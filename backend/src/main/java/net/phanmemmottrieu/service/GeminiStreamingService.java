@@ -335,7 +335,7 @@ public class GeminiStreamingService {
             Map<String, Object> initStatus = new HashMap<>();
             initStatus.put("stage", "waiting_gemini");
             initStatus.put("status", "connecting");
-            initStatus.put("message", "Đang gửi request đến Gemini...");
+            initStatus.put("message", "Đang gửi yêu cầu đến Chuyên Gia...");
             initStatus.put("estimatedWaitSecs", estimatedWaitSecs);
             initStatus.put("promptChars", promptChars);
             initStatus.put("percent", 2);
@@ -358,13 +358,19 @@ public class GeminiStreamingService {
                 Map<String, Object> st = new HashMap<>();
                 if (!firstChunkArrived.get()) {
                     // Chưa có token: đang chờ Gemini
-                    int remainSecs = Math.max(1, estimatedWaitSecs - (int)(elapsed / 1000));
+                    int elapsedSecs = Math.max(1, (int) Math.ceil(elapsed / 1000.0));
+                    int remainSecs = Math.max(0, estimatedWaitSecs - (int) (elapsed / 1000));
+                    boolean overdue = remainSecs <= 0;
                     st.put("stage", "waiting_gemini");
                     st.put("status", "waiting");
-                    st.put("message", "Gemini đang suy nghĩ... (~" + remainSecs + "s còn lại)");
+                    st.put("message", overdue
+                            ? "Chuyên Gia đang suy nghĩ... (đã chờ " + elapsedSecs + "s)"
+                            : "Chuyên Gia đang suy nghĩ... (~" + remainSecs + "s còn lại)");
                     st.put("elapsedMs", elapsed);
+                    st.put("elapsedSecs", elapsedSecs);
                     st.put("estimatedWaitSecs", estimatedWaitSecs);
                     st.put("remainingEstimateSecs", remainSecs);
+                    st.put("waitState", overdue ? "overdue" : "estimated");
                     st.put("percent", Math.min(15, 2 + (int)(elapsed / 1000)));
                 } else {
                     // Đang streaming: hiển thị tiến trình
@@ -486,7 +492,7 @@ public class GeminiStreamingService {
             Map<String, Object> st = new HashMap<>();
             st.put("stage", "streaming_started");
             st.put("status", "first_token");
-            st.put("message", "Bắt đầu nhận kết quả từ Gemini");
+            st.put("message", "Bắt đầu nhận kết quả từ Chuyên Gia");
             st.put("ttftMs", ttft);
             st.put("estimatedTotalChars", estimatedOutputChars);
             st.put("percent", 15);
@@ -611,7 +617,7 @@ public class GeminiStreamingService {
                 Map<String, Object> status = new HashMap<>();
                 status.put("stage", "key_rotation");
                 status.put("status", "trying_key");
-                status.put("message", "Dang thu Gemini key " + (i + 1) + "/" + keys.size());
+                status.put("message", "Đang thử kênh xử lý " + (i + 1) + "/" + keys.size());
                 status.put("attempt", i + 1);
                 status.put("total", keys.size());
                 onStatus.accept(status);
@@ -646,12 +652,12 @@ public class GeminiStreamingService {
         }
 
         if (skippedByCooldown >= keys.size() && minWaitMs != Long.MAX_VALUE) {
-            IllegalStateException err = new IllegalStateException("Tat ca Gemini key dang trong cooldown, thu lai sau " + minWaitMs + " ms");
+            IllegalStateException err = new IllegalStateException("Tất cả kênh xử lý đang trong thời gian chờ, thử lại sau " + minWaitMs + " ms");
             if (onStatus != null) {
                 Map<String, Object> status = new HashMap<>();
                 status.put("stage", "waiting");
                 status.put("status", "all_keys_cooldown");
-                status.put("message", "Tat ca API key dang bi rate-limit tam thoi");
+                status.put("message", "Hệ thống đang bận tạm thời, vui lòng thử lại sau");
                 status.put("waitingMs", minWaitMs);
                 onStatus.accept(status);
             }
@@ -737,7 +743,7 @@ public class GeminiStreamingService {
         }
 
         if (skippedByCooldown >= keys.size() && minWaitMs != Long.MAX_VALUE) {
-            IllegalStateException err = new IllegalStateException("Tat ca Gemini key dang trong cooldown, thu lai sau " + minWaitMs + " ms");
+            IllegalStateException err = new IllegalStateException("Tất cả kênh xử lý đang trong thời gian chờ, thử lại sau " + minWaitMs + " ms");
             if (onError != null) onError.accept(err);
             return "";
         }

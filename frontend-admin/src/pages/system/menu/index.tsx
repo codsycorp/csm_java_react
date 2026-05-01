@@ -11,7 +11,7 @@ import { resolveDevFlag } from "#src/utils/dev-flag";
 import { getLocalizedField, type SupportedLanguage } from "#src/utils/i18nHelper";
 
 import { PlusCircleOutlined } from "@ant-design/icons";
-import { Button, Tabs, Select, Row, Col, Space } from "antd";
+import { Button, Tabs, Select, Row, Col, Space, Progress } from "antd";
 import { useRef, useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Form, Modal, Radio } from "antd";
@@ -21,6 +21,18 @@ import { csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
 import { MenuTreeView } from "./menu-tree-view";
 import TreeMenu from "./tree-menu";
 import AiMenuDesigner from "./components/AiMenuDesigner";
+
+type LanguageGenerateStatus = {
+	phase: "running" | "completed" | "error";
+	stage: "preparing" | "generating" | "retrying" | "applying" | "completed" | "error";
+	percent: number;
+	message: string;
+	currentChunk: number;
+	totalChunks: number;
+	attempt: number;
+	maxRetry: number;
+	etaSeconds: number;
+};
 
 export default function Menu() {
 	const { t, i18n } = useTranslation();
@@ -84,6 +96,8 @@ export default function Menu() {
 	const [copySubmitting, setCopySubmitting] = useState(false);
 	const [languageGenerating, setLanguageGenerating] = useState(false);
 	const [languageGenerateProgress, setLanguageGenerateProgress] = useState<string>("");
+	const [languageGenerateStatus, setLanguageGenerateStatus] = useState<LanguageGenerateStatus | null>(null);
+	const [showLanguageGenerateDetails, setShowLanguageGenerateDetails] = useState(true);
 	const [pendingLanguageMenus, setPendingLanguageMenus] = useState<any[] | null>(null);
 	const [languageSaving, setLanguageSaving] = useState(false);
 	/* Detail Data */
@@ -1039,18 +1053,74 @@ export default function Menu() {
 
 		setLanguageGenerating(true);
 		setLanguageGenerateProgress("");
+		setShowLanguageGenerateDetails(true);
 		const progressMsgKey = "menu-language-generate-progress";
 		try {
+			const startedAt = Date.now();
 			const sourceMenus = deepClone(menuData);
 			const compactMenus = compactMenusForLanguagePrompt(sourceMenus);
 			const maxCharsPerChunk = Number(import.meta.env.VITE_AI_MENU_LANG_CHUNK_CHARS) || 120000;
 			const initialChunks = buildMenuChunksBySize(compactMenus, Math.max(30000, maxCharsPerChunk));
+			const maxRetry = 3;
+			let completedChunks = 0;
+			const clampProgressPercent = (value: number) => Math.max(1, Math.min(100, Math.round(value)));
+			const updateLanguageStatus = (params: {
+				message: string;
+				stage?: LanguageGenerateStatus["stage"];
+				currentChunk?: number;
+				totalChunks?: number;
+				attempt?: number;
+				chunkProgress?: number;
+				phase?: LanguageGenerateStatus["phase"];
+			}) => {
+				const totalChunks = Math.max(1, params.totalChunks ?? initialChunks.length ?? 1);
+				const phase = params.phase ?? "running";
+				const chunkProgress = Math.max(0, Math.min(1, params.chunkProgress ?? 0));
+				const percent = phase === "completed"
+					? 100
+					: phase === "error"
+						? clampProgressPercent((completedChunks / totalChunks) * 100)
+						: clampProgressPercent(((completedChunks + chunkProgress) / totalChunks) * 100);
+				const elapsedMs = Math.max(1, Date.now() - startedAt);
+				const etaSeconds = phase === "running" && percent > 0 && percent < 100
+					? Math.max(0, Math.round(((elapsedMs / (percent / 100)) - elapsedMs) / 1000))
+					: 0;
+				setLanguageGenerateStatus({
+					phase,
+					stage: params.stage ?? (phase === "completed" ? "completed" : phase === "error" ? "error" : "generating"),
+					percent,
+					message: params.message,
+					currentChunk: Math.max(0, params.currentChunk ?? 0),
+					totalChunks,
+					attempt: Math.max(1, params.attempt ?? 1),
+					maxRetry,
+					etaSeconds,
+				});
+			};
+			updateLanguageStatus({
+				stage: "preparing",
+				message: t("system.menu.languageGeneratePreparing") || "Đang chuẩn bị dữ liệu menu/table...",
+				currentChunk: 0,
+				totalChunks: Math.max(1, initialChunks.length || 1),
+				attempt: 1,
+				chunkProgress: 0.04,
+			});
 			if (!initialChunks.length) {
+				setLanguageGenerateStatus({
+					phase: "error",
+					stage: "error",
+					percent: 0,
+					message: t("system.menu.aiDesigner.invalidJson") || "Không có menu hợp lệ để xử lý",
+					currentChunk: 0,
+					totalChunks: 0,
+					attempt: 1,
+					maxRetry,
+					etaSeconds: 0,
+				});
 				window.$message?.error(t("system.menu.aiDesigner.invalidJson") || "Không có menu hợp lệ để xử lý");
 				return;
 			}
 
-			const maxRetry = 3;
 			let pendingChunks = initialChunks.map((menus, index) => ({
 				menus,
 				chunkIndex: index + 1,
@@ -1063,6 +1133,14 @@ export default function Menu() {
 
 				for (let i = 0; i < pendingChunks.length; i += 1) {
 					const chunk = pendingChunks[i];
+					updateLanguageStatus({
+						stage: "generating",
+						message: t("system.menu.languageGenerateProcessingChunk") || "Đang tạo ngôn ngữ cho menu/table...",
+						currentChunk: chunk.chunkIndex,
+						totalChunks: initialChunks.length,
+						attempt,
+						chunkProgress: 0.08,
+					});
 					const chunkJson = JSON.stringify({ menu: chunk.menus }, null, 2);
 					const prompt = [
 						"Bạn là chuyên gia chuẩn hóa đa ngôn ngữ cho cấu hình menu JSON.",
@@ -1086,8 +1164,21 @@ export default function Menu() {
 						taskType: "menu_i18n_generate",
 						menuDesignByDev: isDevUser,
 						onProgress: (progress) => {
-							const text = `Chunk ${chunk.chunkIndex}/${initialChunks.length}: ${String(progress?.message || progress?.stage || progress?.status || "Đang xử lý AI")}`;
+							const stageMessage = String(progress?.message || progress?.stage || progress?.status || (t("system.menu.languageGenerateProcessingChunk") || "Đang xử lý AI"));
+							const rawPercent = Number(progress?.percent);
+							const chunkProgress = Number.isFinite(rawPercent)
+								? Math.max(0.1, Math.min(0.96, rawPercent / 100))
+								: 0.45;
+							const text = `Chunk ${chunk.chunkIndex}/${initialChunks.length}: ${stageMessage}`;
 							setLanguageGenerateProgress(text);
+							updateLanguageStatus({
+								stage: String(progress?.status || "").toLowerCase().includes("retry") ? "retrying" : "generating",
+								message: stageMessage,
+								currentChunk: chunk.chunkIndex,
+								totalChunks: initialChunks.length,
+								attempt,
+								chunkProgress,
+							});
 							window.$message?.loading({ content: text, key: progressMsgKey, duration: 0 });
 						},
 					});
@@ -1095,9 +1186,28 @@ export default function Menu() {
 					const failureMessage = extractAiFailureMessage(response);
 					if (failureMessage) {
 						if (attempt < maxRetry) {
+							updateLanguageStatus({
+								stage: "retrying",
+								message: failureMessage,
+								currentChunk: chunk.chunkIndex,
+								totalChunks: initialChunks.length,
+								attempt,
+								chunkProgress: 0.12,
+							});
 							nextPending.push(chunk);
 							continue;
 						}
+						setLanguageGenerateStatus({
+							phase: "error",
+							stage: "error",
+							percent: Math.max(1, Math.round((completedChunks / Math.max(1, initialChunks.length)) * 100)),
+							message: failureMessage,
+							currentChunk: chunk.chunkIndex,
+							totalChunks: initialChunks.length,
+							attempt,
+							maxRetry,
+							etaSeconds: 0,
+						});
 						window.$message?.error(failureMessage);
 						return;
 					}
@@ -1105,9 +1215,28 @@ export default function Menu() {
 					const menuFromAi = extractMenuListFromAnyPayload(response?.result ?? (response as any)?.data ?? response);
 					if (!Array.isArray(menuFromAi) || menuFromAi.length === 0) {
 						if (attempt < maxRetry) {
+							updateLanguageStatus({
+								stage: "retrying",
+								message: t("system.menu.aiDesigner.invalidJson") || "AI trả về sai định dạng menu",
+								currentChunk: chunk.chunkIndex,
+								totalChunks: initialChunks.length,
+								attempt,
+								chunkProgress: 0.12,
+							});
 							nextPending.push(chunk);
 							continue;
 						}
+						setLanguageGenerateStatus({
+							phase: "error",
+							stage: "error",
+							percent: Math.max(1, Math.round((completedChunks / Math.max(1, initialChunks.length)) * 100)),
+							message: t("system.menu.aiDesigner.invalidJson") || "AI trả về sai định dạng menu",
+							currentChunk: chunk.chunkIndex,
+							totalChunks: initialChunks.length,
+							attempt,
+							maxRetry,
+							etaSeconds: 0,
+						});
 						window.$message?.error(t("system.menu.aiDesigner.invalidJson") || "AI trả về sai định dạng menu");
 						return;
 					}
@@ -1122,34 +1251,103 @@ export default function Menu() {
 					}
 
 					if (!coveredAll && attempt < maxRetry) {
+						updateLanguageStatus({
+							stage: "retrying",
+							message: t("system.menu.languageGenerateRetrying") || "AI trả về chưa đủ dữ liệu, đang thử lại...",
+							currentChunk: chunk.chunkIndex,
+							totalChunks: initialChunks.length,
+							attempt,
+							chunkProgress: 0.18,
+						});
 						nextPending.push(chunk);
 						continue;
 					}
 
 					successfulChunkMenus.push(...menuFromAi);
+					completedChunks += 1;
+					updateLanguageStatus({
+						stage: "generating",
+						message: t("system.menu.languageGenerateChunkDone") || "Đã hoàn tất một phần dữ liệu ngôn ngữ",
+						currentChunk: chunk.chunkIndex,
+						totalChunks: initialChunks.length,
+						attempt,
+						chunkProgress: 0,
+					});
 				}
 
 				pendingChunks = nextPending;
 			}
 
 			if (pendingChunks.length > 0) {
+				setLanguageGenerateStatus({
+					phase: "error",
+					stage: "error",
+					percent: Math.max(1, Math.round((completedChunks / Math.max(1, initialChunks.length)) * 100)),
+					message: t("system.menu.aiDesigner.invalidJson") || "AI chưa trả đủ dữ liệu menu. Vui lòng chạy lại.",
+					currentChunk: completedChunks,
+					totalChunks: initialChunks.length,
+					attempt: maxRetry,
+					maxRetry,
+					etaSeconds: 0,
+				});
 				window.$message?.error(t("system.menu.aiDesigner.invalidJson") || "AI chưa trả đủ dữ liệu menu. Vui lòng chạy lại.");
 				return;
 			}
 
+			updateLanguageStatus({
+				stage: "applying",
+				message: t("system.menu.languageGenerateApplying") || "Đang ghép và kiểm tra dữ liệu 3 ngôn ngữ...",
+				currentChunk: initialChunks.length,
+				totalChunks: initialChunks.length,
+				attempt: 1,
+				chunkProgress: 0.98,
+			});
 			const mergedMenus = mergeGeneratedLanguagesToSourceMenus(sourceMenus, successfulChunkMenus);
 			const completedMenus = fillMenuLanguageFallbacks(mergedMenus);
 			if (!hasFullThreeLanguageData(completedMenus)) {
+				setLanguageGenerateStatus({
+					phase: "error",
+					stage: "error",
+					percent: 99,
+					message: t("system.menu.languageDataIncomplete") || "Thiếu dữ liệu 3 ngôn ngữ cho menu/table. Vui lòng tạo lại.",
+					currentChunk: initialChunks.length,
+					totalChunks: initialChunks.length,
+					attempt: 1,
+					maxRetry,
+					etaSeconds: 0,
+				});
 				window.$message?.error(t("system.menu.languageDataIncomplete") || "Thiếu dữ liệu 3 ngôn ngữ cho menu/table. Vui lòng tạo lại.");
 				return;
 			}
 			setMenuData(completedMenus);
 			buildFlatParentMenus(completedMenus);
 			setPendingLanguageMenus(completedMenus);
+			setLanguageGenerateStatus({
+				phase: "completed",
+				stage: "completed",
+				percent: 100,
+				message: t("system.menu.languageGenerateCompleted") || "Đã tạo xong ngôn ngữ menu/table",
+				currentChunk: initialChunks.length,
+				totalChunks: initialChunks.length,
+				attempt: 1,
+				maxRetry,
+				etaSeconds: 0,
+			});
 			window.$message?.success(t("system.menu.generatedPreviewReady") || "Đã áp dụng tạm ngôn ngữ menu/table. Nhấn 'Lưu 3 ngôn ngữ' để lưu thật vào hệ thống.");
 		} catch (error) {
 			window.$message?.destroy(progressMsgKey);
 			console.error("Failed to auto-generate menu languages:", error);
+			setLanguageGenerateStatus((prev) => ({
+				phase: "error",
+				stage: "error",
+				percent: Math.max(1, prev?.percent || 1),
+				message: t("system.menu.copyFailed") || "Tạo ngôn ngữ menu thất bại",
+				currentChunk: prev?.currentChunk || 0,
+				totalChunks: prev?.totalChunks || 0,
+				attempt: prev?.attempt || 1,
+				maxRetry: prev?.maxRetry || 3,
+				etaSeconds: 0,
+			}));
 			window.$message?.error(t("system.menu.copyFailed") || "Tạo ngôn ngữ menu thất bại");
 		} finally {
 			window.$message?.destroy(progressMsgKey);
@@ -1157,6 +1355,91 @@ export default function Menu() {
 			setLanguageGenerateProgress("");
 		}
 	};
+
+	const languageGeneratePhaseLabel = useMemo(() => {
+		if (!languageGenerateStatus) return "";
+		switch (languageGenerateStatus.stage) {
+			case "preparing":
+				return t("system.menu.languageGeneratePhasePreparing") || "Chuẩn bị";
+			case "retrying":
+				return t("system.menu.languageGeneratePhaseRetrying") || "Đang thử lại";
+			case "applying":
+				return t("system.menu.languageGeneratePhaseApplying") || "Đang kiểm tra";
+			case "completed":
+				return t("system.menu.languageGeneratePhaseCompleted") || "Hoàn tất";
+			case "error":
+				return t("system.menu.languageGeneratePhaseError") || "Lỗi";
+			default:
+				return t("system.menu.languageGeneratePhaseGenerating") || "Đang tạo";
+		}
+	}, [languageGenerateStatus, t]);
+
+	const languageGenerateStatusBlock = languageGenerateStatus ? (
+		<div style={{
+			marginTop: 12,
+			padding: 12,
+			borderRadius: 10,
+			border: "1px solid #d9d9d9",
+			background: languageGenerateStatus.phase === "error" ? "#fff2f0" : languageGenerateStatus.phase === "completed" ? "#f6ffed" : "#fafafa",
+		}}>
+			<div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+				<div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+					<strong>{t("system.menu.languageGenerateProgressTitle") || "Tiến độ tạo ngôn ngữ"}</strong>
+					<span style={{
+						display: "inline-flex",
+						alignItems: "center",
+						padding: "2px 8px",
+						borderRadius: 999,
+						fontSize: 12,
+						fontWeight: 600,
+						background: languageGenerateStatus.phase === "error" ? "#fff1f0" : languageGenerateStatus.phase === "completed" ? "#f6ffed" : "#e6f4ff",
+						color: languageGenerateStatus.phase === "error" ? "#cf1322" : languageGenerateStatus.phase === "completed" ? "#389e0d" : "#0958d9",
+					}}>
+						{languageGeneratePhaseLabel}
+					</span>
+				</div>
+				<div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+					<span>{languageGenerateStatus.percent}%</span>
+					<Button type="link" size="small" onClick={() => setShowLanguageGenerateDetails((prev) => !prev)}>
+						{showLanguageGenerateDetails
+							? (t("system.menu.languageGenerateHideDetails") || "Ẩn chi tiết")
+							: (t("system.menu.languageGenerateShowDetails") || "Hiện chi tiết")}
+					</Button>
+				</div>
+			</div>
+			<Progress
+				percent={languageGenerateStatus.percent}
+				size="small"
+				status={languageGenerateStatus.phase === "error" ? "exception" : languageGenerateStatus.phase === "completed" ? "success" : "active"}
+				showInfo={false}
+			/>
+			<div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
+				<span>
+					{languageGenerateStatus.phase === "running"
+						? (t("system.menu.languageGenerateProgressNow") || "Đang xử lý")
+						: languageGenerateStatus.phase === "completed"
+							? (t("system.menu.languageGenerateProgressDone") || "Đã hoàn tất")
+							: (t("system.menu.languageGenerateProgressStopped") || "Đã dừng")}
+				</span>
+				{languageGenerateStatus.phase === "running" && languageGenerateStatus.etaSeconds > 0 && (
+					<span>{t("system.menu.languageGenerateEta", { seconds: languageGenerateStatus.etaSeconds }) || `~${languageGenerateStatus.etaSeconds}s còn lại`}</span>
+				)}
+			</div>
+			{showLanguageGenerateDetails && languageGenerateStatus.totalChunks > 0 && (
+				<div style={{ marginTop: 6, color: "rgba(0,0,0,0.65)", fontSize: 12 }}>
+					<div>{languageGenerateStatus.message || languageGenerateProgress}</div>
+					<div style={{ marginTop: 4 }}>
+						{t("system.menu.languageGenerateChunkMeta", {
+							current: Math.max(0, languageGenerateStatus.currentChunk),
+							total: languageGenerateStatus.totalChunks,
+							attempt: languageGenerateStatus.attempt,
+							maxRetry: languageGenerateStatus.maxRetry,
+						}) || `Chunk ${languageGenerateStatus.currentChunk}/${languageGenerateStatus.totalChunks} · lần ${languageGenerateStatus.attempt}/${languageGenerateStatus.maxRetry}`}
+					</div>
+				</div>
+			)}
+		</div>
+	) : null;
 
 	const handleSaveGeneratedLanguages = async () => {
 		if (!selectedApp) {
@@ -1302,6 +1585,7 @@ export default function Menu() {
 												</Button>
 											)}
 										</Space>
+										{languageGenerateStatusBlock}
 									</div>
 									{Array.isArray(menuData) && menuData.length > 0 && (
 										<MenuTreeView
@@ -1391,6 +1675,7 @@ export default function Menu() {
 								</Button>
 							)}
 						</Space>
+						{languageGenerateStatusBlock}
 					</div>
 					{Array.isArray(menuData) && menuData.length > 0 && (
 						<MenuTreeView

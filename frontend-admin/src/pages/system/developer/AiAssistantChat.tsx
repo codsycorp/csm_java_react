@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Button, Input, Card, Space, Empty, Spin, Tooltip, Tag, Switch, message } from "antd";
 import {
 	SendOutlined,
@@ -64,6 +64,7 @@ type AiAssistantStageEvent = {
 	stage: string;
 	status?: string;
 	model?: string;
+	requestId?: string;
 	message: string;
 	messageKey?: string;
 	messageArgs?: Record<string, any>;
@@ -88,6 +89,13 @@ type AiUsageSummary = {
 	totalTokens: number;
 	estimatedCostUsd: number;
 	currency?: string;
+};
+
+	type CompletionState = "idle" | "done" | "stream_closed" | "error" | "cancelled";
+
+type CompletionMetrics = {
+	elapsedMs?: number;
+	outputChars?: number;
 };
 
 type ModelDecisionTrace = {
@@ -127,6 +135,10 @@ const MAX_CHAT_INPUT_CHARS = 20000;
 const MAX_STRUCTURED_TEXT_EDITS = 160;
 const MAX_STRUCTURED_REPLACEMENT_CHARS = 800000;
 const SHOW_DETAILED_PROGRESS_TIMELINE = true;
+const COMPACT_STAGE_EVENTS = 6;
+const COMPACT_MODEL_TRACE = 2;
+const DONE_DOCK_AUTO_COLLAPSE_MS = 3500;
+const DONE_USAGE_DOCK_AUTO_HIDE_MS = 6500;
 const TEXT_FILE_EXTENSIONS = new Set([
 	"txt", "md", "markdown", "json", "js", "ts", "tsx", "jsx", "java", "sql", "css", "scss", "less",
 	"html", "xml", "yml", "yaml", "csv", "py", "properties", "env", "log", "ini",
@@ -581,6 +593,14 @@ export default function AiAssistantChat({
 		sessionTokens: 0,
 	});
 	const [modelDecisionTrace, setModelDecisionTrace] = useState<ModelDecisionTrace[]>([]);
+	const [showFullTimeline, setShowFullTimeline] = useState(false);
+	const [showFullModelTrace, setShowFullModelTrace] = useState(false);
+	const [showMiniProgress, setShowMiniProgress] = useState(true);
+	const [isProgressDockCollapsed, setIsProgressDockCollapsed] = useState(false);
+	const [isUsageDockVisible, setIsUsageDockVisible] = useState(true);
+	const [streamRequestId, setStreamRequestId] = useState("");
+	const [completionState, setCompletionState] = useState<CompletionState>("idle");
+	const [completionMetrics, setCompletionMetrics] = useState<CompletionMetrics>({});
 	// Progress state: waiting for Gemini / streaming progress
 	const [geminiProgress, setGeminiProgress] = useState<{
 		phase: "idle" | "waiting" | "streaming";
@@ -609,11 +629,18 @@ export default function AiAssistantChat({
 	const lastSmoothScrollAtRef = useRef<number>(0);
 	const turnAllowAutoApplyRef = useRef<boolean>(false);
 	const stageEventSignaturesRef = useRef<Set<string>>(new Set());
+	const requestStartedAtRef = useRef<number>(0);
 	// Live exchange rates fetched once per session (USD base). Fallback to hardcoded.
 	const fxRatesRef = useRef<{ vnd: number; cny: number }>({ vnd: 25000, cny: 7.2 });
 	const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || "");
 	const sendHintKey = isMac ? "Cmd" : "Ctrl";
 	const shouldRenderAssistantCodeBlocks = !onCodeInsert;
+	const visibleStageEvents = showFullTimeline ? stageEvents : stageEvents.slice(-COMPACT_STAGE_EVENTS);
+	const hiddenStageCount = Math.max(0, stageEvents.length - visibleStageEvents.length);
+	const visibleModelDecisionTrace = showFullModelTrace
+		? modelDecisionTrace
+		: modelDecisionTrace.slice(-COMPACT_MODEL_TRACE);
+	const hiddenModelTraceCount = Math.max(0, modelDecisionTrace.length - visibleModelDecisionTrace.length);
 
 	const uiText = useCallback((vi: string, en: string, zh: string) => {
 		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
@@ -623,6 +650,64 @@ export default function AiAssistantChat({
 	}, [i18n.language, i18n.resolvedLanguage]);
 
 	const assistantBrandLabel = uiText("Chuyên Gia", "Expert", "专家");
+	const formatCompletionDuration = useCallback((elapsedMs?: number): string => {
+		const value = Number(elapsedMs);
+		if (!Number.isFinite(value) || value <= 0) return "";
+		if (value < 1000) return `${Math.round(value)}ms`;
+		return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}s`;
+	}, []);
+	const formatOutputChars = useCallback((outputChars?: number): string => {
+		const value = Number(outputChars);
+		if (!Number.isFinite(value) || value <= 0) return "";
+		return uiText(
+			`${Math.round(value).toLocaleString("vi-VN")} ký tự`,
+			`${Math.round(value).toLocaleString("en-US")} chars`,
+			`${Math.round(value).toLocaleString("zh-CN")} 字符`,
+		);
+	}, [uiText]);
+	const completionMetricsLabel = useMemo(() => {
+		const parts = [
+			formatCompletionDuration(completionMetrics.elapsedMs),
+			formatOutputChars(completionMetrics.outputChars),
+		].filter(Boolean);
+		return parts.join(" · ");
+	}, [completionMetrics.elapsedMs, completionMetrics.outputChars, formatCompletionDuration, formatOutputChars]);
+	const completionStateLabel = useMemo(() => {
+		switch (completionState) {
+			case "done":
+				return uiText("HOÀN THÀNH", "DONE", "已完成");
+			case "stream_closed":
+				return uiText("ĐÓNG LUỒNG", "STREAM CLOSED", "流已关闭");
+			case "error":
+				return uiText("LỖI", "ERROR", "错误");
+			case "cancelled":
+				return uiText("ĐÃ HỦY", "CANCELLED", "已取消");
+			default:
+				return "";
+		}
+	}, [completionState, uiText]);
+	const completionSummaryLabel = useMemo(() => {
+		return [completionStateLabel, completionMetricsLabel].filter(Boolean).join(" · ");
+	}, [completionMetricsLabel, completionStateLabel]);
+	const completionDetailTooltip = useMemo(() => {
+		const lines = [
+			completionStateLabel ? `${uiText("Trạng thái", "State", "状态")}: ${completionStateLabel}` : "",
+			streamRequestId ? `requestId: ${streamRequestId}` : "",
+			completionMetrics.elapsedMs != null ? `${uiText("Thời gian", "Elapsed", "耗时")}: ${formatCompletionDuration(completionMetrics.elapsedMs)}` : "",
+			completionMetrics.outputChars != null ? `${uiText("Độ dài", "Output", "输出长度")}: ${formatOutputChars(completionMetrics.outputChars)}` : "",
+			aiUsageSummary.turn?.model ? `${uiText("Model", "Model", "模型")}: ${aiUsageSummary.turn.model}` : "",
+		].filter(Boolean);
+		return lines.join("\n");
+	}, [
+		aiUsageSummary.turn?.model,
+		completionMetrics.elapsedMs,
+		completionMetrics.outputChars,
+		completionStateLabel,
+		formatCompletionDuration,
+		formatOutputChars,
+		streamRequestId,
+		uiText,
+	]);
 
 	const formatModelDecisionReason = useCallback((reasonCode?: string): string => {
 		const code = String(reasonCode || "").trim().toLowerCase();
@@ -698,13 +783,17 @@ export default function AiAssistantChat({
 
 		const waitingMatch = source.match(/~\s*(\d+)\s*s/i);
 		const waitingSecs = waitingMatch ? Number(waitingMatch[1]) : NaN;
-		if (/dang\s*ket\s*noi\s*gemini|đang\s*kết\s*nối\s*gemini|connecting\s*(to\s*)?gemini|连接\s*gemini/i.test(source)) {
+		const waitedMatch = source.match(/(?:da|đã)\s*cho\s*(\d+)\s*s|waited\s*(\d+)\s*s/i);
+		const waitedSecs = waitedMatch ? Number(waitedMatch[1] || waitedMatch[2]) : NaN;
+		const receivingMatch = source.match(/(\d+)\s*(?:ký\s*tự|chars?|字符)/i);
+		const receivedChars = receivingMatch ? Number(receivingMatch[1]) : NaN;
+		if (/dang\s*ket\s*noi\s*gemini|đang\s*kết\s*nối\s*gemini|connecting\s*(to\s*)?gemini|连接\s*gemini|đang\s*kết\s*nối\s*chuyên\s*gia|connecting\s*(to\s*)?expert|正在连接专家/i.test(source)) {
 			return uiText("Đang kết nối Chuyên Gia...", "Connecting to Expert...", "正在连接专家...");
 		}
-		if (/dang\s*gui\s*request\s*den\s*gemini|đang\s*gửi\s*request\s*đến\s*gemini|sending\s*request\s*to\s*gemini|发送\s*请求\s*到\s*gemini/i.test(source)) {
+		if (/dang\s*gui\s*request\s*den\s*gemini|đang\s*gửi\s*request\s*đến\s*gemini|sending\s*request\s*to\s*gemini|发送\s*请求\s*到\s*gemini|đang\s*gửi\s*yêu\s*cầu\s*đến\s*chuyên\s*gia|sending\s*request\s*to\s*expert|正在向专家发送请求/i.test(source)) {
 			return uiText("Đang gửi yêu cầu đến Chuyên Gia...", "Sending request to Expert...", "正在向专家发送请求...");
 		}
-		if (/gemini\s*dang\s*suy\s*nghi|gemini\s*đang\s*suy\s*nghĩ|gemini\s*is\s*thinking|gemini\s*思考/i.test(source)) {
+		if (/gemini\s*dang\s*suy\s*nghi|gemini\s*đang\s*suy\s*nghĩ|gemini\s*is\s*thinking|gemini\s*思考|chuyên\s*gia\s*đang\s*suy\s*nghĩ|expert\s*is\s*thinking|专家正在思考/i.test(source)) {
 			if (Number.isFinite(waitingSecs) && waitingSecs > 0) {
 				return uiText(
 					`Chuyên Gia đang suy nghĩ... (~${waitingSecs}s còn lại)`,
@@ -712,10 +801,33 @@ export default function AiAssistantChat({
 					`专家正在思考...（约剩余 ${waitingSecs}s）`,
 				);
 			}
+			if (Number.isFinite(waitedSecs) && waitedSecs > 0) {
+				return uiText(
+					`Chuyên Gia đang suy nghĩ... (đã chờ ${waitedSecs}s)`,
+					`Expert is thinking... (waited ${waitedSecs}s)`,
+					`专家正在思考...（已等待 ${waitedSecs}s）`,
+				);
+			}
 			return uiText("Chuyên Gia đang suy nghĩ...", "Expert is thinking...", "专家正在思考...");
 		}
-		if (/bat\s*dau\s*nhan\s*ket\s*qua\s*tu\s*gemini|bắt\s*đầu\s*nhận\s*kết\s*quả\s*từ\s*gemini|start\w*\s*receiv\w*\s*result\w*\s*from\s*gemini|开始\s*接收\s*gemini/i.test(source)) {
+		if (/bat\s*dau\s*nhan\s*ket\s*qua\s*tu\s*gemini|bắt\s*đầu\s*nhận\s*kết\s*quả\s*từ\s*gemini|start\w*\s*receiv\w*\s*result\w*\s*from\s*gemini|开始\s*接收\s*gemini|bắt\s*đầu\s*nhận\s*kết\s*quả\s*từ\s*chuyên\s*gia|starting\s*to\s*receive\s*result\s*from\s*expert|开始接收专家结果/i.test(source)) {
 			return uiText("Bắt đầu nhận kết quả từ Chuyên Gia", "Starting to receive result from Expert", "开始接收专家结果");
+		}
+		if (/đang\s*nhận\s*kết\s*quả|receiving\s*result|正在接收结果/i.test(source)) {
+			if (Number.isFinite(receivedChars) && receivedChars > 0) {
+				return uiText(
+					`Đang nhận kết quả... (${receivedChars.toLocaleString("vi-VN")} ký tự)`,
+					`Receiving result... (${receivedChars.toLocaleString("en-US")} chars)`,
+					`正在接收结果...（${receivedChars.toLocaleString("zh-CN")} 字符）`,
+				);
+			}
+			return uiText("Đang nhận kết quả...", "Receiving result...", "正在接收结果...");
+		}
+		if (/đang\s*chuẩn\s*bị\s*yêu\s*cầu|preparing\s*request|正在准备请求/i.test(source)) {
+			return uiText("Đang chuẩn bị yêu cầu...", "Preparing request...", "正在准备请求...");
+		}
+		if (/đã\s*hủy\s*request\s*theo\s*yêu\s*cầu|request\s*cancelled\s*by\s*user|已按用户要求取消请求/i.test(source)) {
+			return uiText("Đã hủy request theo yêu cầu", "Request cancelled by user", "已按用户要求取消请求");
 		}
 
 		return source
@@ -781,6 +893,35 @@ export default function AiAssistantChat({
 		saveAutoApplyPreference(autoApplyPreferenceKey, autoApplyEnabled);
 		onAutoApplyChange?.(autoApplyEnabled);
 	}, [autoApplyEnabled, autoApplyPreferenceKey, onAutoApplyChange]);
+
+	useEffect(() => {
+		if (completionState !== "done") {
+			setIsProgressDockCollapsed(false);
+			return;
+		}
+		const timer = window.setTimeout(() => {
+			setShowMiniProgress(true);
+			setIsProgressDockCollapsed(true);
+		}, DONE_DOCK_AUTO_COLLAPSE_MS);
+		return () => window.clearTimeout(timer);
+	}, [completionState]);
+
+	useEffect(() => {
+		if (completionState === "done") {
+			setIsUsageDockVisible(true);
+			const timer = window.setTimeout(() => {
+				setIsUsageDockVisible(false);
+			}, DONE_USAGE_DOCK_AUTO_HIDE_MS);
+			return () => window.clearTimeout(timer);
+		}
+		if (completionState === "stream_closed" || completionState === "error" || completionState === "cancelled") {
+			setIsUsageDockVisible(true);
+			return;
+		}
+		if (completionState === "idle") {
+			setIsUsageDockVisible(true);
+		}
+	}, [completionState]);
 
 	const pickPreferredCodeBlock = useCallback((blocks: CodeBlock[]): CodeBlock | null => {
 		if (!Array.isArray(blocks) || blocks.length === 0) return null;
@@ -1006,6 +1147,25 @@ export default function AiAssistantChat({
 		return "default";
 	}, []);
 
+	const formatStageToneLabel = useCallback((tone: "preparing" | "chunking" | "reducing" | "final" | "completed" | "error" | "default") => {
+		switch (tone) {
+			case "preparing":
+				return uiText("Chuẩn bị", "Preparing", "准备中");
+			case "chunking":
+				return uiText("Phân khối", "Chunking", "分块处理中");
+			case "reducing":
+				return uiText("Rút gọn", "Reducing", "归并中");
+			case "final":
+				return uiText("Suy luận cuối", "Final", "最终阶段");
+			case "completed":
+				return uiText("Hoàn tất", "Completed", "已完成");
+			case "error":
+				return uiText("Lỗi", "Error", "错误");
+			default:
+				return uiText("Khác", "Other", "其他");
+		}
+	}, [uiText]);
+
 	const extractStageRangeLabel = useCallback((data: any): string | undefined => {
 		const candidates: any[] =
 			(Array.isArray(data?.textEdits) && data.textEdits.length > 0 && data.textEdits)
@@ -1040,6 +1200,7 @@ export default function AiAssistantChat({
 		const stage = String(data?.stage || data?.status || "").trim();
 		const status = String(data?.status || "").trim();
 		const model = String(data?.model || "").trim();
+		const requestId = String(data?.requestId || "").trim();
 		const msg = normalizeAssistantProgressMessage(String(data?.message || "").trim());
 		const messageKey = String(data?.messageKey || "").trim();
 		const messageArgs = data?.messageArgs && typeof data.messageArgs === "object" ? data.messageArgs : undefined;
@@ -1060,6 +1221,7 @@ export default function AiAssistantChat({
 			stage.toLowerCase(),
 			status.toLowerCase(),
 			model.toLowerCase(),
+			requestId.toLowerCase(),
 			messageKey,
 			orchestrationPhase,
 			orchestrationPhaseKey,
@@ -1086,6 +1248,7 @@ export default function AiAssistantChat({
 					stage: stage || "processing",
 					status: status || undefined,
 					model: model || undefined,
+					requestId: requestId || undefined,
 					message: msg,
 					messageKey: messageKey || undefined,
 					messageArgs,
@@ -1105,6 +1268,28 @@ export default function AiAssistantChat({
 			return next.slice(-60);
 		});
 	}, [extractStageRangeLabel, normalizeAssistantProgressMessage]);
+
+	const groupedVisibleStageEvents = useMemo(() => {
+		const orderedTones: Array<"preparing" | "chunking" | "reducing" | "final" | "completed" | "error" | "default"> = [
+			"preparing", "chunking", "reducing", "final", "completed", "error", "default",
+		];
+		const buckets = new Map<string, AiAssistantStageEvent[]>();
+		for (const event of visibleStageEvents) {
+			const tone = getStageTone(event.stage, event.orchestrationPhase);
+			if (!buckets.has(tone)) {
+				buckets.set(tone, []);
+			}
+			buckets.get(tone)!.push(event);
+		}
+
+		return orderedTones
+			.filter((tone) => (buckets.get(tone)?.length || 0) > 0)
+			.map((tone) => ({
+				tone,
+				label: formatStageToneLabel(tone),
+				events: buckets.get(tone) || [],
+			}));
+	}, [visibleStageEvents, getStageTone, formatStageToneLabel]);
 
 	const isNearBottom = useCallback((element: HTMLDivElement, threshold = 72): boolean => {
 		const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
@@ -1372,6 +1557,32 @@ export default function AiAssistantChat({
 			sseAbortRef.current?.abort();
 		};
 	}, []);
+
+	const handleCancelRequest = useCallback(() => {
+		const controller = sseAbortRef.current;
+		if (!controller || !isLoading) {
+			return;
+		}
+		sseAbortRef.current = null;
+		controller.abort();
+		flushStreamingToUI(true);
+		setCompletionState("cancelled");
+		setCompletionMetrics({
+			elapsedMs: requestStartedAtRef.current > 0 ? Math.max(0, Date.now() - requestStartedAtRef.current) : undefined,
+			outputChars: streamingMessageRef.current.length + pendingStreamChunkRef.current.length,
+		});
+		setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+		setIsLoading(false);
+		turnAllowAutoApplyRef.current = false;
+		if (SHOW_DETAILED_PROGRESS_TIMELINE) {
+			appendStageEvent({
+				stage: "cancelled",
+				message: uiText("Đã hủy request theo yêu cầu", "Request cancelled by user", "已按用户要求取消请求"),
+				percent: Math.max(0, geminiProgress.percent || 0),
+			});
+		}
+		message.info(uiText("Đã hủy request đang chạy", "Cancelled the running request", "已取消当前请求"));
+	}, [appendStageEvent, flushStreamingToUI, geminiProgress.percent, isLoading, uiText]);
 	// Auto-scroll to latest message
 	useEffect(() => {
 		scrollToBottom(false);
@@ -1437,6 +1648,14 @@ export default function AiAssistantChat({
 			setStageEvents([]);
 			setAiUsageSummary((prev) => ({ ...prev, turn: null }));
 			setModelDecisionTrace([]);
+			setShowFullTimeline(false);
+			setShowFullModelTrace(false);
+			setShowMiniProgress(true);
+			setIsProgressDockCollapsed(false);
+			setIsUsageDockVisible(true);
+			setStreamRequestId("");
+			setCompletionState("idle");
+			setCompletionMetrics({});
 			setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 			stageEventSignaturesRef.current = new Set();
 			followBottomRef.current = true;
@@ -1456,12 +1675,14 @@ export default function AiAssistantChat({
 					? "edit"
 					: (hasEditIntent(cleanedMessage || normalizedText) ? "edit" : "analyze"));
 			turnAllowAutoApplyRef.current = responseMode === "edit";
+			requestStartedAtRef.current = Date.now();
 			setInputValue("");
 			setPendingAttachments([]);
 
+			let controller: AbortController | null = null;
 			try {
 				// SSE streaming via Gemini (replaces legacy Socket.IO stream route)
-				const controller = new AbortController();
+				controller = new AbortController();
 				sseAbortRef.current = controller;
 				const authState = useAuthStore.getState();
 				const token = authState.token ?? "";
@@ -1527,6 +1748,8 @@ export default function AiAssistantChat({
 				const reader = response.body!.getReader();
 				const decoder = new TextDecoder();
 				let buffer = "";
+				let receivedCompleteEvent = false;
+				let receivedErrorEvent = false;
 				while (true) {
 					const { done, value } = await reader.read();
 					if (done) break;
@@ -1543,12 +1766,16 @@ export default function AiAssistantChat({
 								message?: string; percent?: number; estimatedWaitSecs?: number;
 								remainingEstimateSecs?: number; charsReceived?: number; estimatedTotalChars?: number;
 								ttftMs?: number; elapsedMs?: number; promptTokens?: number; model?: string;
+								requestId?: string;
 								modelDecisionStep?: "primary" | "fallback" | "final";
 								modelDecisionReason?: string;
 								decision_step?: "primary" | "fallback" | "final";
 								reason_code?: string;
 								usage?: any; completionTokens?: number; estimatedCostUsd?: number;
 							};
+							if (evt.requestId) {
+								setStreamRequestId(String(evt.requestId));
+							}
 							const decisionStep = evt.modelDecisionStep || evt.decision_step;
 							const decisionReason = evt.modelDecisionReason || evt.reason_code;
 							if (evt.stage === "preparing") {
@@ -1614,6 +1841,7 @@ export default function AiAssistantChat({
 								pendingStreamChunkRef.current += evt.chunk;
 								scheduleStreamFlush();
 							} else if (evt.stage === "complete") {
+								receivedCompleteEvent = true;
 								const usage = normalizeUsagePayload(evt.usage || {
 									model: evt.model,
 									promptTokens: evt.promptTokens,
@@ -1634,8 +1862,18 @@ export default function AiAssistantChat({
 										sessionTokens: prev.sessionTokens + usage.totalTokens,
 									}));
 								}
+								setCompletionMetrics({
+									elapsedMs: Number.isFinite(Number(evt.elapsedMs))
+										? Number(evt.elapsedMs)
+										: Math.max(0, Date.now() - requestStartedAtRef.current),
+									outputChars: evt.fullResponse
+										? evt.fullResponse.length
+										: Number.isFinite(Number(evt.charsReceived))
+											? Number(evt.charsReceived)
+											: streamingMessageRef.current.length + pendingStreamChunkRef.current.length,
+								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
-								setGeminiProgress({ phase: "idle", percent: 100, message: "Hoàn thành", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+								setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Hoàn thành", "Completed", "已完成"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								if (evt.fullResponse) {
 									streamingMessageRef.current = evt.fullResponse;
 									pendingStreamChunkRef.current = "";
@@ -1644,13 +1882,22 @@ export default function AiAssistantChat({
 								if (evt.fullResponse) {
 									applyRealtimeCodeFromText(evt.fullResponse);
 								}
+								setCompletionState("done");
 								setIsLoading(false);
+								if (sseAbortRef.current === controller) {
+									sseAbortRef.current = null;
+								}
 								turnAllowAutoApplyRef.current = false;
 							} else if (evt.stage === "error") {
+								receivedErrorEvent = true;
+								setCompletionState("error");
 								setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
 								message.error(evt.message || uiText("Chat thất bại", "Chat failed", "对话失败"));
 								setIsLoading(false);
+								if (sseAbortRef.current === controller) {
+									sseAbortRef.current = null;
+								}
 								turnAllowAutoApplyRef.current = false;
 							}
 						} catch (parseErr) {
@@ -1658,9 +1905,37 @@ export default function AiAssistantChat({
 						}
 					}
 				}
+
+				if (!receivedCompleteEvent && !receivedErrorEvent) {
+					// Fallback: some deployments may close SSE without the final complete frame.
+					flushStreamingToUI(true);
+					setCompletionState("stream_closed");
+					setCompletionMetrics({
+						elapsedMs: Math.max(0, Date.now() - requestStartedAtRef.current),
+						outputChars: streamingMessageRef.current.length,
+					});
+					setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Hoàn thành", "Completed", "已完成"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+					setIsLoading(false);
+					if (sseAbortRef.current === controller) {
+						sseAbortRef.current = null;
+					}
+					turnAllowAutoApplyRef.current = false;
+					if (SHOW_DETAILED_PROGRESS_TIMELINE) {
+						appendStageEvent({
+							stage: "complete",
+							message: uiText("Đã nhận xong dữ liệu trả về", "Stream closed after response", "响应流已完成"),
+							percent: 100,
+						});
+					}
+				}
 			} catch (error) {
 				if ((error as Error)?.name === "AbortError") return;
 				console.error("Failed to send message:", error);
+				setCompletionState("error");
+				setCompletionMetrics({
+					elapsedMs: requestStartedAtRef.current > 0 ? Math.max(0, Date.now() - requestStartedAtRef.current) : undefined,
+					outputChars: streamingMessageRef.current.length + pendingStreamChunkRef.current.length,
+				});
 				const status = Number((error as any)?.response?.status ?? 0);
 				if (status === 401) {
 					message.error(uiText("Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại", "Session expired, please log in again", "登录会话已过期，请重新登录"));
@@ -1668,7 +1943,14 @@ export default function AiAssistantChat({
 					message.error(uiText("Gửi tin nhắn thất bại", "Failed to send message", "发送消息失败"));
 				}
 				setIsLoading(false);
+				if (sseAbortRef.current === controller) {
+					sseAbortRef.current = null;
+				}
 				turnAllowAutoApplyRef.current = false;
+			} finally {
+				if (sseAbortRef.current === controller) {
+					sseAbortRef.current = null;
+				}
 			}
 		},
 		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom]
@@ -1687,6 +1969,11 @@ export default function AiAssistantChat({
 	const handleClearHistory = () => {
 		setMessages([]);
 		setAiUsageSummary({ turn: null, sessionCostUsd: 0, sessionTokens: 0 });
+		setIsProgressDockCollapsed(false);
+		setIsUsageDockVisible(true);
+		setStreamRequestId("");
+		setCompletionState("idle");
+		setCompletionMetrics({});
 		localStorage.removeItem(CHAT_HISTORY_KEY);
 		message.success(uiText("Đã xóa lịch sử chat", "Chat history cleared", "聊天记录已清除"));
 	};
@@ -1695,6 +1982,12 @@ export default function AiAssistantChat({
 		navigator.clipboard.writeText(code);
 		message.success(uiText("Đã sao chép code", "Code copied", "代码已复制"));
 	};
+
+	const handleCopyRequestId = useCallback(() => {
+		if (!streamRequestId) return;
+		navigator.clipboard.writeText(streamRequestId);
+		message.success(uiText("Đã sao chép requestId", "requestId copied", "requestId 已复制"));
+	}, [streamRequestId, uiText]);
 
 	const handleInsertCode = (code: string) => {
 		if (onCodeInsert) {
@@ -1837,105 +2130,308 @@ export default function AiAssistantChat({
 
 				</div>
 
-				{isLoading && (
+				{(isLoading || completionState !== "idle") && (
 					<div className={styles.progressDock}>
-						{geminiProgress.phase !== "idle" && (
-							<div className={styles.geminiProgressCard}>
-								<div className={styles.geminiProgressHeader}>
-									<span className={styles.geminiProgressIcon}>
-										{geminiProgress.phase === "waiting" ? "⏳" : "⚡"}
+						{isProgressDockCollapsed && !isLoading && completionSummaryLabel && (
+							<div className={styles.progressDockCollapsedBar}>
+								<div className={styles.progressCompletionMain}>
+									<span className={styles.progressCompletionTitle}>
+										{uiText("Kết thúc xử lý", "Processing finished", "处理已结束")}
 									</span>
-									<span className={styles.geminiProgressLabel}>
-										{normalizeAssistantProgressMessage(
-											geminiProgress.message,
-											geminiProgress.phase === "waiting"
-												? uiText("Chuyên Gia đang xử lý...", "Expert is processing...", "专家正在处理中...")
-												: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果..."),
-										)}
-									</span>
-									<span className={styles.geminiProgressCountdown}>
-										{geminiProgress.remainingSecs > 0 ? `~${geminiProgress.remainingSecs}s` : " "}
-									</span>
+									<span className={styles.progressCompletionStats}>{completionSummaryLabel}</span>
+									{streamRequestId && (
+										<span className={styles.progressRequestId}>req {streamRequestId}</span>
+									)}
 								</div>
-								<div className={styles.geminiProgressBarTrack}>
-									<div
-										className={`${styles.geminiProgressBarFill} ${geminiProgress.phase === "waiting" ? styles.geminiProgressBarWaiting : styles.geminiProgressBarStreaming}`}
-										style={{ width: `${Math.max(2, Math.min(100, geminiProgress.percent))}%` }}
-									/>
-								</div>
-								<div className={styles.geminiProgressMeta}>
-									{geminiProgress.phase === "streaming" && geminiProgress.charsReceived > 0
-										? (
-											<>
-												{geminiProgress.charsReceived.toLocaleString()} ký tự nhận được
-												{geminiProgress.ttftMs != null && (
-													<span className={styles.geminiProgressTtft}> · TTFT {geminiProgress.ttftMs}ms</span>
-												)}
-											</>
-										)
-										: geminiProgress.phase === "waiting" && geminiProgress.estimatedWaitSecs > 0
-											? uiText(
-												`Ước tính ~${geminiProgress.estimatedWaitSecs}s tổng thời gian`,
-												`Estimated total time ~${geminiProgress.estimatedWaitSecs}s`,
-												`预计总耗时约 ${geminiProgress.estimatedWaitSecs}s`,
-											)
-											: " "}
+								<div className={styles.progressCollapsedActions}>
+									{streamRequestId && (
+										<Button
+											type="text"
+											size="small"
+											icon={<CopyOutlined />}
+											className={styles.requestActionBtn}
+											onClick={handleCopyRequestId}
+											title={uiText("Sao chép requestId", "Copy requestId", "复制 requestId")}
+										/>
+									)}
+									<Button
+										type="link"
+										size="small"
+										className={styles.compactToggleBtn}
+										onClick={() => setIsProgressDockCollapsed(false)}
+									>
+										{uiText("Mở lại", "Expand", "展开")}
+									</Button>
 								</div>
 							</div>
 						)}
-						{SHOW_DETAILED_PROGRESS_TIMELINE && stageEvents.length > 0 && (
+						{!isProgressDockCollapsed && isLoading && geminiProgress.phase !== "idle" && (
+							showMiniProgress ? (
+								<div className={styles.progressMiniBar}>
+									<div className={styles.progressMiniMain}>
+										<span className={styles.progressMiniPhase}>
+											{normalizeAssistantProgressMessage(
+												geminiProgress.message,
+												geminiProgress.phase === "waiting"
+													? uiText("Đang xử lý", "Processing", "处理中")
+													: uiText("Đang streaming", "Streaming", "流式中"),
+											)}
+										</span>
+										<span className={styles.progressMiniStats}>
+											{`${Math.max(0, Math.min(100, geminiProgress.percent))}%`}
+											{geminiProgress.remainingSecs > 0 ? ` · ~${geminiProgress.remainingSecs}s` : ""}
+										</span>
+										{streamRequestId && (
+											<button type="button" className={styles.progressRequestIdButton} onClick={handleCopyRequestId}>
+												<span className={styles.progressRequestId}>req {streamRequestId}</span>
+											</button>
+										)}
+									</div>
+									<Space size={4}>
+										<Button
+											type="text"
+											size="small"
+											danger
+											icon={<CloseOutlined />}
+											onClick={handleCancelRequest}
+										>
+											{uiText("Hủy", "Cancel", "取消")}
+										</Button>
+										<Button
+											type="link"
+											size="small"
+											className={styles.compactToggleBtn}
+											onClick={() => setShowMiniProgress(false)}
+										>
+											{uiText("Chi tiết", "Details", "详情")}
+										</Button>
+									</Space>
+								</div>
+							) : (
+								<div className={styles.geminiProgressCard}>
+									<div className={styles.geminiProgressHeader}>
+										<span className={styles.geminiProgressIcon}>
+											{geminiProgress.phase === "waiting" ? "⏳" : "⚡"}
+										</span>
+										<span className={styles.geminiProgressLabel}>
+											{normalizeAssistantProgressMessage(
+												geminiProgress.message,
+												geminiProgress.phase === "waiting"
+													? uiText("Chuyên Gia đang xử lý...", "Expert is processing...", "专家正在处理中...")
+													: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果..."),
+											)}
+										</span>
+										<span className={styles.geminiProgressCountdown}>
+											{geminiProgress.remainingSecs > 0 ? `~${geminiProgress.remainingSecs}s` : " "}
+										</span>
+										<Button
+											type="text"
+											size="small"
+											danger
+											icon={<CloseOutlined />}
+											onClick={handleCancelRequest}
+										>
+											{uiText("Hủy", "Cancel", "取消")}
+										</Button>
+										<Button
+											type="link"
+											size="small"
+											className={styles.compactToggleBtn}
+											onClick={() => setShowMiniProgress(true)}
+										>
+											{uiText("Mini", "Mini", "迷你")}
+										</Button>
+									</div>
+									<div className={styles.geminiProgressBarTrack}>
+										<div
+											className={`${styles.geminiProgressBarFill} ${geminiProgress.phase === "waiting" ? styles.geminiProgressBarWaiting : styles.geminiProgressBarStreaming}`}
+											style={{ width: `${Math.max(2, Math.min(100, geminiProgress.percent))}%` }}
+										/>
+									</div>
+									<div className={styles.geminiProgressMeta}>
+										{geminiProgress.phase === "streaming" && geminiProgress.charsReceived > 0
+											? (
+												<>
+													{geminiProgress.charsReceived.toLocaleString()} ký tự nhận được
+													{geminiProgress.ttftMs != null && (
+														<span className={styles.geminiProgressTtft}> · TTFT {geminiProgress.ttftMs}ms</span>
+													)}
+												</>
+											)
+											: geminiProgress.phase === "waiting" && geminiProgress.estimatedWaitSecs > 0
+												? uiText(
+													`Ước tính ~${geminiProgress.estimatedWaitSecs}s tổng thời gian`,
+													`Estimated total time ~${geminiProgress.estimatedWaitSecs}s`,
+													`预计总耗时约 ${geminiProgress.estimatedWaitSecs}s`,
+												)
+												: " "}
+									</div>
+									{streamRequestId && (
+										<button type="button" className={styles.progressRequestIdButton} onClick={handleCopyRequestId}>
+											<div className={styles.progressMetaInline}>req {streamRequestId}</div>
+										</button>
+									)}
+								</div>
+							)
+						)}
+						{!isProgressDockCollapsed && !isLoading && completionSummaryLabel && (
+							<div className={[
+								styles.progressCompletionBar,
+								completionState === "stream_closed" ? styles.progressCompletionBar_streamClosed : "",
+								completionState === "error" ? styles.progressCompletionBar_error : "",
+							].filter(Boolean).join(" ")}>
+								<div className={styles.progressCompletionMain}>
+									<span className={styles.progressCompletionTitle}>
+										{uiText("Kết thúc xử lý", "Processing finished", "处理已结束")}
+									</span>
+									<Tooltip title={completionDetailTooltip || completionSummaryLabel}>
+										<span className={styles.progressCompletionStats}>{completionSummaryLabel}</span>
+									</Tooltip>
+									{streamRequestId && (
+										<span className={styles.progressRequestId}>req {streamRequestId}</span>
+									)}
+								</div>
+								{streamRequestId && (
+									<Button
+										type="text"
+										size="small"
+										icon={<CopyOutlined />}
+										className={styles.requestActionBtn}
+										onClick={handleCopyRequestId}
+										title={uiText("Sao chép requestId", "Copy requestId", "复制 requestId")}
+									/>
+								)}
+							</div>
+						)}
+						{!isProgressDockCollapsed && SHOW_DETAILED_PROGRESS_TIMELINE && stageEvents.length > 0 && !showMiniProgress && (
 							<div className={`${styles.messageContent} ${styles.stageTimelineCard}`}>
-								<div className={styles.stageTimelineTitle}>
-									{uiText("Tiến độ xử lý", "Processing timeline", "处理进度")}
+								<div className={styles.stageTimelineHeader}>
+									<div className={styles.stageTimelineTitle}>
+										{uiText("Tiến độ xử lý", "Processing timeline", "处理进度")}
+									</div>
+									<Button
+										type="link"
+										size="small"
+										className={styles.compactToggleBtn}
+										onClick={() => setShowFullTimeline((prev) => !prev)}
+									>
+										{showFullTimeline
+											? uiText("Thu gọn", "Compact", "收起")
+											: uiText("Xem đầy đủ", "Expand", "展开")}
+									</Button>
 								</div>
 								<div className={styles.stageTimelineList}>
-									{stageEvents.map((event) => {
-										const stageLabel = renderProgressText(event.orchestrationPhaseKey, undefined, event.orchestrationPhase || formatStageLabel(event.stage));
-										const stageTone = getStageTone(event.stage, event.orchestrationPhase);
-										const effectivePercent = Number.isFinite(Number(event.overallPercent)) ? Number(event.overallPercent) : Number(event.percent);
-										const percentText = Number.isFinite(effectivePercent) ? ` (${Math.max(0, Math.min(100, effectivePercent))}%)` : "";
-										const progressText = Number.isFinite(Number(event.current)) && Number.isFinite(Number(event.total))
-											? ` [${Math.max(0, Number(event.current))}/${Math.max(1, Number(event.total))}]`
-											: "";
-										const timelineMessage = renderProgressText(event.detailKey, event.detailArgs, event.detail || renderProgressText(event.messageKey, event.messageArgs, event.message));
-										return (
-											<div key={event.id} className={`${styles.stageTimelineItem} ${styles[`stageTimelineItem_${stageTone}`] || ""}`.trim()}>
-												<span className={`${styles.stageTimelineBullet} ${styles[`stageTimelineBullet_${stageTone}`] || ""}`.trim()} />
-												<div className={styles.stageTimelineText}>
-													<div className={`${styles.stageTimelineHead} ${styles[`stageTimelineHead_${stageTone}`] || ""}`.trim()}>
-														<span>{stageLabel}{percentText}{progressText}</span>
-														{event.rangeLabel && <span className={styles.stageRangeBadge}>{event.rangeLabel}</span>}
-													</div>
-													{event.model && (
-														<div className={styles.stageTimelineMessage}>
-															{`model=${event.model}`}
+									{hiddenStageCount > 0 && !showFullTimeline && (
+										<div className={styles.stageTimelineMetaLine}>
+											{uiText(
+												`Đang ẩn ${hiddenStageCount} mốc cũ`,
+												`Hiding ${hiddenStageCount} older events`,
+												`已隐藏 ${hiddenStageCount} 条较早记录`,
+											)}
+										</div>
+									)}
+									{groupedVisibleStageEvents.map((group) => (
+										<div key={group.tone} className={styles.stageTimelineGroup}>
+											<div className={styles.stageTimelineGroupHeader}>{group.label}</div>
+											<div className={styles.stageTimelineGroupList}>
+												{group.events.map((event) => {
+													const stageLabel = renderProgressText(event.orchestrationPhaseKey, undefined, event.orchestrationPhase || formatStageLabel(event.stage));
+													const stageTone = getStageTone(event.stage, event.orchestrationPhase);
+													const effectivePercent = Number.isFinite(Number(event.overallPercent)) ? Number(event.overallPercent) : Number(event.percent);
+													const percentText = Number.isFinite(effectivePercent) ? ` (${Math.max(0, Math.min(100, effectivePercent))}%)` : "";
+													const progressText = Number.isFinite(Number(event.current)) && Number.isFinite(Number(event.total))
+														? ` [${Math.max(0, Number(event.current))}/${Math.max(1, Number(event.total))}]`
+														: "";
+													const timelineMessage = renderProgressText(event.detailKey, event.detailArgs, event.detail || renderProgressText(event.messageKey, event.messageArgs, event.message));
+													return (
+														<div key={event.id} className={`${styles.stageTimelineItem} ${styles[`stageTimelineItem_${stageTone}`] || ""}`.trim()}>
+															<span className={`${styles.stageTimelineBullet} ${styles[`stageTimelineBullet_${stageTone}`] || ""}`.trim()} />
+															<div className={styles.stageTimelineText}>
+																<div className={`${styles.stageTimelineHead} ${styles[`stageTimelineHead_${stageTone}`] || ""}`.trim()}>
+																	<span>{stageLabel}{percentText}{progressText}</span>
+																	{event.rangeLabel && <span className={styles.stageRangeBadge}>{event.rangeLabel}</span>}
+																</div>
+																{event.model && (
+																	<div className={`${styles.stageTimelineMessage} ${styles.stageTimelineMessageCompact}`.trim()}>
+																		{`model=${event.model}`}
+																	</div>
+																)}
+																{event.requestId && (stageTone === "completed" || stageTone === "error") && (
+																	<div className={`${styles.stageTimelineMessage} ${styles.stageTimelineMessageCompact}`.trim()}>
+																		{`req=${event.requestId}`}
+																	</div>
+																)}
+																{timelineMessage && (
+																	<div className={`${styles.stageTimelineMessage} ${styles.stageTimelineMessageCompact}`.trim()}>
+																		{timelineMessage}
+																	</div>
+																)}
+															</div>
 														</div>
-													)}
-													{timelineMessage && <div className={styles.stageTimelineMessage}>{timelineMessage}</div>}
-												</div>
+													);
+												})}
 											</div>
-										);
-									})}
+										</div>
+									))}
 								</div>
 							</div>
 						)}
-						<div className={styles.progressDockSpinnerRow}>
-							<Spin size="small" />
-						</div>
+						{!isProgressDockCollapsed && isLoading && (
+							<div className={styles.progressDockSpinnerRow}>
+								<Spin size="small" />
+							</div>
+						)}
 					</div>
 				)}
 
-			{(aiUsageSummary.turn || aiUsageSummary.sessionTokens > 0) && (
-				<div className={styles.usageDock}>
-					<div className={styles.usageDockTitle}>
-						{uiText("Theo dõi chi phí AI", "AI Cost Tracking", "AI 成本跟踪")}
+			{isUsageDockVisible && (aiUsageSummary.turn || aiUsageSummary.sessionTokens > 0 || completionState === "stream_closed" || completionState === "error" || completionState === "cancelled") && (
+				<div className={[
+					styles.usageDock,
+					completionState === "stream_closed" ? styles.usageDock_streamClosed : "",
+					completionState === "error" ? styles.usageDock_error : "",
+				].filter(Boolean).join(" ")}>
+					<div className={styles.usageDockHeader}>
+						<div className={styles.usageDockTitle}>
+							{uiText("Theo dõi chi phí AI", "AI Cost Tracking", "AI 成本跟踪")}
+						</div>
+						<div className={styles.usageDockBadges}>
+							{completionStateLabel && (
+								<Tooltip title={completionDetailTooltip || completionStateLabel}>
+									<Tag color={completionState === "done" ? "green" : completionState === "stream_closed" ? "gold" : completionState === "error" ? "red" : completionState === "cancelled" ? "orange" : "default"}>
+										{completionStateLabel}
+									</Tag>
+								</Tooltip>
+							)}
+							{streamRequestId && (
+								<Tag>
+									<span className={styles.requestTagContent}>req {streamRequestId}</span>
+									<Button
+										type="text"
+										size="small"
+										icon={<CopyOutlined />}
+										className={styles.requestActionBtn}
+										onClick={handleCopyRequestId}
+										title={uiText("Sao chép requestId", "Copy requestId", "复制 requestId")}
+									/>
+								</Tag>
+							)}
+						</div>
 					</div>
+					{completionSummaryLabel && (
+						<div className={styles.usageDockRow}>
+							<span>{uiText("Kết thúc", "Completion", "结束状态")}</span>
+							<span>{completionSummaryLabel}</span>
+						</div>
+					)}
 					{modelDecisionTrace.length > 0 && (
 						<div className={styles.usageDockRow}>
 							<span>{uiText("Luồng model", "Model trace", "模型路径")}</span>
 							<span>
+								{hiddenModelTraceCount > 0 && !showFullModelTrace && (
+									<Tag>{uiText(`+${hiddenModelTraceCount} cũ`, `+${hiddenModelTraceCount} older`, `+${hiddenModelTraceCount} 条旧记录`)}</Tag>
+								)}
 								<Space size={4} wrap>
-									{modelDecisionTrace.map((trace) => {
+									{visibleModelDecisionTrace.map((trace) => {
 										const color = trace.step === "primary"
 											? "blue"
 											: trace.step === "fallback"
@@ -1953,6 +2449,16 @@ export default function AiAssistantChat({
 											</Tooltip>
 										);
 									})}
+									<Button
+										type="link"
+										size="small"
+										className={styles.compactToggleBtn}
+										onClick={() => setShowFullModelTrace((prev) => !prev)}
+									>
+										{showFullModelTrace
+											? uiText("Thu gọn", "Compact", "收起")
+											: uiText("Xem đầy đủ", "Expand", "展开")}
+									</Button>
 								</Space>
 							</span>
 						</div>
@@ -2065,6 +2571,15 @@ export default function AiAssistantChat({
 								disabled={isLoading}
 							/>
 						</Tooltip>
+						{isLoading && (
+							<Button
+								danger
+								icon={<CloseOutlined />}
+								onClick={handleCancelRequest}
+							>
+								{uiText("Hủy", "Cancel", "取消")}
+							</Button>
+						)}
 						<Button
 							type="primary"
 							icon={<SendOutlined />}

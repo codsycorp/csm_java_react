@@ -68,6 +68,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -427,6 +428,8 @@ public class ApiSpringController {
 
         aiCodeStreamExecutor.execute(() -> {
             try {
+                String requestId = Long.toHexString(System.currentTimeMillis()) + "-"
+                        + Integer.toHexString(System.identityHashCode(Thread.currentThread()));
                 String appId = str(body.get("appId"), "");
                 String message = truncate(str(body.get("message"), ""), MAX_MESSAGE_CHARS);
                 String currentCodeRaw = truncate(strKeep(body.get("currentCode"), ""), Math.max(MAX_CODE_CHARS, aiCodeStreamMaxBaseContentChars));
@@ -505,14 +508,15 @@ public class ApiSpringController {
                 boolean hasImages = !imageParts.isEmpty();
 
                 logger.info(
-                        "ApiSpringController: ai-code-stream start appId={} model={} language={} promptChars={} promptTokens~{} messageChars={} promptCache={} images={}",
-                        appId, effectiveModel, language, prompt.length(), estimateTokens(prompt), message.length(), usePromptCache,
+                    "ApiSpringController: ai-code-stream start requestId={} appId={} model={} language={} promptChars={} promptTokens~{} messageChars={} promptCache={} images={}",
+                    requestId, appId, effectiveModel, language, prompt.length(), estimateTokens(prompt), message.length(), usePromptCache,
                         imageParts.size());
 
                 if (!base.baseRef().isBlank()) {
                     sendEvent(emitter, jsonOf(
                             "stage", "context",
                             "status", "base_cached",
+                            "requestId", requestId,
                             "baseContentRef", base.baseRef(),
                             "baseContentChars", base.baseContentChars(),
                             "effectiveCodeChars", effectiveCodeContext.length(),
@@ -526,6 +530,7 @@ public class ApiSpringController {
                     : "routing_simple_model";
                 sendEvent(emitter, jsonOf(
                         "stage", "preparing",
+                    "requestId", requestId,
                         "message", "Đang kết nối Gemini...",
                         "model", effectiveModel,
                         "modelDecisionStep", "primary",
@@ -539,7 +544,7 @@ public class ApiSpringController {
                 String rawResponse;
                 if (hasImages) {
                     rawResponse = streamWithAutoContinueMultimodal(emitter, prompt, imageParts, effectiveModel, language,
-                            responseMode);
+                        responseMode, requestId);
                 } else {
                     rawResponse = streamWithAutoContinue(
                             emitter,
@@ -550,7 +555,8 @@ public class ApiSpringController {
                             language,
                             responseMode,
                             largeStructuredEditMode,
-                            usePromptCache);
+                            usePromptCache,
+                            requestId);
                 }
                 if (rawResponse == null) {
                     if (!shouldFallbackToDefaultOnSimpleFailure || hasImages) {
@@ -561,6 +567,7 @@ public class ApiSpringController {
                     sendEvent(emitter, jsonOf(
                             "stage", "model_switch",
                             "status", "fallback",
+                            "requestId", requestId,
                             "model", defaultModel,
                             "modelDecisionStep", "fallback",
                             "modelDecisionReason", "provider_error",
@@ -577,7 +584,8 @@ public class ApiSpringController {
                             language,
                             responseMode,
                             largeStructuredEditMode,
-                            usePromptCache);
+                            usePromptCache,
+                            requestId);
                     effectiveModel = defaultModel;
 
                     if (rawResponse == null) {
@@ -605,6 +613,7 @@ public class ApiSpringController {
                 completion.put("modelDecisionReason", "completed");
                 completion.put("decision_step", "final");
                 completion.put("reason_code", "completed");
+                completion.put("requestId", requestId);
                 if (!base.baseRef().isBlank()) {
                     completion.put("baseContentRef", base.baseRef());
                     completion.put("baseContentChars", base.baseContentChars());
@@ -628,8 +637,8 @@ public class ApiSpringController {
                     rawResponse,
                     codeTurnMeta);
 
-                logger.info("ApiSpringController: ai-code-stream complete appId={} model={} elapsedMs={} outputChars={}",
-                        appId, effectiveModel, (System.currentTimeMillis() - startedAtMs), rawResponse.length());
+                logger.info("ApiSpringController: ai-code-stream complete requestId={} appId={} model={} elapsedMs={} outputChars={}",
+                    requestId, appId, effectiveModel, (System.currentTimeMillis() - startedAtMs), rawResponse.length());
                 emitter.complete();
 
             } catch (Exception ex) {
@@ -715,8 +724,9 @@ public class ApiSpringController {
             String model,
             String language,
             String responseMode,
-            boolean largeStructuredEditMode) throws Exception {
-        return streamWithAutoContinue(emitter, prompt, "", "", model, language, responseMode, largeStructuredEditMode, false);
+            boolean largeStructuredEditMode,
+            String requestId) throws Exception {
+        return streamWithAutoContinue(emitter, prompt, "", "", model, language, responseMode, largeStructuredEditMode, false, requestId);
     }
 
     private String streamWithAutoContinueMultimodal(
@@ -725,9 +735,11 @@ public class ApiSpringController {
             List<Map<String, String>> imageParts,
             String model,
             String language,
-            String responseMode) throws Exception {
+            String responseMode,
+            String requestId) throws Exception {
         StringBuilder responseBuffer = new StringBuilder();
         final boolean[] errored = { false };
+        AtomicInteger waitingLogBucket = new AtomicInteger(0);
 
         geminiStreamingService.streamContentMultimodal(
                 prompt,
@@ -754,7 +766,10 @@ public class ApiSpringController {
                 },
                 status -> {
                     try {
-                        sendEvent(emitter, objectMapper.writeValueAsString(status));
+                        Map<String, Object> wrapped = new LinkedHashMap<>(status);
+                        wrapped.put("requestId", requestId);
+                        logAiCodeStreamStatusHeartbeat(requestId, model, wrapped, waitingLogBucket);
+                        sendEvent(emitter, objectMapper.writeValueAsString(wrapped));
                     } catch (Exception ignored) {
                     }
                 });
@@ -772,11 +787,13 @@ public class ApiSpringController {
             String language,
             String responseMode,
             boolean largeStructuredEditMode,
-            boolean usePromptCache) throws Exception {
+            boolean usePromptCache,
+            String requestId) throws Exception {
         boolean editMode = "edit".equalsIgnoreCase(responseMode);
         int maxAttempts = editMode && aiCodeStreamAutoContinueEnabled ? Math.max(1, aiCodeStreamAutoContinueMaxAttempts) : 1;
         String currentPrompt = prompt;
         String lastRawResponse = "";
+        AtomicInteger waitingLogBucket = new AtomicInteger(0);
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             final int attemptNo = attempt;
@@ -824,8 +841,10 @@ public class ApiSpringController {
                             try {
                                 Map<String, Object> wrapped = new LinkedHashMap<>(status);
                                 enrichModelDecisionMetadata(wrapped, model);
+                                wrapped.put("requestId", requestId);
                                 wrapped.put("attempt", attemptNo);
                                 wrapped.put("maxAttempts", maxAttempts);
+                                logAiCodeStreamStatusHeartbeat(requestId, model, wrapped, waitingLogBucket);
                                 sendEvent(emitter, objectMapper.writeValueAsString(wrapped));
                             } catch (Exception ignored) {
                             }
@@ -841,8 +860,10 @@ public class ApiSpringController {
                             try {
                                 Map<String, Object> wrapped = new LinkedHashMap<>(status);
                                 enrichModelDecisionMetadata(wrapped, model);
+                                wrapped.put("requestId", requestId);
                                 wrapped.put("attempt", attemptNo);
                                 wrapped.put("maxAttempts", maxAttempts);
+                                logAiCodeStreamStatusHeartbeat(requestId, model, wrapped, waitingLogBucket);
                                 sendEvent(emitter, objectMapper.writeValueAsString(wrapped));
                             } catch (Exception ignored) {
                             }
@@ -893,6 +914,40 @@ public class ApiSpringController {
         }
 
         return lastRawResponse;
+    }
+
+    private void logAiCodeStreamStatusHeartbeat(String requestId, String model, Map<String, Object> status,
+            AtomicInteger waitingLogBucket) {
+        String stage = str(status.get("stage"), "");
+        if ("streaming_started".equalsIgnoreCase(stage)) {
+            long ttftMs = parseLongOrDefault(status.get("ttftMs"), -1L);
+            if (ttftMs >= 0) {
+                logger.info("ApiSpringController: ai-code-stream first-token requestId={} model={} ttftMs={}",
+                        requestId, model, ttftMs);
+            }
+            return;
+        }
+        if (!"waiting_gemini".equalsIgnoreCase(stage)) {
+            return;
+        }
+        long elapsedMs = parseLongOrDefault(status.get("elapsedMs"), -1L);
+        if (elapsedMs < 0) {
+            return;
+        }
+        int bucket = (int) (elapsedMs / 15000L);
+        if (bucket <= 0) {
+            return;
+        }
+        int previousBucket = waitingLogBucket.get();
+        if (bucket <= previousBucket || !waitingLogBucket.compareAndSet(previousBucket, bucket)) {
+            return;
+        }
+        long elapsedSecs = Math.max(1L, elapsedMs / 1000L);
+        long estimatedWaitSecs = parseLongOrDefault(status.get("estimatedWaitSecs"), 0L);
+        String waitState = str(status.get("waitState"), "estimated");
+        logger.info(
+                "ApiSpringController: ai-code-stream waiting requestId={} model={} elapsedSecs={} estimatedWaitSecs={} waitState={}",
+                requestId, model, elapsedSecs, estimatedWaitSecs, waitState);
     }
 
     private String buildAutoContinuePrompt(String originalPrompt, String previousRawResponse, String language,
@@ -4093,6 +4148,16 @@ public class ApiSpringController {
             return Integer.valueOf(text);
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    private long parseLongOrDefault(Object raw, long fallback) {
+        if (raw == null) return fallback;
+        if (raw instanceof Number number) return number.longValue();
+        try {
+            return Long.parseLong(String.valueOf(raw).trim());
+        } catch (Exception ignored) {
+            return fallback;
         }
     }
 
