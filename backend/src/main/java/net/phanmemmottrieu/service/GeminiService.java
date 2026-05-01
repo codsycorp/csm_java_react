@@ -54,6 +54,9 @@ public class GeminiService implements AIProvider {
   /** URL của Gemini API được cấu hình trong file properties. */
   private final String apiUrl;
 
+  /** Dedicated paid API key for Pro fallback path (if configured). */
+  private final String geminiProApiKey;
+
   /** Danh sách các Gemini models để rotate */
   private final List<String> availableModels;
 
@@ -77,6 +80,12 @@ public class GeminiService implements AIProvider {
 
   /** Tên model AI mặc định sẽ được sử dụng. */
   private final String aiModel;
+
+  /** Enable final paid fallback when all shared-model attempts fail. */
+  private final boolean geminiPaidFallbackEnabled;
+
+  /** Paid fallback model, default to gemini-2.5-pro. */
+  private final String geminiPaidFallbackModel;
 
   /** RestTemplate được tối ưu với connection pooling và timeout. */
   private final RestTemplate restTemplate;
@@ -104,6 +113,9 @@ public class GeminiService implements AIProvider {
       ApiKeyService apiKeyService,
       @Value("${gemini.api.url}") String apiUrl,
       @Value("${gemini.model}") String aiModel,
+      @Value("${gemini.pro.api-key:${GEMINI_PRO_API_KEY:}}") String geminiProApiKey,
+      @Value("${gemini.paid-fallback.enabled:true}") boolean geminiPaidFallbackEnabled,
+      @Value("${gemini.paid-fallback.model:gemini-2.5-pro}") String geminiPaidFallbackModel,
       @Value("${gemini.models:gemini-2.0-flash-exp,gemini-1.5-flash,gemini-1.5-pro,gemma-2-27b-it,gemma-3-27b-it}") String geminiModels,
       @Value("${gemini.model.quota.per-minute:60}") int quotaPerMinute,
       @Value("${gemini.model.quota.per-day:1500}") int quotaPerDay,
@@ -111,6 +123,9 @@ public class GeminiService implements AIProvider {
     this.apiKeyService = apiKeyService;
     this.apiUrl = apiUrl;
     this.aiModel = aiModel;
+    this.geminiProApiKey = geminiProApiKey;
+    this.geminiPaidFallbackEnabled = geminiPaidFallbackEnabled;
+    this.geminiPaidFallbackModel = geminiPaidFallbackModel;
     this.quotaPerMinute = quotaPerMinute;
     this.quotaPerDay = quotaPerDay;
     this.modelUnavailableCooldownMs = modelUnavailableCooldownMs;
@@ -296,11 +311,18 @@ public class GeminiService implements AIProvider {
       modelsAttempted++;
     }
     
-    // All models failed
+    // All shared models failed
     String keyStr = dynamicApiKey.length() > 8 ? dynamicApiKey.substring(0, 8) : dynamicApiKey;
     log.error("All {} Gemini models failed for key {}: {}", totalModels, keyStr, lastError);
     if (sawQuotaExceeded) {
       this.apiKeyService.disableApiKeyUntilNextDay(dynamicApiKey);
+    }
+
+    // Final fallback: dedicated paid Pro key/model to avoid freezing at GEMINI_ALL_MODELS_FAILED.
+    String paidFallbackResult = tryPaidProFallback(prompt, entity, lastError);
+    if (paidFallbackResult != null && !paidFallbackResult.isBlank()) {
+      responseCache.put(prompt, paidFallbackResult);
+      return paidFallbackResult;
     }
     
     // Build quota status for error message
@@ -329,6 +351,49 @@ public class GeminiService implements AIProvider {
           log.error("Error in async generateContent: " + ex.getMessage());
           return "Lỗi khi xử lý yêu cầu AI";
         });
+  }
+
+  private String tryPaidProFallback(String prompt, HttpEntity<Map<String, Object>> entity, String reason) {
+    if (!geminiPaidFallbackEnabled) {
+      return "";
+    }
+
+    String paidKey = geminiProApiKey == null ? "" : geminiProApiKey.trim();
+    if (paidKey.isEmpty()) {
+      log.info("Gemini paid fallback skipped: GEMINI_PRO_API_KEY is empty");
+      return "";
+    }
+
+    String model = (geminiPaidFallbackModel == null || geminiPaidFallbackModel.trim().isEmpty())
+        ? "gemini-2.5-pro"
+        : geminiPaidFallbackModel.trim();
+
+    try {
+      String apiGeminiUrl = String.format(apiUrl, model) + paidKey;
+      log.warn("[Gemini] Trying paid fallback model={} because shared-model rotation failed: {}", model, reason);
+      ResponseEntity<String> response = restTemplate.postForEntity(apiGeminiUrl, entity, String.class);
+      if (response == null || response.getBody() == null) {
+        log.warn("[Gemini] Paid fallback returned empty response body for model={}", model);
+        return "";
+      }
+
+      String body = response.getBody();
+      String result = parseGeminiResponse(body);
+      if (result == null || result.isBlank()) {
+        log.warn("[Gemini] Paid fallback parsed empty result for model={}", model);
+        return "";
+      }
+
+      log.info("[Gemini] Paid fallback succeeded with model={} (result chars={})", model, result.length());
+      return result;
+    } catch (RestClientException e) {
+      String errorMsg = String.valueOf(e.getMessage() == null ? "" : e.getMessage());
+      log.warn("[Gemini] Paid fallback failed with RestClientException: {}", errorMsg);
+      return "";
+    } catch (Exception e) {
+      log.warn("[Gemini] Paid fallback failed with Exception: {}", e.getMessage());
+      return "";
+    }
   }
 
   /**

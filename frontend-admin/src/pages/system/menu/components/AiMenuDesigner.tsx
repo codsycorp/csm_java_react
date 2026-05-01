@@ -2219,12 +2219,20 @@ function isLikelyMenuNode(value: any): boolean {
 function extractMenuListFromPayload(payload: any): MenuItemType[] {
   if (!payload) return [];
 
+  const pickLikelyMenuNodes = (items: any): MenuItemType[] => {
+    if (!Array.isArray(items)) return [];
+    return items.filter((item) => isLikelyMenuNode(item)) as MenuItemType[];
+  };
+
   if (Array.isArray(payload?.code?.menu)) return payload.code.menu as MenuItemType[];
   if (isLikelyMenuNode(payload?.code?.menu)) return [payload.code.menu as MenuItemType];
 
   if (Array.isArray(payload?.menu)) return payload.menu as MenuItemType[];
   if (isLikelyMenuNode(payload?.menu)) return [payload.menu as MenuItemType];
-  if (Array.isArray(payload)) return payload as MenuItemType[];
+  if (Array.isArray(payload)) {
+    const fromRootArray = pickLikelyMenuNodes(payload);
+    if (fromRootArray.length > 0) return fromRootArray;
+  }
   if (isLikelyMenuNode(payload)) return [payload as MenuItemType];
 
   const nestedData = payload?.data;
@@ -2232,7 +2240,10 @@ function extractMenuListFromPayload(payload: any): MenuItemType[] {
   if (isLikelyMenuNode(nestedData?.code?.menu)) return [nestedData.code.menu as MenuItemType];
   if (Array.isArray(nestedData?.menu)) return nestedData.menu as MenuItemType[];
   if (isLikelyMenuNode(nestedData?.menu)) return [nestedData.menu as MenuItemType];
-  if (Array.isArray(nestedData)) return nestedData as MenuItemType[];
+  if (Array.isArray(nestedData)) {
+    const fromDataArray = pickLikelyMenuNodes(nestedData);
+    if (fromDataArray.length > 0) return fromDataArray;
+  }
   if (isLikelyMenuNode(nestedData)) return [nestedData as MenuItemType];
 
   const nestedResult = payload?.result;
@@ -3048,6 +3059,118 @@ function revertPatchOpOnMenus(draftMenus: MenuItemType[], baseMenus: MenuItemTyp
   return restoreMenuNodeFromBase(draftMenus, baseMenus, op.nodeId);
 }
 
+function extractIdBasedMenuChanges(payload: any): Array<Record<string, any>> {
+  const rawCandidates = [
+    payload?.changes,
+    payload?.data?.changes,
+    payload?.result?.changes,
+    payload?.result?.data?.changes,
+  ];
+
+  for (const candidate of rawCandidates) {
+    if (!Array.isArray(candidate)) continue;
+    const normalized = candidate
+      .filter((item) => isPlainObject(item))
+      .map((item) => item as Record<string, any>)
+      .filter((item) => {
+        const id = String(item.id || "").trim();
+        const deltaKeys = Object.keys(item).filter((key) => key !== "id");
+        return !!id && deltaKeys.length > 0;
+      });
+    if (normalized.length > 0) {
+      return normalized;
+    }
+  }
+
+  return [];
+}
+
+function applyIdBasedMenuChanges(
+  baseMenus: MenuItemType[],
+  changes: Array<Record<string, any>>,
+): { menus: MenuItemType[]; appliedIds: string[]; missingIds: string[] } {
+  let working = cloneMenuTree(Array.isArray(baseMenus) ? baseMenus : []);
+  const appliedIds: string[] = [];
+  const missingIds: string[] = [];
+
+  for (const change of Array.isArray(changes) ? changes : []) {
+    const id = String(change?.id || "").trim();
+    if (!id) continue;
+
+    const currentNode = findMenuNodeById(working, id);
+    if (!currentNode) {
+      missingIds.push(id);
+      continue;
+    }
+
+    const { id: _ignoreId, ...delta } = change;
+    if (Object.keys(delta).length === 0) continue;
+
+    const merged = { ...(currentNode as any), ...delta } as MenuItemType;
+    working = replaceMenuNodeById(working, id, merged);
+    appliedIds.push(id);
+  }
+
+  return { menus: working, appliedIds, missingIds };
+}
+
+function buildPatchOpsFromIdBasedChanges(
+  baseMenus: MenuItemType[],
+  changes: Array<Record<string, any>>,
+): PatchOp[] {
+  const ops: PatchOp[] = [];
+
+  const walkPath = (nodes: MenuItemType[], targetId: string, prefix = ""): string | null => {
+    for (const node of Array.isArray(nodes) ? nodes : []) {
+      const nodeId = String((node as any).id || "");
+      const nodeLabel = String((node as any).label || (node as any).label_en || (node as any).label_zh || nodeId || "unknown");
+      const currentPath = prefix ? `${prefix} > ${nodeLabel}` : nodeLabel;
+      if (nodeId === targetId) return currentPath;
+      const children = Array.isArray((node as any).children) ? ((node as any).children as MenuItemType[]) : [];
+      if (children.length > 0) {
+        const found = walkPath(children, targetId, currentPath);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  for (const change of Array.isArray(changes) ? changes : []) {
+    const id = String(change?.id || "").trim();
+    if (!id) continue;
+    const node = findMenuNodeById(baseMenus, id);
+    if (!node) continue;
+
+    const changedFields: FieldDelta[] = [];
+    Object.entries(change || {}).forEach(([key, nextValue]) => {
+      if (key === "id") return;
+      const prevValue = (node as any)?.[key];
+      const prevText = prevValue == null ? null : String(prevValue);
+      const nextText = nextValue == null ? null : String(nextValue);
+      if (prevText === nextText) return;
+      changedFields.push({
+        fieldName: key,
+        oldVal: prevText,
+        newVal: nextText,
+      });
+    });
+
+    if (changedFields.length === 0) continue;
+
+    const nodeName = String((node as any).label || (node as any).label_en || (node as any).label_zh || id);
+    const nodePath = walkPath(baseMenus, id) || nodeName;
+    ops.push({
+      action: "edit",
+      nodeId: id,
+      nodeName,
+      nodePath,
+      changedFields,
+    });
+  }
+
+  return ops;
+}
+
 /**
  * Kịch bản 2: Incremental Update payload.
  * AI nhận toàn bộ cây menu hiện tại + yêu cầu thay đổi.
@@ -3553,6 +3676,27 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       console.log("[APPLY_SOCKET_DRAFT] extractMenuDraftForEditor returned null, trying fallback");
       try {
         const directParsed = JSON.parse(explicitDraft);
+
+        // Incremental by-id patch payload: { changes: [{ id, field... }] }
+        if (operationScenario === "incremental_update" && decodedCurrentMenus.length > 0) {
+          const idChanges = extractIdBasedMenuChanges(directParsed);
+          if (idChanges.length > 0) {
+            const patched = applyIdBasedMenuChanges(decodedCurrentMenus, idChanges);
+            if (patched.appliedIds.length > 0) {
+              const idPatchOps = buildPatchOpsFromIdBasedChanges(decodedCurrentMenus, idChanges);
+              const wrappedDraft = JSON.stringify({ menu: patched.menus }, null, 2);
+              syncPatchReviewState(idPatchOps.length > 0 ? idPatchOps : nextPatchOps);
+              setMergeStats(buildMergeStatsFromPatchOps(idPatchOps.length > 0 ? idPatchOps : nextPatchOps));
+              setEditableAiDraftText(wrappedDraft);
+              setAiProgress((prev) => ({
+                ...(prev || {}),
+                message: `Da ap dung ${patched.appliedIds.length}/${idChanges.length} thay doi theo id`,
+              }));
+              return;
+            }
+          }
+        }
+
         const menus = extractMenuListFromPayload(directParsed);
         if (Array.isArray(menus) && menus.length > 0) {
           console.log("[APPLY_SOCKET_DRAFT] fallback: found menus=", menus.length);
@@ -4698,12 +4842,32 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       }
 
       const menuPayload = extractMenuListFromPayload(payload);
-      if (menuPayload.length === 0) {
+      const normalized = normalizeMenuList(menuPayload);
+      let finalMenus = normalized;
+
+      // Incremental fallback: AI returns only id-based changes instead of full menu tree.
+      if (menuPayload.length === 0 && operationScenario === "incremental_update" && decodedCurrentMenus.length > 0) {
+        const idChanges = extractIdBasedMenuChanges(payload);
+        if (idChanges.length > 0) {
+          const patched = applyIdBasedMenuChanges(decodedCurrentMenus, idChanges);
+          if (patched.appliedIds.length > 0) {
+            finalMenus = normalizeMenuList(patched.menus);
+            const idPatchOps = buildPatchOpsFromIdBasedChanges(decodedCurrentMenus, idChanges);
+            if (idPatchOps.length > 0) {
+              syncPatchReviewState(idPatchOps);
+              setMergeStats(buildMergeStatsFromPatchOps(idPatchOps));
+            }
+            if (patched.missingIds.length > 0) {
+              message.warning(`Khong tim thay ${patched.missingIds.length} id de cap nhat`);
+            }
+          }
+        }
+      }
+
+      if (finalMenus.length === 0) {
         message.warning(t("system.menu.aiDesigner.emptyMenu") || "AI chưa trả về danh sách menu");
       }
 
-      const normalized = normalizeMenuList(menuPayload);
-      let finalMenus = normalized;
       if (operationScenario === "incremental_update" && decodedCurrentMenus.length > 0) {
         const mergeResult = payload?._merge_preview || payload?.data?._merge_preview || await runBackendMenuMerge(
           "incremental_update",

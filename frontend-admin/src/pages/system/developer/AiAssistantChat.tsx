@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { Button, Input, Card, Space, Empty, Spin, Tooltip, Tag, Switch, message } from "antd";
 import {
 	SendOutlined,
@@ -8,6 +8,7 @@ import {
 	PaperClipOutlined,
 	FileImageOutlined,
 	CloseOutlined,
+	ThunderboltOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "#src/store/auth";
@@ -37,12 +38,18 @@ export type AiAssistantUserMessagePayload = {
 
 type ChatMessage = {
 	id: string;
-	role: "user" | "assistant";
-	messageType?: "response" | "debug";
+	role: "user" | "assistant" | "system";
+	messageType?: "response" | "debug" | "compacted_context";
 	content: string;
 	timestamp: number;
 	codeBlocks?: CodeBlock[];
 	attachments?: Array<Pick<AiAssistantAttachment, "id" | "name" | "mimeType" | "size" | "kind" | "summary" | "previewUrl">>;
+	/** For compacted_context divider: chars saved by orchestration */
+	compactedSavedChars?: number;
+	compactedCharsBefore?: number;
+	compactedCharsAfter?: number;
+	compactedRoutingTier?: string;
+	compactedPlanStepCount?: number;
 };
 
 type CodeBlock = {
@@ -52,6 +59,30 @@ type CodeBlock = {
 };
 
 type ResponseMode = "analyze" | "edit";
+
+type AgenticStep = {
+	id: string;
+	stage: string;
+	icon: string;
+	label: string;
+	detail?: string;
+	status: "running" | "done";
+	timestamp: number;
+};
+
+type OrchestrationPreviewResult = {
+	enabled: boolean;
+	totalCharsBefore: number;
+	totalCharsAfter: number;
+	savedChars: number;
+	routingTier: string;
+	preferredModelHint: string;
+	speculativeExecuted: boolean;
+	speculativeOperation: string;
+	planSteps: string[];
+	toolStats: Record<string, number>;
+	compressedContextBlock: string;
+};
 
 type StructuredAssistantPayload = {
 	summary: string;
@@ -286,56 +317,73 @@ function extractMenuDraftForEditor(raw: unknown): string {
 	const text = String(raw || "").trim();
 	if (!text) return "";
 
- const parseMenuPayload = (candidate: string): string => {
-	const value = String(candidate || "").trim();
-	if (!value) return "";
-	try {
-	 const parsed = JSON.parse(value);
-	 if (Array.isArray(parsed)) {
-		return JSON.stringify({ menu: parsed }, null, 2);
-	 }
-	 if (parsed && typeof parsed === "object") {
-		const obj = parsed as Record<string, unknown>;
-		if (typeof obj.code === "string" && obj.code.trim()) {
-			return parseMenuPayload(obj.code);
+ 	const parseMenuPayload = (candidate: string): string => {
+		const value = String(candidate || "").trim();
+		if (!value) return "";
+		try {
+			const parsed = JSON.parse(value);
+			if (Array.isArray(parsed)) {
+				return JSON.stringify({ menu: parsed }, null, 2);
+			}
+			if (parsed && typeof parsed === "object") {
+				const obj = parsed as Record<string, unknown>;
+
+				if (typeof obj.code === "string" && obj.code.trim()) {
+					const fromCode = parseMenuPayload(obj.code);
+					if (fromCode) return fromCode;
+				}
+
+				if (Array.isArray(obj.menu)) {
+					// Editor expects menu payload only, not summary/code wrapper keys.
+					return JSON.stringify({ menu: obj.menu }, null, 2);
+				}
+				if (Array.isArray(obj.menus)) {
+					return JSON.stringify({ menu: obj.menus }, null, 2);
+				}
+
+				if (obj.data && typeof obj.data === "object") {
+					const nested = obj.data as Record<string, unknown>;
+					if (Array.isArray(nested.menu)) {
+						return JSON.stringify({ menu: nested.menu }, null, 2);
+					}
+				}
+
+				const maybeNode = Boolean(typeof obj.id === "string" && obj.id.trim())
+					&& ("children" in obj || "table" in obj || "type_form" in obj || "table_name" in obj);
+				if (maybeNode) {
+					return JSON.stringify({ menu: [obj] }, null, 2);
+				}
+			}
+		} catch {
+			return "";
 		}
-		if (Array.isArray(obj.menu)) {
-		 return JSON.stringify({ ...obj, menu: obj.menu }, null, 2);
-		}
-		if (obj.data && typeof obj.data === "object" && Array.isArray((obj.data as any).menu)) {
-		 return JSON.stringify({ menu: (obj.data as any).menu }, null, 2);
-		}
-	 }
-	} catch {
-	 return "";
+		return "";
+	};
+
+ 	const direct = parseMenuPayload(text);
+ 	if (direct) return direct;
+
+ 	const strippedFence = text
+		.replace(/^```(?:json)?\s*/i, "")
+		.replace(/\s*```$/i, "")
+		.trim();
+ 	const stripped = parseMenuPayload(strippedFence);
+ 	if (stripped) return stripped;
+
+ 	const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+ 	let match: RegExpExecArray | null;
+ 	while ((match = fenceRegex.exec(text)) !== null) {
+		const fromFence = parseMenuPayload(match[1]);
+		if (fromFence) return fromFence;
 	}
-	return "";
- };
-
- const direct = parseMenuPayload(text);
- if (direct) return direct;
-
- const strippedFence = text
-	.replace(/^```(?:json)?\s*/i, "")
-	.replace(/\s*```$/i, "")
-	.trim();
- const stripped = parseMenuPayload(strippedFence);
- if (stripped) return stripped;
-
- const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
- let match: RegExpExecArray | null;
- while ((match = fenceRegex.exec(text)) !== null) {
-	const fromFence = parseMenuPayload(match[1]);
-	if (fromFence) return fromFence;
- }
 
 	try {
-	// Fallback: locate the first JSON object in mixed text and attempt parse.
-	const start = text.indexOf("{");
-	const end = text.lastIndexOf("}");
-	if (start >= 0 && end > start) {
-	 return parseMenuPayload(text.slice(start, end + 1));
-	}
+		// Fallback: locate the first JSON object in mixed text and attempt parse.
+		const start = text.indexOf("{");
+		const end = text.lastIndexOf("}");
+		if (start >= 0 && end > start) {
+			return parseMenuPayload(text.slice(start, end + 1));
+		}
 	} catch {
 		return "";
 	}
@@ -598,6 +646,11 @@ export default function AiAssistantChat({
 	const [showMiniProgress, setShowMiniProgress] = useState(true);
 	const [isProgressDockCollapsed, setIsProgressDockCollapsed] = useState(false);
 	const [isUsageDockVisible, setIsUsageDockVisible] = useState(true);
+	const [orchPreview, setOrchPreview] = useState<OrchestrationPreviewResult | null>(null);
+	const [orchPreviewLoading, setOrchPreviewLoading] = useState(false);
+	const [showOrchPreview, setShowOrchPreview] = useState(false);
+	const [agenticSteps, setAgenticSteps] = useState<AgenticStep[]>([]);
+	const [agenticStepsCollapsed, setAgenticStepsCollapsed] = useState(false);
 	const [streamRequestId, setStreamRequestId] = useState("");
 	const [completionState, setCompletionState] = useState<CompletionState>("idle");
 	const [completionMetrics, setCompletionMetrics] = useState<CompletionMetrics>({});
@@ -904,6 +957,14 @@ export default function AiAssistantChat({
 			setIsProgressDockCollapsed(true);
 		}, DONE_DOCK_AUTO_COLLAPSE_MS);
 		return () => window.clearTimeout(timer);
+	}, [completionState]);
+
+	useEffect(() => {
+		if (completionState === "done" || completionState === "stream_closed" || completionState === "error" || completionState === "cancelled") {
+			setAgenticSteps(prev => prev.length > 0 ? prev.map(s => ({ ...s, status: "done" as const })) : prev);
+			const timer = window.setTimeout(() => setAgenticStepsCollapsed(true), 3200);
+			return () => window.clearTimeout(timer);
+		}
 	}, [completionState]);
 
 	useEffect(() => {
@@ -1399,7 +1460,8 @@ export default function AiAssistantChat({
 	}, [flushStreamingToUI]);
 
 	const applyRealtimeCodeFromText = useCallback((rawText: string, force = false): boolean => {
-		if (!autoApplyEnabled || !turnAllowAutoApplyRef.current || !onCodeInsert) return false;
+		const isMenuJsonContext = contextType === "menu_json";
+		if ((!autoApplyEnabled && !isMenuJsonContext) || !turnAllowAutoApplyRef.current || !onCodeInsert) return false;
 		const source = String(rawText || "");
 		let nextCode = "";
 		if (contextType === "menu_json") {
@@ -1558,6 +1620,79 @@ export default function AiAssistantChat({
 		};
 	}, []);
 
+	const appendAgenticStep = useCallback((partial: Omit<AgenticStep, "id" | "timestamp">) => {
+		setAgenticSteps(prev => {
+			const existing = prev.findIndex(s => s.stage === partial.stage);
+			if (existing >= 0) {
+				const updated = [...prev];
+				updated[existing] = { ...updated[existing], ...partial, timestamp: Date.now() };
+				return updated;
+			}
+			return [...prev, { ...partial, id: `astep_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, timestamp: Date.now() }];
+		});
+	}, []);
+
+	const handleOrchPreview = useCallback(async () => {
+		const msg = inputValue.trim();
+		if (!msg && pendingAttachments.length === 0) {
+			message.warning(uiText(
+				"Nhập nội dung để preview orchestration",
+				"Enter a message to preview orchestration",
+				"请输入内容以预览编排",
+			));
+			return;
+		}
+		setOrchPreviewLoading(true);
+		setShowOrchPreview(true);
+		try {
+			const authState = useAuthStore.getState();
+			const token = authState.token ?? "";
+			const refreshToken = authState.refreshToken ?? "";
+			const csrfToken = authState.csrfToken
+				|| (typeof document !== "undefined" ? decodeURIComponent(document.cookie.match(/(?:^|; )CSRF-TOKEN=([^;]*)/)?.[1] || "") : "");
+			const headers: Record<string, string> = { "Content-Type": "application/json" };
+			if (token) headers["csm-token"] = token;
+			if (refreshToken) headers["X-Refresh-Token"] = refreshToken;
+			if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+			const responseMode: ResponseMode = contextType === "menu_json" ? "edit" : (hasEditIntent(msg) ? "edit" : "analyze");
+			const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/ai-orchestration-preview`, {
+				method: "POST",
+				headers,
+				credentials: "include",
+				body: JSON.stringify({
+					message: msg,
+					currentCode,
+					language,
+					contextType,
+					taskType: responseMode,
+					responseMode,
+					attachments: pendingAttachments.map((a) => ({
+						id: a.id,
+						name: a.name,
+						mimeType: a.mimeType,
+						size: a.size,
+						kind: a.kind,
+						contextRole: a.contextRole,
+						authoritative: a.authoritative,
+						summary: a.summary,
+						textContent: a.textContent,
+						fullContext: a.fullContext ?? false,
+					})),
+				}),
+			});
+			if (!res.ok) {
+				message.error(uiText("Không lấy được preview", "Failed to fetch preview", "获取预览失败"));
+				return;
+			}
+			const data = await res.json() as OrchestrationPreviewResult;
+			setOrchPreview(data);
+		} catch {
+			message.error(uiText("Lỗi preview orchestration", "Orchestration preview error", "编排预览错误"));
+		} finally {
+			setOrchPreviewLoading(false);
+		}
+	}, [inputValue, pendingAttachments, contextType, currentCode, language, uiText]);
+
 	const handleCancelRequest = useCallback(() => {
 		const controller = sseAbortRef.current;
 		if (!controller || !isLoading) {
@@ -1646,6 +1781,8 @@ export default function AiAssistantChat({
 			setMessages([...newMessages, assistantMsg]);
 			setIsLoading(true);
 			setStageEvents([]);
+			setAgenticSteps([]);
+			setAgenticStepsCollapsed(false);
 			setAiUsageSummary((prev) => ({ ...prev, turn: null }));
 			setModelDecisionTrace([]);
 			setShowFullTimeline(false);
@@ -1772,13 +1909,66 @@ export default function AiAssistantChat({
 								decision_step?: "primary" | "fallback" | "final";
 								reason_code?: string;
 								usage?: any; completionTokens?: number; estimatedCostUsd?: number;
+								// agentic_plan fields
+								compacted?: boolean; savedChars?: number; charsBefore?: number; charsAfter?: number;
+								routingTier?: string; planStepCount?: number;
 							};
 							if (evt.requestId) {
 								setStreamRequestId(String(evt.requestId));
 							}
 							const decisionStep = evt.modelDecisionStep || evt.decision_step;
 							const decisionReason = evt.modelDecisionReason || evt.reason_code;
-							if (evt.stage === "preparing") {
+							if (evt.stage === "agentic_plan" && evt.compacted && Number(evt.savedChars) > 0) {
+								const divider: ChatMessage = {
+									id: `compact_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+									role: "system",
+									messageType: "compacted_context",
+									content: "",
+									timestamp: Date.now(),
+									compactedSavedChars: Number(evt.savedChars),
+									compactedCharsBefore: Number(evt.charsBefore ?? 0),
+									compactedCharsAfter: Number(evt.charsAfter ?? 0),
+									compactedRoutingTier: String(evt.routingTier || ""),
+									compactedPlanStepCount: Number(evt.planStepCount ?? 0),
+								};
+								setMessages((prev) => {
+									// Only add if no divider already present for this turn
+									const lastIsCompact = prev.length > 0 && prev[prev.length - 1].messageType === "compacted_context";
+									return lastIsCompact ? prev : [...prev, divider];
+								});
+								appendAgenticStep({
+									stage: "agentic_plan",
+									icon: "🧠",
+									label: uiText("Lập kế hoạch Agentic", "Agentic Planning", "Agent 计划"),
+									detail: uiText(
+										`${evt.planStepCount ?? 0} bước · tier: ${evt.routingTier || "—"} · tiết kiệm ${(evt.savedChars ?? 0).toLocaleString()} ký tự`,
+										`${evt.planStepCount ?? 0} steps · tier: ${evt.routingTier || "—"} · saved ${(evt.savedChars ?? 0).toLocaleString()} chars`,
+										`${evt.planStepCount ?? 0} 步骤 · 层级: ${evt.routingTier || "—"} · 节省 ${(evt.savedChars ?? 0).toLocaleString()} 字符`,
+									),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
+							} else if (evt.stage === "agentic_plan") {
+								appendAgenticStep({ stage: "agentic_plan", icon: "🧠", label: uiText("Lập kế hoạch Agentic", "Agentic Planning", "Agent 计划"), status: "done" });
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
+							} else if (evt.stage === "local_tool_invocation") {
+								appendAgenticStep({
+									stage: "local_tool_invocation",
+									icon: "🔧",
+									label: uiText("Chạy local tools", "Local tools executed", "执行本地工具"),
+									detail: evt.message,
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
+							} else if (evt.stage === "context_compression") {
+								appendAgenticStep({
+									stage: "context_compression",
+									icon: "🗜",
+									label: uiText("Gắn context nén vào prompt", "Attached compressed context", "已附加压缩上下文"),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
+							} else if (evt.stage === "preparing") {
 								appendModelDecisionTrace({
 									step: decisionStep || "primary",
 									model: evt.model,
@@ -1880,7 +2070,8 @@ export default function AiAssistantChat({
 								}
 								flushStreamingToUI(true);
 								if (evt.fullResponse) {
-									applyRealtimeCodeFromText(evt.fullResponse);
+									// Force final apply to avoid debounce race with end-of-turn flag reset.
+									applyRealtimeCodeFromText(evt.fullResponse, true);
 								}
 								setCompletionState("done");
 								setIsLoading(false);
@@ -2036,9 +2227,96 @@ export default function AiAssistantChat({
 							style={{ marginTop: 32 }}
 						/>
 					) : (
-						messages.map((msg) => (
+						messages.map((msg, msgIdx) => {
+							if (msg.messageType === "compacted_context") {
+								const savedK = Math.round((msg.compactedSavedChars ?? 0) / 1000);
+								const savePct = msg.compactedCharsBefore && msg.compactedCharsBefore > 0
+									? Math.round(((msg.compactedSavedChars ?? 0) / msg.compactedCharsBefore) * 100)
+									: 0;
+								return (
+									<div key={msg.id} style={{
+										display: "flex",
+										alignItems: "center",
+										gap: 8,
+										margin: "8px 0",
+										paddingLeft: 4,
+										paddingRight: 4,
+									}}>
+										<div style={{ flex: 1, height: 1, background: "rgba(114,46,209,0.25)" }} />
+										<Tooltip title={uiText(
+											`Context đã được nén: ${(msg.compactedCharsBefore ?? 0).toLocaleString()} → ${(msg.compactedCharsAfter ?? 0).toLocaleString()} ký tự${msg.compactedRoutingTier ? ` · tier: ${msg.compactedRoutingTier}` : ""}${msg.compactedPlanStepCount ? ` · ${msg.compactedPlanStepCount} bước kế hoạch` : ""}`,
+											`Context compacted: ${(msg.compactedCharsBefore ?? 0).toLocaleString()} → ${(msg.compactedCharsAfter ?? 0).toLocaleString()} chars${msg.compactedRoutingTier ? ` · tier: ${msg.compactedRoutingTier}` : ""}${msg.compactedPlanStepCount ? ` · ${msg.compactedPlanStepCount} plan steps` : ""}`,
+											`上下文已压缩：${(msg.compactedCharsBefore ?? 0).toLocaleString()} → ${(msg.compactedCharsAfter ?? 0).toLocaleString()} 字符${msg.compactedRoutingTier ? ` · 层级: ${msg.compactedRoutingTier}` : ""}`,
+										)}>
+											<span style={{
+												fontSize: 11,
+												color: "#722ed1",
+												whiteSpace: "nowrap",
+												cursor: "default",
+												display: "flex",
+												alignItems: "center",
+												gap: 4,
+											}}>
+												<ThunderboltOutlined style={{ fontSize: 10 }} />
+												{uiText(
+													`Hội thoại đã được nén · tiết kiệm ${savedK > 0 ? `~${savedK}K` : (msg.compactedSavedChars ?? 0).toLocaleString()} ký tự${savePct > 0 ? ` (${savePct}%)` : ""}`,
+													`Compacted conversation · saved ${savedK > 0 ? `~${savedK}K` : (msg.compactedSavedChars ?? 0).toLocaleString()} chars${savePct > 0 ? ` (${savePct}%)` : ""}`,
+													`对话已压缩 · 节省 ${savedK > 0 ? `~${savedK}K` : (msg.compactedSavedChars ?? 0).toLocaleString()} 字符${savePct > 0 ? `（${savePct}%）` : ""}`,
+												)}
+											</span>
+										</Tooltip>
+										<div style={{ flex: 1, height: 1, background: "rgba(114,46,209,0.25)" }} />
+									</div>
+								);
+							}
+							const isLastMsg = msgIdx === messages.length - 1;
+							const showStepCards = isLastMsg && msg.role === "assistant" && agenticSteps.length > 0;
+							return (
+							<Fragment key={msg.id}>
+							{showStepCards && (
+								<div style={{ padding: "2px 8px 0" }}>
+									<div style={{
+										border: "1px solid rgba(114,46,209,0.22)",
+										borderRadius: 8,
+										background: "rgba(114,46,209,0.05)",
+										overflow: "hidden",
+										marginBottom: 4,
+									}}>
+										<div
+											style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", cursor: "pointer" }}
+											onClick={() => setAgenticStepsCollapsed(c => !c)}
+										>
+											<span style={{ fontSize: 11, color: "#722ed1", display: "flex", alignItems: "center", gap: 4, fontWeight: 500 }}>
+												<ThunderboltOutlined style={{ fontSize: 10 }} />
+												{agenticStepsCollapsed
+													? uiText(`${agenticSteps.length} b\u01b0\u1edbc agentic ho\u00e0n t\u1ea5t`, `${agenticSteps.length} agentic steps done`, `${agenticSteps.length} \u4e2a Agent \u6b65\u9aa4\u5b8c\u6210`)
+													: uiText("Agentic workflow", "Agentic workflow", "Agent \u5de5\u4f5c\u6d41")
+												}
+											</span>
+											<span style={{ fontSize: 10, color: "#722ed1" }}>{agenticStepsCollapsed ? "\u25bc" : "\u25b2"}</span>
+										</div>
+										{!agenticStepsCollapsed && (
+											<div style={{ borderTop: "1px solid rgba(114,46,209,0.12)", padding: "3px 0" }}>
+												{agenticSteps.map(step => (
+													<div key={step.id} style={{ display: "flex", alignItems: "flex-start", gap: 7, padding: "3px 10px", fontSize: 11 }}>
+														<span style={{ fontSize: 13, lineHeight: "15px", flexShrink: 0 }}>{step.icon}</span>
+														<div style={{ flex: 1, minWidth: 0, lineHeight: "15px" }}>
+															<span style={{ color: "rgba(230,230,230,0.9)" }}>{step.label}</span>
+															{step.detail && (
+																<span style={{ color: "rgba(180,180,180,0.6)", marginLeft: 6, fontSize: 10 }}>{step.detail}</span>
+															)}
+														</div>
+														<span style={{ fontSize: 11, color: step.status === "done" ? "#52c41a" : "#722ed1", flexShrink: 0, lineHeight: "15px" }}>
+															{step.status === "done" ? "\u2713" : <Spin size="small" />}
+														</span>
+													</div>
+												))}
+											</div>
+										)}
+									</div>
+								</div>
+							)}
 							<div
-								key={msg.id}
 								className={`${styles.messageItem} ${styles[msg.role]}`}
 							>
 								<div className={styles.messageContent}>
@@ -2125,7 +2403,9 @@ export default function AiAssistantChat({
 									</div>
 								</div>
 							</div>
-						))
+							</Fragment>
+							);
+						})
 					)}
 
 				</div>
@@ -2485,6 +2765,67 @@ export default function AiAssistantChat({
 				</div>
 			)}
 
+				{/* Orchestration Preview Panel */}
+				{showOrchPreview && (
+					<div className={styles.usageDock} style={{ borderTop: "2px solid #722ed1" }}>
+						<div className={styles.usageDockHeader}>
+							<div className={styles.usageDockTitle} style={{ color: "#722ed1" }}>
+								<ThunderboltOutlined style={{ marginRight: 4 }} />
+								{uiText("Preview Orchestration", "Orchestration Preview", "编排预览")}
+							</div>
+							<Button type="text" size="small" icon={<CloseOutlined />} onClick={() => setShowOrchPreview(false)} />
+						</div>
+						{orchPreviewLoading && (
+							<div className={styles.progressDockSpinnerRow}>
+								<Spin size="small" />
+								<span style={{ marginLeft: 8, fontSize: 12 }}>{uiText("Đang phân tích...", "Analyzing...", "分析中...")}</span>
+							</div>
+						)}
+						{!orchPreviewLoading && orchPreview && (
+							<>
+								<div className={styles.usageDockRow}>
+									<span>{uiText("Routing tier", "Routing tier", "路由层级")}</span>
+									<span>
+										<Tag color="purple">{orchPreview.routingTier || "—"}</Tag>
+										<Tag color="geekblue">{orchPreview.preferredModelHint || "—"}</Tag>
+									</span>
+								</div>
+								<div className={styles.usageDockRow}>
+									<span>{uiText("Tiết kiệm ký tự", "Chars saved", "节省字符数")}</span>
+									<span>
+										{orchPreview.totalCharsBefore.toLocaleString()} → {orchPreview.totalCharsAfter.toLocaleString()}
+										{orchPreview.savedChars > 0 && (
+											<Tag color="green" style={{ marginLeft: 4 }}>-{orchPreview.savedChars.toLocaleString()}</Tag>
+										)}
+									</span>
+								</div>
+								{orchPreview.speculativeExecuted && (
+									<div className={styles.usageDockRow}>
+										<span>{uiText("Speculative", "Speculative", "推测执行")}</span>
+										<Tag color="cyan">{orchPreview.speculativeOperation}</Tag>
+									</div>
+								)}
+								{Array.isArray(orchPreview.planSteps) && orchPreview.planSteps.length > 0 && (
+									<div className={styles.usageDockRow} style={{ alignItems: "flex-start" }}>
+										<span style={{ flexShrink: 0 }}>{uiText("Kế hoạch", "Plan steps", "计划步骤")}</span>
+										<div style={{ fontSize: 11, lineHeight: 1.5 }}>
+											{orchPreview.planSteps.map((step, i) => (
+												<div key={i}><span style={{ color: "#722ed1", marginRight: 4 }}>{i + 1}.</span>{step}</div>
+											))}
+										</div>
+									</div>
+								)}
+								{orchPreview.compressedContextBlock && (
+									<div className={styles.usageDockRow} style={{ alignItems: "flex-start" }}>
+										<span style={{ flexShrink: 0 }}>{uiText("Context nén", "Compressed ctx", "压缩上下文")}</span>
+										<pre style={{ fontSize: 10, maxHeight: 80, overflowY: "auto", background: "#1f1f1f", color: "#d4d4d4", padding: "4px 6px", borderRadius: 4, flex: 1, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{orchPreview.compressedContextBlock.slice(0, 600)}{orchPreview.compressedContextBlock.length > 600 ? "..." : ""}</pre>
+									</div>
+								)}
+							</>
+						)}
+					</div>
+				)}
+
 				{/* Input Area */}
 				<div className={styles.inputArea}>
 					<input
@@ -2569,6 +2910,16 @@ export default function AiAssistantChat({
 								icon={<FileImageOutlined />}
 								onClick={() => imageInputRef.current?.click()}
 								disabled={isLoading}
+							/>
+						</Tooltip>
+						<Tooltip title={uiText("Preview luồng orchestration (dev)", "Preview orchestration plan (dev)", "预览编排计划（开发）")}>
+							<Button
+								type="text"
+								icon={<ThunderboltOutlined />}
+								onClick={() => void handleOrchPreview()}
+								disabled={isLoading || orchPreviewLoading}
+								loading={orchPreviewLoading}
+								style={{ color: showOrchPreview ? "#722ed1" : undefined }}
 							/>
 						</Tooltip>
 						{isLoading && (

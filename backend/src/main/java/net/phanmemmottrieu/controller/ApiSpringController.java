@@ -42,6 +42,7 @@ import net.phanmemmottrieu.service.ApiCallInstrumentationService;
 import net.phanmemmottrieu.service.AiConversationContextService;
 import net.phanmemmottrieu.service.MenuQualityGateService;
 import net.phanmemmottrieu.service.TokenOptimizationService;
+import net.phanmemmottrieu.service.AiLocalOrchestrationService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -127,6 +128,7 @@ public class ApiSpringController {
     private final AiConversationContextService aiConversationContextService;
     private final MenuQualityGateService menuQualityGateService;
     private final TokenOptimizationService tokenOptimizationService;
+    private final AiLocalOrchestrationService aiLocalOrchestrationService;
 
     private static final int MAX_CODE_CHARS = 500_000;
     private static final int MAX_MESSAGE_CHARS = 20_000;
@@ -311,8 +313,44 @@ public class ApiSpringController {
     @Value("${ai.code-stream.routing.force-simple-first:true}")
     private boolean aiCodeStreamRoutingForceSimpleFirst;
 
+    @Value("${ai.code-stream.routing.simple-first-max-chars:60000}")
+    private int aiCodeStreamRoutingSimpleFirstMaxChars;
+
+    @Value("${ai.code-stream.routing.retry-default-max-prompt-chars:80000}")
+    private int aiCodeStreamRoutingRetryDefaultMaxPromptChars;
+
     @Value("${ai.code-stream.prompt-cache.min-chars:8000}")
     private int aiCodeStreamPromptCacheMinChars;
+
+    @Value("${ai.assistant.prompt-budget.menu.max-chars:140000}")
+    private int aiAssistantPromptBudgetMenuMaxChars;
+
+    @Value("${ai.assistant.prompt-budget.code.max-chars:90000}")
+    private int aiAssistantPromptBudgetCodeMaxChars;
+
+    @Value("${ai.assistant.prompt-budget.code-analyze.current-code-max-chars:22000}")
+    private int aiAssistantPromptBudgetCodeAnalyzeCurrentCodeMaxChars;
+
+    @Value("${ai.assistant.prompt-budget.continuity.max-chars:30000}")
+    private int aiAssistantPromptBudgetContinuityMaxChars;
+
+    @Value("${ai.assistant.prompt-budget.global.max-chars:60000}")
+    private int aiAssistantPromptBudgetGlobalMaxChars;
+
+    @Value("${ai.assistant.menu.primary-probe.skip-when-over-ratio:1.4}")
+    private double aiAssistantMenuPrimaryProbeSkipWhenOverRatio;
+
+    @Value("${ai.telemetry.dashboard.window-hours:24}")
+    private int aiTelemetryDashboardWindowHours;
+
+    @Value("${ai.telemetry.alert.fallback-rate-threshold:0.35}")
+    private double aiTelemetryAlertFallbackRateThreshold;
+
+    @Value("${ai.telemetry.alert.quick-probe-rate-threshold:0.30}")
+    private double aiTelemetryAlertQuickProbeRateThreshold;
+
+    @Value("${ai.telemetry.alert.min-samples:12}")
+    private int aiTelemetryAlertMinSamples;
 
     @Value("${gemini.model:}")
     private String aiCodeStreamDefaultStreamingModel;
@@ -374,7 +412,8 @@ public class ApiSpringController {
             ApiCallInstrumentationService apiCallInstrumentationService,
             AiConversationContextService aiConversationContextService,
             MenuQualityGateService menuQualityGateService,
-            TokenOptimizationService tokenOptimizationService
+            TokenOptimizationService tokenOptimizationService,
+            AiLocalOrchestrationService aiLocalOrchestrationService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -400,6 +439,7 @@ public class ApiSpringController {
         this.aiConversationContextService = aiConversationContextService;
         this.menuQualityGateService = menuQualityGateService;
         this.tokenOptimizationService = tokenOptimizationService;
+        this.aiLocalOrchestrationService = aiLocalOrchestrationService;
     }
 
     @PostMapping(value = {"/ai-code-stream", "/api/ai-code-stream"})
@@ -496,12 +536,15 @@ public class ApiSpringController {
                     usePromptCache = false;
                 }
 
-                String effectiveModel = routeModel(message, effectiveCodeContext, responseMode, modelOverride);
+                String effectiveModel = routeModel(message, effectiveCodeContext, contextType, responseMode, modelOverride);
                 String defaultModel = resolveDefaultStreamingModel();
                 String simpleModel = resolveSimpleStreamingModel();
                 boolean shouldFallbackToDefaultOnSimpleFailure = aiCodeStreamRoutingForceSimpleFirst
                     && effectiveModel.equalsIgnoreCase(simpleModel)
-                    && !defaultModel.equalsIgnoreCase(simpleModel);
+                    && !defaultModel.equalsIgnoreCase(simpleModel)
+                    && prompt.length() <= Math.max(20000, aiCodeStreamRoutingRetryDefaultMaxPromptChars);
+                boolean switchedToDefaultModel = false;
+                boolean providerFallbackUsed = false;
                 long startedAtMs = System.currentTimeMillis();
 
                 List<Map<String, String>> imageParts = extractImageParts(attachmentsRaw);
@@ -553,6 +596,7 @@ public class ApiSpringController {
                             promptParts[1],
                             effectiveModel,
                             language,
+                            contextType,
                             responseMode,
                             largeStructuredEditMode,
                             usePromptCache,
@@ -582,15 +626,45 @@ public class ApiSpringController {
                             promptParts[1],
                             defaultModel,
                             language,
+                            contextType,
                             responseMode,
                             largeStructuredEditMode,
                             usePromptCache,
                             requestId);
                     effectiveModel = defaultModel;
+                            switchedToDefaultModel = true;
 
                     if (rawResponse == null) {
-                        sendErrorEvent(emitter, "Cả simple model và default model đều thất bại");
-                        return;
+                        sendEvent(emitter, jsonOf(
+                            "stage", "model_switch",
+                            "status", "fallback_provider",
+                            "requestId", requestId,
+                            "model", "provider_fallback",
+                            "modelDecisionStep", "fallback",
+                            "modelDecisionReason", "provider_error",
+                            "decision_step", "fallback",
+                            "reason_code", "provider_error",
+                            "message", "Simple/default stream đều thất bại, chuyển sang provider fallback"));
+
+                        String providerRaw = aiProviderFactory.generateContent(prompt);
+                        String providerText = extractAiResultText(providerRaw);
+                        if ((providerText == null || providerText.isBlank()) && providerRaw != null) {
+                            providerText = providerRaw.trim();
+                        }
+                        if (providerText == null || providerText.isBlank()) {
+                            sendErrorEvent(emitter, "Cả simple model, default model và provider fallback đều thất bại");
+                            return;
+                        }
+
+                        sendEvent(emitter, jsonOf(
+                            "stage", "streaming",
+                            "requestId", requestId,
+                            "chunk", providerText,
+                            "attempt", 1,
+                            "providerFallback", true));
+                        rawResponse = providerText;
+                        effectiveModel = "provider_fallback";
+                        providerFallbackUsed = true;
                     }
                 }
 
@@ -599,6 +673,9 @@ public class ApiSpringController {
                 String completionPayload = rawResponse;
                 if (largeStructuredEditMode) {
                     completionPayload = materializeLargeEditResponse(completionPayload, base.baseContent());
+                }
+                if ("edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType)) {
+                    completionPayload = mergeMenuCompletionWithBase(effectiveCodeContext, completionPayload, contextType);
                 }
                 completion.put("fullResponse", completionPayload);
                 completion.put("responseMode", responseMode);
@@ -620,6 +697,43 @@ public class ApiSpringController {
                 }
                 completion.put("timestamp", System.currentTimeMillis());
                 sendEvent(emitter, objectMapper.writeValueAsString(completion));
+
+                logger.info(
+                    "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType={} responseMode={} model={} promptChars={} promptTokens={} outputChars={} completionTokens={} estimatedCostUsd={} switchedToDefaultModel={} providerFallbackUsed={} promptCache={} images={} elapsedMs={}",
+                    requestId,
+                    appId,
+                    contextType,
+                    responseMode,
+                    effectiveModel,
+                    prompt.length(),
+                    promptTokens,
+                    rawResponse.length(),
+                    completionTokens,
+                    usageInfo.get("estimatedCostUsd"),
+                    switchedToDefaultModel,
+                    providerFallbackUsed,
+                    usePromptCache,
+                    imageParts.size(),
+                    (System.currentTimeMillis() - startedAtMs));
+
+                Map<String, Object> codeTelemetry = new LinkedHashMap<>();
+                codeTelemetry.put("timestamp", System.currentTimeMillis());
+                codeTelemetry.put("flow", "ai-code-stream");
+                codeTelemetry.put("appId", appId);
+                codeTelemetry.put("contextType", contextType);
+                codeTelemetry.put("taskType", "code_stream");
+                codeTelemetry.put("responseMode", responseMode);
+                codeTelemetry.put("model", effectiveModel);
+                codeTelemetry.put("promptChars", prompt.length());
+                codeTelemetry.put("promptTokens", promptTokens);
+                codeTelemetry.put("outputChars", rawResponse.length());
+                codeTelemetry.put("completionTokens", completionTokens);
+                codeTelemetry.put("estimatedCostUsd", usageInfo.get("estimatedCostUsd"));
+                codeTelemetry.put("switchedToDefaultModel", switchedToDefaultModel);
+                codeTelemetry.put("providerFallbackUsed", providerFallbackUsed);
+                codeTelemetry.put("attachments", imageParts.size());
+                codeTelemetry.put("elapsedMs", Math.max(0L, (System.currentTimeMillis() - startedAtMs)));
+                apiCallInstrumentationService.recordAiTelemetry(codeTelemetry);
 
                 Map<String, Object> codeTurnMeta = new LinkedHashMap<>();
                 codeTurnMeta.put("source", "aiCodeStream");
@@ -664,6 +778,7 @@ public class ApiSpringController {
             String contextType, String responseMode, Object attachmentsRaw,
             boolean largeStructuredEditMode, String baseRef, int baseChars) {
         StringBuilder sb = new StringBuilder();
+        boolean menuJsonEditMode = "edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType);
 
         sb.append("Bạn là AI trợ lý lập trình (như Cursor/Copilot). Hỗ trợ người dùng chính xác và chi tiết.\n\n");
 
@@ -680,7 +795,15 @@ public class ApiSpringController {
                 sb.append("BASE_CONTENT_CHARS: ").append(baseChars).append("\n\n");
             }
         } else if ("edit".equalsIgnoreCase(responseMode)) {
-            sb.append("CHẾ ĐỘ: Chỉnh sửa code. Trả về code đã cập nhật hoàn chỉnh.\n\n");
+            if (menuJsonEditMode) {
+                sb.append("CHẾ ĐỘ: Chỉnh sửa menu JSON cho editor.\n");
+                sb.append("BẮT BUỘC: Trả về DUY NHẤT một JSON hợp lệ cho menu editor.\n");
+                sb.append("Đầu ra phải là object chứa trường menu (ví dụ: {\"menu\":[...]}) hoặc mảng menu thuần.\n");
+                sb.append("Không trả về wrapper {\"summary\",\"code\",\"changes\"}.\n");
+                sb.append("Không markdown, không code fence, không giải thích ngoài JSON.\n\n");
+            } else {
+                sb.append("CHẾ ĐỘ: Chỉnh sửa code. Trả về code đã cập nhật hoàn chỉnh.\n\n");
+            }
         } else {
             sb.append("CHẾ ĐỘ: Phân tích/Giải thích. Phân tích và giải thích chi tiết.\n\n");
         }
@@ -723,10 +846,11 @@ public class ApiSpringController {
             String prompt,
             String model,
             String language,
+            String contextType,
             String responseMode,
             boolean largeStructuredEditMode,
             String requestId) throws Exception {
-        return streamWithAutoContinue(emitter, prompt, "", "", model, language, responseMode, largeStructuredEditMode, false, requestId);
+        return streamWithAutoContinue(emitter, prompt, "", "", model, language, contextType, responseMode, largeStructuredEditMode, false, requestId);
     }
 
     private String streamWithAutoContinueMultimodal(
@@ -785,6 +909,7 @@ public class ApiSpringController {
             String userMessage,
             String model,
             String language,
+            String contextType,
             String responseMode,
             boolean largeStructuredEditMode,
             boolean usePromptCache,
@@ -896,7 +1021,7 @@ public class ApiSpringController {
             String raw = attemptBuffer.toString();
             lastRawResponse = raw;
 
-            if (isCompleteResponse(raw, language, responseMode, largeStructuredEditMode)) {
+            if (isCompleteResponse(raw, language, contextType, responseMode, largeStructuredEditMode)) {
                 if (attempt > 1) {
                     sendEvent(emitter, jsonOf(
                             "stage", "auto_continue",
@@ -909,7 +1034,7 @@ public class ApiSpringController {
             }
 
             if (attempt < maxAttempts) {
-                currentPrompt = buildAutoContinuePrompt(prompt, raw, language, largeStructuredEditMode);
+                currentPrompt = buildAutoContinuePrompt(prompt, raw, language, contextType, largeStructuredEditMode);
             }
         }
 
@@ -951,12 +1076,18 @@ public class ApiSpringController {
     }
 
     private String buildAutoContinuePrompt(String originalPrompt, String previousRawResponse, String language,
+            String contextType,
             boolean largeStructuredEditMode) {
         StringBuilder sb = new StringBuilder();
         sb.append("KẾT QUẢ VỪA RỒI CHƯA HOÀN CHỈNH (bị cắt giữa chừng). Hãy trả về lại 1 lần DUY NHẤT, đầy đủ và hợp lệ.\n\n");
         if (largeStructuredEditMode) {
             sb.append("BẮT BUỘC format JSON: {\"summary\":\"...\",\"changes\":[...],\"textEdits\":[{\"find\":\"...\",\"replace\":\"...\"}]}\n");
             sb.append("Không markdown, không code fence, không giải thích thêm.\n\n");
+        } else if (isMenuJsonContext(contextType)) {
+            sb.append("BẮT BUỘC: Trả về DUY NHẤT JSON menu hợp lệ, đầy đủ từ đầu đến cuối.\n");
+            sb.append("Đầu ra phải là object chứa trường menu hoặc mảng menu thuần.\n");
+            sb.append("Không dùng wrapper {\"summary\",\"code\",\"changes\"}.\n");
+            sb.append("Không markdown, không code fence, không cắt bớt.\n\n");
         } else if ("json".equalsIgnoreCase(language)) {
             sb.append("BẮT BUỘC: Trả về JSON hợp lệ, đầy đủ từ đầu đến cuối trong wrapper: {\"summary\":\"...\",\"code\":\"toàn bộ JSON hoàn chỉnh\",\"changes\":[...]}\n");
             sb.append("QUAN TRỌNG: Trường 'code' phải chứa toàn bộ JSON hợp lệ (không được bỏ sót bất kỳ phần nào, mở { phải có đóng }).\n");
@@ -972,10 +1103,15 @@ public class ApiSpringController {
         return sb.toString();
     }
 
-    private boolean isCompleteResponse(String rawResponse, String language, String responseMode, boolean largeStructuredEditMode) {
+    private boolean isCompleteResponse(String rawResponse, String language, String contextType, String responseMode, boolean largeStructuredEditMode) {
         String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
         if (raw.isBlank()) {
             return false;
+        }
+
+        if ("edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType)) {
+            String menuCandidate = extractMenuDraftForCompletion(raw, contextType);
+            return !menuCandidate.isBlank();
         }
 
         if ("json".equalsIgnoreCase(language)) {
@@ -1097,6 +1233,11 @@ public class ApiSpringController {
         return Math.max(1, (int) Math.ceil(value.length() / 4.0));
     }
 
+    private int estimateTokensByChars(int chars) {
+        if (chars <= 0) return 0;
+        return Math.max(1, (int) Math.ceil(chars / 4.0));
+    }
+
     private record ModelPrice(double inputUsdPer1k, double outputUsdPer1k) {
     }
 
@@ -1158,7 +1299,7 @@ public class ApiSpringController {
         return "gemini-2.5-flash";
     }
 
-    private String routeModel(String messageText, String codeContext, String responseMode, String modelOverride) {
+    private String routeModel(String messageText, String codeContext, String contextType, String responseMode, String modelOverride) {
         if (modelOverride != null && !modelOverride.isBlank()) return modelOverride.trim();
         if (!aiCodeStreamRoutingEnabled) return resolveDefaultStreamingModel();
 
@@ -1168,15 +1309,22 @@ public class ApiSpringController {
             return defaultModel;
         }
 
-        if (aiCodeStreamRoutingForceSimpleFirst) {
-            logger.debug("ApiSpringController: ai-code-stream force simple-first model={}", simpleModel);
-            return simpleModel;
-        }
-
         boolean isAnalyzeMode = !"edit".equalsIgnoreCase(responseMode);
         boolean isEditMode = "edit".equalsIgnoreCase(responseMode);
+        boolean isMenuContext = isMenuJsonContext(contextType);
         int totalChars = (messageText == null ? 0 : messageText.length())
                 + (codeContext == null ? 0 : codeContext.length());
+
+        // Menu JSON edit ưu tiên model mặc định để giảm retry/fallback nhiều vòng.
+        if (isMenuContext && isEditMode) {
+            return defaultModel;
+        }
+
+        if (aiCodeStreamRoutingForceSimpleFirst
+                && totalChars <= Math.max(8000, aiCodeStreamRoutingSimpleFirstMaxChars)) {
+            logger.debug("ApiSpringController: ai-code-stream force simple-first model={} totalChars={}", simpleModel, totalChars);
+            return simpleModel;
+        }
 
         if (isEditMode && aiCodeStreamRoutingPreferSimpleForEdit
                 && totalChars <= Math.max(4000, aiCodeStreamRoutingEditSimpleMaxChars)) {
@@ -2193,12 +2341,19 @@ public class ApiSpringController {
                     : (continuityMemory + "\n\n## SHARED_REUSE_MEMORY\n" + aggregatedReusableMemory);
             }
             List<String> pendingQuestions = aiAssistantGatewayService.loadAiAssistantPendingQuestions(appId, continuityScopeKey, 8);
+            AiLocalOrchestrationService.OrchestrationResult orchestrationResult = AiLocalOrchestrationService.OrchestrationResult.disabled();
 
             // CHAINING Step 1: if enabled and total payload is very large, run chained distillation
             // to compress large config files via an extra AI Assistant API call before the final request.
             String chainedSchemaSummary = "";
             String chainedCodeSummary = "";
-            int estimatedCharsBeforeChain = estimateTotalAiAssistantPayloadChars(attachments, message, currentCode);
+            int estimatedCharsBeforeChain = estimateTotalAiAssistantPayloadChars(
+                attachments,
+                message,
+                currentCode,
+                continuityMemory,
+                aggregatedReusableMemory,
+                "");
             if (aiAssistantMenuChainingEnabled
                 && "menu_json".equals(effectiveContextType)
                 && estimatedCharsBeforeChain > Math.max(150000, aiAssistantMenuChainingThresholdChars)) {
@@ -2312,6 +2467,76 @@ public class ApiSpringController {
                     + "When conflict happens: prioritize ACTIVE FILE IN EDITOR content over this summary.\n\n"
                     + chainedCodeSummary;
             }
+
+            try {
+                orchestrationResult = aiLocalOrchestrationService.orchestrate(
+                    appId,
+                    message,
+                    currentCode,
+                    attachments,
+                    effectiveContextType,
+                    effectiveTaskType,
+                    responseMode,
+                    language);
+                if (orchestrationResult.enabled && orchestrationResult.compressedContextBlock != null
+                    && !orchestrationResult.compressedContextBlock.isBlank()) {
+                    Map<String, Object> agenticPlanEvt = new java.util.LinkedHashMap<>();
+                    agenticPlanEvt.put("stage", "agentic_plan");
+                    agenticPlanEvt.put("message", uiTextByLang(
+                        uiLang,
+                        "Đã lập kế hoạch local-agentic và chạy local tools trước khi gọi model chính",
+                        "Prepared local-agentic plan and executed local tools before final model call",
+                        "已在最终模型调用前完成本地 Agent 计划与工具执行"));
+                    agenticPlanEvt.put("responseMode", responseMode);
+                    agenticPlanEvt.put("status", "running");
+                    agenticPlanEvt.put("current", 1);
+                    agenticPlanEvt.put("total", 3);
+                    agenticPlanEvt.put("percent", 33);
+                    agenticPlanEvt.put("compacted", orchestrationResult.savedChars > 0);
+                    agenticPlanEvt.put("savedChars", orchestrationResult.savedChars);
+                    agenticPlanEvt.put("charsBefore", orchestrationResult.totalCharsBefore);
+                    agenticPlanEvt.put("charsAfter", orchestrationResult.totalCharsAfter);
+                    agenticPlanEvt.put("routingTier", orchestrationResult.routingTier != null ? orchestrationResult.routingTier : "");
+                    agenticPlanEvt.put("planStepCount", orchestrationResult.planSteps != null ? orchestrationResult.planSteps.size() : 0);
+                    emitAiAssistantChatChunk(appId, agenticPlanEvt);
+
+                    emitAiAssistantChatChunk(appId, Map.of(
+                        "stage", "local_tool_invocation",
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Local tools đã nén context theo tầng để giảm token",
+                            "Local tools compressed tiered context to reduce token usage",
+                            "本地工具已按分层上下文进行压缩以减少 token"),
+                        "responseMode", responseMode,
+                        "status", "running",
+                        "current", 2,
+                        "total", 3,
+                        "percent", 66,
+                        "detail", "savedChars=" + orchestrationResult.savedChars
+                            + ", routingTier=" + String.valueOf(orchestrationResult.routingTier == null ? "" : orchestrationResult.routingTier)
+                            + ", preferredModel=" + String.valueOf(orchestrationResult.preferredModelHint == null ? "" : orchestrationResult.preferredModelHint)
+                            + ", speculative=" + String.valueOf(orchestrationResult.speculativeOperation == null ? "none" : orchestrationResult.speculativeOperation)));
+
+                    globalContext = (globalContext.isBlank() ? "" : globalContext + "\n\n")
+                        + orchestrationResult.compressedContextBlock;
+
+                    emitAiAssistantChatChunk(appId, Map.of(
+                        "stage", "context_compression",
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Đã gắn compressed orchestration context vào prompt cuối",
+                            "Attached compressed orchestration context to final prompt",
+                            "已将压缩后的编排上下文加入最终提示"),
+                        "responseMode", responseMode,
+                        "status", "running",
+                        "current", 3,
+                        "total", 3,
+                        "percent", 100));
+                }
+            } catch (Exception orchestrationEx) {
+                logger.warn("AI Assistant local orchestration failed, continue with baseline flow: {}", orchestrationEx.getMessage());
+            }
+
             List<Map<String, Object>> messages = buildAiAssistantChatMessages(appId, message, currentCode, language, effectiveContextType,
                 effectiveTaskType, responseMode, attachments, continuityMemory, globalContext, pName, pType, continuityScopeKey, pendingQuestions);
             emitAiAssistantChatDebug(appId, buildAiAssistantDebugPayload(
@@ -2429,7 +2654,13 @@ public class ApiSpringController {
             };
 
             String githubRaw = "";
-            int estimatedPayloadChars = estimateTotalAiAssistantPayloadChars(attachments, message, currentCode);
+            int estimatedPayloadChars = estimateTotalAiAssistantPayloadChars(
+                attachments,
+                message,
+                currentCode,
+                continuityMemory,
+                aggregatedReusableMemory,
+                globalContext);
             boolean directProviderRoute = shouldDirectProviderRouteForLargeMenu(
                 effectiveContextType,
                 effectiveTaskType,
@@ -2445,10 +2676,16 @@ public class ApiSpringController {
                 effectiveContextType,
                 effectiveTaskType,
                 estimatedPayloadChars);
+            boolean skipPrimaryProbeForHugePayload = shouldSkipPrimaryProbeForHugeMenuPayload(estimatedPayloadChars);
             boolean forceGeminiFallback = false;
+            boolean usedQuickPrimaryProbe = false;
+            boolean usedDirectProviderRoute = false;
+            boolean usedGeminiFallback = false;
 
             if (directProviderRoute) {
-                if (aiAssistantMenuDirectProviderPrimaryProbeFirst) {
+                usedDirectProviderRoute = true;
+                if (aiAssistantMenuDirectProviderPrimaryProbeFirst && !skipPrimaryProbeForHugePayload) {
+                    usedQuickPrimaryProbe = true;
                     emitAiAssistantChatChunk(appId, Map.of(
                         "stage", "large_menu_quick_primary_probe",
                         "modelDecisionStep", "primary",
@@ -2509,9 +2746,15 @@ public class ApiSpringController {
                         "reason_code", "payload_too_large",
                         "message", uiTextByLang(
                             uiLang,
-                            "Menu payload lớn, route trực tiếp sang provider fallback để tránh vòng lặp 429",
-                            "Menu payload is large, routing directly to fallback provider to avoid repeated 429",
-                            "菜单负载较大，直接路由到回退提供方以避免 429 循环"),
+                            skipPrimaryProbeForHugePayload
+                                ? "Payload quá lớn, bỏ qua quick probe và route trực tiếp sang provider fallback"
+                                : "Menu payload lớn, route trực tiếp sang provider fallback để tránh vòng lặp 429",
+                            skipPrimaryProbeForHugePayload
+                                ? "Payload is extremely large, skipping quick probe and routing directly to fallback provider"
+                                : "Menu payload is large, routing directly to fallback provider to avoid repeated 429",
+                            skipPrimaryProbeForHugePayload
+                                ? "负载极大，跳过快速探测并直接路由到回退提供方"
+                                : "菜单负载较大，直接路由到回退提供方以避免 429 循环"),
                         "responseMode", responseMode,
                         "status", "running"
                     ));
@@ -2537,6 +2780,7 @@ public class ApiSpringController {
                     }
                 }
             } else if (quickPrimaryProbeRoute) {
+                usedQuickPrimaryProbe = true;
                 emitAiAssistantChatChunk(appId, Map.of(
                     "stage", "quick_primary_probe",
                     "modelDecisionStep", "primary",
@@ -2623,6 +2867,7 @@ public class ApiSpringController {
             boolean shouldGeminiFallback = upstreamFallbackSignal
                 && (!menuGeminiFallbackDisabled || forcedMenuFallbackOverride);
             if (fullResponse.length() == 0 && shouldGeminiFallback) {
+                usedGeminiFallback = true;
                 boolean authFailure = isAuthFailureFromRawText(githubRaw);
                 if (menuGeminiFallbackDisabled && forcedMenuFallbackOverride) {
                     logger.warn("AI Assistant stream: overriding disabled menu Gemini fallback due to upstream failure signals.");
@@ -3071,6 +3316,56 @@ public class ApiSpringController {
                 message,
                 fullResponse.toString(),
                 sharedTurnMeta);
+
+            int inputCharsEstimate = extractAiAssistantTextPayloadChars(messages);
+            int outputCharsEstimate = fullResponse.length();
+            int inputTokensEstimate = estimateTokensByChars(inputCharsEstimate);
+            int outputTokensEstimate = estimateTokensByChars(outputCharsEstimate);
+            logger.info(
+                "AI_TELEMETRY flow=ai-assistant-chat appId={} contextType={} taskType={} responseMode={} inputChars~={} inputTokens~={} outputChars={} outputTokens~={} estimatedPayloadChars={} directProviderRoute={} quickProbe={} skipQuickProbe={} geminiFallback={} menuFallbackDisabled={} attachments={}",
+                appId,
+                effectiveContextType,
+                effectiveTaskType,
+                responseMode,
+                inputCharsEstimate,
+                inputTokensEstimate,
+                outputCharsEstimate,
+                outputTokensEstimate,
+                estimatedPayloadChars,
+                usedDirectProviderRoute,
+                usedQuickPrimaryProbe,
+                skipPrimaryProbeForHugePayload,
+                usedGeminiFallback,
+                menuGeminiFallbackDisabled,
+                attachments == null ? 0 : attachments.size());
+
+            Map<String, Object> chatTelemetry = new LinkedHashMap<>();
+            chatTelemetry.put("timestamp", System.currentTimeMillis());
+            chatTelemetry.put("flow", "ai-assistant-chat");
+            chatTelemetry.put("appId", appId);
+            chatTelemetry.put("contextType", effectiveContextType);
+            chatTelemetry.put("taskType", effectiveTaskType);
+            chatTelemetry.put("responseMode", responseMode);
+            chatTelemetry.put("inputChars", inputCharsEstimate);
+            chatTelemetry.put("inputTokens", inputTokensEstimate);
+            chatTelemetry.put("outputChars", outputCharsEstimate);
+            chatTelemetry.put("outputTokens", outputTokensEstimate);
+            chatTelemetry.put("usedDirectProviderRoute", usedDirectProviderRoute);
+            chatTelemetry.put("usedQuickProbe", usedQuickPrimaryProbe);
+            chatTelemetry.put("skippedQuickProbe", skipPrimaryProbeForHugePayload);
+            chatTelemetry.put("usedGeminiFallback", usedGeminiFallback);
+            chatTelemetry.put("attachments", attachments == null ? 0 : attachments.size());
+            chatTelemetry.put("elapsedMs", 0);
+            chatTelemetry.put("orchestrationEnabled", orchestrationResult != null && orchestrationResult.enabled);
+            chatTelemetry.put("orchestrationInputChars", orchestrationResult == null ? 0 : orchestrationResult.totalCharsBefore);
+            chatTelemetry.put("orchestrationOutputChars", orchestrationResult == null ? 0 : orchestrationResult.totalCharsAfter);
+            chatTelemetry.put("orchestrationSavedChars", orchestrationResult == null ? 0 : orchestrationResult.savedChars);
+            chatTelemetry.put("orchestrationPlanSteps", orchestrationResult == null ? 0 : orchestrationResult.planSteps.size());
+            chatTelemetry.put("routingTier", orchestrationResult == null ? "" : orchestrationResult.routingTier);
+            chatTelemetry.put("preferredModelHint", orchestrationResult == null ? "" : orchestrationResult.preferredModelHint);
+            chatTelemetry.put("speculativeExecuted", orchestrationResult != null && orchestrationResult.speculativeExecuted);
+            chatTelemetry.put("speculativeOperation", orchestrationResult == null ? "none" : orchestrationResult.speculativeOperation);
+            apiCallInstrumentationService.recordAiTelemetry(chatTelemetry);
 
             response.set("code", 200);
             response.set("success", true);
@@ -3901,9 +4196,17 @@ public class ApiSpringController {
                 + "Return explanation and analysis text only.\n"
                 + "Do NOT generate replacement code blocks, full JSON payloads, or patch instructions unless user explicitly asks to edit/apply changes.";
         } else {
-            systemPrompt = systemPrompt + "\n\n"
-                + "OUTPUT MODE: EDIT_ALLOWED.\n"
-                + "When user asks to modify, return directly applicable code/JSON with minimal commentary.";
+            if ("menu_json".equals(normalizedContext)) {
+                systemPrompt = systemPrompt + "\n\n"
+                    + "OUTPUT MODE: MENU_EDIT_APPLY.\n"
+                    + "Return ONLY valid menu JSON for direct editor apply (object with menu field, or menu array).\n"
+                    + "Do NOT wrap output in summary/code/changes object.\n"
+                    + "Do NOT use markdown/code fences or extra commentary outside JSON.";
+            } else {
+                systemPrompt = systemPrompt + "\n\n"
+                    + "OUTPUT MODE: EDIT_ALLOWED.\n"
+                    + "When user asks to modify, return directly applicable code/JSON with minimal commentary.";
+            }
         }
 
         Object userContent = buildAiAssistantUserContent(
@@ -3987,6 +4290,17 @@ public class ApiSpringController {
         StringBuilder sb = new StringBuilder();
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
         String normalizedMode = normalizeAiAssistantResponseMode(responseMode, message);
+        String effectiveCurrentCode = String.valueOf(currentCode == null ? "" : currentCode);
+        String effectiveContinuityMemory = optimizeAiAssistantContextSegment(continuityMemory, normalizedContext, normalizedMode, true);
+        String effectiveGlobalContext = optimizeAiAssistantContextSegment(globalContext, normalizedContext, normalizedMode, false);
+        int promptHardCap = resolveAiAssistantPromptHardCap(normalizedContext);
+
+        if ("code".equals(normalizedContext) && "analyze".equals(normalizedMode)
+            && !effectiveCurrentCode.isBlank()) {
+            effectiveCurrentCode = truncateMiddle(
+                effectiveCurrentCode,
+                Math.max(8000, aiAssistantPromptBudgetCodeAnalyzeCurrentCodeMaxChars));
+        }
         if (includeSystemHeader) {
             if ("menu_json".equals(normalizedContext)) {
                 // Try to use the custom instructions file (reduces repeated token cost for static rules)
@@ -4023,7 +4337,15 @@ public class ApiSpringController {
             if ("analyze".equals(normalizedMode)) {
                 sb.append("Response mode: analyze_only. Return text analysis only, no direct replacement code or JSON output unless explicitly requested.\n\n");
             } else {
-                sb.append("Response mode: edit_allowed. If user asks to modify, provide directly applicable code/JSON result.\n");
+                if ("menu_json".equals(normalizedContext)) {
+                    sb.append("Response mode: menu_edit_apply.\n");
+                    sb.append("Output contract (strict): return ONLY a valid menu JSON payload for editor apply.\n");
+                    sb.append("Allowed top-level forms: {\"menu\":[...]} or [...].\n");
+                    sb.append("Forbidden: wrapper object with summary/code/changes, markdown code fences, prose before/after JSON.\n");
+                    sb.append("If you need to explain, do it by embedding notes in JSON-safe fields only when already part of schema.\n");
+                } else {
+                    sb.append("Response mode: edit_allowed. If user asks to modify, provide directly applicable code/JSON result.\n");
+                }
                 if (aiAssistantAskBeforeEditEnabled) {
                     sb.append("Before any patch/code output, include section 'UNDERSTANDING_CHECKLIST' with:\n");
                     sb.append("- Goal in 1-2 lines\n");
@@ -4033,7 +4355,7 @@ public class ApiSpringController {
                 } else {
                     sb.append("\n");
                 }
-                if (aiAssistantStructuredEditRequired) {
+                if (aiAssistantStructuredEditRequired && !"menu_json".equals(normalizedContext)) {
                     sb.append("STRUCTURED_EDIT_OUTPUT (required for apply):\n");
                     sb.append("Return JSON object only (no markdown fences) using this shape:\n");
                     sb.append("{\n");
@@ -4072,31 +4394,62 @@ public class ApiSpringController {
             sb.append("\n");
         }
 
-        if (continuityMemory != null && !continuityMemory.isBlank()) {
+        if (!effectiveContinuityMemory.isBlank()) {
             sb.append("SESSION CONTINUITY MEMORY (continue from unresolved thread, do not restart from scratch):\n");
-            sb.append(continuityMemory).append("\n\n");
+            sb.append(effectiveContinuityMemory).append("\n\n");
         }
 
-        if ("menu_json".equals(normalizedContext) && globalContext != null && !globalContext.isBlank()) {
+        if ("menu_json".equals(normalizedContext) && !effectiveGlobalContext.isBlank()) {
             sb.append("GLOBAL_CONTEXT_MEMORY (compressed summaries from feeding+consolidation stages):\n");
-            sb.append(globalContext).append("\n\n");
+            sb.append(effectiveGlobalContext).append("\n\n");
         }
-        if ("code".equals(normalizedContext) && globalContext != null && !globalContext.isBlank()) {
+        if ("code".equals(normalizedContext) && !effectiveGlobalContext.isBlank()) {
             sb.append("CODE_CHAINING_CONTEXT (derived from full large editor code, secondary to ACTIVE FILE IN EDITOR):\n");
-            sb.append(globalContext).append("\n\n");
+            sb.append(effectiveGlobalContext).append("\n\n");
         }
         
-        if (!currentCode.trim().isEmpty()) {
-            sb.append(buildAiAssistantActiveEditorContextBlock(currentCode, message, normalizedContext, language, pName));
+        if (!effectiveCurrentCode.trim().isEmpty()) {
+            sb.append(buildAiAssistantActiveEditorContextBlock(effectiveCurrentCode, message, normalizedContext, language, pName));
         }
 
         if (!attachments.isEmpty()) {
-            sb.append(buildAiAssistantAttachmentContextBlock(message, attachments, normalizedContext, language));
+            sb.append(buildAiAssistantAttachmentContextBlock(message, attachments, normalizedContext, language, normalizedMode));
         }
 
         sb.append("Context type: ").append(normalizedContext).append("\n");
         sb.append("User request: ").append(message == null ? "" : message);
-        return sb.toString();
+        return trimAiAssistantCodeContext(sb.toString(), promptHardCap);
+    }
+
+    private int resolveAiAssistantPromptHardCap(String normalizedContext) {
+        if ("menu_json".equalsIgnoreCase(String.valueOf(normalizedContext == null ? "" : normalizedContext).trim())) {
+            return Math.max(60000, aiAssistantPromptBudgetMenuMaxChars);
+        }
+        return Math.max(40000, aiAssistantPromptBudgetCodeMaxChars);
+    }
+
+    private String optimizeAiAssistantContextSegment(
+            String raw,
+            String normalizedContext,
+            String normalizedMode,
+            boolean continuitySegment) {
+        String text = String.valueOf(raw == null ? "" : raw).trim();
+        if (text.isBlank()) {
+            return "";
+        }
+        int configuredCap = continuitySegment
+            ? Math.max(8000, aiAssistantPromptBudgetContinuityMaxChars)
+            : Math.max(12000, aiAssistantPromptBudgetGlobalMaxChars);
+
+        int modeCap = configuredCap;
+        if ("analyze".equalsIgnoreCase(normalizedMode)) {
+            modeCap = continuitySegment ? Math.min(modeCap, 12000) : Math.min(modeCap, 20000);
+        }
+        if ("code".equalsIgnoreCase(String.valueOf(normalizedContext == null ? "" : normalizedContext).trim())) {
+            modeCap = continuitySegment ? Math.min(modeCap, 18000) : Math.min(modeCap, 30000);
+        }
+
+        return truncateMiddle(text, Math.max(4000, modeCap));
     }
 
     private String buildAiAssistantQuickProbePromptText(
@@ -4358,12 +4711,14 @@ public class ApiSpringController {
             String message,
             List<Map<String, Object>> attachments,
             String contextType,
-            String language) {
+            String language,
+            String responseMode) {
         if (attachments == null || attachments.isEmpty()) {
             return "";
         }
 
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
+        boolean analyzeMode = "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode).trim());
         StringBuilder sb = new StringBuilder();
         sb.append("Attached context inventory:\n");
         int idx = 1;
@@ -4385,9 +4740,14 @@ public class ApiSpringController {
             sb.append("\n");
         }
 
-        String structuredPack = "menu_json".equals(normalizedContext)
-            ? buildMenuAttachmentContextPack(message, attachments)
-            : buildCodeAttachmentContextPack(message, attachments, language);
+        String structuredPack;
+        if ("menu_json".equals(normalizedContext)) {
+            structuredPack = buildMenuAttachmentContextPack(message, attachments);
+        } else if (analyzeMode) {
+            structuredPack = "";
+        } else {
+            structuredPack = buildCodeAttachmentContextPack(message, attachments, language);
+        }
         if (!structuredPack.isBlank()) {
             sb.append("\n").append(structuredPack).append("\n");
             return sb.append("\n").toString();
@@ -4396,7 +4756,8 @@ public class ApiSpringController {
         AiAssistantAttachmentRetrievalResult retrieval = buildAiAssistantRelevantAttachmentContextResult(message, attachments);
         if (!retrieval.context.isBlank()) {
             sb.append("\nAuto-retrieved relevant excerpts from text attachments:\n");
-            sb.append(retrieval.context).append("\n\n");
+            int retrievalCap = analyzeMode && "code".equals(normalizedContext) ? 18000 : 36000;
+            sb.append(truncateMiddle(retrieval.context, retrievalCap)).append("\n\n");
         } else {
             sb.append("\n");
         }
@@ -6432,12 +6793,25 @@ public class ApiSpringController {
         return estimatedChars >= lowerBound && estimatedChars < upperBound;
     }
 
+    private boolean shouldSkipPrimaryProbeForHugeMenuPayload(int estimatedChars) {
+        int directThreshold = Math.max(50000, aiAssistantMenuDirectProviderThresholdChars);
+        double ratio = aiAssistantMenuPrimaryProbeSkipWhenOverRatio <= 1.0d ? 1.4d : aiAssistantMenuPrimaryProbeSkipWhenOverRatio;
+        long skipThreshold = Math.round(directThreshold * ratio);
+        return estimatedChars >= Math.max(directThreshold + 10000, (int) Math.min(Integer.MAX_VALUE, skipThreshold));
+    }
+
     private int estimateTotalAiAssistantPayloadChars(
             List<Map<String, Object>> attachments,
             String message,
-            String currentCode) {
+            String currentCode,
+            String continuityMemory,
+            String aggregatedReusableMemory,
+            String globalContext) {
         return Math.max(0, String.valueOf(message == null ? "" : message).length())
                 + Math.max(0, String.valueOf(currentCode == null ? "" : currentCode).length())
+                + Math.max(0, String.valueOf(continuityMemory == null ? "" : continuityMemory).length())
+                + Math.max(0, String.valueOf(aggregatedReusableMemory == null ? "" : aggregatedReusableMemory).length())
+                + Math.max(0, String.valueOf(globalContext == null ? "" : globalContext).length())
                 + estimateAttachmentTextChars(attachments);
     }
 
@@ -6734,8 +7108,7 @@ public class ApiSpringController {
     }
 
     private String extractMenuDraftForCompletion(String rawResponse, String contextType) {
-        String normalizedContext = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase();
-        if (!"menu_json".equals(normalizedContext)) {
+        if (!isMenuJsonContext(contextType)) {
             return "";
         }
 
@@ -6759,6 +7132,37 @@ public class ApiSpringController {
         }
 
         return "";
+    }
+
+    private String mergeMenuCompletionWithBase(String baseDraftRaw, String aiDraftRaw, String contextType) {
+        String normalizedAiDraft = extractMenuDraftForCompletion(aiDraftRaw, contextType);
+        if (normalizedAiDraft.isBlank()) {
+            return aiDraftRaw == null ? "" : aiDraftRaw;
+        }
+
+        String normalizedBaseDraft = extractMenuDraftForCompletion(baseDraftRaw, contextType);
+        if (normalizedBaseDraft.isBlank()) {
+            return normalizedAiDraft;
+        }
+
+        try {
+            AiMenuMergeService.MergeOutput mergeOut = aiMenuMergeService.diffMergeTrees(normalizedBaseDraft, normalizedAiDraft);
+            if (mergeOut != null && mergeOut.mergedMenu != null) {
+                Map<String, Object> wrapped = new LinkedHashMap<>();
+                wrapped.put("menu", mergeOut.mergedMenu);
+                String merged = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
+                logger.info("ai-code-stream menu completion merged with base: added={} edited={} deleted={} patchOps={}",
+                    mergeOut.added,
+                    mergeOut.edited,
+                    mergeOut.deleted,
+                    mergeOut.patchOps == null ? 0 : mergeOut.patchOps.size());
+                return merged;
+            }
+        } catch (Exception ex) {
+            logger.warn("ai-code-stream menu completion merge failed, fallback to normalized AI draft: {}", ex.getMessage());
+        }
+
+        return normalizedAiDraft;
     }
 
     private String normalizeMenuDraftJson(String text) {
@@ -6788,10 +7192,23 @@ public class ApiSpringController {
             return "";
         }
 
+        Object code = map.get("code");
+        if (code instanceof String codeText) {
+            String candidate = codeText.trim();
+            if (!candidate.isBlank() && !candidate.equals(raw)) {
+                String fromCode = normalizeMenuDraftJson(candidate);
+                if (!fromCode.isBlank()) {
+                    return fromCode;
+                }
+            }
+        }
+
         Object menu = map.get("menu");
         if (menu instanceof List<?>) {
+            Map<String, Object> wrapped = new HashMap<>();
+            wrapped.put("menu", menu);
             try {
-                return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(map);
+                return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
             } catch (Exception ignored) {
                 return "";
             }
@@ -6847,6 +7264,10 @@ public class ApiSpringController {
             || map.containsKey("table_name")
             || map.containsKey("table")
             || map.containsKey("children");
+    }
+
+    private boolean isMenuJsonContext(String contextType) {
+        return "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim());
     }
 
     private void emitTextAsAiAssistantChunks(String appId, String text, String responseMode, String uiLang) {
@@ -10361,7 +10782,11 @@ public class ApiSpringController {
      * Endpoint: AI Cost Dashboard - Real-time metrics on API calls and cost
      */
     @GetMapping({"/ai-metrics-dashboard", "/api/ai-metrics-dashboard"})
-    public ResponseEntity<Map<String, Object>> getAiMetricsDashboard() {
+    public ResponseEntity<Map<String, Object>> getAiMetricsDashboard(
+            @RequestParam(required = false) Integer windowHours,
+            @RequestParam(required = false) Double fallbackRateThreshold,
+            @RequestParam(required = false) Double quickProbeRateThreshold,
+            @RequestParam(required = false) Integer minSamples) {
         UserAuthContext authCtx = extractUserAuthContext();
         Map<String, Object> dashboard = new HashMap<>();
 
@@ -10379,10 +10804,84 @@ public class ApiSpringController {
         // Recent API calls (last 20)
         dashboard.put("recent_calls", apiCallInstrumentationService.getMetrics());
 
+        int effectiveWindowHours = windowHours == null
+            ? Math.max(1, aiTelemetryDashboardWindowHours)
+            : Math.max(1, windowHours);
+        double effectiveFallbackThreshold = fallbackRateThreshold == null
+            ? Math.max(0.01, aiTelemetryAlertFallbackRateThreshold)
+            : Math.max(0.01, fallbackRateThreshold);
+        double effectiveQuickProbeThreshold = quickProbeRateThreshold == null
+            ? Math.max(0.01, aiTelemetryAlertQuickProbeRateThreshold)
+            : Math.max(0.01, quickProbeRateThreshold);
+        int effectiveMinSamples = minSamples == null
+            ? Math.max(5, aiTelemetryAlertMinSamples)
+            : Math.max(5, minSamples);
+
+        dashboard.put(
+            "ai_telemetry_dashboard",
+            apiCallInstrumentationService.getAiTelemetryDashboard(
+                effectiveWindowHours,
+                effectiveFallbackThreshold,
+                effectiveQuickProbeThreshold,
+                effectiveMinSamples));
+
         dashboard.put("timestamp", System.currentTimeMillis());
         dashboard.put("user", authCtx.principalId);
 
         return ResponseEntity.ok(dashboard);
+    }
+
+    @PostMapping({"/ai-orchestration-preview", "/api/ai-orchestration-preview"})
+    public ResponseEntity<Map<String, Object>> previewAiOrchestration(@RequestBody(required = false) Map<String, Object> body) {
+        UserAuthContext authCtx = extractUserAuthContext();
+        Map<String, Object> request = body == null ? new LinkedHashMap<>() : body;
+
+        String appId = String.valueOf(request.getOrDefault("appId", "")).trim();
+        if (appId.isBlank()) {
+            appId = String.valueOf(authCtx.appId == null ? "" : authCtx.appId).trim();
+        }
+        if (appId.isBlank()) {
+            appId = "csm";
+        }
+
+        String message = String.valueOf(request.getOrDefault("message", "")).trim();
+        String currentCode = String.valueOf(request.getOrDefault("currentCode", "")).trim();
+        String language = String.valueOf(request.getOrDefault("language", "javascript")).trim();
+        String contextType = String.valueOf(request.getOrDefault("contextType", "code")).trim();
+        String taskType = String.valueOf(request.getOrDefault("taskType", "code_assistant")).trim();
+        String responseMode = normalizeAiAssistantResponseMode(request.get("responseMode"), message);
+        List<Map<String, Object>> attachments = normalizeAiAssistantAttachments(request.get("attachments"));
+
+        AiLocalOrchestrationService.OrchestrationResult result = aiLocalOrchestrationService.orchestrate(
+            appId,
+            message,
+            currentCode,
+            attachments,
+            contextType,
+            taskType,
+            responseMode,
+            language);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("success", true);
+        out.put("appId", appId);
+        out.put("contextType", contextType);
+        out.put("taskType", taskType);
+        out.put("responseMode", responseMode);
+        out.put("orchestrationEnabled", result.enabled);
+        out.put("routingTier", result.routingTier);
+        out.put("preferredModelHint", result.preferredModelHint);
+        out.put("speculativeExecuted", result.speculativeExecuted);
+        out.put("speculativeOperation", result.speculativeOperation);
+        out.put("totalCharsBefore", result.totalCharsBefore);
+        out.put("totalCharsAfter", result.totalCharsAfter);
+        out.put("savedChars", result.savedChars);
+        out.put("planSteps", result.planSteps);
+        out.put("toolStats", result.toolStats);
+        out.put("compressedContextBlock", result.compressedContextBlock);
+        out.put("timestamp", System.currentTimeMillis());
+        out.put("user", authCtx.principalId);
+        return ResponseEntity.ok(out);
     }
 
     /**

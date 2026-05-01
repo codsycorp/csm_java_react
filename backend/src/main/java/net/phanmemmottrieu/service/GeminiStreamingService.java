@@ -7,11 +7,22 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.googleai.GoogleAiGeminiStreamingChatModel;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
@@ -75,6 +86,48 @@ public class GeminiStreamingService {
 
     @Value("${gemini.streaming.rate-limit-key-cooldown-ms:90000}")
     private long rateLimitKeyCooldownMs;
+
+    // ─── Claude (Anthropic) configuration ───────────────────────────────────────
+    @Value("${claude.api-key:${CLAUDE_API_KEY:}}")
+    private String claudeApiKey;
+
+    @Value("${claude.api-keys:${CLAUDE_API_KEYS:}}")
+    private String claudeApiKeys;
+
+    @Value("${claude.model:claude-opus-4-5}")
+    private String claudeDefaultModel;
+
+    @Value("${claude.streaming.max-tokens:8192}")
+    private int claudeMaxTokens;
+
+    @Value("${claude.streaming.temperature:0.7}")
+    private double claudeTemperature;
+
+    @Value("${claude.streaming.rate-limit-key-cooldown-ms:60000}")
+    private long claudeRateLimitKeyCooldownMs;
+
+    private static final String CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
+    private static final String CLAUDE_API_VERSION = "2023-06-01";
+    private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
+
+    private final ObjectMapper jsonMapper = new ObjectMapper();
+    private volatile OkHttpClient claudeHttpClient;
+    private final Map<String, Long> claudeRateLimitedUntilByApiKey = Collections.synchronizedMap(new HashMap<>());
+
+    private OkHttpClient getClaudeHttpClient() {
+        if (claudeHttpClient == null) {
+            synchronized (this) {
+                if (claudeHttpClient == null) {
+                    claudeHttpClient = new OkHttpClient.Builder()
+                            .connectTimeout(30, TimeUnit.SECONDS)
+                            .readTimeout(5, TimeUnit.MINUTES)
+                            .writeTimeout(60, TimeUnit.SECONDS)
+                            .build();
+                }
+            }
+        }
+        return claudeHttpClient;
+    }
 
     private static class CachedResponse {
         private final String text;
@@ -539,6 +592,12 @@ public class GeminiStreamingService {
             Consumer<Throwable> onError,
             Consumer<Map<String, Object>> onStatus) {
 
+        // Route Claude models to Anthropic API instead of Gemini
+        String rawModel = String.valueOf(modelOverride == null ? "" : modelOverride).trim();
+        if (isClaudeModel(rawModel)) {
+            return streamContentClaude(rawModel, prompt, onChunk, onComplete, onError, onStatus);
+        }
+
         String model = normalizeModelToGemini(modelOverride);
         String cacheKey = buildCacheKey(model, prompt);
 
@@ -652,6 +711,19 @@ public class GeminiStreamingService {
         }
 
         if (skippedByCooldown >= keys.size() && minWaitMs != Long.MAX_VALUE) {
+            // All Gemini keys on cooldown → try Claude fallback
+            log.warn("GeminiStreamingService: All Gemini keys on cooldown, attempting Claude fallback");
+            List<String> claudeKeys = resolveClaudeApiKeys();
+            if (!claudeKeys.isEmpty()) {
+                if (onStatus != null) {
+                    Map<String, Object> status = new HashMap<>();
+                    status.put("stage", "claude_fallback");
+                    status.put("status", "gemini_cooldown_fallback");
+                    status.put("message", "Gemini đang bận, chuyển sang Claude...");
+                    onStatus.accept(status);
+                }
+                return streamContentClaude(claudeDefaultModel, prompt, onChunk, onComplete, onError, onStatus);
+            }
             IllegalStateException err = new IllegalStateException("Tất cả kênh xử lý đang trong thời gian chờ, thử lại sau " + minWaitMs + " ms");
             if (onStatus != null) {
                 Map<String, Object> status = new HashMap<>();
@@ -665,6 +737,21 @@ public class GeminiStreamingService {
                 onError.accept(err);
             }
             return "";
+        }
+
+        // All Gemini keys failed → try Claude fallback
+        List<String> claudeKeys = resolveClaudeApiKeys();
+        if (!claudeKeys.isEmpty()) {
+            log.warn("GeminiStreamingService: All Gemini keys failed (last error: {}), attempting Claude fallback",
+                    lastError != null ? lastError.getMessage() : "unknown");
+            if (onStatus != null) {
+                Map<String, Object> status = new HashMap<>();
+                status.put("stage", "claude_fallback");
+                status.put("status", "gemini_failed_fallback");
+                status.put("message", "Gemini gặp sự cố, chuyển sang Claude...");
+                onStatus.accept(status);
+            }
+            return streamContentClaude(claudeDefaultModel, prompt, onChunk, onComplete, onError, onStatus);
         }
 
         if (onError != null) {
@@ -758,4 +845,298 @@ public class GeminiStreamingService {
         String key = resolveGeminiApiKey();
         return key == null ? "" : key;
     }
+
+    // ─── Claude helpers ───────────────────────────────────────────────────────
+
+    private boolean isClaudeModel(String model) {
+        String lower = String.valueOf(model == null ? "" : model).trim().toLowerCase();
+        return lower.startsWith("claude-") || lower.contains("claude");
+    }
+
+    private List<String> resolveClaudeApiKeys() {
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        addParsedApiKeys(keys, claudeApiKeys);
+        addParsedApiKeys(keys, claudeApiKey);
+        return new ArrayList<>(keys);
+    }
+
+    private String normalizeClaudeModel(String model) {
+        String raw = String.valueOf(model == null ? "" : model).trim();
+        if (raw.isBlank() || !isClaudeModel(raw)) {
+            return claudeDefaultModel != null && !claudeDefaultModel.isBlank()
+                    ? claudeDefaultModel.trim() : "claude-opus-4-5";
+        }
+        return raw;
+    }
+
+    private long getRemainingClaudeApiKeyCooldownMs(String apiKey) {
+        if (apiKey == null || apiKey.isBlank()) return 0L;
+        Long untilMs = claudeRateLimitedUntilByApiKey.get(apiKey);
+        if (untilMs == null) return 0L;
+        long remain = untilMs - System.currentTimeMillis();
+        if (remain <= 0L) { claudeRateLimitedUntilByApiKey.remove(apiKey); return 0L; }
+        return remain;
+    }
+
+    private void markClaudeApiKeyRateLimitCooldown(String apiKey) {
+        if (apiKey == null || apiKey.isBlank()) return;
+        long cooldown = Math.max(3000L, claudeRateLimitKeyCooldownMs);
+        claudeRateLimitedUntilByApiKey.put(apiKey, System.currentTimeMillis() + cooldown);
+    }
+
+    /**
+     * Calls Anthropic /v1/messages with stream=true, parses SSE text_delta events.
+     */
+    private String executeClaudeStreamContent(String model, String prompt, String apiKey,
+            Consumer<String> onChunk, Consumer<Map<String, Object>> onStatus) throws Exception {
+
+        int promptChars = prompt == null ? 0 : prompt.length();
+        int outTokens = Math.max(256, claudeMaxTokens);
+        // Claude TTFT ~2s + 1s per 4000 chars; generation ~300 chars/s
+        int estimatedWaitSecs = 3 + promptChars / 5000 + (outTokens * 4) / 300;
+        int estimatedOutputChars = outTokens * 4;
+        long startMs = System.currentTimeMillis();
+
+        if (onStatus != null) {
+            Map<String, Object> init = new HashMap<>();
+            init.put("stage", "waiting_claude");
+            init.put("status", "connecting");
+            init.put("message", "Đang gửi yêu cầu đến Claude...");
+            init.put("estimatedWaitSecs", estimatedWaitSecs);
+            init.put("promptChars", promptChars);
+            init.put("model", model);
+            init.put("percent", 2);
+            onStatus.accept(init);
+        }
+
+        // Build JSON request body using Jackson
+        ObjectNode body = jsonMapper.createObjectNode();
+        body.put("model", model);
+        body.put("max_tokens", outTokens);
+        body.put("stream", true);
+        ArrayNode messages = body.putArray("messages");
+        ObjectNode userMsg = messages.addObject();
+        userMsg.put("role", "user");
+        userMsg.put("content", String.valueOf(prompt == null ? "" : prompt));
+
+        // Add system prompt temperature via top_level (Anthropic doesn't use temperature in body for claude-3.5+, but still supported)
+        body.put("temperature", Math.min(1.0, Math.max(0.0, claudeTemperature)));
+
+        String requestJson = jsonMapper.writeValueAsString(body);
+
+        Request request = new Request.Builder()
+                .url(CLAUDE_API_URL)
+                .post(RequestBody.create(requestJson, JSON_MEDIA_TYPE))
+                .addHeader("x-api-key", apiKey)
+                .addHeader("anthropic-version", CLAUDE_API_VERSION)
+                .addHeader("content-type", "application/json")
+                .addHeader("accept", "text/event-stream")
+                .build();
+
+        AtomicBoolean firstChunkArrived = new AtomicBoolean(false);
+        AtomicInteger charsReceived = new AtomicInteger(0);
+
+        ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "claude-heartbeat");
+            t.setDaemon(true);
+            return t;
+        });
+        ScheduledFuture<?> heartbeatTask = null;
+        if (onStatus != null) {
+            heartbeatTask = heartbeat.scheduleAtFixedRate(() -> {
+                long elapsed = System.currentTimeMillis() - startMs;
+                int received = charsReceived.get();
+                Map<String, Object> st = new HashMap<>();
+                if (!firstChunkArrived.get()) {
+                    int elapsedSecs = Math.max(1, (int) Math.ceil(elapsed / 1000.0));
+                    int remainSecs = Math.max(0, estimatedWaitSecs - (int) (elapsed / 1000));
+                    boolean overdue = remainSecs <= 0;
+                    st.put("stage", "waiting_claude");
+                    st.put("status", "waiting");
+                    st.put("message", overdue
+                            ? "Claude đang suy nghĩ... (đã chờ " + elapsedSecs + "s)"
+                            : "Claude đang suy nghĩ... (~" + remainSecs + "s còn lại)");
+                    st.put("elapsedMs", elapsed);
+                    st.put("estimatedWaitSecs", estimatedWaitSecs);
+                    st.put("percent", Math.min(15, 2 + (int) (elapsed / 1000)));
+                } else {
+                    int pct = estimatedOutputChars > 0
+                            ? Math.min(95, 15 + (received * 80 / estimatedOutputChars)) : 50;
+                    int remainOutputChars = Math.max(0, estimatedOutputChars - received);
+                    int remainSecs = remainOutputChars > 0 && elapsed > 0
+                            ? (int) (remainOutputChars / Math.max(1.0, (double) received / (elapsed / 1000.0))) : 0;
+                    st.put("stage", "streaming_progress");
+                    st.put("status", "streaming");
+                    st.put("message", "Claude đang trả lời... (" + received + " ký tự)");
+                    st.put("charsReceived", received);
+                    st.put("estimatedTotalChars", estimatedOutputChars);
+                    st.put("elapsedMs", elapsed);
+                    st.put("remainingEstimateSecs", remainSecs);
+                    st.put("percent", pct);
+                }
+                onStatus.accept(st);
+            }, 3, 3, TimeUnit.SECONDS);
+        }
+
+        StringBuilder fullText = new StringBuilder();
+        try (Response response = getClaudeHttpClient().newCall(request).execute()) {
+            if (!response.isSuccessful()) {
+                String errBody = response.body() != null ? response.body().string() : "(no body)";
+                throw new IllegalStateException("Claude API error " + response.code() + ": " + errBody);
+            }
+            if (response.body() == null) {
+                throw new IllegalStateException("Claude API returned empty response body");
+            }
+
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(response.body().byteStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.startsWith("data: ")) {
+                        String dataStr = line.substring(6).trim();
+                        if (dataStr.equals("[DONE]")) break;
+                        try {
+                            JsonNode node = jsonMapper.readTree(dataStr);
+                            String type = node.path("type").asText("");
+                            if ("content_block_delta".equals(type)) {
+                                JsonNode delta = node.path("delta");
+                                if ("text_delta".equals(delta.path("type").asText(""))) {
+                                    String text = delta.path("text").asText("");
+                                    if (!text.isEmpty()) {
+                                        if (firstChunkArrived.compareAndSet(false, true) && onStatus != null) {
+                                            long ttft = System.currentTimeMillis() - startMs;
+                                            Map<String, Object> st = new HashMap<>();
+                                            st.put("stage", "streaming_started");
+                                            st.put("status", "first_token");
+                                            st.put("message", "Bắt đầu nhận kết quả từ Claude");
+                                            st.put("ttftMs", ttft);
+                                            st.put("estimatedTotalChars", estimatedOutputChars);
+                                            st.put("percent", 15);
+                                            onStatus.accept(st);
+                                        }
+                                        fullText.append(text);
+                                        charsReceived.addAndGet(text.length());
+                                        if (onChunk != null) onChunk.accept(text);
+                                    }
+                                }
+                            } else if ("message_stop".equals(type)) {
+                                break;
+                            } else if ("error".equals(type)) {
+                                String errMsg = node.path("error").path("message").asText("Unknown Claude error");
+                                throw new IllegalStateException("Claude stream error: " + errMsg);
+                            }
+                        } catch (IllegalStateException ex) {
+                            throw ex;
+                        } catch (Exception ignored) {
+                            // Skip malformed SSE lines
+                        }
+                    }
+                }
+            }
+        } finally {
+            if (heartbeatTask != null) heartbeatTask.cancel(false);
+            heartbeat.shutdownNow();
+        }
+
+        return fullText.toString();
+    }
+
+    /**
+     * Multi-key retry Claude streaming — same rotation logic as Gemini.
+     */
+    public String streamContentClaude(
+            String modelOverride,
+            String prompt,
+            Consumer<String> onChunk,
+            Runnable onComplete,
+            Consumer<Throwable> onError,
+            Consumer<Map<String, Object>> onStatus) {
+
+        String model = normalizeClaudeModel(modelOverride);
+
+        List<String> keys = resolveClaudeApiKeys();
+        if (keys.isEmpty()) {
+            IllegalStateException err = new IllegalStateException(
+                    "Missing Claude API key. Set CLAUDE_API_KEY or CLAUDE_API_KEYS in config.env");
+            log.error("GeminiStreamingService[Claude]: {}", err.getMessage());
+            if (onError != null) onError.accept(err);
+            return "";
+        }
+
+        int startIndex = Math.floorMod(String.valueOf(prompt == null ? "" : prompt).hashCode(), keys.size());
+        Throwable lastError = null;
+        long minWaitMs = Long.MAX_VALUE;
+        int skippedByCooldown = 0;
+
+        for (int i = 0; i < keys.size(); i++) {
+            String key = keys.get((startIndex + i) % keys.size());
+            long keyCooldown = getRemainingClaudeApiKeyCooldownMs(key);
+            if (keyCooldown > 0L) {
+                skippedByCooldown++;
+                minWaitMs = Math.min(minWaitMs, keyCooldown);
+                continue;
+            }
+
+            if (onStatus != null && keys.size() > 1) {
+                Map<String, Object> status = new HashMap<>();
+                status.put("stage", "key_rotation");
+                status.put("status", "trying_key");
+                status.put("message", "Đang thử kênh Claude " + (i + 1) + "/" + keys.size());
+                status.put("attempt", i + 1);
+                status.put("total", keys.size());
+                onStatus.accept(status);
+            }
+
+            AtomicBoolean attemptStreamed = new AtomicBoolean(false);
+            Consumer<String> attemptChunk = chunk -> {
+                String text = String.valueOf(chunk == null ? "" : chunk);
+                if (!text.isEmpty()) attemptStreamed.set(true);
+                if (onChunk != null) onChunk.accept(text);
+            };
+
+            try {
+                String text = executeClaudeStreamContent(model, prompt, key, attemptChunk, onStatus);
+                if (onComplete != null) onComplete.run();
+                return text;
+            } catch (Throwable ex) {
+                lastError = ex;
+                String msg = String.valueOf(ex.getMessage()).toLowerCase();
+                boolean isRateLimit = msg.contains("429") || msg.contains("rate_limit") || msg.contains("overloaded");
+                if (isRateLimit) {
+                    markClaudeApiKeyRateLimitCooldown(key);
+                }
+                log.warn("GeminiStreamingService[Claude]: key {} failed: {}", maskApiKey(key), ex.getMessage());
+
+                if (attemptStreamed.get()) {
+                    if (onError != null) onError.accept(ex);
+                    return "";
+                }
+                boolean tryNext = isRateLimit
+                        || msg.contains("401") || msg.contains("403")
+                        || msg.contains("timeout") || msg.contains("503") || msg.contains("500");
+                if (!tryNext) break;
+            }
+        }
+
+        if (skippedByCooldown >= keys.size() && minWaitMs != Long.MAX_VALUE) {
+            IllegalStateException err = new IllegalStateException(
+                    "Tất cả kênh Claude đang trong thời gian chờ, thử lại sau " + minWaitMs + " ms");
+            if (onStatus != null) {
+                Map<String, Object> status = new HashMap<>();
+                status.put("stage", "waiting");
+                status.put("status", "all_keys_cooldown");
+                status.put("message", "Claude đang bận tạm thời, vui lòng thử lại sau");
+                status.put("waitingMs", minWaitMs);
+                onStatus.accept(status);
+            }
+            if (onError != null) onError.accept(err);
+            return "";
+        }
+
+        if (onError != null) {
+            onError.accept(lastError != null ? lastError : new IllegalStateException("Claude request failed on all keys"));
+        }
+        return "";
+    }
+
 }

@@ -13,9 +13,10 @@ import java.util.*;
  *
  * <p>Supports two scenarios:</p>
  * <ul>
- *   <li><b>incremental_update</b> — diffMergeTrees(): compares old vs new full tree,
- *       produces a list of precise add/edit/delete PatchOps. The merged result is
- *       the new AI tree (already complete).</li>
+ *   <li><b>incremental_update</b> — diffMergeTrees(): compares old vs new tree (which
+ *       may be partial/truncated from AI). Produces add/edit/delete PatchOps.
+ *       The merged result is the OLD tree with AI's field-changes overlaid
+ *       (base-preserving — nodes absent from AI result are KEPT).</li>
  *   <li><b>property_edit</b> — mergeMenuNode(): field-level Jackson merge for a single
  *       node; preserves id/parentId/children; special f_name-keyed merge for "table"
  *       arrays; tracks field-level FieldDelta changes.</li>
@@ -114,6 +115,9 @@ public class AiMenuMergeService {
         }
 
         // DELETEs: old nodes not present in new tree
+        // NOTE: We only record DELETEs as patchOps but do NOT actually remove them
+        // from the merged result, because the AI often returns a partial tree due to
+        // token limits. Old nodes absent from the AI result are KEPT (non-destructive).
         for (String id : oldMap.keySet()) {
             if (!newMap.containsKey(id)) {
                 PatchOp op = new PatchOp();
@@ -126,9 +130,71 @@ public class AiMenuMergeService {
             }
         }
 
-        // Merged result = the new (full) AI tree
-        out.mergedMenu = jsonNodeToList(newTree);
+        // Merged result = old tree with AI field-changes overlaid (base-preserving).
+        // This ensures all original menu nodes are kept even when AI only returns
+        // a partial/truncated subset (e.g. when adding icons or i18n labels).
+        out.mergedMenu = jsonNodeToList(mergeTreePreservingBase(oldTree, newMap));
         return out;
+    }
+
+    /**
+     * Recursively walk the OLD tree; for each node whose id appears in {@code newMap},
+     * overlay the AI's scalar fields (excluding id, parentId, parent_id, menu_id, children).
+     * Nodes not touched by the AI are returned as-is. Children are recursed.
+     * New root-level nodes returned by AI that have no match in old tree are appended.
+     */
+    private ArrayNode mergeTreePreservingBase(JsonNode oldTree, Map<String, JsonNode> newMap) {
+        ArrayNode result = om.createArrayNode();
+        Set<String> visitedIds = new LinkedHashSet<>();
+
+        for (JsonNode oldNode : oldTree) {
+            String id = getNodeIdStr(oldNode);
+            ObjectNode merged = oldNode.deepCopy() instanceof ObjectNode
+                    ? (ObjectNode) oldNode.deepCopy()
+                    : (ObjectNode) om.valueToTree(oldNode);
+
+            if (id != null && newMap.containsKey(id)) {
+                // Overlay AI's changed fields (scalar/object fields only, not children)
+                JsonNode newNode = newMap.get(id);
+                Iterator<Map.Entry<String, JsonNode>> fields = newNode.fields();
+                while (fields.hasNext()) {
+                    Map.Entry<String, JsonNode> entry = fields.next();
+                    String key = entry.getKey();
+                    if ("id".equals(key) || "parentId".equals(key) || "parent_id".equals(key)
+                            || "menu_id".equals(key) || "children".equals(key)) {
+                        continue;
+                    }
+                    merged.set(key, entry.getValue().deepCopy());
+                }
+                visitedIds.add(id);
+            }
+
+            // Recurse into children using the same newMap (flat)
+            JsonNode oldChildren = oldNode.get("children");
+            if (oldChildren != null && oldChildren.isArray()) {
+                merged.set("children", mergeTreePreservingBase(oldChildren, newMap));
+            }
+
+            result.add(merged);
+        }
+
+        // Append any brand-new root nodes from AI that had no match in old tree
+        // (these are genuine additions, not truncated nodes)
+        for (Map.Entry<String, JsonNode> e : newMap.entrySet()) {
+            if (!visitedIds.contains(e.getKey())) {
+                // Only add if this node has no parentId (true root-level addition)
+                JsonNode candidate = e.getValue();
+                JsonNode parentId = candidate.get("parentId");
+                JsonNode parentId2 = candidate.get("parent_id");
+                boolean isRoot = (parentId == null || parentId.isNull() || parentId.asText().isBlank())
+                        && (parentId2 == null || parentId2.isNull() || parentId2.asText().isBlank());
+                if (isRoot) {
+                    result.add(candidate.deepCopy());
+                }
+            }
+        }
+
+        return result;
     }
 
     /**

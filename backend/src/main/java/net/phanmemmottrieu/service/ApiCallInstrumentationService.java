@@ -2,8 +2,10 @@ package net.phanmemmottrieu.service;
 
 import org.springframework.stereotype.Service;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 
 /**
  * API Call Instrumentation Service
@@ -11,6 +13,11 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Service
 public class ApiCallInstrumentationService {
+
+    private static final DateTimeFormatter HOUR_BUCKET_FORMATTER =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:00").withZone(ZoneOffset.UTC);
+    private static final DateTimeFormatter DAY_BUCKET_FORMATTER =
+        DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneOffset.UTC);
 
     public static class ApiCallMetric {
         public String callId;
@@ -47,7 +54,72 @@ public class ApiCallInstrumentationService {
         }
     }
 
+    public static class AiTelemetryMetric {
+        public String telemetryId;
+        public long timestamp;
+        public String flow; // ai-code-stream | ai-assistant-chat
+        public String appId;
+        public String contextType;
+        public String taskType;
+        public String responseMode;
+        public String model;
+        public int inputTokens;
+        public int outputTokens;
+        public int promptTokens;
+        public int completionTokens;
+        public int inputChars;
+        public int outputChars;
+        public int promptChars;
+        public double estimatedCostUsd;
+        public boolean switchedToDefaultModel;
+        public boolean providerFallbackUsed;
+        public boolean usedGeminiFallback;
+        public boolean usedQuickProbe;
+        public boolean skippedQuickProbe;
+        public boolean usedDirectProviderRoute;
+        public int attachments;
+        public int elapsedMs;
+        public String routingTier;
+        public String preferredModelHint;
+        public boolean speculativeExecuted;
+        public String speculativeOperation;
+
+        public Map<String, Object> toMap() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("telemetryId", telemetryId);
+            m.put("timestamp", timestamp);
+            m.put("flow", flow);
+            m.put("appId", appId);
+            m.put("contextType", contextType);
+            m.put("taskType", taskType);
+            m.put("responseMode", responseMode);
+            m.put("model", model);
+            m.put("inputTokens", inputTokens);
+            m.put("outputTokens", outputTokens);
+            m.put("promptTokens", promptTokens);
+            m.put("completionTokens", completionTokens);
+            m.put("inputChars", inputChars);
+            m.put("outputChars", outputChars);
+            m.put("promptChars", promptChars);
+            m.put("estimatedCostUsd", estimatedCostUsd);
+            m.put("switchedToDefaultModel", switchedToDefaultModel);
+            m.put("providerFallbackUsed", providerFallbackUsed);
+            m.put("usedGeminiFallback", usedGeminiFallback);
+            m.put("usedQuickProbe", usedQuickProbe);
+            m.put("skippedQuickProbe", skippedQuickProbe);
+            m.put("usedDirectProviderRoute", usedDirectProviderRoute);
+            m.put("attachments", attachments);
+            m.put("elapsedMs", elapsedMs);
+            m.put("routingTier", routingTier);
+            m.put("preferredModelHint", preferredModelHint);
+            m.put("speculativeExecuted", speculativeExecuted);
+            m.put("speculativeOperation", speculativeOperation);
+            return m;
+        }
+    }
+
     private final List<ApiCallMetric> callHistory = Collections.synchronizedList(new ArrayList<>());
+    private final List<AiTelemetryMetric> aiTelemetryHistory = Collections.synchronizedList(new ArrayList<>());
     private final AtomicLong totalApiCallCount = new AtomicLong(0);
     private final AtomicLong totalLocalProcessCount = new AtomicLong(0);
     private final AtomicLong totalGeminiCostVND = new AtomicLong(0);
@@ -154,6 +226,364 @@ public class ApiCallInstrumentationService {
         return summary;
     }
 
+    public void recordAiTelemetry(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return;
+        }
+        AiTelemetryMetric metric = new AiTelemetryMetric();
+        metric.telemetryId = "tel_" + UUID.randomUUID().toString().substring(0, 8) + "_" + System.currentTimeMillis();
+        metric.timestamp = toLong(payload.get("timestamp"), System.currentTimeMillis());
+        metric.flow = toText(payload.get("flow"));
+        metric.appId = toText(payload.get("appId"));
+        metric.contextType = toText(payload.get("contextType"));
+        metric.taskType = toText(payload.get("taskType"));
+        metric.responseMode = toText(payload.get("responseMode"));
+        metric.model = toText(payload.get("model"));
+        metric.inputTokens = toInt(payload.get("inputTokens"));
+        metric.outputTokens = toInt(payload.get("outputTokens"));
+        metric.promptTokens = toInt(payload.get("promptTokens"));
+        metric.completionTokens = toInt(payload.get("completionTokens"));
+        metric.inputChars = toInt(payload.get("inputChars"));
+        metric.outputChars = toInt(payload.get("outputChars"));
+        metric.promptChars = toInt(payload.get("promptChars"));
+        metric.estimatedCostUsd = toDouble(payload.get("estimatedCostUsd"));
+        metric.switchedToDefaultModel = toBool(payload.get("switchedToDefaultModel"));
+        metric.providerFallbackUsed = toBool(payload.get("providerFallbackUsed"));
+        metric.usedGeminiFallback = toBool(payload.get("usedGeminiFallback"));
+        metric.usedQuickProbe = toBool(payload.get("usedQuickProbe"));
+        metric.skippedQuickProbe = toBool(payload.get("skippedQuickProbe"));
+        metric.usedDirectProviderRoute = toBool(payload.get("usedDirectProviderRoute"));
+        metric.attachments = toInt(payload.get("attachments"));
+        metric.elapsedMs = toInt(payload.get("elapsedMs"));
+        metric.routingTier = toText(payload.get("routingTier"));
+        metric.preferredModelHint = toText(payload.get("preferredModelHint"));
+        metric.speculativeExecuted = toBool(payload.get("speculativeExecuted"));
+        metric.speculativeOperation = toText(payload.get("speculativeOperation"));
+
+        aiTelemetryHistory.add(metric);
+        pruneAiTelemetryHistoryIfNeeded(5000);
+    }
+
+    public Map<String, Object> getAiTelemetryDashboard(
+            int windowHours,
+            double fallbackAlertThreshold,
+            double quickProbeAlertThreshold,
+            int minSamplesForAlert) {
+        long now = System.currentTimeMillis();
+        int safeWindowHours = Math.max(1, Math.min(24 * 30, windowHours));
+        long windowStart = now - safeWindowHours * 3600_000L;
+        int safeMinSamples = Math.max(5, minSamplesForAlert);
+
+        List<AiTelemetryMetric> snapshot;
+        synchronized (aiTelemetryHistory) {
+            snapshot = new ArrayList<>(aiTelemetryHistory);
+        }
+
+        List<AiTelemetryMetric> windowEvents = new ArrayList<>();
+        for (AiTelemetryMetric metric : snapshot) {
+            if (metric != null && metric.timestamp >= windowStart) {
+                windowEvents.add(metric);
+            }
+        }
+
+        Map<String, Object> summary = buildTelemetrySummary(windowEvents);
+        Map<String, Object> hourly = buildHourlyBuckets(windowEvents);
+        Map<String, Object> daily = buildDailyBuckets(snapshot, 7);
+        Map<String, Object> alerts = buildTelemetryAlerts(
+            windowEvents,
+            fallbackAlertThreshold,
+            quickProbeAlertThreshold,
+            safeMinSamples);
+        Map<String, Object> recommendations = buildAdaptiveBudgetRecommendations(alerts, summary);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("windowHours", safeWindowHours);
+        out.put("windowStart", windowStart);
+        out.put("windowEnd", now);
+        out.put("summary", summary);
+        out.put("hourly", hourly);
+        out.put("daily", daily);
+        out.put("alerts", alerts);
+        out.put("adaptiveBudgetRecommendations", recommendations);
+        out.put("recentTelemetry", windowEvents.stream()
+            .skip(Math.max(0, windowEvents.size() - 40))
+            .map(AiTelemetryMetric::toMap)
+            .toList());
+        return out;
+    }
+
+    private Map<String, Object> buildTelemetrySummary(List<AiTelemetryMetric> events) {
+        int total = events == null ? 0 : events.size();
+        int fallbackCount = 0;
+        int quickProbeCount = 0;
+        int skipQuickProbeCount = 0;
+        int directProviderCount = 0;
+        long inputTokens = 0;
+        long outputTokens = 0;
+        long elapsedMs = 0;
+        double totalCostUsd = 0.0;
+        int speculativeCount = 0;
+        Map<String, Integer> flowCounts = new LinkedHashMap<>();
+        Map<String, Integer> routingTierCounts = new LinkedHashMap<>();
+
+        if (events != null) {
+            for (AiTelemetryMetric m : events) {
+                if (m == null) continue;
+                if (m.providerFallbackUsed || m.usedGeminiFallback || m.switchedToDefaultModel) {
+                    fallbackCount++;
+                }
+                if (m.usedQuickProbe) quickProbeCount++;
+                if (m.skippedQuickProbe) skipQuickProbeCount++;
+                if (m.usedDirectProviderRoute) directProviderCount++;
+                inputTokens += Math.max(0, m.inputTokens + m.promptTokens);
+                outputTokens += Math.max(0, m.outputTokens + m.completionTokens);
+                elapsedMs += Math.max(0, m.elapsedMs);
+                totalCostUsd += Math.max(0.0, m.estimatedCostUsd);
+                if (m.speculativeExecuted) {
+                    speculativeCount++;
+                }
+                String flow = toText(m.flow);
+                flowCounts.put(flow, flowCounts.getOrDefault(flow, 0) + 1);
+                String routingTier = toText(m.routingTier);
+                if (!routingTier.isBlank()) {
+                    routingTierCounts.put(routingTier, routingTierCounts.getOrDefault(routingTier, 0) + 1);
+                }
+            }
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("totalEvents", total);
+        out.put("fallbackCount", fallbackCount);
+        out.put("fallbackRate", ratio(fallbackCount, total));
+        out.put("quickProbeCount", quickProbeCount);
+        out.put("quickProbeRate", ratio(quickProbeCount, total));
+        out.put("skipQuickProbeCount", skipQuickProbeCount);
+        out.put("directProviderRouteCount", directProviderCount);
+        out.put("inputTokens", inputTokens);
+        out.put("outputTokens", outputTokens);
+        out.put("avgElapsedMs", total <= 0 ? 0 : (elapsedMs / total));
+        out.put("estimatedCostUsd", round6(totalCostUsd));
+        out.put("speculativeExecutionCount", speculativeCount);
+        out.put("speculativeExecutionRate", ratio(speculativeCount, total));
+        out.put("byFlow", flowCounts);
+        out.put("byRoutingTier", routingTierCounts);
+        return out;
+    }
+
+    private Map<String, Object> buildHourlyBuckets(List<AiTelemetryMetric> events) {
+        Map<String, Map<String, Object>> buckets = new LinkedHashMap<>();
+        if (events != null) {
+            for (AiTelemetryMetric m : events) {
+                if (m == null) continue;
+                String bucket = HOUR_BUCKET_FORMATTER.format(Instant.ofEpochMilli(m.timestamp));
+                Map<String, Object> agg = buckets.computeIfAbsent(bucket, k -> new LinkedHashMap<>());
+                incLong(agg, "events", 1);
+                incLong(agg, "inputTokens", Math.max(0, m.inputTokens + m.promptTokens));
+                incLong(agg, "outputTokens", Math.max(0, m.outputTokens + m.completionTokens));
+                incLong(agg, "fallbackEvents", (m.providerFallbackUsed || m.usedGeminiFallback || m.switchedToDefaultModel) ? 1 : 0);
+                incLong(agg, "quickProbeEvents", m.usedQuickProbe ? 1 : 0);
+                incLong(agg, "skipQuickProbeEvents", m.skippedQuickProbe ? 1 : 0);
+                incLong(agg, "directProviderEvents", m.usedDirectProviderRoute ? 1 : 0);
+                incDouble(agg, "estimatedCostUsd", Math.max(0.0, m.estimatedCostUsd));
+            }
+        }
+        return new LinkedHashMap<>(buckets);
+    }
+
+    private Map<String, Object> buildDailyBuckets(List<AiTelemetryMetric> events, int lastDays) {
+        int safeDays = Math.max(1, Math.min(60, lastDays));
+        long startMs = System.currentTimeMillis() - safeDays * 24L * 3600_000L;
+        Map<String, Map<String, Object>> buckets = new LinkedHashMap<>();
+
+        if (events != null) {
+            for (AiTelemetryMetric m : events) {
+                if (m == null || m.timestamp < startMs) continue;
+                String bucket = DAY_BUCKET_FORMATTER.format(Instant.ofEpochMilli(m.timestamp));
+                Map<String, Object> agg = buckets.computeIfAbsent(bucket, k -> new LinkedHashMap<>());
+                incLong(agg, "events", 1);
+                incLong(agg, "inputTokens", Math.max(0, m.inputTokens + m.promptTokens));
+                incLong(agg, "outputTokens", Math.max(0, m.outputTokens + m.completionTokens));
+                incLong(agg, "fallbackEvents", (m.providerFallbackUsed || m.usedGeminiFallback || m.switchedToDefaultModel) ? 1 : 0);
+                incDouble(agg, "estimatedCostUsd", Math.max(0.0, m.estimatedCostUsd));
+            }
+        }
+
+        return new LinkedHashMap<>(buckets);
+    }
+
+    private Map<String, Object> buildTelemetryAlerts(
+            List<AiTelemetryMetric> windowEvents,
+            double fallbackAlertThreshold,
+            double quickProbeAlertThreshold,
+            int minSamplesForAlert) {
+        int total = windowEvents == null ? 0 : windowEvents.size();
+        int fallbackCount = 0;
+        int quickProbeCount = 0;
+        if (windowEvents != null) {
+            for (AiTelemetryMetric m : windowEvents) {
+                if (m == null) continue;
+                if (m.providerFallbackUsed || m.usedGeminiFallback || m.switchedToDefaultModel) fallbackCount++;
+                if (m.usedQuickProbe) quickProbeCount++;
+            }
+        }
+
+        double fallbackRate = ratio(fallbackCount, total);
+        double quickProbeRate = ratio(quickProbeCount, total);
+        boolean enoughSamples = total >= minSamplesForAlert;
+        boolean fallbackSpike = enoughSamples && fallbackRate >= Math.max(0.05, fallbackAlertThreshold);
+        boolean quickProbeSpike = enoughSamples && quickProbeRate >= Math.max(0.05, quickProbeAlertThreshold);
+
+        List<Map<String, Object>> alertItems = new ArrayList<>();
+        if (fallbackSpike) {
+            alertItems.add(Map.of(
+                "type", "fallback_spike",
+                "severity", fallbackRate >= 0.5 ? "high" : "warning",
+                "value", round6(fallbackRate),
+                "threshold", round6(Math.max(0.05, fallbackAlertThreshold)),
+                "message", "Fallback rate vượt ngưỡng, cần tăng ổn định route/prompt budget"));
+        }
+        if (quickProbeSpike) {
+            alertItems.add(Map.of(
+                "type", "quick_probe_spike",
+                "severity", quickProbeRate >= 0.5 ? "high" : "warning",
+                "value", round6(quickProbeRate),
+                "threshold", round6(Math.max(0.05, quickProbeAlertThreshold)),
+                "message", "Quick-probe rate cao, nên nới budget hoặc tăng ngưỡng skip-probe"));
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("totalEvents", total);
+        out.put("fallbackRate", round6(fallbackRate));
+        out.put("quickProbeRate", round6(quickProbeRate));
+        out.put("minSamplesForAlert", minSamplesForAlert);
+        out.put("fallbackSpike", fallbackSpike);
+        out.put("quickProbeSpike", quickProbeSpike);
+        out.put("items", alertItems);
+        return out;
+    }
+
+    private Map<String, Object> buildAdaptiveBudgetRecommendations(Map<String, Object> alerts, Map<String, Object> summary) {
+        boolean fallbackSpike = toBool(alerts == null ? null : alerts.get("fallbackSpike"));
+        boolean quickProbeSpike = toBool(alerts == null ? null : alerts.get("quickProbeSpike"));
+        int totalEvents = toInt(summary == null ? null : summary.get("totalEvents"));
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("enabled", totalEvents > 0);
+        out.put("mode", (fallbackSpike || quickProbeSpike) ? "scale_up_budget" : "scale_down_budget");
+
+        List<Map<String, Object>> actions = new ArrayList<>();
+        if (fallbackSpike || quickProbeSpike) {
+            actions.add(adjustment("ai.assistant.prompt-budget.menu.max-chars", 1.15, "increase"));
+            actions.add(adjustment("ai.assistant.prompt-budget.code.max-chars", 1.10, "increase"));
+            actions.add(adjustment("ai.code-stream.routing.retry-default-max-prompt-chars", 1.10, "increase"));
+        } else {
+            actions.add(adjustment("ai.assistant.prompt-budget.menu.max-chars", 0.95, "decrease"));
+            actions.add(adjustment("ai.assistant.prompt-budget.code.max-chars", 0.95, "decrease"));
+            actions.add(adjustment("ai.code-stream.routing.retry-default-max-prompt-chars", 0.95, "decrease"));
+        }
+        out.put("actions", actions);
+        out.put("note", "Đề xuất tự động để điều chỉnh budget động; áp dụng qua config rollout sau khi xác minh.");
+        return out;
+    }
+
+    private Map<String, Object> adjustment(String key, double ratio, String direction) {
+        Map<String, Object> action = new LinkedHashMap<>();
+        action.put("configKey", key);
+        action.put("direction", direction);
+        action.put("ratio", round6(ratio));
+        return action;
+    }
+
+    private void pruneAiTelemetryHistoryIfNeeded(int maxItems) {
+        int safeMax = Math.max(500, maxItems);
+        synchronized (aiTelemetryHistory) {
+            int extra = aiTelemetryHistory.size() - safeMax;
+            if (extra <= 0) {
+                return;
+            }
+            aiTelemetryHistory.subList(0, extra).clear();
+        }
+    }
+
+    private static void incLong(Map<String, Object> map, String key, long delta) {
+        long value = 0;
+        Object current = map.get(key);
+        if (current instanceof Number n) {
+            value = n.longValue();
+        } else if (current != null) {
+            try {
+                value = Long.parseLong(String.valueOf(current));
+            } catch (Exception ignored) {
+                value = 0;
+            }
+        }
+        map.put(key, value + Math.max(0, delta));
+    }
+
+    private static void incDouble(Map<String, Object> map, String key, double delta) {
+        double value = 0.0;
+        Object current = map.get(key);
+        if (current instanceof Number n) {
+            value = n.doubleValue();
+        } else if (current != null) {
+            try {
+                value = Double.parseDouble(String.valueOf(current));
+            } catch (Exception ignored) {
+                value = 0.0;
+            }
+        }
+        map.put(key, value + Math.max(0.0, delta));
+    }
+
+    private static double ratio(int n, int d) {
+        if (d <= 0) return 0.0;
+        return (double) n / (double) d;
+    }
+
+    private static double round6(double v) {
+        return Math.round(v * 1_000_000d) / 1_000_000d;
+    }
+
+    private static String toText(Object raw) {
+        return String.valueOf(raw == null ? "" : raw).trim();
+    }
+
+    private static int toInt(Object raw) {
+        if (raw == null) return 0;
+        if (raw instanceof Number n) return Math.max(0, n.intValue());
+        try {
+            return Math.max(0, (int) Math.round(Double.parseDouble(String.valueOf(raw).trim())));
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private static long toLong(Object raw, long fallback) {
+        if (raw == null) return fallback;
+        if (raw instanceof Number n) return n.longValue();
+        try {
+            return Long.parseLong(String.valueOf(raw).trim());
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private static double toDouble(Object raw) {
+        if (raw == null) return 0.0;
+        if (raw instanceof Number n) return Math.max(0.0, n.doubleValue());
+        try {
+            return Math.max(0.0, Double.parseDouble(String.valueOf(raw).trim()));
+        } catch (Exception ignored) {
+            return 0.0;
+        }
+    }
+
+    private static boolean toBool(Object raw) {
+        if (raw instanceof Boolean b) return b;
+        String text = String.valueOf(raw == null ? "" : raw).trim().toLowerCase(Locale.ROOT);
+        return "1".equals(text) || "true".equals(text) || "yes".equals(text) || "y".equals(text);
+    }
+
     private double calculateEstimatedCost(int inputTokens, int outputTokens) {
         double inputCost = (inputTokens / 1_000_000.0) * (INPUT_COST_PER_1M_TOKENS * 1_000_000);
         double outputCost = (outputTokens / 1_000_000.0) * (OUTPUT_COST_PER_1M_TOKENS * 1_000_000);
@@ -172,6 +602,7 @@ public class ApiCallInstrumentationService {
 
     public void clearHistory() {
         callHistory.clear();
+        aiTelemetryHistory.clear();
         totalApiCallCount.set(0);
         totalLocalProcessCount.set(0);
         totalGeminiCostVND.set(0);

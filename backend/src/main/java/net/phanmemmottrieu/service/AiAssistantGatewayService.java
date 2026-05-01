@@ -899,6 +899,52 @@ public class AiAssistantGatewayService {
     }
 
     String taskLower = taskType == null ? "" : taskType.toLowerCase();
+
+    // Copilot-style routing matrix: planner -> mini/flash, complex solver -> pro/high-capacity.
+    if (taskLower.contains("planning_fast") || taskLower.contains("planner_fast")) {
+      List<String> candidates = resolveCandidateModels();
+      if (candidates.contains("gpt-4o-mini")) {
+        return "gpt-4o-mini";
+      }
+      if (candidates.contains("gpt-4.1-mini")) {
+        return "gpt-4.1-mini";
+      }
+      if (candidates.contains("codex-mini-latest")) {
+        return "codex-mini-latest";
+      }
+      boolean delegatedGeminiAvailable = geminiEnabled && geminiService != null;
+      if (delegatedGeminiAvailable) {
+        return "gemini:gemini-2.5-flash";
+      }
+      return model;
+    }
+
+    if (taskLower.contains("solver_complex")) {
+      boolean ownGeminiConfigured = geminiEnabled && !googleApiKey.isBlank() && !googleProjectId.isBlank();
+      boolean delegatedGeminiAvailable = geminiEnabled && geminiService != null;
+      if (ownGeminiConfigured || delegatedGeminiAvailable) {
+        return "gemini:" + geminiModel;
+      }
+      List<String> candidates = resolveCandidateModels();
+      if (candidates.contains("gpt-4.1")) {
+        return "gpt-4.1";
+      }
+      if (candidates.contains("gpt-4o")) {
+        return "gpt-4o";
+      }
+      return model;
+    }
+
+    if (taskLower.contains("solver_balanced")) {
+      List<String> candidates = resolveCandidateModels();
+      if (candidates.contains("gpt-4o-mini")) {
+        return "gpt-4o-mini";
+      }
+      if (candidates.contains("gpt-4.1-mini")) {
+        return "gpt-4.1-mini";
+      }
+    }
+
     boolean isCodeGeneration = taskLower.contains("code") || taskLower.contains("java") || taskLower.contains("function");
     boolean isMenuDesign = taskLower.contains("menu");
 
@@ -997,6 +1043,16 @@ public class AiAssistantGatewayService {
   }
 
   private String detectTaskTypeHint(String prompt) {
+    String normalized = String.valueOf(prompt == null ? "" : prompt).toLowerCase(Locale.ROOT);
+    if (normalized.contains("orchestration_routing_tier=planner_fast")) {
+      return "planning_fast";
+    }
+    if (normalized.contains("orchestration_routing_tier=solver_complex")) {
+      return "solver_complex";
+    }
+    if (normalized.contains("orchestration_routing_tier=solver_balanced")) {
+      return "solver_balanced";
+    }
     if (looksLikeMenuTask(prompt)) {
       return "menu_design";
     }
