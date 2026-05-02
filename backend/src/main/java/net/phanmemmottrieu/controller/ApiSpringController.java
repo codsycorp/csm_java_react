@@ -12,6 +12,20 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.apache.lucene.analysis.standard.StandardAnalyzer;
+import org.apache.lucene.document.Document;
+import org.apache.lucene.document.StoredField;
+import org.apache.lucene.document.TextField;
+import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.queryparser.classic.QueryParser;
+import org.apache.lucene.queryparser.classic.QueryParserBase;
+import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.Query;
+import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.TopDocs;
+import org.apache.lucene.store.ByteBuffersDirectory;
 
 // THAY ĐỔI DÒNG NÀY:
 // import javax.servlet.http.HttpServletRequest; // BỎ DÒNG NÀY
@@ -292,6 +306,18 @@ public class ApiSpringController {
     @Value("${ai.code-stream.edit.text-edits-retry.max-extra-attempts:1}")
     private int aiCodeStreamEditTextEditsRetryMaxExtraAttempts;
 
+    @Value("${ai.code-stream.edit.strict-search-replace-enabled:true}")
+    private boolean aiCodeStreamEditStrictSearchReplaceEnabled;
+
+    @Value("${ai.code-stream.context.lucene-enabled:true}")
+    private boolean aiCodeStreamContextLuceneEnabled;
+
+    @Value("${ai.code-stream.context.lucene-max-items:4}")
+    private int aiCodeStreamContextLuceneMaxItems;
+
+    @Value("${ai.code-stream.context.lucene-excerpt-chars:2200}")
+    private int aiCodeStreamContextLuceneExcerptChars;
+
     @Value("${ai.menu.auto-continue.enabled:true}")
     private boolean aiMenuAutoContinueEnabled;
 
@@ -514,6 +540,30 @@ public class ApiSpringController {
                     ? focusWindow.code()
                     : effectiveCodeContext;
 
+                if ("edit".equalsIgnoreCase(responseMode)
+                        && !isMenuJsonContext(contextType)
+                        && aiCodeStreamContextLuceneEnabled) {
+                    List<String> luceneExcerpts = buildCodeStreamLuceneExcerpts(
+                        effectiveCodeContext,
+                        message,
+                        focusWindow == null ? "" : focusWindow.code(),
+                        Math.max(1, aiCodeStreamContextLuceneMaxItems),
+                        Math.max(900, aiCodeStreamContextLuceneExcerptChars));
+                    if (!luceneExcerpts.isEmpty()) {
+                        StringBuilder semanticCtx = new StringBuilder(promptCodeContext);
+                        semanticCtx.append("\n\n/* ===== LUCENE RELATED CONTEXT ===== */\n");
+                        for (String excerpt : luceneExcerpts) {
+                            if (excerpt == null || excerpt.isBlank()) {
+                                continue;
+                            }
+                            semanticCtx.append(excerpt).append("\n");
+                        }
+                        promptCodeContext = truncateMiddle(
+                            semanticCtx.toString(),
+                            Math.max(4000, aiCodeStreamMaxCurrentCodeChars));
+                    }
+                }
+
                 if ("edit".equalsIgnoreCase(responseMode) && !isMenuJsonContext(contextType)) {
                     List<String> relatedSymbolExcerpts = buildCodeStreamRelatedSymbolExcerpts(
                         effectiveCodeContext,
@@ -720,8 +770,15 @@ public class ApiSpringController {
                 if (!largeStructuredEditMode
                         && "edit".equalsIgnoreCase(responseMode)
                         && !isMenuJsonContext(contextType)) {
+                    if (aiCodeStreamEditStrictSearchReplaceEnabled && !hasSearchReplaceBlocks(completionPayload)) {
+                        sendErrorEvent(emitter,
+                                "Strict mode: AI phải trả về SEARCH/REPLACE blocks. Không chấp nhận JSON textEdits/full code.");
+                        return;
+                    }
                     completionPayload = salvageSearchReplaceAsTextEdits(completionPayload, effectiveCodeContext);
-                    completionPayload = salvagePropertyPatchAsTextEdits(completionPayload, effectiveCodeContext);
+                    if (!aiCodeStreamEditStrictSearchReplaceEnabled) {
+                        completionPayload = salvagePropertyPatchAsTextEdits(completionPayload, effectiveCodeContext);
+                    }
                     completionPayload = canonicalizeLineTextEditsPayload(completionPayload, effectiveCodeContext);
 
                     List<Map<String, Object>> canonicalTextEdits = parseNormalizedLineTextEdits(completionPayload);
@@ -1323,6 +1380,101 @@ public class ApiSpringController {
         return new CodeWindowContext(sb.toString(), start, end);
     }
 
+    private List<String> buildCodeStreamLuceneExcerpts(
+        String fullCode,
+        String message,
+        String focusCode,
+        int maxItems,
+        int excerptChars
+    ) {
+        List<String> excerpts = new ArrayList<>();
+        String code = String.valueOf(fullCode == null ? "" : fullCode);
+        if (code.isBlank() || maxItems <= 0 || excerptChars <= 0) {
+            return excerpts;
+        }
+
+        LinkedHashSet<String> tokens = new LinkedHashSet<>();
+        tokens.addAll(extractAiAssistantRetrievalTokens(message));
+        tokens.addAll(extractCodeStreamSymbolCandidates(focusCode, Math.max(6, maxItems * 3)));
+        if (tokens.isEmpty()) {
+            return excerpts;
+        }
+
+        int chunkChars = Math.max(900, excerptChars);
+        int overlapChars = Math.max(200, chunkChars / 5);
+
+        try (StandardAnalyzer analyzer = new StandardAnalyzer();
+             ByteBuffersDirectory directory = new ByteBuffersDirectory()) {
+            IndexWriterConfig config = new IndexWriterConfig(analyzer);
+            try (IndexWriter writer = new IndexWriter(directory, config)) {
+                int cursor = 0;
+                int docId = 0;
+                int codeLength = code.length();
+                while (cursor < codeLength) {
+                    int start = cursor;
+                    int end = Math.min(codeLength, start + chunkChars);
+                    String chunk = code.substring(start, end);
+                    Document doc = new Document();
+                    doc.add(new StoredField("chunkId", docId++));
+                    doc.add(new StoredField("start", start));
+                    doc.add(new StoredField("end", end));
+                    doc.add(new TextField("content", chunk, org.apache.lucene.document.Field.Store.NO));
+                    writer.addDocument(doc);
+
+                    if (end >= codeLength) {
+                        break;
+                    }
+                    cursor = Math.max(cursor + 1, end - overlapChars);
+                }
+            }
+
+            String queryText = tokens.stream()
+                .limit(10)
+                .map(QueryParserBase::escape)
+                .filter(s -> s != null && !s.isBlank())
+                .reduce((a, b) -> a + " OR " + b)
+                .orElse("");
+            if (queryText.isBlank()) {
+                return excerpts;
+            }
+
+            try (DirectoryReader reader = DirectoryReader.open(directory)) {
+                IndexSearcher searcher = new IndexSearcher(reader);
+                QueryParser parser = new QueryParser("content", analyzer);
+                Query query = parser.parse(queryText);
+                TopDocs topDocs = searcher.search(query, Math.max(maxItems * 2, maxItems));
+                List<Integer> anchors = new ArrayList<>();
+                for (ScoreDoc scoreDoc : topDocs.scoreDocs) {
+                    Document hit = searcher.doc(scoreDoc.doc);
+                    if (hit.getField("start") == null || hit.getField("end") == null) {
+                        continue;
+                    }
+                    int start = hit.getField("start").numericValue().intValue();
+                    int end = hit.getField("end").numericValue().intValue();
+                    if (start < 0 || end <= start || start >= code.length()) {
+                        continue;
+                    }
+                    if (isNearExistingAnchor(anchors, start, Math.max(500, chunkChars / 2))) {
+                        continue;
+                    }
+                    int safeEnd = Math.min(code.length(), end);
+                    String chunk = code.substring(start, safeEnd);
+                    int startLine = estimateLineAt(code, start);
+                    int endLine = estimateLineAt(code, Math.max(start, safeEnd - 1));
+                    anchors.add(start);
+                    excerpts.add("/* lucene lines " + startLine + "-" + endLine + " */\\n" + chunk);
+                    if (excerpts.size() >= maxItems) {
+                        break;
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            logger.debug("ai-code-stream lucene excerpt retrieval failed: {}", ex.getMessage());
+        }
+
+        return excerpts;
+    }
+
     private List<String> buildCodeStreamRelatedSymbolExcerpts(
         String fullCode,
         String message,
@@ -1497,13 +1649,18 @@ public class ApiSpringController {
                 sb.append("Không markdown, không code fence, không giải thích ngoài JSON.\n\n");
             } else {
                 sb.append("CHẾ ĐỘ: Chỉnh sửa code theo vị trí dòng.\n");
-                sb.append("ƯU TIÊN CAO NHẤT: trả về các khối SEARCH/REPLACE để backend ráp đúng vùng code:\n");
+                sb.append("BẮT BUỘC: trả về các khối SEARCH/REPLACE để backend ráp đúng vùng code:\n");
                 sb.append("<<<<<<< SEARCH\n[đoạn code cũ]\n=======\n[đoạn code mới]\n>>>>>>> REPLACE\n");
                 sb.append("Mỗi SEARCH phải đủ unique theo ngữ cảnh thật và giữ nguyên whitespace/tab.\n");
-                sb.append("Ưu tiên trả về JSON thuần theo format:\n");
-                sb.append("{\"summary\":\"...\",\"changes\":[\"...\"],\"textEdits\":[{\"startLine\":10,\"endLine\":12,\"replacement\":\"...\",\"action\":\"edit\"}]}\n");
-                sb.append("Trong đó textEdits phải không chồng lấn và chỉ chỉnh đúng phạm vi cần thiết.\n");
-                sb.append("Chỉ fallback trả về {\"summary\",\"code\",\"changes\"} khi không thể biểu diễn bằng SEARCH/REPLACE hoặc textEdits.\n");
+                if (aiCodeStreamEditStrictSearchReplaceEnabled) {
+                    sb.append("STRICT MODE: Chỉ được trả SEARCH/REPLACE blocks.\n");
+                    sb.append("Cấm JSON wrapper, cấm textEdits, cấm full code.\n");
+                } else {
+                    sb.append("Ưu tiên trả về JSON thuần theo format:\n");
+                    sb.append("{\"summary\":\"...\",\"changes\":[\"...\"],\"textEdits\":[{\"startLine\":10,\"endLine\":12,\"replacement\":\"...\",\"action\":\"edit\"}]}\n");
+                    sb.append("Trong đó textEdits phải không chồng lấn và chỉ chỉnh đúng phạm vi cần thiết.\n");
+                    sb.append("Chỉ fallback trả về {\"summary\",\"code\",\"changes\"} khi không thể biểu diễn bằng SEARCH/REPLACE hoặc textEdits.\n");
+                }
                 sb.append("Không markdown, không code fence.\n\n");
             }
         } else {
@@ -1925,13 +2082,23 @@ public class ApiSpringController {
         return sb.toString();
     }
 
-    private String buildTextEditsRetryPrompt(String originalPrompt, String previousRawResponse, String language,
-            String contextType,
-            boolean largeStructuredEditMode) {
-        if (largeStructuredEditMode) {
-            return buildAutoContinuePrompt(originalPrompt, previousRawResponse, language, contextType, true);
+    privif (aiCodeStreamEditStrictSearchReplaceEnabled) {
+            sb.append("ĐIỀU CHỈNH ĐỊNH DẠNG KẾT QUẢ: backend đang ở STRICT SEARCH/REPLACE mode.\n");
+            sb.append("BẮT BUỘC chỉ trả về các block:\n");
+            sb.append("<<<<<<< SEARCH\n[old]\n=======\n[new]\n>>>>>>> REPLACE\n");
+            sb.append("Quy tắc:\n");
+            sb.append("- Không markdown, không code fence.\n");
+            sb.append("- Không JSON, không textEdits, không full code.\n");
+            sb.append("- Mỗi SEARCH phải đủ unique theo ngữ cảnh.\n\n");
+        } else {
+            sb.append("ĐIỀU CHỈNH ĐỊNH DẠNG KẾT QUẢ: backend cần apply theo line-level edits để tránh ghi đè cả file.\n");
+            sb.append("BẮT BUỘC trả về JSON thuần dạng:\n");
+            sb.append("{\"summary\":\"...\",\"changes\":[\"...\"],\"textEdits\":[{\"startLine\":10,\"endLine\":12,\"replacement\":\"...\",\"action\":\"edit\"}]}\n");
+            sb.append("Quy tắc:\n");
+            sb.append("- Không markdown, không code fence.\n");
+            sb.append("- textEdits không chồng lấn nhau.\n");
+            sb.append("- Chỉ sửa vùng cần thiết, không thay toàn bộ file.\n\n");
         }
-        StringBuilder sb = new StringBuilder();
         sb.append("ĐIỀU CHỈNH ĐỊNH DẠNG KẾT QUẢ: backend cần apply theo line-level edits để tránh ghi đè cả file.\n");
         sb.append("BẮT BUỘC trả về JSON thuần dạng:\n");
         sb.append("{\"summary\":\"...\",\"changes\":[\"...\"],\"textEdits\":[{\"startLine\":10,\"endLine\":12,\"replacement\":\"...\",\"action\":\"edit\"}]}\n");
@@ -1964,6 +2131,10 @@ public class ApiSpringController {
 
         // Keep retry available for long prompts by only hard-stopping at extreme sizes.
         if (prompt != null && prompt.length() > Math.max(12000, aiCodeStreamEditTextEditsRetryMaxPromptChars * 3)) return false;
+
+        if (aiCodeStreamEditStrictSearchReplaceEnabled) {
+            return !hasSearchReplaceBlocks(rawResponse);
+        }
 
         int textEditsCount = extractLineTextEditsCount(rawResponse);
         if (textEditsCount > 0) return false;

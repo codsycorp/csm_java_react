@@ -805,6 +805,10 @@
   word-break: break-word;
 }
 
+.aiMergeEditor {
+  border-top: 1px solid var(--ant-color-border-secondary);
+}
+
 .hotkeyRow {
   display: grid;
   grid-template-columns: 200px 1fr auto;

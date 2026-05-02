@@ -887,6 +887,11 @@ export default function CodeEditor() {
 		[pendingChunk, selectedPendingRanges],
 	);
 
+	const pendingMergePreview = useMemo(() => ({
+		beforeText: String(pendingChunk?.before || ""),
+		afterText: String(pendingPreviewCode || pendingChunk?.after || ""),
+	}), [pendingChunk, pendingPreviewCode]);
+
 	const pendingSelectedCount = selectedPendingRanges.length;
 
 	useEffect(() => {
@@ -2105,10 +2110,10 @@ export default function CodeEditor() {
 			</Modal>
 
 			<Modal
-				title={devUiText("Diff Preview", "Diff Preview", "差异预览")}
+				title={devUiText("Merge Review", "Merge Review", "合并审阅")}
 				open={pendingDiffPreviewOpen}
 				onCancel={() => setPendingDiffPreviewOpen(false)}
-				width={1200}
+				width={1320}
 				footer={[
 					<Button key="close" onClick={() => setPendingDiffPreviewOpen(false)}>{t("system.developer.close")}</Button>,
 					<Button key="apply" type="primary" onClick={applySelectedPendingRanges} disabled={pendingSelectedCount <= 0}>
@@ -2119,11 +2124,45 @@ export default function CodeEditor() {
 				<div className={styles.aiDiffPreviewShell}>
 					<div className={styles.aiDiffColumn}>
 						<div className={styles.aiDiffColumnTitle}>{devUiText("Before", "Before", "修改前")}</div>
-						<pre className={styles.aiDiffCode}>{pendingDiffPreview.beforeText || devUiText("Không có vùng nào được chọn.", "No ranges selected.", "未选择任何范围。")}</pre>
+						<CodeMirror
+							aiAssistantEnabled={false}
+							value={pendingMergePreview.beforeText || pendingDiffPreview.beforeText}
+							onChange={() => {}}
+							extensions={[
+								search({ top: true }),
+								codeType === 0 ? javascript()
+									: codeType === 1 ? html()
+									: codeType === 2 ? python()
+									: codeType === 3 ? css()
+									: codeType === 4 ? sql()
+									: json(),
+							]}
+							theme={prefersDarkMode ? vscodeDark : vscodeLight}
+							height="56vh"
+							editable={false}
+							className={styles.aiMergeEditor}
+						/>
 					</div>
 					<div className={styles.aiDiffColumn}>
 						<div className={styles.aiDiffColumnTitle}>{devUiText("After", "After", "修改后")}</div>
-						<pre className={styles.aiDiffCode}>{pendingDiffPreview.afterText || devUiText("Không có vùng nào được chọn.", "No ranges selected.", "未选择任何范围。")}</pre>
+						<CodeMirror
+							aiAssistantEnabled={false}
+							value={pendingMergePreview.afterText || pendingDiffPreview.afterText}
+							onChange={() => {}}
+							extensions={[
+								search({ top: true }),
+								codeType === 0 ? javascript()
+									: codeType === 1 ? html()
+									: codeType === 2 ? python()
+									: codeType === 3 ? css()
+									: codeType === 4 ? sql()
+									: json(),
+							]}
+							theme={prefersDarkMode ? vscodeDark : vscodeLight}
+							height="56vh"
+							editable={false}
+							className={styles.aiMergeEditor}
+						/>
 					</div>
 				</div>
 			</Modal>
