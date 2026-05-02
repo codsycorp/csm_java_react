@@ -798,10 +798,14 @@ async function streamAiCode(
 	let accumulated = "";
 	let buffer = "";
 	let completed = false;
+	let bytesReceived = 0;
+	let sseLineCount = 0;
+	let streamChunkCount = 0;
 
 	const processSseLine = (line: string) => {
 		const trimmed = line.trim();
 		if (!trimmed.startsWith("data:")) return;
+		sseLineCount += 1;
 		const jsonStr = trimmed.slice(5).trim();
 		if (!jsonStr) return;
 		try {
@@ -809,6 +813,7 @@ async function streamAiCode(
 			const stage = String(event.stage || "");
 			if (stage === "streaming" && typeof event.chunk === "string") {
 				accumulated += event.chunk;
+				streamChunkCount += 1;
 				callbacks.onChunk?.(event.chunk, accumulated);
 				return;
 			}
@@ -834,6 +839,7 @@ async function streamAiCode(
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
+			if (value) bytesReceived += value.byteLength;
 			buffer += decoder.decode(value, { stream: true });
 			const lines = buffer.split("\n");
 			buffer = lines.pop() ?? "";
@@ -851,8 +857,21 @@ async function streamAiCode(
 				stage: "warning",
 				status: "incomplete",
 				message: "Luồng stream kết thúc trước event complete",
+				bytesReceived,
+				sseLineCount,
+				streamChunkCount,
+				accumulatedChars: accumulated.length,
 			});
 			callbacks.onError?.("Stream ended before complete event");
+		} else {
+			callbacks.onStatus?.({
+				stage: "stream_stats",
+				status: "done",
+				bytesReceived,
+				sseLineCount,
+				streamChunkCount,
+				accumulatedChars: accumulated.length,
+			});
 		}
 	} finally {
 		reader.releaseLock();

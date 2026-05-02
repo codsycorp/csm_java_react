@@ -127,6 +127,13 @@ type AiUsageSummary = {
 type CompletionMetrics = {
 	elapsedMs?: number;
 	outputChars?: number;
+	streamedChars?: number;
+	streamChunkCount?: number;
+	streamAssemblyMismatch?: boolean;
+	promptOriginalChars?: number;
+	promptFinalChars?: number;
+	promptCapChars?: number;
+	promptTruncatedByCharCap?: boolean;
 };
 
 type ModelDecisionTrace = {
@@ -793,6 +800,13 @@ export default function AiAssistantChat({
 			streamRequestId ? `requestId: ${streamRequestId}` : "",
 			completionMetrics.elapsedMs != null ? `${uiText("Thời gian", "Elapsed", "耗时")}: ${formatCompletionDuration(completionMetrics.elapsedMs)}` : "",
 			completionMetrics.outputChars != null ? `${uiText("Độ dài", "Output", "输出长度")}: ${formatOutputChars(completionMetrics.outputChars)}` : "",
+			completionMetrics.streamedChars != null ? `${uiText("Ký tự stream", "Streamed chars", "流式字符")}: ${formatOutputChars(completionMetrics.streamedChars)}` : "",
+			completionMetrics.streamChunkCount != null ? `${uiText("Số chunk", "Chunk count", "分块数")}: ${Math.max(0, Math.floor(completionMetrics.streamChunkCount)).toLocaleString("en-US")}` : "",
+			completionMetrics.streamAssemblyMismatch === true ? `${uiText("Mất đồng bộ", "Assembly mismatch", "拼接不一致")}: true` : "",
+			completionMetrics.promptOriginalChars != null ? `${uiText("Prompt gốc", "Prompt original", "原始提示")}: ${formatOutputChars(completionMetrics.promptOriginalChars)}` : "",
+			completionMetrics.promptFinalChars != null ? `${uiText("Prompt sau cắt", "Prompt final", "裁剪后提示")}: ${formatOutputChars(completionMetrics.promptFinalChars)}` : "",
+			completionMetrics.promptCapChars != null ? `${uiText("Ngưỡng prompt", "Prompt cap", "提示上限")}: ${formatOutputChars(completionMetrics.promptCapChars)}` : "",
+			completionMetrics.promptTruncatedByCharCap === true ? `${uiText("Prompt bị cắt theo ngưỡng", "Prompt truncated by cap", "提示触发长度裁剪")}: true` : "",
 			aiUsageSummary.turn?.model ? `${uiText("Model", "Model", "模型")}: ${aiUsageSummary.turn.model}` : "",
 		].filter(Boolean);
 		return lines.join("\n");
@@ -800,6 +814,13 @@ export default function AiAssistantChat({
 		aiUsageSummary.turn?.model,
 		completionMetrics.elapsedMs,
 		completionMetrics.outputChars,
+		completionMetrics.streamedChars,
+		completionMetrics.streamChunkCount,
+		completionMetrics.streamAssemblyMismatch,
+		completionMetrics.promptOriginalChars,
+		completionMetrics.promptFinalChars,
+		completionMetrics.promptCapChars,
+		completionMetrics.promptTruncatedByCharCap,
 		completionStateLabel,
 		formatCompletionDuration,
 		formatOutputChars,
@@ -1964,6 +1985,8 @@ export default function AiAssistantChat({
 								remainingEstimateSecs?: number; charsReceived?: number; estimatedTotalChars?: number;
 								ttftMs?: number; elapsedMs?: number; promptTokens?: number; model?: string;
 								requestId?: string;
+								streamedChars?: number; streamChunkCount?: number; streamAssemblyMismatch?: boolean;
+								promptOriginalChars?: number; promptFinalChars?: number; promptCapChars?: number; promptTruncatedByCharCap?: boolean;
 								modelDecisionStep?: "primary" | "fallback" | "final";
 								modelDecisionReason?: string;
 								decision_step?: "primary" | "fallback" | "final";
@@ -2076,7 +2099,7 @@ export default function AiAssistantChat({
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
 									appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
 								}
-							} else if (evt.stage === "context" || evt.stage === "continuing" || evt.stage === "cached") {
+							} else if (evt.stage === "context" || evt.stage === "continuing" || evt.stage === "cached" || evt.stage === "prompt_budget") {
 								if (decisionStep === "fallback" || !!decisionReason || (evt.message || "").toLowerCase().includes("fallback") || (evt.message || "").toLowerCase().includes("switch") || (evt.message || "").toLowerCase().includes("chuy") || (evt.message || "").toLowerCase().includes("rate-limit")) {
 									appendModelDecisionTrace({
 										step: decisionStep || "fallback",
@@ -2121,12 +2144,26 @@ export default function AiAssistantChat({
 										: Number.isFinite(Number(evt.charsReceived))
 											? Number(evt.charsReceived)
 											: streamingMessageRef.current.length + pendingStreamChunkRef.current.length,
+									streamedChars: Number.isFinite(Number(evt.streamedChars)) ? Number(evt.streamedChars) : undefined,
+									streamChunkCount: Number.isFinite(Number(evt.streamChunkCount)) ? Number(evt.streamChunkCount) : undefined,
+									streamAssemblyMismatch: evt.streamAssemblyMismatch === true,
+									promptOriginalChars: Number.isFinite(Number(evt.promptOriginalChars)) ? Number(evt.promptOriginalChars) : undefined,
+									promptFinalChars: Number.isFinite(Number(evt.promptFinalChars)) ? Number(evt.promptFinalChars) : undefined,
+									promptCapChars: Number.isFinite(Number(evt.promptCapChars)) ? Number(evt.promptCapChars) : undefined,
+									promptTruncatedByCharCap: evt.promptTruncatedByCharCap === true,
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
 								setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Hoàn thành", "Completed", "已完成"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								if (evt.fullResponse) {
 									streamingMessageRef.current = evt.fullResponse;
 									pendingStreamChunkRef.current = "";
+								}
+								if (evt.promptTruncatedByCharCap === true) {
+									message.warning(uiText(
+										"Prompt đã bị cắt theo ngưỡng, kết quả có thể thiếu một phần menu lớn",
+										"Prompt was truncated by budget, large menu output may be incomplete",
+										"提示已按预算裁剪，大型菜单结果可能不完整",
+									));
 								}
 								flushStreamingToUI(true);
 								if (evt.fullResponse) {

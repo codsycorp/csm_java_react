@@ -288,6 +288,18 @@ public class ApiSpringController {
     @Value("${ai.code-stream.max-prompt-chars:140000}")
     private int aiCodeStreamMaxPromptChars;
 
+    @Value("${ai.code-stream.menu.max-prompt-chars:220000}")
+    private int aiCodeStreamMenuMaxPromptChars;
+
+    @Value("${ai.code-stream.menu.chunked-context.enabled:true}")
+    private boolean aiCodeStreamMenuChunkedContextEnabled;
+
+    @Value("${ai.code-stream.menu.chunked-context-threshold-chars:120000}")
+    private int aiCodeStreamMenuChunkedContextThresholdChars;
+
+    @Value("${ai.code-stream.menu.chunked-context-max-chars:110000}")
+    private int aiCodeStreamMenuChunkedContextMaxChars;
+
     @Value("${ai.code-stream.max-current-code-chars:80000}")
     private int aiCodeStreamMaxCurrentCodeChars;
 
@@ -565,9 +577,32 @@ public class ApiSpringController {
                 String promptCodeContext = focusWindow != null && !focusWindow.code().isBlank()
                     ? focusWindow.code()
                     : effectiveCodeContext;
+                boolean menuJsonContext = isMenuJsonContext(contextType);
+                boolean menuChunkedContextApplied = false;
+
+                if (menuJsonContext
+                        && aiCodeStreamMenuChunkedContextEnabled
+                        && promptCodeContext.length() > Math.max(40000, aiCodeStreamMenuChunkedContextThresholdChars)) {
+                    String chunkedContext = buildMenuChunkedPromptContext(
+                        promptCodeContext,
+                        Math.max(50000, aiCodeStreamMenuChunkedContextMaxChars));
+                    if (!chunkedContext.isBlank() && chunkedContext.length() < promptCodeContext.length()) {
+                        promptCodeContext = chunkedContext;
+                        menuChunkedContextApplied = true;
+                        sendEvent(emitter, jsonOf(
+                            "stage", "context_compression",
+                            "status", "chunked_context_fallback",
+                            "detailKey", "copilot.progress.detail.streaming_chunk_fallback",
+                            "contextType", contextType,
+                            "message", "Ngữ cảnh menu lớn vượt ngưỡng, kích hoạt chunk mode map-reduce để giữ toàn vẹn cấu trúc",
+                            "charsBefore", effectiveCodeContext.length(),
+                            "charsAfter", promptCodeContext.length(),
+                            "requestId", requestId));
+                    }
+                }
 
                 if ("edit".equalsIgnoreCase(responseMode)
-                        && !isMenuJsonContext(contextType)
+                        && !menuJsonContext
                         && aiCodeStreamContextLuceneEnabled) {
                     List<String> luceneExcerpts = buildCodeStreamLuceneExcerpts(
                         effectiveCodeContext,
@@ -590,7 +625,7 @@ public class ApiSpringController {
                     }
                 }
 
-                if ("edit".equalsIgnoreCase(responseMode) && !isMenuJsonContext(contextType)) {
+                if ("edit".equalsIgnoreCase(responseMode) && !menuJsonContext) {
                     List<String> relatedSymbolExcerpts = buildCodeStreamRelatedSymbolExcerpts(
                         effectiveCodeContext,
                         message,
@@ -634,9 +669,16 @@ public class ApiSpringController {
                     prompt = buildCodingPrompt(messageWithReuse, promptCodeContext, language, contextType, responseMode,
                             attachmentsRaw, true, base.baseRef(), base.baseContentChars());
                 }
-                if (prompt.length() > aiCodeStreamMaxPromptChars) {
-                    prompt = truncateMiddle(prompt, Math.max(20000, aiCodeStreamMaxPromptChars));
+                int effectivePromptCharCap = menuJsonContext
+                    ? Math.max(aiCodeStreamMaxPromptChars, aiCodeStreamMenuMaxPromptChars)
+                    : aiCodeStreamMaxPromptChars;
+                int promptOriginalChars = prompt.length();
+                boolean promptTruncatedByCharCap = false;
+                if (prompt.length() > effectivePromptCharCap) {
+                    prompt = truncateMiddle(prompt, Math.max(20000, effectivePromptCharCap));
+                    promptTruncatedByCharCap = true;
                 }
+                int promptFinalChars = prompt.length();
 
                 int systemContentEstimate = prompt.length() - message.length();
                 boolean usePromptCache = systemContentEstimate >= Math.max(1000, aiCodeStreamPromptCacheMinChars);
@@ -644,15 +686,37 @@ public class ApiSpringController {
                     ? buildCodingPromptParts(message, promptCodeContext, language, contextType, responseMode,
                                 attachmentsRaw, largeStructuredEditMode, base.baseRef(), base.baseContentChars())
                         : new String[] { prompt, "" };
-                if (promptParts[0].length() > aiCodeStreamMaxPromptChars) {
-                    promptParts[0] = truncateMiddle(promptParts[0], Math.max(20000, aiCodeStreamMaxPromptChars));
+                if (promptParts[0].length() > effectivePromptCharCap) {
+                    promptParts[0] = truncateMiddle(promptParts[0], Math.max(20000, effectivePromptCharCap));
                     usePromptCache = false;
                 }
+
+                if (promptTruncatedByCharCap) {
+                    sendEvent(emitter, jsonOf(
+                        "stage", "prompt_budget",
+                        "status", "truncated",
+                        "requestId", requestId,
+                        "contextType", contextType,
+                        "message", "Prompt vượt ngưỡng, backend đã cắt gọn trước khi gửi model",
+                        "promptOriginalChars", promptOriginalChars,
+                        "promptFinalChars", promptFinalChars,
+                        "promptCapChars", effectivePromptCharCap,
+                        "menuChunkedContextApplied", menuChunkedContextApplied,
+                        "detailKey", "copilot.progress.detail.streaming_chunk_fallback"));
+                }
+
+                Map<String, Object> codeStreamMeta = new LinkedHashMap<>();
+                codeStreamMeta.put("promptOriginalChars", promptOriginalChars);
+                codeStreamMeta.put("promptFinalChars", promptFinalChars);
+                codeStreamMeta.put("promptCapChars", effectivePromptCharCap);
+                codeStreamMeta.put("promptTruncatedByCharCap", promptTruncatedByCharCap);
+                codeStreamMeta.put("promptCacheEligible", systemContentEstimate >= Math.max(1000, aiCodeStreamPromptCacheMinChars));
+                codeStreamMeta.put("promptCacheUsed", usePromptCache);
+                codeStreamMeta.put("menuChunkedContextApplied", menuChunkedContextApplied);
 
                 String effectiveModel = routeModel(message, effectiveCodeContext, contextType, responseMode, modelOverride);
                 String defaultModel = resolveDefaultStreamingModel();
                 String simpleModel = resolveSimpleStreamingModel();
-                Map<String, Object> codeStreamMeta = new LinkedHashMap<>();
                 boolean shouldFallbackToDefaultOnSimpleFailure = aiCodeStreamRoutingForceSimpleFirst
                     && effectiveModel.equalsIgnoreCase(simpleModel)
                     && !defaultModel.equalsIgnoreCase(simpleModel)
@@ -704,7 +768,7 @@ public class ApiSpringController {
                 String rawResponse;
                 if (hasImages) {
                     rawResponse = streamWithAutoContinueMultimodal(emitter, prompt, imageParts, effectiveModel, language,
-                        responseMode, requestId);
+                        responseMode, requestId, codeStreamMeta);
                 } else {
                     rawResponse = streamWithAutoContinue(
                             emitter,
@@ -831,6 +895,18 @@ public class ApiSpringController {
                     bool(codeStreamMeta.get("textEditsRetryTriggered"), false));
                 completion.put("textEditsRetryAttempts",
                     parseIntSafe(codeStreamMeta.get("textEditsRetryAttempts"), 0));
+                int streamedChars = parseIntSafe(codeStreamMeta.get("streamedChars"), rawResponse.length());
+                int streamChunkCount = parseIntSafe(codeStreamMeta.get("streamChunkCount"), 0);
+                boolean streamAssemblyMismatch = streamedChars != rawResponse.length();
+                completion.put("streamedChars", streamedChars);
+                completion.put("streamChunkCount", streamChunkCount);
+                completion.put("streamAssemblyMismatch", streamAssemblyMismatch);
+                completion.put("promptOriginalChars", parseIntSafe(codeStreamMeta.get("promptOriginalChars"), promptOriginalChars));
+                completion.put("promptFinalChars", parseIntSafe(codeStreamMeta.get("promptFinalChars"), promptFinalChars));
+                completion.put("promptCapChars", parseIntSafe(codeStreamMeta.get("promptCapChars"), effectivePromptCharCap));
+                completion.put("promptTruncatedByCharCap", bool(codeStreamMeta.get("promptTruncatedByCharCap"), promptTruncatedByCharCap));
+                completion.put("promptCacheUsed", bool(codeStreamMeta.get("promptCacheUsed"), usePromptCache));
+                completion.put("menuChunkedContextApplied", bool(codeStreamMeta.get("menuChunkedContextApplied"), menuChunkedContextApplied));
                 int completionTokens = estimateTokens(rawResponse);
                 Map<String, Object> usageInfo = buildUsageInfoForSse(effectiveModel, promptTokens, completionTokens);
                 completion.put("usage", usageInfo);
@@ -851,15 +927,22 @@ public class ApiSpringController {
                 sendEvent(emitter, objectMapper.writeValueAsString(completion));
 
                 logger.info(
-                    "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType={} responseMode={} model={} promptChars={} promptTokens={} outputChars={} completionTokens={} estimatedCostUsd={} outputShape={} textEditsCount={} fallbackToFullCode={} textEditsRetryTriggered={} textEditsRetryAttempts={} attemptsUsed={} maxAttempts={} providerCallsEstimate={} switchedToDefaultModel={} providerFallbackUsed={} promptCache={} images={} elapsedMs={}",
+                    "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType={} responseMode={} model={} promptChars={} promptOriginalChars={} promptCapChars={} promptTruncatedByCharCap={} menuChunkedContextApplied={} promptTokens={} outputChars={} streamedChars={} streamChunkCount={} streamAssemblyMismatch={} completionTokens={} estimatedCostUsd={} outputShape={} textEditsCount={} fallbackToFullCode={} textEditsRetryTriggered={} textEditsRetryAttempts={} attemptsUsed={} maxAttempts={} providerCallsEstimate={} switchedToDefaultModel={} providerFallbackUsed={} promptCache={} images={} elapsedMs={}",
                     requestId,
                     appId,
                     contextType,
                     responseMode,
                     effectiveModel,
                     prompt.length(),
+                    parseIntSafe(codeStreamMeta.get("promptOriginalChars"), promptOriginalChars),
+                    parseIntSafe(codeStreamMeta.get("promptCapChars"), effectivePromptCharCap),
+                    bool(codeStreamMeta.get("promptTruncatedByCharCap"), promptTruncatedByCharCap),
+                    bool(codeStreamMeta.get("menuChunkedContextApplied"), menuChunkedContextApplied),
                     promptTokens,
                     rawResponse.length(),
+                    streamedChars,
+                    streamChunkCount,
+                    streamAssemblyMismatch,
                     completionTokens,
                     usageInfo.get("estimatedCostUsd"),
                     outputShape.get("outputShape"),
@@ -885,8 +968,17 @@ public class ApiSpringController {
                 codeTelemetry.put("responseMode", responseMode);
                 codeTelemetry.put("model", effectiveModel);
                 codeTelemetry.put("promptChars", prompt.length());
+                codeTelemetry.put("promptOriginalChars", parseIntSafe(codeStreamMeta.get("promptOriginalChars"), promptOriginalChars));
+                codeTelemetry.put("promptFinalChars", parseIntSafe(codeStreamMeta.get("promptFinalChars"), promptFinalChars));
+                codeTelemetry.put("promptCapChars", parseIntSafe(codeStreamMeta.get("promptCapChars"), effectivePromptCharCap));
+                codeTelemetry.put("promptTruncatedByCharCap", bool(codeStreamMeta.get("promptTruncatedByCharCap"), promptTruncatedByCharCap));
+                codeTelemetry.put("promptCacheUsed", bool(codeStreamMeta.get("promptCacheUsed"), usePromptCache));
+                codeTelemetry.put("menuChunkedContextApplied", bool(codeStreamMeta.get("menuChunkedContextApplied"), menuChunkedContextApplied));
                 codeTelemetry.put("promptTokens", promptTokens);
                 codeTelemetry.put("outputChars", rawResponse.length());
+                codeTelemetry.put("streamedChars", streamedChars);
+                codeTelemetry.put("streamChunkCount", streamChunkCount);
+                codeTelemetry.put("streamAssemblyMismatch", streamAssemblyMismatch);
                 codeTelemetry.put("completionTokens", completionTokens);
                 codeTelemetry.put("estimatedCostUsd", usageInfo.get("estimatedCostUsd"));
                 codeTelemetry.put("outputShape", outputShape.get("outputShape"));
@@ -1760,10 +1852,13 @@ public class ApiSpringController {
             String model,
             String language,
             String responseMode,
-            String requestId) throws Exception {
+            String requestId,
+            Map<String, Object> streamMeta) throws Exception {
         StringBuilder responseBuffer = new StringBuilder();
         final boolean[] errored = { false };
         AtomicInteger waitingLogBucket = new AtomicInteger(0);
+        AtomicInteger streamChunkCount = new AtomicInteger(0);
+        AtomicInteger streamedChars = new AtomicInteger(0);
 
         geminiStreamingService.streamContentMultimodal(
                 prompt,
@@ -1774,6 +1869,8 @@ public class ApiSpringController {
                         String escaped = chunk.replace("\\", "\\\\").replace("\n", "\\n").replace("\"", "\\\"");
                         sendEvent(emitter, "{\"stage\":\"streaming\",\"chunk\":\"" + escaped + "\"}");
                         responseBuffer.append(chunk);
+                        streamChunkCount.incrementAndGet();
+                        streamedChars.addAndGet(chunk.length());
                     } catch (Exception e) {
                         logger.warn("ApiSpringController multimodal: error sending chunk: {}", e.getMessage());
                     }
@@ -1798,6 +1895,10 @@ public class ApiSpringController {
                     }
                 });
 
+        if (streamMeta != null) {
+            streamMeta.put("streamChunkCount", streamChunkCount.get());
+            streamMeta.put("streamedChars", streamedChars.get());
+        }
         if (errored[0]) return null;
         return responseBuffer.toString();
     }
@@ -1816,7 +1917,11 @@ public class ApiSpringController {
             Map<String, Object> streamMeta,
             String requestId) throws Exception {
         boolean editMode = "edit".equalsIgnoreCase(responseMode);
+        boolean menuJsonEditMode = editMode && isMenuJsonContext(contextType);
         int autoContinueAttempts = editMode && aiCodeStreamAutoContinueEnabled ? Math.max(1, aiCodeStreamAutoContinueMaxAttempts) : 1;
+        if (menuJsonEditMode && aiMenuAutoContinueEnabled) {
+            autoContinueAttempts = Math.max(autoContinueAttempts, Math.max(1, aiMenuAutoContinueMaxAttempts));
+        }
         int textEditRetryAttempts = (editMode && aiCodeStreamEditTextEditsRetryEnabled)
                 ? 1 + Math.max(0, aiCodeStreamEditTextEditsRetryMaxExtraAttempts)
                 : 1;
@@ -1833,6 +1938,8 @@ public class ApiSpringController {
         int attemptsUsed = 0;
         AtomicInteger providerCalls = new AtomicInteger(0);
         AtomicInteger providerFallbackTransitions = new AtomicInteger(0);
+        AtomicInteger streamChunkCount = new AtomicInteger(0);
+        AtomicInteger streamedChars = new AtomicInteger(0);
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             final int attemptNo = attempt;
@@ -1861,6 +1968,8 @@ public class ApiSpringController {
 
             Consumer<String> chunkHandler = chunk -> {
                 attemptBuffer.append(chunk);
+                streamChunkCount.incrementAndGet();
+                streamedChars.addAndGet(chunk.length());
                 try {
                     sendEvent(emitter, objectMapper.writeValueAsString(Map.of(
                             "stage", "streaming",
@@ -2014,6 +2123,8 @@ public class ApiSpringController {
                     streamMeta.put("attemptsUsed", attemptsUsed);
                     streamMeta.put("maxAttempts", maxAttempts);
                     streamMeta.put("providerCallsEstimate", providerCalls.get() + providerFallbackTransitions.get());
+                    streamMeta.put("streamChunkCount", streamChunkCount.get());
+                    streamMeta.put("streamedChars", streamedChars.get());
                 }
                 return raw;
             }
@@ -2055,6 +2166,8 @@ public class ApiSpringController {
             streamMeta.put("attemptsUsed", attemptsUsed);
             streamMeta.put("maxAttempts", maxAttempts);
             streamMeta.put("providerCallsEstimate", providerCalls.get() + providerFallbackTransitions.get());
+            streamMeta.put("streamChunkCount", streamChunkCount.get());
+            streamMeta.put("streamedChars", streamedChars.get());
         }
 
         return lastRawResponse;
@@ -6326,6 +6439,59 @@ public class ApiSpringController {
         } catch (Exception ignored) {
             return fallback;
         }
+    }
+
+    private String buildMenuChunkedPromptContext(String rawContext, int maxChars) {
+        String context = String.valueOf(rawContext == null ? "" : rawContext);
+        if (context.isBlank()) {
+            return "";
+        }
+        int safeMax = Math.max(20000, maxChars);
+        if (context.length() <= safeMax) {
+            return context;
+        }
+
+        int chunkSize = Math.max(8000, Math.min(22000, safeMax / 4));
+        List<String> chunks = new ArrayList<>();
+        for (int i = 0; i < context.length(); i += chunkSize) {
+            chunks.add(context.substring(i, Math.min(context.length(), i + chunkSize)));
+        }
+        if (chunks.isEmpty()) {
+            return truncateMiddle(context, safeMax);
+        }
+
+        LinkedHashSet<Integer> selectedIndexes = new LinkedHashSet<>();
+        selectedIndexes.add(0);
+        if (chunks.size() > 1) selectedIndexes.add(1);
+        if (chunks.size() > 2) selectedIndexes.add(chunks.size() / 2);
+        if (chunks.size() > 2) selectedIndexes.add(chunks.size() - 2);
+        if (chunks.size() > 1) selectedIndexes.add(chunks.size() - 1);
+
+        StringBuilder sb = new StringBuilder(Math.min(safeMax + 1024, context.length()));
+        sb.append("/* MENU_CHUNKED_CONTEXT mode: selected chunks from large menu draft */\n");
+        sb.append("/* fullChars=").append(context.length())
+            .append(", chunkSize=").append(chunkSize)
+            .append(", chunkCount=").append(chunks.size())
+            .append(" */\n\n");
+
+        for (Integer idx : selectedIndexes) {
+            if (idx == null || idx < 0 || idx >= chunks.size()) {
+                continue;
+            }
+            String chunk = chunks.get(idx);
+            sb.append("/* chunk ").append(idx + 1).append("/").append(chunks.size())
+                .append(" chars=").append(chunk.length()).append(" */\n");
+            sb.append(chunk).append("\n\n");
+            if (sb.length() >= safeMax) {
+                break;
+            }
+        }
+
+        String reduced = sb.toString().trim();
+        if (reduced.isBlank()) {
+            return truncateMiddle(context, safeMax);
+        }
+        return reduced.length() > safeMax ? truncateMiddle(reduced, safeMax) : reduced;
     }
 
     private String buildAiAssistantContinuityScopeKey(String contextType, String language, String pName, Integer pType) {
