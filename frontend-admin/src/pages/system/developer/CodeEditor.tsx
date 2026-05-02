@@ -101,6 +101,11 @@ type PendingRangeItem = {
 	label: string;
 };
 
+type PendingDiffPreview = {
+	beforeText: string;
+	afterText: string;
+};
+
 type HotkeyAction = "save" | "find" | "replaceFocus" | "goto" | "askAi" | "continueAi" | "commandPalette";
 
 type HotkeyConfig = Record<HotkeyAction, string>;
@@ -143,6 +148,32 @@ function applySelectedRangesFromChunk(chunk: PendingDraftChunk, selectedRanges: 
 		beforeLines.splice(from - 1, (to - from) + 1, ...replacement);
 	}
 	return beforeLines.join("\n");
+}
+
+function buildSelectedRangePreview(chunk: PendingDraftChunk | null, selectedRanges: DraftLineRange[]): PendingDiffPreview {
+	if (!chunk || !Array.isArray(selectedRanges) || selectedRanges.length === 0) {
+		return { beforeText: "", afterText: "" };
+	}
+	const beforeLines = String(chunk.before || "").split("\n");
+	const afterLines = String(chunk.after || "").split("\n");
+	const sectionsBefore: string[] = [];
+	const sectionsAfter: string[] = [];
+	const sorted = [...selectedRanges].sort((a, b) => Number(a.fromLine || 1) - Number(b.fromLine || 1));
+	for (const range of sorted) {
+		const from = Math.max(1, parseLineNumber(range.fromLine, 1));
+		const to = Math.max(from, parseLineNumber(range.toLine, from));
+		const action = normalizeDraftAction(range.action);
+		const marker = action === "add" ? "+" : action === "delete" ? "-" : "~";
+		const title = `${marker} L${from}${from === to ? "" : `-L${to}`}`;
+		const beforeSnippet = beforeLines.slice(from - 1, to).join("\n");
+		const afterSnippet = afterLines.slice(from - 1, to).join("\n");
+		sectionsBefore.push(`### ${title}\n${beforeSnippet}`.trim());
+		sectionsAfter.push(`### ${title}\n${afterSnippet}`.trim());
+	}
+	return {
+		beforeText: sectionsBefore.join("\n\n"),
+		afterText: sectionsAfter.join("\n\n"),
+	};
 }
 
 const setDraftHighlights = StateEffect.define<DraftLineRange[]>();
@@ -738,6 +769,7 @@ export default function CodeEditor() {
 
 	const [pendingChunk, setPendingChunk] = useState<PendingDraftChunk | null>(null);
 	const [pendingRangeSelection, setPendingRangeSelection] = useState<Record<string, boolean>>({});
+	const [pendingDiffPreviewOpen, setPendingDiffPreviewOpen] = useState(false);
 	const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
 	const [historyFilter, setHistoryFilter] = useState<AiHistoryFilter>("all");
 	const [historyKeyword, setHistoryKeyword] = useState("");
@@ -847,6 +879,11 @@ export default function CodeEditor() {
 		if (!pendingChunk) return "";
 		return applySelectedRangesFromChunk(pendingChunk, selectedPendingRanges);
 	}, [pendingChunk, selectedPendingRanges]);
+
+	const pendingDiffPreview = useMemo(
+		() => buildSelectedRangePreview(pendingChunk, selectedPendingRanges),
+		[pendingChunk, selectedPendingRanges],
+	);
 
 	const pendingSelectedCount = selectedPendingRanges.length;
 
@@ -1280,6 +1317,7 @@ export default function CodeEditor() {
 		}
 		applyDraftFromAi(pendingPreviewCode);
 		setPendingChunk(null);
+		setPendingDiffPreviewOpen(false);
 		message.success(t("system.developer.ai.generatedSuccess"));
 	};
 
@@ -1290,6 +1328,7 @@ export default function CodeEditor() {
 			.map((item) => item.range);
 		if (keep.length === 0) {
 			setPendingChunk(null);
+			setPendingDiffPreviewOpen(false);
 			message.info(t("system.developer.ai.pendingApply", "Đã bỏ toàn bộ thay đổi đang chờ."));
 			return;
 		}
@@ -1298,6 +1337,7 @@ export default function CodeEditor() {
 			after: applySelectedRangesFromChunk(pendingChunk, keep),
 			ranges: keep,
 		});
+		setPendingDiffPreviewOpen(false);
 	};
 
 	const addAiMessage = (role: AiRole, content: string) => {
@@ -1921,6 +1961,9 @@ export default function CodeEditor() {
 										<div className={styles.aiPatchReviewActions}>
 											<Button onClick={selectAllPendingRanges}>{devUiText("Chọn hết", "Select all", "全选")}</Button>
 											<Button onClick={clearPendingRangeSelection}>{devUiText("Bỏ chọn hết", "Clear all", "清除")}</Button>
+											<Button onClick={() => setPendingDiffPreviewOpen(true)} disabled={pendingSelectedCount <= 0}>
+												{devUiText("Xem diff", "Diff preview", "查看差异")}
+											</Button>
 											<Button onClick={dropSelectedPendingRanges} danger>{devUiText("Loại phần đã chọn", "Drop selected", "移除所选")}</Button>
 											<Button type="primary" onClick={applySelectedPendingRanges}>{devUiText("Áp dụng phần đã chọn", "Apply selected", "应用所选")}</Button>
 										</div>
@@ -2035,6 +2078,30 @@ export default function CodeEditor() {
 						))}
 					</div>
 				</Space>
+			</Modal>
+
+			<Modal
+				title={devUiText("Diff Preview", "Diff Preview", "差异预览")}
+				open={pendingDiffPreviewOpen}
+				onCancel={() => setPendingDiffPreviewOpen(false)}
+				width={1200}
+				footer={[
+					<Button key="close" onClick={() => setPendingDiffPreviewOpen(false)}>{t("system.developer.close")}</Button>,
+					<Button key="apply" type="primary" onClick={applySelectedPendingRanges} disabled={pendingSelectedCount <= 0}>
+						{devUiText("Áp dụng phần đã chọn", "Apply selected", "应用所选")}
+					</Button>,
+				]}
+			>
+				<div className={styles.aiDiffPreviewShell}>
+					<div className={styles.aiDiffColumn}>
+						<div className={styles.aiDiffColumnTitle}>{devUiText("Before", "Before", "修改前")}</div>
+						<pre className={styles.aiDiffCode}>{pendingDiffPreview.beforeText || devUiText("Không có vùng nào được chọn.", "No ranges selected.", "未选择任何范围。")}</pre>
+					</div>
+					<div className={styles.aiDiffColumn}>
+						<div className={styles.aiDiffColumnTitle}>{devUiText("After", "After", "修改后")}</div>
+						<pre className={styles.aiDiffCode}>{pendingDiffPreview.afterText || devUiText("Không có vùng nào được chọn.", "No ranges selected.", "未选择任何范围。")}</pre>
+					</div>
+				</div>
 			</Modal>
 
 			<Modal

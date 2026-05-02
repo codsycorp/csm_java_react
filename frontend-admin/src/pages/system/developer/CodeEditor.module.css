@@ -768,6 +768,43 @@
   flex-wrap: wrap;
 }
 
+.aiDiffPreviewShell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.aiDiffColumn {
+  border: 1px solid var(--ant-color-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--ant-color-bg-container);
+}
+
+.aiDiffColumnTitle {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--ant-color-border-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ant-color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  background: color-mix(in srgb, var(--ant-color-fill-quaternary) 86%, transparent);
+}
+
+.aiDiffCode {
+  margin: 0;
+  padding: 10px;
+  max-height: 420px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ant-color-text);
+  background: var(--ant-color-bg-container);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .hotkeyRow {
   display: grid;
   grid-template-columns: 200px 1fr auto;
@@ -873,5 +910,9 @@
 
   .aiPanelControls :global(.ant-btn) {
     flex: 1;
+  }
+
+  .aiDiffPreviewShell {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
