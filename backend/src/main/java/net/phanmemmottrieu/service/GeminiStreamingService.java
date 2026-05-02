@@ -214,6 +214,19 @@ public class GeminiStreamingService {
         return Math.min(profileLimit, localLimit);
     }
 
+    /**
+     * Model-aware soft limit: gemini-2.5-flash and gemini-2.5-pro support 1M token context,
+     * so the conservative 6800-token default must not block valid large-prompt requests.
+     */
+    private int resolveGeminiInputTokenSoftLimit(String model) {
+        String m = String.valueOf(model == null ? "" : model).toLowerCase();
+        // gemini-2.5-flash: 1M tokens, gemini-2.5-pro: 1M tokens — allow up to 200K
+        if (m.contains("gemini-2.5") || (m.contains("gemini") && (m.contains("flash") || m.contains("pro")))) {
+            return 200000;
+        }
+        return resolveGeminiInputTokenSoftLimit();
+    }
+
     private int resolveClaudeInputTokenSoftLimit() {
         int profileLimit = aiPromptBudgetService.resolveClaudeSoftLimit();
         int localLimit = Math.max(2000, claudeInputTokenSoftLimit);
@@ -736,7 +749,7 @@ public class GeminiStreamingService {
             }
             return "";
         }
-        if (isOverPromptSoftLimit("gemini", model, effectivePrompt, resolveGeminiInputTokenSoftLimit(), onError, onStatus)) {
+        if (isOverPromptSoftLimit("gemini", model, effectivePrompt, resolveGeminiInputTokenSoftLimit(model), onError, onStatus)) {
             return "";
         }
         String cacheKey = buildCacheKey(model, effectivePrompt);
@@ -922,7 +935,7 @@ public class GeminiStreamingService {
             }
             return "";
         }
-        if (isOverPromptSoftLimit("gemini", model, effectivePrompt, resolveGeminiInputTokenSoftLimit(), onError, onStatus)) {
+        if (isOverPromptSoftLimit("gemini", model, effectivePrompt, resolveGeminiInputTokenSoftLimit(model), onError, onStatus)) {
             return "";
         }
         List<String> keys = resolveGeminiApiKeys();

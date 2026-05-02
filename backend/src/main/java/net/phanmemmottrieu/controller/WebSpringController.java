@@ -2883,7 +2883,9 @@ public class WebSpringController {
                             // Domain: khớp chính xác hoặc chuỗi chứa domain (CSV). Dùng "like" để bao phủ "a.com,b.com".
                             RecordManager.createCondition("domain", "like", domainLike)
                         ));
-                        Map<String, Object> catResult = recordManager.filter(app_id, tbl_services, catFilter);
+                        Map<String, Object> catResult = (app_id != null && !app_id.isBlank() && tbl_services != null && !tbl_services.isBlank())
+                                ? recordManager.filter(app_id, tbl_services, catFilter)
+                                : new java.util.HashMap<>();
                         List<Map<String, Object>> catRows = (List<Map<String, Object>>) catResult.getOrDefault("rows", new ArrayList<>());
                         Set<String> seenCategoryKeys = new HashSet<>();
                         for (Map<String, Object> row : catRows) {
