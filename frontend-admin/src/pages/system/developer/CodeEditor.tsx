@@ -114,6 +114,11 @@ type StructuredTextEdit = {
 	action?: DraftChangeAction;
 };
 
+type SearchReplaceBlock = {
+	search: string;
+	replace: string;
+};
+
 const setDraftHighlights = StateEffect.define<DraftLineRange[]>();
 
 function normalizeDraftAction(raw: any): DraftChangeAction {
@@ -239,6 +244,12 @@ function createAiPrompt(params: {
 		"Treat p_name and p_type as the stable identity of the selected sys_autos record.",
 		"Do not rename or switch the target record unless the user explicitly requests that.",
 		"Your job is only to return an updated draft code suggestion. Database save/delete is handled separately by the UI.",
+		"Preferred output for precise patching is SEARCH/REPLACE blocks:",
+		"<<<<<<< SEARCH",
+		"old code",
+		"=======",
+		"new code",
+		">>>>>>> REPLACE",
 		"Prefer strict JSON with position-based edits so the editor can apply only related lines:",
 		"{",
 		"  \"summary\": \"short explanation\",",
@@ -338,6 +349,54 @@ function summarizeTextEditRanges(edits: StructuredTextEdit[]): string[] {
 			: `L${edit.startLine}-L${edit.endLine}`;
 		return `${String(edit.action || "edit").toUpperCase()} ${rangeLabel}`;
 	});
+}
+
+function extractSearchReplaceBlocks(rawText: string): SearchReplaceBlock[] {
+	const raw = String(rawText || "").trim();
+	if (!raw) return [];
+	const normalized = raw
+		.replace(/^```[a-zA-Z]*\s*/i, "")
+		.replace(/\s*```$/i, "")
+		.trim();
+	const regex = /<<<<<<<\s*SEARCH\s*\n([\s\S]*?)\n=======\s*\n([\s\S]*?)\n>>>>>>>\s*REPLACE/g;
+	const blocks: SearchReplaceBlock[] = [];
+	let match: RegExpExecArray | null;
+	while ((match = regex.exec(normalized)) !== null) {
+		const search = String(match[1] || "");
+		if (!search.trim()) continue;
+		blocks.push({ search, replace: String(match[2] || "") });
+		if (blocks.length >= MAX_STRUCTURED_TEXT_EDITS) break;
+	}
+	return blocks;
+}
+
+function applySearchReplaceBlocksToDraft(baseText: string, blocks: SearchReplaceBlock[]): { code: string; applied: number; failed: number } {
+	if (!Array.isArray(blocks) || blocks.length === 0) {
+		return { code: baseText, applied: 0, failed: 0 };
+	}
+	let working = String(baseText || "");
+	let applied = 0;
+	let failed = 0;
+	let searchFrom = 0;
+	for (const block of blocks) {
+		const search = String(block?.search || "");
+		if (!search) {
+			failed += 1;
+			continue;
+		}
+		let idx = working.indexOf(search, Math.max(0, searchFrom));
+		if (idx < 0) {
+			idx = working.indexOf(search);
+		}
+		if (idx < 0) {
+			failed += 1;
+			continue;
+		}
+		working = `${working.slice(0, idx)}${String(block?.replace || "")}${working.slice(idx + search.length)}`;
+		searchFrom = idx + Math.max(1, String(block?.replace || "").length);
+		applied += 1;
+	}
+	return { code: working, applied, failed };
 }
 
 function parseAiCodeResponse(response: any): { summary: string; code: string; changes: string[] } | null {
@@ -510,6 +569,8 @@ async function streamAiCode(
 		appId: string;
 		message: string;
 		currentCode: string;
+		cursorLine?: number;
+		contextWindowLines?: number;
 		baseContentRef?: string;
 		baseContent?: string;
 		preserveBaseContent?: boolean;
@@ -1186,6 +1247,8 @@ export default function CodeEditor() {
 				continueMode
 					? "Bạn đang ở chế độ CONTINUE. BẮT BUỘC trả về FULL tài liệu hoàn chỉnh từ đầu đến cuối, không chỉ phần mới."
 					: "",
+					"Ưu tiên cao nhất: trả về SEARCH/REPLACE blocks để patch chính xác:",
+					"<<<<<<< SEARCH\\nold code\\n=======\\nnew code\\n>>>>>>> REPLACE",
 				"Ưu tiên trả về chỉnh sửa theo vị trí line để editor áp dụng đúng vùng thay đổi.",
 				`Format ưu tiên: {"summary":"mô tả ngắn thay đổi","textEdits":[{"startLine":10,"endLine":12,"replacement":"...","action":"edit"}],"changes":["điểm thay đổi 1","điểm thay đổi 2"]}`,
 				`Chỉ fallback sang full code nếu không thể biểu diễn bằng textEdits: {"summary":"...","code":"toàn bộ code hoàn chỉnh","changes":["..."]}`,
@@ -1200,6 +1263,8 @@ export default function CodeEditor() {
 					appId: appId || "",
 					message: fullMessage,
 					currentCode: payloadCurrentCode,
+					cursorLine: draftCursor.line,
+					contextWindowLines: 50,
 					baseContent: payloadBaseContent,
 					baseContentRef: aiBaseContentRef.current || undefined,
 					preserveBaseContent: shouldUseBaseRef,
@@ -1284,6 +1349,23 @@ export default function CodeEditor() {
 					return null;
 				}
 			})();
+
+			if (!parsedEnvelopeCandidate) {
+				const srBlocks = extractSearchReplaceBlocks(finalResponse);
+				if (srBlocks.length > 0) {
+					const patched = applySearchReplaceBlocksToDraft(currentDraftRef.current, srBlocks);
+					if (patched.applied > 0) {
+						finalResponse = JSON.stringify({
+							summary: t("system.developer.ai.generatedReady"),
+							code: patched.code,
+							changes: [
+								`SEARCH/REPLACE applied: ${patched.applied}`,
+								...(patched.failed > 0 ? [`SEARCH/REPLACE failed: ${patched.failed}`] : []),
+							],
+						});
+					}
+				}
+			}
 
 			if (Array.isArray(parsedEnvelopeCandidate?.operations) && parsedEnvelopeCandidate.operations.length > 0) {
 				const apiBase = ((import.meta.env.VITE_API_BASE_URL as string) || "").replace(/\/$/, "");

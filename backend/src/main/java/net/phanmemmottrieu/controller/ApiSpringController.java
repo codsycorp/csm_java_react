@@ -488,6 +488,8 @@ public class ApiSpringController {
                 String modelOverride = str(body.get("model"), "");
                 String pName = str(body.get("pName"), "");
                 Integer pType = parseNullableInteger(body.get("pType"));
+                int cursorLine = parseIntSafe(body.get("cursorLine"), -1);
+                int contextWindowLines = parseIntSafe(body.get("contextWindowLines"), 50);
                 String baseContentRef = str(body.get("baseContentRef"), "");
                 String baseContent = truncate(strKeep(body.get("baseContent"), ""), Math.max(100000, aiCodeStreamMaxBaseContentChars));
                 boolean preserveBaseContent = bool(body.get("preserveBaseContent"), false);
@@ -507,6 +509,10 @@ public class ApiSpringController {
                     effectiveCodeContext = base.baseContent();
                 }
                 effectiveCodeContext = truncate(effectiveCodeContext, Math.max(MAX_CODE_CHARS, aiCodeStreamMaxBaseContentChars));
+                CodeWindowContext focusWindow = extractCodeWindowByLine(effectiveCodeContext, cursorLine, contextWindowLines);
+                String promptCodeContext = focusWindow != null && !focusWindow.code().isBlank()
+                    ? focusWindow.code()
+                    : effectiveCodeContext;
 
                 String reusableCodeMemory = trimAiAssistantContinuityMemory(
                     aiConversationContextService.buildAggregatedContextWindow(
@@ -521,13 +527,13 @@ public class ApiSpringController {
                     messageWithReuse = "[REUSED_CONTEXT]\n" + compactReuse + "\n\n[CURRENT_REQUEST]\n" + message;
                 }
 
-                String prompt = buildCodingPrompt(messageWithReuse, effectiveCodeContext, language, contextType, responseMode, attachmentsRaw);
+                String prompt = buildCodingPrompt(messageWithReuse, promptCodeContext, language, contextType, responseMode, attachmentsRaw);
                 boolean largeStructuredEditMode = preserveBaseContent
                         && "edit".equalsIgnoreCase(responseMode)
                         && !base.baseContent().isBlank()
                         && base.baseContentChars() > Math.max(100000, aiCodeStreamMaxCurrentCodeChars);
                 if (largeStructuredEditMode) {
-                    prompt = buildCodingPrompt(messageWithReuse, effectiveCodeContext, language, contextType, responseMode,
+                    prompt = buildCodingPrompt(messageWithReuse, promptCodeContext, language, contextType, responseMode,
                             attachmentsRaw, true, base.baseRef(), base.baseContentChars());
                 }
                 if (prompt.length() > aiCodeStreamMaxPromptChars) {
@@ -537,7 +543,7 @@ public class ApiSpringController {
                 int systemContentEstimate = prompt.length() - message.length();
                 boolean usePromptCache = systemContentEstimate >= Math.max(1000, aiCodeStreamPromptCacheMinChars);
                 String[] promptParts = usePromptCache
-                        ? buildCodingPromptParts(message, effectiveCodeContext, language, contextType, responseMode,
+                    ? buildCodingPromptParts(message, promptCodeContext, language, contextType, responseMode,
                                 attachmentsRaw, largeStructuredEditMode, base.baseRef(), base.baseContentChars())
                         : new String[] { prompt, "" };
                 if (promptParts[0].length() > aiCodeStreamMaxPromptChars) {
@@ -561,9 +567,12 @@ public class ApiSpringController {
                 boolean hasImages = !imageParts.isEmpty();
 
                 logger.info(
-                    "ApiSpringController: ai-code-stream start requestId={} appId={} model={} language={} promptChars={} promptTokens~{} messageChars={} promptCache={} images={}",
+                    "ApiSpringController: ai-code-stream start requestId={} appId={} model={} language={} promptChars={} promptTokens~{} messageChars={} promptCache={} images={} focusLine={} focusStart={} focusEnd={} focusChars={}",
                     requestId, appId, effectiveModel, language, prompt.length(), estimateTokens(prompt), message.length(), usePromptCache,
-                        imageParts.size());
+                        imageParts.size(), cursorLine,
+                        focusWindow == null ? -1 : focusWindow.startLine(),
+                        focusWindow == null ? -1 : focusWindow.endLine(),
+                        promptCodeContext.length());
 
                 if (!base.baseRef().isBlank()) {
                     sendEvent(emitter, jsonOf(
@@ -689,6 +698,7 @@ public class ApiSpringController {
                 if (!largeStructuredEditMode
                         && "edit".equalsIgnoreCase(responseMode)
                         && !isMenuJsonContext(contextType)) {
+                    completionPayload = salvageSearchReplaceAsTextEdits(completionPayload, effectiveCodeContext);
                     completionPayload = salvagePropertyPatchAsTextEdits(completionPayload, effectiveCodeContext);
                 }
                 if ("edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType)) {
@@ -1251,6 +1261,28 @@ public class ApiSpringController {
         return line;
     }
 
+    private CodeWindowContext extractCodeWindowByLine(String code, int cursorLine, int contextWindowLines) {
+        String source = String.valueOf(code == null ? "" : code);
+        if (source.isBlank() || cursorLine <= 0) {
+            return new CodeWindowContext(source, 1, Math.max(1, source.split("\\n", -1).length));
+        }
+        String[] lines = source.split("\\n", -1);
+        int totalLines = Math.max(1, lines.length);
+        int radius = Math.max(10, Math.min(400, contextWindowLines));
+        int center = Math.min(totalLines, Math.max(1, cursorLine));
+        int start = Math.max(1, center - radius);
+        int end = Math.min(totalLines, center + radius);
+
+        StringBuilder sb = new StringBuilder();
+        for (int i = start; i <= end; i++) {
+            sb.append(lines[i - 1]);
+            if (i < end) {
+                sb.append("\n");
+            }
+        }
+        return new CodeWindowContext(sb.toString(), start, end);
+    }
+
     private int parseIntSafe(Object raw, int fallback) {
         if (raw == null) return fallback;
         try {
@@ -1309,10 +1341,13 @@ public class ApiSpringController {
                 sb.append("Không markdown, không code fence, không giải thích ngoài JSON.\n\n");
             } else {
                 sb.append("CHẾ ĐỘ: Chỉnh sửa code theo vị trí dòng.\n");
+                sb.append("ƯU TIÊN CAO NHẤT: trả về các khối SEARCH/REPLACE để backend ráp đúng vùng code:\n");
+                sb.append("<<<<<<< SEARCH\n[đoạn code cũ]\n=======\n[đoạn code mới]\n>>>>>>> REPLACE\n");
+                sb.append("Mỗi SEARCH phải đủ unique theo ngữ cảnh thật và giữ nguyên whitespace/tab.\n");
                 sb.append("Ưu tiên trả về JSON thuần theo format:\n");
                 sb.append("{\"summary\":\"...\",\"changes\":[\"...\"],\"textEdits\":[{\"startLine\":10,\"endLine\":12,\"replacement\":\"...\",\"action\":\"edit\"}]}\n");
                 sb.append("Trong đó textEdits phải không chồng lấn và chỉ chỉnh đúng phạm vi cần thiết.\n");
-                sb.append("Chỉ fallback trả về {\"summary\",\"code\",\"changes\"} khi không thể biểu diễn bằng textEdits.\n");
+                sb.append("Chỉ fallback trả về {\"summary\",\"code\",\"changes\"} khi không thể biểu diễn bằng SEARCH/REPLACE hoặc textEdits.\n");
                 sb.append("Không markdown, không code fence.\n\n");
             }
         } else {
@@ -1722,6 +1757,7 @@ public class ApiSpringController {
 
         int textEditsCount = extractLineTextEditsCount(rawResponse);
         if (textEditsCount > 0) return false;
+        if (hasSearchReplaceBlocks(rawResponse)) return false;
 
         return hasFullCodeInEditPayload(rawResponse);
     }
@@ -1792,6 +1828,95 @@ public class ApiSpringController {
     private boolean hasFullCodeInEditPayload(String rawResponse) {
         ParsedCodePayload payload = parseCodePayload(rawResponse);
         return payload != null && payload.code() != null && !payload.code().isBlank();
+    }
+
+    private boolean hasSearchReplaceBlocks(String rawResponse) {
+        return !parseSearchReplaceBlocks(rawResponse).isEmpty();
+    }
+
+    private List<SearchReplaceBlock> parseSearchReplaceBlocks(String rawResponse) {
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        if (raw.isBlank()) {
+            return List.of();
+        }
+        if (raw.startsWith("```")) {
+            raw = raw.replaceFirst("^```[a-zA-Z]*\\s*", "").replaceAll("\\s*```$", "").trim();
+        }
+
+        Pattern pattern = Pattern.compile("<<<<<<<\\s*SEARCH\\s*\\n([\\s\\S]*?)\\n=======\\s*\\n([\\s\\S]*?)\\n>>>>>>>\\s*REPLACE");
+        Matcher matcher = pattern.matcher(raw);
+        List<SearchReplaceBlock> blocks = new ArrayList<>();
+        while (matcher.find()) {
+            String search = String.valueOf(matcher.group(1) == null ? "" : matcher.group(1));
+            String replace = String.valueOf(matcher.group(2) == null ? "" : matcher.group(2));
+            if (!search.isBlank()) {
+                blocks.add(new SearchReplaceBlock(search, replace));
+            }
+        }
+        return blocks;
+    }
+
+    private String salvageSearchReplaceAsTextEdits(String rawResponse, String baseCode) {
+        String sourceCode = String.valueOf(baseCode == null ? "" : baseCode);
+        if (sourceCode.isBlank()) {
+            return rawResponse;
+        }
+        if (extractLineTextEditsCount(rawResponse) > 0 || hasFullCodeInEditPayload(rawResponse)) {
+            return rawResponse;
+        }
+
+        List<SearchReplaceBlock> blocks = parseSearchReplaceBlocks(rawResponse);
+        if (blocks.isEmpty()) {
+            return rawResponse;
+        }
+
+        int maxEdits = Math.max(1, aiAssistantStructuredEditMaxTextEdits);
+        List<Map<String, Object>> edits = new ArrayList<>();
+        List<String> changes = new ArrayList<>();
+        int searchFrom = 0;
+
+        for (SearchReplaceBlock block : blocks) {
+            if (block == null || block.search() == null || block.search().isBlank()) {
+                continue;
+            }
+            String search = block.search();
+            int index = sourceCode.indexOf(search, Math.max(0, searchFrom));
+            if (index < 0) {
+                index = sourceCode.indexOf(search);
+            }
+            if (index < 0) {
+                continue;
+            }
+
+            int startLine = lineNumberAtOffset(sourceCode, index);
+            int endLine = lineNumberAtOffset(sourceCode, index + Math.max(0, search.length() - 1));
+            Map<String, Object> edit = new LinkedHashMap<>();
+            edit.put("startLine", startLine);
+            edit.put("endLine", endLine);
+            edit.put("replacement", String.valueOf(block.replace() == null ? "" : block.replace()));
+            edit.put("action", "edit");
+            edits.add(edit);
+            changes.add("Patch block lines " + startLine + "-" + endLine);
+            searchFrom = index + Math.max(1, search.length());
+            if (edits.size() >= maxEdits) {
+                break;
+            }
+        }
+
+        if (edits.isEmpty()) {
+            return rawResponse;
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("summary", "Đã chuyển SEARCH/REPLACE thành textEdits theo line");
+        out.put("changes", changes);
+        out.put("textEdits", edits);
+        out.put("meta", Map.of("salvagedFromSearchReplace", true, "blockCount", blocks.size()));
+        try {
+            return objectMapper.writeValueAsString(out);
+        } catch (Exception ex) {
+            return rawResponse;
+        }
     }
 
     private String salvagePropertyPatchAsTextEdits(String rawResponse, String baseCode) {
@@ -2046,6 +2171,10 @@ public class ApiSpringController {
         if (largeStructuredEditMode) {
             ParsedTextEditPayload payload = parseTextEditPayload(raw);
             return payload != null && payload.textEdits != null && !payload.textEdits.isEmpty();
+        }
+
+        if (hasSearchReplaceBlocks(raw)) {
+            return true;
         }
 
         ParsedCodePayload payload = parseCodePayload(raw);
@@ -2393,6 +2522,9 @@ public class ApiSpringController {
     private record AiCodeBaseContentEntry(String appId, String content, long createdAtMs) {
     }
 
+    private record CodeWindowContext(String code, int startLine, int endLine) {
+    }
+
     private String materializeLargeEditResponse(String rawResponse, String baseContent) {
         ParsedTextEditPayload payload = parseTextEditPayload(rawResponse);
         if (payload == null || payload.textEdits.isEmpty()) {
@@ -2513,6 +2645,9 @@ public class ApiSpringController {
     }
 
     private record TextEditOp(String find, String replace) {
+    }
+
+    private record SearchReplaceBlock(String search, String replace) {
     }
 
     private record ParsedTextEditPayload(String summary, List<String> changes, List<TextEditOp> textEdits) {
