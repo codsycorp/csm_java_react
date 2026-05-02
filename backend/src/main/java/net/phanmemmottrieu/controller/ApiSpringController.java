@@ -2082,7 +2082,9 @@ public class ApiSpringController {
         return sb.toString();
     }
 
-    privif (aiCodeStreamEditStrictSearchReplaceEnabled) {
+    private String buildTextEditsRetryPrompt(String originalPrompt, String previousRawResponse, String language, String contextType, boolean largeStructuredEditMode) {
+        StringBuilder sb = new StringBuilder();
+        if (aiCodeStreamEditStrictSearchReplaceEnabled) {
             sb.append("ĐIỀU CHỈNH ĐỊNH DẠNG KẾT QUẢ: backend đang ở STRICT SEARCH/REPLACE mode.\n");
             sb.append("BẮT BUỘC chỉ trả về các block:\n");
             sb.append("<<<<<<< SEARCH\n[old]\n=======\n[new]\n>>>>>>> REPLACE\n");
@@ -2099,13 +2101,6 @@ public class ApiSpringController {
             sb.append("- textEdits không chồng lấn nhau.\n");
             sb.append("- Chỉ sửa vùng cần thiết, không thay toàn bộ file.\n\n");
         }
-        sb.append("ĐIỀU CHỈNH ĐỊNH DẠNG KẾT QUẢ: backend cần apply theo line-level edits để tránh ghi đè cả file.\n");
-        sb.append("BẮT BUỘC trả về JSON thuần dạng:\n");
-        sb.append("{\"summary\":\"...\",\"changes\":[\"...\"],\"textEdits\":[{\"startLine\":10,\"endLine\":12,\"replacement\":\"...\",\"action\":\"edit\"}]}\n");
-        sb.append("Quy tắc:\n");
-        sb.append("- Không markdown, không code fence.\n");
-        sb.append("- textEdits không chồng lấn nhau.\n");
-        sb.append("- Chỉ sửa vùng cần thiết, không thay toàn bộ file.\n\n");
         sb.append("--- YÊU CẦU GỐC ---\n");
         sb.append(truncateMiddle(originalPrompt, Math.max(20000, aiCodeStreamMaxPromptChars))).append("\n\n");
         sb.append("--- KẾT QUẢ TRƯỚC (SAI ĐỊNH DẠNG, ĐANG LÀ FULL CODE) ---\n");
