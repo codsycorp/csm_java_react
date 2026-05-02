@@ -686,6 +686,11 @@ public class ApiSpringController {
                 if (largeStructuredEditMode) {
                     completionPayload = materializeLargeEditResponse(completionPayload, base.baseContent());
                 }
+                if (!largeStructuredEditMode
+                        && "edit".equalsIgnoreCase(responseMode)
+                        && !isMenuJsonContext(contextType)) {
+                    completionPayload = salvagePropertyPatchAsTextEdits(completionPayload, effectiveCodeContext);
+                }
                 if ("edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType)) {
                     completionPayload = mergeMenuCompletionWithBase(effectiveCodeContext, completionPayload, contextType);
                 }
@@ -1528,6 +1533,30 @@ public class ApiSpringController {
                     "attempt", attemptNo,
                     "maxAttempts", maxAttempts,
                     "message", "Model stream failed, triggering fallback path"));
+
+                // Graceful degrade: if a previous attempt already produced content, keep it
+                // instead of failing the whole request because a later auto-continue attempt failed.
+                if (!lastRawResponse.isBlank()) {
+                    sendEvent(emitter, jsonOf(
+                            "stage", "auto_continue",
+                            "status", "partial_kept",
+                            "attempt", attemptNo,
+                            "maxAttempts", maxAttempts,
+                            "message", "Attempt tiếp theo lỗi, giữ kết quả khả dụng từ attempt trước"));
+                    break;
+                }
+
+                // If no content yet, allow retry on next attempt when available.
+                if (attemptNo < maxAttempts) {
+                    sendEvent(emitter, jsonOf(
+                            "stage", "continuing",
+                            "status", "retry_after_error",
+                            "attempt", attemptNo,
+                            "maxAttempts", maxAttempts,
+                            "message", "Lỗi tạm thời, thử lại cùng prompt"));
+                    continue;
+                }
+
                 return null;
             }
 
@@ -1687,7 +1716,9 @@ public class ApiSpringController {
         if (largeStructuredEditMode) return false;
         if (attemptNo >= maxAttempts) return false;
         if (textEditsRetryUsed >= Math.max(0, aiCodeStreamEditTextEditsRetryMaxExtraAttempts)) return false;
-        if (prompt != null && prompt.length() > Math.max(10000, aiCodeStreamEditTextEditsRetryMaxPromptChars)) return false;
+
+        // Keep retry available for long prompts by only hard-stopping at extreme sizes.
+        if (prompt != null && prompt.length() > Math.max(12000, aiCodeStreamEditTextEditsRetryMaxPromptChars * 3)) return false;
 
         int textEditsCount = extractLineTextEditsCount(rawResponse);
         if (textEditsCount > 0) return false;
@@ -1761,6 +1792,224 @@ public class ApiSpringController {
     private boolean hasFullCodeInEditPayload(String rawResponse) {
         ParsedCodePayload payload = parseCodePayload(rawResponse);
         return payload != null && payload.code() != null && !payload.code().isBlank();
+    }
+
+    private String salvagePropertyPatchAsTextEdits(String rawResponse, String baseCode) {
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        String sourceCode = String.valueOf(baseCode == null ? "" : baseCode);
+        if (raw.isBlank() || sourceCode.isBlank()) {
+            return rawResponse;
+        }
+
+        // Only salvage when model did not already provide a supported edit payload.
+        if (extractLineTextEditsCount(raw) > 0 || hasFullCodeInEditPayload(raw)) {
+            return rawResponse;
+        }
+
+        String normalized = raw;
+        if (normalized.startsWith("```json")) normalized = normalized.substring(7).trim();
+        if (normalized.startsWith("```")) normalized = normalized.substring(3).trim();
+        if (normalized.endsWith("```")) normalized = normalized.substring(0, normalized.length() - 3).trim();
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> payload = objectMapper.readValue(normalized, Map.class);
+            if (payload == null || payload.isEmpty() || payload.size() > 4) {
+                return rawResponse;
+            }
+
+            List<Map<String, Object>> textEdits = new ArrayList<>();
+            List<String> changes = new ArrayList<>();
+            int maxEdits = Math.max(1, aiAssistantStructuredEditMaxTextEdits);
+
+            for (Map.Entry<String, Object> entry : payload.entrySet()) {
+                if (entry == null) continue;
+                String property = String.valueOf(entry.getKey() == null ? "" : entry.getKey()).trim();
+                if (property.isBlank()) continue;
+
+                Map<String, Object> edit = buildPropertyLineEdit(sourceCode, property, entry.getValue());
+                if (edit == null || edit.isEmpty()) {
+                    continue;
+                }
+                textEdits.add(edit);
+                changes.add("Patch property: " + property);
+                if (textEdits.size() >= maxEdits) {
+                    break;
+                }
+            }
+
+            if (textEdits.isEmpty()) {
+                return rawResponse;
+            }
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("summary", "Đã chuyển payload partial thành textEdits theo vị trí dòng");
+            out.put("changes", changes);
+            out.put("textEdits", textEdits);
+            out.put("meta", Map.of("salvagedFromPartialPayload", true));
+            return objectMapper.writeValueAsString(out);
+        } catch (Exception ignored) {
+            return rawResponse;
+        }
+    }
+
+    private Map<String, Object> buildPropertyLineEdit(String code, String propertyName, Object newValue) {
+        String source = String.valueOf(code == null ? "" : code);
+        if (source.isBlank() || propertyName == null || propertyName.isBlank()) {
+            return null;
+        }
+
+        String quoted = "\"" + Pattern.quote(propertyName) + "\"\\s*:";
+        Pattern p = Pattern.compile(quoted);
+        Matcher m = p.matcher(source);
+        if (!m.find()) {
+            return null;
+        }
+
+        int keyStart = m.start();
+        int colonIdx = source.indexOf(':', m.start());
+        if (colonIdx < 0) return null;
+
+        int valueStart = colonIdx + 1;
+        while (valueStart < source.length() && Character.isWhitespace(source.charAt(valueStart))) {
+            valueStart++;
+        }
+        if (valueStart >= source.length()) {
+            return null;
+        }
+
+        int valueEnd = findJsonLikeValueEnd(source, valueStart);
+        if (valueEnd <= valueStart) {
+            return null;
+        }
+
+        int startLine = lineNumberAtOffset(source, keyStart);
+        int endLine = lineNumberAtOffset(source, valueEnd);
+        String indent = detectLineIndent(source, startLine);
+        String replacement = buildPropertyReplacement(propertyName, newValue, indent);
+        if (replacement.isBlank()) {
+            return null;
+        }
+
+        Map<String, Object> edit = new LinkedHashMap<>();
+        edit.put("startLine", startLine);
+        edit.put("endLine", endLine);
+        edit.put("replacement", replacement);
+        edit.put("action", "edit");
+        return edit;
+    }
+
+    private int findJsonLikeValueEnd(String text, int start) {
+        if (text == null || text.isEmpty() || start < 0 || start >= text.length()) {
+            return start;
+        }
+        char first = text.charAt(start);
+        if (first == '{' || first == '[') {
+            char open = first;
+            char close = first == '{' ? '}' : ']';
+            int depth = 0;
+            boolean inString = false;
+            boolean escaped = false;
+            for (int i = start; i < text.length(); i++) {
+                char c = text.charAt(i);
+                if (inString) {
+                    if (escaped) {
+                        escaped = false;
+                    } else if (c == '\\') {
+                        escaped = true;
+                    } else if (c == '"') {
+                        inString = false;
+                    }
+                    continue;
+                }
+                if (c == '"') {
+                    inString = true;
+                    continue;
+                }
+                if (c == open) depth++;
+                if (c == close) {
+                    depth--;
+                    if (depth == 0) {
+                        return i;
+                    }
+                }
+            }
+            return text.length() - 1;
+        }
+        if (first == '"') {
+            boolean escaped = false;
+            for (int i = start + 1; i < text.length(); i++) {
+                char c = text.charAt(i);
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (c == '\\') {
+                    escaped = true;
+                    continue;
+                }
+                if (c == '"') {
+                    return i;
+                }
+            }
+            return text.length() - 1;
+        }
+
+        int i = start;
+        while (i < text.length()) {
+            char c = text.charAt(i);
+            if (c == ',' || c == '\n' || c == '\r' || c == '}') {
+                return Math.max(start, i - 1);
+            }
+            i++;
+        }
+        return text.length() - 1;
+    }
+
+    private String detectLineIndent(String text, int oneBasedLine) {
+        if (text == null || text.isEmpty() || oneBasedLine <= 0) {
+            return "";
+        }
+        String[] lines = text.split("\\n", -1);
+        int idx = Math.min(lines.length, Math.max(1, oneBasedLine)) - 1;
+        String line = lines[idx];
+        int i = 0;
+        while (i < line.length() && Character.isWhitespace(line.charAt(i))) {
+            i++;
+        }
+        return line.substring(0, i);
+    }
+
+    private String buildPropertyReplacement(String propertyName, Object newValue, String indent) {
+        try {
+            String valueJson = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(newValue);
+            String[] valueLines = valueJson.split("\\n", -1);
+            StringBuilder sb = new StringBuilder();
+            if (valueLines.length == 1) {
+                sb.append(indent)
+                    .append("\"")
+                    .append(propertyName)
+                    .append("\": ")
+                    .append(valueLines[0]);
+                return sb.toString();
+            }
+
+            sb.append(indent)
+                .append("\"")
+                .append(propertyName)
+                .append("\": ")
+                .append(valueLines[0])
+                .append("\n");
+            for (int i = 1; i < valueLines.length; i++) {
+                sb.append(indent).append(valueLines[i]);
+                if (i < valueLines.length - 1) {
+                    sb.append("\n");
+                }
+            }
+            return sb.toString();
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     private boolean isCompleteResponse(String rawResponse, String language, String contextType, String responseMode, boolean largeStructuredEditMode) {
