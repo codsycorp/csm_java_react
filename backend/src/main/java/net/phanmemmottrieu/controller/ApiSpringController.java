@@ -9616,35 +9616,108 @@ public class ApiSpringController {
         String[] oldLines = oldText.split("\\n", -1);
         String[] newLines = newText.split("\\n", -1);
 
-        int prefix = 0;
-        int minLen = Math.min(oldLines.length, newLines.length);
-        while (prefix < minLen && oldLines[prefix].equals(newLines[prefix])) {
-            prefix++;
+        Map<String, List<Integer>> newLineIndex = new HashMap<>();
+        for (int i = 0; i < newLines.length; i++) {
+            newLineIndex.computeIfAbsent(newLines[i], k -> new ArrayList<>()).add(i);
         }
 
-        int oldSuffix = oldLines.length - 1;
-        int newSuffix = newLines.length - 1;
-        while (oldSuffix >= prefix && newSuffix >= prefix && oldLines[oldSuffix].equals(newLines[newSuffix])) {
-            oldSuffix--;
-            newSuffix--;
+        List<Map<String, Object>> edits = new ArrayList<>();
+        int oldPos = 0;
+        int newPos = 0;
+        while (oldPos < oldLines.length || newPos < newLines.length) {
+            if (oldPos < oldLines.length && newPos < newLines.length && oldLines[oldPos].equals(newLines[newPos])) {
+                oldPos++;
+                newPos++;
+                continue;
+            }
+
+            int[] anchor = findNextAnchor(oldLines, newLines, newLineIndex, oldPos, newPos, 240, 360);
+            if (anchor == null) {
+                appendLineEdit(edits, oldLines, newLines, oldPos, oldLines.length, newPos, newLines.length);
+                break;
+            }
+
+            if (anchor[0] > oldPos || anchor[1] > newPos) {
+                appendLineEdit(edits, oldLines, newLines, oldPos, anchor[0], newPos, anchor[1]);
+            }
+            oldPos = anchor[0];
+            newPos = anchor[1];
         }
 
-        int oldChangedCount = oldSuffix >= prefix ? (oldSuffix - prefix + 1) : 0;
-        int newChangedCount = newSuffix >= prefix ? (newSuffix - prefix + 1) : 0;
+        return edits;
+    }
+
+    private int[] findNextAnchor(
+        String[] oldLines,
+        String[] newLines,
+        Map<String, List<Integer>> newLineIndex,
+        int oldStart,
+        int newStart,
+        int maxOldScan,
+        int maxScore
+    ) {
+        int bestOld = -1;
+        int bestNew = -1;
+        int bestScore = Integer.MAX_VALUE;
+
+        int oldLimit = Math.min(oldLines.length, oldStart + Math.max(1, maxOldScan));
+        for (int oldPos = oldStart; oldPos < oldLimit; oldPos++) {
+            List<Integer> candidates = newLineIndex.get(oldLines[oldPos]);
+            if (candidates == null || candidates.isEmpty()) {
+                continue;
+            }
+
+            int idx = Collections.binarySearch(candidates, newStart);
+            if (idx < 0) {
+                idx = -idx - 1;
+            }
+            if (idx >= candidates.size()) {
+                continue;
+            }
+
+            int newPos = candidates.get(idx);
+            int score = (oldPos - oldStart) + (newPos - newStart);
+            if (score < bestScore) {
+                bestScore = score;
+                bestOld = oldPos;
+                bestNew = newPos;
+                if (score == 0) {
+                    break;
+                }
+            }
+        }
+
+        if (bestOld < 0 || bestNew < 0 || bestScore > Math.max(0, maxScore)) {
+            return null;
+        }
+        return new int[] { bestOld, bestNew };
+    }
+
+    private void appendLineEdit(
+        List<Map<String, Object>> edits,
+        String[] oldLines,
+        String[] newLines,
+        int oldFrom,
+        int oldTo,
+        int newFrom,
+        int newTo
+    ) {
+        int oldChangedCount = Math.max(0, oldTo - oldFrom);
+        int newChangedCount = Math.max(0, newTo - newFrom);
         if (oldChangedCount == 0 && newChangedCount == 0) {
-            return Collections.emptyList();
+            return;
         }
 
-        int startLine = prefix + 1;
-        int endLine = oldChangedCount > 0 ? (oldSuffix + 1) : startLine;
+        int startLine = oldFrom + 1;
+        int endLine = oldChangedCount > 0 ? oldTo : startLine;
         String replacement = newChangedCount > 0
-            ? String.join("\n", Arrays.copyOfRange(newLines, prefix, newSuffix + 1))
+            ? String.join("\n", Arrays.copyOfRange(newLines, newFrom, newTo))
             : "";
 
         String action;
-        if (oldChangedCount == 0 && newChangedCount > 0) {
+        if (oldChangedCount == 0) {
             action = "add";
-        } else if (newChangedCount == 0 && oldChangedCount > 0) {
+        } else if (newChangedCount == 0) {
             action = "delete";
         } else {
             action = "edit";
@@ -9655,8 +9728,7 @@ public class ApiSpringController {
         edit.put("endLine", Math.max(startLine, endLine));
         edit.put("replacement", replacement);
         edit.put("action", action);
-
-        return List.of(edit);
+        edits.add(edit);
     }
 
     private List<Map<String, Object>> convertTextEditsToLineRanges(List<Map<String, Object>> textEdits) {

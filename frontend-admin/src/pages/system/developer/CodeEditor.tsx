@@ -638,7 +638,7 @@ async function streamAiCode(
 	callbacks: {
 		onChunk?: (chunk: string, accumulated: string) => void;
 		onStatus?: (status: Record<string, unknown>) => void;
-		onComplete?: (fullResponse: string) => void;
+		onComplete?: (event: Record<string, unknown>) => void;
 		onError?: (error: string) => void;
 	},
 ): Promise<void> {
@@ -696,9 +696,11 @@ async function streamAiCode(
 				return;
 			}
 			if (stage === "complete") {
-				const full = String(event.fullResponse || accumulated);
+				if (typeof event.fullResponse !== "string") {
+					event.fullResponse = accumulated;
+				}
 				completed = true;
-				callbacks.onComplete?.(full);
+				callbacks.onComplete?.(event);
 				return;
 			}
 			if (stage === "error") {
@@ -1416,6 +1418,7 @@ export default function CodeEditor() {
 			let finalResponse = "";
 			let streamErr = "";
 			let gotCompleteEvent = false;
+			let completePayload: Record<string, unknown> | null = null;
 
 			await streamAiCode(
 				{
@@ -1478,9 +1481,10 @@ export default function CodeEditor() {
 							percent: Number(status.percent || 0),
 						});
 					},
-					onComplete: (full) => {
+					onComplete: (event) => {
 						gotCompleteEvent = true;
-						finalResponse = full;
+						completePayload = event;
+						finalResponse = String(event.fullResponse || finalResponse);
 					},
 					onError: (err) => {
 						streamErr = err;
@@ -1498,7 +1502,20 @@ export default function CodeEditor() {
 				throw new Error(t("system.developer.ai.requestFailed"));
 			}
 
+			const completeEnvelope = completePayload && typeof completePayload === "object"
+				? completePayload
+				: null;
+			const completeEnvelopeAny = completeEnvelope as any;
+
 			const parsedEnvelopeCandidate = (() => {
+				if (completeEnvelope && (Array.isArray((completeEnvelope as any).textEdits)
+					|| Array.isArray((completeEnvelope as any).text_edits)
+					|| Array.isArray((completeEnvelope as any).lineRanges)
+					|| Array.isArray((completeEnvelope as any).changedRanges)
+					|| typeof (completeEnvelope as any).summary === "string"
+					|| typeof (completeEnvelope as any).code === "string")) {
+					return completeEnvelope;
+				}
 				const raw = extractValidJsonCandidate(finalResponse);
 				if (!raw) return null;
 				try {
@@ -1579,7 +1596,10 @@ export default function CodeEditor() {
 			}
 
 			const textEditsFromEnvelope = normalizeStructuredTextEdits(
-				parsedEnvelopeCandidate?.textEdits ?? parsedEnvelopeCandidate?.text_edits,
+				completeEnvelopeAny?.textEdits
+				?? completeEnvelopeAny?.text_edits
+				?? parsedEnvelopeCandidate?.textEdits
+				?? parsedEnvelopeCandidate?.text_edits,
 			);
 			if (textEditsFromEnvelope.length > 0) {
 				const validation = validateStructuredTextEdits(currentDraftRef.current, textEditsFromEnvelope);
@@ -1640,7 +1660,11 @@ export default function CodeEditor() {
 				setPendingChunk(null);
 			} else {
 				const before = currentDraftRef.current;
-				const ranges = buildChangedLineRanges(before, safeResult.code);
+				const ranges = buildRealtimeRangesFromProgress(
+					completeEnvelope ?? parsedEnvelopeCandidate ?? {},
+					before,
+					safeResult.code,
+				);
 				setPendingChunk({
 					id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
 					before,
