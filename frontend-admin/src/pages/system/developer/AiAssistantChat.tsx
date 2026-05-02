@@ -134,6 +134,8 @@ type CompletionMetrics = {
 	promptFinalChars?: number;
 	promptCapChars?: number;
 	promptTruncatedByCharCap?: boolean;
+	menuShrinkGuard?: boolean;
+	menuShrinkRatio?: number;
 };
 
 type ModelDecisionTrace = {
@@ -807,6 +809,7 @@ export default function AiAssistantChat({
 			completionMetrics.promptFinalChars != null ? `${uiText("Prompt sau cắt", "Prompt final", "裁剪后提示")}: ${formatOutputChars(completionMetrics.promptFinalChars)}` : "",
 			completionMetrics.promptCapChars != null ? `${uiText("Ngưỡng prompt", "Prompt cap", "提示上限")}: ${formatOutputChars(completionMetrics.promptCapChars)}` : "",
 			completionMetrics.promptTruncatedByCharCap === true ? `${uiText("Prompt bị cắt theo ngưỡng", "Prompt truncated by cap", "提示触发长度裁剪")}: true` : "",
+			completionMetrics.menuShrinkGuard === true ? `${uiText("Cảnh báo co rút menu", "Menu shrink guard", "菜单压缩警告")}: true (ratio=${(completionMetrics.menuShrinkRatio ?? 0).toFixed(2)})` : "",
 			aiUsageSummary.turn?.model ? `${uiText("Model", "Model", "模型")}: ${aiUsageSummary.turn.model}` : "",
 		].filter(Boolean);
 		return lines.join("\n");
@@ -821,6 +824,8 @@ export default function AiAssistantChat({
 		completionMetrics.promptFinalChars,
 		completionMetrics.promptCapChars,
 		completionMetrics.promptTruncatedByCharCap,
+		completionMetrics.menuShrinkGuard,
+		completionMetrics.menuShrinkRatio,
 		completionStateLabel,
 		formatCompletionDuration,
 		formatOutputChars,
@@ -1987,6 +1992,8 @@ export default function AiAssistantChat({
 								requestId?: string;
 								streamedChars?: number; streamChunkCount?: number; streamAssemblyMismatch?: boolean;
 								promptOriginalChars?: number; promptFinalChars?: number; promptCapChars?: number; promptTruncatedByCharCap?: boolean;
+								menuShrinkGuard?: boolean; menuShrinkRatio?: number; shrinkRatio?: number;
+								inputChars?: number; outputChars?: number; minRatio?: number;
 								modelDecisionStep?: "primary" | "fallback" | "final";
 								modelDecisionReason?: string;
 								decision_step?: "primary" | "fallback" | "final";
@@ -2099,7 +2106,14 @@ export default function AiAssistantChat({
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
 									appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
 								}
-							} else if (evt.stage === "context" || evt.stage === "continuing" || evt.stage === "cached" || evt.stage === "prompt_budget") {
+							} else if (evt.stage === "menu_shrink_guard") {
+							if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
+							message.warning(uiText(
+								`Cảnh báo: AI trả về nhỏ hơn dự kiến (tỷ lệ ${Number(evt.shrinkRatio ?? 0).toFixed(2)}), có thể bị mất dữ liệu menu`,
+								`Warning: AI output shrank unexpectedly (ratio ${Number(evt.shrinkRatio ?? 0).toFixed(2)}), menu data may be missing`,
+								`警告：AI输出意外化小（比例 ${Number(evt.shrinkRatio ?? 0).toFixed(2)}），菜单数据可能丢失`,
+							));
+						} else if (evt.stage === "context" || evt.stage === "continuing" || evt.stage === "cached" || evt.stage === "prompt_budget") {
 								if (decisionStep === "fallback" || !!decisionReason || (evt.message || "").toLowerCase().includes("fallback") || (evt.message || "").toLowerCase().includes("switch") || (evt.message || "").toLowerCase().includes("chuy") || (evt.message || "").toLowerCase().includes("rate-limit")) {
 									appendModelDecisionTrace({
 										step: decisionStep || "fallback",

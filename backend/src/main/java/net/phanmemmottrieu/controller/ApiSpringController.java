@@ -300,6 +300,12 @@ public class ApiSpringController {
     @Value("${ai.code-stream.menu.chunked-context-max-chars:110000}")
     private int aiCodeStreamMenuChunkedContextMaxChars;
 
+    @Value("${ai.code-stream.menu.shrink-guard.enabled:true}")
+    private boolean aiCodeStreamMenuShrinkGuardEnabled;
+
+    @Value("${ai.code-stream.menu.shrink-guard.min-ratio:0.4}")
+    private double aiCodeStreamMenuShrinkGuardMinRatio;
+
     @Value("${ai.code-stream.max-current-code-chars:80000}")
     private int aiCodeStreamMaxCurrentCodeChars;
 
@@ -886,6 +892,28 @@ public class ApiSpringController {
                 if ("edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType)) {
                     completionPayload = mergeMenuCompletionWithBase(effectiveCodeContext, completionPayload, contextType);
                 }
+                boolean menuShrinkGuardTriggered = false;
+                double menuShrinkRatio = 1.0;
+                if (menuJsonContext && aiCodeStreamMenuShrinkGuardEnabled) {
+                    int inputLen = effectiveCodeContext.length();
+                    int outputLen = completionPayload.length();
+                    if (inputLen > 5000 && outputLen < (int)(inputLen * aiCodeStreamMenuShrinkGuardMinRatio)) {
+                        menuShrinkGuardTriggered = true;
+                        menuShrinkRatio = inputLen > 0 ? (double)outputLen / inputLen : 1.0;
+                        sendEvent(emitter, jsonOf(
+                            "stage", "menu_shrink_guard",
+                            "status", "warning",
+                            "requestId", requestId,
+                            "contextType", contextType,
+                            "message", "AI output quá nhỏ so với context menu đầu vào, kết quả có thể bị mất dữ liệu",
+                            "inputChars", inputLen,
+                            "outputChars", outputLen,
+                            "shrinkRatio", menuShrinkRatio,
+                            "minRatio", aiCodeStreamMenuShrinkGuardMinRatio));
+                        logger.warn("MENU_SHRINK_GUARD requestId={} inputChars={} outputChars={} shrinkRatio={} minRatio={}",
+                            requestId, inputLen, outputLen, String.format("%.2f", menuShrinkRatio), aiCodeStreamMenuShrinkGuardMinRatio);
+                    }
+                }
                 Map<String, Object> outputShape = analyzeCodeStreamOutputShape(responseMode, contextType, completionPayload,
                     largeStructuredEditMode);
                 completion.put("fullResponse", completionPayload);
@@ -907,6 +935,10 @@ public class ApiSpringController {
                 completion.put("promptTruncatedByCharCap", bool(codeStreamMeta.get("promptTruncatedByCharCap"), promptTruncatedByCharCap));
                 completion.put("promptCacheUsed", bool(codeStreamMeta.get("promptCacheUsed"), usePromptCache));
                 completion.put("menuChunkedContextApplied", bool(codeStreamMeta.get("menuChunkedContextApplied"), menuChunkedContextApplied));
+                completion.put("menuShrinkGuard", menuShrinkGuardTriggered);
+                if (menuShrinkGuardTriggered) {
+                    completion.put("menuShrinkRatio", menuShrinkRatio);
+                }
                 int completionTokens = estimateTokens(rawResponse);
                 Map<String, Object> usageInfo = buildUsageInfoForSse(effectiveModel, promptTokens, completionTokens);
                 completion.put("usage", usageInfo);
