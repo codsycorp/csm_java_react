@@ -514,6 +514,28 @@ public class ApiSpringController {
                     ? focusWindow.code()
                     : effectiveCodeContext;
 
+                if ("edit".equalsIgnoreCase(responseMode) && !isMenuJsonContext(contextType)) {
+                    List<String> relatedSymbolExcerpts = buildCodeStreamRelatedSymbolExcerpts(
+                        effectiveCodeContext,
+                        message,
+                        focusWindow == null ? "" : focusWindow.code(),
+                        Math.max(2, Math.min(6, AI_ASSISTANT_CODE_FOCUS_EXCERPT_MAX_ITEMS)),
+                        2400);
+                    if (!relatedSymbolExcerpts.isEmpty()) {
+                        StringBuilder semanticCtx = new StringBuilder(promptCodeContext);
+                        semanticCtx.append("\n\n/* ===== RELATED SYMBOL CONTEXT (full-file inference) ===== */\n");
+                        for (String excerpt : relatedSymbolExcerpts) {
+                            if (excerpt == null || excerpt.isBlank()) {
+                                continue;
+                            }
+                            semanticCtx.append(excerpt).append("\n");
+                        }
+                        promptCodeContext = truncateMiddle(
+                            semanticCtx.toString(),
+                            Math.max(4000, aiCodeStreamMaxCurrentCodeChars));
+                    }
+                }
+
                 String reusableCodeMemory = trimAiAssistantContinuityMemory(
                     aiConversationContextService.buildAggregatedContextWindow(
                         authCtx.principalId,
@@ -1299,6 +1321,122 @@ public class ApiSpringController {
             }
         }
         return new CodeWindowContext(sb.toString(), start, end);
+    }
+
+    private List<String> buildCodeStreamRelatedSymbolExcerpts(
+        String fullCode,
+        String message,
+        String focusCode,
+        int maxItems,
+        int excerptChars
+    ) {
+        List<String> excerpts = new ArrayList<>();
+        String code = String.valueOf(fullCode == null ? "" : fullCode);
+        if (code.isBlank() || maxItems <= 0 || excerptChars <= 0) {
+            return excerpts;
+        }
+
+        LinkedHashSet<String> symbols = new LinkedHashSet<>();
+        symbols.addAll(extractCodeStreamSymbolCandidates(message, Math.max(8, maxItems * 2)));
+        symbols.addAll(extractCodeStreamSymbolCandidates(focusCode, Math.max(12, maxItems * 3)));
+        if (symbols.isEmpty()) {
+            return excerpts;
+        }
+
+        String lowerCode = code.toLowerCase();
+        List<Integer> anchors = new ArrayList<>();
+        int safeWindow = Math.max(900, excerptChars);
+        int half = Math.max(300, safeWindow / 2);
+
+        for (String symbol : symbols) {
+            if (symbol == null || symbol.isBlank()) {
+                continue;
+            }
+            String token = symbol.toLowerCase();
+            int idx = lowerCode.indexOf(token);
+            if (idx < 0) {
+                continue;
+            }
+            if (isNearExistingAnchor(anchors, idx, Math.max(500, safeWindow / 2))) {
+                continue;
+            }
+
+            anchors.add(idx);
+            int start = Math.max(0, idx - half);
+            int end = Math.min(code.length(), start + safeWindow);
+            int startLine = estimateLineAt(code, start);
+            int endLine = estimateLineAt(code, Math.max(start, end - 1));
+            String chunk = code.substring(start, end);
+            excerpts.add("/* symbol: " + symbol + ", lines " + startLine + "-" + endLine + " */\\n" + chunk);
+            if (excerpts.size() >= maxItems) {
+                break;
+            }
+        }
+
+        return excerpts;
+    }
+
+    private List<String> extractCodeStreamSymbolCandidates(String text, int maxItems) {
+        List<String> out = new ArrayList<>();
+        String source = String.valueOf(text == null ? "" : text);
+        if (source.isBlank() || maxItems <= 0) {
+            return out;
+        }
+
+        Pattern[] patterns = new Pattern[] {
+            Pattern.compile("\\bclass\\s+([A-Za-z_][A-Za-z0-9_]*)"),
+            Pattern.compile("\\binterface\\s+([A-Za-z_][A-Za-z0-9_]*)"),
+            Pattern.compile("\\benum\\s+([A-Za-z_][A-Za-z0-9_]*)"),
+            Pattern.compile("\\bfunction\\s+([A-Za-z_][A-Za-z0-9_]*)"),
+            Pattern.compile("\\b([A-Za-z_][A-Za-z0-9_]*)\\s*\\(")
+        };
+
+        LinkedHashSet<String> dedup = new LinkedHashSet<>();
+        for (Pattern p : patterns) {
+            Matcher m = p.matcher(source);
+            while (m.find() && dedup.size() < maxItems) {
+                String candidate = String.valueOf(m.groupCount() >= 1 ? m.group(1) : "").trim();
+                if (isCodeStreamUsefulSymbol(candidate)) {
+                    dedup.add(candidate);
+                }
+            }
+            if (dedup.size() >= maxItems) {
+                break;
+            }
+        }
+
+        if (dedup.size() < maxItems) {
+            Matcher words = Pattern.compile("\\b[A-Za-z_][A-Za-z0-9_$.]{2,}\\b").matcher(source);
+            while (words.find() && dedup.size() < maxItems) {
+                String token = String.valueOf(words.group()).trim();
+                if (isCodeStreamUsefulSymbol(token)) {
+                    dedup.add(token);
+                }
+            }
+        }
+
+        out.addAll(dedup);
+        return out;
+    }
+
+    private boolean isCodeStreamUsefulSymbol(String token) {
+        if (token == null) {
+            return false;
+        }
+        String t = token.trim();
+        if (t.length() < 3 || t.length() > 80) {
+            return false;
+        }
+        String lower = t.toLowerCase();
+        Set<String> deny = Set.of(
+            "the", "and", "for", "with", "code", "line", "json", "menu", "edit", "replace", "search",
+            "return", "const", "let", "var", "new", "null", "true", "false", "this", "that", "void",
+            "public", "private", "protected", "static", "class", "interface", "enum", "function"
+        );
+        if (deny.contains(lower)) {
+            return false;
+        }
+        return t.matches("[A-Za-z_][A-Za-z0-9_$.]*");
     }
 
     private int parseIntSafe(Object raw, int fallback) {
