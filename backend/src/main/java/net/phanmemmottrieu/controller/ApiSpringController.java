@@ -700,6 +700,19 @@ public class ApiSpringController {
                         && !isMenuJsonContext(contextType)) {
                     completionPayload = salvageSearchReplaceAsTextEdits(completionPayload, effectiveCodeContext);
                     completionPayload = salvagePropertyPatchAsTextEdits(completionPayload, effectiveCodeContext);
+                    completionPayload = canonicalizeLineTextEditsPayload(completionPayload, effectiveCodeContext);
+
+                    List<Map<String, Object>> canonicalTextEdits = parseNormalizedLineTextEdits(completionPayload);
+                    if (canonicalTextEdits.isEmpty()) {
+                        sendErrorEvent(emitter,
+                                "Chuẩn hóa thất bại: AI output không thể canonicalize về line-level textEdits để apply an toàn");
+                        return;
+                    }
+
+                    completion.put("textEdits", canonicalTextEdits);
+                    List<Map<String, Object>> lineRanges = convertTextEditsToLineRanges(canonicalTextEdits);
+                    completion.put("lineRanges", lineRanges);
+                    completion.put("changedRanges", lineRanges);
                 }
                 if ("edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType)) {
                     completionPayload = mergeMenuCompletionWithBase(effectiveCodeContext, completionPayload, contextType);
@@ -733,7 +746,7 @@ public class ApiSpringController {
                 sendEvent(emitter, objectMapper.writeValueAsString(completion));
 
                 logger.info(
-                    "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType={} responseMode={} model={} promptChars={} promptTokens={} outputChars={} completionTokens={} estimatedCostUsd={} outputShape={} textEditsCount={} fallbackToFullCode={} textEditsRetryTriggered={} textEditsRetryAttempts={} switchedToDefaultModel={} providerFallbackUsed={} promptCache={} images={} elapsedMs={}",
+                    "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType={} responseMode={} model={} promptChars={} promptTokens={} outputChars={} completionTokens={} estimatedCostUsd={} outputShape={} textEditsCount={} fallbackToFullCode={} textEditsRetryTriggered={} textEditsRetryAttempts={} attemptsUsed={} maxAttempts={} providerCallsEstimate={} switchedToDefaultModel={} providerFallbackUsed={} promptCache={} images={} elapsedMs={}",
                     requestId,
                     appId,
                     contextType,
@@ -749,6 +762,9 @@ public class ApiSpringController {
                     outputShape.get("fallbackToFullCode"),
                     bool(codeStreamMeta.get("textEditsRetryTriggered"), false),
                     parseIntSafe(codeStreamMeta.get("textEditsRetryAttempts"), 0),
+                    parseIntSafe(codeStreamMeta.get("attemptsUsed"), 1),
+                    parseIntSafe(codeStreamMeta.get("maxAttempts"), 1),
+                    parseIntSafe(codeStreamMeta.get("providerCallsEstimate"), 1),
                     switchedToDefaultModel,
                     providerFallbackUsed,
                     usePromptCache,
@@ -773,6 +789,9 @@ public class ApiSpringController {
                 codeTelemetry.put("fallbackToFullCode", outputShape.get("fallbackToFullCode"));
                 codeTelemetry.put("textEditsRetryTriggered", bool(codeStreamMeta.get("textEditsRetryTriggered"), false));
                 codeTelemetry.put("textEditsRetryAttempts", parseIntSafe(codeStreamMeta.get("textEditsRetryAttempts"), 0));
+                codeTelemetry.put("attemptsUsed", parseIntSafe(codeStreamMeta.get("attemptsUsed"), 1));
+                codeTelemetry.put("maxAttempts", parseIntSafe(codeStreamMeta.get("maxAttempts"), 1));
+                codeTelemetry.put("providerCallsEstimate", parseIntSafe(codeStreamMeta.get("providerCallsEstimate"), 1));
                 codeTelemetry.put("switchedToDefaultModel", switchedToDefaultModel);
                 codeTelemetry.put("providerFallbackUsed", providerFallbackUsed);
                 codeTelemetry.put("attachments", imageParts.size());
@@ -1076,7 +1095,6 @@ public class ApiSpringController {
                 continue;
             }
 
-            @SuppressWarnings("unchecked")
             Map<String, Object> found = findMenuNodeByIdObject(menuList, nodeId);
             if (found == null) {
                 result.skippedOperationIds.add(opId);
@@ -1467,14 +1485,23 @@ public class ApiSpringController {
         int textEditRetryAttempts = (editMode && aiCodeStreamEditTextEditsRetryEnabled)
                 ? 1 + Math.max(0, aiCodeStreamEditTextEditsRetryMaxExtraAttempts)
                 : 1;
-        int maxAttempts = Math.max(autoContinueAttempts, textEditRetryAttempts);
+        int computedMaxAttempts = Math.max(autoContinueAttempts, textEditRetryAttempts);
+        // Cost guard: JSON edit is frequently strict-parse sensitive; avoid 3 expensive provider rounds.
+        if (editMode && "json".equalsIgnoreCase(language) && !isMenuJsonContext(contextType)) {
+            computedMaxAttempts = Math.min(computedMaxAttempts, 2);
+        }
+        final int maxAttempts = computedMaxAttempts;
         String currentPrompt = prompt;
         String lastRawResponse = "";
         AtomicInteger waitingLogBucket = new AtomicInteger(0);
         int textEditsRetryUsed = 0;
+        int attemptsUsed = 0;
+        AtomicInteger providerCalls = new AtomicInteger(0);
+        AtomicInteger providerFallbackTransitions = new AtomicInteger(0);
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             final int attemptNo = attempt;
+            attemptsUsed = Math.max(attemptsUsed, attemptNo);
             if (attempt > 1) {
                 sendEvent(emitter, jsonOf(
                         "stage", "continuing",
@@ -1495,6 +1522,7 @@ public class ApiSpringController {
             boolean isFirstAttemptWithCache = (attempt == 1) && usePromptCache
                     && systemContent != null && !systemContent.isBlank()
                     && userMessage != null && !userMessage.isBlank();
+                final boolean[] fallbackCountedThisAttempt = { false };
 
             Consumer<String> chunkHandler = chunk -> {
                 attemptBuffer.append(chunk);
@@ -1508,6 +1536,7 @@ public class ApiSpringController {
             };
 
             if (isFirstAttemptWithCache) {
+                providerCalls.incrementAndGet();
                 geminiStreamingService.streamContentWithCache(
                         systemContent,
                         userMessage,
@@ -1518,6 +1547,11 @@ public class ApiSpringController {
                         status -> {
                             try {
                                 Map<String, Object> wrapped = new LinkedHashMap<>(status);
+                                String stage = str(wrapped.get("stage"), "");
+                                if ("claude_fallback".equalsIgnoreCase(stage) && !fallbackCountedThisAttempt[0]) {
+                                    fallbackCountedThisAttempt[0] = true;
+                                    providerFallbackTransitions.incrementAndGet();
+                                }
                                 enrichModelDecisionMetadata(wrapped, model);
                                 wrapped.put("requestId", requestId);
                                 wrapped.put("attempt", attemptNo);
@@ -1528,6 +1562,7 @@ public class ApiSpringController {
                             }
                         });
             } else {
+                providerCalls.incrementAndGet();
                 geminiStreamingService.streamContent(
                         currentPrompt,
                         model,
@@ -1537,6 +1572,11 @@ public class ApiSpringController {
                         status -> {
                             try {
                                 Map<String, Object> wrapped = new LinkedHashMap<>(status);
+                                String stage = str(wrapped.get("stage"), "");
+                                if ("claude_fallback".equalsIgnoreCase(stage) && !fallbackCountedThisAttempt[0]) {
+                                    fallbackCountedThisAttempt[0] = true;
+                                    providerFallbackTransitions.incrementAndGet();
+                                }
                                 enrichModelDecisionMetadata(wrapped, model);
                                 wrapped.put("requestId", requestId);
                                 wrapped.put("attempt", attemptNo);
@@ -1636,18 +1676,50 @@ public class ApiSpringController {
                 if (streamMeta != null) {
                     streamMeta.put("textEditsRetryTriggered", textEditsRetryUsed > 0);
                     streamMeta.put("textEditsRetryAttempts", textEditsRetryUsed);
+                    streamMeta.put("attemptsUsed", attemptsUsed);
+                    streamMeta.put("maxAttempts", maxAttempts);
+                    streamMeta.put("providerCallsEstimate", providerCalls.get() + providerFallbackTransitions.get());
                 }
                 return raw;
             }
 
             if (attempt < maxAttempts) {
-                currentPrompt = buildAutoContinuePrompt(prompt, raw, language, contextType, largeStructuredEditMode);
+                boolean retriedForFormat = false;
+                if (editMode && !largeStructuredEditMode && !isMenuJsonContext(contextType)) {
+                    int textEditsCount = extractLineTextEditsCount(raw);
+                    boolean hasSearchReplace = hasSearchReplaceBlocks(raw);
+                    boolean hasWrappedCode = hasFullCodeInEditPayload(raw);
+                    boolean canTryFormatRetry = textEditsRetryUsed < Math.max(1, 1 + Math.max(0, aiCodeStreamEditTextEditsRetryMaxExtraAttempts));
+
+                    if (canTryFormatRetry && textEditsCount == 0 && !hasSearchReplace && !hasWrappedCode) {
+                        textEditsRetryUsed++;
+                        if (streamMeta != null) {
+                            streamMeta.put("textEditsRetryTriggered", true);
+                            streamMeta.put("textEditsRetryAttempts", textEditsRetryUsed);
+                        }
+                        sendEvent(emitter, jsonOf(
+                                "stage", "auto_continue",
+                                "status", "format_retry",
+                                "attempt", attemptNo,
+                                "maxAttempts", maxAttempts,
+                                "message", "Kết quả chưa đúng định dạng edit, thử lại với prompt ép textEdits/SEARCH-REPLACE để tránh gọi lặp tốn kém"));
+                        currentPrompt = buildTextEditsRetryPrompt(prompt, raw, language, contextType, largeStructuredEditMode);
+                        retriedForFormat = true;
+                    }
+                }
+
+                if (!retriedForFormat) {
+                    currentPrompt = buildAutoContinuePrompt(prompt, raw, language, contextType, largeStructuredEditMode);
+                }
             }
         }
 
         if (streamMeta != null) {
             streamMeta.put("textEditsRetryTriggered", textEditsRetryUsed > 0);
             streamMeta.put("textEditsRetryAttempts", textEditsRetryUsed);
+            streamMeta.put("attemptsUsed", attemptsUsed);
+            streamMeta.put("maxAttempts", maxAttempts);
+            streamMeta.put("providerCallsEstimate", providerCalls.get() + providerFallbackTransitions.get());
         }
 
         return lastRawResponse;
@@ -1976,6 +2048,220 @@ public class ApiSpringController {
         } catch (Exception ignored) {
             return rawResponse;
         }
+    }
+
+    private String canonicalizeLineTextEditsPayload(String rawResponse, String baseCode) {
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        String sourceCode = String.valueOf(baseCode == null ? "" : baseCode);
+        if (raw.isBlank() || sourceCode.isBlank()) {
+            return rawResponse;
+        }
+
+        List<Map<String, Object>> normalizedLineEdits = parseNormalizedLineTextEdits(raw);
+        if (!normalizedLineEdits.isEmpty()) {
+            return buildCanonicalLineEditsEnvelope(raw, "", List.of(), normalizedLineEdits, null,
+                    Map.of("canonicalized", true, "source", "line_text_edits"));
+        }
+
+        ParsedTextEditPayload findReplacePayload = parseTextEditPayload(raw);
+        if (findReplacePayload != null && findReplacePayload.textEdits != null && !findReplacePayload.textEdits.isEmpty()) {
+            List<Map<String, Object>> generated = buildLineTextEditsFromFindReplace(sourceCode, findReplacePayload.textEdits);
+            if (!generated.isEmpty()) {
+                return buildCanonicalLineEditsEnvelope(
+                        raw,
+                        findReplacePayload.summary,
+                        findReplacePayload.changes,
+                        generated,
+                        null,
+                        Map.of("canonicalized", true, "source", "find_replace_text_edits"));
+            }
+        }
+
+        ParsedCodePayload codePayload = parseCodePayload(raw);
+        if (codePayload != null && codePayload.code != null && !codePayload.code.isBlank()) {
+            List<Map<String, Object>> generated = buildLineTextEdits(sourceCode, codePayload.code);
+            if (!generated.isEmpty()) {
+                return buildCanonicalLineEditsEnvelope(
+                        raw,
+                        codePayload.summary,
+                        codePayload.changes,
+                        generated,
+                        codePayload.code,
+                        Map.of("canonicalized", true, "source", "full_code"));
+            }
+        }
+
+        String unwrapped = raw;
+        if (unwrapped.startsWith("```")) {
+            unwrapped = unwrapped.replaceFirst("^```[a-zA-Z]*\\s*", "").replaceAll("\\s*```$", "").trim();
+        }
+        if (!unwrapped.isBlank() && !unwrapped.startsWith("{")) {
+            List<Map<String, Object>> generated = buildLineTextEdits(sourceCode, unwrapped);
+            if (!generated.isEmpty()) {
+                return buildCanonicalLineEditsEnvelope(
+                        raw,
+                        "Đã chuẩn hóa phản hồi thành textEdits theo line",
+                        List.of("Chuẩn hóa output provider về line-level patch"),
+                        generated,
+                        unwrapped,
+                        Map.of("canonicalized", true, "source", "raw_code"));
+            }
+        }
+
+        return rawResponse;
+    }
+
+    private String buildCanonicalLineEditsEnvelope(
+            String fallbackRaw,
+            String summary,
+            List<String> changes,
+            List<Map<String, Object>> textEdits,
+            String code,
+            Map<String, Object> meta) {
+        if (textEdits == null || textEdits.isEmpty()) {
+            return fallbackRaw;
+        }
+        try {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("summary", String.valueOf(summary == null ? "" : summary));
+            out.put("changes", changes == null ? List.of() : changes);
+            out.put("textEdits", textEdits);
+            if (code != null && !code.isBlank()) {
+                out.put("code", code);
+            }
+            if (meta != null && !meta.isEmpty()) {
+                out.put("meta", meta);
+            }
+            return objectMapper.writeValueAsString(out);
+        } catch (Exception ignored) {
+            return fallbackRaw;
+        }
+    }
+
+    private List<Map<String, Object>> buildLineTextEditsFromFindReplace(String baseCode, List<TextEditOp> ops) {
+        String sourceCode = String.valueOf(baseCode == null ? "" : baseCode);
+        if (sourceCode.isBlank() || ops == null || ops.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<Map<String, Object>> edits = new ArrayList<>();
+        int searchFrom = 0;
+        int maxEdits = Math.max(1, aiAssistantStructuredEditMaxTextEdits);
+
+        for (TextEditOp op : ops) {
+            if (op == null || op.find == null || op.find.isBlank()) {
+                continue;
+            }
+            String find = op.find;
+            String replace = String.valueOf(op.replace == null ? "" : op.replace);
+
+            int index = sourceCode.indexOf(find, Math.max(0, searchFrom));
+            if (index < 0) {
+                index = sourceCode.indexOf(find);
+            }
+            if (index < 0) {
+                continue;
+            }
+
+            int startLine = lineNumberAtOffset(sourceCode, index);
+            int endLine = lineNumberAtOffset(sourceCode, index + Math.max(0, find.length() - 1));
+
+            String action;
+            if (replace.isBlank() && !find.isBlank()) {
+                action = "delete";
+            } else if (find.isBlank() && !replace.isBlank()) {
+                action = "add";
+            } else {
+                action = "edit";
+            }
+
+            Map<String, Object> edit = new LinkedHashMap<>();
+            edit.put("startLine", startLine);
+            edit.put("endLine", Math.max(startLine, endLine));
+            edit.put("replacement", replace);
+            edit.put("action", action);
+            edits.add(edit);
+
+            searchFrom = index + Math.max(1, find.length());
+            if (edits.size() >= maxEdits) {
+                break;
+            }
+        }
+
+        return edits;
+    }
+
+    private List<Map<String, Object>> parseNormalizedLineTextEdits(String rawResponse) {
+        String normalized = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        if (normalized.isBlank()) {
+            return Collections.emptyList();
+        }
+        if (normalized.startsWith("```json")) normalized = normalized.substring(7).trim();
+        if (normalized.startsWith("```")) normalized = normalized.substring(3).trim();
+        if (normalized.endsWith("```")) normalized = normalized.substring(0, normalized.length() - 3).trim();
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> obj = objectMapper.readValue(normalized, Map.class);
+            Object editsObj = obj.get("textEdits") != null ? obj.get("textEdits") : obj.get("text_edits");
+            if (!(editsObj instanceof List<?> list) || list.isEmpty()) {
+                return Collections.emptyList();
+            }
+
+            List<Map<String, Object>> out = new ArrayList<>();
+            int maxEdits = Math.max(1, aiAssistantStructuredEditMaxTextEdits);
+            for (Object item : list) {
+                if (!(item instanceof Map<?, ?> map)) {
+                    continue;
+                }
+
+                int startLine = parseIntOrDefault(
+                        map.get("startLine") != null ? map.get("startLine") : (map.get("start_line") != null
+                                ? map.get("start_line")
+                                : (map.get("line") != null ? map.get("line") : 1)),
+                        1);
+                int endLine = parseIntOrDefault(
+                        map.get("endLine") != null ? map.get("endLine") : (map.get("end_line") != null
+                                ? map.get("end_line")
+                                : (map.get("toLine") != null ? map.get("toLine") : startLine)),
+                        startLine);
+                String replacement = String.valueOf(
+                        map.get("replacement") != null ? map.get("replacement")
+                                : (map.get("newText") != null ? map.get("newText")
+                                        : (map.get("text") != null ? map.get("text")
+                                                : (map.get("replace") != null ? map.get("replace") : ""))));
+                String action = String.valueOf(
+                        map.get("action") != null ? map.get("action")
+                                : (map.get("type") != null ? map.get("type") : "edit"));
+
+                Map<String, Object> edit = new LinkedHashMap<>();
+                edit.put("startLine", Math.max(1, startLine));
+                edit.put("endLine", Math.max(Math.max(1, startLine), endLine));
+                edit.put("replacement", replacement);
+                edit.put("action", normalizeLineEditAction(action, replacement));
+                out.add(edit);
+                if (out.size() >= maxEdits) {
+                    break;
+                }
+            }
+            return out;
+        } catch (Exception ex) {
+            return Collections.emptyList();
+        }
+    }
+
+    private String normalizeLineEditAction(String rawAction, String replacement) {
+        String action = String.valueOf(rawAction == null ? "" : rawAction).trim().toLowerCase();
+        if (action.equals("insert") || action.equals("create") || action.equals("new")) {
+            return "add";
+        }
+        if (action.equals("remove") || action.equals("del")) {
+            return "delete";
+        }
+        if (action.equals("add") || action.equals("delete") || action.equals("edit")) {
+            return action;
+        }
+        return String.valueOf(replacement == null ? "" : replacement).isBlank() ? "delete" : "edit";
     }
 
     private Map<String, Object> buildPropertyLineEdit(String code, String propertyName, Object newValue) {
@@ -2665,7 +2951,8 @@ public class ApiSpringController {
     ) {
         // Log đầu vào
         logger.info("[API IN] {} {} IP={} UA={} headers={} body={}", request.getMethod(), request.getRequestURI(),
-                request.getRemoteAddr(), request.getHeader("User-Agent"), headers, requestBody);
+                request.getRemoteAddr(), request.getHeader("User-Agent"),
+                sanitizeApiLogValue(headers), sanitizeApiLogBody(requestBody));
         Map<String, String> lowerCaseHeaders = new HashMap<>();
         if (headers != null) {
             headers.forEach((key, value) -> lowerCaseHeaders.put(key.toLowerCase(), value));
@@ -2691,7 +2978,7 @@ public class ApiSpringController {
                         @SuppressWarnings("unchecked")
                         Map<String, Object> typedParams = (Map<String, Object>) objectMapper.readValue(requestBody, Map.class);
                         params.putAll(typedParams);
-                        logger.debug("✅ Đã parse JSON body: {}", params);
+                        logger.debug("✅ Đã parse JSON body: {}", sanitizeApiLogValue(params));
                     } catch (IOException e) {
                         logger.error("❌ Lỗi parse JSON body trong ApiSpringController: {}", e.getMessage(), e);
                         response.set("code", 400); // Bad Request
@@ -2707,7 +2994,7 @@ public class ApiSpringController {
                             params.put(kv[0], kv[1]);
                         }
                     }
-                    logger.debug("✅ Đã parse form body: {}", params);
+                    logger.debug("✅ Đã parse form body: {}", sanitizeApiLogValue(params));
                 }
             }
         }
@@ -2732,13 +3019,13 @@ public class ApiSpringController {
                 }
             }
         }
-        logger.debug("✅ Tham số {} với phương thức {}", params, httpMethod);
+        logger.debug("✅ Tham số {} với phương thức {}", sanitizeApiLogValue(params), httpMethod);
 
         // CRM multi-tenant guard: force app scoping by authenticated user context.
         if (isCrmPath(effectivePath)) {
             if (!secureAndNormalizeCrmParams(response, params, effectivePath, httpMethod)) {
                 logger.info("[API OUT] {} {} status={} response={}", request.getMethod(), request.getRequestURI(),
-                        response.get("code"), response);
+                        response.get("code"), sanitizeApiLogValue(response));
                 return buildResponseEntity(response);
             }
         }
@@ -3001,8 +3288,93 @@ public class ApiSpringController {
         if (respCode instanceof Integer)
             statusCode = (Integer) respCode;
         logger.info("[API OUT] {} {} status={} response={}", request.getMethod(), request.getRequestURI(), statusCode,
-                response);
+                sanitizeApiLogValue(response));
         return buildResponseEntity(response);
+    }
+
+    private static final Set<String> API_LOG_SENSITIVE_KEYS = Set.of(
+            "password", "pass", "pwd", "secret", "token", "access_token", "refresh_token", "authorization",
+            "cookie", "set-cookie", "apikey", "api_key", "x-api-key", "x-csrf-token", "jwt", "bearer",
+            "app_token", "apptoken", "authtoken");
+
+    private boolean isSensitiveApiLogKey(String key) {
+        if (key == null) {
+            return false;
+        }
+        String lowered = key.trim().toLowerCase(java.util.Locale.ROOT);
+        if (API_LOG_SENSITIVE_KEYS.contains(lowered)) {
+            return true;
+        }
+        return lowered.contains("password") || lowered.contains("token") || lowered.contains("secret")
+                || lowered.contains("authorization") || lowered.contains("cookie") || lowered.contains("api_key")
+                || lowered.contains("apikey");
+    }
+
+    private String redactSecretText(String raw) {
+        String value = String.valueOf(raw == null ? "" : raw);
+        if (value.isBlank()) {
+            return value;
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() <= 6) {
+            return "<redacted>";
+        }
+        if (trimmed.toLowerCase(java.util.Locale.ROOT).startsWith("bearer ")) {
+            return "Bearer <redacted>";
+        }
+        return trimmed.substring(0, 2) + "***" + trimmed.substring(trimmed.length() - 2);
+    }
+
+    private Object sanitizeApiLogValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> sanitized = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                String key = String.valueOf(entry.getKey() == null ? "" : entry.getKey());
+                if (isSensitiveApiLogKey(key)) {
+                    sanitized.put(key, "<redacted>");
+                } else {
+                    sanitized.put(key, sanitizeApiLogValue(entry.getValue()));
+                }
+            }
+            return sanitized;
+        }
+        if (value instanceof List<?> list) {
+            List<Object> sanitized = new ArrayList<>();
+            for (Object item : list) {
+                sanitized.add(sanitizeApiLogValue(item));
+            }
+            return sanitized;
+        }
+        if (value instanceof String text) {
+            String trimmed = text.trim();
+            if (trimmed.toLowerCase(java.util.Locale.ROOT).startsWith("bearer ")) {
+                return "Bearer <redacted>";
+            }
+            if (trimmed.length() > 64 && (trimmed.matches("[A-Za-z0-9_\\-\\.=]+") || trimmed.contains("eyJ"))) {
+                return redactSecretText(trimmed);
+            }
+            return text;
+        }
+        return value;
+    }
+
+    private String sanitizeApiLogBody(String rawBody) {
+        if (rawBody == null || rawBody.isBlank()) {
+            return rawBody;
+        }
+        String body = rawBody.trim();
+        try {
+            Object parsed = objectMapper.readValue(body, Object.class);
+            return objectMapper.writeValueAsString(sanitizeApiLogValue(parsed));
+        } catch (Exception ignored) {
+        }
+        String redacted = body
+                .replaceAll("(?i)(\\\"?(password|pass|pwd|token|refreshToken|accessToken|authorization|cookie|api[_-]?key|secret)\\\"?\\s*[:=]\\s*\\\")([^\\\"]*)(\\\")", "$1<redacted>$4")
+                .replaceAll("(?i)(\\b(password|pass|pwd|token|refreshToken|accessToken|authorization|cookie|api[_-]?key|secret)\\b\\s*=\\s*)([^&\\s]+)", "$1<redacted>");
+        if (redacted.length() > 2000) {
+            return redacted.substring(0, 2000) + "...";
+        }
+        return redacted;
     }
 
     private boolean isCrmPath(String path) {

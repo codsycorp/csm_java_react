@@ -88,6 +88,9 @@ public class ApiCallInstrumentationService {
         public boolean fallbackToFullCode;
         public boolean textEditsRetryTriggered;
         public int textEditsRetryAttempts;
+        public int attemptsUsed;
+        public int maxAttempts;
+        public int providerCallsEstimate;
 
         public Map<String, Object> toMap() {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -124,6 +127,9 @@ public class ApiCallInstrumentationService {
             m.put("fallbackToFullCode", fallbackToFullCode);
             m.put("textEditsRetryTriggered", textEditsRetryTriggered);
             m.put("textEditsRetryAttempts", textEditsRetryAttempts);
+            m.put("attemptsUsed", attemptsUsed);
+            m.put("maxAttempts", maxAttempts);
+            m.put("providerCallsEstimate", providerCallsEstimate);
             return m;
         }
     }
@@ -274,6 +280,9 @@ public class ApiCallInstrumentationService {
         metric.fallbackToFullCode = toBool(payload.get("fallbackToFullCode"));
         metric.textEditsRetryTriggered = toBool(payload.get("textEditsRetryTriggered"));
         metric.textEditsRetryAttempts = toInt(payload.get("textEditsRetryAttempts"));
+        metric.attemptsUsed = toInt(payload.get("attemptsUsed"));
+        metric.maxAttempts = toInt(payload.get("maxAttempts"));
+        metric.providerCallsEstimate = toInt(payload.get("providerCallsEstimate"));
 
         aiTelemetryHistory.add(metric);
         pruneAiTelemetryHistoryIfNeeded(5000);
@@ -341,6 +350,8 @@ public class ApiCallInstrumentationService {
         int textEditsRetrySuccessCount = 0;
         long textEditsTotal = 0;
         long textEditsRetryAttemptsTotal = 0;
+        long attemptsUsedTotal = 0;
+        long providerCallsEstimateTotal = 0;
         long inputTokens = 0;
         long outputTokens = 0;
         long elapsedMs = 0;
@@ -397,6 +408,8 @@ public class ApiCallInstrumentationService {
                 }
                 textEditsTotal += Math.max(0, m.textEditsCount);
                 textEditsRetryAttemptsTotal += Math.max(0, m.textEditsRetryAttempts);
+                attemptsUsedTotal += Math.max(0, m.attemptsUsed);
+                providerCallsEstimateTotal += Math.max(0, m.providerCallsEstimate);
             }
         }
 
@@ -430,6 +443,10 @@ public class ApiCallInstrumentationService {
         out.put("textEditsRetrySuccessCount", textEditsRetrySuccessCount);
         out.put("textEditsRetrySuccessRate", round6((double) textEditsRetrySuccessCount / Math.max(1, textEditsRetryTriggeredCount)));
         out.put("textEditsRetryAttemptsTotal", textEditsRetryAttemptsTotal);
+        out.put("attemptsUsedTotal", attemptsUsedTotal);
+        out.put("avgAttemptsUsed", round6((double) attemptsUsedTotal / Math.max(1, codeStreamEvents)));
+        out.put("providerCallsEstimateTotal", providerCallsEstimateTotal);
+        out.put("avgProviderCallsEstimate", round6((double) providerCallsEstimateTotal / Math.max(1, codeStreamEvents)));
         out.put("byFlow", flowCounts);
         out.put("byRoutingTier", routingTierCounts);
         out.put("byOutputShape", outputShapeCounts);
@@ -455,6 +472,8 @@ public class ApiCallInstrumentationService {
                 incLong(agg, "textEditsRetryTriggeredEvents", m.textEditsRetryTriggered ? 1 : 0);
                 incLong(agg, "textEditsRetrySuccessEvents", (m.textEditsRetryTriggered && "text_edits_line".equalsIgnoreCase(toText(m.outputShape))) ? 1 : 0);
                 incLong(agg, "textEditsTotal", Math.max(0, m.textEditsCount));
+                incLong(agg, "attemptsUsedTotal", Math.max(0, m.attemptsUsed));
+                incLong(agg, "providerCallsEstimateTotal", Math.max(0, m.providerCallsEstimate));
                 incDouble(agg, "estimatedCostUsd", Math.max(0.0, m.estimatedCostUsd));
             }
         }
@@ -480,6 +499,8 @@ public class ApiCallInstrumentationService {
                 incLong(agg, "textEditsRetryTriggeredEvents", m.textEditsRetryTriggered ? 1 : 0);
                 incLong(agg, "textEditsRetrySuccessEvents", (m.textEditsRetryTriggered && "text_edits_line".equalsIgnoreCase(toText(m.outputShape))) ? 1 : 0);
                 incLong(agg, "textEditsTotal", Math.max(0, m.textEditsCount));
+                incLong(agg, "attemptsUsedTotal", Math.max(0, m.attemptsUsed));
+                incLong(agg, "providerCallsEstimateTotal", Math.max(0, m.providerCallsEstimate));
                 incDouble(agg, "estimatedCostUsd", Math.max(0.0, m.estimatedCostUsd));
             }
         }
@@ -498,6 +519,8 @@ public class ApiCallInstrumentationService {
         int fullCodeFallbackCount = 0;
         int retryTriggeredCount = 0;
         int retrySuccessCount = 0;
+        int attemptsSpikeCount = 0;
+        int providerCallSpikeCount = 0;
         if (windowEvents != null) {
             for (AiTelemetryMetric m : windowEvents) {
                 if (m == null) continue;
@@ -510,6 +533,8 @@ public class ApiCallInstrumentationService {
                         retrySuccessCount++;
                     }
                 }
+                if (m.attemptsUsed >= 2) attemptsSpikeCount++;
+                if (m.providerCallsEstimate >= 3) providerCallSpikeCount++;
             }
         }
 
@@ -518,10 +543,14 @@ public class ApiCallInstrumentationService {
         double fullCodeFallbackRate = ratio(fullCodeFallbackCount, total);
         double retryTriggeredRate = ratio(retryTriggeredCount, total);
         double retrySuccessRate = ratio(retrySuccessCount, Math.max(1, retryTriggeredCount));
+        double attemptsSpikeRate = ratio(attemptsSpikeCount, total);
+        double providerCallSpikeRate = ratio(providerCallSpikeCount, total);
         boolean enoughSamples = total >= minSamplesForAlert;
         boolean fallbackSpike = enoughSamples && fallbackRate >= Math.max(0.05, fallbackAlertThreshold);
         boolean quickProbeSpike = enoughSamples && quickProbeRate >= Math.max(0.05, quickProbeAlertThreshold);
         boolean fullCodeFallbackSpike = enoughSamples && fullCodeFallbackRate >= 0.25;
+        boolean attemptsSpike = enoughSamples && attemptsSpikeRate >= 0.30;
+        boolean providerCallSpike = enoughSamples && providerCallSpikeRate >= 0.30;
 
         List<Map<String, Object>> alertItems = new ArrayList<>();
         if (fallbackSpike) {
@@ -548,6 +577,22 @@ public class ApiCallInstrumentationService {
                 "threshold", 0.25,
                 "message", "Tỷ lệ full-code fallback cao, nên siết prompt contract hoặc tăng text-edits retry"));
         }
+        if (attemptsSpike) {
+            alertItems.add(Map.of(
+                "type", "attempts_spike",
+                "severity", attemptsSpikeRate >= 0.45 ? "high" : "warning",
+                "value", round6(attemptsSpikeRate),
+                "threshold", 0.30,
+                "message", "Nhiều request phải chạy >=2 attempts, cần giảm strictness hoặc tăng salvage local"));
+        }
+        if (providerCallSpike) {
+            alertItems.add(Map.of(
+                "type", "provider_calls_spike",
+                "severity", providerCallSpikeRate >= 0.45 ? "high" : "warning",
+                "value", round6(providerCallSpikeRate),
+                "threshold", 0.30,
+                "message", "Số lần gọi provider/request cao bất thường, cần rà fallback loop và quota policy"));
+        }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("totalEvents", total);
@@ -556,10 +601,14 @@ public class ApiCallInstrumentationService {
         out.put("fullCodeFallbackRate", round6(fullCodeFallbackRate));
         out.put("textEditsRetryTriggeredRate", round6(retryTriggeredRate));
         out.put("textEditsRetrySuccessRate", round6(retrySuccessRate));
+        out.put("attemptsSpikeRate", round6(attemptsSpikeRate));
+        out.put("providerCallSpikeRate", round6(providerCallSpikeRate));
         out.put("minSamplesForAlert", minSamplesForAlert);
         out.put("fallbackSpike", fallbackSpike);
         out.put("quickProbeSpike", quickProbeSpike);
         out.put("fullCodeFallbackSpike", fullCodeFallbackSpike);
+        out.put("attemptsSpike", attemptsSpike);
+        out.put("providerCallSpike", providerCallSpike);
         out.put("items", alertItems);
         return out;
     }
