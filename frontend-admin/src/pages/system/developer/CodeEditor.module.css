@@ -698,6 +698,76 @@
   flex-wrap: wrap;
 }
 
+.aiPatchReviewCard {
+  margin: 10px;
+  margin-top: 0;
+  border: 1px solid var(--ant-color-info-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ant-color-info-bg) 70%, transparent);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aiPatchReviewHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.aiPatchReviewTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ant-color-text);
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+}
+
+.aiPatchReviewMeta {
+  font-size: 11px;
+  color: var(--ant-color-text-secondary);
+}
+
+.aiPatchRangeList {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.aiPatchRangeButton {
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: 999px;
+  background: var(--ant-color-bg-container);
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--ant-color-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.aiPatchRangeButtonActive {
+  border-color: var(--ant-color-success-border);
+  background: color-mix(in srgb, var(--ant-color-success-bg) 78%, transparent);
+  color: var(--ant-color-success-text);
+}
+
+.aiPatchReviewSummary {
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+  line-height: 1.5;
+}
+
+.aiPatchReviewActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .hotkeyRow {
   display: grid;
   grid-template-columns: 200px 1fr auto;

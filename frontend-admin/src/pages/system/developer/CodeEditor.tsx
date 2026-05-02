@@ -95,6 +95,12 @@ type PendingDraftChunk = {
 	createdAt: number;
 };
 
+type PendingRangeItem = {
+	key: string;
+	range: DraftLineRange;
+	label: string;
+};
+
 type HotkeyAction = "save" | "find" | "replaceFocus" | "goto" | "askAi" | "continueAi" | "commandPalette";
 
 type HotkeyConfig = Record<HotkeyAction, string>;
@@ -118,6 +124,26 @@ type SearchReplaceBlock = {
 	search: string;
 	replace: string;
 };
+
+function buildRangeKey(range: DraftLineRange): string {
+	return `${Number(range.fromLine || 1)}:${Number(range.toLine || 1)}:${String(range.action || "edit")}`;
+}
+
+function applySelectedRangesFromChunk(chunk: PendingDraftChunk, selectedRanges: DraftLineRange[]): string {
+	if (!chunk || !Array.isArray(selectedRanges) || selectedRanges.length === 0) {
+		return String(chunk?.before || "");
+	}
+	const beforeLines = String(chunk.before || "").split("\n");
+	const afterLines = String(chunk.after || "").split("\n");
+	const sorted = [...selectedRanges].sort((a, b) => Number(b.fromLine || 1) - Number(a.fromLine || 1));
+	for (const range of sorted) {
+		const from = Math.max(1, parseLineNumber(range.fromLine, 1));
+		const to = Math.max(from, parseLineNumber(range.toLine, from));
+		const replacement = afterLines.slice(from - 1, to);
+		beforeLines.splice(from - 1, (to - from) + 1, ...replacement);
+	}
+	return beforeLines.join("\n");
+}
 
 const setDraftHighlights = StateEffect.define<DraftLineRange[]>();
 
@@ -711,6 +737,7 @@ export default function CodeEditor() {
 	const [aiSummary, setAiSummary] = useState("");
 
 	const [pendingChunk, setPendingChunk] = useState<PendingDraftChunk | null>(null);
+	const [pendingRangeSelection, setPendingRangeSelection] = useState<Record<string, boolean>>({});
 	const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
 	const [historyFilter, setHistoryFilter] = useState<AiHistoryFilter>("all");
 	const [historyKeyword, setHistoryKeyword] = useState("");
@@ -794,14 +821,55 @@ export default function CodeEditor() {
 		});
 	}, [aiRequestHistory, historyFilter, historyKeyword]);
 
+	const pendingRangeItems = useMemo<PendingRangeItem[]>(() => {
+		const ranges = pendingChunk?.ranges || [];
+		return ranges.map((range) => {
+			const from = Math.max(1, Number(range.fromLine || 1));
+			const to = Math.max(from, Number(range.toLine || from));
+			const marker = range.action === "add" ? "+" : range.action === "delete" ? "-" : "~";
+			const label = from === to ? `${marker}L${from}` : `${marker}L${from}-L${to}`;
+			return {
+				key: buildRangeKey(range),
+				range,
+				label,
+			};
+		});
+	}, [pendingChunk]);
+
+	const selectedPendingRanges = useMemo<DraftLineRange[]>(() => {
+		if (!pendingChunk) return [];
+		return pendingRangeItems
+			.filter((item) => pendingRangeSelection[item.key] !== false)
+			.map((item) => item.range);
+	}, [pendingChunk, pendingRangeItems, pendingRangeSelection]);
+
+	const pendingPreviewCode = useMemo(() => {
+		if (!pendingChunk) return "";
+		return applySelectedRangesFromChunk(pendingChunk, selectedPendingRanges);
+	}, [pendingChunk, selectedPendingRanges]);
+
+	const pendingSelectedCount = selectedPendingRanges.length;
+
 	useEffect(() => {
 		currentDraftRef.current = aiLastCode;
 	}, [aiLastCode]);
 
 	useEffect(() => {
+		if (!pendingChunk) {
+			setPendingRangeSelection({});
+			return;
+		}
+		const next: Record<string, boolean> = {};
+		for (const range of pendingChunk.ranges || []) {
+			next[buildRangeKey(range)] = true;
+		}
+		setPendingRangeSelection(next);
+	}, [pendingChunk]);
+
+	useEffect(() => {
 		const view = editorRef.current;
 		if (!view) return;
-		const ranges = pendingChunk?.ranges || [];
+		const ranges = selectedPendingRanges;
 		const firstRange = ranges[0];
 		if (firstRange && view?.state?.doc) {
 			const totalLines = Math.max(1, Number(view.state.doc.lines || 1));
@@ -817,7 +885,7 @@ export default function CodeEditor() {
 			return;
 		}
 		view.dispatch({ effects: setDraftHighlights.of(ranges) });
-	}, [pendingChunk]);
+	}, [selectedPendingRanges]);
 
 	useEffect(() => {
 		try {
@@ -1179,6 +1247,57 @@ export default function CodeEditor() {
 					: `${marker}L${range.fromLine}-L${range.toLine}`;
 			})
 			.join(", ");
+	};
+
+	const togglePendingRange = (key: string) => {
+		setPendingRangeSelection((prev) => ({
+			...prev,
+			[key]: !(prev[key] !== false),
+		}));
+	};
+
+	const selectAllPendingRanges = () => {
+		const next: Record<string, boolean> = {};
+		for (const item of pendingRangeItems) {
+			next[item.key] = true;
+		}
+		setPendingRangeSelection(next);
+	};
+
+	const clearPendingRangeSelection = () => {
+		const next: Record<string, boolean> = {};
+		for (const item of pendingRangeItems) {
+			next[item.key] = false;
+		}
+		setPendingRangeSelection(next);
+	};
+
+	const applySelectedPendingRanges = () => {
+		if (!pendingChunk) return;
+		if (pendingSelectedCount <= 0) {
+			message.warning(t("system.developer.ai.pendingApply", "Vui lòng chọn ít nhất 1 vùng thay đổi để áp dụng."));
+			return;
+		}
+		applyDraftFromAi(pendingPreviewCode);
+		setPendingChunk(null);
+		message.success(t("system.developer.ai.generatedSuccess"));
+	};
+
+	const dropSelectedPendingRanges = () => {
+		if (!pendingChunk) return;
+		const keep = pendingRangeItems
+			.filter((item) => pendingRangeSelection[item.key] === false)
+			.map((item) => item.range);
+		if (keep.length === 0) {
+			setPendingChunk(null);
+			message.info(t("system.developer.ai.pendingApply", "Đã bỏ toàn bộ thay đổi đang chờ."));
+			return;
+		}
+		setPendingChunk({
+			...pendingChunk,
+			after: applySelectedRangesFromChunk(pendingChunk, keep),
+			ranges: keep,
+		});
 	};
 
 	const addAiMessage = (role: AiRole, content: string) => {
@@ -1770,10 +1889,47 @@ export default function CodeEditor() {
 										)}
 									</div>
 								</div>
+								{pendingChunk && (
+									<div className={styles.aiPatchReviewCard}>
+										<div className={styles.aiPatchReviewHead}>
+											<div className={styles.aiPatchReviewTitle}>
+												{devUiText("AI Patch Review", "AI Patch Review", "AI Patch Review")}
+											</div>
+											<div className={styles.aiPatchReviewMeta}>
+												{pendingSelectedCount}/{pendingRangeItems.length} {devUiText("vùng được chọn", "ranges selected", "已选范围")}
+											</div>
+										</div>
+										<div className={styles.aiPatchRangeList}>
+											{pendingRangeItems.map((item) => {
+												const active = pendingRangeSelection[item.key] !== false;
+												return (
+													<button
+														type="button"
+														key={item.key}
+														onClick={() => togglePendingRange(item.key)}
+														className={`${styles.aiPatchRangeButton} ${active ? styles.aiPatchRangeButtonActive : ""}`}
+													>
+														<span>{item.label}</span>
+														<span>{active ? devUiText("Giữ", "Keep", "保留") : devUiText("Bỏ", "Drop", "移除")}</span>
+													</button>
+												);
+											})}
+										</div>
+										<div className={styles.aiPatchReviewSummary}>
+											{formatRangesText(selectedPendingRanges)}
+										</div>
+										<div className={styles.aiPatchReviewActions}>
+											<Button onClick={selectAllPendingRanges}>{devUiText("Chọn hết", "Select all", "全选")}</Button>
+											<Button onClick={clearPendingRangeSelection}>{devUiText("Bỏ chọn hết", "Clear all", "清除")}</Button>
+											<Button onClick={dropSelectedPendingRanges} danger>{devUiText("Loại phần đã chọn", "Drop selected", "移除所选")}</Button>
+											<Button type="primary" onClick={applySelectedPendingRanges}>{devUiText("Áp dụng phần đã chọn", "Apply selected", "应用所选")}</Button>
+										</div>
+									</div>
+								)}
 								<CodeMirror
 									onCreateEditor={(view) => {
 										editorRef.current = view;
-										view.dispatch({ effects: setDraftHighlights.of(pendingChunk?.ranges || []) });
+										view.dispatch({ effects: setDraftHighlights.of(selectedPendingRanges) });
 										updateDraftIndicators(view);
 									}}
 									aiAssistantContextType="code"
@@ -1788,6 +1944,7 @@ export default function CodeEditor() {
 										setAiLastCode(value);
 										setCodeContent(value);
 										setPendingChunk(null);
+										setPendingRangeSelection({});
 										const view = editorRef.current;
 										if (view) {
 											updateDraftIndicators(view);
