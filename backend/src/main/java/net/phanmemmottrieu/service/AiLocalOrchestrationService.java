@@ -36,6 +36,12 @@ public class AiLocalOrchestrationService {
         public List<String> planSteps = new ArrayList<>();
         public Map<String, Object> toolStats = new LinkedHashMap<>();
         public String compressedContextBlock = "";
+        /**
+         * OpenDevin AgentFinishAction pattern: when speculative execution fully answers a
+         * simple stats/count request, this field holds the ready-made response.
+         * If non-blank the controller should emit it directly and skip the full LLM call.
+         */
+        public String earlyFinishResponse = "";
 
         public static OrchestrationResult disabled() {
             OrchestrationResult out = new OrchestrationResult();
@@ -135,6 +141,18 @@ public class AiLocalOrchestrationService {
         out.toolStats.put("preferredModelHint", out.preferredModelHint);
         out.toolStats.put("speculativeExecuted", out.speculativeExecuted);
         out.toolStats.put("speculativeOperation", out.speculativeOperation);
+        // OpenDevin AgentFinishAction pattern: if speculative result fully answers a
+        // simple stats/count query, set earlyFinishResponse so the controller can skip
+        // the full LLM call entirely (AgentFinishAction equivalent).
+        if (out.speculativeExecuted && speculative != null
+                && speculative.data != null && !speculative.data.isEmpty()
+                && isSimpleStatsQuery(safeMessage)) {
+            out.earlyFinishResponse = buildEarlyFinishFromSpeculative(speculative.operation, speculative.data);
+            if (!out.earlyFinishResponse.isBlank()) {
+                out.toolStats.put("earlyFinish", true);
+                out.toolStats.put("earlyFinishSource", speculative.operation);
+            }
+        }
         if (speculative != null && speculative.data != null && !speculative.data.isEmpty()) {
             out.toolStats.put("speculativeData", speculative.data);
         }
@@ -515,5 +533,54 @@ public class AiLocalOrchestrationService {
     private static class AttachmentDigest {
         final List<String> items = new ArrayList<>();
         final Map<String, Object> stats = new LinkedHashMap<>();
+    }
+
+    /**
+     * OpenDevin AgentFinishAction pattern: detect whether the user message is a
+     * simple statistics / count query that speculative execution can fully answer
+     * without needing a full LLM round-trip.
+     */
+    private boolean isSimpleStatsQuery(String message) {
+        String m = message.toLowerCase(Locale.ROOT);
+        return m.contains("thống kê") || m.contains("thong ke")
+            || m.contains("bao nhiêu") || m.contains("bao nhieu")
+            || m.contains("có bao nhiêu") || m.contains("co bao nhieu")
+            || m.contains("tổng số") || m.contains("tong so")
+            || m.contains("đếm") || m.contains("dem ")
+            || m.contains("count") || m.contains("how many")
+            || m.contains("summary") || m.contains("tóm tắt")
+            || m.contains("tom tat") || m.contains("analyze") || m.contains("phân tích")
+            || m.contains("phan tich");
+    }
+
+    /**
+     * Builds a plain-language early-finish response from speculative execution data.
+     * Returns blank if the data is not rich enough to stand alone.
+     */
+    private String buildEarlyFinishFromSpeculative(String operation, Map<String, Object> data) {
+        if (data == null || data.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        if ("json_stats".equals(operation)) {
+            int total = toInt(data.get("totalTopLevelKeys")) + toInt(data.get("totalArrayElements"));
+            if (total == 0 && data.containsKey("fileCount")) {
+                total = toInt(data.get("fileCount"));
+            }
+            if (!data.isEmpty()) {
+                sb.append("**Kết quả phân tích cục bộ (không cần gọi AI):**\n");
+                for (Map.Entry<String, Object> e : data.entrySet()) {
+                    sb.append("- ").append(e.getKey()).append(": ").append(e.getValue()).append("\n");
+                }
+                sb.append("\n_[earlyFinish=json_stats — đã phân tích tại máy chủ, tiết kiệm token]_");
+            }
+        } else if ("code_profile".equals(operation)) {
+            if (!data.isEmpty()) {
+                sb.append("**Kết quả phân tích code cục bộ:**\n");
+                for (Map.Entry<String, Object> e : data.entrySet()) {
+                    sb.append("- ").append(e.getKey()).append(": ").append(e.getValue()).append("\n");
+                }
+                sb.append("\n_[earlyFinish=code_profile — đã phân tích tại máy chủ, tiết kiệm token]_");
+            }
+        }
+        return sb.toString().trim();
     }
 }

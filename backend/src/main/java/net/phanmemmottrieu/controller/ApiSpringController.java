@@ -57,6 +57,7 @@ import net.phanmemmottrieu.service.AiConversationContextService;
 import net.phanmemmottrieu.service.MenuQualityGateService;
 import net.phanmemmottrieu.service.TokenOptimizationService;
 import net.phanmemmottrieu.service.AiLocalOrchestrationService;
+import net.phanmemmottrieu.service.AiPromptBudgetService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -143,6 +144,12 @@ public class ApiSpringController {
     private final MenuQualityGateService menuQualityGateService;
     private final TokenOptimizationService tokenOptimizationService;
     private final AiLocalOrchestrationService aiLocalOrchestrationService;
+    private final AiPromptBudgetService aiPromptBudgetService;
+
+    // In-memory ring buffer for prompt-budget debug (max 200 entries, auto-rotated)
+    private static final int PROMPT_DEBUG_LOG_MAX = 200;
+    private final ConcurrentHashMap<String, Map<String, Object>> aiPromptDebugLog = new ConcurrentHashMap<>(256);
+    private final java.util.concurrent.atomic.AtomicInteger promptDebugInsertOrder = new java.util.concurrent.atomic.AtomicInteger(0);
 
     private static final int MAX_CODE_CHARS = 500_000;
     private static final int MAX_MESSAGE_CHARS = 20_000;
@@ -248,6 +255,11 @@ public class ApiSpringController {
 
     @Value("${ai.assistant.code.chaining-threshold-chars:220000}")
     private int aiAssistantCodeChainingThresholdChars;
+
+    // OpenDevin MAX_OUTPUT_LENGTH pattern: cap each chaining step's output before feeding into the next prompt
+    // Prevents one large chaining step from amplifying token cost in subsequent AI calls
+    @Value("${ai.assistant.chaining.max-step-output-chars:8000}")
+    private int aiAssistantChainingMaxStepOutputChars;
 
     @Value("${ai.assistant.code.chaining-cache.enabled:true}")
     private boolean aiAssistantCodeChainingCacheEnabled;
@@ -448,7 +460,8 @@ public class ApiSpringController {
             AiConversationContextService aiConversationContextService,
             MenuQualityGateService menuQualityGateService,
             TokenOptimizationService tokenOptimizationService,
-            AiLocalOrchestrationService aiLocalOrchestrationService
+            AiLocalOrchestrationService aiLocalOrchestrationService,
+            AiPromptBudgetService aiPromptBudgetService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -475,6 +488,7 @@ public class ApiSpringController {
         this.menuQualityGateService = menuQualityGateService;
         this.tokenOptimizationService = tokenOptimizationService;
         this.aiLocalOrchestrationService = aiLocalOrchestrationService;
+        this.aiPromptBudgetService = aiPromptBudgetService;
     }
 
     @PostMapping(value = {"/ai-code-stream", "/api/ai-code-stream"})
@@ -876,6 +890,15 @@ public class ApiSpringController {
                 codeTelemetry.put("attachments", imageParts.size());
                 codeTelemetry.put("elapsedMs", Math.max(0L, (System.currentTimeMillis() - startedAtMs)));
                 apiCallInstrumentationService.recordAiTelemetry(codeTelemetry);
+
+                // OpenDevin state.num_of_chars pattern: accumulate session chars per flow
+                boolean codeSessionOverBudget = aiPromptBudgetService.recordAndCheckSessionBudget(
+                    appId + ":code", promptTokens * 4, completionTokens * 4);
+                if (codeSessionOverBudget) {
+                    long accumulated = aiPromptBudgetService.getSessionAccumulatedChars(appId + ":code");
+                    logger.warn("AI_SESSION_BUDGET_EXCEEDED appId={} requestId={} accumulatedChars={} flow=code-stream",
+                        appId, requestId, accumulated);
+                }
 
                 Map<String, Object> codeTurnMeta = new LinkedHashMap<>();
                 codeTurnMeta.put("source", "aiCodeStream");
@@ -2856,14 +2879,11 @@ public class ApiSpringController {
     }
 
     private int estimateTokens(String text) {
-        String value = String.valueOf(text == null ? "" : text);
-        if (value.isBlank()) return 0;
-        return Math.max(1, (int) Math.ceil(value.length() / 4.0));
+        return aiPromptBudgetService.estimateTokensByChars(text, 4);
     }
 
     private int estimateTokensByChars(int chars) {
-        if (chars <= 0) return 0;
-        return Math.max(1, (int) Math.ceil(chars / 4.0));
+        return aiPromptBudgetService.estimateTokensByChars(chars, 4);
     }
 
     private record ModelPrice(double inputUsdPer1k, double outputUsdPer1k) {
@@ -3985,6 +4005,7 @@ public class ApiSpringController {
         try {
             UserAuthContext authCtx = extractUserAuthContext();
             String appId = String.valueOf(params.getOrDefault("appId", "")).trim();
+            String requestId = Long.toHexString(System.currentTimeMillis()) + "-" + appId + "-chat";
             String message = String.valueOf(params.getOrDefault("message", "")).trim();
             String currentCode = String.valueOf(params.getOrDefault("currentCode", "")).trim();
             String language = String.valueOf(params.getOrDefault("language", "javascript")).trim();
@@ -4089,8 +4110,10 @@ public class ApiSpringController {
                         "status", "running"
                     ));
                     chainedSchemaSummary = runMenuChainingStep1(attachments, appId);
+                    // OpenDevin MAX_OUTPUT_LENGTH pattern: cap step output before feeding into next prompt
+                    chainedSchemaSummary = truncateMiddle(chainedSchemaSummary, Math.max(3000, aiAssistantChainingMaxStepOutputChars));
                     if (!chainedSchemaSummary.isBlank()) {
-                        logger.info("AI Assistant chaining step1 completed: {} chars schema summary for appId={}", chainedSchemaSummary.length(), appId);
+                        logger.info("AI Assistant chaining step1 completed: {} chars schema summary (capped at {}) for appId={}", chainedSchemaSummary.length(), aiAssistantChainingMaxStepOutputChars, appId);
                         emitAiAssistantChatChunk(appId, Map.of(
                             "stage", "chaining_step1_done",
                             "message", uiTextByLang(
@@ -4124,6 +4147,8 @@ public class ApiSpringController {
                     ));
                     CodeChainingResult codeChainResult = runCodeChainingStep1(currentCode, message, language, appId, pName);
                     chainedCodeSummary = codeChainResult.summary;
+                    // OpenDevin MAX_OUTPUT_LENGTH pattern: cap step output before feeding into next prompt
+                    chainedCodeSummary = truncateMiddle(chainedCodeSummary, Math.max(3000, aiAssistantChainingMaxStepOutputChars));
                     if (!chainedCodeSummary.isBlank()) {
                         emitAiAssistantChatChunk(appId, Map.of(
                             "stage", "code_chaining_step1_done",
@@ -4257,6 +4282,41 @@ public class ApiSpringController {
                 logger.warn("AI Assistant local orchestration failed, continue with baseline flow: {}", orchestrationEx.getMessage());
             }
 
+            // OpenDevin AgentFinishAction pattern: if orchestration produced an early-finish
+            // response (speculative execution fully answered a stats/count query locally),
+            // emit it directly and skip the full LLM call to save tokens.
+            if (orchestrationResult != null
+                    && orchestrationResult.earlyFinishResponse != null
+                    && !orchestrationResult.earlyFinishResponse.isBlank()) {
+                logger.info("AI_EARLY_FINISH appId={} requestId={} operation={} — skipping full LLM call",
+                    appId, requestId, orchestrationResult.speculativeOperation);
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "early_finish",
+                    "message", "Đã phân tích cục bộ, không cần gọi AI",
+                    "responseMode", responseMode,
+                    "status", "running"
+                ));
+                String earlyText = orchestrationResult.earlyFinishResponse;
+                emitTextAsAiAssistantChunks(appId, earlyText, responseMode, uiLang);
+
+                Map<String, Object> earlyTelemetry = new java.util.LinkedHashMap<>();
+                earlyTelemetry.put("appId", appId);
+                earlyTelemetry.put("requestId", requestId);
+                earlyTelemetry.put("speculativeExecuted", true);
+                earlyTelemetry.put("speculativeOperation", orchestrationResult.speculativeOperation);
+                earlyTelemetry.put("earlyFinish", true);
+                earlyTelemetry.put("flow", "ai-assistant-chat");
+                apiCallInstrumentationService.recordAiTelemetry(earlyTelemetry);
+
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "done",
+                    "message", "Phân tích hoàn tất (early finish)",
+                    "responseMode", responseMode,
+                    "status", "done"
+                ));
+                return;
+            }
+
             List<Map<String, Object>> messages = buildAiAssistantChatMessages(appId, message, currentCode, language, effectiveContextType,
                 effectiveTaskType, responseMode, attachments, continuityMemory, globalContext, pName, pType, continuityScopeKey, pendingQuestions);
             emitAiAssistantChatDebug(appId, buildAiAssistantDebugPayload(
@@ -4374,6 +4434,11 @@ public class ApiSpringController {
             };
 
             String githubRaw = "";
+            int rawPayloadCharsBeforeNorm = String.valueOf(message).length()
+                + String.valueOf(currentCode).length()
+                + String.valueOf(continuityMemory).length()
+                + String.valueOf(aggregatedReusableMemory).length()
+                + String.valueOf(globalContext).length();
             int estimatedPayloadChars = estimateTotalAiAssistantPayloadChars(
                 attachments,
                 message,
@@ -4381,6 +4446,8 @@ public class ApiSpringController {
                 continuityMemory,
                 aggregatedReusableMemory,
                 globalContext);
+            recordPromptDebugEntry(requestId, rawPayloadCharsBeforeNorm, estimatedPayloadChars,
+                String.valueOf(params.getOrDefault("model", "gemini")), "ai-assistant-chat", false);
             boolean directProviderRoute = shouldDirectProviderRouteForLargeMenu(
                 effectiveContextType,
                 effectiveTaskType,
@@ -5070,6 +5137,7 @@ public class ApiSpringController {
             chatTelemetry.put("inputTokens", inputTokensEstimate);
             chatTelemetry.put("outputChars", outputCharsEstimate);
             chatTelemetry.put("outputTokens", outputTokensEstimate);
+            chatTelemetry.put("requestId", requestId);
             chatTelemetry.put("usedDirectProviderRoute", usedDirectProviderRoute);
             chatTelemetry.put("usedQuickProbe", usedQuickPrimaryProbe);
             chatTelemetry.put("skippedQuickProbe", skipPrimaryProbeForHugePayload);
@@ -5086,6 +5154,15 @@ public class ApiSpringController {
             chatTelemetry.put("speculativeExecuted", orchestrationResult != null && orchestrationResult.speculativeExecuted);
             chatTelemetry.put("speculativeOperation", orchestrationResult == null ? "none" : orchestrationResult.speculativeOperation);
             apiCallInstrumentationService.recordAiTelemetry(chatTelemetry);
+
+            // OpenDevin state.num_of_chars pattern: accumulate session chars and warn if over budget
+            boolean sessionOverBudget = aiPromptBudgetService.recordAndCheckSessionBudget(
+                appId + ":chat", inputCharsEstimate, outputCharsEstimate);
+            if (sessionOverBudget) {
+                long accumulated = aiPromptBudgetService.getSessionAccumulatedChars(appId + ":chat");
+                logger.warn("AI_SESSION_BUDGET_EXCEEDED appId={} requestId={} accumulatedChars={} flow=chat",
+                    appId, requestId, accumulated);
+            }
 
             response.set("code", 200);
             response.set("success", true);
@@ -8527,12 +8604,30 @@ public class ApiSpringController {
             String continuityMemory,
             String aggregatedReusableMemory,
             String globalContext) {
-        return Math.max(0, String.valueOf(message == null ? "" : message).length())
-                + Math.max(0, String.valueOf(currentCode == null ? "" : currentCode).length())
-                + Math.max(0, String.valueOf(continuityMemory == null ? "" : continuityMemory).length())
-                + Math.max(0, String.valueOf(aggregatedReusableMemory == null ? "" : aggregatedReusableMemory).length())
-                + Math.max(0, String.valueOf(globalContext == null ? "" : globalContext).length())
-                + estimateAttachmentTextChars(attachments);
+        String msg = String.valueOf(message == null ? "" : message);
+        String code = String.valueOf(currentCode == null ? "" : currentCode);
+        String continuity = String.valueOf(continuityMemory == null ? "" : continuityMemory);
+        String aggregated = String.valueOf(aggregatedReusableMemory == null ? "" : aggregatedReusableMemory);
+        String global = String.valueOf(globalContext == null ? "" : globalContext);
+
+        msg = aiPromptBudgetService.normalizePrompt(msg, 20000);
+        code = aiPromptBudgetService.normalizePrompt(code, 400000);
+        continuity = aiPromptBudgetService.normalizePrompt(continuity, 120000);
+        aggregated = aiPromptBudgetService.normalizePrompt(aggregated, 120000);
+        global = aiPromptBudgetService.normalizePrompt(global, 120000);
+
+        int total = Math.max(0, msg.length()) + Math.max(0, code.length()) + Math.max(0, global.length());
+
+        if (!continuity.isBlank()) {
+            total += continuity.length();
+        }
+
+        // continuityMemory may already embed aggregatedReusableMemory via SHARED_REUSE_MEMORY block.
+        if (!aggregated.isBlank() && !continuity.contains(aggregated)) {
+            total += aggregated.length();
+        }
+
+        return total + estimateAttachmentTextChars(attachments);
     }
 
     private int estimateAttachmentTextChars(List<Map<String, Object>> attachments) {
@@ -12619,8 +12714,81 @@ public class ApiSpringController {
 
         dashboard.put("timestamp", System.currentTimeMillis());
         dashboard.put("user", authCtx.principalId);
+        dashboard.put("promptBudgetProfile", aiPromptBudgetService.getProfile());
 
         return ResponseEntity.ok(dashboard);
+    }
+
+    // -------------------------------------------------------
+    // Debug endpoints: prompt before/after chars per requestId
+    // -------------------------------------------------------
+
+    @GetMapping({"/ai-prompt-debug", "/api/ai-prompt-debug"})
+    public ResponseEntity<Map<String, Object>> listAiPromptDebug(
+            @RequestParam(required = false, defaultValue = "50") int limit) {
+        int safeLimit = Math.max(1, Math.min(200, limit));
+        java.util.List<Map<String, Object>> entries = aiPromptDebugLog.values()
+                .stream()
+                .sorted(java.util.Comparator.comparingLong(
+                        e -> -((Number) e.getOrDefault("timestamp", 0L)).longValue()))
+                .limit(safeLimit)
+                .collect(java.util.stream.Collectors.toList());
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("count", entries.size());
+        result.put("entries", entries);
+        result.put("profile", aiPromptBudgetService.getProfile());
+        // Prune stale session budget entries opportunistically on each debug list call
+        int pruned = aiPromptBudgetService.pruneStaleSessionBudgets();
+        if (pruned > 0) {
+            result.put("prunedStaleSessionBudgets", pruned);
+        }
+        return ResponseEntity.ok(result);
+    }
+
+    @GetMapping({"/ai-prompt-debug/{requestId}", "/api/ai-prompt-debug/{requestId}"})
+    public ResponseEntity<Map<String, Object>> getAiPromptDebugEntry(
+            @org.springframework.web.bind.annotation.PathVariable String requestId) {
+        Map<String, Object> entry = aiPromptDebugLog.get(requestId);
+        if (entry == null) {
+            Map<String, Object> notFound = new LinkedHashMap<>();
+            notFound.put("found", false);
+            notFound.put("requestId", requestId);
+            return ResponseEntity.ok(notFound);
+        }
+        Map<String, Object> result = new LinkedHashMap<>(entry);
+        result.put("found", true);
+        return ResponseEntity.ok(result);
+    }
+
+    /** Record a prompt normalisation event so the debug endpoints can surface it. */
+    private void recordPromptDebugEntry(String requestId, int originalChars, int normalizedChars,
+            String model, String provider, boolean guardTriggered) {
+        if (requestId == null || requestId.isBlank()) return;
+        // Evict oldest entries when at capacity
+        if (aiPromptDebugLog.size() >= PROMPT_DEBUG_LOG_MAX) {
+            aiPromptDebugLog.values()
+                    .stream()
+                    .min(java.util.Comparator.comparingLong(
+                            e -> ((Number) e.getOrDefault("_insertOrder", 0L)).longValue()))
+                    .map(e -> (String) e.get("requestId"))
+                    .ifPresent(aiPromptDebugLog::remove);
+        }
+        int savedChars = Math.max(0, originalChars - normalizedChars);
+        int savedTokens = estimateTokensByChars(savedChars);
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("requestId", requestId);
+        entry.put("originalChars", originalChars);
+        entry.put("normalizedChars", normalizedChars);
+        entry.put("savedChars", savedChars);
+        entry.put("savedTokens", savedTokens);
+        entry.put("reductionPct", originalChars > 0
+                ? Math.round(savedChars * 1000.0 / originalChars) / 10.0 : 0.0);
+        entry.put("model", model);
+        entry.put("provider", provider);
+        entry.put("guardTriggered", guardTriggered);
+        entry.put("timestamp", System.currentTimeMillis());
+        entry.put("_insertOrder", (long) promptDebugInsertOrder.incrementAndGet());
+        aiPromptDebugLog.put(requestId, entry);
     }
 
     @PostMapping({"/ai-orchestration-preview", "/api/ai-orchestration-preview"})

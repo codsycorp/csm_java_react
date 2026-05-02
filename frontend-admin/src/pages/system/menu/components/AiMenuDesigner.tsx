@@ -442,6 +442,92 @@ function requestMentionsDeleteAction(text: string): boolean {
   return /(\bxoa\b|\bxóa\b|\bdelete\b|\bremove\b|\bclear\b)/i.test(normalized);
 }
 
+function normalizeIconIntentText(raw: string): string {
+  return String(raw || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, " ")
+    .replace(/[^a-z0-9\s\u4e00-\u9fff]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function requestSuggestsMenuIconOnlyChange(text: string): boolean {
+  const normalized = normalizeIconIntentText(text);
+  if (!normalized) return false;
+
+  const hasIconIntent = /(\bicon\b|\bm icons\b|\bm_icons\b|\bbieu tuong\b|\bicon menu\b|图标)/i.test(normalized);
+  if (!hasIconIntent) return false;
+
+  const hasMenuIntent = /(\bmenu\b|\bdanh muc\b|\bchuc nang\b|\bmodule\b|菜单|功能)/i.test(normalized);
+  if (!hasMenuIntent) return false;
+
+  const hasComplexIntent = /(\btrigger\b|\btable\b|\btable_name\b|\bf_name\b|\bf_types\b|\bdelete\b|\bremove\b|\bxoa\b|\brefactor\b|\bmigrate\b|\btranslate\b|\blabel_en\b|\blabel_zh\b|\bbo sung truong\b|\badd field\b)/i.test(normalized);
+  return !hasComplexIntent;
+}
+
+function inferMenuIconClass(node: MenuItemType): string {
+  const raw = (node || {}) as any;
+  const hasChildren = Array.isArray(raw.children) && raw.children.length > 0;
+  const signal = normalizeIconIntentText([
+    raw.label,
+    raw.label_vi,
+    raw.label_en,
+    raw.label_zh,
+    raw.name,
+    raw.table_name,
+    raw.report_name,
+  ].filter(Boolean).join(" "));
+
+  const rules: Array<{ pattern: RegExp; icon: string }> = [
+    { pattern: /(danh muc|category|catalog|分类|目录)/i, icon: "fa fa-folder-open" },
+    { pattern: /(danh sach|list|列表)/i, icon: "fa fa-list" },
+    { pattern: /(xe|bus|car|vehicle|车辆|客车)/i, icon: "fa fa-bus" },
+    { pattern: /(gia ve|ve xe|ticket|fare|票价|车票)/i, icon: "fa fa-ticket" },
+    { pattern: /(gio|lich|time|schedule|时刻|时间)/i, icon: "fa fa-clock-o" },
+    { pattern: /(gui hang|hang gui|shipping|delivery|物流|货运)/i, icon: "fa fa-truck" },
+    { pattern: /(bao cao|report|analysis|统计|报表)/i, icon: "fa fa-bar-chart" },
+    { pattern: /(cau hinh|cai dat|config|setting|设置|配置)/i, icon: "fa fa-cog" },
+    { pattern: /(nguoi dung|user|account|用户|账号)/i, icon: "fa fa-users" },
+    { pattern: /(phan quyen|vai tro|role|permission|权限|角色)/i, icon: "fa fa-shield" },
+    { pattern: /(dashboard|tong quan|overview|概览)/i, icon: "fa fa-dashboard" },
+  ];
+
+  for (const rule of rules) {
+    if (rule.pattern.test(signal)) return rule.icon;
+  }
+  return hasChildren ? "fa fa-folder-open-o" : "fa fa-file-text-o";
+}
+
+function applyLocalMenuIconDefaults(menus: MenuItemType[]): { menus: MenuItemType[]; updatedCount: number; totalCount: number } {
+  let updatedCount = 0;
+  let totalCount = 0;
+
+  const visit = (nodes: MenuItemType[]): MenuItemType[] => {
+    return (Array.isArray(nodes) ? nodes : []).map((node) => {
+      const next = { ...(node as any) } as MenuItemType;
+      totalCount += 1;
+
+      const currentIcon = String((next as any).m_icons || "").trim();
+      if (!currentIcon) {
+        (next as any).m_icons = inferMenuIconClass(next);
+        updatedCount += 1;
+      }
+
+      if (Array.isArray((next as any).children) && (next as any).children.length > 0) {
+        (next as any).children = visit((next as any).children as MenuItemType[]);
+      }
+      return next;
+    });
+  };
+
+  return {
+    menus: visit(Array.isArray(menus) ? menus : []),
+    updatedCount,
+    totalCount,
+  };
+}
+
 function normalizeScopeToken(raw: unknown): string {
   return String(raw || "").trim().toLowerCase();
 }
@@ -4798,6 +4884,107 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     if (!inputRequest.trim()) {
       message.warning(t("system.menu.aiDesigner.enterRequirement") || "Hãy nhập yêu cầu khách hàng");
       return;
+    }
+
+    if (!promptOverride && requestSuggestsMenuIconOnlyChange(inputRequest)) {
+      setLoading(true);
+      try {
+        let baseMenus = decodedCurrentMenus;
+        if (!Array.isArray(baseMenus) || baseMenus.length === 0) {
+          const fromEditor = extractMenusFromEditorDraftText(editableAiDraftText);
+          if (fromEditor.length > 0) baseMenus = fromEditor;
+        }
+        if (!Array.isArray(baseMenus) || baseMenus.length === 0) {
+          const fromRequest = extractMenusFromEditorDraftText(inputRequest);
+          if (fromRequest.length > 0) baseMenus = fromRequest;
+        }
+
+        if (Array.isArray(baseMenus) && baseMenus.length > 0) {
+          const normalizedBaseMenus = normalizeMenuList(baseMenus);
+          const iconPatch = applyLocalMenuIconDefaults(normalizedBaseMenus);
+          const finalMenus = normalizeMenuList(iconPatch.menus);
+
+          const output = {
+            menu: finalMenus,
+            notes: [
+              uiText(
+                "Đã chạy local fast-path bổ sung icon, không gọi AI model",
+                "Local fast-path icon completion was applied without calling AI model",
+                "已执行本地图标补全快速路径，未调用 AI 模型",
+              ),
+            ],
+            warnings: [],
+            coverage_modules: [],
+            coverage_tables: [],
+            unresolved_assumptions: [],
+          };
+
+          setAiRealtimeLogs([]);
+          setAiRuntimeModel("local-icon-fast-path");
+          setAiStopReason("");
+          setShowCoverageDetails(false);
+          setAiOutputMeta({ coverageModules: [], coverageTables: [], unresolvedAssumptions: [] });
+          setAiMenus(finalMenus);
+          setAiResultText(JSON.stringify(output, null, 2));
+          setEditableAiDraftText(JSON.stringify(output, null, 2));
+          setAiProgress({
+            status: "completed",
+            stage: "local_icon_fast_path",
+            message: uiText(
+              `Đã bổ sung icon local cho ${iconPatch.updatedCount}/${iconPatch.totalCount} menu`,
+              `Applied local icon fill for ${iconPatch.updatedCount}/${iconPatch.totalCount} menus`,
+              `已为 ${iconPatch.updatedCount}/${iconPatch.totalCount} 个菜单补全本地图标`,
+            ),
+            current: 1,
+            total: 1,
+            percent: 100,
+          });
+          appendAiRealtimeLogs([{
+            level: "success",
+            message: uiText(
+              "Hoàn tất local fast-path icon fill (0 token AI)",
+              "Local fast-path icon fill completed (0 AI tokens)",
+              "本地快速路径图标补全完成（0 AI token）",
+            ),
+            detail: `updated=${iconPatch.updatedCount}, total=${iconPatch.totalCount}`,
+            fingerprint: buildAiRealtimeFingerprint(["local_icon_fast_path", iconPatch.updatedCount, iconPatch.totalCount]),
+          }]);
+
+          try {
+            const command = recordId ? "update" : "create";
+            const accumulatedHistory = buildAccumulatedHistory(storedRecordMeta?.request_history, inputRequest);
+            await saveRequestRecord(
+              {
+                request_text: inputRequest,
+                request_history: accumulatedHistory,
+                last_prompt: "[LOCAL_FAST_PATH_ICON_FILL]",
+                last_result: JSON.stringify(output),
+                context_files_json: serializeContextFiles(contextFiles),
+                updated_at: Date.now(),
+              },
+              command,
+            );
+            setStoredRequest(inputRequest);
+            setStoredLastResult(JSON.stringify(output));
+            setStoredRecordMeta((prev) => prev
+              ? { ...prev, request_history: accumulatedHistory, last_result: JSON.stringify(output) }
+              : prev);
+          } catch (persistError) {
+            console.warn("Local icon fast-path output generated but failed to persist history:", persistError);
+          }
+
+          syncPatchReviewState([]);
+          setMergeStats(null);
+          message.success(uiText(
+            "Đã bổ sung icon local, không gọi AI",
+            "Icon fill applied locally without calling AI",
+            "已本地补全图标，未调用 AI",
+          ));
+          return;
+        }
+      } finally {
+        setLoading(false);
+      }
     }
 
     const prompt = trimToMax(

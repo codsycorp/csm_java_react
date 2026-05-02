@@ -19,6 +19,7 @@ import okhttp3.Response;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedReader;
@@ -75,6 +76,9 @@ public class GeminiStreamingService {
     @Value("${gemini.streaming.request-timeout-ms:300000}")
     private long requestTimeoutMs;
 
+    @Value("${gemini.streaming.input-token-soft-limit:6800}")
+    private int geminiInputTokenSoftLimit;
+
     @Value("${gemini.streaming.response-cache.enabled:true}")
     private boolean responseCacheEnabled;
 
@@ -106,13 +110,49 @@ public class GeminiStreamingService {
     @Value("${claude.streaming.rate-limit-key-cooldown-ms:60000}")
     private long claudeRateLimitKeyCooldownMs;
 
+    /**
+     * OpenDevin tenacity / Devin retry_task pattern: exponential backoff base delay
+     * when ALL Claude keys are in rate-limit cooldown simultaneously.
+     * Delay = min(backoffMaxMs, backoffBaseMs * 2^attempt).
+     */
+    @Value("${claude.streaming.rate-limit-backoff-base-ms:1000}")
+    private long claudeRateLimitBackoffBaseMs;
+
+    @Value("${claude.streaming.rate-limit-backoff-max-ms:30000}")
+    private long claudeRateLimitBackoffMaxMs;
+
+    @Value("${gemini.streaming.rate-limit-backoff-base-ms:2000}")
+    private long geminiRateLimitBackoffBaseMs;
+
+    @Value("${gemini.streaming.rate-limit-backoff-max-ms:60000}")
+    private long geminiRateLimitBackoffMaxMs;
+
+    @Value("${claude.streaming.input-token-soft-limit:9000}")
+    private int claudeInputTokenSoftLimit;
+
+    @Value("${ai.token-estimate.chars-per-token:4}")
+    private int aiTokenEstimateCharsPerToken;
+
+    @Value("${ai.streaming.prompt-hard-char-cap:1200000}")
+    private int aiStreamingPromptHardCharCap;
+
     private static final String CLAUDE_API_URL = "https://api.anthropic.com/v1/messages";
     private static final String CLAUDE_API_VERSION = "2023-06-01";
     private static final MediaType JSON_MEDIA_TYPE = MediaType.parse("application/json; charset=utf-8");
 
     private final ObjectMapper jsonMapper = new ObjectMapper();
+    private final AiPromptBudgetService aiPromptBudgetService;
+    private final ApiCallInstrumentationService apiCallInstrumentationService;
     private volatile OkHttpClient claudeHttpClient;
     private final Map<String, Long> claudeRateLimitedUntilByApiKey = Collections.synchronizedMap(new HashMap<>());
+
+    @Autowired
+    public GeminiStreamingService(
+            AiPromptBudgetService aiPromptBudgetService,
+            ApiCallInstrumentationService apiCallInstrumentationService) {
+        this.aiPromptBudgetService = aiPromptBudgetService;
+        this.apiCallInstrumentationService = apiCallInstrumentationService;
+    }
 
     private OkHttpClient getClaudeHttpClient() {
         if (claudeHttpClient == null) {
@@ -165,6 +205,95 @@ public class GeminiStreamingService {
 
     private long resolveRateLimitKeyCooldownMs() {
         return Math.max(3000L, rateLimitKeyCooldownMs);
+    }
+
+    private int resolveGeminiInputTokenSoftLimit() {
+        // Profile-driven limit from AiPromptBudgetService takes precedence over local @Value
+        int profileLimit = aiPromptBudgetService.resolveGeminiSoftLimit();
+        int localLimit = Math.max(2000, geminiInputTokenSoftLimit);
+        return Math.min(profileLimit, localLimit);
+    }
+
+    private int resolveClaudeInputTokenSoftLimit() {
+        int profileLimit = aiPromptBudgetService.resolveClaudeSoftLimit();
+        int localLimit = Math.max(2000, claudeInputTokenSoftLimit);
+        return Math.min(profileLimit, localLimit);
+    }
+
+    private int resolveCharsPerTokenEstimate() {
+        return Math.max(2, aiTokenEstimateCharsPerToken);
+    }
+
+    private int estimateInputTokens(String prompt) {
+        return aiPromptBudgetService.estimateTokensByChars(prompt, resolveCharsPerTokenEstimate());
+    }
+
+    private int resolvePromptHardCharCap() {
+        return Math.max(60000, aiStreamingPromptHardCharCap);
+    }
+
+    private String preparePromptForProvider(String prompt) {
+        return aiPromptBudgetService.normalizePrompt(prompt, resolvePromptHardCharCap());
+    }
+
+    private boolean isOverPromptSoftLimit(
+            String provider,
+            String model,
+            String prompt,
+            int softLimit,
+            Consumer<Throwable> onError,
+            Consumer<Map<String, Object>> onStatus) {
+        int promptChars = Math.max(0, String.valueOf(prompt == null ? "" : prompt).length());
+        int promptTokens = estimateInputTokens(prompt);
+        if (promptTokens <= Math.max(1, softLimit)) {
+            return false;
+        }
+
+        String reason = String.format(
+                "%s prompt over soft token limit: promptTokens~%d > softLimit=%d (model=%s)",
+                String.valueOf(provider == null ? "provider" : provider),
+                promptTokens,
+                Math.max(1, softLimit),
+                String.valueOf(model == null ? "" : model));
+        IllegalStateException err = new IllegalStateException(reason);
+        log.warn("GeminiStreamingService: {}", reason);
+
+        if (onStatus != null) {
+            Map<String, Object> status = new HashMap<>();
+            status.put("stage", "input_budget_guard");
+            status.put("status", "prompt_too_large_soft_limit");
+            status.put("provider", String.valueOf(provider == null ? "" : provider));
+            status.put("model", String.valueOf(model == null ? "" : model));
+            status.put("promptChars", promptChars);
+            status.put("promptTokens", promptTokens);
+            status.put("softLimit", Math.max(1, softLimit));
+            status.put("message", "Prompt qua lon cho nguong token mem, dung som de tranh lang phi API");
+            onStatus.accept(status);
+        }
+        if (onError != null) {
+            onError.accept(err);
+        }
+
+        int savedTokens = Math.max(0, promptTokens - Math.max(1, softLimit));
+        try {
+            Map<String, Object> telemetry = new LinkedHashMap<>();
+            telemetry.put("timestamp", System.currentTimeMillis());
+            telemetry.put("flow", "ai-stream-guard");
+            telemetry.put("contextType", String.valueOf(provider == null ? "" : provider));
+            telemetry.put("taskType", "input_budget_guard");
+            telemetry.put("responseMode", "guard_block");
+            telemetry.put("model", String.valueOf(model == null ? "" : model));
+            telemetry.put("promptChars", promptChars);
+            telemetry.put("promptTokens", promptTokens);
+            telemetry.put("estimatedSavedTokens", savedTokens);
+            telemetry.put("inputBudgetGuardTriggered", true);
+            telemetry.put("estimatedCostUsd", 0.0);
+            apiCallInstrumentationService.recordAiTelemetry(telemetry);
+        } catch (Exception ignored) {
+            // Telemetry must not break serving path.
+        }
+
+        return true;
     }
 
     private String normalizePromptForCache(String prompt) {
@@ -595,11 +724,22 @@ public class GeminiStreamingService {
         // Route Claude models to Anthropic API instead of Gemini
         String rawModel = String.valueOf(modelOverride == null ? "" : modelOverride).trim();
         if (isClaudeModel(rawModel)) {
-            return streamContentClaude(rawModel, prompt, onChunk, onComplete, onError, onStatus);
+            return streamContentClaude(rawModel, preparePromptForProvider(prompt), onChunk, onComplete, onError, onStatus);
         }
 
         String model = normalizeModelToGemini(modelOverride);
-        String cacheKey = buildCacheKey(model, prompt);
+        String effectivePrompt = preparePromptForProvider(prompt);
+        if (effectivePrompt.isBlank()) {
+            IllegalStateException err = new IllegalStateException("Prompt is empty after normalization");
+            if (onError != null) {
+                onError.accept(err);
+            }
+            return "";
+        }
+        if (isOverPromptSoftLimit("gemini", model, effectivePrompt, resolveGeminiInputTokenSoftLimit(), onError, onStatus)) {
+            return "";
+        }
+        String cacheKey = buildCacheKey(model, effectivePrompt);
 
         String cachedResponse = getCachedResponse(cacheKey);
         if (cachedResponse != null) {
@@ -683,7 +823,7 @@ public class GeminiStreamingService {
             }
 
             try {
-                String text = executeGeminiStreamContent(model, prompt, key, attemptChunk, onStatus);
+                String text = executeGeminiStreamContent(model, effectivePrompt, key, attemptChunk, onStatus);
                 putCachedResponse(cacheKey, text);
                 if (onComplete != null) {
                     onComplete.run();
@@ -774,6 +914,17 @@ public class GeminiStreamingService {
             Consumer<Map<String, Object>> onStatus) {
 
         String model = normalizeModelToGemini(modelOverride);
+        String effectivePrompt = preparePromptForProvider(prompt);
+        if (effectivePrompt.isBlank()) {
+            IllegalStateException err = new IllegalStateException("Prompt is empty after normalization");
+            if (onError != null) {
+                onError.accept(err);
+            }
+            return "";
+        }
+        if (isOverPromptSoftLimit("gemini", model, effectivePrompt, resolveGeminiInputTokenSoftLimit(), onError, onStatus)) {
+            return "";
+        }
         List<String> keys = resolveGeminiApiKeys();
         if (keys.isEmpty()) {
             IllegalStateException err = new IllegalStateException("Missing Gemini API key. Set GEMINI_PRO_API_KEY, GEMINI_API_KEY, or GOOGLE_AI_GEMINI_API_KEY");
@@ -782,7 +933,7 @@ public class GeminiStreamingService {
             return "";
         }
 
-        int startIndex = Math.floorMod(String.valueOf(prompt == null ? "" : prompt).hashCode(), keys.size());
+        int startIndex = Math.floorMod(String.valueOf(effectivePrompt).hashCode(), keys.size());
         Throwable lastError = null;
         long minWaitMs = Long.MAX_VALUE;
         int skippedByCooldown = 0;
@@ -808,7 +959,7 @@ public class GeminiStreamingService {
             };
 
             try {
-                String text = executeGeminiStreamContent(model, prompt, imageParts, key, attemptChunk, onStatus);
+                String text = executeGeminiStreamContent(model, effectivePrompt, imageParts, key, attemptChunk, onStatus);
                 if (onComplete != null) onComplete.run();
                 return text;
             } catch (Throwable ex) {
@@ -830,6 +981,11 @@ public class GeminiStreamingService {
         }
 
         if (skippedByCooldown >= keys.size() && minWaitMs != Long.MAX_VALUE) {
+            // OpenDevin tenacity pattern: exponential backoff before giving up
+            long backoffMs = Math.min(geminiRateLimitBackoffMaxMs,
+                geminiRateLimitBackoffBaseMs * (long) Math.pow(2, Math.min(skippedByCooldown - 1, 5)));
+            log.warn("GeminiStreamingService[multimodal]: all {} keys in cooldown, exponential backoff {}ms", keys.size(), backoffMs);
+            try { Thread.sleep(Math.min(backoffMs, minWaitMs)); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
             IllegalStateException err = new IllegalStateException("Tất cả kênh xử lý đang trong thời gian chờ, thử lại sau " + minWaitMs + " ms");
             if (onError != null) onError.accept(err);
             return "";
@@ -1053,6 +1209,17 @@ public class GeminiStreamingService {
             Consumer<Map<String, Object>> onStatus) {
 
         String model = normalizeClaudeModel(modelOverride);
+        String effectivePrompt = preparePromptForProvider(prompt);
+        if (effectivePrompt.isBlank()) {
+            IllegalStateException err = new IllegalStateException("Prompt is empty after normalization");
+            if (onError != null) {
+                onError.accept(err);
+            }
+            return "";
+        }
+        if (isOverPromptSoftLimit("claude", model, effectivePrompt, resolveClaudeInputTokenSoftLimit(), onError, onStatus)) {
+            return "";
+        }
 
         List<String> keys = resolveClaudeApiKeys();
         if (keys.isEmpty()) {
@@ -1063,7 +1230,7 @@ public class GeminiStreamingService {
             return "";
         }
 
-        int startIndex = Math.floorMod(String.valueOf(prompt == null ? "" : prompt).hashCode(), keys.size());
+        int startIndex = Math.floorMod(String.valueOf(effectivePrompt).hashCode(), keys.size());
         Throwable lastError = null;
         long minWaitMs = Long.MAX_VALUE;
         int skippedByCooldown = 0;
@@ -1095,7 +1262,7 @@ public class GeminiStreamingService {
             };
 
             try {
-                String text = executeClaudeStreamContent(model, prompt, key, attemptChunk, onStatus);
+                String text = executeClaudeStreamContent(model, effectivePrompt, key, attemptChunk, onStatus);
                 if (onComplete != null) onComplete.run();
                 return text;
             } catch (Throwable ex) {
@@ -1119,16 +1286,50 @@ public class GeminiStreamingService {
         }
 
         if (skippedByCooldown >= keys.size() && minWaitMs != Long.MAX_VALUE) {
-            IllegalStateException err = new IllegalStateException(
-                    "Tất cả kênh Claude đang trong thời gian chờ, thử lại sau " + minWaitMs + " ms");
+            // OpenDevin tenacity / Devin retry_task pattern: exponential backoff when all
+            // Claude keys are simultaneously rate-limited. Attempt a single wait-and-retry
+            // with bounded delay before giving up, rather than failing immediately.
+            long backoffMs = Math.min(claudeRateLimitBackoffMaxMs,
+                claudeRateLimitBackoffBaseMs * (long) Math.pow(2, Math.min(skippedByCooldown - 1, 5)));
+            log.warn("GeminiStreamingService[Claude]: all {} keys in cooldown, exponential backoff {}ms (attempt={}, minWait={}ms)",
+                keys.size(), backoffMs, skippedByCooldown, minWaitMs);
             if (onStatus != null) {
                 Map<String, Object> status = new HashMap<>();
-                status.put("stage", "waiting");
+                status.put("stage", "rate_limit_backoff");
                 status.put("status", "all_keys_cooldown");
-                status.put("message", "Claude đang bận tạm thời, vui lòng thử lại sau");
-                status.put("waitingMs", minWaitMs);
+                status.put("message", "Claude đang bận, đợi " + backoffMs + "ms rồi thử lại");
+                status.put("waitingMs", backoffMs);
+                status.put("minCooldownMs", minWaitMs);
                 onStatus.accept(status);
             }
+            try {
+                Thread.sleep(Math.min(backoffMs, minWaitMs));
+                // Single retry pass after backoff
+                for (int i = 0; i < keys.size(); i++) {
+                    String key = keys.get((startIndex + i) % keys.size());
+                    if (getRemainingClaudeApiKeyCooldownMs(key) > 0L) continue;
+                    try {
+                        AtomicBoolean retryStreamed = new AtomicBoolean(false);
+                        Consumer<String> retryChunk = chunk -> {
+                            String text = String.valueOf(chunk == null ? "" : chunk);
+                            if (!text.isEmpty()) retryStreamed.set(true);
+                            if (onChunk != null) onChunk.accept(text);
+                        };
+                        String text = executeClaudeStreamContent(model, effectivePrompt, key, retryChunk, onStatus);
+                        if (onComplete != null) onComplete.run();
+                        return text;
+                    } catch (Throwable retryEx) {
+                        String rmsg = String.valueOf(retryEx.getMessage()).toLowerCase();
+                        if (rmsg.contains("429") || rmsg.contains("rate_limit") || rmsg.contains("overloaded")) {
+                            markClaudeApiKeyRateLimitCooldown(key);
+                        }
+                    }
+                }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+            IllegalStateException err = new IllegalStateException(
+                    "Tất cả kênh Claude đang trong thời gian chờ, thử lại sau " + minWaitMs + " ms");
             if (onError != null) onError.accept(err);
             return "";
         }
