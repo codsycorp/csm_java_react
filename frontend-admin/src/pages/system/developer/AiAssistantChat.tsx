@@ -153,6 +153,8 @@ type AiAssistantChatProps = {
 
 const CHAT_HISTORY_KEY = "codeeditor.aiassistant.chat.v1";
 const LEGACY_CHAT_HISTORY_KEY = "codeeditor.copilot.chat.v1";
+const PROMPT_HISTORY_KEY_PREFIX = "codeeditor.aiassistant.promptHistory.v1";
+const PROMPT_HISTORY_LIMIT = 50;
 const CHAT_STORAGE_LIMIT = 20;
 const MAX_ATTACHMENTS = 8;
 const MAX_TEXT_ATTACHMENT_CHARS = 800000;
@@ -611,6 +613,42 @@ const saveChatHistory = (messages: ChatMessage[]) => {
 	}
 };
 
+function resolvePromptHistoryStorageKey(params: {
+	appId: string;
+	contextType: string;
+	language: string;
+	targetPName?: string;
+}): string {
+	const app = String(params.appId || "csm").trim() || "csm";
+	const context = String(params.contextType || "code").trim() || "code";
+	const lang = String(params.language || "javascript").trim() || "javascript";
+	const target = String(params.targetPName || "__default__").trim() || "__default__";
+	return `${PROMPT_HISTORY_KEY_PREFIX}:${app}:${context}:${lang}:${target}`;
+}
+
+function loadPromptHistory(storageKey: string): string[] {
+	try {
+		const raw = localStorage.getItem(storageKey);
+		if (!raw) return [];
+		const parsed = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return [];
+		return parsed
+			.map((item) => String(item || "").trim())
+			.filter(Boolean)
+			.slice(0, PROMPT_HISTORY_LIMIT);
+	} catch {
+		return [];
+	}
+}
+
+function savePromptHistory(storageKey: string, items: string[]) {
+	try {
+		localStorage.setItem(storageKey, JSON.stringify(items.slice(0, PROMPT_HISTORY_LIMIT)));
+	} catch {
+		// ignore localStorage write failures
+	}
+}
+
 export default function AiAssistantChat({
 	appId,
 	currentCode = "",
@@ -627,6 +665,9 @@ export default function AiAssistantChat({
 	const { i18n } = useTranslation();
 	const [messages, setMessages] = useState<ChatMessage[]>(getChatHistory());
 	const [inputValue, setInputValue] = useState("");
+	const [promptHistory, setPromptHistory] = useState<string[]>([]);
+	const [promptHistoryIndex, setPromptHistoryIndex] = useState(-1);
+	const [promptHistoryOriginal, setPromptHistoryOriginal] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
 	const [autoApplyEnabled, setAutoApplyEnabled] = useState<boolean>(() => loadAutoApplyPreference(autoApplyPreferenceKey, Boolean(autoApplyCodeBlock)));
 	const [pendingAttachments, setPendingAttachments] = useState<AiAssistantAttachment[]>([]);
@@ -694,6 +735,10 @@ export default function AiAssistantChat({
 		? modelDecisionTrace
 		: modelDecisionTrace.slice(-COMPACT_MODEL_TRACE);
 	const hiddenModelTraceCount = Math.max(0, modelDecisionTrace.length - visibleModelDecisionTrace.length);
+	const promptHistoryStorageKey = useMemo(
+		() => resolvePromptHistoryStorageKey({ appId, contextType, language, targetPName }),
+		[appId, contextType, language, targetPName],
+	);
 
 	const uiText = useCallback((vi: string, en: string, zh: string) => {
 		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
@@ -946,6 +991,12 @@ export default function AiAssistantChat({
 		saveAutoApplyPreference(autoApplyPreferenceKey, autoApplyEnabled);
 		onAutoApplyChange?.(autoApplyEnabled);
 	}, [autoApplyEnabled, autoApplyPreferenceKey, onAutoApplyChange]);
+
+	useEffect(() => {
+		setPromptHistory(loadPromptHistory(promptHistoryStorageKey));
+		setPromptHistoryIndex(-1);
+		setPromptHistoryOriginal("");
+	}, [promptHistoryStorageKey]);
 
 	useEffect(() => {
 		if (completionState !== "done") {
@@ -1730,6 +1781,15 @@ export default function AiAssistantChat({
 			}
 
 			const normalizedText = text.trim();
+			if (normalizedText) {
+				setPromptHistory((prev) => {
+					const next = [normalizedText, ...prev.filter((item) => item !== normalizedText)].slice(0, PROMPT_HISTORY_LIMIT);
+					savePromptHistory(promptHistoryStorageKey, next);
+					return next;
+				});
+				setPromptHistoryIndex(-1);
+				setPromptHistoryOriginal("");
+			}
 			const modeDirective = parseResponseModeDirective(normalizedText);
 			const cleanedMessage = modeDirective.cleanedMessage;
 			if (!cleanedMessage && pendingAttachments.length === 0) {
@@ -2144,7 +2204,7 @@ export default function AiAssistantChat({
 				}
 			}
 		},
-		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom]
+		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey]
 	);
 
 	const handleSend = () => {
@@ -2156,6 +2216,53 @@ export default function AiAssistantChat({
 			handleSend();
 		}
 	};
+
+	const handleInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+		if (e.key === "Enter" && e.ctrlKey) {
+			handleSend();
+			return;
+		}
+		if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+		if (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return;
+		if (!promptHistory.length) return;
+
+		const element = e.currentTarget;
+		const start = Number(element.selectionStart ?? 0);
+		const end = Number(element.selectionEnd ?? 0);
+		const text = String(inputValue || "");
+		const isAtTop = start === 0 && end === 0;
+		const isAtBottom = start === text.length && end === text.length;
+
+		if (e.key === "ArrowUp" && !isAtTop) return;
+		if (e.key === "ArrowDown" && !isAtBottom) return;
+
+		e.preventDefault();
+
+		if (e.key === "ArrowUp") {
+			const nextIndex = promptHistoryIndex < 0
+				? 0
+				: Math.min(promptHistory.length - 1, promptHistoryIndex + 1);
+			if (promptHistoryIndex < 0) {
+				setPromptHistoryOriginal(text);
+			}
+			setPromptHistoryIndex(nextIndex);
+			setInputValue(promptHistory[nextIndex] || "");
+			return;
+		}
+
+		if (promptHistoryIndex < 0) {
+			return;
+		}
+
+		const nextIndex = promptHistoryIndex - 1;
+		if (nextIndex < 0) {
+			setPromptHistoryIndex(-1);
+			setInputValue(promptHistoryOriginal || "");
+			return;
+		}
+		setPromptHistoryIndex(nextIndex);
+		setInputValue(promptHistory[nextIndex] || "");
+	}, [handleSend, inputValue, promptHistory, promptHistoryIndex, promptHistoryOriginal]);
 
 	const handleClearHistory = () => {
 		setMessages([]);
@@ -2883,8 +2990,15 @@ export default function AiAssistantChat({
 					<Space.Compact style={{ width: "100%" }}>
 						<Input.TextArea
 							value={inputValue}
-							onChange={(e) => setInputValue(e.target.value)}
+							onChange={(e) => {
+								setInputValue(e.target.value);
+								if (promptHistoryIndex !== -1) {
+									setPromptHistoryIndex(-1);
+									setPromptHistoryOriginal("");
+								}
+							}}
 							onKeyPress={handleKeyPress}
+							onKeyDown={handleInputKeyDown}
 							placeholder={uiText(
 								`Hỏi Trợ lý AI (${sendHintKey}+Enter để gửi). Lệnh: /phan-tich hoặc /sua`,
 								`Ask AI Assistant (${sendHintKey}+Enter to send). Commands: /analyze or /edit`,

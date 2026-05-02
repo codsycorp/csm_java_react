@@ -118,6 +118,12 @@ public class ApiSpringController {
     private static final int AI_ASSISTANT_CODE_DISTRIBUTED_EXCERPT_CHARS = 1600;
     private static final int AI_ASSISTANT_MENU_ATTACHMENT_CONTEXT_MAX_CHARS = 180000;
     private static final int AI_ASSISTANT_CODE_ATTACHMENT_CONTEXT_MAX_CHARS = 120000;
+    private static final int DEFAULT_PROMPT_BASE64_STRIP_MIN_CHARS = 4096;
+    private static final Pattern LARGE_DATA_URL_BASE64_PATTERN = Pattern.compile(
+        "(?is)data:[a-z0-9.+-]+/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=\\r\\n]{" + DEFAULT_PROMPT_BASE64_STRIP_MIN_CHARS + ",}");
+    private static final Pattern LARGE_NAMED_BASE64_VALUE_PATTERN = Pattern.compile(
+        "(?is)(\\\"(?:report_name|base64|base64Data|dataUrl|file_data|content_base64|docx_base64|payload_base64)\\\"\\s*:\\s*\\\")([A-Za-z0-9+/=\\r\\n]{"
+            + DEFAULT_PROMPT_BASE64_STRIP_MIN_CHARS + ",})(\\\")");
     private final ObjectMapper objectMapper = new ObjectMapper(); // Dùng để parse JSON body
     private final RecordManager recordManager;
     private final InitHandler initHandler;
@@ -159,6 +165,12 @@ public class ApiSpringController {
 
     @Value("${ai.prompt.gemini-max-chars:500000}")
     private int geminiMaxPromptChars;
+
+    @Value("${ai.prompt.base64-strip.min-chars:4096}")
+    private int aiPromptBase64StripMinChars;
+
+    @Value("${ai.prompt.base64-strip.telemetry.enabled:true}")
+    private boolean aiPromptBase64StripTelemetryEnabled;
 
     @Value("${ai.routing.stability.prefer-gemini-for-coding:true}")
     private boolean preferAiAssistantForCoding;
@@ -1648,6 +1660,9 @@ public class ApiSpringController {
             boolean largeStructuredEditMode, String baseRef, int baseChars) {
         StringBuilder sb = new StringBuilder();
         boolean menuJsonEditMode = "edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType);
+        String promptCurrentCode = stripLargeBase64ForPrompt(
+            String.valueOf(currentCode == null ? "" : currentCode),
+            "ai-code-stream-currentCode");
 
         sb.append("Bạn là AI trợ lý lập trình (như Cursor/Copilot). Hỗ trợ người dùng chính xác và chi tiết.\n\n");
 
@@ -1699,7 +1714,9 @@ public class ApiSpringController {
                 }
                 if (att instanceof Map<?, ?> attMap) {
                     String name = str(attMap.get("name"), "file");
-                    String content = str(attMap.get("textContent"), "");
+                    String content = stripLargeBase64ForPrompt(
+                        str(attMap.get("textContent"), ""),
+                        "ai-code-stream-attachment:" + name);
                     if (!content.isBlank()) {
                         int perFileCap = Math.max(2000, aiCodeStreamMaxAttachmentCharsPerFile);
                         String safe = truncateMiddle(content, Math.min(perFileCap, attachmentBudget));
@@ -1710,8 +1727,8 @@ public class ApiSpringController {
             }
         }
 
-        if (!currentCode.isBlank()) {
-            String safeCode = truncateMiddle(currentCode, Math.max(4000, aiCodeStreamMaxCurrentCodeChars));
+        if (!promptCurrentCode.isBlank()) {
+            String safeCode = truncateMiddle(promptCurrentCode, Math.max(4000, aiCodeStreamMaxCurrentCodeChars));
             sb.append("## CODE HIỆN TẠI (").append(language).append(")\n```").append(language).append("\n");
             sb.append(safeCode);
             sb.append("\n```\n\n");
@@ -6361,7 +6378,9 @@ public class ApiSpringController {
     }
 
     private String buildAiAssistantCurrentCodeContext(String currentCode, String message, String contextType, String language) {
-        String code = currentCode == null ? "" : currentCode;
+        String code = stripLargeBase64ForPrompt(
+            String.valueOf(currentCode == null ? "" : currentCode),
+            "ai-assistant-currentCode:" + String.valueOf(contextType == null ? "" : contextType));
         boolean isMenuContext = "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim());
 
         int maxChars = isMenuContext ? AI_ASSISTANT_MENU_CODE_MAX_CHARS : AI_ASSISTANT_CURRENT_CODE_MAX_CHARS;
@@ -6658,7 +6677,9 @@ public class ApiSpringController {
         if (!("text".equals(kind) || "json".equals(kind))) {
             return "";
         }
-        String textContent = String.valueOf(attachment.getOrDefault("textContent", "")).trim();
+        String textContent = stripLargeBase64ForPrompt(
+            String.valueOf(attachment.getOrDefault("textContent", "")).trim(),
+            "ai-assistant-attachment-body:" + String.valueOf(attachment.getOrDefault("name", "attachment")));
         if (textContent.isEmpty()) {
             return "";
         }
@@ -6774,6 +6795,82 @@ public class ApiSpringController {
         if (normalizedName.endsWith(".json") || normalizedMimeType.contains("json")) return "json";
         if (normalizedName.endsWith(".py") || normalizedMimeType.contains("python")) return "python";
         return "menu_json".equalsIgnoreCase(String.valueOf(fallbackContext == null ? "" : fallbackContext).trim()) ? "javascript" : "text";
+    }
+
+    private String stripLargeBase64ForPrompt(String raw, String sourceTag) {
+        String input = String.valueOf(raw == null ? "" : raw);
+        if (input.isBlank()) {
+            return "";
+        }
+        if (!input.contains("base64") && !input.contains("data:")) {
+            return input;
+        }
+
+        String output = input;
+        int replaced = 0;
+        long strippedChars = 0L;
+        int effectiveMinChars = Math.max(1024, aiPromptBase64StripMinChars);
+
+        Matcher dataUrlMatcher = LARGE_DATA_URL_BASE64_PATTERN.matcher(output);
+        StringBuffer dataUrlSb = new StringBuffer();
+        while (dataUrlMatcher.find()) {
+            String blob = String.valueOf(dataUrlMatcher.group());
+            int commaIdx = blob.indexOf(',');
+            int payloadChars = commaIdx >= 0 ? Math.max(0, blob.length() - commaIdx - 1) : blob.length();
+            if (payloadChars < effectiveMinChars) {
+                dataUrlMatcher.appendReplacement(dataUrlSb, Matcher.quoteReplacement(blob));
+                continue;
+            }
+            String replacement = "[BINARY_BASE64_OMITTED chars=" + payloadChars + "]";
+            dataUrlMatcher.appendReplacement(dataUrlSb, Matcher.quoteReplacement(replacement));
+            replaced++;
+            strippedChars += Math.max(0, blob.length() - replacement.length());
+        }
+        dataUrlMatcher.appendTail(dataUrlSb);
+        output = dataUrlSb.toString();
+
+        Matcher namedBase64Matcher = LARGE_NAMED_BASE64_VALUE_PATTERN.matcher(output);
+        StringBuffer namedSb = new StringBuffer();
+        while (namedBase64Matcher.find()) {
+            String value = String.valueOf(namedBase64Matcher.group(2));
+            if (value.length() < effectiveMinChars) {
+                namedBase64Matcher.appendReplacement(namedSb, Matcher.quoteReplacement(namedBase64Matcher.group()));
+                continue;
+            }
+            String replacement = String.valueOf(namedBase64Matcher.group(1))
+                + "[BINARY_BASE64_OMITTED chars=" + value.length() + "]"
+                + String.valueOf(namedBase64Matcher.group(3));
+            namedBase64Matcher.appendReplacement(namedSb, Matcher.quoteReplacement(replacement));
+            replaced++;
+            strippedChars += Math.max(0, value.length());
+        }
+        namedBase64Matcher.appendTail(namedSb);
+        output = namedSb.toString();
+
+        if (replaced > 0) {
+            logger.info(
+                "Prompt context base64 stripped: source={} replaced={} beforeChars={} afterChars={}",
+                String.valueOf(sourceTag == null ? "" : sourceTag),
+                replaced,
+                input.length(),
+                output.length());
+            if (aiPromptBase64StripTelemetryEnabled) {
+                try {
+                    Map<String, Object> telemetry = new LinkedHashMap<>();
+                    telemetry.put("flow", "prompt-base64-strip");
+                    telemetry.put("source", String.valueOf(sourceTag == null ? "" : sourceTag));
+                    telemetry.put("replaced", replaced);
+                    telemetry.put("beforeChars", input.length());
+                    telemetry.put("afterChars", output.length());
+                    telemetry.put("strippedChars", Math.max(0L, strippedChars));
+                    telemetry.put("thresholdChars", effectiveMinChars);
+                    apiCallInstrumentationService.recordAiTelemetry(telemetry);
+                } catch (Exception telemetryEx) {
+                    logger.debug("prompt-base64-strip telemetry failed: {}", telemetryEx.getMessage());
+                }
+            }
+        }
+        return output;
     }
 
     private String trimAiAssistantCodeContext(String context, int hardCapChars) {
@@ -7093,7 +7190,9 @@ public class ApiSpringController {
             String name = String.valueOf(attachment.getOrDefault("name", "attachment")).trim();
             if (name.isEmpty()) name = "attachment";
 
-            String textContent = String.valueOf(attachment.getOrDefault("textContent", "")).trim();
+            String textContent = stripLargeBase64ForPrompt(
+                String.valueOf(attachment.getOrDefault("textContent", "")).trim(),
+                "ai-assistant-retrieval:" + String.valueOf(attachment.getOrDefault("name", "attachment")));
             if (textContent.isEmpty()) continue;
 
             // ── Full-context mode: attach entire file ──────────────────────────
@@ -7452,7 +7551,9 @@ public class ApiSpringController {
             }
 
             if ("text".equals(kind) || "json".equals(kind)) {
-                String textContent = String.valueOf(rawMap.get("textContent") == null ? "" : rawMap.get("textContent")).trim();
+                String textContent = stripLargeBase64ForPrompt(
+                    String.valueOf(rawMap.get("textContent") == null ? "" : rawMap.get("textContent")).trim(),
+                    "normalize-attachment:" + name);
                 if (textContent.isEmpty()) {
                     continue;
                 }

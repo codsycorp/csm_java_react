@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { Button, Select, Card, Space, message, Modal, Input, Form, Row, Col } from "antd";
 import {
 	SaveOutlined,
@@ -113,10 +113,16 @@ type HotkeyConfig = Record<HotkeyAction, string>;
 const HOTKEY_STORAGE_KEY = "developer.codeeditor.hotkeys.v1";
 const AI_SESSION_STORAGE_KEY = "developer.codeeditor.aiSessions.v1";
 const AI_SESSION_LOCAL_STORAGE_KEY = "developer.codeeditor.aiSessions.persist.v1";
+const NEXT_EDIT_PREDICTION_STORAGE_KEY = "developer.codeeditor.nextEditPrediction.v1";
 const AI_HISTORY_LIMIT = 40;
 const AI_SESSION_MAX = 50;
 const MAX_STRUCTURED_TEXT_EDITS = 160;
 const MAX_STRUCTURED_REPLACEMENT_CHARS = 800000;
+const NEXT_EDIT_PREDICTION_DEBOUNCE_MS = 1500;
+const NEXT_EDIT_PREDICTION_IDLE_MS = 700;
+const MAX_IGNORED_PREDICTION_SPOTS = 160;
+const PREDICTION_CACHE_MAX = 120;
+const PREDICTION_CACHE_TTL_MS = 5 * 60 * 1000;
 
 type StructuredTextEdit = {
 	startLine: number;
@@ -601,6 +607,111 @@ function tryExtractStructuredStreamingCode(rawText: string): string | null {
 	}
 }
 
+function resolveSuggestedCodeFromAiResponse(params: {
+	baseCode: string;
+	fullResponse: string;
+	completePayload?: Record<string, unknown> | null;
+}): string | null {
+	const baseCode = String(params.baseCode || "");
+	const fullResponse = String(params.fullResponse || "").trim();
+	const completePayload = params.completePayload;
+
+	const parsed = parseAiCodeResponse({ result: fullResponse });
+	if (parsed?.code && parsed.code !== baseCode) {
+		return parsed.code;
+	}
+
+	const parsedEnvelopeCandidate = (() => {
+		if (completePayload && (
+			Array.isArray((completePayload as any).textEdits)
+			|| Array.isArray((completePayload as any).text_edits)
+			|| typeof (completePayload as any).code === "string"
+		)) {
+			return completePayload as any;
+		}
+		const raw = extractValidJsonCandidate(fullResponse);
+		if (!raw) return null;
+		try {
+			const parsedJson = JSON.parse(raw);
+			return parsedJson && typeof parsedJson === "object" ? parsedJson : null;
+		} catch {
+			return null;
+		}
+	})();
+
+	if (!parsedEnvelopeCandidate) {
+		return null;
+	}
+
+	if (typeof parsedEnvelopeCandidate.code === "string" && parsedEnvelopeCandidate.code !== baseCode) {
+		return parsedEnvelopeCandidate.code;
+	}
+
+	const textEdits = normalizeStructuredTextEdits(
+		parsedEnvelopeCandidate.textEdits ?? parsedEnvelopeCandidate.text_edits,
+	);
+	if (textEdits.length <= 0) {
+		return null;
+	}
+	const validation = validateStructuredTextEdits(baseCode, textEdits);
+	if (!validation.valid) {
+		return null;
+	}
+	const next = applyTextEditsToDraft(baseCode, validation.edits);
+	return next !== baseCode ? next : null;
+}
+
+function createPredictionSpotKey(params: {
+	code: string;
+	cursorLine: number;
+	language: string;
+	targetName?: string | null;
+}): string {
+	const code = String(params.code || "");
+	const language = String(params.language || "text");
+	const targetName = String(params.targetName || "__unsaved__");
+	const lines = code.split("\n");
+	const center = Math.max(1, Math.min(lines.length || 1, Math.floor(Number(params.cursorLine || 1))));
+	const from = Math.max(1, center - 2);
+	const to = Math.min(lines.length || 1, center + 2);
+	const excerpt = lines.slice(from - 1, to).join("\n").slice(0, 320);
+	return [targetName, language, center, excerpt].join("::");
+}
+
+function resolveCursorOffset(code: string, line: number, column: number): number {
+	const lines = String(code || "").split("\n");
+	const safeLine = Math.max(1, Math.min(lines.length || 1, Math.floor(Number(line || 1))));
+	const safeColumn = Math.max(1, Math.floor(Number(column || 1)));
+	let offset = 0;
+	for (let i = 0; i < safeLine - 1; i += 1) {
+		offset += (lines[i] || "").length + 1;
+	}
+	const targetLine = lines[safeLine - 1] || "";
+	offset += Math.min(targetLine.length, safeColumn - 1);
+	return Math.max(0, offset);
+}
+
+function buildPredictionCacheKey(params: {
+	code: string;
+	line: number;
+	column: number;
+	language: string;
+	appId?: string;
+	targetName?: string | null;
+}): string {
+	const code = String(params.code || "");
+	const cursorOffset = resolveCursorOffset(code, params.line, params.column);
+	const prefix = code.slice(Math.max(0, cursorOffset - 1200), cursorOffset);
+	const suffix = code.slice(cursorOffset, Math.min(code.length, cursorOffset + 1200));
+	return [
+		String(params.appId || "csm"),
+		String(params.targetName || "__unsaved__"),
+		String(params.language || "text"),
+		prefix,
+		suffix,
+	].join("<::>");
+}
+
 // ─── Language map: codeType → language id ────────────────────────────────────
 const CODE_TYPE_LANGUAGE: Record<number, string> = {
 	0: "javascript",
@@ -634,6 +745,7 @@ async function streamAiCode(
 		language: string;
 		responseMode: string;
 		contextType: string;
+		signal?: AbortSignal;
 	},
 	callbacks: {
 		onChunk?: (chunk: string, accumulated: string) => void;
@@ -659,6 +771,7 @@ async function streamAiCode(
 	try {
 		response = await fetch(url, {
 			method: "POST",
+			signal: params.signal,
 			headers: {
 				"Content-Type": "application/json",
 				...(token ? { "csm-token": token } : {}),
@@ -667,6 +780,10 @@ async function streamAiCode(
 			body: JSON.stringify(params),
 		});
 	} catch (err) {
+		if ((err as Error)?.name === "AbortError") {
+			callbacks.onStatus?.({ stage: "cancelled", status: "cancelled", message: "aborted" });
+			return;
+		}
 		callbacks.onError?.(err instanceof Error ? err.message : "Network error");
 		return;
 	}
@@ -786,8 +903,24 @@ export default function CodeEditor() {
 	const [draftCursor, setDraftCursor] = useState({ line: 1, column: 1 });
 	const [draftStats, setDraftStats] = useState({ lines: 1, chars: 0 });
 	const [savedCodeSnapshot, setSavedCodeSnapshot] = useState("");
+	const [nextEditPredictionEnabled, setNextEditPredictionEnabled] = useState<boolean>(() => {
+		try {
+			return localStorage.getItem(NEXT_EDIT_PREDICTION_STORAGE_KEY) === "1";
+		} catch {
+			return false;
+		}
+	});
+	const [inlinePredictedCode, setInlinePredictedCode] = useState<string | null>(null);
+	const [ignoredPredictionCount, setIgnoredPredictionCount] = useState(0);
 	const { isDark: prefersDarkMode } = usePreferences();
 	const [form] = Form.useForm();
+	const predictionDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const predictionAbortRef = useRef<AbortController | null>(null);
+	const predictionSeqRef = useRef(0);
+	const predictionCacheRef = useRef<Map<string, { value: string; ts: number }>>(new Map());
+	const lastEditorInteractionAtRef = useRef<number>(Date.now());
+	const ignoredPredictionSpotsRef = useRef<Set<string>>(new Set());
+	const editorScrollCleanupRef = useRef<(() => void) | null>(null);
 
 	const isMac = useMemo(() => /Mac|iPhone|iPad|iPod/i.test(navigator.platform || ""), []);
 	const modKeyLabel = isMac ? "Cmd" : "Ctrl";
@@ -820,6 +953,7 @@ export default function CodeEditor() {
 
 	const updateDraftIndicators = (view: any) => {
 		if (!view?.state?.doc) return;
+		lastEditorInteractionAtRef.current = Date.now();
 		const head = Number(view.state.selection?.main?.head ?? 0);
 		const lineInfo = view.state.doc.lineAt(head);
 		setDraftCursor({
@@ -835,10 +969,18 @@ export default function CodeEditor() {
 	const draftMetricsExtension = useMemo(
 		() => EditorView.updateListener.of((update) => {
 			if (!update.docChanged && !update.selectionSet) return;
+			lastEditorInteractionAtRef.current = Date.now();
 			updateDraftIndicators(update.view);
 		}),
 		[],
 	);
+
+	useEffect(() => {
+		return () => {
+			editorScrollCleanupRef.current?.();
+			editorScrollCleanupRef.current = null;
+		};
+	}, []);
 
 	const visibleAiRequestHistory = useMemo(() => {
 		const keyword = historyKeyword.trim().toLowerCase();
@@ -1221,6 +1363,106 @@ export default function CodeEditor() {
 		runEditorCommand(redo);
 	};
 
+	const handleAiRewriteSelection = async () => {
+		const view = editorRef.current;
+		if (!view?.state?.doc) {
+			message.warning(devUiText(
+				"Editor chưa sẵn sàng.",
+				"Editor is not ready.",
+				"编辑器尚未就绪。",
+			));
+			return;
+		}
+		const selection = view.state.selection?.main;
+		if (!selection || selection.empty) {
+			message.warning(devUiText(
+				"Hãy chọn một đoạn code trước khi yêu cầu AI rewrite.",
+				"Select a code range before asking AI to rewrite.",
+				"请先选择代码范围再让 AI 重写。",
+			));
+			return;
+		}
+		const userPrompt = window.prompt(
+			devUiText(
+				"Nhập yêu cầu rewrite cho vùng chọn:",
+				"Enter rewrite instruction for selected code:",
+				"输入针对选中代码的重写指令：",
+			),
+			"",
+		);
+		if (!userPrompt || !userPrompt.trim()) {
+			return;
+		}
+
+		const selectedCode = view.state.doc.sliceString(selection.from, selection.to);
+		let fullResponse = "";
+		let streamErr = "";
+
+		setAiLoading(true);
+		setAiProgress({ status: "preparing", stage: "selection_rewrite", message: devUiText("AI đang rewrite vùng chọn...", "AI is rewriting selection...", "AI 正在重写所选内容..."), percent: 10 });
+		try {
+			await streamAiCode(
+				{
+					appId: appId || "",
+					message: [
+						"Rewrite ONLY the selected code section.",
+						"Return only replacement code, no markdown.",
+						`Instruction: ${userPrompt.trim()}`,
+						"Selected code:",
+						selectedCode,
+					].join("\n\n"),
+					currentCode: String(aiLastCode || ""),
+					cursorLine: Number(view.state.doc.lineAt(selection.from).number || draftCursor.line || 1),
+					contextWindowLines: 60,
+					language: currentLanguage,
+					responseMode: "edit",
+					contextType: "code",
+				},
+				{
+					onChunk: (_chunk, accumulated) => {
+						fullResponse = accumulated;
+						setAiProgress({ status: "streaming", stage: "selection_rewrite", message: devUiText("Đang nhận kết quả rewrite...", "Receiving rewrite result...", "正在接收重写结果..."), percent: 60 });
+					},
+					onComplete: (event) => {
+						fullResponse = String(event.fullResponse || fullResponse);
+					},
+					onError: (err) => {
+						streamErr = err;
+					},
+				},
+			);
+
+			if (streamErr) {
+				throw new Error(streamErr);
+			}
+			if (!fullResponse.trim()) {
+				throw new Error(devUiText("AI chưa trả về nội dung thay thế.", "AI returned empty replacement.", "AI 未返回替换内容。"));
+			}
+
+			const parsed = parseAiCodeResponse({ result: fullResponse });
+			const replacement = String(parsed?.code || fullResponse || "").trim();
+			if (!replacement) {
+				throw new Error(devUiText("Nội dung thay thế rỗng.", "Replacement is empty.", "替换内容为空。"));
+			}
+
+			view.dispatch({
+				changes: {
+					from: selection.from,
+					to: selection.to,
+					insert: replacement,
+				},
+			});
+			setAiProgress({ status: "completed", stage: "selection_rewrite", message: devUiText("Rewrite vùng chọn thành công.", "Selection rewrite completed.", "选区重写完成。"), percent: 100 });
+			message.success(devUiText("Đã rewrite vùng chọn.", "Selection rewritten.", "已重写所选内容。"));
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : devUiText("Rewrite vùng chọn thất bại.", "Selection rewrite failed.", "选区重写失败。");
+			setAiProgress({ status: "failed", stage: "selection_rewrite", message: msg, percent: 0 });
+			message.error(msg);
+		} finally {
+			setAiLoading(false);
+		}
+	};
+
 	const formatHistoryTime = (timestamp: number) => {
 		try {
 			return new Date(timestamp).toLocaleString();
@@ -1361,12 +1603,227 @@ export default function CodeEditor() {
 
 	const applyDraftFromAi = (nextCode: string) => {
 		aiProgrammaticApplyRef.current = true;
+		setInlinePredictedCode(null);
 		setAiLastCode(nextCode);
 		setCodeContent(nextCode);
 		setTimeout(() => {
 			aiProgrammaticApplyRef.current = false;
 		}, 0);
 	};
+
+	const setNextEditPrediction = useCallback((enabled: boolean) => {
+		setNextEditPredictionEnabled(Boolean(enabled));
+		try {
+			localStorage.setItem(NEXT_EDIT_PREDICTION_STORAGE_KEY, enabled ? "1" : "0");
+		} catch {
+			// ignore localStorage failures
+		}
+		if (!enabled) {
+			setInlinePredictedCode(null);
+		}
+	}, []);
+
+	const ignorePredictionAtCurrentSpot = useCallback(() => {
+		const spotKey = createPredictionSpotKey({
+			code: String(aiLastCode || ""),
+			cursorLine: draftCursor.line,
+			language: currentLanguage,
+			targetName: selectedCode,
+		});
+		const next = new Set(ignoredPredictionSpotsRef.current);
+		next.add(spotKey);
+		if (next.size > MAX_IGNORED_PREDICTION_SPOTS) {
+			const trimmed = Array.from(next).slice(-MAX_IGNORED_PREDICTION_SPOTS);
+			ignoredPredictionSpotsRef.current = new Set(trimmed);
+			setIgnoredPredictionCount(trimmed.length);
+		} else {
+			ignoredPredictionSpotsRef.current = next;
+			setIgnoredPredictionCount(next.size);
+		}
+		setInlinePredictedCode(null);
+	}, [aiLastCode, currentLanguage, draftCursor.line, selectedCode]);
+
+	const clearIgnoredPredictionSpots = useCallback(() => {
+		ignoredPredictionSpotsRef.current = new Set();
+		setIgnoredPredictionCount(0);
+		message.success(devUiText(
+			"Đã xóa danh sách vị trí prediction bị bỏ qua.",
+			"Cleared ignored prediction spots.",
+			"已清除忽略的预测位置。",
+		));
+	}, [devUiText]);
+
+	useEffect(() => {
+		return () => {
+			if (predictionDebounceTimerRef.current) {
+				clearTimeout(predictionDebounceTimerRef.current);
+				predictionDebounceTimerRef.current = null;
+			}
+			predictionAbortRef.current?.abort();
+			predictionAbortRef.current = null;
+		};
+	}, []);
+
+	useEffect(() => {
+		if (!nextEditPredictionEnabled || aiLoading || openingCode) {
+			setInlinePredictedCode(null);
+			if (predictionDebounceTimerRef.current) {
+				clearTimeout(predictionDebounceTimerRef.current);
+				predictionDebounceTimerRef.current = null;
+			}
+			predictionAbortRef.current?.abort();
+			predictionAbortRef.current = null;
+			return;
+		}
+
+		const sourceCode = String(aiLastCode || "");
+		if (!sourceCode.trim() || sourceCode.length > 180000) {
+			setInlinePredictedCode(null);
+			return;
+		}
+
+		const spotKey = createPredictionSpotKey({
+			code: sourceCode,
+			cursorLine: draftCursor.line,
+			language: currentLanguage,
+			targetName: selectedCode,
+		});
+		const cacheKey = buildPredictionCacheKey({
+			code: sourceCode,
+			line: draftCursor.line,
+			column: draftCursor.column,
+			language: currentLanguage,
+			appId,
+			targetName: selectedCode,
+		});
+		if (ignoredPredictionSpotsRef.current.has(spotKey)) {
+			setInlinePredictedCode(null);
+			return;
+		}
+
+		const cached = predictionCacheRef.current.get(cacheKey);
+		if (cached && (Date.now() - cached.ts) <= PREDICTION_CACHE_TTL_MS) {
+			setInlinePredictedCode(cached.value || null);
+			return;
+		}
+
+		if (predictionDebounceTimerRef.current) {
+			clearTimeout(predictionDebounceTimerRef.current);
+		}
+
+		predictionDebounceTimerRef.current = setTimeout(() => {
+			const runPredictionWhenIdle = () => {
+				const elapsedIdle = Date.now() - lastEditorInteractionAtRef.current;
+				if (elapsedIdle < NEXT_EDIT_PREDICTION_IDLE_MS) {
+					predictionDebounceTimerRef.current = setTimeout(
+						runPredictionWhenIdle,
+						Math.max(100, NEXT_EDIT_PREDICTION_IDLE_MS - elapsedIdle),
+					);
+					return;
+				}
+
+				predictionAbortRef.current?.abort();
+				const controller = new AbortController();
+				predictionAbortRef.current = controller;
+				const seq = predictionSeqRef.current + 1;
+				predictionSeqRef.current = seq;
+
+				void (async () => {
+				let fullResponse = "";
+				let completePayload: Record<string, unknown> | null = null;
+				let streamErr = "";
+
+				await streamAiCode(
+					{
+						appId: appId || "",
+						message: [
+							"Predict one likely next edit near the current cursor.",
+							"Return strict JSON only.",
+							"Preferred: {\"textEdits\":[{\"startLine\":X,\"endLine\":Y,\"replacement\":\"...\",\"action\":\"edit\"}],\"summary\":\"...\"}",
+							"Fallback: {\"code\":\"full updated code\",\"summary\":\"...\"}",
+							"No markdown.",
+						].join("\n"),
+						currentCode: sourceCode,
+						cursorLine: draftCursor.line,
+						contextWindowLines: 40,
+						language: currentLanguage,
+						responseMode: "edit",
+						contextType: "code",
+						signal: controller.signal,
+					},
+					{
+						onChunk: (_chunk, accumulated) => {
+							fullResponse = accumulated;
+						},
+						onComplete: (event) => {
+							completePayload = event;
+							fullResponse = String(event.fullResponse || fullResponse);
+						},
+						onError: (err) => {
+							streamErr = err;
+						},
+					},
+				);
+
+				if (controller.signal.aborted || predictionSeqRef.current !== seq) {
+					return;
+				}
+				if (streamErr || !fullResponse.trim()) {
+					setInlinePredictedCode(null);
+					return;
+				}
+
+				const suggestedCode = resolveSuggestedCodeFromAiResponse({
+					baseCode: sourceCode,
+					fullResponse,
+					completePayload,
+				});
+				if (!suggestedCode || suggestedCode === sourceCode) {
+					setInlinePredictedCode(null);
+					predictionCacheRef.current.set(cacheKey, { value: "", ts: Date.now() });
+					return;
+				}
+				predictionCacheRef.current.set(cacheKey, { value: suggestedCode, ts: Date.now() });
+				if (predictionCacheRef.current.size > PREDICTION_CACHE_MAX) {
+					const staleKeys = Array.from(predictionCacheRef.current.entries())
+						.sort((a, b) => a[1].ts - b[1].ts)
+						.slice(0, predictionCacheRef.current.size - PREDICTION_CACHE_MAX)
+						.map((entry) => entry[0]);
+					for (const key of staleKeys) {
+						predictionCacheRef.current.delete(key);
+					}
+				}
+				setInlinePredictedCode(suggestedCode);
+				})();
+			};
+
+			runPredictionWhenIdle();
+		}, NEXT_EDIT_PREDICTION_DEBOUNCE_MS);
+
+		return () => {
+			if (predictionDebounceTimerRef.current) {
+				clearTimeout(predictionDebounceTimerRef.current);
+				predictionDebounceTimerRef.current = null;
+			}
+		};
+	}, [
+		nextEditPredictionEnabled,
+		aiLoading,
+		openingCode,
+		aiLastCode,
+		draftCursor.line,
+		draftCursor.column,
+		appId,
+		currentLanguage,
+		selectedCode,
+	]);
+
+	useEffect(() => {
+		ignoredPredictionSpotsRef.current = new Set();
+		predictionCacheRef.current = new Map();
+		setIgnoredPredictionCount(0);
+		setInlinePredictedCode(null);
+	}, [aiSessionKey]);
 
 	useEffect(() => {
 		aiBaseContentRef.current = "";
@@ -1950,11 +2407,56 @@ export default function CodeEditor() {
 									<Button onClick={handleRedo}>
 										{devUiText("Làm lại", "Redo", "重做")}
 									</Button>
+									<Button onClick={() => void handleAiRewriteSelection()}>
+										{devUiText("Rewrite vùng chọn", "Rewrite selection", "重写选区")}
+									</Button>
+									<Button
+										type={nextEditPredictionEnabled ? "primary" : "default"}
+										onClick={() => setNextEditPrediction(!nextEditPredictionEnabled)}
+									>
+										{nextEditPredictionEnabled
+											? devUiText("Prediction: Bật", "Prediction: On", "预测：开")
+											: devUiText("Prediction: Tắt", "Prediction: Off", "预测：关")}
+									</Button>
+									{inlinePredictedCode && (
+										<Button
+											onClick={ignorePredictionAtCurrentSpot}
+											title={devUiText(
+												"Ẩn gợi ý ở vị trí hiện tại cho đến khi đổi file/record hoặc bấm Clear ignored.",
+												"Hide suggestions at this spot until you switch file/record or clear ignored spots.",
+												"在切换文件/记录或清空忽略列表前，隐藏此位置建议。",
+											)}
+										>
+											{devUiText("Bỏ gợi ý vị trí này", "Ignore this spot", "忽略此位置")}
+										</Button>
+									)}
+									<Button
+										onClick={clearIgnoredPredictionSpots}
+										disabled={ignoredPredictionCount <= 0}
+										title={devUiText(
+											"Xóa toàn bộ vị trí đã Ignore để prediction hoạt động lại đầy đủ.",
+											"Reset all ignored spots so prediction can appear again.",
+											"清除全部忽略位置，使预测重新生效。",
+										)}
+									>
+										{devUiText("Clear ignored", "Clear ignored", "清空忽略")}
+										{ignoredPredictionCount > 0 ? ` (${ignoredPredictionCount})` : ""}
+									</Button>
 									<div className={styles.quickActionHint}>
 										{devUiText(
 											"Mobile: mở nhanh Search/Replace và Go to line ngay trong vùng editor này.",
 											"Mobile: quick access to Search/Replace and Go to line inside this editor.",
 											"移动端：可在此编辑区快速打开查找替换和跳转行。",
+										)}
+										{nextEditPredictionEnabled && (
+											<>
+												{" "}
+												{devUiText(
+													"Prediction chạy khi editor idle; Ignore spot có hiệu lực đến khi đổi file/record hoặc Clear ignored.",
+													"Prediction runs when editor is idle; ignored spots stay active until file/record switch or Clear ignored.",
+													"预测仅在编辑器空闲时运行；忽略位置在切换文件/记录或清空前持续生效。",
+												)}
+											</>
 										)}
 									</div>
 								</div>
@@ -2000,7 +2502,15 @@ export default function CodeEditor() {
 								)}
 								<CodeMirror
 									onCreateEditor={(view) => {
+										editorScrollCleanupRef.current?.();
 										editorRef.current = view;
+										const onEditorScroll = () => {
+											lastEditorInteractionAtRef.current = Date.now();
+										};
+										view.scrollDOM?.addEventListener("scroll", onEditorScroll, { passive: true });
+										editorScrollCleanupRef.current = () => {
+											view.scrollDOM?.removeEventListener("scroll", onEditorScroll);
+										};
 										view.dispatch({ effects: setDraftHighlights.of(selectedPendingRanges) });
 										updateDraftIndicators(view);
 									}}
@@ -2008,11 +2518,13 @@ export default function CodeEditor() {
 									aiAssistantLanguage={currentLanguage as "javascript" | "html" | "python" | "java" | "css" | "sql" | "json"}
 									aiAssistantPName={selectedCode || undefined}
 									aiAssistantPType={resolvedPType}
+									aiAssistantInlineSuggestedCode={inlinePredictedCode}
 									value={aiLastCode}
 									onChange={(value) => {
 										if (!aiProgrammaticApplyRef.current) {
 											manualDraftRevisionRef.current += 1;
 										}
+										setInlinePredictedCode(null);
 										setAiLastCode(value);
 										setCodeContent(value);
 										setPendingChunk(null);

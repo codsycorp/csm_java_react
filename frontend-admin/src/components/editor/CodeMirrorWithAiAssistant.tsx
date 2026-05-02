@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import BaseCodeMirror, { type ReactCodeMirrorProps } from "@uiw/react-codemirror";
 import { Button, Tooltip } from "antd";
 import { MessageOutlined, FullscreenOutlined, FullscreenExitOutlined, CloseOutlined } from "@ant-design/icons";
+import { Prec, StateEffect, StateField, type Extension } from "@codemirror/state";
+import { Decoration, EditorView, WidgetType, keymap, type Command } from "@codemirror/view";
 import { useTranslation } from "react-i18next";
 import AiAssistantChat, { type AiAssistantUserMessagePayload } from "#src/pages/system/developer/AiAssistantChat";
 import { useAppStore } from "#src/store";
@@ -20,6 +22,8 @@ type CodeMirrorWithAiAssistantProps = ReactCodeMirrorProps & {
   aiAssistantPName?: string;
   aiAssistantPType?: number;
   aiAssistantAutoApplyCodeBlock?: boolean;
+  aiAssistantInlineReview?: boolean;
+  aiAssistantInlineSuggestedCode?: string | null;
   aiAssistantOnUserMessage?: (payload: AiAssistantUserMessagePayload) => void;
 };
 
@@ -40,7 +44,269 @@ type FullscreenViewportStyle = {
   height: number;
 };
 
+type InlineSuggestionPayload = {
+  from: number;
+  to: number;
+  oldText: string;
+  newText: string;
+  onAccept: () => void;
+  onReject: () => void;
+};
+
 const CHAT_PANEL_MARGIN = 10;
+const MAX_INLINE_PREVIEW_CHARS = 1200;
+const MAX_INLINE_WIDGET_LINES = 20;
+
+const setInlineSuggestionEffect = StateEffect.define<InlineSuggestionPayload | null>();
+
+const inlineSuggestionField = StateField.define<InlineSuggestionPayload | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setInlineSuggestionEffect)) {
+        return effect.value;
+      }
+    }
+    if (value && tr.docChanged) {
+      return null;
+    }
+    return value;
+  },
+});
+
+class InlineSuggestionWidget extends WidgetType {
+  private readonly suggestion: InlineSuggestionPayload;
+
+  constructor(suggestion: InlineSuggestionPayload) {
+    super();
+    this.suggestion = suggestion;
+  }
+
+  eq(other: InlineSuggestionWidget) {
+    return other.suggestion.from === this.suggestion.from
+      && other.suggestion.to === this.suggestion.to
+      && other.suggestion.oldText === this.suggestion.oldText
+      && other.suggestion.newText === this.suggestion.newText;
+  }
+
+  toDOM() {
+    const root = document.createElement("div");
+    root.className = "cm-ai-inline-widget";
+
+    const title = document.createElement("div");
+    title.className = "cm-ai-inline-widget-title";
+    title.textContent = "AI Suggested Update";
+    root.appendChild(title);
+
+    const previewWrap = document.createElement("div");
+    previewWrap.className = "cm-ai-inline-preview-wrap";
+
+    const oldBlock = document.createElement("pre");
+    oldBlock.className = "cm-ai-inline-preview cm-ai-inline-preview-old";
+    oldBlock.textContent = this.suggestion.oldText;
+    previewWrap.appendChild(oldBlock);
+
+    const newBlock = document.createElement("pre");
+    newBlock.className = "cm-ai-inline-preview cm-ai-inline-preview-new";
+    newBlock.textContent = this.suggestion.newText;
+    previewWrap.appendChild(newBlock);
+
+    root.appendChild(previewWrap);
+
+    const controls = document.createElement("div");
+    controls.className = "cm-ai-inline-controls";
+
+    const acceptButton = document.createElement("button");
+    acceptButton.className = "cm-ai-inline-btn cm-ai-inline-btn-accept";
+    acceptButton.type = "button";
+    acceptButton.textContent = "Accept (Tab)";
+    acceptButton.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.suggestion.onAccept();
+    };
+    controls.appendChild(acceptButton);
+
+    const rejectButton = document.createElement("button");
+    rejectButton.className = "cm-ai-inline-btn cm-ai-inline-btn-reject";
+    rejectButton.type = "button";
+    rejectButton.textContent = "Reject (Esc)";
+    rejectButton.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.suggestion.onReject();
+    };
+    controls.appendChild(rejectButton);
+
+    root.appendChild(controls);
+    return root;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+const inlineSuggestionDecorations = StateField.define({
+  create: () => Decoration.none,
+  update(_deco, tr) {
+    const suggestion = tr.state.field(inlineSuggestionField);
+    if (!suggestion) {
+      return Decoration.none;
+    }
+
+    const ranges: any[] = [];
+    const from = Math.max(0, Math.min(tr.state.doc.length, suggestion.from));
+    const to = Math.max(from, Math.min(tr.state.doc.length, suggestion.to));
+
+    if (to > from) {
+      ranges.push(Decoration.mark({ class: "cm-ai-inline-old" }).range(from, to));
+    }
+    ranges.push(
+      Decoration.widget({
+        widget: new InlineSuggestionWidget(suggestion),
+        side: 1,
+        block: true,
+      }).range(to),
+    );
+
+    return Decoration.set(ranges, true);
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+const inlineSuggestionTheme = EditorView.theme({
+  ".cm-ai-inline-old": {
+    backgroundColor: "rgba(220, 38, 38, 0.16)",
+    textDecoration: "line-through",
+    borderRadius: "2px",
+  },
+  ".cm-ai-inline-widget": {
+    marginTop: "6px",
+    marginBottom: "6px",
+    padding: "10px",
+    borderRadius: "8px",
+    border: "1px solid rgba(125, 125, 125, 0.35)",
+    backgroundColor: "var(--ant-color-bg-container, #1f2937)",
+  },
+  ".cm-ai-inline-widget-title": {
+    fontSize: "11px",
+    fontWeight: "700",
+    marginBottom: "8px",
+    letterSpacing: "0.03em",
+    textTransform: "uppercase",
+    color: "var(--ant-color-text-secondary, #94a3b8)",
+  },
+  ".cm-ai-inline-preview-wrap": {
+    display: "grid",
+    gridTemplateColumns: "1fr",
+    gap: "8px",
+    marginBottom: "8px",
+  },
+  ".cm-ai-inline-preview": {
+    margin: 0,
+    padding: "8px",
+    borderRadius: "6px",
+    whiteSpace: "pre-wrap",
+    fontSize: "12px",
+    lineHeight: "1.5",
+    maxHeight: "180px",
+    overflow: "auto",
+  },
+  ".cm-ai-inline-preview-old": {
+    backgroundColor: "rgba(220, 38, 38, 0.12)",
+    border: "1px solid rgba(220, 38, 38, 0.25)",
+  },
+  ".cm-ai-inline-preview-new": {
+    backgroundColor: "rgba(22, 163, 74, 0.12)",
+    border: "1px solid rgba(22, 163, 74, 0.26)",
+  },
+  ".cm-ai-inline-controls": {
+    display: "flex",
+    gap: "8px",
+  },
+  ".cm-ai-inline-btn": {
+    border: "1px solid transparent",
+    borderRadius: "999px",
+    backgroundColor: "transparent",
+    fontSize: "11px",
+    padding: "2px 10px",
+    lineHeight: "20px",
+    cursor: "pointer",
+  },
+  ".cm-ai-inline-btn-accept": {
+    borderColor: "rgba(22, 163, 74, 0.35)",
+    color: "#22c55e",
+  },
+  ".cm-ai-inline-btn-reject": {
+    borderColor: "rgba(220, 38, 38, 0.35)",
+    color: "#ef4444",
+  },
+});
+
+const acceptInlineSuggestionCommand: Command = (view) => {
+  const suggestion = view.state.field(inlineSuggestionField);
+  if (!suggestion) return false;
+  suggestion.onAccept();
+  return true;
+};
+
+const rejectInlineSuggestionCommand: Command = (view) => {
+  const suggestion = view.state.field(inlineSuggestionField);
+  if (!suggestion) return false;
+  suggestion.onReject();
+  return true;
+};
+
+const inlineSuggestionKeymap = Prec.highest(
+  keymap.of([
+    { key: "Tab", run: acceptInlineSuggestionCommand },
+    { key: "Escape", run: rejectInlineSuggestionCommand },
+  ]),
+);
+
+const inlineSuggestionExtension: Extension[] = [
+  inlineSuggestionField,
+  inlineSuggestionDecorations,
+  inlineSuggestionTheme,
+  inlineSuggestionKeymap,
+];
+
+function clampPreviewText(raw: string): string {
+  const text = String(raw || "");
+  const lines = text.split("\n");
+  const lineLimited = lines.length > MAX_INLINE_WIDGET_LINES
+    ? `${lines.slice(0, MAX_INLINE_WIDGET_LINES).join("\n")}\n...`
+    : text;
+  if (lineLimited.length <= MAX_INLINE_PREVIEW_CHARS) return lineLimited;
+  return `${lineLimited.slice(0, MAX_INLINE_PREVIEW_CHARS)}...`;
+}
+
+function computeChangedRange(baseText: string, nextText: string): { from: number; to: number; oldText: string; newText: string } | null {
+  if (baseText === nextText) return null;
+  const base = String(baseText || "");
+  const next = String(nextText || "");
+
+  let start = 0;
+  const maxStart = Math.min(base.length, next.length);
+  while (start < maxStart && base[start] === next[start]) {
+    start += 1;
+  }
+
+  let endBase = base.length;
+  let endNext = next.length;
+  while (endBase > start && endNext > start && base[endBase - 1] === next[endNext - 1]) {
+    endBase -= 1;
+    endNext -= 1;
+  }
+
+  return {
+    from: start,
+    to: endBase,
+    oldText: base.slice(start, endBase),
+    newText: next.slice(start, endNext),
+  };
+}
 
 function getFloatingPanelMinTop(): number {
   if (typeof document === "undefined") return CHAT_PANEL_MARGIN;
@@ -127,11 +393,14 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
     aiAssistantPName,
     aiAssistantPType,
     aiAssistantAutoApplyCodeBlock = false,
+    aiAssistantInlineReview = true,
+    aiAssistantInlineSuggestedCode,
     aiAssistantOnUserMessage,
     value,
     height,
     onCreateEditor,
     onChange,
+    extensions: externalExtensions,
     ...codeMirrorProps
   } = props;
   const { i18n } = useTranslation();
@@ -399,11 +668,62 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
     window.addEventListener("pointercancel", stopDragging);
   }, [clampPanelPosition, isCompactView]);
 
+  const presentInlineSuggestion = useCallback((nextCode: string) => {
+    const view = editorViewRef.current;
+    if (!view || !aiAssistantInlineReview || autoApplyEnabled) {
+      return false;
+    }
+
+    const beforeCode = String(currentCode || "");
+    const afterCode = String(nextCode || "");
+    const range = computeChangedRange(beforeCode, afterCode);
+    if (!range) {
+      return false;
+    }
+
+    const clearSuggestion = () => {
+      try {
+        view.dispatch({ effects: setInlineSuggestionEffect.of(null) });
+      } catch {
+        // ignore editor dispatch failures
+      }
+    };
+
+    const acceptSuggestion = () => {
+      clearSuggestion();
+      if (typeof onChange === "function") {
+        onChange(afterCode, undefined as any);
+      }
+    };
+
+    view.dispatch({
+      effects: setInlineSuggestionEffect.of({
+        from: range.from,
+        to: range.to,
+        oldText: clampPreviewText(range.oldText || "(empty)"),
+        newText: clampPreviewText(range.newText || "(empty)"),
+        onAccept: acceptSuggestion,
+        onReject: clearSuggestion,
+      }),
+    });
+    return true;
+  }, [aiAssistantInlineReview, autoApplyEnabled, currentCode, onChange]);
+
   const handleCopilotCodeInsert = useCallback((nextCode: string) => {
+    if (presentInlineSuggestion(nextCode)) {
+      return;
+    }
+
     if (typeof onChange === "function") {
       onChange(nextCode, undefined as any);
     }
-  }, [onChange]);
+  }, [onChange, presentInlineSuggestion]);
+
+  useEffect(() => {
+    const suggested = String(aiAssistantInlineSuggestedCode || "").trim();
+    if (!suggested) return;
+    presentInlineSuggestion(suggested);
+  }, [aiAssistantInlineSuggestedCode, presentInlineSuggestion]);
 
   const handleCreateEditor = useCallback((view: any, state: any) => {
     editorViewRef.current = view;
@@ -547,6 +867,16 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
     isCompactView ? styles.chatPanelCompact : "",
   ].filter(Boolean).join(" ");
 
+  const resolvedExtensions = useMemo<Extension[]>(() => {
+    const base = Array.isArray(externalExtensions)
+      ? externalExtensions
+      : externalExtensions
+        ? [externalExtensions]
+        : [];
+    if (!aiAssistantInlineReview) return base as Extension[];
+    return [...(base as Extension[]), ...inlineSuggestionExtension];
+  }, [aiAssistantInlineReview, externalExtensions]);
+
   const rootNode = (
     <div
       className={isFullscreen ? styles.wrapperFullscreen : styles.wrapper}
@@ -566,6 +896,7 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
           height={editorHeight}
           onChange={onChange}
           onCreateEditor={handleCreateEditor}
+          extensions={resolvedExtensions}
           {...codeMirrorProps}
         />
       </div>
