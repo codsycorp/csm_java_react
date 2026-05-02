@@ -2941,6 +2941,11 @@
           setLegacySlrAutoRunning(true);
           setLoading(true);
           setProgress(15);
+          // Xóa kết quả tổng hợp và selection cũ khi chạy lại (LT thay đổi → rows mới → selection cũ không còn hợp lệ)
+          setLegacySlrAutoSelectedRowKeys([]);
+          setLegacySlrAutoTongHopRows([]);
+          setLegacySlrAutoTongHopSummary("");
+          setLegacySlrAutoTongHopSelectedRowKeys([]);
           try {
             var timkiemRows = [];
             try {
@@ -7645,6 +7650,10 @@
     async function runLegacyKiemTraTongHop() {
       setLoading(true);
       setProgress(15);
+      setLegacyKttRows([]);
+      setLegacyKttMatchSet({});
+      setLegacyKttClickMap({});
+      setLegacyKttHasSearchInput(false);
       try {
         var kttQueryType = getLegacySpecialQueryTypeForTab("ktt");
         var dataMien = await loadLegacySpecialDataByQuery(kttQueryType.value);
@@ -7833,6 +7842,8 @@
     async function runLegacySoLauRa() {
       setLoading(true);
       setProgress(15);
+      setLegacySlrRows([]);
+      setLegacySlrWeekRows([]);
       try {
         var slrQueryType = getLegacySpecialQueryTypeForTab("slr");
         var dataMien = await loadLegacySpecialDataByQuery(slrQueryType.value);
@@ -7871,6 +7882,7 @@
     async function runLegacyNamBac() {
       setLoading(true);
       setProgress(15);
+      setLegacyNbRows([]);
       try {
         // NamBac.php is fixed to MaDuoi=2; keep JS runner identical for strict parity.
         var he = 2;
@@ -7945,6 +7957,15 @@
       }
       setLoading(true);
       setProgress(15);
+      setLegacyThRows([]);
+      legacySortedRowsRef.current["th_main"] = null;
+      setLegacyThAutoRows([]);
+      legacySortedRowsRef.current["th_auto"] = null;
+      setLegacyThManualSelectedRowKeys([]);
+      setLegacyThAutoSelectedRowKeys([]);
+      setLegacyThIntersect("");
+      setLegacyThIntersectManual("");
+      setLegacyThParityStatus("");
       try {
         var selectedQueryItems = getLegacyThSelectedQueryTypeItems();
         var queryType = selectedQueryItems.length
@@ -8345,6 +8366,9 @@
     async function runLegacyBong() {
       setLoading(true);
       setProgress(15);
+      setLegacyBongRows([]);
+      setLegacyBongStatsRows([]);
+      setLegacyBongSummary("");
       try {
         var meta = getLegacyBongVariantMeta(legacyBongVariant);
         var fromYmd = normalizeLegacyDateYmd(tu_ngay);
@@ -8566,6 +8590,12 @@
       setLegacyThAutoPinnedFullAuto(true);
       legacyThAutoStopRef.current = false;
       setProgress(10);
+      setLegacyThAutoRows([]);
+      legacySortedRowsRef.current["th_auto"] = null;
+      setLegacyThAutoSelectedRowKeys([]);
+      setLegacyThIntersect("");
+      setLegacyThAutoSummary("");
+      setLegacyThAutoStatus("");
       var resetAutoState = function () {
         legacyThAutoStopRef.current = false;
         setLegacyThAutoRunning(false);
