@@ -283,6 +283,15 @@ public class ApiSpringController {
     @Value("${ai.code-stream.auto-continue.max-previous-response-chars:120000}")
     private int aiCodeStreamAutoContinueMaxPreviousResponseChars;
 
+    @Value("${ai.code-stream.edit.text-edits-retry.enabled:true}")
+    private boolean aiCodeStreamEditTextEditsRetryEnabled;
+
+    @Value("${ai.code-stream.edit.text-edits-retry.max-prompt-chars:80000}")
+    private int aiCodeStreamEditTextEditsRetryMaxPromptChars;
+
+    @Value("${ai.code-stream.edit.text-edits-retry.max-extra-attempts:1}")
+    private int aiCodeStreamEditTextEditsRetryMaxExtraAttempts;
+
     @Value("${ai.menu.auto-continue.enabled:true}")
     private boolean aiMenuAutoContinueEnabled;
 
@@ -539,6 +548,7 @@ public class ApiSpringController {
                 String effectiveModel = routeModel(message, effectiveCodeContext, contextType, responseMode, modelOverride);
                 String defaultModel = resolveDefaultStreamingModel();
                 String simpleModel = resolveSimpleStreamingModel();
+                Map<String, Object> codeStreamMeta = new LinkedHashMap<>();
                 boolean shouldFallbackToDefaultOnSimpleFailure = aiCodeStreamRoutingForceSimpleFirst
                     && effectiveModel.equalsIgnoreCase(simpleModel)
                     && !defaultModel.equalsIgnoreCase(simpleModel)
@@ -600,6 +610,7 @@ public class ApiSpringController {
                             responseMode,
                             largeStructuredEditMode,
                             usePromptCache,
+                            codeStreamMeta,
                             requestId);
                 }
                 if (rawResponse == null) {
@@ -630,6 +641,7 @@ public class ApiSpringController {
                             responseMode,
                             largeStructuredEditMode,
                             usePromptCache,
+                            codeStreamMeta,
                             requestId);
                     effectiveModel = defaultModel;
                             switchedToDefaultModel = true;
@@ -677,8 +689,15 @@ public class ApiSpringController {
                 if ("edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType)) {
                     completionPayload = mergeMenuCompletionWithBase(effectiveCodeContext, completionPayload, contextType);
                 }
+                Map<String, Object> outputShape = analyzeCodeStreamOutputShape(responseMode, contextType, completionPayload,
+                    largeStructuredEditMode);
                 completion.put("fullResponse", completionPayload);
                 completion.put("responseMode", responseMode);
+                completion.putAll(outputShape);
+                completion.put("textEditsRetryTriggered",
+                    bool(codeStreamMeta.get("textEditsRetryTriggered"), false));
+                completion.put("textEditsRetryAttempts",
+                    parseIntSafe(codeStreamMeta.get("textEditsRetryAttempts"), 0));
                 int completionTokens = estimateTokens(rawResponse);
                 Map<String, Object> usageInfo = buildUsageInfoForSse(effectiveModel, promptTokens, completionTokens);
                 completion.put("usage", usageInfo);
@@ -699,7 +718,7 @@ public class ApiSpringController {
                 sendEvent(emitter, objectMapper.writeValueAsString(completion));
 
                 logger.info(
-                    "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType={} responseMode={} model={} promptChars={} promptTokens={} outputChars={} completionTokens={} estimatedCostUsd={} switchedToDefaultModel={} providerFallbackUsed={} promptCache={} images={} elapsedMs={}",
+                    "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType={} responseMode={} model={} promptChars={} promptTokens={} outputChars={} completionTokens={} estimatedCostUsd={} outputShape={} textEditsCount={} fallbackToFullCode={} textEditsRetryTriggered={} textEditsRetryAttempts={} switchedToDefaultModel={} providerFallbackUsed={} promptCache={} images={} elapsedMs={}",
                     requestId,
                     appId,
                     contextType,
@@ -710,6 +729,11 @@ public class ApiSpringController {
                     rawResponse.length(),
                     completionTokens,
                     usageInfo.get("estimatedCostUsd"),
+                    outputShape.get("outputShape"),
+                    outputShape.get("textEditsCount"),
+                    outputShape.get("fallbackToFullCode"),
+                    bool(codeStreamMeta.get("textEditsRetryTriggered"), false),
+                    parseIntSafe(codeStreamMeta.get("textEditsRetryAttempts"), 0),
                     switchedToDefaultModel,
                     providerFallbackUsed,
                     usePromptCache,
@@ -729,6 +753,11 @@ public class ApiSpringController {
                 codeTelemetry.put("outputChars", rawResponse.length());
                 codeTelemetry.put("completionTokens", completionTokens);
                 codeTelemetry.put("estimatedCostUsd", usageInfo.get("estimatedCostUsd"));
+                codeTelemetry.put("outputShape", outputShape.get("outputShape"));
+                codeTelemetry.put("textEditsCount", outputShape.get("textEditsCount"));
+                codeTelemetry.put("fallbackToFullCode", outputShape.get("fallbackToFullCode"));
+                codeTelemetry.put("textEditsRetryTriggered", bool(codeStreamMeta.get("textEditsRetryTriggered"), false));
+                codeTelemetry.put("textEditsRetryAttempts", parseIntSafe(codeStreamMeta.get("textEditsRetryAttempts"), 0));
                 codeTelemetry.put("switchedToDefaultModel", switchedToDefaultModel);
                 codeTelemetry.put("providerFallbackUsed", providerFallbackUsed);
                 codeTelemetry.put("attachments", imageParts.size());
@@ -1274,7 +1303,12 @@ public class ApiSpringController {
                 sb.append("Không trả về wrapper {\"summary\",\"code\",\"changes\"}.\n");
                 sb.append("Không markdown, không code fence, không giải thích ngoài JSON.\n\n");
             } else {
-                sb.append("CHẾ ĐỘ: Chỉnh sửa code. Trả về code đã cập nhật hoàn chỉnh.\n\n");
+                sb.append("CHẾ ĐỘ: Chỉnh sửa code theo vị trí dòng.\n");
+                sb.append("Ưu tiên trả về JSON thuần theo format:\n");
+                sb.append("{\"summary\":\"...\",\"changes\":[\"...\"],\"textEdits\":[{\"startLine\":10,\"endLine\":12,\"replacement\":\"...\",\"action\":\"edit\"}]}\n");
+                sb.append("Trong đó textEdits phải không chồng lấn và chỉ chỉnh đúng phạm vi cần thiết.\n");
+                sb.append("Chỉ fallback trả về {\"summary\",\"code\",\"changes\"} khi không thể biểu diễn bằng textEdits.\n");
+                sb.append("Không markdown, không code fence.\n\n");
             }
         } else {
             sb.append("CHẾ ĐỘ: Phân tích/Giải thích. Phân tích và giải thích chi tiết.\n\n");
@@ -1322,7 +1356,8 @@ public class ApiSpringController {
             String responseMode,
             boolean largeStructuredEditMode,
             String requestId) throws Exception {
-        return streamWithAutoContinue(emitter, prompt, "", "", model, language, contextType, responseMode, largeStructuredEditMode, false, requestId);
+        return streamWithAutoContinue(emitter, prompt, "", "", model, language, contextType, responseMode, largeStructuredEditMode, false,
+            new LinkedHashMap<>(), requestId);
     }
 
     private String streamWithAutoContinueMultimodal(
@@ -1385,12 +1420,18 @@ public class ApiSpringController {
             String responseMode,
             boolean largeStructuredEditMode,
             boolean usePromptCache,
+            Map<String, Object> streamMeta,
             String requestId) throws Exception {
         boolean editMode = "edit".equalsIgnoreCase(responseMode);
-        int maxAttempts = editMode && aiCodeStreamAutoContinueEnabled ? Math.max(1, aiCodeStreamAutoContinueMaxAttempts) : 1;
+        int autoContinueAttempts = editMode && aiCodeStreamAutoContinueEnabled ? Math.max(1, aiCodeStreamAutoContinueMaxAttempts) : 1;
+        int textEditRetryAttempts = (editMode && aiCodeStreamEditTextEditsRetryEnabled)
+                ? 1 + Math.max(0, aiCodeStreamEditTextEditsRetryMaxExtraAttempts)
+                : 1;
+        int maxAttempts = Math.max(autoContinueAttempts, textEditRetryAttempts);
         String currentPrompt = prompt;
         String lastRawResponse = "";
         AtomicInteger waitingLogBucket = new AtomicInteger(0);
+        int textEditsRetryUsed = 0;
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             final int attemptNo = attempt;
@@ -1494,6 +1535,32 @@ public class ApiSpringController {
             lastRawResponse = raw;
 
             if (isCompleteResponse(raw, language, contextType, responseMode, largeStructuredEditMode)) {
+                boolean shouldRetryForTextEdits = shouldRetryForLineTextEdits(
+                        prompt,
+                        contextType,
+                        responseMode,
+                        largeStructuredEditMode,
+                        raw,
+                        attemptNo,
+                        maxAttempts,
+                        textEditsRetryUsed);
+
+                if (shouldRetryForTextEdits) {
+                    textEditsRetryUsed++;
+                    if (streamMeta != null) {
+                        streamMeta.put("textEditsRetryTriggered", true);
+                        streamMeta.put("textEditsRetryAttempts", textEditsRetryUsed);
+                    }
+                    sendEvent(emitter, jsonOf(
+                            "stage", "auto_continue",
+                            "status", "text_edits_retry",
+                            "attempt", attemptNo,
+                            "maxAttempts", maxAttempts,
+                            "message", "Kết quả đang là full code, backend yêu cầu model trả về textEdits theo line để apply chính xác"));
+                    currentPrompt = buildTextEditsRetryPrompt(prompt, raw, language, contextType, largeStructuredEditMode);
+                    continue;
+                }
+
                 if (attempt > 1) {
                     sendEvent(emitter, jsonOf(
                             "stage", "auto_continue",
@@ -1502,12 +1569,21 @@ public class ApiSpringController {
                             "maxAttempts", maxAttempts,
                             "message", "Đã tự động hoàn thiện kết quả trong backend"));
                 }
+                if (streamMeta != null) {
+                    streamMeta.put("textEditsRetryTriggered", textEditsRetryUsed > 0);
+                    streamMeta.put("textEditsRetryAttempts", textEditsRetryUsed);
+                }
                 return raw;
             }
 
             if (attempt < maxAttempts) {
                 currentPrompt = buildAutoContinuePrompt(prompt, raw, language, contextType, largeStructuredEditMode);
             }
+        }
+
+        if (streamMeta != null) {
+            streamMeta.put("textEditsRetryTriggered", textEditsRetryUsed > 0);
+            streamMeta.put("textEditsRetryAttempts", textEditsRetryUsed);
         }
 
         return lastRawResponse;
@@ -1573,6 +1649,118 @@ public class ApiSpringController {
         sb.append("--- KẾT QUẢ TRƯỚC (CHƯA HOÀN CHỈNH - BỊ CẮT) ---\n");
         sb.append(truncateMiddle(previousRawResponse, Math.max(8000, aiCodeStreamAutoContinueMaxPreviousResponseChars))).append("\n");
         return sb.toString();
+    }
+
+    private String buildTextEditsRetryPrompt(String originalPrompt, String previousRawResponse, String language,
+            String contextType,
+            boolean largeStructuredEditMode) {
+        if (largeStructuredEditMode) {
+            return buildAutoContinuePrompt(originalPrompt, previousRawResponse, language, contextType, true);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("ĐIỀU CHỈNH ĐỊNH DẠNG KẾT QUẢ: backend cần apply theo line-level edits để tránh ghi đè cả file.\n");
+        sb.append("BẮT BUỘC trả về JSON thuần dạng:\n");
+        sb.append("{\"summary\":\"...\",\"changes\":[\"...\"],\"textEdits\":[{\"startLine\":10,\"endLine\":12,\"replacement\":\"...\",\"action\":\"edit\"}]}\n");
+        sb.append("Quy tắc:\n");
+        sb.append("- Không markdown, không code fence.\n");
+        sb.append("- textEdits không chồng lấn nhau.\n");
+        sb.append("- Chỉ sửa vùng cần thiết, không thay toàn bộ file.\n\n");
+        sb.append("--- YÊU CẦU GỐC ---\n");
+        sb.append(truncateMiddle(originalPrompt, Math.max(20000, aiCodeStreamMaxPromptChars))).append("\n\n");
+        sb.append("--- KẾT QUẢ TRƯỚC (SAI ĐỊNH DẠNG, ĐANG LÀ FULL CODE) ---\n");
+        sb.append(truncateMiddle(previousRawResponse, Math.max(8000, aiCodeStreamAutoContinueMaxPreviousResponseChars))).append("\n");
+        return sb.toString();
+    }
+
+    private boolean shouldRetryForLineTextEdits(
+            String prompt,
+            String contextType,
+            String responseMode,
+            boolean largeStructuredEditMode,
+            String rawResponse,
+            int attemptNo,
+            int maxAttempts,
+            int textEditsRetryUsed) {
+        if (!aiCodeStreamEditTextEditsRetryEnabled) return false;
+        if (!"edit".equalsIgnoreCase(responseMode)) return false;
+        if (isMenuJsonContext(contextType)) return false;
+        if (largeStructuredEditMode) return false;
+        if (attemptNo >= maxAttempts) return false;
+        if (textEditsRetryUsed >= Math.max(0, aiCodeStreamEditTextEditsRetryMaxExtraAttempts)) return false;
+        if (prompt != null && prompt.length() > Math.max(10000, aiCodeStreamEditTextEditsRetryMaxPromptChars)) return false;
+
+        int textEditsCount = extractLineTextEditsCount(rawResponse);
+        if (textEditsCount > 0) return false;
+
+        return hasFullCodeInEditPayload(rawResponse);
+    }
+
+    private Map<String, Object> analyzeCodeStreamOutputShape(
+            String responseMode,
+            String contextType,
+            String completionPayload,
+            boolean largeStructuredEditMode) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        String mode = String.valueOf(responseMode == null ? "" : responseMode).trim();
+        String ctx = String.valueOf(contextType == null ? "" : contextType).trim();
+
+        int textEditsCount = extractLineTextEditsCount(completionPayload);
+        boolean hasFullCode = hasFullCodeInEditPayload(completionPayload);
+
+        String outputShape;
+        if (!"edit".equalsIgnoreCase(mode)) {
+            outputShape = "non_edit";
+        } else if (isMenuJsonContext(ctx)) {
+            outputShape = "menu_json";
+        } else if (largeStructuredEditMode) {
+            outputShape = textEditsCount > 0 ? "text_edits_find_replace" : "unknown";
+        } else if (textEditsCount > 0) {
+            outputShape = "text_edits_line";
+        } else if (hasFullCode) {
+            outputShape = "full_code";
+        } else {
+            outputShape = "unknown";
+        }
+
+        out.put("outputShape", outputShape);
+        out.put("textEditsCount", textEditsCount);
+        out.put("fallbackToFullCode", "full_code".equals(outputShape));
+        return out;
+    }
+
+    private int extractLineTextEditsCount(String rawResponse) {
+        String normalized = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        if (normalized.isBlank()) return 0;
+        if (normalized.startsWith("```json")) normalized = normalized.substring(7).trim();
+        if (normalized.startsWith("```")) normalized = normalized.substring(3).trim();
+        if (normalized.endsWith("```")) normalized = normalized.substring(0, normalized.length() - 3).trim();
+        try {
+            Map<?, ?> obj = objectMapper.readValue(normalized, Map.class);
+            Object edits = obj.get("textEdits") != null ? obj.get("textEdits") : obj.get("text_edits");
+            if (!(edits instanceof List<?> list)) {
+                return 0;
+            }
+            int count = 0;
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> map) {
+                    boolean hasLine = map.get("startLine") != null || map.get("start_line") != null
+                            || map.get("line") != null || map.get("range") instanceof Map<?, ?>;
+                    boolean hasReplace = map.get("replacement") != null || map.get("newText") != null
+                            || map.get("text") != null;
+                    if (hasLine && hasReplace) {
+                        count++;
+                    }
+                }
+            }
+            return count;
+        } catch (Exception ex) {
+            return 0;
+        }
+    }
+
+    private boolean hasFullCodeInEditPayload(String rawResponse) {
+        ParsedCodePayload payload = parseCodePayload(rawResponse);
+        return payload != null && payload.code() != null && !payload.code().isBlank();
     }
 
     private boolean isCompleteResponse(String rawResponse, String language, String contextType, String responseMode, boolean largeStructuredEditMode) {

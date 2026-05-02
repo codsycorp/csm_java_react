@@ -83,6 +83,11 @@ public class ApiCallInstrumentationService {
         public String preferredModelHint;
         public boolean speculativeExecuted;
         public String speculativeOperation;
+        public String outputShape;
+        public int textEditsCount;
+        public boolean fallbackToFullCode;
+        public boolean textEditsRetryTriggered;
+        public int textEditsRetryAttempts;
 
         public Map<String, Object> toMap() {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -114,6 +119,11 @@ public class ApiCallInstrumentationService {
             m.put("preferredModelHint", preferredModelHint);
             m.put("speculativeExecuted", speculativeExecuted);
             m.put("speculativeOperation", speculativeOperation);
+            m.put("outputShape", outputShape);
+            m.put("textEditsCount", textEditsCount);
+            m.put("fallbackToFullCode", fallbackToFullCode);
+            m.put("textEditsRetryTriggered", textEditsRetryTriggered);
+            m.put("textEditsRetryAttempts", textEditsRetryAttempts);
             return m;
         }
     }
@@ -259,6 +269,11 @@ public class ApiCallInstrumentationService {
         metric.preferredModelHint = toText(payload.get("preferredModelHint"));
         metric.speculativeExecuted = toBool(payload.get("speculativeExecuted"));
         metric.speculativeOperation = toText(payload.get("speculativeOperation"));
+        metric.outputShape = toText(payload.get("outputShape"));
+        metric.textEditsCount = toInt(payload.get("textEditsCount"));
+        metric.fallbackToFullCode = toBool(payload.get("fallbackToFullCode"));
+        metric.textEditsRetryTriggered = toBool(payload.get("textEditsRetryTriggered"));
+        metric.textEditsRetryAttempts = toInt(payload.get("textEditsRetryAttempts"));
 
         aiTelemetryHistory.add(metric);
         pruneAiTelemetryHistoryIfNeeded(5000);
@@ -318,6 +333,14 @@ public class ApiCallInstrumentationService {
         int quickProbeCount = 0;
         int skipQuickProbeCount = 0;
         int directProviderCount = 0;
+        int codeStreamEvents = 0;
+        int codeStreamEditEvents = 0;
+        int textEditsLineCount = 0;
+        int fullCodeFallbackCount = 0;
+        int textEditsRetryTriggeredCount = 0;
+        int textEditsRetrySuccessCount = 0;
+        long textEditsTotal = 0;
+        long textEditsRetryAttemptsTotal = 0;
         long inputTokens = 0;
         long outputTokens = 0;
         long elapsedMs = 0;
@@ -325,6 +348,7 @@ public class ApiCallInstrumentationService {
         int speculativeCount = 0;
         Map<String, Integer> flowCounts = new LinkedHashMap<>();
         Map<String, Integer> routingTierCounts = new LinkedHashMap<>();
+        Map<String, Integer> outputShapeCounts = new LinkedHashMap<>();
 
         if (events != null) {
             for (AiTelemetryMetric m : events) {
@@ -344,12 +368,40 @@ public class ApiCallInstrumentationService {
                 }
                 String flow = toText(m.flow);
                 flowCounts.put(flow, flowCounts.getOrDefault(flow, 0) + 1);
+                if ("ai-code-stream".equalsIgnoreCase(flow)) {
+                    codeStreamEvents++;
+                    if ("edit".equalsIgnoreCase(toText(m.responseMode))) {
+                        codeStreamEditEvents++;
+                    }
+                }
                 String routingTier = toText(m.routingTier);
                 if (!routingTier.isBlank()) {
                     routingTierCounts.put(routingTier, routingTierCounts.getOrDefault(routingTier, 0) + 1);
                 }
+                String outputShape = toText(m.outputShape);
+                if (!outputShape.isBlank()) {
+                    outputShapeCounts.put(outputShape, outputShapeCounts.getOrDefault(outputShape, 0) + 1);
+                }
+
+                if ("text_edits_line".equalsIgnoreCase(outputShape)) {
+                    textEditsLineCount++;
+                }
+                if (m.fallbackToFullCode || "full_code".equalsIgnoreCase(outputShape)) {
+                    fullCodeFallbackCount++;
+                }
+                if (m.textEditsRetryTriggered) {
+                    textEditsRetryTriggeredCount++;
+                    if ("text_edits_line".equalsIgnoreCase(outputShape)) {
+                        textEditsRetrySuccessCount++;
+                    }
+                }
+                textEditsTotal += Math.max(0, m.textEditsCount);
+                textEditsRetryAttemptsTotal += Math.max(0, m.textEditsRetryAttempts);
             }
         }
+
+        int textEditRateBase = Math.max(1, codeStreamEditEvents);
+        int retryRateBase = Math.max(1, codeStreamEvents);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("totalEvents", total);
@@ -365,8 +417,22 @@ public class ApiCallInstrumentationService {
         out.put("estimatedCostUsd", round6(totalCostUsd));
         out.put("speculativeExecutionCount", speculativeCount);
         out.put("speculativeExecutionRate", ratio(speculativeCount, total));
+        out.put("codeStreamEvents", codeStreamEvents);
+        out.put("codeStreamEditEvents", codeStreamEditEvents);
+        out.put("textEditsLineCount", textEditsLineCount);
+        out.put("textEditsLineRate", round6((double) textEditsLineCount / textEditRateBase));
+        out.put("fullCodeFallbackCount", fullCodeFallbackCount);
+        out.put("fullCodeFallbackRate", round6((double) fullCodeFallbackCount / textEditRateBase));
+        out.put("textEditsTotal", textEditsTotal);
+        out.put("avgTextEditsPerEvent", round6((double) textEditsTotal / Math.max(1, codeStreamEvents)));
+        out.put("textEditsRetryTriggeredCount", textEditsRetryTriggeredCount);
+        out.put("textEditsRetryTriggeredRate", round6((double) textEditsRetryTriggeredCount / retryRateBase));
+        out.put("textEditsRetrySuccessCount", textEditsRetrySuccessCount);
+        out.put("textEditsRetrySuccessRate", round6((double) textEditsRetrySuccessCount / Math.max(1, textEditsRetryTriggeredCount)));
+        out.put("textEditsRetryAttemptsTotal", textEditsRetryAttemptsTotal);
         out.put("byFlow", flowCounts);
         out.put("byRoutingTier", routingTierCounts);
+        out.put("byOutputShape", outputShapeCounts);
         return out;
     }
 
@@ -384,6 +450,11 @@ public class ApiCallInstrumentationService {
                 incLong(agg, "quickProbeEvents", m.usedQuickProbe ? 1 : 0);
                 incLong(agg, "skipQuickProbeEvents", m.skippedQuickProbe ? 1 : 0);
                 incLong(agg, "directProviderEvents", m.usedDirectProviderRoute ? 1 : 0);
+                incLong(agg, "textEditsLineEvents", "text_edits_line".equalsIgnoreCase(toText(m.outputShape)) ? 1 : 0);
+                incLong(agg, "fullCodeFallbackEvents", (m.fallbackToFullCode || "full_code".equalsIgnoreCase(toText(m.outputShape))) ? 1 : 0);
+                incLong(agg, "textEditsRetryTriggeredEvents", m.textEditsRetryTriggered ? 1 : 0);
+                incLong(agg, "textEditsRetrySuccessEvents", (m.textEditsRetryTriggered && "text_edits_line".equalsIgnoreCase(toText(m.outputShape))) ? 1 : 0);
+                incLong(agg, "textEditsTotal", Math.max(0, m.textEditsCount));
                 incDouble(agg, "estimatedCostUsd", Math.max(0.0, m.estimatedCostUsd));
             }
         }
@@ -404,6 +475,11 @@ public class ApiCallInstrumentationService {
                 incLong(agg, "inputTokens", Math.max(0, m.inputTokens + m.promptTokens));
                 incLong(agg, "outputTokens", Math.max(0, m.outputTokens + m.completionTokens));
                 incLong(agg, "fallbackEvents", (m.providerFallbackUsed || m.usedGeminiFallback || m.switchedToDefaultModel) ? 1 : 0);
+                incLong(agg, "textEditsLineEvents", "text_edits_line".equalsIgnoreCase(toText(m.outputShape)) ? 1 : 0);
+                incLong(agg, "fullCodeFallbackEvents", (m.fallbackToFullCode || "full_code".equalsIgnoreCase(toText(m.outputShape))) ? 1 : 0);
+                incLong(agg, "textEditsRetryTriggeredEvents", m.textEditsRetryTriggered ? 1 : 0);
+                incLong(agg, "textEditsRetrySuccessEvents", (m.textEditsRetryTriggered && "text_edits_line".equalsIgnoreCase(toText(m.outputShape))) ? 1 : 0);
+                incLong(agg, "textEditsTotal", Math.max(0, m.textEditsCount));
                 incDouble(agg, "estimatedCostUsd", Math.max(0.0, m.estimatedCostUsd));
             }
         }
@@ -419,19 +495,33 @@ public class ApiCallInstrumentationService {
         int total = windowEvents == null ? 0 : windowEvents.size();
         int fallbackCount = 0;
         int quickProbeCount = 0;
+        int fullCodeFallbackCount = 0;
+        int retryTriggeredCount = 0;
+        int retrySuccessCount = 0;
         if (windowEvents != null) {
             for (AiTelemetryMetric m : windowEvents) {
                 if (m == null) continue;
                 if (m.providerFallbackUsed || m.usedGeminiFallback || m.switchedToDefaultModel) fallbackCount++;
                 if (m.usedQuickProbe) quickProbeCount++;
+                if (m.fallbackToFullCode || "full_code".equalsIgnoreCase(toText(m.outputShape))) fullCodeFallbackCount++;
+                if (m.textEditsRetryTriggered) {
+                    retryTriggeredCount++;
+                    if ("text_edits_line".equalsIgnoreCase(toText(m.outputShape))) {
+                        retrySuccessCount++;
+                    }
+                }
             }
         }
 
         double fallbackRate = ratio(fallbackCount, total);
         double quickProbeRate = ratio(quickProbeCount, total);
+        double fullCodeFallbackRate = ratio(fullCodeFallbackCount, total);
+        double retryTriggeredRate = ratio(retryTriggeredCount, total);
+        double retrySuccessRate = ratio(retrySuccessCount, Math.max(1, retryTriggeredCount));
         boolean enoughSamples = total >= minSamplesForAlert;
         boolean fallbackSpike = enoughSamples && fallbackRate >= Math.max(0.05, fallbackAlertThreshold);
         boolean quickProbeSpike = enoughSamples && quickProbeRate >= Math.max(0.05, quickProbeAlertThreshold);
+        boolean fullCodeFallbackSpike = enoughSamples && fullCodeFallbackRate >= 0.25;
 
         List<Map<String, Object>> alertItems = new ArrayList<>();
         if (fallbackSpike) {
@@ -450,14 +540,26 @@ public class ApiCallInstrumentationService {
                 "threshold", round6(Math.max(0.05, quickProbeAlertThreshold)),
                 "message", "Quick-probe rate cao, nên nới budget hoặc tăng ngưỡng skip-probe"));
         }
+        if (fullCodeFallbackSpike) {
+            alertItems.add(Map.of(
+                "type", "full_code_fallback_spike",
+                "severity", fullCodeFallbackRate >= 0.45 ? "high" : "warning",
+                "value", round6(fullCodeFallbackRate),
+                "threshold", 0.25,
+                "message", "Tỷ lệ full-code fallback cao, nên siết prompt contract hoặc tăng text-edits retry"));
+        }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("totalEvents", total);
         out.put("fallbackRate", round6(fallbackRate));
         out.put("quickProbeRate", round6(quickProbeRate));
+        out.put("fullCodeFallbackRate", round6(fullCodeFallbackRate));
+        out.put("textEditsRetryTriggeredRate", round6(retryTriggeredRate));
+        out.put("textEditsRetrySuccessRate", round6(retrySuccessRate));
         out.put("minSamplesForAlert", minSamplesForAlert);
         out.put("fallbackSpike", fallbackSpike);
         out.put("quickProbeSpike", quickProbeSpike);
+        out.put("fullCodeFallbackSpike", fullCodeFallbackSpike);
         out.put("items", alertItems);
         return out;
     }
@@ -465,17 +567,21 @@ public class ApiCallInstrumentationService {
     private Map<String, Object> buildAdaptiveBudgetRecommendations(Map<String, Object> alerts, Map<String, Object> summary) {
         boolean fallbackSpike = toBool(alerts == null ? null : alerts.get("fallbackSpike"));
         boolean quickProbeSpike = toBool(alerts == null ? null : alerts.get("quickProbeSpike"));
+        boolean fullCodeFallbackSpike = toBool(alerts == null ? null : alerts.get("fullCodeFallbackSpike"));
         int totalEvents = toInt(summary == null ? null : summary.get("totalEvents"));
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("enabled", totalEvents > 0);
-        out.put("mode", (fallbackSpike || quickProbeSpike) ? "scale_up_budget" : "scale_down_budget");
+        out.put("mode", (fallbackSpike || quickProbeSpike || fullCodeFallbackSpike) ? "scale_up_budget" : "scale_down_budget");
 
         List<Map<String, Object>> actions = new ArrayList<>();
-        if (fallbackSpike || quickProbeSpike) {
+        if (fallbackSpike || quickProbeSpike || fullCodeFallbackSpike) {
             actions.add(adjustment("ai.assistant.prompt-budget.menu.max-chars", 1.15, "increase"));
             actions.add(adjustment("ai.assistant.prompt-budget.code.max-chars", 1.10, "increase"));
             actions.add(adjustment("ai.code-stream.routing.retry-default-max-prompt-chars", 1.10, "increase"));
+            if (fullCodeFallbackSpike) {
+                actions.add(adjustment("ai.code-stream.edit.text-edits-retry.max-extra-attempts", 2.0, "increase"));
+            }
         } else {
             actions.add(adjustment("ai.assistant.prompt-budget.menu.max-chars", 0.95, "decrease"));
             actions.add(adjustment("ai.assistant.prompt-budget.code.max-chars", 0.95, "decrease"));

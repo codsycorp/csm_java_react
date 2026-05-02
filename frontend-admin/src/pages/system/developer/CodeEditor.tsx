@@ -104,6 +104,15 @@ const AI_SESSION_STORAGE_KEY = "developer.codeeditor.aiSessions.v1";
 const AI_SESSION_LOCAL_STORAGE_KEY = "developer.codeeditor.aiSessions.persist.v1";
 const AI_HISTORY_LIMIT = 40;
 const AI_SESSION_MAX = 50;
+const MAX_STRUCTURED_TEXT_EDITS = 160;
+const MAX_STRUCTURED_REPLACEMENT_CHARS = 800000;
+
+type StructuredTextEdit = {
+	startLine: number;
+	endLine: number;
+	replacement: string;
+	action?: DraftChangeAction;
+};
 
 const setDraftHighlights = StateEffect.define<DraftLineRange[]>();
 
@@ -230,12 +239,14 @@ function createAiPrompt(params: {
 		"Treat p_name and p_type as the stable identity of the selected sys_autos record.",
 		"Do not rename or switch the target record unless the user explicitly requests that.",
 		"Your job is only to return an updated draft code suggestion. Database save/delete is handled separately by the UI.",
-		"Return strict JSON only with this shape:",
+		"Prefer strict JSON with position-based edits so the editor can apply only related lines:",
 		"{",
 		"  \"summary\": \"short explanation\",",
-		"  \"code\": \"full updated code in target language\",",
+		"  \"textEdits\": [{\"startLine\": 10, \"endLine\": 12, \"replacement\": \"...\", \"action\": \"edit\"}],",
 		"  \"changes\": [\"item 1\", \"item 2\"]",
 		"}",
+		"Fallback only when line edits are impossible:",
+		"{\"summary\":\"...\",\"code\":\"full updated code\",\"changes\":[\"...\"]}",
 		"No markdown, no code fences.",
 		`Current app_id: ${appId}`,
 		`Selected p_name: ${codeName || "(unsaved)"}`,
@@ -247,6 +258,86 @@ function createAiPrompt(params: {
 		recentConversation ? `Conversation context:\n${recentConversation}` : "",
 		`New request: ${requestText}`,
 	].filter(Boolean).join("\n\n");
+}
+
+function normalizeStructuredTextEdits(raw: any): StructuredTextEdit[] {
+	if (!Array.isArray(raw)) return [];
+	const out: StructuredTextEdit[] = [];
+	for (const item of raw) {
+		const startRaw = Number(item?.startLine ?? item?.start_line ?? item?.range?.startLine ?? item?.range?.start?.line ?? item?.line ?? 1);
+		const endRaw = Number(item?.endLine ?? item?.end_line ?? item?.range?.endLine ?? item?.range?.end?.line ?? startRaw);
+		const startLine = Math.max(1, Number.isFinite(startRaw) ? Math.floor(startRaw) : 1);
+		const endLine = Math.max(startLine, Number.isFinite(endRaw) ? Math.floor(endRaw) : startLine);
+		const replacement = String(item?.replacement ?? item?.text ?? item?.newText ?? "");
+		const action = normalizeDraftAction(item?.action ?? "edit");
+		out.push({ startLine, endLine, replacement, action });
+		if (out.length >= MAX_STRUCTURED_TEXT_EDITS) break;
+	}
+	return out;
+}
+
+function validateStructuredTextEdits(baseText: string, textEdits: StructuredTextEdit[]): { valid: boolean; reason?: string; edits: StructuredTextEdit[] } {
+	if (!Array.isArray(textEdits) || textEdits.length === 0) {
+		return { valid: false, reason: "missing_edits", edits: [] };
+	}
+	if (textEdits.length > MAX_STRUCTURED_TEXT_EDITS) {
+		return { valid: false, reason: "too_many_edits", edits: [] };
+	}
+
+	const baseLines = String(baseText || "").split("\n");
+	const maxLine = Math.max(1, baseLines.length + 1);
+	const normalized = [...textEdits].map((edit) => ({
+		startLine: Math.max(1, Number.isFinite(Number(edit.startLine)) ? Math.floor(Number(edit.startLine)) : 1),
+		endLine: Math.max(
+			Math.max(1, Number.isFinite(Number(edit.startLine)) ? Math.floor(Number(edit.startLine)) : 1),
+			Number.isFinite(Number(edit.endLine)) ? Math.floor(Number(edit.endLine)) : Math.max(1, Number.isFinite(Number(edit.startLine)) ? Math.floor(Number(edit.startLine)) : 1),
+		),
+		replacement: String(edit.replacement ?? ""),
+		action: normalizeDraftAction(edit.action),
+	}));
+
+	normalized.sort((a, b) => (a.startLine - b.startLine) || (a.endLine - b.endLine));
+	let previousEnd = 0;
+	let replacementChars = 0;
+	for (const edit of normalized) {
+		if (edit.startLine < 1 || edit.endLine < edit.startLine) {
+			return { valid: false, reason: "invalid_line_range", edits: [] };
+		}
+		if (edit.startLine > maxLine || edit.endLine > maxLine) {
+			return { valid: false, reason: "line_out_of_range", edits: [] };
+		}
+		if (edit.startLine <= previousEnd) {
+			return { valid: false, reason: "overlapping_edits", edits: [] };
+		}
+		replacementChars += edit.replacement.length;
+		if (replacementChars > MAX_STRUCTURED_REPLACEMENT_CHARS) {
+			return { valid: false, reason: "replacement_too_large", edits: [] };
+		}
+		previousEnd = edit.endLine;
+	}
+
+	return { valid: true, edits: normalized };
+}
+
+function applyTextEditsToDraft(baseText: string, textEdits: StructuredTextEdit[]): string {
+	if (!Array.isArray(textEdits) || textEdits.length === 0) return baseText;
+	const lines = String(baseText || "").split("\n");
+	const sorted = [...textEdits].sort((a, b) => b.startLine - a.startLine);
+	for (const edit of sorted) {
+		const replacementLines = String(edit.replacement || "").split("\n");
+		lines.splice(edit.startLine - 1, edit.endLine - edit.startLine + 1, ...replacementLines);
+	}
+	return lines.join("\n");
+}
+
+function summarizeTextEditRanges(edits: StructuredTextEdit[]): string[] {
+	if (!Array.isArray(edits) || edits.length === 0) return [];
+	return edits.slice(0, 8).map((edit) => {
+		const rangeLabel = edit.startLine === edit.endLine
+			? `L${edit.startLine}`
+			: `L${edit.startLine}-L${edit.endLine}`;
+		return `${String(edit.action || "edit").toUpperCase()} ${rangeLabel}`;
+	});
 }
 
 function parseAiCodeResponse(response: any): { summary: string; code: string; changes: string[] } | null {
@@ -1095,7 +1186,9 @@ export default function CodeEditor() {
 				continueMode
 					? "Bạn đang ở chế độ CONTINUE. BẮT BUỘC trả về FULL tài liệu hoàn chỉnh từ đầu đến cuối, không chỉ phần mới."
 					: "",
-				`Trả về JSON theo đúng format: {"summary":"mô tả ngắn thay đổi","code":"toàn bộ code hoàn chỉnh","changes":["điểm thay đổi 1","điểm thay đổi 2"]}`,
+				"Ưu tiên trả về chỉnh sửa theo vị trí line để editor áp dụng đúng vùng thay đổi.",
+				`Format ưu tiên: {"summary":"mô tả ngắn thay đổi","textEdits":[{"startLine":10,"endLine":12,"replacement":"...","action":"edit"}],"changes":["điểm thay đổi 1","điểm thay đổi 2"]}`,
+				`Chỉ fallback sang full code nếu không thể biểu diễn bằng textEdits: {"summary":"...","code":"toàn bộ code hoàn chỉnh","changes":["..."]}`,
 			].filter(Boolean).join("\n\n");
 
 			let finalResponse = "";
@@ -1241,6 +1334,27 @@ export default function CodeEditor() {
 							? applied.appliedOperations.map((x: any) => String(x || "")).filter(Boolean)
 							: [],
 					});
+				}
+			}
+
+			const textEditsFromEnvelope = normalizeStructuredTextEdits(
+				parsedEnvelopeCandidate?.textEdits ?? parsedEnvelopeCandidate?.text_edits,
+			);
+			if (textEditsFromEnvelope.length > 0) {
+				const validation = validateStructuredTextEdits(currentDraftRef.current, textEditsFromEnvelope);
+				if (validation.valid) {
+					const patchedCode = applyTextEditsToDraft(currentDraftRef.current, validation.edits);
+					const envelopeChanges = Array.isArray(parsedEnvelopeCandidate?.changes)
+						? parsedEnvelopeCandidate.changes.map((x: any) => String(x || "")).filter(Boolean)
+						: [];
+					finalResponse = JSON.stringify({
+						summary: String(parsedEnvelopeCandidate?.summary || t("system.developer.ai.generatedReady")),
+						code: patchedCode,
+						changes: envelopeChanges.length > 0 ? envelopeChanges : summarizeTextEditRanges(validation.edits),
+						textEdits: validation.edits,
+					});
+				} else {
+					message.warning(t("system.developer.ai.pendingApply", "AI trả về textEdits không hợp lệ, chuyển sang fallback full code nếu có."));
 				}
 			}
 
