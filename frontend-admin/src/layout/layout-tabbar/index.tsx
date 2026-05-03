@@ -9,6 +9,7 @@ import { getLocalizedField, type SupportedLanguage } from "#src/utils/i18nHelper
 import { isString } from "#src/utils";
 import { normalizeMenuLabel } from "#src/utils";
 
+import * as AntIcons from "@ant-design/icons";
 import { RedoOutlined } from "@ant-design/icons";
 import { Button, Tabs } from "antd";
 import { clsx } from "clsx";
@@ -48,6 +49,34 @@ function getDefaultTabKey(openTabs: Map<string, any>) {
 	return first && typeof first.value === "string" ? first.value : "";
 }
 
+function normalizeAntIconName(raw: string): string {
+	const text = String(raw || "").trim();
+	if (!text) return "";
+	if ((AntIcons as any)[text]) return text;
+	for (const token of text.split(/\s+/)) {
+		if ((AntIcons as any)[token]) return token;
+	}
+	if (!/Outlined$|Filled$|TwoTone$/i.test(text)) {
+		const outlined = `${text}Outlined`;
+		if ((AntIcons as any)[outlined]) return outlined;
+	}
+	return "";
+}
+
+function resolveTabIconNode(icon: unknown, modernIcon?: unknown, legacyIcon?: unknown, size = 13): React.ReactNode {
+	if (isValidElement(icon)) return icon;
+	const source = (typeof icon === "string" ? icon : "")
+		|| (typeof modernIcon === "string" ? modernIcon : "")
+		|| (typeof legacyIcon === "string" ? legacyIcon : "");
+	if (!source) return null;
+	const name = normalizeAntIconName(source);
+	if (name && (AntIcons as any)[name]) {
+		const Comp = (AntIcons as any)[name];
+		return <Comp style={{ fontSize: size, lineHeight: 1 }} />;
+	}
+	return <i className={source} style={{ fontSize: size, lineHeight: 1 }} aria-hidden />;
+}
+
 /**
  * LayoutTabbar 组件
  * 用于渲染和管理应用程序的标签页导航
@@ -60,7 +89,7 @@ export default function LayoutTabbar() {
 	const { t } = useTranslation();
 	const currentRoute = useCurrentRoute();
 
-	const { tabbarStyleType, tabbarShowMaximize, tabbarShowMore, language: preferenceLanguage } = usePreferencesStore();
+	const { tabbarStyleType, tabbarShowIcon, tabbarShowMaximize, tabbarShowMore, language: preferenceLanguage } = usePreferencesStore();
 	const { flatRouteList, hasFetchedDynamicRoutes, apiWholeMenus, broadcastHomeCode } = usePermissionStore();
 	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
 	const { activeKey, isRefresh, setActiveKey, setIsRefresh, openTabs, addTab, insertBeforeTab } = useTabsStore();
@@ -396,18 +425,43 @@ export default function LayoutTabbar() {
 		return "";
 	}, [flatRouteList, menuLookup, t, resolveMenuLocalizedLabel]);
 
+	const resolveTabIcon = useCallback((path: string, tab?: any): React.ReactNode => {
+		const tabCandidates = [tab, tab?.menuData, tab?.m_configs].filter(Boolean);
+		for (const candidate of tabCandidates) {
+			const iconNode = resolveTabIconNode(candidate?.icon, candidate?.m_icon, candidate?.m_icons);
+			if (iconNode) return iconNode;
+		}
+
+		const menuId = String(
+			tab?.menuId
+			|| tab?.menuData?.id
+			|| tab?.m_configs?.id
+			|| "",
+		).trim();
+		if (menuId) {
+			const byId = menuLookup.byId.get(menuId) || menuLookup.byKey.get(menuId);
+			const iconNode = resolveTabIconNode(byId?.icon, byId?.m_icon, byId?.m_icons);
+			if (iconNode) return iconNode;
+		}
+
+		const byPath = menuLookup.byPath.get(path) || menuLookup.byPath.get(removeTrailingSlash(path));
+		return resolveTabIconNode(byPath?.icon, byPath?.m_icon, byPath?.m_icons);
+	}, [menuLookup]);
+
 	const tabItems: TabItemProps[] = Array.from(openTabs.values()).map(item => {
 		const isHome = item.key === "homepage";
 		const derivedLabel = isHome
 			? t("common.menu.home")
 			: deriveTabLabel(item.key, item.historyState || null, item);
 		const finalLabel = derivedLabel || (isString(item.label) ? item.label : String(item.label || item.key));
+		const iconNode = !isHome && tabbarShowIcon ? resolveTabIcon(item.key, item) : null;
 		return {
 			...item,
 			closable: isHome ? false : (item.closable ?? true),
 			draggable: isHome ? false : (item.draggable ?? true),
 			label: (
 				<div className="relative flex items-center gap-1">
+					{iconNode ? <span className="inline-flex items-center justify-center text-[13px] leading-none">{iconNode}</span> : null}
 					{finalLabel}
 				</div>
 			),

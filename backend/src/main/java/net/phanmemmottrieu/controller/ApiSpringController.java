@@ -57,7 +57,10 @@ import net.phanmemmottrieu.service.AiConversationContextService;
 import net.phanmemmottrieu.service.MenuQualityGateService;
 import net.phanmemmottrieu.service.TokenOptimizationService;
 import net.phanmemmottrieu.service.AiLocalOrchestrationService;
+import net.phanmemmottrieu.service.AiMenuLearningMemoryService;
 import net.phanmemmottrieu.service.AiPromptBudgetService;
+import net.phanmemmottrieu.service.LlamaCppNativeService;
+import net.phanmemmottrieu.service.LargeFileChunkingService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -124,6 +127,23 @@ public class ApiSpringController {
     private static final Pattern LARGE_NAMED_BASE64_VALUE_PATTERN = Pattern.compile(
         "(?is)(\\\"(?:report_name|base64|base64Data|dataUrl|file_data|content_base64|docx_base64|payload_base64)\\\"\\s*:\\s*\\\")([A-Za-z0-9+/=\\r\\n]{"
             + DEFAULT_PROMPT_BASE64_STRIP_MIN_CHARS + ",})(\\\")");
+    private enum AiRouteMode {
+        LOCAL_ONLY,
+        HYBRID,
+        CLOUD_ONLY
+    }
+
+    private static record AiRouteDecision(AiRouteMode mode, int score, String reasonCode) {}
+
+    private static record RequirementGuardDecision(boolean blocked, List<String> questions, List<String> ambiguities) {}
+
+    private static record LocalPreAnalysisDecision(
+        boolean attempted,
+        boolean handledLocally,
+        String localAnswer,
+        String cloudContext,
+        String reasonCode) {}
+
     private final ObjectMapper objectMapper = new ObjectMapper(); // Dùng để parse JSON body
     private final RecordManager recordManager;
     private final InitHandler initHandler;
@@ -150,7 +170,10 @@ public class ApiSpringController {
     private final MenuQualityGateService menuQualityGateService;
     private final TokenOptimizationService tokenOptimizationService;
     private final AiLocalOrchestrationService aiLocalOrchestrationService;
+    private final AiMenuLearningMemoryService aiMenuLearningMemoryService;
     private final AiPromptBudgetService aiPromptBudgetService;
+    private final LlamaCppNativeService llamaCppNativeService;
+    private final LargeFileChunkingService largeFileChunkingService;
 
     // In-memory ring buffer for prompt-budget debug (max 200 entries, auto-rotated)
     private static final int PROMPT_DEBUG_LOG_MAX = 200;
@@ -267,6 +290,18 @@ public class ApiSpringController {
 
     @Value("${ai.assistant.code.chaining-threshold-chars:220000}")
     private int aiAssistantCodeChainingThresholdChars;
+
+    @Value("${ai.assistant.local-provider.enabled:false}")
+    private boolean aiAssistantLocalProviderEnabled;
+
+    @Value("${ai.assistant.local-provider.analyze-only:true}")
+    private boolean aiAssistantLocalProviderAnalyzeOnly;
+
+    @Value("${ai.assistant.local-provider.max-payload-chars:18000}")
+    private int aiAssistantLocalProviderMaxPayloadChars;
+
+    @Value("${ai.assistant.local-provider.require-structured-for-edit:true}")
+    private boolean aiAssistantLocalProviderRequireStructuredForEdit;
 
     // OpenDevin MAX_OUTPUT_LENGTH pattern: cap each chaining step's output before feeding into the next prompt
     // Prevents one large chaining step from amplifying token cost in subsequent AI calls
@@ -396,6 +431,78 @@ public class ApiSpringController {
     @Value("${ai.code-stream.routing.retry-default-max-prompt-chars:80000}")
     private int aiCodeStreamRoutingRetryDefaultMaxPromptChars;
 
+    @Value("${ai.code-stream.local-provider.enabled:false}")
+    private boolean aiCodeStreamLocalProviderEnabled;
+
+    @Value("${ai.code-stream.local-provider.analyze-only:true}")
+    private boolean aiCodeStreamLocalProviderAnalyzeOnly;
+
+    @Value("${ai.code-stream.local-provider.max-prompt-chars:18000}")
+    private int aiCodeStreamLocalProviderMaxPromptChars;
+
+    @Value("${ai.code-stream.local-provider.allow-menu-json:false}")
+    private boolean aiCodeStreamLocalProviderAllowMenuJson;
+
+    @Value("${ai.code-stream.local-provider.require-structured-for-edit:true}")
+    private boolean aiCodeStreamLocalProviderRequireStructuredForEdit;
+
+    @Value("${ai.local.pre-analysis.enabled:true}")
+    private boolean aiLocalPreAnalysisEnabled;
+
+    @Value("${ai.local.pre-analysis.max-prompt-chars:16000}")
+    private int aiLocalPreAnalysisMaxPromptChars;
+
+    @Value("${ai.local.pre-analysis.max-cloud-context-chars:2400}")
+    private int aiLocalPreAnalysisMaxCloudContextChars;
+
+    @Value("${ai.router.score-v2.enabled:true}")
+    private boolean aiRouterScoreV2Enabled;
+
+    @Value("${ai.router.score-v2.local-only-threshold:80}")
+    private int aiRouterScoreV2LocalOnlyThreshold;
+
+    @Value("${ai.router.score-v2.hybrid-threshold:45}")
+    private int aiRouterScoreV2HybridThreshold;
+
+    @Value("${ai.router.score-v2.large-payload-cloud-threshold-chars:60000}")
+    private int aiRouterScoreV2LargePayloadCloudThresholdChars;
+
+    @Value("${ai.router.score-v2.menu-json-cloud:true}")
+    private boolean aiRouterScoreV2MenuJsonCloud;
+
+    @Value("${ai.router.score-v2.edit-penalty:35}")
+    private int aiRouterScoreV2EditPenalty;
+
+    @Value("${ai.router.score-v2.local-only-hard:false}")
+    private boolean aiRouterScoreV2LocalOnlyHard;
+
+    @Value("${ai.requirement-clarify.enabled:true}")
+    private boolean aiRequirementClarifyEnabled;
+
+    @Value("${ai.requirement-clarify.max-items:6}")
+    private int aiRequirementClarifyMaxItems;
+
+    @Value("${ai.requirement-clarify.hard-guard.enabled:true}")
+    private boolean aiRequirementHardGuardEnabled;
+
+    @Value("${ai.requirement-clarify.hard-guard.edit-only:true}")
+    private boolean aiRequirementHardGuardEditOnly;
+
+    @Value("${ai.requirement-clarify.hard-guard.menu-json.enabled:true}")
+    private boolean aiRequirementHardGuardMenuJsonEnabled;
+
+    @Value("${ai.requirement-clarify.hard-guard.code.enabled:true}")
+    private boolean aiRequirementHardGuardCodeEnabled;
+
+    @Value("${ai.requirement-clarify.hard-guard.min-ambiguities:2}")
+    private int aiRequirementHardGuardMinAmbiguities;
+
+    @Value("${ai.requirement-clarify.hard-guard.max-questions:3}")
+    private int aiRequirementHardGuardMaxQuestions;
+
+    @Value("${ai.requirement-clarify.hard-guard.menu-json.strict-target-required:false}")
+    private boolean aiRequirementHardGuardMenuJsonStrictTargetRequired;
+
     @Value("${ai.code-stream.prompt-cache.min-chars:8000}")
     private int aiCodeStreamPromptCacheMinChars;
 
@@ -491,7 +598,10 @@ public class ApiSpringController {
             MenuQualityGateService menuQualityGateService,
             TokenOptimizationService tokenOptimizationService,
             AiLocalOrchestrationService aiLocalOrchestrationService,
-            AiPromptBudgetService aiPromptBudgetService
+            AiMenuLearningMemoryService aiMenuLearningMemoryService,
+            AiPromptBudgetService aiPromptBudgetService,
+            @Autowired(required = false) LlamaCppNativeService llamaCppNativeService,
+            @Autowired(required = false) LargeFileChunkingService largeFileChunkingService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -518,7 +628,10 @@ public class ApiSpringController {
         this.menuQualityGateService = menuQualityGateService;
         this.tokenOptimizationService = tokenOptimizationService;
         this.aiLocalOrchestrationService = aiLocalOrchestrationService;
+        this.aiMenuLearningMemoryService = aiMenuLearningMemoryService;
         this.aiPromptBudgetService = aiPromptBudgetService;
+        this.llamaCppNativeService = llamaCppNativeService;
+        this.largeFileChunkingService = largeFileChunkingService;
     }
 
     @PostMapping(value = {"/ai-code-stream", "/api/ai-code-stream"})
@@ -567,6 +680,24 @@ public class ApiSpringController {
 
                 if (message.isBlank()) {
                     sendErrorEvent(emitter, "Message không được để trống");
+                    return;
+                }
+
+                RequirementGuardDecision requirementGuard = evaluateRequirementHardGuard(
+                    message,
+                    contextType,
+                    responseMode);
+                if (requirementGuard.blocked()) {
+                    sendEvent(emitter, jsonOf(
+                        "stage", "requirement_clarification_needed",
+                        "status", "blocked",
+                        "requestId", requestId,
+                        "contextType", contextType,
+                        "responseMode", responseMode,
+                        "ambiguities", requirementGuard.ambiguities(),
+                        "questions", requirementGuard.questions(),
+                        "message", "Yeu cau chua du ro de sua an toan. Can lam ro truoc khi thuc thi"));
+                    sendErrorEvent(emitter, "Yeu cau chua du ro de sua an toan. Vui long tra loi cac cau hoi lam ro truoc khi backend sua");
                     return;
                 }
 
@@ -697,6 +828,48 @@ public class ApiSpringController {
                     usePromptCache = false;
                 }
 
+                LocalPreAnalysisDecision codeStreamPreAnalysis = runMandatoryLocalPreAnalysis(
+                    "ai-code-stream",
+                    message,
+                    prompt,
+                    contextType,
+                    responseMode);
+                sendEvent(emitter, jsonOf(
+                    "stage", "local_pre_analysis",
+                    "status", !codeStreamPreAnalysis.attempted()
+                        ? "skipped"
+                        : (codeStreamPreAnalysis.handledLocally() ? "completed_local" : "cloud_context_ready"),
+                    "requestId", requestId,
+                    "attempted", codeStreamPreAnalysis.attempted(),
+                    "handledLocally", codeStreamPreAnalysis.handledLocally(),
+                    "reason_code", codeStreamPreAnalysis.reasonCode(),
+                    "hasCloudContext", !String.valueOf(codeStreamPreAnalysis.cloudContext()).isBlank()));
+                logger.info(
+                    "AI_LOCAL_PRE_ANALYSIS flow=ai-code-stream requestId={} appId={} attempted={} handledLocally={} reasonCode={} cloudContextChars={}",
+                    requestId,
+                    appId,
+                    codeStreamPreAnalysis.attempted(),
+                    codeStreamPreAnalysis.handledLocally(),
+                    codeStreamPreAnalysis.reasonCode(),
+                    String.valueOf(codeStreamPreAnalysis.cloudContext() == null ? "" : codeStreamPreAnalysis.cloudContext()).length());
+
+                if (!codeStreamPreAnalysis.handledLocally()
+                        && !String.valueOf(codeStreamPreAnalysis.cloudContext()).isBlank()) {
+                    prompt = appendLocalPreAnalysisContext(prompt, codeStreamPreAnalysis.cloudContext());
+                    if (prompt.length() > effectivePromptCharCap) {
+                        prompt = truncateMiddle(prompt, Math.max(20000, effectivePromptCharCap));
+                        promptTruncatedByCharCap = true;
+                    }
+                    promptFinalChars = prompt.length();
+                    usePromptCache = false;
+                    promptParts = new String[] { prompt, "" };
+                    sendEvent(emitter, jsonOf(
+                        "stage", "local_pre_analysis",
+                        "status", "cloud_context_injected",
+                        "requestId", requestId,
+                        "reason_code", codeStreamPreAnalysis.reasonCode()));
+                }
+
                 if (promptTruncatedByCharCap) {
                     sendEvent(emitter, jsonOf(
                         "stage", "prompt_budget",
@@ -729,18 +902,24 @@ public class ApiSpringController {
                     && prompt.length() <= Math.max(20000, aiCodeStreamRoutingRetryDefaultMaxPromptChars);
                 boolean switchedToDefaultModel = false;
                 boolean providerFallbackUsed = false;
+                boolean localProviderPrimaryUsed = false;
+                int localPreAnalysisSavedTokensEstimate = 0;
                 long startedAtMs = System.currentTimeMillis();
 
                 List<Map<String, String>> imageParts = extractImageParts(attachmentsRaw);
                 boolean hasImages = !imageParts.isEmpty();
 
                 logger.info(
-                    "ApiSpringController: ai-code-stream start requestId={} appId={} model={} language={} promptChars={} promptTokens~{} messageChars={} promptCache={} images={} focusLine={} focusStart={} focusEnd={} focusChars={}",
+                    "ApiSpringController: ai-code-stream start requestId={} appId={} model={} language={} promptChars={} promptTokens~{} messageChars={} promptCache={} images={} focusLine={} focusStart={} focusEnd={} focusChars={} localPreAnalysisAttempted={} localPreAnalysisHandled={} localPreAnalysisReasonCode={} localCloudContextChars={}",
                     requestId, appId, effectiveModel, language, prompt.length(), estimateTokens(prompt), message.length(), usePromptCache,
                         imageParts.size(), cursorLine,
                         focusWindow == null ? -1 : focusWindow.startLine(),
                         focusWindow == null ? -1 : focusWindow.endLine(),
-                        promptCodeContext.length());
+                        promptCodeContext.length(),
+                        codeStreamPreAnalysis.attempted(),
+                        codeStreamPreAnalysis.handledLocally(),
+                        codeStreamPreAnalysis.reasonCode(),
+                        String.valueOf(codeStreamPreAnalysis.cloudContext() == null ? "" : codeStreamPreAnalysis.cloudContext()).length());
 
                 if (!base.baseRef().isBlank()) {
                     sendEvent(emitter, jsonOf(
@@ -771,24 +950,130 @@ public class ApiSpringController {
                         "estimatedWaitSecs", estimatedWaitSecs,
                         "percent", 0));
 
-                String rawResponse;
-                if (hasImages) {
-                    rawResponse = streamWithAutoContinueMultimodal(emitter, prompt, imageParts, effectiveModel, language,
-                        responseMode, requestId, codeStreamMeta);
-                } else {
-                    rawResponse = streamWithAutoContinue(
-                            emitter,
-                            prompt,
-                            promptParts[0],
-                            promptParts[1],
-                            effectiveModel,
-                            language,
-                            contextType,
+                String rawResponse = null;
+                if (codeStreamPreAnalysis.handledLocally()) {
+                    rawResponse = String.valueOf(codeStreamPreAnalysis.localAnswer() == null ? "" : codeStreamPreAnalysis.localAnswer());
+                    localProviderPrimaryUsed = true;
+                    effectiveModel = "local_pre_analysis";
+                    localPreAnalysisSavedTokensEstimate = Math.max(0, promptTokens + estimateTokens(rawResponse));
+                    sendEvent(emitter, jsonOf(
+                        "stage", "streaming",
+                        "requestId", requestId,
+                        "chunk", rawResponse,
+                        "attempt", 1,
+                        "providerFallback", false,
+                        "localProviderPrimary", true,
+                        "localPreAnalysis", true));
+                }
+
+                if (rawResponse == null) {
+                    AiRouteDecision codeStreamRouteDecision = decideCodeStreamRouteV2(
                             responseMode,
-                            largeStructuredEditMode,
-                            usePromptCache,
-                            codeStreamMeta,
-                            requestId);
+                            contextType,
+                            prompt,
+                            hasImages,
+                            modelOverride);
+                    boolean tryLocalProviderFirst = codeStreamRouteDecision.mode() != AiRouteMode.CLOUD_ONLY;
+                    boolean localOnlyHardRoute = codeStreamRouteDecision.mode() == AiRouteMode.LOCAL_ONLY
+                        && aiRouterScoreV2LocalOnlyHard;
+
+                    sendEvent(emitter, jsonOf(
+                        "stage", "model_switch",
+                        "status", "local_router_v2_decision",
+                        "requestId", requestId,
+                        "routeMode", codeStreamRouteDecision.mode().name().toLowerCase(),
+                        "routeScore", codeStreamRouteDecision.score(),
+                        "reason_code", codeStreamRouteDecision.reasonCode(),
+                        "modelDecisionStep", "primary",
+                        "modelDecisionReason", codeStreamRouteDecision.reasonCode(),
+                        "decision_step", "primary",
+                        "model", tryLocalProviderFirst ? "local_provider" : effectiveModel));
+
+                    if (tryLocalProviderFirst) {
+                    String localPrimaryReason = codeStreamRouteDecision.mode() == AiRouteMode.LOCAL_ONLY
+                        ? "local_only"
+                        : "local_cost_optimized";
+                    sendEvent(emitter, jsonOf(
+                            "stage", "model_switch",
+                            "status", "local_provider_primary",
+                            "requestId", requestId,
+                            "model", "local_provider",
+                            "modelDecisionStep", "primary",
+                        "modelDecisionReason", localPrimaryReason,
+                            "decision_step", "primary",
+                        "reason_code", localPrimaryReason,
+                            "message", "Chi phi toi uu: uu tien local provider truoc"));
+                    String providerRaw = generateProviderContentWithMenuMasterPrompt(prompt, contextType);
+                    String providerText = extractAiResultText(providerRaw);
+                    if ((providerText == null || providerText.isBlank()) && providerRaw != null) {
+                        providerText = providerRaw.trim();
+                    }
+                    if (providerText != null && !providerText.isBlank()) {
+                        boolean localAccepted = shouldAcceptLocalCodeStreamOutput(
+                                providerText,
+                                responseMode,
+                                contextType);
+                        if (localAccepted) {
+                            sendEvent(emitter, jsonOf(
+                                    "stage", "streaming",
+                                    "requestId", requestId,
+                                    "chunk", providerText,
+                                    "attempt", 1,
+                                    "providerFallback", false,
+                                    "localProviderPrimary", true));
+                            rawResponse = providerText;
+                            effectiveModel = "local_provider";
+                            localProviderPrimaryUsed = true;
+                        } else {
+                            sendEvent(emitter, jsonOf(
+                                    "stage", "model_switch",
+                                    "status", "local_provider_quality_fallback",
+                                    "requestId", requestId,
+                                    "model", effectiveModel,
+                                    "modelDecisionStep", "fallback",
+                                    "modelDecisionReason", "local_quality_guard_failed",
+                                    "decision_step", "fallback",
+                                    "reason_code", "local_quality_guard_failed",
+                                    "message", "Local provider output khong dat quality gate, fallback sang streaming model"));
+                        }
+                    } else {
+                        sendEvent(emitter, jsonOf(
+                                "stage", "model_switch",
+                                "status", "local_provider_failed",
+                                "requestId", requestId,
+                                "model", effectiveModel,
+                                "modelDecisionStep", "fallback",
+                                "modelDecisionReason", "local_provider_failed",
+                                "decision_step", "fallback",
+                                "reason_code", "local_provider_failed",
+                                "message", "Local provider khong tra du lieu hop le, fallback sang streaming model"));
+                    }
+                }
+
+                    if (rawResponse == null) {
+                        if (localOnlyHardRoute) {
+                            sendErrorEvent(emitter, "Local-only route dang bat hard mode va local output khong dat quality gate");
+                            return;
+                        }
+                        if (hasImages) {
+                            rawResponse = streamWithAutoContinueMultimodal(emitter, prompt, imageParts, effectiveModel, language,
+                                responseMode, requestId, codeStreamMeta);
+                        } else {
+                            rawResponse = streamWithAutoContinue(
+                                    emitter,
+                                    prompt,
+                                    promptParts[0],
+                                    promptParts[1],
+                                    effectiveModel,
+                                    language,
+                                    contextType,
+                                    responseMode,
+                                    largeStructuredEditMode,
+                                    usePromptCache,
+                                    codeStreamMeta,
+                                    requestId);
+                        }
+                    }
                 }
                 if (rawResponse == null) {
                     if (!shouldFallbackToDefaultOnSimpleFailure || hasImages) {
@@ -835,7 +1120,7 @@ public class ApiSpringController {
                             "reason_code", "provider_error",
                             "message", "Simple/default stream đều thất bại, chuyển sang provider fallback"));
 
-                        String providerRaw = aiProviderFactory.generateContent(prompt);
+                        String providerRaw = generateProviderContentWithMenuMasterPrompt(prompt, contextType);
                         String providerText = extractAiResultText(providerRaw);
                         if ((providerText == null || providerText.isBlank()) && providerRaw != null) {
                             providerText = providerRaw.trim();
@@ -892,6 +1177,12 @@ public class ApiSpringController {
                 if ("edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType)) {
                     completionPayload = mergeMenuCompletionWithBase(effectiveCodeContext, completionPayload, contextType);
                 }
+                if (isMenuJsonContext(contextType)) {
+                    String sanitizedMenuPayload = normalizeMenuDraftJson(completionPayload);
+                    if (!sanitizedMenuPayload.isBlank()) {
+                        completionPayload = sanitizedMenuPayload;
+                    }
+                }
                 boolean menuShrinkGuardTriggered = false;
                 double menuShrinkRatio = 1.0;
                 if (menuJsonContext && aiCodeStreamMenuShrinkGuardEnabled) {
@@ -929,6 +1220,7 @@ public class ApiSpringController {
                 completion.put("streamedChars", streamedChars);
                 completion.put("streamChunkCount", streamChunkCount);
                 completion.put("streamAssemblyMismatch", streamAssemblyMismatch);
+                completion.put("localProviderPrimaryUsed", localProviderPrimaryUsed);
                 completion.put("promptOriginalChars", parseIntSafe(codeStreamMeta.get("promptOriginalChars"), promptOriginalChars));
                 completion.put("promptFinalChars", parseIntSafe(codeStreamMeta.get("promptFinalChars"), promptFinalChars));
                 completion.put("promptCapChars", parseIntSafe(codeStreamMeta.get("promptCapChars"), effectivePromptCharCap));
@@ -1023,6 +1315,12 @@ public class ApiSpringController {
                 codeTelemetry.put("providerCallsEstimate", parseIntSafe(codeStreamMeta.get("providerCallsEstimate"), 1));
                 codeTelemetry.put("switchedToDefaultModel", switchedToDefaultModel);
                 codeTelemetry.put("providerFallbackUsed", providerFallbackUsed);
+                codeTelemetry.put("localProviderPrimaryUsed", localProviderPrimaryUsed);
+                codeTelemetry.put("estimatedSavedTokens", localPreAnalysisSavedTokensEstimate);
+                codeTelemetry.put("localPreAnalysisAttempted", codeStreamPreAnalysis.attempted());
+                codeTelemetry.put("localPreAnalysisHandled", codeStreamPreAnalysis.handledLocally());
+                codeTelemetry.put("localPreAnalysisCloudContextInjected", !String.valueOf(codeStreamPreAnalysis.cloudContext()).isBlank());
+                codeTelemetry.put("localPreAnalysisReasonCode", codeStreamPreAnalysis.reasonCode());
                 codeTelemetry.put("attachments", imageParts.size());
                 codeTelemetry.put("elapsedMs", Math.max(0L, (System.currentTimeMillis() - startedAtMs)));
                 apiCallInstrumentationService.recordAiTelemetry(codeTelemetry);
@@ -1856,6 +2154,11 @@ public class ApiSpringController {
             sb.append("## CODE HIỆN TẠI (").append(language).append(")\n```").append(language).append("\n");
             sb.append(safeCode);
             sb.append("\n```\n\n");
+        }
+
+        String requirementContract = buildRequirementContractForPrompt(message, contextType, responseMode);
+        if (!requirementContract.isBlank()) {
+            sb.append(requirementContract).append("\n\n");
         }
 
         sb.append("## YÊU CẦU\n").append(message).append("\n");
@@ -3053,6 +3356,9 @@ public class ApiSpringController {
 
     private ModelPrice resolveModelPrice(String modelName) {
         String model = String.valueOf(modelName == null ? "" : modelName).toLowerCase();
+        if (model.contains("local") || model.contains("llama") || model.contains("provider_fallback")) {
+            return new ModelPrice(0.0, 0.0);
+        }
         if (model.contains("flash")) {
             return new ModelPrice(
                     Math.max(0.0, aiCodeStreamCostFlashInputUsdPer1k),
@@ -3109,6 +3415,237 @@ public class ApiSpringController {
         return "gemini-2.5-flash";
     }
 
+    private LocalPreAnalysisDecision runMandatoryLocalPreAnalysis(
+            String flow,
+            String requestText,
+            String prompt,
+            String contextType,
+            String responseMode) {
+        if (!aiLocalPreAnalysisEnabled) {
+            return new LocalPreAnalysisDecision(false, false, "", "", "pre_analysis_disabled");
+        }
+        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
+            String heuristic = buildHeuristicCloudContext(requestText, prompt, contextType, responseMode);
+            return new LocalPreAnalysisDecision(true, false, "", heuristic, "local_provider_unavailable_heuristic");
+        }
+
+        String sourcePrompt = String.valueOf(prompt == null ? "" : prompt).trim();
+        if (sourcePrompt.isBlank()) {
+            sourcePrompt = String.valueOf(requestText == null ? "" : requestText).trim();
+        }
+        if (sourcePrompt.isBlank()) {
+            return new LocalPreAnalysisDecision(true, false, "", "", "empty_prompt");
+        }
+
+        // For oversized inputs: run chunked local summarization pipeline instead of plain truncation.
+        int effectivePreAnalysisMax = Math.max(2000, aiLocalPreAnalysisMaxPromptChars);
+        if (sourcePrompt.length() > effectivePreAnalysisMax && largeFileChunkingService != null) {
+            logger.info("[AI_LOCAL_PRE_ANALYSIS] Large input ({} chars) – invoking chunking pipeline", sourcePrompt.length());
+            sourcePrompt = largeFileChunkingService.compressLargePrompt(sourcePrompt, requestText, contextType);
+            logger.info("[AI_LOCAL_PRE_ANALYSIS] After chunking compression: {} chars", sourcePrompt.length());
+        } else {
+            sourcePrompt = truncateMiddle(sourcePrompt, effectivePreAnalysisMax);
+        }
+        String localPrompt = String.join("\n",
+            "You are local pre-analysis for cost optimization.",
+            "Output strict JSON only.",
+            "Schema:",
+            "{",
+            "  \"canHandleFully\": true|false,",
+            "  \"localAnswer\": \"final output if local can finish safely\",",
+            "  \"cloudContext\": \"short requirement+structure summary for cloud fallback\",",
+            "  \"reason\": \"short_reason_code\"",
+            "}",
+            "Rules:",
+            "- canHandleFully=true only when output is complete and safe to return directly.",
+            "- cloudContext must be concise, structured, and implementation-oriented.",
+            "flow=" + String.valueOf(flow == null ? "" : flow),
+            "contextType=" + String.valueOf(contextType == null ? "" : contextType),
+            "responseMode=" + String.valueOf(responseMode == null ? "" : responseMode),
+            "requestText=\"\"\"",
+            String.valueOf(requestText == null ? "" : requestText),
+            "\"\"\"",
+            "prompt=\"\"\"",
+            sourcePrompt,
+            "\"\"\"");
+
+        String localRaw = llamaCppNativeService.generateContent(localPrompt);
+        String localText = extractAiResultText(localRaw);
+        if (localText.isBlank()) {
+            String heuristic = buildHeuristicCloudContext(requestText, prompt, contextType, responseMode);
+            return new LocalPreAnalysisDecision(true, false, "", heuristic, "local_pre_analysis_empty_heuristic");
+        }
+
+        return parseLocalPreAnalysisDecision(localText, flow, contextType, responseMode);
+    }
+
+    private LocalPreAnalysisDecision parseLocalPreAnalysisDecision(
+            String localText,
+            String flow,
+            String contextType,
+            String responseMode) {
+        String trimmed = String.valueOf(localText == null ? "" : localText).trim();
+        boolean canHandle = false;
+        String localAnswer = "";
+        String cloudContext = "";
+        String reasonCode = "local_pre_analysis_parsed";
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(trimmed, Map.class);
+            canHandle = asBoolean(parsed.get("canHandleFully")) || asBoolean(parsed.get("handledLocally"));
+            localAnswer = firstNonBlankString(
+                parsed.get("localAnswer"),
+                parsed.get("answer"),
+                parsed.get("finalOutput"),
+                parsed.get("result"));
+            cloudContext = firstNonBlankString(
+                parsed.get("cloudContext"),
+                parsed.get("cloudHint"),
+                parsed.get("analysis"),
+                parsed.get("summary"));
+            reasonCode = firstNonBlankString(parsed.get("reason"), parsed.get("reasonCode"), reasonCode);
+        } catch (Exception ignored) {
+            String jsonCandidate = extractJsonObjectCandidate(trimmed);
+            if (!jsonCandidate.isBlank()) {
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> parsed = objectMapper.readValue(jsonCandidate, Map.class);
+                    canHandle = asBoolean(parsed.get("canHandleFully")) || asBoolean(parsed.get("handledLocally"));
+                    localAnswer = firstNonBlankString(
+                        parsed.get("localAnswer"),
+                        parsed.get("answer"),
+                        parsed.get("finalOutput"),
+                        parsed.get("result"));
+                    cloudContext = firstNonBlankString(
+                        parsed.get("cloudContext"),
+                        parsed.get("cloudHint"),
+                        parsed.get("analysis"),
+                        parsed.get("summary"));
+                    reasonCode = firstNonBlankString(parsed.get("reason"), parsed.get("reasonCode"), "local_pre_analysis_json_salvaged");
+                } catch (Exception ignored2) {
+                    cloudContext = jsonCandidate;
+                    reasonCode = "local_pre_analysis_non_json";
+                }
+            } else {
+                cloudContext = trimmed;
+                reasonCode = "local_pre_analysis_non_json";
+            }
+        }
+
+        String normalizedFlow = String.valueOf(flow == null ? "" : flow).trim().toLowerCase();
+        // If local skipped wrapper schema but returned directly usable payload, accept it.
+        if (!canHandle && !trimmed.isBlank()) {
+            boolean directAccepted = false;
+            if ("ai-code-stream".equals(normalizedFlow)) {
+                directAccepted = shouldAcceptLocalCodeStreamOutput(trimmed, responseMode, contextType);
+            } else {
+                directAccepted = shouldAcceptLocalAiAssistantOutput(trimmed, contextType, responseMode);
+            }
+            if (directAccepted) {
+                canHandle = true;
+                localAnswer = trimmed;
+                reasonCode = "local_pre_analysis_direct_output";
+                cloudContext = "";
+            }
+        }
+
+        if (canHandle) {
+            String candidate = String.valueOf(localAnswer == null ? "" : localAnswer).trim();
+            boolean accepted;
+            if ("ai-code-stream".equals(normalizedFlow)) {
+                accepted = shouldAcceptLocalCodeStreamOutput(candidate, responseMode, contextType);
+            } else {
+                accepted = shouldAcceptLocalAiAssistantOutput(candidate, contextType, responseMode);
+            }
+            if (!accepted) {
+                canHandle = false;
+                reasonCode = "local_quality_guard_failed";
+            }
+        }
+
+        cloudContext = truncateMiddle(
+            String.valueOf(cloudContext == null ? "" : cloudContext).trim(),
+            Math.max(300, aiLocalPreAnalysisMaxCloudContextChars));
+
+        return new LocalPreAnalysisDecision(
+            true,
+            canHandle,
+            String.valueOf(localAnswer == null ? "" : localAnswer).trim(),
+            cloudContext,
+            reasonCode);
+    }
+
+    private String extractJsonObjectCandidate(String raw) {
+        String text = String.valueOf(raw == null ? "" : raw).trim();
+        if (text.isBlank()) {
+            return "";
+        }
+
+        // 1) direct JSON
+        if (text.startsWith("{") && text.endsWith("}")) {
+            return text;
+        }
+
+        // 2) fenced JSON block
+        Matcher fenced = Pattern.compile("(?is)```(?:json)?\\s*(\\{.*?\\})\\s*```").matcher(text);
+        if (fenced.find()) {
+            return String.valueOf(fenced.group(1) == null ? "" : fenced.group(1)).trim();
+        }
+
+        // 3) first object span by braces
+        int start = text.indexOf('{');
+        int end = text.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            return text.substring(start, end + 1).trim();
+        }
+
+        return "";
+    }
+
+    private String appendLocalPreAnalysisContext(String prompt, String cloudContext) {
+        String base = String.valueOf(prompt == null ? "" : prompt).trim();
+        String hint = String.valueOf(cloudContext == null ? "" : cloudContext).trim();
+        if (hint.isBlank()) {
+            return base;
+        }
+        if (base.isBlank()) {
+            return hint;
+        }
+        return base + "\n\n## LOCAL_PRE_ANALYSIS_CONTEXT\n"
+            + "- This summary is generated by local AI pre-analysis.\n"
+            + "- Use it to reduce retries and stay on-requirement.\n"
+            + hint;
+    }
+
+    private String buildHeuristicCloudContext(String requestText, String prompt, String contextType, String responseMode) {
+        String request = String.valueOf(requestText == null ? "" : requestText).trim();
+        String promptText = String.valueOf(prompt == null ? "" : prompt).trim();
+
+        List<String> lines = new ArrayList<>();
+        lines.add("[LOCAL_HEURISTIC_PRE_ANALYSIS]");
+        lines.add("contextType=" + String.valueOf(contextType == null ? "" : contextType));
+        lines.add("responseMode=" + String.valueOf(responseMode == null ? "" : responseMode));
+        if (!request.isBlank()) {
+            lines.add("request_summary=" + truncateMiddle(request.replaceAll("\\s+", " "), 600));
+        }
+        if (!promptText.isBlank()) {
+            lines.add("prompt_signal_excerpt=" + truncateMiddle(promptText.replaceAll("\\s+", " "), 900));
+        }
+        lines.add("execution_rule=Prioritize strict requirement alignment, minimal-diff edits, and deterministic structured output.");
+        lines.add("safety_rule=Do not alter unrelated modules/fields; keep unchanged business behavior.");
+
+        return truncateMiddle(String.join("\n", lines), Math.max(300, aiLocalPreAnalysisMaxCloudContextChars));
+    }
+
+    private boolean asBoolean(Object raw) {
+        if (raw instanceof Boolean b) {
+            return b;
+        }
+        String text = String.valueOf(raw == null ? "" : raw).trim().toLowerCase();
+        return "true".equals(text) || "1".equals(text) || "yes".equals(text);
+    }
+
     private String routeModel(String messageText, String codeContext, String contextType, String responseMode, String modelOverride) {
         if (modelOverride != null && !modelOverride.isBlank()) return modelOverride.trim();
         if (!aiCodeStreamRoutingEnabled) return resolveDefaultStreamingModel();
@@ -3149,6 +3686,145 @@ public class ApiSpringController {
         }
 
         return defaultModel;
+    }
+
+    private boolean shouldRouteLocalProviderFirstForCodeStream(
+            String responseMode,
+            String contextType,
+            String prompt,
+            boolean hasImages,
+            String modelOverride) {
+        if (!aiCodeStreamLocalProviderEnabled) {
+            return false;
+        }
+        if (hasImages) {
+            return false;
+        }
+
+        String override = String.valueOf(modelOverride == null ? "" : modelOverride).trim().toLowerCase();
+        if (!override.isBlank()) {
+            if (override.contains("llama") || override.contains("local")) {
+                return true;
+            }
+            return false;
+        }
+
+        if (!aiCodeStreamLocalProviderAllowMenuJson && isMenuJsonContext(contextType)) {
+            return false;
+        }
+        if (aiCodeStreamLocalProviderAnalyzeOnly && "edit".equalsIgnoreCase(responseMode)) {
+            return false;
+        }
+
+        int maxChars = Math.max(2000, aiCodeStreamLocalProviderMaxPromptChars);
+        return String.valueOf(prompt == null ? "" : prompt).length() <= maxChars;
+    }
+
+    private AiRouteDecision decideCodeStreamRouteV2(
+            String responseMode,
+            String contextType,
+            String prompt,
+            boolean hasImages,
+            String modelOverride) {
+        if (!aiRouterScoreV2Enabled) {
+            boolean legacyLocal = shouldRouteLocalProviderFirstForCodeStream(
+                    responseMode,
+                    contextType,
+                    prompt,
+                    hasImages,
+                    modelOverride);
+            return legacyLocal
+                    ? new AiRouteDecision(AiRouteMode.HYBRID, 50, "legacy_local_rule")
+                    : new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "legacy_cloud_rule");
+        }
+
+        if (!aiCodeStreamLocalProviderEnabled) {
+            return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "local_provider_disabled");
+        }
+        if (hasImages) {
+            return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "multimodal_cloud_preferred");
+        }
+
+        String override = String.valueOf(modelOverride == null ? "" : modelOverride).trim().toLowerCase();
+        if (!override.isBlank()) {
+            if (override.contains("llama") || override.contains("local")) {
+                return new AiRouteDecision(AiRouteMode.LOCAL_ONLY, 100, "model_override_local");
+            }
+            return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "model_override_cloud");
+        }
+
+        boolean editMode = "edit".equalsIgnoreCase(responseMode);
+        if (editMode && aiCodeStreamLocalProviderAnalyzeOnly) {
+            return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "analyze_only_local_policy");
+        }
+
+        if (isMenuJsonContext(contextType) && aiRouterScoreV2MenuJsonCloud) {
+            return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "menu_json_cloud_policy");
+        }
+        if (!aiCodeStreamLocalProviderAllowMenuJson && isMenuJsonContext(contextType)) {
+            return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "menu_json_local_disabled");
+        }
+
+        int promptChars = String.valueOf(prompt == null ? "" : prompt).length();
+        int maxLocalChars = Math.max(2000, aiCodeStreamLocalProviderMaxPromptChars);
+        if (promptChars > Math.max(maxLocalChars, aiRouterScoreV2LargePayloadCloudThresholdChars)) {
+            return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "payload_too_large_for_local");
+        }
+
+        int score = 100;
+        if (editMode) {
+            score -= Math.max(0, aiRouterScoreV2EditPenalty);
+        }
+        if (isMenuJsonContext(contextType)) {
+            score -= 25;
+        }
+
+        double utilization = maxLocalChars <= 0 ? 1.0 : (promptChars * 1.0d / maxLocalChars);
+        if (utilization > 0.85d) {
+            score -= 30;
+        } else if (utilization > 0.65d) {
+            score -= 15;
+        }
+        score = Math.max(0, Math.min(100, score));
+
+        if (score >= Math.max(0, aiRouterScoreV2LocalOnlyThreshold)) {
+            return new AiRouteDecision(AiRouteMode.LOCAL_ONLY, score, "router_score_local_only");
+        }
+        if (score >= Math.max(0, aiRouterScoreV2HybridThreshold)) {
+            return new AiRouteDecision(AiRouteMode.HYBRID, score, "router_score_hybrid");
+        }
+        return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, score, "router_score_cloud_only");
+    }
+
+    private boolean shouldAcceptLocalCodeStreamOutput(String output, String responseMode, String contextType) {
+        String text = String.valueOf(output == null ? "" : output).trim();
+        if (text.isBlank()) {
+            return false;
+        }
+
+        if (!"edit".equalsIgnoreCase(responseMode)) {
+            return text.length() >= 24;
+        }
+
+        if (isMenuJsonContext(contextType)) {
+            return isLikelyJsonPayload(text);
+        }
+
+        if (!aiCodeStreamLocalProviderRequireStructuredForEdit) {
+            return true;
+        }
+
+        if (aiCodeStreamEditStrictSearchReplaceEnabled) {
+            return hasSearchReplaceBlocks(text);
+        }
+
+        if (hasSearchReplaceBlocks(text)) {
+            return true;
+        }
+        if (extractLineTextEditsCount(text) > 0) {
+            return true;
+        }
+        return hasFullCodeInEditPayload(text);
     }
 
     private String[] buildCodingPromptParts(String message, String currentCode, String language,
@@ -4039,6 +4715,392 @@ public class ApiSpringController {
         return prompt.length() > 300 ? prompt.substring(0, 300) : prompt;
     }
 
+    private String buildRequirementContractForPrompt(String message, String contextType, String responseMode) {
+        if (!aiRequirementClarifyEnabled) {
+            return "";
+        }
+
+        String requestText = extractRequestTextFromPrompt(message);
+        String normalized = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (normalized.isBlank()) {
+            return "";
+        }
+
+        String lower = normalized.toLowerCase();
+        boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        boolean menuContext = isMenuJsonContext(contextType);
+
+        String expectedOutput;
+        if (menuContext && editMode) {
+            expectedOutput = "JSON menu payload hop le, apply duoc ngay vao editor";
+        } else if (editMode) {
+            expectedOutput = "Patch/structured edits co the apply truc tiep";
+        } else {
+            expectedOutput = "Phan tich/chu dan ro rang, bam sat yeu cau";
+        }
+
+        String primaryGoal = detectPrimaryGoal(normalized, lower, editMode, menuContext);
+        List<String> constraints = extractRequirementConstraints(normalized);
+        List<String> acceptance = buildAcceptanceCriteria(editMode, menuContext, constraints);
+        List<String> ambiguities = detectRequirementAmbiguities(normalized, lower);
+
+        int maxItems = Math.max(3, aiRequirementClarifyMaxItems);
+        StringBuilder sb = new StringBuilder();
+        sb.append("## REQUIREMENT_CONTRACT (AUTO-GENERATED BY BACKEND)\n");
+        sb.append("- PRIMARY_GOAL: ").append(primaryGoal).append("\n");
+        sb.append("- EXPECTED_OUTPUT: ").append(expectedOutput).append("\n");
+
+        if (!constraints.isEmpty()) {
+            sb.append("- HARD_CONSTRAINTS:\n");
+            int idx = 1;
+            for (String item : constraints) {
+                if (idx > maxItems) {
+                    break;
+                }
+                sb.append("  ").append(idx++).append(") ").append(item).append("\n");
+            }
+        }
+
+        if (!acceptance.isEmpty()) {
+            sb.append("- ACCEPTANCE_CRITERIA:\n");
+            int idx = 1;
+            for (String item : acceptance) {
+                if (idx > maxItems) {
+                    break;
+                }
+                sb.append("  ").append(idx++).append(") ").append(item).append("\n");
+            }
+        }
+
+        if (!ambiguities.isEmpty()) {
+            sb.append("- AMBIGUITY_GUARD:\n");
+            int idx = 1;
+            for (String item : ambiguities) {
+                if (idx > Math.min(3, maxItems)) {
+                    break;
+                }
+                sb.append("  ").append(idx++).append(") ").append(item).append("\n");
+            }
+            sb.append("- RULE: Neu chua du thong tin de thay doi an toan, phai hoi lai truoc khi sua.\n");
+        }
+
+        sb.append("- RULE: Luon restate ngắn gon requirement contract truoc khi dua ra ket qua cuoi.\n");
+        return sb.toString().trim();
+    }
+
+    private String detectPrimaryGoal(String requestText, String lower, boolean editMode, boolean menuContext) {
+        if (menuContext) {
+            if (lower.contains("menu") || lower.contains("json") || lower.contains("cau truc")) {
+                return "Chinh sua cau truc menu theo dung logic nghiep vu hien co";
+            }
+            return "Cap nhat cau hinh menu ma khong lam sai logic nghiep vu";
+        }
+
+        if (editMode) {
+            if (lower.contains("toi uu") || lower.contains("optimi")) {
+                return "Chinh sua code de toi uu nhung van giu hanh vi dung theo yeu cau";
+            }
+            if (lower.contains("fix") || lower.contains("sua loi") || lower.contains("bug")) {
+                return "Sua loi dung diem va tranh gay hoi quy";
+            }
+            return "Chinh sua code dung pham vi va dung muc tieu nguoi dung";
+        }
+
+        if (lower.contains("phan tich") || lower.contains("giai thich")) {
+            return "Phan tich yeu cau va de xuat cach lam ro rang, co tinh kha thi";
+        }
+        return "Dap ung yeu cau nguoi dung dung va du";
+    }
+
+    private List<String> extractRequirementConstraints(String requestText) {
+        List<String> out = new ArrayList<>();
+        String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (text.isBlank()) {
+            return out;
+        }
+
+        String[] lines = text.split("\\r?\\n");
+        for (String raw : lines) {
+            String line = String.valueOf(raw == null ? "" : raw).trim();
+            if (line.isEmpty()) {
+                continue;
+            }
+            String lower = line.toLowerCase();
+            if (lower.contains("khong")
+                    || lower.contains("không")
+                    || lower.contains("bắt buộc")
+                    || lower.contains("bat buoc")
+                    || lower.contains("must")
+                    || lower.contains("giu nguyen")
+                    || lower.contains("giữ nguyên")
+                    || lower.contains("only")
+                    || lower.contains("chi ")) {
+                out.add(truncateMiddle(line, 240));
+            }
+            if (out.size() >= Math.max(3, aiRequirementClarifyMaxItems)) {
+                break;
+            }
+        }
+
+        return out;
+    }
+
+    private List<String> buildAcceptanceCriteria(boolean editMode, boolean menuContext, List<String> constraints) {
+        List<String> out = new ArrayList<>();
+        if (menuContext) {
+            out.add("JSON hop le, parse duoc, co the apply vao editor ma khong vo schema");
+            out.add("Khong xoa/doi truong nghiep vu neu user khong yeu cau ro rang");
+        } else if (editMode) {
+            out.add("Thay doi toi thieu, dung pham vi, apply duoc vao code hien tai");
+            out.add("Khong lam thay doi ngoai yeu cau va tranh regression");
+        } else {
+            out.add("Noi dung tra loi bam sat yeu cau va context duoc cung cap");
+        }
+
+        if (!constraints.isEmpty()) {
+            out.add("Tat ca hard constraints phai duoc ton trong truoc khi ket luan");
+        }
+        return out;
+    }
+
+    private List<String> detectRequirementAmbiguities(String requestText, String lower) {
+        List<String> out = new ArrayList<>();
+        String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (text.isBlank()) {
+            return out;
+        }
+
+        if (text.length() < 28) {
+            out.add("Yeu cau qua ngan, thieu pham vi thay doi cu the");
+        }
+        if (!lower.contains("file") && !lower.contains("table") && !lower.contains("menu")
+                && !lower.contains("class") && !lower.contains("ham") && !lower.contains("function")) {
+            out.add("Chua ro doi tuong tac dong (file/table/module)");
+        }
+        if (lower.contains("toi uu") && !lower.contains("muc tieu") && !lower.contains("chi so")) {
+            out.add("Tu 'toi uu' chua co KPI ro rang (toc do/chi phi/do dung)");
+        }
+        if (lower.contains("sua") && !lower.contains("khong") && !lower.contains("giu nguyen")) {
+            out.add("Chua neu ro gioi han: duoc phep sua den dau");
+        }
+        return out;
+    }
+
+    private RequirementGuardDecision evaluateRequirementHardGuard(String requestText, String contextType, String responseMode) {
+        if (!aiRequirementClarifyEnabled || !aiRequirementHardGuardEnabled) {
+            return new RequirementGuardDecision(false, List.of(), List.of());
+        }
+
+        String normalizedContext = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase();
+        if (normalizedContext.isBlank() || "json".equals(normalizedContext) || "json_editor".equals(normalizedContext)) {
+            normalizedContext = "code";
+        }
+        boolean guardedMenu = "menu_json".equals(normalizedContext) && aiRequirementHardGuardMenuJsonEnabled;
+        boolean guardedCode = "code".equals(normalizedContext) && aiRequirementHardGuardCodeEnabled;
+        if (!guardedMenu && !guardedCode) {
+            logger.info("Requirement hard-guard skipped: contextType={} normalizedContext={} responseMode={}",
+                contextType,
+                normalizedContext,
+                responseMode);
+            return new RequirementGuardDecision(false, List.of(), List.of());
+        }
+
+        boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        if (aiRequirementHardGuardEditOnly && !editMode) {
+            logger.info("Requirement hard-guard skipped by edit-only policy: contextType={} normalizedContext={} responseMode={}",
+                contextType,
+                normalizedContext,
+                responseMode);
+            return new RequirementGuardDecision(false, List.of(), List.of());
+        }
+
+        String normalized = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (normalized.isBlank()) {
+            List<String> questions = List.of("Ban muon backend sua phan nao cu the? (file/table/menu node)");
+            logger.info("Requirement hard-guard blocked: empty request text, contextType={} normalizedContext={} responseMode={}",
+                contextType,
+                normalizedContext,
+                responseMode);
+            return new RequirementGuardDecision(true, questions, List.of("Yeu cau rong"));
+        }
+
+        List<String> ambiguities = new ArrayList<>(detectRequirementAmbiguities(normalized, normalized.toLowerCase()));
+        ambiguities.addAll(detectContextualRequirementAmbiguities(
+            normalized,
+            normalized.toLowerCase(),
+            normalizedContext,
+            responseMode));
+
+        // De-duplicate while preserving order for stable logs and user prompts.
+        LinkedHashSet<String> uniq = new LinkedHashSet<>();
+        for (String item : ambiguities) {
+            String text = String.valueOf(item == null ? "" : item).trim();
+            if (!text.isEmpty()) {
+                uniq.add(text);
+            }
+        }
+        ambiguities = new ArrayList<>(uniq);
+        int minAmbiguities = Math.max(1, aiRequirementHardGuardMinAmbiguities);
+        if (ambiguities.size() < minAmbiguities) {
+            logger.info("Requirement hard-guard pass: contextType={} normalizedContext={} responseMode={} ambiguityCount={} threshold={}",
+                contextType,
+                normalizedContext,
+                responseMode,
+                ambiguities.size(),
+                minAmbiguities);
+            return new RequirementGuardDecision(false, List.of(), ambiguities);
+        }
+
+        List<String> questions = new ArrayList<>();
+        if ("menu_json".equals(normalizedContext)
+            && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+            && aiRequirementHardGuardMenuJsonStrictTargetRequired
+            && !hasExplicitMenuEditTarget(normalized)
+            && !hasDynamicMenuBusinessIntent(normalized)) {
+            questions.add("Ban muon sua node nao? Vui long cho id hoac duong dan node (vi du: root.sales.invoice)");
+            questions.add("Ban muon sua truong nao trong node do (label/trigger/table/permissions/...)?");
+            questions.add("Phan nao phai giu nguyen de tranh vo nghiep vu?");
+            ambiguities.add("Menu edit chua co target cu the (id/path/field) nen khong an toan de sua");
+        } else {
+            questions.add("Ban muon sua file/module/class nao cu the?");
+            questions.add("Pham vi thay doi den dau: chi fix diem hay duoc refactor rong hon?");
+            questions.add("Tieu chi xac nhan ket qua dung la gi (behavior/test/output)?");
+        }
+
+        int maxQuestions = Math.max(1, aiRequirementHardGuardMaxQuestions);
+        if (questions.size() > maxQuestions) {
+            questions = new ArrayList<>(questions.subList(0, maxQuestions));
+        }
+        logger.info("Requirement hard-guard blocked: contextType={} normalizedContext={} responseMode={} ambiguityCount={} threshold={} questions={} ambiguities={}",
+            contextType,
+            normalizedContext,
+            responseMode,
+            ambiguities.size(),
+            minAmbiguities,
+            questions,
+            ambiguities);
+        return new RequirementGuardDecision(true, questions, ambiguities);
+    }
+
+    private boolean hasDynamicMenuBusinessIntent(String requestText) {
+        String lower = String.valueOf(requestText == null ? "" : requestText).trim().toLowerCase();
+        if (lower.isBlank()) {
+            return false;
+        }
+
+        boolean hasMenuDomainSignal = lower.contains("menu")
+            || lower.contains("json")
+            || lower.contains("table")
+            || lower.contains("trigger")
+            || lower.contains("f_name")
+            || lower.contains("f_types")
+            || lower.contains("label")
+            || lower.contains("phan quyen")
+            || lower.contains("permission")
+            || lower.contains("nghiep vu")
+            || lower.contains("business");
+
+        boolean hasActionSignal = lower.contains("them")
+            || lower.contains("thêm")
+            || lower.contains("sua")
+            || lower.contains("sửa")
+            || lower.contains("xoa")
+            || lower.contains("xóa")
+            || lower.contains("cap nhat")
+            || lower.contains("cập nhật")
+            || lower.contains("tao")
+            || lower.contains("tạo")
+            || lower.contains("thiet ke")
+            || lower.contains("thiết kế")
+            || lower.contains("generate")
+            || lower.contains("refine");
+
+        return hasMenuDomainSignal && hasActionSignal;
+    }
+
+    private boolean hasExplicitMenuEditTarget(String requestText) {
+        String lower = String.valueOf(requestText == null ? "" : requestText).trim().toLowerCase();
+        if (lower.isBlank()) {
+            return false;
+        }
+
+        if (Pattern.compile("\\b(root|node|parent|child|menu)\\.[a-z0-9_.-]{2,}").matcher(lower).find()) {
+            return true;
+        }
+        if (Pattern.compile("\\bid\\s*[:=]\\s*[a-z0-9_-]{4,}").matcher(lower).find()) {
+            return true;
+        }
+        if (Pattern.compile("\\b(p_name|table_name|trigger|f_name|f_types|label|permissions?)\\b").matcher(lower).find()) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private List<String> detectContextualRequirementAmbiguities(
+            String requestText,
+            String lower,
+            String normalizedContext,
+            String responseMode) {
+        List<String> out = new ArrayList<>();
+        String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (text.isBlank()) {
+            return out;
+        }
+
+        boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        if (!editMode) {
+            return out;
+        }
+
+        // menu_json edit requires explicit target node/scope to avoid broad destructive edits.
+        if ("menu_json".equals(normalizedContext)) {
+            boolean hasTargetAnchor = lower.contains("id")
+                || lower.contains("node")
+                || lower.contains("menu con")
+                || lower.contains("parent")
+                || lower.contains("trigger")
+                || lower.contains("table")
+                || Pattern.compile("\\b[a-z0-9_\\-]{8,}\\b").matcher(lower).find();
+            boolean hasActionVerb = lower.contains("them")
+                || lower.contains("thêm")
+                || lower.contains("sua")
+                || lower.contains("sửa")
+                || lower.contains("xoa")
+                || lower.contains("xóa")
+                || lower.contains("doi")
+                || lower.contains("đổi")
+                || lower.contains("cap nhat")
+                || lower.contains("cập nhật");
+
+            if (!hasTargetAnchor) {
+                out.add("Menu edit chua chi ro target node/menu id/parent/trigger/table can sua");
+            }
+            if (!hasActionVerb) {
+                out.add("Menu edit chua ro hanh dong can thuc hien (them/sua/xoa/cap nhat)");
+            }
+            return out;
+        }
+
+        // code edit requires explicit target file/module/symbol/scope.
+        if ("code".equals(normalizedContext)) {
+            boolean hasScopeAnchor = lower.contains("file")
+                || lower.contains("module")
+                || lower.contains("class")
+                || lower.contains("function")
+                || lower.contains("ham")
+                || lower.contains("line")
+                || lower.contains("dong")
+                || lower.contains("api")
+                || lower.contains("endpoint");
+            if (!hasScopeAnchor) {
+                out.add("Code edit chua chi ro pham vi tac dong (file/module/class/function/line)");
+            }
+        }
+
+        return out;
+    }
+
     private boolean shouldExposeRoutingDebug(Map<String, Object> params) {
         boolean requested = (params != null && Boolean.TRUE.equals(params.get("includeRoutingDebug")))
                 || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("includeRoutingDebug") : null));
@@ -4226,6 +5288,135 @@ public class ApiSpringController {
                     "appId is required",
                     "缺少 appId"));
                 return;
+            }
+
+            RequirementGuardDecision requirementGuard = evaluateRequirementHardGuard(
+                message,
+                effectiveContextType,
+                responseMode);
+            if (requirementGuard.blocked()) {
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "requirement_clarification_needed",
+                    "status", "blocked",
+                    "contextType", effectiveContextType,
+                    "responseMode", responseMode,
+                    "ambiguities", requirementGuard.ambiguities(),
+                    "questions", requirementGuard.questions(),
+                    "message", uiTextByLang(
+                        uiLang,
+                        "Yeu cau chua du ro de sua an toan, can tra loi cau hoi lam ro truoc",
+                        "Request is not clear enough for safe edit, please answer clarification questions first",
+                        "需求不够清晰，需先回答澄清问题再执行编辑")
+                ));
+                response.set("code", 200);
+                response.set("success", false);
+                response.set("clarificationNeeded", true);
+                response.set("questions", requirementGuard.questions());
+                response.set("ambiguities", requirementGuard.ambiguities());
+                response.set("message", uiTextByLang(
+                    uiLang,
+                    "Yeu cau chua du ro de backend sua an toan",
+                    "Request is not clear enough for safe backend edits",
+                    "需求不够清晰，无法安全执行后端编辑"));
+                return;
+            }
+
+            String assistantPreAnalysisSource = "REQUEST:\n"
+                + String.valueOf(message == null ? "" : message)
+                + "\n\nCURRENT_CODE:\n"
+                + truncateMiddle(String.valueOf(currentCode == null ? "" : currentCode), 8000)
+                + "\n\nATTACHMENTS:\n"
+                + buildAiAssistantAttachmentRequestLogLine(attachments);
+            int localPreAnalysisSavedTokensEstimate = 0;
+            LocalPreAnalysisDecision assistantPreAnalysis = runMandatoryLocalPreAnalysis(
+                "ai-assistant-chat",
+                message,
+                assistantPreAnalysisSource,
+                effectiveContextType,
+                responseMode);
+            emitAiAssistantChatChunk(appId, Map.of(
+                "stage", "local_pre_analysis",
+                "status", !assistantPreAnalysis.attempted()
+                    ? "skipped"
+                    : (assistantPreAnalysis.handledLocally() ? "completed_local" : "cloud_context_ready"),
+                "attempted", assistantPreAnalysis.attempted(),
+                "handledLocally", assistantPreAnalysis.handledLocally(),
+                "reason_code", assistantPreAnalysis.reasonCode(),
+                "responseMode", responseMode));
+            logger.info(
+                "AI_LOCAL_PRE_ANALYSIS flow=ai-assistant-chat appId={} attempted={} handledLocally={} reasonCode={} cloudContextChars={}",
+                appId,
+                assistantPreAnalysis.attempted(),
+                assistantPreAnalysis.handledLocally(),
+                assistantPreAnalysis.reasonCode(),
+                String.valueOf(assistantPreAnalysis.cloudContext() == null ? "" : assistantPreAnalysis.cloudContext()).length());
+            if (assistantPreAnalysis.handledLocally()) {
+                String localAnswer = String.valueOf(assistantPreAnalysis.localAnswer() == null ? "" : assistantPreAnalysis.localAnswer()).trim();
+                if (!localAnswer.isBlank()) {
+                    localPreAnalysisSavedTokensEstimate = Math.max(
+                        0,
+                        estimateTokensByChars(assistantPreAnalysisSource.length()) + estimateTokensByChars(localAnswer.length()));
+                    emitTextAsAiAssistantChunks(appId, localAnswer, responseMode, uiLang);
+                    String localContinuityScopeKey = buildAiAssistantContinuityScopeKey(effectiveContextType, language, pName, pType);
+                    aiAssistantGatewayService.appendAiAssistantConversationTurn(
+                        appId,
+                        localContinuityScopeKey,
+                        message,
+                        localAnswer,
+                        effectiveContextType,
+                        responseMode,
+                        attachments);
+                    Map<String, Object> localTurnMeta = new LinkedHashMap<>();
+                    localTurnMeta.put("source", "aiAssistantLocalPreAnalysis");
+                    localTurnMeta.put("responseMode", responseMode);
+                    localTurnMeta.put("continuityScopeKey", localContinuityScopeKey);
+                    localTurnMeta.put("attachments", attachments == null ? 0 : attachments.size());
+                    aiConversationContextService.recordTurnWithScopes(
+                        authCtx.principalId,
+                        appId,
+                        effectiveContextType,
+                        pName,
+                        pType,
+                        message,
+                        localAnswer,
+                        localTurnMeta);
+                    Map<String, Object> localTelemetry = new LinkedHashMap<>();
+                    localTelemetry.put("timestamp", System.currentTimeMillis());
+                    localTelemetry.put("flow", "ai-assistant-chat");
+                    localTelemetry.put("appId", appId);
+                    localTelemetry.put("contextType", effectiveContextType);
+                    localTelemetry.put("taskType", effectiveTaskType);
+                    localTelemetry.put("responseMode", responseMode);
+                    localTelemetry.put("model", "local_pre_analysis");
+                    localTelemetry.put("inputChars", assistantPreAnalysisSource.length());
+                    localTelemetry.put("inputTokens", estimateTokensByChars(assistantPreAnalysisSource.length()));
+                    localTelemetry.put("outputChars", localAnswer.length());
+                    localTelemetry.put("outputTokens", estimateTokensByChars(localAnswer.length()));
+                    localTelemetry.put("localProviderPrimaryUsed", true);
+                    localTelemetry.put("attachments", attachments == null ? 0 : attachments.size());
+                    localTelemetry.put("estimatedSavedTokens", localPreAnalysisSavedTokensEstimate);
+                    localTelemetry.put("localPreAnalysisAttempted", true);
+                    localTelemetry.put("localPreAnalysisHandled", true);
+                    localTelemetry.put("localPreAnalysisCloudContextInjected", false);
+                    localTelemetry.put("localPreAnalysisReasonCode", assistantPreAnalysis.reasonCode());
+                    apiCallInstrumentationService.recordAiTelemetry(localTelemetry);
+                    response.set("code", 200);
+                    response.set("success", true);
+                    response.set("message", uiTextByLang(
+                        uiLang,
+                        "Da hoan thanh bang AI local pre-analysis",
+                        "Completed by local pre-analysis",
+                        "已由本地预分析完成"));
+                    return;
+                }
+            }
+            if (!String.valueOf(assistantPreAnalysis.cloudContext()).isBlank()) {
+                message = appendLocalPreAnalysisContext(message, assistantPreAnalysis.cloudContext());
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "local_pre_analysis",
+                    "status", "cloud_context_injected",
+                    "reason_code", assistantPreAnalysis.reasonCode(),
+                    "responseMode", responseMode));
             }
 
             String continuityScopeKey = buildAiAssistantContinuityScopeKey(effectiveContextType, language, pName, pType);
@@ -4630,8 +5821,106 @@ public class ApiSpringController {
             boolean usedQuickPrimaryProbe = false;
             boolean usedDirectProviderRoute = false;
             boolean usedGeminiFallback = false;
+            boolean localProviderPrimaryUsed = false;
 
-            if (directProviderRoute) {
+            AiRouteDecision aiAssistantRouteDecision = decideAiAssistantLocalRouteV2(
+                effectiveContextType,
+                effectiveTaskType,
+                responseMode,
+                estimatedPayloadChars);
+            boolean localProviderRoute = aiAssistantRouteDecision.mode() != AiRouteMode.CLOUD_ONLY;
+
+            emitAiAssistantChatChunk(appId, Map.of(
+                "stage", "local_provider_router_decision",
+                "routeMode", aiAssistantRouteDecision.mode().name().toLowerCase(),
+                "routeScore", aiAssistantRouteDecision.score(),
+                "modelDecisionStep", "primary",
+                "modelDecisionReason", aiAssistantRouteDecision.reasonCode(),
+                "decision_step", "primary",
+                "reason_code", aiAssistantRouteDecision.reasonCode(),
+                "responseMode", responseMode,
+                "status", "running"
+            ));
+
+            if (localProviderRoute) {
+                String localPrimaryReason = aiAssistantRouteDecision.mode() == AiRouteMode.LOCAL_ONLY
+                    ? "local_only"
+                    : "local_cost_optimized";
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "local_provider_route",
+                    "modelDecisionStep", "primary",
+                    "modelDecisionReason", localPrimaryReason,
+                    "decision_step", "primary",
+                    "reason_code", localPrimaryReason,
+                    "message", uiTextByLang(
+                        uiLang,
+                        "Luồng code nhẹ, ưu tiên local provider để tối ưu chi phí",
+                        "Light code flow detected, preferring local provider for cost optimization",
+                        "检测到轻量代码流程，优先使用本地提供方以优化成本"),
+                    "responseMode", responseMode,
+                    "status", "running"
+                ));
+
+                String localPrompt = buildAiAssistantChatPromptText(
+                    message,
+                    currentCode,
+                    language,
+                    effectiveContextType,
+                    responseMode,
+                    attachments,
+                    continuityMemory,
+                    globalContext,
+                    pName,
+                    pType,
+                    continuityScopeKey,
+                    pendingQuestions,
+                    false);
+                githubRaw = generateProviderContentWithMenuMasterPrompt(localPrompt, effectiveContextType);
+                String localText = extractAiResultText(githubRaw);
+                if (!localText.isBlank()) {
+                    boolean localAccepted = shouldAcceptLocalAiAssistantOutput(
+                        localText,
+                        effectiveContextType,
+                        responseMode);
+                    if (localAccepted) {
+                        localProviderPrimaryUsed = true;
+                        fullResponse.append(localText);
+                        emitTextAsAiAssistantChunks(appId, localText, responseMode, uiLang);
+                    } else {
+                        emitAiAssistantChatChunk(appId, Map.of(
+                            "stage", "local_provider_route_failed",
+                            "modelDecisionStep", "fallback",
+                            "modelDecisionReason", "local_quality_guard_failed",
+                            "decision_step", "fallback",
+                            "reason_code", "local_quality_guard_failed",
+                            "message", uiTextByLang(
+                                uiLang,
+                                "Local provider trả về nội dung chưa đạt quality gate, chuyển về luồng mặc định",
+                                "Local provider output did not pass quality gate, switching to default route",
+                                "本地提供方输出未通过质量门槛，切换到默认路由"),
+                            "responseMode", responseMode,
+                            "status", "running"
+                        ));
+                    }
+                } else {
+                    emitAiAssistantChatChunk(appId, Map.of(
+                        "stage", "local_provider_route_failed",
+                        "modelDecisionStep", "fallback",
+                        "modelDecisionReason", "local_provider_failed",
+                        "decision_step", "fallback",
+                        "reason_code", "local_provider_failed",
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Local provider không trả về nội dung hợp lệ, chuyển về luồng mặc định",
+                            "Local provider did not return valid content, switching to default route",
+                            "本地提供方未返回有效内容，切换到默认路由"),
+                        "responseMode", responseMode,
+                        "status", "running"
+                    ));
+                }
+            }
+
+            if (fullResponse.length() == 0 && directProviderRoute) {
                 usedDirectProviderRoute = true;
                 if (aiAssistantMenuDirectProviderPrimaryProbeFirst && !skipPrimaryProbeForHugePayload) {
                     usedQuickPrimaryProbe = true;
@@ -4721,14 +6010,14 @@ public class ApiSpringController {
                         continuityScopeKey,
                         pendingQuestions,
                         true);
-                    githubRaw = this.aiProviderFactory.generateContent(directPrompt);
+                    githubRaw = generateProviderContentWithMenuMasterPrompt(directPrompt, effectiveContextType);
                     String directText = extractAiResultText(githubRaw);
                     if (!directText.isBlank()) {
                         fullResponse.append(directText);
                         emitTextAsAiAssistantChunks(appId, directText, responseMode, uiLang);
                     }
                 }
-            } else if (quickPrimaryProbeRoute) {
+            } else if (fullResponse.length() == 0 && quickPrimaryProbeRoute) {
                 usedQuickPrimaryProbe = true;
                 emitAiAssistantChatChunk(appId, Map.of(
                     "stage", "quick_primary_probe",
@@ -4781,7 +6070,7 @@ public class ApiSpringController {
                         "status", "running"
                     ));
                 }
-            } else {
+            } else if (fullResponse.length() == 0) {
                 emitAiAssistantChatChunk(appId, Map.of(
                     "stage", "ai_assistant_route",
                     "modelDecisionStep", "primary",
@@ -4876,7 +6165,7 @@ public class ApiSpringController {
                     continuityScopeKey,
                     pendingQuestions,
                     true);
-                String fallbackRaw = this.aiProviderFactory.generateContent(fallbackPrompt);
+                String fallbackRaw = generateProviderContentWithMenuMasterPrompt(fallbackPrompt, effectiveContextType);
                 String fallbackText = extractAiResultText(fallbackRaw);
                 if (!fallbackText.isBlank()) {
                     fullResponse.append(fallbackText);
@@ -4975,7 +6264,7 @@ public class ApiSpringController {
                     boolean preferProviderFirstForRepair = canGateFallbackToProvider;
                     String repairText = "";
                     if (preferProviderFirstForRepair) {
-                        String providerRaw = this.aiProviderFactory.generateContent(repairPrompt);
+                        String providerRaw = generateProviderContentWithMenuMasterPrompt(repairPrompt, effectiveContextType);
                         repairText = extractAiResultText(providerRaw);
                     } else {
                         try {
@@ -5028,7 +6317,7 @@ public class ApiSpringController {
                                     "status", "running"
                                 ));
 
-                                String providerRaw = this.aiProviderFactory.generateContent(repairPrompt);
+                                String providerRaw = generateProviderContentWithMenuMasterPrompt(repairPrompt, effectiveContextType);
                                 String providerText = extractAiResultText(providerRaw);
                                 if (!providerText.isBlank()) {
                                     MenuQualityGateResult providerGate = evaluateMenuOutputQuality(providerText, attachments);
@@ -5110,7 +6399,7 @@ public class ApiSpringController {
                                 "responseMode", responseMode,
                                 "status", "running"
                             ));
-                            String providerRaw = this.aiProviderFactory.generateContent(repairPrompt);
+                            String providerRaw = generateProviderContentWithMenuMasterPrompt(repairPrompt, effectiveContextType);
                             String providerText = extractAiResultText(providerRaw);
                             if (!providerText.isBlank()) {
                                 MenuQualityGateResult providerGate = evaluateMenuOutputQuality(providerText, attachments);
@@ -5215,10 +6504,20 @@ public class ApiSpringController {
                 ));
             }
             
+            String completionResponseText = fullResponse.toString();
+            if (isMenuJsonContext(effectiveContextType)) {
+                String sanitizedMenuResponse = normalizeMenuDraftJson(completionResponseText);
+                if (!sanitizedMenuResponse.isBlank()) {
+                    completionResponseText = sanitizedMenuResponse;
+                    fullResponse.setLength(0);
+                    fullResponse.append(sanitizedMenuResponse);
+                }
+            }
+
             // Emit completion event
             Map<String, Object> completion = new HashMap<>();
             completion.put("stage", "complete");
-            completion.put("fullResponse", fullResponse.toString());
+            completion.put("fullResponse", completionResponseText);
             completion.put("responseMode", responseMode);
             completion.put("requiresStructuredEdits", requireStructured);
             completion.put("structuredEditValid", structuredValid);
@@ -5246,7 +6545,7 @@ public class ApiSpringController {
                 appId,
                 continuityScopeKey,
                 message,
-                fullResponse.toString(),
+                completionResponseText,
                 effectiveContextType,
                 responseMode,
                 attachments);
@@ -5263,7 +6562,7 @@ public class ApiSpringController {
                 pName,
                 pType,
                 message,
-                fullResponse.toString(),
+                completionResponseText,
                 sharedTurnMeta);
 
             int inputCharsEstimate = extractAiAssistantTextPayloadChars(messages);
@@ -5271,7 +6570,7 @@ public class ApiSpringController {
             int inputTokensEstimate = estimateTokensByChars(inputCharsEstimate);
             int outputTokensEstimate = estimateTokensByChars(outputCharsEstimate);
             logger.info(
-                "AI_TELEMETRY flow=ai-assistant-chat appId={} contextType={} taskType={} responseMode={} inputChars~={} inputTokens~={} outputChars={} outputTokens~={} estimatedPayloadChars={} directProviderRoute={} quickProbe={} skipQuickProbe={} geminiFallback={} menuFallbackDisabled={} attachments={}",
+                "AI_TELEMETRY flow=ai-assistant-chat appId={} contextType={} taskType={} responseMode={} inputChars~={} inputTokens~={} outputChars={} outputTokens~={} estimatedPayloadChars={} directProviderRoute={} quickProbe={} skipQuickProbe={} geminiFallback={} localProviderPrimary={} menuFallbackDisabled={} attachments={}",
                 appId,
                 effectiveContextType,
                 effectiveTaskType,
@@ -5285,6 +6584,7 @@ public class ApiSpringController {
                 usedQuickPrimaryProbe,
                 skipPrimaryProbeForHugePayload,
                 usedGeminiFallback,
+                localProviderPrimaryUsed,
                 menuGeminiFallbackDisabled,
                 attachments == null ? 0 : attachments.size());
 
@@ -5304,6 +6604,12 @@ public class ApiSpringController {
             chatTelemetry.put("usedQuickProbe", usedQuickPrimaryProbe);
             chatTelemetry.put("skippedQuickProbe", skipPrimaryProbeForHugePayload);
             chatTelemetry.put("usedGeminiFallback", usedGeminiFallback);
+            chatTelemetry.put("localProviderPrimaryUsed", localProviderPrimaryUsed);
+            chatTelemetry.put("estimatedSavedTokens", localPreAnalysisSavedTokensEstimate);
+            chatTelemetry.put("localPreAnalysisAttempted", assistantPreAnalysis.attempted());
+            chatTelemetry.put("localPreAnalysisHandled", assistantPreAnalysis.handledLocally());
+            chatTelemetry.put("localPreAnalysisCloudContextInjected", !String.valueOf(assistantPreAnalysis.cloudContext()).isBlank());
+            chatTelemetry.put("localPreAnalysisReasonCode", assistantPreAnalysis.reasonCode());
             chatTelemetry.put("attachments", attachments == null ? 0 : attachments.size());
             chatTelemetry.put("elapsedMs", 0);
             chatTelemetry.put("orchestrationEnabled", orchestrationResult != null && orchestrationResult.enabled);
@@ -6373,6 +7679,11 @@ public class ApiSpringController {
 
         if (!attachments.isEmpty()) {
             sb.append(buildAiAssistantAttachmentContextBlock(message, attachments, normalizedContext, language, normalizedMode));
+        }
+
+        String requirementContract = buildRequirementContractForPrompt(message, normalizedContext, normalizedMode);
+        if (!requirementContract.isBlank()) {
+            sb.append(requirementContract).append("\n\n");
         }
 
         sb.append("Context type: ").append(normalizedContext).append("\n");
@@ -7875,6 +9186,7 @@ public class ApiSpringController {
             if (promptAppId != null && !promptAppId.isBlank()) {
                 String requestText = extractRequestTextFromPrompt(prompt);
                 this.aiAssistantGatewayService.updateAppContextFile(promptAppId, requestText, rawContent);
+                this.aiMenuLearningMemoryService.recordSuccessfulMenuGeneration(promptAppId, requestText, rawContent);
             }
         } catch (Exception ctxEx) {
             logger.warn("Could not update AI context file after generation: {}", ctxEx.getMessage());
@@ -8564,6 +9876,106 @@ public class ApiSpringController {
             return false;
         }
         return estimatedChars >= Math.max(50000, aiAssistantMenuDirectProviderThresholdChars);
+    }
+
+    private boolean shouldLocalProviderRouteForCodeAiAssistant(
+            String contextType,
+            String taskType,
+            String responseMode,
+            int estimatedPayloadChars) {
+        if (!aiAssistantLocalProviderEnabled) {
+            return false;
+        }
+        if (isMenuAiAssistantFlow(contextType, taskType)) {
+            return false;
+        }
+        if (aiAssistantLocalProviderAnalyzeOnly && "edit".equalsIgnoreCase(responseMode)) {
+            return false;
+        }
+        return estimatedPayloadChars <= Math.max(2000, aiAssistantLocalProviderMaxPayloadChars);
+    }
+
+    private AiRouteDecision decideAiAssistantLocalRouteV2(
+            String contextType,
+            String taskType,
+            String responseMode,
+            int estimatedPayloadChars) {
+        if (!aiRouterScoreV2Enabled) {
+            boolean legacyLocal = shouldLocalProviderRouteForCodeAiAssistant(
+                    contextType,
+                    taskType,
+                    responseMode,
+                    estimatedPayloadChars);
+            return legacyLocal
+                    ? new AiRouteDecision(AiRouteMode.HYBRID, 50, "legacy_local_rule")
+                    : new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "legacy_cloud_rule");
+        }
+
+        if (!aiAssistantLocalProviderEnabled) {
+            return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "local_provider_disabled");
+        }
+        if (isMenuAiAssistantFlow(contextType, taskType)) {
+            return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "menu_flow_cloud_policy");
+        }
+        if ("edit".equalsIgnoreCase(responseMode) && aiAssistantLocalProviderAnalyzeOnly) {
+            return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "analyze_only_local_policy");
+        }
+
+        int maxLocalChars = Math.max(2000, aiAssistantLocalProviderMaxPayloadChars);
+        if (estimatedPayloadChars > Math.max(maxLocalChars, aiRouterScoreV2LargePayloadCloudThresholdChars)) {
+            return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, 0, "payload_too_large_for_local");
+        }
+
+        int score = 100;
+        if ("edit".equalsIgnoreCase(responseMode)) {
+            score -= Math.max(0, aiRouterScoreV2EditPenalty);
+        }
+
+        double utilization = maxLocalChars <= 0 ? 1.0 : (estimatedPayloadChars * 1.0d / maxLocalChars);
+        if (utilization > 0.85d) {
+            score -= 30;
+        } else if (utilization > 0.65d) {
+            score -= 15;
+        }
+        score = Math.max(0, Math.min(100, score));
+
+        if (score >= Math.max(0, aiRouterScoreV2LocalOnlyThreshold)) {
+            return new AiRouteDecision(AiRouteMode.LOCAL_ONLY, score, "router_score_local_only");
+        }
+        if (score >= Math.max(0, aiRouterScoreV2HybridThreshold)) {
+            return new AiRouteDecision(AiRouteMode.HYBRID, score, "router_score_hybrid");
+        }
+        return new AiRouteDecision(AiRouteMode.CLOUD_ONLY, score, "router_score_cloud_only");
+    }
+
+    private boolean shouldAcceptLocalAiAssistantOutput(
+            String output,
+            String contextType,
+            String responseMode) {
+        String text = String.valueOf(output == null ? "" : output).trim();
+        if (text.isBlank()) {
+            return false;
+        }
+
+        if (isMenuJsonContext(contextType)) {
+            return isLikelyJsonPayload(text);
+        }
+
+        if (!"edit".equalsIgnoreCase(responseMode)) {
+            return text.length() >= 24;
+        }
+
+        if (!aiAssistantLocalProviderRequireStructuredForEdit) {
+            return true;
+        }
+
+        if (aiCodeStreamEditStrictSearchReplaceEnabled) {
+            return hasSearchReplaceBlocks(text);
+        }
+
+        return hasSearchReplaceBlocks(text)
+            || extractLineTextEditsCount(text) > 0
+            || hasFullCodeInEditPayload(text);
     }
 
     private String buildMenuGlobalContext(
@@ -9265,11 +10677,15 @@ public class ApiSpringController {
                 Map<String, Object> wrapped = new LinkedHashMap<>();
                 wrapped.put("menu", mergeOut.mergedMenu);
                 String merged = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
+                String sanitizedMerged = normalizeMenuDraftJson(merged);
                 logger.info("ai-code-stream menu completion merged with base: added={} edited={} deleted={} patchOps={}",
                     mergeOut.added,
                     mergeOut.edited,
                     mergeOut.deleted,
                     mergeOut.patchOps == null ? 0 : mergeOut.patchOps.size());
+                if (!sanitizedMerged.isBlank()) {
+                    return sanitizedMerged;
+                }
                 return merged;
             }
         } catch (Exception ex) {
@@ -9293,20 +10709,17 @@ public class ApiSpringController {
         }
 
         if (parsed instanceof List<?> list) {
-            Map<String, Object> wrapped = new HashMap<>();
-            wrapped.put("menu", list);
-            try {
-                return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
-            } catch (Exception ignored) {
-                return "";
-            }
+            return wrapAndSanitizeMenuPayload(list);
         }
 
         if (!(parsed instanceof Map<?, ?> map)) {
             return "";
         }
 
-        Object code = map.get("code");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> normalizedMap = (Map<String, Object>) sanitizeMenuJsonValue(map);
+
+        Object code = normalizedMap.get("code");
         if (code instanceof String codeText) {
             String candidate = codeText.trim();
             if (!candidate.isBlank() && !candidate.equals(raw)) {
@@ -9317,61 +10730,402 @@ public class ApiSpringController {
             }
         }
 
-        Object menu = map.get("menu");
+        Object menu = normalizedMap.get("menu");
         if (menu instanceof List<?>) {
-            Map<String, Object> wrapped = new HashMap<>();
-            wrapped.put("menu", menu);
-            try {
-                return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
-            } catch (Exception ignored) {
-                return "";
-            }
+            return wrapAndSanitizeMenuPayload(menu);
         }
 
-        Object menus = map.get("menus");
+        Object menus = normalizedMap.get("menus");
         if (menus instanceof List<?> menuList) {
-            Map<String, Object> wrapped = new HashMap<>();
-            wrapped.put("menu", menuList);
-            try {
-                return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
-            } catch (Exception ignored) {
-                return "";
-            }
+            return wrapAndSanitizeMenuPayload(menuList);
         }
 
-        Object nestedData = map.get("data");
+        Object nestedData = normalizedMap.get("data");
         if (nestedData instanceof Map<?, ?> nestedMap) {
             Object nestedMenu = nestedMap.get("menu");
             if (nestedMenu instanceof List<?> menuList) {
-                Map<String, Object> wrapped = new HashMap<>();
-                wrapped.put("menu", menuList);
-                try {
-                    return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
-                } catch (Exception ignored) {
-                    return "";
+                return wrapAndSanitizeMenuPayload(menuList);
+            }
+        }
+
+        if (isLikelyMenuNodeMap(normalizedMap)) {
+            return wrapAndSanitizeMenuPayload(List.of(normalizedMap));
+        }
+
+        return "";
+    }
+
+    private String wrapAndSanitizeMenuPayload(Object menuRaw) {
+        List<Map<String, Object>> sanitizedMenu = sanitizeMenuTree(menuRaw);
+        if (sanitizedMenu.isEmpty()) {
+            return "";
+        }
+        Map<String, Object> wrapped = new LinkedHashMap<>();
+        wrapped.put("menu", sanitizedMenu);
+        try {
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private List<Map<String, Object>> sanitizeMenuTree(Object menuRaw) {
+        if (!(menuRaw instanceof List<?> list) || list.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        LinkedHashMap<String, Map<String, Object>> nodesById = new LinkedHashMap<>();
+        LinkedHashMap<String, String> canonicalIdByMenuId = new LinkedHashMap<>();
+        LinkedHashMap<String, String> parentById = new LinkedHashMap<>();
+        List<String> rootOrder = new ArrayList<>();
+        int[] autoIdCounter = new int[] {1};
+
+        for (Object item : list) {
+            collectMenuNodes(
+                item,
+                "",
+                new LinkedHashSet<>(),
+                nodesById,
+                canonicalIdByMenuId,
+                parentById,
+                rootOrder,
+                autoIdCounter);
+        }
+
+        if (nodesById.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        for (String id : nodesById.keySet()) {
+            String parent = String.valueOf(parentById.getOrDefault(id, "")).trim();
+            if (parent.isBlank() || id.equals(parent) || !nodesById.containsKey(parent)) {
+                parentById.put(id, "");
+                if (!rootOrder.contains(id)) {
+                    rootOrder.add(id);
                 }
             }
         }
 
-        if (isLikelyMenuNodeMap(map)) {
-            Map<String, Object> wrapped = new HashMap<>();
-            wrapped.put("menu", List.of(map));
-            try {
-                return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
-            } catch (Exception ignored) {
-                return "";
+        LinkedHashMap<String, List<String>> childrenByParent = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : parentById.entrySet()) {
+            String childId = entry.getKey();
+            String parentId = String.valueOf(entry.getValue() == null ? "" : entry.getValue()).trim();
+            if (parentId.isBlank() || childId.equals(parentId) || !nodesById.containsKey(parentId)) {
+                continue;
+            }
+            List<String> siblings = childrenByParent.computeIfAbsent(parentId, k -> new ArrayList<>());
+            if (!siblings.contains(childId)) {
+                siblings.add(childId);
             }
         }
 
-        return "";
+        List<Map<String, Object>> result = new ArrayList<>();
+        LinkedHashSet<String> emitted = new LinkedHashSet<>();
+
+        for (String rootId : rootOrder) {
+            Map<String, Object> built = buildSanitizedMenuNode(rootId, nodesById, parentById, childrenByParent, new LinkedHashSet<>());
+            if (built != null && emitted.add(rootId)) {
+                result.add(built);
+            }
+        }
+
+        for (String id : nodesById.keySet()) {
+            if (emitted.contains(id)) {
+                continue;
+            }
+            String parentId = String.valueOf(parentById.getOrDefault(id, "")).trim();
+            if (!parentId.isBlank() && nodesById.containsKey(parentId)) {
+                continue;
+            }
+            Map<String, Object> built = buildSanitizedMenuNode(id, nodesById, parentById, childrenByParent, new LinkedHashSet<>());
+            if (built != null && emitted.add(id)) {
+                result.add(built);
+            }
+        }
+
+        return result;
+    }
+
+    private void collectMenuNodes(
+            Object rawNode,
+            String inheritedParentId,
+            Set<String> ancestors,
+            LinkedHashMap<String, Map<String, Object>> nodesById,
+            LinkedHashMap<String, String> canonicalIdByMenuId,
+            LinkedHashMap<String, String> parentById,
+            List<String> rootOrder,
+            int[] autoIdCounter) {
+        if (!(rawNode instanceof Map<?, ?> map)) {
+            return;
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> normalized = (Map<String, Object>) sanitizeMenuJsonValue(map);
+
+        String nodeId = cleanMenuIdentifier(normalized.get("id"));
+        if (nodeId.isBlank()) {
+            nodeId = "menu_auto_" + autoIdCounter[0]++;
+        }
+
+        // menu_id is a stronger business identity in this system; use it to collapse
+        // AI-generated duplicate nodes that only differ by id.
+        String menuId = cleanMenuIdentifier(normalized.get("menu_id"));
+        if (!menuId.isBlank()) {
+            String canonicalId = cleanMenuIdentifier(canonicalIdByMenuId.get(menuId));
+            if (canonicalId.isBlank()) {
+                canonicalIdByMenuId.put(menuId, nodeId);
+            } else if (!canonicalId.equals(nodeId)) {
+                nodeId = canonicalId;
+                normalized.put("id", canonicalId);
+            }
+        }
+
+        if (ancestors.contains(nodeId)) {
+            return;
+        }
+
+        String explicitParent = cleanMenuIdentifier(normalized.get("parentId"));
+        String parentId = explicitParent.isBlank() ? cleanMenuIdentifier(inheritedParentId) : explicitParent;
+        if (nodeId.equals(parentId)) {
+            parentId = "";
+        }
+
+        Map<String, Object> existing = nodesById.get(nodeId);
+        if (existing == null) {
+            String preferredParent = selectPreferredParentId("", parentId, nodeId);
+            Map<String, Object> base = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> entry : normalized.entrySet()) {
+                String key = entry.getKey();
+                if ("children".equals(key) || "nodes".equals(key)) {
+                    continue;
+                }
+                base.put(key, entry.getValue());
+            }
+            base.put("id", nodeId);
+            base.put("parentId", preferredParent);
+            harmonizeMenuIconFields(base);
+            nodesById.put(nodeId, base);
+            parentById.put(nodeId, preferredParent);
+            if (preferredParent.isBlank() && !rootOrder.contains(nodeId)) {
+                rootOrder.add(nodeId);
+            }
+        } else {
+            String existingParent = cleanMenuIdentifier(parentById.get(nodeId));
+            String preferredParent = selectPreferredParentId(existingParent, parentId, nodeId);
+            parentById.put(nodeId, preferredParent);
+            existing.put("parentId", preferredParent);
+            if (preferredParent.isBlank()) {
+                if (!rootOrder.contains(nodeId)) {
+                    rootOrder.add(nodeId);
+                }
+            } else {
+                rootOrder.remove(nodeId);
+            }
+
+            for (Map.Entry<String, Object> entry : normalized.entrySet()) {
+                String key = entry.getKey();
+                if ("children".equals(key) || "nodes".equals(key) || "id".equals(key) || "parentId".equals(key)) {
+                    continue;
+                }
+                Object currentValue = existing.get(key);
+                Object incomingValue = entry.getValue();
+                if (isBlankMenuValue(currentValue) && !isBlankMenuValue(incomingValue)) {
+                    existing.put(key, incomingValue);
+                }
+            }
+            harmonizeMenuIconFields(existing);
+        }
+
+        Object childrenRaw = normalized.get("children");
+        if (!(childrenRaw instanceof List<?>)) {
+            childrenRaw = normalized.get("nodes");
+        }
+        if (childrenRaw instanceof List<?> children) {
+            LinkedHashSet<String> nextAncestors = new LinkedHashSet<>(ancestors);
+            nextAncestors.add(nodeId);
+            for (Object child : children) {
+                collectMenuNodes(
+                    child,
+                    nodeId,
+                    nextAncestors,
+                    nodesById,
+                    canonicalIdByMenuId,
+                    parentById,
+                    rootOrder,
+                    autoIdCounter);
+            }
+        }
+    }
+
+    private Map<String, Object> buildSanitizedMenuNode(
+            String nodeId,
+            LinkedHashMap<String, Map<String, Object>> nodesById,
+            LinkedHashMap<String, String> parentById,
+            LinkedHashMap<String, List<String>> childrenByParent,
+            Set<String> path) {
+        if (nodeId == null || nodeId.isBlank()) {
+            return null;
+        }
+        if (path.contains(nodeId)) {
+            return null;
+        }
+        Map<String, Object> base = nodesById.get(nodeId);
+        if (base == null) {
+            return null;
+        }
+
+        LinkedHashSet<String> nextPath = new LinkedHashSet<>(path);
+        nextPath.add(nodeId);
+
+        Map<String, Object> node = new LinkedHashMap<>(base);
+        String parentId = String.valueOf(parentById.getOrDefault(nodeId, "")).trim();
+        node.put("parentId", parentId);
+        harmonizeMenuIconFields(node);
+
+        List<Map<String, Object>> children = new ArrayList<>();
+        List<String> childIds = childrenByParent.getOrDefault(nodeId, Collections.emptyList());
+        for (String childId : childIds) {
+            if (childId == null || childId.isBlank() || childId.equals(nodeId)) {
+                continue;
+            }
+            Map<String, Object> childNode = buildSanitizedMenuNode(childId, nodesById, parentById, childrenByParent, nextPath);
+            if (childNode != null) {
+                children.add(childNode);
+            }
+        }
+
+        if (children.isEmpty()) {
+            node.remove("children");
+        } else {
+            node.put("children", children);
+        }
+        node.remove("nodes");
+        return node;
+    }
+
+    private Object sanitizeMenuJsonValue(Object value) {
+        if (value instanceof Map<?, ?> rawMap) {
+            Map<String, Object> sanitized = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
+                String key = normalizeMenuJsonKey(entry.getKey());
+                if (key.isBlank()) {
+                    continue;
+                }
+                sanitized.put(key, sanitizeMenuJsonValue(entry.getValue()));
+            }
+            return sanitized;
+        }
+        if (value instanceof List<?> rawList) {
+            List<Object> sanitized = new ArrayList<>();
+            for (Object item : rawList) {
+                sanitized.add(sanitizeMenuJsonValue(item));
+            }
+            return sanitized;
+        }
+        return value;
+    }
+
+    private String normalizeMenuJsonKey(Object rawKey) {
+        String key = String.valueOf(rawKey == null ? "" : rawKey).trim();
+        if (key.isEmpty()) {
+            return "";
+        }
+        key = key.replace("\"", "").trim();
+        if ("parent_id".equalsIgnoreCase(key)) {
+            return "parentId";
+        }
+        return key;
+    }
+
+    private void harmonizeMenuIconFields(Map<String, Object> node) {
+        if (node == null || node.isEmpty()) {
+            return;
+        }
+        String mIcon = String.valueOf(node.getOrDefault("m_icon", "")).trim();
+        String mIcons = String.valueOf(node.getOrDefault("m_icons", "")).trim();
+        String icon = String.valueOf(node.getOrDefault("icon", "")).trim();
+
+        String preferred = !mIcon.isBlank()
+            ? mIcon
+            : (!mIcons.isBlank() ? mIcons : icon);
+        if (preferred.isBlank()) {
+            preferred = defaultMenuIconForNode(node);
+        }
+        if (preferred.isBlank()) {
+            return;
+        }
+
+        node.put("m_icon", preferred);
+        node.put("icon", preferred);
+        node.remove("m_icons");
+    }
+
+    private String defaultMenuIconForNode(Map<String, Object> node) {
+        if (node == null || node.isEmpty()) {
+            return "";
+        }
+        int typeForm = parseIntSafe(node.get("type_form"), -1);
+        if (typeForm == 0) {
+            return "AppstoreOutlined";
+        }
+        return "MenuOutlined";
+    }
+
+    private String selectPreferredParentId(String existingParentId, String candidateParentId, String nodeId) {
+        String existing = cleanMenuIdentifier(existingParentId);
+        String candidate = cleanMenuIdentifier(candidateParentId);
+        String self = cleanMenuIdentifier(nodeId);
+
+        if (!candidate.isBlank() && candidate.equals(self)) {
+            candidate = "";
+        }
+        if (!existing.isBlank() && existing.equals(self)) {
+            existing = "";
+        }
+
+        if (existing.isBlank() && !candidate.isBlank()) {
+            return candidate;
+        }
+        if (!existing.isBlank()) {
+            return existing;
+        }
+        return candidate;
+    }
+
+    private boolean isBlankMenuValue(Object value) {
+        if (value == null) {
+            return true;
+        }
+        if (value instanceof String s) {
+            return s.trim().isEmpty();
+        }
+        if (value instanceof Map<?, ?> m) {
+            return m.isEmpty();
+        }
+        if (value instanceof List<?> l) {
+            return l.isEmpty();
+        }
+        return false;
+    }
+
+    private String cleanMenuIdentifier(Object raw) {
+        String value = String.valueOf(raw == null ? "" : raw).trim();
+        if (value.isEmpty()) {
+            return "";
+        }
+        value = value.replace("\"", "").trim();
+        if ("null".equalsIgnoreCase(value)) {
+            return "";
+        }
+        return value;
     }
 
     private boolean isLikelyMenuNodeMap(Map<?, ?> map) {
         if (map == null || map.isEmpty()) {
             return false;
         }
-        Object id = map.get("id");
-        if (!(id instanceof String) || String.valueOf(id).isBlank()) {
+        String id = cleanMenuIdentifier(map.get("id"));
+        if (id.isBlank()) {
             return false;
         }
         return map.containsKey("type_form")
@@ -9382,6 +11136,71 @@ public class ApiSpringController {
 
     private boolean isMenuJsonContext(String contextType) {
         return "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim());
+    }
+
+    private String generateProviderContentWithMenuMasterPrompt(String prompt, String contextType) {
+        return aiProviderFactory.generateContent(prependMenuMasterPromptIfNeeded(prompt, contextType));
+    }
+
+    private String prependMenuMasterPromptIfNeeded(String prompt, String contextType) {
+        String source = String.valueOf(prompt == null ? "" : prompt).trim();
+        if (source.isBlank() || !isMenuJsonContext(contextType) || aiAssistantGatewayService == null) {
+            return source;
+        }
+        if (source.contains("# CSM Multi-tenant AI Menu Master Prompt")
+                || source.contains("## 1) ROLE AND MANDATE")) {
+            return source;
+        }
+        try {
+            String masterPrompt = String.valueOf(aiAssistantGatewayService.getMasterPrompt() == null
+                ? ""
+                : aiAssistantGatewayService.getMasterPrompt()).trim();
+            if (masterPrompt.isBlank()) {
+                return source;
+            }
+            String promptAppId = extractPromptAppIdRelaxed(source);
+            String requestText = extractRequestTextFromPrompt(source);
+            String learningBlock = "";
+            if (aiMenuLearningMemoryService != null && !promptAppId.isBlank()) {
+                String learnedContext = aiMenuLearningMemoryService.buildLearningContextBlock(promptAppId, requestText);
+                learningBlock = String.valueOf(learnedContext == null ? "" : learnedContext).trim();
+            }
+            return masterPrompt
+                + "\n\n"
+                + (learningBlock.isBlank() ? "" : learningBlock + "\n\n")
+                + "## LOCAL PROVIDER ENFORCEMENT\n"
+                + "You are the local menu_json generator. Follow the System Core above exactly.\n"
+                + "Do not flatten child menus into top-level siblings. Preserve the original tree unless the request explicitly asks to restructure it.\n"
+                + "Dynamic menu icons must render exactly like static menus in frontend-admin. Prefer valid Ant Design icon names in m_icon (UserOutlined, SettingOutlined, AppstoreOutlined, MenuOutlined).\n"
+                + "Never rely on legacy m_icons or arbitrary CSS classes for new output. Preserve an existing valid m_icon unless the request explicitly asks to replace it.\n"
+                + "When asked to only supplement/fix, keep all existing ids, parentId relations, menu_id ordering, and business fields stable.\n\n"
+                + source;
+        } catch (Exception ex) {
+            logger.warn("Failed to prepend menu master prompt for local provider: {}", ex.getMessage());
+            return source;
+        }
+    }
+
+    private String extractPromptAppIdRelaxed(String prompt) {
+        String source = String.valueOf(prompt == null ? "" : prompt).trim();
+        if (source.isBlank()) {
+            return "";
+        }
+        try {
+            String exact = String.valueOf(aiAssistantGatewayService.extractAppIdFromPrompt(source) == null
+                ? ""
+                : aiAssistantGatewayService.extractAppIdFromPrompt(source)).trim();
+            if (!exact.isBlank()) {
+                return exact;
+            }
+        } catch (Exception ignored) {
+        }
+
+        Matcher matcher = Pattern.compile("(?i)\\bapp_id(?:_target)?\\b\\s*[=:]\\s*\"?([a-zA-Z0-9_\\-]+)").matcher(source);
+        if (matcher.find()) {
+            return String.valueOf(matcher.group(1) == null ? "" : matcher.group(1)).trim();
+        }
+        return "";
     }
 
     private void emitTextAsAiAssistantChunks(String appId, String text, String responseMode, String uiLang) {
@@ -9794,6 +11613,7 @@ public class ApiSpringController {
                         if (promptAppId != null && !promptAppId.isBlank()) {
                             String requestText = extractRequestTextFromPrompt(prompt);
                             this.aiAssistantGatewayService.updateAppContextFile(promptAppId, requestText, rawContent);
+                            this.aiMenuLearningMemoryService.recordSuccessfulMenuGeneration(promptAppId, requestText, rawContent);
                         }
                     } catch (Exception ctxEx) {
                         logger.warn("Could not update AI context file (async): {}", ctxEx.getMessage());

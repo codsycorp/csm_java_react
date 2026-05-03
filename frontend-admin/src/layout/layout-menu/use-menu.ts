@@ -129,12 +129,13 @@ function normalizeIconName(iconName: string): string {
 	return "";
 }
 
-function resolveMenuIcon(icon: unknown, legacyIcon?: unknown): React.ReactNode {
+function resolveMenuIcon(icon: unknown, modernIcon?: unknown, legacyIcon?: unknown): React.ReactNode {
 	if (React.isValidElement(icon)) return icon;
 
 	const iconString = typeof icon === "string" ? icon : "";
+	const modernString = typeof modernIcon === "string" ? modernIcon : "";
 	const legacyString = typeof legacyIcon === "string" ? legacyIcon : "";
-	const source = iconString || legacyString;
+	const source = iconString || modernString || legacyString;
 	if (!source) return undefined;
 
 	const antIconName = normalizeIconName(source);
@@ -198,6 +199,7 @@ export function useMenu() {
 						name_en: menu.name_en,
 						name_zh: menu.name_zh,
 						icon: menu.icon,
+						m_icon: menu.m_icon,
 						m_icons: menu.m_icons,
 						disabled: menu.disabled,
 						children: menu.children,
@@ -356,6 +358,7 @@ export function useMenu() {
 					label: item.label,
 					id: item.id,
 					path: item.path,
+					m_icon: item.m_icon,
 					type_form: item.type_form,
 					table_name: item.table_name,
 					report_name: item.report_name,
@@ -365,7 +368,7 @@ export function useMenu() {
 					trigger: item.trigger,
 					m_icons: item.m_icons,
 				};
-				cleaned.icon = resolveMenuIcon(item.icon, item.m_icons);
+				cleaned.icon = resolveMenuIcon(item.icon, item.m_icon, item.m_icons);
 				if (item.disabled === true) {
 					cleaned.disabled = item.disabled;
 				}

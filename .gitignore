@@ -63,6 +63,9 @@ backend/auto-index-state.json
 backend/google-index-quota-state.json
 backend/x-twitter-state.json
 
+# Local AI model binaries (too large for normal git push)
+backend/src/main/resources/models/*.gguf
+
 # Lock files (optional - uncomment if you want to ignore them)
 # pnpm-lock.yaml
 # package-lock.json

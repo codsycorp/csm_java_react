@@ -338,13 +338,21 @@ public class RecordManager {
         }
     }
     public void shutdownAllDatabases() {
+        shutdownInProgress.set(true);
         for (Map.Entry<String, RocksDBWrapper> entry : dbMap.entrySet()) {
             RocksDBWrapper wrapper = entry.getValue();
             if (wrapper != null) {
-                wrapper.close();
-                logger.info("Đã đóng DB: {}", entry.getKey());
+                try {
+                    wrapper.close();
+                    logger.info("Đã đóng DB: {}", entry.getKey());
+                } catch (Exception e) {
+                    logger.error("❌ Lỗi khi đóng DB {}: {}", entry.getKey(), e.getMessage());
+                }
             }
         }
+        // Keep dbMap entries (just closed) so isOwningHandle() returns false
+        // and any concurrent request can detect stale handles instead of attempting a fresh open
+        // against a still-registered native RocksDB path.
         dbMap.clear();
         dbLocks.clear();
     }    
@@ -1518,6 +1526,11 @@ public class RecordManager {
     }
 
     public RocksDB getDatabaseWithBloomFilter(String appId, String tableName) {
+        // Fail fast during shutdown to prevent opening new DBs after cleanup
+        if (shutdownInProgress.get()) {
+            throw new RuntimeException("Server đang tắt, không mở RocksDB mới cho: " + appId + "/" + tableName);
+        }
+
         // ✅ Chuẩn hóa trước khi dùng làm path — đây là điểm duy nhất mọi path RocksDB đi qua.
         // Ngăn: (1) appId rỗng → file thoát ra database/ root, (2) case khác nhau → 2 thư mục trùng,
         // (3) whitespace → 2 thư mục trùng, (4) path traversal → escape khỏi database/.
@@ -1530,7 +1543,13 @@ public class RecordManager {
         synchronized (dbLocks.get(dbKey)) {
             RocksDBWrapper wrapper = dbMap.get(dbKey);
             if (wrapper != null && wrapper.db != null) {
-                return wrapper.db;
+                // isOwningHandle() returns false when db.close() was called — detect stale cached handles
+                if (wrapper.db.isOwningHandle()) {
+                    return wrapper.db;
+                }
+                // Closed handle in cache: remove it so we can reopen below
+                logger.warn("⚠️ Phát hiện RocksDB handle đã đóng trong cache cho {}, sẽ mở lại", dbKey);
+                dbMap.remove(dbKey);
             }
     
             try {
@@ -1576,7 +1595,32 @@ public class RecordManager {
                 try {
                     db = RocksDB.open(options, dbPath);
                 } catch (RocksDBException openEx) {
-                    if (shouldAutoRecoverRocksDb(safeTableName) && isRecoverableOpenError(openEx)) {
+                    String openErrMsg = openEx.getMessage() != null ? openEx.getMessage().toLowerCase(Locale.ROOT) : "";
+                    boolean isStaleLock = openErrMsg.contains("lock hold by current process")
+                            || openErrMsg.contains("no locks available");
+                    if (isStaleLock) {
+                        // Same-JVM stale lock: native RocksDB C++ registry still has this path open
+                        // (e.g., from DevTools restart or failed shutdown). Force GC to finalize
+                        // orphaned native RocksDB objects, then retry.
+                        logger.warn("⚠️ RocksDB stale lock cho {} — forcing GC để giải phóng native handles cũ, sau đó retry...", dbKey);
+                        System.gc();
+                        System.runFinalization();
+                        try { Thread.sleep(200); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                        try {
+                            db = RocksDB.open(options, dbPath);
+                            logger.info("✅ RocksDB {} mở thành công sau khi giải phóng stale lock", dbKey);
+                        } catch (RocksDBException retryEx) {
+                            // GC didn't help; for index table quarantine+recreate; others propagate
+                            if (shouldAutoRecoverRocksDb(safeTableName)) {
+                                logger.error("❌ Stale lock vẫn còn cho {} — thử quarantine+recreate", dbKey, retryEx);
+                                quarantineCorruptedRocksDirectory(dbPath, dbKey);
+                                db = RocksDB.open(options, dbPath);
+                                logger.warn("⚠️ RocksDB {} đã được tự phục hồi sau stale lock", dbKey);
+                            } else {
+                                throw retryEx;
+                            }
+                        }
+                    } else if (shouldAutoRecoverRocksDb(safeTableName) && isRecoverableOpenError(openEx)) {
                         logger.error("❌ RocksDB bị lỗi/corrupt cho {} tại {}. Thử tự phục hồi...", dbKey, dbPath, openEx);
                         quarantineCorruptedRocksDirectory(dbPath, dbKey);
                         db = RocksDB.open(options, dbPath);

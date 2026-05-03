@@ -1,0 +1,501 @@
+package net.phanmemmottrieu.service;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+
+/**
+ * Content-adaptive pipeline for oversized prompts (JSON, JS, config, text).
+ *
+ * Strategy (fully dynamic – no hardcoded schema or contextType assumptions):
+ * 1. Detect actual content shape: JSON array / JSON object-with-array-value / code / plain text.
+ * 2. Split along natural structural boundaries.
+ * 3. Summarize each chunk with a generic introspective prompt.
+ * 4. Aggregate chunk summaries into a condensed cloud context.
+ *
+ * When the local model is unavailable, a pure-Java heuristic extracts any
+ * string-valued keys present in the content (no field names assumed).
+ */
+@Service
+@ConditionalOnProperty(name = "ai.local.chunking.enabled", havingValue = "true")
+public class LargeFileChunkingService {
+
+    private static final Logger log = LoggerFactory.getLogger(LargeFileChunkingService.class);
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Value("${ai.local.chunking.threshold-chars:60000}")
+    private int thresholdChars;
+
+    @Value("${ai.local.chunking.chunk-size-chars:7000}")
+    private int chunkSizeChars;
+
+    @Value("${ai.local.chunking.max-chunks:20}")
+    private int maxChunks;
+
+    @Value("${ai.local.chunking.output-budget-chars:5000}")
+    private int outputBudgetChars;
+
+    @Autowired(required = false)
+    private LlamaCppNativeService llamaCppNativeService;
+
+    // ── Public API ────────────────────────────────────────────────────────────
+
+    /**
+     * Compress an oversized prompt via local chunked summarization.
+     * Returns the original text unchanged when below threshold or local is unavailable.
+     */
+    public String compressLargePrompt(String prompt, String requestText, String contextType) {
+        String text = prompt == null ? "" : prompt.trim();
+        if (text.length() <= thresholdChars) {
+            return text;
+        }
+        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
+            log.warn("[CHUNKING] Local model unavailable – heuristic fallback for {} chars", text.length());
+            return buildHeuristicHeader(text, requestText, contextType);
+        }
+
+        ContentShape shape = detectShape(text);
+        log.info("[CHUNKING] {} chars, shape={}, contextType={} – starting Map-Reduce",
+                text.length(), shape, contextType);
+
+        List<String> chunks = splitByShape(text, shape);
+        int active = Math.min(chunks.size(), maxChunks);
+
+        List<String> summaries = new ArrayList<>();
+        for (int i = 0; i < active; i++) {
+            String s = summarizeChunk(i + 1, chunks.size(), chunks.get(i), shape);
+            if (s != null && !s.isBlank()) summaries.add(s);
+        }
+
+        if (summaries.isEmpty()) {
+            log.warn("[CHUNKING] All summaries empty – heuristic fallback");
+            return buildHeuristicHeader(text, requestText, contextType);
+        }
+
+        log.info("[CHUNKING] {}/{} chunks summarized → aggregating", summaries.size(), chunks.size());
+        return aggregateSummaries(summaries, requestText, contextType, chunks.size());
+    }
+
+    // ── Content-shape detection ───────────────────────────────────────────────
+
+    enum ContentShape { JSON_ARRAY, JSON_OBJECT_WITH_ARRAY, JSON_OBJECT, CODE, TEXT }
+
+    /**
+     * Inspect the first ~400 chars to determine the dominant structural shape.
+     * No assumptions about field names or domain semantics.
+     */
+    private ContentShape detectShape(String t) {
+        String head = t.substring(0, Math.min(t.length(), 400)).stripLeading();
+        if (head.startsWith("[")) return ContentShape.JSON_ARRAY;
+        if (head.startsWith("{")) {
+            // Check whether the object has at least one array-valued top-level key
+            // by looking for the pattern   "key" : [   within the first 600 chars
+            String scan = t.substring(0, Math.min(t.length(), 600));
+            if (Pattern.compile("\"[^\"]+\"\\s*:\\s*\\[").matcher(scan).find()) {
+                return ContentShape.JSON_OBJECT_WITH_ARRAY;
+            }
+            return ContentShape.JSON_OBJECT;
+        }
+        // Simple heuristic for code files
+        if (head.contains("function ") || head.contains("class ") || head.contains("import ")
+                || head.contains("export ") || head.contains("var ") || head.contains("const ")) {
+            return ContentShape.CODE;
+        }
+        return ContentShape.TEXT;
+    }
+
+    // ── Splitting ─────────────────────────────────────────────────────────────
+
+    private List<String> splitByShape(String content, ContentShape shape) {
+        String t = content.trim();
+        switch (shape) {
+            case JSON_ARRAY: {
+                List<String> items = splitJsonArrayTopLevel(t);
+                if (items.size() > 1) return groupItemsIntoChunks(items);
+                break;
+            }
+            case JSON_OBJECT_WITH_ARRAY: {
+                // Unwrap the first array-valued key generically
+                List<String> items = unwrapFirstArrayValue(t);
+                if (items.size() > 1) return groupItemsIntoChunks(items);
+                // Fallback: split as plain object pairs
+                List<String> pairs = splitJsonObjectTopLevel(t);
+                if (pairs.size() > 1) return groupItemsIntoChunks(pairs);
+                break;
+            }
+            case JSON_OBJECT: {
+                List<String> pairs = splitJsonObjectTopLevel(t);
+                if (pairs.size() > 1) return groupItemsIntoChunks(pairs);
+                break;
+            }
+            default:
+                break;
+        }
+        return splitByLinesWithBoundaries(content, shape);
+    }
+
+    /**
+     * Generic unwrap: find the first top-level key whose value is an array,
+     * then split that array's items. Works for any field name, not just "menu".
+     */
+    private List<String> unwrapFirstArrayValue(String json) {
+        // Locate first occurrence of  "anyKey": [
+        Matcher m = Pattern.compile("\"[^\"]+\"\\s*:\\s*\\[").matcher(json);
+        if (!m.find()) return List.of(json);
+        int arrayStart = json.indexOf('[', m.start());
+        int arrayEnd = json.lastIndexOf(']');
+        if (arrayEnd <= arrayStart) return List.of(json);
+        String arrayContent = json.substring(arrayStart, arrayEnd + 1);
+        List<String> items = splitJsonArrayTopLevel(arrayContent);
+        return items.size() > 1 ? items : List.of(json);
+    }
+
+    /**
+     * Extract top-level items from a JSON array string.
+     * Uses depth counting – no full JSON parse needed.
+     */
+    private List<String> splitJsonArrayTopLevel(String json) {
+        List<String> items = new ArrayList<>();
+        int depth = 0;
+        int start = -1;
+        boolean inString = false;
+        char prev = 0;
+
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (inString) {
+                if (c == '"' && prev != '\\') inString = false;
+                prev = c;
+                continue;
+            }
+            if (c == '"') { inString = true; prev = c; continue; }
+
+            if (c == '[' || c == '{') {
+                if (depth == 0 && c == '[') { start = i + 1; }
+                depth++;
+            } else if (c == ']' || c == '}') {
+                depth--;
+                if (depth == 0 && start >= 0) {
+                    items.add(json.substring(start, i).trim());
+                }
+            } else if (c == ',' && depth == 1 && start >= 0) {
+                String item = json.substring(start, i).trim();
+                if (!item.isBlank()) items.add(item);
+                start = i + 1;
+            }
+            prev = c;
+        }
+        return items;
+    }
+
+    /**
+     * Extract top-level key-value pairs from a JSON object string.
+     */
+    private List<String> splitJsonObjectTopLevel(String json) {
+        List<String> pairs = new ArrayList<>();
+        int depth = 0;
+        int start = -1;
+        boolean inString = false;
+        char prev = 0;
+
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (inString) {
+                if (c == '"' && prev != '\\') inString = false;
+                prev = c;
+                continue;
+            }
+            if (c == '"') { inString = true; prev = c; continue; }
+
+            if (c == '{') {
+                depth++;
+                if (depth == 1) start = i + 1;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0 && start >= 0) {
+                    String tail = json.substring(start, i).trim();
+                    if (!tail.isBlank()) pairs.add(tail);
+                }
+            } else if (c == ',' && depth == 1 && start >= 0) {
+                String pair = json.substring(start, i).trim();
+                if (!pair.isBlank()) pairs.add(pair);
+                start = i + 1;
+            }
+            prev = c;
+        }
+        return pairs;
+    }
+
+    /**
+     * Group items into chunks not exceeding chunkSizeChars each.
+     */
+    private List<String> groupItemsIntoChunks(List<String> items) {
+        List<String> chunks = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String item : items) {
+            if (current.length() > 0 && current.length() + item.length() + 2 > chunkSizeChars) {
+                chunks.add(current.toString().trim());
+                current = new StringBuilder();
+            }
+            if (current.length() > 0) current.append(",\n");
+            current.append(item);
+        }
+        if (current.length() > 0) chunks.add(current.toString().trim());
+        return chunks;
+    }
+
+    /**
+     * Line-based chunking. For code, prefers to split at structural declaration boundaries.
+     * For plain text, splits purely by size.
+     */
+    private List<String> splitByLinesWithBoundaries(String content, ContentShape shape) {
+        boolean isCode = (shape == ContentShape.CODE);
+        String[] lines = content.split("\n", -1);
+        List<String> chunks = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+
+        for (String line : lines) {
+            boolean isBoundary = isCode && isCodeDeclarationBoundary(line);
+            if (isBoundary && current.length() >= chunkSizeChars / 2) {
+                chunks.add(current.toString().trim());
+                current = new StringBuilder();
+            }
+            if (current.length() + line.length() + 1 > chunkSizeChars && current.length() > 0) {
+                chunks.add(current.toString().trim());
+                current = new StringBuilder();
+            }
+            current.append(line).append('\n');
+        }
+        if (current.length() > 0) chunks.add(current.toString().trim());
+        return chunks.isEmpty() ? List.of(content) : chunks;
+    }
+
+    /**
+     * Returns true when a line starts a new top-level code declaration.
+     * Generic enough to cover JS/TS/Java/Python patterns without domain assumptions.
+     */
+    private boolean isCodeDeclarationBoundary(String line) {
+        String t = line.stripLeading();
+        return t.startsWith("function ")
+            || t.startsWith("async function ")
+            || t.startsWith("class ")
+            || t.startsWith("public class ")
+            || t.startsWith("private class ")
+            || t.startsWith("export function ")
+            || t.startsWith("export class ")
+            || t.startsWith("export default ")
+            || t.startsWith("export const ")
+            || t.startsWith("def ")          // Python
+            || t.startsWith("public ")       // Java methods
+            || t.startsWith("private ")
+            || t.startsWith("protected ");
+    }
+
+    // ── Summarization ─────────────────────────────────────────────────────────
+
+    /**
+     * Summarize one chunk using a generic introspective prompt.
+     * The prompt does NOT assume any field names or schema – the model is asked
+     * to describe what it actually finds in the content.
+     */
+    private String summarizeChunk(int index, int total, String chunk, ContentShape shape) {
+        String safeChunk = chunk.length() > chunkSizeChars
+                ? chunk.substring(0, chunkSizeChars) : chunk;
+        String chunkFingerprint = shortDigest(safeChunk);
+        String chunkAnchors = extractAnchors(safeChunk, shape);
+
+        String shapeHint = switch (shape) {
+            case JSON_ARRAY, JSON_OBJECT_WITH_ARRAY, JSON_OBJECT -> "JSON/config";
+            case CODE -> "source code";
+            default -> "text";
+        };
+
+        // Generic, schema-agnostic prompt: model reads what IS there, not what we expect
+        String chunkPrompt = "chunk=" + index + "/" + total + " type=" + shapeHint + "\n"
+            + "chunkFingerprint=" + chunkFingerprint + "\n"
+            + "chunkAnchors=" + chunkAnchors + "\n"
+            + "Summarize this chunk concisely (max 8 lines).\n"
+            + "For JSON/config: list identifiers, key names, and non-trivial values you see.\n"
+            + "For code: list function/class names and their purpose.\n"
+            + "Do not invent information. Output plain text only.\n"
+            + "---\n"
+            + safeChunk;
+
+        try {
+            String raw = llamaCppNativeService.generateContent(chunkPrompt);
+            String result = extractResultText(raw);
+            log.debug("[CHUNKING] chunk {}/{} summary len={}", index, total,
+                    result == null ? 0 : result.length());
+            if (result == null || result.isBlank()) {
+                return "chunk=" + index + "/" + total + " fp=" + chunkFingerprint + " anchors=" + chunkAnchors;
+            }
+            return "chunk=" + index + "/" + total + " fp=" + chunkFingerprint + " anchors=" + chunkAnchors + "\n" + result;
+        } catch (Exception ex) {
+            log.warn("[CHUNKING] chunk {}/{} inference failed: {}", index, total, ex.getMessage());
+            String heuristic = heuristicExtract(safeChunk);
+            return "chunk=" + index + "/" + total + " fp=" + chunkFingerprint + " anchors=" + chunkAnchors + "\n" + heuristic;
+        }
+    }
+
+    /**
+     * Pure-Java heuristic extraction when LLM is unavailable.
+     * Scans for any pattern  "key": "short-value"  in the content – no field names assumed.
+     * Also picks up function/class declarations from code.
+     */
+    private String heuristicExtract(String chunk) {
+        StringBuilder sb = new StringBuilder();
+
+        // JSON string-valued keys (short values ≤ 80 chars)
+        Matcher kvMatcher = Pattern.compile("\"([^\"]{1,40})\"\\s*:\\s*\"([^\"]{1,80})\"").matcher(chunk);
+        int kvCount = 0;
+        while (kvMatcher.find() && kvCount < 20) {
+            sb.append(kvMatcher.group(1)).append('=').append(kvMatcher.group(2)).append(' ');
+            kvCount++;
+        }
+
+        // Code declarations
+        Pattern declPat = Pattern.compile("(?m)^\\s*((?:async\\s+)?function\\s+\\w+|(?:export\\s+)?(?:const|let|var)\\s+\\w+|class\\s+\\w+|def\\s+\\w+|(?:public|private|protected)\\s+\\w+\\s+\\w+\\s*\\()");
+        Matcher declMatcher = declPat.matcher(chunk);
+        int declCount = 0;
+        while (declMatcher.find() && declCount < 15) {
+            sb.append(declMatcher.group(1).trim()).append("; ");
+            declCount++;
+        }
+
+        return sb.toString().trim();
+    }
+
+
+    // ── Aggregation ───────────────────────────────────────────────────────────
+
+    private String aggregateSummaries(List<String> summaries, String requestText, String contextType, int totalChunks) {
+        StringBuilder joined = new StringBuilder();
+        for (int i = 0; i < summaries.size(); i++) {
+            joined.append("=== CHUNK ").append(i + 1).append("/").append(totalChunks).append(" ===\n");
+            joined.append(summaries.get(i)).append("\n\n");
+        }
+
+        // If joined is already small enough, return it directly
+        if (joined.length() <= outputBudgetChars) {
+            return buildAggregatedBlock(joined.toString(), requestText, contextType, totalChunks);
+        }
+
+        // Otherwise run one more local pass to reduce further
+        String aggregatePrompt = "[LOCAL_AGGREGATE] contextType=" + safeStr(contextType) + "\n"
+            + "Create a single condensed technical overview (max " + (outputBudgetChars / 5 * 4) + " chars).\n"
+            + "Preserve chunk anchors and identifiers exactly as given.\n"
+            + "Include: main data structures, key functions, critical logic, identifiers.\n"
+            + "Do not merge unrelated anchors.\n"
+            + "---\n"
+            + joined.substring(0, Math.min(joined.length(), chunkSizeChars * 2));
+
+        try {
+            String raw = llamaCppNativeService.generateContent(aggregatePrompt);
+            String result = extractResultText(raw);
+            if (result != null && !result.isBlank()) {
+                return buildAggregatedBlock(result, requestText, contextType, totalChunks);
+            }
+        } catch (Exception ex) {
+            log.warn("[CHUNKING] aggregation inference failed: {}", ex.getMessage());
+        }
+
+        // Truncate joined to budget as fallback
+        String truncated = joined.length() > outputBudgetChars
+                ? joined.substring(0, outputBudgetChars) : joined.toString();
+        return buildAggregatedBlock(truncated, requestText, contextType, totalChunks);
+    }
+
+    private String buildAggregatedBlock(String body, String requestText, String contextType, int totalChunks) {
+        return "[LOCAL_CHUNKED_ANALYSIS]\n"
+            + "totalChunks=" + totalChunks + " contextType=" + safeStr(contextType) + "\n"
+            + (requestText != null && !requestText.isBlank()
+                ? "request=" + requestText.replaceAll("\\s+", " ").substring(0, Math.min(requestText.length(), 300)) + "\n"
+                : "")
+            + body.trim();
+    }
+
+    private String buildHeuristicHeader(String text, String requestText, String contextType) {
+        int headLen = Math.min(text.length(), chunkSizeChars);
+        int tailLen = Math.min(text.length() - headLen, chunkSizeChars / 2);
+        String head = text.substring(0, headLen);
+        String tail = tailLen > 0 ? "\n...\n" + text.substring(text.length() - tailLen) : "";
+        return "[LOCAL_HEURISTIC_LARGE]\n"
+            + "totalChars=" + text.length() + " contextType=" + safeStr(contextType) + "\n"
+            + (requestText != null && !requestText.isBlank()
+                ? "request=" + requestText.replaceAll("\\s+", " ").substring(0, Math.min(requestText.length(), 200)) + "\n"
+                : "")
+            + head + tail;
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    @SuppressWarnings("unchecked")
+    private String extractResultText(String raw) {
+        if (raw == null || raw.isBlank()) return "";
+        try {
+            Map<String, Object> map = objectMapper.readValue(raw.trim(), Map.class);
+            Object result = map.get("result");
+            if (result instanceof String s && !s.isBlank()) return s.trim();
+            Object answer = map.get("answer");
+            if (answer instanceof String a && !a.isBlank()) return a.trim();
+        } catch (Exception ignored) {
+            // raw is plain text
+        }
+        return raw.trim();
+    }
+
+    private String safeStr(String s) {
+        return s == null ? "" : s;
+    }
+
+    private String extractAnchors(String chunk, ContentShape shape) {
+        List<String> anchors = new ArrayList<>();
+
+        Matcher idLike = Pattern.compile("\"([^\"]{1,40}(?:id|code|key|name|label|icon)[^\"]{0,20})\"\\s*:\\s*\"([^\"]{1,80})\"", Pattern.CASE_INSENSITIVE).matcher(chunk);
+        while (idLike.find() && anchors.size() < 8) {
+            anchors.add(idLike.group(1) + "=" + idLike.group(2));
+        }
+
+        if (shape == ContentShape.CODE) {
+            Matcher decl = Pattern.compile("(?m)^\\s*(?:export\\s+)?(?:async\\s+)?(?:function|class|const|let|var)\\s+([A-Za-z0-9_]+)").matcher(chunk);
+            while (decl.find() && anchors.size() < 12) {
+                anchors.add("decl=" + decl.group(1));
+            }
+        }
+
+        if (anchors.isEmpty()) {
+            Matcher anyKey = Pattern.compile("\"([^\"]{1,40})\"\\s*:").matcher(chunk);
+            while (anyKey.find() && anchors.size() < 6) {
+                anchors.add("key=" + anyKey.group(1));
+            }
+        }
+
+        return String.join(",", anchors);
+    }
+
+    private String shortDigest(String text) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = md.digest(String.valueOf(text == null ? "" : text).getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < Math.min(6, bytes.length); i++) {
+                sb.append(String.format("%02x", bytes[i]));
+            }
+            return sb.toString();
+        } catch (Exception ignored) {
+            return "na";
+        }
+    }
+}

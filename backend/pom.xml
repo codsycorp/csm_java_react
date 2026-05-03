@@ -299,6 +299,13 @@
       <version>1.13.1</version>
     </dependency>
 
+    <!-- Native llama.cpp JNI bindings (runs GGUF directly in JVM, no extra service) -->
+    <dependency>
+      <groupId>de.kherud</groupId>
+      <artifactId>llama</artifactId>
+      <version>3.0.0</version>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>

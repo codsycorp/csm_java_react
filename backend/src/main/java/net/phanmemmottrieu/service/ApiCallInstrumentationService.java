@@ -93,6 +93,10 @@ public class ApiCallInstrumentationService {
         public int providerCallsEstimate;
         public boolean inputBudgetGuardTriggered;
         public int estimatedSavedTokens;
+        public boolean localPreAnalysisAttempted;
+        public boolean localPreAnalysisHandled;
+        public boolean localPreAnalysisCloudContextInjected;
+        public String localPreAnalysisReasonCode;
 
         public Map<String, Object> toMap() {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -134,6 +138,10 @@ public class ApiCallInstrumentationService {
             m.put("providerCallsEstimate", providerCallsEstimate);
             m.put("inputBudgetGuardTriggered", inputBudgetGuardTriggered);
             m.put("estimatedSavedTokens", estimatedSavedTokens);
+            m.put("localPreAnalysisAttempted", localPreAnalysisAttempted);
+            m.put("localPreAnalysisHandled", localPreAnalysisHandled);
+            m.put("localPreAnalysisCloudContextInjected", localPreAnalysisCloudContextInjected);
+            m.put("localPreAnalysisReasonCode", localPreAnalysisReasonCode);
             return m;
         }
     }
@@ -289,6 +297,10 @@ public class ApiCallInstrumentationService {
         metric.providerCallsEstimate = toInt(payload.get("providerCallsEstimate"));
         metric.inputBudgetGuardTriggered = toBool(payload.get("inputBudgetGuardTriggered"));
         metric.estimatedSavedTokens = toInt(payload.get("estimatedSavedTokens"));
+        metric.localPreAnalysisAttempted = toBool(payload.get("localPreAnalysisAttempted"));
+        metric.localPreAnalysisHandled = toBool(payload.get("localPreAnalysisHandled"));
+        metric.localPreAnalysisCloudContextInjected = toBool(payload.get("localPreAnalysisCloudContextInjected"));
+        metric.localPreAnalysisReasonCode = toText(payload.get("localPreAnalysisReasonCode"));
 
         aiTelemetryHistory.add(metric);
         pruneAiTelemetryHistoryIfNeeded(5000);
@@ -360,6 +372,9 @@ public class ApiCallInstrumentationService {
         long attemptsUsedTotal = 0;
         long providerCallsEstimateTotal = 0;
         long estimatedSavedTokensTotal = 0;
+        int localPreAnalysisAttemptedCount = 0;
+        int localPreAnalysisHandledCount = 0;
+        int localPreAnalysisCloudContextInjectedCount = 0;
         long inputTokens = 0;
         long outputTokens = 0;
         long elapsedMs = 0;
@@ -368,6 +383,7 @@ public class ApiCallInstrumentationService {
         Map<String, Integer> flowCounts = new LinkedHashMap<>();
         Map<String, Integer> routingTierCounts = new LinkedHashMap<>();
         Map<String, Integer> outputShapeCounts = new LinkedHashMap<>();
+        Map<String, Integer> localPreAnalysisReasonCounts = new LinkedHashMap<>();
 
         if (events != null) {
             for (AiTelemetryMetric m : events) {
@@ -422,6 +438,20 @@ public class ApiCallInstrumentationService {
                 attemptsUsedTotal += Math.max(0, m.attemptsUsed);
                 providerCallsEstimateTotal += Math.max(0, m.providerCallsEstimate);
                 estimatedSavedTokensTotal += Math.max(0, m.estimatedSavedTokens);
+
+                if (m.localPreAnalysisAttempted) {
+                    localPreAnalysisAttemptedCount++;
+                }
+                if (m.localPreAnalysisHandled) {
+                    localPreAnalysisHandledCount++;
+                }
+                if (m.localPreAnalysisCloudContextInjected) {
+                    localPreAnalysisCloudContextInjectedCount++;
+                }
+                String localReason = toText(m.localPreAnalysisReasonCode);
+                if (!localReason.isBlank()) {
+                    localPreAnalysisReasonCounts.put(localReason, localPreAnalysisReasonCounts.getOrDefault(localReason, 0) + 1);
+                }
             }
         }
 
@@ -463,6 +493,13 @@ public class ApiCallInstrumentationService {
         out.put("avgProviderCallsEstimate", round6((double) providerCallsEstimateTotal / Math.max(1, codeStreamEvents)));
         out.put("estimatedSavedTokensTotal", estimatedSavedTokensTotal);
         out.put("avgEstimatedSavedTokensPerEvent", round6((double) estimatedSavedTokensTotal / Math.max(1, total)));
+        out.put("localPreAnalysisAttemptedCount", localPreAnalysisAttemptedCount);
+        out.put("localPreAnalysisAttemptedRate", ratio(localPreAnalysisAttemptedCount, total));
+        out.put("localPreAnalysisHandledCount", localPreAnalysisHandledCount);
+        out.put("localPreAnalysisHandledRate", ratio(localPreAnalysisHandledCount, total));
+        out.put("localPreAnalysisCloudContextInjectedCount", localPreAnalysisCloudContextInjectedCount);
+        out.put("localPreAnalysisCloudContextInjectedRate", ratio(localPreAnalysisCloudContextInjectedCount, total));
+        out.put("byLocalPreAnalysisReasonCode", localPreAnalysisReasonCounts);
         out.put("byFlow", flowCounts);
         out.put("byRoutingTier", routingTierCounts);
         out.put("byOutputShape", outputShapeCounts);
@@ -492,6 +529,9 @@ public class ApiCallInstrumentationService {
                 incLong(agg, "attemptsUsedTotal", Math.max(0, m.attemptsUsed));
                 incLong(agg, "providerCallsEstimateTotal", Math.max(0, m.providerCallsEstimate));
                 incLong(agg, "estimatedSavedTokensTotal", Math.max(0, m.estimatedSavedTokens));
+                incLong(agg, "localPreAnalysisAttemptedEvents", m.localPreAnalysisAttempted ? 1 : 0);
+                incLong(agg, "localPreAnalysisHandledEvents", m.localPreAnalysisHandled ? 1 : 0);
+                incLong(agg, "localPreAnalysisCloudContextInjectedEvents", m.localPreAnalysisCloudContextInjected ? 1 : 0);
                 incDouble(agg, "estimatedCostUsd", Math.max(0.0, m.estimatedCostUsd));
             }
         }
@@ -521,6 +561,9 @@ public class ApiCallInstrumentationService {
                 incLong(agg, "attemptsUsedTotal", Math.max(0, m.attemptsUsed));
                 incLong(agg, "providerCallsEstimateTotal", Math.max(0, m.providerCallsEstimate));
                 incLong(agg, "estimatedSavedTokensTotal", Math.max(0, m.estimatedSavedTokens));
+                incLong(agg, "localPreAnalysisAttemptedEvents", m.localPreAnalysisAttempted ? 1 : 0);
+                incLong(agg, "localPreAnalysisHandledEvents", m.localPreAnalysisHandled ? 1 : 0);
+                incLong(agg, "localPreAnalysisCloudContextInjectedEvents", m.localPreAnalysisCloudContextInjected ? 1 : 0);
                 incDouble(agg, "estimatedCostUsd", Math.max(0.0, m.estimatedCostUsd));
             }
         }

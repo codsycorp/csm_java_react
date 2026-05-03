@@ -1,6 +1,8 @@
 package net.phanmemmottrieu.service;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -30,9 +32,20 @@ public class AIProviderFactory {
   /**
    * Constructor - chỉ sử dụng Gemini
    */
-  public AIProviderFactory(GeminiService geminiService) {
-    providers.add(geminiService);
-    log.info("AIProviderFactory initialized with {} providers: Gemini", providers.size());
+  public AIProviderFactory(
+      GeminiService geminiService,
+      @Autowired(required = false) LlamaCppNativeService llamaCppNativeService,
+      @Value("${ai.local.llama.prefer-local-first:true}") boolean preferLocalFirst) {
+    if (llamaCppNativeService != null && llamaCppNativeService.isAvailable() && preferLocalFirst) {
+      providers.add(llamaCppNativeService);
+      providers.add(geminiService);
+    } else {
+      providers.add(geminiService);
+      if (llamaCppNativeService != null && llamaCppNativeService.isAvailable()) {
+        providers.add(llamaCppNativeService);
+      }
+    }
+    log.info("AIProviderFactory initialized with {} providers", providers.size());
   }
   
   /**
@@ -124,12 +137,22 @@ public class AIProviderFactory {
   private String extractErrorCode(String response) {
     try {
       Map<String, Object> parsed = objectMapper.readValue(response, Map.class);
-      if (parsed.containsKey("error")) {
-        boolean isError = (Boolean) parsed.get("error");
-        if (isError) {
-          Object errorCode = parsed.get("errorCode");
-          return errorCode != null ? errorCode.toString() : "UNKNOWN_ERROR";
-        }
+      if (parsed == null || parsed.isEmpty()) {
+        return "EMPTY_RESPONSE";
+      }
+
+      // Legacy shape: {"error": true, "errorCode": "..."}
+      Object errorFlag = parsed.get("error");
+      if (errorFlag instanceof Boolean && (Boolean) errorFlag) {
+        Object errorCode = parsed.get("errorCode");
+        return errorCode != null ? errorCode.toString() : "UNKNOWN_ERROR";
+      }
+
+      // Current provider shape: {"success": false, "errorCode": "..."}
+      Object successFlag = parsed.get("success");
+      if (successFlag instanceof Boolean && !((Boolean) successFlag)) {
+        Object errorCode = parsed.get("errorCode");
+        return errorCode != null ? errorCode.toString() : "UNKNOWN_ERROR";
       }
     } catch (Exception e) {
       // Ignore parse errors

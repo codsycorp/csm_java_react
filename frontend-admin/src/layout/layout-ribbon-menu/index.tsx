@@ -418,12 +418,15 @@ function normalizeAntIconName(raw: string): string {
 
 function resolveIcon(
 	icon: unknown,
+	modernIcon?: unknown,
 	legacyIcon?: unknown,
 	fallback?: React.ReactNode,
 	size = 14,
 ): React.ReactNode {
 	if (React.isValidElement(icon)) return icon;
-	const src = (typeof icon === "string" ? icon : "") || (typeof legacyIcon === "string" ? legacyIcon : "");
+	const src = (typeof icon === "string" ? icon : "")
+		|| (typeof modernIcon === "string" ? modernIcon : "")
+		|| (typeof legacyIcon === "string" ? legacyIcon : "");
 	if (!src) return fallback ?? null;
 	const name = normalizeAntIconName(src);
 	if (name) return <RenderIcon name={name} style={{ fontSize: size }} fallback={fallback} />;
@@ -477,7 +480,7 @@ function LargeButton({ item, active, onSelect, classes }: LargeButtonProps) {
 		? kids!.map(c => ({
 			key: String(c.key),
 			label: String(c.label ?? ""),
-			icon: resolveIcon(c.icon, (c as any).m_icons, <AntIcons.AppstoreOutlined style={{ fontSize: 13 }} />, 13),
+			icon: resolveIcon(c.icon, (c as any).m_icon, (c as any).m_icons, <AntIcons.AppstoreOutlined style={{ fontSize: 13 }} />, 13),
 		}))
 		: [];
 
@@ -487,7 +490,7 @@ function LargeButton({ item, active, onSelect, classes }: LargeButtonProps) {
 			onClick={() => !hasKids && onSelect(key)}
 		>
 			<span className={cn(classes.btnLargeIcon, active && classes.btnLargeIconActive)}>
-				{resolveIcon(item.icon, (item as any).m_icons, <AntIcons.AppstoreOutlined />, 22)}
+				{resolveIcon(item.icon, (item as any).m_icon, (item as any).m_icons, <AntIcons.AppstoreOutlined />, 22)}
 			</span>
 			<span className={classes.btnLargeLabel}>{label}</span>
 			<span className={classes.btnLargeArrow} style={hasKids ? undefined : { visibility: "hidden" }}>
@@ -528,7 +531,7 @@ function SmallButton({ item, active, onSelect, classes }: SmallButtonProps) {
 			title={label}
 		>
 			<span className={cn(classes.btnSmallIcon, active && classes.btnSmallIconActive)}>
-				{resolveIcon(item.icon, (item as any).m_icons, <AntIcons.AppstoreOutlined />, 12)}
+				{resolveIcon(item.icon, (item as any).m_icon, (item as any).m_icons, <AntIcons.AppstoreOutlined />, 12)}
 			</span>
 			<span className={classes.btnSmallLabel}>{label}</span>
 		</div>
@@ -758,7 +761,7 @@ export default function LayoutRibbonMenu({ menus, handleMenuSelect }: LayoutRibb
 							title={tabLabel}
 						>
 							<span className={classes.tabIcon}>
-								{resolveIcon((tab as any).icon, (tab as any).m_icons, undefined, 13)}
+								{resolveIcon((tab as any).icon, (tab as any).m_icon, (tab as any).m_icons, undefined, 13)}
 							</span>
 							<span className={classes.tabLabel}>{tabLabel}</span>
 						</div>

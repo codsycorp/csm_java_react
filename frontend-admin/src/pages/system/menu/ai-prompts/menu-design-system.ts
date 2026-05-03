@@ -350,7 +350,7 @@ g_readonly       boolean    Chỉ xem, không CRUD
 field_root       string     Field FK detail→master (type 2 children)
 prefix_pk        string     Prefix ID tự sinh. VD: "DH-"
 menu_id          string     Internal ID cho API (thường = id hoặc table_name)
-m_icons          string     Icon CSS class (fa-list, ant-design-icon, v.v.)
+m_icon           string     Ant Design icon name cho frontend-admin (vd: AppstoreOutlined)
 keepAlive        0|1        Cache trang
 m_show           boolean    Hiển thị trong sidebar
 
@@ -464,7 +464,7 @@ Dashboard animation/widget realtime: type_form=4, auto_code_name=tên_trong_sys_
   "coverage_tables":[{"table":"...","menus":["menu_id_1"],"status":"covered|partial|missing"}],
   "unresolved_assumptions":["..."]
 }
-Mỗi menu item đầy đủ: id, parentId, type_form, label, m_icons, m_show, g_readonly,
+Mỗi menu item đầy đủ: id, parentId, type_form, label, m_icon, m_show, g_readonly,
   table_name, table[], trigger{}, field_root, report_name, orientation, p_width, p_height,
   table_pagesize, menu_id, row_type_edit, kanban_config, auto_code_name, dynamic_link_url,
   dev, prefix_pk, children[].

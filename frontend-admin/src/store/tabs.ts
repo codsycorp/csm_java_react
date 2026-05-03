@@ -24,6 +24,9 @@ export interface TabItemProps extends Omit<TabPaneProps, "tab"> {
 // Mở rộng TabStateType để cho phép các props động cho tab động
 export interface TabStateType extends Omit<TabItemProps, "label"> {
 	label: string;
+	icon?: React.ReactNode | string;
+	m_icon?: string;
+	m_icons?: string;
 	// Các props động cho tab động
 	menuData?: any;
 	m_configs?: any;
@@ -56,6 +59,18 @@ const HOME_TAB_KEY = "homepage";
 function normalizeHomePath(routePath: string) {
 	if (routePath === "/" || routePath === "/home" || routePath === HOME_TAB_KEY) return HOME_TAB_KEY;
 	return routePath;
+}
+
+function pickTabIconProps(tabProps: TabStateType): Pick<TabStateType, "icon" | "m_icon" | "m_icons"> {
+	const menuLike = tabProps?.menuData || tabProps?.m_configs || {};
+	const icon = tabProps?.icon ?? menuLike?.icon;
+	const mIcon = String(tabProps?.m_icon || menuLike?.m_icon || "").trim();
+	const mIcons = String(tabProps?.m_icons || menuLike?.m_icons || "").trim();
+	return {
+		icon,
+		m_icon: mIcon || undefined,
+		m_icons: mIcons || undefined,
+	};
 }
 
 type TabsState = typeof initialState;
@@ -125,18 +140,30 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 				if (!normalizedPath.length) return state;
 
 				const isHome = normalizedPath === HOME_TAB_KEY;
+				const iconProps = pickTabIconProps(tabProps);
 
 				// If tab already exists, only update label (avoid overwriting menuData/m_configs
 				// which would change prop references and re-trigger data-loading effects in the component).
 				if (state.openTabs.has(normalizedPath)) {
 					const existingTab = state.openTabs.get(normalizedPath)!;
-					if (existingTab.label === tabProps.label) {
+					const nextIcon = iconProps.icon ?? existingTab.icon;
+					const nextModernIcon = iconProps.m_icon || existingTab.m_icon;
+					const nextLegacyIcon = iconProps.m_icons || existingTab.m_icons;
+					if (
+						existingTab.label === tabProps.label
+						&& existingTab.icon === nextIcon
+						&& existingTab.m_icon === nextModernIcon
+						&& existingTab.m_icons === nextLegacyIcon
+					) {
 						return state; // Nothing changed, skip to avoid spurious re-renders
 					}
 					const newTabs = new Map(state.openTabs);
 					newTabs.set(normalizedPath, {
 						...existingTab,
 						label: tabProps.label,
+						icon: nextIcon,
+						m_icon: nextModernIcon,
+						m_icons: nextLegacyIcon,
 						closable: isHome ? false : existingTab.closable,
 						draggable: isHome ? false : existingTab.draggable,
 					});
@@ -146,6 +173,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 				const newTabs = new Map(state.openTabs);
 				newTabs.set(normalizedPath, {
 					...tabProps,
+					...iconProps,
 					key: normalizedPath,
 					closable: isHome ? false : tabProps.closable,
 					draggable: isHome ? false : tabProps.draggable,
