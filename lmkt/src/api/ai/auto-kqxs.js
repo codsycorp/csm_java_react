@@ -2976,6 +2976,18 @@
             var modeNow = String(legacyCdMode || "C_D").toUpperCase();
             pushAutoLog("Tham số: LoạiTìm=" + selectedQueryValues.length + ", STTWindow=" + sttWindowSize + ", NamNoHitWeeks=" + tongNamWeeks + ", Mode=" + modeNow);
 
+            function resolveLegacySlrZeroWeekTarget(queryValue) {
+              var meta = parseLegacyLoaiTimMeta(queryValue, legacyHeThong);
+              var fieldPart = String((meta && meta.fieldPart) || "").toUpperCase();
+              var hasB = fieldPart.indexOf("B_") >= 0;
+              var hasNam = fieldPart.indexOf("D_") >= 0 || fieldPart.indexOf("P_") >= 0 || fieldPart.indexOf("T_") >= 0;
+              return (hasB && !hasNam) ? "bac" : "nam";
+            }
+
+            function getLegacySlrZeroWeekLabel(target) {
+              return String(target || "nam") === "bac" ? "Bắc" : "Nam";
+            }
+
             function findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo) {
               for (var idx = 0; idx < cells.length; idx += 1) {
                 var cache = cellCaches[idx] || {};
@@ -2996,6 +3008,7 @@
               var sttTo = Number(args && args.sttTo || 0);
               var qv = String(args && args.qv || "");
               var queryLabel = String(args && args.queryLabel || qv);
+              var zeroWeekTarget = resolveLegacySlrZeroWeekTarget(qv);
               var currentDateText = String(args && args.currentDateText || "").trim();
               var weekRows = Array.isArray(args && args.weekRows) ? args.weekRows : [];
               var cells = Array.isArray(args && args.cells) ? args.cells : [];
@@ -3019,6 +3032,7 @@
               var oldestCell = cells[cells.length - 1] && cells[cells.length - 1].cell || {};
 
               var weekNamTotals = {};
+              var weekBacTotals = {};
               var weekCNamTotals = {};
               var weekDNamTotals = {};
               var weekCBacTotals = {};
@@ -3027,24 +3041,29 @@
                 var wk = Number(cells[wi] && cells[wi].weekIdx || 0);
                 if (!weekNamTotals[wk]) {
                   weekNamTotals[wk] = 0;
+                  weekBacTotals[wk] = 0;
                   weekCNamTotals[wk] = 0;
                   weekDNamTotals[wk] = 0;
                   weekCBacTotals[wk] = 0;
                   weekDBacTotals[wk] = 0;
                 }
                 var cacheWi = cellCaches[wi];
-                weekNamTotals[wk] += getLegacySlrHitCountRangeCached(cacheWi, sttFrom, sttTo);
+                weekNamTotals[wk] += getLegacySlrNamHitCountRangeCached(cacheWi, sttFrom, sttTo);
                 weekCNamTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.cNamPrefix, sttFrom, sttTo);
                 weekDNamTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.dNamPrefix, sttFrom, sttTo);
                 weekCBacTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.cBacPrefix, sttFrom, sttTo);
                 weekDBacTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.dBacPrefix, sttFrom, sttTo);
+                weekBacTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.cBacPrefix, sttFrom, sttTo)
+                  + getLegacySlrRangeCachedCount(cacheWi.dBacPrefix, sttFrom, sttTo);
               }
 
               var weekNoHitStreak = 0;
               var weekNoHitMax = 0;
               for (var wri = 0; wri < weekRows.length; wri += 1) {
-                var namTotal = Number(weekNamTotals[wri] || 0);
-                if (namTotal === 0) {
+                var regionTotal = zeroWeekTarget === "bac"
+                  ? Number(weekBacTotals[wri] || 0)
+                  : Number(weekNamTotals[wri] || 0);
+                if (regionTotal === 0) {
                   weekNoHitStreak += 1;
                   if (weekNoHitStreak > weekNoHitMax) weekNoHitMax = weekNoHitStreak;
                 } else {
@@ -3115,6 +3134,7 @@
                 toDate: String((nearestBaseHit && nearestBaseHit.date) || oldestCell.date || ""),
                 tongNamWeeks: tongNamWeeks,
                 tongNamZeroWeekStreak: weekNoHitMax,
+                zeroWeekTarget: zeroWeekTarget,
                 weekSummaryRows: rowWeekSummaryRows,
                 latestCellData: latestCellData,
                 latestCellStats: latestCellStats,
@@ -3176,6 +3196,7 @@
                 continue;
               }
               pushAutoLog("Loại Tìm " + (qi + 1) + "/" + selectedQueryValues.length + ": " + qv);
+              var zeroWeekTarget = resolveLegacySlrZeroWeekTarget(qv);
               if (!dataByQuery[qv]) {
                 dataByQuery[qv] = await loadLegacySpecialDataByQuery(qv);
               }
@@ -3225,16 +3246,22 @@
                 var sttTo = sttFrom + sttWindowSize - 1;
 
                 var weekNamTotals = {};
+                var weekBacTotals = {};
                 var weekNoHitStreak = 0;
                 var weekNoHitMax = 0;
                 for (var wri = 0; wri < weekRows.length; wri += 1) {
                   var namTotalTmp = 0;
+                  var bacTotalTmp = 0;
                   for (var wci = 0; wci < cells.length; wci += 1) {
                     if (Number(cells[wci] && cells[wci].weekIdx || -1) !== wri) continue;
-                    namTotalTmp += getLegacySlrHitCountRangeCached(cellCaches[wci], sttFrom, sttTo);
+                    namTotalTmp += getLegacySlrNamHitCountRangeCached(cellCaches[wci], sttFrom, sttTo);
+                    bacTotalTmp += getLegacySlrRangeCachedCount(cellCaches[wci].cBacPrefix, sttFrom, sttTo)
+                      + getLegacySlrRangeCachedCount(cellCaches[wci].dBacPrefix, sttFrom, sttTo);
                   }
                   weekNamTotals[wri] = namTotalTmp;
-                  if (namTotalTmp === 0) {
+                  weekBacTotals[wri] = bacTotalTmp;
+                  var regionTotalTmp = zeroWeekTarget === "bac" ? bacTotalTmp : namTotalTmp;
+                  if (regionTotalTmp === 0) {
                     weekNoHitStreak += 1;
                     if (weekNoHitStreak > weekNoHitMax) weekNoHitMax = weekNoHitStreak;
                   } else {
@@ -3282,9 +3309,9 @@
               }
               var mergedCount = queryRows.filter(function (row) { return !!(row && row.isMergedAuto); }).length;
               if (rangeMatched === 0) {
-                pushAutoLog("- Rớt theo STT: checked=" + rangeChecked + ", rejectByWeek=" + rangeRejectedByWeek + " (bestWeekStreak=" + bestWeekStreak + "/need=" + tongNamWeeks + ")");
+                pushAutoLog("- Rớt theo STT: checked=" + rangeChecked + ", rejectByWeek=" + rangeRejectedByWeek + " (bestWeekStreak=" + bestWeekStreak + "/need=" + tongNamWeeks + ", target=" + getLegacySlrZeroWeekLabel(zeroWeekTarget) + ")");
               } else {
-                pushAutoLog("- Quét STT xong: checked=" + rangeChecked + ", matched=" + rangeMatched + ", merged=" + mergedCount + ", rejectByWeek=" + rangeRejectedByWeek + ", bestWeekStreak=" + bestWeekStreak);
+                pushAutoLog("- Quét STT xong: checked=" + rangeChecked + ", matched=" + rangeMatched + ", merged=" + mergedCount + ", rejectByWeek=" + rangeRejectedByWeek + ", bestWeekStreak=" + bestWeekStreak + ", target=" + getLegacySlrZeroWeekLabel(zeroWeekTarget));
               }
             }
 
@@ -9563,7 +9590,7 @@
         function isLegacySlrRowKeepByNamZeroWeek(row) {
           var streak = Number((row && row.tongNamZeroWeekStreak) || 0);
           var needed = Math.max(1, Number((row && row.tongNamWeeks) || 0));
-          return streak > needed;
+          return streak >= needed;
         }
 
         function flushMerged() {
@@ -9667,6 +9694,7 @@
       rows.forEach(function (r) {
         var noHitDaysCurrent = Number((r && r.noHitDaysCurrent) || (r && r.noHitDays) || 0);
         var cNamText = buildLegacySlrAutoNumberText(r && r.latestCellData, "c");
+        var targetLabel = String((r && r.zeroWeekTarget) || "nam") === "bac" ? "Bắc" : "Nam";
         var dNamText = String((r && r.mode) || "").toUpperCase() === "2C" 
           ? "-" 
           : buildLegacySlrAutoNumberText(r && r.latestCellData, "d");
@@ -9676,7 +9704,7 @@
           Number((r && r.sttTo) || 0),
           String(noHitDaysCurrent) + " ngày (" + String((r && r.fromDate) || "") + " -> " + String((r && r.toDate) || "") + ")"
             + (r && r.noHitHintText ? ("\n" + String(r.noHitHintText)) : ""),
-          String(Number((r && r.tongNamZeroWeekStreak) || 0)) + " tuần (yêu cầu > " + String(Number((r && r.tongNamWeeks) || 0)) + ")",
+          "Tổng " + targetLabel + ": " + String(Number((r && r.tongNamZeroWeekStreak) || 0)) + " tuần (yêu cầu >= " + String(Number((r && r.tongNamWeeks) || 0)) + ")",
           cNamText,
           dNamText,
           buildLegacySlrAutoWeekSeriesText(r && r.weekSummaryRows, r && r.mode, "bac"),
@@ -10004,13 +10032,28 @@
         }
       },
       {
-        title: "Tổng Nam không xổ LT",
+        title: "Tổng vùng không xổ LT",
         dataIndex: "tongNamZeroWeekStreak",
         key: "tongNamZeroWeekStreak",
         width: 180,
         sorter: function (a, b) { return Number((a && a.tongNamZeroWeekStreak) || 0) - Number((b && b.tongNamZeroWeekStreak) || 0); },
         render: function (v, rec) {
-          return String(Number(v || 0)) + " tuần (yêu cầu > " + String(Number((rec && rec.tongNamWeeks) || 0)) + ")";
+          var targetLabel = String((rec && rec.zeroWeekTarget) || "nam") === "bac" ? "Bắc" : "Nam";
+          var isBac = String((rec && rec.zeroWeekTarget) || "nam") === "bac";
+          return h("span", { style: { display: "inline-flex", alignItems: "center", gap: 5 } }, [
+            h("span", {
+              style: {
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "1px 6px",
+                borderRadius: 3,
+                background: isBac ? "#1677ff" : "#52c41a",
+                color: "#fff",
+                whiteSpace: "nowrap"
+              }
+            }, targetLabel),
+            String(Number(v || 0)) + " tuần (>= " + String(Number((rec && rec.tongNamWeeks) || 0)) + ")"
+          ]);
         }
       },
       {
@@ -11934,7 +11977,7 @@
                             h("div", { style: { marginBottom: 6, fontWeight: 600 } }, "Điều kiện chạy tự động"),
                             h(Row, { gutter: [8, 8], style: { marginBottom: 10 } }, [
                               h(Col, { xs: 24, sm: 24 }, [
-                                h("div", { style: { fontSize: 12, color: theme.muted, marginBottom: 4 } }, "Nam 0/tuần LT"),
+                                h("div", { style: { fontSize: 12, color: theme.muted, marginBottom: 4 } }, "Số tuần không xổ LT (Nam/Bắc theo loại tìm)"),
                                 h(InputNumber, themedNumberProps({
                                   min: 1,
                                   max: 20,
@@ -12011,7 +12054,20 @@
                                               String((r && r.noHitHintText) || "").trim()
                                                 ? h("div", { style: { fontSize: 13, color: theme.error, fontWeight: 800, lineHeight: 1.35 } }, String(r.noHitHintText || ""))
                                                 : null,
-                                              h("div", null, "STT " + String(r.sttFrom || "") + "–" + String(r.sttTo || ""))
+                                              h("div", { style: { display: "flex", alignItems: "center", gap: 4 } }, [
+                                                "STT " + String(r.sttFrom || "") + "–" + String(r.sttTo || ""),
+                                                h("span", {
+                                                  style: {
+                                                    fontSize: 10,
+                                                    fontWeight: 700,
+                                                    padding: "1px 5px",
+                                                    borderRadius: 3,
+                                                    background: String((r && r.zeroWeekTarget) || "nam") === "bac" ? "#1677ff" : "#52c41a",
+                                                    color: "#fff",
+                                                    whiteSpace: "nowrap"
+                                                  }
+                                                }, "LT: " + (String((r && r.zeroWeekTarget) || "nam") === "bac" ? "Bắc" : "Nam"))
+                                              ])
                                             ]),
                                             h("span", { style: { fontSize: 12, color: theme.text, whiteSpace: "nowrap" } }, String(noHitDaysCurrent) + "ng"),
                                             h("span", {
