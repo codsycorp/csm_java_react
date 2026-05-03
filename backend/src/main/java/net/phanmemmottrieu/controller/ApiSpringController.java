@@ -121,6 +121,8 @@ public class ApiSpringController {
     private static final int AI_ASSISTANT_CODE_DISTRIBUTED_EXCERPT_CHARS = 1600;
     private static final int AI_ASSISTANT_MENU_ATTACHMENT_CONTEXT_MAX_CHARS = 180000;
     private static final int AI_ASSISTANT_CODE_ATTACHMENT_CONTEXT_MAX_CHARS = 120000;
+    private static final int AI_EDITOR_METADATA_BLOCK_MAX_CHARS = 12000;
+    private static final int AI_BUSINESS_MD_BLOCK_MAX_CHARS = 28000;
     private static final int DEFAULT_PROMPT_BASE64_STRIP_MIN_CHARS = 4096;
     private static final Pattern LARGE_DATA_URL_BASE64_PATTERN = Pattern.compile(
         "(?is)data:[a-z0-9.+-]+/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=\\r\\n]{" + DEFAULT_PROMPT_BASE64_STRIP_MIN_CHARS + ",}");
@@ -136,6 +138,18 @@ public class ApiSpringController {
     private static record AiRouteDecision(AiRouteMode mode, int score, String reasonCode) {}
 
     private static record RequirementGuardDecision(boolean blocked, List<String> questions, List<String> ambiguities) {}
+
+    private static final class InstructionsCacheEntry {
+        final String content;
+        final long loadedAtMs;
+        final long fileMtime;
+
+        InstructionsCacheEntry(String content, long loadedAtMs, long fileMtime) {
+            this.content = content;
+            this.loadedAtMs = loadedAtMs;
+            this.fileMtime = fileMtime;
+        }
+    }
 
     private static record LocalPreAnalysisDecision(
         boolean attempted,
@@ -319,6 +333,9 @@ public class ApiSpringController {
 
     @Value("${ai.assistant.custom-instructions.path:csm_datas/public/ai-assistant-instructions.md}")
     private String aiAssistantCustomInstructionsPath;
+
+    @Value("${ai.assistant.custom-instructions.reload-ms:3000}")
+    private long aiAssistantCustomInstructionsReloadMs;
 
     @Value("${ai.code-stream.max-prompt-chars:140000}")
     private int aiCodeStreamMaxPromptChars;
@@ -563,7 +580,7 @@ public class ApiSpringController {
     @Value("${ai.code-stream.cost.default.output-usd-per-1k:0.003}")
     private double aiCodeStreamCostDefaultOutputUsdPer1k;
 
-    private volatile String cachedAiAssistantCustomInstructions = null;
+    private final ConcurrentHashMap<String, InstructionsCacheEntry> aiAssistantCustomInstructionsCache = new ConcurrentHashMap<>();
 
     private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
     private final ExecutorService aiCodeStreamExecutor = Executors.newCachedThreadPool();
@@ -673,6 +690,7 @@ public class ApiSpringController {
                 Integer pType = parseNullableInteger(body.get("pType"));
                 int cursorLine = parseIntSafe(body.get("cursorLine"), -1);
                 int contextWindowLines = parseIntSafe(body.get("contextWindowLines"), 50);
+                Map<String, Object> editorMetadata = normalizeEditorMetadata(body.get("editorMetadata"));
                 String baseContentRef = str(body.get("baseContentRef"), "");
                 String baseContent = truncate(strKeep(body.get("baseContent"), ""), Math.max(100000, aiCodeStreamMaxBaseContentChars));
                 boolean preserveBaseContent = bool(body.get("preserveBaseContent"), false);
@@ -797,14 +815,40 @@ public class ApiSpringController {
                     messageWithReuse = "[REUSED_CONTEXT]\n" + compactReuse + "\n\n[CURRENT_REQUEST]\n" + message;
                 }
 
-                String prompt = buildCodingPrompt(messageWithReuse, promptCodeContext, language, contextType, responseMode, attachmentsRaw);
+                String prompt = buildCodingPrompt(
+                    appId,
+                    messageWithReuse,
+                    promptCodeContext,
+                    language,
+                    contextType,
+                    responseMode,
+                    attachmentsRaw,
+                    editorMetadata,
+                    pName,
+                    pType,
+                    cursorLine,
+                    contextWindowLines);
                 boolean largeStructuredEditMode = preserveBaseContent
                         && "edit".equalsIgnoreCase(responseMode)
                         && !base.baseContent().isBlank()
                         && base.baseContentChars() > Math.max(100000, aiCodeStreamMaxCurrentCodeChars);
                 if (largeStructuredEditMode) {
-                    prompt = buildCodingPrompt(messageWithReuse, promptCodeContext, language, contextType, responseMode,
-                            attachmentsRaw, true, base.baseRef(), base.baseContentChars());
+                    prompt = buildCodingPrompt(
+                    appId,
+                    messageWithReuse,
+                    promptCodeContext,
+                    language,
+                    contextType,
+                    responseMode,
+                    attachmentsRaw,
+                    editorMetadata,
+                    pName,
+                    pType,
+                    cursorLine,
+                    contextWindowLines,
+                    true,
+                    base.baseRef(),
+                    base.baseContentChars());
                 }
                 int effectivePromptCharCap = menuJsonContext
                     ? Math.max(aiCodeStreamMaxPromptChars, aiCodeStreamMenuMaxPromptChars)
@@ -820,8 +864,9 @@ public class ApiSpringController {
                 int systemContentEstimate = prompt.length() - message.length();
                 boolean usePromptCache = systemContentEstimate >= Math.max(1000, aiCodeStreamPromptCacheMinChars);
                 String[] promptParts = usePromptCache
-                    ? buildCodingPromptParts(message, promptCodeContext, language, contextType, responseMode,
-                                attachmentsRaw, largeStructuredEditMode, base.baseRef(), base.baseContentChars())
+                    ? buildCodingPromptParts(appId, message, promptCodeContext, language, contextType, responseMode,
+                                attachmentsRaw, editorMetadata, pName, pType, cursorLine, contextWindowLines,
+                                largeStructuredEditMode, base.baseRef(), base.baseContentChars())
                         : new String[] { prompt, "" };
                 if (promptParts[0].length() > effectivePromptCharCap) {
                     promptParts[0] = truncateMiddle(promptParts[0], Math.max(20000, effectivePromptCharCap));
@@ -2057,6 +2102,148 @@ public class ApiSpringController {
         }
     }
 
+    private Map<String, Object> normalizeEditorMetadata(Object raw) {
+        if (!(raw instanceof Map<?, ?> source)) {
+            return Collections.emptyMap();
+        }
+        LinkedHashMap<String, Object> out = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : source.entrySet()) {
+            if (entry == null || entry.getKey() == null) {
+                continue;
+            }
+            String key = String.valueOf(entry.getKey()).trim();
+            if (key.isEmpty()) {
+                continue;
+            }
+            Object value = entry.getValue();
+            if (value == null) {
+                continue;
+            }
+            if (value instanceof String) {
+                String normalized = String.valueOf(value).trim();
+                if (!normalized.isEmpty()) {
+                    out.put(key, truncateMiddle(normalized, 2000));
+                }
+                continue;
+            }
+            if (value instanceof Number || value instanceof Boolean) {
+                out.put(key, value);
+                continue;
+            }
+            if (value instanceof Map<?, ?> || value instanceof List<?>) {
+                try {
+                    String compact = objectMapper.writeValueAsString(value);
+                    out.put(key, truncateMiddle(compact, 4000));
+                } catch (Exception ignored) {
+                    out.put(key, truncateMiddle(String.valueOf(value), 2000));
+                }
+                continue;
+            }
+            out.put(key, truncateMiddle(String.valueOf(value), 2000));
+        }
+        return out.isEmpty() ? Collections.emptyMap() : out;
+    }
+
+    private String buildEditorMetadataContextBlock(
+            Map<String, Object> editorMetadata,
+            String contextType,
+            String language,
+            String pName,
+            Integer pType,
+            int cursorLine,
+            int contextWindowLines) {
+        LinkedHashMap<String, Object> merged = new LinkedHashMap<>();
+        if (editorMetadata != null && !editorMetadata.isEmpty()) {
+            merged.putAll(editorMetadata);
+        }
+        if (!merged.containsKey("contextType")) {
+            merged.put("contextType", String.valueOf(contextType == null ? "code" : contextType));
+        }
+        if (!merged.containsKey("language") && language != null && !language.isBlank()) {
+            merged.put("language", language);
+        }
+        if (!merged.containsKey("fileKey") && pName != null && !pName.isBlank()) {
+            merged.put("fileKey", pName);
+        }
+        if (!merged.containsKey("pType") && pType != null) {
+            merged.put("pType", pType);
+        }
+        if (!merged.containsKey("cursorLine") && cursorLine > 0) {
+            merged.put("cursorLine", cursorLine);
+        }
+        if (!merged.containsKey("contextWindowLines") && contextWindowLines > 0) {
+            merged.put("contextWindowLines", contextWindowLines);
+        }
+        if (merged.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("EDITOR_METADATA_SCOPE (do not ignore)\n");
+        sb.append("Use this metadata to restrict edits to the active editor scope.\n");
+        Object focusMode = merged.get("focusMode");
+        if (focusMode != null && "current_file".equalsIgnoreCase(String.valueOf(focusMode).trim())) {
+            sb.append("Do not infer out-of-scope project files when focusMode=current_file.\n");
+        }
+        for (Map.Entry<String, Object> entry : merged.entrySet()) {
+            if (entry == null) continue;
+            String key = String.valueOf(entry.getKey());
+            Object value = entry.getValue();
+            if (value == null) continue;
+            String valueText = truncateMiddle(String.valueOf(value), 1800);
+            if (valueText.isBlank()) continue;
+            sb.append("- ").append(key).append(": ").append(valueText).append("\n");
+        }
+
+        String normalizedContext = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase();
+        if ("menu_json".equals(normalizedContext)) {
+            String parentNodeJson = String.valueOf(merged.getOrDefault("parentNodeJson", "")).trim();
+            if (!parentNodeJson.isBlank()) {
+                sb.append("\nPARENT_NODE_METADATA_JSON (for scoped menu patching):\n");
+                sb.append("```json\n");
+                sb.append(truncateMiddle(parentNodeJson, Math.max(1000, AI_EDITOR_METADATA_BLOCK_MAX_CHARS / 2)));
+                sb.append("\n```\n");
+            }
+        }
+
+        return truncateMiddle(sb.toString().trim(), AI_EDITOR_METADATA_BLOCK_MAX_CHARS);
+    }
+
+        private String buildAdaptiveBusinessInstructionsBlock(
+            String appId,
+            String contextType,
+            int currentCodeChars,
+            int promptHardCap,
+            boolean includeSystemHeaderAlready) {
+        String normalizedContext = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase();
+        if (!"menu_json".equals(normalizedContext)) {
+            return "";
+        }
+        // Avoid duplicating the same markdown block when system header already injected it.
+        if (includeSystemHeaderAlready) {
+            return "";
+        }
+        String businessInstructions = loadAiAssistantCustomInstructions(appId);
+        if (businessInstructions.isBlank()) {
+            return "";
+        }
+
+        // Dynamic cap by payload size: when menu tree is very large, keep only a compact rules digest.
+        int capByCodeSize;
+        if (currentCodeChars > 220_000) {
+            capByCodeSize = 4_000;
+        } else if (currentCodeChars > 160_000) {
+            capByCodeSize = 7_000;
+        } else if (currentCodeChars > 100_000) {
+            capByCodeSize = 12_000;
+        } else {
+            capByCodeSize = AI_BUSINESS_MD_BLOCK_MAX_CHARS;
+        }
+        int capByPromptBudget = Math.max(3_000, Math.min(AI_BUSINESS_MD_BLOCK_MAX_CHARS, promptHardCap / 4));
+        int effectiveCap = Math.max(3_000, Math.min(capByCodeSize, capByPromptBudget));
+        return truncateMiddle(businessInstructions, effectiveCap);
+    }
+
     private String sha256Hex(String raw) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -2071,14 +2258,25 @@ public class ApiSpringController {
         }
     }
 
-    private String buildCodingPrompt(String message, String currentCode, String language,
-            String contextType, String responseMode, Object attachmentsRaw) {
-        return buildCodingPrompt(message, currentCode, language, contextType, responseMode, attachmentsRaw,
+    private String buildCodingPrompt(String appId, String message, String currentCode, String language,
+            String contextType, String responseMode, Object attachmentsRaw,
+            Map<String, Object> editorMetadata,
+            String pName,
+            Integer pType,
+            int cursorLine,
+            int contextWindowLines) {
+        return buildCodingPrompt(appId, message, currentCode, language, contextType, responseMode, attachmentsRaw,
+                editorMetadata, pName, pType, cursorLine, contextWindowLines,
                 false, "", currentCode == null ? 0 : currentCode.length());
     }
 
-    private String buildCodingPrompt(String message, String currentCode, String language,
+    private String buildCodingPrompt(String appId, String message, String currentCode, String language,
             String contextType, String responseMode, Object attachmentsRaw,
+            Map<String, Object> editorMetadata,
+            String pName,
+            Integer pType,
+            int cursorLine,
+            int contextWindowLines,
             boolean largeStructuredEditMode, String baseRef, int baseChars) {
         StringBuilder sb = new StringBuilder();
         boolean menuJsonEditMode = "edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType);
@@ -2087,6 +2285,32 @@ public class ApiSpringController {
             "ai-code-stream-currentCode");
 
         sb.append("Bạn là AI trợ lý lập trình (như Cursor/Copilot). Hỗ trợ người dùng chính xác và chi tiết.\n\n");
+
+        if (menuJsonEditMode || isMenuJsonContext(contextType)) {
+            int promptCapHint = Math.max(60_000, aiCodeStreamMenuMaxPromptChars);
+            String businessInstructions = buildAdaptiveBusinessInstructionsBlock(
+                appId,
+                contextType,
+                promptCurrentCode.length(),
+                promptCapHint,
+                false);
+            if (!businessInstructions.isBlank()) {
+                sb.append("## BUSINESS_SYSTEM_PROMPT_MD (adaptive rules digest)\n");
+                sb.append(businessInstructions).append("\n\n");
+            }
+        }
+
+        String editorMetadataBlock = buildEditorMetadataContextBlock(
+            editorMetadata,
+            contextType,
+            language,
+            pName,
+            pType,
+            cursorLine,
+            contextWindowLines);
+        if (!editorMetadataBlock.isBlank()) {
+            sb.append(editorMetadataBlock).append("\n\n");
+        }
 
         if (largeStructuredEditMode) {
             sb.append("CHẾ ĐỘ: Chỉnh sửa dữ liệu rất lớn. KHÔNG trả về full code trực tiếp.\n");
@@ -3827,11 +4051,17 @@ public class ApiSpringController {
         return hasFullCodeInEditPayload(text);
     }
 
-    private String[] buildCodingPromptParts(String message, String currentCode, String language,
+    private String[] buildCodingPromptParts(String appId, String message, String currentCode, String language,
             String contextType, String responseMode, Object attachmentsRaw,
+            Map<String, Object> editorMetadata,
+            String pName,
+            Integer pType,
+            int cursorLine,
+            int contextWindowLines,
             boolean largeStructuredEditMode, String baseRef, int baseChars) {
-        String full = buildCodingPrompt(message, currentCode, language, contextType, responseMode,
-                attachmentsRaw, largeStructuredEditMode, baseRef, baseChars);
+        String full = buildCodingPrompt(appId, message, currentCode, language, contextType, responseMode,
+                attachmentsRaw, editorMetadata, pName, pType, cursorLine, contextWindowLines,
+                largeStructuredEditMode, baseRef, baseChars);
         int idx = full.lastIndexOf("\n## YÊU CẦU\n");
         if (idx >= 0) {
             String systemPart = full.substring(0, idx).trim();
@@ -5239,6 +5469,7 @@ public class ApiSpringController {
             String flowType = String.valueOf(params.getOrDefault("flowType", "")).trim();
             String pName = String.valueOf(params.getOrDefault("pName", "")).trim();
             Integer pType = parseNullableInteger(params.get("pType"));
+            Map<String, Object> editorMetadata = normalizeEditorMetadata(params.get("editorMetadata"));
             String rawResponseMode = String.valueOf(params.getOrDefault("responseMode", "")).trim();
             String detectedModeFromMessage = detectAiAssistantResponseModeFromMessage(message);
             String normalizedFlowType = normalizeAiAssistantFlowType(flowType, contextType, taskType);
@@ -5671,7 +5902,7 @@ public class ApiSpringController {
             }
 
             List<Map<String, Object>> messages = buildAiAssistantChatMessages(appId, message, currentCode, language, effectiveContextType,
-                effectiveTaskType, responseMode, attachments, continuityMemory, globalContext, pName, pType, continuityScopeKey, pendingQuestions);
+                effectiveTaskType, responseMode, attachments, continuityMemory, globalContext, pName, pType, continuityScopeKey, pendingQuestions, editorMetadata);
             emitAiAssistantChatDebug(appId, buildAiAssistantDebugPayload(
                 appId,
                 message,
@@ -5862,6 +6093,7 @@ public class ApiSpringController {
                 ));
 
                 String localPrompt = buildAiAssistantChatPromptText(
+                    appId,
                     message,
                     currentCode,
                     language,
@@ -5874,6 +6106,7 @@ public class ApiSpringController {
                     pType,
                     continuityScopeKey,
                     pendingQuestions,
+                    editorMetadata,
                     false);
                 githubRaw = generateProviderContentWithMenuMasterPrompt(localPrompt, effectiveContextType);
                 String localText = extractAiResultText(githubRaw);
@@ -5997,6 +6230,7 @@ public class ApiSpringController {
                         "status", "running"
                     ));
                     String directPrompt = buildAiAssistantChatPromptText(
+                        appId,
                         message,
                         currentCode,
                         language,
@@ -6009,6 +6243,7 @@ public class ApiSpringController {
                         pType,
                         continuityScopeKey,
                         pendingQuestions,
+                        editorMetadata,
                         true);
                     githubRaw = generateProviderContentWithMenuMasterPrompt(directPrompt, effectiveContextType);
                     String directText = extractAiResultText(githubRaw);
@@ -6152,6 +6387,7 @@ public class ApiSpringController {
                     "percent", 0));
 
                 String fallbackPrompt = buildAiAssistantChatPromptText(
+                    appId,
                     message,
                     currentCode,
                     language,
@@ -6164,6 +6400,7 @@ public class ApiSpringController {
                     pType,
                     continuityScopeKey,
                     pendingQuestions,
+                    editorMetadata,
                     true);
                 String fallbackRaw = generateProviderContentWithMenuMasterPrompt(fallbackPrompt, effectiveContextType);
                 String fallbackText = extractAiResultText(fallbackRaw);
@@ -6917,6 +7154,7 @@ public class ApiSpringController {
         collectMenuSourceSignals(attachments, sourceTables, sourceIds, sourceLabels);
 
         String basePrompt = buildAiAssistantChatPromptText(
+            "",
             userMessage,
             currentCode,
             language,
@@ -7429,7 +7667,8 @@ public class ApiSpringController {
             String pName,
             Integer pType,
             String continuityScopeKey,
-            List<String> pendingQuestions) {
+            List<String> pendingQuestions,
+            Map<String, Object> editorMetadata) {
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
         String normalizedMode = normalizeAiAssistantResponseMode(responseMode, message);
         String menuKnowledge = this.aiAssistantGatewayService.buildAiAssistantMenuKnowledgeBlock(appId, normalizedContext, taskType);
@@ -7475,6 +7714,7 @@ public class ApiSpringController {
         }
 
         Object userContent = buildAiAssistantUserContent(
+            appId,
             message,
             currentCode,
             language,
@@ -7486,14 +7726,16 @@ public class ApiSpringController {
             pName,
             pType,
             continuityScopeKey,
-            pendingQuestions);
+            pendingQuestions,
+            editorMetadata);
         List<Map<String, Object>> messages = new ArrayList<>();
         messages.add(Map.of("role", "system", "content", systemPrompt));
         messages.add(Map.of("role", "user", "content", userContent));
         return messages;
     }
 
-    private Object buildAiAssistantUserContent(
+        private Object buildAiAssistantUserContent(
+            String appId,
             String message,
             String currentCode,
             String language,
@@ -7505,8 +7747,10 @@ public class ApiSpringController {
             String pName,
             Integer pType,
             String continuityScopeKey,
-            List<String> pendingQuestions) {
+            List<String> pendingQuestions,
+            Map<String, Object> editorMetadata) {
         String promptText = buildAiAssistantChatPromptText(
+            appId,
             message,
             currentCode,
             language,
@@ -7519,6 +7763,7 @@ public class ApiSpringController {
             pType,
             continuityScopeKey,
             pendingQuestions,
+            editorMetadata,
             false);
         List<Map<String, Object>> imageParts = new ArrayList<>();
         for (Map<String, Object> attachment : attachments) {
@@ -7542,7 +7787,7 @@ public class ApiSpringController {
         return content;
     }
 
-    private String buildAiAssistantChatPromptText(String message, String currentCode, String language, String contextType,
+    private String buildAiAssistantChatPromptText(String appId, String message, String currentCode, String language, String contextType,
             String responseMode,
             List<Map<String, Object>> attachments,
             String continuityMemory,
@@ -7551,6 +7796,35 @@ public class ApiSpringController {
             Integer pType,
             String continuityScopeKey,
             List<String> pendingQuestions,
+            boolean includeSystemHeader) {
+        return buildAiAssistantChatPromptText(
+            appId,
+            message,
+            currentCode,
+            language,
+            contextType,
+            responseMode,
+            attachments,
+            continuityMemory,
+            globalContext,
+            pName,
+            pType,
+            continuityScopeKey,
+            pendingQuestions,
+            Collections.emptyMap(),
+            includeSystemHeader);
+        }
+
+        private String buildAiAssistantChatPromptText(String appId, String message, String currentCode, String language, String contextType,
+            String responseMode,
+            List<Map<String, Object>> attachments,
+            String continuityMemory,
+            String globalContext,
+            String pName,
+            Integer pType,
+            String continuityScopeKey,
+            List<String> pendingQuestions,
+            Map<String, Object> editorMetadata,
             boolean includeSystemHeader) {
         StringBuilder sb = new StringBuilder();
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
@@ -7569,7 +7843,7 @@ public class ApiSpringController {
         if (includeSystemHeader) {
             if ("menu_json".equals(normalizedContext)) {
                 // Try to use the custom instructions file (reduces repeated token cost for static rules)
-                String customInstructions = loadAiAssistantCustomInstructions();
+                String customInstructions = loadAiAssistantCustomInstructions(appId);
                 if (!customInstructions.isBlank()) {
                     sb.append("## CUSTOM INSTRUCTIONS (authoritative system rules — do not repeat in output)\n");
                     sb.append(customInstructions).append("\n\n");
@@ -7631,6 +7905,31 @@ public class ApiSpringController {
                     sb.append("Rules: text_edits line numbers are 1-based and replacements must be directly applicable to current editor content.\n\n");
                 }
             }
+        }
+
+        if ("menu_json".equals(normalizedContext)) {
+            String adaptiveBusinessInstructions = buildAdaptiveBusinessInstructionsBlock(
+                appId,
+                normalizedContext,
+                effectiveCurrentCode.length(),
+                promptHardCap,
+                includeSystemHeader);
+            if (!adaptiveBusinessInstructions.isBlank()) {
+                sb.append("BUSINESS_SYSTEM_PROMPT_MD (adaptive rules digest, apply before generating output):\n");
+                sb.append(adaptiveBusinessInstructions).append("\n\n");
+            }
+        }
+
+        String editorMetadataBlock = buildEditorMetadataContextBlock(
+            editorMetadata,
+            normalizedContext,
+            language,
+            pName,
+            pType,
+            parseIntSafe(editorMetadata == null ? null : editorMetadata.get("cursorLine"), -1),
+            parseIntSafe(editorMetadata == null ? null : editorMetadata.get("contextWindowLines"), 50));
+        if (!editorMetadataBlock.isBlank()) {
+            sb.append(editorMetadataBlock).append("\n\n");
         }
 
         if ("code".equals(normalizedContext)) {
@@ -7736,6 +8035,7 @@ public class ApiSpringController {
             String continuityScopeKey,
             List<String> pendingQuestions) {
         String fullPrompt = buildAiAssistantChatPromptText(
+            "",
             message,
             currentCode,
             language,
@@ -10006,33 +10306,98 @@ public class ApiSpringController {
         }
     }
 
-    private String loadAiAssistantCustomInstructions() {
-        if (cachedAiAssistantCustomInstructions != null) return cachedAiAssistantCustomInstructions;
+    private String sanitizeAppIdForPath(String appId) {
+        String raw = String.valueOf(appId == null ? "" : appId).trim();
+        if (raw.isEmpty()) {
+            return "default";
+        }
+        return raw.replaceAll("[^A-Za-z0-9._-]", "_");
+    }
+
+    private String resolveAiAssistantCustomInstructionsPath(String appId) {
+        String template = String.valueOf(aiAssistantCustomInstructionsPath == null ? "" : aiAssistantCustomInstructionsPath).trim();
+        if (template.isEmpty()) {
+            return "";
+        }
+        String safeAppId = sanitizeAppIdForPath(appId);
+        return template
+            .replace("{appId}", safeAppId)
+            .replace("${appId}", safeAppId)
+            .trim();
+    }
+
+    private String loadAiAssistantCustomInstructions(String appId) {
+        String resolvedPath = resolveAiAssistantCustomInstructionsPath(appId);
+        if (resolvedPath.isEmpty()) {
+            return "";
+        }
+
+        long now = System.currentTimeMillis();
+        long reloadIntervalMs = Math.max(0L, aiAssistantCustomInstructionsReloadMs);
+        java.io.File directFile = new java.io.File(resolvedPath);
+        boolean hasDirectFile = directFile.exists() && directFile.isFile();
+        long directFileMtime = hasDirectFile ? directFile.lastModified() : -1L;
+
+        InstructionsCacheEntry cached = aiAssistantCustomInstructionsCache.get(resolvedPath);
+        if (cached != null
+                && (reloadIntervalMs == 0L || now - cached.loadedAtMs < reloadIntervalMs)
+                && (!hasDirectFile || directFileMtime == cached.fileMtime)) {
+            return cached.content;
+        }
+
         synchronized (this) {
-            if (cachedAiAssistantCustomInstructions != null) return cachedAiAssistantCustomInstructions;
+            now = System.currentTimeMillis();
+            directFile = new java.io.File(resolvedPath);
+            hasDirectFile = directFile.exists() && directFile.isFile();
+            directFileMtime = hasDirectFile ? directFile.lastModified() : -1L;
+
+            cached = aiAssistantCustomInstructionsCache.get(resolvedPath);
+            if (cached != null
+                    && (reloadIntervalMs == 0L || now - cached.loadedAtMs < reloadIntervalMs)
+                    && (!hasDirectFile || directFileMtime == cached.fileMtime)) {
+                return cached.content;
+            }
+
+            String content = "";
+            long mtime = -1L;
             try {
-                String path = String.valueOf(aiAssistantCustomInstructionsPath == null ? "" : aiAssistantCustomInstructionsPath).trim();
-                if (path.isEmpty()) { cachedAiAssistantCustomInstructions = ""; return ""; }
-                java.io.File f = new java.io.File(path);
-                if (f.exists() && f.isFile()) {
-                    cachedAiAssistantCustomInstructions = java.nio.file.Files.readString(f.toPath(), java.nio.charset.StandardCharsets.UTF_8).trim();
+                if (hasDirectFile) {
+                    content = java.nio.file.Files.readString(directFile.toPath(), java.nio.charset.StandardCharsets.UTF_8).trim();
+                    mtime = directFileMtime;
                 } else {
                     // Try classpath
-                    var resource = new org.springframework.core.io.ClassPathResource(path);
+                    var resource = new org.springframework.core.io.ClassPathResource(resolvedPath);
                     if (resource.exists()) {
                         try (var in = resource.getInputStream()) {
-                            cachedAiAssistantCustomInstructions = org.springframework.util.StreamUtils.copyToString(in, java.nio.charset.StandardCharsets.UTF_8).trim();
+                            content = org.springframework.util.StreamUtils.copyToString(in, java.nio.charset.StandardCharsets.UTF_8).trim();
                         }
-                    } else {
-                        cachedAiAssistantCustomInstructions = "";
                     }
                 }
             } catch (Exception ex) {
-                logger.warn("Cannot load AI Assistant custom instructions from {}: {}", aiAssistantCustomInstructionsPath, ex.getMessage());
-                cachedAiAssistantCustomInstructions = "";
+                logger.warn("Cannot load AI Assistant custom instructions from {}: {}", resolvedPath, ex.getMessage());
+                content = "";
+                mtime = -1L;
             }
+
+            aiAssistantCustomInstructionsCache.put(resolvedPath, new InstructionsCacheEntry(content, now, mtime));
+            return content;
         }
-        return cachedAiAssistantCustomInstructions;
+    }
+
+    @PostMapping({"/ai-assistant/custom-instructions/reload", "/api/ai-assistant/custom-instructions/reload"})
+    public ResponseEntity<Map<String, Object>> reloadAiAssistantCustomInstructions(@RequestBody(required = false) Map<String, Object> body) {
+        String appId = body == null ? "" : String.valueOf(body.getOrDefault("appId", "")).trim();
+        aiAssistantCustomInstructionsCache.clear();
+        String resolvedPath = resolveAiAssistantCustomInstructionsPath(appId);
+        String loaded = loadAiAssistantCustomInstructions(appId);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", true);
+        response.put("appId", appId);
+        response.put("resolvedPath", resolvedPath);
+        response.put("loadedChars", loaded.length());
+        response.put("cacheSize", aiAssistantCustomInstructionsCache.size());
+        return ResponseEntity.ok(response);
     }
 
     /**

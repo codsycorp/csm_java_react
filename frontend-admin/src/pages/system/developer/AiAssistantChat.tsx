@@ -153,6 +153,7 @@ type AiAssistantChatProps = {
 	contextType?: "code" | "menu_json";
 	targetPName?: string;
 	targetPType?: number;
+	editorMetadata?: Record<string, unknown>;
 	onCodeInsert?: (code: string) => void;
 	onUserMessage?: (payload: AiAssistantUserMessagePayload) => void;
 	autoApplyCodeBlock?: boolean;
@@ -665,6 +666,7 @@ export default function AiAssistantChat({
 	contextType = "code",
 	targetPName,
 	targetPType,
+	editorMetadata,
 	onCodeInsert,
 	onUserMessage,
 	autoApplyCodeBlock = false,
@@ -748,6 +750,38 @@ export default function AiAssistantChat({
 		() => resolvePromptHistoryStorageKey({ appId, contextType, language, targetPName }),
 		[appId, contextType, language, targetPName],
 	);
+	const requestEditorMetadata = useMemo(() => {
+		const merged: Record<string, unknown> =
+			editorMetadata && typeof editorMetadata === "object"
+				? { ...(editorMetadata as Record<string, unknown>) }
+				: {};
+
+		const normalizedPName = (targetPName || "").trim();
+		if (normalizedPName && merged.fileKey == null) {
+			merged.fileKey = normalizedPName;
+		}
+		if (language && merged.language == null) {
+			merged.language = language;
+		}
+		if (contextType && merged.contextType == null) {
+			merged.contextType = contextType;
+		}
+		if (typeof targetPType === "number" && Number.isFinite(targetPType) && merged.pType == null) {
+			merged.pType = targetPType;
+		}
+
+		const codeLength = typeof currentCode === "string" ? currentCode.length : 0;
+		if (codeLength > 0) {
+			if (merged.bufferChars == null) {
+				merged.bufferChars = codeLength;
+			}
+			if (merged.bufferLines == null) {
+				merged.bufferLines = currentCode.split(/\r?\n/).length;
+			}
+		}
+
+		return merged;
+	}, [editorMetadata, targetPName, targetPType, language, contextType, currentCode]);
 
 	const uiText = useCallback((vi: string, en: string, zh: string) => {
 		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
@@ -1737,10 +1771,14 @@ export default function AiAssistantChat({
 				headers,
 				credentials: "include",
 				body: JSON.stringify({
+					appId,
 					message: msg,
 					currentCode,
 					language,
 					contextType,
+					pName: targetPName,
+					pType: targetPType,
+					editorMetadata: requestEditorMetadata,
 					taskType: responseMode,
 					responseMode,
 					attachments: pendingAttachments.map((a) => ({
@@ -1768,7 +1806,7 @@ export default function AiAssistantChat({
 		} finally {
 			setOrchPreviewLoading(false);
 		}
-	}, [inputValue, pendingAttachments, contextType, currentCode, language, uiText]);
+	}, [appId, inputValue, pendingAttachments, contextType, currentCode, language, targetPName, targetPType, requestEditorMetadata, uiText]);
 
 	const handleCancelRequest = useCallback(() => {
 		const controller = sseAbortRef.current;
@@ -1935,6 +1973,9 @@ export default function AiAssistantChat({
 						currentCode,
 						language,
 						contextType,
+						pName: targetPName,
+						pType: targetPType,
+						editorMetadata: requestEditorMetadata,
 						attachments: outgoingAttachments.map((attachment) => ({
 							id: attachment.id,
 							name: attachment.name,
@@ -2255,7 +2296,7 @@ export default function AiAssistantChat({
 				}
 			}
 		},
-		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey]
+		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey]
 	);
 
 	const handleSend = () => {

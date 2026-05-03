@@ -867,6 +867,41 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
     isCompactView ? styles.chatPanelCompact : "",
   ].filter(Boolean).join(" ");
 
+  const aiAssistantEditorMetadata = useMemo(() => {
+    const metadata: Record<string, unknown> = {
+      source: "CodeMirrorWithAiAssistant",
+      ownerId: instanceIdRef.current,
+      viewMode: isCompactView ? "compact" : "dock",
+    };
+
+    const codeLength = typeof currentCode === "string" ? currentCode.length : 0;
+    if (codeLength > 0) {
+      metadata.bufferChars = codeLength;
+      metadata.bufferLines = currentCode.split(/\r?\n/).length;
+    }
+
+    const view = editorViewRef.current;
+    try {
+      const mainSelection = view?.state?.selection?.main;
+      const doc = view?.state?.doc;
+      if (mainSelection && doc && typeof doc.lineAt === "function") {
+        const from = Math.max(0, Number(mainSelection.from ?? 0));
+        const to = Math.max(from, Number(mainSelection.to ?? from));
+        const fromLine = doc.lineAt(from).number;
+        const toLine = doc.lineAt(to).number;
+        metadata.cursorLine = fromLine;
+        metadata.selectionFromLine = fromLine;
+        metadata.selectionToLine = toLine;
+        metadata.hasSelection = to > from;
+        metadata.selectedChars = Math.max(0, to - from);
+      }
+    } catch {
+      // Keep metadata best-effort; chat requests should never fail on editor state probing.
+    }
+
+    return metadata;
+  }, [currentCode, isCompactView]);
+
   const resolvedExtensions = useMemo<Extension[]>(() => {
     const base = Array.isArray(externalExtensions)
       ? externalExtensions
@@ -966,6 +1001,7 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
                   contextType={contextType}
                   targetPName={aiAssistantPName}
                   targetPType={aiAssistantPType}
+                  editorMetadata={aiAssistantEditorMetadata}
                   onCodeInsert={handleCopilotCodeInsert}
                   autoApplyCodeBlock={autoApplyEnabled}
                   autoApplyPreferenceKey={autoApplyStorageKey}
