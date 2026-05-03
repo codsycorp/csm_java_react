@@ -3039,7 +3039,7 @@
               var weekDBacTotals = {};
               for (var wi = 0; wi < cells.length; wi += 1) {
                 var wk = Number(cells[wi] && cells[wi].weekIdx || 0);
-                if (!weekNamTotals[wk]) {
+                if (weekNamTotals[wk] === undefined) {
                   weekNamTotals[wk] = 0;
                   weekBacTotals[wk] = 0;
                   weekCNamTotals[wk] = 0;
@@ -9469,7 +9469,7 @@
     async function exportLegacySlrAutoRows() {
       var rows = legacySortedRowsRef.current["slr_auto"] || (Array.isArray(legacySlrAutoRows) ? legacySlrAutoRows : []);
       if (!rows.length) { canhbao(tt.exportNoData || "Không có dữ liệu để xuất"); return; }
-      var header = ["Loại Tìm", "Từ STT", "Đến STT", "Chuỗi (ngày)", "Từ ngày (hiện tại)", "Đến ngày (ngày xổ)", "Tổng Nam 0 (tuần)", "Số chính", "Số đảo", "Dãy Tổng Bắc", "Dãy Tổng Nam"];
+      var header = ["Loại Tìm", "Từ STT", "Đến STT", "Chuỗi (ngày)", "Từ ngày (hiện tại)", "Đến ngày (ngày xổ)", "Tổng 0 tuần (vùng LT)", "Số chính", "Số đảo", "Dãy Tổng Bắc", "Dãy Tổng Nam"];
       var aoa = [header];
       for (var ri3 = 0; ri3 < rows.length; ri3 += 1) {
         var r = rows[ri3] || {};
@@ -9935,6 +9935,7 @@
               sttTo: Number(row.sttTo || 0),
               noHitDaysCurrent: Number((row && row.noHitDaysCurrent) || (row && row.noHitDays) || 0),
               tongNamZeroWeekStreak: Number((row && row.tongNamZeroWeekStreak) || 0),
+              zeroWeekTarget: String((row && row.zeroWeekTarget) || "nam"),
               cNumbers: tongHopInput.cText,
               dNumbers: tongHopInput.dText,
               tongHopInput: tongHopInput.searchText,
@@ -10190,7 +10191,7 @@
       { title: "Lâu ngày", dataIndex: "lauNgay", key: "lauNgay", width: 80, sorter: function (a, b) { return Number((a && a.lauNgay) || 0) - Number((b && b.lauNgay) || 0); } },
       { title: "Lâu kỳ", dataIndex: "lauKy", key: "lauKy", width: 80, sorter: function (a, b) { return Number((a && a.lauKy) || 0) - Number((b && b.lauKy) || 0); } },
       { title: "Chuỗi LT", dataIndex: "noHitDaysCurrent", key: "noHitDaysCurrent", width: 80, sorter: function (a, b) { return Number((a && a.noHitDaysCurrent) || 0) - Number((b && b.noHitDaysCurrent) || 0); } },
-      { title: "Tuần Nam 0", dataIndex: "tongNamZeroWeekStreak", key: "tongNamZeroWeekStreak", width: 90, sorter: function (a, b) { return Number((a && a.tongNamZeroWeekStreak) || 0) - Number((b && b.tongNamZeroWeekStreak) || 0); } }
+      { title: "Tuần 0 (Nam/Bắc)", dataIndex: "tongNamZeroWeekStreak", key: "tongNamZeroWeekStreak", width: 90, sorter: function (a, b) { return Number((a && a.tongNamZeroWeekStreak) || 0) - Number((b && b.tongNamZeroWeekStreak) || 0); } }
     ];
 
     function makeNbCol(title, di, dw, mp) {
