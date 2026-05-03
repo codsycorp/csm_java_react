@@ -38,7 +38,7 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.enabled:false}")
     private boolean enabled;
 
-    @Value("${ai.local.llama.model-path:src/main/resources/models/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf}")
+    @Value("${ai.local.llama.model-path:./csm_datas/public/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf}")
     private String modelPath;
 
     @Value("${ai.local.llama.context-window:2048}")
@@ -243,7 +243,7 @@ public class LlamaCppNativeService implements AIProvider {
     private Path resolveModelPath(String rawPath) {
         String p = String.valueOf(rawPath == null ? "" : rawPath).trim();
         if (p.isBlank()) {
-            return Paths.get("src/main/resources/models/model.gguf").toAbsolutePath().normalize();
+            return Paths.get("csm_datas/public/ai_local/model/model.gguf").toAbsolutePath().normalize();
         }
         Path path = Paths.get(p);
         if (!path.isAbsolute()) {
