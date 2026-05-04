@@ -678,6 +678,7 @@ export default function AiAssistantChat({
 	const [streamRequestId, setStreamRequestId] = useState("");
 	const [completionState, setCompletionState] = useState<CompletionState>("idle");
 	const [completionMetrics, setCompletionMetrics] = useState<CompletionMetrics>({});
+	const [completionErrorMessage, setCompletionErrorMessage] = useState("");
 	// Progress state: waiting for Gemini / streaming progress
 	const [geminiProgress, setGeminiProgress] = useState<{
 		phase: "idle" | "waiting" | "streaming";
@@ -805,6 +806,9 @@ export default function AiAssistantChat({
 	const completionDetailTooltip = useMemo(() => {
 		const lines = [
 			completionStateLabel ? `${uiText("Trạng thái", "State", "状态")}: ${completionStateLabel}` : "",
+			completionState === "error" && completionErrorMessage
+				? `${uiText("Lý do", "Reason", "原因")}: ${completionErrorMessage}`
+				: "",
 			streamRequestId ? `requestId: ${streamRequestId}` : "",
 			completionMetrics.elapsedMs != null ? `${uiText("Thời gian", "Elapsed", "耗时")}: ${formatCompletionDuration(completionMetrics.elapsedMs)}` : "",
 			completionMetrics.outputChars != null ? `${uiText("Độ dài", "Output", "输出长度")}: ${formatOutputChars(completionMetrics.outputChars)}` : "",
@@ -832,6 +836,8 @@ export default function AiAssistantChat({
 		completionMetrics.promptTruncatedByCharCap,
 		completionMetrics.menuShrinkGuard,
 		completionMetrics.menuShrinkRatio,
+		completionErrorMessage,
+		completionState,
 		completionStateLabel,
 		formatCompletionDuration,
 		formatOutputChars,
@@ -1410,16 +1416,36 @@ export default function AiAssistantChat({
 	}, []);
 
 	const appendStageEvent = useCallback((data: any) => {
+		const normalizeProgressArgs = (raw: any): Record<string, any> | undefined => {
+			if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+				return raw as Record<string, any>;
+			}
+			if (typeof raw === "string") {
+				const text = raw.trim();
+				if (text.startsWith("{") && text.endsWith("}")) {
+					try {
+						const parsed = JSON.parse(text);
+						if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+							return parsed as Record<string, any>;
+						}
+					} catch {
+						return undefined;
+					}
+				}
+			}
+			return undefined;
+		};
+
 		const stage = String(data?.stage || data?.status || "").trim();
 		const status = String(data?.status || "").trim();
 		const model = String(data?.model || "").trim();
 		const requestId = String(data?.requestId || "").trim();
 		const msg = normalizeAssistantProgressMessage(String(data?.message || "").trim());
 		const messageKey = String(data?.messageKey || "").trim();
-		const messageArgs = data?.messageArgs && typeof data.messageArgs === "object" ? data.messageArgs : undefined;
+		const messageArgs = normalizeProgressArgs(data?.messageArgs);
 		const detail = normalizeAssistantProgressMessage(String(data?.detail || "").trim());
 		const detailKey = String(data?.detailKey || "").trim();
-		const detailArgs = data?.detailArgs && typeof data.detailArgs === "object" ? data.detailArgs : undefined;
+		const detailArgs = normalizeProgressArgs(data?.detailArgs);
 		const orchestrationPhase = String(data?.orchestrationPhase || "").trim();
 		const orchestrationPhaseKey = String(data?.orchestrationPhaseKey || "").trim();
 		const rangeLabel = extractStageRangeLabel(data);
@@ -1984,6 +2010,7 @@ export default function AiAssistantChat({
 			setStreamRequestId("");
 			setCompletionState("idle");
 			setCompletionMetrics({});
+			setCompletionErrorMessage("");
 			setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 			stageEventSignaturesRef.current = new Set();
 			followBottomRef.current = true;
@@ -2115,6 +2142,27 @@ export default function AiAssistantChat({
 								compacted?: boolean; savedChars?: number; charsBefore?: number; charsAfter?: number;
 								routingTier?: string; planStepCount?: number;
 							};
+							const normalizeEvtArgs = (raw: any): Record<string, any> | undefined => {
+								if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+									return raw as Record<string, any>;
+								}
+								if (typeof raw === "string") {
+									const text = raw.trim();
+									if (text.startsWith("{") && text.endsWith("}")) {
+										try {
+											const parsed = JSON.parse(text);
+											if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+												return parsed as Record<string, any>;
+											}
+										} catch {
+											return undefined;
+										}
+									}
+								}
+								return undefined;
+							};
+							const evtMessageArgs = normalizeEvtArgs(evt.messageArgs);
+							const evtForTimeline = evtMessageArgs ? { ...evt, messageArgs: evtMessageArgs } : evt;
 							if (evt.responseMode) {
 								const mode = String(evt.responseMode).trim().toLowerCase();
 								if (mode === "edit") {
@@ -2180,20 +2228,21 @@ export default function AiAssistantChat({
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
 							} else if (evt.stage === "preparing") {
 								const preparingMessageFromKey = renderProgressText(evt.messageKey, evt.messageArgs, evt.message);
+								const preparingMessage = renderProgressText(evt.messageKey, evtMessageArgs, evt.message);
 								appendModelDecisionTrace({
 									step: decisionStep || "primary",
 									model: evt.model,
-									reason: formatModelDecisionReason(decisionReason) || preparingMessageFromKey || evt.message,
+									reason: formatModelDecisionReason(decisionReason) || preparingMessage || evt.message,
 								});
 								setGeminiProgress(prev => ({
 									...prev,
 									phase: "waiting",
 									percent: evt.percent ?? 0,
-									message: normalizeAssistantProgressMessage(preparingMessageFromKey || evt.message, uiText("Chuyên Gia đang chuẩn bị yêu cầu...", "Expert is preparing the request...", "专家正在准备请求...")),
+									message: normalizeAssistantProgressMessage(preparingMessage || evt.message, uiText("Chuyên Gia đang chuẩn bị yêu cầu...", "Expert is preparing the request...", "专家正在准备请求...")),
 									estimatedWaitSecs: evt.estimatedWaitSecs ?? 0,
 									remainingSecs: evt.estimatedWaitSecs ?? 0,
 								}));
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evtForTimeline);
 							} else if (evt.stage === "waiting_gemini") {
 								const localPhase = String(evt.localPhase || "").trim().toLowerCase();
 								const localPhaseFallback = localPhase === "loading"
@@ -2201,7 +2250,7 @@ export default function AiAssistantChat({
 									: localPhase === "postprocess"
 										? uiText("AI local đang hậu xử lý kết quả...", "Local AI is post-processing output...", "本地AI正在后处理结果...")
 										: uiText("AI local đang suy luận...", "Local AI is inferring...", "本地AI正在推理...");
-								const waitingMessageFromKey = renderProgressText(evt.messageKey, evt.messageArgs, evt.message);
+								const waitingMessageFromKey = renderProgressText(evt.messageKey, evtMessageArgs, evt.message);
 								setGeminiProgress(prev => ({
 									...prev,
 									phase: "waiting",
@@ -2209,7 +2258,7 @@ export default function AiAssistantChat({
 									message: normalizeAssistantProgressMessage(waitingMessageFromKey || evt.message, localPhaseFallback),
 									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
 								}));
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evtForTimeline);
 							} else if (evt.stage === "streaming_started") {
 								setGeminiProgress(prev => ({
 									...prev,
@@ -2220,7 +2269,7 @@ export default function AiAssistantChat({
 									estimatedTotalChars: evt.estimatedTotalChars ?? prev.estimatedTotalChars,
 									remainingSecs: 0,
 								}));
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evtForTimeline);
 							} else if (evt.stage === "streaming_progress") {
 								setGeminiProgress(prev => ({
 									...prev,
@@ -2294,7 +2343,7 @@ export default function AiAssistantChat({
 									promptCapChars: Number.isFinite(Number(evt.promptCapChars)) ? Number(evt.promptCapChars) : undefined,
 									promptTruncatedByCharCap: evt.promptTruncatedByCharCap === true,
 								});
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evtForTimeline);
 								setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Hoàn thành", "Completed", "已完成"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								if (evt.fullResponse) {
 									streamingMessageRef.current = evt.fullResponse;
@@ -2324,6 +2373,7 @@ export default function AiAssistantChat({
 							} else if (evt.stage === "error") {
 								receivedErrorEvent = true;
 								setCompletionState("error");
+								setCompletionErrorMessage(String(evt.message || ""));
 								setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
 								message.error(evt.message || uiText("Chat thất bại", "Chat failed", "对话失败"));
@@ -2365,6 +2415,7 @@ export default function AiAssistantChat({
 				if ((error as Error)?.name === "AbortError") return;
 				console.error("Failed to send message:", error);
 				setCompletionState("error");
+				setCompletionErrorMessage((error as Error)?.message ? String((error as Error).message) : "SSE request failed");
 				setCompletionMetrics({
 					elapsedMs: requestStartedAtRef.current > 0 ? Math.max(0, Date.now() - requestStartedAtRef.current) : undefined,
 					outputChars: streamingMessageRef.current.length + pendingStreamChunkRef.current.length,
@@ -2454,6 +2505,7 @@ export default function AiAssistantChat({
 		setStreamRequestId("");
 		setCompletionState("idle");
 		setCompletionMetrics({});
+		setCompletionErrorMessage("");
 		localStorage.removeItem(CHAT_HISTORY_KEY);
 		message.success(uiText("Đã xóa lịch sử chat", "Chat history cleared", "聊天记录已清除"));
 	};

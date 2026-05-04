@@ -609,6 +609,9 @@ public class ApiSpringController {
     @Value("${ai.code-stream.cost.default.output-usd-per-1k:0.003}")
     private double aiCodeStreamCostDefaultOutputUsdPer1k;
 
+    @Value("${ai.code-stream.sse-timeout-ms:1800000}")
+    private long aiCodeStreamSseTimeoutMs;
+
     private final ConcurrentHashMap<String, InstructionsCacheEntry> aiAssistantCustomInstructionsCache = new ConcurrentHashMap<>();
 
     private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
@@ -682,7 +685,8 @@ public class ApiSpringController {
 
     @PostMapping(value = {"/ai-code-stream", "/api/ai-code-stream"})
     public SseEmitter streamCodeAssistant(@RequestBody Map<String, Object> body) {
-        SseEmitter emitter = new SseEmitter(900_000L); // 15-minute timeout
+        long effectiveSseTimeoutMs = aiCodeStreamSseTimeoutMs <= 0L ? Long.MAX_VALUE : aiCodeStreamSseTimeoutMs;
+        SseEmitter emitter = new SseEmitter(effectiveSseTimeoutMs);
 
         emitter.onTimeout(() -> {
             logger.warn("ApiSpringController: ai-code-stream SSE timeout");
@@ -4686,8 +4690,8 @@ public class ApiSpringController {
     ) {
         // Log đầu vào
         logger.info("[API IN] {} {} IP={} UA={} headers={} body={}", request.getMethod(), request.getRequestURI(),
-                request.getRemoteAddr(), request.getHeader("User-Agent"),
-                sanitizeApiLogValue(headers), sanitizeApiLogBody(requestBody));
+            request.getRemoteAddr(), request.getHeader("User-Agent"),
+            sanitizeApiLogValue(headers), summarizeApiLogBody(requestBody));
         Map<String, String> lowerCaseHeaders = new HashMap<>();
         if (headers != null) {
             headers.forEach((key, value) -> lowerCaseHeaders.put(key.toLowerCase(), value));
@@ -5088,9 +5092,25 @@ public class ApiSpringController {
             if (trimmed.length() > 64 && (trimmed.matches("[A-Za-z0-9_\\-\\.=]+") || trimmed.contains("eyJ"))) {
                 return redactSecretText(trimmed);
             }
+            if (trimmed.length() > 2000) {
+                return trimmed.substring(0, 2000) + "...[truncated]";
+            }
             return text;
         }
         return value;
+    }
+
+    private String summarizeApiLogBody(String rawBody) {
+        if (rawBody == null || rawBody.isBlank()) {
+            return rawBody;
+        }
+        String body = rawBody.trim();
+        if (body.length() > 4000) {
+            String digest = sha256(body);
+            String shortDigest = digest.length() >= 16 ? digest.substring(0, 16) : digest;
+            return "<omitted body: chars=" + body.length() + ", sha256=" + shortDigest + ">";
+        }
+        return sanitizeApiLogBody(body);
     }
 
     private String sanitizeApiLogBody(String rawBody) {

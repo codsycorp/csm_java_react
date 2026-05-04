@@ -158,9 +158,11 @@ public class GeminiStreamingService {
         if (claudeHttpClient == null) {
             synchronized (this) {
                 if (claudeHttpClient == null) {
+                    long effectiveTimeoutMs = resolveRequestTimeoutMs();
                     claudeHttpClient = new OkHttpClient.Builder()
                             .connectTimeout(30, TimeUnit.SECONDS)
-                            .readTimeout(5, TimeUnit.MINUTES)
+                            // 0 means no timeout in OkHttp; useful for very large long-running prompts.
+                            .readTimeout(effectiveTimeoutMs <= 0 ? 0 : effectiveTimeoutMs, TimeUnit.MILLISECONDS)
                             .writeTimeout(60, TimeUnit.SECONDS)
                             .build();
                 }
@@ -192,6 +194,10 @@ public class GeminiStreamingService {
     }
 
     private long resolveRequestTimeoutMs() {
+        // <= 0 means disable timeout and wait until provider completes.
+        if (requestTimeoutMs <= 0L) {
+            return 0L;
+        }
         return Math.max(15000L, requestTimeoutMs);
     }
 
@@ -593,13 +599,16 @@ public class GeminiStreamingService {
         StringBuilder fullText = new StringBuilder();
         CompletableFuture<String> completion = new CompletableFuture<>();
 
-        GoogleAiGeminiStreamingChatModel streamingModel = GoogleAiGeminiStreamingChatModel.builder()
+        long effectiveTimeoutMs = resolveRequestTimeoutMs();
+        var streamingModelBuilder = GoogleAiGeminiStreamingChatModel.builder()
                 .apiKey(apiKey)
                 .modelName(resolvedModel)
                 .temperature(temperature)
-            .maxOutputTokens(configuredOutputTokens)
-                .timeout(Duration.ofMillis(resolveRequestTimeoutMs()))
-                .build();
+            .maxOutputTokens(configuredOutputTokens);
+        if (effectiveTimeoutMs > 0L) {
+            streamingModelBuilder.timeout(Duration.ofMillis(effectiveTimeoutMs));
+        }
+        GoogleAiGeminiStreamingChatModel streamingModel = streamingModelBuilder.build();
 
         try {
             if (imageParts != null && !imageParts.isEmpty()) {
@@ -667,7 +676,10 @@ public class GeminiStreamingService {
                 });
             }
 
-            return completion.get(resolveRequestTimeoutMs(), TimeUnit.MILLISECONDS);
+            if (effectiveTimeoutMs > 0L) {
+                return completion.get(effectiveTimeoutMs, TimeUnit.MILLISECONDS);
+            }
+            return completion.get();
         } finally {
             if (heartbeatTask != null) heartbeatTask.cancel(false);
             heartbeat.shutdownNow();
