@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { Button, Input, Card, Space, Empty, Spin, Tooltip, Tag, Switch, message } from "antd";
+import { Button, Input, Card, Space, Empty, Spin, Tooltip, Tag, message } from "antd";
 import {
 	SendOutlined,
 	CopyOutlined,
@@ -9,10 +9,12 @@ import {
 	FileImageOutlined,
 	CloseOutlined,
 	ThunderboltOutlined,
+	BulbOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "#src/store/auth";
 import { extractCodeBlocks, extractLatestOpenCodeBlock } from "#src/pages/system/developer/codeUtils";
+import { searchBusinessMemory } from "#src/api/ai/assistant-engine";
 import styles from "./AiAssistantChat.module.css";
 
 export type AiAssistantAttachment = {
@@ -164,6 +166,7 @@ type AiAssistantChatProps = {
 const CHAT_HISTORY_KEY = "codeeditor.aiassistant.chat.v1";
 const LEGACY_CHAT_HISTORY_KEY = "codeeditor.copilot.chat.v1";
 const PROMPT_HISTORY_KEY_PREFIX = "codeeditor.aiassistant.promptHistory.v1";
+const BUSINESS_MEMORY_ENABLED_KEY = "aiassistant.businessMemory.enabled";
 const PROMPT_HISTORY_LIMIT = 50;
 const CHAT_STORAGE_LIMIT = 20;
 const MAX_ATTACHMENTS = 8;
@@ -172,8 +175,6 @@ const MAX_TEXT_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_FILE_BYTES = 5 * 1024 * 1024;
 const STREAM_UI_FLUSH_MS = 48;
 const STREAM_CODEBLOCK_PARSE_MS = 240;
-const AUTO_APPLY_PREF_KEY = "aiassistant.autoApply";
-const LEGACY_AUTO_APPLY_PREF_KEY = "copilot.autoApply";
 const MAX_CHAT_INPUT_CHARS = 20000;
 const MAX_STRUCTURED_TEXT_EDITS = 160;
 const MAX_STRUCTURED_REPLACEMENT_CHARS = 800000;
@@ -294,35 +295,6 @@ function summarizeFileContent(file: File, textContent: string): string {
 
 function createAttachmentId(prefix: string): string {
 	return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function resolveAutoApplyStorageKey(preferenceKey?: string): string {
-	const suffix = String(preferenceKey || "default").trim() || "default";
-	return `${AUTO_APPLY_PREF_KEY}:${suffix}`;
-}
-
-function resolveLegacyAutoApplyStorageKey(preferenceKey?: string): string {
-	const suffix = String(preferenceKey || "default").trim() || "default";
-	return `${LEGACY_AUTO_APPLY_PREF_KEY}:${suffix}`;
-}
-
-function loadAutoApplyPreference(preferenceKey: string | undefined, fallback: boolean): boolean {
-	try {
-		const raw = localStorage.getItem(resolveAutoApplyStorageKey(preferenceKey))
-			?? localStorage.getItem(resolveLegacyAutoApplyStorageKey(preferenceKey));
-		if (raw == null) return fallback;
-		return raw === "1" || raw === "true";
-	} catch {
-		return fallback;
-	}
-}
-
-function saveAutoApplyPreference(preferenceKey: string | undefined, value: boolean) {
-	try {
-		localStorage.setItem(resolveAutoApplyStorageKey(preferenceKey), value ? "1" : "0");
-	} catch {
-		// ignore localStorage write failures
-	}
 }
 
 function extractMenuDraftForEditor(raw: unknown): string {
@@ -669,9 +641,6 @@ export default function AiAssistantChat({
 	editorMetadata,
 	onCodeInsert,
 	onUserMessage,
-	autoApplyCodeBlock = false,
-	autoApplyPreferenceKey,
-	onAutoApplyChange,
 }: AiAssistantChatProps) {
 	const { i18n } = useTranslation();
 	const [messages, setMessages] = useState<ChatMessage[]>(getChatHistory());
@@ -680,7 +649,6 @@ export default function AiAssistantChat({
 	const [promptHistoryIndex, setPromptHistoryIndex] = useState(-1);
 	const [promptHistoryOriginal, setPromptHistoryOriginal] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
-	const [autoApplyEnabled, setAutoApplyEnabled] = useState<boolean>(() => loadAutoApplyPreference(autoApplyPreferenceKey, Boolean(autoApplyCodeBlock)));
 	const [pendingAttachments, setPendingAttachments] = useState<AiAssistantAttachment[]>([]);
 	const [stageEvents, setStageEvents] = useState<AiAssistantStageEvent[]>([]);
 	const [aiUsageSummary, setAiUsageSummary] = useState<{
@@ -701,6 +669,10 @@ export default function AiAssistantChat({
 	const [orchPreview, setOrchPreview] = useState<OrchestrationPreviewResult | null>(null);
 	const [orchPreviewLoading, setOrchPreviewLoading] = useState(false);
 	const [showOrchPreview, setShowOrchPreview] = useState(false);
+	const [businessMemoryEnabled, setBusinessMemoryEnabled] = useState<boolean>(() => {
+		try { return localStorage.getItem(BUSINESS_MEMORY_ENABLED_KEY) !== "false"; } catch { return true; }
+	});
+	const [bmSearching, setBmSearching] = useState(false);
 	const [agenticSteps, setAgenticSteps] = useState<AgenticStep[]>([]);
 	const [agenticStepsCollapsed, setAgenticStepsCollapsed] = useState(false);
 	const [streamRequestId, setStreamRequestId] = useState("");
@@ -1044,15 +1016,6 @@ export default function AiAssistantChat({
 	}, []);
 
 	useEffect(() => {
-		setAutoApplyEnabled(loadAutoApplyPreference(autoApplyPreferenceKey, Boolean(autoApplyCodeBlock)));
-	}, [autoApplyCodeBlock, autoApplyPreferenceKey]);
-
-	useEffect(() => {
-		saveAutoApplyPreference(autoApplyPreferenceKey, autoApplyEnabled);
-		onAutoApplyChange?.(autoApplyEnabled);
-	}, [autoApplyEnabled, autoApplyPreferenceKey, onAutoApplyChange]);
-
-	useEffect(() => {
 		setPromptHistory(loadPromptHistory(promptHistoryStorageKey));
 		setPromptHistoryIndex(-1);
 		setPromptHistoryOriginal("");
@@ -1231,6 +1194,36 @@ export default function AiAssistantChat({
 					`Connecting ${assistantBrandLabel}`,
 					`正在连接 ${assistantBrandLabel}`,
 				);
+			case "copilot.progress.message.local_provider_primary":
+				return uiText(
+					"Tối ưu chi phí: ưu tiên AI local trước",
+					"Cost optimized: prioritize local AI first",
+					"成本优化：优先使用本地 AI",
+				);
+			case "copilot.progress.message.local_quality_fallback":
+				return uiText(
+					"Kết quả local chưa đạt quality gate, chuyển fallback sang model stream",
+					"Local output failed quality gate, switching to stream-model fallback",
+					"本地输出未通过质量门禁，切换到流式模型回退",
+				);
+			case "copilot.progress.message.local_provider_failed":
+				return uiText(
+					"AI local không trả dữ liệu hợp lệ, chuyển fallback sang model stream",
+					"Local AI returned invalid output, switching to stream-model fallback",
+					"本地 AI 返回无效结果，切换到流式模型回退",
+				);
+			case "copilot.progress.message.fallback_to_default":
+				return uiText(
+					"Model hiện tại lỗi, tự động chuyển sang model mặc định",
+					"Current model failed, auto-switching to default model",
+					"当前模型失败，自动切换到默认模型",
+				);
+			case "copilot.progress.message.fallback_to_provider":
+				return uiText(
+					"Simple/default stream đều thất bại, chuyển sang provider fallback",
+					"Simple/default streams failed, switching to provider fallback",
+					"简单/默认流均失败，切换到提供方回退",
+				);
 			case "copilot.progress.message.chat_complete":
 				return uiText("Chat hoàn tất", "Chat completed", "对话已完成");
 			case "copilot.progress.message.github_fallback":
@@ -1252,6 +1245,54 @@ export default function AiAssistantChat({
 					`Đang chờ quota AI${args?.waitingMs ? ` (${args.waitingMs}ms)` : ""}`,
 					`Waiting for AI quota${args?.waitingMs ? ` (${args.waitingMs}ms)` : ""}`,
 					`正在等待 AI 配额${args?.waitingMs ? `（${args.waitingMs}ms）` : ""}`,
+				);
+			case "copilot.progress.message.local_loading":
+				return uiText(
+					`AI local đang nạp model... ${args?.elapsedSecs ?? 0}s/${args?.estimatedWaitSecs ?? 0}s`,
+					`Local AI is loading model... ${args?.elapsedSecs ?? 0}s/${args?.estimatedWaitSecs ?? 0}s`,
+					`本地AI正在加载模型... ${args?.elapsedSecs ?? 0}s/${args?.estimatedWaitSecs ?? 0}s`,
+				);
+			case "copilot.progress.message.local_infer":
+				return uiText(
+					`AI local đang suy luận... ${args?.elapsedSecs ?? 0}s/${args?.estimatedWaitSecs ?? 0}s`,
+					`Local AI is inferring... ${args?.elapsedSecs ?? 0}s/${args?.estimatedWaitSecs ?? 0}s`,
+					`本地AI正在推理... ${args?.elapsedSecs ?? 0}s/${args?.estimatedWaitSecs ?? 0}s`,
+				);
+			case "copilot.progress.message.local_postprocess":
+				return uiText(
+					`AI local đang hậu xử lý kết quả... ${args?.elapsedSecs ?? 0}s/${args?.estimatedWaitSecs ?? 0}s`,
+					`Local AI is post-processing output... ${args?.elapsedSecs ?? 0}s/${args?.estimatedWaitSecs ?? 0}s`,
+					`本地AI正在后处理结果... ${args?.elapsedSecs ?? 0}s/${args?.estimatedWaitSecs ?? 0}s`,
+				);
+			case "copilot.progress.message.local_chunking_start":
+				return uiText(
+					`AI local đang chia ngữ cảnh lớn thành ${args?.chunkCount ?? "?"} phần (~${args?.estimatedWaitSecs ?? "?"}s)`,
+					`Local AI is chunking large context into ${args?.chunkCount ?? "?"} parts (~${args?.estimatedWaitSecs ?? "?"}s)`,
+					`本地AI正在将大上下文拆分为 ${args?.chunkCount ?? "?"} 个分块（约 ${args?.estimatedWaitSecs ?? "?"}s）`,
+				);
+			case "copilot.progress.message.local_chunking_done":
+				return uiText(
+					`Đã nén context còn ${args?.outputChars ?? "?"} ký tự trong ${args?.elapsedSecs ?? "?"}s`,
+					`Context compressed to ${args?.outputChars ?? "?"} chars in ${args?.elapsedSecs ?? "?"}s`,
+					`上下文已压缩至 ${args?.outputChars ?? "?"} 字符，用时 ${args?.elapsedSecs ?? "?"}s`,
+				);
+			case "copilot.progress.message.local_preanalysis_infer":
+				return uiText(
+					`AI local đang suy luận pre-analysis (~${args?.estimatedWaitSecs ?? "?"}s)`,
+					`Local AI is running pre-analysis inference (~${args?.estimatedWaitSecs ?? "?"}s)`,
+					`本地AI正在进行预分析推理（约 ${args?.estimatedWaitSecs ?? "?"}s）`,
+				);
+			case "copilot.progress.message.local_preanalysis_fallback_cloud":
+				return uiText(
+					"AI local không xử lý trọn vẹn, chuyển sang cloud context fallback",
+					"Local AI could not complete safely, switching to cloud-context fallback",
+					"本地AI无法完整处理，切换到云上下文回退",
+				);
+			case "copilot.progress.message.local_preanalysis_budget_trim":
+				return uiText(
+					`Đã rút gọn ngữ cảnh local ${args?.beforeChars ?? "?"} -> ${args?.afterChars ?? "?"} ký tự (budget ~${args?.tokenBudget ?? "?"} tokens)`,
+					`Trimmed local context ${args?.beforeChars ?? "?"} -> ${args?.afterChars ?? "?"} chars (budget ~${args?.tokenBudget ?? "?"} tokens)`,
+					`已裁剪本地上下文 ${args?.beforeChars ?? "?"} -> ${args?.afterChars ?? "?"} 字符（预算约 ${args?.tokenBudget ?? "?"} tokens）`,
 				);
 			case "copilot.progress.message.completed":
 				return uiText("Đã hoàn tất xử lý AI", "AI processing completed", "AI 处理已完成");
@@ -1571,8 +1612,7 @@ export default function AiAssistantChat({
 	}, [flushStreamingToUI]);
 
 	const applyRealtimeCodeFromText = useCallback((rawText: string, force = false): boolean => {
-		const isMenuJsonContext = contextType === "menu_json";
-		if ((!autoApplyEnabled && !isMenuJsonContext) || !turnAllowAutoApplyRef.current || !onCodeInsert) return false;
+		if (!turnAllowAutoApplyRef.current || !onCodeInsert) return false;
 		const source = String(rawText || "");
 		let nextCode = "";
 		if (contextType === "menu_json") {
@@ -1613,7 +1653,7 @@ export default function AiAssistantChat({
 		lastAppliedCodeRef.current = nextCode;
 		lastRealtimeApplyAtRef.current = now;
 		return true;
-	}, [autoApplyEnabled, contextType, onCodeInsert, pickPreferredCodeBlock]);
+	}, [contextType, onCodeInsert, pickPreferredCodeBlock]);
 
 	useEffect(() => {
 		applyRealtimeCodeFromTextRef.current = applyRealtimeCodeFromText;
@@ -1864,7 +1904,34 @@ export default function AiAssistantChat({
 				));
 				return;
 			}
-			const outgoingAttachments = [...pendingAttachments];
+			// Business Memory auto-inject: search relevant knowledge before sending
+			let bmAttachments: AiAssistantAttachment[] = [];
+			if (businessMemoryEnabled) {
+				try {
+					setBmSearching(true);
+					const bmHits = await searchBusinessMemory({ appId, q: cleanedMessage || normalizedText, k: 4 });
+					bmAttachments = bmHits
+						.filter((hit) => Number(hit.score) > 0.05)
+						.slice(0, 4)
+						.map((hit) => ({
+							id: `bm_${hit.chunkId}`,
+							name: hit.sourceName,
+							mimeType: "text/markdown",
+							size: hit.content.length,
+							kind: "text" as const,
+							contextRole: "business_logic" as const,
+							authoritative: true,
+							summary: hit.summary,
+							textContent: hit.content,
+							fullContext: true,
+						}));
+				} catch {
+					// Silent fallback: business memory unavailable does not block chat
+				} finally {
+					setBmSearching(false);
+				}
+			}
+			const outgoingAttachments = [...bmAttachments, ...pendingAttachments];
 			onUserMessage?.({
 				message: cleanedMessage || normalizedText,
 				attachments: outgoingAttachments,
@@ -1931,11 +1998,9 @@ export default function AiAssistantChat({
 					percent: 0,
 				});
 			}
-			const responseMode: ResponseMode = modeDirective.overrideMode
-				|| (contextType === "menu_json"
-					? "edit"
-					: (hasEditIntent(cleanedMessage || normalizedText) ? "edit" : "analyze"));
-			turnAllowAutoApplyRef.current = responseMode === "edit";
+			// Let backend/AI infer mode from natural language, unless user explicitly uses /analyze or /edit.
+			const requestedResponseMode: ResponseMode | undefined = modeDirective.overrideMode;
+			turnAllowAutoApplyRef.current = requestedResponseMode === "edit";
 			requestStartedAtRef.current = Date.now();
 			setInputValue("");
 			setPendingAttachments([]);
@@ -1945,6 +2010,8 @@ export default function AiAssistantChat({
 				// SSE streaming via Gemini (replaces legacy Socket.IO stream route)
 				controller = new AbortController();
 				sseAbortRef.current = controller;
+				const flowType = contextType === "menu_json" ? "menu_manager" : "code_editor";
+				const taskType = contextType === "menu_json" ? "menu_design" : "code_assistant";
 				const authState = useAuthStore.getState();
 				const token = authState.token ?? "";
 				const refreshToken = authState.refreshToken ?? "";
@@ -1969,7 +2036,9 @@ export default function AiAssistantChat({
 					body: JSON.stringify({
 						appId,
 						message: cleanedMessage || normalizedText,
-						responseMode,
+						flowType,
+						taskType,
+						responseMode: requestedResponseMode,
 						currentCode,
 						language,
 						contextType,
@@ -2028,6 +2097,8 @@ export default function AiAssistantChat({
 							const evt = JSON.parse(json) as {
 								stage: string; chunk?: string; fullResponse?: string; responseMode?: string;
 								message?: string; percent?: number; estimatedWaitSecs?: number;
+								messageKey?: string; messageArgs?: Record<string, any>;
+								localPhase?: string;
 								remainingEstimateSecs?: number; charsReceived?: number; estimatedTotalChars?: number;
 								ttftMs?: number; elapsedMs?: number; promptTokens?: number; model?: string;
 								requestId?: string;
@@ -2044,6 +2115,14 @@ export default function AiAssistantChat({
 								compacted?: boolean; savedChars?: number; charsBefore?: number; charsAfter?: number;
 								routingTier?: string; planStepCount?: number;
 							};
+							if (evt.responseMode) {
+								const mode = String(evt.responseMode).trim().toLowerCase();
+								if (mode === "edit") {
+									turnAllowAutoApplyRef.current = true;
+								} else if (mode === "analyze") {
+									turnAllowAutoApplyRef.current = false;
+								}
+							}
 							if (evt.requestId) {
 								setStreamRequestId(String(evt.requestId));
 							}
@@ -2100,26 +2179,34 @@ export default function AiAssistantChat({
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
 							} else if (evt.stage === "preparing") {
+								const preparingMessageFromKey = renderProgressText(evt.messageKey, evt.messageArgs, evt.message);
 								appendModelDecisionTrace({
 									step: decisionStep || "primary",
 									model: evt.model,
-									reason: formatModelDecisionReason(decisionReason) || evt.message,
+									reason: formatModelDecisionReason(decisionReason) || preparingMessageFromKey || evt.message,
 								});
 								setGeminiProgress(prev => ({
 									...prev,
 									phase: "waiting",
 									percent: evt.percent ?? 0,
-									message: normalizeAssistantProgressMessage(evt.message, uiText("Chuyên Gia đang chuẩn bị yêu cầu...", "Expert is preparing the request...", "专家正在准备请求...")),
+									message: normalizeAssistantProgressMessage(preparingMessageFromKey || evt.message, uiText("Chuyên Gia đang chuẩn bị yêu cầu...", "Expert is preparing the request...", "专家正在准备请求...")),
 									estimatedWaitSecs: evt.estimatedWaitSecs ?? 0,
 									remainingSecs: evt.estimatedWaitSecs ?? 0,
 								}));
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
 							} else if (evt.stage === "waiting_gemini") {
+								const localPhase = String(evt.localPhase || "").trim().toLowerCase();
+								const localPhaseFallback = localPhase === "loading"
+									? uiText("AI local đang nạp model...", "Local AI is loading model...", "本地AI正在加载模型...")
+									: localPhase === "postprocess"
+										? uiText("AI local đang hậu xử lý kết quả...", "Local AI is post-processing output...", "本地AI正在后处理结果...")
+										: uiText("AI local đang suy luận...", "Local AI is inferring...", "本地AI正在推理...");
+								const waitingMessageFromKey = renderProgressText(evt.messageKey, evt.messageArgs, evt.message);
 								setGeminiProgress(prev => ({
 									...prev,
 									phase: "waiting",
 									percent: evt.percent ?? prev.percent,
-									message: normalizeAssistantProgressMessage(evt.message, uiText("Chuyên Gia đang xử lý...", "Expert is processing...", "专家正在处理中...")),
+									message: normalizeAssistantProgressMessage(waitingMessageFromKey || evt.message, localPhaseFallback),
 									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
 								}));
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
@@ -2213,6 +2300,9 @@ export default function AiAssistantChat({
 									streamingMessageRef.current = evt.fullResponse;
 									pendingStreamChunkRef.current = "";
 								}
+								if (String(evt.responseMode || "").trim().toLowerCase() === "edit") {
+									turnAllowAutoApplyRef.current = true;
+								}
 								if (evt.promptTruncatedByCharCap === true) {
 									message.warning(uiText(
 										"Prompt đã bị cắt theo ngưỡng, kết quả có thể thiếu một phần menu lớn",
@@ -2222,7 +2312,7 @@ export default function AiAssistantChat({
 								}
 								flushStreamingToUI(true);
 								if (evt.fullResponse) {
-									// Force final apply to avoid debounce race with end-of-turn flag reset.
+									// Force final apply after backend settles mode to avoid debounce race.
 									applyRealtimeCodeFromText(evt.fullResponse, true);
 								}
 								setCompletionState("done");
@@ -2296,7 +2386,7 @@ export default function AiAssistantChat({
 				}
 			}
 		},
-		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey]
+		[appId, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey]
 	);
 
 	const handleSend = () => {
@@ -2393,15 +2483,6 @@ export default function AiAssistantChat({
 			size="small"
 			extra={
 				<Space size="small">
-					<Tooltip title={uiText("Tự chèn vào editor khi prompt có ý định chỉnh sửa", "Auto insert into editor when prompt implies editing", "当提示词包含编辑意图时自动插入到编辑器")}> 
-						<Switch
-							size="small"
-							checked={autoApplyEnabled}
-							onChange={(checked) => setAutoApplyEnabled(Boolean(checked))}
-							checkedChildren="Auto"
-							unCheckedChildren="Text"
-						/>
-					</Tooltip>
 					<Tooltip title={uiText("Xóa lịch sử", "Clear history", "清除历史")}> 
 						<Button
 							type="text"
@@ -3116,6 +3197,31 @@ export default function AiAssistantChat({
 								icon={<FileImageOutlined />}
 								onClick={() => imageInputRef.current?.click()}
 								disabled={isLoading}
+							/>
+						</Tooltip>
+						<Tooltip title={uiText(
+							businessMemoryEnabled
+								? "Bộ nhớ nghiệp vụ BẬT — AI tự động tra cứu tài liệu nghiệp vụ trước mỗi câu hỏi"
+								: "Bộ nhớ nghiệp vụ TẮT — Click để bật tra cứu tài liệu nghiệp vụ",
+							businessMemoryEnabled
+								? "Business Memory ON — AI auto-searches knowledge base before each message"
+								: "Business Memory OFF — Click to enable knowledge base lookup",
+							businessMemoryEnabled ? "业务记忆已开启" : "业务记忆已关闭",
+						)}>
+							<Button
+								type="text"
+								icon={<BulbOutlined />}
+								loading={bmSearching}
+								onClick={() => {
+									const next = !businessMemoryEnabled;
+									setBusinessMemoryEnabled(next);
+									try { localStorage.setItem(BUSINESS_MEMORY_ENABLED_KEY, String(next)); } catch { /* ignore */ }
+									message.info(next
+										? uiText("Đã bật tra cứu nghiệp vụ", "Business memory enabled", "业务记忆已开启")
+										: uiText("Đã tắt tra cứu nghiệp vụ", "Business memory disabled", "业务记忆已关闭"),
+									);
+								}}
+								style={{ color: businessMemoryEnabled ? "#52c41a" : undefined }}
 							/>
 						</Tooltip>
 						<Tooltip title={uiText("Preview luồng orchestration (dev)", "Preview orchestration plan (dev)", "预览编排计划（开发）")}>

@@ -14,10 +14,32 @@ Hệ thống quản lý khách hàng và nội dung với Spring Boot + React/Vu
 cd backend
 mvn spring-boot:run
 
+set -a && source ../config.env && set +a && mvn spring-boot:run
+
+set -a && source /Volumes/Datas/CSM/JavaProjects/csm_server/config.env && set +a && cd /Volumes/Datas/CSM/JavaProjects/csm_server/backend && mvn spring-boot:run
 # Frontend
 cd frontend
 pnpm install
 pnpm dev
+```
+
+### Local Llama model setup (GGUF)
+
+Chạy các lệnh này một lần để tránh lỗi thiếu file model `.gguf` khi backend khởi động:
+
+```bash
+mkdir -p backend/csm_datas/public/ai_local/model
+
+curl -L --fail --retry 3 --retry-delay 5 \
+  -o backend/csm_datas/public/ai_local/model/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf \
+  "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+
+# Cập nhật đường dẫn model trong config.env
+echo 'AI_LOCAL_LLAMA_MODEL_PATH=/Volumes/Datas/CSM/JavaProjects/csm_server/backend/csm_datas/public/ai_local/model/tinyllama-1.1b-chat-v1.0-q4_k_m.gguf' >> config.env
+
+# Chạy backend với config.env
+cd backend
+set -a && source ../config.env && set +a && mvn spring-boot:run
 ```
 
 ### Production Deployment

@@ -44,6 +44,24 @@ public class LargeFileChunkingService {
     @Value("${ai.local.chunking.max-chunks:20}")
     private int maxChunks;
 
+    @Value("${ai.local.chunking.chunk-size-min-chars:1200}")
+    private int chunkSizeMinChars;
+
+    @Value("${ai.local.chunking.local-input-safety-ratio:0.68}")
+    private double localInputSafetyRatio;
+
+    @Value("${ai.local.chunking.local-prompt-overhead-tokens:260}")
+    private int localPromptOverheadTokens;
+
+    @Value("${ai.local.chunking.local-input-token-hard-cap:1800}")
+    private int localInputTokenHardCap;
+
+    @Value("${ai.local.llama.context-window:2048}")
+    private int llamaContextWindow;
+
+    @Value("${ai.local.llama.max-tokens:384}")
+    private int llamaMaxTokens;
+
     @Value("${ai.local.chunking.output-budget-chars:5000}")
     private int outputBudgetChars;
 
@@ -67,15 +85,16 @@ public class LargeFileChunkingService {
         }
 
         ContentShape shape = detectShape(text);
+        int effectiveChunkSize = resolveEffectiveChunkSizeChars();
         log.info("[CHUNKING] {} chars, shape={}, contextType={} – starting Map-Reduce",
                 text.length(), shape, contextType);
 
-        List<String> chunks = splitByShape(text, shape);
+        List<String> chunks = splitByShape(text, shape, effectiveChunkSize);
         int active = Math.min(chunks.size(), maxChunks);
 
         List<String> summaries = new ArrayList<>();
         for (int i = 0; i < active; i++) {
-            String s = summarizeChunk(i + 1, chunks.size(), chunks.get(i), shape);
+            String s = summarizeChunk(i + 1, chunks.size(), chunks.get(i), shape, effectiveChunkSize);
             if (s != null && !s.isBlank()) summaries.add(s);
         }
 
@@ -85,7 +104,7 @@ public class LargeFileChunkingService {
         }
 
         log.info("[CHUNKING] {}/{} chunks summarized → aggregating", summaries.size(), chunks.size());
-        return aggregateSummaries(summaries, requestText, contextType, chunks.size());
+        return aggregateSummaries(summaries, requestText, contextType, chunks.size(), effectiveChunkSize);
     }
 
     // ── Content-shape detection ───────────────────────────────────────────────
@@ -118,32 +137,32 @@ public class LargeFileChunkingService {
 
     // ── Splitting ─────────────────────────────────────────────────────────────
 
-    private List<String> splitByShape(String content, ContentShape shape) {
+    private List<String> splitByShape(String content, ContentShape shape, int effectiveChunkSize) {
         String t = content.trim();
         switch (shape) {
             case JSON_ARRAY: {
                 List<String> items = splitJsonArrayTopLevel(t);
-                if (items.size() > 1) return groupItemsIntoChunks(items);
+                if (items.size() > 1) return groupItemsIntoChunks(items, effectiveChunkSize);
                 break;
             }
             case JSON_OBJECT_WITH_ARRAY: {
                 // Unwrap the first array-valued key generically
                 List<String> items = unwrapFirstArrayValue(t);
-                if (items.size() > 1) return groupItemsIntoChunks(items);
+                if (items.size() > 1) return groupItemsIntoChunks(items, effectiveChunkSize);
                 // Fallback: split as plain object pairs
                 List<String> pairs = splitJsonObjectTopLevel(t);
-                if (pairs.size() > 1) return groupItemsIntoChunks(pairs);
+                if (pairs.size() > 1) return groupItemsIntoChunks(pairs, effectiveChunkSize);
                 break;
             }
             case JSON_OBJECT: {
                 List<String> pairs = splitJsonObjectTopLevel(t);
-                if (pairs.size() > 1) return groupItemsIntoChunks(pairs);
+                if (pairs.size() > 1) return groupItemsIntoChunks(pairs, effectiveChunkSize);
                 break;
             }
             default:
                 break;
         }
-        return splitByLinesWithBoundaries(content, shape);
+        return splitByLinesWithBoundaries(content, shape, effectiveChunkSize);
     }
 
     /**
@@ -241,11 +260,12 @@ public class LargeFileChunkingService {
     /**
      * Group items into chunks not exceeding chunkSizeChars each.
      */
-    private List<String> groupItemsIntoChunks(List<String> items) {
+    private List<String> groupItemsIntoChunks(List<String> items, int effectiveChunkSize) {
         List<String> chunks = new ArrayList<>();
         StringBuilder current = new StringBuilder();
+        int safeChunkSize = Math.max(800, effectiveChunkSize);
         for (String item : items) {
-            if (current.length() > 0 && current.length() + item.length() + 2 > chunkSizeChars) {
+            if (current.length() > 0 && current.length() + item.length() + 2 > safeChunkSize) {
                 chunks.add(current.toString().trim());
                 current = new StringBuilder();
             }
@@ -260,19 +280,20 @@ public class LargeFileChunkingService {
      * Line-based chunking. For code, prefers to split at structural declaration boundaries.
      * For plain text, splits purely by size.
      */
-    private List<String> splitByLinesWithBoundaries(String content, ContentShape shape) {
+    private List<String> splitByLinesWithBoundaries(String content, ContentShape shape, int effectiveChunkSize) {
         boolean isCode = (shape == ContentShape.CODE);
         String[] lines = content.split("\n", -1);
         List<String> chunks = new ArrayList<>();
         StringBuilder current = new StringBuilder();
+        int safeChunkSize = Math.max(800, effectiveChunkSize);
 
         for (String line : lines) {
             boolean isBoundary = isCode && isCodeDeclarationBoundary(line);
-            if (isBoundary && current.length() >= chunkSizeChars / 2) {
+            if (isBoundary && current.length() >= safeChunkSize / 2) {
                 chunks.add(current.toString().trim());
                 current = new StringBuilder();
             }
-            if (current.length() + line.length() + 1 > chunkSizeChars && current.length() > 0) {
+            if (current.length() + line.length() + 1 > safeChunkSize && current.length() > 0) {
                 chunks.add(current.toString().trim());
                 current = new StringBuilder();
             }
@@ -310,9 +331,10 @@ public class LargeFileChunkingService {
      * The prompt does NOT assume any field names or schema – the model is asked
      * to describe what it actually finds in the content.
      */
-    private String summarizeChunk(int index, int total, String chunk, ContentShape shape) {
-        String safeChunk = chunk.length() > chunkSizeChars
-                ? chunk.substring(0, chunkSizeChars) : chunk;
+    private String summarizeChunk(int index, int total, String chunk, ContentShape shape, int effectiveChunkSize) {
+        int safeChunkSize = Math.max(800, effectiveChunkSize);
+        String safeChunk = chunk.length() > safeChunkSize
+                ? chunk.substring(0, safeChunkSize) : chunk;
         String chunkFingerprint = shortDigest(safeChunk);
         String chunkAnchors = extractAnchors(safeChunk, shape);
 
@@ -380,7 +402,7 @@ public class LargeFileChunkingService {
 
     // ── Aggregation ───────────────────────────────────────────────────────────
 
-    private String aggregateSummaries(List<String> summaries, String requestText, String contextType, int totalChunks) {
+    private String aggregateSummaries(List<String> summaries, String requestText, String contextType, int totalChunks, int effectiveChunkSize) {
         StringBuilder joined = new StringBuilder();
         for (int i = 0; i < summaries.size(); i++) {
             joined.append("=== CHUNK ").append(i + 1).append("/").append(totalChunks).append(" ===\n");
@@ -399,7 +421,7 @@ public class LargeFileChunkingService {
             + "Include: main data structures, key functions, critical logic, identifiers.\n"
             + "Do not merge unrelated anchors.\n"
             + "---\n"
-            + joined.substring(0, Math.min(joined.length(), chunkSizeChars * 2));
+            + joined.substring(0, Math.min(joined.length(), Math.max(2000, effectiveChunkSize * 2)));
 
         try {
             String raw = llamaCppNativeService.generateContent(aggregatePrompt);
@@ -497,5 +519,18 @@ public class LargeFileChunkingService {
         } catch (Exception ignored) {
             return "na";
         }
+    }
+
+    private int resolveEffectiveChunkSizeChars() {
+        int configuredMax = Math.max(1200, chunkSizeChars);
+        int configuredMin = Math.max(800, Math.min(configuredMax, chunkSizeMinChars));
+        int context = Math.max(1024, llamaContextWindow);
+        int reservedOutput = Math.max(128, llamaMaxTokens);
+        int safeByRatio = (int) Math.floor(context * Math.max(0.45d, Math.min(0.9d, localInputSafetyRatio)));
+        int safeByWindow = Math.max(256, context - reservedOutput - 192);
+        int tokenBudget = Math.max(256, Math.min(Math.max(512, localInputTokenHardCap), Math.min(safeByRatio, safeByWindow)));
+        int availableForChunkTokens = Math.max(180, tokenBudget - Math.max(120, localPromptOverheadTokens));
+        int dynamicChars = Math.max(configuredMin, availableForChunkTokens * 4);
+        return Math.max(configuredMin, Math.min(configuredMax, dynamicChars));
     }
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { Button, Select, Card, Space, message, Modal, Input, Form, Row, Col } from "antd";
+import { Button, Select, Card, Space, message, Modal, Input, Form, Row, Col, Tag, Tooltip, Collapse } from "antd";
 import {
 	SaveOutlined,
 	DeleteOutlined,
@@ -12,8 +12,12 @@ import {
 	PushpinFilled,
 	MenuFoldOutlined,
 	MenuUnfoldOutlined,
+	BookOutlined,
+	SyncOutlined,
+	ReloadOutlined,
 } from "@ant-design/icons";
 import CodeMirror from "#src/components/editor/CodeMirrorWithAiAssistant";
+import { getBusinessMemoryStats, scanIndexBusinessMemoryFromDir } from "#src/api/ai/assistant-engine";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
 import { python } from "@codemirror/lang-python";
@@ -745,6 +749,8 @@ async function streamAiCode(
 		language: string;
 		responseMode: string;
 		contextType: string;
+		flowType?: "menu_manager" | "code_editor";
+		taskType?: string;
 		signal?: AbortSignal;
 	},
 	callbacks: {
@@ -756,6 +762,10 @@ async function streamAiCode(
 ): Promise<void> {
 	const apiBase = ((import.meta.env.VITE_API_BASE_URL as string) || "").replace(/\/$/, "");
 	const url = `${apiBase}/api/ai-code-stream`;
+	const resolvedFlowType = params.flowType
+		|| (params.contextType === "menu_json" ? "menu_manager" : "code_editor");
+	const resolvedTaskType = params.taskType
+		|| (resolvedFlowType === "menu_manager" ? "menu_design" : "code_assistant");
 
 	let token = "";
 	let csrfToken = "";
@@ -777,7 +787,11 @@ async function streamAiCode(
 				...(token ? { "csm-token": token } : {}),
 				...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
 			},
-			body: JSON.stringify(params),
+			body: JSON.stringify({
+				...params,
+				flowType: resolvedFlowType,
+				taskType: resolvedTaskType,
+			}),
 		});
 	} catch (err) {
 		if ((err as Error)?.name === "AbortError") {
@@ -962,6 +976,45 @@ export default function CodeEditor() {
 		() => String(codeContent || "") !== String(savedCodeSnapshot || ""),
 		[codeContent, savedCodeSnapshot],
 	);
+
+	// ─── Business Memory panel ────────────────────────────────────────────────
+	const [bmStats, setBmStats] = useState<Record<string, unknown> | null>(null);
+	const [bmIndexing, setBmIndexing] = useState(false);
+	const [bmStatsLoading, setBmStatsLoading] = useState(false);
+
+	const refreshBmStats = useCallback(async () => {
+		if (!appId) return;
+		setBmStatsLoading(true);
+		try {
+			const stats = await getBusinessMemoryStats(appId);
+			setBmStats(stats);
+		} catch {
+			// silent
+		} finally {
+			setBmStatsLoading(false);
+		}
+	}, [appId]);
+
+	useEffect(() => { void refreshBmStats(); }, [refreshBmStats]);
+
+	const handleScanIndex = useCallback(async () => {
+		if (!appId) return;
+		setBmIndexing(true);
+		try {
+			const res = await scanIndexBusinessMemoryFromDir(appId);
+			if (!res.success) {
+				message.error(res.message || "Scan index thất bại");
+			} else {
+				const count = res.indexed?.length ?? 0;
+				message.success(res.message || `Đã index ${count} file(s) từ server`);
+				void refreshBmStats();
+			}
+		} catch (err: any) {
+			message.error(err?.message || "Không thể scan index");
+		} finally {
+			setBmIndexing(false);
+		}
+	}, [appId, refreshBmStats]);
 
 	const devUiText = (vi: string, en: string, zh: string) => {
 		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
@@ -2397,6 +2450,49 @@ export default function CodeEditor() {
 			</Card>
 
 			<Card className={styles.surfaceCard} style={{ marginTop: 16 }}>
+				<Collapse
+					ghost
+					size="small"
+					style={{ marginBottom: 8 }}
+					items={[{
+						key: "bm",
+						label: (
+							<span>
+								<BookOutlined style={{ marginRight: 6, color: "#52c41a" }} />
+								{devUiText("Bộ nhớ nghiệp vụ (Business Memory)", "Business Memory", "业务记忆")}
+								{bmStats != null && (
+									<Tag color="green" style={{ marginLeft: 8, fontSize: 11 }}>
+										{String(bmStats?.totalChunks ?? 0)} chunks
+									</Tag>
+								)}
+							</span>
+						),
+						children: (
+							<div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+								<Button icon={<SyncOutlined />} loading={bmIndexing} size="small" onClick={() => void handleScanIndex()}>
+									{devUiText("Quét & Index từ server", "Scan & Index from server", "从服务器扫描并索引")}
+								</Button>
+								<Tooltip title={devUiText("Làm mới thống kê", "Refresh stats", "刷新统计")}>
+									<Button icon={<ReloadOutlined />} size="small" loading={bmStatsLoading} onClick={() => void refreshBmStats()} />
+								</Tooltip>
+								{bmStats != null && (
+									<>
+										<Tag>{devUiText("Nguồn", "Sources", "来源")}: {String(bmStats?.totalSources ?? 0)}</Tag>
+										<Tag>{devUiText("Chunks", "Chunks", "分块")}: {String(bmStats?.totalChunks ?? 0)}</Tag>
+										<Tag>{devUiText("App", "App", "应用")}: {String(bmStats?.appId ?? appId)}</Tag>
+									</>
+								)}
+								<span style={{ fontSize: 11, color: "#888" }}>
+									{devUiText(
+										"Upload tài liệu nghiệp vụ để AI Trợ lý tự động tra cứu khi trả lời.",
+										"Upload business docs so AI Assistant auto-searches them when answering.",
+										"上传业务文档，AI 助手回答时将自动检索。",
+									)}
+								</span>
+							</div>
+						),
+					}]}
+				/>
 				<div className={styles.aiShell}>
 					<div className={`${styles.aiBody} ${styles.aiBodyLeftHidden}`}>
 					<div className={styles.aiRightColumn}>

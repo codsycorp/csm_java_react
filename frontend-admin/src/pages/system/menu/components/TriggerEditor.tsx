@@ -155,6 +155,8 @@ export function TriggerEditor({ value, onChange }: TriggerEditorProps) {
         body: JSON.stringify({
           appId: "trigger_editor",
           message: `Hoàn thành và cải thiện đoạn mã sau bằng ${language} và chỉ trả về code, không giải thích:\n\`\`\`${language.toLowerCase()}\n${code}\n\`\`\``,
+          flowType: "code_editor",
+          taskType: "code_assistant",
           currentCode: code,
           language: codeMode,
           contextType: "code",

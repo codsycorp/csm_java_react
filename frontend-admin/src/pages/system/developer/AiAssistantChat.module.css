@@ -828,11 +828,22 @@
 .buttonGroup {
 	display: flex;
 	align-items: center;
+	justify-content: flex-end;
+	flex-wrap: wrap;
 	gap: 12px;
+	row-gap: 8px;
+	width: 100%;
+	min-width: 0;
 }
 
 .buttonGroup :global(.ant-btn) {
-	min-width: 80px;
+	min-width: 72px;
+	max-width: 100%;
+}
+
+.buttonGroup :global(.ant-btn.ant-btn-icon-only),
+.buttonGroup :global(.ant-btn.ant-btn-text) {
+	min-width: 34px;
 }
 
 .statusText {
@@ -898,6 +909,15 @@
 	.codeContent {
 		font-size: 11px;
 		padding: 8px;
+	}
+
+	.buttonGroup {
+		justify-content: flex-start;
+		gap: 8px;
+	}
+
+	.buttonGroup :global(.ant-btn) {
+		min-width: 64px;
 	}
 }
 

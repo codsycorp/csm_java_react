@@ -140,6 +140,11 @@ public class LlamaCppNativeService implements AIProvider {
             return createErrorJson("Local llama provider chua san sang (kiem tra model-path va config)", "LOCAL_PROVIDER_UNAVAILABLE");
         }
 
+        // Prepend system prompt if configured (system prompt API removed in llama v4.x)
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            safePrompt = systemPrompt.trim() + "\n" + safePrompt;
+        }
+
         int promptCap = effectiveMaxPromptChars();
         if (safePrompt.length() > promptCap) {
             String digest = shortDigest(safePrompt);
@@ -222,17 +227,10 @@ public class LlamaCppNativeService implements AIProvider {
             }
 
             ModelParameters parameters = new ModelParameters()
-                    .setModelFilePath(path.toAbsolutePath().toString())
-                    .setNCtx(effectiveContextWindow())
-                    .setNThreads(Math.max(1, threads))
-                    .setNThreadsBatch(Math.max(1, threads))
-                    .setUseMmap(true)
-                    .setUseMlock(false)
-                    .setContinuousBatching(false);
-
-            if (systemPrompt != null && !systemPrompt.isBlank()) {
-                parameters.setSystemPrompt(systemPrompt.trim());
-            }
+                    .setModel(path.toAbsolutePath().toString())
+                    .setCtxSize(effectiveContextWindow())
+                    .setThreads(Math.max(1, threads))
+                    .setThreadsBatch(Math.max(1, threads));
 
             log.info("Loading local GGUF model via llama.cpp JNI: {}", path.toAbsolutePath());
             model = new LlamaModel(parameters);

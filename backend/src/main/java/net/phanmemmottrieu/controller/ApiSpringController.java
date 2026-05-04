@@ -79,6 +79,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -129,6 +130,10 @@ public class ApiSpringController {
     private static final Pattern LARGE_NAMED_BASE64_VALUE_PATTERN = Pattern.compile(
         "(?is)(\\\"(?:report_name|base64|base64Data|dataUrl|file_data|content_base64|docx_base64|payload_base64)\\\"\\s*:\\s*\\\")([A-Za-z0-9+/=\\r\\n]{"
             + DEFAULT_PROMPT_BASE64_STRIP_MIN_CHARS + ",})(\\\")");
+    private static final Pattern SENSITIVE_JSON_KEY_VALUE_PATTERN = Pattern.compile(
+        "(?is)(\\\"(?:pass|password|refresh_token|access_token|app_token|token|authorization|cookie|set-cookie|x-refresh-token|csm-token)\\\"\\s*:\\s*\\\")(?:[^\\\"\\\\]|\\\\.){0,4096}(\\\")");
+    private static final Pattern LONG_SECRET_LIKE_VALUE_PATTERN = Pattern.compile(
+        "(?i)\\b(?:eyJ[A-Za-z0-9_\\-]{20,}\\.[A-Za-z0-9_\\-]{20,}\\.[A-Za-z0-9_\\-]{10,}|[A-Fa-f0-9]{64,}|[A-Za-z0-9_\\-]{80,})\\b");
     private enum AiRouteMode {
         LOCAL_ONLY,
         HYBRID,
@@ -472,6 +477,30 @@ public class ApiSpringController {
     @Value("${ai.local.pre-analysis.max-cloud-context-chars:2400}")
     private int aiLocalPreAnalysisMaxCloudContextChars;
 
+    @Value("${ai.local.pre-analysis.request-max-chars:2200}")
+    private int aiLocalPreAnalysisRequestMaxChars;
+
+    @Value("${ai.local.pre-analysis.sanitize-sensitive:true}")
+    private boolean aiLocalPreAnalysisSanitizeSensitive;
+
+    @Value("${ai.local.pre-analysis.llama-input-safety-ratio:0.68}")
+    private double aiLocalPreAnalysisLlamaInputSafetyRatio;
+
+    @Value("${ai.local.pre-analysis.llama-input-token-hard-cap:1800}")
+    private int aiLocalPreAnalysisLlamaInputTokenHardCap;
+
+    @Value("${ai.local.llama.context-window:2048}")
+    private int aiLocalLlamaContextWindow;
+
+    @Value("${ai.local.llama.max-tokens:384}")
+    private int aiLocalLlamaMaxTokens;
+
+    @Value("${ai.local.chunking.chunk-size-chars:7000}")
+    private int aiLocalChunkingChunkSizeChars;
+
+    @Value("${ai.local.chunking.max-chunks:20}")
+    private int aiLocalChunkingMaxChunks;
+
     @Value("${ai.router.score-v2.enabled:true}")
     private boolean aiRouterScoreV2Enabled;
 
@@ -684,7 +713,39 @@ public class ApiSpringController {
                 String currentCodeRaw = truncate(strKeep(body.get("currentCode"), ""), Math.max(MAX_CODE_CHARS, aiCodeStreamMaxBaseContentChars));
                 String language = str(body.get("language"), "javascript");
                 String contextType = str(body.get("contextType"), "code");
-                String responseMode = str(body.get("responseMode"), "analyze");
+                String rawFlowType = str(body.get("flowType"), "");
+                String rawTaskType = str(body.get("taskType"), "");
+                if (rawFlowType.isBlank()) {
+                    sendEvent(emitter, jsonOf(
+                        "stage", "flow_guard",
+                        "status", "blocked",
+                        "requestId", requestId,
+                        "message", "Thieu flowType bat buoc cho /ai-code-stream",
+                        "reason_code", "missing_flow_type"));
+                    sendErrorEvent(emitter, "Thieu flowType bat buoc cho /ai-code-stream");
+                    return;
+                }
+                String normalizedFlowType = normalizeAiAssistantFlowType(rawFlowType, contextType, rawTaskType);
+                String expectedContextType = "menu_manager".equals(normalizedFlowType) ? "menu_json" : "code";
+                if (!expectedContextType.equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim())) {
+                    sendEvent(emitter, jsonOf(
+                        "stage", "flow_guard",
+                        "status", "blocked",
+                        "requestId", requestId,
+                        "flowType", normalizedFlowType,
+                        "contextType", contextType,
+                        "expectedContextType", expectedContextType,
+                        "message", "flowType/contextType khong khop, da chan de tranh nham luong",
+                        "reason_code", "flow_context_mismatch"));
+                    sendErrorEvent(emitter, "flowType/contextType khong khop, da chan request");
+                    return;
+                }
+                contextType = expectedContextType;
+                String effectiveTaskType = "menu_manager".equals(normalizedFlowType)
+                    ? (rawTaskType.isBlank() ? "menu_design" : rawTaskType)
+                    : (rawTaskType.isBlank() ? "code_assistant" : rawTaskType);
+                String rawResponseMode = str(body.get("responseMode"), "");
+                String responseMode = normalizeAiAssistantResponseMode(rawResponseMode, message);
                 String modelOverride = str(body.get("model"), "");
                 String pName = str(body.get("pName"), "");
                 Integer pType = parseNullableInteger(body.get("pType"));
@@ -878,7 +939,13 @@ public class ApiSpringController {
                     message,
                     prompt,
                     contextType,
-                    responseMode);
+                    responseMode,
+                    progressJson -> {
+                        if (progressJson == null || progressJson.isBlank()) {
+                            return;
+                        }
+                        sendEvent(emitter, progressJson);
+                    });
                 sendEvent(emitter, jsonOf(
                     "stage", "local_pre_analysis",
                     "status", !codeStreamPreAnalysis.attempted()
@@ -920,6 +987,8 @@ public class ApiSpringController {
                         "stage", "prompt_budget",
                         "status", "truncated",
                         "requestId", requestId,
+                        "flowType", normalizedFlowType,
+                        "taskType", effectiveTaskType,
                         "contextType", contextType,
                         "message", "Prompt vượt ngưỡng, backend đã cắt gọn trước khi gửi model",
                         "promptOriginalChars", promptOriginalChars,
@@ -955,8 +1024,8 @@ public class ApiSpringController {
                 boolean hasImages = !imageParts.isEmpty();
 
                 logger.info(
-                    "ApiSpringController: ai-code-stream start requestId={} appId={} model={} language={} promptChars={} promptTokens~{} messageChars={} promptCache={} images={} focusLine={} focusStart={} focusEnd={} focusChars={} localPreAnalysisAttempted={} localPreAnalysisHandled={} localPreAnalysisReasonCode={} localCloudContextChars={}",
-                    requestId, appId, effectiveModel, language, prompt.length(), estimateTokens(prompt), message.length(), usePromptCache,
+                    "ApiSpringController: ai-code-stream start requestId={} appId={} flowType={} taskType={} contextType={} model={} language={} promptChars={} promptTokens~{} messageChars={} promptCache={} images={} focusLine={} focusStart={} focusEnd={} focusChars={} localPreAnalysisAttempted={} localPreAnalysisHandled={} localPreAnalysisReasonCode={} localCloudContextChars={}",
+                    requestId, appId, normalizedFlowType, effectiveTaskType, contextType, effectiveModel, language, prompt.length(), estimateTokens(prompt), message.length(), usePromptCache,
                         imageParts.size(), cursorLine,
                         focusWindow == null ? -1 : focusWindow.startLine(),
                         focusWindow == null ? -1 : focusWindow.endLine(),
@@ -986,6 +1055,8 @@ public class ApiSpringController {
                         "stage", "preparing",
                     "requestId", requestId,
                         "message", "Đang kết nối Gemini...",
+                        "messageKey", "copilot.progress.message.connecting_model",
+                        "messageArgs", jsonOf("model", effectiveModel),
                         "model", effectiveModel,
                         "modelDecisionStep", "primary",
                     "modelDecisionReason", routeReasonCode,
@@ -1047,8 +1118,9 @@ public class ApiSpringController {
                         "modelDecisionReason", localPrimaryReason,
                             "decision_step", "primary",
                         "reason_code", localPrimaryReason,
-                            "message", "Chi phi toi uu: uu tien local provider truoc"));
-                    String providerRaw = generateProviderContentWithMenuMasterPrompt(prompt, contextType);
+                            "message", "Chi phi toi uu: uu tien local provider truoc",
+                            "messageKey", "copilot.progress.message.local_provider_primary"));
+                    String providerRaw = runLocalProviderWithProgress(emitter, requestId, prompt, contextType);
                     String providerText = extractAiResultText(providerRaw);
                     if ((providerText == null || providerText.isBlank()) && providerRaw != null) {
                         providerText = providerRaw.trim();
@@ -1059,6 +1131,13 @@ public class ApiSpringController {
                                 responseMode,
                                 contextType);
                         if (localAccepted) {
+                            sendEvent(emitter, jsonOf(
+                                "stage", "streaming_started",
+                                "requestId", requestId,
+                                "model", "local_provider",
+                                "ttftMs", 0,
+                                "estimatedTotalChars", providerText.length(),
+                                "percent", 12));
                             sendEvent(emitter, jsonOf(
                                     "stage", "streaming",
                                     "requestId", requestId,
@@ -1079,7 +1158,8 @@ public class ApiSpringController {
                                     "modelDecisionReason", "local_quality_guard_failed",
                                     "decision_step", "fallback",
                                     "reason_code", "local_quality_guard_failed",
-                                    "message", "Local provider output khong dat quality gate, fallback sang streaming model"));
+                                    "message", "Local provider output khong dat quality gate, fallback sang streaming model",
+                                    "messageKey", "copilot.progress.message.local_quality_fallback"));
                         }
                     } else {
                         sendEvent(emitter, jsonOf(
@@ -1091,7 +1171,8 @@ public class ApiSpringController {
                                 "modelDecisionReason", "local_provider_failed",
                                 "decision_step", "fallback",
                                 "reason_code", "local_provider_failed",
-                                "message", "Local provider khong tra du lieu hop le, fallback sang streaming model"));
+                                "message", "Local provider khong tra du lieu hop le, fallback sang streaming model",
+                                "messageKey", "copilot.progress.message.local_provider_failed"));
                     }
                 }
 
@@ -1135,7 +1216,8 @@ public class ApiSpringController {
                             "modelDecisionReason", "provider_error",
                             "decision_step", "fallback",
                             "reason_code", "provider_error",
-                            "message", "Simple model lỗi, tự động chuyển sang model mặc định"));
+                            "message", "Simple model lỗi, tự động chuyển sang model mặc định",
+                            "messageKey", "copilot.progress.message.fallback_to_default"));
 
                     rawResponse = streamWithAutoContinue(
                             emitter,
@@ -1163,7 +1245,8 @@ public class ApiSpringController {
                             "modelDecisionReason", "provider_error",
                             "decision_step", "fallback",
                             "reason_code", "provider_error",
-                            "message", "Simple/default stream đều thất bại, chuyển sang provider fallback"));
+                            "message", "Simple/default stream đều thất bại, chuyển sang provider fallback",
+                            "messageKey", "copilot.progress.message.fallback_to_provider"));
 
                         String providerRaw = generateProviderContentWithMenuMasterPrompt(prompt, contextType);
                         String providerText = extractAiResultText(providerRaw);
@@ -2298,6 +2381,11 @@ public class ApiSpringController {
                 sb.append("## BUSINESS_SYSTEM_PROMPT_MD (adaptive rules digest)\n");
                 sb.append(businessInstructions).append("\n\n");
             }
+            String menuKnowledge = aiAssistantGatewayService.buildAiAssistantMenuKnowledgeBlock(appId, contextType, "menu_design");
+            if (!menuKnowledge.isBlank()) {
+                sb.append("## AUTO_LOADED_MENU_SYSTEM_KNOWLEDGE\n");
+                sb.append(menuKnowledge).append("\n\n");
+            }
         }
 
         String editorMetadataBlock = buildEditorMetadataContextBlock(
@@ -2764,6 +2852,84 @@ public class ApiSpringController {
         logger.info(
                 "ApiSpringController: ai-code-stream waiting requestId={} model={} elapsedSecs={} estimatedWaitSecs={} waitState={}",
                 requestId, model, elapsedSecs, estimatedWaitSecs, waitState);
+    }
+
+    private int estimateLocalProviderWaitSecs(String prompt) {
+        int promptChars = String.valueOf(prompt == null ? "" : prompt).length();
+        int byInput = 2 + (promptChars / 2500);
+        return Math.max(4, Math.min(240, byInput));
+    }
+
+    private String runLocalProviderWithProgress(
+            SseEmitter emitter,
+            String requestId,
+            String prompt,
+            String contextType) throws Exception {
+        int estimatedWaitSecs = estimateLocalProviderWaitSecs(prompt);
+        long startedAt = System.currentTimeMillis();
+        Future<String> future = aiCodeStreamExecutor.submit(() -> generateProviderContentWithMenuMasterPrompt(prompt, contextType));
+
+        sendEvent(emitter, jsonOf(
+                "stage", "waiting_gemini",
+                "requestId", requestId,
+                "message", "AI local dang nap model va khoi tao context...",
+                "messageKey", "copilot.progress.message.local_loading",
+                "messageArgs", jsonOf(
+                        "elapsedSecs", 0,
+                        "estimatedWaitSecs", estimatedWaitSecs),
+                "waitState", "local_inference",
+                "localPhase", "loading",
+                "percent", 4,
+                "elapsedMs", 0,
+                "estimatedWaitSecs", estimatedWaitSecs,
+                "remainingEstimateSecs", estimatedWaitSecs));
+
+        while (true) {
+            try {
+                return future.get(1, TimeUnit.SECONDS);
+            } catch (TimeoutException timeout) {
+                long elapsedMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+                long elapsedSecs = Math.max(1L, elapsedMs / 1000L);
+                long remainingSecs = Math.max(0L, estimatedWaitSecs - elapsedSecs);
+                String localPhase;
+                String localMessage;
+                String localMessageKey;
+                if (elapsedSecs <= 2) {
+                    localPhase = "loading";
+                    localMessage = String.format("AI local dang nap model... %ds/%ds", elapsedSecs, estimatedWaitSecs);
+                    localMessageKey = "copilot.progress.message.local_loading";
+                } else if (remainingSecs > Math.max(2L, estimatedWaitSecs / 6L)) {
+                    localPhase = "infer";
+                    localMessage = String.format("AI local dang suy luan... %ds/%ds", elapsedSecs, estimatedWaitSecs);
+                    localMessageKey = "copilot.progress.message.local_infer";
+                } else {
+                    localPhase = "postprocess";
+                    localMessage = String.format("AI local dang hau xu ly ket qua... %ds/%ds", elapsedSecs, estimatedWaitSecs);
+                    localMessageKey = "copilot.progress.message.local_postprocess";
+                }
+                int percent = (int) Math.max(5L, Math.min(95L,
+                        Math.round((Math.min(1.0d, elapsedSecs / (double) Math.max(1, estimatedWaitSecs))) * 95.0d)));
+
+                sendEvent(emitter, jsonOf(
+                        "stage", "waiting_gemini",
+                        "requestId", requestId,
+                        "message", localMessage,
+                        "messageKey", localMessageKey,
+                        "messageArgs", jsonOf(
+                            "elapsedSecs", elapsedSecs,
+                            "estimatedWaitSecs", estimatedWaitSecs,
+                            "remainingSecs", remainingSecs),
+                        "waitState", "local_inference",
+                        "localPhase", localPhase,
+                        "percent", percent,
+                        "elapsedMs", elapsedMs,
+                        "estimatedWaitSecs", estimatedWaitSecs,
+                        "remainingEstimateSecs", remainingSecs));
+            } catch (Exception ex) {
+                future.cancel(true);
+                throw ex;
+            }
+        }
     }
 
     private String buildAutoContinuePrompt(String originalPrompt, String previousRawResponse, String language,
@@ -3645,10 +3811,28 @@ public class ApiSpringController {
             String prompt,
             String contextType,
             String responseMode) {
+        return runMandatoryLocalPreAnalysis(flow, requestText, prompt, contextType, responseMode, null);
+    }
+
+    private LocalPreAnalysisDecision runMandatoryLocalPreAnalysis(
+            String flow,
+            String requestText,
+            String prompt,
+            String contextType,
+            String responseMode,
+            Consumer<String> progressCallback) {
         if (!aiLocalPreAnalysisEnabled) {
             return new LocalPreAnalysisDecision(false, false, "", "", "pre_analysis_disabled");
         }
         if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
+            emitLocalPreAnalysisProgress(progressCallback, jsonOf(
+                "stage", "waiting_gemini",
+                "waitState", "local_pre_analysis",
+                "localPhase", "fallback",
+                "messageKey", "copilot.progress.message.local_preanalysis_fallback_cloud",
+                "messageArgs", jsonOf("reason", "local_unavailable"),
+                "percent", 35,
+                "remainingEstimateSecs", 0));
             String heuristic = buildHeuristicCloudContext(requestText, prompt, contextType, responseMode);
             return new LocalPreAnalysisDecision(true, false, "", heuristic, "local_provider_unavailable_heuristic");
         }
@@ -3661,16 +3845,144 @@ public class ApiSpringController {
             return new LocalPreAnalysisDecision(true, false, "", "", "empty_prompt");
         }
 
+        sourcePrompt = sanitizeForLocalPreAnalysis(sourcePrompt, "local-preanalysis-source");
+        String safeRequestText = truncateMiddle(
+            sanitizeForLocalPreAnalysis(String.valueOf(requestText == null ? "" : requestText), "local-preanalysis-request"),
+            Math.max(300, aiLocalPreAnalysisRequestMaxChars));
+
         // For oversized inputs: run chunked local summarization pipeline instead of plain truncation.
         int effectivePreAnalysisMax = Math.max(2000, aiLocalPreAnalysisMaxPromptChars);
         if (sourcePrompt.length() > effectivePreAnalysisMax && largeFileChunkingService != null) {
+            int estimatedChunkCount = estimateLocalChunkCount(sourcePrompt.length());
+            int estimatedChunkingSecs = estimateLocalChunkingWaitSecs(sourcePrompt.length(), estimatedChunkCount);
+            emitLocalPreAnalysisProgress(progressCallback, jsonOf(
+                "stage", "waiting_gemini",
+                "waitState", "local_pre_analysis",
+                "localPhase", "chunking_map",
+                "messageKey", "copilot.progress.message.local_chunking_start",
+                "messageArgs", jsonOf(
+                    "inputChars", sourcePrompt.length(),
+                    "chunkCount", estimatedChunkCount,
+                    "estimatedWaitSecs", estimatedChunkingSecs),
+                "percent", 8,
+                "estimatedWaitSecs", estimatedChunkingSecs,
+                "remainingEstimateSecs", estimatedChunkingSecs));
+            long chunkingStartedAt = System.currentTimeMillis();
             logger.info("[AI_LOCAL_PRE_ANALYSIS] Large input ({} chars) – invoking chunking pipeline", sourcePrompt.length());
             sourcePrompt = largeFileChunkingService.compressLargePrompt(sourcePrompt, requestText, contextType);
             logger.info("[AI_LOCAL_PRE_ANALYSIS] After chunking compression: {} chars", sourcePrompt.length());
+            long chunkingElapsedSecs = Math.max(1L, (System.currentTimeMillis() - chunkingStartedAt) / 1000L);
+            emitLocalPreAnalysisProgress(progressCallback, jsonOf(
+                "stage", "waiting_gemini",
+                "waitState", "local_pre_analysis",
+                "localPhase", "chunking_reduce",
+                "messageKey", "copilot.progress.message.local_chunking_done",
+                "messageArgs", jsonOf(
+                    "outputChars", sourcePrompt.length(),
+                    "elapsedSecs", chunkingElapsedSecs,
+                    "chunkCount", estimatedChunkCount),
+                "percent", 32,
+                "estimatedWaitSecs", estimatedChunkingSecs,
+                "remainingEstimateSecs", 0));
         } else {
             sourcePrompt = truncateMiddle(sourcePrompt, effectivePreAnalysisMax);
         }
-        String localPrompt = String.join("\n",
+
+        int localInputTokenBudget = resolveLocalPreAnalysisInputTokenBudget();
+        int sourceBeforeBudgetTrim = sourcePrompt.length();
+        sourcePrompt = fitSourcePromptToLocalTokenBudget(
+            flow,
+            contextType,
+            responseMode,
+            safeRequestText,
+            sourcePrompt,
+            localInputTokenBudget);
+        if (sourcePrompt.length() < sourceBeforeBudgetTrim) {
+            emitLocalPreAnalysisProgress(progressCallback, jsonOf(
+                "stage", "waiting_gemini",
+                "waitState", "local_pre_analysis",
+                "localPhase", "budget_trim",
+                "messageKey", "copilot.progress.message.local_preanalysis_budget_trim",
+                "messageArgs", jsonOf(
+                    "beforeChars", sourceBeforeBudgetTrim,
+                    "afterChars", sourcePrompt.length(),
+                    "tokenBudget", localInputTokenBudget),
+                "percent", 38,
+                "remainingEstimateSecs", Math.max(1, estimateLocalProviderWaitSecs(sourcePrompt) / 2)));
+        }
+        String localPrompt = buildLocalPreAnalysisPrompt(flow, contextType, responseMode, safeRequestText, sourcePrompt);
+
+        int inferEstimatedWaitSecs = estimateLocalProviderWaitSecs(localPrompt);
+        emitLocalPreAnalysisProgress(progressCallback, jsonOf(
+            "stage", "waiting_gemini",
+            "waitState", "local_pre_analysis",
+            "localPhase", "infer",
+            "messageKey", "copilot.progress.message.local_preanalysis_infer",
+            "messageArgs", jsonOf("estimatedWaitSecs", inferEstimatedWaitSecs),
+            "percent", 45,
+            "estimatedWaitSecs", inferEstimatedWaitSecs,
+            "remainingEstimateSecs", inferEstimatedWaitSecs));
+
+        String localRaw = llamaCppNativeService.generateContent(localPrompt);
+        String localText = extractAiResultText(localRaw);
+        if (localText.isBlank()) {
+            emitLocalPreAnalysisProgress(progressCallback, jsonOf(
+                "stage", "waiting_gemini",
+                "waitState", "local_pre_analysis",
+                "localPhase", "fallback",
+                "messageKey", "copilot.progress.message.local_preanalysis_fallback_cloud",
+                "messageArgs", jsonOf("reason", "empty_local_result"),
+                "percent", 55,
+                "remainingEstimateSecs", 0));
+            String heuristic = buildHeuristicCloudContext(requestText, prompt, contextType, responseMode);
+            return new LocalPreAnalysisDecision(true, false, "", heuristic, "local_pre_analysis_empty_heuristic");
+        }
+
+        return parseLocalPreAnalysisDecision(localText, flow, contextType, responseMode);
+    }
+
+    private void emitLocalPreAnalysisProgress(Consumer<String> progressCallback, String payloadJson) {
+        if (progressCallback == null || payloadJson == null || payloadJson.isBlank()) {
+            return;
+        }
+        try {
+            progressCallback.accept(payloadJson);
+        } catch (Exception ignored) {
+            // Progress emission must never break the main AI path.
+        }
+    }
+
+    private int estimateLocalChunkCount(int chars) {
+        int safeChars = Math.max(1, chars);
+        int chunkSize = Math.max(1000, aiLocalChunkingChunkSizeChars);
+        int bySize = (int) Math.ceil(safeChars / (double) chunkSize);
+        return Math.max(1, Math.min(Math.max(1, aiLocalChunkingMaxChunks), bySize));
+    }
+
+    private int estimateLocalChunkingWaitSecs(int chars, int chunkCount) {
+        int safeChars = Math.max(1, chars);
+        int safeChunkCount = Math.max(1, chunkCount);
+        int byChunks = 2 + (safeChunkCount * 2);
+        int byChars = 2 + (safeChars / 12000);
+        return Math.max(4, Math.min(240, Math.max(byChunks, byChars)));
+    }
+
+    private int resolveLocalPreAnalysisInputTokenBudget() {
+        int contextWindow = Math.max(1024, aiLocalLlamaContextWindow);
+        int reservedForOutput = Math.max(128, aiLocalLlamaMaxTokens);
+        int hardCap = Math.max(512, aiLocalPreAnalysisLlamaInputTokenHardCap);
+        int byRatio = (int) Math.floor(contextWindow * Math.max(0.45d, Math.min(0.9d, aiLocalPreAnalysisLlamaInputSafetyRatio)));
+        int byWindow = Math.max(256, contextWindow - reservedForOutput - 192);
+        return Math.max(256, Math.min(hardCap, Math.min(byRatio, byWindow)));
+    }
+
+    private String buildLocalPreAnalysisPrompt(
+            String flow,
+            String contextType,
+            String responseMode,
+            String requestText,
+            String sourcePrompt) {
+        return String.join("\n",
             "You are local pre-analysis for cost optimization.",
             "Output strict JSON only.",
             "Schema:",
@@ -3690,17 +4002,48 @@ public class ApiSpringController {
             String.valueOf(requestText == null ? "" : requestText),
             "\"\"\"",
             "prompt=\"\"\"",
-            sourcePrompt,
+            String.valueOf(sourcePrompt == null ? "" : sourcePrompt),
             "\"\"\"");
+    }
 
-        String localRaw = llamaCppNativeService.generateContent(localPrompt);
-        String localText = extractAiResultText(localRaw);
-        if (localText.isBlank()) {
-            String heuristic = buildHeuristicCloudContext(requestText, prompt, contextType, responseMode);
-            return new LocalPreAnalysisDecision(true, false, "", heuristic, "local_pre_analysis_empty_heuristic");
+    private String fitSourcePromptToLocalTokenBudget(
+            String flow,
+            String contextType,
+            String responseMode,
+            String requestText,
+            String sourcePrompt,
+            int tokenBudget) {
+        String current = String.valueOf(sourcePrompt == null ? "" : sourcePrompt);
+        int safeBudget = Math.max(256, tokenBudget);
+        for (int i = 0; i < 6; i++) {
+            String candidatePrompt = buildLocalPreAnalysisPrompt(flow, contextType, responseMode, requestText, current);
+            int tokens = estimateTokens(candidatePrompt);
+            if (tokens <= safeBudget) {
+                return current;
+            }
+            int overBy = tokens - safeBudget;
+            int shrinkChars = Math.max(800, overBy * 5);
+            int nextMax = Math.max(1200, current.length() - shrinkChars);
+            if (nextMax >= current.length()) {
+                break;
+            }
+            current = truncateMiddle(current, nextMax);
+        }
+        return current;
+    }
+
+    private String sanitizeForLocalPreAnalysis(String raw, String sourceTag) {
+        String text = stripLargeBase64ForPrompt(raw, sourceTag);
+        if (!aiLocalPreAnalysisSanitizeSensitive || text.isBlank()) {
+            return text;
         }
 
-        return parseLocalPreAnalysisDecision(localText, flow, contextType, responseMode);
+        Matcher sensitiveKeyMatcher = SENSITIVE_JSON_KEY_VALUE_PATTERN.matcher(text);
+        text = sensitiveKeyMatcher.replaceAll("$1[REDACTED]$2");
+
+        Matcher longSecretMatcher = LONG_SECRET_LIKE_VALUE_PATTERN.matcher(text);
+        text = longSecretMatcher.replaceAll("[SECRET_OMITTED]");
+        return text;
     }
 
     private LocalPreAnalysisDecision parseLocalPreAnalysisDecision(
@@ -5471,7 +5814,7 @@ public class ApiSpringController {
             Integer pType = parseNullableInteger(params.get("pType"));
             Map<String, Object> editorMetadata = normalizeEditorMetadata(params.get("editorMetadata"));
             String rawResponseMode = String.valueOf(params.getOrDefault("responseMode", "")).trim();
-            String detectedModeFromMessage = detectAiAssistantResponseModeFromMessage(message);
+            String detectedModeFromMessage = inferAiAssistantResponseModeFromText(message);
             String normalizedFlowType = normalizeAiAssistantFlowType(flowType, contextType, taskType);
             String effectiveContextType = "menu_manager".equals(normalizedFlowType) ? "menu_json" : "code";
             String effectiveTaskType = "menu_manager".equals(normalizedFlowType)
@@ -9242,11 +9585,56 @@ public class ApiSpringController {
         if ("analyze".equals(mode)) {
             return "analyze";
         }
-        String detected = detectAiAssistantResponseModeFromMessage(message);
+        String detected = inferAiAssistantResponseModeFromText(message);
         if ("edit".equals(detected) || "analyze".equals(detected)) {
             return detected;
         }
         return "analyze";
+    }
+
+    private String inferAiAssistantResponseModeFromText(String message) {
+        String directiveMode = detectAiAssistantResponseModeFromMessage(message);
+        if ("edit".equals(directiveMode) || "analyze".equals(directiveMode)) {
+            return directiveMode;
+        }
+
+        String raw = String.valueOf(message == null ? "" : message).trim();
+        if (raw.isBlank()) {
+            return "";
+        }
+
+        String normalized = Normalizer.normalize(raw.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
+            .replaceAll("\\p{M}", "");
+
+        boolean hasAnalyzeIntent = normalized.contains("phan tich")
+            || normalized.contains("giai thich")
+            || normalized.contains("explain")
+            || normalized.contains("analyze")
+            || normalized.contains("analysis")
+            || normalized.contains("logic")
+            || normalized.contains("dang tinh toan gi")
+            || normalized.contains("luong thu 2")
+            || normalized.contains("doc hieu code")
+            || normalized.contains("review code")
+            || normalized.contains("hien tai backend");
+
+        boolean hasEditIntent = normalized.contains("sua")
+            || normalized.contains("chinh")
+            || normalized.contains("cap nhat")
+            || normalized.contains("refactor")
+            || normalized.contains("patch")
+            || normalized.contains("thay doi")
+            || normalized.contains("them vao")
+            || normalized.contains("xoa")
+            || normalized.contains("fix");
+
+        if (hasAnalyzeIntent && !hasEditIntent) {
+            return "analyze";
+        }
+        if (hasEditIntent && !hasAnalyzeIntent) {
+            return "edit";
+        }
+        return "";
     }
 
     private String detectAiAssistantResponseModeFromMessage(String message) {
