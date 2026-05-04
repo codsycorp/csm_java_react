@@ -56,6 +56,18 @@ public class LargeFileChunkingService {
     @Value("${ai.local.chunking.local-input-token-hard-cap:1800}")
     private int localInputTokenHardCap;
 
+    @Value("${ai.local.chunking.local-chars-per-token-estimate:3}")
+    private int localCharsPerTokenEstimate;
+
+    @Value("${ai.local.chunking.capacity-retry-max-attempts:2}")
+    private int capacityRetryMaxAttempts;
+
+    @Value("${ai.local.chunking.capacity-retry-shrink-ratio:0.65}")
+    private double capacityRetryShrinkRatio;
+
+    @Value("${ai.local.chunking.capacity-retry-min-chars:900}")
+    private int capacityRetryMinChars;
+
     @Value("${ai.local.llama.context-window:2048}")
     private int llamaContextWindow;
 
@@ -67,6 +79,16 @@ public class LargeFileChunkingService {
 
     @Autowired(required = false)
     private LlamaCppNativeService llamaCppNativeService;
+
+    private static final class ChunkSummaryResult {
+        private final String summary;
+        private final boolean disableLocalForRemaining;
+
+        private ChunkSummaryResult(String summary, boolean disableLocalForRemaining) {
+            this.summary = summary;
+            this.disableLocalForRemaining = disableLocalForRemaining;
+        }
+    }
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -93,9 +115,19 @@ public class LargeFileChunkingService {
         int active = Math.min(chunks.size(), maxChunks);
 
         List<String> summaries = new ArrayList<>();
+        boolean disableLocalForRemaining = false;
         for (int i = 0; i < active; i++) {
-            String s = summarizeChunk(i + 1, chunks.size(), chunks.get(i), shape, effectiveChunkSize);
-            if (s != null && !s.isBlank()) summaries.add(s);
+            ChunkSummaryResult summaryResult = disableLocalForRemaining
+                ? summarizeChunkHeuristicOnly(i + 1, chunks.size(), chunks.get(i), shape, effectiveChunkSize)
+                : summarizeChunk(i + 1, chunks.size(), chunks.get(i), shape, effectiveChunkSize);
+            if (summaryResult.summary != null && !summaryResult.summary.isBlank()) {
+                summaries.add(summaryResult.summary);
+            }
+            if (summaryResult.disableLocalForRemaining && !disableLocalForRemaining) {
+                disableLocalForRemaining = true;
+                log.warn("[CHUNKING] Local llama capacity failure detected at chunk {}/{}; switching remaining chunks to heuristic mode",
+                    i + 1, active);
+            }
         }
 
         if (summaries.isEmpty()) {
@@ -331,12 +363,11 @@ public class LargeFileChunkingService {
      * The prompt does NOT assume any field names or schema – the model is asked
      * to describe what it actually finds in the content.
      */
-    private String summarizeChunk(int index, int total, String chunk, ContentShape shape, int effectiveChunkSize) {
+    private ChunkSummaryResult summarizeChunk(int index, int total, String chunk, ContentShape shape, int effectiveChunkSize) {
         int safeChunkSize = Math.max(800, effectiveChunkSize);
-        String safeChunk = chunk.length() > safeChunkSize
+        String originalChunk = chunk.length() > safeChunkSize
                 ? chunk.substring(0, safeChunkSize) : chunk;
-        String chunkFingerprint = shortDigest(safeChunk);
-        String chunkAnchors = extractAnchors(safeChunk, shape);
+        String safeChunk = originalChunk;
 
         String shapeHint = switch (shape) {
             case JSON_ARRAY, JSON_OBJECT_WITH_ARRAY, JSON_OBJECT -> "JSON/config";
@@ -344,8 +375,92 @@ public class LargeFileChunkingService {
             default -> "text";
         };
 
-        // Generic, schema-agnostic prompt: model reads what IS there, not what we expect
-        String chunkPrompt = "chunk=" + index + "/" + total + " type=" + shapeHint + "\n"
+        int maxAttempts = Math.max(1, capacityRetryMaxAttempts + 1);
+        int minChars = Math.max(400, Math.min(safeChunkSize - 1, capacityRetryMinChars));
+        double shrinkRatio = Math.max(0.35d, Math.min(0.9d, capacityRetryShrinkRatio));
+        String lastErrorMessage = "";
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            String chunkFingerprint = shortDigest(safeChunk);
+            String chunkAnchors = extractAnchors(safeChunk, shape);
+            String chunkPrompt = buildChunkPrompt(index, total, shapeHint, chunkFingerprint, chunkAnchors, safeChunk);
+            try {
+                String raw = llamaCppNativeService.generateContent(chunkPrompt);
+                if (isLocalProviderError(raw)) {
+                    String message = extractLocalProviderErrorMessage(raw);
+                    lastErrorMessage = message;
+                    boolean capacityLike = isLocalCapacityLikeError(message);
+                    if (capacityLike && attempt < maxAttempts && safeChunk.length() > minChars + 40) {
+                        int nextLength = nextShrunkLength(safeChunk.length(), minChars, shrinkRatio);
+                        log.warn("[CHUNKING] chunk {}/{} local capacity issue on attempt {}/{} ({} chars -> {} chars): {}",
+                            index, total, attempt, maxAttempts, safeChunk.length(), nextLength, safeStr(message));
+                        safeChunk = safeChunk.substring(0, nextLength);
+                        continue;
+                    }
+                    String heuristic = heuristicExtract(safeChunk);
+                    return new ChunkSummaryResult(
+                        formatChunkSummary(index, total, chunkFingerprint, chunkAnchors, heuristic),
+                        capacityLike
+                    );
+                }
+
+                String result = extractResultText(raw);
+                log.debug("[CHUNKING] chunk {}/{} summary len={} (attempt {}/{})", index, total,
+                        result == null ? 0 : result.length(), attempt, maxAttempts);
+                if (result == null || result.isBlank()) {
+                    return new ChunkSummaryResult(formatChunkSummary(index, total, chunkFingerprint, chunkAnchors, ""), false);
+                }
+                return new ChunkSummaryResult(formatChunkSummary(index, total, chunkFingerprint, chunkAnchors, result), false);
+            } catch (Exception ex) {
+                lastErrorMessage = ex.getMessage();
+                boolean capacityLike = isLocalCapacityLikeError(lastErrorMessage);
+                if (capacityLike && attempt < maxAttempts && safeChunk.length() > minChars + 40) {
+                    int nextLength = nextShrunkLength(safeChunk.length(), minChars, shrinkRatio);
+                    log.warn("[CHUNKING] chunk {}/{} inference failed on attempt {}/{} ({} chars -> {} chars): {}",
+                        index, total, attempt, maxAttempts, safeChunk.length(), nextLength, safeStr(lastErrorMessage));
+                    safeChunk = safeChunk.substring(0, nextLength);
+                    continue;
+                }
+                log.warn("[CHUNKING] chunk {}/{} inference failed: {}", index, total, ex.getMessage());
+                String heuristic = heuristicExtract(safeChunk);
+                return new ChunkSummaryResult(
+                    formatChunkSummary(index, total, chunkFingerprint, chunkAnchors, heuristic),
+                    capacityLike
+                );
+            }
+        }
+
+        String fallbackFingerprint = shortDigest(safeChunk);
+        String fallbackAnchors = extractAnchors(safeChunk, shape);
+        String fallbackHeuristic = heuristicExtract(safeChunk);
+        return new ChunkSummaryResult(
+            formatChunkSummary(index, total, fallbackFingerprint, fallbackAnchors, fallbackHeuristic),
+            isLocalCapacityLikeError(lastErrorMessage)
+        );
+    }
+
+    private ChunkSummaryResult summarizeChunkHeuristicOnly(int index, int total, String chunk, ContentShape shape, int effectiveChunkSize) {
+        int safeChunkSize = Math.max(800, effectiveChunkSize);
+        String safeChunk = chunk.length() > safeChunkSize
+            ? chunk.substring(0, safeChunkSize) : chunk;
+        String chunkFingerprint = shortDigest(safeChunk);
+        String chunkAnchors = extractAnchors(safeChunk, shape);
+        String heuristic = heuristicExtract(safeChunk);
+        return new ChunkSummaryResult(
+            formatChunkSummary(index, total, chunkFingerprint, chunkAnchors, heuristic),
+            true
+        );
+    }
+
+    private String buildChunkPrompt(
+        int index,
+        int total,
+        String shapeHint,
+        String chunkFingerprint,
+        String chunkAnchors,
+        String safeChunk
+    ) {
+        return "chunk=" + index + "/" + total + " type=" + shapeHint + "\n"
             + "chunkFingerprint=" + chunkFingerprint + "\n"
             + "chunkAnchors=" + chunkAnchors + "\n"
             + "Summarize this chunk concisely (max 8 lines).\n"
@@ -354,21 +469,20 @@ public class LargeFileChunkingService {
             + "Do not invent information. Output plain text only.\n"
             + "---\n"
             + safeChunk;
+    }
 
-        try {
-            String raw = llamaCppNativeService.generateContent(chunkPrompt);
-            String result = extractResultText(raw);
-            log.debug("[CHUNKING] chunk {}/{} summary len={}", index, total,
-                    result == null ? 0 : result.length());
-            if (result == null || result.isBlank()) {
-                return "chunk=" + index + "/" + total + " fp=" + chunkFingerprint + " anchors=" + chunkAnchors;
-            }
-            return "chunk=" + index + "/" + total + " fp=" + chunkFingerprint + " anchors=" + chunkAnchors + "\n" + result;
-        } catch (Exception ex) {
-            log.warn("[CHUNKING] chunk {}/{} inference failed: {}", index, total, ex.getMessage());
-            String heuristic = heuristicExtract(safeChunk);
-            return "chunk=" + index + "/" + total + " fp=" + chunkFingerprint + " anchors=" + chunkAnchors + "\n" + heuristic;
+    private String formatChunkSummary(int index, int total, String chunkFingerprint, String chunkAnchors, String body) {
+        String header = "chunk=" + index + "/" + total + " fp=" + chunkFingerprint + " anchors=" + chunkAnchors;
+        String safeBody = String.valueOf(body == null ? "" : body).trim();
+        return safeBody.isBlank() ? header : header + "\n" + safeBody;
+    }
+
+    private int nextShrunkLength(int currentLength, int minChars, double shrinkRatio) {
+        int next = (int) Math.floor(currentLength * shrinkRatio);
+        if (next >= currentLength) {
+            next = currentLength - Math.max(32, currentLength / 10);
         }
+        return Math.max(minChars, Math.min(next, currentLength - 1));
     }
 
     /**
@@ -415,22 +529,51 @@ public class LargeFileChunkingService {
         }
 
         // Otherwise run one more local pass to reduce further
-        String aggregatePrompt = "[LOCAL_AGGREGATE] contextType=" + safeStr(contextType) + "\n"
-            + "Create a single condensed technical overview (max " + (outputBudgetChars / 5 * 4) + " chars).\n"
-            + "Preserve chunk anchors and identifiers exactly as given.\n"
-            + "Include: main data structures, key functions, critical logic, identifiers.\n"
-            + "Do not merge unrelated anchors.\n"
-            + "---\n"
-            + joined.substring(0, Math.min(joined.length(), Math.max(2000, effectiveChunkSize * 2)));
+        String aggregateSource = joined.substring(0, Math.min(joined.length(), Math.max(2000, effectiveChunkSize * 2)));
+        int maxAttempts = Math.max(1, capacityRetryMaxAttempts + 1);
+        int minChars = Math.max(600, Math.min(aggregateSource.length(), capacityRetryMinChars));
+        double shrinkRatio = Math.max(0.35d, Math.min(0.9d, capacityRetryShrinkRatio));
+        String aggregateInput = aggregateSource;
 
-        try {
-            String raw = llamaCppNativeService.generateContent(aggregatePrompt);
-            String result = extractResultText(raw);
-            if (result != null && !result.isBlank()) {
-                return buildAggregatedBlock(result, requestText, contextType, totalChunks);
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            String aggregatePrompt = "[LOCAL_AGGREGATE] contextType=" + safeStr(contextType) + "\n"
+                + "Create a single condensed technical overview (max " + (outputBudgetChars / 5 * 4) + " chars).\n"
+                + "Preserve chunk anchors and identifiers exactly as given.\n"
+                + "Include: main data structures, key functions, critical logic, identifiers.\n"
+                + "Do not merge unrelated anchors.\n"
+                + "---\n"
+                + aggregateInput;
+
+            try {
+                String raw = llamaCppNativeService.generateContent(aggregatePrompt);
+                if (isLocalProviderError(raw)) {
+                    String message = extractLocalProviderErrorMessage(raw);
+                    if (isLocalCapacityLikeError(message) && attempt < maxAttempts && aggregateInput.length() > minChars + 40) {
+                        int nextLength = nextShrunkLength(aggregateInput.length(), minChars, shrinkRatio);
+                        log.warn("[CHUNKING] aggregation capacity issue on attempt {}/{} ({} chars -> {} chars): {}",
+                            attempt, maxAttempts, aggregateInput.length(), nextLength, safeStr(message));
+                        aggregateInput = aggregateInput.substring(0, nextLength);
+                        continue;
+                    }
+                    break;
+                }
+
+                String result = extractResultText(raw);
+                if (result != null && !result.isBlank()) {
+                    return buildAggregatedBlock(result, requestText, contextType, totalChunks);
+                }
+                break;
+            } catch (Exception ex) {
+                if (isLocalCapacityLikeError(ex.getMessage()) && attempt < maxAttempts && aggregateInput.length() > minChars + 40) {
+                    int nextLength = nextShrunkLength(aggregateInput.length(), minChars, shrinkRatio);
+                    log.warn("[CHUNKING] aggregation inference failed on attempt {}/{} ({} chars -> {} chars): {}",
+                        attempt, maxAttempts, aggregateInput.length(), nextLength, safeStr(ex.getMessage()));
+                    aggregateInput = aggregateInput.substring(0, nextLength);
+                    continue;
+                }
+                log.warn("[CHUNKING] aggregation inference failed: {}", ex.getMessage());
+                break;
             }
-        } catch (Exception ex) {
-            log.warn("[CHUNKING] aggregation inference failed: {}", ex.getMessage());
         }
 
         // Truncate joined to budget as fallback
@@ -482,6 +625,50 @@ public class LargeFileChunkingService {
         return s == null ? "" : s;
     }
 
+    @SuppressWarnings("unchecked")
+    private boolean isLocalProviderError(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return false;
+        }
+        try {
+            Map<String, Object> map = objectMapper.readValue(raw.trim(), Map.class);
+            Object success = map.get("success");
+            return (success instanceof Boolean b) && !b;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private String extractLocalProviderErrorMessage(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "";
+        }
+        try {
+            Map<String, Object> map = objectMapper.readValue(raw.trim(), Map.class);
+            Object message = map.get("message");
+            if (message instanceof String s) {
+                return s;
+            }
+            Object errorCode = map.get("errorCode");
+            return errorCode instanceof String s ? s : "";
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private boolean isLocalCapacityLikeError(String message) {
+        String msg = String.valueOf(message == null ? "" : message).toLowerCase();
+        if (msg.isBlank()) {
+            return false;
+        }
+        return msg.contains("kv cache is full")
+            || msg.contains("input prompt is too big")
+            || msg.contains("gpu timeout")
+            || msg.contains("kioaccelcommandbuffercallbackerrortimeout")
+            || msg.contains("submissionsignored");
+    }
+
     private String extractAnchors(String chunk, ContentShape shape) {
         List<String> anchors = new ArrayList<>();
 
@@ -530,7 +717,8 @@ public class LargeFileChunkingService {
         int safeByWindow = Math.max(256, context - reservedOutput - 192);
         int tokenBudget = Math.max(256, Math.min(Math.max(512, localInputTokenHardCap), Math.min(safeByRatio, safeByWindow)));
         int availableForChunkTokens = Math.max(180, tokenBudget - Math.max(120, localPromptOverheadTokens));
-        int dynamicChars = Math.max(configuredMin, availableForChunkTokens * 4);
+        int charsPerToken = Math.max(2, Math.min(5, localCharsPerTokenEstimate));
+        int dynamicChars = Math.max(configuredMin, availableForChunkTokens * charsPerToken);
         return Math.max(configuredMin, Math.min(configuredMax, dynamicChars));
     }
 }
