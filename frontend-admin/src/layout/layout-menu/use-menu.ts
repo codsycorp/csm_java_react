@@ -15,10 +15,9 @@ import { fetchNavigationMenus } from "#src/api/system/menu";
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import * as AntIcons from "@ant-design/icons";
 
 import { useLayout } from "../hooks";
-import { findDeepestFirstItem, findRootMenuByPath, translateMenus, processMenuChildrenVisibility } from "./utils";
+import { findDeepestFirstItem, findRootMenuByPath, translateMenus, processMenuChildrenVisibility, resolveMenuIcon } from "./utils";
 
 /**
  * Logic để xử lý hiển thị menu dựa trên type_menu, type_form, m_show, dev
@@ -111,43 +110,6 @@ function autoFixMenu(menus: any[], isDev: boolean = false): any[] {
 	return result;
 }
 
-function normalizeIconName(iconName: string): string {
-	const raw = String(iconName || "").trim();
-	if (!raw) return "";
-	if ((AntIcons as any)[raw]) return raw;
-
-	const tokens = raw.split(/\s+/g).filter(Boolean);
-	for (const token of tokens) {
-		if ((AntIcons as any)[token]) return token;
-	}
-
-	if (!/Outlined$|Filled$|TwoTone$/i.test(raw)) {
-		const outlined = `${raw}Outlined`;
-		if ((AntIcons as any)[outlined]) return outlined;
-	}
-
-	return "";
-}
-
-function resolveMenuIcon(icon: unknown, modernIcon?: unknown, legacyIcon?: unknown): React.ReactNode {
-	if (React.isValidElement(icon)) return icon;
-
-	const iconString = typeof icon === "string" ? icon : "";
-	const modernString = typeof modernIcon === "string" ? modernIcon : "";
-	const legacyString = typeof legacyIcon === "string" ? legacyIcon : "";
-	const source = iconString || modernString || legacyString;
-	if (!source) return undefined;
-
-	const antIconName = normalizeIconName(source);
-	if (antIconName && (AntIcons as any)[antIconName]) {
-		const Comp = (AntIcons as any)[antIconName];
-		return React.createElement(Comp);
-	}
-
-	// Support legacy class-based icons (fa/fa-solid/other icon fonts)
-	return React.createElement("i", { className: source });
-}
-
 export function useMenu() {
 	const { addTab, setActiveKey } = useTabsStore();
 	const wholeMenus = usePermissionStore(state => state.wholeMenus);
@@ -183,9 +145,64 @@ export function useMenu() {
 	const menusForTranslation = useMemo(() => {
 		const sourceMenus = wholeMenus || [];
 		if (sourceMenus.length > 0) {
+			const apiIconLookup = new Map<string, { icon?: any; m_icon?: any; m_icons?: any }>();
+			const pushApiLookup = (menu: any) => {
+				const payload = {
+					icon: menu?.icon,
+					m_icon: menu?.m_icon,
+					m_icons: menu?.m_icons,
+				};
+				const hasAnyIcon = payload.icon !== undefined || payload.m_icon !== undefined || payload.m_icons !== undefined;
+				if (!hasAnyIcon) return;
+
+				const keys = [
+					String(menu?.id || "").trim(),
+					String(menu?.menuId || "").trim(),
+					String(menu?.path || "").trim(),
+					String(menu?.key || "").trim(),
+				].filter(Boolean);
+
+				for (const key of keys) {
+					if (!apiIconLookup.has(key)) {
+						apiIconLookup.set(key, payload);
+					}
+				}
+			};
+
+			const flattenApiMenus = (menus: any[]) => {
+				const queue = [...(menus || [])];
+				while (queue.length > 0) {
+					const node = queue.shift();
+					if (!node) continue;
+					pushApiLookup(node);
+					if (Array.isArray(node.children) && node.children.length > 0) {
+						queue.push(...node.children);
+					}
+					if (Array.isArray(node.nodes) && node.nodes.length > 0) {
+						queue.push(...node.nodes);
+					}
+				}
+			};
+
+			flattenApiMenus(apiWholeMenus || []);
+
 			// Thêm key field, nhưng xoá tất cả fields không cần thiết để không render
 			const addKeysAndClean = (menus: any[]): any[] => {
 				return menus.map(menu => {
+					const lookupKeys = [
+						String(menu?.id || "").trim(),
+						String(menu?.menuId || "").trim(),
+						String(menu?.path || "").trim(),
+						String(menu?.key || "").trim(),
+					].filter(Boolean);
+					let iconMeta: { icon?: any; m_icon?: any; m_icons?: any } | undefined;
+					for (const k of lookupKeys) {
+						if (apiIconLookup.has(k)) {
+							iconMeta = apiIconLookup.get(k);
+							break;
+						}
+					}
+
 					const cleaned: any = {
 						key: menu.path || menu.id || menu.key || "",
 						path: menu.path,
@@ -198,9 +215,9 @@ export function useMenu() {
 						name_vi: menu.name_vi,
 						name_en: menu.name_en,
 						name_zh: menu.name_zh,
-						icon: menu.icon,
-						m_icon: menu.m_icon,
-						m_icons: menu.m_icons,
+						icon: menu.icon ?? iconMeta?.icon,
+						m_icon: menu.m_icon ?? iconMeta?.m_icon,
+						m_icons: menu.m_icons ?? iconMeta?.m_icons,
 						disabled: menu.disabled,
 						children: menu.children,
 						// Preserve these for app logic
@@ -272,7 +289,7 @@ export function useMenu() {
 			return ensureSystemDeveloper(cleanedMenus);
 		}
 		return sourceMenus;
-	}, [wholeMenus]);
+	}, [wholeMenus, apiWholeMenus]);
 	
 	const translatedMenus = useMemo(() => {
 		return translateMenus(menusForTranslation, t, currentLanguage);
@@ -357,8 +374,8 @@ export function useMenu() {
 					key: uniqueKey,
 					label: item.label,
 					id: item.id,
+					menuId: item.menuId,
 					path: item.path,
-					m_icon: item.m_icon,
 					type_form: item.type_form,
 					table_name: item.table_name,
 					report_name: item.report_name,
@@ -366,9 +383,17 @@ export function useMenu() {
 					auto_code: item.auto_code,
 					kanban_config: item.kanban_config,
 					trigger: item.trigger,
+					m_icon: item.m_icon,
 					m_icons: item.m_icons,
 				};
-				cleaned.icon = resolveMenuIcon(item.icon, item.m_icon, item.m_icons);
+				// Resolve icon from string to React component using shared utility function
+				const sourceIcon = item.icon ?? item.m_icon ?? item.m_icons;
+				if (sourceIcon !== undefined) {
+					const resolved = resolveMenuIcon(sourceIcon);
+					if (resolved !== undefined) {
+						cleaned.icon = resolved;
+					}
+				}
 				if (item.disabled === true) {
 					cleaned.disabled = item.disabled;
 				}

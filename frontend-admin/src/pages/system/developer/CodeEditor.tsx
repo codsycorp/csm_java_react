@@ -30,8 +30,10 @@ import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { vscodeDark, vscodeLight } from "@uiw/codemirror-theme-vscode";
 import { useTranslation } from "react-i18next";
-import { useAppStore, useAuthStore } from "#src/store";
+import { useAppStore } from "#src/store";
 import { usePreferences } from "#src/hooks";
+import { request } from "#src/utils";
+import { consumeSseStream, dispatchAiCodeStreamEvent } from "#src/api/ai/sse-stream";
 import {
 	fetchCodeList,
 	decryptCode,
@@ -760,38 +762,21 @@ async function streamAiCode(
 		onError?: (error: string) => void;
 	},
 ): Promise<void> {
-	const apiBase = ((import.meta.env.VITE_API_BASE_URL as string) || "").replace(/\/$/, "");
-	const url = `${apiBase}/api/ai-code-stream`;
 	const resolvedFlowType = params.flowType
 		|| (params.contextType === "menu_json" ? "menu_manager" : "code_editor");
 	const resolvedTaskType = params.taskType
 		|| (resolvedFlowType === "menu_manager" ? "menu_design" : "code_assistant");
 
-	let token = "";
-	let csrfToken = "";
-	try {
-		token = useAuthStore.getState().token || "";
-	} catch { /* ignore */ }
-	try {
-		const m = document.cookie.match(/(?:^|; )CSRF-TOKEN=([^;]*)/);
-		csrfToken = m ? decodeURIComponent(m[1]) : "";
-	} catch { /* ignore */ }
-
 	let response: Response;
 	try {
-		response = await fetch(url, {
-			method: "POST",
+		response = await request.post("ai-code-stream", {
 			signal: params.signal,
-			headers: {
-				"Content-Type": "application/json",
-				...(token ? { "csm-token": token } : {}),
-				...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
-			},
-			body: JSON.stringify({
+			json: {
 				...params,
 				flowType: resolvedFlowType,
 				taskType: resolvedTaskType,
-			}),
+			},
+			throwHttpErrors: false,
 		});
 	} catch (err) {
 		if ((err as Error)?.name === "AbortError") {
@@ -807,88 +792,49 @@ async function streamAiCode(
 		return;
 	}
 
-	const reader = response.body.getReader();
-	const decoder = new TextDecoder();
 	let accumulated = "";
-	let buffer = "";
 	let completed = false;
-	let bytesReceived = 0;
-	let sseLineCount = 0;
 	let streamChunkCount = 0;
 
-	const processSseLine = (line: string) => {
-		const trimmed = line.trim();
-		if (!trimmed.startsWith("data:")) return;
-		sseLineCount += 1;
-		const jsonStr = trimmed.slice(5).trim();
-		if (!jsonStr) return;
-		try {
-			const event = JSON.parse(jsonStr) as Record<string, unknown>;
-			const stage = String(event.stage || "");
-			if (stage === "streaming" && typeof event.chunk === "string") {
-				accumulated += event.chunk;
+	const streamStats = await consumeSseStream(response, {
+		onEvent: (evt) => {
+			const payload = (evt.payload && typeof evt.payload === "object")
+				? (evt.payload as Record<string, unknown>)
+				: null;
+			if (!payload) {
+				return;
+			}
+			if (String(payload.stage || "") === "streaming") {
 				streamChunkCount += 1;
-				callbacks.onChunk?.(event.chunk, accumulated);
-				return;
 			}
-			if (stage === "complete") {
-				if (typeof event.fullResponse !== "string") {
-					event.fullResponse = accumulated;
-				}
+			const result = dispatchAiCodeStreamEvent(payload, accumulated, callbacks);
+			accumulated = result.accumulated;
+			if (result.completed) {
 				completed = true;
-				callbacks.onComplete?.(event);
-				return;
 			}
-			if (stage === "error") {
-				callbacks.onError?.(String(event.message || "Unknown error"));
-				return;
-			}
-			callbacks.onStatus?.(event);
-		} catch {
-			// skip malformed SSE lines
-		}
-	};
+		},
+	});
 
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			if (value) bytesReceived += value.byteLength;
-			buffer += decoder.decode(value, { stream: true });
-			const lines = buffer.split("\n");
-			buffer = lines.pop() ?? "";
-			for (const line of lines) {
-				processSseLine(line);
-			}
-		}
-
-		const tail = buffer.trim();
-		if (tail) {
-			processSseLine(tail);
-		}
-		if (!completed) {
-			callbacks.onStatus?.({
-				stage: "warning",
-				status: "incomplete",
-				message: "Luồng stream kết thúc trước event complete",
-				bytesReceived,
-				sseLineCount,
-				streamChunkCount,
-				accumulatedChars: accumulated.length,
-			});
-			callbacks.onError?.("Stream ended before complete event");
-		} else {
-			callbacks.onStatus?.({
-				stage: "stream_stats",
-				status: "done",
-				bytesReceived,
-				sseLineCount,
-				streamChunkCount,
-				accumulatedChars: accumulated.length,
-			});
-		}
-	} finally {
-		reader.releaseLock();
+	if (!completed) {
+		callbacks.onStatus?.({
+			stage: "warning",
+			status: "incomplete",
+			message: "Luồng stream kết thúc trước event complete",
+			bytesReceived: streamStats.bytesReceived,
+			sseLineCount: streamStats.dataLineCount,
+			streamChunkCount,
+			accumulatedChars: accumulated.length,
+		});
+		callbacks.onError?.("Stream ended before complete event");
+	} else {
+		callbacks.onStatus?.({
+			stage: "stream_stats",
+			status: "done",
+			bytesReceived: streamStats.bytesReceived,
+			sseLineCount: streamStats.dataLineCount,
+			streamChunkCount,
+			accumulatedChars: accumulated.length,
+		});
 	}
 }
 
@@ -2078,26 +2024,8 @@ export default function CodeEditor() {
 			}
 
 			if (Array.isArray(parsedEnvelopeCandidate?.operations) && parsedEnvelopeCandidate.operations.length > 0) {
-				const apiBase = ((import.meta.env.VITE_API_BASE_URL as string) || "").replace(/\/$/, "");
-				const url = `${apiBase}/api/ai/apply-edits`;
-				let token = "";
-				let csrfToken = "";
-				try {
-					token = useAuthStore.getState().token || "";
-				} catch { /* ignore */ }
-				try {
-					const m = document.cookie.match(/(?:^|; )CSRF-TOKEN=([^;]*)/);
-					csrfToken = m ? decodeURIComponent(m[1]) : "";
-				} catch { /* ignore */ }
-
-				const applyResp = await fetch(url, {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-						...(token ? { "csm-token": token } : {}),
-						...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
-					},
-					body: JSON.stringify({
+				const applyResp = await request.post("ai/apply-edits", {
+					json: {
 						target: {
 							kind: "code_doc",
 							appId: appId || "",
@@ -2110,7 +2038,8 @@ export default function CodeEditor() {
 						currentContent: currentDraftRef.current,
 						operations: parsedEnvelopeCandidate.operations,
 						applyMode: "dry_run",
-					}),
+					},
+					throwHttpErrors: false,
 				});
 
 				if (!applyResp.ok) {

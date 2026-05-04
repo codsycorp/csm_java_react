@@ -749,7 +749,7 @@ public class ApiSpringController {
                     ? (rawTaskType.isBlank() ? "menu_design" : rawTaskType)
                     : (rawTaskType.isBlank() ? "code_assistant" : rawTaskType);
                 String rawResponseMode = str(body.get("responseMode"), "");
-                String responseMode = normalizeAiAssistantResponseMode(rawResponseMode, message);
+                String responseMode = normalizeAiAssistantResponseMode(rawResponseMode, message, contextType, rawTaskType);
                 String modelOverride = str(body.get("model"), "");
                 String pName = str(body.get("pName"), "");
                 Integer pType = parseNullableInteger(body.get("pType"));
@@ -875,9 +875,14 @@ public class ApiSpringController {
                         pName,
                         pType));
                 String messageWithReuse = message;
+                boolean menuJsonEditMode = menuJsonContext && "edit".equalsIgnoreCase(responseMode);
                 if (!reusableCodeMemory.isBlank()) {
-                    String compactReuse = truncateMiddle(reusableCodeMemory, 12000);
-                    messageWithReuse = "[REUSED_CONTEXT]\n" + compactReuse + "\n\n[CURRENT_REQUEST]\n" + message;
+                    int reuseCap = menuJsonEditMode ? 3000 : 12000;
+                    String compactReuse = truncateMiddle(reusableCodeMemory, reuseCap);
+                    String continuityHeader = menuJsonEditMode
+                        ? "[SESSION_CONTINUITY]\n(Ưu tiên CURRENT_REQUEST. Context này chỉ dùng để tiếp tục phiên trước đó.)\n"
+                        : "[REUSED_CONTEXT]\n";
+                    messageWithReuse = continuityHeader + compactReuse + "\n\n[CURRENT_REQUEST]\n" + message;
                 }
 
                 String prompt = buildCodingPrompt(
@@ -1076,14 +1081,15 @@ public class ApiSpringController {
                     localProviderPrimaryUsed = true;
                     effectiveModel = "local_pre_analysis";
                     localPreAnalysisSavedTokensEstimate = Math.max(0, promptTokens + estimateTokens(rawResponse));
-                    sendEvent(emitter, jsonOf(
-                        "stage", "streaming",
-                        "requestId", requestId,
-                        "chunk", rawResponse,
-                        "attempt", 1,
-                        "providerFallback", false,
-                        "localProviderPrimary", true,
-                        "localPreAnalysis", true));
+                    int localStreamChunks = emitSyntheticLocalStreamChunks(
+                        emitter,
+                        requestId,
+                        rawResponse,
+                        1,
+                        true,
+                        true);
+                    codeStreamMeta.put("streamChunkCount", localStreamChunks);
+                    codeStreamMeta.put("streamedChars", rawResponse.length());
                 }
 
                 if (rawResponse == null) {
@@ -1142,13 +1148,15 @@ public class ApiSpringController {
                                 "ttftMs", 0,
                                 "estimatedTotalChars", providerText.length(),
                                 "percent", 12));
-                            sendEvent(emitter, jsonOf(
-                                    "stage", "streaming",
-                                    "requestId", requestId,
-                                    "chunk", providerText,
-                                    "attempt", 1,
-                                    "providerFallback", false,
-                                    "localProviderPrimary", true));
+                            int localStreamChunks = emitSyntheticLocalStreamChunks(
+                                emitter,
+                                requestId,
+                                providerText,
+                                1,
+                                false,
+                                true);
+                            codeStreamMeta.put("streamChunkCount", localStreamChunks);
+                            codeStreamMeta.put("streamedChars", providerText.length());
                             rawResponse = providerText;
                             effectiveModel = "local_provider";
                             localProviderPrimaryUsed = true;
@@ -1320,7 +1328,13 @@ public class ApiSpringController {
                 if (menuJsonContext && aiCodeStreamMenuShrinkGuardEnabled) {
                     int inputLen = effectiveCodeContext.length();
                     int outputLen = completionPayload.length();
-                    if (inputLen > 5000 && outputLen < (int)(inputLen * aiCodeStreamMenuShrinkGuardMinRatio)) {
+                    int inputNodeCount = countMenuNodesFromDraft(effectiveCodeContext);
+                    int outputNodeCount = countMenuNodesFromDraft(completionPayload);
+                    boolean nodeRetentionHealthy = inputNodeCount > 0
+                        && outputNodeCount >= Math.max(1, (int) Math.ceil(inputNodeCount * 0.80d));
+                    if (inputLen > 5000
+                            && outputLen < (int)(inputLen * aiCodeStreamMenuShrinkGuardMinRatio)
+                            && !nodeRetentionHealthy) {
                         menuShrinkGuardTriggered = true;
                         menuShrinkRatio = inputLen > 0 ? (double)outputLen / inputLen : 1.0;
                         sendEvent(emitter, jsonOf(
@@ -1331,10 +1345,18 @@ public class ApiSpringController {
                             "message", "AI output quá nhỏ so với context menu đầu vào, kết quả có thể bị mất dữ liệu",
                             "inputChars", inputLen,
                             "outputChars", outputLen,
+                            "inputNodeCount", inputNodeCount,
+                            "outputNodeCount", outputNodeCount,
                             "shrinkRatio", menuShrinkRatio,
                             "minRatio", aiCodeStreamMenuShrinkGuardMinRatio));
-                        logger.warn("MENU_SHRINK_GUARD requestId={} inputChars={} outputChars={} shrinkRatio={} minRatio={}",
-                            requestId, inputLen, outputLen, String.format("%.2f", menuShrinkRatio), aiCodeStreamMenuShrinkGuardMinRatio);
+                        logger.warn("MENU_SHRINK_GUARD requestId={} inputChars={} outputChars={} inputNodes={} outputNodes={} shrinkRatio={} minRatio={}",
+                            requestId,
+                            inputLen,
+                            outputLen,
+                            inputNodeCount,
+                            outputNodeCount,
+                            String.format("%.2f", menuShrinkRatio),
+                            aiCodeStreamMenuShrinkGuardMinRatio);
                     }
                 }
                 Map<String, Object> outputShape = analyzeCodeStreamOutputShape(responseMode, contextType, completionPayload,
@@ -2494,6 +2516,34 @@ public class ApiSpringController {
             String requestId) throws Exception {
         return streamWithAutoContinue(emitter, prompt, "", "", model, language, contextType, responseMode, largeStructuredEditMode, false,
             new LinkedHashMap<>(), requestId);
+    }
+
+    private int emitSyntheticLocalStreamChunks(
+            SseEmitter emitter,
+            String requestId,
+            String text,
+            int attempt,
+            boolean localPreAnalysis,
+            boolean localProviderPrimary) {
+        String safe = String.valueOf(text == null ? "" : text);
+        if (safe.isBlank()) {
+            return 0;
+        }
+        int chunkSize = 280;
+        int chunks = 0;
+        for (int i = 0; i < safe.length(); i += chunkSize) {
+            String part = safe.substring(i, Math.min(safe.length(), i + chunkSize));
+            sendEvent(emitter, jsonOf(
+                "stage", "streaming",
+                "requestId", requestId,
+                "chunk", part,
+                "attempt", Math.max(1, attempt),
+                "providerFallback", false,
+                "localProviderPrimary", localProviderPrimary,
+                "localPreAnalysis", localPreAnalysis));
+            chunks += 1;
+        }
+        return chunks;
     }
 
     private String streamWithAutoContinueMultimodal(
@@ -3842,6 +3892,19 @@ public class ApiSpringController {
         }
 
         String sourcePrompt = String.valueOf(prompt == null ? "" : prompt).trim();
+        if (llamaCppNativeService.isCircuitOpen()) {
+            emitLocalPreAnalysisProgress(progressCallback, jsonOf(
+                "stage", "waiting_gemini",
+                "waitState", "local_pre_analysis",
+                "localPhase", "fallback",
+                "messageKey", "copilot.progress.message.local_preanalysis_fallback_cloud",
+                "messageArgs", jsonOf("reason", "local_circuit_open"),
+                "percent", 35,
+                "remainingEstimateSecs", 0));
+            logger.info("[AI_LOCAL_PRE_ANALYSIS] Skipping local inference – circuit breaker is OPEN (recent GPU/KV failure)");
+            String heuristic = buildHeuristicCloudContext(requestText, prompt, contextType, responseMode);
+            return new LocalPreAnalysisDecision(true, false, "", heuristic, "local_circuit_open_heuristic");
+        }
         if (sourcePrompt.isBlank()) {
             sourcePrompt = String.valueOf(requestText == null ? "" : requestText).trim();
         }
@@ -3853,10 +3916,12 @@ public class ApiSpringController {
         String safeRequestText = truncateMiddle(
             sanitizeForLocalPreAnalysis(String.valueOf(requestText == null ? "" : requestText), "local-preanalysis-request"),
             Math.max(300, aiLocalPreAnalysisRequestMaxChars));
+        boolean menuJsonContext = isMenuJsonContext(contextType);
 
         // For oversized inputs: run chunked local summarization pipeline instead of plain truncation.
         int effectivePreAnalysisMax = Math.max(2000, aiLocalPreAnalysisMaxPromptChars);
         if (sourcePrompt.length() > effectivePreAnalysisMax && largeFileChunkingService != null) {
+            int beforeChunkingChars = sourcePrompt.length();
             int estimatedChunkCount = estimateLocalChunkCount(sourcePrompt.length());
             int estimatedChunkingSecs = estimateLocalChunkingWaitSecs(sourcePrompt.length(), estimatedChunkCount);
             emitLocalPreAnalysisProgress(progressCallback, jsonOf(
@@ -3874,6 +3939,16 @@ public class ApiSpringController {
             long chunkingStartedAt = System.currentTimeMillis();
             logger.info("[AI_LOCAL_PRE_ANALYSIS] Large input ({} chars) – invoking chunking pipeline", sourcePrompt.length());
             sourcePrompt = largeFileChunkingService.compressLargePrompt(sourcePrompt, requestText, contextType);
+            if (menuJsonContext && sourcePrompt.length() >= (int) Math.floor(beforeChunkingChars * 0.95d)) {
+                String chunkedMenuContext = buildMenuChunkedPromptContext(
+                    sourcePrompt,
+                    Math.max(4000, Math.min(8000, aiLocalPreAnalysisMaxPromptChars)));
+                if (!chunkedMenuContext.isBlank() && chunkedMenuContext.length() < sourcePrompt.length()) {
+                    sourcePrompt = chunkedMenuContext;
+                    logger.info("[AI_LOCAL_PRE_ANALYSIS] Fallback menu chunk-context applied: before={} after={}",
+                        beforeChunkingChars, sourcePrompt.length());
+                }
+            }
             logger.info("[AI_LOCAL_PRE_ANALYSIS] After chunking compression: {} chars", sourcePrompt.length());
             long chunkingElapsedSecs = Math.max(1L, (System.currentTimeMillis() - chunkingStartedAt) / 1000L);
             emitLocalPreAnalysisProgress(progressCallback, jsonOf(
@@ -3901,6 +3976,11 @@ public class ApiSpringController {
             safeRequestText,
             sourcePrompt,
             localInputTokenBudget);
+        int finalPromptClampChars = menuJsonContext ? 4000 : 10000;
+        if (sourcePrompt.length() > finalPromptClampChars) {
+            sourcePrompt = truncateMiddle(sourcePrompt, finalPromptClampChars);
+            logger.info("[AI_LOCAL_PRE_ANALYSIS] Final clamp applied for local prompt: {} chars", sourcePrompt.length());
+        }
         if (sourcePrompt.length() < sourceBeforeBudgetTrim) {
             emitLocalPreAnalysisProgress(progressCallback, jsonOf(
                 "stage", "waiting_gemini",
@@ -3975,8 +4055,9 @@ public class ApiSpringController {
         int contextWindow = Math.max(1024, aiLocalLlamaContextWindow);
         int reservedForOutput = Math.max(128, aiLocalLlamaMaxTokens);
         int hardCap = Math.max(512, aiLocalPreAnalysisLlamaInputTokenHardCap);
-        int byRatio = (int) Math.floor(contextWindow * Math.max(0.45d, Math.min(0.9d, aiLocalPreAnalysisLlamaInputSafetyRatio)));
-        int byWindow = Math.max(256, contextWindow - reservedForOutput - 192);
+        // Keep stronger guard-band for local llama to avoid GPU/KV overflow on Metal.
+        int byRatio = (int) Math.floor(contextWindow * Math.max(0.35d, Math.min(0.75d, aiLocalPreAnalysisLlamaInputSafetyRatio)));
+        int byWindow = Math.max(256, contextWindow - reservedForOutput - 640);
         return Math.max(256, Math.min(hardCap, Math.min(byRatio, byWindow)));
     }
 
@@ -4192,6 +4273,7 @@ public class ApiSpringController {
     private String buildHeuristicCloudContext(String requestText, String prompt, String contextType, String responseMode) {
         String request = String.valueOf(requestText == null ? "" : requestText).trim();
         String promptText = String.valueOf(prompt == null ? "" : prompt).trim();
+        boolean menuJsonEdit = isMenuJsonContext(contextType) && "edit".equalsIgnoreCase(responseMode);
 
         List<String> lines = new ArrayList<>();
         lines.add("[LOCAL_HEURISTIC_PRE_ANALYSIS]");
@@ -4200,13 +4282,20 @@ public class ApiSpringController {
         if (!request.isBlank()) {
             lines.add("request_summary=" + truncateMiddle(request.replaceAll("\\s+", " "), 600));
         }
-        if (!promptText.isBlank()) {
+        if (!menuJsonEdit && !promptText.isBlank()) {
             lines.add("prompt_signal_excerpt=" + truncateMiddle(promptText.replaceAll("\\s+", " "), 900));
+        }
+        if (menuJsonEdit) {
+            lines.add("execution_rule_menu_json=Only follow CURRENT_REQUEST; ignore stale examples from prior turns.");
+            lines.add("output_rule_menu_json=Return valid menu JSON only; no prose, no markdown, no wrapper.");
         }
         lines.add("execution_rule=Prioritize strict requirement alignment, minimal-diff edits, and deterministic structured output.");
         lines.add("safety_rule=Do not alter unrelated modules/fields; keep unchanged business behavior.");
 
-        return truncateMiddle(String.join("\n", lines), Math.max(300, aiLocalPreAnalysisMaxCloudContextChars));
+        int cap = menuJsonEdit
+            ? Math.min(Math.max(240, aiLocalPreAnalysisMaxCloudContextChars), 700)
+            : Math.max(300, aiLocalPreAnalysisMaxCloudContextChars);
+        return truncateMiddle(String.join("\n", lines), cap);
     }
 
     private boolean asBoolean(Object raw) {
@@ -9598,6 +9687,10 @@ public class ApiSpringController {
     }
 
     private String normalizeAiAssistantResponseMode(Object rawMode, String message) {
+        return normalizeAiAssistantResponseMode(rawMode, message, "", "");
+    }
+
+    private String normalizeAiAssistantResponseMode(Object rawMode, String message, String contextType, String taskType) {
         String mode = String.valueOf(rawMode == null ? "" : rawMode).trim().toLowerCase();
         if ("edit".equals(mode)) {
             return "edit";
@@ -9605,9 +9698,24 @@ public class ApiSpringController {
         if ("analyze".equals(mode)) {
             return "analyze";
         }
+        String normalizedContextType = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        String normalizedTaskType = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
+
+        // Menu design/update should default to edit mode when caller doesn't provide explicit responseMode.
+        if ("menu_json".equals(normalizedContextType)
+                || normalizedTaskType.contains("menu")) {
+            return "edit";
+        }
+
         String detected = inferAiAssistantResponseModeFromText(message);
         if ("edit".equals(detected) || "analyze".equals(detected)) {
             return detected;
+        }
+
+        // Code assistant asks are usually generation/refactor intents if explicit mode is absent.
+        if ("code".equals(normalizedContextType)
+                || normalizedTaskType.contains("code")) {
+            return "edit";
         }
         return "analyze";
     }
@@ -9646,7 +9754,14 @@ public class ApiSpringController {
             || normalized.contains("thay doi")
             || normalized.contains("them vao")
             || normalized.contains("xoa")
-            || normalized.contains("fix");
+            || normalized.contains("fix")
+            || normalized.contains("viet")
+            || normalized.contains("tao")
+            || normalized.contains("generate")
+            || normalized.contains("implement")
+            || normalized.contains("thiet ke")
+            || normalized.contains("build")
+            || normalized.contains("coding");
 
         if (hasAnalyzeIntent && !hasEditIntent) {
             return "analyze";
@@ -11526,6 +11641,43 @@ public class ApiSpringController {
         }
 
         return "";
+    }
+
+    private int countMenuNodesFromDraft(String draftText) {
+        String normalized = extractMenuDraftForCompletion(draftText, "menu_json");
+        if (normalized.isBlank()) {
+            normalized = normalizeMenuDraftJson(draftText);
+        }
+        if (normalized.isBlank()) {
+            return 0;
+        }
+        try {
+            Object parsed = objectMapper.readValue(normalized, Object.class);
+            if (parsed instanceof Map<?, ?> map) {
+                Object menu = map.get("menu");
+                if (menu instanceof List<?> list) {
+                    return countMenuNodesRecursive(list);
+                }
+            }
+        } catch (Exception ignored) {
+            return 0;
+        }
+        return 0;
+    }
+
+    private int countMenuNodesRecursive(List<?> nodes) {
+        int total = 0;
+        for (Object nodeObj : nodes) {
+            if (!(nodeObj instanceof Map<?, ?> node)) {
+                continue;
+            }
+            total += 1;
+            Object children = node.get("children");
+            if (children instanceof List<?> childList && !childList.isEmpty()) {
+                total += countMenuNodesRecursive(childList);
+            }
+        }
+        return total;
     }
 
     private String wrapAndSanitizeMenuPayload(Object menuRaw) {

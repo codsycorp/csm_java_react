@@ -5,6 +5,7 @@ import { useDeviceType } from "#src/hooks";
 import { LayoutContext } from "#src/layout/container-layout/layout-context";
 import { removeTrailingSlash } from "#src/router/utils";
 import { useAppStore, usePreferencesStore, useUserStore } from "#src/store";
+import { resolveMenuIcon } from "./utils";
 
 import { Menu } from "antd";
 import { useContext, useEffect, useMemo, useState } from "react";
@@ -119,11 +120,27 @@ export default function LayoutMenu({
 					? localizeItems(item.children as MenuItemType[])
 					: item.children;
 
-				return {
+				const result: MenuItemType = {
 					...item,
 					label: localizeLabelValue(item),
 					children,
 				};
+
+				// Convert icon to React component (supports icon, m_icon, m_icons)
+				const sourceIcon = (item as any).icon ?? (item as any).m_icon ?? (item as any).m_icons;
+				if (sourceIcon !== undefined) {
+					try {
+						const resolvedIcon = resolveMenuIcon(sourceIcon);
+						if (resolvedIcon) {
+							result.icon = resolvedIcon;
+						}
+					} catch (err) {
+						console.error('[LayoutMenu] Failed to resolve icon:', sourceIcon, err);
+						// Giữ icon original nếu có lỗi
+					}
+				}
+
+				return result;
 			});
 		};
 

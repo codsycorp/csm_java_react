@@ -1,5 +1,5 @@
-import { useAuthStore } from "#src/store/auth";
 import { request } from "#src/utils";
+import { consumeSseStream } from "#src/api/ai/sse-stream";
 
 export interface BusinessMemoryHit {
 	appId: string
@@ -111,103 +111,58 @@ export async function streamOptimizeWithBusinessMemory(
 	payload: StreamOptimizePayload,
 	callbacks: StreamOptimizeCallbacks = {},
 ): Promise<void> {
-	const apiBase = String(import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-	const url = `${apiBase}/api/ai-assistant/stream-optimize`;
-
-	const authState = useAuthStore.getState();
-	const token = authState?.token ?? "";
-	const refreshToken = authState?.refreshToken ?? "";
-	const csrfToken = authState?.csrfToken || (typeof document !== "undefined" ? decodeURIComponent(document.cookie.match(/(?:^|; )CSRF-TOKEN=([^;]*)/)?.[1] || "") : "");
-
-	const headers: Record<string, string> = {
-		"Content-Type": "application/json",
-		...(token ? { "csm-token": token } : {}),
-		...(refreshToken ? { "X-Refresh-Token": refreshToken } : {}),
-		...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
-	};
-
-	const response = await fetch(url, {
-		method: "POST",
-		headers,
-		credentials: "include",
-		body: JSON.stringify(payload),
-	});
+	let response: Response;
+	try {
+		response = await request.post("ai-assistant/stream-optimize", {
+			json: payload,
+			timeout: 300_000,
+			throwHttpErrors: false,
+		});
+	}
+	catch (error: any) {
+		const errMsg = String(error?.message || "Request failed");
+		callbacks.onError?.(errMsg);
+		return;
+	}
 
 	if (!response.ok || !response.body) {
 		callbacks.onError?.(`HTTP ${response.status}: ${response.statusText}`);
 		return;
 	}
 
-	const reader = response.body.getReader();
-	const decoder = new TextDecoder("utf-8");
-	let buffer = "";
-	let eventName = "message";
-	let eventData = "";
 	let fullText = "";
 
-	const flushEvent = () => {
-		const dataText = eventData.trim();
-		if (!dataText) {
-			eventName = "message";
-			eventData = "";
-			return;
-		}
+	await consumeSseStream(response, {
+		onEvent: (evt) => {
+			const eventName = String(evt.event || "message");
+			const payloadObj = (evt.payload && typeof evt.payload === "object")
+				? (evt.payload as Record<string, unknown>)
+				: null;
 
-		try {
-			const payloadObj = JSON.parse(dataText) as Record<string, unknown>;
 			if (eventName === "status") {
-				callbacks.onStatus?.(payloadObj);
+				callbacks.onStatus?.(payloadObj || { text: evt.data });
+				return;
 			}
-			else if (eventName === "chunk") {
-				const chunk = String(payloadObj?.text || "");
+			if (eventName === "chunk") {
+				const chunk = payloadObj ? String(payloadObj?.text || "") : evt.data;
+				if (!chunk) {
+					return;
+				}
 				fullText += chunk;
 				callbacks.onChunk?.(chunk, fullText);
+				return;
 			}
-			else if (eventName === "complete") {
-				callbacks.onComplete?.(payloadObj);
+			if (eventName === "complete") {
+				callbacks.onComplete?.(payloadObj || { text: evt.data });
+				return;
 			}
-			else if (eventName === "error") {
-				callbacks.onError?.(String(payloadObj?.message || "Unknown stream error"));
+			if (eventName === "error") {
+				callbacks.onError?.(
+					payloadObj
+						? String(payloadObj?.message || "Unknown stream error")
+						: (evt.data || "Unknown stream error"),
+				);
 			}
-		}
-		catch {
-			if (eventName === "chunk") {
-				fullText += dataText;
-				callbacks.onChunk?.(dataText, fullText);
-			}
-		}
-
-		eventName = "message";
-		eventData = "";
-	};
-
-	while (true) {
-		const { done, value } = await reader.read();
-		if (done) {
-			break;
-		}
-
-		buffer += decoder.decode(value, { stream: true });
-		const lines = buffer.split(/\r?\n/);
-		buffer = lines.pop() || "";
-
-		for (const rawLine of lines) {
-			const line = String(rawLine || "");
-			if (!line.trim()) {
-				flushEvent();
-				continue;
-			}
-			if (line.startsWith("event:")) {
-				eventName = line.slice(6).trim();
-				continue;
-			}
-			if (line.startsWith("data:")) {
-				eventData += `${line.slice(5).trim()}\n`;
-			}
-		}
-	}
-
-	if (eventData.trim()) {
-		flushEvent();
-	}
+		},
+	});
 }

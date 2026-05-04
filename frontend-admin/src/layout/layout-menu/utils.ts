@@ -1,8 +1,52 @@
 import type { MenuItemType } from "./types";
 
+import React from "react";
+import * as AntIcons from "@ant-design/icons";
 import { isString } from "#src/utils";
 import { getLocalizedField, type SupportedLanguage } from "#src/utils/i18nHelper";
 import { useTranslation } from "react-i18next";
+
+/**
+ * Chuẩn hoá tên icon để tìm kiếm trong @ant-design/icons
+ * Hỗ trợ các định dạng: "CarOutlined", "car", "car-outlined", "CarOutlined", vv...
+ */
+export function normalizeIconName(iconName: string): string {
+	const raw = String(iconName || "").trim();
+	if (!raw) return "";
+	if ((AntIcons as any)[raw]) return raw;
+
+	const tokens = raw.split(/\s+/g).filter(Boolean);
+	for (const token of tokens) {
+		if ((AntIcons as any)[token]) return token;
+	}
+
+	if (!/Outlined$|Filled$|TwoTone$/i.test(raw)) {
+		const outlined = `${raw}Outlined`;
+		if ((AntIcons as any)[outlined]) return outlined;
+	}
+
+	return "";
+}
+
+/**
+ * Chuyển đổi icon (string hoặc component) thành React component
+ * String icon được xử lý qua normalizeIconName để tìm icon tương ứng từ @ant-design/icons
+ */
+export function resolveMenuIcon(icon: unknown): React.ReactNode {
+	if (React.isValidElement(icon)) return icon;
+
+	const iconString = typeof icon === "string" ? icon.trim() : "";
+	if (!iconString) return undefined;
+
+	const antIconName = normalizeIconName(iconString);
+	if (antIconName && (AntIcons as any)[antIconName]) {
+		const Comp = (AntIcons as any)[antIconName];
+		return React.createElement(Comp);
+	}
+
+	// Hỗ trợ các icon font legacy (fa/fa-solid/other icon fonts)
+	return React.createElement("i", { className: iconString });
+}
 
 /**
  * Strip menu prefix từ label
@@ -125,10 +169,18 @@ export function translateMenus(
 		};
 
 		// Include optional Ant-compatible fields only
-		// Note: Icon must be a React component, not a string
-		// String icon names will be rendered as text and break the UI
-		if (menu.icon !== undefined && typeof menu.icon !== 'string') {
-			translatedMenu.icon = menu.icon;
+		// Icon có thể đến từ icon, m_icon hoặc m_icons (dữ liệu menu động legacy)
+		const sourceIcon = menu.icon ?? menu.m_icon ?? menu.m_icons;
+		if (sourceIcon !== undefined) {
+			try {
+				const resolvedIcon = resolveMenuIcon(sourceIcon);
+				if (resolvedIcon) {
+					translatedMenu.icon = resolvedIcon;
+				}
+			} catch (err) {
+				console.error('[MenuIcon] Failed to resolve icon:', sourceIcon, err);
+				// Fallback: giữ nguyên nếu có lỗi
+			}
 		}
 		if (menu.disabled === true) {
 			translatedMenu.disabled = menu.disabled;

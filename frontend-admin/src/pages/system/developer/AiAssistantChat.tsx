@@ -12,7 +12,7 @@ import {
 	BulbOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { useAuthStore } from "#src/store/auth";
+import { request } from "#src/utils";
 import { extractCodeBlocks, extractLatestOpenCodeBlock } from "#src/pages/system/developer/codeUtils";
 import { searchBusinessMemory } from "#src/api/ai/assistant-engine";
 import styles from "./AiAssistantChat.module.css";
@@ -1822,21 +1822,9 @@ export default function AiAssistantChat({
 		setOrchPreviewLoading(true);
 		setShowOrchPreview(true);
 		try {
-			const authState = useAuthStore.getState();
-			const token = authState.token ?? "";
-			const refreshToken = authState.refreshToken ?? "";
-			const csrfToken = authState.csrfToken
-				|| (typeof document !== "undefined" ? decodeURIComponent(document.cookie.match(/(?:^|; )CSRF-TOKEN=([^;]*)/)?.[1] || "") : "");
-			const headers: Record<string, string> = { "Content-Type": "application/json" };
-			if (token) headers["csm-token"] = token;
-			if (refreshToken) headers["X-Refresh-Token"] = refreshToken;
-			if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
 			const responseMode: ResponseMode = contextType === "menu_json" ? "edit" : (hasEditIntent(msg) ? "edit" : "analyze");
-			const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/ai-orchestration-preview`, {
-				method: "POST",
-				headers,
-				credentials: "include",
-				body: JSON.stringify({
+			const res = await request.post("ai-orchestration-preview", {
+				json: {
 					appId,
 					message: msg,
 					currentCode,
@@ -1859,7 +1847,8 @@ export default function AiAssistantChat({
 						textContent: a.textContent,
 						fullContext: a.fullContext ?? false,
 					})),
-				}),
+				},
+				throwHttpErrors: false,
 			});
 			if (!res.ok) {
 				message.error(uiText("Không lấy được preview", "Failed to fetch preview", "获取预览失败"));
@@ -2025,8 +2014,11 @@ export default function AiAssistantChat({
 					percent: 0,
 				});
 			}
-			// Let backend/AI infer mode from natural language, unless user explicitly uses /analyze or /edit.
-			const requestedResponseMode: ResponseMode | undefined = modeDirective.overrideMode;
+			// Resolve response mode deterministically to avoid backend fallback-to-analyze for edit/design requests.
+			const inferredResponseMode: ResponseMode = contextType === "menu_json"
+				? "edit"
+				: (hasEditIntent(cleanedMessage || normalizedText) ? "edit" : "analyze");
+			const requestedResponseMode: ResponseMode = modeDirective.overrideMode ?? inferredResponseMode;
 			turnAllowAutoApplyRef.current = requestedResponseMode === "edit";
 			requestStartedAtRef.current = Date.now();
 			setInputValue("");
@@ -2039,28 +2031,8 @@ export default function AiAssistantChat({
 				sseAbortRef.current = controller;
 				const flowType = contextType === "menu_json" ? "menu_manager" : "code_editor";
 				const taskType = contextType === "menu_json" ? "menu_design" : "code_assistant";
-				const authState = useAuthStore.getState();
-				const token = authState.token ?? "";
-				const refreshToken = authState.refreshToken ?? "";
-				const csrfToken = authState.csrfToken
-					|| (typeof document !== "undefined" ? decodeURIComponent(document.cookie.match(/(?:^|; )CSRF-TOKEN=([^;]*)/)?.[1] || "") : "");
-				const headers: Record<string, string> = {
-					"Content-Type": "application/json",
-				};
-				if (token) {
-					headers["csm-token"] = token;
-				}
-				if (refreshToken) {
-					headers["X-Refresh-Token"] = refreshToken;
-				}
-				if (csrfToken) {
-					headers["X-CSRF-Token"] = csrfToken;
-				}
-				const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/ai-code-stream`, {
-					method: "POST",
-					headers,
-					credentials: "include",
-					body: JSON.stringify({
+				const response = await request.post("ai-code-stream", {
+					json: {
 						appId,
 						message: cleanedMessage || normalizedText,
 						flowType,
@@ -2089,7 +2061,8 @@ export default function AiAssistantChat({
 								? attachment.dataUrl.includes(",") ? attachment.dataUrl.split(",")[1] : attachment.dataUrl
 								: undefined,
 						})),
-					}),
+					},
+					throwHttpErrors: false,
 					signal: controller.signal,
 				});
 

@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -34,6 +35,26 @@ public class LlamaCppNativeService implements AIProvider {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AtomicLong requestCount = new AtomicLong(0L);
+
+    // ── Circuit breaker ────────────────────────────────────────────────────────
+    private static final int CB_FAILURE_THRESHOLD   = 2;           // open after N consecutive failures
+    private static final long CB_COOLDOWN_MS        = 5 * 60_000L; // 5 min normal cooldown
+    private static final long CB_HARD_COOLDOWN_MS   = 15 * 60_000L;// 15 min for GPU/KV hard errors
+    /** Error substrings that indicate a persistent hardware/state failure. */
+    private static final String[] HARD_FAILURE_PATTERNS = {
+        "kIOAccelCommandBufferCallbackErrorTimeout".toLowerCase(),
+        "kioaccelcommandbuffercallbackerrortimeout",
+        "gpu timeout",
+        "metal",
+        "kv cache is full",
+        "input prompt is too big compared to kv",
+        "command buffer",
+        "failed to decode the batch",
+    };
+
+    private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
+    private volatile long circuitOpenedAt = 0L;
+    private volatile long circuitCooldownMs = CB_COOLDOWN_MS;
 
     @Value("${ai.local.llama.enabled:false}")
     private boolean enabled;
@@ -58,6 +79,18 @@ public class LlamaCppNativeService implements AIProvider {
 
     @Value("${ai.local.llama.threads:2}")
     private int threads;
+
+    @Value("${ai.local.llama.batch-size:256}")
+    private int batchSize;
+
+    @Value("${ai.local.llama.ubatch-size:128}")
+    private int ubatchSize;
+
+    @Value("${ai.local.llama.gpu-layers:18}")
+    private int gpuLayers;
+
+    @Value("${ai.local.llama.disable-kv-offload:true}")
+    private boolean disableKvOffload;
 
     @Value("${ai.local.llama.max-prompt-chars:16000}")
     private int maxPromptChars;
@@ -92,6 +125,57 @@ public class LlamaCppNativeService implements AIProvider {
         MAX
     }
 
+    // ── Circuit breaker helpers ────────────────────────────────────────────────
+
+    /** Returns true when the circuit is open (model is in cooldown and should be skipped). */
+    public boolean isCircuitOpen() {
+        long openedAt = circuitOpenedAt;
+        if (openedAt == 0L) {
+            return false;
+        }
+        return (System.currentTimeMillis() - openedAt) < circuitCooldownMs;
+    }
+
+    /** Convenience: true when enabled, file exists, AND circuit is not open. */
+    public boolean isHealthy() {
+        return isAvailable() && !isCircuitOpen();
+    }
+
+    private void recordSuccess() {
+        if (consecutiveFailures.getAndSet(0) > 0) {
+            circuitOpenedAt = 0L;
+            log.info("Local llama circuit reset after successful inference");
+        }
+    }
+
+    private void recordFailure(String errorMessage) {
+        boolean hard = isHardFailurePattern(errorMessage);
+        long cooldown = hard ? CB_HARD_COOLDOWN_MS : CB_COOLDOWN_MS;
+        circuitCooldownMs = cooldown;
+        int failures = consecutiveFailures.incrementAndGet();
+        if (failures >= CB_FAILURE_THRESHOLD) {
+            circuitOpenedAt = System.currentTimeMillis();
+            log.warn("Local llama circuit OPENED after {} consecutive failures (hard={}, cooldownMin={}) – skipping local for {}min. Last error: {}",
+                failures, hard, cooldown / 60_000L, cooldown / 60_000L, errorMessage);
+        } else {
+            log.warn("Local llama failure {}/{} (hard={}) – not yet tripping circuit. Error: {}",
+                failures, CB_FAILURE_THRESHOLD, hard, errorMessage);
+        }
+    }
+
+    private static boolean isHardFailurePattern(String message) {
+        if (message == null) {
+            return false;
+        }
+        String lower = message.toLowerCase();
+        for (String pattern : HARD_FAILURE_PATTERNS) {
+            if (lower.contains(pattern)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @PostConstruct
     public void validateStartupAvailability() {
         if (!enabled) {
@@ -111,11 +195,12 @@ public class LlamaCppNativeService implements AIProvider {
         }
 
         log.info("Local llama model path verified: {}", path);
-        log.info("Local llama profile={} effective caps: contextWindow={} (hardCap={}), maxPromptChars={} (hardCap={}), maxTokens={} (hardCap={})",
+        log.info("Local llama profile={} effective caps: contextWindow={} (hardCap={}), maxPromptChars={} (hardCap={}), maxTokens={} (hardCap={}), batchSize={}, ubatchSize={}, gpuLayers={}, disableKvOffload={}",
             resolveRuntimeProfile(),
             effectiveContextWindow(), contextWindowHardCap,
             effectiveMaxPromptChars(), maxPromptCharsHardCap,
-            effectiveMaxTokens(), maxTokensHardCap);
+            effectiveMaxTokens(), maxTokensHardCap,
+            effectiveBatchSize(), effectiveUbatchSize(), effectiveGpuLayers(), disableKvOffload);
         if (preloadOnStartup) {
             try {
                 ensureModelLoaded();
@@ -139,6 +224,11 @@ public class LlamaCppNativeService implements AIProvider {
         if (!isAvailable()) {
             return createErrorJson("Local llama provider chua san sang (kiem tra model-path va config)", "LOCAL_PROVIDER_UNAVAILABLE");
         }
+        if (isCircuitOpen()) {
+            long remainSecs = Math.max(0, (circuitCooldownMs - (System.currentTimeMillis() - circuitOpenedAt)) / 1000L);
+            log.info("Local llama circuit is OPEN, skipping inference (cooldown remaining ~{}s)", remainSecs);
+            return createErrorJson("Local llama circuit open – skipping inference (cooldown " + remainSecs + "s remaining)", "CIRCUIT_OPEN");
+        }
 
         // Prepend system prompt if configured (system prompt API removed in llama v4.x)
         if (systemPrompt != null && !systemPrompt.isBlank()) {
@@ -152,19 +242,17 @@ public class LlamaCppNativeService implements AIProvider {
             safePrompt = safePrompt.substring(0, promptCap);
         }
 
-        try {
-            LlamaModel localModel = ensureModelLoaded();
-            InferenceParameters inference = new InferenceParameters(safePrompt)
-                    .setNPredict(effectiveMaxTokens())
-                    .setTemperature(Math.max(0f, temperature))
-                    .setTopP(Math.max(0.1f, Math.min(1f, topP)))
-                    .setTopK(Math.max(1, topK));
+        // Keep a conservative safety margin to avoid KV/GPU pressure when prompt is near context limit.
+        int runtimePromptCharBudget = resolveRuntimePromptCharBudget();
+        if (safePrompt.length() > runtimePromptCharBudget) {
+            log.warn("Local prompt reduced by runtime budget from {} to {} chars", safePrompt.length(), runtimePromptCharBudget);
+            safePrompt = safePrompt.substring(0, runtimePromptCharBudget);
+        }
 
-            String output;
-            synchronized (modelLock) {
-                output = localModel.complete(inference);
-            }
+        try {
+            String output = runLocalCompletion(safePrompt, false);
             requestCount.incrementAndGet();
+            recordSuccess();
 
             Map<String, Object> success = new HashMap<>();
             success.put("success", true);
@@ -173,9 +261,74 @@ public class LlamaCppNativeService implements AIProvider {
             success.put("timestamp", System.currentTimeMillis());
             return objectMapper.writeValueAsString(success);
         } catch (Exception ex) {
-            log.error("Local llama inference failed: {}", ex.getMessage());
-            return createErrorJson("Local llama inference failed: " + ex.getMessage(), "LOCAL_INFERENCE_FAILED");
+            String firstErr = String.valueOf(ex.getMessage());
+            if (isHardFailurePattern(firstErr) && safePrompt.length() > 1400) {
+                try {
+                    int retryChars = Math.max(1200, Math.min(safePrompt.length() / 2, 6000));
+                    String retryPrompt = safePrompt.substring(0, retryChars);
+                    String retryOutput = runLocalCompletion(retryPrompt, true);
+                    requestCount.incrementAndGet();
+                    recordSuccess();
+
+                    Map<String, Object> success = new HashMap<>();
+                    success.put("success", true);
+                    success.put("result", String.valueOf(retryOutput == null ? "" : retryOutput).trim());
+                    success.put("provider", getName());
+                    success.put("timestamp", System.currentTimeMillis());
+                    success.put("degradedRetry", true);
+                    success.put("retryPromptChars", retryChars);
+                    success.put("retryReason", "hard_failure_prompt_shrink");
+                    log.warn("Local llama recovered via degraded retry after hard error; retryPromptChars={}", retryChars);
+                    return objectMapper.writeValueAsString(success);
+                } catch (Exception retryEx) {
+                    firstErr = String.valueOf(retryEx.getMessage());
+                }
+            }
+
+            log.error("Local llama inference failed: {}", firstErr);
+            recordFailure(firstErr);
+            return createErrorJson("Local llama inference failed: " + firstErr, "LOCAL_INFERENCE_FAILED");
         }
+    }
+
+    private String runLocalCompletion(String prompt, boolean degradedMode) {
+        LlamaModel localModel = ensureModelLoaded();
+        int nPredict = resolveAdaptiveNPredict(prompt, degradedMode);
+        float temp = degradedMode ? Math.min(temperature, 0.1f) : Math.max(0f, temperature);
+        InferenceParameters inference = new InferenceParameters(prompt)
+                .setNPredict(nPredict)
+                .setTemperature(temp)
+                .setTopP(Math.max(0.1f, Math.min(1f, topP)))
+                .setTopK(Math.max(1, topK));
+        synchronized (modelLock) {
+            return localModel.complete(inference);
+        }
+    }
+
+    private int resolveAdaptiveNPredict(String prompt, boolean degradedMode) {
+        int ctx = Math.max(1024, effectiveContextWindow());
+        int promptTokens = estimateTokensByChars(String.valueOf(prompt == null ? "" : prompt).length());
+        int reserved = Math.max(192, degradedMode ? 640 : 384);
+        int availableForOutput = Math.max(32, ctx - promptTokens - reserved);
+        int maxConfigured = Math.max(32, effectiveMaxTokens());
+        int nPredict = Math.min(maxConfigured, availableForOutput);
+        if (degradedMode) {
+            nPredict = Math.min(nPredict, 256);
+        }
+        return Math.max(32, nPredict);
+    }
+
+    private int resolveRuntimePromptCharBudget() {
+        int ctx = Math.max(1024, effectiveContextWindow());
+        int outputReserve = Math.max(256, effectiveMaxTokens());
+        int promptTokenBudget = Math.max(256, ctx - outputReserve - 512);
+        int byTokenChars = promptTokenBudget * 3;
+        return Math.max(2000, Math.min(effectiveMaxPromptChars(), byTokenChars));
+    }
+
+    private int estimateTokensByChars(int chars) {
+        int safeChars = Math.max(0, chars);
+        return Math.max(1, (safeChars + 3) / 4);
     }
 
     @Override
@@ -230,12 +383,39 @@ public class LlamaCppNativeService implements AIProvider {
                     .setModel(path.toAbsolutePath().toString())
                     .setCtxSize(effectiveContextWindow())
                     .setThreads(Math.max(1, threads))
-                    .setThreadsBatch(Math.max(1, threads));
+                    .setThreadsBatch(Math.max(1, threads))
+                    .setBatchSize(effectiveBatchSize())
+                    .setUbatchSize(effectiveUbatchSize());
+
+            int safeGpuLayers = effectiveGpuLayers();
+            if (safeGpuLayers >= 0) {
+                parameters.setGpuLayers(safeGpuLayers);
+            }
+            if (disableKvOffload) {
+                parameters.disableKvOffload();
+            }
 
             log.info("Loading local GGUF model via llama.cpp JNI: {}", path.toAbsolutePath());
             model = new LlamaModel(parameters);
             return model;
         }
+    }
+
+    private int effectiveBatchSize() {
+        return Math.max(32, Math.min(512, batchSize));
+    }
+
+    private int effectiveUbatchSize() {
+        int batch = effectiveBatchSize();
+        return Math.max(16, Math.min(batch, ubatchSize));
+    }
+
+    private int effectiveGpuLayers() {
+        // -1 means auto/all according to backend, otherwise clamp to safe positive range.
+        if (gpuLayers < 0) {
+            return -1;
+        }
+        return Math.max(0, Math.min(80, gpuLayers));
     }
 
     private Path resolveModelPath(String rawPath) {

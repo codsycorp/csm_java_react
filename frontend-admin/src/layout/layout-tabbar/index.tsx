@@ -457,6 +457,7 @@ export default function LayoutTabbar() {
 		const iconNode = !isHome && tabbarShowIcon ? resolveTabIcon(item.key, item) : null;
 		return {
 			...item,
+			icon: undefined,
 			closable: isHome ? false : (item.closable ?? true),
 			draggable: isHome ? false : (item.draggable ?? true),
 			label: (

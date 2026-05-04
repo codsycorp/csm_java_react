@@ -1175,6 +1175,179 @@ if (window.hasOwnProperty("process")) {
 } else if (!window.opsys) {
   window.opsys = 'unknown';
 }
+
+window.__runtimeDiagnostics = window.__runtimeDiagnostics || {
+  enabled: true,
+  maxInMemoryLogs: 200,
+  highMemoryRssBytes: 3221225472,
+  criticalMemoryRssBytes: 4294967296,
+  heartbeatIntervalMs: 60000,
+  startedAt: Date.now(),
+  logs: []
+};
+
+window.runtimeDiagLog = function(level, event, payload) {
+  try {
+    const diag = window.__runtimeDiagnostics || {};
+    if (diag.enabled === false) return;
+
+    const entry = {
+      ts: new Date().toISOString(),
+      level: String(level || 'info'),
+      event: String(event || 'event'),
+      payload: payload || {}
+    };
+
+    const logs = Array.isArray(diag.logs) ? diag.logs : [];
+    logs.push(entry);
+    if (logs.length > Number(diag.maxInMemoryLogs || 200)) {
+      logs.splice(0, logs.length - Number(diag.maxInMemoryLogs || 200));
+    }
+    diag.logs = logs;
+
+    const message = `[RUNTIME-DIAG] ${entry.ts} [${entry.level}] ${entry.event}`;
+    if (entry.level === 'error') {
+      console.error(message, entry.payload);
+    } else if (entry.level === 'warn') {
+      console.warn(message, entry.payload);
+    } else {
+      console.log(message, entry.payload);
+    }
+
+    if (window.hasOwnProperty('process')) {
+      try {
+        const fs = require('fs');
+        const Path = require('path');
+        const gui = require('nw.gui');
+        const userDataPath = gui && gui.App && gui.App.dataPath ? gui.App.dataPath : null;
+        if (userDataPath) {
+          const logDir = Path.join(userDataPath, 'logs');
+          if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+          const logFile = Path.join(logDir, 'seo-runtime.log');
+          fs.appendFile(logFile, JSON.stringify(entry) + '\n', function() {});
+        }
+      } catch (fileErr) {
+        console.warn('[RUNTIME-DIAG] Không ghi được file log:', fileErr.message);
+      }
+    }
+  } catch (err) {
+    console.error('[RUNTIME-DIAG] runtimeDiagLog failed:', err && err.message ? err.message : err);
+  }
+};
+
+if (!window.__runtimeDiagRegistered) {
+  window.__runtimeDiagRegistered = true;
+
+  window.addEventListener('error', function(event) {
+    window.runtimeDiagLog('error', 'window_error', {
+      message: event && event.message ? String(event.message) : 'unknown',
+      file: event && event.filename ? String(event.filename) : '',
+      line: event && event.lineno ? Number(event.lineno) : 0,
+      column: event && event.colno ? Number(event.colno) : 0
+    });
+  });
+
+  window.addEventListener('unhandledrejection', function(event) {
+    const reason = event && event.reason;
+    window.runtimeDiagLog('error', 'unhandled_rejection', {
+      reason: reason && reason.message ? String(reason.message) : String(reason || 'unknown')
+    });
+  });
+
+  window.addEventListener('beforeunload', function() {
+    window.runtimeDiagLog('warn', 'before_unload', {
+      isRunning: !!window.isRunning,
+      activeTabs: document.querySelectorAll('webview[id^="U_"]').length
+    });
+  });
+
+  if (window.hasOwnProperty('process') && process && typeof process.on === 'function') {
+    process.on('uncaughtException', function(err) {
+      window.runtimeDiagLog('error', 'process_uncaught_exception', {
+        message: err && err.message ? String(err.message) : String(err || 'unknown'),
+        stack: err && err.stack ? String(err.stack) : ''
+      });
+    });
+    process.on('unhandledRejection', function(reason) {
+      window.runtimeDiagLog('error', 'process_unhandled_rejection', {
+        reason: reason && reason.message ? String(reason.message) : String(reason || 'unknown')
+      });
+    });
+    process.on('warning', function(warn) {
+      window.runtimeDiagLog('warn', 'process_warning', {
+        message: warn && warn.message ? String(warn.message) : String(warn || 'unknown')
+      });
+    });
+  }
+
+  window.runtimeDiagLog('info', 'diag_initialized', { platform: window.opsys || 'unknown' });
+}
+
+window.startRuntimeDiagnosticsHeartbeat = function() {
+  if (window.__runtimeDiagTimer) {
+    clearInterval(window.__runtimeDiagTimer);
+    window.__runtimeDiagTimer = null;
+  }
+
+  const cfg = window.__runtimeDiagnostics || {};
+  const intervalMs = Math.max(30000, Number(cfg.heartbeatIntervalMs || 60000));
+
+  const tick = function() {
+    const activeTabs = document.querySelectorAll('webview[id^="U_"]').length;
+    const payload = {
+      isRunning: !!window.isRunning,
+      activeTabs,
+      proxyActive: !!window.__isProxyActive,
+      proxyNeedsReset: !!window.__proxyNeedsReset
+    };
+
+    if (window.hasOwnProperty('process') && process && typeof process.memoryUsage === 'function') {
+      try {
+        const mem = process.memoryUsage();
+        payload.memory = {
+          rss: Number(mem.rss || 0),
+          heapTotal: Number(mem.heapTotal || 0),
+          heapUsed: Number(mem.heapUsed || 0),
+          external: Number(mem.external || 0)
+        };
+
+        const warnAt = Number(cfg.highMemoryRssBytes || 3221225472);
+        const criticalAt = Number(cfg.criticalMemoryRssBytes || 4294967296);
+        if (payload.memory.rss >= criticalAt) {
+          window.runtimeDiagLog('error', 'critical_memory_pressure', payload);
+          if (window.isRunning && typeof window.stopApp === 'function') {
+            window.runtimeDiagLog('warn', 'auto_stop_due_to_memory', {
+              rss: payload.memory.rss,
+              threshold: criticalAt
+            });
+            window.stopApp(true);
+          }
+          return;
+        }
+        if (payload.memory.rss >= warnAt) {
+          window.runtimeDiagLog('warn', 'high_memory_pressure', payload);
+          return;
+        }
+      } catch (memErr) {
+        window.runtimeDiagLog('warn', 'memory_usage_read_failed', {
+          message: memErr && memErr.message ? memErr.message : String(memErr)
+        });
+      }
+    }
+
+    window.runtimeDiagLog('info', 'heartbeat', payload);
+  };
+
+  tick();
+  window.__runtimeDiagTimer = setInterval(tick, intervalMs);
+};
+
+window.stopRuntimeDiagnosticsHeartbeat = function() {
+  if (window.__runtimeDiagTimer) {
+    clearInterval(window.__runtimeDiagTimer);
+    window.__runtimeDiagTimer = null;
+  }
+};
 // Giả sử bạn có thẻ webview trong HTML: <webview id="myWebview" src="..."></webview>
 
 // QUAN TRỌNG: Cấu hình proxy tối ưu
@@ -1411,6 +1584,13 @@ window.closeWebviewDueToProxyIssue = function(webviewId, reason) {
   if (!webviewId) return;
   const tabId = String(webviewId).replace(/^U_/, '');
   console.warn(`[Proxy Guard] Đóng ${webviewId} do ${reason}`);
+  if (typeof window.runtimeDiagLog === 'function') {
+    window.runtimeDiagLog('warn', 'close_webview_due_to_proxy_issue', {
+      webviewId,
+      tabId,
+      reason: String(reason || 'unknown')
+    });
+  }
   try {
     if (typeof window.fnRemoveTab === 'function') {
       window.fnRemoveTab(tabId);
@@ -1494,37 +1674,52 @@ window.startWebviewHealthMonitor = function() {
     console.log(`🏥 [Health Monitor] Kiểm tra ${batchSize}/${activeWebviews.length} webview...`);
     
     let unhealthyCount = 0;
+    const unhealthyEvents = [];
+    const finalizeBatch = () => {
+      if (unhealthyCount > activeWebviews.length / 2) {
+        console.error(`🚨 [Health Monitor] ${unhealthyCount}/${activeWebviews.length} webview không khỏe mạnh - Có thể proxy có vấn đề`);
+        window.__proxyNeedsReset = true;
+        if (typeof window.runtimeDiagLog === 'function') {
+          window.runtimeDiagLog('error', 'health_monitor_majority_unhealthy', {
+            unhealthyCount,
+            activeWebviews: activeWebviews.length,
+            details: unhealthyEvents.slice(0, 20)
+          });
+        }
+      }
+    };
+
+    let remaining = batchSize;
     for (let i = 0; i < batchSize; i++) {
       const idx = (window.__webviewHealthCursor + i) % activeWebviews.length;
       const webview = activeWebviews[idx];
       const webviewId = webview.id;
       window.checkWebviewNetworkHealth(webviewId, (result) => {
-        if (result.healthy) return;
+        if (!result.healthy) {
+          unhealthyCount++;
+          const reason = String(result.reason || 'unknown');
+          unhealthyEvents.push({ webviewId, reason });
+          window.markWebviewProxyFailure(webviewId, reason);
 
-        unhealthyCount++;
-        const reason = String(result.reason || 'unknown');
-        window.markWebviewProxyFailure(webviewId, reason);
-
-        if (reason === 'proxy_expired') {
-          window.__proxyNeedsReset = true;
-          window.closeWebviewDueToProxyIssue(webviewId, 'proxy hết hạn');
-          return;
+          if (reason === 'proxy_expired') {
+            window.__proxyNeedsReset = true;
+            window.closeWebviewDueToProxyIssue(webviewId, 'proxy hết hạn');
+          } else {
+            const state = window.__webviewProxyState[webviewId];
+            if (state && state.failureCount >= Number(guardCfg.failureThreshold || 2)) {
+              window.__proxyNeedsReset = true;
+              window.closeWebviewDueToProxyIssue(webviewId, `lỗi proxy lặp lại (${reason})`);
+            }
+          }
         }
 
-        const state = window.__webviewProxyState[webviewId];
-        if (state && state.failureCount >= Number(guardCfg.failureThreshold || 2)) {
-          window.__proxyNeedsReset = true;
-          window.closeWebviewDueToProxyIssue(webviewId, `lỗi proxy lặp lại (${reason})`);
+        remaining--;
+        if (remaining <= 0) {
+          finalizeBatch();
         }
       });
     }
     window.__webviewHealthCursor = (window.__webviewHealthCursor + batchSize) % Math.max(1, activeWebviews.length);
-    
-    // Nếu quá nhiều webview unhealthy, cân nhắc reset proxy
-    if (unhealthyCount > activeWebviews.length / 2) {
-      console.error(`🚨 [Health Monitor] ${unhealthyCount}/${activeWebviews.length} webview không khỏe mạnh - Có thể proxy có vấn đề`);
-      window.__proxyNeedsReset = true;
-    }
     
   }, Number(guardCfg.monitorIntervalMs || 120000));
 };
@@ -1632,22 +1827,32 @@ window.fnClearWebviewCache = function (webviewId, killProcess = false) {
           if (wv.terminate) {
             wv.terminate();
             console.log('[fnClearWebviewCache] ✅ Đã terminate webview process:', processId);
+            if (typeof window.runtimeDiagLog === 'function') {
+              window.runtimeDiagLog('info', 'webview_terminated', { webviewId, processId });
+            }
           } else {
-            // Fallback: kill process trực tiếp - CHỈ KHI CHẮC CHẮN không phải main process
-            if (typeof process !== 'undefined' && typeof process.kill === 'function') {
-              try {
-                process.kill(processId, 'SIGTERM');
-                console.log('[fnClearWebviewCache] ✅ Đã kill process:', processId);
-              } catch (killErr) {
-                console.warn('[fnClearWebviewCache] ⚠️ Không thể kill process:', killErr.message);
-                // KHÔNG thử force kill để tránh crash app
-              }
+            const killed = window.safeKillWebviewProcess(processId, {
+              webviewId,
+              source: 'fnClearWebviewCache'
+            });
+            if (killed) {
+              console.warn('[fnClearWebviewCache] ⚠️ terminate không khả dụng, đã áp dụng safe kill renderer child:', processId);
             } else {
-              console.warn('[fnClearWebviewCache] ⚠️ process.kill không khả dụng');
+              console.warn('[fnClearWebviewCache] ⚠️ wv.terminate không khả dụng và safe kill bị từ chối (không đủ điều kiện an toàn)');
+              if (typeof window.runtimeDiagLog === 'function') {
+                window.runtimeDiagLog('warn', 'skip_direct_process_kill', { webviewId, processId });
+              }
             }
           }
         } catch (killErr) {
           console.warn('[fnClearWebviewCache] ⚠️ Lỗi khi terminate:', killErr.message);
+          if (typeof window.runtimeDiagLog === 'function') {
+            window.runtimeDiagLog('warn', 'webview_terminate_failed', {
+              webviewId,
+              processId,
+              message: killErr && killErr.message ? killErr.message : String(killErr)
+            });
+          }
         }
       }, 500);
     }
@@ -1798,6 +2003,260 @@ const deleteFolderRecursive = function (directoryPath) {
         fs.rmdirSync(directoryPath);
       }
     } catch (e) { }
+  }
+};
+
+window.safeKillWebviewProcess = function(processId, context = {}) {
+  try {
+    if (!window.hasOwnProperty('process')) return false;
+    if (!processId || !Number.isFinite(Number(processId))) return false;
+
+    const pid = Number(processId);
+    const mainPid = Number(process.pid || 0);
+    if (!pid || pid <= 1 || pid === mainPid) {
+      return false;
+    }
+
+    if (typeof process.kill !== 'function') {
+      return false;
+    }
+
+    let ppid = 0;
+    let cmdLine = '';
+
+    try {
+      const childProcess = require('child_process');
+      if (window.opsys === 'win32') {
+        const raw = childProcess.execSync(
+          `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"ProcessId = ${pid}\" | Select-Object ParentProcessId,CommandLine | ConvertTo-Json -Compress"`,
+          { stdio: ['ignore', 'pipe', 'ignore'] }
+        ).toString().trim();
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          ppid = Number(parsed?.ParentProcessId || 0);
+          cmdLine = String(parsed?.CommandLine || '');
+        }
+      } else {
+        const info = childProcess.execSync(`ps -o ppid= -o command= -p ${pid}`, {
+          stdio: ['ignore', 'pipe', 'ignore']
+        }).toString().trim();
+        const splitIndex = info.search(/\s+/);
+        if (splitIndex > 0) {
+          ppid = Number(info.slice(0, splitIndex).trim() || 0);
+          cmdLine = String(info.slice(splitIndex).trim() || '');
+        }
+      }
+    } catch (inspectErr) {
+      if (typeof window.runtimeDiagLog === 'function') {
+        window.runtimeDiagLog('warn', 'safe_kill_inspect_failed', {
+          pid,
+          message: inspectErr && inspectErr.message ? inspectErr.message : String(inspectErr),
+          context
+        });
+      }
+      return false;
+    }
+
+    const directChild = ppid === mainPid;
+    const commandLower = cmdLine.toLowerCase();
+    const looksRenderer = ['renderer', '--type=renderer', 'helper (renderer)'].some(k => commandLower.includes(k));
+    const looksBlocked = ['--type=browser', 'gpu-process', '--type=zygote'].some(k => commandLower.includes(k));
+
+    if (!directChild || !looksRenderer || looksBlocked) {
+      if (typeof window.runtimeDiagLog === 'function') {
+        window.runtimeDiagLog('warn', 'safe_kill_rejected', {
+          pid,
+          ppid,
+          mainPid,
+          directChild,
+          looksRenderer,
+          looksBlocked,
+          cmdLine: cmdLine.slice(0, 280),
+          context
+        });
+      }
+      return false;
+    }
+
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch (termErr) {
+      if (typeof window.runtimeDiagLog === 'function') {
+        window.runtimeDiagLog('warn', 'safe_kill_sigterm_failed', {
+          pid,
+          message: termErr && termErr.message ? termErr.message : String(termErr),
+          context
+        });
+      }
+      return false;
+    }
+
+    setTimeout(() => {
+      try {
+        process.kill(pid, 0);
+        try {
+          process.kill(pid, 'SIGKILL');
+          if (typeof window.runtimeDiagLog === 'function') {
+            window.runtimeDiagLog('warn', 'safe_kill_escalated_sigkill', { pid, context });
+          }
+        } catch (killErr) {
+          if (typeof window.runtimeDiagLog === 'function') {
+            window.runtimeDiagLog('warn', 'safe_kill_sigkill_failed', {
+              pid,
+              message: killErr && killErr.message ? killErr.message : String(killErr),
+              context
+            });
+          }
+        }
+      } catch {
+        // process already exited after SIGTERM
+      }
+    }, 800);
+
+    if (typeof window.runtimeDiagLog === 'function') {
+      window.runtimeDiagLog('warn', 'safe_kill_applied', {
+        pid,
+        ppid,
+        cmdLine: cmdLine.slice(0, 280),
+        context
+      });
+    }
+    return true;
+  } catch (err) {
+    if (typeof window.runtimeDiagLog === 'function') {
+      window.runtimeDiagLog('warn', 'safe_kill_exception', {
+        processId,
+        message: err && err.message ? err.message : String(err),
+        context
+      });
+    }
+    return false;
+  }
+};
+
+window.cleanupSpecificPartition = function(partitionId) {
+  if (!window.hasOwnProperty('process')) return false;
+  if (!partitionId || typeof partitionId !== 'string' || !partitionId.startsWith('temp_session_')) return false;
+
+  try {
+    const gui = require('nw.gui');
+    const Path = require('path');
+    const fs = require('fs');
+    const userDataPath = gui.App.dataPath;
+
+    const targets = [
+      Path.join(userDataPath, 'Default', 'Partitions', partitionId),
+      Path.join(userDataPath, 'Default', 'Storage', 'ext', partitionId)
+    ];
+
+    let removed = false;
+    targets.forEach(targetPath => {
+      try {
+        if (!targetPath.includes(partitionId)) return;
+        if (!fs.existsSync(targetPath)) return;
+
+        if (typeof fs.rmSync === 'function') {
+          fs.rmSync(targetPath, { recursive: true, force: true, maxRetries: 4, retryDelay: 250 });
+        } else {
+          deleteFolderRecursive(targetPath);
+        }
+        removed = true;
+      } catch (rmErr) {
+        if (typeof window.runtimeDiagLog === 'function') {
+          window.runtimeDiagLog('warn', 'cleanup_specific_partition_failed', {
+            partitionId,
+            path: targetPath,
+            message: rmErr && rmErr.message ? rmErr.message : String(rmErr)
+          });
+        }
+      }
+    });
+
+    return removed;
+  } catch (err) {
+    if (typeof window.runtimeDiagLog === 'function') {
+      window.runtimeDiagLog('warn', 'cleanup_specific_partition_exception', {
+        partitionId,
+        message: err && err.message ? err.message : String(err)
+      });
+    }
+    return false;
+  }
+};
+
+window.runTempPartitionJanitor = function() {
+  if (!window.hasOwnProperty('process')) return;
+
+  try {
+    const gui = require('nw.gui');
+    const Path = require('path');
+    const fs = require('fs');
+    const userDataPath = gui.App.dataPath;
+
+    const active = new Set(
+      Array.from(document.querySelectorAll('webview[id^="U_"]'))
+        .map((wv) => String(wv.dataset.partitionId || '').trim())
+        .filter((id) => id.startsWith('temp_session_'))
+    );
+
+    const partitionsPath = Path.join(userDataPath, 'Default', 'Partitions');
+    if (!fs.existsSync(partitionsPath)) return;
+
+    const now = Date.now();
+    const staleMs = 30 * 60 * 1000;
+    const entries = fs.readdirSync(partitionsPath);
+    let cleaned = 0;
+
+    entries.forEach((name) => {
+      try {
+        if (!String(name).startsWith('temp_session_')) return;
+        if (active.has(name)) return;
+
+        const fullPath = Path.join(partitionsPath, name);
+        const stat = fs.statSync(fullPath);
+        const ageMs = now - Number(stat.mtimeMs || 0);
+        if (ageMs < staleMs) return;
+
+        const ok = window.cleanupSpecificPartition(name);
+        if (ok) cleaned++;
+      } catch (entryErr) {
+        if (typeof window.runtimeDiagLog === 'function') {
+          window.runtimeDiagLog('warn', 'janitor_entry_error', {
+            name,
+            message: entryErr && entryErr.message ? entryErr.message : String(entryErr)
+          });
+        }
+      }
+    });
+
+    if (cleaned > 0 && typeof window.runtimeDiagLog === 'function') {
+      window.runtimeDiagLog('info', 'janitor_cleaned_partitions', { cleaned });
+    }
+  } catch (err) {
+    if (typeof window.runtimeDiagLog === 'function') {
+      window.runtimeDiagLog('warn', 'janitor_exception', {
+        message: err && err.message ? err.message : String(err)
+      });
+    }
+  }
+};
+
+window.startTempPartitionJanitor = function() {
+  if (window.__tempPartitionJanitorTimer) {
+    clearInterval(window.__tempPartitionJanitorTimer);
+    window.__tempPartitionJanitorTimer = null;
+  }
+
+  window.runTempPartitionJanitor();
+  window.__tempPartitionJanitorTimer = setInterval(function() {
+    window.runTempPartitionJanitor();
+  }, 120000);
+};
+
+window.stopTempPartitionJanitor = function() {
+  if (window.__tempPartitionJanitorTimer) {
+    clearInterval(window.__tempPartitionJanitorTimer);
+    window.__tempPartitionJanitorTimer = null;
   }
 };
 
@@ -4411,7 +4870,8 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
         window.markWebviewProxyFailure(webviewId, `did-fail-load:${event.errorCode}`);
         const state = window.__webviewProxyState?.[webviewId];
         console.warn(`[Proxy Guard] ${webviewId} lỗi tải (${event.errorCode}) lần ${state?.failureCount || 1}: ${event.errorDescription || ''}`);
-        if ((state?.failureCount || 0) >= 2) {
+        const failureThreshold = Number(window.PROXY_GUARD_CONFIG?.failureThreshold || 2);
+        if ((state?.failureCount || 0) >= failureThreshold) {
         window.__proxyNeedsReset = true;
         window.closeWebviewDueToProxyIssue(webviewId, `proxy/network error ${event.errorCode}`);
         }
@@ -4425,14 +4885,33 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
     `);
     });
     webview.addEventListener('exit', function (e) {
-        if (e.reason === 'crash') {
-            var self = this;
+        const webviewId = 'U_' + id_tab;
+        const reason = e && e.reason ? String(e.reason) : 'unknown';
+        const code = e && e.exitCode != null ? e.exitCode : null;
+
+        if (typeof window.runtimeDiagLog === 'function') {
+          window.runtimeDiagLog(reason === 'crash' ? 'error' : 'warn', 'webview_exit', {
+            webviewId,
+            reason,
+            exitCode: code
+          });
+        }
+
+        if (reason === 'crash' || reason === 'abnormal-exit') {
+          window.markWebviewProxyFailure(webviewId, 'webview_crash');
+          window.__proxyNeedsReset = true;
+          window.closeWebviewDueToProxyIssue(webviewId, `webview ${reason}`);
+
+          if (window.isRunning && typeof fnResetIP === 'function') {
             setTimeout(function () {
-                try {
-                    if (document.querySelector('#U_' + id_tab))
-                        document.querySelector('#U_' + id_tab).reload();
-                } catch { }
-            }, 15000);
+              fnResetIP(true);
+            }, 1500);
+          }
+          return;
+        }
+
+        if (reason === 'killed') {
+          window.unregisterWebviewProxyState(webviewId);
         }
     });
     webview.addEventListener('dialog', function (e) {
@@ -5724,6 +6203,9 @@ function mainAppCode() {
       window.tmRun = null;
       console.log('[stopApp] ✅ Stopped creating new tabs');
     }
+
+    window.stopRuntimeDiagnosticsHeartbeat();
+    window.stopTempPartitionJanitor();
     
     // Dừng health monitor
     window.stopWebviewHealthMonitor();
@@ -5777,6 +6259,15 @@ function mainAppCode() {
     isRunning = true;
     window.isRunning = true;
     currentIndex = 0; // Reset currentIndex khi khởi động
+
+    window.startRuntimeDiagnosticsHeartbeat();
+    window.startTempPartitionJanitor();
+    if (typeof window.runtimeDiagLog === 'function') {
+      window.runtimeDiagLog('info', 'run_app_started', {
+        source: 'runApp',
+        totalLinks: Array.isArray(window.dataUserOption) ? window.dataUserOption.length : 0
+      });
+    }
     
     // Bắt đầu health monitoring cho webviews
     window.startWebviewHealthMonitor();
