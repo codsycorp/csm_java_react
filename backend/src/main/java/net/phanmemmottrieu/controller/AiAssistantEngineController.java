@@ -2,8 +2,6 @@ package net.phanmemmottrieu.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.phanmemmottrieu.service.AiBusinessMemoryVectorService;
-import net.phanmemmottrieu.service.GeminiStreamingService;
-import net.phanmemmottrieu.service.LlamaCppNativeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,10 +26,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Value;
 
 @RestController
@@ -42,24 +36,15 @@ public class AiAssistantEngineController {
     private static final long SSE_TIMEOUT_MS = 10 * 60_000L;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final ExecutorService streamExecutor = Executors.newCachedThreadPool();
 
     private final AiBusinessMemoryVectorService businessMemoryVectorService;
-    private final GeminiStreamingService geminiStreamingService;
-    private final LlamaCppNativeService llamaCppNativeService;
 
     @Value("${ai.context.dir:csm_datas/public}")
     private String contextDir;
 
     @Autowired
-    public AiAssistantEngineController(
-        AiBusinessMemoryVectorService businessMemoryVectorService,
-        GeminiStreamingService geminiStreamingService,
-        @Autowired(required = false) LlamaCppNativeService llamaCppNativeService
-    ) {
+    public AiAssistantEngineController(AiBusinessMemoryVectorService businessMemoryVectorService) {
         this.businessMemoryVectorService = businessMemoryVectorService;
-        this.geminiStreamingService = geminiStreamingService;
-        this.llamaCppNativeService = llamaCppNativeService;
     }
 
     @PostMapping(value = {"/ai-assistant/business-memory/index-md", "/api/ai-assistant/business-memory/index-md"}, consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -209,210 +194,12 @@ public class AiAssistantEngineController {
         emitter.onTimeout(emitter::complete);
         emitter.onError(ex -> log.debug("stream-optimize SSE error: {}", ex.getMessage()));
 
-        streamExecutor.execute(() -> runOptimizeStream(emitter, body));
+        sendEvent(emitter, "error", mapOf(
+            "stage", "error",
+            "message", "Legacy endpoint disabled. Use SSE /ai-code-stream only."
+        ));
+        emitter.complete();
         return emitter;
-    }
-
-    private void runOptimizeStream(SseEmitter emitter, Map<String, Object> body) {
-        String requestId = "eng_" + UUID.randomUUID().toString().substring(0, 10);
-        try {
-            String appId = str(body.get("appId"));
-            String instruction = str(body.get("instruction"));
-            String selection = str(body.get("selection"));
-            String currentCode = str(body.get("currentCode"));
-            String language = str(body.get("language"));
-            String model = str(body.get("model"));
-            int k = intSafe(body.get("topK"), 6);
-
-            if (instruction.isBlank()) {
-                sendEvent(emitter, "error", mapOf(
-                    "requestId", requestId,
-                    "message", "instruction is empty"
-                ));
-                emitter.complete();
-                return;
-            }
-
-            String query = (instruction + "\n" + selection + "\n" + currentCode).trim();
-            String ragBlock = businessMemoryVectorService.buildRagBlock(appId, query, k, 28_000);
-            sendEvent(emitter, "status", mapOf(
-                "requestId", requestId,
-                "stage", "retrieval",
-                "message", ragBlock.isBlank() ? "No business memory found" : "Retrieved business memory context",
-                "ragChars", ragBlock.length()
-            ));
-
-            String prompt = buildUniversalPrompt(instruction, selection, currentCode, language, ragBlock);
-            sendEvent(emitter, "status", mapOf(
-                "requestId", requestId,
-                "stage", "orchestrate",
-                "message", "Prompt packaged and ready for model",
-                "promptChars", prompt.length()
-            ));
-
-            if (shouldUseLocalModel(model)) {
-                streamWithLocalModel(emitter, requestId, prompt, model);
-            } else {
-                streamWithGemini(emitter, requestId, prompt, model);
-            }
-        } catch (Exception ex) {
-            sendEvent(emitter, "error", mapOf(
-                "requestId", requestId,
-                "message", ex.getMessage()
-            ));
-            emitter.complete();
-        }
-    }
-
-    private void streamWithGemini(SseEmitter emitter, String requestId, String prompt, String model) {
-        String resolvedModel = model.isBlank() ? "gemini-2.5-pro" : model;
-        sendEvent(emitter, "status", mapOf(
-            "requestId", requestId,
-            "stage", "generation",
-            "provider", "gemini",
-            "model", resolvedModel,
-            "message", "Streaming response"
-        ));
-
-        StringBuilder full = new StringBuilder();
-        geminiStreamingService.streamContent(
-            prompt,
-            resolvedModel,
-            chunk -> {
-                full.append(chunk);
-                sendEvent(emitter, "chunk", mapOf(
-                    "requestId", requestId,
-                    "text", chunk
-                ));
-            },
-            () -> {
-                sendEvent(emitter, "complete", mapOf(
-                    "requestId", requestId,
-                    "provider", "gemini",
-                    "text", full.toString()
-                ));
-                emitter.complete();
-            },
-            err -> {
-                sendEvent(emitter, "error", mapOf(
-                    "requestId", requestId,
-                    "provider", "gemini",
-                    "message", err == null ? "stream error" : err.getMessage()
-                ));
-                emitter.complete();
-            },
-            status -> sendEvent(emitter, "status", status)
-        );
-    }
-
-    private void streamWithLocalModel(SseEmitter emitter, String requestId, String prompt, String model) {
-        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
-            sendEvent(emitter, "status", mapOf(
-                "requestId", requestId,
-                "stage", "local_provider_unavailable",
-                "message", "Local model unavailable. Fallback to Gemini"
-            ));
-            streamWithGemini(emitter, requestId, prompt, "gemini-2.5-flash");
-            return;
-        }
-
-        sendEvent(emitter, "status", mapOf(
-            "requestId", requestId,
-            "stage", "generation",
-            "provider", "local",
-            "model", model,
-            "message", "Running local model"
-        ));
-
-        try {
-            String raw = llamaCppNativeService.generateContent(prompt);
-            String outText = parseLocalResult(raw);
-            int chunkSize = 280;
-            for (int i = 0; i < outText.length(); i += chunkSize) {
-                String chunk = outText.substring(i, Math.min(outText.length(), i + chunkSize));
-                sendEvent(emitter, "chunk", mapOf(
-                    "requestId", requestId,
-                    "text", chunk
-                ));
-                try {
-                    TimeUnit.MILLISECONDS.sleep(8L);
-                } catch (InterruptedException ignored) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-
-            sendEvent(emitter, "complete", mapOf(
-                "requestId", requestId,
-                "provider", "local",
-                "text", outText
-            ));
-            emitter.complete();
-        } catch (Exception ex) {
-            sendEvent(emitter, "error", mapOf(
-                "requestId", requestId,
-                "provider", "local",
-                "message", ex.getMessage()
-            ));
-            emitter.complete();
-        }
-    }
-
-    private String parseLocalResult(String raw) {
-        String safe = String.valueOf(raw == null ? "" : raw).trim();
-        if (safe.isBlank()) {
-            return "";
-        }
-        try {
-            Map<?, ?> node = objectMapper.readValue(safe, Map.class);
-            Object result = node.get("result");
-            if (result != null) {
-                return String.valueOf(result);
-            }
-            Object message = node.get("message");
-            if (message != null) {
-                return String.valueOf(message);
-            }
-        } catch (Exception ignored) {
-            // Return raw text when local provider already returned plain content.
-        }
-        return safe;
-    }
-
-    private String buildUniversalPrompt(
-        String instruction,
-        String selection,
-        String currentCode,
-        String language,
-        String ragBlock
-    ) {
-        String safeLang = language.isBlank() ? "html" : language;
-        String selectedOrFull = selection.isBlank() ? currentCode : selection;
-        return String.join("\n\n",
-            "You are a senior software customization expert.",
-            "Focus language priority: HTML + inline JavaScript + JSON configuration.",
-            "Apply customer-specific business rules from RAG memory with strict precedence.",
-            "Output format MUST be valid JSON only:",
-            "{\"summary\":\"short\",\"optimizedCode\":\"...\",\"changes\":[\"...\"]}",
-            "Do not wrap JSON in markdown fences.",
-            ragBlock,
-            "## USER INSTRUCTION",
-            instruction,
-            "## TARGET LANGUAGE",
-            safeLang,
-            "## CURRENT SELECTION OR CODE",
-            selectedOrFull
-        );
-    }
-
-    private boolean shouldUseLocalModel(String model) {
-        String m = String.valueOf(model == null ? "" : model).toLowerCase(Locale.ROOT).trim();
-        if (m.isBlank()) {
-            return false;
-        }
-        return m.contains("local")
-            || m.contains("qwen")
-            || m.contains("deepseek")
-            || m.contains("llama");
     }
 
     private void sendEvent(SseEmitter emitter, String event, Map<String, Object> payload) {
@@ -426,17 +213,6 @@ public class AiAssistantEngineController {
 
     private String str(Object raw) {
         return String.valueOf(raw == null ? "" : raw).trim();
-    }
-
-    private int intSafe(Object raw, int fallback) {
-        if (raw instanceof Number n) {
-            return n.intValue();
-        }
-        try {
-            return Integer.parseInt(str(raw));
-        } catch (Exception ignored) {
-            return fallback;
-        }
     }
 
     private List<String> parseTags(String tagsRaw) {

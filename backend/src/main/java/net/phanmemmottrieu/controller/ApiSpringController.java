@@ -52,6 +52,7 @@ import net.phanmemmottrieu.service.AiMenuMergeService;
 import net.phanmemmottrieu.service.AiAssistantMemoryManagerService;
 import net.phanmemmottrieu.service.GeminiStreamingService;
 import net.phanmemmottrieu.service.LocalTranslationService;
+import net.phanmemmottrieu.service.LocalAiAssistantContextService;
 import net.phanmemmottrieu.service.ApiCallInstrumentationService;
 import net.phanmemmottrieu.service.AiConversationContextService;
 import net.phanmemmottrieu.service.MenuQualityGateService;
@@ -144,6 +145,38 @@ public class ApiSpringController {
 
     private static record RequirementGuardDecision(boolean blocked, List<String> questions, List<String> ambiguities) {}
 
+    /**
+     * Result of local AI intent classification.
+     * type: EDIT_MENU | EDIT_CODE | QUESTION | GENERAL
+     * action: add | remove | modify | ask | search | other
+     * confidence: 0-100
+     */
+    private static record LocalIntentClassification(
+        String type,
+        String action,
+        int confidence,
+        String nextStep,
+        String contextKind,
+        String raw) {
+        boolean isEditTask() { return "EDIT_MENU".equals(type) || "EDIT_CODE".equals(type); }
+        boolean isQuestion() { return "QUESTION".equals(type); }
+        boolean isGeneral() { return "GENERAL".equals(type); }
+        boolean isMenuEdit() { return "EDIT_MENU".equals(type); }
+        boolean isCodeEdit() { return "EDIT_CODE".equals(type); }
+        boolean answerDirectly() { return "answer_direct".equalsIgnoreCase(String.valueOf(nextStep)); }
+        boolean needsMenuContext() {
+            return "load_menu_context".equalsIgnoreCase(String.valueOf(nextStep))
+                || "menu".equalsIgnoreCase(String.valueOf(contextKind));
+        }
+        boolean needsCodeContext() {
+            return "load_code_context".equalsIgnoreCase(String.valueOf(nextStep))
+                || "code".equalsIgnoreCase(String.valueOf(contextKind));
+        }
+        static LocalIntentClassification unknown() {
+            return new LocalIntentClassification("GENERAL", "other", 0, "unknown", "none", "");
+        }
+    }
+
     private static final class InstructionsCacheEntry {
         final String content;
         final long loadedAtMs;
@@ -155,6 +188,21 @@ public class ApiSpringController {
             this.fileMtime = fileMtime;
         }
     }
+
+    // ── Intent classification short-lived cache ───────────────────────────────
+    // Shared between evaluateRequirementHardGuard and runMandatoryLocalPreAnalysis
+    // within the same HTTP request (called milliseconds apart).
+    // Key: truncated request text, Value: [LocalIntentClassification, long timestampMs]
+    private final java.util.Map<String, Object[]> intentClassifyCache =
+        java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<String, Object[]>(32, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, Object[]> e) {
+                    return size() > 64;
+                }
+            });
+    private static final long INTENT_CACHE_TTL_MS = 10_000L; // 10 seconds
+    private static final int INTENT_CONFIDENCE_THRESHOLD = 60;
 
     private static record LocalPreAnalysisDecision(
         boolean attempted,
@@ -186,6 +234,7 @@ public class ApiSpringController {
     private final LocalTranslationService localTranslationService;
     private final ApiCallInstrumentationService apiCallInstrumentationService;
     private final AiConversationContextService aiConversationContextService;
+    private final LocalAiAssistantContextService localAiAssistantContextService;
     private final MenuQualityGateService menuQualityGateService;
     private final TokenOptimizationService tokenOptimizationService;
     private final AiLocalOrchestrationService aiLocalOrchestrationService;
@@ -644,6 +693,7 @@ public class ApiSpringController {
             LocalTranslationService localTranslationService,
             ApiCallInstrumentationService apiCallInstrumentationService,
             AiConversationContextService aiConversationContextService,
+            LocalAiAssistantContextService localAiAssistantContextService,
             MenuQualityGateService menuQualityGateService,
             TokenOptimizationService tokenOptimizationService,
             AiLocalOrchestrationService aiLocalOrchestrationService,
@@ -674,6 +724,7 @@ public class ApiSpringController {
         this.localTranslationService = localTranslationService;
         this.apiCallInstrumentationService = apiCallInstrumentationService;
         this.aiConversationContextService = aiConversationContextService;
+        this.localAiAssistantContextService = localAiAssistantContextService;
         this.menuQualityGateService = menuQualityGateService;
         this.tokenOptimizationService = tokenOptimizationService;
         this.aiLocalOrchestrationService = aiLocalOrchestrationService;
@@ -710,6 +761,7 @@ public class ApiSpringController {
 
         aiCodeStreamExecutor.execute(() -> {
             try {
+                long requestStartedAtMs = System.currentTimeMillis();
                 String requestId = Long.toHexString(System.currentTimeMillis()) + "-"
                         + Integer.toHexString(System.identityHashCode(Thread.currentThread()));
                 String appId = str(body.get("appId"), "");
@@ -760,16 +812,46 @@ public class ApiSpringController {
                 String baseContent = truncate(strKeep(body.get("baseContent"), ""), Math.max(100000, aiCodeStreamMaxBaseContentChars));
                 boolean preserveBaseContent = bool(body.get("preserveBaseContent"), false);
                 Object attachmentsRaw = body.get("attachments");
+                boolean strictLocalAssistantScope = localAiAssistantContextService != null
+                    && localAiAssistantContextService.shouldForceLocalOnly(contextType);
 
                 if (message.isBlank()) {
                     sendErrorEvent(emitter, "Message không được để trống");
                     return;
                 }
 
+                if (strictLocalAssistantScope) {
+                    if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
+                        sendEvent(emitter, jsonOf(
+                            "stage", "local_scope_guard",
+                            "status", "blocked",
+                            "requestId", requestId,
+                            "contextType", contextType,
+                            "reason_code", "local_provider_unavailable",
+                            "message", "Luồng Local AI Assistant chỉ cho phép xử lý local, nhưng local provider chưa sẵn sàng"));
+                        sendErrorEvent(emitter, "Luồng Local AI Assistant yêu cầu local provider sẵn sàng. Không fallback cloud.");
+                        return;
+                    }
+                    if (llamaCppNativeService.isCircuitOpen()) {
+                        sendEvent(emitter, jsonOf(
+                            "stage", "local_scope_guard",
+                            "status", "blocked",
+                            "requestId", requestId,
+                            "contextType", contextType,
+                            "reason_code", "local_provider_circuit_open",
+                            "message", "Local provider đang trong cooldown bảo vệ, request local-only bị chặn"));
+                        sendErrorEvent(emitter, "Local provider đang cooldown sau lỗi GPU/KV. Không fallback cloud trong local-only scope.");
+                        return;
+                    }
+                }
+
+                LocalIntentClassification preclassifiedIntent = classifyIntentWithLocalAI(message);
+
                 RequirementGuardDecision requirementGuard = evaluateRequirementHardGuard(
                     message,
                     contextType,
-                    responseMode);
+                    responseMode,
+                    preclassifiedIntent);
                 if (requirementGuard.blocked()) {
                     sendEvent(emitter, jsonOf(
                         "stage", "requirement_clarification_needed",
@@ -780,7 +862,14 @@ public class ApiSpringController {
                         "ambiguities", requirementGuard.ambiguities(),
                         "questions", requirementGuard.questions(),
                         "message", "Yeu cau chua du ro de sua an toan. Can lam ro truoc khi thuc thi"));
-                    sendErrorEvent(emitter, "Yeu cau chua du ro de sua an toan. Vui long tra loi cac cau hoi lam ro truoc khi backend sua");
+                    sendEvent(emitter, jsonOf(
+                        "stage", "completed",
+                        "status", "clarification_needed",
+                        "requestId", requestId,
+                        "message", "Yeu cau can lam ro them truoc khi backend thuc thi",
+                        "ambiguities", requirementGuard.ambiguities(),
+                        "questions", requirementGuard.questions()));
+                    emitter.complete();
                     return;
                 }
 
@@ -943,18 +1032,22 @@ public class ApiSpringController {
                     usePromptCache = false;
                 }
 
+                long localPreAnalysisStartedAtMs = System.currentTimeMillis();
                 LocalPreAnalysisDecision codeStreamPreAnalysis = runMandatoryLocalPreAnalysis(
                     "ai-code-stream",
                     message,
                     prompt,
+                    effectiveCodeContext,
                     contextType,
                     responseMode,
+                    preclassifiedIntent,
                     progressJson -> {
                         if (progressJson == null || progressJson.isBlank()) {
                             return;
                         }
                         sendEvent(emitter, progressJson);
                     });
+                long localPreAnalysisElapsedMs = Math.max(0L, System.currentTimeMillis() - localPreAnalysisStartedAtMs);
                 sendEvent(emitter, jsonOf(
                     "stage", "local_pre_analysis",
                     "status", !codeStreamPreAnalysis.attempted()
@@ -966,13 +1059,14 @@ public class ApiSpringController {
                     "reason_code", codeStreamPreAnalysis.reasonCode(),
                     "hasCloudContext", !String.valueOf(codeStreamPreAnalysis.cloudContext()).isBlank()));
                 logger.info(
-                    "AI_LOCAL_PRE_ANALYSIS flow=ai-code-stream requestId={} appId={} attempted={} handledLocally={} reasonCode={} cloudContextChars={}",
+                    "AI_LOCAL_PRE_ANALYSIS flow=ai-code-stream requestId={} appId={} attempted={} handledLocally={} reasonCode={} cloudContextChars={} elapsedMs={}",
                     requestId,
                     appId,
                     codeStreamPreAnalysis.attempted(),
                     codeStreamPreAnalysis.handledLocally(),
                     codeStreamPreAnalysis.reasonCode(),
-                    String.valueOf(codeStreamPreAnalysis.cloudContext() == null ? "" : codeStreamPreAnalysis.cloudContext()).length());
+                    String.valueOf(codeStreamPreAnalysis.cloudContext() == null ? "" : codeStreamPreAnalysis.cloudContext()).length(),
+                    localPreAnalysisElapsedMs);
 
                 if (!codeStreamPreAnalysis.handledLocally()
                         && !String.valueOf(codeStreamPreAnalysis.cloudContext()).isBlank()) {
@@ -1019,6 +1113,7 @@ public class ApiSpringController {
                 String effectiveModel = routeModel(message, effectiveCodeContext, contextType, responseMode, modelOverride);
                 String defaultModel = resolveDefaultStreamingModel();
                 String simpleModel = resolveSimpleStreamingModel();
+                String startLogModel = codeStreamPreAnalysis.handledLocally() ? "local_pre_analysis" : effectiveModel;
                 boolean shouldFallbackToDefaultOnSimpleFailure = aiCodeStreamRoutingForceSimpleFirst
                     && effectiveModel.equalsIgnoreCase(simpleModel)
                     && !defaultModel.equalsIgnoreCase(simpleModel)
@@ -1027,14 +1122,14 @@ public class ApiSpringController {
                 boolean providerFallbackUsed = false;
                 boolean localProviderPrimaryUsed = false;
                 int localPreAnalysisSavedTokensEstimate = 0;
-                long startedAtMs = System.currentTimeMillis();
+                long inferenceStartedAtMs = System.currentTimeMillis();
 
                 List<Map<String, String>> imageParts = extractImageParts(attachmentsRaw);
                 boolean hasImages = !imageParts.isEmpty();
 
                 logger.info(
                     "ApiSpringController: ai-code-stream start requestId={} appId={} flowType={} taskType={} contextType={} model={} language={} promptChars={} promptTokens~{} messageChars={} promptCache={} images={} focusLine={} focusStart={} focusEnd={} focusChars={} localPreAnalysisAttempted={} localPreAnalysisHandled={} localPreAnalysisReasonCode={} localCloudContextChars={}",
-                    requestId, appId, normalizedFlowType, effectiveTaskType, contextType, effectiveModel, language, prompt.length(), estimateTokens(prompt), message.length(), usePromptCache,
+                    requestId, appId, normalizedFlowType, effectiveTaskType, contextType, startLogModel, language, prompt.length(), estimateTokens(prompt), message.length(), usePromptCache,
                         imageParts.size(), cursorLine,
                         focusWindow == null ? -1 : focusWindow.startLine(),
                         focusWindow == null ? -1 : focusWindow.endLine(),
@@ -1057,16 +1152,20 @@ public class ApiSpringController {
 
                 int promptTokens = estimateTokens(prompt);
                 int estimatedWaitSecs = 3 + prompt.length() / 4000 + (8192 * 4 / 400);
-                String routeReasonCode = effectiveModel.equalsIgnoreCase(defaultModel)
-                    ? "routing_default_model"
-                    : "routing_simple_model";
+                String routeReasonCode = codeStreamPreAnalysis.handledLocally()
+                    ? "local_pre_analysis_handled"
+                    : (effectiveModel.equalsIgnoreCase(defaultModel)
+                        ? "routing_default_model"
+                        : "routing_simple_model");
                 sendEvent(emitter, jsonOf(
                         "stage", "preparing",
                     "requestId", requestId,
-                        "message", "Đang kết nối Gemini...",
+                        "message", codeStreamPreAnalysis.handledLocally()
+                            ? "Đang chuẩn bị kết quả từ Local AI..."
+                            : "Đang kết nối Gemini...",
                         "messageKey", "copilot.progress.message.connecting_model",
-                        "messageArgs", jsonOf("model", effectiveModel),
-                        "model", effectiveModel,
+                        "messageArgs", jsonOf("model", startLogModel),
+                        "model", startLogModel,
                         "modelDecisionStep", "primary",
                     "modelDecisionReason", routeReasonCode,
                         "decision_step", "primary",
@@ -1100,8 +1199,9 @@ public class ApiSpringController {
                             hasImages,
                             modelOverride);
                     boolean tryLocalProviderFirst = codeStreamRouteDecision.mode() != AiRouteMode.CLOUD_ONLY;
-                    boolean localOnlyHardRoute = codeStreamRouteDecision.mode() == AiRouteMode.LOCAL_ONLY
-                        && aiRouterScoreV2LocalOnlyHard;
+                    boolean localOnlyHardRoute = strictLocalAssistantScope
+                        || (codeStreamRouteDecision.mode() == AiRouteMode.LOCAL_ONLY
+                        && aiRouterScoreV2LocalOnlyHard);
 
                     sendEvent(emitter, jsonOf(
                         "stage", "model_switch",
@@ -1134,6 +1234,15 @@ public class ApiSpringController {
                     String providerText = extractAiResultText(providerRaw);
                     if ((providerText == null || providerText.isBlank()) && providerRaw != null) {
                         providerText = providerRaw.trim();
+                    }
+                    if (isMenuJsonContext(contextType)
+                            && providerText != null
+                            && !providerText.isBlank()
+                            && !isLikelyJsonPayload(providerText)) {
+                        String extractedJson = extractJsonObjectCandidate(providerText);
+                        if (!extractedJson.isBlank()) {
+                            providerText = extractedJson;
+                        }
                     }
                     if (providerText != null && !providerText.isBlank()) {
                         boolean localAccepted = shouldAcceptLocalCodeStreamOutput(
@@ -1190,8 +1299,19 @@ public class ApiSpringController {
 
                     if (rawResponse == null) {
                         if (localOnlyHardRoute) {
-                            sendErrorEvent(emitter, "Local-only route dang bat hard mode va local output khong dat quality gate");
-                            return;
+                            logger.warn("LOCAL_ONLY_HARD_ROUTE local quality gate failed, allowing cloud fallback requestId={} contextType={} reasonCode={}",
+                                requestId, contextType, codeStreamPreAnalysis.reasonCode());
+                            sendEvent(emitter, jsonOf(
+                                "stage", "model_switch",
+                                "status", "local_hard_route_quality_fallback",
+                                "requestId", requestId,
+                                "model", effectiveModel,
+                                "modelDecisionStep", "fallback",
+                                "modelDecisionReason", "local_hard_route_quality_gate_failed",
+                                "decision_step", "fallback",
+                                "reason_code", "local_hard_route_quality_gate_failed",
+                                "message", "Local AI không tạo được output đạt chất lượng, chuyển sang cloud model",
+                                "messageKey", "copilot.progress.message.local_hard_route_fallback"));
                         }
                         if (hasImages) {
                             rawResponse = streamWithAutoContinueMultimodal(emitter, prompt, imageParts, effectiveModel, language,
@@ -1405,7 +1525,7 @@ public class ApiSpringController {
                 sendEvent(emitter, objectMapper.writeValueAsString(completion));
 
                 logger.info(
-                    "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType={} responseMode={} model={} promptChars={} promptOriginalChars={} promptCapChars={} promptTruncatedByCharCap={} menuChunkedContextApplied={} promptTokens={} outputChars={} streamedChars={} streamChunkCount={} streamAssemblyMismatch={} completionTokens={} estimatedCostUsd={} outputShape={} textEditsCount={} fallbackToFullCode={} textEditsRetryTriggered={} textEditsRetryAttempts={} attemptsUsed={} maxAttempts={} providerCallsEstimate={} switchedToDefaultModel={} providerFallbackUsed={} promptCache={} images={} elapsedMs={}",
+                    "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType={} responseMode={} model={} promptChars={} promptOriginalChars={} promptCapChars={} promptTruncatedByCharCap={} menuChunkedContextApplied={} promptTokens={} outputChars={} streamedChars={} streamChunkCount={} streamAssemblyMismatch={} completionTokens={} estimatedCostUsd={} outputShape={} textEditsCount={} fallbackToFullCode={} textEditsRetryTriggered={} textEditsRetryAttempts={} attemptsUsed={} maxAttempts={} providerCallsEstimate={} switchedToDefaultModel={} providerFallbackUsed={} promptCache={} images={} elapsedMs={} inferenceElapsedMs={} localPreAnalysisElapsedMs={}",
                     requestId,
                     appId,
                     contextType,
@@ -1435,7 +1555,9 @@ public class ApiSpringController {
                     providerFallbackUsed,
                     usePromptCache,
                     imageParts.size(),
-                    (System.currentTimeMillis() - startedAtMs));
+                    (System.currentTimeMillis() - requestStartedAtMs),
+                    (System.currentTimeMillis() - inferenceStartedAtMs),
+                    localPreAnalysisElapsedMs);
 
                 Map<String, Object> codeTelemetry = new LinkedHashMap<>();
                 codeTelemetry.put("timestamp", System.currentTimeMillis());
@@ -1476,7 +1598,9 @@ public class ApiSpringController {
                 codeTelemetry.put("localPreAnalysisCloudContextInjected", !String.valueOf(codeStreamPreAnalysis.cloudContext()).isBlank());
                 codeTelemetry.put("localPreAnalysisReasonCode", codeStreamPreAnalysis.reasonCode());
                 codeTelemetry.put("attachments", imageParts.size());
-                codeTelemetry.put("elapsedMs", Math.max(0L, (System.currentTimeMillis() - startedAtMs)));
+                codeTelemetry.put("elapsedMs", Math.max(0L, (System.currentTimeMillis() - requestStartedAtMs)));
+                codeTelemetry.put("inferenceElapsedMs", Math.max(0L, (System.currentTimeMillis() - inferenceStartedAtMs)));
+                codeTelemetry.put("localPreAnalysisElapsedMs", localPreAnalysisElapsedMs);
                 apiCallInstrumentationService.recordAiTelemetry(codeTelemetry);
 
                 // OpenDevin state.num_of_chars pattern: accumulate session chars per flow
@@ -1505,7 +1629,7 @@ public class ApiSpringController {
                     codeTurnMeta);
 
                 logger.info("ApiSpringController: ai-code-stream complete requestId={} appId={} model={} elapsedMs={} outputChars={}",
-                    requestId, appId, effectiveModel, (System.currentTimeMillis() - startedAtMs), rawResponse.length());
+                    requestId, appId, effectiveModel, (System.currentTimeMillis() - requestStartedAtMs), rawResponse.length());
                 emitter.complete();
 
             } catch (Exception ex) {
@@ -2392,8 +2516,35 @@ public class ApiSpringController {
         String promptCurrentCode = stripLargeBase64ForPrompt(
             String.valueOf(currentCode == null ? "" : currentCode),
             "ai-code-stream-currentCode");
+        LocalAiAssistantContextService.ContextBundle localContextBundle = localAiAssistantContextService == null
+            ? new LocalAiAssistantContextService.ContextBundle("", "", false, "local_context_service_missing")
+            : localAiAssistantContextService.buildContext(
+                appId,
+                message,
+                promptCurrentCode,
+                language,
+                contextType,
+                responseMode,
+                pName,
+                pType,
+                cursorLine);
 
         sb.append("Bạn là AI trợ lý lập trình (như Cursor/Copilot). Hỗ trợ người dùng chính xác và chi tiết.\n\n");
+
+        if (localContextBundle.forceLocalOnly()) {
+            sb.append("## LOCAL_EXECUTION_POLICY\n");
+            sb.append("Luồng này bắt buộc xử lý local-only trong Java backend + Lucene + llama local.\n");
+            sb.append("Cấm dùng cloud provider, cấm giả định dữ liệu từ dịch vụ ngoài, cấm gửi dữ liệu ra ngoài.\n");
+            sb.append("Khi ngữ cảnh chưa đủ, phải dựa vào CURRENT STATE + STATIC ANALYSIS + LOCAL_SEMANTIC_SEARCH_CONTEXT bên dưới.\n\n");
+        }
+
+        if (!localContextBundle.retrievalBlock().isBlank()) {
+            sb.append(localContextBundle.retrievalBlock()).append("\n\n");
+        }
+
+        if (!localContextBundle.analysisBlock().isBlank()) {
+            sb.append(localContextBundle.analysisBlock()).append("\n\n");
+        }
 
         if (menuJsonEditMode || isMenuJsonContext(contextType)) {
             int promptCapHint = Math.max(60_000, aiCodeStreamMenuMaxPromptChars);
@@ -2921,7 +3072,7 @@ public class ApiSpringController {
             String contextType) throws Exception {
         int estimatedWaitSecs = estimateLocalProviderWaitSecs(prompt);
         long startedAt = System.currentTimeMillis();
-        Future<String> future = aiCodeStreamExecutor.submit(() -> generateProviderContentWithMenuMasterPrompt(prompt, contextType));
+        Future<String> future = aiCodeStreamExecutor.submit(() -> generateDirectLocalContentWithMenuMasterPrompt(prompt, contextType));
 
         sendEvent(emitter, jsonOf(
                 "stage", "waiting_gemini",
@@ -3865,7 +4016,7 @@ public class ApiSpringController {
             String prompt,
             String contextType,
             String responseMode) {
-        return runMandatoryLocalPreAnalysis(flow, requestText, prompt, contextType, responseMode, null);
+        return runMandatoryLocalPreAnalysis(flow, requestText, prompt, "", contextType, responseMode, null, null);
     }
 
     private LocalPreAnalysisDecision runMandatoryLocalPreAnalysis(
@@ -3874,6 +4025,28 @@ public class ApiSpringController {
             String prompt,
             String contextType,
             String responseMode,
+            Consumer<String> progressCallback) {
+        return runMandatoryLocalPreAnalysis(flow, requestText, prompt, "", contextType, responseMode, null, progressCallback);
+    }
+
+    private LocalPreAnalysisDecision runMandatoryLocalPreAnalysis(
+            String flow,
+            String requestText,
+            String prompt,
+            String contextType,
+            String responseMode,
+            LocalIntentClassification preclassifiedIntent) {
+        return runMandatoryLocalPreAnalysis(flow, requestText, prompt, "", contextType, responseMode, preclassifiedIntent, null);
+    }
+
+    private LocalPreAnalysisDecision runMandatoryLocalPreAnalysis(
+            String flow,
+            String requestText,
+            String prompt,
+            String codeContext,
+            String contextType,
+            String responseMode,
+            LocalIntentClassification preclassifiedIntent,
             Consumer<String> progressCallback) {
         if (!aiLocalPreAnalysisEnabled) {
             return new LocalPreAnalysisDecision(false, false, "", "", "pre_analysis_disabled");
@@ -3917,55 +4090,106 @@ public class ApiSpringController {
             sanitizeForLocalPreAnalysis(String.valueOf(requestText == null ? "" : requestText), "local-preanalysis-request"),
             Math.max(300, aiLocalPreAnalysisRequestMaxChars));
         boolean menuJsonContext = isMenuJsonContext(contextType);
+        String safeCodeContext = sanitizeForLocalPreAnalysis(String.valueOf(codeContext == null ? "" : codeContext), "local-preanalysis-code");
 
-        // For oversized inputs: run chunked local summarization pipeline instead of plain truncation.
-        int effectivePreAnalysisMax = Math.max(2000, aiLocalPreAnalysisMaxPromptChars);
-        if (sourcePrompt.length() > effectivePreAnalysisMax && largeFileChunkingService != null) {
-            int beforeChunkingChars = sourcePrompt.length();
-            int estimatedChunkCount = estimateLocalChunkCount(sourcePrompt.length());
-            int estimatedChunkingSecs = estimateLocalChunkingWaitSecs(sourcePrompt.length(), estimatedChunkCount);
+        // ── STEP 1: Classify user intent (request-scope hint preferred) ─────
+        LocalIntentClassification intentClass = preclassifiedIntent;
+        if (intentClass == null) {
             emitLocalPreAnalysisProgress(progressCallback, jsonOf(
                 "stage", "waiting_gemini",
                 "waitState", "local_pre_analysis",
-                "localPhase", "chunking_map",
-                "messageKey", "copilot.progress.message.local_chunking_start",
-                "messageArgs", jsonOf(
-                    "inputChars", sourcePrompt.length(),
-                    "chunkCount", estimatedChunkCount,
-                    "estimatedWaitSecs", estimatedChunkingSecs),
-                "percent", 8,
-                "estimatedWaitSecs", estimatedChunkingSecs,
-                "remainingEstimateSecs", estimatedChunkingSecs));
-            long chunkingStartedAt = System.currentTimeMillis();
-            logger.info("[AI_LOCAL_PRE_ANALYSIS] Large input ({} chars) – invoking chunking pipeline", sourcePrompt.length());
-            sourcePrompt = largeFileChunkingService.compressLargePrompt(sourcePrompt, requestText, contextType);
-            if (menuJsonContext && sourcePrompt.length() >= (int) Math.floor(beforeChunkingChars * 0.95d)) {
-                String chunkedMenuContext = buildMenuChunkedPromptContext(
-                    sourcePrompt,
-                    Math.max(4000, Math.min(8000, aiLocalPreAnalysisMaxPromptChars)));
-                if (!chunkedMenuContext.isBlank() && chunkedMenuContext.length() < sourcePrompt.length()) {
-                    sourcePrompt = chunkedMenuContext;
-                    logger.info("[AI_LOCAL_PRE_ANALYSIS] Fallback menu chunk-context applied: before={} after={}",
-                        beforeChunkingChars, sourcePrompt.length());
-                }
-            }
-            logger.info("[AI_LOCAL_PRE_ANALYSIS] After chunking compression: {} chars", sourcePrompt.length());
-            long chunkingElapsedSecs = Math.max(1L, (System.currentTimeMillis() - chunkingStartedAt) / 1000L);
-            emitLocalPreAnalysisProgress(progressCallback, jsonOf(
-                "stage", "waiting_gemini",
-                "waitState", "local_pre_analysis",
-                "localPhase", "chunking_reduce",
-                "messageKey", "copilot.progress.message.local_chunking_done",
-                "messageArgs", jsonOf(
-                    "outputChars", sourcePrompt.length(),
-                    "elapsedSecs", chunkingElapsedSecs,
-                    "chunkCount", estimatedChunkCount),
-                "percent", 32,
-                "estimatedWaitSecs", estimatedChunkingSecs,
-                "remainingEstimateSecs", 0));
+                "localPhase", "classify",
+                "messageKey", "copilot.progress.message.local_preanalysis_classify",
+                "percent", 35,
+                "remainingEstimateSecs", 2));
+            intentClass = classifyIntentWithLocalAI(safeRequestText);
         } else {
-            sourcePrompt = truncateMiddle(sourcePrompt, effectivePreAnalysisMax);
+            emitLocalPreAnalysisProgress(progressCallback, jsonOf(
+                "stage", "waiting_gemini",
+                "waitState", "local_pre_analysis",
+                "localPhase", "classify",
+                "messageKey", "copilot.progress.message.local_preanalysis_classify",
+                "percent", 35,
+                "remainingEstimateSecs", 0,
+                "detail", "intent_reused_from_request_scope"));
         }
+            intentClass = resolveIntentForNextStep(intentClass, safeRequestText, contextType, responseMode);
+        logger.info("[AI_LOCAL_DIRECT] intent classified: type={} action={} confidence={} menuCtx={} codeCtxLen={}",
+            intentClass.type(), intentClass.action(), intentClass.confidence(), menuJsonContext, safeCodeContext.length());
+
+        // ── STEP 2: Route based on AI-classified intent ─────────────────────
+        if ("ai-code-stream".equals(flow)) {
+
+            // ── 2A: AI decided direct answer -> no code/menu context loading ──
+            if (intentClass.answerDirectly() || intentClass.isQuestion() || intentClass.isGeneral()) {
+                emitLocalPreAnalysisProgress(progressCallback, jsonOf(
+                    "stage", "waiting_gemini",
+                    "waitState", "local_pre_analysis",
+                    "localPhase", "infer",
+                    "messageKey", "copilot.progress.message.local_preanalysis_infer",
+                    "messageArgs", jsonOf("estimatedWaitSecs", 3),
+                    "percent", 45,
+                    "remainingEstimateSecs", 3));
+                String questionPrompt = buildLocalDirectTaskPrompt(contextType, responseMode, safeRequestText, "");
+                String rawResult = llamaCppNativeService.generateContent(questionPrompt);
+                String localText = extractAiResultText(rawResult);
+                if (!localText.isBlank()) {
+                    logger.info("[AI_LOCAL_DIRECT] CHAT answered locally chars={}", localText.length());
+                    return new LocalPreAnalysisDecision(true, true, localText, "", "local_direct_question_answered");
+                }
+                // Model couldn't answer — fall through to cloud
+                return new LocalPreAnalysisDecision(true, false, "", safeRequestText, "local_direct_question_empty");
+            }
+
+            // ── 2B: EDIT_MENU or EDIT_CODE -> load only the context the model requested ──
+            boolean doMenuEdit = intentClass.needsMenuContext()
+                || (intentClass.isMenuEdit() && !intentClass.needsCodeContext())
+                || (menuJsonContext && !intentClass.isCodeEdit());
+            String rawContext = !safeCodeContext.isBlank() ? safeCodeContext : sourcePrompt;
+            String compactContext;
+            if (doMenuEdit) {
+                compactContext = extractRelevantMenuNodesForLocal(safeRequestText, rawContext, 3500);
+            } else {
+                // EDIT_CODE or other — use focus window
+                compactContext = truncateMiddle(rawContext, 3500);
+            }
+
+            if (!compactContext.isBlank()) {
+                int estWait = estimateLocalProviderWaitSecs(compactContext);
+                emitLocalPreAnalysisProgress(progressCallback, jsonOf(
+                    "stage", "waiting_gemini",
+                    "waitState", "local_pre_analysis",
+                    "localPhase", "infer",
+                    "messageKey", "copilot.progress.message.local_preanalysis_infer",
+                    "messageArgs", jsonOf("estimatedWaitSecs", estWait),
+                    "percent", 50,
+                    "estimatedWaitSecs", estWait,
+                    "remainingEstimateSecs", estWait));
+                logger.info("[AI_LOCAL_DIRECT] contextType={} doMenuEdit={} compactContextChars={} intent={}",
+                    contextType, doMenuEdit, compactContext.length(), intentClass.type());
+                String directPrompt = buildLocalDirectTaskPrompt(
+                    doMenuEdit ? "menu_json" : contextType,
+                    responseMode, safeRequestText, compactContext);
+                String rawResult = llamaCppNativeService.generateContent(directPrompt);
+                String localText = extractAiResultText(rawResult);
+                if (!localText.isBlank()) {
+                    boolean accepted = shouldAcceptLocalCodeStreamOutput(localText, responseMode,
+                        doMenuEdit ? "menu_json" : contextType);
+                    if (accepted) {
+                        logger.info("[AI_LOCAL_DIRECT] accepted handledLocally=true chars={}", localText.length());
+                        return new LocalPreAnalysisDecision(true, true, localText, "", "local_direct_accepted");
+                    }
+                    logger.info("[AI_LOCAL_DIRECT] output not accepted by quality gate, using as cloudContext chars={}", localText.length());
+                    return new LocalPreAnalysisDecision(true, false, "", localText, "local_direct_cloud_context");
+                }
+                logger.info("[AI_LOCAL_DIRECT] empty local output, using compactContext as cloudContext chars={}", compactContext.length());
+                return new LocalPreAnalysisDecision(true, false, "", compactContext, "local_direct_compact_context");
+            }
+        }
+
+        // ── FALLBACK: plain truncation + meta-schema prompt (for non-code flows) ───────────────
+        int effectivePreAnalysisMax = Math.max(2000, aiLocalPreAnalysisMaxPromptChars);
+        sourcePrompt = truncateMiddle(sourcePrompt, effectivePreAnalysisMax);
 
         int localInputTokenBudget = resolveLocalPreAnalysisInputTokenBudget();
         int sourceBeforeBudgetTrim = sourcePrompt.length();
@@ -3976,10 +4200,8 @@ public class ApiSpringController {
             safeRequestText,
             sourcePrompt,
             localInputTokenBudget);
-        int finalPromptClampChars = menuJsonContext ? 4000 : 10000;
-        if (sourcePrompt.length() > finalPromptClampChars) {
-            sourcePrompt = truncateMiddle(sourcePrompt, finalPromptClampChars);
-            logger.info("[AI_LOCAL_PRE_ANALYSIS] Final clamp applied for local prompt: {} chars", sourcePrompt.length());
+        if (sourcePrompt.length() > 10000) {
+            sourcePrompt = truncateMiddle(sourcePrompt, 10000);
         }
         if (sourcePrompt.length() < sourceBeforeBudgetTrim) {
             emitLocalPreAnalysisProgress(progressCallback, jsonOf(
@@ -4049,6 +4271,297 @@ public class ApiSpringController {
         int byChunks = 2 + (safeChunkCount * 2);
         int byChars = 2 + (safeChars / 12000);
         return Math.max(4, Math.min(240, Math.max(byChunks, byChars)));
+    }
+
+    /**
+     * Extract the menu nodes most relevant to the request from the full menu JSON.
+     * Returns a compact JSON string that fits within maxChars.
+     * Strategy: keyword-match node name/id, include full ancestor chain, cap at maxChars.
+     */
+    @SuppressWarnings("unchecked")
+    private String extractRelevantMenuNodesForLocal(String requestText, String menuJson, int maxChars) {
+        String text = String.valueOf(menuJson == null ? "" : menuJson).trim();
+        if (text.isBlank()) return "";
+        try {
+            // Normalize to array of flat nodes
+            List<Map<String, Object>> allNodes = new java.util.ArrayList<>();
+            Object parsed = objectMapper.readValue(text, Object.class);
+            java.util.function.Consumer<Object> flatten = null;
+            // Use array holder so lambda can recurse
+            java.util.function.Consumer<Object>[] flattenRef = new java.util.function.Consumer[1];
+            flattenRef[0] = obj -> {
+                if (obj instanceof List) {
+                    for (Object item : (List<?>) obj) flattenRef[0].accept(item);
+                } else if (obj instanceof Map) {
+                    Map<String, Object> node = (Map<String, Object>) obj;
+                    allNodes.add(node);
+                    Object children = node.get("children");
+                    if (children instanceof List) flattenRef[0].accept(children);
+                }
+            };
+            // Try menus[] wrapper or direct array
+            if (parsed instanceof Map) {
+                Map<String, Object> root = (Map<String, Object>) parsed;
+                Object menus = root.getOrDefault("menus", root.getOrDefault("items", null));
+                if (menus instanceof List) flattenRef[0].accept(menus);
+                else flattenRef[0].accept(parsed);
+            } else {
+                flattenRef[0].accept(parsed);
+            }
+
+            if (allNodes.isEmpty()) return truncateMiddle(text, maxChars);
+
+            // Score each node by keyword overlap with request
+            String req = requestText == null ? "" : requestText.toLowerCase(java.util.Locale.ROOT);
+            String[] keywords = req.split("[\\s,;.!?/]+");
+            java.util.Set<String> relevantIds = new java.util.LinkedHashSet<>();
+            for (Map<String, Object> node : allNodes) {
+                String name = String.valueOf(node.getOrDefault("name", node.getOrDefault("label", node.getOrDefault("title", "")))).toLowerCase(java.util.Locale.ROOT);
+                String id   = String.valueOf(node.getOrDefault("id", "")).toLowerCase(java.util.Locale.ROOT);
+                String path = String.valueOf(node.getOrDefault("path", node.getOrDefault("routerPath", node.getOrDefault("href", "")))).toLowerCase(java.util.Locale.ROOT);
+                for (String kw : keywords) {
+                    if (kw.length() >= 3 && (name.contains(kw) || id.contains(kw) || path.contains(kw))) {
+                        String nodeId = String.valueOf(node.getOrDefault("id", ""));
+                        if (!nodeId.isBlank()) relevantIds.add(nodeId);
+                        break;
+                    }
+                }
+            }
+            // Build id→node map for parent lookup
+            java.util.Map<String, Map<String, Object>> idMap = new java.util.LinkedHashMap<>();
+            for (Map<String, Object> node : allNodes) {
+                String id = String.valueOf(node.getOrDefault("id", ""));
+                if (!id.isBlank()) idMap.put(id, node);
+            }
+            // Include parents of relevant nodes
+            java.util.Set<String> idsToInclude = new java.util.LinkedHashSet<>(relevantIds);
+            for (String id : new java.util.ArrayList<>(relevantIds)) {
+                Map<String, Object> node = idMap.get(id);
+                while (node != null) {
+                    String parentId = String.valueOf(node.getOrDefault("parentId", "")).trim();
+                    if (parentId.isBlank()) break;
+                    idsToInclude.add(parentId);
+                    node = idMap.get(parentId);
+                }
+            }
+            // If nothing matched, use top-level nodes as representative sample
+            if (idsToInclude.isEmpty()) {
+                for (Map<String, Object> node : allNodes) {
+                    String parentId = String.valueOf(node.getOrDefault("parentId", "")).trim();
+                    if (parentId.isBlank()) {
+                        String id = String.valueOf(node.getOrDefault("id", ""));
+                        if (!id.isBlank()) idsToInclude.add(id);
+                    }
+                    if (idsToInclude.size() >= 12) break;
+                }
+            }
+            // Collect compact nodes (strip children, keep essential fields)
+            List<Map<String, Object>> compact = new java.util.ArrayList<>();
+            for (Map<String, Object> node : allNodes) {
+                String id = String.valueOf(node.getOrDefault("id", ""));
+                if (!idsToInclude.contains(id)) continue;
+                java.util.LinkedHashMap<String, Object> slim = new java.util.LinkedHashMap<>();
+                for (String key : new String[]{"id","name","label","title","parentId","path","routerPath","href","type","icon","order","visible","enabled","pName","pType"}) {
+                    if (node.containsKey(key)) slim.put(key, node.get(key));
+                }
+                compact.add(slim);
+            }
+            String result = objectMapper.writeValueAsString(compact);
+            if (result.length() > maxChars) result = truncateMiddle(result, maxChars);
+            return result;
+        } catch (Exception e) {
+            return truncateMiddle(text, maxChars);
+        }
+    }
+
+    /**
+     * Build a ChatML-formatted direct task prompt for the local Qwen model.
+     * The prompt is lean: system instruction + compact context + user request.
+     * No JSON-wrapper schema (canHandleFully/localAnswer) — the model outputs the answer directly.
+     */
+    /**
+     * Detect user intent from request text to select the most targeted prompt strategy.
+     * Returns one of: ADD, DELETE, EDIT, RESTRUCTURE, EXPLAIN, SEARCH, GENERAL
+     */
+    private String detectUserIntent(String requestText) {
+        if (requestText == null || requestText.isBlank()) return "GENERAL";
+        String lower = requestText.toLowerCase();
+
+        // ADD intent
+        if (lower.contains("thêm") || lower.contains("tạo") || lower.contains("thêm mới") || lower.contains("tạo mới")
+                || lower.contains("bổ sung") || lower.contains("add") || lower.contains("create") || lower.contains("insert")) {
+            return "ADD";
+        }
+        // DELETE intent
+        if (lower.contains("xóa") || lower.contains("xoá") || lower.contains("loại bỏ") || lower.contains("remove")
+                || lower.contains("delete") || lower.contains("ẩn") || lower.contains("disable")) {
+            return "DELETE";
+        }
+        // EXPLAIN / QUESTION intent
+        if (lower.contains("giải thích") || lower.contains("giải thich") || lower.contains("là gì")
+                || lower.contains("nghĩa là") || lower.contains("explain") || lower.contains("what is")
+                || lower.contains("tại sao") || lower.contains("why") || lower.contains("?")) {
+            return "EXPLAIN";
+        }
+        // SEARCH / FIND intent
+        if (lower.contains("tìm") || lower.contains("tìm kiếm") || lower.contains("search") || lower.contains("find")
+                || lower.contains("danh sách") || lower.contains("liệt kê") || lower.contains("list")) {
+            return "SEARCH";
+        }
+        // RESTRUCTURE intent
+        if (lower.contains("sắp xếp") || lower.contains("di chuyển") || lower.contains("move") || lower.contains("reorder")
+                || lower.contains("restructure") || lower.contains("cấu trúc lại") || lower.contains("chuyển")) {
+            return "RESTRUCTURE";
+        }
+        // EDIT intent (default for modification)
+        if (lower.contains("sửa") || lower.contains("chỉnh") || lower.contains("đổi") || lower.contains("cập nhật")
+                || lower.contains("update") || lower.contains("edit") || lower.contains("change") || lower.contains("rename")) {
+            return "EDIT";
+        }
+        return "GENERAL";
+    }
+
+    private String buildLocalDirectTaskPrompt(String contextType, String responseMode, String requestText, String compactContext) {
+        boolean isMenu = isMenuJsonContext(contextType);
+        String safeRequest = String.valueOf(requestText == null ? "" : requestText).trim();
+        // Use keyword detection only as fallback hint for prompt wording — primary routing is done by AI classification upstream
+        String intent = detectUserIntent(safeRequest);
+
+        // No context = question/general intent — build a direct Q&A prompt
+        if (compactContext == null || compactContext.isBlank()) {
+            return buildGeneralAnswerPrompt(safeRequest);
+        }
+
+        if (isMenu) {
+            return buildMenuDirectPrompt(intent, safeRequest, compactContext);
+        } else {
+            return buildCodeDirectPrompt(intent, safeRequest, compactContext, contextType);
+        }
+    }
+
+    /**
+     * Prompt for QUESTION/GENERAL intent where no code/menu context is needed.
+     * Local AI answers the user directly as a knowledgeable assistant.
+     */
+    private String buildGeneralAnswerPrompt(String requestText) {
+        String systemMsg = "Bạn là trợ lý AI thông minh, hiểu biết sâu về lập trình, công nghệ, và hệ thống phần mềm. "
+            + "Trả lời bằng tiếng Việt, ngắn gọn, chính xác. "
+            + "Nếu câu hỏi về bản thân bạn (model AI, khả năng xử lý): trả lời trung thực về giới hạn kỹ thuật của mô hình ngôn ngữ cục bộ (local LLM). "
+            + "Không bịa thông tin. Không giải thích thừa.";
+        return "<|im_start|>system\n" + systemMsg + "<|im_end|>\n"
+            + "<|im_start|>user\n" + requestText + "<|im_end|>\n"
+            + "<|im_start|>assistant\n";
+    }
+
+    private String buildMenuDirectPrompt(String intent, String requestText, String compactContext) {
+        String systemMsg;
+        String taskInstruction;
+
+        switch (intent) {
+            case "ADD" -> {
+                systemMsg = "Bạn là AI chỉnh sửa menu JSON cho hệ thống CSM. Nhiệm vụ: THÊM node mới theo yêu cầu. "
+                    + "Quy tắc: output là JSON object {\"menu\":[...]} chứa toàn bộ menu sau khi thêm. "
+                    + "Mỗi node mới phải có: id (unique snake_case), name (tiếng Việt), path, icon, permission (snake_case). "
+                    + "Giữ nguyên tất cả node hiện có, chỉ thêm node mới vào đúng vị trí. Không giải thích.";
+                taskInstruction = "THÊM node mới theo yêu cầu sau: " + requestText;
+            }
+            case "DELETE" -> {
+                systemMsg = "Bạn là AI chỉnh sửa menu JSON cho hệ thống CSM. Nhiệm vụ: XÓA node theo yêu cầu. "
+                    + "Quy tắc: output là JSON object {\"menu\":[...]} chứa toàn bộ menu sau khi xóa node được chỉ định. "
+                    + "Giữ nguyên tất cả node khác. Không giải thích.";
+                taskInstruction = "XÓA node theo yêu cầu sau: " + requestText;
+            }
+            case "EDIT" -> {
+                systemMsg = "Bạn là AI chỉnh sửa menu JSON cho hệ thống CSM. Nhiệm vụ: SỬA node theo yêu cầu. "
+                    + "Quy tắc: output là JSON object {\"menu\":[...]} chứa toàn bộ menu sau khi sửa. "
+                    + "Chỉ thay đổi field được yêu cầu, giữ nguyên tất cả field và node khác. Không giải thích.";
+                taskInstruction = "SỬA node theo yêu cầu sau: " + requestText;
+            }
+            case "RESTRUCTURE" -> {
+                systemMsg = "Bạn là AI chỉnh sửa menu JSON cho hệ thống CSM. Nhiệm vụ: SẮP XẾP LẠI cấu trúc menu. "
+                    + "Quy tắc: output là JSON object {\"menu\":[...]} chứa toàn bộ menu sau khi sắp xếp lại. "
+                    + "Giữ nguyên tất cả node và field, chỉ thay đổi thứ tự/cấu trúc phân cấp. Không giải thích.";
+                taskInstruction = "SẮP XẾP LẠI menu theo yêu cầu sau: " + requestText;
+            }
+            case "EXPLAIN", "SEARCH" -> {
+                systemMsg = "Bạn là AI phân tích menu JSON hệ thống CSM. Nhiệm vụ: trả lời câu hỏi dựa trên cấu trúc menu. "
+                    + "Trả lời bằng tiếng Việt, ngắn gọn, chính xác. Không sửa JSON nếu không được yêu cầu.";
+                taskInstruction = "Câu hỏi: " + requestText;
+            }
+            default -> {
+                systemMsg = "Bạn là AI chỉnh sửa menu JSON cho hệ thống CSM. "
+                    + "Phân tích yêu cầu và thực hiện thay đổi phù hợp. "
+                    + "Nếu yêu cầu chỉnh sửa: output JSON object {\"menu\":[...]} chứa toàn bộ menu sau chỉnh sửa. "
+                    + "Nếu yêu cầu giải thích: trả lời bằng tiếng Việt. Không giải thích thừa.";
+                taskInstruction = "Yêu cầu: " + requestText;
+            }
+        }
+
+        String contextLabel = "MENU HIỆN TẠI (các node liên quan):\n";
+        String userMsg = contextLabel + compactContext + "\n\n" + taskInstruction;
+
+        return "<|im_start|>system\n" + systemMsg + "<|im_end|>\n"
+            + "<|im_start|>user\n" + userMsg + "<|im_end|>\n"
+            + "<|im_start|>assistant\n";
+    }
+
+    private String buildCodeDirectPrompt(String intent, String requestText, String compactContext, String contextType) {
+        String lang = detectCodeLanguage(contextType, compactContext);
+        String systemMsg;
+        String taskInstruction;
+
+        switch (intent) {
+            case "ADD" -> {
+                systemMsg = "Bạn là AI lập trình " + lang + ". Nhiệm vụ: THÊM code mới theo yêu cầu. "
+                    + "Xuất code hoàn chỉnh sau khi thêm. Không giải thích. Không markdown wrapper thừa.";
+                taskInstruction = "THÊM code theo yêu cầu: " + requestText;
+            }
+            case "DELETE" -> {
+                systemMsg = "Bạn là AI lập trình " + lang + ". Nhiệm vụ: XÓA/ẨN phần code được chỉ định. "
+                    + "Xuất code hoàn chỉnh sau khi xóa. Không giải thích. Không markdown wrapper thừa.";
+                taskInstruction = "XÓA phần code theo yêu cầu: " + requestText;
+            }
+            case "EXPLAIN" -> {
+                systemMsg = "Bạn là AI lập trình " + lang + ". Nhiệm vụ: GIẢI THÍCH code. "
+                    + "Trả lời bằng tiếng Việt, ngắn gọn, chính xác, tập trung vào điểm quan trọng.";
+                taskInstruction = "Giải thích: " + requestText;
+            }
+            case "SEARCH" -> {
+                systemMsg = "Bạn là AI lập trình " + lang + ". Nhiệm vụ: TÌM KIẾM trong code. "
+                    + "Trả lời bằng tiếng Việt, chỉ ra đúng vị trí/function/biến liên quan.";
+                taskInstruction = "Tìm kiếm: " + requestText;
+            }
+            default -> {
+                systemMsg = "Bạn là AI lập trình " + lang + ". Phân tích yêu cầu và thực hiện thay đổi phù hợp. "
+                    + "Nếu chỉnh sửa code: xuất code hoàn chỉnh. Nếu giải thích: trả lời tiếng Việt ngắn gọn. "
+                    + "Không giải thích thừa. Không markdown wrapper thừa.";
+                taskInstruction = "Yêu cầu: " + requestText;
+            }
+        }
+
+        String userMsg = "CODE HIỆN TẠI:\n" + compactContext + "\n\n" + taskInstruction;
+        return "<|im_start|>system\n" + systemMsg + "<|im_end|>\n"
+            + "<|im_start|>user\n" + userMsg + "<|im_end|>\n"
+            + "<|im_start|>assistant\n";
+    }
+
+    private String detectCodeLanguage(String contextType, String code) {
+        if (contextType != null) {
+            String ct = contextType.toLowerCase();
+            if (ct.contains("vue")) return "Vue.js";
+            if (ct.contains("react") || ct.contains("tsx") || ct.contains("jsx")) return "React/TypeScript";
+            if (ct.contains("html")) return "HTML";
+            if (ct.contains("json")) return "JSON";
+            if (ct.contains("js") || ct.contains("javascript")) return "JavaScript";
+            if (ct.contains("ts") || ct.contains("typescript")) return "TypeScript";
+        }
+        if (code != null) {
+            String sample = code.substring(0, Math.min(500, code.length()));
+            if (sample.contains("<template>")) return "Vue.js";
+            if (sample.contains("import React") || sample.contains("JSX")) return "React/TypeScript";
+            if (sample.contains("<!DOCTYPE") || sample.contains("<html")) return "HTML";
+        }
+        return "JavaScript";
     }
 
     private int resolveLocalPreAnalysisInputTokenBudget() {
@@ -4386,6 +4899,10 @@ public class ApiSpringController {
             String prompt,
             boolean hasImages,
             String modelOverride) {
+        if (localAiAssistantContextService != null && localAiAssistantContextService.shouldForceLocalOnly(contextType)) {
+            return new AiRouteDecision(AiRouteMode.LOCAL_ONLY, 100, "local_assistant_scope_local_only");
+        }
+
         if (!aiRouterScoreV2Enabled) {
             boolean legacyLocal = shouldRouteLocalProviderFirstForCodeStream(
                     responseMode,
@@ -4467,7 +4984,18 @@ public class ApiSpringController {
         }
 
         if (isMenuJsonContext(contextType)) {
-            return isLikelyJsonPayload(text);
+            String jsonCandidate = "";
+            if (isLikelyJsonPayload(text)) {
+                jsonCandidate = text;
+            } else {
+                jsonCandidate = extractJsonObjectCandidate(text);
+            }
+            // If local returned plain-text answer (explain/search intent), accept if long enough
+            if (jsonCandidate.isBlank() || !isLikelyJsonPayload(jsonCandidate)) {
+                // Plain text answer from local AI (e.g., explain/search intent) — accept as analyze response
+                return text.length() >= 30 && !text.startsWith("{") && !text.startsWith("[");
+            }
+            return countMenuNodesFromDraft(jsonCandidate) > 0;
         }
 
         if (!aiCodeStreamLocalProviderRequireStructuredForEdit) {
@@ -5568,7 +6096,288 @@ public class ApiSpringController {
         return out;
     }
 
-    private RequirementGuardDecision evaluateRequirementHardGuard(String requestText, String contextType, String responseMode) {
+    /**
+     * Ask the local AI model to classify user intent in ~1 call with a minimal prompt.
+        * Output: {
+        *   "type":"EDIT_MENU|EDIT_CODE|QUESTION|GENERAL",
+        *   "action":"add|remove|modify|ask|search|other",
+        *   "nextStep":"answer_direct|load_menu_context|load_code_context|clarify",
+        *   "contextKind":"menu|code|none",
+        *   "confidence":0-100
+        * }
+     * Falls back to GENERAL if model unavailable or output unparseable.
+     */
+    private LocalIntentClassification classifyIntentWithLocalAI(String requestText) {
+        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()
+                || llamaCppNativeService.isCircuitOpen()) {
+            return LocalIntentClassification.unknown();
+        }
+        String safe = truncateMiddle(String.valueOf(requestText == null ? "" : requestText).trim(), 400);
+        if (safe.isBlank()) return LocalIntentClassification.unknown();
+
+        // ── Cache lookup (10s TTL) ────────────────────────────────────────────
+        String cacheKey = safe.length() > 120 ? safe.substring(0, 120) : safe;
+        Object[] cached = intentClassifyCache.get(cacheKey);
+        if (cached != null) {
+            long cachedAt = (long) cached[1];
+            if (System.currentTimeMillis() - cachedAt < INTENT_CACHE_TTL_MS) {
+                LocalIntentClassification hit = (LocalIntentClassification) cached[0];
+                logger.debug("[AI_INTENT_CLASSIFY] cache-hit type={} action={}", hit.type(), hit.action());
+                return hit;
+            }
+        }
+
+        // ── Fast heuristic bypass: obvious conversational → skip llama call ──
+        if (isConversationalRequest(safe)) {
+            LocalIntentClassification fast = new LocalIntentClassification(
+                "QUESTION", "ask", 90, "answer_direct", "none", "heuristic_fast");
+            intentClassifyCache.put(cacheKey, new Object[]{ fast, System.currentTimeMillis() });
+            logger.debug("[AI_INTENT_CLASSIFY] fast-heuristic QUESTION (no llama call)");
+            return fast;
+        }
+
+        // ── Llama classification call with reduced token budget ───────────────
+        String classifyPrompt = "<|im_start|>system\n"
+            + "Classify user request. Output JSON only, no explanation.\n"
+            + "Schema: {\"type\":\"EDIT_MENU|EDIT_CODE|QUESTION|GENERAL\","
+            + "\"action\":\"add|remove|modify|ask|search|other\","
+            + "\"nextStep\":\"answer_direct|load_menu_context|load_code_context|clarify\","
+            + "\"contextKind\":\"menu|code|none\",\"confidence\":0-100}\n"
+            + "Rules:\n"
+            + "- EDIT_MENU: user wants to add/remove/modify/restructure menu items or JSON menu nodes\n"
+            + "- EDIT_CODE: user wants to write/fix/refactor source code (JS/Vue/HTML/TS/Java)\n"
+            + "- QUESTION: user asks a question about AI, technology, code behavior, or anything informational\n"
+            + "- GENERAL: casual chat, greeting, or unrelated to code/menu\n"
+            + "- nextStep=answer_direct when assistant should answer immediately without loading code/menu context\n"
+            + "- nextStep=load_menu_context when assistant must inspect menu JSON / related menu files before answering\n"
+            + "- nextStep=load_code_context when assistant must inspect code files before answering\n"
+            + "- contextKind=none for direct question answering\n"
+            + "Important routing policy:\n"
+            + "- If user asks about AI capability, context window, memory, summarization, handling millions of characters, preserving full content, session continuity, or how the assistant should work, classify as QUESTION even if current UI is menu/code editor.\n"
+            + "- Only classify as EDIT_MENU or EDIT_CODE when user clearly wants a concrete change to menu/code artifacts.\n"
+            + "Examples:\n"
+            + "1) 'Neu toi gui vai trieu ky tu thi ban xu ly va ghi nho the nao?' => {\"type\":\"QUESTION\",\"action\":\"ask\",\"nextStep\":\"answer_direct\",\"contextKind\":\"none\",\"confidence\":95}\n"
+            + "2) 'Them menu quan ly nhan vien vao he thong' => {\"type\":\"EDIT_MENU\",\"action\":\"add\",\"nextStep\":\"load_menu_context\",\"contextKind\":\"menu\",\"confidence\":90}\n"
+            + "3) 'Sua function login va them validate' => {\"type\":\"EDIT_CODE\",\"action\":\"modify\",\"nextStep\":\"load_code_context\",\"contextKind\":\"code\",\"confidence\":90}\n"
+            + "<|im_end|>\n"
+            + "<|im_start|>user\nREQUEST: " + safe + "<|im_end|>\n"
+            + "<|im_start|>assistant\n";
+
+        try {
+            // 48-token cap: enough for {"type":"EDIT_MENU","action":"add","confidence":85}
+            String raw = llamaCppNativeService.generateContentFast(classifyPrompt, 48);
+            String text = extractAiResultText(raw);
+            if (text == null || text.isBlank()) return LocalIntentClassification.unknown();
+
+            // Try parse JSON directly or extract candidate
+            String candidate = isLikelyJsonPayload(text) ? text : extractJsonObjectCandidate(text);
+            if (candidate.isBlank()) return LocalIntentClassification.unknown();
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(candidate, Map.class);
+            String type = String.valueOf(parsed.getOrDefault("type", "GENERAL")).trim().toUpperCase();
+            String action = String.valueOf(parsed.getOrDefault("action", "other")).trim().toLowerCase();
+            String nextStep = String.valueOf(parsed.getOrDefault("nextStep", "unknown")).trim().toLowerCase();
+            String contextKind = String.valueOf(parsed.getOrDefault("contextKind", "none")).trim().toLowerCase();
+            int confidence = 0;
+            Object confObj = parsed.get("confidence");
+            if (confObj instanceof Number n) confidence = n.intValue();
+            else try { confidence = Integer.parseInt(String.valueOf(confObj)); } catch (Exception ignored2) {}
+
+            // Normalize type to known values
+            if (!List.of("EDIT_MENU","EDIT_CODE","QUESTION","GENERAL").contains(type)) type = "GENERAL";
+            if (!List.of("answer_direct", "load_menu_context", "load_code_context", "clarify", "unknown").contains(nextStep)) {
+                nextStep = "unknown";
+            }
+            if (!List.of("menu", "code", "none").contains(contextKind)) {
+                contextKind = "none";
+            }
+            logger.info("[AI_INTENT_CLASSIFY] type={} action={} nextStep={} contextKind={} confidence={} request={}",
+                type, action, nextStep, contextKind, confidence, safe.length() > 80 ? safe.substring(0, 80) + "…" : safe);
+            LocalIntentClassification result = new LocalIntentClassification(type, action, confidence, nextStep, contextKind, candidate);
+            intentClassifyCache.put(cacheKey, new Object[]{ result, System.currentTimeMillis() });
+            return result;
+        } catch (Exception e) {
+            logger.debug("[AI_INTENT_CLASSIFY] parse failed: {}", e.getMessage());
+            return LocalIntentClassification.unknown();
+        }
+    }
+
+    /**
+     * Resolve the final intent used for step-2 routing.
+     * - Conversational question/general chat -> answer directly
+     * - Edit mode always routes to EDIT_MENU/EDIT_CODE even if classifier is uncertain
+     */
+    private LocalIntentClassification resolveIntentForNextStep(
+            LocalIntentClassification classified,
+            String requestText,
+            String contextType,
+            String responseMode) {
+        LocalIntentClassification base = classified == null ? LocalIntentClassification.unknown() : classified;
+        if (base.isEditTask()) {
+            return base;
+        }
+
+        boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        boolean menuContext = isMenuJsonContext(contextType);
+        boolean conversational = isConversationalRequest(requestText);
+        boolean metaAiQuestion = isMetaAiQuestion(requestText);
+        boolean likelyMenuEdit = hasDynamicMenuBusinessIntent(requestText)
+            || (menuContext && (hasExplicitMenuEditTarget(requestText) || editMode));
+        boolean likelyCodeEdit = hasLikelyCodeEditIntent(requestText)
+            || (!menuContext && editMode);
+        boolean lowConfidence = base.confidence() < INTENT_CONFIDENCE_THRESHOLD;
+
+        // Prefer the model's explicit next-step routing when it is confident enough.
+        if (!lowConfidence) {
+            if (base.answerDirectly()) {
+                return new LocalIntentClassification("QUESTION", base.action(), base.confidence(), "answer_direct", "none", base.raw());
+            }
+            if (base.needsMenuContext()) {
+                return new LocalIntentClassification("EDIT_MENU", base.action(), base.confidence(), "load_menu_context", "menu", base.raw());
+            }
+            if (base.needsCodeContext()) {
+                return new LocalIntentClassification("EDIT_CODE", base.action(), base.confidence(), "load_code_context", "code", base.raw());
+            }
+        }
+
+        // Chat-only questions should be answered immediately after step-1.
+        if (metaAiQuestion) {
+            return new LocalIntentClassification("QUESTION", "ask", Math.max(base.confidence(), 85), "answer_direct", "none", base.raw());
+        }
+        if ((conversational && lowConfidence) || (conversational && (base.isQuestion() || base.isGeneral()))) {
+            return new LocalIntentClassification("QUESTION", "ask", Math.max(base.confidence(), 70), "answer_direct", "none", base.raw());
+        }
+
+        // Low-confidence classifier output falls back to lightweight heuristics.
+        if (lowConfidence) {
+            if (likelyMenuEdit) {
+                return new LocalIntentClassification("EDIT_MENU", "modify", Math.max(base.confidence(), 65), "load_menu_context", "menu", base.raw());
+            }
+            if (likelyCodeEdit) {
+                return new LocalIntentClassification("EDIT_CODE", "modify", Math.max(base.confidence(), 65), "load_code_context", "code", base.raw());
+            }
+        }
+
+        // In edit mode, never stay in GENERAL/QUESTION bucket; force into an edit path.
+        if (editMode) {
+            return menuContext
+                ? new LocalIntentClassification("EDIT_MENU", "modify", Math.max(base.confidence(), 55), "load_menu_context", "menu", base.raw())
+                : new LocalIntentClassification("EDIT_CODE", "modify", Math.max(base.confidence(), 55), "load_code_context", "code", base.raw());
+        }
+
+        return base;
+    }
+
+    private boolean isMetaAiQuestion(String requestText) {
+        String lower = String.valueOf(requestText == null ? "" : requestText).trim().toLowerCase();
+        if (lower.isBlank()) {
+            return false;
+        }
+
+        boolean asksAboutScaleOrMemory = lower.contains("triệu ký tự")
+            || lower.contains("trieu ky tu")
+            || lower.contains("vài triệu")
+            || lower.contains("vai trieu")
+            || lower.contains("không mất cái nào")
+            || lower.contains("khong mat cai nao")
+            || lower.contains("toàn bộ")
+            || lower.contains("toan bo")
+            || lower.contains("tóm tắt")
+            || lower.contains("tom tat")
+            || lower.contains("ghi nhớ")
+            || lower.contains("ghi nho")
+            || lower.contains("phiên làm việc")
+            || lower.contains("phien lam viec")
+            || lower.contains("một luồng")
+            || lower.contains("mot luong")
+            || lower.contains("truy xuất")
+            || lower.contains("truy xuat")
+            || lower.contains("nhớ lại")
+            || lower.contains("nho lai")
+            || lower.contains("liên tục")
+            || lower.contains("lien tuc")
+            || lower.contains("context")
+            || lower.contains("memory")
+            || lower.contains("session");
+
+        boolean asksAboutAssistantBehavior = lower.contains("hướng dẫn")
+            || lower.contains("huong dan")
+            || lower.contains("làm sao")
+            || lower.contains("lam sao")
+            || lower.contains("nếu tôi gửi")
+            || lower.contains("neu toi gui")
+            || lower.contains("bạn có thể")
+            || lower.contains("ban co the")
+            || lower.contains("bạn tự")
+            || lower.contains("ban tu")
+            || lower.contains("có thể")
+            || lower.contains("co the");
+
+        boolean lacksConcreteEditTarget = !hasExplicitMenuEditTarget(lower)
+            && !hasDynamicMenuBusinessIntent(lower)
+            && !hasLikelyCodeEditIntent(lower);
+
+        return (asksAboutScaleOrMemory || asksAboutAssistantBehavior) && lacksConcreteEditTarget;
+    }
+
+    private boolean hasLikelyCodeEditIntent(String requestText) {
+        String lower = String.valueOf(requestText == null ? "" : requestText).trim().toLowerCase();
+        if (lower.isBlank()) {
+            return false;
+        }
+
+        boolean hasCodeDomainSignal = lower.contains("code")
+            || lower.contains("function")
+            || lower.contains("component")
+            || lower.contains("api")
+            || lower.contains("class")
+            || lower.contains("method")
+            || lower.contains("java")
+            || lower.contains("javascript")
+            || lower.contains("typescript")
+            || lower.contains("vue")
+            || lower.contains("react")
+            || lower.contains("sql")
+            || lower.contains("backend")
+            || lower.contains("frontend")
+            || lower.contains("file ")
+            || lower.contains("bug")
+            || lower.contains("lỗi")
+            || lower.contains("loi");
+
+        boolean hasEditActionSignal = lower.contains("sửa")
+            || lower.contains("sua")
+            || lower.contains("fix")
+            || lower.contains("refactor")
+            || lower.contains("update")
+            || lower.contains("edit")
+            || lower.contains("change")
+            || lower.contains("implement")
+            || lower.contains("thêm")
+            || lower.contains("them")
+            || lower.contains("tạo")
+            || lower.contains("tao")
+            || lower.contains("viết")
+            || lower.contains("viet")
+            || lower.contains("xóa")
+            || lower.contains("xoa")
+            || lower.contains("rename");
+
+        String highLevelIntent = detectUserIntent(requestText);
+        boolean intentSuggestsEdit = "ADD".equals(highLevelIntent)
+            || "DELETE".equals(highLevelIntent)
+            || "EDIT".equals(highLevelIntent)
+            || "RESTRUCTURE".equals(highLevelIntent);
+
+        return hasCodeDomainSignal && (hasEditActionSignal || intentSuggestsEdit);
+    }
+
+        private RequirementGuardDecision evaluateRequirementHardGuard(
+            String requestText,
+            String contextType,
+            String responseMode,
+            LocalIntentClassification preclassifiedIntent) {
         if (!aiRequirementClarifyEnabled || !aiRequirementHardGuardEnabled) {
             return new RequirementGuardDecision(false, List.of(), List.of());
         }
@@ -5597,6 +6406,24 @@ public class ApiSpringController {
         }
 
         String normalized = String.valueOf(requestText == null ? "" : requestText).trim();
+
+        // Ask local AI to classify intent — this replaces all hardcoded keyword checks.
+        // QUESTION/GENERAL intent → skip guard, local AI will answer directly.
+        // EDIT_MENU/EDIT_CODE → proceed with ambiguity check.
+        LocalIntentClassification intentClass = preclassifiedIntent == null
+            ? classifyIntentWithLocalAI(normalized)
+            : preclassifiedIntent;
+        LocalIntentClassification effectiveIntent = resolveIntentForNextStep(
+            intentClass,
+            normalized,
+            contextType,
+            responseMode);
+        if (effectiveIntent.answerDirectly() || effectiveIntent.isQuestion() || effectiveIntent.isGeneral()) {
+            logger.info("Requirement hard-guard skipped: local AI classified as {} action={} confidence={}, contextType={} responseMode={}",
+                effectiveIntent.type(), effectiveIntent.action(), effectiveIntent.confidence(), contextType, responseMode);
+            return new RequirementGuardDecision(false, List.of(), List.of());
+        }
+
         if (normalized.isBlank()) {
             List<String> questions = List.of("Ban muon backend sua phan nao cu the? (file/table/menu node)");
             logger.info("Requirement hard-guard blocked: empty request text, contextType={} normalizedContext={} responseMode={}",
@@ -5662,6 +6489,44 @@ public class ApiSpringController {
             questions,
             ambiguities);
         return new RequirementGuardDecision(true, questions, ambiguities);
+    }
+
+    private boolean isConversationalRequest(String requestText) {
+        String lower = String.valueOf(requestText == null ? "" : requestText).trim().toLowerCase();
+        if (lower.isBlank()) return false;
+        if (isMetaAiQuestion(lower)) return true;
+
+        // Question patterns — general knowledge/AI/tech questions, not code-edit tasks
+        boolean isQuestion = lower.endsWith("?")
+            || lower.contains(" là gì") || lower.contains(" là ai")
+            || lower.contains("bạn là") || lower.contains("ban la")
+            || lower.contains("ai là") || lower.contains("ai la")
+            || lower.contains("what is") || lower.contains("who are")
+            || lower.contains("how many") || lower.contains("bao nhiêu") || lower.contains("bao nhieu")
+            || lower.contains("có thể xử lý") || lower.contains("co the xu ly")
+            || lower.contains("triệu ký tự") || lower.contains("trieu ky tu")
+            || lower.contains("token") && !lower.contains("menu") && !lower.contains("code")
+            || lower.contains("model nào") || lower.contains("model nao")
+            || lower.contains("giải thích") || lower.contains("giai thich")
+            || lower.contains("tại sao") || lower.contains("tai sao")
+            || lower.contains("khi nào") || lower.contains("khi nao")
+            || lower.contains("ở đâu") || lower.contains("o dau")
+            || lower.contains("như thế nào") || lower.contains("nhu the nao");
+
+        // Confirm it's NOT a code/menu edit action
+        boolean hasEditAction = lower.contains("thêm") || lower.contains("them")
+            || lower.contains("sửa") || lower.contains("sua")
+            || lower.contains("xóa") || lower.contains("xoa")
+            || lower.contains("tạo") || lower.contains("tao")
+            || lower.contains("cập nhật") || lower.contains("cap nhat")
+            || lower.contains("viết code") || lower.contains("viet code")
+            || lower.contains("generate") || lower.contains("refactor")
+            || lower.contains("implement") || lower.contains("add function")
+            || lower.contains("create") && (lower.contains("menu") || lower.contains("code") || lower.contains("component"))
+            || lower.contains("delete") && (lower.contains("menu") || lower.contains("node") || lower.contains("field"));
+
+        // Conversational = has question signal AND no edit action
+        return isQuestion && !hasEditAction;
     }
 
     private boolean hasDynamicMenuBusinessIntent(String requestText) {
@@ -5973,10 +6838,13 @@ public class ApiSpringController {
                 return;
             }
 
+            LocalIntentClassification preclassifiedIntent = classifyIntentWithLocalAI(message);
+
             RequirementGuardDecision requirementGuard = evaluateRequirementHardGuard(
                 message,
                 effectiveContextType,
-                responseMode);
+                responseMode,
+                preclassifiedIntent);
             if (requirementGuard.blocked()) {
                 emitAiAssistantChatChunk(appId, Map.of(
                     "stage", "requirement_clarification_needed",
@@ -6016,7 +6884,8 @@ public class ApiSpringController {
                 message,
                 assistantPreAnalysisSource,
                 effectiveContextType,
-                responseMode);
+                responseMode,
+                preclassifiedIntent);
             emitAiAssistantChatChunk(appId, Map.of(
                 "stage", "local_pre_analysis",
                 "status", !assistantPreAnalysis.attempted()
@@ -12065,6 +12934,13 @@ public class ApiSpringController {
 
     private String generateProviderContentWithMenuMasterPrompt(String prompt, String contextType) {
         return aiProviderFactory.generateContent(prependMenuMasterPromptIfNeeded(prompt, contextType));
+    }
+
+    private String generateDirectLocalContentWithMenuMasterPrompt(String prompt, String contextType) {
+        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
+            return "{\"success\":false,\"errorCode\":\"LOCAL_PROVIDER_UNAVAILABLE\",\"message\":\"Local provider unavailable\"}";
+        }
+        return llamaCppNativeService.generateContent(prependMenuMasterPromptIfNeeded(prompt, contextType));
     }
 
     private String prependMenuMasterPromptIfNeeded(String prompt, String contextType) {

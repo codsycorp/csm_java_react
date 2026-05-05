@@ -1,5 +1,5 @@
 import { request } from "#src/utils";
-import { consumeSseStream } from "#src/api/ai/sse-stream";
+import { consumeSseStream, dispatchAiCodeStreamEvent } from "#src/api/ai/sse-stream";
 
 export interface BusinessMemoryHit {
 	appId: string
@@ -112,9 +112,23 @@ export async function streamOptimizeWithBusinessMemory(
 	callbacks: StreamOptimizeCallbacks = {},
 ): Promise<void> {
 	let response: Response;
+	const selection = String(payload.selection || "").trim();
+	const effectiveCurrentCode = selection || String(payload.currentCode || "");
+	const instruction = String(payload.instruction || "").trim();
+
 	try {
-		response = await request.post("ai-assistant/stream-optimize", {
-			json: payload,
+		response = await request.post("ai-code-stream", {
+			json: {
+				appId: payload.appId,
+				message: instruction,
+				currentCode: effectiveCurrentCode,
+				language: payload.language,
+				contextType: "code",
+				flowType: "code_editor",
+				taskType: "code_assistant",
+				responseMode: "edit",
+				model: payload.model,
+			},
 			timeout: 300_000,
 			throwHttpErrors: false,
 		});
@@ -130,39 +144,45 @@ export async function streamOptimizeWithBusinessMemory(
 		return;
 	}
 
-	let fullText = "";
+	let accumulated = "";
+	let completed = false;
 
 	await consumeSseStream(response, {
 		onEvent: (evt) => {
-			const eventName = String(evt.event || "message");
 			const payloadObj = (evt.payload && typeof evt.payload === "object")
 				? (evt.payload as Record<string, unknown>)
 				: null;
+			if (!payloadObj) {
+				return;
+			}
 
-			if (eventName === "status") {
-				callbacks.onStatus?.(payloadObj || { text: evt.data });
-				return;
-			}
-			if (eventName === "chunk") {
-				const chunk = payloadObj ? String(payloadObj?.text || "") : evt.data;
-				if (!chunk) {
-					return;
-				}
-				fullText += chunk;
-				callbacks.onChunk?.(chunk, fullText);
-				return;
-			}
-			if (eventName === "complete") {
-				callbacks.onComplete?.(payloadObj || { text: evt.data });
-				return;
-			}
-			if (eventName === "error") {
-				callbacks.onError?.(
-					payloadObj
-						? String(payloadObj?.message || "Unknown stream error")
-						: (evt.data || "Unknown stream error"),
-				);
+			const result = dispatchAiCodeStreamEvent(payloadObj, accumulated, {
+				onChunk: (chunk, full) => {
+					callbacks.onChunk?.(chunk, full);
+				},
+				onStatus: (event) => {
+					callbacks.onStatus?.(event);
+				},
+				onComplete: (event) => {
+					const normalized = {
+						...event,
+						text: String(event.fullResponse || ""),
+					};
+					callbacks.onComplete?.(normalized);
+				},
+				onError: (msg) => {
+					callbacks.onError?.(msg);
+				},
+			});
+
+			accumulated = result.accumulated;
+			if (result.completed) {
+				completed = true;
 			}
 		},
 	});
+
+	if (!completed) {
+		callbacks.onError?.("Stream ended before complete event");
+	}
 }

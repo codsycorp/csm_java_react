@@ -96,7 +96,12 @@ public class AdvancedRateLimitFilter implements Filter {
         if (ip == null || ip.isEmpty()) {
             ip = request.getRemoteAddr();
         }
-        return ip;
+        if (ip == null || ip.isEmpty()) {
+            return "unknown";
+        }
+        // X-Forwarded-For may contain multiple IPs; use only the first one
+        int commaIdx = ip.indexOf(',');
+        return commaIdx > 0 ? ip.substring(0, commaIdx).trim() : ip.trim();
     }
     
     private void sendRateLimitResponse(HttpServletResponse response, String message) 

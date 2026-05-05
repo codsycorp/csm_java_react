@@ -8,8 +8,10 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.nio.charset.StandardCharsets;
@@ -97,12 +99,28 @@ public class LargeFileChunkingService {
      * Returns the original text unchanged when below threshold or local is unavailable.
      */
     public String compressLargePrompt(String prompt, String requestText, String contextType) {
+        return compressLargePrompt(prompt, requestText, contextType, null);
+    }
+
+    /**
+     * Same as {@link #compressLargePrompt(String, String, String)} but emits structured progress updates.
+     */
+    public String compressLargePrompt(
+            String prompt,
+            String requestText,
+            String contextType,
+            Consumer<Map<String, Object>> progressCallback) {
         String text = prompt == null ? "" : prompt.trim();
         if (text.length() <= thresholdChars) {
             return text;
         }
         if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
             log.warn("[CHUNKING] Local model unavailable – heuristic fallback for {} chars", text.length());
+            emitProgress(progressCallback,
+                "phase", "fallback_heuristic",
+                "reason", "local_unavailable",
+                "inputChars", text.length(),
+                "elapsedMs", 0L);
             return buildHeuristicHeader(text, requestText, contextType);
         }
 
@@ -113,30 +131,151 @@ public class LargeFileChunkingService {
 
         List<String> chunks = splitByShape(text, shape, effectiveChunkSize);
         int active = Math.min(chunks.size(), maxChunks);
+        long startedAt = System.currentTimeMillis();
+
+        int estimatedTotalSecs = estimateChunkingTotalSecs(text.length(), active);
+        emitProgress(progressCallback,
+            "phase", "start",
+            "shape", String.valueOf(shape),
+            "inputChars", text.length(),
+            "totalChunks", active,
+            "estimatedTotalSecs", estimatedTotalSecs,
+            "elapsedMs", 0L,
+            "remainingSecs", estimatedTotalSecs,
+            "percent", 8);
 
         List<String> summaries = new ArrayList<>();
         boolean disableLocalForRemaining = false;
         for (int i = 0; i < active; i++) {
+            int current = i + 1;
+            long chunkStartedAt = System.currentTimeMillis();
+            long elapsedBeforeChunkMs = Math.max(0L, chunkStartedAt - startedAt);
+            long remainingBeforeChunkSecs = estimateRemainingSecs(elapsedBeforeChunkMs, current - 1, active, estimatedTotalSecs);
+            emitProgress(progressCallback,
+                "phase", "chunk_start",
+                "shape", String.valueOf(shape),
+                "current", current,
+                "total", active,
+                "mode", disableLocalForRemaining ? "heuristic" : "local",
+                "chunkChars", chunks.get(i) == null ? 0 : chunks.get(i).length(),
+                "elapsedMs", elapsedBeforeChunkMs,
+                "remainingSecs", remainingBeforeChunkSecs,
+                "estimatedTotalSecs", estimatedTotalSecs,
+                "percent", mapChunkPercent(current, active, false));
+
             ChunkSummaryResult summaryResult = disableLocalForRemaining
                 ? summarizeChunkHeuristicOnly(i + 1, chunks.size(), chunks.get(i), shape, effectiveChunkSize)
                 : summarizeChunk(i + 1, chunks.size(), chunks.get(i), shape, effectiveChunkSize);
             if (summaryResult.summary != null && !summaryResult.summary.isBlank()) {
                 summaries.add(summaryResult.summary);
             }
+
+            long chunkElapsedMs = Math.max(0L, System.currentTimeMillis() - chunkStartedAt);
+            long elapsedAfterChunkMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+            long remainingAfterChunkSecs = estimateRemainingSecs(elapsedAfterChunkMs, current, active, estimatedTotalSecs);
+            emitProgress(progressCallback,
+                "phase", "chunk_done",
+                "shape", String.valueOf(shape),
+                "current", current,
+                "total", active,
+                "mode", disableLocalForRemaining ? "heuristic" : "local",
+                "chunkElapsedMs", chunkElapsedMs,
+                "elapsedMs", elapsedAfterChunkMs,
+                "remainingSecs", remainingAfterChunkSecs,
+                "estimatedTotalSecs", estimatedTotalSecs,
+                "summaryChars", summaryResult.summary == null ? 0 : summaryResult.summary.length(),
+                "percent", mapChunkPercent(current, active, true));
+
             if (summaryResult.disableLocalForRemaining && !disableLocalForRemaining) {
                 disableLocalForRemaining = true;
                 log.warn("[CHUNKING] Local llama capacity failure detected at chunk {}/{}; switching remaining chunks to heuristic mode",
                     i + 1, active);
+                emitProgress(progressCallback,
+                    "phase", "switch_heuristic",
+                    "current", current,
+                    "total", active,
+                    "elapsedMs", elapsedAfterChunkMs,
+                    "reason", "local_capacity_like_error");
             }
         }
 
         if (summaries.isEmpty()) {
             log.warn("[CHUNKING] All summaries empty – heuristic fallback");
+            emitProgress(progressCallback,
+                "phase", "fallback_heuristic",
+                "reason", "all_summaries_empty",
+                "elapsedMs", Math.max(0L, System.currentTimeMillis() - startedAt),
+                "inputChars", text.length());
             return buildHeuristicHeader(text, requestText, contextType);
         }
 
         log.info("[CHUNKING] {}/{} chunks summarized → aggregating", summaries.size(), chunks.size());
-        return aggregateSummaries(summaries, requestText, contextType, chunks.size(), effectiveChunkSize);
+        long beforeAggregateMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+        emitProgress(progressCallback,
+            "phase", "aggregate_start",
+            "summaryCount", summaries.size(),
+            "totalChunks", active,
+            "elapsedMs", beforeAggregateMs,
+            "remainingSecs", Math.max(1L, estimateRemainingSecs(beforeAggregateMs, active, active, estimatedTotalSecs)),
+            "percent", 28);
+
+        String aggregated = aggregateSummaries(summaries, requestText, contextType, chunks.size(), effectiveChunkSize);
+
+        long totalElapsedMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+        emitProgress(progressCallback,
+            "phase", "done",
+            "totalChunks", active,
+            "outputChars", aggregated == null ? 0 : aggregated.length(),
+            "elapsedMs", totalElapsedMs,
+            "remainingSecs", 0,
+            "percent", 32);
+        return aggregated;
+    }
+
+    private void emitProgress(Consumer<Map<String, Object>> callback, Object... keyValues) {
+        if (callback == null || keyValues == null || keyValues.length == 0) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            for (int i = 0; i + 1 < keyValues.length; i += 2) {
+                payload.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
+            }
+            callback.accept(payload);
+        } catch (Exception ignored) {
+            // Progress callbacks are best-effort and must not break chunking.
+        }
+    }
+
+    private int estimateChunkingTotalSecs(int chars, int chunks) {
+        int safeChars = Math.max(1, chars);
+        int safeChunks = Math.max(1, chunks);
+        int byChunks = 4 + (safeChunks * 2);
+        int byChars = 4 + (safeChars / 12000);
+        return Math.max(8, Math.min(360, Math.max(byChunks, byChars)));
+    }
+
+    private long estimateRemainingSecs(long elapsedMs, int completedChunks, int totalChunks, int baselineSecs) {
+        int safeTotal = Math.max(1, totalChunks);
+        int safeDone = Math.max(0, Math.min(completedChunks, safeTotal));
+        if (safeDone <= 0) {
+            return Math.max(1, baselineSecs);
+        }
+        double avgPerChunkMs = elapsedMs / (double) safeDone;
+        int remainingChunks = Math.max(0, safeTotal - safeDone);
+        long estimatedChunksMs = Math.round(avgPerChunkMs * remainingChunks);
+        long aggregateReserveMs = Math.max(2000L, Math.round(avgPerChunkMs * 0.8d));
+        long remainingMs = Math.max(0L, estimatedChunksMs + aggregateReserveMs);
+        return Math.max(0L, Math.min(360L, Math.round(remainingMs / 1000.0d)));
+    }
+
+    private int mapChunkPercent(int current, int total, boolean done) {
+        int safeTotal = Math.max(1, total);
+        int safeCurrent = Math.max(1, Math.min(current, safeTotal));
+        int base = 10;
+        int span = 16;
+        double ratio = done ? (safeCurrent / (double) safeTotal) : ((safeCurrent - 1) / (double) safeTotal);
+        return Math.max(base, Math.min(base + span, base + (int) Math.round(span * ratio)));
     }
 
     // ── Content-shape detection ───────────────────────────────────────────────

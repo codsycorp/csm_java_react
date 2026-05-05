@@ -32,6 +32,7 @@ import { vscodeDark, vscodeLight } from "@uiw/codemirror-theme-vscode";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "#src/store";
 import { usePreferences } from "#src/hooks";
+import { AI_TIMEOUT_MS } from "#src/api/ai";
 import { request } from "#src/utils";
 import { consumeSseStream, dispatchAiCodeStreamEvent } from "#src/api/ai/sse-stream";
 import {
@@ -776,6 +777,7 @@ async function streamAiCode(
 				flowType: resolvedFlowType,
 				taskType: resolvedTaskType,
 			},
+			timeout: AI_TIMEOUT_MS,
 			throwHttpErrors: false,
 		});
 	} catch (err) {

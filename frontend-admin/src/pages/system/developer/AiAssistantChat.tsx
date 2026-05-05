@@ -1,167 +1,168 @@
-import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
-import { Button, Input, Card, Space, Empty, Spin, Tooltip, Tag, message } from "antd";
-import {
-	SendOutlined,
-	CopyOutlined,
-	ClearOutlined,
-	BgColorsOutlined,
-	PaperClipOutlined,
-	FileImageOutlined,
-	CloseOutlined,
-	ThunderboltOutlined,
-	BulbOutlined,
-} from "@ant-design/icons";
-import { useTranslation } from "react-i18next";
-import { request } from "#src/utils";
-import { extractCodeBlocks, extractLatestOpenCodeBlock } from "#src/pages/system/developer/codeUtils";
+import { AI_TIMEOUT_MS } from "#src/api/ai";
 import { searchBusinessMemory } from "#src/api/ai/assistant-engine";
+import { extractCodeBlocks, extractLatestOpenCodeBlock } from "#src/pages/system/developer/codeUtils";
+import { request } from "#src/utils";
+import {
+	BgColorsOutlined,
+	BulbOutlined,
+	ClearOutlined,
+	CloseOutlined,
+	CopyOutlined,
+	FileImageOutlined,
+	PaperClipOutlined,
+	SendOutlined,
+	ThunderboltOutlined,
+} from "@ant-design/icons";
+import { Button, Card, Empty, Input, message, Space, Spin, Tag, Tooltip } from "antd";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import styles from "./AiAssistantChat.module.css";
 
-export type AiAssistantAttachment = {
-	id: string;
-	name: string;
-	mimeType: string;
-	size: number;
-	kind: "text" | "json" | "image";
-	contextRole?: "system_requirement" | "legacy_json" | "business_logic" | "reference_code" | "general_text";
-	authoritative?: boolean;
-	summary: string;
-	textContent?: string;
-	dataUrl?: string;
-	previewUrl?: string;
+export interface AiAssistantAttachment {
+	id: string
+	name: string
+	mimeType: string
+	size: number
+	kind: "text" | "json" | "image"
+	contextRole?: "system_requirement" | "legacy_json" | "business_logic" | "reference_code" | "general_text"
+	authoritative?: boolean
+	summary: string
+	textContent?: string
+	dataUrl?: string
+	previewUrl?: string
 	/** When true the entire file content is injected instead of snippet-based RAG */
-	fullContext?: boolean;
-};
+	fullContext?: boolean
+}
 
-export type AiAssistantUserMessagePayload = {
-	message: string;
-	attachments: AiAssistantAttachment[];
-};
+export interface AiAssistantUserMessagePayload {
+	message: string
+	attachments: AiAssistantAttachment[]
+}
 
-type ChatMessage = {
-	id: string;
-	role: "user" | "assistant" | "system";
-	messageType?: "response" | "debug" | "compacted_context";
-	content: string;
-	timestamp: number;
-	codeBlocks?: CodeBlock[];
-	attachments?: Array<Pick<AiAssistantAttachment, "id" | "name" | "mimeType" | "size" | "kind" | "summary" | "previewUrl">>;
+interface ChatMessage {
+	id: string
+	role: "user" | "assistant" | "system"
+	messageType?: "response" | "debug" | "compacted_context"
+	content: string
+	timestamp: number
+	codeBlocks?: CodeBlock[]
+	attachments?: Array<Pick<AiAssistantAttachment, "id" | "name" | "mimeType" | "size" | "kind" | "summary" | "previewUrl">>
 	/** For compacted_context divider: chars saved by orchestration */
-	compactedSavedChars?: number;
-	compactedCharsBefore?: number;
-	compactedCharsAfter?: number;
-	compactedRoutingTier?: string;
-	compactedPlanStepCount?: number;
-};
+	compactedSavedChars?: number
+	compactedCharsBefore?: number
+	compactedCharsAfter?: number
+	compactedRoutingTier?: string
+	compactedPlanStepCount?: number
+}
 
-type CodeBlock = {
-	language: string;
-	code: string;
-	index: number;
-};
+interface CodeBlock {
+	language: string
+	code: string
+	index: number
+}
 
 type ResponseMode = "analyze" | "edit";
 
-type AgenticStep = {
-	id: string;
-	stage: string;
-	icon: string;
-	label: string;
-	detail?: string;
-	status: "running" | "done";
-	timestamp: number;
-};
+interface AgenticStep {
+	id: string
+	stage: string
+	icon: string
+	label: string
+	detail?: string
+	status: "running" | "done"
+	timestamp: number
+}
 
-type OrchestrationPreviewResult = {
-	enabled: boolean;
-	totalCharsBefore: number;
-	totalCharsAfter: number;
-	savedChars: number;
-	routingTier: string;
-	preferredModelHint: string;
-	speculativeExecuted: boolean;
-	speculativeOperation: string;
-	planSteps: string[];
-	toolStats: Record<string, number>;
-	compressedContextBlock: string;
-};
+interface OrchestrationPreviewResult {
+	enabled: boolean
+	totalCharsBefore: number
+	totalCharsAfter: number
+	savedChars: number
+	routingTier: string
+	preferredModelHint: string
+	speculativeExecuted: boolean
+	speculativeOperation: string
+	planSteps: string[]
+	toolStats: Record<string, number>
+	compressedContextBlock: string
+}
 
-type StructuredAssistantPayload = {
-	summary: string;
-	code: string;
-	changes: string[];
-};
+interface StructuredAssistantPayload {
+	summary: string
+	code: string
+	changes: string[]
+}
 
-type AiAssistantStageEvent = {
-	id: string;
-	stage: string;
-	status?: string;
-	model?: string;
-	requestId?: string;
-	message: string;
-	messageKey?: string;
-	messageArgs?: Record<string, any>;
-	detail?: string;
-	detailKey?: string;
-	detailArgs?: Record<string, any>;
-	orchestrationPhase?: string;
-	orchestrationPhaseKey?: string;
-	overallPercent?: number;
-	percent?: number;
-	current?: number;
-	total?: number;
-	rangeLabel?: string;
-	timestamp: number;
-};
+interface AiAssistantStageEvent {
+	id: string
+	stage: string
+	status?: string
+	model?: string
+	requestId?: string
+	message: string
+	messageKey?: string
+	messageArgs?: Record<string, any>
+	detail?: string
+	detailKey?: string
+	detailArgs?: Record<string, any>
+	orchestrationPhase?: string
+	orchestrationPhaseKey?: string
+	overallPercent?: number
+	percent?: number
+	current?: number
+	total?: number
+	rangeLabel?: string
+	timestamp: number
+}
 
-type AiUsageSummary = {
-	enabled: boolean;
-	model: string;
-	promptTokens: number;
-	completionTokens: number;
-	totalTokens: number;
-	estimatedCostUsd: number;
-	currency?: string;
-};
+interface AiUsageSummary {
+	enabled: boolean
+	model: string
+	promptTokens: number
+	completionTokens: number
+	totalTokens: number
+	estimatedCostUsd: number
+	currency?: string
+}
 
 	type CompletionState = "idle" | "done" | "stream_closed" | "error" | "cancelled";
 
-type CompletionMetrics = {
-	elapsedMs?: number;
-	outputChars?: number;
-	streamedChars?: number;
-	streamChunkCount?: number;
-	streamAssemblyMismatch?: boolean;
-	promptOriginalChars?: number;
-	promptFinalChars?: number;
-	promptCapChars?: number;
-	promptTruncatedByCharCap?: boolean;
-	menuShrinkGuard?: boolean;
-	menuShrinkRatio?: number;
-};
+interface CompletionMetrics {
+	elapsedMs?: number
+	outputChars?: number
+	streamedChars?: number
+	streamChunkCount?: number
+	streamAssemblyMismatch?: boolean
+	promptOriginalChars?: number
+	promptFinalChars?: number
+	promptCapChars?: number
+	promptTruncatedByCharCap?: boolean
+	menuShrinkGuard?: boolean
+	menuShrinkRatio?: number
+}
 
-type ModelDecisionTrace = {
-	id: string;
-	step: "primary" | "fallback" | "final";
-	model: string;
-	reason?: string;
-	timestamp: number;
-};
+interface ModelDecisionTrace {
+	id: string
+	step: "primary" | "fallback" | "final"
+	model: string
+	reason?: string
+	timestamp: number
+}
 
-type AiAssistantChatProps = {
-	appId: string;
-	currentCode?: string;
-	language?: "javascript" | "html" | "python" | "java" | "css" | "sql" | "json";
-	contextType?: "code" | "menu_json";
-	targetPName?: string;
-	targetPType?: number;
-	editorMetadata?: Record<string, unknown>;
-	onCodeInsert?: (code: string) => void;
-	onUserMessage?: (payload: AiAssistantUserMessagePayload) => void;
-	autoApplyCodeBlock?: boolean;
-	autoApplyPreferenceKey?: string;
-	onAutoApplyChange?: (enabled: boolean) => void;
-};
+interface AiAssistantChatProps {
+	appId: string
+	currentCode?: string
+	language?: "javascript" | "html" | "python" | "java" | "css" | "sql" | "json"
+	contextType?: "code" | "menu_json"
+	targetPName?: string
+	targetPType?: number
+	editorMetadata?: Record<string, unknown>
+	onCodeInsert?: (code: string) => void
+	onUserMessage?: (payload: AiAssistantUserMessagePayload) => void
+	autoApplyCodeBlock?: boolean
+	autoApplyPreferenceKey?: string
+	onAutoApplyChange?: (enabled: boolean) => void
+}
 
 const CHAT_HISTORY_KEY = "codeeditor.aiassistant.chat.v1";
 const LEGACY_CHAT_HISTORY_KEY = "codeeditor.copilot.chat.v1";
@@ -183,16 +184,41 @@ const COMPACT_STAGE_EVENTS = 6;
 const COMPACT_MODEL_TRACE = 2;
 const DONE_DOCK_AUTO_COLLAPSE_MS = 3500;
 const DONE_USAGE_DOCK_AUTO_HIDE_MS = 6500;
+const PROGRESS_WATCHDOG_SILENCE_MS = 10_000;
+const PROGRESS_WATCHDOG_TICK_MS = 3_000;
+const PROGRESS_WATCHDOG_ALERT_INTERVAL_MS = 20_000;
+const PROGRESS_EVENT_AGE_TICK_MS = 1_000;
 const TEXT_FILE_EXTENSIONS = new Set([
-	"txt", "md", "markdown", "json", "js", "ts", "tsx", "jsx", "java", "sql", "css", "scss", "less",
-	"html", "xml", "yml", "yaml", "csv", "py", "properties", "env", "log", "ini",
+	"txt",
+	"md",
+	"markdown",
+	"json",
+	"js",
+	"ts",
+	"tsx",
+	"jsx",
+	"java",
+	"sql",
+	"css",
+	"scss",
+	"less",
+	"html",
+	"xml",
+	"yml",
+	"yaml",
+	"csv",
+	"py",
+	"properties",
+	"env",
+	"log",
+	"ini",
 ]);
 
 function sanitizeHistoryMessages(messages: ChatMessage[]): ChatMessage[] {
-	return messages.slice(-CHAT_STORAGE_LIMIT).map((msg) => ({
+	return messages.slice(-CHAT_STORAGE_LIMIT).map(msg => ({
 		...msg,
 		attachments: Array.isArray(msg.attachments)
-			? msg.attachments.map((attachment) => ({
+			? msg.attachments.map(attachment => ({
 				id: attachment.id,
 				name: attachment.name,
 				mimeType: attachment.mimeType,
@@ -213,13 +239,13 @@ function getFileExtension(name: string): string {
 function isMarkdownLikeName(name: string): boolean {
 	const normalized = String(name || "").trim().toLowerCase();
 	return normalized.endsWith(".md")
-		|| normalized.endsWith(".markdown")
-		|| normalized.endsWith(".txt")
-		|| normalized.includes("prompt")
-		|| normalized.includes("requirement")
-		|| normalized.includes("spec")
-		|| normalized.includes("architecture")
-		|| normalized.includes("system");
+	  || normalized.endsWith(".markdown")
+	  || normalized.endsWith(".txt")
+	  || normalized.includes("prompt")
+	  || normalized.includes("requirement")
+	  || normalized.includes("spec")
+	  || normalized.includes("architecture")
+	  || normalized.includes("system");
 }
 
 function isCodeLikeName(name: string): boolean {
@@ -228,9 +254,9 @@ function isCodeLikeName(name: string): boolean {
 }
 
 function classifyAttachmentContext(name: string, mimeType: string, kind: AiAssistantAttachment["kind"], contextType: AiAssistantChatProps["contextType"]): {
-	contextRole: NonNullable<AiAssistantAttachment["contextRole"]>;
-	authoritative: boolean;
-	defaultFullContext: boolean;
+	contextRole: NonNullable<AiAssistantAttachment["contextRole"]>
+	authoritative: boolean
+	defaultFullContext: boolean
 } {
 	const normalizedName = String(name || "").trim().toLowerCase();
 	const normalizedMimeType = String(mimeType || "").trim().toLowerCase();
@@ -268,14 +294,17 @@ function classifyAttachmentContext(name: string, mimeType: string, kind: AiAssis
 }
 
 function isTextLikeFile(file: File): boolean {
-	if (file.type.startsWith("text/")) return true;
-	if (["application/json", "application/xml"].includes(file.type)) return true;
+	if (file.type.startsWith("text/"))
+		return true;
+	if (["application/json", "application/xml"].includes(file.type))
+		return true;
 	return TEXT_FILE_EXTENSIONS.has(getFileExtension(file.name));
 }
 
 function summarizeAttachmentText(text: string, maxLength = 180): string {
 	const compact = String(text || "").replace(/\s+/g, " ").trim();
-	if (!compact) return "";
+	if (!compact)
+		return "";
 	return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength)}...`;
 }
 
@@ -284,9 +313,12 @@ function summarizeFileContent(file: File, textContent: string): string {
 	if (ext === "json") {
 		try {
 			const parsed = JSON.parse(textContent);
-			if (Array.isArray(parsed)) return `JSON array (${parsed.length} items)`;
-			if (parsed && typeof parsed === "object") return `JSON object (${Object.keys(parsed).length} keys)`;
-		} catch {
+			if (Array.isArray(parsed))
+				return `JSON array (${parsed.length} items)`;
+			if (parsed && typeof parsed === "object")
+				return `JSON object (${Object.keys(parsed).length} keys)`;
+		}
+		catch {
 			return summarizeAttachmentText(textContent);
 		}
 	}
@@ -299,11 +331,13 @@ function createAttachmentId(prefix: string): string {
 
 function extractMenuDraftForEditor(raw: unknown): string {
 	const text = String(raw || "").trim();
-	if (!text) return "";
+	if (!text)
+		return "";
 
- 	const parseMenuPayload = (candidate: string): string => {
+	const parseMenuPayload = (candidate: string): string => {
 		const value = String(candidate || "").trim();
-		if (!value) return "";
+		if (!value)
+			return "";
 		try {
 			const parsed = JSON.parse(value);
 			if (Array.isArray(parsed)) {
@@ -314,7 +348,8 @@ function extractMenuDraftForEditor(raw: unknown): string {
 
 				if (typeof obj.code === "string" && obj.code.trim()) {
 					const fromCode = parseMenuPayload(obj.code);
-					if (fromCode) return fromCode;
+					if (fromCode)
+						return fromCode;
 				}
 
 				if (Array.isArray(obj.menu)) {
@@ -333,32 +368,36 @@ function extractMenuDraftForEditor(raw: unknown): string {
 				}
 
 				const maybeNode = Boolean(typeof obj.id === "string" && obj.id.trim())
-					&& ("children" in obj || "table" in obj || "type_form" in obj || "table_name" in obj);
+				  && ("children" in obj || "table" in obj || "type_form" in obj || "table_name" in obj);
 				if (maybeNode) {
 					return JSON.stringify({ menu: [obj] }, null, 2);
 				}
 			}
-		} catch {
+		}
+		catch {
 			return "";
 		}
 		return "";
 	};
 
- 	const direct = parseMenuPayload(text);
- 	if (direct) return direct;
+	const direct = parseMenuPayload(text);
+	if (direct)
+		return direct;
 
- 	const strippedFence = text
+	const strippedFence = text
 		.replace(/^```(?:json)?\s*/i, "")
-		.replace(/\s*```$/i, "")
+		.replace(/\s*```$/, "")
 		.trim();
- 	const stripped = parseMenuPayload(strippedFence);
- 	if (stripped) return stripped;
+	const stripped = parseMenuPayload(strippedFence);
+	if (stripped)
+		return stripped;
 
- 	const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
- 	let match: RegExpExecArray | null;
- 	while ((match = fenceRegex.exec(text)) !== null) {
+	const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+	let match: RegExpExecArray | null;
+	while ((match = fenceRegex.exec(text)) !== null) {
 		const fromFence = parseMenuPayload(match[1]);
-		if (fromFence) return fromFence;
+		if (fromFence)
+			return fromFence;
 	}
 
 	try {
@@ -368,7 +407,8 @@ function extractMenuDraftForEditor(raw: unknown): string {
 		if (start >= 0 && end > start) {
 			return parseMenuPayload(text.slice(start, end + 1));
 		}
-	} catch {
+	}
+	catch {
 		return "";
 	}
 	return "";
@@ -376,7 +416,8 @@ function extractMenuDraftForEditor(raw: unknown): string {
 
 function extractValidJsonCandidate(rawText: string): string | null {
 	const text = String(rawText || "").trim();
-	if (!text) return null;
+	if (!text)
+		return null;
 	const candidates = [text];
 
 	const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -394,7 +435,8 @@ function extractValidJsonCandidate(rawText: string): string | null {
 		try {
 			JSON.parse(candidate);
 			return candidate;
-		} catch {
+		}
+		catch {
 			// try next candidate
 		}
 	}
@@ -404,7 +446,8 @@ function extractValidJsonCandidate(rawText: string): string | null {
 
 function parseStructuredAssistantPayload(raw: unknown): StructuredAssistantPayload | null {
 	const candidate = extractValidJsonCandidate(String(raw || ""));
-	if (!candidate) return null;
+	if (!candidate)
+		return null;
 
 	try {
 		const parsed = JSON.parse(candidate);
@@ -413,27 +456,31 @@ function parseStructuredAssistantPayload(raw: unknown): StructuredAssistantPaylo
 		}
 		const payload = parsed as Record<string, unknown>;
 		const code = typeof payload.code === "string" ? payload.code.trim() : "";
-		if (!code) return null;
+		if (!code)
+			return null;
 		return {
 			summary: typeof payload.summary === "string" ? payload.summary.trim() : "",
 			code,
 			changes: Array.isArray(payload.changes)
-				? payload.changes.map((item) => String(item || "").trim()).filter(Boolean)
+				? payload.changes.map(item => String(item || "").trim()).filter(Boolean)
 				: [],
 		};
-	} catch {
+	}
+	catch {
 		return null;
 	}
 }
 
 function looksLikeStructuredPayload(raw: unknown): boolean {
 	const text = String(raw || "").trim();
-	if (!text) return false;
+	if (!text)
+		return false;
 	return text.startsWith("{") && (/"summary"\s*:/.test(text) || /"code"\s*:/.test(text));
 }
 
 function applyTextEditsToDraft(baseText: string, textEdits: any[]): string {
-	if (!Array.isArray(textEdits) || textEdits.length === 0) return baseText;
+	if (!Array.isArray(textEdits) || textEdits.length === 0)
+		return baseText;
 	const lines = String(baseText || "").split("\n");
 	const normalizeLine = (edit: any, key: "start" | "end"): number => {
 		if (key === "start") {
@@ -453,7 +500,7 @@ function applyTextEditsToDraft(baseText: string, textEdits: any[]): string {
 	return lines.join("\n");
 }
 
-function validateStructuredTextEdits(baseText: string, textEdits: any[]): { valid: boolean; reason?: string; edits: any[] } {
+function validateStructuredTextEdits(baseText: string, textEdits: any[]): { valid: boolean, reason?: string, edits: any[] } {
 	if (!Array.isArray(textEdits) || textEdits.length === 0) {
 		return { valid: false, reason: "missing_edits", edits: [] };
 	}
@@ -502,31 +549,39 @@ function validateStructuredTextEdits(baseText: string, textEdits: any[]): { vali
 }
 
 function summarizeChecklistForConfirm(rawChecklist: any): string {
-	if (!rawChecklist) return "";
-	if (typeof rawChecklist === "string") return rawChecklist.trim();
-	if (typeof rawChecklist !== "object") return "";
+	if (!rawChecklist)
+		return "";
+	if (typeof rawChecklist === "string")
+		return rawChecklist.trim();
+	if (typeof rawChecklist !== "object")
+		return "";
 	const checklist = rawChecklist as Record<string, any>;
 	const goal = String(checklist.goal || checklist.muc_tieu || "").trim();
 	const scope = String(checklist.scope || checklist.pham_vi || "").trim();
-	const assumptions = Array.isArray(checklist.assumptions) ? checklist.assumptions.map((x) => String(x || "").trim()).filter(Boolean) : [];
-	const risks = Array.isArray(checklist.risks) ? checklist.risks.map((x) => String(x || "").trim()).filter(Boolean) : [];
+	const assumptions = Array.isArray(checklist.assumptions) ? checklist.assumptions.map(x => String(x || "").trim()).filter(Boolean) : [];
+	const risks = Array.isArray(checklist.risks) ? checklist.risks.map(x => String(x || "").trim()).filter(Boolean) : [];
 	const parts: string[] = [];
-	if (goal) parts.push(`Goal: ${goal}`);
-	if (scope) parts.push(`Scope: ${scope}`);
-	if (assumptions.length) parts.push(`Assumptions: ${assumptions.slice(0, 4).join("; ")}`);
-	if (risks.length) parts.push(`Risks: ${risks.slice(0, 4).join("; ")}`);
+	if (goal)
+		parts.push(`Goal: ${goal}`);
+	if (scope)
+		parts.push(`Scope: ${scope}`);
+	if (assumptions.length)
+		parts.push(`Assumptions: ${assumptions.slice(0, 4).join("; ")}`);
+	if (risks.length)
+		parts.push(`Risks: ${risks.slice(0, 4).join("; ")}`);
 	return parts.join("\n").trim();
 }
 
 function hasEditIntent(input: string): boolean {
 	const text = String(input || "").trim().toLowerCase();
-	if (!text) return false;
+	if (!text)
+		return false;
 	const patterns = [
 		/\b(sua|chinh|chỉnh|update|modify|refactor|rewrite|fix|implement|generate|tao|tạo|viet|viết|chen|chèn|apply|patch|replace|doi|đổi)\b/i,
 		/\b(add|remove|delete|insert|edit|code|json|schema|menu)\b/i,
 		/(修改|更新|重写|修复|生成|插入|替换|代码|菜单|json)/i,
 	];
-	return patterns.some((pattern) => pattern.test(text));
+	return patterns.some(pattern => pattern.test(text));
 }
 
 function normalizeDirectiveToken(raw: string): string {
@@ -534,17 +589,17 @@ function normalizeDirectiveToken(raw: string): string {
 		.trim()
 		.toLowerCase()
 		.normalize("NFD")
-		.replace(/[\u0300-\u036f]/g, "")
+		.replace(/[\u0300-\u036F]/g, "")
 		.replace(/_/g, "-");
 }
 
-function parseResponseModeDirective(input: string): { cleanedMessage: string; overrideMode?: ResponseMode } {
+function parseResponseModeDirective(input: string): { cleanedMessage: string, overrideMode?: ResponseMode } {
 	const text = String(input || "").trim();
 	if (!text.startsWith("/")) {
 		return { cleanedMessage: text };
 	}
 
-	const match = text.match(/^\/([^\s:]+)\s*:?[\s\n]*(.*)$/s);
+	const match = text.match(/^\/([^\s:]+)\s*(?::\s*)?(.*)$/s);
 	if (!match) {
 		return { cleanedMessage: text };
 	}
@@ -576,30 +631,32 @@ async function readFileAsDataUrl(file: File): Promise<string> {
 	});
 }
 
-const getChatHistory = (): ChatMessage[] => {
+function getChatHistory(): ChatMessage[] {
 	try {
 		const stored = localStorage.getItem(CHAT_HISTORY_KEY)
-			?? localStorage.getItem(LEGACY_CHAT_HISTORY_KEY);
+		  ?? localStorage.getItem(LEGACY_CHAT_HISTORY_KEY);
 		return stored ? JSON.parse(stored) : [];
-	} catch {
+	}
+	catch {
 		return [];
 	}
-};
+}
 
-const saveChatHistory = (messages: ChatMessage[]) => {
+function saveChatHistory(messages: ChatMessage[]) {
 	try {
 		const limited = sanitizeHistoryMessages(messages);
 		localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(limited));
-	} catch (error) {
+	}
+	catch (error) {
 		console.error("Failed to save chat history:", error);
 	}
-};
+}
 
 function resolvePromptHistoryStorageKey(params: {
-	appId: string;
-	contextType: string;
-	language: string;
-	targetPName?: string;
+	appId: string
+	contextType: string
+	language: string
+	targetPName?: string
 }): string {
 	const app = String(params.appId || "csm").trim() || "csm";
 	const context = String(params.contextType || "code").trim() || "code";
@@ -611,14 +668,17 @@ function resolvePromptHistoryStorageKey(params: {
 function loadPromptHistory(storageKey: string): string[] {
 	try {
 		const raw = localStorage.getItem(storageKey);
-		if (!raw) return [];
+		if (!raw)
+			return [];
 		const parsed = JSON.parse(raw);
-		if (!Array.isArray(parsed)) return [];
+		if (!Array.isArray(parsed))
+			return [];
 		return parsed
-			.map((item) => String(item || "").trim())
+			.map(item => String(item || "").trim())
 			.filter(Boolean)
 			.slice(0, PROMPT_HISTORY_LIMIT);
-	} catch {
+	}
+	catch {
 		return [];
 	}
 }
@@ -626,7 +686,8 @@ function loadPromptHistory(storageKey: string): string[] {
 function savePromptHistory(storageKey: string, items: string[]) {
 	try {
 		localStorage.setItem(storageKey, JSON.stringify(items.slice(0, PROMPT_HISTORY_LIMIT)));
-	} catch {
+	}
+	catch {
 		// ignore localStorage write failures
 	}
 }
@@ -652,9 +713,9 @@ export default function AiAssistantChat({
 	const [pendingAttachments, setPendingAttachments] = useState<AiAssistantAttachment[]>([]);
 	const [stageEvents, setStageEvents] = useState<AiAssistantStageEvent[]>([]);
 	const [aiUsageSummary, setAiUsageSummary] = useState<{
-		turn: AiUsageSummary | null;
-		sessionCostUsd: number;
-		sessionTokens: number;
+		turn: AiUsageSummary | null
+		sessionCostUsd: number
+		sessionTokens: number
 	}>({
 		turn: null,
 		sessionCostUsd: 0,
@@ -670,7 +731,8 @@ export default function AiAssistantChat({
 	const [orchPreviewLoading, setOrchPreviewLoading] = useState(false);
 	const [showOrchPreview, setShowOrchPreview] = useState(false);
 	const [businessMemoryEnabled, setBusinessMemoryEnabled] = useState<boolean>(() => {
-		try { return localStorage.getItem(BUSINESS_MEMORY_ENABLED_KEY) !== "false"; } catch { return true; }
+		try { return localStorage.getItem(BUSINESS_MEMORY_ENABLED_KEY) !== "false"; }
+		catch { return true; }
 	});
 	const [bmSearching, setBmSearching] = useState(false);
 	const [agenticSteps, setAgenticSteps] = useState<AgenticStep[]>([]);
@@ -679,16 +741,17 @@ export default function AiAssistantChat({
 	const [completionState, setCompletionState] = useState<CompletionState>("idle");
 	const [completionMetrics, setCompletionMetrics] = useState<CompletionMetrics>({});
 	const [completionErrorMessage, setCompletionErrorMessage] = useState("");
+	const [lastProgressEventAgeSecs, setLastProgressEventAgeSecs] = useState(0);
 	// Progress state: waiting for Gemini / streaming progress
 	const [geminiProgress, setGeminiProgress] = useState<{
-		phase: "idle" | "waiting" | "streaming";
-		percent: number;
-		message: string;
-		estimatedWaitSecs: number;
-		remainingSecs: number;
-		charsReceived: number;
-		estimatedTotalChars: number;
-		ttftMs?: number;
+		phase: "idle" | "waiting" | "streaming"
+		percent: number
+		message: string
+		estimatedWaitSecs: number
+		remainingSecs: number
+		charsReceived: number
+		estimatedTotalChars: number
+		ttftMs?: number
 	}>({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 	const messageListRef = useRef<HTMLDivElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
@@ -709,7 +772,7 @@ export default function AiAssistantChat({
 	const stageEventSignaturesRef = useRef<Set<string>>(new Set());
 	const requestStartedAtRef = useRef<number>(0);
 	// Live exchange rates fetched once per session (USD base). Fallback to hardcoded.
-	const fxRatesRef = useRef<{ vnd: number; cny: number }>({ vnd: 25000, cny: 7.2 });
+	const fxRatesRef = useRef<{ vnd: number, cny: number }>({ vnd: 25000, cny: 7.2 });
 	const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || "");
 	const sendHintKey = isMac ? "Cmd" : "Ctrl";
 	const shouldRenderAssistantCodeBlocks = !onCodeInsert;
@@ -724,8 +787,8 @@ export default function AiAssistantChat({
 		[appId, contextType, language, targetPName],
 	);
 	const requestEditorMetadata = useMemo(() => {
-		const merged: Record<string, unknown> =
-			editorMetadata && typeof editorMetadata === "object"
+		const merged: Record<string, unknown>
+			= editorMetadata && typeof editorMetadata === "object"
 				? { ...(editorMetadata as Record<string, unknown>) }
 				: {};
 
@@ -758,21 +821,26 @@ export default function AiAssistantChat({
 
 	const uiText = useCallback((vi: string, en: string, zh: string) => {
 		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
-		if (lang.startsWith("zh")) return zh;
-		if (lang.startsWith("en")) return en;
+		if (lang.startsWith("zh"))
+			return zh;
+		if (lang.startsWith("en"))
+			return en;
 		return vi;
 	}, [i18n.language, i18n.resolvedLanguage]);
 
 	const assistantBrandLabel = uiText("Chuyên Gia", "Expert", "专家");
 	const formatCompletionDuration = useCallback((elapsedMs?: number): string => {
 		const value = Number(elapsedMs);
-		if (!Number.isFinite(value) || value <= 0) return "";
-		if (value < 1000) return `${Math.round(value)}ms`;
+		if (!Number.isFinite(value) || value <= 0)
+			return "";
+		if (value < 1000)
+			return `${Math.round(value)}ms`;
 		return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}s`;
 	}, []);
 	const formatOutputChars = useCallback((outputChars?: number): string => {
 		const value = Number(outputChars);
-		if (!Number.isFinite(value) || value <= 0) return "";
+		if (!Number.isFinite(value) || value <= 0)
+			return "";
 		return uiText(
 			`${Math.round(value).toLocaleString("vi-VN")} ký tự`,
 			`${Math.round(value).toLocaleString("en-US")} chars`,
@@ -876,17 +944,19 @@ export default function AiAssistantChat({
 	}, [uiText]);
 
 	const appendModelDecisionTrace = useCallback((input: {
-		step: ModelDecisionTrace["step"];
-		model?: string;
-		reason?: string;
+		step: ModelDecisionTrace["step"]
+		model?: string
+		reason?: string
 	}) => {
 		const model = String(input.model || "").trim();
-		if (!model) return;
+		if (!model)
+			return;
 		const reason = String(input.reason || "").trim();
 		setModelDecisionTrace((prev) => {
 			const signature = `${input.step}|${model.toLowerCase()}|${reason.toLowerCase()}`;
-			const exists = prev.some((item) => `${item.step}|${item.model.toLowerCase()}|${String(item.reason || "").toLowerCase()}` === signature);
-			if (exists) return prev;
+			const exists = prev.some(item => `${item.step}|${item.model.toLowerCase()}|${String(item.reason || "").toLowerCase()}` === signature);
+			if (exists)
+				return prev;
 			const next: ModelDecisionTrace = {
 				id: `md_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
 				step: input.step,
@@ -915,14 +985,15 @@ export default function AiAssistantChat({
 
 	const normalizeAssistantProgressMessage = useCallback((rawMessage: unknown, fallback = ""): string => {
 		const source = String(rawMessage || "").trim() || String(fallback || "").trim();
-		if (!source) return "";
+		if (!source)
+			return "";
 
 		const waitingMatch = source.match(/~\s*(\d+)\s*s/i);
-		const waitingSecs = waitingMatch ? Number(waitingMatch[1]) : NaN;
+		const waitingSecs = waitingMatch ? Number(waitingMatch[1]) : Number.NaN;
 		const waitedMatch = source.match(/(?:da|đã)\s*cho\s*(\d+)\s*s|waited\s*(\d+)\s*s/i);
-		const waitedSecs = waitedMatch ? Number(waitedMatch[1] || waitedMatch[2]) : NaN;
+		const waitedSecs = waitedMatch ? Number(waitedMatch[1] || waitedMatch[2]) : Number.NaN;
 		const receivingMatch = source.match(/(\d+)\s*(?:ký\s*tự|chars?|字符)/i);
-		const receivedChars = receivingMatch ? Number(receivingMatch[1]) : NaN;
+		const receivedChars = receivingMatch ? Number(receivingMatch[1]) : Number.NaN;
 		if (/dang\s*ket\s*noi\s*gemini|đang\s*kết\s*nối\s*gemini|connecting\s*(to\s*)?gemini|连接\s*gemini|đang\s*kết\s*nối\s*chuyên\s*gia|connecting\s*(to\s*)?expert|正在连接专家/i.test(source)) {
 			return uiText("Đang kết nối Chuyên Gia...", "Connecting to Expert...", "正在连接专家...");
 		}
@@ -980,7 +1051,8 @@ export default function AiAssistantChat({
 	}, []);
 
 	const normalizeUsagePayload = useCallback((usage: any): AiUsageSummary | null => {
-		if (!usage || typeof usage !== "object") return null;
+		if (!usage || typeof usage !== "object")
+			return null;
 		const promptTokens = Number(usage.promptTokens);
 		const completionTokens = Number(usage.completionTokens);
 		const totalTokensRaw = Number(usage.totalTokens);
@@ -1005,12 +1077,13 @@ export default function AiAssistantChat({
 		fetch("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json", {
 			signal: controller.signal,
 		})
-			.then((res) => res.json())
+			.then(res => res.json())
 			.then((data: { usd?: Record<string, number> }) => {
 				const rates = data?.usd;
-				if (!rates) return;
-				const vnd = Number(rates["vnd"]);
-				const cny = Number(rates["cny"]);
+				if (!rates)
+					return;
+				const vnd = Number(rates.vnd);
+				const cny = Number(rates.cny);
 				if (vnd > 0 && cny > 0) {
 					fxRatesRef.current = { vnd, cny };
 				}
@@ -1065,7 +1138,8 @@ export default function AiAssistantChat({
 	}, [completionState]);
 
 	const pickPreferredCodeBlock = useCallback((blocks: CodeBlock[]): CodeBlock | null => {
-		if (!Array.isArray(blocks) || blocks.length === 0) return null;
+		if (!Array.isArray(blocks) || blocks.length === 0)
+			return null;
 		const currentLang = String(language || "").trim().toLowerCase();
 		const normalize = (input: string) => String(input || "").trim().toLowerCase();
 		const aliasMap: Record<string, string[]> = {
@@ -1136,7 +1210,8 @@ export default function AiAssistantChat({
 
 	const renderProgressText = useCallback((key?: string, args?: Record<string, any>, fallback?: string): string => {
 		const normalizedKey = String(key || "").trim().replace(/^aiassistant\.progress\./i, "copilot.progress.");
-		if (!normalizedKey) return String(fallback || "").trim();
+		if (!normalizedKey)
+			return String(fallback || "").trim();
 		switch (normalizedKey) {
 			case "copilot.progress.phase.preparing":
 				return uiText("Chuẩn bị", "Preparing", "准备中");
@@ -1276,6 +1351,18 @@ export default function AiAssistantChat({
 					`Local AI is chunking large context into ${args?.chunkCount ?? "?"} parts (~${args?.estimatedWaitSecs ?? "?"}s)`,
 					`本地AI正在将大上下文拆分为 ${args?.chunkCount ?? "?"} 个分块（约 ${args?.estimatedWaitSecs ?? "?"}s）`,
 				);
+			case "copilot.progress.message.local_chunking_progress":
+				return uiText(
+					`Đang xử lý chunk ${args?.current ?? "?"}/${args?.total ?? "?"} (${args?.mode === "heuristic" ? "heuristic" : "local"}) · ${args?.elapsedSecs ?? 0}s, còn ~${args?.remainingSecs ?? "?"}s`,
+					`Processing chunk ${args?.current ?? "?"}/${args?.total ?? "?"} (${args?.mode === "heuristic" ? "heuristic" : "local"}) · ${args?.elapsedSecs ?? 0}s elapsed, ~${args?.remainingSecs ?? "?"}s left`,
+					`正在处理分块 ${args?.current ?? "?"}/${args?.total ?? "?"}（${args?.mode === "heuristic" ? "heuristic" : "local"}）· 已耗时 ${args?.elapsedSecs ?? 0}s，预计剩余 ${args?.remainingSecs ?? "?"}s`,
+				);
+			case "copilot.progress.message.local_chunking_reduce_start":
+				return uiText(
+					`Đang gộp tóm tắt ${args?.chunkCount ?? "?"} chunk để tạo context gọn · ${args?.elapsedSecs ?? 0}s, còn ~${args?.remainingSecs ?? "?"}s`,
+					`Reducing ${args?.chunkCount ?? "?"} chunk summaries into compact context · ${args?.elapsedSecs ?? 0}s elapsed, ~${args?.remainingSecs ?? "?"}s left`,
+					`正在合并 ${args?.chunkCount ?? "?"} 个分块摘要为紧凑上下文 · 已耗时 ${args?.elapsedSecs ?? 0}s，预计剩余 ${args?.remainingSecs ?? "?"}s`,
+				);
 			case "copilot.progress.message.local_chunking_done":
 				return uiText(
 					`Đã nén context còn ${args?.outputChars ?? "?"} ký tự trong ${args?.elapsedSecs ?? "?"}s`,
@@ -1357,12 +1444,18 @@ export default function AiAssistantChat({
 		const normalizedPhase = String(orchestrationPhase || "").trim().toLowerCase();
 		const normalizedStage = String(stage || "").trim().toLowerCase();
 		const key = normalizedPhase || normalizedStage;
-		if (key.includes("preparing")) return "preparing";
-		if (key.includes("chunking")) return "chunking";
-		if (key.includes("reducing")) return "reducing";
-		if (key.includes("final")) return "final";
-		if (key.includes("complete")) return "completed";
-		if (key.includes("error")) return "error";
+		if (key.includes("preparing"))
+			return "preparing";
+		if (key.includes("chunking"))
+			return "chunking";
+		if (key.includes("reducing"))
+			return "reducing";
+		if (key.includes("final"))
+			return "final";
+		if (key.includes("complete"))
+			return "completed";
+		if (key.includes("error"))
+			return "error";
 		return "default";
 	}, []);
 
@@ -1386,12 +1479,13 @@ export default function AiAssistantChat({
 	}, [uiText]);
 
 	const extractStageRangeLabel = useCallback((data: any): string | undefined => {
-		const candidates: any[] =
-			(Array.isArray(data?.textEdits) && data.textEdits.length > 0 && data.textEdits)
-			|| (Array.isArray(data?.lineRanges) && data.lineRanges.length > 0 && data.lineRanges)
-			|| (Array.isArray(data?.changedRanges) && data.changedRanges.length > 0 && data.changedRanges)
-			|| [];
-		if (candidates.length === 0) return undefined;
+		const candidates: any[]
+			= (Array.isArray(data?.textEdits) && data.textEdits.length > 0 && data.textEdits)
+			  || (Array.isArray(data?.lineRanges) && data.lineRanges.length > 0 && data.lineRanges)
+			  || (Array.isArray(data?.changedRanges) && data.changedRanges.length > 0 && data.changedRanges)
+			  || [];
+		if (candidates.length === 0)
+			return undefined;
 
 		const normalizeLine = (item: any, key: "start" | "end"): number => {
 			const raw = key === "start"
@@ -1408,7 +1502,8 @@ export default function AiAssistantChat({
 				const endLine = Math.max(startLine, normalizeLine(item, "end"));
 				return startLine === endLine ? `L${startLine}` : `L${startLine}-L${endLine}`;
 			});
-		if (ranges.length === 0) return undefined;
+		if (ranges.length === 0)
+			return undefined;
 		if (candidates.length > 3) {
 			ranges.push(`+${candidates.length - 3}`);
 		}
@@ -1428,7 +1523,8 @@ export default function AiAssistantChat({
 						if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
 							return parsed as Record<string, any>;
 						}
-					} catch {
+					}
+					catch {
 						return undefined;
 					}
 				}
@@ -1450,7 +1546,8 @@ export default function AiAssistantChat({
 		const orchestrationPhaseKey = String(data?.orchestrationPhaseKey || "").trim();
 		const rangeLabel = extractStageRangeLabel(data);
 		const hasValue = stage || msg || messageKey || detail || detailKey || orchestrationPhase || orchestrationPhaseKey || Number.isFinite(Number(data?.percent)) || Number.isFinite(Number(data?.overallPercent)) || Boolean(rangeLabel);
-		if (!hasValue) return;
+		if (!hasValue)
+			return;
 
 		const overallPercentNum = Number(data?.overallPercent);
 		const percentNum = Number(data?.percent);
@@ -1476,7 +1573,8 @@ export default function AiAssistantChat({
 			rangeLabel || "",
 		].join("|");
 
-		if (stageEventSignaturesRef.current.has(signature)) return;
+		if (stageEventSignaturesRef.current.has(signature))
+			return;
 		stageEventSignaturesRef.current.add(signature);
 
 		setStageEvents((prev) => {
@@ -1510,7 +1608,13 @@ export default function AiAssistantChat({
 
 	const groupedVisibleStageEvents = useMemo(() => {
 		const orderedTones: Array<"preparing" | "chunking" | "reducing" | "final" | "completed" | "error" | "default"> = [
-			"preparing", "chunking", "reducing", "final", "completed", "error", "default",
+			"preparing",
+			"chunking",
+			"reducing",
+			"final",
+			"completed",
+			"error",
+			"default",
 		];
 		const buckets = new Map<string, AiAssistantStageEvent[]>();
 		for (const event of visibleStageEvents) {
@@ -1522,8 +1626,8 @@ export default function AiAssistantChat({
 		}
 
 		return orderedTones
-			.filter((tone) => (buckets.get(tone)?.length || 0) > 0)
-			.map((tone) => ({
+			.filter(tone => (buckets.get(tone)?.length || 0) > 0)
+			.map(tone => ({
 				tone,
 				label: formatStageToneLabel(tone),
 				events: buckets.get(tone) || [],
@@ -1537,8 +1641,10 @@ export default function AiAssistantChat({
 
 	const scrollToBottom = useCallback((force = false) => {
 		const container = messageListRef.current;
-		if (!container) return;
-		if (!force && !followBottomRef.current) return;
+		if (!container)
+			return;
+		if (!force && !followBottomRef.current)
+			return;
 
 		if (scrollFrameRef.current != null) {
 			window.cancelAnimationFrame(scrollFrameRef.current);
@@ -1560,13 +1666,15 @@ export default function AiAssistantChat({
 
 	const handleMessageListScroll = useCallback(() => {
 		const container = messageListRef.current;
-		if (!container) return;
+		if (!container)
+			return;
 		followBottomRef.current = isNearBottom(container);
 	}, [isNearBottom]);
 
 	const flushStreamingToUI = useCallback((force = false) => {
 		const pendingChunk = pendingStreamChunkRef.current;
-		if (!pendingChunk && !force) return;
+		if (!pendingChunk && !force)
+			return;
 
 		if (pendingChunk) {
 			streamingMessageRef.current += pendingChunk;
@@ -1574,7 +1682,8 @@ export default function AiAssistantChat({
 		}
 
 		const nextText = String(streamingMessageRef.current || "");
-		if (!nextText && !force) return;
+		if (!nextText && !force)
+			return;
 
 		applyRealtimeCodeFromTextRef.current(nextText, force);
 		const structuredPayload = parseStructuredAssistantPayload(nextText);
@@ -1584,7 +1693,7 @@ export default function AiAssistantChat({
 			? [
 				structuredPayload.summary,
 				structuredPayload.changes.length
-					? structuredPayload.changes.map((item) => `- ${item}`).join("\n")
+					? structuredPayload.changes.map(item => `- ${item}`).join("\n")
 					: "",
 			].filter(Boolean).join("\n\n").trim()
 			: showStructuredPlaceholder
@@ -1607,7 +1716,8 @@ export default function AiAssistantChat({
 			nextCodeBlocks = [];
 			parsedCodeBlocksRef.current = nextCodeBlocks;
 			lastCodeBlockParseAtRef.current = now;
-		} else if (force || now - lastCodeBlockParseAtRef.current >= STREAM_CODEBLOCK_PARSE_MS) {
+		}
+		else if (force || now - lastCodeBlockParseAtRef.current >= STREAM_CODEBLOCK_PARSE_MS) {
 			nextCodeBlocks = extractCodeBlocks(nextText);
 			parsedCodeBlocksRef.current = nextCodeBlocks;
 			lastCodeBlockParseAtRef.current = now;
@@ -1630,7 +1740,8 @@ export default function AiAssistantChat({
 	}, [assistantBrandLabel, contextType, onCodeInsert, scrollToBottom, stripMarkdownCodeBlocks, uiText]);
 
 	const scheduleStreamFlush = useCallback(() => {
-		if (streamFlushTimerRef.current) return;
+		if (streamFlushTimerRef.current)
+			return;
 		streamFlushTimerRef.current = setTimeout(() => {
 			streamFlushTimerRef.current = null;
 			flushStreamingToUI(false);
@@ -1638,12 +1749,14 @@ export default function AiAssistantChat({
 	}, [flushStreamingToUI]);
 
 	const applyRealtimeCodeFromText = useCallback((rawText: string, force = false): boolean => {
-		if (!turnAllowAutoApplyRef.current || !onCodeInsert) return false;
+		if (!turnAllowAutoApplyRef.current || !onCodeInsert)
+			return false;
 		const source = String(rawText || "");
 		let nextCode = "";
 		if (contextType === "menu_json") {
 			nextCode = extractMenuDraftForEditor(source);
-		} else {
+		}
+		else {
 			const structuredPayload = parseStructuredAssistantPayload(source);
 			if (structuredPayload?.code) {
 				nextCode = structuredPayload.code;
@@ -1658,16 +1771,20 @@ export default function AiAssistantChat({
 			}
 		}
 		if (!nextCode) {
-			if (!blocks.length) return false;
+			if (!blocks.length)
+				return false;
 			const preferredBlock = pickPreferredCodeBlock(blocks);
-			if (!preferredBlock?.code) return false;
+			if (!preferredBlock?.code)
+				return false;
 			nextCode = preferredBlock.code;
 		}
-		if (nextCode === lastAppliedCodeRef.current) return false;
+		if (nextCode === lastAppliedCodeRef.current)
+			return false;
 
 		const now = Date.now();
 		if (!force && now - lastRealtimeApplyAtRef.current < 140) {
-			if (realtimeApplyTimerRef.current) clearTimeout(realtimeApplyTimerRef.current);
+			if (realtimeApplyTimerRef.current)
+				clearTimeout(realtimeApplyTimerRef.current);
 			realtimeApplyTimerRef.current = setTimeout(() => {
 				realtimeApplyTimerRef.current = null;
 				applyRealtimeCodeFromText(rawText, true);
@@ -1686,7 +1803,8 @@ export default function AiAssistantChat({
 	}, [applyRealtimeCodeFromText]);
 
 	const appendFiles = useCallback(async (fileList: FileList | null) => {
-		if (!fileList || fileList.length === 0) return;
+		if (!fileList || fileList.length === 0)
+			return;
 		const currentCount = pendingAttachments.length;
 		if (currentCount >= MAX_ATTACHMENTS) {
 			message.warning(uiText(`Tối đa ${MAX_ATTACHMENTS} tệp đính kèm`, `Maximum ${MAX_ATTACHMENTS} attachments`, `最多 ${MAX_ATTACHMENTS} 个附件`));
@@ -1756,7 +1874,8 @@ export default function AiAssistantChat({
 					textContent,
 					fullContext: contextMeta.defaultFullContext,
 				});
-			} catch (error) {
+			}
+			catch (error) {
 				console.error("Failed to process attachment:", error);
 				message.error(uiText(
 					`Không đọc được tệp ${file.name}`,
@@ -1767,16 +1886,18 @@ export default function AiAssistantChat({
 		}
 
 		if (nextAttachments.length > 0) {
-			setPendingAttachments((prev) => [...prev, ...nextAttachments].slice(0, MAX_ATTACHMENTS));
+			setPendingAttachments(prev => [...prev, ...nextAttachments].slice(0, MAX_ATTACHMENTS));
 		}
 	}, [contextType, pendingAttachments.length, uiText]);
 
 	const removePendingAttachment = useCallback((id: string) => {
-		setPendingAttachments((prev) => prev.filter((item) => item.id !== id));
+		setPendingAttachments(prev => prev.filter(item => item.id !== id));
 	}, []);
 
 	// SSE abort ref for canceling in-flight streaming requests
 	const sseAbortRef = useRef<AbortController | null>(null);
+	const lastProgressEventAtRef = useRef<number>(0);
+	const lastProgressWatchdogAlertAtRef = useRef<number>(0);
 
 	// Cleanup on unmount: cancel animation frame, timers, in-flight SSE fetch
 	useEffect(() => {
@@ -1797,8 +1918,76 @@ export default function AiAssistantChat({
 		};
 	}, []);
 
+	useEffect(() => {
+		if (!isLoading) {
+			setLastProgressEventAgeSecs(0);
+			return;
+		}
+
+		if (lastProgressEventAtRef.current <= 0) {
+			lastProgressEventAtRef.current = Date.now();
+		}
+
+		const watchdogTimer = window.setInterval(() => {
+			if (!isLoading) {
+				return;
+			}
+			if (geminiProgress.phase === "idle") {
+				return;
+			}
+
+			const now = Date.now();
+			const lastEventAt = lastProgressEventAtRef.current || requestStartedAtRef.current || now;
+			const silentMs = Math.max(0, now - lastEventAt);
+			if (silentMs < PROGRESS_WATCHDOG_SILENCE_MS) {
+				return;
+			}
+
+			const silentSecs = Math.floor(silentMs / 1000);
+			setGeminiProgress(prev => ({
+				...prev,
+				message: uiText(
+					`Tiến độ tạm im ${silentSecs}s, AI vẫn đang chạy. Nếu file lớn có thể cần thêm thời gian...`,
+					`No progress event for ${silentSecs}s, AI is still running. Large inputs may need more time...`,
+					`进度暂时静默 ${silentSecs}s，AI 仍在运行。大输入可能需要更久时间...`,
+				),
+			}));
+
+			if (SHOW_DETAILED_PROGRESS_TIMELINE) {
+				const lastAlert = lastProgressWatchdogAlertAtRef.current;
+				if (now - lastAlert >= PROGRESS_WATCHDOG_ALERT_INTERVAL_MS) {
+					lastProgressWatchdogAlertAtRef.current = now;
+					appendStageEvent({
+						stage: "waiting_gemini",
+						message: uiText(
+							`Watchdog: chưa nhận event mới trong ${silentSecs}s, backend có thể đang xử lý chunk/reduce nặng`,
+							`Watchdog: no new events in ${silentSecs}s, backend may be processing heavy chunk/reduce work`,
+							`Watchdog：${silentSecs}s 未收到新事件，后端可能正在执行较重的分块/归并处理`,
+						),
+						percent: Math.max(1, Math.min(95, Number(geminiProgress.percent || 0))),
+					});
+				}
+			}
+		}, PROGRESS_WATCHDOG_TICK_MS);
+
+		const ageTicker = window.setInterval(() => {
+			if (!isLoading || geminiProgress.phase === "idle") {
+				setLastProgressEventAgeSecs(0);
+				return;
+			}
+			const now = Date.now();
+			const lastEventAt = lastProgressEventAtRef.current || requestStartedAtRef.current || now;
+			setLastProgressEventAgeSecs(Math.max(0, Math.floor((now - lastEventAt) / 1000)));
+		}, PROGRESS_EVENT_AGE_TICK_MS);
+
+		return () => {
+			window.clearInterval(watchdogTimer);
+			window.clearInterval(ageTicker);
+		};
+	}, [appendStageEvent, geminiProgress.percent, geminiProgress.phase, isLoading, uiText]);
+
 	const appendAgenticStep = useCallback((partial: Omit<AgenticStep, "id" | "timestamp">) => {
-		setAgenticSteps(prev => {
+		setAgenticSteps((prev) => {
 			const existing = prev.findIndex(s => s.stage === partial.stage);
 			if (existing >= 0) {
 				const updated = [...prev];
@@ -1835,7 +2024,7 @@ export default function AiAssistantChat({
 					editorMetadata: requestEditorMetadata,
 					taskType: responseMode,
 					responseMode,
-					attachments: pendingAttachments.map((a) => ({
+					attachments: pendingAttachments.map(a => ({
 						id: a.id,
 						name: a.name,
 						mimeType: a.mimeType,
@@ -1856,9 +2045,11 @@ export default function AiAssistantChat({
 			}
 			const data = await res.json() as OrchestrationPreviewResult;
 			setOrchPreview(data);
-		} catch {
+		}
+		catch {
 			message.error(uiText("Lỗi preview orchestration", "Orchestration preview error", "编排预览错误"));
-		} finally {
+		}
+		finally {
 			setOrchPreviewLoading(false);
 		}
 	}, [appId, inputValue, pendingAttachments, contextType, currentCode, language, targetPName, targetPType, requestEditorMetadata, uiText]);
@@ -1902,7 +2093,7 @@ export default function AiAssistantChat({
 			const normalizedText = text.trim();
 			if (normalizedText) {
 				setPromptHistory((prev) => {
-					const next = [normalizedText, ...prev.filter((item) => item !== normalizedText)].slice(0, PROMPT_HISTORY_LIMIT);
+					const next = [normalizedText, ...prev.filter(item => item !== normalizedText)].slice(0, PROMPT_HISTORY_LIMIT);
 					savePromptHistory(promptHistoryStorageKey, next);
 					return next;
 				});
@@ -1926,9 +2117,9 @@ export default function AiAssistantChat({
 					setBmSearching(true);
 					const bmHits = await searchBusinessMemory({ appId, q: cleanedMessage || normalizedText, k: 4 });
 					bmAttachments = bmHits
-						.filter((hit) => Number(hit.score) > 0.05)
+						.filter(hit => Number(hit.score) > 0.05)
 						.slice(0, 4)
-						.map((hit) => ({
+						.map(hit => ({
 							id: `bm_${hit.chunkId}`,
 							name: hit.sourceName,
 							mimeType: "text/markdown",
@@ -1940,9 +2131,11 @@ export default function AiAssistantChat({
 							textContent: hit.content,
 							fullContext: true,
 						}));
-				} catch {
+				}
+				catch {
 					// Silent fallback: business memory unavailable does not block chat
-				} finally {
+				}
+				finally {
 					setBmSearching(false);
 				}
 			}
@@ -1958,7 +2151,7 @@ export default function AiAssistantChat({
 				role: "user",
 				content: cleanedMessage || text,
 				timestamp: Date.now(),
-				attachments: outgoingAttachments.map((attachment) => ({
+				attachments: outgoingAttachments.map(attachment => ({
 					id: attachment.id,
 					name: attachment.name,
 					mimeType: attachment.mimeType,
@@ -1989,7 +2182,7 @@ export default function AiAssistantChat({
 			setStageEvents([]);
 			setAgenticSteps([]);
 			setAgenticStepsCollapsed(false);
-			setAiUsageSummary((prev) => ({ ...prev, turn: null }));
+			setAiUsageSummary(prev => ({ ...prev, turn: null }));
 			setModelDecisionTrace([]);
 			setShowFullTimeline(false);
 			setShowFullModelTrace(false);
@@ -2001,6 +2194,9 @@ export default function AiAssistantChat({
 			setCompletionMetrics({});
 			setCompletionErrorMessage("");
 			setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+			setLastProgressEventAgeSecs(0);
+			lastProgressEventAtRef.current = 0;
+			lastProgressWatchdogAlertAtRef.current = 0;
 			stageEventSignaturesRef.current = new Set();
 			followBottomRef.current = true;
 			streamingMessageRef.current = "";
@@ -2021,6 +2217,9 @@ export default function AiAssistantChat({
 			const requestedResponseMode: ResponseMode = modeDirective.overrideMode ?? inferredResponseMode;
 			turnAllowAutoApplyRef.current = requestedResponseMode === "edit";
 			requestStartedAtRef.current = Date.now();
+			lastProgressEventAtRef.current = requestStartedAtRef.current;
+			lastProgressWatchdogAlertAtRef.current = 0;
+			setLastProgressEventAgeSecs(0);
 			setInputValue("");
 			setPendingAttachments([]);
 
@@ -2044,7 +2243,7 @@ export default function AiAssistantChat({
 						pName: targetPName,
 						pType: targetPType,
 						editorMetadata: requestEditorMetadata,
-						attachments: outgoingAttachments.map((attachment) => ({
+						attachments: outgoingAttachments.map(attachment => ({
 							id: attachment.id,
 							name: attachment.name,
 							mimeType: attachment.mimeType,
@@ -2062,6 +2261,7 @@ export default function AiAssistantChat({
 								: undefined,
 						})),
 					},
+					timeout: AI_TIMEOUT_MS,
 					throwHttpErrors: false,
 					signal: controller.signal,
 				});
@@ -2070,7 +2270,8 @@ export default function AiAssistantChat({
 					const status = response.status;
 					if (status === 401) {
 						message.error(uiText("Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại", "Session expired, please log in again", "登录会话已过期，请重新登录"));
-					} else {
+					}
+					else {
 						message.error(uiText("Gửi tin nhắn thất bại", "Failed to send message", "发送消息失败"));
 					}
 					setIsLoading(false);
@@ -2085,36 +2286,67 @@ export default function AiAssistantChat({
 				let receivedErrorEvent = false;
 				while (true) {
 					const { done, value } = await reader.read();
-					if (done) break;
+					if (done)
+						break;
 					buffer += decoder.decode(value, { stream: true });
 					const lines = buffer.split("\n");
 					buffer = lines.pop() ?? "";
 					for (const line of lines) {
-						if (!line.startsWith("data:")) continue;
+						if (!line.startsWith("data:"))
+							continue;
 						const json = line.slice(5).trim();
-						if (!json || json === "[DONE]") continue;
+						if (!json || json === "[DONE]")
+							continue;
 						try {
 							const evt = JSON.parse(json) as {
-								stage: string; chunk?: string; fullResponse?: string; responseMode?: string;
-								message?: string; percent?: number; estimatedWaitSecs?: number;
-								messageKey?: string; messageArgs?: Record<string, any>;
-								localPhase?: string;
-								remainingEstimateSecs?: number; charsReceived?: number; estimatedTotalChars?: number;
-								ttftMs?: number; elapsedMs?: number; promptTokens?: number; model?: string;
-								requestId?: string;
-								streamedChars?: number; streamChunkCount?: number; streamAssemblyMismatch?: boolean;
-								promptOriginalChars?: number; promptFinalChars?: number; promptCapChars?: number; promptTruncatedByCharCap?: boolean;
-								menuShrinkGuard?: boolean; menuShrinkRatio?: number; shrinkRatio?: number;
-								inputChars?: number; outputChars?: number; minRatio?: number;
-								modelDecisionStep?: "primary" | "fallback" | "final";
-								modelDecisionReason?: string;
-								decision_step?: "primary" | "fallback" | "final";
-								reason_code?: string;
-								usage?: any; completionTokens?: number; estimatedCostUsd?: number;
+								stage: string
+								chunk?: string
+								fullResponse?: string
+								responseMode?: string
+								message?: string
+								percent?: number
+								estimatedWaitSecs?: number
+								messageKey?: string
+								messageArgs?: Record<string, any>
+								localPhase?: string
+								remainingEstimateSecs?: number
+								charsReceived?: number
+								estimatedTotalChars?: number
+								ttftMs?: number
+								elapsedMs?: number
+								promptTokens?: number
+								model?: string
+								requestId?: string
+								streamedChars?: number
+								streamChunkCount?: number
+								streamAssemblyMismatch?: boolean
+								promptOriginalChars?: number
+								promptFinalChars?: number
+								promptCapChars?: number
+								promptTruncatedByCharCap?: boolean
+								menuShrinkGuard?: boolean
+								menuShrinkRatio?: number
+								shrinkRatio?: number
+								inputChars?: number
+								outputChars?: number
+								minRatio?: number
+								modelDecisionStep?: "primary" | "fallback" | "final"
+								modelDecisionReason?: string
+								decision_step?: "primary" | "fallback" | "final"
+								reason_code?: string
+								usage?: any
+								completionTokens?: number
+								estimatedCostUsd?: number
 								// agentic_plan fields
-								compacted?: boolean; savedChars?: number; charsBefore?: number; charsAfter?: number;
-								routingTier?: string; planStepCount?: number;
+								compacted?: boolean
+								savedChars?: number
+								charsBefore?: number
+								charsAfter?: number
+								routingTier?: string
+								planStepCount?: number
 							};
+							lastProgressEventAtRef.current = Date.now();
+							setLastProgressEventAgeSecs(0);
 							const normalizeEvtArgs = (raw: any): Record<string, any> | undefined => {
 								if (raw && typeof raw === "object" && !Array.isArray(raw)) {
 									return raw as Record<string, any>;
@@ -2127,7 +2359,8 @@ export default function AiAssistantChat({
 											if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
 												return parsed as Record<string, any>;
 											}
-										} catch {
+										}
+										catch {
 											return undefined;
 										}
 									}
@@ -2140,7 +2373,8 @@ export default function AiAssistantChat({
 								const mode = String(evt.responseMode).trim().toLowerCase();
 								if (mode === "edit") {
 									turnAllowAutoApplyRef.current = true;
-								} else if (mode === "analyze") {
+								}
+								else if (mode === "analyze") {
 									turnAllowAutoApplyRef.current = false;
 								}
 							}
@@ -2178,11 +2412,15 @@ export default function AiAssistantChat({
 									),
 									status: "done",
 								});
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
-							} else if (evt.stage === "agentic_plan") {
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evt);
+							}
+							else if (evt.stage === "agentic_plan") {
 								appendAgenticStep({ stage: "agentic_plan", icon: "🧠", label: uiText("Lập kế hoạch Agentic", "Agentic Planning", "Agent 计划"), status: "done" });
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
-							} else if (evt.stage === "local_tool_invocation") {
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evt);
+							}
+							else if (evt.stage === "local_tool_invocation") {
 								appendAgenticStep({
 									stage: "local_tool_invocation",
 									icon: "🔧",
@@ -2190,16 +2428,20 @@ export default function AiAssistantChat({
 									detail: evt.message,
 									status: "done",
 								});
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
-							} else if (evt.stage === "context_compression") {
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evt);
+							}
+							else if (evt.stage === "context_compression") {
 								appendAgenticStep({
 									stage: "context_compression",
 									icon: "🗜",
 									label: uiText("Gắn context nén vào prompt", "Attached compressed context", "已附加压缩上下文"),
 									status: "done",
 								});
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
-							} else if (evt.stage === "preparing") {
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evt);
+							}
+							else if (evt.stage === "preparing") {
 								const preparingMessageFromKey = renderProgressText(evt.messageKey, evt.messageArgs, evt.message);
 								const preparingMessage = renderProgressText(evt.messageKey, evtMessageArgs, evt.message);
 								appendModelDecisionTrace({
@@ -2215,8 +2457,10 @@ export default function AiAssistantChat({
 									estimatedWaitSecs: evt.estimatedWaitSecs ?? 0,
 									remainingSecs: evt.estimatedWaitSecs ?? 0,
 								}));
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evtForTimeline);
-							} else if (evt.stage === "waiting_gemini") {
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "waiting_gemini") {
 								const localPhase = String(evt.localPhase || "").trim().toLowerCase();
 								const localPhaseFallback = localPhase === "loading"
 									? uiText("AI local đang nạp model...", "Local AI is loading model...", "本地AI正在加载模型...")
@@ -2231,8 +2475,10 @@ export default function AiAssistantChat({
 									message: normalizeAssistantProgressMessage(waitingMessageFromKey || evt.message, localPhaseFallback),
 									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
 								}));
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evtForTimeline);
-							} else if (evt.stage === "streaming_started") {
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "streaming_started") {
 								setGeminiProgress(prev => ({
 									...prev,
 									phase: "streaming",
@@ -2242,8 +2488,10 @@ export default function AiAssistantChat({
 									estimatedTotalChars: evt.estimatedTotalChars ?? prev.estimatedTotalChars,
 									remainingSecs: 0,
 								}));
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evtForTimeline);
-							} else if (evt.stage === "streaming_progress") {
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "streaming_progress") {
 								setGeminiProgress(prev => ({
 									...prev,
 									phase: "streaming",
@@ -2252,18 +2500,22 @@ export default function AiAssistantChat({
 									charsReceived: evt.charsReceived ?? prev.charsReceived,
 									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
 								}));
-							} else if (evt.stage === "analyzing") {
+							}
+							else if (evt.stage === "analyzing") {
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
 									appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
 								}
-							} else if (evt.stage === "menu_shrink_guard") {
-							if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
-							message.warning(uiText(
-								`Cảnh báo: AI trả về nhỏ hơn dự kiến (tỷ lệ ${Number(evt.shrinkRatio ?? 0).toFixed(2)}), có thể bị mất dữ liệu menu`,
-								`Warning: AI output shrank unexpectedly (ratio ${Number(evt.shrinkRatio ?? 0).toFixed(2)}), menu data may be missing`,
-								`警告：AI输出意外化小（比例 ${Number(evt.shrinkRatio ?? 0).toFixed(2)}），菜单数据可能丢失`,
-							));
-						} else if (evt.stage === "context" || evt.stage === "continuing" || evt.stage === "cached" || evt.stage === "prompt_budget") {
+							}
+							else if (evt.stage === "menu_shrink_guard") {
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evt);
+								message.warning(uiText(
+									`Cảnh báo: AI trả về nhỏ hơn dự kiến (tỷ lệ ${Number(evt.shrinkRatio ?? 0).toFixed(2)}), có thể bị mất dữ liệu menu`,
+									`Warning: AI output shrank unexpectedly (ratio ${Number(evt.shrinkRatio ?? 0).toFixed(2)}), menu data may be missing`,
+									`警告：AI输出意外化小（比例 ${Number(evt.shrinkRatio ?? 0).toFixed(2)}），菜单数据可能丢失`,
+								));
+							}
+							else if (evt.stage === "context" || evt.stage === "continuing" || evt.stage === "cached" || evt.stage === "prompt_budget") {
 								if (decisionStep === "fallback" || !!decisionReason || (evt.message || "").toLowerCase().includes("fallback") || (evt.message || "").toLowerCase().includes("switch") || (evt.message || "").toLowerCase().includes("chuy") || (evt.message || "").toLowerCase().includes("rate-limit")) {
 									appendModelDecisionTrace({
 										step: decisionStep || "fallback",
@@ -2274,10 +2526,12 @@ export default function AiAssistantChat({
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
 									appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
 								}
-							} else if (evt.stage === "streaming" && evt.chunk) {
+							}
+							else if (evt.stage === "streaming" && evt.chunk) {
 								pendingStreamChunkRef.current += evt.chunk;
 								scheduleStreamFlush();
-							} else if (evt.stage === "complete") {
+							}
+							else if (evt.stage === "complete") {
 								receivedCompleteEvent = true;
 								const usage = normalizeUsagePayload(evt.usage || {
 									model: evt.model,
@@ -2293,7 +2547,7 @@ export default function AiAssistantChat({
 										model: usage.model,
 										reason: formatModelDecisionReason(decisionReason) || uiText("Model kết thúc lượt xử lý", "Final model used for this turn", "本轮最终使用模型"),
 									});
-									setAiUsageSummary((prev) => ({
+									setAiUsageSummary(prev => ({
 										turn: usage,
 										sessionCostUsd: prev.sessionCostUsd + (usage.enabled ? usage.estimatedCostUsd : 0),
 										sessionTokens: prev.sessionTokens + usage.totalTokens,
@@ -2316,7 +2570,8 @@ export default function AiAssistantChat({
 									promptCapChars: Number.isFinite(Number(evt.promptCapChars)) ? Number(evt.promptCapChars) : undefined,
 									promptTruncatedByCharCap: evt.promptTruncatedByCharCap === true,
 								});
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evtForTimeline);
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
 								setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Hoàn thành", "Completed", "已完成"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								if (evt.fullResponse) {
 									streamingMessageRef.current = evt.fullResponse;
@@ -2343,12 +2598,14 @@ export default function AiAssistantChat({
 									sseAbortRef.current = null;
 								}
 								turnAllowAutoApplyRef.current = false;
-							} else if (evt.stage === "error") {
+							}
+							else if (evt.stage === "error") {
 								receivedErrorEvent = true;
 								setCompletionState("error");
 								setCompletionErrorMessage(String(evt.message || ""));
 								setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
-								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evt);
 								message.error(evt.message || uiText("Chat thất bại", "Chat failed", "对话失败"));
 								setIsLoading(false);
 								if (sseAbortRef.current === controller) {
@@ -2356,7 +2613,8 @@ export default function AiAssistantChat({
 								}
 								turnAllowAutoApplyRef.current = false;
 							}
-						} catch (parseErr) {
+						}
+						catch (parseErr) {
 							console.debug("Failed to parse SSE line:", json, parseErr);
 						}
 					}
@@ -2384,8 +2642,10 @@ export default function AiAssistantChat({
 						});
 					}
 				}
-			} catch (error) {
-				if ((error as Error)?.name === "AbortError") return;
+			}
+			catch (error) {
+				if ((error as Error)?.name === "AbortError")
+					return;
 				console.error("Failed to send message:", error);
 				setCompletionState("error");
 				setCompletionErrorMessage((error as Error)?.message ? String((error as Error).message) : "SSE request failed");
@@ -2396,7 +2656,8 @@ export default function AiAssistantChat({
 				const status = Number((error as any)?.response?.status ?? 0);
 				if (status === 401) {
 					message.error(uiText("Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại", "Session expired, please log in again", "登录会话已过期，请重新登录"));
-				} else {
+				}
+				else {
 					message.error(uiText("Gửi tin nhắn thất bại", "Failed to send message", "发送消息失败"));
 				}
 				setIsLoading(false);
@@ -2404,13 +2665,14 @@ export default function AiAssistantChat({
 					sseAbortRef.current = null;
 				}
 				turnAllowAutoApplyRef.current = false;
-			} finally {
+			}
+			finally {
 				if (sseAbortRef.current === controller) {
 					sseAbortRef.current = null;
 				}
 			}
 		},
-		[appId, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey]
+		[appId, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey],
 	);
 
 	const handleSend = () => {
@@ -2428,9 +2690,12 @@ export default function AiAssistantChat({
 			handleSend();
 			return;
 		}
-		if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-		if (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return;
-		if (!promptHistory.length) return;
+		if (e.key !== "ArrowUp" && e.key !== "ArrowDown")
+			return;
+		if (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey)
+			return;
+		if (!promptHistory.length)
+			return;
 
 		const element = e.currentTarget;
 		const start = Number(element.selectionStart ?? 0);
@@ -2439,8 +2704,10 @@ export default function AiAssistantChat({
 		const isAtTop = start === 0 && end === 0;
 		const isAtBottom = start === text.length && end === text.length;
 
-		if (e.key === "ArrowUp" && !isAtTop) return;
-		if (e.key === "ArrowDown" && !isAtBottom) return;
+		if (e.key === "ArrowUp" && !isAtTop)
+			return;
+		if (e.key === "ArrowDown" && !isAtBottom)
+			return;
 
 		e.preventDefault();
 
@@ -2489,7 +2756,8 @@ export default function AiAssistantChat({
 	};
 
 	const handleCopyRequestId = useCallback(() => {
-		if (!streamRequestId) return;
+		if (!streamRequestId)
+			return;
 		navigator.clipboard.writeText(streamRequestId);
 		message.success(uiText("Đã sao chép requestId", "requestId copied", "requestId 已复制"));
 	}, [streamRequestId, uiText]);
@@ -2506,9 +2774,9 @@ export default function AiAssistantChat({
 			className={styles.aiAssistantChat}
 			title={uiText("Trò chuyện Trợ lý AI", "AI Assistant Chat", "AI 助手对话")}
 			size="small"
-			extra={
+			extra={(
 				<Space size="small">
-					<Tooltip title={uiText("Xóa lịch sử", "Clear history", "清除历史")}> 
+					<Tooltip title={uiText("Xóa lịch sử", "Clear history", "清除历史")}>
 						<Button
 							type="text"
 							size="small"
@@ -2517,7 +2785,7 @@ export default function AiAssistantChat({
 						/>
 					</Tooltip>
 				</Space>
-			}
+			)}
 		>
 			<div className={styles.container}>
 				{/* Messages List */}
@@ -2539,20 +2807,24 @@ export default function AiAssistantChat({
 									? Math.round(((msg.compactedSavedChars ?? 0) / msg.compactedCharsBefore) * 100)
 									: 0;
 								return (
-									<div key={msg.id} style={{
-										display: "flex",
-										alignItems: "center",
-										gap: 8,
-										margin: "8px 0",
-										paddingLeft: 4,
-										paddingRight: 4,
-									}}>
+									<div
+										key={msg.id}
+										style={{
+											display: "flex",
+											alignItems: "center",
+											gap: 8,
+											margin: "8px 0",
+											paddingLeft: 4,
+											paddingRight: 4,
+										}}
+									>
 										<div style={{ flex: 1, height: 1, background: "rgba(114,46,209,0.25)" }} />
 										<Tooltip title={uiText(
 											`Context đã được nén: ${(msg.compactedCharsBefore ?? 0).toLocaleString()} → ${(msg.compactedCharsAfter ?? 0).toLocaleString()} ký tự${msg.compactedRoutingTier ? ` · tier: ${msg.compactedRoutingTier}` : ""}${msg.compactedPlanStepCount ? ` · ${msg.compactedPlanStepCount} bước kế hoạch` : ""}`,
 											`Context compacted: ${(msg.compactedCharsBefore ?? 0).toLocaleString()} → ${(msg.compactedCharsAfter ?? 0).toLocaleString()} chars${msg.compactedRoutingTier ? ` · tier: ${msg.compactedRoutingTier}` : ""}${msg.compactedPlanStepCount ? ` · ${msg.compactedPlanStepCount} plan steps` : ""}`,
 											`上下文已压缩：${(msg.compactedCharsBefore ?? 0).toLocaleString()} → ${(msg.compactedCharsAfter ?? 0).toLocaleString()} 字符${msg.compactedRoutingTier ? ` · 层级: ${msg.compactedRoutingTier}` : ""}`,
-										)}>
+										)}
+										>
 											<span style={{
 												fontSize: 11,
 												color: "#722ed1",
@@ -2561,7 +2833,8 @@ export default function AiAssistantChat({
 												display: "flex",
 												alignItems: "center",
 												gap: 4,
-											}}>
+											}}
+											>
 												<ThunderboltOutlined style={{ fontSize: 10 }} />
 												{uiText(
 													`Hội thoại đã được nén · tiết kiệm ${savedK > 0 ? `~${savedK}K` : (msg.compactedSavedChars ?? 0).toLocaleString()} ký tự${savePct > 0 ? ` (${savePct}%)` : ""}`,
@@ -2577,138 +2850,139 @@ export default function AiAssistantChat({
 							const isLastMsg = msgIdx === messages.length - 1;
 							const showStepCards = isLastMsg && msg.role === "assistant" && agenticSteps.length > 0;
 							return (
-							<Fragment key={msg.id}>
-							{showStepCards && (
-								<div style={{ padding: "2px 8px 0" }}>
-									<div style={{
-										border: "1px solid rgba(114,46,209,0.22)",
-										borderRadius: 8,
-										background: "rgba(114,46,209,0.05)",
-										overflow: "hidden",
-										marginBottom: 4,
-									}}>
-										<div
-											style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", cursor: "pointer" }}
-											onClick={() => setAgenticStepsCollapsed(c => !c)}
-										>
-											<span style={{ fontSize: 11, color: "#722ed1", display: "flex", alignItems: "center", gap: 4, fontWeight: 500 }}>
-												<ThunderboltOutlined style={{ fontSize: 10 }} />
-												{agenticStepsCollapsed
-													? uiText(`${agenticSteps.length} b\u01b0\u1edbc agentic ho\u00e0n t\u1ea5t`, `${agenticSteps.length} agentic steps done`, `${agenticSteps.length} \u4e2a Agent \u6b65\u9aa4\u5b8c\u6210`)
-													: uiText("Agentic workflow", "Agentic workflow", "Agent \u5de5\u4f5c\u6d41")
-												}
-											</span>
-											<span style={{ fontSize: 10, color: "#722ed1" }}>{agenticStepsCollapsed ? "\u25bc" : "\u25b2"}</span>
-										</div>
-										{!agenticStepsCollapsed && (
-											<div style={{ borderTop: "1px solid rgba(114,46,209,0.12)", padding: "3px 0" }}>
-												{agenticSteps.map(step => (
-													<div key={step.id} style={{ display: "flex", alignItems: "flex-start", gap: 7, padding: "3px 10px", fontSize: 11 }}>
-														<span style={{ fontSize: 13, lineHeight: "15px", flexShrink: 0 }}>{step.icon}</span>
-														<div style={{ flex: 1, minWidth: 0, lineHeight: "15px" }}>
-															<span style={{ color: "rgba(230,230,230,0.9)" }}>{step.label}</span>
-															{step.detail && (
-																<span style={{ color: "rgba(180,180,180,0.6)", marginLeft: 6, fontSize: 10 }}>{step.detail}</span>
-															)}
-														</div>
-														<span style={{ fontSize: 11, color: step.status === "done" ? "#52c41a" : "#722ed1", flexShrink: 0, lineHeight: "15px" }}>
-															{step.status === "done" ? "\u2713" : <Spin size="small" />}
-														</span>
-													</div>
-												))}
-											</div>
-										)}
-									</div>
-								</div>
-							)}
-							<div
-								className={`${styles.messageItem} ${styles[msg.role]}`}
-							>
-								<div className={styles.messageContent}>
-									<div className={styles.messageText}>
-										{msg.role === "user" ? (
-											<>
-												<span>{msg.content}</span>
-												{Array.isArray(msg.attachments) && msg.attachments.length > 0 && (
-													<div className={styles.attachmentList}>
-														{msg.attachments.map((attachment) => (
-															<div key={attachment.id} className={styles.attachmentChip}>
-																{attachment.kind === "image" && attachment.previewUrl ? (
-																	<img src={attachment.previewUrl} alt={attachment.name} className={styles.attachmentThumb} />
-																) : (
-																	<PaperClipOutlined />
-																)}
-																<div className={styles.attachmentMeta}>
-																	<div>{attachment.name}</div>
-																	<div className={styles.attachmentSummary}>{attachment.summary}</div>
+								<Fragment key={msg.id}>
+									{showStepCards && (
+										<div style={{ padding: "2px 8px 0" }}>
+											<div style={{
+												border: "1px solid rgba(114,46,209,0.22)",
+												borderRadius: 8,
+												background: "rgba(114,46,209,0.05)",
+												overflow: "hidden",
+												marginBottom: 4,
+											}}
+											>
+												<div
+													style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", cursor: "pointer" }}
+													onClick={() => setAgenticStepsCollapsed(c => !c)}
+												>
+													<span style={{ fontSize: 11, color: "#722ed1", display: "flex", alignItems: "center", gap: 4, fontWeight: 500 }}>
+														<ThunderboltOutlined style={{ fontSize: 10 }} />
+														{agenticStepsCollapsed
+															? uiText(`${agenticSteps.length} b\u01B0\u1EDBc agentic ho\u00E0n t\u1EA5t`, `${agenticSteps.length} agentic steps done`, `${agenticSteps.length} \u4E2A Agent \u6B65\u9AA4\u5B8C\u6210`)
+															: uiText("Agentic workflow", "Agentic workflow", "Agent \u5DE5\u4F5C\u6D41")}
+													</span>
+													<span style={{ fontSize: 10, color: "#722ed1" }}>{agenticStepsCollapsed ? "\u25BC" : "\u25B2"}</span>
+												</div>
+												{!agenticStepsCollapsed && (
+													<div style={{ borderTop: "1px solid rgba(114,46,209,0.12)", padding: "3px 0" }}>
+														{agenticSteps.map(step => (
+															<div key={step.id} style={{ display: "flex", alignItems: "flex-start", gap: 7, padding: "3px 10px", fontSize: 11 }}>
+																<span style={{ fontSize: 13, lineHeight: "15px", flexShrink: 0 }}>{step.icon}</span>
+																<div style={{ flex: 1, minWidth: 0, lineHeight: "15px" }}>
+																	<span style={{ color: "rgba(230,230,230,0.9)" }}>{step.label}</span>
+																	{step.detail && (
+																		<span style={{ color: "rgba(180,180,180,0.6)", marginLeft: 6, fontSize: 10 }}>{step.detail}</span>
+																	)}
 																</div>
+																<span style={{ fontSize: 11, color: step.status === "done" ? "#52c41a" : "#722ed1", flexShrink: 0, lineHeight: "15px" }}>
+																	{step.status === "done" ? "\u2713" : <Spin size="small" />}
+																</span>
 															</div>
 														))}
 													</div>
 												)}
-											</>
-										) : (
-											<div className={styles.assistantText}>
-												{msg.messageType === "debug" && (
-													<Tag color="gold">AI ASSISTANT DEBUG PAYLOAD</Tag>
-												)}
-												{/* Render text with code blocks */}
-												{msg.content.split(/```[\s\S]*?```/g).map((part, idx) => (
-													<span key={idx}>{part}</span>
-												))}
-												
-												{/* Render code blocks */}
-												{!shouldRenderAssistantCodeBlocks && Array.isArray(msg.codeBlocks) && msg.codeBlocks.length > 0 && (
-													<div className={styles.attachmentSummary}>
-														{uiText(
-															"Mã đã được cập nhật trong editor. Chat chỉ hiển thị tóm tắt thay đổi.",
-															"Code has been updated in the editor. Chat shows only the summary.",
-															"代码已更新到编辑器中，聊天窗口仅显示摘要。",
-														)}
-													</div>
-												)}
-												{shouldRenderAssistantCodeBlocks && msg.codeBlocks?.map((block) => (
-													<div
-														key={`code_${block.index}`}
-														className={styles.codeBlock}
-													>
-														<div className={styles.codeHeader}>
-															<span>{block.language}</span>
-															<Space size={4}>
-																<Button
-																	type="text"
-																	size="small"
-																	icon={<CopyOutlined />}
-																	onClick={() => handleCopyCode(block.code)}
-																	title={uiText("Sao chép code", "Copy code", "复制代码")}
-																/>
-																{onCodeInsert && msg.messageType !== "debug" && (
-																	<Button
-																		type="text"
-																		size="small"
-																		icon={<BgColorsOutlined />}
-																		onClick={() =>
-																			handleInsertCode(block.code)
-																		}
-																		title={uiText("Chèn vào editor", "Insert into editor", "插入到编辑器")}
-																	/>
-																)}
-															</Space>
-														</div>
-														<pre className={styles.codeContent}>
-															<code>{block.code}</code>
-														</pre>
-													</div>
-												))}
 											</div>
-										)}
+										</div>
+									)}
+									<div
+										className={`${styles.messageItem} ${styles[msg.role]}`}
+									>
+										<div className={styles.messageContent}>
+											<div className={styles.messageText}>
+												{msg.role === "user" ? (
+													<>
+														<span>{msg.content}</span>
+														{Array.isArray(msg.attachments) && msg.attachments.length > 0 && (
+															<div className={styles.attachmentList}>
+																{msg.attachments.map(attachment => (
+																	<div key={attachment.id} className={styles.attachmentChip}>
+																		{attachment.kind === "image" && attachment.previewUrl
+																			? (
+																				<img src={attachment.previewUrl} alt={attachment.name} className={styles.attachmentThumb} />
+																			)
+																			: (
+																				<PaperClipOutlined />
+																			)}
+																		<div className={styles.attachmentMeta}>
+																			<div>{attachment.name}</div>
+																			<div className={styles.attachmentSummary}>{attachment.summary}</div>
+																		</div>
+																	</div>
+																))}
+															</div>
+														)}
+													</>
+												) : (
+													<div className={styles.assistantText}>
+														{msg.messageType === "debug" && (
+															<Tag color="gold">AI ASSISTANT DEBUG PAYLOAD</Tag>
+														)}
+														{/* Render text with code blocks */}
+														{msg.content.split(/```[\s\S]*?```/g).map((part, idx) => (
+															<span key={idx}>{part}</span>
+														))}
+
+														{/* Render code blocks */}
+														{!shouldRenderAssistantCodeBlocks && Array.isArray(msg.codeBlocks) && msg.codeBlocks.length > 0 && (
+															<div className={styles.attachmentSummary}>
+																{uiText(
+																	"Mã đã được cập nhật trong editor. Chat chỉ hiển thị tóm tắt thay đổi.",
+																	"Code has been updated in the editor. Chat shows only the summary.",
+																	"代码已更新到编辑器中，聊天窗口仅显示摘要。",
+																)}
+															</div>
+														)}
+														{shouldRenderAssistantCodeBlocks && msg.codeBlocks?.map(block => (
+															<div
+																key={`code_${block.index}`}
+																className={styles.codeBlock}
+															>
+																<div className={styles.codeHeader}>
+																	<span>{block.language}</span>
+																	<Space size={4}>
+																		<Button
+																			type="text"
+																			size="small"
+																			icon={<CopyOutlined />}
+																			onClick={() => handleCopyCode(block.code)}
+																			title={uiText("Sao chép code", "Copy code", "复制代码")}
+																		/>
+																		{onCodeInsert && msg.messageType !== "debug" && (
+																			<Button
+																				type="text"
+																				size="small"
+																				icon={<BgColorsOutlined />}
+																				onClick={() =>
+																					handleInsertCode(block.code)}
+																				title={uiText("Chèn vào editor", "Insert into editor", "插入到编辑器")}
+																			/>
+																		)}
+																	</Space>
+																</div>
+																<pre className={styles.codeContent}>
+																	<code>{block.code}</code>
+																</pre>
+															</div>
+														))}
+													</div>
+												)}
+											</div>
+											<div className={styles.timestamp}>
+												{new Date(msg.timestamp).toLocaleTimeString()}
+											</div>
+										</div>
 									</div>
-									<div className={styles.timestamp}>
-										{new Date(msg.timestamp).toLocaleTimeString()}
-									</div>
-								</div>
-							</div>
-							</Fragment>
+								</Fragment>
 							);
 						})
 					)}
@@ -2725,7 +2999,10 @@ export default function AiAssistantChat({
 									</span>
 									<span className={styles.progressCompletionStats}>{completionSummaryLabel}</span>
 									{streamRequestId && (
-										<span className={styles.progressRequestId}>req {streamRequestId}</span>
+										<span className={styles.progressRequestId}>
+											req
+											{streamRequestId}
+										</span>
 									)}
 								</div>
 								<div className={styles.progressCollapsedActions}>
@@ -2751,120 +3028,140 @@ export default function AiAssistantChat({
 							</div>
 						)}
 						{!isProgressDockCollapsed && isLoading && geminiProgress.phase !== "idle" && (
-							showMiniProgress ? (
-								<div className={styles.progressMiniBar}>
-									<div className={styles.progressMiniMain}>
-										<span className={styles.progressMiniPhase}>
-											{normalizeAssistantProgressMessage(
-												geminiProgress.message,
-												geminiProgress.phase === "waiting"
-													? uiText("Đang xử lý", "Processing", "处理中")
-													: uiText("Đang streaming", "Streaming", "流式中"),
+							showMiniProgress
+								? (
+									<div className={styles.progressMiniBar}>
+										<div className={styles.progressMiniMain}>
+											<span className={styles.progressMiniPhase}>
+												{normalizeAssistantProgressMessage(
+													geminiProgress.message,
+													geminiProgress.phase === "waiting"
+														? uiText("Đang xử lý", "Processing", "处理中")
+														: uiText("Đang streaming", "Streaming", "流式中"),
+												)}
+											</span>
+											<span className={styles.progressMiniStats}>
+												{`${Math.max(0, Math.min(100, geminiProgress.percent))}%`}
+												{geminiProgress.remainingSecs > 0 ? ` · ~${geminiProgress.remainingSecs}s` : ""}
+												{` · evt ${Math.max(0, lastProgressEventAgeSecs)}s`}
+											</span>
+											{streamRequestId && (
+												<button type="button" className={styles.progressRequestIdButton} onClick={handleCopyRequestId}>
+													<span className={styles.progressRequestId}>
+														req
+														{streamRequestId}
+													</span>
+												</button>
 											)}
-										</span>
-										<span className={styles.progressMiniStats}>
-											{`${Math.max(0, Math.min(100, geminiProgress.percent))}%`}
-											{geminiProgress.remainingSecs > 0 ? ` · ~${geminiProgress.remainingSecs}s` : ""}
-										</span>
+										</div>
+										<Space size={4}>
+											<Button
+												type="text"
+												size="small"
+												danger
+												icon={<CloseOutlined />}
+												onClick={handleCancelRequest}
+											>
+												{uiText("Hủy", "Cancel", "取消")}
+											</Button>
+											<Button
+												type="link"
+												size="small"
+												className={styles.compactToggleBtn}
+												onClick={() => setShowMiniProgress(false)}
+											>
+												{uiText("Chi tiết", "Details", "详情")}
+											</Button>
+										</Space>
+									</div>
+								)
+								: (
+									<div className={styles.geminiProgressCard}>
+										<div className={styles.geminiProgressHeader}>
+											<span className={styles.geminiProgressIcon}>
+												{geminiProgress.phase === "waiting" ? "⏳" : "⚡"}
+											</span>
+											<span className={styles.geminiProgressLabel}>
+												{normalizeAssistantProgressMessage(
+													geminiProgress.message,
+													geminiProgress.phase === "waiting"
+														? uiText("Chuyên Gia đang xử lý...", "Expert is processing...", "专家正在处理中...")
+														: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果..."),
+												)}
+											</span>
+											<span className={styles.geminiProgressCountdown}>
+												{geminiProgress.remainingSecs > 0 ? `~${geminiProgress.remainingSecs}s` : " "}
+											</span>
+											<span className={styles.geminiProgressCountdown}>
+												{`evt ${Math.max(0, lastProgressEventAgeSecs)}s`}
+											</span>
+											<Button
+												type="text"
+												size="small"
+												danger
+												icon={<CloseOutlined />}
+												onClick={handleCancelRequest}
+											>
+												{uiText("Hủy", "Cancel", "取消")}
+											</Button>
+											<Button
+												type="link"
+												size="small"
+												className={styles.compactToggleBtn}
+												onClick={() => setShowMiniProgress(true)}
+											>
+												{uiText("Mini", "Mini", "迷你")}
+											</Button>
+										</div>
+										<div className={styles.geminiProgressBarTrack}>
+											<div
+												className={`${styles.geminiProgressBarFill} ${geminiProgress.phase === "waiting" ? styles.geminiProgressBarWaiting : styles.geminiProgressBarStreaming}`}
+												style={{ width: `${Math.max(2, Math.min(100, geminiProgress.percent))}%` }}
+											/>
+										</div>
+										<div className={styles.geminiProgressMeta}>
+											{geminiProgress.phase === "streaming" && geminiProgress.charsReceived > 0
+												? (
+													<>
+														{geminiProgress.charsReceived.toLocaleString()}
+														{" "}
+														ký tự nhận được
+														{geminiProgress.ttftMs != null && (
+															<span className={styles.geminiProgressTtft}>
+																{" "}
+																· TTFT
+																{geminiProgress.ttftMs}
+																ms
+															</span>
+														)}
+													</>
+												)
+												: geminiProgress.phase === "waiting" && geminiProgress.estimatedWaitSecs > 0
+													? uiText(
+														`Ước tính ~${geminiProgress.estimatedWaitSecs}s tổng thời gian`,
+														`Estimated total time ~${geminiProgress.estimatedWaitSecs}s`,
+														`预计总耗时约 ${geminiProgress.estimatedWaitSecs}s`,
+													)
+													: " "}
+										</div>
 										{streamRequestId && (
 											<button type="button" className={styles.progressRequestIdButton} onClick={handleCopyRequestId}>
-												<span className={styles.progressRequestId}>req {streamRequestId}</span>
+												<div className={styles.progressMetaInline}>
+													req
+													{streamRequestId}
+												</div>
 											</button>
 										)}
 									</div>
-									<Space size={4}>
-										<Button
-											type="text"
-											size="small"
-											danger
-											icon={<CloseOutlined />}
-											onClick={handleCancelRequest}
-										>
-											{uiText("Hủy", "Cancel", "取消")}
-										</Button>
-										<Button
-											type="link"
-											size="small"
-											className={styles.compactToggleBtn}
-											onClick={() => setShowMiniProgress(false)}
-										>
-											{uiText("Chi tiết", "Details", "详情")}
-										</Button>
-									</Space>
-								</div>
-							) : (
-								<div className={styles.geminiProgressCard}>
-									<div className={styles.geminiProgressHeader}>
-										<span className={styles.geminiProgressIcon}>
-											{geminiProgress.phase === "waiting" ? "⏳" : "⚡"}
-										</span>
-										<span className={styles.geminiProgressLabel}>
-											{normalizeAssistantProgressMessage(
-												geminiProgress.message,
-												geminiProgress.phase === "waiting"
-													? uiText("Chuyên Gia đang xử lý...", "Expert is processing...", "专家正在处理中...")
-													: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果..."),
-											)}
-										</span>
-										<span className={styles.geminiProgressCountdown}>
-											{geminiProgress.remainingSecs > 0 ? `~${geminiProgress.remainingSecs}s` : " "}
-										</span>
-										<Button
-											type="text"
-											size="small"
-											danger
-											icon={<CloseOutlined />}
-											onClick={handleCancelRequest}
-										>
-											{uiText("Hủy", "Cancel", "取消")}
-										</Button>
-										<Button
-											type="link"
-											size="small"
-											className={styles.compactToggleBtn}
-											onClick={() => setShowMiniProgress(true)}
-										>
-											{uiText("Mini", "Mini", "迷你")}
-										</Button>
-									</div>
-									<div className={styles.geminiProgressBarTrack}>
-										<div
-											className={`${styles.geminiProgressBarFill} ${geminiProgress.phase === "waiting" ? styles.geminiProgressBarWaiting : styles.geminiProgressBarStreaming}`}
-											style={{ width: `${Math.max(2, Math.min(100, geminiProgress.percent))}%` }}
-										/>
-									</div>
-									<div className={styles.geminiProgressMeta}>
-										{geminiProgress.phase === "streaming" && geminiProgress.charsReceived > 0
-											? (
-												<>
-													{geminiProgress.charsReceived.toLocaleString()} ký tự nhận được
-													{geminiProgress.ttftMs != null && (
-														<span className={styles.geminiProgressTtft}> · TTFT {geminiProgress.ttftMs}ms</span>
-													)}
-												</>
-											)
-											: geminiProgress.phase === "waiting" && geminiProgress.estimatedWaitSecs > 0
-												? uiText(
-													`Ước tính ~${geminiProgress.estimatedWaitSecs}s tổng thời gian`,
-													`Estimated total time ~${geminiProgress.estimatedWaitSecs}s`,
-													`预计总耗时约 ${geminiProgress.estimatedWaitSecs}s`,
-												)
-												: " "}
-									</div>
-									{streamRequestId && (
-										<button type="button" className={styles.progressRequestIdButton} onClick={handleCopyRequestId}>
-											<div className={styles.progressMetaInline}>req {streamRequestId}</div>
-										</button>
-									)}
-								</div>
-							)
+								)
 						)}
 						{!isProgressDockCollapsed && !isLoading && completionSummaryLabel && (
 							<div className={[
 								styles.progressCompletionBar,
 								completionState === "stream_closed" ? styles.progressCompletionBar_streamClosed : "",
 								completionState === "error" ? styles.progressCompletionBar_error : "",
-							].filter(Boolean).join(" ")}>
+							].filter(Boolean).join(" ")}
+							>
 								<div className={styles.progressCompletionMain}>
 									<span className={styles.progressCompletionTitle}>
 										{uiText("Kết thúc xử lý", "Processing finished", "处理已结束")}
@@ -2873,7 +3170,10 @@ export default function AiAssistantChat({
 										<span className={styles.progressCompletionStats}>{completionSummaryLabel}</span>
 									</Tooltip>
 									{streamRequestId && (
-										<span className={styles.progressRequestId}>req {streamRequestId}</span>
+										<span className={styles.progressRequestId}>
+											req
+											{streamRequestId}
+										</span>
 									)}
 								</div>
 								{streamRequestId && (
@@ -2898,7 +3198,7 @@ export default function AiAssistantChat({
 										type="link"
 										size="small"
 										className={styles.compactToggleBtn}
-										onClick={() => setShowFullTimeline((prev) => !prev)}
+										onClick={() => setShowFullTimeline(prev => !prev)}
 									>
 										{showFullTimeline
 											? uiText("Thu gọn", "Compact", "收起")
@@ -2915,7 +3215,7 @@ export default function AiAssistantChat({
 											)}
 										</div>
 									)}
-									{groupedVisibleStageEvents.map((group) => (
+									{groupedVisibleStageEvents.map(group => (
 										<div key={group.tone} className={styles.stageTimelineGroup}>
 											<div className={styles.stageTimelineGroupHeader}>{group.label}</div>
 											<div className={styles.stageTimelineGroupList}>
@@ -2933,7 +3233,11 @@ export default function AiAssistantChat({
 															<span className={`${styles.stageTimelineBullet} ${styles[`stageTimelineBullet_${stageTone}`] || ""}`.trim()} />
 															<div className={styles.stageTimelineText}>
 																<div className={`${styles.stageTimelineHead} ${styles[`stageTimelineHead_${stageTone}`] || ""}`.trim()}>
-																	<span>{stageLabel}{percentText}{progressText}</span>
+																	<span>
+																		{stageLabel}
+																		{percentText}
+																		{progressText}
+																	</span>
 																	{event.rangeLabel && <span className={styles.stageRangeBadge}>{event.rangeLabel}</span>}
 																</div>
 																{event.model && (
@@ -2969,106 +3273,120 @@ export default function AiAssistantChat({
 					</div>
 				)}
 
-			{isUsageDockVisible && (aiUsageSummary.turn || aiUsageSummary.sessionTokens > 0 || completionState === "stream_closed" || completionState === "error" || completionState === "cancelled") && (
-				<div className={[
-					styles.usageDock,
-					completionState === "stream_closed" ? styles.usageDock_streamClosed : "",
-					completionState === "error" ? styles.usageDock_error : "",
-				].filter(Boolean).join(" ")}>
-					<div className={styles.usageDockHeader}>
-						<div className={styles.usageDockTitle}>
-							{uiText("Theo dõi chi phí AI", "AI Cost Tracking", "AI 成本跟踪")}
-						</div>
-						<div className={styles.usageDockBadges}>
-							{completionStateLabel && (
-								<Tooltip title={completionDetailTooltip || completionStateLabel}>
-									<Tag color={completionState === "done" ? "green" : completionState === "stream_closed" ? "gold" : completionState === "error" ? "red" : completionState === "cancelled" ? "orange" : "default"}>
-										{completionStateLabel}
-									</Tag>
-								</Tooltip>
-							)}
-							{streamRequestId && (
-								<Tag>
-									<span className={styles.requestTagContent}>req {streamRequestId}</span>
-									<Button
-										type="text"
-										size="small"
-										icon={<CopyOutlined />}
-										className={styles.requestActionBtn}
-										onClick={handleCopyRequestId}
-										title={uiText("Sao chép requestId", "Copy requestId", "复制 requestId")}
-									/>
-								</Tag>
-							)}
-						</div>
-					</div>
-					{completionSummaryLabel && (
-						<div className={styles.usageDockRow}>
-							<span>{uiText("Kết thúc", "Completion", "结束状态")}</span>
-							<span>{completionSummaryLabel}</span>
-						</div>
-					)}
-					{modelDecisionTrace.length > 0 && (
-						<div className={styles.usageDockRow}>
-							<span>{uiText("Luồng model", "Model trace", "模型路径")}</span>
-							<span>
-								{hiddenModelTraceCount > 0 && !showFullModelTrace && (
-									<Tag>{uiText(`+${hiddenModelTraceCount} cũ`, `+${hiddenModelTraceCount} older`, `+${hiddenModelTraceCount} 条旧记录`)}</Tag>
+				{isUsageDockVisible && (aiUsageSummary.turn || aiUsageSummary.sessionTokens > 0 || completionState === "stream_closed" || completionState === "error" || completionState === "cancelled") && (
+					<div className={[
+						styles.usageDock,
+						completionState === "stream_closed" ? styles.usageDock_streamClosed : "",
+						completionState === "error" ? styles.usageDock_error : "",
+					].filter(Boolean).join(" ")}
+					>
+						<div className={styles.usageDockHeader}>
+							<div className={styles.usageDockTitle}>
+								{uiText("Theo dõi chi phí AI", "AI Cost Tracking", "AI 成本跟踪")}
+							</div>
+							<div className={styles.usageDockBadges}>
+								{completionStateLabel && (
+									<Tooltip title={completionDetailTooltip || completionStateLabel}>
+										<Tag color={completionState === "done" ? "green" : completionState === "stream_closed" ? "gold" : completionState === "error" ? "red" : completionState === "cancelled" ? "orange" : "default"}>
+											{completionStateLabel}
+										</Tag>
+									</Tooltip>
 								)}
-								<Space size={4} wrap>
-									{visibleModelDecisionTrace.map((trace) => {
-										const color = trace.step === "primary"
-											? "blue"
-											: trace.step === "fallback"
-												? "orange"
-												: "green";
-										const label = trace.step === "primary"
-											? uiText("Primary", "Primary", "主模型")
-											: trace.step === "fallback"
-												? uiText("Fallback", "Fallback", "回退")
-												: uiText("Final", "Final", "最终");
-										const text = `${label}: ${trace.model}`;
-										return (
-											<Tooltip key={trace.id} title={trace.reason || text}>
-												<Tag color={color}>{text}</Tag>
-											</Tooltip>
-										);
-									})}
-									<Button
-										type="link"
-										size="small"
-										className={styles.compactToggleBtn}
-										onClick={() => setShowFullModelTrace((prev) => !prev)}
-									>
-										{showFullModelTrace
-											? uiText("Thu gọn", "Compact", "收起")
-											: uiText("Xem đầy đủ", "Expand", "展开")}
-									</Button>
-								</Space>
-							</span>
+								{streamRequestId && (
+									<Tag>
+										<span className={styles.requestTagContent}>
+											req
+											{streamRequestId}
+										</span>
+										<Button
+											type="text"
+											size="small"
+											icon={<CopyOutlined />}
+											className={styles.requestActionBtn}
+											onClick={handleCopyRequestId}
+											title={uiText("Sao chép requestId", "Copy requestId", "复制 requestId")}
+										/>
+									</Tag>
+								)}
+							</div>
 						</div>
-					)}
-					{aiUsageSummary.turn && (
+						{completionSummaryLabel && (
+							<div className={styles.usageDockRow}>
+								<span>{uiText("Kết thúc", "Completion", "结束状态")}</span>
+								<span>{completionSummaryLabel}</span>
+							</div>
+						)}
+						{modelDecisionTrace.length > 0 && (
+							<div className={styles.usageDockRow}>
+								<span>{uiText("Luồng model", "Model trace", "模型路径")}</span>
+								<span>
+									{hiddenModelTraceCount > 0 && !showFullModelTrace && (
+										<Tag>{uiText(`+${hiddenModelTraceCount} cũ`, `+${hiddenModelTraceCount} older`, `+${hiddenModelTraceCount} 条旧记录`)}</Tag>
+									)}
+									<Space size={4} wrap>
+										{visibleModelDecisionTrace.map((trace) => {
+											const color = trace.step === "primary"
+												? "blue"
+												: trace.step === "fallback"
+													? "orange"
+													: "green";
+											const label = trace.step === "primary"
+												? uiText("Primary", "Primary", "主模型")
+												: trace.step === "fallback"
+													? uiText("Fallback", "Fallback", "回退")
+													: uiText("Final", "Final", "最终");
+											const text = `${label}: ${trace.model}`;
+											return (
+												<Tooltip key={trace.id} title={trace.reason || text}>
+													<Tag color={color}>{text}</Tag>
+												</Tooltip>
+											);
+										})}
+										<Button
+											type="link"
+											size="small"
+											className={styles.compactToggleBtn}
+											onClick={() => setShowFullModelTrace(prev => !prev)}
+										>
+											{showFullModelTrace
+												? uiText("Thu gọn", "Compact", "收起")
+												: uiText("Xem đầy đủ", "Expand", "展开")}
+										</Button>
+									</Space>
+								</span>
+							</div>
+						)}
+						{aiUsageSummary.turn && (
+							<div className={styles.usageDockRow}>
+								<span>{uiText("Lượt này", "This turn", "本轮")}</span>
+								<span>
+									{aiUsageSummary.turn.enabled
+										? `${formatCost(aiUsageSummary.turn.estimatedCostUsd)} · ${aiUsageSummary.turn.totalTokens.toLocaleString()} tokens`
+										: uiText("Đã tắt", "Disabled", "已关闭")}
+								</span>
+							</div>
+						)}
 						<div className={styles.usageDockRow}>
-							<span>{uiText("Lượt này", "This turn", "本轮")}</span>
+							<span>{uiText("Tổng phiên", "Session total", "会话总计")}</span>
 							<span>
-								{aiUsageSummary.turn.enabled
-									? `${formatCost(aiUsageSummary.turn.estimatedCostUsd)} · ${aiUsageSummary.turn.totalTokens.toLocaleString()} tokens`
-									: uiText("Đã tắt", "Disabled", "已关闭")}
+								{formatCost(aiUsageSummary.sessionCostUsd)}
+								{" "}
+								·
+								{" "}
+								{aiUsageSummary.sessionTokens.toLocaleString()}
+								{" "}
+								tokens
 							</span>
 						</div>
-					)}
-					<div className={styles.usageDockRow}>
-						<span>{uiText("Tổng phiên", "Session total", "会话总计")}</span>
-						<span>{formatCost(aiUsageSummary.sessionCostUsd)} · {aiUsageSummary.sessionTokens.toLocaleString()} tokens</span>
+						{aiUsageSummary.turn?.model && (
+							<div className={styles.usageDockModel}>
+								{uiText("Model", "Model", "模型")}
+								:
+								{aiUsageSummary.turn.model}
+							</div>
+						)}
 					</div>
-					{aiUsageSummary.turn?.model && (
-						<div className={styles.usageDockModel}>
-							{uiText("Model", "Model", "模型")}: {aiUsageSummary.turn.model}
-						</div>
-					)}
-				</div>
-			)}
+				)}
 
 				{/* Orchestration Preview Panel */}
 				{showOrchPreview && (
@@ -3098,9 +3416,15 @@ export default function AiAssistantChat({
 								<div className={styles.usageDockRow}>
 									<span>{uiText("Tiết kiệm ký tự", "Chars saved", "节省字符数")}</span>
 									<span>
-										{orchPreview.totalCharsBefore.toLocaleString()} → {orchPreview.totalCharsAfter.toLocaleString()}
+										{orchPreview.totalCharsBefore.toLocaleString()}
+										{" "}
+										→
+										{orchPreview.totalCharsAfter.toLocaleString()}
 										{orchPreview.savedChars > 0 && (
-											<Tag color="green" style={{ marginLeft: 4 }}>-{orchPreview.savedChars.toLocaleString()}</Tag>
+											<Tag color="green" style={{ marginLeft: 4 }}>
+												-
+												{orchPreview.savedChars.toLocaleString()}
+											</Tag>
 										)}
 									</span>
 								</div>
@@ -3115,7 +3439,13 @@ export default function AiAssistantChat({
 										<span style={{ flexShrink: 0 }}>{uiText("Kế hoạch", "Plan steps", "计划步骤")}</span>
 										<div style={{ fontSize: 11, lineHeight: 1.5 }}>
 											{orchPreview.planSteps.map((step, i) => (
-												<div key={i}><span style={{ color: "#722ed1", marginRight: 4 }}>{i + 1}.</span>{step}</div>
+												<div key={i}>
+													<span style={{ color: "#722ed1", marginRight: 4 }}>
+														{i + 1}
+														.
+													</span>
+													{step}
+												</div>
 											))}
 										</div>
 									</div>
@@ -3123,7 +3453,10 @@ export default function AiAssistantChat({
 								{orchPreview.compressedContextBlock && (
 									<div className={styles.usageDockRow} style={{ alignItems: "flex-start" }}>
 										<span style={{ flexShrink: 0 }}>{uiText("Context nén", "Compressed ctx", "压缩上下文")}</span>
-										<pre style={{ fontSize: 10, maxHeight: 80, overflowY: "auto", background: "#1f1f1f", color: "#d4d4d4", padding: "4px 6px", borderRadius: 4, flex: 1, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{orchPreview.compressedContextBlock.slice(0, 600)}{orchPreview.compressedContextBlock.length > 600 ? "..." : ""}</pre>
+										<pre style={{ fontSize: 10, maxHeight: 80, overflowY: "auto", background: "#1f1f1f", color: "#d4d4d4", padding: "4px 6px", borderRadius: 4, flex: 1, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+											{orchPreview.compressedContextBlock.slice(0, 600)}
+											{orchPreview.compressedContextBlock.length > 600 ? "..." : ""}
+										</pre>
 									</div>
 								)}
 							</>
@@ -3157,25 +3490,28 @@ export default function AiAssistantChat({
 					/>
 					{pendingAttachments.length > 0 && (
 						<div className={styles.pendingAttachmentWrap}>
-							{pendingAttachments.map((attachment) => (
+							{pendingAttachments.map(attachment => (
 								<div key={attachment.id} className={styles.pendingAttachmentItem}>
-									{attachment.kind === "image" && attachment.previewUrl ? (
-										<img src={attachment.previewUrl} alt={attachment.name} className={styles.pendingAttachmentThumb} />
-									) : (
-										<Tag color={attachment.kind === "json" ? "processing" : "default"}>{attachment.kind.toUpperCase()}</Tag>
-									)}
+									{attachment.kind === "image" && attachment.previewUrl
+										? (
+											<img src={attachment.previewUrl} alt={attachment.name} className={styles.pendingAttachmentThumb} />
+										)
+										: (
+											<Tag color={attachment.kind === "json" ? "processing" : "default"}>{attachment.kind.toUpperCase()}</Tag>
+										)}
 									<div className={styles.pendingAttachmentMeta}>
 										<div>{attachment.name}</div>
 										<div className={styles.attachmentSummary}>{attachment.summary}</div>
 									</div>
 									<Tooltip title={attachment.fullContext
 										? uiText("Toàn bộ nội dung (click để tắt)", "Full content (click to disable)", "完整内容（点击关闭）")
-										: uiText("Chỉ snippet (click để gửi toàn bộ)", "Snippet only (click to send full)", "仅片段（点击发送完整内容）")}>
+										: uiText("Chỉ snippet (click để gửi toàn bộ)", "Snippet only (click to send full)", "仅片段（点击发送完整内容）")}
+									>
 										<Button
 											type="text"
 											size="small"
 											style={{ color: attachment.fullContext ? "#52c41a" : undefined, fontSize: 11, padding: "0 4px" }}
-											onClick={() => setPendingAttachments((prev) => prev.map((a) => a.id === attachment.id ? { ...a, fullContext: !a.fullContext } : a))}
+											onClick={() => setPendingAttachments(prev => prev.map(a => a.id === attachment.id ? { ...a, fullContext: !a.fullContext } : a))}
 										>
 											{attachment.fullContext ? "FULL" : "RAG"}
 										</Button>
@@ -3232,7 +3568,8 @@ export default function AiAssistantChat({
 								? "Business Memory ON — AI auto-searches knowledge base before each message"
 								: "Business Memory OFF — Click to enable knowledge base lookup",
 							businessMemoryEnabled ? "业务记忆已开启" : "业务记忆已关闭",
-						)}>
+						)}
+						>
 							<Button
 								type="text"
 								icon={<BulbOutlined />}
@@ -3240,7 +3577,8 @@ export default function AiAssistantChat({
 								onClick={() => {
 									const next = !businessMemoryEnabled;
 									setBusinessMemoryEnabled(next);
-									try { localStorage.setItem(BUSINESS_MEMORY_ENABLED_KEY, String(next)); } catch { /* ignore */ }
+									try { localStorage.setItem(BUSINESS_MEMORY_ENABLED_KEY, String(next)); }
+									catch { /* ignore */ }
 									message.info(next
 										? uiText("Đã bật tra cứu nghiệp vụ", "Business memory enabled", "业务记忆已开启")
 										: uiText("Đã tắt tra cứu nghiệp vụ", "Business memory disabled", "业务记忆已关闭"),

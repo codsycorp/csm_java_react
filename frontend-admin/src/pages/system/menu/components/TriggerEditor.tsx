@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Select, Space, Button, message, Tooltip } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
+import { AI_TIMEOUT_MS } from "#src/api/ai";
 import type { TriggerConfig } from "#src/components/csm-grid/CsmDynamicGrid";
 import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
 import { request } from "#src/utils";
@@ -142,6 +143,7 @@ export function TriggerEditor({ value, onChange }: TriggerEditorProps) {
           contextType: "code",
           responseMode: "edit",
         },
+		timeout: AI_TIMEOUT_MS,
         throwHttpErrors: false,
       });
 

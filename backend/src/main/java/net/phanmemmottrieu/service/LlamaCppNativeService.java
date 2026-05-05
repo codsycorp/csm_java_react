@@ -235,6 +235,13 @@ public class LlamaCppNativeService implements AIProvider {
             safePrompt = systemPrompt.trim() + "\n" + safePrompt;
         }
 
+        // JSON-forcing: detect if prompt expects JSON output and prepend format instruction
+        if (detectJsonExpectation(safePrompt)) {
+            String jsonForcePrefix = "You MUST output ONLY valid JSON, with no markdown fences, no explanation, no extra text. Start with { or [.\n\n";
+            safePrompt = jsonForcePrefix + safePrompt;
+            log.debug("JSON-forcing enabled: prepended format instruction to prompt");
+        }
+
         int promptCap = effectiveMaxPromptChars();
         if (safePrompt.length() > promptCap) {
             String digest = shortDigest(safePrompt);
@@ -250,7 +257,8 @@ public class LlamaCppNativeService implements AIProvider {
         }
 
         try {
-            String output = runLocalCompletion(safePrompt, false);
+            boolean isJsonForced = detectJsonExpectation(safePrompt);
+            String output = runLocalCompletion(safePrompt, false, isJsonForced);
             requestCount.incrementAndGet();
             recordSuccess();
 
@@ -266,7 +274,8 @@ public class LlamaCppNativeService implements AIProvider {
                 try {
                     int retryChars = Math.max(1200, Math.min(safePrompt.length() / 2, 6000));
                     String retryPrompt = safePrompt.substring(0, retryChars);
-                    String retryOutput = runLocalCompletion(retryPrompt, true);
+                    boolean isJsonForced = detectJsonExpectation(retryPrompt);
+                    String retryOutput = runLocalCompletion(retryPrompt, true, isJsonForced);
                     requestCount.incrementAndGet();
                     recordSuccess();
 
@@ -291,15 +300,87 @@ public class LlamaCppNativeService implements AIProvider {
         }
     }
 
-    private String runLocalCompletion(String prompt, boolean degradedMode) {
+    /**
+     * Fast variant of generateContent with a hard cap on output tokens.
+     * Use for classification/probe calls where full 384-token output is wasteful.
+     * @param maxOutputTokensCap hard cap on generated tokens (e.g. 48 for JSON classification)
+     */
+    public String generateContentFast(String prompt, int maxOutputTokensCap) {
+        String safePrompt = String.valueOf(prompt == null ? "" : prompt).trim();
+        if (safePrompt.isBlank()) {
+            return createErrorJson("Prompt khong duoc de trong", "INVALID_PROMPT");
+        }
+        if (!isAvailable()) {
+            return createErrorJson("Local llama provider chua san sang", "LOCAL_PROVIDER_UNAVAILABLE");
+        }
+        if (isCircuitOpen()) {
+            return createErrorJson("Local llama circuit open", "CIRCUIT_OPEN");
+        }
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            safePrompt = systemPrompt.trim() + "\n" + safePrompt;
+        }
+        
+        // JSON-forcing for fast path too
+        if (detectJsonExpectation(safePrompt)) {
+            String jsonForcePrefix = "You MUST output ONLY valid JSON, with no markdown fences, no explanation, no extra text. Start with { or [.\n\n";
+            safePrompt = jsonForcePrefix + safePrompt;
+        }
+        
+        int promptCap = effectiveMaxPromptChars();
+        if (safePrompt.length() > promptCap) {
+            safePrompt = safePrompt.substring(0, promptCap);
+        }
+        int runtimeBudget = resolveRuntimePromptCharBudget();
+        if (safePrompt.length() > runtimeBudget) {
+            safePrompt = safePrompt.substring(0, runtimeBudget);
+        }
+        int cappedTokens = Math.max(16, Math.min(effectiveMaxTokens(), maxOutputTokensCap));
+        try {
+            boolean isJsonForced = detectJsonExpectation(safePrompt);
+            String output = runLocalCompletionWithCap(safePrompt, cappedTokens, isJsonForced);
+            requestCount.incrementAndGet();
+            recordSuccess();
+            Map<String, Object> success = new HashMap<>();
+            success.put("success", true);
+            success.put("result", String.valueOf(output == null ? "" : output).trim());
+            success.put("provider", getName());
+            success.put("timestamp", System.currentTimeMillis());
+            return objectMapper.writeValueAsString(success);
+        } catch (Exception ex) {
+            log.debug("generateContentFast failed: {}", ex.getMessage());
+            recordFailure(ex.getMessage());
+            return createErrorJson("Fast inference failed: " + ex.getMessage(), "LOCAL_INFERENCE_FAILED");
+        }
+    }
+
+    private String runLocalCompletionWithCap(String prompt, int nPredictCap, boolean isJsonForced) {
         LlamaModel localModel = ensureModelLoaded();
-        int nPredict = resolveAdaptiveNPredict(prompt, degradedMode);
-        float temp = degradedMode ? Math.min(temperature, 0.1f) : Math.max(0f, temperature);
+        int ctx = Math.max(1024, effectiveContextWindow());
+        int promptTokens = estimateTokensByChars(prompt.length());
+        int availableForOutput = Math.max(16, ctx - promptTokens - 256);
+        int nPredict = Math.max(16, Math.min(nPredictCap, availableForOutput));
+        // Use lower temperature for JSON outputs
+        float temp = isJsonForced ? 0.05f : Math.max(0f, temperature);
         InferenceParameters inference = new InferenceParameters(prompt)
                 .setNPredict(nPredict)
                 .setTemperature(temp)
-                .setTopP(Math.max(0.1f, Math.min(1f, topP)))
-                .setTopK(Math.max(1, topK));
+                .setTopP(isJsonForced ? 0.5f : Math.max(0.1f, Math.min(1f, topP)))
+                .setTopK(isJsonForced ? 10 : Math.max(1, topK));
+        synchronized (modelLock) {
+            return localModel.complete(inference);
+        }
+    }
+
+    private String runLocalCompletion(String prompt, boolean degradedMode, boolean isJsonForced) {
+        LlamaModel localModel = ensureModelLoaded();
+        int nPredict = resolveAdaptiveNPredict(prompt, degradedMode);
+        // Use lower temperature for JSON outputs to ensure valid formatting
+        float temp = isJsonForced ? 0.05f : (degradedMode ? Math.min(temperature, 0.1f) : Math.max(0f, temperature));
+        InferenceParameters inference = new InferenceParameters(prompt)
+                .setNPredict(nPredict)
+                .setTemperature(temp)
+                .setTopP(isJsonForced ? 0.5f : Math.max(0.1f, Math.min(1f, topP)))
+                .setTopK(isJsonForced ? 10 : Math.max(1, topK));
         synchronized (modelLock) {
             return localModel.complete(inference);
         }
@@ -521,5 +602,19 @@ public class LlamaCppNativeService implements AIProvider {
         } catch (Exception ignored) {
             return "na";
         }
+    }
+
+    /**
+     * Detect if prompt expects JSON output.
+     * Returns true if prompt contains keywords suggesting JSON format requirement.
+     */
+    private boolean detectJsonExpectation(String prompt) {
+        if (prompt == null) {
+            return false;
+        }
+        String lower = prompt.toLowerCase();
+        return lower.contains("json") || lower.contains("{\"") || lower.contains("return json") 
+            || lower.contains("output json") || lower.contains("format json")
+            || lower.contains("[{") || lower.contains("[]");
     }
 }
