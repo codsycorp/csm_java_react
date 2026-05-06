@@ -12,6 +12,7 @@ import org.springframework.web.servlet.HandlerInterceptor;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -25,11 +26,14 @@ public class ApiCacheInterceptor implements HandlerInterceptor {
     private static final Logger logger = LoggerFactory.getLogger(ApiCacheInterceptor.class);
     private static final String CACHE_PREFIX = "api:cache:";
     private static final int DEFAULT_TTL_SECONDS = 300; // 5 minutes
+    private static final long REDIS_RETRY_COOLDOWN_MS = 30_000L;
     
     @Autowired(required = false)
     private RedisTemplate<String, Object> redisTemplate;
     
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final AtomicLong redisBypassUntilMs = new AtomicLong(0L);
+    private final AtomicLong lastRedisDownLogAtMs = new AtomicLong(0L);
     
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
@@ -40,6 +44,12 @@ public class ApiCacheInterceptor implements HandlerInterceptor {
         
         // Skip if Redis not available
         if (redisTemplate == null) {
+            return true;
+        }
+
+        // Fail-open during cooldown when Redis is known unavailable.
+        if (isRedisBypassed()) {
+            response.setHeader("X-Cache", "BYPASS_REDIS_DOWN");
             return true;
         }
         
@@ -71,7 +81,8 @@ public class ApiCacheInterceptor implements HandlerInterceptor {
             request.setAttribute("etag", etag);
             
         } catch (Exception e) {
-            logger.error("Cache lookup error: {}", e.getMessage());
+            markRedisUnavailable("lookup", e);
+            response.setHeader("X-Cache", "BYPASS_REDIS_DOWN");
         }
         
         return true; // Continue to controller
@@ -113,6 +124,9 @@ public class ApiCacheInterceptor implements HandlerInterceptor {
      * Cache the response after controller execution
      */
     public void cacheResponse(String cacheKey, Object response) {
+        if (isRedisBypassed()) {
+            return;
+        }
         if (redisTemplate != null && cacheKey != null && response != null) {
             try {
                 redisTemplate.opsForValue().set(
@@ -122,8 +136,23 @@ public class ApiCacheInterceptor implements HandlerInterceptor {
                     TimeUnit.SECONDS
                 );
             } catch (Exception e) {
-                logger.error("Failed to cache response: {}", e.getMessage());
+                markRedisUnavailable("write", e);
             }
+        }
+    }
+
+    private boolean isRedisBypassed() {
+        long until = redisBypassUntilMs.get();
+        return until > 0L && System.currentTimeMillis() < until;
+    }
+
+    private void markRedisUnavailable(String phase, Exception e) {
+        long now = System.currentTimeMillis();
+        redisBypassUntilMs.set(now + REDIS_RETRY_COOLDOWN_MS);
+        long last = lastRedisDownLogAtMs.get();
+        if (now - last >= REDIS_RETRY_COOLDOWN_MS) {
+            lastRedisDownLogAtMs.set(now);
+            logger.warn("Redis unavailable during cache {}. Bypassing cache for {}ms. Cause: {}", phase, REDIS_RETRY_COOLDOWN_MS, e.getMessage());
         }
     }
 }

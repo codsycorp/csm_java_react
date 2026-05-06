@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import net.phanmemmottrieu.service.ChatCleanupService;
+import net.phanmemmottrieu.service.LlamaCppNativeService;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
@@ -32,6 +33,9 @@ public class MonitoringController {
     
     @Autowired(required = false)
     private ChatCleanupService chatCleanupService;
+
+    @Autowired(required = false)
+    private LlamaCppNativeService llamaCppNativeService;
 
     /**
      * Health check endpoint
@@ -176,5 +180,22 @@ public class MonitoringController {
         }
         
         return ResponseEntity.ok(chatCleanupService.triggerCleanupNow());
+    }
+
+    /**
+     * Local AI runtime status for progress and troubleshooting.
+     */
+    @GetMapping("/ai/local-status")
+    public ResponseEntity<Map<String, Object>> localAiStatus() {
+        Map<String, Object> result = new HashMap<>();
+        result.put("timestamp", System.currentTimeMillis());
+        if (llamaCppNativeService == null) {
+            result.put("enabled", false);
+            result.put("available", false);
+            result.put("message", "Local llama service not enabled");
+            return ResponseEntity.ok(result);
+        }
+        result.putAll(llamaCppNativeService.getRuntimeStatus());
+        return ResponseEntity.ok(result);
     }
 }

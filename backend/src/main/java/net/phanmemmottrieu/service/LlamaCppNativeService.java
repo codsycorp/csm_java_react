@@ -35,6 +35,15 @@ public class LlamaCppNativeService implements AIProvider {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AtomicLong requestCount = new AtomicLong(0L);
+    private final AtomicLong failedRequestCount = new AtomicLong(0L);
+    private final AtomicInteger inFlightRequests = new AtomicInteger(0);
+    private final AtomicLong lastRequestStartedAtMs = new AtomicLong(0L);
+    private final AtomicLong lastRequestFinishedAtMs = new AtomicLong(0L);
+    private final AtomicLong lastRequestDurationMs = new AtomicLong(0L);
+    private final AtomicInteger lastPromptChars = new AtomicInteger(0);
+    private final AtomicInteger lastOutputChars = new AtomicInteger(0);
+    private volatile String lastPromptDigest = "";
+    private volatile String lastFailureMessage = "";
 
     // ── Circuit breaker ────────────────────────────────────────────────────────
     private static final int CB_FAILURE_THRESHOLD   = 2;           // open after N consecutive failures
@@ -256,11 +265,13 @@ public class LlamaCppNativeService implements AIProvider {
             safePrompt = safePrompt.substring(0, runtimePromptCharBudget);
         }
 
+        long startedAt = markRequestStart(safePrompt);
         try {
             boolean isJsonForced = detectJsonExpectation(safePrompt);
             String output = runLocalCompletion(safePrompt, false, isJsonForced);
             requestCount.incrementAndGet();
             recordSuccess();
+            markRequestFinish(startedAt, output, null);
 
             Map<String, Object> success = new HashMap<>();
             success.put("success", true);
@@ -278,6 +289,7 @@ public class LlamaCppNativeService implements AIProvider {
                     String retryOutput = runLocalCompletion(retryPrompt, true, isJsonForced);
                     requestCount.incrementAndGet();
                     recordSuccess();
+                    markRequestFinish(startedAt, retryOutput, null);
 
                     Map<String, Object> success = new HashMap<>();
                     success.put("success", true);
@@ -296,6 +308,7 @@ public class LlamaCppNativeService implements AIProvider {
 
             log.error("Local llama inference failed: {}", firstErr);
             recordFailure(firstErr);
+            markRequestFinish(startedAt, "", firstErr);
             return createErrorJson("Local llama inference failed: " + firstErr, "LOCAL_INFERENCE_FAILED");
         }
     }
@@ -335,11 +348,13 @@ public class LlamaCppNativeService implements AIProvider {
             safePrompt = safePrompt.substring(0, runtimeBudget);
         }
         int cappedTokens = Math.max(16, Math.min(effectiveMaxTokens(), maxOutputTokensCap));
+        long startedAt = markRequestStart(safePrompt);
         try {
             boolean isJsonForced = detectJsonExpectation(safePrompt);
             String output = runLocalCompletionWithCap(safePrompt, cappedTokens, isJsonForced);
             requestCount.incrementAndGet();
             recordSuccess();
+            markRequestFinish(startedAt, output, null);
             Map<String, Object> success = new HashMap<>();
             success.put("success", true);
             success.put("result", String.valueOf(output == null ? "" : output).trim());
@@ -349,8 +364,66 @@ public class LlamaCppNativeService implements AIProvider {
         } catch (Exception ex) {
             log.debug("generateContentFast failed: {}", ex.getMessage());
             recordFailure(ex.getMessage());
+            markRequestFinish(startedAt, "", ex.getMessage());
             return createErrorJson("Fast inference failed: " + ex.getMessage(), "LOCAL_INFERENCE_FAILED");
         }
+    }
+
+    public Map<String, Object> getRuntimeStatus() {
+        Map<String, Object> out = new HashMap<>();
+        long now = System.currentTimeMillis();
+        long openedAt = circuitOpenedAt;
+        long cooldownRemainingMs = 0L;
+        if (openedAt > 0L) {
+            cooldownRemainingMs = Math.max(0L, circuitCooldownMs - (now - openedAt));
+        }
+        out.put("enabled", enabled);
+        out.put("available", isAvailable());
+        out.put("healthy", isHealthy());
+        out.put("provider", getName());
+        out.put("inFlightRequests", inFlightRequests.get());
+        out.put("requestCount", requestCount.get());
+        out.put("failedRequestCount", failedRequestCount.get());
+        out.put("lastRequestStartedAtMs", lastRequestStartedAtMs.get());
+        out.put("lastRequestFinishedAtMs", lastRequestFinishedAtMs.get());
+        out.put("lastRequestDurationMs", lastRequestDurationMs.get());
+        out.put("lastPromptChars", lastPromptChars.get());
+        out.put("lastOutputChars", lastOutputChars.get());
+        out.put("lastPromptDigest", lastPromptDigest);
+        out.put("lastFailureMessage", lastFailureMessage);
+        out.put("circuitOpen", isCircuitOpen());
+        out.put("circuitConsecutiveFailures", consecutiveFailures.get());
+        out.put("circuitCooldownMs", circuitCooldownMs);
+        out.put("circuitCooldownRemainingMs", cooldownRemainingMs);
+        out.put("modelPath", String.valueOf(modelPath == null ? "" : modelPath));
+        out.put("effectiveContextWindow", effectiveContextWindow());
+        out.put("effectiveMaxTokens", effectiveMaxTokens());
+        out.put("effectiveMaxPromptChars", effectiveMaxPromptChars());
+        return out;
+    }
+
+    private long markRequestStart(String prompt) {
+        long now = System.currentTimeMillis();
+        inFlightRequests.incrementAndGet();
+        lastRequestStartedAtMs.set(now);
+        lastPromptChars.set(String.valueOf(prompt == null ? "" : prompt).length());
+        lastPromptDigest = shortDigest(prompt);
+        return now;
+    }
+
+    private void markRequestFinish(long startedAt, String output, String errorMessage) {
+        long finishedAt = System.currentTimeMillis();
+        lastRequestFinishedAtMs.set(finishedAt);
+        long duration = startedAt > 0L ? Math.max(0L, finishedAt - startedAt) : 0L;
+        lastRequestDurationMs.set(duration);
+        lastOutputChars.set(String.valueOf(output == null ? "" : output).length());
+        if (errorMessage == null || errorMessage.isBlank()) {
+            lastFailureMessage = "";
+        } else {
+            lastFailureMessage = String.valueOf(errorMessage).trim();
+            failedRequestCount.incrementAndGet();
+        }
+        inFlightRequests.updateAndGet(v -> Math.max(0, v - 1));
     }
 
     private String runLocalCompletionWithCap(String prompt, int nPredictCap, boolean isJsonForced) {

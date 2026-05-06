@@ -1037,10 +1037,7 @@ export default function AiAssistantChat({
 			return uiText("Đã hủy request theo yêu cầu", "Request cancelled by user", "已按用户要求取消请求");
 		}
 
-		return source
-			.replace(/\bgemini\b/gi, assistantBrandLabel)
-			.replace(/\bgoogle\s+gemini\b/gi, assistantBrandLabel)
-			.replace(/\bmodel\s+gemini\b/gi, assistantBrandLabel);
+		return uiText("Đang xử lý...", "Processing...", "处理中...");
 	}, [assistantBrandLabel, uiText]);
 
 	const stripMarkdownCodeBlocks = useCallback((rawText: unknown): string => {
@@ -1748,6 +1745,26 @@ export default function AiAssistantChat({
 		}, STREAM_UI_FLUSH_MS);
 	}, [flushStreamingToUI]);
 
+	const setAssistantLiveStatus = useCallback((statusText: string) => {
+		const text = String(statusText || "").trim();
+		if (!text)
+			return;
+		if (streamingMessageRef.current.length > 0 || pendingStreamChunkRef.current.length > 0)
+			return;
+		setMessages((prev) => {
+			const updated = [...prev];
+			for (let i = updated.length - 1; i >= 0; i -= 1) {
+				const lastMsg = updated[i];
+				if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
+					lastMsg.content = `⏳ ${text}`;
+					lastMsg.codeBlocks = [];
+					break;
+				}
+			}
+			return updated;
+		});
+	}, []);
+
 	const applyRealtimeCodeFromText = useCallback((rawText: string, force = false): boolean => {
 		if (!turnAllowAutoApplyRef.current || !onCodeInsert)
 			return false;
@@ -1952,6 +1969,11 @@ export default function AiAssistantChat({
 					`进度暂时静默 ${silentSecs}s，AI 仍在运行。大输入可能需要更久时间...`,
 				),
 			}));
+			setAssistantLiveStatus(uiText(
+				`Tiến độ tạm im ${silentSecs}s, AI vẫn đang chạy...`,
+				`No progress event for ${silentSecs}s, AI is still running...`,
+				`进度静默 ${silentSecs}s，AI 仍在运行...`,
+			));
 
 			if (SHOW_DETAILED_PROGRESS_TIMELINE) {
 				const lastAlert = lastProgressWatchdogAlertAtRef.current;
@@ -1984,7 +2006,7 @@ export default function AiAssistantChat({
 			window.clearInterval(watchdogTimer);
 			window.clearInterval(ageTicker);
 		};
-	}, [appendStageEvent, geminiProgress.percent, geminiProgress.phase, isLoading, uiText]);
+	}, [appendStageEvent, geminiProgress.percent, geminiProgress.phase, isLoading, setAssistantLiveStatus, uiText]);
 
 	const appendAgenticStep = useCallback((partial: Omit<AgenticStep, "id" | "timestamp">) => {
 		setAgenticSteps((prev) => {
@@ -2304,6 +2326,9 @@ export default function AiAssistantChat({
 								fullResponse?: string
 								responseMode?: string
 								message?: string
+								detail?: string
+								detailKey?: string
+								detailArgs?: Record<string, any>
 								percent?: number
 								estimatedWaitSecs?: number
 								messageKey?: string
@@ -2368,7 +2393,20 @@ export default function AiAssistantChat({
 								return undefined;
 							};
 							const evtMessageArgs = normalizeEvtArgs(evt.messageArgs);
-							const evtForTimeline = evtMessageArgs ? { ...evt, messageArgs: evtMessageArgs } : evt;
+							const evtDetailArgs = normalizeEvtArgs(evt.detailArgs);
+							const localizedEvtMessage = normalizeAssistantProgressMessage(
+								renderProgressText(evt.messageKey, evtMessageArgs, evt.message),
+							);
+							const localizedEvtDetail = normalizeAssistantProgressMessage(
+								renderProgressText(evt.detailKey, evtDetailArgs, evt.detail),
+							);
+							const evtForTimeline = {
+								...evt,
+								messageArgs: evtMessageArgs,
+								detailArgs: evtDetailArgs,
+								message: localizedEvtMessage,
+								detail: localizedEvtDetail || undefined,
+							};
 							if (evt.responseMode) {
 								const mode = String(evt.responseMode).trim().toLowerCase();
 								if (mode === "edit") {
@@ -2425,11 +2463,11 @@ export default function AiAssistantChat({
 									stage: "local_tool_invocation",
 									icon: "🔧",
 									label: uiText("Chạy local tools", "Local tools executed", "执行本地工具"),
-									detail: evt.message,
+									detail: localizedEvtMessage,
 									status: "done",
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
-									appendStageEvent(evt);
+									appendStageEvent(evtForTimeline);
 							}
 							else if (evt.stage === "context_compression") {
 								appendAgenticStep({
@@ -2447,7 +2485,7 @@ export default function AiAssistantChat({
 								appendModelDecisionTrace({
 									step: decisionStep || "primary",
 									model: evt.model,
-									reason: formatModelDecisionReason(decisionReason) || preparingMessage || evt.message,
+									reason: formatModelDecisionReason(decisionReason) || preparingMessage || localizedEvtMessage,
 								});
 								setGeminiProgress(prev => ({
 									...prev,
@@ -2457,6 +2495,7 @@ export default function AiAssistantChat({
 									estimatedWaitSecs: evt.estimatedWaitSecs ?? 0,
 									remainingSecs: evt.estimatedWaitSecs ?? 0,
 								}));
+								setAssistantLiveStatus(normalizeAssistantProgressMessage(preparingMessage || evt.message, uiText("Chuyên Gia đang chuẩn bị yêu cầu...", "Expert is preparing the request...", "专家正在准备请求...")));
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 							}
@@ -2475,19 +2514,22 @@ export default function AiAssistantChat({
 									message: normalizeAssistantProgressMessage(waitingMessageFromKey || evt.message, localPhaseFallback),
 									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
 								}));
+								setAssistantLiveStatus(normalizeAssistantProgressMessage(waitingMessageFromKey || evt.message, localPhaseFallback));
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 							}
 							else if (evt.stage === "streaming_started") {
+								const startedText = uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果...");
 								setGeminiProgress(prev => ({
 									...prev,
 									phase: "streaming",
 									percent: 15,
-									message: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果..."),
+									message: startedText,
 									ttftMs: evt.ttftMs,
 									estimatedTotalChars: evt.estimatedTotalChars ?? prev.estimatedTotalChars,
 									remainingSecs: 0,
 								}));
+								setAssistantLiveStatus(startedText);
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 							}
@@ -2496,19 +2538,19 @@ export default function AiAssistantChat({
 									...prev,
 									phase: "streaming",
 									percent: evt.percent ?? prev.percent,
-									message: normalizeAssistantProgressMessage(evt.message ?? prev.message),
+									message: localizedEvtMessage || prev.message,
 									charsReceived: evt.charsReceived ?? prev.charsReceived,
 									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
 								}));
 							}
 							else if (evt.stage === "analyzing") {
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
-									appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
+									appendStageEvent({ stage: evt.stage as any, message: localizedEvtMessage, percent: evt.percent ?? 0 });
 								}
 							}
 							else if (evt.stage === "menu_shrink_guard") {
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
-									appendStageEvent(evt);
+									appendStageEvent(evtForTimeline);
 								message.warning(uiText(
 									`Cảnh báo: AI trả về nhỏ hơn dự kiến (tỷ lệ ${Number(evt.shrinkRatio ?? 0).toFixed(2)}), có thể bị mất dữ liệu menu`,
 									`Warning: AI output shrank unexpectedly (ratio ${Number(evt.shrinkRatio ?? 0).toFixed(2)}), menu data may be missing`,
@@ -2520,11 +2562,11 @@ export default function AiAssistantChat({
 									appendModelDecisionTrace({
 										step: decisionStep || "fallback",
 										model: evt.model,
-										reason: formatModelDecisionReason(decisionReason) || evt.message,
+										reason: formatModelDecisionReason(decisionReason) || localizedEvtMessage,
 									});
 								}
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
-									appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
+									appendStageEvent({ stage: evt.stage as any, message: localizedEvtMessage, percent: evt.percent ?? 0 });
 								}
 							}
 							else if (evt.stage === "streaming" && evt.chunk) {
@@ -2602,11 +2644,11 @@ export default function AiAssistantChat({
 							else if (evt.stage === "error") {
 								receivedErrorEvent = true;
 								setCompletionState("error");
-								setCompletionErrorMessage(String(evt.message || ""));
+								setCompletionErrorMessage(localizedEvtMessage || uiText("Lỗi xử lý từ backend", "Backend processing error", "后端处理错误"));
 								setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
-									appendStageEvent(evt);
-								message.error(evt.message || uiText("Chat thất bại", "Chat failed", "对话失败"));
+									appendStageEvent(evtForTimeline);
+								message.error(localizedEvtMessage || uiText("Chat thất bại", "Chat failed", "对话失败"));
 								setIsLoading(false);
 								if (sseAbortRef.current === controller) {
 									sseAbortRef.current = null;
@@ -2672,7 +2714,7 @@ export default function AiAssistantChat({
 				}
 			}
 		},
-		[appId, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey],
+		[appId, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus],
 	);
 
 	const handleSend = () => {
