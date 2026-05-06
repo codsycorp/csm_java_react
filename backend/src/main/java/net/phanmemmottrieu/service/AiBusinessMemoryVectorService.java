@@ -45,7 +45,7 @@ public class AiBusinessMemoryVectorService {
     @Value("${ai.business.memory.enabled:${AI_BUSINESS_MEMORY_ENABLED:true}}")
     private boolean enabled;
 
-    @Value("${ai.business.memory.index-dir:${AI_BUSINESS_MEMORY_INDEX_DIR:csm_datas/public/ai_business_memory}}")
+    @Value("${ai.business.memory.index-dir:${AI_BUSINESS_MEMORY_INDEX_DIR:csm_datas/ai_local/ai_business_memory}}")
     private String indexDir;
 
     @Value("${ai.business.memory.chunk-max-chars:${AI_BUSINESS_MEMORY_CHUNK_MAX_CHARS:2200}}")

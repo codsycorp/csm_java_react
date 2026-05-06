@@ -39,7 +39,7 @@ public class AiAssistantEngineController {
 
     private final AiBusinessMemoryVectorService businessMemoryVectorService;
 
-    @Value("${ai.context.dir:csm_datas/public}")
+    @Value("${ai.context.dir:csm_datas/ai_local}")
     private String contextDir;
 
     @Autowired

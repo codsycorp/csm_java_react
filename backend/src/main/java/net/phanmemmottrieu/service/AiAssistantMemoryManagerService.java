@@ -36,7 +36,7 @@ public class AiAssistantMemoryManagerService {
   @Value("${ai.assistant.memory-manager.enabled:true}")
   private boolean enabled;
 
-  @Value("${ai.assistant.memory-manager.context-dir:csm_datas/public}")
+  @Value("${ai.assistant.memory-manager.context-dir:csm_datas/ai_local}")
   private String contextDir;
 
   @Value("${ai.assistant.memory-manager.max-sources:18}")

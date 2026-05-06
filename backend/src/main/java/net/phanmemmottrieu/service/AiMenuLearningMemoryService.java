@@ -48,7 +48,7 @@ public class AiMenuLearningMemoryService {
     @Value("${ai.menu.learning.enabled:true}")
     private boolean enabled;
 
-    @Value("${ai.context.dir:csm_datas/public}")
+    @Value("${ai.context.dir:csm_datas/ai_local}")
     private String contextDir;
 
     @Value("${ai.menu.learning.max-entries-per-app:240}")

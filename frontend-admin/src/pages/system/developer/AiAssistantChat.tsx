@@ -478,6 +478,29 @@ function looksLikeStructuredPayload(raw: unknown): boolean {
 	return text.startsWith("{") && (/"summary"\s*:/.test(text) || /"code"\s*:/.test(text));
 }
 
+/** Parse a JSON payload that contains only textEdits (no full code field). */
+function parseTextEditsOnlyPayload(raw: unknown): any[] | null {
+	const candidate = extractValidJsonCandidate(String(raw || ""));
+	if (!candidate)
+		return null;
+	try {
+		const parsed = JSON.parse(candidate);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+			return null;
+		const payload = parsed as Record<string, unknown>;
+		// Only activate when there is no full-code field — textEdits-only mode.
+		if (typeof payload.code === "string" && payload.code.trim())
+			return null;
+		const edits = (payload.textEdits ?? payload.text_edits) as unknown;
+		if (!Array.isArray(edits) || edits.length === 0)
+			return null;
+		return edits;
+	}
+	catch {
+		return null;
+	}
+}
+
 function applyTextEditsToDraft(baseText: string, textEdits: any[]): string {
 	if (!Array.isArray(textEdits) || textEdits.length === 0)
 		return baseText;
@@ -1778,6 +1801,16 @@ export default function AiAssistantChat({
 			if (structuredPayload?.code) {
 				nextCode = structuredPayload.code;
 			}
+			// Handle textEdits-only response: backend returned patch array without full code.
+			if (!nextCode && currentCode) {
+				const rawEdits = parseTextEditsOnlyPayload(source);
+				if (rawEdits) {
+					const validation = validateStructuredTextEdits(currentCode, rawEdits);
+					if (validation.valid && validation.edits.length > 0) {
+						nextCode = applyTextEditsToDraft(currentCode, validation.edits);
+					}
+				}
+			}
 		}
 
 		const blocks = !nextCode ? extractCodeBlocks(source) : [];
@@ -1813,7 +1846,7 @@ export default function AiAssistantChat({
 		lastAppliedCodeRef.current = nextCode;
 		lastRealtimeApplyAtRef.current = now;
 		return true;
-	}, [contextType, onCodeInsert, pickPreferredCodeBlock]);
+	}, [contextType, currentCode, onCodeInsert, pickPreferredCodeBlock]);
 
 	useEffect(() => {
 		applyRealtimeCodeFromTextRef.current = applyRealtimeCodeFromText;

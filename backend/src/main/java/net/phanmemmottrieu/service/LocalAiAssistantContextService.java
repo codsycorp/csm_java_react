@@ -76,10 +76,10 @@ public class LocalAiAssistantContextService {
     @Value("${ai.local.assistant.force-local-only:true}")
     private boolean forceLocalOnly;
 
-    @Value("${ai.local.assistant.index-dir:csm_datas/public/ai_local_assistant_index}")
+    @Value("${ai.local.assistant.index-dir:csm_datas/ai_local/ai_local_assistant_index}")
     private String indexDir;
 
-    @Value("${ai.local.assistant.source-roots:../frontend-admin/src,../backend/src/main/java,csm_datas/public}")
+    @Value("${ai.local.assistant.source-roots:../frontend-admin/src,../backend/src/main/java,csm_datas/ai_local}")
     private String sourceRootsRaw;
 
     @Value("${ai.local.assistant.index-refresh-ms:300000}")

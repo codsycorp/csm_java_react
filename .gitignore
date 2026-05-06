@@ -67,6 +67,10 @@ backend/x-twitter-state.json
 backend/src/main/resources/models/*.gguf
 backend/csm_datas/public/ai_local/model/*.gguf
 backend/csm_datas/public/ai_local/model/*.gguf*
+backend/csm_datas/ai_local/model/*.gguf
+backend/csm_datas/ai_local/model/*.gguf*
+backend/csm_datas/ai_local/ai_local_assistant_index/
+backend/csm_datas/ai_local/ai_business_memory/
 
 # Lock files (optional - uncomment if you want to ignore them)
 # pnpm-lock.yaml

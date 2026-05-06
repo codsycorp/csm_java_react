@@ -50,13 +50,25 @@ public class AiAssistantGatewayService {
 
   // Cached master prompt content
   private volatile String masterPrompt = null;
+  // Cached code master prompt content
+  private volatile String codeMasterPrompt = null;
 
   // Path to master prompt file, configurable via application.properties
-  @Value("${ai.context.master-prompt-path:classpath:csm_datas/public/ai_menu_master_prompt.md}")
+  @Value("${ai.context.master-prompt-path:file:./csm_datas/ai_local/ai_menu_master_prompt.md}")
   private String masterPromptPath;
 
+  // Path to code master prompt file, configurable via application.properties
+  @Value("${ai.context.code-master-prompt-path:file:./csm_datas/ai_local/ai_code_master_prompt.md}")
+  private String codeMasterPromptPath;
+
+  @Value("${ai.gateway.stability.code-context-injection:true}")
+  private boolean codeContextInjection;
+
+  @Value("${ai.gateway.code-runtime-guard.enabled:true}")
+  private boolean codeRuntimeGuardEnabled;
+
   // Directory where per-app AI context files are stored
-  @Value("${ai.context.dir:csm_datas/public}")
+  @Value("${ai.context.dir:csm_datas/ai_local}")
   private String contextDir;
 
   // Max chars to keep in the request history inside the context file
@@ -84,6 +96,7 @@ public class AiAssistantGatewayService {
 
   /** Return AI Assistant continuity memory file path for a given appId and optional scope key. */
   private java.io.File getAiAssistantMemoryFile(String appId, String scopeKey) {
+
     String safeName = sanitizeAppName(appId);
     String safeScope = scopeKey == null ? "" : scopeKey.replaceAll("[^a-zA-Z0-9_\\-]", "_");
     if (safeScope.isBlank()) {
@@ -125,6 +138,26 @@ public class AiAssistantGatewayService {
     } catch (Exception e) {
       log.warn("Could not load AI Assistant pending questions for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
       return Collections.emptyList();
+    }
+  }
+
+  /**
+   * Load the code master prompt (system core for context_type=code), cache for reuse.
+   * Path is configurable via ai.context.code-master-prompt-path property.
+   */
+  public String getCodeMasterPrompt() {
+    if (codeMasterPrompt != null) return codeMasterPrompt;
+    synchronized (this) {
+      if (codeMasterPrompt != null) return codeMasterPrompt;
+      try {
+        Resource resource = resolveResource(codeMasterPromptPath);
+        try (InputStream in = resource.getInputStream()) {
+          codeMasterPrompt = StreamUtils.copyToString(in, StandardCharsets.UTF_8);
+          return codeMasterPrompt;
+        }
+      } catch (IOException e) {
+        throw new RuntimeException("Không đọc được code master prompt từ: " + codeMasterPromptPath, e);
+      }
     }
   }
 
@@ -1059,6 +1092,21 @@ public class AiAssistantGatewayService {
     return looksLikeCodeTask(prompt) ? "code_generation" : "general";
   }
 
+  private String detectContextTypeHint(String prompt) {
+    String normalized = String.valueOf(prompt == null ? "" : prompt).toLowerCase(Locale.ROOT);
+    if (normalized.contains("context_type=menu_json")
+        || normalized.contains("\"context_type\":\"menu_json\"")
+        || normalized.contains("\"context_type\": \"menu_json\"")) {
+      return "menu_json";
+    }
+    if (normalized.contains("context_type=code")
+        || normalized.contains("\"context_type\":\"code\"")
+        || normalized.contains("\"context_type\": \"code\"")) {
+      return "code";
+    }
+    return "";
+  }
+
   /**
    * Apply slot-based token budget fitting to the assembled finalPrompt.
    *
@@ -1632,11 +1680,21 @@ public class AiAssistantGatewayService {
     String taskTypeHint = detectTaskTypeHint(trimmedPrompt);
     boolean isMenuTask = looksLikeMenuTask(trimmedPrompt);
     boolean isCodeTask = looksLikeCodeTask(trimmedPrompt) && !isMenuTask;
+    String contextTypeHint = detectContextTypeHint(trimmedPrompt);
 
     // Inject scenario-specific instructions between master prompt and dynamic context
     AiMenuOperationScenario scenario = extractOperationScenario(prompt);
     boolean isMenuScenario = scenario != AiMenuOperationScenario.UNKNOWN;
-    boolean shouldInjectMenuContext = !menuOnlyContextInjection || isMenuScenario;
+    boolean isExplicitMenuContext = "menu_json".equals(contextTypeHint);
+    boolean isExplicitCodeContext = "code".equals(contextTypeHint);
+    boolean shouldInjectMenuContext = isExplicitMenuContext || !menuOnlyContextInjection || isMenuScenario;
+    boolean shouldInjectCodeContext = codeContextInjection
+        && !shouldInjectMenuContext
+        && (isExplicitCodeContext || (contextTypeHint.isBlank() && isCodeTask));
+    boolean shouldInjectSystemContext = shouldInjectMenuContext || shouldInjectCodeContext;
+    String selectedPromptProfile = shouldInjectMenuContext
+      ? "menu_master_prompt"
+      : (shouldInjectCodeContext ? "code_master_prompt" : "no_master_prompt");
 
     String systemCore = "";
     String scenarioContext = null;
@@ -1646,6 +1704,11 @@ public class AiAssistantGatewayService {
         return createErrorJson("Không load được System Core (master prompt)", "MASTER_PROMPT_MISSING");
       }
       scenarioContext = buildScenarioContext(prompt);
+    } else if (shouldInjectCodeContext) {
+      systemCore = getCodeMasterPrompt();
+      if (systemCore == null || systemCore.trim().isEmpty()) {
+        return createErrorJson("Không load được Code System Core (master prompt)", "CODE_MASTER_PROMPT_MISSING");
+      }
     }
 
     // Load per-app session context file (if prompt doesn't already embed session_memory)
@@ -1653,7 +1716,7 @@ public class AiAssistantGatewayService {
     String appContextBlock = "";
     boolean promptAlreadyHasSessionMemory = prompt.contains("session_memory")
         || prompt.contains("APP CONTINUITY MEMORY");
-    if (shouldInjectMenuContext && !promptAlreadyHasSessionMemory) {
+    if (shouldInjectSystemContext && !promptAlreadyHasSessionMemory) {
       String promptAppId = extractAppIdFromPrompt(prompt);
       if (promptAppId != null) {
         String ctxFile = loadAppContextFile(promptAppId);
@@ -1669,7 +1732,7 @@ public class AiAssistantGatewayService {
     // Compose final prompt: [System_Core]\n\n[App_Context?]\n\n[Scenario_Context?]\n\n[Dynamic_Context]
     String finalPrompt;
     String scenarioContextText = scenarioContext == null ? "" : scenarioContext.trim();
-    if (!shouldInjectMenuContext) {
+    if (!shouldInjectSystemContext) {
       finalPrompt = trimmedPrompt;
     } else if (appContextBlock.isBlank() && scenarioContextText.isBlank()) {
       finalPrompt = systemCore.trim() + "\n\n" + trimmedPrompt;
@@ -1702,16 +1765,21 @@ public class AiAssistantGatewayService {
     String selectedModel = selectOptimalModel(taskTypeHint, finalPrompt.length(), isCodeTask);
     if (shouldFastFallbackMenuToGemini(selectedModel, finalPrompt.length(), isMenuTask)) {
       log.info(
-          "Routing request to Gemini (fast-fallback) because menu context is large and primary AI Assistant model is in cooldown: selectedModel={}, promptChars={}",
+          "Routing request to Gemini (fast-fallback) because menu context is large and primary AI Assistant model is in cooldown: selectedModel={}, promptChars={}, promptProfile={}, contextTypeHint={}",
           selectedModel,
-          finalPrompt.length());
-      return callGeminiWithContext(finalPrompt, maxOutputTokens, directTemperature, progressListener);
+          finalPrompt.length(),
+          selectedPromptProfile,
+          contextTypeHint);
+      String fastFallback = callGeminiWithContext(finalPrompt, maxOutputTokens, directTemperature, progressListener);
+      return applyCodeRuntimeGuardIfNeeded(fastFallback, shouldInjectCodeContext, contextTypeHint, selectedPromptProfile);
     }
     log.info(
-      "AI routing decision: taskTypeHint={}, isCodeTask={}, isMenuTask={}, injectedProjectContext={}, promptChars={}, directMaxChars={}, largeContextThresholdChars={}, selectedModel={}, geminiConfigured={}",
+      "AI routing decision: taskTypeHint={}, isCodeTask={}, isMenuTask={}, contextTypeHint={}, promptProfile={}, injectedProjectContext={}, promptChars={}, directMaxChars={}, largeContextThresholdChars={}, selectedModel={}, geminiConfigured={}",
         taskTypeHint,
         isCodeTask,
         isMenuTask,
+        contextTypeHint,
+        selectedPromptProfile,
         injectedProjectContext,
         finalPrompt.length(),
       directMaxChars,
@@ -1719,9 +1787,10 @@ public class AiAssistantGatewayService {
         selectedModel,
         geminiEnabled && (!googleApiKey.isBlank() || geminiService != null));
     if (selectedModel.startsWith("gemini:")) {
-      log.info("Routing request to Gemini because selectedModel={} for taskTypeHint={} promptChars={}",
-          selectedModel, taskTypeHint, finalPrompt.length());
-      return callGeminiWithContext(finalPrompt, maxOutputTokens, directTemperature, progressListener);
+      log.info("Routing request to Gemini because selectedModel={} for taskTypeHint={} promptChars={} promptProfile={} contextTypeHint={}",
+          selectedModel, taskTypeHint, finalPrompt.length(), selectedPromptProfile, contextTypeHint);
+      String geminiRouted = callGeminiWithContext(finalPrompt, maxOutputTokens, directTemperature, progressListener);
+      return applyCodeRuntimeGuardIfNeeded(geminiRouted, shouldInjectCodeContext, contextTypeHint, selectedPromptProfile);
     }
 
     emitProgress(progressListener, progressPayload(
@@ -1749,11 +1818,91 @@ public class AiAssistantGatewayService {
           "inputChars", finalPrompt.length())))));
 
     int chunkThresholdChars = Math.max(10000, chunkModeThresholdChars);
+    String rawResponse;
     if (finalPrompt.length() > directMaxChars || finalPrompt.length() > chunkThresholdChars) {
-      return generateLargePromptContent(finalPrompt, progressListener, scenario);
+      rawResponse = generateLargePromptContent(finalPrompt, progressListener, scenario);
+    } else {
+      rawResponse = generateDirectContent(finalPrompt, progressListener);
+    }
+    return applyCodeRuntimeGuardIfNeeded(rawResponse, shouldInjectCodeContext, contextTypeHint, selectedPromptProfile);
+  }
+
+  private String applyCodeRuntimeGuardIfNeeded(
+      String wrappedResponse,
+      boolean shouldInjectCodeContext,
+      String contextTypeHint,
+      String promptProfile) {
+    if (!codeRuntimeGuardEnabled || !shouldInjectCodeContext) {
+      return wrappedResponse;
+    }
+    if (wrappedResponse == null || wrappedResponse.isBlank()) {
+      return wrappedResponse;
     }
 
-    return generateDirectContent(finalPrompt, progressListener);
+    String resultText = extractResultTextFromWrappedJson(wrappedResponse);
+    if (resultText == null || resultText.isBlank()) {
+      return wrappedResponse;
+    }
+
+    List<String> violations = detectCodeRuntimeViolations(resultText);
+    if (violations.isEmpty()) {
+      log.info("Code runtime guard passed: contextTypeHint={}, promptProfile={}, violations=0", contextTypeHint, promptProfile);
+      return wrappedResponse;
+    }
+
+    log.warn("Code runtime guard blocked response: contextTypeHint={}, promptProfile={}, violations={}",
+        contextTypeHint, promptProfile, violations);
+    String detail = String.join("; ", violations);
+    return createErrorJson("Code output không tương thích runtime browser: " + detail, "CODE_RUNTIME_GUARD_FAILED");
+  }
+
+  private List<String> detectCodeRuntimeViolations(String resultText) {
+    List<String> violations = new ArrayList<>();
+    Object parsed = tryParseJson(resultText);
+
+    if (parsed instanceof Map<?, ?> map) {
+      Object codeObj = map.get("code");
+      if (codeObj instanceof String codeText) {
+        collectRuntimePatternViolations(codeText, "code", violations);
+      }
+      Object textEditsObj = map.get("textEdits");
+      if (textEditsObj instanceof List<?> edits) {
+        for (int i = 0; i < edits.size(); i++) {
+          Object editObj = edits.get(i);
+          if (!(editObj instanceof Map<?, ?> editMap)) {
+            continue;
+          }
+          Object replacementObj = editMap.get("replacement");
+          if (replacementObj instanceof String replacement) {
+            collectRuntimePatternViolations(replacement, "textEdits[" + i + "].replacement", violations);
+          }
+        }
+      }
+    }
+
+    if (violations.isEmpty()) {
+      collectRuntimePatternViolations(resultText, "result", violations);
+    }
+    return violations;
+  }
+
+  private void collectRuntimePatternViolations(String codeText, String fieldPath, List<String> violations) {
+    if (codeText == null || codeText.isBlank()) {
+      return;
+    }
+    String text = codeText;
+    if (Pattern.compile("(?m)^\\s*import\\s+.+$", Pattern.CASE_INSENSITIVE).matcher(text).find()) {
+      violations.add(fieldPath + ": uses import syntax");
+    }
+    if (Pattern.compile("(?m)^\\s*export\\s+", Pattern.CASE_INSENSITIVE).matcher(text).find()) {
+      violations.add(fieldPath + ": uses export syntax");
+    }
+    if (Pattern.compile("\\brequire\\s*\\(", Pattern.CASE_INSENSITIVE).matcher(text).find()) {
+      violations.add(fieldPath + ": uses require()");
+    }
+    if (Pattern.compile("\\bmodule\\.exports\\b", Pattern.CASE_INSENSITIVE).matcher(text).find()) {
+      violations.add(fieldPath + ": uses module.exports");
+    }
   }
 
   /**

@@ -385,7 +385,7 @@ public class ApiSpringController {
     @Value("${ai.assistant.code.chaining-cache-ttl-ms:1800000}")
     private long aiAssistantCodeChainingCacheTtlMs;
 
-    @Value("${ai.assistant.custom-instructions.path:csm_datas/public/ai-assistant-instructions.md}")
+    @Value("${ai.assistant.custom-instructions.path:csm_datas/ai_local/ai-assistant-instructions.md}")
     private String aiAssistantCustomInstructionsPath;
 
     @Value("${ai.assistant.custom-instructions.reload-ms:3000}")
@@ -16791,6 +16791,8 @@ public class ApiSpringController {
         response.put("passes_hard_gate", report.passesHardGate);
         response.put("summary", report.summary);
         response.put("stats", report.stats);
+        response.put("validation_report", report.toValidationReportPayload());
+        response.put("error_codes", report.getErrorCodes());
         response.put("errors", report.getErrors());
         response.put("warnings", report.getWarnings());
 

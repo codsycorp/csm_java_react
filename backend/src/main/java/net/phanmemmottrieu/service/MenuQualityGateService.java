@@ -1,384 +1,596 @@
 package net.phanmemmottrieu.service;
 
 import org.springframework.stereotype.Service;
-import java.util.*;
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * Quality gate for AI-generated menu JSON
- * Validates against CSM system standards:
- * - Multilingual completeness (label_vi/label_en/label_zh, f_header_vi/en/zh)
- * - Field schema compliance (f_name, f_types, f_cbo_query)
- * - Menu structure (type_form, table_name, trigger)
- * - Trigger patterns (valid signatures per CSM runtime)
+ * Contract-aligned quality gate for AI menu JSON.
+ *
+ * Enforces key rules from ai_menu_master_prompt v2:
+ * - parentId hierarchy integrity
+ * - canonical icon field only (icon)
+ * - valid type_form and runtime consistency
+ * - table field f_* schema checks
+ * - combo query requirements for combo-like fields
+ * - trigger key whitelist
  */
 @Service
 public class MenuQualityGateService {
 
     public static class QualityIssue {
-        public String severity; // "error" | "warning" | "info"
+        public String severity; // error | warning | info
         public String rule;
+        public String errorCode;
         public String path;
         public String message;
         public Object detail;
 
-        public QualityIssue(String severity, String rule, String path, String message) {
+        public QualityIssue(String severity, String rule, String errorCode, String path, String message) {
             this.severity = severity;
             this.rule = rule;
+            this.errorCode = errorCode;
             this.path = path;
             this.message = message;
         }
 
-        public QualityIssue(String severity, String rule, String path, String message, Object detail) {
-            this(severity, rule, path, message);
+        public QualityIssue(String severity, String rule, String errorCode, String path, String message, Object detail) {
+            this(severity, rule, errorCode, path, message);
             this.detail = detail;
         }
     }
 
     public static class QualityReport {
         public List<QualityIssue> issues = new ArrayList<>();
-        public double qualityScore; // 0-100
-        public boolean passesHardGate; // No critical errors
+        public double qualityScore;
+        public boolean passesHardGate;
         public String summary;
-        public Map<String, Object> stats = new HashMap<>();
+        public Map<String, Object> stats = new LinkedHashMap<>();
 
         public List<QualityIssue> getErrors() {
-            return issues.stream()
-                .filter(i -> "error".equals(i.severity))
-                .toList();
+            return issues.stream().filter(i -> "error".equals(i.severity)).toList();
         }
 
         public List<QualityIssue> getWarnings() {
-            return issues.stream()
-                .filter(i -> "warning".equals(i.severity))
-                .toList();
+            return issues.stream().filter(i -> "warning".equals(i.severity)).toList();
+        }
+
+        public List<String> getErrorCodes() {
+            LinkedHashSet<String> codes = new LinkedHashSet<>();
+            for (QualityIssue issue : getErrors()) {
+                if (issue.errorCode != null && !issue.errorCode.isBlank()) {
+                    codes.add(issue.errorCode);
+                }
+            }
+            return new ArrayList<>(codes);
+        }
+
+        public Map<String, Object> toValidationReportPayload() {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("passed", passesHardGate);
+            payload.put("qualityScore", qualityScore);
+            payload.put("summary", summary);
+            payload.put("error_codes", getErrorCodes());
+            payload.put("checks", issues);
+            return payload;
         }
     }
 
-    // Valid f_types for table fields
-    private static final Set<String> VALID_F_TYPES = new HashSet<>(Arrays.asList(
-        "string", "string_ro", "number", "num", "price", "ron", "date", "datetime", "time",
-        "checkbox", "switch", "co", "co_ro", "multi_select", "multi_tag", "menu_tree",
-        "json", "password", "html", "text", "textarea", "email", "phone", "url",
-        "percent", "currency", "rating", "color", "file", "image", "signature"
-    ));
+    private static final Set<Integer> VALID_TYPE_FORMS = Set.of(0, 1, 2, 3, 4, 5, 6);
 
-    // Valid trigger keys
-    private static final Set<String> VALID_TRIGGER_KEYS = new HashSet<>(Arrays.asList(
-        "filter", "load_db", "datacolumntemplate", "datarowtemplate", "update", "barcode",
-        "update_db", "delete_db", "report_db", "beforeSave", "beforeImport", "afterImport",
-        "afterAdd", "afterEdit", "afterDelete", "on_load", "on_save", "on_delete",
-        "custom_validator", "auto_compute", "cascade_update"
-    ));
+    private static final Set<String> FORBIDDEN_ICON_FIELDS = Set.of(
+        "m_icon", "m_icons", "attributes_icon"
+    );
 
-    private static final Pattern VALID_ID_PATTERN = Pattern.compile("^[a-zA-Z0-9_-]{4,64}$");
+    private static final Set<String> COMBO_LIKE_TYPES = Set.of(
+        "co", "co_ro", "cbo", "coro", "cp", "multi_select", "multi_tag", "menu_tree"
+    );
+
+    private static final Set<String> VALID_TRIGGER_KEYS = Set.of(
+        "filter",
+        "load_db",
+        "datacolumntemplate",
+        "datarowtemplate",
+        "update",
+        "barcode",
+        "update_db",
+        "delete_db",
+        "report_db",
+        "beforeSave",
+        "beforeImport",
+        "afterImport",
+        "afterAdd",
+        "afterEdit",
+        "afterDelete"
+    );
+
     private static final Pattern VALID_TABLE_NAME = Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]*$");
 
-    /**
-     * Main validation entry point
-     */
+    private static final class NodeCtx {
+        Map<String, Object> node;
+        String path;
+        String parentIdDeclared;
+        String parentIdPosition;
+        int depth;
+
+        NodeCtx(
+            Map<String, Object> node,
+            String path,
+            String parentIdDeclared,
+            String parentIdPosition,
+            int depth
+        ) {
+            this.node = node;
+            this.path = path;
+            this.parentIdDeclared = parentIdDeclared;
+            this.parentIdPosition = parentIdPosition;
+            this.depth = depth;
+        }
+    }
+
     public QualityReport validateMenuJson(List<Map<String, Object>> menus, String requirement) {
         QualityReport report = new QualityReport();
 
         if (menus == null || menus.isEmpty()) {
-            report.issues.add(new QualityIssue("error", "empty_menu", "", "Menu list is empty"));
-            report.qualityScore = 0;
-            report.passesHardGate = false;
-            report.summary = "FAIL: Empty menu";
+            report.issues.add(new QualityIssue(
+                "error",
+                "json_not_empty",
+                "ERR_JSON_INVALID",
+                "menu",
+                "Menu array is empty"
+            ));
+            finalizeReport(report, 0, 0, 0, 0, 0, requirement);
             return report;
         }
 
-        int totalNodes = 0;
-        final int[] validNodes = new int[] { 0 };
-        final int[] multilingualCompleteNodes = new int[] { 0 };
-        final int[] fieldCompleteNodes = new int[] { 0 };
+        List<NodeCtx> allNodes = new ArrayList<>();
+        Map<String, NodeCtx> byId = new LinkedHashMap<>();
+        Set<String> duplicateIds = new LinkedHashSet<>();
+        Deque<String> ancestorStack = new ArrayDeque<>();
 
-        for (Map<String, Object> menu : menus) {
-            walkAndValidate(menu, "", report, (violation) -> {
-                if ("valid_node".equals(violation.rule)) {
-                    validNodes[0]++;
-                }
-                if ("multilingual_complete".equals(violation.rule)) {
-                    multilingualCompleteNodes[0]++;
-                }
-                if ("field_schema_complete".equals(violation.rule)) {
-                    fieldCompleteNodes[0]++;
-                }
-            });
-            totalNodes++;
+        for (int i = 0; i < menus.size(); i++) {
+            Object rootObj = menus.get(i);
+            if (!(rootObj instanceof Map<?, ?> rawRoot)) {
+                report.issues.add(new QualityIssue(
+                    "error",
+                    "node_object_required",
+                    "ERR_JSON_INVALID",
+                    "menu[" + i + "]",
+                    "Each root menu item must be an object"
+                ));
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = (Map<String, Object>) rawRoot;
+            walkNode(root, "menu[" + i + "]", "", 0, ancestorStack, allNodes, byId, duplicateIds, report);
         }
 
-        // Calculate quality score
-        report.stats.put("totalNodes", totalNodes);
-        report.stats.put("validNodes", validNodes[0]);
-        report.stats.put("multilingualCompleteNodes", multilingualCompleteNodes[0]);
-        report.stats.put("fieldCompleteNodes", fieldCompleteNodes[0]);
-
-        double structureScore = totalNodes > 0 ? (validNodes[0] * 100.0 / totalNodes) : 0;
-        double multilingualScore = totalNodes > 0 ? (multilingualCompleteNodes[0] * 100.0 / totalNodes) : 0;
-        double fieldScore = totalNodes > 0 ? (fieldCompleteNodes[0] * 100.0 / totalNodes) : 0;
-
-        report.qualityScore = (structureScore * 0.4 + multilingualScore * 0.35 + fieldScore * 0.25);
-
-        // Hard gate: No critical errors
-        List<QualityIssue> errors = report.getErrors();
-        report.passesHardGate = errors.isEmpty();
-
-        // Build summary
-        if (report.passesHardGate) {
-            report.summary = String.format("PASS: Quality=%.1f%% | Nodes=%d | Multilingual=%.0f%% | Fields=%.0f%%",
-                report.qualityScore, validNodes[0], multilingualScore, fieldScore);
-        } else {
-            report.summary = String.format("FAIL: %d critical errors | Quality=%.1f%%",
-                errors.size(), report.qualityScore);
+        for (String dupId : duplicateIds) {
+            report.issues.add(new QualityIssue(
+                "error",
+                "id_unique",
+                "ERR_JSON_INVALID",
+                "id=" + dupId,
+                "Duplicate menu id found"
+            ));
         }
 
+        for (NodeCtx ctx : allNodes) {
+            validateHierarchy(ctx, byId, report);
+            validateIconContract(ctx, report);
+            validateTypeForm(ctx, report);
+            validateTableSchema(ctx, report);
+            validateTrigger(ctx, report);
+        }
+
+        long errorCount = report.getErrors().size();
+        long warningCount = report.getWarnings().size();
+        long infoCount = report.issues.stream().filter(i -> "info".equals(i.severity)).count();
+
+        int rootCount = (int) allNodes.stream().filter(n -> n.parentIdDeclared.isBlank()).count();
+        finalizeReport(report, allNodes.size(), rootCount, errorCount, warningCount, infoCount, requirement);
         return report;
     }
 
-    // ─── Recursive validation ─────────────────────────────────────
+    private void walkNode(
+        Map<String, Object> node,
+        String path,
+        String parentIdPosition,
+        int depth,
+        Deque<String> ancestorStack,
+        List<NodeCtx> allNodes,
+        Map<String, NodeCtx> byId,
+        Set<String> duplicateIds,
+        QualityReport report
+    ) {
+        String id = normalizeId(node.get("id"));
+        String declaredParent = normalizeParentId(node.get("parentId"), node.get("parent_id"));
 
-    private void walkAndValidate(Object node, String path, QualityReport report, 
-                                 java.util.function.Consumer<QualityIssue> tracker) {
-        if (!(node instanceof Map)) {
+        if (id.isBlank()) {
+            report.issues.add(new QualityIssue(
+                "error",
+                "id_required",
+                "ERR_JSON_INVALID",
+                path,
+                "Node is missing non-empty id"
+            ));
+        }
+
+        String effectivePath = path + (id.isBlank() ? "" : "(" + id + ")");
+        NodeCtx ctx = new NodeCtx(node, effectivePath, declaredParent, parentIdPosition, depth);
+        allNodes.add(ctx);
+
+        if (!id.isBlank()) {
+            if (byId.containsKey(id)) {
+                duplicateIds.add(id);
+            } else {
+                byId.put(id, ctx);
+            }
+        }
+
+        if (!id.isBlank() && ancestorStack.contains(id)) {
+            report.issues.add(new QualityIssue(
+                "error",
+                "cycle_detected",
+                "ERR_PARENT_MAPPING_INVALID",
+                effectivePath,
+                "Cycle detected in menu tree"
+            ));
+        }
+
+        ancestorStack.push(id);
+        Object childrenObj = node.get("children");
+        if (childrenObj instanceof List<?> children) {
+            for (int i = 0; i < children.size(); i++) {
+                Object childObj = children.get(i);
+                if (!(childObj instanceof Map<?, ?> rawChild)) {
+                    report.issues.add(new QualityIssue(
+                        "error",
+                        "children_item_object_required",
+                        "ERR_JSON_INVALID",
+                        effectivePath + ".children[" + i + "]",
+                        "Children item must be an object"
+                    ));
+                    continue;
+                }
+                @SuppressWarnings("unchecked")
+                Map<String, Object> child = (Map<String, Object>) rawChild;
+                walkNode(
+                    child,
+                    effectivePath + ".children[" + i + "]",
+                    id,
+                    depth + 1,
+                    ancestorStack,
+                    allNodes,
+                    byId,
+                    duplicateIds,
+                    report
+                );
+            }
+        }
+        ancestorStack.pop();
+    }
+
+    private void validateHierarchy(NodeCtx ctx, Map<String, NodeCtx> byId, QualityReport report) {
+        if (ctx.parentIdDeclared.isBlank()) {
+            if (ctx.depth > 0) {
+                report.issues.add(new QualityIssue(
+                    "error",
+                    "root_node_in_children",
+                    "ERR_ROOT_NODE_IN_CHILDREN",
+                    ctx.path,
+                    "Node with empty parentId must be top-level only"
+                ));
+            }
             return;
         }
 
-        Map<String, Object> item = (Map<String, Object>) node;
-        String nodeId = String.valueOf(item.getOrDefault("id", "unknown"));
-        String label = String.valueOf(item.getOrDefault("label", ""));
-        String currentPath = path.isEmpty() ? label : path + " > " + label;
-
-        // 1. Check ID validity
-        validateId(item, currentPath, report);
-
-        // 2. Check multilingual labels
-        validateMultilingualLabels(item, currentPath, report);
-
-        // 3. Check table structure
-        validateTableSchema(item, currentPath, report);
-
-        // 4. Check trigger
-        validateTrigger(item, currentPath, report);
-
-        // 5. Check type_form consistency
-        validateTypeForm(item, currentPath, report);
-
-        // 6. Check combo fields
-        validateComboFields(item, currentPath, report);
-
-        // Mark as valid if no errors at this node
-        if (report.issues.stream()
-            .filter(i -> i.path.equals(currentPath) && "error".equals(i.severity))
-            .count() == 0) {
-            tracker.accept(new QualityIssue("info", "valid_node", currentPath, "Node passes validation"));
-        }
-
-        // 7. Recurse into children
-        Object childrenObj = item.get("children");
-        if (childrenObj instanceof List) {
-            List<?> children = (List<?>) childrenObj;
-            for (Object child : children) {
-                walkAndValidate(child, currentPath, report, tracker);
-            }
-        }
-    }
-
-    private void validateId(Map<String, Object> item, String path, QualityReport report) {
-        Object id = item.get("id");
-        if (id == null || String.valueOf(id).trim().isEmpty()) {
-            report.issues.add(new QualityIssue("error", "id_missing", path, "Missing or empty 'id' field"));
-        } else if (!VALID_ID_PATTERN.matcher(String.valueOf(id)).matches()) {
-            report.issues.add(new QualityIssue("warning", "id_format", path, 
-                "ID should be alphanumeric (4-64 chars): " + id));
-        }
-    }
-
-    private void validateMultilingualLabels(Map<String, Object> item, String path, QualityReport report) {
-        String labelVi = String.valueOf(item.getOrDefault("label", "")).trim();
-        String labelEn = String.valueOf(item.getOrDefault("label_en", "")).trim();
-        String labelZh = String.valueOf(item.getOrDefault("label_zh", "")).trim();
-
-        // Rule: At least one must be present
-        if (labelVi.isEmpty() && labelEn.isEmpty() && labelZh.isEmpty()) {
-            report.issues.add(new QualityIssue("error", "label_missing", path, 
-                "Must have at least one of: label (VI), label_en (EN), label_zh (ZH)"));
+        NodeCtx parent = byId.get(ctx.parentIdDeclared);
+        if (parent == null) {
+            report.issues.add(new QualityIssue(
+                "error",
+                "parent_exists",
+                "ERR_PARENT_MAPPING_INVALID",
+                ctx.path,
+                "parentId does not reference an existing node",
+                Map.of("parentId", ctx.parentIdDeclared)
+            ));
             return;
         }
 
-        // Rule: All three should be present (strict)
-        List<String> missing = new ArrayList<>();
-        if (labelVi.isEmpty()) missing.add("label_vi");
-        if (labelEn.isEmpty()) missing.add("label_en");
-        if (labelZh.isEmpty()) missing.add("label_zh");
-
-        if (!missing.isEmpty()) {
-            report.issues.add(new QualityIssue("warning", "multilingual_incomplete", path,
-                "Missing translations: " + String.join(", ", missing)));
-        } else {
-            report.issues.add(new QualityIssue("info", "multilingual_complete", path, "All 3 languages present"));
-        }
-
-        // Rule: Translations should be distinct (not just copy-paste)
-        if (!labelVi.isEmpty() && labelVi.equals(labelEn)) {
-            report.issues.add(new QualityIssue("warning", "translation_duplicate_en", path,
-                "label_en is identical to label (should be translated to English)"));
-        }
-        if (!labelVi.isEmpty() && labelVi.equals(labelZh)) {
-            report.issues.add(new QualityIssue("warning", "translation_duplicate_zh", path,
-                "label_zh is identical to label (should be translated to Chinese)"));
+        if (!Objects.equals(ctx.parentIdDeclared, ctx.parentIdPosition)) {
+            report.issues.add(new QualityIssue(
+                "error",
+                "parent_position_consistency",
+                "ERR_PARENT_MAPPING_INVALID",
+                ctx.path,
+                "Node location in children tree does not match parentId",
+                Map.of(
+                    "parentIdDeclared", ctx.parentIdDeclared,
+                    "parentIdByPosition", ctx.parentIdPosition,
+                    "parentNodePath", parent.path
+                )
+            ));
         }
     }
 
-    private void validateTableSchema(Map<String, Object> item, String path, QualityReport report) {
-        Object tableObj = item.get("table");
-        if (!(tableObj instanceof List)) {
-            return; // No table fields
+    private void validateIconContract(NodeCtx ctx, QualityReport report) {
+        for (String forbidden : FORBIDDEN_ICON_FIELDS) {
+            if (ctx.node.containsKey(forbidden) && !isBlank(ctx.node.get(forbidden))) {
+                report.issues.add(new QualityIssue(
+                    "error",
+                    "icon_canonical_field_only",
+                    "ERR_ICON_LEGACY_FIELD",
+                    ctx.path,
+                    "Forbidden legacy icon field detected: " + forbidden
+                ));
+            }
         }
 
-        List<?> fields = (List<?>) tableObj;
-        if (fields.isEmpty()) {
+        String icon = asText(ctx.node.get("icon"));
+        if (icon.isBlank()) {
+            report.issues.add(new QualityIssue(
+                "warning",
+                "icon_recommended",
+                null,
+                ctx.path,
+                "icon is blank, fallback AppstoreOutlined is recommended"
+            ));
+        }
+    }
+
+    private void validateTypeForm(NodeCtx ctx, QualityReport report) {
+        Object rawType = ctx.node.get("type_form");
+        if (rawType == null) {
+            report.issues.add(new QualityIssue(
+                "warning",
+                "type_form_missing",
+                null,
+                ctx.path,
+                "type_form is missing"
+            ));
             return;
         }
 
-        boolean allFieldsValid = true;
-        List<String> missingHeaderFields = new ArrayList<>();
+        Integer typeForm = toInt(rawType);
+        if (typeForm == null || !VALID_TYPE_FORMS.contains(typeForm)) {
+            report.issues.add(new QualityIssue(
+                "error",
+                "type_form_valid",
+                "ERR_TYPE_FORM_INVALID",
+                ctx.path,
+                "type_form must be one of 0,1,2,3,4,5,6",
+                Map.of("value", String.valueOf(rawType))
+            ));
+            return;
+        }
 
-        for (int i = 0; i < fields.size(); i++) {
-            Object fieldObj = fields.get(i);
-            if (!(fieldObj instanceof Map)) continue;
+        String tableName = asText(ctx.node.get("table_name"));
+        if ((typeForm == 1 || typeForm == 2 || typeForm == 6) && tableName.isBlank()) {
+            report.issues.add(new QualityIssue(
+                "warning",
+                "table_name_expected",
+                null,
+                ctx.path,
+                "type_form=" + typeForm + " usually expects non-empty table_name"
+            ));
+        }
 
-            Map<String, Object> field = (Map<String, Object>) fieldObj;
-            String fieldPath = path + " > field[" + (i + 1) + "]";
-
-            // Required f_* fields
-            String fName = String.valueOf(field.getOrDefault("f_name", "")).trim();
-            String fTypes = String.valueOf(field.getOrDefault("f_types", "")).trim();
-            String fHeader = String.valueOf(field.getOrDefault("f_header", "")).trim();
-
-            if (fName.isEmpty()) {
-                report.issues.add(new QualityIssue("error", "f_name_required", fieldPath, "Missing f_name"));
-                allFieldsValid = false;
-            }
-
-            if (fTypes.isEmpty()) {
-                report.issues.add(new QualityIssue("error", "f_types_required", fieldPath, 
-                    "Missing f_types for field: " + fName));
-                allFieldsValid = false;
-            } else if (!VALID_F_TYPES.contains(fTypes)) {
-                report.issues.add(new QualityIssue("warning", "f_types_unknown", fieldPath,
-                    "Unknown f_types: " + fTypes + " (valid: " + String.join(",", VALID_F_TYPES) + ")"));
-            }
-
-            // Multilingual headers
-            String fHeaderEn = String.valueOf(field.getOrDefault("f_header_en", "")).trim();
-            String fHeaderZh = String.valueOf(field.getOrDefault("f_header_zh", "")).trim();
-
-            if (fHeader.isEmpty() && fHeaderEn.isEmpty() && fHeaderZh.isEmpty()) {
-                report.issues.add(new QualityIssue("warning", "f_header_missing", fieldPath,
-                    "No header text (f_header/f_header_en/f_header_zh)"));
-                missingHeaderFields.add(fName);
-            } else if (fHeaderEn.isEmpty() || fHeaderZh.isEmpty()) {
-                List<String> missingLangs = new ArrayList<>();
-                if (fHeaderEn.isEmpty()) missingLangs.add("f_header_en");
-                if (fHeaderZh.isEmpty()) missingLangs.add("f_header_zh");
-                report.issues.add(new QualityIssue("warning", "f_header_incomplete", fieldPath,
-                    "Missing header translations: " + String.join(", ", missingLangs) + " for field: " + fName));
-            }
-
-            // Combo field requires f_cbo_query
-            if ("co".equals(fTypes) || "co_ro".equals(fTypes) || "multi_select".equals(fTypes)) {
-                String fCboQuery = String.valueOf(field.getOrDefault("f_cbo_query", "")).trim();
-                if (fCboQuery.isEmpty()) {
-                    report.issues.add(new QualityIssue("error", "f_cbo_query_missing", fieldPath,
-                        "Combo field '" + fName + "' (" + fTypes + ") must have f_cbo_query"));
-                    allFieldsValid = false;
+        if (!tableName.isBlank()) {
+            String[] names = tableName.split(",");
+            for (String name : names) {
+                String normalized = name.trim();
+                if (normalized.isBlank()) continue;
+                if (!VALID_TABLE_NAME.matcher(normalized).matches()) {
+                    report.issues.add(new QualityIssue(
+                        "warning",
+                        "table_name_format",
+                        null,
+                        ctx.path,
+                        "table_name token has unusual format: " + normalized
+                    ));
                 }
             }
         }
+    }
 
-        if (allFieldsValid) {
-            report.issues.add(new QualityIssue("info", "field_schema_complete", path, 
-                "All " + fields.size() + " fields are valid"));
-        } else if (!missingHeaderFields.isEmpty()) {
-            report.issues.add(new QualityIssue("warning", "field_quality", path,
-                "Some fields missing multilingual headers: " + String.join(", ", missingHeaderFields)));
+    private void validateTableSchema(NodeCtx ctx, QualityReport report) {
+        Object tableObj = ctx.node.get("table");
+        if (tableObj == null) {
+            return;
+        }
+        if (!(tableObj instanceof List<?> fields)) {
+            report.issues.add(new QualityIssue(
+                "error",
+                "table_array_required",
+                "ERR_TABLE_SCHEMA_INVALID",
+                ctx.path,
+                "table must be an array when present"
+            ));
+            return;
+        }
+
+        Set<String> seenFieldNames = new HashSet<>();
+        for (int i = 0; i < fields.size(); i++) {
+            Object fieldObj = fields.get(i);
+            String fieldPath = ctx.path + ".table[" + i + "]";
+            if (!(fieldObj instanceof Map<?, ?> rawField)) {
+                report.issues.add(new QualityIssue(
+                    "error",
+                    "field_object_required",
+                    "ERR_TABLE_SCHEMA_INVALID",
+                    fieldPath,
+                    "table item must be an object"
+                ));
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> field = (Map<String, Object>) rawField;
+
+            String fName = asText(field.get("f_name"));
+            String fTypes = normalizeType(asText(field.get("f_types")));
+            String fHeader = asText(field.get("f_header"));
+
+            if (fName.isBlank()) {
+                report.issues.add(new QualityIssue(
+                    "error",
+                    "f_name_required",
+                    "ERR_TABLE_SCHEMA_INVALID",
+                    fieldPath,
+                    "f_name is required"
+                ));
+            } else if (!seenFieldNames.add(fName)) {
+                report.issues.add(new QualityIssue(
+                    "warning",
+                    "f_name_unique",
+                    null,
+                    fieldPath,
+                    "duplicate f_name detected: " + fName
+                ));
+            }
+
+            if (fTypes.isBlank()) {
+                report.issues.add(new QualityIssue(
+                    "error",
+                    "f_types_required",
+                    "ERR_TABLE_SCHEMA_INVALID",
+                    fieldPath,
+                    "f_types is required"
+                ));
+            }
+
+            if (fHeader.isBlank()) {
+                report.issues.add(new QualityIssue(
+                    "warning",
+                    "f_header_recommended",
+                    null,
+                    fieldPath,
+                    "f_header is blank"
+                ));
+            }
+
+            if (COMBO_LIKE_TYPES.contains(fTypes)) {
+                boolean hasCboQuery = !asText(field.get("f_cbo_query")).isBlank();
+                boolean hasOptions = field.get("f_options") instanceof List<?> opts && !opts.isEmpty();
+                if (!hasCboQuery && !hasOptions) {
+                    report.issues.add(new QualityIssue(
+                        "error",
+                        "combo_source_required",
+                        "ERR_COMBO_QUERY_INVALID",
+                        fieldPath,
+                        "Combo-like field requires f_cbo_query or non-empty f_options",
+                        Map.of("f_types", fTypes, "f_name", fName)
+                    ));
+                }
+            }
         }
     }
 
-    private void validateTrigger(Map<String, Object> item, String path, QualityReport report) {
-        Object triggerObj = item.get("trigger");
+    private void validateTrigger(NodeCtx ctx, QualityReport report) {
+        Object triggerObj = ctx.node.get("trigger");
         if (triggerObj == null) {
             return;
         }
-
-        if (!(triggerObj instanceof Map)) {
-            report.issues.add(new QualityIssue("warning", "trigger_not_object", path,
-                "trigger should be an object, got: " + triggerObj.getClass().getSimpleName()));
+        if (!(triggerObj instanceof Map<?, ?> triggerMap)) {
+            report.issues.add(new QualityIssue(
+                "error",
+                "trigger_object_required",
+                "ERR_TRIGGER_KEY_INVALID",
+                ctx.path,
+                "trigger must be an object"
+            ));
             return;
         }
 
-        Map<String, Object> trigger = (Map<String, Object>) triggerObj;
-        for (String key : trigger.keySet()) {
+        for (Object keyObj : triggerMap.keySet()) {
+            String key = String.valueOf(keyObj);
             if (!VALID_TRIGGER_KEYS.contains(key)) {
-                report.issues.add(new QualityIssue("warning", "trigger_unknown_key", path,
-                    "Unknown trigger key: " + key + " (valid: " + String.join(",", VALID_TRIGGER_KEYS) + ")"));
+                report.issues.add(new QualityIssue(
+                    "error",
+                    "trigger_key_supported",
+                    "ERR_TRIGGER_KEY_INVALID",
+                    ctx.path,
+                    "Unsupported trigger key: " + key
+                ));
             }
         }
     }
 
-    private void validateTypeForm(Map<String, Object> item, String path, QualityReport report) {
-        Object typeFormObj = item.get("type_form");
-        if (typeFormObj == null) {
-            return;
-        }
+    private void finalizeReport(
+        QualityReport report,
+        int totalNodes,
+        int rootNodes,
+        long errorCount,
+        long warningCount,
+        long infoCount,
+        String requirement
+    ) {
+        double score = 100.0;
+        score -= errorCount * 12.0;
+        score -= warningCount * 2.5;
+        if (score < 0) score = 0;
 
+        report.qualityScore = Math.round(score * 10.0) / 10.0;
+        report.passesHardGate = errorCount == 0;
+
+        report.stats.put("totalNodes", totalNodes);
+        report.stats.put("rootNodes", rootNodes);
+        report.stats.put("errorCount", errorCount);
+        report.stats.put("warningCount", warningCount);
+        report.stats.put("infoCount", infoCount);
+        report.stats.put("requirementChars", requirement == null ? 0 : requirement.length());
+
+        if (report.passesHardGate) {
+            report.summary = "PASS: menu output satisfies hard gate";
+        } else {
+            report.summary = "FAIL: menu output violates hard gate";
+        }
+    }
+
+    private String normalizeId(Object rawId) {
+        return asText(rawId);
+    }
+
+    private String normalizeParentId(Object parentId, Object parentIdLegacy) {
+        String p = asText(parentId);
+        if (!p.isBlank()) return p;
+        return asText(parentIdLegacy);
+    }
+
+    private String asText(Object raw) {
+        if (raw == null) return "";
+        return String.valueOf(raw).trim();
+    }
+
+    private boolean isBlank(Object raw) {
+        return asText(raw).isBlank();
+    }
+
+    private String normalizeType(String type) {
+        return String.valueOf(type == null ? "" : type).trim().toLowerCase(Locale.ROOT);
+    }
+
+    private Integer toInt(Object raw) {
+        if (raw instanceof Number n) {
+            return n.intValue();
+        }
+        String text = asText(raw);
+        if (text.isBlank()) return null;
         try {
-            int typeForm = Integer.parseInt(String.valueOf(typeFormObj));
-            if (typeForm < 0 || typeForm > 6) {
-                report.issues.add(new QualityIssue("warning", "type_form_invalid", path,
-                    "type_form should be 0-6, got: " + typeForm));
-            }
-
-            // Type form 1/2/6 should have table_name
-            if ((typeForm == 1 || typeForm == 2 || typeForm == 6) && 
-                String.valueOf(item.getOrDefault("table_name", "")).trim().isEmpty()) {
-                report.issues.add(new QualityIssue("warning", "table_name_missing", path,
-                    "type_form=" + typeForm + " usually requires table_name"));
-            }
-
-            // Type form 0 should not have table_name
-            if (typeForm == 0 && !String.valueOf(item.getOrDefault("table_name", "")).trim().isEmpty()) {
-                report.issues.add(new QualityIssue("info", "type_form_container", path,
-                    "type_form=0 (group) should not have table_name"));
-            }
-        } catch (NumberFormatException e) {
-            report.issues.add(new QualityIssue("warning", "type_form_not_number", path,
-                "type_form is not a number: " + typeFormObj));
-        }
-    }
-
-    private void validateComboFields(Map<String, Object> item, String path, QualityReport report) {
-        Object tableObj = item.get("table");
-        if (!(tableObj instanceof List)) {
-            return;
-        }
-
-        List<?> fields = (List<?>) tableObj;
-        for (Object fieldObj : fields) {
-            if (!(fieldObj instanceof Map)) continue;
-
-            Map<String, Object> field = (Map<String, Object>) fieldObj;
-            String fTypes = String.valueOf(field.getOrDefault("f_types", "")).trim();
-            String fName = String.valueOf(field.getOrDefault("f_name", "")).trim();
-
-            if ("co".equals(fTypes) || "co_ro".equals(fTypes) || "multi_select".equals(fTypes)) {
-                Object cboQuery = field.get("f_cbo_query");
-                if (cboQuery == null || String.valueOf(cboQuery).trim().isEmpty()) {
-                    report.issues.add(new QualityIssue("error", "combo_no_query", 
-                        path + " > " + fName, "Combo field missing f_cbo_query"));
-                }
-            }
+            return Integer.parseInt(text);
+        } catch (Exception ignored) {
+            return null;
         }
     }
 }
