@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import jakarta.annotation.PostConstruct;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -112,6 +113,17 @@ public class LocalAiAssistantContextService {
     ) {
         this.aiBusinessMemoryVectorService = aiBusinessMemoryVectorService;
         this.aiMenuLearningMemoryService = aiMenuLearningMemoryService;
+    }
+
+    @PostConstruct
+    public void initIndex() {
+        if (enabled) {
+            try {
+                ensureIndexFresh();
+            } catch (Exception ex) {
+                log.warn("Local assistant index init on startup failed: {}", ex.getMessage(), ex);
+            }
+        }
     }
 
     public boolean isEnabled() {

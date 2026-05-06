@@ -5939,9 +5939,12 @@ public class ApiSpringController {
         String lower = normalized.toLowerCase();
         boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
         boolean menuContext = isMenuJsonContext(contextType);
+        boolean menuPatchOnly = menuContext && editMode && isMenuPatchOnlyRequest(lower);
 
         String expectedOutput;
-        if (menuContext && editMode) {
+        if (menuPatchOnly) {
+            expectedOutput = "JSON menu payload hop le, CHI cap nhat cac field duoc yeu cau, khong doi cau truc";
+        } else if (menuContext && editMode) {
             expectedOutput = "JSON menu payload hop le, apply duoc ngay vao editor";
         } else if (editMode) {
             expectedOutput = "Patch/structured edits co the apply truc tiep";
@@ -5949,9 +5952,9 @@ public class ApiSpringController {
             expectedOutput = "Phan tich/chu dan ro rang, bam sat yeu cau";
         }
 
-        String primaryGoal = detectPrimaryGoal(normalized, lower, editMode, menuContext);
+        String primaryGoal = detectPrimaryGoal(normalized, lower, editMode, menuContext, menuPatchOnly);
         List<String> constraints = extractRequirementConstraints(normalized);
-        List<String> acceptance = buildAcceptanceCriteria(editMode, menuContext, constraints);
+        List<String> acceptance = buildAcceptanceCriteria(editMode, menuContext, constraints, menuPatchOnly);
         List<String> ambiguities = detectRequirementAmbiguities(normalized, lower);
 
         int maxItems = Math.max(3, aiRequirementClarifyMaxItems);
@@ -5998,8 +6001,11 @@ public class ApiSpringController {
         return sb.toString().trim();
     }
 
-    private String detectPrimaryGoal(String requestText, String lower, boolean editMode, boolean menuContext) {
+    private String detectPrimaryGoal(String requestText, String lower, boolean editMode, boolean menuContext, boolean menuPatchOnly) {
         if (menuContext) {
+            if (menuPatchOnly) {
+                return "Bo sung/chinh sua dung cac field duoc yeu cau, giu nguyen 100% cau truc menu hien co";
+            }
             if (lower.contains("menu") || lower.contains("json") || lower.contains("cau truc")) {
                 return "Chinh sua cau truc menu theo dung logic nghiep vu hien co";
             }
@@ -6055,11 +6061,17 @@ public class ApiSpringController {
         return out;
     }
 
-    private List<String> buildAcceptanceCriteria(boolean editMode, boolean menuContext, List<String> constraints) {
+    private List<String> buildAcceptanceCriteria(boolean editMode, boolean menuContext, List<String> constraints, boolean menuPatchOnly) {
         List<String> out = new ArrayList<>();
         if (menuContext) {
-            out.add("JSON hop le, parse duoc, co the apply vao editor ma khong vo schema");
-            out.add("Khong xoa/doi truong nghiep vu neu user khong yeu cau ro rang");
+            if (menuPatchOnly) {
+                out.add("JSON hop le, parse duoc, co the apply vao editor ma khong vo schema");
+                out.add("Khong thay doi so node, id, parentId, thu tu menu_id va cau truc cay");
+                out.add("Chi chinh sua cac field duoc user yeu cau, khong tao node moi");
+            } else {
+                out.add("JSON hop le, parse duoc, co the apply vao editor ma khong vo schema");
+                out.add("Khong xoa/doi truong nghiep vu neu user khong yeu cau ro rang");
+            }
         } else if (editMode) {
             out.add("Thay doi toi thieu, dung pham vi, apply duoc vao code hien tai");
             out.add("Khong lam thay doi ngoai yeu cau va tranh regression");
@@ -6071,6 +6083,32 @@ public class ApiSpringController {
             out.add("Tat ca hard constraints phai duoc ton trong truoc khi ket luan");
         }
         return out;
+    }
+
+    private boolean isMenuPatchOnlyRequest(String lower) {
+        if (lower == null || lower.isBlank()) {
+            return false;
+        }
+        boolean hasOnlySignals = lower.contains("chi bo sung")
+                || lower.contains("chỉ bổ sung")
+                || lower.contains("chi cap nhat")
+                || lower.contains("chỉ cập nhật")
+                || lower.contains("chi sua")
+                || lower.contains("chỉ sửa")
+                || lower.contains("khong lam gi khac")
+                || lower.contains("không làm gì khác")
+                || lower.contains("giu nguyen")
+                || lower.contains("giữ nguyên");
+        boolean hasFieldSignals = lower.contains("label_en")
+                || lower.contains("label_zh")
+                || lower.contains("m_icon")
+                || lower.contains("f_header_en")
+                || lower.contains("f_header_zh")
+                || lower.contains("3 ngon ngu")
+                || lower.contains("3 ngôn ngữ")
+                || lower.contains("đa ngôn ngữ")
+                || lower.contains("da ngon ngu");
+        return hasOnlySignals || hasFieldSignals;
     }
 
     private List<String> detectRequirementAmbiguities(String requestText, String lower) {

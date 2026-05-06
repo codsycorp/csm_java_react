@@ -607,6 +607,17 @@ function hasEditIntent(input: string): boolean {
 	return patterns.some(pattern => pattern.test(text));
 }
 
+function hasMenuPatchOnlyIntent(input: string): boolean {
+	const text = String(input || "").trim().toLowerCase();
+	if (!text)
+		return false;
+	const patterns = [
+		/(chi\s+bo\s+sung|chỉ\s+bổ\s+sung|chi\s+cap\s+nhat|chỉ\s+cập\s+nhật|khong\s+lam\s+gi\s+khac|không\s+làm\s+gì\s+khác|giu\s+nguyen|giữ\s+nguyên)/i,
+		/(label_en|label_zh|m_icon|f_header_en|f_header_zh|3\s+ngon\s+ngu|3\s+ngôn\s+ngữ|đa\s+ngôn\s+ngữ)/i,
+	];
+	return patterns.some(pattern => pattern.test(text));
+}
+
 function normalizeDirectiveToken(raw: string): string {
 	return String(raw || "")
 		.trim()
@@ -2284,7 +2295,9 @@ export default function AiAssistantChat({
 				controller = new AbortController();
 				sseAbortRef.current = controller;
 				const flowType = contextType === "menu_json" ? "menu_manager" : "code_editor";
-				const taskType = contextType === "menu_json" ? "menu_design" : "code_assistant";
+				const taskType = contextType === "menu_json"
+					? (hasMenuPatchOnlyIntent(cleanedMessage || normalizedText) ? "menu_patch" : "menu_design")
+					: "code_assistant";
 				const response = await request.post("ai-code-stream", {
 					json: {
 						appId,
