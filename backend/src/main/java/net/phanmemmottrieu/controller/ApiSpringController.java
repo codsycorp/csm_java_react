@@ -201,6 +201,15 @@ public class ApiSpringController {
             });
     private static final long INTENT_CACHE_TTL_MS = 10_000L; // 10 seconds
     private static final int INTENT_CONFIDENCE_THRESHOLD = 60;
+    private final java.util.Map<String, Object[]> inputLanguageDetectCache =
+        java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<String, Object[]>(32, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, Object[]> e) {
+                    return size() > 64;
+                }
+            });
+    private static final long INPUT_LANGUAGE_CACHE_TTL_MS = 30_000L;
 
     private static record LocalPreAnalysisDecision(
         boolean attempted,
@@ -369,6 +378,12 @@ public class ApiSpringController {
 
     @Value("${ai.assistant.local-provider.require-structured-for-edit:true}")
     private boolean aiAssistantLocalProviderRequireStructuredForEdit;
+
+    @Value("${ai.assistant.response-mode.local-intent-enabled:true}")
+    private boolean aiAssistantResponseModeLocalIntentEnabled;
+
+    @Value("${ai.assistant.response-mode.local-intent-min-confidence:60}")
+    private int aiAssistantResponseModeLocalIntentMinConfidence;
 
     // OpenDevin MAX_OUTPUT_LENGTH pattern: cap each chaining step's output before feeding into the next prompt
     // Prevents one large chaining step from amplifying token cost in subsequent AI calls
@@ -851,7 +866,7 @@ public class ApiSpringController {
                     ? (rawTaskType.isBlank() ? "menu_design" : rawTaskType)
                     : (rawTaskType.isBlank() ? "code_assistant" : rawTaskType);
                 String rawResponseMode = str(body.get("responseMode"), "");
-                String responseMode = normalizeAiAssistantResponseMode(rawResponseMode, message, contextType, rawTaskType);
+                String responseMode = normalizeAiAssistantResponseMode(rawResponseMode, message, contextType, effectiveTaskType);
                 String modelOverride = str(body.get("model"), "");
                 String pName = str(body.get("pName"), "");
                 Integer pType = parseNullableInteger(body.get("pType"));
@@ -1405,6 +1420,47 @@ public class ApiSpringController {
                         String overrideNorm = String.valueOf(modelOverride == null ? "" : modelOverride).trim().toLowerCase();
                         boolean callerForcedLocal = overrideNorm.contains("local") || overrideNorm.contains("llama");
                         if (callerForcedLocal) {
+                            String degradedLocalText = codeStreamPreAnalysis == null
+                                ? ""
+                                : String.valueOf(codeStreamPreAnalysis.cloudContext() == null ? "" : codeStreamPreAnalysis.cloudContext()).trim();
+                            boolean degradedAccepted = !degradedLocalText.isBlank()
+                                && shouldAcceptLocalCodeStreamOutput(degradedLocalText, responseMode, contextType);
+                            if (degradedAccepted) {
+                                logger.warn("LOCAL_OVERRIDE local provider no final output, degraded to local pre-analysis context requestId={} contextType={} chars={}",
+                                    requestId, contextType, degradedLocalText.length());
+                                sendEvent(emitter, jsonOf(
+                                    "stage", "model_switch",
+                                    "status", "local_override_degraded_context",
+                                    "requestId", requestId,
+                                    "model", "local_provider",
+                                    "modelDecisionStep", "final",
+                                    "modelDecisionReason", "local_override_use_preanalysis_context",
+                                    "decision_step", "final",
+                                    "reason_code", "local_override_use_preanalysis_context",
+                                    "message", "Local AI khong tao duoc output cuoi; dung ket qua pre-analysis de tra loi.",
+                                    "messageKey", "copilot.progress.message.local_override_use_preanalysis_context"));
+                                sendEvent(emitter, jsonOf(
+                                    "stage", "streaming_started",
+                                    "requestId", requestId,
+                                    "model", "local_provider",
+                                    "ttftMs", 0,
+                                    "estimatedTotalChars", degradedLocalText.length(),
+                                    "percent", 12));
+                                int degradedChunks = emitSyntheticLocalStreamChunks(
+                                    emitter,
+                                    requestId,
+                                    degradedLocalText,
+                                    1,
+                                    false,
+                                    true);
+                                codeStreamMeta.put("streamChunkCount", degradedChunks);
+                                codeStreamMeta.put("streamedChars", degradedLocalText.length());
+                                rawResponse = degradedLocalText;
+                                effectiveModel = "local_provider";
+                                localProviderPrimaryUsed = true;
+                            }
+                        }
+                        if (callerForcedLocal && rawResponse == null) {
                             logger.warn("LOCAL_OVERRIDE local provider returned no usable output, blocking cloud fallback per caller request requestId={} contextType={}",
                                 requestId, contextType);
                             sendEvent(emitter, jsonOf(
@@ -1537,28 +1593,31 @@ public class ApiSpringController {
                 if (!largeStructuredEditMode
                         && "edit".equalsIgnoreCase(responseMode)
                         && !isMenuJsonContext(contextType)) {
-                    if (aiCodeStreamEditStrictSearchReplaceEnabled && !hasSearchReplaceBlocks(completionPayload)) {
-                        sendErrorEvent(emitter,
-                                "Strict mode: AI phải trả về SEARCH/REPLACE blocks. Không chấp nhận JSON textEdits/full code.");
-                        return;
-                    }
-                    completionPayload = salvageSearchReplaceAsTextEdits(completionPayload, effectiveCodeContext);
-                    if (!aiCodeStreamEditStrictSearchReplaceEnabled) {
-                        completionPayload = salvagePropertyPatchAsTextEdits(completionPayload, effectiveCodeContext);
-                    }
-                    completionPayload = canonicalizeLineTextEditsPayload(completionPayload, effectiveCodeContext);
+                    boolean localAnsweredDirectly = localProviderPrimaryUsed && codeStreamPreAnalysis.handledLocally();
+                    if (!localAnsweredDirectly) {
+                        if (aiCodeStreamEditStrictSearchReplaceEnabled && !hasSearchReplaceBlocks(completionPayload)) {
+                            sendErrorEvent(emitter,
+                                    "Strict mode: AI phải trả về SEARCH/REPLACE blocks. Không chấp nhận JSON textEdits/full code.");
+                            return;
+                        }
+                        completionPayload = salvageSearchReplaceAsTextEdits(completionPayload, effectiveCodeContext);
+                        if (!aiCodeStreamEditStrictSearchReplaceEnabled) {
+                            completionPayload = salvagePropertyPatchAsTextEdits(completionPayload, effectiveCodeContext);
+                        }
+                        completionPayload = canonicalizeLineTextEditsPayload(completionPayload, effectiveCodeContext);
 
-                    List<Map<String, Object>> canonicalTextEdits = parseNormalizedLineTextEdits(completionPayload);
-                    if (canonicalTextEdits.isEmpty()) {
-                        sendErrorEvent(emitter,
-                                "Chuẩn hóa thất bại: AI output không thể canonicalize về line-level textEdits để apply an toàn");
-                        return;
-                    }
+                        List<Map<String, Object>> canonicalTextEdits = parseNormalizedLineTextEdits(completionPayload);
+                        if (canonicalTextEdits.isEmpty()) {
+                            sendErrorEvent(emitter,
+                                    "Chuẩn hóa thất bại: AI output không thể canonicalize về line-level textEdits để apply an toàn");
+                            return;
+                        }
 
-                    completion.put("textEdits", canonicalTextEdits);
-                    List<Map<String, Object>> lineRanges = convertTextEditsToLineRanges(canonicalTextEdits);
-                    completion.put("lineRanges", lineRanges);
-                    completion.put("changedRanges", lineRanges);
+                        completion.put("textEdits", canonicalTextEdits);
+                        List<Map<String, Object>> lineRanges = convertTextEditsToLineRanges(canonicalTextEdits);
+                        completion.put("lineRanges", lineRanges);
+                        completion.put("changedRanges", lineRanges);
+                    }
                 }
                 if ("edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType)) {
                     completionPayload = mergeMenuCompletionWithBase(effectiveCodeContext, completionPayload, contextType);
@@ -4713,9 +4772,6 @@ public class ApiSpringController {
         if (normalizedMessage.isBlank()) {
             return false;
         }
-        if (!isMenuJsonContext(contextType) && referencesCurrentCodeArtifact(normalizedMessage)) {
-            return false;
-        }
         if (normalizedMessage.length() > Math.max(300, aiLocalFastQuestionMaxQuestionChars)) {
             return false;
         }
@@ -4733,28 +4789,6 @@ public class ApiSpringController {
         // Keep fast path for non-edit semantics only.
         return !"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
             || !isMenuJsonContext(contextType);
-    }
-
-    private boolean referencesCurrentCodeArtifact(String requestText) {
-        String text = String.valueOf(requestText == null ? "" : requestText).trim();
-        if (text.isBlank()) {
-            return false;
-        }
-        String lower = text.toLowerCase(Locale.ROOT);
-
-        if (text.contains("`")
-            || Pattern.compile("\\b[a-zA-Z_][a-zA-Z0-9_]*\\s*\\(").matcher(text).find()
-            || Pattern.compile("\\b[a-zA-Z0-9_/.-]+\\.(java|js|ts|tsx|jsx|vue|py|go|cs|json|xml)\\b").matcher(lower).find()) {
-            return true;
-        }
-
-        boolean hasArtifactNoun = Pattern.compile("\\b(code|logic|function|ham|class|module|file|api|query|doan\\s+code|nghiep\\s+vu)\\b", Pattern.CASE_INSENSITIVE)
-            .matcher(lower)
-            .find();
-        boolean hasDemonstrative = Pattern.compile("\\b(this|current|nay|này|do|đó|tren|trên|hien\\s+tai|hiện\\s+tại)\\b", Pattern.CASE_INSENSITIVE)
-            .matcher(lower)
-            .find();
-        return hasArtifactNoun && hasDemonstrative;
     }
 
     private boolean tryHandleLocalFastQuestion(
@@ -4883,11 +4917,6 @@ public class ApiSpringController {
             safe = dewrapped;
         }
 
-        if (isIdentityQuestion(originalMessage) && !isLikelyJsonPayload(safe)) {
-            // Model answered naturally — use it directly.
-            return safe;
-        }
-
         if (!isLikelyJsonPayload(safe)) {
             return safe;
         }
@@ -4944,17 +4973,8 @@ public class ApiSpringController {
             return "vi";
         }
 
-        boolean hasAsciiLetter = false;
-        boolean hasVietnameseSpecial = false;
         for (int i = 0; i < source.length(); i++) {
             char ch = source.charAt(i);
-            if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
-                hasAsciiLetter = true;
-            }
-            if ("ăâđêôơưĂÂĐÊÔƠƯ".indexOf(ch) >= 0) {
-                hasVietnameseSpecial = true;
-            }
-
             Character.UnicodeBlock block = Character.UnicodeBlock.of(ch);
             if (block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
                     || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
@@ -4964,51 +4984,72 @@ public class ApiSpringController {
             }
         }
 
-        String normalized = Normalizer.normalize(source.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
-            .replaceAll("\\p{M}", "");
-        String tokenized = " " + normalized.replaceAll("[^a-z0-9]+", " ") + " ";
-
-        if (hasVietnameseSpecial
-                || tokenized.contains(" ban ")
-                || tokenized.contains(" toi ")
-                || tokenized.contains(" khong ")
-                || tokenized.contains(" duoc ")
-                || tokenized.contains(" tieng viet ")
-                || tokenized.contains(" giup toi ")
-                || tokenized.contains(" giup minh ")
-                || tokenized.contains(" nhu the nao ")
-                || tokenized.contains(" tai sao ")
-                || tokenized.contains(" lam sao ")
-                || tokenized.contains(" cho toi ")) {
-            return "vi";
+        String inferred = detectInputLanguageCodeWithLocalAI(source, false);
+        if (!inferred.isBlank()) {
+            return inferred;
         }
 
-        if (tokenized.contains(" what ")
-                || tokenized.contains(" how ")
-                || tokenized.contains(" why ")
-                || tokenized.contains(" can you ")
-                || tokenized.contains(" please ")
-                || tokenized.contains(" explain ")
-                || tokenized.contains(" in english ")) {
-            return "en";
-        }
-
-        if (hasAsciiLetter) {
-            // Với câu không dấu/khó phân biệt, ưu tiên tiếng Việt để tránh trả lời lẫn ngôn ngữ.
-            return "vi";
-        }
         return "vi";
     }
 
-    private boolean isIdentityQuestion(String message) {
-        String lower = String.valueOf(message == null ? "" : message).trim().toLowerCase(Locale.ROOT);
-        if (lower.isBlank()) {
-            return false;
+    private String detectInputLanguageCodeWithLocalAI(String text, boolean bypassCache) {
+        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()
+                || llamaCppNativeService.isCircuitOpen()) {
+            return "";
         }
-        return lower.matches(".*\\b(ban|bạn)\\s+(la|là)\\s+ai\\b.*")
-            || lower.contains("who are you")
-            || lower.contains("ban la ai")
-            || lower.contains("bạn là ai");
+        String safe = truncateMiddle(String.valueOf(text == null ? "" : text).trim(), 240);
+        if (safe.isBlank()) {
+            return "";
+        }
+
+        String cacheKey = safe.length() > 120 ? safe.substring(0, 120) : safe;
+        if (!bypassCache) {
+            Object[] cached = inputLanguageDetectCache.get(cacheKey);
+            if (cached != null) {
+                long cachedAt = (long) cached[1];
+                if (System.currentTimeMillis() - cachedAt < INPUT_LANGUAGE_CACHE_TTL_MS) {
+                    return String.valueOf(cached[0]);
+                }
+            }
+        }
+
+        String prompt = "<|im_start|>system\n"
+            + "Detect the user's primary natural language.\n"
+            + "Return exactly one token and nothing else: vi or en or zh.\n"
+            + "Do not return JSON. Do not explain.\n"
+            + "<|im_end|>\n"
+            + "<|im_start|>user\nTEXT: " + safe + "<|im_end|>\n"
+            + "<|im_start|>assistant\n";
+
+        try {
+            String raw = llamaCppNativeService.generateContentFast(prompt, 8);
+            String normalized = normalizeDetectedInputLanguageCode(extractAiResultText(raw));
+            if (!normalized.isBlank()) {
+                if (!bypassCache) {
+                    inputLanguageDetectCache.put(cacheKey, new Object[]{ normalized, System.currentTimeMillis() });
+                }
+                return normalized;
+            }
+        } catch (Exception ex) {
+            logger.debug("[AI_INPUT_LANGUAGE] local detection failed: {}", ex.getMessage());
+        }
+
+        if (!bypassCache) {
+            return detectInputLanguageCodeWithLocalAI(safe, true);
+        }
+        return "";
+    }
+
+    private String normalizeDetectedInputLanguageCode(String raw) {
+        String text = String.valueOf(raw == null ? "" : raw).trim().toLowerCase(Locale.ROOT);
+        if (text.isBlank()) {
+            return "";
+        }
+        Matcher matcher = Pattern.compile("\\b(vi|en|zh)\\b").matcher(text);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return "";
     }
 
     private String sanitizeBrokenConversationalWrapper(String value) {
@@ -6923,12 +6964,14 @@ public class ApiSpringController {
             + "- nextStep=load_code_context when assistant must inspect code files before answering\n"
             + "- contextKind=none for direct question answering\n"
             + "Important routing policy:\n"
+            + "- If user asks to analyze/review/explain existing code/business flow/architecture without asking for concrete changes, classify as QUESTION with nextStep=load_code_context and contextKind=code.\n"
             + "- If user asks about AI capability, context window, memory, summarization, handling millions of characters, preserving full content, session continuity, or how the assistant should work, classify as QUESTION even if current UI is menu/code editor.\n"
             + "- Only classify as EDIT_MENU or EDIT_CODE when user clearly wants a concrete change to menu/code artifacts.\n"
             + "Examples:\n"
             + "1) 'Neu toi gui vai trieu ky tu thi ban xu ly va ghi nho the nao?' => {\"type\":\"QUESTION\",\"action\":\"ask\",\"nextStep\":\"answer_direct\",\"contextKind\":\"none\",\"confidence\":95}\n"
             + "2) 'Them menu quan ly nhan vien vao he thong' => {\"type\":\"EDIT_MENU\",\"action\":\"add\",\"nextStep\":\"load_menu_context\",\"contextKind\":\"menu\",\"confidence\":90}\n"
             + "3) 'Sua function login va them validate' => {\"type\":\"EDIT_CODE\",\"action\":\"modify\",\"nextStep\":\"load_code_context\",\"contextKind\":\"code\",\"confidence\":90}\n"
+            + "4) 'Hay phan tich toan bo code nay va giai thich nghiep vu dang xu ly' => {\"type\":\"QUESTION\",\"action\":\"ask\",\"nextStep\":\"load_code_context\",\"contextKind\":\"code\",\"confidence\":92}\n"
             + "<|im_end|>\n"
             + "<|im_start|>user\nREQUEST: " + safe + "<|im_end|>\n"
             + "<|im_start|>assistant\n";
@@ -6939,8 +6982,11 @@ public class ApiSpringController {
             String text = extractAiResultText(raw);
             if (text == null || text.isBlank()) return LocalIntentClassification.unknown();
 
-            // Try parse JSON directly or extract candidate
-            String candidate = isLikelyJsonPayload(text) ? text : extractJsonObjectCandidate(text);
+            // Always normalize JSON candidate first to handle fenced payloads like ```json {...}```.
+            String candidate = extractJsonObjectCandidate(text);
+            if (candidate.isBlank() && isLikelyJsonPayload(text)) {
+                candidate = text;
+            }
             if (candidate.isBlank()) return LocalIntentClassification.unknown();
 
             @SuppressWarnings("unchecked")
@@ -7001,27 +7047,6 @@ public class ApiSpringController {
         boolean menuContext = isMenuJsonContext(contextType);
         boolean lowConfidence = base.confidence() < INTENT_CONFIDENCE_THRESHOLD;
 
-        if (!editMode && !menuContext && "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
-            String request = String.valueOf(requestText == null ? "" : requestText).trim();
-            if (referencesCurrentCodeArtifact(request)) {
-                return new LocalIntentClassification(
-                    "EDIT_CODE",
-                    "inspect",
-                    Math.max(base.confidence(), 65),
-                    "load_code_context",
-                    "code",
-                    base.raw());
-            }
-            // Analyze mode without explicit code anchor → treat as direct question for quick-answer UX.
-            return new LocalIntentClassification(
-                "QUESTION",
-                "ask",
-                Math.max(base.confidence(), 60),
-                "answer_direct",
-                "none",
-                base.raw());
-        }
-
         if (base.isEditTask()) {
             return base;
         }
@@ -7069,18 +7094,30 @@ public class ApiSpringController {
             }
         }
 
+        // In edit mode, never stay in GENERAL/QUESTION bucket; always route through context loading.
+        if (editMode) {
+            if (!lowConfidence) {
+                if (normalizedBaseRoute.needsMenuContext() || normalizedBaseRoute.needsCodeContext()) {
+                    return normalizedBaseRoute;
+                }
+                if (normalizedBaseRoute.answerDirectly()) {
+                    logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} confidence={} nextStep={} -> forced={} (edit_mode_requires_context)",
+                        "edit_mode_force_context",
+                        base.confidence(),
+                        base.nextStep(),
+                        menuContext ? "load_menu_context" : "load_code_context");
+                }
+            }
+            return menuContext
+                ? new LocalIntentClassification("EDIT_MENU", "inspect", Math.max(base.confidence(), 55), "load_menu_context", "menu", base.raw())
+                : new LocalIntentClassification("EDIT_CODE", "inspect", Math.max(base.confidence(), 55), "load_code_context", "code", base.raw());
+        }
+
         // Prefer the model's explicit next-step routing when it is confident enough.
         if (!lowConfidence) {
             if (!normalizedBaseRoute.equals(LocalIntentClassification.unknown())) {
                 return normalizedBaseRoute;
             }
-        }
-
-        // In edit mode, never stay in GENERAL/QUESTION bucket; force into an edit path.
-        if (editMode) {
-            return menuContext
-                ? new LocalIntentClassification("EDIT_MENU", "modify", Math.max(base.confidence(), 55), "load_menu_context", "menu", base.raw())
-                : new LocalIntentClassification("EDIT_CODE", "modify", Math.max(base.confidence(), 55), "load_code_context", "code", base.raw());
         }
 
         // Non-edit turns outside code assistant keep direct-answer behavior.
@@ -7101,6 +7138,11 @@ public class ApiSpringController {
         LocalIntentClassification base = input == null ? LocalIntentClassification.unknown() : input;
         if (base.answerDirectly()) {
             return new LocalIntentClassification("QUESTION", base.action(), base.confidence(), "answer_direct", "none", base.raw());
+        }
+        if ((base.isQuestion() || base.isGeneral()) && (base.needsMenuContext() || base.needsCodeContext())) {
+            return base.needsMenuContext()
+                ? new LocalIntentClassification("QUESTION", "ask", base.confidence(), "load_menu_context", "menu", base.raw())
+                : new LocalIntentClassification("QUESTION", "ask", base.confidence(), "load_code_context", "code", base.raw());
         }
         if (base.needsMenuContext()) {
             return new LocalIntentClassification("EDIT_MENU", base.action(), base.confidence(), "load_menu_context", "menu", base.raw());
@@ -7293,6 +7335,11 @@ public class ApiSpringController {
         LocalIntentClassification intentClass = preclassifiedIntent == null
             ? classifyIntentWithLocalAI(normalized)
             : preclassifiedIntent;
+        if (intentClass.answerDirectly() || intentClass.isQuestion() || intentClass.isGeneral()) {
+            logger.info("Requirement hard-guard skipped: raw local intent classified as {} action={} confidence={}, contextType={} responseMode={}",
+                intentClass.type(), intentClass.action(), intentClass.confidence(), contextType, responseMode);
+            return new RequirementGuardDecision(false, List.of(), List.of());
+        }
         LocalIntentClassification effectiveIntent = resolveIntentForNextStep(
             intentClass,
             normalized,
@@ -7591,17 +7638,12 @@ public class ApiSpringController {
             Integer pType = parseNullableInteger(params.get("pType"));
             Map<String, Object> editorMetadata = normalizeEditorMetadata(params.get("editorMetadata"));
             String rawResponseMode = String.valueOf(params.getOrDefault("responseMode", "")).trim();
-            String detectedModeFromMessage = inferAiAssistantResponseModeFromText(message);
             String normalizedFlowType = normalizeAiAssistantFlowType(flowType, contextType, taskType);
             String effectiveContextType = "menu_manager".equals(normalizedFlowType) ? "menu_json" : "code";
             String effectiveTaskType = "menu_manager".equals(normalizedFlowType)
                 ? (taskType == null || taskType.isBlank() ? "menu_design" : taskType)
                 : "code_assistant";
-            String responseMode = (isMenuAiAssistantFlow(effectiveContextType, effectiveTaskType)
-                && rawResponseMode.isEmpty()
-                && !"analyze".equalsIgnoreCase(detectedModeFromMessage))
-                ? "edit"
-                : normalizeAiAssistantResponseMode(params.get("responseMode"), message);
+            String responseMode = normalizeAiAssistantResponseMode(rawResponseMode, message, effectiveContextType, effectiveTaskType);
             message = stripAiAssistantModeDirective(message);
             List<Map<String, Object>> attachments = normalizeAiAssistantAttachments(params.get("attachments"));
             if (attachments == null) {
@@ -9541,7 +9583,7 @@ public class ApiSpringController {
         debugMeta.put("appId", String.valueOf(appId == null ? "" : appId).trim());
         debugMeta.put("contextType", String.valueOf(contextType == null ? "" : contextType).trim());
         debugMeta.put("taskType", String.valueOf(taskType == null ? "" : taskType).trim());
-        debugMeta.put("responseMode", normalizeAiAssistantResponseMode(responseMode, message));
+        debugMeta.put("responseMode", normalizeAiAssistantResponseMode(responseMode, message, contextType, taskType));
         debugMeta.put("language", String.valueOf(language == null ? "" : language).trim());
         debugMeta.put("pName", String.valueOf(pName == null ? "" : pName).trim());
         debugMeta.put("pType", pType);
@@ -9956,7 +9998,8 @@ public class ApiSpringController {
             boolean includeSystemHeader) {
         StringBuilder sb = new StringBuilder();
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
-        String normalizedMode = normalizeAiAssistantResponseMode(responseMode, message);
+        String inferredTaskType = "menu_json".equals(normalizedContext) ? "menu_design" : "code_assistant";
+        String normalizedMode = normalizeAiAssistantResponseMode(responseMode, message, contextType, inferredTaskType);
         String effectiveCurrentCode = String.valueOf(currentCode == null ? "" : currentCode);
         String effectiveContinuityMemory = optimizeAiAssistantContextSegment(continuityMemory, normalizedContext, normalizedMode, true);
         String effectiveGlobalContext = optimizeAiAssistantContextSegment(globalContext, normalizedContext, normalizedMode, false);
@@ -11368,24 +11411,32 @@ public class ApiSpringController {
 
     private String normalizeAiAssistantResponseMode(Object rawMode, String message, String contextType, String taskType) {
         String mode = String.valueOf(rawMode == null ? "" : rawMode).trim().toLowerCase();
+        String normalizedContextType = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        String normalizedTaskType = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
+        String detected = inferAiAssistantResponseModeFromText(message);
+
         if ("edit".equals(mode)) {
+            // Code assistant may still send "edit" by default even for pure analysis asks.
+            // Prefer analyze mode when user intent is clearly analysis.
+            if (!"menu_json".equals(normalizedContextType)
+                    && !normalizedTaskType.contains("menu")
+                    && "analyze".equals(detected)) {
+                return "analyze";
+            }
             return "edit";
         }
         if ("analyze".equals(mode)) {
             return "analyze";
         }
-        String normalizedContextType = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
-        String normalizedTaskType = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
+
+        if ("edit".equals(detected) || "analyze".equals(detected)) {
+            return detected;
+        }
 
         // Menu design/update should default to edit mode when caller doesn't provide explicit responseMode.
         if ("menu_json".equals(normalizedContextType)
                 || normalizedTaskType.contains("menu")) {
             return "edit";
-        }
-
-        String detected = inferAiAssistantResponseModeFromText(message);
-        if ("edit".equals(detected) || "analyze".equals(detected)) {
-            return detected;
         }
 
         // Code assistant asks are usually generation/refactor intents if explicit mode is absent.
@@ -11407,44 +11458,39 @@ public class ApiSpringController {
             return "";
         }
 
-        String normalized = Normalizer.normalize(raw.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
-            .replaceAll("\\p{M}", "");
+        if (aiAssistantResponseModeLocalIntentEnabled) {
+            try {
+                int minConfidence = Math.max(40, Math.min(95, aiAssistantResponseModeLocalIntentMinConfidence));
+                LocalIntentClassification firstPass = classifyIntentWithLocalAI(raw);
+                LocalIntentClassification chosen = firstPass;
 
-        boolean hasAnalyzeIntent = normalized.contains("phan tich")
-            || normalized.contains("giai thich")
-            || normalized.contains("explain")
-            || normalized.contains("analyze")
-            || normalized.contains("analysis")
-            || normalized.contains("logic")
-            || normalized.contains("dang tinh toan gi")
-            || normalized.contains("luong thu 2")
-            || normalized.contains("doc hieu code")
-            || normalized.contains("review code")
-            || normalized.contains("hien tai backend");
+                if (firstPass.confidence() < minConfidence) {
+                    LocalIntentClassification secondPass = classifyIntentWithLocalAI(raw, true);
+                    if (secondPass.confidence() > firstPass.confidence()) {
+                        chosen = secondPass;
+                    }
+                }
 
-        boolean hasEditIntent = normalized.contains("sua")
-            || normalized.contains("chinh")
-            || normalized.contains("cap nhat")
-            || normalized.contains("refactor")
-            || normalized.contains("patch")
-            || normalized.contains("thay doi")
-            || normalized.contains("them vao")
-            || normalized.contains("xoa")
-            || normalized.contains("fix")
-            || normalized.contains("viet")
-            || normalized.contains("tao")
-            || normalized.contains("generate")
-            || normalized.contains("implement")
-            || normalized.contains("thiet ke")
-            || normalized.contains("build")
-            || normalized.contains("coding");
-
-        if (hasAnalyzeIntent && !hasEditIntent) {
-            return "analyze";
+                if (chosen.confidence() >= minConfidence) {
+                    if (chosen.isQuestion() || chosen.isGeneral() || chosen.answerDirectly()) {
+                        logger.info("[AI_RESPONSE_MODE] source=local_intent mode=analyze type={} action={} nextStep={} confidence={}",
+                            chosen.type(), chosen.action(), chosen.nextStep(), chosen.confidence());
+                        return "analyze";
+                    }
+                    if (chosen.isEditTask() || chosen.needsCodeContext() || chosen.needsMenuContext()) {
+                        logger.info("[AI_RESPONSE_MODE] source=local_intent mode=edit type={} action={} nextStep={} confidence={}",
+                            chosen.type(), chosen.action(), chosen.nextStep(), chosen.confidence());
+                        return "edit";
+                    }
+                }
+            } catch (Exception ex) {
+                logger.debug("[AI_RESPONSE_MODE] local intent inference failed: {}", ex.getMessage());
+            }
         }
-        if (hasEditIntent && !hasAnalyzeIntent) {
-            return "edit";
-        }
+
+        // No keyword-based fallback here: keep mode inference dynamic via local intent classifier.
+        // Returning empty lets normalizeAiAssistantResponseMode decide by explicit responseMode
+        // or by context/task defaults.
         return "";
     }
 
@@ -17536,7 +17582,7 @@ public class ApiSpringController {
         String language = String.valueOf(request.getOrDefault("language", "javascript")).trim();
         String contextType = String.valueOf(request.getOrDefault("contextType", "code")).trim();
         String taskType = String.valueOf(request.getOrDefault("taskType", "code_assistant")).trim();
-        String responseMode = normalizeAiAssistantResponseMode(request.get("responseMode"), message);
+        String responseMode = normalizeAiAssistantResponseMode(request.get("responseMode"), message, contextType, taskType);
         List<Map<String, Object>> attachments = normalizeAiAssistantAttachments(request.get("attachments"));
 
         AiLocalOrchestrationService.OrchestrationResult result = aiLocalOrchestrationService.orchestrate(

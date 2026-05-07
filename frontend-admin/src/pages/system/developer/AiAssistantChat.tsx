@@ -8,12 +8,15 @@ import {
 	ClearOutlined,
 	CloseOutlined,
 	CopyOutlined,
+	DeleteOutlined,
+	DislikeOutlined,
 	FileImageOutlined,
+	LikeOutlined,
 	PaperClipOutlined,
 	SendOutlined,
 	ThunderboltOutlined,
 } from "@ant-design/icons";
-import { Button, Card, Empty, Input, message, Space, Spin, Tag, Tooltip } from "antd";
+import { Button, Card, Empty, Input, message, Popconfirm, Space, Spin, Tag, Tooltip } from "antd";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import styles from "./AiAssistantChat.module.css";
@@ -41,6 +44,8 @@ export interface AiAssistantUserMessagePayload {
 
 interface ChatMessage {
 	id: string
+	serverTurnId?: string
+	feedbackRating?: number
 	role: "user" | "assistant" | "system"
 	messageType?: "response" | "debug" | "compacted_context"
 	responseMode?: ResponseMode
@@ -1146,6 +1151,154 @@ export default function AiAssistantChat({
 		].filter(Boolean).join("\n\n").trim();
 	}, [uiText]);
 
+	const loadRemoteSessionHistory = useCallback(async (showErrorToast = false) => {
+		if (!appId) {
+			return;
+		}
+		try {
+			const response = await request.get("ai-assistant-session-history", {
+				searchParams: {
+					appId,
+					contextType,
+					language,
+					pName: targetPName || "",
+					pType: typeof targetPType === "number" ? targetPType : "",
+					limit: 100,
+				},
+				throwHttpErrors: false,
+			});
+			if (!response.ok) {
+				if (showErrorToast) {
+					message.warning(uiText("Không tải được lịch sử chat từ server", "Could not load chat history from server", "无法从服务器加载聊天历史"));
+				}
+				return;
+			}
+			const data = await response.json() as any;
+			const turns = Array.isArray(data?.turns) ? data.turns : [];
+			const converted: ChatMessage[] = [];
+			for (let i = 0; i < turns.length; i += 1) {
+				const turn = turns[i] || {};
+				const turnId = String(turn.turn_id || "").trim();
+				const parsedTime = Date.parse(String(turn.timestamp || ""));
+				const baseTs = Number.isFinite(parsedTime) ? parsedTime : Date.now() - Math.max(0, turns.length - i) * 1000;
+				const userText = String(turn.user_message || "").trim();
+				const assistantText = String(turn.assistant_message || "").trim();
+				if (userText) {
+					converted.push({
+						id: `${turnId || `turn_${i}`}_u`,
+						serverTurnId: turnId || undefined,
+						role: "user",
+						content: userText,
+						timestamp: baseTs,
+					});
+				}
+				if (assistantText) {
+					const rawRating = Number(turn.feedback_rating);
+					const feedbackRating = Number.isFinite(rawRating)
+						? Math.max(-1, Math.min(1, rawRating))
+						: 0;
+					converted.push({
+						id: `${turnId || `turn_${i}`}_a`,
+						serverTurnId: turnId || undefined,
+						feedbackRating,
+						role: "assistant",
+						content: assistantText,
+						timestamp: baseTs + 1,
+					});
+				}
+			}
+
+			if (converted.length > 0 || turns.length === 0) {
+				setMessages(converted);
+				saveChatHistory(converted);
+			}
+		}
+		catch {
+			if (showErrorToast) {
+				message.warning(uiText("Không tải được lịch sử chat từ server", "Could not load chat history from server", "无法从服务器加载聊天历史"));
+			}
+		}
+	}, [appId, contextType, language, targetPName, targetPType, uiText]);
+
+	const handleRateMessage = useCallback(async (msg: ChatMessage, rating: -1 | 0 | 1) => {
+		if (!msg.serverTurnId) {
+			return;
+		}
+		const nextRating = msg.feedbackRating === rating ? 0 : rating;
+		try {
+			const response = await request.post("ai-assistant-session-feedback", {
+				json: {
+					appId,
+					contextType,
+					language,
+					pName: targetPName || "",
+					pType: typeof targetPType === "number" ? targetPType : undefined,
+					turnId: msg.serverTurnId,
+					rating: nextRating,
+				},
+				throwHttpErrors: false,
+			});
+			if (!response.ok) {
+				message.error(uiText("Không lưu được đánh giá", "Failed to save feedback", "保存反馈失败"));
+				return;
+			}
+			setMessages((prev) => {
+				const next = prev.map((item) => {
+					if (item.serverTurnId !== msg.serverTurnId || item.role !== "assistant") {
+						return item;
+					}
+					return {
+						...item,
+						feedbackRating: nextRating,
+					};
+				});
+				saveChatHistory(next);
+				return next;
+			});
+		}
+		catch {
+			message.error(uiText("Không lưu được đánh giá", "Failed to save feedback", "保存反馈失败"));
+		}
+	}, [appId, contextType, language, targetPName, targetPType, uiText]);
+
+	const handleDeleteMessage = useCallback(async (msg: ChatMessage) => {
+		if (!msg.serverTurnId) {
+			setMessages((prev) => {
+				const next = prev.filter(item => item.id !== msg.id);
+				saveChatHistory(next);
+				return next;
+			});
+			return;
+		}
+
+		try {
+			const response = await request.post("ai-assistant-session-delete", {
+				json: {
+					appId,
+					contextType,
+					language,
+					pName: targetPName || "",
+					pType: typeof targetPType === "number" ? targetPType : undefined,
+					turnId: msg.serverTurnId,
+					deleteAll: false,
+				},
+				throwHttpErrors: false,
+			});
+			if (!response.ok) {
+				message.error(uiText("Không xóa được tin nhắn", "Failed to delete message", "删除消息失败"));
+				return;
+			}
+			setMessages((prev) => {
+				const next = prev.filter(item => item.serverTurnId !== msg.serverTurnId);
+				saveChatHistory(next);
+				return next;
+			});
+		}
+		catch {
+			message.error(uiText("Không xóa được tin nhắn", "Failed to delete message", "删除消息失败"));
+		}
+	}, [appId, contextType, language, targetPName, targetPType, uiText]);
+
 	const resolveSystemNextStep = useCallback((internalCode?: string, stage?: string, fallback?: string) => {
 		const code = String(internalCode || "").trim().toLowerCase();
 		const normalizedStage = String(stage || "").trim().toLowerCase();
@@ -1344,6 +1497,10 @@ export default function AiAssistantChat({
 		setPromptHistoryIndex(-1);
 		setPromptHistoryOriginal("");
 	}, [promptHistoryStorageKey]);
+
+	useEffect(() => {
+		void loadRemoteSessionHistory(false);
+	}, [loadRemoteSessionHistory]);
 
 	useEffect(() => {
 		if (completionState !== "done") {
@@ -3180,7 +3337,23 @@ export default function AiAssistantChat({
 		setInputValue(promptHistory[nextIndex] || "");
 	}, [handleSend, inputValue, promptHistory, promptHistoryIndex, promptHistoryOriginal]);
 
-	const handleClearHistory = () => {
+	const handleClearHistory = async () => {
+		try {
+			await request.post("ai-assistant-session-delete", {
+				json: {
+					appId,
+					contextType,
+					language,
+					pName: targetPName || "",
+					pType: typeof targetPType === "number" ? targetPType : undefined,
+					deleteAll: true,
+				},
+				throwHttpErrors: false,
+			});
+		}
+		catch {
+			// Ignore remote clear errors and still clear local UI state
+		}
 		setMessages([]);
 		setAiUsageSummary({ turn: null, sessionCostUsd: 0, sessionTokens: 0 });
 		setIsProgressDockCollapsed(false);
@@ -3220,12 +3393,23 @@ export default function AiAssistantChat({
 			extra={(
 				<Space size="small">
 					<Tooltip title={uiText("Xóa lịch sử", "Clear history", "清除历史")}>
-						<Button
-							type="text"
-							size="small"
-							icon={<ClearOutlined />}
-							onClick={handleClearHistory}
-						/>
+						<Popconfirm
+							title={uiText("Xóa toàn bộ lịch sử chat?", "Delete all chat history?", "删除全部聊天记录？")}
+							description={uiText(
+								"Thao tác này sẽ xóa dữ liệu phiên trên server theo phạm vi hiện tại.",
+								"This will remove session data on server for the current scope.",
+								"此操作将删除当前范围下服务器会话数据。",
+							)}
+							okText={uiText("Xóa", "Delete", "删除")}
+							cancelText={uiText("Hủy", "Cancel", "取消")}
+							onConfirm={() => void handleClearHistory()}
+						>
+							<Button
+								type="text"
+								size="small"
+								icon={<ClearOutlined />}
+							/>
+						</Popconfirm>
 					</Tooltip>
 				</Space>
 			)}
@@ -3421,7 +3605,42 @@ export default function AiAssistantChat({
 												)}
 											</div>
 											<div className={styles.timestamp}>
-												{new Date(msg.timestamp).toLocaleTimeString()}
+												<span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
+												<span className={styles.messageActionGroup}>
+													{msg.role === "assistant" && msg.serverTurnId && (
+														<>
+															<span className={styles.feedbackMessageAction}>
+																<Button
+																	type="text"
+																	size="small"
+																	icon={<LikeOutlined />}
+																	className={msg.feedbackRating === 1 ? styles.feedbackActivePositive : undefined}
+																	onClick={() => void handleRateMessage(msg, 1)}
+																	title={uiText("Đánh giá tốt", "Mark as good", "标记为有帮助")}
+																/>
+															</span>
+															<span className={styles.feedbackMessageAction}>
+																<Button
+																	type="text"
+																	size="small"
+																	icon={<DislikeOutlined />}
+																	className={msg.feedbackRating === -1 ? styles.feedbackActiveNegative : undefined}
+																	onClick={() => void handleRateMessage(msg, -1)}
+																	title={uiText("Đánh giá chưa tốt", "Mark as not helpful", "标记为无帮助")}
+																/>
+															</span>
+														</>
+													)}
+													<span className={styles.deleteMessageAction}>
+														<Button
+															type="text"
+															size="small"
+															icon={<DeleteOutlined />}
+															onClick={() => void handleDeleteMessage(msg)}
+															title={uiText("Xóa tin nhắn", "Delete message", "删除消息")}
+														/>
+													</span>
+												</span>
 											</div>
 										</div>
 									</div>
@@ -3982,7 +4201,6 @@ export default function AiAssistantChat({
 								`向 AI 助手提问（${sendHintKey}+Enter 发送）。命令：/分析 或 /编辑`,
 							)}
 							rows={3}
-							disabled={isLoading}
 							maxLength={MAX_CHAT_INPUT_CHARS}
 						/>
 					</Space.Compact>
@@ -3992,7 +4210,6 @@ export default function AiAssistantChat({
 								type="text"
 								icon={<PaperClipOutlined />}
 								onClick={() => fileInputRef.current?.click()}
-								disabled={isLoading}
 							/>
 						</Tooltip>
 						<Tooltip title={uiText("Đính kèm hình ảnh", "Attach image", "附加图像")}>
@@ -4000,7 +4217,6 @@ export default function AiAssistantChat({
 								type="text"
 								icon={<FileImageOutlined />}
 								onClick={() => imageInputRef.current?.click()}
-								disabled={isLoading}
 							/>
 						</Tooltip>
 						<Tooltip title={uiText(

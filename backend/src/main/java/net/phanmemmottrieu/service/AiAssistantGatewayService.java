@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Collections;
+import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
@@ -78,6 +79,18 @@ public class AiAssistantGatewayService {
   // Max chars to keep for AI Assistant conversation continuity memory
   private static final int AI_ASSISTANT_MEMORY_MAX_CHARS = 180000;
   private static final int AI_ASSISTANT_PENDING_MAX_ITEMS = 12;
+
+  public static class AiAssistantTurn {
+    public String turnId;
+    public String timestamp;
+    public String contextType;
+    public String responseMode;
+    public int attachmentCount;
+    public int feedbackRating;
+    public String feedbackUpdatedAt;
+    public String userMessage;
+    public String assistantMessage;
+  }
 
   // ───────────────────────────────────────────────────────────────────────────
   // Per-app AI session context file  (mirrors AI Assistant's /memories/session/)
@@ -207,9 +220,11 @@ public class AiAssistantGatewayService {
       String existing = loadAiAssistantConversationMemory(appId, scopeKey);
       String now = java.time.LocalDateTime.now()
           .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+      String turnId = UUID.randomUUID().toString();
 
       int attachmentCount = attachments == null ? 0 : attachments.size();
       String turn = "\n\n### Turn @ " + now + "\n"
+          + "turn_id=" + turnId + "\n"
           + "context_type=" + String.valueOf(contextType == null ? "" : contextType).trim() + "\n"
           + "response_mode=" + String.valueOf(responseMode == null ? "" : responseMode).trim() + "\n"
           + "attachment_count=" + attachmentCount + "\n\n"
@@ -236,6 +251,401 @@ public class AiAssistantGatewayService {
       updateAiAssistantPendingQuestions(appId, scopeKey, userMessage, assistantMessage);
     } catch (Exception e) {
       log.warn("Could not append AI Assistant continuity memory for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+    }
+  }
+
+  public List<AiAssistantTurn> listAiAssistantConversationTurns(String appId, String scopeKey, int limit) {
+    if (appId == null || appId.isBlank()) {
+      return Collections.emptyList();
+    }
+    int safeLimit = Math.max(1, Math.min(500, limit));
+    java.io.File f = getAiAssistantMemoryFile(appId, scopeKey);
+    if (!f.exists()) {
+      return Collections.emptyList();
+    }
+    try {
+      String text = java.nio.file.Files.readString(f.toPath(), StandardCharsets.UTF_8);
+      List<AiAssistantTurn> parsed = parseAiAssistantTurns(text);
+      if (parsed.size() <= safeLimit) {
+        return parsed;
+      }
+      return new ArrayList<>(parsed.subList(parsed.size() - safeLimit, parsed.size()));
+    } catch (Exception e) {
+      log.warn("Could not list AI Assistant turns for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+      return Collections.emptyList();
+    }
+  }
+
+  public boolean deleteAiAssistantConversationTurn(String appId, String scopeKey, String turnId) {
+    String safeTurnId = String.valueOf(turnId == null ? "" : turnId).trim();
+    if (appId == null || appId.isBlank() || safeTurnId.isBlank()) {
+      return false;
+    }
+    java.io.File f = getAiAssistantMemoryFile(appId, scopeKey);
+    if (!f.exists()) {
+      return false;
+    }
+    try {
+      String text = java.nio.file.Files.readString(f.toPath(), StandardCharsets.UTF_8);
+      List<AiAssistantTurn> parsed = parseAiAssistantTurns(text);
+      int before = parsed.size();
+      parsed.removeIf(turn -> safeTurnId.equals(String.valueOf(turn.turnId == null ? "" : turn.turnId).trim()));
+      if (parsed.size() == before) {
+        return false;
+      }
+      writeTurnsBackToMemoryFile(f, text, parsed, appId, scopeKey);
+      return true;
+    } catch (Exception e) {
+      log.warn("Could not delete AI Assistant turn for appId={} scope={} turnId={}: {}", appId, scopeKey, safeTurnId, e.getMessage());
+      return false;
+    }
+  }
+
+  public boolean rateAiAssistantConversationTurn(String appId, String scopeKey, String turnId, int rating) {
+    String safeTurnId = String.valueOf(turnId == null ? "" : turnId).trim();
+    if (appId == null || appId.isBlank() || safeTurnId.isBlank()) {
+      return false;
+    }
+    int normalizedRating = Math.max(-1, Math.min(1, rating));
+    java.io.File f = getAiAssistantMemoryFile(appId, scopeKey);
+    if (!f.exists()) {
+      return false;
+    }
+    try {
+      String text = java.nio.file.Files.readString(f.toPath(), StandardCharsets.UTF_8);
+      List<AiAssistantTurn> parsed = parseAiAssistantTurns(text);
+      boolean updated = false;
+      String now = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+      for (AiAssistantTurn turn : parsed) {
+        String currentTurnId = String.valueOf(turn.turnId == null ? "" : turn.turnId).trim();
+        if (!safeTurnId.equals(currentTurnId)) {
+          continue;
+        }
+        turn.feedbackRating = normalizedRating;
+        turn.feedbackUpdatedAt = now;
+        updated = true;
+        break;
+      }
+      if (!updated) {
+        return false;
+      }
+      writeTurnsBackToMemoryFile(f, text, parsed, appId, scopeKey);
+      return true;
+    } catch (Exception e) {
+      log.warn("Could not rate AI Assistant turn for appId={} scope={} turnId={}: {}", appId, scopeKey, safeTurnId, e.getMessage());
+      return false;
+    }
+  }
+
+  public String buildPositiveFeedbackContext(String appId, String scopeKey, String requestText, int maxItems, int maxChars) {
+    if (appId == null || appId.isBlank()) {
+      return "";
+    }
+    java.io.File f = getAiAssistantMemoryFile(appId, scopeKey);
+    if (!f.exists()) {
+      return "";
+    }
+
+    int safeMaxItems = Math.max(1, Math.min(12, maxItems));
+    int safeMaxChars = Math.max(400, Math.min(12000, maxChars));
+    try {
+      String text = java.nio.file.Files.readString(f.toPath(), StandardCharsets.UTF_8);
+      List<AiAssistantTurn> parsed = parseAiAssistantTurns(text);
+      if (parsed.isEmpty()) {
+        return "";
+      }
+
+      List<String> queryTokens = tokenizeForFeedbackSearch(requestText);
+      List<AiAssistantTurn> ranked = new ArrayList<>();
+      for (AiAssistantTurn turn : parsed) {
+        if (turn == null || turn.feedbackRating <= 0) {
+          continue;
+        }
+        ranked.add(turn);
+      }
+      if (ranked.isEmpty()) {
+        return "";
+      }
+
+      ranked.sort((a, b) -> {
+        int scoreA = scoreTurnForFeedbackSearch(a, queryTokens);
+        int scoreB = scoreTurnForFeedbackSearch(b, queryTokens);
+        if (scoreA != scoreB) {
+          return Integer.compare(scoreB, scoreA);
+        }
+        return String.valueOf(b.timestamp == null ? "" : b.timestamp)
+            .compareTo(String.valueOf(a.timestamp == null ? "" : a.timestamp));
+      });
+
+      StringBuilder sb = new StringBuilder();
+      sb.append("## POSITIVE_FEEDBACK_MEMORY\n");
+      sb.append("Use these previously liked answers as style/quality references when relevant to current request.\n\n");
+
+      int used = 0;
+      for (AiAssistantTurn turn : ranked) {
+        if (used >= safeMaxItems) {
+          break;
+        }
+        String user = trimToMax(String.valueOf(turn.userMessage == null ? "" : turn.userMessage).trim(), 600);
+        String assistant = trimToMax(String.valueOf(turn.assistantMessage == null ? "" : turn.assistantMessage).trim(), 1200);
+        if (assistant.isBlank()) {
+          continue;
+        }
+        String block = "### Liked turn\n"
+            + "time=" + String.valueOf(turn.timestamp == null ? "" : turn.timestamp).trim() + "\n"
+            + "user_request=" + user + "\n"
+            + "assistant_answer=\n" + assistant + "\n\n";
+        if (sb.length() + block.length() > safeMaxChars && used > 0) {
+          break;
+        }
+        sb.append(block);
+        used++;
+      }
+
+      if (used == 0) {
+        return "";
+      }
+      return sb.toString().trim();
+    } catch (Exception e) {
+      log.warn("Could not build positive feedback context for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+      return "";
+    }
+  }
+
+  private int scoreTurnForFeedbackSearch(AiAssistantTurn turn, List<String> queryTokens) {
+    String haystack = (
+        String.valueOf(turn == null || turn.userMessage == null ? "" : turn.userMessage)
+            + " "
+            + String.valueOf(turn == null || turn.assistantMessage == null ? "" : turn.assistantMessage)
+    ).toLowerCase(Locale.ROOT);
+    int score = 0;
+    for (String token : queryTokens) {
+      if (token.isBlank()) continue;
+      if (haystack.contains(token)) {
+        score += 2;
+      }
+    }
+    score += Math.max(0, turn == null ? 0 : turn.feedbackRating) * 3;
+    return score;
+  }
+
+  private List<String> tokenizeForFeedbackSearch(String text) {
+    String src = String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT);
+    if (src.isBlank()) {
+      return Collections.emptyList();
+    }
+    Matcher matcher = Pattern.compile("[\\p{L}\\p{N}_]{2,}").matcher(src);
+    LinkedHashSet<String> out = new LinkedHashSet<>();
+    while (matcher.find() && out.size() < 24) {
+      String token = String.valueOf(matcher.group() == null ? "" : matcher.group()).trim();
+      if (!token.isBlank()) {
+        out.add(token);
+      }
+    }
+    return new ArrayList<>(out);
+  }
+
+  public int clearAiAssistantConversationTurns(String appId, String scopeKey) {
+    if (appId == null || appId.isBlank()) {
+      return 0;
+    }
+    java.io.File f = getAiAssistantMemoryFile(appId, scopeKey);
+    int deleted = 0;
+    if (f.exists()) {
+      try {
+        String text = java.nio.file.Files.readString(f.toPath(), StandardCharsets.UTF_8);
+        deleted = parseAiAssistantTurns(text).size();
+      } catch (Exception ignore) {
+        deleted = 0;
+      }
+      try {
+        java.nio.file.Files.deleteIfExists(f.toPath());
+      } catch (Exception e) {
+        log.warn("Could not delete AI Assistant memory file for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+      }
+    }
+    try {
+      java.io.File pending = getAiAssistantPendingFile(appId, scopeKey);
+      if (pending.exists()) {
+        java.nio.file.Files.deleteIfExists(pending.toPath());
+      }
+    } catch (Exception e) {
+      log.debug("Could not delete AI Assistant pending file for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+    }
+    return deleted;
+  }
+
+  private void writeTurnsBackToMemoryFile(
+      java.io.File file,
+      String originalText,
+      List<AiAssistantTurn> turns,
+      String appId,
+      String scopeKey) throws IOException {
+    String header = extractHeaderBeforeTurns(originalText);
+    if (header.isBlank()) {
+      header = "# AI Assistant Conversation Continuity: app_id=" + appId + "\n"
+          + (scopeKey == null || scopeKey.isBlank() ? "" : "scope_key=" + scopeKey + "\n")
+          + "<!-- AUTO-GENERATED by GitHubModelsService -->";
+    }
+    StringBuilder out = new StringBuilder(header.trim());
+    for (AiAssistantTurn turn : turns) {
+      out.append("\n\n");
+      out.append(formatTurnBlock(turn));
+    }
+    java.nio.file.Files.writeString(file.toPath(), out.toString(), StandardCharsets.UTF_8);
+  }
+
+  private String extractHeaderBeforeTurns(String text) {
+    String source = String.valueOf(text == null ? "" : text);
+    int firstTurn = source.indexOf("\n### Turn @ ");
+    if (firstTurn < 0) {
+      firstTurn = source.indexOf("### Turn @ ");
+    }
+    if (firstTurn < 0) {
+      return source.trim();
+    }
+    return source.substring(0, firstTurn).trim();
+  }
+
+  private String formatTurnBlock(AiAssistantTurn turn) {
+    String timestamp = String.valueOf(turn == null || turn.timestamp == null ? "" : turn.timestamp).trim();
+    if (timestamp.isBlank()) {
+      timestamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+    }
+    String turnId = String.valueOf(turn == null || turn.turnId == null ? "" : turn.turnId).trim();
+    if (turnId.isBlank()) {
+      turnId = UUID.randomUUID().toString();
+    }
+    String contextType = String.valueOf(turn == null || turn.contextType == null ? "" : turn.contextType).trim();
+    String responseMode = String.valueOf(turn == null || turn.responseMode == null ? "" : turn.responseMode).trim();
+    int attachmentCount = Math.max(0, turn == null ? 0 : turn.attachmentCount);
+    int feedbackRating = Math.max(-1, Math.min(1, turn == null ? 0 : turn.feedbackRating));
+    String feedbackUpdatedAt = String.valueOf(turn == null || turn.feedbackUpdatedAt == null ? "" : turn.feedbackUpdatedAt).trim();
+    String user = String.valueOf(turn == null || turn.userMessage == null ? "" : turn.userMessage).trim();
+    String assistant = String.valueOf(turn == null || turn.assistantMessage == null ? "" : turn.assistantMessage).trim();
+
+    return "### Turn @ " + timestamp + "\n"
+        + "turn_id=" + turnId + "\n"
+        + "context_type=" + contextType + "\n"
+        + "response_mode=" + responseMode + "\n"
+        + "attachment_count=" + attachmentCount + "\n\n"
+      + "feedback_rating=" + feedbackRating + "\n"
+      + "feedback_updated_at=" + feedbackUpdatedAt + "\n\n"
+        + "User:\n" + user + "\n\n"
+        + "Assistant:\n" + assistant;
+  }
+
+  private List<AiAssistantTurn> parseAiAssistantTurns(String text) {
+    String source = String.valueOf(text == null ? "" : text).replace("\r\n", "\n").replace('\r', '\n');
+    if (source.isBlank()) {
+      return Collections.emptyList();
+    }
+    Pattern headerPattern = Pattern.compile("(?m)^### Turn @ ");
+    Matcher matcher = headerPattern.matcher(source);
+    List<Integer> starts = new ArrayList<>();
+    while (matcher.find()) {
+      starts.add(matcher.start());
+    }
+    if (starts.isEmpty()) {
+      return Collections.emptyList();
+    }
+
+    List<AiAssistantTurn> turns = new ArrayList<>();
+    for (int i = 0; i < starts.size(); i++) {
+      int start = starts.get(i);
+      int end = (i + 1 < starts.size()) ? starts.get(i + 1) : source.length();
+      String block = source.substring(start, end).trim();
+      AiAssistantTurn turn = parseTurnBlock(block, i);
+      if (turn != null) {
+        turns.add(turn);
+      }
+    }
+    return turns;
+  }
+
+  private AiAssistantTurn parseTurnBlock(String block, int index) {
+    if (block == null || block.isBlank()) {
+      return null;
+    }
+    String src = block.trim();
+    AiAssistantTurn turn = new AiAssistantTurn();
+
+    String[] lines = src.split("\n", 2);
+    String header = lines.length > 0 ? lines[0].trim() : "";
+    turn.timestamp = header.startsWith("### Turn @ ") ? header.substring("### Turn @ ".length()).trim() : "";
+
+    turn.turnId = extractLineValue(src, "turn_id=");
+    turn.contextType = extractLineValue(src, "context_type=");
+    turn.responseMode = extractLineValue(src, "response_mode=");
+    turn.attachmentCount = parseSafeInt(extractLineValue(src, "attachment_count="));
+    turn.feedbackRating = Math.max(-1, Math.min(1, parseSafeInt(extractLineValue(src, "feedback_rating="))));
+    turn.feedbackUpdatedAt = extractLineValue(src, "feedback_updated_at=");
+
+    int userStart = src.indexOf("\nUser:\n");
+    if (userStart < 0 && src.startsWith("User:\n")) {
+      userStart = 0;
+    }
+    int assistantStart = src.indexOf("\n\nAssistant:\n");
+    if (assistantStart < 0) {
+      assistantStart = src.indexOf("\nAssistant:\n");
+    }
+
+    String user = "";
+    String assistant = "";
+    if (userStart >= 0) {
+      int userBodyStart = userStart == 0 ? "User:\n".length() : userStart + "\nUser:\n".length();
+      int userBodyEnd = assistantStart > userBodyStart ? assistantStart : src.length();
+      user = src.substring(userBodyStart, userBodyEnd).trim();
+    }
+    if (assistantStart >= 0) {
+      int assistantBodyStart;
+      if (src.startsWith("Assistant:\n", assistantStart)) {
+        assistantBodyStart = assistantStart + "Assistant:\n".length();
+      } else if (src.startsWith("\nAssistant:\n", assistantStart)) {
+        assistantBodyStart = assistantStart + "\nAssistant:\n".length();
+      } else {
+        assistantBodyStart = assistantStart + "\n\nAssistant:\n".length();
+      }
+      assistant = src.substring(Math.min(assistantBodyStart, src.length())).trim();
+    }
+
+    turn.userMessage = user;
+    turn.assistantMessage = assistant;
+
+    if (turn.turnId == null || turn.turnId.isBlank()) {
+      turn.turnId = buildFallbackTurnId(turn, index);
+    }
+    if (turn.timestamp == null) {
+      turn.timestamp = "";
+    }
+    return turn;
+  }
+
+  private String buildFallbackTurnId(AiAssistantTurn turn, int index) {
+    String seed = String.valueOf(turn.timestamp == null ? "" : turn.timestamp)
+        + "|" + String.valueOf(turn.userMessage == null ? "" : turn.userMessage)
+        + "|" + String.valueOf(turn.assistantMessage == null ? "" : turn.assistantMessage)
+        + "|" + index;
+    return UUID.nameUUIDFromBytes(seed.getBytes(StandardCharsets.UTF_8)).toString();
+  }
+
+  private String extractLineValue(String text, String prefix) {
+    if (text == null || text.isBlank() || prefix == null || prefix.isBlank()) {
+      return "";
+    }
+    Pattern p = Pattern.compile("(?m)^" + Pattern.quote(prefix) + "(.*)$");
+    Matcher m = p.matcher(text);
+    if (!m.find()) {
+      return "";
+    }
+    return String.valueOf(m.group(1) == null ? "" : m.group(1)).trim();
+  }
+
+  private int parseSafeInt(String raw) {
+    try {
+      return Integer.parseInt(String.valueOf(raw == null ? "0" : raw).trim());
+    } catch (Exception e) {
+      return 0;
     }
   }
 

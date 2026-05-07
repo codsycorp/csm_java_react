@@ -724,10 +724,56 @@
 	font-size: 11px;
 	color: var(--chat-muted);
 	text-align: right;
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 4px;
 }
 
 .messageItem.user .timestamp {
 	color: rgba(255, 255, 255, 0.7);
+}
+
+.messageActionGroup {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+}
+
+.feedbackMessageAction {
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.18s ease;
+}
+
+.deleteMessageAction {
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.18s ease;
+}
+
+.messageItem:hover .feedbackMessageAction,
+.messageItem:focus-within .feedbackMessageAction,
+.messageItem:hover .deleteMessageAction,
+.messageItem:focus-within .deleteMessageAction {
+	opacity: 1;
+	pointer-events: auto;
+}
+
+.feedbackActivePositive {
+	color: #16a34a !important;
+}
+
+.feedbackActiveNegative {
+	color: #dc2626 !important;
+}
+
+@media (hover: none) {
+	.feedbackMessageAction,
+	.deleteMessageAction {
+		opacity: 1;
+		pointer-events: auto;
+	}
 }
 
 .codeBlock {
