@@ -1037,6 +1037,32 @@ public class ApiSpringController {
                     }
                 }
 
+                boolean broadAnalyzeRequest = !menuJsonContext
+                    && "analyze".equalsIgnoreCase(responseMode)
+                    && isBroadAnalysisRequest(message, preclassifiedIntent);
+                if (broadAnalyzeRequest
+                        && promptCodeContext.length() > 30000
+                        && aiCodeStreamLocalProviderEnabled) {
+                    String condensedAnalyzeContext = buildAnalyzeCondensedPromptContext(
+                        effectiveCodeContext,
+                        message,
+                        focusWindow == null ? "" : focusWindow.code(),
+                        Math.max(18000, Math.min(32000, aiCodeStreamMaxCurrentCodeChars)));
+                    if (!condensedAnalyzeContext.isBlank() && condensedAnalyzeContext.length() < promptCodeContext.length()) {
+                        int before = promptCodeContext.length();
+                        promptCodeContext = condensedAnalyzeContext;
+                        sendEvent(emitter, jsonOf(
+                            "stage", "context_compression",
+                            "status", "analyze_condensed_context",
+                            "detailKey", "copilot.progress.detail.analyze_condensed_context",
+                            "contextType", contextType,
+                            "message", "Ngữ cảnh phân tích quá lớn, chuyển sang condensed map-reduce context để tăng tốc và giữ đủ nghiệp vụ",
+                            "charsBefore", before,
+                            "charsAfter", promptCodeContext.length(),
+                            "requestId", requestId));
+                    }
+                }
+
                 if ("edit".equalsIgnoreCase(responseMode)
                         && !menuJsonContext
                         && aiCodeStreamContextLuceneEnabled) {
@@ -1372,10 +1398,51 @@ public class ApiSpringController {
                         }
                     }
                     if (providerText != null && !providerText.isBlank()) {
+                        if (shouldRunBroadAnalysisGapFill(
+                                message,
+                                responseMode,
+                                contextType,
+                                preclassifiedIntent,
+                                providerText)) {
+                            List<String> missingSections = detectBroadAnalysisCoverageGaps(providerText);
+                            sendEvent(emitter, jsonOf(
+                                "stage", "model_switch",
+                                "status", "local_provider_gap_fill_retry",
+                                "requestId", requestId,
+                                "model", "local_provider",
+                                "modelDecisionStep", "retry",
+                                "modelDecisionReason", "broad_analysis_missing_sections",
+                                "decision_step", "retry",
+                                "reason_code", "broad_analysis_missing_sections",
+                                "missingSections", String.join(", ", missingSections),
+                                "message", "AI local se bo sung cac muc con thieu de dam bao phan tich day du.",
+                                "messageKey", "copilot.progress.message.local_gap_fill_retry"));
+
+                            String gapFillPrompt = buildBroadAnalysisGapFillPrompt(message, providerText, missingSections);
+                            if (!gapFillPrompt.isBlank()) {
+                                String gapRaw = runLocalProviderWithProgress(emitter, requestId, gapFillPrompt, contextType);
+                                String gapText = extractAiResultText(gapRaw);
+                                if ((gapText == null || gapText.isBlank()) && gapRaw != null) {
+                                    gapText = gapRaw.trim();
+                                }
+                                providerText = mergeBroadAnalysisGapFill(providerText, gapText);
+                            }
+                        }
+
                         boolean localAccepted = shouldAcceptLocalCodeStreamOutput(
                                 providerText,
                                 responseMode,
                                 contextType);
+                        if (localAccepted
+                                && shouldRunBroadAnalysisGapFill(
+                                    message,
+                                    responseMode,
+                                    contextType,
+                                    preclassifiedIntent,
+                                    providerText)
+                                && !detectBroadAnalysisCoverageGaps(providerText).isEmpty()) {
+                            localAccepted = false;
+                        }
                         if (localAccepted && shouldRejectShallowLocalBroadAnalysis(
                                 "ai-code-stream",
                                 message,
@@ -2836,6 +2903,8 @@ public class ApiSpringController {
                 sb.append("4) Điều kiện rẽ nhánh, rule nghiệp vụ, edge cases.\n");
                 sb.append("5) Dữ liệu vào/ra và side effects (DB/API/cache/event).\n");
                 sb.append("6) Rủi ro kỹ thuật và gợi ý cải thiện.\n");
+                sb.append("Mỗi mục phải có bằng chứng từ code (tên hàm/biến/khối xử lý/luồng dữ liệu) thay vì mô tả chung chung.\n");
+                sb.append("Nếu mục nào chưa đủ bằng chứng, phải ghi rõ \"Thiếu bằng chứng\" và nêu chính xác phần code cần thêm để xác nhận.\n");
                 sb.append("Không được chỉ liệt kê key/prop/token rời rạc (ví dụ rowKey/dateFormatter/options...).\n");
                 sb.append("Phải bám sát code thực tế, tránh trả lời chung chung.\n\n");
             }
@@ -6007,6 +6076,10 @@ public class ApiSpringController {
             return false;
         }
 
+        if (isLowSubstanceEnumeratedOutput(text)) {
+            return false;
+        }
+
         if (!"edit".equalsIgnoreCase(responseMode)) {
             return text.length() >= 24;
         }
@@ -6041,6 +6114,198 @@ public class ApiSpringController {
             return true;
         }
         return hasFullCodeInEditPayload(text);
+    }
+
+    private boolean isLowSubstanceEnumeratedOutput(String text) {
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return true;
+        }
+
+        String[] lines = safe.split("\\r?\\n");
+        int nonEmpty = 0;
+        int skeletal = 0;
+        int alnumChars = 0;
+        for (String line : lines) {
+            String t = String.valueOf(line == null ? "" : line).trim();
+            if (t.isEmpty()) {
+                continue;
+            }
+            nonEmpty++;
+            for (int i = 0; i < t.length(); i++) {
+                if (Character.isLetterOrDigit(t.charAt(i))) {
+                    alnumChars++;
+                }
+            }
+            if (t.matches("^[-*•\\d\\.)\\s]*[:：-]*\\s*$") || t.matches("^[-*•]\\s*[:：]\\s*$")) {
+                skeletal++;
+            }
+        }
+
+        if (nonEmpty == 0) {
+            return true;
+        }
+        if (alnumChars < 40 && skeletal >= Math.max(2, nonEmpty - 1)) {
+            return true;
+        }
+        return nonEmpty >= 4 && skeletal >= Math.max(3, (int) Math.floor(nonEmpty * 0.6d));
+    }
+
+    private String buildAnalyzeCondensedPromptContext(
+            String fullCode,
+            String message,
+            String focusCode,
+            int maxChars) {
+        String code = String.valueOf(fullCode == null ? "" : fullCode);
+        if (code.isBlank()) {
+            return "";
+        }
+        int cap = Math.max(12000, maxChars);
+        if (code.length() <= cap) {
+            return code;
+        }
+
+        LinkedHashSet<String> blocks = new LinkedHashSet<>();
+        int edgeWindow = Math.max(1200, Math.min(2600, cap / 8));
+        blocks.add("/* FILE HEAD */\\n" + code.substring(0, Math.min(code.length(), edgeWindow)));
+        int midStart = Math.max(0, (code.length() / 2) - (edgeWindow / 2));
+        int midEnd = Math.min(code.length(), midStart + edgeWindow);
+        blocks.add("/* FILE MID */\\n" + code.substring(midStart, midEnd));
+        int tailStart = Math.max(0, code.length() - edgeWindow);
+        blocks.add("/* FILE TAIL */\\n" + code.substring(tailStart));
+
+        List<String> symbolExcerpts = buildCodeStreamRelatedSymbolExcerpts(
+            code,
+            message,
+            focusCode,
+            6,
+            Math.max(1200, Math.min(2600, cap / 6)));
+        List<String> luceneExcerpts = buildCodeStreamLuceneExcerpts(
+            code,
+            message,
+            focusCode,
+            6,
+            Math.max(1200, Math.min(2600, cap / 6)));
+        blocks.addAll(symbolExcerpts);
+        blocks.addAll(luceneExcerpts);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("/* CONDENSED ANALYZE CONTEXT (map-reduce) */\\n");
+        sb.append("/* fullCodeChars=").append(code.length()).append(", condensedTargetChars=").append(cap).append(" */\\n\\n");
+        for (String block : blocks) {
+            if (block == null || block.isBlank()) {
+                continue;
+            }
+            if (sb.length() + block.length() + 2 > cap) {
+                break;
+            }
+            sb.append(block).append("\\n\\n");
+        }
+
+        return truncateMiddle(sb.toString(), cap);
+    }
+
+    private boolean shouldRunBroadAnalysisGapFill(
+            String message,
+            String responseMode,
+            String contextType,
+            LocalIntentClassification intentClass,
+            String candidateText) {
+        if (!"analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            return false;
+        }
+        if (isMenuJsonContext(contextType)) {
+            return false;
+        }
+        if (!isBroadAnalysisRequest(message, intentClass)) {
+            return false;
+        }
+        String text = String.valueOf(candidateText == null ? "" : candidateText).trim();
+        if (text.isBlank()) {
+            return true;
+        }
+        if (text.length() < 1800) {
+            return true;
+        }
+        return !detectBroadAnalysisCoverageGaps(text).isEmpty();
+    }
+
+    private List<String> detectBroadAnalysisCoverageGaps(String answer) {
+        String text = String.valueOf(answer == null ? "" : answer).toLowerCase(Locale.ROOT);
+        List<String> gaps = new ArrayList<>();
+        if (text.isBlank()) {
+            gaps.add("muc_tieu_nghiep_vu");
+            gaps.add("luong_xu_ly_chinh");
+            gaps.add("thanh_phan_quan_trong");
+            gaps.add("dieu_kien_re_nhanh");
+            gaps.add("du_lieu_vao_ra_side_effects");
+            gaps.add("rui_ro_va_goi_y");
+            return gaps;
+        }
+
+        if (!(text.contains("mục tiêu") || text.contains("muc tieu") || text.contains("nghiệp vụ") || text.contains("nghiep vu") || text.contains("business goal"))) {
+            gaps.add("muc_tieu_nghiep_vu");
+        }
+        if (!(text.contains("luồng") || text.contains("luong") || text.contains("input") || text.contains("output") || text.contains("validate") || text.contains("transform"))) {
+            gaps.add("luong_xu_ly_chinh");
+        }
+        if (!(text.contains("hàm") || text.contains("ham") || text.contains("module") || text.contains("component") || text.contains("vai trò") || text.contains("vai tro"))) {
+            gaps.add("thanh_phan_quan_trong");
+        }
+        if (!(text.contains("rẽ nhánh") || text.contains("re nhanh") || text.contains("điều kiện") || text.contains("dieu kien") || text.contains("edge case") || text.contains("rule"))) {
+            gaps.add("dieu_kien_re_nhanh");
+        }
+        if (!(text.contains("db") || text.contains("database") || text.contains("api") || text.contains("cache") || text.contains("event") || text.contains("đầu vào") || text.contains("dau vao") || text.contains("đầu ra") || text.contains("dau ra") || text.contains("side effect"))) {
+            gaps.add("du_lieu_vao_ra_side_effects");
+        }
+        if (!(text.contains("rủi ro") || text.contains("rui ro") || text.contains("cải thiện") || text.contains("cai thien") || text.contains("improve") || text.contains("risk"))) {
+            gaps.add("rui_ro_va_goi_y");
+        }
+        return gaps;
+    }
+
+    private String buildBroadAnalysisGapFillPrompt(String requestText, String currentAnswer, List<String> missingSections) {
+        List<String> missing = missingSections == null ? List.of() : missingSections;
+        if (missing.isEmpty()) {
+            return "";
+        }
+        String safeRequest = truncateMiddle(String.valueOf(requestText == null ? "" : requestText).trim(), 1200);
+        String safeAnswer = truncateMiddle(String.valueOf(currentAnswer == null ? "" : currentAnswer).trim(), 7000);
+        String outputLanguageRule = buildMatchInputLanguageRule(safeRequest);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("<|im_start|>system\n");
+        sb.append("Bạn là AI code analyst. Chỉ bổ sung các mục còn thiếu trong câu trả lời hiện có.\n");
+        sb.append(outputLanguageRule).append("\n");
+        sb.append("Không lặp lại toàn bộ nội dung cũ. Không markdown rườm rà. Không trả lời chung chung.\n");
+        sb.append("<|im_end|>\n");
+        sb.append("<|im_start|>user\n");
+        sb.append("YEU_CAU_GOC:\n").append(safeRequest).append("\n\n");
+        sb.append("TRA_LOI_HIEN_TAI:\n").append(safeAnswer).append("\n\n");
+        sb.append("CAC_MUC_CON_THIEU (bat buoc bo sung day du):\n");
+        int idx = 1;
+        for (String item : missing) {
+            sb.append(idx++).append(") ").append(item).append("\n");
+        }
+        sb.append("\nTra ve DUY NHAT phan bo sung cho cac muc thieu o tren, moi muc co bang chung tu code (ten ham/ten bien/luong).\n");
+        sb.append("<|im_end|>\n");
+        sb.append("<|im_start|>assistant\n");
+        return sb.toString();
+    }
+
+    private String mergeBroadAnalysisGapFill(String baseAnswer, String gapFillAnswer) {
+        String base = String.valueOf(baseAnswer == null ? "" : baseAnswer).trim();
+        String gap = String.valueOf(gapFillAnswer == null ? "" : gapFillAnswer).trim();
+        if (gap.isBlank()) {
+            return base;
+        }
+        if (base.isBlank()) {
+            return gap;
+        }
+        if (base.toLowerCase(Locale.ROOT).contains(gap.toLowerCase(Locale.ROOT))) {
+            return base;
+        }
+        return base + "\n\n" + "## Bổ sung phần còn thiếu\n" + gap;
     }
 
     private String[] buildCodingPromptParts(String appId, String message, String currentCode, String language,
