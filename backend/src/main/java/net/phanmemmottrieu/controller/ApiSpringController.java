@@ -4713,6 +4713,9 @@ public class ApiSpringController {
         if (normalizedMessage.isBlank()) {
             return false;
         }
+        if (!isMenuJsonContext(contextType) && referencesCurrentCodeArtifact(normalizedMessage)) {
+            return false;
+        }
         if (normalizedMessage.length() > Math.max(300, aiLocalFastQuestionMaxQuestionChars)) {
             return false;
         }
@@ -4730,6 +4733,28 @@ public class ApiSpringController {
         // Keep fast path for non-edit semantics only.
         return !"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
             || !isMenuJsonContext(contextType);
+    }
+
+    private boolean referencesCurrentCodeArtifact(String requestText) {
+        String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (text.isBlank()) {
+            return false;
+        }
+        String lower = text.toLowerCase(Locale.ROOT);
+
+        if (text.contains("`")
+            || Pattern.compile("\\b[a-zA-Z_][a-zA-Z0-9_]*\\s*\\(").matcher(text).find()
+            || Pattern.compile("\\b[a-zA-Z0-9_/.-]+\\.(java|js|ts|tsx|jsx|vue|py|go|cs|json|xml)\\b").matcher(lower).find()) {
+            return true;
+        }
+
+        boolean hasArtifactNoun = Pattern.compile("\\b(code|logic|function|ham|class|module|file|api|query|doan\\s+code|nghiep\\s+vu)\\b", Pattern.CASE_INSENSITIVE)
+            .matcher(lower)
+            .find();
+        boolean hasDemonstrative = Pattern.compile("\\b(this|current|nay|này|do|đó|tren|trên|hien\\s+tai|hiện\\s+tại)\\b", Pattern.CASE_INSENSITIVE)
+            .matcher(lower)
+            .find();
+        return hasArtifactNoun && hasDemonstrative;
     }
 
     private boolean tryHandleLocalFastQuestion(
@@ -6977,7 +7002,17 @@ public class ApiSpringController {
         boolean lowConfidence = base.confidence() < INTENT_CONFIDENCE_THRESHOLD;
 
         if (!editMode && !menuContext && "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
-            // Analyze mode without code/menu edit intent → treat as direct question so local fast path can handle it.
+            String request = String.valueOf(requestText == null ? "" : requestText).trim();
+            if (referencesCurrentCodeArtifact(request)) {
+                return new LocalIntentClassification(
+                    "EDIT_CODE",
+                    "inspect",
+                    Math.max(base.confidence(), 65),
+                    "load_code_context",
+                    "code",
+                    base.raw());
+            }
+            // Analyze mode without explicit code anchor → treat as direct question for quick-answer UX.
             return new LocalIntentClassification(
                 "QUESTION",
                 "ask",
