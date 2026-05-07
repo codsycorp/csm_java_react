@@ -382,7 +382,7 @@ public class ApiSpringController {
     @Value("${ai.assistant.local-provider.analyze-only:true}")
     private boolean aiAssistantLocalProviderAnalyzeOnly;
 
-    @Value("${ai.assistant.local-provider.max-payload-chars:18000}")
+    @Value("${ai.assistant.local-provider.max-payload-chars:120000}")
     private int aiAssistantLocalProviderMaxPayloadChars;
 
     @Value("${ai.assistant.local-provider.require-structured-for-edit:true}")
@@ -531,7 +531,7 @@ public class ApiSpringController {
     @Value("${ai.code-stream.local-provider.analyze-only:true}")
     private boolean aiCodeStreamLocalProviderAnalyzeOnly;
 
-    @Value("${ai.code-stream.local-provider.max-prompt-chars:18000}")
+    @Value("${ai.code-stream.local-provider.max-prompt-chars:120000}")
     private int aiCodeStreamLocalProviderMaxPromptChars;
 
     @Value("${ai.code-stream.local-provider.allow-menu-json:false}")
@@ -543,10 +543,10 @@ public class ApiSpringController {
     @Value("${ai.local.pre-analysis.enabled:true}")
     private boolean aiLocalPreAnalysisEnabled;
 
-    @Value("${ai.local.pre-analysis.max-prompt-chars:16000}")
+    @Value("${ai.local.pre-analysis.max-prompt-chars:120000}")
     private int aiLocalPreAnalysisMaxPromptChars;
 
-    @Value("${ai.local.pre-analysis.max-cloud-context-chars:2400}")
+    @Value("${ai.local.pre-analysis.max-cloud-context-chars:12000}")
     private int aiLocalPreAnalysisMaxCloudContextChars;
 
     @Value("${ai.local.pre-analysis.adaptive.enabled:true}")
@@ -558,7 +558,7 @@ public class ApiSpringController {
     @Value("${ai.local.pre-analysis.adaptive.deep-prompt-threshold-chars:14000}")
     private int aiLocalPreAnalysisAdaptiveDeepPromptThresholdChars;
 
-    @Value("${ai.local.pre-analysis.adaptive.deep-max-prompt-chars:14000}")
+    @Value("${ai.local.pre-analysis.adaptive.deep-max-prompt-chars:120000}")
     private int aiLocalPreAnalysisAdaptiveDeepMaxPromptChars;
 
     @Value("${ai.local.pre-analysis.adaptive.deep-input-token-scale:1.25}")
@@ -576,7 +576,7 @@ public class ApiSpringController {
     @Value("${ai.local.fast-question.max-tokens:224}")
     private int aiLocalFastQuestionMaxTokens;
 
-    @Value("${ai.local.pre-analysis.request-max-chars:2200}")
+    @Value("${ai.local.pre-analysis.request-max-chars:20000}")
     private int aiLocalPreAnalysisRequestMaxChars;
 
     @Value("${ai.local.pre-analysis.sanitize-sensitive:true}")
@@ -588,10 +588,10 @@ public class ApiSpringController {
     @Value("${ai.local.pre-analysis.llama-input-token-hard-cap:1800}")
     private int aiLocalPreAnalysisLlamaInputTokenHardCap;
 
-    @Value("${ai.local.llama.context-window:2048}")
+    @Value("${ai.local.llama.context-window:8192}")
     private int aiLocalLlamaContextWindow;
 
-    @Value("${ai.local.llama.max-tokens:384}")
+    @Value("${ai.local.llama.max-tokens:1024}")
     private int aiLocalLlamaMaxTokens;
 
     @Value("${ai.local.chunking.chunk-size-chars:7000}")
@@ -4306,7 +4306,7 @@ public class ApiSpringController {
 
         // ── STEP 2: Route based on AI-classified intent ─────────────────────
         if ("ai-code-stream".equals(flow) || "ai-assistant-chat".equals(flow)) {
-            String compactContext = resolveLocalDirectCompactContext(safeRequestText, sourcePrompt, safeCodeContext, intentClass);
+            String compactContext = resolveLocalDirectCompactContext(safeRequestText, sourcePrompt, safeCodeContext, responseMode, intentClass);
             String effectiveLocalContextType = resolveLocalDirectContextType(contextType, intentClass);
 
             // ── 2A: AI decided question/general answer; still load context when classifier requested it ──
@@ -4327,9 +4327,26 @@ public class ApiSpringController {
                     safeRequestText,
                     questionContext,
                     intentClass);
-                String rawResult = llamaCppNativeService.generateContent(questionPrompt);
+                int localDirectOutputCap = resolveLocalDirectOutputTokenCap(responseMode, safeRequestText, questionContext);
+                String rawResult = llamaCppNativeService.generateContentFast(questionPrompt, localDirectOutputCap);
                 String localText = extractAiResultText(rawResult);
                 if (!localText.isBlank()) {
+                    if (shouldRejectShallowLocalBroadAnalysis(
+                            flow,
+                            safeRequestText,
+                            responseMode,
+                            effectiveLocalContextType,
+                            localText,
+                            intentClass)) {
+                        logger.info("[AI_LOCAL_DIRECT] rejected shallow broad-analysis answer chars={} nextStep={}",
+                            localText.length(), intentClass.nextStep());
+                        return new LocalPreAnalysisDecision(
+                            true,
+                            false,
+                            "",
+                            "",
+                            "local_direct_shallow_analysis_rejected");
+                    }
                     if (shouldEscalateLocalDirectFullAnalysis(
                             flow,
                             safeRequestText,
@@ -4372,7 +4389,8 @@ public class ApiSpringController {
                 String directPrompt = buildLocalDirectTaskPrompt(
                     effectiveLocalContextType,
                     responseMode, safeRequestText, compactContext, intentClass);
-                String rawResult = llamaCppNativeService.generateContent(directPrompt);
+                int localDirectOutputCap = resolveLocalDirectOutputTokenCap(responseMode, safeRequestText, compactContext);
+                String rawResult = llamaCppNativeService.generateContentFast(directPrompt, localDirectOutputCap);
                 String localText = extractAiResultText(rawResult);
                 if (!localText.isBlank()) {
                     boolean accepted = shouldAcceptLocalCodeStreamOutput(localText, responseMode,
@@ -4402,8 +4420,9 @@ public class ApiSpringController {
             safeRequestText,
             sourcePrompt,
             localInputTokenBudget);
-        if (sourcePrompt.length() > 10000) {
-            sourcePrompt = truncateMiddle(sourcePrompt, 10000);
+        int adaptiveHardClip = Math.max(12000, Math.min(160000, aiLocalPreAnalysisMaxPromptChars));
+        if (sourcePrompt.length() > adaptiveHardClip) {
+            sourcePrompt = truncateMiddle(sourcePrompt, adaptiveHardClip);
         }
         if (sourcePrompt.length() < sourceBeforeBudgetTrim) {
             emitLocalPreAnalysisProgress(progressCallback, jsonOf(
@@ -4460,10 +4479,11 @@ public class ApiSpringController {
         }
     }
 
-    private String resolveLocalDirectCompactContext(
+        private String resolveLocalDirectCompactContext(
             String requestText,
             String sourcePrompt,
             String explicitCodeContext,
+            String responseMode,
             LocalIntentClassification intentClass) {
         boolean needsMenuContext = intentClass != null && intentClass.needsMenuContext();
         boolean needsCodeContext = intentClass != null && intentClass.needsCodeContext();
@@ -4473,13 +4493,59 @@ public class ApiSpringController {
         if (rawContext.isBlank()) {
             return "";
         }
+        int compactContextCap = resolveLocalDirectContextCapChars(
+            needsMenuContext,
+            requestText,
+            responseMode,
+            intentClass);
         if (needsMenuContext) {
-            return extractRelevantMenuNodesForLocal(requestText, rawContext, 3500);
+            return extractRelevantMenuNodesForLocal(requestText, rawContext, compactContextCap);
         }
         if (needsCodeContext || rawContext.length() > 0) {
-            return truncateMiddle(rawContext, 3500);
+            return truncateMiddle(rawContext, compactContextCap);
         }
         return "";
+    }
+
+    private int resolveLocalDirectContextCapChars(
+            boolean menuContext,
+            String requestText,
+            String responseMode,
+            LocalIntentClassification intentClass) {
+        int contextWindow = Math.max(2048, aiLocalLlamaContextWindow);
+        int outputReserve = Math.max(256, aiLocalLlamaMaxTokens);
+        int promptBudgetTokens = Math.max(1024, contextWindow - outputReserve - 256);
+        int dynamicCap = promptBudgetTokens * 4;
+        String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
+        LocalIntentClassification intent = intentClass == null ? LocalIntentClassification.unknown() : intentClass;
+        boolean needsDeepCodeContext = intent.needsCodeContext()
+            || "load_code_context".equalsIgnoreCase(String.valueOf(intent.nextStep() == null ? "" : intent.nextStep()));
+        boolean broadAnalyze = "analyze".equals(mode) && isBroadAnalysisRequest(requestText, intentClass);
+
+        if (menuContext) {
+            dynamicCap = Math.max(dynamicCap, 20000);
+        } else if (!broadAnalyze && !needsDeepCodeContext) {
+            int fastCap = Math.max(4000, Math.min(20000, dynamicCap / 3));
+            return fastCap;
+        }
+        int configuredCap = Math.max(12000, aiLocalPreAnalysisMaxPromptChars);
+        int hardUpperBound = Math.max(configuredCap, 160000);
+        return Math.max(12000, Math.min(hardUpperBound, dynamicCap));
+    }
+
+    private int resolveLocalDirectOutputTokenCap(String responseMode, String requestText, String contextText) {
+        int base = 640;
+        String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
+        int contextChars = String.valueOf(contextText == null ? "" : contextText).length();
+        if ("analyze".equals(mode)) {
+            base = Math.max(base, 896);
+            if (contextChars > 12000 || isBroadAnalysisRequest(requestText, null)) {
+                base = Math.max(base, 2048);
+            }
+        } else if ("edit".equals(mode)) {
+            base = Math.max(base, 1024);
+        }
+        return Math.max(256, Math.min(3072, base));
     }
 
     private String resolveLocalDirectContextType(String contextType, LocalIntentClassification intentClass) {
@@ -4517,7 +4583,6 @@ public class ApiSpringController {
         // is still short, force full pipeline even when broad-request detector is uncertain.
         if ("ai-code-stream".equals(normalizedFlow)
                 && needsDeepCodeContext
-                && effectiveCodeContext.length() >= 8000
                 && effectiveLocalText.length() < 3000) {
             return true;
         }
@@ -4532,6 +4597,60 @@ public class ApiSpringController {
             return false;
         }
         return needsDeepCodeContext;
+    }
+
+    private boolean shouldRejectShallowLocalBroadAnalysis(
+            String flow,
+            String requestText,
+            String responseMode,
+            String contextType,
+            String localText,
+            LocalIntentClassification intentClass) {
+        String normalizedFlow = String.valueOf(flow == null ? "" : flow).trim().toLowerCase(Locale.ROOT);
+        if (!"ai-code-stream".equals(normalizedFlow) && !"ai-assistant-chat".equals(normalizedFlow)) {
+            return false;
+        }
+        if (!"analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            return false;
+        }
+        if (isMenuJsonContext(contextType)) {
+            return false;
+        }
+        if (!isBroadAnalysisRequest(requestText, intentClass)) {
+            return false;
+        }
+        return isShallowKeyListAnalysis(String.valueOf(localText == null ? "" : localText));
+    }
+
+    private boolean isShallowKeyListAnalysis(String text) {
+        String source = String.valueOf(text == null ? "" : text).trim();
+        if (source.isBlank()) {
+            return false;
+        }
+        String lower = source.toLowerCase(Locale.ROOT);
+        int keyHits = 0;
+        for (String token : new String[]{"rowkey", "dateformatter", "search", "options", "rootclassname", "classname", "scroll", "loading", "pagination", "expandable"}) {
+            if (lower.contains(token)) {
+                keyHits++;
+            }
+        }
+
+        int bulletLines = 0;
+        int lineCount = 0;
+        for (String line : source.split("\\r?\\n")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            lineCount++;
+            if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+                bulletLines++;
+            }
+        }
+
+        boolean keyListDominant = keyHits >= 4 && bulletLines >= 4;
+        boolean tooShortForEndToEnd = source.length() < 1800;
+        return keyListDominant && tooShortForEndToEnd && lineCount <= 30;
     }
 
     private boolean isBroadAnalysisRequest(String requestText, LocalIntentClassification intentClass) {

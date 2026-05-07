@@ -71,10 +71,10 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf}")
     private String modelPath;
 
-    @Value("${ai.local.llama.context-window:2048}")
+    @Value("${ai.local.llama.context-window:8192}")
     private int contextWindow;
 
-    @Value("${ai.local.llama.max-tokens:384}")
+    @Value("${ai.local.llama.max-tokens:1024}")
     private int maxTokens;
 
     @Value("${ai.local.llama.temperature:0.2}")
@@ -101,7 +101,7 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.disable-kv-offload:true}")
     private boolean disableKvOffload;
 
-    @Value("${ai.local.llama.max-prompt-chars:16000}")
+    @Value("${ai.local.llama.max-prompt-chars:120000}")
     private int maxPromptChars;
 
     @Value("${ai.local.llama.system-prompt:}")
@@ -475,8 +475,8 @@ public class LlamaCppNativeService implements AIProvider {
     private int resolveRuntimePromptCharBudget() {
         int ctx = Math.max(1024, effectiveContextWindow());
         int outputReserve = Math.max(256, effectiveMaxTokens());
-        int promptTokenBudget = Math.max(256, ctx - outputReserve - 512);
-        int byTokenChars = promptTokenBudget * 3;
+        int promptTokenBudget = Math.max(256, ctx - outputReserve - 256);
+        int byTokenChars = promptTokenBudget * 4;
         return Math.max(2000, Math.min(effectiveMaxPromptChars(), byTokenChars));
     }
 
