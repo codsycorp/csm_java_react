@@ -1383,7 +1383,20 @@ public class ApiSpringController {
                         "reason_code", localPrimaryReason,
                             "message", "Chi phi toi uu: uu tien local provider truoc",
                             "messageKey", "copilot.progress.message.local_provider_primary"));
-                    String providerRaw = runLocalProviderWithProgress(emitter, requestId, prompt, contextType);
+                    boolean useMapReduceBroadAnalysis = shouldUseLocalMapReduceBroadAnalysis(
+                        message,
+                        responseMode,
+                        contextType,
+                        preclassifiedIntent,
+                        effectiveCodeContext);
+                    String providerRaw = useMapReduceBroadAnalysis
+                        ? runLocalProviderMapReduceBroadAnalysis(
+                            emitter,
+                            requestId,
+                            message,
+                            effectiveCodeContext,
+                            contextType)
+                        : runLocalProviderWithProgress(emitter, requestId, prompt, contextType);
                     String providerText = extractAiResultText(providerRaw);
                     if ((providerText == null || providerText.isBlank()) && providerRaw != null) {
                         providerText = providerRaw.trim();
@@ -3429,6 +3442,193 @@ public class ApiSpringController {
                 throw ex;
             }
         }
+    }
+
+    private boolean shouldUseLocalMapReduceBroadAnalysis(
+            String message,
+            String responseMode,
+            String contextType,
+            LocalIntentClassification intentClass,
+            String codeContext) {
+        if (!"analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            return false;
+        }
+        if (isMenuJsonContext(contextType)) {
+            return false;
+        }
+        if (!isBroadAnalysisRequest(message, intentClass)) {
+            return false;
+        }
+        int codeChars = String.valueOf(codeContext == null ? "" : codeContext).length();
+        return codeChars > 120000;
+    }
+
+    private String runLocalProviderMapReduceBroadAnalysis(
+            SseEmitter emitter,
+            String requestId,
+            String requestText,
+            String fullCode,
+            String contextType) throws Exception {
+        String safeRequest = String.valueOf(requestText == null ? "" : requestText).trim();
+        String sourceCode = String.valueOf(fullCode == null ? "" : fullCode);
+        if (sourceCode.isBlank()) {
+            return "";
+        }
+
+        String condensed = buildAnalyzeCondensedPromptContext(
+            sourceCode,
+            safeRequest,
+            "",
+            Math.max(42000, Math.min(76000, Math.max(42000, aiCodeStreamMaxCurrentCodeChars))));
+        if (condensed.isBlank()) {
+            condensed = truncateMiddle(sourceCode, 52000);
+        }
+
+        List<String> chunks = splitMapReduceChunks(
+            condensed,
+            14000,
+            5,
+            1200);
+        if (chunks.isEmpty()) {
+            chunks = List.of(truncateMiddle(condensed, 14000));
+        }
+
+        sendEvent(emitter, jsonOf(
+            "stage", "context_compression",
+            "status", "local_map_reduce_plan",
+            "requestId", requestId,
+            "message", "Kich hoat map-reduce local: phan tich theo nhieu chunk roi tong hop de tranh thieu y.",
+            "chunks", chunks.size(),
+            "sourceChars", sourceCode.length(),
+            "condensedChars", condensed.length()));
+
+        List<String> chunkAnalyses = new ArrayList<>();
+        for (int i = 0; i < chunks.size(); i++) {
+            String chunk = chunks.get(i);
+            String chunkPrompt = buildBroadAnalysisChunkPrompt(safeRequest, chunk, i + 1, chunks.size());
+            sendEvent(emitter, jsonOf(
+                "stage", "waiting_gemini",
+                "requestId", requestId,
+                "waitState", "local_map_reduce",
+                "localPhase", "chunk_analysis",
+                "chunkIndex", i + 1,
+                "chunkTotal", chunks.size(),
+                "message", "AI local dang phan tich chunk " + (i + 1) + "/" + chunks.size()));
+
+            String chunkRaw = runLocalProviderWithProgress(emitter, requestId, chunkPrompt, contextType);
+            String chunkText = extractAiResultText(chunkRaw);
+            if ((chunkText == null || chunkText.isBlank()) && chunkRaw != null) {
+                chunkText = chunkRaw.trim();
+            }
+            if (chunkText != null && !chunkText.isBlank()) {
+                chunkAnalyses.add(truncateMiddle(chunkText, 5000));
+            }
+        }
+
+        if (chunkAnalyses.isEmpty()) {
+            return "";
+        }
+
+        String synthesisPrompt = buildBroadAnalysisSynthesisPrompt(safeRequest, chunkAnalyses);
+        sendEvent(emitter, jsonOf(
+            "stage", "waiting_gemini",
+            "requestId", requestId,
+            "waitState", "local_map_reduce",
+            "localPhase", "synthesis",
+            "message", "AI local dang tong hop ket qua tu cac chunk de tra loi day du."));
+        String synthesisRaw = runLocalProviderWithProgress(emitter, requestId, synthesisPrompt, contextType);
+        String synthesisText = extractAiResultText(synthesisRaw);
+        if ((synthesisText == null || synthesisText.isBlank()) && synthesisRaw != null) {
+            synthesisText = synthesisRaw.trim();
+        }
+        if (synthesisText != null && !synthesisText.isBlank()) {
+            return synthesisText;
+        }
+        return String.join("\n\n", chunkAnalyses);
+    }
+
+    private List<String> splitMapReduceChunks(String text, int chunkChars, int maxChunks, int overlapChars) {
+        String source = String.valueOf(text == null ? "" : text);
+        if (source.isBlank()) {
+            return List.of();
+        }
+        int safeChunk = Math.max(4000, chunkChars);
+        int safeMaxChunks = Math.max(1, maxChunks);
+        int safeOverlap = Math.max(0, Math.min(safeChunk / 2, overlapChars));
+
+        List<String> out = new ArrayList<>();
+        int cursor = 0;
+        while (cursor < source.length() && out.size() < safeMaxChunks) {
+            int end = Math.min(source.length(), cursor + safeChunk);
+            if (end < source.length()) {
+                int newline = source.lastIndexOf('\n', end);
+                if (newline > cursor + (safeChunk / 2)) {
+                    end = newline;
+                }
+            }
+            if (end <= cursor) {
+                end = Math.min(source.length(), cursor + safeChunk);
+            }
+            String chunk = source.substring(cursor, end).trim();
+            if (!chunk.isBlank()) {
+                out.add(chunk);
+            }
+            if (end >= source.length()) {
+                break;
+            }
+            cursor = Math.max(cursor + 1, end - safeOverlap);
+        }
+        return out;
+    }
+
+    private String buildBroadAnalysisChunkPrompt(String requestText, String codeChunk, int chunkIndex, int chunkTotal) {
+        String safeRequest = truncateMiddle(String.valueOf(requestText == null ? "" : requestText).trim(), 1200);
+        String safeChunk = truncateMiddle(String.valueOf(codeChunk == null ? "" : codeChunk), 18000);
+        String outputLanguageRule = buildMatchInputLanguageRule(safeRequest);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("<|im_start|>system\n");
+        sb.append("Ban la AI phan tich code theo cach map-reduce.\n");
+        sb.append(outputLanguageRule).append("\n");
+        sb.append("Phan tich CHI chunk hien tai, khong suy dien vuot qua du lieu trong chunk.\n");
+        sb.append("Tra loi ngan gon nhung day du bang chung code cho cac muc: muc tieu, luong xu ly, thanh phan/ham, dieu kien/re nhanh, IO-side effects, rui ro.\n");
+        sb.append("<|im_end|>\n");
+        sb.append("<|im_start|>user\n");
+        sb.append("YEU_CAU_GOC: ").append(safeRequest).append("\n");
+        sb.append("CHUNK: ").append(chunkIndex).append("/").append(chunkTotal).append("\n");
+        sb.append("CODE_CHUNK:\n").append(safeChunk).append("\n");
+        sb.append("<|im_end|>\n");
+        sb.append("<|im_start|>assistant\n");
+        return sb.toString();
+    }
+
+    private String buildBroadAnalysisSynthesisPrompt(String requestText, List<String> chunkAnalyses) {
+        String safeRequest = truncateMiddle(String.valueOf(requestText == null ? "" : requestText).trim(), 1200);
+        String outputLanguageRule = buildMatchInputLanguageRule(safeRequest);
+        StringBuilder analyses = new StringBuilder();
+        int idx = 1;
+        for (String analysis : chunkAnalyses) {
+            String safe = truncateMiddle(String.valueOf(analysis == null ? "" : analysis).trim(), 4200);
+            if (safe.isBlank()) {
+                continue;
+            }
+            analyses.append("### PHAN_TICH_CHUNK_").append(idx++).append("\n");
+            analyses.append(safe).append("\n\n");
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("<|im_start|>system\n");
+        sb.append("Ban la AI tong hop ket qua map-reduce cho phan tich code.\n");
+        sb.append(outputLanguageRule).append("\n");
+        sb.append("Bat buoc tra loi du 6 muc: (1) muc tieu nghiep vu (2) luong xu ly chinh (3) thanh phan/ham quan trong (4) dieu kien/re nhanh/edge cases (5) du lieu vao-ra + side effects (6) rui ro + goi y cai thien.\n");
+        sb.append("Moi muc phai co bang chung cu the tu code (ten ham, ten bien, buoc xu ly).\n");
+        sb.append("<|im_end|>\n");
+        sb.append("<|im_start|>user\n");
+        sb.append("YEU_CAU_GOC: ").append(safeRequest).append("\n\n");
+        sb.append("KET_QUA_PHAN_TICH_THEO_CHUNK:\n").append(analyses);
+        sb.append("<|im_end|>\n");
+        sb.append("<|im_start|>assistant\n");
+        return sb.toString();
     }
 
     private String buildAutoContinuePrompt(String originalPrompt, String previousRawResponse, String language,
