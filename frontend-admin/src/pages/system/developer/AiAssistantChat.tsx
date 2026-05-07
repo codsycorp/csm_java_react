@@ -2537,6 +2537,7 @@ export default function AiAssistantChat({
 						currentCode,
 						language,
 						contextType,
+						model: "local",
 						pName: targetPName,
 						pType: targetPType,
 						editorMetadata: requestEditorMetadata,
@@ -3327,7 +3328,7 @@ export default function AiAssistantChat({
 																	)}
 																</div>
 																<span style={{ fontSize: 11, color: step.status === "done" ? "#52c41a" : "#722ed1", flexShrink: 0, lineHeight: "15px" }}>
-																	{step.status === "done" ? "\u2713" : <Spin size="small" />}
+																	{step.status === "done" ? "\u2713" : "\u2026"}
 																</span>
 															</div>
 														))}
@@ -4053,7 +4054,6 @@ export default function AiAssistantChat({
 							icon={<SendOutlined />}
 							onClick={handleSend}
 							disabled={isLoading || (!inputValue.trim() && pendingAttachments.length === 0)}
-							loading={isLoading}
 						>
 							{uiText("Gửi", "Send", "发送")}
 						</Button>

@@ -161,8 +161,6 @@ public class ApiSpringController {
         boolean isEditTask() { return "EDIT_MENU".equals(type) || "EDIT_CODE".equals(type); }
         boolean isQuestion() { return "QUESTION".equals(type); }
         boolean isGeneral() { return "GENERAL".equals(type); }
-        boolean isMenuEdit() { return "EDIT_MENU".equals(type); }
-        boolean isCodeEdit() { return "EDIT_CODE".equals(type); }
         boolean answerDirectly() { return "answer_direct".equalsIgnoreCase(String.valueOf(nextStep)); }
         boolean needsMenuContext() {
             return "load_menu_context".equalsIgnoreCase(String.valueOf(nextStep))
@@ -241,6 +239,7 @@ public class ApiSpringController {
     private final AiMenuLearningMemoryService aiMenuLearningMemoryService;
     private final AiPromptBudgetService aiPromptBudgetService;
     private final LlamaCppNativeService llamaCppNativeService;
+    @SuppressWarnings("unused")
     private final LargeFileChunkingService largeFileChunkingService;
 
     // In-memory ring buffer for prompt-budget debug (max 200 entries, auto-rotated)
@@ -954,7 +953,13 @@ public class ApiSpringController {
                     return;
                 }
 
-                if (shouldUseLocalFastQuestionPath(preclassifiedIntent, message, contextType, responseMode)) {
+                LocalIntentClassification fastPathIntent = resolveIntentForNextStep(
+                    preclassifiedIntent,
+                    message,
+                    contextType,
+                    responseMode);
+
+                if (shouldUseLocalFastQuestionPath(fastPathIntent, message, contextType, responseMode)) {
                     boolean fastHandled = tryHandleLocalFastQuestion(
                         emitter,
                         requestId,
@@ -1396,6 +1401,29 @@ public class ApiSpringController {
                 }
 
                     if (rawResponse == null) {
+                        // When caller explicitly requested local model, never fall back to cloud.
+                        String overrideNorm = String.valueOf(modelOverride == null ? "" : modelOverride).trim().toLowerCase();
+                        boolean callerForcedLocal = overrideNorm.contains("local") || overrideNorm.contains("llama");
+                        if (callerForcedLocal) {
+                            logger.warn("LOCAL_OVERRIDE local provider returned no usable output, blocking cloud fallback per caller request requestId={} contextType={}",
+                                requestId, contextType);
+                            sendEvent(emitter, jsonOf(
+                                "stage", "model_switch",
+                                "status", "local_override_blocked_cloud",
+                                "requestId", requestId,
+                                "model", "local_provider",
+                                "modelDecisionStep", "final",
+                                "modelDecisionReason", "local_override_no_cloud_fallback",
+                                "decision_step", "final",
+                                "reason_code", "local_override_no_cloud_fallback",
+                                "message", "Local AI không tạo được output. Không chuyển sang cloud (local-only mode).",
+                                "messageKey", "copilot.progress.message.local_override_no_cloud"));
+                            sendErrorEvent(emitter, uiTextByLang(uiLang,
+                                "Local AI không trả lời được yêu cầu này. Vui lòng thử diễn đạt lại câu hỏi.",
+                                "Local AI could not handle this request. Please try rephrasing your question.",
+                                "本地AI无法处理此请求。请尝试重新表述您的问题。"));
+                            return;
+                        }
                         if (localOnlyHardRoute) {
                             logger.warn("LOCAL_ONLY_HARD_ROUTE local quality gate failed, allowing cloud fallback requestId={} contextType={} reasonCode={}",
                                 requestId, contextType, codeStreamPreAnalysis.reasonCode());
@@ -2213,6 +2241,7 @@ public class ApiSpringController {
         return new CodeWindowContext(sb.toString(), start, end);
     }
 
+    @SuppressWarnings("deprecation")
     private List<String> buildCodeStreamLuceneExcerpts(
         String fullCode,
         String message,
@@ -2711,7 +2740,13 @@ public class ApiSpringController {
                 sb.append("Không markdown, không code fence.\n\n");
             }
         } else {
-            sb.append("CHẾ ĐỘ: Phân tích/Giải thích. Phân tích và giải thích chi tiết.\n\n");
+            sb.append("CHẾ ĐỘ: Phân tích/Giải thích. Phân tích và giải thích chi tiết.\n");
+            sb.append("BẮT BUỘC:\n");
+            sb.append("- Chỉ giải thích logic của CODE HIỆN TẠI đang được cung cấp.\n");
+            sb.append("- Không viết lại code sang ngôn ngữ khác.\n");
+            sb.append("- Không tự sinh ví dụ code mới, pseudo-code hay hàm minh họa nếu người dùng không yêu cầu.\n");
+            sb.append("- Nếu cần trích dẫn, chỉ dùng snippet ngắn từ chính code hiện tại và giữ nguyên ngôn ngữ gốc: ").append(language).append(".\n");
+            sb.append("- Ưu tiên mô tả: mục đích, đầu vào, luồng xử lý, đầu ra và điểm cần lưu ý.\n\n");
         }
 
         if (attachmentsRaw instanceof List<?> attachments && !attachments.isEmpty()) {
@@ -4112,35 +4147,6 @@ public class ApiSpringController {
             String flow,
             String requestText,
             String prompt,
-            String contextType,
-            String responseMode) {
-        return runMandatoryLocalPreAnalysis(flow, requestText, prompt, "", contextType, responseMode, null, null);
-    }
-
-    private LocalPreAnalysisDecision runMandatoryLocalPreAnalysis(
-            String flow,
-            String requestText,
-            String prompt,
-            String contextType,
-            String responseMode,
-            Consumer<String> progressCallback) {
-        return runMandatoryLocalPreAnalysis(flow, requestText, prompt, "", contextType, responseMode, null, progressCallback);
-    }
-
-    private LocalPreAnalysisDecision runMandatoryLocalPreAnalysis(
-            String flow,
-            String requestText,
-            String prompt,
-            String contextType,
-            String responseMode,
-            LocalIntentClassification preclassifiedIntent) {
-        return runMandatoryLocalPreAnalysis(flow, requestText, prompt, "", contextType, responseMode, preclassifiedIntent, null);
-    }
-
-    private LocalPreAnalysisDecision runMandatoryLocalPreAnalysis(
-            String flow,
-            String requestText,
-            String prompt,
             String codeContext,
             String contextType,
             String responseMode,
@@ -4216,23 +4222,33 @@ public class ApiSpringController {
             intentClass.type(), intentClass.action(), intentClass.confidence(), menuJsonContext, safeCodeContext.length());
 
         // ── STEP 2: Route based on AI-classified intent ─────────────────────
-        if ("ai-code-stream".equals(flow)) {
+        if ("ai-code-stream".equals(flow) || "ai-assistant-chat".equals(flow)) {
+            String compactContext = resolveLocalDirectCompactContext(safeRequestText, sourcePrompt, safeCodeContext, intentClass);
+            String effectiveLocalContextType = resolveLocalDirectContextType(contextType, intentClass);
 
-            // ── 2A: AI decided direct answer -> no code/menu context loading ──
+            // ── 2A: AI decided question/general answer; still load context when classifier requested it ──
             if (intentClass.answerDirectly() || intentClass.isQuestion() || intentClass.isGeneral()) {
+                String questionContext = compactContext;
+                int estimatedWaitSecs = Math.max(3, estimateLocalProviderWaitSecs(questionContext.isBlank() ? safeRequestText : questionContext));
                 emitLocalPreAnalysisProgress(progressCallback, jsonOf(
                     "stage", "waiting_gemini",
                     "waitState", "local_pre_analysis",
                     "localPhase", "infer",
                     "messageKey", "copilot.progress.message.local_preanalysis_infer",
-                    "messageArgs", jsonOf("estimatedWaitSecs", 3),
+                    "messageArgs", jsonOf("estimatedWaitSecs", estimatedWaitSecs),
                     "percent", 45,
-                    "remainingEstimateSecs", 3));
-                String questionPrompt = buildLocalDirectTaskPrompt(contextType, responseMode, safeRequestText, "", intentClass);
+                    "remainingEstimateSecs", estimatedWaitSecs));
+                String questionPrompt = buildLocalDirectTaskPrompt(
+                    effectiveLocalContextType,
+                    responseMode,
+                    safeRequestText,
+                    questionContext,
+                    intentClass);
                 String rawResult = llamaCppNativeService.generateContent(questionPrompt);
                 String localText = extractAiResultText(rawResult);
                 if (!localText.isBlank()) {
-                    logger.info("[AI_LOCAL_DIRECT] CHAT answered locally chars={}", localText.length());
+                    logger.info("[AI_LOCAL_DIRECT] CHAT answered locally chars={} contextChars={} nextStep={}",
+                        localText.length(), questionContext.length(), intentClass.nextStep());
                     return new LocalPreAnalysisDecision(true, true, localText, "", "local_direct_question_answered");
                 }
                 // Model couldn't answer — fall through to cloud
@@ -4240,18 +4256,6 @@ public class ApiSpringController {
             }
 
             // ── 2B: EDIT_MENU or EDIT_CODE -> load only the context the model requested ──
-            boolean doMenuEdit = intentClass.needsMenuContext()
-                || (intentClass.isMenuEdit() && !intentClass.needsCodeContext())
-                || (menuJsonContext && !intentClass.isCodeEdit());
-            String rawContext = !safeCodeContext.isBlank() ? safeCodeContext : sourcePrompt;
-            String compactContext;
-            if (doMenuEdit) {
-                compactContext = extractRelevantMenuNodesForLocal(safeRequestText, rawContext, 3500);
-            } else {
-                // EDIT_CODE or other — use focus window
-                compactContext = truncateMiddle(rawContext, 3500);
-            }
-
             if (!compactContext.isBlank()) {
                 int estWait = estimateLocalProviderWaitSecs(compactContext);
                 emitLocalPreAnalysisProgress(progressCallback, jsonOf(
@@ -4263,16 +4267,16 @@ public class ApiSpringController {
                     "percent", 50,
                     "estimatedWaitSecs", estWait,
                     "remainingEstimateSecs", estWait));
-                logger.info("[AI_LOCAL_DIRECT] contextType={} doMenuEdit={} compactContextChars={} intent={}",
-                    contextType, doMenuEdit, compactContext.length(), intentClass.type());
+                logger.info("[AI_LOCAL_DIRECT] contextType={} effectiveLocalContextType={} compactContextChars={} intent={} nextStep={}",
+                    contextType, effectiveLocalContextType, compactContext.length(), intentClass.type(), intentClass.nextStep());
                 String directPrompt = buildLocalDirectTaskPrompt(
-                    doMenuEdit ? "menu_json" : contextType,
+                    effectiveLocalContextType,
                     responseMode, safeRequestText, compactContext, intentClass);
                 String rawResult = llamaCppNativeService.generateContent(directPrompt);
                 String localText = extractAiResultText(rawResult);
                 if (!localText.isBlank()) {
                     boolean accepted = shouldAcceptLocalCodeStreamOutput(localText, responseMode,
-                        doMenuEdit ? "menu_json" : contextType);
+                        effectiveLocalContextType);
                     if (accepted) {
                         logger.info("[AI_LOCAL_DIRECT] accepted handledLocally=true chars={}", localText.length());
                         return new LocalPreAnalysisDecision(true, true, localText, "", "local_direct_accepted");
@@ -4356,19 +4360,33 @@ public class ApiSpringController {
         }
     }
 
-    private int estimateLocalChunkCount(int chars) {
-        int safeChars = Math.max(1, chars);
-        int chunkSize = Math.max(1000, aiLocalChunkingChunkSizeChars);
-        int bySize = (int) Math.ceil(safeChars / (double) chunkSize);
-        return Math.max(1, Math.min(Math.max(1, aiLocalChunkingMaxChunks), bySize));
+    private String resolveLocalDirectCompactContext(
+            String requestText,
+            String sourcePrompt,
+            String explicitCodeContext,
+            LocalIntentClassification intentClass) {
+        boolean needsMenuContext = intentClass != null && intentClass.needsMenuContext();
+        boolean needsCodeContext = intentClass != null && intentClass.needsCodeContext();
+        String rawContext = !String.valueOf(explicitCodeContext == null ? "" : explicitCodeContext).isBlank()
+            ? String.valueOf(explicitCodeContext)
+            : String.valueOf(sourcePrompt == null ? "" : sourcePrompt);
+        if (rawContext.isBlank()) {
+            return "";
+        }
+        if (needsMenuContext) {
+            return extractRelevantMenuNodesForLocal(requestText, rawContext, 3500);
+        }
+        if (needsCodeContext || rawContext.length() > 0) {
+            return truncateMiddle(rawContext, 3500);
+        }
+        return "";
     }
 
-    private int estimateLocalChunkingWaitSecs(int chars, int chunkCount) {
-        int safeChars = Math.max(1, chars);
-        int safeChunkCount = Math.max(1, chunkCount);
-        int byChunks = 2 + (safeChunkCount * 2);
-        int byChars = 2 + (safeChars / 12000);
-        return Math.max(4, Math.min(240, Math.max(byChunks, byChars)));
+    private String resolveLocalDirectContextType(String contextType, LocalIntentClassification intentClass) {
+        if (intentClass != null && intentClass.needsMenuContext()) {
+            return "menu_json";
+        }
+        return contextType;
     }
 
     /**
@@ -4384,7 +4402,6 @@ public class ApiSpringController {
             // Normalize to array of flat nodes
             List<Map<String, Object>> allNodes = new java.util.ArrayList<>();
             Object parsed = objectMapper.readValue(text, Object.class);
-            java.util.function.Consumer<Object> flatten = null;
             // Use array holder so lambda can recurse
             java.util.function.Consumer<Object>[] flattenRef = new java.util.function.Consumer[1];
             flattenRef[0] = obj -> {
@@ -4485,7 +4502,6 @@ public class ApiSpringController {
             LocalIntentClassification intentClass) {
         boolean isMenu = isMenuJsonContext(contextType);
         String safeRequest = String.valueOf(requestText == null ? "" : requestText).trim();
-        String intent = resolvePromptIntentFromClassification(intentClass, responseMode);
 
         // No context = question/general intent — build a direct Q&A prompt
         if (compactContext == null || compactContext.isBlank()) {
@@ -4493,39 +4509,10 @@ public class ApiSpringController {
         }
 
         if (isMenu) {
-            return buildMenuDirectPrompt(intent, safeRequest, compactContext);
+            return buildMenuDirectPrompt(responseMode, safeRequest, compactContext, intentClass);
         } else {
-            return buildCodeDirectPrompt(intent, safeRequest, compactContext, contextType);
+            return buildCodeDirectPrompt(responseMode, safeRequest, compactContext, contextType, intentClass);
         }
-    }
-
-    private String resolvePromptIntentFromClassification(LocalIntentClassification intentClass, String responseMode) {
-        LocalIntentClassification intent = intentClass == null
-            ? LocalIntentClassification.unknown()
-            : intentClass;
-        String action = String.valueOf(intent.action() == null ? "" : intent.action()).trim().toLowerCase(Locale.ROOT);
-
-        if (intent.isQuestion() || intent.isGeneral() || "ask".equals(action)) {
-            return "EXPLAIN";
-        }
-        if ("search".equals(action)) {
-            return "SEARCH";
-        }
-        if ("add".equals(action)) {
-            return "ADD";
-        }
-        if ("remove".equals(action) || "delete".equals(action)) {
-            return "DELETE";
-        }
-
-        if (intent.isMenuEdit() || intent.isCodeEdit()) {
-            return "EDIT";
-        }
-
-        if ("edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
-            return "EDIT";
-        }
-        return "GENERAL";
     }
 
     /**
@@ -4533,105 +4520,162 @@ public class ApiSpringController {
      * Local AI answers the user directly as a knowledgeable assistant.
      */
     private String buildGeneralAnswerPrompt(String requestText) {
-        String systemMsg = "Bạn là trợ lý AI thông minh, hiểu biết sâu về lập trình, công nghệ, và hệ thống phần mềm. "
-            + "Trả lời bằng tiếng Việt, ngắn gọn, chính xác. "
-            + "Nếu câu hỏi về bản thân bạn (model AI, khả năng xử lý): trả lời trung thực về giới hạn kỹ thuật của mô hình ngôn ngữ cục bộ (local LLM). "
-            + "Không bịa thông tin. Không giải thích thừa.";
+        String languageRule = buildMatchInputLanguageRule(requestText);
+        String systemMsg = localizeByInputLanguage(
+            requestText,
+            "Bạn là trợ lý AI thông minh, hiểu biết sâu về lập trình, công nghệ, và hệ thống phần mềm. "
+                + "Trả lời ngắn gọn, chính xác. "
+                + languageRule + " "
+                + "Nếu câu hỏi về bản thân bạn (model AI, khả năng xử lý): trả lời trung thực về giới hạn kỹ thuật của mô hình ngôn ngữ cục bộ (local LLM). "
+                + "Không bịa thông tin. Không giải thích thừa.",
+            "You are an intelligent AI assistant with strong knowledge of programming, technology, and software systems. "
+                + "Respond concisely and accurately. "
+                + languageRule + " "
+                + "If asked about yourself (model identity or capabilities), answer truthfully about local LLM limitations. "
+                + "Do not fabricate information. Avoid unnecessary explanation.",
+            "你是一个智能 AI 助手，熟悉编程、技术与软件系统。"
+                + "请简洁、准确地回答。"
+                + languageRule + " "
+                + "如果用户询问你的身份或能力，请如实说明本地 LLM 的技术限制。"
+                + "不要编造信息，不要冗长解释。"
+        );
         return "<|im_start|>system\n" + systemMsg + "<|im_end|>\n"
             + "<|im_start|>user\n" + requestText + "<|im_end|>\n"
             + "<|im_start|>assistant\n";
     }
 
-    private String buildMenuDirectPrompt(String intent, String requestText, String compactContext) {
+    private String buildMenuDirectPrompt(
+            String responseMode,
+            String requestText,
+            String compactContext,
+            LocalIntentClassification intentClass) {
+        boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        String languageRule = buildMatchInputLanguageRule(requestText);
         String systemMsg;
-        String taskInstruction;
-
-        switch (intent) {
-            case "ADD" -> {
-                systemMsg = "Bạn là AI chỉnh sửa menu JSON cho hệ thống CSM. Nhiệm vụ: THÊM node mới theo yêu cầu. "
-                    + "Quy tắc: output là JSON object {\"menu\":[...]} chứa toàn bộ menu sau khi thêm. "
-                    + "Mỗi node mới phải có: id (unique snake_case), name (tiếng Việt), path, icon, permission (snake_case). "
-                    + "Giữ nguyên tất cả node hiện có, chỉ thêm node mới vào đúng vị trí. Không giải thích.";
-                taskInstruction = "THÊM node mới theo yêu cầu sau: " + requestText;
-            }
-            case "DELETE" -> {
-                systemMsg = "Bạn là AI chỉnh sửa menu JSON cho hệ thống CSM. Nhiệm vụ: XÓA node theo yêu cầu. "
-                    + "Quy tắc: output là JSON object {\"menu\":[...]} chứa toàn bộ menu sau khi xóa node được chỉ định. "
-                    + "Giữ nguyên tất cả node khác. Không giải thích.";
-                taskInstruction = "XÓA node theo yêu cầu sau: " + requestText;
-            }
-            case "EDIT" -> {
-                systemMsg = "Bạn là AI chỉnh sửa menu JSON cho hệ thống CSM. Nhiệm vụ: SỬA node theo yêu cầu. "
-                    + "Quy tắc: output là JSON object {\"menu\":[...]} chứa toàn bộ menu sau khi sửa. "
-                    + "Chỉ thay đổi field được yêu cầu, giữ nguyên tất cả field và node khác. Không giải thích.";
-                taskInstruction = "SỬA node theo yêu cầu sau: " + requestText;
-            }
-            case "RESTRUCTURE" -> {
-                systemMsg = "Bạn là AI chỉnh sửa menu JSON cho hệ thống CSM. Nhiệm vụ: SẮP XẾP LẠI cấu trúc menu. "
-                    + "Quy tắc: output là JSON object {\"menu\":[...]} chứa toàn bộ menu sau khi sắp xếp lại. "
-                    + "Giữ nguyên tất cả node và field, chỉ thay đổi thứ tự/cấu trúc phân cấp. Không giải thích.";
-                taskInstruction = "SẮP XẾP LẠI menu theo yêu cầu sau: " + requestText;
-            }
-            case "EXPLAIN", "SEARCH" -> {
-                systemMsg = "Bạn là AI phân tích menu JSON hệ thống CSM. Nhiệm vụ: trả lời câu hỏi dựa trên cấu trúc menu. "
-                    + "Trả lời bằng tiếng Việt, ngắn gọn, chính xác. Không sửa JSON nếu không được yêu cầu.";
-                taskInstruction = "Câu hỏi: " + requestText;
-            }
-            default -> {
-                systemMsg = "Bạn là AI chỉnh sửa menu JSON cho hệ thống CSM. "
-                    + "Phân tích yêu cầu và thực hiện thay đổi phù hợp. "
-                    + "Nếu yêu cầu chỉnh sửa: output JSON object {\"menu\":[...]} chứa toàn bộ menu sau chỉnh sửa. "
-                    + "Nếu yêu cầu giải thích: trả lời bằng tiếng Việt. Không giải thích thừa.";
-                taskInstruction = "Yêu cầu: " + requestText;
-            }
+        if (editMode) {
+            systemMsg = localizeByInputLanguage(
+                requestText,
+                "Bạn là chuyên gia lập trình hơn 20 năm kinh nghiệm, làm việc theo yêu cầu khách hàng. "
+                    + "Hãy tự phân tích yêu cầu thật của người dùng dựa trên request + menu context + responseMode hiện tại, không bị khóa cứng vào classifier hint. "
+                    + "Classifier hint chỉ là gợi ý mềm; nếu mâu thuẫn với dữ kiện thực, hãy bỏ qua hint và làm theo ngữ cảnh thật. "
+                    + "Nếu kết quả cần chỉnh sửa menu, đầu ra phải là DUY NHẤT một JSON hợp lệ dạng {\"menu\":[...]} hoặc mảng menu thuần, chứa trạng thái menu sau cùng. "
+                    + "Giữ nguyên mọi node/field không liên quan. Không markdown. Không giải thích ngoài JSON. "
+                    + languageRule,
+                "You are a programming expert with over 20 years of experience, working according to customer requirements. "
+                    + "Analyze the real user request from request + menu context + current responseMode; do not be hard-locked to classifier hints. "
+                    + "Classifier hints are soft guidance only; if they conflict with actual context, follow the real context. "
+                    + "If a menu edit is required, output ONLY valid JSON as {\"menu\":[...]} or a plain menu array representing the final state. "
+                    + "Keep unrelated nodes/fields unchanged. No markdown. No explanation outside JSON. "
+                    + languageRule,
+                "你是一名拥有20多年经验的编程专家，按客户需求开展工作。"
+                    + "请基于用户请求 + 菜单上下文 + 当前 responseMode 做真实判断，不要被分类器提示硬性锁定。"
+                    + "分类器提示仅作软参考；若与真实上下文冲突，以真实上下文为准。"
+                    + "若需要修改菜单，输出必须且仅能是合法 JSON：{\"menu\":[...]} 或纯菜单数组，表示最终状态。"
+                    + "保持无关节点/字段不变。不要 markdown，不要在 JSON 外解释。"
+                    + languageRule
+            );
+        } else {
+            systemMsg = localizeByInputLanguage(
+                requestText,
+                "Bạn là chuyên gia lập trình hơn 20 năm kinh nghiệm, làm việc theo yêu cầu khách hàng. "
+                    + "Hãy tự suy luận từ request + menu context để trả lời đúng trọng tâm. "
+                    + "Classifier hint chỉ là gợi ý mềm, không phải lệnh bắt buộc. "
+                    + "Trả lời ngắn gọn, chính xác. " + languageRule + " "
+                    + "Không tự sửa JSON nếu người dùng không yêu cầu.",
+                "You are a programming expert with over 20 years of experience, working according to customer requirements. "
+                    + "Reason from request + menu context and answer the exact point. "
+                    + "Classifier hints are soft guidance, not mandatory commands. "
+                    + "Respond concisely and accurately. " + languageRule + " "
+                    + "Do not modify JSON unless the user explicitly asks for edits.",
+                "你是一名拥有20多年经验的编程专家，按客户需求开展工作。"
+                    + "请基于请求与菜单上下文进行推理，并准确回答重点。"
+                    + "分类器提示仅作软参考，不是强制命令。"
+                    + "请简洁准确回答。" + languageRule + " "
+                    + "除非用户明确要求，否则不要修改 JSON。"
+            );
         }
 
-        String contextLabel = "MENU HIỆN TẠI (các node liên quan):\n";
-        String userMsg = contextLabel + compactContext + "\n\n" + taskInstruction;
+        String userMsg = buildLocalDirectClassifierHint(intentClass)
+            + "USER_REQUEST:\n" + requestText
+            + "\n\nCURRENT_MENU_CONTEXT:\n" + compactContext;
 
         return "<|im_start|>system\n" + systemMsg + "<|im_end|>\n"
             + "<|im_start|>user\n" + userMsg + "<|im_end|>\n"
             + "<|im_start|>assistant\n";
     }
 
-    private String buildCodeDirectPrompt(String intent, String requestText, String compactContext, String contextType) {
+    private String buildCodeDirectPrompt(
+            String responseMode,
+            String requestText,
+            String compactContext,
+            String contextType,
+            LocalIntentClassification intentClass) {
         String lang = detectCodeLanguage(contextType, compactContext);
+        boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        String languageRule = buildMatchInputLanguageRule(requestText);
         String systemMsg;
-        String taskInstruction;
-
-        switch (intent) {
-            case "ADD" -> {
-                systemMsg = "Bạn là AI lập trình " + lang + ". Nhiệm vụ: THÊM code mới theo yêu cầu. "
-                    + "Xuất code hoàn chỉnh sau khi thêm. Không giải thích. Không markdown wrapper thừa.";
-                taskInstruction = "THÊM code theo yêu cầu: " + requestText;
-            }
-            case "DELETE" -> {
-                systemMsg = "Bạn là AI lập trình " + lang + ". Nhiệm vụ: XÓA/ẨN phần code được chỉ định. "
-                    + "Xuất code hoàn chỉnh sau khi xóa. Không giải thích. Không markdown wrapper thừa.";
-                taskInstruction = "XÓA phần code theo yêu cầu: " + requestText;
-            }
-            case "EXPLAIN" -> {
-                systemMsg = "Bạn là AI lập trình " + lang + ". Nhiệm vụ: GIẢI THÍCH code. "
-                    + "Trả lời bằng tiếng Việt, ngắn gọn, chính xác, tập trung vào điểm quan trọng.";
-                taskInstruction = "Giải thích: " + requestText;
-            }
-            case "SEARCH" -> {
-                systemMsg = "Bạn là AI lập trình " + lang + ". Nhiệm vụ: TÌM KIẾM trong code. "
-                    + "Trả lời bằng tiếng Việt, chỉ ra đúng vị trí/function/biến liên quan.";
-                taskInstruction = "Tìm kiếm: " + requestText;
-            }
-            default -> {
-                systemMsg = "Bạn là AI lập trình " + lang + ". Phân tích yêu cầu và thực hiện thay đổi phù hợp. "
-                    + "Nếu chỉnh sửa code: xuất code hoàn chỉnh. Nếu giải thích: trả lời tiếng Việt ngắn gọn. "
-                    + "Không giải thích thừa. Không markdown wrapper thừa.";
-                taskInstruction = "Yêu cầu: " + requestText;
-            }
+        if (editMode) {
+            systemMsg = localizeByInputLanguage(
+                requestText,
+                "Bạn là chuyên gia lập trình " + lang + " hơn 20 năm kinh nghiệm, làm việc theo yêu cầu khách hàng. "
+                    + "Hãy tự phân tích yêu cầu thật của người dùng dựa trên request + code context + responseMode hiện tại. "
+                    + "Classifier hint chỉ là gợi ý mềm; không bị khóa cứng vào add/edit/delete/search nếu ngữ cảnh thật cho thấy hướng khác. "
+                    + "Nếu cần chỉnh sửa code, hãy xuất code hoàn chỉnh sau thay đổi. Không markdown wrapper. Không giải thích dài dòng. "
+                    + "Chỉ sửa phần thực sự liên quan, giữ nguyên hành vi không liên quan. "
+                    + languageRule,
+                "You are a programming expert in " + lang + " with over 20 years of experience, working according to customer requirements. "
+                    + "Analyze the real request from request + code context + current responseMode. "
+                    + "Classifier hints are soft guidance only; do not be hard-locked to add/edit/delete/search when context suggests otherwise. "
+                    + "If editing is required, output the complete updated code. No markdown wrappers. Avoid verbose explanation. "
+                    + "Only change what is relevant and preserve unrelated behavior. "
+                    + languageRule,
+                "你是一名拥有20多年经验的 " + lang + " 编程专家，按客户需求开展工作。"
+                    + "请基于用户请求 + 代码上下文 + 当前 responseMode 进行真实分析。"
+                    + "分类器提示仅作软参考；当真实上下文指向其他方向时，不要被 add/edit/delete/search 硬性锁定。"
+                    + "如果需要改代码，请输出完整修改后代码。不要 markdown 包装，不要冗长解释。"
+                    + "仅修改相关部分，保持无关行为不变。"
+                    + languageRule
+            );
+        } else {
+            systemMsg = localizeByInputLanguage(
+                requestText,
+                "Bạn là chuyên gia lập trình " + lang + " hơn 20 năm kinh nghiệm, làm việc theo yêu cầu khách hàng. "
+                    + "Hãy tự suy luận từ request + code hiện tại để phân tích, giải thích hoặc tìm vị trí liên quan. "
+                    + "Classifier hint chỉ là gợi ý mềm, không phải lệnh bắt buộc. "
+                    + "Trả lời ngắn gọn, chính xác, bám đúng code hiện có. " + languageRule + " "
+                    + "Không tự viết lại sang ngôn ngữ khác, không tự bịa ví dụ mới và không sinh code mẫu nếu người dùng không yêu cầu.",
+                "You are a programming expert in " + lang + " with over 20 years of experience, working according to customer requirements. "
+                    + "Reason from the request + current code to analyze, explain, or locate relevant parts. "
+                    + "Classifier hints are soft guidance, not mandatory commands. "
+                    + "Respond concisely and accurately, grounded in the current code. " + languageRule + " "
+                    + "Do not rewrite into another language, invent new examples, or generate sample code unless explicitly requested.",
+                "你是一名拥有20多年经验的 " + lang + " 编程专家，按客户需求开展工作。"
+                    + "请基于用户请求与当前代码进行分析、解释或定位相关位置。"
+                    + "分类器提示仅作软参考，不是强制命令。"
+                    + "请基于当前代码简洁且准确地回答。" + languageRule + " "
+                    + "除非用户明确要求，否则不要改写成其他语言、不要虚构示例、不要生成示例代码。"
+            );
         }
 
-        String userMsg = "CODE HIỆN TẠI:\n" + compactContext + "\n\n" + taskInstruction;
+        String userMsg = buildLocalDirectClassifierHint(intentClass)
+            + "USER_REQUEST:\n" + requestText
+            + "\n\nCURRENT_CODE_CONTEXT:\n" + compactContext;
         return "<|im_start|>system\n" + systemMsg + "<|im_end|>\n"
             + "<|im_start|>user\n" + userMsg + "<|im_end|>\n"
             + "<|im_start|>assistant\n";
+    }
+
+    private String buildLocalDirectClassifierHint(LocalIntentClassification intentClass) {
+        LocalIntentClassification intent = intentClass == null
+            ? LocalIntentClassification.unknown()
+            : intentClass;
+        return "CLASSIFIER_HINT_SOFT_ONLY:\n"
+            + "- type=" + String.valueOf(intent.type() == null ? "" : intent.type()) + "\n"
+            + "- action=" + String.valueOf(intent.action() == null ? "" : intent.action()) + "\n"
+            + "- confidence=" + intent.confidence() + "\n"
+            + "- nextStep=" + String.valueOf(intent.nextStep() == null ? "" : intent.nextStep()) + "\n"
+            + "- contextKind=" + String.valueOf(intent.contextKind() == null ? "" : intent.contextKind()) + "\n"
+            + "- Rule: use these hints as advisory only; the actual request and context always have higher priority.\n\n";
     }
 
     private String detectCodeLanguage(String contextType, String code) {
@@ -4784,10 +4828,12 @@ public class ApiSpringController {
     private String buildLocalFastQuestionPrompt(String message, String language) {
         String normalizedLanguage = String.valueOf(language == null ? "" : language).trim();
         String safeMessage = truncateMiddle(String.valueOf(message == null ? "" : message).trim(), Math.max(300, aiLocalFastQuestionMaxQuestionChars));
+        String languageRule = buildMatchInputLanguageRule(safeMessage);
         return String.join("\n",
             "<|im_start|>system",
             "Bạn là trợ lý AI local của hệ thống CSM.",
-            "Trả lời NGẮN GỌN, đúng trọng tâm, tiếng Việt tự nhiên.",
+            "Trả lời NGẮN GỌN, đúng trọng tâm.",
+            languageRule,
             "Không trả về JSON/object/map. Chỉ trả lời văn bản tự nhiên.",
             "Không sinh code nếu người dùng chỉ hỏi thông tin.",
             "Nếu cần liệt kê ý, chỉ nêu tối đa 4 ý ngắn, mỗi ý 1 dòng.",
@@ -4812,8 +4858,9 @@ public class ApiSpringController {
             safe = dewrapped;
         }
 
-        if (isIdentityQuestion(originalMessage)) {
-            return "Tôi là trợ lý AI local của hệ thống CSM. Tôi hỗ trợ giải thích, phân tích và chỉnh sửa theo yêu cầu của bạn.";
+        if (isIdentityQuestion(originalMessage) && !isLikelyJsonPayload(safe)) {
+            // Model answered naturally — use it directly.
+            return safe;
         }
 
         if (!isLikelyJsonPayload(safe)) {
@@ -4829,12 +4876,10 @@ public class ApiSpringController {
                     parsedMap.get("answer"),
                     parsedMap.get("description"),
                     parsedMap.get("summary"));
-                if (!preferred.isBlank()) {
-                    return preferred;
-                }
-                String name = firstNonBlankString(parsedMap.get("assistant"), parsedMap.get("name"), parsedMap.get("title"));
-                if (!name.isBlank() && parsedMap.size() <= 3) {
-                    return "Tôi là " + name + ".";
+                String structured = renderLocalFastQuestionStructuredAnswer(parsed, 0);
+                String best = selectBestLocalFastAnswer(preferred, structured);
+                if (!best.isBlank()) {
+                    return best;
                 }
             }
 
@@ -4843,10 +4888,91 @@ public class ApiSpringController {
                 return structured;
             }
         } catch (Exception ignored) {
-            // Fall through to generic fallback below.
+            // JSON parse failed — return the raw answer as-is.
         }
 
-        return "Tôi đã nhận câu hỏi của bạn. Bạn có thể nói rõ hơn nội dung bạn muốn tôi hỗ trợ không?";
+        // Return whatever the model actually said rather than a hardcoded fallback.
+        return safe;
+    }
+
+    private String buildMatchInputLanguageRule(String userText) {
+        String languageCode = detectInputLanguageCode(userText);
+        return switch (languageCode) {
+            case "zh" -> "MANDATORY: respond ONLY in Chinese (中文), matching the user's input language. Do NOT mix English or Vietnamese, except code/identifiers/URLs.";
+            case "en" -> "MANDATORY: respond ONLY in English, matching the user's input language. Do NOT mix Vietnamese or Chinese, except code/identifiers/URLs.";
+            default -> "BẮT BUỘC: chỉ trả lời bằng tiếng Việt, đúng ngôn ngữ người dùng vừa nhập. KHÔNG trộn tiếng Anh/tiếng Trung, trừ code, định danh kỹ thuật hoặc URL.";
+        };
+    }
+
+    private String localizeByInputLanguage(String userText, String vi, String en, String zh) {
+        String languageCode = detectInputLanguageCode(userText);
+        return switch (languageCode) {
+            case "zh" -> zh;
+            case "en" -> en;
+            default -> vi;
+        };
+    }
+
+    private String detectInputLanguageCode(String text) {
+        String source = String.valueOf(text == null ? "" : text).trim();
+        if (source.isBlank()) {
+            return "vi";
+        }
+
+        boolean hasAsciiLetter = false;
+        boolean hasVietnameseSpecial = false;
+        for (int i = 0; i < source.length(); i++) {
+            char ch = source.charAt(i);
+            if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
+                hasAsciiLetter = true;
+            }
+            if ("ăâđêôơưĂÂĐÊÔƠƯ".indexOf(ch) >= 0) {
+                hasVietnameseSpecial = true;
+            }
+
+            Character.UnicodeBlock block = Character.UnicodeBlock.of(ch);
+            if (block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
+                    || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
+                    || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B
+                    || block == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS) {
+                return "zh";
+            }
+        }
+
+        String normalized = Normalizer.normalize(source.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
+            .replaceAll("\\p{M}", "");
+        String tokenized = " " + normalized.replaceAll("[^a-z0-9]+", " ") + " ";
+
+        if (hasVietnameseSpecial
+                || tokenized.contains(" ban ")
+                || tokenized.contains(" toi ")
+                || tokenized.contains(" khong ")
+                || tokenized.contains(" duoc ")
+                || tokenized.contains(" tieng viet ")
+                || tokenized.contains(" giup toi ")
+                || tokenized.contains(" giup minh ")
+                || tokenized.contains(" nhu the nao ")
+                || tokenized.contains(" tai sao ")
+                || tokenized.contains(" lam sao ")
+                || tokenized.contains(" cho toi ")) {
+            return "vi";
+        }
+
+        if (tokenized.contains(" what ")
+                || tokenized.contains(" how ")
+                || tokenized.contains(" why ")
+                || tokenized.contains(" can you ")
+                || tokenized.contains(" please ")
+                || tokenized.contains(" explain ")
+                || tokenized.contains(" in english ")) {
+            return "en";
+        }
+
+        if (hasAsciiLetter) {
+            // Với câu không dấu/khó phân biệt, ưu tiên tiếng Việt để tránh trả lời lẫn ngôn ngữ.
+            return "vi";
+        }
+        return "vi";
     }
 
     private boolean isIdentityQuestion(String message) {
@@ -4889,11 +5015,11 @@ public class ApiSpringController {
         }
         if (value instanceof List<?> list) {
             List<String> rendered = new ArrayList<>();
-            int limit = Math.min(list.size(), 8);
+            int limit = Math.min(list.size(), 24);
             for (int i = 0; i < limit; i++) {
                 String item = renderLocalFastQuestionStructuredAnswer(list.get(i), depth + 1);
                 if (!item.isBlank()) {
-                    rendered.add("- " + item.replaceAll("\\s+", " ").trim());
+                    rendered.add("- " + item.trim());
                 }
             }
             return String.join("\n", rendered).trim();
@@ -4902,7 +5028,7 @@ public class ApiSpringController {
             List<String> rendered = new ArrayList<>();
             int count = 0;
             for (Map.Entry<?, ?> entry : map.entrySet()) {
-                if (count++ >= 6) {
+                if (count++ >= 16) {
                     break;
                 }
                 String key = String.valueOf(entry.getKey() == null ? "" : entry.getKey()).trim();
@@ -4919,6 +5045,35 @@ public class ApiSpringController {
             return String.join("\n", rendered).trim();
         }
         return String.valueOf(value).trim();
+    }
+
+    private String selectBestLocalFastAnswer(String preferred, String structured) {
+        String p = String.valueOf(preferred == null ? "" : preferred).trim();
+        String s = String.valueOf(structured == null ? "" : structured).trim();
+        if (p.isBlank()) {
+            return s;
+        }
+        if (s.isBlank()) {
+            return p;
+        }
+
+        int preferredScore = p.length() + (looksLikeStructuredMarkdown(p) ? 120 : 0);
+        int structuredScore = s.length() + (looksLikeStructuredMarkdown(s) ? 120 : 0);
+        return structuredScore > preferredScore ? s : p;
+    }
+
+    private boolean looksLikeStructuredMarkdown(String value) {
+        String text = String.valueOf(value == null ? "" : value);
+        if (text.isBlank()) {
+            return false;
+        }
+        String lower = text.toLowerCase(Locale.ROOT);
+        return lower.contains("###")
+            || lower.contains("**")
+            || lower.contains("1. ")
+            || lower.contains("2. ")
+            || lower.contains("\n- ")
+            || lower.contains("\n1. ");
     }
 
     private int resolveLocalPreAnalysisInputTokenBudget(String requestText, String sourcePrompt, String contextType, String responseMode) {
@@ -6327,6 +6482,15 @@ public class ApiSpringController {
     }
 
     private String buildRequirementContractForPrompt(String message, String contextType, String responseMode) {
+        return buildRequirementContractForPrompt(message, contextType, responseMode, null, "");
+    }
+
+    private String buildRequirementContractForPrompt(
+            String message,
+            String contextType,
+            String responseMode,
+            LocalIntentClassification effectiveIntent,
+            String uiLang) {
         if (!aiRequirementClarifyEnabled) {
             return "";
         }
@@ -6337,6 +6501,10 @@ public class ApiSpringController {
             return "";
         }
 
+        LocalIntentClassification intent = effectiveIntent == null
+            ? LocalIntentClassification.unknown()
+            : effectiveIntent;
+
         String lower = normalized.toLowerCase();
         boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
         boolean menuContext = isMenuJsonContext(contextType);
@@ -6344,23 +6512,35 @@ public class ApiSpringController {
 
         String expectedOutput;
         if (menuPatchOnly) {
-            expectedOutput = "JSON menu payload hop le, CHI cap nhat cac field duoc yeu cau, khong doi cau truc";
+            expectedOutput = uiTextByLang(uiLang,
+                "JSON menu payload hợp lệ, CHỈ cập nhật đúng các field yêu cầu, không đổi cấu trúc",
+                "Valid JSON menu payload — update ONLY the requested fields, do not change structure",
+                "合法 JSON 菜单 payload — 仅更新请求字段，不改变结构");
         } else if (menuContext && editMode) {
-            expectedOutput = "JSON menu payload hop le, apply duoc ngay vao editor";
+            expectedOutput = uiTextByLang(uiLang,
+                "JSON menu payload hợp lệ, áp dụng được ngay vào editor",
+                "Valid JSON menu payload ready to apply directly in the editor",
+                "合法 JSON 菜单 payload，可直接应用于编辑器");
         } else if (editMode) {
-            expectedOutput = "Patch/structured edits co the apply truc tiep";
+            expectedOutput = uiTextByLang(uiLang,
+                "Patch/structured edits có thể apply trực tiếp",
+                "Patch or structured edits applicable directly",
+                "可直接应用的 patch 或结构化修改");
         } else {
-            expectedOutput = "Phan tich/chu dan ro rang, bam sat yeu cau";
+            expectedOutput = uiTextByLang(uiLang,
+                "Phân tích/chỉ dẫn rõ ràng, bám sát yêu cầu",
+                "Clear analysis or guidance that directly addresses the request",
+                "清晰的分析或指引，直接切中请求");
         }
 
-        String primaryGoal = detectPrimaryGoal(normalized, lower, editMode, menuContext, menuPatchOnly);
+        String primaryGoal = derivePrimaryGoal(intent, editMode, menuContext, menuPatchOnly, uiLang);
         List<String> constraints = extractRequirementConstraints(normalized);
         List<String> acceptance = buildAcceptanceCriteria(editMode, menuContext, constraints, menuPatchOnly);
         List<String> ambiguities = detectRequirementAmbiguities(
             normalized,
             contextType,
             responseMode,
-            null);
+            intent);
 
         int maxItems = Math.max(3, aiRequirementClarifyMaxItems);
         StringBuilder sb = new StringBuilder();
@@ -6406,17 +6586,91 @@ public class ApiSpringController {
         return sb.toString().trim();
     }
 
-    private String detectPrimaryGoal(String requestText, String lower, boolean editMode, boolean menuContext, boolean menuPatchOnly) {
-        if (menuContext) {
+    /**
+     * Derive the primary goal description from the classifier output (type + action),
+     * expressed in the user's chosen language (vi / en / zh).
+     * No hardcoded goal strings — the combination of classifier type and action drives the text.
+     */
+    private String derivePrimaryGoal(
+            LocalIntentClassification intent,
+            boolean editMode,
+            boolean menuContext,
+            boolean menuPatchOnly,
+            String uiLang) {
+        String type   = String.valueOf(intent.type()   == null ? "" : intent.type()).trim().toUpperCase(Locale.ROOT);
+        String action = String.valueOf(intent.action() == null ? "" : intent.action()).trim().toLowerCase(Locale.ROOT);
+
+        // Determine domain: prefer classifier, fall back to structural context flags.
+        boolean isMenuEdit = "EDIT_MENU".equals(type) || (menuContext && editMode);
+        boolean isCodeEdit = "EDIT_CODE".equals(type) || (!menuContext && editMode);
+        boolean isQuestion = "QUESTION".equals(type);
+
+        if (isMenuEdit) {
             if (menuPatchOnly) {
-                return "Bo sung/chinh sua dung cac field duoc yeu cau, giu nguyen 100% cau truc menu hien co";
+                return uiTextByLang(uiLang,
+                    "Cập nhật đúng các field được yêu cầu, giữ nguyên 100% cấu trúc menu hiện có",
+                    "Update only the requested fields while keeping the entire existing menu structure intact",
+                    "仅更新请求的字段，完整保留现有菜单结构");
             }
-            return "Chinh sua cau truc menu theo dung logic nghiep vu hien co, khong thay doi schema";
+            return switch (action) {
+                case "add" -> uiTextByLang(uiLang,
+                    "Thêm node/mục menu mới đúng vị trí và đúng schema hiện có",
+                    "Add the new menu node or item at the correct position following the existing schema",
+                    "在正确位置按现有 schema 添加新菜单节点或条目");
+                case "remove", "delete" -> uiTextByLang(uiLang,
+                    "Xóa đúng node/mục menu được chỉ định, không ảnh hưởng phần còn lại",
+                    "Remove only the specified menu node or item without affecting the remaining structure",
+                    "仅删除指定菜单节点或条目，不影响其余结构");
+                case "modify" -> uiTextByLang(uiLang,
+                    "Chỉnh sửa menu đúng logic nghiệp vụ, không thay đổi schema tổng thể",
+                    "Modify the menu following existing business logic without changing the overall schema",
+                    "按业务逻辑修改菜单，不改变整体 schema");
+                default -> uiTextByLang(uiLang,
+                    "Cập nhật menu đúng yêu cầu, giữ nguyên cấu trúc hợp lệ",
+                    "Update the menu as requested while preserving a valid structure",
+                    "按要求更新菜单，同时保持结构合法");
+            };
         }
-        if (editMode) {
-            return "Chinh sua code dung pham vi, dung muc tieu nguoi dung, tranh regression";
+
+        if (isCodeEdit) {
+            return switch (action) {
+                case "add" -> uiTextByLang(uiLang,
+                    "Thêm code/tính năng mới đúng vị trí, đúng phong cách hiện có",
+                    "Add the new code or feature at the correct location following the existing code style",
+                    "在正确位置按现有代码风格添加新代码或功能");
+                case "remove", "delete" -> uiTextByLang(uiLang,
+                    "Xóa đúng phần code được chỉ định, không gây regression",
+                    "Remove exactly the specified code without causing regressions elsewhere",
+                    "仅删除指定代码，不引入其他回归问题");
+                case "modify" -> uiTextByLang(uiLang,
+                    "Sửa code đúng phạm vi và đúng mục tiêu, tránh regression",
+                    "Edit the code within the defined scope and goal while avoiding regression",
+                    "在指定范围和目标内修改代码，避免引入回归");
+                default -> uiTextByLang(uiLang,
+                    "Chỉnh sửa code đúng yêu cầu và đúng phạm vi được xác định",
+                    "Edit the code as requested within the specified scope",
+                    "按要求在确定范围内修改代码");
+            };
         }
-        return "Phan tich va tra loi dung noi dung yeu cau nguoi dung";
+
+        if (isQuestion) {
+            return switch (action) {
+                case "search" -> uiTextByLang(uiLang,
+                    "Tìm kiếm và cung cấp thông tin chính xác đáp ứng yêu cầu",
+                    "Search and provide accurate information that directly answers the request",
+                    "搜索并提供准确信息以直接回答请求");
+                default -> uiTextByLang(uiLang,
+                    "Phân tích và trả lời đúng nội dung yêu cầu của người dùng",
+                    "Analyze and answer the user's request accurately",
+                    "准确分析并回答用户请求");
+            };
+        }
+
+        // GENERAL or unknown classifier output
+        return uiTextByLang(uiLang,
+            "Hỗ trợ người dùng đúng và đủ theo yêu cầu",
+            "Assist the user accurately and fully according to the request",
+            "准确、完整地按请求为用户提供帮助");
     }
 
     private List<String> extractRequirementConstraints(String requestText) {
@@ -6718,13 +6972,24 @@ public class ApiSpringController {
             String contextType,
             String responseMode) {
         LocalIntentClassification base = classified == null ? LocalIntentClassification.unknown() : classified;
-        if (base.isEditTask()) {
-            return base;
-        }
-
         boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
         boolean menuContext = isMenuJsonContext(contextType);
         boolean lowConfidence = base.confidence() < INTENT_CONFIDENCE_THRESHOLD;
+
+        if (!editMode && !menuContext && "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            // Analyze mode without code/menu edit intent → treat as direct question so local fast path can handle it.
+            return new LocalIntentClassification(
+                "QUESTION",
+                "ask",
+                Math.max(base.confidence(), 60),
+                "answer_direct",
+                "none",
+                base.raw());
+        }
+
+        if (base.isEditTask()) {
+            return base;
+        }
 
         LocalIntentClassification normalizedBaseRoute = normalizeClassifierRoute(base);
 
@@ -6783,7 +7048,7 @@ public class ApiSpringController {
                 : new LocalIntentClassification("EDIT_CODE", "modify", Math.max(base.confidence(), 55), "load_code_context", "code", base.raw());
         }
 
-        // Non-edit turns: keep classifier's direction instead of hardcoded meta-question heuristics.
+        // Non-edit turns outside code assistant keep direct-answer behavior.
         if (base.isQuestion() || base.isGeneral()) {
             return new LocalIntentClassification(
                 "QUESTION",
@@ -7388,9 +7653,11 @@ public class ApiSpringController {
                 "ai-assistant-chat",
                 message,
                 assistantPreAnalysisSource,
+                String.valueOf(currentCode == null ? "" : currentCode),
                 effectiveContextType,
                 responseMode,
-                preclassifiedIntent);
+                preclassifiedIntent,
+                null);
             emitAiAssistantChatChunk(appId, Map.of(
                 "stage", "local_pre_analysis",
                 "status", !assistantPreAnalysis.attempted()
