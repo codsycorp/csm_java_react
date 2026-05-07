@@ -2714,8 +2714,11 @@ public class ApiSpringController {
                 pName,
                 pType,
                 cursorLine);
+            String outputLanguageRule = buildMatchInputLanguageRule(message);
 
         sb.append("Bạn là AI trợ lý lập trình (như Cursor/Copilot). Hỗ trợ người dùng chính xác và chi tiết.\n\n");
+            sb.append("QUY TẮC NGÔN NGỮ ĐẦU RA (bắt buộc): ").append(outputLanguageRule).append("\n");
+            sb.append("Ngôn ngữ trả lời phải khớp ngôn ngữ người dùng trong phần YÊU CẦU, kể cả ở chế độ analyze.\n\n");
 
         if (localContextBundle.forceLocalOnly()) {
             sb.append("## LOCAL_EXECUTION_POLICY\n");
@@ -10000,10 +10003,14 @@ public class ApiSpringController {
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
         String inferredTaskType = "menu_json".equals(normalizedContext) ? "menu_design" : "code_assistant";
         String normalizedMode = normalizeAiAssistantResponseMode(responseMode, message, contextType, inferredTaskType);
+        String outputLanguageRule = buildMatchInputLanguageRule(message);
         String effectiveCurrentCode = String.valueOf(currentCode == null ? "" : currentCode);
         String effectiveContinuityMemory = optimizeAiAssistantContextSegment(continuityMemory, normalizedContext, normalizedMode, true);
         String effectiveGlobalContext = optimizeAiAssistantContextSegment(globalContext, normalizedContext, normalizedMode, false);
         int promptHardCap = resolveAiAssistantPromptHardCap(normalizedContext);
+
+        sb.append("OUTPUT LANGUAGE RULE (required): ").append(outputLanguageRule).append("\n");
+        sb.append("Always reply in the same natural language as the user's latest message.\n\n");
 
         if ("code".equals(normalizedContext) && "analyze".equals(normalizedMode)
             && !effectiveCurrentCode.isBlank()) {
