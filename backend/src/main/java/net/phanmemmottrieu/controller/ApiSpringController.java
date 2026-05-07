@@ -4705,16 +4705,19 @@ public class ApiSpringController {
                     + "Hãy tự suy luận từ request + code hiện tại để phân tích, giải thích hoặc tìm vị trí liên quan. "
                     + "Classifier hint chỉ là gợi ý mềm, không phải lệnh bắt buộc. "
                     + "Trả lời ngắn gọn, chính xác, bám đúng code hiện có. " + languageRule + " "
+                    + "Không mở đầu bằng kế hoạch kiểu 'Tôi sẽ phân tích theo các bước...'; phải phân tích trực tiếp vào nghiệp vụ/code hiện tại. "
                     + "Không tự viết lại sang ngôn ngữ khác, không tự bịa ví dụ mới và không sinh code mẫu nếu người dùng không yêu cầu.",
                 "You are a programming expert in " + lang + " with over 20 years of experience, working according to customer requirements. "
                     + "Reason from the request + current code to analyze, explain, or locate relevant parts. "
                     + "Classifier hints are soft guidance, not mandatory commands. "
                     + "Respond concisely and accurately, grounded in the current code. " + languageRule + " "
+                    + "Do not start with meta planning text like 'I will analyze this in steps'; provide direct analysis of the current code/business flow immediately. "
                     + "Do not rewrite into another language, invent new examples, or generate sample code unless explicitly requested.",
                 "你是一名拥有20多年经验的 " + lang + " 编程专家，按客户需求开展工作。"
                     + "请基于用户请求与当前代码进行分析、解释或定位相关位置。"
                     + "分类器提示仅作软参考，不是强制命令。"
                     + "请基于当前代码简洁且准确地回答。" + languageRule + " "
+                    + "不要先输出“我将按步骤分析”这类计划话术，必须直接分析当前代码与业务流程。"
                     + "除非用户明确要求，否则不要改写成其他语言、不要虚构示例、不要生成示例代码。"
             );
         }
@@ -4987,12 +4990,46 @@ public class ApiSpringController {
             }
         }
 
+        String heuristic = detectInputLanguageCodeHeuristic(source);
+        if (!heuristic.isBlank()) {
+            return heuristic;
+        }
+
         String inferred = detectInputLanguageCodeWithLocalAI(source, false);
         if (!inferred.isBlank()) {
             return inferred;
         }
 
         return "vi";
+    }
+
+    private String detectInputLanguageCodeHeuristic(String text) {
+        String source = String.valueOf(text == null ? "" : text).trim();
+        if (source.isBlank()) {
+            return "";
+        }
+
+        String lower = source.toLowerCase(Locale.ROOT);
+        int viScore = 0;
+        int enScore = 0;
+
+        if (lower.matches(".*[ăâđêôơưáàảãạắằẳẵặấầẩẫậéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ].*")) {
+            viScore += 4;
+        }
+        if (lower.matches(".*\\b(hay|hãy|phan|phân|tich|tích|toan|toàn|nghiep|nghiệp|vu|vụ|day|đầy|du|đủ|xu ly|xử lý|de lam gi|để làm gì|cho toi|cho tôi|giup toi|giúp tôi)\\b.*")) {
+            viScore += 2;
+        }
+        if (lower.matches(".*\\b(the|and|what|why|how|please|analyze|analysis|business|purpose|explain|summary)\\b.*")) {
+            enScore += 2;
+        }
+
+        if (viScore >= 2 && viScore >= enScore) {
+            return "vi";
+        }
+        if (enScore >= 2 && enScore > viScore) {
+            return "en";
+        }
+        return "";
     }
 
     private String detectInputLanguageCodeWithLocalAI(String text, boolean bypassCache) {
@@ -7761,6 +7798,13 @@ public class ApiSpringController {
                         0,
                         estimateTokensByChars(assistantPreAnalysisSource.length()) + estimateTokensByChars(localAnswer.length()));
                     emitTextAsAiAssistantChunks(appId, localAnswer, responseMode, uiLang);
+                    Map<String, Object> localCompletion = new HashMap<>();
+                    localCompletion.put("stage", "complete");
+                    localCompletion.put("fullResponse", localAnswer);
+                    localCompletion.put("responseMode", responseMode);
+                    localCompletion.put("timestamp", System.currentTimeMillis());
+                    localCompletion.put("model", "local_pre_analysis");
+                    emitAiAssistantChatEvent(appId, "aiAssistant_chat_complete", localCompletion);
                     String localContinuityScopeKey = buildAiAssistantContinuityScopeKey(effectiveContextType, language, pName, pType);
                     aiAssistantGatewayService.appendAiAssistantConversationTurn(
                         appId,
