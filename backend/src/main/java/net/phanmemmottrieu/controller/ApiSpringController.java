@@ -4507,20 +4507,31 @@ public class ApiSpringController {
         if (isMenuJsonContext(contextType)) {
             return false;
         }
+        String effectiveCodeContext = String.valueOf(codeContext == null ? "" : codeContext);
+        String effectiveLocalText = String.valueOf(localText == null ? "" : localText).trim();
+        LocalIntentClassification effectiveIntent = intentClass == null ? LocalIntentClassification.unknown() : intentClass;
+        boolean needsDeepCodeContext = effectiveIntent.needsCodeContext()
+            || "load_code_context".equalsIgnoreCase(String.valueOf(effectiveIntent.nextStep() == null ? "" : effectiveIntent.nextStep()));
+
+        // For ai-code-stream analyze path, if classifier says code context is required and local direct answer
+        // is still short, force full pipeline even when broad-request detector is uncertain.
+        if ("ai-code-stream".equals(normalizedFlow)
+                && needsDeepCodeContext
+                && effectiveCodeContext.length() >= 8000
+                && effectiveLocalText.length() < 3000) {
+            return true;
+        }
+
         if (!isBroadAnalysisRequest(requestText, intentClass)) {
             return false;
         }
-        String effectiveCodeContext = String.valueOf(codeContext == null ? "" : codeContext);
         if (effectiveCodeContext.length() < 12000) {
             return false;
         }
-        String effectiveLocalText = String.valueOf(localText == null ? "" : localText).trim();
         if (effectiveLocalText.length() >= 2000) {
             return false;
         }
-        LocalIntentClassification effectiveIntent = intentClass == null ? LocalIntentClassification.unknown() : intentClass;
-        return effectiveIntent.needsCodeContext()
-            || "load_code_context".equalsIgnoreCase(String.valueOf(effectiveIntent.nextStep() == null ? "" : effectiveIntent.nextStep()));
+        return needsDeepCodeContext;
     }
 
     private boolean isBroadAnalysisRequest(String requestText, LocalIntentClassification intentClass) {
