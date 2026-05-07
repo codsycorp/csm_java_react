@@ -2818,6 +2818,18 @@ public class ApiSpringController {
             sb.append("- Không tự sinh ví dụ code mới, pseudo-code hay hàm minh họa nếu người dùng không yêu cầu.\n");
             sb.append("- Nếu cần trích dẫn, chỉ dùng snippet ngắn từ chính code hiện tại và giữ nguyên ngôn ngữ gốc: ").append(language).append(".\n");
             sb.append("- Ưu tiên mô tả: mục đích, đầu vào, luồng xử lý, đầu ra và điểm cần lưu ý.\n\n");
+            if (isBroadAnalysisRequest(message, null)) {
+                sb.append("ĐÂY LÀ YÊU CẦU PHÂN TÍCH TOÀN BỘ CODE (END-TO-END).\n");
+                sb.append("BẮT BUỘC TRẢ LỜI ĐỦ CÁC PHẦN SAU:\n");
+                sb.append("1) Mục tiêu nghiệp vụ tổng thể của chức năng/module.\n");
+                sb.append("2) Luồng xử lý chính từ input -> validate -> transform -> output.\n");
+                sb.append("3) Các thành phần/hàm quan trọng và vai trò của từng phần.\n");
+                sb.append("4) Điều kiện rẽ nhánh, rule nghiệp vụ, edge cases.\n");
+                sb.append("5) Dữ liệu vào/ra và side effects (DB/API/cache/event).\n");
+                sb.append("6) Rủi ro kỹ thuật và gợi ý cải thiện.\n");
+                sb.append("Không được chỉ liệt kê key/prop/token rời rạc (ví dụ rowKey/dateFormatter/options...).\n");
+                sb.append("Phải bám sát code thực tế, tránh trả lời chung chung.\n\n");
+            }
         }
 
         if (attachmentsRaw instanceof List<?> attachments && !attachments.isEmpty()) {
@@ -4332,7 +4344,7 @@ public class ApiSpringController {
                             true,
                             false,
                             "",
-                            localText,
+                            "",
                             "local_direct_escalated_full_analysis");
                     }
                     logger.info("[AI_LOCAL_DIRECT] CHAT answered locally chars={} contextChars={} nextStep={}",
