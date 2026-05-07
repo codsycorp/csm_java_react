@@ -43,6 +43,7 @@ interface ChatMessage {
 	id: string
 	role: "user" | "assistant" | "system"
 	messageType?: "response" | "debug" | "compacted_context"
+	responseMode?: ResponseMode
 	content: string
 	timestamp: number
 	codeBlocks?: CodeBlock[]
@@ -471,6 +472,103 @@ function parseStructuredAssistantPayload(raw: unknown): StructuredAssistantPaylo
 	}
 }
 
+function renderJsonAnswerForChat(raw: unknown, depth = 0): string {
+	if (raw == null || depth > 3)
+		return "";
+	if (typeof raw === "string")
+		return raw.trim();
+	if (typeof raw === "number" || typeof raw === "boolean")
+		return String(raw);
+	if (Array.isArray(raw)) {
+		return raw
+			.slice(0, 8)
+			.map(item => renderJsonAnswerForChat(item, depth + 1))
+			.filter(Boolean)
+			.map(item => `- ${item.replace(/\s+/g, " ").trim()}`)
+			.join("\n")
+			.trim();
+	}
+	if (typeof raw === "object") {
+		return Object.entries(raw as Record<string, unknown>)
+			.slice(0, 6)
+			.map(([key, value]) => {
+				const rendered = renderJsonAnswerForChat(value, depth + 1);
+				if (!rendered)
+					return "";
+				return rendered.includes("\n")
+					? `${key}:\n${rendered}`
+					: `${key}: ${rendered}`;
+			})
+			.filter(Boolean)
+			.join("\n")
+			.trim();
+	}
+	return String(raw).trim();
+}
+
+function decodeJsonLikeString(value: string): string {
+	try {
+		return JSON.parse(`"${value}"`);
+	}
+	catch {
+		return value.replace(/\\n/g, " ").replace(/\\"/g, '"').trim();
+	}
+}
+
+function renderLooseJsonLikeAnswer(raw: unknown): string | null {
+	const text = String(raw || "").trim();
+	if (!text)
+		return null;
+	const start = Math.max(text.indexOf("{"), text.indexOf("["));
+	const candidate = start >= 0 ? text.slice(start).trim() : text;
+	if (!(candidate.startsWith("{") || candidate.startsWith("[")))
+		return null;
+
+	const quoted = Array.from(candidate.matchAll(/"((?:[^"\\]|\\.)*)"/g))
+		.map(match => decodeJsonLikeString(match[1]).trim())
+		.filter(Boolean);
+	if (!quoted.length)
+		return null;
+
+	if (candidate.startsWith("{") && /"(?:[^"\\]|\\.)*"\s*:\s*\[/.test(candidate) && quoted.length >= 2) {
+		const [title, ...items] = quoted;
+		return `${title}:\n${items.slice(0, 8).map(item => `- ${item}`).join("\n")}`.trim();
+	}
+
+	if (candidate.startsWith("{")) {
+		const [title, ...rest] = quoted;
+		if (!rest.length)
+			return title || null;
+		if (rest.length === 1)
+			return `${title}: ${rest[0]}`.trim();
+		return `${title}:\n${rest.slice(0, 8).map(item => `- ${item}`).join("\n")}`.trim();
+	}
+
+	return quoted.slice(0, 8).map(item => `- ${item}`).join("\n").trim() || null;
+}
+
+function normalizeConversationalJsonAnswer(raw: unknown): string | null {
+	const candidate = extractValidJsonCandidate(String(raw || ""));
+	if (candidate) {
+		try {
+			const parsed = JSON.parse(candidate);
+			const rendered = renderJsonAnswerForChat(parsed, 0).trim();
+			if (rendered)
+				return rendered;
+		}
+		catch {
+			// Fall through to truncated JSON-like fallback.
+		}
+	}
+	return renderLooseJsonLikeAnswer(raw);
+}
+
+function toStringList(raw: unknown): string[] {
+	if (!Array.isArray(raw))
+		return [];
+	return raw.map(item => String(item || "").trim()).filter(Boolean);
+}
+
 function looksLikeStructuredPayload(raw: unknown): boolean {
 	const text = String(raw || "").trim();
 	if (!text)
@@ -605,6 +703,30 @@ function hasEditIntent(input: string): boolean {
 		/(修改|更新|重写|修复|生成|插入|替换|代码|菜单|json)/i,
 	];
 	return patterns.some(pattern => pattern.test(text));
+}
+
+function hasConversationalQuestionIntent(input: string): boolean {
+	const text = String(input || "").trim().toLowerCase();
+	if (!text)
+		return false;
+	const patterns = [
+		/^(hi|hello|alo|xin\s+chao|chao\s+ban|chào\s+bạn|ban\s+la\s+ai|bạn\s+là\s+ai|who\s+are\s+you|ban\s+co\s+the\s+lam\s+gi|bạn\s+có\s+thể\s+làm\s+gì)/i,
+		/(la\s+gi|là\s+gì|tai\s+sao|tại\s+sao|nhu\s+the\s+nao|như\s+thế\s+nào|how|why|what|explain|giai\s+thich|giải\s+thích|huong\s+dan|hướng\s+dẫn)/i,
+	];
+	const hasEdit = hasEditIntent(text) || hasMenuPatchOnlyIntent(text);
+	return !hasEdit && patterns.some(pattern => pattern.test(text));
+}
+
+function inferResponseModeByIntent(input: string, contextType: AiAssistantChatProps["contextType"]): ResponseMode {
+	const text = String(input || "").trim();
+	if (!text)
+		return "analyze";
+	if (hasConversationalQuestionIntent(text))
+		return "analyze";
+	if (contextType === "menu_json") {
+		return (hasEditIntent(text) || hasMenuPatchOnlyIntent(text)) ? "edit" : "analyze";
+	}
+	return hasEditIntent(text) ? "edit" : "analyze";
 }
 
 function hasMenuPatchOnlyIntent(input: string): boolean {
@@ -976,6 +1098,82 @@ export default function AiAssistantChat({
 				return code || uiText("Đang xử lý", "Processing", "处理中");
 		}
 	}, [uiText]);
+
+	const formatSystemNotice = useCallback((input: {
+		summary: string
+		nextStep?: string
+		internalCode?: string
+		ambiguities?: string[]
+		questions?: string[]
+	}) => {
+		const summary = String(input.summary || "").trim();
+		const nextStep = String(input.nextStep || "").trim();
+		const internalCode = String(input.internalCode || "").trim();
+		const ambiguities = Array.isArray(input.ambiguities) ? input.ambiguities.filter(Boolean) : [];
+		const questions = Array.isArray(input.questions) ? input.questions.filter(Boolean) : [];
+
+		return [
+			summary
+				? `${uiText("Nguyên nhân", "Reason", "原因")}:\n${summary}`
+				: "",
+			ambiguities.length
+				? `${uiText("Các điểm cần lưu ý", "Points to note", "需要注意的点")}:\n${ambiguities.map(item => `- ${item}`).join("\n")}`
+				: "",
+			questions.length
+				? `${uiText("Việc cần làm tiếp", "What to do next", "下一步操作")}:\n${questions.map((item, index) => `${index + 1}. ${item}`).join("\n")}`
+				: nextStep
+					? `${uiText("Việc cần làm tiếp", "What to do next", "下一步操作")}:\n${nextStep}`
+					: "",
+			internalCode
+				? `${uiText("Mã nội bộ", "Internal code", "内部代码")}: ${internalCode}`
+				: "",
+		].filter(Boolean).join("\n\n").trim();
+	}, [uiText]);
+
+	const resolveSystemNextStep = useCallback((internalCode?: string, stage?: string, fallback?: string) => {
+		const code = String(internalCode || "").trim().toLowerCase();
+		const normalizedStage = String(stage || "").trim().toLowerCase();
+		switch (code || normalizedStage) {
+			case "authentication_required":
+			case "auth_guard":
+			case "http_401":
+				return uiText("Vui lòng đăng nhập lại rồi gửi lại yêu cầu.", "Please sign in again and resend the request.", "请重新登录后再重新发送请求。");
+			case "missing_flow_type":
+				return uiText("Hãy mở đúng màn hình editor rồi gửi lại yêu cầu để frontend truyền đủ flowType.", "Open the correct editor screen and resend the request so the frontend can include the required flowType.", "请先打开正确的编辑器页面，再重新发送请求，以便前端带上必需的 flowType。");
+			case "flow_context_mismatch":
+			case "flow_guard":
+				return uiText("Hãy kiểm tra lại bạn đang ở luồng code hay menu rồi gửi lại yêu cầu cho đúng ngữ cảnh.", "Check whether you are in code flow or menu flow, then resend the request with the correct context.", "请确认你当前处于代码流还是菜单流，然后按正确上下文重新发送请求。");
+			case "local_provider_unavailable":
+				return uiText("Hãy khởi động hoặc kiểm tra local provider rồi thử lại.", "Start or verify the local provider, then try again.", "请先启动或检查本地 provider，然后再试一次。");
+			case "local_provider_circuit_open":
+				return uiText("Hãy chờ local provider hết cooldown rồi thử lại sau.", "Wait for the local provider cooldown to finish, then try again.", "请等待本地 provider 冷却结束后再重试。");
+			case "requirement_clarification_needed":
+				return uiText("Hãy trả lời các câu hỏi làm rõ bên dưới rồi gửi tiếp để backend xử lý an toàn.", "Answer the clarification questions below, then send the request again so the backend can proceed safely.", "请先回答下面的澄清问题，然后再继续发送请求，以便后端安全处理。");
+			default:
+				return String(fallback || "").trim() || uiText("Bạn có thể thử lại, hoặc kiểm tra log backend nếu lỗi còn lặp lại.", "Try again, or inspect backend logs if the issue keeps happening.", "你可以重试；如果问题持续出现，请检查后端日志。");
+		}
+	}, [uiText]);
+
+	const showSystemToast = useCallback((kind: "info" | "warning" | "error", input: {
+		summary: string
+		nextStep?: string
+		internalCode?: string
+		ambiguities?: string[]
+		questions?: string[]
+	}) => {
+		const content = formatSystemNotice(input);
+		if (!content)
+			return;
+		if (kind === "warning") {
+			message.warning(content);
+			return;
+		}
+		if (kind === "info") {
+			message.info(content);
+			return;
+		}
+		message.error(content);
+	}, [formatSystemNotice]);
 
 	const appendModelDecisionTrace = useCallback((input: {
 		step: ModelDecisionTrace["step"]
@@ -1718,8 +1916,11 @@ export default function AiAssistantChat({
 
 		applyRealtimeCodeFromTextRef.current(nextText, force);
 		const structuredPayload = parseStructuredAssistantPayload(nextText);
+		const shouldHideCodeInChat = Boolean(onCodeInsert) && turnAllowAutoApplyRef.current;
+		const conversationalJsonText = !structuredPayload && !shouldHideCodeInChat
+			? normalizeConversationalJsonAnswer(nextText)
+			: null;
 		const showStructuredPlaceholder = !structuredPayload && looksLikeStructuredPayload(nextText);
-		const hideCodeInChat = Boolean(onCodeInsert);
 		const displayText = structuredPayload
 			? [
 				structuredPayload.summary,
@@ -1733,7 +1934,9 @@ export default function AiAssistantChat({
 					"Virtual Assistant is preparing the result for the editor...",
 					"虚拟助手正在为编辑器准备结果...",
 				)
-				: hideCodeInChat
+				: conversationalJsonText
+					? conversationalJsonText
+				: shouldHideCodeInChat
 					? (stripMarkdownCodeBlocks(nextText) || uiText(
 						`Đang cập nhật mã vào editor bằng ${assistantBrandLabel}...`,
 						`${assistantBrandLabel} is updating code in the editor...`,
@@ -1742,6 +1945,7 @@ export default function AiAssistantChat({
 					: nextText;
 
 		const now = Date.now();
+		const finalizedAt = force && nextText.trim() ? now : null;
 		let nextCodeBlocks = parsedCodeBlocksRef.current;
 		if (structuredPayload) {
 			nextCodeBlocks = [];
@@ -1760,7 +1964,10 @@ export default function AiAssistantChat({
 				const lastMsg = updated[i];
 				if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
 					lastMsg.content = displayText;
-					lastMsg.codeBlocks = hideCodeInChat ? [] : nextCodeBlocks;
+					lastMsg.codeBlocks = shouldHideCodeInChat ? [] : nextCodeBlocks;
+					if (finalizedAt) {
+						lastMsg.timestamp = finalizedAt;
+					}
 					break;
 				}
 			}
@@ -2077,7 +2284,7 @@ export default function AiAssistantChat({
 		setOrchPreviewLoading(true);
 		setShowOrchPreview(true);
 		try {
-			const responseMode: ResponseMode = contextType === "menu_json" ? "edit" : (hasEditIntent(msg) ? "edit" : "analyze");
+			const responseMode: ResponseMode = inferResponseModeByIntent(msg, contextType);
 			const res = await request.post("ai-orchestration-preview", {
 				json: {
 					appId,
@@ -2143,8 +2350,12 @@ export default function AiAssistantChat({
 				percent: Math.max(0, geminiProgress.percent || 0),
 			});
 		}
-		message.info(uiText("Đã hủy request đang chạy", "Cancelled the running request", "已取消当前请求"));
-	}, [appendStageEvent, flushStreamingToUI, geminiProgress.percent, isLoading, uiText]);
+		showSystemToast("info", {
+			summary: uiText("Đã hủy request đang chạy.", "The running request was cancelled.", "当前正在运行的请求已取消。"),
+			nextStep: uiText("Bạn có thể chỉnh lại yêu cầu rồi gửi lại khi sẵn sàng.", "You can revise the request and send it again when ready.", "你可以调整请求后在准备好时重新发送。"),
+			internalCode: "REQUEST_CANCELLED",
+		});
+	}, [appendStageEvent, flushStreamingToUI, geminiProgress.percent, isLoading, showSystemToast, uiText]);
 	// Auto-scroll to latest message
 	useEffect(() => {
 		scrollToBottom(false);
@@ -2234,6 +2445,10 @@ export default function AiAssistantChat({
 			setMessages(newMessages);
 			saveChatHistory(newMessages);
 
+			// Resolve response mode deterministically to avoid backend fallback-to-analyze for edit/design requests.
+			const inferredResponseMode: ResponseMode = inferResponseModeByIntent(cleanedMessage || normalizedText, contextType);
+			const requestedResponseMode: ResponseMode = modeDirective.overrideMode ?? inferredResponseMode;
+
 			// Add placeholder for assistant response
 			const assistantMsg: ChatMessage = {
 				id: `assistant_${Date.now()}`,
@@ -2276,11 +2491,6 @@ export default function AiAssistantChat({
 					percent: 0,
 				});
 			}
-			// Resolve response mode deterministically to avoid backend fallback-to-analyze for edit/design requests.
-			const inferredResponseMode: ResponseMode = contextType === "menu_json"
-				? "edit"
-				: (hasEditIntent(cleanedMessage || normalizedText) ? "edit" : "analyze");
-			const requestedResponseMode: ResponseMode = modeDirective.overrideMode ?? inferredResponseMode;
 			turnAllowAutoApplyRef.current = requestedResponseMode === "edit";
 			requestStartedAtRef.current = Date.now();
 			lastProgressEventAtRef.current = requestStartedAtRef.current;
@@ -2296,12 +2506,15 @@ export default function AiAssistantChat({
 				sseAbortRef.current = controller;
 				const flowType = contextType === "menu_json" ? "menu_manager" : "code_editor";
 				const taskType = contextType === "menu_json"
-					? (hasMenuPatchOnlyIntent(cleanedMessage || normalizedText) ? "menu_patch" : "menu_design")
+					? (requestedResponseMode === "analyze"
+						? "menu_qa"
+						: (hasMenuPatchOnlyIntent(cleanedMessage || normalizedText) ? "menu_patch" : "menu_design"))
 					: "code_assistant";
 				const response = await request.post("ai-code-stream", {
 					json: {
 						appId,
 						message: cleanedMessage || normalizedText,
+						uiLanguage: String(i18n.resolvedLanguage || i18n.language || "vi"),
 						flowType,
 						taskType,
 						responseMode: requestedResponseMode,
@@ -2336,12 +2549,34 @@ export default function AiAssistantChat({
 
 				if (!response.ok) {
 					const status = response.status;
-					if (status === 401) {
-						message.error(uiText("Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại", "Session expired, please log in again", "登录会话已过期，请重新登录"));
-					}
-					else {
-						message.error(uiText("Gửi tin nhắn thất bại", "Failed to send message", "发送消息失败"));
-					}
+					const errorText = formatSystemNotice({
+						summary: status === 401
+							? uiText("Phiên đăng nhập đã hết hạn hoặc chưa hợp lệ.", "Your session has expired or is no longer valid.", "当前登录会话已过期或已失效。")
+							: uiText("Không gửi được yêu cầu lên backend.", "The request could not be sent to the backend.", "请求无法发送到后端。"),
+						nextStep: resolveSystemNextStep(status === 401 ? "http_401" : "http_request_failed"),
+						internalCode: status === 401 ? "HTTP_401" : `HTTP_${status}`,
+					});
+					setMessages((prev) => {
+						const updated = [...prev];
+						for (let i = updated.length - 1; i >= 0; i -= 1) {
+							const lastMsg = updated[i];
+							if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
+								lastMsg.content = errorText;
+								lastMsg.codeBlocks = [];
+								lastMsg.responseMode = "analyze";
+								lastMsg.timestamp = Date.now();
+								break;
+							}
+						}
+						return updated;
+					});
+					showSystemToast("error", {
+						summary: status === 401
+							? uiText("Phiên đăng nhập đã hết hạn hoặc chưa hợp lệ.", "Your session has expired or is no longer valid.", "当前登录会话已过期或已失效。")
+							: uiText("Không gửi được yêu cầu lên backend.", "The request could not be sent to the backend.", "请求无法发送到后端。"),
+						nextStep: resolveSystemNextStep(status === 401 ? "http_401" : "http_request_failed"),
+						internalCode: status === 401 ? "HTTP_401" : `HTTP_${status}`,
+					});
 					setIsLoading(false);
 					turnAllowAutoApplyRef.current = false;
 					return;
@@ -2352,6 +2587,7 @@ export default function AiAssistantChat({
 				let buffer = "";
 				let receivedCompleteEvent = false;
 				let receivedErrorEvent = false;
+				let receivedBlockedGuardEvent = false;
 				while (true) {
 					const { done, value } = await reader.read();
 					if (done)
@@ -2453,6 +2689,10 @@ export default function AiAssistantChat({
 								message: localizedEvtMessage,
 								detail: localizedEvtDetail || undefined,
 							};
+							const evtStatus = String((evt as any).status || "").trim().toLowerCase();
+							const evtQuestions = toStringList((evt as any).questions);
+							const evtAmbiguities = toStringList((evt as any).ambiguities);
+							const evtReasonCode = String((evt as any).reason_code || "").trim().toLowerCase();
 							if (evt.responseMode) {
 								const mode = String(evt.responseMode).trim().toLowerCase();
 								if (mode === "edit") {
@@ -2461,9 +2701,55 @@ export default function AiAssistantChat({
 								else if (mode === "analyze") {
 									turnAllowAutoApplyRef.current = false;
 								}
+								setMessages((prev) => {
+									const updated = [...prev];
+									for (let i = updated.length - 1; i >= 0; i -= 1) {
+										const lastMsg = updated[i];
+										if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
+											lastMsg.responseMode = mode === "edit" ? "edit" : "analyze";
+											break;
+										}
+									}
+									return updated;
+								});
 							}
 							if (evt.requestId) {
 								setStreamRequestId(String(evt.requestId));
+							}
+							if (evtStatus === "blocked" && localizedEvtMessage) {
+								receivedBlockedGuardEvent = true;
+								const blockedContent = formatSystemNotice({
+									summary: localizedEvtMessage,
+									nextStep: resolveSystemNextStep(evtReasonCode, evt.stage),
+									internalCode: String(evtReasonCode || evt.stage || "").trim().toUpperCase(),
+									ambiguities: evtAmbiguities,
+									questions: evtQuestions,
+								});
+								showSystemToast("warning", {
+									summary: localizedEvtMessage,
+									nextStep: resolveSystemNextStep(evtReasonCode, evt.stage),
+									internalCode: String(evtReasonCode || evt.stage || "").trim().toUpperCase(),
+									ambiguities: evtAmbiguities,
+									questions: evtQuestions,
+								});
+
+								streamingMessageRef.current = blockedContent;
+								pendingStreamChunkRef.current = "";
+								turnAllowAutoApplyRef.current = false;
+								setMessages((prev) => {
+									const updated = [...prev];
+									for (let i = updated.length - 1; i >= 0; i -= 1) {
+										const lastMsg = updated[i];
+										if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
+											lastMsg.content = blockedContent;
+											lastMsg.codeBlocks = [];
+											lastMsg.responseMode = "analyze";
+											lastMsg.timestamp = Date.now();
+											break;
+										}
+									}
+									return updated;
+								});
 							}
 							const decisionStep = evt.modelDecisionStep || evt.decision_step;
 							const decisionReason = evt.modelDecisionReason || evt.reason_code;
@@ -2597,11 +2883,15 @@ export default function AiAssistantChat({
 							else if (evt.stage === "menu_shrink_guard") {
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
-								message.warning(uiText(
-									`Cảnh báo: AI trả về nhỏ hơn dự kiến (tỷ lệ ${Number(evt.shrinkRatio ?? 0).toFixed(2)}), có thể bị mất dữ liệu menu`,
-									`Warning: AI output shrank unexpectedly (ratio ${Number(evt.shrinkRatio ?? 0).toFixed(2)}), menu data may be missing`,
-									`警告：AI输出意外化小（比例 ${Number(evt.shrinkRatio ?? 0).toFixed(2)}），菜单数据可能丢失`,
-								));
+								showSystemToast("warning", {
+									summary: uiText(
+										`AI trả về nhỏ hơn dự kiến (tỷ lệ ${Number(evt.shrinkRatio ?? 0).toFixed(2)}), có thể bị mất dữ liệu menu.`,
+										`AI output shrank unexpectedly (ratio ${Number(evt.shrinkRatio ?? 0).toFixed(2)}), and menu data may be missing.`,
+										`AI 输出意外缩小（比例 ${Number(evt.shrinkRatio ?? 0).toFixed(2)}），菜单数据可能缺失。`,
+									),
+									nextStep: uiText("Hãy kiểm tra lại kết quả menu trước khi áp dụng vào editor.", "Review the menu result carefully before applying it to the editor.", "在应用到编辑器之前，请先仔细检查菜单结果。"),
+									internalCode: "MENU_SHRINK_GUARD",
+								});
 							}
 							else if (evt.stage === "context" || evt.stage === "continuing" || evt.stage === "cached" || evt.stage === "prompt_budget") {
 								if (decisionStep === "fallback" || !!decisionReason || (evt.message || "").toLowerCase().includes("fallback") || (evt.message || "").toLowerCase().includes("switch") || (evt.message || "").toLowerCase().includes("chuy") || (evt.message || "").toLowerCase().includes("rate-limit")) {
@@ -2618,6 +2908,18 @@ export default function AiAssistantChat({
 							else if (evt.stage === "streaming" && evt.chunk) {
 								pendingStreamChunkRef.current += evt.chunk;
 								scheduleStreamFlush();
+							}
+							else if (evt.stage === "completed" && evtStatus === "clarification_needed") {
+								receivedCompleteEvent = true;
+								setCompletionState("done");
+								setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Cần làm rõ thêm", "Clarification needed", "需要进一步澄清"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+								setIsLoading(false);
+								if (sseAbortRef.current === controller) {
+									sseAbortRef.current = null;
+								}
+								turnAllowAutoApplyRef.current = false;
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
 							}
 							else if (evt.stage === "complete") {
 								receivedCompleteEvent = true;
@@ -2689,12 +2991,47 @@ export default function AiAssistantChat({
 							}
 							else if (evt.stage === "error") {
 								receivedErrorEvent = true;
+								if (receivedBlockedGuardEvent) {
+									setCompletionState("done");
+									setCompletionErrorMessage("");
+									setGeminiProgress({ phase: "idle", percent: 100, message: localizedEvtMessage || uiText("Đã chặn theo điều kiện bảo vệ", "Blocked by safety guard", "已被保护规则拦截"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+									if (SHOW_DETAILED_PROGRESS_TIMELINE)
+										appendStageEvent(evtForTimeline);
+									setIsLoading(false);
+									if (sseAbortRef.current === controller) {
+										sseAbortRef.current = null;
+									}
+									turnAllowAutoApplyRef.current = false;
+									continue;
+								}
+								setMessages((prev) => {
+									const updated = [...prev];
+									for (let i = updated.length - 1; i >= 0; i -= 1) {
+										const lastMsg = updated[i];
+										if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
+											lastMsg.content = formatSystemNotice({
+												summary: localizedEvtMessage || uiText("Lỗi xử lý từ backend", "Backend processing error", "后端处理错误"),
+												nextStep: resolveSystemNextStep(evtReasonCode, evt.stage),
+												internalCode: String(evtReasonCode || evt.stage || "error").trim().toUpperCase(),
+											});
+											lastMsg.codeBlocks = [];
+											lastMsg.responseMode = "analyze";
+											lastMsg.timestamp = Date.now();
+											break;
+										}
+									}
+									return updated;
+								});
 								setCompletionState("error");
 								setCompletionErrorMessage(localizedEvtMessage || uiText("Lỗi xử lý từ backend", "Backend processing error", "后端处理错误"));
 								setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
-								message.error(localizedEvtMessage || uiText("Chat thất bại", "Chat failed", "对话失败"));
+								showSystemToast("error", {
+									summary: localizedEvtMessage || uiText("Lỗi xử lý từ backend.", "Backend processing error.", "后端处理错误。"),
+									nextStep: resolveSystemNextStep(evtReasonCode, evt.stage),
+									internalCode: String(evtReasonCode || evt.stage || "error").trim().toUpperCase(),
+								});
 								setIsLoading(false);
 								if (sseAbortRef.current === controller) {
 									sseAbortRef.current = null;
@@ -2742,12 +3079,13 @@ export default function AiAssistantChat({
 					outputChars: streamingMessageRef.current.length + pendingStreamChunkRef.current.length,
 				});
 				const status = Number((error as any)?.response?.status ?? 0);
-				if (status === 401) {
-					message.error(uiText("Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại", "Session expired, please log in again", "登录会话已过期，请重新登录"));
-				}
-				else {
-					message.error(uiText("Gửi tin nhắn thất bại", "Failed to send message", "发送消息失败"));
-				}
+				showSystemToast("error", {
+					summary: status === 401
+						? uiText("Phiên đăng nhập đã hết hạn hoặc chưa hợp lệ.", "Your session has expired or is no longer valid.", "当前登录会话已过期或已失效。")
+						: uiText("Không gửi được yêu cầu lên backend.", "The request could not be sent to the backend.", "请求无法发送到后端。"),
+					nextStep: resolveSystemNextStep(status === 401 ? "http_401" : "http_request_failed"),
+					internalCode: status === 401 ? "HTTP_401" : `HTTP_${status || 0}`,
+				});
 				setIsLoading(false);
 				if (sseAbortRef.current === controller) {
 					sseAbortRef.current = null;
@@ -2760,7 +3098,7 @@ export default function AiAssistantChat({
 				}
 			}
 		},
-		[appId, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus],
+		[appId, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus],
 	);
 
 	const handleSend = () => {
@@ -3021,7 +3359,7 @@ export default function AiAssistantChat({
 														))}
 
 														{/* Render code blocks */}
-														{!shouldRenderAssistantCodeBlocks && Array.isArray(msg.codeBlocks) && msg.codeBlocks.length > 0 && (
+														{!shouldRenderAssistantCodeBlocks && msg.responseMode === "edit" && Array.isArray(msg.codeBlocks) && msg.codeBlocks.length > 0 && (
 															<div className={styles.attachmentSummary}>
 																{uiText(
 																	"Mã đã được cập nhật trong editor. Chat chỉ hiển thị tóm tắt thay đổi.",
@@ -3030,7 +3368,7 @@ export default function AiAssistantChat({
 																)}
 															</div>
 														)}
-														{shouldRenderAssistantCodeBlocks && msg.codeBlocks?.map(block => (
+														{(shouldRenderAssistantCodeBlocks || msg.responseMode !== "edit") && msg.codeBlocks?.map(block => (
 															<div
 																key={`code_${block.index}`}
 																className={styles.codeBlock}

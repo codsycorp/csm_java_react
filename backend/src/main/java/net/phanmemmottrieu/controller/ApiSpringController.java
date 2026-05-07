@@ -526,6 +526,33 @@ public class ApiSpringController {
     @Value("${ai.local.pre-analysis.max-cloud-context-chars:2400}")
     private int aiLocalPreAnalysisMaxCloudContextChars;
 
+    @Value("${ai.local.pre-analysis.adaptive.enabled:true}")
+    private boolean aiLocalPreAnalysisAdaptiveEnabled;
+
+    @Value("${ai.local.pre-analysis.adaptive.deep-request-threshold-chars:800}")
+    private int aiLocalPreAnalysisAdaptiveDeepRequestThresholdChars;
+
+    @Value("${ai.local.pre-analysis.adaptive.deep-prompt-threshold-chars:14000}")
+    private int aiLocalPreAnalysisAdaptiveDeepPromptThresholdChars;
+
+    @Value("${ai.local.pre-analysis.adaptive.deep-max-prompt-chars:14000}")
+    private int aiLocalPreAnalysisAdaptiveDeepMaxPromptChars;
+
+    @Value("${ai.local.pre-analysis.adaptive.deep-input-token-scale:1.25}")
+    private double aiLocalPreAnalysisAdaptiveDeepInputTokenScale;
+
+    @Value("${ai.local.pre-analysis.adaptive.deep-input-token-hard-cap:2400}")
+    private int aiLocalPreAnalysisAdaptiveDeepInputTokenHardCap;
+
+    @Value("${ai.local.fast-question.enabled:true}")
+    private boolean aiLocalFastQuestionEnabled;
+
+    @Value("${ai.local.fast-question.max-question-chars:1600}")
+    private int aiLocalFastQuestionMaxQuestionChars;
+
+    @Value("${ai.local.fast-question.max-tokens:224}")
+    private int aiLocalFastQuestionMaxTokens;
+
     @Value("${ai.local.pre-analysis.request-max-chars:2200}")
     private int aiLocalPreAnalysisRequestMaxChars;
 
@@ -748,7 +775,19 @@ public class ApiSpringController {
         // Keep tenant scoping consistent with ApiSpringController security conventions.
         UserAuthContext authCtx = extractUserAuthContext();
         if (!authCtx.authenticated) {
-            sendErrorEvent(emitter, "Authentication required");
+            String uiLang = resolveClientUiLanguage(body);
+            String blockedMessage = uiTextByLang(
+                uiLang,
+                "Phiên đăng nhập đã hết hạn hoặc chưa hợp lệ. Vui lòng đăng nhập lại để tiếp tục.",
+                "Your session has expired or is not valid. Please sign in again to continue.",
+                "当前登录会话已过期或无效。请重新登录后再继续。"
+            );
+            sendEvent(emitter, jsonOf(
+                "stage", "auth_guard",
+                "status", "blocked",
+                "message", blockedMessage,
+                "reason_code", "authentication_required"));
+            sendErrorEvent(emitter, blockedMessage);
             return emitter;
         }
         String requestedAppId = firstNonBlankString(body.get("appId"), body.get("app_id"));
@@ -768,22 +807,34 @@ public class ApiSpringController {
                 String message = truncate(str(body.get("message"), ""), MAX_MESSAGE_CHARS);
                 String currentCodeRaw = truncate(strKeep(body.get("currentCode"), ""), Math.max(MAX_CODE_CHARS, aiCodeStreamMaxBaseContentChars));
                 String language = str(body.get("language"), "javascript");
+                String uiLang = resolveClientUiLanguage(body);
                 String contextType = str(body.get("contextType"), "code");
                 String rawFlowType = str(body.get("flowType"), "");
                 String rawTaskType = str(body.get("taskType"), "");
                 if (rawFlowType.isBlank()) {
+                    String blockedMessage = uiTextByLang(
+                        uiLang,
+                        "Thiếu flowType bắt buộc cho /ai-code-stream. Hãy gửi đúng flow của editor trước khi tiếp tục.",
+                        "Missing required flowType for /ai-code-stream. Please send the correct editor flow before continuing.",
+                        "/ai-code-stream 缺少必填的 flowType。请先发送正确的编辑器流程后再继续。");
                     sendEvent(emitter, jsonOf(
                         "stage", "flow_guard",
                         "status", "blocked",
                         "requestId", requestId,
-                        "message", "Thieu flowType bat buoc cho /ai-code-stream",
+                        "message", blockedMessage,
                         "reason_code", "missing_flow_type"));
-                    sendErrorEvent(emitter, "Thieu flowType bat buoc cho /ai-code-stream");
+                    sendErrorEvent(emitter, blockedMessage);
                     return;
                 }
                 String normalizedFlowType = normalizeAiAssistantFlowType(rawFlowType, contextType, rawTaskType);
                 String expectedContextType = "menu_manager".equals(normalizedFlowType) ? "menu_json" : "code";
                 if (!expectedContextType.equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim())) {
+                    String blockedMessage = uiTextByLang(
+                        uiLang,
+                        "flowType và contextType không khớp nên request đã bị chặn để tránh nhầm luồng.",
+                        "flowType and contextType do not match, so the request was blocked to avoid running the wrong flow.",
+                        "flowType 与 contextType 不匹配，因此请求已被拦截，以避免执行错误流程。"
+                    );
                     sendEvent(emitter, jsonOf(
                         "stage", "flow_guard",
                         "status", "blocked",
@@ -791,9 +842,9 @@ public class ApiSpringController {
                         "flowType", normalizedFlowType,
                         "contextType", contextType,
                         "expectedContextType", expectedContextType,
-                        "message", "flowType/contextType khong khop, da chan de tranh nham luong",
+                        "message", blockedMessage,
                         "reason_code", "flow_context_mismatch"));
-                    sendErrorEvent(emitter, "flowType/contextType khong khop, da chan request");
+                    sendErrorEvent(emitter, blockedMessage);
                     return;
                 }
                 contextType = expectedContextType;
@@ -822,25 +873,45 @@ public class ApiSpringController {
 
                 if (strictLocalAssistantScope) {
                     if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
+                        String blockedMessage = uiTextByLang(
+                            uiLang,
+                            "Luồng Local AI Assistant chỉ cho phép xử lý local, nhưng local provider hiện chưa sẵn sàng.",
+                            "This Local AI Assistant flow allows local execution only, but the local provider is not ready yet.",
+                            "该 Local AI Assistant 流程只允许本地执行，但本地 provider 当前尚未就绪。"
+                        );
                         sendEvent(emitter, jsonOf(
                             "stage", "local_scope_guard",
                             "status", "blocked",
                             "requestId", requestId,
                             "contextType", contextType,
                             "reason_code", "local_provider_unavailable",
-                            "message", "Luồng Local AI Assistant chỉ cho phép xử lý local, nhưng local provider chưa sẵn sàng"));
-                        sendErrorEvent(emitter, "Luồng Local AI Assistant yêu cầu local provider sẵn sàng. Không fallback cloud.");
+                            "message", blockedMessage));
+                        sendErrorEvent(emitter, uiTextByLang(
+                            uiLang,
+                            "Luồng Local AI Assistant yêu cầu local provider sẵn sàng. Không fallback sang cloud.",
+                            "This Local AI Assistant flow requires a ready local provider. Cloud fallback is disabled.",
+                            "该 Local AI Assistant 流程要求本地 provider 已就绪，不允许回退到云端。"));
                         return;
                     }
                     if (llamaCppNativeService.isCircuitOpen()) {
+                        String blockedMessage = uiTextByLang(
+                            uiLang,
+                            "Local provider đang trong thời gian cooldown bảo vệ nên request local-only tạm thời bị chặn.",
+                            "The local provider is currently in protective cooldown, so the local-only request is temporarily blocked.",
+                            "本地 provider 当前处于保护性冷却中，因此该仅本地请求被暂时拦截。"
+                        );
                         sendEvent(emitter, jsonOf(
                             "stage", "local_scope_guard",
                             "status", "blocked",
                             "requestId", requestId,
                             "contextType", contextType,
                             "reason_code", "local_provider_circuit_open",
-                            "message", "Local provider đang trong cooldown bảo vệ, request local-only bị chặn"));
-                        sendErrorEvent(emitter, "Local provider đang cooldown sau lỗi GPU/KV. Không fallback cloud trong local-only scope.");
+                            "message", blockedMessage));
+                        sendErrorEvent(emitter, uiTextByLang(
+                            uiLang,
+                            "Local provider đang cooldown sau lỗi GPU hoặc KV cache. Không fallback sang cloud trong local-only scope.",
+                            "The local provider is cooling down after a GPU or KV-cache failure. Cloud fallback is disabled in local-only scope.",
+                            "本地 provider 因 GPU 或 KV 缓存错误正在冷却中。在仅本地范围内不允许回退到云端。"));
                         return;
                     }
                 }
@@ -853,24 +924,51 @@ public class ApiSpringController {
                     responseMode,
                     preclassifiedIntent);
                 if (requirementGuard.blocked()) {
+                    List<String> localizedQuestions = localizeRequirementGuardQuestions(requirementGuard.questions(), uiLang);
+                    List<String> localizedAmbiguities = localizeRequirementGuardAmbiguities(requirementGuard.ambiguities(), uiLang);
                     sendEvent(emitter, jsonOf(
                         "stage", "requirement_clarification_needed",
                         "status", "blocked",
                         "requestId", requestId,
                         "contextType", contextType,
                         "responseMode", responseMode,
-                        "ambiguities", requirementGuard.ambiguities(),
-                        "questions", requirementGuard.questions(),
-                        "message", "Yeu cau chua du ro de sua an toan. Can lam ro truoc khi thuc thi"));
+                        "ambiguities", localizedAmbiguities,
+                        "questions", localizedQuestions,
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Yêu cầu chưa đủ rõ để sửa an toàn. Hãy trả lời các câu hỏi làm rõ dưới đây trước khi thực thi.",
+                            "The request is not clear enough for a safe edit. Please answer the clarification questions below before execution.",
+                            "当前请求还不够清晰，无法安全编辑。请先回答下面的澄清问题后再执行。")));
                     sendEvent(emitter, jsonOf(
                         "stage", "completed",
                         "status", "clarification_needed",
                         "requestId", requestId,
-                        "message", "Yeu cau can lam ro them truoc khi backend thuc thi",
-                        "ambiguities", requirementGuard.ambiguities(),
-                        "questions", requirementGuard.questions()));
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Cần làm rõ thêm yêu cầu trước khi backend thực thi.",
+                            "More clarification is required before the backend can execute.",
+                            "在后端执行之前，还需要进一步澄清需求。"),
+                        "ambiguities", localizedAmbiguities,
+                        "questions", localizedQuestions));
                     emitter.complete();
                     return;
+                }
+
+                if (shouldUseLocalFastQuestionPath(preclassifiedIntent, message, contextType, responseMode)) {
+                    boolean fastHandled = tryHandleLocalFastQuestion(
+                        emitter,
+                        requestId,
+                        authCtx,
+                        appId,
+                        contextType,
+                        pName,
+                        pType,
+                        message,
+                        language,
+                        responseMode);
+                    if (fastHandled) {
+                        return;
+                    }
                 }
 
                 pruneBaseContentCache();
@@ -4188,10 +4286,10 @@ public class ApiSpringController {
         }
 
         // ── FALLBACK: plain truncation + meta-schema prompt (for non-code flows) ───────────────
-        int effectivePreAnalysisMax = Math.max(2000, aiLocalPreAnalysisMaxPromptChars);
+        int effectivePreAnalysisMax = resolveLocalPreAnalysisMaxPromptChars(safeRequestText, sourcePrompt, contextType, responseMode);
         sourcePrompt = truncateMiddle(sourcePrompt, effectivePreAnalysisMax);
 
-        int localInputTokenBudget = resolveLocalPreAnalysisInputTokenBudget();
+        int localInputTokenBudget = resolveLocalPreAnalysisInputTokenBudget(safeRequestText, sourcePrompt, contextType, responseMode);
         int sourceBeforeBudgetTrim = sourcePrompt.length();
         sourcePrompt = fitSourcePromptToLocalTokenBudget(
             flow,
@@ -4564,14 +4662,304 @@ public class ApiSpringController {
         return "JavaScript";
     }
 
-    private int resolveLocalPreAnalysisInputTokenBudget() {
+    private boolean shouldUseLocalFastQuestionPath(
+            LocalIntentClassification preclassifiedIntent,
+            String message,
+            String contextType,
+            String responseMode) {
+        if (!aiLocalFastQuestionEnabled) {
+            return false;
+        }
+        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable() || llamaCppNativeService.isCircuitOpen()) {
+            return false;
+        }
+
+        String normalizedMessage = String.valueOf(message == null ? "" : message).trim();
+        if (normalizedMessage.isBlank()) {
+            return false;
+        }
+        if (normalizedMessage.length() > Math.max(300, aiLocalFastQuestionMaxQuestionChars)) {
+            return false;
+        }
+
+        LocalIntentClassification intent = preclassifiedIntent == null
+            ? LocalIntentClassification.unknown()
+            : preclassifiedIntent;
+        boolean directIntent = intent.answerDirectly() || intent.isQuestion() || intent.isGeneral();
+        if (!directIntent) {
+            return false;
+        }
+
+        // Keep fast path for non-edit semantics only.
+        return !"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+            || isConversationalRequest(normalizedMessage)
+            || isMetaAiQuestion(normalizedMessage)
+            || !isMenuJsonContext(contextType);
+    }
+
+    private boolean tryHandleLocalFastQuestion(
+            SseEmitter emitter,
+            String requestId,
+            UserAuthContext authCtx,
+            String appId,
+            String contextType,
+            String pName,
+            Integer pType,
+            String message,
+            String language,
+            String responseMode) {
+        long startedAtMs = System.currentTimeMillis();
+        try {
+            String fastPrompt = buildLocalFastQuestionPrompt(message, language);
+            int promptTokens = estimateTokens(fastPrompt);
+            int maxTokens = Math.max(48, Math.min(256, aiLocalFastQuestionMaxTokens));
+
+            sendEvent(emitter, jsonOf(
+                "stage", "preparing",
+                "requestId", requestId,
+                "message", "Đang trả lời nhanh từ Local AI...",
+                "messageKey", "copilot.progress.message.local_provider_primary",
+                "model", "local_fast_question",
+                "modelDecisionStep", "primary",
+                "modelDecisionReason", "local_fast_question",
+                "decision_step", "primary",
+                "reason_code", "local_fast_question",
+                "promptTokens", promptTokens,
+                "percent", 0));
+
+            String raw = llamaCppNativeService.generateContentFast(fastPrompt, maxTokens);
+            String answer = extractAiResultText(raw);
+            if (answer == null || answer.isBlank()) {
+                return false;
+            }
+
+            String safeAnswer = normalizeLocalFastQuestionAnswer(answer, message);
+            if (safeAnswer.isBlank()) {
+                return false;
+            }
+            int completionTokens = estimateTokens(safeAnswer);
+            sendEvent(emitter, jsonOf(
+                "stage", "streaming_started",
+                "requestId", requestId,
+                "model", "local_fast_question",
+                "ttftMs", Math.max(0L, System.currentTimeMillis() - startedAtMs),
+                "estimatedTotalChars", safeAnswer.length(),
+                "percent", 20));
+            int chunkCount = emitSyntheticLocalStreamChunks(emitter, requestId, safeAnswer, 1, false, true);
+
+            Map<String, Object> completion = new LinkedHashMap<>();
+            completion.put("stage", "complete");
+            completion.put("fullResponse", safeAnswer);
+            completion.put("responseMode", "analyze");
+            completion.put("outputShape", "text");
+            completion.put("streamChunkCount", chunkCount);
+            completion.put("streamedChars", safeAnswer.length());
+            completion.put("localProviderPrimaryUsed", true);
+            completion.put("promptTokens", promptTokens);
+            completion.put("completionTokens", completionTokens);
+            completion.put("model", "local_fast_question");
+            completion.put("modelDecisionStep", "final");
+            completion.put("modelDecisionReason", "local_fast_question_completed");
+            completion.put("decision_step", "final");
+            completion.put("reason_code", "completed");
+            completion.put("requestId", requestId);
+            completion.put("timestamp", System.currentTimeMillis());
+            sendEvent(emitter, objectMapper.writeValueAsString(completion));
+
+            Map<String, Object> turnMeta = new LinkedHashMap<>();
+            turnMeta.put("source", "aiCodeStreamFastQuestion");
+            turnMeta.put("model", "local_fast_question");
+            turnMeta.put("responseMode", "analyze");
+            turnMeta.put("promptTokens", promptTokens);
+            turnMeta.put("completionTokens", completionTokens);
+            aiConversationContextService.recordTurnWithScopes(
+                authCtx.principalId,
+                appId,
+                contextType,
+                pName,
+                pType,
+                message,
+                safeAnswer,
+                turnMeta);
+
+            emitter.complete();
+            return true;
+        } catch (Exception ex) {
+            logger.warn("Local fast-question path failed, fallback to standard pipeline: {}", ex.getMessage());
+            return false;
+        }
+    }
+
+    private String buildLocalFastQuestionPrompt(String message, String language) {
+        String normalizedLanguage = String.valueOf(language == null ? "" : language).trim();
+        String safeMessage = truncateMiddle(String.valueOf(message == null ? "" : message).trim(), Math.max(300, aiLocalFastQuestionMaxQuestionChars));
+        return String.join("\n",
+            "<|im_start|>system",
+            "Bạn là trợ lý AI local của hệ thống CSM.",
+            "Trả lời NGẮN GỌN, đúng trọng tâm, tiếng Việt tự nhiên.",
+            "Không trả về JSON/object/map. Chỉ trả lời văn bản tự nhiên.",
+            "Không sinh code nếu người dùng chỉ hỏi thông tin.",
+            "Nếu cần liệt kê ý, chỉ nêu tối đa 4 ý ngắn, mỗi ý 1 dòng.",
+            "Không được mở đầu bằng dấu { hoặc [.",
+            "Nếu thiếu dữ kiện, nêu rõ điều còn thiếu trong 1 câu.",
+            "Ngữ cảnh ngôn ngữ: " + (normalizedLanguage.isBlank() ? "general" : normalizedLanguage),
+            "<|im_end|>",
+            "<|im_start|>user",
+            safeMessage,
+            "<|im_end|>",
+            "<|im_start|>assistant");
+    }
+
+    private String normalizeLocalFastQuestionAnswer(String rawAnswer, String originalMessage) {
+        String safe = String.valueOf(rawAnswer == null ? "" : rawAnswer).trim();
+        if (safe.isBlank()) {
+            return "";
+        }
+
+        if (isIdentityQuestion(originalMessage)) {
+            return "Tôi là trợ lý AI local của hệ thống CSM. Tôi hỗ trợ giải thích, phân tích và chỉnh sửa theo yêu cầu của bạn.";
+        }
+
+        if (!isLikelyJsonPayload(safe)) {
+            return safe;
+        }
+
+        try {
+            Object parsed = objectMapper.readValue(safe, Object.class);
+            if (parsed instanceof Map<?, ?> parsedMap) {
+                String preferred = firstNonBlankString(
+                    parsedMap.get("message"),
+                    parsedMap.get("content"),
+                    parsedMap.get("answer"),
+                    parsedMap.get("description"),
+                    parsedMap.get("summary"));
+                if (!preferred.isBlank()) {
+                    return preferred;
+                }
+                String name = firstNonBlankString(parsedMap.get("assistant"), parsedMap.get("name"), parsedMap.get("title"));
+                if (!name.isBlank() && parsedMap.size() <= 3) {
+                    return "Tôi là " + name + ".";
+                }
+            }
+
+            String structured = renderLocalFastQuestionStructuredAnswer(parsed, 0);
+            if (!structured.isBlank()) {
+                return structured;
+            }
+        } catch (Exception ignored) {
+            // Fall through to generic fallback below.
+        }
+
+        return "Tôi đã nhận câu hỏi của bạn. Bạn có thể nói rõ hơn nội dung bạn muốn tôi hỗ trợ không?";
+    }
+
+    private boolean isIdentityQuestion(String message) {
+        String lower = String.valueOf(message == null ? "" : message).trim().toLowerCase(Locale.ROOT);
+        if (lower.isBlank()) {
+            return false;
+        }
+        return lower.matches(".*\\b(ban|bạn)\\s+(la|là)\\s+ai\\b.*")
+            || lower.contains("who are you")
+            || lower.contains("ban la ai")
+            || lower.contains("bạn là ai");
+    }
+
+    private String renderLocalFastQuestionStructuredAnswer(Object value, int depth) {
+        if (value == null || depth > 3) {
+            return "";
+        }
+        if (value instanceof String s) {
+            return s.trim();
+        }
+        if (value instanceof Number || value instanceof Boolean) {
+            return String.valueOf(value);
+        }
+        if (value instanceof List<?> list) {
+            List<String> rendered = new ArrayList<>();
+            int limit = Math.min(list.size(), 8);
+            for (int i = 0; i < limit; i++) {
+                String item = renderLocalFastQuestionStructuredAnswer(list.get(i), depth + 1);
+                if (!item.isBlank()) {
+                    rendered.add("- " + item.replaceAll("\\s+", " ").trim());
+                }
+            }
+            return String.join("\n", rendered).trim();
+        }
+        if (value instanceof Map<?, ?> map) {
+            List<String> rendered = new ArrayList<>();
+            int count = 0;
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (count++ >= 6) {
+                    break;
+                }
+                String key = String.valueOf(entry.getKey() == null ? "" : entry.getKey()).trim();
+                String item = renderLocalFastQuestionStructuredAnswer(entry.getValue(), depth + 1);
+                if (item.isBlank()) {
+                    continue;
+                }
+                if (item.contains("\n")) {
+                    rendered.add(key + ":\n" + item);
+                } else {
+                    rendered.add(key + ": " + item);
+                }
+            }
+            return String.join("\n", rendered).trim();
+        }
+        return String.valueOf(value).trim();
+    }
+
+    private int resolveLocalPreAnalysisInputTokenBudget(String requestText, String sourcePrompt, String contextType, String responseMode) {
         int contextWindow = Math.max(1024, aiLocalLlamaContextWindow);
         int reservedForOutput = Math.max(128, aiLocalLlamaMaxTokens);
         int hardCap = Math.max(512, aiLocalPreAnalysisLlamaInputTokenHardCap);
         // Keep stronger guard-band for local llama to avoid GPU/KV overflow on Metal.
         int byRatio = (int) Math.floor(contextWindow * Math.max(0.35d, Math.min(0.75d, aiLocalPreAnalysisLlamaInputSafetyRatio)));
         int byWindow = Math.max(256, contextWindow - reservedForOutput - 640);
-        return Math.max(256, Math.min(hardCap, Math.min(byRatio, byWindow)));
+        int baseBudget = Math.max(256, Math.min(hardCap, Math.min(byRatio, byWindow)));
+
+        if (!shouldUseDeepLocalPreAnalysis(requestText, sourcePrompt, contextType, responseMode)) {
+            return baseBudget;
+        }
+
+        double scale = Math.max(1.0d, Math.min(2.0d, aiLocalPreAnalysisAdaptiveDeepInputTokenScale));
+        int deepHardCap = Math.max(hardCap, aiLocalPreAnalysisAdaptiveDeepInputTokenHardCap);
+        int scaledBudget = (int) Math.floor(baseBudget * scale);
+        return Math.max(baseBudget, Math.min(deepHardCap, scaledBudget));
+    }
+
+    private int resolveLocalPreAnalysisMaxPromptChars(String requestText, String sourcePrompt, String contextType, String responseMode) {
+        int baseCap = Math.max(2000, aiLocalPreAnalysisMaxPromptChars);
+        if (!shouldUseDeepLocalPreAnalysis(requestText, sourcePrompt, contextType, responseMode)) {
+            return baseCap;
+        }
+        int deepCap = Math.max(baseCap, aiLocalPreAnalysisAdaptiveDeepMaxPromptChars);
+        return Math.max(2000, deepCap);
+    }
+
+    private boolean shouldUseDeepLocalPreAnalysis(String requestText, String sourcePrompt, String contextType, String responseMode) {
+        if (!aiLocalPreAnalysisAdaptiveEnabled) {
+            return false;
+        }
+
+        String safeRequest = String.valueOf(requestText == null ? "" : requestText).trim();
+        String safePrompt = String.valueOf(sourcePrompt == null ? "" : sourcePrompt).trim();
+        String normalizedContext = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        String normalizedMode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
+
+        int score = 0;
+        if (safeRequest.length() >= Math.max(200, aiLocalPreAnalysisAdaptiveDeepRequestThresholdChars)) {
+            score += 1;
+        }
+        if (safePrompt.length() >= Math.max(4000, aiLocalPreAnalysisAdaptiveDeepPromptThresholdChars)) {
+            score += 1;
+        }
+        if ("menu_json".equals(normalizedContext)) {
+            score += 1;
+        }
+        if ("edit".equals(normalizedMode)) {
+            score += 1;
+        }
+        return score >= 2;
     }
 
     private String buildLocalPreAnalysisPrompt(
@@ -6174,6 +6562,24 @@ public class ApiSpringController {
             return fast;
         }
 
+        // Fast heuristic bypass: obvious menu edit requests should skip an extra local classify pass.
+        if (hasExplicitMenuEditTarget(safe) || hasDynamicMenuBusinessIntent(safe)) {
+            LocalIntentClassification fast = new LocalIntentClassification(
+                "EDIT_MENU", "modify", 86, "load_menu_context", "menu", "heuristic_menu_edit");
+            intentClassifyCache.put(cacheKey, new Object[]{ fast, System.currentTimeMillis() });
+            logger.debug("[AI_INTENT_CLASSIFY] fast-heuristic EDIT_MENU (no llama call)");
+            return fast;
+        }
+
+        // Fast heuristic bypass: obvious code edit requests should skip an extra local classify pass.
+        if (hasLikelyCodeEditIntent(safe)) {
+            LocalIntentClassification fast = new LocalIntentClassification(
+                "EDIT_CODE", "modify", 84, "load_code_context", "code", "heuristic_code_edit");
+            intentClassifyCache.put(cacheKey, new Object[]{ fast, System.currentTimeMillis() });
+            logger.debug("[AI_INTENT_CLASSIFY] fast-heuristic EDIT_CODE (no llama call)");
+            return fast;
+        }
+
         // ── Llama classification call with reduced token budget ───────────────
         String classifyPrompt = "<|im_start|>system\n"
             + "Classify user request. Output JSON only, no explanation.\n"
@@ -6409,6 +6815,95 @@ public class ApiSpringController {
             || "RESTRUCTURE".equals(highLevelIntent);
 
         return hasCodeDomainSignal && (hasEditActionSignal || intentSuggestsEdit);
+    }
+
+    private List<String> localizeRequirementGuardQuestions(List<String> questions, String uiLang) {
+        if (questions == null || questions.isEmpty()) {
+            return List.of();
+        }
+        List<String> localized = new ArrayList<>();
+        for (String question : questions) {
+            String text = String.valueOf(question == null ? "" : question).trim();
+            if (text.isEmpty()) {
+                continue;
+            }
+            switch (text) {
+                case "Ban muon sua file/module/class nao cu the?" -> localized.add(uiTextByLang(
+                    uiLang,
+                    "Bạn muốn sửa file, module hoặc class nào cụ thể?",
+                    "Which file, module, or class do you want to change exactly?",
+                    "你具体想修改哪个文件、模块或类？"));
+                case "Pham vi thay doi den dau: chi fix diem hay duoc refactor rong hon?" -> localized.add(uiTextByLang(
+                    uiLang,
+                    "Phạm vi thay đổi đến đâu: chỉ sửa đúng điểm đó hay được phép refactor rộng hơn?",
+                    "How far may the change go: only a targeted fix, or is a broader refactor allowed?",
+                    "这次改动的范围到哪里：只修这个点，还是允许做更大的重构？"));
+                case "Tieu chi xac nhan ket qua dung la gi (behavior/test/output)?" -> localized.add(uiTextByLang(
+                    uiLang,
+                    "Tiêu chí xác nhận kết quả đúng là gì: hành vi, test hay output nào?",
+                    "What should count as success: which behavior, test, or output should confirm the result?",
+                    "什么算是正确结果：以哪个行为、测试或输出作为验收标准？"));
+                case "Ban muon sua node nao? Vui long cho id hoac duong dan node (vi du: root.sales.invoice)" -> localized.add(uiTextByLang(
+                    uiLang,
+                    "Bạn muốn sửa node nào? Vui lòng cung cấp id hoặc đường dẫn node, ví dụ: root.sales.invoice.",
+                    "Which node do you want to edit? Please provide its id or path, for example: root.sales.invoice.",
+                    "你想修改哪个节点？请提供节点 id 或路径，例如：root.sales.invoice。"));
+                case "Ban muon sua truong nao trong node do (label/trigger/table/permissions/...)?" -> localized.add(uiTextByLang(
+                    uiLang,
+                    "Bạn muốn sửa trường nào trong node đó, ví dụ label, trigger, table hay permissions?",
+                    "Which field inside that node do you want to edit, such as label, trigger, table, or permissions?",
+                    "你想修改该节点里的哪个字段，例如 label、trigger、table 或 permissions？"));
+                case "Phan nao phai giu nguyen de tranh vo nghiep vu?" -> localized.add(uiTextByLang(
+                    uiLang,
+                    "Phần nào bắt buộc phải giữ nguyên để tránh làm vỡ nghiệp vụ?",
+                    "Which parts must stay unchanged to avoid breaking business logic?",
+                    "哪些部分必须保持不变，以避免破坏业务逻辑？"));
+                case "Ban muon backend sua phan nao cu the? (file/table/menu node)" -> localized.add(uiTextByLang(
+                    uiLang,
+                    "Bạn muốn backend sửa phần nào cụ thể, ví dụ file, bảng hay menu node nào?",
+                    "Which backend part do you want to change exactly, for example which file, table, or menu node?",
+                    "你希望后端具体修改哪一部分，例如哪个文件、数据表或菜单节点？"));
+                default -> localized.add(text);
+            }
+        }
+        return localized;
+    }
+
+    private List<String> localizeRequirementGuardAmbiguities(List<String> ambiguities, String uiLang) {
+        if (ambiguities == null || ambiguities.isEmpty()) {
+            return List.of();
+        }
+        List<String> localized = new ArrayList<>();
+        for (String ambiguity : ambiguities) {
+            String text = String.valueOf(ambiguity == null ? "" : ambiguity).trim();
+            if (text.isEmpty()) {
+                continue;
+            }
+            switch (text) {
+                case "Yeu cau rong" -> localized.add(uiTextByLang(
+                    uiLang,
+                    "Yêu cầu đang để trống.",
+                    "The request is empty.",
+                    "当前请求为空。"));
+                case "Chua ro doi tuong tac dong (file/table/module)" -> localized.add(uiTextByLang(
+                    uiLang,
+                    "Chưa rõ đối tượng bị tác động, ví dụ file, bảng hoặc module nào.",
+                    "The target is still unclear, for example which file, table, or module is affected.",
+                    "受影响对象还不明确，例如是哪个文件、数据表或模块。"));
+                case "Code edit chua chi ro pham vi tac dong (file/module/class/function/line)" -> localized.add(uiTextByLang(
+                    uiLang,
+                    "Yêu cầu sửa code chưa chỉ rõ phạm vi tác động, ví dụ file, module, class, function hoặc dòng nào.",
+                    "The code-edit request does not define its scope clearly, such as which file, module, class, function, or line is affected.",
+                    "代码修改请求还没有明确范围，例如具体是哪个文件、模块、类、函数或行。"));
+                case "Menu edit chua co target cu the (id/path/field) nen khong an toan de sua" -> localized.add(uiTextByLang(
+                    uiLang,
+                    "Yêu cầu sửa menu chưa có target cụ thể như id, path hoặc field nên chưa an toàn để sửa.",
+                    "The menu-edit request does not specify a concrete target such as an id, path, or field, so it is not yet safe to edit.",
+                    "菜单修改请求还没有明确目标，例如 id、path 或 field，因此目前不适合安全执行修改。"));
+                default -> localized.add(text);
+            }
+        }
+        return localized;
     }
 
         private RequirementGuardDecision evaluateRequirementHardGuard(
@@ -6884,27 +7379,29 @@ public class ApiSpringController {
                 responseMode,
                 preclassifiedIntent);
             if (requirementGuard.blocked()) {
+                List<String> localizedQuestions = localizeRequirementGuardQuestions(requirementGuard.questions(), uiLang);
+                List<String> localizedAmbiguities = localizeRequirementGuardAmbiguities(requirementGuard.ambiguities(), uiLang);
                 emitAiAssistantChatChunk(appId, Map.of(
                     "stage", "requirement_clarification_needed",
                     "status", "blocked",
                     "contextType", effectiveContextType,
                     "responseMode", responseMode,
-                    "ambiguities", requirementGuard.ambiguities(),
-                    "questions", requirementGuard.questions(),
+                    "ambiguities", localizedAmbiguities,
+                    "questions", localizedQuestions,
                     "message", uiTextByLang(
                         uiLang,
-                        "Yeu cau chua du ro de sua an toan, can tra loi cau hoi lam ro truoc",
+                        "Yêu cầu chưa đủ rõ để sửa an toàn, cần trả lời các câu hỏi làm rõ trước.",
                         "Request is not clear enough for safe edit, please answer clarification questions first",
                         "需求不够清晰，需先回答澄清问题再执行编辑")
                 ));
                 response.set("code", 200);
                 response.set("success", false);
                 response.set("clarificationNeeded", true);
-                response.set("questions", requirementGuard.questions());
-                response.set("ambiguities", requirementGuard.ambiguities());
+                response.set("questions", localizedQuestions);
+                response.set("ambiguities", localizedAmbiguities);
                 response.set("message", uiTextByLang(
                     uiLang,
-                    "Yeu cau chua du ro de backend sua an toan",
+                    "Yêu cầu chưa đủ rõ để backend sửa an toàn",
                     "Request is not clear enough for safe backend edits",
                     "需求不够清晰，无法安全执行后端编辑"));
                 return;

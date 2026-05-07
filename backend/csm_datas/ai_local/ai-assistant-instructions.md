@@ -85,3 +85,90 @@ Before final output, verify:
 - Is dynamic JS executable in current runtime style?
 
 If any answer is no, regenerate before returning.
+
+## 10) System Structure Map (must understand before editing)
+You must reason with this structure first, then generate output:
+
+- Chat + streaming UI:
+  - frontend-admin/src/pages/system/developer/AiAssistantChat.tsx
+  - frontend-admin/src/pages/system/developer/CodeEditor.tsx
+- Menu runtime + navigation:
+  - frontend-admin/src/layout/layout-menu/use-menu.ts
+  - frontend-admin/src/pages/system/menu/menu-tree-view.tsx
+  - frontend-admin/src/pages/system/menu/menu-tree-table.tsx
+  - frontend-admin/src/pages/system/menu/utils/menu-type-resolver.ts
+- Dynamic code execution runtime:
+  - frontend-admin/src/pages/system/dynamic-code/index.tsx
+  - frontend-admin/src/pages/homepage/index.tsx
+  - frontend-admin/src/pages/auto/AutoSetup.tsx
+- Existing large production auto scripts (golden references):
+  - lmkt/src/api/ai/auto-kqxs.js
+  - lmkt/src/api/ai/auto-lmkt.js
+- Backend orchestration and routing:
+  - backend/src/main/java/net/phanmemmottrieu/controller/ApiSpringController.java
+
+If user request conflicts with this runtime map, preserve runtime compatibility first and ask clarification.
+
+## 11) Dynamic JS Golden Pattern (non-negotiable)
+When generating code for homepage/autosetup/dynamic runtime, follow the same style as the two reference scripts.
+
+Required shape:
+- Use IIFE wrapper.
+- Use browser globals (window.React, window.ReactDOM, window.antd) with safe fallback checks.
+- Keep idempotent double-load protection where needed for large scripts.
+- Avoid import/export/require/module syntax.
+- Avoid Node-only APIs.
+
+Required container behavior:
+- Support runtime container from window.csmDynamicCodeContainerId when available.
+- Keep compatibility with:
+  - homepage container: broadcast-auto-root-homepage
+  - autosetup container: context-auto
+  - fallback: dynamic-code-root
+
+Required stability:
+- Do not rewrite whole script unless user explicitly asks.
+- Keep existing global helpers and hook points stable.
+- Keep current business dictionaries/config maps and API flow stable.
+
+## 12) Chat Requirement Analysis Pipeline (internal)
+For every incoming chat request, do this in order before output:
+
+1. Intent detection:
+   - QUESTION_ANALYZE
+   - MENU_PATCH_FIELDS_ONLY
+   - MENU_STRUCTURE_EDIT
+   - DYNAMIC_JS_RUNTIME_EDIT
+   - CODE_EDIT_GENERAL
+2. Target extraction:
+   - affected file/module/runtime area
+   - exact scope (specific patch vs broad refactor)
+3. Constraint extraction:
+   - must-preserve items from user text
+   - runtime constraints from section 10 and 11
+4. Risk scoring:
+   - low: local field patch / textual analysis
+   - medium: partial code edit in known module
+   - high: structural rewrite / runtime container change
+5. Output strategy:
+   - if ambiguous and user asked edit: ask concise clarification
+   - if clear: produce output in strict contract format
+
+Never skip this pipeline.
+
+## 13) Clarification Policy for Edit Requests
+Before editing, if any of these is missing, ask clarification first:
+- exact target file/module/node
+- change boundary (minimal fix vs refactor)
+- acceptance criteria (expected behavior/output/test)
+
+If user asks analysis-only, do not force edit questions.
+
+## 14) Do-Not-Break Rules for Existing Business Logic
+Never break these by default:
+- menu id / parentId / menu_id order
+- type_form semantics for existing menu routing
+- dynamic code execution path for homepage/autosetup
+- compatibility with existing long scripts already running in production
+
+If user requests a breaking change, explicitly state impact and proceed only with clear confirmation intent.

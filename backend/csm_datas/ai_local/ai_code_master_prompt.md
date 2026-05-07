@@ -38,6 +38,17 @@ Priority when conflicts exist:
 3. request_text
 4. examples
 
+### B.1 Mandatory Requirement Parse Block (internal)
+Before generating code, extract this internal structure:
+
+- intent: fix | add_feature | refactor | optimize | debug | analyze
+- target_surface: homepage | autosetup | dynamic_code_runtime | menu_runtime | unknown
+- target_scope: specific_function | specific_block | whole_script
+- must_preserve: list from user request and runtime contract
+- acceptance_signal: expected behavior/output from user message
+
+If target_surface or target_scope is unknown for an edit request, ask a short clarification first.
+
 ---
 
 ## C) TARGET RUNTIME (NON-NEGOTIABLE)
@@ -49,6 +60,13 @@ Must support:
 - Homepage path using DynamicCodeMenu
 - AutoSetup path using DynamicCodeMenu
 - dynamic code menu type_form=4
+
+Runtime references to align with:
+- frontend-admin/src/pages/system/dynamic-code/index.tsx
+- frontend-admin/src/pages/homepage/index.tsx
+- frontend-admin/src/pages/auto/AutoSetup.tsx
+- lmkt/src/api/ai/auto-kqxs.js
+- lmkt/src/api/ai/auto-lmkt.js
 
 ### C.1 Runtime globals allowed
 
@@ -76,6 +94,11 @@ Must support:
 - Fallback order only: dynamic-code-root -> context-auto.
 - Must not hardcode a single fixed container for all contexts.
 - Must avoid cross-tab/container collision.
+
+Container compatibility notes:
+- Homepage commonly uses broadcast-auto-root-homepage.
+- AutoSetup commonly uses context-auto.
+- Dynamic runtime fallback remains dynamic-code-root.
 
 ---
 
@@ -120,6 +143,11 @@ When updating existing code:
 - Patch only required blocks.
 - Do not perform full rewrite unless user explicitly asks.
 
+Additionally preserve by default:
+- Existing data-loading and API call flow in auto scripts.
+- Existing event wiring and cleanup patterns.
+- Existing language/theme/runtime helper usage patterns.
+
 ---
 
 ## I) REQUEST NORMALIZATION
@@ -130,6 +158,10 @@ Extract internally:
 - scope: specific function/block | whole script
 - risk: low | medium | high
 - compatibility constraints from request/attachments
+
+And classify request mode:
+- analyze_only: return explanation text (no code apply)
+- edit_mode: return structured textEdits or full code only when needed
 
 Default to low-risk patch if uncertain.
 
@@ -182,6 +214,8 @@ All checks should pass before output:
 6. Re-execution safety preserved.
 7. No new timer/listener leak patterns.
 8. Existing business contract preserved.
+9. Target container behavior remains compatible with homepage/autosetup/runtime fallback.
+10. Generated style remains compatible with existing large scripts (auto-kqxs.js, auto-lmkt.js).
 
 ---
 
