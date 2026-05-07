@@ -4228,7 +4228,7 @@ public class ApiSpringController {
                     "messageArgs", jsonOf("estimatedWaitSecs", 3),
                     "percent", 45,
                     "remainingEstimateSecs", 3));
-                String questionPrompt = buildLocalDirectTaskPrompt(contextType, responseMode, safeRequestText, "");
+                String questionPrompt = buildLocalDirectTaskPrompt(contextType, responseMode, safeRequestText, "", intentClass);
                 String rawResult = llamaCppNativeService.generateContent(questionPrompt);
                 String localText = extractAiResultText(rawResult);
                 if (!localText.isBlank()) {
@@ -4267,7 +4267,7 @@ public class ApiSpringController {
                     contextType, doMenuEdit, compactContext.length(), intentClass.type());
                 String directPrompt = buildLocalDirectTaskPrompt(
                     doMenuEdit ? "menu_json" : contextType,
-                    responseMode, safeRequestText, compactContext);
+                    responseMode, safeRequestText, compactContext, intentClass);
                 String rawResult = llamaCppNativeService.generateContent(directPrompt);
                 String localText = extractAiResultText(rawResult);
                 if (!localText.isBlank()) {
@@ -4477,53 +4477,15 @@ public class ApiSpringController {
      * The prompt is lean: system instruction + compact context + user request.
      * No JSON-wrapper schema (canHandleFully/localAnswer) — the model outputs the answer directly.
      */
-    /**
-     * Detect user intent from request text to select the most targeted prompt strategy.
-     * Returns one of: ADD, DELETE, EDIT, RESTRUCTURE, EXPLAIN, SEARCH, GENERAL
-     */
-    private String detectUserIntent(String requestText) {
-        if (requestText == null || requestText.isBlank()) return "GENERAL";
-        String lower = requestText.toLowerCase();
-
-        // ADD intent
-        if (lower.contains("thêm") || lower.contains("tạo") || lower.contains("thêm mới") || lower.contains("tạo mới")
-                || lower.contains("bổ sung") || lower.contains("add") || lower.contains("create") || lower.contains("insert")) {
-            return "ADD";
-        }
-        // DELETE intent
-        if (lower.contains("xóa") || lower.contains("xoá") || lower.contains("loại bỏ") || lower.contains("remove")
-                || lower.contains("delete") || lower.contains("ẩn") || lower.contains("disable")) {
-            return "DELETE";
-        }
-        // EXPLAIN / QUESTION intent
-        if (lower.contains("giải thích") || lower.contains("giải thich") || lower.contains("là gì")
-                || lower.contains("nghĩa là") || lower.contains("explain") || lower.contains("what is")
-                || lower.contains("tại sao") || lower.contains("why") || lower.contains("?")) {
-            return "EXPLAIN";
-        }
-        // SEARCH / FIND intent
-        if (lower.contains("tìm") || lower.contains("tìm kiếm") || lower.contains("search") || lower.contains("find")
-                || lower.contains("danh sách") || lower.contains("liệt kê") || lower.contains("list")) {
-            return "SEARCH";
-        }
-        // RESTRUCTURE intent
-        if (lower.contains("sắp xếp") || lower.contains("di chuyển") || lower.contains("move") || lower.contains("reorder")
-                || lower.contains("restructure") || lower.contains("cấu trúc lại") || lower.contains("chuyển")) {
-            return "RESTRUCTURE";
-        }
-        // EDIT intent (default for modification)
-        if (lower.contains("sửa") || lower.contains("chỉnh") || lower.contains("đổi") || lower.contains("cập nhật")
-                || lower.contains("update") || lower.contains("edit") || lower.contains("change") || lower.contains("rename")) {
-            return "EDIT";
-        }
-        return "GENERAL";
-    }
-
-    private String buildLocalDirectTaskPrompt(String contextType, String responseMode, String requestText, String compactContext) {
+    private String buildLocalDirectTaskPrompt(
+            String contextType,
+            String responseMode,
+            String requestText,
+            String compactContext,
+            LocalIntentClassification intentClass) {
         boolean isMenu = isMenuJsonContext(contextType);
         String safeRequest = String.valueOf(requestText == null ? "" : requestText).trim();
-        // Use keyword detection only as fallback hint for prompt wording — primary routing is done by AI classification upstream
-        String intent = detectUserIntent(safeRequest);
+        String intent = resolvePromptIntentFromClassification(intentClass, responseMode);
 
         // No context = question/general intent — build a direct Q&A prompt
         if (compactContext == null || compactContext.isBlank()) {
@@ -4535,6 +4497,35 @@ public class ApiSpringController {
         } else {
             return buildCodeDirectPrompt(intent, safeRequest, compactContext, contextType);
         }
+    }
+
+    private String resolvePromptIntentFromClassification(LocalIntentClassification intentClass, String responseMode) {
+        LocalIntentClassification intent = intentClass == null
+            ? LocalIntentClassification.unknown()
+            : intentClass;
+        String action = String.valueOf(intent.action() == null ? "" : intent.action()).trim().toLowerCase(Locale.ROOT);
+
+        if (intent.isQuestion() || intent.isGeneral() || "ask".equals(action)) {
+            return "EXPLAIN";
+        }
+        if ("search".equals(action)) {
+            return "SEARCH";
+        }
+        if ("add".equals(action)) {
+            return "ADD";
+        }
+        if ("remove".equals(action) || "delete".equals(action)) {
+            return "DELETE";
+        }
+
+        if (intent.isMenuEdit() || intent.isCodeEdit()) {
+            return "EDIT";
+        }
+
+        if ("edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            return "EDIT";
+        }
+        return "GENERAL";
     }
 
     /**
@@ -4681,19 +4672,19 @@ public class ApiSpringController {
         if (normalizedMessage.length() > Math.max(300, aiLocalFastQuestionMaxQuestionChars)) {
             return false;
         }
-
         LocalIntentClassification intent = preclassifiedIntent == null
             ? LocalIntentClassification.unknown()
             : preclassifiedIntent;
-        boolean directIntent = intent.answerDirectly() || intent.isQuestion() || intent.isGeneral();
+        boolean directIntent = intent.answerDirectly()
+            || ((intent.isQuestion() || intent.isGeneral())
+                && !intent.needsCodeContext()
+                && !intent.needsMenuContext());
         if (!directIntent) {
             return false;
         }
 
         // Keep fast path for non-edit semantics only.
         return !"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
-            || isConversationalRequest(normalizedMessage)
-            || isMetaAiQuestion(normalizedMessage)
             || !isMenuJsonContext(contextType);
     }
 
@@ -4816,6 +4807,11 @@ public class ApiSpringController {
             return "";
         }
 
+        String dewrapped = sanitizeBrokenConversationalWrapper(safe);
+        if (!dewrapped.isBlank() && !isLikelyJsonPayload(dewrapped)) {
+            safe = dewrapped;
+        }
+
         if (isIdentityQuestion(originalMessage)) {
             return "Tôi là trợ lý AI local của hệ thống CSM. Tôi hỗ trợ giải thích, phân tích và chỉnh sửa theo yêu cầu của bạn.";
         }
@@ -4862,6 +4858,23 @@ public class ApiSpringController {
             || lower.contains("who are you")
             || lower.contains("ban la ai")
             || lower.contains("bạn là ai");
+    }
+
+    private String sanitizeBrokenConversationalWrapper(String value) {
+        String text = String.valueOf(value == null ? "" : value).trim();
+        if (text.isBlank()) {
+            return "";
+        }
+        String out = text;
+        boolean looksLikeRealJson = out.matches("^\\s*[\\[{]\\s*\\\".*") || out.contains("\":") || out.contains("\"");
+        if ((out.startsWith("{") || out.startsWith("[")) && !looksLikeRealJson) {
+            out = out.substring(1).trim();
+        }
+        if ((out.endsWith("}") || out.endsWith("]"))
+                && !looksLikeRealJson) {
+            out = out.substring(0, out.length() - 1).trim();
+        }
+        return out.isBlank() ? text : out;
     }
 
     private String renderLocalFastQuestionStructuredAnswer(Object value, int depth) {
@@ -6343,7 +6356,11 @@ public class ApiSpringController {
         String primaryGoal = detectPrimaryGoal(normalized, lower, editMode, menuContext, menuPatchOnly);
         List<String> constraints = extractRequirementConstraints(normalized);
         List<String> acceptance = buildAcceptanceCriteria(editMode, menuContext, constraints, menuPatchOnly);
-        List<String> ambiguities = detectRequirementAmbiguities(normalized, lower);
+        List<String> ambiguities = detectRequirementAmbiguities(
+            normalized,
+            contextType,
+            responseMode,
+            null);
 
         int maxItems = Math.max(3, aiRequirementClarifyMaxItems);
         StringBuilder sb = new StringBuilder();
@@ -6394,26 +6411,12 @@ public class ApiSpringController {
             if (menuPatchOnly) {
                 return "Bo sung/chinh sua dung cac field duoc yeu cau, giu nguyen 100% cau truc menu hien co";
             }
-            if (lower.contains("menu") || lower.contains("json") || lower.contains("cau truc")) {
-                return "Chinh sua cau truc menu theo dung logic nghiep vu hien co";
-            }
-            return "Cap nhat cau hinh menu ma khong lam sai logic nghiep vu";
+            return "Chinh sua cau truc menu theo dung logic nghiep vu hien co, khong thay doi schema";
         }
-
         if (editMode) {
-            if (lower.contains("toi uu") || lower.contains("optimi")) {
-                return "Chinh sua code de toi uu nhung van giu hanh vi dung theo yeu cau";
-            }
-            if (lower.contains("fix") || lower.contains("sua loi") || lower.contains("bug")) {
-                return "Sua loi dung diem va tranh gay hoi quy";
-            }
-            return "Chinh sua code dung pham vi va dung muc tieu nguoi dung";
+            return "Chinh sua code dung pham vi, dung muc tieu nguoi dung, tranh regression";
         }
-
-        if (lower.contains("phan tich") || lower.contains("giai thich")) {
-            return "Phan tich yeu cau va de xuat cach lam ro rang, co tinh kha thi";
-        }
-        return "Dap ung yeu cau nguoi dung dung va du";
+        return "Phan tich va tra loi dung noi dung yeu cau nguoi dung";
     }
 
     private List<String> extractRequirementConstraints(String requestText) {
@@ -6477,49 +6480,114 @@ public class ApiSpringController {
         if (lower == null || lower.isBlank()) {
             return false;
         }
-        boolean hasOnlySignals = lower.contains("chi bo sung")
-                || lower.contains("chỉ bổ sung")
-                || lower.contains("chi cap nhat")
-                || lower.contains("chỉ cập nhật")
-                || lower.contains("chi sua")
-                || lower.contains("chỉ sửa")
-                || lower.contains("khong lam gi khac")
-                || lower.contains("không làm gì khác")
-                || lower.contains("giu nguyen")
-                || lower.contains("giữ nguyên");
+        // Structural domain field names — concrete, language-independent schema signals.
         boolean hasFieldSignals = lower.contains("label_en")
                 || lower.contains("label_zh")
                 || lower.contains("m_icon")
                 || lower.contains("f_header_en")
-                || lower.contains("f_header_zh")
-                || lower.contains("3 ngon ngu")
-                || lower.contains("3 ngôn ngữ")
-                || lower.contains("đa ngôn ngữ")
-                || lower.contains("da ngon ngu");
-        return hasOnlySignals || hasFieldSignals;
+                || lower.contains("f_header_zh");
+        if (hasFieldSignals) {
+            return true;
+        }
+        // Explicit user scope-restriction patterns — look for structural anchor combos
+        // (scope-limiter adjective + action verb) rather than isolated words.
+        // This avoids false positives from partial word matches.
+        return Pattern.compile(
+            "(chi\\s+(bo\\s+sung|cap\\s+nhat|sua|them|them\\s+vao)|giu\\s+nguyen|khong\\s+lam\\s+gi\\s+khac)",
+            Pattern.UNICODE_CASE
+        ).matcher(lower).find()
+        || Pattern.compile(
+            "(ch\u1ec9\s+(b\u1ed5\s+sung|c\u1eadp\s+nh\u1eadt|s\u1eeda|th\u00eam)|gi\u1eef\s+nguy\u00ean|kh\u00f4ng\s+l\u00e0m\s+g\u00ec\s+kh\u00e1c)",
+            Pattern.UNICODE_CASE
+        ).matcher(lower).find();
     }
 
-    private List<String> detectRequirementAmbiguities(String requestText, String lower) {
+    private List<String> detectRequirementAmbiguities(
+            String requestText,
+            String contextType,
+            String responseMode,
+            LocalIntentClassification effectiveIntent) {
         List<String> out = new ArrayList<>();
         String text = String.valueOf(requestText == null ? "" : requestText).trim();
         if (text.isBlank()) {
             return out;
         }
 
-        if (text.length() < 28) {
+        LocalIntentClassification intent = effectiveIntent == null
+            ? LocalIntentClassification.unknown()
+            : effectiveIntent;
+        String action = String.valueOf(intent.action() == null ? "" : intent.action()).trim().toLowerCase(Locale.ROOT);
+        String normalizedContext = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        boolean likelyEditTask = editMode || intent.isEditTask() || "modify".equals(action) || "add".equals(action) || "remove".equals(action) || "delete".equals(action);
+        boolean lowConfidence = intent.confidence() < INTENT_CONFIDENCE_THRESHOLD;
+
+        if (text.length() < 28 && lowConfidence) {
             out.add("Yeu cau qua ngan, thieu pham vi thay doi cu the");
         }
-        if (!lower.contains("file") && !lower.contains("table") && !lower.contains("menu")
-                && !lower.contains("class") && !lower.contains("ham") && !lower.contains("function")) {
+
+        if (likelyEditTask && !hasStructuredScopeTarget(text, normalizedContext)) {
             out.add("Chua ro doi tuong tac dong (file/table/module)");
         }
-        if (lower.contains("toi uu") && !lower.contains("muc tieu") && !lower.contains("chi so")) {
-            out.add("Tu 'toi uu' chua co KPI ro rang (toc do/chi phi/do dung)");
-        }
-        if (lower.contains("sua") && !lower.contains("khong") && !lower.contains("giu nguyen")) {
+
+        if (likelyEditTask && lowConfidence && !hasStructuredBoundaryConstraint(text)) {
             out.add("Chua neu ro gioi han: duoc phep sua den dau");
         }
         return out;
+    }
+
+    private boolean hasStructuredScopeTarget(String requestText, String normalizedContext) {
+        String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (text.isBlank()) {
+            return false;
+        }
+        String lower = text.toLowerCase(Locale.ROOT);
+
+        if ("menu_json".equals(normalizedContext)) {
+            return hasStructuredMenuTarget(text);
+        }
+
+        if (Pattern.compile("\\b[\\w./\\-]+\\.(java|kt|ts|tsx|js|jsx|vue|py|sql|json|xml|yml|yaml|html|css|scss|less)\\b", Pattern.CASE_INSENSITIVE).matcher(text).find()) {
+            return true;
+        }
+        if (Pattern.compile("#[lL]\\d+").matcher(text).find()) {
+            return true;
+        }
+        if (Pattern.compile("\\b[a-z_][a-z0-9_]*\\.[a-z_][a-z0-9_]*(\\.[a-z_][a-z0-9_]*)*\\b", Pattern.CASE_INSENSITIVE).matcher(lower).find()) {
+            return true;
+        }
+        if (Pattern.compile("\\b[a-z_][a-z0-9_]{2,}\\s*\\(", Pattern.CASE_INSENSITIVE).matcher(text).find()) {
+            return true;
+        }
+        if (Pattern.compile("\\b[a-z0-9_]+\\s*[:=]\\s*['\"][^'\"]{2,}['\"]", Pattern.CASE_INSENSITIVE).matcher(text).find()) {
+            return true;
+        }
+        return false;
+    }
+
+    private boolean hasStructuredBoundaryConstraint(String requestText) {
+        String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (text.isBlank()) {
+            return false;
+        }
+        if (Pattern.compile("['\"][^'\"]{2,}['\"]").matcher(text).find()) {
+            return true;
+        }
+        if (Pattern.compile("\\b(<=|>=|==|!=|=>|->|:|=)\\b").matcher(text).find()) {
+            return true;
+        }
+        if (Pattern.compile("\\b\\d+(ms|s|sec|min|h|%|kb|mb|gb|x)\\b", Pattern.CASE_INSENSITIVE).matcher(text).find()) {
+            return true;
+        }
+
+        int newlineCount = 0;
+        int commaCount = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (ch == '\n') newlineCount++;
+            if (ch == ',') commaCount++;
+        }
+        return newlineCount >= 1 || commaCount >= 2;
     }
 
     /**
@@ -6534,6 +6602,10 @@ public class ApiSpringController {
      * Falls back to GENERAL if model unavailable or output unparseable.
      */
     private LocalIntentClassification classifyIntentWithLocalAI(String requestText) {
+        return classifyIntentWithLocalAI(requestText, false);
+    }
+
+    private LocalIntentClassification classifyIntentWithLocalAI(String requestText, boolean bypassCache) {
         if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()
                 || llamaCppNativeService.isCircuitOpen()) {
             return LocalIntentClassification.unknown();
@@ -6543,44 +6615,19 @@ public class ApiSpringController {
 
         // ── Cache lookup (10s TTL) ────────────────────────────────────────────
         String cacheKey = safe.length() > 120 ? safe.substring(0, 120) : safe;
-        Object[] cached = intentClassifyCache.get(cacheKey);
-        if (cached != null) {
-            long cachedAt = (long) cached[1];
-            if (System.currentTimeMillis() - cachedAt < INTENT_CACHE_TTL_MS) {
-                LocalIntentClassification hit = (LocalIntentClassification) cached[0];
-                logger.debug("[AI_INTENT_CLASSIFY] cache-hit type={} action={}", hit.type(), hit.action());
-                return hit;
+        if (!bypassCache) {
+            Object[] cached = intentClassifyCache.get(cacheKey);
+            if (cached != null) {
+                long cachedAt = (long) cached[1];
+                if (System.currentTimeMillis() - cachedAt < INTENT_CACHE_TTL_MS) {
+                    LocalIntentClassification hit = (LocalIntentClassification) cached[0];
+                    logger.debug("[AI_INTENT_CLASSIFY] cache-hit type={} action={}", hit.type(), hit.action());
+                    return hit;
+                }
             }
         }
 
-        // ── Fast heuristic bypass: obvious conversational → skip llama call ──
-        if (isConversationalRequest(safe)) {
-            LocalIntentClassification fast = new LocalIntentClassification(
-                "QUESTION", "ask", 90, "answer_direct", "none", "heuristic_fast");
-            intentClassifyCache.put(cacheKey, new Object[]{ fast, System.currentTimeMillis() });
-            logger.debug("[AI_INTENT_CLASSIFY] fast-heuristic QUESTION (no llama call)");
-            return fast;
-        }
-
-        // Fast heuristic bypass: obvious menu edit requests should skip an extra local classify pass.
-        if (hasExplicitMenuEditTarget(safe) || hasDynamicMenuBusinessIntent(safe)) {
-            LocalIntentClassification fast = new LocalIntentClassification(
-                "EDIT_MENU", "modify", 86, "load_menu_context", "menu", "heuristic_menu_edit");
-            intentClassifyCache.put(cacheKey, new Object[]{ fast, System.currentTimeMillis() });
-            logger.debug("[AI_INTENT_CLASSIFY] fast-heuristic EDIT_MENU (no llama call)");
-            return fast;
-        }
-
-        // Fast heuristic bypass: obvious code edit requests should skip an extra local classify pass.
-        if (hasLikelyCodeEditIntent(safe)) {
-            LocalIntentClassification fast = new LocalIntentClassification(
-                "EDIT_CODE", "modify", 84, "load_code_context", "code", "heuristic_code_edit");
-            intentClassifyCache.put(cacheKey, new Object[]{ fast, System.currentTimeMillis() });
-            logger.debug("[AI_INTENT_CLASSIFY] fast-heuristic EDIT_CODE (no llama call)");
-            return fast;
-        }
-
-        // ── Llama classification call with reduced token budget ───────────────
+        // ── Local AI classification call with reduced token budget ───────────
         String classifyPrompt = "<|im_start|>system\n"
             + "Classify user request. Output JSON only, no explanation.\n"
             + "Schema: {\"type\":\"EDIT_MENU|EDIT_CODE|QUESTION|GENERAL\","
@@ -6608,8 +6655,8 @@ public class ApiSpringController {
             + "<|im_start|>assistant\n";
 
         try {
-            // 48-token cap: enough for {"type":"EDIT_MENU","action":"add","confidence":85}
-            String raw = llamaCppNativeService.generateContentFast(classifyPrompt, 48);
+            int classifyMaxTokens = resolveIntentClassifyMaxTokens(safe, bypassCache);
+            String raw = llamaCppNativeService.generateContentFast(classifyPrompt, classifyMaxTokens);
             String text = extractAiResultText(raw);
             if (text == null || text.isBlank()) return LocalIntentClassification.unknown();
 
@@ -6638,11 +6685,24 @@ public class ApiSpringController {
             }
             logger.info("[AI_INTENT_CLASSIFY] type={} action={} nextStep={} contextKind={} confidence={} request={}",
                 type, action, nextStep, contextKind, confidence, safe.length() > 80 ? safe.substring(0, 80) + "…" : safe);
+            logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} pass={} maxTokens={} confidence={} nextStep={} contextKind={}",
+                "classify_success",
+                bypassCache ? "second" : "first",
+                classifyMaxTokens,
+                confidence,
+                nextStep,
+                contextKind);
             LocalIntentClassification result = new LocalIntentClassification(type, action, confidence, nextStep, contextKind, candidate);
-            intentClassifyCache.put(cacheKey, new Object[]{ result, System.currentTimeMillis() });
+            if (!bypassCache) {
+                intentClassifyCache.put(cacheKey, new Object[]{ result, System.currentTimeMillis() });
+            }
             return result;
         } catch (Exception e) {
             logger.debug("[AI_INTENT_CLASSIFY] parse failed: {}", e.getMessage());
+            logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} pass={} error={}",
+                "classify_parse_failed",
+                bypassCache ? "second" : "first",
+                String.valueOf(e.getMessage()));
             return LocalIntentClassification.unknown();
         }
     }
@@ -6664,42 +6724,55 @@ public class ApiSpringController {
 
         boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
         boolean menuContext = isMenuJsonContext(contextType);
-        boolean conversational = isConversationalRequest(requestText);
-        boolean metaAiQuestion = isMetaAiQuestion(requestText);
-        boolean likelyMenuEdit = hasDynamicMenuBusinessIntent(requestText)
-            || (menuContext && (hasExplicitMenuEditTarget(requestText) || editMode));
-        boolean likelyCodeEdit = hasLikelyCodeEditIntent(requestText)
-            || (!menuContext && editMode);
         boolean lowConfidence = base.confidence() < INTENT_CONFIDENCE_THRESHOLD;
+
+        LocalIntentClassification normalizedBaseRoute = normalizeClassifierRoute(base);
+
+        if (lowConfidence && !String.valueOf(requestText == null ? "" : requestText).trim().isBlank()) {
+            LocalIntentClassification secondPass = classifyIntentWithLocalAI(requestText, true);
+            LocalIntentClassification normalizedSecondRoute = normalizeClassifierRoute(secondPass);
+            if (hasRoutingDisagreement(normalizedBaseRoute, normalizedSecondRoute)) {
+                logger.info("[AI_INTENT_CLASSIFY] low-confidence disagreement: firstType={} firstStep={} firstConfidence={} secondType={} secondStep={} secondConfidence={} -> fallback load_code_context",
+                    base.type(), base.nextStep(), base.confidence(),
+                    secondPass.type(), secondPass.nextStep(), secondPass.confidence());
+                logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} firstType={} firstStep={} firstConfidence={} secondType={} secondStep={} secondConfidence={} chosen={}",
+                    "second_pass_disagreement",
+                    base.type(),
+                    base.nextStep(),
+                    base.confidence(),
+                    secondPass.type(),
+                    secondPass.nextStep(),
+                    secondPass.confidence(),
+                    "load_code_context");
+                return new LocalIntentClassification(
+                    "EDIT_CODE",
+                    "inspect",
+                    Math.max(base.confidence(), secondPass.confidence()),
+                    "load_code_context",
+                    "code",
+                    "second_pass_disagreement_fallback");
+            }
+
+            if (secondPass.confidence() > base.confidence() && normalizedSecondRoute != null && !normalizedSecondRoute.equals(LocalIntentClassification.unknown())) {
+                logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} firstType={} firstStep={} firstConfidence={} secondType={} secondStep={} secondConfidence={} chosen={}",
+                    "second_pass_promoted",
+                    base.type(),
+                    base.nextStep(),
+                    base.confidence(),
+                    secondPass.type(),
+                    secondPass.nextStep(),
+                    secondPass.confidence(),
+                    secondPass.nextStep());
+                base = secondPass;
+                lowConfidence = base.confidence() < INTENT_CONFIDENCE_THRESHOLD;
+                normalizedBaseRoute = normalizedSecondRoute;
+            }
+        }
 
         // Prefer the model's explicit next-step routing when it is confident enough.
         if (!lowConfidence) {
-            if (base.answerDirectly()) {
-                return new LocalIntentClassification("QUESTION", base.action(), base.confidence(), "answer_direct", "none", base.raw());
-            }
-            if (base.needsMenuContext()) {
-                return new LocalIntentClassification("EDIT_MENU", base.action(), base.confidence(), "load_menu_context", "menu", base.raw());
-            }
-            if (base.needsCodeContext()) {
-                return new LocalIntentClassification("EDIT_CODE", base.action(), base.confidence(), "load_code_context", "code", base.raw());
-            }
-        }
-
-        // Chat-only questions should be answered immediately after step-1.
-        if (metaAiQuestion) {
-            return new LocalIntentClassification("QUESTION", "ask", Math.max(base.confidence(), 85), "answer_direct", "none", base.raw());
-        }
-        if ((conversational && lowConfidence) || (conversational && (base.isQuestion() || base.isGeneral()))) {
-            return new LocalIntentClassification("QUESTION", "ask", Math.max(base.confidence(), 70), "answer_direct", "none", base.raw());
-        }
-
-        // Low-confidence classifier output falls back to lightweight heuristics.
-        if (lowConfidence) {
-            if (likelyMenuEdit) {
-                return new LocalIntentClassification("EDIT_MENU", "modify", Math.max(base.confidence(), 65), "load_menu_context", "menu", base.raw());
-            }
-            if (likelyCodeEdit) {
-                return new LocalIntentClassification("EDIT_CODE", "modify", Math.max(base.confidence(), 65), "load_code_context", "code", base.raw());
+            if (!normalizedBaseRoute.equals(LocalIntentClassification.unknown())) {
+                return normalizedBaseRoute;
             }
         }
 
@@ -6710,111 +6783,85 @@ public class ApiSpringController {
                 : new LocalIntentClassification("EDIT_CODE", "modify", Math.max(base.confidence(), 55), "load_code_context", "code", base.raw());
         }
 
+        // Non-edit turns: keep classifier's direction instead of hardcoded meta-question heuristics.
+        if (base.isQuestion() || base.isGeneral()) {
+            return new LocalIntentClassification(
+                "QUESTION",
+                "ask",
+                Math.max(base.confidence(), 60),
+                "answer_direct",
+                "none",
+                base.raw());
+        }
+
         return base;
     }
 
-    private boolean isMetaAiQuestion(String requestText) {
-        String lower = String.valueOf(requestText == null ? "" : requestText).trim().toLowerCase();
-        if (lower.isBlank()) {
-            return false;
+    private LocalIntentClassification normalizeClassifierRoute(LocalIntentClassification input) {
+        LocalIntentClassification base = input == null ? LocalIntentClassification.unknown() : input;
+        if (base.answerDirectly()) {
+            return new LocalIntentClassification("QUESTION", base.action(), base.confidence(), "answer_direct", "none", base.raw());
         }
-
-        boolean asksAboutScaleOrMemory = lower.contains("triệu ký tự")
-            || lower.contains("trieu ky tu")
-            || lower.contains("vài triệu")
-            || lower.contains("vai trieu")
-            || lower.contains("không mất cái nào")
-            || lower.contains("khong mat cai nao")
-            || lower.contains("toàn bộ")
-            || lower.contains("toan bo")
-            || lower.contains("tóm tắt")
-            || lower.contains("tom tat")
-            || lower.contains("ghi nhớ")
-            || lower.contains("ghi nho")
-            || lower.contains("phiên làm việc")
-            || lower.contains("phien lam viec")
-            || lower.contains("một luồng")
-            || lower.contains("mot luong")
-            || lower.contains("truy xuất")
-            || lower.contains("truy xuat")
-            || lower.contains("nhớ lại")
-            || lower.contains("nho lai")
-            || lower.contains("liên tục")
-            || lower.contains("lien tuc")
-            || lower.contains("context")
-            || lower.contains("memory")
-            || lower.contains("session");
-
-        boolean asksAboutAssistantBehavior = lower.contains("hướng dẫn")
-            || lower.contains("huong dan")
-            || lower.contains("làm sao")
-            || lower.contains("lam sao")
-            || lower.contains("nếu tôi gửi")
-            || lower.contains("neu toi gui")
-            || lower.contains("bạn có thể")
-            || lower.contains("ban co the")
-            || lower.contains("bạn tự")
-            || lower.contains("ban tu")
-            || lower.contains("có thể")
-            || lower.contains("co the");
-
-        boolean lacksConcreteEditTarget = !hasExplicitMenuEditTarget(lower)
-            && !hasDynamicMenuBusinessIntent(lower)
-            && !hasLikelyCodeEditIntent(lower);
-
-        return (asksAboutScaleOrMemory || asksAboutAssistantBehavior) && lacksConcreteEditTarget;
+        if (base.needsMenuContext()) {
+            return new LocalIntentClassification("EDIT_MENU", base.action(), base.confidence(), "load_menu_context", "menu", base.raw());
+        }
+        if (base.needsCodeContext()) {
+            return new LocalIntentClassification("EDIT_CODE", base.action(), base.confidence(), "load_code_context", "code", base.raw());
+        }
+        return LocalIntentClassification.unknown();
     }
 
-    private boolean hasLikelyCodeEditIntent(String requestText) {
-        String lower = String.valueOf(requestText == null ? "" : requestText).trim().toLowerCase();
-        if (lower.isBlank()) {
+    private boolean hasRoutingDisagreement(LocalIntentClassification first, LocalIntentClassification second) {
+        LocalIntentClassification a = first == null ? LocalIntentClassification.unknown() : first;
+        LocalIntentClassification b = second == null ? LocalIntentClassification.unknown() : second;
+        if (a.equals(LocalIntentClassification.unknown()) || b.equals(LocalIntentClassification.unknown())) {
             return false;
         }
+        String stepA = String.valueOf(a.nextStep() == null ? "" : a.nextStep()).trim().toLowerCase(Locale.ROOT);
+        String stepB = String.valueOf(b.nextStep() == null ? "" : b.nextStep()).trim().toLowerCase(Locale.ROOT);
+        if (stepA.isBlank() || stepB.isBlank()) {
+            return false;
+        }
+        return !stepA.equals(stepB);
+    }
 
-        boolean hasCodeDomainSignal = lower.contains("code")
-            || lower.contains("function")
-            || lower.contains("component")
-            || lower.contains("api")
-            || lower.contains("class")
-            || lower.contains("method")
-            || lower.contains("java")
-            || lower.contains("javascript")
-            || lower.contains("typescript")
-            || lower.contains("vue")
-            || lower.contains("react")
-            || lower.contains("sql")
-            || lower.contains("backend")
-            || lower.contains("frontend")
-            || lower.contains("file ")
-            || lower.contains("bug")
-            || lower.contains("lỗi")
-            || lower.contains("loi");
+    private int resolveIntentClassifyMaxTokens(String requestText, boolean secondPass) {
+        String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (text.isBlank()) {
+            return secondPass ? 72 : 48;
+        }
+        int base = secondPass ? 72 : 48;
+        int len = text.length();
+        if (len > 180) base += 8;
+        if (len > 280) base += 8;
 
-        boolean hasEditActionSignal = lower.contains("sửa")
-            || lower.contains("sua")
-            || lower.contains("fix")
-            || lower.contains("refactor")
-            || lower.contains("update")
-            || lower.contains("edit")
-            || lower.contains("change")
-            || lower.contains("implement")
-            || lower.contains("thêm")
-            || lower.contains("them")
-            || lower.contains("tạo")
-            || lower.contains("tao")
-            || lower.contains("viết")
-            || lower.contains("viet")
-            || lower.contains("xóa")
-            || lower.contains("xoa")
-            || lower.contains("rename");
+        int complexitySignals = 0;
+        if (text.contains("?")) complexitySignals++;
+        if (text.contains(":")) complexitySignals++;
+        if (text.contains(";")) complexitySignals++;
+        if (text.contains("\n")) complexitySignals++;
 
-        String highLevelIntent = detectUserIntent(requestText);
-        boolean intentSuggestsEdit = "ADD".equals(highLevelIntent)
-            || "DELETE".equals(highLevelIntent)
-            || "EDIT".equals(highLevelIntent)
-            || "RESTRUCTURE".equals(highLevelIntent);
+        int sentenceBreaks = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '.' || c == '!' || c == '?' || c == '\n') {
+                sentenceBreaks++;
+            }
+        }
+        if (sentenceBreaks >= 2) complexitySignals++;
+        if (sentenceBreaks >= 4) complexitySignals++;
 
-        return hasCodeDomainSignal && (hasEditActionSignal || intentSuggestsEdit);
+        int commaCount = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == ',') {
+                commaCount++;
+            }
+        }
+        if (commaCount >= 2) complexitySignals++;
+        if (commaCount >= 5) complexitySignals++;
+
+        base += Math.min(24, complexitySignals * 4);
+        return Math.max(48, Math.min(96, base));
     }
 
     private List<String> localizeRequirementGuardQuestions(List<String> questions, String uiLang) {
@@ -6966,12 +7013,16 @@ public class ApiSpringController {
             return new RequirementGuardDecision(true, questions, List.of("Yeu cau rong"));
         }
 
-        List<String> ambiguities = new ArrayList<>(detectRequirementAmbiguities(normalized, normalized.toLowerCase()));
+        List<String> ambiguities = new ArrayList<>(detectRequirementAmbiguities(
+            normalized,
+            normalizedContext,
+            responseMode,
+            effectiveIntent));
         ambiguities.addAll(detectContextualRequirementAmbiguities(
             normalized,
-            normalized.toLowerCase(),
             normalizedContext,
-            responseMode));
+            responseMode,
+            effectiveIntent));
 
         // De-duplicate while preserving order for stable logs and user prompts.
         LinkedHashSet<String> uniq = new LinkedHashSet<>();
@@ -6997,8 +7048,7 @@ public class ApiSpringController {
         if ("menu_json".equals(normalizedContext)
             && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
             && aiRequirementHardGuardMenuJsonStrictTargetRequired
-            && !hasExplicitMenuEditTarget(normalized)
-            && !hasDynamicMenuBusinessIntent(normalized)) {
+            && !hasStructuredMenuTarget(normalized)) {
             questions.add("Ban muon sua node nao? Vui long cho id hoac duong dan node (vi du: root.sales.invoice)");
             questions.add("Ban muon sua truong nao trong node do (label/trigger/table/permissions/...)?");
             questions.add("Phan nao phai giu nguyen de tranh vo nghiep vu?");
@@ -7024,93 +7074,35 @@ public class ApiSpringController {
         return new RequirementGuardDecision(true, questions, ambiguities);
     }
 
-    private boolean isConversationalRequest(String requestText) {
-        String lower = String.valueOf(requestText == null ? "" : requestText).trim().toLowerCase();
-        if (lower.isBlank()) return false;
-        if (isMetaAiQuestion(lower)) return true;
-
-        // Question patterns — general knowledge/AI/tech questions, not code-edit tasks
-        boolean isQuestion = lower.endsWith("?")
-            || lower.contains(" là gì") || lower.contains(" là ai")
-            || lower.contains("bạn là") || lower.contains("ban la")
-            || lower.contains("ai là") || lower.contains("ai la")
-            || lower.contains("what is") || lower.contains("who are")
-            || lower.contains("how many") || lower.contains("bao nhiêu") || lower.contains("bao nhieu")
-            || lower.contains("có thể xử lý") || lower.contains("co the xu ly")
-            || lower.contains("triệu ký tự") || lower.contains("trieu ky tu")
-            || lower.contains("token") && !lower.contains("menu") && !lower.contains("code")
-            || lower.contains("model nào") || lower.contains("model nao")
-            || lower.contains("giải thích") || lower.contains("giai thich")
-            || lower.contains("tại sao") || lower.contains("tai sao")
-            || lower.contains("khi nào") || lower.contains("khi nao")
-            || lower.contains("ở đâu") || lower.contains("o dau")
-            || lower.contains("như thế nào") || lower.contains("nhu the nao");
-
-        // Confirm it's NOT a code/menu edit action
-        boolean hasEditAction = lower.contains("thêm") || lower.contains("them")
-            || lower.contains("sửa") || lower.contains("sua")
-            || lower.contains("xóa") || lower.contains("xoa")
-            || lower.contains("tạo") || lower.contains("tao")
-            || lower.contains("cập nhật") || lower.contains("cap nhat")
-            || lower.contains("viết code") || lower.contains("viet code")
-            || lower.contains("generate") || lower.contains("refactor")
-            || lower.contains("implement") || lower.contains("add function")
-            || lower.contains("create") && (lower.contains("menu") || lower.contains("code") || lower.contains("component"))
-            || lower.contains("delete") && (lower.contains("menu") || lower.contains("node") || lower.contains("field"));
-
-        // Conversational = has question signal AND no edit action
-        return isQuestion && !hasEditAction;
-    }
-
-    private boolean hasDynamicMenuBusinessIntent(String requestText) {
-        String lower = String.valueOf(requestText == null ? "" : requestText).trim().toLowerCase();
-        if (lower.isBlank()) {
+    private boolean hasStructuredMenuTarget(String requestText) {
+        String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (text.isBlank()) {
             return false;
         }
+        String lower = text.toLowerCase(Locale.ROOT);
 
-        boolean hasMenuDomainSignal = lower.contains("menu")
-            || lower.contains("json")
-            || lower.contains("table")
-            || lower.contains("trigger")
-            || lower.contains("f_name")
-            || lower.contains("f_types")
-            || lower.contains("label")
-            || lower.contains("phan quyen")
-            || lower.contains("permission")
-            || lower.contains("nghiep vu")
-            || lower.contains("business");
-
-        boolean hasActionSignal = lower.contains("them")
-            || lower.contains("thêm")
-            || lower.contains("sua")
-            || lower.contains("sửa")
-            || lower.contains("xoa")
-            || lower.contains("xóa")
-            || lower.contains("cap nhat")
-            || lower.contains("cập nhật")
-            || lower.contains("tao")
-            || lower.contains("tạo")
-            || lower.contains("thiet ke")
-            || lower.contains("thiết kế")
-            || lower.contains("generate")
-            || lower.contains("refine");
-
-        return hasMenuDomainSignal && hasActionSignal;
-    }
-
-    private boolean hasExplicitMenuEditTarget(String requestText) {
-        String lower = String.valueOf(requestText == null ? "" : requestText).trim().toLowerCase();
-        if (lower.isBlank()) {
-            return false;
-        }
-
+        // Use format-based anchors instead of language keywords.
         if (Pattern.compile("\\b(root|node|parent|child|menu)\\.[a-z0-9_.-]{2,}").matcher(lower).find()) {
             return true;
         }
         if (Pattern.compile("\\bid\\s*[:=]\\s*[a-z0-9_-]{4,}").matcher(lower).find()) {
             return true;
         }
-        if (Pattern.compile("\\b(p_name|table_name|trigger|f_name|f_types|label|permissions?)\\b").matcher(lower).find()) {
+        if (Pattern.compile("\\b[a-z0-9_]+\\s*[:=]\\s*['\"][a-z0-9_./-]{2,}['\"]").matcher(lower).find()) {
+            return true;
+        }
+        if (Pattern.compile("\\b[a-z0-9_]+\\s*[:=]\\s*[a-z0-9_./-]{4,}").matcher(lower).find()) {
+            return true;
+        }
+
+        int slashCount = 0;
+        int dotCount = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (ch == '/') slashCount++;
+            if (ch == '.') dotCount++;
+        }
+        if (slashCount >= 2 || dotCount >= 2) {
             return true;
         }
 
@@ -7119,9 +7111,9 @@ public class ApiSpringController {
 
     private List<String> detectContextualRequirementAmbiguities(
             String requestText,
-            String lower,
             String normalizedContext,
-            String responseMode) {
+            String responseMode,
+            LocalIntentClassification effectiveIntent) {
         List<String> out = new ArrayList<>();
         String text = String.valueOf(requestText == null ? "" : requestText).trim();
         if (text.isBlank()) {
@@ -7135,28 +7127,14 @@ public class ApiSpringController {
 
         // menu_json edit requires explicit target node/scope to avoid broad destructive edits.
         if ("menu_json".equals(normalizedContext)) {
-            boolean hasTargetAnchor = lower.contains("id")
-                || lower.contains("node")
-                || lower.contains("menu con")
-                || lower.contains("parent")
-                || lower.contains("trigger")
-                || lower.contains("table")
-                || Pattern.compile("\\b[a-z0-9_\\-]{8,}\\b").matcher(lower).find();
-            boolean hasActionVerb = lower.contains("them")
-                || lower.contains("thêm")
-                || lower.contains("sua")
-                || lower.contains("sửa")
-                || lower.contains("xoa")
-                || lower.contains("xóa")
-                || lower.contains("doi")
-                || lower.contains("đổi")
-                || lower.contains("cap nhat")
-                || lower.contains("cập nhật");
+            boolean hasTargetAnchor = hasStructuredMenuTarget(text);
+            String action = String.valueOf(effectiveIntent == null ? "" : effectiveIntent.action()).trim().toLowerCase(Locale.ROOT);
+            boolean hasActionIntent = !action.isEmpty() && !"ask".equals(action) && !"unknown".equals(action);
 
             if (!hasTargetAnchor) {
                 out.add("Menu edit chua chi ro target node/menu id/parent/trigger/table can sua");
             }
-            if (!hasActionVerb) {
+            if (!hasActionIntent) {
                 out.add("Menu edit chua ro hanh dong can thuc hien (them/sua/xoa/cap nhat)");
             }
             return out;
@@ -7164,15 +7142,7 @@ public class ApiSpringController {
 
         // code edit requires explicit target file/module/symbol/scope.
         if ("code".equals(normalizedContext)) {
-            boolean hasScopeAnchor = lower.contains("file")
-                || lower.contains("module")
-                || lower.contains("class")
-                || lower.contains("function")
-                || lower.contains("ham")
-                || lower.contains("line")
-                || lower.contains("dong")
-                || lower.contains("api")
-                || lower.contains("endpoint");
+            boolean hasScopeAnchor = hasStructuredScopeTarget(text, normalizedContext);
             if (!hasScopeAnchor) {
                 out.add("Code edit chua chi ro pham vi tac dong (file/module/class/function/line)");
             }

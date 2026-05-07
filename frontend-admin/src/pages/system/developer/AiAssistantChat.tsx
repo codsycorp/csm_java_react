@@ -547,6 +547,22 @@ function renderLooseJsonLikeAnswer(raw: unknown): string | null {
 	return quoted.slice(0, 8).map(item => `- ${item}`).join("\n").trim() || null;
 }
 
+function sanitizeBrokenConversationalWrapper(raw: unknown): string | null {
+	const text = String(raw || "").trim();
+	if (!text)
+		return null;
+	const looksLikeRealJson = /^\s*[\[{]\s*"/.test(text) || text.includes('":') || text.includes('"');
+	if (looksLikeRealJson)
+		return null;
+
+	let out = text;
+	if (out.startsWith("{") || out.startsWith("["))
+		out = out.slice(1).trim();
+	if (out.endsWith("}") || out.endsWith("]"))
+		out = out.slice(0, -1).trim();
+	return out || null;
+}
+
 function normalizeConversationalJsonAnswer(raw: unknown): string | null {
 	const candidate = extractValidJsonCandidate(String(raw || ""));
 	if (candidate) {
@@ -560,7 +576,7 @@ function normalizeConversationalJsonAnswer(raw: unknown): string | null {
 			// Fall through to truncated JSON-like fallback.
 		}
 	}
-	return renderLooseJsonLikeAnswer(raw);
+	return renderLooseJsonLikeAnswer(raw) || sanitizeBrokenConversationalWrapper(raw);
 }
 
 function toStringList(raw: unknown): string[] {
