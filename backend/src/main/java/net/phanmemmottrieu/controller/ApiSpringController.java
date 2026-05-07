@@ -210,6 +210,15 @@ public class ApiSpringController {
                 }
             });
     private static final long INPUT_LANGUAGE_CACHE_TTL_MS = 30_000L;
+    private final java.util.Map<String, Object[]> broadAnalysisDetectCache =
+        java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<String, Object[]>(32, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, Object[]> e) {
+                    return size() > 64;
+                }
+            });
+    private static final long BROAD_ANALYSIS_CACHE_TTL_MS = 30_000L;
 
     private static record LocalPreAnalysisDecision(
         boolean attempted,
@@ -4309,6 +4318,23 @@ public class ApiSpringController {
                 String rawResult = llamaCppNativeService.generateContent(questionPrompt);
                 String localText = extractAiResultText(rawResult);
                 if (!localText.isBlank()) {
+                    if (shouldEscalateLocalDirectFullAnalysis(
+                            flow,
+                            safeRequestText,
+                            responseMode,
+                            effectiveLocalContextType,
+                            safeCodeContext,
+                            localText,
+                            intentClass)) {
+                        logger.info("[AI_LOCAL_DIRECT] escalated to full-analysis pipeline chars={} contextChars={} nextStep={}",
+                            localText.length(), safeCodeContext.length(), intentClass.nextStep());
+                        return new LocalPreAnalysisDecision(
+                            true,
+                            false,
+                            "",
+                            localText,
+                            "local_direct_escalated_full_analysis");
+                    }
                     logger.info("[AI_LOCAL_DIRECT] CHAT answered locally chars={} contextChars={} nextStep={}",
                         localText.length(), questionContext.length(), intentClass.nextStep());
                     return new LocalPreAnalysisDecision(true, true, localText, "", "local_direct_question_answered");
@@ -4449,6 +4475,148 @@ public class ApiSpringController {
             return "menu_json";
         }
         return contextType;
+    }
+
+    private boolean shouldEscalateLocalDirectFullAnalysis(
+            String flow,
+            String requestText,
+            String responseMode,
+            String contextType,
+            String codeContext,
+            String localText,
+            LocalIntentClassification intentClass) {
+        String normalizedFlow = String.valueOf(flow == null ? "" : flow).trim().toLowerCase(Locale.ROOT);
+        if (!"ai-code-stream".equals(normalizedFlow) && !"ai-assistant-chat".equals(normalizedFlow)) {
+            return false;
+        }
+        if (!"analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            return false;
+        }
+        if (isMenuJsonContext(contextType)) {
+            return false;
+        }
+        if (!isBroadAnalysisRequest(requestText, intentClass)) {
+            return false;
+        }
+        String effectiveCodeContext = String.valueOf(codeContext == null ? "" : codeContext);
+        if (effectiveCodeContext.length() < 12000) {
+            return false;
+        }
+        String effectiveLocalText = String.valueOf(localText == null ? "" : localText).trim();
+        if (effectiveLocalText.length() >= 2000) {
+            return false;
+        }
+        LocalIntentClassification effectiveIntent = intentClass == null ? LocalIntentClassification.unknown() : intentClass;
+        return effectiveIntent.needsCodeContext()
+            || "load_code_context".equalsIgnoreCase(String.valueOf(effectiveIntent.nextStep() == null ? "" : effectiveIntent.nextStep()));
+    }
+
+    private boolean isBroadAnalysisRequest(String requestText, LocalIntentClassification intentClass) {
+        String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (text.isBlank()) {
+            return false;
+        }
+
+        String inferred = detectBroadAnalysisRequestWithLocalAI(text, false);
+        if ("broad".equals(inferred)) {
+            return true;
+        }
+        if ("narrow".equals(inferred)) {
+            return false;
+        }
+
+        LocalIntentClassification intent = intentClass == null ? LocalIntentClassification.unknown() : intentClass;
+        boolean needsCodeContext = intent.needsCodeContext()
+            || "load_code_context".equalsIgnoreCase(String.valueOf(intent.nextStep() == null ? "" : intent.nextStep()));
+        if (!needsCodeContext) {
+            return false;
+        }
+
+        boolean broadByStructure = text.length() >= 70 || countSentenceLikeSeparators(text) >= 2;
+        return broadByStructure;
+    }
+
+    private int countSentenceLikeSeparators(String text) {
+        String source = String.valueOf(text == null ? "" : text);
+        int count = 0;
+        for (int i = 0; i < source.length(); i++) {
+            char ch = source.charAt(i);
+            if (ch == '.' || ch == ';' || ch == ':' || ch == '!' || ch == '?') {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private String detectBroadAnalysisRequestWithLocalAI(String requestText, boolean bypassCache) {
+        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()
+                || llamaCppNativeService.isCircuitOpen()) {
+            return "";
+        }
+
+        String safe = truncateMiddle(String.valueOf(requestText == null ? "" : requestText).trim(), 280);
+        if (safe.isBlank()) {
+            return "";
+        }
+
+        String cacheKey = safe.length() > 140 ? safe.substring(0, 140) : safe;
+        if (!bypassCache) {
+            Object[] cached = broadAnalysisDetectCache.get(cacheKey);
+            if (cached != null) {
+                long cachedAt = (long) cached[1];
+                if (System.currentTimeMillis() - cachedAt < BROAD_ANALYSIS_CACHE_TTL_MS) {
+                    return String.valueOf(cached[0]);
+                }
+            }
+        }
+
+        String prompt = "<|im_start|>system\n"
+            + "Classify whether the user asks for a broad full-code analysis or a narrow/specific answer.\n"
+            + "Return exactly one token only: broad or narrow.\n"
+            + "broad = asks to analyze/explain the whole code/business flow end-to-end.\n"
+            + "narrow = asks a specific part, bug, symbol, or short direct question.\n"
+            + "No JSON. No explanation.\n"
+            + "<|im_end|>\n"
+            + "<|im_start|>user\nREQUEST: " + safe + "<|im_end|>\n"
+            + "<|im_start|>assistant\n";
+
+        try {
+            String raw = llamaCppNativeService.generateContentFast(prompt, 8);
+            String normalized = normalizeBroadAnalysisDecision(extractAiResultText(raw));
+            if (!normalized.isBlank()) {
+                if (!bypassCache) {
+                    broadAnalysisDetectCache.put(cacheKey, new Object[]{ normalized, System.currentTimeMillis() });
+                }
+                return normalized;
+            }
+        } catch (Exception ex) {
+            logger.debug("[AI_BROAD_ANALYSIS] local detection failed: {}", ex.getMessage());
+        }
+
+        if (!bypassCache) {
+            return detectBroadAnalysisRequestWithLocalAI(safe, true);
+        }
+        return "";
+    }
+
+    private String normalizeBroadAnalysisDecision(String raw) {
+        String text = String.valueOf(raw == null ? "" : raw).trim().toLowerCase(Locale.ROOT);
+        if (text.isBlank()) {
+            return "";
+        }
+        if (text.contains("broad")) {
+            return "broad";
+        }
+        if (text.contains("narrow")) {
+            return "narrow";
+        }
+        if (text.matches(".*\\b(yes|true|1)\\b.*")) {
+            return "broad";
+        }
+        if (text.matches(".*\\b(no|false|0)\\b.*")) {
+            return "narrow";
+        }
+        return "";
     }
 
     /**
