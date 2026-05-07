@@ -1376,6 +1376,15 @@ public class ApiSpringController {
                                 providerText,
                                 responseMode,
                                 contextType);
+                        if (localAccepted && shouldRejectShallowLocalBroadAnalysis(
+                                "ai-code-stream",
+                                message,
+                                responseMode,
+                                contextType,
+                                providerText,
+                                preclassifiedIntent)) {
+                            localAccepted = false;
+                        }
                         if (localAccepted) {
                             sendEvent(emitter, jsonOf(
                                 "stage", "streaming_started",
@@ -4312,6 +4321,17 @@ public class ApiSpringController {
             // ── 2A: AI decided question/general answer; still load context when classifier requested it ──
             if (intentClass.answerDirectly() || intentClass.isQuestion() || intentClass.isGeneral()) {
                 String questionContext = compactContext;
+                if (shouldBypassLocalDirectQuestionInference(
+                        flow,
+                        safeRequestText,
+                        responseMode,
+                        effectiveLocalContextType,
+                        safeCodeContext,
+                        intentClass)) {
+                    logger.info("[AI_LOCAL_DIRECT] bypass local question inference for deep analysis nextStep={} codeCtxChars={}",
+                        intentClass.nextStep(), safeCodeContext.length());
+                    return new LocalPreAnalysisDecision(true, false, "", "", "local_direct_bypassed_deep_analysis");
+                }
                 int estimatedWaitSecs = Math.max(3, estimateLocalProviderWaitSecs(questionContext.isBlank() ? safeRequestText : questionContext));
                 emitLocalPreAnalysisProgress(progressCallback, jsonOf(
                     "stage", "waiting_gemini",
@@ -4599,6 +4619,36 @@ public class ApiSpringController {
         return needsDeepCodeContext;
     }
 
+    private boolean shouldBypassLocalDirectQuestionInference(
+            String flow,
+            String requestText,
+            String responseMode,
+            String contextType,
+            String codeContext,
+            LocalIntentClassification intentClass) {
+        String normalizedFlow = String.valueOf(flow == null ? "" : flow).trim().toLowerCase(Locale.ROOT);
+        if (!"ai-code-stream".equals(normalizedFlow)) {
+            return false;
+        }
+        if (!"analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            return false;
+        }
+        if (isMenuJsonContext(contextType)) {
+            return false;
+        }
+        LocalIntentClassification effectiveIntent = intentClass == null ? LocalIntentClassification.unknown() : intentClass;
+        boolean needsDeepCodeContext = effectiveIntent.needsCodeContext()
+            || "load_code_context".equalsIgnoreCase(String.valueOf(effectiveIntent.nextStep() == null ? "" : effectiveIntent.nextStep()));
+        if (!needsDeepCodeContext) {
+            return false;
+        }
+        if (!isBroadAnalysisRequest(requestText, intentClass)) {
+            return false;
+        }
+        int codeCtxChars = String.valueOf(codeContext == null ? "" : codeContext).length();
+        return codeCtxChars >= 12000;
+    }
+
     private boolean shouldRejectShallowLocalBroadAnalysis(
             String flow,
             String requestText,
@@ -4628,6 +4678,12 @@ public class ApiSpringController {
             return false;
         }
         String lower = source.toLowerCase(Locale.ROOT);
+
+        if ((lower.startsWith("http://") || lower.startsWith("https://") || lower.contains("www.google.com"))
+                && source.length() < 2000) {
+            return true;
+        }
+
         int keyHits = 0;
         for (String token : new String[]{"rowkey", "dateformatter", "search", "options", "rootclassname", "classname", "scroll", "loading", "pagination", "expandable"}) {
             if (lower.contains(token)) {
