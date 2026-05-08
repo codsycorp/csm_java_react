@@ -804,8 +804,10 @@ public class ApiSpringController {
 
     private final ConcurrentHashMap<String, InstructionsCacheEntry> aiAssistantCustomInstructionsCache = new ConcurrentHashMap<>();
 
-    private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
-    private final ExecutorService aiCodeStreamExecutor = Executors.newCachedThreadPool();
+        private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
+        // Bound code-stream workers on weak servers to avoid CPU thrashing from unbounded cached pool.
+        private final ExecutorService aiCodeStreamExecutor = Executors.newFixedThreadPool(
+            Math.max(1, Math.min(2, Runtime.getRuntime().availableProcessors())));
     private final ConcurrentHashMap<String, Map<String, Object>> aiAsyncJobs = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CodeChainingCacheEntry> codeChainingStep1Cache = new ConcurrentHashMap<>();
     private final Map<String, AiCodeBaseContentEntry> aiCodeBaseContentCache = new ConcurrentHashMap<>();
@@ -1670,19 +1672,24 @@ public class ApiSpringController {
                             return;
                         }
                         if (localOnlyHardRoute) {
-                            logger.warn("LOCAL_ONLY_HARD_ROUTE local quality gate failed, allowing cloud fallback requestId={} contextType={} reasonCode={}",
+                            logger.warn("LOCAL_ONLY_HARD_ROUTE local quality gate failed, blocking cloud fallback requestId={} contextType={} reasonCode={}",
                                 requestId, contextType, codeStreamPreAnalysis.reasonCode());
                             sendEvent(emitter, jsonOf(
                                 "stage", "model_switch",
-                                "status", "local_hard_route_quality_fallback",
+                                "status", "local_hard_route_blocked_cloud",
                                 "requestId", requestId,
-                                "model", effectiveModel,
+                                "model", "local_provider",
                                 "modelDecisionStep", "fallback",
-                                "modelDecisionReason", "local_hard_route_quality_gate_failed",
+                                "modelDecisionReason", "local_hard_route_no_cloud_fallback",
                                 "decision_step", "fallback",
-                                "reason_code", "local_hard_route_quality_gate_failed",
-                                "message", "Local AI không tạo được output đạt chất lượng, chuyển sang cloud model",
-                                "messageKey", "copilot.progress.message.local_hard_route_fallback"));
+                                "reason_code", "local_hard_route_no_cloud_fallback",
+                                "message", "Local AI không tạo được output đạt chất lượng. Không chuyển sang cloud (local-only mode).",
+                                "messageKey", "copilot.progress.message.local_override_no_cloud"));
+                            sendErrorEvent(emitter, uiTextByLang(uiLang,
+                                "Local AI chưa xử lý được yêu cầu này ở chế độ local-only. Vui lòng rút gọn hoặc chia nhỏ yêu cầu.",
+                                "Local AI could not handle this request in local-only mode. Please simplify or split your request.",
+                                "本地AI在仅本地模式下无法处理此请求。请简化或拆分请求。"));
+                            return;
                         }
                         if (hasImages) {
                             rawResponse = streamWithAutoContinueMultimodal(emitter, prompt, imageParts, effectiveModel, language,
