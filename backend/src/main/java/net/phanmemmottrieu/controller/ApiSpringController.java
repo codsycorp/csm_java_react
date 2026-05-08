@@ -5597,6 +5597,19 @@ public class ApiSpringController {
             return "";
         }
 
+        // Strip ChatML control tokens that leak into output when no stop sequence fires.
+        // Pattern: <|im_end|> marks end of assistant turn; anything after it is a fake continuation.
+        int imEndIdx = safe.indexOf("<|im_end|>");
+        if (imEndIdx >= 0) {
+            safe = safe.substring(0, imEndIdx).trim();
+        }
+        // Also strip any stray <|im_start|> ... sequences left in the output.
+        safe = safe.replaceAll("(?s)<\\|im_start\\|>.*", "").trim();
+        safe = safe.replaceAll("<\\|im_end\\|>", "").trim();
+        if (safe.isBlank()) {
+            return "";
+        }
+
         String dewrapped = sanitizeBrokenConversationalWrapper(safe);
         if (!dewrapped.isBlank() && !isLikelyJsonPayload(dewrapped)) {
             safe = dewrapped;

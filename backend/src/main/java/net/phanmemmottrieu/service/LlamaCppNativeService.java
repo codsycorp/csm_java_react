@@ -490,7 +490,11 @@ public class LlamaCppNativeService implements AIProvider {
                 .setNPredict(nPredict)
                 .setTemperature(temp)
                 .setTopP(isJsonForced ? 0.5f : Math.max(0.1f, Math.min(1f, topP)))
-                .setTopK(isJsonForced ? 10 : Math.max(1, topK));
+                .setTopK(isJsonForced ? 10 : Math.max(1, topK))
+                // Stop at ChatML end-of-turn marker so model doesn't generate fake user turns.
+                .setStopStrings("<|im_end|>", "<|im_start|>")
+                // Penalize immediate repetition to prevent tail loop runaway.
+                .setRepeatPenalty(1.15f);
         synchronized (modelLock) {
             return localModel.complete(inference);
         }
@@ -505,7 +509,11 @@ public class LlamaCppNativeService implements AIProvider {
                 .setNPredict(nPredict)
                 .setTemperature(temp)
                 .setTopP(isJsonForced ? 0.5f : Math.max(0.1f, Math.min(1f, topP)))
-                .setTopK(isJsonForced ? 10 : Math.max(1, topK));
+                .setTopK(isJsonForced ? 10 : Math.max(1, topK))
+                // Stop at ChatML end-of-turn marker so model doesn't generate fake user turns.
+                .setStopStrings("<|im_end|>", "<|im_start|>")
+                // Penalize immediate repetition to prevent tail loop runaway.
+                .setRepeatPenalty(1.15f);
         synchronized (modelLock) {
             return localModel.complete(inference);
         }
