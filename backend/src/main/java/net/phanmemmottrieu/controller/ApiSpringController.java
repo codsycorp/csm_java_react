@@ -5622,8 +5622,7 @@ public class ApiSpringController {
         }
 
         // Keep fast path for non-edit semantics only.
-        return !"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
-            || !isMenuJsonContext(contextType);
+        return !"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
     }
 
     private boolean tryHandleLocalFastQuestion(

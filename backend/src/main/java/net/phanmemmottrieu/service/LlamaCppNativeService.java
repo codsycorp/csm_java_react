@@ -769,9 +769,32 @@ public class LlamaCppNativeService implements AIProvider {
             return false;
         }
         String lower = prompt.toLowerCase();
-        return lower.contains("json") || lower.contains("{\"") || lower.contains("return json") 
-            || lower.contains("output json") || lower.contains("format json")
-            || lower.contains("[{") || lower.contains("[]");
+
+        // Do not force JSON when prompt explicitly asks for natural language text.
+        if (lower.contains("khong tra ve json")
+                || lower.contains("không trả về json")
+                || lower.contains("khong duoc mo dau bang dau {")
+                || lower.contains("không được mở đầu bằng dấu {")
+                || lower.contains("do not return json")
+                || lower.contains("no json")
+                || lower.contains("plain text")) {
+            return false;
+        }
+
+        // Only trigger for explicit JSON-output directives, not generic mentions.
+        return lower.contains("output only valid json")
+            || lower.contains("must output only valid json")
+            || lower.contains("return valid json")
+            || lower.contains("return json only")
+            || lower.contains("respond in json")
+            || lower.contains("json object")
+            || lower.contains("json array")
+            || lower.contains("```json")
+            || lower.contains("\"summary\"")
+            || lower.contains("\"code\"")
+            || lower.contains("\"changes\"")
+            || lower.contains("\"textedits\"")
+            || lower.contains("\"text_edits\"");
     }
 
     // ── Task Cancellation Helpers ──────────────────────────────────────────────────

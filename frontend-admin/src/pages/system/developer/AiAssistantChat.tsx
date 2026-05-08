@@ -584,6 +584,27 @@ function normalizeConversationalJsonAnswer(raw: unknown): string | null {
 	return renderLooseJsonLikeAnswer(raw) || sanitizeBrokenConversationalWrapper(raw);
 }
 
+function normalizeAssistantDisplayText(raw: unknown): string {
+	const text = String(raw || "").trim();
+	if (!text)
+		return "";
+
+	const structuredPayload = parseStructuredAssistantPayload(text);
+	if (structuredPayload) {
+		const structuredText = [
+			structuredPayload.summary,
+			structuredPayload.changes.length
+				? structuredPayload.changes.map(item => `- ${item}`).join("\n")
+				: "",
+		].filter(Boolean).join("\n\n").trim();
+		if (structuredText)
+			return structuredText;
+	}
+
+	const conversationalJsonText = normalizeConversationalJsonAnswer(text);
+	return String(conversationalJsonText || text).trim();
+}
+
 function toStringList(raw: unknown): string[] {
 	if (!Array.isArray(raw))
 		return [];
@@ -1184,7 +1205,14 @@ export default function AiAssistantChat({
 				const parsedTime = Date.parse(String(turn.timestamp || ""));
 				const baseTs = Number.isFinite(parsedTime) ? parsedTime : Date.now() - Math.max(0, turns.length - i) * 1000;
 				const userText = String(turn.user_message || turn.userRequest || "").trim();
-				const assistantText = String(turn.assistant_message || turn.ai_response || turn.aiResponse || "").trim();
+				const assistantRaw = String(turn.assistant_message || turn.ai_response || turn.aiResponse || "").trim();
+				const assistantText = normalizeAssistantDisplayText(assistantRaw);
+				const responseModeRaw = String(turn.response_mode || turn.responseMode || "").trim().toLowerCase();
+				const responseMode: ResponseMode | undefined = responseModeRaw === "edit"
+					? "edit"
+					: responseModeRaw === "analyze"
+						? "analyze"
+						: undefined;
 				if (userText) {
 					converted.push({
 						id: `${turnId || `turn_${i}`}_u`,
@@ -1199,12 +1227,16 @@ export default function AiAssistantChat({
 					const feedbackRating = Number.isFinite(rawRating)
 						? Math.max(-1, Math.min(1, rawRating))
 						: 0;
+					const shouldHideCodeInChat = Boolean(onCodeInsert) && responseMode === "edit";
+					const codeBlocks = shouldHideCodeInChat ? [] : extractCodeBlocks(assistantText);
 					converted.push({
 						id: `${turnId || `turn_${i}`}_a`,
 						serverTurnId: turnId || undefined,
 						feedbackRating,
 						role: "assistant",
+						responseMode,
 						content: assistantText,
+						codeBlocks,
 						timestamp: baseTs + 1,
 					});
 				}
@@ -1232,7 +1264,7 @@ export default function AiAssistantChat({
 				message.warning(uiText("Không tải được lịch sử chat từ server", "Could not load chat history from server", "无法从服务器加载聊天历史"));
 			}
 		}
-	}, [appId, contextType, language, targetPName, targetPType, uiText]);
+	}, [appId, contextType, language, onCodeInsert, targetPName, targetPType, uiText]);
 
 	const handleRateMessage = useCallback(async (msg: ChatMessage, rating: -1 | 0 | 1) => {
 		if (!msg.serverTurnId) {
@@ -2104,10 +2136,10 @@ export default function AiAssistantChat({
 		applyRealtimeCodeFromTextRef.current(nextText, force);
 		const structuredPayload = parseStructuredAssistantPayload(nextText);
 		const shouldHideCodeInChat = Boolean(onCodeInsert) && turnAllowAutoApplyRef.current;
-		const conversationalJsonText = !structuredPayload && !shouldHideCodeInChat
-			? normalizeConversationalJsonAnswer(nextText)
-			: null;
 		const showStructuredPlaceholder = !structuredPayload && looksLikeStructuredPayload(nextText);
+		const normalizedAssistantText = !structuredPayload && !shouldHideCodeInChat && !showStructuredPlaceholder
+			? normalizeAssistantDisplayText(nextText)
+			: "";
 		const displayText = structuredPayload
 			? [
 				structuredPayload.summary,
@@ -2121,8 +2153,8 @@ export default function AiAssistantChat({
 					"Virtual Assistant is preparing the result for the editor...",
 					"虚拟助手正在为编辑器准备结果...",
 				)
-				: conversationalJsonText
-					? conversationalJsonText
+				: normalizedAssistantText
+					? normalizedAssistantText
 				: shouldHideCodeInChat
 					? (stripMarkdownCodeBlocks(nextText) || uiText(
 						`Đang cập nhật mã vào editor bằng ${assistantBrandLabel}...`,

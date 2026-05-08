@@ -244,11 +244,6 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     }
 
     private String resolveCanonicalGuestIdentity(String appId, String guestSessionId, String guestPhone, UUID sessionId) {
-        String fromPayload = guestSessionId == null ? "" : guestSessionId.trim();
-        if (!fromPayload.isBlank() && !looksLikePhone(fromPayload)) {
-            return fromPayload;
-        }
-
         String mappedByPhone = null;
         String phoneKey = appPhoneKey(appId, guestPhone);
         if (phoneKey != null) {
@@ -261,6 +256,11 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         String fromSession = sessionId == null ? null : sessionGuestSessionIds.get(sessionId);
         if (fromSession != null && !fromSession.isBlank()) {
             return fromSession.trim();
+        }
+
+        String fromPayload = guestSessionId == null ? "" : guestSessionId.trim();
+        if (!fromPayload.isBlank() && !looksLikePhone(fromPayload)) {
+            return fromPayload;
         }
 
         return buildAnonymousGuestIdentity(sessionId);
@@ -699,19 +699,74 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 + "Khong nhac den AI, khong markdown, chi tra ve noi dung tin nhan.";
     }
 
-    private String buildNoAdminReplyPrompt(String appId, String guestMessage, String preferredLocale) {
+    private String safeSnippet(String text, int maxLen) {
+        if (text == null) {
+            return "";
+        }
+        String normalized = text.replaceAll("\\s+", " ").trim();
+        if (normalized.length() <= maxLen) {
+            return normalized;
+        }
+        return normalized.substring(0, maxLen);
+    }
+
+    private String buildRecentGuestConversationContext(String appId, String guestIdentity, String guestPhone, int maxMessages) {
+        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) {
+            return "";
+        }
+
+        try {
+            java.util.List<ChatMessage> history = chatPersistenceService.getHistoryByGuestIdentity(appId, guestIdentity, guestPhone, Math.max(12, maxMessages * 2));
+            if (history == null || history.isEmpty()) {
+                return "";
+            }
+
+            java.util.List<String> lines = new java.util.ArrayList<>();
+            int start = Math.max(0, history.size() - Math.max(1, maxMessages));
+            for (int i = start; i < history.size(); i++) {
+                ChatMessage msg = history.get(i);
+                if (msg == null) {
+                    continue;
+                }
+                String text = safeSnippet(msg.getMessage(), 220);
+                if (text.isBlank()) {
+                    continue;
+                }
+                String eventType = msg.getEventType();
+                if (eventType != null && eventType.startsWith("ai_auto_")) {
+                    continue;
+                }
+                String speaker = Boolean.TRUE.equals(msg.getIsAdmin()) ? "Tu van vien" : "Khach";
+                lines.add("- " + speaker + ": " + text);
+            }
+
+            return String.join("\n", lines);
+        } catch (Exception e) {
+            logger.debug("Unable to build guest conversation context for appId={}, guestIdentity={}: {}", appId, guestIdentity, e.getMessage());
+            return "";
+        }
+    }
+
+    private String buildNoAdminReplyPrompt(String appId,
+                                           String guestIdentity,
+                                           String guestPhone,
+                                           String guestMessage,
+                                           String preferredLocale) {
         String sanitizedGuestMessage = guestMessage == null ? "" : guestMessage.replace('"', '\'').trim();
         if (sanitizedGuestMessage.length() > 400) {
             sanitizedGuestMessage = sanitizedGuestMessage.substring(0, 400);
         }
         String localeName = humanLanguageName(preferredLocale);
+        String conversationContext = buildRecentGuestConversationContext(appId, guestIdentity, guestPhone, 8);
 
         return "Bạn là tư vấn viên chăm sóc khách hàng website appId=" + appId + ". "
                 + "Khách vừa gửi tin nhắn nhưng chưa có admin phản hồi ngay. "
                 + "Hãy viết DUY NHẤT 1 tin nhắn trả lời ngắn gọn, lịch sự, hữu ích (tối đa 220 ký tự), "
-                + "giữ giọng tư vấn chuyên nghiệp, không áp lực bán hàng. "
+                + "phải bám sát ý khách đang hỏi và nối tiếp đúng ngữ cảnh hội thoại gần nhất. "
+                + "Giữ giọng tư vấn chuyên nghiệp, không áp lực bán hàng. "
                 + "QUAN TRỌNG: Trả lời bằng ĐÚNG ngôn ngữ này: " + localeName + ". "
                 + "Không nhắc đến AI/hệ thống/appId/thông tin kỹ thuật nội bộ, không markdown. "
+                + (conversationContext.isBlank() ? "" : "Ngữ cảnh hội thoại gần nhất:\n" + conversationContext + "\n")
                 + "Tin nhắn khách: \"" + sanitizedGuestMessage + "\"";
     }
 
@@ -783,7 +838,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         String normalized = messageText.replaceAll("\\s+", " ").trim();
         if (normalized.isEmpty()) return normalized;
 
-        if (eventType == null || !eventType.startsWith("ai_auto_welcome")) {
+        if (eventType == null || !eventType.startsWith("ai_auto_")) {
             return normalized;
         }
 
@@ -801,8 +856,18 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             || folded.contains("nhan vien ho tro tu")
             || folded.contains("nhan vien ho tro den tu")
             || folded.contains("minh la nhan vien ho tro tu");
+        boolean hasPromptLeakage = folded.contains("bat buoc")
+            || folded.contains("duy nhat 1")
+            || folded.contains("toi da")
+            || folded.contains("khong markdown")
+            || folded.contains("tra loi bang")
+            || folded.contains("muc tieu:")
+            || folded.contains("hay viet");
 
-        if (hasBracketPlaceholder || hasTemplateToken || hasTechnicalSelfIntro) {
+        if (hasBracketPlaceholder || hasTemplateToken || hasTechnicalSelfIntro || hasPromptLeakage) {
+            if (eventType.startsWith("ai_auto_no_admin_reply")) {
+                return fallbackNoAdminReplyByLanguage(null, preferredLocale);
+            }
             return fallbackWelcomeByLocale(preferredLocale);
         }
 
@@ -873,7 +938,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                     return;
                 }
 
-                String prompt = buildNoAdminReplyPrompt(appId, guestMessage, preferredLocale);
+                String prompt = buildNoAdminReplyPrompt(appId, guestIdentity, guestPhone, guestMessage, preferredLocale);
                 String text = generateLocalAiContent(prompt, fallbackText, "guest_no_admin_reply");
                 dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, text, "ai_auto_no_admin_reply", preferredLocale);
             } catch (Exception e) {
@@ -913,6 +978,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         aiMsg.setAppId(appId);
         aiMsg.setGuestPhone(guestPhone);
         aiMsg.setGuestSessionId(guestIdentity);
+        aiMsg.setTo(guestIdentity);
         aiMsg.setLocale(normalizeLocale(preferredLocale));
         aiMsg.setEventType(eventType);
         aiMsg.setMessage(safeMessageText.length() > 280 ? safeMessageText.substring(0, 280) : safeMessageText);
@@ -1772,6 +1838,16 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                     appId = "csm";
                                 }
                                 sessionAppIds.put(client.getSessionId(), appId);
+
+                                // Canonical sender display name from server-side session to avoid frontend-forged labels.
+                                String sessionUsername = sessionUsernames.get(client.getSessionId());
+                                if ((isAdmin != null && isAdmin) || (userId != null && !userId.isBlank())) {
+                                    String canonicalName = firstNonBlank(sessionUsername, username, DEFAULT_SUPPORT_USERNAME);
+                                    if (canonicalName != null) {
+                                        data.setUsername(canonicalName);
+                                        username = canonicalName;
+                                    }
+                                }
                                 
                                 // 🚨 CRITICAL VALIDATION: Ensure appId is NOT a phone number
                                 // If appId looks like a phone number, log ERROR and use guestPhone as appId if available
@@ -1874,9 +1950,10 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 // Normalize guest message data BEFORE saving
                                 String guestIdentity = null;
                                 if (guestContext) {
+                                    String serverBoundGuestIdentity = sessionGuestSessionIds.get(client.getSessionId());
                                     guestIdentity = resolveCanonicalGuestIdentity(
                                             appId,
-                                            guestSessionId,
+                                        userId == null ? serverBoundGuestIdentity : guestSessionId,
                                             firstNonBlank(guestPhone, parsedGuestFromRoom),
                                             client.getSessionId());
                                     if (guestIdentity != null && !guestIdentity.isEmpty()) {
@@ -1889,6 +1966,12 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                             sessionGuestLocales.put(client.getSessionId(), localeToRemember);
                                             guestLocaleByKey.put(guestKey(appId, guestIdentity), localeToRemember);
                                             data.setLocale(localeToRemember);
+                                        }
+
+                                        // Enforce canonical guest room to isolate each guest session strictly.
+                                        if (userId == null) {
+                                            data.setRoom("guest:" + appId + ";" + guestIdentity);
+                                            room = data.getRoom();
                                         }
                                     }
                                 } else {
@@ -1904,12 +1987,10 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                     }
                                     flushPendingAutoMessagesOnGuestReply(appId, guestIdentity);
                                     scheduleNoReplyFallbackAfterGuestMessage(appId, guestIdentity, guestPhone, message, data.getTimestamp(), resolvedLocale);
-                                    // This is a guest message - ensure username is set to a stable label
-                                    String guestLabel = firstNonBlank(guestPhone, guestIdentity, username, "Guest");
-                                    if (username == null || username.isEmpty() || username.equals("Guest")) {
-                                        data.setUsername(guestLabel);
-                                        logger.info("🔧 [Chat] Normalized guest username: {} → {}", username, guestLabel);
-                                    }
+                                    // This is a guest message - always normalize to a stable public label.
+                                    String guestLabel = "Khach hang";
+                                    data.setUsername(guestLabel);
+                                    username = guestLabel;
                                     // Ensure guestPhone is set in data
                                     if (data.getGuestPhone() == null || data.getGuestPhone().isEmpty()) {
                                         data.setGuestPhone(guestPhone);
