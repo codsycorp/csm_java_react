@@ -1948,9 +1948,11 @@ export default function CodeEditor() {
 							aiBaseContentRef.current = baseRef;
 						}
 						const stage = String(status.stage || "preparing");
+						if (stage.startsWith("waiting")) {
+							return;
+						}
 						// Map Gemini-specific stages to friendly messages
 						const stageMessageMap: Record<string, string> = {
-							waiting_gemini: String(status.message || "Gemini đang xử lý..."),
 							streaming_started: "Bắt đầu nhận kết quả từ Gemini...",
 							streaming_progress: String(status.message || "Đang nhận kết quả..."),
 							cached: "Lấy từ cache...",

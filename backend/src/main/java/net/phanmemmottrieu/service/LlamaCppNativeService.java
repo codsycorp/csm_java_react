@@ -18,7 +18,9 @@ import java.nio.file.Paths;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -44,6 +46,11 @@ public class LlamaCppNativeService implements AIProvider {
     private final AtomicInteger lastOutputChars = new AtomicInteger(0);
     private volatile String lastPromptDigest = "";
     private volatile String lastFailureMessage = "";
+    
+    // ── Task Cancellation Support ──────────────────────────────────────────────────
+    // Track running inference tasks so they can be cancelled/interrupted by request ID
+    private static final ConcurrentHashMap<String, Thread> activeInferenceTasks = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, AtomicInteger> cancelledTasks = new ConcurrentHashMap<>();
 
     // ── Circuit breaker ────────────────────────────────────────────────────────
     private static final int CB_FAILURE_THRESHOLD   = 2;           // open after N consecutive failures
@@ -74,7 +81,7 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.context-window:8192}")
     private int contextWindow;
 
-    @Value("${ai.local.llama.max-tokens:1024}")
+    @Value("${ai.local.llama.max-tokens:8192}")
     private int maxTokens;
 
     @Value("${ai.local.llama.temperature:0.2}")
@@ -101,7 +108,7 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.disable-kv-offload:true}")
     private boolean disableKvOffload;
 
-    @Value("${ai.local.llama.max-prompt-chars:120000}")
+    @Value("${ai.local.llama.max-prompt-chars:500000}")
     private int maxPromptChars;
 
     @Value("${ai.local.llama.system-prompt:}")
@@ -113,19 +120,20 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.preload-on-startup:true}")
     private boolean preloadOnStartup;
 
-    @Value("${ai.local.llama.runtime-profile:balanced}")
+    @Value("${ai.local.llama.runtime-profile:max}")
     private String runtimeProfile;
 
     @Value("${ai.local.llama.context-window-hard-cap:32768}")
     private int contextWindowHardCap;
 
-    @Value("${ai.local.llama.max-prompt-chars-hard-cap:120000}")
+    @Value("${ai.local.llama.max-prompt-chars-hard-cap:1000000}")
     private int maxPromptCharsHardCap;
 
-    @Value("${ai.local.llama.max-tokens-hard-cap:4096}")
+    @Value("${ai.local.llama.max-tokens-hard-cap:32768}")
     private int maxTokensHardCap;
 
     private volatile LlamaModel model;
+    private volatile boolean shuttingDown = false;
     private final Object modelLock = new Object();
 
     private enum RuntimeProfile {
@@ -226,6 +234,29 @@ public class LlamaCppNativeService implements AIProvider {
 
     @Override
     public String generateContent(String prompt) {
+        return generateContentWithTaskTracking(prompt, null);
+    }
+    
+    /**
+     * Generate content with optional task tracking for cancellation support.
+     * @param prompt The input prompt
+     * @param requestId Optional request ID for task tracking/cancellation
+     */
+    public String generateContentWithTaskTracking(String prompt, String requestId) {
+        if (requestId != null && !requestId.isBlank()) {
+            registerActiveInferenceTask(requestId);
+        }
+        
+        try {
+            return generateContentInternal(prompt);
+        } finally {
+            if (requestId != null && !requestId.isBlank()) {
+                unregisterActiveInferenceTask(requestId);
+            }
+        }
+    }
+
+    private String generateContentInternal(String prompt) {
         String safePrompt = String.valueOf(prompt == null ? "" : prompt).trim();
         if (safePrompt.isBlank()) {
             return createErrorJson("Prompt khong duoc de trong", "INVALID_PROMPT");
@@ -319,6 +350,27 @@ public class LlamaCppNativeService implements AIProvider {
      * @param maxOutputTokensCap hard cap on generated tokens (e.g. 48 for JSON classification)
      */
     public String generateContentFast(String prompt, int maxOutputTokensCap) {
+        return generateContentFastWithTaskTracking(prompt, maxOutputTokensCap, null);
+    }
+    
+    /**
+     * Fast variant with task tracking for cancellation.
+     */
+    public String generateContentFastWithTaskTracking(String prompt, int maxOutputTokensCap, String requestId) {
+        if (requestId != null && !requestId.isBlank()) {
+            registerActiveInferenceTask(requestId);
+        }
+        
+        try {
+            return generateContentFastInternal(prompt, maxOutputTokensCap);
+        } finally {
+            if (requestId != null && !requestId.isBlank()) {
+                unregisterActiveInferenceTask(requestId);
+            }
+        }
+    }
+
+    private String generateContentFastInternal(String prompt, int maxOutputTokensCap) {
         String safePrompt = String.valueOf(prompt == null ? "" : prompt).trim();
         if (safePrompt.isBlank()) {
             return createErrorJson("Prompt khong duoc de trong", "INVALID_PROMPT");
@@ -487,7 +539,7 @@ public class LlamaCppNativeService implements AIProvider {
 
     @Override
     public boolean isAvailable() {
-        if (!enabled) {
+        if (!enabled || shuttingDown) {
             return false;
         }
         Path path = resolveModelPath(modelPath);
@@ -507,24 +559,43 @@ public class LlamaCppNativeService implements AIProvider {
 
     @PreDestroy
     public void close() {
-        synchronized (modelLock) {
-            if (model != null) {
-                try {
-                    model.close();
-                } catch (Exception ignored) {
-                    // ignore close errors
-                }
-                model = null;
+        shuttingDown = true;
+
+        for (Thread taskThread : activeInferenceTasks.values()) {
+            if (taskThread != null) {
+                taskThread.interrupt();
             }
         }
+
+        LlamaModel toClose = model;
+        model = null;
+        if (toClose == null) {
+            return;
+        }
+
+        Thread closeThread = new Thread(() -> {
+            try {
+                toClose.close();
+            } catch (Exception ignored) {
+                // ignore close errors during shutdown
+            }
+        }, "llama-close-shutdown");
+        closeThread.setDaemon(true);
+        closeThread.start();
     }
 
     private LlamaModel ensureModelLoaded() {
+        if (shuttingDown) {
+            throw new IllegalStateException("Local llama provider is shutting down");
+        }
         LlamaModel current = model;
         if (current != null) {
             return current;
         }
         synchronized (modelLock) {
+            if (shuttingDown) {
+                throw new IllegalStateException("Local llama provider is shutting down");
+            }
             if (model != null) {
                 return model;
             }
@@ -620,14 +691,14 @@ public class LlamaCppNativeService implements AIProvider {
         int profileCap;
         switch (resolveRuntimeProfile()) {
             case CONSERVATIVE:
-                profileCap = 24000;
+                profileCap = 50000;  // Increased from 24000 for better coverage
                 break;
             case MAX:
-                profileCap = 120000;
+                profileCap = 500000;  // Increased from 120000 to allow large prompts
                 break;
             case BALANCED:
             default:
-                profileCap = 48000;
+                profileCap = 200000;  // Increased from 48000 for better support
                 break;
         }
         int hardCap = Math.max(4000, maxPromptCharsHardCap);
@@ -641,11 +712,11 @@ public class LlamaCppNativeService implements AIProvider {
                 profileCap = 1024;
                 break;
             case MAX:
-                profileCap = 4096;
+                profileCap = 16384;  // Increased from 4096 to allow longer responses
                 break;
             case BALANCED:
             default:
-                profileCap = 2048;
+                profileCap = 4096;  // Increased from 2048 for better responses
                 break;
         }
         int hardCap = Math.max(256, maxTokensHardCap);
@@ -681,6 +752,10 @@ public class LlamaCppNativeService implements AIProvider {
      * Detect if prompt expects JSON output.
      * Returns true if prompt contains keywords suggesting JSON format requirement.
      */
+    public int getEffectiveMaxTokensLimit() {
+        return effectiveMaxTokens();
+    }
+
     private boolean detectJsonExpectation(String prompt) {
         if (prompt == null) {
             return false;
@@ -690,4 +765,95 @@ public class LlamaCppNativeService implements AIProvider {
             || lower.contains("output json") || lower.contains("format json")
             || lower.contains("[{") || lower.contains("[]");
     }
+
+    // ── Task Cancellation Helpers ──────────────────────────────────────────────────
+    
+    /**
+     * Register the current thread as an active inference task for a given request ID.
+     * This allows external code (e.g., API endpoints) to cancel the task if needed.
+     */
+    public void registerActiveInferenceTask(String requestId) {
+        if (requestId != null && !requestId.isBlank()) {
+            activeInferenceTasks.put(requestId, Thread.currentThread());
+            log.debug("Registered active inference task: {}", requestId);
+        }
+    }
+    
+    /**
+     * Unregister an inference task when it completes (successfully or with error).
+     */
+    public void unregisterActiveInferenceTask(String requestId) {
+        if (requestId != null && !requestId.isBlank()) {
+            activeInferenceTasks.remove(requestId);
+            cancelledTasks.remove(requestId);
+            log.debug("Unregistered active inference task: {}", requestId);
+        }
+    }
+    
+    /**
+     * Attempt to cancel a running inference task by request ID.
+     * This interrupts the Thread running the inference, which may stop the llama.cpp native call.
+     * The interruption may not immediately stop the native code, but signals that the task should stop.
+     * 
+     * @param requestId The ID of the task to cancel
+     * @return true if a running task was found and interrupted, false otherwise
+     */
+    public boolean cancelInferenceTask(String requestId) {
+        if (requestId == null || requestId.isBlank()) {
+            return false;
+        }
+        
+        // Mark task as cancelled first
+        cancelledTasks.put(requestId, new AtomicInteger(1));
+        
+        Thread taskThread = activeInferenceTasks.get(requestId);
+        if (taskThread != null) {
+            log.warn("Attempting to cancel inference task: {} on thread {}", requestId, taskThread.getName());
+            taskThread.interrupt();
+            
+            // Give the thread a moment to respond to interruption
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+            
+            // Check if still active
+            if (activeInferenceTasks.containsKey(requestId)) {
+                log.warn("Inference task {} still running after interruption signal", requestId);
+                return false;
+            }
+            log.info("Successfully cancelled inference task: {}", requestId);
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Check if an inference task has been marked for cancellation.
+     * This can be checked periodically in the native inference loop if possible.
+     */
+    public boolean isCancelled(String requestId) {
+        return cancelledTasks.containsKey(requestId) && cancelledTasks.get(requestId).get() > 0;
+    }
+    
+    /**
+     * Get the list of currently active inference task IDs.
+     */
+    public List<String> getActiveTaskIds() {
+        return new java.util.ArrayList<>(activeInferenceTasks.keySet());
+    }
+    
+    /**
+     * Get information about active tasks for diagnostics.
+     */
+    public Map<String, Object> getTasksInfo() {
+        Map<String, Object> info = new HashMap<>();
+        info.put("activeTaskCount", activeInferenceTasks.size());
+        info.put("activeTaskIds", new java.util.ArrayList<>(activeInferenceTasks.keySet()));
+        info.put("inFlightRequests", inFlightRequests.get());
+        info.put("totalRequests", requestCount.get());
+        return info;
+    }
 }
+

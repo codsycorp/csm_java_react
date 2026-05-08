@@ -1174,15 +1174,17 @@ export default function AiAssistantChat({
 				return;
 			}
 			const data = await response.json() as any;
-			const turns = Array.isArray(data?.turns) ? data.turns : [];
+			const turns = Array.isArray(data?.turns)
+				? data.turns
+				: (Array.isArray(data?.recent_turns) ? data.recent_turns : []);
 			const converted: ChatMessage[] = [];
 			for (let i = 0; i < turns.length; i += 1) {
 				const turn = turns[i] || {};
-				const turnId = String(turn.turn_id || "").trim();
+				const turnId = String(turn.turn_id || turn.id || "").trim();
 				const parsedTime = Date.parse(String(turn.timestamp || ""));
 				const baseTs = Number.isFinite(parsedTime) ? parsedTime : Date.now() - Math.max(0, turns.length - i) * 1000;
-				const userText = String(turn.user_message || "").trim();
-				const assistantText = String(turn.assistant_message || "").trim();
+				const userText = String(turn.user_message || turn.userRequest || "").trim();
+				const assistantText = String(turn.assistant_message || turn.ai_response || turn.aiResponse || "").trim();
 				if (userText) {
 					converted.push({
 						id: `${turnId || `turn_${i}`}_u`,
@@ -1208,9 +1210,21 @@ export default function AiAssistantChat({
 				}
 			}
 
-			if (converted.length > 0 || turns.length === 0) {
+			if (converted.length > 0) {
 				setMessages(converted);
 				saveChatHistory(converted);
+				return;
+			}
+
+			// Keep existing local history when server responds empty or incompatible payload,
+			// to avoid the "flash then disappear" effect on initial render.
+			if (turns.length === 0) {
+				setMessages((prev) => {
+					if (prev.length > 0)
+						return prev;
+					saveChatHistory([]);
+					return [];
+				});
 			}
 		}
 		catch {

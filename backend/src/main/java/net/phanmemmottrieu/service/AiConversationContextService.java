@@ -32,6 +32,7 @@ public class AiConversationContextService {
     private static final String SCOPE_USER = "user";
     private static final String SCOPE_APP_SHARED = "app_shared";
     private static final String SCOPE_CODE_TARGET_SHARED = "code_target_shared";
+    private static final String CONVERSATION_TABLE = "ai_conversation_history";
     // Devin TF-IDF-inspired extractive compressor: if aggregated context exceeds this threshold,
     // apply sentence-level extraction (no LLM needed) to keep only high-signal content.
     private static final int EXTRACTIVE_COMPRESS_THRESHOLD_CHARS = 50_000;
@@ -114,12 +115,19 @@ public class AiConversationContextService {
 
     public ConversationSession getOrCreateSession(String userId, String appId, String contextType) {
         String sessionKey = buildSessionKey(userId, appId, contextType, SCOPE_USER, "");
-        return activeSessions.computeIfAbsent(sessionKey, k -> new ConversationSession(userId, appId, contextType));
+        return activeSessions.computeIfAbsent(sessionKey,
+            k -> loadSessionFromDb(userId, appId, contextType, SCOPE_USER, "", null, null, true));
     }
 
     public ConversationSession getSession(String userId, String appId, String contextType) {
         String sessionKey = buildSessionKey(userId, appId, contextType, SCOPE_USER, "");
         ConversationSession session = activeSessions.get(sessionKey);
+        if (session == null) {
+            session = loadSessionFromDb(userId, appId, contextType, SCOPE_USER, "", null, null, false);
+            if (session != null) {
+                activeSessions.put(sessionKey, session);
+            }
+        }
         if (session != null) {
             session.lastAccessMs = System.currentTimeMillis();
         }
@@ -165,6 +173,7 @@ public class AiConversationContextService {
         // App-wide shared memory: all users in same app_id can continue without restarting.
         ConversationTurn appSharedTurn = new ConversationTurn(userRequest, aiResponse, effectiveMetadata);
         getOrCreateSessionForScope("shared", appId, contextType, SCOPE_APP_SHARED, "").addTurn(appSharedTurn);
+        persistTurnToDb("shared", appId, contextType, SCOPE_APP_SHARED, "", null, null, appSharedTurn);
 
         // Code-target shared memory: all developers working same p_name + p_type can reuse context.
         String codeTargetKey = buildCodeTargetKey(pName, pType);
@@ -172,6 +181,7 @@ public class AiConversationContextService {
             ConversationTurn codeTargetTurn = new ConversationTurn(userRequest, aiResponse, effectiveMetadata);
             getOrCreateSessionForScope("shared", appId, contextType, SCOPE_CODE_TARGET_SHARED, codeTargetKey)
                 .addTurn(codeTargetTurn);
+            persistTurnToDb("shared", appId, contextType, SCOPE_CODE_TARGET_SHARED, codeTargetKey, pName, pType, codeTargetTurn);
         }
     }
 
@@ -340,7 +350,8 @@ public class AiConversationContextService {
         String codeTargetKey
     ) {
         String sessionKey = buildSessionKey(userId, appId, contextType, scope, codeTargetKey);
-        return activeSessions.computeIfAbsent(sessionKey, k -> new ConversationSession(userId, appId, contextType));
+        return activeSessions.computeIfAbsent(sessionKey,
+            k -> loadSessionFromDb(userId, appId, contextType, scope, codeTargetKey, null, null, true));
     }
 
     private ConversationSession getSessionForScope(
@@ -352,10 +363,28 @@ public class AiConversationContextService {
     ) {
         String sessionKey = buildSessionKey(userId, appId, contextType, scope, codeTargetKey);
         ConversationSession session = activeSessions.get(sessionKey);
+        if (session == null) {
+            session = loadSessionFromDb(userId, appId, contextType, scope, codeTargetKey, null, null, false);
+            if (session != null) {
+                activeSessions.put(sessionKey, session);
+            }
+        }
         if (session != null) {
             session.lastAccessMs = System.currentTimeMillis();
         }
         return session;
+    }
+
+    public ConversationSession loadSessionFromPersistence(
+        String userId,
+        String appId,
+        String contextType,
+        String scope,
+        String codeTargetKey,
+        String pName,
+        Integer pType
+    ) {
+        return loadSessionFromDb(userId, appId, contextType, scope, codeTargetKey, pName, pType, false);
     }
 
     private String buildSessionKey(String userId, String appId, String contextType, String scope, String codeTargetKey) {
@@ -550,9 +579,30 @@ public class AiConversationContextService {
     }
 
     private void persistTurnToDb(String userId, String appId, String contextType, ConversationTurn turn) {
+        persistTurnToDb(userId, appId, contextType, SCOPE_USER, "", null, null, turn);
+    }
+
+    private void persistTurnToDb(
+        String userId,
+        String appId,
+        String contextType,
+        String scope,
+        String codeTargetKey,
+        String pName,
+        Integer pType,
+        ConversationTurn turn
+    ) {
         // Store in RocksDB for cross-session recovery
         Map<String, Object> turnData = new LinkedHashMap<>();
+        turnData.put("id", buildPersistedTurnId(turn.turnId, scope, codeTargetKey));
         turnData.put("turn_id", turn.turnId);
+        turnData.put("user_id", String.valueOf(userId == null ? "" : userId).trim());
+        turnData.put("app_id", String.valueOf(appId == null ? "" : appId).trim());
+        turnData.put("context_type", String.valueOf(contextType == null ? "" : contextType).trim());
+        turnData.put("scope", String.valueOf(scope == null ? SCOPE_USER : scope).trim());
+        turnData.put("code_target_key", String.valueOf(codeTargetKey == null ? "" : codeTargetKey).trim());
+        turnData.put("p_name", String.valueOf(pName == null ? "" : pName).trim());
+        turnData.put("p_type", pType);
         turnData.put("timestamp", turn.timestamp);
         turnData.put("user_request", turn.userRequest);
         turnData.put("ai_response", turn.aiResponse);
@@ -561,14 +611,153 @@ public class AiConversationContextService {
 
         if (recordManager != null) {
             try {
-                // Store as: ai_conversation:userId:appId:contextType:turnId
-                String objName = "ai_conversation";
-                String key = String.format("%s:%s:%s:%s", userId, appId, contextType, turn.turnId);
-                // recordManager.put(objName, key, turnData);
+                @SuppressWarnings("unchecked")
+                List<String>[] primaryKeyOverride = new List[]{List.of("id")};
+                recordManager.createRecord(appId, CONVERSATION_TABLE, turnData, primaryKeyOverride);
             } catch (Exception e) {
                 System.err.println("Failed to persist to DB: " + e.getMessage());
             }
         }
+    }
+
+    private ConversationSession loadSessionFromDb(
+        String userId,
+        String appId,
+        String contextType,
+        String scope,
+        String codeTargetKey,
+        String pName,
+        Integer pType,
+        boolean createIfMissing
+    ) {
+        ConversationSession session = new ConversationSession(userId, appId, contextType);
+        if (recordManager == null) {
+            return createIfMissing ? session : null;
+        }
+        try {
+            Map<String, Object> result = recordManager.filter(appId, CONVERSATION_TABLE, null);
+            Object rowsObj = result == null ? null : result.get("rows");
+            if (rowsObj instanceof List<?> rows) {
+                List<Map<String, Object>> matchedRows = new ArrayList<>();
+                for (Object rowObj : rows) {
+                    if (!(rowObj instanceof Map<?, ?> rawMap)) {
+                        continue;
+                    }
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> row = (Map<String, Object>) rawMap;
+                    if (matchesPersistedTurn(row, userId, appId, contextType, scope, codeTargetKey, pName, pType)) {
+                        matchedRows.add(row);
+                    }
+                }
+                matchedRows.sort(Comparator.comparingLong(this::readCreatedAtMs));
+                for (Map<String, Object> row : matchedRows) {
+                    ConversationTurn turn = toConversationTurn(row);
+                    if (turn != null) {
+                        session.addTurn(turn);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to load session from DB: " + e.getMessage());
+        }
+        if (!session.history.isEmpty()) {
+            session.lastAccessMs = System.currentTimeMillis();
+            return session;
+        }
+        return createIfMissing ? session : null;
+    }
+
+    private boolean matchesPersistedTurn(
+        Map<String, Object> row,
+        String userId,
+        String appId,
+        String contextType,
+        String scope,
+        String codeTargetKey,
+        String pName,
+        Integer pType
+    ) {
+        String persistedAppId = String.valueOf(row.getOrDefault("app_id", "")).trim();
+        String persistedContextType = String.valueOf(row.getOrDefault("context_type", "")).trim();
+        String persistedScope = String.valueOf(row.getOrDefault("scope", SCOPE_USER)).trim();
+        if (!String.valueOf(appId == null ? "" : appId).trim().equals(persistedAppId)) {
+            return false;
+        }
+        if (!String.valueOf(contextType == null ? "" : contextType).trim().equals(persistedContextType)) {
+            return false;
+        }
+        if (!String.valueOf(scope == null ? SCOPE_USER : scope).trim().equals(persistedScope)) {
+            return false;
+        }
+
+        if (SCOPE_USER.equals(persistedScope)) {
+            return String.valueOf(userId == null ? "" : userId).trim()
+                .equals(String.valueOf(row.getOrDefault("user_id", "")).trim());
+        }
+
+        if (SCOPE_CODE_TARGET_SHARED.equals(persistedScope)) {
+            String effectiveCodeTargetKey = !String.valueOf(codeTargetKey == null ? "" : codeTargetKey).trim().isBlank()
+                ? String.valueOf(codeTargetKey).trim()
+                : buildCodeTargetKey(pName, pType);
+            return effectiveCodeTargetKey.equals(String.valueOf(row.getOrDefault("code_target_key", "")).trim());
+        }
+
+        return SCOPE_APP_SHARED.equals(persistedScope);
+    }
+
+    private ConversationTurn toConversationTurn(Map<String, Object> row) {
+        if (row == null) {
+            return null;
+        }
+        String userRequest = normalizeTurnText(String.valueOf(row.getOrDefault("user_request", "")), TURN_REQUEST_STORE_MAX_CHARS);
+        String aiResponse = normalizeTurnText(String.valueOf(row.getOrDefault("ai_response", "")), TURN_RESPONSE_STORE_MAX_CHARS);
+        if (!isMeaningfulTurnText(userRequest, aiResponse)) {
+            return null;
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        Object metadataObj = row.get("metadata");
+        if (metadataObj instanceof Map<?, ?> metadataMap) {
+            for (Map.Entry<?, ?> entry : metadataMap.entrySet()) {
+                if (entry.getKey() instanceof String key) {
+                    metadata.put(key, entry.getValue());
+                }
+            }
+        }
+        ConversationTurn turn = new ConversationTurn(userRequest, aiResponse, metadata);
+        String turnId = String.valueOf(row.getOrDefault("turn_id", "")).trim();
+        if (!turnId.isBlank()) {
+            turn.turnId = turnId;
+        }
+        String timestamp = String.valueOf(row.getOrDefault("timestamp", "")).trim();
+        if (!timestamp.isBlank()) {
+            turn.timestamp = timestamp;
+        }
+        turn.createdAtMs = readCreatedAtMs(row);
+        turn.estimatedInputChars = userRequest.length();
+        turn.estimatedOutputChars = aiResponse.length();
+        return turn;
+    }
+
+    private long readCreatedAtMs(Map<String, Object> row) {
+        Object raw = row == null ? null : row.get("created_at_ms");
+        if (raw instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(raw == null ? "0" : raw).trim());
+        } catch (Exception ignored) {
+            return 0L;
+        }
+    }
+
+    private String buildPersistedTurnId(String turnId, String scope, String codeTargetKey) {
+        String safeTurnId = String.valueOf(turnId == null ? "" : turnId).trim();
+        String safeScope = String.valueOf(scope == null ? SCOPE_USER : scope).trim();
+        String safeCodeKey = String.valueOf(codeTargetKey == null ? "" : codeTargetKey).trim();
+        if (safeCodeKey.isBlank()) {
+            return safeTurnId + "::" + safeScope;
+        }
+        return safeTurnId + "::" + safeScope + "::" + safeCodeKey;
     }
 
     /**

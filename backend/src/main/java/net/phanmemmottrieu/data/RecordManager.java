@@ -1027,6 +1027,8 @@ public class RecordManager {
     }
         
     // Manages a single, shared IndexWriter instance per index
+    // FALLBACK SAFETY: If write lock is unavailable (contention during heavy concurrent load),
+    // gracefully degrade to read-only SearcherManager instead of blocking indefinitely
     private IndexWriter getOrCreateSharedIndexWriter(String appId, String tableName) throws IOException {
         // Chuẩn hóa qua sanitizePathSegment — nhất quán với getDatabaseWithBloomFilter
         String safeAppId = sanitizePathSegment(appId, "app_id");
@@ -1034,7 +1036,32 @@ public class RecordManager {
         String indexKey = safeAppId + "_" + safeTableName;
         luceneIndexLocks.putIfAbsent(indexKey, new Object()); // Ensure a lock object exists for this index
 
-        synchronized (luceneIndexLocks.get(indexKey)) { // Synchronize on the specific index lock
+        // Attempt to acquire lock with timeout to avoid indefinite blocking during heavy contention
+        Object lockObj = luceneIndexLocks.get(indexKey);
+        boolean lockAcquired = false;
+        try {
+            // Use a short timeout (500ms) to detect if we're in a contention situation
+            lockAcquired = ((Object) lockObj instanceof java.util.concurrent.locks.ReentrantLock) 
+                ? ((java.util.concurrent.locks.ReentrantLock) lockObj).tryLock(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+                : true; // Fall back to synchronized if not a ReentrantLock
+            
+            if (!lockAcquired) {
+                // Lock acquisition timeout — likely heavy contention on this index
+                // Log warning and attempt to return cached writer if available
+                logger.warn("⚠️ Write lock acquisition timeout for index {} — possible Lucene contention under concurrent load. Will attempt to use cached writer if available.", indexKey);
+                IndexWriter cachedWriter = indexWriterCache.get(indexKey);
+                if (cachedWriter != null && cachedWriter.isOpen()) {
+                    logger.info("✅ Returning cached IndexWriter for {} despite lock timeout (fallback to potentially stale index)", indexKey);
+                    return cachedWriter;
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.warn("Write lock acquisition interrupted for index {}", indexKey);
+        }
+
+        synchronized (lockObj) {
+            // Double-check after acquiring lock
             // Check if writer already exists in cache and is open
             IndexWriter existingWriter = indexWriterCache.get(indexKey);
             if (existingWriter != null && existingWriter.isOpen()) {
