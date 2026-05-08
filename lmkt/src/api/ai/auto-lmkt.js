@@ -2224,10 +2224,22 @@ function extractFacebookPostsFromArticle(article = {}) {
   return [];
 }
 
+function normalizeConfigId(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).trim();
+}
+
+function findZaloConfigById(configs, targetId) {
+  const normalizedTargetId = normalizeConfigId(targetId);
+  if (!normalizedTargetId || !Array.isArray(configs)) return null;
+  return configs.find((cfg) => cfg && cfg.config_for_zalo && normalizeConfigId(cfg.id) === normalizedTargetId) || null;
+}
+
 function buildFanpageTokenMap(ctx = {}) {
   const map = {};
   const fallbackTokens = [];
   const pages = [];
+  const targetConfigId = normalizeConfigId(ctx?.config_id);
 
   const addToken = (pageId, token, pageName = '') => {
     if (!token) return;
@@ -2255,6 +2267,7 @@ function buildFanpageTokenMap(ctx = {}) {
       if (Array.isArray(allConfigs)) {
         allConfigs.forEach((cfg) => {
           if (!cfg || !cfg.config_for_zalo) return;
+          if (targetConfigId && normalizeConfigId(cfg.id) !== targetConfigId) return;
 
           // Ưu tiên token từ list fanpages mới
           if (Array.isArray(cfg.zalo_fanpages)) {
@@ -5606,16 +5619,20 @@ async function processContent(item, opts = {}) {
       if (!Array.isArray(allConfigs)) {
         throw new Error("loadDataOptionUser không trả về array");
       }
-      latestConfig = allConfigs.find(x => x && x.id === opts.config_id && x.config_for_zalo);
+      latestConfig = findZaloConfigById(allConfigs, opts.config_id);
       if (latestConfig) {
         console.log(`✅ [Config Loaded by ID] config_id=${opts.config_id}, domain=${latestConfig.domain}, fanpage=${latestConfig.fanpage_name}`);
       } else {
-        console.warn(`⚠️ [Config NOT FOUND] config_id=${opts.config_id} - falling back to latest`);
+        console.warn(`⚠️ [Config NOT FOUND] config_id=${opts.config_id} - block posting to avoid cross-config risk`);
       }
     } catch (e) {
       console.error(`❌ [Config Load Error] Failed to load config by ID:`, e.message);
       latestConfig = null; // Reset để fallback
     }
+  }
+
+  if (opts.config_id && !latestConfig) {
+    throw new Error(`Không tìm thấy cấu hình Zalo theo config_id=${opts.config_id}. Đã dừng để tránh đăng nhầm domain/fanpage.`);
   }
   
   // ✅ PRIORITY 2: Fallback to latest config ONLY nếu:
@@ -6062,6 +6079,9 @@ async function processContent(item, opts = {}) {
       console.log(`   [${idx}] Name: "${fp.name}", ID: ${fp.id}, Has Token: ${hasToken ? '✅' : '❌ MISSING'} (${fp.access_token?.length || 0} chars)`);
     });
   } else if (ctx.fanpage_id) {
+    if (opts.config_id) {
+      throw new Error(`Cấu hình ${opts.config_id} không có danh sách fanpage hợp lệ. Đã dừng để tránh fallback sang fanpage khác.`);
+    }
     // ✅ Fallback: Dùng fanpage đơn lẻ từ ctx
     fanpagesToPost = [{
       id: ctx.fanpage_id,
@@ -6433,7 +6453,7 @@ async function runMessages(messages, configIdOverride = null) {
   if (configIdOverride) {
     try {
       const allConfigs = loadDataOptionUser && typeof loadDataOptionUser === 'function' ? loadDataOptionUser() : [];
-      configToUse = allConfigs.find(x => x && x.id === configIdOverride && x.config_for_zalo);
+      configToUse = findZaloConfigById(allConfigs, configIdOverride);
       if (configToUse) {
         console.log(`✅ [runMessages] Using config by override: config_id=${configIdOverride}`);
         domainConfigToUse = DOMAIN_OPTIONS[configToUse.service_type === "lmkt" ? "lmkt" : "phanmemmottrieu"];
@@ -6445,6 +6465,10 @@ async function runMessages(messages, configIdOverride = null) {
     }
   } else {
     console.warn(`⚠️ [runMessages] Không có config_id - chỉ xử lý phanmemmottrieu (legacy mode)`);
+  }
+
+  if (configIdOverride && !configToUse) {
+    throw new Error(`runMessages aborted: không tìm thấy config_id=${configIdOverride}, dừng để tránh đăng nhầm domain/fanpage.`);
   }
   
   for (let i = 0; i < messages.length; i++) {
@@ -11355,7 +11379,7 @@ function resetAllZaloData() {
 function getSelectedFacebookPagesForConfig(config_id) {
   try {
     const configs = loadDataOptionUser();
-    const config = configs.find(c => c.id === config_id);
+    const config = findZaloConfigById(configs, config_id);
     
     if (!config) {
       return [];
@@ -11388,6 +11412,13 @@ function getSelectedFacebookPagesForConfig(config_id) {
 window.zaloScannerWebviewId = 'zaloMesssager';
 let zaloLoginCheckTimer = null;
 let isZaloLoggedIn = false;
+
+function stopLoginCheck() {
+  if (zaloLoginCheckTimer) {
+    clearInterval(zaloLoginCheckTimer);
+    zaloLoginCheckTimer = null;
+  }
+}
 
 /**
  * Tạo webview Zalo inline để tích hợp trực tiếp vào UI
