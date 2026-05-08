@@ -5486,9 +5486,11 @@ public class ApiSpringController {
         try {
             String fastPrompt = buildLocalFastQuestionPrompt(message, language);
             int promptTokens = estimateTokens(fastPrompt);
-            int maxTokens = Math.max(1024, llamaCppNativeService == null
-                ? Math.max(aiLocalFastQuestionMaxTokens, aiLocalLlamaMaxTokens)
-                : llamaCppNativeService.getEffectiveMaxTokensLimit());
+            int configuredFastCap = Math.max(64, Math.min(384, aiLocalFastQuestionMaxTokens));
+            int providerEffectiveCap = llamaCppNativeService == null
+                ? configuredFastCap
+                : Math.max(64, llamaCppNativeService.getEffectiveMaxTokensLimit());
+            int maxTokens = Math.max(64, Math.min(configuredFastCap, providerEffectiveCap));
 
             sendEvent(emitter, jsonOf(
                 "stage", "preparing",
@@ -5576,6 +5578,7 @@ public class ApiSpringController {
             "Trả lời NGẮN GỌN, đúng trọng tâm.",
             languageRule,
             "Không trả về JSON/object/map. Chỉ trả lời văn bản tự nhiên.",
+            "Nếu nội dung có cấu trúc, hãy trình bày bằng đoạn văn + bullet rõ ràng, không dùng cú pháp JSON.",
             "Không sinh code nếu người dùng chỉ hỏi thông tin.",
             "Nếu cần liệt kê ý, chỉ nêu tối đa 4 ý ngắn, mỗi ý 1 dòng.",
             "Không được mở đầu bằng dấu { hoặc [.",
@@ -5600,7 +5603,7 @@ public class ApiSpringController {
         }
 
         if (!isLikelyJsonPayload(safe)) {
-            return safe;
+            return formatLocalFastQuestionPlainText(safe, originalMessage);
         }
 
         try {
@@ -5615,20 +5618,300 @@ public class ApiSpringController {
                 String structured = renderLocalFastQuestionStructuredAnswer(parsed, 0);
                 String best = selectBestLocalFastAnswer(preferred, structured);
                 if (!best.isBlank()) {
-                    return best;
+                    return formatLocalFastQuestionPlainText(best, originalMessage);
                 }
             }
 
             String structured = renderLocalFastQuestionStructuredAnswer(parsed, 0);
             if (!structured.isBlank()) {
-                return structured;
+                return formatLocalFastQuestionPlainText(structured, originalMessage);
             }
         } catch (Exception ignored) {
             // JSON parse failed — return the raw answer as-is.
         }
 
         // Return whatever the model actually said rather than a hardcoded fallback.
-        return safe;
+        return formatLocalFastQuestionPlainText(safe, originalMessage);
+    }
+
+    private String formatLocalFastQuestionPlainText(String rawText, String originalMessage) {
+        String text = String.valueOf(rawText == null ? "" : rawText).trim();
+        if (text.isBlank()) {
+            return "";
+        }
+
+        text = text
+            .replaceAll("(?is)^```(?:json|text|markdown)?\\s*", "")
+            .replaceAll("(?is)\\s*```$", "")
+            .trim();
+
+        String langCode = detectInputLanguageCode(originalMessage);
+        if ((text.startsWith("{") || text.startsWith("[")) && text.endsWith("}")) {
+            String wrapperCleaned = sanitizeBrokenConversationalWrapper(text);
+            if (!wrapperCleaned.isBlank() && !wrapperCleaned.equals(text)) {
+                text = wrapperCleaned;
+            }
+        }
+
+        // Generic clean-up (adaptive, no rigid template): compact whitespace, keep readable line breaks.
+        text = text.replace("\r\n", "\n").replace('\r', '\n');
+        text = text.replaceAll("[\\t\\x0B\\f]+", " ");
+        text = text.replaceAll("\\n{3,}", "\n\n");
+
+        String[] lines = text.split("\\n");
+        List<String> cleanedLines = new ArrayList<>();
+        for (String line : lines) {
+            String normalizedLine = String.valueOf(line == null ? "" : line)
+                .replaceAll("\\s+", " ")
+                .trim();
+            if (normalizedLine.isBlank()) {
+                if (!cleanedLines.isEmpty() && !cleanedLines.get(cleanedLines.size() - 1).isBlank()) {
+                    cleanedLines.add("");
+                }
+                continue;
+            }
+
+            // Convert JSON-like key/value prefix into natural text bullet while keeping language/content intact.
+            if (normalizedLine.matches("^[A-Za-z0-9_\\-]{2,40}\\s*:\\s*.+$")) {
+                normalizedLine = "- " + normalizedLine;
+            }
+            cleanedLines.add(normalizedLine);
+        }
+
+        String out = String.join("\n", cleanedLines).trim();
+        out = out.replaceAll("\\n{3,}", "\n\n").trim();
+        out = compactRunawayRepetition(out);
+        if (out.startsWith("{") || out.startsWith("[")) {
+            String fallback = sanitizeBrokenConversationalWrapper(out);
+            if (!fallback.isBlank() && !fallback.equals(out)) {
+                out = fallback;
+            }
+        }
+
+        // If output still looks like compact JSON tokens, render as plain bullet text adaptively.
+        if (isLikelyJsonPayload(out)) {
+            try {
+                Object parsed = objectMapper.readValue(out, Object.class);
+                String rendered = renderLocalFastQuestionStructuredAnswer(parsed, 0);
+                if (!rendered.isBlank()) {
+                    out = rendered;
+                }
+            } catch (Exception ignored) {
+                // keep best-effort text
+            }
+        }
+
+        if ("zh".equals(langCode)) {
+            out = out.replaceAll("\\n- ", "\n• ");
+        }
+        return ensureFastQuestionOutputLanguage(out, originalMessage);
+    }
+
+    private String compactRunawayRepetition(String text) {
+        String source = String.valueOf(text == null ? "" : text).trim();
+        if (source.isBlank()) {
+            return "";
+        }
+
+        String[] lines = source.split("\\n", -1);
+        List<String> compacted = new ArrayList<>(lines.length);
+        boolean changed = false;
+        for (String line : lines) {
+            String c = compactRepeatedTailByWords(line);
+            if (!c.equals(line)) {
+                changed = true;
+            }
+            compacted.add(c);
+        }
+
+        String out = String.join("\n", compacted).replaceAll("\\n{3,}", "\n\n").trim();
+        String compactOut = compactRepeatedTailByWords(out);
+        if (!compactOut.equals(out)) {
+            changed = true;
+            out = compactOut;
+        }
+
+        // Keep fast-question answers concise to avoid tail loops slipping through.
+        if (out.length() > 1200) {
+            changed = true;
+            out = truncateMiddle(out, 1200);
+        }
+
+        if (changed) {
+            logger.debug("[AI_FAST_SANITIZE] compacted repetitive tail in fast answer");
+        }
+        return out;
+    }
+
+    private String compactRepeatedTailByWords(String text) {
+        String source = String.valueOf(text == null ? "" : text).trim();
+        if (source.isBlank()) {
+            return "";
+        }
+
+        String compact = source.replaceAll("\\s+", " ").trim();
+        String[] words = compact.split(" ");
+        if (words.length < 20) {
+            return compact;
+        }
+
+        int bestChunkSize = -1;
+        int bestRepeatCount = -1;
+        for (int chunkSize = 3; chunkSize <= 10; chunkSize++) {
+            if (words.length < chunkSize * 3) {
+                continue;
+            }
+            int cursor = words.length;
+            int repeats = 1;
+            while (cursor - chunkSize * 2 >= 0) {
+                boolean same = true;
+                int aStart = cursor - chunkSize;
+                int bStart = cursor - chunkSize * 2;
+                for (int j = 0; j < chunkSize; j++) {
+                    if (!words[aStart + j].equalsIgnoreCase(words[bStart + j])) {
+                        same = false;
+                        break;
+                    }
+                }
+                if (!same) {
+                    break;
+                }
+                repeats++;
+                cursor -= chunkSize;
+            }
+
+            if (repeats >= 4 && repeats > bestRepeatCount) {
+                bestRepeatCount = repeats;
+                bestChunkSize = chunkSize;
+            }
+        }
+
+        if (bestChunkSize <= 0 || bestRepeatCount < 4) {
+            return compact;
+        }
+
+        int removeRepeats = bestRepeatCount - 2;
+        int keepWords = words.length - (removeRepeats * bestChunkSize);
+        if (keepWords <= 0 || keepWords >= words.length) {
+            return compact;
+        }
+
+        return String.join(" ", Arrays.copyOfRange(words, 0, keepWords)).trim();
+    }
+
+    private String ensureFastQuestionOutputLanguage(String answer, String originalMessage) {
+        String text = String.valueOf(answer == null ? "" : answer).trim();
+        if (text.isBlank()) {
+            return "";
+        }
+        String targetLang = detectInputLanguageCode(originalMessage);
+        if (targetLang.isBlank()) {
+            return text;
+        }
+
+        String outputLang = detectInputLanguageCodeHeuristic(text);
+        if (outputLang.isBlank()) {
+            outputLang = detectOutputLanguageCheap(text);
+        }
+        if (targetLang.equalsIgnoreCase(outputLang)) {
+            return text;
+        }
+
+        // Adaptive rewrite first (no rigid template), for short answers where mismatch is most visible.
+        if (text.length() <= 220) {
+            String rewritten = rewriteAnswerLanguageWithLocalAI(text, targetLang);
+            if (!rewritten.isBlank() && !isLikelyJsonPayload(rewritten)) {
+                return rewritten;
+            }
+        }
+
+        // Fallback for very common one-word confirmations.
+        return rewriteSimpleAffirmationByTargetLanguage(text, targetLang);
+    }
+
+    private String detectOutputLanguageCheap(String text) {
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return "";
+        }
+        for (int i = 0; i < safe.length(); i++) {
+            char ch = safe.charAt(i);
+            Character.UnicodeBlock block = Character.UnicodeBlock.of(ch);
+            if (block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS
+                    || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_A
+                    || block == Character.UnicodeBlock.CJK_UNIFIED_IDEOGRAPHS_EXTENSION_B
+                    || block == Character.UnicodeBlock.CJK_COMPATIBILITY_IDEOGRAPHS) {
+                return "zh";
+            }
+        }
+        return "";
+    }
+
+    private String rewriteAnswerLanguageWithLocalAI(String answer, String targetLang) {
+        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable() || llamaCppNativeService.isCircuitOpen()) {
+            return "";
+        }
+        String safeAnswer = truncateMiddle(String.valueOf(answer == null ? "" : answer).trim(), 240);
+        if (safeAnswer.isBlank()) {
+            return "";
+        }
+
+        String langInstruction = switch (String.valueOf(targetLang == null ? "" : targetLang).toLowerCase(Locale.ROOT)) {
+            case "zh" -> "Rewrite in Chinese (中文) only.";
+            case "en" -> "Rewrite in English only.";
+            default -> "Viết lại bằng tiếng Việt hoàn toàn.";
+        };
+
+        String prompt = "<|im_start|>system\n"
+            + "Rewrite the answer into target language while preserving meaning.\n"
+            + langInstruction + "\n"
+            + "No JSON. No markdown. Keep concise.\n"
+            + "<|im_end|>\n"
+            + "<|im_start|>user\n"
+            + "ANSWER: " + safeAnswer + "\n"
+            + "<|im_end|>\n"
+            + "<|im_start|>assistant\n";
+
+        try {
+            String raw = llamaCppNativeService.generateContentFast(prompt, 40);
+            String rewritten = String.valueOf(extractAiResultText(raw)).trim();
+            if (rewritten.isBlank()) {
+                return "";
+            }
+            return rewritten
+                .replaceAll("(?is)^```(?:text|markdown)?\\s*", "")
+                .replaceAll("(?is)\\s*```$", "")
+                .trim();
+        } catch (Exception ex) {
+            logger.debug("[AI_FAST_LANG_REWRITE] local rewrite failed: {}", ex.getMessage());
+            return "";
+        }
+    }
+
+    private String rewriteSimpleAffirmationByTargetLanguage(String answer, String targetLang) {
+        String text = String.valueOf(answer == null ? "" : answer).trim();
+        if (text.isBlank()) {
+            return "";
+        }
+        String normalized = text.toLowerCase(Locale.ROOT).replaceAll("[.!?\\s]+", "");
+        boolean affirmative = normalized.matches("^(yes|yeah|yep|yup|ok|okay|sure|correct|affirmative|co|có|dung|đúng|是|对)$");
+        boolean negative = normalized.matches("^(no|nope|nah|khong|không|sai|ko|k|不是|不)$");
+        if (!affirmative && !negative) {
+            return text;
+        }
+        String lang = String.valueOf(targetLang == null ? "" : targetLang).toLowerCase(Locale.ROOT);
+        if (affirmative) {
+            return switch (lang) {
+                case "en" -> "Yes.";
+                case "zh" -> "是的。";
+                default -> "Có.";
+            };
+        }
+        return switch (lang) {
+            case "en" -> "No.";
+            case "zh" -> "不是。";
+            default -> "Không.";
+        };
     }
 
     private String buildMatchInputLanguageRule(String userText) {
