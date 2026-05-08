@@ -114,6 +114,21 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     []
   );
 
+  const resolveUiLocale = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return 'vi-VN';
+    }
+    const fromDoc = (document?.documentElement?.lang || '').trim();
+    if (fromDoc) {
+      return fromDoc;
+    }
+    const fromStorage = (localStorage.getItem('language') || localStorage.getItem('i18nextLng') || '').trim();
+    if (fromStorage) {
+      return fromStorage;
+    }
+    return 'vi-VN';
+  }, []);
+
   const getWelcomeDedupStorageKey = useCallback((identity?: string) => {
     const stableIdentity = (identity || guestIdentity || '').trim();
     if (!stableIdentity) {
@@ -340,6 +355,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       to,
       guestPhone: guestPhone || undefined,
       guestSessionId: effectiveIdentity,
+      locale: resolveUiLocale(),
       timestamp: Date.now(),
     };
     
@@ -362,7 +378,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       uiRoom: room,
       message: msg.message.substring(0, 50)
     });
-  }, [socket, guestIdentity, ensureGuestSessionId, guestPhone, appId, saveToLocalStorage]);
+  }, [socket, guestIdentity, ensureGuestSessionId, guestPhone, appId, saveToLocalStorage, resolveUiLocale]);
   
   // Mark as read - LMKT: Guest only
   const markAsRead = useCallback((room: string) => {
@@ -420,6 +436,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         appId,
         guestPhone,
         guestSessionId: guestIdentity,
+        locale: resolveUiLocale(),
       };
       socket.emit("join", joinData);
       
@@ -430,7 +447,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         room: `guest:${appId};${guestIdentity}`
       });
     }
-  }, [socket, connected, appId, guestPhone, guestIdentity]);
+  }, [socket, connected, appId, guestPhone, guestIdentity, resolveUiLocale]);
   
   // Listen for messages
   useEffect(() => {

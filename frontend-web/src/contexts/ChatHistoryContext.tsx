@@ -113,6 +113,21 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     []
   );
 
+  const resolveUiLocale = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return 'vi-VN';
+    }
+    const fromDoc = (document?.documentElement?.lang || '').trim();
+    if (fromDoc) {
+      return fromDoc;
+    }
+    const fromStorage = (localStorage.getItem('language') || localStorage.getItem('i18nextLng') || '').trim();
+    if (fromStorage) {
+      return fromStorage;
+    }
+    return 'vi-VN';
+  }, []);
+
   const emitAutoOpenChat = useCallback((detail: {
     targetRoom: string;
     appId: string;
@@ -504,6 +519,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       to,
       guestPhone: chatActor === 'guest' ? (guestPhone || "") : undefined,
       guestSessionId: chatActor === 'guest' ? (targetGuestIdentity || "") : (targetGuestIdentity || undefined),
+      locale: resolveUiLocale(),
       timestamp: Date.now(),
     };
     
@@ -527,7 +543,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       guestSessionId: msg.guestSessionId,
       message: msg.message.substring(0, 50)
     });
-  }, [socket, user, guestPhone, appId, saveToLocalStorage, resolveOutgoingRoom, isAdminUser, chatActor]);
+  }, [socket, user, guestPhone, appId, saveToLocalStorage, resolveOutgoingRoom, isAdminUser, chatActor, resolveUiLocale]);
   
   // Mark as read with refresh
   const markAsRead = useCallback((room: string) => {
@@ -631,6 +647,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         appId,
         guestPhone: isGuest ? guestPhone : undefined,
         guestSessionId: isGuest ? guestIdentity : undefined,
+        locale: resolveUiLocale(),
       };
       socket.emit("join", joinData);
       
@@ -642,7 +659,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         room: chatActor === 'admin' ? `app:${appId}` : chatActor === 'guest' ? `guest:${appId};${guestIdentity}` : appId
       });
     }
-  }, [socket, connected, appId, user, guestPhone, guestIdentity, isAdminUser, chatActor]);
+  }, [socket, connected, appId, user, guestPhone, guestIdentity, isAdminUser, chatActor, resolveUiLocale]);
   
   // Listen for messages
   useEffect(() => {

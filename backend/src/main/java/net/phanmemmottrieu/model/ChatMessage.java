@@ -26,6 +26,7 @@ public class ChatMessage {
     private String to; // Username của người nhận (để chat riêng)
     private String guestPhone; // Số điện thoại của khách (dùng làm identifier cho guest user)
     private String guestSessionId; // Định danh phiên chat ẩn danh của khách
+    private String locale; // Ngôn ngữ UI mà guest chọn trên web (vd: vi-VN, en-US)
     private Long timestamp; // Thời gian gửi tin nhắn (milliseconds)
     private List<Map<String, Object>> attachments;
     private Map<String, Object> checkinMeta;
@@ -124,6 +125,14 @@ public class ChatMessage {
 
     public void setGuestSessionId(String guestSessionId) {
         this.guestSessionId = guestSessionId;
+    }
+
+    public String getLocale() {
+        return locale;
+    }
+
+    public void setLocale(String locale) {
+        this.locale = locale;
     }
 
     public Long getTimestamp() {
