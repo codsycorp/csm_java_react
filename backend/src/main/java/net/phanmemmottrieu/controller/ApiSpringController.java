@@ -202,8 +202,8 @@ public class ApiSpringController {
                     return size() > 64;
                 }
             });
-    private static final long INTENT_CACHE_TTL_MS = 10_000L; // 10 seconds
-    private static final int INTENT_CONFIDENCE_THRESHOLD = 60;
+    private static final long DEFAULT_INTENT_CACHE_TTL_MS = 10_000L;
+    private static final int DEFAULT_INTENT_CONFIDENCE_THRESHOLD = 60;
     private final java.util.Map<String, Object[]> intentAdaptiveRouteCache =
         java.util.Collections.synchronizedMap(
             new java.util.LinkedHashMap<String, Object[]>(256, 0.75f, true) {
@@ -212,8 +212,8 @@ public class ApiSpringController {
                     return size() > 512;
                 }
             });
-    private static final long INTENT_ADAPTIVE_CACHE_TTL_MS = 30 * 60_000L;
-    private static final int INTENT_ADAPTIVE_CACHE_MIN_CONFIDENCE = 88;
+    private static final long DEFAULT_INTENT_ADAPTIVE_CACHE_TTL_MS = 30 * 60_000L;
+    private static final int DEFAULT_INTENT_ADAPTIVE_CACHE_MIN_CONFIDENCE = 88;
     private final java.util.Map<String, Object[]> inputLanguageDetectCache =
         java.util.Collections.synchronizedMap(
             new java.util.LinkedHashMap<String, Object[]>(32, 0.75f, true) {
@@ -588,6 +588,51 @@ public class ApiSpringController {
 
     @Value("${ai.local.fast-question.max-tokens:224}")
     private int aiLocalFastQuestionMaxTokens;
+
+    @Value("${ai.local.intent-classify.max-request-chars:400}")
+    private int aiLocalIntentClassifyMaxRequestChars;
+
+    @Value("${ai.local.intent-classify.cache-ttl-ms:10000}")
+    private long aiLocalIntentClassifyCacheTtlMs;
+
+    @Value("${ai.local.intent-classify.adaptive-cache-ttl-ms:1800000}")
+    private long aiLocalIntentClassifyAdaptiveCacheTtlMs;
+
+    @Value("${ai.local.intent-classify.adaptive-cache-min-confidence:88}")
+    private int aiLocalIntentClassifyAdaptiveCacheMinConfidence;
+
+    @Value("${ai.local.intent-classify.confidence-threshold:60}")
+    private int aiLocalIntentClassifyConfidenceThreshold;
+
+    @Value("${ai.local.intent-classify.second-pass.enabled:true}")
+    private boolean aiLocalIntentClassifySecondPassEnabled;
+
+    @Value("${ai.local.intent-classify.second-pass.min-request-chars:24}")
+    private int aiLocalIntentClassifySecondPassMinRequestChars;
+
+    @Value("${ai.local.intent-classify.token.min:40}")
+    private int aiLocalIntentClassifyTokenMin;
+
+    @Value("${ai.local.intent-classify.token.max:80}")
+    private int aiLocalIntentClassifyTokenMax;
+
+    @Value("${ai.local.intent-classify.token.first-pass.base:40}")
+    private int aiLocalIntentClassifyTokenFirstPassBase;
+
+    @Value("${ai.local.intent-classify.token.second-pass.base:64}")
+    private int aiLocalIntentClassifyTokenSecondPassBase;
+
+    @Value("${ai.local.intent-classify.token.length-step-chars:180}")
+    private int aiLocalIntentClassifyTokenLengthStepChars;
+
+    @Value("${ai.local.intent-classify.token.length-step-increase:8}")
+    private int aiLocalIntentClassifyTokenLengthStepIncrease;
+
+    @Value("${ai.local.intent-classify.token.complexity-step-increase:3}")
+    private int aiLocalIntentClassifyTokenComplexityStepIncrease;
+
+    @Value("${ai.local.intent-classify.token.complexity-max-bonus:16}")
+    private int aiLocalIntentClassifyTokenComplexityMaxBonus;
 
     @Value("${ai.local.pre-analysis.request-max-chars:20000}")
     private int aiLocalPreAnalysisRequestMaxChars;
@@ -8047,8 +8092,9 @@ public class ApiSpringController {
         String action = String.valueOf(intent.action() == null ? "" : intent.action()).trim().toLowerCase(Locale.ROOT);
         String normalizedContext = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
         boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        boolean menuContext = "menu_json".equals(normalizedContext);
         boolean likelyEditTask = editMode || intent.isEditTask() || "modify".equals(action) || "add".equals(action) || "remove".equals(action) || "delete".equals(action);
-        boolean lowConfidence = intent.confidence() < INTENT_CONFIDENCE_THRESHOLD;
+        boolean lowConfidence = intent.confidence() < resolveIntentConfidenceThreshold(text, editMode, menuContext);
 
         if (text.length() < 28 && lowConfidence) {
             out.add("Yeu cau qua ngan, thieu pham vi thay doi cu the");
@@ -8138,16 +8184,22 @@ public class ApiSpringController {
                 || llamaCppNativeService.isCircuitOpen()) {
             return LocalIntentClassification.unknown();
         }
-        String safe = truncateMiddle(String.valueOf(requestText == null ? "" : requestText).trim(), 400);
+        int maxRequestChars = Math.max(160, aiLocalIntentClassifyMaxRequestChars);
+        String safe = truncateMiddle(String.valueOf(requestText == null ? "" : requestText).trim(), maxRequestChars);
         if (safe.isBlank()) return LocalIntentClassification.unknown();
         String cacheKey = safe.length() > 120 ? safe.substring(0, 120) : safe;
+        long cacheTtlMs = resolveIntentCacheTtlMs(safe);
+        long adaptiveCacheTtlMs = Math.max(60_000L,
+            aiLocalIntentClassifyAdaptiveCacheTtlMs > 0
+                ? aiLocalIntentClassifyAdaptiveCacheTtlMs
+                : DEFAULT_INTENT_ADAPTIVE_CACHE_TTL_MS);
 
         if (!bypassCache) {
             String adaptiveKey = buildAdaptiveIntentKey(safe);
             Object[] adaptiveCached = intentAdaptiveRouteCache.get(adaptiveKey);
             if (adaptiveCached != null) {
                 long cachedAt = (long) adaptiveCached[1];
-                if (System.currentTimeMillis() - cachedAt < INTENT_ADAPTIVE_CACHE_TTL_MS) {
+                if (System.currentTimeMillis() - cachedAt < adaptiveCacheTtlMs) {
                     LocalIntentClassification hit = (LocalIntentClassification) adaptiveCached[0];
                     logger.info("[AI_INTENT_CLASSIFY] adaptive-cache-hit type={} action={} nextStep={} contextKind={} confidence={} key={}",
                         hit.type(), hit.action(), hit.nextStep(), hit.contextKind(), hit.confidence(), adaptiveKey);
@@ -8189,7 +8241,7 @@ public class ApiSpringController {
             Object[] cached = intentClassifyCache.get(cacheKey);
             if (cached != null) {
                 long cachedAt = (long) cached[1];
-                if (System.currentTimeMillis() - cachedAt < INTENT_CACHE_TTL_MS) {
+                if (System.currentTimeMillis() - cachedAt < cacheTtlMs) {
                     LocalIntentClassification hit = (LocalIntentClassification) cached[0];
                     logger.debug("[AI_INTENT_CLASSIFY] cache-hit type={} action={}", hit.type(), hit.action());
                     return hit;
@@ -8272,7 +8324,7 @@ public class ApiSpringController {
             LocalIntentClassification result = new LocalIntentClassification(type, action, confidence, nextStep, contextKind, candidate);
             if (!bypassCache) {
                 intentClassifyCache.put(cacheKey, new Object[]{ result, System.currentTimeMillis() });
-                if (result.confidence() >= INTENT_ADAPTIVE_CACHE_MIN_CONFIDENCE
+                if (result.confidence() >= resolveIntentAdaptiveCacheMinConfidence(safe)
                         && !"unknown".equalsIgnoreCase(String.valueOf(result.nextStep()))) {
                     intentAdaptiveRouteCache.put(buildAdaptiveIntentKey(safe), new Object[]{ result, System.currentTimeMillis() });
                 }
@@ -8311,7 +8363,8 @@ public class ApiSpringController {
         LocalIntentClassification base = classified == null ? LocalIntentClassification.unknown() : classified;
         boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
         boolean menuContext = isMenuJsonContext(contextType);
-        boolean lowConfidence = base.confidence() < INTENT_CONFIDENCE_THRESHOLD;
+        int confidenceThreshold = resolveIntentConfidenceThreshold(requestText, editMode, menuContext);
+        boolean lowConfidence = base.confidence() < confidenceThreshold;
 
         if (base.isEditTask()) {
             return base;
@@ -8319,7 +8372,9 @@ public class ApiSpringController {
 
         LocalIntentClassification normalizedBaseRoute = normalizeClassifierRoute(base);
 
-        if (lowConfidence && !String.valueOf(requestText == null ? "" : requestText).trim().isBlank()) {
+        if (lowConfidence
+            && shouldRunIntentSecondPass(requestText, editMode, menuContext)
+            && !String.valueOf(requestText == null ? "" : requestText).trim().isBlank()) {
             LocalIntentClassification secondPass = classifyIntentWithLocalAI(requestText, true);
             LocalIntentClassification normalizedSecondRoute = normalizeClassifierRoute(secondPass);
             if (hasRoutingDisagreement(normalizedBaseRoute, normalizedSecondRoute)) {
@@ -8381,7 +8436,7 @@ public class ApiSpringController {
                     secondPass.confidence(),
                     secondPass.nextStep());
                 base = secondPass;
-                lowConfidence = base.confidence() < INTENT_CONFIDENCE_THRESHOLD;
+                lowConfidence = base.confidence() < confidenceThreshold;
                 normalizedBaseRoute = normalizedSecondRoute;
             }
         }
@@ -8569,13 +8624,21 @@ public class ApiSpringController {
 
     private int resolveIntentClassifyMaxTokens(String requestText, boolean secondPass) {
         String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        int minTokens = Math.max(16, aiLocalIntentClassifyTokenMin);
+        int maxTokens = Math.max(minTokens, aiLocalIntentClassifyTokenMax);
+        int baseFirst = Math.max(minTokens, aiLocalIntentClassifyTokenFirstPassBase);
+        int baseSecond = Math.max(baseFirst, aiLocalIntentClassifyTokenSecondPassBase);
+        int lenStepChars = Math.max(80, aiLocalIntentClassifyTokenLengthStepChars);
+        int lenStepIncrease = Math.max(1, aiLocalIntentClassifyTokenLengthStepIncrease);
+        int complexityStepIncrease = Math.max(1, aiLocalIntentClassifyTokenComplexityStepIncrease);
+        int complexityMaxBonus = Math.max(0, aiLocalIntentClassifyTokenComplexityMaxBonus);
         if (text.isBlank()) {
-            return secondPass ? 64 : 40;
+            return secondPass ? Math.min(maxTokens, baseSecond) : Math.min(maxTokens, baseFirst);
         }
-        int base = secondPass ? 64 : 40;
+        int base = secondPass ? baseSecond : baseFirst;
         int len = text.length();
-        if (len > 180) base += 8;
-        if (len > 280) base += 8;
+        int lengthBonus = (len / lenStepChars) * lenStepIncrease;
+        base += Math.max(0, lengthBonus);
 
         int complexitySignals = 0;
         if (text.contains("?")) complexitySignals++;
@@ -8602,8 +8665,76 @@ public class ApiSpringController {
         if (commaCount >= 2) complexitySignals++;
         if (commaCount >= 5) complexitySignals++;
 
-        base += Math.min(16, complexitySignals * 3);
-        return Math.max(40, Math.min(80, base));
+        base += Math.min(complexityMaxBonus, complexitySignals * complexityStepIncrease);
+
+        int providerEffectiveCap = llamaCppNativeService == null
+            ? maxTokens
+            : Math.max(minTokens, Math.min(maxTokens, llamaCppNativeService.getEffectiveMaxTokensLimit()));
+        return Math.max(minTokens, Math.min(providerEffectiveCap, base));
+    }
+
+    private long resolveIntentCacheTtlMs(String requestText) {
+        long base = Math.max(1000L,
+            aiLocalIntentClassifyCacheTtlMs > 0
+                ? aiLocalIntentClassifyCacheTtlMs
+                : DEFAULT_INTENT_CACHE_TTL_MS);
+        int len = String.valueOf(requestText == null ? "" : requestText).trim().length();
+        if (len <= 80) {
+            return Math.min(120_000L, base * 2L);
+        }
+        if (len >= 280) {
+            return Math.max(3_000L, base / 2L);
+        }
+        return base;
+    }
+
+    private int resolveIntentAdaptiveCacheMinConfidence(String requestText) {
+        int base = Math.max(50, Math.min(99,
+            aiLocalIntentClassifyAdaptiveCacheMinConfidence > 0
+                ? aiLocalIntentClassifyAdaptiveCacheMinConfidence
+                : DEFAULT_INTENT_ADAPTIVE_CACHE_MIN_CONFIDENCE));
+        String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (text.isBlank()) {
+            return base;
+        }
+        int simpleSignals = 0;
+        if (text.length() <= 70) simpleSignals++;
+        if (!text.contains("\n") && !text.contains(";")) simpleSignals++;
+        if (!text.contains("{" ) && !text.contains("[")) simpleSignals++;
+        return Math.max(55, base - Math.min(8, simpleSignals * 2));
+    }
+
+    private int resolveIntentConfidenceThreshold(String requestText, boolean editMode, boolean menuContext) {
+        int threshold = Math.max(30, Math.min(95,
+            aiLocalIntentClassifyConfidenceThreshold > 0
+                ? aiLocalIntentClassifyConfidenceThreshold
+                : DEFAULT_INTENT_CONFIDENCE_THRESHOLD));
+        String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (editMode || menuContext) {
+            threshold = Math.min(95, threshold + 4);
+        }
+        if (text.length() <= 60 && !editMode && !menuContext) {
+            threshold = Math.max(35, threshold - 6);
+        }
+        if (text.contains("\n") || text.contains(";") || text.contains(":")) {
+            threshold = Math.min(95, threshold + 2);
+        }
+        return threshold;
+    }
+
+    private boolean shouldRunIntentSecondPass(String requestText, boolean editMode, boolean menuContext) {
+        if (!aiLocalIntentClassifySecondPassEnabled) {
+            return false;
+        }
+        String text = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (text.isBlank()) {
+            return false;
+        }
+        int minChars = Math.max(0, aiLocalIntentClassifySecondPassMinRequestChars);
+        if (!editMode && !menuContext && text.length() < minChars) {
+            return false;
+        }
+        return !isObviousDirectConversation(text);
     }
 
     private List<String> localizeRequirementGuardQuestions(List<String> questions, String uiLang) {
