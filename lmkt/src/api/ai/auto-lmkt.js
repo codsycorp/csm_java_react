@@ -5638,6 +5638,22 @@ async function processContent(item, opts = {}) {
       latestConfig = null;
     }
   }
+
+  const parseBooleanFlag = (value, defaultValue = false) => {
+    if (value === undefined || value === null || value === "") return !!defaultValue;
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return value === 1;
+    const normalized = String(value).trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+    return !!defaultValue;
+  };
+
+  const keepOriginalZaloContentToFacebook = parseBooleanFlag(
+    opts.keep_original_zalo_content_to_facebook,
+    parseBooleanFlag(latestConfig?.keep_original_zalo_content_to_facebook, false)
+  );
+  console.log(`🧩 [processContent] keep_original_zalo_content_to_facebook=${keepOriginalZaloContentToFacebook}`);
   
   // 2️⃣ ✅ CRITICAL FIX: Enrich ctx với TOÀN BỘ thông tin từ config
   // Điều này đảm bảo domain/fanpage/project/service_type khớp nhau từ cùng 1 config
@@ -6106,6 +6122,19 @@ async function processContent(item, opts = {}) {
         let pageContent = null;
         const personaFromPool = availablePersonas[index % availablePersonas.length];
         const effectivePersona = opts.personaKey || personaFromPool;
+
+        if (keepOriginalZaloContentToFacebook) {
+          const originalRawText = String(normalizeZaloText(content || "") || "").trim();
+          if (originalRawText) {
+            pageContent = originalRawText;
+            if (!pageContent.includes(articleUrl)) {
+              pageContent += '\n\n👉 Link bài viết: ' + articleUrl;
+            }
+            console.log(`✅ [Facebook Raw] Fanpage="${fanpageName}" using original Zalo content (${pageContent.length} chars)`);
+            return pageContent;
+          }
+          console.warn(`⚠️ [Facebook Raw] Fanpage="${fanpageName}" cấu hình giữ nguyên nội dung nhưng tin Zalo rỗng, fallback sang AI`);
+        }
 
         console.log(`📤 [Facebook AI] Fanpage="${fanpageName}" - persona="${effectivePersona}"`);
         try {
@@ -9186,6 +9215,7 @@ function getConfigsWithZaloGroups() {
     config_id: cfg.id,
     zalo_groups: cfg.zalo_groups || [],
     zalo_scan_interval_minutes: cfg.zalo_scan_interval_minutes || 5, // Default 5 phút
+    keep_original_zalo_content_to_facebook: cfg.keep_original_zalo_content_to_facebook === true || cfg.keep_original_zalo_content_to_facebook === 'true' || cfg.keep_original_zalo_content_to_facebook === 1 || cfg.keep_original_zalo_content_to_facebook === '1',
     // Keep backward compatibility: derive fanpage list from legacy fields when needed.
     zalo_fanpages: Array.isArray(cfg.zalo_fanpages) && cfg.zalo_fanpages.length > 0
       ? cfg.zalo_fanpages
@@ -13131,12 +13161,22 @@ function ensureZaloMultiGroupUI(container) {
   
   // ===== FORM STATE HELPERS =====
   const normalizeKeyPart = (value) => (value || "").toString().trim().toLowerCase();
+  const parseBooleanFlag = (value, defaultValue = false) => {
+    if (value === undefined || value === null || value === '') return !!defaultValue;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value === 1;
+    const normalized = String(value).trim().toLowerCase();
+    if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+    return !!defaultValue;
+  };
 
   const captureFormState = () => {
     const domainSelect = document.getElementById("global-domain-select");
     const industrySelect = document.getElementById("global-industry-select");
     const projectSelect = document.getElementById("global-project-select");
     const textarea = document.getElementById("zalo-group-list");
+    const keepOriginalCheckbox = document.getElementById("zalo-keep-original-content-checkbox");
     const checkedFanpages = Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]'))
       .filter(cb => cb.checked)
       .map(cb => cb.value);
@@ -13146,7 +13186,8 @@ function ensureZaloMultiGroupUI(container) {
       industry: industrySelect?.value || "bat-dong-san",
       project: projectSelect?.value || "",
       checkedFanpages,
-      groupText: textarea?.value || ""
+      groupText: textarea?.value || "",
+      keepOriginalZaloContentToFacebook: !!keepOriginalCheckbox?.checked
     };
   };
 
@@ -13156,6 +13197,7 @@ function ensureZaloMultiGroupUI(container) {
     const industrySelect = document.getElementById("global-industry-select");
     const projectSelect = document.getElementById("global-project-select");
     const textarea = document.getElementById("zalo-group-list");
+    const keepOriginalCheckbox = document.getElementById("zalo-keep-original-content-checkbox");
 
     if (domainSelect) {
       domainSelect.value = state.domainKey || "phanmemmottrieu";
@@ -13169,6 +13211,7 @@ function ensureZaloMultiGroupUI(container) {
     });
 
     if (textarea) textarea.value = state.groupText || "";
+    if (keepOriginalCheckbox) keepOriginalCheckbox.checked = !!state.keepOriginalZaloContentToFacebook;
   };
 
   const normalizeGroupText = (groups) => {
@@ -13288,6 +13331,11 @@ function ensureZaloMultiGroupUI(container) {
     if (textarea && row.zalo_groups) {
       textarea.value = normalizeGroupText(row.zalo_groups);
     }
+
+    const keepOriginalCheckbox = document.getElementById('zalo-keep-original-content-checkbox');
+    if (keepOriginalCheckbox) {
+      keepOriginalCheckbox.checked = parseBooleanFlag(row.keep_original_zalo_content_to_facebook, false);
+    }
     
     console.log('[Zalo Config] Loaded:', fanpageIds.length, 'fanpages,', (row.zalo_groups || []).length, 'groups');
   };
@@ -13323,6 +13371,13 @@ function ensureZaloMultiGroupUI(container) {
     const fanpageIds = splitByComma(row.fanpage_ids || row.fanpage_id || row.FanpageIds || '');
     const fanpageTokens = splitByComma(row.fanpage_tokens || row.fanpage_token || row.FanpageTokens || '');
     const zaloGroups = splitByNewline(row.zalo_groups || row.groups || row.ZaloGroups || row.group_list || '');
+    const keepOriginalZaloToFacebook = parseBooleanFlag(
+      row.keep_original_zalo_content_to_facebook
+        ?? row.keep_original_zalo_to_facebook
+        ?? row.keep_zalo_content
+        ?? row.keep_raw_zalo_to_facebook,
+      false
+    );
 
     if (!domain || fanpageNames.length === 0 || zaloGroups.length === 0) {
       return null;
@@ -13348,6 +13403,7 @@ function ensureZaloMultiGroupUI(container) {
       fanpage_name: fanpageNames.join(', '),
       fanpage_tokens: fanpageTokens,
       fanpage_token: fanpageTokens[0] || null,
+      keep_original_zalo_content_to_facebook: keepOriginalZaloToFacebook,
       zalo_fanpages: fanpageNames.map((name, idx) => ({
         id: fanpageIds[idx] || '',
         name,
@@ -13364,7 +13420,7 @@ function ensureZaloMultiGroupUI(container) {
     }
 
     const aoa = [
-      ['id', 'domain', 'domain_key', 'service_type', 'project', 'fanpage_names', 'fanpage_ids', 'fanpage_tokens', 'zalo_groups', 'created_at']
+      ['id', 'domain', 'domain_key', 'service_type', 'project', 'fanpage_names', 'fanpage_ids', 'fanpage_tokens', 'zalo_groups', 'keep_original_zalo_content_to_facebook', 'created_at']
     ];
 
     allConfigs.forEach(cfg => {
@@ -13378,6 +13434,7 @@ function ensureZaloMultiGroupUI(container) {
         Array.isArray(cfg.fanpage_ids) ? cfg.fanpage_ids.join(',') : (cfg.fanpage_id || ''),
         Array.isArray(cfg.fanpage_tokens) ? cfg.fanpage_tokens.join(',') : (cfg.fanpage_token || ''),
         Array.isArray(cfg.zalo_groups) ? cfg.zalo_groups.join('\n') : '',
+        parseBooleanFlag(cfg.keep_original_zalo_content_to_facebook, false) ? 1 : 0,
         cfg.created_at || Date.now()
       ]);
     });
@@ -13582,6 +13639,12 @@ function ensureZaloMultiGroupUI(container) {
       project: ti('Dự án', 'Project', '项目'),
       fanpages: ti('Fanpages', 'Fanpages', 'Fanpages'),
       groups: ti('Nhóm Zalo', 'Zalo groups', 'Zalo 群组'),
+      keepRawZaloToFacebook: ti('Giữ nguyên Zalo->FB', 'Keep raw Zalo->FB', '保留 Zalo 原文到 FB'),
+      keepRawZaloToFacebookTooltip: ti(
+        'Bật: giữ nguyên nội dung quét từ Zalo khi đăng Facebook. Tắt: dùng AI tạo nội dung Facebook mới.',
+        'On: keep original scraped Zalo content when posting to Facebook. Off: generate new Facebook content with AI.',
+        '开启：发布到 Facebook 时保留 Zalo 抓取原文；关闭：由 AI 生成新的 Facebook 内容。'
+      ),
       token: ti('Token', 'Token', 'Token'),
       actions: ti('Thao tác', 'Actions', '操作'),
       tokenOk: ti('Đầy đủ', 'Available', '可用'),
@@ -13594,7 +13657,7 @@ function ensureZaloMultiGroupUI(container) {
     wrap.style.cssText = `overflow:auto;max-height:360px;border:1px solid ${theme.border};border-radius:4px;background:${theme.bg};`;
 
     const table = document.createElement('table');
-    table.style.cssText = 'width:100%;border-collapse:collapse;font-size:11px;min-width:980px;';
+    table.style.cssText = 'width:100%;border-collapse:collapse;font-size:11px;min-width:1100px;';
 
     const selectedSet = new Set(getSelectedConfigIds());
     const allChecked = allConfigs.length > 0 && allConfigs.every(cfg => selectedSet.has(String(cfg.id || '').trim()));
@@ -13611,6 +13674,7 @@ function ensureZaloMultiGroupUI(container) {
           <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.project}</th>
           <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.fanpages}</th>
           <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.groups}</th>
+          <th title="${gridText.keepRawZaloToFacebookTooltip}" style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;cursor:help;">${gridText.keepRawZaloToFacebook}</th>
           <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.token}</th>
           <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.actions}</th>
         </tr>
@@ -13621,7 +13685,7 @@ function ensureZaloMultiGroupUI(container) {
     const tbody = table.querySelector('tbody');
     if (allConfigs.length === 0) {
       const emptyRow = document.createElement('tr');
-      emptyRow.innerHTML = `<td colspan="9" style="padding:12px;color:${theme.muted};text-align:center;">${gridText.emptyRow}</td>`;
+      emptyRow.innerHTML = `<td colspan="10" style="padding:12px;color:${theme.muted};text-align:center;">${gridText.emptyRow}</td>`;
       tbody.appendChild(emptyRow);
     }
 
@@ -13637,6 +13701,7 @@ function ensureZaloMultiGroupUI(container) {
       const projectInput = `<input data-role="project" value="${String(cfg.project || '').replace(/"/g, '&quot;')}" style="width:100%;font-size:11px;padding:2px 4px;border:1px solid ${theme.border};background:${theme.bg};color:${theme.text};" />`;
       const groupsText = Array.isArray(cfg.zalo_groups) ? cfg.zalo_groups.join('\n') : '';
       const rowChecked = selectedSet.has(String(cfg.id || '').trim());
+      const keepOriginalChecked = parseBooleanFlag(cfg.keep_original_zalo_content_to_facebook, false);
 
       tr.innerHTML = `
         <td style="padding:6px;vertical-align:top;"><input data-role="row-check" type="checkbox" ${rowChecked ? 'checked' : ''} /></td>
@@ -13648,6 +13713,9 @@ function ensureZaloMultiGroupUI(container) {
         <td style="padding:6px;vertical-align:top;min-width:220px;">
           <textarea data-role="groups" style="width:100%;min-height:60px;font-size:11px;padding:4px;border:1px solid ${theme.border};background:${theme.bg};color:${theme.text};">${groupsText}</textarea>
         </td>
+        <td style="padding:6px;vertical-align:top;text-align:center;">
+          <input data-role="keep-original-content" type="checkbox" ${keepOriginalChecked ? 'checked' : ''} />
+        </td>
         <td style="padding:6px;vertical-align:top;color:${cfg.fanpage_token ? '#52c41a' : '#ff4d4f'};">${cfg.fanpage_token ? gridText.tokenOk : gridText.tokenMissing}</td>
         <td style="padding:6px;vertical-align:top;white-space:nowrap;">
           <button data-action="quick-save" style="padding:3px 6px;background:#52c41a;color:#fff;border:none;border-radius:2px;cursor:pointer;margin-right:4px;">💾</button>
@@ -13658,6 +13726,7 @@ function ensureZaloMultiGroupUI(container) {
 
       const groupsEl = tr.querySelector('textarea[data-role="groups"]');
       const projectEl = tr.querySelector('input[data-role="project"]');
+      const keepOriginalEl = tr.querySelector('input[data-role="keep-original-content"]');
       const rowCheck = tr.querySelector('input[data-role="row-check"]');
       const saveBtn = tr.querySelector('button[data-action="quick-save"]');
       const editBtn = tr.querySelector('button[data-action="load-form"]');
@@ -13686,6 +13755,7 @@ function ensureZaloMultiGroupUI(container) {
           ...allData[targetIndex],
           project: String(projectEl?.value || '').trim(),
           zalo_groups: nextGroups,
+          keep_original_zalo_content_to_facebook: !!keepOriginalEl?.checked,
           updated_at: Date.now(),
         };
 
@@ -13715,12 +13785,10 @@ function ensureZaloMultiGroupUI(container) {
         saveDataOptionUser(allData, (success) => {
           if (success) {
             if (status) status.textContent = ti('✅ Đã xóa config', '✅ Config deleted', '✅ 配置已删除');
-            thongbao(status.textContent);
             if (selectedRowData?.id === cfg.id) selectedRowData = null;
             renderZaloConfigList();
           } else if (status) {
             status.textContent = ti('⚠️ Lỗi xóa config', '⚠️ Failed to delete config', '⚠️ 删除配置失败');
-            canhbao(status.textContent);
           }
         }, { allowEmptyConfigSave: true });
       };
@@ -14168,6 +14236,8 @@ function ensureZaloMultiGroupUI(container) {
         console.log('[Zalo Config] Using fanpage data from UI checkboxes:', selectedFanpages);
       }
       const groupList = parseGroupList(input.value);
+      const keepOriginalCheckbox = document.getElementById('zalo-keep-original-content-checkbox');
+      const keepOriginalZaloToFacebook = !!keepOriginalCheckbox?.checked;
       
       // Validate
       if (selectedFanpages.length === 0) {
@@ -14195,6 +14265,7 @@ function ensureZaloMultiGroupUI(container) {
       fanpage_tokens: selectedFanpages.map(f => f.access_token),
       fanpage_token: selectedFanpages[0]?.access_token || null,
       zalo_groups: groupList,
+      keep_original_zalo_content_to_facebook: keepOriginalZaloToFacebook,
       config_for_zalo: true
     };
     
@@ -14235,7 +14306,6 @@ function ensureZaloMultiGroupUI(container) {
             // Set mode idle TRƯỚC khi render
             setMode("idle", null, { preserveStatus: true });
             status.textContent = ti(`✅ Đã cập nhật config: ${configData.fanpage_name}`, `✅ Configuration updated: ${configData.fanpage_name}`, `✅ 配置已更新：${configData.fanpage_name}`);
-            thongbao(status.textContent);
             console.log('[Zalo Config] Successfully saved to server');
             
             // Render grid SAU khi state/mode đã được reset
@@ -14252,7 +14322,6 @@ function ensureZaloMultiGroupUI(container) {
             });
           } else {
             status.textContent = ti(`⚠️ Lỗi cập nhật config: ${error || 'Lỗi không xác định'}`, `⚠️ Failed to update configuration: ${error || 'Unknown error'}`, `⚠️ 更新配置失败：${error || '未知错误'}`);
-            canhbao(status.textContent);
             console.error('[Zalo Config] Save error:', error);
           }
         });
@@ -14276,7 +14345,6 @@ function ensureZaloMultiGroupUI(container) {
           // Set mode idle TRƯỚC khi render
           setMode("idle", null, { preserveStatus: true });
           status.textContent = ti(`✅ Đã thêm config mới: ${configData.fanpage_name}. Bạn có thể tiếp tục thêm cấu hình khác hoặc nhấn "➕ Thêm mới" để xóa form.`, `✅ New configuration added: ${configData.fanpage_name}. You can continue adding more, or click "➕ Add new" to clear the form.`, `✅ 新配置已添加：${configData.fanpage_name}。你可以继续添加，或点击“➕ 新增”清空表单。`);
-          thongbao(ti(`✅ Đã thêm config mới: ${configData.fanpage_name}`, `✅ New configuration added: ${configData.fanpage_name}`, `✅ 新配置已添加：${configData.fanpage_name}`));
           console.log('[Zalo Config] Add success, rendering grid...');
           
           // Render grid SAU khi state/mode đã được reset
@@ -14298,7 +14366,6 @@ function ensureZaloMultiGroupUI(container) {
           });
         } else {
           status.textContent = ti(`⚠️ Lỗi thêm config mới: ${error || 'Lỗi không xác định'}`, `⚠️ Failed to add new configuration: ${error || 'Unknown error'}`, `⚠️ 添加新配置失败：${error || '未知错误'}`);
-          canhbao(status.textContent);
           console.error('[Zalo Config] Add error:', error);
         }
       });
@@ -14342,6 +14409,8 @@ function ensureZaloMultiGroupUI(container) {
       
       // Clear controls (giữ Global Settings và fanpages đã chọn, chỉ clear groups)
       input.value = '';
+      const keepOriginalCheckbox = document.getElementById('zalo-keep-original-content-checkbox');
+      if (keepOriginalCheckbox) keepOriginalCheckbox.checked = true;
       setMode("create");
       status.textContent = ti("📝 Form đã được xoá. Fanpage đã chọn vẫn được giữ nguyên, điền danh sách nhóm rồi nhấn '💾 Lưu cấu hình'.", "📝 Form cleared. Selected fanpages are kept, fill group list then click '💾 Save configuration'.", "📝 表单已清空。已选 fanpage 会保留，请填写群组列表后点击“💾 保存配置”。");
     } finally {
@@ -14422,6 +14491,28 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   input.placeholder = ti("Mỗi nhóm 1 dòng:\nNhóm A\nQ1,3 50T\nNhóm BĐS HCM", "One group per line:\nGroup A\nQ1,3 50T\nHCM Real Estate Group", "每行一个群组：\n群组A\nQ1,3 50T\n胡志明房产群");
   input.style.cssText = `width:100%;min-height:80px;font-size:12px;color:${theme.text};background:${theme.bg};border:1px solid ${theme.border};margin-bottom:8px;flex:1;`;
   input.value = loadGroupList().join("\n");
+
+  const keepOriginalWrapper = document.createElement("label");
+  keepOriginalWrapper.style.cssText = `display:flex;align-items:center;gap:8px;margin:0 0 8px 0;padding:8px;border:1px dashed ${theme.border};border-radius:4px;background:${theme.inputBg};font-size:12px;color:${theme.text};cursor:pointer;`;
+  keepOriginalWrapper.title = ti(
+    "Bật để dùng nguyên nội dung quét từ Zalo khi đăng Facebook. Tắt để AI tạo nội dung Facebook mới.",
+    "Enable to keep original scraped Zalo text when posting to Facebook. Disable to let AI rewrite.",
+    "开启后发布 Facebook 时保留 Zalo 原文；关闭后由 AI 重写。"
+  );
+
+  const keepOriginalCheckbox = document.createElement("input");
+  keepOriginalCheckbox.type = "checkbox";
+  keepOriginalCheckbox.id = "zalo-keep-original-content-checkbox";
+  keepOriginalCheckbox.checked = true;
+
+  const keepOriginalText = document.createElement("span");
+  keepOriginalText.textContent = ti(
+    "Giữ nguyên nội dung quét từ Zalo khi đăng Facebook (bỏ chọn để AI viết mới)",
+    "Keep original scraped Zalo text when posting to Facebook (uncheck to let AI rewrite)",
+    "发布到 Facebook 时保留 Zalo 原文（取消勾选则由 AI 重写）"
+  );
+
+  keepOriginalWrapper.append(keepOriginalCheckbox, keepOriginalText);
 
   status = document.createElement("div");
   status.id = "zalo-group-status";
@@ -14556,7 +14647,7 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   `
   );
 
-  leftPanel.append(title, note, fanpageNote, managementSection, input, status, btnRow, postedStats);
+  leftPanel.append(title, note, fanpageNote, managementSection, keepOriginalWrapper, input, status, btnRow, postedStats);
 
   // ===== PHẦN PHẢI: Webview Zalo =====
   const rightPanel = document.createElement("div");
