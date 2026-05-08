@@ -769,6 +769,39 @@ public class ApiSpringController {
     @Value("${ai.code-stream.sse-timeout-ms:1800000}")
     private long aiCodeStreamSseTimeoutMs;
 
+    @Value("${ai.code-stream.sse-timeout.adaptive.enabled:true}")
+    private boolean aiCodeStreamSseTimeoutAdaptiveEnabled;
+
+    @Value("${ai.code-stream.sse-timeout.adaptive.min-ms:120000}")
+    private long aiCodeStreamSseTimeoutAdaptiveMinMs;
+
+    @Value("${ai.code-stream.sse-timeout.adaptive.max-ms:3600000}")
+    private long aiCodeStreamSseTimeoutAdaptiveMaxMs;
+
+    @Value("${ai.code-stream.sse-timeout.adaptive.message-char-ms:20}")
+    private int aiCodeStreamSseTimeoutAdaptiveMessageCharMs;
+
+    @Value("${ai.code-stream.sse-timeout.adaptive.code-char-ms:3}")
+    private int aiCodeStreamSseTimeoutAdaptiveCodeCharMs;
+
+    @Value("${ai.code-stream.sse-timeout.adaptive.cores-baseline:8}")
+    private int aiCodeStreamSseTimeoutAdaptiveCoresBaseline;
+
+    @Value("${ai.code-stream.sse-timeout.adaptive.memory-gb-baseline:16}")
+    private int aiCodeStreamSseTimeoutAdaptiveMemoryGbBaseline;
+
+    @Value("${ai.code-stream.sse-timeout.adaptive.weak-server-cores-threshold:2}")
+    private int aiCodeStreamSseTimeoutAdaptiveWeakServerCoresThreshold;
+
+    @Value("${ai.code-stream.sse-timeout.adaptive.weak-server-memory-gb-threshold:6}")
+    private int aiCodeStreamSseTimeoutAdaptiveWeakServerMemoryGbThreshold;
+
+    @Value("${ai.code-stream.sse-timeout.adaptive.weak-server-force-infinite:true}")
+    private boolean aiCodeStreamSseTimeoutAdaptiveWeakServerForceInfinite;
+
+    @Value("${ai.code-stream.sse-timeout.adaptive.safety-multiplier:1.2}")
+    private double aiCodeStreamSseTimeoutAdaptiveSafetyMultiplier;
+
     private final ConcurrentHashMap<String, InstructionsCacheEntry> aiAssistantCustomInstructionsCache = new ConcurrentHashMap<>();
 
     private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
@@ -844,11 +877,11 @@ public class ApiSpringController {
 
     @PostMapping(value = {"/ai-code-stream", "/api/ai-code-stream"})
     public SseEmitter streamCodeAssistant(@RequestBody Map<String, Object> body) {
-        long effectiveSseTimeoutMs = aiCodeStreamSseTimeoutMs <= 0L ? Long.MAX_VALUE : aiCodeStreamSseTimeoutMs;
+        long effectiveSseTimeoutMs = resolveAdaptiveSseTimeoutMs(body);
         SseEmitter emitter = new SseEmitter(effectiveSseTimeoutMs);
 
         emitter.onTimeout(() -> {
-            logger.warn("ApiSpringController: ai-code-stream SSE timeout");
+            logger.warn("ApiSpringController: ai-code-stream SSE timeout (configuredMs={})", effectiveSseTimeoutMs);
             emitter.complete();
         });
         emitter.onError(ex -> logger.debug("ApiSpringController: ai-code-stream SSE error: {}", ex.getMessage()));
@@ -3428,6 +3461,76 @@ public class ApiSpringController {
         int promptChars = String.valueOf(prompt == null ? "" : prompt).length();
         int byInput = 2 + (promptChars / 2500);
         return Math.max(4, Math.min(240, byInput));
+    }
+
+    private long resolveAdaptiveSseTimeoutMs(Map<String, Object> body) {
+        long configuredBaseMs = aiCodeStreamSseTimeoutMs <= 0L ? Long.MAX_VALUE : aiCodeStreamSseTimeoutMs;
+        if (!aiCodeStreamSseTimeoutAdaptiveEnabled) {
+            return configuredBaseMs;
+        }
+        if (configuredBaseMs == Long.MAX_VALUE) {
+            return Long.MAX_VALUE;
+        }
+
+        int messageChars = 0;
+        int currentCodeChars = 0;
+        try {
+            messageChars = String.valueOf(body == null ? "" : body.getOrDefault("message", "")).length();
+            currentCodeChars = String.valueOf(body == null ? "" : body.getOrDefault("currentCode", "")).length();
+        } catch (Exception ignored) {
+        }
+
+        Runtime rt = Runtime.getRuntime();
+        int cpuCores = Math.max(1, rt.availableProcessors());
+        long maxMemoryBytes = rt.maxMemory();
+        double maxMemoryGb = maxMemoryBytes > 0L
+            ? (maxMemoryBytes / (1024.0d * 1024.0d * 1024.0d))
+            : 0.0d;
+
+        int weakCoreThreshold = Math.max(1, aiCodeStreamSseTimeoutAdaptiveWeakServerCoresThreshold);
+        int weakMemoryGbThreshold = Math.max(1, aiCodeStreamSseTimeoutAdaptiveWeakServerMemoryGbThreshold);
+        boolean weakServer = cpuCores <= weakCoreThreshold
+            || (maxMemoryGb > 0.0d && maxMemoryGb <= weakMemoryGbThreshold);
+        if (weakServer && aiCodeStreamSseTimeoutAdaptiveWeakServerForceInfinite) {
+            logger.info(
+                "ApiSpringController: adaptive SSE timeout -> infinite (weak server) cores={} maxMemoryGb={} messageChars={} codeChars={}",
+                cpuCores,
+                Math.round(maxMemoryGb * 10.0d) / 10.0d,
+                messageChars,
+                currentCodeChars);
+            return Long.MAX_VALUE;
+        }
+
+        long minMs = Math.max(30_000L, aiCodeStreamSseTimeoutAdaptiveMinMs);
+        long maxMs = Math.max(minMs, aiCodeStreamSseTimeoutAdaptiveMaxMs);
+        int messageCharMs = Math.max(1, aiCodeStreamSseTimeoutAdaptiveMessageCharMs);
+        int codeCharMs = Math.max(1, aiCodeStreamSseTimeoutAdaptiveCodeCharMs);
+
+        long workloadBudgetMs = (long) messageChars * messageCharMs + (long) currentCodeChars * codeCharMs;
+
+        double coresBaseline = Math.max(1, aiCodeStreamSseTimeoutAdaptiveCoresBaseline);
+        double memoryBaselineGb = Math.max(1, aiCodeStreamSseTimeoutAdaptiveMemoryGbBaseline);
+        double cpuScale = Math.max(0.75d, Math.min(6.0d, coresBaseline / cpuCores));
+        double memoryScale = maxMemoryGb > 0.0d
+            ? Math.max(0.75d, Math.min(6.0d, memoryBaselineGb / Math.max(1.0d, maxMemoryGb)))
+            : 1.0d;
+        double safety = Math.max(1.0d, aiCodeStreamSseTimeoutAdaptiveSafetyMultiplier);
+        double totalScale = Math.max(1.0d, ((cpuScale + memoryScale) / 2.0d) * safety);
+
+        long adaptiveMs = (long) Math.ceil((configuredBaseMs + workloadBudgetMs) * totalScale);
+        adaptiveMs = Math.max(minMs, Math.min(maxMs, adaptiveMs));
+
+        logger.info(
+            "ApiSpringController: adaptive SSE timeout ms={} (baseMs={} workloadMs={} scale={} cores={} maxMemoryGb={} messageChars={} codeChars={})",
+            adaptiveMs,
+            configuredBaseMs,
+            workloadBudgetMs,
+            String.format(Locale.ROOT, "%.2f", totalScale),
+            cpuCores,
+            Math.round(maxMemoryGb * 10.0d) / 10.0d,
+            messageChars,
+            currentCodeChars);
+        return adaptiveMs;
     }
 
     private String runLocalProviderWithProgress(
