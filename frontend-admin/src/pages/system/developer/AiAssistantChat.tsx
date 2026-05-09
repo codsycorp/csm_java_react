@@ -584,6 +584,25 @@ function normalizeConversationalJsonAnswer(raw: unknown): string | null {
 	return renderLooseJsonLikeAnswer(raw) || sanitizeBrokenConversationalWrapper(raw);
 }
 
+function normalizeBrokenListLineBreaks(raw: unknown): string {
+	let text = String(raw || "").trim();
+	if (!text)
+		return "";
+
+	text = text
+		.replace(/\\r\\n/g, "\n")
+		.replace(/\\n/g, "\n")
+		.replace(/\r\n/g, "\n")
+		.replace(/\r/g, "\n");
+
+	// Handle malformed separators like ":n1." or ".n- " from streamed/plain payloads.
+	text = text
+		.replace(/([:.!?])\s*n(?=\d{1,2}\.\s)/g, "$1\n")
+		.replace(/([:.!?])\s*n(?=[-*•]\s)/g, "$1\n");
+
+	return text.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function normalizeAssistantDisplayText(raw: unknown): string {
 	const text = String(raw || "").trim();
 	if (!text)
@@ -602,7 +621,7 @@ function normalizeAssistantDisplayText(raw: unknown): string {
 	}
 
 	const conversationalJsonText = normalizeConversationalJsonAnswer(text);
-	return String(conversationalJsonText || text).trim();
+	return normalizeBrokenListLineBreaks(conversationalJsonText || text);
 }
 
 function toStringList(raw: unknown): string[] {

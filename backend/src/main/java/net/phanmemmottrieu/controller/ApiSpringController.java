@@ -3841,7 +3841,9 @@ public class ApiSpringController {
                     futures.add(mapExecutor.submit(() -> {
                         String chunk = finalChunks.get(chunkIndex);
                         String chunkPrompt = buildBroadAnalysisChunkPrompt(safeRequest, chunk, chunkIndex + 1, finalChunks.size(), contextType);
-                        int outputCap = Math.max(1024, Math.min(4096, aiLocalDirectOutputAnalyzeMaxTokens));
+                        int outputCap = llamaCppNativeService == null
+                            ? Math.max(1024, aiLocalLlamaMaxTokens)
+                            : Math.max(1024, llamaCppNativeService.getEffectiveMaxTokensLimit());
                         String chunkRaw = llamaCppNativeService.generateContentFast(chunkPrompt, outputCap);
                         String chunkText = extractAiResultText(chunkRaw);
                         if ((chunkText == null || chunkText.isBlank()) && chunkRaw != null) {
@@ -5353,26 +5355,9 @@ public class ApiSpringController {
         int providerLimit = llamaCppNativeService == null
             ? Math.max(512, aiLocalLlamaMaxTokens)
             : Math.max(512, llamaCppNativeService.getEffectiveMaxTokensLimit());
-        int globalCap = Math.max(512, Math.min(providerLimit, aiLocalDirectOutputMaxTokens));
-        int base = Math.max(640, Math.min(globalCap, aiLocalDirectOutputQuestionMaxTokens));
-        String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
-        int contextChars = String.valueOf(contextText == null ? "" : contextText).length();
-        LocalIntentClassification intent = intentClass == null ? LocalIntentClassification.unknown() : intentClass;
-        if (intent.canAnswerDirectlyWithoutContext() && contextChars == 0) {
-            return Math.max(base, Math.min(globalCap, aiLocalDirectOutputQuestionMaxTokens));
-        }
-        if ("analyze".equals(mode)) {
-            base = Math.max(base, Math.min(globalCap, aiLocalDirectOutputAnalyzeMaxTokens));
-            if (contextChars > 12000 || isBroadAnalysisRequest(requestText, null)) {
-                base = Math.max(base, Math.min(globalCap, Math.max(2048, aiLocalDirectOutputAnalyzeMaxTokens)));
-            }
-        } else if ("edit".equals(mode)) {
-            int editCap = intent.needsMenuContext() || "load_menu_context".equalsIgnoreCase(String.valueOf(intent.nextStep()))
-                ? aiLocalDirectOutputMenuEditMaxTokens
-                : aiLocalDirectOutputMaxTokens;
-            base = Math.max(base, Math.min(globalCap, Math.max(1024, editCap)));
-        }
-        return Math.max(256, Math.min(globalCap, base));
+        // Do not apply mode-specific soft caps. Let local output use the provider's
+        // effective token budget (bounded by model/context-window capability).
+        return providerLimit;
     }
 
     private boolean isFullScopeMenuRequest(String requestText) {
@@ -6260,11 +6245,10 @@ public class ApiSpringController {
         try {
             String fastPrompt = buildLocalFastQuestionPrompt(message, language);
             int promptTokens = estimateTokens(fastPrompt);
-            int configuredFastCap = Math.max(64, Math.min(2048, aiLocalFastQuestionMaxTokens));
             int providerEffectiveCap = llamaCppNativeService == null
-                ? configuredFastCap
+                ? Math.max(256, aiLocalLlamaMaxTokens)
                 : Math.max(64, llamaCppNativeService.getEffectiveMaxTokensLimit());
-            int maxTokens = Math.max(64, Math.min(configuredFastCap, providerEffectiveCap));
+            int maxTokens = providerEffectiveCap;
 
             sendEvent(emitter, jsonOf(
                 "stage", "preparing",
@@ -6284,11 +6268,54 @@ public class ApiSpringController {
             if (answer == null || answer.isBlank()) {
                 return false;
             }
-
             String safeAnswer = normalizeLocalFastQuestionAnswer(answer, message);
             if (safeAnswer.isBlank()) {
                 return false;
             }
+            return streamLocalFastQuestionAnswer(
+                emitter, requestId, authCtx, appId, contextType, pName, pType, message, responseMode,
+                safeAnswer, promptTokens, startedAtMs);
+        } catch (Exception ex) {
+            logger.warn("Local fast-question path failed, fallback to standard pipeline: {}", ex.getMessage());
+            return false;
+        }
+    }
+
+    private String computeLocalFastQuestionAnswer(String message, String language) {
+        if (llamaCppNativeService == null || !llamaCppNativeService.isHealthy()) {
+            return "";
+        }
+        try {
+            String fastPrompt = buildLocalFastQuestionPrompt(message, language);
+            int providerEffectiveCap = Math.max(64, llamaCppNativeService.getEffectiveMaxTokensLimit());
+            int maxTokens = providerEffectiveCap;
+            String raw = llamaCppNativeService.generateContentFast(fastPrompt, maxTokens);
+            String answer = extractAiResultText(raw);
+            if (answer == null || answer.isBlank()) {
+                return "";
+            }
+            String safeAnswer = normalizeLocalFastQuestionAnswer(answer, message);
+            return safeAnswer == null ? "" : safeAnswer;
+        } catch (Exception ex) {
+            logger.warn("computeLocalFastQuestionAnswer failed: {}", ex.getMessage());
+            return "";
+        }
+    }
+
+    private boolean streamLocalFastQuestionAnswer(
+            SseEmitter emitter,
+            String requestId,
+            UserAuthContext authCtx,
+            String appId,
+            String contextType,
+            String pName,
+            Integer pType,
+            String message,
+            String responseMode,
+            String safeAnswer,
+            int promptTokens,
+            long startedAtMs) {
+        try {
             int completionTokens = estimateTokens(safeAnswer);
             sendEvent(emitter, jsonOf(
                 "stage", "streaming_started",
@@ -6337,7 +6364,7 @@ public class ApiSpringController {
             emitter.complete();
             return true;
         } catch (Exception ex) {
-            logger.warn("Local fast-question path failed, fallback to standard pipeline: {}", ex.getMessage());
+            logger.warn("streamLocalFastQuestionAnswer failed: {}", ex.getMessage());
             return false;
         }
     }
@@ -6354,7 +6381,9 @@ public class ApiSpringController {
             "Không trả về JSON/object/map. Chỉ trả lời văn bản tự nhiên.",
             "Nếu nội dung có cấu trúc, hãy trình bày bằng đoạn văn + bullet rõ ràng, không dùng cú pháp JSON.",
             "Không sinh code nếu người dùng chỉ hỏi thông tin.",
-            "Nếu cần liệt kê ý, chỉ nêu tối đa 4 ý ngắn, mỗi ý 1 dòng.",
+            "Nếu là câu hỏi ngoài kỹ thuật/phần mềm, hãy trả lời thân thiện, dễ hiểu, không dùng thuật ngữ hệ thống.",
+            "Luôn trả lời DUY NHẤT bằng cùng ngôn ngữ của câu hỏi người dùng. Không thêm bản dịch tiếng Anh ở cuối.",
+            "Nếu cần liệt kê ý, dùng markdown và xuống dòng từng ý rõ ràng (mỗi ý 1-2 câu ngắn).",
             "Không được mở đầu bằng dấu { hoặc [.",
             "Nếu thiếu dữ kiện, nêu rõ điều còn thiếu trong 1 câu.",
             "Ngữ cảnh ngôn ngữ: " + (normalizedLanguage.isBlank() ? "general" : normalizedLanguage),
@@ -6432,6 +6461,21 @@ public class ApiSpringController {
             .replaceAll("(?is)\\s*```$", "")
             .trim();
 
+        // Normalize escaped newline tokens from model output and broken list delimiters.
+        text = text
+            .replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replaceAll("(?<=[:.!?])\\s*n(?=\\d{1,2}\\.\\s)", "\n")
+            .replaceAll("(?<=[:.!?])\\s*n(?=[-*•]\\s)", "\n");
+
+        // Never leak internal truncation markers to end users.
+        text = text
+            .replace("...[TRIMMED_FOR_CODE_STREAM]...", "...")
+            .replaceAll("(?is)\\n?\\.\\.\\.\\[TRIMMED_FOR_CODE_STREAM\\]\\.\\.\\.\\n?", "\n...\n")
+            .trim();
+
+        text = prettifyOffFlowListLayout(text);
+
         String langCode = detectInputLanguageCode(originalMessage);
         if ((text.startsWith("{") || text.startsWith("[")) && text.endsWith("}")) {
             String wrapperCleaned = sanitizeBrokenConversationalWrapper(text);
@@ -6494,6 +6538,31 @@ public class ApiSpringController {
         return ensureFastQuestionOutputLanguage(out, originalMessage);
     }
 
+    private String prettifyOffFlowListLayout(String text) {
+        String source = String.valueOf(text == null ? "" : text).trim();
+        if (source.isBlank()) {
+            return "";
+        }
+
+        String normalized = source.replace("\r\n", "\n").replace('\r', '\n');
+        Matcher numberedMatcher = Pattern.compile("(?:^|\\s)(\\d{1,2})\\.\\s+").matcher(normalized);
+        int numberedCount = 0;
+        while (numberedMatcher.find()) {
+            numberedCount++;
+            if (numberedCount >= 3) {
+                break;
+            }
+        }
+
+        // If many numbered steps are packed in one paragraph, split them into separate lines.
+        if (numberedCount >= 3) {
+            normalized = normalized.replaceAll("\\s+(\\d{1,2}\\.\\s+)", "\\n$1");
+            normalized = normalized.replaceAll("([^\\n])\\s+(1\\.\\s+)", "$1\\n\\n$2");
+        }
+
+        return normalized.replaceAll("\\n{3,}", "\\n\\n").trim();
+    }
+
     private String compactRunawayRepetition(String text) {
         String source = String.valueOf(text == null ? "" : text).trim();
         if (source.isBlank()) {
@@ -6516,12 +6585,6 @@ public class ApiSpringController {
         if (!compactOut.equals(out)) {
             changed = true;
             out = compactOut;
-        }
-
-        // Keep fast-question answers concise to avoid tail loops slipping through.
-        if (out.length() > 1200) {
-            changed = true;
-            out = truncateMiddle(out, 1200);
         }
 
         if (changed) {
@@ -9017,6 +9080,8 @@ public class ApiSpringController {
             + "- EDIT_MENU only when request clearly changes menu/json nodes.\n"
             + "- EDIT_CODE only when request clearly changes source code.\n"
             + "- Prefer direct answer when uncertain and request has no code/menu signal.\n"
+            + "- Non-software topics (personal finance, health, lifestyle, relationships, business advice) => type=QUESTION, nextStep=answer_direct, contextKind=none, confidence=99.\n"
+            + "- Greetings, chit-chat, vague statements with no technical target => type=GENERAL, nextStep=answer_direct, contextKind=none, confidence=98.\n"
             + "<|im_end|>\n"
             + "<|im_start|>user\nREQUEST: " + safe + "<|im_end|>\n"
             + "<|im_start|>assistant\n";
@@ -10066,6 +10131,41 @@ public class ApiSpringController {
                     "Request is not clear enough for safe backend edits",
                     "需求不够清晰，无法安全执行后端编辑"));
                 return;
+            }
+
+            // Fast path: For clearly off-flow questions on menu/code screen, answer directly
+            // via local AI without going through the heavier runMandatoryLocalPreAnalysis pipeline.
+            // This mirrors the fast-path behavior in /ai-code-stream (tryHandleLocalFastQuestion).
+            if (aiLocalFastQuestionEnabled && llamaCppNativeService != null && llamaCppNativeService.isHealthy()) {
+                LocalIntentClassification fastChatIntent = resolveIntentForNextStep(
+                    preclassifiedIntent, message, effectiveContextType, responseMode);
+                if (shouldUseLocalFastQuestionPath(fastChatIntent, message, effectiveContextType, responseMode)) {
+                    String fastAnswer = computeLocalFastQuestionAnswer(message, language);
+                    if (!fastAnswer.isBlank()) {
+                        logger.info(
+                            "AI_ASSISTANT_CHAT_FAST_PATH appId={} contextType={} answerChars={}",
+                            appId, effectiveContextType, fastAnswer.length());
+                        emitAiAssistantChatChunk(appId, Map.of(
+                            "stage", "local_pre_analysis",
+                            "status", "completed_local",
+                            "attempted", true,
+                            "handledLocally", true,
+                            "reason_code", "local_fast_question",
+                            "responseMode", responseMode));
+                        emitTextAsAiAssistantChunks(appId, fastAnswer, responseMode, uiLang);
+                        emitAiAssistantChatEvent(appId, "aiAssistant_chat_complete", Map.of(
+                            "stage", "complete",
+                            "fullResponse", fastAnswer,
+                            "responseMode", responseMode,
+                            "timestamp", System.currentTimeMillis(),
+                            "model", "local_fast_question",
+                            "localProviderPrimaryUsed", true));
+                        response.set("code", 200);
+                        response.set("success", true);
+                        response.set("handledByLocalFast", true);
+                        return;
+                    }
+                }
             }
 
             String assistantPreAnalysisSource = "REQUEST:\n"
