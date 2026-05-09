@@ -139,6 +139,11 @@ public class LlamaCppNativeService implements AIProvider {
     private volatile boolean shuttingDown = false;
     private final Object modelLock = new Object();
 
+    // When ai.local.djl.enabled=true, this is injected and ONNX inference takes priority.
+    // LlamaCppNativeService (GGUF) acts as fallback when DJL ONNX is not available.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DjlInferenceService djlInferenceService;
+
     private enum RuntimeProfile {
         CONSERVATIVE,
         BALANCED,
@@ -246,6 +251,12 @@ public class LlamaCppNativeService implements AIProvider {
      * @param requestId Optional request ID for task tracking/cancellation
      */
     public String generateContentWithTaskTracking(String prompt, String requestId) {
+        // Prefer DJL ONNX when available (better quality, DJL manages context internally)
+        if (djlInferenceService != null && djlInferenceService.isAvailable()) {
+            log.debug("LlamaCpp: delegating to DJL ONNX (requestId={})", requestId);
+            return djlInferenceService.generateContent(prompt);
+        }
+
         if (requestId != null && !requestId.isBlank()) {
             registerActiveInferenceTask(requestId);
         }
@@ -360,6 +371,12 @@ public class LlamaCppNativeService implements AIProvider {
      * Fast variant with task tracking for cancellation.
      */
     public String generateContentFastWithTaskTracking(String prompt, int maxOutputTokensCap, String requestId) {
+        // Prefer DJL ONNX for fast path too – use the DJL fast variant with token cap
+        if (djlInferenceService != null && djlInferenceService.isAvailable()) {
+            log.debug("LlamaCpp-fast: delegating to DJL ONNX (cap={})", maxOutputTokensCap);
+            return djlInferenceService.generateFast(prompt, maxOutputTokensCap);
+        }
+
         if (requestId != null && !requestId.isBlank()) {
             registerActiveInferenceTask(requestId);
         }
@@ -554,6 +571,10 @@ public class LlamaCppNativeService implements AIProvider {
 
     @Override
     public boolean isAvailable() {
+        // DJL ONNX takes priority when loaded
+        if (djlInferenceService != null && djlInferenceService.isAvailable()) {
+            return true;
+        }
         if (!enabled || shuttingDown) {
             return false;
         }
