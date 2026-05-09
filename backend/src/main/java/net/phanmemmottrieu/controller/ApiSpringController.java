@@ -6245,10 +6245,7 @@ public class ApiSpringController {
         try {
             String fastPrompt = buildLocalFastQuestionPrompt(message, language);
             int promptTokens = estimateTokens(fastPrompt);
-            int providerEffectiveCap = llamaCppNativeService == null
-                ? Math.max(256, aiLocalLlamaMaxTokens)
-                : Math.max(64, llamaCppNativeService.getEffectiveMaxTokensLimit());
-            int maxTokens = providerEffectiveCap;
+            int maxTokens = Math.max(256, aiLocalFastQuestionMaxTokens);
 
             sendEvent(emitter, jsonOf(
                 "stage", "preparing",
@@ -6287,8 +6284,7 @@ public class ApiSpringController {
         }
         try {
             String fastPrompt = buildLocalFastQuestionPrompt(message, language);
-            int providerEffectiveCap = Math.max(64, llamaCppNativeService.getEffectiveMaxTokensLimit());
-            int maxTokens = providerEffectiveCap;
+            int maxTokens = Math.max(256, aiLocalFastQuestionMaxTokens);
             String raw = llamaCppNativeService.generateContentFast(fastPrompt, maxTokens);
             String answer = extractAiResultText(raw);
             if (answer == null || answer.isBlank()) {
