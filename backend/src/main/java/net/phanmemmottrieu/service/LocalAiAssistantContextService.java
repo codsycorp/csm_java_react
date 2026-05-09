@@ -158,7 +158,16 @@ public class LocalAiAssistantContextService {
 
         String normalizedContext = normalizeContextType(contextType);
         String retrievalBlock = buildRetrievalBlock(appId, message, currentCode, language, normalizedContext, pName, pType);
-        String analysisBlock = buildAnalysisBlock(message, currentCode, language, normalizedContext, responseMode, cursorLine, pName, pType);
+        String code = String.valueOf(currentCode == null ? "" : currentCode);
+        String safeCode = code.length() > Math.max(4000, maxAnalysisChars)
+            ? code.substring(0, Math.max(4000, maxAnalysisChars))
+            : code;
+        String analysisBlock = "";
+        if (!safeCode.isBlank()) {
+            analysisBlock = "menu_json".equals(normalizedContext)
+                ? buildMenuJsonAnalysisBlock(safeCode, cursorLine, pName, pType)
+                : buildCodeAnalysisBlock(safeCode, language, responseMode, cursorLine, message, pName, pType);
+        }
         boolean localOnly = shouldForceLocalOnly(normalizedContext);
         String reasonCode = localOnly ? "local_assistant_scope_local_only" : "local_assistant_scope_context_only";
         return new ContextBundle(retrievalBlock, analysisBlock, localOnly, reasonCode);
@@ -227,31 +236,6 @@ public class LocalAiAssistantContextService {
 
         String joined = String.join("\n\n", blocks);
         return trimTo(joined, Math.max(3000, retrievalCap));
-    }
-
-    private String buildAnalysisBlock(
-        String message,
-        String currentCode,
-        String language,
-        String contextType,
-        String responseMode,
-        int cursorLine,
-        String pName,
-        Integer pType
-    ) {
-        String code = String.valueOf(currentCode == null ? "" : currentCode);
-        String safe = code.length() > Math.max(4000, maxAnalysisChars)
-            ? code.substring(0, Math.max(4000, maxAnalysisChars))
-            : code;
-
-        if (safe.isBlank()) {
-            return "";
-        }
-
-        if ("menu_json".equals(contextType)) {
-            return buildMenuJsonAnalysisBlock(safe, cursorLine, pName, pType);
-        }
-        return buildCodeAnalysisBlock(safe, language, responseMode, cursorLine, message, pName, pType);
     }
 
     private String buildMenuJsonAnalysisBlock(String jsonText, int cursorLine, String pName, Integer pType) {

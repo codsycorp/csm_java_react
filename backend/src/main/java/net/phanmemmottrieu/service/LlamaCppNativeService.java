@@ -486,7 +486,8 @@ public class LlamaCppNativeService implements AIProvider {
     private String runLocalCompletionWithCap(String prompt, int nPredictCap, boolean isJsonForced) {
         LlamaModel localModel = ensureModelLoaded();
         int ctx = Math.max(1024, effectiveContextWindow());
-        int promptTokens = estimateTokensByChars(prompt.length());
+        int promptLength = Math.max(0, prompt.length());
+        int promptTokens = Math.max(1, (promptLength + 3) / 4);
         int availableForOutput = Math.max(16, ctx - promptTokens - 256);
         int nPredict = Math.max(16, Math.min(nPredictCap, availableForOutput));
         // Use lower temperature for JSON outputs
@@ -526,7 +527,8 @@ public class LlamaCppNativeService implements AIProvider {
 
     private int resolveAdaptiveNPredict(String prompt, boolean degradedMode) {
         int ctx = Math.max(1024, effectiveContextWindow());
-        int promptTokens = estimateTokensByChars(String.valueOf(prompt == null ? "" : prompt).length());
+        int promptLength = String.valueOf(prompt == null ? "" : prompt).length();
+        int promptTokens = Math.max(1, (Math.max(0, promptLength) + 3) / 4);
         int reserved = Math.max(192, degradedMode ? 640 : 384);
         int availableForOutput = Math.max(32, ctx - promptTokens - reserved);
         int maxConfigured = Math.max(32, effectiveMaxTokens());
@@ -548,11 +550,6 @@ public class LlamaCppNativeService implements AIProvider {
         int promptTokenBudget = Math.max(256, ctx - outputReserve - 256);
         int byTokenChars = promptTokenBudget * 4;
         return Math.max(2000, Math.min(effectiveMaxPromptChars(), byTokenChars));
-    }
-
-    private int estimateTokensByChars(int chars) {
-        int safeChars = Math.max(0, chars);
-        return Math.max(1, (safeChars + 3) / 4);
     }
 
     @Override

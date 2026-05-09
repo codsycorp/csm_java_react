@@ -15602,6 +15602,84 @@ public class ApiSpringController {
         return "";
     }
 
+    private String generateProviderContentWithMenuMasterPrompt(String prompt, String contextType) {
+        String effectivePrompt = prependMenuMasterPromptIfNeeded(prompt, contextType);
+        return aiProviderFactory.generateContent(effectivePrompt);
+    }
+
+    private String generateDirectLocalContentWithMenuMasterPrompt(String prompt, String contextType) {
+        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
+            return "{\"success\":false,\"errorCode\":\"LOCAL_PROVIDER_UNAVAILABLE\",\"message\":\"Local provider unavailable\"}";
+        }
+        String effectivePrompt = prependMenuMasterPromptIfNeeded(prompt, contextType);
+        return llamaCppNativeService.generateContent(effectivePrompt);
+    }
+
+    private String prependMenuMasterPromptIfNeeded(String prompt, String contextType) {
+        String source = prompt == null ? "" : prompt.trim();
+        if (source.isBlank() || !isMenuJsonContext(contextType) || aiAssistantGatewayService == null) {
+            return source;
+        }
+        if (source.contains("# CSM Multi-tenant AI Menu Master Prompt")
+                || source.contains("## 1) ROLE AND MANDATE")) {
+            return source;
+        }
+        try {
+            String masterPrompt = aiAssistantGatewayService.getMasterPrompt();
+            if (masterPrompt == null) {
+                masterPrompt = "";
+            }
+            masterPrompt = masterPrompt.trim();
+            if (masterPrompt.isBlank()) {
+                return source;
+            }
+            String promptAppId = extractPromptAppIdRelaxed(source);
+            String requestText = extractRequestTextFromPrompt(source);
+            String learningBlock = "";
+            if (aiMenuLearningMemoryService != null && !promptAppId.isBlank()) {
+                String learnedContext = aiMenuLearningMemoryService.buildLearningContextBlock(promptAppId, requestText);
+                learningBlock = learnedContext == null ? "" : learnedContext.trim();
+            }
+            return masterPrompt
+                + "\n\n"
+                + (learningBlock.isBlank() ? "" : learningBlock + "\n\n")
+                + "## LOCAL PROVIDER ENFORCEMENT\n"
+                + "You are the local menu_json generator. Follow the System Core above exactly.\n"
+                + "Do not flatten child menus into top-level siblings. Preserve the original tree unless the request explicitly asks to restructure it.\n"
+                + "Dynamic menu icons must render exactly like static menus in frontend-admin. Prefer valid Ant Design icon names in m_icon (UserOutlined, SettingOutlined, AppstoreOutlined, MenuOutlined).\n"
+                + "Never rely on legacy m_icons or arbitrary CSS classes for new output. Preserve an existing valid m_icon unless the request explicitly asks to replace it.\n"
+                + "When asked to only supplement/fix, keep all existing ids, parentId relations, menu_id ordering, and business fields stable.\n\n"
+                + source;
+        } catch (Exception ex) {
+            logger.warn("Failed to prepend menu master prompt for local provider: {}", ex.getMessage());
+            return source;
+        }
+    }
+
+    private String extractPromptAppIdRelaxed(String prompt) {
+        String source = prompt == null ? "" : prompt.trim();
+        if (source.isBlank()) {
+            return "";
+        }
+        try {
+            String exact = aiAssistantGatewayService.extractAppIdFromPrompt(source);
+            if (exact == null) {
+                exact = "";
+            }
+            exact = exact.trim();
+            if (!exact.isBlank()) {
+                return exact;
+            }
+        } catch (Exception ignored) {
+        }
+
+        Matcher matcher = Pattern.compile("(?i)\\bapp_id(?:_target)?\\b\\s*[=:]\\s*\"?([a-zA-Z0-9_\\-]+)").matcher(source);
+        if (matcher.find()) {
+            return String.valueOf(matcher.group(1) == null ? "" : matcher.group(1)).trim();
+        }
+        return "";
+    }
+
     private String extractAiErrorMessage(String rawContent) {
         if (rawContent == null || rawContent.trim().isEmpty()) {
             return "";
@@ -16202,78 +16280,6 @@ public class ApiSpringController {
         boolean assistantScopeLocalOnly = localAiAssistantContextService != null
             && localAiAssistantContextService.shouldForceLocalOnly(contextType);
         return menuLocalOnlyScope || assistantScopeLocalOnly;
-    }
-
-    private String generateProviderContentWithMenuMasterPrompt(String prompt, String contextType) {
-        return aiProviderFactory.generateContent(prependMenuMasterPromptIfNeeded(prompt, contextType));
-    }
-
-    private String generateDirectLocalContentWithMenuMasterPrompt(String prompt, String contextType) {
-        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
-            return "{\"success\":false,\"errorCode\":\"LOCAL_PROVIDER_UNAVAILABLE\",\"message\":\"Local provider unavailable\"}";
-        }
-        return llamaCppNativeService.generateContent(prependMenuMasterPromptIfNeeded(prompt, contextType));
-    }
-
-    private String prependMenuMasterPromptIfNeeded(String prompt, String contextType) {
-        String source = String.valueOf(prompt == null ? "" : prompt).trim();
-        if (source.isBlank() || !isMenuJsonContext(contextType) || aiAssistantGatewayService == null) {
-            return source;
-        }
-        if (source.contains("# CSM Multi-tenant AI Menu Master Prompt")
-                || source.contains("## 1) ROLE AND MANDATE")) {
-            return source;
-        }
-        try {
-            String masterPrompt = String.valueOf(aiAssistantGatewayService.getMasterPrompt() == null
-                ? ""
-                : aiAssistantGatewayService.getMasterPrompt()).trim();
-            if (masterPrompt.isBlank()) {
-                return source;
-            }
-            String promptAppId = extractPromptAppIdRelaxed(source);
-            String requestText = extractRequestTextFromPrompt(source);
-            String learningBlock = "";
-            if (aiMenuLearningMemoryService != null && !promptAppId.isBlank()) {
-                String learnedContext = aiMenuLearningMemoryService.buildLearningContextBlock(promptAppId, requestText);
-                learningBlock = String.valueOf(learnedContext == null ? "" : learnedContext).trim();
-            }
-            return masterPrompt
-                + "\n\n"
-                + (learningBlock.isBlank() ? "" : learningBlock + "\n\n")
-                + "## LOCAL PROVIDER ENFORCEMENT\n"
-                + "You are the local menu_json generator. Follow the System Core above exactly.\n"
-                + "Do not flatten child menus into top-level siblings. Preserve the original tree unless the request explicitly asks to restructure it.\n"
-                + "Dynamic menu icons must render exactly like static menus in frontend-admin. Prefer valid Ant Design icon names in m_icon (UserOutlined, SettingOutlined, AppstoreOutlined, MenuOutlined).\n"
-                + "Never rely on legacy m_icons or arbitrary CSS classes for new output. Preserve an existing valid m_icon unless the request explicitly asks to replace it.\n"
-                + "When asked to only supplement/fix, keep all existing ids, parentId relations, menu_id ordering, and business fields stable.\n\n"
-                + source;
-        } catch (Exception ex) {
-            logger.warn("Failed to prepend menu master prompt for local provider: {}", ex.getMessage());
-            return source;
-        }
-    }
-
-    private String extractPromptAppIdRelaxed(String prompt) {
-        String source = String.valueOf(prompt == null ? "" : prompt).trim();
-        if (source.isBlank()) {
-            return "";
-        }
-        try {
-            String exact = String.valueOf(aiAssistantGatewayService.extractAppIdFromPrompt(source) == null
-                ? ""
-                : aiAssistantGatewayService.extractAppIdFromPrompt(source)).trim();
-            if (!exact.isBlank()) {
-                return exact;
-            }
-        } catch (Exception ignored) {
-        }
-
-        Matcher matcher = Pattern.compile("(?i)\\bapp_id(?:_target)?\\b\\s*[=:]\\s*\"?([a-zA-Z0-9_\\-]+)").matcher(source);
-        if (matcher.find()) {
-            return String.valueOf(matcher.group(1) == null ? "" : matcher.group(1)).trim();
-        }
-        return "";
     }
 
     private void emitTextAsAiAssistantChunks(String appId, String text, String responseMode, String uiLang) {

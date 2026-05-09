@@ -88,35 +88,35 @@ public class AIProviderFactory {
     // Trước tiên, try các providers theo thứ tự ưu tiên
     for (int attempt = 0; attempt < totalProviders; attempt++) {
       AIProvider provider = orderedProviders.get(attempt);
-      
+
       try {
-        if (provider.isAvailable()) {
-          log.debug("Using provider: {} (Attempt {}/{})", provider.getName(), attempt + 1, totalProviders);
-          String result = provider.generateContent(prompt);
-          
-          // Kiểm tra xem kết quả có phải error không
-          String errorCode = extractErrorCode(result);
-          if (errorCode == null) {
-            // Success
-            log.info("Successfully generated content using: {}", provider.getName());
-            return result;
-          } else if (errorCode.contains("QUOTA") || errorCode.contains("RATE_LIMIT") || errorCode.contains("TOKENS_EXCEEDED")) {
-            // Quota/token exceeded, thử provider tiếp theo
-            log.warn("{} quota exceeded: {}. Trying next provider...", provider.getName(), errorCode);
-            sleepBackoff(attempt);
-            continue;
-          } else if (errorCode.equals("CONNECTION_REFUSED")) {
-            // Service không chạy, thử provider tiếp theo
-            log.warn("{} is not available. Trying next provider...", provider.getName());
-            continue;
-          } else {
-            // Lỗi khác nhưng vẫn return để không waste retry
-            log.warn("Provider {} returned error: {}", provider.getName(), errorCode);
-            return result;
-          }
-        } else {
+        if (!provider.isAvailable()) {
           log.debug("Provider {} is not available (quota exceeded or offline)", provider.getName());
+          continue;
         }
+
+        log.debug("Using provider: {} (Attempt {}/{})", provider.getName(), attempt + 1, totalProviders);
+        String result = provider.generateContent(prompt);
+
+        String errorCode = extractErrorCode(result);
+        if (errorCode == null) {
+          log.info("Successfully generated content using: {}", provider.getName());
+          return result;
+        }
+
+        if (isRetryableProviderError(errorCode)) {
+          log.warn("{} quota exceeded: {}. Trying next provider...", provider.getName(), errorCode);
+          sleepBackoff(attempt);
+          continue;
+        }
+
+        if ("CONNECTION_REFUSED".equals(errorCode)) {
+          log.warn("{} is not available. Trying next provider...", provider.getName());
+          continue;
+        }
+
+        log.warn("Provider {} returned error: {}", provider.getName(), errorCode);
+        return result;
       } catch (Exception e) {
         log.warn("Error using provider {}: {}. Trying next provider...", provider.getName(), e.getMessage());
       }
@@ -159,7 +159,8 @@ public class AIProviderFactory {
    */
   private String extractErrorCode(String response) {
     try {
-      Map<String, Object> parsed = objectMapper.readValue(response, Map.class);
+      @SuppressWarnings("unchecked")
+      Map<String, Object> parsed = objectMapper.readValue(response, HashMap.class);
       if (parsed == null || parsed.isEmpty()) {
         return "EMPTY_RESPONSE";
       }
@@ -181,6 +182,12 @@ public class AIProviderFactory {
       // Ignore parse errors
     }
     return null; // No error
+  }
+
+  private boolean isRetryableProviderError(String errorCode) {
+    return errorCode.contains("QUOTA")
+      || errorCode.contains("RATE_LIMIT")
+      || errorCode.contains("TOKENS_EXCEEDED");
   }
   
   /**
