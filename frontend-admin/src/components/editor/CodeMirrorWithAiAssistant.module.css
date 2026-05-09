@@ -2,12 +2,19 @@
   position: relative;
   min-width: 0;
   width: 100%;
+  /* Ensure editor area is not affected by chat panel loading state */
+  pointer-events: auto;
 }
 
 .editorHost {
   width: 100%;
   min-width: 0;
   min-height: 0;
+  /* Ensure editor stays interactive and doesn't show any loading indicators during chat streaming */
+  pointer-events: auto;
+  opacity: 1;
+  /* Maintain editor's own stacking context */
+  z-index: 1;
 }
 
 .wrapperFullscreen {
@@ -35,6 +42,9 @@
 .wrapper :global(.cm-theme),
 .wrapper :global(.cm-editor) {
   width: 100%;
+  /* Ensure CodeMirror is never affected by chat loading state */
+  pointer-events: auto !important;
+  opacity: 1 !important;
 }
 
 .wrapperFullscreen .editorHost :global(.cm-editor),
@@ -45,6 +55,9 @@
   height: 100% !important;
   max-height: 100% !important;
   overflow: auto;
+  /* Ensure editor is never masked by loading indicators */
+  pointer-events: auto !important;
+  opacity: 1 !important;
 }
 
 .toggleButton {
@@ -70,6 +83,8 @@
   flex-direction: column;
   overflow: hidden;
   pointer-events: auto;
+  /* Isolate chat panel state from affecting editor */
+  isolation: isolate;
 }
 
 .chatPanelFloating {

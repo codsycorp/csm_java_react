@@ -26,6 +26,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class AIProviderFactory {
   
   private final List<AIProvider> providers = new CopyOnWriteArrayList<>();
+  private final boolean forceAllLocal;
   
   private final ObjectMapper objectMapper = new ObjectMapper();
   
@@ -35,17 +36,30 @@ public class AIProviderFactory {
   public AIProviderFactory(
       GeminiService geminiService,
       @Autowired(required = false) LlamaCppNativeService llamaCppNativeService,
-      @Value("${ai.local.llama.prefer-local-first:true}") boolean preferLocalFirst) {
-    if (llamaCppNativeService != null && llamaCppNativeService.isAvailable() && preferLocalFirst) {
+      @Value("${ai.local.llama.prefer-local-first:true}") boolean preferLocalFirst,
+      @Value("${ai.local.force-all-flows:false}") boolean forceAllLocal) {
+    this.forceAllLocal = forceAllLocal;
+    boolean localAvailable = llamaCppNativeService != null && llamaCppNativeService.isAvailable();
+
+    if (this.forceAllLocal) {
+      if (localAvailable) {
+        providers.add(llamaCppNativeService);
+      }
+      log.warn("AIProviderFactory running in FORCE-LOCAL-ONLY mode: cloud providers are disabled.");
+      log.info("AIProviderFactory initialized with {} providers (forceLocalOnly={})", providers.size(), this.forceAllLocal);
+      return;
+    }
+
+    if (localAvailable && preferLocalFirst) {
       providers.add(llamaCppNativeService);
       providers.add(geminiService);
     } else {
       providers.add(geminiService);
-      if (llamaCppNativeService != null && llamaCppNativeService.isAvailable()) {
+      if (localAvailable) {
         providers.add(llamaCppNativeService);
       }
     }
-    log.info("AIProviderFactory initialized with {} providers", providers.size());
+    log.info("AIProviderFactory initialized with {} providers (forceLocalOnly={})", providers.size(), this.forceAllLocal);
   }
   
   /**
@@ -57,6 +71,15 @@ public class AIProviderFactory {
   public String generateContent(String prompt) {
     if (prompt == null || prompt.isEmpty()) {
       return createErrorJson("Prompt không được để trống", "INVALID_PROMPT");
+    }
+
+    if (providers.isEmpty()) {
+      if (forceAllLocal) {
+        return createErrorJson(
+          "Local-only mode đang bật nhưng local provider chưa sẵn sàng",
+          "LOCAL_ONLY_PROVIDER_UNAVAILABLE");
+      }
+      return createErrorJson("Không có AI provider khả dụng", "NO_AVAILABLE_PROVIDER");
     }
     
     List<AIProvider> orderedProviders = providers;

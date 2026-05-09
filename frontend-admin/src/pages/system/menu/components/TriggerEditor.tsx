@@ -74,9 +74,13 @@ const encodeTriggerCode = (plain: string): string => {
 interface TriggerEditorProps {
   value?: TriggerConfig | Record<string, any>;
   onChange?: (next: TriggerConfig | Record<string, any>) => void;
+  appId?: string;
+  pName?: string;
+  pType?: number;
+  editorMetadata?: Record<string, unknown>;
 }
 
-export function TriggerEditor({ value, onChange }: TriggerEditorProps) {
+export function TriggerEditor({ value, onChange, appId, pName, pType, editorMetadata }: TriggerEditorProps) {
   const { t } = useTranslation();
   const TRIGGER_OPTIONS = [
     { label: t('system.menu.trigger.datacolumntemplate'), value: "datacolumntemplate" },
@@ -134,7 +138,7 @@ export function TriggerEditor({ value, onChange }: TriggerEditorProps) {
     try {
       const response = await request.post("ai-code-stream", {
         json: {
-          appId: "trigger_editor",
+          appId: String(appId || "trigger_editor").trim() || "trigger_editor",
           message: `Hoàn thành và cải thiện đoạn mã sau bằng ${language} và chỉ trả về code, không giải thích:\n\`\`\`${language.toLowerCase()}\n${code}\n\`\`\``,
           flowType: "code_editor",
           taskType: "code_assistant",
@@ -142,6 +146,15 @@ export function TriggerEditor({ value, onChange }: TriggerEditorProps) {
           language: codeMode,
           contextType: "code",
           responseMode: "edit",
+          pName,
+          pType,
+          editorMetadata: {
+            ...(editorMetadata || {}),
+            source: "TriggerEditor",
+            activeSection: "trigger_editor",
+            activeTriggerKey: selectTrigger,
+            triggerLanguage: codeMode,
+          },
         },
 		timeout: AI_TIMEOUT_MS,
         throwHttpErrors: false,

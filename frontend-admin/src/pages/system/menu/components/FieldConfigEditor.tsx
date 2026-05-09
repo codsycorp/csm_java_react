@@ -16,6 +16,10 @@ import { vscodeDark } from "@uiw/codemirror-theme-vscode";
 interface FieldConfigEditorProps {
   value?: TableField[];
   onChange?: (next: TableField[]) => void;
+  appId?: string;
+  aiAssistantPName?: string;
+  aiAssistantPType?: number;
+  aiAssistantEditorMetadata?: Record<string, unknown>;
 }
 
 const TYPE_OPTIONS = [
@@ -80,7 +84,25 @@ const getLanguageExtension = (mode: string) => {
   }
 };
 
-function CodeArea({ value, onChange, placeholder, defaultMode = "javascript" }: { value?: string; onChange?: (v: string) => void; placeholder?: string; defaultMode?: string }) {
+function CodeArea({
+  value,
+  onChange,
+  placeholder,
+  defaultMode = "javascript",
+  aiAssistantAppId,
+  aiAssistantPName,
+  aiAssistantPType,
+  aiAssistantEditorMetadata,
+}: {
+  value?: string;
+  onChange?: (v: string) => void;
+  placeholder?: string;
+  defaultMode?: string;
+  aiAssistantAppId?: string;
+  aiAssistantPName?: string;
+  aiAssistantPType?: number;
+  aiAssistantEditorMetadata?: Record<string, unknown>;
+}) {
   const [codeMode, setCodeMode] = useState<string>(defaultMode);
 
   return (
@@ -101,6 +123,13 @@ function CodeArea({ value, onChange, placeholder, defaultMode = "javascript" }: 
           height="200px"
           theme={vscodeDark}
           extensions={[getLanguageExtension(codeMode)]}
+          aiAssistantAppId={aiAssistantAppId}
+          aiAssistantLanguage={codeMode as any}
+          aiAssistantContextType="code"
+          aiAssistantCurrentCode={value || ""}
+          aiAssistantPName={aiAssistantPName}
+          aiAssistantPType={aiAssistantPType}
+          aiAssistantEditorMetadata={aiAssistantEditorMetadata}
           onChange={(val) => onChange?.(val)}
           placeholder={placeholder}
           basicSetup={{
@@ -118,7 +147,7 @@ function CodeArea({ value, onChange, placeholder, defaultMode = "javascript" }: 
   );
 }
 
-export function FieldConfigEditor({ value, onChange }: FieldConfigEditorProps) {
+export function FieldConfigEditor({ value, onChange, appId, aiAssistantPName, aiAssistantPType, aiAssistantEditorMetadata }: FieldConfigEditorProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState<TableField | null>(null);
   const [open, setOpen] = useState(false);
@@ -586,19 +615,62 @@ export function FieldConfigEditor({ value, onChange }: FieldConfigEditorProps) {
           </Row>
 
           <Form.Item name="f_cbo_query" label="Query cho combobox">
-            <CodeArea placeholder='{"query":[],"options":[]}' defaultMode="json" />
+            <CodeArea
+              placeholder='{"query":[],"options":[]}'
+              defaultMode="json"
+              aiAssistantAppId={appId}
+              aiAssistantPName={aiAssistantPName}
+              aiAssistantPType={aiAssistantPType}
+              aiAssistantEditorMetadata={{
+                ...(aiAssistantEditorMetadata || {}),
+                activeSection: "combo_query",
+                activeFieldName: String(form.getFieldValue("f_name") || editing?.f_name || "").trim(),
+                activeFieldType: String(form.getFieldValue("f_types") || editing?.f_types || "").trim(),
+              }}
+            />
           </Form.Item>
 
           <Form.Item name="f_group_header_template" label="Hàm tạo Mẫu nhóm ở đầu">
-            <CodeArea />
+            <CodeArea
+              aiAssistantAppId={appId}
+              aiAssistantPName={aiAssistantPName}
+              aiAssistantPType={aiAssistantPType}
+              aiAssistantEditorMetadata={{
+                ...(aiAssistantEditorMetadata || {}),
+                activeSection: "group_header_template",
+                activeFieldName: String(form.getFieldValue("f_name") || editing?.f_name || "").trim(),
+                activeFieldType: String(form.getFieldValue("f_types") || editing?.f_types || "").trim(),
+              }}
+            />
           </Form.Item>
 
           <Form.Item name="f_group_footer_template" label="Hàm tạo Mẫu nhóm ở cuối">
-            <CodeArea />
+            <CodeArea
+              aiAssistantAppId={appId}
+              aiAssistantPName={aiAssistantPName}
+              aiAssistantPType={aiAssistantPType}
+              aiAssistantEditorMetadata={{
+                ...(aiAssistantEditorMetadata || {}),
+                activeSection: "group_footer_template",
+                activeFieldName: String(form.getFieldValue("f_name") || editing?.f_name || "").trim(),
+                activeFieldType: String(form.getFieldValue("f_types") || editing?.f_types || "").trim(),
+              }}
+            />
           </Form.Item>
 
           <Form.Item name="f_alert_query" label="Alert query / tính toán cảnh báo">
-            <CodeArea placeholder="return ..." />
+            <CodeArea
+              placeholder="return ..."
+              aiAssistantAppId={appId}
+              aiAssistantPName={aiAssistantPName}
+              aiAssistantPType={aiAssistantPType}
+              aiAssistantEditorMetadata={{
+                ...(aiAssistantEditorMetadata || {}),
+                activeSection: "alert_query",
+                activeFieldName: String(form.getFieldValue("f_name") || editing?.f_name || "").trim(),
+                activeFieldType: String(form.getFieldValue("f_types") || editing?.f_types || "").trim(),
+              }}
+            />
           </Form.Item>
         </Form>
       </Modal>

@@ -132,6 +132,9 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.max-tokens-hard-cap:32768}")
     private int maxTokensHardCap;
 
+    @Value("${ai.local.llama.degraded-max-tokens:1024}")
+    private int degradedMaxTokens;
+
     private volatile LlamaModel model;
     private volatile boolean shuttingDown = false;
     private final Object modelLock = new Object();
@@ -391,15 +394,17 @@ public class LlamaCppNativeService implements AIProvider {
             safePrompt = jsonForcePrefix + safePrompt;
         }
         
+        int effectiveMax = Math.max(16, effectiveMaxTokens());
+        int requestedCap = maxOutputTokensCap <= 0 ? effectiveMax : maxOutputTokensCap;
+        int cappedTokens = Math.max(16, Math.min(effectiveMax, requestedCap));
         int promptCap = effectiveMaxPromptChars();
         if (safePrompt.length() > promptCap) {
             safePrompt = safePrompt.substring(0, promptCap);
         }
-        int runtimeBudget = resolveRuntimePromptCharBudget();
+        int runtimeBudget = resolveRuntimePromptCharBudget(cappedTokens);
         if (safePrompt.length() > runtimeBudget) {
             safePrompt = safePrompt.substring(0, runtimeBudget);
         }
-        int cappedTokens = Math.max(16, Math.min(effectiveMaxTokens(), maxOutputTokensCap));
         long startedAt = markRequestStart(safePrompt);
         try {
             boolean isJsonForced = detectJsonExpectation(safePrompt);
@@ -527,14 +532,19 @@ public class LlamaCppNativeService implements AIProvider {
         int maxConfigured = Math.max(32, effectiveMaxTokens());
         int nPredict = Math.min(maxConfigured, availableForOutput);
         if (degradedMode) {
-            nPredict = Math.min(nPredict, 256);
+            nPredict = Math.min(nPredict, Math.max(128, degradedMaxTokens));
         }
         return Math.max(32, nPredict);
     }
 
     private int resolveRuntimePromptCharBudget() {
+        return resolveRuntimePromptCharBudget(effectiveMaxTokens());
+    }
+
+    private int resolveRuntimePromptCharBudget(int requestedOutputTokens) {
         int ctx = Math.max(1024, effectiveContextWindow());
-        int outputReserve = Math.max(256, effectiveMaxTokens());
+        int effectiveOutputReserve = Math.max(64, Math.min(effectiveMaxTokens(), requestedOutputTokens));
+        int outputReserve = Math.max(256, effectiveOutputReserve);
         int promptTokenBudget = Math.max(256, ctx - outputReserve - 256);
         int byTokenChars = promptTokenBudget * 4;
         return Math.max(2000, Math.min(effectiveMaxPromptChars(), byTokenChars));

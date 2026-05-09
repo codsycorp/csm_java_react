@@ -1364,6 +1364,8 @@ export default function AiAssistantChat({
 				return uiText("Hãy chờ local provider hết cooldown rồi thử lại sau.", "Wait for the local provider cooldown to finish, then try again.", "请等待本地 provider 冷却结束后再重试。");
 			case "requirement_clarification_needed":
 				return uiText("Hãy trả lời các câu hỏi làm rõ bên dưới rồi gửi tiếp để backend xử lý an toàn.", "Answer the clarification questions below, then send the request again so the backend can proceed safely.", "请先回答下面的澄清问题，然后再继续发送请求，以便后端安全处理。");
+			case "backend_unexpected_error":
+				return uiText("Hãy thử lại. Nếu vẫn lỗi, mở log backend theo requestId để xác định stacktrace gốc.", "Try again. If it still fails, inspect backend logs by requestId to locate the root stacktrace.", "请重试；若仍失败，请按 requestId 检查后端日志中的根因堆栈。");
 			default:
 				return String(fallback || "").trim() || uiText("Bạn có thể thử lại, hoặc kiểm tra log backend nếu lỗi còn lặp lại.", "Try again, or inspect backend logs if the issue keeps happening.", "你可以重试；如果问题持续出现，请检查后端日志。");
 		}
@@ -2740,7 +2742,6 @@ export default function AiAssistantChat({
 						currentCode,
 						language,
 						contextType,
-						model: "local",
 						pName: targetPName,
 						pType: targetPType,
 						editorMetadata: requestEditorMetadata,
@@ -2808,6 +2809,7 @@ export default function AiAssistantChat({
 				let receivedCompleteEvent = false;
 				let receivedErrorEvent = false;
 				let receivedBlockedGuardEvent = false;
+				let lastReasonCode = "";
 				while (true) {
 					const { done, value } = await reader.read();
 					if (done)
@@ -2896,9 +2898,8 @@ export default function AiAssistantChat({
 							};
 							const evtMessageArgs = normalizeEvtArgs(evt.messageArgs);
 							const evtDetailArgs = normalizeEvtArgs(evt.detailArgs);
-							const localizedEvtMessage = normalizeAssistantProgressMessage(
-								renderProgressText(evt.messageKey, evtMessageArgs, evt.message),
-							);
+							const renderedEvtMessage = renderProgressText(evt.messageKey, evtMessageArgs, evt.message);
+							const localizedEvtMessage = normalizeAssistantProgressMessage(renderedEvtMessage);
 							const localizedEvtDetail = normalizeAssistantProgressMessage(
 								renderProgressText(evt.detailKey, evtDetailArgs, evt.detail),
 							);
@@ -2913,6 +2914,10 @@ export default function AiAssistantChat({
 							const evtQuestions = toStringList((evt as any).questions);
 							const evtAmbiguities = toStringList((evt as any).ambiguities);
 							const evtReasonCode = String((evt as any).reason_code || "").trim().toLowerCase();
+							if (evtReasonCode) {
+								lastReasonCode = evtReasonCode;
+							}
+							const effectiveReasonCode = evtReasonCode || lastReasonCode;
 							if (evt.responseMode) {
 								const mode = String(evt.responseMode).trim().toLowerCase();
 								if (mode === "edit") {
@@ -2940,15 +2945,15 @@ export default function AiAssistantChat({
 								receivedBlockedGuardEvent = true;
 								const blockedContent = formatSystemNotice({
 									summary: localizedEvtMessage,
-									nextStep: resolveSystemNextStep(evtReasonCode, evt.stage),
-									internalCode: String(evtReasonCode || evt.stage || "").trim().toUpperCase(),
+									nextStep: resolveSystemNextStep(effectiveReasonCode, evt.stage),
+									internalCode: String(effectiveReasonCode || evt.stage || "").trim().toUpperCase(),
 									ambiguities: evtAmbiguities,
 									questions: evtQuestions,
 								});
 								showSystemToast("warning", {
 									summary: localizedEvtMessage,
-									nextStep: resolveSystemNextStep(evtReasonCode, evt.stage),
-									internalCode: String(evtReasonCode || evt.stage || "").trim().toUpperCase(),
+									nextStep: resolveSystemNextStep(effectiveReasonCode, evt.stage),
+									internalCode: String(effectiveReasonCode || evt.stage || "").trim().toUpperCase(),
 									ambiguities: evtAmbiguities,
 									questions: evtQuestions,
 								});
@@ -3211,6 +3216,9 @@ export default function AiAssistantChat({
 							}
 							else if (evt.stage === "error") {
 								receivedErrorEvent = true;
+								const rawErrorMessage = stripMarkdownCodeBlocks(renderedEvtMessage);
+								const errorSummary = rawErrorMessage || localizedEvtMessage || uiText("Lỗi xử lý từ backend", "Backend processing error", "后端处理错误");
+								const errorCode = String(effectiveReasonCode || "backend_unexpected_error").trim().toUpperCase();
 								if (receivedBlockedGuardEvent) {
 									setCompletionState("done");
 									setCompletionErrorMessage("");
@@ -3230,9 +3238,9 @@ export default function AiAssistantChat({
 										const lastMsg = updated[i];
 										if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
 											lastMsg.content = formatSystemNotice({
-												summary: localizedEvtMessage || uiText("Lỗi xử lý từ backend", "Backend processing error", "后端处理错误"),
-												nextStep: resolveSystemNextStep(evtReasonCode, evt.stage),
-												internalCode: String(evtReasonCode || evt.stage || "error").trim().toUpperCase(),
+												summary: errorSummary,
+												nextStep: resolveSystemNextStep(effectiveReasonCode, evt.stage),
+												internalCode: errorCode,
 											});
 											lastMsg.codeBlocks = [];
 											lastMsg.responseMode = "analyze";
@@ -3243,14 +3251,14 @@ export default function AiAssistantChat({
 									return updated;
 								});
 								setCompletionState("error");
-								setCompletionErrorMessage(localizedEvtMessage || uiText("Lỗi xử lý từ backend", "Backend processing error", "后端处理错误"));
+								setCompletionErrorMessage(errorSummary);
 								setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 								showSystemToast("error", {
-									summary: localizedEvtMessage || uiText("Lỗi xử lý từ backend.", "Backend processing error.", "后端处理错误。"),
-									nextStep: resolveSystemNextStep(evtReasonCode, evt.stage),
-									internalCode: String(evtReasonCode || evt.stage || "error").trim().toUpperCase(),
+									summary: errorSummary,
+									nextStep: resolveSystemNextStep(effectiveReasonCode, evt.stage),
+									internalCode: errorCode,
 								});
 								setIsLoading(false);
 								if (sseAbortRef.current === controller) {

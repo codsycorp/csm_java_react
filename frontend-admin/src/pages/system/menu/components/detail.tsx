@@ -686,6 +686,25 @@ export function Detail({
       .map((name) => ({ label: name, value: name }));
   }, [progressTableRows]);
 
+  const menuScopeAiMetadata = useMemo(() => {
+    const activeMenuId = String((detailData as any)?.id || "").trim();
+    const activeMenuName = String((detailData as any)?.name || (detailData as any)?.label || (detailData as any)?.title || "").trim();
+    const tableName = String((detailData as any)?.table_name || "").trim();
+    const triggerKeys = Object.keys(triggerConfig || {}).filter((key) => String((triggerConfig as any)?.[key] || "").trim());
+    return {
+      focusMode: "current_file",
+      activeScope: "menu_detail",
+      activeMenuId,
+      activeMenuName,
+      tableName,
+      triggerKeys,
+      activeMenuNode: detailData || {},
+      activeTableFields: tableRows || [],
+      activeProgressTableFields: progressTableRows || [],
+      activeTriggerConfig: triggerConfig || {},
+    } as Record<string, unknown>;
+  }, [detailData, progressTableRows, tableRows, triggerConfig]);
+
   const buildKanbanFieldAdvice = (depValues: Record<string, any>): string[] => {
     const advices: string[] = [];
     const mode = String(depValues.kanban_progress_tracking_mode || "single_table").trim() || "single_table";
@@ -2049,6 +2068,15 @@ export function Detail({
                         <div style={{ width: '100%', minWidth: 0 }}>
                           <TriggerEditor
                             value={subUserModeConfig.trigger && typeof subUserModeConfig.trigger === 'object' ? subUserModeConfig.trigger : {}}
+                            appId={appId}
+                            pName={String((detailData as any)?.p_name || "").trim() || undefined}
+                            pType={typeof (detailData as any)?.p_type === "number" ? (detailData as any).p_type : undefined}
+                            editorMetadata={{
+                              ...menuScopeAiMetadata,
+                              activeScope: "sub_user_trigger",
+                              activeTriggerConfig: subUserModeConfig.trigger && typeof subUserModeConfig.trigger === 'object' ? subUserModeConfig.trigger : {},
+                              activeTableFields: Array.isArray(subUserModeConfig.table) ? subUserModeConfig.table : [],
+                            }}
                             onChange={(nextTrigger) => {
                               setSubUserModeConfig((prev) => ({ ...prev, trigger: nextTrigger }));
                             }}
@@ -2954,12 +2982,12 @@ export function Detail({
           {
             key: "fields",
             label: t('system.menu.tab.fields'),
-            children: <FieldConfigEditor value={tableRows} onChange={setTableRows} />,
+            children: <FieldConfigEditor value={tableRows} onChange={setTableRows} appId={appId} aiAssistantPName={String((detailData as any)?.p_name || "").trim() || undefined} aiAssistantPType={typeof (detailData as any)?.p_type === "number" ? (detailData as any).p_type : undefined} aiAssistantEditorMetadata={{ ...menuScopeAiMetadata, activeScope: "field_config" }} />,
           },
           {
             key: "trigger",
             label: t('system.menu.tab.trigger'),
-            children: <div style={{ width: "100%", minWidth: 0 }}><TriggerEditor value={triggerConfig} onChange={setTriggerConfig} /></div>,
+            children: <div style={{ width: "100%", minWidth: 0 }}><TriggerEditor value={triggerConfig} onChange={setTriggerConfig} appId={appId} pName={String((detailData as any)?.p_name || "").trim() || undefined} pType={typeof (detailData as any)?.p_type === "number" ? (detailData as any).p_type : undefined} editorMetadata={{ ...menuScopeAiMetadata, activeScope: "menu_trigger" }} /></div>,
           },
         ]}
       />

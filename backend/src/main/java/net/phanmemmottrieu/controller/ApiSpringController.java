@@ -553,6 +553,69 @@ public class ApiSpringController {
     @Value("${ai.code-stream.local-provider.require-structured-for-edit:true}")
     private boolean aiCodeStreamLocalProviderRequireStructuredForEdit;
 
+    @Value("${ai.local.synthetic-stream.chunk-size:900}")
+    private int aiLocalSyntheticStreamChunkSize;
+
+    @Value("${ai.local.map-reduce.enabled-for-menu-json:true}")
+    private boolean aiLocalMapReduceEnabledForMenuJson;
+
+    @Value("${ai.local.map-reduce.code-threshold-chars:120000}")
+    private int aiLocalMapReduceCodeThresholdChars;
+
+    @Value("${ai.local.map-reduce.menu-threshold-chars:60000}")
+    private int aiLocalMapReduceMenuThresholdChars;
+
+    @Value("${ai.local.map-reduce.chunk-chars:18000}")
+    private int aiLocalMapReduceChunkChars;
+
+    @Value("${ai.local.map-reduce.max-chunks:24}")
+    private int aiLocalMapReduceMaxChunks;
+
+    @Value("${ai.local.map-reduce.overlap-chars:1400}")
+    private int aiLocalMapReduceOverlapChars;
+
+    @Value("${ai.local.map-reduce.parallel-enabled:true}")
+    private boolean aiLocalMapReduceParallelEnabled;
+
+    @Value("${ai.local.map-reduce.parallelism:2}")
+    private int aiLocalMapReduceParallelism;
+
+    @Value("${ai.local.map-reduce.parallelism.max:4}")
+    private int aiLocalMapReduceParallelismMax;
+
+    @Value("${ai.local.map-reduce.parallelism.weak-server-max:1}")
+    private int aiLocalMapReduceParallelismWeakServerMax;
+
+    @Value("${ai.local.map-reduce.parallelism.min-chars-per-worker:28000}")
+    private int aiLocalMapReduceParallelismMinCharsPerWorker;
+
+    @Value("${ai.local.map-reduce.cache.enabled:true}")
+    private boolean aiLocalMapReduceCacheEnabled;
+
+    @Value("${ai.local.map-reduce.cache.ttl-ms:1800000}")
+    private long aiLocalMapReduceCacheTtlMs;
+
+    @Value("${ai.local.map-reduce.cache.max-entries:256}")
+    private int aiLocalMapReduceCacheMaxEntries;
+
+    @Value("${ai.local.direct.output.max-tokens:12288}")
+    private int aiLocalDirectOutputMaxTokens;
+
+    @Value("${ai.local.direct.output.menu-edit-max-tokens:16384}")
+    private int aiLocalDirectOutputMenuEditMaxTokens;
+
+    @Value("${ai.local.direct.output.analyze-max-tokens:8192}")
+    private int aiLocalDirectOutputAnalyzeMaxTokens;
+
+    @Value("${ai.local.direct.output.question-max-tokens:4096}")
+    private int aiLocalDirectOutputQuestionMaxTokens;
+
+    @Value("${ai.local.direct.menu.context-cap-max-chars:260000}")
+    private int aiLocalDirectMenuContextCapMaxChars;
+
+    @Value("${ai.local.direct.menu.full-scope-cap-max-chars:520000}")
+    private int aiLocalDirectMenuFullScopeCapMaxChars;
+
     @Value("${ai.local.pre-analysis.enabled:true}")
     private boolean aiLocalPreAnalysisEnabled;
 
@@ -586,7 +649,7 @@ public class ApiSpringController {
     @Value("${ai.local.fast-question.max-question-chars:1600}")
     private int aiLocalFastQuestionMaxQuestionChars;
 
-    @Value("${ai.local.fast-question.max-tokens:224}")
+    @Value("${ai.local.fast-question.max-tokens:1024}")
     private int aiLocalFastQuestionMaxTokens;
 
     @Value("${ai.local.intent-classify.max-request-chars:400}")
@@ -649,13 +712,13 @@ public class ApiSpringController {
     @Value("${ai.local.llama.context-window:8192}")
     private int aiLocalLlamaContextWindow;
 
-    @Value("${ai.local.llama.max-tokens:1024}")
+    @Value("${ai.local.llama.max-tokens:8192}")
     private int aiLocalLlamaMaxTokens;
 
     @Value("${ai.local.chunking.chunk-size-chars:7000}")
     private int aiLocalChunkingChunkSizeChars;
 
-    @Value("${ai.local.chunking.max-chunks:20}")
+    @Value("${ai.local.chunking.max-chunks:48}")
     private int aiLocalChunkingMaxChunks;
 
     @Value("${ai.router.score-v2.enabled:true}")
@@ -670,7 +733,7 @@ public class ApiSpringController {
     @Value("${ai.router.score-v2.large-payload-cloud-threshold-chars:60000}")
     private int aiRouterScoreV2LargePayloadCloudThresholdChars;
 
-    @Value("${ai.router.score-v2.menu-json-cloud:true}")
+    @Value("${ai.router.score-v2.menu-json-cloud:false}")
     private boolean aiRouterScoreV2MenuJsonCloud;
 
     @Value("${ai.router.score-v2.edit-penalty:35}")
@@ -678,6 +741,12 @@ public class ApiSpringController {
 
     @Value("${ai.router.score-v2.local-only-hard:false}")
     private boolean aiRouterScoreV2LocalOnlyHard;
+
+    @Value("${ai.local.menu.force-local-only:true}")
+    private boolean aiLocalMenuForceLocalOnly;
+
+    @Value("${ai.local.force-all-flows:false}")
+    private boolean aiLocalForceAllFlows;
 
     @Value("${ai.requirement-clarify.enabled:true}")
     private boolean aiRequirementClarifyEnabled;
@@ -811,6 +880,7 @@ public class ApiSpringController {
     private final ConcurrentHashMap<String, Map<String, Object>> aiAsyncJobs = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CodeChainingCacheEntry> codeChainingStep1Cache = new ConcurrentHashMap<>();
     private final Map<String, AiCodeBaseContentEntry> aiCodeBaseContentCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Object[]> localMapReduceResultCache = new ConcurrentHashMap<>();
 
     // Tiêm tất cả các Handler thông qua constructor
     @Autowired
@@ -979,8 +1049,7 @@ public class ApiSpringController {
                 String baseContent = truncate(strKeep(body.get("baseContent"), ""), Math.max(100000, aiCodeStreamMaxBaseContentChars));
                 boolean preserveBaseContent = bool(body.get("preserveBaseContent"), false);
                 Object attachmentsRaw = body.get("attachments");
-                boolean strictLocalAssistantScope = localAiAssistantContextService != null
-                    && localAiAssistantContextService.shouldForceLocalOnly(contextType);
+                boolean strictLocalAssistantScope = isStrictLocalOnlyScope(contextType);
 
                 if (message.isBlank()) {
                     sendErrorEvent(emitter, "Message không được để trống");
@@ -1108,6 +1177,26 @@ public class ApiSpringController {
                     : effectiveCodeContext;
                 boolean menuJsonContext = isMenuJsonContext(contextType);
                 boolean menuChunkedContextApplied = false;
+
+                if (menuJsonContext && editorMetadata != null && !editorMetadata.isEmpty()) {
+                    String scopedMenuContext = buildScopedMenuPromptContext(
+                        effectiveCodeContext,
+                        editorMetadata,
+                        Math.max(28000, aiCodeStreamMenuChunkedContextMaxChars / 2));
+                    if (!scopedMenuContext.isBlank() && scopedMenuContext.length() < promptCodeContext.length()) {
+                        int before = promptCodeContext.length();
+                        promptCodeContext = scopedMenuContext;
+                        sendEvent(emitter, jsonOf(
+                            "stage", "context_compression",
+                            "status", "menu_scope_context",
+                            "detailKey", "copilot.progress.detail.menu_scope_context",
+                            "contextType", contextType,
+                            "message", "Thu gọn ngữ cảnh menu theo node đang mở để tăng tốc xử lý local",
+                            "charsBefore", before,
+                            "charsAfter", promptCodeContext.length(),
+                            "requestId", requestId));
+                    }
+                }
 
                 if (menuJsonContext
                         && aiCodeStreamMenuChunkedContextEnabled
@@ -1287,6 +1376,7 @@ public class ApiSpringController {
                     contextType,
                     responseMode,
                     preclassifiedIntent,
+                    editorMetadata,
                     progressJson -> {
                         if (progressJson == null || progressJson.isBlank()) {
                             return;
@@ -1357,6 +1447,9 @@ public class ApiSpringController {
                 codeStreamMeta.put("menuChunkedContextApplied", menuChunkedContextApplied);
 
                 String effectiveModel = routeModel(message, effectiveCodeContext, contextType, responseMode, modelOverride);
+                if (strictLocalAssistantScope) {
+                    effectiveModel = "local_provider";
+                }
                 String defaultModel = resolveDefaultStreamingModel();
                 String simpleModel = resolveSimpleStreamingModel();
                 String startLogModel = codeStreamPreAnalysis.handledLocally() ? "local_pre_analysis" : effectiveModel;
@@ -1444,7 +1537,8 @@ public class ApiSpringController {
                             prompt,
                             hasImages,
                             modelOverride);
-                    boolean tryLocalProviderFirst = codeStreamRouteDecision.mode() != AiRouteMode.CLOUD_ONLY;
+                    boolean tryLocalProviderFirst = strictLocalAssistantScope
+                        || codeStreamRouteDecision.mode() != AiRouteMode.CLOUD_ONLY;
                     boolean localOnlyHardRoute = strictLocalAssistantScope
                         || (codeStreamRouteDecision.mode() == AiRouteMode.LOCAL_ONLY
                         && aiRouterScoreV2LocalOnlyHard);
@@ -1610,14 +1704,15 @@ public class ApiSpringController {
                         // When caller explicitly requested local model, never fall back to cloud.
                         String overrideNorm = String.valueOf(modelOverride == null ? "" : modelOverride).trim().toLowerCase();
                         boolean callerForcedLocal = overrideNorm.contains("local") || overrideNorm.contains("llama");
-                        if (callerForcedLocal) {
+                        boolean localFallbackForbidden = callerForcedLocal || localOnlyHardRoute;
+                        if (localFallbackForbidden) {
                             String degradedLocalText = codeStreamPreAnalysis == null
                                 ? ""
                                 : String.valueOf(codeStreamPreAnalysis.cloudContext() == null ? "" : codeStreamPreAnalysis.cloudContext()).trim();
                             boolean degradedAccepted = !degradedLocalText.isBlank()
                                 && shouldAcceptLocalCodeStreamOutput(degradedLocalText, responseMode, contextType);
                             if (degradedAccepted) {
-                                logger.warn("LOCAL_OVERRIDE local provider no final output, degraded to local pre-analysis context requestId={} contextType={} chars={}",
+                                logger.warn("LOCAL_ONLY degraded to local pre-analysis context requestId={} contextType={} chars={} callerForcedLocal={} localOnlyHardRoute={}",
                                     requestId, contextType, degradedLocalText.length());
                                 sendEvent(emitter, jsonOf(
                                     "stage", "model_switch",
@@ -1651,7 +1746,7 @@ public class ApiSpringController {
                                 localProviderPrimaryUsed = true;
                             }
                         }
-                        if (callerForcedLocal && rawResponse == null) {
+                        if (localFallbackForbidden && rawResponse == null) {
                             logger.warn("LOCAL_OVERRIDE local provider returned no usable output, blocking cloud fallback per caller request requestId={} contextType={}",
                                 requestId, contextType);
                             sendEvent(emitter, jsonOf(
@@ -1669,26 +1764,6 @@ public class ApiSpringController {
                                 "Local AI không trả lời được yêu cầu này. Vui lòng thử diễn đạt lại câu hỏi.",
                                 "Local AI could not handle this request. Please try rephrasing your question.",
                                 "本地AI无法处理此请求。请尝试重新表述您的问题。"));
-                            return;
-                        }
-                        if (localOnlyHardRoute) {
-                            logger.warn("LOCAL_ONLY_HARD_ROUTE local quality gate failed, blocking cloud fallback requestId={} contextType={} reasonCode={}",
-                                requestId, contextType, codeStreamPreAnalysis.reasonCode());
-                            sendEvent(emitter, jsonOf(
-                                "stage", "model_switch",
-                                "status", "local_hard_route_blocked_cloud",
-                                "requestId", requestId,
-                                "model", "local_provider",
-                                "modelDecisionStep", "fallback",
-                                "modelDecisionReason", "local_hard_route_no_cloud_fallback",
-                                "decision_step", "fallback",
-                                "reason_code", "local_hard_route_no_cloud_fallback",
-                                "message", "Local AI không tạo được output đạt chất lượng. Không chuyển sang cloud (local-only mode).",
-                                "messageKey", "copilot.progress.message.local_override_no_cloud"));
-                            sendErrorEvent(emitter, uiTextByLang(uiLang,
-                                "Local AI chưa xử lý được yêu cầu này ở chế độ local-only. Vui lòng rút gọn hoặc chia nhỏ yêu cầu.",
-                                "Local AI could not handle this request in local-only mode. Please simplify or split your request.",
-                                "本地AI在仅本地模式下无法处理此请求。请简化或拆分请求。"));
                             return;
                         }
                         if (hasImages) {
@@ -2810,6 +2885,12 @@ public class ApiSpringController {
             sb.append("- ").append(key).append(": ").append(valueText).append("\n");
         }
 
+        appendStructuredEditorMetadataBlock(sb, merged, "activeMenuNode", "ACTIVE_MENU_NODE_JSON", AI_EDITOR_METADATA_BLOCK_MAX_CHARS / 3);
+        appendStructuredEditorMetadataBlock(sb, merged, "activeField", "ACTIVE_FIELD_JSON", AI_EDITOR_METADATA_BLOCK_MAX_CHARS / 4);
+        appendStructuredEditorMetadataBlock(sb, merged, "activeTableFields", "ACTIVE_TABLE_FIELDS_JSON", AI_EDITOR_METADATA_BLOCK_MAX_CHARS / 3);
+        appendStructuredEditorMetadataBlock(sb, merged, "activeProgressTableFields", "ACTIVE_PROGRESS_TABLE_FIELDS_JSON", AI_EDITOR_METADATA_BLOCK_MAX_CHARS / 4);
+        appendStructuredEditorMetadataBlock(sb, merged, "activeTriggerConfig", "ACTIVE_TRIGGER_CONFIG_JSON", AI_EDITOR_METADATA_BLOCK_MAX_CHARS / 3);
+
         String normalizedContext = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase();
         if ("menu_json".equals(normalizedContext)) {
             String parentNodeJson = String.valueOf(merged.getOrDefault("parentNodeJson", "")).trim();
@@ -2822,6 +2903,29 @@ public class ApiSpringController {
         }
 
         return truncateMiddle(sb.toString().trim(), AI_EDITOR_METADATA_BLOCK_MAX_CHARS);
+    }
+
+    private void appendStructuredEditorMetadataBlock(
+            StringBuilder sb,
+            Map<String, Object> merged,
+            String key,
+            String title,
+            int maxChars) {
+        if (sb == null || merged == null || merged.isEmpty()) {
+            return;
+        }
+        Object raw = merged.get(key);
+        if (raw == null) {
+            return;
+        }
+        String text = String.valueOf(raw).trim();
+        if (text.isBlank() || "{}".equals(text) || "[]".equals(text)) {
+            return;
+        }
+        sb.append("\n").append(title).append(":\n");
+        sb.append("```json\n");
+        sb.append(truncateMiddle(text, Math.max(800, maxChars)));
+        sb.append("\n```\n");
     }
 
         private String buildAdaptiveBusinessInstructionsBlock(
@@ -3085,7 +3189,7 @@ public class ApiSpringController {
         if (safe.isBlank()) {
             return 0;
         }
-        int chunkSize = 280;
+        int chunkSize = Math.max(200, Math.min(2400, aiLocalSyntheticStreamChunkSize));
         int chunks = 0;
         for (int i = 0; i < safe.length(); i += chunkSize) {
             String part = safe.substring(i, Math.min(safe.length(), i + chunkSize));
@@ -3621,14 +3725,18 @@ public class ApiSpringController {
         if (!"analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
             return false;
         }
-        if (isMenuJsonContext(contextType)) {
+        boolean menuContext = isMenuJsonContext(contextType);
+        if (menuContext && !aiLocalMapReduceEnabledForMenuJson) {
             return false;
         }
         if (!isBroadAnalysisRequest(message, intentClass)) {
             return false;
         }
         int codeChars = String.valueOf(codeContext == null ? "" : codeContext).length();
-        return codeChars > 120000;
+        int threshold = menuContext
+            ? Math.max(12000, aiLocalMapReduceMenuThresholdChars)
+            : Math.max(20000, aiLocalMapReduceCodeThresholdChars);
+        return codeChars > threshold;
     }
 
     private String runLocalProviderMapReduceBroadAnalysis(
@@ -3639,57 +3747,158 @@ public class ApiSpringController {
             String contextType) throws Exception {
         String safeRequest = String.valueOf(requestText == null ? "" : requestText).trim();
         String sourceCode = String.valueOf(fullCode == null ? "" : fullCode);
+        boolean menuContext = isMenuJsonContext(contextType);
         if (sourceCode.isBlank()) {
             return "";
         }
 
-        String condensed = buildAnalyzeCondensedPromptContext(
-            sourceCode,
-            safeRequest,
-            "",
-            Math.max(42000, Math.min(76000, Math.max(42000, aiCodeStreamMaxCurrentCodeChars))));
+        String condensed;
+        if (menuContext) {
+            condensed = buildMenuChunkedPromptContext(
+                sourceCode,
+                Math.max(60000, Math.min(220000, aiLocalDirectMenuContextCapMaxChars)));
+        } else {
+            condensed = buildAnalyzeCondensedPromptContext(
+                sourceCode,
+                safeRequest,
+                "",
+                Math.max(42000, Math.min(76000, Math.max(42000, aiCodeStreamMaxCurrentCodeChars))));
+        }
         if (condensed.isBlank()) {
-            condensed = truncateMiddle(sourceCode, 52000);
+            condensed = truncateMiddle(sourceCode, menuContext ? 90000 : 52000);
         }
 
         List<String> chunks = splitMapReduceChunks(
             condensed,
-            14000,
-            5,
-            1200);
+            Math.max(8000, aiLocalMapReduceChunkChars),
+            Math.max(2, aiLocalMapReduceMaxChunks),
+            Math.max(400, aiLocalMapReduceOverlapChars));
         if (chunks.isEmpty()) {
-            chunks = List.of(truncateMiddle(condensed, 14000));
+            chunks = List.of(truncateMiddle(condensed, Math.max(8000, aiLocalMapReduceChunkChars)));
+        }
+        final List<String> finalChunks = List.copyOf(chunks);
+
+        String mapReduceCacheKey = buildLocalMapReduceCacheKey(safeRequest, condensed, contextType);
+        if (aiLocalMapReduceCacheEnabled && !mapReduceCacheKey.isBlank()) {
+            Object[] cached = localMapReduceResultCache.get(mapReduceCacheKey);
+            if (cached != null && cached.length >= 2) {
+                long cachedAt = cached[1] instanceof Number ? ((Number) cached[1]).longValue() : 0L;
+                long ttlMs = Math.max(30_000L, aiLocalMapReduceCacheTtlMs);
+                if (System.currentTimeMillis() - cachedAt <= ttlMs) {
+                    String cachedText = String.valueOf(cached[0] == null ? "" : cached[0]).trim();
+                    if (!cachedText.isBlank()) {
+                        sendEvent(emitter, jsonOf(
+                            "stage", "context_compression",
+                            "status", "local_map_reduce_cache_hit",
+                            "requestId", requestId,
+                            "message", menuContext
+                                ? "Tai su dung ket qua map-reduce local cho menu de tra loi nhanh hon."
+                                : "Tai su dung ket qua map-reduce local de tra loi nhanh hon.",
+                            "chunks", finalChunks.size(),
+                            "sourceChars", sourceCode.length(),
+                            "condensedChars", condensed.length()));
+                        return cachedText;
+                    }
+                }
+            }
         }
 
         sendEvent(emitter, jsonOf(
             "stage", "context_compression",
             "status", "local_map_reduce_plan",
             "requestId", requestId,
-            "message", "Kich hoat map-reduce local: phan tich theo nhieu chunk roi tong hop de tranh thieu y.",
-            "chunks", chunks.size(),
+            "message", menuContext
+                ? "Kich hoat map-reduce local cho menu: phan tich theo chunk va tong hop de giu du nghiep vu/menu tree."
+                : "Kich hoat map-reduce local: phan tich theo nhieu chunk roi tong hop de tranh thieu y.",
+            "chunks", finalChunks.size(),
             "sourceChars", sourceCode.length(),
             "condensedChars", condensed.length()));
 
         List<String> chunkAnalyses = new ArrayList<>();
-        for (int i = 0; i < chunks.size(); i++) {
-            String chunk = chunks.get(i);
-            String chunkPrompt = buildBroadAnalysisChunkPrompt(safeRequest, chunk, i + 1, chunks.size());
+        boolean canParallelize = aiLocalMapReduceParallelEnabled
+            && finalChunks.size() > 1
+            && llamaCppNativeService != null
+            && llamaCppNativeService.isAvailable();
+        int parallelism = resolveAdaptiveLocalMapReduceParallelism(condensed.length(), finalChunks.size());
+
+        if (canParallelize) {
             sendEvent(emitter, jsonOf(
                 "stage", "waiting_gemini",
                 "requestId", requestId,
                 "waitState", "local_map_reduce",
-                "localPhase", "chunk_analysis",
-                "chunkIndex", i + 1,
-                "chunkTotal", chunks.size(),
-                "message", "AI local dang phan tich chunk " + (i + 1) + "/" + chunks.size()));
+                "localPhase", "chunk_analysis_parallel",
+                "message", menuContext
+                    ? "AI local dang phan tich chunk song song cho menu de tang toc."
+                    : "AI local dang phan tich chunk song song de tang toc.",
+                "chunkTotal", finalChunks.size(),
+                "parallelism", parallelism));
 
-            String chunkRaw = runLocalProviderWithProgress(emitter, requestId, chunkPrompt, contextType);
-            String chunkText = extractAiResultText(chunkRaw);
-            if ((chunkText == null || chunkText.isBlank()) && chunkRaw != null) {
-                chunkText = chunkRaw.trim();
+            ExecutorService mapExecutor = Executors.newFixedThreadPool(parallelism);
+            try {
+                List<Future<Map.Entry<Integer, String>>> futures = new ArrayList<>();
+                for (int i = 0; i < finalChunks.size(); i++) {
+                    final int chunkIndex = i;
+                    futures.add(mapExecutor.submit(() -> {
+                        String chunk = finalChunks.get(chunkIndex);
+                        String chunkPrompt = buildBroadAnalysisChunkPrompt(safeRequest, chunk, chunkIndex + 1, finalChunks.size(), contextType);
+                        int outputCap = Math.max(1024, Math.min(4096, aiLocalDirectOutputAnalyzeMaxTokens));
+                        String chunkRaw = llamaCppNativeService.generateContentFast(chunkPrompt, outputCap);
+                        String chunkText = extractAiResultText(chunkRaw);
+                        if ((chunkText == null || chunkText.isBlank()) && chunkRaw != null) {
+                            chunkText = chunkRaw.trim();
+                        }
+                        if (chunkText == null || chunkText.isBlank()) {
+                            return new java.util.AbstractMap.SimpleEntry<>(chunkIndex, "");
+                        }
+                        return new java.util.AbstractMap.SimpleEntry<>(chunkIndex, truncateMiddle(chunkText, menuContext ? 8500 : 5000));
+                    }));
+                }
+
+                List<String> ordered = new ArrayList<>(Collections.nCopies(finalChunks.size(), ""));
+                for (Future<Map.Entry<Integer, String>> future : futures) {
+                    try {
+                        Map.Entry<Integer, String> result = future.get();
+                        if (result != null && result.getKey() != null) {
+                            int idx = result.getKey();
+                            if (idx >= 0 && idx < ordered.size()) {
+                                ordered.set(idx, String.valueOf(result.getValue() == null ? "" : result.getValue()));
+                            }
+                        }
+                    } catch (Exception ex) {
+                        logger.warn("Local map-reduce parallel chunk failed requestId={} error={}", requestId, ex.getMessage());
+                    }
+                }
+                for (String text : ordered) {
+                    if (!String.valueOf(text == null ? "" : text).isBlank()) {
+                        chunkAnalyses.add(text);
+                    }
+                }
+            } finally {
+                mapExecutor.shutdownNow();
             }
-            if (chunkText != null && !chunkText.isBlank()) {
-                chunkAnalyses.add(truncateMiddle(chunkText, 5000));
+        } else {
+            for (int i = 0; i < finalChunks.size(); i++) {
+                String chunk = finalChunks.get(i);
+                sendEvent(emitter, jsonOf(
+                    "stage", "waiting_gemini",
+                    "requestId", requestId,
+                    "waitState", "local_map_reduce",
+                    "localPhase", "chunk_analysis",
+                    "chunkIndex", i + 1,
+                    "chunkTotal", finalChunks.size(),
+                    "message", menuContext
+                        ? "AI local dang phan tich menu chunk " + (i + 1) + "/" + finalChunks.size()
+                        : "AI local dang phan tich chunk " + (i + 1) + "/" + finalChunks.size()));
+
+                String chunkPrompt = buildBroadAnalysisChunkPrompt(safeRequest, chunk, i + 1, finalChunks.size(), contextType);
+                String chunkRaw = runLocalProviderWithProgress(emitter, requestId, chunkPrompt, contextType);
+                String chunkText = extractAiResultText(chunkRaw);
+                if ((chunkText == null || chunkText.isBlank()) && chunkRaw != null) {
+                    chunkText = chunkRaw.trim();
+                }
+                if (chunkText != null && !chunkText.isBlank()) {
+                    chunkAnalyses.add(truncateMiddle(chunkText, menuContext ? 8500 : 5000));
+                }
             }
         }
 
@@ -3697,22 +3906,116 @@ public class ApiSpringController {
             return "";
         }
 
-        String synthesisPrompt = buildBroadAnalysisSynthesisPrompt(safeRequest, chunkAnalyses);
         sendEvent(emitter, jsonOf(
             "stage", "waiting_gemini",
             "requestId", requestId,
             "waitState", "local_map_reduce",
             "localPhase", "synthesis",
-            "message", "AI local dang tong hop ket qua tu cac chunk de tra loi day du."));
+            "message", menuContext
+                ? "AI local dang tong hop ket qua menu tu cac chunk de tra loi day du."
+                : "AI local dang tong hop ket qua tu cac chunk de tra loi day du."));
+        String synthesisPrompt = buildBroadAnalysisSynthesisPrompt(safeRequest, chunkAnalyses, contextType);
         String synthesisRaw = runLocalProviderWithProgress(emitter, requestId, synthesisPrompt, contextType);
         String synthesisText = extractAiResultText(synthesisRaw);
         if ((synthesisText == null || synthesisText.isBlank()) && synthesisRaw != null) {
             synthesisText = synthesisRaw.trim();
         }
-        if (synthesisText != null && !synthesisText.isBlank()) {
-            return synthesisText;
+        String finalText = (synthesisText != null && !synthesisText.isBlank())
+            ? synthesisText
+            : String.join("\n\n", chunkAnalyses);
+
+        if (aiLocalMapReduceCacheEnabled && !mapReduceCacheKey.isBlank() && !finalText.isBlank()) {
+            localMapReduceResultCache.put(mapReduceCacheKey, new Object[]{ finalText, System.currentTimeMillis() });
+            pruneLocalMapReduceCache();
         }
-        return String.join("\n\n", chunkAnalyses);
+        return finalText;
+    }
+
+    private String buildLocalMapReduceCacheKey(String requestText, String condensedContext, String contextType) {
+        String safeRequest = truncateMiddle(String.valueOf(requestText == null ? "" : requestText).trim(), 1200);
+        String safeContext = truncateMiddle(String.valueOf(condensedContext == null ? "" : condensedContext), 32000);
+        if (safeRequest.isBlank() || safeContext.isBlank()) {
+            return "";
+        }
+        String raw = String.valueOf(contextType == null ? "" : contextType).trim()
+            + "|" + safeRequest
+            + "|" + safeContext;
+        return "mr_" + sha256(raw).substring(0, 24);
+    }
+
+    private void pruneLocalMapReduceCache() {
+        if (!aiLocalMapReduceCacheEnabled || localMapReduceResultCache.isEmpty()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long ttlMs = Math.max(30_000L, aiLocalMapReduceCacheTtlMs);
+        int maxEntries = Math.max(32, aiLocalMapReduceCacheMaxEntries);
+
+        localMapReduceResultCache.entrySet().removeIf(entry -> {
+            Object[] val = entry.getValue();
+            long ts = (val != null && val.length >= 2 && val[1] instanceof Number)
+                ? ((Number) val[1]).longValue()
+                : 0L;
+            return now - ts > ttlMs;
+        });
+
+        if (localMapReduceResultCache.size() <= maxEntries) {
+            return;
+        }
+
+        List<Map.Entry<String, Object[]>> entries = new ArrayList<>(localMapReduceResultCache.entrySet());
+        entries.sort((a, b) -> {
+            long at = (a.getValue() != null && a.getValue().length >= 2 && a.getValue()[1] instanceof Number)
+                ? ((Number) a.getValue()[1]).longValue() : 0L;
+            long bt = (b.getValue() != null && b.getValue().length >= 2 && b.getValue()[1] instanceof Number)
+                ? ((Number) b.getValue()[1]).longValue() : 0L;
+            return Long.compare(at, bt);
+        });
+
+        int removeCount = localMapReduceResultCache.size() - maxEntries;
+        for (int i = 0; i < removeCount && i < entries.size(); i++) {
+            localMapReduceResultCache.remove(entries.get(i).getKey());
+        }
+    }
+
+    private int resolveAdaptiveLocalMapReduceParallelism(int condensedChars, int chunkCount) {
+        Runtime rt = Runtime.getRuntime();
+        int cpuCores = Math.max(1, rt.availableProcessors());
+        long maxMemoryBytes = rt.maxMemory();
+        double maxMemoryGb = maxMemoryBytes > 0L
+            ? (maxMemoryBytes / (1024.0d * 1024.0d * 1024.0d))
+            : 0.0d;
+
+        int weakCoreThreshold = Math.max(1, aiCodeStreamSseTimeoutAdaptiveWeakServerCoresThreshold);
+        int weakMemoryGbThreshold = Math.max(1, aiCodeStreamSseTimeoutAdaptiveWeakServerMemoryGbThreshold);
+        boolean weakServer = cpuCores <= weakCoreThreshold
+            || (maxMemoryGb > 0.0d && maxMemoryGb <= weakMemoryGbThreshold);
+
+        int configuredBase = Math.max(1, aiLocalMapReduceParallelism);
+        int configuredMax = Math.max(configuredBase, aiLocalMapReduceParallelismMax);
+        int workerByPayload = Math.max(1,
+            Math.min(configuredMax, Math.max(1, condensedChars / Math.max(12000, aiLocalMapReduceParallelismMinCharsPerWorker))));
+        int cpuBound = Math.max(1, Math.min(configuredMax, Math.max(1, cpuCores - 1)));
+        int chunkBound = Math.max(1, Math.min(configuredMax, chunkCount));
+
+        int resolved = Math.max(1, Math.min(Math.min(workerByPayload, cpuBound), chunkBound));
+        resolved = Math.max(1, Math.min(resolved, configuredBase));
+
+        if (weakServer) {
+            resolved = Math.max(1, Math.min(resolved, Math.max(1, aiLocalMapReduceParallelismWeakServerMax)));
+        }
+
+        logger.info(
+            "ApiSpringController: adaptive local map-reduce parallelism={} (configuredBase={} configuredMax={} cpuCores={} maxMemoryGb={} chunkCount={} condensedChars={} weakServer={})",
+            resolved,
+            configuredBase,
+            configuredMax,
+            cpuCores,
+            Math.round(maxMemoryGb * 10.0d) / 10.0d,
+            chunkCount,
+            condensedChars,
+            weakServer);
+        return resolved;
     }
 
     private List<String> splitMapReduceChunks(String text, int chunkChars, int maxChunks, int overlapChars) {
@@ -3749,34 +4052,42 @@ public class ApiSpringController {
         return out;
     }
 
-    private String buildBroadAnalysisChunkPrompt(String requestText, String codeChunk, int chunkIndex, int chunkTotal) {
+    private String buildBroadAnalysisChunkPrompt(String requestText, String codeChunk, int chunkIndex, int chunkTotal, String contextType) {
         String safeRequest = truncateMiddle(String.valueOf(requestText == null ? "" : requestText).trim(), 1200);
-        String safeChunk = truncateMiddle(String.valueOf(codeChunk == null ? "" : codeChunk), 18000);
+        String safeChunk = truncateMiddle(String.valueOf(codeChunk == null ? "" : codeChunk), Math.max(10000, aiLocalMapReduceChunkChars));
         String outputLanguageRule = buildMatchInputLanguageRule(safeRequest);
+        boolean menuContext = isMenuJsonContext(contextType);
 
         StringBuilder sb = new StringBuilder();
         sb.append("<|im_start|>system\n");
-        sb.append("Ban la AI phan tich code theo cach map-reduce.\n");
+        if (menuContext) {
+            sb.append("Ban la AI phan tich menu_json theo cach map-reduce.\n");
+            sb.append("Phan tich CHI chunk menu hien tai, khong tu y bo node tru khi yeu cau goc bat buoc xoa.\n");
+            sb.append("Tra loi co cau truc, day du bang chung cho: pham vi menu lien quan, node/field can xu ly, rang buoc parentId/menu_id, rui ro mat du lieu.\n");
+        } else {
+            sb.append("Ban la AI phan tich code theo cach map-reduce.\n");
+            sb.append("Phan tich CHI chunk hien tai, khong suy dien vuot qua du lieu trong chunk.\n");
+            sb.append("Tra loi ngan gon nhung day du bang chung code cho cac muc: muc tieu, luong xu ly, thanh phan/ham, dieu kien/re nhanh, IO-side effects, rui ro.\n");
+        }
         sb.append(outputLanguageRule).append("\n");
-        sb.append("Phan tich CHI chunk hien tai, khong suy dien vuot qua du lieu trong chunk.\n");
-        sb.append("Tra loi ngan gon nhung day du bang chung code cho cac muc: muc tieu, luong xu ly, thanh phan/ham, dieu kien/re nhanh, IO-side effects, rui ro.\n");
         sb.append("<|im_end|>\n");
         sb.append("<|im_start|>user\n");
         sb.append("YEU_CAU_GOC: ").append(safeRequest).append("\n");
         sb.append("CHUNK: ").append(chunkIndex).append("/").append(chunkTotal).append("\n");
-        sb.append("CODE_CHUNK:\n").append(safeChunk).append("\n");
+        sb.append(menuContext ? "MENU_CHUNK:\n" : "CODE_CHUNK:\n").append(safeChunk).append("\n");
         sb.append("<|im_end|>\n");
         sb.append("<|im_start|>assistant\n");
         return sb.toString();
     }
 
-    private String buildBroadAnalysisSynthesisPrompt(String requestText, List<String> chunkAnalyses) {
+    private String buildBroadAnalysisSynthesisPrompt(String requestText, List<String> chunkAnalyses, String contextType) {
         String safeRequest = truncateMiddle(String.valueOf(requestText == null ? "" : requestText).trim(), 1200);
         String outputLanguageRule = buildMatchInputLanguageRule(safeRequest);
+        boolean menuContext = isMenuJsonContext(contextType);
         StringBuilder analyses = new StringBuilder();
         int idx = 1;
         for (String analysis : chunkAnalyses) {
-            String safe = truncateMiddle(String.valueOf(analysis == null ? "" : analysis).trim(), 4200);
+            String safe = truncateMiddle(String.valueOf(analysis == null ? "" : analysis).trim(), menuContext ? 7000 : 4200);
             if (safe.isBlank()) {
                 continue;
             }
@@ -3786,10 +4097,16 @@ public class ApiSpringController {
 
         StringBuilder sb = new StringBuilder();
         sb.append("<|im_start|>system\n");
-        sb.append("Ban la AI tong hop ket qua map-reduce cho phan tich code.\n");
+        if (menuContext) {
+            sb.append("Ban la AI tong hop ket qua map-reduce cho menu_json.\n");
+            sb.append("Bat buoc tra loi day du: (1) pham vi menu duoc xu ly (2) node/field thay doi va ly do (3) cac node giu nguyen (4) rang buoc parentId/menu_id/thu tu (5) rui ro va buoc kiem tra.\n");
+            sb.append("Neu yeu cau la chinh sua menu, uu tien ket qua day du va khong bo sot node lien quan trong pham vi.\n");
+        } else {
+            sb.append("Ban la AI tong hop ket qua map-reduce cho phan tich code.\n");
+            sb.append("Bat buoc tra loi du 6 muc: (1) muc tieu nghiep vu (2) luong xu ly chinh (3) thanh phan/ham quan trong (4) dieu kien/re nhanh/edge cases (5) du lieu vao-ra + side effects (6) rui ro + goi y cai thien.\n");
+            sb.append("Moi muc phai co bang chung cu the tu code (ten ham, ten bien, buoc xu ly).\n");
+        }
         sb.append(outputLanguageRule).append("\n");
-        sb.append("Bat buoc tra loi du 6 muc: (1) muc tieu nghiep vu (2) luong xu ly chinh (3) thanh phan/ham quan trong (4) dieu kien/re nhanh/edge cases (5) du lieu vao-ra + side effects (6) rui ro + goi y cai thien.\n");
-        sb.append("Moi muc phai co bang chung cu the tu code (ten ham, ten bien, buoc xu ly).\n");
         sb.append("<|im_end|>\n");
         sb.append("<|im_start|>user\n");
         sb.append("YEU_CAU_GOC: ").append(safeRequest).append("\n\n");
@@ -4680,6 +4997,7 @@ public class ApiSpringController {
             String contextType,
             String responseMode,
             LocalIntentClassification preclassifiedIntent,
+            Map<String, Object> editorMetadata,
             Consumer<String> progressCallback) {
         if (!aiLocalPreAnalysisEnabled) {
             return new LocalPreAnalysisDecision(false, false, "", "", "pre_analysis_disabled");
@@ -4752,7 +5070,7 @@ public class ApiSpringController {
 
         // ── STEP 2: Route based on AI-classified intent ─────────────────────
         if ("ai-code-stream".equals(flow) || "ai-assistant-chat".equals(flow)) {
-            String compactContext = resolveLocalDirectCompactContext(safeRequestText, sourcePrompt, safeCodeContext, responseMode, intentClass);
+            String compactContext = resolveLocalDirectCompactContext(safeRequestText, sourcePrompt, safeCodeContext, responseMode, intentClass, editorMetadata);
             String effectiveLocalContextType = resolveLocalDirectContextType(contextType, intentClass);
 
             // ── 2A: AI decided question/general answer; still load context when classifier requested it ──
@@ -4792,6 +5110,20 @@ public class ApiSpringController {
                 String rawResult = llamaCppNativeService.generateContentFast(questionPrompt, localDirectOutputCap);
                 String localText = extractAiResultText(rawResult);
                 if (!localText.isBlank()) {
+                    boolean localAccepted = shouldAcceptLocalCodeStreamOutput(localText, responseMode, effectiveLocalContextType);
+                    if (!localAccepted && "ai-assistant-chat".equalsIgnoreCase(String.valueOf(flow == null ? "" : flow))) {
+                        localAccepted = shouldAcceptLocalAiAssistantOutput(localText, effectiveLocalContextType, responseMode);
+                    }
+                    if (!localAccepted) {
+                        logger.info("[AI_LOCAL_DIRECT] rejected low-quality direct answer chars={} nextStep={}",
+                            localText.length(), intentClass.nextStep());
+                        return new LocalPreAnalysisDecision(
+                            true,
+                            false,
+                            "",
+                            safeRequestText,
+                            "local_direct_quality_rejected");
+                    }
                     if (shouldRejectShallowLocalBroadAnalysis(
                             flow,
                             safeRequestText,
@@ -4949,7 +5281,8 @@ public class ApiSpringController {
             String sourcePrompt,
             String explicitCodeContext,
             String responseMode,
-            LocalIntentClassification intentClass) {
+            LocalIntentClassification intentClass,
+            Map<String, Object> editorMetadata) {
             LocalIntentClassification intent = intentClass == null ? LocalIntentClassification.unknown() : intentClass;
             if (intent.canAnswerDirectlyWithoutContext()) {
                 return "";
@@ -4968,6 +5301,10 @@ public class ApiSpringController {
             responseMode,
             intentClass);
         if (needsMenuContext) {
+            String scopedContext = buildScopedMenuPromptContext(rawContext, editorMetadata, compactContextCap);
+            if (!scopedContext.isBlank()) {
+                return scopedContext;
+            }
             return extractRelevantMenuNodesForLocal(requestText, rawContext, compactContextCap);
         }
         if (needsCodeContext) {
@@ -4992,7 +5329,11 @@ public class ApiSpringController {
         boolean broadAnalyze = "analyze".equals(mode) && isBroadAnalysisRequest(requestText, intentClass);
 
         if (menuContext) {
-            dynamicCap = Math.max(dynamicCap, 20000);
+            int menuMaxCap = isFullScopeMenuRequest(requestText)
+                ? Math.max(12000, aiLocalDirectMenuFullScopeCapMaxChars)
+                : Math.max(12000, aiLocalDirectMenuContextCapMaxChars);
+            int configuredMenuCap = Math.max(20000, Math.min(menuMaxCap, dynamicCap * 2));
+            return Math.max(20000, configuredMenuCap);
         } else if (!broadAnalyze && !needsDeepCodeContext) {
             int fastCap = Math.max(4000, Math.min(20000, dynamicCap / 3));
             return fastCap;
@@ -5007,26 +5348,46 @@ public class ApiSpringController {
             String requestText,
             String contextText,
             LocalIntentClassification intentClass) {
-        int base = 640;
+        int providerLimit = llamaCppNativeService == null
+            ? Math.max(512, aiLocalLlamaMaxTokens)
+            : Math.max(512, llamaCppNativeService.getEffectiveMaxTokensLimit());
+        int globalCap = Math.max(512, Math.min(providerLimit, aiLocalDirectOutputMaxTokens));
+        int base = Math.max(640, Math.min(globalCap, aiLocalDirectOutputQuestionMaxTokens));
         String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
         int contextChars = String.valueOf(contextText == null ? "" : contextText).length();
         LocalIntentClassification intent = intentClass == null ? LocalIntentClassification.unknown() : intentClass;
         if (intent.canAnswerDirectlyWithoutContext() && contextChars == 0) {
-            // Direct conversational questions should use the local model's full effective limit
-            // instead of the smaller analysis caps used for code/menu branches.
-            return Math.max(1024, llamaCppNativeService == null
-                ? aiLocalLlamaMaxTokens
-                : llamaCppNativeService.getEffectiveMaxTokensLimit());
+            return Math.max(base, Math.min(globalCap, aiLocalDirectOutputQuestionMaxTokens));
         }
         if ("analyze".equals(mode)) {
-            base = Math.max(base, 896);
+            base = Math.max(base, Math.min(globalCap, aiLocalDirectOutputAnalyzeMaxTokens));
             if (contextChars > 12000 || isBroadAnalysisRequest(requestText, null)) {
-                base = Math.max(base, 2048);
+                base = Math.max(base, Math.min(globalCap, Math.max(2048, aiLocalDirectOutputAnalyzeMaxTokens)));
             }
         } else if ("edit".equals(mode)) {
-            base = Math.max(base, 1024);
+            int editCap = intent.needsMenuContext() || "load_menu_context".equalsIgnoreCase(String.valueOf(intent.nextStep()))
+                ? aiLocalDirectOutputMenuEditMaxTokens
+                : aiLocalDirectOutputMaxTokens;
+            base = Math.max(base, Math.min(globalCap, Math.max(1024, editCap)));
         }
-        return Math.max(256, Math.min(3072, base));
+        return Math.max(256, Math.min(globalCap, base));
+    }
+
+    private boolean isFullScopeMenuRequest(String requestText) {
+        String safe = String.valueOf(requestText == null ? "" : requestText).trim().toLowerCase(Locale.ROOT);
+        if (safe.isBlank()) {
+            return false;
+        }
+        return safe.contains("toan bo")
+            || safe.contains("toàn bộ")
+            || safe.contains("full menu")
+            || safe.contains("all menu")
+            || safe.contains("entire menu")
+            || safe.contains("toan he thong")
+            || safe.contains("toàn hệ thống")
+            || safe.contains("tat ca node")
+            || safe.contains("tất cả node")
+            || safe.contains("all nodes");
     }
 
     private String resolveLocalDirectContextType(String contextType, LocalIntentClassification intentClass) {
@@ -5378,6 +5739,243 @@ public class ApiSpringController {
         }
     }
 
+    private String buildScopedMenuPromptContext(String menuJson, Map<String, Object> editorMetadata, int maxChars) {
+        String text = String.valueOf(menuJson == null ? "" : menuJson).trim();
+        if (text.isBlank() || editorMetadata == null || editorMetadata.isEmpty()) {
+            return "";
+        }
+
+        String activeMenuId = firstNonBlankString(
+            editorMetadata.get("activeMenuId"),
+            extractEditorMetadataJsonField(editorMetadata.get("activeMenuNode"), "id"),
+            extractEditorMetadataJsonField(editorMetadata.get("activeMenuNode"), "menu_id"));
+        activeMenuId = activeMenuId == null ? "" : activeMenuId.trim();
+        String activeMenuName = firstNonBlankString(
+            editorMetadata.get("activeMenuName"),
+            extractEditorMetadataJsonField(editorMetadata.get("activeMenuNode"), "name"),
+            extractEditorMetadataJsonField(editorMetadata.get("activeMenuNode"), "label"),
+            extractEditorMetadataJsonField(editorMetadata.get("activeMenuNode"), "title"));
+        activeMenuName = activeMenuName == null ? "" : activeMenuName.trim();
+        String activeMenuPath = firstNonBlankString(
+            extractEditorMetadataJsonField(editorMetadata.get("activeMenuNode"), "path"),
+            extractEditorMetadataJsonField(editorMetadata.get("activeMenuNode"), "routerPath"),
+            extractEditorMetadataJsonField(editorMetadata.get("activeMenuNode"), "href"));
+        activeMenuPath = activeMenuPath == null ? "" : activeMenuPath.trim();
+        if (activeMenuId.isBlank() && activeMenuName.isBlank() && activeMenuPath.isBlank()) {
+            return "";
+        }
+
+        try {
+            List<Map<String, Object>> allNodes = new ArrayList<>();
+            Map<String, Map<String, Object>> idMap = new LinkedHashMap<>();
+            Map<String, String> parentById = new LinkedHashMap<>();
+            Map<String, List<String>> childrenByParent = new LinkedHashMap<>();
+            Object parsed = objectMapper.readValue(text, Object.class);
+            collectMenuNodesForScope(parsed, "", allNodes, idMap, parentById, childrenByParent);
+            if (allNodes.isEmpty()) {
+                return "";
+            }
+
+            Map<String, Object> focusNode = findBestScopedMenuNode(idMap, activeMenuId, activeMenuName, activeMenuPath);
+            if (focusNode == null || focusNode.isEmpty()) {
+                return "";
+            }
+
+            String focusId = firstNonBlankString(focusNode.get("id"), focusNode.get("menu_id"));
+            focusId = focusId == null ? "" : focusId.trim();
+            List<Map<String, Object>> ancestorChain = new ArrayList<>();
+            if (!focusId.isBlank()) {
+                String parentId = String.valueOf(parentById.getOrDefault(focusId, "")).trim();
+                while (!parentId.isBlank()) {
+                    Map<String, Object> parent = idMap.get(parentId);
+                    if (parent == null || parent.isEmpty()) {
+                        break;
+                    }
+                    ancestorChain.add(0, slimMenuNode(parent, false));
+                    String nextParentId = String.valueOf(parentById.getOrDefault(parentId, "")).trim();
+                    if (parentId.equals(nextParentId)) {
+                        break;
+                    }
+                    parentId = nextParentId;
+                }
+            }
+
+            List<Map<String, Object>> siblingNodes = new ArrayList<>();
+            if (!focusId.isBlank()) {
+                String parentId = String.valueOf(parentById.getOrDefault(focusId, "")).trim();
+                for (String siblingId : childrenByParent.getOrDefault(parentId, Collections.emptyList())) {
+                    if (focusId.equals(siblingId)) {
+                        continue;
+                    }
+                    Map<String, Object> sibling = idMap.get(siblingId);
+                    if (sibling != null && !sibling.isEmpty()) {
+                        siblingNodes.add(slimMenuNode(sibling, false));
+                    }
+                    if (siblingNodes.size() >= 10) {
+                        break;
+                    }
+                }
+            }
+
+            LinkedHashMap<String, Object> scoped = new LinkedHashMap<>();
+            scoped.put("scopeMode", "active_menu_subtree");
+            if (!activeMenuId.isBlank()) scoped.put("activeMenuId", activeMenuId);
+            if (!activeMenuName.isBlank()) scoped.put("activeMenuName", activeMenuName);
+            if (!activeMenuPath.isBlank()) scoped.put("activeMenuPath", activeMenuPath);
+            if (!ancestorChain.isEmpty()) scoped.put("ancestorChain", ancestorChain);
+            scoped.put("activeNode", slimMenuNode(focusNode, true));
+            if (!siblingNodes.isEmpty()) scoped.put("siblingNodes", siblingNodes);
+
+            String json = objectMapper.writeValueAsString(scoped);
+            return json.length() > maxChars ? truncateMiddle(json, maxChars) : json;
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private void collectMenuNodesForScope(
+            Object raw,
+            String inheritedParentId,
+            List<Map<String, Object>> allNodes,
+            Map<String, Map<String, Object>> idMap,
+            Map<String, String> parentById,
+            Map<String, List<String>> childrenByParent) {
+        if (raw instanceof List<?> list) {
+            for (Object item : list) {
+                collectMenuNodesForScope(item, inheritedParentId, allNodes, idMap, parentById, childrenByParent);
+            }
+            return;
+        }
+        if (!(raw instanceof Map<?, ?> rawMap)) {
+            return;
+        }
+
+        Map<String, Object> node = toStringObjectMap(rawMap);
+        Object wrapperChildren = node.get("menus");
+        if (!(wrapperChildren instanceof List<?>)) {
+            wrapperChildren = node.get("items");
+        }
+        if (wrapperChildren instanceof List<?> list && !node.containsKey("id") && !node.containsKey("menu_id")) {
+            collectMenuNodesForScope(list, inheritedParentId, allNodes, idMap, parentById, childrenByParent);
+            return;
+        }
+
+        allNodes.add(node);
+        String nodeId = firstNonBlankString(node.get("id"), node.get("menu_id"));
+        nodeId = nodeId == null ? "" : nodeId.trim();
+        String explicitParentId = firstNonBlankString(node.get("parentId"), node.get("parent_id"));
+        explicitParentId = explicitParentId == null ? "" : explicitParentId.trim();
+        String parentId = !explicitParentId.isBlank() ? explicitParentId : inheritedParentId;
+        parentId = parentId == null ? "" : parentId.trim();
+        if (!nodeId.isBlank()) {
+            idMap.put(nodeId, node);
+            if (!parentId.isBlank() && !nodeId.equals(parentId)) {
+                parentById.put(nodeId, parentId);
+                childrenByParent.computeIfAbsent(parentId, key -> new ArrayList<>()).add(nodeId);
+            }
+        }
+
+        Object children = node.get("children");
+        if (!(children instanceof List<?>)) {
+            children = node.get("nodes");
+        }
+        if (children instanceof List<?> list) {
+            for (Object child : list) {
+                collectMenuNodesForScope(child, nodeId, allNodes, idMap, parentById, childrenByParent);
+            }
+        }
+    }
+
+    private Map<String, Object> findBestScopedMenuNode(
+            Map<String, Map<String, Object>> idMap,
+            String activeMenuId,
+            String activeMenuName,
+            String activeMenuPath) {
+        activeMenuId = activeMenuId == null ? "" : activeMenuId.trim();
+        activeMenuName = activeMenuName == null ? "" : activeMenuName.trim();
+        activeMenuPath = activeMenuPath == null ? "" : activeMenuPath.trim();
+        if (!activeMenuId.isBlank() && idMap.containsKey(activeMenuId)) {
+            return idMap.get(activeMenuId);
+        }
+        String normalizedName = String.valueOf(activeMenuName == null ? "" : activeMenuName).trim().toLowerCase(Locale.ROOT);
+        String normalizedPath = String.valueOf(activeMenuPath == null ? "" : activeMenuPath).trim().toLowerCase(Locale.ROOT);
+        for (Map<String, Object> node : idMap.values()) {
+            String name = firstNonBlankString(node.get("name"), node.get("label"), node.get("title")).trim().toLowerCase(Locale.ROOT);
+            String path = firstNonBlankString(node.get("path"), node.get("routerPath"), node.get("href")).trim().toLowerCase(Locale.ROOT);
+            if (!normalizedName.isBlank() && normalizedName.equals(name)) {
+                return node;
+            }
+            if (!normalizedPath.isBlank() && normalizedPath.equals(path)) {
+                return node;
+            }
+        }
+        return null;
+    }
+
+    private LinkedHashMap<String, Object> slimMenuNode(Map<String, Object> node, boolean includeChildren) {
+        LinkedHashMap<String, Object> slim = new LinkedHashMap<>();
+        if (node == null || node.isEmpty()) {
+            return slim;
+        }
+        for (String key : new String[]{"id","menu_id","name","label","title","parentId","parent_id","path","routerPath","href","type","icon","order","visible","enabled","pName","pType","table_name"}) {
+            Object value = node.get(key);
+            if (value != null) {
+                slim.put(key, value);
+            }
+        }
+        if (includeChildren) {
+            Object children = node.get("children");
+            if (!(children instanceof List<?>)) {
+                children = node.get("nodes");
+            }
+            if (children instanceof List<?> list && !list.isEmpty()) {
+                List<Object> compactChildren = new ArrayList<>();
+                for (Object child : list) {
+                    if (child instanceof Map<?, ?> childMap) {
+                        compactChildren.add(slimMenuNode(toStringObjectMap(childMap), false));
+                    }
+                    if (compactChildren.size() >= 20) {
+                        break;
+                    }
+                }
+                if (!compactChildren.isEmpty()) {
+                    slim.put("children", compactChildren);
+                }
+            }
+        }
+        return slim;
+    }
+
+    private String extractEditorMetadataJsonField(Object raw, String fieldName) {
+        if (raw == null || fieldName == null || fieldName.isBlank()) {
+            return "";
+        }
+        try {
+            Object parsed = raw instanceof String ? objectMapper.readValue(String.valueOf(raw), Object.class) : raw;
+            if (parsed instanceof Map<?, ?> map) {
+                Object value = map.get(fieldName);
+                return value == null ? "" : String.valueOf(value).trim();
+            }
+        } catch (Exception ignored) {
+            // ignore malformed metadata payload
+        }
+        return "";
+    }
+
+    private Map<String, Object> toStringObjectMap(Map<?, ?> source) {
+        LinkedHashMap<String, Object> out = new LinkedHashMap<>();
+        if (source == null || source.isEmpty()) {
+            return out;
+        }
+        for (Map.Entry<?, ?> entry : source.entrySet()) {
+            if (entry == null || entry.getKey() == null) {
+                continue;
+            }
+            out.put(String.valueOf(entry.getKey()), entry.getValue());
+        }
+        return out;
+    }
+
     /**
      * Build a ChatML-formatted direct task prompt for the local Qwen model.
      * The prompt is lean: system instruction + compact context + user request.
@@ -5611,11 +6209,12 @@ public class ApiSpringController {
         LocalIntentClassification intent = preclassifiedIntent == null
             ? LocalIntentClassification.unknown()
             : preclassifiedIntent;
+        // FIX Phase 5: Allow menu_json flow to use fast local Q&A for general questions that don't need menu/code context
+        // This fixes the out-of-scope handling for menu chat (e.g., "Hãy hướng dẫn tôi cách làm giàu...")
         boolean directIntent = intent.canAnswerDirectlyWithoutContext()
             || ((intent.isQuestion() || intent.isGeneral())
                 && !intent.needsCodeContext()
                 && !intent.needsMenuContext()
-                && !isMenuJsonContext(contextType)
                 && !"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode)));
         if (!directIntent) {
             return false;
@@ -5640,7 +6239,7 @@ public class ApiSpringController {
         try {
             String fastPrompt = buildLocalFastQuestionPrompt(message, language);
             int promptTokens = estimateTokens(fastPrompt);
-            int configuredFastCap = Math.max(64, Math.min(384, aiLocalFastQuestionMaxTokens));
+            int configuredFastCap = Math.max(64, Math.min(2048, aiLocalFastQuestionMaxTokens));
             int providerEffectiveCap = llamaCppNativeService == null
                 ? configuredFastCap
                 : Math.max(64, llamaCppNativeService.getEffectiveMaxTokensLimit());
@@ -6687,7 +7286,7 @@ public class ApiSpringController {
             String prompt,
             boolean hasImages,
             String modelOverride) {
-        if (localAiAssistantContextService != null && localAiAssistantContextService.shouldForceLocalOnly(contextType)) {
+        if (isStrictLocalOnlyScope(contextType)) {
             return new AiRouteDecision(AiRouteMode.LOCAL_ONLY, 100, "local_assistant_scope_local_only");
         }
 
@@ -6767,7 +7366,7 @@ public class ApiSpringController {
             return false;
         }
 
-        if (isLowSubstanceEnumeratedOutput(text)) {
+        if (isLikelyRetrievalEchoNoise(text) || isLowSubstanceEnumeratedOutput(text)) {
             return false;
         }
 
@@ -6840,6 +7439,35 @@ public class ApiSpringController {
             return true;
         }
         return nonEmpty >= 4 && skeletal >= Math.max(3, (int) Math.floor(nonEmpty * 0.6d));
+    }
+
+    private boolean isLikelyRetrievalEchoNoise(String text) {
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return false;
+        }
+
+        String lower = safe.toLowerCase(Locale.ROOT);
+        int markerHits = 0;
+        if (lower.contains("local_semantic_search_context")) markerHits++;
+        if (lower.contains("### hit ")) markerHits++;
+        if (lower.contains("path:")) markerHits++;
+        if (lower.contains("scope:")) markerHits++;
+        if (lower.contains("score:")) markerHits++;
+        if (lower.contains("summary:")) markerHits++;
+        if (lower.contains("content:")) markerHits++;
+
+        if (markerHits < 3) {
+            return false;
+        }
+
+        int lineBreaks = 0;
+        for (int i = 0; i < safe.length(); i++) {
+            if (safe.charAt(i) == '\n') {
+                lineBreaks++;
+            }
+        }
+        return lineBreaks >= 3;
     }
 
     private String buildAnalyzeCondensedPromptContext(
@@ -8552,9 +9180,43 @@ public class ApiSpringController {
 
         // In edit mode, never stay in GENERAL/QUESTION bucket; always route through context loading.
         if (editMode) {
+            if (menuContext && shouldForceDirectForGeneralQuestion(requestText, base.type(), base.contextKind())) {
+                logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} confidence={} nextStep={} -> keep={} (edit_mode_menu_general_direct)",
+                    "edit_mode_menu_general_direct",
+                    base.confidence(),
+                    base.nextStep(),
+                    "answer_direct");
+                return new LocalIntentClassification(
+                    "QUESTION",
+                    normalizeIntentAction(base.action()),
+                    Math.max(base.confidence(), 62),
+                    "answer_direct",
+                    "none",
+                    base.raw());
+            }
             if (!lowConfidence) {
                 if (normalizedBaseRoute.needsMenuContext() || normalizedBaseRoute.needsCodeContext()) {
                     return normalizedBaseRoute;
+                }
+                if (menuContext
+                        && normalizedBaseRoute.answerDirectly()
+                        && (base.isQuestion() || base.isGeneral())) {
+                    boolean structuredMenuIntent = hasStructuredMenuTarget(requestText)
+                        || isFullScopeMenuRequest(requestText);
+                    if (!structuredMenuIntent) {
+                        logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} confidence={} nextStep={} -> keep={} (edit_mode_menu_direct_answer)",
+                            "edit_mode_preserve_direct_answer",
+                            base.confidence(),
+                            base.nextStep(),
+                            "answer_direct");
+                        return new LocalIntentClassification(
+                            "QUESTION",
+                            normalizeIntentAction(base.action()),
+                            Math.max(base.confidence(), 60),
+                            "answer_direct",
+                            "none",
+                            base.raw());
+                    }
                 }
                 if (normalizedBaseRoute.answerDirectly()) {
                     logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} confidence={} nextStep={} -> forced={} (edit_mode_requires_context)",
@@ -8582,6 +9244,32 @@ public class ApiSpringController {
                 && !normalizedBaseRoute.equals(LocalIntentClassification.unknown())
                 && (normalizedBaseRoute.needsMenuContext() || normalizedBaseRoute.needsCodeContext())) {
             return normalizedBaseRoute;
+        }
+
+        // In menu workspace, non-trivial question/general requests should still go through
+        // menu context loading so local analysis can reason with full menu tree.
+        if (menuContext
+                && (base.isQuestion() || base.isGeneral())
+                && !isObviousDirectConversation(requestText)) {
+            boolean needsMenuContext = normalizedBaseRoute.needsMenuContext()
+                || hasStructuredMenuTarget(requestText)
+                || isFullScopeMenuRequest(requestText);
+            if (!needsMenuContext) {
+                return new LocalIntentClassification(
+                    "QUESTION",
+                    normalizeIntentAction(base.action()),
+                    Math.max(base.confidence(), 60),
+                    "answer_direct",
+                    "none",
+                    base.raw());
+            }
+            return new LocalIntentClassification(
+                "QUESTION",
+                "ask",
+                Math.max(base.confidence(), 65),
+                "load_menu_context",
+                "menu",
+                base.raw());
         }
 
         // Non-edit turns outside code assistant keep direct-answer behavior.
@@ -9374,6 +10062,7 @@ public class ApiSpringController {
                 effectiveContextType,
                 responseMode,
                 preclassifiedIntent,
+                editorMetadata,
                 null);
             emitAiAssistantChatChunk(appId, Map.of(
                 "stage", "local_pre_analysis",
@@ -9857,6 +10546,10 @@ public class ApiSpringController {
                 currentCode,
                 estimatedPayloadChars);
             boolean menuGeminiFallbackDisabled = shouldDisableGeminiFallbackForMenu(effectiveContextType, effectiveTaskType);
+            boolean strictLocalAssistantScope = isStrictLocalOnlyScope(effectiveContextType);
+            if (strictLocalAssistantScope) {
+                menuGeminiFallbackDisabled = true;
+            }
             if (menuGeminiFallbackDisabled) {
                 directProviderRoute = false;
             }
@@ -9876,7 +10569,8 @@ public class ApiSpringController {
                 effectiveTaskType,
                 responseMode,
                 estimatedPayloadChars);
-            boolean localProviderRoute = aiAssistantRouteDecision.mode() != AiRouteMode.CLOUD_ONLY;
+            boolean localProviderRoute = strictLocalAssistantScope
+                || aiAssistantRouteDecision.mode() != AiRouteMode.CLOUD_ONLY;
 
             emitAiAssistantChatChunk(appId, Map.of(
                 "stage", "local_provider_router_decision",
@@ -9925,7 +10619,9 @@ public class ApiSpringController {
                     pendingQuestions,
                     editorMetadata,
                     false);
-                githubRaw = generateProviderContentWithMenuMasterPrompt(localPrompt, effectiveContextType);
+                githubRaw = strictLocalAssistantScope
+                    ? generateDirectLocalContentWithMenuMasterPrompt(localPrompt, effectiveContextType)
+                    : generateProviderContentWithMenuMasterPrompt(localPrompt, effectiveContextType);
                 String localText = extractAiResultText(githubRaw);
                 if (!localText.isBlank()) {
                     boolean localAccepted = shouldAcceptLocalAiAssistantOutput(
@@ -9945,9 +10641,15 @@ public class ApiSpringController {
                             "reason_code", "local_quality_guard_failed",
                             "message", uiTextByLang(
                                 uiLang,
-                                "Local provider trả về nội dung chưa đạt quality gate, chuyển về luồng mặc định",
-                                "Local provider output did not pass quality gate, switching to default route",
-                                "本地提供方输出未通过质量门槛，切换到默认路由"),
+                                strictLocalAssistantScope
+                                    ? "Local provider trả về nội dung chưa đạt quality gate trong chế độ local-only"
+                                    : "Local provider trả về nội dung chưa đạt quality gate, chuyển về luồng mặc định",
+                                strictLocalAssistantScope
+                                    ? "Local provider output did not pass quality gate in local-only mode"
+                                    : "Local provider output did not pass quality gate, switching to default route",
+                                strictLocalAssistantScope
+                                    ? "本地提供方输出在仅本地模式下未通过质量门槛"
+                                    : "本地提供方输出未通过质量门槛，切换到默认路由"),
                             "responseMode", responseMode,
                             "status", "running"
                         ));
@@ -9961,12 +10663,50 @@ public class ApiSpringController {
                         "reason_code", "local_provider_failed",
                         "message", uiTextByLang(
                             uiLang,
-                            "Local provider không trả về nội dung hợp lệ, chuyển về luồng mặc định",
-                            "Local provider did not return valid content, switching to default route",
-                            "本地提供方未返回有效内容，切换到默认路由"),
+                                strictLocalAssistantScope
+                                    ? "Local provider không trả về nội dung hợp lệ trong chế độ local-only"
+                                    : "Local provider không trả về nội dung hợp lệ, chuyển về luồng mặc định",
+                                strictLocalAssistantScope
+                                    ? "Local provider did not return valid content in local-only mode"
+                                    : "Local provider did not return valid content, switching to default route",
+                                strictLocalAssistantScope
+                                    ? "本地提供方在仅本地模式下未返回有效内容"
+                                    : "本地提供方未返回有效内容，切换到默认路由"),
                         "responseMode", responseMode,
                         "status", "running"
                     ));
+                }
+            }
+
+            if (strictLocalAssistantScope && fullResponse.length() == 0) {
+                String degradedLocalText = String.valueOf(assistantPreAnalysis.cloudContext() == null
+                    ? ""
+                    : assistantPreAnalysis.cloudContext()).trim();
+                boolean degradedAccepted = !degradedLocalText.isBlank()
+                    && shouldAcceptLocalAiAssistantOutput(degradedLocalText, effectiveContextType, responseMode);
+                if (degradedAccepted) {
+                    emitAiAssistantChatChunk(appId, Map.of(
+                        "stage", "local_provider_degraded_context",
+                        "modelDecisionStep", "final",
+                        "modelDecisionReason", "local_override_use_preanalysis_context",
+                        "decision_step", "final",
+                        "reason_code", "local_override_use_preanalysis_context",
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Dùng kết quả pre-analysis local để hoàn tất phản hồi (không fallback cloud)",
+                            "Using local pre-analysis output to complete the response (no cloud fallback)",
+                            "使用本地预分析结果完成回复（不回退到云端）"),
+                        "responseMode", responseMode,
+                        "status", "running"
+                    ));
+                    fullResponse.append(degradedLocalText);
+                    emitTextAsAiAssistantChunks(appId, degradedLocalText, responseMode, uiLang);
+                } else {
+                    throw new IllegalStateException(uiTextByLang(
+                        uiLang,
+                        "Local AI chưa xử lý được yêu cầu này trong chế độ local-only. Vui lòng rút gọn hoặc chia nhỏ yêu cầu.",
+                        "Local AI could not handle this request in local-only mode. Please simplify or split your request.",
+                        "本地AI在仅本地模式下无法处理此请求。请简化或拆分请求。"));
                 }
             }
 
@@ -11674,7 +12414,9 @@ public class ApiSpringController {
                     sb.append("You are an AI assistant for menu JSON design inside a CodeMirror editor.\n");
                     sb.append("Focus on JSON schema correctness, parent/child integrity, field consistency and trigger safety.\n");
                     sb.append("Do not output unrelated source code. Keep structure stable unless user requests a structural change.\n");
-                    sb.append("Use attached legacy JSON, text notes and UI screenshots as authoritative context when relevant.\n\n");
+                    sb.append("Use attached legacy JSON, text notes and UI screenshots as authoritative context when relevant.\n");
+                    sb.append("Never output raw retrieval headers like '### Hit', 'path:', 'scope:', 'score:', 'summary:', 'content:' in final answers.\n");
+                    sb.append("Synthesize the evidence into a direct answer instead of copying retrieval snippets verbatim.\n\n");
                     sb.append("For menu_json edits, return complete and production-ready JSON result.\n");
                     sb.append("Do not return shortened placeholders like '...' or 'same as above'.\n");
                     sb.append("Preserve unrelated nodes and properties unless the user explicitly asks to remove or refactor them.\n\n");
@@ -14096,6 +14838,9 @@ public class ApiSpringController {
             String taskType,
             String responseMode,
             int estimatedPayloadChars) {
+        if (isStrictLocalOnlyScope(contextType)) {
+            return new AiRouteDecision(AiRouteMode.LOCAL_ONLY, 100, "local_assistant_scope_local_only");
+        }
         if (!aiRouterScoreV2Enabled) {
             boolean legacyLocal = shouldLocalProviderRouteForCodeAiAssistant(
                     contextType,
@@ -14153,11 +14898,24 @@ public class ApiSpringController {
             return false;
         }
 
-        if (isMenuJsonContext(contextType)) {
-            return isLikelyJsonPayload(text);
+        if (isLikelyRetrievalEchoNoise(text) || isLowSubstanceEnumeratedOutput(text)) {
+            return false;
         }
 
-        if (!"edit".equalsIgnoreCase(responseMode)) {
+        boolean editMode = "edit".equalsIgnoreCase(responseMode);
+        if (isMenuJsonContext(contextType)) {
+            if (!editMode) {
+                // Menu chat/analyze outside strict edit flow can return plain explanatory text.
+                return text.length() >= 24;
+            }
+            String jsonCandidate = isLikelyJsonPayload(text) ? text : extractJsonObjectCandidate(text);
+            if (jsonCandidate.isBlank() || !isLikelyJsonPayload(jsonCandidate)) {
+                return false;
+            }
+            return countMenuNodesFromDraft(jsonCandidate) > 0;
+        }
+
+        if (!editMode) {
             return text.length() >= 24;
         }
 
@@ -15434,6 +16192,16 @@ public class ApiSpringController {
 
     private boolean isMenuJsonContext(String contextType) {
         return "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim());
+    }
+
+    private boolean isStrictLocalOnlyScope(String contextType) {
+        if (aiLocalForceAllFlows) {
+            return true;
+        }
+        boolean menuLocalOnlyScope = aiLocalMenuForceLocalOnly && isMenuJsonContext(contextType);
+        boolean assistantScopeLocalOnly = localAiAssistantContextService != null
+            && localAiAssistantContextService.shouldForceLocalOnly(contextType);
+        return menuLocalOnlyScope || assistantScopeLocalOnly;
     }
 
     private String generateProviderContentWithMenuMasterPrompt(String prompt, String contextType) {

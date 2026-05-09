@@ -101,6 +101,12 @@ public class LocalAiAssistantContextService {
     @Value("${ai.local.assistant.max-retrieval-chars:18000}")
     private int maxRetrievalChars;
 
+    @Value("${ai.local.assistant.menu.max-hits:14}")
+    private int menuMaxHits;
+
+    @Value("${ai.local.assistant.menu.max-retrieval-chars:90000}")
+    private int menuMaxRetrievalChars;
+
     @Value("${ai.local.assistant.max-analysis-chars:500000}")
     private int maxAnalysisChars;
 
@@ -169,26 +175,33 @@ public class LocalAiAssistantContextService {
     ) {
         List<String> blocks = new ArrayList<>();
         String queryText = buildQueryText(message, currentCode, language, pName, pType);
+        boolean menuContext = "menu_json".equals(contextType);
+        int retrievalCap = menuContext
+            ? Math.max(maxRetrievalChars, menuMaxRetrievalChars)
+            : Math.max(2200, maxRetrievalChars);
+        int retrievalHits = menuContext
+            ? Math.max(maxHits, menuMaxHits)
+            : Math.max(2, maxHits);
 
-        if ("menu_json".equals(contextType)) {
+        if (menuContext) {
             String businessMemory = aiBusinessMemoryVectorService == null
                 ? ""
-                : aiBusinessMemoryVectorService.buildRagBlock(appId, queryText, Math.max(3, Math.min(6, maxHits)), Math.max(3000, maxRetrievalChars / 2));
+                : aiBusinessMemoryVectorService.buildRagBlock(appId, queryText, Math.max(3, Math.min(10, retrievalHits)), Math.max(3000, retrievalCap / 2));
             if (!businessMemory.isBlank()) {
-                blocks.add(trimTo(businessMemory, Math.max(3000, maxRetrievalChars / 2)));
+                blocks.add(trimTo(businessMemory, Math.max(3000, retrievalCap / 2)));
             }
             if (aiMenuLearningMemoryService != null) {
                 String learned = String.valueOf(aiMenuLearningMemoryService.buildLearningContextBlock(appId, message) == null
                     ? ""
                     : aiMenuLearningMemoryService.buildLearningContextBlock(appId, message)).trim();
                 if (!learned.isBlank()) {
-                    blocks.add(trimTo(learned, Math.max(2200, maxRetrievalChars / 3)));
+                    blocks.add(trimTo(learned, Math.max(2200, retrievalCap / 3)));
                 }
             }
         }
 
         ensureIndexFresh();
-        List<SearchHit> semanticHits = searchLocalSources(queryText, contextType, Math.max(2, maxHits));
+        List<SearchHit> semanticHits = searchLocalSources(queryText, contextType, retrievalHits);
         if (!semanticHits.isEmpty()) {
             StringBuilder sb = new StringBuilder();
             sb.append("## LOCAL_SEMANTIC_SEARCH_CONTEXT\n");
@@ -201,11 +214,11 @@ public class LocalAiAssistantContextService {
                 sb.append("score: ").append(String.format(Locale.ROOT, "%.4f", hit.score())).append("\n");
                 sb.append("summary: ").append(hit.summary()).append("\n");
                 sb.append("content:\n").append(hit.content()).append("\n\n");
-                if (sb.length() >= Math.max(2200, maxRetrievalChars)) {
+                if (sb.length() >= retrievalCap) {
                     break;
                 }
             }
-            blocks.add(trimTo(sb.toString(), Math.max(2200, maxRetrievalChars)));
+            blocks.add(trimTo(sb.toString(), retrievalCap));
         }
 
         if (blocks.isEmpty()) {
@@ -213,7 +226,7 @@ public class LocalAiAssistantContextService {
         }
 
         String joined = String.join("\n\n", blocks);
-        return trimTo(joined, Math.max(3000, maxRetrievalChars));
+        return trimTo(joined, Math.max(3000, retrievalCap));
     }
 
     private String buildAnalysisBlock(

@@ -21,6 +21,7 @@ type CodeMirrorWithAiAssistantProps = ReactCodeMirrorProps & {
   aiAssistantCurrentCode?: string;
   aiAssistantPName?: string;
   aiAssistantPType?: number;
+  aiAssistantEditorMetadata?: Record<string, unknown>;
   aiAssistantAutoApplyCodeBlock?: boolean;
   aiAssistantInlineReview?: boolean;
   aiAssistantInlineSuggestedCode?: string | null;
@@ -392,6 +393,7 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
     aiAssistantCurrentCode,
     aiAssistantPName,
     aiAssistantPType,
+    aiAssistantEditorMetadata: externalAiAssistantEditorMetadata,
     aiAssistantAutoApplyCodeBlock = false,
     aiAssistantInlineReview = true,
     aiAssistantInlineSuggestedCode,
@@ -874,6 +876,10 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
       viewMode: isCompactView ? "compact" : "dock",
     };
 
+    if (externalAiAssistantEditorMetadata && typeof externalAiAssistantEditorMetadata === "object") {
+      Object.assign(metadata, externalAiAssistantEditorMetadata);
+    }
+
     const codeLength = typeof currentCode === "string" ? currentCode.length : 0;
     if (codeLength > 0) {
       metadata.bufferChars = codeLength;
@@ -900,7 +906,7 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
     }
 
     return metadata;
-  }, [currentCode, isCompactView]);
+  }, [currentCode, externalAiAssistantEditorMetadata, isCompactView]);
 
   const resolvedExtensions = useMemo<Extension[]>(() => {
     const base = Array.isArray(externalExtensions)
