@@ -5318,9 +5318,11 @@ public class ApiSpringController {
             String requestText,
             String responseMode,
             LocalIntentClassification intentClass) {
-        int contextWindow = Math.max(2048, aiLocalLlamaContextWindow);
-        int outputReserve = Math.max(256, aiLocalLlamaMaxTokens);
-        int promptBudgetTokens = Math.max(1024, contextWindow - outputReserve - 256);
+        int contextWindow = Math.max(4096, aiLocalLlamaContextWindow);
+        // Cap output reserve at half the context window to avoid negative prompt budget
+        // (previously broke when contextWindow == maxTokens, causing dynamicCap=4096)
+        int outputReserve = Math.min(Math.max(256, aiLocalLlamaMaxTokens), contextWindow / 2);
+        int promptBudgetTokens = Math.max(2048, contextWindow - outputReserve - 256);
         int dynamicCap = promptBudgetTokens * 4;
         String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
         LocalIntentClassification intent = intentClass == null ? LocalIntentClassification.unknown() : intentClass;
@@ -5335,7 +5337,7 @@ public class ApiSpringController {
             int configuredMenuCap = Math.max(20000, Math.min(menuMaxCap, dynamicCap * 2));
             return Math.max(20000, configuredMenuCap);
         } else if (!broadAnalyze && !needsDeepCodeContext) {
-            int fastCap = Math.max(4000, Math.min(20000, dynamicCap / 3));
+            int fastCap = Math.max(6000, Math.min(20000, dynamicCap / 3));
             return fastCap;
         }
         int configuredCap = Math.max(12000, aiLocalPreAnalysisMaxPromptChars);
@@ -5717,17 +5719,36 @@ public class ApiSpringController {
                         String id = String.valueOf(node.getOrDefault("id", ""));
                         if (!id.isBlank()) idsToInclude.add(id);
                     }
-                    if (idsToInclude.size() >= 12) break;
+                    if (idsToInclude.size() >= 20) break;
+                }
+                // If still empty (all nodes have parents), fall back to first 20
+                if (idsToInclude.isEmpty()) {
+                    for (Map<String, Object> node : allNodes) {
+                        String id = String.valueOf(node.getOrDefault("id", ""));
+                        if (!id.isBlank()) idsToInclude.add(id);
+                        if (idsToInclude.size() >= 20) break;
+                    }
                 }
             }
             // Collect compact nodes (strip children, keep essential fields)
+            // For nodes that were keyword-matched (relevantIds), include full config detail
+            // (triggers, table, fields, layout, props) so AI has complete context.
+            // For parent/sibling context-only nodes, use slim representation.
             List<Map<String, Object>> compact = new java.util.ArrayList<>();
             for (Map<String, Object> node : allNodes) {
                 String id = String.valueOf(node.getOrDefault("id", ""));
                 if (!idsToInclude.contains(id)) continue;
                 java.util.LinkedHashMap<String, Object> slim = new java.util.LinkedHashMap<>();
+                boolean isMatched = relevantIds.contains(id);
+                // Always include structural fields
                 for (String key : new String[]{"id","name","label","title","parentId","path","routerPath","href","type","icon","order","visible","enabled","pName","pType"}) {
                     if (node.containsKey(key)) slim.put(key, node.get(key));
+                }
+                // For directly matched nodes, also include configuration detail
+                if (isMatched) {
+                    for (String key : new String[]{"triggers","table","fields","layout","props","config","permissions","roles","badge","tooltip","description","menu_id","appId","scope","extra"}) {
+                        if (node.containsKey(key)) slim.put(key, node.get(key));
+                    }
                 }
                 compact.add(slim);
             }

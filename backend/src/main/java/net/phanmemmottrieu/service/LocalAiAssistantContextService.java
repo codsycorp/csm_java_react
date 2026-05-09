@@ -47,13 +47,15 @@ public class LocalAiAssistantContextService {
     private static final Logger log = LoggerFactory.getLogger(LocalAiAssistantContextService.class);
     private static final Pattern TOKEN_PATTERN = Pattern.compile("[\\p{L}\\p{N}_$\\-]{2,}");
     private static final Pattern JSON_KEY_PATTERN = Pattern.compile("\"([^\"]+)\"\\s*:");
+    // Use LocalEmbeddingService.DIMS (384) to match all-MiniLM-L6-v2 output dimensions.
+    // Old indices built with VECTOR_DIMS=128 are detected via the .index-version file and rebuilt.
+    private static final int VECTOR_DIMS = LocalEmbeddingService.DIMS;
     private static final Pattern IMPORT_PATTERN = Pattern.compile("(?m)^\\s*import\\s+");
     private static final Pattern FUNCTION_PATTERN = Pattern.compile(
         "(?m)(?:function\\s+[A-Za-z_$][A-Za-z0-9_$]*\\s*\\(|[A-Za-z_$][A-Za-z0-9_$]*\\s*=\\s*\\([^\\)]*\\)\\s*=>|(?:public|private|protected)?\\s*(?:static\\s+)?[A-Za-z_$][A-Za-z0-9_$<>\\[\\]]*\\s+[A-Za-z_$][A-Za-z0-9_$]*\\s*\\()"
     );
     private static final Pattern CLASS_PATTERN = Pattern.compile("(?m)\\b(class|interface|enum|record)\\b");
     private static final Pattern API_CALL_PATTERN = Pattern.compile("(?i)\\b(fetch\\s*\\(|axios\\.|request\\.|\\.post\\s*\\(|\\.get\\s*\\(|\\.put\\s*\\()", Pattern.MULTILINE);
-    private static final int VECTOR_DIMS = 128;
     private static final List<String> MENU_EXTENSIONS = List.of("md", "markdown", "json", "txt", "yml", "yaml");
     private static final List<String> CODE_EXTENSIONS = List.of("java", "js", "jsx", "ts", "tsx", "vue", "html", "css", "scss", "less", "sql", "json");
     private static final List<String> IGNORED_DIR_NAMES = List.of("node_modules", "target", "dist", "build", ".git", "logs");
@@ -70,6 +72,7 @@ public class LocalAiAssistantContextService {
 
     private final AiBusinessMemoryVectorService aiBusinessMemoryVectorService;
     private final AiMenuLearningMemoryService aiMenuLearningMemoryService;
+    private final LocalEmbeddingService localEmbeddingService;
 
     @Value("${ai.local.assistant.enabled:true}")
     private boolean enabled;
@@ -115,10 +118,12 @@ public class LocalAiAssistantContextService {
     @Autowired
     public LocalAiAssistantContextService(
         AiBusinessMemoryVectorService aiBusinessMemoryVectorService,
-        @Autowired(required = false) AiMenuLearningMemoryService aiMenuLearningMemoryService
+        @Autowired(required = false) AiMenuLearningMemoryService aiMenuLearningMemoryService,
+        LocalEmbeddingService localEmbeddingService
     ) {
         this.aiBusinessMemoryVectorService = aiBusinessMemoryVectorService;
         this.aiMenuLearningMemoryService = aiMenuLearningMemoryService;
+        this.localEmbeddingService = localEmbeddingService;
     }
 
     @PostConstruct
@@ -367,6 +372,16 @@ public class LocalAiAssistantContextService {
         }
         Path indexPath = resolveIndexPath();
         long now = System.currentTimeMillis();
+        // If index version changed (e.g. VECTOR_DIMS 128→384), force immediate rebuild.
+        if (isIndexVersionStale(indexPath)) {
+            log.info("Local assistant index version stale – rebuilding with version={}", LocalEmbeddingService.INDEX_VERSION);
+            clearIndexDirectory(indexPath);
+            synchronized (indexLock) {
+                rebuildIndex(indexPath);
+                lastIndexedAtMs = System.currentTimeMillis();
+            }
+            return;
+        }
         if (lastIndexedAtMs > 0L && (now - lastIndexedAtMs) < Math.max(10000L, indexRefreshMs) && Files.isDirectory(indexPath)) {
             return;
         }
@@ -400,8 +415,55 @@ public class LocalAiAssistantContextService {
                     writer.commit();
                 }
             }
+            // Write version marker so next startup detects stale indices correctly.
+            writeIndexVersion(indexPath);
         } catch (Exception ex) {
             log.warn("Local assistant index rebuild failed: {}", ex.getMessage());
+        }
+    }
+
+    private static final String INDEX_VERSION_FILE = ".index-version";
+
+    private boolean isIndexVersionStale(Path indexPath) {
+        Path versionFile = indexPath.resolve(INDEX_VERSION_FILE);
+        if (!Files.isRegularFile(versionFile)) {
+            return Files.isDirectory(indexPath) && hasIndexSegments(indexPath);
+        }
+        try {
+            String stored = Files.readString(versionFile, StandardCharsets.UTF_8).trim();
+            return !LocalEmbeddingService.INDEX_VERSION.equals(stored);
+        } catch (Exception ignored) {
+            return true;
+        }
+    }
+
+    private boolean hasIndexSegments(Path indexPath) {
+        try (Stream<Path> s = Files.list(indexPath)) {
+            return s.anyMatch(p -> p.getFileName().toString().startsWith("segments"));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private void writeIndexVersion(Path indexPath) {
+        try {
+            Files.writeString(indexPath.resolve(INDEX_VERSION_FILE),
+                LocalEmbeddingService.INDEX_VERSION, StandardCharsets.UTF_8);
+        } catch (Exception ex) {
+            log.debug("Could not write index version file: {}", ex.getMessage());
+        }
+    }
+
+    private void clearIndexDirectory(Path indexPath) {
+        if (!Files.isDirectory(indexPath)) return;
+        try (Stream<Path> s = Files.walk(indexPath)) {
+            s.sorted(java.util.Comparator.reverseOrder())
+                .filter(p -> !p.equals(indexPath))
+                .forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+        } catch (Exception ex) {
+            log.debug("clearIndexDirectory failed: {}", ex.getMessage());
         }
     }
 
@@ -572,30 +634,7 @@ public class LocalAiAssistantContextService {
     }
 
     private float[] embedText(String text) {
-        float[] vector = new float[VECTOR_DIMS];
-        Matcher matcher = TOKEN_PATTERN.matcher(String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT));
-        int tokenCount = 0;
-        while (matcher.find()) {
-            String token = matcher.group();
-            int h = Math.abs(token.hashCode());
-            vector[h % VECTOR_DIMS] += 1.0f;
-            tokenCount++;
-        }
-        if (tokenCount == 0) {
-            return vector;
-        }
-        float norm = 0.0f;
-        for (float value : vector) {
-            norm += value * value;
-        }
-        norm = (float) Math.sqrt(norm);
-        if (norm <= 0.0f) {
-            return vector;
-        }
-        for (int i = 0; i < vector.length; i++) {
-            vector[i] = vector[i] / norm;
-        }
-        return vector;
+        return localEmbeddingService.embed(text);
     }
 
     private int countJsonNodes(JsonNode node, int current, int cap) {

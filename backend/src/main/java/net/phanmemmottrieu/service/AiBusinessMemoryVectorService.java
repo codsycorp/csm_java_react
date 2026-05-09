@@ -40,7 +40,11 @@ public class AiBusinessMemoryVectorService {
 
     private static final Logger log = LoggerFactory.getLogger(AiBusinessMemoryVectorService.class);
     private static final Pattern TOKEN_PATTERN = Pattern.compile("[\\p{L}\\p{N}_]{2,}");
-    private static final int VECTOR_DIMS = 128;
+    // Use LocalEmbeddingService.DIMS (384) to match upgraded semantic index.
+    private static final int VECTOR_DIMS = LocalEmbeddingService.DIMS;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private LocalEmbeddingService localEmbeddingService;
 
     @Value("${ai.business.memory.enabled:${AI_BUSINESS_MEMORY_ENABLED:true}}")
     private boolean enabled;
@@ -384,34 +388,7 @@ public class AiBusinessMemoryVectorService {
     }
 
     private float[] embedText(String text) {
-        float[] vector = new float[VECTOR_DIMS];
-        Matcher matcher = TOKEN_PATTERN.matcher(String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT));
-        int tokenCount = 0;
-        while (matcher.find()) {
-            String token = matcher.group();
-            int h = token.hashCode();
-            int idx = Math.floorMod(h, VECTOR_DIMS);
-            vector[idx] += 1.0f;
-            tokenCount++;
-        }
-
-        if (tokenCount <= 0) {
-            vector[0] = 1.0f;
-            return vector;
-        }
-
-        float norm = 0.0f;
-        for (float v : vector) {
-            norm += v * v;
-        }
-        norm = (float) Math.sqrt(norm);
-        if (norm <= 0f) {
-            return vector;
-        }
-        for (int i = 0; i < vector.length; i++) {
-            vector[i] = vector[i] / norm;
-        }
-        return vector;
+        return localEmbeddingService.embed(text);
     }
 
     private long parseLongSafe(String raw, long fallback) {

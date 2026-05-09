@@ -727,15 +727,25 @@ public class LlamaCppNativeService implements AIProvider {
                 profileCap = 1024;
                 break;
             case MAX:
-                profileCap = 16384;  // Increased from 4096 to allow longer responses
+                // Unlimited output: allow full context window worth of output tokens.
+                // The actual limit is implicitly capped by resolveAdaptiveNPredict via
+                // ctx - promptTokens - reserved, so this just removes an artificial ceiling.
+                profileCap = 32768;
                 break;
             case BALANCED:
             default:
-                profileCap = 4096;  // Increased from 2048 for better responses
+                profileCap = 8192;
                 break;
         }
         int hardCap = Math.max(256, maxTokensHardCap);
         return Math.min(Math.min(hardCap, profileCap), Math.max(32, maxTokens));
+    }
+
+    /**
+     * Exposed for callers that need to know the effective upper bound for output tokens.
+     */
+    public int getEffectiveMaxTokensLimit() {
+        return effectiveMaxTokens();
     }
 
     private RuntimeProfile resolveRuntimeProfile() {
@@ -767,10 +777,6 @@ public class LlamaCppNativeService implements AIProvider {
      * Detect if prompt expects JSON output.
      * Returns true if prompt contains keywords suggesting JSON format requirement.
      */
-    public int getEffectiveMaxTokensLimit() {
-        return effectiveMaxTokens();
-    }
-
     private boolean detectJsonExpectation(String prompt) {
         if (prompt == null) {
             return false;
