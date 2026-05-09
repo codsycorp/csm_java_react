@@ -236,6 +236,69 @@ function sanitizeHistoryMessages(messages: ChatMessage[]): ChatMessage[] {
 	}));
 }
 
+function normalizeMessageContentKey(content: string): string {
+	return String(content || "").replace(/\s+/g, " ").trim();
+}
+
+function buildChatMessageDedupeKey(message: ChatMessage): string {
+	const serverTurnId = String(message.serverTurnId || "").trim();
+	if (serverTurnId) {
+		return `turn:${serverTurnId}:${message.role}:${message.messageType || "response"}`;
+	}
+
+	const normalizedContent = normalizeMessageContentKey(message.content);
+	const attachmentKey = Array.isArray(message.attachments)
+		? message.attachments.map(attachment => `${attachment.name}:${attachment.kind}:${attachment.size}`).join("|")
+		: "";
+	const timestampBucket = Number.isFinite(message.timestamp)
+		? Math.floor(message.timestamp / 1000)
+		: 0;
+
+	if (normalizedContent || attachmentKey) {
+		return `snapshot:${message.role}:${message.messageType || "response"}:${message.responseMode || "none"}:${timestampBucket}:${normalizedContent}:${attachmentKey}`;
+	}
+
+	return `id:${message.id}`;
+}
+
+function mergeChatMessages(previous: ChatMessage, next: ChatMessage): ChatMessage {
+	const previousContent = String(previous.content || "");
+	const nextContent = String(next.content || "");
+	const preferNextContent = nextContent.length >= previousContent.length;
+
+	return {
+		...previous,
+		...next,
+		id: next.id || previous.id,
+		serverTurnId: next.serverTurnId || previous.serverTurnId,
+		content: preferNextContent ? nextContent : previousContent,
+		timestamp: Math.max(previous.timestamp || 0, next.timestamp || 0),
+		codeBlocks: Array.isArray(next.codeBlocks) && next.codeBlocks.length > 0 ? next.codeBlocks : previous.codeBlocks,
+		attachments: Array.isArray(next.attachments) && next.attachments.length > 0 ? next.attachments : previous.attachments,
+		feedbackRating: typeof next.feedbackRating === "number" ? next.feedbackRating : previous.feedbackRating,
+		responseMode: next.responseMode || previous.responseMode,
+		messageType: next.messageType || previous.messageType,
+	};
+}
+
+function dedupeChatMessages(messages: ChatMessage[]): ChatMessage[] {
+	const orderedKeys: string[] = [];
+	const deduped = new Map<string, ChatMessage>();
+
+	for (const message of messages) {
+		const key = buildChatMessageDedupeKey(message);
+		const existing = deduped.get(key);
+		if (!existing) {
+			orderedKeys.push(key);
+			deduped.set(key, message);
+			continue;
+		}
+		deduped.set(key, mergeChatMessages(existing, message));
+	}
+
+	return orderedKeys.map(key => deduped.get(key)!).filter(Boolean);
+}
+
 function getFileExtension(name: string): string {
 	const normalized = String(name || "").trim().toLowerCase();
 	const idx = normalized.lastIndexOf(".");
@@ -852,7 +915,7 @@ function getChatHistory(): ChatMessage[] {
 	try {
 		const stored = localStorage.getItem(CHAT_HISTORY_KEY)
 		  ?? localStorage.getItem(LEGACY_CHAT_HISTORY_KEY);
-		return stored ? JSON.parse(stored) : [];
+		return stored ? dedupeChatMessages(JSON.parse(stored)) : [];
 	}
 	catch {
 		return [];
@@ -861,7 +924,7 @@ function getChatHistory(): ChatMessage[] {
 
 function saveChatHistory(messages: ChatMessage[]) {
 	try {
-		const limited = sanitizeHistoryMessages(messages);
+		const limited = sanitizeHistoryMessages(dedupeChatMessages(messages));
 		localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(limited));
 	}
 	catch (error) {
@@ -921,6 +984,7 @@ export default function AiAssistantChat({
 	onUserMessage,
 }: AiAssistantChatProps) {
 	const { i18n } = useTranslation();
+	const shouldHideCodeInChat = Boolean(onCodeInsert);
 	const [messages, setMessages] = useState<ChatMessage[]>(getChatHistory());
 	const [inputValue, setInputValue] = useState("");
 	const [promptHistory, setPromptHistory] = useState<string[]>([]);
@@ -1246,8 +1310,8 @@ export default function AiAssistantChat({
 					const feedbackRating = Number.isFinite(rawRating)
 						? Math.max(-1, Math.min(1, rawRating))
 						: 0;
-					const shouldHideCodeInChat = Boolean(onCodeInsert) && responseMode === "edit";
-					const codeBlocks = shouldHideCodeInChat ? [] : extractCodeBlocks(assistantText);
+					const hideCodeBlocks = shouldHideCodeInChat && responseMode === "edit";
+					const codeBlocks = hideCodeBlocks ? [] : extractCodeBlocks(assistantText);
 					converted.push({
 						id: `${turnId || `turn_${i}`}_a`,
 						serverTurnId: turnId || undefined,
@@ -1262,8 +1326,9 @@ export default function AiAssistantChat({
 			}
 
 			if (converted.length > 0) {
-				setMessages(converted);
-				saveChatHistory(converted);
+				const nextMessages = dedupeChatMessages(converted);
+				setMessages(nextMessages);
+				saveChatHistory(nextMessages);
 				return;
 			}
 
@@ -1283,7 +1348,7 @@ export default function AiAssistantChat({
 				message.warning(uiText("Không tải được lịch sử chat từ server", "Could not load chat history from server", "无法从服务器加载聊天历史"));
 			}
 		}
-	}, [appId, contextType, language, onCodeInsert, targetPName, targetPType, uiText]);
+	}, [appId, contextType, language, shouldHideCodeInChat, targetPName, targetPType, uiText]);
 
 	const handleRateMessage = useCallback(async (msg: ChatMessage, rating: -1 | 0 | 1) => {
 		if (!msg.serverTurnId) {
@@ -2681,10 +2746,6 @@ export default function AiAssistantChat({
 				})),
 			};
 
-			const newMessages = [...messages, userMsg];
-			setMessages(newMessages);
-			saveChatHistory(newMessages);
-
 			// Resolve response mode deterministically to avoid backend fallback-to-analyze for edit/design requests.
 			const inferredResponseMode: ResponseMode = inferResponseModeByIntent(cleanedMessage || normalizedText, contextType);
 			const requestedResponseMode: ResponseMode = modeDirective.overrideMode ?? inferredResponseMode;
@@ -2698,7 +2759,11 @@ export default function AiAssistantChat({
 				timestamp: Date.now(),
 			};
 
-			setMessages([...newMessages, assistantMsg]);
+			setMessages((prev) => {
+				const nextMessages = dedupeChatMessages([...prev, userMsg, assistantMsg]);
+				saveChatHistory(nextMessages);
+				return nextMessages;
+			});
 			setIsLoading(true);
 			setStageEvents([]);
 			setAgenticSteps([]);
@@ -3345,7 +3410,7 @@ export default function AiAssistantChat({
 				}
 			}
 		},
-		[appId, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus],
+		[appId, contextType, currentCode, isLoading, language, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus],
 	);
 
 	const handleSend = () => {
