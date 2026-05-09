@@ -201,6 +201,18 @@ public class LlamaCppNativeService implements AIProvider {
         return false;
     }
 
+    /**
+     * Memory safeguard: check if heap usage exceeds 90% to prevent OOM.
+     * Returns true if heap should be protected from more inference.
+     */
+    private boolean isHeapExhausted() {
+        Runtime runtime = Runtime.getRuntime();
+        long max = runtime.maxMemory();
+        long used = runtime.totalMemory() - runtime.freeMemory();
+        double usagePercent = (double) used / max * 100.0;
+        return usagePercent > 90.0;
+    }
+
     @PostConstruct
     public void validateStartupAvailability() {
         if (!enabled) {
@@ -282,6 +294,13 @@ public class LlamaCppNativeService implements AIProvider {
             long remainSecs = Math.max(0, (circuitCooldownMs - (System.currentTimeMillis() - circuitOpenedAt)) / 1000L);
             log.info("Local llama circuit is OPEN, skipping inference (cooldown remaining ~{}s)", remainSecs);
             return createErrorJson("Local llama circuit open – skipping inference (cooldown " + remainSecs + "s remaining)", "CIRCUIT_OPEN");
+        }
+        
+        // Memory safeguard: if heap is >90% full, reject inference to prevent OOM
+        if (isHeapExhausted()) {
+            log.warn("Heap usage critical (>90%): rejecting inference request to prevent OOM");
+            recordFailure("HEAP_EXHAUSTED");
+            return createErrorJson("Hệ thống tạm quá tải, hãy thử lại sau", "HEAP_EXHAUSTED");
         }
 
         // Prepend system prompt if configured (system prompt API removed in llama v4.x)
@@ -400,6 +419,13 @@ public class LlamaCppNativeService implements AIProvider {
         }
         if (isCircuitOpen()) {
             return createErrorJson("Local llama circuit open", "CIRCUIT_OPEN");
+        }
+        
+        // Memory safeguard: if heap is >90% full, reject inference to prevent OOM
+        if (isHeapExhausted()) {
+            log.warn("Heap usage critical (>90%): rejecting inference request to prevent OOM");
+            recordFailure("HEAP_EXHAUSTED");
+            return createErrorJson("Hệ thống tạm quá tải, hãy thử lại sau", "HEAP_EXHAUSTED");
         }
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             safePrompt = systemPrompt.trim() + "\n" + safePrompt;

@@ -54,22 +54,22 @@ if [ -z "${HEAP_SIZE:-}" ]; then
     total_mem_mb=$(detect_total_mem_mb)
     if [ "$total_mem_mb" -gt 0 ]; then
         if [ "$total_mem_mb" -lt 3500 ]; then
-            HEAP_SIZE="1g"
-        elif [ "$total_mem_mb" -lt 7000 ]; then
             HEAP_SIZE="1536m"
+        elif [ "$total_mem_mb" -lt 7000 ]; then
+            HEAP_SIZE="3g"
         elif [ "$total_mem_mb" -lt 12000 ]; then
             HEAP_SIZE="4g"
         else
             HEAP_SIZE="6g"
         fi
     else
-        HEAP_SIZE="1536m"
+        HEAP_SIZE="2g"
     fi
 fi
 
 # Init heap smaller than max to reduce RSS pressure on low-RAM systems
-HEAP_INIT="${HEAP_INIT:-384m}"
-DIRECT_MEMORY_SIZE="${DIRECT_MEMORY_SIZE:-128m}"
+HEAP_INIT="${HEAP_INIT:-512m}"
+DIRECT_MEMORY_SIZE="${DIRECT_MEMORY_SIZE:-256m}"
 TOMCAT_MAX_THREADS="${TOMCAT_MAX_THREADS:-32}"
 TOMCAT_MAX_CONNECTIONS="${TOMCAT_MAX_CONNECTIONS:-180}"
 TOMCAT_ACCEPT_COUNT="${TOMCAT_ACCEPT_COUNT:-60}"
