@@ -16274,7 +16274,10 @@ public class ApiSpringController {
 
     private boolean isStrictLocalOnlyScope(String contextType) {
         if (aiLocalForceAllFlows) {
-            return true;
+            // Only enforce strict local-only when local provider is actually available.
+            // If model/JNI is missing on server, allow cloud fallback instead of hard-failing.
+            boolean localAvailable = llamaCppNativeService != null && llamaCppNativeService.isAvailable();
+            return localAvailable;
         }
         boolean menuLocalOnlyScope = aiLocalMenuForceLocalOnly && isMenuJsonContext(contextType);
         boolean assistantScopeLocalOnly = localAiAssistantContextService != null
