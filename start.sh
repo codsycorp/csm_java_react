@@ -27,8 +27,8 @@ APP_LOG_CLEAN_ON_START="${APP_LOG_CLEAN_ON_START:-true}"
 
 # 🚀 JVM MEMORY CONFIGURATION (Adjust based on available RAM)
 # - 1g for systems with 2GB RAM
-# - 2g for systems with 4-6GB RAM (RECOMMENDED FOR YOUR SYSTEM)
-# - 4g for systems with 8GB+ RAM
+# - 2g for systems with 4-6GB RAM (RECOMMENDED FOR 6GB SERVERS)
+# - 3g for systems with 8-12GB RAM
 # - 8g for systems with 16GB+ RAM
 # 
 # 💡 Auto size heap when HEAP_SIZE is not set
@@ -56,9 +56,9 @@ if [ -z "${HEAP_SIZE:-}" ]; then
         if [ "$total_mem_mb" -lt 3500 ]; then
             HEAP_SIZE="1536m"
         elif [ "$total_mem_mb" -lt 7000 ]; then
-            HEAP_SIZE="3g"
+            HEAP_SIZE="2g"
         elif [ "$total_mem_mb" -lt 12000 ]; then
-            HEAP_SIZE="4g"
+            HEAP_SIZE="3g"
         else
             HEAP_SIZE="6g"
         fi
@@ -74,6 +74,26 @@ TOMCAT_MAX_THREADS="${TOMCAT_MAX_THREADS:-32}"
 TOMCAT_MAX_CONNECTIONS="${TOMCAT_MAX_CONNECTIONS:-180}"
 TOMCAT_ACCEPT_COUNT="${TOMCAT_ACCEPT_COUNT:-60}"
 ENABLE_ALWAYS_PRETOUCH="${ENABLE_ALWAYS_PRETOUCH:-false}"
+
+# Spring profile selection for local-only weak servers.
+# - AI_LOCAL_MODE=fast  -> prod,weak-local
+# - AI_LOCAL_MODE=large -> prod,weak-local,weak-local-large
+# You can override fully via SPRING_PROFILES_ACTIVE_OVERRIDE.
+AI_LOCAL_MODE="${AI_LOCAL_MODE:-fast}"
+SPRING_PROFILES_ACTIVE_OVERRIDE="${SPRING_PROFILES_ACTIVE_OVERRIDE:-}"
+
+if [ -n "$SPRING_PROFILES_ACTIVE_OVERRIDE" ]; then
+    EFFECTIVE_SPRING_PROFILES="$SPRING_PROFILES_ACTIVE_OVERRIDE"
+else
+    case "$AI_LOCAL_MODE" in
+        large)
+            EFFECTIVE_SPRING_PROFILES="prod,weak-local,weak-local-large"
+            ;;
+        fast|*)
+            EFFECTIVE_SPRING_PROFILES="prod,weak-local"
+            ;;
+    esac
+fi
 
 log() {
     local msg="[$(date +'%Y-%m-%d %H:%M:%S')] $*"
@@ -323,6 +343,7 @@ if [ -z "$jarName" ]; then
 fi
 
 log "Starting $jarName on port $APP_PORT with performance optimizations..."
+log "Spring profiles: $EFFECTIVE_SPRING_PROFILES (AI_LOCAL_MODE=$AI_LOCAL_MODE)"
 
 # Load environment variables from config.env (API keys, secrets)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -384,7 +405,7 @@ nohup java \
     -Xlog:gc*:file="$GC_LOG":time,uptime,level,tags \
     -Dloader.path="/root/la_server/jlib/" \
     -jar "$jarName" \
-    --spring.profiles.active=prod \
+    --spring.profiles.active="$EFFECTIVE_SPRING_PROFILES" \
     --server.port=$APP_PORT \
     --logging.file.name="$LOG_DIR/application.log" \
     --server.tomcat.threads.max="$TOMCAT_MAX_THREADS" \
@@ -405,7 +426,7 @@ if [ -n "$newPid" ]; then
     
     # Health check with monitoring endpoint
     sleep 2
-    if curl -s http://localhost:9999/api/monitoring/health 2>/dev/null | grep -q '"status":"UP"'; then
+    if curl -s "http://localhost:${APP_PORT}/api/monitoring/health" 2>/dev/null | grep -q '"status":"UP"'; then
         log "✅ Health check PASSED - Server ready to serve requests"
         log "📊 Logs: tail -f $LOG_DIR/application.log"
         log "📈 GC Logs: tail -f $GC_LOG"

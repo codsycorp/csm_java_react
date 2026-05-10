@@ -62,6 +62,7 @@ import net.phanmemmottrieu.service.AiMenuLearningMemoryService;
 import net.phanmemmottrieu.service.AiPromptBudgetService;
 import net.phanmemmottrieu.service.LlamaCppNativeService;
 import net.phanmemmottrieu.service.LargeFileChunkingService;
+import net.phanmemmottrieu.service.AiStreamPartStoreService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -272,6 +273,7 @@ public class ApiSpringController {
     private final LlamaCppNativeService llamaCppNativeService;
     @SuppressWarnings("unused")
     private final LargeFileChunkingService largeFileChunkingService;
+    private final AiStreamPartStoreService aiStreamPartStoreService;
 
     // In-memory ring buffer for prompt-budget debug (max 200 entries, auto-rotated)
     private static final int PROMPT_DEBUG_LOG_MAX = 200;
@@ -871,6 +873,12 @@ public class ApiSpringController {
     @Value("${ai.code-stream.sse-timeout.adaptive.safety-multiplier:1.2}")
     private double aiCodeStreamSseTimeoutAdaptiveSafetyMultiplier;
 
+    @Value("${ai.code-stream.parts.max-chars:12000}")
+    private int aiCodeStreamPartsMaxChars;
+
+    @Value("${ai.code-stream.parts.emit-in-sse:true}")
+    private boolean aiCodeStreamPartsEmitInSse;
+
     private final ConcurrentHashMap<String, InstructionsCacheEntry> aiAssistantCustomInstructionsCache = new ConcurrentHashMap<>();
 
         private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
@@ -913,7 +921,8 @@ public class ApiSpringController {
             AiMenuLearningMemoryService aiMenuLearningMemoryService,
             AiPromptBudgetService aiPromptBudgetService,
             @Autowired(required = false) LlamaCppNativeService llamaCppNativeService,
-            @Autowired(required = false) LargeFileChunkingService largeFileChunkingService
+            @Autowired(required = false) LargeFileChunkingService largeFileChunkingService,
+            AiStreamPartStoreService aiStreamPartStoreService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -945,6 +954,7 @@ public class ApiSpringController {
         this.aiPromptBudgetService = aiPromptBudgetService;
         this.llamaCppNativeService = llamaCppNativeService;
         this.largeFileChunkingService = largeFileChunkingService;
+        this.aiStreamPartStoreService = aiStreamPartStoreService;
     }
 
     @PostMapping(value = {"/ai-code-stream", "/api/ai-code-stream"})
@@ -989,6 +999,9 @@ public class ApiSpringController {
                 long requestStartedAtMs = System.currentTimeMillis();
                 String requestId = Long.toHexString(System.currentTimeMillis()) + "-"
                         + Integer.toHexString(System.identityHashCode(Thread.currentThread()));
+                String requestedJobId = str(body.get("jobId"), "");
+                String jobId = aiStreamPartStoreService.normalizeJobId(
+                    requestedJobId.isBlank() ? requestId : requestedJobId);
                 String appId = str(body.get("appId"), "");
                 String message = truncate(str(body.get("message"), ""), MAX_MESSAGE_CHARS);
                 String currentCodeRaw = truncate(strKeep(body.get("currentCode"), ""), Math.max(MAX_CODE_CHARS, aiCodeStreamMaxBaseContentChars));
@@ -1055,6 +1068,12 @@ public class ApiSpringController {
                     sendErrorEvent(emitter, "Message không được để trống");
                     return;
                 }
+
+                sendEvent(emitter, jsonOf(
+                    "stage", "job_started",
+                    "requestId", requestId,
+                    "jobId", jobId,
+                    "message", "Khoi tao stream job"));
 
                 if (strictLocalAssistantScope) {
                     if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
@@ -1522,6 +1541,7 @@ public class ApiSpringController {
                     int localStreamChunks = emitSyntheticLocalStreamChunks(
                         emitter,
                         requestId,
+                        jobId,
                         rawResponse,
                         1,
                         true,
@@ -1663,6 +1683,7 @@ public class ApiSpringController {
                             int localStreamChunks = emitSyntheticLocalStreamChunks(
                                 emitter,
                                 requestId,
+                                jobId,
                                 providerText,
                                 1,
                                 false,
@@ -1735,6 +1756,7 @@ public class ApiSpringController {
                                 int degradedChunks = emitSyntheticLocalStreamChunks(
                                     emitter,
                                     requestId,
+                                    jobId,
                                     degradedLocalText,
                                     1,
                                     false,
@@ -1768,7 +1790,7 @@ public class ApiSpringController {
                         }
                         if (hasImages) {
                             rawResponse = streamWithAutoContinueMultimodal(emitter, prompt, imageParts, effectiveModel, language,
-                                responseMode, requestId, codeStreamMeta);
+                                responseMode, requestId, jobId, codeStreamMeta);
                         } else {
                             rawResponse = streamWithAutoContinue(
                                     emitter,
@@ -1782,7 +1804,8 @@ public class ApiSpringController {
                                     largeStructuredEditMode,
                                     usePromptCache,
                                     codeStreamMeta,
-                                    requestId);
+                                    requestId,
+                                    jobId);
                         }
                     }
                 }
@@ -1816,7 +1839,8 @@ public class ApiSpringController {
                             largeStructuredEditMode,
                             usePromptCache,
                             codeStreamMeta,
-                            requestId);
+                                requestId,
+                                jobId);
                     effectiveModel = defaultModel;
                             switchedToDefaultModel = true;
 
@@ -1846,6 +1870,10 @@ public class ApiSpringController {
                         sendEvent(emitter, jsonOf(
                             "stage", "streaming",
                             "requestId", requestId,
+                            "jobId", jobId,
+                            "partIndex", 1,
+                            "partTotal", 1,
+                            "partLabel", "PART 1/1",
                             "chunk", providerText,
                             "attempt", 1,
                             "providerFallback", true));
@@ -1937,8 +1965,29 @@ public class ApiSpringController {
                 }
                 Map<String, Object> outputShape = analyzeCodeStreamOutputShape(responseMode, contextType, completionPayload,
                     largeStructuredEditMode);
+
+                List<String> persistedParts = splitOutputIntoParts(completionPayload, aiCodeStreamPartsMaxChars);
+                Map<String, Object> persistedManifest = aiStreamPartStoreService.persistJob(
+                    jobId,
+                    requestId,
+                    appId,
+                    contextType,
+                    responseMode,
+                    effectiveModel,
+                    persistedParts,
+                    completionPayload.length(),
+                    requestStartedAtMs);
+                if (aiCodeStreamPartsEmitInSse) {
+                    emitPersistedPartEvents(emitter, requestId, jobId, persistedParts);
+                }
+
                 completion.put("fullResponse", completionPayload);
+                completion.put("jobId", jobId);
+                completion.put("parts", persistedManifest);
                 completion.put("responseMode", responseMode);
+                completion.put("contextType", contextType);
+                completion.put("flowConfirmedByLocal",
+                    localProviderPrimaryUsed && ("code".equalsIgnoreCase(contextType) || "menu_json".equalsIgnoreCase(contextType)));
                 completion.putAll(outputShape);
                 completion.put("textEditsRetryTriggered",
                     bool(codeStreamMeta.get("textEditsRetryTriggered"), false));
@@ -3173,14 +3222,16 @@ public class ApiSpringController {
             String contextType,
             String responseMode,
             boolean largeStructuredEditMode,
-            String requestId) throws Exception {
+            String requestId,
+            String jobId) throws Exception {
         return streamWithAutoContinue(emitter, prompt, "", "", model, language, contextType, responseMode, largeStructuredEditMode, false,
-            new LinkedHashMap<>(), requestId);
+            new LinkedHashMap<>(), requestId, jobId);
     }
 
     private int emitSyntheticLocalStreamChunks(
             SseEmitter emitter,
             String requestId,
+            String jobId,
             String text,
             int attempt,
             boolean localPreAnalysis,
@@ -3193,10 +3244,15 @@ public class ApiSpringController {
         int chunks = 0;
         for (int i = 0; i < safe.length(); i += chunkSize) {
             String part = safe.substring(i, Math.min(safe.length(), i + chunkSize));
+            int partIndex = chunks + 1;
             sendEvent(emitter, jsonOf(
                 "stage", "streaming",
                 "requestId", requestId,
+                "jobId", str(jobId, requestId),
                 "chunk", part,
+                "partIndex", partIndex,
+                "partTotal", -1,
+                "partLabel", "PART " + partIndex + "/?",
                 "attempt", Math.max(1, attempt),
                 "providerFallback", false,
                 "localProviderPrimary", localProviderPrimary,
@@ -3214,6 +3270,7 @@ public class ApiSpringController {
             String language,
             String responseMode,
             String requestId,
+            String jobId,
             Map<String, Object> streamMeta) throws Exception {
         StringBuilder responseBuffer = new StringBuilder();
         final boolean[] errored = { false };
@@ -3228,9 +3285,11 @@ public class ApiSpringController {
                 chunk -> {
                     try {
                         String escaped = chunk.replace("\\", "\\\\").replace("\n", "\\n").replace("\"", "\\\"");
-                        sendEvent(emitter, "{\"stage\":\"streaming\",\"chunk\":\"" + escaped + "\"}");
+                        int partIndex = streamChunkCount.incrementAndGet();
+                        sendEvent(emitter, "{\"stage\":\"streaming\",\"requestId\":\"" + requestId + "\",\"jobId\":\""
+                            + str(jobId, requestId) + "\",\"partIndex\":" + partIndex
+                            + ",\"partTotal\":-1,\"partLabel\":\"PART " + partIndex + "/?\",\"chunk\":\"" + escaped + "\"}");
                         responseBuffer.append(chunk);
-                        streamChunkCount.incrementAndGet();
                         streamedChars.addAndGet(chunk.length());
                     } catch (Exception e) {
                         logger.warn("ApiSpringController multimodal: error sending chunk: {}", e.getMessage());
@@ -3276,7 +3335,8 @@ public class ApiSpringController {
             boolean largeStructuredEditMode,
             boolean usePromptCache,
             Map<String, Object> streamMeta,
-            String requestId) throws Exception {
+            String requestId,
+            String jobId) throws Exception {
         boolean editMode = "edit".equalsIgnoreCase(responseMode);
         boolean menuJsonEditMode = editMode && isMenuJsonContext(contextType);
         int autoContinueAttempts = editMode && aiCodeStreamAutoContinueEnabled ? Math.max(1, aiCodeStreamAutoContinueMaxAttempts) : 1;
@@ -3329,12 +3389,17 @@ public class ApiSpringController {
 
             Consumer<String> chunkHandler = chunk -> {
                 attemptBuffer.append(chunk);
-                streamChunkCount.incrementAndGet();
+                int partIndex = streamChunkCount.incrementAndGet();
                 streamedChars.addAndGet(chunk.length());
                 try {
                     sendEvent(emitter, objectMapper.writeValueAsString(Map.of(
                             "stage", "streaming",
                             "chunk", chunk,
+                            "requestId", requestId,
+                            "jobId", str(jobId, requestId),
+                            "partIndex", partIndex,
+                            "partTotal", -1,
+                            "partLabel", "PART " + partIndex + "/?",
                             "attempt", attemptNo)));
                 } catch (Exception ignored) {
                 }
@@ -4867,6 +4932,42 @@ public class ApiSpringController {
         }
     }
 
+    private List<String> splitOutputIntoParts(String text, int maxCharsPerPart) {
+        String safe = String.valueOf(text == null ? "" : text);
+        int partSize = Math.max(1000, maxCharsPerPart);
+        if (safe.isBlank()) {
+            return List.of("");
+        }
+
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < safe.length(); i += partSize) {
+            out.add(safe.substring(i, Math.min(safe.length(), i + partSize)));
+        }
+        return out;
+    }
+
+    private void emitPersistedPartEvents(
+            SseEmitter emitter,
+            String requestId,
+            String jobId,
+            List<String> parts) {
+        List<String> safeParts = parts == null ? List.of() : parts;
+        int total = safeParts.size();
+        for (int i = 0; i < total; i++) {
+            int partIndex = i + 1;
+            String content = String.valueOf(safeParts.get(i) == null ? "" : safeParts.get(i));
+            sendEvent(emitter, jsonOf(
+                "stage", "part",
+                "requestId", requestId,
+                "jobId", str(jobId, requestId),
+                "partIndex", partIndex,
+                "partTotal", total,
+                "partLabel", "PART " + partIndex + "/" + total,
+                "isLastPart", partIndex == total,
+                "chunk", content));
+        }
+    }
+
     private List<Map<String, String>> extractImageParts(Object attachmentsRaw) {
         List<Map<String, String>> result = new ArrayList<>();
         if (!(attachmentsRaw instanceof List<?> atts)) return result;
@@ -6320,7 +6421,7 @@ public class ApiSpringController {
                 "ttftMs", Math.max(0L, System.currentTimeMillis() - startedAtMs),
                 "estimatedTotalChars", safeAnswer.length(),
                 "percent", 20));
-            int chunkCount = emitSyntheticLocalStreamChunks(emitter, requestId, safeAnswer, 1, false, true);
+            int chunkCount = emitSyntheticLocalStreamChunks(emitter, requestId, requestId, safeAnswer, 1, false, true);
 
             Map<String, Object> completion = new LinkedHashMap<>();
             completion.put("stage", "complete");
@@ -20422,6 +20523,74 @@ public class ApiSpringController {
             resolvedScope,
             session.history.size()));
         return ResponseEntity.ok(response);
+    }
+
+    @GetMapping(value = {"/ai-code-stream/{jobId}/manifest", "/api/ai-code-stream/{jobId}/manifest"})
+    public ResponseEntity<Map<String, Object>> getAiCodeStreamManifest(@PathVariable String jobId) {
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("success", false, "message", "Authentication required"));
+        }
+        Map<String, Object> manifest = aiStreamPartStoreService.getManifest(jobId);
+        boolean exists = bool(manifest.get("exists"), false);
+        if (!exists) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(manifest);
+        }
+        return ResponseEntity.ok(manifest);
+    }
+
+    @GetMapping(value = {"/ai-code-stream/{jobId}/parts", "/api/ai-code-stream/{jobId}/parts"})
+    public ResponseEntity<Map<String, Object>> getAiCodeStreamPartsPage(
+            @PathVariable String jobId,
+            @RequestParam(value = "page", defaultValue = "1") int page,
+            @RequestParam(value = "size", defaultValue = "10") int size) {
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("success", false, "message", "Authentication required"));
+        }
+        Map<String, Object> payload = aiStreamPartStoreService.getPartsPage(jobId, page, size);
+        boolean exists = bool(payload.get("exists"), false);
+        if (!exists) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(payload);
+        }
+        return ResponseEntity.ok(payload);
+    }
+
+    @GetMapping(value = {"/ai-code-stream/{jobId}/parts/meta", "/api/ai-code-stream/{jobId}/parts/meta"})
+    public ResponseEntity<Map<String, Object>> getAiCodeStreamPartsMetaPage(
+            @PathVariable String jobId,
+            @RequestParam(value = "page", defaultValue = "1") int page,
+            @RequestParam(value = "size", defaultValue = "20") int size) {
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("success", false, "message", "Authentication required"));
+        }
+        Map<String, Object> payload = aiStreamPartStoreService.getPartsMetaPage(jobId, page, size);
+        boolean exists = bool(payload.get("exists"), false);
+        if (!exists) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(payload);
+        }
+        return ResponseEntity.ok(payload);
+    }
+
+    @GetMapping(value = {"/ai-code-stream/{jobId}/parts/{partIndex}", "/api/ai-code-stream/{jobId}/parts/{partIndex}"})
+    public ResponseEntity<Map<String, Object>> getAiCodeStreamPart(
+            @PathVariable String jobId,
+            @PathVariable int partIndex) {
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("success", false, "message", "Authentication required"));
+        }
+        Map<String, Object> payload = aiStreamPartStoreService.getPart(jobId, partIndex);
+        boolean exists = bool(payload.get("exists"), false);
+        if (!exists) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(payload);
+        }
+        return ResponseEntity.ok(payload);
     }
 
     /**

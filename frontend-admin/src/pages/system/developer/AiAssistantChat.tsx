@@ -155,6 +155,47 @@ interface ModelDecisionTrace {
 	timestamp: number
 }
 
+interface AiStreamPartsManifest {
+	jobId: string
+	totalParts: number
+	totalChars?: number
+	status?: string
+	createdAt?: number
+	updatedAt?: number
+}
+
+interface AiStreamPartMeta {
+	partIndex: number
+	label: string
+	chars: number
+}
+
+interface AiStreamPartsMetaPage {
+	jobId: string
+	page: number
+	size: number
+	totalParts: number
+	totalPages: number
+	items: AiStreamPartMeta[]
+}
+
+interface LocalFlowOperationSummary {
+	verified: boolean
+	flow: "code" | "menu_json" | ""
+	addCount: number
+	editCount: number
+	deleteCount: number
+	reason?: string
+}
+
+interface LocalFlowOperationLine {
+	action: "add" | "edit" | "delete"
+	lineLabel: string
+	snippet: string
+}
+
+type LocalFlowOperationFilter = "all" | "add" | "edit" | "delete";
+
 interface AiAssistantChatProps {
 	appId: string
 	currentCode?: string
@@ -793,6 +834,161 @@ function validateStructuredTextEdits(baseText: string, textEdits: any[]): { vali
 	return { valid: true, edits: normalized };
 }
 
+function summarizeTextEditOperations(textEdits: any[]): { addCount: number, editCount: number, deleteCount: number } {
+	let addCount = 0;
+	let editCount = 0;
+	let deleteCount = 0;
+	for (const edit of Array.isArray(textEdits) ? textEdits : []) {
+		const action = String(edit?.action || "").trim().toLowerCase();
+		const replacement = String(edit?.replacement ?? edit?.text ?? edit?.newText ?? "");
+		const startLine = Number(edit?.startLine ?? edit?.range?.startLine ?? edit?.range?.start?.line ?? edit?.line ?? 1);
+		const endLine = Number(edit?.endLine ?? edit?.range?.endLine ?? edit?.range?.end?.line ?? startLine);
+		const removedLines = Math.max(0, Math.floor((Number.isFinite(endLine) ? endLine : startLine) - (Number.isFinite(startLine) ? startLine : 1) + 1));
+
+		if (action.includes("delete") || action.includes("remove")) {
+			deleteCount += 1;
+			continue;
+		}
+		if (action.includes("insert") || action.includes("add") || action.includes("create")) {
+			addCount += 1;
+			continue;
+		}
+		if (!replacement.trim() && removedLines > 0) {
+			deleteCount += 1;
+			continue;
+		}
+		if (replacement.trim() && removedLines === 0) {
+			addCount += 1;
+			continue;
+		}
+		editCount += 1;
+	}
+	return { addCount, editCount, deleteCount };
+}
+
+function extractMenuNodesForDiff(raw: unknown): Array<Record<string, unknown>> {
+	const normalized = extractMenuDraftForEditor(raw);
+	if (!normalized)
+		return [];
+	try {
+		const parsed = JSON.parse(normalized) as { menu?: unknown[] };
+		return Array.isArray(parsed?.menu)
+			? parsed.menu.filter(item => item && typeof item === "object") as Array<Record<string, unknown>>
+			: [];
+	}
+	catch {
+		return [];
+	}
+}
+
+function normalizeJsonForCompare(raw: unknown): string {
+	const normalize = (value: any): any => {
+		if (Array.isArray(value)) {
+			return value.map(item => normalize(item));
+		}
+		if (value && typeof value === "object") {
+			const entries = Object.entries(value as Record<string, unknown>)
+				.filter(([key]) => key !== "_meta" && key !== "updatedAt" && key !== "timestamp")
+				.sort(([a], [b]) => a.localeCompare(b));
+			const out: Record<string, unknown> = {};
+			for (const [key, child] of entries) {
+				out[key] = normalize(child);
+			}
+			return out;
+		}
+		return value;
+	};
+	return JSON.stringify(normalize(raw));
+}
+
+function flattenMenuNodes(nodes: Array<Record<string, unknown>>): Map<string, string> {
+	const result = new Map<string, string>();
+	const walk = (input: Array<Record<string, unknown>>) => {
+		for (const node of input) {
+			const nodeId = String(node?.id || "").trim();
+			if (nodeId) {
+				result.set(nodeId, normalizeJsonForCompare(node));
+			}
+			const childrenRaw = (node as any)?.children;
+			if (Array.isArray(childrenRaw)) {
+				walk(childrenRaw.filter(item => item && typeof item === "object") as Array<Record<string, unknown>>);
+			}
+		}
+	};
+	walk(nodes);
+	return result;
+}
+
+function summarizeMenuOperations(beforeRaw: unknown, afterRaw: unknown): { addCount: number, editCount: number, deleteCount: number } {
+	const beforeMap = flattenMenuNodes(extractMenuNodesForDiff(beforeRaw));
+	const afterMap = flattenMenuNodes(extractMenuNodesForDiff(afterRaw));
+	let addCount = 0;
+	let editCount = 0;
+	let deleteCount = 0;
+
+	for (const [id, afterNode] of afterMap.entries()) {
+		if (!beforeMap.has(id)) {
+			addCount += 1;
+			continue;
+		}
+		if (beforeMap.get(id) !== afterNode) {
+			editCount += 1;
+		}
+	}
+	for (const id of beforeMap.keys()) {
+		if (!afterMap.has(id)) {
+			deleteCount += 1;
+		}
+	}
+
+	return { addCount, editCount, deleteCount };
+}
+
+function buildCodeOperationPreviewLines(baseText: string, textEdits: any[], maxItems = 20): LocalFlowOperationLine[] {
+	const EMPTY_DELETE_MARKER = "__LOCAL_OP_EMPTY_DELETE__";
+	const EMPTY_UPDATE_MARKER = "__LOCAL_OP_EMPTY_UPDATE__";
+	const baseLines = String(baseText || "").split("\n");
+	const normalizeLine = (edit: any, key: "start" | "end"): number => {
+		if (key === "start") {
+			return Number(edit?.startLine ?? edit?.range?.startLine ?? edit?.range?.start?.line ?? edit?.line ?? 1);
+		}
+		return Number(edit?.endLine ?? edit?.range?.endLine ?? edit?.range?.end?.line ?? edit?.startLine ?? 1);
+	};
+	const getReplacement = (edit: any): string => String(edit?.replacement ?? edit?.text ?? edit?.newText ?? "");
+
+	const lines: LocalFlowOperationLine[] = [];
+	for (const edit of Array.isArray(textEdits) ? textEdits : []) {
+		const startLine = Math.max(1, Math.floor(normalizeLine(edit, "start") || 1));
+		const endLine = Math.max(startLine, Math.floor(normalizeLine(edit, "end") || startLine));
+		const lineLabel = startLine === endLine ? `L${startLine}` : `L${startLine}-L${endLine}`;
+		const actionRaw = String(edit?.action || "").trim().toLowerCase();
+		const replacement = getReplacement(edit);
+		let action: LocalFlowOperationLine["action"] = "edit";
+		if (actionRaw.includes("delete") || actionRaw.includes("remove") || (!replacement.trim() && endLine >= startLine)) {
+			action = "delete";
+		}
+		else if (actionRaw.includes("insert") || actionRaw.includes("add") || actionRaw.includes("create") || (replacement.trim() && endLine === startLine && !baseLines[startLine - 1])) {
+			action = "add";
+		}
+
+		let snippet = "";
+		if (action === "delete") {
+			snippet = baseLines.slice(startLine - 1, endLine).join(" ").replace(/\s+/g, " ").trim();
+		}
+		else {
+			snippet = replacement.split(/\r?\n/).map(item => item.trim()).find(Boolean) || "";
+		}
+		if (!snippet) {
+			snippet = action === "delete" ? EMPTY_DELETE_MARKER : EMPTY_UPDATE_MARKER;
+		}
+		lines.push({ action, lineLabel, snippet });
+		if (lines.length >= Math.max(1, maxItems)) {
+			break;
+		}
+	}
+	return lines;
+}
+
 function summarizeChecklistForConfirm(rawChecklist: any): string {
 	if (!rawChecklist)
 		return "";
@@ -1019,9 +1215,19 @@ export default function AiAssistantChat({
 	const [agenticSteps, setAgenticSteps] = useState<AgenticStep[]>([]);
 	const [agenticStepsCollapsed, setAgenticStepsCollapsed] = useState(false);
 	const [streamRequestId, setStreamRequestId] = useState("");
+	const [streamJobId, setStreamJobId] = useState("");
 	const [completionState, setCompletionState] = useState<CompletionState>("idle");
 	const [completionMetrics, setCompletionMetrics] = useState<CompletionMetrics>({});
 	const [completionErrorMessage, setCompletionErrorMessage] = useState("");
+	const [partsManifest, setPartsManifest] = useState<AiStreamPartsManifest | null>(null);
+	const [partsMetaPage, setPartsMetaPage] = useState<AiStreamPartsMetaPage | null>(null);
+	const [partsMetaLoading, setPartsMetaLoading] = useState(false);
+	const [selectedPartIndex, setSelectedPartIndex] = useState<number | null>(null);
+	const [selectedPartContent, setSelectedPartContent] = useState("");
+	const [selectedPartLoading, setSelectedPartLoading] = useState(false);
+	const [localFlowOps, setLocalFlowOps] = useState<LocalFlowOperationSummary | null>(null);
+	const [localFlowOpLines, setLocalFlowOpLines] = useState<LocalFlowOperationLine[]>([]);
+	const [localFlowOpFilter, setLocalFlowOpFilter] = useState<LocalFlowOperationFilter>("all");
 	const [lastProgressEventAgeSecs, setLastProgressEventAgeSecs] = useState(0);
 	// Progress state: waiting for Gemini / streaming progress
 	const [geminiProgress, setGeminiProgress] = useState<{
@@ -1050,6 +1256,7 @@ export default function AiAssistantChat({
 	const scrollFrameRef = useRef<number | null>(null);
 	const lastSmoothScrollAtRef = useRef<number>(0);
 	const turnAllowAutoApplyRef = useRef<boolean>(false);
+	const localFlowVerifiedRef = useRef<boolean>(false);
 	const stageEventSignaturesRef = useRef<Set<string>>(new Set());
 	const requestStartedAtRef = useRef<number>(0);
 	// Live exchange rates fetched once per session (USD base). Fallback to hardcoded.
@@ -1108,6 +1315,17 @@ export default function AiAssistantChat({
 			return en;
 		return vi;
 	}, [i18n.language, i18n.resolvedLanguage]);
+
+	const renderOperationSnippetText = useCallback((raw: string): string => {
+		const text = String(raw || "");
+		if (text === "__LOCAL_OP_EMPTY_DELETE__") {
+			return uiText("(khối đã xóa)", "(deleted block)", "（已删除代码块）");
+		}
+		if (text === "__LOCAL_OP_EMPTY_UPDATE__") {
+			return uiText("(đã cập nhật)", "(updated)", "（已更新）");
+		}
+		return text;
+	}, [uiText]);
 
 	const assistantBrandLabel = uiText("Chuyên Gia", "Expert", "专家");
 	const formatCompletionDuration = useCallback((elapsedMs?: number): string => {
@@ -2168,6 +2386,13 @@ export default function AiAssistantChat({
 			}));
 	}, [visibleStageEvents, getStageTone, formatStageToneLabel]);
 
+	const filteredLocalFlowOpLines = useMemo(() => {
+		if (localFlowOpFilter === "all") {
+			return localFlowOpLines;
+		}
+		return localFlowOpLines.filter(line => line.action === localFlowOpFilter);
+	}, [localFlowOpFilter, localFlowOpLines]);
+
 	const isNearBottom = useCallback((element: HTMLDivElement, threshold = 72): boolean => {
 		const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
 		return distance <= threshold;
@@ -2312,7 +2537,7 @@ export default function AiAssistantChat({
 	}, []);
 
 	const applyRealtimeCodeFromText = useCallback((rawText: string, force = false): boolean => {
-		if (!turnAllowAutoApplyRef.current || !onCodeInsert)
+		if (!turnAllowAutoApplyRef.current || !localFlowVerifiedRef.current || !onCodeInsert)
 			return false;
 		const source = String(rawText || "");
 		let nextCode = "";
@@ -2776,9 +3001,17 @@ export default function AiAssistantChat({
 			setIsProgressDockCollapsed(false);
 			setIsUsageDockVisible(true);
 			setStreamRequestId("");
+			setStreamJobId("");
 			setCompletionState("idle");
 			setCompletionMetrics({});
 			setCompletionErrorMessage("");
+			setPartsManifest(null);
+			setPartsMetaPage(null);
+			setSelectedPartIndex(null);
+			setSelectedPartContent("");
+			setLocalFlowOps(null);
+			setLocalFlowOpLines([]);
+			setLocalFlowOpFilter("all");
 			setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 			setLastProgressEventAgeSecs(0);
 			lastProgressEventAtRef.current = 0;
@@ -2797,6 +3030,7 @@ export default function AiAssistantChat({
 				});
 			}
 			turnAllowAutoApplyRef.current = requestedResponseMode === "edit";
+			localFlowVerifiedRef.current = false;
 			requestStartedAtRef.current = Date.now();
 			lastProgressEventAtRef.current = requestStartedAtRef.current;
 			lastProgressWatchdogAlertAtRef.current = 0;
@@ -2809,6 +3043,9 @@ export default function AiAssistantChat({
 				// SSE streaming via Gemini (replaces legacy Socket.IO stream route)
 				controller = new AbortController();
 				sseAbortRef.current = controller;
+				const requestJobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+				let effectiveStreamJobId = requestJobId;
+				setStreamJobId(requestJobId);
 				const flowType = contextType === "menu_json" ? "menu_manager" : "code_editor";
 				const taskType = contextType === "menu_json"
 					? (requestedResponseMode === "analyze"
@@ -2818,6 +3055,7 @@ export default function AiAssistantChat({
 				const response = await request.post("ai-code-stream", {
 					json: {
 						appId,
+						jobId: requestJobId,
 						message: cleanedMessage || normalizedText,
 						uiLanguage: String(i18n.resolvedLanguage || i18n.language || "vi"),
 						flowType,
@@ -2913,6 +3151,7 @@ export default function AiAssistantChat({
 								chunk?: string
 								fullResponse?: string
 								responseMode?: string
+								contextType?: string
 								message?: string
 								detail?: string
 								detailKey?: string
@@ -2930,8 +3169,16 @@ export default function AiAssistantChat({
 								promptTokens?: number
 								model?: string
 								requestId?: string
+								jobId?: string
+								partIndex?: number
+								partTotal?: number
+								partLabel?: string
+								isLastPart?: boolean
 								streamedChars?: number
 								streamChunkCount?: number
+								localProviderPrimaryUsed?: boolean
+								flowConfirmedByLocal?: boolean
+								textEdits?: any[]
 								streamAssemblyMismatch?: boolean
 								promptOriginalChars?: number
 								promptFinalChars?: number
@@ -2957,6 +3204,14 @@ export default function AiAssistantChat({
 								charsAfter?: number
 								routingTier?: string
 								planStepCount?: number
+								parts?: {
+									jobId?: string
+									totalParts?: number
+									totalChars?: number
+									status?: string
+									createdAt?: number
+									updatedAt?: number
+								}
 							};
 							lastProgressEventAtRef.current = Date.now();
 							setLastProgressEventAgeSecs(0);
@@ -3024,6 +3279,10 @@ export default function AiAssistantChat({
 							}
 							if (evt.requestId) {
 								setStreamRequestId(String(evt.requestId));
+							}
+							if (evt.jobId) {
+								effectiveStreamJobId = String(evt.jobId);
+								setStreamJobId(effectiveStreamJobId);
 							}
 							if (evtStatus === "blocked" && localizedEvtMessage) {
 								receivedBlockedGuardEvent = true;
@@ -3252,6 +3511,53 @@ export default function AiAssistantChat({
 										sessionTokens: prev.sessionTokens + usage.totalTokens,
 									}));
 								}
+
+								const effectiveContextType = String(evt.contextType || contextType || "").trim().toLowerCase();
+								const isMainFlow = effectiveContextType === "code" || effectiveContextType === "menu_json";
+								const isEditModeEvt = String(evt.responseMode || "").trim().toLowerCase() === "edit";
+								const localFlowVerified = Boolean(
+									evt.flowConfirmedByLocal === true
+									|| (evt.localProviderPrimaryUsed === true && isMainFlow),
+								);
+								localFlowVerifiedRef.current = localFlowVerified && isEditModeEvt;
+
+								if (localFlowVerifiedRef.current) {
+									let opSummary = { addCount: 0, editCount: 0, deleteCount: 0 };
+									if (effectiveContextType === "code") {
+										const candidateEdits = Array.isArray(evt.textEdits) && evt.textEdits.length > 0
+											? evt.textEdits
+											: parseTextEditsOnlyPayload(evt.fullResponse || "") || [];
+										opSummary = summarizeTextEditOperations(candidateEdits);
+										setLocalFlowOpLines(buildCodeOperationPreviewLines(currentCode, candidateEdits, 20));
+									}
+									else if (effectiveContextType === "menu_json") {
+										opSummary = summarizeMenuOperations(currentCode, evt.fullResponse || "");
+										setLocalFlowOpLines([]);
+									}
+									setLocalFlowOps({
+										verified: true,
+										flow: effectiveContextType as "code" | "menu_json",
+										addCount: opSummary.addCount,
+										editCount: opSummary.editCount,
+										deleteCount: opSummary.deleteCount,
+									});
+								}
+								else if (isEditModeEvt) {
+									setLocalFlowOpLines([]);
+									setLocalFlowOps({
+										verified: false,
+										flow: "",
+										addCount: 0,
+										editCount: 0,
+										deleteCount: 0,
+										reason: uiText(
+											"Không xác nhận được local flow code/menu nên ẩn nhãn add-edit-delete để tránh sai lệch.",
+											"Local code/menu flow was not verified, so add-edit-delete labels are hidden to avoid misleading output.",
+											"未能确认本地 code/menu 流程，已隐藏 add-edit-delete 标签以避免误导。",
+										),
+									});
+								}
+
 								setCompletionMetrics({
 									elapsedMs: Number.isFinite(Number(evt.elapsedMs))
 										? Number(evt.elapsedMs)
@@ -3272,9 +3578,31 @@ export default function AiAssistantChat({
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 								setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Hoàn thành", "Completed", "已完成"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+								if (evt.parts && evt.parts.jobId) {
+									effectiveStreamJobId = String(evt.parts.jobId);
+									setPartsManifest({
+										jobId: String(evt.parts.jobId),
+										totalParts: Number.isFinite(Number(evt.parts.totalParts)) ? Number(evt.parts.totalParts) : 0,
+										totalChars: Number.isFinite(Number(evt.parts.totalChars)) ? Number(evt.parts.totalChars) : undefined,
+										status: String(evt.parts.status || "").trim() || undefined,
+										createdAt: Number.isFinite(Number(evt.parts.createdAt)) ? Number(evt.parts.createdAt) : undefined,
+										updatedAt: Number.isFinite(Number(evt.parts.updatedAt)) ? Number(evt.parts.updatedAt) : undefined,
+									});
+									setStreamJobId(effectiveStreamJobId);
+									void loadStreamPartsMeta(effectiveStreamJobId, 1, 20);
+								}
 								if (evt.fullResponse) {
 									streamingMessageRef.current = evt.fullResponse;
 									pendingStreamChunkRef.current = "";
+								}
+								else {
+									const effectiveJobId = String(evt.jobId || evt.parts?.jobId || effectiveStreamJobId || "").trim();
+									if (effectiveJobId) {
+										const hydrated = await hydrateFromPersistedParts(effectiveJobId);
+										if (hydrated) {
+											void loadStreamPartsMeta(effectiveJobId, 1, 20);
+										}
+									}
 								}
 								if (String(evt.responseMode || "").trim().toLowerCase() === "edit") {
 									turnAllowAutoApplyRef.current = true;
@@ -3359,6 +3687,15 @@ export default function AiAssistantChat({
 
 				if (!receivedCompleteEvent && !receivedErrorEvent) {
 					// Fallback: some deployments may close SSE without the final complete frame.
+					if (!streamingMessageRef.current) {
+						const fallbackJobId = String(effectiveStreamJobId || "").trim();
+						if (fallbackJobId) {
+							const hydrated = await hydrateFromPersistedParts(fallbackJobId);
+							if (hydrated) {
+								void loadStreamPartsMeta(fallbackJobId, 1, 20);
+							}
+						}
+					}
 					flushStreamingToUI(true);
 					setCompletionState("stream_closed");
 					setCompletionMetrics({
@@ -3515,6 +3852,118 @@ export default function AiAssistantChat({
 		navigator.clipboard.writeText(streamRequestId);
 		message.success(uiText("Đã sao chép requestId", "requestId copied", "requestId 已复制"));
 	}, [streamRequestId, uiText]);
+
+	const handleCopyJobId = useCallback(() => {
+		if (!streamJobId)
+			return;
+		navigator.clipboard.writeText(streamJobId);
+		message.success(uiText("Đã sao chép jobId", "jobId copied", "jobId 已复制"));
+	}, [streamJobId, uiText]);
+
+	const loadStreamPartsManifest = useCallback(async (jobId: string) => {
+		const safeJobId = String(jobId || "").trim();
+		if (!safeJobId)
+			return null;
+		const response = await request.get(`ai-code-stream/${encodeURIComponent(safeJobId)}/manifest`, {
+			throwHttpErrors: false,
+		});
+		if (!response.ok)
+			return null;
+		const data = await response.json() as any;
+		const manifest: AiStreamPartsManifest = {
+			jobId: String(data?.jobId || safeJobId),
+			totalParts: Number.isFinite(Number(data?.totalParts)) ? Number(data.totalParts) : 0,
+			totalChars: Number.isFinite(Number(data?.totalChars)) ? Number(data.totalChars) : undefined,
+			status: String(data?.status || "").trim() || undefined,
+			createdAt: Number.isFinite(Number(data?.createdAt)) ? Number(data.createdAt) : undefined,
+			updatedAt: Number.isFinite(Number(data?.updatedAt)) ? Number(data.updatedAt) : undefined,
+		};
+		setPartsManifest(manifest);
+		return manifest;
+	}, []);
+
+	const loadStreamPartsMeta = useCallback(async (jobId: string, page = 1, size = 20) => {
+		const safeJobId = String(jobId || "").trim();
+		if (!safeJobId)
+			return null;
+		setPartsMetaLoading(true);
+		try {
+			const response = await request.get(`ai-code-stream/${encodeURIComponent(safeJobId)}/parts/meta`, {
+				searchParams: { page, size },
+				throwHttpErrors: false,
+			});
+			if (!response.ok)
+				return null;
+			const data = await response.json() as any;
+			const pagePayload: AiStreamPartsMetaPage = {
+				jobId: String(data?.jobId || safeJobId),
+				page: Number.isFinite(Number(data?.page)) ? Number(data.page) : 1,
+				size: Number.isFinite(Number(data?.size)) ? Number(data.size) : size,
+				totalParts: Number.isFinite(Number(data?.totalParts)) ? Number(data.totalParts) : 0,
+				totalPages: Number.isFinite(Number(data?.totalPages)) ? Number(data.totalPages) : 1,
+				items: Array.isArray(data?.items)
+					? data.items.map((item: any) => ({
+						partIndex: Number(item?.partIndex || 0),
+						label: String(item?.label || ""),
+						chars: Number(item?.chars || 0),
+					})).filter((item: AiStreamPartMeta) => item.partIndex > 0)
+					: [],
+			};
+			setPartsMetaPage(pagePayload);
+			return pagePayload;
+		}
+		finally {
+			setPartsMetaLoading(false);
+		}
+	}, []);
+
+	const loadStreamPartContent = useCallback(async (jobId: string, partIndex: number) => {
+		const safeJobId = String(jobId || "").trim();
+		if (!safeJobId || !Number.isFinite(partIndex) || partIndex <= 0)
+			return "";
+		setSelectedPartLoading(true);
+		setSelectedPartIndex(partIndex);
+		try {
+			const response = await request.get(`ai-code-stream/${encodeURIComponent(safeJobId)}/parts/${partIndex}`, {
+				throwHttpErrors: false,
+			});
+			if (!response.ok)
+				return "";
+			const data = await response.json() as any;
+			const content = String(data?.content || "");
+			setSelectedPartContent(content);
+			return content;
+		}
+		finally {
+			setSelectedPartLoading(false);
+		}
+	}, []);
+
+	const hydrateFromPersistedParts = useCallback(async (jobId: string) => {
+		const safeJobId = String(jobId || "").trim();
+		if (!safeJobId)
+			return "";
+		const manifest = await loadStreamPartsManifest(safeJobId);
+		const totalParts = Number(manifest?.totalParts || 0);
+		if (totalParts <= 0)
+			return "";
+		const chunks: string[] = [];
+		for (let partIndex = 1; partIndex <= totalParts; partIndex += 1) {
+			const response = await request.get(`ai-code-stream/${encodeURIComponent(safeJobId)}/parts/${partIndex}`, {
+				throwHttpErrors: false,
+			});
+			if (!response.ok)
+				break;
+			const data = await response.json() as any;
+			chunks.push(String(data?.content || ""));
+		}
+		const full = chunks.join("");
+		if (full) {
+			streamingMessageRef.current = full;
+			pendingStreamChunkRef.current = "";
+		}
+		return full;
+	}, [loadStreamPartsManifest]);
 
 	const handleInsertCode = (code: string) => {
 		if (onCodeInsert) {
@@ -4114,6 +4563,197 @@ export default function AiAssistantChat({
 							<div className={styles.usageDockRow}>
 								<span>{uiText("Kết thúc", "Completion", "结束状态")}</span>
 								<span>{completionSummaryLabel}</span>
+							</div>
+						)}
+						{localFlowOps && (
+							<div className={styles.usageDockRow}>
+								<span>{uiText("Local flow", "Local flow", "本地流程")}</span>
+								<span>
+									{localFlowOps.verified
+										? (
+											<Space size={4} wrap>
+												<Tag color="green">
+													{localFlowOps.flow === "menu_json"
+														? uiText("Đã xác nhận MENU", "MENU verified", "已确认 MENU")
+														: uiText("Đã xác nhận CODE", "CODE verified", "已确认 CODE")}
+												</Tag>
+												<Tag>{`${uiText("Thêm", "Add", "新增")}: ${localFlowOps.addCount}`}</Tag>
+												<Tag>{`${uiText("Sửa", "Edit", "编辑")}: ${localFlowOps.editCount}`}</Tag>
+												<Tag>{`${uiText("Xóa", "Delete", "删除")}: ${localFlowOps.deleteCount}`}</Tag>
+											</Space>
+										)
+										: (
+											<Tooltip title={localFlowOps.reason || ""}>
+												<Tag color="orange">
+													{uiText("Chưa xác nhận local flow", "Local flow not verified", "本地流程未确认")}
+												</Tag>
+											</Tooltip>
+										)}
+								</span>
+							</div>
+						)}
+						{localFlowOps?.verified && localFlowOps.flow === "code" && localFlowOpLines.length > 0 && (
+							<div className={styles.localOpsPreview}>
+								<div className={styles.localOpsPreviewHeader}>
+									<div className={styles.localOpsPreviewTitle}>
+										{uiText("Preview thay đổi theo line", "Line-level operation preview", "按行操作预览")}
+									</div>
+									<Space size={4} wrap>
+										<Button
+											type={localFlowOpFilter === "all" ? "primary" : "default"}
+											size="small"
+											onClick={() => setLocalFlowOpFilter("all")}
+										>
+											{uiText("Tất cả", "All", "全部")}
+										</Button>
+										<Button
+											type={localFlowOpFilter === "add" ? "primary" : "default"}
+											size="small"
+											onClick={() => setLocalFlowOpFilter("add")}
+										>
+											{uiText("Thêm", "Add", "新增")}
+										</Button>
+										<Button
+											type={localFlowOpFilter === "edit" ? "primary" : "default"}
+											size="small"
+											onClick={() => setLocalFlowOpFilter("edit")}
+										>
+											{uiText("Sửa", "Edit", "编辑")}
+										</Button>
+										<Button
+											type={localFlowOpFilter === "delete" ? "primary" : "default"}
+											size="small"
+											onClick={() => setLocalFlowOpFilter("delete")}
+										>
+											{uiText("Xóa", "Delete", "删除")}
+										</Button>
+									</Space>
+								</div>
+								<div className={styles.localOpsPreviewList}>
+									{filteredLocalFlowOpLines.map((line, idx) => (
+										<div
+											key={`${line.action}_${line.lineLabel}_${idx}`}
+											className={`${styles.localOpsLine} ${styles[`localOpsLine_${line.action}`] || ""}`.trim()}
+										>
+											<span className={styles.localOpsLineTag}>
+												{line.action === "add" ? "+" : line.action === "delete" ? "-" : "~"}
+												{" "}
+												{line.lineLabel}
+											</span>
+											<span className={styles.localOpsLineText}>{renderOperationSnippetText(line.snippet)}</span>
+										</div>
+									))}
+									{filteredLocalFlowOpLines.length === 0 && (
+										<div className={styles.localOpsEmpty}>
+											{uiText("Không có dòng phù hợp bộ lọc.", "No lines match this filter.", "没有匹配该筛选条件的行。")}
+										</div>
+									)}
+								</div>
+							</div>
+						)}
+						{streamJobId && (
+							<div className={styles.usageDockRow}>
+								<span>{uiText("Stream job", "Stream job", "流任务")}</span>
+								<span>
+									<Space size={4} wrap>
+										<Tag>
+											job
+											{streamJobId}
+										</Tag>
+										<Button type="text" size="small" icon={<CopyOutlined />} onClick={handleCopyJobId} />
+										<Button
+											type="link"
+											size="small"
+											className={styles.compactToggleBtn}
+											onClick={() => {
+												void loadStreamPartsManifest(streamJobId);
+												void loadStreamPartsMeta(streamJobId, 1, 20);
+											}}
+										>
+											{partsMetaLoading
+												? uiText("Đang tải...", "Loading...", "加载中...")
+												: uiText("Tải danh sách PART", "Load PART list", "加载 PART 列表")}
+										</Button>
+									</Space>
+								</span>
+							</div>
+						)}
+						{partsManifest && (
+							<div className={styles.usageDockRow}>
+								<span>{uiText("Lưu trữ", "Persistence", "持久化")}</span>
+								<span>
+									{uiText("Tổng PART", "Total PART", "总 PART")}
+									:
+									{" "}
+									{Math.max(0, Number(partsManifest.totalParts || 0)).toLocaleString("en-US")}
+									{partsManifest.totalChars != null && (
+										<>
+											{" · "}
+											{uiText("Ký tự", "Chars", "字符")}
+											:
+											{" "}
+											{Math.max(0, Number(partsManifest.totalChars || 0)).toLocaleString("en-US")}
+										</>
+									)}
+								</span>
+							</div>
+						)}
+						{partsMetaPage && partsMetaPage.items.length > 0 && (
+							<div className={styles.usageDockRow}>
+								<span>{uiText("PART theo trang", "PART pages", "分页 PART")}</span>
+								<span>
+									<Space size={4} wrap>
+										{partsMetaPage.items.map(item => (
+											<Button
+												key={`part_${item.partIndex}`}
+												type={selectedPartIndex === item.partIndex ? "primary" : "default"}
+												size="small"
+												onClick={() => {
+													void loadStreamPartContent(streamJobId, item.partIndex);
+												}}
+											>
+												{`P${item.partIndex}`}
+											</Button>
+										))}
+										<Button
+											type="link"
+											size="small"
+											className={styles.compactToggleBtn}
+											disabled={partsMetaPage.page <= 1 || partsMetaLoading}
+											onClick={() => {
+												void loadStreamPartsMeta(streamJobId, Math.max(1, partsMetaPage.page - 1), partsMetaPage.size);
+											}}
+										>
+											{uiText("Trang trước", "Prev", "上一页")}
+										</Button>
+										<Button
+											type="link"
+											size="small"
+											className={styles.compactToggleBtn}
+											disabled={partsMetaPage.page >= partsMetaPage.totalPages || partsMetaLoading}
+											onClick={() => {
+												void loadStreamPartsMeta(streamJobId, Math.min(partsMetaPage.totalPages, partsMetaPage.page + 1), partsMetaPage.size);
+											}}
+										>
+											{uiText("Trang sau", "Next", "下一页")}
+										</Button>
+										<Tag>
+											{partsMetaPage.page}
+											/
+											{Math.max(1, partsMetaPage.totalPages)}
+										</Tag>
+									</Space>
+								</span>
+							</div>
+						)}
+						{selectedPartIndex != null && (
+							<div className={styles.usageDockRow}>
+								<span>{uiText("Nội dung PART", "PART content", "PART 内容")}</span>
+								<span>
+									{selectedPartLoading
+										? uiText("Đang tải...", "Loading...", "加载中...")
+										: `${uiText("PART", "PART", "PART")} ${selectedPartIndex}: ${selectedPartContent.slice(0, 180).replace(/\s+/g, " ")}${selectedPartContent.length > 180 ? "..." : ""}`}
+								</span>
 							</div>
 						)}
 						{modelDecisionTrace.length > 0 && (

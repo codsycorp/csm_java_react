@@ -418,6 +418,84 @@
 	word-break: break-word;
 }
 
+.localOpsPreview {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 8px 10px;
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--chat-assistant-bg) 88%, transparent);
+	border: 1px solid color-mix(in srgb, var(--chat-border) 72%, transparent);
+}
+
+.localOpsPreviewTitle {
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 1.2;
+	color: var(--ant-color-text-secondary);
+}
+
+.localOpsPreviewHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.localOpsPreviewList {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	max-height: 180px;
+	overflow: auto;
+}
+
+.localOpsLine {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 4px 6px;
+	border-radius: 6px;
+	font-size: 11px;
+	line-height: 1.35;
+	word-break: break-word;
+}
+
+.localOpsLine_add {
+	background: color-mix(in srgb, #ecfdf5 84%, transparent);
+	border: 1px solid color-mix(in srgb, #86efac 42%, transparent);
+}
+
+.localOpsLine_edit {
+	background: color-mix(in srgb, #eff6ff 84%, transparent);
+	border: 1px solid color-mix(in srgb, #93c5fd 42%, transparent);
+}
+
+.localOpsLine_delete {
+	background: color-mix(in srgb, #fef2f2 84%, transparent);
+	border: 1px solid color-mix(in srgb, #fca5a5 42%, transparent);
+}
+
+.localOpsLineTag {
+	flex: 0 0 auto;
+	font-weight: 700;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+	color: var(--ant-color-text-secondary);
+}
+
+.localOpsLineText {
+	min-width: 0;
+	color: var(--ant-color-text);
+}
+
+.localOpsEmpty {
+	font-size: 11px;
+	line-height: 1.35;
+	color: var(--chat-muted);
+	padding: 4px 2px;
+}
+
 /* ── Gemini progress card ───────────────────────────────── */
 .geminiProgressCard {
 	min-width: 0;
