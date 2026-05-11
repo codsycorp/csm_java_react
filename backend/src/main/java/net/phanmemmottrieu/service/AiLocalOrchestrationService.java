@@ -118,6 +118,12 @@ public class AiLocalOrchestrationService {
     @Value("${ai.orchestration.multimodal.scope-rag.max-chars:5000}")
     private int scopedRagMaxChars;
 
+    @Value("${ai.orchestration.fast-unrelated.enabled:true}")
+    private boolean fastUnrelatedEnabled;
+
+    @Value("${ai.orchestration.fast-unrelated.confidence-threshold:0.85}")
+    private double fastUnrelatedConfidenceThreshold;
+
     private final ExecutorService dynamicIngestExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "ai-dynamic-ingest");
         t.setDaemon(true);
@@ -163,6 +169,34 @@ public class AiLocalOrchestrationService {
         int attachmentChars = estimateAttachmentTextChars(safeAttachments);
         out.totalCharsBefore = messageChars + codeChars + attachmentChars;
 
+        LocalToolDigest digest = runLocalTools(safeMessage, safeCode, safeAttachments);
+        out.toolStats.putAll(digest.stats);
+
+        double offTopicConfidence = getOffTopicConfidence(safeMessage, safeContextType, safeTaskType, safeMode, digest.intentKeywords, attachmentChars);
+        if (fastUnrelatedEnabled && offTopicConfidence > fastUnrelatedConfidenceThreshold) {
+            out.planSteps = List.of(
+                "Detect off-topic request in code/menu workspace (confidence: " + String.format("%.2f", offTopicConfidence) + ")",
+                "Return fast local answer and close session early"
+            );
+            out.routingTier = "planner_fast";
+            out.preferredModelHint = resolvePreferredModelHint(out.routingTier);
+            out.speculativeExecuted = true;
+            out.speculativeOperation = "offtopic_fast_reply";
+            out.earlyFinishResponse = buildOffTopicFastResponse(safeContextType);
+            out.totalCharsAfter = out.totalCharsBefore;
+            out.savedChars = 0;
+            out.toolStats.put("earlyFinish", true);
+            out.toolStats.put("earlyFinishSource", "offtopic_fast_reply");
+            out.toolStats.put("offTopicConfidence", offTopicConfidence);
+            out.toolStats.put("confThreshold", fastUnrelatedConfidenceThreshold);
+            out.toolStats.put("routingTier", out.routingTier);
+            out.toolStats.put("preferredModelHint", out.preferredModelHint);
+            return out;
+        } else if (fastUnrelatedEnabled && offTopicConfidence > 0) {
+            out.toolStats.put("rejectedOffTopic", true);
+            out.toolStats.put("rejectedOffTopicConfidence", offTopicConfidence);
+        }
+
         AiMultimodalScannerService.ScanResult scanResult = aiMultimodalScannerService == null
             ? AiMultimodalScannerService.ScanResult.disabled()
             : aiMultimodalScannerService.scan(
@@ -196,7 +230,11 @@ public class AiLocalOrchestrationService {
         boolean dynamicIndexed = false;
         String dynamicSource = "";
         boolean dynamicIngestScheduled = false;
+        int baselineScopeMask = defaultScopeMaskForContext(safeContextType, safeTaskType);
         int aggregateScopeMask = scanResult.enabled() ? Math.max(0, scanResult.aggregateScopeMask()) : 0;
+        if (aggregateScopeMask <= 0) {
+            aggregateScopeMask = baselineScopeMask;
+        }
         List<String> aggregateScopeTags = AiMultimodalScannerService.scopeTagsFromMask(aggregateScopeMask);
         String aggregateScopeSummary = summarizeScopeTags(aggregateScopeTags);
         if (scanResult.enabled()) {
@@ -204,13 +242,31 @@ public class AiLocalOrchestrationService {
             out.toolStats.put("scannerScopeTags", aggregateScopeTags);
             out.toolStats.put("scannerScopeSummary", aggregateScopeSummary);
         }
-        if (scanResult.enabled()
-            && dynamicIngestEnabled
-            && scanResult.ingestCount() > 0
+        String scanIngestionMarkdown = scanResult.enabled()
+            ? String.valueOf(scanResult.ingestionMarkdown() == null ? "" : scanResult.ingestionMarkdown())
+            : "";
+        String primaryFlowMarkdown = buildPrimaryFlowIngestionMarkdown(
+            safeContextType,
+            safeTaskType,
+            safeMessage,
+            safeCode,
+            digest,
+            Math.max(3200, dynamicIngestMaxMarkdownChars / 2));
+
+        if (dynamicIngestEnabled
             && aiBusinessMemoryVectorService != null
             && aiBusinessMemoryVectorService.isEnabled()) {
-            String markdown = trimTo(String.valueOf(scanResult.ingestionMarkdown() == null ? "" : scanResult.ingestionMarkdown()),
-                Math.max(4000, dynamicIngestMaxMarkdownChars));
+            String mergedIngestion = "";
+            if (!scanIngestionMarkdown.isBlank()) {
+                mergedIngestion = scanIngestionMarkdown;
+            }
+            if (!primaryFlowMarkdown.isBlank()) {
+                mergedIngestion = mergedIngestion.isBlank()
+                    ? primaryFlowMarkdown
+                    : (mergedIngestion + "\n\n## PRIMARY_FLOW_CONTEXT\n" + primaryFlowMarkdown);
+            }
+
+            String markdown = trimTo(mergedIngestion, Math.max(4000, dynamicIngestMaxMarkdownChars));
             if (!markdown.isBlank()) {
                 String suffix = "orchestration_" + System.currentTimeMillis();
                 List<String> dynamicTags = new ArrayList<>();
@@ -218,6 +274,9 @@ public class AiLocalOrchestrationService {
                 dynamicTags.add("multimodal");
                 dynamicTags.add(safeContextType);
                 dynamicTags.add(safeTaskType);
+                if (!primaryFlowMarkdown.isBlank()) {
+                    dynamicTags.add("primary_flow");
+                }
                 dynamicTags.addAll(AiMultimodalScannerService.scopeTagsFromMask(aggregateScopeMask));
                 if (dynamicIngestAsyncEnabled) {
                     dynamicIngestScheduled = true;
@@ -225,7 +284,7 @@ public class AiLocalOrchestrationService {
                     final String asyncSuffix = suffix;
                     final String asyncMarkdown = markdown;
                     final List<String> asyncTags = List.copyOf(dynamicTags);
-                    final int asyncScopeMask = aggregateScopeMask;
+                    final int asyncScopeMask = Math.max(aggregateScopeMask, baselineScopeMask);
                     dynamicIngestExecutor.submit(() -> {
                         try {
                             aiBusinessMemoryVectorService.indexDynamicContext(
@@ -248,7 +307,7 @@ public class AiLocalOrchestrationService {
                         suffix,
                         markdown,
                         dynamicTags,
-                        aggregateScopeMask
+                        Math.max(aggregateScopeMask, baselineScopeMask)
                     );
                     dynamicIndexed = indexSummary != null && indexSummary.chunksIndexed() > 0;
                     dynamicSource = indexSummary == null ? "" : String.valueOf(indexSummary.sourceName() == null ? "" : indexSummary.sourceName());
@@ -270,9 +329,15 @@ public class AiLocalOrchestrationService {
             && aggregateScopeMask > 0
             && aiBusinessMemoryVectorService != null
             && aiBusinessMemoryVectorService.isEnabled()) {
+            String retrievalQuery = buildSelfDirectedRetrievalQuery(
+                safeMessage,
+                digest.intentKeywords,
+                safeContextType,
+                safeTaskType,
+                safeMode);
             scopedRagBlock = aiBusinessMemoryVectorService.buildRagBlockWithScopes(
                 appId,
-                safeMessage,
+                retrievalQuery,
                 Math.max(2, scopedRagTopK),
                 aggregateScopeMask,
                 Math.max(1600, scopedRagMaxChars)
@@ -280,10 +345,8 @@ public class AiLocalOrchestrationService {
             out.toolStats.put("scopedRagEnabled", true);
             out.toolStats.put("scopedRagScopeMask", aggregateScopeMask);
             out.toolStats.put("scopedRagChars", scopedRagBlock.length());
+            out.toolStats.put("scopedRagQuery", truncateLine(retrievalQuery, 180));
         }
-
-        LocalToolDigest digest = runLocalTools(safeMessage, safeCode, safeAttachments);
-        out.toolStats.putAll(digest.stats);
 
         AiSpeculativeExecutionService.ExecutionResult speculative = aiSpeculativeExecutionService.run(
             safeMessage,
@@ -691,6 +754,182 @@ public class AiLocalOrchestrationService {
             }
         }
         return out.isEmpty() ? "none" : String.join(", ", out);
+    }
+
+    private int defaultScopeMaskForContext(String contextType, String taskType) {
+        String ctx = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        String task = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
+        int mask = AiMultimodalScannerService.SCOPE_BUSINESS;
+        if ("menu_json".equals(ctx) || task.contains("menu")) {
+            mask |= AiMultimodalScannerService.SCOPE_MENU;
+            mask |= AiMultimodalScannerService.SCOPE_JSON_SCHEMA;
+        } else {
+            mask |= AiMultimodalScannerService.SCOPE_CODE;
+        }
+        return mask;
+    }
+
+    private String buildSelfDirectedRetrievalQuery(
+        String message,
+        Set<String> intentKeywords,
+        String contextType,
+        String taskType,
+        String responseMode
+    ) {
+        StringBuilder q = new StringBuilder();
+        q.append(String.valueOf(message == null ? "" : message).trim());
+        if (intentKeywords != null && !intentKeywords.isEmpty()) {
+            q.append(" | intents: ");
+            int count = 0;
+            for (String token : intentKeywords) {
+                if (token == null || token.isBlank()) {
+                    continue;
+                }
+                if (count > 0) {
+                    q.append(' ');
+                }
+                q.append(token.trim());
+                count++;
+                if (count >= 8) {
+                    break;
+                }
+            }
+        }
+        q.append(" | context=").append(String.valueOf(contextType == null ? "" : contextType));
+        q.append(" | task=").append(String.valueOf(taskType == null ? "" : taskType));
+        q.append(" | mode=").append(String.valueOf(responseMode == null ? "" : responseMode));
+        return trimTo(q.toString(), 380);
+    }
+
+    private String buildPrimaryFlowIngestionMarkdown(
+        String contextType,
+        String taskType,
+        String message,
+        String currentCode,
+        LocalToolDigest digest,
+        int maxChars
+    ) {
+        String code = String.valueOf(currentCode == null ? "" : currentCode).trim();
+        if (code.isBlank()) {
+            return "";
+        }
+        String ctx = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        StringBuilder sb = new StringBuilder();
+        sb.append("source=primary_flow\n");
+        sb.append("contextType=").append(ctx).append("\n");
+        sb.append("taskType=").append(String.valueOf(taskType == null ? "" : taskType).trim()).append("\n");
+        sb.append("request=\n").append(trimTo(String.valueOf(message == null ? "" : message).trim(), 600)).append("\n\n");
+
+        if (digest != null && digest.intentKeywords != null && !digest.intentKeywords.isEmpty()) {
+            sb.append("intentKeywords=\n");
+            int i = 0;
+            for (String token : digest.intentKeywords) {
+                if (token == null || token.isBlank()) {
+                    continue;
+                }
+                sb.append("- ").append(token.trim()).append("\n");
+                i++;
+                if (i >= 12) {
+                    break;
+                }
+            }
+            sb.append("\n");
+        }
+
+        if (digest != null && digest.codeSymbols != null && !digest.codeSymbols.isEmpty()) {
+            sb.append("codeSymbols=\n");
+            for (int i = 0; i < digest.codeSymbols.size() && i < 24; i++) {
+                sb.append("- ").append(String.valueOf(digest.codeSymbols.get(i))).append("\n");
+            }
+            sb.append("\n");
+        }
+
+        String snippet;
+        if ("menu_json".equals(ctx)) {
+            snippet = trimTo(code, Math.max(1600, maxChars / 2));
+            sb.append("menuJsonSnippet=\n```json\n").append(snippet).append("\n```\n");
+        } else {
+            snippet = truncateMiddle(code, Math.max(1800, maxChars / 2));
+            sb.append("codeSnippet=\n```")
+                .append("\n")
+                .append(snippet)
+                .append("\n```\n");
+        }
+        return trimTo(sb.toString(), Math.max(1200, maxChars));
+    }
+
+    private double getOffTopicConfidence(
+        String message,
+        String contextType,
+        String taskType,
+        String responseMode,
+        Set<String> intentKeywords,
+        int attachmentChars
+    ) {
+        // If attachments present, assume on-topic (user providing explicit context)
+        if (attachmentChars > 0) {
+            return 0.0;
+        }
+        String m = String.valueOf(message == null ? "" : message).trim().toLowerCase(Locale.ROOT);
+        if (m.isBlank()) {
+            return 0.0;
+        }
+        String ctx = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        if (!"code".equals(ctx) && !"menu_json".equals(ctx)) {
+            return 0.0;
+        }
+
+        // Domain keywords that indicate coding/menu task
+        boolean looksLikeCodingTask = m.contains("code") || m.contains("bug") || m.contains("fix")
+            || m.contains("json") || m.contains("menu") || m.contains("api")
+            || m.contains("function") || m.contains("class") || m.contains("schema")
+            || m.contains("refactor") || m.contains("patch") || m.contains("cursor")
+            || m.contains("codemirror") || m.contains("sua") || m.contains("chinh")
+            || m.contains("chỉnh") || m.contains("ham") || m.contains("hàm")
+            || m.contains("table") || m.contains("trigger");
+        if (looksLikeCodingTask) {
+            return 0.0;
+        }
+
+        // Off-topic indicators (greetings, weather, sports, etc.)
+        boolean obviousOffTopic = m.matches("^(hi|hello|hey|xin chao|xin chào|cam on|cảm ơn|thanks|thank you|ok|oke|bye|tạm biệt|tam biet)[!. ]*$")
+            || m.contains("thời tiết") || m.contains("thoi tiet") || m.contains("weather")
+            || m.contains("tỷ giá") || m.contains("ty gia") || m.contains("bitcoin")
+            || m.contains("bóng đá") || m.contains("bong da") || m.contains("chứng khoán")
+            || m.contains("chung khoan") || m.contains("joke") || m.contains("kể chuyện")
+            || m.contains("ke chuyen") || m.contains("nhạc") || m.contains("music")
+            || m.contains("phim") || m.contains("movie") || m.contains("du lịch") || m.contains("du lich");
+        if (!obviousOffTopic) {
+            return 0.0;
+        }
+
+        // Scoring: obvious off-topic + low intent keywords + valid context/mode
+        double confidence = 0.7; // Base score for obvious off-topic keyword
+        
+        int intents = intentKeywords == null ? 0 : intentKeywords.size();
+        if (intents <= 3) {
+            confidence += 0.15; // Very low intent keywords
+        } else if (intents <= 8) {
+            confidence += 0.05; // Low-medium intent keywords
+        } else {
+            return 0.0; // Too many intent keywords, likely legitimate
+        }
+        
+        String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
+        String task = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
+        if ("analyze".equals(mode) || "edit".equals(mode) || task.contains("code") || task.contains("menu")) {
+            confidence += 0.1; // Response mode/task type consistent
+        }
+        
+        return Math.min(1.0, confidence);
+    }
+
+    private String buildOffTopicFastResponse(String contextType) {
+        String ctx = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        if ("menu_json".equals(ctx)) {
+            return "[STRICT MODE] Yeu cau nay khong nam trong pham vi thiet ke menu/code hien tai (high confidence off-topic). Vui long gui ro thao tac menu can lam (them/sua/xoa module, bang, trigger, field) de toi xu ly nhanh local theo tung buoc.";
+        }
+        return "[STRICT MODE] Yeu cau nay khong nam trong pham vi ho tro code/menu cua editor hien tai (high confidence off-topic). Vui long gui ro task code can lam (analyze/fix/refactor/generate patch) de toi xu ly local va stream tung buoc len CodeMirror.";
     }
 
     private String str(Object raw) {

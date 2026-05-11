@@ -1318,6 +1318,99 @@ public class ApiSpringController {
                     messageWithReuse = continuityHeader + compactReuse + "\n\n[CURRENT_REQUEST]\n" + message;
                 }
 
+                AiLocalOrchestrationService.OrchestrationResult codeStreamOrchestration = AiLocalOrchestrationService.OrchestrationResult.disabled();
+                try {
+                    List<Map<String, Object>> orchestrationAttachments = normalizeAiAssistantAttachments(attachmentsRaw);
+                    codeStreamOrchestration = aiLocalOrchestrationService.orchestrate(
+                        appId,
+                        message,
+                        effectiveCodeContext,
+                        orchestrationAttachments,
+                        contextType,
+                        effectiveTaskType,
+                        responseMode,
+                        language);
+
+                    if (codeStreamOrchestration.enabled
+                        && codeStreamOrchestration.compressedContextBlock != null
+                        && !codeStreamOrchestration.compressedContextBlock.isBlank()) {
+                        Map<String, Object> orchestrationStats = codeStreamOrchestration.toolStats == null
+                            ? Collections.emptyMap()
+                            : codeStreamOrchestration.toolStats;
+                        sendEvent(emitter, jsonOf(
+                            "stage", "agentic_plan",
+                            "status", "running",
+                            "requestId", requestId,
+                            "message", "Da lap ke hoach local-agentic va chon retrieval Lucene theo scope",
+                            "savedChars", codeStreamOrchestration.savedChars,
+                            "routingTier", codeStreamOrchestration.routingTier,
+                            "planStepCount", codeStreamOrchestration.planSteps == null ? 0 : codeStreamOrchestration.planSteps.size(),
+                            "scopeMask", parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0),
+                            "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none"))));
+
+                        List<String> planSteps = codeStreamOrchestration.planSteps == null ? List.of() : codeStreamOrchestration.planSteps;
+                        int planTotal = Math.min(6, planSteps.size());
+                        for (int i = 0; i < planTotal; i++) {
+                            sendEvent(emitter, jsonOf(
+                                "stage", "agentic_step",
+                                "status", "running",
+                                "requestId", requestId,
+                                "current", i + 1,
+                                "total", planTotal,
+                                "message", String.valueOf(planSteps.get(i) == null ? "" : planSteps.get(i))));
+                        }
+
+                        messageWithReuse = messageWithReuse
+                            + "\n\n[LOCAL_ORCHESTRATION_CONTEXT]\n"
+                            + codeStreamOrchestration.compressedContextBlock;
+
+                        sendEvent(emitter, jsonOf(
+                            "stage", "context_compression",
+                            "status", "orchestration_context_attached",
+                            "requestId", requestId,
+                            "message", "Da gan compressed orchestration context vao prompt cuoi",
+                            "savedChars", codeStreamOrchestration.savedChars));
+                    }
+                } catch (Exception orchestrationEx) {
+                    logger.warn("ai-code-stream local orchestration failed, continue with baseline flow: {}", orchestrationEx.getMessage());
+                }
+
+                if (codeStreamOrchestration != null
+                    && codeStreamOrchestration.earlyFinishResponse != null
+                    && !codeStreamOrchestration.earlyFinishResponse.isBlank()) {
+                    String earlyText = codeStreamOrchestration.earlyFinishResponse;
+                    sendEvent(emitter, jsonOf(
+                        "stage", "early_finish",
+                        "status", "running",
+                        "requestId", requestId,
+                        "message", "Yeu cau ngoai pham vi code/menu, ket thuc nhanh bang local reasoning"));
+                    sendEvent(emitter, jsonOf(
+                        "stage", "streaming_started",
+                        "requestId", requestId,
+                        "model", "local_orchestration",
+                        "ttftMs", 0,
+                        "estimatedTotalChars", earlyText.length(),
+                        "percent", 15));
+                    int localStreamChunks = emitSyntheticLocalStreamChunks(
+                        emitter,
+                        requestId,
+                        earlyText,
+                        1,
+                        false,
+                        true);
+                    Map<String, Object> completion = new LinkedHashMap<>();
+                    completion.put("stage", "complete");
+                    completion.put("requestId", requestId);
+                    completion.put("content", earlyText);
+                    completion.put("streamChunkCount", localStreamChunks);
+                    completion.put("streamedChars", earlyText.length());
+                    completion.put("model", "local_orchestration");
+                    sendEvent(emitter, objectMapper.writeValueAsString(completion));
+                    streamCompletedRef.set(true);
+                    emitter.complete();
+                    return;
+                }
+
                 String prompt = buildCodingPrompt(
                     appId,
                     messageWithReuse,
@@ -14512,20 +14605,11 @@ public class ApiSpringController {
             }
 
             String githubRaw = this.aiAssistantGatewayService.generateContent(safePrompt, progressListener);
+            // For SEO content, do NOT fallback to aiProviderFactory as it respects prefer-local-first.
+            // aiAssistantGatewayService enforces Gemini, so if it fails, return the error from it directly.
             boolean rateOrQuotaFailure = shouldFallbackToGemini(githubRaw);
-            boolean hardQuotaFailure = isHardQuotaFailure(githubRaw);
-            boolean allowGeminiFallback = !blockGeminiFallback || hardQuotaFailure;
-            if (rateOrQuotaFailure && allowGeminiFallback) {
-                logger.warn("AI Assistant API hit quota/rate limit. Auto fallback to Gemini provider flow.");
-                if (progressListener != null) {
-                    String fallbackMsg = hardQuotaFailure
-                        ? "AI Assistant API hết daily quota, đang chuyển sang Gemini"
-                        : "AI Assistant API hết quota, đang chuyển sang Gemini";
-                    progressListener.onProgress(createAiJobProgress("gemini_fallback", fallbackMsg, 0, 1, null));
-                }
-                return this.aiProviderFactory.generateContent(safePrompt);
-            } else if (rateOrQuotaFailure && blockGeminiFallback) {
-                logger.warn("AI Assistant API hit quota/rate limit but Gemini fallback is disabled for this request.");
+            if (rateOrQuotaFailure) {
+                logger.warn("AI Assistant API (Gemini) hit quota/rate limit. Returning error directly (no further fallback).");
             }
             return githubRaw;
         }
@@ -14550,23 +14634,25 @@ public class ApiSpringController {
             }
 
             String githubRaw = this.aiAssistantGatewayService.generateContent(safePrompt, progressListener);
+            // For large prompts, aiAssistantGatewayService handles routing. Do NOT fall back to aiProviderFactory.
+            // aiAssistantGatewayService enforces Gemini, so any errors here should be returned directly.
             if (shouldFallbackToGemini(githubRaw)) {
-                logger.warn("AI Assistant API hit quota/rate limit. Auto fallback to Gemini provider flow.");
-                if (progressListener != null) {
-                    progressListener.onProgress(createAiJobProgress("gemini_fallback", "AI Assistant API hết quota, đang chuyển sang Gemini", 0, 1, null));
-                }
-                return this.aiProviderFactory.generateContent(safePrompt);
+                logger.warn("AI Assistant API (Gemini) hit quota/rate limit for large prompt. Returning error (no further fallback).");
             }
             return githubRaw;
         }
 
         if (params != null) {
-            params.put("_providerRoutingDecision", "gemini_first_default");
+            params.put("_providerRoutingDecision", "gemini_via_aiAssistant_gateway");
         }
         if (progressListener != null) {
-            progressListener.onProgress(createAiJobProgress("gemini", "Đang gọi Gemini", 0, 1, null));
+            progressListener.onProgress(createAiJobProgress("gemini", "Đang gọi Gemini thông qua AI Assistant Gateway", 0, 1, null));
         }
-        return this.aiProviderFactory.generateContent(safePrompt);
+        // For general-purpose tasks (SEO, content generation, etc.) that are not explicitly local,
+        // route through aiAssistantGatewayService which enforces Gemini provider.
+        // Do NOT use aiProviderFactory here because it respects "prefer-local-first" setting
+        // and can get stuck on local AI errors without falling back to Gemini.
+        return this.aiAssistantGatewayService.generateContent(safePrompt, progressListener);
     }
 
     private String fetchAiRawContentWithMenuRecovery(

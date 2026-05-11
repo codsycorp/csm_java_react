@@ -50,8 +50,9 @@ detect_total_mem_mb() {
     echo 0
 }
 
+total_mem_mb=$(detect_total_mem_mb)
+
 if [ -z "${HEAP_SIZE:-}" ]; then
-    total_mem_mb=$(detect_total_mem_mb)
     if [ "$total_mem_mb" -gt 0 ]; then
         if [ "$total_mem_mb" -lt 3500 ]; then
             HEAP_SIZE="1536m"
