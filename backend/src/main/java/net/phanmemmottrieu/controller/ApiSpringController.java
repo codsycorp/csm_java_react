@@ -711,7 +711,7 @@ public class ApiSpringController {
     @Value("${ai.local.chunking.max-chunks:20}")
     private int aiLocalChunkingMaxChunks;
 
-    @Value("${ai.local.analyze.language-alignment.enabled:true}")
+    @Value("${ai.local.analyze.language-alignment.enabled:false}")
     private boolean aiLocalAnalyzeLanguageAlignmentEnabled;
 
     @Value("${ai.local.analyze.language-alignment.max-tokens:384}")
@@ -3297,30 +3297,8 @@ public class ApiSpringController {
             sb.append("- Nếu ngữ cảnh chưa đủ, hỏi rất hẹp: chỉ hỏi đúng phần thiếu để tiếp tục.\n");
             sb.append("- Khi phản hồi, ưu tiên ngắn gọn: đang kiểm tra gì, phát hiện gì, bước tiếp theo là gì.\n\n");
 
-            sb.append("## FIXED_REQUEST_SCHEMA\n");
-            sb.append("Client should send a stable JSON payload shaped like this:\n");
-            sb.append("{\n");
-            sb.append("  \"appId\": \"string\",\n");
-            sb.append("  \"message\": \"string\",\n");
-            sb.append("  \"currentCode\": \"string\",\n");
-            sb.append("  \"language\": \"javascript|html|python|css|sql|json\",\n");
-            sb.append("  \"contextType\": \"code|menu_json\",\n");
-            sb.append("  \"responseMode\": \"answer|analyze|edit\",\n");
-            sb.append("  \"flowType\": \"ai-code-stream|ai-assistant-chat|menu_manager\",\n");
-            sb.append("  \"taskType\": \"string\",\n");
-            sb.append("  \"pName\": \"string\",\n");
-            sb.append("  \"pType\": 0,\n");
-            sb.append("  \"cursorLine\": 1,\n");
-            sb.append("  \"contextWindowLines\": 50,\n");
-            sb.append("  \"baseContentRef\": \"string\",\n");
-            sb.append("  \"baseContent\": \"string\",\n");
-            sb.append("  \"preserveBaseContent\": false,\n");
-            sb.append("  \"attachments\": [],\n");
-            sb.append("  \"editorMetadata\": {}\n");
-            sb.append("}\n");
-            sb.append("Required fields for normal code-string flows: appId, message, currentCode, language, contextType, responseMode, flowType.\n");
-            sb.append("Optional fields should be omitted when empty instead of sending noisy placeholders.\n");
-            sb.append("If the user is editing code from an in-memory string, currentCode remains the source of truth even without a file path.\n\n");
+            // NOTE: FIXED_REQUEST_SCHEMA removed from prompt to prevent weak local models from
+            // echoing the schema JSON block back as their response. Schema is internal developer docs only.
         }
 
         if (localContextBundle.forceLocalOnly()) {
@@ -7893,6 +7871,12 @@ public class ApiSpringController {
                 || llamaCppNativeService == null
                 || !llamaCppNativeService.isAvailable()
                 || llamaCppNativeService.isCircuitOpen()) {
+            return draft;
+        }
+        // Guard: if model's effective token budget is < 256, language alignment would truncate
+        // the entire draft to near-nothing. Skip and return draft directly.
+        int effectiveCap = Math.min(aiLocalAnalyzeLanguageAlignmentMaxTokens, 1024);
+        if (effectiveCap < 256) {
             return draft;
         }
 
