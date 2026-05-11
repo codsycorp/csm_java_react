@@ -306,31 +306,6 @@
       <version>4.1.0</version>
     </dependency>
 
-    <!-- ── Deep Java Library (DJL) ──────────────────────────────────────────
-         DJL provides a unified inference API for both GGUF (via Llama engine)
-         and ONNX (via ONNX Runtime engine) models, running fully in-JVM on CPU.
-         When ai.local.djl.enabled=true, DjlInferenceService is activated and
-         LlamaCppNativeService delegates ONNX requests to it automatically.
-         ONNX models exported from HuggingFace optimum land in:
-           csm_datas/ai_local/model/onnx/  (model.onnx + tokenizer.json)
-    ──────────────────────────────────────────────────────────────────────── -->
-    <dependency>
-      <groupId>ai.djl</groupId>
-      <artifactId>api</artifactId>
-      <version>0.31.0</version>
-    </dependency>
-    <dependency>
-      <groupId>ai.djl.onnxruntime</groupId>
-      <artifactId>onnxruntime-engine</artifactId>
-      <version>0.31.0</version>
-    </dependency>
-    <!-- Microsoft ONNX Runtime CPU (bundled native libs – no system install needed) -->
-    <dependency>
-      <groupId>com.microsoft.onnxruntime</groupId>
-      <artifactId>onnxruntime</artifactId>
-      <version>1.19.0</version>
-    </dependency>
-
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>

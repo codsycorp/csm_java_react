@@ -117,8 +117,11 @@ function withForcedSubuserScope(payload: any): any {
 const API_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 10000;
 
 const defaultConfig: Options = {
-   // The input argument cannot start with a slash / when using prefixUrl option.
-   prefixUrl: import.meta.env.VITE_API_BASE_URL,
+	// In dev, always use Vite proxy to keep auth/cookie flow same-origin and stable.
+	// In production, keep env-based API base URL behavior.
+	prefixUrl: import.meta.env.DEV
+		? '/api'
+		: (import.meta.env.VITE_API_BASE_URL || '/api'),
    timeout: API_TIMEOUT,
    credentials: 'include', // LUÔN gửi cookie lên backend
    retry: {

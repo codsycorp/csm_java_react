@@ -51,7 +51,8 @@ public class AiAssistantEngineController {
     public ResponseEntity<Map<String, Object>> indexMarkdownFile(
         @RequestPart("file") MultipartFile file,
         @RequestParam("appId") String appId,
-        @RequestParam(value = "tags", required = false) String tagsRaw
+        @RequestParam(value = "tags", required = false) String tagsRaw,
+        @RequestParam(value = "scopeMask", required = false) Integer scopeMask
     ) {
         Map<String, Object> out = new LinkedHashMap<>();
         try {
@@ -65,7 +66,8 @@ public class AiAssistantEngineController {
             String content = new String(file.getBytes(), StandardCharsets.UTF_8);
             List<String> tags = parseTags(tagsRaw);
 
-            AiBusinessMemoryVectorService.IndexSummary summary = businessMemoryVectorService.indexMarkdown(appId, sourceName, content, tags);
+            int safeScopeMask = Math.max(0, scopeMask == null ? 0 : scopeMask);
+            AiBusinessMemoryVectorService.IndexSummary summary = businessMemoryVectorService.indexMarkdown(appId, sourceName, content, tags, safeScopeMask);
             out.put("success", true);
             out.put("message", "indexed");
             out.put("result", summary);
@@ -85,8 +87,9 @@ public class AiAssistantEngineController {
             String sourceName = str(body.get("name"));
             String content = str(body.get("content"));
             List<String> tags = parseTags(str(body.get("tags")));
+            int safeScopeMask = parseScopeMask(body.get("scopeMask"));
 
-            AiBusinessMemoryVectorService.IndexSummary summary = businessMemoryVectorService.indexMarkdown(appId, sourceName, content, tags);
+            AiBusinessMemoryVectorService.IndexSummary summary = businessMemoryVectorService.indexMarkdown(appId, sourceName, content, tags, safeScopeMask);
             out.put("success", true);
             out.put("message", "indexed");
             out.put("result", summary);
@@ -102,10 +105,14 @@ public class AiAssistantEngineController {
     public ResponseEntity<Map<String, Object>> search(
         @RequestParam("appId") String appId,
         @RequestParam("q") String q,
-        @RequestParam(value = "k", required = false) Integer k
+        @RequestParam(value = "k", required = false) Integer k,
+        @RequestParam(value = "scopeMask", required = false) Integer scopeMask
     ) {
         Map<String, Object> out = new LinkedHashMap<>();
-        List<AiBusinessMemoryVectorService.SearchHit> hits = businessMemoryVectorService.search(appId, q, k);
+        int safeScopeMask = Math.max(0, scopeMask == null ? 0 : scopeMask);
+        List<AiBusinessMemoryVectorService.SearchHit> hits = safeScopeMask > 0
+            ? businessMemoryVectorService.searchWithScopes(appId, q, k, safeScopeMask)
+            : businessMemoryVectorService.search(appId, q, k);
         out.put("success", true);
         out.put("message", "ok");
         out.put("result", hits);
@@ -130,6 +137,7 @@ public class AiAssistantEngineController {
         Map<String, Object> out = new LinkedHashMap<>();
         try {
             String appId = str(body.getOrDefault("appId", ""));
+            int safeScopeMask = parseScopeMask(body.get("scopeMask"));
             if (appId.isBlank()) {
                 out.put("success", false);
                 out.put("message", "appId is required");
@@ -164,7 +172,7 @@ public class AiAssistantEngineController {
                             String content = Files.readString(p, StandardCharsets.UTF_8);
                             String sourceName = p.getFileName().toString();
                             AiBusinessMemoryVectorService.IndexSummary summary =
-                                businessMemoryVectorService.indexMarkdown(appId, sourceName, content, List.of());
+                                businessMemoryVectorService.indexMarkdown(appId, sourceName, content, List.of(), safeScopeMask);
                             Map<String, Object> entry = new LinkedHashMap<>();
                             entry.put("file", sourceName);
                             entry.put("chunks", summary.chunksIndexed());
@@ -213,6 +221,18 @@ public class AiAssistantEngineController {
 
     private String str(Object raw) {
         return String.valueOf(raw == null ? "" : raw).trim();
+    }
+
+    private int parseScopeMask(Object raw) {
+        String value = str(raw);
+        if (value.isBlank()) {
+            return 0;
+        }
+        try {
+            return Math.max(0, Integer.parseInt(value));
+        } catch (Exception ignored) {
+            return 0;
+        }
     }
 
     private List<String> parseTags(String tagsRaw) {

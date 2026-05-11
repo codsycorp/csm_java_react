@@ -105,6 +105,12 @@ interface AiAssistantStageEvent {
 	status?: string
 	model?: string
 	requestId?: string
+	scopeMask?: number
+	scopeSummary?: string
+	scopeTags?: string[]
+	queueState?: string
+	dynamicSource?: string
+	prunedSources?: number
 	message: string
 	messageKey?: string
 	messageArgs?: Record<string, any>
@@ -145,6 +151,8 @@ interface CompletionMetrics {
 	promptTruncatedByCharCap?: boolean
 	menuShrinkGuard?: boolean
 	menuShrinkRatio?: number
+	patchFallbackNoOp?: boolean
+	patchFallbackReasonCode?: string
 }
 
 interface ModelDecisionTrace {
@@ -226,15 +234,15 @@ const STREAM_CODEBLOCK_PARSE_MS = 240;
 const MAX_CHAT_INPUT_CHARS = 20000;
 const MAX_STRUCTURED_TEXT_EDITS = 160;
 const MAX_STRUCTURED_REPLACEMENT_CHARS = 800000;
-const SHOW_DETAILED_PROGRESS_TIMELINE = true;
-const COMPACT_STAGE_EVENTS = 6;
-const COMPACT_MODEL_TRACE = 2;
+const SHOW_DETAILED_PROGRESS_TIMELINE = false;
+const COMPACT_STAGE_EVENTS = 4;
+const COMPACT_MODEL_TRACE = 1;
 const DONE_DOCK_AUTO_COLLAPSE_MS = 3500;
 const DONE_USAGE_DOCK_AUTO_HIDE_MS = 6500;
-const PROGRESS_WATCHDOG_SILENCE_MS = 10_000;
+const PROGRESS_WATCHDOG_SILENCE_MS = 15_000;
 const PROGRESS_WATCHDOG_TICK_MS = 3_000;
-const PROGRESS_WATCHDOG_ALERT_INTERVAL_MS = 20_000;
-const PROGRESS_EVENT_AGE_TICK_MS = 1_000;
+const PROGRESS_WATCHDOG_ALERT_INTERVAL_MS = 30_000;
+const PROGRESS_EVENT_AGE_TICK_MS = 2_000;
 const TEXT_FILE_EXTENSIONS = new Set([
 	"txt",
 	"md",
@@ -528,17 +536,72 @@ function extractValidJsonCandidate(rawText: string): string | null {
 	const text = String(rawText || "").trim();
 	if (!text)
 		return null;
-	const candidates = [text];
+	const candidates: string[] = [text];
+	const pushCandidate = (raw: string) => {
+		const candidate = String(raw || "").trim();
+		if (!candidate)
+			return;
+		if (!candidates.includes(candidate)) {
+			candidates.push(candidate);
+		}
+	};
 
-	const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-	if (fenceMatch?.[1]) {
-		candidates.push(String(fenceMatch[1]).trim());
+	for (const fenceMatch of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+		if (fenceMatch?.[1]) {
+			pushCandidate(String(fenceMatch[1]));
+		}
+	}
+
+	const objectStarts: number[] = [];
+	for (let i = 0; i < text.length; i += 1) {
+		if (text[i] === "{") {
+			objectStarts.push(i);
+		}
+	}
+	for (const start of objectStarts.slice(0, 12)) {
+		let depth = 0;
+		let inString = false;
+		let escaped = false;
+		for (let i = start; i < text.length; i += 1) {
+			const ch = text[i];
+			if (inString) {
+				if (escaped) {
+					escaped = false;
+					continue;
+				}
+				if (ch === "\\") {
+					escaped = true;
+					continue;
+				}
+				if (ch === '"') {
+					inString = false;
+				}
+				continue;
+			}
+			if (ch === '"') {
+				inString = true;
+				continue;
+			}
+			if (ch === "{") {
+				depth += 1;
+			}
+			else if (ch === "}") {
+				depth -= 1;
+				if (depth === 0) {
+					pushCandidate(text.slice(start, i + 1));
+					break;
+				}
+				if (depth < 0) {
+					break;
+				}
+			}
+		}
 	}
 
 	const objStart = text.indexOf("{");
 	const objEnd = text.lastIndexOf("}");
 	if (objStart >= 0 && objEnd > objStart) {
-		candidates.push(text.slice(objStart, objEnd + 1).trim());
+		pushCandidate(text.slice(objStart, objEnd + 1));
 	}
 
 	for (const candidate of candidates) {
@@ -552,6 +615,17 @@ function extractValidJsonCandidate(rawText: string): string | null {
 	}
 
 	return null;
+}
+
+function sanitizeBusinessDisplayValue(key: string, renderedValue: string): string {
+	const normalizedKey = String(key || "").trim().toLowerCase();
+	const normalizedValue = String(renderedValue || "").trim();
+	if (!normalizedValue)
+		return "";
+	if (normalizedKey.includes("luong_xu_ly") && /^\d{3,}$/.test(normalizedValue)) {
+		return "";
+	}
+	return normalizedValue;
 }
 
 function parseStructuredAssistantPayload(raw: unknown): StructuredAssistantPayload | null {
@@ -601,7 +675,7 @@ function renderJsonAnswerForChat(raw: unknown, depth = 0): string {
 		return Object.entries(raw as Record<string, unknown>)
 			.slice(0, 6)
 			.map(([key, value]) => {
-				const rendered = renderJsonAnswerForChat(value, depth + 1);
+				const rendered = sanitizeBusinessDisplayValue(key, renderJsonAnswerForChat(value, depth + 1));
 				if (!rendered)
 					return "";
 				return rendered.includes("\n")
@@ -1019,7 +1093,8 @@ function hasEditIntent(input: string): boolean {
 		return false;
 	const patterns = [
 		/\b(sua|chinh|chỉnh|update|modify|refactor|rewrite|fix|implement|generate|tao|tạo|viet|viết|chen|chèn|apply|patch|replace|doi|đổi)\b/i,
-		/\b(add|remove|delete|insert|edit|code|json|schema|menu)\b/i,
+		/\b(add|remove|delete|insert|edit)\b/i,
+		/\b(code\s+edit|edit\s+code|sua\s+code|chinh\s+code|chỉnh\s+code|json\s+patch|menu\s+patch|menu\s+design)\b/i,
 		/(修改|更新|重写|修复|生成|插入|替换|代码|菜单|json)/i,
 	];
 	return patterns.some(pattern => pattern.test(text));
@@ -1094,6 +1169,33 @@ function parseResponseModeDirective(input: string): { cleanedMessage: string, ov
 	return { cleanedMessage: text };
 }
 
+function parseExecutionRouteDirective(input: string): { cleanedMessage: string, useLocalPlan: boolean } {
+	const text = String(input || "").trim();
+	if (!text.startsWith("/")) {
+		return { cleanedMessage: text, useLocalPlan: false };
+	}
+
+	const match = text.match(/^\/([^\s:]+)\s*(?::\s*)?(.*)$/s);
+	if (!match) {
+		return { cleanedMessage: text, useLocalPlan: false };
+	}
+
+	const token = normalizeDirectiveToken(match[1]);
+	const rest = String(match[2] || "").trim();
+	const localPlanTokens = new Set([
+		"local-plan",
+		"localplan",
+		"local-ops",
+		"localops",
+		"local-execute",
+		"localexecute",
+	]);
+	if (localPlanTokens.has(token)) {
+		return { cleanedMessage: rest, useLocalPlan: true };
+	}
+	return { cleanedMessage: text, useLocalPlan: false };
+}
+
 async function readFileAsText(file: File): Promise<string> {
 	return file.text();
 }
@@ -1118,10 +1220,25 @@ function getChatHistory(): ChatMessage[] {
 	}
 }
 
+function clearChatHistoryStorage() {
+	try {
+		localStorage.removeItem(CHAT_HISTORY_KEY);
+		localStorage.removeItem(LEGACY_CHAT_HISTORY_KEY);
+	}
+	catch {
+		// ignore localStorage clear failures
+	}
+}
+
 function saveChatHistory(messages: ChatMessage[]) {
 	try {
 		const limited = sanitizeHistoryMessages(dedupeChatMessages(messages));
+		if (limited.length === 0) {
+			clearChatHistoryStorage();
+			return;
+		}
 		localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(limited));
+		localStorage.removeItem(LEGACY_CHAT_HISTORY_KEY);
 	}
 	catch (error) {
 		console.error("Failed to save chat history:", error);
@@ -1229,6 +1346,7 @@ export default function AiAssistantChat({
 	const [localFlowOpLines, setLocalFlowOpLines] = useState<LocalFlowOperationLine[]>([]);
 	const [localFlowOpFilter, setLocalFlowOpFilter] = useState<LocalFlowOperationFilter>("all");
 	const [lastProgressEventAgeSecs, setLastProgressEventAgeSecs] = useState(0);
+	const [backendProgressHint, setBackendProgressHint] = useState<{ stage: string, detail: string }>({ stage: "", detail: "" });
 	// Progress state: waiting for Gemini / streaming progress
 	const [geminiProgress, setGeminiProgress] = useState<{
 		phase: "idle" | "waiting" | "streaming"
@@ -1259,6 +1377,8 @@ export default function AiAssistantChat({
 	const localFlowVerifiedRef = useRef<boolean>(false);
 	const stageEventSignaturesRef = useRef<Set<string>>(new Set());
 	const requestStartedAtRef = useRef<number>(0);
+	const streamJobIdRef = useRef<string>("");
+	const isLoadingRef = useRef<boolean>(false);
 	// Live exchange rates fetched once per session (USD base). Fallback to hardcoded.
 	const fxRatesRef = useRef<{ vnd: number, cny: number }>({ vnd: 25000, cny: 7.2 });
 	const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || "");
@@ -1270,6 +1390,41 @@ export default function AiAssistantChat({
 		? modelDecisionTrace
 		: modelDecisionTrace.slice(-COMPACT_MODEL_TRACE);
 	const hiddenModelTraceCount = Math.max(0, modelDecisionTrace.length - visibleModelDecisionTrace.length);
+
+	useEffect(() => {
+		streamJobIdRef.current = streamJobId;
+	}, [streamJobId]);
+
+	useEffect(() => {
+		isLoadingRef.current = isLoading;
+	}, [isLoading]);
+
+	const notifyServerStreamCancel = useCallback((jobId: string) => {
+		const safeJobId = String(jobId || "").trim();
+		if (!safeJobId) {
+			return;
+		}
+		const endpoint = `/api/ai-code-stream/${encodeURIComponent(safeJobId)}/cancel`;
+		const payload = JSON.stringify({ jobId: safeJobId, reason: "client_unload_or_cancel" });
+		try {
+			if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+				const sent = navigator.sendBeacon(endpoint, new Blob([payload], { type: "application/json" }));
+				if (sent) {
+					return;
+				}
+			}
+		}
+		catch {
+			// Fallback to fetch below.
+		}
+		void fetch(endpoint, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: payload,
+			credentials: "include",
+			keepalive: true,
+		}).catch(() => undefined);
+	}, []);
 	const promptHistoryStorageKey = useMemo(
 		() => resolvePromptHistoryStorageKey({ appId, contextType, language, targetPName }),
 		[appId, contextType, language, targetPName],
@@ -1387,6 +1542,9 @@ export default function AiAssistantChat({
 			completionMetrics.promptCapChars != null ? `${uiText("Ngưỡng prompt", "Prompt cap", "提示上限")}: ${formatOutputChars(completionMetrics.promptCapChars)}` : "",
 			completionMetrics.promptTruncatedByCharCap === true ? `${uiText("Prompt bị cắt theo ngưỡng", "Prompt truncated by cap", "提示触发长度裁剪")}: true` : "",
 			completionMetrics.menuShrinkGuard === true ? `${uiText("Cảnh báo co rút menu", "Menu shrink guard", "菜单压缩警告")}: true (ratio=${(completionMetrics.menuShrinkRatio ?? 0).toFixed(2)})` : "",
+			completionMetrics.patchFallbackNoOp === true
+				? `${uiText("Patch fallback", "Patch fallback", "补丁回退")}: no-op${completionMetrics.patchFallbackReasonCode ? ` (${completionMetrics.patchFallbackReasonCode})` : ""}`
+				: "",
 			aiUsageSummary.turn?.model ? `${uiText("Model", "Model", "模型")}: ${aiUsageSummary.turn.model}` : "",
 		].filter(Boolean);
 		return lines.join("\n");
@@ -1403,6 +1561,8 @@ export default function AiAssistantChat({
 		completionMetrics.promptTruncatedByCharCap,
 		completionMetrics.menuShrinkGuard,
 		completionMetrics.menuShrinkRatio,
+		completionMetrics.patchFallbackNoOp,
+		completionMetrics.patchFallbackReasonCode,
 		completionErrorMessage,
 		completionState,
 		completionStateLabel,
@@ -1441,6 +1601,20 @@ export default function AiAssistantChat({
 				return code || uiText("Đang xử lý", "Processing", "处理中");
 		}
 	}, [uiText]);
+
+	const isLocalProgressMessage = useCallback((raw: string): boolean => {
+		const text = String(raw || "").trim().toLowerCase();
+		if (!text)
+			return false;
+		return text.includes("ai local")
+			|| text.includes("local ai")
+			|| text.includes("local provider")
+			|| text.includes("ban dau local")
+			|| text.includes("đang xử lý chunk")
+			|| text.includes("đang gộp tóm tắt")
+			|| text.includes("dang xu ly chunk")
+			|| text.includes("dang gop tom tat");
+	}, []);
 
 	const formatSystemNotice = useCallback((input: {
 		summary: string
@@ -1550,15 +1724,9 @@ export default function AiAssistantChat({
 				return;
 			}
 
-			// Keep existing local history when server responds empty or incompatible payload,
-			// to avoid the "flash then disappear" effect on initial render.
 			if (turns.length === 0) {
-				setMessages((prev) => {
-					if (prev.length > 0)
-						return prev;
-					saveChatHistory([]);
-					return [];
-				});
+				setMessages([]);
+				saveChatHistory([]);
 			}
 		}
 		catch {
@@ -1739,6 +1907,10 @@ export default function AiAssistantChat({
 		if (!source)
 			return "";
 
+		if (/ai\s*local|local\s*ai|local\s*provider|chunk|reduce|gộp\s*tóm\s*tắt|xu\s*ly\s*chunk|xử\s*lý\s*chunk|nạp\s*model|hậu\s*xử\s*lý|suy\s*luận/i.test(source)) {
+			return source;
+		}
+
 		const waitingMatch = source.match(/~\s*(\d+)\s*s/i);
 		const waitingSecs = waitingMatch ? Number(waitingMatch[1]) : Number.NaN;
 		const waitedMatch = source.match(/(?:da|đã)\s*cho\s*(\d+)\s*s|waited\s*(\d+)\s*s/i);
@@ -1917,6 +2089,10 @@ export default function AiAssistantChat({
 	const formatStageLabel = useCallback((stage: string): string => {
 		const normalized = String(stage || "").trim().toLowerCase();
 		switch (normalized) {
+		case "scope_reasoning":
+			return uiText("Suy luận theo phạm vi", "Scope reasoning", "范围推理");
+		case "dynamic_ingestion":
+			return uiText("Nạp bộ nhớ động", "Dynamic ingestion", "动态入库");
 			case "preparing":
 				return uiText("Chuẩn bị", "Preparing", "准备中");
 			case "context":
@@ -2195,6 +2371,10 @@ export default function AiAssistantChat({
 	const getStageTone = useCallback((stage: string, orchestrationPhase?: string): "preparing" | "chunking" | "reducing" | "final" | "completed" | "error" | "default" => {
 		const normalizedPhase = String(orchestrationPhase || "").trim().toLowerCase();
 		const normalizedStage = String(stage || "").trim().toLowerCase();
+	if (normalizedStage === "scope_reasoning")
+		return "preparing";
+	if (normalizedStage === "dynamic_ingestion")
+		return "chunking";
 		const key = normalizedPhase || normalizedStage;
 		if (key.includes("preparing"))
 			return "preparing";
@@ -2296,6 +2476,14 @@ export default function AiAssistantChat({
 		const detailArgs = normalizeProgressArgs(data?.detailArgs);
 		const orchestrationPhase = String(data?.orchestrationPhase || "").trim();
 		const orchestrationPhaseKey = String(data?.orchestrationPhaseKey || "").trim();
+		const scopeMaskNum = Number(data?.scopeMask);
+		const scopeSummary = String(data?.scopeSummary || "").trim();
+		const scopeTags = Array.isArray(data?.scopeTags)
+			? data.scopeTags.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+			: [];
+		const queueState = String(data?.queueState || "").trim();
+		const dynamicSource = String(data?.dynamicSource || "").trim();
+		const prunedSourcesNum = Number(data?.prunedSources);
 		const rangeLabel = extractStageRangeLabel(data);
 		const hasValue = stage || msg || messageKey || detail || detailKey || orchestrationPhase || orchestrationPhaseKey || Number.isFinite(Number(data?.percent)) || Number.isFinite(Number(data?.overallPercent)) || Boolean(rangeLabel);
 		if (!hasValue)
@@ -2322,6 +2510,12 @@ export default function AiAssistantChat({
 			Number.isFinite(percentNum) ? percentNum : "",
 			Number.isFinite(currentNum) ? currentNum : "",
 			Number.isFinite(totalNum) ? totalNum : "",
+			Number.isFinite(scopeMaskNum) ? scopeMaskNum : "",
+			scopeSummary,
+			scopeTags.join(","),
+			queueState.toLowerCase(),
+			dynamicSource.toLowerCase(),
+			Number.isFinite(prunedSourcesNum) ? prunedSourcesNum : "",
 			rangeLabel || "",
 		].join("|");
 
@@ -2329,34 +2523,188 @@ export default function AiAssistantChat({
 			return;
 		stageEventSignaturesRef.current.add(signature);
 
+		const nextEvent = {
+			id: `stage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+			stage: stage || "processing",
+			status: status || undefined,
+			model: model || undefined,
+			requestId: requestId || undefined,
+			scopeMask: Number.isFinite(scopeMaskNum) ? scopeMaskNum : undefined,
+			scopeSummary: scopeSummary || undefined,
+			scopeTags: scopeTags.length > 0 ? scopeTags : undefined,
+			queueState: queueState || undefined,
+			dynamicSource: dynamicSource || undefined,
+			prunedSources: Number.isFinite(prunedSourcesNum) ? prunedSourcesNum : undefined,
+			message: msg,
+			messageKey: messageKey || undefined,
+			messageArgs,
+			detail: detail || undefined,
+			detailKey: detailKey || undefined,
+			detailArgs,
+			orchestrationPhase: orchestrationPhase || undefined,
+			orchestrationPhaseKey: orchestrationPhaseKey || undefined,
+			overallPercent: Number.isFinite(overallPercentNum) ? overallPercentNum : undefined,
+			percent: Number.isFinite(percentNum) ? percentNum : undefined,
+			current: Number.isFinite(currentNum) ? currentNum : undefined,
+			total: Number.isFinite(totalNum) ? totalNum : undefined,
+			rangeLabel,
+			timestamp: Date.now(),
+		};
+
 		setStageEvents((prev) => {
-			const next: AiAssistantStageEvent[] = [
-				...prev,
-				{
-					id: `stage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-					stage: stage || "processing",
-					status: status || undefined,
-					model: model || undefined,
-					requestId: requestId || undefined,
-					message: msg,
-					messageKey: messageKey || undefined,
-					messageArgs,
-					detail: detail || undefined,
-					detailKey: detailKey || undefined,
-					detailArgs,
-					orchestrationPhase: orchestrationPhase || undefined,
-					orchestrationPhaseKey: orchestrationPhaseKey || undefined,
-					overallPercent: Number.isFinite(overallPercentNum) ? overallPercentNum : undefined,
-					percent: Number.isFinite(percentNum) ? percentNum : undefined,
-					current: Number.isFinite(currentNum) ? currentNum : undefined,
-					total: Number.isFinite(totalNum) ? totalNum : undefined,
-					rangeLabel,
-					timestamp: Date.now(),
-				},
-			];
-			return next.slice(-60);
+			const last = prev[prev.length - 1];
+			if (last) {
+				const lastPercent = Number.isFinite(Number(last.overallPercent))
+					? Number(last.overallPercent)
+					: (Number.isFinite(Number(last.percent)) ? Number(last.percent) : undefined);
+				const nextPercent = Number.isFinite(Number(nextEvent.overallPercent))
+					? Number(nextEvent.overallPercent)
+					: (Number.isFinite(Number(nextEvent.percent)) ? Number(nextEvent.percent) : undefined);
+				const sameCoreSignal = String(last.stage || "").toLowerCase() === String(nextEvent.stage || "").toLowerCase()
+					&& String(last.messageKey || "") === String(nextEvent.messageKey || "")
+					&& String(last.detailKey || "") === String(nextEvent.detailKey || "")
+					&& String(last.orchestrationPhaseKey || "") === String(nextEvent.orchestrationPhaseKey || "")
+					&& String(last.requestId || "") === String(nextEvent.requestId || "")
+					&& String(last.rangeLabel || "") === String(nextEvent.rangeLabel || "")
+					&& String(last.message || "") === String(nextEvent.message || "")
+					&& String(last.detail || "") === String(nextEvent.detail || "");
+				const samePercent = (lastPercent == null && nextPercent == null) || lastPercent === nextPercent;
+				if (sameCoreSignal && samePercent) {
+					return prev;
+				}
+			}
+			const next: AiAssistantStageEvent[] = [...prev, nextEvent];
+			return next.slice(-40);
 		});
 	}, [extractStageRangeLabel, normalizeAssistantProgressMessage]);
+
+	const liveBackendStepLabel = useMemo(() => {
+		const stage = String(backendProgressHint.stage || "").trim();
+		const detail = String(backendProgressHint.detail || "").trim();
+		if (!stage && !detail)
+			return "";
+		if (!detail)
+			return stage;
+		if (!stage)
+			return detail;
+		return `${stage}: ${detail}`;
+	}, [backendProgressHint.detail, backendProgressHint.stage]);
+
+	const formatQueueStateLabel = useCallback((stateRaw: string): string => {
+		const state = String(stateRaw || "").trim().toLowerCase();
+		if (!state)
+			return "";
+		if (state === "queued")
+			return uiText("đang xếp hàng", "queued", "已排队");
+		if (state === "indexed")
+			return uiText("đã index", "indexed", "已索引");
+		return state;
+	}, [uiText]);
+
+	const buildDynamicIngestionParts = useCallback((input: {
+		state?: string
+		source?: string
+		pruned?: number
+	}): string[] => {
+		const state = String(input.state || "").trim().toLowerCase();
+		const source = String(input.source || "").trim();
+		const pruned = Number(input.pruned);
+		const parts: string[] = [];
+		if (state) {
+			parts.push(uiText(
+				`trạng thái ${formatQueueStateLabel(state)}`,
+				`state ${state}`,
+				`状态 ${state}`,
+			));
+		}
+		if (source)
+			parts.push(uiText(`nguồn ${source}`, `source ${source}`, `来源 ${source}`));
+		if (Number.isFinite(pruned) && pruned > 0)
+			parts.push(uiText(`lọc bớt ${pruned}`, `pruned ${pruned}`, `裁剪 ${pruned}`));
+		return parts;
+	}, [formatQueueStateLabel, uiText]);
+
+	const formatScopeReasoningLabel = useCallback((scopeSummaryRaw?: string, scopeMaskRaw?: number, scopeTagsRaw?: string[], includeTags = true): string => {
+		const summary = String(scopeSummaryRaw || "").trim();
+		const mask = Number(scopeMaskRaw);
+		const tags = Array.isArray(scopeTagsRaw)
+			? scopeTagsRaw.map(item => String(item || "").trim()).filter(Boolean).slice(0, 3)
+			: [];
+		if (!summary && !Number.isFinite(mask) && tags.length === 0)
+			return "";
+		const tagsSuffix = includeTags && tags.length > 0 ? ` · ${tags.map(tag => `#${tag}`).join(" ")}` : "";
+		return uiText(
+			`Phạm vi truy hồi: ${summary || "tự động"}${Number.isFinite(mask) ? ` (mask=${mask})` : ""}${tagsSuffix}`,
+			`Retrieval scope: ${summary || "auto"}${Number.isFinite(mask) ? ` (mask=${mask})` : ""}${tagsSuffix}`,
+			`检索范围: ${summary || "自动"}${Number.isFinite(mask) ? `（mask=${mask}）` : ""}${tagsSuffix}`,
+		);
+	}, [uiText]);
+
+	const liveOrchestrationHintLabel = useMemo(() => {
+		for (let i = stageEvents.length - 1; i >= 0; i -= 1) {
+			const event = stageEvents[i];
+			if (!event)
+				continue;
+			const eventStage = String(event.stage || "").trim().toLowerCase();
+			if (eventStage === "scope_reasoning") {
+				const scopeLabel = formatScopeReasoningLabel(event.scopeSummary, event.scopeMask, event.scopeTags);
+				if (scopeLabel)
+					return scopeLabel;
+				const fallbackMessage = String(event.detail || event.message || "").trim();
+				if (fallbackMessage)
+					return fallbackMessage;
+			}
+			if (eventStage === "dynamic_ingestion") {
+				const parts = buildDynamicIngestionParts({
+					state: String(event.queueState || event.status || ""),
+					source: event.dynamicSource,
+					pruned: event.prunedSources,
+				});
+				if (parts.length > 0) {
+					return uiText(
+						`Nạp động: ${parts.join(" · ")}`,
+						`Ingestion: ${parts.join(" · ")}`,
+						`动态入库: ${parts.join(" · ")}`,
+					);
+				}
+				const fallbackMessage = String(event.detail || event.message || "").trim();
+				if (fallbackMessage)
+					return fallbackMessage;
+			}
+		}
+		return "";
+	}, [buildDynamicIngestionParts, formatScopeReasoningLabel, stageEvents, uiText]);
+
+	const liveOrchestrationBadge = useMemo((): { label: string, tone: "scope" | "queued" | "indexed" } | null => {
+		for (let i = stageEvents.length - 1; i >= 0; i -= 1) {
+			const event = stageEvents[i];
+			if (!event)
+				continue;
+			const eventStage = String(event.stage || "").trim().toLowerCase();
+			if (eventStage === "dynamic_ingestion") {
+				const state = String(event.queueState || event.status || "").trim().toLowerCase();
+				if (state === "queued") {
+					return {
+						label: uiText("Queued", "Queued", "已排队"),
+						tone: "queued",
+					};
+				}
+				if (state === "indexed") {
+					return {
+						label: uiText("Indexed", "Indexed", "已索引"),
+						tone: "indexed",
+					};
+				}
+			}
+			if (eventStage === "scope_reasoning") {
+				return {
+					label: uiText("Scoped", "Scoped", "已锁定范围"),
+					tone: "scope",
+				};
+			}
+		}
+		return null;
+	}, [stageEvents, uiText]);
 
 	const groupedVisibleStageEvents = useMemo(() => {
 		const orderedTones: Array<"preparing" | "chunking" | "reducing" | "final" | "completed" | "error" | "default"> = [
@@ -2520,20 +2868,8 @@ export default function AiAssistantChat({
 		const text = String(statusText || "").trim();
 		if (!text)
 			return;
-		if (streamingMessageRef.current.length > 0 || pendingStreamChunkRef.current.length > 0)
-			return;
-		setMessages((prev) => {
-			const updated = [...prev];
-			for (let i = updated.length - 1; i >= 0; i -= 1) {
-				const lastMsg = updated[i];
-				if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
-					lastMsg.content = `⏳ ${text}`;
-					lastMsg.codeBlocks = [];
-					break;
-				}
-			}
-			return updated;
-		});
+		// Progress status belongs to progress dock/timeline, not chat bubble content.
+		return;
 	}, []);
 
 	const applyRealtimeCodeFromText = useCallback((rawText: string, force = false): boolean => {
@@ -2699,7 +3035,30 @@ export default function AiAssistantChat({
 
 	// Cleanup on unmount: cancel animation frame, timers, in-flight SSE fetch
 	useEffect(() => {
+		const stopActiveStream = () => {
+			const jobId = String(streamJobIdRef.current || "").trim();
+			if (jobId) {
+				notifyServerStreamCancel(jobId);
+			}
+			if (sseAbortRef.current) {
+				sseAbortRef.current.abort();
+				sseAbortRef.current = null;
+			}
+		};
+
+		const handlePageLifecycle = () => {
+			if (isLoadingRef.current) {
+				stopActiveStream();
+			}
+		};
+
+		window.addEventListener("pagehide", handlePageLifecycle);
+		window.addEventListener("beforeunload", handlePageLifecycle);
+
 		return () => {
+			window.removeEventListener("pagehide", handlePageLifecycle);
+			window.removeEventListener("beforeunload", handlePageLifecycle);
+			stopActiveStream();
 			if (scrollFrameRef.current != null) {
 				window.cancelAnimationFrame(scrollFrameRef.current);
 				scrollFrameRef.current = null;
@@ -2712,9 +3071,8 @@ export default function AiAssistantChat({
 				clearTimeout(realtimeApplyTimerRef.current);
 				realtimeApplyTimerRef.current = null;
 			}
-			sseAbortRef.current?.abort();
 		};
-	}, []);
+	}, [notifyServerStreamCancel]);
 
 	useEffect(() => {
 		if (!isLoading) {
@@ -2814,7 +3172,8 @@ export default function AiAssistantChat({
 		setOrchPreviewLoading(true);
 		setShowOrchPreview(true);
 		try {
-			const responseMode: ResponseMode = inferResponseModeByIntent(msg, contextType);
+			// Backend classifier handles responseMode routing - don't infer frontend
+			const responseMode: ResponseMode = "analyze";
 			const res = await request.post("ai-orchestration-preview", {
 				json: {
 					appId,
@@ -2859,11 +3218,15 @@ export default function AiAssistantChat({
 
 	const handleCancelRequest = useCallback(() => {
 		const controller = sseAbortRef.current;
-		if (!controller || !isLoading) {
+		if (!controller && !isLoadingRef.current) {
 			return;
 		}
+		const jobId = String(streamJobIdRef.current || "").trim();
+		if (jobId) {
+			notifyServerStreamCancel(jobId);
+		}
 		sseAbortRef.current = null;
-		controller.abort();
+		controller?.abort();
 		flushStreamingToUI(true);
 		setCompletionState("cancelled");
 		setCompletionMetrics({
@@ -2871,6 +3234,7 @@ export default function AiAssistantChat({
 			outputChars: streamingMessageRef.current.length + pendingStreamChunkRef.current.length,
 		});
 		setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+		setBackendProgressHint({ stage: "", detail: "" });
 		setIsLoading(false);
 		turnAllowAutoApplyRef.current = false;
 		if (SHOW_DETAILED_PROGRESS_TIMELINE) {
@@ -2885,7 +3249,7 @@ export default function AiAssistantChat({
 			nextStep: uiText("Bạn có thể chỉnh lại yêu cầu rồi gửi lại khi sẵn sàng.", "You can revise the request and send it again when ready.", "你可以调整请求后在准备好时重新发送。"),
 			internalCode: "REQUEST_CANCELLED",
 		});
-	}, [appendStageEvent, flushStreamingToUI, geminiProgress.percent, isLoading, showSystemToast, uiText]);
+	}, [appendStageEvent, flushStreamingToUI, geminiProgress.percent, notifyServerStreamCancel, showSystemToast, uiText]);
 	// Auto-scroll to latest message
 	useEffect(() => {
 		scrollToBottom(false);
@@ -2907,13 +3271,15 @@ export default function AiAssistantChat({
 				setPromptHistoryIndex(-1);
 				setPromptHistoryOriginal("");
 			}
-			const modeDirective = parseResponseModeDirective(normalizedText);
+			const routeDirective = parseExecutionRouteDirective(normalizedText);
+			const modeDirective = parseResponseModeDirective(routeDirective.cleanedMessage);
 			const cleanedMessage = modeDirective.cleanedMessage;
+			const useLocalPlanRoute = routeDirective.useLocalPlan;
 			if (!cleanedMessage && pendingAttachments.length === 0) {
 				message.warning(uiText(
-					"Vui lòng nhập nội dung sau lệnh /analyze hoặc /edit",
-					"Please enter content after /analyze or /edit",
-					"请在 /analyze 或 /edit 后输入内容",
+					"Vui lòng nhập nội dung sau lệnh /analyze, /edit hoặc /local-plan",
+					"Please enter content after /analyze, /edit, or /local-plan",
+					"请在 /analyze、/edit 或 /local-plan 后输入内容",
 				));
 				return;
 			}
@@ -2971,9 +3337,12 @@ export default function AiAssistantChat({
 				})),
 			};
 
-			// Resolve response mode deterministically to avoid backend fallback-to-analyze for edit/design requests.
-			const inferredResponseMode: ResponseMode = inferResponseModeByIntent(cleanedMessage || normalizedText, contextType);
-			const requestedResponseMode: ResponseMode = modeDirective.overrideMode ?? inferredResponseMode;
+			// Default behavior:
+			// - normal route: analyze-first
+			// - local-plan route: edit-first so streamed local patch can auto-apply
+			const requestedResponseMode: ResponseMode = useLocalPlanRoute
+				? (modeDirective.overrideMode ?? "edit")
+				: (modeDirective.overrideMode ?? "analyze");
 
 			// Add placeholder for assistant response
 			const assistantMsg: ChatMessage = {
@@ -3013,6 +3382,7 @@ export default function AiAssistantChat({
 			setLocalFlowOpLines([]);
 			setLocalFlowOpFilter("all");
 			setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+			setBackendProgressHint({ stage: "", detail: "" });
 			setLastProgressEventAgeSecs(0);
 			lastProgressEventAtRef.current = 0;
 			lastProgressWatchdogAlertAtRef.current = 0;
@@ -3052,9 +3422,11 @@ export default function AiAssistantChat({
 						? "menu_qa"
 						: (hasMenuPatchOnlyIntent(cleanedMessage || normalizedText) ? "menu_patch" : "menu_design"))
 					: "code_assistant";
-				const response = await request.post("ai-code-stream", {
+				const response = await request.post(useLocalPlanRoute ? "ai-local/execute-local-plan" : "ai-code-stream", {
 					json: {
 						appId,
+						applyDynamicIngestion: useLocalPlanRoute,
+						executePatch: useLocalPlanRoute,
 						jobId: requestJobId,
 						message: cleanedMessage || normalizedText,
 						uiLanguage: String(i18n.resolvedLanguage || i18n.language || "vi"),
@@ -3067,23 +3439,37 @@ export default function AiAssistantChat({
 						pName: targetPName,
 						pType: targetPType,
 						editorMetadata: requestEditorMetadata,
-						attachments: outgoingAttachments.map(attachment => ({
-							id: attachment.id,
-							name: attachment.name,
-							mimeType: attachment.mimeType,
-							size: attachment.size,
-							kind: attachment.kind,
-							contextRole: attachment.contextRole,
-							authoritative: attachment.authoritative,
-							summary: attachment.summary,
-							textContent: attachment.textContent,
-							dataUrl: attachment.dataUrl,
-							fullContext: attachment.fullContext ?? false,
-							// For image attachments, strip the data URL prefix so backend gets raw base64
-							base64Data: attachment.kind === "image" && attachment.dataUrl
-								? attachment.dataUrl.includes(",") ? attachment.dataUrl.split(",")[1] : attachment.dataUrl
-								: undefined,
-						})),
+						attachments: outgoingAttachments.map((attachment) => {
+							const imageBase64 = attachment.kind === "image" && attachment.dataUrl
+								? (attachment.dataUrl.includes(",") ? attachment.dataUrl.split(",")[1] : attachment.dataUrl)
+								: undefined;
+							if (useLocalPlanRoute) {
+								return {
+									type: attachment.kind === "image" ? "image" : "json",
+									filename: attachment.name,
+									mimeType: attachment.mimeType,
+									summary: attachment.summary,
+									content: attachment.textContent,
+									dataUrl: attachment.dataUrl,
+									base64Data: imageBase64,
+								};
+							}
+							return {
+								id: attachment.id,
+								name: attachment.name,
+								mimeType: attachment.mimeType,
+								size: attachment.size,
+								kind: attachment.kind,
+								contextRole: attachment.contextRole,
+								authoritative: attachment.authoritative,
+								summary: attachment.summary,
+								textContent: attachment.textContent,
+								dataUrl: attachment.dataUrl,
+								fullContext: attachment.fullContext ?? false,
+								// For image attachments, strip the data URL prefix so backend gets raw base64
+								base64Data: imageBase64,
+							};
+						}),
 					},
 					timeout: AI_TIMEOUT_MS,
 					throwHttpErrors: false,
@@ -3194,6 +3580,8 @@ export default function AiAssistantChat({
 								modelDecisionReason?: string
 								decision_step?: "primary" | "fallback" | "final"
 								reason_code?: string
+								patchFallbackNoOp?: boolean
+								patchFallbackReasonCode?: string
 								usage?: any
 								completionTokens?: number
 								estimatedCostUsd?: number
@@ -3211,6 +3599,12 @@ export default function AiAssistantChat({
 									status?: string
 									createdAt?: number
 									updatedAt?: number
+								}
+								result?: {
+									ingestCount?: number
+									aggregateScopeMask?: number
+									scopeTags?: string[]
+									planningHints?: string[]
 								}
 							};
 							lastProgressEventAtRef.current = Date.now();
@@ -3249,6 +3643,16 @@ export default function AiAssistantChat({
 								message: localizedEvtMessage,
 								detail: localizedEvtDetail || undefined,
 							};
+							const evtAny = evt as any;
+							const progressStageLabel = renderProgressText(
+								String(evtAny.orchestrationPhaseKey || ""),
+								undefined,
+								String(evtAny.orchestrationPhase || "").trim() || formatStageLabel(String(evt.stage || evtAny.status || "processing")),
+							);
+							const progressDetailLabel = localizedEvtDetail || localizedEvtMessage || progressStageLabel;
+							if (progressStageLabel || progressDetailLabel) {
+								setBackendProgressHint({ stage: progressStageLabel, detail: progressDetailLabel });
+							}
 							const evtStatus = String((evt as any).status || "").trim().toLowerCase();
 							const evtQuestions = toStringList((evt as any).questions);
 							const evtAmbiguities = toStringList((evt as any).ambiguities);
@@ -3322,23 +3726,6 @@ export default function AiAssistantChat({
 							const decisionStep = evt.modelDecisionStep || evt.decision_step;
 							const decisionReason = evt.modelDecisionReason || evt.reason_code;
 							if (evt.stage === "agentic_plan" && evt.compacted && Number(evt.savedChars) > 0) {
-								const divider: ChatMessage = {
-									id: `compact_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-									role: "system",
-									messageType: "compacted_context",
-									content: "",
-									timestamp: Date.now(),
-									compactedSavedChars: Number(evt.savedChars),
-									compactedCharsBefore: Number(evt.charsBefore ?? 0),
-									compactedCharsAfter: Number(evt.charsAfter ?? 0),
-									compactedRoutingTier: String(evt.routingTier || ""),
-									compactedPlanStepCount: Number(evt.planStepCount ?? 0),
-								};
-								setMessages((prev) => {
-									// Only add if no divider already present for this turn
-									const lastIsCompact = prev.length > 0 && prev[prev.length - 1].messageType === "compacted_context";
-									return lastIsCompact ? prev : [...prev, divider];
-								});
 								appendAgenticStep({
 									stage: "agentic_plan",
 									icon: "🧠",
@@ -3379,9 +3766,53 @@ export default function AiAssistantChat({
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evt);
 							}
+							else if (evt.stage === "scope_reasoning") {
+								const scopeSummary = String((evt as any).scopeSummary || "").trim();
+								const scopeMask = Number((evt as any).scopeMask);
+								const scopeTags = Array.isArray((evt as any).scopeTags)
+									? (evt as any).scopeTags.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+									: [];
+								const scopeDetail = formatScopeReasoningLabel(scopeSummary, scopeMask, scopeTags) || localizedEvtMessage;
+								appendAgenticStep({
+									stage: "scope_reasoning",
+									icon: "🎯",
+									label: uiText("Khóa phạm vi reasoning", "Scoped reasoning locked", "已锁定推理范围"),
+									detail: scopeDetail,
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "dynamic_ingestion") {
+								const queueState = String((evt as any).queueState || (evt as any).status || "").trim().toLowerCase();
+								const dynamicSource = String((evt as any).dynamicSource || "").trim();
+								const prunedSources = Number((evt as any).prunedSources);
+								const detailParts = buildDynamicIngestionParts({
+									state: queueState,
+									source: dynamicSource,
+									pruned: prunedSources,
+								});
+								const dynamicDetail = detailParts.length > 0
+									? `${uiText("Nạp động", "Ingestion", "动态入库")}: ${detailParts.join(" · ")}`
+									: localizedEvtMessage;
+								appendAgenticStep({
+									stage: "dynamic_ingestion",
+									icon: "📥",
+									label: uiText("Nạp Lucene tạm", "Temporary Lucene ingestion", "临时 Lucene 入库"),
+									detail: dynamicDetail,
+									status: queueState === "queued" ? "running" : "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
 							else if (evt.stage === "preparing") {
 								const preparingMessageFromKey = renderProgressText(evt.messageKey, evt.messageArgs, evt.message);
 								const preparingMessage = renderProgressText(evt.messageKey, evtMessageArgs, evt.message);
+								const isLocalPreparing = String(evt.model || "").trim().toLowerCase() === "local_provider"
+									|| String(decisionReason || "").toLowerCase().includes("local");
+								const preparingFallback = isLocalPreparing
+									? uiText("AI local đang chuẩn bị prompt và context...", "Local AI is preparing prompt and context...", "本地AI正在准备提示和上下文...")
+									: uiText("Chuyên Gia đang chuẩn bị yêu cầu...", "Expert is preparing the request...", "专家正在准备请求...");
 								appendModelDecisionTrace({
 									step: decisionStep || "primary",
 									model: evt.model,
@@ -3391,11 +3822,11 @@ export default function AiAssistantChat({
 									...prev,
 									phase: "waiting",
 									percent: evt.percent ?? 0,
-									message: normalizeAssistantProgressMessage(preparingMessage || evt.message, uiText("Chuyên Gia đang chuẩn bị yêu cầu...", "Expert is preparing the request...", "专家正在准备请求...")),
+									message: normalizeAssistantProgressMessage(preparingMessage || evt.message, preparingFallback),
 									estimatedWaitSecs: evt.estimatedWaitSecs ?? 0,
 									remainingSecs: evt.estimatedWaitSecs ?? 0,
 								}));
-								setAssistantLiveStatus(normalizeAssistantProgressMessage(preparingMessage || evt.message, uiText("Chuyên Gia đang chuẩn bị yêu cầu...", "Expert is preparing the request...", "专家正在准备请求...")));
+								setAssistantLiveStatus(normalizeAssistantProgressMessage(preparingMessage || evt.message, preparingFallback));
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 							}
@@ -3419,7 +3850,9 @@ export default function AiAssistantChat({
 									appendStageEvent(evtForTimeline);
 							}
 							else if (evt.stage === "streaming_started") {
-								const startedText = uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果...");
+								const startedText = String(evt.model || "").trim().toLowerCase() === "local_provider"
+									? uiText("AI local bắt đầu stream kết quả...", "Local AI started streaming the result...", "本地AI开始流式返回结果...")
+									: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果...");
 								setGeminiProgress(prev => ({
 									...prev,
 									phase: "streaming",
@@ -3481,6 +3914,7 @@ export default function AiAssistantChat({
 								receivedCompleteEvent = true;
 								setCompletionState("done");
 								setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Cần làm rõ thêm", "Clarification needed", "需要进一步澄清"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+								setBackendProgressHint({ stage: "", detail: "" });
 								setIsLoading(false);
 								if (sseAbortRef.current === controller) {
 									sseAbortRef.current = null;
@@ -3574,10 +4008,28 @@ export default function AiAssistantChat({
 									promptFinalChars: Number.isFinite(Number(evt.promptFinalChars)) ? Number(evt.promptFinalChars) : undefined,
 									promptCapChars: Number.isFinite(Number(evt.promptCapChars)) ? Number(evt.promptCapChars) : undefined,
 									promptTruncatedByCharCap: evt.promptTruncatedByCharCap === true,
+									patchFallbackNoOp: evt.patchFallbackNoOp === true,
+									patchFallbackReasonCode: String(evt.patchFallbackReasonCode || evt.reason_code || "").trim() || undefined,
 								});
+								if (evt.patchFallbackNoOp === true) {
+									showSystemToast("warning", {
+										summary: uiText(
+											"Patch local không qua quality gate, đã fallback no-op an toàn.",
+											"Local patch failed quality gate and fell back to a safe no-op.",
+											"本地补丁未通过质量门禁，已回退为安全 no-op。",
+										),
+										nextStep: uiText(
+											"Hãy tinh gọn yêu cầu hoặc chia nhỏ tác vụ để model tạo patch ổn định hơn.",
+											"Try narrowing the request or splitting tasks to get a stable patch.",
+											"请缩小请求范围或拆分任务，以获得更稳定的补丁输出。",
+										),
+										internalCode: String(evt.patchFallbackReasonCode || evt.reason_code || "LOCAL_PATCH_FALLBACK_NOOP").toUpperCase(),
+									});
+								}
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 								setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Hoàn thành", "Completed", "已完成"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+								setBackendProgressHint({ stage: "", detail: "" });
 								if (evt.parts && evt.parts.jobId) {
 									effectiveStreamJobId = String(evt.parts.jobId);
 									setPartsManifest({
@@ -3593,6 +4045,42 @@ export default function AiAssistantChat({
 								}
 								if (evt.fullResponse) {
 									streamingMessageRef.current = evt.fullResponse;
+									pendingStreamChunkRef.current = "";
+								}
+								else if (useLocalPlanRoute && evt.result) {
+									const hints = Array.isArray(evt.result.planningHints)
+										? evt.result.planningHints.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 5)
+										: [];
+									const scopeTags = Array.isArray(evt.result.scopeTags)
+										? evt.result.scopeTags.map((item) => String(item || "").trim()).filter(Boolean)
+										: [];
+									const summaryLines: string[] = [
+										uiText("Đã hoàn tất mô phỏng local execute-plan (dry-run).", "Completed local execute-plan simulation (dry-run).", "本地执行计划模拟（dry-run）已完成。"),
+										uiText(
+											`Số nguồn nạp động: ${Number(evt.result.ingestCount || 0)}`,
+											`Dynamic ingestion sources: ${Number(evt.result.ingestCount || 0)}`,
+											`动态入库源数量：${Number(evt.result.ingestCount || 0)}`,
+										),
+										uiText(
+											`Scope mask: ${Number(evt.result.aggregateScopeMask || 0)}`,
+											`Scope mask: ${Number(evt.result.aggregateScopeMask || 0)}`,
+											`范围掩码：${Number(evt.result.aggregateScopeMask || 0)}`,
+										),
+									];
+									if (scopeTags.length > 0) {
+										summaryLines.push(uiText(
+											`Scope tags: ${scopeTags.join(", ")}`,
+											`Scope tags: ${scopeTags.join(", ")}`,
+											`范围标签：${scopeTags.join(", ")}`,
+										));
+									}
+									if (hints.length > 0) {
+										summaryLines.push(uiText("Planning hints:", "Planning hints:", "规划提示："));
+										hints.forEach((hint, index) => {
+											summaryLines.push(`${index + 1}. ${hint}`);
+										});
+									}
+									streamingMessageRef.current = summaryLines.join("\n");
 									pendingStreamChunkRef.current = "";
 								}
 								else {
@@ -3635,8 +4123,42 @@ export default function AiAssistantChat({
 									setCompletionState("done");
 									setCompletionErrorMessage("");
 									setGeminiProgress({ phase: "idle", percent: 100, message: localizedEvtMessage || uiText("Đã chặn theo điều kiện bảo vệ", "Blocked by safety guard", "已被保护规则拦截"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+									setBackendProgressHint({ stage: "", detail: "" });
 									if (SHOW_DETAILED_PROGRESS_TIMELINE)
 										appendStageEvent(evtForTimeline);
+									setIsLoading(false);
+									if (sseAbortRef.current === controller) {
+										sseAbortRef.current = null;
+									}
+									turnAllowAutoApplyRef.current = false;
+									continue;
+								}
+								const hasDeliveredContent = (
+									String(streamingMessageRef.current || "")
+									+ String(pendingStreamChunkRef.current || "")
+								).trim().length > 0;
+								if (hasDeliveredContent) {
+									flushStreamingToUI(true);
+									receivedCompleteEvent = true;
+									setCompletionState("done");
+									setCompletionErrorMessage("");
+									setCompletionMetrics({
+										elapsedMs: Math.max(0, Date.now() - requestStartedAtRef.current),
+										outputChars: String(streamingMessageRef.current || "").length,
+									});
+									setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Hoàn thành", "Completed", "已完成"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+									setBackendProgressHint({ stage: "", detail: "" });
+									if (SHOW_DETAILED_PROGRESS_TIMELINE)
+										appendStageEvent(evtForTimeline);
+									showSystemToast("warning", {
+										summary: uiText(
+											"Đã nhận được nội dung trả về; bỏ qua lỗi muộn từ backend.",
+											"Response content was received; ignoring late backend error.",
+											"已收到响应内容；已忽略后续后端错误。",
+										),
+										nextStep: resolveSystemNextStep(effectiveReasonCode, evt.stage),
+										internalCode: `${errorCode}_LATE`,
+									});
 									setIsLoading(false);
 									if (sseAbortRef.current === controller) {
 										sseAbortRef.current = null;
@@ -3665,6 +4187,7 @@ export default function AiAssistantChat({
 								setCompletionState("error");
 								setCompletionErrorMessage(errorSummary);
 								setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+								setBackendProgressHint({ stage: "", detail: "" });
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 								showSystemToast("error", {
@@ -3697,12 +4220,14 @@ export default function AiAssistantChat({
 						}
 					}
 					flushStreamingToUI(true);
-					setCompletionState("stream_closed");
+					const hasDeliveredContent = String(streamingMessageRef.current || "").trim().length > 0;
+					setCompletionState(hasDeliveredContent ? "done" : "stream_closed");
 					setCompletionMetrics({
 						elapsedMs: Math.max(0, Date.now() - requestStartedAtRef.current),
 						outputChars: streamingMessageRef.current.length,
 					});
 					setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Hoàn thành", "Completed", "已完成"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+					setBackendProgressHint({ stage: "", detail: "" });
 					setIsLoading(false);
 					if (sseAbortRef.current === controller) {
 						sseAbortRef.current = null;
@@ -3747,7 +4272,7 @@ export default function AiAssistantChat({
 				}
 			}
 		},
-		[appId, contextType, currentCode, isLoading, language, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus],
+		[appId, contextType, currentCode, isLoading, language, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus, formatStageLabel, renderProgressText],
 	);
 
 	const handleSend = () => {
@@ -3813,6 +4338,14 @@ export default function AiAssistantChat({
 	}, [handleSend, inputValue, promptHistory, promptHistoryIndex, promptHistoryOriginal]);
 
 	const handleClearHistory = async () => {
+		const activeJobId = String(streamJobIdRef.current || "").trim();
+		if (activeJobId) {
+			notifyServerStreamCancel(activeJobId);
+		}
+		if (sseAbortRef.current) {
+			sseAbortRef.current.abort();
+			sseAbortRef.current = null;
+		}
 		try {
 			await request.post("ai-assistant-session-delete", {
 				json: {
@@ -3821,6 +4354,7 @@ export default function AiAssistantChat({
 					language,
 					pName: targetPName || "",
 					pType: typeof targetPType === "number" ? targetPType : undefined,
+					requestId: activeJobId || undefined,
 					deleteAll: true,
 				},
 				throwHttpErrors: false,
@@ -3833,11 +4367,13 @@ export default function AiAssistantChat({
 		setAiUsageSummary({ turn: null, sessionCostUsd: 0, sessionTokens: 0 });
 		setIsProgressDockCollapsed(false);
 		setIsUsageDockVisible(true);
+		setIsLoading(false);
 		setStreamRequestId("");
+		setStreamJobId("");
 		setCompletionState("idle");
 		setCompletionMetrics({});
 		setCompletionErrorMessage("");
-		localStorage.removeItem(CHAT_HISTORY_KEY);
+		clearChatHistoryStorage();
 		message.success(uiText("Đã xóa lịch sử chat", "Chat history cleared", "聊天记录已清除"));
 	};
 
@@ -4062,7 +4598,7 @@ export default function AiAssistantChat({
 								);
 							}
 							const isLastMsg = msgIdx === messages.length - 1;
-							const showStepCards = isLastMsg && msg.role === "assistant" && agenticSteps.length > 0;
+							const showStepCards = false;
 							return (
 								<Fragment key={msg.id}>
 									{showStepCards && (
@@ -4285,15 +4821,25 @@ export default function AiAssistantChat({
 												{normalizeAssistantProgressMessage(
 													geminiProgress.message,
 													geminiProgress.phase === "waiting"
-														? uiText("Đang xử lý", "Processing", "处理中")
-														: uiText("Đang streaming", "Streaming", "流式中"),
+														? (isLocalProgressMessage(geminiProgress.message)
+															? uiText("AI local đang xử lý", "Local AI processing", "本地AI处理中")
+															: uiText("Đang xử lý", "Processing", "处理中"))
+														: (isLocalProgressMessage(geminiProgress.message)
+															? uiText("AI local đang stream", "Local AI streaming", "本地AI流式处理中")
+															: uiText("Đang streaming", "Streaming", "流式中")),
 												)}
 											</span>
 											<span className={styles.progressMiniStats}>
 												{`${Math.max(0, Math.min(100, geminiProgress.percent))}%`}
 												{geminiProgress.remainingSecs > 0 ? ` · ~${geminiProgress.remainingSecs}s` : ""}
+												{liveOrchestrationHintLabel ? ` · ${liveOrchestrationHintLabel}` : (liveBackendStepLabel ? ` · ${liveBackendStepLabel}` : "")}
 												{` · evt ${Math.max(0, lastProgressEventAgeSecs)}s`}
 											</span>
+											{liveOrchestrationBadge && (
+												<span className={`${styles.progressMiniStageBadge} ${styles[`progressMiniStageBadge_${liveOrchestrationBadge.tone}`] || ""}`.trim()}>
+													{liveOrchestrationBadge.label}
+												</span>
+											)}
 											{streamRequestId && (
 												<button type="button" className={styles.progressRequestIdButton} onClick={handleCopyRequestId}>
 													<span className={styles.progressRequestId}>
@@ -4334,8 +4880,12 @@ export default function AiAssistantChat({
 												{normalizeAssistantProgressMessage(
 													geminiProgress.message,
 													geminiProgress.phase === "waiting"
-														? uiText("Chuyên Gia đang xử lý...", "Expert is processing...", "专家正在处理中...")
-														: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果..."),
+														? (isLocalProgressMessage(geminiProgress.message)
+															? uiText("AI local đang xử lý...", "Local AI is processing...", "本地AI正在处理中...")
+															: uiText("Chuyên Gia đang xử lý...", "Expert is processing...", "专家正在处理中..."))
+														: (isLocalProgressMessage(geminiProgress.message)
+															? uiText("Đang nhận kết quả từ AI local...", "Receiving result from Local AI...", "正在接收本地AI结果...")
+															: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果...")),
 												)}
 											</span>
 											<span className={styles.geminiProgressCountdown}>
@@ -4370,11 +4920,13 @@ export default function AiAssistantChat({
 										</div>
 										<div className={styles.geminiProgressMeta}>
 											{geminiProgress.phase === "streaming" && geminiProgress.charsReceived > 0
-												? (
+													? (
 													<>
 														{geminiProgress.charsReceived.toLocaleString()}
 														{" "}
-														ký tự nhận được
+															{isLocalProgressMessage(geminiProgress.message)
+																? uiText("ký tự từ AI local", "chars from Local AI", "来自本地AI的字符")
+																: uiText("ký tự nhận được", "chars received", "已接收字符")}
 														{geminiProgress.ttftMs != null && (
 															<span className={styles.geminiProgressTtft}>
 																{" "}
@@ -4384,14 +4936,21 @@ export default function AiAssistantChat({
 															</span>
 														)}
 													</>
-												)
-												: geminiProgress.phase === "waiting" && geminiProgress.estimatedWaitSecs > 0
+													)
+													: geminiProgress.phase === "waiting" && geminiProgress.estimatedWaitSecs > 0
 													? uiText(
 														`Ước tính ~${geminiProgress.estimatedWaitSecs}s tổng thời gian`,
 														`Estimated total time ~${geminiProgress.estimatedWaitSecs}s`,
 														`预计总耗时约 ${geminiProgress.estimatedWaitSecs}s`,
 													)
 													: " "}
+											{liveBackendStepLabel && (
+												<div>
+													{uiText("Bước hiện tại", "Current step", "当前步骤")}
+													{": "}
+													{liveBackendStepLabel}
+												</div>
+											)}
 										</div>
 										{streamRequestId && (
 											<button type="button" className={styles.progressRequestIdButton} onClick={handleCopyRequestId}>
@@ -4437,6 +4996,56 @@ export default function AiAssistantChat({
 								)}
 							</div>
 						)}
+						{!isProgressDockCollapsed && agenticSteps.length >= 2 && (
+							<div className={`${styles.messageContent} ${styles.stageTimelineCard}`}>
+								<div
+									className={styles.stageTimelineHeader}
+									onClick={() => setAgenticStepsCollapsed(c => !c)}
+									style={{ cursor: "pointer" }}
+								>
+									<div className={styles.stageTimelineTitle}>
+										{agenticStepsCollapsed
+											? uiText(
+												`${agenticSteps.length} bước agentic hoàn tất`,
+												`${agenticSteps.length} agentic steps done`,
+												`${agenticSteps.length} 个 Agent 步骤完成`,
+											)
+											: uiText("Agentic workflow", "Agentic workflow", "Agent 工作流")}
+									</div>
+									<Button
+										type="link"
+										size="small"
+										className={styles.compactToggleBtn}
+										onClick={(e) => {
+											e.stopPropagation();
+											setAgenticStepsCollapsed(c => !c);
+										}}
+									>
+										{agenticStepsCollapsed
+											? uiText("Mở", "Expand", "展开")
+											: uiText("Thu", "Collapse", "收起")}
+									</Button>
+								</div>
+								{!agenticStepsCollapsed && (
+									<div className={styles.stageTimelineList}>
+										{agenticSteps.map(step => (
+											<div key={step.id} className={styles.stageTimelineItem}>
+												<span className={styles.stageTimelineBullet} />
+												<div className={styles.stageTimelineText}>
+													<div className={styles.stageTimelineHead}>
+														<span>{`${step.icon} ${step.label}`}</span>
+														<span>{step.status === "done" ? "✓" : "…"}</span>
+													</div>
+													{step.detail && (
+														<div className={styles.stageTimelineMessage}>{step.detail}</div>
+													)}
+												</div>
+											</div>
+										))}
+									</div>
+								)}
+							</div>
+						)}
 						{!isProgressDockCollapsed && SHOW_DETAILED_PROGRESS_TIMELINE && stageEvents.length > 0 && !showMiniProgress && (
 							<div className={`${styles.messageContent} ${styles.stageTimelineCard}`}>
 								<div className={styles.stageTimelineHeader}>
@@ -4476,7 +5085,25 @@ export default function AiAssistantChat({
 													const progressText = Number.isFinite(Number(event.current)) && Number.isFinite(Number(event.total))
 														? ` [${Math.max(0, Number(event.current))}/${Math.max(1, Number(event.total))}]`
 														: "";
-													const timelineMessage = renderProgressText(event.detailKey, event.detailArgs, event.detail || renderProgressText(event.messageKey, event.messageArgs, event.message));
+													const timelineMessageBase = renderProgressText(event.detailKey, event.detailArgs, event.detail || renderProgressText(event.messageKey, event.messageArgs, event.message));
+													const dynamicParts = String(event.stage || "").trim().toLowerCase() === "dynamic_ingestion"
+														? buildDynamicIngestionParts({
+															state: String(event.queueState || event.status || ""),
+															source: event.dynamicSource,
+															pruned: event.prunedSources,
+														})
+														: [];
+													const scopeLabel = String(event.stage || "").trim().toLowerCase() === "scope_reasoning"
+														? formatScopeReasoningLabel(event.scopeSummary, event.scopeMask, event.scopeTags, false)
+														: "";
+													const scopeTagsCompact = String(event.stage || "").trim().toLowerCase() === "scope_reasoning"
+														? (Array.isArray(event.scopeTags)
+															? event.scopeTags.map(tag => String(tag || "").trim()).filter(Boolean).slice(0, 3)
+															: [])
+														: [];
+													const timelineMessage = dynamicParts.length > 0
+														? `${uiText("Nạp động", "Ingestion", "动态入库")}: ${dynamicParts.join(" · ")}`
+														: (scopeLabel || timelineMessageBase);
 													return (
 														<div key={event.id} className={`${styles.stageTimelineItem} ${styles[`stageTimelineItem_${stageTone}`] || ""}`.trim()}>
 															<span className={`${styles.stageTimelineBullet} ${styles[`stageTimelineBullet_${stageTone}`] || ""}`.trim()} />
@@ -4502,6 +5129,15 @@ export default function AiAssistantChat({
 																{timelineMessage && (
 																	<div className={`${styles.stageTimelineMessage} ${styles.stageTimelineMessageCompact}`.trim()}>
 																		{timelineMessage}
+																	</div>
+																)}
+																{scopeTagsCompact.length > 0 && (
+																	<div className={styles.stageScopeTagList}>
+																		{scopeTagsCompact.map(tag => (
+																			<span key={`${event.id}_${tag}`} className={styles.stageScopeTagChip}>
+																				#{tag}
+																			</span>
+																		))}
 																	</div>
 																)}
 															</div>
@@ -4538,6 +5174,17 @@ export default function AiAssistantChat({
 									<Tooltip title={completionDetailTooltip || completionStateLabel}>
 										<Tag color={completionState === "done" ? "green" : completionState === "stream_closed" ? "gold" : completionState === "error" ? "red" : completionState === "cancelled" ? "orange" : "default"}>
 											{completionStateLabel}
+										</Tag>
+									</Tooltip>
+								)}
+								{completionMetrics.patchFallbackNoOp === true && (
+									<Tooltip title={uiText(
+										"Patch local không hợp lệ, hệ thống đã fallback no-op an toàn.",
+										"Local patch was invalid, system applied a safe no-op fallback.",
+										"本地补丁无效，系统已回退为安全 no-op。",
+									)}>
+										<Tag color="orange">
+											{uiText("Patch fallback: no-op", "Patch fallback: no-op", "补丁回退：no-op")}
 										</Tag>
 									</Tooltip>
 								)}

@@ -38,6 +38,9 @@ public class LlamaCppNativeService implements AIProvider {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AtomicLong requestCount = new AtomicLong(0L);
     private final AtomicLong failedRequestCount = new AtomicLong(0L);
+    private final AtomicLong promptClipCount = new AtomicLong(0L);
+    private final AtomicLong promptClipCharsRemoved = new AtomicLong(0L);
+    private final AtomicLong circuitOpenCount = new AtomicLong(0L);
     private final AtomicInteger inFlightRequests = new AtomicInteger(0);
     private final AtomicLong lastRequestStartedAtMs = new AtomicLong(0L);
     private final AtomicLong lastRequestFinishedAtMs = new AtomicLong(0L);
@@ -53,9 +56,9 @@ public class LlamaCppNativeService implements AIProvider {
     private static final ConcurrentHashMap<String, AtomicInteger> cancelledTasks = new ConcurrentHashMap<>();
 
     // ── Circuit breaker ────────────────────────────────────────────────────────
-    private static final int CB_FAILURE_THRESHOLD   = 2;           // open after N consecutive failures
-    private static final long CB_COOLDOWN_MS        = 5 * 60_000L; // 5 min normal cooldown
-    private static final long CB_HARD_COOLDOWN_MS   = 15 * 60_000L;// 15 min for GPU/KV hard errors
+    private static final int DEFAULT_CB_FAILURE_THRESHOLD = 5;
+    private static final long DEFAULT_CB_COOLDOWN_MS = 5 * 60_000L;
+    private static final long DEFAULT_CB_HARD_COOLDOWN_MS = 15 * 60_000L;
     /** Error substrings that indicate a persistent hardware/state failure. */
     private static final String[] HARD_FAILURE_PATTERNS = {
         "kIOAccelCommandBufferCallbackErrorTimeout".toLowerCase(),
@@ -70,7 +73,7 @@ public class LlamaCppNativeService implements AIProvider {
 
     private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
     private volatile long circuitOpenedAt = 0L;
-    private volatile long circuitCooldownMs = CB_COOLDOWN_MS;
+    private volatile long circuitCooldownMs = DEFAULT_CB_COOLDOWN_MS;
 
     @Value("${ai.local.llama.enabled:false}")
     private boolean enabled;
@@ -81,7 +84,7 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.context-window:8192}")
     private int contextWindow;
 
-    @Value("${ai.local.llama.max-tokens:8192}")
+    @Value("${ai.local.llama.max-tokens:256}")
     private int maxTokens;
 
     @Value("${ai.local.llama.temperature:0.2}")
@@ -96,10 +99,10 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.threads:2}")
     private int threads;
 
-    @Value("${ai.local.llama.batch-size:256}")
+    @Value("${ai.local.llama.batch-size:48}")
     private int batchSize;
 
-    @Value("${ai.local.llama.ubatch-size:128}")
+    @Value("${ai.local.llama.ubatch-size:24}")
     private int ubatchSize;
 
     @Value("${ai.local.llama.gpu-layers:18}")
@@ -111,7 +114,7 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.max-prompt-chars:500000}")
     private int maxPromptChars;
 
-    @Value("${ai.local.llama.system-prompt:}")
+    @Value("${ai.local.llama.system-prompt:You are a code-string-first assistant. Treat currentCode as the primary source of truth, use cursorLine and nearby context as the first anchor, do not assume a file path exists, and ask only narrowly scoped follow-up questions when needed. Keep answers brief and factual: what you checked, what you found, and the next step.}")
     private String systemPrompt;
 
     @Value("${ai.local.llama.fail-fast:true}")
@@ -120,7 +123,7 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.preload-on-startup:true}")
     private boolean preloadOnStartup;
 
-    @Value("${ai.local.llama.runtime-profile:max}")
+    @Value("${ai.local.llama.runtime-profile:conservative}")
     private String runtimeProfile;
 
     @Value("${ai.local.llama.context-window-hard-cap:32768}")
@@ -132,17 +135,21 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.max-tokens-hard-cap:32768}")
     private int maxTokensHardCap;
 
-    @Value("${ai.local.llama.degraded-max-tokens:1024}")
-    private int degradedMaxTokens;
+    @Value("${ai.local.llama.circuit.failure-threshold:5}")
+    private int cbFailureThreshold;
+
+    @Value("${ai.local.llama.circuit.cooldown-ms:300000}")
+    private long cbCooldownMs;
+
+    @Value("${ai.local.llama.circuit.hard-cooldown-ms:900000}")
+    private long cbHardCooldownMs;
+
+    @Value("${ai.local.llama.threads.reserve-for-system:1}")
+    private int reserveSystemCores;
 
     private volatile LlamaModel model;
     private volatile boolean shuttingDown = false;
     private final Object modelLock = new Object();
-
-    // When ai.local.djl.enabled=true, this is injected and ONNX inference takes priority.
-    // LlamaCppNativeService (GGUF) acts as fallback when DJL ONNX is not available.
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private DjlInferenceService djlInferenceService;
 
     private enum RuntimeProfile {
         CONSERVATIVE,
@@ -175,16 +182,20 @@ public class LlamaCppNativeService implements AIProvider {
 
     private void recordFailure(String errorMessage) {
         boolean hard = isHardFailurePattern(errorMessage);
-        long cooldown = hard ? CB_HARD_COOLDOWN_MS : CB_COOLDOWN_MS;
+        long safeNormalCooldown = Math.max(60_000L, cbCooldownMs <= 0 ? DEFAULT_CB_COOLDOWN_MS : cbCooldownMs);
+        long safeHardCooldown = Math.max(safeNormalCooldown, cbHardCooldownMs <= 0 ? DEFAULT_CB_HARD_COOLDOWN_MS : cbHardCooldownMs);
+        int safeThreshold = Math.max(1, cbFailureThreshold <= 0 ? DEFAULT_CB_FAILURE_THRESHOLD : cbFailureThreshold);
+        long cooldown = hard ? safeHardCooldown : safeNormalCooldown;
         circuitCooldownMs = cooldown;
         int failures = consecutiveFailures.incrementAndGet();
-        if (failures >= CB_FAILURE_THRESHOLD) {
+        if (failures >= safeThreshold) {
             circuitOpenedAt = System.currentTimeMillis();
+            circuitOpenCount.incrementAndGet();
             log.warn("Local llama circuit OPENED after {} consecutive failures (hard={}, cooldownMin={}) – skipping local for {}min. Last error: {}",
                 failures, hard, cooldown / 60_000L, cooldown / 60_000L, errorMessage);
         } else {
             log.warn("Local llama failure {}/{} (hard={}) – not yet tripping circuit. Error: {}",
-                failures, CB_FAILURE_THRESHOLD, hard, errorMessage);
+                failures, safeThreshold, hard, errorMessage);
         }
     }
 
@@ -199,18 +210,6 @@ public class LlamaCppNativeService implements AIProvider {
             }
         }
         return false;
-    }
-
-    /**
-     * Memory safeguard: check if heap usage exceeds 90% to prevent OOM.
-     * Returns true if heap should be protected from more inference.
-     */
-    private boolean isHeapExhausted() {
-        Runtime runtime = Runtime.getRuntime();
-        long max = runtime.maxMemory();
-        long used = runtime.totalMemory() - runtime.freeMemory();
-        double usagePercent = (double) used / max * 100.0;
-        return usagePercent > 90.0;
     }
 
     @PostConstruct
@@ -263,12 +262,6 @@ public class LlamaCppNativeService implements AIProvider {
      * @param requestId Optional request ID for task tracking/cancellation
      */
     public String generateContentWithTaskTracking(String prompt, String requestId) {
-        // Prefer DJL ONNX when available (better quality, DJL manages context internally)
-        if (djlInferenceService != null && djlInferenceService.isAvailable()) {
-            log.debug("LlamaCpp: delegating to DJL ONNX (requestId={})", requestId);
-            return djlInferenceService.generateContent(prompt);
-        }
-
         if (requestId != null && !requestId.isBlank()) {
             registerActiveInferenceTask(requestId);
         }
@@ -295,13 +288,6 @@ public class LlamaCppNativeService implements AIProvider {
             log.info("Local llama circuit is OPEN, skipping inference (cooldown remaining ~{}s)", remainSecs);
             return createErrorJson("Local llama circuit open – skipping inference (cooldown " + remainSecs + "s remaining)", "CIRCUIT_OPEN");
         }
-        
-        // Memory safeguard: if heap is >90% full, reject inference to prevent OOM
-        if (isHeapExhausted()) {
-            log.warn("Heap usage critical (>90%): rejecting inference request to prevent OOM");
-            recordFailure("HEAP_EXHAUSTED");
-            return createErrorJson("Hệ thống tạm quá tải, hãy thử lại sau", "HEAP_EXHAUSTED");
-        }
 
         // Prepend system prompt if configured (system prompt API removed in llama v4.x)
         if (systemPrompt != null && !systemPrompt.isBlank()) {
@@ -315,19 +301,11 @@ public class LlamaCppNativeService implements AIProvider {
             log.debug("JSON-forcing enabled: prepended format instruction to prompt");
         }
 
-        int promptCap = effectiveMaxPromptChars();
-        if (safePrompt.length() > promptCap) {
-            String digest = shortDigest(safePrompt);
-            log.warn("Local prompt clipped from {} to {} chars, digest={}", safePrompt.length(), promptCap, digest);
-            safePrompt = safePrompt.substring(0, promptCap);
-        }
+        safePrompt = clipPromptSmart(safePrompt, effectiveMaxPromptChars(), true);
 
         // Keep a conservative safety margin to avoid KV/GPU pressure when prompt is near context limit.
         int runtimePromptCharBudget = resolveRuntimePromptCharBudget();
-        if (safePrompt.length() > runtimePromptCharBudget) {
-            log.warn("Local prompt reduced by runtime budget from {} to {} chars", safePrompt.length(), runtimePromptCharBudget);
-            safePrompt = safePrompt.substring(0, runtimePromptCharBudget);
-        }
+        safePrompt = clipPromptSmart(safePrompt, runtimePromptCharBudget, true);
 
         long startedAt = markRequestStart(safePrompt);
         try {
@@ -390,12 +368,6 @@ public class LlamaCppNativeService implements AIProvider {
      * Fast variant with task tracking for cancellation.
      */
     public String generateContentFastWithTaskTracking(String prompt, int maxOutputTokensCap, String requestId) {
-        // Prefer DJL ONNX for fast path too – use the DJL fast variant with token cap
-        if (djlInferenceService != null && djlInferenceService.isAvailable()) {
-            log.debug("LlamaCpp-fast: delegating to DJL ONNX (cap={})", maxOutputTokensCap);
-            return djlInferenceService.generateFast(prompt, maxOutputTokensCap);
-        }
-
         if (requestId != null && !requestId.isBlank()) {
             registerActiveInferenceTask(requestId);
         }
@@ -420,13 +392,6 @@ public class LlamaCppNativeService implements AIProvider {
         if (isCircuitOpen()) {
             return createErrorJson("Local llama circuit open", "CIRCUIT_OPEN");
         }
-        
-        // Memory safeguard: if heap is >90% full, reject inference to prevent OOM
-        if (isHeapExhausted()) {
-            log.warn("Heap usage critical (>90%): rejecting inference request to prevent OOM");
-            recordFailure("HEAP_EXHAUSTED");
-            return createErrorJson("Hệ thống tạm quá tải, hãy thử lại sau", "HEAP_EXHAUSTED");
-        }
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             safePrompt = systemPrompt.trim() + "\n" + safePrompt;
         }
@@ -437,17 +402,10 @@ public class LlamaCppNativeService implements AIProvider {
             safePrompt = jsonForcePrefix + safePrompt;
         }
         
-        int effectiveMax = Math.max(16, effectiveMaxTokens());
-        int requestedCap = maxOutputTokensCap <= 0 ? effectiveMax : maxOutputTokensCap;
-        int cappedTokens = Math.max(16, Math.min(effectiveMax, requestedCap));
-        int promptCap = effectiveMaxPromptChars();
-        if (safePrompt.length() > promptCap) {
-            safePrompt = safePrompt.substring(0, promptCap);
-        }
-        int runtimeBudget = resolveRuntimePromptCharBudget(cappedTokens);
-        if (safePrompt.length() > runtimeBudget) {
-            safePrompt = safePrompt.substring(0, runtimeBudget);
-        }
+        safePrompt = clipPromptSmart(safePrompt, effectiveMaxPromptChars(), false);
+        int runtimeBudget = resolveRuntimePromptCharBudget();
+        safePrompt = clipPromptSmart(safePrompt, runtimeBudget, false);
+        int cappedTokens = Math.max(16, Math.min(effectiveMaxTokens(), maxOutputTokensCap));
         long startedAt = markRequestStart(safePrompt);
         try {
             boolean isJsonForced = detectJsonExpectation(safePrompt);
@@ -484,6 +442,9 @@ public class LlamaCppNativeService implements AIProvider {
         out.put("inFlightRequests", inFlightRequests.get());
         out.put("requestCount", requestCount.get());
         out.put("failedRequestCount", failedRequestCount.get());
+        out.put("promptClipCount", promptClipCount.get());
+        out.put("promptClipCharsRemoved", promptClipCharsRemoved.get());
+        out.put("circuitOpenCount", circuitOpenCount.get());
         out.put("lastRequestStartedAtMs", lastRequestStartedAtMs.get());
         out.put("lastRequestFinishedAtMs", lastRequestFinishedAtMs.get());
         out.put("lastRequestDurationMs", lastRequestDurationMs.get());
@@ -529,8 +490,7 @@ public class LlamaCppNativeService implements AIProvider {
     private String runLocalCompletionWithCap(String prompt, int nPredictCap, boolean isJsonForced) {
         LlamaModel localModel = ensureModelLoaded();
         int ctx = Math.max(1024, effectiveContextWindow());
-        int promptLength = Math.max(0, prompt.length());
-        int promptTokens = Math.max(1, (promptLength + 3) / 4);
+        int promptTokens = estimateTokensByChars(prompt.length());
         int availableForOutput = Math.max(16, ctx - promptTokens - 256);
         int nPredict = Math.max(16, Math.min(nPredictCap, availableForOutput));
         // Use lower temperature for JSON outputs
@@ -570,37 +530,32 @@ public class LlamaCppNativeService implements AIProvider {
 
     private int resolveAdaptiveNPredict(String prompt, boolean degradedMode) {
         int ctx = Math.max(1024, effectiveContextWindow());
-        int promptLength = String.valueOf(prompt == null ? "" : prompt).length();
-        int promptTokens = Math.max(1, (Math.max(0, promptLength) + 3) / 4);
+        int promptTokens = estimateTokensByChars(String.valueOf(prompt == null ? "" : prompt).length());
         int reserved = Math.max(192, degradedMode ? 640 : 384);
         int availableForOutput = Math.max(32, ctx - promptTokens - reserved);
         int maxConfigured = Math.max(32, effectiveMaxTokens());
         int nPredict = Math.min(maxConfigured, availableForOutput);
         if (degradedMode) {
-            nPredict = Math.min(nPredict, Math.max(128, degradedMaxTokens));
+            nPredict = Math.min(nPredict, 256);
         }
         return Math.max(32, nPredict);
     }
 
     private int resolveRuntimePromptCharBudget() {
-        return resolveRuntimePromptCharBudget(effectiveMaxTokens());
-    }
-
-    private int resolveRuntimePromptCharBudget(int requestedOutputTokens) {
         int ctx = Math.max(1024, effectiveContextWindow());
-        int effectiveOutputReserve = Math.max(64, Math.min(effectiveMaxTokens(), requestedOutputTokens));
-        int outputReserve = Math.max(256, effectiveOutputReserve);
+        int outputReserve = Math.max(256, effectiveMaxTokens());
         int promptTokenBudget = Math.max(256, ctx - outputReserve - 256);
         int byTokenChars = promptTokenBudget * 4;
         return Math.max(2000, Math.min(effectiveMaxPromptChars(), byTokenChars));
     }
 
+    private int estimateTokensByChars(int chars) {
+        int safeChars = Math.max(0, chars);
+        return Math.max(1, (safeChars + 3) / 4);
+    }
+
     @Override
     public boolean isAvailable() {
-        // DJL ONNX takes priority when loaded
-        if (djlInferenceService != null && djlInferenceService.isAvailable()) {
-            return true;
-        }
         if (!enabled || shuttingDown) {
             return false;
         }
@@ -669,8 +624,8 @@ public class LlamaCppNativeService implements AIProvider {
             ModelParameters parameters = new ModelParameters()
                     .setModel(path.toAbsolutePath().toString())
                     .setCtxSize(effectiveContextWindow())
-                    .setThreads(Math.max(1, threads))
-                    .setThreadsBatch(Math.max(1, threads))
+                    .setThreads(effectiveThreads())
+                    .setThreadsBatch(effectiveThreads())
                     .setBatchSize(effectiveBatchSize())
                     .setUbatchSize(effectiveUbatchSize());
 
@@ -703,6 +658,47 @@ public class LlamaCppNativeService implements AIProvider {
             return -1;
         }
         return Math.max(0, Math.min(80, gpuLayers));
+    }
+
+    private int effectiveThreads() {
+        int configured = Math.max(1, threads);
+        int cores = Math.max(1, Runtime.getRuntime().availableProcessors());
+        int reserve = Math.max(0, reserveSystemCores);
+        int budget = Math.max(1, cores - reserve);
+        if (resolveRuntimeProfile() == RuntimeProfile.CONSERVATIVE) {
+            budget = Math.max(1, Math.min(budget, cores - 1));
+        }
+        return Math.max(1, Math.min(configured, budget));
+    }
+
+    private String clipPromptSmart(String source, int cap, boolean logClip) {
+        String text = String.valueOf(source == null ? "" : source);
+        int safeCap = Math.max(1000, cap);
+        if (text.length() <= safeCap) {
+            return text;
+        }
+
+        int head = Math.max(300, (int) Math.round(safeCap * 0.65d));
+        int tail = Math.max(200, safeCap - head - 96);
+        if (tail <= 0) {
+            tail = Math.max(120, safeCap / 4);
+            head = Math.max(300, safeCap - tail - 96);
+        }
+
+        String clipped = text.substring(0, Math.min(head, text.length()))
+            + "\n\n[...prompt clipped for runtime budget...]\n\n"
+            + text.substring(Math.max(0, text.length() - tail));
+
+        if (clipped.length() > safeCap) {
+            clipped = clipped.substring(0, safeCap);
+        }
+
+        if (logClip) {
+            promptClipCount.incrementAndGet();
+            promptClipCharsRemoved.addAndGet(Math.max(0, text.length() - clipped.length()));
+            log.warn("Local prompt clipped smartly from {} to {} chars, digest={}", text.length(), clipped.length(), shortDigest(text));
+        }
+        return clipped;
     }
 
     private Path resolveModelPath(String rawPath) {
@@ -774,25 +770,15 @@ public class LlamaCppNativeService implements AIProvider {
                 profileCap = 1024;
                 break;
             case MAX:
-                // Unlimited output: allow full context window worth of output tokens.
-                // The actual limit is implicitly capped by resolveAdaptiveNPredict via
-                // ctx - promptTokens - reserved, so this just removes an artificial ceiling.
-                profileCap = 32768;
+                profileCap = 16384;  // Increased from 4096 to allow longer responses
                 break;
             case BALANCED:
             default:
-                profileCap = 8192;
+                profileCap = 4096;  // Increased from 2048 for better responses
                 break;
         }
         int hardCap = Math.max(256, maxTokensHardCap);
         return Math.min(Math.min(hardCap, profileCap), Math.max(32, maxTokens));
-    }
-
-    /**
-     * Exposed for callers that need to know the effective upper bound for output tokens.
-     */
-    public int getEffectiveMaxTokensLimit() {
-        return effectiveMaxTokens();
     }
 
     private RuntimeProfile resolveRuntimeProfile() {
@@ -824,6 +810,10 @@ public class LlamaCppNativeService implements AIProvider {
      * Detect if prompt expects JSON output.
      * Returns true if prompt contains keywords suggesting JSON format requirement.
      */
+    public int getEffectiveMaxTokensLimit() {
+        return effectiveMaxTokens();
+    }
+
     private boolean detectJsonExpectation(String prompt) {
         if (prompt == null) {
             return false;
@@ -944,6 +934,13 @@ public class LlamaCppNativeService implements AIProvider {
         info.put("activeTaskIds", new java.util.ArrayList<>(activeInferenceTasks.keySet()));
         info.put("inFlightRequests", inFlightRequests.get());
         info.put("totalRequests", requestCount.get());
+        info.put("failedRequests", failedRequestCount.get());
+        info.put("promptClipCount", promptClipCount.get());
+        info.put("promptClipCharsRemoved", promptClipCharsRemoved.get());
+        info.put("circuitOpen", isCircuitOpen());
+        info.put("circuitOpenCount", circuitOpenCount.get());
+        info.put("circuitConsecutiveFailures", consecutiveFailures.get());
+        info.put("circuitCooldownMs", circuitCooldownMs);
         return info;
     }
 }

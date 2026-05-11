@@ -26,7 +26,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public class AIProviderFactory {
   
   private final List<AIProvider> providers = new CopyOnWriteArrayList<>();
-  private final boolean forceAllLocal;
   
   private final ObjectMapper objectMapper = new ObjectMapper();
   
@@ -37,29 +36,25 @@ public class AIProviderFactory {
       GeminiService geminiService,
       @Autowired(required = false) LlamaCppNativeService llamaCppNativeService,
       @Value("${ai.local.llama.prefer-local-first:true}") boolean preferLocalFirst,
-      @Value("${ai.local.force-all-flows:false}") boolean forceAllLocal) {
-    this.forceAllLocal = forceAllLocal;
-    boolean localAvailable = llamaCppNativeService != null && llamaCppNativeService.isAvailable();
-
-    if (this.forceAllLocal) {
-      if (localAvailable) {
+      @Value("${ai.local.only.enabled:true}") boolean localOnlyEnabled) {
+    if (localOnlyEnabled) {
+      if (llamaCppNativeService != null && llamaCppNativeService.isAvailable()) {
         providers.add(llamaCppNativeService);
       }
-      log.warn("AIProviderFactory running in FORCE-LOCAL-ONLY mode: cloud providers are disabled.");
-      log.info("AIProviderFactory initialized with {} providers (forceLocalOnly={})", providers.size(), this.forceAllLocal);
+      log.info("AIProviderFactory initialized in local-only mode with {} providers", providers.size());
       return;
     }
 
-    if (localAvailable && preferLocalFirst) {
+    if (llamaCppNativeService != null && llamaCppNativeService.isAvailable() && preferLocalFirst) {
       providers.add(llamaCppNativeService);
       providers.add(geminiService);
     } else {
       providers.add(geminiService);
-      if (localAvailable) {
+      if (llamaCppNativeService != null && llamaCppNativeService.isAvailable()) {
         providers.add(llamaCppNativeService);
       }
     }
-    log.info("AIProviderFactory initialized with {} providers (forceLocalOnly={})", providers.size(), this.forceAllLocal);
+    log.info("AIProviderFactory initialized with {} providers", providers.size());
   }
   
   /**
@@ -74,12 +69,7 @@ public class AIProviderFactory {
     }
 
     if (providers.isEmpty()) {
-      if (forceAllLocal) {
-        return createErrorJson(
-          "Local-only mode đang bật nhưng local provider chưa sẵn sàng",
-          "LOCAL_ONLY_PROVIDER_UNAVAILABLE");
-      }
-      return createErrorJson("Không có AI provider khả dụng", "NO_AVAILABLE_PROVIDER");
+      return createErrorJson("Local-only mode đang bật nhưng local model chưa sẵn sàng", "LOCAL_PROVIDER_UNAVAILABLE");
     }
     
     List<AIProvider> orderedProviders = providers;
@@ -88,35 +78,35 @@ public class AIProviderFactory {
     // Trước tiên, try các providers theo thứ tự ưu tiên
     for (int attempt = 0; attempt < totalProviders; attempt++) {
       AIProvider provider = orderedProviders.get(attempt);
-
+      
       try {
-        if (!provider.isAvailable()) {
+        if (provider.isAvailable()) {
+          log.debug("Using provider: {} (Attempt {}/{})", provider.getName(), attempt + 1, totalProviders);
+          String result = provider.generateContent(prompt);
+          
+          // Kiểm tra xem kết quả có phải error không
+          String errorCode = extractErrorCode(result);
+          if (errorCode == null) {
+            // Success
+            log.info("Successfully generated content using: {}", provider.getName());
+            return result;
+          } else if (errorCode.contains("QUOTA") || errorCode.contains("RATE_LIMIT") || errorCode.contains("TOKENS_EXCEEDED")) {
+            // Quota/token exceeded, thử provider tiếp theo
+            log.warn("{} quota exceeded: {}. Trying next provider...", provider.getName(), errorCode);
+            sleepBackoff(attempt);
+            continue;
+          } else if (errorCode.equals("CONNECTION_REFUSED")) {
+            // Service không chạy, thử provider tiếp theo
+            log.warn("{} is not available. Trying next provider...", provider.getName());
+            continue;
+          } else {
+            // Lỗi khác nhưng vẫn return để không waste retry
+            log.warn("Provider {} returned error: {}", provider.getName(), errorCode);
+            return result;
+          }
+        } else {
           log.debug("Provider {} is not available (quota exceeded or offline)", provider.getName());
-          continue;
         }
-
-        log.debug("Using provider: {} (Attempt {}/{})", provider.getName(), attempt + 1, totalProviders);
-        String result = provider.generateContent(prompt);
-
-        String errorCode = extractErrorCode(result);
-        if (errorCode == null) {
-          log.info("Successfully generated content using: {}", provider.getName());
-          return result;
-        }
-
-        if (isRetryableProviderError(errorCode)) {
-          log.warn("{} quota exceeded: {}. Trying next provider...", provider.getName(), errorCode);
-          sleepBackoff(attempt);
-          continue;
-        }
-
-        if ("CONNECTION_REFUSED".equals(errorCode)) {
-          log.warn("{} is not available. Trying next provider...", provider.getName());
-          continue;
-        }
-
-        log.warn("Provider {} returned error: {}", provider.getName(), errorCode);
-        return result;
       } catch (Exception e) {
         log.warn("Error using provider {}: {}. Trying next provider...", provider.getName(), e.getMessage());
       }
@@ -160,7 +150,7 @@ public class AIProviderFactory {
   private String extractErrorCode(String response) {
     try {
       @SuppressWarnings("unchecked")
-      Map<String, Object> parsed = objectMapper.readValue(response, HashMap.class);
+      Map<String, Object> parsed = objectMapper.readValue(response, Map.class);
       if (parsed == null || parsed.isEmpty()) {
         return "EMPTY_RESPONSE";
       }
@@ -182,12 +172,6 @@ public class AIProviderFactory {
       // Ignore parse errors
     }
     return null; // No error
-  }
-
-  private boolean isRetryableProviderError(String errorCode) {
-    return errorCode.contains("QUOTA")
-      || errorCode.contains("RATE_LIMIT")
-      || errorCode.contains("TOKENS_EXCEEDED");
   }
   
   /**

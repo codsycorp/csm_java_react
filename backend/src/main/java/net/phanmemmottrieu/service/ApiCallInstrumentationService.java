@@ -97,6 +97,15 @@ public class ApiCallInstrumentationService {
         public boolean localPreAnalysisHandled;
         public boolean localPreAnalysisCloudContextInjected;
         public String localPreAnalysisReasonCode;
+        public boolean focusedContextApplied;
+        public int focusedContextLuceneTopKCount;
+        public int focusedContextKeywordHits;
+        public boolean focusedContextCursorWindowIncluded;
+        public boolean analyzeSlidingWindowApplied;
+        public int analyzeSlidingWindowCount;
+        public int analyzeSlidingWindowCharsUsed;
+        public boolean analyzeSlidingWindowCpuCapped;
+        public int analyzeSlidingWindowMaxWindowsEffective;
 
         public Map<String, Object> toMap() {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -142,6 +151,15 @@ public class ApiCallInstrumentationService {
             m.put("localPreAnalysisHandled", localPreAnalysisHandled);
             m.put("localPreAnalysisCloudContextInjected", localPreAnalysisCloudContextInjected);
             m.put("localPreAnalysisReasonCode", localPreAnalysisReasonCode);
+            m.put("focusedContextApplied", focusedContextApplied);
+            m.put("focusedContextLuceneTopKCount", focusedContextLuceneTopKCount);
+            m.put("focusedContextKeywordHits", focusedContextKeywordHits);
+            m.put("focusedContextCursorWindowIncluded", focusedContextCursorWindowIncluded);
+            m.put("analyzeSlidingWindowApplied", analyzeSlidingWindowApplied);
+            m.put("analyzeSlidingWindowCount", analyzeSlidingWindowCount);
+            m.put("analyzeSlidingWindowCharsUsed", analyzeSlidingWindowCharsUsed);
+            m.put("analyzeSlidingWindowCpuCapped", analyzeSlidingWindowCpuCapped);
+            m.put("analyzeSlidingWindowMaxWindowsEffective", analyzeSlidingWindowMaxWindowsEffective);
             return m;
         }
     }
@@ -301,6 +319,15 @@ public class ApiCallInstrumentationService {
         metric.localPreAnalysisHandled = toBool(payload.get("localPreAnalysisHandled"));
         metric.localPreAnalysisCloudContextInjected = toBool(payload.get("localPreAnalysisCloudContextInjected"));
         metric.localPreAnalysisReasonCode = toText(payload.get("localPreAnalysisReasonCode"));
+        metric.focusedContextApplied = toBool(payload.get("focusedContextApplied"));
+        metric.focusedContextLuceneTopKCount = toInt(payload.get("focusedContextLuceneTopKCount"));
+        metric.focusedContextKeywordHits = toInt(payload.get("focusedContextKeywordHits"));
+        metric.focusedContextCursorWindowIncluded = toBool(payload.get("focusedContextCursorWindowIncluded"));
+        metric.analyzeSlidingWindowApplied = toBool(payload.get("analyzeSlidingWindowApplied"));
+        metric.analyzeSlidingWindowCount = toInt(payload.get("analyzeSlidingWindowCount"));
+        metric.analyzeSlidingWindowCharsUsed = toInt(payload.get("analyzeSlidingWindowCharsUsed"));
+        metric.analyzeSlidingWindowCpuCapped = toBool(payload.get("analyzeSlidingWindowCpuCapped"));
+        metric.analyzeSlidingWindowMaxWindowsEffective = toInt(payload.get("analyzeSlidingWindowMaxWindowsEffective"));
 
         aiTelemetryHistory.add(metric);
         pruneAiTelemetryHistoryIfNeeded(5000);
@@ -375,6 +402,15 @@ public class ApiCallInstrumentationService {
         int localPreAnalysisAttemptedCount = 0;
         int localPreAnalysisHandledCount = 0;
         int localPreAnalysisCloudContextInjectedCount = 0;
+        int focusedContextAppliedCount = 0;
+        int focusedContextCursorWindowIncludedCount = 0;
+        long focusedContextLuceneTopKTotal = 0;
+        long focusedContextKeywordHitsTotal = 0;
+        int analyzeSlidingWindowAppliedCount = 0;
+        int analyzeSlidingWindowCpuCappedCount = 0;
+        long analyzeSlidingWindowCountTotal = 0;
+        long analyzeSlidingWindowCharsUsedTotal = 0;
+        long analyzeSlidingWindowMaxWindowsEffectiveTotal = 0;
         long inputTokens = 0;
         long outputTokens = 0;
         long elapsedMs = 0;
@@ -452,6 +488,25 @@ public class ApiCallInstrumentationService {
                 if (!localReason.isBlank()) {
                     localPreAnalysisReasonCounts.put(localReason, localPreAnalysisReasonCounts.getOrDefault(localReason, 0) + 1);
                 }
+
+                if (m.focusedContextApplied) {
+                    focusedContextAppliedCount++;
+                }
+                if (m.focusedContextCursorWindowIncluded) {
+                    focusedContextCursorWindowIncludedCount++;
+                }
+                focusedContextLuceneTopKTotal += Math.max(0, m.focusedContextLuceneTopKCount);
+                focusedContextKeywordHitsTotal += Math.max(0, m.focusedContextKeywordHits);
+
+                if (m.analyzeSlidingWindowApplied) {
+                    analyzeSlidingWindowAppliedCount++;
+                }
+                if (m.analyzeSlidingWindowCpuCapped) {
+                    analyzeSlidingWindowCpuCappedCount++;
+                }
+                analyzeSlidingWindowCountTotal += Math.max(0, m.analyzeSlidingWindowCount);
+                analyzeSlidingWindowCharsUsedTotal += Math.max(0, m.analyzeSlidingWindowCharsUsed);
+                analyzeSlidingWindowMaxWindowsEffectiveTotal += Math.max(0, m.analyzeSlidingWindowMaxWindowsEffective);
             }
         }
 
@@ -499,6 +554,23 @@ public class ApiCallInstrumentationService {
         out.put("localPreAnalysisHandledRate", ratio(localPreAnalysisHandledCount, total));
         out.put("localPreAnalysisCloudContextInjectedCount", localPreAnalysisCloudContextInjectedCount);
         out.put("localPreAnalysisCloudContextInjectedRate", ratio(localPreAnalysisCloudContextInjectedCount, total));
+        out.put("focusedContextAppliedCount", focusedContextAppliedCount);
+        out.put("focusedContextAppliedRate", ratio(focusedContextAppliedCount, total));
+        out.put("focusedContextCursorWindowIncludedCount", focusedContextCursorWindowIncludedCount);
+        out.put("focusedContextCursorWindowIncludedRate", ratio(focusedContextCursorWindowIncludedCount, total));
+        out.put("focusedContextLuceneTopKTotal", focusedContextLuceneTopKTotal);
+        out.put("focusedContextKeywordHitsTotal", focusedContextKeywordHitsTotal);
+        out.put("avgFocusedContextLuceneTopK", round6((double) focusedContextLuceneTopKTotal / Math.max(1, focusedContextAppliedCount)));
+        out.put("avgFocusedContextKeywordHits", round6((double) focusedContextKeywordHitsTotal / Math.max(1, focusedContextAppliedCount)));
+        out.put("analyzeSlidingWindowAppliedCount", analyzeSlidingWindowAppliedCount);
+        out.put("analyzeSlidingWindowAppliedRate", ratio(analyzeSlidingWindowAppliedCount, total));
+        out.put("analyzeSlidingWindowCpuCappedCount", analyzeSlidingWindowCpuCappedCount);
+        out.put("analyzeSlidingWindowCpuCappedRate", ratio(analyzeSlidingWindowCpuCappedCount, total));
+        out.put("analyzeSlidingWindowCountTotal", analyzeSlidingWindowCountTotal);
+        out.put("analyzeSlidingWindowCharsUsedTotal", analyzeSlidingWindowCharsUsedTotal);
+        out.put("avgAnalyzeSlidingWindowCount", round6((double) analyzeSlidingWindowCountTotal / Math.max(1, analyzeSlidingWindowAppliedCount)));
+        out.put("avgAnalyzeSlidingWindowCharsUsed", round6((double) analyzeSlidingWindowCharsUsedTotal / Math.max(1, analyzeSlidingWindowAppliedCount)));
+        out.put("avgAnalyzeSlidingWindowMaxWindowsEffective", round6((double) analyzeSlidingWindowMaxWindowsEffectiveTotal / Math.max(1, analyzeSlidingWindowAppliedCount)));
         out.put("byLocalPreAnalysisReasonCode", localPreAnalysisReasonCounts);
         out.put("byFlow", flowCounts);
         out.put("byRoutingTier", routingTierCounts);
@@ -532,6 +604,14 @@ public class ApiCallInstrumentationService {
                 incLong(agg, "localPreAnalysisAttemptedEvents", m.localPreAnalysisAttempted ? 1 : 0);
                 incLong(agg, "localPreAnalysisHandledEvents", m.localPreAnalysisHandled ? 1 : 0);
                 incLong(agg, "localPreAnalysisCloudContextInjectedEvents", m.localPreAnalysisCloudContextInjected ? 1 : 0);
+                incLong(agg, "focusedContextAppliedEvents", m.focusedContextApplied ? 1 : 0);
+                incLong(agg, "focusedContextCursorWindowIncludedEvents", m.focusedContextCursorWindowIncluded ? 1 : 0);
+                incLong(agg, "focusedContextLuceneTopKTotal", Math.max(0, m.focusedContextLuceneTopKCount));
+                incLong(agg, "focusedContextKeywordHitsTotal", Math.max(0, m.focusedContextKeywordHits));
+                incLong(agg, "analyzeSlidingWindowAppliedEvents", m.analyzeSlidingWindowApplied ? 1 : 0);
+                incLong(agg, "analyzeSlidingWindowCpuCappedEvents", m.analyzeSlidingWindowCpuCapped ? 1 : 0);
+                incLong(agg, "analyzeSlidingWindowCountTotal", Math.max(0, m.analyzeSlidingWindowCount));
+                incLong(agg, "analyzeSlidingWindowCharsUsedTotal", Math.max(0, m.analyzeSlidingWindowCharsUsed));
                 incDouble(agg, "estimatedCostUsd", Math.max(0.0, m.estimatedCostUsd));
             }
         }
@@ -564,6 +644,14 @@ public class ApiCallInstrumentationService {
                 incLong(agg, "localPreAnalysisAttemptedEvents", m.localPreAnalysisAttempted ? 1 : 0);
                 incLong(agg, "localPreAnalysisHandledEvents", m.localPreAnalysisHandled ? 1 : 0);
                 incLong(agg, "localPreAnalysisCloudContextInjectedEvents", m.localPreAnalysisCloudContextInjected ? 1 : 0);
+                incLong(agg, "focusedContextAppliedEvents", m.focusedContextApplied ? 1 : 0);
+                incLong(agg, "focusedContextCursorWindowIncludedEvents", m.focusedContextCursorWindowIncluded ? 1 : 0);
+                incLong(agg, "focusedContextLuceneTopKTotal", Math.max(0, m.focusedContextLuceneTopKCount));
+                incLong(agg, "focusedContextKeywordHitsTotal", Math.max(0, m.focusedContextKeywordHits));
+                incLong(agg, "analyzeSlidingWindowAppliedEvents", m.analyzeSlidingWindowApplied ? 1 : 0);
+                incLong(agg, "analyzeSlidingWindowCpuCappedEvents", m.analyzeSlidingWindowCpuCapped ? 1 : 0);
+                incLong(agg, "analyzeSlidingWindowCountTotal", Math.max(0, m.analyzeSlidingWindowCount));
+                incLong(agg, "analyzeSlidingWindowCharsUsedTotal", Math.max(0, m.analyzeSlidingWindowCharsUsed));
                 incDouble(agg, "estimatedCostUsd", Math.max(0.0, m.estimatedCostUsd));
             }
         }
@@ -585,6 +673,7 @@ public class ApiCallInstrumentationService {
         int attemptsSpikeCount = 0;
         int providerCallSpikeCount = 0;
         int inputBudgetGuardCount = 0;
+        int analyzeSlidingWindowCpuCappedCount = 0;
         if (windowEvents != null) {
             for (AiTelemetryMetric m : windowEvents) {
                 if (m == null) continue;
@@ -600,6 +689,7 @@ public class ApiCallInstrumentationService {
                 if (m.attemptsUsed >= 2) attemptsSpikeCount++;
                 if (m.providerCallsEstimate >= 3) providerCallSpikeCount++;
                 if (m.inputBudgetGuardTriggered || "input_budget_guard".equalsIgnoreCase(toText(m.taskType))) inputBudgetGuardCount++;
+                if (m.analyzeSlidingWindowCpuCapped) analyzeSlidingWindowCpuCappedCount++;
             }
         }
 
@@ -611,6 +701,7 @@ public class ApiCallInstrumentationService {
         double attemptsSpikeRate = ratio(attemptsSpikeCount, total);
         double providerCallSpikeRate = ratio(providerCallSpikeCount, total);
         double inputBudgetGuardRate = ratio(inputBudgetGuardCount, total);
+        double analyzeSlidingWindowCpuCappedRate = ratio(analyzeSlidingWindowCpuCappedCount, total);
         boolean enoughSamples = total >= minSamplesForAlert;
         boolean fallbackSpike = enoughSamples && fallbackRate >= Math.max(0.05, fallbackAlertThreshold);
         boolean quickProbeSpike = enoughSamples && quickProbeRate >= Math.max(0.05, quickProbeAlertThreshold);
@@ -618,6 +709,7 @@ public class ApiCallInstrumentationService {
         boolean attemptsSpike = enoughSamples && attemptsSpikeRate >= 0.30;
         boolean providerCallSpike = enoughSamples && providerCallSpikeRate >= 0.30;
         boolean inputBudgetGuardSpike = enoughSamples && inputBudgetGuardRate >= 0.20;
+        boolean analyzeSlidingWindowCpuCapSpike = enoughSamples && analyzeSlidingWindowCpuCappedRate >= 0.20;
 
         List<Map<String, Object>> alertItems = new ArrayList<>();
         if (fallbackSpike) {
@@ -652,6 +744,14 @@ public class ApiCallInstrumentationService {
                 "threshold", 0.30,
                 "message", "Nhiều request phải chạy >=2 attempts, cần giảm strictness hoặc tăng salvage local"));
         }
+        if (analyzeSlidingWindowCpuCapSpike) {
+            alertItems.add(Map.of(
+                "type", "analyze_sliding_window_cpu_cap_spike",
+                "severity", analyzeSlidingWindowCpuCappedRate >= 0.35 ? "high" : "warning",
+                "value", round6(analyzeSlidingWindowCpuCappedRate),
+                "threshold", 0.20,
+                "message", "Tỷ lệ sliding-window bị CPU cap cao, nên giảm tải đồng thời hoặc tinh chỉnh window/step"));
+        }
         if (providerCallSpike) {
             alertItems.add(Map.of(
                 "type", "provider_calls_spike",
@@ -679,6 +779,7 @@ public class ApiCallInstrumentationService {
         out.put("attemptsSpikeRate", round6(attemptsSpikeRate));
         out.put("providerCallSpikeRate", round6(providerCallSpikeRate));
         out.put("inputBudgetGuardRate", round6(inputBudgetGuardRate));
+        out.put("analyzeSlidingWindowCpuCappedRate", round6(analyzeSlidingWindowCpuCappedRate));
         out.put("minSamplesForAlert", minSamplesForAlert);
         out.put("fallbackSpike", fallbackSpike);
         out.put("quickProbeSpike", quickProbeSpike);
@@ -686,6 +787,7 @@ public class ApiCallInstrumentationService {
         out.put("attemptsSpike", attemptsSpike);
         out.put("providerCallSpike", providerCallSpike);
         out.put("inputBudgetGuardSpike", inputBudgetGuardSpike);
+        out.put("analyzeSlidingWindowCpuCapSpike", analyzeSlidingWindowCpuCapSpike);
         out.put("items", alertItems);
         return out;
     }
@@ -695,11 +797,12 @@ public class ApiCallInstrumentationService {
         boolean quickProbeSpike = toBool(alerts == null ? null : alerts.get("quickProbeSpike"));
         boolean fullCodeFallbackSpike = toBool(alerts == null ? null : alerts.get("fullCodeFallbackSpike"));
         boolean inputBudgetGuardSpike = toBool(alerts == null ? null : alerts.get("inputBudgetGuardSpike"));
+        boolean analyzeSlidingWindowCpuCapSpike = toBool(alerts == null ? null : alerts.get("analyzeSlidingWindowCpuCapSpike"));
         int totalEvents = toInt(summary == null ? null : summary.get("totalEvents"));
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("enabled", totalEvents > 0);
-        out.put("mode", (fallbackSpike || quickProbeSpike || fullCodeFallbackSpike || inputBudgetGuardSpike) ? "scale_up_budget" : "scale_down_budget");
+        out.put("mode", (fallbackSpike || quickProbeSpike || fullCodeFallbackSpike || inputBudgetGuardSpike || analyzeSlidingWindowCpuCapSpike) ? "scale_up_budget" : "scale_down_budget");
 
         List<Map<String, Object>> actions = new ArrayList<>();
         if (fallbackSpike || quickProbeSpike || fullCodeFallbackSpike || inputBudgetGuardSpike) {
@@ -711,6 +814,10 @@ public class ApiCallInstrumentationService {
             }
             if (fullCodeFallbackSpike) {
                 actions.add(adjustment("ai.code-stream.edit.text-edits-retry.max-extra-attempts", 2.0, "increase"));
+            }
+            if (analyzeSlidingWindowCpuCapSpike) {
+                actions.add(adjustment("ai.code-stream.analyze.sliding-window.max-windows", 0.80, "decrease"));
+                actions.add(adjustment("ai.code-stream.analyze.sliding-window.step-chars", 1.15, "increase"));
             }
         } else {
             actions.add(adjustment("ai.assistant.prompt-budget.menu.max-chars", 0.95, "decrease"));

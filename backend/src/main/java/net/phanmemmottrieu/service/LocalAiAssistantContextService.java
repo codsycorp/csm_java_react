@@ -47,15 +47,13 @@ public class LocalAiAssistantContextService {
     private static final Logger log = LoggerFactory.getLogger(LocalAiAssistantContextService.class);
     private static final Pattern TOKEN_PATTERN = Pattern.compile("[\\p{L}\\p{N}_$\\-]{2,}");
     private static final Pattern JSON_KEY_PATTERN = Pattern.compile("\"([^\"]+)\"\\s*:");
-    // Use LocalEmbeddingService.DIMS (384) to match all-MiniLM-L6-v2 output dimensions.
-    // Old indices built with VECTOR_DIMS=128 are detected via the .index-version file and rebuilt.
-    private static final int VECTOR_DIMS = LocalEmbeddingService.DIMS;
     private static final Pattern IMPORT_PATTERN = Pattern.compile("(?m)^\\s*import\\s+");
     private static final Pattern FUNCTION_PATTERN = Pattern.compile(
         "(?m)(?:function\\s+[A-Za-z_$][A-Za-z0-9_$]*\\s*\\(|[A-Za-z_$][A-Za-z0-9_$]*\\s*=\\s*\\([^\\)]*\\)\\s*=>|(?:public|private|protected)?\\s*(?:static\\s+)?[A-Za-z_$][A-Za-z0-9_$<>\\[\\]]*\\s+[A-Za-z_$][A-Za-z0-9_$]*\\s*\\()"
     );
     private static final Pattern CLASS_PATTERN = Pattern.compile("(?m)\\b(class|interface|enum|record)\\b");
     private static final Pattern API_CALL_PATTERN = Pattern.compile("(?i)\\b(fetch\\s*\\(|axios\\.|request\\.|\\.post\\s*\\(|\\.get\\s*\\(|\\.put\\s*\\()", Pattern.MULTILINE);
+    private static final int VECTOR_DIMS = 128;
     private static final List<String> MENU_EXTENSIONS = List.of("md", "markdown", "json", "txt", "yml", "yaml");
     private static final List<String> CODE_EXTENSIONS = List.of("java", "js", "jsx", "ts", "tsx", "vue", "html", "css", "scss", "less", "sql", "json");
     private static final List<String> IGNORED_DIR_NAMES = List.of("node_modules", "target", "dist", "build", ".git", "logs");
@@ -72,7 +70,6 @@ public class LocalAiAssistantContextService {
 
     private final AiBusinessMemoryVectorService aiBusinessMemoryVectorService;
     private final AiMenuLearningMemoryService aiMenuLearningMemoryService;
-    private final LocalEmbeddingService localEmbeddingService;
 
     @Value("${ai.local.assistant.enabled:true}")
     private boolean enabled;
@@ -104,12 +101,6 @@ public class LocalAiAssistantContextService {
     @Value("${ai.local.assistant.max-retrieval-chars:18000}")
     private int maxRetrievalChars;
 
-    @Value("${ai.local.assistant.menu.max-hits:14}")
-    private int menuMaxHits;
-
-    @Value("${ai.local.assistant.menu.max-retrieval-chars:90000}")
-    private int menuMaxRetrievalChars;
-
     @Value("${ai.local.assistant.max-analysis-chars:500000}")
     private int maxAnalysisChars;
 
@@ -118,12 +109,10 @@ public class LocalAiAssistantContextService {
     @Autowired
     public LocalAiAssistantContextService(
         AiBusinessMemoryVectorService aiBusinessMemoryVectorService,
-        @Autowired(required = false) AiMenuLearningMemoryService aiMenuLearningMemoryService,
-        LocalEmbeddingService localEmbeddingService
+        @Autowired(required = false) AiMenuLearningMemoryService aiMenuLearningMemoryService
     ) {
         this.aiBusinessMemoryVectorService = aiBusinessMemoryVectorService;
         this.aiMenuLearningMemoryService = aiMenuLearningMemoryService;
-        this.localEmbeddingService = localEmbeddingService;
     }
 
     @PostConstruct
@@ -163,16 +152,7 @@ public class LocalAiAssistantContextService {
 
         String normalizedContext = normalizeContextType(contextType);
         String retrievalBlock = buildRetrievalBlock(appId, message, currentCode, language, normalizedContext, pName, pType);
-        String code = String.valueOf(currentCode == null ? "" : currentCode);
-        String safeCode = code.length() > Math.max(4000, maxAnalysisChars)
-            ? code.substring(0, Math.max(4000, maxAnalysisChars))
-            : code;
-        String analysisBlock = "";
-        if (!safeCode.isBlank()) {
-            analysisBlock = "menu_json".equals(normalizedContext)
-                ? buildMenuJsonAnalysisBlock(safeCode, cursorLine, pName, pType)
-                : buildCodeAnalysisBlock(safeCode, language, responseMode, cursorLine, message, pName, pType);
-        }
+        String analysisBlock = buildAnalysisBlock(message, currentCode, language, normalizedContext, responseMode, cursorLine, pName, pType);
         boolean localOnly = shouldForceLocalOnly(normalizedContext);
         String reasonCode = localOnly ? "local_assistant_scope_local_only" : "local_assistant_scope_context_only";
         return new ContextBundle(retrievalBlock, analysisBlock, localOnly, reasonCode);
@@ -189,33 +169,26 @@ public class LocalAiAssistantContextService {
     ) {
         List<String> blocks = new ArrayList<>();
         String queryText = buildQueryText(message, currentCode, language, pName, pType);
-        boolean menuContext = "menu_json".equals(contextType);
-        int retrievalCap = menuContext
-            ? Math.max(maxRetrievalChars, menuMaxRetrievalChars)
-            : Math.max(2200, maxRetrievalChars);
-        int retrievalHits = menuContext
-            ? Math.max(maxHits, menuMaxHits)
-            : Math.max(2, maxHits);
 
-        if (menuContext) {
+        if ("menu_json".equals(contextType)) {
             String businessMemory = aiBusinessMemoryVectorService == null
                 ? ""
-                : aiBusinessMemoryVectorService.buildRagBlock(appId, queryText, Math.max(3, Math.min(10, retrievalHits)), Math.max(3000, retrievalCap / 2));
+                : aiBusinessMemoryVectorService.buildRagBlock(appId, queryText, Math.max(3, Math.min(6, maxHits)), Math.max(3000, maxRetrievalChars / 2));
             if (!businessMemory.isBlank()) {
-                blocks.add(trimTo(businessMemory, Math.max(3000, retrievalCap / 2)));
+                blocks.add(trimTo(businessMemory, Math.max(3000, maxRetrievalChars / 2)));
             }
             if (aiMenuLearningMemoryService != null) {
                 String learned = String.valueOf(aiMenuLearningMemoryService.buildLearningContextBlock(appId, message) == null
                     ? ""
                     : aiMenuLearningMemoryService.buildLearningContextBlock(appId, message)).trim();
                 if (!learned.isBlank()) {
-                    blocks.add(trimTo(learned, Math.max(2200, retrievalCap / 3)));
+                    blocks.add(trimTo(learned, Math.max(2200, maxRetrievalChars / 3)));
                 }
             }
         }
 
         ensureIndexFresh();
-        List<SearchHit> semanticHits = searchLocalSources(queryText, contextType, retrievalHits);
+        List<SearchHit> semanticHits = searchLocalSources(queryText, contextType, Math.max(2, maxHits));
         if (!semanticHits.isEmpty()) {
             StringBuilder sb = new StringBuilder();
             sb.append("## LOCAL_SEMANTIC_SEARCH_CONTEXT\n");
@@ -228,11 +201,11 @@ public class LocalAiAssistantContextService {
                 sb.append("score: ").append(String.format(Locale.ROOT, "%.4f", hit.score())).append("\n");
                 sb.append("summary: ").append(hit.summary()).append("\n");
                 sb.append("content:\n").append(hit.content()).append("\n\n");
-                if (sb.length() >= retrievalCap) {
+                if (sb.length() >= Math.max(2200, maxRetrievalChars)) {
                     break;
                 }
             }
-            blocks.add(trimTo(sb.toString(), retrievalCap));
+            blocks.add(trimTo(sb.toString(), Math.max(2200, maxRetrievalChars)));
         }
 
         if (blocks.isEmpty()) {
@@ -240,7 +213,32 @@ public class LocalAiAssistantContextService {
         }
 
         String joined = String.join("\n\n", blocks);
-        return trimTo(joined, Math.max(3000, retrievalCap));
+        return trimTo(joined, Math.max(3000, maxRetrievalChars));
+    }
+
+    private String buildAnalysisBlock(
+        String message,
+        String currentCode,
+        String language,
+        String contextType,
+        String responseMode,
+        int cursorLine,
+        String pName,
+        Integer pType
+    ) {
+        String code = String.valueOf(currentCode == null ? "" : currentCode);
+        String safe = code.length() > Math.max(4000, maxAnalysisChars)
+            ? code.substring(0, Math.max(4000, maxAnalysisChars))
+            : code;
+
+        if (safe.isBlank()) {
+            return "";
+        }
+
+        if ("menu_json".equals(contextType)) {
+            return buildMenuJsonAnalysisBlock(safe, cursorLine, pName, pType);
+        }
+        return buildCodeAnalysisBlock(safe, language, responseMode, cursorLine, message, pName, pType);
     }
 
     private String buildMenuJsonAnalysisBlock(String jsonText, int cursorLine, String pName, Integer pType) {
@@ -372,16 +370,6 @@ public class LocalAiAssistantContextService {
         }
         Path indexPath = resolveIndexPath();
         long now = System.currentTimeMillis();
-        // If index version changed (e.g. VECTOR_DIMS 128→384), force immediate rebuild.
-        if (isIndexVersionStale(indexPath)) {
-            log.info("Local assistant index version stale – rebuilding with version={}", LocalEmbeddingService.INDEX_VERSION);
-            clearIndexDirectory(indexPath);
-            synchronized (indexLock) {
-                rebuildIndex(indexPath);
-                lastIndexedAtMs = System.currentTimeMillis();
-            }
-            return;
-        }
         if (lastIndexedAtMs > 0L && (now - lastIndexedAtMs) < Math.max(10000L, indexRefreshMs) && Files.isDirectory(indexPath)) {
             return;
         }
@@ -415,55 +403,8 @@ public class LocalAiAssistantContextService {
                     writer.commit();
                 }
             }
-            // Write version marker so next startup detects stale indices correctly.
-            writeIndexVersion(indexPath);
         } catch (Exception ex) {
             log.warn("Local assistant index rebuild failed: {}", ex.getMessage());
-        }
-    }
-
-    private static final String INDEX_VERSION_FILE = ".index-version";
-
-    private boolean isIndexVersionStale(Path indexPath) {
-        Path versionFile = indexPath.resolve(INDEX_VERSION_FILE);
-        if (!Files.isRegularFile(versionFile)) {
-            return Files.isDirectory(indexPath) && hasIndexSegments(indexPath);
-        }
-        try {
-            String stored = Files.readString(versionFile, StandardCharsets.UTF_8).trim();
-            return !LocalEmbeddingService.INDEX_VERSION.equals(stored);
-        } catch (Exception ignored) {
-            return true;
-        }
-    }
-
-    private boolean hasIndexSegments(Path indexPath) {
-        try (Stream<Path> s = Files.list(indexPath)) {
-            return s.anyMatch(p -> p.getFileName().toString().startsWith("segments"));
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
-    private void writeIndexVersion(Path indexPath) {
-        try {
-            Files.writeString(indexPath.resolve(INDEX_VERSION_FILE),
-                LocalEmbeddingService.INDEX_VERSION, StandardCharsets.UTF_8);
-        } catch (Exception ex) {
-            log.debug("Could not write index version file: {}", ex.getMessage());
-        }
-    }
-
-    private void clearIndexDirectory(Path indexPath) {
-        if (!Files.isDirectory(indexPath)) return;
-        try (Stream<Path> s = Files.walk(indexPath)) {
-            s.sorted(java.util.Comparator.reverseOrder())
-                .filter(p -> !p.equals(indexPath))
-                .forEach(p -> {
-                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
-                });
-        } catch (Exception ex) {
-            log.debug("clearIndexDirectory failed: {}", ex.getMessage());
         }
     }
 
@@ -634,7 +575,30 @@ public class LocalAiAssistantContextService {
     }
 
     private float[] embedText(String text) {
-        return localEmbeddingService.embed(text);
+        float[] vector = new float[VECTOR_DIMS];
+        Matcher matcher = TOKEN_PATTERN.matcher(String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT));
+        int tokenCount = 0;
+        while (matcher.find()) {
+            String token = matcher.group();
+            int h = Math.abs(token.hashCode());
+            vector[h % VECTOR_DIMS] += 1.0f;
+            tokenCount++;
+        }
+        if (tokenCount == 0) {
+            return vector;
+        }
+        float norm = 0.0f;
+        for (float value : vector) {
+            norm += value * value;
+        }
+        norm = (float) Math.sqrt(norm);
+        if (norm <= 0.0f) {
+            return vector;
+        }
+        for (int i = 0; i < vector.length; i++) {
+            vector[i] = vector[i] / norm;
+        }
+        return vector;
     }
 
     private int countJsonNodes(JsonNode node, int current, int cap) {

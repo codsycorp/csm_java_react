@@ -16,7 +16,7 @@ import net.phanmemmottrieu.model.RegistrationResponse;
 import net.phanmemmottrieu.service.UserService;
 import net.phanmemmottrieu.service.ChatPersistenceService;
 import net.phanmemmottrieu.service.CRMService;
-import net.phanmemmottrieu.service.LlamaCppNativeService;
+import net.phanmemmottrieu.service.GeminiService;
 import net.phanmemmottrieu.util.PortKillerUtil;
 
 import java.util.HashMap;
@@ -85,7 +85,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     private CRMService crmService;
 
     @Autowired(required = false)
-    private LlamaCppNativeService llamaCppNativeService;
+    private GeminiService geminiService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ScheduledExecutorService chatAiScheduler = Executors.newScheduledThreadPool(2);
@@ -659,25 +659,25 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         return raw.trim().isEmpty() ? fallbackText : raw.trim();
     }
 
-    private String generateLocalAiContent(String prompt, String fallbackText, String purpose) {
+    private String generateChatAutoAiContent(String prompt, String fallbackText, String purpose) {
         if (prompt == null || prompt.isBlank()) {
             return fallbackText;
         }
 
-        if (llamaCppNativeService == null) {
-            logger.warn("Local AI service unavailable for {}: llamaCppNativeService is null", purpose);
+        if (geminiService == null) {
+            logger.warn("Gemini service unavailable for {}: geminiService is null", purpose);
             return fallbackText;
         }
 
         try {
-            if (!llamaCppNativeService.isAvailable()) {
-                logger.warn("Local AI service unavailable for {}: service not ready", purpose);
+            if (!geminiService.isAvailable()) {
+                logger.warn("Gemini service unavailable for {}: service not ready", purpose);
                 return fallbackText;
             }
-            String aiRaw = llamaCppNativeService.generateContent(prompt);
+            String aiRaw = geminiService.generateContent(prompt);
             return extractAiText(aiRaw, fallbackText);
         } catch (Exception e) {
-            logger.warn("Local AI generation failed for {}: {}", purpose, e.getMessage());
+            logger.warn("Gemini generation failed for {}: {}", purpose, e.getMessage());
             return fallbackText;
         }
     }
@@ -939,7 +939,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 }
 
                 String prompt = buildNoAdminReplyPrompt(appId, guestIdentity, guestPhone, guestMessage, preferredLocale);
-                String text = generateLocalAiContent(prompt, fallbackText, "guest_no_admin_reply");
+                String text = generateChatAutoAiContent(prompt, fallbackText, "guest_no_admin_reply");
                 dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, text, "ai_auto_no_admin_reply", preferredLocale);
             } catch (Exception e) {
                 logger.warn("Failed to send AI no-reply fallback for {}:{} - {}", appId, guestIdentity, e.getMessage());
@@ -1052,7 +1052,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 }
 
                 String prompt = buildWelcomePrompt(appId, guestPhone, normalizedLocale);
-                String text = generateLocalAiContent(prompt, fallbackWelcome, "guest_welcome");
+                String text = generateChatAutoAiContent(prompt, fallbackWelcome, "guest_welcome");
                 dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, text, "ai_auto_welcome", normalizedLocale);
                 // Record the welcome send time for app+phone to prevent duplicates across identity changes
                 if (appPhoneKeyFinal != null) {

@@ -2,6 +2,7 @@ package net.phanmemmottrieu.service;
 
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import net.phanmemmottrieu.data.RecordManager;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -27,8 +28,6 @@ public class AiConversationContextService {
     private static final int TURN_REQUEST_STORE_MAX_CHARS = 4000;
     private static final int TURN_RESPONSE_STORE_MAX_CHARS = 12000;
     private static final int MIN_MEANINGFUL_TURN_CHARS = 8;
-    private static final int RECENT_FULL_TURNS_PER_SCOPE = 4;
-    private static final int OLDER_SUMMARY_TURNS_PER_SCOPE = 8;
     private static final String SCOPE_USER = "user";
     private static final String SCOPE_APP_SHARED = "app_shared";
     private static final String SCOPE_CODE_TARGET_SHARED = "code_target_shared";
@@ -37,6 +36,18 @@ public class AiConversationContextService {
     // apply sentence-level extraction (no LLM needed) to keep only high-signal content.
     private static final int EXTRACTIVE_COMPRESS_THRESHOLD_CHARS = 50_000;
     private static final int EXTRACTIVE_COMPRESS_TARGET_CHARS = 30_000;
+
+    @Value("${ai.conversation.context.recent-full-turns-per-scope:3}")
+    private int recentFullTurnsPerScope;
+
+    @Value("${ai.conversation.context.older-summary-turns-per-scope:6}")
+    private int olderSummaryTurnsPerScope;
+
+    @Value("${ai.conversation.context.optimized-window-recent-turns:3}")
+    private int optimizedWindowRecentTurns;
+
+    @Value("${ai.conversation.context.summary-recent-turns:3}")
+    private int summaryRecentTurns;
 
     public static class ConversationTurn {
         public String turnId;
@@ -270,7 +281,8 @@ public class AiConversationContextService {
         int charCounter = 0;
 
         // Add recent full turns first
-        List<ConversationTurn> recentTurns = getRecentTurns(userId, appId, contextType, 5);
+        int recentLimit = Math.max(2, optimizedWindowRecentTurns);
+        List<ConversationTurn> recentTurns = getRecentTurns(userId, appId, contextType, recentLimit);
         for (ConversationTurn turn : recentTurns) {
             String turnStr = formatTurn(turn, true);
             if (charCounter + turnStr.length() <= CONTEXT_WINDOW_LIMIT) {
@@ -280,8 +292,9 @@ public class AiConversationContextService {
         }
 
         // Add summaries from older turns if space permits
+        int olderTurnsStart = Math.max(0, session.history.size() - recentLimit);
         List<ConversationTurn> olderTurns = session.history.subList(0, 
-            Math.max(0, session.history.size() - 5));
+            olderTurnsStart);
         for (ConversationTurn turn : olderTurns) {
             String summary = formatTurnSummary(turn);
             if (charCounter + summary.length() <= CONTEXT_WINDOW_LIMIT) {
@@ -310,7 +323,8 @@ public class AiConversationContextService {
             session.totalInputChars, session.totalOutputChars));
         summary.append("Recent turns:\n");
 
-        for (int i = Math.max(0, session.history.size() - 5); i < session.history.size(); i++) {
+        int recentSummaryLimit = Math.max(2, summaryRecentTurns);
+        for (int i = Math.max(0, session.history.size() - recentSummaryLimit); i < session.history.size(); i++) {
             ConversationTurn turn = session.history.get(i);
             summary.append(String.format("  [%d] %s - Request: %d chars, Response: %d chars, Cost: %s VND\n",
                 i + 1, turn.timestamp,
@@ -340,7 +354,136 @@ public class AiConversationContextService {
         return removed;
     }
 
+    /**
+     * Clear in-memory conversation sessions for user/app/context and related shared scopes.
+     * This is used by UI "delete session" actions to avoid reusing stale context.
+     */
+    public int clearAssistantSessions(String userId, String appId, String contextType, String pName, Integer pType) {
+        String safeUserId = String.valueOf(userId == null ? "" : userId).trim();
+        String safeAppId = String.valueOf(appId == null ? "" : appId).trim();
+        String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim();
+        String codeTargetKey = buildCodeTargetKey(pName, pType);
+
+        if (safeAppId.isEmpty() || safeContextType.isEmpty()) {
+            return 0;
+        }
+
+        int removed = 0;
+
+        if (!safeUserId.isEmpty()) {
+            String userScopeKey = buildSessionKey(safeUserId, safeAppId, safeContextType, SCOPE_USER, "");
+            if (activeSessions.remove(userScopeKey) != null) {
+                removed++;
+            }
+        }
+
+        String appSharedKey = buildSessionKey("shared", safeAppId, safeContextType, SCOPE_APP_SHARED, "");
+        if (activeSessions.remove(appSharedKey) != null) {
+            removed++;
+        }
+
+        if (!codeTargetKey.isEmpty()) {
+            String codeSharedKey = buildSessionKey("shared", safeAppId, safeContextType, SCOPE_CODE_TARGET_SHARED, codeTargetKey);
+            if (activeSessions.remove(codeSharedKey) != null) {
+                removed++;
+            }
+        }
+
+        return removed;
+    }
+
+    public int deleteAssistantPersistedTurns(
+        String userId,
+        String appId,
+        String contextType,
+        String pName,
+        Integer pType,
+        String turnId,
+        boolean deleteAll
+    ) {
+        if (recordManager == null) {
+            return 0;
+        }
+
+        String safeUserId = String.valueOf(userId == null ? "" : userId).trim();
+        String safeAppId = String.valueOf(appId == null ? "" : appId).trim();
+        String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim();
+        String safeTurnId = String.valueOf(turnId == null ? "" : turnId).trim();
+        String codeTargetKey = buildCodeTargetKey(pName, pType);
+
+        if (safeAppId.isEmpty() || safeContextType.isEmpty() || (!deleteAll && safeTurnId.isEmpty())) {
+            return 0;
+        }
+
+        int deleted = 0;
+        try {
+            Map<String, Object> result = recordManager.filter(safeAppId, CONVERSATION_TABLE, null);
+            Object rowsObj = result == null ? null : result.get("rows");
+            if (!(rowsObj instanceof List<?> rows)) {
+                return 0;
+            }
+
+            for (Object rowObj : rows) {
+                if (!(rowObj instanceof Map<?, ?> rawMap)) {
+                    continue;
+                }
+                @SuppressWarnings("unchecked")
+                Map<String, Object> row = (Map<String, Object>) rawMap;
+                if (!matchesAssistantDeletionTarget(row, safeUserId, safeAppId, safeContextType, codeTargetKey, safeTurnId, deleteAll)) {
+                    continue;
+                }
+                try {
+                    recordManager.deleteRecord(safeAppId, CONVERSATION_TABLE, row);
+                    deleted++;
+                } catch (Exception ignored) {
+                    // Best-effort delete so one bad row does not block the rest.
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Failed to delete persisted assistant turns: " + e.getMessage());
+        }
+        return deleted;
+    }
     // ─── Private helpers ──────────────────────────────────────────
+
+    private boolean matchesAssistantDeletionTarget(
+        Map<String, Object> row,
+        String userId,
+        String appId,
+        String contextType,
+        String codeTargetKey,
+        String turnId,
+        boolean deleteAll
+    ) {
+        if (row == null) {
+            return false;
+        }
+
+        String persistedAppId = String.valueOf(row.getOrDefault("app_id", "")).trim();
+        String persistedContextType = String.valueOf(row.getOrDefault("context_type", "")).trim();
+        String persistedScope = String.valueOf(row.getOrDefault("scope", SCOPE_USER)).trim();
+        String persistedTurnId = String.valueOf(row.getOrDefault("turn_id", "")).trim();
+        String persistedUserId = String.valueOf(row.getOrDefault("user_id", "")).trim();
+        String persistedCodeTargetKey = String.valueOf(row.getOrDefault("code_target_key", "")).trim();
+
+        if (!appId.equals(persistedAppId) || !contextType.equals(persistedContextType)) {
+            return false;
+        }
+        if (!deleteAll && !turnId.equals(persistedTurnId)) {
+            return false;
+        }
+
+        if (SCOPE_USER.equals(persistedScope)) {
+            return !userId.isEmpty() && userId.equals(persistedUserId);
+        }
+        if (SCOPE_APP_SHARED.equals(persistedScope)) {
+            return deleteAll || !turnId.isEmpty();
+        }
+        if (SCOPE_CODE_TARGET_SHARED.equals(persistedScope)) {
+            return !codeTargetKey.isEmpty() && codeTargetKey.equals(persistedCodeTargetKey);
+        }
+        return false;
+    }
 
     private ConversationSession getOrCreateSessionForScope(
         String userId,
@@ -413,7 +556,9 @@ public class AiConversationContextService {
             return "";
         }
         StringBuilder out = new StringBuilder();
-        int recentFromIndex = Math.max(0, session.history.size() - RECENT_FULL_TURNS_PER_SCOPE);
+        int recentTurns = Math.max(2, recentFullTurnsPerScope);
+        int olderSummaryTurns = Math.max(2, olderSummaryTurnsPerScope);
+        int recentFromIndex = Math.max(0, session.history.size() - recentTurns);
         for (int i = recentFromIndex; i < session.history.size(); i++) {
             ConversationTurn turn = session.history.get(i);
             String fingerprint = buildTurnFingerprint(turn);
@@ -431,7 +576,7 @@ public class AiConversationContextService {
         }
 
         if (out.length() < maxChars && recentFromIndex > 0) {
-            int summaryFromIndex = Math.max(0, recentFromIndex - OLDER_SUMMARY_TURNS_PER_SCOPE);
+            int summaryFromIndex = Math.max(0, recentFromIndex - olderSummaryTurns);
             for (int i = summaryFromIndex; i < recentFromIndex; i++) {
                 ConversationTurn turn = session.history.get(i);
                 String fingerprint = buildTurnFingerprint(turn);

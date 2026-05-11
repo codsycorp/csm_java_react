@@ -2,6 +2,7 @@ package net.phanmemmottrieu.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -12,8 +13,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import jakarta.annotation.PreDestroy;
 
 /**
  * Local agentic orchestration layer inspired by Copilot Agent workflows:
@@ -56,9 +60,17 @@ public class AiLocalOrchestrationService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AiSpeculativeExecutionService aiSpeculativeExecutionService;
+    private final AiMultimodalScannerService aiMultimodalScannerService;
+    private final AiBusinessMemoryVectorService aiBusinessMemoryVectorService;
 
-    public AiLocalOrchestrationService(AiSpeculativeExecutionService aiSpeculativeExecutionService) {
+    public AiLocalOrchestrationService(
+        AiSpeculativeExecutionService aiSpeculativeExecutionService,
+        @Autowired(required = false) AiMultimodalScannerService aiMultimodalScannerService,
+        @Autowired(required = false) AiBusinessMemoryVectorService aiBusinessMemoryVectorService
+    ) {
         this.aiSpeculativeExecutionService = aiSpeculativeExecutionService;
+        this.aiMultimodalScannerService = aiMultimodalScannerService;
+        this.aiBusinessMemoryVectorService = aiBusinessMemoryVectorService;
     }
 
     @Value("${ai.orchestration.agentic.enabled:true}")
@@ -87,6 +99,39 @@ public class AiLocalOrchestrationService {
 
     @Value("${ai.orchestration.routing.matrix.complex-model:gemini-2.5-pro}")
     private String complexModelHint;
+
+    @Value("${ai.orchestration.multimodal.dynamic-ingest.enabled:true}")
+    private boolean dynamicIngestEnabled;
+
+    @Value("${ai.orchestration.multimodal.dynamic-ingest.max-markdown-chars:18000}")
+    private int dynamicIngestMaxMarkdownChars;
+
+    @Value("${ai.orchestration.multimodal.dynamic-ingest.async.enabled:true}")
+    private boolean dynamicIngestAsyncEnabled;
+
+    @Value("${ai.orchestration.multimodal.scope-rag.enabled:true}")
+    private boolean scopedRagEnabled;
+
+    @Value("${ai.orchestration.multimodal.scope-rag.top-k:6}")
+    private int scopedRagTopK;
+
+    @Value("${ai.orchestration.multimodal.scope-rag.max-chars:5000}")
+    private int scopedRagMaxChars;
+
+    private final ExecutorService dynamicIngestExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "ai-dynamic-ingest");
+        t.setDaemon(true);
+        return t;
+    });
+
+    @PreDestroy
+    public void shutdownExecutors() {
+        dynamicIngestExecutor.shutdownNow();
+    }
+
+    public boolean isLocalVisionReady() {
+        return aiMultimodalScannerService != null && aiMultimodalScannerService.isVisionRuntimeReady();
+    }
 
     public OrchestrationResult orchestrate(
         String appId,
@@ -118,7 +163,20 @@ public class AiLocalOrchestrationService {
         int attachmentChars = estimateAttachmentTextChars(safeAttachments);
         out.totalCharsBefore = messageChars + codeChars + attachmentChars;
 
+        AiMultimodalScannerService.ScanResult scanResult = aiMultimodalScannerService == null
+            ? AiMultimodalScannerService.ScanResult.disabled()
+            : aiMultimodalScannerService.scan(
+                safeMessage,
+                safeAttachments,
+                safeContextType,
+                safeTaskType,
+                safeMode
+            );
+
         List<String> planSteps = buildPlannerSteps(safeContextType, safeTaskType, safeMode, codeChars, attachmentChars);
+        if (scanResult.enabled() && scanResult.ingestCount() > 0) {
+            planSteps.add(0, "Run multimodal scanner (JSON/Image) and select dynamic memory ingestion candidates");
+        }
         out.planSteps = planSteps;
 
         String routingTier = resolveRoutingTier(safeMessage, safeContextType, safeTaskType, safeMode, codeChars, attachmentChars);
@@ -126,9 +184,106 @@ public class AiLocalOrchestrationService {
         out.preferredModelHint = resolvePreferredModelHint(routingTier);
         out.toolStats.put("routingTier", out.routingTier);
         out.toolStats.put("preferredModelHint", out.preferredModelHint);
+        if (scanResult.enabled()) {
+            out.toolStats.put("scannerEnabled", true);
+            out.toolStats.put("scannerAttachmentCount", scanResult.attachmentCount());
+            out.toolStats.put("scannerImageCount", scanResult.imageCount());
+            out.toolStats.put("scannerJsonCount", scanResult.jsonCount());
+            out.toolStats.put("scannerIngestCount", scanResult.ingestCount());
+        }
+
+        int dynamicPrunedSources = 0;
+        boolean dynamicIndexed = false;
+        String dynamicSource = "";
+        boolean dynamicIngestScheduled = false;
+        int aggregateScopeMask = scanResult.enabled() ? Math.max(0, scanResult.aggregateScopeMask()) : 0;
+        List<String> aggregateScopeTags = AiMultimodalScannerService.scopeTagsFromMask(aggregateScopeMask);
+        String aggregateScopeSummary = summarizeScopeTags(aggregateScopeTags);
+        if (scanResult.enabled()) {
+            out.toolStats.put("scannerScopeMask", aggregateScopeMask);
+            out.toolStats.put("scannerScopeTags", aggregateScopeTags);
+            out.toolStats.put("scannerScopeSummary", aggregateScopeSummary);
+        }
+        if (scanResult.enabled()
+            && dynamicIngestEnabled
+            && scanResult.ingestCount() > 0
+            && aiBusinessMemoryVectorService != null
+            && aiBusinessMemoryVectorService.isEnabled()) {
+            String markdown = trimTo(String.valueOf(scanResult.ingestionMarkdown() == null ? "" : scanResult.ingestionMarkdown()),
+                Math.max(4000, dynamicIngestMaxMarkdownChars));
+            if (!markdown.isBlank()) {
+                String suffix = "orchestration_" + System.currentTimeMillis();
+                List<String> dynamicTags = new ArrayList<>();
+                dynamicTags.add("dynamic");
+                dynamicTags.add("multimodal");
+                dynamicTags.add(safeContextType);
+                dynamicTags.add(safeTaskType);
+                dynamicTags.addAll(AiMultimodalScannerService.scopeTagsFromMask(aggregateScopeMask));
+                if (dynamicIngestAsyncEnabled) {
+                    dynamicIngestScheduled = true;
+                    final String asyncAppId = String.valueOf(appId == null ? "" : appId).trim();
+                    final String asyncSuffix = suffix;
+                    final String asyncMarkdown = markdown;
+                    final List<String> asyncTags = List.copyOf(dynamicTags);
+                    final int asyncScopeMask = aggregateScopeMask;
+                    dynamicIngestExecutor.submit(() -> {
+                        try {
+                            aiBusinessMemoryVectorService.indexDynamicContext(
+                                asyncAppId,
+                                asyncSuffix,
+                                asyncMarkdown,
+                                asyncTags,
+                                asyncScopeMask
+                            );
+                            aiBusinessMemoryVectorService.pruneDynamicContext(asyncAppId);
+                        } catch (Exception ex) {
+                            // Async ingestion should never break request path.
+                        }
+                    });
+                    dynamicSource = "scheduled:" + suffix;
+                    out.toolStats.put("dynamicMemoryQueueState", "queued");
+                } else {
+                    AiBusinessMemoryVectorService.IndexSummary indexSummary = aiBusinessMemoryVectorService.indexDynamicContext(
+                        appId,
+                        suffix,
+                        markdown,
+                        dynamicTags,
+                        aggregateScopeMask
+                    );
+                    dynamicIndexed = indexSummary != null && indexSummary.chunksIndexed() > 0;
+                    dynamicSource = indexSummary == null ? "" : String.valueOf(indexSummary.sourceName() == null ? "" : indexSummary.sourceName());
+                    dynamicPrunedSources = aiBusinessMemoryVectorService.pruneDynamicContext(appId);
+                    out.toolStats.put("dynamicMemoryQueueState", dynamicIndexed ? "indexed" : "skipped");
+                }
+                out.toolStats.put("dynamicMemoryAsync", dynamicIngestAsyncEnabled);
+                out.toolStats.put("dynamicMemoryScheduled", dynamicIngestScheduled);
+                out.toolStats.put("dynamicMemoryIndexed", dynamicIndexed);
+                out.toolStats.put("dynamicMemorySource", dynamicSource);
+                out.toolStats.put("dynamicMemoryPrunedSources", dynamicPrunedSources);
+                out.toolStats.put("dynamicMemoryScopeMask", aggregateScopeMask);
+            }
+        }
+
+        String scopedRagBlock = "";
+        if (scanResult.enabled()
+            && scopedRagEnabled
+            && aggregateScopeMask > 0
+            && aiBusinessMemoryVectorService != null
+            && aiBusinessMemoryVectorService.isEnabled()) {
+            scopedRagBlock = aiBusinessMemoryVectorService.buildRagBlockWithScopes(
+                appId,
+                safeMessage,
+                Math.max(2, scopedRagTopK),
+                aggregateScopeMask,
+                Math.max(1600, scopedRagMaxChars)
+            );
+            out.toolStats.put("scopedRagEnabled", true);
+            out.toolStats.put("scopedRagScopeMask", aggregateScopeMask);
+            out.toolStats.put("scopedRagChars", scopedRagBlock.length());
+        }
 
         LocalToolDigest digest = runLocalTools(safeMessage, safeCode, safeAttachments);
-        out.toolStats = digest.stats;
+        out.toolStats.putAll(digest.stats);
 
         AiSpeculativeExecutionService.ExecutionResult speculative = aiSpeculativeExecutionService.run(
             safeMessage,
@@ -160,14 +315,26 @@ public class AiLocalOrchestrationService {
         String tier1 = buildTier1Metadata(appId, safeContextType, safeTaskType, safeMode, safeLanguage, safeAttachments.size());
         String tier2 = buildTier2RelevantContext(digest, safeContextType);
         String tier3 = buildTier3RuntimeOutput(digest);
+        String tier0 = scanResult.enabled() ? trimTo(scanResult.compactContext(), Math.max(1200, maxContextChars / 2)) : "";
+        if (!scopedRagBlock.isBlank()) {
+            String ragSection = "## SCOPE_FILTERED_LUCENE_RAG\n" + scopedRagBlock;
+            tier0 = tier0.isBlank() ? ragSection : (tier0 + "\n\n" + ragSection);
+        }
 
         String combined = "## LOCAL_AGENTIC_ORCHESTRATION\\n"
             + "Mode: local_agentic_workflow\\n"
             + "ORCHESTRATION_ROUTING_TIER=" + out.routingTier + "\n"
             + "ORCHESTRATION_PREFERRED_MODEL=" + out.preferredModelHint + "\n"
             + "ORCHESTRATION_SPECULATIVE_OPERATION=" + out.speculativeOperation + "\n"
+            + "ORCHESTRATION_SCANNER_INGEST_COUNT=" + (scanResult.enabled() ? scanResult.ingestCount() : 0) + "\n"
+            + "ORCHESTRATION_SCANNER_SCOPE_MASK=" + aggregateScopeMask + "\n"
+            + "ORCHESTRATION_SCANNER_SCOPE_TAGS=" + aggregateScopeSummary + "\n"
+            + "ORCHESTRATION_DYNAMIC_MEMORY_INDEXED=" + dynamicIndexed + "\n"
+            + "ORCHESTRATION_DYNAMIC_MEMORY_SOURCE=" + dynamicSource + "\n"
+            + "ORCHESTRATION_DYNAMIC_MEMORY_PRUNED=" + dynamicPrunedSources + "\n"
             + "Plan steps:\\n"
             + toNumberedLines(planSteps)
+            + (tier0.isBlank() ? "" : "\\n### Tier 0: Multi-Modal Scanner\\n" + tier0 + "\\n")
             + "\\n"
             + "### Tier 1: Metadata\\n" + tier1 + "\\n\\n"
             + "### Tier 2: Relevant Files/Signals\\n" + tier2 + "\\n\\n"
@@ -498,6 +665,32 @@ public class AiLocalOrchestrationService {
             return v;
         }
         return v.substring(0, Math.max(0, maxLen - 3)) + "...";
+    }
+
+    private String trimTo(String text, int maxChars) {
+        String value = String.valueOf(text == null ? "" : text).trim();
+        int cap = Math.max(120, maxChars);
+        if (value.length() <= cap) {
+            return value;
+        }
+        return value.substring(0, cap);
+    }
+
+    private String summarizeScopeTags(List<String> tags) {
+        if (tags == null || tags.isEmpty()) {
+            return "none";
+        }
+        List<String> out = new ArrayList<>();
+        for (String tag : tags) {
+            String safe = String.valueOf(tag == null ? "" : tag).trim();
+            if (safe.startsWith("scope_")) {
+                safe = safe.substring("scope_".length());
+            }
+            if (!safe.isBlank()) {
+                out.add(safe);
+            }
+        }
+        return out.isEmpty() ? "none" : String.join(", ", out);
     }
 
     private String str(Object raw) {

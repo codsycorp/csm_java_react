@@ -56,7 +56,7 @@ if [ -z "${HEAP_SIZE:-}" ]; then
         if [ "$total_mem_mb" -lt 3500 ]; then
             HEAP_SIZE="1536m"
         elif [ "$total_mem_mb" -lt 7000 ]; then
-            HEAP_SIZE="2g"
+            HEAP_SIZE="1536m"
         elif [ "$total_mem_mb" -lt 12000 ]; then
             HEAP_SIZE="3g"
         else
@@ -68,11 +68,11 @@ if [ -z "${HEAP_SIZE:-}" ]; then
 fi
 
 # Init heap smaller than max to reduce RSS pressure on low-RAM systems
-HEAP_INIT="${HEAP_INIT:-512m}"
-DIRECT_MEMORY_SIZE="${DIRECT_MEMORY_SIZE:-256m}"
-TOMCAT_MAX_THREADS="${TOMCAT_MAX_THREADS:-32}"
-TOMCAT_MAX_CONNECTIONS="${TOMCAT_MAX_CONNECTIONS:-180}"
-TOMCAT_ACCEPT_COUNT="${TOMCAT_ACCEPT_COUNT:-60}"
+HEAP_INIT="${HEAP_INIT:-384m}"
+DIRECT_MEMORY_SIZE="${DIRECT_MEMORY_SIZE:-128m}"
+TOMCAT_MAX_THREADS="${TOMCAT_MAX_THREADS:-24}"
+TOMCAT_MAX_CONNECTIONS="${TOMCAT_MAX_CONNECTIONS:-120}"
+TOMCAT_ACCEPT_COUNT="${TOMCAT_ACCEPT_COUNT:-40}"
 ENABLE_ALWAYS_PRETOUCH="${ENABLE_ALWAYS_PRETOUCH:-false}"
 
 # Spring profile selection for local-only weak servers.
@@ -93,6 +93,57 @@ else
             EFFECTIVE_SPRING_PROFILES="prod,weak-local"
             ;;
     esac
+fi
+
+WEAK_MODE_ACTIVE="false"
+if [[ ",${EFFECTIVE_SPRING_PROFILES}," == *",weak-local,"* ]]; then
+    WEAK_MODE_ACTIVE="true"
+fi
+
+WEAK_LLAMA_CONTEXT_WINDOW="2048"
+WEAK_LLAMA_MAX_TOKENS="96"
+WEAK_LLAMA_MAX_PROMPT_CHARS="18000"
+if [ "$AI_LOCAL_MODE" = "large" ]; then
+    WEAK_LLAMA_CONTEXT_WINDOW="3072"
+    WEAK_LLAMA_MAX_TOKENS="384"
+    WEAK_LLAMA_MAX_PROMPT_CHARS="80000"
+fi
+
+WEAK_SPRING_ARGS=()
+if [ "$WEAK_MODE_ACTIVE" = "true" ]; then
+    WEAK_SPRING_ARGS=(
+        "--chat.ai.auto-message.local-generation.enabled=true"
+        "--chat.ai.auto-message.provider=gemini-direct"
+        "--chat.ai.auto-message.rate-limit.enabled=true"
+        "--chat.ai.auto-message.rate-limit.min-interval-ms=180000"
+        "--chat.ai.auto-message.rate-limit.window-ms=900000"
+        "--chat.ai.auto-message.rate-limit.max-per-window=2"
+        "--chat.ai.auto-message.prompt-dedupe.enabled=true"
+        "--chat.ai.auto-message.prompt-dedupe.window-ms=120000"
+        "--cache.warming.enabled=false"
+        "--ai.orchestration.speculative.enabled=false"
+        "--spring.task.scheduling.pool.size=1"
+        "--ai.local.llama.threads=1"
+        "--ai.local.llama.batch-size=64"
+        "--ai.local.llama.ubatch-size=32"
+        "--ai.local.llama.context-window=${WEAK_LLAMA_CONTEXT_WINDOW}"
+        "--ai.local.llama.max-tokens=${WEAK_LLAMA_MAX_TOKENS}"
+        "--ai.local.llama.max-prompt-chars=${WEAK_LLAMA_MAX_PROMPT_CHARS}"
+        "--ai.local.llama.max-concurrent-requests=1"
+        "--ai.local.llama.acquire-timeout-ms=1200"
+        "--ai.local.llama.load-shed.enabled=true"
+        "--ai.local.llama.load-shed.max-load-per-core=1.15"
+        "--ai.local.llama.load-shed.min-free-heap-mb=384"
+        "--ai.local.llama.inter-request-cooldown-ms=1800"
+        "--ai.local.llama.overload-cooldown-ms=3000"
+        "--ai.local.llama.force-single-thread-on-weak=true"
+        "--ai.local.llama.weak-core-threshold=2"
+        "--ai.local.llama.wait-until-stable.enabled=true"
+        "--ai.local.llama.wait-until-stable.max-wait-ms=0"
+        "--ai.local.llama.wait-until-stable.poll-ms=250"
+        "--ai.local.llama.wait-until-stable.log-interval-ms=5000"
+        "--ai.local.llama.wait-until-stable.max-waiting-requests=3"
+    )
 fi
 
 log() {
@@ -344,6 +395,9 @@ fi
 
 log "Starting $jarName on port $APP_PORT with performance optimizations..."
 log "Spring profiles: $EFFECTIVE_SPRING_PROFILES (AI_LOCAL_MODE=$AI_LOCAL_MODE)"
+if [ "$WEAK_MODE_ACTIVE" = "true" ]; then
+    log "Weak mode runtime hard-overrides are enabled to prevent env drift"
+fi
 
 # Load environment variables from config.env (API keys, secrets)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -380,7 +434,7 @@ nohup java \
     -XX:MaxDirectMemorySize=$DIRECT_MEMORY_SIZE \
     -XX:+UseG1GC \
     -XX:MaxGCPauseMillis=200 \
-    -XX:ParallelGCThreads=2 \
+    -XX:ParallelGCThreads=1 \
     -XX:ConcGCThreads=1 \
     -XX:InitiatingHeapOccupancyPercent=45 \
     -XX:G1HeapRegionSize=8m \
@@ -398,7 +452,7 @@ nohup java \
     -Djava.net.preferIPv4Stack=true \
     -Dsun.net.inetaddr.ttl=60 \
     -Dfile.encoding=UTF-8 \
-    -Dspring.backgroundpreinitializer.ignore=false \
+    -Dspring.backgroundpreinitializer.ignore=true \
     -Dspring.jmx.enabled=false \
     -Dserver.tomcat.util.net.NioEndpoint.ENABLE_PAUSE_RESUME=false \
     -Djdk.net.useFastTcpLoopback=true \
@@ -416,6 +470,7 @@ nohup java \
     --logging.logback.rollingpolicy.max-history="$APP_LOG_MAX_HISTORY" \
     --logging.logback.rollingpolicy.total-size-cap="$APP_LOG_TOTAL_SIZE_CAP" \
     --logging.logback.rollingpolicy.clean-history-on-start="$APP_LOG_CLEAN_ON_START" \
+    "${WEAK_SPRING_ARGS[@]}" \
     >> "$LOG_DIR/console.log" 2>&1 &
 sleep 3
 

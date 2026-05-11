@@ -10,11 +10,14 @@ import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.index.Term;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.KnnFloatVectorQuery;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
@@ -27,6 +30,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -40,11 +44,7 @@ public class AiBusinessMemoryVectorService {
 
     private static final Logger log = LoggerFactory.getLogger(AiBusinessMemoryVectorService.class);
     private static final Pattern TOKEN_PATTERN = Pattern.compile("[\\p{L}\\p{N}_]{2,}");
-    // Use LocalEmbeddingService.DIMS (384) to match upgraded semantic index.
-    private static final int VECTOR_DIMS = LocalEmbeddingService.DIMS;
-
-    @org.springframework.beans.factory.annotation.Autowired
-    private LocalEmbeddingService localEmbeddingService;
+    private static final int VECTOR_DIMS = 128;
 
     @Value("${ai.business.memory.enabled:${AI_BUSINESS_MEMORY_ENABLED:true}}")
     private boolean enabled;
@@ -60,6 +60,18 @@ public class AiBusinessMemoryVectorService {
 
     @Value("${ai.business.memory.search-default-k:${AI_BUSINESS_MEMORY_SEARCH_DEFAULT_K:6}}")
     private int searchDefaultK;
+
+    @Value("${ai.business.memory.dynamic.enabled:true}")
+    private boolean dynamicMemoryEnabled;
+
+    @Value("${ai.business.memory.dynamic.source-prefix:dyn_ctx_}")
+    private String dynamicSourcePrefix;
+
+    @Value("${ai.business.memory.dynamic.max-age-ms:1800000}")
+    private long dynamicMaxAgeMs;
+
+    @Value("${ai.business.memory.dynamic.max-sources:48}")
+    private int dynamicMaxSources;
 
     public record SearchHit(
         String appId,
@@ -83,7 +95,118 @@ public class AiBusinessMemoryVectorService {
         return enabled;
     }
 
+    public IndexSummary indexDynamicContext(String appId, String sourceSuffix, String markdown, List<String> tags) {
+        return indexDynamicContext(appId, sourceSuffix, markdown, tags, 0);
+    }
+
+    public IndexSummary indexDynamicContext(String appId, String sourceSuffix, String markdown, List<String> tags, int scopeMask) {
+        if (!dynamicMemoryEnabled) {
+            String safeAppId = sanitizeAppId(appId);
+            return new IndexSummary(safeAppId, "", 0, 0, System.currentTimeMillis());
+        }
+        String prefix = String.valueOf(dynamicSourcePrefix == null ? "dyn_ctx_" : dynamicSourcePrefix).trim();
+        if (prefix.isBlank()) {
+            prefix = "dyn_ctx_";
+        }
+        String suffix = String.valueOf(sourceSuffix == null ? "" : sourceSuffix).trim();
+        if (suffix.isBlank()) {
+            suffix = Long.toString(System.currentTimeMillis());
+        }
+        String sourceName = prefix + suffix.replaceAll("[^a-zA-Z0-9_\\-]", "_");
+        return indexMarkdown(appId, sourceName, markdown, tags, scopeMask);
+    }
+
+    public int pruneDynamicContext(String appId) {
+        if (!dynamicMemoryEnabled) {
+            return 0;
+        }
+        return pruneSourcesByPrefix(
+            appId,
+            String.valueOf(dynamicSourcePrefix == null ? "dyn_ctx_" : dynamicSourcePrefix).trim(),
+            Math.max(60_000L, dynamicMaxAgeMs),
+            Math.max(8, dynamicMaxSources)
+        );
+    }
+
+    public int pruneSourcesByPrefix(String appId, String sourcePrefix, long maxAgeMs, int maxSources) {
+        String safeAppId = sanitizeAppId(appId);
+        String safePrefix = String.valueOf(sourcePrefix == null ? "" : sourcePrefix).trim();
+        if (!enabled || safeAppId.isBlank() || safePrefix.isBlank()) {
+            return 0;
+        }
+
+        Path appPath = resolveAppIndexPath(safeAppId);
+        if (!Files.isDirectory(appPath)) {
+            return 0;
+        }
+
+        long now = System.currentTimeMillis();
+        Map<String, Long> latestBySource = new LinkedHashMap<>();
+        int removed = 0;
+
+        try (Directory dir = FSDirectory.open(appPath)) {
+            if (!DirectoryReader.indexExists(dir)) {
+                return 0;
+            }
+            try (DirectoryReader reader = DirectoryReader.open(dir)) {
+                IndexSearcher searcher = new IndexSearcher(reader);
+                TopDocs docs = searcher.search(new MatchAllDocsQuery(), Math.max(1, reader.numDocs()));
+                for (ScoreDoc sd : docs.scoreDocs) {
+                    Document d = searcher.storedFields().document(sd.doc);
+                    String docAppId = String.valueOf(d.get("appId") == null ? "" : d.get("appId"));
+                    String sourceName = String.valueOf(d.get("sourceName") == null ? "" : d.get("sourceName"));
+                    if (!safeAppId.equals(docAppId) || !sourceName.startsWith(safePrefix)) {
+                        continue;
+                    }
+                    long createdAt = parseLongSafe(d.get("createdAtMs"), 0L);
+                    latestBySource.merge(sourceName, createdAt, Math::max);
+                }
+            }
+
+            if (latestBySource.isEmpty()) {
+                return 0;
+            }
+
+            List<Map.Entry<String, Long>> ordered = new ArrayList<>(latestBySource.entrySet());
+            ordered.sort(Comparator.comparingLong(Map.Entry<String, Long>::getValue).reversed());
+
+            List<String> deleteSources = new ArrayList<>();
+            int sourceLimit = Math.max(1, maxSources);
+            long ageLimit = Math.max(60_000L, maxAgeMs);
+            for (int i = 0; i < ordered.size(); i++) {
+                Map.Entry<String, Long> entry = ordered.get(i);
+                long age = now - Math.max(0L, entry.getValue());
+                if (i >= sourceLimit || age > ageLimit) {
+                    deleteSources.add(entry.getKey());
+                }
+            }
+
+            if (deleteSources.isEmpty()) {
+                return 0;
+            }
+
+            IndexWriterConfig cfg = new IndexWriterConfig();
+            try (IndexWriter writer = new IndexWriter(dir, cfg)) {
+                for (String sourceName : deleteSources) {
+                    writer.deleteDocuments(new Term("sourceName", sourceName));
+                    removed++;
+                }
+                writer.commit();
+            }
+
+            log.info("Pruned dynamic business memory appId={} removedSources={} prefix={}", safeAppId, removed, safePrefix);
+            return removed;
+        } catch (Exception ex) {
+            log.warn("Failed to prune dynamic memory appId={} prefix={}: {}", safeAppId, safePrefix, ex.getMessage());
+            return 0;
+        }
+    }
+
     public IndexSummary indexMarkdown(String appId, String sourceName, String markdown, List<String> tags) {
+        return indexMarkdown(appId, sourceName, markdown, tags, 0);
+    }
+
+    public IndexSummary indexMarkdown(String appId, String sourceName, String markdown, List<String> tags, int scopeMask) {
         String safeAppId = sanitizeAppId(appId);
         String safeSourceName = String.valueOf(sourceName == null ? "" : sourceName).trim();
         String safeMarkdown = String.valueOf(markdown == null ? "" : markdown).trim();
@@ -120,6 +243,11 @@ public class AiBusinessMemoryVectorService {
                         doc.add(new StringField("sourceName", safeSourceName, Field.Store.YES));
                         doc.add(new StringField("chunkId", chunkId, Field.Store.YES));
                         doc.add(new StoredField("createdAtMs", nowMs));
+                        doc.add(new StoredField("scopeMask", Math.max(0, scopeMask)));
+
+                        for (String scopeTag : scopeTagsFromMask(scopeMask)) {
+                            doc.add(new StringField("scopeTag", scopeTag, Field.Store.YES));
+                        }
 
                         String compactTags = normalizeTags(tags);
                         if (!compactTags.isBlank()) {
@@ -146,6 +274,10 @@ public class AiBusinessMemoryVectorService {
     }
 
     public List<SearchHit> search(String appId, String queryText, Integer kOverride) {
+        return searchWithScopes(appId, queryText, kOverride, 0);
+    }
+
+    public List<SearchHit> searchWithScopes(String appId, String queryText, Integer kOverride, int scopeMask) {
         String safeAppId = sanitizeAppId(appId);
         String safeQuery = String.valueOf(queryText == null ? "" : queryText).trim();
         if (!enabled || safeAppId.isBlank() || safeQuery.isBlank()) {
@@ -165,13 +297,19 @@ public class AiBusinessMemoryVectorService {
             }
             try (DirectoryReader reader = DirectoryReader.open(dir)) {
                 IndexSearcher searcher = new IndexSearcher(reader);
-                Query query = new KnnFloatVectorQuery("vector", embedText(safeQuery), Math.max(k * 3, 12));
+                Query scopeFilter = buildScopeFilterQuery(scopeMask);
+                Query query = scopeFilter == null
+                    ? new KnnFloatVectorQuery("vector", embedText(safeQuery), Math.max(k * 3, 12))
+                    : new KnnFloatVectorQuery("vector", embedText(safeQuery), Math.max(k * 3, 12), scopeFilter);
                 TopDocs docs = searcher.search(query, Math.max(k * 3, 12));
 
                 for (ScoreDoc sd : docs.scoreDocs) {
                     Document d = searcher.storedFields().document(sd.doc);
                     String docAppId = String.valueOf(d.get("appId") == null ? "" : d.get("appId"));
                     if (!safeAppId.equals(docAppId)) {
+                        continue;
+                    }
+                    if (scopeMask > 0 && !matchesScope(d, scopeMask)) {
                         continue;
                     }
                     hits.add(new SearchHit(
@@ -190,11 +328,14 @@ public class AiBusinessMemoryVectorService {
 
                 // Fallback: if vector ranking gives no hits (cold index), return recent docs.
                 if (hits.isEmpty()) {
-                    TopDocs latest = searcher.search(new MatchAllDocsQuery(), Math.max(k, 8));
+                    TopDocs latest = searcher.search(scopeFilter == null ? new MatchAllDocsQuery() : scopeFilter, Math.max(k, 8));
                     for (ScoreDoc sd : latest.scoreDocs) {
                         Document d = searcher.storedFields().document(sd.doc);
                         String docAppId = String.valueOf(d.get("appId") == null ? "" : d.get("appId"));
                         if (!safeAppId.equals(docAppId)) {
+                            continue;
+                        }
+                        if (scopeMask > 0 && !matchesScope(d, scopeMask)) {
                             continue;
                         }
                         hits.add(new SearchHit(
@@ -267,7 +408,11 @@ public class AiBusinessMemoryVectorService {
     }
 
     public String buildRagBlock(String appId, String queryText, Integer kOverride, int maxChars) {
-        List<SearchHit> hits = search(appId, queryText, kOverride);
+        return buildRagBlockWithScopes(appId, queryText, kOverride, 0, maxChars);
+    }
+
+    public String buildRagBlockWithScopes(String appId, String queryText, Integer kOverride, int scopeMask, int maxChars) {
+        List<SearchHit> hits = searchWithScopes(appId, queryText, kOverride, scopeMask);
         if (hits.isEmpty()) {
             return "";
         }
@@ -321,6 +466,60 @@ public class AiBusinessMemoryVectorService {
             }
         }
         return String.join(" ", out);
+    }
+
+    private List<String> scopeTagsFromMask(int scopeMask) {
+        if (scopeMask <= 0) {
+            return List.of();
+        }
+        return AiMultimodalScannerService.scopeTagsFromMask(scopeMask);
+    }
+
+    private Query buildScopeFilterQuery(int scopeMask) {
+        if (scopeMask <= 0) {
+            return null;
+        }
+        List<String> tags = scopeTagsFromMask(scopeMask);
+        if (tags.isEmpty()) {
+            return null;
+        }
+        BooleanQuery.Builder builder = new BooleanQuery.Builder();
+        for (String tag : tags) {
+            String safe = String.valueOf(tag == null ? "" : tag).trim();
+            if (!safe.isBlank()) {
+                builder.add(new TermQuery(new Term("scopeTag", safe)), BooleanClause.Occur.SHOULD);
+            }
+        }
+        builder.setMinimumNumberShouldMatch(1);
+        BooleanQuery query = builder.build();
+        return query.clauses().isEmpty() ? null : query;
+    }
+
+    private boolean matchesScope(Document doc, int requiredScopeMask) {
+        if (requiredScopeMask <= 0 || doc == null) {
+            return true;
+        }
+        long rawMask = parseLongSafe(doc.get("scopeMask"), 0L);
+        int docScopeMask = rawMask > Integer.MAX_VALUE ? 0 : (int) rawMask;
+        if (docScopeMask > 0) {
+            return (docScopeMask & requiredScopeMask) != 0;
+        }
+        List<String> requiredTags = scopeTagsFromMask(requiredScopeMask);
+        if (requiredTags.isEmpty()) {
+            return false;
+        }
+        String[] docTags = doc.getValues("scopeTag");
+        if (docTags == null || docTags.length == 0) {
+            return false;
+        }
+        for (String required : requiredTags) {
+            for (String docTag : docTags) {
+                if (required.equals(docTag)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private List<String> chunkMarkdown(String markdown) {
@@ -388,7 +587,34 @@ public class AiBusinessMemoryVectorService {
     }
 
     private float[] embedText(String text) {
-        return localEmbeddingService.embed(text);
+        float[] vector = new float[VECTOR_DIMS];
+        Matcher matcher = TOKEN_PATTERN.matcher(String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT));
+        int tokenCount = 0;
+        while (matcher.find()) {
+            String token = matcher.group();
+            int h = token.hashCode();
+            int idx = Math.floorMod(h, VECTOR_DIMS);
+            vector[idx] += 1.0f;
+            tokenCount++;
+        }
+
+        if (tokenCount <= 0) {
+            vector[0] = 1.0f;
+            return vector;
+        }
+
+        float norm = 0.0f;
+        for (float v : vector) {
+            norm += v * v;
+        }
+        norm = (float) Math.sqrt(norm);
+        if (norm <= 0f) {
+            return vector;
+        }
+        for (int i = 0; i < vector.length; i++) {
+            vector[i] = vector[i] / norm;
+        }
+        return vector;
     }
 
     private long parseLongSafe(String raw, long fallback) {
