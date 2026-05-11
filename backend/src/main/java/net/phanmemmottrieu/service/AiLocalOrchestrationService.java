@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
@@ -62,6 +63,18 @@ public class AiLocalOrchestrationService {
     private final AiSpeculativeExecutionService aiSpeculativeExecutionService;
     private final AiMultimodalScannerService aiMultimodalScannerService;
     private final AiBusinessMemoryVectorService aiBusinessMemoryVectorService;
+
+    @Autowired(required = false)
+    private AiIntentClassifierService aiIntentClassifierService;
+
+    @Autowired(required = false)
+    private AiScopedContextIngestionService aiScopedContextIngestionService;
+
+    @Autowired(required = false)
+    private AiExecutionPlannerService aiExecutionPlannerService;
+
+    @Autowired(required = false)
+    private RequestContextTracer requestContextTracer;
 
     public AiLocalOrchestrationService(
         AiSpeculativeExecutionService aiSpeculativeExecutionService,
@@ -149,6 +162,20 @@ public class AiLocalOrchestrationService {
         String responseMode,
         String language
     ) {
+        return orchestrate(appId, message, currentCode, attachments, contextType, taskType, responseMode, language, null);
+    }
+
+    public OrchestrationResult orchestrate(
+        String appId,
+        String message,
+        String currentCode,
+        List<Map<String, Object>> attachments,
+        String contextType,
+        String taskType,
+        String responseMode,
+        String language,
+        String requestId
+    ) {
         if (!enabled) {
             return OrchestrationResult.disabled();
         }
@@ -160,9 +187,23 @@ public class AiLocalOrchestrationService {
         String safeTaskType = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
         String safeMode = String.valueOf(responseMode == null ? "edit" : responseMode).trim().toLowerCase(Locale.ROOT);
         String safeLanguage = String.valueOf(language == null ? "" : language).trim().toLowerCase(Locale.ROOT);
+        String effectiveRequestId = String.valueOf(requestId == null ? "" : requestId).trim();
+        boolean ownsTraceRequest = false;
+        long orchestrationStartMs = System.currentTimeMillis();
+        if (effectiveRequestId.isBlank()) {
+            effectiveRequestId = "orch-" + UUID.randomUUID();
+            ownsTraceRequest = true;
+        }
+        if (requestContextTracer != null) {
+            if (ownsTraceRequest) {
+                requestContextTracer.startRequest(effectiveRequestId);
+            }
+            requestContextTracer.startPhase("local_orchestration", effectiveRequestId);
+        }
 
         OrchestrationResult out = new OrchestrationResult();
         out.enabled = true;
+        out.toolStats.put("requestId", effectiveRequestId);
 
         int messageChars = safeMessage.length();
         int codeChars = safeCode.length();
@@ -171,6 +212,41 @@ public class AiLocalOrchestrationService {
 
         LocalToolDigest digest = runLocalTools(safeMessage, safeCode, safeAttachments);
         out.toolStats.putAll(digest.stats);
+
+        if (aiIntentClassifierService != null) {
+            try {
+                String classifierContext = "menu_json".equals(safeContextType) ? "menu" : "code";
+                String classifierMenu = "menu_json".equals(safeContextType) ? safeCode : "";
+                AiIntentClassifierService.IntentClassification intent = aiIntentClassifierService.classify(
+                    safeMessage,
+                    classifierContext,
+                    safeCode,
+                    classifierMenu,
+                    effectiveRequestId
+                );
+                out.toolStats.put("intentClass", intent.intentClass);
+                out.toolStats.put("intentConfidence", intent.confidence);
+                out.toolStats.put("intentMethod", intent.classificationMethod);
+                if (intent.isOffTopic()) {
+                    out.planSteps = List.of(
+                        "Detect off-topic request in code/menu workspace (intent classifier)",
+                        "Return fast local answer and close session early"
+                    );
+                    out.routingTier = "planner_fast";
+                    out.preferredModelHint = resolvePreferredModelHint(out.routingTier);
+                    out.speculativeExecuted = true;
+                    out.speculativeOperation = "offtopic_fast_reply";
+                    out.earlyFinishResponse = buildOffTopicFastResponse(safeContextType);
+                    out.totalCharsAfter = out.totalCharsBefore;
+                    out.savedChars = 0;
+                    out.toolStats.put("earlyFinish", true);
+                    out.toolStats.put("earlyFinishSource", "intent_classifier");
+                    return finalizeOrchestrationResult(out, effectiveRequestId, ownsTraceRequest, orchestrationStartMs);
+                }
+            } catch (Exception ignored) {
+                // Never block orchestration if classifier fails.
+            }
+        }
 
         double offTopicConfidence = getOffTopicConfidence(safeMessage, safeContextType, safeTaskType, safeMode, digest.intentKeywords, attachmentChars);
         if (fastUnrelatedEnabled && offTopicConfidence > fastUnrelatedConfidenceThreshold) {
@@ -191,7 +267,7 @@ public class AiLocalOrchestrationService {
             out.toolStats.put("confThreshold", fastUnrelatedConfidenceThreshold);
             out.toolStats.put("routingTier", out.routingTier);
             out.toolStats.put("preferredModelHint", out.preferredModelHint);
-            return out;
+            return finalizeOrchestrationResult(out, effectiveRequestId, ownsTraceRequest, orchestrationStartMs);
         } else if (fastUnrelatedEnabled && offTopicConfidence > 0) {
             out.toolStats.put("rejectedOffTopic", true);
             out.toolStats.put("rejectedOffTopicConfidence", offTopicConfidence);
@@ -210,6 +286,27 @@ public class AiLocalOrchestrationService {
         List<String> planSteps = buildPlannerSteps(safeContextType, safeTaskType, safeMode, codeChars, attachmentChars);
         if (scanResult.enabled() && scanResult.ingestCount() > 0) {
             planSteps.add(0, "Run multimodal scanner (JSON/Image) and select dynamic memory ingestion candidates");
+        }
+        if (aiExecutionPlannerService != null) {
+            try {
+                String workspaceContext = "menu_json".equals(safeContextType) ? "menu" : "code";
+                AiExecutionPlannerService.ExecutionPlan executionPlan = aiExecutionPlannerService.generatePlan(
+                    safeMessage,
+                    workspaceContext,
+                    safeCode,
+                    ""
+                );
+                if (executionPlan != null && executionPlan.steps != null && !executionPlan.steps.isEmpty()) {
+                    planSteps = executionPlan.steps.stream()
+                        .map(step -> "[" + step.action + "] " + step.description)
+                        .toList();
+                    out.toolStats.put("executionPlanStepCount", executionPlan.getStepCount());
+                    out.toolStats.put("executionPlanEstimatedMs", executionPlan.totalEstimatedMs);
+                    out.toolStats.put("executionPlanDeduped", executionPlan.deduplicationCount);
+                }
+            } catch (Exception ignored) {
+                // Keep base planner when execution planner fails.
+            }
         }
         out.planSteps = planSteps;
 
@@ -232,6 +329,52 @@ public class AiLocalOrchestrationService {
         boolean dynamicIngestScheduled = false;
         int baselineScopeMask = defaultScopeMaskForContext(safeContextType, safeTaskType);
         int aggregateScopeMask = scanResult.enabled() ? Math.max(0, scanResult.aggregateScopeMask()) : 0;
+        if (aiScopedContextIngestionService != null) {
+            try {
+                AiScopedContextIngestionService.ScopeMaskAnalysis scopeAnalysis = aiScopedContextIngestionService.analyzeScopesFromAttachments(
+                    safeMessage,
+                    safeAttachments,
+                    !safeCode.isBlank(),
+                    "menu_json".equals(safeContextType) && !safeCode.isBlank()
+                );
+                int scopedMask = Math.max(0, scopeAnalysis.scopeMask);
+                if ("menu_json".equals(safeContextType)) {
+                    scopedMask |= AiScopedContextIngestionService.SCOPE_MENU;
+                } else {
+                    scopedMask |= AiScopedContextIngestionService.SCOPE_CODE;
+                }
+                if (scopedMask > 0) {
+                    aggregateScopeMask = aggregateScopeMask | scopedMask;
+                    out.toolStats.put("scopedIngestionScopeMask", scopedMask);
+                    out.toolStats.put("scopedIngestionScopeSummary", scopeAnalysis.describe());
+                }
+
+                if ("menu_json".equals(safeContextType) && !safeCode.isBlank() && (aggregateScopeMask & AiScopedContextIngestionService.SCOPE_MENU) != 0) {
+                    AiScopedContextIngestionService.IngestionResult menuIngestion = aiScopedContextIngestionService.ingestMenu(
+                        appId,
+                        safeCode,
+                        aggregateScopeMask,
+                        true,
+                        effectiveRequestId
+                    );
+                    out.toolStats.put("scopedMenuIngestionStatus", menuIngestion.status);
+                    out.toolStats.put("scopedMenuIngestionChunks", menuIngestion.chunksIngested);
+                }
+                if (!"menu_json".equals(safeContextType) && !safeCode.isBlank() && (aggregateScopeMask & AiScopedContextIngestionService.SCOPE_CODE) != 0) {
+                    AiScopedContextIngestionService.IngestionResult codeIngestion = aiScopedContextIngestionService.ingestCode(
+                        appId,
+                        safeCode,
+                        aggregateScopeMask,
+                        true,
+                        effectiveRequestId
+                    );
+                    out.toolStats.put("scopedCodeIngestionStatus", codeIngestion.status);
+                    out.toolStats.put("scopedCodeIngestionChunks", codeIngestion.chunksIngested);
+                }
+            } catch (Exception ignored) {
+                // Continue with existing multimodal ingestion pipeline.
+            }
+        }
         if (aggregateScopeMask <= 0) {
             aggregateScopeMask = baselineScopeMask;
         }
@@ -410,7 +553,24 @@ public class AiLocalOrchestrationService {
         out.toolStats.put("estimatedTokensBefore", estimateTokens(out.totalCharsBefore));
         out.toolStats.put("estimatedTokensAfter", estimateTokens(out.totalCharsAfter));
         out.toolStats.put("estimatedTokenSavings", Math.max(0, estimateTokens(out.totalCharsBefore) - estimateTokens(out.totalCharsAfter)));
+        out.toolStats.put("elapsedMs", Math.max(0L, System.currentTimeMillis() - orchestrationStartMs));
 
+        return finalizeOrchestrationResult(out, effectiveRequestId, ownsTraceRequest, orchestrationStartMs);
+    }
+
+    private OrchestrationResult finalizeOrchestrationResult(
+        OrchestrationResult out,
+        String requestId,
+        boolean ownsTraceRequest,
+        long startMs
+    ) {
+        if (requestContextTracer != null) {
+            requestContextTracer.endPhase("local_orchestration", requestId, Math.max(0L, System.currentTimeMillis() - startMs));
+            requestContextTracer.recordMetric(requestId, "orchestration_saved_chars", Math.max(0, out.savedChars));
+            if (ownsTraceRequest) {
+                requestContextTracer.completeRequest(requestId);
+            }
+        }
         return out;
     }
 

@@ -3745,6 +3745,27 @@ export default function AiAssistantChat({
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evt);
 							}
+							else if (evt.stage === "agentic_step") {
+								const currentStep = Number((evt as any).current || 0);
+								const totalSteps = Number((evt as any).total || 0);
+								const stepMessage = String((evt as any).message || localizedEvtMessage || "").trim();
+								const stepLabel = totalSteps > 0
+									? uiText(
+										`Thực thi bước ${Math.max(1, currentStep)}/${totalSteps}`,
+										`Executing step ${Math.max(1, currentStep)}/${totalSteps}`,
+										`执行步骤 ${Math.max(1, currentStep)}/${totalSteps}`,
+									)
+									: uiText("Thực thi bước", "Executing step", "执行步骤");
+								appendAgenticStep({
+									stage: `agentic_step_${Math.max(1, currentStep)}_${Math.max(1, totalSteps)}`,
+									icon: "🪜",
+									label: stepLabel,
+									detail: stepMessage || undefined,
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
 							else if (evt.stage === "local_tool_invocation") {
 								appendAgenticStep({
 									stage: "local_tool_invocation",
@@ -3909,6 +3930,19 @@ export default function AiAssistantChat({
 							else if (evt.stage === "streaming" && evt.chunk) {
 								pendingStreamChunkRef.current += evt.chunk;
 								scheduleStreamFlush();
+							}
+							else if (evt.stage === "request_complete") {
+								const elapsedMs = Number((evt as any).elapsedMs || 0);
+								appendStageEvent({
+									...evtForTimeline,
+									stage: "request_complete",
+									message: localizedEvtMessage || uiText(
+										`Hoàn tất yêu cầu (${elapsedMs}ms)`,
+										`Request completed (${elapsedMs}ms)`,
+										`请求完成（${elapsedMs}ms）`,
+									),
+									detail: localizedEvtDetail || String((evt as any).flow || "").trim(),
+								});
 							}
 							else if (evt.stage === "completed" && evtStatus === "clarification_needed") {
 								receivedCompleteEvent = true;

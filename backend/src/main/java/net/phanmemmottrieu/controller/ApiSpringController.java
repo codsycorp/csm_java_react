@@ -1329,7 +1329,8 @@ public class ApiSpringController {
                         contextType,
                         effectiveTaskType,
                         responseMode,
-                        language);
+                        language,
+                        requestId);
 
                     if (codeStreamOrchestration.enabled
                         && codeStreamOrchestration.compressedContextBlock != null
@@ -1406,6 +1407,18 @@ public class ApiSpringController {
                     completion.put("streamedChars", earlyText.length());
                     completion.put("model", "local_orchestration");
                     sendEvent(emitter, objectMapper.writeValueAsString(completion));
+                    emitRequestCompleteEvent(
+                        emitter,
+                        requestId,
+                        "ai-code-stream",
+                        requestStartedAtMs,
+                        "ok",
+                        Map.of(
+                            "model", "local_orchestration",
+                            "streamedChars", earlyText.length(),
+                            "streamChunkCount", localStreamChunks
+                        )
+                    );
                     streamCompletedRef.set(true);
                     emitter.complete();
                     return;
@@ -1693,6 +1706,7 @@ public class ApiSpringController {
                         contextType,
                         preclassifiedIntent,
                         effectiveCodeContext);
+                    String localProviderPrompt = clampPromptForLocalProvider(prompt, contextType, responseMode);
                     String providerRaw = useMapReduceBroadAnalysis
                         ? runLocalProviderMapReduceBroadAnalysis(
                             emitter,
@@ -1700,7 +1714,7 @@ public class ApiSpringController {
                             message,
                             effectiveCodeContext,
                             contextType)
-                        : runLocalProviderWithProgress(emitter, requestId, prompt, contextType);
+                        : runLocalProviderWithProgress(emitter, requestId, localProviderPrompt, contextType);
                     String providerText = extractAiResultText(providerRaw);
                     if ((providerText == null || providerText.isBlank()) && providerRaw != null) {
                         providerText = providerRaw.trim();
@@ -1823,7 +1837,9 @@ public class ApiSpringController {
                     if (rawResponse == null) {
                         // When caller explicitly requested local model, never fall back to cloud.
                         String overrideNorm = String.valueOf(modelOverride == null ? "" : modelOverride).trim().toLowerCase();
-                        boolean callerForcedLocal = overrideNorm.contains("local") || overrideNorm.contains("llama");
+                        boolean callerForcedLocal = overrideNorm.contains("local")
+                            || overrideNorm.contains("llama")
+                            || isLocalModelName(effectiveModel);
                         if (callerForcedLocal) {
                             String degradedLocalText = codeStreamPreAnalysis == null
                                 ? ""
@@ -2296,9 +2312,45 @@ public class ApiSpringController {
 
                 logger.info("ApiSpringController: ai-code-stream complete requestId={} appId={} model={} elapsedMs={} outputChars={}",
                     requestId, appId, effectiveModel, (System.currentTimeMillis() - requestStartedAtMs), rawResponse.length());
+                int completionStreamedChars = parseIntSafe(codeStreamMeta.get("streamedChars"), 0);
+                int completionStreamChunkCount = parseIntSafe(codeStreamMeta.get("streamChunkCount"), 0);
+                emitRequestCompleteEvent(
+                    emitter,
+                    requestId,
+                    "ai-code-stream",
+                    requestStartedAtMs,
+                    "ok",
+                    Map.of(
+                        "model", String.valueOf(effectiveModel == null ? "" : effectiveModel),
+                        "outputChars", rawResponse.length(),
+                        "streamedChars", completionStreamedChars,
+                        "streamChunkCount", completionStreamChunkCount
+                    )
+                );
                 emitter.complete();
 
             } catch (Exception ex) {
+                boolean cancelled = "request_cancelled".equalsIgnoreCase(String.valueOf(ex.getMessage() == null ? "" : ex.getMessage()).trim())
+                    || ex instanceof InterruptedException
+                    || Thread.currentThread().isInterrupted();
+                if (cancelled) {
+                    logger.info("ApiSpringController: ai-code-stream cancelled requestId={} reason={}",
+                        activeRequestIdRef.get(), String.valueOf(ex.getMessage()));
+                    try {
+                        sendEvent(emitter, jsonOf(
+                            "stage", "cancelled",
+                            "requestId", activeRequestIdRef.get(),
+                            "message", "Request da bi huy trong qua trinh local inference"));
+                    } catch (Exception ignored) {
+                        // Ignore send failures on cancelled streams.
+                    }
+                    try {
+                        emitter.complete();
+                    } catch (Exception ignored) {
+                        // SSE already closed.
+                    }
+                    return;
+                }
                 logger.error("ApiSpringController: ai-code-stream unexpected error: {}", ex.getMessage(), ex);
                 if (streamCompletedRef.get()) {
                     logger.warn("ApiSpringController: ai-code-stream post-complete follow-up failed requestId={} error={}",
@@ -3633,6 +3685,41 @@ public class ApiSpringController {
             boolean usePromptCache,
             Map<String, Object> streamMeta,
             String requestId) throws Exception {
+        if (isLocalModelName(model)) {
+            String localPrompt = clampPromptForLocalProvider(prompt, contextType, responseMode);
+            String localRaw = runLocalProviderWithProgress(emitter, requestId, localPrompt, contextType);
+            String localText = extractAiResultText(localRaw);
+            if ((localText == null || localText.isBlank()) && localRaw != null) {
+                localText = localRaw.trim();
+            }
+            if (localText == null) {
+                localText = "";
+            }
+            if (!localText.isBlank()) {
+                sendEvent(emitter, jsonOf(
+                    "stage", "streaming_started",
+                    "requestId", requestId,
+                    "model", "local_provider",
+                    "ttftMs", 0,
+                    "estimatedTotalChars", localText.length(),
+                    "percent", 12));
+                int chunks = emitSyntheticLocalStreamChunks(
+                    emitter,
+                    requestId,
+                    localText,
+                    1,
+                    false,
+                    true);
+                streamMeta.put("attemptsUsed", 1);
+                streamMeta.put("maxAttempts", 1);
+                streamMeta.put("providerCallsEstimate", 1);
+                streamMeta.put("providerFallbackUsed", false);
+                streamMeta.put("streamChunkCount", chunks);
+                streamMeta.put("streamedChars", localText.length());
+            }
+            return localText;
+        }
+
         boolean editMode = "edit".equalsIgnoreCase(responseMode);
         boolean menuJsonEditMode = editMode && isMenuJsonContext(contextType);
         int autoContinueAttempts = editMode && aiCodeStreamAutoContinueEnabled ? Math.max(1, aiCodeStreamAutoContinueMaxAttempts) : 1;
@@ -4071,11 +4158,32 @@ public class ApiSpringController {
                         "elapsedMs", elapsedMs,
                         "estimatedWaitSecs", estimatedWaitSecs,
                         "remainingEstimateSecs", remainingSecs));
+            } catch (InterruptedException interrupted) {
+                future.cancel(true);
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("request_cancelled");
             } catch (Exception ex) {
                 future.cancel(true);
                 throw ex;
             }
         }
+    }
+
+    private String clampPromptForLocalProvider(String prompt, String contextType, String responseMode) {
+        String safePrompt = String.valueOf(prompt == null ? "" : prompt);
+        int configured = Math.max(4000, aiCodeStreamLocalProviderMaxPromptChars);
+        int hardCap;
+        if (isMenuJsonContext(contextType)) {
+            hardCap = Math.min(configured, 22000);
+        } else if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            hardCap = Math.min(configured, 26000);
+        } else {
+            hardCap = Math.min(configured, 18000);
+        }
+        if (safePrompt.length() <= hardCap) {
+            return safePrompt;
+        }
+        return truncateMiddle(safePrompt, hardCap);
     }
 
     private boolean shouldUseLocalMapReduceBroadAnalysis(
@@ -5014,6 +5122,30 @@ public class ApiSpringController {
         }
     }
 
+    private void emitRequestCompleteEvent(
+        SseEmitter emitter,
+        String requestId,
+        String flow,
+        long requestStartedAtMs,
+        String status,
+        Map<String, Object> extras
+    ) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("stage", "request_complete");
+            payload.put("requestId", String.valueOf(requestId == null ? "" : requestId));
+            payload.put("flow", String.valueOf(flow == null ? "" : flow));
+            payload.put("status", String.valueOf(status == null ? "ok" : status));
+            payload.put("elapsedMs", Math.max(0L, System.currentTimeMillis() - requestStartedAtMs));
+            if (extras != null && !extras.isEmpty()) {
+                payload.putAll(extras);
+            }
+            sendEvent(emitter, objectMapper.writeValueAsString(payload));
+        } catch (Exception ignored) {
+            // Keep stream path resilient if completion telemetry fails.
+        }
+    }
+
     private List<Map<String, String>> extractImageParts(Object attachmentsRaw) {
         List<Map<String, String>> result = new ArrayList<>();
         if (!(attachmentsRaw instanceof List<?> atts)) return result;
@@ -5135,6 +5267,7 @@ public class ApiSpringController {
         return "gemini-2.5-flash";
     }
 
+    @SuppressWarnings("unused")
     private LocalPreAnalysisDecision runMandatoryLocalPreAnalysis(
             String flow,
             String requestText,
@@ -7192,6 +7325,14 @@ public class ApiSpringController {
         }
 
         return defaultModel;
+    }
+
+    private boolean isLocalModelName(String modelName) {
+        String normalized = String.valueOf(modelName == null ? "" : modelName).trim().toLowerCase(Locale.ROOT);
+        if (normalized.isBlank()) {
+            return false;
+        }
+        return normalized.contains("local") || normalized.contains("llama");
     }
 
     private boolean isCodeOrMenuContext(String contextType) {
@@ -10643,7 +10784,8 @@ public class ApiSpringController {
                     effectiveContextType,
                     effectiveTaskType,
                     responseMode,
-                    language);
+                    language,
+                    requestId);
                 if (orchestrationResult.enabled && orchestrationResult.compressedContextBlock != null
                     && !orchestrationResult.compressedContextBlock.isBlank()) {
                     Map<String, Object> orchestrationStats = orchestrationResult.toolStats == null
@@ -14584,14 +14726,6 @@ public class ApiSpringController {
         boolean forceAiAssistant = (isMenuDesignTask && !isMenuLanguageTask)
             || ((preferAiAssistantForCoding || forceAiAssistantForCoding) && isCodingTask);
 
-        boolean blockGeminiFallback = false;
-        if (disableFallbackForCoding && isCodingTask) {
-            blockGeminiFallback = true;
-        }
-        if (forceAiAssistantForCoding && isCodingTask) {
-            blockGeminiFallback = true;
-        }
-
         if (forceAiAssistant) {
             if (params != null) {
                 params.put("_providerRoutingDecision", isMenuDesignTask
@@ -15912,6 +16046,7 @@ public class ApiSpringController {
             || msg.contains("bad credentials");
     }
 
+    @SuppressWarnings("unused")
     private boolean isHardQuotaFailure(String rawContent) {
         if (rawContent == null || rawContent.trim().isEmpty()) {
             return false;
@@ -20391,7 +20526,8 @@ public class ApiSpringController {
             contextType,
             taskType,
             responseMode,
-            language);
+            language,
+            null);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("success", true);

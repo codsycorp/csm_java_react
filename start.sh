@@ -157,6 +157,11 @@ if [ "$WEAK_MODE_ACTIVE" = "true" ]; then
         "--ai.local.llama.wait-until-stable.poll-ms=250"
         "--ai.local.llama.wait-until-stable.log-interval-ms=5000"
         "--ai.local.llama.wait-until-stable.max-waiting-requests=3"
+        "--cache.warming.enabled=false"
+        "--ai.code-stream.max-prompt-chars=32000"
+        "--ai.code-stream.menu.max-prompt-chars=48000"
+        "--ai.code-stream.local-provider.max-prompt-chars=18000"
+        "--ai.code-stream.routing.retry-default-max-prompt-chars=28000"
     )
 fi
 

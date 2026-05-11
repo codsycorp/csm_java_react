@@ -8,6 +8,7 @@ import java.util.concurrent.Executors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.http.ResponseEntity;
@@ -24,6 +25,7 @@ import net.phanmemmottrieu.data.SearchFilter;
  * Pre-load top pages vào cache để giảm MISS rate ban đầu.
  */
 @Service
+@ConditionalOnProperty(name = "cache.warming.enabled", havingValue = "true", matchIfMissing = true)
 public class CacheWarmingScheduler {
 
     private static final Logger logger = LoggerFactory.getLogger(CacheWarmingScheduler.class);
