@@ -67,6 +67,19 @@ if [ -z "${HEAP_SIZE:-}" ]; then
     fi
 fi
 
+# Clamp manual heap overrides on weak machines to avoid swap thrash.
+if [[ "${HEAP_SIZE}" =~ ^([0-9]+)([mMgG])$ ]]; then
+    heap_value="${BASH_REMATCH[1]}"
+    heap_unit="${BASH_REMATCH[2],,}"
+    heap_mb="$heap_value"
+    if [ "$heap_unit" = "g" ]; then
+        heap_mb=$((heap_value * 1024))
+    fi
+    if [ "$total_mem_mb" -gt 0 ] && [ "$total_mem_mb" -lt 7000 ] && [ "$heap_mb" -gt 1536 ]; then
+        HEAP_SIZE="1536m"
+    fi
+fi
+
 # Init heap smaller than max to reduce RSS pressure on low-RAM systems
 HEAP_INIT="${HEAP_INIT:-384m}"
 DIRECT_MEMORY_SIZE="${DIRECT_MEMORY_SIZE:-128m}"
@@ -113,7 +126,6 @@ WEAK_SPRING_ARGS=()
 if [ "$WEAK_MODE_ACTIVE" = "true" ]; then
     WEAK_SPRING_ARGS=(
         "--chat.ai.auto-message.local-generation.enabled=true"
-        "--chat.ai.auto-message.provider=gemini-direct"
         "--chat.ai.auto-message.rate-limit.enabled=true"
         "--chat.ai.auto-message.rate-limit.min-interval-ms=180000"
         "--chat.ai.auto-message.rate-limit.window-ms=900000"
@@ -124,11 +136,12 @@ if [ "$WEAK_MODE_ACTIVE" = "true" ]; then
         "--ai.orchestration.speculative.enabled=false"
         "--spring.task.scheduling.pool.size=1"
         "--ai.local.llama.threads=1"
-        "--ai.local.llama.batch-size=64"
-        "--ai.local.llama.ubatch-size=32"
+        "--ai.local.llama.batch-size=32"
+        "--ai.local.llama.ubatch-size=16"
         "--ai.local.llama.context-window=${WEAK_LLAMA_CONTEXT_WINDOW}"
         "--ai.local.llama.max-tokens=${WEAK_LLAMA_MAX_TOKENS}"
-        "--ai.local.llama.max-prompt-chars=${WEAK_LLAMA_MAX_PROMPT_CHARS}"
+        "--ai.local.llama.max-prompt-chars=120000"
+        "--ai.local.llama.preload-on-startup=false"
         "--ai.local.llama.max-concurrent-requests=1"
         "--ai.local.llama.acquire-timeout-ms=1200"
         "--ai.local.llama.load-shed.enabled=true"

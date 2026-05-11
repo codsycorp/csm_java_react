@@ -35,8 +35,8 @@ public class AIProviderFactory {
   public AIProviderFactory(
       GeminiService geminiService,
       @Autowired(required = false) LlamaCppNativeService llamaCppNativeService,
-      @Value("${ai.local.llama.prefer-local-first:true}") boolean preferLocalFirst,
-      @Value("${ai.local.only.enabled:true}") boolean localOnlyEnabled) {
+      @Value("${ai.local.llama.prefer-local-first:false}") boolean preferLocalFirst,
+      @Value("${ai.local.only.enabled:false}") boolean localOnlyEnabled) {
     if (localOnlyEnabled) {
       if (llamaCppNativeService != null && llamaCppNativeService.isAvailable()) {
         providers.add(llamaCppNativeService);

@@ -49,7 +49,7 @@ public class AiConversationContextService {
     @Value("${ai.conversation.context.summary-recent-turns:3}")
     private int summaryRecentTurns;
 
-    public static class ConversationTurn {
+    public class ConversationTurn {
         public String turnId;
         public String timestamp;
         public String userRequest;
@@ -71,7 +71,7 @@ public class AiConversationContextService {
         }
     }
 
-    public static class ConversationSession {
+    public class ConversationSession {
         public String sessionId;
         public String userId;
         public String appId;

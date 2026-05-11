@@ -741,7 +741,7 @@ public class ApiSpringController {
     @Value("${ai.router.score-v2.local-only-hard:false}")
     private boolean aiRouterScoreV2LocalOnlyHard;
 
-    @Value("${ai.local.only.enabled:true}")
+    @Value("${ai.local.only.enabled:false}")
     private boolean aiLocalOnlyEnabled;
 
     @Value("${ai.orchestration.multimodal.local-only:true}")
