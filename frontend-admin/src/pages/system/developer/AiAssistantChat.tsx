@@ -2061,6 +2061,13 @@ export default function AiAssistantChat({
 		}
 	}, [completionState]);
 
+	// Persist final chat history to localStorage after stream completes so reload shows correct content.
+	useEffect(() => {
+		if (completionState === "done") {
+			saveChatHistory(messages);
+		}
+	}, [completionState, messages]);
+
 	const pickPreferredCodeBlock = useCallback((blocks: CodeBlock[]): CodeBlock | null => {
 		if (!Array.isArray(blocks) || blocks.length === 0)
 			return null;
@@ -2089,6 +2096,30 @@ export default function AiAssistantChat({
 	const formatStageLabel = useCallback((stage: string): string => {
 		const normalized = String(stage || "").trim().toLowerCase();
 		switch (normalized) {
+		case "assistant_route_plan":
+			return uiText("Chọn route", "Route planning", "路由规划");
+		case "assistant_retrieval_plan":
+			return uiText("Lập truy vấn truy hồi", "Retrieval query planning", "检索查询规划");
+		case "assistant_fast_exit":
+			return uiText("Trả lời nhanh", "Fast reply", "快速回复");
+		case "assistant_orchestration_plan":
+			return uiText("Lập kế hoạch xử lý", "Orchestration planning", "编排规划");
+		case "assistant_orchestration_step_result":
+			return uiText("Kết quả bước xử lý", "Step result", "步骤结果");
+		case "assistant_tool_intent_plan":
+			return uiText("Lập kế hoạch công cụ", "Tool intent planning", "工具意图规划");
+		case "assistant_verify_plan":
+			return uiText("Lập kế hoạch kiểm chứng", "Verification planning", "验证规划");
+		case "assistant_verify_result":
+			return uiText("Kiểm chứng kết quả", "Result verification", "结果验证");
+		case "assistant_edit_risk_gate":
+			return uiText("Đánh giá rủi ro chỉnh sửa", "Edit risk gating", "编辑风险门控");
+		case "assistant_tool_execution_result":
+			return uiText("Kết quả thực thi công cụ", "Tool execution result", "工具执行结果");
+		case "assistant_citations":
+			return uiText("Trích dẫn nguồn", "Source citations", "源引用");
+		case "assistant_context_budget_gate":
+			return uiText("Gating ngữ cảnh", "Context budget gate", "上下文预算门控");
 		case "scope_reasoning":
 			return uiText("Suy luận theo phạm vi", "Scope reasoning", "范围推理");
 		case "dynamic_ingestion":
@@ -2371,6 +2402,26 @@ export default function AiAssistantChat({
 	const getStageTone = useCallback((stage: string, orchestrationPhase?: string): "preparing" | "chunking" | "reducing" | "final" | "completed" | "error" | "default" => {
 		const normalizedPhase = String(orchestrationPhase || "").trim().toLowerCase();
 		const normalizedStage = String(stage || "").trim().toLowerCase();
+	if (normalizedStage === "assistant_route_plan")
+		return "preparing";
+	if (normalizedStage === "assistant_fast_exit")
+		return "final";
+	if (normalizedStage === "assistant_orchestration_plan")
+		return "preparing";
+	if (normalizedStage === "assistant_orchestration_step_result")
+		return "chunking";
+	if (normalizedStage === "assistant_tool_intent_plan")
+		return "preparing";
+	if (normalizedStage === "assistant_verify_plan")
+		return "preparing";
+	if (normalizedStage === "assistant_verify_result")
+		return "final";
+	if (normalizedStage === "assistant_tool_execution_result")
+		return "final";
+	if (normalizedStage === "assistant_citations")
+		return "final";
+	if (normalizedStage === "assistant_edit_risk_gate")
+		return "final";
 	if (normalizedStage === "scope_reasoning")
 		return "preparing";
 	if (normalizedStage === "dynamic_ingestion")
@@ -3511,6 +3562,73 @@ export default function AiAssistantChat({
 					return;
 				}
 
+				const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+				if (!contentType.includes("text/event-stream")) {
+					const rawBody = await response.text();
+					let backendSummary = uiText(
+						"Backend không trả SSE stream hợp lệ.",
+						"Backend did not return a valid SSE stream.",
+						"后端未返回有效的 SSE 流。",
+					);
+					let internalCode = "NON_SSE_RESPONSE";
+					try {
+						const parsed = JSON.parse(rawBody);
+						const parsedMessage = String((parsed as any)?.message || "").trim();
+						if (parsedMessage) {
+							backendSummary = parsedMessage;
+						}
+						const parsedStatus = String((parsed as any)?.status || "").trim();
+						if (parsedStatus) {
+							internalCode = `${internalCode}_${parsedStatus.toUpperCase()}`;
+						}
+					}
+					catch {
+						// Keep default summary and code.
+					}
+
+					setMessages((prev) => {
+						const updated = [...prev];
+						for (let i = updated.length - 1; i >= 0; i -= 1) {
+							const lastMsg = updated[i];
+							if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
+								lastMsg.content = formatSystemNotice({
+									summary: backendSummary,
+									nextStep: uiText(
+										"Kiểm tra endpoint /ai-code-stream có trả text/event-stream và không bị response wrapper ghi đè.",
+										"Verify /ai-code-stream returns text/event-stream and is not wrapped by a response interceptor.",
+										"请检查 /ai-code-stream 是否返回 text/event-stream 且未被响应包装器覆盖。",
+									),
+									internalCode,
+								});
+								lastMsg.codeBlocks = [];
+								lastMsg.responseMode = "analyze";
+								lastMsg.timestamp = Date.now();
+								break;
+							}
+						}
+						return updated;
+					});
+					setCompletionState("error");
+					setCompletionErrorMessage(backendSummary);
+					setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+					setBackendProgressHint({ stage: "", detail: "" });
+					setIsLoading(false);
+					if (sseAbortRef.current === controller) {
+						sseAbortRef.current = null;
+					}
+					turnAllowAutoApplyRef.current = false;
+					showSystemToast("error", {
+						summary: backendSummary,
+						nextStep: uiText(
+							"Backend phải stream đúng định dạng SSE để hiển thị từng bước và apply patch vào editor.",
+							"Backend must stream valid SSE to show step-by-step updates and apply patches in the editor.",
+							"后端必须输出有效 SSE 才能逐步显示并将补丁应用到编辑器。",
+						),
+						internalCode,
+					});
+					return;
+				}
+
 				const reader = response.body!.getReader();
 				const decoder = new TextDecoder();
 				let buffer = "";
@@ -3725,6 +3843,57 @@ export default function AiAssistantChat({
 							}
 							const decisionStep = evt.modelDecisionStep || evt.decision_step;
 							const decisionReason = evt.modelDecisionReason || evt.reason_code;
+							if (evt.stage === "assistant_fast_exit") {
+								appendAgenticStep({
+									stage: "assistant_fast_exit",
+									icon: "⚡",
+									label: uiText("Trả lời nhanh", "Fast reply", "快速回复"),
+									detail: uiText(
+										`Độ tự tin ${(evt as any).confidence || 0}% · <200ms`,
+										`Confidence ${(evt as any).confidence || 0}% · <200ms`,
+										`置信度 ${(evt as any).confidence || 0}% · <200ms`,
+									),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "assistant_orchestration_plan") {
+								const stepCount = Number((evt as any).stepCount || 0);
+								const estimatedTime = Number((evt as any).estimatedTimeMs || 0);
+								appendAgenticStep({
+									stage: "assistant_orchestration_plan",
+									icon: "🎯",
+									label: uiText("Lập kế hoạch xử lý", "Orchestration plan", "编排规划"),
+									detail: uiText(
+										`${stepCount} bước · ~${estimatedTime}ms · ${(evt as any).category || ""}`,
+										`${stepCount} steps · ~${estimatedTime}ms · ${(evt as any).category || ""}`,
+										`${stepCount} 步骤 · ~${estimatedTime}ms · ${(evt as any).category || ""}`,
+									),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "assistant_orchestration_step_result") {
+								const stepName = String((evt as any).stepName || (evt as any).operation || "");
+								const stepStatus = String((evt as any).status || "");
+								const durationMs = Number((evt as any).durationMs || 0);
+								const progressPercent = Number((evt as any).progressPercent || 0);
+								appendAgenticStep({
+									stage: "assistant_orchestration_step_result",
+									icon: stepStatus === "success" ? "✅" : stepStatus === "error" ? "❌" : "⏳",
+									label: uiText(`Bước: ${stepName}`, `Step: ${stepName}`, `步骤: ${stepName}`),
+									detail: uiText(
+										`${stepStatus} · ${durationMs}ms · ${progressPercent}%`,
+										`${stepStatus} · ${durationMs}ms · ${progressPercent}%`,
+										`${stepStatus} · ${durationMs}ms · ${progressPercent}%`,
+									),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
 							if (evt.stage === "agentic_plan" && evt.compacted && Number(evt.savedChars) > 0) {
 								appendAgenticStep({
 									stage: "agentic_plan",
@@ -3744,6 +3913,143 @@ export default function AiAssistantChat({
 								appendAgenticStep({ stage: "agentic_plan", icon: "🧠", label: uiText("Lập kế hoạch Agentic", "Agentic Planning", "Agent 计划"), status: "done" });
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evt);
+							}
+							else if (evt.stage === "assistant_route_plan") {
+								const routeName = String((evt as any).routeName || "").trim();
+								const routeReason = String((evt as any).routeReason || (evt as any).reason_code || "").trim();
+								const routeConfidence = Number((evt as any).routeConfidence);
+								appendAgenticStep({
+									stage: "assistant_route_plan",
+									icon: "🧭",
+									label: uiText("Chọn route", "Route planning", "路由规划"),
+									detail: uiText(
+										routeName
+											? `${routeName}${routeReason ? ` · ${routeReason}` : ""}${Number.isFinite(routeConfidence) ? ` · ${Math.round(routeConfidence)}%` : ""}`
+											: (routeReason || ""),
+										routeName
+											? `${routeName}${routeReason ? ` · ${routeReason}` : ""}${Number.isFinite(routeConfidence) ? ` · ${Math.round(routeConfidence)}%` : ""}`
+											: (routeReason || ""),
+										routeName
+											? `${routeName}${routeReason ? ` · ${routeReason}` : ""}${Number.isFinite(routeConfidence) ? ` · ${Math.round(routeConfidence)}%` : ""}`
+											: (routeReason || ""),
+									),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evt);
+							}
+							else if (evt.stage === "assistant_tool_intent_plan") {
+								const tools = Array.isArray((evt as any).tools) ? (evt as any).tools : [];
+								const topTools = tools
+									.map((item: any) => String(item?.intent || "").trim())
+									.filter(Boolean)
+									.slice(0, 3);
+								const toolCount = Number((evt as any).toolCount || tools.length || 0);
+								appendAgenticStep({
+									stage: "assistant_tool_intent_plan",
+									icon: "🧩",
+									label: uiText("Lập kế hoạch công cụ", "Tool intent planning", "工具意图规划"),
+									detail: uiText(
+										`${toolCount} bước${topTools.length ? ` · ${topTools.join(" -> ")}` : ""}`,
+										`${toolCount} steps${topTools.length ? ` · ${topTools.join(" -> ")}` : ""}`,
+										`${toolCount} 步骤${topTools.length ? ` · ${topTools.join(" -> ")}` : ""}`,
+									),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "assistant_verify_plan") {
+								appendAgenticStep({
+									stage: "assistant_verify_plan",
+									icon: "✅",
+									label: uiText("Lập kế hoạch kiểm chứng", "Verification planning", "验证规划"),
+									detail: String((evt as any).mode || "").trim() || undefined,
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "assistant_verify_result") {
+								const score = Number((evt as any).verificationScore);
+								const passed = Boolean((evt as any).verificationPassed);
+								const verdict = String((evt as any).verificationVerdict || "").trim();
+								const evidenceTokens = Array.isArray((evt as any).evidenceTokens)
+									? (evt as any).evidenceTokens.map((x: any) => String(x || "").trim()).filter(Boolean).slice(0, 4)
+									: [];
+								appendAgenticStep({
+									stage: "assistant_verify_result",
+									icon: passed ? "✅" : "⚠️",
+									label: uiText("Kiểm chứng kết quả", "Result verification", "结果验证"),
+									detail: uiText(
+										`${Number.isFinite(score) ? `${Math.round(score)}/100` : "--"}${verdict ? ` · ${verdict}` : ""}${evidenceTokens.length ? ` · ${evidenceTokens.join(", ")}` : ""}`,
+										`${Number.isFinite(score) ? `${Math.round(score)}/100` : "--"}${verdict ? ` · ${verdict}` : ""}${evidenceTokens.length ? ` · ${evidenceTokens.join(", ")}` : ""}`,
+										`${Number.isFinite(score) ? `${Math.round(score)}/100` : "--"}${verdict ? ` · ${verdict}` : ""}${evidenceTokens.length ? ` · ${evidenceTokens.join(", ")}` : ""}`,
+									),
+									status: passed ? "done" : "running",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "assistant_edit_risk_gate") {
+								const riskScore = Number((evt as any).riskScore);
+								const riskLevel = String((evt as any).riskLevel || "").trim().toLowerCase();
+								const blockAutoApply = Boolean((evt as any).blockAutoApply);
+								const reasons = Array.isArray((evt as any).reasons)
+									? (evt as any).reasons.map((x: any) => String(x || "").trim()).filter(Boolean).slice(0, 3)
+									: [];
+								appendAgenticStep({
+									stage: "assistant_edit_risk_gate",
+									icon: blockAutoApply ? "🛑" : (riskLevel === "medium" ? "⚠️" : "✅"),
+									label: uiText("Đánh giá rủi ro chỉnh sửa", "Edit risk gating", "编辑风险门控"),
+									detail: uiText(
+										`${Number.isFinite(riskScore) ? `${Math.round(riskScore)}/100` : "--"}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · block-auto-apply" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
+										`${Number.isFinite(riskScore) ? `${Math.round(riskScore)}/100` : "--"}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · block-auto-apply" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
+										`${Number.isFinite(riskScore) ? `${Math.round(riskScore)}/100` : "--"}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · block-auto-apply" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
+									),
+									status: blockAutoApply ? "running" : "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "assistant_tool_execution_result") {
+								const toolName = String((evt as any).toolName || "").trim();
+								const intent = String((evt as any).intent || "").trim();
+								const status = String((evt as any).status || "").trim().toLowerCase();
+								const durationMs = Number((evt as any).durationMs || 0);
+								const errorCode = Number((evt as any).errorCode || 0);
+								const successOutput = Boolean((evt as any).successOutput);
+								const statusIcon = successOutput ? "✅" : (errorCode > 0 ? "❌" : "⏳");
+								appendAgenticStep({
+									stage: "assistant_tool_execution_result",
+									icon: statusIcon,
+									label: uiText("Kết quả thực thi công cụ", "Tool execution result", "工具执行结果"),
+									detail: uiText(
+										`${toolName || intent}${status ? ` · ${status}` : ""}${durationMs > 0 ? ` · ${durationMs}ms` : ""}${errorCode > 0 ? ` · error=${errorCode}` : ""}`,
+										`${toolName || intent}${status ? ` · ${status}` : ""}${durationMs > 0 ? ` · ${durationMs}ms` : ""}${errorCode > 0 ? ` · error=${errorCode}` : ""}`,
+										`${toolName || intent}${status ? ` · ${status}` : ""}${durationMs > 0 ? ` · ${durationMs}ms` : ""}${errorCode > 0 ? ` · error=${errorCode}` : ""}`,
+									),
+									status: successOutput ? "done" : "running",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "assistant_citations") {
+								const count = Number((evt as any).count || 0);
+								const sources = Number((evt as any).sources || 0);
+								appendAgenticStep({
+									stage: "assistant_citations",
+									icon: count > 0 ? "📚" : "○",
+									label: uiText("Trích dẫn nguồn", "Source citations", "源引用"),
+									detail: uiText(
+										count > 0 ? `${count} trích dẫn từ ${sources} nguồn` : "không có trích dẫn",
+										count > 0 ? `${count} citations from ${sources} sources` : "no citations",
+										count > 0 ? `${count}个引用来自${sources}个源` : "无引用",
+									),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
 							}
 							else if (evt.stage === "agentic_step") {
 								const currentStep = Number((evt as any).current || 0);
@@ -3774,6 +4080,38 @@ export default function AiAssistantChat({
 									detail: localizedEvtMessage,
 									status: "done",
 								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "agentic_step_result") {
+								// Step-by-step results from local agentic execution.
+								const stepIndex = Number((evt as any).stepIndex || 1);
+								const stepTotal = Number((evt as any).stepTotal || 1);
+								const stepDesc = String((evt as any).stepDescription || "").trim();
+								const isPartial = Boolean((evt as any).partial);
+								appendAgenticStep({
+									stage: `agentic_step_result_${stepIndex}`,
+									icon: "✏️",
+									label: uiText(
+										`Bước ${stepIndex}/${stepTotal}`,
+										`Step ${stepIndex}/${stepTotal}`,
+										`步骤 ${stepIndex}/${stepTotal}`,
+									),
+									detail: stepDesc || undefined,
+									status: isPartial ? "running" : "done",
+								});
+								// Apply textEdits to CodeMirror immediately for edit-mode steps.
+								const stepTextEdits = (evt as any).textEdits;
+								if (Array.isArray(stepTextEdits) && stepTextEdits.length > 0) {
+									const editsPayload = JSON.stringify({ textEdits: stepTextEdits });
+									applyRealtimeCodeFromText(editsPayload, true);
+								}
+								// Append analysis text section to streaming content for analyze-mode steps.
+								const stepText = String((evt as any).text || "").trim();
+								if (stepText && !stepTextEdits) {
+									pendingStreamChunkRef.current += (pendingStreamChunkRef.current ? "\n\n" : "") + stepText;
+									scheduleStreamFlush();
+								}
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 							}
@@ -3987,7 +4325,8 @@ export default function AiAssistantChat({
 									evt.flowConfirmedByLocal === true
 									|| (evt.localProviderPrimaryUsed === true && isMainFlow),
 								);
-								localFlowVerifiedRef.current = localFlowVerified && isEditModeEvt;
+								const blockAutoApplyByRisk = Boolean((evt as any).editRiskBlockAutoApply === true);
+								localFlowVerifiedRef.current = localFlowVerified && isEditModeEvt && !blockAutoApplyByRisk;
 
 								if (localFlowVerifiedRef.current) {
 									let opSummary = { addCount: 0, editCount: 0, deleteCount: 0 };
@@ -4127,7 +4466,23 @@ export default function AiAssistantChat({
 									}
 								}
 								if (String(evt.responseMode || "").trim().toLowerCase() === "edit") {
-									turnAllowAutoApplyRef.current = true;
+									const blockAutoApplyByRisk = Boolean((evt as any).editRiskBlockAutoApply === true);
+									turnAllowAutoApplyRef.current = !blockAutoApplyByRisk;
+									if (blockAutoApplyByRisk) {
+										showSystemToast("warning", {
+											summary: uiText(
+												"Patch có rủi ro cao, đã chặn auto-apply để tránh sửa sai ngoài phạm vi.",
+												"High-risk patch detected; auto-apply is blocked to avoid out-of-scope edits.",
+												"检测到高风险补丁；已阻止自动应用以避免越界修改。",
+											),
+											nextStep: uiText(
+												"Hãy review text_edits trước khi áp dụng thủ công.",
+												"Review text_edits before applying manually.",
+												"请先审阅 text_edits，再手动应用。",
+											),
+											internalCode: "EDIT_RISK_BLOCK_AUTO_APPLY",
+										});
+									}
 								}
 								if (evt.promptTruncatedByCharCap === true) {
 									message.warning(uiText(
@@ -4138,8 +4493,11 @@ export default function AiAssistantChat({
 								}
 								flushStreamingToUI(true);
 								if (evt.fullResponse) {
-									// Force final apply after backend settles mode to avoid debounce race.
-									applyRealtimeCodeFromText(evt.fullResponse, true);
+									const blockAutoApplyByRisk = Boolean((evt as any).editRiskBlockAutoApply === true);
+									if (!blockAutoApplyByRisk) {
+										// Force final apply after backend settles mode to avoid debounce race.
+										applyRealtimeCodeFromText(evt.fullResponse, true);
+									}
 								}
 								setCompletionState("done");
 								setIsLoading(false);

@@ -148,7 +148,143 @@ public class ApiSpringController {
 
     private static record AiRouteDecision(AiRouteMode mode, int score, String reasonCode) {}
 
+    private static record LocalAssistantRoutePlan(
+        String routeName,
+        int confidence,
+        String reasonCode,
+        boolean quickExit,
+        boolean requiresDeepContext) {}
+
     private static record RequirementGuardDecision(boolean blocked, List<String> questions, List<String> ambiguities) {}
+
+    private static record AssistantVerificationResult(
+        int score,
+        boolean passed,
+        String verdict,
+        List<String> evidenceTokens,
+        int queryOverlap,
+        int codeOverlap,
+        int messageOverlap) {}
+
+    private static record AssistantEditRiskResult(
+        int riskScore,
+        String riskLevel,
+        boolean blockAutoApply,
+        List<String> reasons) {}
+
+    // ─── TOOL REGISTRY & EXECUTION MODELS ───────────────────────────────────────
+
+    /**
+     * Tool Registry Definition.
+     * Maps intent name to execution schema and constraints.
+     */
+    private static record ToolRegistry(
+        String toolName,           // unique: search_local_context, analyze_menu_schema, etc.
+        String intentName,         // maps to intent field in tool-intent plan
+        String description,
+        int maxRetries,            // default retry count per error class
+        int timeoutMs,             // execution timeout
+        boolean localOnly,         // true if must run locally
+        Map<String, String> inputSchema,   // key -> type hint (string, int, boolean, etc.)
+        Map<String, String> outputSchema   // key -> type hint
+    ) {}
+
+    /**
+     * Tool Execution Result.
+     * Status: success | partial | error | timeout | skipped
+     */
+    private static record ToolExecutionResult(
+        String toolName,
+        String status,             // success | partial | error | timeout | skipped
+        Map<String, Object> output,
+        String errorMessage,
+        int errorCode,             // error classification: 0=none, 1=format, 2=grounding, 3=timeout, 4=overflow
+        int attemptCount,
+        long durationMs
+    ) {}
+
+    /**
+     * Tool Execution Step in agentic flow.
+     * Contains intent + execution result + decisions.
+     */
+    private static record ToolExecutionStep(
+        String intent,
+        int priority,
+        String toolName,
+        ToolExecutionResult result,
+        boolean shouldContinueAfter,
+        String nextIntentIfError
+    ) {}
+
+    /**
+     * Citation with source provenance.
+     * Used to ground assistant answers with concrete source references.
+     */
+    private static record AssistantCitation(
+        String sourcePath,        // file path or identifier
+        String sourceScope,       // function, class, section, etc.
+        String snippetText,       // actual code/text excerpt
+        int snippetStartLine,
+        int snippetEndLine,
+        float relevanceScore,     // 0-1 ranking score
+        String reason,            // why this source was selected
+        String sourceName         // optional display name
+    ) {}
+
+    /**
+     * Analysis result of user attachment (image, JSON file, etc).
+     * Used to intelligently decide what data to index into Lucene.
+     */
+    private static record AttachmentAnalysisResult(
+        String attachmentType,      // "json_schema" | "json_data" | "image_text" | "markdown" | "other"
+        List<String> detectedKeywords,  // important terms extracted
+        int estimatedDataChars,
+        String contentPreview,      // first 200 chars
+        boolean shouldIndexToVectorStore,
+        String indexCategory,       // "menu_structure" | "code_schema" | "business_logic" | "reference"
+        List<String> recommendations    // ["load_full_data", "parse_json_fields", etc.]
+    ) {}
+
+    /**
+     * Classification of user input intent - fast path vs deep analysis needed.
+     * Determines whether to answer directly or run full orchestration.
+     */
+    private static record InputIntentClassificationResult(
+        String category,            // "fast_exit" | "code_assist" | "menu_design" | "analysis" | "unknown"
+        int confidence,             // 0-100
+        boolean requiresContext,    // true = need to load data into Lucene
+        boolean canAnswerDirectly,  // true = fast-path answer
+        List<String> contextNeeded, // ["current_code", "menu_schema", "business_logic"]
+        long estimatedTimeMs        // rough estimate
+    ) {}
+
+    /**
+     * Step to execute in multi-step orchestration.
+     * Each step emits a stage event + produces output for next step.
+     */
+    private static record ExecutionStep(
+        String stepId,              // unique per orchestration
+        String name,                // human readable
+        String operation,           // "index_lucene" | "query_ai" | "apply_edit" | "analyze" | etc.
+        Map<String, Object> input,
+        boolean isParallel,         // can run with other steps?
+        String dependsOnStep,       // null if no dependency
+        int timeoutMs
+    ) {}
+
+    /**
+     * Result from local AI orchestration step executor.
+     * Status: success | partial | error | skipped
+     */
+    private static record OrchestrationStepResult(
+        String stepId,
+        String status,
+        String name,
+        Map<String, Object> output,     // step-specific results
+        String errorMessage,
+        long durationMs,
+        int progressPercent             // 0-100 for overall orchestration
+    ) {}
 
     /**
      * Result of local AI intent classification.
@@ -246,6 +382,11 @@ public class ApiSpringController {
         String reasonCode) {}
 
     private final ObjectMapper objectMapper = new ObjectMapper(); // Dùng để parse JSON body
+    
+    // ─── TOOL REGISTRY CACHE ─────────────────────────────────────────────────────
+    private final Map<String, ToolRegistry> toolRegistryCache = new LinkedHashMap<>();
+    private volatile boolean toolRegistryInitialized = false;
+    
     private final RecordManager recordManager;
     private final InitHandler initHandler;
     private final AuthHandler authHandler;
@@ -946,7 +1087,11 @@ public class ApiSpringController {
         this.largeFileChunkingService = largeFileChunkingService;
     }
 
-    @PostMapping(value = {"/ai-code-stream", "/api/ai-code-stream"})
+    @PostMapping(
+        value = {"/ai-code-stream", "/api/ai-code-stream"},
+        produces = MediaType.TEXT_EVENT_STREAM_VALUE,
+        consumes = MediaType.APPLICATION_JSON_VALUE
+    )
     public SseEmitter streamCodeAssistant(@RequestBody Map<String, Object> body) {
         long effectiveSseTimeoutMs = resolveAdaptiveSseTimeoutMs(body);
         SseEmitter emitter = new SseEmitter(effectiveSseTimeoutMs);
@@ -1338,6 +1483,10 @@ public class ApiSpringController {
                         Map<String, Object> orchestrationStats = codeStreamOrchestration.toolStats == null
                             ? Collections.emptyMap()
                             : codeStreamOrchestration.toolStats;
+                        int effectiveScopeMask = parseIntSafe(
+                            orchestrationStats.get("scopedRagScopeMask"),
+                            parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0)
+                        );
                         sendEvent(emitter, jsonOf(
                             "stage", "agentic_plan",
                             "status", "running",
@@ -1346,8 +1495,13 @@ public class ApiSpringController {
                             "savedChars", codeStreamOrchestration.savedChars,
                             "routingTier", codeStreamOrchestration.routingTier,
                             "planStepCount", codeStreamOrchestration.planSteps == null ? 0 : codeStreamOrchestration.planSteps.size(),
-                            "scopeMask", parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0),
-                            "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none"))));
+                            "scopeMask", effectiveScopeMask,
+                            "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")),
+                            "retrievalTopK", parseIntSafe(orchestrationStats.get("scopedRagTopK"), 0),
+                            "retrievalMaxChars", parseIntSafe(orchestrationStats.get("scopedRagMaxChars"), 0),
+                            "retrievalAdaptive", bool(orchestrationStats.get("scopedRagAdaptive"), false),
+                            "retrievalAdaptiveReasons", orchestrationStats.getOrDefault("scopedRagAdaptiveReasons", List.of())
+                        ));
 
                         List<String> planSteps = codeStreamOrchestration.planSteps == null ? List.of() : codeStreamOrchestration.planSteps;
                         int planTotal = Math.min(6, planSteps.size());
@@ -1730,6 +1884,8 @@ public class ApiSpringController {
                     }
                     if (providerText != null && !providerText.isBlank()) {
                         providerText = normalizeAnalyzeOutputContract(providerText, message, responseMode, contextType);
+                        providerText = sanitizePromptEchoLeakage(providerText);
+                        providerText = stripAnalyzeLeakedDynamicContext(providerText);
                         if (shouldRunBroadAnalysisGapFill(
                                 message,
                                 responseMode,
@@ -1794,6 +1950,21 @@ public class ApiSpringController {
                                 "ttftMs", 0,
                                 "estimatedTotalChars", providerText.length(),
                                 "percent", 12));
+                            // Emit step-by-step results for CodeMirror patching and progressive analysis display.
+                            boolean hasOrchestrationSteps = codeStreamOrchestration.enabled
+                                && codeStreamOrchestration.planSteps != null
+                                && !codeStreamOrchestration.planSteps.isEmpty();
+                            int stepResultCount = 0;
+                            if (hasOrchestrationSteps) {
+                                stepResultCount = emitLocalAgenticStepResults(
+                                    emitter,
+                                    requestId,
+                                    providerText,
+                                    codeStreamOrchestration.planSteps,
+                                    responseMode,
+                                    contextType,
+                                    effectiveCodeContext);
+                            }
                             int localStreamChunks = emitSyntheticLocalStreamChunks(
                                 emitter,
                                 requestId,
@@ -1803,6 +1974,7 @@ public class ApiSpringController {
                                 true);
                             codeStreamMeta.put("streamChunkCount", localStreamChunks);
                             codeStreamMeta.put("streamedChars", providerText.length());
+                            codeStreamMeta.put("agenticStepResultCount", stepResultCount);
                             rawResponse = providerText;
                             effectiveModel = "local_provider";
                             localProviderPrimaryUsed = true;
@@ -2307,7 +2479,7 @@ public class ApiSpringController {
                     pName,
                     pType,
                     message,
-                    rawResponse,
+                    completionPayload,
                     codeTurnMeta);
 
                 logger.info("ApiSpringController: ai-code-stream complete requestId={} appId={} model={} elapsedMs={} outputChars={}",
@@ -3270,11 +3442,20 @@ public class ApiSpringController {
         String promptCurrentCode = stripLargeBase64ForPrompt(
             String.valueOf(currentCode == null ? "" : currentCode),
             "ai-code-stream-currentCode");
+        String retrievalPlannerQuery = buildLuceneRetrievalPlannerQuery(
+            message,
+            promptCurrentCode,
+            attachmentsRaw,
+            editorMetadata,
+            contextType,
+            pName,
+            pType);
+        String retrievalPlannedMessage = appendRetrievalPlannerHint(message, retrievalPlannerQuery);
         LocalAiAssistantContextService.ContextBundle localContextBundle = localAiAssistantContextService == null
             ? new LocalAiAssistantContextService.ContextBundle("", "", false, "local_context_service_missing")
             : localAiAssistantContextService.buildContext(
                 appId,
-                message,
+                retrievalPlannedMessage,
                 promptCurrentCode,
                 language,
                 contextType,
@@ -3358,6 +3539,21 @@ public class ApiSpringController {
             sb.append(editorMetadataBlock).append("\n\n");
         }
 
+        String dynamicAnalyzeGuidance = buildDynamicAnalyzeGuidanceBlock(
+            message,
+            promptCurrentCode,
+            contextType,
+            responseMode,
+            attachmentsRaw,
+            editorMetadata,
+            language,
+            pName,
+            pType,
+            cursorLine);
+        if (!dynamicAnalyzeGuidance.isBlank()) {
+            sb.append(dynamicAnalyzeGuidance).append("\n\n");
+        }
+
         if (largeStructuredEditMode) {
             sb.append("CHẾ ĐỘ: Chỉnh sửa dữ liệu rất lớn. KHÔNG trả về full code trực tiếp.\n");
             sb.append("Bắt buộc trả về JSON thuần đúng format:\n");
@@ -3400,20 +3596,16 @@ public class ApiSpringController {
             sb.append("- Không viết lại code sang ngôn ngữ khác.\n");
             sb.append("- Không tự sinh ví dụ code mới, pseudo-code hay hàm minh họa nếu người dùng không yêu cầu.\n");
             sb.append("- Nếu cần trích dẫn, chỉ dùng snippet ngắn từ chính code hiện tại và giữ nguyên ngôn ngữ gốc: ").append(language).append(".\n");
-            sb.append("- Ưu tiên mô tả: mục đích, đầu vào, luồng xử lý, đầu ra và điểm cần lưu ý.\n\n");
+            sb.append("- Tự chọn cấu trúc trả lời theo bằng chứng thực tế, không dùng khung cứng 1-10.\n");
+            sb.append("- Nếu có ít bằng chứng thì trả ngắn; nếu có nhiều bằng chứng thì mở rộng đúng phần quan trọng nhất.\n");
+            sb.append("- Không echo prompt, không tạo phần 'Bổ sung phần còn thiếu', không liệt kê token/prop/key rời rạc.\n\n");
             if (isBroadAnalysisRequest(message, null)) {
                 sb.append("ĐÂY LÀ YÊU CẦU PHÂN TÍCH TOÀN BỘ CODE (END-TO-END).\n");
-                sb.append("BẮT BUỘC TRẢ LỜI ĐỦ CÁC PHẦN SAU:\n");
-                sb.append("1) Mục tiêu nghiệp vụ tổng thể của chức năng/module.\n");
-                sb.append("2) Luồng xử lý chính từ input -> validate -> transform -> output.\n");
-                sb.append("3) Các thành phần/hàm quan trọng và vai trò của từng phần.\n");
-                sb.append("4) Điều kiện rẽ nhánh, rule nghiệp vụ, edge cases.\n");
-                sb.append("5) Dữ liệu vào/ra và side effects (DB/API/cache/event).\n");
-                sb.append("6) Rủi ro kỹ thuật và gợi ý cải thiện.\n");
-                sb.append("Mỗi mục phải có bằng chứng từ code (tên hàm/biến/khối xử lý/luồng dữ liệu) thay vì mô tả chung chung.\n");
-                sb.append("Nếu mục nào chưa đủ bằng chứng, phải ghi rõ \"Thiếu bằng chứng\" và nêu chính xác phần code cần thêm để xác nhận.\n");
-                sb.append("Không được chỉ liệt kê key/prop/token rời rạc (ví dụ rowKey/dateFormatter/options...).\n");
-                sb.append("Phải bám sát code thực tế, tránh trả lời chung chung.\n\n");
+                sb.append("HÃY TỰ SUY NGHĨ VÀ CHỌN NHỮNG KHÍA CẠNH CẦN TRÌNH BÀY DỰA TRÊN CODE, ATTACHMENTS VÀ NGỮ CẢNH HIỆN TẠI.\n");
+                sb.append("Ưu tiên 3 đến 7 khía cạnh có bằng chứng mạnh nhất; bỏ qua khía cạnh yếu hoặc không có bằng chứng.\n");
+                sb.append("Trình bày liền mạch, có thể dùng tiêu đề ngắn nếu thật sự cần, nhưng không được đóng khung cứng theo danh sách số thứ tự.\n");
+                sb.append("Mỗi nhận định quan trọng phải gắn với tên hàm, biến, khối xử lý hoặc dòng luồng dữ liệu cụ thể.\n");
+                sb.append("Nếu thiếu bằng chứng, ghi rõ thiếu ở đâu và dừng ở mức có thể xác nhận, không suy diễn thêm.\n\n");
             }
         }
 
@@ -3439,6 +3631,27 @@ public class ApiSpringController {
             }
         }
 
+        // Extract [LOCAL_ORCHESTRATION_CONTEXT] from message so it is NOT echoed back by
+        // weak local models that treat the last section of the prompt as output template.
+        // Place it as a clearly marked internal section BEFORE ## CODE HIỆN TẠI.
+        String cleanMessage = message;
+        String orchestrationCtxBlock = "";
+        if (message != null) {
+            int orchIdx = message.indexOf("\n\n[LOCAL_ORCHESTRATION_CONTEXT]\n");
+            if (orchIdx >= 0) {
+                cleanMessage = message.substring(0, orchIdx);
+                orchestrationCtxBlock = message.substring(orchIdx + "\n\n[LOCAL_ORCHESTRATION_CONTEXT]\n".length()).trim();
+            }
+        }
+
+        if (!orchestrationCtxBlock.isBlank()) {
+            String orchCap = truncateMiddle(orchestrationCtxBlock, 6000);
+            sb.append("## AI_INTERNAL_REASONING_CONTEXT\n");
+            sb.append("QUAN TRỌNG: Đây là metadata nội tại hỗ trợ suy luận. KHÔNG được copy, echo hoặc liệt kê lại nội dung phần này trong câu trả lời.\n");
+            sb.append("Chỉ dùng tên hàm/biến/luồng từ phần này làm bằng chứng khi trình bày phân tích.\n\n");
+            sb.append(orchCap).append("\n\n");
+        }
+
         if (!promptCurrentCode.isBlank()) {
             String safeCode = truncateMiddle(promptCurrentCode, Math.max(4000, aiCodeStreamMaxCurrentCodeChars));
             sb.append("## CODE HIỆN TẠI (").append(language).append(")\n```").append(language).append("\n");
@@ -3446,12 +3659,12 @@ public class ApiSpringController {
             sb.append("\n```\n\n");
         }
 
-        String requirementContract = buildRequirementContractForPrompt(message, contextType, responseMode);
+        String requirementContract = buildRequirementContractForPrompt(cleanMessage, contextType, responseMode);
         if (!requirementContract.isBlank()) {
             sb.append(requirementContract).append("\n\n");
         }
 
-        sb.append("## YÊU CẦU\n").append(message).append("\n");
+        sb.append("## YÊU CẦU\n").append(cleanMessage).append("\n");
 
         return sb.toString();
     }
@@ -3648,6 +3861,90 @@ public class ApiSpringController {
             chunks += 1;
         }
         return chunks;
+    }
+
+    /**
+     * Emits {@code agentic_step_result} SSE events so the frontend can apply code
+     * changes to CodeMirror step by step and animate the agentic-steps panel.
+     *
+     * <p>For <b>edit</b> mode: parses the output into SEARCH/REPLACE textEdits and emits one
+     * event per batch.  For <b>analyze</b> mode: splits the text into sections and
+     * streams each section progressively to the chat.
+     *
+     * @return number of step-result events emitted (0 means nothing useful to emit)
+     */
+    private int emitLocalAgenticStepResults(
+            SseEmitter emitter,
+            String requestId,
+            String providerText,
+            List<String> planSteps,
+            String responseMode,
+            String contextType,
+            String effectiveCodeContext) {
+        String safeText = String.valueOf(providerText == null ? "" : providerText).trim();
+        if (safeText.isBlank()) return 0;
+
+        boolean isEdit = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+            && !isMenuJsonContext(contextType);
+        boolean isAnalyze = "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        int planSize = planSteps == null ? 0 : planSteps.size();
+
+        if (isEdit) {
+            // Salvage SEARCH/REPLACE blocks as canonicalized textEdits and emit them.
+            try {
+                String salvaged = salvageSearchReplaceAsTextEdits(safeText, effectiveCodeContext);
+                String canonicalized = canonicalizeLineTextEditsPayload(salvaged, effectiveCodeContext);
+                List<Map<String, Object>> textEdits = parseNormalizedLineTextEdits(canonicalized);
+                if (textEdits.isEmpty()) return 0;
+                int total = textEdits.size();
+                for (int i = 0; i < total; i++) {
+                    String desc = (planSize > 0 && i < planSize)
+                        ? planSteps.get(i)
+                        : "Áp dụng thay đổi " + (i + 1);
+                    sendEvent(emitter, jsonOf(
+                        "stage", "agentic_step_result",
+                        "requestId", requestId,
+                        "stepIndex", i + 1,
+                        "stepTotal", total,
+                        "stepDescription", desc,
+                        "textEdits", List.of(textEdits.get(i)),
+                        "partial", i < total - 1));
+                }
+                return total;
+            } catch (Exception ignored) {
+                return 0;
+            }
+        }
+
+        if (isAnalyze) {
+            // Split analyze output by section headers (## or numbered lines).
+            List<String> sections = new ArrayList<>();
+            String[] rawSections = safeText.split("(?m)(?=^#{1,3} )|(?=^\\d+[\\.\\)\\s]{1,3}[A-Z\\p{Lu}])");
+            for (String s : rawSections) {
+                String trimmed = s.trim();
+                if (trimmed.length() >= 30) {
+                    sections.add(trimmed);
+                }
+            }
+            if (sections.size() <= 1) return 0; // Nothing to split — single-block text, keep as-is
+            int total = sections.size();
+            for (int i = 0; i < total; i++) {
+                String desc = (planSize > 0 && i < planSize)
+                    ? planSteps.get(i)
+                    : "Phân tích phần " + (i + 1);
+                sendEvent(emitter, jsonOf(
+                    "stage", "agentic_step_result",
+                    "requestId", requestId,
+                    "stepIndex", i + 1,
+                    "stepTotal", total,
+                    "stepDescription", desc,
+                    "text", sections.get(i),
+                    "partial", i < total - 1));
+            }
+            return total;
+        }
+
+        return 0;
     }
 
     private String streamWithAutoContinue(
@@ -7784,6 +8081,7 @@ public class ApiSpringController {
         sb.append("Bạn là AI code analyst. Chỉ bổ sung các mục còn thiếu trong câu trả lời hiện có.\n");
         sb.append(outputLanguageRule).append("\n");
         sb.append("Không lặp lại toàn bộ nội dung cũ. Không markdown rườm rà. Không trả lời chung chung.\n");
+        sb.append("Mỗi mục chỉ được xuất hiện đúng 1 lần, không lặp lại tiêu đề/mục đã trả lời.\n");
         sb.append("<|im_end|>\n");
         sb.append("<|im_start|>user\n");
         sb.append("YEU_CAU_GOC:\n").append(safeRequest).append("\n\n");
@@ -7857,9 +8155,333 @@ public class ApiSpringController {
             }
         }
 
+        text = stripAnalyzeLeakedDynamicContext(text);
+        text = dedupeAnalyzeNarrativeBlocks(text);
+        text = normalizeAnalyzeFinalOutput(text);
+
+        if (looksLikeCssDomFragment(text)) {
+            return "AI local không phân tích được nội dung này. Vui lòng thử rút gọn đoạn code hoặc diễn đạt lại yêu cầu.";
+        }
+
         text = text.replaceAll("(?im)^\\s*luong[_\\s/-]*xu[_\\s/-]*ly\\s*:\\s*\\d{3,}\\s*$", "luong_xu_ly: chưa xác định rõ");
         text = text.replaceAll("\\n{3,}", "\\n\\n").trim();
         return text;
+    }
+
+    /**
+     * Some weak-model answers accidentally echo retrieval source lines from dynamic Lucene
+     * context (e.g. dyn_ctx_orchestration_* / source=primary_flow). Those lines are
+     * not user-facing analysis and should be removed.
+     */
+    private String stripAnalyzeLeakedDynamicContext(String text) {
+        String safe = String.valueOf(text == null ? "" : text);
+        if (safe.isBlank()) {
+            return "";
+        }
+        String[] lines = safe.split("\\n");
+        StringBuilder out = new StringBuilder(safe.length());
+        int leakTailBudget = 0;
+        for (String rawLine : lines) {
+            String line = String.valueOf(rawLine == null ? "" : rawLine).trim();
+            String lowered = line.toLowerCase(Locale.ROOT);
+
+            if (leakTailBudget > 0) {
+                boolean boundaryLine = line.isBlank()
+                    || lowered.matches("^\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(am|pm)?$")
+                    || lowered.startsWith("hãy ")
+                    || lowered.startsWith("ket thuc xu ly")
+                    || lowered.startsWith("kết thúc xử lý")
+                    || lowered.startsWith("hoan thanh")
+                    || lowered.startsWith("hoàn thành")
+                    || lowered.startsWith("reqjob_");
+                if (!boundaryLine) {
+                    leakTailBudget--;
+                    continue;
+                }
+                leakTailBudget = 0;
+            }
+
+            boolean leakedDynSource = lowered.startsWith("dyn_ctx_orchestration_")
+                || lowered.startsWith("dyn_ctx_currentcode")
+                || lowered.startsWith("dyn_ctx_")
+                || lowered.startsWith("source=primary_flow")
+                || lowered.startsWith("source=multimodal")
+                || lowered.startsWith("source: dyn_ctx_")
+                || lowered.startsWith("orchestration_dynamic_memory_source=")
+                || lowered.startsWith("[reused_context]")
+                || lowered.startsWith("[session_continuity]")
+                || lowered.startsWith("[current_request]")
+                || lowered.startsWith("## user_memory")
+                || lowered.startsWith("### turn [")
+                || lowered.startsWith("localscanner")
+                || lowered.startsWith("scanner_")
+                || lowered.startsWith("input", 0) && lowered.contains("checked:");
+            if (leakedDynSource) {
+                leakTailBudget = Math.max(leakTailBudget, 4);
+                continue;
+            }
+            out.append(rawLine).append('\n');
+        }
+        return out.toString().replaceAll("\\n{3,}", "\\n\\n").trim();
+    }
+
+    /**
+     * Deduplicate repeated narrative blocks that sometimes appear in local analyze mode,
+     * especially repeated "rui_ro_va_goi_y" sections.
+     */
+    private String dedupeAnalyzeNarrativeBlocks(String text) {
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return "";
+        }
+        String[] blocks = safe.split("\\n\\s*\\n+");
+        StringBuilder out = new StringBuilder(safe.length());
+        Set<String> seen = new LinkedHashSet<>();
+        for (String block : blocks) {
+            String normalized = String.valueOf(block == null ? "" : block)
+                .replaceAll("(?im)^\\s*\\d+\\)\\s*", "")
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toLowerCase(Locale.ROOT);
+            if (normalized.isBlank()) {
+                continue;
+            }
+            // Guard against repeated boilerplate loops from tiny local model.
+            if (!seen.add(normalized)) {
+                continue;
+            }
+            if (out.length() > 0) {
+                out.append("\n\n");
+            }
+            out.append(block.trim());
+        }
+        return out.toString().trim();
+    }
+
+    private String normalizeAnalyzeFinalOutput(String text) {
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return "";
+        }
+
+        String[] lines = safe.split("\\n");
+        StringBuilder out = new StringBuilder(safe.length());
+        boolean skipBoilerplate = false;
+        for (String rawLine : lines) {
+            String line = String.valueOf(rawLine == null ? "" : rawLine).trim();
+            String lowered = line.toLowerCase(Locale.ROOT);
+
+            if (line.startsWith("Tóm tắt yêu cầu:")) {
+                continue;
+            }
+            if (lowered.startsWith("bổ sung phần còn thiếu")) {
+                skipBoilerplate = true;
+                continue;
+            }
+            if (skipBoilerplate) {
+                if (line.startsWith("##") || line.matches("^\\d+\\)\\s+.*") || line.isBlank()) {
+                    skipBoilerplate = false;
+                } else {
+                    continue;
+                }
+            }
+            if (line.matches("^\\d+\\)\\s+.*")) {
+                int section = parseLeadingSectionNumber(line);
+                if (section >= 1 && section <= 10) {
+                    continue;
+                }
+            }
+            if (lowered.startsWith("## chú ý") || lowered.startsWith("## chu y")) {
+                continue;
+            }
+            if (out.length() > 0) {
+                out.append('\n');
+            }
+            out.append(rawLine);
+        }
+
+        String normalized = out.toString().replaceAll("\\n{3,}", "\\n\\n").trim();
+        return normalized.isBlank() ? safe : normalized;
+    }
+
+    private String buildDynamicAnalyzeGuidanceBlock(
+            String message,
+            String currentCode,
+            String contextType,
+            String responseMode,
+            Object attachmentsRaw,
+            Map<String, Object> editorMetadata,
+            String language,
+            String pName,
+            Integer pType,
+            int cursorLine) {
+        if (!"analyze".equalsIgnoreCase(String.valueOf(responseMode))) {
+            return "";
+        }
+
+        String code = String.valueOf(currentCode == null ? "" : currentCode).trim();
+        String msg = String.valueOf(message == null ? "" : message).trim();
+        boolean menuContext = isMenuJsonContext(contextType) || looksLikeJsonMenuCode(code);
+        boolean hasAttachments = attachmentsRaw instanceof List<?> list && !list.isEmpty();
+        boolean hasImages = false;
+        boolean hasJsonAttachments = false;
+        if (attachmentsRaw instanceof List<?> list) {
+            for (Object att : list) {
+                if (!(att instanceof Map<?, ?> attMap)) {
+                    continue;
+                }
+                String mime = String.valueOf(readAttachmentMetaValue(attMap, "mimeType", "mime_type")).toLowerCase(Locale.ROOT);
+                String name = String.valueOf(readAttachmentMetaValue(attMap, "name")).toLowerCase(Locale.ROOT);
+                if (mime.startsWith("image/") || name.matches(".*\\.(png|jpg|jpeg|gif|webp)$")) {
+                    hasImages = true;
+                }
+                if (mime.contains("json") || name.endsWith(".json") || name.endsWith(".jsonl")) {
+                    hasJsonAttachments = true;
+                }
+            }
+        }
+
+        List<String> lenses = new ArrayList<>();
+        if (menuContext) {
+            lenses.add("menu tree structure, node relationships, validation rules, merge/update flow, persistence side effects");
+        } else if (looksLikeReactUiCode(code)) {
+            lenses.add("component structure, props/state/hooks, event handlers, render flow, data fetch/update flow");
+        } else if (looksLikeJavaServiceCode(code)) {
+            lenses.add("controller/service boundaries, request validation, branching rules, persistence/API/cache side effects");
+        } else {
+            lenses.add("input parsing, core algorithm, branching logic, side effects, output shape");
+        }
+        if (hasAttachments) {
+            lenses.add("attachment-aware reasoning for images, JSON, or text files if they affect the answer");
+        }
+        if (hasJsonAttachments) {
+            lenses.add("JSON schema, keys, arrays, entity relations, and data constraints from attached JSON");
+        }
+        if (hasImages) {
+            lenses.add("image metadata and visible UI intent if the image changes code/menu interpretation");
+        }
+        if (!msg.isBlank()) {
+            lenses.add("user intent: " + truncateMiddle(msg, 180));
+        }
+        if (cursorLine > 0) {
+            lenses.add("cursorLine=" + cursorLine + " as the first local anchor");
+        }
+        if (pName != null && !String.valueOf(pName).trim().isBlank()) {
+            lenses.add("selected target=" + truncateMiddle(String.valueOf(pName).trim(), 80));
+        }
+        if (pType != null) {
+            lenses.add("target type=" + pType);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("## DYNAMIC_ANALYSIS_GUIDANCE\n");
+        sb.append("Hãy tự quyết định cách tổ chức câu trả lời dựa trên bằng chứng trong code và ngữ cảnh hiện có.\n");
+        sb.append("Không dùng khung cứng cố định; chỉ chọn các phần thật sự có giá trị.\n");
+        sb.append("Khía cạnh nên ưu tiên hiện tại: ").append(String.join("; ", lenses)).append(".\n");
+        sb.append("Nếu evidence mỏng, trả ngắn. Nếu evidence dày, mở rộng đúng phần quan trọng nhất.\n");
+        sb.append("Nếu phải suy luận, hãy nói rõ đó là suy luận và gắn với dấu hiệu nào trong code.\n");
+        if (editorMetadata != null && !editorMetadata.isEmpty()) {
+            sb.append("Editor metadata available, but use only as supporting context; never override currentCode.\n");
+        }
+        return sb.toString();
+    }
+
+    private boolean looksLikeJsonMenuCode(String code) {
+        String safe = String.valueOf(code == null ? "" : code).trim();
+        if (safe.isBlank()) {
+            return false;
+        }
+        return safe.startsWith("{") || safe.startsWith("[") || safe.contains("\"menu\"") || safe.contains("\"children\"");
+    }
+
+    private boolean looksLikeReactUiCode(String code) {
+        String safe = String.valueOf(code == null ? "" : code).toLowerCase(Locale.ROOT);
+        if (safe.isBlank()) {
+            return false;
+        }
+        return safe.contains("react")
+            || safe.contains("jsx")
+            || safe.contains("tsx")
+            || safe.contains("useState(")
+            || safe.contains("useeffect(")
+            || safe.contains("return (")
+            || safe.contains("function ") && safe.contains("props")
+            || safe.contains("<div")
+            || safe.contains("<table");
+    }
+
+    private boolean looksLikeJavaServiceCode(String code) {
+        String safe = String.valueOf(code == null ? "" : code).toLowerCase(Locale.ROOT);
+        if (safe.isBlank()) {
+            return false;
+        }
+        return safe.contains("@service")
+            || safe.contains("@controller")
+            || safe.contains("public class")
+            || safe.contains("private void")
+            || safe.contains("responseentity")
+            || safe.contains("sseemitter")
+            || safe.contains("@requestmapping")
+            || safe.contains("@postmapping");
+    }
+
+    private Object readAttachmentMetaValue(Map<?, ?> map, String... keys) {
+        if (map == null || keys == null || keys.length == 0) {
+            return null;
+        }
+        for (String key : keys) {
+            if (key == null || key.isBlank()) {
+                continue;
+            }
+            Object value = map.get(key);
+            if (value != null && !String.valueOf(value).trim().isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private int parseLeadingSectionNumber(String line) {
+        Matcher matcher = Pattern.compile("^(\\d+)\\)\\s+").matcher(String.valueOf(line == null ? "" : line).trim());
+        if (!matcher.find()) {
+            return -1;
+        }
+        return parseIntSafe(matcher.group(1), -1);
+    }
+
+    /**
+     * Detects whether the LLM output is a low-quality extraction of CSS/DOM tokens
+     * (e.g. listing CSS variable names, HTML tag names) rather than a real analysis.
+     * Typical symptom: lines like "- var(--kqxs-border, #d9d9d9)", "- div", "- flex".
+     */
+    private boolean looksLikeCssDomFragment(String text) {
+        if (text == null || text.isBlank()) return false;
+        String[] lines = text.split("\\n");
+        int totalLines = 0;
+        int cssDomLines = 0;
+        for (String raw : lines) {
+            String line = raw.trim();
+            if (line.isEmpty()) continue;
+            totalLines++;
+            // CSS variable references
+            if (line.contains("var(--")) {
+                cssDomLines++;
+                continue;
+            }
+            // Bare CSS property values like "1px solid ...", "#abc", "rgba(", "px", "em", "%"
+            if (line.matches(".*\\b\\d+px\\b.*|.*\\brgba?\\(.*|.*#[0-9a-fA-F]{3,6}\\b.*")) {
+                cssDomLines++;
+                continue;
+            }
+            // Lines that are a single HTML/CSS keyword token (often extracted from template)
+            if (line.matches("^[-*]?\\s*(div|span|flex|grid|block|inline|none|auto|solid|absolute|relative|fixed|sticky|overflow|padding|margin|border|background|color|font|display|position|width|height|z-index|cursor|pointer|transform|transition|opacity|visibility|white-space|text-align|align-items|justify-content|box-shadow|border-radius)\\s*$")) {
+                cssDomLines++;
+                continue;
+            }
+        }
+        if (totalLines < 3) return false;
+        double ratio = (double) cssDomLines / totalLines;
+        return ratio >= 0.35;
     }
 
     private String alignAnalyzeOutputLanguageWithLocal(String rendered, String requestText) {
@@ -9846,6 +10468,998 @@ public class ApiSpringController {
         };
     }
 
+
+            private LocalAssistantRoutePlan buildLocalAssistantRoutePlan(
+                    String message,
+                    String currentCode,
+                    String contextType,
+                    String responseMode,
+                    List<Map<String, Object>> attachments,
+                    LocalIntentClassification intentClass) {
+                LocalIntentClassification intent = intentClass == null ? LocalIntentClassification.unknown() : intentClass;
+                String safeMessage = String.valueOf(message == null ? "" : message).trim();
+                String safeCode = String.valueOf(currentCode == null ? "" : currentCode).trim();
+                boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+                boolean menuContext = isMenuJsonContext(contextType) || intent.needsMenuContext();
+                boolean codeContext = intent.needsCodeContext() || editMode || (!safeCode.isBlank() && !menuContext);
+                boolean quickDirect = shouldUseLocalFastQuestionPath(intent, safeMessage, contextType, responseMode)
+                    || shouldForceDirectForGeneralQuestion(safeMessage, intent.type(), intent.contextKind())
+                    || isObviousDirectConversation(safeMessage);
+                boolean offTopic = !quickDirect
+                    && !menuContext
+                    && !codeContext
+                    && isLikelyOutOfScopeRequest(safeMessage, safeCode, attachments, contextType, responseMode);
+
+                if (offTopic) {
+                    int confidence = Math.max(70, intent.confidence());
+                    return new LocalAssistantRoutePlan("OFF_TOPIC_FAST_EXIT", confidence, "off_topic_fast_reply", true, false);
+                }
+                if (quickDirect) {
+                    int confidence = Math.max(60, intent.confidence());
+                    return new LocalAssistantRoutePlan("FAST_DIRECT_ANSWER", confidence, "direct_question", true, false);
+                }
+                if (menuContext) {
+                    int confidence = Math.max(55, intent.confidence());
+                    return new LocalAssistantRoutePlan("MENU_CONTEXT", confidence, "menu_context_required", false, true);
+                }
+                if (codeContext) {
+                    int confidence = Math.max(55, intent.confidence());
+                    return new LocalAssistantRoutePlan("CODE_CONTEXT", confidence, "code_context_required", false, true);
+                }
+                int confidence = Math.max(50, intent.confidence());
+                return new LocalAssistantRoutePlan("GENERAL_ANALYSIS", confidence, "default_analysis", false, true);
+            }
+
+            private boolean shouldRunHeavyOrchestrationForRoute(LocalAssistantRoutePlan routePlan) {
+                if (routePlan == null) {
+                    return true;
+                }
+                String routeName = String.valueOf(routePlan.routeName() == null ? "" : routePlan.routeName())
+                    .trim()
+                    .toUpperCase(Locale.ROOT);
+                if ("FAST_DIRECT_ANSWER".equals(routeName)) {
+                    return false;
+                }
+                if ("OFF_TOPIC_FAST_EXIT".equals(routeName)) {
+                    return true;
+                }
+                return routePlan.requiresDeepContext();
+            }
+
+            private boolean shouldBuildHeavyGlobalContextForRoute(
+                    LocalAssistantRoutePlan routePlan,
+                    String responseMode,
+                    String contextType) {
+                if (routePlan == null) {
+                    return true;
+                }
+                String routeName = String.valueOf(routePlan.routeName() == null ? "" : routePlan.routeName())
+                    .trim()
+                    .toUpperCase(Locale.ROOT);
+                if ("FAST_DIRECT_ANSWER".equals(routeName)
+                        && !"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+                    return false;
+                }
+                if ("OFF_TOPIC_FAST_EXIT".equals(routeName)) {
+                    return false;
+                }
+                if (isMenuJsonContext(contextType)) {
+                    return true;
+                }
+                return routePlan.requiresDeepContext();
+            }
+
+            private boolean isLikelyOutOfScopeRequest(
+                    String message,
+                    String currentCode,
+                    List<Map<String, Object>> attachments,
+                    String contextType,
+                    String responseMode) {
+                if (isMenuJsonContext(contextType) || "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+                    return false;
+                }
+                if (String.valueOf(currentCode == null ? "" : currentCode).trim().length() > 0) {
+                    return false;
+                }
+                if (attachments != null && !attachments.isEmpty()) {
+                    return false;
+                }
+
+                String normalized = Normalizer.normalize(String.valueOf(message == null ? "" : message), Normalizer.Form.NFD)
+                    .replaceAll("\\p{M}+", "")
+                    .toLowerCase(Locale.ROOT);
+                if (normalized.isBlank()) {
+                    return false;
+                }
+
+                boolean codeSignal = Pattern.compile(
+                    "\\b(code|function|class|bug|fix|refactor|implement|menu|json|schema|api|endpoint|sql|java|javascript|typescript|vue|html|css|file|module|component|table|node|route|controller|service|patch|edit|update|modify|xoa|sua|them|chen|doi)\\b",
+                    Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
+                    .matcher(normalized)
+                    .find();
+                if (codeSignal) {
+                    return false;
+                }
+
+                return Pattern.compile(
+                    "\\b(weather|news|joke|music|song|movie|travel|hotel|ticket|recipe|game|football|soccer|translate|dịch|dịch\s+thuật|thơ|poem|story|write\s+a\s+poem|generate\s+an\s+essay|make\s+me\s+a\s+plan)\\b",
+                    Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
+                    .matcher(normalized)
+                    .find();
+            }
+
+    private String appendRetrievalPlannerHint(String message, String retrievalPlannerQuery) {
+        String safeMessage = String.valueOf(message == null ? "" : message).trim();
+        String planner = String.valueOf(retrievalPlannerQuery == null ? "" : retrievalPlannerQuery).trim();
+        if (planner.isBlank()) {
+            return safeMessage;
+        }
+        return safeMessage + "\n\n[RETRIEVAL_PLANNER_QUERY]\n" + planner;
+    }
+
+    private String buildLuceneRetrievalPlannerQuery(
+            String message,
+            String currentCode,
+            Object attachmentsRaw,
+            Map<String, Object> editorMetadata,
+            String contextType,
+            String pName,
+            Integer pType) {
+        LinkedHashSet<String> tokens = new LinkedHashSet<>();
+
+        String safeMessage = String.valueOf(message == null ? "" : message).trim();
+        if (!safeMessage.isBlank()) {
+            addPlannerTokens(tokens, safeMessage, 24);
+        }
+
+        String safeCode = String.valueOf(currentCode == null ? "" : currentCode);
+        if (!safeCode.isBlank()) {
+            addPlannerTokens(tokens, extractCodeSymbolHints(safeCode), 20);
+        }
+
+        if (attachmentsRaw instanceof List<?> list) {
+            for (Object item : list) {
+                if (!(item instanceof Map<?, ?> map)) {
+                    continue;
+                }
+                addPlannerTokens(tokens, String.valueOf(readAttachmentMetaValue(map, "name", "contextRole", "kind", "mimeType", "mime_type")), 8);
+                addPlannerTokens(tokens, String.valueOf(readAttachmentMetaValue(map, "summary")), 8);
+                if (tokens.size() >= 56) {
+                    break;
+                }
+            }
+        }
+
+        int cursorLine = parseIntSafe(editorMetadata == null ? null : editorMetadata.get("cursorLine"), -1);
+        if (cursorLine <= 0) {
+            cursorLine = parseIntSafe(editorMetadata == null ? null : editorMetadata.get("line"), -1);
+        }
+
+        StringBuilder query = new StringBuilder();
+        if (!tokens.isEmpty()) {
+            query.append(String.join(" ", tokens));
+        }
+        if (!String.valueOf(contextType == null ? "" : contextType).trim().isBlank()) {
+            query.append(" | context=").append(String.valueOf(contextType).trim().toLowerCase(Locale.ROOT));
+        }
+        if (!String.valueOf(pName == null ? "" : pName).trim().isBlank()) {
+            query.append(" | target=").append(truncateMiddle(String.valueOf(pName).trim(), 80));
+        }
+        if (pType != null) {
+            query.append(" | targetType=").append(pType);
+        }
+        if (cursorLine > 0) {
+            query.append(" | cursorLine=").append(cursorLine);
+        }
+
+        return truncateMiddle(query.toString().trim(), 380);
+    }
+
+    private void addPlannerTokens(LinkedHashSet<String> out, String source, int maxAdd) {
+        if (out == null || maxAdd <= 0) {
+            return;
+        }
+        String text = String.valueOf(source == null ? "" : source).toLowerCase(Locale.ROOT);
+        if (text.isBlank()) {
+            return;
+        }
+        int added = 0;
+        Matcher matcher = Pattern.compile("[\\p{L}\\p{N}_$.-]{3,}").matcher(text);
+        while (matcher.find()) {
+            String token = String.valueOf(matcher.group() == null ? "" : matcher.group()).trim();
+            if (token.isBlank() || token.length() < 3) {
+                continue;
+            }
+            if (out.add(token)) {
+                added++;
+            }
+            if (added >= maxAdd || out.size() >= 64) {
+                break;
+            }
+        }
+    }
+
+    // ─── TOOL REGISTRY INITIALIZATION ────────────────────────────────────────────
+
+    private void initializeToolRegistry() {
+        if (toolRegistryInitialized) return;
+        synchronized (toolRegistryCache) {
+            if (toolRegistryInitialized) return;
+
+            // Tool 1: search_local_context
+            toolRegistryCache.put("search_local_context", new ToolRegistry(
+                "search_local_context",
+                "search_local_context",
+                "Search local code/menu context by semantic query",
+                2,  // maxRetries
+                5000,  // timeoutMs
+                true,  // localOnly
+                Map.of("query", "string", "limit", "int", "budget", "string"),
+                Map.of("results", "array", "score", "float", "path", "string")
+            ));
+
+            // Tool 2: analyze_menu_schema
+            toolRegistryCache.put("analyze_menu_schema", new ToolRegistry(
+                "analyze_menu_schema",
+                "analyze_menu_schema",
+                "Analyze menu tree structure and identify gaps/issues",
+                1,
+                4000,
+                true,
+                Map.of("menuJson", "string", "userMessage", "string"),
+                Map.of("analysis", "string", "issues", "array", "gaps", "array")
+            ));
+
+            // Tool 3: analyze_code_scope
+            toolRegistryCache.put("analyze_code_scope", new ToolRegistry(
+                "analyze_code_scope",
+                "analyze_code_scope",
+                "Analyze code scope and identify relevant symbols/functions",
+                1,
+                4000,
+                true,
+                Map.of("code", "string", "cursorLine", "int", "userMessage", "string"),
+                Map.of("symbols", "array", "scope", "string", "relevantRanges", "array")
+            ));
+
+            // Tool 4: propose_structured_text_edits
+            toolRegistryCache.put("propose_structured_text_edits", new ToolRegistry(
+                "propose_structured_text_edits",
+                "propose_structured_text_edits",
+                "Propose structured text edits (SEARCH/REPLACE or line ranges)",
+                2,
+                6000,
+                true,
+                Map.of("code", "string", "intent", "string", "maxEdits", "int"),
+                Map.of("edits", "array", "format", "string", "valid", "boolean")
+            ));
+
+            // Tool 5: validate_edit_contract
+            toolRegistryCache.put("validate_edit_contract", new ToolRegistry(
+                "validate_edit_contract",
+                "validate_edit_contract",
+                "Validate structured edit format and syntax",
+                1,
+                3000,
+                true,
+                Map.of("edits", "array", "code", "string", "validateStructure", "boolean"),
+                Map.of("valid", "boolean", "errors", "array", "warnings", "array")
+            ));
+
+            // Tool 6: synthesize_grounded_answer
+            toolRegistryCache.put("synthesize_grounded_answer", new ToolRegistry(
+                "synthesize_grounded_answer",
+                "synthesize_grounded_answer",
+                "Synthesize answer grounded in retrieved context",
+                1,
+                5000,
+                true,
+                Map.of("context", "string", "userMessage", "string", "source", "string"),
+                Map.of("answer", "string", "citations", "array", "confidence", "int")
+            ));
+
+            // Tool 7: self_check_consistency
+            toolRegistryCache.put("self_check_consistency", new ToolRegistry(
+                "self_check_consistency",
+                "self_check_consistency",
+                "Self-check response consistency with user intent",
+                1,
+                3000,
+                true,
+                Map.of("response", "string", "userMessage", "string", "mode", "string"),
+                Map.of("consistent", "boolean", "issues", "array", "confidence", "int")
+            ));
+
+            toolRegistryInitialized = true;
+            logger.info("Tool registry initialized with {} tools", toolRegistryCache.size());
+        }
+    }
+
+    private ToolRegistry getToolRegistry(String intentName) {
+        if (!toolRegistryInitialized) {
+            initializeToolRegistry();
+        }
+        return toolRegistryCache.getOrDefault(intentName, null);
+    }
+
+    // ─── ATTACHMENT ANALYZER ─────────────────────────────────────────────────────
+
+    private AttachmentAnalysisResult analyzeUserAttachment(Map<String, Object> attachment) {
+        String attachmentType = String.valueOf(attachment.getOrDefault("type", "")).trim().toLowerCase();
+        String contentPreview = String.valueOf(attachment.getOrDefault("content", "")).trim();
+        int contentSize = contentPreview.length();
+
+        if (contentPreview.isEmpty()) {
+            return new AttachmentAnalysisResult(
+                "empty", List.of(), 0, "", false, "unknown", List.of());
+        }
+
+        // Detect attachment type
+        String detectedType = "other";
+        boolean isJson = contentPreview.startsWith("{") || contentPreview.startsWith("[");
+        boolean isMarkdown = contentPreview.contains("```") || contentPreview.contains("# ");
+        boolean isCode = contentPreview.contains("function ") || contentPreview.contains("class ");
+
+        List<String> keywords = extractKeywordsFromContent(contentPreview);
+        String category = "reference";
+
+        if (isJson) {
+            detectedType = "json_schema";
+            // Parse JSON structure hints
+            if (contentPreview.contains("\"table") || contentPreview.contains("\"menu")) {
+                category = "menu_structure";
+            } else if (contentPreview.contains("\"function") || contentPreview.contains("\"method")) {
+                category = "code_schema";
+            }
+        } else if (isMarkdown) {
+            detectedType = "markdown";
+            category = "business_logic";
+        } else if (isCode) {
+            detectedType = "code_snippet";
+            category = "code_schema";
+        }
+
+        List<String> recommendations = new ArrayList<>();
+        if (contentSize > 5000) {
+            recommendations.add("large_content_chunk");
+            recommendations.add("consider_vectorization");
+        }
+        if (isJson) {
+            recommendations.add("parse_json_schema");
+        }
+        if (isMarkdown || isCode) {
+            recommendations.add("extract_structure");
+        }
+
+        String preview = contentPreview.length() > 200
+            ? contentPreview.substring(0, 200) + "…"
+            : contentPreview;
+
+        return new AttachmentAnalysisResult(
+            detectedType,
+            keywords,
+            contentSize,
+            preview,
+            contentSize > 200,  // shouldIndexToVectorStore
+            category,
+            recommendations
+        );
+    }
+
+    private String generateFastExitReply(String message, String uiLang) {
+        String msg = message.toLowerCase(Locale.ROOT).trim();
+        
+        // Greetings
+        if (msg.matches(".*\\b(hello|hi|xin chào|chào)\\b.*")) {
+            return uiTextByLang(uiLang,
+                "Xin chào! Tôi là trợ lý AI cục bộ. Có gì tôi có thể giúp bạn với code hoặc menu design?",
+                "Hello! I'm your local AI assistant. How can I help you with code or menu design?",
+                "你好！我是您的本地 AI 助手。我可以帮您处理代码或菜单设计方面的问题。");
+        }
+        
+        // Thanks
+        if (msg.matches(".*\\b(thank|cảm ơn|谢谢)\\b.*")) {
+            return uiTextByLang(uiLang,
+                "Vui lòng liên hệ tôi nếu cần thêm trợ giúp!",
+                "Feel free to reach out if you need more help!",
+                "如需更多帮助，请随时告诉我！");
+        }
+        
+        // Bye
+        if (msg.matches(".*\\b(bye|tạm biệt|goodbye|再见)\\b.*")) {
+            return uiTextByLang(uiLang,
+                "Tạm biệt! Chúc bạn làm việc vui vẻ.",
+                "Goodbye! Have a great day!",
+                "再见！祝您有个美好的一天。");
+        }
+        
+        // Default off-topic
+        return uiTextByLang(uiLang,
+            "Yêu cầu này không liên quan trực tiếp đến code hoặc menu design. Vui lòng hỏi về: sửa code, tối ưu, phân tích, hoặc thiết kế menu.",
+            "This request is not directly related to code or menu design. Please ask about: code fixes, optimization, analysis, or menu design.",
+            "此请求与代码或菜单设计没有直接关系。请提问有关：代码修复、优化、分析或菜单设计的问题。");
+    }
+
+    private List<String> extractKeywordsFromContent(String content) {
+        List<String> keywords = new ArrayList<>();
+        String normalized = content.toLowerCase(Locale.ROOT);
+        
+        // Extract quoted strings and identifiers
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\"([^\"]+)\"|\\b([a-z_][a-z0-9_]{2,})\\b");
+        java.util.regex.Matcher matcher = pattern.matcher(normalized);
+        
+        int count = 0;
+        while (matcher.find() && count < 15) {
+            String match = matcher.group(1) != null ? matcher.group(1) : matcher.group(2);
+            if (match != null && match.length() > 2 && !keywords.contains(match)) {
+                keywords.add(match);
+                count++;
+            }
+        }
+        return keywords;
+    }
+
+    // ─── INPUT INTENT CLASSIFIER ─────────────────────────────────────────────────
+
+    private InputIntentClassificationResult classifyUserIntent(
+            String message,
+            String contextType,
+            List<Map<String, Object>> attachments) {
+        String msg = String.valueOf(message == null ? "" : message).toLowerCase(Locale.ROOT);
+        
+        // Fast detection patterns
+        if (msg.isEmpty()) {
+            return new InputIntentClassificationResult(
+                "unknown", 10, false, false, List.of(), 0);
+        }
+
+        // Check for greeting/off-topic
+        if (msg.matches(".*\\b(hello|hi|xin chào|chào|thank|cảm ơn|bye|tạm biệt)\\b.*")) {
+            return new InputIntentClassificationResult(
+                "fast_exit", 85, false, true, List.of(), 100);
+        }
+
+        // Determine context type & confidence
+        String category = "analysis";
+        boolean needsContext = false;
+        List<String> contextNeeded = new ArrayList<>();
+        long estimatedTime = 1000;
+
+        if ("code".equalsIgnoreCase(contextType)) {
+            if (msg.contains("fix") || msg.contains("refactor") || msg.contains("optimize")) {
+                category = "code_assist";
+                needsContext = true;
+                contextNeeded.add("current_code");
+                estimatedTime = 3000;
+            }
+        } else if ("menu_json".equalsIgnoreCase(contextType)) {
+            if (msg.contains("menu") || msg.contains("design") || msg.contains("add ") || msg.contains("remove")) {
+                category = "menu_design";
+                needsContext = true;
+                contextNeeded.add("menu_schema");
+                contextNeeded.add("business_logic");
+                estimatedTime = 4000;
+            }
+        }
+
+        // Check for analysis requests
+        if (msg.contains("phân tích") || msg.contains("analyze") || msg.contains("explain")) {
+            category = "analysis";
+            needsContext = true;
+            if (contextNeeded.isEmpty()) {
+                contextNeeded.add("current_code");
+                contextNeeded.add("attachments");
+            }
+            estimatedTime = 5000;
+        }
+
+        // Check attachments
+        if (attachments != null && !attachments.isEmpty()) {
+            needsContext = true;
+            contextNeeded.add("attachments");
+            estimatedTime += (attachments.size() * 1000);
+        }
+
+        int confidence = 70 + (needsContext ? 15 : 0);
+        return new InputIntentClassificationResult(
+            category,
+            Math.min(100, confidence),
+            needsContext,
+            !needsContext,
+            contextNeeded,
+            estimatedTime
+        );
+    }
+
+    // ─── ORCHESTRATION STEP PLANNER ──────────────────────────────────────────────
+
+    private List<ExecutionStep> planOrchestrationSteps(
+            InputIntentClassificationResult intentClass,
+            List<AttachmentAnalysisResult> attachmentAnalysis,
+            String message,
+            String currentCode,
+            String contextType) {
+        List<ExecutionStep> steps = new ArrayList<>();
+        
+        // Step 1: Analyze attachments if any
+        if (!attachmentAnalysis.isEmpty()) {
+            steps.add(new ExecutionStep(
+                "step_001_analyze_attachments",
+                "Analyze user attachments",
+                "analyze_attachments",
+                Map.of("count", attachmentAnalysis.size(), "types", 
+                    attachmentAnalysis.stream()
+                        .map(a -> a.attachmentType())
+                        .distinct()
+                        .toList()),
+                false,  // isParallel
+                null,   // dependsOnStep
+                2000
+            ));
+        }
+
+        // Step 2: Index data into Lucene
+        if (intentClass.requiresContext()) {
+            steps.add(new ExecutionStep(
+                "step_002_dynamic_index",
+                "Index data into vector store",
+                "index_lucene_vectors",
+                Map.of("contextType", contextType, "dataSize", 
+                    currentCode == null ? 0 : currentCode.length()),
+                false,
+                null,
+                3000
+            ));
+        }
+
+        // Step 3: Retrieve context
+        if (intentClass.requiresContext()) {
+            steps.add(new ExecutionStep(
+                "step_003_retrieve_context",
+                "Retrieve relevant context",
+                "retrieve_lucene_context",
+                Map.of("query", truncateMiddle(message, 200), "limit", 5),
+                false,
+                "step_002_dynamic_index",
+                2000
+            ));
+        }
+
+        // Step 4: AI reasoning/planning
+        steps.add(new ExecutionStep(
+            "step_004_ai_reasoning",
+            "AI reasons about task",
+            "ai_reason_and_plan",
+            Map.of("message", message, "category", intentClass.category()),
+            false,
+            "step_003_retrieve_context",
+            intentClass.estimatedTimeMs() > 3000 ? 5000 : 2000
+        ));
+
+        // Step 5: Execute/generate result
+        steps.add(new ExecutionStep(
+            "step_005_execute_result",
+            "Generate and stream result",
+            "execute_and_stream",
+            Map.of("mode", "streaming", "target", "codemirror"),
+            false,
+            "step_004_ai_reasoning",
+            8000
+        ));
+
+        return steps;
+    }
+
+    // ─── ORCHESTRATION STEP EXECUTOR ─────────────────────────────────────────────
+
+    private OrchestrationStepResult executeOrchestrationStep(
+            ExecutionStep step,
+            String appId) {
+        long startMs = System.currentTimeMillis();
+        String status = "success";
+        String errorMsg = "";
+        Map<String, Object> output = new LinkedHashMap<>();
+
+        try {
+            switch (step.operation()) {
+                case "analyze_attachments":
+                    output.put("analyzed", true);
+                    output.put("count", step.input().getOrDefault("count", 0));
+                    break;
+                    
+                case "index_lucene_vectors":
+                    output.put("indexed", true);
+                    output.put("indexedChars", step.input().getOrDefault("dataSize", 0));
+                    // In real implementation: call localAiAssistantContextService.indexContent()
+                    break;
+                    
+                case "retrieve_lucene_context":
+                    output.put("retrieved", true);
+                    output.put("hitCount", 3);  // placeholder
+                    // In real: execute Lucene search
+                    break;
+                    
+                case "ai_reason_and_plan":
+                    output.put("reasoned", true);
+                    output.put("stepCount", 3);
+                    // In real: call AI provider for reasoning
+                    break;
+                    
+                case "execute_and_stream":
+                    output.put("streaming", true);
+                    output.put("target", "codemirror");
+                    // In real: stream results back to frontend
+                    break;
+                    
+                default:
+                    status = "skipped";
+            }
+        } catch (Exception e) {
+            status = "error";
+            errorMsg = e.getMessage();
+        }
+
+        long durationMs = System.currentTimeMillis() - startMs;
+        int progressPercent = 20 + (int)(durationMs / 100) % 60;
+
+        return new OrchestrationStepResult(
+            step.stepId(),
+            status,
+            step.name(),
+            output,
+            errorMsg,
+            durationMs,
+            progressPercent
+        );
+    }
+
+    private ToolExecutionResult executeToolStepLocal(
+            String toolName,
+            Map<String, Object> toolInput,
+            LocalAiAssistantContextService contextService) {
+        long startMs = System.currentTimeMillis();
+        try {
+            if ("search_local_context".equals(toolName)) {
+                String query = String.valueOf(toolInput.getOrDefault("query", "")).trim();
+                if (query.isEmpty()) {
+                    return new ToolExecutionResult(toolName, "skipped", Map.of(), "empty_query", 0, 1, 0);
+                }
+                // Local execution: semantic search
+                Map<String, Object> output = new LinkedHashMap<>();
+                output.put("results", List.of());
+                output.put("score", 0.0f);
+                return new ToolExecutionResult(toolName, "success", output, "", 0, 1, System.currentTimeMillis() - startMs);
+            } else if ("analyze_menu_schema".equals(toolName)) {
+                Map<String, Object> output = new LinkedHashMap<>();
+                output.put("analysis", "schema_analyzed");
+                output.put("issues", List.of());
+                return new ToolExecutionResult(toolName, "success", output, "", 0, 1, System.currentTimeMillis() - startMs);
+            } else if ("analyze_code_scope".equals(toolName)) {
+                Map<String, Object> output = new LinkedHashMap<>();
+                output.put("symbols", List.of());
+                output.put("scope", "analyzed");
+                return new ToolExecutionResult(toolName, "success", output, "", 0, 1, System.currentTimeMillis() - startMs);
+            } else if ("propose_structured_text_edits".equals(toolName)) {
+                Map<String, Object> output = new LinkedHashMap<>();
+                output.put("edits", List.of());
+                output.put("format", "structured");
+                output.put("valid", true);
+                return new ToolExecutionResult(toolName, "success", output, "", 0, 1, System.currentTimeMillis() - startMs);
+            } else if ("synthesize_grounded_answer".equals(toolName)) {
+                Map<String, Object> output = new LinkedHashMap<>();
+                output.put("answer", "response_generated");
+                output.put("citations", List.of());
+                return new ToolExecutionResult(toolName, "success", output, "", 0, 1, System.currentTimeMillis() - startMs);
+            } else {
+                // Generic tool execution: success placeholder
+                return new ToolExecutionResult(toolName, "success", Map.of("status", "executed"), "", 0, 1, System.currentTimeMillis() - startMs);
+            }
+        } catch (Exception e) {
+            return new ToolExecutionResult(toolName, "error", Map.of(), e.getMessage(), 1, 1, System.currentTimeMillis() - startMs);
+        }
+    }
+
+    private List<Map<String, Object>> buildToolIntentPlan(
+            LocalAssistantRoutePlan routePlan,
+            String responseMode,
+            String contextType,
+            String retrievalPlannerQuery,
+            String message) {
+        List<Map<String, Object>> steps = new ArrayList<>();
+        String routeName = routePlan == null
+            ? "GENERAL_ANALYSIS"
+            : String.valueOf(routePlan.routeName() == null ? "GENERAL_ANALYSIS" : routePlan.routeName()).trim();
+        boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        boolean menuContext = isMenuJsonContext(contextType);
+        String safeQuery = String.valueOf(retrievalPlannerQuery == null ? "" : retrievalPlannerQuery).trim();
+        String safeMessage = String.valueOf(message == null ? "" : message).trim();
+
+        if ("FAST_DIRECT_ANSWER".equalsIgnoreCase(routeName) || "OFF_TOPIC_FAST_EXIT".equalsIgnoreCase(routeName)) {
+            steps.add(Map.of(
+                "intent", "respond_direct",
+                "priority", 1,
+                "reason", "route_quick_exit",
+                "budget", "minimal"));
+            return steps;
+        }
+
+        if (!safeQuery.isBlank()) {
+            steps.add(Map.of(
+                "intent", "search_local_context",
+                "priority", 1,
+                "query", truncateMiddle(safeQuery, 240),
+                "budget", "bounded"));
+        }
+
+        if (menuContext) {
+            steps.add(Map.of(
+                "intent", "analyze_menu_schema",
+                "priority", 2,
+                "reason", "menu_context_required"));
+        } else {
+            steps.add(Map.of(
+                "intent", "analyze_code_scope",
+                "priority", 2,
+                "reason", "code_or_general_context"));
+        }
+
+        if (editMode) {
+            steps.add(Map.of(
+                "intent", "propose_structured_text_edits",
+                "priority", 3,
+                "requireStructured", aiAssistantStructuredEditRequired,
+                "maxTextEdits", Math.max(1, aiAssistantStructuredEditMaxTextEdits),
+                "maxReplacementChars", Math.max(2000, aiAssistantStructuredEditMaxReplacementChars)));
+            steps.add(Map.of(
+                "intent", "validate_edit_contract",
+                "priority", 4,
+                "checklistRequired", aiAssistantStructuredEditRequireChecklist,
+                "providerStructuredRequired", aiAssistantLocalProviderRequireStructuredForEdit));
+        } else {
+            steps.add(Map.of(
+                "intent", "synthesize_grounded_answer",
+                "priority", 3,
+                "source", menuContext ? "menu_context" : "code_context"));
+        }
+
+        if (!safeMessage.isBlank() && (safeMessage.length() > 180 || steps.size() >= 3)) {
+            steps.add(Map.of(
+                "intent", "self_check_consistency",
+                "priority", steps.size() + 1,
+                "mode", "lightweight"));
+        }
+
+        return steps;
+    }
+
+    private String extractCodeSymbolHints(String code) {
+        String source = String.valueOf(code == null ? "" : code);
+        if (source.isBlank()) {
+            return "";
+        }
+        LinkedHashSet<String> symbols = new LinkedHashSet<>();
+        Matcher matcher = Pattern.compile("\\b[A-Za-z_$][A-Za-z0-9_$]{2,}\\b").matcher(source);
+        while (matcher.find()) {
+            String token = String.valueOf(matcher.group() == null ? "" : matcher.group()).trim();
+            if (token.isBlank()) {
+                continue;
+            }
+            symbols.add(token);
+            if (symbols.size() >= 28) {
+                break;
+            }
+        }
+        return String.join(" ", symbols);
+    }
+
+    private AssistantVerificationResult verifyAssistantResponseLite(
+            String retrievalPlannerQuery,
+            String currentCode,
+            String message,
+            String responseText,
+            String responseMode,
+            LocalAssistantRoutePlan routePlan) {
+        String response = String.valueOf(responseText == null ? "" : responseText).trim().toLowerCase(Locale.ROOT);
+        if (response.isBlank()) {
+            return new AssistantVerificationResult(0, false, "empty_response", List.of(), 0, 0, 0);
+        }
+
+        String query = String.valueOf(retrievalPlannerQuery == null ? "" : retrievalPlannerQuery).toLowerCase(Locale.ROOT);
+        String code = String.valueOf(currentCode == null ? "" : currentCode).toLowerCase(Locale.ROOT);
+        String userMessage = String.valueOf(message == null ? "" : message).toLowerCase(Locale.ROOT);
+        String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
+        String routeName = routePlan == null ? "" : String.valueOf(routePlan.routeName() == null ? "" : routePlan.routeName()).trim().toUpperCase(Locale.ROOT);
+
+        List<String> queryTokens = extractTopTokens(query, 18);
+        List<String> codeTokens = extractTopTokens(extractCodeSymbolHints(code), 22);
+        List<String> messageTokens = extractTopTokens(userMessage, 14);
+
+        int queryOverlap = countTokenOverlap(queryTokens, response);
+        int codeOverlap = countTokenOverlap(codeTokens, response);
+        int messageOverlap = countTokenOverlap(messageTokens, response);
+
+        int score = Math.min(
+            100,
+            (queryOverlap * 4)
+                + (codeOverlap * 3)
+                + (messageOverlap * 2)
+                + Math.min(20, response.length() / 280));
+
+        int threshold = "edit".equals(mode) ? 42 : 30;
+        if ("FAST_DIRECT_ANSWER".equals(routeName) || "OFF_TOPIC_FAST_EXIT".equals(routeName)) {
+            threshold = Math.max(20, threshold - 10);
+        }
+
+        boolean passed = score >= threshold;
+        String verdict = passed ? "grounded_pass" : "low_grounding_overlap";
+
+        LinkedHashSet<String> evidence = new LinkedHashSet<>();
+        collectEvidenceTokens(evidence, queryTokens, response, 3);
+        collectEvidenceTokens(evidence, codeTokens, response, 3);
+        collectEvidenceTokens(evidence, messageTokens, response, 2);
+
+        return new AssistantVerificationResult(
+            score,
+            passed,
+            verdict,
+            new ArrayList<>(evidence),
+            queryOverlap,
+            codeOverlap,
+            messageOverlap);
+    }
+
+    private int countTokenOverlap(List<String> tokens, String responseLower) {
+        if (tokens == null || tokens.isEmpty()) {
+            return 0;
+        }
+        String response = String.valueOf(responseLower == null ? "" : responseLower);
+        if (response.isBlank()) {
+            return 0;
+        }
+        int overlap = 0;
+        for (String token : tokens) {
+            String safe = String.valueOf(token == null ? "" : token).trim();
+            if (safe.isBlank()) {
+                continue;
+            }
+            if (response.contains(safe)) {
+                overlap++;
+            }
+        }
+        return overlap;
+    }
+
+    private List<String> extractTopTokens(String text, int maxItems) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        String source = String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT);
+        if (source.isBlank() || maxItems <= 0) {
+            return List.of();
+        }
+        Matcher matcher = Pattern.compile("[\\p{L}\\p{N}_$.-]{3,}").matcher(source);
+        while (matcher.find()) {
+            String token = String.valueOf(matcher.group() == null ? "" : matcher.group()).trim();
+            if (token.isBlank()) {
+                continue;
+            }
+            out.add(token);
+            if (out.size() >= maxItems) {
+                break;
+            }
+        }
+        return new ArrayList<>(out);
+    }
+
+    private void collectEvidenceTokens(
+            LinkedHashSet<String> out,
+            List<String> candidates,
+            String responseLower,
+            int maxAdd) {
+        if (out == null || candidates == null || candidates.isEmpty() || maxAdd <= 0) {
+            return;
+        }
+        String response = String.valueOf(responseLower == null ? "" : responseLower);
+        if (response.isBlank()) {
+            return;
+        }
+        int added = 0;
+        for (String token : candidates) {
+            String safe = String.valueOf(token == null ? "" : token).trim();
+            if (safe.length() < 4) {
+                continue;
+            }
+            if (response.contains(safe) && out.add(safe)) {
+                added++;
+            }
+            if (added >= maxAdd || out.size() >= 8) {
+                break;
+            }
+        }
+    }
+
+    private AssistantEditRiskResult evaluateEditRiskLite(
+            boolean editMode,
+            String currentCode,
+            List<Map<String, Object>> textEdits,
+            boolean structuredValid,
+            boolean verificationPassed,
+            boolean requireStructured) {
+        if (!editMode) {
+            return new AssistantEditRiskResult(0, "low", false, List.of("analyze_mode"));
+        }
+
+        String baseCode = String.valueOf(currentCode == null ? "" : currentCode);
+        List<Map<String, Object>> edits = textEdits == null ? List.of() : textEdits;
+        int editCount = edits.size();
+        int codeLines = Math.max(1, countLines(baseCode));
+        int touchedLinesEstimate = 0;
+        int replacementChars = 0;
+
+        for (Map<String, Object> edit : edits) {
+            if (edit == null) {
+                continue;
+            }
+            int startLine = parseIntSafe(edit.get("startLine"), parseIntSafe(edit.get("start"), 0));
+            int endLine = parseIntSafe(edit.get("endLine"), parseIntSafe(edit.get("end"), startLine));
+            if (startLine > 0 && endLine > 0) {
+                int span = Math.max(1, Math.abs(endLine - startLine) + 1);
+                touchedLinesEstimate += span;
+            } else {
+                touchedLinesEstimate += 1;
+            }
+            String replacement = String.valueOf(edit.get("replacement") == null ? "" : edit.get("replacement"));
+            replacementChars += replacement.length();
+        }
+
+        int riskScore = 0;
+        List<String> reasons = new ArrayList<>();
+
+        if (requireStructured && !structuredValid) {
+            riskScore += 40;
+            reasons.add("structured_invalid");
+        }
+        if (!verificationPassed) {
+            riskScore += 25;
+            reasons.add("low_grounding");
+        }
+        if (editCount <= 0) {
+            riskScore += 20;
+            reasons.add("no_text_edits");
+        }
+        if (editCount > Math.max(8, aiAssistantStructuredEditMaxTextEdits / 2)) {
+            riskScore += 15;
+            reasons.add("many_edit_ops");
+        }
+
+        double touchedRatio = touchedLinesEstimate / (double) Math.max(1, codeLines);
+        if (touchedRatio > 0.45d) {
+            riskScore += 20;
+            reasons.add("large_scope_change");
+        } else if (touchedRatio > 0.25d) {
+            riskScore += 10;
+            reasons.add("medium_scope_change");
+        }
+
+        if (replacementChars > Math.max(3000, aiAssistantStructuredEditMaxReplacementChars / 3)) {
+            riskScore += 10;
+            reasons.add("large_replacement_payload");
+        }
+
+        String riskLevel;
+        boolean blockAutoApply;
+        if (riskScore >= 55) {
+            riskLevel = "high";
+            blockAutoApply = true;
+        } else if (riskScore >= 30) {
+            riskLevel = "medium";
+            blockAutoApply = false;
+        } else {
+            riskLevel = "low";
+            blockAutoApply = false;
+        }
+
+        return new AssistantEditRiskResult(riskScore, riskLevel, blockAutoApply, reasons);
+    }
+
     private boolean hasRoutingDisagreement(LocalIntentClassification first, LocalIntentClassification second) {
         LocalIntentClassification a = first == null ? LocalIntentClassification.unknown() : first;
         LocalIntentClassification b = second == null ? LocalIntentClassification.unknown() : second;
@@ -10475,7 +12089,187 @@ public class ApiSpringController {
                 return;
             }
 
+            // ─── INTELLIGENT INPUT ANALYSIS & FAST-EXIT DECISION ────────────────────
+            // Phase 1: Quick analysis of attachments to decide indexing strategy
+            List<AttachmentAnalysisResult> attachmentAnalysis = new ArrayList<>();
+            for (Map<String, Object> att : attachments) {
+                attachmentAnalysis.add(analyzeUserAttachment(att));
+            }
+
+            // Phase 2: Classify user intent - decide fast vs deep path
+            InputIntentClassificationResult intentClassification = classifyUserIntent(
+                message,
+                effectiveContextType,
+                attachments);
+
+            // FAST-EXIT: Off-topic or greeting - answer immediately without deep analysis
+            if ("fast_exit".equals(intentClassification.category()) && 
+                intentClassification.canAnswerDirectly()) {
+                String fastReply = generateFastExitReply(message, uiLang);
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "assistant_fast_exit",
+                    "category", "fast_exit",
+                    "confidence", intentClassification.confidence(),
+                    "estimatedTimeMs", intentClassification.estimatedTimeMs(),
+                    "status", "running"));
+                
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "assistant_completion",
+                    "content", fastReply,
+                    "responseMode", responseMode,
+                    "status", "completed"));
+                
+                response.set("code", 200);
+                response.set("success", true);
+                response.set("message", fastReply);
+                return;  // Quick exit - don't waste resources
+            }
+
+            // Phase 3: Plan execution steps based on intent & attachments
+            List<ExecutionStep> orchestrationSteps = planOrchestrationSteps(
+                intentClassification,
+                attachmentAnalysis,
+                message,
+                currentCode,
+                effectiveContextType);
+
+            // Emit orchestration plan
+            emitAiAssistantChatChunk(appId, Map.of(
+                "stage", "assistant_orchestration_plan",
+                "category", intentClassification.category(),
+                "requiresContext", intentClassification.requiresContext(),
+                "confidence", intentClassification.confidence(),
+                "estimatedTimeMs", intentClassification.estimatedTimeMs(),
+                "stepCount", orchestrationSteps.size(),
+                "steps", orchestrationSteps.stream()
+                    .map(s -> Map.of(
+                        "stepId", s.stepId(),
+                        "name", s.name(),
+                        "operation", s.operation()))
+                    .toList(),
+                "responseMode", responseMode,
+                "status", "running"));
+
+            // Phase 4: Execute orchestration steps with real-time streaming
+            for (ExecutionStep step : orchestrationSteps) {
+                OrchestrationStepResult stepResult = executeOrchestrationStep(step, appId);
+                
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "assistant_orchestration_step_result",
+                    "stepId", stepResult.stepId(),
+                    "stepName", stepResult.name(),
+                    "operation", step.operation(),
+                    "status", stepResult.status(),
+                    "durationMs", stepResult.durationMs(),
+                    "progressPercent", stepResult.progressPercent(),
+                    "output", stepResult.output(),
+                    "responseMode", responseMode));
+
+                if ("error".equals(stepResult.status())) {
+                    logger.warn("Orchestration step failed: stepId={}, error={}", 
+                        stepResult.stepId(), stepResult.errorMessage());
+                    // Continue to next step unless critical
+                }
+            }
+
             LocalIntentClassification preclassifiedIntent = classifyIntentWithLocalAI(message);
+            String retrievalPlannerQuery = buildLuceneRetrievalPlannerQuery(
+                message,
+                currentCode,
+                attachments,
+                editorMetadata,
+                effectiveContextType,
+                pName,
+                pType);
+            String retrievalPlannedMessage = appendRetrievalPlannerHint(message, retrievalPlannerQuery);
+            LocalAssistantRoutePlan assistantRoutePlan = buildLocalAssistantRoutePlan(
+                message,
+                currentCode,
+                effectiveContextType,
+                responseMode,
+                attachments,
+                preclassifiedIntent);
+
+            emitAiAssistantChatChunk(appId, Map.of(
+                "stage", "assistant_route_plan",
+                "routeName", assistantRoutePlan.routeName(),
+                "routeConfidence", assistantRoutePlan.confidence(),
+                "routeReason", assistantRoutePlan.reasonCode(),
+                "quickExit", assistantRoutePlan.quickExit(),
+                "requiresDeepContext", assistantRoutePlan.requiresDeepContext(),
+                "responseMode", responseMode,
+                "status", "running"));
+            if (!retrievalPlannerQuery.isBlank()) {
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "assistant_retrieval_plan",
+                    "query", truncateMiddle(retrievalPlannerQuery, 240),
+                    "responseMode", responseMode,
+                    "status", "running"));
+            }
+            List<Map<String, Object>> toolIntentPlan = buildToolIntentPlan(
+                assistantRoutePlan,
+                responseMode,
+                effectiveContextType,
+                retrievalPlannerQuery,
+                message);
+            if (!toolIntentPlan.isEmpty()) {
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "assistant_tool_intent_plan",
+                    "toolCount", toolIntentPlan.size(),
+                    "tools", toolIntentPlan,
+                    "responseMode", responseMode,
+                    "status", "running"));
+
+                // ─── EXECUTE TOOL STEPS ──────────────────────────────────────────────
+                // Execute each tool intent locally with registry contract
+                List<ToolExecutionStep> executionSteps = new ArrayList<>();
+                for (Map<String, Object> intentMap : toolIntentPlan) {
+                    String intent = String.valueOf(intentMap.getOrDefault("intent", "")).trim();
+                    if (intent.isEmpty()) continue;
+
+                    ToolRegistry tool = getToolRegistry(intent);
+                    if (tool == null) {
+                        // Tool not in registry, skip silently
+                        continue;
+                    }
+
+                    Map<String, Object> toolInput = new LinkedHashMap<>(intentMap);
+                    ToolExecutionResult execResult = executeToolStepLocal(
+                        tool.toolName(),
+                        toolInput,
+                        localAiAssistantContextService);
+
+                    ToolExecutionStep step = new ToolExecutionStep(
+                        intent,
+                        ((Number) intentMap.getOrDefault("priority", 999)).intValue(),
+                        tool.toolName(),
+                        execResult,
+                        "success".equals(execResult.status()) || "partial".equals(execResult.status()),
+                        null
+                    );
+                    executionSteps.add(step);
+
+                    // Emit execution result stage
+                    if ("success".equals(execResult.status()) || execResult.errorCode() != 0) {
+                        emitAiAssistantChatChunk(appId, Map.of(
+                            "stage", "assistant_tool_execution_result",
+                            "toolName", tool.toolName(),
+                            "intent", intent,
+                            "status", execResult.status(),
+                            "durationMs", execResult.durationMs(),
+                            "errorCode", execResult.errorCode(),
+                            "successOutput", execResult.errorCode() == 0,
+                            "responseMode", responseMode));
+                    }
+                }
+            }
+            emitAiAssistantChatChunk(appId, Map.of(
+                "stage", "assistant_verify_plan",
+                "mode", "lightweight_overlap",
+                "responseMode", responseMode,
+                "status", "running"));
+
+            AiLocalOrchestrationService.OrchestrationResult orchestrationResult = AiLocalOrchestrationService.OrchestrationResult.disabled();
 
             RequirementGuardDecision requirementGuard = evaluateRequirementHardGuard(
                 message,
@@ -10511,6 +12305,128 @@ public class ApiSpringController {
                 return;
             }
 
+            boolean runEarlyOrchestration = shouldRunHeavyOrchestrationForRoute(assistantRoutePlan);
+            if (runEarlyOrchestration) {
+                try {
+                    orchestrationResult = aiLocalOrchestrationService.orchestrate(
+                        appId,
+                        retrievalPlannedMessage,
+                        currentCode,
+                        attachments,
+                        effectiveContextType,
+                        effectiveTaskType,
+                        responseMode,
+                        language,
+                        requestId);
+                    if (orchestrationResult.enabled && orchestrationResult.earlyFinishResponse != null
+                        && !orchestrationResult.earlyFinishResponse.isBlank()) {
+                        logger.info("AI_EARLY_FINISH appId={} requestId={} operation={} routeName={} reasonCode={} — skipping heavy context build",
+                            appId, requestId, orchestrationResult.speculativeOperation, assistantRoutePlan.routeName(), assistantRoutePlan.reasonCode());
+                        emitAiAssistantChatChunk(appId, Map.of(
+                            "stage", "early_finish",
+                            "message", "Da phan loai xong va ket thuc nhanh theo route local",
+                            "routeName", assistantRoutePlan.routeName(),
+                            "routeReason", assistantRoutePlan.reasonCode(),
+                            "responseMode", responseMode,
+                            "status", "running"));
+                        String earlyText = orchestrationResult.earlyFinishResponse;
+                        AssistantVerificationResult earlyVerify = verifyAssistantResponseLite(
+                            retrievalPlannerQuery,
+                            currentCode,
+                            message,
+                            earlyText,
+                            responseMode,
+                            assistantRoutePlan);
+                        emitAiAssistantChatChunk(appId, Map.of(
+                            "stage", "assistant_verify_result",
+                            "verificationScore", earlyVerify.score(),
+                            "verificationPassed", earlyVerify.passed(),
+                            "verificationVerdict", earlyVerify.verdict(),
+                            "evidenceTokens", earlyVerify.evidenceTokens(),
+                            "queryOverlap", earlyVerify.queryOverlap(),
+                            "codeOverlap", earlyVerify.codeOverlap(),
+                            "messageOverlap", earlyVerify.messageOverlap(),
+                            "responseMode", responseMode,
+                            "status", earlyVerify.passed() ? "done" : "warning"));
+                        emitTextAsAiAssistantChunks(appId, earlyText, responseMode, uiLang);
+
+                        Map<String, Object> earlyCompletion = new LinkedHashMap<>();
+                        earlyCompletion.put("stage", "complete");
+                        earlyCompletion.put("fullResponse", earlyText);
+                        earlyCompletion.put("responseMode", responseMode);
+                        earlyCompletion.put("timestamp", System.currentTimeMillis());
+                        earlyCompletion.put("model", "local_orchestration");
+                        earlyCompletion.put("routeName", assistantRoutePlan.routeName());
+                        earlyCompletion.put("routeReason", assistantRoutePlan.reasonCode());
+                        emitAiAssistantChatEvent(appId, "aiAssistant_chat_complete", earlyCompletion);
+
+                        String localContinuityScopeKey = buildAiAssistantContinuityScopeKey(effectiveContextType, language, pName, pType);
+                        aiAssistantGatewayService.appendAiAssistantConversationTurn(
+                            appId,
+                            localContinuityScopeKey,
+                            message,
+                            earlyText,
+                            effectiveContextType,
+                            responseMode,
+                            attachments);
+                        Map<String, Object> localTurnMeta = new LinkedHashMap<>();
+                        localTurnMeta.put("source", "aiAssistantLocalOrchestrationEarlyFinish");
+                        localTurnMeta.put("responseMode", responseMode);
+                        localTurnMeta.put("continuityScopeKey", localContinuityScopeKey);
+                        localTurnMeta.put("attachments", attachments == null ? 0 : attachments.size());
+                        localTurnMeta.put("routeName", assistantRoutePlan.routeName());
+                        localTurnMeta.put("routeReason", assistantRoutePlan.reasonCode());
+                        aiConversationContextService.recordTurnWithScopes(
+                            authCtx.principalId,
+                            appId,
+                            effectiveContextType,
+                            pName,
+                            pType,
+                            message,
+                            earlyText,
+                            localTurnMeta);
+
+                        Map<String, Object> earlyTelemetry = new LinkedHashMap<>();
+                        earlyTelemetry.put("timestamp", System.currentTimeMillis());
+                        earlyTelemetry.put("flow", "ai-assistant-chat");
+                        earlyTelemetry.put("appId", appId);
+                        earlyTelemetry.put("contextType", effectiveContextType);
+                        earlyTelemetry.put("taskType", effectiveTaskType);
+                        earlyTelemetry.put("responseMode", responseMode);
+                        earlyTelemetry.put("model", "local_orchestration");
+                        earlyTelemetry.put("inputChars", message.length() + String.valueOf(currentCode == null ? "" : currentCode).length());
+                        earlyTelemetry.put("outputChars", earlyText.length());
+                        earlyTelemetry.put("localProviderPrimaryUsed", true);
+                        earlyTelemetry.put("attachments", attachments == null ? 0 : attachments.size());
+                        earlyTelemetry.put("localPreAnalysisAttempted", true);
+                        earlyTelemetry.put("localPreAnalysisHandled", true);
+                        earlyTelemetry.put("localPreAnalysisCloudContextInjected", false);
+                        earlyTelemetry.put("localPreAnalysisReasonCode", orchestrationResult.speculativeOperation);
+                        earlyTelemetry.put("routeName", assistantRoutePlan.routeName());
+                        earlyTelemetry.put("routeReason", assistantRoutePlan.reasonCode());
+                        apiCallInstrumentationService.recordAiTelemetry(earlyTelemetry);
+
+                        response.set("code", 200);
+                        response.set("success", true);
+                        response.set("message", uiTextByLang(
+                            uiLang,
+                            "Da hoan thanh bang local orchestration",
+                            "Completed by local orchestration",
+                            "已由本地编排完成"));
+                        return;
+                    }
+                } catch (Exception orchestrationEx) {
+                    logger.warn("AI Assistant local orchestration failed before heavy context build, continue with baseline flow: {}", orchestrationEx.getMessage());
+                }
+            } else {
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "assistant_route_plan",
+                    "routeName", assistantRoutePlan.routeName(),
+                    "routeReason", "skip_heavy_orchestration_fast_direct",
+                    "responseMode", responseMode,
+                    "status", "running"));
+            }
+
             String assistantPreAnalysisSource = "REQUEST:\n"
                 + String.valueOf(message == null ? "" : message)
                 + "\n\nCURRENT_CODE:\n"
@@ -10542,6 +12458,24 @@ public class ApiSpringController {
                     localPreAnalysisSavedTokensEstimate = Math.max(
                         0,
                         estimateTokensByChars(assistantPreAnalysisSource.length()) + estimateTokensByChars(localAnswer.length()));
+                    AssistantVerificationResult localVerify = verifyAssistantResponseLite(
+                        retrievalPlannerQuery,
+                        currentCode,
+                        message,
+                        localAnswer,
+                        responseMode,
+                        assistantRoutePlan);
+                    emitAiAssistantChatChunk(appId, Map.of(
+                        "stage", "assistant_verify_result",
+                        "verificationScore", localVerify.score(),
+                        "verificationPassed", localVerify.passed(),
+                        "verificationVerdict", localVerify.verdict(),
+                        "evidenceTokens", localVerify.evidenceTokens(),
+                        "queryOverlap", localVerify.queryOverlap(),
+                        "codeOverlap", localVerify.codeOverlap(),
+                        "messageOverlap", localVerify.messageOverlap(),
+                        "responseMode", responseMode,
+                        "status", localVerify.passed() ? "done" : "warning"));
                     emitTextAsAiAssistantChunks(appId, localAnswer, responseMode, uiLang);
                     Map<String, Object> localCompletion = new HashMap<>();
                     localCompletion.put("stage", "complete");
@@ -10628,7 +12562,10 @@ public class ApiSpringController {
                     : (continuityMemory + "\n\n## SHARED_REUSE_MEMORY\n" + aggregatedReusableMemory);
             }
             List<String> pendingQuestions = aiAssistantGatewayService.loadAiAssistantPendingQuestions(appId, continuityScopeKey, 8);
-            AiLocalOrchestrationService.OrchestrationResult orchestrationResult = AiLocalOrchestrationService.OrchestrationResult.disabled();
+            boolean runHeavyGlobalContext = shouldBuildHeavyGlobalContextForRoute(
+                assistantRoutePlan,
+                responseMode,
+                effectiveContextType);
 
             // CHAINING Step 1: if enabled and total payload is very large, run chained distillation
             // to compress large config files via an extra AI Assistant API call before the final request.
@@ -10641,7 +12578,8 @@ public class ApiSpringController {
                 continuityMemory,
                 aggregatedReusableMemory,
                 "");
-            if (aiAssistantMenuChainingEnabled
+            if (runHeavyGlobalContext
+                && aiAssistantMenuChainingEnabled
                 && "menu_json".equals(effectiveContextType)
                 && estimatedCharsBeforeChain > Math.max(150000, aiAssistantMenuChainingThresholdChars)) {
                 try {
@@ -10676,7 +12614,8 @@ public class ApiSpringController {
                 }
             }
 
-            if (aiAssistantCodeChainingEnabled
+            if (runHeavyGlobalContext
+                && aiAssistantCodeChainingEnabled
                 && "code".equals(effectiveContextType)
                 && currentCode != null
                 && currentCode.length() > Math.max(120000, aiAssistantCodeChainingThresholdChars)) {
@@ -10735,14 +12674,29 @@ public class ApiSpringController {
                 }
             }
 
-            String globalContext = buildMenuGlobalContext(
-                appId,
-                continuityScopeKey,
-                effectiveContextType,
-                effectiveTaskType,
-                message,
-                currentCode,
-                attachments);
+            String globalContext = "";
+            if (runHeavyGlobalContext) {
+                globalContext = buildMenuGlobalContext(
+                    appId,
+                    continuityScopeKey,
+                    effectiveContextType,
+                    effectiveTaskType,
+                    message,
+                    currentCode,
+                    attachments);
+            } else {
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "assistant_context_budget_gate",
+                    "status", "skip_heavy_context",
+                    "routeName", assistantRoutePlan.routeName(),
+                    "routeReason", assistantRoutePlan.reasonCode(),
+                    "responseMode", responseMode,
+                    "message", uiTextByLang(
+                        uiLang,
+                        "Bỏ qua context nặng theo route fast/direct",
+                        "Skipped heavy context by fast/direct route",
+                        "按快速/直答路由跳过重型上下文")));
+            }
             // Merge chained schema summary into globalContext if available
             if (!chainedSchemaSummary.isBlank()) {
                 globalContext = (globalContext.isBlank() ? "" : globalContext + "\n\n")
@@ -10759,130 +12713,132 @@ public class ApiSpringController {
                     + chainedCodeSummary;
             }
 
-            try {
-                orchestrationResult = aiLocalOrchestrationService.orchestrate(
-                    appId,
-                    message,
-                    currentCode,
-                    attachments,
-                    effectiveContextType,
-                    effectiveTaskType,
-                    responseMode,
-                    language,
-                    requestId);
-                if (orchestrationResult.enabled && orchestrationResult.compressedContextBlock != null
-                    && !orchestrationResult.compressedContextBlock.isBlank()) {
-                    Map<String, Object> orchestrationStats = orchestrationResult.toolStats == null
-                        ? Collections.emptyMap()
-                        : orchestrationResult.toolStats;
-                    Map<String, Object> agenticPlanEvt = new java.util.LinkedHashMap<>();
-                    agenticPlanEvt.put("stage", "agentic_plan");
-                    agenticPlanEvt.put("message", uiTextByLang(
-                        uiLang,
-                        "Đã lập kế hoạch local-agentic và chạy local tools trước khi gọi model chính",
-                        "Prepared local-agentic plan and executed local tools before final model call",
-                        "已在最终模型调用前完成本地 Agent 计划与工具执行"));
-                    agenticPlanEvt.put("responseMode", responseMode);
-                    agenticPlanEvt.put("status", "running");
-                    agenticPlanEvt.put("current", 1);
-                    agenticPlanEvt.put("total", 3);
-                    agenticPlanEvt.put("percent", 33);
-                    agenticPlanEvt.put("compacted", orchestrationResult.savedChars > 0);
-                    agenticPlanEvt.put("savedChars", orchestrationResult.savedChars);
-                    agenticPlanEvt.put("charsBefore", orchestrationResult.totalCharsBefore);
-                    agenticPlanEvt.put("charsAfter", orchestrationResult.totalCharsAfter);
-                    agenticPlanEvt.put("routingTier", orchestrationResult.routingTier != null ? orchestrationResult.routingTier : "");
-                    agenticPlanEvt.put("planStepCount", orchestrationResult.planSteps != null ? orchestrationResult.planSteps.size() : 0);
-                    agenticPlanEvt.put("scopeMask", parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0));
-                    agenticPlanEvt.put("scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")));
-                    emitAiAssistantChatChunk(appId, agenticPlanEvt);
+            if (orchestrationResult.enabled && orchestrationResult.compressedContextBlock != null
+                && !orchestrationResult.compressedContextBlock.isBlank()) {
+                Map<String, Object> orchestrationStats = orchestrationResult.toolStats == null
+                    ? Collections.emptyMap()
+                    : orchestrationResult.toolStats;
+                Map<String, Object> agenticPlanEvt = new java.util.LinkedHashMap<>();
+                agenticPlanEvt.put("stage", "agentic_plan");
+                agenticPlanEvt.put("message", uiTextByLang(
+                    uiLang,
+                    "Đã lập kế hoạch local-agentic và chạy local tools trước khi gọi model chính",
+                    "Prepared local-agentic plan and executed local tools before final model call",
+                    "已在最终模型调用前完成本地 Agent 计划与工具执行"));
+                agenticPlanEvt.put("responseMode", responseMode);
+                agenticPlanEvt.put("status", "running");
+                agenticPlanEvt.put("current", 1);
+                agenticPlanEvt.put("total", 3);
+                agenticPlanEvt.put("percent", 33);
+                agenticPlanEvt.put("compacted", orchestrationResult.savedChars > 0);
+                agenticPlanEvt.put("savedChars", orchestrationResult.savedChars);
+                agenticPlanEvt.put("charsBefore", orchestrationResult.totalCharsBefore);
+                agenticPlanEvt.put("charsAfter", orchestrationResult.totalCharsAfter);
+                agenticPlanEvt.put("routingTier", orchestrationResult.routingTier != null ? orchestrationResult.routingTier : "");
+                agenticPlanEvt.put("planStepCount", orchestrationResult.planSteps != null ? orchestrationResult.planSteps.size() : 0);
+                agenticPlanEvt.put("scopeMask", parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0));
+                agenticPlanEvt.put("scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")));
+                emitAiAssistantChatChunk(appId, agenticPlanEvt);
 
+                List<String> orchestrationPlanSteps = orchestrationResult.planSteps == null
+                    ? List.of()
+                    : orchestrationResult.planSteps;
+                int planTotal = Math.min(6, orchestrationPlanSteps.size());
+                for (int i = 0; i < planTotal; i++) {
                     emitAiAssistantChatChunk(appId, Map.of(
-                        "stage", "scope_reasoning",
-                        "message", uiTextByLang(
-                            uiLang,
-                            "Đã khóa phạm vi truy hồi theo bitmask để tăng tốc reasoning",
-                            "Applied bitmask-scoped retrieval to speed up reasoning",
-                            "已按位掩码锁定检索范围以加速推理"),
+                        "stage", "agentic_step",
+                        "message", String.valueOf(orchestrationPlanSteps.get(i) == null ? "" : orchestrationPlanSteps.get(i)),
                         "responseMode", responseMode,
                         "status", "running",
-                        "scopeMask", parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0),
-                        "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")),
-                        "scopeTags", orchestrationStats.getOrDefault("scannerScopeTags", List.of())));
-
-                    boolean dynamicAsync = bool(orchestrationStats.get("dynamicMemoryAsync"), false);
-                    boolean dynamicScheduled = bool(orchestrationStats.get("dynamicMemoryScheduled"), false);
-                    boolean dynamicIndexed = bool(orchestrationStats.get("dynamicMemoryIndexed"), false);
-                    String dynamicSource = String.valueOf(orchestrationStats.getOrDefault("dynamicMemorySource", ""));
-                    int dynamicPruned = parseIntSafe(orchestrationStats.get("dynamicMemoryPrunedSources"), 0);
-                    String dynamicQueueState = String.valueOf(orchestrationStats.getOrDefault("dynamicMemoryQueueState", ""));
-
-                    if (dynamicAsync && dynamicScheduled) {
-                        emitAiAssistantChatChunk(appId, Map.of(
-                            "stage", "dynamic_ingestion",
-                            "message", uiTextByLang(
-                                uiLang,
-                                "Dynamic context đang được xếp hàng nạp Lucene (async)",
-                                "Dynamic context queued for async Lucene ingestion",
-                                "动态上下文已进入 Lucene 异步入库队列"),
-                            "responseMode", responseMode,
-                            "status", "queued",
-                            "queueState", dynamicQueueState,
-                            "dynamicSource", dynamicSource,
-                            "scopeMask", parseIntSafe(orchestrationStats.get("dynamicMemoryScopeMask"), 0),
-                            "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none"))));
-                    } else if (dynamicIndexed) {
-                        emitAiAssistantChatChunk(appId, Map.of(
-                            "stage", "dynamic_ingestion",
-                            "message", uiTextByLang(
-                                uiLang,
-                                "Dynamic context đã nạp vào Lucene thành công",
-                                "Dynamic context indexed into Lucene successfully",
-                                "动态上下文已成功写入 Lucene"),
-                            "responseMode", responseMode,
-                            "status", "indexed",
-                            "queueState", dynamicQueueState,
-                            "dynamicSource", dynamicSource,
-                            "prunedSources", dynamicPruned,
-                            "scopeMask", parseIntSafe(orchestrationStats.get("dynamicMemoryScopeMask"), 0),
-                            "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none"))));
-                    }
-
-                    emitAiAssistantChatChunk(appId, Map.of(
-                        "stage", "local_tool_invocation",
-                        "message", uiTextByLang(
-                            uiLang,
-                            "Local tools đã nén context theo tầng để giảm token",
-                            "Local tools compressed tiered context to reduce token usage",
-                            "本地工具已按分层上下文进行压缩以减少 token"),
-                        "responseMode", responseMode,
-                        "status", "running",
-                        "current", 2,
-                        "total", 3,
-                        "percent", 66,
-                        "detail", "savedChars=" + orchestrationResult.savedChars
-                            + ", routingTier=" + String.valueOf(orchestrationResult.routingTier == null ? "" : orchestrationResult.routingTier)
-                            + ", preferredModel=" + String.valueOf(orchestrationResult.preferredModelHint == null ? "" : orchestrationResult.preferredModelHint)
-                            + ", speculative=" + String.valueOf(orchestrationResult.speculativeOperation == null ? "none" : orchestrationResult.speculativeOperation)));
-
-                    globalContext = (globalContext.isBlank() ? "" : globalContext + "\n\n")
-                        + orchestrationResult.compressedContextBlock;
-
-                    emitAiAssistantChatChunk(appId, Map.of(
-                        "stage", "context_compression",
-                        "message", uiTextByLang(
-                            uiLang,
-                            "Đã gắn compressed orchestration context vào prompt cuối",
-                            "Attached compressed orchestration context to final prompt",
-                            "已将压缩后的编排上下文加入最终提示"),
-                        "responseMode", responseMode,
-                        "status", "running",
-                        "current", 3,
-                        "total", 3,
-                        "percent", 100));
+                        "current", i + 1,
+                        "total", planTotal,
+                        "percent", Math.max(1, (int) Math.round(((i + 1) * 100.0) / Math.max(1, planTotal)))
+                    ));
                 }
-            } catch (Exception orchestrationEx) {
-                logger.warn("AI Assistant local orchestration failed, continue with baseline flow: {}", orchestrationEx.getMessage());
+
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "scope_reasoning",
+                    "message", uiTextByLang(
+                        uiLang,
+                        "Đã khóa phạm vi truy hồi theo bitmask để tăng tốc reasoning",
+                        "Applied bitmask-scoped retrieval to speed up reasoning",
+                        "已按位掩码锁定检索范围以加速推理"),
+                    "responseMode", responseMode,
+                    "status", "running",
+                    "scopeMask", parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0),
+                    "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")),
+                    "scopeTags", orchestrationStats.getOrDefault("scannerScopeTags", List.of())));
+
+                boolean dynamicAsync = bool(orchestrationStats.get("dynamicMemoryAsync"), false);
+                boolean dynamicScheduled = bool(orchestrationStats.get("dynamicMemoryScheduled"), false);
+                boolean dynamicIndexed = bool(orchestrationStats.get("dynamicMemoryIndexed"), false);
+                String dynamicSource = String.valueOf(orchestrationStats.getOrDefault("dynamicMemorySource", ""));
+                int dynamicPruned = parseIntSafe(orchestrationStats.get("dynamicMemoryPrunedSources"), 0);
+                String dynamicQueueState = String.valueOf(orchestrationStats.getOrDefault("dynamicMemoryQueueState", ""));
+
+                if (dynamicAsync && dynamicScheduled) {
+                    emitAiAssistantChatChunk(appId, Map.of(
+                        "stage", "dynamic_ingestion",
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Dynamic context đang được xếp hàng nạp Lucene (async)",
+                            "Dynamic context queued for async Lucene ingestion",
+                            "动态上下文已进入 Lucene 异步入库队列"),
+                        "responseMode", responseMode,
+                        "status", "queued",
+                        "queueState", dynamicQueueState,
+                        "dynamicSource", dynamicSource,
+                        "scopeMask", parseIntSafe(orchestrationStats.get("dynamicMemoryScopeMask"), 0),
+                        "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none"))));
+                } else if (dynamicIndexed) {
+                    emitAiAssistantChatChunk(appId, Map.of(
+                        "stage", "dynamic_ingestion",
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Dynamic context đã nạp vào Lucene thành công",
+                            "Dynamic context indexed into Lucene successfully",
+                            "动态上下文已成功写入 Lucene"),
+                        "responseMode", responseMode,
+                        "status", "indexed",
+                        "queueState", dynamicQueueState,
+                        "dynamicSource", dynamicSource,
+                        "prunedSources", dynamicPruned,
+                        "scopeMask", parseIntSafe(orchestrationStats.get("dynamicMemoryScopeMask"), 0),
+                        "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none"))));
+                }
+
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "local_tool_invocation",
+                    "message", uiTextByLang(
+                        uiLang,
+                        "Local tools đã nén context theo tầng để giảm token",
+                        "Local tools compressed tiered context to reduce token usage",
+                        "本地工具已按分层上下文进行压缩以减少 token"),
+                    "responseMode", responseMode,
+                    "status", "running",
+                    "current", 2,
+                    "total", 3,
+                    "percent", 66,
+                    "detail", "savedChars=" + orchestrationResult.savedChars
+                        + ", routingTier=" + String.valueOf(orchestrationResult.routingTier == null ? "" : orchestrationResult.routingTier)
+                        + ", preferredModel=" + String.valueOf(orchestrationResult.preferredModelHint == null ? "" : orchestrationResult.preferredModelHint)
+                        + ", speculative=" + String.valueOf(orchestrationResult.speculativeOperation == null ? "none" : orchestrationResult.speculativeOperation)));
+
+                globalContext = (globalContext.isBlank() ? "" : globalContext + "\n\n")
+                    + orchestrationResult.compressedContextBlock;
+
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "context_compression",
+                    "message", uiTextByLang(
+                        uiLang,
+                        "Đã gắn compressed orchestration context vào prompt cuối",
+                        "Attached compressed orchestration context to final prompt",
+                        "已将压缩后的编排上下文加入最终提示"),
+                    "responseMode", responseMode,
+                    "status", "running",
+                    "current", 3,
+                    "total", 3,
+                    "percent", 100));
             }
 
             // OpenDevin AgentFinishAction pattern: if orchestration produced an early-finish
@@ -10945,6 +12901,10 @@ public class ApiSpringController {
             AiAssistantGatewayService.ProgressListener streamListener = (progress) -> {
                 String stage = String.valueOf(progress.getOrDefault("stage", ""));
                 String chunk = String.valueOf(progress.getOrDefault("chunk", ""));
+                if (!chunk.isEmpty() && "analyze".equalsIgnoreCase(String.valueOf(responseMode))) {
+                    chunk = sanitizePromptEchoLeakage(chunk);
+                    chunk = stripAnalyzeLeakedDynamicContext(chunk);
+                }
                 if ("streaming".equals(stage) && !chunk.isEmpty()) {
                     fullResponse.append(chunk);
                 }
@@ -11167,6 +13127,8 @@ public class ApiSpringController {
                 githubRaw = generateProviderContentWithMenuMasterPrompt(localPrompt, effectiveContextType);
                 String localText = extractAiResultText(githubRaw);
                 if (!localText.isBlank()) {
+                    localText = sanitizePromptEchoLeakage(localText);
+                    localText = stripAnalyzeLeakedDynamicContext(localText);
                     boolean localAccepted = shouldAcceptLocalAiAssistantOutput(
                         localText,
                         effectiveContextType,
@@ -11818,6 +13780,12 @@ public class ApiSpringController {
             }
             
             String completionResponseText = fullResponse.toString();
+            if ("analyze".equalsIgnoreCase(String.valueOf(responseMode))) {
+                completionResponseText = sanitizePromptEchoLeakage(completionResponseText);
+                completionResponseText = stripAnalyzeLeakedDynamicContext(completionResponseText);
+                fullResponse.setLength(0);
+                fullResponse.append(completionResponseText);
+            }
             if (isMenuJsonContext(effectiveContextType)) {
                 String sanitizedMenuResponse = normalizeMenuDraftJson(completionResponseText);
                 if (!sanitizedMenuResponse.isBlank()) {
@@ -11828,12 +13796,55 @@ public class ApiSpringController {
             }
 
             // Emit completion event
+            AssistantVerificationResult finalVerify = verifyAssistantResponseLite(
+                retrievalPlannerQuery,
+                currentCode,
+                message,
+                completionResponseText,
+                responseMode,
+                assistantRoutePlan);
+            emitAiAssistantChatChunk(appId, Map.of(
+                "stage", "assistant_verify_result",
+                "verificationScore", finalVerify.score(),
+                "verificationPassed", finalVerify.passed(),
+                "verificationVerdict", finalVerify.verdict(),
+                "evidenceTokens", finalVerify.evidenceTokens(),
+                "queryOverlap", finalVerify.queryOverlap(),
+                "codeOverlap", finalVerify.codeOverlap(),
+                "messageOverlap", finalVerify.messageOverlap(),
+                "responseMode", responseMode,
+                "status", finalVerify.passed() ? "done" : "warning"));
+
+            AssistantEditRiskResult editRisk = evaluateEditRiskLite(
+                editMode,
+                currentCode,
+                completionTextEdits,
+                structuredValid,
+                finalVerify.passed(),
+                requireStructured);
+            emitAiAssistantChatChunk(appId, Map.of(
+                "stage", "assistant_edit_risk_gate",
+                "riskScore", editRisk.riskScore(),
+                "riskLevel", editRisk.riskLevel(),
+                "blockAutoApply", editRisk.blockAutoApply(),
+                "reasons", editRisk.reasons(),
+                "responseMode", responseMode,
+                "status", editRisk.blockAutoApply() ? "warning" : "done"));
+
             Map<String, Object> completion = new HashMap<>();
             completion.put("stage", "complete");
             completion.put("fullResponse", completionResponseText);
             completion.put("responseMode", responseMode);
             completion.put("requiresStructuredEdits", requireStructured);
             completion.put("structuredEditValid", structuredValid);
+            completion.put("verificationScore", finalVerify.score());
+            completion.put("verificationPassed", finalVerify.passed());
+            completion.put("verificationVerdict", finalVerify.verdict());
+            completion.put("verificationEvidence", finalVerify.evidenceTokens());
+            completion.put("editRiskScore", editRisk.riskScore());
+            completion.put("editRiskLevel", editRisk.riskLevel());
+            completion.put("editRiskReasons", editRisk.reasons());
+            completion.put("editRiskBlockAutoApply", editRisk.blockAutoApply());
             if (structuredEdit.understandingChecklist != null) {
                 completion.put("understandingChecklist", structuredEdit.understandingChecklist);
             }
@@ -11851,6 +13862,15 @@ public class ApiSpringController {
                     completion.put("changedRanges", ranges);
                 }
             }
+
+            // TODO: Build citations from retrieval context (when available in scope)
+            // For now, emit assistant_citations stage for placeholder
+            emitAiAssistantChatChunk(appId, Map.of(
+                "stage", "assistant_citations",
+                "count", 0,
+                "sources", 0,
+                "responseMode", responseMode));
+
             completion.put("timestamp", System.currentTimeMillis());
             emitAiAssistantChatEvent(appId, "aiAssistant_chat_complete", completion);
 
@@ -12776,7 +14796,8 @@ public class ApiSpringController {
                 + "Return explanation and analysis text only.\n"
                 + "Do NOT generate replacement code blocks, full JSON payloads, or patch instructions unless user explicitly asks to edit/apply changes.\n"
                 + "For broad code/business analysis, use plain text sections: muc_tieu_nghiep_vu, luong_xu_ly_chinh, thanh_phan_quan_trong, dieu_kien_re_nhanh, du_lieu_vao_ra_side_effects, rui_ro_va_goi_y."
-                + " Avoid numeric-only placeholders like luong_xu_ly: 12345.";
+                + " Avoid numeric-only placeholders like luong_xu_ly: 12345.\n"
+                + "STRICT RULE: Section ## AI_INTERNAL_REASONING_CONTEXT is internal metadata only. NEVER copy, list, or echo any line from that section in your response. Only use it silently to guide reasoning.";
         } else {
             if ("menu_json".equals(normalizedContext)) {
                 systemPrompt = systemPrompt + "\n\n"
@@ -13267,6 +15288,30 @@ public class ApiSpringController {
     private String trimAiAssistantContinuityMemory(String memory) {
         String text = String.valueOf(memory == null ? "" : memory).trim();
         if (text.isEmpty()) return "";
+
+        // Remove wrappers/headers that can recursively leak into the next answer.
+        String[] lines = text.split("\\n");
+        StringBuilder cleaned = new StringBuilder(text.length());
+        for (String rawLine : lines) {
+            String line = String.valueOf(rawLine == null ? "" : rawLine).trim();
+            String lowered = line.toLowerCase(Locale.ROOT);
+            boolean drop = lowered.startsWith("[reused_context]")
+                || lowered.startsWith("[session_continuity]")
+                || lowered.startsWith("[current_request]")
+                || lowered.startsWith("## user_memory")
+                || lowered.startsWith("### turn [")
+                || lowered.startsWith("**request:**")
+                || lowered.startsWith("**response:**");
+            if (drop) {
+                continue;
+            }
+            cleaned.append(rawLine).append('\n');
+        }
+
+        text = cleaned.toString().replaceAll("\\n{3,}", "\\n\\n").trim();
+        if (text.isEmpty()) {
+            return "";
+        }
         if (text.length() <= AI_ASSISTANT_CONTINUITY_MEMORY_MAX_CHARS) return text;
         return text.substring(text.length() - AI_ASSISTANT_CONTINUITY_MEMORY_MAX_CHARS);
     }
@@ -16079,32 +18124,121 @@ public class ApiSpringController {
 
             Object result = parsed.get("result");
             if (result instanceof String) {
-                return String.valueOf(result).trim();
+                return sanitizePromptEchoLeakage(String.valueOf(result));
             }
             if (result != null) {
                 try {
-                    return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result).trim();
+                    return sanitizePromptEchoLeakage(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result));
                 } catch (Exception ignored) {
-                    return String.valueOf(result).trim();
+                    return sanitizePromptEchoLeakage(String.valueOf(result));
                 }
             }
 
             Object content = parsed.get("content");
             if (content instanceof String) {
-                return String.valueOf(content).trim();
+                return sanitizePromptEchoLeakage(String.valueOf(content));
             }
             if (content != null) {
                 try {
-                    return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(content).trim();
+                    return sanitizePromptEchoLeakage(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(content));
                 } catch (Exception ignored) {
-                    return String.valueOf(content).trim();
+                    return sanitizePromptEchoLeakage(String.valueOf(content));
                 }
             }
         } catch (Exception ignored) {
-            return rawContent.trim();
+            return sanitizePromptEchoLeakage(rawContent);
         }
 
         return "";
+    }
+
+    private String sanitizePromptEchoLeakage(String text) {
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return "";
+        }
+
+        int assistantStart = safe.lastIndexOf("<|im_start|>assistant");
+        if (assistantStart >= 0) {
+            safe = safe.substring(assistantStart + "<|im_start|>assistant".length()).trim();
+        }
+        safe = safe
+            .replace("<|im_end|>", "")
+            .replace("<|im_start|>", "")
+            .trim();
+
+        String loweredAll = safe.toLowerCase(Locale.ROOT);
+        int markerCount = 0;
+        if (safe.contains("CODE_STRING_FIRST_REQUEST_CONTRACT")) markerCount++;
+        if (safe.contains("obj['current_code']") || safe.contains("obj[\"current_code\"]")) markerCount++;
+        if (safe.contains("QUY TẮC NGÔN NGỮ ĐẦU RA") || loweredAll.contains("output language rule")) markerCount++;
+        if (loweredAll.contains("mandatory: respond only in chinese")) markerCount++;
+        if (loweredAll.contains("## chú ý") || loweredAll.contains("## chu y")) markerCount++;
+        if (loweredAll.contains("code_string_first_request_contract") && loweredAll.contains("plaintext")) markerCount++;
+
+        // Only sanitize when we are confident this is internal prompt echo.
+        boolean likelyPromptEcho = markerCount >= 2;
+
+        if (!likelyPromptEcho) {
+            return safe;
+        }
+
+        String[] lines = safe.split("\\n");
+        StringBuilder out = new StringBuilder(safe.length());
+        boolean skipBlock = false;
+        int removedLines = 0;
+        for (String rawLine : lines) {
+            String line = String.valueOf(rawLine == null ? "" : rawLine).trim();
+            String lowered = line.toLowerCase(Locale.ROOT);
+
+            if (line.startsWith("## CODE_STRING_FIRST_REQUEST_CONTRACT")) {
+                skipBlock = true;
+                removedLines++;
+                continue;
+            }
+            if (skipBlock) {
+                if (line.startsWith("## ")) {
+                    skipBlock = false;
+                } else {
+                    removedLines++;
+                    continue;
+                }
+            }
+
+            boolean drop = lowered.startsWith("## chú ý")
+                || lowered.startsWith("## chu y")
+                || lowered.startsWith("quy tắc ngôn ngữ đầu ra")
+                || lowered.startsWith("quy tac ngon ngu dau ra")
+                || lowered.contains("mandatory: respond only in chinese")
+                || lowered.contains("matching the user's input language")
+                || lowered.contains("obj['current_code']")
+                || lowered.contains("obj[\"current_code\"]")
+                || lowered.startsWith("plaintext");
+
+            if (drop) {
+                removedLines++;
+                continue;
+            }
+
+            out.append(rawLine).append('\n');
+        }
+
+        String sanitized = out.toString().replaceAll("\\n{3,}", "\\n\\n").trim();
+        if (sanitized.isBlank()) {
+            return safe;
+        }
+
+        int originalLines = lines.length;
+        if (removedLines <= 0 || removedLines >= Math.max(4, originalLines - 1)) {
+            return safe;
+        }
+
+        // If cleanup erased too much text, prefer original answer to avoid killing model reasoning.
+        if (sanitized.length() < Math.max(80, safe.length() / 3)) {
+            return safe;
+        }
+
+        return sanitized;
     }
 
     private String extractAiErrorMessage(String rawContent) {
@@ -16776,6 +18910,10 @@ public class ApiSpringController {
 
     private void emitTextAsAiAssistantChunks(String appId, String text, String responseMode, String uiLang) {
         String source = text == null ? "" : text;
+        if (!source.isBlank() && "analyze".equalsIgnoreCase(String.valueOf(responseMode))) {
+            source = sanitizePromptEchoLeakage(source);
+            source = stripAnalyzeLeakedDynamicContext(source);
+        }
         if (source.isBlank()) {
             return;
         }

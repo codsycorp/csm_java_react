@@ -8933,6 +8933,15 @@ function getConfigsWithZaloGroups() {
     config_id: cfg.id,
     zalo_groups: cfg.zalo_groups || [],
     zalo_scan_interval_minutes: cfg.zalo_scan_interval_minutes || 5, // Default 5 phút
+    // ✅ FIX: Giữ lại đầy đủ các field quan trọng để pushSingleMessageToWeb không bị undefined
+    domain: cfg.domain,
+    service_type: cfg.service_type,
+    project: cfg.project,
+    app_id: cfg.app_id,
+    fanpage_id: cfg.fanpage_id,
+    fanpage_token: cfg.fanpage_token,
+    fanpage_name: cfg.fanpage_name,
+    primary_domain: cfg.primary_domain,
     // Keep backward compatibility: derive fanpage list from legacy fields when needed.
     zalo_fanpages: Array.isArray(cfg.zalo_fanpages) && cfg.zalo_fanpages.length > 0
       ? cfg.zalo_fanpages

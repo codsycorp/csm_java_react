@@ -5573,6 +5573,76 @@ function normalizeJsonString(raw) {
   return output;
 }
 
+function extractJsonObjectString(input) {
+  const str = String(input || "").trim();
+  const firstBrace = str.indexOf("{");
+  if (firstBrace === -1) return str;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = firstBrace; i < str.length; i += 1) {
+    const ch = str[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return str.slice(firstBrace, i + 1);
+      }
+    }
+  }
+
+  return str.slice(firstBrace);
+}
+
+function attemptJsonRepair(rawJson) {
+  let repaired = String(rawJson || "")
+    .replace(/\uFEFF/g, "")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+
+  repaired = normalizeJsonString(repaired);
+
+  // Remove trailing commas before object/array closure.
+  repaired = repaired.replace(/,\s*([}\]])/g, "$1");
+
+  // Recover missing comma between JSON values and next object key.
+  repaired = repaired.replace(/([}\]"\d]|true|false|null)\s*(?="(?:[^"\\]|\\.)+"\s*:)/g, "$1,");
+
+  return repaired;
+}
+
+function logJsonParseErrorContext(tag, candidate, error) {
+  const msg = error?.message || "";
+  const matched = msg.match(/position\s+(\d+)/i);
+  if (!matched) {
+    console.error(`${tag} ${msg}`);
+    return;
+  }
+  const pos = Number(matched[1]);
+  const start = Math.max(0, pos - 80);
+  const end = Math.min(candidate.length, pos + 80);
+  const snippet = candidate.slice(start, end);
+  console.error(`${tag} ${msg} | around[${start}:${end}] =`, snippet);
+}
+
 function parseSeoJsonString(seoString) {
   let jsonStr = (seoString || "").trim();
 
@@ -5582,24 +5652,20 @@ function parseSeoJsonString(seoString) {
     jsonStr = match[1].trim();
   }
 
-  const firstBrace = jsonStr.indexOf("{");
-  const lastBrace = jsonStr.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    jsonStr = jsonStr.slice(firstBrace, lastBrace + 1);
-  }
+  jsonStr = extractJsonObjectString(jsonStr);
 
   try {
     return JSON.parse(jsonStr);
   } catch (parseErr) {
-    const repaired = normalizeJsonString(
-      jsonStr
-        .replace(/\uFEFF/g, "")
-        .replace(/[“”]/g, '"')
-        .replace(/[‘’]/g, "'")
-        .replace(/,\s*([}\]])/g, "$1")
-    );
+    logJsonParseErrorContext('[processContent] ❌ parseSeoJsonString primary parse failed:', jsonStr, parseErr);
 
-    return JSON.parse(repaired);
+    const repaired = attemptJsonRepair(jsonStr);
+    try {
+      return JSON.parse(repaired);
+    } catch (repairErr) {
+      logJsonParseErrorContext('[processContent] ❌ parseSeoJsonString repair parse failed:', repaired, repairErr);
+      throw repairErr;
+    }
   }
 }
 
@@ -5632,6 +5698,8 @@ async function processContent(item, opts = {}) {
   }
 
   if (opts.config_id && !latestConfig) {
+    // ✅ FIX: Log rõ opts.domain để trace xem domain nào đang bị dùng khi config không tìm thấy
+    console.error(`❌ [processContent] config_id=${opts.config_id} không tìm thấy trong loadDataOptionUser(). opts.domain=${opts.domain || '(undefined)'}, opts.service_type=${opts.service_type || '(undefined)'}`);
     throw new Error(`Không tìm thấy cấu hình Zalo theo config_id=${opts.config_id}. Đã dừng để tránh đăng nhầm domain/fanpage.`);
   }
   
@@ -9240,6 +9308,15 @@ function getConfigsWithZaloGroups() {
     zalo_groups: cfg.zalo_groups || [],
     zalo_scan_interval_minutes: cfg.zalo_scan_interval_minutes || 5, // Default 5 phút
     keep_original_zalo_content_to_facebook: cfg.keep_original_zalo_content_to_facebook === true || cfg.keep_original_zalo_content_to_facebook === 'true' || cfg.keep_original_zalo_content_to_facebook === 1 || cfg.keep_original_zalo_content_to_facebook === '1',
+    // ✅ FIX: Giữ lại đầy đủ các field quan trọng để pushSingleMessageToWeb không bị undefined
+    domain: cfg.domain,
+    service_type: cfg.service_type,
+    project: cfg.project,
+    app_id: cfg.app_id,
+    fanpage_id: cfg.fanpage_id,
+    fanpage_token: cfg.fanpage_token,
+    fanpage_name: cfg.fanpage_name,
+    primary_domain: cfg.primary_domain,
     // Keep backward compatibility: derive fanpage list from legacy fields when needed.
     zalo_fanpages: Array.isArray(cfg.zalo_fanpages) && cfg.zalo_fanpages.length > 0
       ? cfg.zalo_fanpages

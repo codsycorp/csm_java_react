@@ -5,7 +5,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Request Context Tracer
@@ -39,20 +38,15 @@ public class RequestContextTracer {
     private static class PhaseMetrics {
         String phaseName;
         long startMs;
-        long endMs;
         long durationMs;
-        String status; // running | completed | error
 
         PhaseMetrics(String phaseName, long startMs) {
             this.phaseName = phaseName;
             this.startMs = startMs;
-            this.status = "running";
         }
 
         void complete(long endMs) {
-            this.endMs = endMs;
             this.durationMs = endMs - startMs;
-            this.status = "completed";
         }
     }
 
@@ -129,8 +123,7 @@ public class RequestContextTracer {
      * Start tracking a new request
      */
     public void startRequest(String requestId) {
-        RequestContext ctx = new RequestContext(requestId);
-        requestContexts.put(requestId, ctx);
+        ensureContext(requestId);
         currentRequestId.set(requestId);
         log.debug("Request started: {}", requestId);
     }
@@ -139,11 +132,7 @@ public class RequestContextTracer {
      * Start a named phase within current request
      */
     public void startPhase(String phaseName, String requestId) {
-        RequestContext ctx = requestContexts.get(requestId);
-        if (ctx == null) {
-            log.warn("Request context not found: {}", requestId);
-            return;
-        }
+        RequestContext ctx = ensureContext(requestId);
 
         PhaseMetrics phase = new PhaseMetrics(phaseName, System.currentTimeMillis());
         ctx.phases.put(phaseName, phase);
@@ -154,11 +143,7 @@ public class RequestContextTracer {
      * End a named phase
      */
     public void endPhase(String phaseName, String requestId, long durationMs) {
-        RequestContext ctx = requestContexts.get(requestId);
-        if (ctx == null) {
-            log.warn("Request context not found: {}", requestId);
-            return;
-        }
+        RequestContext ctx = ensureContext(requestId);
 
         PhaseMetrics phase = ctx.phases.get(phaseName);
         if (phase == null) {
@@ -174,10 +159,7 @@ public class RequestContextTracer {
      * Record a custom metric
      */
     public void recordMetric(String requestId, String key, long value) {
-        RequestContext ctx = requestContexts.get(requestId);
-        if (ctx == null) {
-            return;
-        }
+        RequestContext ctx = ensureContext(requestId);
         ctx.metrics.put(key, value);
     }
 
@@ -185,10 +167,7 @@ public class RequestContextTracer {
      * Record an error
      */
     public void recordError(String requestId, String errorKey, String errorMsg) {
-        RequestContext ctx = requestContexts.get(requestId);
-        if (ctx == null) {
-            return;
-        }
+        RequestContext ctx = ensureContext(requestId);
         ctx.errors.add(String.format("%s: %s", errorKey, errorMsg));
         ctx.error();
     }
@@ -197,10 +176,7 @@ public class RequestContextTracer {
      * Get elapsed time since request started
      */
     public long elapsedSinceRequestStart(String requestId) {
-        RequestContext ctx = requestContexts.get(requestId);
-        if (ctx == null) {
-            return 0;
-        }
+        RequestContext ctx = ensureContext(requestId);
         return ctx.totalDurationMs();
     }
 
@@ -208,13 +184,24 @@ public class RequestContextTracer {
      * Mark request as complete
      */
     public void completeRequest(String requestId) {
-        RequestContext ctx = requestContexts.get(requestId);
-        if (ctx == null) {
-            return;
-        }
+        RequestContext ctx = ensureContext(requestId);
         ctx.complete();
         currentRequestId.remove();
         log.debug("Request completed: {} ({}ms)", requestId, ctx.totalDurationMs());
+    }
+
+    private synchronized RequestContext ensureContext(String requestId) {
+        String safeRequestId = String.valueOf(requestId == null ? "" : requestId).trim();
+        if (safeRequestId.isBlank()) {
+            safeRequestId = "request-" + System.currentTimeMillis();
+        }
+        RequestContext existing = requestContexts.get(safeRequestId);
+        if (existing != null) {
+            return existing;
+        }
+        RequestContext created = new RequestContext(safeRequestId);
+        requestContexts.put(safeRequestId, created);
+        return created;
     }
 
     /**

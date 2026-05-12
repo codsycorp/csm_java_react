@@ -119,7 +119,8 @@ public class GeminiService implements AIProvider {
       @Value("${gemini.models:gemini-2.0-flash-exp,gemini-1.5-flash,gemini-1.5-pro,gemma-2-27b-it,gemma-3-27b-it}") String geminiModels,
       @Value("${gemini.model.quota.per-minute:60}") int quotaPerMinute,
       @Value("${gemini.model.quota.per-day:1500}") int quotaPerDay,
-      @Value("${gemini.model.unavailable-cooldown-ms:120000}") long modelUnavailableCooldownMs) {
+      @Value("${gemini.model.unavailable-cooldown-ms:120000}") long modelUnavailableCooldownMs,
+      @Value("${gemini.response-timeout-ms:600000}") long geminiResponseTimeoutMs) {
     this.apiKeyService = apiKeyService;
     this.apiUrl = apiUrl;
     this.aiModel = aiModel;
@@ -129,16 +130,14 @@ public class GeminiService implements AIProvider {
     this.quotaPerMinute = quotaPerMinute;
     this.quotaPerDay = quotaPerDay;
     this.modelUnavailableCooldownMs = modelUnavailableCooldownMs;
-    // Parse comma-separated models list
     this.availableModels = Arrays.asList(geminiModels.split(",\\s*"));
-    this.restTemplate = createOptimizedRestTemplate();
-    
-    // Initialize quota tracking for each model
+    this.restTemplate = createOptimizedRestTemplate(geminiResponseTimeoutMs);
+
     for (String model : availableModels) {
       modelQuotaMap.put(model, new ModelQuota(model, quotaPerMinute, quotaPerDay));
     }
-    
-    log.info("GeminiService initialized with {} models: {}", availableModels.size(), availableModels);
+
+    log.info("GeminiService initialized with {} models: {}, responseTimeoutMs={}", availableModels.size(), availableModels, geminiResponseTimeoutMs);
     log.info("Model quota limits: {} req/min, {} req/day", quotaPerMinute, quotaPerDay);
   }
 
@@ -146,24 +145,20 @@ public class GeminiService implements AIProvider {
    * Tạo RestTemplate được tối ưu với connection pooling, timeout và buffer.
    * Điều này giảm thiểu overhead khi tạo connection mới cho mỗi request.
    */
-  private RestTemplate createOptimizedRestTemplate() {
-    // Tạo RequestConfig với timeout tùy chỉnh
+  private RestTemplate createOptimizedRestTemplate(long responseTimeoutMs) {
+    long effectiveTimeoutMs = responseTimeoutMs > 0 ? responseTimeoutMs : 600_000L;
     RequestConfig requestConfig = RequestConfig.custom()
-        .setConnectTimeout(Timeout.ofSeconds(10))           // 10 giây connect timeout
-        .setConnectionRequestTimeout(Timeout.ofSeconds(5))  // 5 giây request timeout
-        .setResponseTimeout(Timeout.ofSeconds(120))         // 120 giây read/response timeout - AI cần thời gian xử lý prompt phức tạp
+        .setConnectTimeout(Timeout.ofSeconds(10))
+        .setConnectionRequestTimeout(Timeout.ofSeconds(5))
+        .setResponseTimeout(Timeout.ofMilliseconds(effectiveTimeoutMs))
         .build();
-    
-    // Tạo HttpClient với config timeout
+
     CloseableHttpClient httpClient = HttpClients.custom()
         .setDefaultRequestConfig(requestConfig)
         .build();
-    
-    // Tạo factory với HttpClient đã config
+
     HttpComponentsClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory(httpClient);
-    
-    RestTemplate template = new RestTemplate(factory);
-    return template;
+    return new RestTemplate(factory);
   }
 
   /**

@@ -69,7 +69,8 @@ type AiRequestHistoryItem = {
 	summary: string;
 	changes: string[];
 	draftCode: string;
-	createdAt: number;
+	createdAt: number;  // Request start time
+	completedAt?: number;  // Actual completion time when stream finished
 	pinned?: boolean;
 };
 
@@ -2106,6 +2107,7 @@ export default function CodeEditor() {
 				changes: Array.isArray(parsed.changes) ? parsed.changes : [],
 				draftCode: safeResult.shouldApply ? safeResult.code : currentDraftRef.current,
 				createdAt: requestCreatedAt,
+				completedAt: Date.now(),
 			};
 
 			if (!safeResult.shouldApply) {
@@ -2164,6 +2166,7 @@ export default function CodeEditor() {
 				changes: [],
 				draftCode: "",
 				createdAt: requestCreatedAt,
+				completedAt: Date.now(),
 			};
 			setAiProgress({ status: "failed", stage: "failed", message: msg, percent: 0 });
 			setAiRequestHistory((prev) => [

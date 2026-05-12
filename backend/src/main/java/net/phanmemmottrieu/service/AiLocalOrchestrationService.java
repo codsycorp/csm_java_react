@@ -131,6 +131,21 @@ public class AiLocalOrchestrationService {
     @Value("${ai.orchestration.multimodal.scope-rag.max-chars:5000}")
     private int scopedRagMaxChars;
 
+    @Value("${ai.orchestration.multimodal.scope-rag.adaptive.enabled:true}")
+    private boolean adaptiveScopeRagEnabled;
+
+    @Value("${ai.orchestration.multimodal.scope-rag.adaptive.min-top-k:3}")
+    private int adaptiveScopeRagMinTopK;
+
+    @Value("${ai.orchestration.multimodal.scope-rag.adaptive.max-top-k:10}")
+    private int adaptiveScopeRagMaxTopK;
+
+    @Value("${ai.orchestration.multimodal.scope-rag.adaptive.min-max-chars:1800}")
+    private int adaptiveScopeRagMinMaxChars;
+
+    @Value("${ai.orchestration.multimodal.scope-rag.adaptive.max-max-chars:9000}")
+    private int adaptiveScopeRagMaxMaxChars;
+
     @Value("${ai.orchestration.fast-unrelated.enabled:true}")
     private boolean fastUnrelatedEnabled;
 
@@ -472,23 +487,32 @@ public class AiLocalOrchestrationService {
             && aggregateScopeMask > 0
             && aiBusinessMemoryVectorService != null
             && aiBusinessMemoryVectorService.isEnabled()) {
-            String retrievalQuery = buildSelfDirectedRetrievalQuery(
+            AdaptiveRetrievalPlan retrievalPlan = buildAdaptiveRetrievalPlan(
                 safeMessage,
-                digest.intentKeywords,
                 safeContextType,
                 safeTaskType,
-                safeMode);
+                safeMode,
+                safeCode,
+                safeAttachments,
+                digest,
+                aggregateScopeMask,
+                scanResult
+            );
             scopedRagBlock = aiBusinessMemoryVectorService.buildRagBlockWithScopes(
                 appId,
-                retrievalQuery,
-                Math.max(2, scopedRagTopK),
-                aggregateScopeMask,
-                Math.max(1600, scopedRagMaxChars)
+                retrievalPlan.query,
+                retrievalPlan.topK,
+                retrievalPlan.scopeMask,
+                retrievalPlan.maxChars
             );
             out.toolStats.put("scopedRagEnabled", true);
-            out.toolStats.put("scopedRagScopeMask", aggregateScopeMask);
+            out.toolStats.put("scopedRagScopeMask", retrievalPlan.scopeMask);
+            out.toolStats.put("scopedRagTopK", retrievalPlan.topK);
+            out.toolStats.put("scopedRagMaxChars", retrievalPlan.maxChars);
+            out.toolStats.put("scopedRagAdaptive", retrievalPlan.adaptive);
+            out.toolStats.put("scopedRagAdaptiveReasons", retrievalPlan.reasons);
             out.toolStats.put("scopedRagChars", scopedRagBlock.length());
-            out.toolStats.put("scopedRagQuery", truncateLine(retrievalQuery, 180));
+            out.toolStats.put("scopedRagQuery", truncateLine(retrievalPlan.query, 180));
         }
 
         AiSpeculativeExecutionService.ExecutionResult speculative = aiSpeculativeExecutionService.run(
@@ -546,7 +570,9 @@ public class AiLocalOrchestrationService {
             + "### Tier 2: Relevant Files/Signals\\n" + tier2 + "\\n\\n"
             + "### Tier 3: Runtime Tool Output (compressed)\\n" + tier3;
 
-        String trimmed = truncateMiddle(combined, Math.max(4000, maxContextChars));
+        String trimmed = sanitizeInternalOrchestrationContext(
+            truncateMiddle(combined, Math.max(4000, maxContextChars))
+        );
         out.compressedContextBlock = trimmed;
         out.totalCharsAfter = trimmed.length();
         out.savedChars = Math.max(0, out.totalCharsBefore - out.totalCharsAfter);
@@ -556,6 +582,34 @@ public class AiLocalOrchestrationService {
         out.toolStats.put("elapsedMs", Math.max(0L, System.currentTimeMillis() - orchestrationStartMs));
 
         return finalizeOrchestrationResult(out, effectiveRequestId, ownsTraceRequest, orchestrationStartMs);
+    }
+
+    private String sanitizeInternalOrchestrationContext(String context) {
+        String safe = String.valueOf(context == null ? "" : context);
+        if (safe.isBlank()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(safe.length());
+        String[] lines = safe.split("\\n");
+        for (String rawLine : lines) {
+            String line = String.valueOf(rawLine == null ? "" : rawLine).trim();
+            String lowered = line.toLowerCase(Locale.ROOT);
+
+            if (lowered.startsWith("orchestration_dynamic_memory_source=")
+                || lowered.startsWith("source=primary_flow")
+                || lowered.startsWith("source=multimodal")
+                || lowered.startsWith("dyn_ctx_")) {
+                continue;
+            }
+
+            if (lowered.startsWith("source: dyn_ctx_")) {
+                out.append("source: dynamic_context").append('\n');
+                continue;
+            }
+
+            out.append(rawLine).append('\n');
+        }
+        return out.toString().replaceAll("\\n{3,}", "\\n\\n").trim();
     }
 
     private OrchestrationResult finalizeOrchestrationResult(
@@ -722,6 +776,112 @@ public class AiLocalOrchestrationService {
             return String.valueOf(runtime);
         }
     }
+
+    private AdaptiveRetrievalPlan buildAdaptiveRetrievalPlan(
+        String message,
+        String contextType,
+        String taskType,
+        String responseMode,
+        String code,
+        List<Map<String, Object>> attachments,
+        LocalToolDigest digest,
+        int aggregateScopeMask,
+        AiMultimodalScannerService.ScanResult scanResult
+    ) {
+        String safeMessage = String.valueOf(message == null ? "" : message).trim();
+        String safeMode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
+        String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        String safeTaskType = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
+        int codeChars = String.valueOf(code == null ? "" : code).length();
+        int attachmentCount = attachments == null ? 0 : attachments.size();
+        boolean hasJsonAttachments = attachments != null && attachments.stream().anyMatch(item -> {
+            String mime = String.valueOf(item == null ? "" : item.get("mimeType")).toLowerCase(Locale.ROOT);
+            String type = String.valueOf(item == null ? "" : item.get("type")).toLowerCase(Locale.ROOT);
+            String kind = String.valueOf(item == null ? "" : item.get("kind")).toLowerCase(Locale.ROOT);
+            return mime.contains("json") || type.contains("json") || kind.contains("json");
+        });
+        boolean hasImageAttachments = attachments != null && attachments.stream().anyMatch(item -> {
+            String mime = String.valueOf(item == null ? "" : item.get("mimeType")).toLowerCase(Locale.ROOT);
+            String type = String.valueOf(item == null ? "" : item.get("type")).toLowerCase(Locale.ROOT);
+            String kind = String.valueOf(item == null ? "" : item.get("kind")).toLowerCase(Locale.ROOT);
+            return mime.startsWith("image/") || type.contains("image") || kind.contains("image");
+        });
+
+        String query = buildSelfDirectedRetrievalQuery(
+            safeMessage,
+            digest.intentKeywords,
+            digest.codeSymbols,
+            attachments,
+            safeContextType,
+            safeTaskType,
+            safeMode
+        );
+
+        int scopeMask = Math.max(1, aggregateScopeMask);
+        int topK = Math.max(2, scopedRagTopK);
+        int maxChars = Math.max(1600, scopedRagMaxChars);
+        List<String> reasons = new ArrayList<>();
+
+        if (!adaptiveScopeRagEnabled) {
+            return new AdaptiveRetrievalPlan(scopeMask, topK, maxChars, query, false, reasons);
+        }
+
+        if ("menu_json".equals(safeContextType) || safeTaskType.contains("menu")) {
+            topK += 1;
+            maxChars += 800;
+            reasons.add("menu_context_boost");
+        }
+
+        if ("analyze".equals(safeMode)) {
+            topK += 1;
+            maxChars += 600;
+            reasons.add("analyze_mode_context_boost");
+        }
+
+        if (codeChars > 80000) {
+            topK += 1;
+            maxChars += 1200;
+            reasons.add("large_code_context_boost");
+        }
+
+        if (attachmentCount >= 3) {
+            topK += 1;
+            reasons.add("multi_attachment_boost");
+        }
+
+        if (hasJsonAttachments) {
+            maxChars += 700;
+            reasons.add("json_attachment_schema_boost");
+        }
+
+        if (hasImageAttachments) {
+            reasons.add("image_attachment_keep_scope_broad");
+        }
+
+        if (scanResult != null && scanResult.enabled() && scanResult.ingestCount() > 0) {
+            topK += 1;
+            reasons.add("scanner_ingestion_boost");
+        }
+
+        if (digest != null && digest.intentKeywords.size() >= 6) {
+            topK += 1;
+            reasons.add("intent_keyword_density_boost");
+        }
+
+        topK = Math.max(Math.max(2, adaptiveScopeRagMinTopK), Math.min(Math.max(adaptiveScopeRagMinTopK, adaptiveScopeRagMaxTopK), topK));
+        maxChars = Math.max(Math.max(1200, adaptiveScopeRagMinMaxChars), Math.min(Math.max(adaptiveScopeRagMinMaxChars, adaptiveScopeRagMaxMaxChars), maxChars));
+
+        return new AdaptiveRetrievalPlan(scopeMask, topK, maxChars, query, true, reasons);
+    }
+
+    private record AdaptiveRetrievalPlan(
+        int scopeMask,
+        int topK,
+        int maxChars,
+        String query,
+        boolean adaptive,
+        List<String> reasons
+    ) {}
 
     private Set<String> extractIntentKeywords(String message, int limit) {
         LinkedHashSet<String> out = new LinkedHashSet<>();
@@ -932,12 +1092,15 @@ public class AiLocalOrchestrationService {
     private String buildSelfDirectedRetrievalQuery(
         String message,
         Set<String> intentKeywords,
+        List<String> codeSymbols,
+        List<Map<String, Object>> attachments,
         String contextType,
         String taskType,
         String responseMode
     ) {
         StringBuilder q = new StringBuilder();
-        q.append(String.valueOf(message == null ? "" : message).trim());
+        String safeMessage = String.valueOf(message == null ? "" : message).trim();
+        q.append(safeMessage);
         if (intentKeywords != null && !intentKeywords.isEmpty()) {
             q.append(" | intents: ");
             int count = 0;
@@ -955,10 +1118,127 @@ public class AiLocalOrchestrationService {
                 }
             }
         }
+
+        if (codeSymbols != null && !codeSymbols.isEmpty()) {
+            q.append(" | symbols: ");
+            int count = 0;
+            for (String symbol : codeSymbols) {
+                String safe = String.valueOf(symbol == null ? "" : symbol).trim();
+                if (safe.isBlank()) {
+                    continue;
+                }
+                // Keep only identifier-like tokens from signatures to avoid noisy long lines.
+                Matcher m = TOKEN_PATTERN.matcher(safe.toLowerCase(Locale.ROOT));
+                while (m.find()) {
+                    String token = String.valueOf(m.group(0) == null ? "" : m.group(0)).trim();
+                    if (token.length() < 3) {
+                        continue;
+                    }
+                    if (count > 0) {
+                        q.append(' ');
+                    }
+                    q.append(token);
+                    count++;
+                    if (count >= 14) {
+                        break;
+                    }
+                }
+                if (count >= 14) {
+                    break;
+                }
+            }
+        }
+
+        List<String> attachmentHints = extractAttachmentSearchHints(attachments, 16);
+        if (!attachmentHints.isEmpty()) {
+            q.append(" | attachments: ");
+            q.append(String.join(" ", attachmentHints));
+        }
+
+        if (safeMessage.toLowerCase(Locale.ROOT).contains("phan tich")
+            || safeMessage.toLowerCase(Locale.ROOT).contains("phân tích")
+            || safeMessage.toLowerCase(Locale.ROOT).contains("logic")) {
+            q.append(" | focus: business_logic flow side_effects risks");
+        }
+
         q.append(" | context=").append(String.valueOf(contextType == null ? "" : contextType));
         q.append(" | task=").append(String.valueOf(taskType == null ? "" : taskType));
         q.append(" | mode=").append(String.valueOf(responseMode == null ? "" : responseMode));
         return trimTo(q.toString(), 380);
+    }
+
+    private List<String> extractAttachmentSearchHints(List<Map<String, Object>> attachments, int limit) {
+        List<String> out = new ArrayList<>();
+        if (attachments == null || attachments.isEmpty()) {
+            return out;
+        }
+        LinkedHashSet<String> dedupe = new LinkedHashSet<>();
+        for (Map<String, Object> item : attachments) {
+            if (item == null) {
+                continue;
+            }
+            String name = str(item.get("name")).toLowerCase(Locale.ROOT);
+            String kind = str(item.get("kind")).toLowerCase(Locale.ROOT);
+            String mime = str(item.get("mimeType")).toLowerCase(Locale.ROOT);
+            String role = str(item.get("contextRole")).toLowerCase(Locale.ROOT);
+            String summary = str(item.get("summary")).toLowerCase(Locale.ROOT);
+            String text = str(item.get("textContent"));
+
+            if (!name.isBlank()) {
+                for (String token : name.split("[^a-z0-9_]+")) {
+                    if (token.length() >= 3) {
+                        dedupe.add(token);
+                    }
+                }
+            }
+            if (!kind.isBlank()) {
+                dedupe.add(kind);
+            }
+            if (!role.isBlank()) {
+                dedupe.add(role);
+            }
+            if (mime.contains("json") || "json".equals(kind) || name.endsWith(".json")) {
+                dedupe.add("json_schema");
+                String keys = extractJsonRootKeys(text, 10);
+                if (!keys.isBlank()) {
+                    for (String key : keys.toLowerCase(Locale.ROOT).split("[^a-z0-9_]+")) {
+                        if (key.length() >= 3) {
+                            dedupe.add(key);
+                        }
+                    }
+                }
+            }
+            if (mime.startsWith("image/") || "image".equals(kind)) {
+                dedupe.add("image_attachment");
+                dedupe.add("ocr_context");
+            }
+            if (!summary.isBlank()) {
+                Matcher m = TOKEN_PATTERN.matcher(summary);
+                while (m.find()) {
+                    String token = String.valueOf(m.group(0) == null ? "" : m.group(0)).trim();
+                    if (token.length() >= 3) {
+                        dedupe.add(token);
+                    }
+                    if (dedupe.size() >= Math.max(4, limit * 2)) {
+                        break;
+                    }
+                }
+            }
+            if (dedupe.size() >= Math.max(4, limit * 2)) {
+                break;
+            }
+        }
+
+        for (String token : dedupe) {
+            if (token == null || token.isBlank()) {
+                continue;
+            }
+            out.add(token);
+            if (out.size() >= Math.max(1, limit)) {
+                break;
+            }
+        }
+        return out;
     }
 
     private String buildPrimaryFlowIngestionMarkdown(
@@ -1004,17 +1284,15 @@ public class AiLocalOrchestrationService {
             sb.append("\n");
         }
 
-        String snippet;
-        if ("menu_json".equals(ctx)) {
-            snippet = trimTo(code, Math.max(1600, maxChars / 2));
-            sb.append("menuJsonSnippet=\n```json\n").append(snippet).append("\n```\n");
-        } else {
-            snippet = truncateMiddle(code, Math.max(1800, maxChars / 2));
-            sb.append("codeSnippet=\n```")
-                .append("\n")
-                .append(snippet)
-                .append("\n```\n");
-        }
+        // NOTE: Raw code snippet intentionally excluded from Lucene ingestion to prevent a
+        // circular retrieval loop where current code is indexed → retrieved as RAG → injected
+        // back into the prompt → weak local model echoes it verbatim instead of reasoning.
+        // The full code is already present in the main prompt via ## CODE HIỆN TẠI section.
+        // Only intent keywords + code symbols (function signatures) are indexed so that
+        // semantic search finds the right docs without leaking raw source into LLM context.
+        sb.append("codeChars=").append(code.length()).append("\n");
+        sb.append("contextSummary=primary_flow_indexed_for_semantic_retrieval\n");
+
         return trimTo(sb.toString(), Math.max(1200, maxChars));
     }
 

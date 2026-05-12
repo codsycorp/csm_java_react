@@ -33,6 +33,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -445,6 +446,7 @@ public class LocalAiAssistantContextService {
 
     private List<SearchHit> searchLocalSources(String queryText, String contextType, int limit) {
         List<SearchHit> out = new ArrayList<>();
+        List<SearchHit> candidates = new ArrayList<>();
         Path indexPath = resolveIndexPath();
         if (!Files.isDirectory(indexPath)) {
             return out;
@@ -464,18 +466,18 @@ public class LocalAiAssistantContextService {
                     if (!matchesContext(scope, ext, contextType)) {
                         continue;
                     }
-                    out.add(new SearchHit(
+                    candidates.add(new SearchHit(
                         str(doc.get("path")),
                         scope,
                         str(doc.get("summary")),
                         trimTo(str(doc.get("content")), 1600),
                         scoreDoc.score
                     ));
-                    if (out.size() >= Math.max(1, limit)) {
+                    if (candidates.size() >= Math.max(4, limit * 4)) {
                         break;
                     }
                 }
-                if (out.isEmpty()) {
+                if (candidates.isEmpty()) {
                     TopDocs fallback = searcher.search(new MatchAllDocsQuery(), Math.max(limit * 2, 8));
                     for (ScoreDoc scoreDoc : fallback.scoreDocs) {
                         Document doc = searcher.storedFields().document(scoreDoc.doc);
@@ -484,14 +486,14 @@ public class LocalAiAssistantContextService {
                         if (!matchesContext(scope, ext, contextType)) {
                             continue;
                         }
-                        out.add(new SearchHit(
+                        candidates.add(new SearchHit(
                             str(doc.get("path")),
                             scope,
                             str(doc.get("summary")),
                             trimTo(str(doc.get("content")), 1200),
                             scoreDoc.score
                         ));
-                        if (out.size() >= Math.max(1, limit)) {
+                        if (candidates.size() >= Math.max(4, limit * 4)) {
                             break;
                         }
                     }
@@ -500,7 +502,67 @@ public class LocalAiAssistantContextService {
         } catch (Exception ex) {
             log.debug("Local assistant semantic search failed: {}", ex.getMessage());
         }
+        return rerankSearchHits(queryText, candidates, limit);
+    }
+
+    private List<SearchHit> rerankSearchHits(String queryText, List<SearchHit> candidates, int limit) {
+        if (candidates == null || candidates.isEmpty()) {
+            return List.of();
+        }
+        int safeLimit = Math.max(1, limit);
+        List<String> queryTokens = extractTopTokens(queryText, 28);
+        List<SearchHit> rescored = new ArrayList<>();
+        for (SearchHit hit : candidates) {
+            String combined = (str(hit.path()) + "\n" + str(hit.summary()) + "\n" + str(hit.content())).toLowerCase(Locale.ROOT);
+            float lexical = lexicalOverlapScore(queryTokens, combined);
+            float finalScore = (hit.score() * 0.68f) + (lexical * 0.32f);
+            rescored.add(new SearchHit(hit.path(), hit.scope(), hit.summary(), hit.content(), finalScore));
+        }
+
+        rescored.sort(Comparator.comparingDouble((SearchHit h) -> h.score()).reversed());
+        List<SearchHit> out = new ArrayList<>();
+        LinkedHashSet<String> seenPath = new LinkedHashSet<>();
+        for (SearchHit hit : rescored) {
+            String pathKey = str(hit.path());
+            if (!pathKey.isBlank() && seenPath.contains(pathKey)) {
+                continue;
+            }
+            out.add(hit);
+            if (!pathKey.isBlank()) {
+                seenPath.add(pathKey);
+            }
+            if (out.size() >= safeLimit) {
+                break;
+            }
+        }
         return out;
+    }
+
+    private float lexicalOverlapScore(List<String> queryTokens, String text) {
+        if (queryTokens == null || queryTokens.isEmpty()) {
+            return 0f;
+        }
+        String source = String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT);
+        if (source.isBlank()) {
+            return 0f;
+        }
+        int hitCount = 0;
+        int weightedHit = 0;
+        for (String token : queryTokens) {
+            String safeToken = String.valueOf(token == null ? "" : token).trim();
+            if (safeToken.isBlank()) {
+                continue;
+            }
+            if (source.contains(safeToken)) {
+                hitCount++;
+                if (safeToken.length() >= 6) {
+                    weightedHit++;
+                }
+            }
+        }
+        float base = hitCount / (float) Math.max(1, queryTokens.size());
+        float weighted = weightedHit / (float) Math.max(1, queryTokens.size());
+        return Math.min(1.0f, (base * 0.75f) + (weighted * 0.25f));
     }
 
     private boolean matchesContext(String scope, String ext, String contextType) {

@@ -21,6 +21,7 @@ import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.store.LockObtainFailedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -38,6 +39,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 public class AiBusinessMemoryVectorService {
@@ -72,6 +76,14 @@ public class AiBusinessMemoryVectorService {
 
     @Value("${ai.business.memory.dynamic.max-sources:48}")
     private int dynamicMaxSources;
+
+    @Value("${ai.business.memory.write.lock-retries:3}")
+    private int lockRetries;
+
+    @Value("${ai.business.memory.write.lock-backoff-ms:35}")
+    private int lockBackoffMs;
+
+    private final ConcurrentHashMap<String, ReentrantLock> appWriteLocks = new ConcurrentHashMap<>();
 
     public record SearchHit(
         String appId,
@@ -142,8 +154,10 @@ public class AiBusinessMemoryVectorService {
 
         long now = System.currentTimeMillis();
         Map<String, Long> latestBySource = new LinkedHashMap<>();
-        int removed = 0;
+        AtomicInteger removedCounter = new AtomicInteger(0);
 
+        ReentrantLock appLock = appWriteLocks.computeIfAbsent(safeAppId, key -> new ReentrantLock());
+        appLock.lock();
         try (Directory dir = FSDirectory.open(appPath)) {
             if (!DirectoryReader.indexExists(dir)) {
                 return 0;
@@ -185,20 +199,26 @@ public class AiBusinessMemoryVectorService {
                 return 0;
             }
 
-            IndexWriterConfig cfg = new IndexWriterConfig();
-            try (IndexWriter writer = new IndexWriter(dir, cfg)) {
-                for (String sourceName : deleteSources) {
-                    writer.deleteDocuments(new Term("sourceName", sourceName));
-                    removed++;
+            withWriteLockRetry(safeAppId, "pruneSourcesByPrefix", () -> {
+                IndexWriterConfig cfg = new IndexWriterConfig();
+                try (IndexWriter writer = new IndexWriter(dir, cfg)) {
+                    for (String sourceName : deleteSources) {
+                        writer.deleteDocuments(new Term("sourceName", sourceName));
+                        removedCounter.incrementAndGet();
+                    }
+                    writer.commit();
                 }
-                writer.commit();
-            }
+                return null;
+            });
+            int removed = removedCounter.get();
 
             log.info("Pruned dynamic business memory appId={} removedSources={} prefix={}", safeAppId, removed, safePrefix);
             return removed;
         } catch (Exception ex) {
             log.warn("Failed to prune dynamic memory appId={} prefix={}: {}", safeAppId, safePrefix, ex.getMessage());
             return 0;
+        } finally {
+            appLock.unlock();
         }
     }
 
@@ -222,52 +242,63 @@ public class AiBusinessMemoryVectorService {
         Path appPath = resolveAppIndexPath(safeAppId);
         int totalChars = 0;
         long nowMs = System.currentTimeMillis();
+        ReentrantLock appLock = appWriteLocks.computeIfAbsent(safeAppId, key -> new ReentrantLock());
+        appLock.lock();
         try {
             Files.createDirectories(appPath);
             try (Directory dir = FSDirectory.open(appPath)) {
-                IndexWriterConfig cfg = new IndexWriterConfig();
-                try (IndexWriter writer = new IndexWriter(dir, cfg)) {
-                    writer.deleteDocuments(new Term("sourceName", safeSourceName));
+                int[] indexedChunksRef = {0};
+                int[] totalCharsRef = {0};
+                withWriteLockRetry(safeAppId, "indexMarkdown", () -> {
+                    IndexWriterConfig cfg = new IndexWriterConfig();
+                    try (IndexWriter writer = new IndexWriter(dir, cfg)) {
+                        writer.deleteDocuments(new Term("sourceName", safeSourceName));
 
-                    int idx = 0;
-                    for (String chunk : chunks) {
-                        String safeChunk = String.valueOf(chunk == null ? "" : chunk).trim();
-                        if (safeChunk.isBlank()) {
-                            continue;
+                        int idx = 0;
+                        for (String chunk : chunks) {
+                            String safeChunk = String.valueOf(chunk == null ? "" : chunk).trim();
+                            if (safeChunk.isBlank()) {
+                                continue;
+                            }
+                            totalCharsRef[0] += safeChunk.length();
+                            String chunkId = safeSourceName + "#" + idx;
+
+                            Document doc = new Document();
+                            doc.add(new StringField("appId", safeAppId, Field.Store.YES));
+                            doc.add(new StringField("sourceName", safeSourceName, Field.Store.YES));
+                            doc.add(new StringField("chunkId", chunkId, Field.Store.YES));
+                            doc.add(new StoredField("createdAtMs", nowMs));
+                            doc.add(new StoredField("scopeMask", Math.max(0, scopeMask)));
+
+                            for (String scopeTag : scopeTagsFromMask(scopeMask)) {
+                                doc.add(new StringField("scopeTag", scopeTag, Field.Store.YES));
+                            }
+
+                            String compactTags = normalizeTags(tags);
+                            if (!compactTags.isBlank()) {
+                                doc.add(new TextField("tags", compactTags, Field.Store.YES));
+                            }
+
+                            String summary = summarizeForIndex(safeChunk, 240);
+                            doc.add(new TextField("summary", summary, Field.Store.YES));
+                            doc.add(new TextField("content", safeChunk, Field.Store.YES));
+                            doc.add(new KnnFloatVectorField("vector", embedText(summary + "\n" + safeChunk)));
+                            writer.addDocument(doc);
+                            idx++;
                         }
-                        totalChars += safeChunk.length();
-                        String chunkId = safeSourceName + "#" + idx;
-
-                        Document doc = new Document();
-                        doc.add(new StringField("appId", safeAppId, Field.Store.YES));
-                        doc.add(new StringField("sourceName", safeSourceName, Field.Store.YES));
-                        doc.add(new StringField("chunkId", chunkId, Field.Store.YES));
-                        doc.add(new StoredField("createdAtMs", nowMs));
-                        doc.add(new StoredField("scopeMask", Math.max(0, scopeMask)));
-
-                        for (String scopeTag : scopeTagsFromMask(scopeMask)) {
-                            doc.add(new StringField("scopeTag", scopeTag, Field.Store.YES));
-                        }
-
-                        String compactTags = normalizeTags(tags);
-                        if (!compactTags.isBlank()) {
-                            doc.add(new TextField("tags", compactTags, Field.Store.YES));
-                        }
-
-                        String summary = summarizeForIndex(safeChunk, 240);
-                        doc.add(new TextField("summary", summary, Field.Store.YES));
-                        doc.add(new TextField("content", safeChunk, Field.Store.YES));
-                        doc.add(new KnnFloatVectorField("vector", embedText(summary + "\n" + safeChunk)));
-                        writer.addDocument(doc);
-                        idx++;
+                        indexedChunksRef[0] = idx;
+                        writer.commit();
                     }
-                    writer.commit();
-                    log.info("Indexed business memory appId={} source={} chunks={} chars={}", safeAppId, safeSourceName, chunks.size(), totalChars);
-                }
+                    return null;
+                });
+                totalChars = totalCharsRef[0];
+                log.info("Indexed business memory appId={} source={} chunks={} chars={}", safeAppId, safeSourceName, indexedChunksRef[0], totalChars);
             }
         } catch (Exception ex) {
             log.error("Failed to index business markdown appId={} source={}: {}", safeAppId, safeSourceName, ex.getMessage(), ex);
             return new IndexSummary(safeAppId, safeSourceName, 0, 0, nowMs);
+        } finally {
+            appLock.unlock();
         }
 
         return new IndexSummary(safeAppId, safeSourceName, chunks.size(), totalChars, nowMs);
@@ -426,16 +457,45 @@ public class AiBusinessMemoryVectorService {
             if (hit == null) {
                 continue;
             }
+            String sourceName = String.valueOf(hit.sourceName() == null ? "" : hit.sourceName()).trim();
+            boolean dynamicSource = !dynamicSourcePrefix.isBlank() && sourceName.startsWith(dynamicSourcePrefix);
             sb.append("### Memory ").append(idx++).append("\n");
-            sb.append("source: ").append(hit.sourceName()).append("\n");
+            sb.append("source: ").append(dynamicSource ? "dynamic_context" : sourceName).append("\n");
             sb.append("score: ").append(String.format(Locale.ROOT, "%.4f", hit.score())).append("\n");
             sb.append("summary: ").append(hit.summary()).append("\n");
-            sb.append("content:\n").append(hit.content()).append("\n\n");
+            sb.append("content:\n").append(sanitizeRagContent(hit.content(), dynamicSource)).append("\n\n");
             if (sb.length() >= cap) {
                 break;
             }
         }
         return trimTo(sb.toString(), cap);
+    }
+
+    private String sanitizeRagContent(String content, boolean dynamicSource) {
+        String safe = String.valueOf(content == null ? "" : content);
+        if (safe.isBlank()) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(safe.length());
+        String[] lines = safe.split("\\n");
+        for (String rawLine : lines) {
+            String line = String.valueOf(rawLine == null ? "" : rawLine).trim();
+            String lowered = line.toLowerCase(Locale.ROOT);
+            boolean looksInternal = lowered.startsWith("dyn_ctx_")
+                || lowered.startsWith("source=primary_flow")
+                || lowered.startsWith("source=multimodal")
+                || lowered.startsWith("orchestration_")
+                || lowered.startsWith("localscanner")
+                || lowered.startsWith("scanner_");
+            if (looksInternal) {
+                continue;
+            }
+            if (dynamicSource && lowered.startsWith("contextsummary=")) {
+                continue;
+            }
+            out.append(rawLine).append('\n');
+        }
+        return out.toString().trim();
     }
 
     private Path resolveAppIndexPath(String appId) {
@@ -643,5 +703,45 @@ public class AiBusinessMemoryVectorService {
             return safe;
         }
         return safe.substring(0, Math.max(0, maxChars));
+    }
+
+    private interface WriteOperation<T> {
+        T run() throws Exception;
+    }
+
+    private <T> T withWriteLockRetry(String appId, String operation, WriteOperation<T> operationBody) throws Exception {
+        int attempts = Math.max(1, lockRetries + 1);
+        int backoffMs = Math.max(10, lockBackoffMs);
+        LockObtainFailedException lastLockEx = null;
+
+        for (int attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                return operationBody.run();
+            } catch (LockObtainFailedException lockEx) {
+                lastLockEx = lockEx;
+                if (attempt >= attempts) {
+                    break;
+                }
+                log.warn(
+                    "Business memory write lock busy appId={} op={} attempt={}/{}; retrying in {}ms",
+                    appId,
+                    operation,
+                    attempt,
+                    attempts,
+                    backoffMs * attempt
+                );
+                try {
+                    Thread.sleep((long) backoffMs * attempt);
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    throw lockEx;
+                }
+            }
+        }
+
+        if (lastLockEx != null) {
+            throw lastLockEx;
+        }
+        throw new IllegalStateException("Unexpected write retry state for operation: " + operation);
     }
 }

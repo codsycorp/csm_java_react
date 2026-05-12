@@ -118,19 +118,9 @@ public class AiScopedContextIngestionService {
     }
 
     private static class IngestionTask {
-        String appId;
-        String sourceName;
-        String content;
-        int scopeMask;
-        long createdAtMs;
         CompletableFuture<IngestionResult> future;
 
-        IngestionTask(String appId, String sourceName, String content, int scopeMask) {
-            this.appId = appId;
-            this.sourceName = sourceName;
-            this.content = content;
-            this.scopeMask = scopeMask;
-            this.createdAtMs = System.currentTimeMillis();
+        IngestionTask() {
             this.future = new CompletableFuture<>();
         }
     }
@@ -338,29 +328,22 @@ public class AiScopedContextIngestionService {
         result.scopeMask = scopeMask;
 
         try {
-            List<String> chunks = chunkContent(currentCode);
-            int ingested = 0;
+            // Index in one write operation. indexDynamicContext already chunks internally,
+            // so looping per chunk only increases lock contention and rewrites.
+            AiBusinessMemoryVectorService.IndexSummary summary = businessMemoryVectorService.indexDynamicContext(
+                appId,
+                "currentCode",
+                trimForIngestion(currentCode),
+                Arrays.asList("scope_code", "currentCode"),
+                scopeMask
+            );
 
-            for (int i = 0; i < Math.min(chunks.size(), maxChunksPerScope); i++) {
-                String chunk = chunks.get(i);
-                String chunkId = String.format("code-%d-%d", appId.hashCode(), i);
-
-                businessMemoryVectorService.indexDynamicContext(
-                    appId,
-                    "currentCode",
-                    chunk,
-                    Arrays.asList(chunkId),
-                    scopeMask
-                );
-                ingested++;
-            }
-
-            result.chunksIngested = ingested;
+            result.chunksIngested = summary == null ? 0 : Math.max(0, summary.chunksIndexed());
             result.totalCharsIndexed = currentCode.length();
             result.ingestionTimeMs = System.currentTimeMillis() - startMs;
 
             log.info("Code ingestion completed: appId={}, chunks={}, chars={}, time={}ms",
-                    appId, ingested, result.totalCharsIndexed, result.ingestionTimeMs);
+                    appId, result.chunksIngested, result.totalCharsIndexed, result.ingestionTimeMs);
 
             if (pruneOldIndexes) {
                 businessMemoryVectorService.pruneDynamicContext(appId);
@@ -378,7 +361,7 @@ public class AiScopedContextIngestionService {
         IngestionResult result = new IngestionResult(appId);
         result.status = "pending";
 
-        IngestionTask task = new IngestionTask(appId, "currentCode", currentCode, scopeMask);
+        IngestionTask task = new IngestionTask();
         pendingTasks.put(appId, task);
 
         asyncExecutor.submit(() -> {
@@ -402,29 +385,21 @@ public class AiScopedContextIngestionService {
         result.scopeMask = scopeMask;
 
         try {
-            List<String> chunks = chunkContent(currentMenu);
-            int ingested = 0;
+            // Same optimization as code ingestion: single-write indexing.
+            AiBusinessMemoryVectorService.IndexSummary summary = businessMemoryVectorService.indexDynamicContext(
+                appId,
+                "currentMenu",
+                trimForIngestion(currentMenu),
+                Arrays.asList("scope_menu", "currentMenu"),
+                scopeMask
+            );
 
-            for (int i = 0; i < Math.min(chunks.size(), maxChunksPerScope); i++) {
-                String chunk = chunks.get(i);
-                String chunkId = String.format("menu-%d-%d", appId.hashCode(), i);
-
-                businessMemoryVectorService.indexDynamicContext(
-                    appId,
-                    "currentMenu",
-                    chunk,
-                    Arrays.asList(chunkId),
-                    scopeMask
-                );
-                ingested++;
-            }
-
-            result.chunksIngested = ingested;
+            result.chunksIngested = summary == null ? 0 : Math.max(0, summary.chunksIndexed());
             result.totalCharsIndexed = currentMenu.length();
             result.ingestionTimeMs = System.currentTimeMillis() - startMs;
 
             log.info("Menu ingestion completed: appId={}, chunks={}, chars={}, time={}ms",
-                    appId, ingested, result.totalCharsIndexed, result.ingestionTimeMs);
+                    appId, result.chunksIngested, result.totalCharsIndexed, result.ingestionTimeMs);
 
             if (pruneOldIndexes) {
                 businessMemoryVectorService.pruneDynamicContext(appId);
@@ -442,7 +417,7 @@ public class AiScopedContextIngestionService {
         IngestionResult result = new IngestionResult(appId);
         result.status = "pending";
 
-        IngestionTask task = new IngestionTask(appId, "currentMenu", currentMenu, scopeMask);
+        IngestionTask task = new IngestionTask();
         pendingTasks.put(appId, task);
 
         asyncExecutor.submit(() -> {
@@ -460,34 +435,13 @@ public class AiScopedContextIngestionService {
         return result;
     }
 
-    /**
-     * Split content into logical chunks
-     */
-    private List<String> chunkContent(String content) {
-        if (content.length() <= chunkSize) {
-            return Arrays.asList(content);
+    private String trimForIngestion(String content) {
+        String safe = String.valueOf(content == null ? "" : content);
+        int maxChars = Math.max(12000, chunkSize * Math.max(4, maxChunksPerScope));
+        if (safe.length() <= maxChars) {
+            return safe;
         }
-
-        List<String> chunks = new ArrayList<>();
-        String[] lines = content.split("\\n");
-        StringBuilder current = new StringBuilder();
-
-        for (String line : lines) {
-            if ((current.length() + line.length() + 1) > chunkSize && current.length() > 0) {
-                chunks.add(current.toString());
-                current = new StringBuilder();
-            }
-            if (current.length() > 0) {
-                current.append("\n");
-            }
-            current.append(line);
-        }
-
-        if (current.length() > 0) {
-            chunks.add(current.toString());
-        }
-
-        return chunks;
+        return safe.substring(0, maxChars);
     }
 
     /**
