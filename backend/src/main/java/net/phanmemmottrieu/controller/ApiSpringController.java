@@ -2117,6 +2117,7 @@ public class ApiSpringController {
                                 responseMode,
                                 contextType);
                         if (localAccepted
+                                && aiLocalAnalyzeBroadGapFillEnabled
                                 && shouldRunBroadAnalysisGapFill(
                                     message,
                                     responseMode,
@@ -2204,9 +2205,8 @@ public class ApiSpringController {
                             }
                         }
 
-                        if (localAccepted
-                                && aiLocalAnalyzeBroadGapFillEnabled
-                                && shouldRunBroadAnalysisGapFill(
+                        if (localAccepted) {
+                            sendEvent(emitter, jsonOf(
                                 "stage", "streaming_started",
                                 "requestId", requestId,
                                 "model", "local_provider",
@@ -9614,7 +9614,7 @@ public class ApiSpringController {
     }
 
     private List<String> detectBroadAnalysisCoverageGaps(String answer) {
-        String text = String.valueOf(answer == null ? "" : answer).toLowerCase(Locale.ROOT);
+        String text = String.valueOf(answer == null ? "" : answer).trim();
         List<String> gaps = new ArrayList<>();
         if (text.isBlank()) {
             gaps.add("muc_tieu_nghiep_vu");
@@ -9626,25 +9626,80 @@ public class ApiSpringController {
             return gaps;
         }
 
-        if (!(text.contains("mục tiêu") || text.contains("muc tieu") || text.contains("nghiệp vụ") || text.contains("nghiep vu") || text.contains("business goal"))) {
-            gaps.add("muc_tieu_nghiep_vu");
+        List<String> required = List.of(
+            "muc_tieu_nghiep_vu",
+            "luong_xu_ly_chinh",
+            "thanh_phan_quan_trong",
+            "dieu_kien_re_nhanh",
+            "du_lieu_vao_ra_side_effects",
+            "rui_ro_va_goi_y"
+        );
+
+        // No phrase-matching: infer coverage quality from structure + evidence density.
+        String normalized = text.replaceAll("\\r\\n?", "\\n");
+        List<String> blocks = new ArrayList<>();
+        if (normalized.contains("\n## ")) {
+            String[] split = normalized.split("(?m)^##\\s+");
+            for (String raw : split) {
+                String block = String.valueOf(raw == null ? "" : raw).trim();
+                if (!block.isBlank()) {
+                    blocks.add(block);
+                }
+            }
+        } else {
+            String[] split = normalized.split("\\n\\s*\\n+");
+            for (String raw : split) {
+                String block = String.valueOf(raw == null ? "" : raw).trim();
+                if (!block.isBlank()) {
+                    blocks.add(block);
+                }
+            }
         }
-        if (!(text.contains("luồng") || text.contains("luong") || text.contains("input") || text.contains("output") || text.contains("validate") || text.contains("transform"))) {
-            gaps.add("luong_xu_ly_chinh");
+
+        int covered = 0;
+        for (String block : blocks) {
+            if (isBroadAnalysisSectionLikelyCovered(block)) {
+                covered++;
+            }
+            if (covered >= required.size()) {
+                break;
+            }
         }
-        if (!(text.contains("hàm") || text.contains("ham") || text.contains("module") || text.contains("component") || text.contains("vai trò") || text.contains("vai tro"))) {
-            gaps.add("thanh_phan_quan_trong");
-        }
-        if (!(text.contains("rẽ nhánh") || text.contains("re nhanh") || text.contains("điều kiện") || text.contains("dieu kien") || text.contains("edge case") || text.contains("rule"))) {
-            gaps.add("dieu_kien_re_nhanh");
-        }
-        if (!(text.contains("db") || text.contains("database") || text.contains("api") || text.contains("cache") || text.contains("event") || text.contains("đầu vào") || text.contains("dau vao") || text.contains("đầu ra") || text.contains("dau ra") || text.contains("side effect"))) {
-            gaps.add("du_lieu_vao_ra_side_effects");
-        }
-        if (!(text.contains("rủi ro") || text.contains("rui ro") || text.contains("cải thiện") || text.contains("cai thien") || text.contains("improve") || text.contains("risk"))) {
-            gaps.add("rui_ro_va_goi_y");
+        for (int i = covered; i < required.size(); i++) {
+            gaps.add(required.get(i));
         }
         return gaps;
+    }
+
+    private boolean isBroadAnalysisSectionLikelyCovered(String block) {
+        String safe = String.valueOf(block == null ? "" : block).trim();
+        if (safe.isBlank()) {
+            return false;
+        }
+        String[] lines = safe.split("\\n");
+        int contentLines = 0;
+        int evidenceLines = 0;
+        int listLines = 0;
+        for (String rawLine : lines) {
+            String line = String.valueOf(rawLine == null ? "" : rawLine).trim();
+            if (line.isBlank()) {
+                continue;
+            }
+            contentLines++;
+            if (EVIDENCE_CODE_REF_PATTERN.matcher(line).find()) {
+                evidenceLines++;
+            }
+            if (line.startsWith("-") || line.startsWith("*") || line.matches("^\\d+[.)].+")) {
+                listLines++;
+            }
+        }
+        if (contentLines == 0) {
+            return false;
+        }
+        double evidenceDensity = (double) evidenceLines / contentLines;
+        boolean enoughLength = safe.length() >= 70;
+        boolean enoughStructure = listLines >= 1 || contentLines >= 3;
+        return enoughLength && enoughStructure && (evidenceLines >= 1 || evidenceDensity >= 0.2d);
     }
 
     private String buildBroadAnalysisGapFillPrompt(String requestText, String currentAnswer, List<String> missingSections) {
