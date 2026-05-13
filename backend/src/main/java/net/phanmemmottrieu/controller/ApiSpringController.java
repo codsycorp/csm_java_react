@@ -66,6 +66,7 @@ import net.phanmemmottrieu.service.LargeFileChunkingService;
 import net.phanmemmottrieu.service.AiPatternCacheService;
 import net.phanmemmottrieu.service.AiIncrementalStepExecutorService;
 import net.phanmemmottrieu.service.AiQualityMetricsService;
+import net.phanmemmottrieu.service.AiAdaptiveRetryPolicy;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -426,6 +427,9 @@ public class ApiSpringController {
 
     @Autowired(required = false)
     private AiIncrementalStepExecutorService aiIncrementalStepExecutorService;
+
+    @Autowired(required = false)
+    private AiAdaptiveRetryPolicy aiAdaptiveRetryPolicy;
 
     // In-memory ring buffer for prompt-budget debug (max 200 entries, auto-rotated)
     private static final int PROMPT_DEBUG_LOG_MAX = 200;
@@ -1727,7 +1731,7 @@ public class ApiSpringController {
                         "none",
                         null
                     );
-                    codeStreamOrchestration = aiLocalOrchestrationService.orchestrate(
+                    codeStreamOrchestration = aiLocalOrchestrationService.orchestrateResilient(
                         appId,
                         message,
                         effectiveCodeContext,
@@ -1875,6 +1879,14 @@ public class ApiSpringController {
                         "ORCHESTRATION_EXCEPTION",
                         "LOCAL_ORCHESTRATION_FAILED",
                         null
+                    );
+                    handleLocalOrchestrationFailureRetry(
+                        emitter,
+                        requestId,
+                        appId,
+                        contextType,
+                        effectiveTaskType,
+                        orchestrationEx
                     );
                 }
 
@@ -2053,6 +2065,20 @@ public class ApiSpringController {
                 codeStreamMeta.put("promptCacheEligible", systemContentEstimate >= Math.max(1000, aiCodeStreamPromptCacheMinChars));
                 codeStreamMeta.put("promptCacheUsed", usePromptCache);
                 codeStreamMeta.put("menuChunkedContextApplied", menuChunkedContextApplied);
+                if (codeStreamOrchestration != null && codeStreamOrchestration.toolStats != null && !codeStreamOrchestration.toolStats.isEmpty()) {
+                    Object recoveryRetryApplied = codeStreamOrchestration.toolStats.get("recoveryRetryApplied");
+                    Object recoveryRetryStrategy = codeStreamOrchestration.toolStats.get("recoveryRetryStrategy");
+                    Object recoveryRetryAdjustments = codeStreamOrchestration.toolStats.get("recoveryRetryAdjustments");
+                    if (recoveryRetryApplied != null) {
+                        codeStreamMeta.put("recoveryRetryApplied", bool(recoveryRetryApplied, false));
+                    }
+                    if (recoveryRetryStrategy != null) {
+                        codeStreamMeta.put("recoveryRetryStrategy", String.valueOf(recoveryRetryStrategy));
+                    }
+                    if (recoveryRetryAdjustments != null) {
+                        codeStreamMeta.put("recoveryRetryAdjustments", recoveryRetryAdjustments);
+                    }
+                }
 
                 String effectiveModel = routeModel(message, effectiveCodeContext, contextType, responseMode, modelOverride);
                 String defaultModel = resolveDefaultStreamingModel();
@@ -4738,6 +4764,10 @@ public class ApiSpringController {
         int skipped = 0;
         int lowConfidence = 0;
         Map<String, Integer> reasonCounts = new LinkedHashMap<>();
+        StepVerifierRuntimePolicy verifierPolicy = resolveStepVerifierRuntimePolicy(stepStatsOut);
+        boolean verifierEnabled = aiLocalAgenticStepVerifierEnabled;
+        int lowConfidenceThreshold = verifierPolicy.lowConfidenceThreshold;
+        stepStatsOut.put("stepVerifierRuntimePolicy", verifierPolicy.toMap());
 
         boolean isEdit = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
             && !isMenuJsonContext(contextType);
@@ -4776,17 +4806,18 @@ public class ApiSpringController {
                         : "Áp dụng thay đổi " + (i + 1);
                     StepEvidenceVerdict evidence = verifyEditStepEvidence(textEdits.get(i), effectiveCodeContext);
                     int qualityScore = evidence.score();
+                    boolean evidenceAccepted = passesStepEvidence(evidence, verifierPolicy);
                     AssistantEditRiskResult editRisk = evaluateEditRiskLite(
                         true,
                         effectiveCodeContext,
                         List.of(textEdits.get(i)),
                         !patchValidation.acceptedEdits.isEmpty(),
-                        evidence.accepted(),
+                        evidenceAccepted,
                         true
                     );
                     boolean approvalRequired = ("high".equalsIgnoreCase(editRisk.riskLevel()) && aiAgenticApprovalHighRiskRequired)
                         || ("medium".equalsIgnoreCase(editRisk.riskLevel()) && aiAgenticApprovalMediumRiskRequired);
-                    if (aiLocalAgenticStepVerifierEnabled && !evidence.accepted()) {
+                    if (verifierEnabled && !evidenceAccepted) {
                         sendEvent(emitter, jsonOf(
                             "stage", "agentic_step_result",
                             "requestId", requestId,
@@ -4795,6 +4826,8 @@ public class ApiSpringController {
                             "stepDescription", desc,
                             "qualityScore", qualityScore,
                             "lowConfidence", true,
+                            "verifierMinScore", verifierPolicy.minScore,
+                            "recoveryStrategy", verifierPolicy.strategyId,
                             "riskScore", editRisk.riskScore(),
                             "riskLevel", editRisk.riskLevel(),
                             "approvalRequired", approvalRequired,
@@ -4829,7 +4862,9 @@ public class ApiSpringController {
                         "stepTotal", total,
                         "stepDescription", desc,
                         "qualityScore", qualityScore,
-                        "lowConfidence", qualityScore < aiLocalAnalyzeStepQualityLowThreshold,
+                        "lowConfidence", qualityScore < lowConfidenceThreshold,
+                        "verifierMinScore", verifierPolicy.minScore,
+                        "recoveryStrategy", verifierPolicy.strategyId,
                         "riskScore", editRisk.riskScore(),
                         "riskLevel", editRisk.riskLevel(),
                         "approvalRequired", approvalRequired,
@@ -4859,7 +4894,7 @@ public class ApiSpringController {
                     );
                     emitted += 1;
                     accepted += 1;
-                    if (qualityScore < aiLocalAnalyzeStepQualityLowThreshold) {
+                    if (qualityScore < lowConfidenceThreshold) {
                         lowConfidence += 1;
                     }
                 }
@@ -4904,7 +4939,8 @@ public class ApiSpringController {
                 String sectionText = sections.get(i);
                 StepEvidenceVerdict evidence = verifyAnalyzeStepEvidence(sectionText, effectiveCodeContext, i == 0);
                 int qualityScore = evidence.score();
-                if (aiLocalAgenticStepVerifierEnabled && !evidence.accepted()) {
+                boolean evidenceAccepted = passesStepEvidence(evidence, verifierPolicy);
+                if (verifierEnabled && !evidenceAccepted) {
                     sendEvent(emitter, jsonOf(
                         "stage", "agentic_step_result",
                         "requestId", requestId,
@@ -4913,6 +4949,8 @@ public class ApiSpringController {
                         "stepDescription", desc,
                         "qualityScore", qualityScore,
                         "lowConfidence", true,
+                        "verifierMinScore", verifierPolicy.minScore,
+                        "recoveryStrategy", verifierPolicy.strategyId,
                         "skipped", true,
                         "evidenceAnchors", evidence.anchors(),
                         "evidenceReason", evidence.reason(),
@@ -4943,7 +4981,9 @@ public class ApiSpringController {
                     "stepTotal", total,
                     "stepDescription", desc,
                     "qualityScore", qualityScore,
-                    "lowConfidence", qualityScore < aiLocalAnalyzeStepQualityLowThreshold,
+                    "lowConfidence", qualityScore < lowConfidenceThreshold,
+                    "verifierMinScore", verifierPolicy.minScore,
+                    "recoveryStrategy", verifierPolicy.strategyId,
                     "evidenceAnchors", evidence.anchors(),
                     "text", sectionText,
                     "partial", i < total - 1));
@@ -4962,7 +5002,7 @@ public class ApiSpringController {
                 );
                 emitted += 1;
                 accepted += 1;
-                if (qualityScore < aiLocalAnalyzeStepQualityLowThreshold) {
+                if (qualityScore < lowConfidenceThreshold) {
                     lowConfidence += 1;
                 }
             }
@@ -4995,6 +5035,8 @@ public class ApiSpringController {
             int skipped = 0;
             int lowConfidence = 0;
             Map<String, Integer> reasonCounts = new LinkedHashMap<>();
+            StepVerifierRuntimePolicy verifierPolicy = resolveStepVerifierRuntimePolicy(stepStatsOut);
+            int lowConfidenceThreshold = verifierPolicy.lowConfidenceThreshold;
             int total = plan.steps.size();
 
             for (int i = 0; i < total; i++) {
@@ -5044,12 +5086,13 @@ public class ApiSpringController {
 
                 StepEvidenceVerdict evidence = verifyEditStepEvidence(textEdit, effectiveCodeContext);
                 int qualityScore = evidence.score();
+                boolean evidenceAccepted = passesStepEvidence(evidence, verifierPolicy);
                 AssistantEditRiskResult editRisk = evaluateEditRiskLite(
                     true,
                     effectiveCodeContext,
                     List.of(textEdit),
                     true,
-                    evidence.accepted(),
+                    evidenceAccepted,
                     true);
                 boolean approvalRequired = ("high".equalsIgnoreCase(editRisk.riskLevel()) && aiAgenticApprovalHighRiskRequired)
                     || ("medium".equalsIgnoreCase(editRisk.riskLevel()) && aiAgenticApprovalMediumRiskRequired);
@@ -5061,7 +5104,9 @@ public class ApiSpringController {
                     "stepTotal", total,
                     "stepDescription", desc,
                     "qualityScore", qualityScore,
-                    "lowConfidence", qualityScore < aiLocalAnalyzeStepQualityLowThreshold,
+                    "lowConfidence", qualityScore < lowConfidenceThreshold,
+                    "verifierMinScore", verifierPolicy.minScore,
+                    "recoveryStrategy", verifierPolicy.strategyId,
                     "riskScore", editRisk.riskScore(),
                     "riskLevel", editRisk.riskLevel(),
                     "approvalRequired", approvalRequired,
@@ -5089,7 +5134,7 @@ public class ApiSpringController {
                 );
                 emitted += 1;
                 accepted += 1;
-                if (qualityScore < aiLocalAnalyzeStepQualityLowThreshold) {
+                if (qualityScore < lowConfidenceThreshold) {
                     lowConfidence += 1;
                 }
             }
@@ -5099,6 +5144,75 @@ public class ApiSpringController {
         } catch (Exception ignored) {
             return 0;
         }
+    }
+
+    private static final class StepVerifierRuntimePolicy {
+        final String strategyId;
+        final boolean recoveryApplied;
+        final int minScore;
+        final int lowConfidenceThreshold;
+
+        private StepVerifierRuntimePolicy(String strategyId, boolean recoveryApplied, int minScore, int lowConfidenceThreshold) {
+            this.strategyId = strategyId;
+            this.recoveryApplied = recoveryApplied;
+            this.minScore = minScore;
+            this.lowConfidenceThreshold = lowConfidenceThreshold;
+        }
+
+        Map<String, Object> toMap() {
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("strategyId", strategyId);
+            out.put("recoveryApplied", recoveryApplied);
+            out.put("minScore", minScore);
+            out.put("lowConfidenceThreshold", lowConfidenceThreshold);
+            return out;
+        }
+    }
+
+    private StepVerifierRuntimePolicy resolveStepVerifierRuntimePolicy(Map<String, Object> stepStatsOut) {
+        String strategy = String.valueOf(stepStatsOut == null ? "" : stepStatsOut.getOrDefault("recoveryRetryStrategy", "none"));
+        String safeStrategy = strategy.trim().toLowerCase(Locale.ROOT);
+        boolean recoveryApplied = stepStatsOut != null && bool(stepStatsOut.get("recoveryRetryApplied"), false);
+
+        int minScore = Math.max(20, aiLocalAgenticStepVerifierMinScore);
+        int lowThreshold = Math.max(20, aiLocalAnalyzeStepQualityLowThreshold);
+
+        if (recoveryApplied) {
+            switch (safeStrategy) {
+                case "simplify_edits":
+                    minScore -= 8;
+                    lowThreshold -= 6;
+                    break;
+                case "reduce_prompt":
+                    minScore -= 4;
+                    lowThreshold -= 4;
+                    break;
+                case "expand_scope":
+                case "broaden_context":
+                case "broaden_query":
+                    minScore -= 3;
+                    break;
+                case "swap_strategy":
+                case "fallback_strategy":
+                    minScore -= 5;
+                    lowThreshold -= 3;
+                    break;
+                default:
+                    minScore -= 2;
+                    break;
+            }
+        }
+
+        minScore = Math.max(20, Math.min(95, minScore));
+        lowThreshold = Math.max(20, Math.min(95, lowThreshold));
+        return new StepVerifierRuntimePolicy(safeStrategy.isBlank() ? "none" : safeStrategy, recoveryApplied, minScore, lowThreshold);
+    }
+
+    private boolean passesStepEvidence(StepEvidenceVerdict evidence, StepVerifierRuntimePolicy policy) {
+        if (evidence == null || policy == null) {
+            return false;
+        }
+        return evidence.score() >= Math.max(20, policy.minScore);
     }
 
     private Map<String, Object> toMapSafe(Object raw) {
@@ -6318,6 +6432,60 @@ public class ApiSpringController {
             aiQualityMetricsService.recordFallback(appId);
         } catch (Exception ex) {
             logger.debug("Quality metrics fallback record failed: {}", ex.getMessage());
+        }
+    }
+
+    private void handleLocalOrchestrationFailureRetry(
+            SseEmitter emitter,
+            String requestId,
+            String appId,
+            String contextType,
+            String taskType,
+            Exception orchestrationEx) {
+        if (aiAdaptiveRetryPolicy == null) {
+            return;
+        }
+        try {
+            AiAdaptiveRetryPolicy.RetryDecision decision = aiAdaptiveRetryPolicy.decideRetry(
+                String.valueOf(appId == null ? "" : appId),
+                String.valueOf(requestId == null ? "" : requestId),
+                AiAdaptiveRetryPolicy.RetryReason.UPSTREAM_FAILURE,
+                1,
+                1,
+                0L
+            );
+            aiAdaptiveRetryPolicy.recordRetryOutcome(AiAdaptiveRetryPolicy.RetryReason.UPSTREAM_FAILURE, false);
+            emitToolTrace(
+                emitter,
+                requestId,
+                "local_orchestration_retry_policy",
+                decision.shouldRetry ? "planned" : "give_up",
+                "contextType=" + contextType + " taskType=" + taskType,
+                compactToolDigest(String.valueOf(decision.rationale), 180),
+                0,
+                0,
+                decision.shouldRetry ? "RETRY_SCHEDULED" : "RETRY_GIVE_UP",
+                String.valueOf(decision.reason == null ? "UPSTREAM_FAILURE" : decision.reason.name()).toUpperCase(Locale.ROOT),
+                decision.strategy == null ? null : Map.of(
+                    "strategy", String.valueOf(decision.strategy.strategyId),
+                    "adjustments", decision.strategy.adjustments
+                )
+            );
+            sendEvent(emitter, jsonOf(
+                "stage", "orchestration_retry_policy",
+                "status", decision.shouldRetry ? "planned" : "give_up",
+                "requestId", requestId,
+                "reason", decision.reason == null ? "upstream_fail" : decision.reason.name().toLowerCase(Locale.ROOT),
+                "rationale", decision.rationale,
+                "strategy", decision.strategy == null ? "none" : decision.strategy.strategyId,
+                "message", decision.shouldRetry
+                    ? "Pipeline bi loi, da kich hoat retry-policy de fallback co cau truc"
+                    : "Pipeline bi loi va retry-policy da dung retry de tranh loop"
+            ));
+        } catch (Exception retryEx) {
+            logger.debug("Local orchestration retry policy handler failed: {} (root cause: {})",
+                retryEx.getMessage(),
+                orchestrationEx == null ? "unknown" : orchestrationEx.getMessage());
         }
     }
 
@@ -16098,7 +16266,7 @@ public class ApiSpringController {
             boolean runEarlyOrchestration = shouldRunHeavyOrchestrationForRoute(assistantRoutePlan);
             if (runEarlyOrchestration) {
                 try {
-                    orchestrationResult = aiLocalOrchestrationService.orchestrate(
+                    orchestrationResult = aiLocalOrchestrationService.orchestrateResilient(
                         appId,
                         retrievalPlannedMessage,
                         currentCode,
@@ -26629,7 +26797,7 @@ public class ApiSpringController {
         String responseMode = normalizeAiAssistantResponseMode(request.get("responseMode"), message, contextType, taskType);
         List<Map<String, Object>> attachments = normalizeAiAssistantAttachments(request.get("attachments"));
 
-        AiLocalOrchestrationService.OrchestrationResult result = aiLocalOrchestrationService.orchestrate(
+        AiLocalOrchestrationService.OrchestrationResult result = aiLocalOrchestrationService.orchestrateResilient(
             appId,
             message,
             currentCode,

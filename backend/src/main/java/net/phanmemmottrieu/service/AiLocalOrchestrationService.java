@@ -2,6 +2,8 @@ package net.phanmemmottrieu.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -30,6 +32,8 @@ import jakarta.annotation.PreDestroy;
  */
 @Service
 public class AiLocalOrchestrationService {
+
+    private static final Logger log = LoggerFactory.getLogger(AiLocalOrchestrationService.class);
 
     public static class OrchestrationResult {
         public boolean enabled;
@@ -92,6 +96,9 @@ public class AiLocalOrchestrationService {
 
     @Autowired(required = false)
     private AiRetrievalPolicyEngine aiRetrievalPolicyEngine;
+
+    @Autowired(required = false)
+    private AiAdaptiveRetryPolicy aiAdaptiveRetryPolicy;
 
     public AiLocalOrchestrationService(
         AiSpeculativeExecutionService aiSpeculativeExecutionService,
@@ -212,6 +219,8 @@ public class AiLocalOrchestrationService {
 
     @Value("${ai.local.agentic.plan-schema.min-score:68}")
     private int planSchemaMinScore;
+
+    private final ThreadLocal<RecoveryHints> recoveryHintsContext = new ThreadLocal<>();
 
     private final ExecutorService dynamicIngestExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "ai-dynamic-ingest");
@@ -399,6 +408,18 @@ public class AiLocalOrchestrationService {
 
     private record RetrievalTuningProfile(int topKBoost, int maxCharsBoost, boolean prioritizeSchema) {}
 
+    private static final class RecoveryHints {
+        String strategyId = "none";
+        double topKMultiplier = 1.0;
+        double maxCharsMultiplier = 1.0;
+        int scopeMaskOr = 0;
+        Integer stepVerifierMinScoreOverride = null;
+        Integer planSchemaMinScoreOverride = null;
+        int maxCodeChars = 0;
+        int maxAttachmentCharsTotal = 0;
+        Map<String, Object> adjustments = new LinkedHashMap<>();
+    }
+
     private interface RetrievalProfileFactory {
         RetrievalTuningProfile create(OrchestrationRequest request);
     }
@@ -457,6 +478,243 @@ public class AiLocalOrchestrationService {
         String language
     ) {
         return orchestrate(appId, message, currentCode, attachments, contextType, taskType, responseMode, language, null);
+    }
+
+    /**
+     * Resilient wrapper that never throws to controller.
+     * If full orchestration fails, emit a degraded but structured context block.
+     */
+    public OrchestrationResult orchestrateResilient(
+        String appId,
+        String message,
+        String currentCode,
+        List<Map<String, Object>> attachments,
+        String contextType,
+        String taskType,
+        String responseMode,
+        String language,
+        String requestId
+    ) {
+        try {
+            OrchestrationResult out = orchestrate(
+                appId,
+                message,
+                currentCode,
+                attachments,
+                contextType,
+                taskType,
+                responseMode,
+                language,
+                requestId
+            );
+            if (aiAdaptiveRetryPolicy != null) {
+                aiAdaptiveRetryPolicy.recordRetryOutcome(AiAdaptiveRetryPolicy.RetryReason.UPSTREAM_FAILURE, true);
+            }
+            return out;
+        } catch (Exception ex) {
+            String safeRequestId = String.valueOf(requestId == null ? "" : requestId).trim();
+            if (safeRequestId.isBlank()) {
+                safeRequestId = "orch-resilient-" + UUID.randomUUID();
+            }
+            log.warn("orchestrateResilient fallback activated requestId={} appId={} reason={}",
+                safeRequestId,
+                String.valueOf(appId == null ? "" : appId),
+                ex.getMessage());
+
+            AiAdaptiveRetryPolicy.RetryDecision retryDecision = null;
+            if (aiAdaptiveRetryPolicy != null) {
+                retryDecision = aiAdaptiveRetryPolicy.decideRetry(
+                    String.valueOf(appId == null ? "" : appId),
+                    safeRequestId,
+                    AiAdaptiveRetryPolicy.RetryReason.UPSTREAM_FAILURE,
+                    1,
+                    1,
+                    0L
+                );
+                aiAdaptiveRetryPolicy.recordRetryOutcome(AiAdaptiveRetryPolicy.RetryReason.UPSTREAM_FAILURE, false);
+            }
+
+            if (retryDecision != null && retryDecision.shouldRetry && retryDecision.strategy != null) {
+                RecoveryHints hints = mapRecoveryHints(retryDecision.strategy);
+                OrchestrationResult recovered = tryOrchestrateWithRecovery(
+                    appId,
+                    message,
+                    currentCode,
+                    attachments,
+                    contextType,
+                    taskType,
+                    responseMode,
+                    language,
+                    safeRequestId + "-retry1",
+                    hints
+                );
+                if (recovered != null && recovered.enabled && recovered.compressedContextBlock != null && !recovered.compressedContextBlock.isBlank()) {
+                    recovered.toolStats.put("recoveryRetryAttempted", true);
+                    recovered.toolStats.put("recoveryRetrySucceeded", true);
+                    recovered.toolStats.put("recoveryRetryStrategy", hints.strategyId);
+                    recovered.toolStats.put("recoveryRetryAdjustments", hints.adjustments);
+                    return recovered;
+                }
+            }
+
+            return buildDegradedOrchestrationResult(
+                appId,
+                message,
+                currentCode,
+                attachments,
+                contextType,
+                taskType,
+                responseMode,
+                language,
+                safeRequestId,
+                ex,
+                retryDecision
+            );
+        }
+    }
+
+    private OrchestrationResult tryOrchestrateWithRecovery(
+        String appId,
+        String message,
+        String currentCode,
+        List<Map<String, Object>> attachments,
+        String contextType,
+        String taskType,
+        String responseMode,
+        String language,
+        String requestId,
+        RecoveryHints hints
+    ) {
+        RecoveryHints safeHints = hints == null ? new RecoveryHints() : hints;
+        String adjustedCode = adaptCodeForRecovery(currentCode, safeHints.maxCodeChars);
+        List<Map<String, Object>> adjustedAttachments = adaptAttachmentsForRecovery(attachments, safeHints.maxAttachmentCharsTotal);
+        recoveryHintsContext.set(safeHints);
+        try {
+            OrchestrationResult out = orchestrate(
+                appId,
+                message,
+                adjustedCode,
+                adjustedAttachments,
+                contextType,
+                taskType,
+                responseMode,
+                language,
+                requestId
+            );
+            out.toolStats.put("recoveryRetryApplied", true);
+            out.toolStats.put("recoveryRetryStrategy", safeHints.strategyId);
+            out.toolStats.put("recoveryRetryAdjustments", safeHints.adjustments);
+            return out;
+        } catch (Exception ex) {
+            log.warn("orchestration recovery retry failed requestId={} strategy={} reason={}",
+                requestId,
+                safeHints.strategyId,
+                ex.getMessage());
+            return null;
+        } finally {
+            recoveryHintsContext.remove();
+        }
+    }
+
+    private RecoveryHints mapRecoveryHints(AiAdaptiveRetryPolicy.RecoveryStrategy strategy) {
+        RecoveryHints out = new RecoveryHints();
+        if (strategy == null) {
+            return out;
+        }
+        out.strategyId = String.valueOf(strategy.strategyId == null ? "none" : strategy.strategyId).trim().toLowerCase(Locale.ROOT);
+        out.adjustments = strategy.adjustments == null ? new LinkedHashMap<>() : new LinkedHashMap<>(strategy.adjustments);
+
+        if (out.adjustments.containsKey("topKMultiplier")) {
+            out.topKMultiplier = Math.max(0.6d, Math.min(1.8d, toDoubleSafe(out.adjustments.get("topKMultiplier"), out.topKMultiplier)));
+        }
+
+        switch (out.strategyId) {
+            case "expand_scope":
+            case "broaden_context":
+            case "broaden_query":
+                out.topKMultiplier = Math.max(out.topKMultiplier, 1.15d);
+                out.maxCharsMultiplier = Math.max(out.maxCharsMultiplier, 1.10d);
+                out.scopeMaskOr = AiScopedContextIngestionService.SCOPE_CODE | AiScopedContextIngestionService.SCOPE_MENU;
+                break;
+            case "reduce_scope":
+                out.topKMultiplier = Math.min(out.topKMultiplier, 0.75d);
+                out.maxCharsMultiplier = Math.min(out.maxCharsMultiplier, 0.85d);
+                break;
+            case "reduce_prompt":
+                out.maxCodeChars = 45000;
+                out.maxAttachmentCharsTotal = 14000;
+                out.topKMultiplier = Math.min(out.topKMultiplier, 0.90d);
+                break;
+            case "simplify_edits":
+                out.stepVerifierMinScoreOverride = Math.max(20, stepVerifierMinScore - 6);
+                out.planSchemaMinScoreOverride = Math.max(20, planSchemaMinScore - 6);
+                out.maxCodeChars = 60000;
+                break;
+            case "fallback_strategy":
+            case "swap_strategy":
+                out.topKMultiplier = Math.max(out.topKMultiplier, 1.05d);
+                out.maxCharsMultiplier = Math.max(out.maxCharsMultiplier, 1.05d);
+                break;
+            default:
+                break;
+        }
+        return out;
+    }
+
+    private String adaptCodeForRecovery(String code, int maxChars) {
+        String safe = String.valueOf(code == null ? "" : code);
+        if (safe.isBlank() || maxChars <= 0 || safe.length() <= maxChars) {
+            return safe;
+        }
+        return truncateMiddle(safe, maxChars);
+    }
+
+    private List<Map<String, Object>> adaptAttachmentsForRecovery(List<Map<String, Object>> attachments, int maxTotalChars) {
+        if (attachments == null || attachments.isEmpty() || maxTotalChars <= 0) {
+            return attachments == null ? List.of() : attachments;
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        int used = 0;
+        for (Map<String, Object> item : attachments) {
+            if (item == null || item.isEmpty()) {
+                out.add(Map.of());
+                continue;
+            }
+            Map<String, Object> copy = new LinkedHashMap<>(item);
+            String content = String.valueOf(copy.getOrDefault("content", ""));
+            if (content.isBlank()) {
+                content = String.valueOf(copy.getOrDefault("text", ""));
+            }
+            int remaining = Math.max(0, maxTotalChars - used);
+            if (!content.isBlank() && remaining > 0) {
+                String trimmed = content.length() <= remaining ? content : content.substring(0, remaining);
+                copy.put("content", trimmed);
+                copy.put("text", trimmed);
+                used += trimmed.length();
+            } else {
+                copy.put("content", "");
+                copy.put("text", "");
+            }
+            out.add(Collections.unmodifiableMap(copy));
+            if (used >= maxTotalChars) {
+                break;
+            }
+        }
+        return Collections.unmodifiableList(out);
+    }
+
+    private double toDoubleSafe(Object raw, double fallback) {
+        if (raw == null) {
+            return fallback;
+        }
+        if (raw instanceof Number n) {
+            return n.doubleValue();
+        }
+        try {
+            return Double.parseDouble(String.valueOf(raw).trim());
+        } catch (Exception ignored) {
+            return fallback;
+        }
     }
 
     public OrchestrationResult orchestrate(
@@ -630,6 +888,10 @@ public class AiLocalOrchestrationService {
             }
         }
 
+        RecoveryHints recoveryHints = recoveryHintsContext.get();
+        Integer stepVerifierMinScoreOverride = recoveryHints == null ? null : recoveryHints.stepVerifierMinScoreOverride;
+        Integer planSchemaMinScoreOverride = recoveryHints == null ? null : recoveryHints.planSchemaMinScoreOverride;
+
         PlanCoverageCheck planCoverage = evaluatePlanCoverage(
             safeMessage,
             safeContextType,
@@ -639,7 +901,8 @@ public class AiLocalOrchestrationService {
             attachmentChars,
             digest,
             scanResult,
-            planSteps
+            planSteps,
+            stepVerifierMinScoreOverride
         );
         if (stepVerifierEnabled && !planCoverage.passed && !planCoverage.missingAreas.isEmpty()) {
             planSteps.add("Verifier remediation: " + String.join("; ", planCoverage.missingAreas));
@@ -652,11 +915,11 @@ public class AiLocalOrchestrationService {
         out.toolStats.put("planVerifierMissing", planCoverage.missingAreas);
 
         List<Map<String, Object>> structuredPlanSteps = buildStructuredPlanSteps(planSteps);
-        PlanSchemaCheck schemaCheck = evaluatePlanSchema(structuredPlanSteps);
+        PlanSchemaCheck schemaCheck = evaluatePlanSchema(structuredPlanSteps, planSchemaMinScoreOverride);
         if (planSchemaEnabled && !schemaCheck.passed && !schemaCheck.missingSignals.isEmpty()) {
             planSteps.add("Schema remediation: " + String.join("; ", schemaCheck.missingSignals));
             structuredPlanSteps = buildStructuredPlanSteps(planSteps);
-            schemaCheck = evaluatePlanSchema(structuredPlanSteps);
+            schemaCheck = evaluatePlanSchema(structuredPlanSteps, planSchemaMinScoreOverride);
         }
         out.toolStats.put("planSchemaEnabled", planSchemaEnabled);
         out.toolStats.put("planSchemaScore", schemaCheck.score);
@@ -1110,6 +1373,116 @@ public class AiLocalOrchestrationService {
         return out.toString().replaceAll("\\n{3,}", "\\n\\n").trim();
     }
 
+    private OrchestrationResult buildDegradedOrchestrationResult(
+        String appId,
+        String message,
+        String currentCode,
+        List<Map<String, Object>> attachments,
+        String contextType,
+        String taskType,
+        String responseMode,
+        String language,
+        String requestId,
+        Exception error,
+        AiAdaptiveRetryPolicy.RetryDecision retryDecision
+    ) {
+        String safeMessage = String.valueOf(message == null ? "" : message).trim();
+        String safeCode = String.valueOf(currentCode == null ? "" : currentCode);
+        List<Map<String, Object>> safeAttachments = attachments == null ? List.of() : attachments;
+        String safeContextType = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase(Locale.ROOT);
+        String safeTaskType = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
+        String safeMode = String.valueOf(responseMode == null ? "edit" : responseMode).trim().toLowerCase(Locale.ROOT);
+        String safeLanguage = String.valueOf(language == null ? "" : language).trim().toLowerCase(Locale.ROOT);
+
+        OrchestrationResult out = new OrchestrationResult();
+        out.enabled = true;
+        out.routingTier = "solver_degraded";
+        out.preferredModelHint = resolvePreferredModelHint(out.routingTier);
+        out.speculativeOperation = "degraded_orchestration";
+        out.speculativeExecuted = false;
+
+        LocalToolDigest digest = runLocalTools(safeMessage, safeCode, safeAttachments);
+        out.toolStats.put("requestId", requestId);
+        out.toolStats.put("degradedMode", true);
+        out.toolStats.put("degradedReason", truncateLine(String.valueOf(error == null ? "unknown" : error.getMessage()), 180));
+        out.toolStats.put("routingTier", out.routingTier);
+        out.toolStats.put("preferredModelHint", out.preferredModelHint);
+        out.toolStats.putAll(digest.stats);
+        if (retryDecision != null) {
+            out.toolStats.put("retryPolicyEnabled", true);
+            out.toolStats.put("retryDecision", retryDecision.shouldRetry);
+            out.toolStats.put("retryReason", retryDecision.reason == null ? "unknown" : retryDecision.reason.code);
+            out.toolStats.put("retryRationale", retryDecision.rationale);
+            if (retryDecision.strategy != null) {
+                out.toolStats.put("retryStrategy", retryDecision.strategy.strategyId);
+                out.toolStats.put("retryAdjustments", retryDecision.strategy.adjustments);
+            }
+        }
+
+        int messageChars = safeMessage.length();
+        int codeChars = safeCode.length();
+        int attachmentChars = estimateAttachmentTextChars(safeAttachments);
+        out.totalCharsBefore = messageChars + codeChars + attachmentChars;
+
+        List<String> planSteps = new ArrayList<>(buildPlannerSteps(
+            safeContextType,
+            safeTaskType,
+            safeMode,
+            codeChars,
+            attachmentChars,
+            digest,
+            AiMultimodalScannerService.ScanResult.disabled(),
+            0d,
+            new FlowDecision("solver_degraded", false, "resilient_fallback")
+        ));
+        planSteps.add("Degraded fallback: continue with deterministic local context only (no broad Lucene retry)");
+        if (planSteps.size() > 8) {
+            planSteps = new ArrayList<>(planSteps.subList(0, 8));
+        }
+        out.planSteps = planSteps;
+
+        String focusedCode = buildFocusedCodeSnippet(safeCode, 6000);
+        String tier1 = buildTier1Metadata(appId, safeContextType, safeTaskType, safeMode, safeLanguage, safeAttachments.size());
+        String tier2 = buildTier2RelevantContext(digest, safeContextType);
+        String tier3 = buildTier3RuntimeOutput(digest);
+        String combined = "## LOCAL_AGENTIC_ORCHESTRATION\\n"
+            + "Mode: resilient_degraded\\n"
+            + "ORCHESTRATION_ROUTING_TIER=" + out.routingTier + "\\n"
+            + "ORCHESTRATION_ERROR=" + truncateLine(String.valueOf(error == null ? "unknown" : error.getMessage()), 180) + "\\n"
+            + "Plan steps:\\n"
+            + toNumberedLines(planSteps)
+            + "\\n### Tier 1: Metadata\\n" + tier1
+            + "\\n\\n### Tier 2: Relevant Files/Signals\\n" + tier2
+            + "\\n\\n### Tier 3: Runtime Tool Output (compressed)\\n" + tier3
+            + (focusedCode.isBlank() ? "" : "\\n\\n### Focused Current Code Snippet\\n" + focusedCode);
+
+        out.compressedContextBlock = sanitizeInternalOrchestrationContext(
+            truncateMiddle(combined, Math.max(3500, maxContextChars))
+        );
+        out.totalCharsAfter = out.compressedContextBlock.length();
+        out.savedChars = Math.max(0, out.totalCharsBefore - out.totalCharsAfter);
+        out.toolStats.put("estimatedTokensBefore", estimateTokens(out.totalCharsBefore));
+        out.toolStats.put("estimatedTokensAfter", estimateTokens(out.totalCharsAfter));
+        out.toolStats.put("estimatedTokenSavings", Math.max(0, estimateTokens(out.totalCharsBefore) - estimateTokens(out.totalCharsAfter)));
+        return out;
+    }
+
+    private String buildFocusedCodeSnippet(String code, int maxChars) {
+        String safe = String.valueOf(code == null ? "" : code);
+        if (safe.isBlank()) {
+            return "";
+        }
+        int cap = Math.max(1200, maxChars);
+        if (safe.length() <= cap) {
+            return safe;
+        }
+        int head = Math.min(cap / 2, safe.length());
+        int tail = Math.min(cap - head, safe.length() - head);
+        return safe.substring(0, head)
+            + "\\n... [snip " + Math.max(0, safe.length() - cap) + " chars] ...\\n"
+            + safe.substring(safe.length() - tail);
+    }
+
     private OrchestrationResult finalizeOrchestrationResult(
         OrchestrationResult out,
         String requestId,
@@ -1194,7 +1567,8 @@ public class AiLocalOrchestrationService {
         int attachmentChars,
         LocalToolDigest digest,
         AiMultimodalScannerService.ScanResult scanResult,
-        List<String> planSteps
+        List<String> planSteps,
+        Integer stepVerifierMinScoreOverride
     ) {
         List<String> missing = new ArrayList<>();
         List<String> steps = planSteps == null ? List.of() : planSteps;
@@ -1258,7 +1632,8 @@ public class AiLocalOrchestrationService {
         }
 
         int capped = Math.max(0, Math.min(100, score));
-        int min = Math.max(20, Math.min(95, stepVerifierMinScore));
+        int configuredMin = stepVerifierMinScoreOverride == null ? stepVerifierMinScore : stepVerifierMinScoreOverride;
+        int min = Math.max(20, Math.min(95, configuredMin));
         boolean passed = !stepVerifierEnabled || capped >= min;
         String verdict = passed ? "passed" : "needs_refine";
         return new PlanCoverageCheck(capped, min, passed, verdict, missing);
@@ -1332,7 +1707,7 @@ public class AiLocalOrchestrationService {
         return out;
     }
 
-    private PlanSchemaCheck evaluatePlanSchema(List<Map<String, Object>> steps) {
+    private PlanSchemaCheck evaluatePlanSchema(List<Map<String, Object>> steps, Integer planSchemaMinScoreOverride) {
         List<Map<String, Object>> safeSteps = steps == null ? List.of() : steps;
         List<String> missing = new ArrayList<>();
         int score = 24;
@@ -1391,7 +1766,8 @@ public class AiLocalOrchestrationService {
         }
 
         int capped = Math.max(0, Math.min(100, score));
-        int min = Math.max(20, Math.min(95, planSchemaMinScore));
+        int configuredMin = planSchemaMinScoreOverride == null ? planSchemaMinScore : planSchemaMinScoreOverride;
+        int min = Math.max(20, Math.min(95, configuredMin));
         boolean passed = !planSchemaEnabled || (invalidCount == 0 && capped >= min);
         return new PlanSchemaCheck(capped, min, passed, Math.max(0, invalidCount), missing);
     }
@@ -1600,7 +1976,15 @@ public class AiLocalOrchestrationService {
             reasons.add("policy_engine_adaptive_topk");
         }
 
+        RecoveryHints recoveryHints = recoveryHintsContext.get();
+
         if (!adaptiveScopeRagEnabled) {
+            if (recoveryHints != null) {
+                scopeMask = scopeMask | Math.max(0, recoveryHints.scopeMaskOr);
+                topK = (int) Math.round(topK * Math.max(0.6d, Math.min(1.8d, recoveryHints.topKMultiplier)));
+                maxChars = (int) Math.round(maxChars * Math.max(0.7d, Math.min(1.7d, recoveryHints.maxCharsMultiplier)));
+                reasons.add("recovery_retry_adjustments");
+            }
             int baseTopK = Math.max(2, topK + retrievalProfile.topKBoost());
             int baseMaxChars = Math.max(1200, maxChars + retrievalProfile.maxCharsBoost());
             return new AdaptiveRetrievalPlan(scopeMask, baseTopK, baseMaxChars, query, false, reasons);
@@ -1652,6 +2036,13 @@ public class AiLocalOrchestrationService {
         if (digest != null && digest.intentKeywords.size() >= 6) {
             topK += 1;
             reasons.add("intent_keyword_density_boost");
+        }
+
+        if (recoveryHints != null) {
+            scopeMask = scopeMask | Math.max(0, recoveryHints.scopeMaskOr);
+            topK = (int) Math.round(topK * Math.max(0.6d, Math.min(1.8d, recoveryHints.topKMultiplier)));
+            maxChars = (int) Math.round(maxChars * Math.max(0.7d, Math.min(1.7d, recoveryHints.maxCharsMultiplier)));
+            reasons.add("recovery_retry_adjustments");
         }
 
         topK = Math.max(Math.max(2, adaptiveScopeRagMinTopK), Math.min(Math.max(adaptiveScopeRagMinTopK, adaptiveScopeRagMaxTopK), topK));
