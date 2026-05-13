@@ -1636,16 +1636,7 @@ public class ApiSpringController {
                         ));
 
                         List<String> planSteps = codeStreamOrchestration.planSteps == null ? List.of() : codeStreamOrchestration.planSteps;
-                        int planTotal = Math.min(6, planSteps.size());
-                        for (int i = 0; i < planTotal; i++) {
-                            sendEvent(emitter, jsonOf(
-                                "stage", "agentic_step",
-                                "status", "running",
-                                "requestId", requestId,
-                                "current", i + 1,
-                                "total", planTotal,
-                                "message", String.valueOf(planSteps.get(i) == null ? "" : planSteps.get(i))));
-                        }
+                        emitAgenticStepLifecycleToSse(emitter, requestId, planSteps, 6);
 
                         messageWithReuse = messageWithReuse
                             + "\n\n[LOCAL_ORCHESTRATION_CONTEXT]\n"
@@ -4446,6 +4437,110 @@ public class ApiSpringController {
         }
 
         return 0;
+    }
+
+    @FunctionalInterface
+    private interface AgenticStepEventSink {
+        void emit(Map<String, Object> payload);
+    }
+
+    /**
+     * Director for deterministic step lifecycle events so frontend can render
+     * planned -> running -> done consistently for both code-stream and chat paths.
+     */
+    private static final class AgenticStepLifecycleDirector {
+        void emitLifecycle(List<String> rawSteps, int maxSteps, AgenticStepEventSink sink, String requestId, String responseMode) {
+            if (sink == null) {
+                return;
+            }
+            List<String> safeSteps = rawSteps == null ? List.of() : rawSteps;
+            int total = Math.min(Math.max(0, maxSteps), safeSteps.size());
+            if (total <= 0) {
+                return;
+            }
+
+            for (int i = 0; i < total; i++) {
+                Map<String, Object> planned = new LinkedHashMap<>();
+                planned.put("stage", "agentic_step");
+                planned.put("status", "planned");
+                planned.put("stepIndex", i + 1);
+                planned.put("current", i + 1);
+                planned.put("total", total);
+                planned.put("percent", Math.max(1, (int) Math.round(((i + 1) * 100.0) / Math.max(1, total))));
+                planned.put("message", String.valueOf(safeSteps.get(i) == null ? "" : safeSteps.get(i)));
+                if (!String.valueOf(requestId == null ? "" : requestId).isBlank()) {
+                    planned.put("requestId", requestId);
+                }
+                if (!String.valueOf(responseMode == null ? "" : responseMode).isBlank()) {
+                    planned.put("responseMode", responseMode);
+                }
+                sink.emit(planned);
+            }
+
+            for (int i = 0; i < total; i++) {
+                String stepMessage = String.valueOf(safeSteps.get(i) == null ? "" : safeSteps.get(i));
+
+                Map<String, Object> running = new LinkedHashMap<>();
+                running.put("stage", "agentic_step");
+                running.put("status", "running");
+                running.put("stepIndex", i + 1);
+                running.put("current", i + 1);
+                running.put("total", total);
+                running.put("percent", Math.max(1, (int) Math.round(((i + 1) * 100.0) / Math.max(1, total))));
+                running.put("message", stepMessage);
+                if (!String.valueOf(requestId == null ? "" : requestId).isBlank()) {
+                    running.put("requestId", requestId);
+                }
+                if (!String.valueOf(responseMode == null ? "" : responseMode).isBlank()) {
+                    running.put("responseMode", responseMode);
+                }
+                sink.emit(running);
+
+                Map<String, Object> done = new LinkedHashMap<>();
+                done.put("stage", "agentic_step");
+                done.put("status", "done");
+                done.put("stepIndex", i + 1);
+                done.put("current", i + 1);
+                done.put("total", total);
+                done.put("percent", Math.max(1, (int) Math.round(((i + 1) * 100.0) / Math.max(1, total))));
+                done.put("message", stepMessage);
+                if (!String.valueOf(requestId == null ? "" : requestId).isBlank()) {
+                    done.put("requestId", requestId);
+                }
+                if (!String.valueOf(responseMode == null ? "" : responseMode).isBlank()) {
+                    done.put("responseMode", responseMode);
+                }
+                sink.emit(done);
+            }
+        }
+    }
+
+    private static final AgenticStepLifecycleDirector AGENTIC_STEP_LIFECYCLE_DIRECTOR = new AgenticStepLifecycleDirector();
+
+    private void emitAgenticStepLifecycleToSse(SseEmitter emitter, String requestId, List<String> planSteps, int maxSteps) {
+        AGENTIC_STEP_LIFECYCLE_DIRECTOR.emitLifecycle(
+            planSteps,
+            maxSteps,
+            payload -> {
+                try {
+                    sendEvent(emitter, objectMapper.writeValueAsString(payload));
+                } catch (Exception ignored) {
+                    // SSE can be closed by client; do not fail main flow.
+                }
+            },
+            requestId,
+            ""
+        );
+    }
+
+    private void emitAgenticStepLifecycleToChat(String appId, String responseMode, List<String> planSteps, int maxSteps) {
+        AGENTIC_STEP_LIFECYCLE_DIRECTOR.emitLifecycle(
+            planSteps,
+            maxSteps,
+            payload -> emitAiAssistantChatChunk(appId, payload),
+            "",
+            responseMode
+        );
     }
 
     private String streamWithAutoContinue(
@@ -14746,18 +14841,7 @@ public class ApiSpringController {
                 List<String> orchestrationPlanSteps = orchestrationResult.planSteps == null
                     ? List.of()
                     : orchestrationResult.planSteps;
-                int planTotal = Math.min(6, orchestrationPlanSteps.size());
-                for (int i = 0; i < planTotal; i++) {
-                    emitAiAssistantChatChunk(appId, Map.of(
-                        "stage", "agentic_step",
-                        "message", String.valueOf(orchestrationPlanSteps.get(i) == null ? "" : orchestrationPlanSteps.get(i)),
-                        "responseMode", responseMode,
-                        "status", "running",
-                        "current", i + 1,
-                        "total", planTotal,
-                        "percent", Math.max(1, (int) Math.round(((i + 1) * 100.0) / Math.max(1, planTotal)))
-                    ));
-                }
+                emitAgenticStepLifecycleToChat(appId, responseMode, orchestrationPlanSteps, 6);
 
                 emitAiAssistantChatChunk(appId, Map.of(
                     "stage", "scope_reasoning",
