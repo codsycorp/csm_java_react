@@ -9855,7 +9855,7 @@ public class ApiSpringController {
     // Matches code-like tokens: backtick spans, method/field/array calls, camelCase symbols
     private static final Pattern EVIDENCE_CODE_REF_PATTERN = Pattern.compile(
         "`[^`]+`"
-        + "|[A-Za-z_$][A-Za-z0-9_$]*\\s*[.([\\[]"
+        + "|[A-Za-z_$][A-Za-z0-9_$]*\\s*[.(\\[]"
         + "|\\b[a-z][a-zA-Z0-9]{2,}[A-Z][a-zA-Z0-9]*\\b"
     );
 
