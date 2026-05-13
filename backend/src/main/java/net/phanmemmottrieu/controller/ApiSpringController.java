@@ -9852,36 +9852,27 @@ public class ApiSpringController {
         return clampPromptForLocalProvider(truncateMiddle(sb.toString(), Math.max(6000, maxPromptChars)), contextType, "analyze");
     }
 
+    // Matches code-like tokens: backtick spans, method/field/array calls, camelCase symbols
+    private static final Pattern EVIDENCE_CODE_REF_PATTERN = Pattern.compile(
+        "`[^`]+`"
+        + "|[A-Za-z_$][A-Za-z0-9_$]*\\s*[.([\\[]"
+        + "|\\b[a-z][a-zA-Z0-9]{2,}[A-Z][a-zA-Z0-9]*\\b"
+    );
+
     private boolean isLowSignalAnalyzeOutput(String text) {
         String safe = String.valueOf(text == null ? "" : text).trim();
         if (safe.isBlank()) {
             return true;
         }
-        String lower = safe.toLowerCase(Locale.ROOT);
         if (safe.length() < Math.max(80, aiLocalAnalyzeLowSignalMinLength)) {
             return true;
         }
 
-        int checklistHits = 0;
-        String[] checklistMarkers = {
-            "bổ sung phần còn thiếu",
-            "ban chua",
-            "bạn chưa",
-            "chưa xác định rõ",
-            "thời gian thực hiện",
-            "điều kiện dừng",
-            "ket qua cuoi cung",
-            "kết quả cuối cùng"
-        };
-        for (String marker : checklistMarkers) {
-            if (lower.contains(marker)) {
-                checklistHits++;
-            }
-        }
-
+        // --- Repetition score ---
         int repeatLineCount = 0;
         Map<String, Integer> freq = new LinkedHashMap<>();
-        for (String rawLine : safe.split("\\n")) {
+        String[] rawLines = safe.split("\\n");
+        for (String rawLine : rawLines) {
             String line = String.valueOf(rawLine == null ? "" : rawLine)
                 .replaceAll("(?im)^\\s*\\d+[\\.)]\\s*", "")
                 .replaceAll("\\s+", " ")
@@ -9896,9 +9887,42 @@ public class ApiSpringController {
                 repeatLineCount++;
             }
         }
+        if (repeatLineCount >= Math.max(1, aiLocalAnalyzeLowSignalRepeatLineThreshold)) {
+            return true;
+        }
 
-        return checklistHits >= Math.max(1, aiLocalAnalyzeLowSignalChecklistHitThreshold)
-            || repeatLineCount >= Math.max(1, aiLocalAnalyzeLowSignalRepeatLineThreshold);
+        // --- Evidence-density scorer (no hardcoded phrases) ---
+        // evidenceLines: lines that reference actual code tokens (camelCase, calls, backticks)
+        // vacuousLines: bullet/dash lines with no code reference and short content
+        int contentLines = 0;
+        int evidenceLines = 0;
+        int vacuousLines = 0;
+        for (String rawLine : rawLines) {
+            String line = rawLine.trim();
+            if (line.isBlank()) {
+                continue;
+            }
+            contentLines++;
+            if (EVIDENCE_CODE_REF_PATTERN.matcher(line).find()) {
+                evidenceLines++;
+            } else {
+                boolean isBullet = line.startsWith("-") || line.startsWith("*")
+                    || line.startsWith("•") || line.matches("^\\d+[.)].+");
+                if (isBullet && line.length() < 60) {
+                    vacuousLines++;
+                }
+            }
+        }
+        if (contentLines >= 4) {
+            double evidenceDensity = (double) evidenceLines / contentLines;
+            double vacuousRatio = (double) vacuousLines / contentLines;
+            // low signal: almost no code references + majority are vague short bullets
+            if (evidenceDensity < 0.12 && vacuousRatio > 0.45) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private String buildHeuristicBusinessLogicAnalysis(String currentCode, String requestText, String contextType) {

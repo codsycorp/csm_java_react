@@ -58,6 +58,9 @@ public class AiLocalOrchestrationService {
     private static final Pattern TOKEN_PATTERN = Pattern.compile("[a-zA-Z0-9_\\-]{3,}");
     private static final Pattern CODE_SYMBOL_PATTERN = Pattern.compile(
         "(?m)^\\s*(?:public|private|protected)?\\s*(?:static\\s+)?(?:class|interface|enum|record|void|int|long|double|float|boolean|String|def|function)\\s+[A-Za-z_][A-Za-z0-9_]*.*$");
+    private static final Pattern BRANCH_SIGNAL_PATTERN = Pattern.compile("(?i)\\b(if|else\\s+if|switch|case|catch|throw|return)\\b");
+    private static final Pattern SIDE_EFFECT_SIGNAL_PATTERN = Pattern.compile("(?i)(fetch\\s*\\(|axios\\.|request\\.|socket\\.|emit\\s*\\(|setTimeout\\s*\\(|setInterval\\s*\\(|save\\s*\\(|update\\s*\\(|delete\\s*\\(|insert\\s*\\()");
+    private static final Pattern STATE_SIGNAL_PATTERN = Pattern.compile("(?i)(useState\\s*\\(|useReducer\\s*\\(|set[A-Z][A-Za-z0-9_]*\\s*\\(|props\\.|state\\.|ref\\.)");
     
     // Type extraction: Java (public String, List<String>), TypeScript (string, interface User), Python (: str, """...(str)""")
     private static final Pattern CODE_TYPE_PATTERN = Pattern.compile(
@@ -184,6 +187,12 @@ public class AiLocalOrchestrationService {
 
     @Value("${ai.orchestration.fast-unrelated.confidence-threshold:0.85}")
     private double fastUnrelatedConfidenceThreshold;
+
+    @Value("${ai.local.primary-flow.logic-outline.enabled:true}")
+    private boolean primaryFlowLogicOutlineEnabled;
+
+    @Value("${ai.local.primary-flow.logic-outline.max-lines:18}")
+    private int primaryFlowLogicOutlineMaxLines;
 
     private final ExecutorService dynamicIngestExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "ai-dynamic-ingest");
@@ -1451,9 +1460,16 @@ public class AiLocalOrchestrationService {
             q.append(String.join(" ", attachmentHints));
         }
 
-        if (safeMessage.toLowerCase(Locale.ROOT).contains("phan tich")
-            || safeMessage.toLowerCase(Locale.ROOT).contains("phân tích")
-            || safeMessage.toLowerCase(Locale.ROOT).contains("logic")) {
+        int semanticIntentDensity = 0;
+        if (intentKeywords != null) {
+            for (String token : intentKeywords) {
+                String safe = String.valueOf(token == null ? "" : token).trim();
+                if (safe.length() >= 5) {
+                    semanticIntentDensity++;
+                }
+            }
+        }
+        if (semanticIntentDensity >= 3) {
             q.append(" | focus: business_logic flow side_effects risks");
         }
 
@@ -1470,6 +1486,15 @@ public class AiLocalOrchestrationService {
 
         if (!safeMessage.isBlank()) {
             queries.add(trimTo(safeMessage, 160));
+        }
+
+        if (isBroadAnalyzeIntent(safeMessage, digest)) {
+            queries.add("business logic main flow state transitions side effects risk hot spots");
+            if ("menu_json".equalsIgnoreCase(safeContextType)) {
+                queries.add("menu schema module table trigger relationship business rules");
+            } else {
+                queries.add("code architecture module boundaries data flow api calls mutation points");
+            }
         }
 
         if (digest != null && digest.intentKeywords != null && !digest.intentKeywords.isEmpty()) {
@@ -1522,6 +1547,64 @@ public class AiLocalOrchestrationService {
             }
         }
         return out;
+    }
+
+    private boolean isBroadAnalyzeIntent(String message, LocalToolDigest digest) {
+        String safeMessage = String.valueOf(message == null ? "" : message).trim().toLowerCase(Locale.ROOT);
+        if (safeMessage.isBlank() || digest == null) {
+            return false;
+        }
+
+        LinkedHashSet<String> messageTokens = new LinkedHashSet<>();
+        Matcher msgMatcher = TOKEN_PATTERN.matcher(safeMessage);
+        while (msgMatcher.find() && messageTokens.size() < 32) {
+            String token = String.valueOf(msgMatcher.group(0) == null ? "" : msgMatcher.group(0)).trim();
+            if (token.length() >= 3) {
+                messageTokens.add(token);
+            }
+        }
+        if (messageTokens.isEmpty()) {
+            return false;
+        }
+
+        LinkedHashSet<String> symbolTokens = new LinkedHashSet<>();
+        if (digest.codeSymbols != null) {
+            for (String symbol : digest.codeSymbols) {
+                String safe = String.valueOf(symbol == null ? "" : symbol).toLowerCase(Locale.ROOT);
+                Matcher symbolMatcher = TOKEN_PATTERN.matcher(safe);
+                while (symbolMatcher.find() && symbolTokens.size() < 64) {
+                    String token = String.valueOf(symbolMatcher.group(0) == null ? "" : symbolMatcher.group(0)).trim();
+                    if (token.length() >= 3 && !isLowValueSymbolToken(token)) {
+                        symbolTokens.add(token);
+                    }
+                }
+                if (symbolTokens.size() >= 64) {
+                    break;
+                }
+            }
+        }
+
+        int overlap = 0;
+        for (String token : messageTokens) {
+            if (symbolTokens.contains(token)) {
+                overlap++;
+                if (overlap >= 3) {
+                    break;
+                }
+            }
+        }
+
+        int score = 0;
+        if (!symbolTokens.isEmpty() && overlap == 0) {
+            score += 2;
+        }
+        if (messageTokens.size() <= 14) {
+            score += 1;
+        }
+        if (digest.intentKeywords != null && digest.intentKeywords.size() >= 3) {
+            score += 1;
+        }
+        return score >= 3;
     }
 
     private List<String> extractAttachmentSearchHints(List<Map<String, Object>> attachments, int limit) {
@@ -1648,9 +1731,110 @@ public class AiLocalOrchestrationService {
         // Only intent keywords + code symbols (function signatures) are indexed so that
         // semantic search finds the right docs without leaking raw source into LLM context.
         sb.append("codeChars=").append(code.length()).append("\n");
+        if (primaryFlowLogicOutlineEnabled) {
+            String logicOutline = buildPrimaryFlowLogicOutline(code);
+            if (!logicOutline.isBlank()) {
+                sb.append("logicOutline=\n").append(logicOutline).append("\n");
+            }
+        }
         sb.append("contextSummary=primary_flow_indexed_for_semantic_retrieval\n");
 
         return trimTo(sb.toString(), Math.max(1200, maxChars));
+    }
+
+    private String buildPrimaryFlowLogicOutline(String code) {
+        String source = String.valueOf(code == null ? "" : code).trim();
+        if (source.isBlank()) {
+            return "";
+        }
+        if (source.length() > 280000) {
+            source = source.substring(0, 280000);
+        }
+
+        LinkedHashSet<String> functionTokens = new LinkedHashSet<>();
+        Matcher symbolMatcher = CODE_SYMBOL_PATTERN.matcher(source);
+        while (symbolMatcher.find() && functionTokens.size() < Math.max(6, primaryFlowLogicOutlineMaxLines)) {
+            String line = String.valueOf(symbolMatcher.group(0) == null ? "" : symbolMatcher.group(0)).trim();
+            if (line.isBlank()) {
+                continue;
+            }
+            Matcher tokenMatcher = TOKEN_PATTERN.matcher(line);
+            while (tokenMatcher.find() && functionTokens.size() < Math.max(6, primaryFlowLogicOutlineMaxLines)) {
+                String token = String.valueOf(tokenMatcher.group(0) == null ? "" : tokenMatcher.group(0)).trim();
+                if (isLowValueSymbolToken(token)) {
+                    continue;
+                }
+                functionTokens.add(token);
+            }
+        }
+
+        LinkedHashSet<String> branchSignals = new LinkedHashSet<>();
+        Matcher branchMatcher = BRANCH_SIGNAL_PATTERN.matcher(source);
+        while (branchMatcher.find() && branchSignals.size() < 8) {
+            String token = String.valueOf(branchMatcher.group(1) == null ? "" : branchMatcher.group(1)).trim().toLowerCase(Locale.ROOT);
+            if (!token.isBlank()) {
+                branchSignals.add(token);
+            }
+        }
+
+        LinkedHashSet<String> sideEffects = new LinkedHashSet<>();
+        Matcher sideEffectMatcher = SIDE_EFFECT_SIGNAL_PATTERN.matcher(source);
+        while (sideEffectMatcher.find() && sideEffects.size() < 8) {
+            String token = String.valueOf(sideEffectMatcher.group(1) == null ? "" : sideEffectMatcher.group(1)).trim();
+            if (!token.isBlank()) {
+                sideEffects.add(token);
+            }
+        }
+
+        LinkedHashSet<String> stateSignals = new LinkedHashSet<>();
+        Matcher stateMatcher = STATE_SIGNAL_PATTERN.matcher(source);
+        while (stateMatcher.find() && stateSignals.size() < 8) {
+            String token = String.valueOf(stateMatcher.group(1) == null ? "" : stateMatcher.group(1)).trim();
+            if (!token.isBlank()) {
+                stateSignals.add(token);
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        if (!functionTokens.isEmpty()) {
+            sb.append("- mainSymbols: ").append(String.join(", ", functionTokens)).append("\n");
+        }
+        if (!branchSignals.isEmpty()) {
+            sb.append("- branchSignals: ").append(String.join(", ", branchSignals)).append("\n");
+        }
+        if (!stateSignals.isEmpty()) {
+            sb.append("- stateSignals: ").append(String.join(", ", stateSignals)).append("\n");
+        }
+        if (!sideEffects.isEmpty()) {
+            sb.append("- sideEffects: ").append(String.join(", ", sideEffects)).append("\n");
+        }
+        return trimTo(sb.toString().trim(), 1800);
+    }
+
+    private boolean isLowValueSymbolToken(String token) {
+        String safe = String.valueOf(token == null ? "" : token).trim().toLowerCase(Locale.ROOT);
+        if (safe.length() < 3) {
+            return true;
+        }
+        return safe.equals("public")
+            || safe.equals("private")
+            || safe.equals("protected")
+            || safe.equals("static")
+            || safe.equals("class")
+            || safe.equals("interface")
+            || safe.equals("enum")
+            || safe.equals("record")
+            || safe.equals("function")
+            || safe.equals("void")
+            || safe.equals("int")
+            || safe.equals("long")
+            || safe.equals("double")
+            || safe.equals("float")
+            || safe.equals("boolean")
+            || safe.equals("string")
+            || safe.equals("props")
+            || safe.equals("state")
+            || safe.equals("return");
     }
 
     private double getOffTopicConfidence(
