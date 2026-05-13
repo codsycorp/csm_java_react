@@ -58,6 +58,15 @@ public class AiLocalOrchestrationService {
     private static final Pattern TOKEN_PATTERN = Pattern.compile("[a-zA-Z0-9_\\-]{3,}");
     private static final Pattern CODE_SYMBOL_PATTERN = Pattern.compile(
         "(?m)^\\s*(?:public|private|protected)?\\s*(?:static\\s+)?(?:class|interface|enum|record|void|int|long|double|float|boolean|String|def|function)\\s+[A-Za-z_][A-Za-z0-9_]*.*$");
+    
+    // Type extraction: Java (public String, List<String>), TypeScript (string, interface User), Python (: str, """...(str)""")
+    private static final Pattern CODE_TYPE_PATTERN = Pattern.compile(
+        "(?:public|private|protected)?\\s*(?:static\\s+)?(?:final\\s+)?" +
+        "(?:List|Set|Map|Optional|Stream|Function|Supplier|Consumer|Predicate|Comparable|Serializable|" +
+        "String|int|long|double|float|boolean|byte|short|char|void|Object|" +
+        "var|let|const|string|number|boolean|object|any|unknown|null|undefined|" +
+        "str|int|float|bool|list|dict|tuple|Optional|Union|Type)" +
+        "(?:<[^>]+>)?\\s*(?:&|\\|)?\\s*[A-Za-z_][A-Za-z0-9_]*");
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AiSpeculativeExecutionService aiSpeculativeExecutionService;
@@ -145,6 +154,30 @@ public class AiLocalOrchestrationService {
 
     @Value("${ai.orchestration.multimodal.scope-rag.adaptive.max-max-chars:9000}")
     private int adaptiveScopeRagMaxMaxChars;
+
+    @Value("${ai.local.symbol.aware.retrieval.enabled:true}")
+    private boolean symbolAwareRetrievalEnabled;
+
+    @Value("${ai.local.symbol.aware.retrieval.top-k:3}")
+    private int symbolAwareRetrievalTopK;
+
+    @Value("${ai.local.symbol.aware.retrieval.max-chars:2400}")
+    private int symbolAwareRetrievalMaxChars;
+
+    @Value("${ai.local.symbol.aware.retrieval.min-symbols:2}")
+    private int symbolAwareRetrievalMinSymbols;
+
+    @Value("${ai.code.stream.type.aware.injection.enabled:true}")
+    private boolean typeAwareInjectionEnabled;
+
+    @Value("${ai.code.stream.type.aware.injection.max-types:20}")
+    private int typeAwareInjectionMaxTypes;
+
+    @Value("${ai.code.stream.type.aware.injection.max-chars:1600}")
+    private int typeAwareInjectionMaxChars;
+
+    @Value("${ai.code.stream.type.aware.injection.min-confidence:0.7}")
+    private double typeAwareInjectionMinConfidence;
 
     @Value("${ai.orchestration.fast-unrelated.enabled:true}")
     private boolean fastUnrelatedEnabled;
@@ -487,6 +520,80 @@ public class AiLocalOrchestrationService {
             && aggregateScopeMask > 0
             && aiBusinessMemoryVectorService != null
             && aiBusinessMemoryVectorService.isEnabled()) {
+            
+            // ─── Phase 1: Symbol-Aware Retrieval (prioritize code symbols over generic vector search) ───
+            StringBuilder symbolRagBlock = new StringBuilder();
+            if (symbolAwareRetrievalEnabled && !digest.codeSymbols.isEmpty()) {
+                List<String> symbolQueries = buildSymbolAwareQueries(digest.codeSymbols, maxCodeSymbols / 2);
+                if (!symbolQueries.isEmpty()) {
+                    int symbolTopK = Math.max(2, symbolAwareRetrievalTopK);
+                    int symbolMaxChars = Math.max(1200, symbolAwareRetrievalMaxChars);
+                    int symbolsProcessed = 0;
+                    for (String symQuery : symbolQueries) {
+                        if (symbolsProcessed >= Math.min(3, symbolQueries.size())) {
+                            break;
+                        }
+                        String safeSq = String.valueOf(symQuery == null ? "" : symQuery).trim();
+                        if (safeSq.isBlank()) {
+                            continue;
+                        }
+                        String symbolResult = aiBusinessMemoryVectorService.buildRagBlockWithScopes(
+                            appId,
+                            safeSq,
+                            symbolTopK,
+                            aggregateScopeMask,
+                            symbolMaxChars
+                        );
+                        if (symbolResult != null && !symbolResult.isBlank()) {
+                            if (symbolRagBlock.length() > 0) {
+                                symbolRagBlock.append("\n\n");
+                            }
+                            symbolRagBlock.append("### Symbol Match: ").append(safeSq).append("\n").append(symbolResult);
+                            symbolsProcessed++;
+                        }
+                    }
+                }
+                if (symbolRagBlock.length() > 0) {
+                    out.toolStats.put("symbolAwareRetrievalEnabled", true);
+                    out.toolStats.put("symbolAwareRetrievalSymbolsProcessed", Math.min(3, symbolQueries.size()));
+                    out.toolStats.put("symbolAwareRetrievalChars", symbolRagBlock.length());
+                }
+            }
+
+            // ─── Phase 1.5: Type-Aware Context Injection (enhance symbol results with type hints) ───
+            StringBuilder typeHintsBlock = new StringBuilder();
+            if (typeAwareInjectionEnabled && !safeCode.isBlank()) {
+                List<String> typeHints = extractTypeHints(safeCode, typeAwareInjectionMaxTypes);
+                if (!typeHints.isEmpty()) {
+                    typeHintsBlock.append("## Available Types in This Code\n");
+                    int typeCharsUsed = "## Available Types in This Code\n".length();
+                    int typesAdded = 0;
+                    for (String type : typeHints) {
+                        if (typesAdded >= typeAwareInjectionMaxTypes) {
+                            break;
+                        }
+                        String safeType = String.valueOf(type == null ? "" : type).trim();
+                        if (safeType.isEmpty()) {
+                            continue;
+                        }
+                        String typeLine = "- " + safeType + "\n";
+                        if (typeCharsUsed + typeLine.length() <= typeAwareInjectionMaxChars) {
+                            typeHintsBlock.append(typeLine);
+                            typeCharsUsed += typeLine.length();
+                            typesAdded++;
+                        } else {
+                            break;
+                        }
+                    }
+                    if (typesAdded > 0) {
+                        out.toolStats.put("typeAwareInjectionEnabled", true);
+                        out.toolStats.put("typeAwareInjectionTypesExtracted", typesAdded);
+                        out.toolStats.put("typeAwareInjectionChars", typeHintsBlock.length());
+                    }
+                }
+            }
+
+            // ─── Phase 2: Adaptive Main Vector Search ───
             AdaptiveRetrievalPlan retrievalPlan = buildAdaptiveRetrievalPlan(
                 safeMessage,
                 safeContextType,
@@ -505,6 +612,57 @@ public class AiLocalOrchestrationService {
                 retrievalPlan.scopeMask,
                 retrievalPlan.maxChars
             );
+            
+            // Prepend type hints and symbol results (highest priority: types > symbols > vector search)
+            StringBuilder ragBlockWithContext = new StringBuilder();
+            if (typeHintsBlock.length() > 0) {
+                ragBlockWithContext.append(typeHintsBlock.toString()).append("\n\n");
+            }
+            if (symbolRagBlock.length() > 0) {
+                ragBlockWithContext.append(symbolRagBlock.toString()).append("\n\n");
+            }
+            ragBlockWithContext.append(scopedRagBlock);
+            scopedRagBlock = ragBlockWithContext.toString();
+
+            // ─── Phase 3: Targeted Queries (derived from message/context) ───
+            List<String> targetedQueries = deriveTargetedRetrievalQueries(safeMessage, digest, safeContextType);
+            if (!targetedQueries.isEmpty()) {
+                int targetedTopK = Math.max(2, retrievalPlan.topK - 2);
+                int targetedMaxChars = Math.max(900, retrievalPlan.maxChars / 2);
+                StringBuilder targetedBlock = new StringBuilder();
+                int added = 0;
+                for (String tq : targetedQueries) {
+                    String safeTq = String.valueOf(tq == null ? "" : tq).trim();
+                    if (safeTq.isBlank() || safeTq.equalsIgnoreCase(retrievalPlan.query)) {
+                        continue;
+                    }
+                    String extra = aiBusinessMemoryVectorService.buildRagBlockWithScopes(
+                        appId,
+                        safeTq,
+                        targetedTopK,
+                        retrievalPlan.scopeMask,
+                        targetedMaxChars
+                    );
+                    if (extra != null && !extra.isBlank()) {
+                        if (targetedBlock.length() > 0) {
+                            targetedBlock.append("\n\n");
+                        }
+                        targetedBlock.append("### Targeted Query: ").append(safeTq).append("\n").append(extra);
+                        added++;
+                        if (added >= 2) {
+                            break;
+                        }
+                    }
+                }
+                if (targetedBlock.length() > 0) {
+                    scopedRagBlock = scopedRagBlock.isBlank()
+                        ? targetedBlock.toString()
+                        : (scopedRagBlock + "\n\n" + targetedBlock);
+                    out.toolStats.put("scopedRagTargetedQueries", targetedQueries);
+                    out.toolStats.put("scopedRagTargetedTopK", targetedTopK);
+                    out.toolStats.put("scopedRagTargetedMaxChars", targetedMaxChars);
+                }
+            }
             out.toolStats.put("scopedRagEnabled", true);
             out.toolStats.put("scopedRagScopeMask", retrievalPlan.scopeMask);
             out.toolStats.put("scopedRagTopK", retrievalPlan.topK);
@@ -918,6 +1076,144 @@ public class AiLocalOrchestrationService {
         return out;
     }
 
+    /**
+     * Build symbol-aware retrieval queries from code symbols.
+     * Extracts function/class names and derives targeted search queries.
+     * Format: "symbolName implementation behavior" or "symbolName usage"
+     */
+    private List<String> buildSymbolAwareQueries(List<String> codeSymbols, int limit) {
+        List<String> out = new ArrayList<>();
+        if (codeSymbols == null || codeSymbols.isEmpty()) {
+            return out;
+        }
+
+        for (String symbolLine : codeSymbols) {
+            if (symbolLine == null || symbolLine.isBlank()) {
+                continue;
+            }
+            String safeLine = String.valueOf(symbolLine).trim();
+            
+            // Extract potential symbol names from the line
+            // e.g., "public void processUserData(..." -> extract "processUserData"
+            // "class MenuItem {" -> extract "MenuItem"
+            String[] potentialSymbols = safeLine.split("[\\s\\(\\{<>\\[\\]=\"\\.]+");
+            for (String sym : potentialSymbols) {
+                String cleanSym = String.valueOf(sym == null ? "" : sym).trim();
+                if (cleanSym.length() >= 3 
+                    && !cleanSym.equalsIgnoreCase("public")
+                    && !cleanSym.equalsIgnoreCase("private")
+                    && !cleanSym.equalsIgnoreCase("protected")
+                    && !cleanSym.equalsIgnoreCase("static")
+                    && !cleanSym.equalsIgnoreCase("void")
+                    && !cleanSym.equalsIgnoreCase("class")
+                    && !cleanSym.equalsIgnoreCase("interface")
+                    && !cleanSym.equalsIgnoreCase("function")
+                    && !cleanSym.equalsIgnoreCase("def")) {
+                    
+                    // Generate query variants
+                    String implQuery = cleanSym + " implementation logic";
+                    String usageQuery = cleanSym + " usage pattern";
+                    
+                    if (!out.contains(implQuery)) {
+                        out.add(implQuery);
+                    }
+                    if (out.size() < limit && !out.contains(usageQuery)) {
+                        out.add(usageQuery);
+                    }
+                    
+                    if (out.size() >= limit) {
+                        break;
+                    }
+                }
+            }
+            if (out.size() >= limit) {
+                break;
+            }
+        }
+        
+        return out.subList(0, Math.min(limit, out.size()));
+    }
+
+    /**
+     * Extract type hints from code for type-aware injection.
+     * Captures: Java types (List<String>, User myVar), TypeScript types (string, interface User),
+     * Python types (: str, -> int, Union[str, int]).
+     * 
+     * Returns deduplicated list of detected types with confidence scoring.
+     * Purpose: Inject into prompt as "## Available Types in This Code" block for better accuracy.
+     */
+    private List<String> extractTypeHints(String code, int limit) {
+        List<String> out = new ArrayList<>();
+        if (code == null || code.isBlank()) {
+            return out;
+        }
+        
+        String source = code.length() > 300000 ? code.substring(0, 300000) : code;
+        
+        // Detect language hints to improve type extraction
+        boolean isJava = source.contains("public class") || source.contains("import ") && source.contains(";");
+        boolean isTypeScript = source.contains("interface ") || source.contains("type ") || source.contains("export ");
+        boolean isPython = source.contains("def ") || source.contains("import ") && source.contains("\n");
+        
+        LinkedHashSet<String> typeSet = new LinkedHashSet<>();
+        
+        // Extract type declarations
+        Matcher m = CODE_TYPE_PATTERN.matcher(source);
+        while (m.find() && typeSet.size() < limit) {
+            String typeMatch = String.valueOf(m.group(0) == null ? "" : m.group(0)).trim();
+            if (!typeMatch.isEmpty() && typeMatch.length() <= 80) {
+                typeSet.add(typeMatch);
+            }
+        }
+        
+        // Java-specific: extract from method signatures and field declarations
+        if (isJava) {
+            Pattern javaFieldPattern = Pattern.compile(
+                "(?:public|private|protected)?\\s*(?:static\\s+)?(?:final\\s+)?" +
+                "(List|Set|Map|Optional|String|int|long|double|float|boolean|Object|[A-Z][A-Za-z0-9]*)" +
+                "(?:<[^>]+>)?\\s+[a-z_][a-zA-Z0-9_]*");
+            Matcher jm = javaFieldPattern.matcher(source);
+            while (jm.find() && typeSet.size() < limit) {
+                String javaType = jm.group(1);
+                if (javaType != null && !javaType.isEmpty()) {
+                    typeSet.add(javaType);
+                }
+            }
+        }
+        
+        // TypeScript-specific: extract interface and type definitions
+        if (isTypeScript) {
+            Pattern tsInterfacePattern = Pattern.compile("(?:interface|type)\\s+([A-Z][A-Za-z0-9]*)");
+            Matcher tm = tsInterfacePattern.matcher(source);
+            while (tm.find() && typeSet.size() < limit) {
+                String tsType = tm.group(1);
+                if (tsType != null && !tsType.isEmpty()) {
+                    typeSet.add(tsType);
+                }
+            }
+        }
+        
+        // Python-specific: extract type hints (: type, -> type)
+        if (isPython) {
+            Pattern pythonTypePattern = Pattern.compile(
+                "(?::\\s*([A-Z][A-Za-z0-9]*|(?:str|int|float|bool|list|dict|tuple|Optional|Union)(?:\\[[^\\]]+\\])?))" +
+                "|(?:->\\s*([A-Z][A-Za-z0-9]*|(?:str|int|float|bool|list|dict|tuple|Optional|Union)(?:\\[[^\\]]+\\])?))"
+            );
+            Matcher pm = pythonTypePattern.matcher(source);
+            while (pm.find() && typeSet.size() < limit) {
+                String pyType1 = pm.group(1);
+                String pyType2 = pm.group(2);
+                String pyType = pyType1 != null ? pyType1 : pyType2;
+                if (pyType != null && !pyType.isEmpty()) {
+                    typeSet.add(pyType);
+                }
+            }
+        }
+        
+        out.addAll(typeSet);
+        return out.subList(0, Math.min(limit, out.size()));
+    }
+
     private AttachmentDigest buildAttachmentDigest(List<Map<String, Object>> attachments, int limit) {
         AttachmentDigest out = new AttachmentDigest();
         if (attachments == null || attachments.isEmpty()) {
@@ -1165,6 +1461,67 @@ public class AiLocalOrchestrationService {
         q.append(" | task=").append(String.valueOf(taskType == null ? "" : taskType));
         q.append(" | mode=").append(String.valueOf(responseMode == null ? "" : responseMode));
         return trimTo(q.toString(), 380);
+    }
+
+    private List<String> deriveTargetedRetrievalQueries(String message, LocalToolDigest digest, String contextType) {
+        LinkedHashSet<String> queries = new LinkedHashSet<>();
+        String safeMessage = String.valueOf(message == null ? "" : message).trim();
+        String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim();
+
+        if (!safeMessage.isBlank()) {
+            queries.add(trimTo(safeMessage, 160));
+        }
+
+        if (digest != null && digest.intentKeywords != null && !digest.intentKeywords.isEmpty()) {
+            List<String> topIntents = new ArrayList<>();
+            for (String keyword : digest.intentKeywords) {
+                String safe = String.valueOf(keyword == null ? "" : keyword).trim();
+                if (safe.length() >= 3) {
+                    topIntents.add(safe);
+                }
+                if (topIntents.size() >= 6) {
+                    break;
+                }
+            }
+            if (!topIntents.isEmpty()) {
+                queries.add(String.join(" ", topIntents) + " business logic data flow " + safeContextType);
+            }
+        }
+
+        if (digest != null && digest.codeSymbols != null && !digest.codeSymbols.isEmpty()) {
+            LinkedHashSet<String> symbolTokens = new LinkedHashSet<>();
+            for (String symbol : digest.codeSymbols) {
+                String safe = String.valueOf(symbol == null ? "" : symbol).toLowerCase(Locale.ROOT);
+                Matcher m = TOKEN_PATTERN.matcher(safe);
+                while (m.find()) {
+                    String token = String.valueOf(m.group(0) == null ? "" : m.group(0)).trim();
+                    if (token.length() >= 3) {
+                        symbolTokens.add(token);
+                    }
+                    if (symbolTokens.size() >= 8) {
+                        break;
+                    }
+                }
+                if (symbolTokens.size() >= 8) {
+                    break;
+                }
+            }
+            if (!symbolTokens.isEmpty()) {
+                queries.add(String.join(" ", symbolTokens) + " implementation behavior side effects");
+            }
+        }
+
+        List<String> out = new ArrayList<>();
+        for (String q : queries) {
+            String safe = trimTo(String.valueOf(q == null ? "" : q).trim(), 220);
+            if (!safe.isBlank()) {
+                out.add(safe);
+            }
+            if (out.size() >= 3) {
+                break;
+            }
+        }
+        return out;
     }
 
     private List<String> extractAttachmentSearchHints(List<Map<String, Object>> attachments, int limit) {

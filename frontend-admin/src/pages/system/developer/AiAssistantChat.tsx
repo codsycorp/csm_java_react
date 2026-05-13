@@ -69,12 +69,50 @@ interface CodeBlock {
 
 type ResponseMode = "analyze" | "edit";
 
+interface PatchValidatorMeta {
+	inputCount?: number
+	normalizedCount?: number
+	acceptedCount?: number
+	rejectedCount?: number
+	rejectionReason?: string
+}
+
+interface QuickFixSuggestion {
+	id: string
+	title: string
+	description?: string
+	action: string
+	payload: Record<string, any>
+}
+
+interface EditCandidate {
+	id: string
+	title: string
+	description?: string
+	textEdits: any[]
+	lineRanges?: any[]
+	riskLevel?: "low" | "medium" | "high"
+	confidence?: number
+	rationale?: string
+	feedbackScore?: number
+	ops?: {
+		add?: number
+		edit?: number
+		delete?: number
+	}
+}
+
 interface AgenticStep {
 	id: string
 	stage: string
 	icon: string
 	label: string
 	detail?: string
+	qualityScore?: number
+	lowConfidence?: boolean
+	stepIndex?: number
+	stepTotal?: number
+	patchValidator?: PatchValidatorMeta
 	status: "running" | "done"
 	timestamp: number
 }
@@ -124,7 +162,111 @@ interface AiAssistantStageEvent {
 	current?: number
 	total?: number
 	rangeLabel?: string
+	patchValidator?: PatchValidatorMeta
 	timestamp: number
+}
+
+function normalizePatchValidatorMeta(raw: unknown): PatchValidatorMeta | undefined {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw))
+		return undefined;
+	const input = raw as Record<string, unknown>;
+	const toSafeInt = (value: unknown): number | undefined => {
+		const num = Number(value);
+		if (!Number.isFinite(num))
+			return undefined;
+		return Math.max(0, Math.floor(num));
+	};
+	const rejectionReason = String(input.rejectionReason || "").trim();
+	const meta: PatchValidatorMeta = {
+		inputCount: toSafeInt(input.inputCount),
+		normalizedCount: toSafeInt(input.normalizedCount),
+		acceptedCount: toSafeInt(input.acceptedCount),
+		rejectedCount: toSafeInt(input.rejectedCount),
+		rejectionReason: rejectionReason || undefined,
+	};
+	if (meta.inputCount == null && meta.normalizedCount == null && meta.acceptedCount == null && meta.rejectedCount == null && !meta.rejectionReason) {
+		return undefined;
+	}
+	return meta;
+}
+
+function isPatchValidatorRejected(meta?: PatchValidatorMeta): boolean {
+	if (!meta)
+		return false;
+	const reason = String(meta.rejectionReason || "").trim().toLowerCase();
+	if (reason && reason !== "none" && reason !== "validator_disabled")
+		return true;
+	const rejected = Number(meta.rejectedCount || 0);
+	const accepted = Number(meta.acceptedCount || 0);
+	return rejected > 0 && accepted <= 0;
+}
+
+function normalizeQuickFixSuggestions(raw: unknown): QuickFixSuggestion[] {
+	if (!Array.isArray(raw))
+		return [];
+	const out: QuickFixSuggestion[] = [];
+	for (const item of raw) {
+		if (!item || typeof item !== "object" || Array.isArray(item))
+			continue;
+		const obj = item as Record<string, unknown>;
+		const id = String(obj.id || "").trim();
+		const title = String(obj.title || "").trim();
+		const action = String(obj.action || "").trim().toLowerCase();
+		const payload = obj.payload && typeof obj.payload === "object" && !Array.isArray(obj.payload)
+			? (obj.payload as Record<string, any>)
+			: {};
+		if (!id || !title || !action)
+			continue;
+		out.push({
+			id,
+			title,
+			description: String(obj.description || "").trim() || undefined,
+			action,
+			payload,
+		});
+	}
+	return out;
+}
+
+function normalizeEditCandidates(raw: unknown): EditCandidate[] {
+	if (!Array.isArray(raw))
+		return [];
+	const out: EditCandidate[] = [];
+	for (let i = 0; i < raw.length; i += 1) {
+		const item = raw[i];
+		if (!item || typeof item !== "object" || Array.isArray(item))
+			continue;
+		const obj = item as Record<string, unknown>;
+		const textEdits = Array.isArray(obj.textEdits) ? obj.textEdits : [];
+		if (textEdits.length === 0)
+			continue;
+		const id = String(obj.id || `candidate_${i + 1}`).trim();
+		const title = String(obj.title || `Candidate ${i + 1}`).trim();
+		const opsRaw = obj.ops && typeof obj.ops === "object" && !Array.isArray(obj.ops)
+			? (obj.ops as Record<string, unknown>)
+			: undefined;
+		out.push({
+			id,
+			title,
+			description: String(obj.description || "").trim() || undefined,
+			textEdits,
+			lineRanges: Array.isArray(obj.lineRanges) ? obj.lineRanges : undefined,
+			riskLevel: ["low", "medium", "high"].includes(String(obj.riskLevel || "").trim().toLowerCase())
+				? (String(obj.riskLevel || "").trim().toLowerCase() as "low" | "medium" | "high")
+				: undefined,
+			confidence: Number.isFinite(Number(obj.confidence)) ? Number(obj.confidence) : undefined,
+			rationale: String(obj.rationale || "").trim() || undefined,
+			feedbackScore: Number.isFinite(Number(obj.feedbackScore)) ? Number(obj.feedbackScore) : undefined,
+			ops: opsRaw
+				? {
+					add: Number.isFinite(Number(opsRaw.add)) ? Number(opsRaw.add) : undefined,
+					edit: Number.isFinite(Number(opsRaw.edit)) ? Number(opsRaw.edit) : undefined,
+					delete: Number.isFinite(Number(opsRaw.delete)) ? Number(opsRaw.delete) : undefined,
+				}
+				: undefined,
+		});
+	}
+	return out;
 }
 
 interface AiUsageSummary {
@@ -1345,6 +1487,11 @@ export default function AiAssistantChat({
 	const [localFlowOps, setLocalFlowOps] = useState<LocalFlowOperationSummary | null>(null);
 	const [localFlowOpLines, setLocalFlowOpLines] = useState<LocalFlowOperationLine[]>([]);
 	const [localFlowOpFilter, setLocalFlowOpFilter] = useState<LocalFlowOperationFilter>("all");
+	const [quickFixSuggestions, setQuickFixSuggestions] = useState<QuickFixSuggestion[]>([]);
+	const [applyingQuickFixId, setApplyingQuickFixId] = useState("");
+	const [editCandidates, setEditCandidates] = useState<EditCandidate[]>([]);
+	const [applyingEditCandidateId, setApplyingEditCandidateId] = useState("");
+	const [retryingEditCandidateId, setRetryingEditCandidateId] = useState("");
 	const [lastProgressEventAgeSecs, setLastProgressEventAgeSecs] = useState(0);
 	const [backendProgressHint, setBackendProgressHint] = useState<{ stage: string, detail: string }>({ stage: "", detail: "" });
 	// Progress state: waiting for Gemini / streaming progress
@@ -1599,6 +1746,61 @@ export default function AiAssistantChat({
 				return uiText("Hoàn tất lượt", "Turn completed", "本轮完成");
 			default:
 				return code || uiText("Đang xử lý", "Processing", "处理中");
+		}
+	}, [uiText]);
+
+	const formatPatchValidatorReason = useCallback((reasonCode?: string): string => {
+		const code = String(reasonCode || "").trim().toLowerCase();
+		switch (code) {
+			case "empty_input":
+				return uiText("không có patch đầu vào", "empty patch input", "补丁输入为空");
+			case "all_filtered_pre_normalize":
+				return uiText("patch bị loại trước normalize", "patch filtered before normalize", "规范化前已被过滤");
+			case "all_filtered_overlap_or_limits":
+				return uiText("patch chồng lấp hoặc vượt giới hạn", "overlap or limit-filtered patch", "补丁重叠或超限");
+			case "empty_after_simulation":
+				return uiText("kết quả mô phỏng rỗng", "empty result after simulation", "模拟应用后为空");
+			case "shrink_ratio_below_min":
+				return uiText("tỷ lệ output thấp hơn ngưỡng", "output ratio below minimum", "输出比例低于阈值");
+			case "partial_filtered":
+				return uiText("một phần patch bị lọc", "partially filtered patch", "补丁被部分过滤");
+			case "validator_disabled":
+				return uiText("validator tắt", "validator disabled", "验证器已关闭");
+			case "none":
+				return uiText("hợp lệ", "valid", "有效");
+			default:
+				return code || uiText("không rõ", "unknown", "未知");
+		}
+	}, [uiText]);
+
+	const buildPatchValidatorRetryHint = useCallback((reasonCode?: string): string => {
+		const code = String(reasonCode || "").trim().toLowerCase();
+		switch (code) {
+			case "all_filtered_pre_normalize":
+			case "all_filtered_overlap_or_limits":
+				return uiText(
+					"Yêu cầu textEdits không chồng lấp, line-range hợp lệ, theo đúng vùng cần sửa.",
+					"Return non-overlapping textEdits with valid line ranges and strict scope.",
+					"请返回不重叠且行范围有效的 textEdits，并严格限制在目标范围。",
+				);
+			case "empty_after_simulation":
+				return uiText(
+					"Patch phải tạo thay đổi thực tế sau khi apply mô phỏng, không để output rỗng.",
+					"Patch must produce real changes after simulated apply; output cannot be empty.",
+					"补丁在模拟应用后必须产生真实变化，输出不能为空。",
+				);
+			case "shrink_ratio_below_min":
+				return uiText(
+					"Giữ nguyên phần không liên quan, tránh xóa lớn gây shrink ratio thấp.",
+					"Preserve unrelated code and avoid large deletions that reduce output ratio.",
+					"保留无关代码，避免大范围删除导致输出比例过低。",
+				);
+			default:
+				return uiText(
+					"Trả patch tối thiểu, áp dụng được ngay và không chỉnh ngoài phạm vi.",
+					"Return a minimal immediately-applicable patch without out-of-scope edits.",
+					"返回最小可立即应用补丁，且不要越范围修改。",
+				);
 		}
 	}, [uiText]);
 
@@ -2535,8 +2737,9 @@ export default function AiAssistantChat({
 		const queueState = String(data?.queueState || "").trim();
 		const dynamicSource = String(data?.dynamicSource || "").trim();
 		const prunedSourcesNum = Number(data?.prunedSources);
+		const patchValidator = normalizePatchValidatorMeta(data?.patchValidator);
 		const rangeLabel = extractStageRangeLabel(data);
-		const hasValue = stage || msg || messageKey || detail || detailKey || orchestrationPhase || orchestrationPhaseKey || Number.isFinite(Number(data?.percent)) || Number.isFinite(Number(data?.overallPercent)) || Boolean(rangeLabel);
+		const hasValue = stage || msg || messageKey || detail || detailKey || orchestrationPhase || orchestrationPhaseKey || Number.isFinite(Number(data?.percent)) || Number.isFinite(Number(data?.overallPercent)) || Boolean(rangeLabel) || Boolean(patchValidator);
 		if (!hasValue)
 			return;
 
@@ -2567,6 +2770,9 @@ export default function AiAssistantChat({
 			queueState.toLowerCase(),
 			dynamicSource.toLowerCase(),
 			Number.isFinite(prunedSourcesNum) ? prunedSourcesNum : "",
+			patchValidator?.rejectionReason || "",
+			patchValidator?.acceptedCount ?? "",
+			patchValidator?.rejectedCount ?? "",
 			rangeLabel || "",
 		].join("|");
 
@@ -2586,6 +2792,7 @@ export default function AiAssistantChat({
 			queueState: queueState || undefined,
 			dynamicSource: dynamicSource || undefined,
 			prunedSources: Number.isFinite(prunedSourcesNum) ? prunedSourcesNum : undefined,
+			patchValidator,
 			message: msg,
 			messageKey: messageKey || undefined,
 			messageArgs,
@@ -2785,6 +2992,11 @@ export default function AiAssistantChat({
 			}));
 	}, [visibleStageEvents, getStageTone, formatStageToneLabel]);
 
+	const lowConfidenceAgenticSteps = useMemo(
+		() => agenticSteps.filter(step => Boolean(step.lowConfidence)),
+		[agenticSteps],
+	);
+
 	const filteredLocalFlowOpLines = useMemo(() => {
 		if (localFlowOpFilter === "all") {
 			return localFlowOpLines;
@@ -2982,6 +3194,131 @@ export default function AiAssistantChat({
 		lastRealtimeApplyAtRef.current = now;
 		return true;
 	}, [contextType, currentCode, onCodeInsert, pickPreferredCodeBlock]);
+
+	const insertImportLinesIntoCode = useCallback((baseCode: string, importLines: string[]): string => {
+		const source = String(baseCode || "");
+		if (!source || !Array.isArray(importLines) || importLines.length === 0)
+			return source;
+		const normalizedImports = importLines
+			.map(line => String(line || "").trim())
+			.filter(Boolean)
+			.filter((line, idx, arr) => arr.indexOf(line) === idx)
+			.filter(line => !source.includes(line));
+		if (normalizedImports.length === 0)
+			return source;
+
+		const lines = source.split(/\r?\n/);
+		let insertIndex = 0;
+		for (let i = 0; i < lines.length; i += 1) {
+			const line = String(lines[i] || "").trim();
+			if (line.startsWith("package ") || line.startsWith("import ")) {
+				insertIndex = i + 1;
+				continue;
+			}
+			if (insertIndex > 0) {
+				break;
+			}
+		}
+
+		const next = [...lines];
+		next.splice(insertIndex, 0, ...normalizedImports);
+		return next.join("\n");
+	}, []);
+
+	const sendQuickFixFeedback = useCallback(async (suggestion: QuickFixSuggestion, action: "applied" | "dismissed") => {
+		try {
+			await request.post("ai-code-stream/quick-fix-feedback", {
+				json: {
+					appId,
+					language,
+					quickFixId: suggestion.id,
+					action,
+				},
+			});
+		}
+		catch {
+			// Best-effort telemetry only. UI flow should not be blocked.
+		}
+	}, [appId, language]);
+
+	const applyQuickFixSuggestion = useCallback((suggestion: QuickFixSuggestion) => {
+		if (!onCodeInsert || contextType !== "code") {
+			message.info(uiText("Quick-fix chỉ áp dụng cho code editor.", "Quick fixes are available in code editor mode only.", "Quick-fix 仅适用于代码编辑模式。"));
+			return;
+		}
+		const action = String(suggestion.action || "").trim().toLowerCase();
+		const payload = suggestion.payload || {};
+		let nextCode = String(currentCode || "");
+		if (action === "insert_import") {
+			const importLine = String(payload.importLine || "").trim();
+			nextCode = insertImportLinesIntoCode(nextCode, importLine ? [importLine] : []);
+		}
+		else if (action === "insert_imports") {
+			const importLines = Array.isArray(payload.importLines)
+				? payload.importLines.map((line: unknown) => String(line || "").trim()).filter(Boolean)
+				: [];
+			nextCode = insertImportLinesIntoCode(nextCode, importLines);
+		}
+		if (!nextCode || nextCode === currentCode) {
+			message.warning(uiText("Không có thay đổi để áp dụng từ quick-fix.", "No changes to apply from this quick fix.", "该 quick-fix 没有可应用的变更。"));
+			return;
+		}
+		setApplyingQuickFixId(suggestion.id);
+		onCodeInsert(nextCode);
+		setQuickFixSuggestions(prev => prev.filter(item => item.id !== suggestion.id));
+		void sendQuickFixFeedback(suggestion, "applied");
+		setApplyingQuickFixId("");
+		message.success(uiText("Đã áp dụng quick-fix.", "Quick fix applied.", "已应用 quick-fix。"));
+	}, [contextType, currentCode, insertImportLinesIntoCode, onCodeInsert, sendQuickFixFeedback, uiText]);
+
+	const dismissQuickFixSuggestion = useCallback((suggestion: QuickFixSuggestion) => {
+		setQuickFixSuggestions(prev => prev.filter(item => item.id !== suggestion.id));
+		void sendQuickFixFeedback(suggestion, "dismissed");
+	}, [sendQuickFixFeedback]);
+
+	const sendEditCandidateFeedback = useCallback(async (candidate: EditCandidate, action: "applied" | "dismissed") => {
+		try {
+			await request.post("ai-code-stream/edit-candidate-feedback", {
+				json: {
+					appId,
+					language,
+					editCandidateId: candidate.id,
+					action,
+				},
+			});
+		}
+		catch {
+			// Best-effort telemetry only. UI flow should not be blocked.
+		}
+	}, [appId, language]);
+
+	const applyEditCandidate = useCallback((candidate: EditCandidate) => {
+		if (!onCodeInsert || contextType !== "code") {
+			message.info(uiText("Edit candidate chỉ áp dụng cho code editor.", "Edit candidates are available in code editor mode only.", "Edit candidate 仅适用于代码编辑模式。"));
+			return;
+		}
+		const validation = validateStructuredTextEdits(currentCode, candidate.textEdits);
+		if (!validation.valid || validation.edits.length === 0) {
+			message.warning(uiText("Candidate không hợp lệ để áp dụng an toàn.", "Candidate is invalid for safe apply.", "Candidate 无法安全应用。"));
+			return;
+		}
+		const nextCode = applyTextEditsToDraft(currentCode, validation.edits);
+		if (!nextCode || nextCode === currentCode) {
+			message.warning(uiText("Candidate không tạo ra thay đổi mới.", "Candidate does not produce any change.", "Candidate 未产生新变更。"));
+			return;
+		}
+		setApplyingEditCandidateId(candidate.id);
+		onCodeInsert(nextCode);
+		setEditCandidates(prev => prev.filter(item => item.id !== candidate.id));
+		void sendEditCandidateFeedback(candidate, "applied");
+		setApplyingEditCandidateId("");
+		message.success(uiText("Đã áp dụng edit candidate.", "Edit candidate applied.", "已应用 edit candidate。"));
+	}, [contextType, currentCode, onCodeInsert, sendEditCandidateFeedback, uiText]);
+
+	const dismissEditCandidate = useCallback((candidate: EditCandidate) => {
+		setEditCandidates(prev => prev.filter(item => item.id !== candidate.id));
+		void sendEditCandidateFeedback(candidate, "dismissed");
+	}, [sendEditCandidateFeedback]);
 
 	useEffect(() => {
 		applyRealtimeCodeFromTextRef.current = applyRealtimeCodeFromText;
@@ -3432,6 +3769,11 @@ export default function AiAssistantChat({
 			setLocalFlowOps(null);
 			setLocalFlowOpLines([]);
 			setLocalFlowOpFilter("all");
+			setQuickFixSuggestions([]);
+			setApplyingQuickFixId("");
+			setEditCandidates([]);
+			setApplyingEditCandidateId("");
+			setRetryingEditCandidateId("");
 			setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 			setBackendProgressHint({ stage: "", detail: "" });
 			setLastProgressEventAgeSecs(0);
@@ -3700,6 +4042,8 @@ export default function AiAssistantChat({
 								reason_code?: string
 								patchFallbackNoOp?: boolean
 								patchFallbackReasonCode?: string
+								patchValidator?: PatchValidatorMeta
+								quickFixes?: any[]
 								usage?: any
 								completionTokens?: number
 								estimatedCostUsd?: number
@@ -4089,15 +4433,40 @@ export default function AiAssistantChat({
 								const stepTotal = Number((evt as any).stepTotal || 1);
 								const stepDesc = String((evt as any).stepDescription || "").trim();
 								const isPartial = Boolean((evt as any).partial);
+								const stepPatchValidator = normalizePatchValidatorMeta((evt as any).patchValidator);
+								const patchRejected = isPatchValidatorRejected(stepPatchValidator);
+								const patchReasonCode = String(stepPatchValidator?.rejectionReason || "").trim().toLowerCase();
+								const patchHint = stepPatchValidator
+									? `${formatPatchValidatorReason(stepPatchValidator.rejectionReason)} (${stepPatchValidator.acceptedCount ?? 0}/${stepPatchValidator.inputCount ?? 0})`
+									: "";
+								const rawQualityScore = Number((evt as any).qualityScore);
+								const hasQualityScore = Number.isFinite(rawQualityScore);
+								const qualityScore = Number.isFinite(rawQualityScore)
+									? Math.max(0, Math.min(100, Math.round(rawQualityScore)))
+									: undefined;
+								const lowConfidence = Boolean((evt as any).lowConfidence)
+									|| (hasQualityScore && qualityScore !== undefined ? qualityScore < 45 : false)
+									|| patchRejected;
+								const qualityNote = hasQualityScore && qualityScore !== undefined
+									? ` · Q=${qualityScore}${lowConfidence ? " low" : ""}`
+									: (lowConfidence ? " · low-confidence" : "");
+								const validatorNote = patchRejected
+									? ` · validator=${patchReasonCode || "rejected"}`
+									: (patchHint ? ` · validator=${patchHint}` : "");
 								appendAgenticStep({
 									stage: `agentic_step_result_${stepIndex}`,
-									icon: "✏️",
+									icon: lowConfidence ? "⚠️" : "✏️",
 									label: uiText(
 										`Bước ${stepIndex}/${stepTotal}`,
 										`Step ${stepIndex}/${stepTotal}`,
 										`步骤 ${stepIndex}/${stepTotal}`,
 									),
-									detail: stepDesc || undefined,
+									detail: `${stepDesc || ""}${qualityNote}${validatorNote}`.trim() || undefined,
+									qualityScore,
+									lowConfidence,
+									stepIndex,
+									stepTotal,
+									patchValidator: stepPatchValidator,
 									status: isPartial ? "running" : "done",
 								});
 								// Apply textEdits to CodeMirror immediately for edit-mode steps.
@@ -4253,6 +4622,48 @@ export default function AiAssistantChat({
 									internalCode: "MENU_SHRINK_GUARD",
 								});
 							}
+							else if (evt.stage === "quick_fixes_available") {
+								const fixes = normalizeQuickFixSuggestions((evt as any).quickFixes);
+								if (fixes.length > 0) {
+									setQuickFixSuggestions(fixes);
+									showSystemToast("info", {
+										summary: uiText(
+											`Có ${fixes.length} quick-fix có thể áp dụng ngay.`,
+											`${fixes.length} quick fixes are ready to apply.`,
+											`有 ${fixes.length} 个 quick-fix 可立即应用。`,
+										),
+										nextStep: uiText(
+											"Bấm Apply trong khu vực Usage Dock để áp dụng từng fix.",
+											"Click Apply in the Usage Dock to apply each fix.",
+											"在 Usage Dock 中点击 Apply 逐个应用修复。",
+										),
+										internalCode: "QUICK_FIX_AVAILABLE",
+									});
+								}
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "edit_candidates_available") {
+								const candidates = normalizeEditCandidates((evt as any).editCandidates);
+								if (candidates.length > 0) {
+									setEditCandidates(candidates);
+									showSystemToast("info", {
+										summary: uiText(
+											`Có ${candidates.length} phương án patch để chọn.`,
+											`${candidates.length} patch candidates are available.`,
+											`有 ${candidates.length} 个 patch 候选方案可选。`,
+										),
+										nextStep: uiText(
+											"Bấm Apply trong Usage Dock để áp dụng phương án phù hợp.",
+											"Click Apply in the Usage Dock to use the best candidate.",
+											"在 Usage Dock 中点击 Apply 应用合适方案。",
+										),
+										internalCode: "EDIT_CANDIDATES_AVAILABLE",
+									});
+								}
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
 							else if (evt.stage === "context" || evt.stage === "continuing" || evt.stage === "cached" || evt.stage === "prompt_budget") {
 								if (decisionStep === "fallback" || !!decisionReason || (evt.message || "").toLowerCase().includes("fallback") || (evt.message || "").toLowerCase().includes("switch") || (evt.message || "").toLowerCase().includes("chuy") || (evt.message || "").toLowerCase().includes("rate-limit")) {
 									appendModelDecisionTrace({
@@ -4297,6 +4708,14 @@ export default function AiAssistantChat({
 							}
 							else if (evt.stage === "complete") {
 								receivedCompleteEvent = true;
+								const completionQuickFixes = normalizeQuickFixSuggestions((evt as any).quickFixes);
+								if (completionQuickFixes.length > 0) {
+									setQuickFixSuggestions(completionQuickFixes);
+								}
+								const completionEditCandidates = normalizeEditCandidates((evt as any).editCandidates);
+								if (completionEditCandidates.length > 0) {
+									setEditCandidates(completionEditCandidates);
+								}
 								const usage = normalizeUsagePayload(evt.usage || {
 									model: evt.model,
 									promptTokens: evt.promptTokens,
@@ -4664,8 +5083,111 @@ export default function AiAssistantChat({
 				}
 			}
 		},
-		[appId, contextType, currentCode, isLoading, language, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus, formatStageLabel, renderProgressText],
+		[appId, contextType, currentCode, isLoading, language, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatPatchValidatorReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus, formatStageLabel, renderProgressText],
 	);
+
+	const handleRetryAgenticStep = useCallback((step: AgenticStep) => {
+		if (isLoading) {
+			message.info(uiText(
+				"Đang có request chạy, hãy chờ xong rồi retry step.",
+				"A request is running, wait until it finishes before retrying this step.",
+				"当前有请求在运行，请等待完成后再重试该步骤。",
+			));
+			return;
+		}
+		const stepLabel = step.stepIndex && step.stepTotal
+			? `${step.stepIndex}/${step.stepTotal}`
+			: step.label;
+		const validatorReason = String(step.patchValidator?.rejectionReason || "").trim();
+		const validatorHint = validatorReason
+			? `${formatPatchValidatorReason(validatorReason)}. ${buildPatchValidatorRetryHint(validatorReason)}`
+			: "";
+		const retryPrompt = uiText(
+			`/edit Retry riêng bước ${stepLabel}: ${step.detail || step.label}. ${validatorHint ? `Lỗi validator trước đó: ${validatorHint}. ` : ""}Yêu cầu: chỉ sửa phần liên quan bước này, trả về patch apply được ngay (textEdits hoặc SEARCH/REPLACE), không lan sang phần khác.`,
+			`/edit Retry step ${stepLabel}: ${step.detail || step.label}. ${validatorHint ? `Previous validator issue: ${validatorHint}. ` : ""}Requirement: update only this step scope and return an immediately applicable patch (textEdits or SEARCH/REPLACE), without unrelated changes.`,
+			`/edit 重试步骤 ${stepLabel}：${step.detail || step.label}。${validatorHint ? `此前验证器问题：${validatorHint}。` : ""}要求：仅修改该步骤范围，并返回可立即应用的补丁（textEdits 或 SEARCH/REPLACE），不要扩散到无关部分。`,
+		);
+		setInputValue(retryPrompt);
+		void sendMessage(retryPrompt);
+	}, [buildPatchValidatorRetryHint, formatPatchValidatorReason, isLoading, message, sendMessage, uiText]);
+
+	const handleRetryLowConfidenceBatch = useCallback(() => {
+		if (isLoading) {
+			message.info(uiText(
+				"Đang có request chạy, hãy chờ xong rồi retry batch.",
+				"A request is running, wait until it finishes before retrying the batch.",
+				"当前有请求在运行，请等待完成后再批量重试。",
+			));
+			return;
+		}
+		if (!lowConfidenceAgenticSteps.length) {
+			message.info(uiText(
+				"Không có bước low-confidence để retry.",
+				"No low-confidence steps to retry.",
+				"没有可重试的低置信度步骤。",
+			));
+			return;
+		}
+		const bulletList = lowConfidenceAgenticSteps
+			.slice(0, 8)
+			.map((step, idx) => {
+				const stepLabel = step.stepIndex && step.stepTotal
+					? `${step.stepIndex}/${step.stepTotal}`
+					: step.label;
+				const quality = typeof step.qualityScore === "number" && Number.isFinite(step.qualityScore)
+					? `Q${Math.round(step.qualityScore)}`
+					: "Q?";
+				const validatorReason = String(step.patchValidator?.rejectionReason || "").trim();
+				const validatorNote = validatorReason
+					? ` · validator=${formatPatchValidatorReason(validatorReason)}`
+					: "";
+				return `${idx + 1}. step ${stepLabel} (${quality}${validatorNote}): ${step.detail || step.label}`;
+			})
+			.join("\n");
+		const retryPrompt = uiText(
+			`/edit Retry batch các bước low-confidence sau:\n${bulletList}\n\nYêu cầu:\n- Chỉ sửa đúng phạm vi các bước trên\n- Trả patch apply được ngay (textEdits hoặc SEARCH/REPLACE)\n- Không thay đổi phần không liên quan\n- Nếu thiếu dữ kiện, nêu rõ bước nào thiếu và đề xuất patch tối thiểu an toàn.`,
+			`/edit Retry batch for these low-confidence steps:\n${bulletList}\n\nRequirements:\n- Update only the scopes listed above\n- Return an immediately applicable patch (textEdits or SEARCH/REPLACE)\n- Do not modify unrelated parts\n- If evidence is insufficient, state which step lacks evidence and provide a minimal safe patch.`,
+			`/edit 批量重试以下低置信度步骤：\n${bulletList}\n\n要求：\n- 仅修改上述步骤范围\n- 返回可立即应用的补丁（textEdits 或 SEARCH/REPLACE）\n- 不要修改无关部分\n- 若证据不足，请明确指出缺失步骤并给出最小安全补丁。`,
+		);
+		setInputValue(retryPrompt);
+		void sendMessage(retryPrompt);
+	}, [formatPatchValidatorReason, isLoading, lowConfidenceAgenticSteps, message, sendMessage, uiText]);
+
+	const handleRetryEditCandidate = useCallback((candidate: EditCandidate) => {
+		if (isLoading) {
+			message.info(uiText(
+				"Đang có request chạy, hãy chờ xong rồi retry candidate.",
+				"A request is running, wait until it finishes before retrying this candidate.",
+				"当前有请求在运行，请等待完成后再重试该候选方案。",
+			));
+			return;
+		}
+		const risk = String(candidate.riskLevel || "").trim().toLowerCase();
+		const guardText = risk === "high"
+			? uiText(
+				"Giảm thao tác xóa, chỉ giữ thay đổi thiết yếu.",
+				"Reduce deletions and keep only essential changes.",
+				"减少删除操作，仅保留必要改动。",
+			)
+			: uiText(
+				"Giữ phạm vi hẹp, không đổi phần không liên quan.",
+				"Keep scope narrow and avoid unrelated edits.",
+				"保持范围收敛，不修改无关部分。",
+			);
+		const rationale = String(candidate.rationale || candidate.description || "").trim();
+		const retryPrompt = uiText(
+			`/edit Retry candidate ${candidate.title}: ${rationale || "patch trước chưa phù hợp"}. Yêu cầu: ${guardText} Trả về textEdits hoặc SEARCH/REPLACE có thể apply ngay.`,
+			`/edit Retry candidate ${candidate.title}: ${rationale || "previous patch was not ideal"}. Requirement: ${guardText} Return immediately-applicable textEdits or SEARCH/REPLACE.`,
+			`/edit 重试候选方案 ${candidate.title}：${rationale || "之前补丁不够理想"}。要求：${guardText} 返回可立即应用的 textEdits 或 SEARCH/REPLACE。`,
+		);
+		setRetryingEditCandidateId(candidate.id);
+		setInputValue(retryPrompt);
+		setEditCandidates(prev => prev.filter(item => item.id !== candidate.id));
+		void sendEditCandidateFeedback(candidate, "dismissed");
+		void sendMessage(retryPrompt).finally(() => {
+			setRetryingEditCandidateId("");
+		});
+	}, [isLoading, message, sendEditCandidateFeedback, sendMessage, uiText]);
 
 	const handleSend = () => {
 		sendMessage(inputValue);
@@ -5404,19 +5926,34 @@ export default function AiAssistantChat({
 											)
 											: uiText("Agentic workflow", "Agentic workflow", "Agent 工作流")}
 									</div>
-									<Button
-										type="link"
-										size="small"
-										className={styles.compactToggleBtn}
-										onClick={(e) => {
-											e.stopPropagation();
-											setAgenticStepsCollapsed(c => !c);
-										}}
-									>
-										{agenticStepsCollapsed
-											? uiText("Mở", "Expand", "展开")
-											: uiText("Thu", "Collapse", "收起")}
-									</Button>
+											<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+												{lowConfidenceAgenticSteps.length > 1 && !agenticStepsCollapsed && (
+													<Button
+														type="link"
+														size="small"
+														className={styles.compactToggleBtn}
+														onClick={(e) => {
+															e.stopPropagation();
+															handleRetryLowConfidenceBatch();
+														}}
+													>
+														{uiText("Retry all low-confidence", "Retry all low-confidence", "重试全部低置信度")}
+													</Button>
+												)}
+												<Button
+													type="link"
+													size="small"
+													className={styles.compactToggleBtn}
+													onClick={(e) => {
+														e.stopPropagation();
+														setAgenticStepsCollapsed(c => !c);
+													}}
+												>
+													{agenticStepsCollapsed
+														? uiText("Mở", "Expand", "展开")
+														: uiText("Thu", "Collapse", "收起")}
+												</Button>
+											</div>
 								</div>
 								{!agenticStepsCollapsed && (
 									<div className={styles.stageTimelineList}>
@@ -5425,7 +5962,40 @@ export default function AiAssistantChat({
 												<span className={styles.stageTimelineBullet} />
 												<div className={styles.stageTimelineText}>
 													<div className={styles.stageTimelineHead}>
-														<span>{`${step.icon} ${step.label}`}</span>
+														<div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+															<span>{`${step.icon} ${step.label}`}</span>
+															{Number.isFinite(step.qualityScore as number) && (
+																<span style={{
+																	fontSize: 11,
+																	padding: "1px 6px",
+																	borderRadius: 999,
+																	border: "1px solid rgba(255,255,255,0.16)",
+																	color: step.lowConfidence ? "#ff7875" : "#95de64",
+																}}>{`Q${Math.round(step.qualityScore as number)}`}</span>
+															)}
+															{step.lowConfidence && (
+																<Button
+																	type="link"
+																	size="small"
+																	className={styles.compactToggleBtn}
+																	onClick={(e) => {
+																		e.stopPropagation();
+																		handleRetryAgenticStep(step);
+																	}}
+																>
+																	{uiText("Retry step", "Retry step", "重试步骤")}
+																</Button>
+															)}
+															{step.patchValidator?.rejectionReason && String(step.patchValidator.rejectionReason).toLowerCase() !== "none" && (
+																<Tooltip title={uiText(
+																	buildPatchValidatorRetryHint(step.patchValidator.rejectionReason),
+																	buildPatchValidatorRetryHint(step.patchValidator.rejectionReason),
+																	buildPatchValidatorRetryHint(step.patchValidator.rejectionReason),
+																)}>
+																	<Tag color="orange">{`validator: ${formatPatchValidatorReason(step.patchValidator.rejectionReason)}`}</Tag>
+																</Tooltip>
+															)}
+														</div>
 														<span>{step.status === "done" ? "✓" : "…"}</span>
 													</div>
 													{step.detail && (
@@ -5496,6 +6066,9 @@ export default function AiAssistantChat({
 													const timelineMessage = dynamicParts.length > 0
 														? `${uiText("Nạp động", "Ingestion", "动态入库")}: ${dynamicParts.join(" · ")}`
 														: (scopeLabel || timelineMessageBase);
+													const patchValidatorHint = event.patchValidator
+														? `${formatPatchValidatorReason(event.patchValidator.rejectionReason)} (${event.patchValidator.acceptedCount ?? 0}/${event.patchValidator.inputCount ?? 0})`
+														: "";
 													return (
 														<div key={event.id} className={`${styles.stageTimelineItem} ${styles[`stageTimelineItem_${stageTone}`] || ""}`.trim()}>
 															<span className={`${styles.stageTimelineBullet} ${styles[`stageTimelineBullet_${stageTone}`] || ""}`.trim()} />
@@ -5521,6 +6094,11 @@ export default function AiAssistantChat({
 																{timelineMessage && (
 																	<div className={`${styles.stageTimelineMessage} ${styles.stageTimelineMessageCompact}`.trim()}>
 																		{timelineMessage}
+																	</div>
+																)}
+																{patchValidatorHint && (
+																	<div className={`${styles.stageTimelineMessage} ${styles.stageTimelineMessageCompact}`.trim()}>
+																		{`validator=${patchValidatorHint}`}
 																	</div>
 																)}
 																{scopeTagsCompact.length > 0 && (
@@ -5687,6 +6265,105 @@ export default function AiAssistantChat({
 											{uiText("Không có dòng phù hợp bộ lọc.", "No lines match this filter.", "没有匹配该筛选条件的行。")}
 										</div>
 									)}
+								</div>
+							</div>
+						)}
+						{quickFixSuggestions.length > 0 && (
+							<div className={styles.quickFixPanel}>
+								<div className={styles.quickFixPanelHeader}>
+									{uiText("Quick-fix đề xuất", "Suggested quick fixes", "建议的 quick-fix")}
+								</div>
+								<div className={styles.quickFixList}>
+									{quickFixSuggestions.map((fix) => {
+										const canApply = Boolean(onCodeInsert) && contextType === "code";
+										return (
+											<div key={fix.id} className={styles.quickFixItem}>
+												<div className={styles.quickFixText}>
+													<div className={styles.quickFixTitle}>{fix.title}</div>
+													{fix.description && <div className={styles.quickFixDesc}>{fix.description}</div>}
+												</div>
+												<Space size={6}>
+													<Button
+														size="small"
+														type="primary"
+														disabled={!canApply}
+														loading={applyingQuickFixId === fix.id}
+														onClick={() => applyQuickFixSuggestion(fix)}
+													>
+														{uiText("Áp dụng", "Apply", "应用")}
+													</Button>
+													<Button
+														size="small"
+														onClick={() => dismissQuickFixSuggestion(fix)}
+													>
+														{uiText("Bỏ qua", "Dismiss", "忽略")}
+													</Button>
+												</Space>
+											</div>
+										);
+									})}
+								</div>
+							</div>
+						)}
+						{editCandidates.length > 0 && (
+							<div className={styles.quickFixPanel}>
+								<div className={styles.quickFixPanelHeader}>
+									{uiText("Patch candidates", "Patch candidates", "Patch 候选方案")}
+								</div>
+								<div className={styles.quickFixList}>
+									{editCandidates.map((candidate) => {
+										const canApply = Boolean(onCodeInsert) && contextType === "code";
+										const opAdd = Number(candidate.ops?.add || 0);
+										const opEdit = Number(candidate.ops?.edit || 0);
+										const opDelete = Number(candidate.ops?.delete || 0);
+										const opSummary = `+${opAdd} ~${opEdit} -${opDelete}`;
+										const riskLabel = String(candidate.riskLevel || "").trim().toLowerCase();
+										const confidenceLabel = Number.isFinite(Number(candidate.confidence))
+											? `conf ${Math.round(Number(candidate.confidence))}`
+											: "";
+										const feedbackLabel = Number.isFinite(Number(candidate.feedbackScore))
+											? `score ${Number(candidate.feedbackScore).toFixed(2)}`
+											: "";
+										return (
+											<div key={candidate.id} className={styles.quickFixItem}>
+												<div className={styles.quickFixText}>
+													<div className={styles.quickFixTitle}>{candidate.title}</div>
+													{candidate.description && <div className={styles.quickFixDesc}>{candidate.description}</div>}
+													<div className={styles.quickFixDesc}>{opSummary}</div>
+													{(riskLabel || confidenceLabel || feedbackLabel) && (
+														<div className={styles.quickFixDesc}>
+															{[riskLabel ? `risk ${riskLabel}` : "", confidenceLabel, feedbackLabel].filter(Boolean).join(" · ")}
+														</div>
+													)}
+													{candidate.rationale && <div className={styles.quickFixDesc}>{candidate.rationale}</div>}
+												</div>
+												<Space size={6}>
+													<Button
+														size="small"
+														type="primary"
+														disabled={!canApply}
+														loading={applyingEditCandidateId === candidate.id}
+														onClick={() => applyEditCandidate(candidate)}
+													>
+														{uiText("Áp dụng", "Apply", "应用")}
+													</Button>
+													<Button
+														size="small"
+														loading={retryingEditCandidateId === candidate.id}
+														onClick={() => handleRetryEditCandidate(candidate)}
+													>
+														{uiText("Thử phương án khác", "Retry", "重试")}
+													</Button>
+													<Button
+														size="small"
+														onClick={() => dismissEditCandidate(candidate)}
+													>
+														{uiText("Bỏ qua", "Dismiss", "忽略")}
+													</Button>
+												</Space>
+											</div>
+										);
+									})}
 								</div>
 							</div>
 						)}

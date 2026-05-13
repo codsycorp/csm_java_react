@@ -63,6 +63,7 @@ import net.phanmemmottrieu.service.AiMenuLearningMemoryService;
 import net.phanmemmottrieu.service.AiPromptBudgetService;
 import net.phanmemmottrieu.service.LlamaCppNativeService;
 import net.phanmemmottrieu.service.LargeFileChunkingService;
+import net.phanmemmottrieu.service.AiPatternCacheService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -416,6 +417,7 @@ public class ApiSpringController {
     private final AiMenuLearningMemoryService aiMenuLearningMemoryService;
     private final AiPromptBudgetService aiPromptBudgetService;
     private final LlamaCppNativeService llamaCppNativeService;
+    private final AiPatternCacheService aiPatternCacheService;
     @SuppressWarnings("unused")
     private final LargeFileChunkingService largeFileChunkingService;
 
@@ -642,6 +644,87 @@ public class ApiSpringController {
     @Value("${ai.code-stream.edit.text-edits-retry.max-extra-attempts:1}")
     private int aiCodeStreamEditTextEditsRetryMaxExtraAttempts;
 
+    @Value("${ai.code-stream.edit.patch-validator.enabled:true}")
+    private boolean aiCodeStreamEditPatchValidatorEnabled;
+
+    @Value("${ai.code-stream.edit.patch-validator.reject-noop:true}")
+    private boolean aiCodeStreamEditPatchValidatorRejectNoop;
+
+    @Value("${ai.code-stream.edit.patch-validator.reject-empty-output:true}")
+    private boolean aiCodeStreamEditPatchValidatorRejectEmptyOutput;
+
+    @Value("${ai.code-stream.edit.patch-validator.min-output-ratio:0.08}")
+    private double aiCodeStreamEditPatchValidatorMinOutputRatio;
+
+    @Value("${ai.code-stream.edit.patch-validator.min-base-chars:1200}")
+    private int aiCodeStreamEditPatchValidatorMinBaseChars;
+
+    @Value("${ai.code-stream.edit.patch-validator.ast-guard.enabled:true}")
+    private boolean aiCodeStreamEditPatchValidatorAstGuardEnabled;
+
+    @Value("${ai.code-stream.edit.patch-validator.ast-guard.max-scan-chars:300000}")
+    private int aiCodeStreamEditPatchValidatorAstGuardMaxScanChars;
+
+    @Value("${ai.local.edit.adaptive-retry.enabled:true}")
+    private boolean aiLocalEditAdaptiveRetryEnabled;
+
+    @Value("${ai.local.edit.adaptive-retry.max-attempts:1}")
+    private int aiLocalEditAdaptiveRetryMaxAttempts;
+
+    @Value("${ai.local.edit.adaptive-retry.min-quality-score:50}")
+    private int aiLocalEditAdaptiveRetryMinQualityScore;
+
+    @Value("${ai.code-stream.edit.semantic-verify.enabled:true}")
+    private boolean aiCodeStreamEditSemanticVerifyEnabled;
+
+    @Value("${ai.code-stream.edit.semantic-verify.max-attempts:1}")
+    private int aiCodeStreamEditSemanticVerifyMaxAttempts;
+
+    @Value("${ai.code-stream.edit.semantic-verify.max-prompt-chars:4000}")
+    private int aiCodeStreamEditSemanticVerifyMaxPromptChars;
+
+    @Value("${ai.code-stream.edit.semantic-verify.max-output-tokens:512}")
+    private int aiCodeStreamEditSemanticVerifyMaxOutputTokens;
+
+    @Value("${ai.code-stream.pattern-cache.enabled:true}")
+    private boolean aiCodeStreamPatternCacheEnabled;
+
+    @Value("${ai.code-stream.pattern-cache.min-confidence:0.75}")
+    private double aiCodeStreamPatternCacheMinConfidence;
+
+    @Value("${ai.code-stream.pattern-cache.max-patterns:200}")
+    private int aiCodeStreamPatternCacheMaxPatterns;
+
+    @Value("${ai.code-stream.quick-fix.enabled:true}")
+    private boolean aiCodeStreamQuickFixEnabled;
+
+    @Value("${ai.code-stream.quick-fix.max-suggestions:3}")
+    private int aiCodeStreamQuickFixMaxSuggestions;
+
+    @Value("${ai.code-stream.quick-fix.feedback.enabled:true}")
+    private boolean aiCodeStreamQuickFixFeedbackEnabled;
+
+    @Value("${ai.code-stream.quick-fix.feedback.max-entries:2000}")
+    private int aiCodeStreamQuickFixFeedbackMaxEntries;
+
+    @Value("${ai.code-stream.quick-fix.feedback.min-samples:2}")
+    private int aiCodeStreamQuickFixFeedbackMinSamples;
+
+    @Value("${ai.code-stream.multi-candidate.enabled:true}")
+    private boolean aiCodeStreamMultiCandidateEnabled;
+
+    @Value("${ai.code-stream.multi-candidate.max-candidates:3}")
+    private int aiCodeStreamMultiCandidateMaxCandidates;
+
+    @Value("${ai.code-stream.multi-candidate.feedback.enabled:true}")
+    private boolean aiCodeStreamMultiCandidateFeedbackEnabled;
+
+    @Value("${ai.code-stream.multi-candidate.feedback.max-entries:2000}")
+    private int aiCodeStreamMultiCandidateFeedbackMaxEntries;
+
+    @Value("${ai.code-stream.multi-candidate.feedback.min-samples:2}")
+    private int aiCodeStreamMultiCandidateFeedbackMinSamples;
+
     @Value("${ai.code-stream.edit.strict-search-replace-enabled:true}")
     private boolean aiCodeStreamEditStrictSearchReplaceEnabled;
 
@@ -858,6 +941,36 @@ public class ApiSpringController {
     @Value("${ai.local.analyze.language-alignment.max-tokens:384}")
     private int aiLocalAnalyzeLanguageAlignmentMaxTokens;
 
+    @Value("${ai.local.analyze.guardrail.enabled:true}")
+    private boolean aiLocalAnalyzeGuardrailEnabled;
+
+    @Value("${ai.local.analyze.guardrail.heuristic-fallback.enabled:true}")
+    private boolean aiLocalAnalyzeHeuristicFallbackEnabled;
+
+    @Value("${ai.local.analyze.guardrail.low-signal.min-length:220}")
+    private int aiLocalAnalyzeLowSignalMinLength;
+
+    @Value("${ai.local.analyze.guardrail.low-signal.checklist-hit-threshold:3}")
+    private int aiLocalAnalyzeLowSignalChecklistHitThreshold;
+
+    @Value("${ai.local.analyze.guardrail.low-signal.repeat-line-threshold:2}")
+    private int aiLocalAnalyzeLowSignalRepeatLineThreshold;
+
+    @Value("${ai.local.analyze.low-confidence-retry.enabled:true}")
+    private boolean aiLocalAnalyzeLowConfidenceRetryEnabled;
+
+    @Value("${ai.local.analyze.low-confidence-retry.min-score:56}")
+    private int aiLocalAnalyzeLowConfidenceRetryMinScore;
+
+    @Value("${ai.local.analyze.low-confidence-retry.max-prompt-chars:70000}")
+    private int aiLocalAnalyzeLowConfidenceRetryMaxPromptChars;
+
+    @Value("${ai.local.analyze.step-quality.enabled:true}")
+    private boolean aiLocalAnalyzeStepQualityEnabled;
+
+    @Value("${ai.local.analyze.step-quality.low-threshold:45}")
+    private int aiLocalAnalyzeStepQualityLowThreshold;
+
     @Value("${ai.local.analyze.language-alignment.max-draft-chars:3200}")
     private int aiLocalAnalyzeLanguageAlignmentMaxDraftChars;
 
@@ -1012,6 +1125,8 @@ public class ApiSpringController {
     private double aiCodeStreamSseTimeoutAdaptiveSafetyMultiplier;
 
     private final ConcurrentHashMap<String, InstructionsCacheEntry> aiAssistantCustomInstructionsCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, QuickFixFeedbackStats> quickFixFeedbackStats = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, EditCandidateFeedbackStats> editCandidateFeedbackStats = new ConcurrentHashMap<>();
 
         private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
         // Bound code-stream workers on weak servers to avoid CPU thrashing from unbounded cached pool.
@@ -1021,6 +1136,18 @@ public class ApiSpringController {
     private final ConcurrentHashMap<String, CodeChainingCacheEntry> codeChainingStep1Cache = new ConcurrentHashMap<>();
     private final Map<String, AiCodeBaseContentEntry> aiCodeBaseContentCache = new ConcurrentHashMap<>();
             private final ConcurrentHashMap<String, Thread> activeCodeStreamWorkers = new ConcurrentHashMap<>();
+
+    private static final class QuickFixFeedbackStats {
+        final AtomicInteger applied = new AtomicInteger(0);
+        final AtomicInteger dismissed = new AtomicInteger(0);
+        volatile long lastUpdatedMs = System.currentTimeMillis();
+    }
+
+    private static final class EditCandidateFeedbackStats {
+        final AtomicInteger applied = new AtomicInteger(0);
+        final AtomicInteger dismissed = new AtomicInteger(0);
+        volatile long lastUpdatedMs = System.currentTimeMillis();
+    }
 
     // Tiêm tất cả các Handler thông qua constructor
     @Autowired
@@ -1053,6 +1180,7 @@ public class ApiSpringController {
             AiMenuLearningMemoryService aiMenuLearningMemoryService,
             AiPromptBudgetService aiPromptBudgetService,
             @Autowired(required = false) LlamaCppNativeService llamaCppNativeService,
+            AiPatternCacheService aiPatternCacheService,
             @Autowired(required = false) LargeFileChunkingService largeFileChunkingService
         ) {
         this.recordManager = recordManager;
@@ -1084,6 +1212,7 @@ public class ApiSpringController {
         this.aiMenuLearningMemoryService = aiMenuLearningMemoryService;
         this.aiPromptBudgetService = aiPromptBudgetService;
         this.llamaCppNativeService = llamaCppNativeService;
+        this.aiPatternCacheService = aiPatternCacheService;
         this.largeFileChunkingService = largeFileChunkingService;
     }
 
@@ -1883,7 +2012,7 @@ public class ApiSpringController {
                         }
                     }
                     if (providerText != null && !providerText.isBlank()) {
-                        providerText = normalizeAnalyzeOutputContract(providerText, message, responseMode, contextType);
+                        providerText = normalizeAnalyzeOutputContract(providerText, message, responseMode, contextType, effectiveCodeContext);
                         providerText = sanitizePromptEchoLeakage(providerText);
                         providerText = stripAnalyzeLeakedDynamicContext(providerText);
                         if (shouldRunBroadAnalysisGapFill(
@@ -1917,6 +2046,56 @@ public class ApiSpringController {
                             }
                         }
 
+                        if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                                && aiLocalAnalyzeLowConfidenceRetryEnabled) {
+                            int analyzeConfidence = scoreAnalyzeAnswerConfidence(providerText, effectiveCodeContext, message);
+                            if (analyzeConfidence < Math.max(1, aiLocalAnalyzeLowConfidenceRetryMinScore)) {
+                                sendEvent(emitter, jsonOf(
+                                    "stage", "model_switch",
+                                    "status", "local_provider_low_confidence_retry",
+                                    "requestId", requestId,
+                                    "model", "local_provider",
+                                    "modelDecisionStep", "retry",
+                                    "modelDecisionReason", "analyze_low_confidence",
+                                    "decision_step", "retry",
+                                    "reason_code", "analyze_low_confidence",
+                                    "confidence", analyzeConfidence,
+                                    "threshold", aiLocalAnalyzeLowConfidenceRetryMinScore,
+                                    "message", "AI local phát hiện phân tích chưa đủ chắc chắn, sẽ retry theo chiến lược evidence-first."));
+
+                                String retryPrompt = buildLowConfidenceAnalyzeRetryPrompt(
+                                    message,
+                                    providerText,
+                                    effectiveCodeContext,
+                                    contextType,
+                                    aiLocalAnalyzeLowConfidenceRetryMaxPromptChars
+                                );
+                                if (!retryPrompt.isBlank()) {
+                                    String retryRaw = runLocalProviderWithProgress(emitter, requestId, retryPrompt, contextType);
+                                    String retryText = extractAiResultText(retryRaw);
+                                    if ((retryText == null || retryText.isBlank()) && retryRaw != null) {
+                                        retryText = retryRaw.trim();
+                                    }
+                                    retryText = normalizeAnalyzeOutputContract(retryText, message, responseMode, contextType, effectiveCodeContext);
+                                    retryText = sanitizePromptEchoLeakage(retryText);
+                                    retryText = stripAnalyzeLeakedDynamicContext(retryText);
+                                    int retryConfidence = scoreAnalyzeAnswerConfidence(retryText, effectiveCodeContext, message);
+                                    if (retryConfidence >= analyzeConfidence && retryText != null && !retryText.isBlank()) {
+                                        providerText = retryText;
+                                    }
+                                    sendEvent(emitter, jsonOf(
+                                        "stage", "model_switch",
+                                        "status", "local_provider_low_confidence_retry_done",
+                                        "requestId", requestId,
+                                        "model", "local_provider",
+                                        "modelDecisionStep", "retry_complete",
+                                        "beforeConfidence", analyzeConfidence,
+                                        "afterConfidence", retryConfidence,
+                                        "message", "Đã hoàn tất retry evidence-first cho analyze mode."));
+                                }
+                            }
+                        }
+
                         lastLocalProviderText = String.valueOf(providerText == null ? "" : providerText).trim();
 
                         boolean localAccepted = shouldAcceptLocalCodeStreamOutput(
@@ -1942,6 +2121,75 @@ public class ApiSpringController {
                                 preclassifiedIntent)) {
                             localAccepted = false;
                         }
+
+                        if (!localAccepted
+                                && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                                && !isMenuJsonContext(contextType)
+                                && aiLocalEditAdaptiveRetryEnabled) {
+                            int maxAdaptiveAttempts = Math.max(1, aiLocalEditAdaptiveRetryMaxAttempts);
+                            int previousScore = scoreLocalEditOutputQuality(providerText, effectiveCodeContext, contextType, responseMode);
+                            for (int retryIndex = 1; retryIndex <= maxAdaptiveAttempts; retryIndex++) {
+                                String retryReason = classifyEditRetryReason(providerText, effectiveCodeContext, contextType, responseMode);
+                                String retryPrompt = buildEditAdaptiveRetryPrompt(
+                                    localProviderPrompt,
+                                    providerText,
+                                    message,
+                                    effectiveCodeContext,
+                                    language,
+                                    contextType,
+                                    retryReason
+                                );
+                                if (retryPrompt.isBlank()) {
+                                    break;
+                                }
+                                sendEvent(emitter, jsonOf(
+                                    "stage", "model_switch",
+                                    "status", "local_provider_edit_retry",
+                                    "requestId", requestId,
+                                    "model", "local_provider",
+                                    "modelDecisionStep", "retry",
+                                    "modelDecisionReason", retryReason,
+                                    "decision_step", "retry",
+                                    "reason_code", retryReason,
+                                    "retryIndex", retryIndex,
+                                    "retryMax", maxAdaptiveAttempts,
+                                    "beforeQualityScore", previousScore,
+                                    "message", "AI local retry theo chiến lược edit thích ứng để trả output apply được."));
+
+                                String retryRaw = runLocalProviderWithProgress(emitter, requestId, retryPrompt, contextType);
+                                String retryText = extractAiResultText(retryRaw);
+                                if ((retryText == null || retryText.isBlank()) && retryRaw != null) {
+                                    retryText = retryRaw.trim();
+                                }
+                                retryText = sanitizePromptEchoLeakage(String.valueOf(retryText == null ? "" : retryText));
+
+                                int retryScore = scoreLocalEditOutputQuality(retryText, effectiveCodeContext, contextType, responseMode);
+                                boolean retryAccepted = shouldAcceptLocalCodeStreamOutput(retryText, responseMode, contextType);
+                                sendEvent(emitter, jsonOf(
+                                    "stage", "model_switch",
+                                    "status", "local_provider_edit_retry_done",
+                                    "requestId", requestId,
+                                    "model", "local_provider",
+                                    "modelDecisionStep", "retry_complete",
+                                    "reason_code", retryReason,
+                                    "retryIndex", retryIndex,
+                                    "beforeQualityScore", previousScore,
+                                    "afterQualityScore", retryScore,
+                                    "accepted", retryAccepted,
+                                    "message", "Đã hoàn tất retry edit; so sánh chất lượng output trước/sau."));
+
+                                if (retryAccepted && retryScore >= Math.max(aiLocalEditAdaptiveRetryMinQualityScore, previousScore)) {
+                                    providerText = retryText;
+                                    localAccepted = true;
+                                    break;
+                                }
+                                if (retryScore > previousScore && retryText != null && !retryText.isBlank()) {
+                                    providerText = retryText;
+                                    previousScore = retryScore;
+                                }
+                            }
+                        }
+
                         if (localAccepted) {
                             sendEvent(emitter, jsonOf(
                                 "stage", "streaming_started",
@@ -2238,6 +2486,31 @@ public class ApiSpringController {
                 if (largeStructuredEditMode) {
                     completionPayload = materializeLargeEditResponse(completionPayload, base.baseContent());
                 }
+
+                // ─── Fast-Path Pattern Cache: Try to match completion against known patterns ───
+                if (aiCodeStreamPatternCacheEnabled && "edit".equalsIgnoreCase(responseMode) && !isMenuJsonContext(contextType)) {
+                    try {
+                        AiPatternCacheService.PatternMatch patternMatch = aiPatternCacheService.tryMatch(
+                            completionPayload,
+                            completionPayload,
+                            effectiveCodeContext
+                        );
+                        if (patternMatch.matched && patternMatch.confidence >= aiCodeStreamPatternCacheMinConfidence) {
+                            sendEvent(emitter, jsonOf(
+                                "stage", "pattern_cache_matched",
+                                "requestId", requestId,
+                                "patternName", patternMatch.patternName,
+                                "confidence", String.format("%.1f%%", patternMatch.confidence * 100),
+                                "explanation", patternMatch.explanation,
+                                "speedupEstimate", "2-3x faster on boilerplate"));
+                            codeStreamMeta.put("patternMatched", true);
+                            codeStreamMeta.put("patternName", patternMatch.patternName);
+                        }
+                    } catch (Exception e) {
+                        logger.debug("Pattern cache matching error: {}", e.getMessage());
+                    }
+                }
+
                 if (!largeStructuredEditMode
                         && "edit".equalsIgnoreCase(responseMode)
                         && !isMenuJsonContext(contextType)) {
@@ -2255,16 +2528,96 @@ public class ApiSpringController {
                         completionPayload = canonicalizeLineTextEditsPayload(completionPayload, effectiveCodeContext);
 
                         List<Map<String, Object>> canonicalTextEdits = parseNormalizedLineTextEdits(completionPayload);
+                        DeterministicPatchValidationResult patchValidation = validateDeterministicLineTextEdits(canonicalTextEdits, effectiveCodeContext);
+                        canonicalTextEdits = patchValidation.acceptedEdits;
+                        
+                        // ─── Semantic Verify Loop: attempt 1-round auto-repair if validator rejects ───
+                        if (canonicalTextEdits.isEmpty() && aiCodeStreamEditSemanticVerifyEnabled && aiCodeStreamEditSemanticVerifyMaxAttempts > 0) {
+                            String verifyPrompt = buildEditVerifyFixPrompt(
+                                patchValidation.rejectionReason,
+                                completionPayload,
+                                effectiveCodeContext
+                            );
+                            if (!verifyPrompt.isBlank() && llamaCppNativeService != null && llamaCppNativeService.isAvailable()) {
+                                try {
+                                    String verifyOutput = llamaCppNativeService.generateContentFast(
+                                        verifyPrompt,
+                                        aiCodeStreamEditSemanticVerifyMaxOutputTokens
+                                    );
+                                    String sanitized = String.valueOf(verifyOutput == null ? "" : verifyOutput).trim();
+                                    if (!sanitized.isBlank()) {
+                                        String fixedPayload = sanitized;
+                                        List<Map<String, Object>> fixedEdits = parseNormalizedLineTextEdits(fixedPayload);
+                                        DeterministicPatchValidationResult fixedValidation = validateDeterministicLineTextEdits(fixedEdits, effectiveCodeContext);
+                                        if (!fixedValidation.acceptedEdits.isEmpty()) {
+                                            canonicalTextEdits = fixedValidation.acceptedEdits;
+                                            patchValidation = fixedValidation;
+                                            patchValidation.rejectionReason = patchValidation.rejectionReason + "_self_corrected";
+                                            sendEvent(emitter, jsonOf(
+                                                "stage", "patch_validator_self_corrected",
+                                                "requestId", requestId,
+                                                "reason", patchValidation.rejectionReason,
+                                                "stats", patchValidation.toMetaMap()));
+                                        }
+                                    }
+                                } catch (Exception verifyEx) {
+                                    logger.debug("Semantic verify-fix attempt failed: {}", verifyEx.getMessage());
+                                }
+                            }
+                        }
+                        
                         if (canonicalTextEdits.isEmpty()) {
+                            sendEvent(emitter, jsonOf(
+                                "stage", "patch_validator_rejected",
+                                "requestId", requestId,
+                                "reason", patchValidation.rejectionReason,
+                                "stats", patchValidation.toMetaMap()));
                             sendErrorEvent(emitter,
                                     "Chuẩn hóa thất bại: AI output không thể canonicalize về line-level textEdits để apply an toàn");
                             return;
                         }
 
                         completion.put("textEdits", canonicalTextEdits);
+                        completion.put("patchValidator", patchValidation.toMetaMap());
                         List<Map<String, Object>> lineRanges = convertTextEditsToLineRanges(canonicalTextEdits);
                         completion.put("lineRanges", lineRanges);
                         completion.put("changedRanges", lineRanges);
+
+                        if (aiCodeStreamMultiCandidateEnabled) {
+                            List<Map<String, Object>> editCandidates = buildEditCandidates(
+                                appId,
+                                language,
+                                effectiveCodeContext,
+                                canonicalTextEdits,
+                                aiCodeStreamMultiCandidateMaxCandidates);
+                            if (!editCandidates.isEmpty()) {
+                                completion.put("editCandidates", editCandidates);
+                                sendEvent(emitter, jsonOf(
+                                    "stage", "edit_candidates_available",
+                                    "requestId", requestId,
+                                    "message", "Đã tạo nhiều phương án patch để lựa chọn",
+                                    "editCandidates", editCandidates,
+                                    "count", editCandidates.size()));
+                            }
+                        }
+
+                        if (aiCodeStreamQuickFixEnabled) {
+                            List<Map<String, Object>> quickFixes = suggestQuickFixes(
+                                appId,
+                                effectiveCodeContext,
+                                canonicalTextEdits,
+                                language,
+                                aiCodeStreamQuickFixMaxSuggestions);
+                            if (!quickFixes.isEmpty()) {
+                                completion.put("quickFixes", quickFixes);
+                                sendEvent(emitter, jsonOf(
+                                    "stage", "quick_fixes_available",
+                                    "requestId", requestId,
+                                    "message", "Đã phát hiện các quick-fix có thể áp dụng tiếp theo",
+                                    "quickFixes", quickFixes,
+                                    "count", quickFixes.size()));
+                            }
+                        }
                     }
                 }
                 if ("edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType)) {
@@ -2276,7 +2629,7 @@ public class ApiSpringController {
                         completionPayload = sanitizedMenuPayload;
                     }
                 } else if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
-                    completionPayload = normalizeAnalyzeOutputContract(completionPayload, message, responseMode, contextType);
+                    completionPayload = normalizeAnalyzeOutputContract(completionPayload, message, responseMode, contextType, effectiveCodeContext);
                 }
                 boolean menuShrinkGuardTriggered = false;
                 double menuShrinkRatio = 1.0;
@@ -2547,6 +2900,128 @@ public class ApiSpringController {
         });
 
         return emitter;
+    }
+
+    @PostMapping(value = {"/ai-code-stream/quick-fix-feedback", "/api/ai-code-stream/quick-fix-feedback"}, consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Map<String, Object>> recordQuickFixFeedback(@RequestBody Map<String, Object> body) {
+        Map<String, Object> out = new LinkedHashMap<>();
+
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            out.put("success", false);
+            out.put("message", "authentication_required");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(out);
+        }
+
+        if (!aiCodeStreamQuickFixFeedbackEnabled) {
+            out.put("success", true);
+            out.put("message", "disabled");
+            return ResponseEntity.ok(out);
+        }
+
+        String fixId = firstNonBlankString(body.get("quickFixId"), body.get("id"), "").trim();
+        String action = normalizeQuickFixFeedbackAction(firstNonBlankString(body.get("action"), ""));
+        String language = firstNonBlankString(body.get("language"), "").trim().toLowerCase(Locale.ROOT);
+        String appId = firstNonBlankString(body.get("appId"), body.get("app_id"), authCtx.appId, "csm")
+            .trim()
+            .toLowerCase(Locale.ROOT);
+
+        if (fixId.isBlank() || action.isBlank()) {
+            out.put("success", false);
+            out.put("message", "invalid_payload");
+            return ResponseEntity.badRequest().body(out);
+        }
+
+        String key = buildQuickFixFeedbackKey(appId, language, fixId);
+        QuickFixFeedbackStats stats = quickFixFeedbackStats.computeIfAbsent(key, k -> new QuickFixFeedbackStats());
+        if ("applied".equals(action)) {
+            stats.applied.incrementAndGet();
+        } else if ("dismissed".equals(action)) {
+            stats.dismissed.incrementAndGet();
+        } else {
+            out.put("success", false);
+            out.put("message", "unsupported_action");
+            return ResponseEntity.badRequest().body(out);
+        }
+        stats.lastUpdatedMs = System.currentTimeMillis();
+        pruneQuickFixFeedbackStatsIfNeeded();
+
+        int applied = Math.max(0, stats.applied.get());
+        int dismissed = Math.max(0, stats.dismissed.get());
+        int samples = applied + dismissed;
+
+        out.put("success", true);
+        out.put("message", "ok");
+        out.put("result", jsonOf(
+            "quickFixId", fixId,
+            "action", action,
+            "samples", samples,
+            "applied", applied,
+            "dismissed", dismissed,
+            "score", quickFixFeedbackScore(applied, dismissed, samples)
+        ));
+        return ResponseEntity.ok(out);
+    }
+
+    @PostMapping(value = {"/ai-code-stream/edit-candidate-feedback", "/api/ai-code-stream/edit-candidate-feedback"}, consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Map<String, Object>> recordEditCandidateFeedback(@RequestBody Map<String, Object> body) {
+        Map<String, Object> out = new LinkedHashMap<>();
+
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            out.put("success", false);
+            out.put("message", "authentication_required");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(out);
+        }
+
+        if (!aiCodeStreamMultiCandidateFeedbackEnabled) {
+            out.put("success", true);
+            out.put("message", "disabled");
+            return ResponseEntity.ok(out);
+        }
+
+        String candidateId = firstNonBlankString(body.get("editCandidateId"), body.get("candidateId"), body.get("id"), "").trim();
+        String action = normalizeQuickFixFeedbackAction(firstNonBlankString(body.get("action"), ""));
+        String language = firstNonBlankString(body.get("language"), "").trim().toLowerCase(Locale.ROOT);
+        String appId = firstNonBlankString(body.get("appId"), body.get("app_id"), authCtx.appId, "csm")
+            .trim()
+            .toLowerCase(Locale.ROOT);
+
+        if (candidateId.isBlank() || action.isBlank()) {
+            out.put("success", false);
+            out.put("message", "invalid_payload");
+            return ResponseEntity.badRequest().body(out);
+        }
+
+        String key = buildEditCandidateFeedbackKey(appId, language, candidateId);
+        EditCandidateFeedbackStats stats = editCandidateFeedbackStats.computeIfAbsent(key, k -> new EditCandidateFeedbackStats());
+        if ("applied".equals(action)) {
+            stats.applied.incrementAndGet();
+        } else if ("dismissed".equals(action)) {
+            stats.dismissed.incrementAndGet();
+        } else {
+            out.put("success", false);
+            out.put("message", "unsupported_action");
+            return ResponseEntity.badRequest().body(out);
+        }
+        stats.lastUpdatedMs = System.currentTimeMillis();
+        pruneEditCandidateFeedbackStatsIfNeeded();
+
+        int applied = Math.max(0, stats.applied.get());
+        int dismissed = Math.max(0, stats.dismissed.get());
+        int samples = applied + dismissed;
+
+        out.put("success", true);
+        out.put("message", "ok");
+        out.put("result", jsonOf(
+            "editCandidateId", candidateId,
+            "action", action,
+            "samples", samples,
+            "applied", applied,
+            "dismissed", dismissed,
+            "score", editCandidateFeedbackScore(applied, dismissed, samples)
+        ));
+        return ResponseEntity.ok(out);
     }
 
     private boolean cancelActiveCodeStream(String requestId, String reason) {
@@ -3895,18 +4370,24 @@ public class ApiSpringController {
                 String salvaged = salvageSearchReplaceAsTextEdits(safeText, effectiveCodeContext);
                 String canonicalized = canonicalizeLineTextEditsPayload(salvaged, effectiveCodeContext);
                 List<Map<String, Object>> textEdits = parseNormalizedLineTextEdits(canonicalized);
+                DeterministicPatchValidationResult patchValidation = validateDeterministicLineTextEdits(textEdits, effectiveCodeContext);
+                textEdits = patchValidation.acceptedEdits;
                 if (textEdits.isEmpty()) return 0;
                 int total = textEdits.size();
                 for (int i = 0; i < total; i++) {
                     String desc = (planSize > 0 && i < planSize)
                         ? planSteps.get(i)
                         : "Áp dụng thay đổi " + (i + 1);
+                    int qualityScore = Math.min(100, 70 + (String.valueOf(textEdits.get(i)).length() > 40 ? 15 : 0));
                     sendEvent(emitter, jsonOf(
                         "stage", "agentic_step_result",
                         "requestId", requestId,
                         "stepIndex", i + 1,
                         "stepTotal", total,
                         "stepDescription", desc,
+                        "qualityScore", qualityScore,
+                        "lowConfidence", qualityScore < aiLocalAnalyzeStepQualityLowThreshold,
+                        "patchValidator", patchValidation.toMetaMap(),
                         "textEdits", List.of(textEdits.get(i)),
                         "partial", i < total - 1));
                 }
@@ -3932,12 +4413,17 @@ public class ApiSpringController {
                 String desc = (planSize > 0 && i < planSize)
                     ? planSteps.get(i)
                     : "Phân tích phần " + (i + 1);
+                int qualityScore = aiLocalAnalyzeStepQualityEnabled
+                    ? scoreAnalyzeSectionQuality(sections.get(i), effectiveCodeContext, i == 0)
+                    : 60;
                 sendEvent(emitter, jsonOf(
                     "stage", "agentic_step_result",
                     "requestId", requestId,
                     "stepIndex", i + 1,
                     "stepTotal", total,
                     "stepDescription", desc,
+                    "qualityScore", qualityScore,
+                    "lowConfidence", qualityScore < aiLocalAnalyzeStepQualityLowThreshold,
                     "text", sections.get(i),
                     "partial", i < total - 1));
             }
@@ -4174,17 +4660,20 @@ public class ApiSpringController {
 
                 if (shouldRetryForTextEdits) {
                     textEditsRetryUsed++;
+                    String retryReason = classifyEditRetryReason(raw, "", contextType, responseMode);
                     if (streamMeta != null) {
                         streamMeta.put("textEditsRetryTriggered", true);
                         streamMeta.put("textEditsRetryAttempts", textEditsRetryUsed);
+                        streamMeta.put("textEditsRetryReason", retryReason);
                     }
                     sendEvent(emitter, jsonOf(
                             "stage", "auto_continue",
                             "status", "text_edits_retry",
                             "attempt", attemptNo,
                             "maxAttempts", maxAttempts,
-                            "message", "Kết quả đang là full code, backend yêu cầu model trả về textEdits theo line để apply chính xác"));
-                    currentPrompt = buildTextEditsRetryPrompt(prompt, raw, language, contextType, largeStructuredEditMode);
+                            "reason_code", retryReason,
+                            "message", "Kết quả chưa đạt shape tối ưu, backend retry theo chiến lược thích ứng để apply chính xác"));
+                    currentPrompt = buildEditAdaptiveRetryPrompt(prompt, raw, "", "", language, contextType, retryReason);
                     continue;
                 }
 
@@ -4218,17 +4707,20 @@ public class ApiSpringController {
 
                     if (canTryFormatRetry && textEditsCount == 0 && !hasSearchReplace && !hasWrappedCode) {
                         textEditsRetryUsed++;
+                        String retryReason = classifyEditRetryReason(raw, "", contextType, responseMode);
                         if (streamMeta != null) {
                             streamMeta.put("textEditsRetryTriggered", true);
                             streamMeta.put("textEditsRetryAttempts", textEditsRetryUsed);
+                            streamMeta.put("textEditsRetryReason", retryReason);
                         }
                         sendEvent(emitter, jsonOf(
                                 "stage", "auto_continue",
                                 "status", "format_retry",
                                 "attempt", attemptNo,
                                 "maxAttempts", maxAttempts,
-                                "message", "Kết quả chưa đúng định dạng edit, thử lại với prompt ép textEdits/SEARCH-REPLACE để tránh gọi lặp tốn kém"));
-                        currentPrompt = buildTextEditsRetryPrompt(prompt, raw, language, contextType, largeStructuredEditMode);
+                                "reason_code", retryReason,
+                                "message", "Kết quả edit chưa đủ tốt, retry theo chiến lược thích ứng để tránh gọi lặp tốn kém"));
+                        currentPrompt = buildEditAdaptiveRetryPrompt(prompt, raw, "", "", language, contextType, retryReason);
                         retriedForFormat = true;
                     }
                 }
@@ -4702,6 +5194,115 @@ public class ApiSpringController {
         return sb.toString();
     }
 
+    private int scoreLocalEditOutputQuality(String output, String baseCode, String contextType, String responseMode) {
+        String text = String.valueOf(output == null ? "" : output).trim();
+        if (text.isBlank()) {
+            return 0;
+        }
+        if (!"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            return Math.min(100, 40 + Math.min(40, text.length() / 20));
+        }
+        if (isMenuJsonContext(contextType)) {
+            return countMenuNodesFromDraft(text) > 0 ? 80 : 35;
+        }
+
+        int score = 20;
+        int lineTextEdits = extractLineTextEditsCount(text);
+        boolean hasSearchReplace = hasSearchReplaceBlocks(text);
+        boolean hasFullCode = hasFullCodeInEditPayload(text);
+        if (lineTextEdits > 0) {
+            score += 48;
+            score += Math.min(14, lineTextEdits * 3);
+        }
+        if (hasSearchReplace) {
+            score += 42;
+        }
+        if (hasFullCode && lineTextEdits == 0 && !hasSearchReplace) {
+            score -= 18;
+        }
+        if (isLowSubstanceEnumeratedOutput(text)) {
+            score -= 28;
+        }
+
+        String lower = text.toLowerCase(Locale.ROOT);
+        if (baseCode != null && !baseCode.isBlank()) {
+            int evidenceHits = 0;
+            Matcher m = Pattern.compile("(?m)(?:function\\s+([A-Za-z_$][A-Za-z0-9_$]*)|class\\s+([A-Za-z_$][A-Za-z0-9_$]*))").matcher(baseCode);
+            while (m.find() && evidenceHits < 5) {
+                String name = firstNonBlank(m.group(1), m.group(2));
+                if (!name.isBlank() && lower.contains(name.toLowerCase(Locale.ROOT))) {
+                    evidenceHits++;
+                }
+            }
+            score += Math.min(12, evidenceHits * 2);
+        }
+
+        return Math.max(0, Math.min(100, score));
+    }
+
+    private String classifyEditRetryReason(String output, String baseCode, String contextType, String responseMode) {
+        String text = String.valueOf(output == null ? "" : output).trim();
+        if (text.isBlank()) {
+            return "empty_output";
+        }
+        if (!"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            return "non_edit_mode";
+        }
+        if (isMenuJsonContext(contextType)) {
+            return "menu_json_retry";
+        }
+        int lineTextEdits = extractLineTextEditsCount(text);
+        boolean hasSearchReplace = hasSearchReplaceBlocks(text);
+        boolean hasFullCode = hasFullCodeInEditPayload(text);
+        if (lineTextEdits == 0 && !hasSearchReplace && !hasFullCode) {
+            return "format_invalid";
+        }
+        if (hasFullCode && lineTextEdits == 0 && !hasSearchReplace) {
+            return "full_code_fallback";
+        }
+        if (isLowSubstanceEnumeratedOutput(text)) {
+            return "low_substance";
+        }
+        int quality = scoreLocalEditOutputQuality(text, baseCode, contextType, responseMode);
+        if (quality < Math.max(1, aiLocalEditAdaptiveRetryMinQualityScore)) {
+            return "low_quality";
+        }
+        return "unknown_edit_quality";
+    }
+
+    private String buildEditAdaptiveRetryPrompt(
+            String originalPrompt,
+            String previousRawResponse,
+            String userMessage,
+            String currentCode,
+            String language,
+            String contextType,
+            String reasonCode) {
+        String reason = String.valueOf(reasonCode == null ? "" : reasonCode).trim().toLowerCase(Locale.ROOT);
+        if (reason.isBlank()) {
+            reason = "format_invalid";
+        }
+        if ("format_invalid".equals(reason) || "full_code_fallback".equals(reason) || "empty_output".equals(reason)) {
+            return buildTextEditsRetryPrompt(originalPrompt, previousRawResponse, language, contextType, false);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("ĐIỀU CHỈNH CHIẾN LƯỢC RETRY CHO EDIT (reason=").append(reason).append("):\n");
+        sb.append("- Chỉ trả output có thể apply ngay (SEARCH/REPLACE hoặc line-level textEdits).\n");
+        sb.append("- Bám đúng currentCode, không trả checklist chung, không mở rộng ngoài phạm vi yêu cầu.\n");
+        sb.append("- Nếu thiếu dữ kiện, vẫn phải tạo patch tối thiểu an toàn cho phần có đủ evidence.\n\n");
+        if (aiCodeStreamEditStrictSearchReplaceEnabled) {
+            sb.append("BẮT BUỘC định dạng SEARCH/REPLACE blocks, không JSON.\n\n");
+        } else {
+            sb.append("BẮT BUỘC định dạng JSON với textEdits line-level, không full code.\n\n");
+        }
+        sb.append("--- USER REQUEST ---\n").append(truncateMiddle(String.valueOf(userMessage == null ? "" : userMessage), 1200)).append("\n\n");
+        sb.append("--- CURRENT CODE (anchor) ---\n").append(truncateMiddle(String.valueOf(currentCode == null ? "" : currentCode), 5000)).append("\n\n");
+        sb.append("--- ORIGINAL PROMPT ---\n").append(truncateMiddle(String.valueOf(originalPrompt == null ? "" : originalPrompt), Math.max(12000, aiCodeStreamMaxPromptChars / 2))).append("\n\n");
+        sb.append("--- PREVIOUS OUTPUT (NOT GOOD ENOUGH) ---\n").append(truncateMiddle(String.valueOf(previousRawResponse == null ? "" : previousRawResponse), 3000)).append("\n");
+        return clampPromptForLocalProvider(sb.toString(), contextType, "edit");
+    }
+
     private boolean shouldRetryForLineTextEdits(
             String prompt,
             String contextType,
@@ -5146,6 +5747,897 @@ public class ApiSpringController {
         } catch (Exception ex) {
             return Collections.emptyList();
         }
+    }
+
+        private List<Map<String, Object>> suggestQuickFixes(
+            String appId,
+            String baseCode,
+            List<Map<String, Object>> textEdits,
+            String language,
+            int maxSuggestions) {
+        String source = String.valueOf(baseCode == null ? "" : baseCode);
+        String lang = String.valueOf(language == null ? "" : language).trim().toLowerCase(Locale.ROOT);
+        int cap = Math.max(1, maxSuggestions);
+        if (source.isBlank() || textEdits == null || textEdits.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        String replacementBlob = collectReplacementBlob(textEdits).toLowerCase(Locale.ROOT);
+        List<Map<String, Object>> out = new ArrayList<>();
+
+        boolean isJava = "java".equals(lang)
+            || source.contains("public class")
+            || source.contains("package ");
+
+        if (isJava) {
+            maybeAddImportQuickFix(out, source, replacementBlob, "list<", "import java.util.List;",
+                "add_import_list", "Add import java.util.List", "Them import cho List<> vua duoc su dung.");
+            maybeAddImportQuickFix(out, source, replacementBlob, "map<", "import java.util.Map;",
+                "add_import_map", "Add import java.util.Map", "Them import cho Map<> vua duoc su dung.");
+            maybeAddImportQuickFix(out, source, replacementBlob, "set<", "import java.util.Set;",
+                "add_import_set", "Add import java.util.Set", "Them import cho Set<> vua duoc su dung.");
+            maybeAddImportQuickFix(out, source, replacementBlob, "optional<", "import java.util.Optional;",
+                "add_import_optional", "Add import java.util.Optional", "Them import cho Optional<> vua duoc su dung.");
+
+            if (replacementBlob.contains("@autowired")
+                && !source.contains("import org.springframework.beans.factory.annotation.Autowired;")) {
+                out.add(buildQuickFix(
+                    "add_import_autowired",
+                    "Add import Autowired",
+                    "Them import cho @Autowired.",
+                    "insert_import",
+                    Map.of("importLine", "import org.springframework.beans.factory.annotation.Autowired;")));
+            }
+
+            if (replacementBlob.contains("logger")
+                && !source.contains("import org.slf4j.Logger;")
+                && !source.contains("import org.slf4j.LoggerFactory;")) {
+                out.add(buildQuickFix(
+                    "add_import_logger",
+                    "Add SLF4J imports",
+                    "Them import Logger va LoggerFactory cho logging.",
+                    "insert_imports",
+                    Map.of("importLines", List.of("import org.slf4j.Logger;", "import org.slf4j.LoggerFactory;"))));
+            }
+        }
+
+        if (("typescript".equals(lang) || "ts".equals(lang) || "tsx".equals(lang))
+            && replacementBlob.contains("useeffect(")
+            && !source.contains("useEffect")) {
+            out.add(buildQuickFix(
+                "add_import_useeffect",
+                "Add React useEffect import",
+                "Them useEffect vao import React de tranh loi compile.",
+                "insert_import",
+                Map.of("importLine", "import React, { useEffect } from 'react';")));
+        }
+
+        if (aiCodeStreamQuickFixFeedbackEnabled && out.size() > 1) {
+            rankQuickFixSuggestionsByFeedback(appId, lang, out);
+        }
+
+        if (out.size() > cap) {
+            return new ArrayList<>(out.subList(0, cap));
+        }
+        return out;
+    }
+
+    private void rankQuickFixSuggestionsByFeedback(String appId, String language, List<Map<String, Object>> suggestions) {
+        if (suggestions == null || suggestions.size() <= 1) {
+            return;
+        }
+        String safeAppId = String.valueOf(appId == null ? "" : appId).trim().toLowerCase(Locale.ROOT);
+        String safeLanguage = String.valueOf(language == null ? "" : language).trim().toLowerCase(Locale.ROOT);
+        suggestions.sort((left, right) -> {
+            String leftId = String.valueOf(left.get("id") == null ? "" : left.get("id")).trim();
+            String rightId = String.valueOf(right.get("id") == null ? "" : right.get("id")).trim();
+            double rightScore = getQuickFixFeedbackScore(safeAppId, safeLanguage, rightId);
+            double leftScore = getQuickFixFeedbackScore(safeAppId, safeLanguage, leftId);
+            int byScore = Double.compare(rightScore, leftScore);
+            if (byScore != 0) {
+                return byScore;
+            }
+            return leftId.compareToIgnoreCase(rightId);
+        });
+    }
+
+    private double getQuickFixFeedbackScore(String appId, String language, String quickFixId) {
+        String key = buildQuickFixFeedbackKey(appId, language, quickFixId);
+        QuickFixFeedbackStats stats = quickFixFeedbackStats.get(key);
+        if (stats == null) {
+            return 0.5d;
+        }
+        int applied = Math.max(0, stats.applied.get());
+        int dismissed = Math.max(0, stats.dismissed.get());
+        int samples = applied + dismissed;
+        double base = quickFixFeedbackScore(applied, dismissed, samples);
+        if (samples < Math.max(1, aiCodeStreamQuickFixFeedbackMinSamples)) {
+            return 0.5d + ((base - 0.5d) * 0.25d);
+        }
+        return base;
+    }
+
+    private double quickFixFeedbackScore(int applied, int dismissed, int samples) {
+        int safeApplied = Math.max(0, applied);
+        int safeDismissed = Math.max(0, dismissed);
+        int safeSamples = Math.max(0, samples);
+        if (safeSamples <= 0) {
+            return 0.5d;
+        }
+        return (safeApplied + 1.0d) / (safeApplied + safeDismissed + 2.0d);
+    }
+
+    private String normalizeQuickFixFeedbackAction(String raw) {
+        String value = String.valueOf(raw == null ? "" : raw).trim().toLowerCase(Locale.ROOT);
+        if ("apply".equals(value) || "applied".equals(value) || "accept".equals(value) || "accepted".equals(value)) {
+            return "applied";
+        }
+        if ("dismiss".equals(value) || "dismissed".equals(value) || "reject".equals(value) || "rejected".equals(value)) {
+            return "dismissed";
+        }
+        return "";
+    }
+
+    private String buildQuickFixFeedbackKey(String appId, String language, String quickFixId) {
+        String safeAppId = String.valueOf(appId == null ? "" : appId).trim().toLowerCase(Locale.ROOT);
+        String safeLanguage = String.valueOf(language == null ? "" : language).trim().toLowerCase(Locale.ROOT);
+        String safeId = String.valueOf(quickFixId == null ? "" : quickFixId).trim().toLowerCase(Locale.ROOT);
+        return safeAppId + "|" + safeLanguage + "|" + safeId;
+    }
+
+    private void pruneQuickFixFeedbackStatsIfNeeded() {
+        int maxEntries = Math.max(100, aiCodeStreamQuickFixFeedbackMaxEntries);
+        if (quickFixFeedbackStats.size() <= maxEntries) {
+            return;
+        }
+        int targetSize = Math.max(80, maxEntries - 100);
+        List<Map.Entry<String, QuickFixFeedbackStats>> entries = new ArrayList<>(quickFixFeedbackStats.entrySet());
+        entries.sort((a, b) -> Long.compare(
+            a.getValue() == null ? 0L : a.getValue().lastUpdatedMs,
+            b.getValue() == null ? 0L : b.getValue().lastUpdatedMs));
+        for (Map.Entry<String, QuickFixFeedbackStats> entry : entries) {
+            if (quickFixFeedbackStats.size() <= targetSize) {
+                break;
+            }
+            quickFixFeedbackStats.remove(entry.getKey());
+        }
+    }
+
+    private void rankEditCandidatesByFeedback(String appId, String language, List<Map<String, Object>> candidates) {
+        if (candidates == null || candidates.size() <= 1) {
+            return;
+        }
+        String safeAppId = String.valueOf(appId == null ? "" : appId).trim().toLowerCase(Locale.ROOT);
+        String safeLanguage = String.valueOf(language == null ? "" : language).trim().toLowerCase(Locale.ROOT);
+        for (Map<String, Object> candidate : candidates) {
+            if (candidate == null) {
+                continue;
+            }
+            String id = String.valueOf(candidate.get("id") == null ? "" : candidate.get("id")).trim();
+            candidate.put("feedbackScore", getEditCandidateFeedbackScore(safeAppId, safeLanguage, id));
+        }
+        candidates.sort((left, right) -> {
+            String leftId = String.valueOf(left == null ? "" : left.get("id") == null ? "" : left.get("id")).trim();
+            String rightId = String.valueOf(right == null ? "" : right.get("id") == null ? "" : right.get("id")).trim();
+            double rightScore = getEditCandidateFeedbackScore(safeAppId, safeLanguage, rightId);
+            double leftScore = getEditCandidateFeedbackScore(safeAppId, safeLanguage, leftId);
+            int byScore = Double.compare(rightScore, leftScore);
+            if (byScore != 0) {
+                return byScore;
+            }
+            return leftId.compareToIgnoreCase(rightId);
+        });
+    }
+
+    private double getEditCandidateFeedbackScore(String appId, String language, String candidateId) {
+        String key = buildEditCandidateFeedbackKey(appId, language, candidateId);
+        EditCandidateFeedbackStats stats = editCandidateFeedbackStats.get(key);
+        if (stats == null) {
+            return 0.5d;
+        }
+        int applied = Math.max(0, stats.applied.get());
+        int dismissed = Math.max(0, stats.dismissed.get());
+        int samples = applied + dismissed;
+        double base = editCandidateFeedbackScore(applied, dismissed, samples);
+        if (samples < Math.max(1, aiCodeStreamMultiCandidateFeedbackMinSamples)) {
+            return 0.5d + ((base - 0.5d) * 0.25d);
+        }
+        return base;
+    }
+
+    private double editCandidateFeedbackScore(int applied, int dismissed, int samples) {
+        int safeApplied = Math.max(0, applied);
+        int safeDismissed = Math.max(0, dismissed);
+        int safeSamples = Math.max(0, samples);
+        if (safeSamples <= 0) {
+            return 0.5d;
+        }
+        return (safeApplied + 1.0d) / (safeApplied + safeDismissed + 2.0d);
+    }
+
+    private String buildEditCandidateFeedbackKey(String appId, String language, String candidateId) {
+        String safeAppId = String.valueOf(appId == null ? "" : appId).trim().toLowerCase(Locale.ROOT);
+        String safeLanguage = String.valueOf(language == null ? "" : language).trim().toLowerCase(Locale.ROOT);
+        String safeId = String.valueOf(candidateId == null ? "" : candidateId).trim().toLowerCase(Locale.ROOT);
+        return safeAppId + "|" + safeLanguage + "|" + safeId;
+    }
+
+    private void pruneEditCandidateFeedbackStatsIfNeeded() {
+        int maxEntries = Math.max(100, aiCodeStreamMultiCandidateFeedbackMaxEntries);
+        if (editCandidateFeedbackStats.size() <= maxEntries) {
+            return;
+        }
+        int targetSize = Math.max(80, maxEntries - 100);
+        List<Map.Entry<String, EditCandidateFeedbackStats>> entries = new ArrayList<>(editCandidateFeedbackStats.entrySet());
+        entries.sort((a, b) -> Long.compare(
+            a.getValue() == null ? 0L : a.getValue().lastUpdatedMs,
+            b.getValue() == null ? 0L : b.getValue().lastUpdatedMs));
+        for (Map.Entry<String, EditCandidateFeedbackStats> entry : entries) {
+            if (editCandidateFeedbackStats.size() <= targetSize) {
+                break;
+            }
+            editCandidateFeedbackStats.remove(entry.getKey());
+        }
+    }
+
+    private void maybeAddImportQuickFix(
+            List<Map<String, Object>> out,
+            String source,
+            String replacementBlob,
+            String token,
+            String importLine,
+            String id,
+            String title,
+            String description) {
+        if (!replacementBlob.contains(token)) {
+            return;
+        }
+        if (source.contains(importLine)) {
+            return;
+        }
+        out.add(buildQuickFix(id, title, description, "insert_import", Map.of("importLine", importLine)));
+    }
+
+    private Map<String, Object> buildQuickFix(
+            String id,
+            String title,
+            String description,
+            String action,
+            Map<String, Object> payload) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("id", id);
+        out.put("title", title);
+        out.put("description", description);
+        out.put("action", action);
+        out.put("payload", payload == null ? Collections.emptyMap() : payload);
+        return out;
+    }
+
+    private String collectReplacementBlob(List<Map<String, Object>> textEdits) {
+        StringBuilder sb = new StringBuilder();
+        if (textEdits == null) {
+            return "";
+        }
+        for (Map<String, Object> edit : textEdits) {
+            if (edit == null) {
+                continue;
+            }
+            String replacement = String.valueOf(edit.get("replacement") == null ? "" : edit.get("replacement"));
+            if (!replacement.isBlank()) {
+                if (sb.length() > 0) {
+                    sb.append('\n');
+                }
+                sb.append(replacement);
+            }
+        }
+        return sb.toString();
+    }
+
+    private List<Map<String, Object>> buildEditCandidates(
+            String appId,
+            String language,
+            String baseCode,
+            List<Map<String, Object>> canonicalTextEdits,
+            int maxCandidates) {
+        if (canonicalTextEdits == null || canonicalTextEdits.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        int limit = Math.max(1, Math.min(3, maxCandidates));
+        List<Map<String, Object>> out = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+
+        List<Map<String, Object>> primary = new ArrayList<>(canonicalTextEdits);
+        appendEditCandidate(out, seen, "primary", "Primary (balanced)", "Cân bằng giữa độ phủ và an toàn.", primary, baseCode, limit);
+
+        List<Map<String, Object>> conservative = new ArrayList<>();
+        for (Map<String, Object> edit : canonicalTextEdits) {
+            if (edit == null) {
+                continue;
+            }
+            String action = String.valueOf(edit.getOrDefault("action", "")).trim().toLowerCase(Locale.ROOT);
+            if (!"delete".equals(action)) {
+                conservative.add(edit);
+            }
+        }
+        appendEditCandidate(out, seen, "conservative", "Conservative (non-delete)", "Ưu tiên không xóa code để giảm rủi ro.", conservative, baseCode, limit);
+
+        List<Map<String, Object>> minimal = canonicalTextEdits.isEmpty()
+            ? Collections.emptyList()
+            : List.of(canonicalTextEdits.get(0));
+        appendEditCandidate(out, seen, "minimal", "Minimal (first edit)", "Chỉ áp dụng thay đổi đầu tiên để kiểm chứng nhanh.", minimal, baseCode, limit);
+
+        if (aiCodeStreamMultiCandidateFeedbackEnabled && out.size() > 1) {
+            rankEditCandidatesByFeedback(appId, language, out);
+        }
+
+        return out;
+    }
+
+    private void appendEditCandidate(
+            List<Map<String, Object>> out,
+            Set<String> seen,
+            String id,
+            String title,
+            String description,
+            List<Map<String, Object>> edits,
+            String baseCode,
+            int limit) {
+        if (out.size() >= limit || edits == null || edits.isEmpty()) {
+            return;
+        }
+        try {
+            String signature = objectMapper.writeValueAsString(edits);
+            if (!seen.add(signature)) {
+                return;
+            }
+        } catch (Exception ignored) {
+            // Ignore dedupe serialization failures.
+        }
+
+        Map<String, Object> candidate = new LinkedHashMap<>();
+        candidate.put("id", id);
+        candidate.put("title", title);
+        candidate.put("description", description);
+        candidate.put("textEdits", edits);
+        candidate.put("lineRanges", convertTextEditsToLineRanges(edits));
+        String preview = simulateApplyLineTextEdits(baseCode, edits);
+        candidate.put("previewChars", Math.max(0, preview.length()));
+        int opAdd = summarizeLineEditActionCount(edits, "add");
+        int opEdit = summarizeLineEditActionCount(edits, "edit");
+        int opDelete = summarizeLineEditActionCount(edits, "delete");
+        candidate.put("ops", jsonOf(
+            "add", opAdd,
+            "edit", opEdit,
+            "delete", opDelete
+        ));
+        candidate.put("riskLevel", computeEditCandidateRiskLevel(opAdd, opEdit, opDelete));
+        candidate.put("confidence", computeEditCandidateConfidence(id, opAdd, opEdit, opDelete));
+        candidate.put("rationale", buildEditCandidateRationale(id, opAdd, opEdit, opDelete));
+        out.add(candidate);
+    }
+
+    private String computeEditCandidateRiskLevel(int add, int edit, int delete) {
+        int safeAdd = Math.max(0, add);
+        int safeEdit = Math.max(0, edit);
+        int safeDelete = Math.max(0, delete);
+        if (safeDelete <= 0) {
+            return "low";
+        }
+        if (safeDelete >= Math.max(2, safeAdd + safeEdit)) {
+            return "high";
+        }
+        return "medium";
+    }
+
+    private int computeEditCandidateConfidence(String candidateId, int add, int edit, int delete) {
+        String safeId = String.valueOf(candidateId == null ? "" : candidateId).trim().toLowerCase(Locale.ROOT);
+        int base = 76;
+        if ("conservative".equals(safeId)) {
+            base = 84;
+        } else if ("primary".equals(safeId)) {
+            base = 79;
+        } else if ("minimal".equals(safeId)) {
+            base = 71;
+        }
+        int complexityPenalty = Math.max(0, delete * 4) + Math.max(0, (add + edit + delete - 4));
+        int confidence = base - complexityPenalty;
+        return Math.max(45, Math.min(95, confidence));
+    }
+
+    private String buildEditCandidateRationale(String candidateId, int add, int edit, int delete) {
+        String safeId = String.valueOf(candidateId == null ? "" : candidateId).trim().toLowerCase(Locale.ROOT);
+        if ("conservative".equals(safeId)) {
+            return "Ưu tiên giữ nguyên code cũ, hạn chế xóa để giảm rủi ro regression.";
+        }
+        if ("minimal".equals(safeId)) {
+            return "Patch nhỏ để kiểm chứng nhanh giả thuyết trước khi áp dụng thay đổi lớn hơn.";
+        }
+        if (delete > 0) {
+            return "Bao phủ thay đổi chính nhưng có thao tác xóa, cần rà soát phạm vi tác động.";
+        }
+        return "Cân bằng giữa độ phủ thay đổi và khả năng áp dụng an toàn ngay.";
+    }
+
+    private int summarizeLineEditActionCount(List<Map<String, Object>> edits, String actionName) {
+        if (edits == null || edits.isEmpty()) {
+            return 0;
+        }
+        String target = String.valueOf(actionName == null ? "" : actionName).trim().toLowerCase(Locale.ROOT);
+        int count = 0;
+        for (Map<String, Object> edit : edits) {
+            String action = String.valueOf(edit == null ? "" : edit.getOrDefault("action", "")).trim().toLowerCase(Locale.ROOT);
+            if (target.equals(action)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private static class DeterministicPatchValidationResult {
+        List<Map<String, Object>> acceptedEdits = Collections.emptyList();
+        int inputCount;
+        int normalizedCount;
+        int rejectedCount;
+        String rejectionReason = "none";
+
+        Map<String, Object> toMetaMap() {
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("inputCount", inputCount);
+            meta.put("normalizedCount", normalizedCount);
+            meta.put("acceptedCount", acceptedEdits == null ? 0 : acceptedEdits.size());
+            meta.put("rejectedCount", rejectedCount);
+            meta.put("rejectionReason", String.valueOf(rejectionReason == null ? "none" : rejectionReason));
+            return meta;
+        }
+    }
+
+    private DeterministicPatchValidationResult validateDeterministicLineTextEdits(
+            List<Map<String, Object>> textEdits,
+            String baseCode) {
+        DeterministicPatchValidationResult result = new DeterministicPatchValidationResult();
+        result.inputCount = textEdits == null ? 0 : textEdits.size();
+        if (textEdits == null || textEdits.isEmpty()) {
+            result.rejectionReason = "empty_input";
+            return result;
+        }
+        if (!aiCodeStreamEditPatchValidatorEnabled) {
+            result.acceptedEdits = textEdits;
+            result.normalizedCount = textEdits.size();
+            result.rejectedCount = 0;
+            result.rejectionReason = "validator_disabled";
+            return result;
+        }
+
+        String code = String.valueOf(baseCode == null ? "" : baseCode);
+        int baseLineCount = countLines(code);
+        int maxAllowedLine = Math.max(1, baseLineCount + 1);
+        int maxTotalReplacementChars = Math.max(20000, aiAssistantStructuredEditMaxReplacementChars);
+
+        List<Map<String, Object>> normalized = new ArrayList<>();
+        for (Map<String, Object> edit : textEdits) {
+            if (edit == null || edit.isEmpty()) {
+                continue;
+            }
+
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+            if (startLine < 1) {
+                startLine = 1;
+            }
+            if (endLine < startLine) {
+                endLine = startLine;
+            }
+            if (startLine > maxAllowedLine || endLine > maxAllowedLine) {
+                continue;
+            }
+
+            String replacement = String.valueOf(edit.getOrDefault("replacement", ""));
+            String action = normalizeLineEditAction(String.valueOf(edit.getOrDefault("action", "edit")), replacement);
+
+            if (aiCodeStreamEditPatchValidatorRejectNoop && !code.isBlank() && !"add".equals(action)) {
+                String currentSlice = extractCodeSliceByLineRange(code, startLine, endLine);
+                if (currentSlice.equals(replacement)) {
+                    continue;
+                }
+            }
+
+            Map<String, Object> normalizedEdit = new LinkedHashMap<>();
+            normalizedEdit.put("startLine", startLine);
+            normalizedEdit.put("endLine", endLine);
+            normalizedEdit.put("replacement", replacement);
+            normalizedEdit.put("action", action);
+            normalized.add(normalizedEdit);
+        }
+
+        result.normalizedCount = normalized.size();
+        if (normalized.isEmpty()) {
+            result.rejectedCount = Math.max(0, result.inputCount);
+            result.rejectionReason = "all_filtered_pre_normalize";
+            return result;
+        }
+
+        normalized.sort((a, b) -> {
+            int sa = parseIntOrDefault(a.get("startLine"), 1);
+            int sb = parseIntOrDefault(b.get("startLine"), 1);
+            if (sa != sb) return Integer.compare(sa, sb);
+            int ea = parseIntOrDefault(a.get("endLine"), sa);
+            int eb = parseIntOrDefault(b.get("endLine"), sb);
+            return Integer.compare(ea, eb);
+        });
+
+        List<Map<String, Object>> accepted = new ArrayList<>();
+        int previousEnd = 0;
+        int totalReplacementChars = 0;
+        int maxEdits = Math.max(1, aiAssistantStructuredEditMaxTextEdits);
+
+        for (Map<String, Object> edit : normalized) {
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+            if (startLine <= previousEnd) {
+                continue;
+            }
+
+            String replacement = String.valueOf(edit.getOrDefault("replacement", ""));
+            totalReplacementChars += replacement.length();
+            if (totalReplacementChars > maxTotalReplacementChars) {
+                break;
+            }
+
+            accepted.add(edit);
+            previousEnd = endLine;
+            if (accepted.size() >= maxEdits) {
+                break;
+            }
+        }
+
+        if (accepted.isEmpty()) {
+            result.rejectedCount = Math.max(0, result.inputCount);
+            result.rejectionReason = "all_filtered_overlap_or_limits";
+            return result;
+        }
+
+        if (!code.isBlank()) {
+            String simulated = simulateApplyLineTextEdits(code, accepted);
+            if (aiCodeStreamEditPatchValidatorRejectEmptyOutput && simulated.isBlank()) {
+                result.rejectedCount = Math.max(0, result.inputCount);
+                result.rejectionReason = "empty_after_simulation";
+                return result;
+            }
+
+            double minRatio = Math.max(0.0d, aiCodeStreamEditPatchValidatorMinOutputRatio);
+            int minBaseChars = Math.max(200, aiCodeStreamEditPatchValidatorMinBaseChars);
+            if (minRatio > 0.0d
+                && code.length() >= minBaseChars
+                && !hasDominantDeleteActions(accepted)) {
+                double ratio = simulated.length() / (double) Math.max(1, code.length());
+                if (ratio < minRatio) {
+                    result.rejectedCount = Math.max(0, result.inputCount);
+                    result.rejectionReason = "shrink_ratio_below_min";
+                    return result;
+                }
+            }
+
+            if (aiCodeStreamEditPatchValidatorAstGuardEnabled) {
+                String astGuardReason = validatePatchedCodeStructure(code, simulated);
+                if (!astGuardReason.isBlank()) {
+                    result.rejectedCount = Math.max(0, result.inputCount);
+                    result.rejectionReason = astGuardReason;
+                    return result;
+                }
+            }
+        }
+
+        result.acceptedEdits = accepted;
+        result.rejectedCount = Math.max(0, result.inputCount - accepted.size());
+        result.rejectionReason = result.rejectedCount > 0 ? "partial_filtered" : "none";
+        return result;
+    }
+
+    private boolean hasDominantDeleteActions(List<Map<String, Object>> edits) {
+        if (edits == null || edits.isEmpty()) {
+            return false;
+        }
+        int deleteCount = 0;
+        for (Map<String, Object> edit : edits) {
+            String action = String.valueOf(edit == null ? "" : edit.getOrDefault("action", "")).trim().toLowerCase(Locale.ROOT);
+            if ("delete".equals(action)) {
+                deleteCount++;
+            }
+        }
+        return deleteCount > edits.size() / 2;
+    }
+
+    private String validatePatchedCodeStructure(String originalCode, String patchedCode) {
+        String patched = String.valueOf(patchedCode == null ? "" : patchedCode);
+        if (patched.isBlank()) {
+            return "ast_guard_failed_empty";
+        }
+
+        int maxScan = Math.max(20_000, aiCodeStreamEditPatchValidatorAstGuardMaxScanChars);
+        String scanText = patched.length() > maxScan ? patched.substring(0, maxScan) : patched;
+
+        String balanceError = detectUnbalancedCodeDelimiters(scanText);
+        if (!balanceError.isBlank()) {
+            return balanceError;
+        }
+
+        String lang = detectCodeLanguageForAstGuard(originalCode, patched);
+        if ("java".equals(lang)) {
+            String javaError = detectLikelyJavaStructureIssues(scanText);
+            if (!javaError.isBlank()) {
+                return javaError;
+            }
+        }
+
+        return "";
+    }
+
+    private String detectCodeLanguageForAstGuard(String originalCode, String patchedCode) {
+        String code = String.valueOf((patchedCode == null ? "" : patchedCode)
+            + "\n"
+            + (originalCode == null ? "" : originalCode)).toLowerCase(Locale.ROOT);
+        if (code.contains("package ") || code.contains("public class") || code.contains("@override")) {
+            return "java";
+        }
+        if (code.contains("interface ") || code.contains(": string") || code.contains("type ")) {
+            return "typescript";
+        }
+        if (code.contains("function ") || code.contains("=>") || code.contains("const ") || code.contains("let ")) {
+            return "javascript";
+        }
+        return "generic";
+    }
+
+    private String detectUnbalancedCodeDelimiters(String code) {
+        int paren = 0;
+        int brace = 0;
+        int bracket = 0;
+
+        boolean inSingleQuote = false;
+        boolean inDoubleQuote = false;
+        boolean inBacktick = false;
+        boolean inLineComment = false;
+        boolean inBlockComment = false;
+        boolean escaped = false;
+
+        char prev = '\0';
+        for (int i = 0; i < code.length(); i++) {
+            char c = code.charAt(i);
+            char next = (i + 1 < code.length()) ? code.charAt(i + 1) : '\0';
+
+            if (inLineComment) {
+                if (c == '\n') {
+                    inLineComment = false;
+                }
+                prev = c;
+                continue;
+            }
+
+            if (inBlockComment) {
+                if (prev == '*' && c == '/') {
+                    inBlockComment = false;
+                }
+                prev = c;
+                continue;
+            }
+
+            if (inSingleQuote) {
+                if (!escaped && c == '\'') {
+                    inSingleQuote = false;
+                }
+                escaped = (!escaped && c == '\\');
+                prev = c;
+                continue;
+            }
+
+            if (inDoubleQuote) {
+                if (!escaped && c == '"') {
+                    inDoubleQuote = false;
+                }
+                escaped = (!escaped && c == '\\');
+                prev = c;
+                continue;
+            }
+
+            if (inBacktick) {
+                if (!escaped && c == '`') {
+                    inBacktick = false;
+                }
+                escaped = (!escaped && c == '\\');
+                prev = c;
+                continue;
+            }
+
+            if (c == '/' && next == '/') {
+                inLineComment = true;
+                i++;
+                prev = '/';
+                continue;
+            }
+            if (c == '/' && next == '*') {
+                inBlockComment = true;
+                i++;
+                prev = '*';
+                continue;
+            }
+            if (c == '\'') {
+                inSingleQuote = true;
+                escaped = false;
+                prev = c;
+                continue;
+            }
+            if (c == '"') {
+                inDoubleQuote = true;
+                escaped = false;
+                prev = c;
+                continue;
+            }
+            if (c == '`') {
+                inBacktick = true;
+                escaped = false;
+                prev = c;
+                continue;
+            }
+
+            if (c == '(') {
+                paren++;
+            } else if (c == ')') {
+                paren--;
+                if (paren < 0) return "ast_guard_failed_unbalanced_paren";
+            } else if (c == '{') {
+                brace++;
+            } else if (c == '}') {
+                brace--;
+                if (brace < 0) return "ast_guard_failed_unbalanced_brace";
+            } else if (c == '[') {
+                bracket++;
+            } else if (c == ']') {
+                bracket--;
+                if (bracket < 0) return "ast_guard_failed_unbalanced_bracket";
+            }
+
+            prev = c;
+        }
+
+        if (inBlockComment) return "ast_guard_failed_unclosed_comment";
+        if (inSingleQuote || inDoubleQuote || inBacktick) return "ast_guard_failed_unclosed_string";
+        if (paren != 0) return "ast_guard_failed_unbalanced_paren";
+        if (brace != 0) return "ast_guard_failed_unbalanced_brace";
+        if (bracket != 0) return "ast_guard_failed_unbalanced_bracket";
+        return "";
+    }
+
+    private String detectLikelyJavaStructureIssues(String code) {
+        int classCount = countRegexMatches(code, "(?m)\\b(class|interface|enum|record)\\b");
+        int publicCount = countRegexMatches(code, "(?m)^\\s*public\\s+");
+        if (publicCount > 0 && classCount == 0) {
+            return "ast_guard_failed_java_structure";
+        }
+        return "";
+    }
+
+    private int countRegexMatches(String text, String regex) {
+        if (text == null || text.isBlank()) {
+            return 0;
+        }
+        int count = 0;
+        Matcher matcher = Pattern.compile(regex).matcher(text);
+        while (matcher.find()) {
+            count++;
+        }
+        return count;
+    }
+
+    /**
+     * Build a focused verify-fix prompt based on rejection reason.
+     * Returns a narrow, targeted prompt for 1-round local repair.
+     */
+    private String buildEditVerifyFixPrompt(String rejectionReason, String aiOutput, String baseCode) {
+        String reason = String.valueOf(rejectionReason == null ? "unknown" : rejectionReason).trim().toLowerCase(Locale.ROOT);
+        String code = String.valueOf(baseCode == null ? "" : baseCode);
+        String output = String.valueOf(aiOutput == null ? "" : aiOutput);
+        
+        if (code.isBlank() || output.isBlank()) {
+            return "";
+        }
+        
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("You are fixing a code edit that was rejected.\n\n");
+        prompt.append("Original code (first 1200 chars):\n```\n");
+        prompt.append(truncate(code, 1200));
+        prompt.append("\n```\n\n");
+        
+        prompt.append("AI's rejected output:\n```\n");
+        prompt.append(truncate(output, 800));
+        prompt.append("\n```\n\n");
+        
+        // Reason-specific guidance
+        if (reason.contains("shrink_ratio")) {
+            prompt.append("Issue: The output removed too much code.\n");
+            prompt.append("Fix: Keep more of the original code. Include all unrelated sections unchanged.\n");
+            prompt.append("Output ONLY the corrected edits in SEARCH/REPLACE format.\n");
+        } else if (reason.contains("empty_after")) {
+            prompt.append("Issue: The edited result would be empty or nearly empty.\n");
+            prompt.append("Fix: Make sure the output preserves the code structure.\n");
+            prompt.append("Output ONLY the corrected edits in SEARCH/REPLACE format.\n");
+        } else if (reason.contains("overlap_or_limits")) {
+            prompt.append("Issue: The edits overlap or exceed allowed line ranges.\n");
+            prompt.append("Fix: Make sure edits do not overlap and stay within valid line numbers.\n");
+            prompt.append("Output ONLY non-overlapping edits in SEARCH/REPLACE format.\n");
+        } else if (reason.contains("pre_normalize")) {
+            prompt.append("Issue: The edits contain invalid patterns.\n");
+            prompt.append("Fix: Use proper SEARCH/REPLACE blocks with valid line numbers.\n");
+            prompt.append("Output ONLY valid edits in SEARCH/REPLACE format.\n");
+        } else {
+            prompt.append("Issue: The edits were rejected by validation.\n");
+            prompt.append("Fix: Produce valid, non-overlapping edits that preserve unrelated code.\n");
+            prompt.append("Output ONLY the corrected edits in SEARCH/REPLACE format.\n");
+        }
+        
+        return prompt.toString();
+    }
+
+    private String simulateApplyLineTextEdits(String baseCode, List<Map<String, Object>> edits) {
+        String code = String.valueOf(baseCode == null ? "" : baseCode);
+        if (code.isBlank() || edits == null || edits.isEmpty()) {
+            return code;
+        }
+
+        List<String> lines = new ArrayList<>(Arrays.asList(code.split("\\n", -1)));
+        List<Map<String, Object>> sorted = new ArrayList<>(edits);
+        sorted.sort((a, b) -> {
+            int sa = parseIntOrDefault(a == null ? null : a.get("startLine"), 1);
+            int sb = parseIntOrDefault(b == null ? null : b.get("startLine"), 1);
+            return Integer.compare(sb, sa);
+        });
+
+        for (Map<String, Object> edit : sorted) {
+            if (edit == null || edit.isEmpty()) {
+                continue;
+            }
+
+            int startLine = Math.max(1, parseIntOrDefault(edit.get("startLine"), 1));
+            int endLine = Math.max(startLine, parseIntOrDefault(edit.get("endLine"), startLine));
+            String replacement = String.valueOf(edit.getOrDefault("replacement", ""));
+            String action = String.valueOf(edit.getOrDefault("action", "edit")).trim().toLowerCase(Locale.ROOT);
+
+            int insertAt = Math.min(lines.size(), Math.max(0, startLine - 1));
+            int fromIdx = Math.min(lines.size(), Math.max(0, startLine - 1));
+            int toExclusive = Math.min(lines.size(), Math.max(fromIdx, endLine));
+
+            if ("add".equals(action)) {
+                if (!replacement.isBlank()) {
+                    lines.addAll(insertAt, Arrays.asList(replacement.split("\\n", -1)));
+                }
+                continue;
+            }
+
+            if (fromIdx < toExclusive) {
+                lines.subList(fromIdx, toExclusive).clear();
+            }
+            if (!replacement.isBlank()) {
+                lines.addAll(fromIdx, Arrays.asList(replacement.split("\\n", -1)));
+            }
+        }
+
+        return String.join("\n", lines);
+    }
+
+    private String extractCodeSliceByLineRange(String code, int startLine, int endLine) {
+        String text = String.valueOf(code == null ? "" : code);
+        if (text.isBlank()) {
+            return "";
+        }
+
+        String[] lines = text.split("\\n", -1);
+        int from = Math.max(1, startLine);
+        int to = Math.max(from, endLine);
+        if (from > lines.length) {
+            return "";
+        }
+        int safeTo = Math.min(lines.length, to);
+        return String.join("\n", Arrays.copyOfRange(lines, from - 1, safeTo));
     }
 
     private String normalizeLineEditAction(String rawAction, String replacement) {
@@ -6401,35 +7893,108 @@ public class ApiSpringController {
                     + languageRule
             );
         } else {
+            // Structured sections guide the small local model to produce organized business-logic
+            // analysis rather than echoing CSS/template tokens or rambling in free-form prose.
+            String analyzeFormatGuide = localizeByInputLanguage(
+                requestText,
+                "Cấu trúc phân tích theo các mục (chỉ mục có nội dung thực tế):\n"
+                    + "## Luồng xử lý chính\n## State và dữ liệu\n## Logic nghiệp vụ\n## API calls / Side effects\n"
+                    + "Nếu code là Vue/React: CHỈ phân tích phần script/logic, KHÔNG liệt kê CSS class, HTML tag hay giá trị style.",
+                "Structure the analysis into these sections (only sections with real content):\n"
+                    + "## Main Processing Flow\n## State and Data\n## Business Logic\n## API Calls / Side Effects\n"
+                    + "For Vue/React code: analyze ONLY the script/logic section. Do NOT list CSS classes, HTML tags, or style values.",
+                "请按以下结构组织分析（仅列出有实际内容的章节）：\n"
+                    + "## 主要处理流程\n## 状态与数据\n## 业务逻辑\n## API 调用 / 副作用\n"
+                    + "Vue/React 代码：只分析脚本/逻辑部分，不要列出 CSS 类名、HTML 标签或样式值。"
+            );
             systemMsg = localizeByInputLanguage(
                 requestText,
                 "Bạn là chuyên gia lập trình " + lang + " hơn 20 năm kinh nghiệm, làm việc theo yêu cầu khách hàng. "
                     + "Hãy tự suy luận từ request + code hiện tại để phân tích, giải thích hoặc tìm vị trí liên quan. "
                     + "Classifier hint chỉ là gợi ý mềm, không phải lệnh bắt buộc. "
-                    + "Trả lời ngắn gọn, chính xác, bám đúng code hiện có. " + languageRule + " "
+                    + "Trả lời ngắn gọn, chính xác, bám đúng code hiện có. " + languageRule + "\n"
                     + "Không mở đầu bằng kế hoạch kiểu 'Tôi sẽ phân tích theo các bước...'; phải phân tích trực tiếp vào nghiệp vụ/code hiện tại. "
-                    + "Không tự viết lại sang ngôn ngữ khác, không tự bịa ví dụ mới và không sinh code mẫu nếu người dùng không yêu cầu.",
+                    + "Không tự viết lại sang ngôn ngữ khác, không tự bịa ví dụ mới và không sinh code mẫu nếu người dùng không yêu cầu.\n"
+                    + analyzeFormatGuide,
                 "You are a programming expert in " + lang + " with over 20 years of experience, working according to customer requirements. "
                     + "Reason from the request + current code to analyze, explain, or locate relevant parts. "
                     + "Classifier hints are soft guidance, not mandatory commands. "
-                    + "Respond concisely and accurately, grounded in the current code. " + languageRule + " "
+                    + "Respond concisely and accurately, grounded in the current code. " + languageRule + "\n"
                     + "Do not start with meta planning text like 'I will analyze this in steps'; provide direct analysis of the current code/business flow immediately. "
-                    + "Do not rewrite into another language, invent new examples, or generate sample code unless explicitly requested.",
+                    + "Do not rewrite into another language, invent new examples, or generate sample code unless explicitly requested.\n"
+                    + analyzeFormatGuide,
                 "你是一名拥有20多年经验的 " + lang + " 编程专家，按客户需求开展工作。"
                     + "请基于用户请求与当前代码进行分析、解释或定位相关位置。"
                     + "分类器提示仅作软参考，不是强制命令。"
-                    + "请基于当前代码简洁且准确地回答。" + languageRule + " "
+                    + "请基于当前代码简洁且准确地回答。" + languageRule + "\n"
                     + "不要先输出“我将按步骤分析”这类计划话术，必须直接分析当前代码与业务流程。"
-                    + "除非用户明确要求，否则不要改写成其他语言、不要虚构示例、不要生成示例代码。"
+                    + "除非用户明确要求，否则不要改写成其他语言、不要虚构示例、不要生成示例代码。\n"
+                    + analyzeFormatGuide
             );
         }
 
+        // For analyze mode, extract only the logic/script section from Vue/React/HTML to prevent
+        // the model from echoing CSS/template tokens instead of analyzing business logic.
+        String effectiveContext = editMode ? compactContext
+            : extractScriptContentForAnalysis(compactContext, lang);
+
         String userMsg = buildLocalDirectClassifierHint(intentClass)
             + "USER_REQUEST:\n" + requestText
-            + "\n\nCURRENT_CODE_CONTEXT:\n" + compactContext;
+            + "\n\nCURRENT_CODE_CONTEXT:\n" + effectiveContext;
         return "<|im_start|>system\n" + systemMsg + "<|im_end|>\n"
             + "<|im_start|>user\n" + userMsg + "<|im_end|>\n"
             + "<|im_start|>assistant\n";
+    }
+
+    /**
+     * For analyze mode, pre-extract the script/logic section from Vue/React/HTML code so
+     * the local LLM focuses on business logic rather than template/CSS tokens.
+     *
+     * Extraction rules:
+     * - Vue: extracts content inside {@code <script>...</script>} (first block).
+     * - React/JSX: strips JSX markup patterns, keeps JS logic.
+     * - HTML/template-heavy: strips inline style blocks and most HTML tags.
+     * - Other: returns original content unchanged.
+     *
+     * If the extracted script section is too short (&lt; 60 chars) the original is returned.
+     */
+    private String extractScriptContentForAnalysis(String code, String lang) {
+        if (code == null || code.isBlank()) return code == null ? "" : code;
+        String safeCode = code.trim();
+        String safeLang = String.valueOf(lang == null ? "" : lang).trim().toLowerCase(java.util.Locale.ROOT);
+
+        // Vue: extract <script> ... </script> section
+        if (safeLang.contains("vue") || safeCode.contains("<template>")) {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("<script(?:[^>]*)>([\\s\\S]*?)</script>", java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(safeCode);
+            if (m.find()) {
+                String extracted = m.group(1).trim();
+                if (extracted.length() >= 60) {
+                    return "// [VUE SCRIPT SECTION ONLY — template/style stripped for analysis]\n" + extracted;
+                }
+            }
+            // Fallback: strip <template> and <style> blocks
+            String stripped = safeCode
+                .replaceAll("(?si)<template[^>]*>[\\s\\S]*?</template>", "")
+                .replaceAll("(?si)<style[^>]*>[\\s\\S]*?</style>", "")
+                .replaceAll("(?si)<script[^>]*>", "")
+                .replaceAll("(?si)</script>", "")
+                .replaceAll("\\n{3,}", "\\n\\n")
+                .trim();
+            return stripped.length() >= 60 ? stripped : safeCode;
+        }
+
+        // HTML: strip <style> blocks and heavy tag nesting
+        if (safeLang.contains("html") || (safeCode.startsWith("<!DOCTYPE") || safeCode.startsWith("<html"))) {
+            String stripped = safeCode
+                .replaceAll("(?si)<style[^>]*>[\\s\\S]*?</style>", "")
+                .replaceAll("(?si)<script[^>]*>([\\s\\S]*?)</script>", "$1")
+                .trim();
+            return stripped.length() >= 60 ? stripped : safeCode;
+        }
+
+        return safeCode;
     }
 
     private String buildLocalDirectClassifierHint(LocalIntentClassification intentClass) {
@@ -8116,7 +9681,8 @@ public class ApiSpringController {
             String raw,
             String requestText,
             String responseMode,
-            String contextType) {
+            String contextType,
+            String currentCode) {
         if (!"analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
             return String.valueOf(raw == null ? "" : raw).trim();
         }
@@ -8160,12 +9726,329 @@ public class ApiSpringController {
         text = normalizeAnalyzeFinalOutput(text);
 
         if (looksLikeCssDomFragment(text)) {
-            return "AI local không phân tích được nội dung này. Vui lòng thử rút gọn đoạn code hoặc diễn đạt lại yêu cầu.";
+            if (aiLocalAnalyzeGuardrailEnabled && aiLocalAnalyzeHeuristicFallbackEnabled) {
+                String fallback = buildHeuristicBusinessLogicAnalysis(currentCode, requestText, contextType);
+                return fallback.isBlank()
+                    ? "AI local không phân tích được nội dung này. Vui lòng thử rút gọn đoạn code hoặc diễn đạt lại yêu cầu."
+                    : fallback;
+            }
+            return text;
         }
 
         text = text.replaceAll("(?im)^\\s*luong[_\\s/-]*xu[_\\s/-]*ly\\s*:\\s*\\d{3,}\\s*$", "luong_xu_ly: chưa xác định rõ");
         text = text.replaceAll("\\n{3,}", "\\n\\n").trim();
+        if (aiLocalAnalyzeGuardrailEnabled && aiLocalAnalyzeHeuristicFallbackEnabled && isLowSignalAnalyzeOutput(text)) {
+            String fallback = buildHeuristicBusinessLogicAnalysis(currentCode, requestText, contextType);
+            if (!fallback.isBlank()) {
+                return fallback;
+            }
+        }
         return text;
+    }
+
+    private int scoreAnalyzeAnswerConfidence(String answer, String currentCode, String requestText) {
+        String safe = String.valueOf(answer == null ? "" : answer).trim();
+        if (safe.isBlank()) {
+            return 0;
+        }
+        int score = 20;
+        if (safe.length() >= 260) score += 12;
+        if (safe.length() >= 700) score += 8;
+        if (safe.contains("## ")) score += 12;
+        if (safe.toLowerCase(Locale.ROOT).contains("logic") || safe.toLowerCase(Locale.ROOT).contains("nghiệp vụ")) score += 8;
+        if (safe.toLowerCase(Locale.ROOT).contains("api") || safe.toLowerCase(Locale.ROOT).contains("side effect")) score += 8;
+
+        int sectionQuality = scoreAnalyzeSectionQuality(safe, currentCode, true);
+        score += Math.max(0, Math.min(28, sectionQuality / 3));
+
+        String request = String.valueOf(requestText == null ? "" : requestText).toLowerCase(Locale.ROOT);
+        if (request.contains("toàn bộ logic") || request.contains("phan tich") || request.contains("phân tích")) {
+            if (safe.toLowerCase(Locale.ROOT).contains("luồng xử lý") || safe.toLowerCase(Locale.ROOT).contains("main processing flow")) {
+                score += 8;
+            }
+        }
+
+        if (isLowSignalAnalyzeOutput(safe)) {
+            score -= 28;
+        }
+        if (looksLikeCssDomFragment(safe)) {
+            score -= 36;
+        }
+        return Math.max(0, Math.min(100, score));
+    }
+
+    private int scoreAnalyzeSectionQuality(String section, String currentCode, boolean firstSection) {
+        String safe = String.valueOf(section == null ? "" : section).trim();
+        if (safe.isBlank()) {
+            return 0;
+        }
+        int score = 20;
+        if (safe.length() >= 120) score += 14;
+        if (safe.length() >= 280) score += 12;
+        if (safe.contains("- ") || safe.matches("(?s).*(\\d+\\.|\\d+\\)).*")) score += 8;
+        String lower = safe.toLowerCase(Locale.ROOT);
+        if (lower.contains("flow") || lower.contains("luồng") || lower.contains("xử lý")) score += 8;
+        if (lower.contains("state") || lower.contains("props") || lower.contains("dữ liệu") || lower.contains("data")) score += 8;
+        if (lower.contains("logic") || lower.contains("nghiệp vụ")) score += 10;
+        if (lower.contains("api") || lower.contains("side effect") || lower.contains("rủi ro") || lower.contains("risk")) score += 10;
+
+        String code = String.valueOf(currentCode == null ? "" : currentCode);
+        if (!code.isBlank()) {
+            int evidenceHits = 0;
+            Matcher m = Pattern.compile("(?m)(?:function\\s+([A-Za-z_$][A-Za-z0-9_$]*)|class\\s+([A-Za-z_$][A-Za-z0-9_$]*))").matcher(code);
+            while (m.find() && evidenceHits < 6) {
+                String name = firstNonBlank(m.group(1), m.group(2));
+                if (!name.isBlank() && lower.contains(name.toLowerCase(Locale.ROOT))) {
+                    evidenceHits++;
+                }
+            }
+            score += Math.min(18, evidenceHits * 3);
+        }
+
+        if (firstSection && (lower.contains("bổ sung phần còn thiếu") || lower.contains("ban chua") || lower.contains("bạn chưa"))) {
+            score -= 26;
+        }
+        if (looksLikeCssDomFragment(safe)) {
+            score -= 30;
+        }
+        return Math.max(0, Math.min(100, score));
+    }
+
+    private String buildLowConfidenceAnalyzeRetryPrompt(
+            String requestText,
+            String previousAnswer,
+            String currentCode,
+            String contextType,
+            int maxPromptChars) {
+        String code = String.valueOf(currentCode == null ? "" : currentCode).trim();
+        String request = String.valueOf(requestText == null ? "" : requestText).trim();
+        String previous = String.valueOf(previousAnswer == null ? "" : previousAnswer).trim();
+        if (code.isBlank() || request.isBlank()) {
+            return "";
+        }
+        String lang = detectCodeLanguage(contextType, code);
+        String evidenceCode = extractScriptContentForAnalysis(code, lang);
+        if (evidenceCode == null || evidenceCode.isBlank()) {
+            evidenceCode = code;
+        }
+        evidenceCode = truncateMiddle(evidenceCode, Math.max(3000, maxPromptChars - 1800));
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("<|im_start|>system\n");
+        sb.append("Bạn là senior engineer. Hãy phân tích dựa trên bằng chứng code, không checklist chung, không lặp ý, không liệt kê CSS/HTML token.\n");
+        sb.append("Bắt buộc output đúng 5 mục: \n");
+        sb.append("## Luồng xử lý chính\n## State và dữ liệu\n## Logic nghiệp vụ\n## API calls / Side effects\n## Rủi ro và gợi ý\n");
+        sb.append("Mỗi mục nêu evidence cụ thể (tên hàm/biến/component) lấy từ code. Nếu thiếu evidence thì ghi rõ chưa đủ dữ liệu.\n");
+        sb.append("<|im_end|>\n");
+        sb.append("<|im_start|>user\n");
+        sb.append("YÊU CẦU: ").append(request).append("\n\n");
+        if (!previous.isBlank()) {
+            sb.append("CÂU TRẢ LỜI TRƯỚC CHƯA ĐẠT (tham khảo để tránh lặp):\n");
+            sb.append(truncateMiddle(previous, 1200)).append("\n\n");
+        }
+        sb.append("CODE EVIDENCE:\n").append(evidenceCode).append("\n");
+        sb.append("<|im_end|>\n");
+        sb.append("<|im_start|>assistant\n");
+        return clampPromptForLocalProvider(truncateMiddle(sb.toString(), Math.max(6000, maxPromptChars)), contextType, "analyze");
+    }
+
+    private boolean isLowSignalAnalyzeOutput(String text) {
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return true;
+        }
+        String lower = safe.toLowerCase(Locale.ROOT);
+        if (safe.length() < Math.max(80, aiLocalAnalyzeLowSignalMinLength)) {
+            return true;
+        }
+
+        int checklistHits = 0;
+        String[] checklistMarkers = {
+            "bổ sung phần còn thiếu",
+            "ban chua",
+            "bạn chưa",
+            "chưa xác định rõ",
+            "thời gian thực hiện",
+            "điều kiện dừng",
+            "ket qua cuoi cung",
+            "kết quả cuối cùng"
+        };
+        for (String marker : checklistMarkers) {
+            if (lower.contains(marker)) {
+                checklistHits++;
+            }
+        }
+
+        int repeatLineCount = 0;
+        Map<String, Integer> freq = new LinkedHashMap<>();
+        for (String rawLine : safe.split("\\n")) {
+            String line = String.valueOf(rawLine == null ? "" : rawLine)
+                .replaceAll("(?im)^\\s*\\d+[\\.)]\\s*", "")
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toLowerCase(Locale.ROOT);
+            if (line.isBlank()) {
+                continue;
+            }
+            int next = freq.getOrDefault(line, 0) + 1;
+            freq.put(line, next);
+            if (next >= 2) {
+                repeatLineCount++;
+            }
+        }
+
+        return checklistHits >= Math.max(1, aiLocalAnalyzeLowSignalChecklistHitThreshold)
+            || repeatLineCount >= Math.max(1, aiLocalAnalyzeLowSignalRepeatLineThreshold);
+    }
+
+    private String buildHeuristicBusinessLogicAnalysis(String currentCode, String requestText, String contextType) {
+        String code = String.valueOf(currentCode == null ? "" : currentCode);
+        if (code.isBlank()) {
+            return "Không đủ ngữ cảnh code để phân tích nghiệp vụ. Hãy gửi thêm đoạn code cần phân tích.";
+        }
+
+        String analysisCode = extractScriptContentForAnalysis(code, detectCodeLanguage(contextType, code));
+        if (analysisCode == null || analysisCode.isBlank()) {
+            analysisCode = code;
+        }
+
+        LinkedHashSet<String> functionNames = new LinkedHashSet<>();
+        LinkedHashSet<String> stateSignals = new LinkedHashSet<>();
+        LinkedHashSet<String> sideEffects = new LinkedHashSet<>();
+        LinkedHashSet<String> riskHints = new LinkedHashSet<>();
+
+        Matcher fnMatcher = Pattern.compile("(?m)(?:function\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*\\(|const\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=\\s*\\([^\\)]*\\)\\s*=>|class\\s+([A-Za-z_$][A-Za-z0-9_$]*))").matcher(analysisCode);
+        while (fnMatcher.find()) {
+            String name = firstNonBlank(fnMatcher.group(1), fnMatcher.group(2), fnMatcher.group(3));
+            if (!name.isBlank()) {
+                functionNames.add(name);
+            }
+            if (functionNames.size() >= 16) {
+                break;
+            }
+        }
+
+        Matcher stateMatcher = Pattern.compile("(?i)(useState\\s*\\(|useReducer\\s*\\(|set[A-Z][A-Za-z0-9_]*\\s*\\(|props\\.|state\\.|ref\\.|memo\\(|computed\\()")
+            .matcher(analysisCode);
+        while (stateMatcher.find()) {
+            String token = String.valueOf(stateMatcher.group(1) == null ? "" : stateMatcher.group(1)).trim();
+            if (!token.isBlank()) {
+                stateSignals.add(token);
+            }
+            if (stateSignals.size() >= 8) {
+                break;
+            }
+        }
+
+        Matcher effectMatcher = Pattern.compile("(?i)(fetch\\s*\\(|axios\\.|request\\.|recordManager\\.|save\\s*\\(|update\\s*\\(|delete\\s*\\(|emit\\s*\\(|socket\\.|sseemitter|settimeout\\s*\\()")
+            .matcher(analysisCode);
+        while (effectMatcher.find()) {
+            String token = String.valueOf(effectMatcher.group(1) == null ? "" : effectMatcher.group(1)).trim();
+            if (!token.isBlank()) {
+                sideEffects.add(token);
+            }
+            if (sideEffects.size() >= 10) {
+                break;
+            }
+        }
+
+        if (analysisCode.length() > 120000) {
+            riskHints.add("Khối code rất lớn, nên chia nhỏ theo module/hàm để giảm bỏ sót.");
+        }
+        if (sideEffects.isEmpty()) {
+            riskHints.add("Chưa thấy dấu hiệu gọi API/persistence rõ ràng trong đoạn hiện tại; có thể logic nằm ở file khác.");
+        }
+        if (functionNames.isEmpty()) {
+            riskHints.add("Không phát hiện được hàm/class rõ ràng từ đoạn code hiện tại (có thể code đã minify hoặc thiếu phần script).");
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Luồng xử lý chính\n");
+        if (!functionNames.isEmpty()) {
+            sb.append("- Entry/khối xử lý nổi bật: ").append(String.join(", ", limitList(functionNames, 10))).append(".\n");
+            sb.append("- Trình tự tổng quát: nhận input -> xử lý qua các hàm trên -> render/cập nhật kết quả.\n");
+        } else {
+            sb.append("- Chưa xác định rõ entry-point do thiếu tín hiệu hàm/class; cần thêm đoạn script đầy đủ hơn.\n");
+        }
+
+        sb.append("\n## State và dữ liệu\n");
+        if (!stateSignals.isEmpty()) {
+            sb.append("- Tín hiệu state/props: ").append(String.join(", ", limitList(stateSignals, 8))).append(".\n");
+        } else {
+            sb.append("- Chưa thấy tín hiệu state rõ ràng; có thể đang là logic thuần hoặc state ở module khác.\n");
+        }
+        sb.append("- Dữ liệu chính đi qua currentCode; ưu tiên bám theo biến đầu vào/biến trung gian ngay tại vùng đang mở.\n");
+
+        sb.append("\n## Logic nghiệp vụ\n");
+        if (!functionNames.isEmpty()) {
+            sb.append("- Nhóm hàm chịu trách nhiệm nghiệp vụ: ").append(String.join(", ", limitList(functionNames, 6))).append(".\n");
+            sb.append("- Mẫu xử lý cho thấy thiên về:");
+            if (looksLikeReactUiCode(analysisCode)) {
+                sb.append(" điều khiển UI + xử lý tương tác người dùng");
+            } else if (looksLikeJavaServiceCode(analysisCode)) {
+                sb.append(" validate request + điều phối service + side effects");
+            } else {
+                sb.append(" xử lý dữ liệu + rẽ nhánh theo điều kiện nghiệp vụ");
+            }
+            sb.append(".\n");
+        } else {
+            sb.append("- Chưa đủ bằng chứng để kết luận luồng nghiệp vụ chi tiết.\n");
+        }
+
+        sb.append("\n## API calls / Side effects\n");
+        if (!sideEffects.isEmpty()) {
+            sb.append("- Dấu hiệu side effects: ").append(String.join(", ", limitList(sideEffects, 10))).append(".\n");
+            sb.append("- Cần kiểm tra kỹ idempotency, retry và xử lý lỗi cho các điểm side effect này.\n");
+        } else {
+            sb.append("- Không phát hiện điểm gọi API/persistence nổi bật trong đoạn code hiện tại.\n");
+        }
+
+        sb.append("\n## Rủi ro và gợi ý\n");
+        if (riskHints.isEmpty()) {
+            sb.append("- Tách rõ tầng dữ liệu và tầng hiển thị để truy vết nghiệp vụ dễ hơn.\n");
+            sb.append("- Bổ sung log theo bước (input -> xử lý -> output) để debug nhanh trên máy yếu.\n");
+        } else {
+            for (String hint : riskHints) {
+                sb.append("- ").append(hint).append("\n");
+            }
+        }
+
+        if (String.valueOf(requestText == null ? "" : requestText).toLowerCase(Locale.ROOT).contains("toàn bộ logic")) {
+            sb.append("\nGhi chú: Phân tích trên bám theo đoạn code đã gửi trong phiên hiện tại. Nếu muốn 'toàn bộ' hệ thống, cần nạp thêm các module liên quan qua Lucene scopes (code + business markdown + attachments).\n");
+        }
+        return sb.toString().replaceAll("\\n{3,}", "\\n\\n").trim();
+    }
+
+    private List<String> limitList(Set<String> source, int max) {
+        List<String> out = new ArrayList<>();
+        if (source == null || source.isEmpty()) {
+            return out;
+        }
+        int limit = Math.max(1, max);
+        for (String item : source) {
+            String safe = String.valueOf(item == null ? "" : item).trim();
+            if (safe.isBlank()) {
+                continue;
+            }
+            out.add(safe);
+            if (out.size() >= limit) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null || values.length == 0) {
+            return "";
+        }
+        for (String value : values) {
+            String safe = String.valueOf(value == null ? "" : value).trim();
+            if (!safe.isBlank()) {
+                return safe;
+            }
+        }
+        return "";
     }
 
     /**
@@ -8474,7 +10357,7 @@ public class ApiSpringController {
                 continue;
             }
             // Lines that are a single HTML/CSS keyword token (often extracted from template)
-            if (line.matches("^[-*]?\\s*(div|span|flex|grid|block|inline|none|auto|solid|absolute|relative|fixed|sticky|overflow|padding|margin|border|background|color|font|display|position|width|height|z-index|cursor|pointer|transform|transition|opacity|visibility|white-space|text-align|align-items|justify-content|box-shadow|border-radius)\\s*$")) {
+            if (line.matches("^[-*]?\\s*(div|span|p|a|ul|li|ol|nav|header|footer|section|article|aside|main|form|label|input|button|select|option|textarea|img|table|thead|tbody|tr|td|th|h1|h2|h3|h4|h5|h6|flex|grid|block|inline|none|auto|solid|absolute|relative|fixed|sticky|overflow|padding|margin|border|background|color|font|display|position|width|height|z-index|cursor|pointer|transform|transition|opacity|visibility|white-space|text-align|align-items|justify-content|box-shadow|border-radius|wrap|nowrap|center|start|end|between|around|stretch|baseline|row|column|number|text|password|email|checkbox|radio|submit|reset|card|container|box|icon|badge|chip|tag|image|avatar)\\s*$")) {
                 cssDomLines++;
                 continue;
             }

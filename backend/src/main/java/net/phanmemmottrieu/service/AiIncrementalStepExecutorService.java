@@ -356,12 +356,46 @@ public class AiIncrementalStepExecutorService {
 
     private Map<String, Object> handleSearchContext(ExecutionStep step, Map<String, Object> context) {
         Map<String, Object> result = new LinkedHashMap<>();
-        
         String query = getStringParam(step.params, "query", "");
+        String scopeParam = getStringParam(step.params, "scope", "");
         result.put("searchType", "lucene_vector");
         result.put("query", query);
-        result.put("message", "Vector search completed");
-        
+
+        if (businessMemoryService != null && !query.isBlank()) {
+            try {
+                String appId = String.valueOf(context.getOrDefault("appId", ""));
+                int k = 5;
+                List<AiBusinessMemoryVectorService.SearchHit> hits;
+                if (!scopeParam.isBlank()) {
+                    int scopeMask = 0;
+                    try { scopeMask = Integer.parseInt(String.valueOf(context.getOrDefault("scopeMask", "0"))); } catch (Exception ignored) {}
+                    hits = businessMemoryService.searchWithScopes(appId, query, k, scopeMask);
+                } else {
+                    hits = businessMemoryService.search(appId, query, k);
+                }
+                List<Map<String, Object>> hitMaps = hits.stream().map(h -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("source", h.sourceName());
+                    m.put("score", Math.round(h.score() * 1000.0f) / 1000.0f);
+                    m.put("summary", h.summary() != null ? h.summary() : "");
+                    String snip = h.content() != null ? h.content() : "";
+                    if (snip.length() > 300) snip = snip.substring(0, 300) + "\u2026";
+                    m.put("snippet", snip);
+                    return m;
+                }).toList();
+                result.put("hits", hitMaps);
+                result.put("hitCount", hitMaps.size());
+                result.put("message", "Found " + hitMaps.size() + " relevant context item(s) for: " + query);
+            } catch (Exception ex) {
+                result.put("hits", java.util.Collections.emptyList());
+                result.put("hitCount", 0);
+                result.put("message", "Search error: " + ex.getMessage());
+            }
+        } else {
+            result.put("hits", java.util.Collections.emptyList());
+            result.put("hitCount", 0);
+            result.put("message", query.isBlank() ? "No query provided" : "Search service unavailable");
+        }
         return result;
     }
 

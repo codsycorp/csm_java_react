@@ -530,6 +530,60 @@
 	padding: 4px 2px;
 }
 
+.quickFixPanel {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 8px 10px;
+	border-radius: 8px;
+	background: color-mix(in srgb, #eff6ff 82%, transparent);
+	border: 1px solid color-mix(in srgb, #93c5fd 36%, transparent);
+}
+
+.quickFixPanelHeader {
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 1.2;
+	color: var(--ant-color-text-secondary);
+}
+
+.quickFixList {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.quickFixItem {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 6px;
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--chat-bg) 70%, transparent);
+	border: 1px solid color-mix(in srgb, var(--chat-border) 70%, transparent);
+}
+
+.quickFixText {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.quickFixTitle {
+	font-size: 11px;
+	line-height: 1.3;
+	font-weight: 600;
+	color: var(--ant-color-text);
+}
+
+.quickFixDesc {
+	font-size: 10px;
+	line-height: 1.3;
+	color: var(--chat-muted);
+}
+
 /* ── Gemini progress card ───────────────────────────────── */
 .geminiProgressCard {
 	min-width: 0;
