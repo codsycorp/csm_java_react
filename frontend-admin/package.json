@@ -31,6 +31,8 @@
 		"eslint-config-inspector": "npx @eslint/config-inspector",
 		"lint": "eslint .",
 		"lint:fix": "eslint . --fix",
+		"lint:staged": "lint-staged",
+		"lint:staged:soft": "lint-staged || true",
 		"prepare": "simple-git-hooks",
 		"test": "vitest"
 	},
@@ -144,11 +146,12 @@
 		"vitest": "^v3.0.0-beta.4"
 	},
 	"simple-git-hooks": {
-		"pre-commit": "npx lint-staged",
+		"pre-commit": "pnpm lint:staged:soft",
+		"pre-push": "pnpm lint",
 		"commit-msg": "npx commitlint --edit"
 	},
 	"lint-staged": {
-		"*": [
+		"*.{js,jsx,ts,tsx,mjs,cjs}": [
 			"eslint --fix"
 		]
 	},
