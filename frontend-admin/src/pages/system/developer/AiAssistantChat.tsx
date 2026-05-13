@@ -113,7 +113,7 @@ interface AgenticStep {
 	stepIndex?: number
 	stepTotal?: number
 	patchValidator?: PatchValidatorMeta
-	status: "running" | "done"
+	status: "planned" | "running" | "done"
 	timestamp: number
 }
 
@@ -765,6 +765,10 @@ function sanitizeBusinessDisplayValue(key: string, renderedValue: string): strin
 	if (!normalizedValue)
 		return "";
 	if (normalizedKey.includes("luong_xu_ly") && /^\d{3,}$/.test(normalizedValue)) {
+		return "";
+	}
+	if ((normalizedKey.includes("rui_ro") || normalizedKey.includes("risk"))
+		&& /^(n\/a|na|none|khong\s+co|không\s+có)$/i.test(normalizedValue)) {
 		return "";
 	}
 	return normalizedValue;
@@ -4399,19 +4403,22 @@ export default function AiAssistantChat({
 								const currentStep = Number((evt as any).current || 0);
 								const totalSteps = Number((evt as any).total || 0);
 								const stepMessage = String((evt as any).message || localizedEvtMessage || "").trim();
-								const stepLabel = totalSteps > 0
-									? uiText(
-										`Thực thi bước ${Math.max(1, currentStep)}/${totalSteps}`,
-										`Executing step ${Math.max(1, currentStep)}/${totalSteps}`,
-										`执行步骤 ${Math.max(1, currentStep)}/${totalSteps}`,
-									)
+								const lifecycleStatusRaw = String((evt as any).status || "").trim().toLowerCase();
+								const lifecycleStatus: AgenticStep["status"] = lifecycleStatusRaw === "planned"
+									? "planned"
+									: (lifecycleStatusRaw === "done" ? "done" : "running");
+								const stepLabelPrefix = lifecycleStatus === "planned"
+									? uiText("Lên kế hoạch bước", "Planned step", "计划步骤")
 									: uiText("Thực thi bước", "Executing step", "执行步骤");
+								const stepLabel = totalSteps > 0
+									? `${stepLabelPrefix} ${Math.max(1, currentStep)}/${totalSteps}`
+									: stepLabelPrefix;
 								appendAgenticStep({
 									stage: `agentic_step_${Math.max(1, currentStep)}_${Math.max(1, totalSteps)}`,
-									icon: "🪜",
+									icon: lifecycleStatus === "planned" ? "🧭" : "🪜",
 									label: stepLabel,
 									detail: stepMessage || undefined,
-									status: "done",
+									status: lifecycleStatus,
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
@@ -5548,8 +5555,13 @@ export default function AiAssistantChat({
 																		<span style={{ color: "rgba(180,180,180,0.6)", marginLeft: 6, fontSize: 10 }}>{step.detail}</span>
 																	)}
 																</div>
-																<span style={{ fontSize: 11, color: step.status === "done" ? "#52c41a" : "#722ed1", flexShrink: 0, lineHeight: "15px" }}>
-																	{step.status === "done" ? "\u2713" : "\u2026"}
+																<span style={{
+																	fontSize: 11,
+																	color: step.status === "done" ? "#52c41a" : (step.status === "planned" ? "#8c8c8c" : "#722ed1"),
+																	flexShrink: 0,
+																	lineHeight: "15px",
+																}}>
+																	{step.status === "done" ? "\u2713" : (step.status === "planned" ? "\u25CB" : "\u2026")}
 																</span>
 															</div>
 														))}
@@ -5996,7 +6008,7 @@ export default function AiAssistantChat({
 																</Tooltip>
 															)}
 														</div>
-														<span>{step.status === "done" ? "✓" : "…"}</span>
+														<span>{step.status === "done" ? "✓" : (step.status === "planned" ? "○" : "…")}</span>
 													</div>
 													{step.detail && (
 														<div className={styles.stageTimelineMessage}>{step.detail}</div>

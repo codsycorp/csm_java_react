@@ -974,6 +974,42 @@ public class ApiSpringController {
     @Value("${ai.local.analyze.step-quality.low-threshold:45}")
     private int aiLocalAnalyzeStepQualityLowThreshold;
 
+    @Value("${ai.local.analyze.broad-detect.fast-heuristic.enabled:true}")
+    private boolean aiLocalAnalyzeBroadDetectFastHeuristicEnabled;
+
+    @Value("${ai.local.analyze.broad-detect.skip-llm-max-request-chars:420}")
+    private int aiLocalAnalyzeBroadDetectSkipLlmMaxRequestChars;
+
+    @Value("${ai.local.analyze.map-reduce.min-code-chars:30000}")
+    private int aiLocalAnalyzeMapReduceMinCodeChars;
+
+    @Value("${ai.local.agentic.step-verifier.enabled:true}")
+    private boolean aiLocalAgenticStepVerifierEnabled;
+
+    @Value("${ai.local.agentic.step-verifier.min-score:42}")
+    private int aiLocalAgenticStepVerifierMinScore;
+
+    @Value("${ai.local.agentic.step-verifier.max-anchors:4}")
+    private int aiLocalAgenticStepVerifierMaxAnchors;
+
+    @Value("${ai.local.runtime.weak-profile.enabled:true}")
+    private boolean aiLocalRuntimeWeakProfileEnabled;
+
+    @Value("${ai.local.runtime.weak-profile.cores-threshold:2}")
+    private int aiLocalRuntimeWeakProfileCoresThreshold;
+
+    @Value("${ai.local.runtime.weak-profile.heap-gb-threshold:6}")
+    private int aiLocalRuntimeWeakProfileHeapGbThreshold;
+
+    @Value("${ai.local.runtime.weak-profile.local-provider.max-prompt-chars:18000}")
+    private int aiLocalRuntimeWeakProfileLocalPromptMaxChars;
+
+    @Value("${ai.local.runtime.weak-profile.map-reduce.max-chunks:3}")
+    private int aiLocalRuntimeWeakProfileMapReduceMaxChunks;
+
+    @Value("${ai.local.runtime.weak-profile.map-reduce.chunk-chars:9000}")
+    private int aiLocalRuntimeWeakProfileMapReduceChunkChars;
+
     @Value("${ai.local.analyze.language-alignment.max-draft-chars:3200}")
     private int aiLocalAnalyzeLanguageAlignmentMaxDraftChars;
 
@@ -2217,7 +2253,8 @@ public class ApiSpringController {
                                     codeStreamOrchestration.planSteps,
                                     responseMode,
                                     contextType,
-                                    effectiveCodeContext);
+                                    effectiveCodeContext,
+                                    codeStreamMeta);
                             }
                             int localStreamChunks = emitSyntheticLocalStreamChunks(
                                 emitter,
@@ -2684,10 +2721,18 @@ public class ApiSpringController {
                     parseIntSafe(codeStreamMeta.get("textEditsRetryAttempts"), 0));
                 int streamedChars = parseIntSafe(codeStreamMeta.get("streamedChars"), rawResponse.length());
                 int streamChunkCount = parseIntSafe(codeStreamMeta.get("streamChunkCount"), 0);
+                int agenticStepAcceptedCount = parseIntSafe(codeStreamMeta.get("agenticStepAcceptedCount"), 0);
+                int agenticStepSkippedCount = parseIntSafe(codeStreamMeta.get("agenticStepSkippedCount"), 0);
+                int agenticStepLowConfidenceCount = parseIntSafe(codeStreamMeta.get("agenticStepLowConfidenceCount"), 0);
                 boolean streamAssemblyMismatch = streamedChars != rawResponse.length();
                 completion.put("streamedChars", streamedChars);
                 completion.put("streamChunkCount", streamChunkCount);
                 completion.put("streamAssemblyMismatch", streamAssemblyMismatch);
+                completion.put("agenticStepResultCount", parseIntSafe(codeStreamMeta.get("agenticStepResultCount"), 0));
+                completion.put("agenticStepAcceptedCount", agenticStepAcceptedCount);
+                completion.put("agenticStepSkippedCount", agenticStepSkippedCount);
+                completion.put("agenticStepLowConfidenceCount", agenticStepLowConfidenceCount);
+                completion.put("agenticStepSkippedReasons", codeStreamMeta.getOrDefault("agenticStepSkippedReasons", Collections.emptyMap()));
                 completion.put("localProviderPrimaryUsed", localProviderPrimaryUsed);
                 completion.put("promptOriginalChars", parseIntSafe(codeStreamMeta.get("promptOriginalChars"), promptOriginalChars));
                 completion.put("promptFinalChars", parseIntSafe(codeStreamMeta.get("promptFinalChars"), promptFinalChars));
@@ -2729,7 +2774,7 @@ public class ApiSpringController {
                 streamCompletedRef.set(true);
 
                 logger.info(
-                    "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType={} responseMode={} model={} promptChars={} promptOriginalChars={} promptCapChars={} promptTruncatedByCharCap={} menuChunkedContextApplied={} promptTokens={} outputChars={} streamedChars={} streamChunkCount={} streamAssemblyMismatch={} completionTokens={} estimatedCostUsd={} outputShape={} textEditsCount={} fallbackToFullCode={} textEditsRetryTriggered={} textEditsRetryAttempts={} attemptsUsed={} maxAttempts={} providerCallsEstimate={} switchedToDefaultModel={} providerFallbackUsed={} promptCache={} images={} elapsedMs={} inferenceElapsedMs={} localPreAnalysisElapsedMs={}",
+                    "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType={} responseMode={} model={} promptChars={} promptOriginalChars={} promptCapChars={} promptTruncatedByCharCap={} menuChunkedContextApplied={} promptTokens={} outputChars={} streamedChars={} streamChunkCount={} streamAssemblyMismatch={} completionTokens={} estimatedCostUsd={} outputShape={} textEditsCount={} fallbackToFullCode={} textEditsRetryTriggered={} textEditsRetryAttempts={} attemptsUsed={} maxAttempts={} providerCallsEstimate={} switchedToDefaultModel={} providerFallbackUsed={} promptCache={} images={} agenticStepResultCount={} agenticStepAcceptedCount={} agenticStepSkippedCount={} agenticStepLowConfidenceCount={} elapsedMs={} inferenceElapsedMs={} localPreAnalysisElapsedMs={}",
                     requestId,
                     appId,
                     contextType,
@@ -2759,6 +2804,10 @@ public class ApiSpringController {
                     providerFallbackUsed,
                     usePromptCache,
                     imageParts.size(),
+                    parseIntSafe(codeStreamMeta.get("agenticStepResultCount"), 0),
+                    agenticStepAcceptedCount,
+                    agenticStepSkippedCount,
+                    agenticStepLowConfidenceCount,
                     (System.currentTimeMillis() - requestStartedAtMs),
                     (System.currentTimeMillis() - inferenceStartedAtMs),
                     localPreAnalysisElapsedMs);
@@ -2805,6 +2854,11 @@ public class ApiSpringController {
                 codeTelemetry.put("switchedToDefaultModel", switchedToDefaultModel);
                 codeTelemetry.put("providerFallbackUsed", providerFallbackUsed);
                 codeTelemetry.put("localProviderPrimaryUsed", localProviderPrimaryUsed);
+                codeTelemetry.put("agenticStepResultCount", parseIntSafe(codeStreamMeta.get("agenticStepResultCount"), 0));
+                codeTelemetry.put("agenticStepAcceptedCount", agenticStepAcceptedCount);
+                codeTelemetry.put("agenticStepSkippedCount", agenticStepSkippedCount);
+                codeTelemetry.put("agenticStepLowConfidenceCount", agenticStepLowConfidenceCount);
+                codeTelemetry.put("agenticStepSkippedReasons", codeStreamMeta.getOrDefault("agenticStepSkippedReasons", Collections.emptyMap()));
                 codeTelemetry.put("estimatedSavedTokens", localPreAnalysisSavedTokensEstimate);
                 codeTelemetry.put("localPreAnalysisAttempted", codeStreamPreAnalysis.attempted());
                 codeTelemetry.put("localPreAnalysisHandled", codeStreamPreAnalysis.handledLocally());
@@ -4361,9 +4415,19 @@ public class ApiSpringController {
             List<String> planSteps,
             String responseMode,
             String contextType,
-            String effectiveCodeContext) {
+            String effectiveCodeContext,
+            Map<String, Object> stepStatsOut) {
         String safeText = String.valueOf(providerText == null ? "" : providerText).trim();
-        if (safeText.isBlank()) return 0;
+        if (safeText.isBlank()) {
+            writeAgenticStepStats(stepStatsOut, 0, 0, 0, 0, Collections.emptyMap());
+            return 0;
+        }
+
+        int emitted = 0;
+        int accepted = 0;
+        int skipped = 0;
+        int lowConfidence = 0;
+        Map<String, Integer> reasonCounts = new LinkedHashMap<>();
 
         boolean isEdit = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
             && !isMenuJsonContext(contextType);
@@ -4384,7 +4448,27 @@ public class ApiSpringController {
                     String desc = (planSize > 0 && i < planSize)
                         ? planSteps.get(i)
                         : "Áp dụng thay đổi " + (i + 1);
-                    int qualityScore = Math.min(100, 70 + (String.valueOf(textEdits.get(i)).length() > 40 ? 15 : 0));
+                    StepEvidenceVerdict evidence = verifyEditStepEvidence(textEdits.get(i), effectiveCodeContext);
+                    int qualityScore = evidence.score();
+                    if (aiLocalAgenticStepVerifierEnabled && !evidence.accepted()) {
+                        sendEvent(emitter, jsonOf(
+                            "stage", "agentic_step_result",
+                            "requestId", requestId,
+                            "stepIndex", i + 1,
+                            "stepTotal", total,
+                            "stepDescription", desc,
+                            "qualityScore", qualityScore,
+                            "lowConfidence", true,
+                            "skipped", true,
+                            "evidenceAnchors", evidence.anchors(),
+                            "evidenceReason", evidence.reason(),
+                            "partial", i < total - 1));
+                        emitted += 1;
+                        skipped += 1;
+                        lowConfidence += 1;
+                        reasonCounts.merge(String.valueOf(evidence.reason() == null ? "unknown" : evidence.reason()), 1, Integer::sum);
+                        continue;
+                    }
                     sendEvent(emitter, jsonOf(
                         "stage", "agentic_step_result",
                         "requestId", requestId,
@@ -4393,12 +4477,20 @@ public class ApiSpringController {
                         "stepDescription", desc,
                         "qualityScore", qualityScore,
                         "lowConfidence", qualityScore < aiLocalAnalyzeStepQualityLowThreshold,
+                        "evidenceAnchors", evidence.anchors(),
                         "patchValidator", patchValidation.toMetaMap(),
                         "textEdits", List.of(textEdits.get(i)),
                         "partial", i < total - 1));
+                    emitted += 1;
+                    accepted += 1;
+                    if (qualityScore < aiLocalAnalyzeStepQualityLowThreshold) {
+                        lowConfidence += 1;
+                    }
                 }
+                writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
                 return total;
             } catch (Exception ignored) {
+                writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
                 return 0;
             }
         }
@@ -4413,15 +4505,37 @@ public class ApiSpringController {
                     sections.add(trimmed);
                 }
             }
-            if (sections.size() <= 1) return 0; // Nothing to split — single-block text, keep as-is
+            if (sections.size() <= 1) {
+                writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
+                return 0; // Nothing to split — single-block text, keep as-is
+            }
             int total = sections.size();
             for (int i = 0; i < total; i++) {
                 String desc = (planSize > 0 && i < planSize)
                     ? planSteps.get(i)
                     : "Phân tích phần " + (i + 1);
-                int qualityScore = aiLocalAnalyzeStepQualityEnabled
-                    ? scoreAnalyzeSectionQuality(sections.get(i), effectiveCodeContext, i == 0)
-                    : 60;
+                String sectionText = sections.get(i);
+                StepEvidenceVerdict evidence = verifyAnalyzeStepEvidence(sectionText, effectiveCodeContext, i == 0);
+                int qualityScore = evidence.score();
+                if (aiLocalAgenticStepVerifierEnabled && !evidence.accepted()) {
+                    sendEvent(emitter, jsonOf(
+                        "stage", "agentic_step_result",
+                        "requestId", requestId,
+                        "stepIndex", i + 1,
+                        "stepTotal", total,
+                        "stepDescription", desc,
+                        "qualityScore", qualityScore,
+                        "lowConfidence", true,
+                        "skipped", true,
+                        "evidenceAnchors", evidence.anchors(),
+                        "evidenceReason", evidence.reason(),
+                        "partial", i < total - 1));
+                    emitted += 1;
+                    skipped += 1;
+                    lowConfidence += 1;
+                    reasonCounts.merge(String.valueOf(evidence.reason() == null ? "unknown" : evidence.reason()), 1, Integer::sum);
+                    continue;
+                }
                 sendEvent(emitter, jsonOf(
                     "stage", "agentic_step_result",
                     "requestId", requestId,
@@ -4430,13 +4544,38 @@ public class ApiSpringController {
                     "stepDescription", desc,
                     "qualityScore", qualityScore,
                     "lowConfidence", qualityScore < aiLocalAnalyzeStepQualityLowThreshold,
-                    "text", sections.get(i),
+                    "evidenceAnchors", evidence.anchors(),
+                    "text", sectionText,
                     "partial", i < total - 1));
+                emitted += 1;
+                accepted += 1;
+                if (qualityScore < aiLocalAnalyzeStepQualityLowThreshold) {
+                    lowConfidence += 1;
+                }
             }
+            writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
             return total;
         }
 
+        writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
         return 0;
+    }
+
+    private void writeAgenticStepStats(
+            Map<String, Object> stepStatsOut,
+            int emitted,
+            int accepted,
+            int skipped,
+            int lowConfidence,
+            Map<String, Integer> reasonCounts) {
+        if (stepStatsOut == null) {
+            return;
+        }
+        stepStatsOut.put("agenticStepResultCount", Math.max(0, emitted));
+        stepStatsOut.put("agenticStepAcceptedCount", Math.max(0, accepted));
+        stepStatsOut.put("agenticStepSkippedCount", Math.max(0, skipped));
+        stepStatsOut.put("agenticStepLowConfidenceCount", Math.max(0, lowConfidence));
+        stepStatsOut.put("agenticStepSkippedReasons", reasonCounts == null ? Collections.emptyMap() : new LinkedHashMap<>(reasonCounts));
     }
 
     @FunctionalInterface
@@ -5057,6 +5196,9 @@ public class ApiSpringController {
         } else {
             hardCap = Math.min(configured, 18000);
         }
+        if (isWeakLocalRuntime()) {
+            hardCap = Math.min(hardCap, Math.max(6000, aiLocalRuntimeWeakProfileLocalPromptMaxChars));
+        }
         if (safePrompt.length() <= hardCap) {
             return safePrompt;
         }
@@ -5079,7 +5221,7 @@ public class ApiSpringController {
             return false;
         }
         int codeChars = String.valueOf(codeContext == null ? "" : codeContext).length();
-        return codeChars > 120000;
+        return codeChars >= Math.max(12000, aiLocalAnalyzeMapReduceMinCodeChars);
     }
 
     private String runLocalProviderMapReduceBroadAnalysis(
@@ -5103,13 +5245,23 @@ public class ApiSpringController {
             condensed = truncateMiddle(sourceCode, 52000);
         }
 
+        int adaptiveChunkChars = aiLocalLlamaContextWindow >= 12000 ? 14000 : 10000;
+        int adaptiveMaxChunks = aiLocalLlamaContextWindow >= 12000 ? 5 : 4;
+        int adaptiveOverlap = aiLocalLlamaContextWindow >= 12000 ? 1200 : 800;
+
+        if (isWeakLocalRuntime()) {
+            adaptiveChunkChars = Math.min(adaptiveChunkChars, Math.max(4000, aiLocalRuntimeWeakProfileMapReduceChunkChars));
+            adaptiveMaxChunks = Math.min(adaptiveMaxChunks, Math.max(2, aiLocalRuntimeWeakProfileMapReduceMaxChunks));
+            adaptiveOverlap = Math.min(adaptiveOverlap, 700);
+        }
+
         List<String> chunks = splitMapReduceChunks(
             condensed,
-            14000,
-            5,
-            1200);
+            adaptiveChunkChars,
+            adaptiveMaxChunks,
+            adaptiveOverlap);
         if (chunks.isEmpty()) {
-            chunks = List.of(truncateMiddle(condensed, 14000));
+            chunks = List.of(truncateMiddle(condensed, adaptiveChunkChars));
         }
 
         sendEvent(emitter, jsonOf(
@@ -7653,6 +7805,16 @@ public class ApiSpringController {
             return false;
         }
 
+        if (aiLocalAnalyzeBroadDetectFastHeuristicEnabled) {
+            String heuristicDecision = detectBroadAnalysisRequestWithHeuristic(text);
+            if ("broad".equals(heuristicDecision)) {
+                return true;
+            }
+            if ("narrow".equals(heuristicDecision)) {
+                return false;
+            }
+        }
+
         String inferred = detectBroadAnalysisRequestWithLocalAI(text, false);
         if ("broad".equals(inferred)) {
             return true;
@@ -7670,6 +7832,44 @@ public class ApiSpringController {
 
         boolean broadByStructure = text.length() >= 70 || countSentenceLikeSeparators(text) >= 2;
         return broadByStructure;
+    }
+
+    private String detectBroadAnalysisRequestWithHeuristic(String requestText) {
+        String text = String.valueOf(requestText == null ? "" : requestText).trim().toLowerCase(Locale.ROOT);
+        if (text.isBlank()) {
+            return "";
+        }
+
+        int broadHits = 0;
+        for (String token : List.of(
+                "toan bo", "toàn bộ", "tong the", "tổng thể", "end-to-end", "toi uu tong the",
+                "phan tich toan", "phân tích toàn", "luong xu ly", "luồng xử lý", "business logic",
+                "kien truc", "kiến trúc", "dong du lieu", "dòng dữ liệu", "module lien quan", "module liên quan")) {
+            if (text.contains(token)) {
+                broadHits++;
+            }
+        }
+
+        int narrowHits = 0;
+        for (String token : List.of(
+                "ham ", "hàm ", "function ", "method ", "class ", "dong ", "dòng ",
+                "bug", "fix", "sua", "sửa", "refactor", "variable", "bien ", "biến ",
+                "regex", "sql", "api ")) {
+            if (text.contains(token)) {
+                narrowHits++;
+            }
+        }
+
+        if (broadHits >= 2 && narrowHits <= 1) {
+            return "broad";
+        }
+        if (narrowHits >= 2 && broadHits == 0) {
+            return "narrow";
+        }
+        if (text.length() <= 40 && broadHits == 0) {
+            return "narrow";
+        }
+        return "";
     }
 
     private int countSentenceLikeSeparators(String text) {
@@ -7693,6 +7893,14 @@ public class ApiSpringController {
         String safe = truncateMiddle(String.valueOf(requestText == null ? "" : requestText).trim(), 280);
         if (safe.isBlank()) {
             return "";
+        }
+
+        // Avoid extra local-LLM classify round for short/obvious requests on weak machines.
+        if (safe.length() <= Math.max(120, aiLocalAnalyzeBroadDetectSkipLlmMaxRequestChars)) {
+            String quickDecision = detectBroadAnalysisRequestWithHeuristic(safe);
+            if (!quickDecision.isBlank()) {
+                return quickDecision;
+            }
         }
 
         String cacheKey = safe.length() > 140 ? safe.substring(0, 140) : safe;
@@ -7753,6 +7961,80 @@ public class ApiSpringController {
             return "narrow";
         }
         return "";
+    }
+
+    private record StepEvidenceVerdict(boolean accepted, int score, List<String> anchors, String reason) {}
+
+    private StepEvidenceVerdict verifyEditStepEvidence(Map<String, Object> edit, String codeContext) {
+        List<String> anchors = collectStepEvidenceAnchors(
+            String.valueOf(edit == null ? "" : edit),
+            String.valueOf(codeContext == null ? "" : codeContext),
+            aiLocalAgenticStepVerifierMaxAnchors);
+        int score = 35;
+        if (edit != null) {
+            int start = parseIntSafe(edit.get("startLine"), 0);
+            int end = parseIntSafe(edit.get("endLine"), 0);
+            if (start > 0 || end > 0) {
+                score += 20;
+            }
+            String replacement = String.valueOf(edit.getOrDefault("replacement", ""));
+            if (!replacement.isBlank()) {
+                score += Math.min(12, replacement.length() > 60 ? 12 : 8);
+            }
+        }
+        score += Math.min(35, anchors.size() * 9);
+        boolean accepted = score >= Math.max(20, aiLocalAgenticStepVerifierMinScore);
+        String reason = accepted ? "accepted" : "insufficient_code_evidence";
+        return new StepEvidenceVerdict(accepted, Math.max(0, Math.min(100, score)), anchors, reason);
+    }
+
+    private StepEvidenceVerdict verifyAnalyzeStepEvidence(String sectionText, String codeContext, boolean firstSection) {
+        int quality = aiLocalAnalyzeStepQualityEnabled
+            ? scoreAnalyzeSectionQuality(sectionText, codeContext, firstSection)
+            : 60;
+        List<String> anchors = collectStepEvidenceAnchors(
+            String.valueOf(sectionText == null ? "" : sectionText),
+            String.valueOf(codeContext == null ? "" : codeContext),
+            aiLocalAgenticStepVerifierMaxAnchors);
+        int score = quality + Math.min(18, anchors.size() * 4);
+        boolean accepted = score >= Math.max(20, aiLocalAgenticStepVerifierMinScore);
+        String reason = accepted ? "accepted" : "insufficient_evidence_in_section";
+        return new StepEvidenceVerdict(accepted, Math.max(0, Math.min(100, score)), anchors, reason);
+    }
+
+    private List<String> collectStepEvidenceAnchors(String content, String codeContext, int maxAnchors) {
+        String text = String.valueOf(content == null ? "" : content);
+        String code = String.valueOf(codeContext == null ? "" : codeContext);
+        if (text.isBlank() || code.isBlank()) {
+            return List.of();
+        }
+        LinkedHashSet<String> anchors = new LinkedHashSet<>();
+        Matcher m = Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]{2,}").matcher(text);
+        String lowerCode = code.toLowerCase(Locale.ROOT);
+        while (m.find() && anchors.size() < Math.max(1, maxAnchors)) {
+            String token = String.valueOf(m.group(0) == null ? "" : m.group(0)).trim();
+            if (token.isBlank()) {
+                continue;
+            }
+            String lower = token.toLowerCase(Locale.ROOT);
+            if (lower.length() < 3 || lower.matches("(the|and|for|with|this|that|from|into|void|true|false|null|return|class|public|private|static|const|function|analysis|logic)") ) {
+                continue;
+            }
+            if (lowerCode.contains(lower)) {
+                anchors.add(token);
+            }
+        }
+        return new ArrayList<>(anchors);
+    }
+
+    private boolean isWeakLocalRuntime() {
+        if (!aiLocalRuntimeWeakProfileEnabled) {
+            return false;
+        }
+        int cores = Runtime.getRuntime().availableProcessors();
+        long heapGb = Math.max(1L, Runtime.getRuntime().maxMemory() / (1024L * 1024L * 1024L));
+        return cores <= Math.max(1, aiLocalRuntimeWeakProfileCoresThreshold)
+            || heapGb <= Math.max(2, aiLocalRuntimeWeakProfileHeapGbThreshold);
     }
 
     /**
@@ -10307,6 +10589,11 @@ public class ApiSpringController {
                 || lowered.startsWith("source=primary_flow")
                 || lowered.startsWith("source=multimodal")
                 || lowered.startsWith("source: dyn_ctx_")
+                || lowered.startsWith("request=")
+                || lowered.startsWith("intentkeywords=")
+                || lowered.startsWith("codesymbols=")
+                || lowered.startsWith("contexttype=")
+                || lowered.startsWith("tasktype=")
                 || lowered.startsWith("orchestration_dynamic_memory_source=")
                 || lowered.startsWith("[reused_context]")
                 || lowered.startsWith("[session_continuity]")
@@ -10315,6 +10602,7 @@ public class ApiSpringController {
                 || lowered.startsWith("### turn [")
                 || lowered.startsWith("localscanner")
                 || lowered.startsWith("scanner_")
+                || lowered.matches("^\\d{1,2}:\\d{2}(:\\d{2})?\\s*(am|pm)?$")
                 || lowered.startsWith("input", 0) && lowered.contains("checked:");
             if (leakedDynSource) {
                 leakTailBudget = Math.max(leakTailBudget, 4);
