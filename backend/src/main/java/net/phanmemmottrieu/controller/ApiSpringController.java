@@ -959,6 +959,9 @@ public class ApiSpringController {
     @Value("${ai.local.analyze.low-confidence-retry.enabled:true}")
     private boolean aiLocalAnalyzeLowConfidenceRetryEnabled;
 
+    @Value("${ai.local.analyze.broad-gap-fill.enabled:false}")
+    private boolean aiLocalAnalyzeBroadGapFillEnabled;
+
     @Value("${ai.local.analyze.low-confidence-retry.min-score:56}")
     private int aiLocalAnalyzeLowConfidenceRetryMinScore;
 
@@ -2015,7 +2018,7 @@ public class ApiSpringController {
                         providerText = normalizeAnalyzeOutputContract(providerText, message, responseMode, contextType, effectiveCodeContext);
                         providerText = sanitizePromptEchoLeakage(providerText);
                         providerText = stripAnalyzeLeakedDynamicContext(providerText);
-                        if (shouldRunBroadAnalysisGapFill(
+                        if (aiLocalAnalyzeBroadGapFillEnabled && shouldRunBroadAnalysisGapFill(
                                 message,
                                 responseMode,
                                 contextType,
@@ -2042,7 +2045,18 @@ public class ApiSpringController {
                                 if ((gapText == null || gapText.isBlank()) && gapRaw != null) {
                                     gapText = gapRaw.trim();
                                 }
-                                providerText = mergeBroadAnalysisGapFill(providerText, gapText);
+                                // Quality gate: reject gap fill if it's low-signal (e.g. model 1.5B hallucinating repeated blocks)
+                                String cleanGap = dedupeAnalyzeNarrativeBlocks(String.valueOf(gapText == null ? "" : gapText));
+                                boolean gapLowSignal = cleanGap.isBlank()
+                                    || isLowSignalAnalyzeOutput(cleanGap)
+                                    || cleanGap.length() < 60;
+                                if (!gapLowSignal) {
+                                    providerText = mergeBroadAnalysisGapFill(providerText, cleanGap);
+                                    // Re-normalize after merge so the appended section goes through cleanup
+                                    providerText = normalizeAnalyzeOutputContract(providerText, message, responseMode, contextType, effectiveCodeContext);
+                                    providerText = sanitizePromptEchoLeakage(providerText);
+                                    providerText = stripAnalyzeLeakedDynamicContext(providerText);
+                                }
                             }
                         }
 
@@ -2190,8 +2204,9 @@ public class ApiSpringController {
                             }
                         }
 
-                        if (localAccepted) {
-                            sendEvent(emitter, jsonOf(
+                        if (localAccepted
+                                && aiLocalAnalyzeBroadGapFillEnabled
+                                && shouldRunBroadAnalysisGapFill(
                                 "stage", "streaming_started",
                                 "requestId", requestId,
                                 "model", "local_provider",
@@ -10181,20 +10196,18 @@ public class ApiSpringController {
             if (line.startsWith("Tóm tắt yêu cầu:")) {
                 continue;
             }
-            if (lowered.startsWith("bổ sung phần còn thiếu")) {
+            if (lowered.startsWith("bổ sung phần còn thiếu")
+                    || lowered.startsWith("bo sung phan con thieu")) {
                 skipBoilerplate = true;
                 continue;
             }
             if (skipBoilerplate) {
-                if (line.startsWith("##") || line.matches("^\\d+\\)\\s+.*") || line.isBlank()) {
+                // Only end the boilerplate skip on a real ## heading.
+                // Numbered items inside the boilerplate (e.g. "1) rui_ro_va_goi_y") must stay skipped.
+                if (line.startsWith("##")) {
                     skipBoilerplate = false;
+                    // fall through to emit this heading
                 } else {
-                    continue;
-                }
-            }
-            if (line.matches("^\\d+\\)\\s+.*")) {
-                int section = parseLeadingSectionNumber(line);
-                if (section >= 1 && section <= 10) {
                     continue;
                 }
             }
