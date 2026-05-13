@@ -9825,18 +9825,27 @@ public class ApiSpringController {
         if (safe.length() >= 260) score += 12;
         if (safe.length() >= 700) score += 8;
         if (safe.contains("## ")) score += 12;
-        if (safe.toLowerCase(Locale.ROOT).contains("logic") || safe.toLowerCase(Locale.ROOT).contains("nghiệp vụ")) score += 8;
-        if (safe.toLowerCase(Locale.ROOT).contains("api") || safe.toLowerCase(Locale.ROOT).contains("side effect")) score += 8;
+
+        int contentLines = 0;
+        int evidenceLines = 0;
+        for (String rawLine : safe.split("\\n")) {
+            String line = String.valueOf(rawLine == null ? "" : rawLine).trim();
+            if (line.isBlank()) {
+                continue;
+            }
+            contentLines++;
+            if (EVIDENCE_CODE_REF_PATTERN.matcher(line).find()) {
+                evidenceLines++;
+            }
+        }
+        if (contentLines > 0) {
+            double evidenceDensity = (double) evidenceLines / contentLines;
+            if (evidenceDensity >= 0.20d) score += 10;
+            if (evidenceDensity >= 0.35d) score += 6;
+        }
 
         int sectionQuality = scoreAnalyzeSectionQuality(safe, currentCode, true);
         score += Math.max(0, Math.min(28, sectionQuality / 3));
-
-        String request = String.valueOf(requestText == null ? "" : requestText).toLowerCase(Locale.ROOT);
-        if (request.contains("toàn bộ logic") || request.contains("phan tich") || request.contains("phân tích")) {
-            if (safe.toLowerCase(Locale.ROOT).contains("luồng xử lý") || safe.toLowerCase(Locale.ROOT).contains("main processing flow")) {
-                score += 8;
-            }
-        }
 
         if (isLowSignalAnalyzeOutput(safe)) {
             score -= 28;
@@ -9857,10 +9866,29 @@ public class ApiSpringController {
         if (safe.length() >= 280) score += 12;
         if (safe.contains("- ") || safe.matches("(?s).*(\\d+\\.|\\d+\\)).*")) score += 8;
         String lower = safe.toLowerCase(Locale.ROOT);
-        if (lower.contains("flow") || lower.contains("luồng") || lower.contains("xử lý")) score += 8;
-        if (lower.contains("state") || lower.contains("props") || lower.contains("dữ liệu") || lower.contains("data")) score += 8;
-        if (lower.contains("logic") || lower.contains("nghiệp vụ")) score += 10;
-        if (lower.contains("api") || lower.contains("side effect") || lower.contains("rủi ro") || lower.contains("risk")) score += 10;
+
+        int contentLines = 0;
+        int evidenceLines = 0;
+        int listLines = 0;
+        for (String rawLine : safe.split("\\n")) {
+            String line = String.valueOf(rawLine == null ? "" : rawLine).trim();
+            if (line.isBlank()) {
+                continue;
+            }
+            contentLines++;
+            if (EVIDENCE_CODE_REF_PATTERN.matcher(line).find()) {
+                evidenceLines++;
+            }
+            if (line.startsWith("-") || line.startsWith("*") || line.matches("^\\d+[.)].+")) {
+                listLines++;
+            }
+        }
+        if (listLines >= 2) score += 8;
+        if (evidenceLines >= 1) score += 10;
+        if (contentLines > 0) {
+            double evidenceDensity = (double) evidenceLines / contentLines;
+            if (evidenceDensity >= 0.25d) score += 8;
+        }
 
         String code = String.valueOf(currentCode == null ? "" : currentCode);
         if (!code.isBlank()) {
@@ -9875,7 +9903,7 @@ public class ApiSpringController {
             score += Math.min(18, evidenceHits * 3);
         }
 
-        if (firstSection && (lower.contains("bổ sung phần còn thiếu") || lower.contains("ban chua") || lower.contains("bạn chưa"))) {
+        if (firstSection && (lower.contains("bổ sung phần còn thiếu") || lower.contains("bo sung phan con thieu"))) {
             score -= 26;
         }
         if (looksLikeCssDomFragment(safe)) {
