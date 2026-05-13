@@ -64,6 +64,7 @@ import net.phanmemmottrieu.service.AiPromptBudgetService;
 import net.phanmemmottrieu.service.LlamaCppNativeService;
 import net.phanmemmottrieu.service.LargeFileChunkingService;
 import net.phanmemmottrieu.service.AiPatternCacheService;
+import net.phanmemmottrieu.service.AiQualityMetricsService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -420,6 +421,7 @@ public class ApiSpringController {
     private final AiPatternCacheService aiPatternCacheService;
     @SuppressWarnings("unused")
     private final LargeFileChunkingService largeFileChunkingService;
+    private final AiQualityMetricsService aiQualityMetricsService;
 
     // In-memory ring buffer for prompt-budget debug (max 200 entries, auto-rotated)
     private static final int PROMPT_DEBUG_LOG_MAX = 200;
@@ -549,6 +551,15 @@ public class ApiSpringController {
     @Value("${ai.assistant.local-provider.require-structured-for-edit:true}")
     private boolean aiAssistantLocalProviderRequireStructuredForEdit;
 
+    @Value("${ai.assistant.analyze.evidence-gate.enabled:true}")
+    private boolean aiAssistantAnalyzeEvidenceGateEnabled;
+
+    @Value("${ai.assistant.analyze.evidence-gate.min-score:36}")
+    private int aiAssistantAnalyzeEvidenceGateMinScore;
+
+    @Value("${ai.assistant.analyze.evidence-gate.min-evidence-tokens:3}")
+    private int aiAssistantAnalyzeEvidenceGateMinEvidenceTokens;
+
     @Value("${ai.assistant.response-mode.local-intent-enabled:true}")
     private boolean aiAssistantResponseModeLocalIntentEnabled;
 
@@ -643,6 +654,39 @@ public class ApiSpringController {
 
     @Value("${ai.code-stream.edit.text-edits-retry.max-extra-attempts:1}")
     private int aiCodeStreamEditTextEditsRetryMaxExtraAttempts;
+
+    @Value("${ai.code-stream.edit.delta-first.enabled:true}")
+    private boolean aiCodeStreamEditDeltaFirstEnabled;
+
+    @Value("${ai.code-stream.edit.anti-echo.enabled:true}")
+    private boolean aiCodeStreamEditAntiEchoEnabled;
+
+    @Value("${ai.code-stream.edit.anti-echo.max-duplicate-edits:1}")
+    private int aiCodeStreamEditAntiEchoMaxDuplicateEdits;
+
+    @Value("${ai.code-stream.edit.retry-policy.enabled:true}")
+    private boolean aiCodeStreamEditRetryPolicyEnabled;
+
+    @Value("${ai.code-stream.edit.retry-policy.empty-output-max-retries:2}")
+    private int aiCodeStreamEditRetryPolicyEmptyOutputMaxRetries;
+
+    @Value("${ai.code-stream.edit.retry-policy.format-invalid-max-retries:2}")
+    private int aiCodeStreamEditRetryPolicyFormatInvalidMaxRetries;
+
+    @Value("${ai.code-stream.edit.retry-policy.full-code-fallback-max-retries:1}")
+    private int aiCodeStreamEditRetryPolicyFullCodeFallbackMaxRetries;
+
+    @Value("${ai.code-stream.edit.retry-policy.low-substance-max-retries:1}")
+    private int aiCodeStreamEditRetryPolicyLowSubstanceMaxRetries;
+
+    @Value("${ai.code-stream.edit.retry-policy.low-quality-max-retries:1}")
+    private int aiCodeStreamEditRetryPolicyLowQualityMaxRetries;
+
+    @Value("${ai.code-stream.edit.retry-policy.insufficient-evidence-max-retries:1}")
+    private int aiCodeStreamEditRetryPolicyInsufficientEvidenceMaxRetries;
+
+    @Value("${ai.code-stream.edit.retry-policy.default-max-retries:1}")
+    private int aiCodeStreamEditRetryPolicyDefaultMaxRetries;
 
     @Value("${ai.code-stream.edit.patch-validator.enabled:true}")
     private boolean aiCodeStreamEditPatchValidatorEnabled;
@@ -992,6 +1036,18 @@ public class ApiSpringController {
     @Value("${ai.local.agentic.step-verifier.max-anchors:4}")
     private int aiLocalAgenticStepVerifierMaxAnchors;
 
+    @Value("${ai.agentic.approval.high-risk-required:true}")
+    private boolean aiAgenticApprovalHighRiskRequired;
+
+    @Value("${ai.agentic.approval.medium-risk-required:false}")
+    private boolean aiAgenticApprovalMediumRiskRequired;
+
+    @Value("${ai.local.evidence-gate.enabled:true}")
+    private boolean aiLocalEvidenceGateEnabled;
+
+    @Value("${ai.local.evidence-gate.min-score:50}")
+    private int aiLocalEvidenceGateMinScore;
+
     @Value("${ai.local.runtime.weak-profile.enabled:true}")
     private boolean aiLocalRuntimeWeakProfileEnabled;
 
@@ -1220,7 +1276,8 @@ public class ApiSpringController {
             AiPromptBudgetService aiPromptBudgetService,
             @Autowired(required = false) LlamaCppNativeService llamaCppNativeService,
             AiPatternCacheService aiPatternCacheService,
-            @Autowired(required = false) LargeFileChunkingService largeFileChunkingService
+            @Autowired(required = false) LargeFileChunkingService largeFileChunkingService,
+            AiQualityMetricsService aiQualityMetricsService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -1253,6 +1310,7 @@ public class ApiSpringController {
         this.llamaCppNativeService = llamaCppNativeService;
         this.aiPatternCacheService = aiPatternCacheService;
         this.largeFileChunkingService = largeFileChunkingService;
+        this.aiQualityMetricsService = aiQualityMetricsService;
     }
 
     @PostMapping(
@@ -1671,6 +1729,25 @@ public class ApiSpringController {
                             "retrievalAdaptiveReasons", orchestrationStats.getOrDefault("scopedRagAdaptiveReasons", List.of())
                         ));
 
+                        boolean planSchemaEnabled = bool(orchestrationStats.get("planSchemaEnabled"), false);
+                        int planSchemaScore = parseIntSafe(orchestrationStats.get("planSchemaScore"), 0);
+                        int planSchemaMinScore = parseIntSafe(orchestrationStats.get("planSchemaMinScore"), 0);
+                        boolean planSchemaPassed = bool(orchestrationStats.get("planSchemaPassed"), true);
+                        Object planSchemaMissing = orchestrationStats.getOrDefault("planSchemaMissing", List.of());
+                        if (planSchemaEnabled) {
+                            sendEvent(emitter, jsonOf(
+                                "stage", "agentic_plan_schema",
+                                "status", planSchemaPassed ? "passed" : "needs_refine",
+                                "requestId", requestId,
+                                "score", planSchemaScore,
+                                "minScore", planSchemaMinScore,
+                                "missing", planSchemaMissing,
+                                "message", planSchemaPassed
+                                    ? "Planner step schema đạt chuẩn"
+                                    : "Planner step schema thiếu tín hiệu, đã thêm remediation"
+                            ));
+                        }
+
                         List<String> planSteps = codeStreamOrchestration.planSteps == null ? List.of() : codeStreamOrchestration.planSteps;
                         emitAgenticStepLifecycleToSse(emitter, requestId, planSteps, 6);
 
@@ -1856,6 +1933,7 @@ public class ApiSpringController {
                 }
 
                 Map<String, Object> codeStreamMeta = new LinkedHashMap<>();
+                codeStreamMeta.put("appId", appId);
                 codeStreamMeta.put("promptOriginalChars", promptOriginalChars);
                 codeStreamMeta.put("promptFinalChars", promptFinalChars);
                 codeStreamMeta.put("promptCapChars", effectivePromptCharCap);
@@ -2164,14 +2242,58 @@ public class ApiSpringController {
                             localAccepted = false;
                         }
 
+                        LocalOutputEvidenceGate localEvidenceGate = evaluateLocalOutputEvidenceGate(
+                            providerText,
+                            responseMode,
+                            contextType,
+                            effectiveCodeContext
+                        );
+                        if (localAccepted && aiLocalEvidenceGateEnabled && !localEvidenceGate.passed()) {
+                            localAccepted = false;
+                            recordQualityEvidenceGate("local_output:" + localEvidenceGate.reason(), appId);
+                            sendEvent(emitter, jsonOf(
+                                "stage", "model_switch",
+                                "status", "local_provider_evidence_gate_failed",
+                                "requestId", requestId,
+                                "model", "local_provider",
+                                "modelDecisionStep", "guardrail",
+                                "modelDecisionReason", localEvidenceGate.reason(),
+                                "decision_step", "guardrail",
+                                "reason_code", localEvidenceGate.reason(),
+                                "evidenceGateScore", localEvidenceGate.score(),
+                                "evidenceGateMinScore", Math.max(20, Math.min(95, aiLocalEvidenceGateMinScore)),
+                                "evidenceAnchors", localEvidenceGate.anchors(),
+                                "message", "Output local thiếu bằng chứng theo currentCode, chuyển sang retry/fallback để tránh patch suy đoán."));
+                        }
+
                         if (!localAccepted
                                 && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
                                 && !isMenuJsonContext(contextType)
                                 && aiLocalEditAdaptiveRetryEnabled) {
                             int maxAdaptiveAttempts = Math.max(1, aiLocalEditAdaptiveRetryMaxAttempts);
                             int previousScore = scoreLocalEditOutputQuality(providerText, effectiveCodeContext, contextType, responseMode);
+                            Map<String, Integer> retryReasonCounters = new HashMap<>();
                             for (int retryIndex = 1; retryIndex <= maxAdaptiveAttempts; retryIndex++) {
                                 String retryReason = classifyEditRetryReason(providerText, effectiveCodeContext, contextType, responseMode);
+                                String retryReasonKey = normalizeEditRetryReasonCode(retryReason);
+                                int reasonUsed = retryReasonCounters.getOrDefault(retryReasonKey, 0);
+                                int reasonBudget = resolveEditRetryBudgetByReason(retryReasonKey);
+                                if (reasonUsed >= reasonBudget) {
+                                    sendEvent(emitter, jsonOf(
+                                        "stage", "model_switch",
+                                        "status", "local_provider_edit_retry_skipped",
+                                        "requestId", requestId,
+                                        "model", "local_provider",
+                                        "modelDecisionStep", "retry_policy",
+                                        "modelDecisionReason", retryReasonKey,
+                                        "decision_step", "retry_policy",
+                                        "reason_code", retryReasonKey,
+                                        "retryIndex", retryIndex,
+                                        "retryUsedByReason", reasonUsed,
+                                        "retryBudgetByReason", reasonBudget,
+                                        "message", "Bỏ qua retry do đã chạm ngân sách retry theo lớp lỗi."));
+                                    break;
+                                }
                                 String retryPrompt = buildEditAdaptiveRetryPrompt(
                                     localProviderPrompt,
                                     providerText,
@@ -2184,6 +2306,8 @@ public class ApiSpringController {
                                 if (retryPrompt.isBlank()) {
                                     break;
                                 }
+                                retryReasonCounters.put(retryReasonKey, reasonUsed + 1);
+                                recordQualityRetryReason(retryReasonKey, appId);
                                 sendEvent(emitter, jsonOf(
                                     "stage", "model_switch",
                                     "status", "local_provider_edit_retry",
@@ -2207,6 +2331,15 @@ public class ApiSpringController {
 
                                 int retryScore = scoreLocalEditOutputQuality(retryText, effectiveCodeContext, contextType, responseMode);
                                 boolean retryAccepted = shouldAcceptLocalCodeStreamOutput(retryText, responseMode, contextType);
+                                LocalOutputEvidenceGate retryEvidenceGate = evaluateLocalOutputEvidenceGate(
+                                    retryText,
+                                    responseMode,
+                                    contextType,
+                                    effectiveCodeContext
+                                );
+                                if (retryAccepted && aiLocalEvidenceGateEnabled && !retryEvidenceGate.passed()) {
+                                    retryAccepted = false;
+                                }
                                 sendEvent(emitter, jsonOf(
                                     "stage", "model_switch",
                                     "status", "local_provider_edit_retry_done",
@@ -2217,6 +2350,9 @@ public class ApiSpringController {
                                     "retryIndex", retryIndex,
                                     "beforeQualityScore", previousScore,
                                     "afterQualityScore", retryScore,
+                                    "evidenceGateScore", retryEvidenceGate.score(),
+                                    "evidenceGateReason", retryEvidenceGate.reason(),
+                                    "evidenceAnchors", retryEvidenceGate.anchors(),
                                     "accepted", retryAccepted,
                                     "message", "Đã hoàn tất retry edit; so sánh chất lượng output trước/sau."));
 
@@ -2270,6 +2406,7 @@ public class ApiSpringController {
                             effectiveModel = "local_provider";
                             localProviderPrimaryUsed = true;
                         } else {
+                            recordQualityFallback(appId);
                             sendEvent(emitter, jsonOf(
                                     "stage", "model_switch",
                                     "status", "local_provider_quality_fallback",
@@ -2283,6 +2420,7 @@ public class ApiSpringController {
                                     "messageKey", "copilot.progress.message.local_quality_fallback"));
                         }
                     } else {
+                        recordQualityFallback(appId);
                         sendEvent(emitter, jsonOf(
                                 "stage", "model_switch",
                                 "status", "local_provider_failed",
@@ -2309,6 +2447,17 @@ public class ApiSpringController {
                                 : String.valueOf(codeStreamPreAnalysis.cloudContext() == null ? "" : codeStreamPreAnalysis.cloudContext()).trim();
                             boolean degradedAccepted = !degradedLocalText.isBlank()
                                 && shouldAcceptLocalCodeStreamOutput(degradedLocalText, responseMode, contextType);
+                            if (degradedAccepted) {
+                                LocalOutputEvidenceGate degradedEvidenceGate = evaluateLocalOutputEvidenceGate(
+                                    degradedLocalText,
+                                    responseMode,
+                                    contextType,
+                                    effectiveCodeContext
+                                );
+                                if (aiLocalEvidenceGateEnabled && !degradedEvidenceGate.passed()) {
+                                    degradedAccepted = false;
+                                }
+                            }
                             if (degradedAccepted) {
                                 logger.warn("LOCAL_OVERRIDE local provider no final output, degraded to local pre-analysis context requestId={} contextType={} chars={}",
                                     requestId, contextType, degradedLocalText.length());
@@ -2471,6 +2620,7 @@ public class ApiSpringController {
                             "reason_code", "provider_error",
                             "message", "Simple model lỗi, tự động chuyển sang model mặc định",
                             "messageKey", "copilot.progress.message.fallback_to_default"));
+                            recordQualityFallback(appId);
 
                     rawResponse = streamWithAutoContinue(
                             emitter,
@@ -2500,6 +2650,7 @@ public class ApiSpringController {
                             "reason_code", "provider_error",
                             "message", "Simple/default stream đều thất bại, chuyển sang provider fallback",
                             "messageKey", "copilot.progress.message.fallback_to_provider"));
+                        recordQualityFallback(appId);
 
                         String providerRaw = generateProviderContentWithMenuMasterPrompt(prompt, contextType);
                         String providerText = extractAiResultText(providerRaw);
@@ -2571,6 +2722,7 @@ public class ApiSpringController {
                         completionPayload = canonicalizeLineTextEditsPayload(completionPayload, effectiveCodeContext);
 
                         List<Map<String, Object>> canonicalTextEdits = parseNormalizedLineTextEdits(completionPayload);
+                        canonicalTextEdits = applyDeltaFirstAntiEchoLineTextEdits(canonicalTextEdits, effectiveCodeContext);
                         DeterministicPatchValidationResult patchValidation = validateDeterministicLineTextEdits(canonicalTextEdits, effectiveCodeContext);
                         canonicalTextEdits = patchValidation.acceptedEdits;
                         
@@ -2610,6 +2762,7 @@ public class ApiSpringController {
                         }
                         
                         if (canonicalTextEdits.isEmpty()) {
+                            recordQualityValidatorReject(patchValidation.rejectionReason, appId);
                             sendEvent(emitter, jsonOf(
                                 "stage", "patch_validator_rejected",
                                 "requestId", requestId,
@@ -2620,8 +2773,23 @@ public class ApiSpringController {
                             return;
                         }
 
+                        PatchDryRunSimulationResult patchDryRun = runPatchDryRunSimulation(canonicalTextEdits, effectiveCodeContext);
+                        canonicalTextEdits = patchDryRun.acceptedEdits;
+                        if (canonicalTextEdits.isEmpty()) {
+                            recordQualityPatchReject(patchDryRun.rejectionReason, appId);
+                            sendEvent(emitter, jsonOf(
+                                "stage", "patch_dry_run_rejected",
+                                "requestId", requestId,
+                                "reason", patchDryRun.rejectionReason,
+                                "stats", patchDryRun.toMetaMap()));
+                            sendErrorEvent(emitter,
+                                    "Dry-run thất bại: textEdits có xung đột hoặc không apply an toàn trên currentCode");
+                            return;
+                        }
+
                         completion.put("textEdits", canonicalTextEdits);
                         completion.put("patchValidator", patchValidation.toMetaMap());
+                        completion.put("patchDryRun", patchDryRun.toMetaMap());
                         List<Map<String, Object>> lineRanges = convertTextEditsToLineRanges(canonicalTextEdits);
                         completion.put("lineRanges", lineRanges);
                         completion.put("changedRanges", lineRanges);
@@ -4440,8 +4608,11 @@ public class ApiSpringController {
                 String salvaged = salvageSearchReplaceAsTextEdits(safeText, effectiveCodeContext);
                 String canonicalized = canonicalizeLineTextEditsPayload(salvaged, effectiveCodeContext);
                 List<Map<String, Object>> textEdits = parseNormalizedLineTextEdits(canonicalized);
+                textEdits = applyDeltaFirstAntiEchoLineTextEdits(textEdits, effectiveCodeContext);
                 DeterministicPatchValidationResult patchValidation = validateDeterministicLineTextEdits(textEdits, effectiveCodeContext);
                 textEdits = patchValidation.acceptedEdits;
+                PatchDryRunSimulationResult patchDryRun = runPatchDryRunSimulation(textEdits, effectiveCodeContext);
+                textEdits = patchDryRun.acceptedEdits;
                 if (textEdits.isEmpty()) return 0;
                 int total = textEdits.size();
                 for (int i = 0; i < total; i++) {
@@ -4450,6 +4621,16 @@ public class ApiSpringController {
                         : "Áp dụng thay đổi " + (i + 1);
                     StepEvidenceVerdict evidence = verifyEditStepEvidence(textEdits.get(i), effectiveCodeContext);
                     int qualityScore = evidence.score();
+                    AssistantEditRiskResult editRisk = evaluateEditRiskLite(
+                        true,
+                        effectiveCodeContext,
+                        List.of(textEdits.get(i)),
+                        !patchValidation.acceptedEdits.isEmpty(),
+                        evidence.accepted(),
+                        true
+                    );
+                    boolean approvalRequired = ("high".equalsIgnoreCase(editRisk.riskLevel()) && aiAgenticApprovalHighRiskRequired)
+                        || ("medium".equalsIgnoreCase(editRisk.riskLevel()) && aiAgenticApprovalMediumRiskRequired);
                     if (aiLocalAgenticStepVerifierEnabled && !evidence.accepted()) {
                         sendEvent(emitter, jsonOf(
                             "stage", "agentic_step_result",
@@ -4459,6 +4640,10 @@ public class ApiSpringController {
                             "stepDescription", desc,
                             "qualityScore", qualityScore,
                             "lowConfidence", true,
+                            "riskScore", editRisk.riskScore(),
+                            "riskLevel", editRisk.riskLevel(),
+                            "approvalRequired", approvalRequired,
+                            "approvalReasons", editRisk.reasons(),
                             "skipped", true,
                             "evidenceAnchors", evidence.anchors(),
                             "evidenceReason", evidence.reason(),
@@ -4477,8 +4662,13 @@ public class ApiSpringController {
                         "stepDescription", desc,
                         "qualityScore", qualityScore,
                         "lowConfidence", qualityScore < aiLocalAnalyzeStepQualityLowThreshold,
+                        "riskScore", editRisk.riskScore(),
+                        "riskLevel", editRisk.riskLevel(),
+                        "approvalRequired", approvalRequired,
+                        "approvalReasons", editRisk.reasons(),
                         "evidenceAnchors", evidence.anchors(),
                         "patchValidator", patchValidation.toMetaMap(),
+                        "patchDryRun", patchDryRun.toMetaMap(),
                         "textEdits", List.of(textEdits.get(i)),
                         "partial", i < total - 1));
                     emitted += 1;
@@ -4745,6 +4935,7 @@ public class ApiSpringController {
             computedMaxAttempts = Math.min(computedMaxAttempts, 2);
         }
         final int maxAttempts = computedMaxAttempts;
+        String metricsAppId = str(streamMeta == null ? null : streamMeta.get("appId"), "");
         String currentPrompt = prompt;
         String lastRawResponse = "";
         AtomicInteger waitingLogBucket = new AtomicInteger(0);
@@ -4754,6 +4945,7 @@ public class ApiSpringController {
         AtomicInteger providerFallbackTransitions = new AtomicInteger(0);
         AtomicInteger streamChunkCount = new AtomicInteger(0);
         AtomicInteger streamedChars = new AtomicInteger(0);
+        Map<String, Integer> retryReasonCounts = new HashMap<>();
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             final int attemptNo = attempt;
@@ -4809,6 +5001,7 @@ public class ApiSpringController {
                                 if ("claude_fallback".equalsIgnoreCase(stage) && !fallbackCountedThisAttempt[0]) {
                                     fallbackCountedThisAttempt[0] = true;
                                     providerFallbackTransitions.incrementAndGet();
+                                    recordQualityFallback(metricsAppId);
                                 }
                                 enrichModelDecisionMetadata(wrapped, model);
                                 wrapped.put("requestId", requestId);
@@ -4834,6 +5027,7 @@ public class ApiSpringController {
                                 if ("claude_fallback".equalsIgnoreCase(stage) && !fallbackCountedThisAttempt[0]) {
                                     fallbackCountedThisAttempt[0] = true;
                                     providerFallbackTransitions.incrementAndGet();
+                                    recordQualityFallback(metricsAppId);
                                 }
                                 enrichModelDecisionMetadata(wrapped, model);
                                 wrapped.put("requestId", requestId);
@@ -4903,6 +5097,8 @@ public class ApiSpringController {
                         responseMode,
                         largeStructuredEditMode,
                         raw,
+                        classifyEditRetryReason(raw, "", contextType, responseMode),
+                        retryReasonCounts,
                         attemptNo,
                         maxAttempts,
                         textEditsRetryUsed);
@@ -4910,10 +5106,16 @@ public class ApiSpringController {
                 if (shouldRetryForTextEdits) {
                     textEditsRetryUsed++;
                     String retryReason = classifyEditRetryReason(raw, "", contextType, responseMode);
+                    String retryReasonKey = normalizeEditRetryReasonCode(retryReason);
+                    int retryUsedByReason = retryReasonCounts.merge(retryReasonKey, 1, Integer::sum);
+                    recordQualityRetryReason(retryReasonKey, metricsAppId);
+                    int retryBudgetByReason = resolveEditRetryBudgetByReason(retryReasonKey);
                     if (streamMeta != null) {
                         streamMeta.put("textEditsRetryTriggered", true);
                         streamMeta.put("textEditsRetryAttempts", textEditsRetryUsed);
                         streamMeta.put("textEditsRetryReason", retryReason);
+                        streamMeta.put("textEditsRetryReasonCount", retryUsedByReason);
+                        streamMeta.put("textEditsRetryReasonBudget", retryBudgetByReason);
                     }
                     sendEvent(emitter, jsonOf(
                             "stage", "auto_continue",
@@ -4921,6 +5123,8 @@ public class ApiSpringController {
                             "attempt", attemptNo,
                             "maxAttempts", maxAttempts,
                             "reason_code", retryReason,
+                            "retryUsedByReason", retryUsedByReason,
+                            "retryBudgetByReason", retryBudgetByReason,
                             "message", "Kết quả chưa đạt shape tối ưu, backend retry theo chiến lược thích ứng để apply chính xác"));
                     currentPrompt = buildEditAdaptiveRetryPrompt(prompt, raw, "", "", language, contextType, retryReason);
                     continue;
@@ -4955,22 +5159,44 @@ public class ApiSpringController {
                     boolean canTryFormatRetry = textEditsRetryUsed < Math.max(1, 1 + Math.max(0, aiCodeStreamEditTextEditsRetryMaxExtraAttempts));
 
                     if (canTryFormatRetry && textEditsCount == 0 && !hasSearchReplace && !hasWrappedCode) {
-                        textEditsRetryUsed++;
                         String retryReason = classifyEditRetryReason(raw, "", contextType, responseMode);
-                        if (streamMeta != null) {
-                            streamMeta.put("textEditsRetryTriggered", true);
-                            streamMeta.put("textEditsRetryAttempts", textEditsRetryUsed);
-                            streamMeta.put("textEditsRetryReason", retryReason);
+                        String retryReasonKey = normalizeEditRetryReasonCode(retryReason);
+                        int usedByReason = retryReasonCounts.getOrDefault(retryReasonKey, 0);
+                        int budgetByReason = resolveEditRetryBudgetByReason(retryReasonKey);
+                        if (usedByReason >= budgetByReason) {
+                            sendEvent(emitter, jsonOf(
+                                    "stage", "auto_continue",
+                                    "status", "format_retry_skipped",
+                                    "attempt", attemptNo,
+                                    "maxAttempts", maxAttempts,
+                                    "reason_code", retryReason,
+                                    "retryUsedByReason", usedByReason,
+                                    "retryBudgetByReason", budgetByReason,
+                                    "message", "Bỏ qua format retry do đã chạm ngân sách retry theo lớp lỗi"));
+                        } else {
+                            textEditsRetryUsed++;
+                            int retriedByReason = retryReasonCounts.merge(retryReasonKey, 1, Integer::sum);
+                            recordQualityRetryReason(retryReasonKey, metricsAppId);
+                            int retryBudgetByReason = resolveEditRetryBudgetByReason(retryReasonKey);
+                            if (streamMeta != null) {
+                                streamMeta.put("textEditsRetryTriggered", true);
+                                streamMeta.put("textEditsRetryAttempts", textEditsRetryUsed);
+                                streamMeta.put("textEditsRetryReason", retryReason);
+                                streamMeta.put("textEditsRetryReasonCount", retriedByReason);
+                                streamMeta.put("textEditsRetryReasonBudget", retryBudgetByReason);
+                            }
+                            sendEvent(emitter, jsonOf(
+                                    "stage", "auto_continue",
+                                    "status", "format_retry",
+                                    "attempt", attemptNo,
+                                    "maxAttempts", maxAttempts,
+                                    "reason_code", retryReason,
+                                    "retryUsedByReason", retriedByReason,
+                                    "retryBudgetByReason", retryBudgetByReason,
+                                    "message", "Kết quả edit chưa đủ tốt, retry theo chiến lược thích ứng để tránh gọi lặp tốn kém"));
+                            currentPrompt = buildEditAdaptiveRetryPrompt(prompt, raw, "", "", language, contextType, retryReason);
+                            retriedForFormat = true;
                         }
-                        sendEvent(emitter, jsonOf(
-                                "stage", "auto_continue",
-                                "status", "format_retry",
-                                "attempt", attemptNo,
-                                "maxAttempts", maxAttempts,
-                                "reason_code", retryReason,
-                                "message", "Kết quả edit chưa đủ tốt, retry theo chiến lược thích ứng để tránh gọi lặp tốn kém"));
-                        currentPrompt = buildEditAdaptiveRetryPrompt(prompt, raw, "", "", language, contextType, retryReason);
-                        retriedForFormat = true;
                     }
                 }
 
@@ -5449,6 +5675,13 @@ public class ApiSpringController {
             sb.append("- textEdits không chồng lấn nhau.\n");
             sb.append("- Chỉ sửa vùng cần thiết, không thay toàn bộ file.\n\n");
         }
+        if (aiCodeStreamEditDeltaFirstEnabled) {
+            sb.append("- Delta-first: chỉ trả các thay đổi tối thiểu khác biệt với currentCode, không lặp lại phần không đổi.\n");
+        }
+        if (aiCodeStreamEditAntiEchoEnabled) {
+            sb.append("- Anti-echo: không lặp lại cùng một edit nhiều lần trong textEdits/SEARCH-REPLACE.\n");
+        }
+        sb.append("\n");
         sb.append("--- YÊU CẦU GỐC ---\n");
         sb.append(truncateMiddle(originalPrompt, Math.max(20000, aiCodeStreamMaxPromptChars))).append("\n\n");
         sb.append("--- KẾT QUẢ TRƯỚC (SAI ĐỊNH DẠNG, ĐANG LÀ FULL CODE) ---\n");
@@ -5532,6 +5765,113 @@ public class ApiSpringController {
         return "unknown_edit_quality";
     }
 
+    private String normalizeEditRetryReasonCode(String reasonCode) {
+        String code = String.valueOf(reasonCode == null ? "" : reasonCode).trim().toLowerCase(Locale.ROOT);
+        if (code.isBlank()) {
+            return "unknown_edit_quality";
+        }
+        return code;
+    }
+
+    private int resolveEditRetryBudgetByReason(String reasonCode) {
+        int globalDefault = Math.max(0, aiCodeStreamEditTextEditsRetryMaxExtraAttempts);
+        if (!aiCodeStreamEditRetryPolicyEnabled) {
+            return globalDefault;
+        }
+        String code = normalizeEditRetryReasonCode(reasonCode);
+        int policyBudget;
+        switch (code) {
+            case "empty_output":
+                policyBudget = aiCodeStreamEditRetryPolicyEmptyOutputMaxRetries;
+                break;
+            case "format_invalid":
+                policyBudget = aiCodeStreamEditRetryPolicyFormatInvalidMaxRetries;
+                break;
+            case "full_code_fallback":
+                policyBudget = aiCodeStreamEditRetryPolicyFullCodeFallbackMaxRetries;
+                break;
+            case "low_substance":
+                policyBudget = aiCodeStreamEditRetryPolicyLowSubstanceMaxRetries;
+                break;
+            case "low_quality":
+                policyBudget = aiCodeStreamEditRetryPolicyLowQualityMaxRetries;
+                break;
+            case "insufficient_evidence_tokens":
+                policyBudget = aiCodeStreamEditRetryPolicyInsufficientEvidenceMaxRetries;
+                break;
+            default:
+                policyBudget = aiCodeStreamEditRetryPolicyDefaultMaxRetries;
+                break;
+        }
+        return Math.max(0, Math.min(globalDefault, Math.max(0, policyBudget)));
+    }
+
+    private void recordQualityRetryReason(String reasonCode) {
+        recordQualityRetryReason(reasonCode, null);
+    }
+
+    private void recordQualityRetryReason(String reasonCode, String appId) {
+        try {
+            aiQualityMetricsService.recordRetryReason(normalizeEditRetryReasonCode(reasonCode), 1, appId);
+        } catch (Exception ex) {
+            logger.debug("Quality metrics retry record failed: {}", ex.getMessage());
+        }
+    }
+
+    private void recordQualityEvidenceGate(String gateType) {
+        recordQualityEvidenceGate(gateType, null);
+    }
+
+    private void recordQualityEvidenceGate(String gateType, String appId) {
+        try {
+            String safe = String.valueOf(gateType == null ? "unknown" : gateType).trim().toLowerCase(Locale.ROOT);
+            if (safe.isBlank()) safe = "unknown";
+            aiQualityMetricsService.recordEvidenceGateHit(safe, 1, appId);
+        } catch (Exception ex) {
+            logger.debug("Quality metrics evidence gate record failed: {}", ex.getMessage());
+        }
+    }
+
+    private void recordQualityPatchReject(String reasonCode) {
+        recordQualityPatchReject(reasonCode, null);
+    }
+
+    private void recordQualityPatchReject(String reasonCode, String appId) {
+        try {
+            String safe = String.valueOf(reasonCode == null ? "unknown" : reasonCode).trim().toLowerCase(Locale.ROOT);
+            if (safe.isBlank()) safe = "unknown";
+            aiQualityMetricsService.recordPatchReject(safe, 1, appId);
+        } catch (Exception ex) {
+            logger.debug("Quality metrics patch reject record failed: {}", ex.getMessage());
+        }
+    }
+
+    private void recordQualityValidatorReject(String reasonCode) {
+        recordQualityValidatorReject(reasonCode, null);
+    }
+
+    private void recordQualityValidatorReject(String reasonCode, String appId) {
+        try {
+            String safe = String.valueOf(reasonCode == null ? "unknown" : reasonCode).trim().toLowerCase(Locale.ROOT);
+            if (safe.isBlank()) safe = "unknown";
+            aiQualityMetricsService.recordValidatorReject(safe, 1, appId);
+        } catch (Exception ex) {
+            logger.debug("Quality metrics validator reject record failed: {}", ex.getMessage());
+        }
+    }
+
+    private void recordQualityFallback() {
+        recordQualityFallback(null);
+    }
+
+    private void recordQualityFallback(String appId) {
+        try {
+            aiQualityMetricsService.recordFallback(appId);
+        } catch (Exception ex) {
+            logger.debug("Quality metrics fallback record failed: {}", ex.getMessage());
+        }
+    }
+
     private String buildEditAdaptiveRetryPrompt(
             String originalPrompt,
             String previousRawResponse,
@@ -5558,6 +5898,13 @@ public class ApiSpringController {
         } else {
             sb.append("BẮT BUỘC định dạng JSON với textEdits line-level, không full code.\n\n");
         }
+        if (aiCodeStreamEditDeltaFirstEnabled) {
+            sb.append("Delta-first: chỉ tạo edit cho phần thực sự khác currentCode, tránh patch dư.\n");
+        }
+        if (aiCodeStreamEditAntiEchoEnabled) {
+            sb.append("Anti-echo: cấm lặp lại cùng nội dung edit nhiều lần.\n");
+        }
+        sb.append("\n");
         sb.append("--- USER REQUEST ---\n").append(truncateMiddle(String.valueOf(userMessage == null ? "" : userMessage), 1200)).append("\n\n");
         sb.append("--- CURRENT CODE (anchor) ---\n").append(truncateMiddle(String.valueOf(currentCode == null ? "" : currentCode), 5000)).append("\n\n");
         sb.append("--- ORIGINAL PROMPT ---\n").append(truncateMiddle(String.valueOf(originalPrompt == null ? "" : originalPrompt), Math.max(12000, aiCodeStreamMaxPromptChars / 2))).append("\n\n");
@@ -5571,6 +5918,8 @@ public class ApiSpringController {
             String responseMode,
             boolean largeStructuredEditMode,
             String rawResponse,
+            String retryReason,
+            Map<String, Integer> retryReasonCounts,
             int attemptNo,
             int maxAttempts,
             int textEditsRetryUsed) {
@@ -5580,6 +5929,9 @@ public class ApiSpringController {
         if (largeStructuredEditMode) return false;
         if (attemptNo >= maxAttempts) return false;
         if (textEditsRetryUsed >= Math.max(0, aiCodeStreamEditTextEditsRetryMaxExtraAttempts)) return false;
+        String reasonKey = normalizeEditRetryReasonCode(retryReason);
+        int usedByReason = retryReasonCounts == null ? 0 : retryReasonCounts.getOrDefault(reasonKey, 0);
+        if (usedByReason >= resolveEditRetryBudgetByReason(reasonKey)) return false;
 
         // Keep retry available for long prompts by only hard-stopping at extreme sizes.
         if (prompt != null && prompt.length() > Math.max(12000, aiCodeStreamEditTextEditsRetryMaxPromptChars * 3)) return false;
@@ -6452,6 +6804,174 @@ public class ApiSpringController {
             meta.put("rejectionReason", String.valueOf(rejectionReason == null ? "none" : rejectionReason));
             return meta;
         }
+    }
+
+    private static class PatchDryRunSimulationResult {
+        List<Map<String, Object>> acceptedEdits = Collections.emptyList();
+        List<Map<String, Object>> conflicts = Collections.emptyList();
+        int inputCount;
+        int acceptedCount;
+        int rejectedCount;
+        String rejectionReason = "none";
+
+        Map<String, Object> toMetaMap() {
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("inputCount", inputCount);
+            meta.put("acceptedCount", acceptedCount);
+            meta.put("rejectedCount", rejectedCount);
+            meta.put("rejectionReason", String.valueOf(rejectionReason == null ? "none" : rejectionReason));
+            meta.put("conflictCount", conflicts == null ? 0 : conflicts.size());
+            meta.put("conflicts", conflicts == null ? List.of() : conflicts);
+            return meta;
+        }
+    }
+
+    private List<Map<String, Object>> applyDeltaFirstAntiEchoLineTextEdits(
+            List<Map<String, Object>> textEdits,
+            String baseCode) {
+        List<Map<String, Object>> input = textEdits == null ? List.of() : textEdits;
+        if (input.isEmpty()) {
+            return List.of();
+        }
+        if (!aiCodeStreamEditDeltaFirstEnabled && !aiCodeStreamEditAntiEchoEnabled) {
+            return input;
+        }
+
+        String code = String.valueOf(baseCode == null ? "" : baseCode);
+        int maxDuplicates = Math.max(0, aiCodeStreamEditAntiEchoMaxDuplicateEdits);
+        Map<String, Integer> duplicateCounter = new LinkedHashMap<>();
+        List<Map<String, Object>> out = new ArrayList<>();
+
+        for (Map<String, Object> rawEdit : input) {
+            if (rawEdit == null || rawEdit.isEmpty()) {
+                continue;
+            }
+            int startLine = parseIntOrDefault(rawEdit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(rawEdit.get("endLine"), startLine);
+            if (startLine < 1) {
+                startLine = 1;
+            }
+            if (endLine < startLine) {
+                endLine = startLine;
+            }
+            String replacement = String.valueOf(rawEdit.getOrDefault("replacement", ""));
+            String action = normalizeLineEditAction(String.valueOf(rawEdit.getOrDefault("action", "edit")), replacement);
+
+            if (aiCodeStreamEditDeltaFirstEnabled
+                && aiCodeStreamEditPatchValidatorRejectNoop
+                && !code.isBlank()
+                && !"add".equals(action)) {
+                String currentSlice = extractCodeSliceByLineRange(code, startLine, endLine);
+                if (currentSlice.equals(replacement)) {
+                    continue;
+                }
+            }
+
+            String deltaKey = startLine + ":" + endLine + ":" + action + ":" + Integer.toHexString(replacement.hashCode());
+            if (aiCodeStreamEditAntiEchoEnabled && maxDuplicates >= 0) {
+                int used = duplicateCounter.getOrDefault(deltaKey, 0);
+                if (used >= maxDuplicates) {
+                    continue;
+                }
+                duplicateCounter.put(deltaKey, used + 1);
+            }
+
+            Map<String, Object> normalizedEdit = new LinkedHashMap<>();
+            normalizedEdit.put("startLine", startLine);
+            normalizedEdit.put("endLine", endLine);
+            normalizedEdit.put("replacement", replacement);
+            normalizedEdit.put("action", action);
+            out.add(normalizedEdit);
+        }
+
+        out.sort((a, b) -> {
+            int sa = parseIntOrDefault(a.get("startLine"), 1);
+            int sb = parseIntOrDefault(b.get("startLine"), 1);
+            if (sa != sb) return Integer.compare(sa, sb);
+            int ea = parseIntOrDefault(a.get("endLine"), sa);
+            int eb = parseIntOrDefault(b.get("endLine"), sb);
+            return Integer.compare(ea, eb);
+        });
+        return out;
+    }
+
+    private PatchDryRunSimulationResult runPatchDryRunSimulation(
+            List<Map<String, Object>> textEdits,
+            String baseCode) {
+        PatchDryRunSimulationResult result = new PatchDryRunSimulationResult();
+        result.inputCount = textEdits == null ? 0 : textEdits.size();
+        if (textEdits == null || textEdits.isEmpty()) {
+            result.rejectionReason = "empty_input";
+            return result;
+        }
+
+        String code = String.valueOf(baseCode == null ? "" : baseCode);
+        int maxAllowedLine = Math.max(1, countLines(code) + 1);
+
+        List<Map<String, Object>> accepted = new ArrayList<>();
+        List<Map<String, Object>> conflicts = new ArrayList<>();
+        int previousEnd = 0;
+
+        for (Map<String, Object> edit : textEdits) {
+            if (edit == null || edit.isEmpty()) {
+                continue;
+            }
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+            String replacement = String.valueOf(edit.getOrDefault("replacement", ""));
+            String action = String.valueOf(edit.getOrDefault("action", "edit")).trim().toLowerCase(Locale.ROOT);
+
+            String conflictClass = "";
+            if (startLine < 1 || endLine < startLine || startLine > maxAllowedLine || endLine > maxAllowedLine) {
+                conflictClass = "bounds";
+            } else if (startLine <= previousEnd) {
+                conflictClass = "overlap";
+            } else if (aiCodeStreamEditPatchValidatorRejectNoop && !code.isBlank() && !"add".equals(action)) {
+                String currentSlice = extractCodeSliceByLineRange(code, startLine, endLine);
+                if (currentSlice.equals(replacement)) {
+                    conflictClass = "noop";
+                }
+            }
+
+            if (!conflictClass.isBlank()) {
+                Map<String, Object> conflict = new LinkedHashMap<>();
+                conflict.put("class", conflictClass);
+                conflict.put("startLine", startLine);
+                conflict.put("endLine", endLine);
+                conflict.put("action", action);
+                conflicts.add(conflict);
+                continue;
+            }
+
+            accepted.add(edit);
+            previousEnd = endLine;
+        }
+
+        result.acceptedEdits = accepted;
+        result.conflicts = conflicts;
+        result.acceptedCount = accepted.size();
+        result.rejectedCount = Math.max(0, result.inputCount - result.acceptedCount);
+        result.rejectionReason = accepted.isEmpty() ? "all_conflicted" : (conflicts.isEmpty() ? "none" : "partial_conflicted");
+
+        if (!accepted.isEmpty() && !code.isBlank()) {
+            String simulated = simulateApplyLineTextEdits(code, accepted);
+            if (aiCodeStreamEditPatchValidatorRejectEmptyOutput && simulated.isBlank()) {
+                result.acceptedEdits = List.of();
+                result.acceptedCount = 0;
+                result.rejectedCount = result.inputCount;
+                result.rejectionReason = "empty_after_simulation";
+                Map<String, Object> conflict = new LinkedHashMap<>();
+                conflict.put("class", "empty_after_simulation");
+                conflict.put("startLine", 0);
+                conflict.put("endLine", 0);
+                conflict.put("action", "simulate");
+                List<Map<String, Object>> merged = new ArrayList<>(conflicts);
+                merged.add(conflict);
+                result.conflicts = merged;
+            }
+        }
+
+        return result;
     }
 
     private DeterministicPatchValidationResult validateDeterministicLineTextEdits(
@@ -7964,6 +8484,74 @@ public class ApiSpringController {
     }
 
     private record StepEvidenceVerdict(boolean accepted, int score, List<String> anchors, String reason) {}
+
+    private record LocalOutputEvidenceGate(boolean passed, int score, List<String> anchors, String reason) {}
+
+    private LocalOutputEvidenceGate evaluateLocalOutputEvidenceGate(
+        String output,
+        String responseMode,
+        String contextType,
+        String codeContext
+    ) {
+        String text = String.valueOf(output == null ? "" : output).trim();
+        if (text.isBlank()) {
+            return new LocalOutputEvidenceGate(false, 0, List.of(), "empty_output");
+        }
+        if (!aiLocalEvidenceGateEnabled) {
+            return new LocalOutputEvidenceGate(true, 100, List.of(), "disabled");
+        }
+
+        int minScore = Math.max(20, Math.min(95, aiLocalEvidenceGateMinScore));
+        boolean isEdit = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        boolean isAnalyze = "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+
+        if (isEdit && !isMenuJsonContext(contextType)) {
+            try {
+                String salvaged = salvageSearchReplaceAsTextEdits(text, codeContext);
+                String canonicalized = canonicalizeLineTextEditsPayload(salvaged, codeContext);
+                List<Map<String, Object>> edits = parseNormalizedLineTextEdits(canonicalized);
+                if (edits.isEmpty()) {
+                    List<String> anchors = collectStepEvidenceAnchors(text, codeContext, aiLocalAgenticStepVerifierMaxAnchors);
+                    return new LocalOutputEvidenceGate(false, anchors.isEmpty() ? 20 : 34, anchors, "no_structured_edits");
+                }
+                int sample = Math.max(1, Math.min(3, edits.size()));
+                int total = 0;
+                LinkedHashSet<String> anchors = new LinkedHashSet<>();
+                int rejected = 0;
+                for (int i = 0; i < sample; i++) {
+                    StepEvidenceVerdict verdict = verifyEditStepEvidence(edits.get(i), codeContext);
+                    total += verdict.score();
+                    anchors.addAll(verdict.anchors());
+                    if (!verdict.accepted()) {
+                        rejected++;
+                    }
+                }
+                int score = Math.max(0, Math.min(100, total / sample));
+                boolean passed = rejected == 0 && score >= minScore;
+                String reason = passed ? "accepted" : "insufficient_edit_evidence";
+                return new LocalOutputEvidenceGate(passed, score, new ArrayList<>(anchors), reason);
+            } catch (Exception ex) {
+                List<String> anchors = collectStepEvidenceAnchors(text, codeContext, aiLocalAgenticStepVerifierMaxAnchors);
+                return new LocalOutputEvidenceGate(false, anchors.isEmpty() ? 18 : 30, anchors, "evidence_parse_failed");
+            }
+        }
+
+        if (isAnalyze) {
+            StepEvidenceVerdict verdict = verifyAnalyzeStepEvidence(text, codeContext, true);
+            boolean passed = verdict.score() >= minScore;
+            return new LocalOutputEvidenceGate(
+                passed,
+                verdict.score(),
+                verdict.anchors(),
+                passed ? "accepted" : "insufficient_analyze_evidence"
+            );
+        }
+
+        List<String> anchors = collectStepEvidenceAnchors(text, codeContext, aiLocalAgenticStepVerifierMaxAnchors);
+        int score = Math.max(20, Math.min(100, 40 + (anchors.size() * 10)));
+        boolean passed = score >= minScore || text.length() >= 80;
+        return new LocalOutputEvidenceGate(passed, score, anchors, passed ? "accepted" : "insufficient_generic_evidence");
+    }
 
     private StepEvidenceVerdict verifyEditStepEvidence(Map<String, Object> edit, String codeContext) {
         List<String> anchors = collectStepEvidenceAnchors(
@@ -10588,6 +11176,7 @@ public class ApiSpringController {
                 || lowered.startsWith("dyn_ctx_")
                 || lowered.startsWith("source=primary_flow")
                 || lowered.startsWith("source=multimodal")
+                || lowered.startsWith("source=") && (lowered.contains("primary_flow") || lowered.contains("multimodal") || lowered.contains("orchestration"))
                 || lowered.startsWith("source: dyn_ctx_")
                 || lowered.startsWith("request=")
                 || lowered.startsWith("intentkeywords=")
@@ -10605,10 +11194,33 @@ public class ApiSpringController {
                 || lowered.matches("^\\d{1,2}:\\d{2}(:\\d{2})?\\s*(am|pm)?$")
                 || lowered.startsWith("input", 0) && lowered.contains("checked:");
             if (leakedDynSource) {
-                leakTailBudget = Math.max(leakTailBudget, 4);
+                leakTailBudget = Math.max(leakTailBudget, 8);
                 continue;
             }
             out.append(rawLine).append('\n');
+        }
+        return out.toString().replaceAll("\\n{3,}", "\\n\\n").trim();
+    }
+
+    private String sanitizeInternalContextForModel(String text) {
+        String safe = String.valueOf(text == null ? "" : text);
+        if (safe.isBlank()) {
+            return "";
+        }
+        String[] lines = safe.split("\\n");
+        StringBuilder out = new StringBuilder(safe.length());
+        for (String rawLine : lines) {
+            String line = String.valueOf(rawLine == null ? "" : rawLine);
+            String lowered = line.trim().toLowerCase(Locale.ROOT);
+            if (lowered.startsWith("source=primary_flow")
+                || lowered.startsWith("source=multimodal")
+                || lowered.startsWith("source=") && (lowered.contains("primary_flow") || lowered.contains("multimodal") || lowered.contains("orchestration"))
+                || lowered.startsWith("orchestration_dynamic_memory_source=")
+                || lowered.startsWith("dyn_ctx_")) {
+                continue;
+            }
+            String sanitized = line.replaceAll("(?i)dyn_ctx_[a-z0-9_\\-]+", "dynamic_context");
+            out.append(sanitized).append('\n');
         }
         return out.toString().replaceAll("\\n{3,}", "\\n\\n").trim();
     }
@@ -13684,6 +14296,23 @@ public class ApiSpringController {
         collectEvidenceTokens(evidence, codeTokens, response, 3);
         collectEvidenceTokens(evidence, messageTokens, response, 2);
 
+        boolean analyzeMode = "analyze".equals(mode);
+        if (analyzeMode
+            && aiAssistantAnalyzeEvidenceGateEnabled
+            && !"FAST_DIRECT_ANSWER".equals(routeName)
+            && !"OFF_TOPIC_FAST_EXIT".equals(routeName)) {
+            int minScore = Math.max(20, Math.min(95, aiAssistantAnalyzeEvidenceGateMinScore));
+            int minEvidence = Math.max(1, Math.min(8, aiAssistantAnalyzeEvidenceGateMinEvidenceTokens));
+            if (score < minScore) {
+                passed = false;
+                verdict = "insufficient_analyze_grounding";
+            }
+            if (evidence.size() < minEvidence) {
+                passed = false;
+                verdict = "insufficient_evidence_tokens";
+            }
+        }
+
         return new AssistantVerificationResult(
             score,
             passed,
@@ -15144,6 +15773,60 @@ public class ApiSpringController {
                     "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")),
                     "scopeTags", orchestrationStats.getOrDefault("scannerScopeTags", List.of())));
 
+                boolean verifierEnabled = bool(orchestrationStats.get("planVerifierEnabled"), false);
+                int verifierScore = parseIntSafe(orchestrationStats.get("planVerifierScore"), 0);
+                int verifierMin = parseIntSafe(orchestrationStats.get("planVerifierMinScore"), 0);
+                boolean verifierPassed = bool(orchestrationStats.get("planVerifierPassed"), true);
+                String verifierVerdict = String.valueOf(orchestrationStats.getOrDefault("planVerifierVerdict", verifierPassed ? "passed" : "needs_refine"));
+                Object verifierMissing = orchestrationStats.getOrDefault("planVerifierMissing", List.of());
+                if (verifierEnabled) {
+                    emitAiAssistantChatChunk(appId, Map.of(
+                        "stage", "agentic_step_verifier",
+                        "message", uiTextByLang(
+                            uiLang,
+                            verifierPassed
+                                ? "Đã kiểm tra chất lượng plan step: đạt ngưỡng"
+                                : "Plan step còn thiếu tín hiệu, đã tự bổ sung bước refine",
+                            verifierPassed
+                                ? "Plan-step quality check passed"
+                                : "Plan-step quality check detected gaps and added refine step",
+                            verifierPassed
+                                ? "计划步骤质量检查已通过"
+                                : "计划步骤质量检查发现缺口并已补充细化步骤"),
+                        "responseMode", responseMode,
+                        "status", verifierPassed ? "passed" : "needs_refine",
+                        "score", verifierScore,
+                        "minScore", verifierMin,
+                        "verdict", verifierVerdict,
+                        "missing", verifierMissing));
+                }
+
+                boolean planSchemaEnabled = bool(orchestrationStats.get("planSchemaEnabled"), false);
+                int planSchemaScore = parseIntSafe(orchestrationStats.get("planSchemaScore"), 0);
+                int planSchemaMin = parseIntSafe(orchestrationStats.get("planSchemaMinScore"), 0);
+                boolean planSchemaPassed = bool(orchestrationStats.get("planSchemaPassed"), true);
+                Object planSchemaMissing = orchestrationStats.getOrDefault("planSchemaMissing", List.of());
+                if (planSchemaEnabled) {
+                    emitAiAssistantChatChunk(appId, Map.of(
+                        "stage", "agentic_plan_schema",
+                        "message", uiTextByLang(
+                            uiLang,
+                            planSchemaPassed
+                                ? "Kế hoạch agentic đã đạt schema contract"
+                                : "Kế hoạch agentic thiếu schema signals, đã tự bổ sung remediation",
+                            planSchemaPassed
+                                ? "Agentic planner schema contract passed"
+                                : "Agentic planner schema contract detected gaps and added remediation",
+                            planSchemaPassed
+                                ? "Agentic 规划步骤已通过 schema 约束"
+                                : "Agentic 规划步骤 schema 信号不足，已补充修复步骤"),
+                        "responseMode", responseMode,
+                        "status", planSchemaPassed ? "passed" : "needs_refine",
+                        "score", planSchemaScore,
+                        "minScore", planSchemaMin,
+                        "missing", planSchemaMissing));
+                }
+
                 boolean dynamicAsync = bool(orchestrationStats.get("dynamicMemoryAsync"), false);
                 boolean dynamicScheduled = bool(orchestrationStats.get("dynamicMemoryScheduled"), false);
                 boolean dynamicIndexed = bool(orchestrationStats.get("dynamicMemoryIndexed"), false);
@@ -15214,6 +15897,10 @@ public class ApiSpringController {
                     "current", 3,
                     "total", 3,
                     "percent", 100));
+            }
+
+            if (!globalContext.isBlank()) {
+                globalContext = sanitizeInternalContextForModel(globalContext);
             }
 
             // OpenDevin AgentFinishAction pattern: if orchestration produced an early-finish
@@ -16190,6 +16877,31 @@ public class ApiSpringController {
                 "responseMode", responseMode,
                 "status", finalVerify.passed() ? "done" : "warning"));
 
+            boolean analyzeEvidenceGateBlocked = "analyze".equalsIgnoreCase(String.valueOf(responseMode))
+                && aiAssistantAnalyzeEvidenceGateEnabled
+                && !finalVerify.passed()
+                && ("insufficient_evidence_tokens".equalsIgnoreCase(finalVerify.verdict())
+                    || "insufficient_analyze_grounding".equalsIgnoreCase(finalVerify.verdict()));
+            if (analyzeEvidenceGateBlocked) {
+                recordQualityEvidenceGate("assistant_analyze:" + finalVerify.verdict(), appId);
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "assistant_evidence_gate",
+                    "status", "blocked",
+                    "verificationVerdict", finalVerify.verdict(),
+                    "score", finalVerify.score(),
+                    "minScore", Math.max(20, Math.min(95, aiAssistantAnalyzeEvidenceGateMinScore)),
+                    "evidenceCount", finalVerify.evidenceTokens() == null ? 0 : finalVerify.evidenceTokens().size(),
+                    "minEvidenceCount", Math.max(1, Math.min(8, aiAssistantAnalyzeEvidenceGateMinEvidenceTokens)),
+                    "responseMode", responseMode,
+                    "message", uiTextByLang(
+                        uiLang,
+                        "Phân tích chưa đủ bằng chứng từ code hiện tại, vui lòng thu hẹp phạm vi hoặc chỉ định module cụ thể.",
+                        "Analysis is not sufficiently grounded in the current code. Please narrow the scope or specify a concrete module.",
+                        "分析结果与当前代码证据不足，请缩小范围或指定具体模块。"
+                    )
+                ));
+            }
+
             AssistantEditRiskResult editRisk = evaluateEditRiskLite(
                 editMode,
                 currentCode,
@@ -16238,12 +16950,12 @@ public class ApiSpringController {
                 }
             }
 
-            // TODO: Build citations from retrieval context (when available in scope)
-            // For now, emit assistant_citations stage for placeholder
+            List<String> verificationEvidence = finalVerify.evidenceTokens() == null ? List.of() : finalVerify.evidenceTokens();
             emitAiAssistantChatChunk(appId, Map.of(
                 "stage", "assistant_citations",
-                "count", 0,
-                "sources", 0,
+                "count", verificationEvidence.size(),
+                "sources", verificationEvidence.isEmpty() ? 0 : 1,
+                "tokens", verificationEvidence,
                 "responseMode", responseMode));
 
             completion.put("timestamp", System.currentTimeMillis());
@@ -24920,6 +25632,63 @@ public class ApiSpringController {
         dashboard.put("promptBudgetProfile", aiPromptBudgetService.getProfile());
 
         return ResponseEntity.ok(dashboard);
+    }
+
+    /**
+     * Endpoint: AI Quality Metrics - Real-time quality KPIs (retry distribution, gate hits, reject rates)
+     */
+    @GetMapping({"/ai/metrics", "/api/ai/metrics"})
+    public ResponseEntity<Map<String, Object>> getAiQualityMetrics(@RequestParam(required = false) String appId) {
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("error", "Not authenticated"));
+        }
+
+        Map<String, Object> metrics = aiQualityMetricsService.getMetricsSummary(appId);
+        metrics.put("user", authCtx.principalId);
+        metrics.put("is_dev", authCtx.dev);
+        metrics.put("roles", authCtx.roles == null ? List.of() : authCtx.roles);
+
+        return ResponseEntity.ok(metrics);
+    }
+
+    /**
+     * Endpoint: Reset AI Quality Metrics (admin only).
+     */
+    @PostMapping({"/ai/metrics/reset", "/api/ai/metrics/reset"})
+    public ResponseEntity<Map<String, Object>> resetAiQualityMetrics(@RequestParam(required = false) String appId) {
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("success", false, "message", "Not authenticated"));
+        }
+        if (!isCsmAdmin(authCtx)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Map.of("success", false, "message", "Admin access required"));
+        }
+
+        String safeAppId = String.valueOf(appId == null ? "" : appId).trim();
+        if (safeAppId.isBlank()) {
+            aiQualityMetricsService.reset();
+        } else {
+            aiQualityMetricsService.reset(safeAppId);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("message", safeAppId.isBlank()
+            ? "AI quality metrics reset successfully"
+            : "AI quality metrics reset successfully for appId=" + safeAppId);
+        result.put("timestamp", System.currentTimeMillis());
+        result.put("user", String.valueOf(authCtx.principalId == null ? "" : authCtx.principalId));
+        if (!safeAppId.isBlank()) {
+            result.put("app_id", safeAppId);
+            result.put("scope", "app");
+        } else {
+            result.put("scope", "global");
+        }
+        return ResponseEntity.ok(result);
     }
 
     // -------------------------------------------------------

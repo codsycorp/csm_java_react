@@ -721,6 +721,30 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
     }
   }, [onChange, presentInlineSuggestion]);
 
+  const handleCitationNavigate = useCallback((location: { path?: string; line?: number; token: string }) => {
+    const view = editorViewRef.current;
+    if (!view || !location.line) {
+      return;
+    }
+
+    try {
+      const doc = view.state?.doc;
+      const targetLineNumber = Math.max(1, Number(location.line));
+      const targetLine = doc?.line ? doc.line(Math.min(targetLineNumber, doc.lines)) : null;
+      if (!targetLine) {
+        return;
+      }
+
+      view.dispatch({
+        selection: { anchor: targetLine.from },
+        scrollIntoView: true,
+      });
+      view.focus?.();
+    } catch {
+      // ignore navigation failures
+    }
+  }, []);
+
   useEffect(() => {
     const suggested = String(aiAssistantInlineSuggestedCode || "").trim();
     if (!suggested) return;
@@ -1009,6 +1033,7 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
                   targetPType={aiAssistantPType}
                   editorMetadata={aiAssistantEditorMetadata}
                   onCodeInsert={handleCopilotCodeInsert}
+                  onCitationNavigate={handleCitationNavigate}
                   autoApplyCodeBlock={autoApplyEnabled}
                   autoApplyPreferenceKey={autoApplyStorageKey}
                   onAutoApplyChange={handleAutoApplyChange}

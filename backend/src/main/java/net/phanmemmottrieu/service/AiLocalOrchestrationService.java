@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -195,6 +196,18 @@ public class AiLocalOrchestrationService {
     @Value("${ai.local.primary-flow.logic-outline.max-lines:18}")
     private int primaryFlowLogicOutlineMaxLines;
 
+    @Value("${ai.local.agentic.step.verifier.enabled:true}")
+    private boolean stepVerifierEnabled;
+
+    @Value("${ai.local.agentic.step.verifier.min-score:62}")
+    private int stepVerifierMinScore;
+
+    @Value("${ai.local.agentic.plan-schema.enabled:true}")
+    private boolean planSchemaEnabled;
+
+    @Value("${ai.local.agentic.plan-schema.min-score:68}")
+    private int planSchemaMinScore;
+
     private final ExecutorService dynamicIngestExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "ai-dynamic-ingest");
         t.setDaemon(true);
@@ -239,11 +252,35 @@ public class AiLocalOrchestrationService {
         final String responseMode;
         final String language;
 
+        private interface AttachmentSnapshotFactory {
+            List<Map<String, Object>> freeze(List<Map<String, Object>> attachments);
+        }
+
+        private static final class ShallowImmutableAttachmentFactory implements AttachmentSnapshotFactory {
+            @Override
+            public List<Map<String, Object>> freeze(List<Map<String, Object>> attachments) {
+                if (attachments == null || attachments.isEmpty()) {
+                    return List.of();
+                }
+                List<Map<String, Object>> out = new ArrayList<>(attachments.size());
+                for (Map<String, Object> item : attachments) {
+                    if (item == null || item.isEmpty()) {
+                        out.add(Map.of());
+                        continue;
+                    }
+                    out.add(Collections.unmodifiableMap(new LinkedHashMap<>(item)));
+                }
+                return Collections.unmodifiableList(out);
+            }
+        }
+
+        private static final AttachmentSnapshotFactory ATTACHMENT_SNAPSHOT_FACTORY = new ShallowImmutableAttachmentFactory();
+
         private OrchestrationRequest(Builder builder) {
             this.appId = builder.appId;
             this.message = builder.message;
             this.currentCode = builder.currentCode;
-            this.attachments = builder.attachments == null ? List.of() : List.copyOf(builder.attachments);
+            this.attachments = ATTACHMENT_SNAPSHOT_FACTORY.freeze(builder.attachments);
             this.contextType = builder.contextType;
             this.taskType = builder.taskType;
             this.responseMode = builder.responseMode;
@@ -577,6 +614,43 @@ public class AiLocalOrchestrationService {
                 // Keep base planner when execution planner fails.
             }
         }
+
+        PlanCoverageCheck planCoverage = evaluatePlanCoverage(
+            safeMessage,
+            safeContextType,
+            safeTaskType,
+            safeMode,
+            codeChars,
+            attachmentChars,
+            digest,
+            scanResult,
+            planSteps
+        );
+        if (stepVerifierEnabled && !planCoverage.passed && !planCoverage.missingAreas.isEmpty()) {
+            planSteps.add("Verifier remediation: " + String.join("; ", planCoverage.missingAreas));
+        }
+        out.toolStats.put("planVerifierEnabled", stepVerifierEnabled);
+        out.toolStats.put("planVerifierScore", planCoverage.score);
+        out.toolStats.put("planVerifierMinScore", planCoverage.minScore);
+        out.toolStats.put("planVerifierPassed", planCoverage.passed);
+        out.toolStats.put("planVerifierVerdict", planCoverage.verdict);
+        out.toolStats.put("planVerifierMissing", planCoverage.missingAreas);
+
+        List<Map<String, Object>> structuredPlanSteps = buildStructuredPlanSteps(planSteps);
+        PlanSchemaCheck schemaCheck = evaluatePlanSchema(structuredPlanSteps);
+        if (planSchemaEnabled && !schemaCheck.passed && !schemaCheck.missingSignals.isEmpty()) {
+            planSteps.add("Schema remediation: " + String.join("; ", schemaCheck.missingSignals));
+            structuredPlanSteps = buildStructuredPlanSteps(planSteps);
+            schemaCheck = evaluatePlanSchema(structuredPlanSteps);
+        }
+        out.toolStats.put("planSchemaEnabled", planSchemaEnabled);
+        out.toolStats.put("planSchemaScore", schemaCheck.score);
+        out.toolStats.put("planSchemaMinScore", schemaCheck.minScore);
+        out.toolStats.put("planSchemaPassed", schemaCheck.passed);
+        out.toolStats.put("planSchemaInvalidCount", schemaCheck.invalidCount);
+        out.toolStats.put("planSchemaMissing", schemaCheck.missingSignals);
+        out.toolStats.put("planStructuredSteps", structuredPlanSteps);
+
         out.planSteps = planSteps;
 
         String routingTier = resolveRoutingTier(safeMessage, safeContextType, safeTaskType, safeMode, codeChars, attachmentChars);
@@ -910,7 +984,7 @@ public class AiLocalOrchestrationService {
         // the full LLM call entirely (AgentFinishAction equivalent).
         if (out.speculativeExecuted && speculative != null
                 && speculative.data != null && !speculative.data.isEmpty()
-                && isSimpleStatsQuery(safeMessage)) {
+            && isEarlyFinishEligible(safeMessage, safeMode, safeContextType)) {
             out.earlyFinishResponse = buildEarlyFinishFromSpeculative(speculative.operation, speculative.data);
             if (!out.earlyFinishResponse.isBlank()) {
                 out.toolStats.put("earlyFinish", true);
@@ -1031,6 +1105,244 @@ public class AiLocalOrchestrationService {
         }
         steps.add("Apply routing matrix hint for model selection (planner/balanced/complex)");
         return steps;
+    }
+
+    private record PlanCoverageCheck(
+        int score,
+        int minScore,
+        boolean passed,
+        String verdict,
+        List<String> missingAreas
+    ) {}
+
+    private PlanCoverageCheck evaluatePlanCoverage(
+        String message,
+        String contextType,
+        String taskType,
+        String responseMode,
+        int codeChars,
+        int attachmentChars,
+        LocalToolDigest digest,
+        AiMultimodalScannerService.ScanResult scanResult,
+        List<String> planSteps
+    ) {
+        List<String> missing = new ArrayList<>();
+        List<String> steps = planSteps == null ? List.of() : planSteps;
+        int score = 25;
+
+        if (hasPlanSignal(steps, "scope", "route", "low-cost")) {
+            score += 15;
+        } else {
+            missing.add("missing_scope_or_route_step");
+        }
+
+        if (codeChars <= 0 || hasPlanSignal(steps, "code symbol", "symbol scan", "source")) {
+            score += 15;
+        } else {
+            missing.add("missing_code_symbol_step");
+        }
+
+        if (attachmentChars <= 0 || hasPlanSignal(steps, "attachment", "json key", "digest")) {
+            score += 15;
+        } else {
+            missing.add("missing_attachment_digest_step");
+        }
+
+        String ctx = String.valueOf(contextType == null ? "" : contextType).toLowerCase(Locale.ROOT);
+        String task = String.valueOf(taskType == null ? "" : taskType).toLowerCase(Locale.ROOT);
+        if ("menu_json".equals(ctx) || task.contains("menu")) {
+            if (hasPlanSignal(steps, "schema", "table", "trigger", "menu grounding")) {
+                score += 15;
+            } else {
+                missing.add("missing_menu_schema_grounding");
+            }
+        } else {
+            score += 10;
+        }
+
+        String mode = String.valueOf(responseMode == null ? "" : responseMode).toLowerCase(Locale.ROOT);
+        if (!"analyze".equals(mode) || hasPlanSignal(steps, "explanation", "analyze", "minimal")) {
+            score += 10;
+        } else {
+            missing.add("missing_analyze_mode_guidance");
+        }
+
+        if (digest != null && digest.intentKeywords != null && !digest.intentKeywords.isEmpty()) {
+            score += 5;
+        }
+
+        if (scanResult != null && scanResult.enabled() && scanResult.ingestCount() > 0) {
+            if (hasPlanSignal(steps, "scanner", "multimodal", "ingestion")) {
+                score += 5;
+            } else {
+                missing.add("missing_multimodal_scan_step");
+            }
+        }
+
+        if (isBroadAnalysisRequest(message)) {
+            if (hasPlanSignal(steps, "analysis", "logic", "reasoning")) {
+                score += 5;
+            } else {
+                missing.add("missing_broad_analysis_reasoning_step");
+            }
+        }
+
+        int capped = Math.max(0, Math.min(100, score));
+        int min = Math.max(20, Math.min(95, stepVerifierMinScore));
+        boolean passed = !stepVerifierEnabled || capped >= min;
+        String verdict = passed ? "passed" : "needs_refine";
+        return new PlanCoverageCheck(capped, min, passed, verdict, missing);
+    }
+
+    private record PlanSchemaCheck(
+        int score,
+        int minScore,
+        boolean passed,
+        int invalidCount,
+        List<String> missingSignals
+    ) {}
+
+    private List<Map<String, Object>> buildStructuredPlanSteps(List<String> planSteps) {
+        if (planSteps == null || planSteps.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        int index = 1;
+        for (String rawStep : planSteps) {
+            String step = String.valueOf(rawStep == null ? "" : rawStep).trim();
+            if (step.isBlank()) {
+                continue;
+            }
+            String normalized = step.toLowerCase(Locale.ROOT);
+            String action = "inspect_context";
+            String inputSignal = "user_message";
+            String evidenceSignal = "context_alignment";
+            String stopCondition = "evidence_collected_or_no_signal";
+
+            if (normalized.contains("scope") || normalized.contains("route")) {
+                action = "route_scope";
+                inputSignal = "request_intent";
+                evidenceSignal = "routing_tier";
+            } else if (normalized.contains("code symbol") || normalized.contains("symbol scan") || normalized.contains("source")) {
+                action = "scan_symbols";
+                inputSignal = "current_code";
+                evidenceSignal = "symbol_hits";
+                stopCondition = "symbol_hits_collected_or_limit_reached";
+            } else if (normalized.contains("attachment") || normalized.contains("json key") || normalized.contains("digest")) {
+                action = "digest_attachments";
+                inputSignal = "attachments";
+                evidenceSignal = "attachment_keys";
+                stopCondition = "attachment_digest_complete";
+            } else if (normalized.contains("scanner") || normalized.contains("multimodal") || normalized.contains("ingestion")) {
+                action = "multimodal_scan";
+                inputSignal = "image_json_attachments";
+                evidenceSignal = "scanner_candidates";
+                stopCondition = "scanner_candidates_ranked";
+            } else if (normalized.contains("schema") || normalized.contains("table") || normalized.contains("trigger") || normalized.contains("menu")) {
+                action = "ground_menu_schema";
+                inputSignal = "menu_context";
+                evidenceSignal = "schema_table_trigger_hits";
+                stopCondition = "menu_grounding_sufficient";
+            } else if (normalized.contains("explanation") || normalized.contains("analyze")) {
+                action = "synthesize_analysis";
+                inputSignal = "collected_evidence";
+                evidenceSignal = "analysis_with_code_refs";
+                stopCondition = "analysis_sections_complete";
+            }
+
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("index", index++);
+            row.put("raw", step);
+            row.put("action", action);
+            row.put("inputSignal", inputSignal);
+            row.put("evidenceSignal", evidenceSignal);
+            row.put("stopCondition", stopCondition);
+            out.add(row);
+        }
+        return out;
+    }
+
+    private PlanSchemaCheck evaluatePlanSchema(List<Map<String, Object>> steps) {
+        List<Map<String, Object>> safeSteps = steps == null ? List.of() : steps;
+        List<String> missing = new ArrayList<>();
+        int score = 24;
+        int invalidCount = 0;
+        if (!safeSteps.isEmpty()) {
+            score += Math.min(18, safeSteps.size() * 3);
+        }
+
+        boolean hasRoute = false;
+        boolean hasEvidenceDriven = false;
+        boolean hasStopCondition = false;
+        for (Map<String, Object> step : safeSteps) {
+            if (step == null || step.isEmpty()) {
+                invalidCount++;
+                continue;
+            }
+            String action = String.valueOf(step.getOrDefault("action", "")).trim();
+            String input = String.valueOf(step.getOrDefault("inputSignal", "")).trim();
+            String evidence = String.valueOf(step.getOrDefault("evidenceSignal", "")).trim();
+            String stop = String.valueOf(step.getOrDefault("stopCondition", "")).trim();
+            if (action.isBlank() || input.isBlank() || evidence.isBlank() || stop.isBlank()) {
+                invalidCount++;
+                continue;
+            }
+            if (action.contains("route")) {
+                hasRoute = true;
+            }
+            if (evidence.toLowerCase(Locale.ROOT).contains("hit") || evidence.toLowerCase(Locale.ROOT).contains("evidence")) {
+                hasEvidenceDriven = true;
+            }
+            if (stop.toLowerCase(Locale.ROOT).contains("complete") || stop.toLowerCase(Locale.ROOT).contains("limit") || stop.toLowerCase(Locale.ROOT).contains("sufficient")) {
+                hasStopCondition = true;
+            }
+        }
+
+        if (invalidCount == 0) {
+            score += 22;
+        } else {
+            score -= Math.min(24, invalidCount * 6);
+            missing.add("missing_structured_fields");
+        }
+        if (hasRoute) {
+            score += 14;
+        } else {
+            missing.add("missing_route_action");
+        }
+        if (hasEvidenceDriven) {
+            score += 14;
+        } else {
+            missing.add("missing_evidence_signal");
+        }
+        if (hasStopCondition) {
+            score += 10;
+        } else {
+            missing.add("missing_stop_condition");
+        }
+
+        int capped = Math.max(0, Math.min(100, score));
+        int min = Math.max(20, Math.min(95, planSchemaMinScore));
+        boolean passed = !planSchemaEnabled || (invalidCount == 0 && capped >= min);
+        return new PlanSchemaCheck(capped, min, passed, Math.max(0, invalidCount), missing);
+    }
+
+    private boolean hasPlanSignal(List<String> steps, String... signals) {
+        if (steps == null || steps.isEmpty() || signals == null || signals.length == 0) {
+            return false;
+        }
+        for (String step : steps) {
+            String s = String.valueOf(step == null ? "" : step).toLowerCase(Locale.ROOT);
+            if (s.isBlank()) {
+                continue;
+            }
+            for (String signal : signals) {
+                String token = String.valueOf(signal == null ? "" : signal).toLowerCase(Locale.ROOT).trim();
+                if (!token.isBlank() && s.contains(token)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private String resolveRoutingTier(
@@ -2192,8 +2504,40 @@ public class AiLocalOrchestrationService {
             || m.contains("đếm") || m.contains("dem ")
             || m.contains("count") || m.contains("how many")
             || m.contains("summary") || m.contains("tóm tắt")
-            || m.contains("tom tat") || m.contains("analyze") || m.contains("phân tích")
-            || m.contains("phan tich");
+            || m.contains("tom tat");
+    }
+
+    private boolean isBroadAnalysisRequest(String message) {
+        String m = String.valueOf(message == null ? "" : message).trim().toLowerCase(Locale.ROOT);
+        if (m.isBlank()) {
+            return false;
+        }
+        boolean asksAnalyze = m.contains("phân tích") || m.contains("phan tich") || m.contains("analyze");
+        boolean asksWholeScope = m.contains("toàn bộ") || m.contains("toan bo")
+            || m.contains("nghiệp vụ") || m.contains("nghiep vu")
+            || m.contains("business logic") || m.contains("luồng") || m.contains("luong")
+            || m.contains("hệ thống") || m.contains("he thong");
+        return asksAnalyze && asksWholeScope;
+    }
+
+    private boolean isEarlyFinishEligible(String message, String responseMode, String contextType) {
+        String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
+        String ctx = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        if (!isSimpleStatsQuery(message)) {
+            return false;
+        }
+        // Never short-circuit broad analysis requests; they require full reasoning pass.
+        if (isBroadAnalysisRequest(message)) {
+            return false;
+        }
+        // For menu/code editing flows, keep full pipeline unless this is clearly stats-only.
+        if ("edit".equals(mode)) {
+            return false;
+        }
+        if ("menu_json".equals(ctx) && "analyze".equals(mode)) {
+            return false;
+        }
+        return true;
     }
 
     /**

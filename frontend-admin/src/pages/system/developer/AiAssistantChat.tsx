@@ -1,6 +1,7 @@
 import { AI_TIMEOUT_MS } from "#src/api/ai";
 import { searchBusinessMemory } from "#src/api/ai/assistant-engine";
 import { extractCodeBlocks, extractLatestOpenCodeBlock } from "#src/pages/system/developer/codeUtils";
+import { validateCode, collectWorkspaceDiagnostics, CodeDiagnostic } from "#src/pages/system/developer/useCodeEditor";
 import { request } from "#src/utils";
 import {
 	BgColorsOutlined,
@@ -15,8 +16,9 @@ import {
 	PaperClipOutlined,
 	SendOutlined,
 	ThunderboltOutlined,
+	UndoOutlined,
 } from "@ant-design/icons";
-import { Button, Card, Empty, Input, message, Popconfirm, Space, Spin, Tag, Tooltip } from "antd";
+import { Button, Card, Empty, Input, message, Popconfirm, Segmented, Space, Spin, Tag, Tooltip } from "antd";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import styles from "./AiAssistantChat.module.css";
@@ -77,6 +79,20 @@ interface PatchValidatorMeta {
 	rejectionReason?: string
 }
 
+interface PatchDryRunMeta {
+	inputCount?: number
+	acceptedCount?: number
+	rejectedCount?: number
+	conflictCount?: number
+	rejectionReason?: string
+	conflicts?: Array<{
+		class?: string
+		startLine?: number
+		endLine?: number
+		action?: string
+	}>
+}
+
 interface QuickFixSuggestion {
 	id: string
 	title: string
@@ -110,9 +126,16 @@ interface AgenticStep {
 	detail?: string
 	qualityScore?: number
 	lowConfidence?: boolean
+	riskScore?: number
+	riskLevel?: "low" | "medium" | "high"
+	approvalRequired?: boolean
+	approvalReasons?: string[]
+	approvalState?: "pending" | "approved" | "rejected"
+	pendingTextEdits?: any[]
 	stepIndex?: number
 	stepTotal?: number
 	patchValidator?: PatchValidatorMeta
+	patchDryRun?: PatchDryRunMeta
 	status: "planned" | "running" | "done"
 	timestamp: number
 }
@@ -129,6 +152,20 @@ interface OrchestrationPreviewResult {
 	planSteps: string[]
 	toolStats: Record<string, number>
 	compressedContextBlock: string
+}
+
+interface FileScope {
+	filePath: string
+	fileName: string
+	language?: string
+	description?: string
+}
+
+interface ScopedPatch {
+	fileScope: FileScope
+	patches: any[]
+	status: "pending" | "applied" | "rejected"
+	error?: string
 }
 
 interface StructuredAssistantPayload {
@@ -149,6 +186,7 @@ interface AiAssistantStageEvent {
 	queueState?: string
 	dynamicSource?: string
 	prunedSources?: number
+	tokens?: string[]
 	message: string
 	messageKey?: string
 	messageArgs?: Record<string, any>
@@ -163,6 +201,11 @@ interface AiAssistantStageEvent {
 	total?: number
 	rangeLabel?: string
 	patchValidator?: PatchValidatorMeta
+	patchDryRun?: PatchDryRunMeta
+	riskScore?: number
+	riskLevel?: string
+	approvalRequired?: boolean
+	approvalReasons?: string[]
 	timestamp: number
 }
 
@@ -190,6 +233,51 @@ function normalizePatchValidatorMeta(raw: unknown): PatchValidatorMeta | undefin
 	return meta;
 }
 
+function normalizePatchDryRunMeta(raw: unknown): PatchDryRunMeta | undefined {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw))
+		return undefined;
+	const input = raw as Record<string, unknown>;
+	const toSafeInt = (value: unknown): number | undefined => {
+		const num = Number(value);
+		if (!Number.isFinite(num))
+			return undefined;
+		return Math.max(0, Math.floor(num));
+	};
+	const conflicts = Array.isArray(input.conflicts)
+		? input.conflicts
+			.map((item) => {
+				if (!item || typeof item !== "object" || Array.isArray(item))
+					return null;
+				const obj = item as Record<string, unknown>;
+				return {
+					class: String(obj.class || "").trim() || undefined,
+					startLine: toSafeInt(obj.startLine),
+					endLine: toSafeInt(obj.endLine),
+					action: String(obj.action || "").trim() || undefined,
+				};
+			})
+			.filter(Boolean) as PatchDryRunMeta["conflicts"]
+		: undefined;
+	const rejectionReason = String(input.rejectionReason || "").trim();
+	const meta: PatchDryRunMeta = {
+		inputCount: toSafeInt(input.inputCount),
+		acceptedCount: toSafeInt(input.acceptedCount),
+		rejectedCount: toSafeInt(input.rejectedCount),
+		conflictCount: toSafeInt(input.conflictCount),
+		rejectionReason: rejectionReason || undefined,
+		conflicts,
+	};
+	if (meta.inputCount == null
+		&& meta.acceptedCount == null
+		&& meta.rejectedCount == null
+		&& meta.conflictCount == null
+		&& !meta.rejectionReason
+		&& (!meta.conflicts || meta.conflicts.length === 0)) {
+		return undefined;
+	}
+	return meta;
+}
+
 function isPatchValidatorRejected(meta?: PatchValidatorMeta): boolean {
 	if (!meta)
 		return false;
@@ -198,6 +286,17 @@ function isPatchValidatorRejected(meta?: PatchValidatorMeta): boolean {
 		return true;
 	const rejected = Number(meta.rejectedCount || 0);
 	const accepted = Number(meta.acceptedCount || 0);
+	return rejected > 0 && accepted <= 0;
+}
+
+function isPatchDryRunRejected(meta?: PatchDryRunMeta): boolean {
+	if (!meta)
+		return false;
+	const reason = String(meta.rejectionReason || "").trim().toLowerCase();
+	if (reason && reason !== "none" && reason !== "partial_conflicted")
+		return true;
+	const accepted = Number(meta.acceptedCount || 0);
+	const rejected = Number(meta.rejectedCount || 0);
 	return rejected > 0 && accepted <= 0;
 }
 
@@ -267,6 +366,77 @@ function normalizeEditCandidates(raw: unknown): EditCandidate[] {
 		});
 	}
 	return out;
+}
+
+function parsePreviewCitationSources(block: string): Array<{
+	title: string
+	path?: string
+	scope?: string
+	score?: string
+	summary?: string
+	content?: string
+}> {
+	const text = String(block || "").trim();
+	if (!text) {
+		return [];
+	}
+
+	const sources: Array<{
+		title: string
+		path?: string
+		scope?: string
+		score?: string
+		summary?: string
+		content?: string
+	}> = [];
+	const sections = text.split(/\n(?=###\s+Hit\s+\d+)/g);
+	for (const section of sections) {
+		if (!/###\s+Hit\s+/i.test(section)) {
+			continue;
+		}
+		const path = (section.match(/\npath:\s*(.+)$/im)?.[1] || "").trim();
+		const scope = (section.match(/\nscope:\s*(.+)$/im)?.[1] || "").trim();
+		const score = (section.match(/\nscore:\s*(.+)$/im)?.[1] || "").trim();
+		const summary = (section.match(/\nsummary:\s*(.+)$/im)?.[1] || "").trim();
+		const content = (section.match(/\ncontent:\s*\n([\s\S]*)$/im)?.[1] || "").trim();
+		sources.push({
+			title: path || summary || `Source ${sources.length + 1}`,
+			path: path || undefined,
+			scope: scope || undefined,
+			score: score || undefined,
+			summary: summary || undefined,
+			content: content || undefined,
+		});
+		if (sources.length >= 6) {
+			break;
+		}
+	}
+	return sources;
+}
+
+function parseCitationLocation(raw: string): { path?: string; line?: number } {
+	const text = String(raw || "").trim();
+	if (!text) {
+		return {};
+	}
+
+	const hashLineMatch = text.match(/^(.*?)(?:#L|:)(\d+)(?::\d+)?$/i);
+	if (hashLineMatch) {
+		return {
+			path: hashLineMatch[1]?.trim() || undefined,
+			line: Number(hashLineMatch[2]),
+		};
+	}
+
+	const lineLabelMatch = text.match(/^(.*?)[\s,]+line\s+(\d+)$/i);
+	if (lineLabelMatch) {
+		return {
+			path: lineLabelMatch[1]?.trim() || undefined,
+			line: Number(lineLabelMatch[2]),
+		};
+	}
+
+	return { path: text || undefined };
 }
 
 interface AiUsageSummary {
@@ -355,6 +525,7 @@ interface AiAssistantChatProps {
 	targetPType?: number
 	editorMetadata?: Record<string, unknown>
 	onCodeInsert?: (code: string) => void
+	onCitationNavigate?: (location: { path?: string; line?: number; token: string }) => void
 	onUserMessage?: (payload: AiAssistantUserMessagePayload) => void
 	autoApplyCodeBlock?: boolean
 	autoApplyPreferenceKey?: string
@@ -385,6 +556,14 @@ const PROGRESS_WATCHDOG_SILENCE_MS = 15_000;
 const PROGRESS_WATCHDOG_TICK_MS = 3_000;
 const PROGRESS_WATCHDOG_ALERT_INTERVAL_MS = 30_000;
 const PROGRESS_EVENT_AGE_TICK_MS = 2_000;
+
+const SLASH_COMMANDS = [
+	{ command: "/analyze", label: "Analyze", description: "Analyze current code or selection" },
+	{ command: "/edit", label: "Edit", description: "Request an immediately applicable patch" },
+	{ command: "/local-plan", label: "Local Plan", description: "Preview local orchestration plan" },
+	{ command: "/fix", label: "Fix", description: "Focus on current errors or diagnostics" },
+	{ command: "/help", label: "Help", description: "Show available assistant commands" },
+];
 const TEXT_FILE_EXTENSIONS = new Set([
 	"txt",
 	"md",
@@ -948,6 +1127,64 @@ function normalizeAssistantDisplayText(raw: unknown): string {
 	return normalizeBrokenListLineBreaks(conversationalJsonText || text);
 }
 
+function stripInternalOrchestrationLeakLines(raw: unknown): string {
+	const source = String(raw || "");
+	if (!source.trim())
+		return "";
+
+	const lines = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+	const out: string[] = [];
+	let leakTailBudget = 0;
+	for (const rawLine of lines) {
+		const line = String(rawLine || "");
+		const lowered = line.trim().toLowerCase();
+
+		if (leakTailBudget > 0) {
+			const boundaryLine = !lowered
+				|| /^\d{1,2}:\d{2}(:\d{2})?\s*(am|pm)?$/.test(lowered)
+				|| lowered.startsWith("## ")
+				|| lowered.startsWith("### ");
+			if (!boundaryLine) {
+				leakTailBudget -= 1;
+				continue;
+			}
+			leakTailBudget = 0;
+		}
+
+		const leakedDynSource = lowered.startsWith("dyn_ctx_orchestration_")
+			|| lowered.startsWith("dyn_ctx_currentcode")
+			|| lowered.startsWith("dyn_ctx_")
+			|| lowered.startsWith("source=primary_flow")
+			|| lowered.startsWith("source=multimodal")
+			|| (lowered.startsWith("source=")
+				&& (lowered.includes("primary_flow") || lowered.includes("multimodal") || lowered.includes("orchestration")))
+			|| lowered.startsWith("source: dyn_ctx_")
+			|| lowered.startsWith("request=")
+			|| lowered.startsWith("intentkeywords=")
+			|| lowered.startsWith("codesymbols=")
+			|| lowered.startsWith("contexttype=")
+			|| lowered.startsWith("tasktype=")
+			|| lowered.startsWith("orchestration_dynamic_memory_source=")
+			|| lowered.startsWith("[reused_context]")
+			|| lowered.startsWith("[session_continuity]")
+			|| lowered.startsWith("[current_request]")
+			|| lowered.startsWith("## user_memory")
+			|| lowered.startsWith("### turn [")
+			|| lowered.startsWith("localscanner")
+			|| lowered.startsWith("scanner_")
+			|| /^\d{1,2}:\d{2}(:\d{2})?\s*(am|pm)?$/.test(lowered)
+			|| (lowered.startsWith("input") && lowered.includes("checked:"));
+		if (leakedDynSource) {
+			leakTailBudget = Math.max(leakTailBudget, 8);
+			continue;
+		}
+
+		out.push(line);
+	}
+
+	return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function toStringList(raw: unknown): string[] {
 	if (!Array.isArray(raw))
 		return [];
@@ -1440,18 +1677,24 @@ export default function AiAssistantChat({
 	targetPType,
 	editorMetadata,
 	onCodeInsert,
+	onCitationNavigate,
 	onUserMessage,
 }: AiAssistantChatProps) {
 	const { i18n } = useTranslation();
 	const shouldHideCodeInChat = Boolean(onCodeInsert);
 	const [messages, setMessages] = useState<ChatMessage[]>(getChatHistory());
 	const [inputValue, setInputValue] = useState("");
+	const [showSlashCommandPalette, setShowSlashCommandPalette] = useState(false);
+	const [slashCommandIndex, setSlashCommandIndex] = useState(0);
 	const [promptHistory, setPromptHistory] = useState<string[]>([]);
 	const [promptHistoryIndex, setPromptHistoryIndex] = useState(-1);
 	const [promptHistoryOriginal, setPromptHistoryOriginal] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
 	const [pendingAttachments, setPendingAttachments] = useState<AiAssistantAttachment[]>([]);
 	const [stageEvents, setStageEvents] = useState<AiAssistantStageEvent[]>([]);
+	const [targetFileScopes, setTargetFileScopes] = useState<FileScope[]>([]);
+	const [scopedPatches, setScopedPatches] = useState<ScopedPatch[]>([]);
+	const [showMultiFilePanel, setShowMultiFilePanel] = useState(false);
 	const [aiUsageSummary, setAiUsageSummary] = useState<{
 		turn: AiUsageSummary | null
 		sessionCostUsd: number
@@ -1496,8 +1739,12 @@ export default function AiAssistantChat({
 	const [editCandidates, setEditCandidates] = useState<EditCandidate[]>([]);
 	const [applyingEditCandidateId, setApplyingEditCandidateId] = useState("");
 	const [retryingEditCandidateId, setRetryingEditCandidateId] = useState("");
+	const [assistantCitationTokens, setAssistantCitationTokens] = useState<string[]>([]);
 	const [lastProgressEventAgeSecs, setLastProgressEventAgeSecs] = useState(0);
 	const [backendProgressHint, setBackendProgressHint] = useState<{ stage: string, detail: string }>({ stage: "", detail: "" });
+	const [followUpSuggestions, setFollowUpSuggestions] = useState<string[]>([]);
+	const [canUndoLastEdit, setCanUndoLastEdit] = useState(false);
+	const [forcedResponseMode, setForcedResponseMode] = useState<"ask" | "edit" | null>(null);
 	// Progress state: waiting for Gemini / streaming progress
 	const [geminiProgress, setGeminiProgress] = useState<{
 		phase: "idle" | "waiting" | "streaming"
@@ -1521,6 +1768,7 @@ export default function AiAssistantChat({
 	const applyRealtimeCodeFromTextRef = useRef<(rawText: string, force?: boolean) => boolean>(() => false);
 	const lastAppliedCodeRef = useRef<string>("");
 	const lastRealtimeApplyAtRef = useRef<number>(0);
+	const undoSnapshotRef = useRef<string>("");
 	const followBottomRef = useRef<boolean>(true);
 	const scrollFrameRef = useRef<number | null>(null);
 	const lastSmoothScrollAtRef = useRef<number>(0);
@@ -1541,6 +1789,22 @@ export default function AiAssistantChat({
 		? modelDecisionTrace
 		: modelDecisionTrace.slice(-COMPACT_MODEL_TRACE);
 	const hiddenModelTraceCount = Math.max(0, modelDecisionTrace.length - visibleModelDecisionTrace.length);
+	const previewSources = useMemo(
+		() => parsePreviewCitationSources(orchPreview?.compressedContextBlock || ""),
+		[orchPreview?.compressedContextBlock],
+	);
+	const visibleCitationTokens = useMemo(
+		() => assistantCitationTokens.slice(0, 8),
+		[assistantCitationTokens],
+	);
+	const filteredSlashCommands = useMemo(() => {
+		const text = String(inputValue || "").trimStart();
+		if (!text.startsWith("/")) {
+			return [];
+		}
+		const query = text.toLowerCase();
+		return SLASH_COMMANDS.filter(item => item.command.startsWith(query) || item.label.toLowerCase().includes(query.slice(1)));
+	}, [inputValue]);
 
 	useEffect(() => {
 		streamJobIdRef.current = streamJobId;
@@ -1586,6 +1850,20 @@ export default function AiAssistantChat({
 				? { ...(editorMetadata as Record<string, unknown>) }
 				: {};
 
+		// Support multiple languages for diagnostics
+		const supportedLanguages = ["javascript", "html", "typescript", "python", "java", "css", "json", "sql"];
+		const diagnosticsLanguage = supportedLanguages.includes(String(language || "")) ? String(language) : null;
+
+		// Collect basic syntax validation (skip TypeScript as it requires type checker)
+		const diagnosticsSnapshot = diagnosticsLanguage && diagnosticsLanguage !== "typescript"
+			? validateCode(String(currentCode || ""), diagnosticsLanguage as any)
+			: null;
+
+		// Collect comprehensive workspace diagnostics (including lint patterns, structure validation)
+		const workspaceDiagnostics: CodeDiagnostic[] = diagnosticsLanguage
+			? collectWorkspaceDiagnostics(String(currentCode || ""), diagnosticsLanguage)
+			: [];
+
 		const normalizedPName = (targetPName || "").trim();
 		if (normalizedPName && merged.fileKey == null) {
 			merged.fileKey = normalizedPName;
@@ -1610,8 +1888,45 @@ export default function AiAssistantChat({
 			}
 		}
 
+		// Include comprehensive diagnostics in metadata
+		if (diagnosticsLanguage) {
+			const errorCount = Math.max(
+				(diagnosticsSnapshot?.errors.length || 0),
+				workspaceDiagnostics.filter(d => d.severity === "error").length
+			);
+			const warningCount = workspaceDiagnostics.filter(d => d.severity === "warning").length;
+
+			merged.diagnostics = {
+				language: diagnosticsLanguage,
+				valid: (diagnosticsSnapshot?.valid ?? true) && errorCount === 0,
+				errorCount,
+				warningCount,
+				errors: [
+					...(diagnosticsSnapshot?.errors || []).slice(0, 3),
+					...workspaceDiagnostics
+						.filter(d => d.severity === "error")
+						.slice(0, 3)
+						.map(d => `Line ${d.line + 1}: ${d.message}`),
+				].slice(0, 5),
+				workspaceDiagnostics: workspaceDiagnostics.slice(0, 8), // Include detailed diagnostics
+			};
+		}
+
+		if (targetFileScopes.length > 0) {
+			merged.multiFileScopes = targetFileScopes;
+			merged.isMultiFileRequest = true;
+		}
+
 		return merged;
-	}, [editorMetadata, targetPName, targetPType, language, contextType, currentCode]);
+	}, [editorMetadata, targetPName, targetPType, language, contextType, currentCode, targetFileScopes]);
+
+	const editorDiagnostics = useMemo(() => {
+		const supportedLanguages = ["javascript", "html", "typescript", "python", "java", "css", "json", "sql"];
+		if (!supportedLanguages.includes(String(language || ""))) {
+			return null;
+		}
+		return validateCode(String(currentCode || ""), String(language) as any);
+	}, [currentCode, language]);
 
 	const uiText = useCallback((vi: string, en: string, zh: string) => {
 		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
@@ -1621,6 +1936,91 @@ export default function AiAssistantChat({
 			return en;
 		return vi;
 	}, [i18n.language, i18n.resolvedLanguage]);
+
+	// Multi-file scope helpers
+	const addTargetFileScope = useCallback((filePath: string, fileName?: string, language?: string) => {
+		const existing = targetFileScopes.find(f => f.filePath === filePath);
+		if (existing) return;
+		setTargetFileScopes(prev => [...prev, {
+			filePath,
+			fileName: fileName || filePath.split('/').pop() || '',
+			language,
+		}]);
+	}, [targetFileScopes]);
+
+	const removeTargetFileScope = useCallback((filePath: string) => {
+		setTargetFileScopes(prev => prev.filter(f => f.filePath !== filePath));
+		setScopedPatches(prev => prev.filter(p => p.fileScope.filePath !== filePath));
+	}, []);
+
+	const clearTargetFileScopes = useCallback(() => {
+		setTargetFileScopes([]);
+		setScopedPatches([]);
+	}, []);
+
+	const handleCitationNavigate = useCallback((raw: string) => {
+		if (!onCitationNavigate) {
+			return;
+		}
+		const location = parseCitationLocation(raw);
+		onCitationNavigate({
+			path: location.path,
+			line: location.line,
+			token: raw,
+		});
+	}, [onCitationNavigate]);
+
+	const applySlashCommand = useCallback((command: string) => {
+		const current = String(inputValue || "").trimStart();
+		const nextValue = current.startsWith(command)
+			? current
+			: `${command} `;
+		setInputValue(nextValue);
+		setShowSlashCommandPalette(false);
+		setSlashCommandIndex(0);
+	}, [inputValue]);
+
+	const renderMultiFileScopePanel = useCallback(() => {
+		if (targetFileScopes.length === 0) {
+			return null;
+		}
+
+		return (
+			<div style={{ display: "grid", gap: 8, padding: "8px 12px", background: "rgba(99, 102, 241, 0.08)", borderRadius: 6, marginBottom: 8 }}>
+				<div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }}>
+					<div style={{ fontSize: 11, fontWeight: 600, color: "#6366f1" }}>
+						{uiText("Phạm vi tập tin", "File Scopes", "文件作用域")}
+						{" "}
+						({targetFileScopes.length})
+					</div>
+					<Button
+						type="text"
+						size="small"
+						onClick={clearTargetFileScopes}
+						style={{ color: "#ef4444", fontSize: 11 }}
+					>
+						{uiText("Xóa tất cả", "Clear", "清空")}
+					</Button>
+				</div>
+				<div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+					{targetFileScopes.map((scope, idx) => (
+						<Tag
+							key={`${scope.filePath}-${idx}`}
+							color="blue"
+							closable
+							onClose={() => removeTargetFileScope(scope.filePath)}
+							style={{ marginInlineEnd: 0 }}
+						>
+							<span style={{ fontSize: 11 }}>
+								{scope.fileName}
+								{scope.language && <span style={{ opacity: 0.7 }}> ({scope.language})</span>}
+							</span>
+						</Tag>
+					))}
+				</div>
+			</div>
+		);
+	}, [clearTargetFileScopes, removeTargetFileScope, targetFileScopes, uiText]);
 
 	const renderOperationSnippetText = useCallback((raw: string): string => {
 		const text = String(raw || "");
@@ -1805,6 +2205,24 @@ export default function AiAssistantChat({
 					"Return a minimal immediately-applicable patch without out-of-scope edits.",
 					"返回最小可立即应用补丁，且不要越范围修改。",
 				);
+		}
+	}, [uiText]);
+
+	const formatPatchDryRunReason = useCallback((reasonCode?: string): string => {
+		const code = String(reasonCode || "").trim().toLowerCase();
+		switch (code) {
+			case "all_conflicted":
+				return uiText("mọi patch đều xung đột", "all patches conflicted", "所有补丁均冲突");
+			case "partial_conflicted":
+				return uiText("một phần patch xung đột", "partially conflicted patch", "部分补丁冲突");
+			case "empty_after_simulation":
+				return uiText("mô phỏng xong cho ra kết quả rỗng", "empty output after dry-run simulation", "干运行后输出为空");
+			case "empty_input":
+				return uiText("không có patch để dry-run", "empty patch input for dry-run", "无可用于干运行的补丁");
+			case "none":
+				return uiText("dry-run hợp lệ", "dry-run valid", "干运行有效");
+			default:
+				return code || uiText("không rõ", "unknown", "未知");
 		}
 	}, [uiText]);
 
@@ -2318,8 +2736,12 @@ export default function AiAssistantChat({
 			return uiText("Lập kế hoạch kiểm chứng", "Verification planning", "验证规划");
 		case "assistant_verify_result":
 			return uiText("Kiểm chứng kết quả", "Result verification", "结果验证");
+		case "assistant_evidence_gate":
+			return uiText("Kiểm tra bằng chứng phân tích", "Analysis evidence gate", "分析证据门控");
 		case "assistant_edit_risk_gate":
 			return uiText("Đánh giá rủi ro chỉnh sửa", "Edit risk gating", "编辑风险门控");
+		case "patch_dry_run_rejected":
+			return uiText("Dry-run patch bị chặn", "Patch dry-run rejected", "补丁干运行被拒绝");
 		case "assistant_tool_execution_result":
 			return uiText("Kết quả thực thi công cụ", "Tool execution result", "工具执行结果");
 		case "assistant_citations":
@@ -2330,6 +2752,10 @@ export default function AiAssistantChat({
 			return uiText("Suy luận theo phạm vi", "Scope reasoning", "范围推理");
 		case "dynamic_ingestion":
 			return uiText("Nạp bộ nhớ động", "Dynamic ingestion", "动态入库");
+		case "agentic_plan_schema":
+			return uiText("Kiểm tra schema kế hoạch", "Plan schema verification", "计划结构验证");
+		case "agentic_step_verifier":
+			return uiText("Kiểm tra chất lượng step", "Step quality verification", "步骤质量验证");
 			case "preparing":
 				return uiText("Chuẩn bị", "Preparing", "准备中");
 			case "context":
@@ -2626,12 +3052,20 @@ export default function AiAssistantChat({
 		return "final";
 	if (normalizedStage === "assistant_citations")
 		return "final";
+	if (normalizedStage === "assistant_evidence_gate")
+		return "final";
 	if (normalizedStage === "assistant_edit_risk_gate")
 		return "final";
+	if (normalizedStage === "patch_dry_run_rejected")
+		return "error";
 	if (normalizedStage === "scope_reasoning")
 		return "preparing";
 	if (normalizedStage === "dynamic_ingestion")
 		return "chunking";
+	if (normalizedStage === "agentic_plan_schema")
+		return "final";
+	if (normalizedStage === "agentic_step_verifier")
+		return "final";
 		const key = normalizedPhase || normalizedStage;
 		if (key.includes("preparing"))
 			return "preparing";
@@ -2742,8 +3176,9 @@ export default function AiAssistantChat({
 		const dynamicSource = String(data?.dynamicSource || "").trim();
 		const prunedSourcesNum = Number(data?.prunedSources);
 		const patchValidator = normalizePatchValidatorMeta(data?.patchValidator);
+		const patchDryRun = normalizePatchDryRunMeta(data?.patchDryRun);
 		const rangeLabel = extractStageRangeLabel(data);
-		const hasValue = stage || msg || messageKey || detail || detailKey || orchestrationPhase || orchestrationPhaseKey || Number.isFinite(Number(data?.percent)) || Number.isFinite(Number(data?.overallPercent)) || Boolean(rangeLabel) || Boolean(patchValidator);
+		const hasValue = stage || msg || messageKey || detail || detailKey || orchestrationPhase || orchestrationPhaseKey || Number.isFinite(Number(data?.percent)) || Number.isFinite(Number(data?.overallPercent)) || Boolean(rangeLabel) || Boolean(patchValidator) || Boolean(patchDryRun);
 		if (!hasValue)
 			return;
 
@@ -2777,6 +3212,10 @@ export default function AiAssistantChat({
 			patchValidator?.rejectionReason || "",
 			patchValidator?.acceptedCount ?? "",
 			patchValidator?.rejectedCount ?? "",
+			patchDryRun?.rejectionReason || "",
+			patchDryRun?.acceptedCount ?? "",
+			patchDryRun?.rejectedCount ?? "",
+			patchDryRun?.conflictCount ?? "",
 			rangeLabel || "",
 		].join("|");
 
@@ -2797,6 +3236,7 @@ export default function AiAssistantChat({
 			dynamicSource: dynamicSource || undefined,
 			prunedSources: Number.isFinite(prunedSourcesNum) ? prunedSourcesNum : undefined,
 			patchValidator,
+			patchDryRun,
 			message: msg,
 			messageKey: messageKey || undefined,
 			messageArgs,
@@ -3001,6 +3441,11 @@ export default function AiAssistantChat({
 		[agenticSteps],
 	);
 
+	const pendingApprovalAgenticSteps = useMemo(
+		() => agenticSteps.filter(step => step.approvalRequired && step.approvalState === "pending"),
+		[agenticSteps],
+	);
+
 	const filteredLocalFlowOpLines = useMemo(() => {
 		if (localFlowOpFilter === "all") {
 			return localFlowOpLines;
@@ -3055,7 +3500,8 @@ export default function AiAssistantChat({
 			pendingStreamChunkRef.current = "";
 		}
 
-		const nextText = String(streamingMessageRef.current || "");
+		const nextText = stripInternalOrchestrationLeakLines(streamingMessageRef.current || "");
+		streamingMessageRef.current = nextText;
 		if (!nextText && !force)
 			return;
 
@@ -3193,6 +3639,11 @@ export default function AiAssistantChat({
 			return false;
 		}
 
+		// Snapshot code before overwriting so user can undo
+		if (currentCode && currentCode !== nextCode) {
+			undoSnapshotRef.current = currentCode;
+			setCanUndoLastEdit(true);
+		}
 		onCodeInsert(nextCode);
 		lastAppliedCodeRef.current = nextCode;
 		lastRealtimeApplyAtRef.current = now;
@@ -3551,6 +4002,25 @@ export default function AiAssistantChat({
 		});
 	}, []);
 
+	const handleApproveAgenticStep = useCallback((step: AgenticStep) => {
+		if (!step.pendingTextEdits || step.pendingTextEdits.length <= 0) {
+			return;
+		}
+		const editsPayload = JSON.stringify({ textEdits: step.pendingTextEdits });
+		applyRealtimeCodeFromTextRef.current(editsPayload, true);
+		setAgenticSteps(prev => prev.map(item => item.id === step.id
+			? { ...item, approvalState: "approved", detail: [item.detail, uiText("Đã duyệt và áp dụng", "Approved and applied", "已批准并应用")].filter(Boolean).join(" · ") }
+			: item));
+		message.success(uiText("Đã áp dụng bước risky sau khi duyệt", "Risky step applied after approval", "已在批准后应用风险步骤"));
+	}, [uiText]);
+
+	const handleRejectAgenticStep = useCallback((step: AgenticStep) => {
+		setAgenticSteps(prev => prev.map(item => item.id === step.id
+			? { ...item, approvalState: "rejected", detail: [item.detail, uiText("Đã từ chối áp dụng", "Rejected for apply", "已拒绝应用")].filter(Boolean).join(" · ") }
+			: item));
+		message.info(uiText("Đã giữ lại patch risky, chưa áp dụng", "Risky patch kept unapplied", "风险补丁已保留且未应用"));
+	}, [uiText]);
+
 	const handleOrchPreview = useCallback(async () => {
 		const msg = inputValue.trim();
 		if (!msg && pendingAttachments.length === 0) {
@@ -3732,9 +4202,10 @@ export default function AiAssistantChat({
 			// Default behavior:
 			// - normal route: analyze-first
 			// - local-plan route: edit-first so streamed local patch can auto-apply
+			// forcedResponseMode from toolbar Ask/Edit toggle overrides directive if set
 			const requestedResponseMode: ResponseMode = useLocalPlanRoute
 				? (modeDirective.overrideMode ?? "edit")
-				: (modeDirective.overrideMode ?? "analyze");
+				: (forcedResponseMode === "edit" ? (modeDirective.overrideMode ?? "edit") : forcedResponseMode === "ask" ? (modeDirective.overrideMode ?? "analyze") : (modeDirective.overrideMode ?? "analyze"));
 
 			// Add placeholder for assistant response
 			const assistantMsg: ChatMessage = {
@@ -3778,6 +4249,9 @@ export default function AiAssistantChat({
 			setEditCandidates([]);
 			setApplyingEditCandidateId("");
 			setRetryingEditCandidateId("");
+			setAssistantCitationTokens([]);
+			setFollowUpSuggestions([]);
+			setCanUndoLastEdit(false);
 			setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 			setBackendProgressHint({ stage: "", detail: "" });
 			setLastProgressEventAgeSecs(0);
@@ -4339,6 +4813,36 @@ export default function AiAssistantChat({
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 							}
+							else if (evt.stage === "assistant_evidence_gate") {
+								const verdict = String((evt as any).verificationVerdict || "").trim();
+								const score = Number((evt as any).score);
+								const minScore = Number((evt as any).minScore);
+								const evidenceCount = Number((evt as any).evidenceCount || 0);
+								const minEvidenceCount = Number((evt as any).minEvidenceCount || 0);
+								appendAgenticStep({
+									stage: "assistant_evidence_gate",
+									icon: "🛡️",
+									label: uiText("Gate bằng chứng phân tích", "Analysis evidence gate", "分析证据门控"),
+									detail: `${verdict || "blocked"} · ${Number.isFinite(score) ? Math.round(score) : "--"}/${Number.isFinite(minScore) ? Math.round(minScore) : "--"} · ev=${evidenceCount}/${minEvidenceCount}`,
+									status: "running",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "patch_dry_run_rejected") {
+								const dryRun = normalizePatchDryRunMeta((evt as any).stats || (evt as any).patchDryRun || {});
+								const reason = String((evt as any).reason || dryRun?.rejectionReason || "").trim();
+								const conflictCount = Number(dryRun?.conflictCount ?? (dryRun?.conflicts?.length || 0));
+								appendAgenticStep({
+									stage: "patch_dry_run_rejected",
+									icon: "⛔",
+									label: uiText("Dry-run patch bị chặn", "Patch dry-run rejected", "补丁干运行被拒绝"),
+									detail: `${formatPatchDryRunReason(reason)}${Number.isFinite(conflictCount) && conflictCount > 0 ? ` · conflicts=${conflictCount}` : ""}`,
+									status: "running",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
 							else if (evt.stage === "assistant_edit_risk_gate") {
 								const riskScore = Number((evt as any).riskScore);
 								const riskLevel = String((evt as any).riskLevel || "").trim().toLowerCase();
@@ -4385,6 +4889,10 @@ export default function AiAssistantChat({
 							else if (evt.stage === "assistant_citations") {
 								const count = Number((evt as any).count || 0);
 								const sources = Number((evt as any).sources || 0);
+								const tokens = Array.isArray((evt as any).tokens)
+									? (evt as any).tokens.map((token: any) => String(token || "").trim()).filter(Boolean)
+									: [];
+								setAssistantCitationTokens(tokens);
 								appendAgenticStep({
 									stage: "assistant_citations",
 									icon: count > 0 ? "📚" : "○",
@@ -4441,44 +4949,73 @@ export default function AiAssistantChat({
 								const stepDesc = String((evt as any).stepDescription || "").trim();
 								const isPartial = Boolean((evt as any).partial);
 								const stepPatchValidator = normalizePatchValidatorMeta((evt as any).patchValidator);
+								const stepPatchDryRun = normalizePatchDryRunMeta((evt as any).patchDryRun);
 								const patchRejected = isPatchValidatorRejected(stepPatchValidator);
+								const dryRunRejected = isPatchDryRunRejected(stepPatchDryRun);
 								const patchReasonCode = String(stepPatchValidator?.rejectionReason || "").trim().toLowerCase();
+								const dryRunReasonCode = String(stepPatchDryRun?.rejectionReason || "").trim().toLowerCase();
 								const patchHint = stepPatchValidator
 									? `${formatPatchValidatorReason(stepPatchValidator.rejectionReason)} (${stepPatchValidator.acceptedCount ?? 0}/${stepPatchValidator.inputCount ?? 0})`
+									: "";
+								const dryRunHint = stepPatchDryRun
+									? `${formatPatchDryRunReason(stepPatchDryRun.rejectionReason)} (${stepPatchDryRun.acceptedCount ?? 0}/${stepPatchDryRun.inputCount ?? 0})`
 									: "";
 								const rawQualityScore = Number((evt as any).qualityScore);
 								const hasQualityScore = Number.isFinite(rawQualityScore);
 								const qualityScore = Number.isFinite(rawQualityScore)
 									? Math.max(0, Math.min(100, Math.round(rawQualityScore)))
 									: undefined;
+								const rawRiskScore = Number((evt as any).riskScore);
+								const riskScore = Number.isFinite(rawRiskScore)
+									? Math.max(0, Math.min(100, Math.round(rawRiskScore)))
+									: undefined;
+								const riskLevelRaw = String((evt as any).riskLevel || "").trim().toLowerCase();
+								const riskLevel = ["low", "medium", "high"].includes(riskLevelRaw)
+									? (riskLevelRaw as "low" | "medium" | "high")
+									: undefined;
+								const approvalRequired = Boolean((evt as any).approvalRequired);
+								const approvalReasons = Array.isArray((evt as any).approvalReasons)
+									? (evt as any).approvalReasons.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+									: [];
 								const lowConfidence = Boolean((evt as any).lowConfidence)
 									|| (hasQualityScore && qualityScore !== undefined ? qualityScore < 45 : false)
-									|| patchRejected;
+									|| patchRejected
+									|| dryRunRejected;
 								const qualityNote = hasQualityScore && qualityScore !== undefined
 									? ` · Q=${qualityScore}${lowConfidence ? " low" : ""}`
 									: (lowConfidence ? " · low-confidence" : "");
 								const validatorNote = patchRejected
 									? ` · validator=${patchReasonCode || "rejected"}`
 									: (patchHint ? ` · validator=${patchHint}` : "");
+								const dryRunNote = dryRunRejected
+									? ` · dryRun=${dryRunReasonCode || "rejected"}`
+									: (dryRunHint ? ` · dryRun=${dryRunHint}` : "");
 								appendAgenticStep({
 									stage: `agentic_step_result_${stepIndex}`,
-									icon: lowConfidence ? "⚠️" : "✏️",
+									icon: approvalRequired ? "🛂" : (lowConfidence ? "⚠️" : "✏️"),
 									label: uiText(
 										`Bước ${stepIndex}/${stepTotal}`,
 										`Step ${stepIndex}/${stepTotal}`,
 										`步骤 ${stepIndex}/${stepTotal}`,
 									),
-									detail: `${stepDesc || ""}${qualityNote}${validatorNote}`.trim() || undefined,
+									detail: `${stepDesc || ""}${qualityNote}${validatorNote}${dryRunNote}`.trim() || undefined,
 									qualityScore,
 									lowConfidence,
+									riskScore,
+									riskLevel,
+									approvalRequired,
+									approvalReasons,
+									approvalState: approvalRequired ? "pending" : undefined,
 									stepIndex,
 									stepTotal,
 									patchValidator: stepPatchValidator,
+									patchDryRun: stepPatchDryRun,
+									pendingTextEdits: approvalRequired && Array.isArray((evt as any).textEdits) ? (evt as any).textEdits : undefined,
 									status: isPartial ? "running" : "done",
 								});
 								// Apply textEdits to CodeMirror immediately for edit-mode steps.
 								const stepTextEdits = (evt as any).textEdits;
-								if (Array.isArray(stepTextEdits) && stepTextEdits.length > 0) {
+								if (!approvalRequired && Array.isArray(stepTextEdits) && stepTextEdits.length > 0) {
 									const editsPayload = JSON.stringify({ textEdits: stepTextEdits });
 									applyRealtimeCodeFromText(editsPayload, true);
 								}
@@ -4536,6 +5073,53 @@ export default function AiAssistantChat({
 									label: uiText("Nạp Lucene tạm", "Temporary Lucene ingestion", "临时 Lucene 入库"),
 									detail: dynamicDetail,
 									status: queueState === "queued" ? "running" : "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "agentic_plan_schema") {
+								const score = Number((evt as any).score);
+								const minScore = Number((evt as any).minScore);
+								const missing = Array.isArray((evt as any).missing)
+									? (evt as any).missing.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+									: [];
+								const detailParts: string[] = [];
+								if (Number.isFinite(score) && Number.isFinite(minScore) && minScore > 0) {
+									detailParts.push(`${uiText("điểm", "score", "分数")}: ${score}/${minScore}`);
+								}
+								if (missing.length > 0) {
+									detailParts.push(`${uiText("thiếu", "missing", "缺失")}: ${missing.slice(0, 3).join(", ")}`);
+								}
+								appendAgenticStep({
+									stage: "agentic_plan_schema",
+									icon: "🧭",
+									label: uiText("Chuẩn hóa schema kế hoạch", "Planner schema contract", "计划结构约束"),
+									detail: detailParts.length > 0 ? detailParts.join(" · ") : localizedEvtMessage,
+									status: String((evt as any).status || "").toLowerCase() === "passed" ? "done" : "running",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "agentic_step_verifier") {
+								const score = Number((evt as any).score);
+								const minScore = Number((evt as any).minScore);
+								const verdict = String((evt as any).verdict || (evt as any).status || "").trim().toLowerCase();
+								const missing = Array.isArray((evt as any).missing)
+									? (evt as any).missing.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+									: [];
+								const detailParts: string[] = [];
+								if (Number.isFinite(score) && Number.isFinite(minScore) && minScore > 0) {
+									detailParts.push(`${uiText("điểm", "score", "分数")}: ${score}/${minScore}`);
+								}
+								if (missing.length > 0) {
+									detailParts.push(`${uiText("thiếu", "missing", "缺失")}: ${missing.slice(0, 3).join(", ")}`);
+								}
+								appendAgenticStep({
+									stage: "agentic_step_verifier",
+									icon: "✅",
+									label: uiText("Kiểm tra chất lượng kế hoạch", "Plan quality verification", "计划质量验证"),
+									detail: detailParts.length > 0 ? detailParts.join(" · ") : localizedEvtMessage,
+									status: verdict === "passed" ? "done" : "running",
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
@@ -4684,7 +5268,7 @@ export default function AiAssistantChat({
 								}
 							}
 							else if (evt.stage === "streaming" && evt.chunk) {
-								pendingStreamChunkRef.current += evt.chunk;
+								pendingStreamChunkRef.current += stripInternalOrchestrationLeakLines(evt.chunk);
 								scheduleStreamFlush();
 							}
 							else if (evt.stage === "request_complete") {
@@ -4843,7 +5427,7 @@ export default function AiAssistantChat({
 									void loadStreamPartsMeta(effectiveStreamJobId, 1, 20);
 								}
 								if (evt.fullResponse) {
-									streamingMessageRef.current = evt.fullResponse;
+									streamingMessageRef.current = stripInternalOrchestrationLeakLines(evt.fullResponse);
 									pendingStreamChunkRef.current = "";
 								}
 								else if (useLocalPlanRoute && evt.result) {
@@ -4931,6 +5515,13 @@ export default function AiAssistantChat({
 									sseAbortRef.current = null;
 								}
 								turnAllowAutoApplyRef.current = false;
+								// Populate follow-up suggestions if backend emitted them
+								const backendFollowUps = Array.isArray((evt as any).followUpSuggestions)
+									? (evt as any).followUpSuggestions.map((s: unknown) => String(s || "").trim()).filter(Boolean).slice(0, 3) as string[]
+									: [];
+								if (backendFollowUps.length > 0) {
+									setFollowUpSuggestions(backendFollowUps);
+								}
 							}
 							else if (evt.stage === "error") {
 								receivedErrorEvent = true;
@@ -5211,6 +5802,31 @@ export default function AiAssistantChat({
 			handleSend();
 			return;
 		}
+
+		if (showSlashCommandPalette && filteredSlashCommands.length > 0) {
+			if (e.key === "ArrowDown") {
+				e.preventDefault();
+				setSlashCommandIndex((prev) => (prev + 1) % filteredSlashCommands.length);
+				return;
+			}
+			if (e.key === "ArrowUp") {
+				e.preventDefault();
+				setSlashCommandIndex((prev) => (prev - 1 + filteredSlashCommands.length) % filteredSlashCommands.length);
+				return;
+			}
+			if (e.key === "Enter" && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+				e.preventDefault();
+				applySlashCommand(filteredSlashCommands[slashCommandIndex]?.command || filteredSlashCommands[0]?.command || "/analyze");
+				return;
+			}
+			if (e.key === "Escape") {
+				e.preventDefault();
+				setShowSlashCommandPalette(false);
+				setSlashCommandIndex(0);
+				return;
+			}
+		}
+
 		if (e.key !== "ArrowUp" && e.key !== "ArrowDown")
 			return;
 		if (e.shiftKey || e.altKey || e.metaKey || e.ctrlKey)
@@ -5256,7 +5872,7 @@ export default function AiAssistantChat({
 		}
 		setPromptHistoryIndex(nextIndex);
 		setInputValue(promptHistory[nextIndex] || "");
-	}, [handleSend, inputValue, promptHistory, promptHistoryIndex, promptHistoryOriginal]);
+	}, [applySlashCommand, filteredSlashCommands, handleSend, inputValue, promptHistory, promptHistoryIndex, promptHistoryOriginal, showSlashCommandPalette, slashCommandIndex]);
 
 	const handleClearHistory = async () => {
 		const activeJobId = String(streamJobIdRef.current || "").trim();
@@ -5618,43 +6234,58 @@ export default function AiAssistantChat({
 																)}
 															</div>
 														)}
-														{(shouldRenderAssistantCodeBlocks || msg.responseMode !== "edit") && msg.codeBlocks?.map(block => (
-															<div
-																key={`code_${block.index}`}
-																className={styles.codeBlock}
-															>
-																<div className={styles.codeHeader}>
-																	<span>{block.language}</span>
-																	<Space size={4}>
-																		<Button
-																			type="text"
-																			size="small"
-																			icon={<CopyOutlined />}
-																			onClick={() => handleCopyCode(block.code)}
-																			title={uiText("Sao chép code", "Copy code", "复制代码")}
-																		/>
-																		{onCodeInsert && msg.messageType !== "debug" && (
+															{(shouldRenderAssistantCodeBlocks || msg.responseMode !== "edit") && msg.codeBlocks?.map(block => (
+																<div
+																	key={`code_${block.index}`}
+																	className={styles.codeBlock}
+																>
+																	<div className={styles.codeHeader}>
+																		<span>{block.language}</span>
+																		<Space size={4}>
 																			<Button
 																				type="text"
 																				size="small"
-																				icon={<BgColorsOutlined />}
-																				onClick={() =>
-																					handleInsertCode(block.code)}
-																				title={uiText("Chèn vào editor", "Insert into editor", "插入到编辑器")}
+																				icon={<CopyOutlined />}
+																				onClick={() => handleCopyCode(block.code)}
+																				title={uiText("Sao chép code", "Copy code", "复制代码")}
 																			/>
-																		)}
-																	</Space>
+																			{onCodeInsert && msg.messageType !== "debug" && (
+																				<>
+																				<Button
+																					type="text"
+																					size="small"
+																					icon={<BgColorsOutlined />}
+																					onClick={() => handleInsertCode(block.code)}
+																					title={uiText("Chèn vào editor", "Insert into editor", "插入到编辑器")}
+																				/>
+																				<Button
+																					type="primary"
+																					size="small"
+																					onClick={() => {
+																						undoSnapshotRef.current = currentCode || "";
+																						setCanUndoLastEdit(true);
+																						onCodeInsert(block.code);
+																						lastAppliedCodeRef.current = block.code;
+																						message.success(uiText("Đã áp dụng vào editor", "Applied to editor", "已应用到编辑器"));
+																					}}
+																					title={uiText("Áp dụng vào editor", "Apply in Editor", "应用到编辑器")}
+																				>
+																					{uiText("Apply", "Apply", "应用")}
+																				</Button>
+																				</>
+																			)}
+																		</Space>
+																	</div>
+																	<pre className={styles.codeContent}>
+																		<code>{block.code}</code>
+																	</pre>
 																</div>
-																<pre className={styles.codeContent}>
-																	<code>{block.code}</code>
-																</pre>
-															</div>
-														))}
-													</div>
-												)}
-											</div>
-											<div className={styles.timestamp}>
-												<span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
+															))}
+														</div>
+													)}
+												</div>
+												<div className={styles.timestamp}>
+													<span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
 												<span className={styles.messageActionGroup}>
 													{msg.role === "assistant" && msg.serverTurnId && (
 														<>
@@ -5699,6 +6330,26 @@ export default function AiAssistantChat({
 					)}
 
 				</div>
+
+				{/* Follow-up question suggestions (shown after response completes) */}
+				{!isLoading && completionState === "done" && followUpSuggestions.length > 0 && (
+					<div style={{ padding: "6px 12px 2px", display: "flex", flexWrap: "wrap", gap: 6 }}>
+						{followUpSuggestions.map((suggestion, idx) => (
+							<Button
+								key={idx}
+								size="small"
+								type="dashed"
+								style={{ fontSize: 12, borderRadius: 12, height: "auto", whiteSpace: "normal", textAlign: "left" }}
+								onClick={() => {
+									setInputValue(suggestion);
+									setFollowUpSuggestions([]);
+								}}
+							>
+								{suggestion}
+							</Button>
+						))}
+					</div>
+				)}
 
 				{(isLoading || completionState !== "idle") && (
 					<div className={styles.progressDock}>
@@ -5939,6 +6590,13 @@ export default function AiAssistantChat({
 											: uiText("Agentic workflow", "Agentic workflow", "Agent 工作流")}
 									</div>
 											<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+												{pendingApprovalAgenticSteps.length > 0 && !agenticStepsCollapsed && (
+													<Tag color="red">{uiText(
+														`${pendingApprovalAgenticSteps.length} bước chờ duyệt`,
+														`${pendingApprovalAgenticSteps.length} awaiting approval`,
+														`${pendingApprovalAgenticSteps.length} 个步骤待批准`,
+													)}</Tag>
+												)}
 												{lowConfidenceAgenticSteps.length > 1 && !agenticStepsCollapsed && (
 													<Button
 														type="link"
@@ -5998,6 +6656,18 @@ export default function AiAssistantChat({
 																	{uiText("Retry step", "Retry step", "重试步骤")}
 																</Button>
 															)}
+															{step.riskLevel && step.riskLevel !== "low" && (
+																<Tag color={step.riskLevel === "high" ? "red" : "orange"}>{`risk: ${step.riskLevel}`}</Tag>
+															)}
+															{step.approvalRequired && step.approvalState === "pending" && (
+																<Tag color="magenta">{uiText("Chờ duyệt", "Pending approval", "待批准")}</Tag>
+															)}
+															{step.approvalState === "approved" && (
+																<Tag color="green">{uiText("Đã duyệt", "Approved", "已批准")}</Tag>
+															)}
+															{step.approvalState === "rejected" && (
+																<Tag color="default">{uiText("Đã từ chối", "Rejected", "已拒绝")}</Tag>
+															)}
 															{step.patchValidator?.rejectionReason && String(step.patchValidator.rejectionReason).toLowerCase() !== "none" && (
 																<Tooltip title={uiText(
 																	buildPatchValidatorRetryHint(step.patchValidator.rejectionReason),
@@ -6007,11 +6677,42 @@ export default function AiAssistantChat({
 																	<Tag color="orange">{`validator: ${formatPatchValidatorReason(step.patchValidator.rejectionReason)}`}</Tag>
 																</Tooltip>
 															)}
+															{step.approvalRequired && step.approvalState === "pending" && (
+																<>
+																	<Button
+																		type="link"
+																		size="small"
+																		className={styles.compactToggleBtn}
+																		onClick={(e) => {
+																			e.stopPropagation();
+																			handleApproveAgenticStep(step);
+																		}}
+																	>
+																		{uiText("Approve", "Approve", "批准")}
+																	</Button>
+																	<Button
+																		type="link"
+																		size="small"
+																		className={styles.compactToggleBtn}
+																		onClick={(e) => {
+																			e.stopPropagation();
+																			handleRejectAgenticStep(step);
+																		}}
+																	>
+																		{uiText("Reject", "Reject", "拒绝")}
+																	</Button>
+																</>
+															)}
 														</div>
 														<span>{step.status === "done" ? "✓" : (step.status === "planned" ? "○" : "…")}</span>
 													</div>
 													{step.detail && (
 														<div className={styles.stageTimelineMessage}>{step.detail}</div>
+													)}
+													{step.approvalRequired && step.approvalReasons && step.approvalReasons.length > 0 && (
+														<div className={styles.stageTimelineMetaLine}>
+															{step.approvalReasons.join(" · ")}
+														</div>
 													)}
 												</div>
 											</div>
@@ -6627,6 +7328,106 @@ export default function AiAssistantChat({
 										</pre>
 									</div>
 								)}
+								{previewSources.length > 0 && (
+									<div className={styles.usageDockRow} style={{ alignItems: "flex-start" }}>
+										<span style={{ flexShrink: 0 }}>{uiText("Nguồn tham chiếu", "References", "参考来源")}</span>
+										<div style={{ flex: 1, display: "grid", gap: 8 }}>
+											{previewSources.map((src, idx) => (
+												<div key={`${src.title}-${idx}`} style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: 8, background: "rgba(255,255,255,0.03)" }}>
+													<div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
+														<Tag color="blue">#{idx + 1}</Tag>
+														<span style={{ fontSize: 11, fontWeight: 600, wordBreak: "break-word" }}>{src.title}</span>
+														{src.score && <Tag color="geekblue">score {src.score}</Tag>}
+														{src.scope && <Tag color="cyan">{src.scope}</Tag>}
+													</div>
+													{src.path && (
+														<button
+															type="button"
+															onClick={() => handleCitationNavigate(src.path || src.title)}
+															style={{ fontSize: 10, opacity: 0.8, wordBreak: "break-all", textAlign: "left", padding: 0, border: 0, background: "transparent", color: "#91caff", cursor: "pointer" }}
+														>
+															{src.path}
+														</button>
+													)}
+													{src.summary && <div style={{ fontSize: 10, opacity: 0.9, marginTop: 4 }}>{src.summary}</div>}
+													{src.content && (
+														<pre style={{ fontSize: 10, maxHeight: 90, overflowY: "auto", background: "#111827", color: "#e5e7eb", padding: "6px 8px", borderRadius: 4, marginTop: 6, marginBottom: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+															{src.content.slice(0, 320)}
+															{src.content.length > 320 ? "..." : ""}
+														</pre>
+													)}
+												</div>
+											))}
+										</div>
+									</div>
+								)}
+								{visibleCitationTokens.length > 0 && (
+									<div className={styles.usageDockRow} style={{ alignItems: "flex-start" }}>
+										<span style={{ flexShrink: 0 }}>{uiText("Bằng chứng", "Evidence", "证据")}</span>
+										<div style={{ flex: 1, display: "flex", flexWrap: "wrap", gap: 6 }}>
+											{visibleCitationTokens.map((token, idx) => (
+												<Tag
+													key={`${token}-${idx}`}
+													color="gold"
+													style={{ maxWidth: 280, marginInlineEnd: 0, whiteSpace: "normal", wordBreak: "break-word", cursor: onCitationNavigate ? "pointer" : "default" }}
+													onClick={onCitationNavigate ? () => handleCitationNavigate(token) : undefined}
+												>
+													{token}
+												</Tag>
+											))}
+											{assistantCitationTokens.length > visibleCitationTokens.length && (
+												<Tag color="default">+{assistantCitationTokens.length - visibleCitationTokens.length}</Tag>
+											)}
+										</div>
+									</div>
+								)}
+								{editorDiagnostics && (
+									<div className={styles.usageDockRow} style={{ alignItems: "flex-start" }}>
+										<span style={{ flexShrink: 0 }}>{uiText("Diagnostics", "Diagnostics", "诊断")}</span>
+										<div style={{ flex: 1, display: "grid", gap: 6 }}>
+											<Tag color={editorDiagnostics.valid ? "green" : "red"} style={{ width: "fit-content" }}>
+												{editorDiagnostics.valid ? uiText("Hợp lệ", "Valid", "有效") : uiText("Có lỗi", "Has errors", "存在错误")}
+											</Tag>
+											{!editorDiagnostics.valid && editorDiagnostics.errors.length > 0 && (
+												<div style={{ display: "grid", gap: 4 }}>
+													<div style={{ fontSize: 11, fontWeight: 600, color: "#f5a623" }}>
+														{uiText("Lỗi cú pháp", "Syntax Errors", "语法错误")}
+														{" "}
+														({editorDiagnostics.errors.length})
+													</div>
+													{editorDiagnostics.errors.slice(0, 3).map((error, idx) => (
+														<div key={`${error}-${idx}`} style={{ fontSize: 10, lineHeight: 1.4, color: "#f87171", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+															• {error}
+														</div>
+													))}
+												</div>
+											)}
+											{/* Show workspace diagnostics if available */}
+											{(requestEditorMetadata as any)?.diagnostics?.workspaceDiagnostics?.length > 0 && (
+												<div style={{ display: "grid", gap: 4, marginTop: 4 }}>
+													<div style={{ fontSize: 11, fontWeight: 600, color: "#a78bfa" }}>
+														{uiText("Lỗi workspace", "Workspace Issues", "工作区问题")}
+														{" "}
+														({(requestEditorMetadata as any).diagnostics.workspaceDiagnostics.length})
+													</div>
+													{(requestEditorMetadata as any).diagnostics.workspaceDiagnostics.slice(0, 4).map((diag: any, idx: number) => (
+														<div key={`diag-${idx}`} style={{ 
+															fontSize: 10, 
+															lineHeight: 1.4, 
+															color: diag.severity === "error" ? "#f87171" : "#fbbf24",
+															whiteSpace: "pre-wrap", 
+															wordBreak: "break-word",
+															borderLeft: `2px solid ${diag.severity === "error" ? "#ef4444" : "#f59e0b"}`,
+															paddingLeft: 6
+														}}>
+															Line {diag.line + 1}: {diag.message}
+														</div>
+													))}
+												</div>
+											)}
+										</div>
+									</div>
+								)}
 							</>
 						)}
 					</div>
@@ -6689,11 +7490,18 @@ export default function AiAssistantChat({
 							))}
 						</div>
 					)}
+					{renderMultiFileScopePanel()}
 					<Space.Compact style={{ width: "100%" }}>
 						<Input.TextArea
 							value={inputValue}
 							onChange={(e) => {
-								setInputValue(e.target.value);
+								const nextValue = e.target.value;
+								setInputValue(nextValue);
+								const shouldShowPalette = nextValue.trimStart().startsWith("/");
+								setShowSlashCommandPalette(shouldShowPalette);
+								if (!shouldShowPalette) {
+									setSlashCommandIndex(0);
+								}
 								if (promptHistoryIndex !== -1) {
 									setPromptHistoryIndex(-1);
 									setPromptHistoryOriginal("");
@@ -6710,6 +7518,33 @@ export default function AiAssistantChat({
 							maxLength={MAX_CHAT_INPUT_CHARS}
 						/>
 					</Space.Compact>
+					{showSlashCommandPalette && filteredSlashCommands.length > 0 && (
+						<div style={{ marginTop: 8, display: "grid", gap: 6, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: 8, background: "rgba(15, 23, 42, 0.92)" }}>
+							{filteredSlashCommands.slice(0, 5).map((item, idx) => (
+								<button
+									key={item.command}
+									type="button"
+									onClick={() => applySlashCommand(item.command)}
+									style={{
+										display: "flex",
+										justifyContent: "space-between",
+										alignItems: "center",
+										gap: 12,
+										padding: "8px 10px",
+										borderRadius: 6,
+										border: idx === slashCommandIndex ? "1px solid #60a5fa" : "1px solid transparent",
+										background: idx === slashCommandIndex ? "rgba(59,130,246,0.16)" : "transparent",
+										color: "#e5e7eb",
+										cursor: "pointer",
+										textAlign: "left",
+									}}
+								>
+									<span style={{ fontSize: 12, fontWeight: 600 }}>{item.command}</span>
+									<span style={{ fontSize: 11, opacity: 0.8 }}>{item.description}</span>
+								</button>
+							))}
+						</div>
+					)}
 					<div className={styles.buttonGroup}>
 						<Tooltip title={uiText("Đính kèm file văn bản/JSON", "Attach text/JSON file", "附加文本/JSON 文件")}>
 							<Button
@@ -6771,6 +7606,30 @@ export default function AiAssistantChat({
 								{uiText("Hủy", "Cancel", "取消")}
 							</Button>
 						)}
+						{canUndoLastEdit && !isLoading && onCodeInsert && (
+							<Button
+								type="default"
+								icon={<UndoOutlined />}
+								onClick={() => {
+									if (undoSnapshotRef.current) {
+										onCodeInsert(undoSnapshotRef.current);
+										setCanUndoLastEdit(false);
+										message.info(uiText("Đã hoàn tác thay đổi", "Edit undone", "已撤销编辑"));
+									}
+								}}
+							>
+								{uiText("Hoàn tác", "Undo edit", "撤销编辑")}
+							</Button>
+						)}
+						<Segmented
+							size="small"
+							value={forcedResponseMode ?? "ask"}
+							onChange={(val) => setForcedResponseMode(val === "edit" ? "edit" : "ask")}
+							options={[
+								{ value: "ask", label: "Ask" },
+								{ value: "edit", label: "Edit" },
+							]}
+						/>
 						<Button
 							type="primary"
 							icon={<SendOutlined />}
