@@ -14,6 +14,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
@@ -200,6 +201,200 @@ public class AiLocalOrchestrationService {
         return t;
     });
 
+    // Thread-safe singleton runtime cache shared across orchestration turns.
+    private enum OrchestrationRuntimeSingleton {
+        INSTANCE;
+
+        private final ConcurrentHashMap<String, Object[]> routeCache = new ConcurrentHashMap<>();
+
+        String getRoute(String key, long ttlMs) {
+            Object[] cached = routeCache.get(key);
+            if (cached == null) {
+                return "";
+            }
+            long ts = (long) cached[1];
+            if (System.currentTimeMillis() - ts > Math.max(1L, ttlMs)) {
+                routeCache.remove(key);
+                return "";
+            }
+            return String.valueOf(cached[0]);
+        }
+
+        void putRoute(String key, String route) {
+            if (key == null || key.isBlank()) {
+                return;
+            }
+            routeCache.put(key, new Object[]{String.valueOf(route == null ? "" : route), System.currentTimeMillis()});
+        }
+    }
+
+    // Builder + Prototype: immutable orchestration input without deep copy overhead.
+    private static final class OrchestrationRequest {
+        final String appId;
+        final String message;
+        final String currentCode;
+        final List<Map<String, Object>> attachments;
+        final String contextType;
+        final String taskType;
+        final String responseMode;
+        final String language;
+
+        private OrchestrationRequest(Builder builder) {
+            this.appId = builder.appId;
+            this.message = builder.message;
+            this.currentCode = builder.currentCode;
+            this.attachments = builder.attachments == null ? List.of() : List.copyOf(builder.attachments);
+            this.contextType = builder.contextType;
+            this.taskType = builder.taskType;
+            this.responseMode = builder.responseMode;
+            this.language = builder.language;
+        }
+
+        Builder prototype() {
+            return new Builder()
+                .appId(appId)
+                .message(message)
+                .currentCode(currentCode)
+                .attachments(attachments)
+                .contextType(contextType)
+                .taskType(taskType)
+                .responseMode(responseMode)
+                .language(language);
+        }
+
+        static Builder builder() {
+            return new Builder();
+        }
+
+        static final class Builder {
+            private String appId = "";
+            private String message = "";
+            private String currentCode = "";
+            private List<Map<String, Object>> attachments = List.of();
+            private String contextType = "code";
+            private String taskType = "";
+            private String responseMode = "edit";
+            private String language = "";
+
+            Builder appId(String value) { this.appId = String.valueOf(value == null ? "" : value); return this; }
+            Builder message(String value) { this.message = String.valueOf(value == null ? "" : value); return this; }
+            Builder currentCode(String value) { this.currentCode = String.valueOf(value == null ? "" : value); return this; }
+            Builder attachments(List<Map<String, Object>> value) { this.attachments = value == null ? List.of() : value; return this; }
+            Builder contextType(String value) { this.contextType = String.valueOf(value == null ? "code" : value); return this; }
+            Builder taskType(String value) { this.taskType = String.valueOf(value == null ? "" : value); return this; }
+            Builder responseMode(String value) { this.responseMode = String.valueOf(value == null ? "edit" : value); return this; }
+            Builder language(String value) { this.language = String.valueOf(value == null ? "" : value); return this; }
+
+            OrchestrationRequest build() {
+                return new OrchestrationRequest(this);
+            }
+        }
+    }
+
+    private record FlowDecision(String routeName, boolean quickReply, String reason) {}
+
+    private interface FlowHandler {
+        FlowDecision decide(OrchestrationRequest request, LocalToolDigest digest, double offTopicConfidence, double threshold);
+    }
+
+    private static final class QuickReplyFlowHandler implements FlowHandler {
+        @Override
+        public FlowDecision decide(OrchestrationRequest request, LocalToolDigest digest, double offTopicConfidence, double threshold) {
+            boolean quick = offTopicConfidence > threshold;
+            return new FlowDecision("planner_fast", quick, "offtopic_confidence");
+        }
+    }
+
+    private static final class MainFlowHandler implements FlowHandler {
+        @Override
+        public FlowDecision decide(OrchestrationRequest request, LocalToolDigest digest, double offTopicConfidence, double threshold) {
+            return new FlowDecision("solver_balanced", false, "main_flow_required");
+        }
+    }
+
+    // Factory Method: chooses a route handler based on current request profile.
+    private interface FlowHandlerFactory {
+        FlowHandler create(OrchestrationRequest request, double offTopicConfidence, double threshold, boolean fastUnrelatedEnabled);
+    }
+
+    private static final class DefaultFlowHandlerFactory implements FlowHandlerFactory {
+        @Override
+        public FlowHandler create(OrchestrationRequest request, double offTopicConfidence, double threshold, boolean fastUnrelatedEnabled) {
+            if (fastUnrelatedEnabled && offTopicConfidence > threshold) {
+                return new QuickReplyFlowHandler();
+            }
+            return new MainFlowHandler();
+        }
+    }
+
+    // Director: orchestrates routing order using factory outputs and cache reuse.
+    private static final class FlowDirector {
+        private final FlowHandlerFactory factory;
+
+        private FlowDirector(FlowHandlerFactory factory) {
+            this.factory = factory;
+        }
+
+        FlowDecision direct(OrchestrationRequest request, LocalToolDigest digest, double offTopicConfidence, double threshold, boolean fastUnrelatedEnabled) {
+            String key = (request.contextType + "|" + request.taskType + "|" + truncateCacheKey(request.message)).toLowerCase(Locale.ROOT);
+            String cachedRoute = OrchestrationRuntimeSingleton.INSTANCE.getRoute(key, 20_000L);
+            if ("planner_fast".equals(cachedRoute)) {
+                return new FlowDecision("planner_fast", true, "cached_offtopic_route");
+            }
+            FlowHandler handler = factory.create(request, offTopicConfidence, threshold, fastUnrelatedEnabled);
+            FlowDecision decision = handler.decide(request, digest, offTopicConfidence, threshold);
+            OrchestrationRuntimeSingleton.INSTANCE.putRoute(key, decision.routeName());
+            return decision;
+        }
+
+        private static String truncateCacheKey(String text) {
+            String safe = String.valueOf(text == null ? "" : text).trim();
+            return safe.length() > 140 ? safe.substring(0, 140) : safe;
+        }
+    }
+
+    private static final FlowDirector FLOW_DIRECTOR = new FlowDirector(new DefaultFlowHandlerFactory());
+
+    private record RetrievalTuningProfile(int topKBoost, int maxCharsBoost, boolean prioritizeSchema) {}
+
+    private interface RetrievalProfileFactory {
+        RetrievalTuningProfile create(OrchestrationRequest request);
+    }
+
+    private static final class CodeRetrievalProfileFactory implements RetrievalProfileFactory {
+        @Override
+        public RetrievalTuningProfile create(OrchestrationRequest request) {
+            int codeChars = String.valueOf(request.currentCode == null ? "" : request.currentCode).length();
+            int topKBoost = codeChars > 80_000 ? 1 : 0;
+            int maxCharsBoost = codeChars > 80_000 ? 1200 : 0;
+            return new RetrievalTuningProfile(topKBoost, maxCharsBoost, false);
+        }
+    }
+
+    private static final class MenuRetrievalProfileFactory implements RetrievalProfileFactory {
+        @Override
+        public RetrievalTuningProfile create(OrchestrationRequest request) {
+            return new RetrievalTuningProfile(1, 800, true);
+        }
+    }
+
+    // Abstract Factory: resolves retrieval profile for each context family.
+    private static final class RetrievalProfileAbstractFactory {
+        private final RetrievalProfileFactory codeFactory = new CodeRetrievalProfileFactory();
+        private final RetrievalProfileFactory menuFactory = new MenuRetrievalProfileFactory();
+
+        RetrievalTuningProfile create(OrchestrationRequest request) {
+            String ctx = String.valueOf(request.contextType == null ? "" : request.contextType).toLowerCase(Locale.ROOT);
+            String task = String.valueOf(request.taskType == null ? "" : request.taskType).toLowerCase(Locale.ROOT);
+            if ("menu_json".equals(ctx) || task.contains("menu")) {
+                return menuFactory.create(request);
+            }
+            return codeFactory.create(request);
+        }
+    }
+
+    private static final RetrievalProfileAbstractFactory RETRIEVAL_PROFILE_FACTORY = new RetrievalProfileAbstractFactory();
+
     @PreDestroy
     public void shutdownExecutors() {
         dynamicIngestExecutor.shutdownNow();
@@ -244,6 +439,16 @@ public class AiLocalOrchestrationService {
         String safeTaskType = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
         String safeMode = String.valueOf(responseMode == null ? "edit" : responseMode).trim().toLowerCase(Locale.ROOT);
         String safeLanguage = String.valueOf(language == null ? "" : language).trim().toLowerCase(Locale.ROOT);
+        OrchestrationRequest request = OrchestrationRequest.builder()
+            .appId(appId)
+            .message(safeMessage)
+            .currentCode(safeCode)
+            .attachments(safeAttachments)
+            .contextType(safeContextType)
+            .taskType(safeTaskType)
+            .responseMode(safeMode)
+            .language(safeLanguage)
+            .build();
         String effectiveRequestId = String.valueOf(requestId == null ? "" : requestId).trim();
         boolean ownsTraceRequest = false;
         long orchestrationStartMs = System.currentTimeMillis();
@@ -306,7 +511,14 @@ public class AiLocalOrchestrationService {
         }
 
         double offTopicConfidence = getOffTopicConfidence(safeMessage, safeContextType, safeTaskType, safeMode, digest.intentKeywords, attachmentChars);
-        if (fastUnrelatedEnabled && offTopicConfidence > fastUnrelatedConfidenceThreshold) {
+        FlowDecision flowDecision = FLOW_DIRECTOR.direct(
+            request,
+            digest,
+            offTopicConfidence,
+            fastUnrelatedConfidenceThreshold,
+            fastUnrelatedEnabled
+        );
+        if (flowDecision.quickReply()) {
             out.planSteps = List.of(
                 "Detect off-topic request in code/menu workspace (confidence: " + String.format("%.2f", offTopicConfidence) + ")",
                 "Return fast local answer and close session early"
@@ -319,7 +531,7 @@ public class AiLocalOrchestrationService {
             out.totalCharsAfter = out.totalCharsBefore;
             out.savedChars = 0;
             out.toolStats.put("earlyFinish", true);
-            out.toolStats.put("earlyFinishSource", "offtopic_fast_reply");
+            out.toolStats.put("earlyFinishSource", flowDecision.reason());
             out.toolStats.put("offTopicConfidence", offTopicConfidence);
             out.toolStats.put("confThreshold", fastUnrelatedConfidenceThreshold);
             out.toolStats.put("routingTier", out.routingTier);
@@ -974,6 +1186,18 @@ public class AiLocalOrchestrationService {
             return mime.startsWith("image/") || type.contains("image") || kind.contains("image");
         });
 
+        OrchestrationRequest retrievalRequest = OrchestrationRequest.builder()
+            .appId("")
+            .message(safeMessage)
+            .currentCode(String.valueOf(code == null ? "" : code))
+            .attachments(attachments)
+            .contextType(safeContextType)
+            .taskType(safeTaskType)
+            .responseMode(safeMode)
+            .language("")
+            .build();
+        RetrievalTuningProfile retrievalProfile = RETRIEVAL_PROFILE_FACTORY.create(retrievalRequest.prototype().build());
+
         String query = buildSelfDirectedRetrievalQuery(
             safeMessage,
             digest.intentKeywords,
@@ -990,13 +1214,21 @@ public class AiLocalOrchestrationService {
         List<String> reasons = new ArrayList<>();
 
         if (!adaptiveScopeRagEnabled) {
-            return new AdaptiveRetrievalPlan(scopeMask, topK, maxChars, query, false, reasons);
+            int baseTopK = Math.max(2, topK + retrievalProfile.topKBoost());
+            int baseMaxChars = Math.max(1200, maxChars + retrievalProfile.maxCharsBoost());
+            return new AdaptiveRetrievalPlan(scopeMask, baseTopK, baseMaxChars, query, false, reasons);
         }
 
         if ("menu_json".equals(safeContextType) || safeTaskType.contains("menu")) {
             topK += 1;
             maxChars += 800;
             reasons.add("menu_context_boost");
+        }
+
+        if (retrievalProfile.topKBoost() > 0 || retrievalProfile.maxCharsBoost() > 0) {
+            topK += retrievalProfile.topKBoost();
+            maxChars += retrievalProfile.maxCharsBoost();
+            reasons.add("abstract_factory_profile_boost");
         }
 
         if ("analyze".equals(safeMode)) {
