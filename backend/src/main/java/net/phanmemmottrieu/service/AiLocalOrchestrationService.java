@@ -90,14 +90,19 @@ public class AiLocalOrchestrationService {
     @Autowired(required = false)
     private RequestContextTracer requestContextTracer;
 
+    @Autowired(required = false)
+    private AiRetrievalPolicyEngine aiRetrievalPolicyEngine;
+
     public AiLocalOrchestrationService(
         AiSpeculativeExecutionService aiSpeculativeExecutionService,
         @Autowired(required = false) AiMultimodalScannerService aiMultimodalScannerService,
-        @Autowired(required = false) AiBusinessMemoryVectorService aiBusinessMemoryVectorService
+        @Autowired(required = false) AiBusinessMemoryVectorService aiBusinessMemoryVectorService,
+        @Autowired(required = false) AiRetrievalPolicyEngine aiRetrievalPolicyEngine
     ) {
         this.aiSpeculativeExecutionService = aiSpeculativeExecutionService;
         this.aiMultimodalScannerService = aiMultimodalScannerService;
         this.aiBusinessMemoryVectorService = aiBusinessMemoryVectorService;
+        this.aiRetrievalPolicyEngine = aiRetrievalPolicyEngine;
     }
 
     @Value("${ai.orchestration.agentic.enabled:true}")
@@ -589,7 +594,17 @@ public class AiLocalOrchestrationService {
                 safeMode
             );
 
-        List<String> planSteps = buildPlannerSteps(safeContextType, safeTaskType, safeMode, codeChars, attachmentChars);
+        List<String> planSteps = buildPlannerSteps(
+            safeContextType,
+            safeTaskType,
+            safeMode,
+            codeChars,
+            attachmentChars,
+            digest,
+            scanResult,
+            offTopicConfidence,
+            flowDecision
+        );
         if (scanResult.enabled() && scanResult.ingestCount() > 0) {
             planSteps.add(0, "Run multimodal scanner (JSON/Image) and select dynamic memory ingestion candidates");
         }
@@ -816,6 +831,35 @@ public class AiLocalOrchestrationService {
             && aiBusinessMemoryVectorService != null
             && aiBusinessMemoryVectorService.isEnabled()) {
             
+            // ─── Policy Decision: Adaptive Scope & TopK per Request ───
+            AiRetrievalPolicyEngine.RetrievalPolicy retrievalPolicy = null;
+            int policyTopK = scopedRagTopK;
+            int policyScopeMask = aggregateScopeMask;
+            if (aiRetrievalPolicyEngine != null) {
+                try {
+                    retrievalPolicy = aiRetrievalPolicyEngine.decidePolicy(
+                        safeMessage,
+                        safeCode,
+                        aggregateScopeMask,
+                        safeAttachments.size(),
+                        safeCode.length(),
+                        safeLanguage
+                    );
+                    policyTopK = retrievalPolicy.topK;
+                    policyScopeMask = retrievalPolicy.scopeMask;
+                    out.toolStats.put("retrievalPolicy", retrievalPolicy.policyId);
+                    out.toolStats.put("retrievalPolicyTopK", policyTopK);
+                    out.toolStats.put("retrievalPolicyScopeMask", policyScopeMask);
+                    out.toolStats.put("retrievalPolicyRelevance", retrievalPolicy.relevanceScore);
+                    out.toolStats.put("retrievalPolicyBudgetFit", retrievalPolicy.budgetFitScore);
+                    out.toolStats.put("retrievalPolicyRationale", retrievalPolicy.rationale);
+                    out.toolStats.put("retrievalPolicyMetrics", retrievalPolicy.metrics);
+                } catch (Exception ex) {
+                    // Policy engine failure: fallback to defaults
+                    out.toolStats.put("retrievalPolicyError", ex.getMessage());
+                }
+            }
+            
             // ─── Phase 1: Symbol-Aware Retrieval (prioritize code symbols over generic vector search) ───
             StringBuilder symbolRagBlock = new StringBuilder();
             if (symbolAwareRetrievalEnabled && !digest.codeSymbols.isEmpty()) {
@@ -888,7 +932,7 @@ public class AiLocalOrchestrationService {
                 }
             }
 
-            // ─── Phase 2: Adaptive Main Vector Search ───
+            // ─── Phase 2: Adaptive Main Vector Search (using policy-decided topK/scope) ───
             AdaptiveRetrievalPlan retrievalPlan = buildAdaptiveRetrievalPlan(
                 safeMessage,
                 safeContextType,
@@ -897,8 +941,9 @@ public class AiLocalOrchestrationService {
                 safeCode,
                 safeAttachments,
                 digest,
-                aggregateScopeMask,
-                scanResult
+                policyScopeMask,  // Use policy-decided scope instead of hardcoded
+                scanResult,
+                policyTopK        // Pass policy-decided topK to planner
             );
             scopedRagBlock = aiBusinessMemoryVectorService.buildRagBlockWithScopes(
                 appId,
@@ -1086,23 +1131,48 @@ public class AiLocalOrchestrationService {
         String taskType,
         String responseMode,
         int codeChars,
-        int attachmentChars
+        int attachmentChars,
+        LocalToolDigest digest,
+        AiMultimodalScannerService.ScanResult scanResult,
+        double offTopicConfidence,
+        FlowDecision flowDecision
     ) {
         List<String> steps = new ArrayList<>();
-        steps.add("Plan request scope and choose low-cost local tools first");
+        String flowName = flowDecision == null ? "GENERAL_ANALYSIS" : String.valueOf(flowDecision.routeName() == null ? "GENERAL_ANALYSIS" : flowDecision.routeName()).trim();
+        steps.add("Classify request relevance (route=" + flowName + ", offTopicConfidence=" + String.format(Locale.ROOT, "%.2f", Math.max(0d, offTopicConfidence)) + ") and choose fast-exit vs full orchestration");
+        steps.add("Plan request scope with code-string-first anchor (currentCode + cursor window) before any broad retrieval");
+
         if (codeChars > 0) {
-            steps.add("Run local code symbol scan to avoid sending full source blindly");
+            steps.add("Run local code symbol scan and logic-outline extraction to ground business flow evidence");
         }
+
         if (attachmentChars > 0) {
-            steps.add("Run local attachment digest and JSON key extraction");
+            steps.add("Run local attachment digest (json/md/image) and extract schema/summary signals before Lucene ingestion");
         }
-        steps.add("Assemble tiered context (metadata -> relevant -> runtime output)");
+
+        if (scanResult != null && scanResult.enabled() && scanResult.ingestCount() > 0) {
+            steps.add("Run multimodal scanner (JSON/Image) and choose scoped dynamic-memory ingestion candidates");
+        }
+
+        if (digest != null && digest.intentKeywords != null && !digest.intentKeywords.isEmpty()) {
+            steps.add("Build intent-driven Lucene query from message + symbols + attachment signals");
+        }
+
+        steps.add("Assemble tiered context (metadata -> relevant evidence -> runtime output) with dedupe and token budget");
+
         if ("menu_json".equals(contextType) || taskType.contains("menu")) {
-            steps.add("Prioritize schema/table/trigger signals for menu grounding");
+            steps.add("Prioritize schema/table/trigger signals for menu grounding and preserve unaffected nodes");
+        } else {
+            steps.add("Prioritize function/state/branch/side-effect evidence for code-business analysis");
         }
+
         if ("analyze".equals(responseMode)) {
-            steps.add("Favor explanation output and keep code payload minimal");
+            steps.add("Synthesize evidence-first analysis sections and stream each section incrementally to chat/editor timeline");
+        } else {
+            steps.add("Generate deterministic incremental textEdits and apply each accepted step directly to CodeMirror");
         }
+
+        steps.add("Verify step quality (schema/verifier gates), then continue/rollback per step before final success event");
         steps.add("Apply routing matrix hint for model selection (planner/balanced/complex)");
         return steps;
     }
@@ -1477,7 +1547,8 @@ public class AiLocalOrchestrationService {
         List<Map<String, Object>> attachments,
         LocalToolDigest digest,
         int aggregateScopeMask,
-        AiMultimodalScannerService.ScanResult scanResult
+        AiMultimodalScannerService.ScanResult scanResult,
+        int policyTopK  // NEW: Policy-decided topK override
     ) {
         String safeMessage = String.valueOf(message == null ? "" : message).trim();
         String safeMode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
@@ -1521,9 +1592,13 @@ public class AiLocalOrchestrationService {
         );
 
         int scopeMask = Math.max(1, aggregateScopeMask);
-        int topK = Math.max(2, scopedRagTopK);
+        // Use policy-decided topK if provided (policyTopK > 0); otherwise fall back to default
+        int topK = policyTopK > 0 ? policyTopK : Math.max(2, scopedRagTopK);
         int maxChars = Math.max(1600, scopedRagMaxChars);
         List<String> reasons = new ArrayList<>();
+        if (policyTopK > 0) {
+            reasons.add("policy_engine_adaptive_topk");
+        }
 
         if (!adaptiveScopeRagEnabled) {
             int baseTopK = Math.max(2, topK + retrievalProfile.topKBoost());

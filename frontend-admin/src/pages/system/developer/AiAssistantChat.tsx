@@ -178,6 +178,11 @@ interface AiAssistantStageEvent {
 	id: string
 	stage: string
 	status?: string
+	traceStatus?: string
+	toolName?: string
+	retryCount?: number
+	errorClass?: string
+	errorCode?: string
 	model?: string
 	requestId?: string
 	scopeMask?: number
@@ -547,7 +552,7 @@ const STREAM_CODEBLOCK_PARSE_MS = 240;
 const MAX_CHAT_INPUT_CHARS = 20000;
 const MAX_STRUCTURED_TEXT_EDITS = 160;
 const MAX_STRUCTURED_REPLACEMENT_CHARS = 800000;
-const SHOW_DETAILED_PROGRESS_TIMELINE = false;
+const SHOW_DETAILED_PROGRESS_TIMELINE = true;
 const COMPACT_STAGE_EVENTS = 4;
 const COMPACT_MODEL_TRACE = 1;
 const DONE_DOCK_AUTO_COLLAPSE_MS = 3500;
@@ -1154,8 +1159,11 @@ function stripInternalOrchestrationLeakLines(raw: unknown): string {
 		const leakedDynSource = lowered.startsWith("dyn_ctx_orchestration_")
 			|| lowered.startsWith("dyn_ctx_currentcode")
 			|| lowered.startsWith("dyn_ctx_")
+			|| lowered.includes("dyn_ctx_")
 			|| lowered.startsWith("source=primary_flow")
 			|| lowered.startsWith("source=multimodal")
+			|| lowered.includes("source=primary_flow")
+			|| lowered.includes("source=multimodal")
 			|| (lowered.startsWith("source=")
 				&& (lowered.includes("primary_flow") || lowered.includes("multimodal") || lowered.includes("orchestration")))
 			|| lowered.startsWith("source: dyn_ctx_")
@@ -1175,7 +1183,7 @@ function stripInternalOrchestrationLeakLines(raw: unknown): string {
 			|| /^\d{1,2}:\d{2}(:\d{2})?\s*(am|pm)?$/.test(lowered)
 			|| (lowered.startsWith("input") && lowered.includes("checked:"));
 		if (leakedDynSource) {
-			leakTailBudget = Math.max(leakTailBudget, 8);
+			leakTailBudget = Math.max(leakTailBudget, 26);
 			continue;
 		}
 
@@ -3157,6 +3165,11 @@ export default function AiAssistantChat({
 
 		const stage = String(data?.stage || data?.status || "").trim();
 		const status = String(data?.status || "").trim();
+		const traceStatus = String(data?.traceStatus || data?.status || "").trim();
+		const toolName = String(data?.toolName || "").trim();
+		const retryCountNum = Number(data?.retryCount);
+		const errorClass = String(data?.errorClass || "").trim();
+		const errorCode = String(data?.errorCode || "").trim();
 		const model = String(data?.model || "").trim();
 		const requestId = String(data?.requestId || "").trim();
 		const msg = normalizeAssistantProgressMessage(String(data?.message || "").trim());
@@ -3189,6 +3202,11 @@ export default function AiAssistantChat({
 		const signature = [
 			stage.toLowerCase(),
 			status.toLowerCase(),
+			traceStatus.toLowerCase(),
+			toolName.toLowerCase(),
+			Number.isFinite(retryCountNum) ? retryCountNum : "",
+			errorClass.toLowerCase(),
+			errorCode.toLowerCase(),
 			model.toLowerCase(),
 			requestId.toLowerCase(),
 			messageKey,
@@ -3227,6 +3245,11 @@ export default function AiAssistantChat({
 			id: `stage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
 			stage: stage || "processing",
 			status: status || undefined,
+			traceStatus: traceStatus || undefined,
+			toolName: toolName || undefined,
+			retryCount: Number.isFinite(retryCountNum) ? Math.max(0, Math.floor(retryCountNum)) : undefined,
+			errorClass: errorClass || undefined,
+			errorCode: errorCode || undefined,
 			model: model || undefined,
 			requestId: requestId || undefined,
 			scopeMask: Number.isFinite(scopeMaskNum) ? scopeMaskNum : undefined,
@@ -3254,6 +3277,23 @@ export default function AiAssistantChat({
 		};
 
 		setStageEvents((prev) => {
+			if (String(nextEvent.stage || "").toLowerCase().startsWith("tool_trace_")) {
+				const matchRequestId = String(nextEvent.requestId || "");
+				let replaced = false;
+				const updated = prev.map((item) => {
+					const sameLane = String(item.stage || "").toLowerCase() === String(nextEvent.stage || "").toLowerCase();
+					const sameRequest = String(item.requestId || "") === matchRequestId;
+					if (sameLane && sameRequest) {
+						replaced = true;
+						return { ...item, ...nextEvent, id: item.id, timestamp: Date.now() };
+					}
+					return item;
+				});
+				if (replaced) {
+					return updated.slice(-40);
+				}
+			}
+
 			const last = prev[prev.length - 1];
 			if (last) {
 				const lastPercent = Number.isFinite(Number(last.overallPercent))
@@ -3263,6 +3303,8 @@ export default function AiAssistantChat({
 					? Number(nextEvent.overallPercent)
 					: (Number.isFinite(Number(nextEvent.percent)) ? Number(nextEvent.percent) : undefined);
 				const sameCoreSignal = String(last.stage || "").toLowerCase() === String(nextEvent.stage || "").toLowerCase()
+					&& String(last.toolName || "") === String(nextEvent.toolName || "")
+					&& String(last.traceStatus || "") === String(nextEvent.traceStatus || "")
 					&& String(last.messageKey || "") === String(nextEvent.messageKey || "")
 					&& String(last.detailKey || "") === String(nextEvent.detailKey || "")
 					&& String(last.orchestrationPhaseKey || "") === String(nextEvent.orchestrationPhaseKey || "")
@@ -3271,7 +3313,10 @@ export default function AiAssistantChat({
 					&& String(last.message || "") === String(nextEvent.message || "")
 					&& String(last.detail || "") === String(nextEvent.detail || "");
 				const samePercent = (lastPercent == null && nextPercent == null) || lastPercent === nextPercent;
-				if (sameCoreSignal && samePercent) {
+				const sameRetry = Number(last.retryCount ?? -1) === Number(nextEvent.retryCount ?? -1);
+				const sameError = String(last.errorClass || "") === String(nextEvent.errorClass || "")
+					&& String(last.errorCode || "") === String(nextEvent.errorCode || "");
+				if (sameCoreSignal && samePercent && sameRetry && sameError) {
 					return prev;
 				}
 			}
@@ -4906,6 +4951,112 @@ export default function AiAssistantChat({
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "attachment_intake") {
+								const total = Number((evt as any).total || 0);
+								const imageCount = Number((evt as any).images || 0);
+								const jsonCount = Number((evt as any).json || 0);
+								const markdownCount = Number((evt as any).markdown || 0);
+								const textChars = Number((evt as any).textChars || 0);
+								appendAgenticStep({
+									stage: "attachment_intake",
+									icon: "📎",
+									label: uiText("Chuẩn hóa attachment inline", "Normalized inline attachments", "规范化内联附件"),
+									detail: uiText(
+										`${total} tệp · img ${imageCount} · json ${jsonCount} · md ${markdownCount} · ${textChars} chars`,
+										`${total} files · img ${imageCount} · json ${jsonCount} · md ${markdownCount} · ${textChars} chars`,
+										`${total} 个文件 · 图像 ${imageCount} · json ${jsonCount} · md ${markdownCount} · ${textChars} 字符`,
+									),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "tool_search") {
+								const topK = Number((evt as any).retrievalTopK || 0);
+								const scopeSummary = String((evt as any).scopeSummary || "").trim();
+								appendAgenticStep({
+									stage: "tool_search",
+									icon: "🔎",
+									label: uiText("Tra cứu ngữ cảnh cục bộ", "Searched local context", "检索本地上下文"),
+									detail: `${scopeSummary || localizedEvtMessage}${topK > 0 ? ` · topK=${topK}` : ""}`.trim(),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "tool_prepare") {
+								const stepCount = Number((evt as any).planStepCount || 0);
+								appendAgenticStep({
+									stage: "tool_prepare",
+									icon: "🧩",
+									label: uiText("Chuẩn bị plan thực thi", "Prepared execution plan", "准备执行计划"),
+									detail: stepCount > 0 ? uiText(`${stepCount} bước`, `${stepCount} steps`, `${stepCount} 步`) : localizedEvtMessage,
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "tool_apply") {
+								appendAgenticStep({
+									stage: "tool_apply",
+									icon: "🛠",
+									label: uiText("Áp step vào editor", "Applying steps to editor", "将步骤应用到编辑器"),
+									detail: localizedEvtMessage,
+									status: "running",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "tool_trace") {
+								const toolName = String((evt as any).toolName || "").trim() || "tool";
+								const toolLane = toolName.toLowerCase().replace(/[^a-z0-9_]+/g, "_");
+								const traceStatusRaw = String((evt as any).status || "completed").trim().toLowerCase();
+								const traceStatus = ["start", "running", "completed", "failed", "skipped"].includes(traceStatusRaw)
+									? traceStatusRaw
+									: "completed";
+								const inputDigest = String((evt as any).inputDigest || "").trim();
+								const outputDigest = String((evt as any).outputDigest || "").trim();
+								const durationMs = Number((evt as any).durationMs || 0);
+								const retryCount = Number((evt as any).retryCount || 0);
+								const errorClass = String((evt as any).errorClass || "none").trim();
+								const errorCode = String((evt as any).errorCode || "none").trim();
+								const stepIndex = Number((evt as any).stepIndex || 0);
+								const stepTotal = Number((evt as any).stepTotal || 0);
+								const lifecycle: AgenticStep["status"] = (traceStatus === "running" || traceStatus === "start") ? "running" : "done";
+								const icon = traceStatus === "failed"
+									? "❌"
+									: (traceStatus === "skipped" ? "⚠️" : (traceStatus === "running" || traceStatus === "start" ? "⏳" : "✅"));
+								const parts = [
+									stepIndex > 0 && stepTotal > 0 ? `${stepIndex}/${stepTotal}` : "",
+									traceStatus,
+									durationMs > 0 ? `${Math.round(durationMs)}ms` : "",
+									retryCount > 0 ? `retry=${retryCount}` : "",
+									inputDigest ? `in: ${inputDigest}` : "",
+									outputDigest ? `out: ${outputDigest}` : "",
+									(errorClass !== "none" || errorCode !== "none") ? `err=${errorClass}/${errorCode}` : "",
+								].filter(Boolean);
+								appendAgenticStep({
+									stage: `tool_trace_${toolLane}`,
+									icon,
+									label: uiText(`Tool trace · ${toolName}`, `Tool trace · ${toolName}`, `工具轨迹 · ${toolName}`),
+									detail: parts.join(" · "),
+									status: lifecycle,
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
+									appendStageEvent({
+										...evtForTimeline,
+										stage: `tool_trace_${toolLane}`,
+										traceStatus,
+										toolName,
+										retryCount,
+										errorClass,
+										errorCode,
+										message: uiText(`Tool trace · ${toolName}`, `Tool trace · ${toolName}`, `工具轨迹 · ${toolName}`),
+										detail: parts.join(" · ") || undefined,
+										orchestrationPhase: traceStatus,
+									});
+								}
 							}
 							else if (evt.stage === "agentic_step") {
 								const currentStep = Number((evt as any).current || 0);
@@ -6755,6 +6906,11 @@ export default function AiAssistantChat({
 												{group.events.map((event) => {
 													const stageLabel = renderProgressText(event.orchestrationPhaseKey, undefined, event.orchestrationPhase || formatStageLabel(event.stage));
 													const stageTone = getStageTone(event.stage, event.orchestrationPhase);
+													const isToolTraceEvent = String(event.stage || "").trim().toLowerCase().startsWith("tool_trace_");
+													const toolRetry = Number(event.retryCount || 0);
+													const toolErrorClass = String(event.errorClass || "").trim();
+													const toolErrorCode = String(event.errorCode || "").trim();
+													const toolTraceStatus = String(event.traceStatus || event.orchestrationPhase || event.status || "").trim().toLowerCase();
 													const effectivePercent = Number.isFinite(Number(event.overallPercent)) ? Number(event.overallPercent) : Number(event.percent);
 													const percentText = Number.isFinite(effectivePercent) ? ` (${Math.max(0, Math.min(100, effectivePercent))}%)` : "";
 													const progressText = Number.isFinite(Number(event.current)) && Number.isFinite(Number(event.total))
@@ -6809,6 +6965,22 @@ export default function AiAssistantChat({
 																		{timelineMessage}
 																	</div>
 																)}
+																	{isToolTraceEvent && (
+																		<div className={styles.stageScopeTagList}>
+																			{toolTraceStatus && (
+																				<span className={styles.stageScopeTagChip}>{`status:${toolTraceStatus}`}</span>
+																			)}
+																			{toolRetry > 0 && (
+																				<span className={styles.stageScopeTagChip}>{`retry:${toolRetry}`}</span>
+																			)}
+																			{toolErrorClass && toolErrorClass.toLowerCase() !== "none" && (
+																				<span className={styles.stageScopeTagChip}>{`errorClass:${toolErrorClass}`}</span>
+																			)}
+																			{toolErrorCode && toolErrorCode.toLowerCase() !== "none" && (
+																				<span className={styles.stageScopeTagChip}>{`errorCode:${toolErrorCode}`}</span>
+																			)}
+																		</div>
+																	)}
 																{patchValidatorHint && (
 																	<div className={`${styles.stageTimelineMessage} ${styles.stageTimelineMessageCompact}`.trim()}>
 																		{`validator=${patchValidatorHint}`}

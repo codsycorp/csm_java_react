@@ -112,6 +112,14 @@ public class AiQualityMetricsService {
         tryCleanup();
     }
 
+    /**
+     * Track retry policy decisions: will_retry or give_up.
+     */
+    public void recordRetryDecision(String reasonCode, boolean willRetry) {
+        String key = normalizeMetricKey((willRetry ? "will_retry_" : "give_up_") + reasonCode);
+        recordRetryReason(key, 1, null);
+    }
+
     public Map<String, Object> getMetricsSummary() {
         return getMetricsSummary(null);
     }

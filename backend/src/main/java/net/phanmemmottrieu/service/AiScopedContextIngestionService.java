@@ -5,9 +5,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import jakarta.annotation.PreDestroy;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.regex.Pattern;
 
 /**
  * AI Scoped Context Ingestion Service
@@ -46,6 +48,9 @@ public class AiScopedContextIngestionService {
     @Autowired
     private RequestContextTracer contextTracer;
 
+    @Autowired(required = false)
+    private AiIntentClassifierService aiIntentClassifierService;
+
     @Value("${ai.context.ingestion.enabled:true}")
     private boolean enabled;
 
@@ -70,6 +75,10 @@ public class AiScopedContextIngestionService {
 
     // Track pending ingestions
     private final Map<String, IngestionTask> pendingTasks = new ConcurrentHashMap<>();
+
+    private static final Pattern CODE_REQUEST_PATTERN = Pattern.compile("(?i)\\b(code|class|method|function|bug|fix|refactor|compile|build|java|typescript|ts|js|api)\\b");
+    private static final Pattern MENU_REQUEST_PATTERN = Pattern.compile("(?i)\\b(menu|screen|form|field|tree|module|flow|trigger|report|json menu)\\b");
+    private static final Pattern CONFIG_REQUEST_PATTERN = Pattern.compile("(?i)\\b(config|setting|schema|env|property|metadata|yaml|yml|ini)\\b");
 
     // ── Data Model ──────────────────────────────────────────────────────
 
@@ -146,36 +155,84 @@ public class AiScopedContextIngestionService {
         int scopeMask = 0;
         Map<String, Integer> reasons = new LinkedHashMap<>();
 
-        // Check message keywords
-        String msgLower = message.toLowerCase();
-        if (msgLower.contains("code") || msgLower.contains("function") || msgLower.contains("method")) {
-            scopeMask |= SCOPE_CODE;
-            reasons.put("message_contains_code_keywords", 1);
+        String safeMessage = String.valueOf(message == null ? "" : message).trim();
+        String msgLower = safeMessage.toLowerCase(Locale.ROOT);
+
+        // Stage 1: Intent-aware first-pass routing (fast, bounded)
+        if (aiIntentClassifierService != null && !safeMessage.isBlank()) {
+            try {
+                AiIntentClassifierService.IntentClassification intent = aiIntentClassifierService.classify(
+                    safeMessage,
+                    hasCurrentMenu ? "menu" : "code",
+                    hasCurrentCode ? "ctx" : "",
+                    hasCurrentMenu ? "ctx" : "",
+                    "scope_ingest_" + System.currentTimeMillis());
+                String intentClass = String.valueOf(intent.intentClass == null ? "" : intent.intentClass).trim().toLowerCase(Locale.ROOT);
+                if ("code_edit".equals(intentClass) || "code_analyze".equals(intentClass)) {
+                    scopeMask |= SCOPE_CODE;
+                    reasons.put("intent_code", 1);
+                } else if ("menu_edit".equals(intentClass) || "menu_design".equals(intentClass)) {
+                    scopeMask |= SCOPE_MENU;
+                    reasons.put("intent_menu", 1);
+                }
+            } catch (Exception ignored) {
+                // Never block ingestion on classifier failure.
+            }
         }
-        if (msgLower.contains("menu") || msgLower.contains("item") || msgLower.contains("tree")) {
+
+        // Stage 2: Lightweight lexical inference from user message
+        if (CODE_REQUEST_PATTERN.matcher(msgLower).find()) {
+            scopeMask |= SCOPE_CODE;
+            reasons.put("message_code_signal", 1);
+        }
+        if (MENU_REQUEST_PATTERN.matcher(msgLower).find()) {
             scopeMask |= SCOPE_MENU;
-            reasons.put("message_contains_menu_keywords", 1);
+            reasons.put("message_menu_signal", 1);
+        }
+        if (CONFIG_REQUEST_PATTERN.matcher(msgLower).find()) {
+            scopeMask |= SCOPE_CONFIG;
+            reasons.put("message_config_signal", 1);
         }
 
         // Analyze attachments
         if (attachments != null && !attachments.isEmpty()) {
             for (Map<String, Object> att : attachments) {
                 String type = String.valueOf(att.getOrDefault("type", ""));
-                String name = String.valueOf(att.getOrDefault("name", ""));
+                String name = String.valueOf(att.getOrDefault("name", "")).toLowerCase(Locale.ROOT);
+                String kind = String.valueOf(att.getOrDefault("kind", "")).toLowerCase(Locale.ROOT);
+                String contextRole = String.valueOf(att.getOrDefault("contextRole", "")).toLowerCase(Locale.ROOT);
+                String summary = String.valueOf(att.getOrDefault("summary", "")).toLowerCase(Locale.ROOT);
 
-                if ("json".equalsIgnoreCase(type) || name.endsWith(".json")) {
-                    // Might be menu JSON or config
-                    if (name.toLowerCase().contains("menu")) {
+                if ("json".equalsIgnoreCase(type) || "json".equalsIgnoreCase(kind) || name.endsWith(".json")) {
+                    if (name.contains("menu") || contextRole.contains("business") || summary.contains("menu")) {
                         scopeMask |= SCOPE_MENU;
-                        reasons.put("json_attachment_is_menu", 1);
+                        reasons.put("attachment_json_menu", 1);
                     } else {
                         scopeMask |= SCOPE_CONFIG;
-                        reasons.put("json_attachment_is_config", 1);
+                        reasons.put("attachment_json_config", 1);
                     }
+                    scopeMask |= SCOPE_EXTERNAL;
+                    reasons.put("attachment_json_external", 1);
                 } else if ("image".equalsIgnoreCase(type)) {
-                    // Images might contain code screenshots or UI mockups
                     scopeMask |= SCOPE_EXTERNAL;
                     reasons.put("image_attachment_detected", 1);
+                    if (summary.contains("ui") || summary.contains("screen") || summary.contains("layout")) {
+                        scopeMask |= SCOPE_MENU;
+                        reasons.put("image_ui_signal", 1);
+                    }
+                    if (summary.contains("code") || summary.contains("stacktrace") || summary.contains("error")) {
+                        scopeMask |= SCOPE_CODE;
+                        reasons.put("image_code_signal", 1);
+                    }
+                } else if ("text".equalsIgnoreCase(kind) || name.endsWith(".md") || name.endsWith(".txt")) {
+                    if (summary.contains("class") || summary.contains("method") || summary.contains("function")) {
+                        scopeMask |= SCOPE_CODE;
+                        reasons.put("attachment_text_code_signal", 1);
+                    }
+                    if (summary.contains("menu") || summary.contains("trigger") || summary.contains("workflow")) {
+                        scopeMask |= SCOPE_MENU;
+                        reasons.put("attachment_text_menu_signal", 1);
+                    }
                 }
             }
         }
@@ -192,6 +249,11 @@ public class AiScopedContextIngestionService {
             }
         }
 
+        if (scopeMask == 0 && hasCurrentCode && !hasCurrentMenu) {
+            scopeMask |= SCOPE_CODE;
+            reasons.put("default_code_only", 1);
+        }
+
         ScopeMaskAnalysis result = new ScopeMaskAnalysis(scopeMask);
         result.scopeReasons = reasons;
         result.analysisTimeMs = System.currentTimeMillis() - startMs;
@@ -200,6 +262,11 @@ public class AiScopedContextIngestionService {
                 String.format("0x%02x", scopeMask), result.describe(), result.analysisTimeMs);
 
         return result;
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        asyncExecutor.shutdownNow();
     }
 
     /**

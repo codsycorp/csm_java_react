@@ -64,6 +64,7 @@ import net.phanmemmottrieu.service.AiPromptBudgetService;
 import net.phanmemmottrieu.service.LlamaCppNativeService;
 import net.phanmemmottrieu.service.LargeFileChunkingService;
 import net.phanmemmottrieu.service.AiPatternCacheService;
+import net.phanmemmottrieu.service.AiIncrementalStepExecutorService;
 import net.phanmemmottrieu.service.AiQualityMetricsService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
@@ -422,6 +423,9 @@ public class ApiSpringController {
     @SuppressWarnings("unused")
     private final LargeFileChunkingService largeFileChunkingService;
     private final AiQualityMetricsService aiQualityMetricsService;
+
+    @Autowired(required = false)
+    private AiIncrementalStepExecutorService aiIncrementalStepExecutorService;
 
     // In-memory ring buffer for prompt-budget debug (max 200 entries, auto-rotated)
     private static final int PROMPT_DEBUG_LOG_MAX = 200;
@@ -1691,7 +1695,38 @@ public class ApiSpringController {
 
                 AiLocalOrchestrationService.OrchestrationResult codeStreamOrchestration = AiLocalOrchestrationService.OrchestrationResult.disabled();
                 try {
+                    long attachmentIntakeStartMs = System.currentTimeMillis();
                     List<Map<String, Object>> orchestrationAttachments = normalizeAiAssistantAttachments(attachmentsRaw);
+                    Map<String, Object> attachmentStats = summarizeAttachmentMix(orchestrationAttachments);
+                    sendEvent(emitter, jsonOf(
+                        "stage", "attachment_intake",
+                        "status", "completed",
+                        "requestId", requestId,
+                        "message", "Normalized inline attachments for server-side orchestration",
+                        "total", parseIntSafe(attachmentStats.get("total"), 0),
+                        "images", parseIntSafe(attachmentStats.get("images"), 0),
+                        "json", parseIntSafe(attachmentStats.get("json"), 0),
+                        "markdown", parseIntSafe(attachmentStats.get("markdown"), 0),
+                        "text", parseIntSafe(attachmentStats.get("text"), 0),
+                        "authoritative", parseIntSafe(attachmentStats.get("authoritative"), 0),
+                        "textChars", parseIntSafe(attachmentStats.get("textChars"), 0),
+                        "roles", attachmentStats.getOrDefault("roles", Collections.emptyMap())
+                    ));
+                    emitToolTrace(
+                        emitter,
+                        requestId,
+                        "attachment_intake",
+                        "completed",
+                        "raw_attachments=" + (attachmentsRaw instanceof List<?> list ? list.size() : 0),
+                        "normalized=" + parseIntSafe(attachmentStats.get("total"), 0)
+                            + " image=" + parseIntSafe(attachmentStats.get("images"), 0)
+                            + " json=" + parseIntSafe(attachmentStats.get("json"), 0),
+                        System.currentTimeMillis() - attachmentIntakeStartMs,
+                        0,
+                        "none",
+                        "none",
+                        null
+                    );
                     codeStreamOrchestration = aiLocalOrchestrationService.orchestrate(
                         appId,
                         message,
@@ -1728,6 +1763,30 @@ public class ApiSpringController {
                             "retrievalAdaptive", bool(orchestrationStats.get("scopedRagAdaptive"), false),
                             "retrievalAdaptiveReasons", orchestrationStats.getOrDefault("scopedRagAdaptiveReasons", List.of())
                         ));
+                        sendEvent(emitter, jsonOf(
+                            "stage", "tool_search",
+                            "status", "completed",
+                            "requestId", requestId,
+                            "message", "Searched scoped Lucene/vector context from current code, menu, and attachments",
+                            "scopeMask", effectiveScopeMask,
+                            "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")),
+                            "retrievalTopK", parseIntSafe(orchestrationStats.get("scopedRagTopK"), 0),
+                            "retrievalMaxChars", parseIntSafe(orchestrationStats.get("scopedRagMaxChars"), 0)
+                        ));
+                        emitToolTrace(
+                            emitter,
+                            requestId,
+                            "search_scoped_context",
+                            "completed",
+                            "scopeMask=" + effectiveScopeMask + " query=" + compactToolDigest(String.valueOf(orchestrationStats.getOrDefault("scopedRagQuery", "")), 120),
+                            "hitsTopK=" + parseIntSafe(orchestrationStats.get("scopedRagTopK"), 0)
+                                + " chars=" + parseIntSafe(orchestrationStats.get("scopedRagChars"), 0),
+                            parseIntSafe(orchestrationStats.get("elapsedMs"), 0),
+                            0,
+                            "none",
+                            "none",
+                            Map.of("scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")))
+                        );
 
                         boolean planSchemaEnabled = bool(orchestrationStats.get("planSchemaEnabled"), false);
                         int planSchemaScore = parseIntSafe(orchestrationStats.get("planSchemaScore"), 0);
@@ -1749,7 +1808,47 @@ public class ApiSpringController {
                         }
 
                         List<String> planSteps = codeStreamOrchestration.planSteps == null ? List.of() : codeStreamOrchestration.planSteps;
+                        sendEvent(emitter, jsonOf(
+                            "stage", "tool_prepare",
+                            "status", "completed",
+                            "requestId", requestId,
+                            "message", "Prepared orchestration plan and step lifecycle for incremental execution",
+                            "planStepCount", planSteps.size(),
+                            "routingTier", codeStreamOrchestration.routingTier
+                        ));
+                        emitToolTrace(
+                            emitter,
+                            requestId,
+                            "prepare_execution_plan",
+                            "completed",
+                            "routingTier=" + String.valueOf(codeStreamOrchestration.routingTier == null ? "" : codeStreamOrchestration.routingTier),
+                            "planSteps=" + planSteps.size(),
+                            parseIntSafe(orchestrationStats.get("elapsedMs"), 0),
+                            0,
+                            "none",
+                            "none",
+                            null
+                        );
                         emitAgenticStepLifecycleToSse(emitter, requestId, planSteps, 6);
+                        sendEvent(emitter, jsonOf(
+                            "stage", "tool_apply",
+                            "status", "running",
+                            "requestId", requestId,
+                            "message", "Applying step-by-step results to Codemirror-compatible text edits"
+                        ));
+                        emitToolTrace(
+                            emitter,
+                            requestId,
+                            "apply_incremental_steps",
+                            "running",
+                            "responseMode=" + responseMode,
+                            "awaiting_agentic_step_result",
+                            0,
+                            0,
+                            "none",
+                            "none",
+                            Map.of("planStepCount", planSteps.size())
+                        );
 
                         messageWithReuse = messageWithReuse
                             + "\n\n[LOCAL_ORCHESTRATION_CONTEXT]\n"
@@ -1764,6 +1863,19 @@ public class ApiSpringController {
                     }
                 } catch (Exception orchestrationEx) {
                     logger.warn("ai-code-stream local orchestration failed, continue with baseline flow: {}", orchestrationEx.getMessage());
+                    emitToolTrace(
+                        emitter,
+                        requestId,
+                        "local_orchestration_pipeline",
+                        "failed",
+                        "contextType=" + contextType + " taskType=" + effectiveTaskType,
+                        compactToolDigest(orchestrationEx.getMessage(), 220),
+                        0,
+                        0,
+                        "ORCHESTRATION_EXCEPTION",
+                        "LOCAL_ORCHESTRATION_FAILED",
+                        null
+                    );
                 }
 
                 if (codeStreamOrchestration != null
@@ -2933,6 +3045,7 @@ public class ApiSpringController {
                 completion.put("decision_step", "final");
                 completion.put("reason_code", "completed");
                 completion.put("requestId", requestId);
+                completion.put("followUpSuggestions", buildLocalFollowUpSuggestions(message, completionPayload, contextType, responseMode));
                 if (!base.baseRef().isBlank()) {
                     completion.put("baseContentRef", base.baseRef());
                     completion.put("baseContentChars", base.baseContentChars());
@@ -4313,22 +4426,51 @@ public class ApiSpringController {
         }
 
         if (attachmentsRaw instanceof List<?> attachments && !attachments.isEmpty()) {
-            sb.append("## TÀI LIỆU ĐÍNH KÈM\n");
+            sb.append("## ATTACHMENTS (SERVER INLINE)\n");
+            sb.append("Các attachment được gửi inline trong request (code string flow), không giả định file path workspace.\n\n");
             int attachmentBudget = Math.max(10000, aiCodeStreamMaxAttachmentsTotalChars);
+            int attachmentIndex = 0;
             for (Object att : attachments) {
                 if (attachmentBudget <= 0) {
                     break;
                 }
                 if (att instanceof Map<?, ?> attMap) {
-                    String name = str(attMap.get("name"), "file");
+                    attachmentIndex += 1;
+                    String name = str(attMap.get("name"), "attachment_" + attachmentIndex);
+                    String kind = str(attMap.get("kind"), "text").toLowerCase(Locale.ROOT);
+                    String mimeType = str(attMap.get("mimeType"), "");
+                    String contextRole = str(attMap.get("contextRole"), "general_text");
+                    boolean authoritative = bool(attMap.get("authoritative"), false);
+                    String summary = str(attMap.get("summary"), "");
+                    String contentRaw = strKeep(attMap.get("textContent"), "");
+                    if (contentRaw.isBlank()) {
+                        contentRaw = strKeep(attMap.get("content"), "");
+                    }
                     String content = stripLargeBase64ForPrompt(
-                        str(attMap.get("textContent"), ""),
+                        contentRaw,
                         "ai-code-stream-attachment:" + name);
+
+                    sb.append("### ATTACHMENT[").append(attachmentIndex).append("]\n");
+                    sb.append("- kind: ").append(kind).append("\n");
+                    sb.append("- contextRole: ").append(contextRole).append("\n");
+                    sb.append("- authoritative: ").append(authoritative).append("\n");
+                    if (!mimeType.isBlank()) {
+                        sb.append("- mimeType: ").append(mimeType).append("\n");
+                    }
+                    sb.append("- nameHint: ").append(name).append("\n");
+                    if (!summary.isBlank()) {
+                        sb.append("- summary: ").append(truncateMiddle(summary, 280).replace("\n", " ")).append("\n");
+                    }
+
                     if (!content.isBlank()) {
                         int perFileCap = Math.max(2000, aiCodeStreamMaxAttachmentCharsPerFile);
                         String safe = truncateMiddle(content, Math.min(perFileCap, attachmentBudget));
                         attachmentBudget -= safe.length();
-                        sb.append("### ").append(name).append("\n```\n").append(safe).append("\n```\n\n");
+                        sb.append("[CONTENT]\n```\n").append(safe).append("\n```\n\n");
+                    } else if ("image".equals(kind)) {
+                        sb.append("[CONTENT]\n[image payload attached separately as dataUrl/base64Data]\n\n");
+                    } else {
+                        sb.append("[CONTENT]\n[empty]\n\n");
                     }
                 }
             }
@@ -4613,7 +4755,20 @@ public class ApiSpringController {
                 textEdits = patchValidation.acceptedEdits;
                 PatchDryRunSimulationResult patchDryRun = runPatchDryRunSimulation(textEdits, effectiveCodeContext);
                 textEdits = patchDryRun.acceptedEdits;
-                if (textEdits.isEmpty()) return 0;
+                if (textEdits.isEmpty()) {
+                    int fallbackEmitted = emitFallbackIncrementalStepResults(
+                        emitter,
+                        requestId,
+                        safeText,
+                        planSteps,
+                        contextType,
+                        effectiveCodeContext,
+                        stepStatsOut);
+                    if (fallbackEmitted > 0) {
+                        return fallbackEmitted;
+                    }
+                    return 0;
+                }
                 int total = textEdits.size();
                 for (int i = 0; i < total; i++) {
                     String desc = (planSize > 0 && i < planSize)
@@ -4648,6 +4803,19 @@ public class ApiSpringController {
                             "evidenceAnchors", evidence.anchors(),
                             "evidenceReason", evidence.reason(),
                             "partial", i < total - 1));
+                        emitToolTrace(
+                            emitter,
+                            requestId,
+                            "agentic_step_execute",
+                            "skipped",
+                            "step=" + (i + 1) + "/" + total + " desc=" + compactToolDigest(desc, 120),
+                            "reason=" + compactToolDigest(String.valueOf(evidence.reason()), 120) + " quality=" + qualityScore,
+                            0,
+                            0,
+                            "EVIDENCE_GATE",
+                            "LOW_EVIDENCE",
+                            Map.of("stepIndex", i + 1, "stepTotal", total)
+                        );
                         emitted += 1;
                         skipped += 1;
                         lowConfidence += 1;
@@ -4671,6 +4839,24 @@ public class ApiSpringController {
                         "patchDryRun", patchDryRun.toMetaMap(),
                         "textEdits", List.of(textEdits.get(i)),
                         "partial", i < total - 1));
+                    emitToolTrace(
+                        emitter,
+                        requestId,
+                        "agentic_step_execute",
+                        "completed",
+                        "step=" + (i + 1) + "/" + total + " desc=" + compactToolDigest(desc, 120),
+                        "quality=" + qualityScore + " risk=" + editRisk.riskLevel(),
+                        0,
+                        0,
+                        "none",
+                        "none",
+                        Map.of(
+                            "stepIndex", i + 1,
+                            "stepTotal", total,
+                            "approvalRequired", approvalRequired,
+                            "riskScore", editRisk.riskScore()
+                        )
+                    );
                     emitted += 1;
                     accepted += 1;
                     if (qualityScore < aiLocalAnalyzeStepQualityLowThreshold) {
@@ -4680,6 +4866,17 @@ public class ApiSpringController {
                 writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
                 return total;
             } catch (Exception ignored) {
+                int fallbackEmitted = emitFallbackIncrementalStepResults(
+                    emitter,
+                    requestId,
+                    safeText,
+                    planSteps,
+                    contextType,
+                    effectiveCodeContext,
+                    stepStatsOut);
+                if (fallbackEmitted > 0) {
+                    return fallbackEmitted;
+                }
                 writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
                 return 0;
             }
@@ -4720,6 +4917,19 @@ public class ApiSpringController {
                         "evidenceAnchors", evidence.anchors(),
                         "evidenceReason", evidence.reason(),
                         "partial", i < total - 1));
+                    emitToolTrace(
+                        emitter,
+                        requestId,
+                        "agentic_step_execute",
+                        "skipped",
+                        "step=" + (i + 1) + "/" + total + " desc=" + compactToolDigest(desc, 120),
+                        "reason=" + compactToolDigest(String.valueOf(evidence.reason()), 120) + " quality=" + qualityScore,
+                        0,
+                        0,
+                        "EVIDENCE_GATE",
+                        "LOW_EVIDENCE",
+                        Map.of("stepIndex", i + 1, "stepTotal", total)
+                    );
                     emitted += 1;
                     skipped += 1;
                     lowConfidence += 1;
@@ -4737,6 +4947,19 @@ public class ApiSpringController {
                     "evidenceAnchors", evidence.anchors(),
                     "text", sectionText,
                     "partial", i < total - 1));
+                emitToolTrace(
+                    emitter,
+                    requestId,
+                    "agentic_step_execute",
+                    "completed",
+                    "step=" + (i + 1) + "/" + total + " desc=" + compactToolDigest(desc, 120),
+                    "quality=" + qualityScore + " anchors=" + (evidence.anchors() == null ? 0 : evidence.anchors().size()),
+                    0,
+                    0,
+                    "none",
+                    "none",
+                    Map.of("stepIndex", i + 1, "stepTotal", total)
+                );
                 emitted += 1;
                 accepted += 1;
                 if (qualityScore < aiLocalAnalyzeStepQualityLowThreshold) {
@@ -4749,6 +4972,232 @@ public class ApiSpringController {
 
         writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
         return 0;
+    }
+
+    private int emitFallbackIncrementalStepResults(
+            SseEmitter emitter,
+            String requestId,
+            String providerText,
+            List<String> planSteps,
+            String contextType,
+            String effectiveCodeContext,
+            Map<String, Object> stepStatsOut) {
+        if (aiIncrementalStepExecutorService == null) {
+            return 0;
+        }
+        try {
+            AiIncrementalStepExecutorService.PlanOutput plan = aiIncrementalStepExecutorService.parsePlan(providerText, contextType);
+            if (plan == null || plan.steps == null || plan.steps.isEmpty()) {
+                return 0;
+            }
+            int emitted = 0;
+            int accepted = 0;
+            int skipped = 0;
+            int lowConfidence = 0;
+            Map<String, Integer> reasonCounts = new LinkedHashMap<>();
+            int total = plan.steps.size();
+
+            for (int i = 0; i < total; i++) {
+                AiIncrementalStepExecutorService.ExecutionStep step = plan.steps.get(i);
+                AiIncrementalStepExecutorService.StepResult stepResult = aiIncrementalStepExecutorService.executeStep(
+                    step,
+                    effectiveCodeContext,
+                    Map.of("requestId", requestId, "contextType", contextType));
+
+                String desc = (planSteps != null && i < planSteps.size())
+                    ? planSteps.get(i)
+                    : String.valueOf(step == null ? "" : step.description);
+
+                Map<String, Object> stepPatch = toMapSafe(stepResult == null ? null : stepResult.resultData);
+                Map<String, Object> textEdit = mapIncrementalStepToTextEdit(stepPatch, step == null ? "" : step.actionType, effectiveCodeContext);
+                if (textEdit == null || textEdit.isEmpty()) {
+                    sendEvent(emitter, jsonOf(
+                        "stage", "agentic_step_result",
+                        "requestId", requestId,
+                        "stepIndex", i + 1,
+                        "stepTotal", total,
+                        "stepDescription", desc,
+                        "qualityScore", 52,
+                        "lowConfidence", true,
+                        "skipped", true,
+                        "evidenceReason", "incremental_step_without_patch",
+                        "partial", i < total - 1));
+                    emitToolTrace(
+                        emitter,
+                        requestId,
+                        "incremental_step_execute",
+                        "skipped",
+                        "step=" + (i + 1) + "/" + total + " desc=" + compactToolDigest(desc, 120),
+                        "reason=incremental_step_without_patch",
+                        0,
+                        0,
+                        "PATCH_MAPPING",
+                        "STEP_WITHOUT_PATCH",
+                        Map.of("stepIndex", i + 1, "stepTotal", total)
+                    );
+                    emitted += 1;
+                    skipped += 1;
+                    lowConfidence += 1;
+                    reasonCounts.merge("incremental_step_without_patch", 1, Integer::sum);
+                    continue;
+                }
+
+                StepEvidenceVerdict evidence = verifyEditStepEvidence(textEdit, effectiveCodeContext);
+                int qualityScore = evidence.score();
+                AssistantEditRiskResult editRisk = evaluateEditRiskLite(
+                    true,
+                    effectiveCodeContext,
+                    List.of(textEdit),
+                    true,
+                    evidence.accepted(),
+                    true);
+                boolean approvalRequired = ("high".equalsIgnoreCase(editRisk.riskLevel()) && aiAgenticApprovalHighRiskRequired)
+                    || ("medium".equalsIgnoreCase(editRisk.riskLevel()) && aiAgenticApprovalMediumRiskRequired);
+
+                sendEvent(emitter, jsonOf(
+                    "stage", "agentic_step_result",
+                    "requestId", requestId,
+                    "stepIndex", i + 1,
+                    "stepTotal", total,
+                    "stepDescription", desc,
+                    "qualityScore", qualityScore,
+                    "lowConfidence", qualityScore < aiLocalAnalyzeStepQualityLowThreshold,
+                    "riskScore", editRisk.riskScore(),
+                    "riskLevel", editRisk.riskLevel(),
+                    "approvalRequired", approvalRequired,
+                    "approvalReasons", editRisk.reasons(),
+                    "evidenceAnchors", evidence.anchors(),
+                    "textEdits", List.of(textEdit),
+                    "partial", i < total - 1));
+                emitToolTrace(
+                    emitter,
+                    requestId,
+                    "incremental_step_execute",
+                    "completed",
+                    "step=" + (i + 1) + "/" + total + " desc=" + compactToolDigest(desc, 120),
+                    "quality=" + qualityScore + " risk=" + editRisk.riskLevel(),
+                    0,
+                    0,
+                    "none",
+                    "none",
+                    Map.of(
+                        "stepIndex", i + 1,
+                        "stepTotal", total,
+                        "approvalRequired", approvalRequired,
+                        "riskScore", editRisk.riskScore()
+                    )
+                );
+                emitted += 1;
+                accepted += 1;
+                if (qualityScore < aiLocalAnalyzeStepQualityLowThreshold) {
+                    lowConfidence += 1;
+                }
+            }
+
+            writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
+            return emitted;
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private Map<String, Object> toMapSafe(Object raw) {
+        if (!(raw instanceof Map<?, ?> rawMap) || rawMap.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
+            String key = String.valueOf(entry.getKey() == null ? "" : entry.getKey()).trim();
+            if (key.isEmpty()) {
+                continue;
+            }
+            out.put(key, entry.getValue());
+        }
+        return out;
+    }
+
+    private Map<String, Object> mapIncrementalStepToTextEdit(
+            Map<String, Object> stepPatch,
+            String actionType,
+            String effectiveCodeContext) {
+        if (stepPatch == null || stepPatch.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        String safeActionType = String.valueOf(actionType == null ? "" : actionType).trim().toLowerCase(Locale.ROOT);
+        String patchAction = String.valueOf(stepPatch.getOrDefault("action", "")).trim().toLowerCase(Locale.ROOT);
+        int totalLines = Math.max(1, String.valueOf(effectiveCodeContext == null ? "" : effectiveCodeContext).split("\\n").length);
+
+        int startLine = parseIntSafe(stepPatch.get("startLine"), parseIntSafe(stepPatch.get("line"), 0));
+        int endLine = parseIntSafe(stepPatch.get("endLine"), startLine);
+        if (startLine <= 0) {
+            return Collections.emptyMap();
+        }
+        startLine = Math.min(Math.max(1, startLine), totalLines);
+        endLine = Math.min(Math.max(startLine, endLine), totalLines);
+
+        String replacement = strKeep(stepPatch.get("content"), "");
+        String action = "edit";
+        if ("delete".equals(patchAction) || "delete_code".equals(safeActionType)) {
+            action = "delete";
+            replacement = "";
+        } else if ("insert".equals(patchAction) || "insert_code".equals(safeActionType)) {
+            action = "add";
+        }
+
+        Map<String, Object> edit = new LinkedHashMap<>();
+        edit.put("startLine", startLine);
+        edit.put("endLine", endLine);
+        edit.put("replacement", replacement);
+        edit.put("action", action);
+        return edit;
+    }
+
+    private List<String> buildLocalFollowUpSuggestions(
+            String userMessage,
+            String completionPayload,
+            String contextType,
+            String responseMode) {
+        String safeMessage = String.valueOf(userMessage == null ? "" : userMessage).trim();
+        String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        String safeResponseMode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
+        boolean menuCtx = isMenuJsonContext(safeContextType);
+
+        LinkedHashSet<String> suggestions = new LinkedHashSet<>();
+        if ("edit".equals(safeResponseMode)) {
+            suggestions.add(menuCtx
+                ? "Tiếp theo hãy kiểm tra xung đột trigger và quyền theo menu vừa sửa"
+                : "Tiếp theo hãy chạy tự kiểm tra lỗi compile/type cho phần vừa sửa");
+            suggestions.add(menuCtx
+                ? "Tạo danh sách patch add/edit/delete theo từng node để tôi duyệt"
+                : "Tạo danh sách patch theo từng bước nhỏ để tôi duyệt trước khi áp dụng hết");
+        } else {
+            suggestions.add(menuCtx
+                ? "Tóm tắt luồng nghiệp vụ chính theo từng module menu"
+                : "Chỉ ra các side effects quan trọng và rủi ro hồi quy");
+            suggestions.add(menuCtx
+                ? "Liệt kê các phần còn thiếu dữ liệu để phân tích đầy đủ hơn"
+                : "Tạo kế hoạch refactor từng bước cho phần code này");
+        }
+
+        if (safeMessage.contains("logic") || safeMessage.contains("nghiệp vụ")) {
+            suggestions.add("Sinh checklist xác minh nghiệp vụ trước khi triển khai production");
+        }
+
+        if (String.valueOf(completionPayload == null ? "" : completionPayload).length() > 1800) {
+            suggestions.add("Rút gọn kết quả thành 5 ý chính và thứ tự ưu tiên thực thi");
+        }
+
+        List<String> out = new ArrayList<>();
+        for (String item : suggestions) {
+            if (item == null || item.isBlank()) {
+                continue;
+            }
+            out.add(item.trim());
+            if (out.size() >= 3) {
+                break;
+            }
+        }
+        return out;
     }
 
     private void writeAgenticStepStats(
@@ -7693,6 +8142,52 @@ public class ApiSpringController {
         } catch (Exception ignored) {
             // Keep stream path resilient if completion telemetry fails.
         }
+    }
+
+    private void emitToolTrace(
+        SseEmitter emitter,
+        String requestId,
+        String toolName,
+        String status,
+        String inputDigest,
+        String outputDigest,
+        long durationMs,
+        int retryCount,
+        String errorClass,
+        String errorCode,
+        Map<String, Object> extras
+    ) {
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("stage", "tool_trace");
+            payload.put("requestId", String.valueOf(requestId == null ? "" : requestId));
+            payload.put("toolName", String.valueOf(toolName == null ? "unknown_tool" : toolName));
+            payload.put("status", String.valueOf(status == null ? "completed" : status));
+            payload.put("inputDigest", compactToolDigest(inputDigest, 280));
+            payload.put("outputDigest", compactToolDigest(outputDigest, 360));
+            payload.put("durationMs", Math.max(0L, durationMs));
+            payload.put("retryCount", Math.max(0, retryCount));
+            payload.put("errorClass", String.valueOf(errorClass == null ? "none" : errorClass));
+            payload.put("errorCode", String.valueOf(errorCode == null ? "none" : errorCode));
+            if (extras != null && !extras.isEmpty()) {
+                payload.putAll(extras);
+            }
+            sendEvent(emitter, objectMapper.writeValueAsString(payload));
+        } catch (Exception ignored) {
+            // tool trace is telemetry-only; never block main stream
+        }
+    }
+
+    private String compactToolDigest(String value, int maxChars) {
+        String safe = String.valueOf(value == null ? "" : value).replaceAll("\\s+", " ").trim();
+        if (safe.isBlank()) {
+            return "";
+        }
+        int cap = Math.max(40, maxChars);
+        if (safe.length() <= cap) {
+            return safe;
+        }
+        return safe.substring(0, cap) + "...";
     }
 
     private List<Map<String, String>> extractImageParts(Object attachmentsRaw) {
@@ -10772,6 +11267,12 @@ public class ApiSpringController {
 
         text = text.replaceAll("(?im)^\\s*luong[_\\s/-]*xu[_\\s/-]*ly\\s*:\\s*\\d{3,}\\s*$", "luong_xu_ly: chưa xác định rõ");
         text = text.replaceAll("\\n{3,}", "\\n\\n").trim();
+        if (isProductionChecklistRequest(requestText) && isUngroundedChecklistOutput(text, currentCode)) {
+            String checklistFallback = buildHeuristicProductionChecklist(currentCode, requestText, contextType);
+            if (!checklistFallback.isBlank()) {
+                return checklistFallback;
+            }
+        }
         if (aiLocalAnalyzeGuardrailEnabled && aiLocalAnalyzeHeuristicFallbackEnabled && isLowSignalAnalyzeOutput(text)) {
             String fallback = buildHeuristicBusinessLogicAnalysis(currentCode, requestText, contextType);
             if (!fallback.isBlank()) {
@@ -10988,10 +11489,223 @@ public class ApiSpringController {
         return false;
     }
 
+    private boolean isProductionChecklistRequest(String requestText) {
+        String safe = String.valueOf(requestText == null ? "" : requestText).toLowerCase(Locale.ROOT);
+        if (safe.isBlank()) {
+            return false;
+        }
+        return safe.contains("checklist")
+            || safe.contains("xác minh")
+            || safe.contains("xac minh")
+            || safe.contains("production")
+            || safe.contains("triển khai")
+            || safe.contains("trien khai")
+            || safe.contains("go-live");
+    }
+
+    private boolean isUngroundedChecklistOutput(String answer, String currentCode) {
+        String safe = String.valueOf(answer == null ? "" : answer).trim();
+        if (safe.isBlank()) {
+            return true;
+        }
+
+        int checklistLikeLines = 0;
+        int evidenceLines = 0;
+        for (String rawLine : safe.split("\\n")) {
+            String line = String.valueOf(rawLine == null ? "" : rawLine).trim();
+            if (line.isBlank()) {
+                continue;
+            }
+            if (line.startsWith("-") || line.startsWith("*") || line.startsWith("•") || line.matches("^\\d+[.)].+")) {
+                checklistLikeLines += 1;
+            }
+            if (EVIDENCE_CODE_REF_PATTERN.matcher(line).find()) {
+                evidenceLines += 1;
+            }
+        }
+
+        if (checklistLikeLines < 4) {
+            return false;
+        }
+
+        int symbolMentions = countCodeSymbolMentions(safe, collectCodeEvidenceSymbols(currentCode));
+        return evidenceLines < 2 && symbolMentions < 2;
+    }
+
+    private LinkedHashSet<String> collectCodeEvidenceSymbols(String currentCode) {
+        LinkedHashSet<String> symbols = new LinkedHashSet<>();
+        String code = String.valueOf(currentCode == null ? "" : currentCode);
+        if (code.isBlank()) {
+            return symbols;
+        }
+
+        Matcher fnMatcher = Pattern.compile("(?m)(?:function\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*\\(|class\\s+([A-Za-z_$][A-Za-z0-9_$]*)|const\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=\\s*\\([^\\)]*\\)\\s*=>)").matcher(code);
+        while (fnMatcher.find()) {
+            String name = firstNonBlank(fnMatcher.group(1), fnMatcher.group(2), fnMatcher.group(3));
+            if (!name.isBlank()) {
+                symbols.add(name);
+            }
+            if (symbols.size() >= 14) {
+                break;
+            }
+        }
+
+        Matcher stateMatcher = Pattern.compile("(?m)\\b(set[A-Z][A-Za-z0-9_]*|useState|useReducer|fetch|axios|request)\\b").matcher(code);
+        while (stateMatcher.find()) {
+            String token = String.valueOf(stateMatcher.group(1) == null ? "" : stateMatcher.group(1)).trim();
+            if (!token.isBlank()) {
+                symbols.add(token);
+            }
+            if (symbols.size() >= 20) {
+                break;
+            }
+        }
+        return symbols;
+    }
+
+    private int countCodeSymbolMentions(String answer, Set<String> symbols) {
+        String lower = String.valueOf(answer == null ? "" : answer).toLowerCase(Locale.ROOT);
+        if (lower.isBlank() || symbols == null || symbols.isEmpty()) {
+            return 0;
+        }
+        int hits = 0;
+        for (String symbol : symbols) {
+            String safe = String.valueOf(symbol == null ? "" : symbol).trim();
+            if (safe.length() < 3) {
+                continue;
+            }
+            if (lower.contains(safe.toLowerCase(Locale.ROOT))) {
+                hits += 1;
+            }
+            if (hits >= 8) {
+                break;
+            }
+        }
+        return hits;
+    }
+
+    private String buildHeuristicProductionChecklist(String currentCode, String requestText, String contextType) {
+        String code = String.valueOf(currentCode == null ? "" : currentCode);
+        if (code.isBlank()) {
+            return "Không đủ ngữ cảnh code để tạo checklist production. Hãy gửi thêm đoạn code cần xác minh.";
+        }
+
+        String analysisCode = extractScriptContentForAnalysis(code, detectCodeLanguage(contextType, code));
+        if (analysisCode == null || analysisCode.isBlank()) {
+            analysisCode = code;
+        }
+
+        LinkedHashSet<String> functionNames = new LinkedHashSet<>();
+        LinkedHashSet<String> sideEffects = new LinkedHashSet<>();
+        LinkedHashSet<String> branchConditions = new LinkedHashSet<>();
+        LinkedHashSet<String> stateSignals = new LinkedHashSet<>();
+
+        Matcher fnMatcher = Pattern.compile("(?m)(?:function\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*\\(|const\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=\\s*\\([^\\)]*\\)\\s*=>|class\\s+([A-Za-z_$][A-Za-z0-9_$]*))").matcher(analysisCode);
+        while (fnMatcher.find()) {
+            String name = firstNonBlank(fnMatcher.group(1), fnMatcher.group(2), fnMatcher.group(3));
+            if (!name.isBlank()) {
+                functionNames.add(name);
+            }
+            if (functionNames.size() >= 10) {
+                break;
+            }
+        }
+
+        Matcher effectMatcher = Pattern.compile("(?i)(fetch\\s*\\(|axios\\.|request\\.|recordManager\\.|save\\s*\\(|update\\s*\\(|delete\\s*\\(|emit\\s*\\(|socket\\.|sseemitter|settimeout\\s*\\()")
+            .matcher(analysisCode);
+        while (effectMatcher.find()) {
+            String token = String.valueOf(effectMatcher.group(1) == null ? "" : effectMatcher.group(1)).trim();
+            if (!token.isBlank()) {
+                sideEffects.add(token);
+            }
+            if (sideEffects.size() >= 8) {
+                break;
+            }
+        }
+
+        Matcher branchMatcher = Pattern.compile("(?m)\\bif\\s*\\(([^\\)]{1,100})\\)").matcher(analysisCode);
+        while (branchMatcher.find()) {
+            String cond = String.valueOf(branchMatcher.group(1) == null ? "" : branchMatcher.group(1)).trim();
+            if (!cond.isBlank()) {
+                branchConditions.add(cond.replaceAll("\\s+", " "));
+            }
+            if (branchConditions.size() >= 8) {
+                break;
+            }
+        }
+
+        Matcher stateMatcher = Pattern.compile("(?i)(useState\\s*\\(|useReducer\\s*\\(|set[A-Z][A-Za-z0-9_]*\\s*\\(|props\\.|state\\.|ref\\.)")
+            .matcher(analysisCode);
+        while (stateMatcher.find()) {
+            String token = String.valueOf(stateMatcher.group(1) == null ? "" : stateMatcher.group(1)).trim();
+            if (!token.isBlank()) {
+                stateSignals.add(token);
+            }
+            if (stateSignals.size() >= 8) {
+                break;
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("CHECKLIST XÁC MINH NGHIỆP VỤ TRƯỚC KHI TRIỂN KHAI PRODUCTION (code-grounded)\n");
+        if (!functionNames.isEmpty()) {
+            sb.append("Phạm vi được soi theo code hiện tại: ").append(String.join(", ", limitList(functionNames, 8))).append(".\n");
+        }
+
+        sb.append("\n1) Scope và invariants\n");
+        sb.append("- [ ] Xác nhận phạm vi thay đổi chỉ nằm trong các hàm/component mục tiêu, không lan sang luồng ngoài yêu cầu.\n");
+        sb.append("- [ ] Chốt invariants dữ liệu đầu vào/đầu ra trước khi apply patch.\n");
+
+        sb.append("\n2) Branch coverage nghiệp vụ\n");
+        if (!branchConditions.isEmpty()) {
+            for (String cond : limitList(branchConditions, 6)) {
+                sb.append("- [ ] Test nhánh: ").append(cond).append("\n");
+            }
+        } else {
+            sb.append("- [ ] Bổ sung test cho các nhánh if/switch quan trọng chưa được liệt kê rõ từ đoạn code hiện tại.\n");
+        }
+
+        sb.append("\n3) Side effects và idempotency\n");
+        if (!sideEffects.isEmpty()) {
+            sb.append("- Điểm side effect phát hiện: ").append(String.join(", ", limitList(sideEffects, 8))).append(".\n");
+        }
+        sb.append("- [ ] Kiểm tra retry/error-path cho từng side effect.\n");
+        sb.append("- [ ] Đảm bảo thao tác ghi/update/delete có idempotency hoặc guard chống chạy lặp.\n");
+
+        sb.append("\n4) State consistency\n");
+        if (!stateSignals.isEmpty()) {
+            sb.append("- Tín hiệu state/props: ").append(String.join(", ", limitList(stateSignals, 8))).append(".\n");
+        }
+        sb.append("- [ ] Verify state transition trước/sau mỗi bước apply vào editor.\n");
+        sb.append("- [ ] Không để stale state hoặc race condition khi stream step-by-step.\n");
+
+        sb.append("\n5) Verify patch và rollback\n");
+        sb.append("- [ ] Patch validator + dry-run pass trước khi apply tự động.\n");
+        sb.append("- [ ] Có snapshot để rollback/undo nếu step bị reject hoặc lệch logic.\n");
+
+        sb.append("\n6) Quan sát vận hành (observability)\n");
+        sb.append("- [ ] Có requestId/tool_trace cho từng bước (search/prepare/apply/step execute).\n");
+        sb.append("- [ ] Theo dõi metrics: retry reason, evidence gate, patch reject, validator reject, fallback.\n");
+
+        sb.append("\n7) Tối ưu máy yếu\n");
+        sb.append("- [ ] Giới hạn context/prompt theo weak profile trước khi tăng retry.\n");
+        sb.append("- [ ] Ưu tiên code-string-first + cursor window, chỉ mở rộng Lucene scope khi có tín hiệu đủ mạnh.\n");
+        sb.append("- [ ] Kết thúc nhanh với off-topic request để tránh chiếm tài nguyên local model.\n");
+
+        if (String.valueOf(requestText == null ? "" : requestText).toLowerCase(Locale.ROOT).contains("production")) {
+            sb.append("\nTiêu chí đạt: mọi checkbox bắt buộc ở mục 2/3/5 phải pass trước khi go-live.\n");
+        }
+        return sb.toString().replaceAll("\\n{3,}", "\\n\\n").trim();
+    }
+
     private String buildHeuristicBusinessLogicAnalysis(String currentCode, String requestText, String contextType) {
         String code = String.valueOf(currentCode == null ? "" : currentCode);
         if (code.isBlank()) {
             return "Không đủ ngữ cảnh code để phân tích nghiệp vụ. Hãy gửi thêm đoạn code cần phân tích.";
+        }
+
+        if (isProductionChecklistRequest(requestText)) {
+            return buildHeuristicProductionChecklist(currentCode, requestText, contextType);
         }
 
         String analysisCode = extractScriptContentForAnalysis(code, detectCodeLanguage(contextType, code));
@@ -11002,6 +11716,9 @@ public class ApiSpringController {
         LinkedHashSet<String> functionNames = new LinkedHashSet<>();
         LinkedHashSet<String> stateSignals = new LinkedHashSet<>();
         LinkedHashSet<String> sideEffects = new LinkedHashSet<>();
+        LinkedHashSet<String> branchConditions = new LinkedHashSet<>();
+        LinkedHashSet<String> inputSignals = new LinkedHashSet<>();
+        LinkedHashSet<String> outputSignals = new LinkedHashSet<>();
         LinkedHashSet<String> riskHints = new LinkedHashSet<>();
 
         Matcher fnMatcher = Pattern.compile("(?m)(?:function\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*\\(|const\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=\\s*\\([^\\)]*\\)\\s*=>|class\\s+([A-Za-z_$][A-Za-z0-9_$]*))").matcher(analysisCode);
@@ -11039,6 +11756,51 @@ public class ApiSpringController {
             }
         }
 
+        Matcher branchMatcher = Pattern.compile("(?m)\\bif\\s*\\(([^\\)]{1,120})\\)").matcher(analysisCode);
+        while (branchMatcher.find()) {
+            String expr = String.valueOf(branchMatcher.group(1) == null ? "" : branchMatcher.group(1)).trim();
+            if (!expr.isBlank()) {
+                branchConditions.add(expr.replaceAll("\\s+", " "));
+            }
+            if (branchConditions.size() >= 12) {
+                break;
+            }
+        }
+        Matcher switchMatcher = Pattern.compile("(?m)\\bswitch\\s*\\(([^\\)]{1,100})\\)").matcher(analysisCode);
+        while (switchMatcher.find()) {
+            String expr = String.valueOf(switchMatcher.group(1) == null ? "" : switchMatcher.group(1)).trim();
+            if (!expr.isBlank()) {
+                branchConditions.add("switch(" + expr.replaceAll("\\s+", " ") + ")");
+            }
+            if (branchConditions.size() >= 12) {
+                break;
+            }
+        }
+
+        Matcher inputMatcher = Pattern.compile("(?i)\\b(props\\.|params\\.|request\\.|body\\.|attachments\\b|currentCode\\b|cursorLine\\b|useState\\s*\\()")
+            .matcher(analysisCode);
+        while (inputMatcher.find()) {
+            String token = String.valueOf(inputMatcher.group(1) == null ? "" : inputMatcher.group(1)).trim();
+            if (!token.isBlank()) {
+                inputSignals.add(token);
+            }
+            if (inputSignals.size() >= 12) {
+                break;
+            }
+        }
+
+        Matcher outputMatcher = Pattern.compile("(?i)\\b(return\\b|set[A-Z][A-Za-z0-9_]*\\s*\\(|emit\\s*\\(|response\\.set|socket\\.|sseemitter)")
+            .matcher(analysisCode);
+        while (outputMatcher.find()) {
+            String token = String.valueOf(outputMatcher.group(1) == null ? "" : outputMatcher.group(1)).trim();
+            if (!token.isBlank()) {
+                outputSignals.add(token);
+            }
+            if (outputSignals.size() >= 12) {
+                break;
+            }
+        }
+
         if (analysisCode.length() > 120000) {
             riskHints.add("Khối code rất lớn, nên chia nhỏ theo module/hàm để giảm bỏ sót.");
         }
@@ -11050,47 +11812,60 @@ public class ApiSpringController {
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("## Luồng xử lý chính\n");
-        if (!functionNames.isEmpty()) {
-            sb.append("- Entry/khối xử lý nổi bật: ").append(String.join(", ", limitList(functionNames, 10))).append(".\n");
-            sb.append("- Trình tự tổng quát: nhận input -> xử lý qua các hàm trên -> render/cập nhật kết quả.\n");
+        sb.append("1) Mục tiêu nghiệp vụ\n");
+        if (looksLikeReactUiCode(analysisCode)) {
+            sb.append("- Điều phối UI + xử lý tương tác + đồng bộ state theo dữ liệu đầu vào.\n");
+        } else if (looksLikeJavaServiceCode(analysisCode)) {
+            sb.append("- Validate yêu cầu, điều phối service, và thực thi side effects có kiểm soát.\n");
         } else {
-            sb.append("- Chưa xác định rõ entry-point do thiếu tín hiệu hàm/class; cần thêm đoạn script đầy đủ hơn.\n");
+            sb.append("- Xử lý dữ liệu theo điều kiện nghiệp vụ và trả kết quả theo nhánh.\n");
+        }
+        if (!functionNames.isEmpty()) {
+            sb.append("- Hạt nhân xử lý: ").append(String.join(", ", limitList(functionNames, 8))).append(".\n");
         }
 
-        sb.append("\n## State và dữ liệu\n");
+        sb.append("\n2) Luồng xử lý chính\n");
+        sb.append("- Nhận input -> chuẩn hóa/đọc state -> rẽ nhánh điều kiện -> thực thi side effect -> cập nhật output/state.\n");
+        if (!functionNames.isEmpty()) {
+            sb.append("- Chuỗi hàm nổi bật theo code hiện tại: ").append(String.join(" -> ", limitList(functionNames, 6))).append(".\n");
+        }
         if (!stateSignals.isEmpty()) {
-            sb.append("- Tín hiệu state/props: ").append(String.join(", ", limitList(stateSignals, 8))).append(".\n");
-        } else {
-            sb.append("- Chưa thấy tín hiệu state rõ ràng; có thể đang là logic thuần hoặc state ở module khác.\n");
+            sb.append("- Neo state/props: ").append(String.join(", ", limitList(stateSignals, 8))).append(".\n");
         }
-        sb.append("- Dữ liệu chính đi qua currentCode; ưu tiên bám theo biến đầu vào/biến trung gian ngay tại vùng đang mở.\n");
 
-        sb.append("\n## Logic nghiệp vụ\n");
+        sb.append("\n3) Thành phần/hàm quan trọng\n");
         if (!functionNames.isEmpty()) {
-            sb.append("- Nhóm hàm chịu trách nhiệm nghiệp vụ: ").append(String.join(", ", limitList(functionNames, 6))).append(".\n");
-            sb.append("- Mẫu xử lý cho thấy thiên về:");
-            if (looksLikeReactUiCode(analysisCode)) {
-                sb.append(" điều khiển UI + xử lý tương tác người dùng");
-            } else if (looksLikeJavaServiceCode(analysisCode)) {
-                sb.append(" validate request + điều phối service + side effects");
-            } else {
-                sb.append(" xử lý dữ liệu + rẽ nhánh theo điều kiện nghiệp vụ");
+            for (String fn : limitList(functionNames, 10)) {
+                sb.append("- ").append(fn).append("\n");
             }
-            sb.append(".\n");
         } else {
-            sb.append("- Chưa đủ bằng chứng để kết luận luồng nghiệp vụ chi tiết.\n");
+            sb.append("- Chưa bắt được tên hàm rõ ràng; khả năng code rút gọn hoặc thiếu block script đầy đủ.\n");
         }
 
-        sb.append("\n## API calls / Side effects\n");
+        sb.append("\n4) Điều kiện rẽ nhánh\n");
+        if (!branchConditions.isEmpty()) {
+            for (String cond : limitList(branchConditions, 12)) {
+                sb.append("- ").append(cond).append("\n");
+            }
+        } else {
+            sb.append("- Không bắt được biểu thức if/switch nổi bật trong đoạn gửi vào.\n");
+        }
+
+        sb.append("\n5) Đầu vào/đầu ra/side effects\n");
+        if (!inputSignals.isEmpty()) {
+            sb.append("- Đầu vào chính: ").append(String.join(", ", limitList(inputSignals, 10))).append(".\n");
+        }
+        if (!outputSignals.isEmpty()) {
+            sb.append("- Đầu ra/cập nhật: ").append(String.join(", ", limitList(outputSignals, 10))).append(".\n");
+        }
         if (!sideEffects.isEmpty()) {
-            sb.append("- Dấu hiệu side effects: ").append(String.join(", ", limitList(sideEffects, 10))).append(".\n");
-            sb.append("- Cần kiểm tra kỹ idempotency, retry và xử lý lỗi cho các điểm side effect này.\n");
+            sb.append("- Side effects: ").append(String.join(", ", limitList(sideEffects, 10))).append(".\n");
+            sb.append("- Lưu ý kiểm soát retry/idempotency/error-path tại các điểm side effect.\n");
         } else {
-            sb.append("- Không phát hiện điểm gọi API/persistence nổi bật trong đoạn code hiện tại.\n");
+            sb.append("- Chưa phát hiện side effect mạnh trong đoạn hiện tại.\n");
         }
 
-        sb.append("\n## Rủi ro và gợi ý\n");
+        sb.append("\n6) Rủi ro và gợi ý\n");
         if (riskHints.isEmpty()) {
             sb.append("- Tách rõ tầng dữ liệu và tầng hiển thị để truy vết nghiệp vụ dễ hơn.\n");
             sb.append("- Bổ sung log theo bước (input -> xử lý -> output) để debug nhanh trên máy yếu.\n");
@@ -11193,8 +11968,8 @@ public class ApiSpringController {
                 || lowered.startsWith("scanner_")
                 || lowered.matches("^\\d{1,2}:\\d{2}(:\\d{2})?\\s*(am|pm)?$")
                 || lowered.startsWith("input", 0) && lowered.contains("checked:");
-            if (leakedDynSource) {
-                leakTailBudget = Math.max(leakTailBudget, 8);
+            if (leakedDynSource || lowered.contains("dyn_ctx_currentcode")) {
+                leakTailBudget = Math.max(leakTailBudget, 26);
                 continue;
             }
             out.append(rawLine).append('\n');
@@ -19669,6 +20444,76 @@ public class ApiSpringController {
         }
 
         return normalized;
+    }
+
+    private Map<String, Object> summarizeAttachmentMix(List<Map<String, Object>> attachments) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (attachments == null || attachments.isEmpty()) {
+            out.put("total", 0);
+            out.put("images", 0);
+            out.put("json", 0);
+            out.put("markdown", 0);
+            out.put("text", 0);
+            out.put("authoritative", 0);
+            out.put("textChars", 0);
+            out.put("roles", Collections.emptyMap());
+            return out;
+        }
+
+        int total = 0;
+        int images = 0;
+        int json = 0;
+        int markdown = 0;
+        int text = 0;
+        int authoritative = 0;
+        int textChars = 0;
+        Map<String, Integer> roles = new LinkedHashMap<>();
+
+        for (Map<String, Object> att : attachments) {
+            if (att == null || att.isEmpty()) {
+                continue;
+            }
+            total += 1;
+            String kind = String.valueOf(att.getOrDefault("kind", "")).trim().toLowerCase(Locale.ROOT);
+            String mime = String.valueOf(att.getOrDefault("mimeType", "")).trim().toLowerCase(Locale.ROOT);
+            String name = String.valueOf(att.getOrDefault("name", "")).trim().toLowerCase(Locale.ROOT);
+            String role = String.valueOf(att.getOrDefault("contextRole", "general_text")).trim();
+            if (!role.isBlank()) {
+                roles.merge(role, 1, Integer::sum);
+            }
+            if (bool(att.get("authoritative"), false)) {
+                authoritative += 1;
+            }
+
+            String textContent = String.valueOf(att.getOrDefault("textContent", ""));
+            if (!textContent.isBlank()) {
+                textChars += textContent.length();
+                text += 1;
+            }
+
+            boolean imageLike = "image".equals(kind) || mime.startsWith("image/");
+            if (imageLike) {
+                images += 1;
+            }
+            boolean jsonLike = "json".equals(kind) || mime.contains("json") || name.endsWith(".json") || name.endsWith(".jsonl");
+            if (jsonLike) {
+                json += 1;
+            }
+            boolean markdownLike = mime.contains("markdown") || name.endsWith(".md") || name.endsWith(".markdown");
+            if (markdownLike) {
+                markdown += 1;
+            }
+        }
+
+        out.put("total", total);
+        out.put("images", images);
+        out.put("json", json);
+        out.put("markdown", markdown);
+        out.put("text", text);
+        out.put("authoritative", authoritative);
+        out.put("textChars", textChars);
+        out.put("roles", roles);
+        return out;
     }
 
     private void emitAiAssistantChatChunk(String appId, Map<String, Object> payload) {
