@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Row, Col, Statistic, Table, Tabs, Progress, Spin, Alert, Empty, Button, Popconfirm, message, Space, Input } from 'antd';
 import { LineChartOutlined, CheckCircleOutlined, ExclamationOutlined, ReloadOutlined } from '@ant-design/icons';
 
@@ -19,6 +19,21 @@ interface MetricsData {
   fallback_rate: number;
   patch_reject_rate: number;
   validator_reject_rate: number;
+  quality_trends?: Record<string, Record<string, number>>;
+  request_status_trends?: Record<string, Record<string, number>>;
+  recent_request_traces?: Array<{
+    timestamp: number;
+    requestId: string;
+    flow: string;
+    stage: string;
+    status: string;
+    reason_code: string;
+    app_id?: string;
+    response_mode?: string;
+    model?: string;
+    elapsed_ms?: number;
+    meta?: Record<string, unknown>;
+  }>;
   scope?: 'global' | 'app';
   app_id?: string;
 }
@@ -26,18 +41,28 @@ interface MetricsData {
 interface QualityDashboardProps {
   refreshInterval?: number; // ms
   enabled?: boolean;
+  focusRequestId?: string;
+  focusAppId?: string;
+  focusNonce?: number;
 }
 
 const QualityDashboard: React.FC<QualityDashboardProps> = ({ 
   refreshInterval = 5000, 
-  enabled = true 
+  enabled = true,
+  focusRequestId,
+  focusAppId,
+  focusNonce,
 }) => {
+  const traceLimit = 80;
   const [metrics, setMetrics] = useState<MetricsData | null>(null);
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdateMs, setLastUpdateMs] = useState<number>(0);
   const [appIdFilter, setAppIdFilter] = useState<string>('');
+  const [traceFilter, setTraceFilter] = useState<string>('');
+  const [activeMetricsTab, setActiveMetricsTab] = useState<string>('request-timeline');
+  const [expandedTimelineRowKeys, setExpandedTimelineRowKeys] = useState<React.Key[]>([]);
 
   // Fetch metrics from backend
   const fetchMetrics = async () => {
@@ -48,7 +73,12 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
       setError(null);
 
       const safeAppId = appIdFilter.trim();
-      const query = safeAppId ? `?appId=${encodeURIComponent(safeAppId)}` : '';
+      const queryParams = new URLSearchParams();
+      queryParams.set('traceLimit', String(traceLimit));
+      if (safeAppId) {
+        queryParams.set('appId', safeAppId);
+      }
+      const query = `?${queryParams.toString()}`;
       const response = await fetch(`/api/ai/metrics${query}`, {
         method: 'GET',
         headers: {
@@ -84,6 +114,21 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
     const interval = setInterval(fetchMetrics, refreshInterval);
     return () => clearInterval(interval);
   }, [enabled, refreshInterval, appIdFilter]);
+
+  useEffect(() => {
+    const safeRequestId = String(focusRequestId || '').trim();
+    const safeAppId = String(focusAppId || '').trim();
+    if (!safeRequestId && !safeAppId) {
+      return;
+    }
+    if (safeAppId) {
+      setAppIdFilter(safeAppId);
+    }
+    if (safeRequestId) {
+      setTraceFilter(safeRequestId);
+      setActiveMetricsTab('request-timeline');
+    }
+  }, [focusAppId, focusNonce, focusRequestId]);
 
   const handleResetMetrics = async () => {
     try {
@@ -162,6 +207,160 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
   const formatRate = (rate: number) => `${(rate * 100).toFixed(2)}%`;
   const timeAgoMs = Date.now() - lastUpdateMs;
   const timeAgoStr = timeAgoMs < 1000 ? 'now' : `${Math.round(timeAgoMs / 1000)}s ago`;
+
+  const retrievalPassCount = Number(metrics.evidence_gate_hits['retrieval_quality_pass'] || 0);
+  const retrievalLowCount = Number(metrics.evidence_gate_hits['retrieval_quality_low'] || 0);
+  const retrievalRetryAppliedCount = Number(metrics.evidence_gate_hits['retrieval_quality_retry_applied'] || 0);
+  const retrievalTotal = retrievalPassCount + retrievalLowCount;
+  const retrievalPassRate = retrievalTotal > 0 ? retrievalPassCount / retrievalTotal : 0;
+  const retrievalLowRate = retrievalTotal > 0 ? retrievalLowCount / retrievalTotal : 0;
+
+  const stepContractViolationCount = Number(metrics.evidence_gate_hits['step_output_contract_violation'] || 0);
+  const stepContractRepairAppliedCount = Number(metrics.evidence_gate_hits['step_output_contract_repair_applied'] || 0);
+  const stepContractRepairFailedCount = Number(metrics.evidence_gate_hits['step_output_contract_repair_failed'] || 0);
+  const stepContractRepairLowQualityCount = Number(metrics.evidence_gate_hits['step_output_contract_repair_low_quality'] || 0);
+  const stepContractHandledTotal = stepContractViolationCount + stepContractRepairAppliedCount;
+  const stepContractViolationRate = metrics.totals.total_requests > 0
+    ? stepContractViolationCount / metrics.totals.total_requests
+    : 0;
+  const stepContractRepairSuccessRate = (stepContractRepairAppliedCount + stepContractRepairFailedCount) > 0
+    ? stepContractRepairAppliedCount / (stepContractRepairAppliedCount + stepContractRepairFailedCount)
+    : 0;
+
+  const retrievalGateData = [
+    {
+      gate: 'retrieval_quality_pass',
+      count: retrievalPassCount,
+      percentage: retrievalTotal > 0 ? ((retrievalPassCount / retrievalTotal) * 100).toFixed(1) : '0.0',
+    },
+    {
+      gate: 'retrieval_quality_low',
+      count: retrievalLowCount,
+      percentage: retrievalTotal > 0 ? ((retrievalLowCount / retrievalTotal) * 100).toFixed(1) : '0.0',
+    },
+    {
+      gate: 'retrieval_quality_retry_applied',
+      count: retrievalRetryAppliedCount,
+      percentage: retrievalTotal > 0 ? ((retrievalRetryAppliedCount / retrievalTotal) * 100).toFixed(1) : '0.0',
+    },
+  ].filter((item) => item.count > 0);
+
+  const stepContractData = [
+    {
+      gate: 'step_output_contract_violation',
+      count: stepContractViolationCount,
+      percentage: metrics.totals.total_requests > 0
+        ? ((stepContractViolationCount / metrics.totals.total_requests) * 100).toFixed(1)
+        : '0.0',
+    },
+    {
+      gate: 'step_output_contract_repair_applied',
+      count: stepContractRepairAppliedCount,
+      percentage: stepContractHandledTotal > 0
+        ? ((stepContractRepairAppliedCount / stepContractHandledTotal) * 100).toFixed(1)
+        : '0.0',
+    },
+    {
+      gate: 'step_output_contract_repair_failed',
+      count: stepContractRepairFailedCount,
+      percentage: stepContractHandledTotal > 0
+        ? ((stepContractRepairFailedCount / stepContractHandledTotal) * 100).toFixed(1)
+        : '0.0',
+    },
+    {
+      gate: 'step_output_contract_repair_low_quality',
+      count: stepContractRepairLowQualityCount,
+      percentage: stepContractHandledTotal > 0
+        ? ((stepContractRepairLowQualityCount / stepContractHandledTotal) * 100).toFixed(1)
+        : '0.0',
+    },
+  ].filter((item) => item.count > 0);
+
+  const recentRequestTraceData = (metrics.recent_request_traces || []).map((item, index) => ({
+    key: `${item.requestId || 'unknown'}_${item.timestamp}_${index}`,
+    ...item,
+  })).filter((item) => {
+    const q = traceFilter.trim().toLowerCase();
+    if (!q) {
+      return true;
+    }
+    const haystack = [
+      String(item.requestId || ''),
+      String(item.stage || ''),
+      String(item.status || ''),
+      String(item.reason_code || ''),
+      String(item.model || ''),
+      String(item.flow || ''),
+      String(item.response_mode || ''),
+    ].join(' ').toLowerCase();
+    return haystack.includes(q);
+  });
+
+  const requestTimelineData = useMemo(() => {
+    const grouped = new Map<string, typeof recentRequestTraceData>();
+    for (const item of recentRequestTraceData) {
+      const id = String(item.requestId || 'unknown').trim() || 'unknown';
+      const entries = grouped.get(id) || [];
+      entries.push(item);
+      grouped.set(id, entries);
+    }
+
+    return Array.from(grouped.entries()).map(([requestId, events]) => {
+      const sorted = [...events].sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0));
+      const firstTs = Number(sorted[0]?.timestamp || 0);
+      const lastTs = Number(sorted[sorted.length - 1]?.timestamp || firstTs);
+      const durationMs = Math.max(0, lastTs - firstTs);
+      const finalEvent = sorted[sorted.length - 1];
+      const stages = Array.from(new Set(sorted.map((e) => String(e.stage || '').trim()).filter(Boolean)));
+
+      return {
+        key: `timeline_${requestId}`,
+        requestId,
+        events: sorted,
+        eventCount: sorted.length,
+        startedAt: firstTs,
+        endedAt: lastTs,
+        durationMs,
+        finalStatus: String(finalEvent?.status || '-'),
+        finalReason: String(finalEvent?.reason_code || '-'),
+        model: String(finalEvent?.model || '-'),
+        stages: stages.join(' -> '),
+      };
+    }).sort((a, b) => b.startedAt - a.startedAt);
+  }, [recentRequestTraceData]);
+
+  useEffect(() => {
+    const safeRequestId = String(focusRequestId || '').trim();
+    if (!safeRequestId) {
+      return;
+    }
+    const matchedKeys = requestTimelineData
+      .filter((item) => String(item.requestId || '').trim() === safeRequestId)
+      .map((item) => item.key);
+    if (matchedKeys.length > 0) {
+      setExpandedTimelineRowKeys(matchedKeys);
+    }
+  }, [focusNonce, focusRequestId, requestTimelineData]);
+
+  const qualityTrendData = Object.entries(metrics.quality_trends || {}).map(([signal, values]) => ({
+    key: `quality_${signal}`,
+    category: 'evidence_gate',
+    signal,
+    m5: Number(values['5m'] || 0),
+    h1: Number(values['1h'] || 0),
+    h24: Number(values['24h'] || 0),
+  }));
+
+  const requestStatusTrendData = Object.entries(metrics.request_status_trends || {}).map(([signal, values]) => ({
+    key: `request_${signal}`,
+    category: 'request_status',
+    signal,
+    m5: Number(values['5m'] || 0),
+    h1: Number(values['1h'] || 0),
+    h24: Number(values['24h'] || 0),
+  }));
+
+  const trendData = [...qualityTrendData, ...requestStatusTrendData];
 
   return (
     <div style={{ padding: '16px' }}>
@@ -281,8 +480,92 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
         </Col>
       </Row>
 
+      {/* Retrieval Quality - Copilot parity signals */}
+      <Row gutter={16} style={{ marginBottom: '24px' }}>
+        <Col xs={24} sm={12} lg={8}>
+          <Card title="Retrieval Pass Rate" size="small">
+            <Progress
+              type="circle"
+              percent={Math.round(retrievalPassRate * 100)}
+              strokeColor={retrievalPassRate >= 0.75 ? '#52c41a' : '#faad14'}
+            />
+            <div style={{ marginTop: '8px', textAlign: 'center', fontSize: '12px' }}>
+              {retrievalPassCount} pass / {retrievalTotal} total
+            </div>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={8}>
+          <Card title="Retrieval Low Evidence" size="small">
+            <Progress
+              type="circle"
+              percent={Math.round(retrievalLowRate * 100)}
+              strokeColor={retrievalLowRate > 0.2 ? '#ff4d4f' : '#52c41a'}
+            />
+            <div style={{ marginTop: '8px', textAlign: 'center', fontSize: '12px' }}>
+              {retrievalLowCount} low-evidence hits
+            </div>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={8}>
+          <Card title="Retrieval Remediation" size="small">
+            <Progress
+              type="circle"
+              percent={Math.round(retrievalTotal > 0 ? (retrievalRetryAppliedCount / retrievalTotal) * 100 : 0)}
+              strokeColor="#1890ff"
+            />
+            <div style={{ marginTop: '8px', textAlign: 'center', fontSize: '12px' }}>
+              {retrievalRetryAppliedCount} retry-applied events
+            </div>
+          </Card>
+        </Col>
+      </Row>
+
+      {/* Step Contract Reliability - Copilot parity signals */}
+      <Row gutter={16} style={{ marginBottom: '24px' }}>
+        <Col xs={24} sm={12} lg={8}>
+          <Card title="Step Contract Violations" size="small">
+            <Progress
+              type="circle"
+              percent={Math.round(stepContractViolationRate * 100)}
+              strokeColor={stepContractViolationRate > 0.08 ? '#ff4d4f' : '#52c41a'}
+            />
+            <div style={{ marginTop: '8px', textAlign: 'center', fontSize: '12px' }}>
+              {stepContractViolationCount} violations / {metrics.totals.total_requests} requests
+            </div>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={8}>
+          <Card title="Step Contract Repair Success" size="small">
+            <Progress
+              type="circle"
+              percent={Math.round(stepContractRepairSuccessRate * 100)}
+              strokeColor={stepContractRepairSuccessRate >= 0.7 ? '#52c41a' : '#faad14'}
+            />
+            <div style={{ marginTop: '8px', textAlign: 'center', fontSize: '12px' }}>
+              {stepContractRepairAppliedCount} repaired successfully
+            </div>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={8}>
+          <Card title="Step Contract Repair Failed" size="small">
+            <Progress
+              type="circle"
+              percent={Math.round(stepContractHandledTotal > 0
+                ? (stepContractRepairFailedCount / stepContractHandledTotal) * 100
+                : 0)}
+              strokeColor={stepContractRepairFailedCount > 0 ? '#ff4d4f' : '#52c41a'}
+            />
+            <div style={{ marginTop: '8px', textAlign: 'center', fontSize: '12px' }}>
+              {stepContractRepairFailedCount} repair-failed events
+            </div>
+          </Card>
+        </Col>
+      </Row>
+
       {/* Detailed Breakdown Tables */}
       <Tabs
+        activeKey={activeMetricsTab}
+        onChange={setActiveMetricsTab}
         items={[
           {
             key: 'retry',
@@ -327,6 +610,48 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
             ),
           },
           {
+            key: 'retrieval',
+            label: `Retrieval Quality (${retrievalGateData.length})`,
+            children: (
+              retrievalGateData.length > 0 ? (
+                <Table
+                  size="small"
+                  pagination={false}
+                  columns={[
+                    { title: 'Signal', dataIndex: 'gate', key: 'gate' },
+                    { title: 'Count', dataIndex: 'count', key: 'count', sorter: (a, b) => a.count - b.count },
+                    { title: '%', dataIndex: 'percentage', key: 'percentage' },
+                  ]}
+                  dataSource={retrievalGateData.sort((a, b) => b.count - a.count)}
+                  rowKey="gate"
+                />
+              ) : (
+                <Empty description="No retrieval quality events recorded" />
+              )
+            ),
+          },
+          {
+            key: 'step-contract',
+            label: `Step Contract (${stepContractData.length})`,
+            children: (
+              stepContractData.length > 0 ? (
+                <Table
+                  size="small"
+                  pagination={false}
+                  columns={[
+                    { title: 'Signal', dataIndex: 'gate', key: 'gate' },
+                    { title: 'Count', dataIndex: 'count', key: 'count', sorter: (a, b) => a.count - b.count },
+                    { title: '%', dataIndex: 'percentage', key: 'percentage' },
+                  ]}
+                  dataSource={stepContractData.sort((a, b) => b.count - a.count)}
+                  rowKey="gate"
+                />
+              ) : (
+                <Empty description="No step contract events recorded" />
+              )
+            ),
+          },
+          {
             key: 'patch',
             label: `Patch Rejections (${patchRejectData.length})`,
             children: (
@@ -366,6 +691,159 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
               ) : (
                 <Empty description="No validator rejections recorded" />
               )
+            ),
+          },
+          {
+            key: 'trends',
+            label: `Trends (${trendData.length})`,
+            children: (
+              trendData.length > 0 ? (
+                <Table
+                  size="small"
+                  pagination={false}
+                  columns={[
+                    { title: 'Category', dataIndex: 'category', key: 'category', width: 150 },
+                    { title: 'Signal', dataIndex: 'signal', key: 'signal' },
+                    { title: '5m', dataIndex: 'm5', key: 'm5', sorter: (a, b) => a.m5 - b.m5, width: 90 },
+                    { title: '1h', dataIndex: 'h1', key: 'h1', sorter: (a, b) => a.h1 - b.h1, width: 90 },
+                    { title: '24h', dataIndex: 'h24', key: 'h24', sorter: (a, b) => a.h24 - b.h24, width: 90 },
+                  ]}
+                  dataSource={trendData.sort((a, b) => b.h24 - a.h24)}
+                />
+              ) : (
+                <Empty description="No trend data recorded" />
+              )
+            ),
+          },
+          {
+            key: 'request-timeline',
+            label: `Timeline (${requestTimelineData.length})`,
+            children: (
+              requestTimelineData.length > 0 ? (
+                <Table
+                  size="small"
+                  pagination={{ pageSize: 10 }}
+                  scroll={{ x: 1400 }}
+                  columns={[
+                    {
+                      title: 'Started At',
+                      dataIndex: 'startedAt',
+                      key: 'startedAt',
+                      width: 130,
+                      render: (value: number) => new Date(value).toLocaleTimeString(),
+                      sorter: (a, b) => a.startedAt - b.startedAt,
+                      defaultSortOrder: 'descend',
+                    },
+                    { title: 'Request ID', dataIndex: 'requestId', key: 'requestId', ellipsis: true, width: 180 },
+                    { title: 'Events', dataIndex: 'eventCount', key: 'eventCount', width: 90, sorter: (a, b) => a.eventCount - b.eventCount },
+                    { title: 'Duration (ms)', dataIndex: 'durationMs', key: 'durationMs', width: 120, sorter: (a, b) => a.durationMs - b.durationMs },
+                    { title: 'Final Status', dataIndex: 'finalStatus', key: 'finalStatus', width: 140 },
+                    { title: 'Final Reason', dataIndex: 'finalReason', key: 'finalReason', width: 220, ellipsis: true },
+                    { title: 'Model', dataIndex: 'model', key: 'model', width: 180, ellipsis: true },
+                    { title: 'Stages', dataIndex: 'stages', key: 'stages', ellipsis: true },
+                  ]}
+                  expandable={{
+                    expandedRowKeys: expandedTimelineRowKeys,
+                    onExpandedRowsChange: (keys) => setExpandedTimelineRowKeys([...keys]),
+                    expandedRowRender: (record) => (
+                      <Table
+                        size="small"
+                        pagination={false}
+                        columns={[
+                          {
+                            title: 'Time',
+                            dataIndex: 'timestamp',
+                            key: 'timestamp',
+                            width: 140,
+                            render: (value: number) => new Date(value).toLocaleTimeString(),
+                          },
+                          { title: 'Stage', dataIndex: 'stage', key: 'stage', width: 170 },
+                          { title: 'Status', dataIndex: 'status', key: 'status', width: 150 },
+                          { title: 'Reason', dataIndex: 'reason_code', key: 'reason_code', width: 220, ellipsis: true },
+                          {
+                            title: 'Elapsed (ms)',
+                            dataIndex: 'elapsed_ms',
+                            key: 'elapsed_ms',
+                            width: 120,
+                            render: (value: number | undefined) => (typeof value === 'number' ? value : '-'),
+                          },
+                          { title: 'Model', dataIndex: 'model', key: 'model', width: 170, ellipsis: true },
+                        ]}
+                        dataSource={record.events.map((event, index) => ({
+                          ...event,
+                          key: `${record.requestId}_${index}_${event.stage}_${event.status}`,
+                        }))}
+                      />
+                    ),
+                  }}
+                  dataSource={requestTimelineData}
+                />
+              ) : (
+                <Empty description="No request timeline data" />
+              )
+            ),
+          },
+          {
+            key: 'request-traces',
+            label: `Request Traces (${recentRequestTraceData.length})`,
+            children: (
+              <div>
+                <div style={{ marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Input
+                    placeholder="Filter request traces (requestId, stage, status, reason, model...)"
+                    allowClear
+                    value={traceFilter}
+                    onChange={(e) => setTraceFilter(e.target.value)}
+                    style={{ maxWidth: 460 }}
+                  />
+                </div>
+                {recentRequestTraceData.length > 0 ? (
+                  <Table
+                    size="small"
+                    pagination={{ pageSize: 10 }}
+                    scroll={{ x: 1300 }}
+                    columns={[
+                      {
+                        title: 'Timestamp',
+                        dataIndex: 'timestamp',
+                        key: 'timestamp',
+                        render: (value: number) => new Date(value).toLocaleTimeString(),
+                        sorter: (a, b) => a.timestamp - b.timestamp,
+                        defaultSortOrder: 'descend',
+                      },
+                      { title: 'Request ID', dataIndex: 'requestId', key: 'requestId', ellipsis: true, width: 180 },
+                      { title: 'Flow', dataIndex: 'flow', key: 'flow', width: 130 },
+                      { title: 'Stage', dataIndex: 'stage', key: 'stage', width: 160 },
+                      { title: 'Status', dataIndex: 'status', key: 'status', width: 120 },
+                      { title: 'Reason', dataIndex: 'reason_code', key: 'reason_code', width: 180 },
+                      { title: 'Model', dataIndex: 'model', key: 'model', width: 180 },
+                      {
+                        title: 'Elapsed (ms)',
+                        dataIndex: 'elapsed_ms',
+                        key: 'elapsed_ms',
+                        width: 120,
+                        render: (value: number | undefined) => (typeof value === 'number' ? value : '-'),
+                      },
+                    ]}
+                    expandable={{
+                      expandedRowRender: (record) => (
+                        <div style={{ fontSize: 12, lineHeight: 1.4 }}>
+                          <div><strong>app_id:</strong> {record.app_id || '-'}</div>
+                          <div><strong>response_mode:</strong> {record.response_mode || '-'}</div>
+                          <div><strong>meta:</strong></div>
+                          <pre style={{ marginTop: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+{JSON.stringify(record.meta || {}, null, 2)}
+                          </pre>
+                        </div>
+                      ),
+                      rowExpandable: () => true,
+                    }}
+                    dataSource={recentRequestTraceData}
+                  />
+                ) : (
+                  <Empty description="No recent request traces" />
+                )}
+              </div>
             ),
           },
         ]}

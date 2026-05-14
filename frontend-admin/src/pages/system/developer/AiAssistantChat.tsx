@@ -12,6 +12,7 @@ import {
 	DeleteOutlined,
 	DislikeOutlined,
 	FileImageOutlined,
+	LineChartOutlined,
 	LikeOutlined,
 	PaperClipOutlined,
 	SendOutlined,
@@ -47,6 +48,8 @@ export interface AiAssistantUserMessagePayload {
 interface ChatMessage {
 	id: string
 	serverTurnId?: string
+	requestId?: string
+	appId?: string
 	feedbackRating?: number
 	role: "user" | "assistant" | "system"
 	messageType?: "response" | "debug" | "compacted_context"
@@ -211,6 +214,10 @@ interface AiAssistantStageEvent {
 	riskLevel?: string
 	approvalRequired?: boolean
 	approvalReasons?: string[]
+	retrievalChars?: number
+	minChars?: number
+	deficit?: number
+	retryApplied?: boolean
 	timestamp: number
 }
 
@@ -531,6 +538,7 @@ interface AiAssistantChatProps {
 	editorMetadata?: Record<string, unknown>
 	onCodeInsert?: (code: string) => void
 	onCitationNavigate?: (location: { path?: string; line?: number; token: string }) => void
+	onOpenQualityTrace?: (payload: { requestId: string; appId?: string }) => void
 	onUserMessage?: (payload: AiAssistantUserMessagePayload) => void
 	autoApplyCodeBlock?: boolean
 	autoApplyPreferenceKey?: string
@@ -646,6 +654,8 @@ function mergeChatMessages(previous: ChatMessage, next: ChatMessage): ChatMessag
 		...next,
 		id: next.id || previous.id,
 		serverTurnId: next.serverTurnId || previous.serverTurnId,
+		requestId: next.requestId || previous.requestId,
+		appId: next.appId || previous.appId,
 		content: preferNextContent ? nextContent : previousContent,
 		timestamp: Math.max(previous.timestamp || 0, next.timestamp || 0),
 		codeBlocks: Array.isArray(next.codeBlocks) && next.codeBlocks.length > 0 ? next.codeBlocks : previous.codeBlocks,
@@ -1686,6 +1696,7 @@ export default function AiAssistantChat({
 	editorMetadata,
 	onCodeInsert,
 	onCitationNavigate,
+	onOpenQualityTrace,
 	onUserMessage,
 }: AiAssistantChatProps) {
 	const { i18n } = useTranslation();
@@ -2339,6 +2350,8 @@ export default function AiAssistantChat({
 					converted.push({
 						id: `${turnId || `turn_${i}`}_a`,
 						serverTurnId: turnId || undefined,
+						requestId: String((turn as any).request_id || (turn as any).requestId || "").trim() || undefined,
+						appId: String((turn as any).app_id || (turn as any).appId || appId || "").trim() || undefined,
 						feedbackRating,
 						role: "assistant",
 						responseMode,
@@ -2695,7 +2708,7 @@ export default function AiAssistantChat({
 
 	// Persist final chat history to localStorage after stream completes so reload shows correct content.
 	useEffect(() => {
-		if (completionState === "done") {
+		if (completionState === "done" || completionState === "stream_closed" || completionState === "error" || completionState === "cancelled") {
 			saveChatHistory(messages);
 		}
 	}, [completionState, messages]);
@@ -2738,6 +2751,10 @@ export default function AiAssistantChat({
 			return uiText("Lập kế hoạch xử lý", "Orchestration planning", "编排规划");
 		case "assistant_orchestration_step_result":
 			return uiText("Kết quả bước xử lý", "Step result", "步骤结果");
+		case "assistant_orchestration_replan":
+			return uiText("Tái lập kế hoạch", "Orchestration replan", "编排重规划");
+		case "assistant_multifile_patch_plan":
+			return uiText("Kế hoạch patch nhiều file", "Multi-file patch plan", "多文件补丁规划");
 		case "assistant_tool_intent_plan":
 			return uiText("Lập kế hoạch công cụ", "Tool intent planning", "工具意图规划");
 		case "assistant_verify_plan":
@@ -2748,6 +2765,8 @@ export default function AiAssistantChat({
 			return uiText("Kiểm tra bằng chứng phân tích", "Analysis evidence gate", "分析证据门控");
 		case "assistant_edit_risk_gate":
 			return uiText("Đánh giá rủi ro chỉnh sửa", "Edit risk gating", "编辑风险门控");
+		case "assistant_semantic_sandbox":
+			return uiText("Semantic sandbox trước khi apply", "Pre-apply semantic sandbox", "应用前语义沙箱");
 		case "patch_dry_run_rejected":
 			return uiText("Dry-run patch bị chặn", "Patch dry-run rejected", "补丁干运行被拒绝");
 		case "assistant_tool_execution_result":
@@ -2764,6 +2783,10 @@ export default function AiAssistantChat({
 			return uiText("Kiểm tra schema kế hoạch", "Plan schema verification", "计划结构验证");
 		case "agentic_step_verifier":
 			return uiText("Kiểm tra chất lượng step", "Step quality verification", "步骤质量验证");
+		case "retrieval_quality_gate":
+			return uiText("Kiểm tra chất lượng retrieval", "Retrieval quality gate", "检索质量门控");
+		case "agentic_step_contract":
+			return uiText("Ràng buộc step output", "Step output contract", "步骤输出契约");
 			case "preparing":
 				return uiText("Chuẩn bị", "Preparing", "准备中");
 			case "context":
@@ -3050,6 +3073,10 @@ export default function AiAssistantChat({
 		return "preparing";
 	if (normalizedStage === "assistant_orchestration_step_result")
 		return "chunking";
+	if (normalizedStage === "assistant_orchestration_replan")
+		return "chunking";
+	if (normalizedStage === "assistant_multifile_patch_plan")
+		return "preparing";
 	if (normalizedStage === "assistant_tool_intent_plan")
 		return "preparing";
 	if (normalizedStage === "assistant_verify_plan")
@@ -3064,6 +3091,8 @@ export default function AiAssistantChat({
 		return "final";
 	if (normalizedStage === "assistant_edit_risk_gate")
 		return "final";
+	if (normalizedStage === "assistant_semantic_sandbox")
+		return "final";
 	if (normalizedStage === "patch_dry_run_rejected")
 		return "error";
 	if (normalizedStage === "scope_reasoning")
@@ -3074,6 +3103,10 @@ export default function AiAssistantChat({
 		return "final";
 	if (normalizedStage === "agentic_step_verifier")
 		return "final";
+	if (normalizedStage === "retrieval_quality_gate")
+		return "final";
+	if (normalizedStage === "agentic_step_contract")
+		return "error";
 		const key = normalizedPhase || normalizedStage;
 		if (key.includes("preparing"))
 			return "preparing";
@@ -3188,6 +3221,10 @@ export default function AiAssistantChat({
 		const queueState = String(data?.queueState || "").trim();
 		const dynamicSource = String(data?.dynamicSource || "").trim();
 		const prunedSourcesNum = Number(data?.prunedSources);
+		const retrievalCharsNum = Number(data?.retrievalChars);
+		const minCharsNum = Number(data?.minChars);
+		const deficitNum = Number(data?.deficit);
+		const retryApplied = Boolean(data?.retryApplied);
 		const patchValidator = normalizePatchValidatorMeta(data?.patchValidator);
 		const patchDryRun = normalizePatchDryRunMeta(data?.patchDryRun);
 		const rangeLabel = extractStageRangeLabel(data);
@@ -3227,6 +3264,10 @@ export default function AiAssistantChat({
 			queueState.toLowerCase(),
 			dynamicSource.toLowerCase(),
 			Number.isFinite(prunedSourcesNum) ? prunedSourcesNum : "",
+			Number.isFinite(retrievalCharsNum) ? retrievalCharsNum : "",
+			Number.isFinite(minCharsNum) ? minCharsNum : "",
+			Number.isFinite(deficitNum) ? deficitNum : "",
+			retryApplied ? "1" : "0",
 			patchValidator?.rejectionReason || "",
 			patchValidator?.acceptedCount ?? "",
 			patchValidator?.rejectedCount ?? "",
@@ -3258,6 +3299,10 @@ export default function AiAssistantChat({
 			queueState: queueState || undefined,
 			dynamicSource: dynamicSource || undefined,
 			prunedSources: Number.isFinite(prunedSourcesNum) ? prunedSourcesNum : undefined,
+			retrievalChars: Number.isFinite(retrievalCharsNum) ? retrievalCharsNum : undefined,
+			minChars: Number.isFinite(minCharsNum) ? minCharsNum : undefined,
+			deficit: Number.isFinite(deficitNum) ? deficitNum : undefined,
+			retryApplied,
 			patchValidator,
 			patchDryRun,
 			message: msg,
@@ -3418,16 +3463,53 @@ export default function AiAssistantChat({
 				if (fallbackMessage)
 					return fallbackMessage;
 			}
+			if (eventStage === "retrieval_quality_gate") {
+				const status = String(event.status || "").trim().toLowerCase();
+				const chars = Number.isFinite(Number(event.retrievalChars)) ? Number(event.retrievalChars) : undefined;
+				const minChars = Number.isFinite(Number(event.minChars)) ? Number(event.minChars) : undefined;
+				const deficit = Number.isFinite(Number(event.deficit)) ? Number(event.deficit) : undefined;
+				const retryApplied = Boolean(event.retryApplied);
+				if (chars != null || minChars != null || deficit != null || retryApplied || status) {
+					return uiText(
+						`Retrieval gate: ${status || "running"}${chars != null ? ` · chars=${chars}` : ""}${minChars != null ? `/${minChars}` : ""}${deficit != null && deficit > 0 ? ` · thiếu ${deficit}` : ""}${retryApplied ? " · có remediation" : ""}`,
+						`Retrieval gate: ${status || "running"}${chars != null ? ` · chars=${chars}` : ""}${minChars != null ? `/${minChars}` : ""}${deficit != null && deficit > 0 ? ` · deficit ${deficit}` : ""}${retryApplied ? " · remediation applied" : ""}`,
+						`检索门控：${status || "running"}${chars != null ? ` · chars=${chars}` : ""}${minChars != null ? `/${minChars}` : ""}${deficit != null && deficit > 0 ? ` · 缺口 ${deficit}` : ""}${retryApplied ? " · 已补救" : ""}`,
+					);
+				}
+				const fallbackMessage = String(event.detail || event.message || "").trim();
+				if (fallbackMessage)
+					return fallbackMessage;
+			}
+			if (eventStage === "agentic_step_contract") {
+				const status = String(event.status || "").trim().toLowerCase();
+				const fallbackMessage = String(event.detail || event.message || "").trim();
+				if (status || fallbackMessage) {
+					return uiText(
+						`Step contract: ${status || "unknown"}${fallbackMessage ? ` · ${fallbackMessage}` : ""}`,
+						`Step contract: ${status || "unknown"}${fallbackMessage ? ` · ${fallbackMessage}` : ""}`,
+						`步骤契约：${status || "unknown"}${fallbackMessage ? ` · ${fallbackMessage}` : ""}`,
+					);
+				}
+			}
 		}
 		return "";
 	}, [buildDynamicIngestionParts, formatScopeReasoningLabel, stageEvents, uiText]);
 
-	const liveOrchestrationBadge = useMemo((): { label: string, tone: "scope" | "queued" | "indexed" } | null => {
+	const liveOrchestrationBadge = useMemo((): { label: string, tone: "scope" | "queued" | "indexed" | "retrieval_low" } | null => {
 		for (let i = stageEvents.length - 1; i >= 0; i -= 1) {
 			const event = stageEvents[i];
 			if (!event)
 				continue;
 			const eventStage = String(event.stage || "").trim().toLowerCase();
+			if (eventStage === "retrieval_quality_gate") {
+				const status = String(event.status || "").trim().toLowerCase();
+				if (status === "low_evidence") {
+					return {
+						label: uiText("Low Evidence", "Low Evidence", "证据偏低"),
+						tone: "retrieval_low",
+					};
+				}
+			}
 			if (eventStage === "dynamic_ingestion") {
 				const state = String(event.queueState || event.status || "").trim().toLowerCase();
 				if (state === "queued") {
@@ -4257,6 +4339,7 @@ export default function AiAssistantChat({
 				id: `assistant_${Date.now()}`,
 				role: "assistant",
 				messageType: "response",
+				appId: String(appId || "").trim() || undefined,
 				content: "",
 				timestamp: Date.now(),
 			};
@@ -4667,7 +4750,20 @@ export default function AiAssistantChat({
 								});
 							}
 							if (evt.requestId) {
+								const nextRequestId = String(evt.requestId).trim();
 								setStreamRequestId(String(evt.requestId));
+								setMessages((prev) => {
+									const updated = [...prev];
+									for (let i = updated.length - 1; i >= 0; i -= 1) {
+										const lastMsg = updated[i];
+										if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
+											lastMsg.requestId = nextRequestId || lastMsg.requestId;
+											lastMsg.appId = String(appId || "").trim() || lastMsg.appId;
+											break;
+										}
+									}
+									return updated;
+								});
 							}
 							if (evt.jobId) {
 								effectiveStreamJobId = String(evt.jobId);
@@ -4755,6 +4851,44 @@ export default function AiAssistantChat({
 										`${stepStatus} · ${durationMs}ms · ${progressPercent}%`,
 										`${stepStatus} · ${durationMs}ms · ${progressPercent}%`,
 										`${stepStatus} · ${durationMs}ms · ${progressPercent}%`,
+									),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "assistant_orchestration_replan") {
+								const failedStep = String((evt as any).failedStep || "");
+								const currentConfidence = Number((evt as any).currentConfidence || 0);
+								const requiredConfidence = Number((evt as any).requiredConfidence || 0);
+								const candidateSteps = Array.isArray((evt as any).candidateSteps) ? (evt as any).candidateSteps.length : 0;
+								appendAgenticStep({
+									stage: "assistant_orchestration_replan",
+									icon: "🔁",
+									label: uiText("Tái lập kế hoạch DAG", "Replan DAG", "DAG 重规划"),
+									detail: uiText(
+										`step: ${failedStep || "-"} · conf ${Math.round(currentConfidence * 100)}%/${Math.round(requiredConfidence * 100)}% · ${candidateSteps} nhánh`,
+										`step: ${failedStep || "-"} · conf ${Math.round(currentConfidence * 100)}%/${Math.round(requiredConfidence * 100)}% · ${candidateSteps} branches`,
+										`步骤: ${failedStep || "-"} · 置信度 ${Math.round(currentConfidence * 100)}%/${Math.round(requiredConfidence * 100)}% · ${candidateSteps} 分支`,
+									),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "assistant_multifile_patch_plan") {
+								const fileCount = Number((evt as any).fileCount || 0);
+								const edgeCount = Number((evt as any).edgeCount || 0);
+								const planConfidence = Number((evt as any).planConfidence || 0);
+								const strategy = String((evt as any).strategy || "dependency_ordered_linear");
+								appendAgenticStep({
+									stage: "assistant_multifile_patch_plan",
+									icon: "🗺️",
+									label: uiText("Lập patch nhiều file", "Planning multi-file patch", "规划多文件补丁"),
+									detail: uiText(
+										`${fileCount} file · ${edgeCount} dependency · ${planConfidence}% · ${strategy}`,
+										`${fileCount} files · ${edgeCount} dependencies · ${planConfidence}% · ${strategy}`,
+										`${fileCount} 文件 · ${edgeCount} 依赖 · ${planConfidence}% · ${strategy}`,
 									),
 									status: "done",
 								});
@@ -4903,6 +5037,28 @@ export default function AiAssistantChat({
 										`${Number.isFinite(riskScore) ? `${Math.round(riskScore)}/100` : "--"}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · block-auto-apply" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
 										`${Number.isFinite(riskScore) ? `${Math.round(riskScore)}/100` : "--"}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · block-auto-apply" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
 										`${Number.isFinite(riskScore) ? `${Math.round(riskScore)}/100` : "--"}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · block-auto-apply" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
+									),
+									status: blockAutoApply ? "running" : "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "assistant_semantic_sandbox") {
+								const riskScore = Number((evt as any).riskScore);
+								const riskLevel = String((evt as any).riskLevel || "").trim().toLowerCase();
+								const blockAutoApply = Boolean((evt as any).blockAutoApply);
+								const verdict = String((evt as any).verdict || "").trim();
+								const reasons = Array.isArray((evt as any).reasons)
+									? (evt as any).reasons.map((x: any) => String(x || "").trim()).filter(Boolean).slice(0, 3)
+									: [];
+								appendAgenticStep({
+									stage: "assistant_semantic_sandbox",
+									icon: blockAutoApply ? "🛑" : (riskLevel === "medium" ? "⚠️" : "🧪"),
+									label: uiText("Semantic sandbox trước khi apply", "Pre-apply semantic sandbox", "应用前语义沙箱"),
+									detail: uiText(
+										`${verdict || "passed"}${Number.isFinite(riskScore) ? ` · ${Math.round(riskScore)}/100` : ""}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · review-required" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
+										`${verdict || "passed"}${Number.isFinite(riskScore) ? ` · ${Math.round(riskScore)}/100` : ""}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · review-required" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
+										`${verdict || "passed"}${Number.isFinite(riskScore) ? ` · ${Math.round(riskScore)}/100` : ""}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · review-required" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
 									),
 									status: blockAutoApply ? "running" : "done",
 								});
@@ -6077,6 +6233,26 @@ export default function AiAssistantChat({
 		message.success(uiText("Đã sao chép requestId", "requestId copied", "requestId 已复制"));
 	}, [streamRequestId, uiText]);
 
+	const handleOpenQualityTrace = useCallback(() => {
+		const safeRequestId = String(streamRequestId || "").trim();
+		if (!safeRequestId || !onOpenQualityTrace)
+			return;
+		onOpenQualityTrace({
+			requestId: safeRequestId,
+			appId: String(appId || "").trim() || undefined,
+		});
+	}, [appId, onOpenQualityTrace, streamRequestId]);
+
+	const handleOpenMessageTrace = useCallback((msg: ChatMessage) => {
+		const safeRequestId = String(msg.requestId || "").trim();
+		if (!safeRequestId || !onOpenQualityTrace)
+			return;
+		onOpenQualityTrace({
+			requestId: safeRequestId,
+			appId: String(msg.appId || appId || "").trim() || undefined,
+		});
+	}, [appId, onOpenQualityTrace]);
+
 	const handleCopyJobId = useCallback(() => {
 		if (!streamJobId)
 			return;
@@ -6440,6 +6616,17 @@ export default function AiAssistantChat({
 												<span className={styles.messageActionGroup}>
 													{msg.role === "assistant" && msg.serverTurnId && (
 														<>
+															{msg.requestId && onOpenQualityTrace && (
+																<span className={styles.feedbackMessageAction}>
+																	<Button
+																		type="text"
+																		size="small"
+																		icon={<LineChartOutlined />}
+																		onClick={() => handleOpenMessageTrace(msg)}
+																		title={uiText("Mở trace metrics", "Open trace metrics", "打开追踪指标")}
+																	/>
+																</span>
+															)}
 															<span className={styles.feedbackMessageAction}>
 																<Button
 																	type="text"
@@ -6523,6 +6710,17 @@ export default function AiAssistantChat({
 										<Button
 											type="text"
 											size="small"
+											icon={<LineChartOutlined />}
+											className={styles.requestActionBtn}
+											onClick={handleOpenQualityTrace}
+											title={uiText("Mở trace metrics", "Open trace metrics", "打开追踪指标")}
+											disabled={!onOpenQualityTrace}
+										/>
+									)}
+									{streamRequestId && (
+										<Button
+											type="text"
+											size="small"
 											icon={<CopyOutlined />}
 											className={styles.requestActionBtn}
 											onClick={handleCopyRequestId}
@@ -6575,6 +6773,16 @@ export default function AiAssistantChat({
 														{streamRequestId}
 													</span>
 												</button>
+											)}
+											{streamRequestId && onOpenQualityTrace && (
+												<Button
+													type="text"
+													size="small"
+													icon={<LineChartOutlined />}
+													className={styles.requestActionBtn}
+													onClick={handleOpenQualityTrace}
+													title={uiText("Mở trace metrics", "Open trace metrics", "打开追踪指标")}
+												/>
 											)}
 										</div>
 										<Space size={4}>
@@ -7049,6 +7257,16 @@ export default function AiAssistantChat({
 											req
 											{streamRequestId}
 										</span>
+										{onOpenQualityTrace && (
+											<Button
+												type="text"
+												size="small"
+												icon={<LineChartOutlined />}
+												className={styles.requestActionBtn}
+												onClick={handleOpenQualityTrace}
+												title={uiText("Mở trace metrics", "Open trace metrics", "打开追踪指标")}
+											/>
+										)}
 										<Button
 											type="text"
 											size="small"

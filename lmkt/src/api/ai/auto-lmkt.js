@@ -3238,7 +3238,7 @@ function resolveContext(seftObj) {
   const app_id = (seftObj && seftObj.app_id) || "wuweb";
   const domainFromSeft = seftObj && seftObj.domain;
   const domainFromHost = normalizeDomain(win.location?.hostname);
-  const domain = domainFromSeft || domainFromHost || "phanmemmottrieu.net";
+  const domain = domainFromSeft || domainFromHost || "csmbridge.net";
 
   const apiBase = (seftObj && seftObj.domain_api_url)
     || win.domain_api_url
@@ -5370,7 +5370,7 @@ function buildDetail(ctx, seo, imgs, vids, opts = {}) {
     // Metadata
     image: featuredImage,
     author: author,
-    avatar: opts.avatar || "https://phanmemmottrieu.net/media/icon.png",
+    avatar: opts.avatar || "https://www.csmbridge.net/media/icon.png",
     publishDate: now.split("T")[0],
     readTime: readTime,
     views: 0,
@@ -5751,7 +5751,7 @@ async function processContent(item, opts = {}) {
     // Fallback: Create minimal context
     ctx = {
       app_id: opts.app_id || "wuweb",
-      domain: opts.domain || "phanmemmottrieu.net",
+      domain: opts.domain || "csmbridge.net",
       service_type: opts.service_type || "bat-dong-san",
       project: opts.project || "",
       fanpage_id: opts.fanpage_id,
@@ -6506,7 +6506,7 @@ async function runMessages(messages, configIdOverride = null) {
     console.error(`❌ [runMessages] Failed to resolve context:`, e.message);
     ctx = {
       app_id: "wuweb",
-      domain: "phanmemmottrieu.net"
+      domain: "csmbridge.net"
     };
   }
   
@@ -7835,7 +7835,7 @@ function ensureAdsApiTestPanel() {
     campaignNameField.input.value = campaignNameField.input.value.trim() || `Test Ads ${today}`;
     objectiveField.input.value = objectiveField.input.value.trim() || "OUTCOME_TRAFFIC";
     budgetField.input.value = budgetField.input.value.trim() || "50000";
-    linkField.input.value = linkField.input.value.trim() || "https://phanmemmottrieu.net";
+    linkField.input.value = linkField.input.value.trim() || "https://www.csmbridge.net";
     headlineField.input.value = headlineField.input.value.trim() || "Uu dai dac biet hom nay";
     descriptionField.input.value = descriptionField.input.value.trim() || "Nhan tu van nhanh va uu dai ngay";
     messageField.input.value = messageField.input.value.trim() || "Dang ky de nhan thong tin chi tiet va uu dai moi nhat.";

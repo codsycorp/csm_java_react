@@ -2153,7 +2153,7 @@
         var proxyServer="157.15.38.151:14594";
         var proxyUsername="muaproxy6875dfd52d30c";
         var proxyPassword="lkfnjdsvkbjelbhs";
-        var link='https://api.phanmemmottrieu.net/scrape-web';
+        var link='https://api.csmbridge.net/scrape-web';
         if(window.hasOwnProperty("process"))
           link='';
         (link!==""?fetch(link,{

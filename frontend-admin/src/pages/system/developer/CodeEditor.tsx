@@ -17,7 +17,7 @@ import {
 	ReloadOutlined,
 } from "@ant-design/icons";
 import CodeMirror from "#src/components/editor/CodeMirrorWithAiAssistant";
-import { getBusinessMemoryStats, scanIndexBusinessMemoryFromDir } from "#src/api/ai/assistant-engine";
+import { fetchWorkspaceSourceFile, getBusinessMemoryStats, scanIndexBusinessMemoryFromDir } from "#src/api/ai/assistant-engine";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
 import { python } from "@codemirror/lang-python";
@@ -71,6 +71,8 @@ type AiRequestHistoryItem = {
 	draftCode: string;
 	createdAt: number;  // Request start time
 	completedAt?: number;  // Actual completion time when stream finished
+	requestId?: string;
+	appId?: string;
 	pinned?: boolean;
 };
 
@@ -82,6 +84,10 @@ type AiSessionSnapshot = {
 	history: AiRequestHistoryItem[];
 	updatedAt?: number;
 };
+
+interface CodeEditorProps {
+	onOpenQualityTrace?: (payload: { requestId: string; appId?: string }) => void;
+}
 
 type AiPanelMode = "normal" | "expanded";
 type AiHistoryFilter = "all" | "completed" | "failed" | "pinned";
@@ -112,6 +118,16 @@ type PendingRangeItem = {
 type PendingDiffPreview = {
 	beforeText: string;
 	afterText: string;
+};
+
+type WorkspaceCitationPreview = {
+	path: string;
+	scope: string;
+	content: string;
+	line?: number;
+	truncated: boolean;
+	sizeBytes: number;
+	codeType: number;
 };
 
 type HotkeyAction = "save" | "find" | "replaceFocus" | "goto" | "askAi" | "continueAi" | "commandPalette";
@@ -739,6 +755,76 @@ const CODE_TYPE_LABEL: Record<number, string> = {
 	5: "JSON",
 };
 
+const CODE_TYPE_EXTENSION_MAP: Record<number, string[]> = {
+	0: ["js", "jsx", "ts", "tsx"],
+	1: ["html", "htm", "vue"],
+	2: ["py"],
+	3: ["css", "scss", "less"],
+	4: ["sql"],
+	5: ["json", "jsonc", "yaml", "yml"],
+};
+
+function normalizeCitationPath(raw: string): string {
+	return String(raw || "")
+		.trim()
+		.replace(/\\/g, "/")
+		.replace(/^file:\/\//i, "")
+		.replace(/^\.\//, "")
+		.replace(/^\/+/, "");
+}
+
+function resolveCitationCodeType(rawPath?: string): number | null {
+	const normalized = normalizeCitationPath(rawPath || "").toLowerCase();
+	const ext = normalized.includes(".") ? normalized.split(".").pop() || "" : "";
+	if (!ext) {
+		return null;
+	}
+	for (const [typeKey, extensions] of Object.entries(CODE_TYPE_EXTENSION_MAP)) {
+		if (extensions.includes(ext)) {
+			return Number(typeKey);
+		}
+	}
+	return null;
+}
+
+function buildCitationNameCandidates(rawPath?: string): string[] {
+	const normalized = normalizeCitationPath(rawPath || "");
+	if (!normalized) {
+		return [];
+	}
+	const parts = normalized.split("/").filter(Boolean);
+	const basename = parts[parts.length - 1] || normalized;
+	const basenameWithoutExt = basename.replace(/\.[^.]+$/, "");
+	return Array.from(new Set([
+		normalized,
+		basename,
+		basenameWithoutExt,
+	] .map(item => item.trim()).filter(Boolean)));
+}
+
+function findCitationCodeItem(codeItems: CodeItem[], rawPath?: string): CodeItem | null {
+	const candidates = buildCitationNameCandidates(rawPath).map(item => item.toLowerCase());
+	if (candidates.length === 0) {
+		return null;
+	}
+	return codeItems.find((item) => {
+		const name = String(item.p_name || "").trim();
+		if (!name) {
+			return false;
+		}
+		const normalizedName = name.toLowerCase();
+		return candidates.some((candidate) => {
+			if (normalizedName === candidate) {
+				return true;
+			}
+			if (normalizedName.endsWith(`/${candidate}`) || normalizedName.endsWith(`\\${candidate}`)) {
+				return true;
+			}
+			return normalizedName.replace(/\.[^.]+$/, "") === candidate;
+		});
+	}) || null;
+}
+
 // ─── SSE streaming helper for /api/ai-code-stream ────────────────────────────
 async function streamAiCode(
 	params: {
@@ -841,7 +927,7 @@ async function streamAiCode(
 	}
 }
 
-export default function CodeEditor() {
+export default function CodeEditor({ onOpenQualityTrace }: CodeEditorProps = {}) {
 	const { t, i18n } = useTranslation();
 	const appId = useAppStore(state => state.currentAppId);
 	const editorRef = useRef<any>(null);
@@ -867,10 +953,12 @@ export default function CodeEditor() {
 	const [aiLoading, setAiLoading] = useState(false);
 	const [aiProgress, setAiProgress] = useState<AiProgress | null>(null);
 	const [aiSummary, setAiSummary] = useState("");
+	const [activeAiRequestId, setActiveAiRequestId] = useState("");
 
 	const [pendingChunk, setPendingChunk] = useState<PendingDraftChunk | null>(null);
 	const [pendingRangeSelection, setPendingRangeSelection] = useState<Record<string, boolean>>({});
 	const [pendingDiffPreviewOpen, setPendingDiffPreviewOpen] = useState(false);
+	const [workspaceCitationPreview, setWorkspaceCitationPreview] = useState<WorkspaceCitationPreview | null>(null);
 	const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
 	const [historyFilter, setHistoryFilter] = useState<AiHistoryFilter>("all");
 	const [historyKeyword, setHistoryKeyword] = useState("");
@@ -906,11 +994,12 @@ export default function CodeEditor() {
 
 	const isMac = useMemo(() => /Mac|iPhone|iPad|iPod/i.test(navigator.platform || ""), []);
 	const modKeyLabel = isMac ? "Cmd" : "Ctrl";
+	const isWorkspaceSourceActive = Boolean(workspaceCitationPreview);
 	const selectedCodeItem = useMemo(
 		() => codeList.find((item) => item.p_name === selectedCode) || null,
 		[codeList, selectedCode],
 	);
-	const selectedCodeLabel = selectedCode || t("system.developer.ai.unsaved");
+	const selectedCodeLabel = workspaceCitationPreview?.path || selectedCode || t("system.developer.ai.unsaved");
 	const resolvedPType = selectedCodeItem?.p_type ?? codeType;
 	const currentLanguage = CODE_TYPE_LANGUAGE[codeType] ?? "javascript";
 	const currentTypeLabel = CODE_TYPE_LABEL[codeType] ?? "JavaScript";
@@ -918,8 +1007,8 @@ export default function CodeEditor() {
 	const LARGE_BASE_CONTENT_THRESHOLD = 120000;
 	const aiSessionSnapshotsRef = useRef<Record<string, AiSessionSnapshot>>({});
 	const aiSessionKey = useMemo(
-		() => `${appId || "unknown"}::${selectedCode || "__unsaved__"}::${resolvedPType}::${currentLanguage}`,
-		[appId, selectedCode, resolvedPType, currentLanguage],
+		() => `${appId || "unknown"}::${workspaceCitationPreview?.path || selectedCode || "__unsaved__"}::${resolvedPType}::${currentLanguage}`,
+		[appId, workspaceCitationPreview?.path, selectedCode, resolvedPType, currentLanguage],
 	);
 	const draftDirty = useMemo(
 		() => String(codeContent || "") !== String(savedCodeSnapshot || ""),
@@ -972,6 +1061,85 @@ export default function CodeEditor() {
 		return vi;
 	};
 
+	const navigateEditorToLine = useCallback((line?: number) => {
+		const safeLine = Number(line || 0);
+		if (!safeLine || safeLine < 1) {
+			return;
+		}
+		window.requestAnimationFrame(() => {
+			const view = editorRef.current;
+			if (!view?.state?.doc?.line) {
+				return;
+			}
+			try {
+				const targetLine = view.state.doc.line(Math.min(safeLine, view.state.doc.lines));
+				view.dispatch({
+					selection: { anchor: targetLine.from },
+					scrollIntoView: true,
+				});
+				view.focus?.();
+				updateDraftIndicators(view);
+			} catch {
+				// ignore citation navigation failures
+			}
+		});
+	}, []);
+
+	const openCodeItem = useCallback((codeName: string, code: CodeItem | null, line?: number) => {
+		setWorkspaceCitationPreview(null);
+		setSelectedCode(codeName);
+		setOpeningCode(true);
+		const jobId = Date.now();
+		codeOpenJobRef.current = jobId;
+
+		window.requestAnimationFrame(() => {
+			if (codeOpenJobRef.current !== jobId) return;
+			if (!code) {
+				setCodeContent("");
+				setAiLastCode("");
+				setSavedCodeSnapshot("");
+				setPendingChunk(null);
+				setOpeningCode(false);
+				return;
+			}
+
+			try {
+				const decrypted = decryptCode(code.p_code);
+				if (codeOpenJobRef.current !== jobId) return;
+				setCodeContent(decrypted);
+				setAiLastCode(decrypted);
+				setSavedCodeSnapshot(decrypted);
+				setPendingChunk(null);
+			} catch (error) {
+				message.error(t("system.developer.decryptFailed"));
+				if (codeOpenJobRef.current !== jobId) return;
+				setCodeContent(code.p_code);
+				setAiLastCode(code.p_code);
+				setSavedCodeSnapshot(code.p_code);
+				setPendingChunk(null);
+			} finally {
+				if (codeOpenJobRef.current === jobId) {
+					setOpeningCode(false);
+					navigateEditorToLine(line);
+				}
+			}
+		});
+	}, [navigateEditorToLine, t]);
+
+	const openWorkspaceSourceItem = useCallback((source: WorkspaceCitationPreview) => {
+		codeOpenJobRef.current += 1;
+		setOpeningCode(false);
+		setWorkspaceCitationPreview(source);
+		setSelectedCode(null);
+		setCodeType(source.codeType);
+		setCodeContent(source.content);
+		setAiLastCode(source.content);
+		setSavedCodeSnapshot(source.content);
+		setPendingChunk(null);
+		setPendingRangeSelection({});
+		navigateEditorToLine(source.line);
+	}, [navigateEditorToLine]);
+
 	const updateDraftIndicators = (view: any) => {
 		if (!view?.state?.doc) return;
 		lastEditorInteractionAtRef.current = Date.now();
@@ -1003,6 +1171,13 @@ export default function CodeEditor() {
 		};
 	}, []);
 
+	useEffect(() => {
+		if (!workspaceCitationPreview) {
+			return;
+		}
+		navigateEditorToLine(workspaceCitationPreview.line);
+	}, [navigateEditorToLine, workspaceCitationPreview]);
+
 	const visibleAiRequestHistory = useMemo(() => {
 		const keyword = historyKeyword.trim().toLowerCase();
 		const source = Array.isArray(aiRequestHistory) ? aiRequestHistory : [];
@@ -1014,9 +1189,27 @@ export default function CodeEditor() {
 			return (
 				String(item.request || "").toLowerCase().includes(keyword)
 				|| String(item.summary || "").toLowerCase().includes(keyword)
+				|| String(item.requestId || "").toLowerCase().includes(keyword)
 			);
 		});
 	}, [aiRequestHistory, historyFilter, historyKeyword]);
+
+	const selectedHistoryItem = useMemo(() => {
+		if (!selectedHistoryId) return null;
+		return aiRequestHistory.find((item) => item.id === selectedHistoryId) || null;
+	}, [aiRequestHistory, selectedHistoryId]);
+
+	const qualityTraceTarget = useMemo(() => {
+		const selectedRequestId = String(selectedHistoryItem?.requestId || "").trim();
+		if (selectedRequestId) {
+			return { requestId: selectedRequestId, appId: String(selectedHistoryItem?.appId || appId || "").trim() || undefined };
+		}
+		const activeRequestId = String(activeAiRequestId || "").trim();
+		if (activeRequestId) {
+			return { requestId: activeRequestId, appId: String(appId || "").trim() || undefined };
+		}
+		return null;
+	}, [activeAiRequestId, appId, selectedHistoryItem]);
 
 	const pendingRangeItems = useMemo<PendingRangeItem[]>(() => {
 		const ranges = pendingChunk?.ranges || [];
@@ -1072,6 +1265,22 @@ export default function CodeEditor() {
 		}
 		setPendingRangeSelection(next);
 	}, [pendingChunk]);
+
+	const openQualityTrace = useCallback((requestId?: string, appIdOverride?: string) => {
+		const safeRequestId = String(requestId || "").trim();
+		if (!safeRequestId) {
+			message.warning(devUiText(
+				"Chưa có requestId để mở trace.",
+				"No requestId available for trace lookup.",
+				"当前没有可用于追踪的 requestId。",
+			));
+			return;
+		}
+		onOpenQualityTrace?.({
+			requestId: safeRequestId,
+			appId: String(appIdOverride || appId || "").trim() || undefined,
+		});
+	}, [appId, devUiText, onOpenQualityTrace]);
 
 	useEffect(() => {
 		const view = editorRef.current;
@@ -1209,49 +1418,85 @@ export default function CodeEditor() {
 		loadCodeList(codeType);
 	}, [codeType, appId]);
 
-	// Load selected code
-	const handleSelectCode = (codeName: string) => {
-		setSelectedCode(codeName);
-		setOpeningCode(true);
-		const jobId = Date.now();
-		codeOpenJobRef.current = jobId;
-		const code = codeList.find(c => c.p_name === codeName);
+	const handleAssistantCitationNavigate = useCallback((location: { path?: string; line?: number; token: string }) => {
+		const normalizedPath = normalizeCitationPath(location.path || location.token || "");
+		if (!normalizedPath || !appId) {
+			navigateEditorToLine(location.line);
+			return true;
+		}
 
-		window.requestAnimationFrame(() => {
-			if (codeOpenJobRef.current !== jobId) return;
-			if (!code) {
-				setCodeContent("");
-				setAiLastCode("");
-				setSavedCodeSnapshot("");
-				setPendingChunk(null);
-				setOpeningCode(false);
+		const openFromItems = (items: CodeItem[], nextType?: number) => {
+			const matched = findCitationCodeItem(items, normalizedPath);
+			if (!matched) {
+				return false;
+			}
+			if (typeof nextType === "number" && nextType !== codeType) {
+				setCodeType(nextType);
+			}
+			setCodeList(items);
+			openCodeItem(matched.p_name, matched, location.line);
+			return true;
+		};
+
+		if (openFromItems(codeList)) {
+			return true;
+		}
+
+		const inferredType = resolveCitationCodeType(normalizedPath);
+		void (async () => {
+			const candidateTypes = inferredType === null
+				? Object.keys(CODE_TYPE_LANGUAGE).map((key) => Number(key)).filter((value) => value !== codeType)
+				: [inferredType, ...Object.keys(CODE_TYPE_LANGUAGE).map((key) => Number(key)).filter((value) => value !== codeType && value !== inferredType)];
+
+			for (const candidateType of candidateTypes) {
+				const response = await fetchCodeList(appId, candidateType);
+				if (!response.success) {
+					continue;
+				}
+				if (openFromItems(response.data, candidateType)) {
+					return;
+				}
+			}
+
+			const workspaceSource = await fetchWorkspaceSourceFile({
+				path: normalizedPath,
+				contextType: "code",
+			});
+			if (workspaceSource) {
+				openWorkspaceSourceItem({
+					path: workspaceSource.path,
+					scope: workspaceSource.scope,
+					content: workspaceSource.content,
+					line: location.line,
+					truncated: Boolean(workspaceSource.truncated),
+					sizeBytes: Number(workspaceSource.sizeBytes || 0),
+					codeType: resolveCitationCodeType(workspaceSource.path) ?? 0,
+				});
 				return;
 			}
 
-			try {
-				const decrypted = decryptCode(code.p_code);
-				if (codeOpenJobRef.current !== jobId) return;
-				setCodeContent(decrypted);
-				setAiLastCode(decrypted);
-				setSavedCodeSnapshot(decrypted);
-				setPendingChunk(null);
-			} catch (error) {
-				message.error(t("system.developer.decryptFailed"));
-				if (codeOpenJobRef.current !== jobId) return;
-				setCodeContent(code.p_code);
-				setAiLastCode(code.p_code);
-				setSavedCodeSnapshot(code.p_code);
-				setPendingChunk(null);
-			} finally {
-				if (codeOpenJobRef.current === jobId) {
-					setOpeningCode(false);
-				}
-			}
-		});
+			navigateEditorToLine(location.line);
+		})();
+
+		return true;
+	}, [appId, codeList, codeType, navigateEditorToLine, openCodeItem, openWorkspaceSourceItem]);
+
+	// Load selected code
+	const handleSelectCode = (codeName: string) => {
+		const code = codeList.find(c => c.p_name === codeName);
+		openCodeItem(codeName, code ?? null);
 	};
 
 	// Save code
 	const handleSaveCode = async () => {
+		if (isWorkspaceSourceActive) {
+			message.warning(devUiText(
+				"Đây là file workspace chỉ đọc từ citation, không thể lưu tại màn hình sys_autos.",
+				"This workspace citation file is read-only here and cannot be saved via sys_autos.",
+				"这是从 citation 打开的工作区只读文件，不能通过 sys_autos 在这里保存。",
+			));
+			return;
+		}
 		if (!selectedCode) {
 			message.warning(t("system.developer.selectOrCreateFirst"));
 			return;
@@ -1276,6 +1521,14 @@ export default function CodeEditor() {
 
 	// Delete code
 	const handleDeleteCode = () => {
+		if (isWorkspaceSourceActive) {
+			message.warning(devUiText(
+				"File workspace mở từ citation không thể xóa ở màn hình này.",
+				"Workspace citation files cannot be deleted from this screen.",
+				"从 citation 打开的工作区文件不能在此界面删除。",
+			));
+			return;
+		}
 		if (!selectedCode) {
 			message.warning(t("system.developer.selectToDelete"));
 			return;
@@ -1318,6 +1571,7 @@ export default function CodeEditor() {
 		setNewCodeName("");
 		codeOpenJobRef.current += 1;
 		setOpeningCode(false);
+		setWorkspaceCitationPreview(null);
 		setSelectedCode(newCodeName.trim());
 		setCodeContent("");
 		setAiLastCode("");
@@ -1862,9 +2116,11 @@ export default function CodeEditor() {
 		const requestBaseRevision = manualDraftRevisionRef.current;
 		const shouldAutoApplyAi = () => manualDraftRevisionRef.current === requestBaseRevision;
 		const realtimeApplyEnabled = false;
+		let requestTraceId = "";
 
 		setAiLoading(true);
 		setAiSummary("");
+		setActiveAiRequestId("");
 		setAiChangeItems([]);
 		setPendingChunk(null);
 		if (!continueMode && !aiLastCode.trim()) {
@@ -1944,6 +2200,11 @@ export default function CodeEditor() {
 						});
 					},
 					onStatus: (status) => {
+						const nextRequestId = String(status.requestId || "").trim();
+						if (nextRequestId) {
+							requestTraceId = nextRequestId;
+							setActiveAiRequestId(nextRequestId);
+						}
 						const baseRef = String(status.baseContentRef || "").trim();
 						if (baseRef) {
 							aiBaseContentRef.current = baseRef;
@@ -1969,6 +2230,11 @@ export default function CodeEditor() {
 					onComplete: (event) => {
 						gotCompleteEvent = true;
 						completePayload = event;
+						const nextRequestId = String(event.requestId || "").trim();
+						if (nextRequestId) {
+							requestTraceId = nextRequestId;
+							setActiveAiRequestId(nextRequestId);
+						}
 						finalResponse = String(event.fullResponse || finalResponse);
 					},
 					onError: (err) => {
@@ -2108,6 +2374,8 @@ export default function CodeEditor() {
 				draftCode: safeResult.shouldApply ? safeResult.code : currentDraftRef.current,
 				createdAt: requestCreatedAt,
 				completedAt: Date.now(),
+				requestId: requestTraceId || String(completeEnvelopeAny?.requestId || "").trim() || undefined,
+				appId: String(appId || "").trim() || undefined,
 			};
 
 			if (!safeResult.shouldApply) {
@@ -2167,6 +2435,8 @@ export default function CodeEditor() {
 				draftCode: "",
 				createdAt: requestCreatedAt,
 				completedAt: Date.now(),
+				requestId: requestTraceId || undefined,
+				appId: String(appId || "").trim() || undefined,
 			};
 			setAiProgress({ status: "failed", stage: "failed", message: msg, percent: 0 });
 			setAiRequestHistory((prev) => [
@@ -2187,6 +2457,10 @@ export default function CodeEditor() {
 		setAiPromptText(item.request || "");
 		setAiSummary(item.summary || "");
 		setAiChangeItems(Array.isArray(item.changes) ? item.changes : []);
+		setActiveAiRequestId(String(item.requestId || "").trim());
+		if (item.requestId) {
+			setAiProgress((prev) => prev ? { ...prev, jobId: String(item.requestId) } : { status: item.status, stage: item.status, message: item.summary || "", percent: 100, jobId: String(item.requestId) });
+		}
 		if (item.draftCode) {
 			setAiLastCode(item.draftCode);
 			setCodeContent(item.draftCode);
@@ -2307,7 +2581,10 @@ export default function CodeEditor() {
 							<div className={styles.editorMeta}>
 								<div className={styles.editorMetaTitle}>{t("system.developer.command.save")}</div>
 								<div className={styles.editorMetaLine}>{t("system.developer.ai.currentFile")}: {selectedCodeLabel}</div>
-								<div className={styles.editorMetaLine}>p_type={resolvedPType} • {currentTypeLabel} • app_id={appId}</div>
+								<div className={styles.editorMetaLine}>
+									p_type={resolvedPType} • {currentTypeLabel} • app_id={appId}
+									{workspaceCitationPreview ? ` • ${workspaceCitationPreview.scope}` : ""}
+								</div>
 							</div>
 							<div className={styles.editorToolbarActions}>
 								<Button onClick={() => setCommandPaletteOpen(true)}>
@@ -2316,10 +2593,10 @@ export default function CodeEditor() {
 								<Button icon={<SettingOutlined />} onClick={() => setHotkeyModalOpen(true)}>
 									{t("system.developer.hotkeys")}
 								</Button>
-								<Button icon={<SaveOutlined />} onClick={handleSaveCode} type="primary">
+								<Button icon={<SaveOutlined />} onClick={handleSaveCode} type="primary" disabled={isWorkspaceSourceActive}>
 									{t("system.developer.command.save")}
 								</Button>
-								<Button icon={<DeleteOutlined />} danger onClick={handleDeleteCode}>
+								<Button icon={<DeleteOutlined />} danger onClick={handleDeleteCode} disabled={isWorkspaceSourceActive}>
 									{t("system.developer.delete")}
 								</Button>
 							</div>
@@ -2330,7 +2607,10 @@ export default function CodeEditor() {
 								<Select
 									style={{ width: 150 }}
 									value={codeType}
-									onChange={setCodeType}
+									onChange={(value) => {
+										setWorkspaceCitationPreview(null);
+										setCodeType(value);
+									}}
 									options={[
 										{ label: "JavaScript", value: 0 },
 										{ label: "HTML", value: 1 },
@@ -2358,13 +2638,14 @@ export default function CodeEditor() {
 									onClear={() => {
 										codeOpenJobRef.current += 1;
 										setOpeningCode(false);
+										setWorkspaceCitationPreview(null);
 										setSelectedCode(null);
 										setCodeContent("");
 										setAiLastCode("");
 										setSavedCodeSnapshot("");
 									}}
 								/>
-								<Button type="primary" onClick={() => setCreateModalOpen(true)}>
+								<Button type="primary" onClick={() => setCreateModalOpen(true)} disabled={isWorkspaceSourceActive}>
 									{t("system.developer.createNew")}
 								</Button>
 							</div>
@@ -2377,7 +2658,13 @@ export default function CodeEditor() {
 						</div>
 
 						<div className={styles.boundaryNote}>
-							{t("system.developer.ai.saveBoundary", "Lưu hoặc Xóa tại đây sẽ cập nhật trực tiếp mã đang sử dụng trên hệ thống. Vui lòng kiểm tra kỹ trước khi thực hiện.")}
+							{workspaceCitationPreview
+								? devUiText(
+									"Bạn đang xem file workspace được mở từ citation. Buffer này chỉ đọc trong developer surface và không ghi ngược vào sys_autos.",
+									"You are viewing a workspace file opened from a citation. This buffer is read-only in the developer surface and does not write back to sys_autos.",
+									"你当前查看的是从 citation 打开的工作区文件。该缓冲区在此开发界面中为只读，不会回写到 sys_autos。",
+								)
+								: t("system.developer.ai.saveBoundary", "Lưu hoặc Xóa tại đây sẽ cập nhật trực tiếp mã đang sử dụng trên hệ thống. Vui lòng kiểm tra kỹ trước khi thực hiện.")}
 						</div>
 
 					</div>
@@ -2441,6 +2728,15 @@ export default function CodeEditor() {
 									<span>L{draftCursor.line}:C{draftCursor.column}</span>
 									<span>{draftStats.lines} lines</span>
 									<span>{draftStats.chars} chars</span>
+									{qualityTraceTarget?.requestId && (
+										<Button
+											size="small"
+											icon={<HistoryOutlined />}
+											onClick={() => openQualityTrace(qualityTraceTarget.requestId, qualityTraceTarget.appId)}
+										>
+											{devUiText("Mở trace", "Open trace", "打开追踪")}
+										</Button>
+									)}
 								</div>
 								<div className={styles.aiDraftQuickActions}>
 									<div className={styles.aiEditorToolsTitle}>
@@ -2570,6 +2866,8 @@ export default function CodeEditor() {
 									aiAssistantPName={selectedCode || undefined}
 									aiAssistantPType={resolvedPType}
 									aiAssistantInlineSuggestedCode={inlinePredictedCode}
+									aiAssistantOnCitationNavigate={handleAssistantCitationNavigate}
+									aiAssistantOnOpenQualityTrace={onOpenQualityTrace}
 									value={aiLastCode}
 									onChange={(value) => {
 										if (!aiProgrammaticApplyRef.current) {
@@ -2599,7 +2897,7 @@ export default function CodeEditor() {
 									]}
 									theme={prefersDarkMode ? vscodeDark : vscodeLight}
 									height="360px"
-									editable
+									editable={!isWorkspaceSourceActive}
 									className={styles.editor}
 								/>
 						</div>

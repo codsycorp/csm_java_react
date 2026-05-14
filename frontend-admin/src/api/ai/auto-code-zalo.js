@@ -7,8 +7,8 @@
 // ===== CONFIGURATION =====
 const UPLOAD_ENDPOINT = "/upload.shtml";
 const APP_ID = "wuweb";
-const DOMAIN = "phanmemmottrieu.net";
-const API_URL = "https://api.phanmemmottrieu.net";
+const DOMAIN = "csmbridge.net";
+const API_URL = "https://api.csmbridge.net";
 const CSM_TOKEN = "4d543bb4-714c-4bb1-952f-a2e0bf8b24a3";
 
 // ===== HELPER FUNCTIONS =====
@@ -181,7 +181,7 @@ async function processZaloMessage(zaloData, options = {}) {
       content_zh: "",
       image: uploadedImages[0],
       author,
-      avatar: "https://phanmemmottrieu.net/media/icon.png",
+      avatar: "https://www.csmbridge.net/media/icon.png",
       publishDate,
       readTime: "5 phút",
       views: 0,

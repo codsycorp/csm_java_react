@@ -66,6 +66,14 @@ public class LocalAiAssistantContextService {
         String reasonCode
     ) {}
 
+    public record SourceFileView(
+        String path,
+        String scope,
+        String content,
+        boolean truncated,
+        long sizeBytes
+    ) {}
+
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Object indexLock = new Object();
 
@@ -134,6 +142,50 @@ public class LocalAiAssistantContextService {
     public boolean shouldForceLocalOnly(String contextType) {
         // Hard local-only disabled: when local output fails quality gate, cloud fallback is always allowed
         return false;
+    }
+
+    public SourceFileView loadIndexedSourceFile(String rawPath, String contextType) {
+        if (!enabled) {
+            return null;
+        }
+
+        String normalizedPath = normalizeStoredPath(str(rawPath));
+        if (normalizedPath.isBlank()) {
+            return null;
+        }
+
+        String normalizedContext = normalizeContextType(contextType);
+        for (Path root : resolveSourceRoots()) {
+            try {
+                if (!Files.isDirectory(root)) {
+                    continue;
+                }
+
+                Path candidate = root.resolve(normalizedPath).normalize();
+                if (!candidate.startsWith(root) || !Files.isRegularFile(candidate) || !shouldIndexFile(candidate)) {
+                    continue;
+                }
+
+                String ext = extensionOf(candidate);
+                String scope = inferScope(ext, candidate);
+                if (!matchesContext(scope, ext, normalizedContext)) {
+                    continue;
+                }
+
+                String content = Files.readString(candidate, StandardCharsets.UTF_8);
+                boolean truncated = content.length() > Math.max(2000, maxFileChars);
+                String safeContent = truncated
+                    ? content.substring(0, Math.max(2000, maxFileChars))
+                    : content;
+                long sizeBytes = Files.size(candidate);
+                String storedPath = normalizeStoredPath(root.relativize(candidate).toString());
+                return new SourceFileView(storedPath, scope, safeContent, truncated, sizeBytes);
+            } catch (Exception ex) {
+                log.debug("Skip local assistant source file {}: {}", normalizedPath, ex.getMessage());
+            }
+        }
+
+        return null;
     }
 
     public ContextBundle buildContext(

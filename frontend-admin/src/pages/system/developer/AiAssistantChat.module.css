@@ -365,6 +365,12 @@
 	color: #166534;
 }
 
+.progressMiniStageBadge_retrieval_low {
+	background: color-mix(in srgb, #fee2e2 84%, var(--chat-bg));
+	border-color: color-mix(in srgb, #ef4444 34%, transparent);
+	color: #b91c1c;
+}
+
 .progressRequestId {
 	font-size: 10px;
 	line-height: 1.2;

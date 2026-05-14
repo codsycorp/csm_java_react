@@ -157,6 +157,12 @@ public class AiLocalOrchestrationService {
     @Value("${ai.orchestration.multimodal.scope-rag.max-chars:5000}")
     private int scopedRagMaxChars;
 
+    @Value("${ai.orchestration.multimodal.scope-rag.quality.min-chars:1200}")
+    private int scopedRagQualityMinChars;
+
+    @Value("${ai.orchestration.multimodal.scope-rag.quality.retry-on-low:true}")
+    private boolean scopedRagQualityRetryOnLow;
+
     @Value("${ai.orchestration.multimodal.scope-rag.adaptive.enabled:true}")
     private boolean adaptiveScopeRagEnabled;
 
@@ -219,6 +225,15 @@ public class AiLocalOrchestrationService {
 
     @Value("${ai.local.agentic.plan-schema.min-score:68}")
     private int planSchemaMinScore;
+
+    @Value("${ai.local.orchestration.tool-dag.enabled:true}")
+    private boolean toolDagEnabled;
+
+    @Value("${ai.local.orchestration.tool-dag.max-nodes:8}")
+    private int toolDagMaxNodes;
+
+    @Value("${ai.local.orchestration.tool-dag.min-confidence-stop:0.62}")
+    private double toolDagMinConfidenceStop;
 
     private final ThreadLocal<RecoveryHints> recoveryHintsContext = new ThreadLocal<>();
 
@@ -928,6 +943,21 @@ public class AiLocalOrchestrationService {
         out.toolStats.put("planSchemaInvalidCount", schemaCheck.invalidCount);
         out.toolStats.put("planSchemaMissing", schemaCheck.missingSignals);
         out.toolStats.put("planStructuredSteps", structuredPlanSteps);
+        if (toolDagEnabled) {
+            Map<String, Object> toolDag = buildToolDagPlan(
+                planSteps,
+                structuredPlanSteps,
+                safeContextType,
+                safeMode,
+                digest,
+                scanResult,
+                planCoverage,
+                schemaCheck
+            );
+            if (!toolDag.isEmpty()) {
+                out.toolStats.putAll(toolDag);
+            }
+        }
 
         out.planSteps = planSteps;
 
@@ -1266,13 +1296,89 @@ public class AiLocalOrchestrationService {
                     out.toolStats.put("scopedRagTargetedMaxChars", targetedMaxChars);
                 }
             }
+
+            // Last-resort guard: never continue orchestration on empty scoped retrieval.
+            if (scopedRagBlock == null || scopedRagBlock.isBlank()) {
+                int fallbackScopeMask = retrievalPlan.scopeMask > 0
+                    ? retrievalPlan.scopeMask
+                    : defaultScopeMaskForContext(safeContextType, safeTaskType);
+                String fallbackQuery = buildGuaranteedScopedFallbackQuery(
+                    safeMessage,
+                    digest,
+                    safeContextType,
+                    safeTaskType,
+                    safeMode
+                );
+                int fallbackTopK = Math.max(3, retrievalPlan.topK);
+                int fallbackMaxChars = Math.max(1400, retrievalPlan.maxChars);
+                String fallbackRag = aiBusinessMemoryVectorService.buildRagBlockWithScopes(
+                    appId,
+                    fallbackQuery,
+                    fallbackTopK,
+                    fallbackScopeMask,
+                    fallbackMaxChars
+                );
+                if (fallbackRag != null && !fallbackRag.isBlank()) {
+                    scopedRagBlock = fallbackRag;
+                }
+                out.toolStats.put("scopedRagFallbackApplied", true);
+                out.toolStats.put("scopedRagFallbackScopeMask", fallbackScopeMask);
+                out.toolStats.put("scopedRagFallbackTopK", fallbackTopK);
+                out.toolStats.put("scopedRagFallbackMaxChars", fallbackMaxChars);
+                out.toolStats.put("scopedRagFallbackQuery", truncateLine(fallbackQuery, 180));
+            }
+
+            int scopedRagChars = scopedRagBlock == null ? 0 : scopedRagBlock.length();
+            int retrievalMinChars = Math.max(400, scopedRagQualityMinChars);
+            boolean retrievalQualityPassed = scopedRagChars >= retrievalMinChars;
+            if (!retrievalQualityPassed && scopedRagQualityRetryOnLow) {
+                int retryScopeMask = Math.max(1,
+                    retrievalPlan.scopeMask
+                        | defaultScopeMaskForContext(safeContextType, safeTaskType)
+                        | AiMultimodalScannerService.SCOPE_BUSINESS
+                );
+                int retryTopK = Math.max(3, retrievalPlan.topK + 2);
+                int retryMaxChars = Math.max(1600, retrievalPlan.maxChars + 1000);
+                String retryQuery = buildGuaranteedScopedFallbackQuery(
+                    safeMessage,
+                    digest,
+                    safeContextType,
+                    safeTaskType,
+                    safeMode
+                ) + " evidence retrieval remediation";
+                String retryRag = aiBusinessMemoryVectorService.buildRagBlockWithScopes(
+                    appId,
+                    trimTo(retryQuery, 360),
+                    retryTopK,
+                    retryScopeMask,
+                    retryMaxChars
+                );
+                if (retryRag != null && retryRag.length() > scopedRagChars) {
+                    scopedRagBlock = retryRag;
+                    scopedRagChars = scopedRagBlock.length();
+                }
+                retrievalQualityPassed = scopedRagChars >= retrievalMinChars;
+                out.toolStats.put("scopedRagQualityRetryApplied", true);
+                out.toolStats.put("scopedRagQualityRetryScopeMask", retryScopeMask);
+                out.toolStats.put("scopedRagQualityRetryTopK", retryTopK);
+                out.toolStats.put("scopedRagQualityRetryMaxChars", retryMaxChars);
+                out.toolStats.put("scopedRagQualityRetryQuery", truncateLine(retryQuery, 180));
+            }
+
+            if (!retrievalQualityPassed) {
+                out.planSteps.add("Retrieval remediation: context evidence vẫn thấp, ưu tiên anchor currentCode + symbols khi suy luận step");
+            }
+
+            out.toolStats.put("scopedRagQualityMinChars", retrievalMinChars);
+            out.toolStats.put("scopedRagQualityPassed", retrievalQualityPassed);
+            out.toolStats.put("scopedRagQualityDeficit", Math.max(0, retrievalMinChars - scopedRagChars));
             out.toolStats.put("scopedRagEnabled", true);
             out.toolStats.put("scopedRagScopeMask", retrievalPlan.scopeMask);
             out.toolStats.put("scopedRagTopK", retrievalPlan.topK);
             out.toolStats.put("scopedRagMaxChars", retrievalPlan.maxChars);
             out.toolStats.put("scopedRagAdaptive", retrievalPlan.adaptive);
             out.toolStats.put("scopedRagAdaptiveReasons", retrievalPlan.reasons);
-            out.toolStats.put("scopedRagChars", scopedRagBlock.length());
+            out.toolStats.put("scopedRagChars", scopedRagChars);
             out.toolStats.put("scopedRagQuery", truncateLine(retrievalPlan.query, 180));
         }
 
@@ -1440,6 +1546,21 @@ public class AiLocalOrchestrationService {
             planSteps = new ArrayList<>(planSteps.subList(0, 8));
         }
         out.planSteps = planSteps;
+        if (toolDagEnabled) {
+            Map<String, Object> toolDag = buildToolDagPlan(
+                planSteps,
+                buildStructuredPlanSteps(planSteps),
+                safeContextType,
+                safeMode,
+                digest,
+                AiMultimodalScannerService.ScanResult.disabled(),
+                new PlanCoverageCheck(48, Math.max(20, stepVerifierMinScore), false, "degraded", List.of("degraded_context")),
+                new PlanSchemaCheck(46, Math.max(20, planSchemaMinScore), false, 1, List.of("degraded_schema"))
+            );
+            if (!toolDag.isEmpty()) {
+                out.toolStats.putAll(toolDag);
+            }
+        }
 
         String focusedCode = buildFocusedCodeSnippet(safeCode, 6000);
         String tier1 = buildTier1Metadata(appId, safeContextType, safeTaskType, safeMode, safeLanguage, safeAttachments.size());
@@ -1705,6 +1826,110 @@ public class AiLocalOrchestrationService {
             out.add(row);
         }
         return out;
+    }
+
+    private Map<String, Object> buildToolDagPlan(
+        List<String> planSteps,
+        List<Map<String, Object>> structuredPlanSteps,
+        String contextType,
+        String responseMode,
+        LocalToolDigest digest,
+        AiMultimodalScannerService.ScanResult scanResult,
+        PlanCoverageCheck coverage,
+        PlanSchemaCheck schema
+    ) {
+        if (!toolDagEnabled) {
+            return Collections.emptyMap();
+        }
+        List<Map<String, Object>> nodes = new ArrayList<>();
+        List<Map<String, Object>> edges = new ArrayList<>();
+        int maxNodes = Math.max(3, toolDagMaxNodes);
+        int idx = 1;
+
+        nodes.add(buildToolDagNode("n1", idx++, "classify_request", "intent_router", "request_intent", "route_decision", "off_topic_or_supported_route", 0.15));
+        if (scanResult != null && scanResult.enabled() && (scanResult.attachmentCount() > 0 || scanResult.ingestCount() > 0)) {
+            nodes.add(buildToolDagNode("n2", idx++, "intake_multimodal", "multimodal_scanner", "attachments", "scanner_scope_mask", "scope_mask_ready", 0.22));
+        }
+        nodes.add(buildToolDagNode("n3", idx++, "ingest_scoped_memory", "lucene_ingestion", "current_code+menu", "dynamic_context_ids", "ingestion_completed", 0.33));
+        nodes.add(buildToolDagNode("n4", idx++, "retrieve_scoped_context", "lucene_vector_retrieval", "scope_mask+query", "scoped_rag_block", "retrieval_quality_sufficient", 0.48));
+        nodes.add(buildToolDagNode("n5", idx++, "verify_plan", "plan_verifier", "plan_steps", "coverage+schema_scores", "verification_passed_or_refine", 0.62));
+        nodes.add(buildToolDagNode(
+            "n6",
+            idx,
+            "stream_results",
+            "codemirror_streamer",
+            "verified_steps",
+            "agentic_step_result_events",
+            "all_steps_emitted",
+            0.78
+        ));
+
+        if (nodes.size() > maxNodes) {
+            nodes = new ArrayList<>(nodes.subList(0, maxNodes));
+        }
+
+        for (int i = 0; i < nodes.size() - 1; i++) {
+            String from = String.valueOf(nodes.get(i).getOrDefault("id", ""));
+            String to = String.valueOf(nodes.get(i + 1).getOrDefault("id", ""));
+            if (!from.isBlank() && !to.isBlank()) {
+                edges.add(Map.of("from", from, "to", to, "type", "sequential"));
+            }
+        }
+
+        double confidence = Math.max(0d, Math.min(1d,
+            ((coverage == null ? 0 : coverage.score) * 0.6 + (schema == null ? 0 : schema.score) * 0.4) / 100.0));
+        String stopReason = confidence >= toolDagMinConfidenceStop
+            ? "confidence_sufficient"
+            : "needs_refine_or_retry";
+        String mode = String.valueOf(responseMode == null ? "edit" : responseMode).toLowerCase(Locale.ROOT);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("toolDagEnabled", true);
+        out.put("toolDagVersion", "v1");
+        out.put("toolDagNodes", nodes);
+        out.put("toolDagEdges", edges);
+        out.put("toolDagNodeCount", nodes.size());
+        out.put("toolDagEdgeCount", edges.size());
+        out.put("toolDagStopPolicy", Map.of(
+            "minConfidence", toolDagMinConfidenceStop,
+            "currentConfidence", confidence,
+            "stopReason", stopReason,
+            "mode", mode,
+            "contextType", String.valueOf(contextType == null ? "" : contextType)
+        ));
+        if (digest != null && digest.intentKeywords != null && !digest.intentKeywords.isEmpty()) {
+            out.put("toolDagIntentAnchors", digest.intentKeywords.stream().limit(8).toList());
+        }
+        if (planSteps != null && !planSteps.isEmpty()) {
+            out.put("toolDagPlanSteps", planSteps.stream().limit(10).toList());
+        }
+        if (structuredPlanSteps != null && !structuredPlanSteps.isEmpty()) {
+            out.put("toolDagStructuredSteps", structuredPlanSteps.stream().limit(10).toList());
+        }
+        return out;
+    }
+
+    private Map<String, Object> buildToolDagNode(
+        String id,
+        int order,
+        String intent,
+        String tool,
+        String input,
+        String output,
+        String stopCondition,
+        double minConfidence
+    ) {
+        Map<String, Object> node = new LinkedHashMap<>();
+        node.put("id", id);
+        node.put("order", order);
+        node.put("intent", intent);
+        node.put("tool", tool);
+        node.put("input", input);
+        node.put("output", output);
+        node.put("stopCondition", stopCondition);
+        node.put("minConfidence", Math.max(0d, Math.min(1d, minConfidence)));
+        node.put("status", "planned");
+        return node;
     }
 
     private PlanSchemaCheck evaluatePlanSchema(List<Map<String, Object>> steps, Integer planSchemaMinScoreOverride) {
@@ -2487,6 +2712,77 @@ public class AiLocalOrchestrationService {
         q.append(" | task=").append(String.valueOf(taskType == null ? "" : taskType));
         q.append(" | mode=").append(String.valueOf(responseMode == null ? "" : responseMode));
         return trimTo(q.toString(), 380);
+    }
+
+    private String buildGuaranteedScopedFallbackQuery(
+        String message,
+        LocalToolDigest digest,
+        String contextType,
+        String taskType,
+        String responseMode
+    ) {
+        String safeMessage = String.valueOf(message == null ? "" : message).trim();
+        String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim();
+        String safeTaskType = String.valueOf(taskType == null ? "" : taskType).trim();
+        String safeMode = String.valueOf(responseMode == null ? "" : responseMode).trim();
+
+        StringBuilder out = new StringBuilder();
+        if (!safeMessage.isBlank()) {
+            out.append(trimTo(safeMessage, 160));
+        }
+
+        if (digest != null && digest.intentKeywords != null && !digest.intentKeywords.isEmpty()) {
+            out.append(" intents ");
+            int count = 0;
+            for (String token : digest.intentKeywords) {
+                String safeToken = String.valueOf(token == null ? "" : token).trim();
+                if (safeToken.length() < 3) {
+                    continue;
+                }
+                out.append(safeToken).append(' ');
+                count++;
+                if (count >= 6) {
+                    break;
+                }
+            }
+        }
+
+        if (digest != null && digest.codeSymbols != null && !digest.codeSymbols.isEmpty()) {
+            out.append(" symbols ");
+            int symbolCount = 0;
+            for (String symbol : digest.codeSymbols) {
+                String safeSymbol = String.valueOf(symbol == null ? "" : symbol).toLowerCase(Locale.ROOT);
+                Matcher matcher = TOKEN_PATTERN.matcher(safeSymbol);
+                while (matcher.find()) {
+                    String token = String.valueOf(matcher.group(0) == null ? "" : matcher.group(0)).trim();
+                    if (token.length() < 3) {
+                        continue;
+                    }
+                    out.append(token).append(' ');
+                    symbolCount++;
+                    if (symbolCount >= 10) {
+                        break;
+                    }
+                }
+                if (symbolCount >= 10) {
+                    break;
+                }
+            }
+        }
+
+        out.append(" context ")
+            .append(safeContextType)
+            .append(" task ")
+            .append(safeTaskType)
+            .append(" mode ")
+            .append(safeMode)
+            .append(" business logic flow analysis");
+
+        String normalized = trimTo(out.toString().replaceAll("\\s+", " ").trim(), 320);
+        if (!normalized.isBlank()) {
+            return normalized;
+        }
+        return "business logic flow analysis context code menu";
     }
 
     private List<String> deriveTargetedRetrievalQueries(String message, LocalToolDigest digest, String contextType) {

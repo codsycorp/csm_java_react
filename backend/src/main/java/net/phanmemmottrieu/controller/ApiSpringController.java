@@ -144,6 +144,12 @@ public class ApiSpringController {
         "(?i)\\b(?:eyJ[A-Za-z0-9_\\-]{20,}\\.[A-Za-z0-9_\\-]{20,}\\.[A-Za-z0-9_\\-]{10,}|[A-Fa-f0-9]{64,}|[A-Za-z0-9_\\-]{80,})\\b");
     private static final Pattern SLIDING_WINDOW_META_PATTERN = Pattern.compile(
         "/\\* SLIDING_WINDOW_META windows=(\\d+) chars=(\\d+) cpuCapped=(true|false) maxWindows=(\\d+) \\*/");
+    private static final Pattern FILE_PATH_HINT_PATTERN = Pattern.compile(
+        "(?i)\\b([A-Za-z0-9_./-]+\\.(?:java|kt|groovy|js|jsx|ts|tsx|vue|json|xml|yml|yaml|sql|css|scss|md))\\b");
+    private static final Pattern JS_IMPORT_PATH_PATTERN = Pattern.compile(
+        "(?m)^\\s*import\\s+[^;\\n]*?from\\s+['\"]([^'\"\\n]+)['\"]");
+    private static final Pattern JAVA_IMPORT_PATH_PATTERN = Pattern.compile(
+        "(?m)^\\s*import\\s+([a-zA-Z0-9_.]+);");
     private enum AiRouteMode {
         LOCAL_ONLY,
         HYBRID,
@@ -384,6 +390,26 @@ public class ApiSpringController {
         String localAnswer,
         String cloudContext,
         String reasonCode) {}
+
+    private static record OrchestrationEvidenceSnapshot(
+        int scopedRagChars,
+        int planVerifierScore,
+        int planSchemaScore,
+        boolean planVerifierPassed,
+        boolean planSchemaPassed,
+        int score,
+        int unifiedConfidence
+    ) {}
+
+    private static record MultiFilePatchPlanPreview(
+        boolean multiFile,
+        List<Map<String, Object>> files,
+        List<Map<String, Object>> dependencies,
+        List<String> applyOrder,
+        int confidence,
+        String strategy,
+        String reason
+    ) {}
 
     private final ObjectMapper objectMapper = new ObjectMapper(); // Dùng để parse JSON body
     
@@ -738,6 +764,39 @@ public class ApiSpringController {
     @Value("${ai.code-stream.edit.semantic-verify.max-output-tokens:512}")
     private int aiCodeStreamEditSemanticVerifyMaxOutputTokens;
 
+    @Value("${ai.code-stream.step-output-contract.strict-edit:true}")
+    private boolean aiCodeStreamStepOutputContractStrictEdit;
+
+    @Value("${ai.code-stream.step-output-contract.strict-analyze:false}")
+    private boolean aiCodeStreamStepOutputContractStrictAnalyze;
+
+    @Value("${ai.code-stream.step-output-contract.repair.enabled:true}")
+    private boolean aiCodeStreamStepOutputContractRepairEnabled;
+
+    @Value("${ai.code-stream.step-output-contract.repair.max-attempts:1}")
+    private int aiCodeStreamStepOutputContractRepairMaxAttempts;
+
+    @Value("${ai.code-stream.step-output-contract.repair.max-output-tokens:512}")
+    private int aiCodeStreamStepOutputContractRepairMaxOutputTokens;
+
+    @Value("${ai.code-stream.step-output-contract.repair.min-quality-score:50}")
+    private int aiCodeStreamStepOutputContractRepairMinQualityScore;
+
+    @Value("${ai.code-stream.edit.semantic-sandbox.enabled:true}")
+    private boolean aiCodeStreamEditSemanticSandboxEnabled;
+
+    @Value("${ai.code-stream.edit.semantic-sandbox.min-base-chars:1200}")
+    private int aiCodeStreamEditSemanticSandboxMinBaseChars;
+
+    @Value("${ai.code-stream.edit.semantic-sandbox.output-ratio-floor:0.08}")
+    private double aiCodeStreamEditSemanticSandboxOutputRatioFloor;
+
+    @Value("${ai.code-stream.edit.semantic-sandbox.touch-ratio-high:0.45}")
+    private double aiCodeStreamEditSemanticSandboxTouchRatioHigh;
+
+    @Value("${ai.code-stream.edit.semantic-sandbox.touch-ratio-medium:0.25}")
+    private double aiCodeStreamEditSemanticSandboxTouchRatioMedium;
+
     @Value("${ai.code-stream.pattern-cache.enabled:true}")
     private boolean aiCodeStreamPatternCacheEnabled;
 
@@ -1073,6 +1132,81 @@ public class ApiSpringController {
 
     @Value("${ai.local.runtime.weak-profile.map-reduce.chunk-chars:9000}")
     private int aiLocalRuntimeWeakProfileMapReduceChunkChars;
+
+    @Value("${ai.local.orchestration.decision-narrative.enabled:true}")
+    private boolean aiLocalOrchestrationDecisionNarrativeEnabled;
+
+    @Value("${ai.local.orchestration.decision-narrative.max-tools:6}")
+    private int aiLocalOrchestrationDecisionNarrativeMaxTools;
+
+    @Value("${ai.local.orchestration.evidence-refine.enabled:true}")
+    private boolean aiLocalOrchestrationEvidenceRefineEnabled;
+
+    @Value("${ai.local.orchestration.evidence-refine.max-attempts:1}")
+    private int aiLocalOrchestrationEvidenceRefineMaxAttempts;
+
+    @Value("${ai.local.orchestration.evidence-refine.min-scoped-rag-chars:1400}")
+    private int aiLocalOrchestrationEvidenceRefineMinScopedRagChars;
+
+    @Value("${ai.local.orchestration.evidence-refine.min-plan-score:58}")
+    private int aiLocalOrchestrationEvidenceRefineMinPlanScore;
+
+    @Value("${ai.local.orchestration.evidence-refine.min-score-gain:3}")
+    private int aiLocalOrchestrationEvidenceRefineMinScoreGain;
+
+    @Value("${ai.local.orchestration.evidence-refine.early-stop-no-gain:true}")
+    private boolean aiLocalOrchestrationEvidenceRefineEarlyStopNoGain;
+
+    @Value("${ai.local.orchestration.unified-confidence.min-promote:62}")
+    private int aiLocalOrchestrationUnifiedConfidenceMinPromote;
+
+    @Value("${ai.local.orchestration.tool-dag.adaptive.enabled:true}")
+    private boolean aiLocalOrchestrationToolDagAdaptiveEnabled;
+
+    @Value("${ai.local.orchestration.tool-dag.adaptive.step-confidence-boost:0.08}")
+    private double aiLocalOrchestrationToolDagAdaptiveStepConfidenceBoost;
+
+    @Value("${ai.local.orchestration.tool-dag.adaptive.stop-on-low-confidence:true}")
+    private boolean aiLocalOrchestrationToolDagAdaptiveStopOnLowConfidence;
+
+    @Value("${ai.local.orchestration.large-code-region-plan.enabled:true}")
+    private boolean aiLocalOrchestrationLargeCodeRegionPlanEnabled;
+
+    @Value("${ai.local.orchestration.large-code-region-plan.threshold-chars:100000}")
+    private int aiLocalOrchestrationLargeCodeRegionPlanThresholdChars;
+
+    @Value("${ai.local.orchestration.large-code-region-plan.max-regions:8}")
+    private int aiLocalOrchestrationLargeCodeRegionPlanMaxRegions;
+
+    @Value("${ai.local.orchestration.large-code-region-plan.max-chars:28000}")
+    private int aiLocalOrchestrationLargeCodeRegionPlanMaxChars;
+
+    @Value("${ai.local.orchestration.tool-dag.replan.enabled:true}")
+    private boolean aiLocalOrchestrationToolDagReplanEnabled;
+
+    @Value("${ai.local.orchestration.tool-dag.replan.max-steps:4}")
+    private int aiLocalOrchestrationToolDagReplanMaxSteps;
+
+    @Value("${ai.local.orchestration.tool-dag.replan.max-attempts:2}")
+    private int aiLocalOrchestrationToolDagReplanMaxAttempts;
+
+    @Value("${ai.local.orchestration.tool-dag.replan.budget-ms:2500}")
+    private long aiLocalOrchestrationToolDagReplanBudgetMs;
+
+    @Value("${ai.local.orchestration.tool-dag.replan.early-stop-no-gain:true}")
+    private boolean aiLocalOrchestrationToolDagReplanEarlyStopNoGain;
+
+    @Value("${ai.local.orchestration.multifile-plan.enabled:true}")
+    private boolean aiLocalOrchestrationMultiFilePlanEnabled;
+
+    @Value("${ai.local.orchestration.multifile-plan.max-files:6}")
+    private int aiLocalOrchestrationMultiFilePlanMaxFiles;
+
+    @Value("${ai.local.orchestration.multifile-plan.max-edges:8}")
+    private int aiLocalOrchestrationMultiFilePlanMaxEdges;
+
+    @Value("${ai.local.orchestration.multifile-plan.min-signals:2}")
+    private int aiLocalOrchestrationMultiFilePlanMinSignals;
 
     @Value("${ai.local.analyze.language-alignment.max-draft-chars:3200}")
     private int aiLocalAnalyzeLanguageAlignmentMaxDraftChars;
@@ -1600,6 +1734,43 @@ public class ApiSpringController {
                 if (broadAnalyzeRequest
                         && promptCodeContext.length() > 30000
                         && aiCodeStreamLocalProviderEnabled) {
+                    LargeCodeRegionPlan regionPlan = buildLargeCodeRegionPlan(
+                        message,
+                        effectiveCodeContext,
+                        focusWindow == null ? "" : focusWindow.code(),
+                        cursorLine,
+                        contextWindowLines,
+                        Math.max(18000, Math.min(32000, aiCodeStreamMaxCurrentCodeChars))
+                    );
+                    if (regionPlan.applied() && regionPlan.condensedChars() < promptCodeContext.length()) {
+                        int before = promptCodeContext.length();
+                        promptCodeContext = regionPlan.condensedContext();
+                        sendEvent(emitter, jsonOf(
+                            "stage", "scope_reasoning",
+                            "status", "running",
+                            "requestId", requestId,
+                            "message", "Large file region plan activated: prioritize cursor/symbol/lucene hotspots before broad scan",
+                            "strategy", "region_aware",
+                            "regionCount", regionPlan.regionCount(),
+                            "sourceChars", regionPlan.sourceChars(),
+                            "condensedChars", regionPlan.condensedChars(),
+                            "reductionChars", Math.max(0, before - regionPlan.condensedChars()),
+                            "regions", regionPlan.regions()
+                        ));
+                        emitToolTrace(
+                            emitter,
+                            requestId,
+                            "large_code_region_plan",
+                            "completed",
+                            "sourceChars=" + regionPlan.sourceChars(),
+                            "regions=" + regionPlan.regionCount() + " condensedChars=" + regionPlan.condensedChars(),
+                            0,
+                            0,
+                            "none",
+                            "none",
+                            Map.of("strategy", "cursor+symbol+lucene_hotspots")
+                        );
+                    }
                     String condensedAnalyzeContext = buildAnalyzeCondensedPromptContext(
                         effectiveCodeContext,
                         message,
@@ -1742,6 +1913,305 @@ public class ApiSpringController {
                         language,
                         requestId);
 
+                    if (shouldAttemptOrchestrationEvidenceRefine(codeStreamOrchestration)) {
+                        int maxRefineAttempts = Math.max(0, aiLocalOrchestrationEvidenceRefineMaxAttempts);
+                        for (int refineAttempt = 1; refineAttempt <= maxRefineAttempts; refineAttempt++) {
+                            OrchestrationEvidenceSnapshot baseSnapshot = snapshotOrchestrationEvidence(codeStreamOrchestration);
+                            String refineMessage = buildOrchestrationRefineMessage(message, effectiveCodeContext, codeStreamOrchestration, refineAttempt);
+                            sendEvent(emitter, jsonOf(
+                                "stage", "assistant_verify_plan",
+                                "status", "running",
+                                "requestId", requestId,
+                                "mode", "orchestration_evidence_refine",
+                                "attempt", refineAttempt,
+                                "maxAttempts", maxRefineAttempts,
+                                "message", "Refine retrieval scope to improve evidence before final model call"
+                            ));
+                            emitToolTrace(
+                                emitter,
+                                requestId,
+                                "orchestration_evidence_refine",
+                                "running",
+                                "attempt=" + refineAttempt + " score=" + baseSnapshot.score(),
+                                compactToolDigest(refineMessage, 220),
+                                0,
+                                0,
+                                "none",
+                                "none",
+                                null
+                            );
+                            long refineStartMs = System.currentTimeMillis();
+                            AiLocalOrchestrationService.OrchestrationResult refined = aiLocalOrchestrationService.orchestrateResilient(
+                                appId,
+                                refineMessage,
+                                effectiveCodeContext,
+                                orchestrationAttachments,
+                                contextType,
+                                effectiveTaskType,
+                                responseMode,
+                                language,
+                                requestId + "_refine_" + refineAttempt
+                            );
+                            OrchestrationEvidenceSnapshot refinedSnapshot = snapshotOrchestrationEvidence(refined);
+                            boolean promoted = shouldPromoteRefinedOrchestration(baseSnapshot, refinedSnapshot, codeStreamOrchestration, refined);
+                            boolean noGain = !promoted && !hasMeaningfulEvidenceGain(baseSnapshot, refinedSnapshot);
+                            sendEvent(emitter, jsonOf(
+                                "stage", "assistant_verify_result",
+                                "status", promoted ? "passed" : "fallback",
+                                "requestId", requestId,
+                                "verificationScore", refinedSnapshot.score(),
+                                "unifiedConfidence", refinedSnapshot.unifiedConfidence(),
+                                "verificationPassed", promoted,
+                                "verificationVerdict", promoted ? "promoted_refined_orchestration" : "kept_initial_orchestration",
+                                "baseScore", baseSnapshot.score(),
+                                "refinedScore", refinedSnapshot.score(),
+                                "baseUnifiedConfidence", baseSnapshot.unifiedConfidence(),
+                                "refinedUnifiedConfidence", refinedSnapshot.unifiedConfidence(),
+                                "attempt", refineAttempt
+                            ));
+                            emitToolTrace(
+                                emitter,
+                                requestId,
+                                "orchestration_evidence_refine",
+                                promoted ? "completed" : "skipped",
+                                "baseScore=" + baseSnapshot.score() + " refinedScore=" + refinedSnapshot.score(),
+                                "promoted=" + promoted + " ragChars=" + refinedSnapshot.scopedRagChars(),
+                                Math.max(0L, System.currentTimeMillis() - refineStartMs),
+                                Math.max(0, refineAttempt - 1),
+                                "none",
+                                promoted ? "REFINE_PROMOTED" : "REFINE_NOT_PROMOTED",
+                                Map.of(
+                                    "baseRagChars", baseSnapshot.scopedRagChars(),
+                                    "refinedRagChars", refinedSnapshot.scopedRagChars(),
+                                    "basePlanScore", baseSnapshot.planVerifierScore(),
+                                    "refinedPlanScore", refinedSnapshot.planVerifierScore(),
+                                    "baseUnifiedConfidence", baseSnapshot.unifiedConfidence(),
+                                    "refinedUnifiedConfidence", refinedSnapshot.unifiedConfidence()
+                                )
+                            );
+                            if (promoted) {
+                                codeStreamOrchestration = refined;
+                                if (codeStreamOrchestration.toolStats != null) {
+                                    codeStreamOrchestration.toolStats.put("evidenceRefineApplied", true);
+                                    codeStreamOrchestration.toolStats.put("evidenceRefineAttempt", refineAttempt);
+                                    codeStreamOrchestration.toolStats.put("evidenceRefineBaseScore", baseSnapshot.score());
+                                    codeStreamOrchestration.toolStats.put("evidenceRefineFinalScore", refinedSnapshot.score());
+                                    codeStreamOrchestration.toolStats.put("evidenceRefineBaseUnifiedConfidence", baseSnapshot.unifiedConfidence());
+                                    codeStreamOrchestration.toolStats.put("evidenceRefineFinalUnifiedConfidence", refinedSnapshot.unifiedConfidence());
+                                }
+                                break;
+                            }
+                            if (aiLocalOrchestrationEvidenceRefineEarlyStopNoGain && noGain) {
+                                break;
+                            }
+                        }
+                    }
+
+                    if (shouldAttemptToolDagReplanExecution(codeStreamOrchestration)) {
+                        Map<String, Object> baseStats = codeStreamOrchestration.toolStats == null
+                            ? Collections.emptyMap()
+                            : codeStreamOrchestration.toolStats;
+                        String failedStep = String.valueOf(baseStats.getOrDefault("planVerifierVerdict", "verify_plan"));
+                        String failedTool = "plan_verifier";
+                        List<String> replanSteps = buildToolDagReplanSteps(baseStats, failedStep, failedTool);
+                        if (!replanSteps.isEmpty()) {
+                            int maxReplanAttempts = Math.max(1, aiLocalOrchestrationToolDagReplanMaxAttempts);
+                            long replanBudgetMs = Math.max(500L, aiLocalOrchestrationToolDagReplanBudgetMs);
+                            long replanBudgetStartMs = System.currentTimeMillis();
+                            boolean replanPromoted = false;
+                            int replanAttemptsUsed = 0;
+                            for (int replanAttempt = 1; replanAttempt <= maxReplanAttempts; replanAttempt++) {
+                                long elapsedBudgetMs = Math.max(0L, System.currentTimeMillis() - replanBudgetStartMs);
+                                if (replanAttempt > 1 && elapsedBudgetMs >= replanBudgetMs) {
+                                    break;
+                                }
+                                replanAttemptsUsed = replanAttempt;
+                                OrchestrationEvidenceSnapshot baseSnapshot = snapshotOrchestrationEvidence(codeStreamOrchestration);
+                                long remainingBudgetMs = Math.max(0L, replanBudgetMs - elapsedBudgetMs);
+                                sendEvent(emitter, jsonOf(
+                                    "stage", "assistant_orchestration_replan",
+                                    "status", "running",
+                                    "requestId", requestId,
+                                    "failedStep", failedStep,
+                                    "failedOperation", failedTool,
+                                    "reason", "low_confidence_gate",
+                                    "currentConfidence", baseSnapshot.unifiedConfidence() / 100.0d,
+                                    "requiredConfidence", Math.max(0.35d, aiLocalOrchestrationUnifiedConfidenceMinPromote / 100.0d),
+                                    "candidateSteps", replanSteps,
+                                    "attempt", replanAttempt,
+                                    "maxAttempts", maxReplanAttempts,
+                                    "remainingBudgetMs", remainingBudgetMs,
+                                    "stepIndex", replanAttempt,
+                                    "stepTotal", maxReplanAttempts
+                                ));
+
+                                String replanMessage = buildOrchestrationToolDagReplanMessage(
+                                    message,
+                                    effectiveCodeContext,
+                                    codeStreamOrchestration,
+                                    replanSteps
+                                ) + "\n- replan_attempt=" + replanAttempt + "/" + maxReplanAttempts;
+                                emitToolTrace(
+                                    emitter,
+                                    requestId,
+                                    "orchestration_tool_dag_replan",
+                                    "running",
+                                    "attempt=" + replanAttempt + " baseUnifiedConfidence=" + baseSnapshot.unifiedConfidence(),
+                                    compactToolDigest(replanMessage, 220),
+                                    0,
+                                    Math.max(0, replanAttempt - 1),
+                                    "none",
+                                    "none",
+                                    Map.of(
+                                        "candidateStepCount", replanSteps.size(),
+                                        "maxAttempts", maxReplanAttempts,
+                                        "remainingBudgetMs", remainingBudgetMs
+                                    )
+                                );
+
+                                long replanStartMs = System.currentTimeMillis();
+                                AiLocalOrchestrationService.OrchestrationResult replanned = aiLocalOrchestrationService.orchestrateResilient(
+                                    appId,
+                                    replanMessage,
+                                    effectiveCodeContext,
+                                    orchestrationAttachments,
+                                    contextType,
+                                    effectiveTaskType,
+                                    responseMode,
+                                    language,
+                                    requestId + "_dag_replan_" + replanAttempt
+                                );
+                                OrchestrationEvidenceSnapshot replannedSnapshot = snapshotOrchestrationEvidence(replanned);
+                                boolean promoted = shouldPromoteRefinedOrchestration(baseSnapshot, replannedSnapshot, codeStreamOrchestration, replanned);
+                                boolean noGain = !promoted && !hasMeaningfulEvidenceGain(baseSnapshot, replannedSnapshot);
+
+                                sendEvent(emitter, jsonOf(
+                                    "stage", "assistant_orchestration_replan",
+                                    "status", promoted ? "completed" : "fallback",
+                                    "requestId", requestId,
+                                    "failedStep", failedStep,
+                                    "failedOperation", failedTool,
+                                    "reason", promoted ? "promoted_replanned_orchestration" : "kept_previous_orchestration",
+                                    "currentConfidence", replannedSnapshot.unifiedConfidence() / 100.0d,
+                                    "requiredConfidence", Math.max(0.35d, aiLocalOrchestrationUnifiedConfidenceMinPromote / 100.0d),
+                                    "candidateSteps", replanSteps,
+                                    "applied", promoted,
+                                    "baseUnifiedConfidence", baseSnapshot.unifiedConfidence(),
+                                    "replannedUnifiedConfidence", replannedSnapshot.unifiedConfidence(),
+                                    "baseScore", baseSnapshot.score(),
+                                    "replannedScore", replannedSnapshot.score(),
+                                    "attempt", replanAttempt,
+                                    "maxAttempts", maxReplanAttempts,
+                                    "stepIndex", replanAttempt,
+                                    "stepTotal", maxReplanAttempts
+                                ));
+                                emitToolTrace(
+                                    emitter,
+                                    requestId,
+                                    "orchestration_tool_dag_replan",
+                                    promoted ? "completed" : "skipped",
+                                    "attempt=" + replanAttempt + " baseScore=" + baseSnapshot.score() + " replannedScore=" + replannedSnapshot.score(),
+                                    "promoted=" + promoted + " replannedUnifiedConfidence=" + replannedSnapshot.unifiedConfidence(),
+                                    Math.max(0L, System.currentTimeMillis() - replanStartMs),
+                                    Math.max(0, replanAttempt - 1),
+                                    "none",
+                                    promoted ? "DAG_REPLAN_PROMOTED" : "DAG_REPLAN_NOT_PROMOTED",
+                                    Map.of(
+                                        "candidateStepCount", replanSteps.size(),
+                                        "maxAttempts", maxReplanAttempts,
+                                        "remainingBudgetMs", Math.max(0L, replanBudgetMs - Math.max(0L, System.currentTimeMillis() - replanBudgetStartMs))
+                                    )
+                                );
+
+                                if (promoted) {
+                                    codeStreamOrchestration = replanned;
+                                    replanPromoted = true;
+                                    if (codeStreamOrchestration.toolStats != null) {
+                                        codeStreamOrchestration.toolStats.put("toolDagReplanApplied", true);
+                                        codeStreamOrchestration.toolStats.put("toolDagReplanStepCount", replanSteps.size());
+                                        codeStreamOrchestration.toolStats.put("toolDagReplanAttempt", replanAttempt);
+                                        codeStreamOrchestration.toolStats.put("toolDagReplanMaxAttempts", maxReplanAttempts);
+                                        codeStreamOrchestration.toolStats.put("toolDagReplanBaseUnifiedConfidence", baseSnapshot.unifiedConfidence());
+                                        codeStreamOrchestration.toolStats.put("toolDagReplanFinalUnifiedConfidence", replannedSnapshot.unifiedConfidence());
+                                        codeStreamOrchestration.toolStats.put("toolDagReplanBaseScore", baseSnapshot.score());
+                                        codeStreamOrchestration.toolStats.put("toolDagReplanFinalScore", replannedSnapshot.score());
+                                    }
+                                    break;
+                                }
+                                if (aiLocalOrchestrationToolDagReplanEarlyStopNoGain && noGain) {
+                                    break;
+                                }
+                            }
+                            if (codeStreamOrchestration != null && codeStreamOrchestration.toolStats != null) {
+                                codeStreamOrchestration.toolStats.put("toolDagReplanAttempted", true);
+                                codeStreamOrchestration.toolStats.put("toolDagReplanApplied", replanPromoted);
+                                codeStreamOrchestration.toolStats.put("toolDagReplanAttemptsUsed", replanAttemptsUsed);
+                                codeStreamOrchestration.toolStats.put("toolDagReplanMaxAttempts", Math.max(1, aiLocalOrchestrationToolDagReplanMaxAttempts));
+                            }
+                        }
+                    }
+
+                    if (codeStreamOrchestration != null && codeStreamOrchestration.toolStats != null) {
+                        OrchestrationEvidenceSnapshot finalSnapshot = snapshotOrchestrationEvidence(codeStreamOrchestration);
+                        codeStreamOrchestration.toolStats.put("unifiedConfidenceScore", finalSnapshot.unifiedConfidence());
+                        codeStreamOrchestration.toolStats.put("unifiedConfidencePromoteThreshold", aiLocalOrchestrationUnifiedConfidenceMinPromote);
+                    }
+
+                    emitCopilotStyleDecisionNarrative(
+                        emitter,
+                        requestId,
+                        message,
+                        contextType,
+                        responseMode,
+                        codeStreamOrchestration,
+                        attachmentStats
+                    );
+                    emitToolDagLifecycle(emitter, requestId, codeStreamOrchestration);
+
+                    MultiFilePatchPlanPreview multiFilePatchPlan = buildMultiFilePatchPlanPreview(
+                        message,
+                        effectiveCodeContext,
+                        orchestrationAttachments,
+                        language,
+                        codeStreamOrchestration
+                    );
+                    if (multiFilePatchPlan.multiFile()) {
+                        sendEvent(emitter, jsonOf(
+                            "stage", "assistant_multifile_patch_plan",
+                            "status", "completed",
+                            "requestId", requestId,
+                            "message", "Da lap dependency graph cho patch nhieu file truoc khi apply",
+                            "fileCount", multiFilePatchPlan.files().size(),
+                            "edgeCount", multiFilePatchPlan.dependencies().size(),
+                            "planConfidence", multiFilePatchPlan.confidence(),
+                            "strategy", multiFilePatchPlan.strategy(),
+                            "reason", multiFilePatchPlan.reason(),
+                            "files", multiFilePatchPlan.files(),
+                            "dependencies", multiFilePatchPlan.dependencies(),
+                            "applyOrder", multiFilePatchPlan.applyOrder()
+                        ));
+                        emitToolTrace(
+                            emitter,
+                            requestId,
+                            "multifile_patch_plan",
+                            "completed",
+                            "files=" + multiFilePatchPlan.files().size() + " edges=" + multiFilePatchPlan.dependencies().size(),
+                            "strategy=" + multiFilePatchPlan.strategy() + " confidence=" + multiFilePatchPlan.confidence(),
+                            0,
+                            0,
+                            "none",
+                            "none",
+                            Map.of("applyOrder", multiFilePatchPlan.applyOrder())
+                        );
+                        if (codeStreamOrchestration != null && codeStreamOrchestration.toolStats != null) {
+                            codeStreamOrchestration.toolStats.put("multiFilePatchPlanEnabled", true);
+                            codeStreamOrchestration.toolStats.put("multiFilePatchPlanFileCount", multiFilePatchPlan.files().size());
+                            codeStreamOrchestration.toolStats.put("multiFilePatchPlanEdgeCount", multiFilePatchPlan.dependencies().size());
+                            codeStreamOrchestration.toolStats.put("multiFilePatchPlanConfidence", multiFilePatchPlan.confidence());
+                            codeStreamOrchestration.toolStats.put("multiFilePatchPlanStrategy", multiFilePatchPlan.strategy());
+                        }
+                    }
+
                     if (codeStreamOrchestration.enabled
                         && codeStreamOrchestration.compressedContextBlock != null
                         && !codeStreamOrchestration.compressedContextBlock.isBlank()) {
@@ -1777,6 +2247,49 @@ public class ApiSpringController {
                             "retrievalTopK", parseIntSafe(orchestrationStats.get("scopedRagTopK"), 0),
                             "retrievalMaxChars", parseIntSafe(orchestrationStats.get("scopedRagMaxChars"), 0)
                         ));
+                        int retrievalChars = parseIntSafe(orchestrationStats.get("scopedRagChars"), 0);
+                        int retrievalMinChars = Math.max(0, parseIntSafe(orchestrationStats.get("scopedRagQualityMinChars"), 0));
+                        boolean retrievalQualityPassed = bool(
+                            orchestrationStats.get("scopedRagQualityPassed"),
+                            retrievalMinChars <= 0 || retrievalChars >= retrievalMinChars
+                        );
+                        int retrievalDeficit = Math.max(0, parseIntSafe(
+                            orchestrationStats.get("scopedRagQualityDeficit"),
+                            retrievalMinChars - retrievalChars
+                        ));
+                        boolean retrievalRetryApplied = bool(orchestrationStats.get("scopedRagQualityRetryApplied"), false);
+                        sendEvent(emitter, jsonOf(
+                            "stage", "retrieval_quality_gate",
+                            "status", retrievalQualityPassed ? "passed" : "low_evidence",
+                            "requestId", requestId,
+                            "message", retrievalQualityPassed
+                                ? "Scoped retrieval quality dat nguong evidence"
+                                : "Scoped retrieval quality duoi nguong; da uu tien remediation context",
+                            "retrievalChars", retrievalChars,
+                            "minChars", retrievalMinChars,
+                            "deficit", retrievalDeficit,
+                            "retryApplied", retrievalRetryApplied,
+                            "retryScopeMask", parseIntSafe(orchestrationStats.get("scopedRagQualityRetryScopeMask"), 0),
+                            "retryTopK", parseIntSafe(orchestrationStats.get("scopedRagQualityRetryTopK"), 0),
+                            "retryMaxChars", parseIntSafe(orchestrationStats.get("scopedRagQualityRetryMaxChars"), 0)
+                        ));
+                        emitToolTrace(
+                            emitter,
+                            requestId,
+                            "retrieval_quality_gate",
+                            retrievalQualityPassed ? "passed" : "needs_refine",
+                            "chars=" + retrievalChars + " min=" + retrievalMinChars,
+                            "deficit=" + retrievalDeficit + " retryApplied=" + retrievalRetryApplied,
+                            0,
+                            0,
+                            retrievalQualityPassed ? "none" : "LOW_RETRIEVAL_EVIDENCE",
+                            retrievalQualityPassed ? "none" : "SCOPED_RAG_QUALITY_LOW",
+                            Map.of("scopeMask", effectiveScopeMask)
+                        );
+                        recordQualityEvidenceGate(retrievalQualityPassed ? "retrieval_quality_pass" : "retrieval_quality_low", appId);
+                        if (retrievalRetryApplied) {
+                            recordQualityEvidenceGate("retrieval_quality_retry_applied", appId);
+                        }
                         emitToolTrace(
                             emitter,
                             requestId,
@@ -2111,6 +2624,24 @@ public class ApiSpringController {
                         codeStreamPreAnalysis.reasonCode(),
                         String.valueOf(codeStreamPreAnalysis.cloudContext() == null ? "" : codeStreamPreAnalysis.cloudContext()).length());
 
+                recordQualityRequestTrace(
+                    requestId,
+                    appId,
+                    "ai-code-stream",
+                    "request_start",
+                    "started",
+                    "accepted",
+                    responseMode,
+                    startLogModel,
+                    0L,
+                    Map.of(
+                        "contextType", String.valueOf(contextType == null ? "" : contextType),
+                        "taskType", String.valueOf(effectiveTaskType == null ? "" : effectiveTaskType),
+                        "promptChars", prompt.length(),
+                        "attachments", imageParts.size()
+                    )
+                );
+
                 if (!base.baseRef().isBlank()) {
                     sendEvent(emitter, jsonOf(
                             "stage", "context",
@@ -2120,6 +2651,22 @@ public class ApiSpringController {
                             "baseContentChars", base.baseContentChars(),
                             "effectiveCodeChars", effectiveCodeContext.length(),
                             "preserveBaseContent", preserveBaseContent));
+                    recordQualityRequestTrace(
+                        requestId,
+                        appId,
+                        "ai-code-stream",
+                        "context",
+                        "base_cached",
+                        "base_cached",
+                        responseMode,
+                        startLogModel,
+                        0L,
+                        Map.of(
+                            "baseContentRef", base.baseRef(),
+                            "baseContentChars", base.baseContentChars(),
+                            "effectiveCodeChars", effectiveCodeContext.length()
+                        )
+                    );
                 }
 
                 int promptTokens = estimateTokens(prompt);
@@ -2147,6 +2694,22 @@ public class ApiSpringController {
                         "promptTokens", promptTokens,
                         "estimatedWaitSecs", estimatedWaitSecs,
                         "percent", 0));
+                recordQualityRequestTrace(
+                    requestId,
+                    appId,
+                    "ai-code-stream",
+                    "preparing",
+                    "started",
+                    routeReasonCode,
+                    responseMode,
+                    startLogModel,
+                    0L,
+                    Map.of(
+                        "promptTokens", promptTokens,
+                        "estimatedWaitSecs", estimatedWaitSecs,
+                        "handledLocally", codeStreamPreAnalysis.handledLocally()
+                    )
+                );
 
                 String rawResponse = null;
                 if (codeStreamPreAnalysis.handledLocally()) {
@@ -2188,6 +2751,21 @@ public class ApiSpringController {
                         "modelDecisionReason", codeStreamRouteDecision.reasonCode(),
                         "decision_step", "primary",
                         "model", tryLocalProviderFirst ? "local_provider" : effectiveModel));
+                    recordQualityRequestTrace(
+                        requestId,
+                        appId,
+                        "ai-code-stream",
+                        "model_switch",
+                        "local_router_v2_decision",
+                        codeStreamRouteDecision.reasonCode(),
+                        responseMode,
+                        tryLocalProviderFirst ? "local_provider" : effectiveModel,
+                        0L,
+                        Map.of(
+                            "routeMode", codeStreamRouteDecision.mode().name().toLowerCase(Locale.ROOT),
+                            "routeScore", codeStreamRouteDecision.score()
+                        )
+                    );
 
                     if ("multimodal_local_only_policy".equalsIgnoreCase(codeStreamRouteDecision.reasonCode())
                         || "multimodal_local_only_enforced".equalsIgnoreCase(codeStreamRouteDecision.reasonCode())
@@ -2204,9 +2782,37 @@ public class ApiSpringController {
                             "multimodalLocalOnly", aiOrchestrationMultimodalLocalOnly,
                             "requireLocalVision", aiOrchestrationMultimodalLocalOnlyRequireVision,
                             "localVisionReady", isMultimodalLocalVisionReady()));
+                        recordQualityRequestTrace(
+                            requestId,
+                            appId,
+                            "ai-code-stream",
+                            "route_policy",
+                            "multimodal_local_only_enforced",
+                            codeStreamRouteDecision.reasonCode(),
+                            responseMode,
+                            tryLocalProviderFirst ? "local_provider" : effectiveModel,
+                            0L,
+                            Map.of(
+                                "multimodalLocalOnly", aiOrchestrationMultimodalLocalOnly,
+                                "requireLocalVision", aiOrchestrationMultimodalLocalOnlyRequireVision,
+                                "localVisionReady", isMultimodalLocalVisionReady()
+                            )
+                        );
                     }
 
                     if ("multimodal_local_only_missing_local_vision".equalsIgnoreCase(codeStreamRouteDecision.reasonCode())) {
+                        recordQualityRequestTrace(
+                            requestId,
+                            appId,
+                            "ai-code-stream",
+                            "route_policy",
+                            "blocked_missing_local_vision",
+                            "multimodal_local_only_missing_local_vision",
+                            responseMode,
+                            "local_provider",
+                            0L,
+                            Map.of("blocked", true)
+                        );
                         sendErrorEvent(emitter, uiTextByLang(uiLang,
                             "Luồng multimodal đang local-only và yêu cầu local vision, nhưng endpoint vision local chưa sẵn sàng.",
                             "Multimodal flow is local-only and requires local vision, but the local vision endpoint is not ready.",
@@ -2229,6 +2835,18 @@ public class ApiSpringController {
                         "reason_code", localPrimaryReason,
                             "message", "Chi phi toi uu: uu tien local provider truoc",
                             "messageKey", "copilot.progress.message.local_provider_primary"));
+                    recordQualityRequestTrace(
+                        requestId,
+                        appId,
+                        "ai-code-stream",
+                        "model_switch",
+                        "local_provider_primary",
+                        localPrimaryReason,
+                        responseMode,
+                        "local_provider",
+                        0L,
+                        Map.of("decision_step", "primary")
+                    );
                     boolean useMapReduceBroadAnalysis = shouldUseLocalMapReduceBroadAnalysis(
                         message,
                         responseMode,
@@ -2402,6 +3020,22 @@ public class ApiSpringController {
                                 "evidenceGateMinScore", Math.max(20, Math.min(95, aiLocalEvidenceGateMinScore)),
                                 "evidenceAnchors", localEvidenceGate.anchors(),
                                 "message", "Output local thiếu bằng chứng theo currentCode, chuyển sang retry/fallback để tránh patch suy đoán."));
+                            recordQualityRequestTrace(
+                                requestId,
+                                appId,
+                                "ai-code-stream",
+                                "model_switch",
+                                "local_provider_evidence_gate_failed",
+                                localEvidenceGate.reason(),
+                                responseMode,
+                                "local_provider",
+                                0L,
+                                Map.of(
+                                    "evidenceGateScore", localEvidenceGate.score(),
+                                    "evidenceGateMinScore", Math.max(20, Math.min(95, aiLocalEvidenceGateMinScore)),
+                                    "evidenceAnchors", localEvidenceGate.anchors()
+                                )
+                            );
                         }
 
                         if (!localAccepted
@@ -2430,6 +3064,22 @@ public class ApiSpringController {
                                         "retryUsedByReason", reasonUsed,
                                         "retryBudgetByReason", reasonBudget,
                                         "message", "Bỏ qua retry do đã chạm ngân sách retry theo lớp lỗi."));
+                                    recordQualityRequestTrace(
+                                        requestId,
+                                        appId,
+                                        "ai-code-stream",
+                                        "model_switch",
+                                        "local_provider_edit_retry_skipped",
+                                        retryReasonKey,
+                                        responseMode,
+                                        "local_provider",
+                                        0L,
+                                        Map.of(
+                                            "retryIndex", retryIndex,
+                                            "retryUsedByReason", reasonUsed,
+                                            "retryBudgetByReason", reasonBudget
+                                        )
+                                    );
                                     break;
                                 }
                                 String retryPrompt = buildEditAdaptiveRetryPrompt(
@@ -2459,6 +3109,22 @@ public class ApiSpringController {
                                     "retryMax", maxAdaptiveAttempts,
                                     "beforeQualityScore", previousScore,
                                     "message", "AI local retry theo chiến lược edit thích ứng để trả output apply được."));
+                                recordQualityRequestTrace(
+                                    requestId,
+                                    appId,
+                                    "ai-code-stream",
+                                    "model_switch",
+                                    "local_provider_edit_retry",
+                                    retryReasonKey,
+                                    responseMode,
+                                    "local_provider",
+                                    0L,
+                                    Map.of(
+                                        "retryIndex", retryIndex,
+                                        "retryMax", maxAdaptiveAttempts,
+                                        "beforeQualityScore", previousScore
+                                    )
+                                );
 
                                 String retryRaw = runLocalProviderWithProgress(emitter, requestId, retryPrompt, contextType);
                                 String retryText = extractAiResultText(retryRaw);
@@ -2493,6 +3159,25 @@ public class ApiSpringController {
                                     "evidenceAnchors", retryEvidenceGate.anchors(),
                                     "accepted", retryAccepted,
                                     "message", "Đã hoàn tất retry edit; so sánh chất lượng output trước/sau."));
+                                recordQualityRequestTrace(
+                                    requestId,
+                                    appId,
+                                    "ai-code-stream",
+                                    "model_switch",
+                                    "local_provider_edit_retry_done",
+                                    retryReasonKey,
+                                    responseMode,
+                                    "local_provider",
+                                    0L,
+                                    Map.of(
+                                        "retryIndex", retryIndex,
+                                        "beforeQualityScore", previousScore,
+                                        "afterQualityScore", retryScore,
+                                        "accepted", retryAccepted,
+                                        "evidenceGateScore", retryEvidenceGate.score(),
+                                        "evidenceGateReason", retryEvidenceGate.reason()
+                                    )
+                                );
 
                                 if (retryAccepted && retryScore >= Math.max(aiLocalEditAdaptiveRetryMinQualityScore, previousScore)) {
                                     providerText = retryText;
@@ -2530,19 +3215,267 @@ public class ApiSpringController {
                                     effectiveCodeContext,
                                     codeStreamMeta);
                             }
-                            int localStreamChunks = emitSyntheticLocalStreamChunks(
-                                emitter,
-                                requestId,
-                                providerText,
-                                1,
-                                false,
-                                true);
-                            codeStreamMeta.put("streamChunkCount", localStreamChunks);
-                            codeStreamMeta.put("streamedChars", providerText.length());
-                            codeStreamMeta.put("agenticStepResultCount", stepResultCount);
-                            rawResponse = providerText;
-                            effectiveModel = "local_provider";
-                            localProviderPrimaryUsed = true;
+                            boolean stepContractRequired = hasOrchestrationSteps
+                                && ("edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                                || "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode)));
+                            if (stepContractRequired && stepResultCount <= 0) {
+                                codeStreamMeta.put("stepOutputContractViolated", true);
+                                codeStreamMeta.put("stepOutputContractReason", "no_structured_step_results");
+                                emitToolTrace(
+                                    emitter,
+                                    requestId,
+                                    "agentic_step_contract",
+                                    "skipped",
+                                    "contract=structured_step_result_required",
+                                    "reason=no_structured_step_results",
+                                    0,
+                                    0,
+                                    "STEP_CONTRACT",
+                                    "NO_STRUCTURED_STEP_RESULTS",
+                                    Map.of("responseMode", String.valueOf(responseMode == null ? "" : responseMode))
+                                );
+                                String responseModeSafe = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
+                                boolean strictContract = ("edit".equals(responseModeSafe) && aiCodeStreamStepOutputContractStrictEdit)
+                                    || ("analyze".equals(responseModeSafe) && aiCodeStreamStepOutputContractStrictAnalyze);
+                                if (strictContract) {
+                                    int repairAttempts = Math.max(0, aiCodeStreamStepOutputContractRepairMaxAttempts);
+                                    boolean repairApplied = false;
+                                    if (aiCodeStreamStepOutputContractRepairEnabled
+                                        && repairAttempts > 0
+                                        && llamaCppNativeService != null
+                                        && llamaCppNativeService.isAvailable()) {
+                                        for (int repairAttempt = 1; repairAttempt <= repairAttempts; repairAttempt++) {
+                                            String repairPrompt = buildStepOutputContractRepairPrompt(
+                                                message,
+                                                providerText,
+                                                effectiveCodeContext,
+                                                responseModeSafe,
+                                                contextType,
+                                                repairAttempt,
+                                                repairAttempts
+                                            );
+                                            if (repairPrompt.isBlank()) {
+                                                break;
+                                            }
+                                            sendEvent(emitter, jsonOf(
+                                                "stage", "agentic_step_contract",
+                                                "status", "repair_running",
+                                                "requestId", requestId,
+                                                "attempt", repairAttempt,
+                                                "maxAttempts", repairAttempts,
+                                                "message", "Dang thu sua local output de dat step-output contract truoc fallback"
+                                            ));
+                                            recordQualityRequestTrace(
+                                                requestId,
+                                                appId,
+                                                "ai-code-stream",
+                                                "agentic_step_contract",
+                                                "repair_running",
+                                                "step_output_contract_repair",
+                                                responseMode,
+                                                "local_provider",
+                                                0L,
+                                                Map.of(
+                                                    "attempt", repairAttempt,
+                                                    "maxAttempts", repairAttempts
+                                                )
+                                            );
+                                            try {
+                                                String repairRaw = llamaCppNativeService.generateContentFast(
+                                                    repairPrompt,
+                                                    Math.max(128, aiCodeStreamStepOutputContractRepairMaxOutputTokens)
+                                                );
+                                                String repairText = extractAiResultText(repairRaw);
+                                                if ((repairText == null || repairText.isBlank()) && repairRaw != null) {
+                                                    repairText = repairRaw.trim();
+                                                }
+                                                repairText = sanitizePromptEchoLeakage(String.valueOf(repairText == null ? "" : repairText));
+                                                int repairQualityScore = scoreLocalEditOutputQuality(
+                                                    repairText,
+                                                    effectiveCodeContext,
+                                                    contextType,
+                                                    responseMode
+                                                );
+                                                boolean repairAccepted = shouldAcceptLocalCodeStreamOutput(repairText, responseMode, contextType);
+                                                LocalOutputEvidenceGate repairEvidenceGate = evaluateLocalOutputEvidenceGate(
+                                                    repairText,
+                                                    responseMode,
+                                                    contextType,
+                                                    effectiveCodeContext
+                                                );
+                                                if (repairAccepted && repairQualityScore < Math.max(0, aiCodeStreamStepOutputContractRepairMinQualityScore)) {
+                                                    repairAccepted = false;
+                                                    codeStreamMeta.put("stepOutputContractRepairQualityRejected", true);
+                                                    codeStreamMeta.put("stepOutputContractRepairQualityScore", repairQualityScore);
+                                                    codeStreamMeta.put("stepOutputContractRepairQualityMin", aiCodeStreamStepOutputContractRepairMinQualityScore);
+                                                    recordQualityEvidenceGate("step_output_contract_repair_low_quality", appId);
+                                                    sendEvent(emitter, jsonOf(
+                                                        "stage", "agentic_step_contract",
+                                                        "status", "repair_rejected_low_quality",
+                                                        "requestId", requestId,
+                                                        "attempt", repairAttempt,
+                                                        "maxAttempts", repairAttempts,
+                                                        "qualityScore", repairQualityScore,
+                                                        "qualityMin", aiCodeStreamStepOutputContractRepairMinQualityScore,
+                                                        "message", "Repair output duoc tao nhung quality chua dat threshold"
+                                                    ));
+                                                    recordQualityRequestTrace(
+                                                        requestId,
+                                                        appId,
+                                                        "ai-code-stream",
+                                                        "agentic_step_contract",
+                                                        "repair_rejected_low_quality",
+                                                        "step_output_contract_repair_low_quality",
+                                                        responseMode,
+                                                        "local_provider",
+                                                        0L,
+                                                        Map.of(
+                                                            "attempt", repairAttempt,
+                                                            "qualityScore", repairQualityScore,
+                                                            "qualityMin", aiCodeStreamStepOutputContractRepairMinQualityScore
+                                                        )
+                                                    );
+                                                }
+                                                if (repairAccepted && aiLocalEvidenceGateEnabled && !repairEvidenceGate.passed()) {
+                                                    repairAccepted = false;
+                                                }
+                                                if (repairAccepted) {
+                                                    int repairedStepResultCount = emitLocalAgenticStepResults(
+                                                        emitter,
+                                                        requestId,
+                                                        repairText,
+                                                        codeStreamOrchestration.planSteps,
+                                                        responseMode,
+                                                        contextType,
+                                                        effectiveCodeContext,
+                                                        codeStreamMeta);
+                                                    if (repairedStepResultCount > 0) {
+                                                        providerText = repairText;
+                                                        stepResultCount = repairedStepResultCount;
+                                                        repairApplied = true;
+                                                        codeStreamMeta.put("stepOutputContractRepaired", true);
+                                                        codeStreamMeta.put("stepOutputContractRepairAttempt", repairAttempt);
+                                                        codeStreamMeta.put("stepOutputContractRepairMaxAttempts", repairAttempts);
+                                                        codeStreamMeta.put("stepOutputContractRepairQualityScore", repairQualityScore);
+                                                        codeStreamMeta.put("stepOutputContractRepairQualityMin", aiCodeStreamStepOutputContractRepairMinQualityScore);
+                                                        codeStreamMeta.put("stepOutputContractRepairEvidenceScore", repairEvidenceGate.score());
+                                                        codeStreamMeta.put("stepOutputContractRepairEvidenceReason", repairEvidenceGate.reason());
+                                                        recordQualityEvidenceGate("step_output_contract_repair_applied", appId);
+                                                        sendEvent(emitter, jsonOf(
+                                                            "stage", "agentic_step_contract",
+                                                            "status", "repair_applied",
+                                                            "requestId", requestId,
+                                                            "attempt", repairAttempt,
+                                                            "maxAttempts", repairAttempts,
+                                                            "stepResultCount", repairedStepResultCount,
+                                                            "qualityScore", repairQualityScore,
+                                                            "qualityMin", aiCodeStreamStepOutputContractRepairMinQualityScore,
+                                                            "evidenceGateScore", repairEvidenceGate.score(),
+                                                            "evidenceGateReason", repairEvidenceGate.reason(),
+                                                            "message", "Da sua local output dat step-output contract, tiep tuc local streaming"
+                                                        ));
+                                                        recordQualityRequestTrace(
+                                                            requestId,
+                                                            appId,
+                                                            "ai-code-stream",
+                                                            "agentic_step_contract",
+                                                            "repair_applied",
+                                                            "step_output_contract_repair_applied",
+                                                            responseMode,
+                                                            "local_provider",
+                                                            0L,
+                                                            Map.of(
+                                                                "attempt", repairAttempt,
+                                                                "stepResultCount", repairedStepResultCount,
+                                                                "qualityScore", repairQualityScore,
+                                                                "evidenceGateScore", repairEvidenceGate.score(),
+                                                                "evidenceGateReason", repairEvidenceGate.reason()
+                                                            )
+                                                        );
+                                                        emitToolTrace(
+                                                            emitter,
+                                                            requestId,
+                                                            "agentic_step_contract_repair",
+                                                            "completed",
+                                                            "attempt=" + repairAttempt + " repairedStepResults=" + repairedStepResultCount,
+                                                            "evidenceScore=" + repairEvidenceGate.score() + " reason=" + repairEvidenceGate.reason(),
+                                                            0,
+                                                            Math.max(0, repairAttempt - 1),
+                                                            "none",
+                                                            "none",
+                                                            Map.of(
+                                                                "evidenceAnchors", repairEvidenceGate.anchors(),
+                                                                "responseMode", responseModeSafe
+                                                            )
+                                                        );
+                                                        break;
+                                                    }
+                                                }
+                                            } catch (Exception repairEx) {
+                                                logger.debug("Step-output contract repair attempt failed: {}", repairEx.getMessage());
+                                            }
+                                        }
+                                    }
+                                    if (repairApplied) {
+                                        localAccepted = true;
+                                    } else {
+                                        recordQualityEvidenceGate("step_output_contract_violation", appId);
+                                        recordQualityRetryReason("step_output_contract_violation", appId);
+                                        localAccepted = false;
+                                        codeStreamMeta.put("stepOutputContractRepaired", false);
+                                        if (repairAttempts > 0) {
+                                            codeStreamMeta.put("stepOutputContractRepairAttempted", aiCodeStreamStepOutputContractRepairEnabled);
+                                            codeStreamMeta.put("stepOutputContractRepairMaxAttempts", repairAttempts);
+                                            recordQualityEvidenceGate("step_output_contract_repair_failed", appId);
+                                        }
+                                        sendEvent(emitter, jsonOf(
+                                            "stage", "model_switch",
+                                            "status", "local_provider_step_contract_fallback",
+                                            "requestId", requestId,
+                                            "model", "local_provider",
+                                            "modelDecisionStep", "fallback",
+                                            "modelDecisionReason", "step_output_contract_violation",
+                                            "decision_step", "fallback",
+                                            "reason_code", "step_output_contract_violation",
+                                            "responseMode", responseModeSafe,
+                                            "message", "Local provider output khong dat step-output contract, fallback sang streaming model"
+                                        ));
+                                        recordQualityRequestTrace(
+                                            requestId,
+                                            appId,
+                                            "ai-code-stream",
+                                            "model_switch",
+                                            "local_provider_step_contract_fallback",
+                                            "step_output_contract_violation",
+                                            responseMode,
+                                            String.valueOf(effectiveModel == null ? "" : effectiveModel),
+                                            0L,
+                                            Map.of(
+                                                "responseMode", responseModeSafe,
+                                                "repairAttempted", aiCodeStreamStepOutputContractRepairEnabled,
+                                                "repairMaxAttempts", repairAttempts
+                                            )
+                                        );
+                                    }
+                                }
+                            }
+                            if (!localAccepted) {
+                                recordQualityFallback(appId);
+                            } else {
+                                int localStreamChunks = emitSyntheticLocalStreamChunks(
+                                    emitter,
+                                    requestId,
+                                    providerText,
+                                    1,
+                                    false,
+                                    true);
+                                codeStreamMeta.put("streamChunkCount", localStreamChunks);
+                                codeStreamMeta.put("streamedChars", providerText.length());
+                                codeStreamMeta.put("agenticStepResultCount", stepResultCount);
+                                rawResponse = providerText;
+                                effectiveModel = "local_provider";
+                                localProviderPrimaryUsed = true;
+                            }
                         } else {
                             recordQualityFallback(appId);
                             sendEvent(emitter, jsonOf(
@@ -2556,6 +3489,18 @@ public class ApiSpringController {
                                     "reason_code", "local_quality_guard_failed",
                                     "message", "Local provider output khong dat quality gate, fallback sang streaming model",
                                     "messageKey", "copilot.progress.message.local_quality_fallback"));
+                            recordQualityRequestTrace(
+                                requestId,
+                                appId,
+                                "ai-code-stream",
+                                "model_switch",
+                                "local_provider_quality_fallback",
+                                "local_quality_guard_failed",
+                                responseMode,
+                                String.valueOf(effectiveModel == null ? "" : effectiveModel),
+                                0L,
+                                Map.of("fallback", true)
+                            );
                         }
                     } else {
                         recordQualityFallback(appId);
@@ -2570,6 +3515,18 @@ public class ApiSpringController {
                                 "reason_code", "local_provider_failed",
                                 "message", "Local provider khong tra du lieu hop le, fallback sang streaming model",
                                 "messageKey", "copilot.progress.message.local_provider_failed"));
+                        recordQualityRequestTrace(
+                            requestId,
+                            appId,
+                            "ai-code-stream",
+                            "model_switch",
+                            "local_provider_failed",
+                            "local_provider_failed",
+                            responseMode,
+                            String.valueOf(effectiveModel == null ? "" : effectiveModel),
+                            0L,
+                            Map.of("fallback", true)
+                        );
                     }
                 }
 
@@ -2610,6 +3567,18 @@ public class ApiSpringController {
                                     "reason_code", "local_override_use_preanalysis_context",
                                     "message", "Local AI khong tao duoc output cuoi; dung ket qua pre-analysis de tra loi.",
                                     "messageKey", "copilot.progress.message.local_override_use_preanalysis_context"));
+                                recordQualityRequestTrace(
+                                    requestId,
+                                    appId,
+                                    "ai-code-stream",
+                                    "model_switch",
+                                    "local_override_degraded_context",
+                                    "local_override_use_preanalysis_context",
+                                    responseMode,
+                                    "local_provider",
+                                    0L,
+                                    Map.of("degradedChars", degradedLocalText.length())
+                                );
                                 sendEvent(emitter, jsonOf(
                                     "stage", "streaming_started",
                                     "requestId", requestId,
@@ -2645,6 +3614,18 @@ public class ApiSpringController {
                                 "reason_code", "local_override_no_cloud_fallback",
                                 "message", "Local AI không tạo được output. Không chuyển sang cloud (local-only mode).",
                                 "messageKey", "copilot.progress.message.local_override_no_cloud"));
+                            recordQualityRequestTrace(
+                                requestId,
+                                appId,
+                                "ai-code-stream",
+                                "model_switch",
+                                "local_override_blocked_cloud",
+                                "local_override_no_cloud_fallback",
+                                responseMode,
+                                "local_provider",
+                                0L,
+                                Map.of("blocked", true)
+                            );
                             sendErrorEvent(emitter, uiTextByLang(uiLang,
                                 "Local AI không trả lời được yêu cầu này. Vui lòng thử diễn đạt lại câu hỏi.",
                                 "Local AI could not handle this request. Please try rephrasing your question.",
@@ -2667,6 +3648,18 @@ public class ApiSpringController {
                                     "reason_code", "local_hard_route_degraded_local",
                                     "message", "Local-only mode: output local duoc giu lai duoi dang degraded response.",
                                     "messageKey", "copilot.progress.message.local_override_use_preanalysis_context"));
+                                recordQualityRequestTrace(
+                                    requestId,
+                                    appId,
+                                    "ai-code-stream",
+                                    "model_switch",
+                                    "local_hard_route_degraded_local",
+                                    "local_hard_route_degraded_local",
+                                    responseMode,
+                                    "local_provider",
+                                    0L,
+                                    Map.of("degradedChars", degradedLocalText.length())
+                                );
                                 sendEvent(emitter, jsonOf(
                                     "stage", "streaming_started",
                                     "requestId", requestId,
@@ -2702,6 +3695,18 @@ public class ApiSpringController {
                                 "reason_code", "local_hard_route_no_cloud_fallback",
                                 "message", "Local AI không tạo được output đạt chất lượng. Không chuyển sang cloud (local-only mode).",
                                 "messageKey", "copilot.progress.message.local_override_no_cloud"));
+                            recordQualityRequestTrace(
+                                requestId,
+                                appId,
+                                "ai-code-stream",
+                                "model_switch",
+                                "local_hard_route_blocked_cloud",
+                                "local_hard_route_no_cloud_fallback",
+                                responseMode,
+                                "local_provider",
+                                0L,
+                                Map.of("blocked", true)
+                            );
                             sendErrorEvent(emitter, uiTextByLang(uiLang,
                                 "Local AI chưa xử lý được yêu cầu này ở chế độ local-only. Vui lòng rút gọn hoặc chia nhỏ yêu cầu.",
                                 "Local AI could not handle this request in local-only mode. Please simplify or split your request.",
@@ -2719,6 +3724,18 @@ public class ApiSpringController {
                                 "modelDecisionReason", "multimodal_cloud_disabled",
                                 "decision_step", "guard",
                                 "reason_code", "multimodal_cloud_disabled"));
+                            recordQualityRequestTrace(
+                                requestId,
+                                appId,
+                                "ai-code-stream",
+                                "route_policy",
+                                "blocked_cloud_disabled",
+                                "multimodal_cloud_disabled",
+                                responseMode,
+                                "none",
+                                0L,
+                                Map.of("blocked", true)
+                            );
                             sendErrorEvent(emitter, uiTextByLang(uiLang,
                                 "Luồng multimodal cloud đã bị loại bỏ hoàn toàn. Vui lòng bật local vision/local provider để xử lý yêu cầu này.",
                                 "Multimodal cloud path has been removed completely. Please enable local vision/local provider for this request.",
@@ -2743,6 +3760,21 @@ public class ApiSpringController {
                 }
                 if (rawResponse == null) {
                     if (!shouldFallbackToDefaultOnSimpleFailure || hasImages) {
+                        recordQualityRequestTrace(
+                            requestId,
+                            appId,
+                            "ai-code-stream",
+                            "model_switch",
+                            "stream_failed_no_fallback",
+                            hasImages ? "multimodal_no_default_fallback" : "provider_error_no_default_fallback",
+                            responseMode,
+                            String.valueOf(effectiveModel == null ? "" : effectiveModel),
+                            0L,
+                            Map.of(
+                                "hasImages", hasImages,
+                                "shouldFallbackToDefaultOnSimpleFailure", shouldFallbackToDefaultOnSimpleFailure
+                            )
+                        );
                         sendErrorEvent(emitter, "Model streaming lỗi và không thể fallback tự động");
                         return;
                     }
@@ -2758,6 +3790,18 @@ public class ApiSpringController {
                             "reason_code", "provider_error",
                             "message", "Simple model lỗi, tự động chuyển sang model mặc định",
                             "messageKey", "copilot.progress.message.fallback_to_default"));
+                    recordQualityRequestTrace(
+                        requestId,
+                        appId,
+                        "ai-code-stream",
+                        "model_switch",
+                        "fallback_to_default",
+                        "provider_error",
+                        responseMode,
+                        defaultModel,
+                        0L,
+                        Map.of("fromModel", String.valueOf(effectiveModel == null ? "" : effectiveModel))
+                    );
                             recordQualityFallback(appId);
 
                     rawResponse = streamWithAutoContinue(
@@ -2788,6 +3832,18 @@ public class ApiSpringController {
                             "reason_code", "provider_error",
                             "message", "Simple/default stream đều thất bại, chuyển sang provider fallback",
                             "messageKey", "copilot.progress.message.fallback_to_provider"));
+                        recordQualityRequestTrace(
+                            requestId,
+                            appId,
+                            "ai-code-stream",
+                            "model_switch",
+                            "fallback_provider",
+                            "provider_error",
+                            responseMode,
+                            "provider_fallback",
+                            0L,
+                            Map.of("fromModel", defaultModel)
+                        );
                         recordQualityFallback(appId);
 
                         String providerRaw = generateProviderContentWithMenuMasterPrompt(prompt, contextType);
@@ -2906,6 +3962,18 @@ public class ApiSpringController {
                                 "requestId", requestId,
                                 "reason", patchValidation.rejectionReason,
                                 "stats", patchValidation.toMetaMap()));
+                            recordQualityRequestTrace(
+                                requestId,
+                                appId,
+                                "ai-code-stream",
+                                "patch_validator_rejected",
+                                "rejected",
+                                String.valueOf(patchValidation.rejectionReason == null ? "unknown" : patchValidation.rejectionReason),
+                                responseMode,
+                                String.valueOf(effectiveModel == null ? "" : effectiveModel),
+                                0L,
+                                patchValidation.toMetaMap()
+                            );
                             sendErrorEvent(emitter,
                                     "Chuẩn hóa thất bại: AI output không thể canonicalize về line-level textEdits để apply an toàn");
                             return;
@@ -2920,10 +3988,39 @@ public class ApiSpringController {
                                 "requestId", requestId,
                                 "reason", patchDryRun.rejectionReason,
                                 "stats", patchDryRun.toMetaMap()));
+                            recordQualityRequestTrace(
+                                requestId,
+                                appId,
+                                "ai-code-stream",
+                                "patch_dry_run_rejected",
+                                "rejected",
+                                String.valueOf(patchDryRun.rejectionReason == null ? "unknown" : patchDryRun.rejectionReason),
+                                responseMode,
+                                String.valueOf(effectiveModel == null ? "" : effectiveModel),
+                                0L,
+                                patchDryRun.toMetaMap()
+                            );
                             sendErrorEvent(emitter,
                                     "Dry-run thất bại: textEdits có xung đột hoặc không apply an toàn trên currentCode");
                             return;
                         }
+
+                        SemanticSandboxResult semanticSandbox = runSemanticSandboxSimulation(canonicalTextEdits, effectiveCodeContext);
+                        completion.put("semanticSandbox", semanticSandbox.toMetaMap());
+                        sendEvent(emitter, jsonOf(
+                            "stage", "assistant_semantic_sandbox",
+                            "requestId", requestId,
+                            "status", semanticSandbox.blockAutoApply ? "warning" : "done",
+                            "verdict", semanticSandbox.verdict,
+                            "riskScore", semanticSandbox.riskScore,
+                            "riskLevel", semanticSandbox.riskLevel,
+                            "blockAutoApply", semanticSandbox.blockAutoApply,
+                            "reasons", semanticSandbox.reasons,
+                            "stats", semanticSandbox.toMetaMap(),
+                            "message", semanticSandbox.blockAutoApply
+                                ? "Semantic sandbox phát hiện patch có nguy cơ cao, cần review trước khi apply"
+                                : "Semantic sandbox passed: patch có thể apply an toàn"
+                        ));
 
                         completion.put("textEdits", canonicalTextEdits);
                         completion.put("patchValidator", patchValidation.toMetaMap());
@@ -3204,6 +4301,25 @@ public class ApiSpringController {
 
                 logger.info("ApiSpringController: ai-code-stream complete requestId={} appId={} model={} elapsedMs={} outputChars={}",
                     requestId, appId, effectiveModel, (System.currentTimeMillis() - requestStartedAtMs), rawResponse.length());
+                long completionElapsedMs = Math.max(0L, (System.currentTimeMillis() - requestStartedAtMs));
+                recordQualityRequestTrace(
+                    requestId,
+                    appId,
+                    "ai-code-stream",
+                    "request_complete",
+                    "ok",
+                    "completed",
+                    responseMode,
+                    effectiveModel,
+                    completionElapsedMs,
+                    Map.of(
+                        "outputChars", rawResponse.length(),
+                        "promptTokens", promptTokens,
+                        "completionTokens", completionTokens,
+                        "providerFallbackUsed", providerFallbackUsed,
+                        "localProviderPrimaryUsed", localProviderPrimaryUsed
+                    )
+                );
                 int completionStreamedChars = parseIntSafe(codeStreamMeta.get("streamedChars"), 0);
                 int completionStreamChunkCount = parseIntSafe(codeStreamMeta.get("streamChunkCount"), 0);
                 emitRequestCompleteEvent(
@@ -3228,6 +4344,18 @@ public class ApiSpringController {
                 if (cancelled) {
                     logger.info("ApiSpringController: ai-code-stream cancelled requestId={} reason={}",
                         activeRequestIdRef.get(), String.valueOf(ex.getMessage()));
+                    recordQualityRequestTrace(
+                        String.valueOf(activeRequestIdRef.get() == null ? "" : activeRequestIdRef.get()),
+                        "",
+                        "ai-code-stream",
+                        "request_complete",
+                        "cancelled",
+                        "request_cancelled",
+                        "unknown",
+                        "unknown",
+                        0L,
+                        Map.of("error", String.valueOf(ex.getMessage() == null ? "" : ex.getMessage()))
+                    );
                     try {
                         sendEvent(emitter, jsonOf(
                             "stage", "cancelled",
@@ -3244,6 +4372,18 @@ public class ApiSpringController {
                     return;
                 }
                 logger.error("ApiSpringController: ai-code-stream unexpected error: {}", ex.getMessage(), ex);
+                recordQualityRequestTrace(
+                    String.valueOf(activeRequestIdRef.get() == null ? "" : activeRequestIdRef.get()),
+                    "",
+                    "ai-code-stream",
+                    "request_complete",
+                    "error",
+                    "unexpected_error",
+                    "unknown",
+                    "unknown",
+                    0L,
+                    Map.of("error", String.valueOf(ex.getMessage() == null ? "" : ex.getMessage()))
+                );
                 if (streamCompletedRef.get()) {
                     logger.warn("ApiSpringController: ai-code-stream post-complete follow-up failed requestId={} error={}",
                         activeRequestIdRef.get(), ex.getMessage());
@@ -4928,8 +6068,16 @@ public class ApiSpringController {
                 }
             }
             if (sections.size() <= 1) {
-                writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
-                return 0; // Nothing to split — single-block text, keep as-is
+                StepEvidenceVerdict singleEvidence = verifyAnalyzeStepEvidence(safeText, effectiveCodeContext, true);
+                int singleScore = singleEvidence.score();
+                boolean singleAccepted = passesStepEvidence(singleEvidence, verifierPolicy);
+                if (!singleAccepted && verifierEnabled) {
+                    writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
+                    return 0;
+                }
+                sections = new ArrayList<>(List.of(safeText));
+                stepStatsOut.put("analyzeStepContractNormalized", true);
+                reasonCounts.merge("single_block_normalized", 1, Integer::sum);
             }
             int total = sections.size();
             for (int i = 0; i < total; i++) {
@@ -6435,6 +7583,34 @@ public class ApiSpringController {
         }
     }
 
+    private void recordQualityRequestTrace(
+            String requestId,
+            String appId,
+            String flow,
+            String stage,
+            String status,
+            String reasonCode,
+            String responseMode,
+            String model,
+            long elapsedMs,
+            Map<String, Object> meta) {
+        try {
+            aiQualityMetricsService.recordRequestTrace(
+                requestId,
+                flow,
+                stage,
+                status,
+                reasonCode,
+                appId,
+                responseMode,
+                model,
+                elapsedMs,
+                meta);
+        } catch (Exception ex) {
+            logger.debug("Quality metrics request trace record failed: {}", ex.getMessage());
+        }
+    }
+
     private void handleLocalOrchestrationFailureRetry(
             SseEmitter emitter,
             String requestId,
@@ -7443,6 +8619,42 @@ public class ApiSpringController {
         }
     }
 
+    private static class SemanticSandboxResult {
+        boolean enabled = false;
+        int inputCount;
+        int touchedLines;
+        int baseLines;
+        double touchedLineRatio;
+        int baseChars;
+        int simulatedChars;
+        double outputRatio;
+        int riskScore;
+        String riskLevel = "low";
+        boolean blockAutoApply;
+        String verdict = "passed";
+        String rejectionReason = "none";
+        List<String> reasons = Collections.emptyList();
+
+        Map<String, Object> toMetaMap() {
+            Map<String, Object> meta = new LinkedHashMap<>();
+            meta.put("enabled", enabled);
+            meta.put("inputCount", inputCount);
+            meta.put("touchedLines", touchedLines);
+            meta.put("baseLines", baseLines);
+            meta.put("touchedLineRatio", touchedLineRatio);
+            meta.put("baseChars", baseChars);
+            meta.put("simulatedChars", simulatedChars);
+            meta.put("outputRatio", outputRatio);
+            meta.put("riskScore", riskScore);
+            meta.put("riskLevel", riskLevel);
+            meta.put("blockAutoApply", blockAutoApply);
+            meta.put("verdict", verdict);
+            meta.put("rejectionReason", rejectionReason);
+            meta.put("reasons", reasons == null ? List.of() : reasons);
+            return meta;
+        }
+    }
+
     private List<Map<String, Object>> applyDeltaFirstAntiEchoLineTextEdits(
             List<Map<String, Object>> textEdits,
             String baseCode) {
@@ -7588,6 +8800,111 @@ public class ApiSpringController {
             }
         }
 
+        return result;
+    }
+
+    private SemanticSandboxResult runSemanticSandboxSimulation(
+            List<Map<String, Object>> acceptedTextEdits,
+            String baseCode) {
+        SemanticSandboxResult result = new SemanticSandboxResult();
+        result.enabled = aiCodeStreamEditSemanticSandboxEnabled;
+        result.inputCount = acceptedTextEdits == null ? 0 : acceptedTextEdits.size();
+        String code = String.valueOf(baseCode == null ? "" : baseCode);
+        result.baseChars = code.length();
+        result.baseLines = Math.max(1, countLines(code));
+
+        if (!aiCodeStreamEditSemanticSandboxEnabled) {
+            result.verdict = "disabled";
+            result.rejectionReason = "sandbox_disabled";
+            return result;
+        }
+        if (acceptedTextEdits == null || acceptedTextEdits.isEmpty()) {
+            result.verdict = "failed";
+            result.rejectionReason = "empty_input";
+            result.riskScore = 100;
+            result.riskLevel = "high";
+            result.blockAutoApply = true;
+            result.reasons = List.of("empty_accepted_edits");
+            return result;
+        }
+
+        int touchedLines = 0;
+        int deleteOps = 0;
+        for (Map<String, Object> edit : acceptedTextEdits) {
+            if (edit == null || edit.isEmpty()) {
+                continue;
+            }
+            int startLine = Math.max(1, parseIntOrDefault(edit.get("startLine"), 1));
+            int endLine = Math.max(startLine, parseIntOrDefault(edit.get("endLine"), startLine));
+            touchedLines += Math.max(1, endLine - startLine + 1);
+            String action = String.valueOf(edit.getOrDefault("action", "edit")).trim().toLowerCase(Locale.ROOT);
+            if ("delete".equals(action)) {
+                deleteOps += 1;
+            }
+        }
+        result.touchedLines = touchedLines;
+        result.touchedLineRatio = Math.max(0d, Math.min(1d, touchedLines / (double) Math.max(1, result.baseLines)));
+
+        String simulated = simulateApplyLineTextEdits(code, acceptedTextEdits);
+        result.simulatedChars = simulated.length();
+        if (result.baseChars >= Math.max(200, aiCodeStreamEditSemanticSandboxMinBaseChars)) {
+            result.outputRatio = result.simulatedChars / (double) Math.max(1, result.baseChars);
+        } else {
+            result.outputRatio = 1.0d;
+        }
+
+        int score = 0;
+        List<String> reasons = new ArrayList<>();
+
+        double highTouchRatio = Math.max(0.15d, Math.min(0.95d, aiCodeStreamEditSemanticSandboxTouchRatioHigh));
+        double mediumTouchRatio = Math.max(0.10d, Math.min(highTouchRatio, aiCodeStreamEditSemanticSandboxTouchRatioMedium));
+        if (result.touchedLineRatio >= highTouchRatio) {
+            score += 42;
+            reasons.add("large_surface_change");
+        } else if (result.touchedLineRatio >= mediumTouchRatio) {
+            score += 24;
+            reasons.add("medium_surface_change");
+        }
+
+        if (deleteOps > Math.max(1, acceptedTextEdits.size() / 2)) {
+            score += 22;
+            reasons.add("delete_heavy_patch");
+        }
+
+        double outputRatioFloor = Math.max(0.03d, Math.min(0.5d, aiCodeStreamEditSemanticSandboxOutputRatioFloor));
+        if (result.outputRatio < outputRatioFloor) {
+            score += 36;
+            reasons.add("output_ratio_too_low");
+        }
+
+        if (result.simulatedChars <= 0 || simulated.isBlank()) {
+            score += 48;
+            reasons.add("empty_after_simulation");
+        }
+
+        if (acceptedTextEdits.size() >= 60) {
+            score += 12;
+            reasons.add("high_edit_count");
+        }
+
+        result.riskScore = Math.max(0, Math.min(100, score));
+        if (result.riskScore >= 72) {
+            result.riskLevel = "high";
+            result.blockAutoApply = true;
+            result.verdict = "warning";
+            result.rejectionReason = reasons.isEmpty() ? "high_risk" : reasons.get(0);
+        } else if (result.riskScore >= 42) {
+            result.riskLevel = "medium";
+            result.blockAutoApply = false;
+            result.verdict = "review";
+            result.rejectionReason = reasons.isEmpty() ? "medium_risk" : reasons.get(0);
+        } else {
+            result.riskLevel = "low";
+            result.blockAutoApply = false;
+            result.verdict = "passed";
+            result.rejectionReason = "none";
+        }
+        result.reasons = reasons;
         return result;
     }
 
@@ -7932,6 +9249,46 @@ public class ApiSpringController {
      * Build a focused verify-fix prompt based on rejection reason.
      * Returns a narrow, targeted prompt for 1-round local repair.
      */
+    private String buildStepOutputContractRepairPrompt(
+        String userMessage,
+        String localOutput,
+        String baseCode,
+        String responseMode,
+        String contextType,
+        int attempt,
+        int maxAttempts
+    ) {
+        String request = String.valueOf(userMessage == null ? "" : userMessage).trim();
+        String output = String.valueOf(localOutput == null ? "" : localOutput).trim();
+        String code = String.valueOf(baseCode == null ? "" : baseCode);
+        String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
+        String ctx = String.valueOf(contextType == null ? "" : contextType).trim();
+        if (request.isBlank() || output.isBlank()) {
+            return "";
+        }
+
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("You are repairing a LOCAL_PROVIDER output that violated structured step-output contract.\n");
+        prompt.append("Attempt: ").append(Math.max(1, attempt)).append("/").append(Math.max(1, maxAttempts)).append("\n");
+        prompt.append("Response mode: ").append(mode).append(" | Context type: ").append(ctx).append("\n\n");
+        prompt.append("Rules:\n");
+        prompt.append("1) Keep answer grounded in CURRENT_CODE only.\n");
+        prompt.append("2) Output must be directly actionable and structured, not generic explanation.\n");
+        prompt.append("3) If mode=edit, produce SEARCH/REPLACE or line-level text edits blocks with enough detail to apply patch.\n");
+        prompt.append("4) If mode=analyze, produce explicit step-by-step findings tied to concrete code anchors.\n");
+        prompt.append("5) Do not output policy/system chatter.\n\n");
+
+        prompt.append("[USER_REQUEST]\n").append(truncate(request, 1200)).append("\n\n");
+        if (!code.isBlank()) {
+            prompt.append("[CURRENT_CODE_SNIPPET]\n");
+            prompt.append("```\n").append(truncate(code, 2200)).append("\n```\n\n");
+        }
+        prompt.append("[PREVIOUS_LOCAL_OUTPUT_REJECTED]\n");
+        prompt.append("```\n").append(truncate(output, 1500)).append("\n```\n\n");
+        prompt.append("Now return a repaired output that satisfies structured step contract.");
+        return prompt.toString();
+    }
+
     private String buildEditVerifyFixPrompt(String rejectionReason, String aiOutput, String baseCode) {
         String reason = String.valueOf(rejectionReason == null ? "unknown" : rejectionReason).trim().toLowerCase(Locale.ROOT);
         String code = String.valueOf(baseCode == null ? "" : baseCode);
@@ -8344,6 +9701,742 @@ public class ApiSpringController {
         } catch (Exception ignored) {
             // tool trace is telemetry-only; never block main stream
         }
+    }
+
+    private boolean shouldAttemptOrchestrationEvidenceRefine(AiLocalOrchestrationService.OrchestrationResult result) {
+        if (!aiLocalOrchestrationEvidenceRefineEnabled || result == null || !result.enabled) {
+            return false;
+        }
+        if (result.earlyFinishResponse != null && !result.earlyFinishResponse.isBlank()) {
+            return false;
+        }
+        if (result.compressedContextBlock == null || result.compressedContextBlock.isBlank()) {
+            return false;
+        }
+        OrchestrationEvidenceSnapshot snapshot = snapshotOrchestrationEvidence(result);
+        boolean ragLow = snapshot.scopedRagChars() < Math.max(400, aiLocalOrchestrationEvidenceRefineMinScopedRagChars);
+        boolean planLow = snapshot.planVerifierScore() < Math.max(30, aiLocalOrchestrationEvidenceRefineMinPlanScore);
+        return ragLow || planLow || !snapshot.planVerifierPassed() || !snapshot.planSchemaPassed();
+    }
+
+    private OrchestrationEvidenceSnapshot snapshotOrchestrationEvidence(AiLocalOrchestrationService.OrchestrationResult result) {
+        Map<String, Object> stats = result == null || result.toolStats == null
+            ? Collections.emptyMap()
+            : result.toolStats;
+        int scopedRagChars = parseIntSafe(stats.get("scopedRagChars"), 0);
+        int planVerifierScore = parseIntSafe(stats.get("planVerifierScore"), 0);
+        int planSchemaScore = parseIntSafe(stats.get("planSchemaScore"), 0);
+        boolean planVerifierPassed = bool(stats.get("planVerifierPassed"), true);
+        boolean planSchemaPassed = bool(stats.get("planSchemaPassed"), true);
+        int score = computeOrchestrationEvidenceScore(
+            scopedRagChars,
+            planVerifierScore,
+            planSchemaScore,
+            planVerifierPassed,
+            planSchemaPassed);
+        int unifiedConfidence = computeUnifiedOrchestrationConfidence(
+            score,
+            scopedRagChars,
+            planVerifierScore,
+            planSchemaScore,
+            planVerifierPassed,
+            planSchemaPassed
+        );
+        return new OrchestrationEvidenceSnapshot(
+            scopedRagChars,
+            planVerifierScore,
+            planSchemaScore,
+            planVerifierPassed,
+            planSchemaPassed,
+            score,
+            unifiedConfidence
+        );
+    }
+
+    private int computeUnifiedOrchestrationConfidence(
+        int evidenceScore,
+        int scopedRagChars,
+        int planVerifierScore,
+        int planSchemaScore,
+        boolean planVerifierPassed,
+        boolean planSchemaPassed
+    ) {
+        int retrievalStrength = Math.max(0, Math.min(100, (scopedRagChars * 100) / Math.max(1, aiLocalOrchestrationEvidenceRefineMinScopedRagChars * 2)));
+        int verifierStrength = Math.max(0, Math.min(100, Math.max(planVerifierScore, planSchemaScore)));
+        int gatePenalty = (!planVerifierPassed || !planSchemaPassed) ? 10 : 0;
+        int score = Math.round((evidenceScore * 0.45f) + (retrievalStrength * 0.30f) + (verifierStrength * 0.25f)) - gatePenalty;
+        return Math.max(0, Math.min(100, score));
+    }
+
+    private boolean hasMeaningfulEvidenceGain(
+        OrchestrationEvidenceSnapshot base,
+        OrchestrationEvidenceSnapshot refined
+    ) {
+        if (base == null || refined == null) {
+            return false;
+        }
+        int minGain = Math.max(1, aiLocalOrchestrationEvidenceRefineMinScoreGain);
+        if (refined.unifiedConfidence() >= base.unifiedConfidence() + minGain) {
+            return true;
+        }
+        if (refined.score() >= base.score() + minGain) {
+            return true;
+        }
+        return refined.scopedRagChars() >= base.scopedRagChars() + 400;
+    }
+
+    private int computeOrchestrationEvidenceScore(
+        int scopedRagChars,
+        int planVerifierScore,
+        int planSchemaScore,
+        boolean planVerifierPassed,
+        boolean planSchemaPassed
+    ) {
+        int ragScore = Math.max(0, Math.min(35, scopedRagChars / 120));
+        int verifierScore = Math.max(0, Math.min(40, Math.round(Math.max(0, planVerifierScore) * 0.40f)));
+        int schemaScore = Math.max(0, Math.min(20, Math.round(Math.max(0, planSchemaScore) * 0.20f)));
+        int passBonus = (planVerifierPassed ? 3 : 0) + (planSchemaPassed ? 2 : 0);
+        return Math.max(0, Math.min(100, ragScore + verifierScore + schemaScore + passBonus));
+    }
+
+    private boolean shouldPromoteRefinedOrchestration(
+        OrchestrationEvidenceSnapshot base,
+        OrchestrationEvidenceSnapshot refined,
+        AiLocalOrchestrationService.OrchestrationResult baseResult,
+        AiLocalOrchestrationService.OrchestrationResult refinedResult
+    ) {
+        if (refinedResult == null || !refinedResult.enabled) {
+            return false;
+        }
+        if (refinedResult.compressedContextBlock == null || refinedResult.compressedContextBlock.isBlank()) {
+            return false;
+        }
+        if (baseResult == null || !baseResult.enabled) {
+            return true;
+        }
+        if (refined.score() >= base.score() + 4) {
+            return true;
+        }
+        int minGain = Math.max(1, aiLocalOrchestrationEvidenceRefineMinScoreGain);
+        if (refined.unifiedConfidence() >= base.unifiedConfidence() + minGain
+            && refined.unifiedConfidence() >= Math.max(35, aiLocalOrchestrationUnifiedConfidenceMinPromote)) {
+            return true;
+        }
+        if (refined.scopedRagChars() >= base.scopedRagChars() + 320
+            && refined.planVerifierScore() >= Math.max(0, base.planVerifierScore() - 4)) {
+            return true;
+        }
+        return refined.planVerifierPassed() && !base.planVerifierPassed();
+    }
+
+    private String buildOrchestrationRefineMessage(
+        String message,
+        String codeContext,
+        AiLocalOrchestrationService.OrchestrationResult current,
+        int refineAttempt
+    ) {
+        List<String> anchors = extractTopTokens(
+            String.valueOf(message == null ? "" : message)
+                + "\n"
+                + truncateMiddle(String.valueOf(codeContext == null ? "" : codeContext), 3200),
+            8
+        );
+        String anchorLine = anchors.isEmpty() ? "none" : String.join(", ", anchors);
+        int currentRagChars = current == null || current.toolStats == null
+            ? 0
+            : parseIntSafe(current.toolStats.get("scopedRagChars"), 0);
+        int currentPlanScore = current == null || current.toolStats == null
+            ? 0
+            : parseIntSafe(current.toolStats.get("planVerifierScore"), 0);
+        return String.valueOf(message == null ? "" : message)
+            + "\n\n[ORCHESTRATION_EVIDENCE_REFINE]"
+            + "\n- attempt=" + Math.max(1, refineAttempt)
+            + "\n- current_scoped_rag_chars=" + currentRagChars
+            + "\n- current_plan_score=" + currentPlanScore
+            + "\n- anchor_terms=" + anchorLine
+            + "\n- refine_goal=prioritize exact symbols/types and retrieval scope that directly maps to current request";
+    }
+
+    private boolean shouldAttemptToolDagReplanExecution(AiLocalOrchestrationService.OrchestrationResult result) {
+        if (!aiLocalOrchestrationToolDagReplanEnabled || result == null || !result.enabled) {
+            return false;
+        }
+        if (result.earlyFinishResponse != null && !result.earlyFinishResponse.isBlank()) {
+            return false;
+        }
+        if (result.compressedContextBlock == null || result.compressedContextBlock.isBlank()) {
+            return false;
+        }
+        Map<String, Object> stats = result.toolStats == null ? Collections.emptyMap() : result.toolStats;
+        if (!bool(stats.get("toolDagEnabled"), false)) {
+            return false;
+        }
+        OrchestrationEvidenceSnapshot snapshot = snapshotOrchestrationEvidence(result);
+        int minPromote = Math.max(35, aiLocalOrchestrationUnifiedConfidenceMinPromote);
+        return snapshot.unifiedConfidence() < minPromote || !snapshot.planVerifierPassed() || !snapshot.planSchemaPassed();
+    }
+
+    private String buildOrchestrationToolDagReplanMessage(
+        String message,
+        String codeContext,
+        AiLocalOrchestrationService.OrchestrationResult current,
+        List<String> replanSteps
+    ) {
+        String safeMessage = String.valueOf(message == null ? "" : message);
+        String safeCode = String.valueOf(codeContext == null ? "" : codeContext);
+        List<String> anchors = extractTopTokens(
+            safeMessage + "\n" + truncateMiddle(safeCode, 3200),
+            8
+        );
+        String anchorLine = anchors.isEmpty() ? "none" : String.join(", ", anchors);
+        OrchestrationEvidenceSnapshot snapshot = snapshotOrchestrationEvidence(current);
+        StringBuilder sb = new StringBuilder();
+        sb.append(safeMessage)
+            .append("\n\n[ORCHESTRATION_TOOL_DAG_REPLAN]")
+            .append("\n- current_unified_confidence=").append(snapshot.unifiedConfidence())
+            .append("\n- target_unified_confidence>=").append(Math.max(35, aiLocalOrchestrationUnifiedConfidenceMinPromote))
+            .append("\n- current_scoped_rag_chars=").append(snapshot.scopedRagChars())
+            .append("\n- current_plan_score=").append(snapshot.planVerifierScore())
+            .append("\n- anchor_terms=").append(anchorLine)
+            .append("\n- replan_steps=");
+
+        List<String> safeSteps = replanSteps == null ? List.of() : replanSteps;
+        int cap = Math.max(2, aiLocalOrchestrationToolDagReplanMaxSteps);
+        int idx = 1;
+        for (String step : safeSteps) {
+            if (idx > cap) {
+                break;
+            }
+            String row = String.valueOf(step == null ? "" : step).trim();
+            if (row.isBlank()) {
+                continue;
+            }
+            sb.append("\n  ").append(idx).append('.').append(' ').append(compactToolDigest(row, 180));
+            idx += 1;
+        }
+        sb.append("\n- refine_goal=execute replan candidates then rebuild scoped retrieval evidence for final generation");
+        return sb.toString();
+    }
+
+    private void emitCopilotStyleDecisionNarrative(
+        SseEmitter emitter,
+        String requestId,
+        String message,
+        String contextType,
+        String responseMode,
+        AiLocalOrchestrationService.OrchestrationResult orchestration,
+        Map<String, Object> attachmentStats
+    ) {
+        if (!aiLocalOrchestrationDecisionNarrativeEnabled || orchestration == null || !orchestration.enabled) {
+            return;
+        }
+        Map<String, Object> stats = orchestration.toolStats == null ? Collections.emptyMap() : orchestration.toolStats;
+        int routeScore = Math.max(0, Math.min(100, parseIntSafe(stats.get("planVerifierScore"), 0)));
+        int unifiedConfidence = parseIntSafe(stats.get("unifiedConfidenceScore"), snapshotOrchestrationEvidence(orchestration).unifiedConfidence());
+        String routeName = String.valueOf(orchestration.routingTier == null ? "solver_balanced" : orchestration.routingTier);
+        String routeReason = String.valueOf(stats.getOrDefault("retrievalPolicy", stats.getOrDefault("planVerifierVerdict", "local_agentic")));
+        sendEvent(emitter, jsonOf(
+            "stage", "assistant_route_plan",
+            "status", "done",
+            "requestId", requestId,
+            "routeName", routeName,
+            "routeReason", routeReason,
+            "routeConfidence", routeScore,
+            "unifiedConfidence", unifiedConfidence
+        ));
+
+        List<Map<String, Object>> tools = new ArrayList<>();
+        tools.add(Map.of(
+            "intent", "attachment_intake",
+            "reason", "normalize_inline_attachments",
+            "expectedEvidence", "attachments_stats"
+        ));
+        tools.add(Map.of(
+            "intent", "search_scoped_context",
+            "reason", String.valueOf(stats.getOrDefault("scopedRagQuery", compactToolDigest(String.valueOf(message == null ? "" : message), 120))),
+            "expectedEvidence", "scoped_rag_hits"
+        ));
+        if (bool(stats.get("symbolAwareRetrievalEnabled"), false)) {
+            tools.add(Map.of(
+                "intent", "symbol_aware_retrieval",
+                "reason", "code_symbols_first",
+                "expectedEvidence", "symbol_context"
+            ));
+        }
+        if (bool(stats.get("typeAwareInjectionEnabled"), false)) {
+            tools.add(Map.of(
+                "intent", "type_aware_injection",
+                "reason", "type_hints_boost",
+                "expectedEvidence", "type_catalog"
+            ));
+        }
+        int maxTools = Math.max(2, aiLocalOrchestrationDecisionNarrativeMaxTools);
+        if (tools.size() > maxTools) {
+            tools = new ArrayList<>(tools.subList(0, maxTools));
+        }
+        sendEvent(emitter, jsonOf(
+            "stage", "assistant_tool_intent_plan",
+            "status", "done",
+            "requestId", requestId,
+            "toolCount", tools.size(),
+            "tools", tools,
+            "contextType", String.valueOf(contextType == null ? "" : contextType),
+            "responseMode", String.valueOf(responseMode == null ? "" : responseMode),
+            "attachmentTotal", parseIntSafe(attachmentStats == null ? null : attachmentStats.get("total"), 0)
+        ));
+
+        for (Map<String, Object> tool : tools) {
+            sendEvent(emitter, jsonOf(
+                "stage", "assistant_tool_execution_result",
+                "status", "planned",
+                "requestId", requestId,
+                "toolName", String.valueOf(tool.getOrDefault("intent", "tool")),
+                "intent", String.valueOf(tool.getOrDefault("intent", "tool")),
+                "successOutput", true,
+                "durationMs", 0,
+                "reason", String.valueOf(tool.getOrDefault("reason", ""))
+            ));
+        }
+
+        OrchestrationEvidenceSnapshot snapshot = snapshotOrchestrationEvidence(orchestration);
+        sendEvent(emitter, jsonOf(
+            "stage", "assistant_verify_result",
+            "status", snapshot.planVerifierPassed() ? "passed" : "needs_refine",
+            "requestId", requestId,
+            "verificationScore", snapshot.score(),
+            "unifiedConfidence", snapshot.unifiedConfidence(),
+            "verificationPassed", snapshot.planVerifierPassed() && snapshot.planSchemaPassed(),
+            "verificationVerdict", snapshot.planVerifierPassed() && snapshot.planSchemaPassed() ? "ready_for_generation" : "partial_evidence",
+            "evidenceTokens", extractTopTokens(String.valueOf(message == null ? "" : message), 4)
+        ));
+    }
+
+    private void emitToolDagLifecycle(
+        SseEmitter emitter,
+        String requestId,
+        AiLocalOrchestrationService.OrchestrationResult orchestration
+    ) {
+        if (orchestration == null || orchestration.toolStats == null || orchestration.toolStats.isEmpty()) {
+            return;
+        }
+        Map<String, Object> stats = orchestration.toolStats;
+        if (!bool(stats.get("toolDagEnabled"), false)) {
+            return;
+        }
+        List<Map<String, Object>> nodes = listOfMap(stats.get("toolDagNodes"));
+        if (nodes.isEmpty()) {
+            return;
+        }
+        Map<String, Object> stopPolicy = asMap(stats.get("toolDagStopPolicy"));
+        int nodeCount = nodes.size();
+        int estimatedMs = Math.max(300, nodeCount * 180);
+        int scopedRagChars = parseIntSafe(stats.get("scopedRagChars"), 0);
+        int planVerifierScore = parseIntSafe(stats.get("planVerifierScore"), 0);
+        int planSchemaScore = parseIntSafe(stats.get("planSchemaScore"), 0);
+        double baseConfidence = resolveToolDagBaseConfidence(stopPolicy, stats);
+        double stepBoost = Math.max(0.01d, Math.min(0.2d, aiLocalOrchestrationToolDagAdaptiveStepConfidenceBoost));
+        double evidenceBoost = Math.max(0d, Math.min(0.18d,
+            (Math.max(0, scopedRagChars) / 18000d) * 0.08d
+                + (Math.max(0, planVerifierScore) / 100d) * 0.06d
+                + (Math.max(0, planSchemaScore) / 100d) * 0.04d));
+        sendEvent(emitter, jsonOf(
+            "stage", "assistant_orchestration_plan",
+            "status", "completed",
+            "requestId", requestId,
+            "stepCount", nodeCount,
+            "estimatedTimeMs", estimatedMs,
+            "category", String.valueOf(orchestration.routingTier == null ? "local_agentic" : orchestration.routingTier),
+            "stopPolicy", stopPolicy,
+            "adaptive", aiLocalOrchestrationToolDagAdaptiveEnabled,
+            "baseConfidence", baseConfidence
+        ));
+
+        double runningConfidence = baseConfidence;
+        int stepIndex = 1;
+        for (Map<String, Object> node : nodes) {
+            String stepName = String.valueOf(node.getOrDefault("intent", node.getOrDefault("tool", "step"))).trim();
+            String toolName = String.valueOf(node.getOrDefault("tool", "tool")).trim();
+            String stopCondition = String.valueOf(node.getOrDefault("stopCondition", "")).trim();
+            double nodeMinConfidence = parseDoubleSafe(node.get("minConfidence"), 0.0d);
+            sendEvent(emitter, jsonOf(
+                "stage", "assistant_orchestration_step_result",
+                "status", "running",
+                "requestId", requestId,
+                "stepName", stepName,
+                "operation", toolName,
+                "durationMs", 0,
+                "progressPercent", Math.max(1, Math.min(99, ((stepIndex - 1) * 100) / Math.max(1, nodeCount))),
+                "stepIndex", stepIndex,
+                "stepTotal", nodeCount,
+                "stopCondition", stopCondition,
+                "nodeMinConfidence", nodeMinConfidence,
+                "currentConfidence", runningConfidence
+            ));
+
+            double projectedConfidence = Math.max(0d, Math.min(1d,
+                runningConfidence + evidenceBoost + (stepBoost * (stepIndex / (double) Math.max(1, nodeCount)))));
+            boolean passGate = projectedConfidence >= Math.max(0.01d, nodeMinConfidence);
+            if (!passGate && aiLocalOrchestrationToolDagAdaptiveEnabled) {
+                List<String> replanSteps = buildToolDagReplanSteps(stats, stepName, toolName);
+                sendEvent(emitter, jsonOf(
+                    "stage", "assistant_orchestration_step_result",
+                    "status", "skipped",
+                    "requestId", requestId,
+                    "stepName", stepName,
+                    "operation", toolName,
+                    "durationMs", 0,
+                    "progressPercent", Math.max(1, Math.min(99, (stepIndex * 100) / Math.max(1, nodeCount))),
+                    "stepIndex", stepIndex,
+                    "stepTotal", nodeCount,
+                    "stopCondition", stopCondition,
+                    "nodeMinConfidence", nodeMinConfidence,
+                    "currentConfidence", projectedConfidence,
+                    "reason", "low_confidence_gate"
+                ));
+                if (aiLocalOrchestrationToolDagReplanEnabled && !replanSteps.isEmpty()) {
+                    sendEvent(emitter, jsonOf(
+                        "stage", "assistant_orchestration_replan",
+                        "status", "running",
+                        "requestId", requestId,
+                        "failedStep", stepName,
+                        "failedOperation", toolName,
+                        "reason", "low_confidence_gate",
+                        "currentConfidence", projectedConfidence,
+                        "requiredConfidence", nodeMinConfidence,
+                        "candidateSteps", replanSteps,
+                        "stepIndex", stepIndex,
+                        "stepTotal", nodeCount
+                    ));
+                }
+                if (aiLocalOrchestrationToolDagAdaptiveStopOnLowConfidence) {
+                    break;
+                }
+            } else {
+                runningConfidence = Math.max(runningConfidence, projectedConfidence);
+                sendEvent(emitter, jsonOf(
+                    "stage", "assistant_orchestration_step_result",
+                    "status", "success",
+                    "requestId", requestId,
+                    "stepName", stepName,
+                    "operation", toolName,
+                    "durationMs", 0,
+                    "progressPercent", Math.max(1, Math.min(99, (stepIndex * 100) / Math.max(1, nodeCount))),
+                    "stepIndex", stepIndex,
+                    "stepTotal", nodeCount,
+                    "stopCondition", stopCondition,
+                    "nodeMinConfidence", nodeMinConfidence,
+                    "currentConfidence", runningConfidence
+                ));
+            }
+            stepIndex += 1;
+        }
+    }
+
+    private List<String> buildToolDagReplanSteps(Map<String, Object> stats, String failedStepName, String failedToolName) {
+        List<String> out = new ArrayList<>();
+        out.add("Refine scoped retrieval query with missing intent anchors from failed step "
+            + String.valueOf(failedStepName == null ? "unknown" : failedStepName));
+
+        List<String> verifierMissing = listOfString(stats.get("planVerifierMissing"), 6);
+        List<String> schemaMissing = listOfString(stats.get("planSchemaMissing"), 6);
+        for (String miss : verifierMissing) {
+            if (out.size() >= Math.max(2, aiLocalOrchestrationToolDagReplanMaxSteps)) {
+                break;
+            }
+            out.add("Inject verifier signal: " + compactToolDigest(miss, 90));
+        }
+        for (String miss : schemaMissing) {
+            if (out.size() >= Math.max(2, aiLocalOrchestrationToolDagReplanMaxSteps)) {
+                break;
+            }
+            out.add("Patch schema grounding signal: " + compactToolDigest(miss, 90));
+        }
+        if (out.size() < Math.max(2, aiLocalOrchestrationToolDagReplanMaxSteps)) {
+            out.add("Fallback to symbol-aware + lucene hybrid retrieval before retrying "
+                + String.valueOf(failedToolName == null ? "tool" : failedToolName));
+        }
+        int cap = Math.max(2, aiLocalOrchestrationToolDagReplanMaxSteps);
+        if (out.size() > cap) {
+            return new ArrayList<>(out.subList(0, cap));
+        }
+        return out;
+    }
+
+    private double resolveToolDagBaseConfidence(Map<String, Object> stopPolicy, Map<String, Object> stats) {
+        double fromPolicy = parseDoubleSafe(stopPolicy.get("currentConfidence"), -1d);
+        if (fromPolicy >= 0d) {
+            return Math.max(0d, Math.min(1d, fromPolicy));
+        }
+        int unifiedConfidence = parseIntSafe(stats.get("unifiedConfidenceScore"), 0);
+        return Math.max(0d, Math.min(1d, unifiedConfidence / 100d));
+    }
+
+    private double parseDoubleSafe(Object raw, double fallback) {
+        if (raw == null) {
+            return fallback;
+        }
+        if (raw instanceof Number number) {
+            return number.doubleValue();
+        }
+        try {
+            return Double.parseDouble(String.valueOf(raw).trim());
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private MultiFilePatchPlanPreview buildMultiFilePatchPlanPreview(
+        String message,
+        String codeContext,
+        List<Map<String, Object>> attachments,
+        String language,
+        AiLocalOrchestrationService.OrchestrationResult orchestration
+    ) {
+        if (!aiLocalOrchestrationMultiFilePlanEnabled) {
+            return new MultiFilePatchPlanPreview(false, List.of(), List.of(), List.of(), 0, "disabled", "feature_disabled");
+        }
+        Map<String, Integer> signalScores = new LinkedHashMap<>();
+        addFileSignalsFromText(signalScores, String.valueOf(message == null ? "" : message), 3);
+        addFileSignalsFromText(signalScores, String.valueOf(codeContext == null ? "" : codeContext), 2);
+
+        String safeLanguage = String.valueOf(language == null ? "" : language).trim().toLowerCase(Locale.ROOT);
+        String safeCode = String.valueOf(codeContext == null ? "" : codeContext);
+        if (!safeCode.isBlank()) {
+            Matcher jsImports = JS_IMPORT_PATH_PATTERN.matcher(safeCode);
+            while (jsImports.find()) {
+                String normalized = normalizeFileSignal(jsImports.group(1), safeLanguage);
+                if (normalized.isBlank()) {
+                    continue;
+                }
+                signalScores.merge(normalized, 2, Integer::sum);
+            }
+            Matcher javaImports = JAVA_IMPORT_PATH_PATTERN.matcher(safeCode);
+            while (javaImports.find()) {
+                String raw = String.valueOf(javaImports.group(1) == null ? "" : javaImports.group(1)).trim();
+                if (raw.isBlank() || raw.startsWith("java.") || raw.startsWith("jakarta.") || raw.startsWith("org.")) {
+                    continue;
+                }
+                String normalized = normalizeFileSignal(raw.replace('.', '/') + ".java", "java");
+                if (!normalized.isBlank()) {
+                    signalScores.merge(normalized, 1, Integer::sum);
+                }
+            }
+        }
+
+        List<Map<String, Object>> safeAttachments = attachments == null ? List.of() : attachments;
+        for (Map<String, Object> attachment : safeAttachments) {
+            String name = String.valueOf(attachment == null ? "" : attachment.getOrDefault("name", "")).trim();
+            if (name.isBlank()) {
+                name = String.valueOf(attachment == null ? "" : attachment.getOrDefault("path", "")).trim();
+            }
+            String normalized = normalizeFileSignal(name, safeLanguage);
+            if (!normalized.isBlank()) {
+                signalScores.merge(normalized, 3, Integer::sum);
+            }
+        }
+
+        Map<String, Object> stats = orchestration == null || orchestration.toolStats == null
+            ? Collections.emptyMap()
+            : orchestration.toolStats;
+        addFileSignalsFromText(signalScores, String.valueOf(stats.getOrDefault("scannerScopeSummary", "")), 2);
+        addFileSignalsFromText(signalScores, String.valueOf(stats.getOrDefault("scopedRagQuery", "")), 1);
+
+        int minSignals = Math.max(2, aiLocalOrchestrationMultiFilePlanMinSignals);
+        int maxFiles = Math.max(minSignals, aiLocalOrchestrationMultiFilePlanMaxFiles);
+        List<Map.Entry<String, Integer>> sortedSignals = new ArrayList<>(signalScores.entrySet());
+        sortedSignals.removeIf(e -> e.getValue() < 1 || String.valueOf(e.getKey() == null ? "" : e.getKey()).isBlank());
+        sortedSignals.sort((a, b) -> {
+            int byScore = Integer.compare(b.getValue(), a.getValue());
+            if (byScore != 0) {
+                return byScore;
+            }
+            return Integer.compare(a.getKey().length(), b.getKey().length());
+        });
+        if (sortedSignals.size() < minSignals) {
+            return new MultiFilePatchPlanPreview(false, List.of(), List.of(), List.of(), 0, "single_file", "insufficient_file_signals");
+        }
+
+        List<Map<String, Object>> files = new ArrayList<>();
+        for (int i = 0; i < sortedSignals.size() && files.size() < maxFiles; i++) {
+            Map.Entry<String, Integer> signal = sortedSignals.get(i);
+            String path = signal.getKey();
+            String lower = path.toLowerCase(Locale.ROOT);
+            String role = i == 0
+                ? "primary"
+                : (lower.contains("test") || lower.contains("spec") ? "validation" : "support");
+            files.add(Map.of(
+                "id", "f" + (i + 1),
+                "path", path,
+                "role", role,
+                "signalScore", signal.getValue()
+            ));
+        }
+
+        List<Map<String, Object>> dependencies = new ArrayList<>();
+        int maxEdges = Math.max(1, aiLocalOrchestrationMultiFilePlanMaxEdges);
+        if (!files.isEmpty()) {
+            String primaryId = String.valueOf(files.get(0).get("id"));
+            for (int i = 1; i < files.size() && dependencies.size() < maxEdges; i++) {
+                String toId = String.valueOf(files.get(i).get("id"));
+                String toPath = String.valueOf(files.get(i).get("path")).toLowerCase(Locale.ROOT);
+                String relation = (toPath.contains("config") || toPath.endsWith(".json") || toPath.endsWith(".yml") || toPath.endsWith(".yaml"))
+                    ? "config_alignment"
+                    : "symbol_dependency";
+                dependencies.add(Map.of(
+                    "from", primaryId,
+                    "to", toId,
+                    "relation", relation
+                ));
+            }
+            for (int i = 1; i < files.size() - 1 && dependencies.size() < maxEdges; i++) {
+                String fromId = String.valueOf(files.get(i).get("id"));
+                String toId = String.valueOf(files.get(i + 1).get("id"));
+                dependencies.add(Map.of(
+                    "from", fromId,
+                    "to", toId,
+                    "relation", "apply_order"
+                ));
+            }
+        }
+
+        List<String> applyOrder = new ArrayList<>();
+        for (Map<String, Object> file : files) {
+            applyOrder.add(String.valueOf(file.getOrDefault("path", "")));
+        }
+
+        int baseConfidence = parseIntSafe(stats.get("unifiedConfidenceScore"), 58);
+        int confidence = Math.max(38, Math.min(96, baseConfidence + Math.min(16, files.size() * 3)));
+        String strategy = files.size() >= 4 ? "dependency_ordered_batch" : "dependency_ordered_linear";
+        return new MultiFilePatchPlanPreview(
+            files.size() >= 2,
+            files,
+            dependencies,
+            applyOrder,
+            confidence,
+            strategy,
+            "detected_cross_file_signals"
+        );
+    }
+
+    private void addFileSignalsFromText(Map<String, Integer> signalScores, String text, int weight) {
+        String safe = String.valueOf(text == null ? "" : text);
+        if (safe.isBlank()) {
+            return;
+        }
+        Matcher matcher = FILE_PATH_HINT_PATTERN.matcher(safe);
+        while (matcher.find()) {
+            String normalized = normalizeFileSignal(matcher.group(1), "");
+            if (normalized.isBlank()) {
+                continue;
+            }
+            signalScores.merge(normalized, Math.max(1, weight), Integer::sum);
+        }
+    }
+
+    private String normalizeFileSignal(String raw, String language) {
+        String value = String.valueOf(raw == null ? "" : raw).trim();
+        if (value.isBlank()) {
+            return "";
+        }
+        value = value.replace('\\', '/');
+        if (value.startsWith("@") || value.contains("://") || value.startsWith("data:")) {
+            return "";
+        }
+        value = value.replaceAll("^[`'\"]+", "").replaceAll("[`'\"]+$", "");
+        value = value.replaceAll("^\\./+", "");
+        value = value.replaceAll("//+", "/");
+        if (value.startsWith("/")) {
+            value = value.substring(1);
+        }
+        if (value.isBlank() || value.length() > 180) {
+            return "";
+        }
+        int lastSlash = value.lastIndexOf('/');
+        int lastDot = value.lastIndexOf('.');
+        if (lastDot <= lastSlash) {
+            String lang = String.valueOf(language == null ? "" : language).trim().toLowerCase(Locale.ROOT);
+            if ("typescript".equals(lang) || "ts".equals(lang) || "tsx".equals(lang)) {
+                value = value + ".ts";
+            } else if ("javascript".equals(lang) || "js".equals(lang) || "jsx".equals(lang)) {
+                value = value + ".js";
+            }
+        }
+        if (!FILE_PATH_HINT_PATTERN.matcher(value).find()) {
+            return "";
+        }
+        return value;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> listOfMap(Object raw) {
+        if (!(raw instanceof List<?> list) || list.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> map) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> e : map.entrySet()) {
+                    String key = String.valueOf(e.getKey() == null ? "" : e.getKey()).trim();
+                    if (!key.isBlank()) {
+                        row.put(key, e.getValue());
+                    }
+                }
+                if (!row.isEmpty()) {
+                    out.add(row);
+                }
+            }
+        }
+        return out;
+    }
+
+    private Map<String, Object> asMap(Object raw) {
+        if (!(raw instanceof Map<?, ?> map) || map.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> e : map.entrySet()) {
+            String key = String.valueOf(e.getKey() == null ? "" : e.getKey()).trim();
+            if (!key.isBlank()) {
+                out.put(key, e.getValue());
+            }
+        }
+        return out;
+    }
+
+    private List<String> listOfString(Object raw, int maxItems) {
+        int cap = Math.max(1, maxItems);
+        if (raw instanceof List<?> list && !list.isEmpty()) {
+            List<String> out = new ArrayList<>();
+            for (Object item : list) {
+                String text = String.valueOf(item == null ? "" : item).trim();
+                if (text.isBlank()) {
+                    continue;
+                }
+                out.add(text);
+                if (out.size() >= cap) {
+                    break;
+                }
+            }
+            return out;
+        }
+        String text = String.valueOf(raw == null ? "" : raw).trim();
+        if (text.isBlank()) {
+            return List.of();
+        }
+        String[] parts = text.split("[,;\\n]");
+        List<String> out = new ArrayList<>();
+        for (String part : parts) {
+            String item = String.valueOf(part == null ? "" : part).trim();
+            if (item.isBlank()) {
+                continue;
+            }
+            out.add(item);
+            if (out.size() >= cap) {
+                break;
+            }
+        }
+        return out;
     }
 
     private String compactToolDigest(String value, int maxChars) {
@@ -11082,6 +13175,135 @@ public class ApiSpringController {
         }
 
         return truncateMiddle(sb.toString(), cap);
+    }
+
+    private LargeCodeRegionPlan buildLargeCodeRegionPlan(
+            String message,
+            String fullCode,
+            String focusCode,
+            int cursorLine,
+            int contextWindowLines,
+            int maxChars) {
+        String source = String.valueOf(fullCode == null ? "" : fullCode);
+        if (!aiLocalOrchestrationLargeCodeRegionPlanEnabled || source.isBlank()) {
+            return LargeCodeRegionPlan.disabled(source.length());
+        }
+        int threshold = Math.max(50000, aiLocalOrchestrationLargeCodeRegionPlanThresholdChars);
+        if (source.length() < threshold) {
+            return LargeCodeRegionPlan.disabled(source.length());
+        }
+
+        int cap = Math.max(14000, Math.min(Math.max(18000, maxChars), Math.max(18000, aiLocalOrchestrationLargeCodeRegionPlanMaxChars)));
+        int maxRegions = Math.max(3, aiLocalOrchestrationLargeCodeRegionPlanMaxRegions);
+        List<Map<String, Object>> regions = new ArrayList<>();
+        LinkedHashSet<String> blocks = new LinkedHashSet<>();
+
+        CodeWindowContext cursorWindow = extractCodeWindowByLine(source, cursorLine, Math.max(20, contextWindowLines));
+        if (cursorWindow != null && !cursorWindow.code().isBlank()) {
+            String snippet = truncateMiddle(cursorWindow.code(), 2600);
+            blocks.add("/* REGION cursor_window lines " + cursorWindow.startLine() + "-" + cursorWindow.endLine() + " */\\n" + snippet);
+            regions.add(Map.of(
+                "kind", "cursor_window",
+                "lineStart", cursorWindow.startLine(),
+                "lineEnd", cursorWindow.endLine(),
+                "chars", snippet.length()
+            ));
+        }
+
+        List<String> symbolExcerpts = buildCodeStreamRelatedSymbolExcerpts(source, message, focusCode, 4, 1800);
+        int symbolIndex = 1;
+        for (String excerpt : symbolExcerpts) {
+            if (regions.size() >= maxRegions) {
+                break;
+            }
+            String safe = truncateMiddle(String.valueOf(excerpt == null ? "" : excerpt).trim(), 1600);
+            if (safe.isBlank()) {
+                continue;
+            }
+            blocks.add("/* REGION symbol_hit #" + symbolIndex + " */\\n" + safe);
+            regions.add(Map.of(
+                "kind", "symbol_hit",
+                "rank", symbolIndex,
+                "chars", safe.length()
+            ));
+            symbolIndex += 1;
+        }
+
+        if (regions.size() < maxRegions) {
+            List<String> luceneExcerpts = buildCodeStreamLuceneExcerpts(source, message, focusCode, 3, 1600);
+            int luceneIndex = 1;
+            for (String excerpt : luceneExcerpts) {
+                if (regions.size() >= maxRegions) {
+                    break;
+                }
+                String safe = truncateMiddle(String.valueOf(excerpt == null ? "" : excerpt).trim(), 1400);
+                if (safe.isBlank()) {
+                    continue;
+                }
+                blocks.add("/* REGION lucene_hit #" + luceneIndex + " */\\n" + safe);
+                regions.add(Map.of(
+                    "kind", "lucene_hit",
+                    "rank", luceneIndex,
+                    "chars", safe.length()
+                ));
+                luceneIndex += 1;
+            }
+        }
+
+        int edgeWindow = Math.max(700, Math.min(1300, cap / 10));
+        String head = source.substring(0, Math.min(source.length(), edgeWindow)).trim();
+        if (!head.isBlank() && regions.size() < maxRegions) {
+            blocks.add("/* REGION file_head */\\n" + head);
+            regions.add(Map.of("kind", "file_head", "chars", head.length()));
+        }
+        String tail = source.substring(Math.max(0, source.length() - edgeWindow)).trim();
+        if (!tail.isBlank() && regions.size() < maxRegions) {
+            blocks.add("/* REGION file_tail */\\n" + tail);
+            regions.add(Map.of("kind", "file_tail", "chars", tail.length()));
+        }
+
+        if (blocks.isEmpty()) {
+            return LargeCodeRegionPlan.disabled(source.length());
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("/* REGION_PLAN_META sourceChars=")
+            .append(source.length())
+            .append(" regions=")
+            .append(regions.size())
+            .append(" targetChars=")
+            .append(cap)
+            .append(" */\\n\\n");
+        for (String block : blocks) {
+            if (block == null || block.isBlank()) {
+                continue;
+            }
+            if (sb.length() + block.length() + 2 > cap) {
+                break;
+            }
+            sb.append(block).append("\\n\\n");
+        }
+        String condensed = truncateMiddle(sb.toString(), cap).trim();
+        if (condensed.isBlank()) {
+            return LargeCodeRegionPlan.disabled(source.length());
+        }
+        return new LargeCodeRegionPlan(true, condensed, regions, source.length(), condensed.length());
+    }
+
+    private record LargeCodeRegionPlan(
+        boolean applied,
+        String condensedContext,
+        List<Map<String, Object>> regions,
+        int sourceChars,
+        int condensedChars
+    ) {
+        private static LargeCodeRegionPlan disabled(int sourceChars) {
+            return new LargeCodeRegionPlan(false, "", List.of(), Math.max(0, sourceChars), 0);
+        }
+
+        private int regionCount() {
+            return regions == null ? 0 : regions.size();
+        }
     }
 
     private List<String> buildAnalyzeSlidingWindowExcerpts(String code) {
@@ -16715,6 +18937,41 @@ public class ApiSpringController {
                     "scopeMask", parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0),
                     "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")),
                     "scopeTags", orchestrationStats.getOrDefault("scannerScopeTags", List.of())));
+
+                int retrievalChars = parseIntSafe(orchestrationStats.get("scopedRagChars"), 0);
+                int retrievalMinChars = Math.max(0, parseIntSafe(orchestrationStats.get("scopedRagQualityMinChars"), 0));
+                boolean retrievalQualityPassed = bool(
+                    orchestrationStats.get("scopedRagQualityPassed"),
+                    retrievalMinChars <= 0 || retrievalChars >= retrievalMinChars
+                );
+                int retrievalDeficit = Math.max(0, parseIntSafe(
+                    orchestrationStats.get("scopedRagQualityDeficit"),
+                    retrievalMinChars - retrievalChars
+                ));
+                boolean retrievalRetryApplied = bool(orchestrationStats.get("scopedRagQualityRetryApplied"), false);
+                emitAiAssistantChatChunk(appId, Map.of(
+                    "stage", "retrieval_quality_gate",
+                    "message", uiTextByLang(
+                        uiLang,
+                        retrievalQualityPassed
+                            ? "Chất lượng retrieval theo scope đã đạt ngưỡng evidence"
+                            : "Chất lượng retrieval theo scope còn thấp, đã bật remediation",
+                        retrievalQualityPassed
+                            ? "Scoped retrieval quality reached evidence threshold"
+                            : "Scoped retrieval quality is low; remediation has been applied",
+                        retrievalQualityPassed
+                            ? "分域检索质量已达到证据阈值"
+                            : "分域检索质量偏低，已触发补救流程"),
+                    "responseMode", responseMode,
+                    "status", retrievalQualityPassed ? "passed" : "low_evidence",
+                    "retrievalChars", retrievalChars,
+                    "minChars", retrievalMinChars,
+                    "deficit", retrievalDeficit,
+                    "retryApplied", retrievalRetryApplied));
+                recordQualityEvidenceGate(retrievalQualityPassed ? "retrieval_quality_pass" : "retrieval_quality_low", appId);
+                if (retrievalRetryApplied) {
+                    recordQualityEvidenceGate("retrieval_quality_retry_applied", appId);
+                }
 
                 boolean verifierEnabled = bool(orchestrationStats.get("planVerifierEnabled"), false);
                 int verifierScore = parseIntSafe(orchestrationStats.get("planVerifierScore"), 0);
@@ -26651,14 +28908,16 @@ public class ApiSpringController {
      * Endpoint: AI Quality Metrics - Real-time quality KPIs (retry distribution, gate hits, reject rates)
      */
     @GetMapping({"/ai/metrics", "/api/ai/metrics"})
-    public ResponseEntity<Map<String, Object>> getAiQualityMetrics(@RequestParam(required = false) String appId) {
+    public ResponseEntity<Map<String, Object>> getAiQualityMetrics(
+            @RequestParam(required = false) String appId,
+            @RequestParam(required = false) Integer traceLimit) {
         UserAuthContext authCtx = extractUserAuthContext();
         if (!authCtx.authenticated) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(Map.of("error", "Not authenticated"));
         }
 
-        Map<String, Object> metrics = aiQualityMetricsService.getMetricsSummary(appId);
+        Map<String, Object> metrics = aiQualityMetricsService.getMetricsSummary(appId, traceLimit);
         metrics.put("user", authCtx.principalId);
         metrics.put("is_dev", authCtx.dev);
         metrics.put("roles", authCtx.roles == null ? List.of() : authCtx.roles);

@@ -2,6 +2,7 @@ package net.phanmemmottrieu.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import net.phanmemmottrieu.service.AiBusinessMemoryVectorService;
+import net.phanmemmottrieu.service.LocalAiAssistantContextService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,13 +39,18 @@ public class AiAssistantEngineController {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private final AiBusinessMemoryVectorService businessMemoryVectorService;
+    private final LocalAiAssistantContextService localAiAssistantContextService;
 
     @Value("${ai.context.dir:csm_datas/ai_local}")
     private String contextDir;
 
     @Autowired
-    public AiAssistantEngineController(AiBusinessMemoryVectorService businessMemoryVectorService) {
+    public AiAssistantEngineController(
+        AiBusinessMemoryVectorService businessMemoryVectorService,
+        LocalAiAssistantContextService localAiAssistantContextService
+    ) {
         this.businessMemoryVectorService = businessMemoryVectorService;
+        this.localAiAssistantContextService = localAiAssistantContextService;
     }
 
     @PostMapping(value = {"/ai-assistant/business-memory/index-md", "/api/ai-assistant/business-memory/index-md"}, consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -126,6 +132,32 @@ public class AiAssistantEngineController {
         out.put("message", "ok");
         out.put("result", businessMemoryVectorService.getStats(appId));
         return ResponseEntity.ok(out);
+    }
+
+    @GetMapping({"/ai-assistant/workspace-source", "/api/ai-assistant/workspace-source"})
+    public ResponseEntity<Map<String, Object>> workspaceSource(
+        @RequestParam("path") String path,
+        @RequestParam(value = "contextType", required = false) String contextType
+    ) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        try {
+            LocalAiAssistantContextService.SourceFileView view = localAiAssistantContextService
+                .loadIndexedSourceFile(path, str(contextType));
+            if (view == null) {
+                out.put("success", false);
+                out.put("message", "workspace source not found");
+                return ResponseEntity.ok(out);
+            }
+
+            out.put("success", true);
+            out.put("message", "ok");
+            out.put("result", view);
+            return ResponseEntity.ok(out);
+        } catch (Exception ex) {
+            out.put("success", false);
+            out.put("message", ex.getMessage());
+            return ResponseEntity.ok(out);
+        }
     }
 
     /**

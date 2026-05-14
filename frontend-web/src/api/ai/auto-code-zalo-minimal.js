@@ -10,7 +10,7 @@
 // ===== CONFIG =====
 const DEFAULT_UPLOAD_ENDPOINT = "/upload.shtml";
 const DEFAULT_APP_ID = "wuweb";
-const DEFAULT_DOMAIN = "phanmemmottrieu.net";
+const DEFAULT_DOMAIN = "csmbridge.net";
 const LMKT_WEST_DOMAINS = "h-holding.vn,h-holding.com.vn";
 const LMKT_CONTACT_NAME = "phongkinhdoanhlmkt";
 const LMKT_CONTACT_PHONE = "0909879885";
@@ -1446,7 +1446,7 @@ function buildDetail(ctx, seo, imgs, opts) {
     // Metadata
     image: imgs[0] || "",
     author: author,
-    avatar: "https://phanmemmottrieu.net/media/icon.png",
+    avatar: "https://www.csmbridge.net/media/icon.png",
     publishDate: now.split("T")[0],
     readTime: readTime,
     views: 0,

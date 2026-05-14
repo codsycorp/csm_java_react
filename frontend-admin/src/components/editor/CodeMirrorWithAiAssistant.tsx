@@ -25,6 +25,8 @@ type CodeMirrorWithAiAssistantProps = ReactCodeMirrorProps & {
   aiAssistantAutoApplyCodeBlock?: boolean;
   aiAssistantInlineReview?: boolean;
   aiAssistantInlineSuggestedCode?: string | null;
+  aiAssistantOnCitationNavigate?: (location: { path?: string; line?: number; token: string }) => boolean | void;
+  aiAssistantOnOpenQualityTrace?: (payload: { requestId: string; appId?: string }) => void;
   aiAssistantOnUserMessage?: (payload: AiAssistantUserMessagePayload) => void;
 };
 
@@ -397,6 +399,8 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
     aiAssistantAutoApplyCodeBlock = false,
     aiAssistantInlineReview = true,
     aiAssistantInlineSuggestedCode,
+    aiAssistantOnCitationNavigate,
+    aiAssistantOnOpenQualityTrace,
     aiAssistantOnUserMessage,
     value,
     height,
@@ -722,6 +726,11 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
   }, [onChange, presentInlineSuggestion]);
 
   const handleCitationNavigate = useCallback((location: { path?: string; line?: number; token: string }) => {
+    const delegated = aiAssistantOnCitationNavigate?.(location);
+    if (delegated === true) {
+      return;
+    }
+
     const view = editorViewRef.current;
     if (!view || !location.line) {
       return;
@@ -743,7 +752,7 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
     } catch {
       // ignore navigation failures
     }
-  }, []);
+  }, [aiAssistantOnCitationNavigate]);
 
   useEffect(() => {
     const suggested = String(aiAssistantInlineSuggestedCode || "").trim();
@@ -1034,6 +1043,7 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
                   editorMetadata={aiAssistantEditorMetadata}
                   onCodeInsert={handleCopilotCodeInsert}
                   onCitationNavigate={handleCitationNavigate}
+                  onOpenQualityTrace={aiAssistantOnOpenQualityTrace}
                   autoApplyCodeBlock={autoApplyEnabled}
                   autoApplyPreferenceKey={autoApplyStorageKey}
                   onAutoApplyChange={handleAutoApplyChange}

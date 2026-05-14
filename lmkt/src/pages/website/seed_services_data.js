@@ -8,8 +8,8 @@
 
 const CSM_TOKEN = '4d543bb4-714c-4bb1-952f-a2e0bf8b24a3';
 const APP_ID = 'wuweb';
-const DOMAIN = 'phanmemmottrieu.net';
-const API_URL = 'https://api.phanmemmottrieu.net';
+const DOMAIN = 'csmbridge.net';
+const API_URL = 'https://api.csmbridge.net';
 // const API_URL = 'http://localhost:15300/api'; // Dùng local server để test
 // Luồng tạo bảng web_services
 async function createWebServicesTable() {
@@ -478,8 +478,8 @@ const serviceDetails = [{
     tags: ["phan-mem", "web-scraper", "crawl-data", "automation"],
     activeHome: true,
     featured: true,
-    thumbnail: "https://www.phanmemmottrieu.net/app_images/web/congcucaodulieucotheclick.png",
-    images: JSON.stringify(["https://www.phanmemmottrieu.net/app_images/web/congcucaodulieucotheclick.png"]),
+    thumbnail: "https://www.csmbridge.net/app_images/web/congcucaodulieucotheclick.png",
+    images: JSON.stringify(["https://www.csmbridge.net/app_images/web/congcucaodulieucotheclick.png"]),
     priority: 1,
     attributes_contact: "0964.014.947",
   },
@@ -506,8 +506,8 @@ const serviceDetails = [{
     tags: ["phan-mem", "custom-software", "erp", "crm"],
     activeHome: true,
     featured: false,
-    thumbnail: "https://www.phanmemmottrieu.net/app_images/web/vietphanmemtheoyeucau.png",
-    images: JSON.stringify(["https://www.phanmemmottrieu.net/app_images/web/vietphanmemtheoyeucau.png"]),
+    thumbnail: "https://www.csmbridge.net/app_images/web/vietphanmemtheoyeucau.png",
+    images: JSON.stringify(["https://www.csmbridge.net/app_images/web/vietphanmemtheoyeucau.png"]),
     priority: 2,
     attributes_contact: "0964.014.947",
   },
@@ -528,13 +528,13 @@ const serviceDetails = [{
       content_zh: '%3Cdiv style=%22font-size%3A14px;color%3A%23000000%22%3E%3Cp%3E网站排名工具是帮助企业和个人快速有效提升搜索引擎排名的完美解决方案。%3C/p%3E%3Cp%3E%3Cb%3E多样化的解决方案：%3C/b%3E%3C/p%3E%3Cul%3E%3Cli%3E关键词分析和优化%3C/li%3E%3Cli%3E创建高质量的反向链接%3C/li%3E%3Cli%3E发布符合SEO标准的内容%3C/li%3E%3Cli%3E实时监控和报告排名情况%3C/li%3E%3C/ul%3E%3Cp%3E%3Cb%3E立即联系我们：%3C/b%3E%20电话0964.014.947或访问%3Ca href=%22https://phanmemmottrieu.net%22 target=%22_blank%22%3Ephanmemmottrieu.net%3C/a%3E了解更多详情。%3C/p%3E%3C/div%3E',
       serviceType: 'phan-mem',
       author: 'Phần Mềm Một Triệu',
-      avatar: 'https://phanmemmottrieu.net/media/icon.png',
+      avatar: 'https://www.csmbridge.net/media/icon.png',
       publishDate: '2025-09-03',
       readTime: '5 phút',
       views: 2500,
       tags: ['seo', 'tool', 'thu-hang', 'website', 'google'],
-      thumbnail: 'https://www.phanmemmottrieu.net/app_images/web/tool-tang-thu-hang-website.png',
-      images: JSON.stringify(['https://www.phanmemmottrieu.net/app_images/web/tool-tang-thu-hang-website.png']),
+      thumbnail: 'https://www.csmbridge.net/app_images/web/tool-tang-thu-hang-website.png',
+      images: JSON.stringify(['https://www.csmbridge.net/app_images/web/tool-tang-thu-hang-website.png']),
       featured: false,
       priority: 5
     },
@@ -555,13 +555,13 @@ const serviceDetails = [{
       content_zh: '%3Cdiv style=%22font-size%3A14px;color%3A%23000000%22%3E%3Cp%3E要将网站提升到谷歌首页，您需要应用各种有效的SEO策略。我们提供以下服务：%3C/p%3E%3Cul%3E%3Cli%3E优化网站内容%3C/li%3E%3Cli%3E创建高质量的反向链接%3C/li%3E%3Cli%3E提高页面加载速度%3C/li%3E%3Cli%3E分析和监控结果%3C/li%3E%3C/ul%3E%3Cp%3E%3Cb%3E联系方式：%3C/b%3E电话0964.014.947或访问%3Ca href=%22https://phanmemmottrieu.net%22 target=%22_blank%22%3Ephanmemmottrieu.net%3C/a%3E。%3C/p%3E%3C/div%3E',
       serviceType: 'phan-mem',
       author: 'Phần Mềm Một Triệu',
-      avatar: 'https://phanmemmottrieu.net/media/icon.png',
+      avatar: 'https://www.csmbridge.net/media/icon.png',
       publishDate: '2025-08-26',
       readTime: '7 phút',
       views: 3200,
       tags: ['seo', 'google', 'top-ranking', 'website', 'optimization'],
-      thumbnail: 'https://www.phanmemmottrieu.net/app_images/web/lam-the-nao-de-dua-web-len-top-google.png',
-      images: JSON.stringify(['https://www.phanmemmottrieu.net/app_images/web/lam-the-nao-de-dua-web-len-top-google.png']),
+      thumbnail: 'https://www.csmbridge.net/app_images/web/lam-the-nao-de-dua-web-len-top-google.png',
+      images: JSON.stringify(['https://www.csmbridge.net/app_images/web/lam-the-nao-de-dua-web-len-top-google.png']),
       featured: true,
       priority: 6
     },
@@ -582,13 +582,13 @@ const serviceDetails = [{
       content_zh: '%3Cdiv style=%22font-size%3A14px;color%3A%23000000%22%3E%3Cp%3E真实用户流量增加服务有助于提升您网站的信誉和排名。我们提供来自各种来源的高质量流量。请致电0964.014.947联系我们。%3C/p%3E%3Cp%3E%3Cb%3E真实用户流量：%3C/b%3E%3C/p%3E%3Cul%3E%3Cli%3E100%25真实用户%3C/li%3E%3Cli%3E自然流量%3C/li%3E%3Cli %3E增加网站停留时间%3C/li%3E%3Cli%3E降低跳出率%3C/li%3E%3C/ul%3E%3Cp%3E%3Cb%3E联系方式：%3C/b%3E电话0964.014.947或访问%3Ca href=%22https://phanmemmottrieu.net%22 target=%22_blank%22%3Ephanmemmottrieu.net%3C/a%3E。%3C/p%3E%3C/div%3E',
       serviceType: 'phan-mem',
       author: 'Phần Mềm Một Triệu',
-      avatar: 'https://phanmemmottrieu.net/media/icon.png',
+      avatar: 'https://www.csmbridge.net/media/icon.png',
       publishDate: '2025-08-26',
       readTime: '6 phút',
       views: 2800,
       tags: ['traffic', 'user', 'website', 'seo', 'optimization'],
-      thumbnail: 'https://www.phanmemmottrieu.net/app_images/web/tang-traffic-user.png',
-      images: JSON.stringify(['https://www.phanmemmottrieu.net/app_images/web/tang-traffic-user.png']),
+      thumbnail: 'https://www.csmbridge.net/app_images/web/tang-traffic-user.png',
+      images: JSON.stringify(['https://www.csmbridge.net/app_images/web/tang-traffic-user.png']),
       featured: false,
       priority: 7
     },
@@ -609,13 +609,13 @@ const serviceDetails = [{
       content_zh: '%3Cdiv style=%22font-size%3A14px;color%3A%23000000%22%3E%3Cp%3E凭借一支经验丰富的专家团队，我们在软件和技术领域提供专业的咨询服务。%3C/p%3E%3Cp%3E%3Cb%3E咨询领域：%3C/b%3E%3C/p%3E%3Cul%3E%3Cli%3E选择合适的技术%3C/li%3E%3Cli%3E系统架构设计%3C/li%3E%3Cli%3E优化开发流程%3C/li%3E%3Cli%3E评估和改进现有软件%3C/li%3E%3C/ul%3E%3Cp%3E%3Cb%3E联系方式：%3C/b%3E电话0964.014.947或访问%3Ca href=%22https://phanmemmottrieu.net%22 target=%22_blank%22%3Ephanmemmottrieu.net%3C/a%3E。%3C/p%3E%3C/div%3E',
       serviceType: 'phan-mem',
       author: 'Phần Mềm Một Triệu',
-      avatar: 'https://phanmemmottrieu.net/media/icon.png',
+      avatar: 'https://www.csmbridge.net/media/icon.png',
       publishDate: '2022-10-28',
       readTime: '8 phút',
       views: 1500,
       tags: ['consulting', 'expert', 'software', 'technology', 'advisory'],
-      thumbnail: 'https://www.phanmemmottrieu.net/app_images/web/chuyen-gia-tu-van-phan-mem.png',
-      images: JSON.stringify(['https://www.phanmemmottrieu.net/app_images/web/chuyen-gia-tu-van-phan-mem.png']),
+      thumbnail: 'https://www.csmbridge.net/app_images/web/chuyen-gia-tu-van-phan-mem.png',
+      images: JSON.stringify(['https://www.csmbridge.net/app_images/web/chuyen-gia-tu-van-phan-mem.png']),
       featured: false,
       priority: 8
     },

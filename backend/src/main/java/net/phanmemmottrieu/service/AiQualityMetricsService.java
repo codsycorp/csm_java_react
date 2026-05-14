@@ -2,6 +2,7 @@ package net.phanmemmottrieu.service;
 
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.Locale;
@@ -19,7 +20,20 @@ public class AiQualityMetricsService {
 
     private static final String APP_GLOBAL_KEY = "__global__";
     private static final long WINDOW_SIZE_MS = 60L * 60L * 1000L; // 1 hour
+    private static final long RETENTION_WINDOW_MS = 24L * 60L * 60L * 1000L; // 24 hours
     private static final long CLEANUP_INTERVAL_MS = 5L * 60L * 1000L; // 5 mins
+    private static final int DEFAULT_TRACE_LIMIT = 30;
+    private static final int[] TREND_WINDOWS_MINUTES = new int[] {5, 60, 1440};
+    private static final String[] TREND_EVIDENCE_GATES = new String[] {
+        "retrieval_quality_pass",
+        "retrieval_quality_low",
+        "retrieval_quality_retry_applied",
+        "step_output_contract_violation",
+        "step_output_contract_repair_applied",
+        "step_output_contract_repair_failed",
+        "step_output_contract_repair_low_quality"
+    };
+    private static final String[] TREND_REQUEST_STATUSES = new String[] {"ok", "error", "cancelled", "started"};
 
     private volatile long lastCleanupMs = System.currentTimeMillis();
 
@@ -36,12 +50,53 @@ public class AiQualityMetricsService {
         }
     }
 
+    private static class RequestTraceEvent {
+        long timestampMs;
+        String requestId;
+        String flow;
+        String stage;
+        String status;
+        String reasonCode;
+        String appId;
+        String responseMode;
+        String model;
+        long elapsedMs;
+        Map<String, Object> meta;
+
+        RequestTraceEvent(
+            long timestampMs,
+            String requestId,
+            String flow,
+            String stage,
+            String status,
+            String reasonCode,
+            String appId,
+            String responseMode,
+            String model,
+            long elapsedMs,
+            Map<String, Object> meta
+        ) {
+            this.timestampMs = timestampMs;
+            this.requestId = requestId;
+            this.flow = flow;
+            this.stage = stage;
+            this.status = status;
+            this.reasonCode = reasonCode;
+            this.appId = appId;
+            this.responseMode = responseMode;
+            this.model = model;
+            this.elapsedMs = elapsedMs;
+            this.meta = meta;
+        }
+    }
+
     private static class ScopedMetrics {
         final ConcurrentHashMap<String, LinkedList<MetricEvent>> retryReasonHistory = new ConcurrentHashMap<>();
         final ConcurrentHashMap<String, LinkedList<MetricEvent>> evidenceGateHistory = new ConcurrentHashMap<>();
         final ConcurrentHashMap<String, LinkedList<MetricEvent>> patchRejectHistory = new ConcurrentHashMap<>();
         final ConcurrentHashMap<String, LinkedList<MetricEvent>> validatorRejectHistory = new ConcurrentHashMap<>();
         final LinkedList<MetricEvent> fallbackHistory = new LinkedList<>();
+        final LinkedList<RequestTraceEvent> requestTraceHistory = new LinkedList<>();
 
         final AtomicLong totalRequests = new AtomicLong(0L);
         final AtomicLong totalRetries = new AtomicLong(0L);
@@ -54,7 +109,8 @@ public class AiQualityMetricsService {
                 && totalRetries.get() == 0L
                 && totalFallbacks.get() == 0L
                 && totalPatchRejects.get() == 0L
-                && totalValidatorRejects.get() == 0L;
+                && totalValidatorRejects.get() == 0L
+                && requestTraceHistory.isEmpty();
         }
     }
 
@@ -112,6 +168,64 @@ public class AiQualityMetricsService {
         tryCleanup();
     }
 
+    public void recordRequestTrace(
+        String requestId,
+        String flow,
+        String stage,
+        String status,
+        String reasonCode,
+        String appId,
+        String responseMode,
+        String model,
+        long elapsedMs,
+        Map<String, Object> meta
+    ) {
+        String safeRequestId = normalizeMetricKey(requestId);
+        String safeFlow = normalizeMetricKey(flow);
+        String safeStage = normalizeMetricKey(stage);
+        String safeStatus = normalizeMetricKey(status);
+        String safeReason = normalizeMetricKey(reasonCode);
+        String safeAppId = normalizeAppId(appId);
+        String safeResponseMode = normalizeMetricKey(responseMode);
+        String safeModel = normalizeMetricKey(model);
+        long safeElapsedMs = Math.max(0L, elapsedMs);
+        Map<String, Object> safeMeta = meta == null ? Map.of() : new LinkedHashMap<>(meta);
+        long now = System.currentTimeMillis();
+        recordRequestTraceInternal(
+            globalMetrics,
+            new RequestTraceEvent(
+                now,
+                safeRequestId,
+                safeFlow,
+                safeStage,
+                safeStatus,
+                safeReason,
+                APP_GLOBAL_KEY.equals(safeAppId) ? "" : safeAppId,
+                safeResponseMode,
+                safeModel,
+                safeElapsedMs,
+                safeMeta
+            )
+        );
+        recordScoped(appId, scoped -> recordRequestTraceInternal(
+            scoped,
+            new RequestTraceEvent(
+                now,
+                safeRequestId,
+                safeFlow,
+                safeStage,
+                safeStatus,
+                safeReason,
+                APP_GLOBAL_KEY.equals(safeAppId) ? "" : safeAppId,
+                safeResponseMode,
+                safeModel,
+                safeElapsedMs,
+                safeMeta
+            )
+        ));
+        tryCleanup();
+    }
+
     /**
      * Track retry policy decisions: will_retry or give_up.
      */
@@ -121,10 +235,14 @@ public class AiQualityMetricsService {
     }
 
     public Map<String, Object> getMetricsSummary() {
-        return getMetricsSummary(null);
+        return getMetricsSummary(null, DEFAULT_TRACE_LIMIT);
     }
 
     public Map<String, Object> getMetricsSummary(String appId) {
+        return getMetricsSummary(appId, DEFAULT_TRACE_LIMIT);
+    }
+
+    public Map<String, Object> getMetricsSummary(String appId, Integer traceLimit) {
         long now = System.currentTimeMillis();
         tryCleanup();
 
@@ -133,7 +251,8 @@ public class AiQualityMetricsService {
             ? globalMetrics
             : metricsByApp.get(normalizedAppId);
 
-        Map<String, Object> result = buildSummaryFrom(metrics == null ? new ScopedMetrics() : metrics, now);
+        int safeTraceLimit = Math.max(1, traceLimit == null ? DEFAULT_TRACE_LIMIT : traceLimit);
+        Map<String, Object> result = buildSummaryFrom(metrics == null ? new ScopedMetrics() : metrics, now, safeTraceLimit);
         if (APP_GLOBAL_KEY.equals(normalizedAppId)) {
             result.put("scope", "global");
         } else {
@@ -188,6 +307,12 @@ public class AiQualityMetricsService {
         metrics.totalRequests.incrementAndGet();
     }
 
+    private void recordRequestTraceInternal(ScopedMetrics metrics, RequestTraceEvent event) {
+        synchronized (metrics.requestTraceHistory) {
+            metrics.requestTraceHistory.add(event);
+        }
+    }
+
     private void recordScoped(String appId, java.util.function.Consumer<ScopedMetrics> recorder) {
         String normalizedAppId = normalizeAppId(appId);
         if (APP_GLOBAL_KEY.equals(normalizedAppId)) {
@@ -204,7 +329,7 @@ public class AiQualityMetricsService {
         }
     }
 
-    private Map<String, Object> buildSummaryFrom(ScopedMetrics metrics, long now) {
+    private Map<String, Object> buildSummaryFrom(ScopedMetrics metrics, long now, int traceLimit) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("timestamp", now);
         result.put("window_size_ms", WINDOW_SIZE_MS);
@@ -230,8 +355,115 @@ public class AiQualityMetricsService {
         result.put("fallback_rate", fallbackRate);
         result.put("patch_reject_rate", patchRejectRate);
         result.put("validator_reject_rate", validatorRejectRate);
+        result.put("quality_trends", buildEvidenceGateTrends(metrics, now));
+        result.put("request_status_trends", buildRequestStatusTrends(metrics, now));
+        result.put("recent_request_traces", aggregateRecentRequestTraces(metrics, now, traceLimit));
 
         return result;
+    }
+
+    private Map<String, Map<String, Integer>> buildEvidenceGateTrends(ScopedMetrics metrics, long now) {
+        Map<String, Map<String, Integer>> out = new LinkedHashMap<>();
+        for (String key : TREND_EVIDENCE_GATES) {
+            LinkedList<MetricEvent> events = metrics.evidenceGateHistory.get(key);
+            if (events == null) {
+                out.put(key, buildZeroWindowCounts());
+                continue;
+            }
+            out.put(key, countByWindows(events, now));
+        }
+        return out;
+    }
+
+    private Map<String, Map<String, Integer>> buildRequestStatusTrends(ScopedMetrics metrics, long now) {
+        Map<String, Map<String, Integer>> out = new LinkedHashMap<>();
+        synchronized (metrics.requestTraceHistory) {
+            for (String status : TREND_REQUEST_STATUSES) {
+                out.put(status, countTraceStatusByWindows(metrics.requestTraceHistory, status, now));
+            }
+        }
+        return out;
+    }
+
+    private Map<String, Integer> countByWindows(LinkedList<MetricEvent> events, long now) {
+        Map<String, Integer> out = new LinkedHashMap<>();
+        for (int mins : TREND_WINDOWS_MINUTES) {
+            long windowMs = mins * 60_000L;
+            int total = 0;
+            synchronized (events) {
+                for (MetricEvent event : events) {
+                    if (now - event.timestampMs <= windowMs) {
+                        total += event.count;
+                    }
+                }
+            }
+            out.put(windowLabel(mins), total);
+        }
+        return out;
+    }
+
+    private Map<String, Integer> countTraceStatusByWindows(
+        LinkedList<RequestTraceEvent> events,
+        String expectedStatus,
+        long now
+    ) {
+        Map<String, Integer> out = new LinkedHashMap<>();
+        String safeStatus = normalizeMetricKey(expectedStatus);
+        for (int mins : TREND_WINDOWS_MINUTES) {
+            long windowMs = mins * 60_000L;
+            int total = 0;
+            for (RequestTraceEvent event : events) {
+                if (now - event.timestampMs <= windowMs && safeStatus.equals(normalizeMetricKey(event.status))) {
+                    total += 1;
+                }
+            }
+            out.put(windowLabel(mins), total);
+        }
+        return out;
+    }
+
+    private Map<String, Integer> buildZeroWindowCounts() {
+        Map<String, Integer> zeros = new LinkedHashMap<>();
+        for (int mins : TREND_WINDOWS_MINUTES) {
+            zeros.put(windowLabel(mins), 0);
+        }
+        return zeros;
+    }
+
+    private String windowLabel(int minutes) {
+        if (minutes >= 60) {
+            if (minutes % 60 == 0) {
+                return (minutes / 60) + "h";
+            }
+            return minutes + "m";
+        }
+        return minutes + "m";
+    }
+
+    private java.util.List<Map<String, Object>> aggregateRecentRequestTraces(ScopedMetrics metrics, long now, int traceLimit) {
+        java.util.List<Map<String, Object>> out = new ArrayList<>();
+        synchronized (metrics.requestTraceHistory) {
+            for (int i = metrics.requestTraceHistory.size() - 1; i >= 0 && out.size() < traceLimit; i--) {
+                RequestTraceEvent evt = metrics.requestTraceHistory.get(i);
+                if (now - evt.timestampMs > RETENTION_WINDOW_MS) {
+                    continue;
+                }
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("timestamp", evt.timestampMs);
+                item.put("requestId", evt.requestId);
+                item.put("flow", evt.flow);
+                item.put("stage", evt.stage);
+                item.put("status", evt.status);
+                item.put("reason_code", evt.reasonCode);
+                item.put("app_id", evt.appId);
+                item.put("response_mode", evt.responseMode);
+                item.put("model", evt.model);
+                item.put("elapsed_ms", evt.elapsedMs);
+                item.put("meta", evt.meta == null ? Map.of() : evt.meta);
+                out.add(item);
+            }
+        }
+        return out;
     }
 
     private Map<String, Integer> aggregateMetrics(
@@ -282,14 +514,17 @@ public class AiQualityMetricsService {
         cleanupHistoryMap(metrics.patchRejectHistory, now);
         cleanupHistoryMap(metrics.validatorRejectHistory, now);
         synchronized (metrics.fallbackHistory) {
-            metrics.fallbackHistory.removeIf(evt -> now - evt.timestampMs > WINDOW_SIZE_MS);
+            metrics.fallbackHistory.removeIf(evt -> now - evt.timestampMs > RETENTION_WINDOW_MS);
+        }
+        synchronized (metrics.requestTraceHistory) {
+            metrics.requestTraceHistory.removeIf(evt -> now - evt.timestampMs > RETENTION_WINDOW_MS);
         }
     }
 
     private void cleanupHistoryMap(ConcurrentHashMap<String, LinkedList<MetricEvent>> history, long now) {
         for (LinkedList<MetricEvent> events : history.values()) {
             synchronized (events) {
-                events.removeIf(evt -> now - evt.timestampMs > WINDOW_SIZE_MS);
+                events.removeIf(evt -> now - evt.timestampMs > RETENTION_WINDOW_MS);
             }
         }
     }
@@ -300,6 +535,7 @@ public class AiQualityMetricsService {
         metrics.patchRejectHistory.clear();
         metrics.validatorRejectHistory.clear();
         metrics.fallbackHistory.clear();
+        metrics.requestTraceHistory.clear();
         metrics.totalRequests.set(0L);
         metrics.totalRetries.set(0L);
         metrics.totalFallbacks.set(0L);
