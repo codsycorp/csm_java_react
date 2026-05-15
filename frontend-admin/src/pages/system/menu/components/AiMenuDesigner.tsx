@@ -4710,7 +4710,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const handleAiAssistantRequirementMessage = (payload: AiAssistantUserMessagePayload) => {
     const nextText = String(payload?.message || "").trim();
     const derivedContextFiles = mapAiAssistantAttachmentsToContextFiles(payload?.attachments || []);
-    setLatestAiAssistantAttachmentCount(Array.isArray(payload?.attachments) ? payload.attachments.length : 0);
+    const attachmentCount = Array.isArray(payload?.attachments) ? payload.attachments.length : 0;
+    setLatestAiAssistantAttachmentCount(attachmentCount);
     if (nextText) {
       setLatestAiAssistantPrompt(nextText);
       setRequestText(nextText);
@@ -4726,6 +4727,20 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         return merged.slice(0, MAX_CONTEXT_FILES);
       });
     }
+    appendAiRealtimeLogs([{
+      level: "info",
+      message: uiText(
+        "Đã đồng bộ yêu cầu từ chat AI vào menu designer",
+        "Synced AI chat request into menu designer",
+        "已将 AI 聊天请求同步到菜单设计器",
+      ),
+      detail: [
+        nextText ? `prompt=${compactAiRealtimeText(nextText, 140)}` : "",
+        attachmentCount > 0 ? `attachments=${attachmentCount}` : "",
+        derivedContextFiles.length > 0 ? `contextFiles+=${derivedContextFiles.length}` : "",
+      ].filter(Boolean).join(" • "),
+      fingerprint: buildAiRealtimeFingerprint(["assistant_sync", nextText, attachmentCount, derivedContextFiles.length]),
+    }]);
     if (!nextText && derivedContextFiles.length === 0) return;
   };
 
@@ -5618,6 +5633,25 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 )}
               </>
             }
+          />
+        )}
+
+        {latestAiAssistantPromptPreview && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={uiText("Yêu cầu gần nhất từ chat AI menu", "Latest menu AI chat request", "最近的菜单 AI 聊天请求")}
+            description={[
+              latestAiAssistantPromptPreview,
+              latestAiAssistantAttachmentCount > 0
+                ? uiText(
+                    `attachments đã sync: ${latestAiAssistantAttachmentCount}`,
+                    `synced attachments: ${latestAiAssistantAttachmentCount}`,
+                    `已同步附件：${latestAiAssistantAttachmentCount}`,
+                  )
+                : "",
+            ].filter(Boolean).join(" • ")}
           />
         )}
 

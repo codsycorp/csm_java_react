@@ -34,6 +34,8 @@ import jakarta.annotation.PreDestroy;
 public class AiLocalOrchestrationService {
 
     private static final Logger log = LoggerFactory.getLogger(AiLocalOrchestrationService.class);
+    private static final Pattern SEARCH_DIRECTIVE_PATTERN = Pattern.compile("(?is)\\[(?:SEARCH|SEARCH_QUERY)\\s*:\\s*([^\\]]{3,220})\\]");
+    private static final Pattern FRESH_KNOWLEDGE_SIGNAL_PATTERN = Pattern.compile("(?i)\\b(202[4-9]|latest|new|moi nhat|mới nhất|cap nhat|cập nhật|release|changelog|version|phien ban|phiên bản|docs|documentation|api|framework|library|thu vien|thư viện)\\b");
 
     public static class OrchestrationResult {
         public boolean enabled;
@@ -99,6 +101,9 @@ public class AiLocalOrchestrationService {
 
     @Autowired(required = false)
     private AiAdaptiveRetryPolicy aiAdaptiveRetryPolicy;
+
+    @Autowired(required = false)
+    private AiLocalWorkflowAdvisorService aiLocalWorkflowAdvisorService;
 
     public AiLocalOrchestrationService(
         AiSpeculativeExecutionService aiSpeculativeExecutionService,
@@ -235,6 +240,18 @@ public class AiLocalOrchestrationService {
     @Value("${ai.local.orchestration.tool-dag.min-confidence-stop:0.62}")
     private double toolDagMinConfidenceStop;
 
+    @Value("${ai.orchestration.web-search.enabled:${AI_ORCHESTRATION_WEB_SEARCH_ENABLED:true}}")
+    private boolean agenticWebSearchEnabled;
+
+    @Value("${ai.orchestration.web-search.min-internal-rag-chars:${AI_ORCHESTRATION_WEB_SEARCH_MIN_INTERNAL_RAG_CHARS:900}}")
+    private int agenticWebSearchMinInternalRagChars;
+
+    @Value("${ai.orchestration.web-search.query-max-chars:${AI_ORCHESTRATION_WEB_SEARCH_QUERY_MAX_CHARS:120}}")
+    private int agenticWebSearchQueryMaxChars;
+
+    @Value("${ai.orchestration.web-search.llama-max-output-tokens:${AI_ORCHESTRATION_WEB_SEARCH_LLAMA_MAX_OUTPUT_TOKENS:72}}")
+    private int agenticWebSearchLlamaMaxOutputTokens;
+
     private final ThreadLocal<RecoveryHints> recoveryHintsContext = new ThreadLocal<>();
 
     private final ExecutorService dynamicIngestExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -270,6 +287,12 @@ public class AiLocalOrchestrationService {
         }
     }
 
+    @Autowired(required = false)
+    private LlamaCppNativeService llamaCppNativeService;
+
+    @Autowired(required = false)
+    private AiAgenticWebSearchService aiAgenticWebSearchService;
+
     // Builder + Prototype: immutable orchestration input without deep copy overhead.
     private static final class OrchestrationRequest {
         final String appId;
@@ -280,6 +303,8 @@ public class AiLocalOrchestrationService {
         final String taskType;
         final String responseMode;
         final String language;
+        final String pName;
+        final Integer pType;
 
         private interface AttachmentSnapshotFactory {
             List<Map<String, Object>> freeze(List<Map<String, Object>> attachments);
@@ -314,6 +339,8 @@ public class AiLocalOrchestrationService {
             this.taskType = builder.taskType;
             this.responseMode = builder.responseMode;
             this.language = builder.language;
+            this.pName = builder.pName;
+            this.pType = builder.pType;
         }
 
         Builder prototype() {
@@ -325,7 +352,9 @@ public class AiLocalOrchestrationService {
                 .contextType(contextType)
                 .taskType(taskType)
                 .responseMode(responseMode)
-                .language(language);
+                .language(language)
+                .pName(pName)
+                .pType(pType);
         }
 
         static Builder builder() {
@@ -341,6 +370,8 @@ public class AiLocalOrchestrationService {
             private String taskType = "";
             private String responseMode = "edit";
             private String language = "";
+            private String pName = "";
+            private Integer pType;
 
             Builder appId(String value) { this.appId = String.valueOf(value == null ? "" : value); return this; }
             Builder message(String value) { this.message = String.valueOf(value == null ? "" : value); return this; }
@@ -350,6 +381,8 @@ public class AiLocalOrchestrationService {
             Builder taskType(String value) { this.taskType = String.valueOf(value == null ? "" : value); return this; }
             Builder responseMode(String value) { this.responseMode = String.valueOf(value == null ? "edit" : value); return this; }
             Builder language(String value) { this.language = String.valueOf(value == null ? "" : value); return this; }
+            Builder pName(String value) { this.pName = String.valueOf(value == null ? "" : value).trim(); return this; }
+            Builder pType(Integer value) { this.pType = value; return this; }
 
             OrchestrationRequest build() {
                 return new OrchestrationRequest(this);
@@ -492,7 +525,7 @@ public class AiLocalOrchestrationService {
         String responseMode,
         String language
     ) {
-        return orchestrate(appId, message, currentCode, attachments, contextType, taskType, responseMode, language, null);
+        return orchestrate(appId, message, currentCode, attachments, contextType, taskType, responseMode, language, null, "", null);
     }
 
     /**
@@ -510,6 +543,22 @@ public class AiLocalOrchestrationService {
         String language,
         String requestId
     ) {
+        return orchestrateResilient(appId, message, currentCode, attachments, contextType, taskType, responseMode, language, requestId, "", null);
+    }
+
+    public OrchestrationResult orchestrateResilient(
+        String appId,
+        String message,
+        String currentCode,
+        List<Map<String, Object>> attachments,
+        String contextType,
+        String taskType,
+        String responseMode,
+        String language,
+        String requestId,
+        String pName,
+        Integer pType
+    ) {
         try {
             OrchestrationResult out = orchestrate(
                 appId,
@@ -520,7 +569,9 @@ public class AiLocalOrchestrationService {
                 taskType,
                 responseMode,
                 language,
-                requestId
+                requestId,
+                pName,
+                pType
             );
             if (aiAdaptiveRetryPolicy != null) {
                 aiAdaptiveRetryPolicy.recordRetryOutcome(AiAdaptiveRetryPolicy.RetryReason.UPSTREAM_FAILURE, true);
@@ -561,6 +612,8 @@ public class AiLocalOrchestrationService {
                     responseMode,
                     language,
                     safeRequestId + "-retry1",
+                    pName,
+                    pType,
                     hints
                 );
                 if (recovered != null && recovered.enabled && recovered.compressedContextBlock != null && !recovered.compressedContextBlock.isBlank()) {
@@ -582,6 +635,8 @@ public class AiLocalOrchestrationService {
                 responseMode,
                 language,
                 safeRequestId,
+                pName,
+                pType,
                 ex,
                 retryDecision
             );
@@ -598,6 +653,8 @@ public class AiLocalOrchestrationService {
         String responseMode,
         String language,
         String requestId,
+        String pName,
+        Integer pType,
         RecoveryHints hints
     ) {
         RecoveryHints safeHints = hints == null ? new RecoveryHints() : hints;
@@ -614,7 +671,9 @@ public class AiLocalOrchestrationService {
                 taskType,
                 responseMode,
                 language,
-                requestId
+                requestId,
+                pName,
+                pType
             );
             out.toolStats.put("recoveryRetryApplied", true);
             out.toolStats.put("recoveryRetryStrategy", safeHints.strategyId);
@@ -741,7 +800,9 @@ public class AiLocalOrchestrationService {
         String taskType,
         String responseMode,
         String language,
-        String requestId
+        String requestId,
+        String pName,
+        Integer pType
     ) {
         if (!enabled) {
             return OrchestrationResult.disabled();
@@ -763,6 +824,8 @@ public class AiLocalOrchestrationService {
             .taskType(safeTaskType)
             .responseMode(safeMode)
             .language(safeLanguage)
+            .pName(pName)
+            .pType(pType)
             .build();
         String effectiveRequestId = String.valueOf(requestId == null ? "" : requestId).trim();
         boolean ownsTraceRequest = false;
@@ -787,8 +850,11 @@ public class AiLocalOrchestrationService {
         int attachmentChars = estimateAttachmentTextChars(safeAttachments);
         out.totalCharsBefore = messageChars + codeChars + attachmentChars;
 
-        LocalToolDigest digest = runLocalTools(safeMessage, safeCode, safeAttachments);
+        LocalToolDigest digest = runLocalTools(safeMessage, safeCode, safeAttachments, safeContextType);
         out.toolStats.putAll(digest.stats);
+        if (!digest.menuSignals.isEmpty()) {
+            out.toolStats.put("menuSignals", truncateLines(digest.menuSignals, 8, 96));
+        }
 
         if (aiIntentClassifierService != null) {
             try {
@@ -822,6 +888,36 @@ public class AiLocalOrchestrationService {
                 }
             } catch (Exception ignored) {
                 // Never block orchestration if classifier fails.
+            }
+        }
+
+        AiLocalWorkflowAdvisorService.WorkflowAdvice workflowAdvice = null;
+        if (aiLocalWorkflowAdvisorService != null) {
+            try {
+                workflowAdvice = aiLocalWorkflowAdvisorService.advise(
+                    new AiLocalWorkflowAdvisorService.WorkflowRequest(
+                        safeMessage,
+                        safeCode,
+                        safeContextType,
+                        safeMode,
+                        safeAttachments,
+                        buildPlannerQueryHint(safeMessage, digest, safeContextType, safeTaskType, safeMode),
+                        buildWorkflowIntentSnapshot(safeContextType, safeMode)
+                    )
+                );
+            } catch (Exception ignored) {
+                workflowAdvice = null;
+            }
+        }
+        if (workflowAdvice != null) {
+            out.toolStats.put("workflowWorkspaceKind", workflowAdvice.workspaceKind());
+            out.toolStats.put("workflowWeakMachineSafe", workflowAdvice.weakMachineSafe());
+            out.toolStats.put("workflowIngestTargets", workflowAdvice.ingestTargets());
+            if (!workflowAdvice.executionBlueprint().isEmpty()) {
+                out.toolStats.put("workflowExecutionBlueprint", workflowAdvice.executionBlueprint());
+            }
+            if (!workflowAdvice.attachmentInsights().isEmpty()) {
+                out.toolStats.put("workflowAttachmentInsights", workflowAdvice.attachmentInsights());
             }
         }
 
@@ -867,47 +963,10 @@ public class AiLocalOrchestrationService {
                 safeMode
             );
 
-        List<String> planSteps = buildPlannerSteps(
-            safeContextType,
-            safeTaskType,
-            safeMode,
-            codeChars,
-            attachmentChars,
-            digest,
-            scanResult,
-            offTopicConfidence,
-            flowDecision
-        );
-        if (scanResult.enabled() && scanResult.ingestCount() > 0) {
-            planSteps.add(0, "Run multimodal scanner (JSON/Image) and select dynamic memory ingestion candidates");
-        }
-        if (aiExecutionPlannerService != null) {
-            try {
-                String workspaceContext = "menu_json".equals(safeContextType) ? "menu" : "code";
-                AiExecutionPlannerService.ExecutionPlan executionPlan = aiExecutionPlannerService.generatePlan(
-                    safeMessage,
-                    workspaceContext,
-                    safeCode,
-                    ""
-                );
-                if (executionPlan != null && executionPlan.steps != null && !executionPlan.steps.isEmpty()) {
-                    planSteps = executionPlan.steps.stream()
-                        .map(step -> "[" + step.action + "] " + step.description)
-                        .toList();
-                    out.toolStats.put("executionPlanStepCount", executionPlan.getStepCount());
-                    out.toolStats.put("executionPlanEstimatedMs", executionPlan.totalEstimatedMs);
-                    out.toolStats.put("executionPlanDeduped", executionPlan.deduplicationCount);
-                }
-            } catch (Exception ignored) {
-                // Keep base planner when execution planner fails.
-            }
-        }
-
         RecoveryHints recoveryHints = recoveryHintsContext.get();
         Integer stepVerifierMinScoreOverride = recoveryHints == null ? null : recoveryHints.stepVerifierMinScoreOverride;
         Integer planSchemaMinScoreOverride = recoveryHints == null ? null : recoveryHints.planSchemaMinScoreOverride;
-
-        PlanCoverageCheck planCoverage = evaluatePlanCoverage(
+        ExecutionPlanningSnapshot planning = buildExecutionPlanningSnapshot(
             safeMessage,
             safeContextType,
             safeTaskType,
@@ -916,49 +975,19 @@ public class AiLocalOrchestrationService {
             attachmentChars,
             digest,
             scanResult,
-            planSteps,
-            stepVerifierMinScoreOverride
+            offTopicConfidence,
+            flowDecision,
+            stepVerifierMinScoreOverride,
+            planSchemaMinScoreOverride,
+            safeCode,
+            "",
+            workflowAdvice
         );
-        if (stepVerifierEnabled && !planCoverage.passed && !planCoverage.missingAreas.isEmpty()) {
-            planSteps.add("Verifier remediation: " + String.join("; ", planCoverage.missingAreas));
-        }
-        out.toolStats.put("planVerifierEnabled", stepVerifierEnabled);
-        out.toolStats.put("planVerifierScore", planCoverage.score);
-        out.toolStats.put("planVerifierMinScore", planCoverage.minScore);
-        out.toolStats.put("planVerifierPassed", planCoverage.passed);
-        out.toolStats.put("planVerifierVerdict", planCoverage.verdict);
-        out.toolStats.put("planVerifierMissing", planCoverage.missingAreas);
-
-        List<Map<String, Object>> structuredPlanSteps = buildStructuredPlanSteps(planSteps);
-        PlanSchemaCheck schemaCheck = evaluatePlanSchema(structuredPlanSteps, planSchemaMinScoreOverride);
-        if (planSchemaEnabled && !schemaCheck.passed && !schemaCheck.missingSignals.isEmpty()) {
-            planSteps.add("Schema remediation: " + String.join("; ", schemaCheck.missingSignals));
-            structuredPlanSteps = buildStructuredPlanSteps(planSteps);
-            schemaCheck = evaluatePlanSchema(structuredPlanSteps, planSchemaMinScoreOverride);
-        }
-        out.toolStats.put("planSchemaEnabled", planSchemaEnabled);
-        out.toolStats.put("planSchemaScore", schemaCheck.score);
-        out.toolStats.put("planSchemaMinScore", schemaCheck.minScore);
-        out.toolStats.put("planSchemaPassed", schemaCheck.passed);
-        out.toolStats.put("planSchemaInvalidCount", schemaCheck.invalidCount);
-        out.toolStats.put("planSchemaMissing", schemaCheck.missingSignals);
-        out.toolStats.put("planStructuredSteps", structuredPlanSteps);
-        if (toolDagEnabled) {
-            Map<String, Object> toolDag = buildToolDagPlan(
-                planSteps,
-                structuredPlanSteps,
-                safeContextType,
-                safeMode,
-                digest,
-                scanResult,
-                planCoverage,
-                schemaCheck
-            );
-            if (!toolDag.isEmpty()) {
-                out.toolStats.putAll(toolDag);
-            }
-        }
-
+        List<String> planSteps = new ArrayList<>(planning.planSteps());
+        PlanCoverageCheck planCoverage = planning.planCoverage();
+        PlanSchemaCheck schemaCheck = planning.schemaCheck();
+        List<Map<String, Object>> structuredPlanSteps = new ArrayList<>(planning.structuredPlanSteps());
+        applyExecutionPlanningStats(out, planning, safeContextType, safeMode, digest, scanResult);
         out.planSteps = planSteps;
 
         String routingTier = resolveRoutingTier(safeMessage, safeContextType, safeTaskType, safeMode, codeChars, attachmentChars);
@@ -978,15 +1007,20 @@ public class AiLocalOrchestrationService {
         boolean dynamicIndexed = false;
         String dynamicSource = "";
         boolean dynamicIngestScheduled = false;
-        int baselineScopeMask = defaultScopeMaskForContext(safeContextType, safeTaskType);
+        int baselineScopeMask = mergeWorkflowAdviceScopeMask(
+            defaultScopeMaskForContext(safeContextType, safeTaskType),
+            workflowAdvice
+        );
         int aggregateScopeMask = scanResult.enabled() ? Math.max(0, scanResult.aggregateScopeMask()) : 0;
+        boolean hasCurrentMenuSurface = "menu_json".equals(safeContextType) && !safeCode.isBlank();
+        boolean hasCurrentCodeSurface = !hasCurrentMenuSurface && !safeCode.isBlank();
         if (aiScopedContextIngestionService != null) {
             try {
                 AiScopedContextIngestionService.ScopeMaskAnalysis scopeAnalysis = aiScopedContextIngestionService.analyzeScopesFromAttachments(
                     safeMessage,
                     safeAttachments,
-                    !safeCode.isBlank(),
-                    "menu_json".equals(safeContextType) && !safeCode.isBlank()
+                    hasCurrentCodeSurface,
+                    hasCurrentMenuSurface
                 );
                 int scopedMask = Math.max(0, scopeAnalysis.scopeMask);
                 if ("menu_json".equals(safeContextType)) {
@@ -1046,6 +1080,9 @@ public class AiLocalOrchestrationService {
             safeCode,
             digest,
             Math.max(3200, dynamicIngestMaxMarkdownChars / 2));
+        boolean shouldIndexPrimaryFlowDynamically = !primaryFlowMarkdown.isBlank()
+            && !"menu_json".equals(safeContextType)
+            && !"code".equals(safeContextType);
 
         if (dynamicIngestEnabled
             && aiBusinessMemoryVectorService != null
@@ -1054,7 +1091,7 @@ public class AiLocalOrchestrationService {
             if (!scanIngestionMarkdown.isBlank()) {
                 mergedIngestion = scanIngestionMarkdown;
             }
-            if (!primaryFlowMarkdown.isBlank()) {
+            if (shouldIndexPrimaryFlowDynamically) {
                 mergedIngestion = mergedIngestion.isBlank()
                     ? primaryFlowMarkdown
                     : (mergedIngestion + "\n\n## PRIMARY_FLOW_CONTEXT\n" + primaryFlowMarkdown);
@@ -1068,7 +1105,7 @@ public class AiLocalOrchestrationService {
                 dynamicTags.add("multimodal");
                 dynamicTags.add(safeContextType);
                 dynamicTags.add(safeTaskType);
-                if (!primaryFlowMarkdown.isBlank()) {
+                if (shouldIndexPrimaryFlowDynamically) {
                     dynamicTags.add("primary_flow");
                 }
                 dynamicTags.addAll(AiMultimodalScannerService.scopeTagsFromMask(aggregateScopeMask));
@@ -1114,6 +1151,7 @@ public class AiLocalOrchestrationService {
                 out.toolStats.put("dynamicMemorySource", dynamicSource);
                 out.toolStats.put("dynamicMemoryPrunedSources", dynamicPrunedSources);
                 out.toolStats.put("dynamicMemoryScopeMask", aggregateScopeMask);
+                out.toolStats.put("dynamicMemoryPrimaryFlowIndexed", shouldIndexPrimaryFlowDynamically);
             }
         }
 
@@ -1154,9 +1192,14 @@ public class AiLocalOrchestrationService {
             }
             
             // ─── Phase 1: Symbol-Aware Retrieval (prioritize code symbols over generic vector search) ───
+            boolean menuFlow = "menu_json".equals(safeContextType);
             StringBuilder symbolRagBlock = new StringBuilder();
-            if (symbolAwareRetrievalEnabled && !digest.codeSymbols.isEmpty()) {
-                List<String> symbolQueries = buildSymbolAwareQueries(digest.codeSymbols, maxCodeSymbols / 2);
+            List<String> symbolQueries = List.of();
+            if (!menuFlow && symbolAwareRetrievalEnabled && !digest.codeSymbols.isEmpty()) {
+                symbolQueries = buildSymbolAwareQueries(digest.codeSymbols, maxCodeSymbols / 2);
+                if (!symbolQueries.isEmpty()) {
+                    out.toolStats.put("symbolAwareRetrievalQueries", truncateLines(symbolQueries, 3, 140));
+                }
                 if (!symbolQueries.isEmpty()) {
                     int symbolTopK = Math.max(2, symbolAwareRetrievalTopK);
                     int symbolMaxChars = Math.max(1200, symbolAwareRetrievalMaxChars);
@@ -1194,7 +1237,7 @@ public class AiLocalOrchestrationService {
 
             // ─── Phase 1.5: Type-Aware Context Injection (enhance symbol results with type hints) ───
             StringBuilder typeHintsBlock = new StringBuilder();
-            if (typeAwareInjectionEnabled && !safeCode.isBlank()) {
+            if (!menuFlow && typeAwareInjectionEnabled && !safeCode.isBlank()) {
                 List<String> typeHints = extractTypeHints(safeCode, typeAwareInjectionMaxTypes);
                 if (!typeHints.isEmpty()) {
                     typeHintsBlock.append("## Available Types in This Code\n");
@@ -1238,6 +1281,19 @@ public class AiLocalOrchestrationService {
                 scanResult,
                 policyTopK        // Pass policy-decided topK to planner
             );
+            out.toolStats.put("retrievalFocusTargets", buildRetrievalFocusTargets(
+                safeMessage,
+                safeContextType,
+                safeTaskType,
+                safeAttachments,
+                request.appId,
+                request.currentCode,
+                request.pName,
+                request.pType
+            ));
+            out.toolStats.put("retrievalEngineLabel", menuFlow
+                ? "menu schema + trigger retrieval"
+                : "code scope + symbol retrieval");
             scopedRagBlock = aiBusinessMemoryVectorService.buildRagBlockWithScopes(
                 appId,
                 retrievalPlan.query,
@@ -1335,7 +1391,6 @@ public class AiLocalOrchestrationService {
                 int retryScopeMask = Math.max(1,
                     retrievalPlan.scopeMask
                         | defaultScopeMaskForContext(safeContextType, safeTaskType)
-                        | AiMultimodalScannerService.SCOPE_BUSINESS
                 );
                 int retryTopK = Math.max(3, retrievalPlan.topK + 2);
                 int retryMaxChars = Math.max(1600, retrievalPlan.maxChars + 1000);
@@ -1365,10 +1420,6 @@ public class AiLocalOrchestrationService {
                 out.toolStats.put("scopedRagQualityRetryQuery", truncateLine(retryQuery, 180));
             }
 
-            if (!retrievalQualityPassed) {
-                out.planSteps.add("Retrieval remediation: context evidence vẫn thấp, ưu tiên anchor currentCode + symbols khi suy luận step");
-            }
-
             out.toolStats.put("scopedRagQualityMinChars", retrievalMinChars);
             out.toolStats.put("scopedRagQualityPassed", retrievalQualityPassed);
             out.toolStats.put("scopedRagQualityDeficit", Math.max(0, retrievalMinChars - scopedRagChars));
@@ -1380,6 +1431,117 @@ public class AiLocalOrchestrationService {
             out.toolStats.put("scopedRagAdaptiveReasons", retrievalPlan.reasons);
             out.toolStats.put("scopedRagChars", scopedRagChars);
             out.toolStats.put("scopedRagQuery", truncateLine(retrievalPlan.query, 180));
+            List<AiBusinessMemoryVectorService.SearchHit> retrievalHits = aiBusinessMemoryVectorService.searchWithScopes(
+                appId,
+                retrievalPlan.query,
+                retrievalPlan.topK,
+                retrievalPlan.scopeMask
+            );
+            out.toolStats.put("scopedRagHitCount", retrievalHits.size());
+            out.toolStats.put("scopedRagSourceCount", countUniqueHitSources(retrievalHits));
+            out.toolStats.put(
+                "scopedRagTopHits",
+                summarizeSearchHits(retrievalHits, 3, retrievalPlan.query, request.appId, safeContextType, request.pName, request.pType)
+            );
+            out.toolStats.put(
+                "virtualContextPreview",
+                buildVirtualContextPreview(
+                    retrievalHits,
+                    retrievalPlan.query,
+                    safeContextType,
+                    digest,
+                    request.appId,
+                    request.pName,
+                    request.pType,
+                    buildRetrievalFocusTargets(
+                        safeMessage,
+                        safeContextType,
+                        safeTaskType,
+                        safeAttachments,
+                        request.appId,
+                        request.currentCode,
+                        request.pName,
+                        request.pType
+                    ),
+                    targetedQueries,
+                    symbolQueries
+                )
+            );
+            String webSearchRagBlock = maybeBuildWebSearchRagBlock(
+                appId,
+                safeMessage,
+                safeContextType,
+                safeTaskType,
+                safeMode,
+                safeLanguage,
+                digest,
+                Math.max(1, retrievalPlan.scopeMask),
+                scopedRagChars,
+                retrievalQualityPassed,
+                retrievalHits,
+                effectiveRequestId,
+                out
+            );
+            if (!webSearchRagBlock.isBlank()) {
+                scopedRagBlock = scopedRagBlock == null || scopedRagBlock.isBlank()
+                    ? webSearchRagBlock
+                    : (scopedRagBlock + "\n\n## AGENTIC_WEB_SEARCH_RAG\n" + webSearchRagBlock);
+                scopedRagChars = scopedRagBlock.length();
+            }
+
+            planning = buildExecutionPlanningSnapshot(
+                safeMessage,
+                safeContextType,
+                safeTaskType,
+                safeMode,
+                codeChars,
+                attachmentChars,
+                digest,
+                scanResult,
+                offTopicConfidence,
+                flowDecision,
+                stepVerifierMinScoreOverride,
+                planSchemaMinScoreOverride,
+                safeCode,
+                scopedRagBlock,
+                workflowAdvice
+            );
+            planSteps = new ArrayList<>(planning.planSteps());
+            planCoverage = planning.planCoverage();
+            schemaCheck = planning.schemaCheck();
+            structuredPlanSteps = new ArrayList<>(planning.structuredPlanSteps());
+            if (!retrievalQualityPassed) {
+                planSteps.add("Retrieval remediation: context evidence vẫn thấp, ưu tiên anchor currentCode + symbols khi suy luận step");
+                structuredPlanSteps = buildStructuredPlanSteps(planSteps);
+                planCoverage = evaluatePlanCoverage(
+                    safeMessage,
+                    safeContextType,
+                    safeTaskType,
+                    safeMode,
+                    codeChars,
+                    attachmentChars,
+                    digest,
+                    scanResult,
+                    planSteps,
+                    stepVerifierMinScoreOverride
+                );
+                schemaCheck = evaluatePlanSchema(structuredPlanSteps, planSchemaMinScoreOverride);
+                planning = new ExecutionPlanningSnapshot(
+                    planSteps,
+                    planCoverage,
+                    schemaCheck,
+                    structuredPlanSteps,
+                    planning.workflowBlueprintUsed(),
+                    planning.executionPlannerUsed(),
+                    planning.executionPlanStepCount(),
+                    planning.executionPlanEstimatedMs(),
+                    planning.executionPlanDeduped(),
+                    planning.retrievalAware()
+                );
+            }
+            applyExecutionPlanningStats(out, planning, safeContextType, safeMode, digest, scanResult);
+            out.toolStats.put("executionPlanRetrievedContextChars", scopedRagChars);
+            out.planSteps = planSteps;
         }
 
         AiSpeculativeExecutionService.ExecutionResult speculative = aiSpeculativeExecutionService.run(
@@ -1489,6 +1651,8 @@ public class AiLocalOrchestrationService {
         String responseMode,
         String language,
         String requestId,
+        String pName,
+        Integer pType,
         Exception error,
         AiAdaptiveRetryPolicy.RetryDecision retryDecision
     ) {
@@ -1507,13 +1671,16 @@ public class AiLocalOrchestrationService {
         out.speculativeOperation = "degraded_orchestration";
         out.speculativeExecuted = false;
 
-        LocalToolDigest digest = runLocalTools(safeMessage, safeCode, safeAttachments);
+        LocalToolDigest digest = runLocalTools(safeMessage, safeCode, safeAttachments, safeContextType);
         out.toolStats.put("requestId", requestId);
         out.toolStats.put("degradedMode", true);
         out.toolStats.put("degradedReason", truncateLine(String.valueOf(error == null ? "unknown" : error.getMessage()), 180));
         out.toolStats.put("routingTier", out.routingTier);
         out.toolStats.put("preferredModelHint", out.preferredModelHint);
         out.toolStats.putAll(digest.stats);
+        if (!digest.menuSignals.isEmpty()) {
+            out.toolStats.put("menuSignals", truncateLines(digest.menuSignals, 8, 96));
+        }
         if (retryDecision != null) {
             out.toolStats.put("retryPolicyEnabled", true);
             out.toolStats.put("retryDecision", retryDecision.shouldRetry);
@@ -1768,6 +1935,19 @@ public class AiLocalOrchestrationService {
         List<String> missingSignals
     ) {}
 
+    private record ExecutionPlanningSnapshot(
+        List<String> planSteps,
+        PlanCoverageCheck planCoverage,
+        PlanSchemaCheck schemaCheck,
+        List<Map<String, Object>> structuredPlanSteps,
+        boolean workflowBlueprintUsed,
+        boolean executionPlannerUsed,
+        int executionPlanStepCount,
+        long executionPlanEstimatedMs,
+        int executionPlanDeduped,
+        boolean retrievalAware
+    ) {}
+
     private List<Map<String, Object>> buildStructuredPlanSteps(List<String> planSteps) {
         if (planSteps == null || planSteps.isEmpty()) {
             return List.of();
@@ -1997,6 +2177,212 @@ public class AiLocalOrchestrationService {
         return new PlanSchemaCheck(capped, min, passed, Math.max(0, invalidCount), missing);
     }
 
+    private ExecutionPlanningSnapshot buildExecutionPlanningSnapshot(
+        String safeMessage,
+        String safeContextType,
+        String safeTaskType,
+        String safeMode,
+        int codeChars,
+        int attachmentChars,
+        LocalToolDigest digest,
+        AiMultimodalScannerService.ScanResult scanResult,
+        double offTopicConfidence,
+        FlowDecision flowDecision,
+        Integer stepVerifierMinScoreOverride,
+        Integer planSchemaMinScoreOverride,
+        String safeCode,
+        String retrievedContext,
+        AiLocalWorkflowAdvisorService.WorkflowAdvice workflowAdvice
+    ) {
+        List<String> planSteps = new ArrayList<>(buildPlannerSteps(
+            safeContextType,
+            safeTaskType,
+            safeMode,
+            codeChars,
+            attachmentChars,
+            digest,
+            scanResult,
+            offTopicConfidence,
+            flowDecision
+        ));
+        if (scanResult.enabled() && scanResult.ingestCount() > 0
+            && (planSteps.isEmpty() || !planSteps.get(0).startsWith("Run multimodal scanner"))) {
+            planSteps.add(0, "Run multimodal scanner (JSON/Image) and select dynamic memory ingestion candidates");
+        }
+
+        boolean workflowBlueprintUsed = false;
+        List<String> workflowBlueprintSteps = normalizeWorkflowBlueprintPlanSteps(workflowAdvice);
+        if (!workflowBlueprintSteps.isEmpty()) {
+            workflowBlueprintUsed = true;
+            planSteps = new ArrayList<>(workflowBlueprintSteps);
+            if (scanResult.enabled() && scanResult.ingestCount() > 0
+                && planSteps.stream().noneMatch(step -> String.valueOf(step).toLowerCase(Locale.ROOT).contains("scanner"))) {
+                planSteps.add(0, "Run multimodal scanner (JSON/Image) and select dynamic memory ingestion candidates");
+            }
+        }
+
+        boolean executionPlannerUsed = false;
+        int executionPlanStepCount = 0;
+        long executionPlanEstimatedMs = 0L;
+        int executionPlanDeduped = 0;
+        if (!workflowBlueprintUsed && aiExecutionPlannerService != null) {
+            try {
+                String workspaceContext = "menu_json".equals(safeContextType) ? "menu" : "code";
+                AiExecutionPlannerService.ExecutionPlan executionPlan = aiExecutionPlannerService.generatePlan(
+                    safeMessage,
+                    workspaceContext,
+                    safeCode,
+                    retrievedContext
+                );
+                if (executionPlan != null && executionPlan.steps != null && !executionPlan.steps.isEmpty()) {
+                    executionPlannerUsed = true;
+                    executionPlanStepCount = executionPlan.getStepCount();
+                    executionPlanEstimatedMs = executionPlan.totalEstimatedMs;
+                    executionPlanDeduped = executionPlan.deduplicationCount;
+                    planSteps = executionPlan.steps.stream()
+                        .map(step -> "[" + step.action + "] " + step.description)
+                        .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+                }
+            } catch (Exception ignored) {
+                // Keep heuristic planner when execution planner fails.
+            }
+        }
+
+        PlanCoverageCheck planCoverage = evaluatePlanCoverage(
+            safeMessage,
+            safeContextType,
+            safeTaskType,
+            safeMode,
+            codeChars,
+            attachmentChars,
+            digest,
+            scanResult,
+            planSteps,
+            stepVerifierMinScoreOverride
+        );
+        if (stepVerifierEnabled && !planCoverage.passed && !planCoverage.missingAreas.isEmpty()) {
+            planSteps.add("Verifier remediation: " + String.join("; ", planCoverage.missingAreas));
+            planCoverage = evaluatePlanCoverage(
+                safeMessage,
+                safeContextType,
+                safeTaskType,
+                safeMode,
+                codeChars,
+                attachmentChars,
+                digest,
+                scanResult,
+                planSteps,
+                stepVerifierMinScoreOverride
+            );
+        }
+
+        List<Map<String, Object>> structuredPlanSteps = buildStructuredPlanSteps(planSteps);
+        PlanSchemaCheck schemaCheck = evaluatePlanSchema(structuredPlanSteps, planSchemaMinScoreOverride);
+        if (planSchemaEnabled && !schemaCheck.passed && !schemaCheck.missingSignals.isEmpty()) {
+            planSteps.add("Schema remediation: " + String.join("; ", schemaCheck.missingSignals));
+            structuredPlanSteps = buildStructuredPlanSteps(planSteps);
+            schemaCheck = evaluatePlanSchema(structuredPlanSteps, planSchemaMinScoreOverride);
+        }
+
+        return new ExecutionPlanningSnapshot(
+            planSteps,
+            planCoverage,
+            schemaCheck,
+            structuredPlanSteps,
+            workflowBlueprintUsed,
+            executionPlannerUsed,
+            executionPlanStepCount,
+            executionPlanEstimatedMs,
+            executionPlanDeduped,
+            retrievedContext != null && !retrievedContext.isBlank()
+        );
+    }
+
+    private List<String> normalizeWorkflowBlueprintPlanSteps(AiLocalWorkflowAdvisorService.WorkflowAdvice workflowAdvice) {
+        if (workflowAdvice == null || workflowAdvice.executionBlueprint().isEmpty()) {
+            return List.of();
+        }
+        List<String> out = new ArrayList<>();
+        for (Map<String, Object> step : workflowAdvice.executionBlueprint()) {
+            if (step == null || step.isEmpty()) {
+                continue;
+            }
+            String action = String.valueOf(step.getOrDefault("action", "")).trim();
+            String description = String.valueOf(step.getOrDefault("description", "")).trim();
+            String targetPath = String.valueOf(step.getOrDefault("targetPath", "")).trim();
+            StringBuilder line = new StringBuilder();
+            if (!action.isBlank()) {
+                line.append('[').append(action).append(']').append(' ');
+            }
+            if (!description.isBlank()) {
+                line.append(description);
+            }
+            if (!targetPath.isBlank()) {
+                if (line.length() > 0) {
+                    line.append(" -> ");
+                }
+                line.append(targetPath);
+            }
+            String normalized = line.toString().trim();
+            if (!normalized.isBlank()) {
+                out.add(normalized);
+            }
+            if (out.size() >= 8) {
+                break;
+            }
+        }
+        return out.isEmpty() ? List.of() : List.copyOf(out);
+    }
+
+    private void applyExecutionPlanningStats(
+        OrchestrationResult out,
+        ExecutionPlanningSnapshot snapshot,
+        String safeContextType,
+        String safeMode,
+        LocalToolDigest digest,
+        AiMultimodalScannerService.ScanResult scanResult
+    ) {
+        out.toolStats.put("planVerifierEnabled", stepVerifierEnabled);
+        out.toolStats.put("planVerifierScore", snapshot.planCoverage().score);
+        out.toolStats.put("planVerifierMinScore", snapshot.planCoverage().minScore);
+        out.toolStats.put("planVerifierPassed", snapshot.planCoverage().passed);
+        out.toolStats.put("planVerifierVerdict", snapshot.planCoverage().verdict);
+        out.toolStats.put("planVerifierMissing", snapshot.planCoverage().missingAreas);
+        out.toolStats.put("planSchemaEnabled", planSchemaEnabled);
+        out.toolStats.put("planSchemaScore", snapshot.schemaCheck().score);
+        out.toolStats.put("planSchemaMinScore", snapshot.schemaCheck().minScore);
+        out.toolStats.put("planSchemaPassed", snapshot.schemaCheck().passed);
+        out.toolStats.put("planSchemaInvalidCount", snapshot.schemaCheck().invalidCount);
+        out.toolStats.put("planSchemaMissing", snapshot.schemaCheck().missingSignals);
+        out.toolStats.put("planStructuredSteps", snapshot.structuredPlanSteps());
+        out.toolStats.put("workflowBlueprintUsed", snapshot.workflowBlueprintUsed());
+        out.toolStats.put("executionPlanUsed", snapshot.executionPlannerUsed());
+        out.toolStats.put("executionPlanRetrievalAware", snapshot.retrievalAware());
+        if (snapshot.workflowBlueprintUsed()) {
+            out.toolStats.put("workflowBlueprintStepCount", snapshot.planSteps().size());
+        }
+        if (snapshot.executionPlannerUsed()) {
+            out.toolStats.put("executionPlanStepCount", snapshot.executionPlanStepCount());
+            out.toolStats.put("executionPlanEstimatedMs", snapshot.executionPlanEstimatedMs());
+            out.toolStats.put("executionPlanDeduped", snapshot.executionPlanDeduped());
+        }
+        if (toolDagEnabled) {
+            Map<String, Object> toolDag = buildToolDagPlan(
+                snapshot.planSteps(),
+                snapshot.structuredPlanSteps(),
+                safeContextType,
+                safeMode,
+                digest,
+                scanResult,
+                snapshot.planCoverage(),
+                snapshot.schemaCheck()
+            );
+            if (!toolDag.isEmpty()) {
+                out.toolStats.putAll(toolDag);
+            }
+        }
+    }
+
     private boolean hasPlanSignal(List<String> steps, String... signals) {
         if (steps == null || steps.isEmpty() || signals == null || signals.length == 0) {
             return false;
@@ -2067,16 +2453,26 @@ public class AiLocalOrchestrationService {
         return String.valueOf(balancedModelHint == null ? "gemini-2.5-flash" : balancedModelHint).trim();
     }
 
-    private LocalToolDigest runLocalTools(String message, String code, List<Map<String, Object>> attachments) {
+    private LocalToolDigest runLocalTools(String message, String code, List<Map<String, Object>> attachments, String contextType) {
         LocalToolDigest digest = new LocalToolDigest();
+        String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        boolean menuFlow = "menu_json".equals(safeContextType);
 
         Set<String> intents = extractIntentKeywords(message, Math.max(4, maxIntents));
         digest.intentKeywords.addAll(intents);
         digest.stats.put("intentKeywords", intents.size());
 
-        List<String> codeSymbols = extractCodeSymbols(code, Math.max(10, maxCodeSymbols));
-        digest.codeSymbols.addAll(codeSymbols);
-        digest.stats.put("codeSymbols", codeSymbols.size());
+        if (menuFlow) {
+            List<String> menuSignals = extractMenuSignals(code, Math.max(10, maxCodeSymbols));
+            digest.menuSignals.addAll(menuSignals);
+            digest.stats.put("menuSignals", menuSignals.size());
+            digest.stats.put("codeSymbols", 0);
+        } else {
+            List<String> codeSymbols = extractCodeSymbols(code, Math.max(10, maxCodeSymbols));
+            digest.codeSymbols.addAll(codeSymbols);
+            digest.stats.put("codeSymbols", codeSymbols.size());
+            digest.stats.put("menuSignals", 0);
+        }
 
         AttachmentDigest attachmentDigest = buildAttachmentDigest(attachments, Math.max(1, maxAttachmentItems));
         digest.attachmentItems.addAll(attachmentDigest.items);
@@ -2108,7 +2504,13 @@ public class AiLocalOrchestrationService {
         if (!digest.intentKeywords.isEmpty()) {
             sb.append("intentKeywords: ").append(String.join(", ", digest.intentKeywords)).append("\\n");
         }
-        if (!digest.codeSymbols.isEmpty()) {
+        if ("menu_json".equals(contextType) && !digest.menuSignals.isEmpty()) {
+            sb.append("menuSignals:\n");
+            for (String line : digest.menuSignals) {
+                sb.append("- ").append(line).append("\n");
+            }
+        }
+        if (!"menu_json".equals(contextType) && !digest.codeSymbols.isEmpty()) {
             sb.append("codeSymbols:\\n");
             for (String line : digest.codeSymbols) {
                 sb.append("- ").append(line).append("\\n");
@@ -2131,6 +2533,7 @@ public class AiLocalOrchestrationService {
         runtime.put("stats", digest.stats);
         runtime.put("intents", digest.intentKeywords);
         runtime.put("codeSymbolCount", digest.codeSymbols.size());
+        runtime.put("menuSignalCount", digest.menuSignals.size());
         runtime.put("attachmentItemCount", digest.attachmentItems.size());
         try {
             return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(runtime);
@@ -2186,6 +2589,7 @@ public class AiLocalOrchestrationService {
             safeMessage,
             digest.intentKeywords,
             digest.codeSymbols,
+            digest.menuSignals,
             attachments,
             safeContextType,
             safeTaskType,
@@ -2318,6 +2722,87 @@ public class AiLocalOrchestrationService {
             }
         }
         return out;
+    }
+
+    private List<String> extractMenuSignals(String menuJson, int limit) {
+        LinkedHashSet<String> signals = new LinkedHashSet<>();
+        String source = String.valueOf(menuJson == null ? "" : menuJson).trim();
+        if (source.isBlank()) {
+            return new ArrayList<>();
+        }
+
+        try {
+            JsonNode root = objectMapper.readTree(source);
+            collectMenuSignals(root, signals, Math.max(4, limit * 3));
+        } catch (Exception ignored) {
+            Matcher matcher = Pattern.compile("\"(label|table_name|parentId|parentid|type_form|id)\"\\s*:\\s*\"?([^\",}\\n]+)").matcher(source);
+            while (matcher.find() && signals.size() < Math.max(4, limit * 3)) {
+                String key = String.valueOf(matcher.group(1) == null ? "" : matcher.group(1)).trim().toLowerCase(Locale.ROOT);
+                String value = String.valueOf(matcher.group(2) == null ? "" : matcher.group(2)).trim();
+                if (!value.isBlank()) {
+                    signals.add(key + "=" + truncateLine(value, 48));
+                }
+            }
+        }
+
+        List<String> out = new ArrayList<>();
+        for (String signal : signals) {
+            String safe = truncateLine(String.valueOf(signal == null ? "" : signal).trim(), 96);
+            if (!safe.isBlank()) {
+                out.add(safe);
+            }
+            if (out.size() >= Math.max(1, limit)) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    private void collectMenuSignals(JsonNode node, LinkedHashSet<String> signals, int maxSignals) {
+        if (node == null || signals.size() >= maxSignals) {
+            return;
+        }
+        if (node.isObject()) {
+            addMenuSignal(signals, "id", node.get("id"), maxSignals);
+            addMenuSignal(signals, "label", node.get("label"), maxSignals);
+            addMenuSignal(signals, "table_name", node.get("table_name"), maxSignals);
+            addMenuSignal(signals, "parentId", node.get("parentId"), maxSignals);
+            addMenuSignal(signals, "parentid", node.get("parentid"), maxSignals);
+            addMenuSignal(signals, "type_form", node.get("type_form"), maxSignals);
+            JsonNode triggerNode = node.get("trigger");
+            if (triggerNode != null && triggerNode.isObject()) {
+                triggerNode.fieldNames().forEachRemaining(name -> {
+                    if (signals.size() < maxSignals) {
+                        String safe = String.valueOf(name == null ? "" : name).trim();
+                        if (!safe.isBlank()) {
+                            signals.add("trigger=" + truncateLine(safe, 48));
+                        }
+                    }
+                });
+            }
+            collectMenuSignals(node.get("menu"), signals, maxSignals);
+            collectMenuSignals(node.get("children"), signals, maxSignals);
+            return;
+        }
+        if (node.isArray()) {
+            for (JsonNode item : node) {
+                if (signals.size() >= maxSignals) {
+                    break;
+                }
+                collectMenuSignals(item, signals, maxSignals);
+            }
+        }
+    }
+
+    private void addMenuSignal(LinkedHashSet<String> signals, String key, JsonNode valueNode, int maxSignals) {
+        if (signals.size() >= maxSignals || valueNode == null || valueNode.isNull()) {
+            return;
+        }
+        String value = valueNode.isValueNode() ? valueNode.asText("") : "";
+        String safe = String.valueOf(value == null ? "" : value).trim();
+        if (!safe.isBlank()) {
+            signals.add(key + "=" + truncateLine(safe, 48));
+        }
     }
 
     /**
@@ -2616,23 +3101,78 @@ public class AiLocalOrchestrationService {
         return out.isEmpty() ? "none" : String.join(", ", out);
     }
 
+    private AiLocalWorkflowAdvisorService.IntentSnapshot buildWorkflowIntentSnapshot(String contextType, String responseMode) {
+        boolean menuFlow = "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim());
+        return new AiLocalWorkflowAdvisorService.IntentSnapshot(
+            menuFlow ? "EDIT_MENU" : "EDIT_CODE",
+            "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode).trim()) ? "modify" : "search",
+            60,
+            menuFlow ? "load_menu_context" : "load_code_context",
+            menuFlow ? "menu" : "code"
+        );
+    }
+
+    private String buildPlannerQueryHint(
+        String message,
+        LocalToolDigest digest,
+        String contextType,
+        String taskType,
+        String responseMode
+    ) {
+        return truncateMiddle(
+            buildSelfDirectedRetrievalQuery(
+                message,
+                digest == null ? Set.of() : digest.intentKeywords,
+                digest == null ? List.of() : digest.codeSymbols,
+                digest == null ? List.of() : digest.menuSignals,
+                List.of(),
+                contextType,
+                taskType,
+                responseMode
+            ),
+            240
+        );
+    }
+
+    private int mergeWorkflowAdviceScopeMask(int fallbackMask, AiLocalWorkflowAdvisorService.WorkflowAdvice workflowAdvice) {
+        int mask = Math.max(0, fallbackMask);
+        if (workflowAdvice == null) {
+            return mask;
+        }
+        String workspaceKind = String.valueOf(workflowAdvice.workspaceKind() == null ? "" : workflowAdvice.workspaceKind()).trim().toLowerCase(Locale.ROOT);
+        if ("menu".equals(workspaceKind)) {
+            mask |= AiMultimodalScannerService.SCOPE_MENU | AiMultimodalScannerService.SCOPE_JSON_SCHEMA;
+        } else if ("code".equals(workspaceKind)) {
+            mask |= AiMultimodalScannerService.SCOPE_CODE;
+        }
+        for (String target : workflowAdvice.ingestTargets()) {
+            String safeTarget = String.valueOf(target == null ? "" : target).trim().toLowerCase(Locale.ROOT);
+            switch (safeTarget) {
+                case "current_menu", "menu_attachments" -> mask |= AiMultimodalScannerService.SCOPE_MENU | AiMultimodalScannerService.SCOPE_JSON_SCHEMA;
+                case "current_code", "code_attachments" -> mask |= AiMultimodalScannerService.SCOPE_CODE;
+                case "business_markdown", "reference_attachments" -> mask |= AiMultimodalScannerService.SCOPE_BUSINESS;
+                case "json_attachments" -> mask |= AiMultimodalScannerService.SCOPE_JSON_SCHEMA;
+                default -> {
+                }
+            }
+        }
+        return Math.max(mask, Math.max(0, fallbackMask));
+    }
+
     private int defaultScopeMaskForContext(String contextType, String taskType) {
         String ctx = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
         String task = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
-        int mask = AiMultimodalScannerService.SCOPE_BUSINESS;
         if ("menu_json".equals(ctx) || task.contains("menu")) {
-            mask |= AiMultimodalScannerService.SCOPE_MENU;
-            mask |= AiMultimodalScannerService.SCOPE_JSON_SCHEMA;
-        } else {
-            mask |= AiMultimodalScannerService.SCOPE_CODE;
+            return AiMultimodalScannerService.SCOPE_MENU | AiMultimodalScannerService.SCOPE_JSON_SCHEMA;
         }
-        return mask;
+        return AiMultimodalScannerService.SCOPE_CODE;
     }
 
     private String buildSelfDirectedRetrievalQuery(
         String message,
         Set<String> intentKeywords,
         List<String> codeSymbols,
+        List<String> menuSignals,
         List<Map<String, Object>> attachments,
         String contextType,
         String taskType,
@@ -2640,6 +3180,7 @@ public class AiLocalOrchestrationService {
     ) {
         StringBuilder q = new StringBuilder();
         String safeMessage = String.valueOf(message == null ? "" : message).trim();
+        boolean menuFlow = "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim());
         q.append(safeMessage);
         if (intentKeywords != null && !intentKeywords.isEmpty()) {
             q.append(" | intents: ");
@@ -2659,7 +3200,7 @@ public class AiLocalOrchestrationService {
             }
         }
 
-        if (codeSymbols != null && !codeSymbols.isEmpty()) {
+        if (!menuFlow && codeSymbols != null && !codeSymbols.isEmpty()) {
             q.append(" | symbols: ");
             int count = 0;
             for (String symbol : codeSymbols) {
@@ -2689,6 +3230,25 @@ public class AiLocalOrchestrationService {
             }
         }
 
+        if (menuFlow && menuSignals != null && !menuSignals.isEmpty()) {
+            q.append(" | menu: ");
+            int count = 0;
+            for (String signal : menuSignals) {
+                String safeSignal = String.valueOf(signal == null ? "" : signal).trim();
+                if (safeSignal.isBlank()) {
+                    continue;
+                }
+                if (count > 0) {
+                    q.append(' ');
+                }
+                q.append(safeSignal);
+                count++;
+                if (count >= 10) {
+                    break;
+                }
+            }
+        }
+
         List<String> attachmentHints = extractAttachmentSearchHints(attachments, 16);
         if (!attachmentHints.isEmpty()) {
             q.append(" | attachments: ");
@@ -2705,7 +3265,9 @@ public class AiLocalOrchestrationService {
             }
         }
         if (semanticIntentDensity >= 3) {
-            q.append(" | focus: business_logic flow side_effects risks");
+            q.append(menuFlow
+                ? " | focus: menu_schema trigger hierarchy parentid table_name type_form"
+                : " | focus: business_logic flow side_effects risks");
         }
 
         q.append(" | context=").append(String.valueOf(contextType == null ? "" : contextType));
@@ -2725,6 +3287,7 @@ public class AiLocalOrchestrationService {
         String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim();
         String safeTaskType = String.valueOf(taskType == null ? "" : taskType).trim();
         String safeMode = String.valueOf(responseMode == null ? "" : responseMode).trim();
+        boolean menuFlow = "menu_json".equalsIgnoreCase(safeContextType);
 
         StringBuilder out = new StringBuilder();
         if (!safeMessage.isBlank()) {
@@ -2747,7 +3310,21 @@ public class AiLocalOrchestrationService {
             }
         }
 
-        if (digest != null && digest.codeSymbols != null && !digest.codeSymbols.isEmpty()) {
+        if (menuFlow && digest != null && digest.menuSignals != null && !digest.menuSignals.isEmpty()) {
+            out.append(" menu ");
+            int signalCount = 0;
+            for (String signal : digest.menuSignals) {
+                String safeSignal = String.valueOf(signal == null ? "" : signal).trim();
+                if (safeSignal.length() < 3) {
+                    continue;
+                }
+                out.append(safeSignal).append(' ');
+                signalCount++;
+                if (signalCount >= 8) {
+                    break;
+                }
+            }
+        } else if (digest != null && digest.codeSymbols != null && !digest.codeSymbols.isEmpty()) {
             out.append(" symbols ");
             int symbolCount = 0;
             for (String symbol : digest.codeSymbols) {
@@ -2776,7 +3353,7 @@ public class AiLocalOrchestrationService {
             .append(safeTaskType)
             .append(" mode ")
             .append(safeMode)
-            .append(" business logic flow analysis");
+            .append(menuFlow ? " menu schema trigger hierarchy analysis" : " business logic flow analysis");
 
         String normalized = trimTo(out.toString().replaceAll("\\s+", " ").trim(), 320);
         if (!normalized.isBlank()) {
@@ -2789,6 +3366,7 @@ public class AiLocalOrchestrationService {
         LinkedHashSet<String> queries = new LinkedHashSet<>();
         String safeMessage = String.valueOf(message == null ? "" : message).trim();
         String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim();
+        boolean menuFlow = "menu_json".equalsIgnoreCase(safeContextType);
 
         if (!safeMessage.isBlank()) {
             queries.add(trimTo(safeMessage, 160));
@@ -2819,7 +3397,28 @@ public class AiLocalOrchestrationService {
             }
         }
 
-        if (digest != null && digest.codeSymbols != null && !digest.codeSymbols.isEmpty()) {
+        if (menuFlow && digest != null && digest.menuSignals != null && !digest.menuSignals.isEmpty()) {
+            LinkedHashSet<String> menuTokens = new LinkedHashSet<>();
+            for (String signal : digest.menuSignals) {
+                String safe = String.valueOf(signal == null ? "" : signal).toLowerCase(Locale.ROOT);
+                Matcher m = TOKEN_PATTERN.matcher(safe);
+                while (m.find()) {
+                    String token = String.valueOf(m.group(0) == null ? "" : m.group(0)).trim();
+                    if (token.length() >= 3) {
+                        menuTokens.add(token);
+                    }
+                    if (menuTokens.size() >= 8) {
+                        break;
+                    }
+                }
+                if (menuTokens.size() >= 8) {
+                    break;
+                }
+            }
+            if (!menuTokens.isEmpty()) {
+                queries.add(String.join(" ", menuTokens) + " menu trigger hierarchy parentid table_name type_form");
+            }
+        } else if (digest != null && digest.codeSymbols != null && !digest.codeSymbols.isEmpty()) {
             LinkedHashSet<String> symbolTokens = new LinkedHashSet<>();
             for (String symbol : digest.codeSymbols) {
                 String safe = String.valueOf(symbol == null ? "" : symbol).toLowerCase(Locale.ROOT);
@@ -2853,6 +3452,391 @@ public class AiLocalOrchestrationService {
             }
         }
         return out;
+    }
+
+    private List<String> buildRetrievalFocusTargets(
+        String message,
+        String contextType,
+        String taskType,
+        List<Map<String, Object>> attachments,
+        String appId,
+        String currentCode,
+        String pName,
+        Integer pType
+    ) {
+        LinkedHashSet<String> targets = new LinkedHashSet<>();
+        String safeMessage = String.valueOf(message == null ? "" : message).toLowerCase(Locale.ROOT);
+        String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        String safeTaskType = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
+        boolean menuFlow = "menu_json".equals(safeContextType) || safeTaskType.contains("menu");
+        String safeAppId = str(appId);
+        String menuSourceKind = resolveMenuFocusSourceKind(currentCode, attachments);
+        String resolvedPName = resolveFocusTargetPName(pName, attachments);
+        Integer resolvedPType = resolveFocusTargetPType(pType, attachments);
+
+        if (menuFlow) {
+            targets.add("menu_json");
+            if (!safeAppId.isBlank()) {
+                targets.add("app_id=" + truncateLine(safeAppId, 64));
+            }
+            targets.add(menuSourceKind);
+        } else {
+            targets.add("code_editor");
+            if (!resolvedPName.isBlank()) {
+                targets.add("p_name=" + truncateLine(resolvedPName, 96));
+            }
+            if (resolvedPType != null) {
+                targets.add("p_type=" + resolvedPType);
+            }
+        }
+        if (safeMessage.contains("lmkt")) {
+            targets.add("lmkt");
+        }
+        if (attachments != null) {
+            for (Map<String, Object> attachment : attachments) {
+                if (attachment == null) {
+                    continue;
+                }
+                String name = str(attachment.get("name")).toLowerCase(Locale.ROOT);
+                if (!menuFlow && targets.size() == 1) {
+                    String attachmentPName = resolveAttachmentFocusPName(attachment);
+                    Integer attachmentPType = resolveAttachmentFocusPType(attachment);
+                    if (!attachmentPName.isBlank()) {
+                        targets.add("p_name=" + truncateLine(attachmentPName, 96));
+                    }
+                    if (attachmentPType != null) {
+                        targets.add("p_type=" + attachmentPType);
+                    }
+                }
+                if (name.contains("lmkt")) {
+                    targets.add("lmkt");
+                }
+            }
+        }
+        return new ArrayList<>(targets);
+    }
+
+    private String resolveMenuFocusSourceKind(String currentCode, List<Map<String, Object>> attachments) {
+        String safeCode = String.valueOf(currentCode == null ? "" : currentCode).trim();
+        if (!safeCode.isBlank()) {
+            return "menu_string";
+        }
+        if (attachments != null) {
+            for (Map<String, Object> attachment : attachments) {
+                if (attachment == null || attachment.isEmpty()) {
+                    continue;
+                }
+                String kind = str(attachment.get("kind")).toLowerCase(Locale.ROOT);
+                String mimeType = str(attachment.get("mimeType")).toLowerCase(Locale.ROOT);
+                String name = str(attachment.get("name")).toLowerCase(Locale.ROOT);
+                if ("json".equals(kind) || mimeType.contains("json") || name.endsWith(".json") || name.endsWith(".jsonl")) {
+                    return "menu_attachment_json";
+                }
+            }
+        }
+        return "menu_context";
+    }
+
+    private String resolveFocusTargetPName(String pName, List<Map<String, Object>> attachments) {
+        String safePName = str(pName);
+        if (!safePName.isBlank()) {
+            return safePName;
+        }
+        if (attachments == null || attachments.isEmpty()) {
+            return "";
+        }
+        for (Map<String, Object> attachment : attachments) {
+            String candidate = resolveAttachmentFocusPName(attachment);
+            if (!candidate.isBlank()) {
+                return candidate;
+            }
+        }
+        return "";
+    }
+
+    private Integer resolveFocusTargetPType(Integer pType, List<Map<String, Object>> attachments) {
+        if (pType != null) {
+            return pType;
+        }
+        if (attachments == null || attachments.isEmpty()) {
+            return null;
+        }
+        for (Map<String, Object> attachment : attachments) {
+            Integer candidate = resolveAttachmentFocusPType(attachment);
+            if (candidate != null) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private String resolveAttachmentFocusPName(Map<String, Object> attachment) {
+        if (attachment == null || attachment.isEmpty()) {
+            return "";
+        }
+        for (String key : List.of("pName", "fileKey", "sourceKey", "targetName")) {
+            String candidate = str(attachment.get(key));
+            if (!candidate.isBlank()) {
+                return candidate;
+            }
+        }
+        return "";
+    }
+
+    private Integer resolveAttachmentFocusPType(Map<String, Object> attachment) {
+        if (attachment == null || attachment.isEmpty()) {
+            return null;
+        }
+        Object raw = attachment.get("pType");
+        if (raw == null) {
+            raw = attachment.get("targetType");
+        }
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(String.valueOf(raw).trim());
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private List<String> truncateLines(List<String> lines, int limit, int maxLen) {
+        List<String> out = new ArrayList<>();
+        if (lines == null || lines.isEmpty()) {
+            return out;
+        }
+        for (String line : lines) {
+            String safe = truncateLine(line, maxLen);
+            if (!safe.isBlank()) {
+                out.add(safe);
+            }
+            if (out.size() >= Math.max(1, limit)) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    private List<Map<String, Object>> summarizeSearchHits(
+        List<AiBusinessMemoryVectorService.SearchHit> hits,
+        int limit,
+        String queryText,
+        String appId,
+        String contextType,
+        String pName,
+        Integer pType
+    ) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (hits == null || hits.isEmpty()) {
+            return out;
+        }
+        List<String> queryTokens = collectQueryTokensForHitSummary(queryText);
+        for (AiBusinessMemoryVectorService.SearchHit hit : hits) {
+            if (hit == null) {
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            String sourceCategory = classifyHitSourceCategory(hit);
+            row.put("source", buildReadableHitSourceLabel(hit, sourceCategory, appId, contextType, pName, pType));
+            row.put("chunkId", truncateLine(hit.chunkId(), 48));
+            row.put("summary", truncateLine(hit.summary(), 120));
+            row.put("score", Math.round(hit.score() * 1000.0f) / 1000.0f);
+            row.put("sourceCategory", sourceCategory);
+            row.put("matchedTokens", collectMatchedHitTokens(hit, queryTokens, 3));
+            row.put("recent", isRecentHit(hit));
+            out.add(row);
+            if (out.size() >= Math.max(1, limit)) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    private List<String> buildVirtualContextPreview(
+        List<AiBusinessMemoryVectorService.SearchHit> hits,
+        String queryText,
+        String contextType,
+        LocalToolDigest digest,
+        String appId,
+        String pName,
+        Integer pType,
+        List<String> focusTargets,
+        List<String> targetedQueries,
+        List<String> symbolQueries
+    ) {
+        LinkedHashSet<String> preview = new LinkedHashSet<>();
+
+        List<String> safeFocusTargets = focusTargets == null ? List.of() : focusTargets;
+        if (!safeFocusTargets.isEmpty()) {
+            preview.add("focus=" + String.join(",", truncateLines(safeFocusTargets, 4, 42)));
+        }
+
+        if ("menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType))
+            && digest != null
+            && digest.menuSignals != null
+            && !digest.menuSignals.isEmpty()) {
+            preview.add("menu-signals=" + String.join(" | ", truncateLines(digest.menuSignals, 3, 54)));
+        }
+
+        if (symbolQueries != null && !symbolQueries.isEmpty()) {
+            preview.add("symbol-probes=" + String.join(" | ", truncateLines(symbolQueries, 2, 64)));
+        }
+
+        if (targetedQueries != null && !targetedQueries.isEmpty()) {
+            preview.add("targeted-probes=" + String.join(" | ", truncateLines(targetedQueries, 2, 64)));
+        }
+
+        List<Map<String, Object>> summarizedHits = summarizeSearchHits(hits, 2, queryText, appId, contextType, pName, pType);
+        for (Map<String, Object> hit : summarizedHits) {
+            String source = String.valueOf(hit.getOrDefault("source", "")).trim();
+            String summary = String.valueOf(hit.getOrDefault("summary", "")).trim();
+            if (!source.isBlank() || !summary.isBlank()) {
+                preview.add("memory=" + truncateLine(source + (summary.isBlank() ? "" : " -> " + summary), 140));
+            }
+        }
+
+        return List.copyOf(preview);
+    }
+
+    private String buildReadableHitSourceLabel(
+        AiBusinessMemoryVectorService.SearchHit hit,
+        String sourceCategory,
+        String appId,
+        String contextType,
+        String pName,
+        Integer pType
+    ) {
+        String rawSource = truncateLine(String.valueOf(hit == null || hit.sourceName() == null ? "" : hit.sourceName()).trim(), 96);
+        String safeCategory = String.valueOf(sourceCategory == null ? "general" : sourceCategory).trim().toLowerCase(Locale.ROOT);
+        String safeAppId = str(appId);
+        String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        String safePName = str(pName);
+
+        if ("current_code".equals(safeCategory)
+            || (rawSource.toLowerCase(Locale.ROOT).contains("dyn_ctx_currentcode"))
+            || (rawSource.toLowerCase(Locale.ROOT).contains("dyn_ctx_orchestration") && "code".equals(safeContextType) && !safePName.isBlank())) {
+            StringBuilder label = new StringBuilder("active_code");
+            if (!safePName.isBlank()) {
+                label.append(" p_name=").append(truncateLine(safePName, 64));
+            }
+            if (pType != null) {
+                label.append(" p_type=").append(pType);
+            }
+            return truncateLine(label.toString(), 96);
+        }
+
+        if ("current_menu".equals(safeCategory)
+            || "menu_context".equals(safeCategory)
+            || rawSource.toLowerCase(Locale.ROOT).contains("dyn_ctx_currentmenu")
+            || (rawSource.toLowerCase(Locale.ROOT).contains("dyn_ctx_orchestration") && "menu_json".equals(safeContextType))) {
+            StringBuilder label = new StringBuilder("active_menu");
+            if (!safeAppId.isBlank()) {
+                label.append(" app_id=").append(truncateLine(safeAppId, 48));
+            }
+            return truncateLine(label.toString(), 96);
+        }
+
+        if ("attachment_context".equals(safeCategory)) {
+            return rawSource.isBlank() ? "attachment_context" : rawSource;
+        }
+        if ("reference_docs".equals(safeCategory)) {
+            return rawSource.isBlank() ? "reference_docs" : rawSource;
+        }
+        if ("workspace_module".equals(safeCategory)) {
+            return rawSource.isBlank() ? "workspace_module" : rawSource;
+        }
+        if ("dynamic_context".equals(safeCategory)) {
+            return "dynamic_context";
+        }
+        return rawSource.isBlank() ? "context_source" : rawSource;
+    }
+
+    private List<String> collectQueryTokensForHitSummary(String queryText) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        Matcher matcher = TOKEN_PATTERN.matcher(String.valueOf(queryText == null ? "" : queryText).toLowerCase(Locale.ROOT));
+        while (matcher.find() && out.size() < 10) {
+            String token = String.valueOf(matcher.group(0) == null ? "" : matcher.group(0)).trim();
+            if (token.length() >= 3) {
+                out.add(token);
+            }
+        }
+        return new ArrayList<>(out);
+    }
+
+    private List<String> collectMatchedHitTokens(AiBusinessMemoryVectorService.SearchHit hit, List<String> queryTokens, int limit) {
+        List<String> out = new ArrayList<>();
+        if (hit == null || queryTokens == null || queryTokens.isEmpty()) {
+            return out;
+        }
+        String source = String.valueOf(hit.sourceName() == null ? "" : hit.sourceName()).toLowerCase(Locale.ROOT);
+        String summary = String.valueOf(hit.summary() == null ? "" : hit.summary()).toLowerCase(Locale.ROOT);
+        String content = String.valueOf(hit.content() == null ? "" : hit.content()).toLowerCase(Locale.ROOT);
+        for (String token : queryTokens) {
+            String safeToken = String.valueOf(token == null ? "" : token).trim().toLowerCase(Locale.ROOT);
+            if (safeToken.length() < 3) {
+                continue;
+            }
+            if (source.contains(safeToken) || summary.contains(safeToken) || content.contains(safeToken)) {
+                out.add(safeToken);
+            }
+            if (out.size() >= Math.max(1, limit)) {
+                break;
+            }
+        }
+        return out;
+    }
+
+    private String classifyHitSourceCategory(AiBusinessMemoryVectorService.SearchHit hit) {
+        String source = String.valueOf(hit == null || hit.sourceName() == null ? "" : hit.sourceName()).toLowerCase(Locale.ROOT);
+        if (source.contains("dynamic_context") || source.contains("dyn_ctx")) {
+            if (source.contains("currentcode") || source.contains("current_code")) {
+                return "current_code";
+            }
+            if (source.contains("menu")) {
+                return "current_menu";
+            }
+            return "dynamic_context";
+        }
+        if (source.contains("menu_json") || source.contains("menu_string") || source.contains("menu_attachment") || source.contains("menu")) {
+            return "menu_context";
+        }
+        if (source.contains("attachment") || source.endsWith(".json") || source.endsWith(".jsonl") || source.endsWith(".md") || source.endsWith(".markdown")) {
+            return "attachment_context";
+        }
+        if (source.startsWith("ai_") || source.contains("business") || source.contains("knowledge") || source.contains("system")) {
+            return "reference_docs";
+        }
+        if (source.endsWith(".js") || source.endsWith(".ts") || source.endsWith(".tsx") || source.endsWith(".jsx") || source.endsWith(".vue")
+            || source.contains("frontend") || source.contains("backend") || source.contains("lmkt")) {
+            return "workspace_module";
+        }
+        return "general";
+    }
+
+    private boolean isRecentHit(AiBusinessMemoryVectorService.SearchHit hit) {
+        if (hit == null || hit.createdAtMs() <= 0L) {
+            return false;
+        }
+        long ageMs = Math.max(0L, System.currentTimeMillis() - hit.createdAtMs());
+        return ageMs <= 60 * 60_000L;
+    }
+
+    private int countUniqueHitSources(List<AiBusinessMemoryVectorService.SearchHit> hits) {
+        if (hits == null || hits.isEmpty()) {
+            return 0;
+        }
+        LinkedHashSet<String> sources = new LinkedHashSet<>();
+        for (AiBusinessMemoryVectorService.SearchHit hit : hits) {
+            if (hit == null) {
+                continue;
+            }
+            String source = String.valueOf(hit.sourceName() == null ? "" : hit.sourceName()).trim();
+            if (!source.isBlank()) {
+                sources.add(source);
+            }
+        }
+        return sources.size();
     }
 
     private boolean isBroadAnalyzeIntent(String message, LocalToolDigest digest) {
@@ -3046,6 +4030,168 @@ public class AiLocalOrchestrationService {
         sb.append("contextSummary=primary_flow_indexed_for_semantic_retrieval\n");
 
         return trimTo(sb.toString(), Math.max(1200, maxChars));
+    }
+
+    private String maybeBuildWebSearchRagBlock(
+        String appId,
+        String message,
+        String contextType,
+        String taskType,
+        String responseMode,
+        String language,
+        LocalToolDigest digest,
+        int scopeMask,
+        int internalRagChars,
+        boolean retrievalQualityPassed,
+        List<AiBusinessMemoryVectorService.SearchHit> retrievalHits,
+        String requestId,
+        OrchestrationResult out
+    ) {
+        if (!agenticWebSearchEnabled
+            || !scopedRagEnabled
+            || aiAgenticWebSearchService == null
+            || !aiAgenticWebSearchService.isEnabled()
+            || aiBusinessMemoryVectorService == null
+            || !aiBusinessMemoryVectorService.isEnabled()) {
+            return "";
+        }
+        int hitCount = retrievalHits == null ? 0 : retrievalHits.size();
+        boolean lowInternalEvidence = !retrievalQualityPassed
+            || internalRagChars < Math.max(400, agenticWebSearchMinInternalRagChars)
+            || hitCount <= 0;
+        String searchQuery = resolveAgenticWebSearchQuery(message, contextType, taskType, responseMode, language, digest, lowInternalEvidence);
+        if (!lowInternalEvidence && searchQuery.isBlank()) {
+            return "";
+        }
+        if (searchQuery.isBlank()) {
+            out.toolStats.put("webSearchDecision", "skipped_no_query");
+            return "";
+        }
+
+        AiAgenticWebSearchService.SearchExecution execution = aiAgenticWebSearchService.search(searchQuery);
+        out.toolStats.put("webSearchDecision", execution.success() ? "executed" : "failed");
+        out.toolStats.put("webSearchTriggered", true);
+        out.toolStats.put("webSearchQuery", truncateLine(searchQuery, 160));
+        out.toolStats.put("webSearchProvider", execution.provider());
+        out.toolStats.put("webSearchResultCount", execution.pageCount());
+        out.toolStats.put("webSearchVisitedUrls", truncateLines(execution.visitedUrls(), 3, 200));
+        out.toolStats.put("webSearchFailureReason", truncateLine(execution.failureReason(), 180));
+        if (!execution.success() || execution.markdown().isBlank()) {
+            return "";
+        }
+
+        int webScopeMask = Math.max(1, scopeMask);
+        List<String> webTags = new ArrayList<>();
+        webTags.add("dynamic");
+        webTags.add("web_search");
+        webTags.add(contextType);
+        webTags.add(taskType);
+        webTags.addAll(AiMultimodalScannerService.scopeTagsFromMask(webScopeMask));
+        String sourceSuffix = "web_search_" + System.currentTimeMillis();
+        AiBusinessMemoryVectorService.IndexSummary webIndexSummary = aiBusinessMemoryVectorService.indexDynamicContext(
+            appId,
+            sourceSuffix,
+            execution.markdown(),
+            webTags,
+            webScopeMask
+        );
+        out.toolStats.put("webSearchIndexSource", webIndexSummary == null ? "" : webIndexSummary.sourceName());
+        out.toolStats.put("webSearchIndexedChunks", webIndexSummary == null ? 0 : webIndexSummary.chunksIndexed());
+        out.toolStats.put("webSearchIndexedChars", execution.totalChars());
+        out.toolStats.put("webSearchRequestId", truncateLine(requestId, 120));
+
+        String rag = aiBusinessMemoryVectorService.buildRagBlockWithScopes(
+            appId,
+            searchQuery,
+            Math.max(2, Math.min(4, execution.pageCount())),
+            webScopeMask,
+            Math.max(1200, symbolAwareRetrievalMaxChars)
+        );
+        if (rag == null || rag.isBlank()) {
+            return execution.markdown();
+        }
+        return rag;
+    }
+
+    private String resolveAgenticWebSearchQuery(
+        String message,
+        String contextType,
+        String taskType,
+        String responseMode,
+        String language,
+        LocalToolDigest digest,
+        boolean lowInternalEvidence
+    ) {
+        String directive = extractSearchDirective(message);
+        if (!directive.isBlank()) {
+            return trimTo(directive, Math.max(48, agenticWebSearchQueryMaxChars));
+        }
+        if (!lowInternalEvidence && !looksLikeFreshKnowledgeNeed(message)) {
+            return "";
+        }
+        String llmQuery = proposeSearchQueryWithLocalModel(message, contextType, taskType, responseMode, language, digest);
+        if (!llmQuery.isBlank()) {
+            return trimTo(llmQuery, Math.max(48, agenticWebSearchQueryMaxChars));
+        }
+        if (looksLikeFreshKnowledgeNeed(message)) {
+            return trimTo(message, Math.max(48, agenticWebSearchQueryMaxChars));
+        }
+        return "";
+    }
+
+    private String extractSearchDirective(String text) {
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return "";
+        }
+        Matcher matcher = SEARCH_DIRECTIVE_PATTERN.matcher(safe);
+        if (matcher.find()) {
+            return String.valueOf(matcher.group(1) == null ? "" : matcher.group(1)).trim();
+        }
+        return "";
+    }
+
+    private boolean looksLikeFreshKnowledgeNeed(String message) {
+        String safe = String.valueOf(message == null ? "" : message).trim();
+        return !safe.isBlank() && FRESH_KNOWLEDGE_SIGNAL_PATTERN.matcher(safe).find();
+    }
+
+    private String proposeSearchQueryWithLocalModel(
+        String message,
+        String contextType,
+        String taskType,
+        String responseMode,
+        String language,
+        LocalToolDigest digest
+    ) {
+        if (llamaCppNativeService == null || !llamaCppNativeService.isHealthy()) {
+            return "";
+        }
+        try {
+            String prompt = "You are a search planner for a local AI system. "
+                + "If the request needs up-to-date or external web knowledge, return exactly one line in the form [SEARCH_QUERY: keywords]. "
+                + "If local knowledge should be enough, return NONE. "
+                + "Do not explain.\n"
+                + "contextType=" + String.valueOf(contextType == null ? "" : contextType).trim() + "\n"
+                + "taskType=" + String.valueOf(taskType == null ? "" : taskType).trim() + "\n"
+                + "responseMode=" + String.valueOf(responseMode == null ? "" : responseMode).trim() + "\n"
+                + "language=" + String.valueOf(language == null ? "" : language).trim() + "\n"
+                + "intentKeywords=" + String.join(", ", digest == null || digest.intentKeywords == null ? List.of() : digest.intentKeywords) + "\n"
+                + "userRequest=" + trimTo(String.valueOf(message == null ? "" : message).trim(), 600);
+            String raw = String.valueOf(
+                llamaCppNativeService.generateContentFast(prompt, Math.max(32, agenticWebSearchLlamaMaxOutputTokens))
+            ).trim();
+            if (raw.equalsIgnoreCase("NONE")) {
+                return "";
+            }
+            String directive = extractSearchDirective(raw);
+            if (!directive.isBlank()) {
+                return directive;
+            }
+        } catch (Exception ex) {
+            log.debug("Agentic web search query planning failed: {}", ex.getMessage());
+        }
+        return "";
     }
 
     private String buildPrimaryFlowLogicOutline(String code) {
@@ -3243,6 +4389,7 @@ public class AiLocalOrchestrationService {
     private static class LocalToolDigest {
         final Set<String> intentKeywords = new LinkedHashSet<>();
         final List<String> codeSymbols = new ArrayList<>();
+        final List<String> menuSignals = new ArrayList<>();
         final List<String> attachmentItems = new ArrayList<>();
         final Map<String, Object> stats = new LinkedHashMap<>();
     }

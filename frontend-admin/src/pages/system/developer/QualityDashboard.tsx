@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Row, Col, Statistic, Table, Tabs, Progress, Spin, Alert, Empty, Button, Popconfirm, message, Space, Input } from 'antd';
 import { LineChartOutlined, CheckCircleOutlined, ExclamationOutlined, ReloadOutlined } from '@ant-design/icons';
+import { request } from '#src/utils';
 
 interface MetricsData {
   timestamp: number;
@@ -34,6 +35,30 @@ interface MetricsData {
     elapsed_ms?: number;
     meta?: Record<string, unknown>;
   }>;
+  embeddingRuntime?: {
+    embeddingProvider?: string;
+    embeddingDimensions?: number;
+    embeddingRuntime?: {
+      requestedProvider?: string;
+      resolvedProvider?: string;
+      enabledMiniLm?: boolean;
+      hashFallbackEnabled?: boolean;
+      dimension?: number;
+      indexNamespace?: string;
+      osName?: string;
+      osArch?: string;
+      javaVendor?: string;
+      javaVersion?: string;
+      runtimeStatus?: string;
+      lastFailureReason?: string;
+      platformKey?: string;
+      miniLmPlatformSupported?: boolean;
+      miniLmNativeResourcePath?: string;
+      miniLmSupportReason?: string;
+      recommendedProvider?: string;
+      platformRecommendation?: string;
+    };
+  };
   scope?: 'global' | 'app';
   app_id?: string;
 }
@@ -44,6 +69,89 @@ interface QualityDashboardProps {
   focusRequestId?: string;
   focusAppId?: string;
   focusNonce?: number;
+}
+
+const EMPTY_METRICS: MetricsData = {
+  timestamp: 0,
+  window_size_ms: 0,
+  totals: {
+    total_requests: 0,
+    total_retries: 0,
+    total_fallbacks: 0,
+    total_patch_rejects: 0,
+    total_validator_rejects: 0,
+  },
+  retry_reason_distribution: {},
+  evidence_gate_hits: {},
+  patch_reject_reasons: {},
+  validator_reject_reasons: {},
+  fallback_rate: 0,
+  patch_reject_rate: 0,
+  validator_reject_rate: 0,
+  quality_trends: {},
+  request_status_trends: {},
+  recent_request_traces: [],
+};
+
+function formatTraceStage(stage?: string): string {
+  const value = String(stage || '').trim().toLowerCase();
+  switch (value) {
+    case 'approval_action':
+      return 'Approval Action';
+    case 'review_resolved':
+      return 'Review Resolved';
+    case 'agentic_step_execute':
+      return 'Agentic Step Execute';
+    case 'assistant_route_plan':
+      return 'Route Plan';
+    case 'assistant_tool_intent_plan':
+      return 'Tool Intent Plan';
+    default:
+      return String(stage || '-') || '-';
+  }
+}
+
+function formatTraceStatus(status?: string): string {
+  const value = String(status || '').trim().toLowerCase();
+  switch (value) {
+    case 'approved':
+      return 'Approved';
+    case 'rejected':
+      return 'Rejected';
+    case 'resolved':
+      return 'Resolved';
+    case 'review_required':
+      return 'Review Required';
+    case 'completed':
+      return 'Completed';
+    default:
+      return String(status || '-') || '-';
+  }
+}
+
+function buildTraceDetail(meta?: Record<string, unknown>): string {
+  if (!meta || typeof meta !== 'object') {
+    return '-';
+  }
+  const stepLabel = String(meta.stepLabel || '').trim();
+  const riskLevel = String(meta.riskLevel || '').trim();
+  const stepIndex = Number(meta.stepIndex);
+  const stepTotal = Number(meta.stepTotal);
+  const editCount = Number(meta.editCount);
+  const parts: string[] = [];
+  if (stepLabel) {
+    parts.push(stepLabel);
+  }
+  if (Number.isFinite(stepIndex) && stepIndex > 0) {
+    parts.push(`step ${stepIndex}${Number.isFinite(stepTotal) && stepTotal > 0 ? `/${stepTotal}` : ''}`);
+  }
+  if (riskLevel) {
+    parts.push(`risk=${riskLevel}`);
+  }
+  if (Number.isFinite(editCount) && editCount > 0) {
+    parts.push(`edits=${editCount}`);
+  }
+  return parts.length > 0 ? parts.join(' | ') : '-';
 }
 
 const QualityDashboard: React.FC<QualityDashboardProps> = ({ 
@@ -63,6 +171,7 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
   const [traceFilter, setTraceFilter] = useState<string>('');
   const [activeMetricsTab, setActiveMetricsTab] = useState<string>('request-timeline');
   const [expandedTimelineRowKeys, setExpandedTimelineRowKeys] = useState<React.Key[]>([]);
+  const resolvedMetrics = metrics ?? EMPTY_METRICS;
 
   // Fetch metrics from backend
   const fetchMetrics = async () => {
@@ -78,21 +187,14 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
       if (safeAppId) {
         queryParams.set('appId', safeAppId);
       }
-      const query = `?${queryParams.toString()}`;
-      const response = await fetch(`/api/ai/metrics${query}`, {
-        method: 'GET',
+      const data = await request.get('ai/metrics', {
+        searchParams: queryParams,
         headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
+          Accept: 'application/json',
         },
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const data: MetricsData = await response.json();
-      setMetrics(data);
+      const parsed = await data.json<MetricsData>();
+      setMetrics(parsed);
       setLastUpdateMs(Date.now());
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -134,17 +236,13 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
     try {
       setResetLoading(true);
       const safeAppId = appIdFilter.trim();
-      const query = safeAppId ? `?appId=${encodeURIComponent(safeAppId)}` : '';
-      const response = await fetch(`/api/ai/metrics/reset${query}`, {
-        method: 'POST',
+      await request.post('ai/metrics/reset', {
+        searchParams: safeAppId ? { appId: safeAppId } : undefined,
+        json: {},
         headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
+          Accept: 'application/json',
         },
       });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
       message.success(safeAppId ? `Metrics reset for appId=${safeAppId}` : 'Global metrics reset successfully');
       await fetchMetrics();
     } catch (err) {
@@ -155,52 +253,36 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
     }
   };
 
-  if (!enabled) {
-    return <Empty description="Dashboard disabled" />;
-  }
-
-  if (error) {
-    return <Alert type="error" message="Metrics Error" description={error} />;
-  }
-
-  if (loading && !metrics) {
-    return <Spin size="large" />;
-  }
-
-  if (!metrics) {
-    return <Empty description="No metrics available" />;
-  }
-
   // Convert distribution records to table format
-  const retryReasonData = Object.entries(metrics.retry_reason_distribution).map(([reason, count]) => ({
+  const retryReasonData = Object.entries(resolvedMetrics.retry_reason_distribution).map(([reason, count]) => ({
     reason,
     count,
-    percentage: metrics.totals.total_retries > 0 
-      ? ((count / metrics.totals.total_retries) * 100).toFixed(1)
+    percentage: resolvedMetrics.totals.total_retries > 0 
+      ? ((count / resolvedMetrics.totals.total_retries) * 100).toFixed(1)
       : '0.0',
   }));
 
-  const evidenceGateData = Object.entries(metrics.evidence_gate_hits).map(([gate, count]) => ({
+  const evidenceGateData = Object.entries(resolvedMetrics.evidence_gate_hits).map(([gate, count]) => ({
     gate,
     count,
-    percentage: metrics.totals.total_requests > 0
-      ? ((count / metrics.totals.total_requests) * 100).toFixed(1)
+    percentage: resolvedMetrics.totals.total_requests > 0
+      ? ((count / resolvedMetrics.totals.total_requests) * 100).toFixed(1)
       : '0.0',
   }));
 
-  const patchRejectData = Object.entries(metrics.patch_reject_reasons).map(([reason, count]) => ({
+  const patchRejectData = Object.entries(resolvedMetrics.patch_reject_reasons).map(([reason, count]) => ({
     reason,
     count,
-    percentage: metrics.totals.total_patch_rejects > 0
-      ? ((count / metrics.totals.total_patch_rejects) * 100).toFixed(1)
+    percentage: resolvedMetrics.totals.total_patch_rejects > 0
+      ? ((count / resolvedMetrics.totals.total_patch_rejects) * 100).toFixed(1)
       : '0.0',
   }));
 
-  const validatorRejectData = Object.entries(metrics.validator_reject_reasons).map(([reason, count]) => ({
+  const validatorRejectData = Object.entries(resolvedMetrics.validator_reject_reasons).map(([reason, count]) => ({
     reason,
     count,
-    percentage: metrics.totals.total_validator_rejects > 0
-      ? ((count / metrics.totals.total_validator_rejects) * 100).toFixed(1)
+    percentage: resolvedMetrics.totals.total_validator_rejects > 0
+      ? ((count / resolvedMetrics.totals.total_validator_rejects) * 100).toFixed(1)
       : '0.0',
   }));
 
@@ -208,20 +290,20 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
   const timeAgoMs = Date.now() - lastUpdateMs;
   const timeAgoStr = timeAgoMs < 1000 ? 'now' : `${Math.round(timeAgoMs / 1000)}s ago`;
 
-  const retrievalPassCount = Number(metrics.evidence_gate_hits['retrieval_quality_pass'] || 0);
-  const retrievalLowCount = Number(metrics.evidence_gate_hits['retrieval_quality_low'] || 0);
-  const retrievalRetryAppliedCount = Number(metrics.evidence_gate_hits['retrieval_quality_retry_applied'] || 0);
+  const retrievalPassCount = Number(resolvedMetrics.evidence_gate_hits['retrieval_quality_pass'] || 0);
+  const retrievalLowCount = Number(resolvedMetrics.evidence_gate_hits['retrieval_quality_low'] || 0);
+  const retrievalRetryAppliedCount = Number(resolvedMetrics.evidence_gate_hits['retrieval_quality_retry_applied'] || 0);
   const retrievalTotal = retrievalPassCount + retrievalLowCount;
   const retrievalPassRate = retrievalTotal > 0 ? retrievalPassCount / retrievalTotal : 0;
   const retrievalLowRate = retrievalTotal > 0 ? retrievalLowCount / retrievalTotal : 0;
 
-  const stepContractViolationCount = Number(metrics.evidence_gate_hits['step_output_contract_violation'] || 0);
-  const stepContractRepairAppliedCount = Number(metrics.evidence_gate_hits['step_output_contract_repair_applied'] || 0);
-  const stepContractRepairFailedCount = Number(metrics.evidence_gate_hits['step_output_contract_repair_failed'] || 0);
-  const stepContractRepairLowQualityCount = Number(metrics.evidence_gate_hits['step_output_contract_repair_low_quality'] || 0);
+  const stepContractViolationCount = Number(resolvedMetrics.evidence_gate_hits['step_output_contract_violation'] || 0);
+  const stepContractRepairAppliedCount = Number(resolvedMetrics.evidence_gate_hits['step_output_contract_repair_applied'] || 0);
+  const stepContractRepairFailedCount = Number(resolvedMetrics.evidence_gate_hits['step_output_contract_repair_failed'] || 0);
+  const stepContractRepairLowQualityCount = Number(resolvedMetrics.evidence_gate_hits['step_output_contract_repair_low_quality'] || 0);
   const stepContractHandledTotal = stepContractViolationCount + stepContractRepairAppliedCount;
-  const stepContractViolationRate = metrics.totals.total_requests > 0
-    ? stepContractViolationCount / metrics.totals.total_requests
+  const stepContractViolationRate = resolvedMetrics.totals.total_requests > 0
+    ? stepContractViolationCount / resolvedMetrics.totals.total_requests
     : 0;
   const stepContractRepairSuccessRate = (stepContractRepairAppliedCount + stepContractRepairFailedCount) > 0
     ? stepContractRepairAppliedCount / (stepContractRepairAppliedCount + stepContractRepairFailedCount)
@@ -249,8 +331,8 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
     {
       gate: 'step_output_contract_violation',
       count: stepContractViolationCount,
-      percentage: metrics.totals.total_requests > 0
-        ? ((stepContractViolationCount / metrics.totals.total_requests) * 100).toFixed(1)
+      percentage: resolvedMetrics.totals.total_requests > 0
+        ? ((stepContractViolationCount / resolvedMetrics.totals.total_requests) * 100).toFixed(1)
         : '0.0',
     },
     {
@@ -276,8 +358,11 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
     },
   ].filter((item) => item.count > 0);
 
-  const recentRequestTraceData = (metrics.recent_request_traces || []).map((item, index) => ({
+  const recentRequestTraceData = (resolvedMetrics.recent_request_traces || []).map((item, index) => ({
     key: `${item.requestId || 'unknown'}_${item.timestamp}_${index}`,
+    stageLabel: formatTraceStage(item.stage),
+    statusLabel: formatTraceStatus(item.status),
+    detailLabel: buildTraceDetail(item.meta),
     ...item,
   })).filter((item) => {
     const q = traceFilter.trim().toLowerCase();
@@ -321,10 +406,10 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
         startedAt: firstTs,
         endedAt: lastTs,
         durationMs,
-        finalStatus: String(finalEvent?.status || '-'),
+        finalStatus: formatTraceStatus(String(finalEvent?.status || '-')),
         finalReason: String(finalEvent?.reason_code || '-'),
         model: String(finalEvent?.model || '-'),
-        stages: stages.join(' -> '),
+        stages: stages.map((stage) => formatTraceStage(stage)).join(' -> '),
       };
     }).sort((a, b) => b.startedAt - a.startedAt);
   }, [recentRequestTraceData]);
@@ -342,7 +427,7 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
     }
   }, [focusNonce, focusRequestId, requestTimelineData]);
 
-  const qualityTrendData = Object.entries(metrics.quality_trends || {}).map(([signal, values]) => ({
+  const qualityTrendData = Object.entries(resolvedMetrics.quality_trends || {}).map(([signal, values]) => ({
     key: `quality_${signal}`,
     category: 'evidence_gate',
     signal,
@@ -351,7 +436,7 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
     h24: Number(values['24h'] || 0),
   }));
 
-  const requestStatusTrendData = Object.entries(metrics.request_status_trends || {}).map(([signal, values]) => ({
+  const requestStatusTrendData = Object.entries(resolvedMetrics.request_status_trends || {}).map(([signal, values]) => ({
     key: `request_${signal}`,
     category: 'request_status',
     signal,
@@ -361,6 +446,27 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
   }));
 
   const trendData = [...qualityTrendData, ...requestStatusTrendData];
+  const embeddingRuntime = resolvedMetrics.embeddingRuntime?.embeddingRuntime;
+  const embeddingProvider = String(resolvedMetrics.embeddingRuntime?.embeddingProvider || embeddingRuntime?.resolvedProvider || '-');
+  const embeddingStatus = String(embeddingRuntime?.runtimeStatus || '-');
+  const embeddingPlatform = String(embeddingRuntime?.platformKey || [embeddingRuntime?.osName, embeddingRuntime?.osArch].filter(Boolean).join(' / ') || '-');
+  const embeddingReason = String(embeddingRuntime?.lastFailureReason || embeddingRuntime?.miniLmSupportReason || '').trim();
+
+  if (!enabled) {
+    return <Empty description="Dashboard disabled" />;
+  }
+
+  if (error) {
+    return <Alert type="error" message="Metrics Error" description={error} />;
+  }
+
+  if (loading && !metrics) {
+    return <Spin size="large" />;
+  }
+
+  if (!metrics) {
+    return <Empty description="No metrics available" />;
+  }
 
   return (
     <div style={{ padding: '16px' }}>
@@ -439,6 +545,42 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
           </Card>
         </Col>
       </Row>
+
+      {metrics.scope === 'app' && metrics.app_id && embeddingRuntime && (
+        <Row gutter={16} style={{ marginBottom: '24px' }}>
+          <Col xs={24}>
+            <Card title="Embedding Runtime" size="small">
+              <Row gutter={16}>
+                <Col xs={24} sm={12} lg={6}>
+                  <Statistic title="Provider" value={embeddingProvider} />
+                </Col>
+                <Col xs={24} sm={12} lg={6}>
+                  <Statistic
+                    title="Runtime Status"
+                    value={embeddingStatus}
+                    valueStyle={{ color: embeddingStatus === 'active' ? '#52c41a' : '#faad14' }}
+                  />
+                </Col>
+                <Col xs={24} sm={12} lg={6}>
+                  <Statistic title="Dimensions" value={Number(metrics.embeddingRuntime?.embeddingDimensions || embeddingRuntime?.dimension || 0)} />
+                </Col>
+                <Col xs={24} sm={12} lg={6}>
+                  <Statistic title="Platform" value={embeddingPlatform} />
+                </Col>
+              </Row>
+              <div style={{ marginTop: 12, fontSize: 12, lineHeight: 1.5 }}>
+                <div><strong>Requested:</strong> {String(embeddingRuntime.requestedProvider || '-')}</div>
+                <div><strong>Recommended:</strong> {String(embeddingRuntime.recommendedProvider || '-')}</div>
+                <div><strong>Index Namespace:</strong> {String(embeddingRuntime.indexNamespace || '-')}</div>
+                <div><strong>Java:</strong> {String(embeddingRuntime.javaVendor || '-')} / {String(embeddingRuntime.javaVersion || '-')}</div>
+                <div><strong>MiniLM Native:</strong> {embeddingRuntime.miniLmPlatformSupported ? 'supported' : 'unsupported'}{embeddingRuntime.miniLmNativeResourcePath ? ` (${embeddingRuntime.miniLmNativeResourcePath})` : ''}</div>
+                {embeddingReason && <div><strong>Reason:</strong> {embeddingReason}</div>}
+                {embeddingRuntime.platformRecommendation && <div><strong>Recommendation:</strong> {String(embeddingRuntime.platformRecommendation)}</div>}
+              </div>
+            </Card>
+          </Col>
+        </Row>
+      )}
 
       {/* Rejection Rates - Progress Indicators */}
       <Row gutter={16} style={{ marginBottom: '24px' }}>
@@ -757,8 +899,9 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
                             width: 140,
                             render: (value: number) => new Date(value).toLocaleTimeString(),
                           },
-                          { title: 'Stage', dataIndex: 'stage', key: 'stage', width: 170 },
-                          { title: 'Status', dataIndex: 'status', key: 'status', width: 150 },
+                          { title: 'Stage', dataIndex: 'stageLabel', key: 'stageLabel', width: 170 },
+                          { title: 'Status', dataIndex: 'statusLabel', key: 'statusLabel', width: 150 },
+                          { title: 'Detail', dataIndex: 'detailLabel', key: 'detailLabel', width: 260, ellipsis: true },
                           { title: 'Reason', dataIndex: 'reason_code', key: 'reason_code', width: 220, ellipsis: true },
                           {
                             title: 'Elapsed (ms)',
@@ -813,8 +956,9 @@ const QualityDashboard: React.FC<QualityDashboardProps> = ({
                       },
                       { title: 'Request ID', dataIndex: 'requestId', key: 'requestId', ellipsis: true, width: 180 },
                       { title: 'Flow', dataIndex: 'flow', key: 'flow', width: 130 },
-                      { title: 'Stage', dataIndex: 'stage', key: 'stage', width: 160 },
-                      { title: 'Status', dataIndex: 'status', key: 'status', width: 120 },
+                      { title: 'Stage', dataIndex: 'stageLabel', key: 'stageLabel', width: 160 },
+                      { title: 'Status', dataIndex: 'statusLabel', key: 'statusLabel', width: 120 },
+                      { title: 'Detail', dataIndex: 'detailLabel', key: 'detailLabel', width: 260, ellipsis: true },
                       { title: 'Reason', dataIndex: 'reason_code', key: 'reason_code', width: 180 },
                       { title: 'Model', dataIndex: 'model', key: 'model', width: 180 },
                       {

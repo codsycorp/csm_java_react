@@ -461,8 +461,6 @@ interface AiUsageSummary {
 	currency?: string
 }
 
-	type CompletionState = "idle" | "done" | "stream_closed" | "error" | "cancelled";
-
 interface CompletionMetrics {
 	elapsedMs?: number
 	outputChars?: number
@@ -527,6 +525,14 @@ interface LocalFlowOperationLine {
 }
 
 type LocalFlowOperationFilter = "all" | "add" | "edit" | "delete";
+type CompletionState = "idle" | "done" | "review_required" | "stream_closed" | "error" | "cancelled";
+
+interface ChatRuntimeSnapshot {
+	agenticSteps: AgenticStep[]
+	completionState: CompletionState
+	streamRequestId?: string
+	updatedAt: number
+}
 
 interface AiAssistantChatProps {
 	appId: string
@@ -547,6 +553,7 @@ interface AiAssistantChatProps {
 
 const CHAT_HISTORY_KEY = "codeeditor.aiassistant.chat.v1";
 const LEGACY_CHAT_HISTORY_KEY = "codeeditor.copilot.chat.v1";
+const CHAT_RUNTIME_KEY_PREFIX = "codeeditor.aiassistant.runtime.v1";
 const PROMPT_HISTORY_KEY_PREFIX = "codeeditor.aiassistant.promptHistory.v1";
 const BUSINESS_MEMORY_ENABLED_KEY = "aiassistant.businessMemory.enabled";
 const PROMPT_HISTORY_LIMIT = 50;
@@ -1121,8 +1128,87 @@ function normalizeBrokenListLineBreaks(raw: unknown): string {
 	return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
+function collapseRepeatedPromptEchoBlocks(raw: unknown): string {
+	const source = String(raw || "").trim();
+	if (!source)
+		return "";
+
+	const dedupeRequirementLines = (block: string): string => {
+		const seen = new Set<string>();
+		const keptLines: string[] = [];
+		for (const rawLine of block.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n")) {
+			const line = String(rawLine || "");
+			const trimmed = line.trim();
+			if (!trimmed) {
+				if (keptLines.length > 0 && keptLines[keptLines.length - 1] !== "") {
+					keptLines.push("");
+				}
+				continue;
+			}
+			const normalizedLine = trimmed.replace(/\s+/g, " ").trim().toLowerCase();
+			const isRequirementHeading = /^#{1,3}\s*yêu\s*cầu\b/i.test(trimmed)
+				|| /^#{1,3}\s*yeu\s*cau\b/i.test(trimmed)
+				|| /^yêu\s*cầu\s*:/i.test(trimmed)
+				|| /^yeu\s*cau\s*:/i.test(trimmed);
+			const shouldDedupeLine = isRequirementHeading || normalizedLine.length >= 48;
+			if (shouldDedupeLine) {
+				if (seen.has(normalizedLine)) {
+					continue;
+				}
+				seen.add(normalizedLine);
+			}
+			keptLines.push(line);
+		}
+		return keptLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+	}
+
+	const blocks = source
+		.replace(/\r\n/g, "\n")
+		.replace(/\r/g, "\n")
+		.split(/\n{2,}/)
+		.map(block => block.trim())
+		.filter(Boolean);
+	if (blocks.length <= 1)
+		return dedupeRequirementLines(source) || source;
+
+	const seenLongBlocks = new Set<string>();
+	const seenRequirementBlocks = new Set<string>();
+	const kept: string[] = [];
+
+	for (const block of blocks) {
+		const cleanedBlock = dedupeRequirementLines(block);
+		const normalized = cleanedBlock.replace(/\s+/g, " ").trim();
+		if (!normalized) {
+			continue;
+		}
+		const isRequirementBlock = /^#{1,3}\s*yêu\s*cầu\b/i.test(cleanedBlock)
+			|| /^#{1,3}\s*yeu\s*cau\b/i.test(cleanedBlock)
+			|| /^yêu\s*cầu\s*:/i.test(cleanedBlock)
+			|| /^yeu\s*cau\s*:/i.test(cleanedBlock)
+			|| /^-{2,}\s*yêu\s*cầu/i.test(cleanedBlock)
+			|| /^-{2,}\s*yeu\s*cau/i.test(cleanedBlock);
+		if (isRequirementBlock) {
+			if (seenRequirementBlocks.has(normalized)) {
+				continue;
+			}
+			seenRequirementBlocks.add(normalized);
+			kept.push(cleanedBlock);
+			continue;
+		}
+		if (normalized.length >= 80) {
+			if (seenLongBlocks.has(normalized)) {
+				continue;
+			}
+			seenLongBlocks.add(normalized);
+		}
+		kept.push(cleanedBlock);
+	}
+
+	return kept.join("\n\n").trim() || source;
+}
+
 function normalizeAssistantDisplayText(raw: unknown): string {
-	const text = String(raw || "").trim();
+	const text = stripInternalOrchestrationLeakLines(String(raw || "")).trim();
 	if (!text)
 		return "";
 
@@ -1138,8 +1224,9 @@ function normalizeAssistantDisplayText(raw: unknown): string {
 			return structuredText;
 	}
 
-	const conversationalJsonText = normalizeConversationalJsonAnswer(text);
-	return normalizeBrokenListLineBreaks(conversationalJsonText || text);
+	const sanitizedPromptEcho = collapseRepeatedPromptEchoBlocks(text);
+	const conversationalJsonText = normalizeConversationalJsonAnswer(sanitizedPromptEcho);
+	return normalizeBrokenListLineBreaks(conversationalJsonText || sanitizedPromptEcho);
 }
 
 function stripInternalOrchestrationLeakLines(raw: unknown): string {
@@ -1150,9 +1237,39 @@ function stripInternalOrchestrationLeakLines(raw: unknown): string {
 	const lines = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
 	const out: string[] = [];
 	let leakTailBudget = 0;
+	let skipPromptBlock = false;
+	let skipRagBlock = false;
+	let skipSessionBlock = false;
 	for (const rawLine of lines) {
 		const line = String(rawLine || "");
 		const lowered = line.trim().toLowerCase();
+
+		if (skipRagBlock) {
+			if (lowered.startsWith("## ")) {
+				skipRagBlock = false;
+			}
+			else {
+				continue;
+			}
+		}
+
+		if (skipSessionBlock) {
+			if (lowered.startsWith("## ")) {
+				skipSessionBlock = false;
+			}
+			else {
+				continue;
+			}
+		}
+
+		if (skipPromptBlock) {
+			if (lowered.startsWith("## ") || lowered.startsWith("# ")) {
+				skipPromptBlock = false;
+			}
+			else {
+				continue;
+			}
+		}
 
 		if (leakTailBudget > 0) {
 			const boundaryLine = !lowered
@@ -1166,10 +1283,30 @@ function stripInternalOrchestrationLeakLines(raw: unknown): string {
 			leakTailBudget = 0;
 		}
 
+		if (lowered.startsWith("## customer business memory") || lowered.includes("lucene vector rag")) {
+			skipRagBlock = true;
+			continue;
+		}
+		if (lowered.startsWith("## backend session context")) {
+			skipSessionBlock = true;
+			continue;
+		}
+		if (lowered.startsWith("# csm ai menu master prompt")
+			|| lowered.startsWith("# csm ai code master prompt")
+			|| lowered.startsWith("## auto_loaded_menu_system_knowledge")
+			|| lowered.startsWith("## quy tắc ngôn ngữ đầu ra")
+			|| lowered.startsWith("## quy tac ngon ngu dau ra")
+			|| lowered.startsWith("quy tắc ngôn ngữ đầu ra")
+			|| lowered.startsWith("quy tac ngon ngu dau ra")) {
+			skipPromptBlock = true;
+			continue;
+		}
+
 		const leakedDynSource = lowered.startsWith("dyn_ctx_orchestration_")
 			|| lowered.startsWith("dyn_ctx_currentcode")
 			|| lowered.startsWith("dyn_ctx_")
 			|| lowered.includes("dyn_ctx_")
+			|| lowered.startsWith("### memory ")
 			|| lowered.startsWith("source=primary_flow")
 			|| lowered.startsWith("source=multimodal")
 			|| lowered.includes("source=primary_flow")
@@ -1188,6 +1325,9 @@ function stripInternalOrchestrationLeakLines(raw: unknown): string {
 			|| lowered.startsWith("[current_request]")
 			|| lowered.startsWith("## user_memory")
 			|| lowered.startsWith("### turn [")
+			|| lowered.startsWith("source:")
+			|| lowered.startsWith("score:")
+			|| lowered === "content:"
 			|| lowered.startsWith("localscanner")
 			|| lowered.startsWith("scanner_")
 			|| /^\d{1,2}:\d{2}(:\d{2})?\s*(am|pm)?$/.test(lowered)
@@ -1419,6 +1559,81 @@ function summarizeMenuOperations(beforeRaw: unknown, afterRaw: unknown): { addCo
 	return { addCount, editCount, deleteCount };
 }
 
+function summarizeMenuPatchOps(rawPatchOps: unknown, rawMergeStats?: unknown): { addCount: number, editCount: number, deleteCount: number } {
+	if (rawMergeStats && typeof rawMergeStats === "object") {
+		const mergeStats = rawMergeStats as Record<string, unknown>;
+		return {
+			addCount: Math.max(0, Number(mergeStats.added || 0) || 0),
+			editCount: Math.max(0, Number(mergeStats.edited || 0) || 0),
+			deleteCount: Math.max(0, Number(mergeStats.deleted || 0) || 0),
+		};
+	}
+	let addCount = 0;
+	let editCount = 0;
+	let deleteCount = 0;
+	for (const op of Array.isArray(rawPatchOps) ? rawPatchOps : []) {
+		const action = String((op as Record<string, unknown>)?.action || "").trim().toLowerCase();
+		if (action === "add") {
+			addCount += 1;
+		}
+		else if (action === "delete") {
+			deleteCount += 1;
+		}
+		else if (action === "edit") {
+			editCount += 1;
+		}
+	}
+	return { addCount, editCount, deleteCount };
+}
+
+function buildStructuredEditCompletionSummary(params: {
+	contextType: "code" | "menu_json"
+	stepResultCount: number
+	acceptedCount: number
+	addCount: number
+	editCount: number
+	deleteCount: number
+	reviewRequired: boolean
+	uiText: (vi: string, en: string, zh: string) => string
+}): string {
+	const {
+		contextType,
+		stepResultCount,
+		acceptedCount,
+		addCount,
+		editCount,
+		deleteCount,
+		reviewRequired,
+		uiText,
+	} = params;
+	const effectiveAcceptedCount = Math.max(0, acceptedCount || stepResultCount || 0);
+	const opsSummary = `+${Math.max(0, addCount)} ~${Math.max(0, editCount)} -${Math.max(0, deleteCount)}`;
+	if (contextType === "menu_json") {
+		return reviewRequired
+			? uiText(
+				`Đã áp ${effectiveAcceptedCount} bước cập nhật menu vào editor. Tóm tắt thay đổi: ${opsSummary}. Một số bước đang chờ duyệt thủ công.`,
+				`Applied ${effectiveAcceptedCount} menu update steps to the editor. Change summary: ${opsSummary}. Some steps are waiting for manual approval.`,
+				`已将 ${effectiveAcceptedCount} 个菜单更新步骤应用到编辑器。变更摘要：${opsSummary}。部分步骤仍在等待人工批准。`,
+			)
+			: uiText(
+				`Đã áp ${effectiveAcceptedCount} bước cập nhật menu vào editor. Tóm tắt thay đổi: ${opsSummary}.`,
+				`Applied ${effectiveAcceptedCount} menu update steps to the editor. Change summary: ${opsSummary}.`,
+				`已将 ${effectiveAcceptedCount} 个菜单更新步骤应用到编辑器。变更摘要：${opsSummary}。`,
+			);
+	}
+	return reviewRequired
+		? uiText(
+			`Đã áp ${effectiveAcceptedCount} bước chỉnh sửa vào editor. Tóm tắt thay đổi: ${opsSummary}. Một số bước đang chờ duyệt thủ công.`,
+			`Applied ${effectiveAcceptedCount} edit steps to the editor. Change summary: ${opsSummary}. Some steps are waiting for manual approval.`,
+			`已将 ${effectiveAcceptedCount} 个编辑步骤应用到编辑器。变更摘要：${opsSummary}。部分步骤仍在等待人工批准。`,
+		)
+		: uiText(
+			`Đã áp ${effectiveAcceptedCount} bước chỉnh sửa vào editor. Tóm tắt thay đổi: ${opsSummary}.`,
+			`Applied ${effectiveAcceptedCount} edit steps to the editor. Change summary: ${opsSummary}.`,
+			`已将 ${effectiveAcceptedCount} 个编辑步骤应用到编辑器。变更摘要：${opsSummary}。`,
+		);
+}
+
 function buildCodeOperationPreviewLines(baseText: string, textEdits: any[], maxItems = 20): LocalFlowOperationLine[] {
 	const EMPTY_DELETE_MARKER = "__LOCAL_OP_EMPTY_DELETE__";
 	const EMPTY_UPDATE_MARKER = "__LOCAL_OP_EMPTY_UPDATE__";
@@ -1646,6 +1861,106 @@ function saveChatHistory(messages: ChatMessage[]) {
 	}
 }
 
+function resolveChatRuntimeStorageKey(params: {
+	appId: string
+	contextType: string
+	language: string
+	targetPName?: string
+}): string {
+	const app = String(params.appId || "csm").trim() || "csm";
+	const context = String(params.contextType || "code").trim() || "code";
+	const lang = String(params.language || "javascript").trim() || "javascript";
+	const target = String(params.targetPName || "__default__").trim() || "__default__";
+	return `${CHAT_RUNTIME_KEY_PREFIX}:${app}:${context}:${lang}:${target}`;
+}
+
+function loadChatRuntimeSnapshot(storageKey: string): ChatRuntimeSnapshot | null {
+	try {
+		const raw = localStorage.getItem(storageKey);
+		if (!raw) {
+			return null;
+		}
+		const parsed = JSON.parse(raw) as Partial<ChatRuntimeSnapshot> | null;
+		if (!parsed || typeof parsed !== "object") {
+			return null;
+		}
+		const agenticSteps = Array.isArray(parsed.agenticSteps) ? parsed.agenticSteps as AgenticStep[] : [];
+		const completionState = String(parsed.completionState || "idle").trim() as CompletionState;
+		const allowedStates: CompletionState[] = ["idle", "done", "review_required", "stream_closed", "error", "cancelled"];
+		return {
+			agenticSteps,
+			completionState: allowedStates.includes(completionState) ? completionState : "idle",
+			streamRequestId: String(parsed.streamRequestId || "").trim() || undefined,
+			updatedAt: Number.isFinite(Number(parsed.updatedAt)) ? Number(parsed.updatedAt) : Date.now(),
+		};
+	}
+	catch {
+		return null;
+	}
+}
+
+function saveChatRuntimeSnapshot(storageKey: string, snapshot: ChatRuntimeSnapshot) {
+	try {
+		localStorage.setItem(storageKey, JSON.stringify(snapshot));
+	}
+	catch {
+		// ignore localStorage save failures
+	}
+}
+
+function clearChatRuntimeSnapshot(storageKey: string) {
+	try {
+		localStorage.removeItem(storageKey);
+	}
+	catch {
+		// ignore localStorage clear failures
+	}
+}
+
+function normalizePersistedAgenticSteps(raw: unknown): AgenticStep[] {
+	if (!Array.isArray(raw)) {
+		return [];
+	}
+	const out: AgenticStep[] = [];
+	raw.forEach((item, index) => {
+			if (!item || typeof item !== "object" || Array.isArray(item)) {
+				return;
+			}
+			const input = item as Record<string, unknown>;
+			const stepIndex = Number(input.stepIndex);
+			const stepTotal = Number(input.stepTotal);
+			const riskLevel = String(input.riskLevel || "").trim().toLowerCase();
+			const approvalState = String(input.approvalState || "pending").trim().toLowerCase();
+			const status = String(input.status || "done").trim().toLowerCase();
+			const approvalReasons = Array.isArray(input.approvalReasons)
+				? input.approvalReasons.map((entry) => String(entry || "").trim()).filter(Boolean)
+				: [];
+			const nextStep: AgenticStep = {
+				id: String(input.id || `persisted_agentic_${index}_${Date.now()}`),
+				stage: String(input.stage || `agentic_step_result_${Number.isFinite(stepIndex) ? stepIndex : index + 1}`),
+				icon: String(input.icon || (approvalState === "pending" ? "🛂" : approvalState === "approved" ? "✅" : "⛔")),
+				label: String(input.label || `Step ${Number.isFinite(stepIndex) ? stepIndex : index + 1}${Number.isFinite(stepTotal) && stepTotal > 0 ? `/${stepTotal}` : ""}`),
+				detail: String(input.detail || "").trim() || undefined,
+				qualityScore: Number.isFinite(Number(input.qualityScore)) ? Number(input.qualityScore) : undefined,
+				lowConfidence: Boolean(input.lowConfidence),
+				riskScore: Number.isFinite(Number(input.riskScore)) ? Number(input.riskScore) : undefined,
+				riskLevel: (riskLevel === "low" || riskLevel === "medium" || riskLevel === "high") ? riskLevel as AgenticStep["riskLevel"] : undefined,
+				approvalRequired: Boolean(input.approvalRequired ?? true),
+				approvalReasons,
+				approvalState: (approvalState === "approved" || approvalState === "rejected" || approvalState === "pending") ? approvalState as AgenticStep["approvalState"] : "pending",
+				pendingTextEdits: Array.isArray(input.pendingTextEdits) ? input.pendingTextEdits : undefined,
+				stepIndex: Number.isFinite(stepIndex) ? stepIndex : undefined,
+				stepTotal: Number.isFinite(stepTotal) ? stepTotal : undefined,
+				patchValidator: input.patchValidator as PatchValidatorMeta | undefined,
+				patchDryRun: input.patchDryRun as PatchDryRunMeta | undefined,
+				status: (status === "planned" || status === "running" || status === "done") ? status as AgenticStep["status"] : "done",
+				timestamp: Number.isFinite(Number(input.timestamp)) ? Number(input.timestamp) : Date.now(),
+			};
+			out.push(nextStep);
+		});
+	return out;
+}
+
 function resolvePromptHistoryStorageKey(params: {
 	appId: string
 	contextType: string
@@ -1701,6 +2016,13 @@ export default function AiAssistantChat({
 }: AiAssistantChatProps) {
 	const { i18n } = useTranslation();
 	const shouldHideCodeInChat = Boolean(onCodeInsert);
+	const runtimeStorageKey = resolveChatRuntimeStorageKey({
+		appId,
+		contextType,
+		language,
+		targetPName,
+	});
+	const initialRuntimeSnapshot = loadChatRuntimeSnapshot(runtimeStorageKey);
 	const [messages, setMessages] = useState<ChatMessage[]>(getChatHistory());
 	const [inputValue, setInputValue] = useState("");
 	const [showSlashCommandPalette, setShowSlashCommandPalette] = useState(false);
@@ -1742,6 +2064,7 @@ export default function AiAssistantChat({
 	const [streamRequestId, setStreamRequestId] = useState("");
 	const [streamJobId, setStreamJobId] = useState("");
 	const [completionState, setCompletionState] = useState<CompletionState>("idle");
+	const [serverReviewHydrationDone, setServerReviewHydrationDone] = useState(false);
 	const [completionMetrics, setCompletionMetrics] = useState<CompletionMetrics>({});
 	const [completionErrorMessage, setCompletionErrorMessage] = useState("");
 	const [partsManifest, setPartsManifest] = useState<AiStreamPartsManifest | null>(null);
@@ -1764,6 +2087,7 @@ export default function AiAssistantChat({
 	const [followUpSuggestions, setFollowUpSuggestions] = useState<string[]>([]);
 	const [canUndoLastEdit, setCanUndoLastEdit] = useState(false);
 	const [forcedResponseMode, setForcedResponseMode] = useState<"ask" | "edit" | null>(null);
+	const [processingApprovalStepId, setProcessingApprovalStepId] = useState("");
 	// Progress state: waiting for Gemini / streaming progress
 	const [geminiProgress, setGeminiProgress] = useState<{
 		phase: "idle" | "waiting" | "streaming"
@@ -1786,6 +2110,8 @@ export default function AiAssistantChat({
 	const lastCodeBlockParseAtRef = useRef<number>(0);
 	const applyRealtimeCodeFromTextRef = useRef<(rawText: string, force?: boolean) => boolean>(() => false);
 	const lastAppliedCodeRef = useRef<string>("");
+	const liveCodeRef = useRef<string>(currentCode || "");
+	const reviewResolutionFeedbackSentRef = useRef<string>("");
 	const lastRealtimeApplyAtRef = useRef<number>(0);
 	const undoSnapshotRef = useRef<string>("");
 	const followBottomRef = useRef<boolean>(true);
@@ -1793,7 +2119,11 @@ export default function AiAssistantChat({
 	const lastSmoothScrollAtRef = useRef<number>(0);
 	const turnAllowAutoApplyRef = useRef<boolean>(false);
 	const localFlowVerifiedRef = useRef<boolean>(false);
+	const deliveredAssistantResultRef = useRef<boolean>(false);
+	const remoteHistoryLoadedScopeRef = useRef<string>("");
+	const remoteHistoryLoadingScopeRef = useRef<string>("");
 	const stageEventSignaturesRef = useRef<Set<string>>(new Set());
+	const initialReviewStateSyncRef = useRef(false);
 	const requestStartedAtRef = useRef<number>(0);
 	const streamJobIdRef = useRef<string>("");
 	const isLoadingRef = useRef<boolean>(false);
@@ -1947,6 +2277,14 @@ export default function AiAssistantChat({
 		return validateCode(String(currentCode || ""), String(language) as any);
 	}, [currentCode, language]);
 
+	const remoteHistoryScopeKey = useMemo(() => JSON.stringify({
+		appId,
+		contextType,
+		language,
+		targetPName: targetPName || "",
+		targetPType: typeof targetPType === "number" ? targetPType : "",
+	}), [appId, contextType, language, targetPName, targetPType]);
+
 	const uiText = useCallback((vi: string, en: string, zh: string) => {
 		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
 		if (lang.startsWith("zh"))
@@ -2082,6 +2420,8 @@ export default function AiAssistantChat({
 		switch (completionState) {
 			case "done":
 				return uiText("HOÀN THÀNH", "DONE", "已完成");
+			case "review_required":
+				return uiText("CHỜ DUYỆT", "REVIEW REQUIRED", "等待审核");
 			case "stream_closed":
 				return uiText("ĐÓNG LUỒNG", "STREAM CLOSED", "流已关闭");
 			case "error":
@@ -2290,6 +2630,74 @@ export default function AiAssistantChat({
 		].filter(Boolean).join("\n\n").trim();
 	}, [uiText]);
 
+	const syncAgenticReviewState = useCallback(async (requestIdOverride?: string, showErrorToast = false, clearIfNotFound = false) => {
+		const safeRequestId = String(requestIdOverride || streamRequestId || "").trim();
+		if (!appId || !safeRequestId) {
+			return false;
+		}
+		try {
+			const response = await request.get("ai-code-stream/agentic-review-state", {
+				searchParams: {
+					appId,
+					contextType,
+					language,
+					pName: targetPName || "",
+					pType: typeof targetPType === "number" ? targetPType : "",
+					requestId: safeRequestId,
+				},
+				throwHttpErrors: false,
+			});
+			if (!response.ok) {
+				if (showErrorToast) {
+					message.warning(uiText("Không đồng bộ được trạng thái review từ server", "Could not sync review state from server", "无法从服务器同步审查状态"));
+				}
+				return false;
+			}
+			const data = await response.json() as any;
+			const result = data?.result && typeof data.result === "object" ? data.result as Record<string, unknown> : {};
+			const found = result.found === true;
+			if (!found) {
+				if (clearIfNotFound) {
+					setAgenticSteps([]);
+					setCompletionState("idle");
+					setStreamRequestId("");
+					clearChatRuntimeSnapshot(runtimeStorageKey);
+				}
+				return false;
+			}
+			const nextRequestId = String(result.requestId || safeRequestId).trim() || safeRequestId;
+			const nextSteps = normalizePersistedAgenticSteps(result.agenticPendingApprovalSteps);
+			const reviewRequired = result.reviewRequired === true
+				|| String(result.status || "").trim().toLowerCase() === "review_required"
+				|| nextSteps.some(step => step.approvalRequired && step.approvalState === "pending");
+			if (nextSteps.length > 0) {
+				setAgenticSteps(nextSteps);
+				setCompletionState("review_required");
+				setStreamRequestId(nextRequestId);
+				saveChatRuntimeSnapshot(runtimeStorageKey, {
+					agenticSteps: nextSteps,
+					completionState: "review_required",
+					streamRequestId: nextRequestId,
+					updatedAt: Date.now(),
+				});
+				return true;
+			}
+			if (clearIfNotFound) {
+				setAgenticSteps([]);
+				setCompletionState("idle");
+				setStreamRequestId("");
+				clearChatRuntimeSnapshot(runtimeStorageKey);
+			}
+			return true;
+		}
+		catch {
+			if (showErrorToast) {
+				message.warning(uiText("Không đồng bộ được trạng thái review từ server", "Could not sync review state from server", "无法从服务器同步审查状态"));
+			}
+			return false;
+		}
+	}, [appId, contextType, language, runtimeStorageKey, streamRequestId, targetPName, targetPType, uiText]);
+
 	const loadRemoteSessionHistory = useCallback(async (showErrorToast = false) => {
 		if (!appId) {
 			return;
@@ -2317,6 +2725,8 @@ export default function AiAssistantChat({
 				? data.turns
 				: (Array.isArray(data?.recent_turns) ? data.recent_turns : []);
 			const converted: ChatMessage[] = [];
+			let restoredReviewRequestId = "";
+			let restoredReviewSteps: AgenticStep[] = [];
 			for (let i = 0; i < turns.length; i += 1) {
 				const turn = turns[i] || {};
 				const turnId = String(turn.turn_id || turn.id || "").trim();
@@ -2341,6 +2751,17 @@ export default function AiAssistantChat({
 					});
 				}
 				if (assistantText) {
+					const metadata = turn.metadata && typeof turn.metadata === "object" && !Array.isArray(turn.metadata)
+						? turn.metadata as Record<string, unknown>
+						: {};
+					const persistedReviewRequired = metadata.reviewRequired === true
+						|| String(metadata.status || "").trim().toLowerCase() === "review_required";
+					const persistedRequestId = String((turn as any).request_id || (turn as any).requestId || metadata.requestId || "").trim();
+					const persistedReviewSteps = normalizePersistedAgenticSteps(metadata.agenticPendingApprovalSteps);
+					if (persistedReviewRequired && persistedReviewSteps.length > 0 && persistedRequestId) {
+						restoredReviewRequestId = persistedRequestId;
+						restoredReviewSteps = persistedReviewSteps;
+					}
 					const rawRating = Number(turn.feedback_rating);
 					const feedbackRating = Number.isFinite(rawRating)
 						? Math.max(-1, Math.min(1, rawRating))
@@ -2366,12 +2787,36 @@ export default function AiAssistantChat({
 				const nextMessages = dedupeChatMessages(converted);
 				setMessages(nextMessages);
 				saveChatHistory(nextMessages);
+				if (restoredReviewRequestId && restoredReviewSteps.length > 0) {
+					const synced = await syncAgenticReviewState(restoredReviewRequestId, false, true);
+					if (!synced) {
+						setAgenticSteps(restoredReviewSteps);
+						setCompletionState("review_required");
+						setStreamRequestId(restoredReviewRequestId);
+						saveChatRuntimeSnapshot(runtimeStorageKey, {
+							agenticSteps: restoredReviewSteps,
+							completionState: "review_required",
+							streamRequestId: restoredReviewRequestId,
+							updatedAt: Date.now(),
+						});
+					}
+				}
+				else {
+					setAgenticSteps([]);
+					setCompletionState("idle");
+					setStreamRequestId("");
+					clearChatRuntimeSnapshot(runtimeStorageKey);
+				}
 				return;
 			}
 
 			if (turns.length === 0) {
 				setMessages([]);
 				saveChatHistory([]);
+				setAgenticSteps([]);
+				setCompletionState("idle");
+				setStreamRequestId("");
+				clearChatRuntimeSnapshot(runtimeStorageKey);
 			}
 		}
 		catch {
@@ -2379,7 +2824,10 @@ export default function AiAssistantChat({
 				message.warning(uiText("Không tải được lịch sử chat từ server", "Could not load chat history from server", "无法从服务器加载聊天历史"));
 			}
 		}
-	}, [appId, contextType, language, shouldHideCodeInChat, targetPName, targetPType, uiText]);
+		finally {
+			setServerReviewHydrationDone(true);
+		}
+	}, [appId, contextType, language, runtimeStorageKey, shouldHideCodeInChat, syncAgenticReviewState, targetPName, targetPType, uiText]);
 
 	const handleRateMessage = useCallback(async (msg: ChatMessage, rating: -1 | 0 | 1) => {
 		if (!msg.serverTurnId) {
@@ -2666,8 +3114,45 @@ export default function AiAssistantChat({
 	}, [promptHistoryStorageKey]);
 
 	useEffect(() => {
-		void loadRemoteSessionHistory(false);
-	}, [loadRemoteSessionHistory]);
+		if (!appId) {
+			return;
+		}
+		if (isLoading || String(streamRequestId || "").trim()) {
+			return;
+		}
+		if (remoteHistoryLoadedScopeRef.current === remoteHistoryScopeKey) {
+			return;
+		}
+		if (remoteHistoryLoadingScopeRef.current === remoteHistoryScopeKey) {
+			return;
+		}
+		remoteHistoryLoadingScopeRef.current = remoteHistoryScopeKey;
+		void loadRemoteSessionHistory(false)
+			.finally(() => {
+				if (remoteHistoryLoadingScopeRef.current === remoteHistoryScopeKey) {
+					remoteHistoryLoadingScopeRef.current = "";
+				}
+				remoteHistoryLoadedScopeRef.current = remoteHistoryScopeKey;
+			});
+	}, [appId, isLoading, loadRemoteSessionHistory, remoteHistoryScopeKey, streamRequestId]);
+
+	useEffect(() => {
+		if (initialReviewStateSyncRef.current) {
+			return;
+		}
+		if (!serverReviewHydrationDone) {
+			return;
+		}
+		if (completionState !== "idle" || agenticSteps.length > 0 || String(streamRequestId || "").trim()) {
+			return;
+		}
+		const snapshotRequestId = String(initialRuntimeSnapshot?.streamRequestId || "").trim();
+		if (!snapshotRequestId || initialRuntimeSnapshot?.completionState !== "review_required") {
+			return;
+		}
+		initialReviewStateSyncRef.current = true;
+		void syncAgenticReviewState(snapshotRequestId, false, true);
+	}, [agenticSteps.length, completionState, initialRuntimeSnapshot, serverReviewHydrationDone, streamRequestId, syncAgenticReviewState]);
 
 	useEffect(() => {
 		if (completionState !== "done") {
@@ -2697,7 +3182,7 @@ export default function AiAssistantChat({
 			}, DONE_USAGE_DOCK_AUTO_HIDE_MS);
 			return () => window.clearTimeout(timer);
 		}
-		if (completionState === "stream_closed" || completionState === "error" || completionState === "cancelled") {
+		if (completionState === "review_required" || completionState === "stream_closed" || completionState === "error" || completionState === "cancelled") {
 			setIsUsageDockVisible(true);
 			return;
 		}
@@ -2708,7 +3193,7 @@ export default function AiAssistantChat({
 
 	// Persist final chat history to localStorage after stream completes so reload shows correct content.
 	useEffect(() => {
-		if (completionState === "done" || completionState === "stream_closed" || completionState === "error" || completionState === "cancelled") {
+		if (completionState === "done" || completionState === "review_required" || completionState === "stream_closed" || completionState === "error" || completionState === "cancelled") {
 			saveChatHistory(messages);
 		}
 	}, [completionState, messages]);
@@ -2775,6 +3260,12 @@ export default function AiAssistantChat({
 			return uiText("Trích dẫn nguồn", "Source citations", "源引用");
 		case "assistant_context_budget_gate":
 			return uiText("Gating ngữ cảnh", "Context budget gate", "上下文预算门控");
+		case "tool_search":
+			return uiText("Dò nguồn cần cập nhật", "Exploring necessary updates", "探索需要更新的来源");
+		case "tool_prepare":
+			return uiText("Phân tích và lập kế hoạch", "Analyzing and planning", "分析并规划");
+		case "tool_apply":
+			return uiText("Áp kết quả vào editor", "Applying results to editor", "将结果应用到编辑器");
 		case "scope_reasoning":
 			return uiText("Suy luận theo phạm vi", "Scope reasoning", "范围推理");
 		case "dynamic_ingestion":
@@ -3393,6 +3884,58 @@ export default function AiAssistantChat({
 		return state;
 	}, [uiText]);
 
+	const formatRiskLevelLabel = useCallback((riskLevelRaw?: string): string => {
+		const level = String(riskLevelRaw || "").trim().toLowerCase();
+		if (!level)
+			return "";
+		switch (level) {
+			case "low":
+				return uiText("thấp", "low", "低");
+			case "medium":
+				return uiText("trung bình", "medium", "中");
+			case "high":
+				return uiText("cao", "high", "高");
+			default:
+				return level;
+		}
+	}, [uiText]);
+
+	const formatVerdictLabel = useCallback((verdictRaw?: string): string => {
+		const verdict = String(verdictRaw || "").trim().toLowerCase();
+		if (!verdict)
+			return "";
+		switch (verdict) {
+			case "passed":
+				return uiText("đạt", "passed", "已通过");
+			case "blocked":
+				return uiText("bị chặn", "blocked", "已阻止");
+			case "failed":
+				return uiText("thất bại", "failed", "失败");
+			case "warning":
+				return uiText("cảnh báo", "warning", "警告");
+			case "rejected":
+				return uiText("bị từ chối", "rejected", "已拒绝");
+			default:
+				return verdict;
+		}
+	}, [uiText]);
+
+	const formatInternalFlagLabel = useCallback((flagRaw?: string): string => {
+		const flag = String(flagRaw || "").trim().toLowerCase();
+		if (!flag)
+			return "";
+		switch (flag) {
+			case "block-auto-apply":
+				return uiText("chặn tự apply", "auto-apply blocked", "已阻止自动应用");
+			case "review-required":
+				return uiText("cần duyệt", "review required", "需要审核");
+			case "low-confidence":
+				return uiText("độ tin cậy thấp", "low confidence", "低置信度");
+			default:
+				return flag;
+		}
+	}, [uiText]);
+
 	const buildDynamicIngestionParts = useCallback((input: {
 		state?: string
 		source?: string
@@ -3403,10 +3946,11 @@ export default function AiAssistantChat({
 		const pruned = Number(input.pruned);
 		const parts: string[] = [];
 		if (state) {
+			const localizedState = formatQueueStateLabel(state);
 			parts.push(uiText(
-				`trạng thái ${formatQueueStateLabel(state)}`,
-				`state ${state}`,
-				`状态 ${state}`,
+				`trạng thái ${localizedState}`,
+				`state ${localizedState}`,
+				`状态 ${localizedState}`,
 			));
 		}
 		if (source)
@@ -3573,6 +4117,81 @@ export default function AiAssistantChat({
 		[agenticSteps],
 	);
 
+	useEffect(() => {
+		const shouldPersistReviewLoop = completionState === "review_required"
+			|| agenticSteps.some(step => step.approvalRequired && step.approvalState === "pending");
+		if (!shouldPersistReviewLoop) {
+			clearChatRuntimeSnapshot(runtimeStorageKey);
+			return;
+		}
+		saveChatRuntimeSnapshot(runtimeStorageKey, {
+			agenticSteps,
+			completionState,
+			streamRequestId: String(streamRequestId || "").trim() || undefined,
+			updatedAt: Date.now(),
+		});
+	}, [agenticSteps, completionState, runtimeStorageKey, streamRequestId]);
+
+	useEffect(() => {
+		if (completionState !== "review_required") {
+			return;
+		}
+		if (pendingApprovalAgenticSteps.length > 0) {
+			return;
+		}
+		const reviewResolutionKey = String(streamRequestId || "__review_resolved__").trim();
+		if (reviewResolutionFeedbackSentRef.current !== reviewResolutionKey) {
+			reviewResolutionFeedbackSentRef.current = reviewResolutionKey;
+			const safeRequestId = String(streamRequestId || "").trim();
+			if (safeRequestId) {
+				void request.post("ai-code-stream/agentic-approval-feedback", {
+					json: {
+						appId,
+						language,
+						contextType,
+						requestId: safeRequestId,
+						action: "resolved",
+					},
+				}).catch(() => {
+					// Best-effort telemetry only. UI flow should not be blocked.
+				});
+			}
+		}
+		appendStageEvent({
+			stage: "review_resolved",
+			status: "completed",
+			requestId: streamRequestId || undefined,
+			message: uiText(
+				"Đã xử lý xong tất cả bước chờ duyệt",
+				"All pending approval steps were resolved",
+				"所有待批准步骤均已处理完毕",
+			),
+			detail: uiText(
+				"Kết thúc lượt agentic sau vòng review thủ công.",
+				"Closing the agentic turn after manual review completed.",
+				"手动审核完成后结束 agentic 回合。",
+			),
+		});
+		setCompletionState("done");
+		setGeminiProgress({
+			phase: "idle",
+			percent: 100,
+			message: uiText("Đã hoàn tất sau khi duyệt", "Completed after review", "审核后已完成"),
+			estimatedWaitSecs: 0,
+			remainingSecs: 0,
+			charsReceived: 0,
+			estimatedTotalChars: 0,
+		});
+		showSystemToast("info", {
+			summary: uiText(
+				"Đã xử lý xong tất cả bước cần duyệt và kết thúc lượt làm việc.",
+				"All review-required steps were resolved and the turn is now complete.",
+				"所有待审核步骤均已处理完毕，本轮现已完成。",
+			),
+			internalCode: "REVIEW_LOOP_RESOLVED",
+		});
+	}, [appId, appendStageEvent, completionState, contextType, language, pendingApprovalAgenticSteps.length, showSystemToast, streamRequestId, uiText]);
+
 	const filteredLocalFlowOpLines = useMemo(() => {
 		if (localFlowOpFilter === "all") {
 			return localFlowOpLines;
@@ -3629,6 +4248,9 @@ export default function AiAssistantChat({
 
 		const nextText = stripInternalOrchestrationLeakLines(streamingMessageRef.current || "");
 		streamingMessageRef.current = nextText;
+		if (nextText.trim()) {
+			deliveredAssistantResultRef.current = true;
+		}
 		if (!nextText && !force)
 			return;
 
@@ -3716,9 +4338,19 @@ export default function AiAssistantChat({
 		if (!turnAllowAutoApplyRef.current || !localFlowVerifiedRef.current || !onCodeInsert)
 			return false;
 		const source = String(rawText || "");
+		const baseCode = liveCodeRef.current || currentCode || "";
 		let nextCode = "";
 		if (contextType === "menu_json") {
 			nextCode = extractMenuDraftForEditor(source);
+			if (!nextCode && baseCode) {
+				const rawEdits = parseTextEditsOnlyPayload(source);
+				if (rawEdits) {
+					const validation = validateStructuredTextEdits(baseCode, rawEdits);
+					if (validation.valid && validation.edits.length > 0) {
+						nextCode = applyTextEditsToDraft(baseCode, validation.edits);
+					}
+				}
+			}
 		}
 		else {
 			const structuredPayload = parseStructuredAssistantPayload(source);
@@ -3726,12 +4358,12 @@ export default function AiAssistantChat({
 				nextCode = structuredPayload.code;
 			}
 			// Handle textEdits-only response: backend returned patch array without full code.
-			if (!nextCode && currentCode) {
+			if (!nextCode && baseCode) {
 				const rawEdits = parseTextEditsOnlyPayload(source);
 				if (rawEdits) {
-					const validation = validateStructuredTextEdits(currentCode, rawEdits);
+					const validation = validateStructuredTextEdits(baseCode, rawEdits);
 					if (validation.valid && validation.edits.length > 0) {
-						nextCode = applyTextEditsToDraft(currentCode, validation.edits);
+						nextCode = applyTextEditsToDraft(baseCode, validation.edits);
 					}
 				}
 			}
@@ -3767,11 +4399,12 @@ export default function AiAssistantChat({
 		}
 
 		// Snapshot code before overwriting so user can undo
-		if (currentCode && currentCode !== nextCode) {
-			undoSnapshotRef.current = currentCode;
+		if (baseCode && baseCode !== nextCode) {
+			undoSnapshotRef.current = baseCode;
 			setCanUndoLastEdit(true);
 		}
 		onCodeInsert(nextCode);
+		liveCodeRef.current = nextCode;
 		lastAppliedCodeRef.current = nextCode;
 		lastRealtimeApplyAtRef.current = now;
 		return true;
@@ -3874,6 +4507,39 @@ export default function AiAssistantChat({
 		}
 	}, [appId, language]);
 
+	const sendAgenticApprovalFeedback = useCallback(async (action: "approved" | "rejected" | "resolved", step?: AgenticStep) => {
+		const safeRequestId = String(streamRequestId || "").trim();
+		if (!safeRequestId) {
+			return false;
+		}
+		try {
+			await request.post("ai-code-stream/agentic-approval-feedback", {
+				json: {
+					appId,
+					language,
+					contextType,
+					pName: targetPName,
+					pType: typeof targetPType === "number" ? targetPType : undefined,
+					requestId: safeRequestId,
+					action,
+					stepIndex: step?.stepIndex,
+					stepTotal: step?.stepTotal,
+					stepLabel: step?.label || step?.detail || step?.stage,
+					riskLevel: step?.riskLevel,
+					editCount: Array.isArray(step?.pendingTextEdits) ? step.pendingTextEdits.length : 0,
+				},
+			});
+			if (action !== "resolved") {
+				return await syncAgenticReviewState(safeRequestId, false, false);
+			}
+			return true;
+		}
+		catch {
+			// Best-effort telemetry only. UI flow should not be blocked.
+			return false;
+		}
+	}, [appId, contextType, language, streamRequestId, syncAgenticReviewState, targetPName, targetPType]);
+
 	const applyEditCandidate = useCallback((candidate: EditCandidate) => {
 		if (!onCodeInsert || contextType !== "code") {
 			message.info(uiText("Edit candidate chỉ áp dụng cho code editor.", "Edit candidates are available in code editor mode only.", "Edit candidate 仅适用于代码编辑模式。"));
@@ -3905,6 +4571,10 @@ export default function AiAssistantChat({
 	useEffect(() => {
 		applyRealtimeCodeFromTextRef.current = applyRealtimeCodeFromText;
 	}, [applyRealtimeCodeFromText]);
+
+	useEffect(() => {
+		liveCodeRef.current = currentCode || "";
+	}, [currentCode]);
 
 	const appendFiles = useCallback(async (fileList: FileList | null) => {
 		if (!fileList || fileList.length === 0)
@@ -4129,24 +4799,68 @@ export default function AiAssistantChat({
 		});
 	}, []);
 
-	const handleApproveAgenticStep = useCallback((step: AgenticStep) => {
+	const handleApproveAgenticStep = useCallback(async (step: AgenticStep) => {
 		if (!step.pendingTextEdits || step.pendingTextEdits.length <= 0) {
 			return;
 		}
-		const editsPayload = JSON.stringify({ textEdits: step.pendingTextEdits });
-		applyRealtimeCodeFromTextRef.current(editsPayload, true);
-		setAgenticSteps(prev => prev.map(item => item.id === step.id
-			? { ...item, approvalState: "approved", detail: [item.detail, uiText("Đã duyệt và áp dụng", "Approved and applied", "已批准并应用")].filter(Boolean).join(" · ") }
-			: item));
-		message.success(uiText("Đã áp dụng bước risky sau khi duyệt", "Risky step applied after approval", "已在批准后应用风险步骤"));
-	}, [uiText]);
+		if (processingApprovalStepId) {
+			return;
+		}
+		setProcessingApprovalStepId(step.id);
+		try {
+			const synced = await sendAgenticApprovalFeedback("approved", step);
+			if (!synced) {
+				message.warning(uiText(
+					"Không đồng bộ được trạng thái duyệt từ server, chưa áp dụng patch risky.",
+					"Could not sync approval state from server, the risky patch was not applied.",
+					"无法从服务器同步批准状态，风险补丁尚未应用。",
+				));
+				return;
+			}
+			const editsPayload = JSON.stringify({ textEdits: step.pendingTextEdits });
+			applyRealtimeCodeFromTextRef.current(editsPayload, true);
+			appendStageEvent({
+				stage: "approval_action",
+				status: "approved",
+				requestId: streamRequestId || undefined,
+				message: uiText("Đã duyệt bước risky", "Approved risky step", "已批准风险步骤"),
+				detail: step.label || step.detail || step.stage,
+			});
+			message.success(uiText("Đã áp dụng bước risky sau khi duyệt", "Risky step applied after approval", "已在批准后应用风险步骤"));
+		}
+		finally {
+			setProcessingApprovalStepId("");
+		}
+	}, [appendStageEvent, processingApprovalStepId, sendAgenticApprovalFeedback, streamRequestId, uiText]);
 
-	const handleRejectAgenticStep = useCallback((step: AgenticStep) => {
-		setAgenticSteps(prev => prev.map(item => item.id === step.id
-			? { ...item, approvalState: "rejected", detail: [item.detail, uiText("Đã từ chối áp dụng", "Rejected for apply", "已拒绝应用")].filter(Boolean).join(" · ") }
-			: item));
-		message.info(uiText("Đã giữ lại patch risky, chưa áp dụng", "Risky patch kept unapplied", "风险补丁已保留且未应用"));
-	}, [uiText]);
+	const handleRejectAgenticStep = useCallback(async (step: AgenticStep) => {
+		if (processingApprovalStepId) {
+			return;
+		}
+		setProcessingApprovalStepId(step.id);
+		try {
+			const synced = await sendAgenticApprovalFeedback("rejected", step);
+			if (!synced) {
+				message.warning(uiText(
+					"Không đồng bộ được trạng thái từ chối từ server, chưa chốt bước risky này.",
+					"Could not sync rejection state from server, this risky step remains unresolved.",
+					"无法从服务器同步拒绝状态，此风险步骤仍未完成处理。",
+				));
+				return;
+			}
+			appendStageEvent({
+				stage: "approval_action",
+				status: "rejected",
+				requestId: streamRequestId || undefined,
+				message: uiText("Đã từ chối bước risky", "Rejected risky step", "已拒绝风险步骤"),
+				detail: step.label || step.detail || step.stage,
+			});
+			message.info(uiText("Đã giữ lại patch risky, chưa áp dụng", "Risky patch kept unapplied", "风险补丁已保留且未应用"));
+		}
+		finally {
+			setProcessingApprovalStepId("");
+		}
+	}, [appendStageEvent, processingApprovalStepId, sendAgenticApprovalFeedback, streamRequestId, uiText]);
 
 	const handleOrchPreview = useCallback(async () => {
 		const msg = inputValue.trim();
@@ -4326,13 +5040,15 @@ export default function AiAssistantChat({
 				})),
 			};
 
-			// Default behavior:
-			// - normal route: analyze-first
-			// - local-plan route: edit-first so streamed local patch can auto-apply
-			// forcedResponseMode from toolbar Ask/Edit toggle overrides directive if set
-			const requestedResponseMode: ResponseMode = useLocalPlanRoute
+			const inferredResponseMode = inferResponseModeByIntent(cleanedMessage || normalizedText, contextType);
+			const explicitResponseMode: ResponseMode | undefined = useLocalPlanRoute
 				? (modeDirective.overrideMode ?? "edit")
-				: (forcedResponseMode === "edit" ? (modeDirective.overrideMode ?? "edit") : forcedResponseMode === "ask" ? (modeDirective.overrideMode ?? "analyze") : (modeDirective.overrideMode ?? "analyze"));
+				: (forcedResponseMode === "edit"
+					? (modeDirective.overrideMode ?? "edit")
+					: forcedResponseMode === "ask"
+						? (modeDirective.overrideMode ?? "analyze")
+						: modeDirective.overrideMode);
+			const requestedResponseMode: ResponseMode = explicitResponseMode ?? inferredResponseMode;
 
 			// Add placeholder for assistant response
 			const assistantMsg: ChatMessage = {
@@ -4360,6 +5076,7 @@ export default function AiAssistantChat({
 			setShowMiniProgress(true);
 			setIsProgressDockCollapsed(false);
 			setIsUsageDockVisible(true);
+			reviewResolutionFeedbackSentRef.current = "";
 			setStreamRequestId("");
 			setStreamJobId("");
 			setCompletionState("idle");
@@ -4389,6 +5106,7 @@ export default function AiAssistantChat({
 			followBottomRef.current = true;
 			streamingMessageRef.current = "";
 			pendingStreamChunkRef.current = "";
+			deliveredAssistantResultRef.current = false;
 			parsedCodeBlocksRef.current = [];
 			lastCodeBlockParseAtRef.current = 0;
 			if (SHOW_DETAILED_PROGRESS_TIMELINE) {
@@ -4431,7 +5149,7 @@ export default function AiAssistantChat({
 						uiLanguage: String(i18n.resolvedLanguage || i18n.language || "vi"),
 						flowType,
 						taskType,
-						responseMode: requestedResponseMode,
+						responseMode: explicitResponseMode,
 						currentCode,
 						language,
 						contextType,
@@ -4604,6 +5322,12 @@ export default function AiAssistantChat({
 								fullResponse?: string
 								responseMode?: string
 								contextType?: string
+								patchOps?: unknown[]
+								mergeStats?: {
+									added?: number
+									edited?: number
+									deleted?: number
+								}
 								message?: string
 								detail?: string
 								detailKey?: string
@@ -4919,21 +5643,18 @@ export default function AiAssistantChat({
 								const routeName = String((evt as any).routeName || "").trim();
 								const routeReason = String((evt as any).routeReason || (evt as any).reason_code || "").trim();
 								const routeConfidence = Number((evt as any).routeConfidence);
+								const workspaceKind = String((evt as any).workspaceKind || "").trim();
+								const weakMachineSafe = Boolean((evt as any).weakMachineSafe);
+								const routeParts = [
+									routeName ? `${routeName}${routeReason ? ` · ${routeReason}` : ""}${Number.isFinite(routeConfidence) ? ` · ${Math.round(routeConfidence)}%` : ""}` : (routeReason || ""),
+									workspaceKind ? uiText(`workspace=${workspaceKind}`, `workspace=${workspaceKind}`, `workspace=${workspaceKind}`) : "",
+									weakMachineSafe ? uiText("safe cho máy yếu", "weak-machine safe", "弱机器安全") : "",
+								].filter(Boolean);
 								appendAgenticStep({
 									stage: "assistant_route_plan",
 									icon: "🧭",
 									label: uiText("Chọn route", "Route planning", "路由规划"),
-									detail: uiText(
-										routeName
-											? `${routeName}${routeReason ? ` · ${routeReason}` : ""}${Number.isFinite(routeConfidence) ? ` · ${Math.round(routeConfidence)}%` : ""}`
-											: (routeReason || ""),
-										routeName
-											? `${routeName}${routeReason ? ` · ${routeReason}` : ""}${Number.isFinite(routeConfidence) ? ` · ${Math.round(routeConfidence)}%` : ""}`
-											: (routeReason || ""),
-										routeName
-											? `${routeName}${routeReason ? ` · ${routeReason}` : ""}${Number.isFinite(routeConfidence) ? ` · ${Math.round(routeConfidence)}%` : ""}`
-											: (routeReason || ""),
-									),
+									detail: routeParts.join(" · ") || undefined,
 									status: "done",
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
@@ -4946,15 +5667,36 @@ export default function AiAssistantChat({
 									.filter(Boolean)
 									.slice(0, 3);
 								const toolCount = Number((evt as any).toolCount || tools.length || 0);
-								appendAgenticStep({
-									stage: "assistant_tool_intent_plan",
-									icon: "🧩",
-									label: uiText("Lập kế hoạch công cụ", "Tool intent planning", "工具意图规划"),
-									detail: uiText(
+								const ingestTargets = Array.isArray((evt as any).ingestTargets)
+									? (evt as any).ingestTargets.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 4)
+									: [];
+								const executionBlueprint = Array.isArray((evt as any).executionBlueprint)
+									? (evt as any).executionBlueprint
+										.map((item: any) => String(item?.description || item?.action || "").trim())
+										.filter(Boolean)
+										.slice(0, 3)
+									: [];
+								const attachmentInsights = Array.isArray((evt as any).attachmentInsights)
+									? (evt as any).attachmentInsights
+										.map((item: any) => String(item?.category || item?.role || item?.name || "").trim())
+										.filter(Boolean)
+										.slice(0, 3)
+									: [];
+								const detailParts = [
+									uiText(
 										`${toolCount} bước${topTools.length ? ` · ${topTools.join(" -> ")}` : ""}`,
 										`${toolCount} steps${topTools.length ? ` · ${topTools.join(" -> ")}` : ""}`,
 										`${toolCount} 步骤${topTools.length ? ` · ${topTools.join(" -> ")}` : ""}`,
 									),
+									ingestTargets.length > 0 ? uiText(`nạp: ${ingestTargets.join(", ")}`, `ingest: ${ingestTargets.join(", ")}`, `入库: ${ingestTargets.join(", ")}`) : "",
+									executionBlueprint.length > 0 ? uiText(`plan: ${executionBlueprint.join(" | ")}`, `plan: ${executionBlueprint.join(" | ")}`, `plan: ${executionBlueprint.join(" | ")}`) : "",
+									attachmentInsights.length > 0 ? uiText(`attachment: ${attachmentInsights.join(", ")}`, `attachments: ${attachmentInsights.join(", ")}`, `附件: ${attachmentInsights.join(", ")}`) : "",
+								].filter(Boolean);
+								appendAgenticStep({
+									stage: "assistant_tool_intent_plan",
+									icon: "🧩",
+									label: uiText("Lập kế hoạch công cụ", "Tool intent planning", "工具意图规划"),
+									detail: detailParts.join(" · "),
 									status: "done",
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
@@ -5002,7 +5744,7 @@ export default function AiAssistantChat({
 									stage: "assistant_evidence_gate",
 									icon: "🛡️",
 									label: uiText("Gate bằng chứng phân tích", "Analysis evidence gate", "分析证据门控"),
-									detail: `${verdict || "blocked"} · ${Number.isFinite(score) ? Math.round(score) : "--"}/${Number.isFinite(minScore) ? Math.round(minScore) : "--"} · ev=${evidenceCount}/${minEvidenceCount}`,
+									detail: `${formatVerdictLabel(verdict || "blocked")} · ${uiText("điểm", "score", "分数")}=${Number.isFinite(score) ? Math.round(score) : "--"}/${Number.isFinite(minScore) ? Math.round(minScore) : "--"} · ${uiText("bằng chứng", "evidence", "证据")}=${evidenceCount}/${minEvidenceCount}`,
 									status: "running",
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
@@ -5016,7 +5758,7 @@ export default function AiAssistantChat({
 									stage: "patch_dry_run_rejected",
 									icon: "⛔",
 									label: uiText("Dry-run patch bị chặn", "Patch dry-run rejected", "补丁干运行被拒绝"),
-									detail: `${formatPatchDryRunReason(reason)}${Number.isFinite(conflictCount) && conflictCount > 0 ? ` · conflicts=${conflictCount}` : ""}`,
+									detail: `${formatPatchDryRunReason(reason)}${Number.isFinite(conflictCount) && conflictCount > 0 ? ` · ${uiText("xung đột", "conflicts", "冲突") }=${conflictCount}` : ""}`,
 									status: "running",
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
@@ -5025,6 +5767,7 @@ export default function AiAssistantChat({
 							else if (evt.stage === "assistant_edit_risk_gate") {
 								const riskScore = Number((evt as any).riskScore);
 								const riskLevel = String((evt as any).riskLevel || "").trim().toLowerCase();
+								const localizedRiskLevel = formatRiskLevelLabel(riskLevel);
 								const blockAutoApply = Boolean((evt as any).blockAutoApply);
 								const reasons = Array.isArray((evt as any).reasons)
 									? (evt as any).reasons.map((x: any) => String(x || "").trim()).filter(Boolean).slice(0, 3)
@@ -5034,9 +5777,9 @@ export default function AiAssistantChat({
 									icon: blockAutoApply ? "🛑" : (riskLevel === "medium" ? "⚠️" : "✅"),
 									label: uiText("Đánh giá rủi ro chỉnh sửa", "Edit risk gating", "编辑风险门控"),
 									detail: uiText(
-										`${Number.isFinite(riskScore) ? `${Math.round(riskScore)}/100` : "--"}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · block-auto-apply" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
-										`${Number.isFinite(riskScore) ? `${Math.round(riskScore)}/100` : "--"}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · block-auto-apply" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
-										`${Number.isFinite(riskScore) ? `${Math.round(riskScore)}/100` : "--"}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · block-auto-apply" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
+										`${Number.isFinite(riskScore) ? `${Math.round(riskScore)}/100` : "--"}${localizedRiskLevel ? ` · ${localizedRiskLevel}` : ""}${blockAutoApply ? ` · ${formatInternalFlagLabel("block-auto-apply")}` : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
+										`${Number.isFinite(riskScore) ? `${Math.round(riskScore)}/100` : "--"}${localizedRiskLevel ? ` · ${localizedRiskLevel}` : ""}${blockAutoApply ? ` · ${formatInternalFlagLabel("block-auto-apply")}` : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
+										`${Number.isFinite(riskScore) ? `${Math.round(riskScore)}/100` : "--"}${localizedRiskLevel ? ` · ${localizedRiskLevel}` : ""}${blockAutoApply ? ` · ${formatInternalFlagLabel("block-auto-apply")}` : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
 									),
 									status: blockAutoApply ? "running" : "done",
 								});
@@ -5046,6 +5789,7 @@ export default function AiAssistantChat({
 							else if (evt.stage === "assistant_semantic_sandbox") {
 								const riskScore = Number((evt as any).riskScore);
 								const riskLevel = String((evt as any).riskLevel || "").trim().toLowerCase();
+								const localizedRiskLevel = formatRiskLevelLabel(riskLevel);
 								const blockAutoApply = Boolean((evt as any).blockAutoApply);
 								const verdict = String((evt as any).verdict || "").trim();
 								const reasons = Array.isArray((evt as any).reasons)
@@ -5056,9 +5800,9 @@ export default function AiAssistantChat({
 									icon: blockAutoApply ? "🛑" : (riskLevel === "medium" ? "⚠️" : "🧪"),
 									label: uiText("Semantic sandbox trước khi apply", "Pre-apply semantic sandbox", "应用前语义沙箱"),
 									detail: uiText(
-										`${verdict || "passed"}${Number.isFinite(riskScore) ? ` · ${Math.round(riskScore)}/100` : ""}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · review-required" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
-										`${verdict || "passed"}${Number.isFinite(riskScore) ? ` · ${Math.round(riskScore)}/100` : ""}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · review-required" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
-										`${verdict || "passed"}${Number.isFinite(riskScore) ? ` · ${Math.round(riskScore)}/100` : ""}${riskLevel ? ` · ${riskLevel}` : ""}${blockAutoApply ? " · review-required" : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
+										`${formatVerdictLabel(verdict || "passed")}${Number.isFinite(riskScore) ? ` · ${Math.round(riskScore)}/100` : ""}${localizedRiskLevel ? ` · ${localizedRiskLevel}` : ""}${blockAutoApply ? ` · ${formatInternalFlagLabel("review-required")}` : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
+										`${formatVerdictLabel(verdict || "passed")}${Number.isFinite(riskScore) ? ` · ${Math.round(riskScore)}/100` : ""}${localizedRiskLevel ? ` · ${localizedRiskLevel}` : ""}${blockAutoApply ? ` · ${formatInternalFlagLabel("review-required")}` : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
+										`${formatVerdictLabel(verdict || "passed")}${Number.isFinite(riskScore) ? ` · ${Math.round(riskScore)}/100` : ""}${localizedRiskLevel ? ` · ${localizedRiskLevel}` : ""}${blockAutoApply ? ` · ${formatInternalFlagLabel("review-required")}` : ""}${reasons.length ? ` · ${reasons.join(", ")}` : ""}`,
 									),
 									status: blockAutoApply ? "running" : "done",
 								});
@@ -5130,12 +5874,184 @@ export default function AiAssistantChat({
 							}
 							else if (evt.stage === "tool_search") {
 								const topK = Number((evt as any).retrievalTopK || 0);
+								const retrievalHitCount = Number((evt as any).retrievalHitCount || 0);
+								const retrievalSourceCount = Number((evt as any).retrievalSourceCount || 0);
+								const retrievalMaxChars = Number((evt as any).retrievalMaxChars || 0);
 								const scopeSummary = String((evt as any).scopeSummary || "").trim();
+								const retrievalEngineLabel = String((evt as any).retrievalEngineLabel || "").trim();
+								const retrievalQuery = String((evt as any).retrievalQuery || "").trim();
+								const menuSignals = Array.isArray((evt as any).menuSignals)
+									? (evt as any).menuSignals.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 4)
+									: [];
+								const focusTargets = Array.isArray((evt as any).focusTargets)
+									? (evt as any).focusTargets.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 4)
+									: [];
+								const symbolQueries = Array.isArray((evt as any).symbolQueries)
+									? (evt as any).symbolQueries.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 2)
+									: [];
+								const targetedQueries = Array.isArray((evt as any).targetedQueries)
+									? (evt as any).targetedQueries.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 2)
+									: [];
+								const virtualContextPreview = Array.isArray((evt as any).virtualContextPreview)
+									? (evt as any).virtualContextPreview.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 3)
+									: [];
+								const retrievalHits = Array.isArray((evt as any).retrievalHits)
+									? (evt as any).retrievalHits
+										.map((item: any) => {
+											const source = String(item?.source || "").trim();
+											const summary = String(item?.summary || "").trim();
+											const score = Number(item?.score || 0);
+											const scoreLabel = score > 0 ? ` (${score.toFixed(3)})` : "";
+											const sourceCategory = String(item?.sourceCategory || "").trim().toLowerCase();
+											const matchedTokens = Array.isArray(item?.matchedTokens)
+												? item.matchedTokens.map((token: unknown) => String(token || "").trim()).filter(Boolean).slice(0, 3)
+												: [];
+											const recent = Boolean(item?.recent);
+											const reasonParts: string[] = [];
+											if (sourceCategory && sourceCategory !== "general") {
+												reasonParts.push((() => {
+													switch (sourceCategory) {
+														case "current_code":
+															return uiText("code hiện tại", "current code", "当前代码");
+														case "current_menu":
+															return uiText("menu hiện tại", "current menu", "当前菜单");
+														case "menu_context":
+															return uiText("ngữ cảnh menu", "menu context", "菜单上下文");
+														case "attachment_context":
+															return uiText("attachment tham chiếu", "attachment context", "附件上下文");
+														case "reference_docs":
+															return uiText("tài liệu tham chiếu", "reference docs", "参考文档");
+														case "workspace_module":
+															return uiText("module workspace", "workspace module", "工作区模块");
+														case "dynamic_context":
+															return uiText("ngữ cảnh động", "dynamic context", "动态上下文");
+														default:
+															return "";
+													}
+												})());
+											}
+											if (matchedTokens.length > 0) {
+												reasonParts.push(uiText(
+													`khớp ${matchedTokens.join(", ")}`,
+													`matched ${matchedTokens.join(", ")}`,
+													`匹配 ${matchedTokens.join(", ")}`,
+												));
+											}
+											if (recent) {
+												reasonParts.push(uiText("mới", "recent", "最近"));
+											}
+											const reasonLabel = reasonParts.length > 0
+												? ` [${uiText("vì sao", "why", "原因")}: ${reasonParts.join(" · ")}]`
+												: "";
+											if (!source && !summary) {
+												return "";
+											}
+											if (source && summary) {
+												return `${source}${scoreLabel}: ${summary}${reasonLabel}`;
+											}
+											return `${source || summary}${scoreLabel}${reasonLabel}`;
+										})
+										.filter(Boolean)
+										.slice(0, 2)
+									: [];
+								const adaptiveReasons = Array.isArray((evt as any).adaptiveReasons)
+									? (evt as any).adaptiveReasons.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 2)
+									: [];
+								const formatFocusTargetLabel = (item: string) => {
+									if (item === "code_editor") {
+										return uiText("trình biên tập mã", "code editor", "代码编辑器");
+									}
+									if (item === "menu_json") {
+										return uiText("thiết kế menu", "menu designer", "菜单设计");
+									}
+									if (item === "menu_string") {
+										return uiText("menu hiện tại", "current menu", "当前菜单");
+									}
+									if (item === "menu_attachment_json") {
+										return uiText("json menu đính kèm", "attached menu json", "附加菜单 JSON");
+									}
+									if (item === "menu_context") {
+										return uiText("ngữ cảnh menu", "menu context", "菜单上下文");
+									}
+									if (item === "current_code") {
+										return uiText("code hiện tại", "current code", "当前代码");
+									}
+									if (item === "current_menu") {
+										return uiText("menu hiện tại", "current menu", "当前菜单");
+									}
+									return item;
+								};
+								const buildPrefixedList = (labelVi: string, labelEn: string, labelZh: string, values: string[], formatter?: (value: string) => string) => {
+									if (values.length <= 0) {
+										return "";
+									}
+									const rendered = values.map(value => formatter ? formatter(value) : value).filter(Boolean).join(" · ");
+									if (!rendered) {
+										return "";
+									}
+									return uiText(
+										`${labelVi}: ${rendered}`,
+										`${labelEn}: ${rendered}`,
+										`${labelZh}: ${rendered}`,
+									);
+								};
+								const detailParts: string[] = [];
+								if (focusTargets.length > 0) {
+									detailParts.push(buildPrefixedList("phạm vi", "scope", "范围", focusTargets, formatFocusTargetLabel));
+								}
+								if (retrievalSourceCount > 0 || retrievalHitCount > 0) {
+									detailParts.push(uiText(
+										`đã dò ${retrievalSourceCount || retrievalHitCount} nguồn · ${retrievalHitCount} hits`,
+										`searched ${retrievalSourceCount || retrievalHitCount} sources · ${retrievalHitCount} hits`,
+										`已搜索 ${retrievalSourceCount || retrievalHitCount} 个来源 · ${retrievalHitCount} 个命中`,
+									));
+								}
+								if (retrievalQuery) {
+									detailParts.push(uiText(`query chính: ${retrievalQuery}`, `main query: ${retrievalQuery}`, `主查询: ${retrievalQuery}`));
+								}
+								if (menuSignals.length > 0) {
+									detailParts.push(buildPrefixedList("neo menu", "menu anchors", "菜单锚点", menuSignals));
+								}
+								if (symbolQueries.length > 0) {
+									detailParts.push(buildPrefixedList("neo symbol", "symbol probes", "符号探针", symbolQueries));
+								}
+								if (targetedQueries.length > 0) {
+									detailParts.push(buildPrefixedList("neo đích", "targeted probes", "定向探针", targetedQueries));
+								}
+								if (virtualContextPreview.length > 0) {
+									detailParts.push(buildPrefixedList("bộ nhớ ảo", "virtual context", "虚拟上下文", virtualContextPreview));
+								}
+								if (retrievalHits.length > 0) {
+									detailParts.push(buildPrefixedList("nguồn trúng", "matched sources", "命中来源", retrievalHits));
+								}
+								const isMenuSearchFlow = menuSignals.length > 0
+									|| focusTargets.includes("menu_json")
+									|| focusTargets.includes("menu_context")
+									|| focusTargets.includes("current_menu")
+									|| focusTargets.includes("menu_attachment_json");
+								const scopeEngineLabel = (() => {
+									if (isMenuSearchFlow) {
+										const normalizedEngineLabel = retrievalEngineLabel.toLowerCase();
+										if (!normalizedEngineLabel || normalizedEngineLabel.includes("code scope") || normalizedEngineLabel.includes("symbol retrieval")) {
+											return "menu schema + trigger retrieval";
+										}
+									}
+									return retrievalEngineLabel || scopeSummary;
+								})();
+								if (scopeEngineLabel) {
+									detailParts.push(uiText(`scope engine: ${scopeEngineLabel}`, `scope engine: ${scopeEngineLabel}`, `范围引擎: ${scopeEngineLabel}`));
+								}
+								if (topK > 0) {
+									detailParts.push(uiText(`topK=${topK}${retrievalMaxChars > 0 ? ` · tối đa ${retrievalMaxChars} ký tự` : ""}`, `topK=${topK}${retrievalMaxChars > 0 ? ` · max ${retrievalMaxChars} chars` : ""}`, `topK=${topK}${retrievalMaxChars > 0 ? ` · 最多 ${retrievalMaxChars} 字符` : ""}`));
+								}
+								if (adaptiveReasons.length > 0) {
+									detailParts.push(buildPrefixedList("điều chỉnh", "adaptive reasons", "自适应原因", adaptiveReasons));
+								}
 								appendAgenticStep({
 									stage: "tool_search",
 									icon: "🔎",
-									label: uiText("Tra cứu ngữ cảnh cục bộ", "Searched local context", "检索本地上下文"),
-									detail: `${scopeSummary || localizedEvtMessage}${topK > 0 ? ` · topK=${topK}` : ""}`.trim(),
+									label: uiText("Tìm ngữ cảnh và nguồn liên quan", "Searching context and relevant sources", "搜索上下文与相关来源"),
+									detail: detailParts.length > 0 ? detailParts.join(" · ") : localizedEvtMessage,
 									status: "done",
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
@@ -5146,7 +6062,7 @@ export default function AiAssistantChat({
 								appendAgenticStep({
 									stage: "tool_prepare",
 									icon: "🧩",
-									label: uiText("Chuẩn bị plan thực thi", "Prepared execution plan", "准备执行计划"),
+									label: uiText("Phân tích và lập kế hoạch", "Analyzing and planning", "分析并规划"),
 									detail: stepCount > 0 ? uiText(`${stepCount} bước`, `${stepCount} steps`, `${stepCount} 步`) : localizedEvtMessage,
 									status: "done",
 								});
@@ -5154,12 +6070,19 @@ export default function AiAssistantChat({
 									appendStageEvent(evtForTimeline);
 							}
 							else if (evt.stage === "tool_apply") {
+								const applyStatusRaw = String((evt as any).status || "running").trim().toLowerCase();
+								const applyStatus: AgenticStep["status"] = (applyStatusRaw === "completed" || applyStatusRaw === "failed" || applyStatusRaw === "skipped")
+									? "done"
+									: (applyStatusRaw === "planned" ? "planned" : "running");
+								const applyIcon = applyStatusRaw === "completed"
+									? "✅"
+									: (applyStatusRaw === "failed" ? "❌" : "🛠");
 								appendAgenticStep({
 									stage: "tool_apply",
-									icon: "🛠",
-									label: uiText("Áp step vào editor", "Applying steps to editor", "将步骤应用到编辑器"),
+									icon: applyIcon,
+									label: uiText("Áp kết quả vào editor", "Applying results to editor", "将结果应用到编辑器"),
 									detail: localizedEvtMessage,
-									status: "running",
+									status: applyStatus,
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
@@ -5257,6 +6180,9 @@ export default function AiAssistantChat({
 								const isPartial = Boolean((evt as any).partial);
 								const stepPatchValidator = normalizePatchValidatorMeta((evt as any).patchValidator);
 								const stepPatchDryRun = normalizePatchDryRunMeta((evt as any).patchDryRun);
+								const stepContextType = String((evt as any).contextType || contextType || "").trim().toLowerCase();
+								const stepPatchOps = (evt as any).patchOps;
+								const stepMergeStats = (evt as any).mergeStats;
 								const patchRejected = isPatchValidatorRejected(stepPatchValidator);
 								const dryRunRejected = isPatchDryRunRejected(stepPatchDryRun);
 								const patchReasonCode = String(stepPatchValidator?.rejectionReason || "").trim().toLowerCase();
@@ -5289,14 +6215,14 @@ export default function AiAssistantChat({
 									|| patchRejected
 									|| dryRunRejected;
 								const qualityNote = hasQualityScore && qualityScore !== undefined
-									? ` · Q=${qualityScore}${lowConfidence ? " low" : ""}`
-									: (lowConfidence ? " · low-confidence" : "");
+									? ` · ${uiText("chất lượng", "quality", "质量")}=${qualityScore}${lowConfidence ? ` · ${formatInternalFlagLabel("low-confidence")}` : ""}`
+									: (lowConfidence ? ` · ${formatInternalFlagLabel("low-confidence")}` : "");
 								const validatorNote = patchRejected
-									? ` · validator=${patchReasonCode || "rejected"}`
-									: (patchHint ? ` · validator=${patchHint}` : "");
+									? ` · ${uiText("validator", "validator", "验证器")}=${formatPatchValidatorReason(patchReasonCode || "rejected")}`
+									: (patchHint ? ` · ${uiText("validator", "validator", "验证器")}=${patchHint}` : "");
 								const dryRunNote = dryRunRejected
-									? ` · dryRun=${dryRunReasonCode || "rejected"}`
-									: (dryRunHint ? ` · dryRun=${dryRunHint}` : "");
+									? ` · ${uiText("dry-run", "dry-run", "干运行")}=${formatPatchDryRunReason(dryRunReasonCode || "rejected")}`
+									: (dryRunHint ? ` · ${uiText("dry-run", "dry-run", "干运行")}=${dryRunHint}` : "");
 								appendAgenticStep({
 									stage: `agentic_step_result_${stepIndex}`,
 									icon: approvalRequired ? "🛂" : (lowConfidence ? "⚠️" : "✏️"),
@@ -5322,6 +6248,32 @@ export default function AiAssistantChat({
 								});
 								// Apply textEdits to CodeMirror immediately for edit-mode steps.
 								const stepTextEdits = (evt as any).textEdits;
+								if (approvalRequired || (Array.isArray(stepTextEdits) && stepTextEdits.length > 0)) {
+									deliveredAssistantResultRef.current = true;
+								}
+								if (stepContextType === "menu_json" && Array.isArray(stepPatchOps) && stepPatchOps.length > 0) {
+									const menuOpSummary = summarizeMenuPatchOps(stepPatchOps, stepMergeStats);
+									setLocalFlowOps({
+										verified: true,
+										flow: "menu_json",
+										addCount: menuOpSummary.addCount,
+										editCount: menuOpSummary.editCount,
+										deleteCount: menuOpSummary.deleteCount,
+									});
+									setLocalFlowOpLines([]);
+									localFlowVerifiedRef.current = true;
+								}
+								if (Array.isArray(stepTextEdits) && stepTextEdits.length > 0) {
+									const stepEvent = evt as Record<string, unknown>;
+									const normalizedStepContextType = String(stepEvent.contextType || contextType || "").trim().toLowerCase();
+									const normalizedStepResponseMode = String(stepEvent.responseMode || "").trim().toLowerCase();
+									const blockAutoApplyByRisk = Boolean(stepEvent.editRiskBlockAutoApply === true);
+									const isRealtimeEditableFlow = (normalizedStepContextType === "code" || normalizedStepContextType === "menu_json")
+										&& (normalizedStepResponseMode === "edit" || turnAllowAutoApplyRef.current);
+									if (isRealtimeEditableFlow && !blockAutoApplyByRisk) {
+										localFlowVerifiedRef.current = true;
+									}
+								}
 								if (!approvalRequired && Array.isArray(stepTextEdits) && stepTextEdits.length > 0) {
 									const editsPayload = JSON.stringify({ textEdits: stepTextEdits });
 									applyRealtimeCodeFromText(editsPayload, true);
@@ -5329,6 +6281,7 @@ export default function AiAssistantChat({
 								// Append analysis text section to streaming content for analyze-mode steps.
 								const stepText = String((evt as any).text || "").trim();
 								if (stepText && !stepTextEdits) {
+									deliveredAssistantResultRef.current = true;
 									pendingStreamChunkRef.current += (pendingStreamChunkRef.current ? "\n\n" : "") + stepText;
 									scheduleStreamFlush();
 								}
@@ -5606,11 +6559,14 @@ export default function AiAssistantChat({
 							}
 							else if (evt.stage === "complete") {
 								receivedCompleteEvent = true;
-								const completionQuickFixes = normalizeQuickFixSuggestions((evt as any).quickFixes);
+								const completionPayload: any = evt;
+								const reviewRequired = String(completionPayload.status || "").trim().toLowerCase() === "review_required"
+									|| Number(completionPayload.agenticStepApprovalPendingCount || 0) > 0;
+								const completionQuickFixes = normalizeQuickFixSuggestions(completionPayload.quickFixes);
 								if (completionQuickFixes.length > 0) {
 									setQuickFixSuggestions(completionQuickFixes);
 								}
-								const completionEditCandidates = normalizeEditCandidates((evt as any).editCandidates);
+								const completionEditCandidates = normalizeEditCandidates(completionPayload.editCandidates);
 								if (completionEditCandidates.length > 0) {
 									setEditCandidates(completionEditCandidates);
 								}
@@ -5638,32 +6594,44 @@ export default function AiAssistantChat({
 								const effectiveContextType = String(evt.contextType || contextType || "").trim().toLowerCase();
 								const isMainFlow = effectiveContextType === "code" || effectiveContextType === "menu_json";
 								const isEditModeEvt = String(evt.responseMode || "").trim().toLowerCase() === "edit";
+								const completionEventMeta = evt as Record<string, unknown>;
+								const agenticStepResultCount = Math.max(0, Number(completionEventMeta["agenticStepResultCount"] || 0));
+								const agenticStepAcceptedCount = Math.max(0, Number(completionEventMeta["agenticStepAcceptedCount"] || 0));
+								const completionTextEdits = Array.isArray(evt.textEdits) && evt.textEdits.length > 0
+									? evt.textEdits
+									: parseTextEditsOnlyPayload(evt.fullResponse || "") || [];
+								const completionPatchOps = effectiveContextType === "menu_json" && Array.isArray(evt.patchOps)
+									? evt.patchOps
+									: [];
+								const hasStructuredStepResults = agenticStepResultCount > 0;
+								const hasStructuredCompletionEdits = hasStructuredStepResults
+									|| completionTextEdits.length > 0
+									|| completionPatchOps.length > 0;
 								const localFlowVerified = Boolean(
 									evt.flowConfirmedByLocal === true
 									|| (evt.localProviderPrimaryUsed === true && isMainFlow),
 								);
 								const blockAutoApplyByRisk = Boolean((evt as any).editRiskBlockAutoApply === true);
 								localFlowVerifiedRef.current = localFlowVerified && isEditModeEvt && !blockAutoApplyByRisk;
+								let completionOpSummary = { addCount: 0, editCount: 0, deleteCount: 0 };
 
 								if (localFlowVerifiedRef.current) {
-									let opSummary = { addCount: 0, editCount: 0, deleteCount: 0 };
 									if (effectiveContextType === "code") {
-										const candidateEdits = Array.isArray(evt.textEdits) && evt.textEdits.length > 0
-											? evt.textEdits
-											: parseTextEditsOnlyPayload(evt.fullResponse || "") || [];
-										opSummary = summarizeTextEditOperations(candidateEdits);
-										setLocalFlowOpLines(buildCodeOperationPreviewLines(currentCode, candidateEdits, 20));
+										completionOpSummary = summarizeTextEditOperations(completionTextEdits);
+										setLocalFlowOpLines(buildCodeOperationPreviewLines(currentCode, completionTextEdits, 20));
 									}
 									else if (effectiveContextType === "menu_json") {
-										opSummary = summarizeMenuOperations(currentCode, evt.fullResponse || "");
+										completionOpSummary = completionPatchOps.length > 0
+											? summarizeMenuPatchOps(completionPatchOps, evt.mergeStats)
+											: summarizeMenuOperations(currentCode, evt.fullResponse || "");
 										setLocalFlowOpLines([]);
 									}
 									setLocalFlowOps({
 										verified: true,
 										flow: effectiveContextType as "code" | "menu_json",
-										addCount: opSummary.addCount,
-										editCount: opSummary.editCount,
-										deleteCount: opSummary.deleteCount,
+										addCount: completionOpSummary.addCount,
+										editCount: completionOpSummary.editCount,
+										deleteCount: completionOpSummary.deleteCount,
 									});
 								}
 								else if (isEditModeEvt) {
@@ -5718,7 +6686,17 @@ export default function AiAssistantChat({
 								}
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
-								setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Hoàn thành", "Completed", "已完成"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+								setGeminiProgress({
+									phase: "idle",
+									percent: 100,
+									message: reviewRequired
+										? uiText("Chờ duyệt trước khi hoàn tất", "Waiting for approval before completion", "等待批准后完成")
+										: uiText("Hoàn thành", "Completed", "已完成"),
+									estimatedWaitSecs: 0,
+									remainingSecs: 0,
+									charsReceived: 0,
+									estimatedTotalChars: 0,
+								});
 								setBackendProgressHint({ stage: "", detail: "" });
 								if (evt.parts && evt.parts.jobId) {
 									effectiveStreamJobId = String(evt.parts.jobId);
@@ -5733,11 +6711,25 @@ export default function AiAssistantChat({
 									setStreamJobId(effectiveStreamJobId);
 									void loadStreamPartsMeta(effectiveStreamJobId, 1, 20);
 								}
-								if (evt.fullResponse) {
-									streamingMessageRef.current = stripInternalOrchestrationLeakLines(evt.fullResponse);
+								const shouldHideRawEditCompletionPayload = isEditModeEvt && isMainFlow && hasStructuredCompletionEdits;
+								if (evt.fullResponse || shouldHideRawEditCompletionPayload) {
+									deliveredAssistantResultRef.current = true;
+									streamingMessageRef.current = shouldHideRawEditCompletionPayload
+										? buildStructuredEditCompletionSummary({
+											contextType: effectiveContextType === "menu_json" ? "menu_json" : "code",
+											stepResultCount: agenticStepResultCount,
+											acceptedCount: agenticStepAcceptedCount,
+											addCount: completionOpSummary.addCount,
+											editCount: completionOpSummary.editCount,
+											deleteCount: completionOpSummary.deleteCount,
+											reviewRequired,
+											uiText,
+										})
+										: stripInternalOrchestrationLeakLines(evt.fullResponse);
 									pendingStreamChunkRef.current = "";
 								}
 								else if (useLocalPlanRoute && evt.result) {
+									deliveredAssistantResultRef.current = true;
 									const hints = Array.isArray(evt.result.planningHints)
 										? evt.result.planningHints.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 5)
 										: [];
@@ -5782,6 +6774,43 @@ export default function AiAssistantChat({
 										}
 									}
 								}
+								const shouldSynthesizeCompletionStep = isEditModeEvt
+									&& isMainFlow
+									&& !hasStructuredStepResults
+									&& (completionTextEdits.length > 0 || completionPatchOps.length > 0);
+								if (shouldSynthesizeCompletionStep) {
+									appendAgenticStep({
+										stage: "agentic_step_result_completion",
+										icon: reviewRequired ? "🛂" : "✏️",
+										label: uiText("Kết quả apply cuối", "Final applied result", "最终应用结果"),
+										detail: buildStructuredEditCompletionSummary({
+											contextType: effectiveContextType === "menu_json" ? "menu_json" : "code",
+											stepResultCount: Math.max(1, completionTextEdits.length || completionPatchOps.length),
+											acceptedCount: Math.max(1, completionTextEdits.length || completionPatchOps.length),
+											addCount: completionOpSummary.addCount,
+											editCount: completionOpSummary.editCount,
+											deleteCount: completionOpSummary.deleteCount,
+											reviewRequired,
+											uiText,
+										}),
+										approvalRequired: reviewRequired,
+										approvalState: reviewRequired ? "pending" : undefined,
+										pendingTextEdits: reviewRequired && completionTextEdits.length > 0 ? completionTextEdits : undefined,
+										status: "done",
+									});
+									if (SHOW_DETAILED_PROGRESS_TIMELINE) {
+										appendStageEvent({
+											stage: "agentic_step_result",
+											message: uiText(
+												"Dựng step apply từ completion cuối để đồng bộ editor",
+												"Synthesized final apply step from completion",
+												"已从最终 completion 合成应用步骤",
+											),
+											percent: 100,
+										});
+									}
+								}
+
 								if (String(evt.responseMode || "").trim().toLowerCase() === "edit") {
 									const blockAutoApplyByRisk = Boolean((evt as any).editRiskBlockAutoApply === true);
 									turnAllowAutoApplyRef.current = !blockAutoApplyByRisk;
@@ -5809,22 +6838,42 @@ export default function AiAssistantChat({
 									));
 								}
 								flushStreamingToUI(true);
-								if (evt.fullResponse) {
+								if (evt.fullResponse || completionTextEdits.length > 0) {
 									const blockAutoApplyByRisk = Boolean((evt as any).editRiskBlockAutoApply === true);
-									if (!blockAutoApplyByRisk) {
-										// Force final apply after backend settles mode to avoid debounce race.
-										applyRealtimeCodeFromText(evt.fullResponse, true);
+									if (!blockAutoApplyByRisk && !reviewRequired) {
+										if (!hasStructuredStepResults) {
+											const completionTextEditsPayload = completionTextEdits.length > 0
+												? String(JSON.stringify({ textEdits: completionTextEdits }) || "")
+												: "";
+											// Force final apply after backend settles mode to avoid debounce race.
+											applyRealtimeCodeFromText(completionTextEditsPayload || String(evt.fullResponse || ""), true);
+										}
 									}
 								}
-								setCompletionState("done");
+								setCompletionState(reviewRequired ? "review_required" : "done");
 								setIsLoading(false);
 								if (sseAbortRef.current === controller) {
 									sseAbortRef.current = null;
 								}
 								turnAllowAutoApplyRef.current = false;
+								if (reviewRequired) {
+									showSystemToast("info", {
+										summary: uiText(
+											"Đã dừng ở trạng thái chờ duyệt vì còn patch rủi ro cần xác nhận thủ công.",
+											"Stopped in review-required state because some risky patches still need manual approval.",
+											"已停在待审核状态，因为仍有高风险补丁需要手动批准。",
+										),
+										nextStep: uiText(
+											"Duyệt hoặc từ chối các bước đang gắn nhãn pending trong bảng agentic steps.",
+											"Approve or reject the pending items in the agentic steps panel.",
+											"请在 agentic steps 面板中批准或拒绝待处理项。",
+										),
+										internalCode: "REVIEW_REQUIRED",
+									});
+								}
 								// Populate follow-up suggestions if backend emitted them
-								const backendFollowUps = Array.isArray((evt as any).followUpSuggestions)
-									? (evt as any).followUpSuggestions.map((s: unknown) => String(s || "").trim()).filter(Boolean).slice(0, 3) as string[]
+								const backendFollowUps = Array.isArray(completionPayload.followUpSuggestions)
+									? completionPayload.followUpSuggestions.map((s: unknown) => String(s || "").trim()).filter(Boolean).slice(0, 3) as string[]
 									: [];
 								if (backendFollowUps.length > 0) {
 									setFollowUpSuggestions(backendFollowUps);
@@ -5850,9 +6899,12 @@ export default function AiAssistantChat({
 									continue;
 								}
 								const hasDeliveredContent = (
-									String(streamingMessageRef.current || "")
-									+ String(pendingStreamChunkRef.current || "")
-								).trim().length > 0;
+									deliveredAssistantResultRef.current
+									|| (
+										String(streamingMessageRef.current || "")
+										+ String(pendingStreamChunkRef.current || "")
+									).trim().length > 0
+								);
 								if (hasDeliveredContent) {
 									flushStreamingToUI(true);
 									receivedCompleteEvent = true;
@@ -5926,7 +6978,7 @@ export default function AiAssistantChat({
 
 				if (!receivedCompleteEvent && !receivedErrorEvent) {
 					// Fallback: some deployments may close SSE without the final complete frame.
-					if (!streamingMessageRef.current) {
+					if (!streamingMessageRef.current && !deliveredAssistantResultRef.current) {
 						const fallbackJobId = String(effectiveStreamJobId || "").trim();
 						if (fallbackJobId) {
 							const hydrated = await hydrateFromPersistedParts(fallbackJobId);
@@ -5936,11 +6988,11 @@ export default function AiAssistantChat({
 						}
 					}
 					flushStreamingToUI(true);
-					const hasDeliveredContent = String(streamingMessageRef.current || "").trim().length > 0;
+					const hasDeliveredContent = deliveredAssistantResultRef.current || String(streamingMessageRef.current || "").trim().length > 0;
 					setCompletionState(hasDeliveredContent ? "done" : "stream_closed");
 					setCompletionMetrics({
 						elapsedMs: Math.max(0, Date.now() - requestStartedAtRef.current),
-						outputChars: streamingMessageRef.current.length,
+						outputChars: streamingMessageRef.current.length + pendingStreamChunkRef.current.length,
 					});
 					setGeminiProgress({ phase: "idle", percent: 100, message: uiText("Hoàn thành", "Completed", "已完成"), estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 					setBackendProgressHint({ stage: "", detail: "" });
@@ -6212,6 +7264,7 @@ export default function AiAssistantChat({
 		setIsProgressDockCollapsed(false);
 		setIsUsageDockVisible(true);
 		setIsLoading(false);
+		reviewResolutionFeedbackSentRef.current = "";
 		setStreamRequestId("");
 		setStreamJobId("");
 		setCompletionState("idle");
@@ -7042,20 +8095,24 @@ export default function AiAssistantChat({
 																		type="link"
 																		size="small"
 																		className={styles.compactToggleBtn}
+																		disabled={processingApprovalStepId === step.id}
 																		onClick={(e) => {
 																			e.stopPropagation();
-																			handleApproveAgenticStep(step);
+																			void handleApproveAgenticStep(step);
 																		}}
 																	>
-																		{uiText("Approve", "Approve", "批准")}
+																		{processingApprovalStepId === step.id
+																			? uiText("Syncing...", "Syncing...", "同步中...")
+																			: uiText("Approve", "Approve", "批准")}
 																	</Button>
 																	<Button
 																		type="link"
 																		size="small"
 																		className={styles.compactToggleBtn}
+																		disabled={processingApprovalStepId === step.id}
 																		onClick={(e) => {
 																			e.stopPropagation();
-																			handleRejectAgenticStep(step);
+																			void handleRejectAgenticStep(step);
 																		}}
 																	>
 																		{uiText("Reject", "Reject", "拒绝")}
@@ -7235,7 +8292,7 @@ export default function AiAssistantChat({
 							<div className={styles.usageDockBadges}>
 								{completionStateLabel && (
 									<Tooltip title={completionDetailTooltip || completionStateLabel}>
-										<Tag color={completionState === "done" ? "green" : completionState === "stream_closed" ? "gold" : completionState === "error" ? "red" : completionState === "cancelled" ? "orange" : "default"}>
+										<Tag color={completionState === "done" ? "green" : completionState === "review_required" ? "blue" : completionState === "stream_closed" ? "gold" : completionState === "error" ? "red" : completionState === "cancelled" ? "orange" : "default"}>
 											{completionStateLabel}
 										</Tag>
 									</Tooltip>

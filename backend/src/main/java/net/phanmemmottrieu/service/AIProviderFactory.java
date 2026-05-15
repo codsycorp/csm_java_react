@@ -7,10 +7,10 @@ import org.springframework.stereotype.Service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Factory để lựa chọn AI provider phù hợp dựa trên quota và availability.
@@ -24,10 +24,57 @@ import java.util.concurrent.CopyOnWriteArrayList;
 @Slf4j
 @Service
 public class AIProviderFactory {
-  
-  private final List<AIProvider> providers = new CopyOnWriteArrayList<>();
+
+  private final List<AIProvider> providers;
   
   private final ObjectMapper objectMapper = new ObjectMapper();
+
+  private enum ProviderChainMode {
+    LOCAL_ONLY,
+    HYBRID
+  }
+
+  private static final class ProviderChainBuilder {
+    private final List<AIProvider> orderedProviders = new ArrayList<>();
+
+    ProviderChainBuilder addIfUsable(AIProvider provider) {
+      if (provider != null && provider.isAvailable() && !orderedProviders.contains(provider)) {
+        orderedProviders.add(provider);
+      }
+      return this;
+    }
+
+    List<AIProvider> build() {
+      return Collections.unmodifiableList(new ArrayList<>(orderedProviders));
+    }
+  }
+
+  private static final class ProviderChainDirector {
+    private ProviderChainDirector() {
+    }
+
+    static List<AIProvider> buildChain(
+        ProviderChainMode mode,
+        GeminiService geminiService,
+        LlamaCppNativeService llamaCppNativeService,
+        boolean preferLocalFirst) {
+      ProviderChainBuilder builder = new ProviderChainBuilder();
+      if (mode == ProviderChainMode.LOCAL_ONLY) {
+        return builder
+            .addIfUsable(llamaCppNativeService)
+            .build();
+      }
+
+      if (preferLocalFirst) {
+        builder.addIfUsable(llamaCppNativeService);
+        builder.addIfUsable(geminiService);
+      } else {
+        builder.addIfUsable(geminiService);
+        builder.addIfUsable(llamaCppNativeService);
+      }
+      return builder.build();
+    }
+  }
   
   /**
    * Constructor - chỉ sử dụng Gemini
@@ -37,23 +84,14 @@ public class AIProviderFactory {
       @Autowired(required = false) LlamaCppNativeService llamaCppNativeService,
       @Value("${ai.local.llama.prefer-local-first:false}") boolean preferLocalFirst,
       @Value("${ai.local.only.enabled:false}") boolean localOnlyEnabled) {
+    ProviderChainMode mode = localOnlyEnabled ? ProviderChainMode.LOCAL_ONLY : ProviderChainMode.HYBRID;
+    this.providers = ProviderChainDirector.buildChain(mode, geminiService, llamaCppNativeService, preferLocalFirst);
+
     if (localOnlyEnabled) {
-      if (llamaCppNativeService != null && llamaCppNativeService.isAvailable()) {
-        providers.add(llamaCppNativeService);
-      }
       log.info("AIProviderFactory initialized in local-only mode with {} providers", providers.size());
       return;
     }
 
-    if (llamaCppNativeService != null && llamaCppNativeService.isAvailable() && preferLocalFirst) {
-      providers.add(llamaCppNativeService);
-      providers.add(geminiService);
-    } else {
-      providers.add(geminiService);
-      if (llamaCppNativeService != null && llamaCppNativeService.isAvailable()) {
-        providers.add(llamaCppNativeService);
-      }
-    }
     log.info("AIProviderFactory initialized with {} providers", providers.size());
   }
   
@@ -72,12 +110,11 @@ public class AIProviderFactory {
       return createErrorJson("Local-only mode đang bật nhưng local model chưa sẵn sàng", "LOCAL_PROVIDER_UNAVAILABLE");
     }
     
-    List<AIProvider> orderedProviders = providers;
-    int totalProviders = orderedProviders.size();
+    int totalProviders = providers.size();
     
     // Trước tiên, try các providers theo thứ tự ưu tiên
     for (int attempt = 0; attempt < totalProviders; attempt++) {
-      AIProvider provider = orderedProviders.get(attempt);
+      AIProvider provider = providers.get(attempt);
       
       try {
         if (provider.isAvailable()) {

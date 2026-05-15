@@ -196,6 +196,133 @@ public class AiConversationContextService {
         }
     }
 
+    public Map<String, Object> updateAgenticApprovalState(
+        String userId,
+        String appId,
+        String contextType,
+        String pName,
+        Integer pType,
+        String requestId,
+        int stepIndex,
+        String action
+    ) {
+        String safeUserId = String.valueOf(userId == null ? "" : userId).trim();
+        String safeAppId = String.valueOf(appId == null ? "" : appId).trim();
+        String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim();
+        String safeRequestId = String.valueOf(requestId == null ? "" : requestId).trim();
+        String safeAction = String.valueOf(action == null ? "" : action).trim().toLowerCase(Locale.ROOT);
+        String codeTargetKey = buildCodeTargetKey(pName, pType);
+        if (safeUserId.isBlank() || safeAppId.isBlank() || safeContextType.isBlank() || safeRequestId.isBlank() || safeAction.isBlank()) {
+            return Map.of("updated", false, "message", "invalid_input");
+        }
+
+        boolean updated = false;
+        int pendingCount = 0;
+
+        Map<String, Object> userResult = updateAgenticApprovalScope(safeUserId, safeAppId, safeContextType, SCOPE_USER, "", safeRequestId, stepIndex, safeAction);
+        updated = updated || Boolean.TRUE.equals(userResult.get("updated"));
+        pendingCount = Math.max(pendingCount, toSafeInt(userResult.get("pendingCount")));
+
+        Map<String, Object> appSharedResult = updateAgenticApprovalScope("shared", safeAppId, safeContextType, SCOPE_APP_SHARED, "", safeRequestId, stepIndex, safeAction);
+        updated = updated || Boolean.TRUE.equals(appSharedResult.get("updated"));
+        pendingCount = Math.max(pendingCount, toSafeInt(appSharedResult.get("pendingCount")));
+
+        if (!codeTargetKey.isBlank()) {
+            Map<String, Object> codeSharedResult = updateAgenticApprovalScope("shared", safeAppId, safeContextType, SCOPE_CODE_TARGET_SHARED, codeTargetKey, safeRequestId, stepIndex, safeAction);
+            updated = updated || Boolean.TRUE.equals(codeSharedResult.get("updated"));
+            pendingCount = Math.max(pendingCount, toSafeInt(codeSharedResult.get("pendingCount")));
+        }
+
+        return Map.of(
+            "updated", updated,
+            "pendingCount", Math.max(0, pendingCount),
+            "status", pendingCount > 0 ? "review_required" : "completed"
+        );
+    }
+
+    public Map<String, Object> getAgenticReviewState(
+        String userId,
+        String appId,
+        String contextType,
+        String pName,
+        Integer pType,
+        String requestId
+    ) {
+        String safeUserId = String.valueOf(userId == null ? "" : userId).trim();
+        String safeAppId = String.valueOf(appId == null ? "" : appId).trim();
+        String safeContextType = String.valueOf(contextType == null ? "" : contextType).trim();
+        String safeRequestId = String.valueOf(requestId == null ? "" : requestId).trim();
+        if (safeUserId.isBlank() || safeAppId.isBlank() || safeContextType.isBlank() || safeRequestId.isBlank()) {
+            return Map.of("found", false, "message", "invalid_input");
+        }
+
+        String codeTargetKey = buildCodeTargetKey(pName, pType);
+        List<Map<String, Object>> searchScopes = new ArrayList<>();
+        if (!codeTargetKey.isBlank()) {
+            searchScopes.add(Map.of(
+                "userId", "shared",
+                "scope", SCOPE_CODE_TARGET_SHARED,
+                "codeTargetKey", codeTargetKey,
+                "persistence", false
+            ));
+        }
+        searchScopes.add(Map.of(
+            "userId", safeUserId,
+            "scope", SCOPE_USER,
+            "codeTargetKey", "",
+            "persistence", false
+        ));
+        searchScopes.add(Map.of(
+            "userId", "shared",
+            "scope", SCOPE_APP_SHARED,
+            "codeTargetKey", "",
+            "persistence", false
+        ));
+        if (!codeTargetKey.isBlank()) {
+            searchScopes.add(Map.of(
+                "userId", "shared",
+                "scope", SCOPE_CODE_TARGET_SHARED,
+                "codeTargetKey", codeTargetKey,
+                "persistence", true
+            ));
+        }
+        searchScopes.add(Map.of(
+            "userId", safeUserId,
+            "scope", SCOPE_USER,
+            "codeTargetKey", "",
+            "persistence", true
+        ));
+        searchScopes.add(Map.of(
+            "userId", "shared",
+            "scope", SCOPE_APP_SHARED,
+            "codeTargetKey", "",
+            "persistence", true
+        ));
+
+        for (Map<String, Object> searchScope : searchScopes) {
+            String scopeUserId = String.valueOf(searchScope.getOrDefault("userId", "")).trim();
+            String scope = String.valueOf(searchScope.getOrDefault("scope", "")).trim();
+            String scopeCodeTargetKey = String.valueOf(searchScope.getOrDefault("codeTargetKey", "")).trim();
+            boolean persistence = Boolean.TRUE.equals(searchScope.get("persistence"));
+            ConversationSession session = persistence
+                ? loadSessionFromPersistence(scopeUserId, safeAppId, safeContextType, scope, scopeCodeTargetKey, pName, pType)
+                : getSessionForScope(scopeUserId, safeAppId, safeContextType, scope, scopeCodeTargetKey);
+            Map<String, Object> state = findAgenticReviewStateInSession(session, safeRequestId, scope, persistence);
+            if (Boolean.TRUE.equals(state.get("found"))) {
+                return state;
+            }
+        }
+
+        return Map.of(
+            "found", false,
+            "requestId", safeRequestId,
+            "status", "completed",
+            "pendingCount", 0,
+            "reviewRequired", false,
+            "agenticPendingApprovalSteps", List.of()
+        );
+    }
+
     public String buildAggregatedContextWindow(
         String userId,
         String appId,
@@ -537,6 +664,236 @@ public class AiConversationContextService {
         String safeScope = String.valueOf(scope == null ? "" : scope).trim();
         String safeCodeKey = String.valueOf(codeTargetKey == null ? "" : codeTargetKey).trim();
         return String.format("%s:%s:%s:%s:%s", safeUser, safeApp, safeType, safeScope, safeCodeKey);
+    }
+
+    private Map<String, Object> updateAgenticApprovalScope(
+        String userId,
+        String appId,
+        String contextType,
+        String scope,
+        String codeTargetKey,
+        String requestId,
+        int stepIndex,
+        String action
+    ) {
+        boolean updated = false;
+        int pendingCount = 0;
+
+        String sessionKey = buildSessionKey(userId, appId, contextType, scope, codeTargetKey);
+        ConversationSession active = activeSessions.get(sessionKey);
+        if (active != null) {
+            Map<String, Object> inMemoryResult = updateAgenticApprovalInSession(active, requestId, stepIndex, action);
+            updated = updated || Boolean.TRUE.equals(inMemoryResult.get("updated"));
+            pendingCount = Math.max(pendingCount, toSafeInt(inMemoryResult.get("pendingCount")));
+        }
+
+        if (recordManager != null) {
+            try {
+                Map<String, Object> result = recordManager.filter(appId, CONVERSATION_TABLE, null);
+                Object rowsObj = result == null ? null : result.get("rows");
+                if (rowsObj instanceof List<?> rows) {
+                    List<Map<String, Object>> updates = new ArrayList<>();
+                    for (Object rowObj : rows) {
+                        if (!(rowObj instanceof Map<?, ?> rawMap)) {
+                            continue;
+                        }
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> row = new LinkedHashMap<>((Map<String, Object>) rawMap);
+                        if (!matchesPersistedTurn(row, userId, appId, contextType, scope, codeTargetKey, null, null)) {
+                            continue;
+                        }
+                        Object metadataObj = row.get("metadata");
+                        if (!(metadataObj instanceof Map<?, ?> metadataMap)) {
+                            continue;
+                        }
+                        Map<String, Object> metadata = new LinkedHashMap<>();
+                        for (Map.Entry<?, ?> entry : metadataMap.entrySet()) {
+                            if (entry.getKey() instanceof String key) {
+                                metadata.put(key, entry.getValue());
+                            }
+                        }
+                        if (!requestId.equals(String.valueOf(metadata.getOrDefault("requestId", "")).trim())) {
+                            continue;
+                        }
+                        Map<String, Object> metaUpdate = applyAgenticApprovalUpdate(metadata, stepIndex, action);
+                        if (!Boolean.TRUE.equals(metaUpdate.get("updated"))) {
+                            continue;
+                        }
+                        row.put("metadata", metadata);
+                        updates.add(row);
+                        updated = true;
+                        pendingCount = Math.max(pendingCount, toSafeInt(metaUpdate.get("pendingCount")));
+                    }
+                    if (!updates.isEmpty()) {
+                        recordManager.batchUpdateRecords(appId, CONVERSATION_TABLE, updates, List.of("id"));
+                    }
+                }
+            }
+            catch (Exception ignored) {
+                // Best-effort persistence update only.
+            }
+        }
+
+        return Map.of("updated", updated, "pendingCount", pendingCount);
+    }
+
+    private Map<String, Object> findAgenticReviewStateInSession(
+        ConversationSession session,
+        String requestId,
+        String scope,
+        boolean fromPersistence
+    ) {
+        if (session == null || session.history == null || session.history.isEmpty()) {
+            return Map.of("found", false);
+        }
+        for (int i = session.history.size() - 1; i >= 0; i--) {
+            ConversationTurn turn = session.history.get(i);
+            if (turn == null || turn.metadata == null) {
+                continue;
+            }
+            if (!requestId.equals(String.valueOf(turn.metadata.getOrDefault("requestId", "")).trim())) {
+                continue;
+            }
+            return buildAgenticReviewStatePayload(turn, requestId, scope, fromPersistence);
+        }
+        return Map.of("found", false);
+    }
+
+    private Map<String, Object> updateAgenticApprovalInSession(ConversationSession session, String requestId, int stepIndex, String action) {
+        if (session == null || session.history == null || session.history.isEmpty()) {
+            return Map.of("updated", false, "pendingCount", 0);
+        }
+        boolean updated = false;
+        int pendingCount = 0;
+        for (int i = session.history.size() - 1; i >= 0; i--) {
+            ConversationTurn turn = session.history.get(i);
+            if (turn == null || turn.metadata == null) {
+                continue;
+            }
+            if (!requestId.equals(String.valueOf(turn.metadata.getOrDefault("requestId", "")).trim())) {
+                continue;
+            }
+            Map<String, Object> result = applyAgenticApprovalUpdate(turn.metadata, stepIndex, action);
+            updated = updated || Boolean.TRUE.equals(result.get("updated"));
+            pendingCount = Math.max(pendingCount, toSafeInt(result.get("pendingCount")));
+            break;
+        }
+        return Map.of("updated", updated, "pendingCount", pendingCount);
+    }
+
+    private Map<String, Object> applyAgenticApprovalUpdate(Map<String, Object> metadata, int stepIndex, String action) {
+        if (metadata == null) {
+            return Map.of("updated", false, "pendingCount", 0);
+        }
+        Object rawSteps = metadata.get("agenticPendingApprovalSteps");
+        if (!(rawSteps instanceof List<?> rawList) || rawList.isEmpty()) {
+            return Map.of("updated", false, "pendingCount", 0);
+        }
+
+        boolean updated = false;
+        List<Map<String, Object>> normalizedSteps = new ArrayList<>();
+        for (Object item : rawList) {
+            if (!(item instanceof Map<?, ?> rawMap)) {
+                continue;
+            }
+            Map<String, Object> step = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
+                if (entry.getKey() instanceof String key) {
+                    step.put(key, entry.getValue());
+                }
+            }
+            int currentStepIndex = toSafeInt(step.get("stepIndex"));
+            if (("approved".equals(action) || "rejected".equals(action)) && currentStepIndex == Math.max(1, stepIndex)) {
+                step.put("approvalState", action);
+                step.put("status", "done");
+                step.put("timestamp", System.currentTimeMillis());
+                updated = true;
+            }
+            normalizedSteps.add(step);
+        }
+
+        int pendingCount = 0;
+        for (Map<String, Object> step : normalizedSteps) {
+            String state = String.valueOf(step.getOrDefault("approvalState", "pending")).trim().toLowerCase(Locale.ROOT);
+            if ("pending".equals(state)) {
+                pendingCount += 1;
+            }
+        }
+
+        if ("resolved".equals(action)) {
+            metadata.put("reviewResolvedAt", System.currentTimeMillis());
+            updated = true;
+        }
+
+        metadata.put("agenticPendingApprovalSteps", normalizedSteps);
+        metadata.put("agenticStepApprovalPendingCount", Math.max(0, pendingCount));
+        metadata.put("reviewRequired", pendingCount > 0);
+        metadata.put("status", pendingCount > 0 ? "review_required" : "completed");
+        return Map.of("updated", updated, "pendingCount", pendingCount);
+    }
+
+    private Map<String, Object> buildAgenticReviewStatePayload(
+        ConversationTurn turn,
+        String requestId,
+        String scope,
+        boolean fromPersistence
+    ) {
+        Map<String, Object> metadata = turn.metadata != null ? new LinkedHashMap<>(turn.metadata) : new LinkedHashMap<>();
+        List<Map<String, Object>> normalizedSteps = new ArrayList<>();
+        Object rawSteps = metadata.get("agenticPendingApprovalSteps");
+        if (rawSteps instanceof List<?> stepList) {
+            for (Object item : stepList) {
+                if (!(item instanceof Map<?, ?> rawMap)) {
+                    continue;
+                }
+                Map<String, Object> step = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
+                    if (entry.getKey() instanceof String key) {
+                        step.put(key, entry.getValue());
+                    }
+                }
+                normalizedSteps.add(step);
+            }
+        }
+        int pendingCount = toSafeInt(metadata.get("agenticStepApprovalPendingCount"));
+        if (pendingCount <= 0 && !normalizedSteps.isEmpty()) {
+            for (Map<String, Object> step : normalizedSteps) {
+                String approvalState = String.valueOf(step.getOrDefault("approvalState", "pending")).trim().toLowerCase(Locale.ROOT);
+                if ("pending".equals(approvalState)) {
+                    pendingCount += 1;
+                }
+            }
+        }
+        String status = String.valueOf(metadata.getOrDefault("status", pendingCount > 0 ? "review_required" : "completed"))
+            .trim()
+            .toLowerCase(Locale.ROOT);
+        boolean reviewRequired = metadata.get("reviewRequired") instanceof Boolean bool
+            ? bool
+            : pendingCount > 0 || "review_required".equals(status);
+        return Map.of(
+            "found", true,
+            "requestId", requestId,
+            "turnId", String.valueOf(turn.turnId == null ? "" : turn.turnId),
+            "timestamp", String.valueOf(turn.timestamp == null ? "" : turn.timestamp),
+            "scope", String.valueOf(scope == null ? "" : scope),
+            "fromPersistence", fromPersistence,
+            "status", status.isBlank() ? (reviewRequired ? "review_required" : "completed") : status,
+            "reviewRequired", reviewRequired,
+            "pendingCount", Math.max(0, pendingCount),
+            "agenticPendingApprovalSteps", normalizedSteps
+        );
+    }
+
+    private int toSafeInt(Object value) {
+        if (value instanceof Number number) {
+            return Math.max(0, number.intValue());
+        }
+        try {
+            return Math.max(0, Integer.parseInt(String.valueOf(value == null ? "0" : value).trim()));
+        }
+        catch (Exception ignored) {
+            return 0;
+        }
     }
 
     private String buildCodeTargetKey(String pName, Integer pType) {

@@ -16,6 +16,7 @@ import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.ByteBuffersDirectory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -30,20 +31,17 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Service
 public class AiMenuLearningMemoryService {
 
     private static final Logger log = LoggerFactory.getLogger(AiMenuLearningMemoryService.class);
-    private static final Pattern TOKEN_PATTERN = Pattern.compile("[\\p{L}\\p{N}_]{2,}");
-    private static final int VECTOR_DIMS = 128;
     private static final int SUMMARY_MAX_CHARS = 6000;
+
+    private final AiLocalEmbeddingService aiLocalEmbeddingService;
 
     @Value("${ai.menu.learning.enabled:true}")
     private boolean enabled;
@@ -62,6 +60,11 @@ public class AiMenuLearningMemoryService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ConcurrentHashMap<String, Object> appLocks = new ConcurrentHashMap<>();
+
+    @Autowired
+    public AiMenuLearningMemoryService(AiLocalEmbeddingService aiLocalEmbeddingService) {
+        this.aiLocalEmbeddingService = aiLocalEmbeddingService;
+    }
 
     private record LearningEntry(
         String id,
@@ -84,7 +87,7 @@ public class AiMenuLearningMemoryService {
 
         int safeMaxItems = Math.max(1, retrieveMaxItems);
         int safeMaxChars = Math.max(1200, retrieveMaxChars);
-        float[] queryVector = embedText(String.valueOf(requestText == null ? "" : requestText));
+        float[] queryVector = embedQueryText(String.valueOf(requestText == null ? "" : requestText));
         List<String> blocks = new ArrayList<>();
 
         try (ByteBuffersDirectory directory = new ByteBuffersDirectory()) {
@@ -101,7 +104,7 @@ public class AiMenuLearningMemoryService {
                     doc.add(new StoredField("summary", truncate(entry.summary(), SUMMARY_MAX_CHARS)));
                     doc.add(new StoredField("menuCount", entry.menuCount()));
                     doc.add(new TextField("content", content, org.apache.lucene.document.Field.Store.NO));
-                    doc.add(new KnnFloatVectorField("vector", embedText(content), VectorSimilarityFunction.COSINE));
+                    doc.add(new KnnFloatVectorField("vector", embedDocumentText(content), VectorSimilarityFunction.COSINE));
                     writer.addDocument(doc);
                 }
                 writer.commit();
@@ -378,36 +381,12 @@ public class AiMenuLearningMemoryService {
             + String.valueOf(entry.summary() == null ? "" : entry.summary()).trim()).trim();
     }
 
-    private float[] embedText(String text) {
-        float[] vector = new float[VECTOR_DIMS];
-        Matcher matcher = TOKEN_PATTERN.matcher(String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT));
-        int tokenCount = 0;
-        while (matcher.find()) {
-            String token = matcher.group();
-            if (token == null || token.isBlank()) {
-                continue;
-            }
-            int index = Math.floorMod(token.hashCode(), VECTOR_DIMS);
-            vector[index] += 1.0f;
-            tokenCount++;
-        }
-        if (tokenCount == 0) {
-            vector[0] = 1.0f;
-            return vector;
-        }
-        float norm = 0.0f;
-        for (float value : vector) {
-            norm += value * value;
-        }
-        norm = (float) Math.sqrt(norm);
-        if (norm <= 0.0f) {
-            vector[0] = 1.0f;
-            return vector;
-        }
-        for (int i = 0; i < vector.length; i++) {
-            vector[i] = vector[i] / norm;
-        }
-        return vector;
+    private float[] embedQueryText(String text) {
+        return aiLocalEmbeddingService.embedQueryText(text);
+    }
+
+    private float[] embedDocumentText(String text) {
+        return aiLocalEmbeddingService.embedDocumentText(text);
     }
 
     private String firstNonBlank(Object... values) {

@@ -67,6 +67,8 @@ import net.phanmemmottrieu.service.AiPatternCacheService;
 import net.phanmemmottrieu.service.AiIncrementalStepExecutorService;
 import net.phanmemmottrieu.service.AiQualityMetricsService;
 import net.phanmemmottrieu.service.AiAdaptiveRetryPolicy;
+import net.phanmemmottrieu.service.AiBusinessMemoryVectorService;
+import net.phanmemmottrieu.service.AiLocalWorkflowAdvisorService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -450,6 +452,8 @@ public class ApiSpringController {
     @SuppressWarnings("unused")
     private final LargeFileChunkingService largeFileChunkingService;
     private final AiQualityMetricsService aiQualityMetricsService;
+    private final AiBusinessMemoryVectorService aiBusinessMemoryVectorService;
+    private final AiLocalWorkflowAdvisorService aiLocalWorkflowAdvisorService;
 
     @Autowired(required = false)
     private AiIncrementalStepExecutorService aiIncrementalStepExecutorService;
@@ -829,6 +833,9 @@ public class ApiSpringController {
 
     @Value("${ai.code-stream.multi-candidate.feedback.enabled:true}")
     private boolean aiCodeStreamMultiCandidateFeedbackEnabled;
+
+    @Value("${ai.code-stream.agentic-approval.feedback.enabled:true}")
+    private boolean aiCodeStreamAgenticApprovalFeedbackEnabled;
 
     @Value("${ai.code-stream.multi-candidate.feedback.max-entries:2000}")
     private int aiCodeStreamMultiCandidateFeedbackMaxEntries;
@@ -1419,7 +1426,9 @@ public class ApiSpringController {
             @Autowired(required = false) LlamaCppNativeService llamaCppNativeService,
             AiPatternCacheService aiPatternCacheService,
             @Autowired(required = false) LargeFileChunkingService largeFileChunkingService,
-            AiQualityMetricsService aiQualityMetricsService
+            AiQualityMetricsService aiQualityMetricsService,
+            AiBusinessMemoryVectorService aiBusinessMemoryVectorService,
+            AiLocalWorkflowAdvisorService aiLocalWorkflowAdvisorService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -1453,6 +1462,8 @@ public class ApiSpringController {
         this.aiPatternCacheService = aiPatternCacheService;
         this.largeFileChunkingService = largeFileChunkingService;
         this.aiQualityMetricsService = aiQualityMetricsService;
+        this.aiBusinessMemoryVectorService = aiBusinessMemoryVectorService;
+        this.aiLocalWorkflowAdvisorService = aiLocalWorkflowAdvisorService;
     }
 
     @PostMapping(
@@ -1911,7 +1922,9 @@ public class ApiSpringController {
                         effectiveTaskType,
                         responseMode,
                         language,
-                        requestId);
+                        requestId,
+                        pName,
+                        pType);
 
                     if (shouldAttemptOrchestrationEvidenceRefine(codeStreamOrchestration)) {
                         int maxRefineAttempts = Math.max(0, aiLocalOrchestrationEvidenceRefineMaxAttempts);
@@ -1950,7 +1963,9 @@ public class ApiSpringController {
                                 effectiveTaskType,
                                 responseMode,
                                 language,
-                                requestId + "_refine_" + refineAttempt
+                                requestId + "_refine_" + refineAttempt,
+                                pName,
+                                pType
                             );
                             OrchestrationEvidenceSnapshot refinedSnapshot = snapshotOrchestrationEvidence(refined);
                             boolean promoted = shouldPromoteRefinedOrchestration(baseSnapshot, refinedSnapshot, codeStreamOrchestration, refined);
@@ -2079,7 +2094,9 @@ public class ApiSpringController {
                                     effectiveTaskType,
                                     responseMode,
                                     language,
-                                    requestId + "_dag_replan_" + replanAttempt
+                                    requestId + "_dag_replan_" + replanAttempt,
+                                    pName,
+                                    pType
                                 );
                                 OrchestrationEvidenceSnapshot replannedSnapshot = snapshotOrchestrationEvidence(replanned);
                                 boolean promoted = shouldPromoteRefinedOrchestration(baseSnapshot, replannedSnapshot, codeStreamOrchestration, replanned);
@@ -2218,6 +2235,55 @@ public class ApiSpringController {
                         Map<String, Object> orchestrationStats = codeStreamOrchestration.toolStats == null
                             ? Collections.emptyMap()
                             : codeStreamOrchestration.toolStats;
+                        String retrievalPlannerQuery = buildLuceneRetrievalPlannerQuery(
+                            message,
+                            effectiveCodeContext,
+                            orchestrationAttachments,
+                            editorMetadata,
+                            contextType,
+                            pName,
+                            pType);
+                        AiLocalWorkflowAdvisorService.WorkflowAdvice workflowAdvice = aiLocalWorkflowAdvisorService.advise(
+                            new AiLocalWorkflowAdvisorService.WorkflowRequest(
+                                message,
+                                effectiveCodeContext,
+                                contextType,
+                                responseMode,
+                                orchestrationAttachments,
+                                retrievalPlannerQuery,
+                                toWorkflowIntentSnapshot(preclassifiedIntent)
+                            )
+                        );
+                        LocalAssistantRoutePlan assistantRoutePlan = toLocalAssistantRoutePlan(workflowAdvice.routePlan());
+                        sendEvent(emitter, jsonOf(
+                            "stage", "assistant_route_plan",
+                            "status", "running",
+                            "requestId", requestId,
+                            "routeName", assistantRoutePlan.routeName(),
+                            "routeConfidence", assistantRoutePlan.confidence(),
+                            "routeReason", assistantRoutePlan.reasonCode(),
+                            "quickExit", assistantRoutePlan.quickExit(),
+                            "requiresDeepContext", assistantRoutePlan.requiresDeepContext(),
+                            "workspaceKind", workflowAdvice.workspaceKind(),
+                            "weakMachineSafe", workflowAdvice.weakMachineSafe(),
+                            "responseMode", responseMode,
+                            "message", "Da chot route local agentic truoc khi implement"
+                        ));
+                        List<Map<String, Object>> toolIntentPlan = workflowAdvice.toolPlan();
+                        if (!toolIntentPlan.isEmpty()) {
+                            sendEvent(emitter, jsonOf(
+                                "stage", "assistant_tool_intent_plan",
+                                "status", "running",
+                                "requestId", requestId,
+                                "toolCount", toolIntentPlan.size(),
+                                "tools", toolIntentPlan,
+                                "ingestTargets", workflowAdvice.ingestTargets(),
+                                "executionBlueprint", workflowAdvice.executionBlueprint(),
+                                "attachmentInsights", workflowAdvice.attachmentInsights(),
+                                "responseMode", responseMode,
+                                "message", "Da chot tool intents cho local retrieval va incremental execution"
+                            ));
+                        }
                         int effectiveScopeMask = parseIntSafe(
                             orchestrationStats.get("scopedRagScopeMask"),
                             parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0)
@@ -2245,7 +2311,18 @@ public class ApiSpringController {
                             "scopeMask", effectiveScopeMask,
                             "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")),
                             "retrievalTopK", parseIntSafe(orchestrationStats.get("scopedRagTopK"), 0),
-                            "retrievalMaxChars", parseIntSafe(orchestrationStats.get("scopedRagMaxChars"), 0)
+                            "retrievalHitCount", parseIntSafe(orchestrationStats.get("scopedRagHitCount"), 0),
+                            "retrievalSourceCount", parseIntSafe(orchestrationStats.get("scopedRagSourceCount"), 0),
+                            "retrievalMaxChars", parseIntSafe(orchestrationStats.get("scopedRagMaxChars"), 0),
+                            "retrievalQuery", String.valueOf(orchestrationStats.getOrDefault("scopedRagQuery", "")),
+                            "retrievalEngineLabel", String.valueOf(orchestrationStats.getOrDefault("retrievalEngineLabel", "")),
+                            "menuSignals", orchestrationStats.getOrDefault("menuSignals", List.of()),
+                            "symbolQueries", orchestrationStats.getOrDefault("symbolAwareRetrievalQueries", List.of()),
+                            "targetedQueries", orchestrationStats.getOrDefault("scopedRagTargetedQueries", List.of()),
+                            "focusTargets", orchestrationStats.getOrDefault("retrievalFocusTargets", List.of()),
+                            "virtualContextPreview", orchestrationStats.getOrDefault("virtualContextPreview", List.of()),
+                            "retrievalHits", orchestrationStats.getOrDefault("scopedRagTopHits", List.of()),
+                            "adaptiveReasons", orchestrationStats.getOrDefault("scopedRagAdaptiveReasons", List.of())
                         ));
                         int retrievalChars = parseIntSafe(orchestrationStats.get("scopedRagChars"), 0);
                         int retrievalMinChars = Math.max(0, parseIntSafe(orchestrationStats.get("scopedRagQualityMinChars"), 0));
@@ -2302,7 +2379,10 @@ public class ApiSpringController {
                             0,
                             "none",
                             "none",
-                            Map.of("scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")))
+                            Map.of(
+                                "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")),
+                                "retrievalEngineLabel", String.valueOf(orchestrationStats.getOrDefault("retrievalEngineLabel", ""))
+                            )
                         );
 
                         boolean planSchemaEnabled = bool(orchestrationStats.get("planSchemaEnabled"), false);
@@ -2346,7 +2426,13 @@ public class ApiSpringController {
                             "none",
                             null
                         );
-                        emitAgenticStepLifecycleToSse(emitter, requestId, planSteps, 6);
+                        emitAgenticStepLifecycleToSse(
+                            emitter,
+                            requestId,
+                            planSteps,
+                            orchestrationStats.get("planStructuredSteps"),
+                            orchestrationStats.get("workflowExecutionBlueprint"),
+                            6);
                         sendEvent(emitter, jsonOf(
                             "stage", "tool_apply",
                             "status", "running",
@@ -3210,10 +3296,37 @@ public class ApiSpringController {
                                     requestId,
                                     providerText,
                                     codeStreamOrchestration.planSteps,
+                                    codeStreamMeta.get("planStructuredSteps"),
+                                    codeStreamMeta.get("workflowExecutionBlueprint"),
                                     responseMode,
                                     contextType,
                                     effectiveCodeContext,
                                     codeStreamMeta);
+                                if (stepResultCount > 0) {
+                                    sendEvent(emitter, jsonOf(
+                                        "stage", "tool_apply",
+                                        "status", "completed",
+                                        "requestId", requestId,
+                                        "stepResultCount", stepResultCount,
+                                        "message", "Da ap incremental step results vao luong editor-compatible"
+                                    ));
+                                    emitToolTrace(
+                                        emitter,
+                                        requestId,
+                                        "apply_incremental_steps",
+                                        "completed",
+                                        "responseMode=" + responseMode,
+                                        "stepResults=" + stepResultCount,
+                                        0,
+                                        0,
+                                        "none",
+                                        "none",
+                                        Map.of(
+                                            "planStepCount", codeStreamOrchestration.planSteps.size(),
+                                            "stepResultCount", stepResultCount
+                                        )
+                                    );
+                                }
                             }
                             boolean stepContractRequired = hasOrchestrationSteps
                                 && ("edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
@@ -3345,11 +3458,37 @@ public class ApiSpringController {
                                                         requestId,
                                                         repairText,
                                                         codeStreamOrchestration.planSteps,
+                                                        codeStreamMeta.get("planStructuredSteps"),
+                                                        codeStreamMeta.get("workflowExecutionBlueprint"),
                                                         responseMode,
                                                         contextType,
                                                         effectiveCodeContext,
                                                         codeStreamMeta);
                                                     if (repairedStepResultCount > 0) {
+                                                        sendEvent(emitter, jsonOf(
+                                                            "stage", "tool_apply",
+                                                            "status", "completed",
+                                                            "requestId", requestId,
+                                                            "stepResultCount", repairedStepResultCount,
+                                                            "message", "Da ap incremental step results vao luong editor-compatible"
+                                                        ));
+                                                        emitToolTrace(
+                                                            emitter,
+                                                            requestId,
+                                                            "apply_incremental_steps",
+                                                            "completed",
+                                                            "responseMode=" + responseMode,
+                                                            "stepResults=" + repairedStepResultCount,
+                                                            0,
+                                                            Math.max(0, repairAttempt - 1),
+                                                            "none",
+                                                            "none",
+                                                            Map.of(
+                                                                "planStepCount", codeStreamOrchestration.planSteps.size(),
+                                                                "stepResultCount", repairedStepResultCount,
+                                                                "repairAttempt", repairAttempt
+                                                            )
+                                                        );
                                                         providerText = repairText;
                                                         stepResultCount = repairedStepResultCount;
                                                         repairApplied = true;
@@ -3419,6 +3558,29 @@ public class ApiSpringController {
                                     if (repairApplied) {
                                         localAccepted = true;
                                     } else {
+                                        sendEvent(emitter, jsonOf(
+                                            "stage", "tool_apply",
+                                            "status", "failed",
+                                            "requestId", requestId,
+                                            "message", "Khong tao duoc incremental step results an toan cho editor"
+                                        ));
+                                        emitToolTrace(
+                                            emitter,
+                                            requestId,
+                                            "apply_incremental_steps",
+                                            "failed",
+                                            "responseMode=" + responseModeSafe,
+                                            "reason=no_structured_step_results",
+                                            0,
+                                            Math.max(0, repairAttempts),
+                                            "STEP_CONTRACT",
+                                            "NO_STRUCTURED_STEP_RESULTS",
+                                            Map.of(
+                                                "planStepCount", codeStreamOrchestration.planSteps.size(),
+                                                "repairAttempted", aiCodeStreamStepOutputContractRepairEnabled,
+                                                "repairMaxAttempts", repairAttempts
+                                            )
+                                        );
                                         recordQualityEvidenceGate("step_output_contract_violation", appId);
                                         recordQualityRetryReason("step_output_contract_violation", appId);
                                         localAccepted = false;
@@ -4066,8 +4228,10 @@ public class ApiSpringController {
                         }
                     }
                 }
+                Map<String, Object> menuMergePreview = Collections.emptyMap();
                 if ("edit".equalsIgnoreCase(responseMode) && isMenuJsonContext(contextType)) {
-                    completionPayload = mergeMenuCompletionWithBase(effectiveCodeContext, completionPayload, contextType);
+                    menuMergePreview = buildMenuCompletionMergePreview(effectiveCodeContext, completionPayload, contextType);
+                    completionPayload = str(menuMergePreview.get("mergedResponse"), completionPayload);
                 }
                 if (isMenuJsonContext(contextType)) {
                     String sanitizedMenuPayload = normalizeMenuDraftJson(completionPayload);
@@ -4118,24 +4282,85 @@ public class ApiSpringController {
                 completion.put("fullResponse", completionPayload);
                 completion.put("responseMode", responseMode);
                 completion.putAll(outputShape);
+                Object completionPatchOps = menuMergePreview.get("patchOps");
+                if (completionPatchOps instanceof List<?> patchList && !patchList.isEmpty()) {
+                    completion.put("patchOps", patchList);
+                }
+                if (!menuMergePreview.isEmpty()) {
+                    Map<String, Object> mergeStats = new LinkedHashMap<>();
+                    mergeStats.put("added", parseIntSafe(menuMergePreview.get("added"), 0));
+                    mergeStats.put("edited", parseIntSafe(menuMergePreview.get("edited"), 0));
+                    mergeStats.put("deleted", parseIntSafe(menuMergePreview.get("deleted"), 0));
+                    completion.put("mergeStats", mergeStats);
+                }
                 completion.put("textEditsRetryTriggered",
                     bool(codeStreamMeta.get("textEditsRetryTriggered"), false));
                 completion.put("textEditsRetryAttempts",
                     parseIntSafe(codeStreamMeta.get("textEditsRetryAttempts"), 0));
                 int streamedChars = parseIntSafe(codeStreamMeta.get("streamedChars"), rawResponse.length());
                 int streamChunkCount = parseIntSafe(codeStreamMeta.get("streamChunkCount"), 0);
+                int agenticStepResultCount = parseIntSafe(codeStreamMeta.get("agenticStepResultCount"), 0);
                 int agenticStepAcceptedCount = parseIntSafe(codeStreamMeta.get("agenticStepAcceptedCount"), 0);
                 int agenticStepSkippedCount = parseIntSafe(codeStreamMeta.get("agenticStepSkippedCount"), 0);
                 int agenticStepLowConfidenceCount = parseIntSafe(codeStreamMeta.get("agenticStepLowConfidenceCount"), 0);
+                int agenticStepApprovalPendingCount = parseIntSafe(codeStreamMeta.get("agenticStepApprovalPendingCount"), 0);
+                boolean reviewRequired = agenticStepApprovalPendingCount > 0;
                 boolean streamAssemblyMismatch = streamedChars != rawResponse.length();
+                int completionPlanStepCount = parseIntSafe(codeStreamMeta.get("planStepCount"), 0);
+                int completionActionableEditCount = 0;
+                Object completionTextEdits = completion.get("textEdits");
+                if (completionTextEdits instanceof List<?> textEditList && !textEditList.isEmpty()) {
+                    completionActionableEditCount = textEditList.size();
+                } else {
+                    Object completionPatchOpsRaw = completion.get("patchOps");
+                    if (completionPatchOpsRaw instanceof List<?> patchOpList && !patchOpList.isEmpty()) {
+                        completionActionableEditCount = patchOpList.size();
+                    }
+                }
                 completion.put("streamedChars", streamedChars);
                 completion.put("streamChunkCount", streamChunkCount);
                 completion.put("streamAssemblyMismatch", streamAssemblyMismatch);
-                completion.put("agenticStepResultCount", parseIntSafe(codeStreamMeta.get("agenticStepResultCount"), 0));
+                completion.put("agenticStepResultCount", agenticStepResultCount);
                 completion.put("agenticStepAcceptedCount", agenticStepAcceptedCount);
                 completion.put("agenticStepSkippedCount", agenticStepSkippedCount);
                 completion.put("agenticStepLowConfidenceCount", agenticStepLowConfidenceCount);
+                completion.put("agenticStepApprovalPendingCount", agenticStepApprovalPendingCount);
+                completion.put("agenticPendingApprovalSteps", codeStreamMeta.getOrDefault("agenticPendingApprovalSteps", Collections.emptyList()));
                 completion.put("agenticStepSkippedReasons", codeStreamMeta.getOrDefault("agenticStepSkippedReasons", Collections.emptyMap()));
+                if ("edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                    && agenticStepResultCount <= 0
+                    && completionActionableEditCount > 0) {
+                    sendEvent(emitter, jsonOf(
+                        "stage", "tool_apply",
+                        "status", reviewRequired ? "review_required" : "completed",
+                        "requestId", requestId,
+                        "stepResultCount", 0,
+                        "completionActionableEditCount", completionActionableEditCount,
+                        "synthesizedFromCompletion", true,
+                        "message", reviewRequired
+                            ? "Completion da co patch apply duoc; dang cho duyet buoc risk-gated"
+                            : "Completion da co patch apply duoc; dong apply_incremental_steps bang completion fallback"
+                    ));
+                    emitToolTrace(
+                        emitter,
+                        requestId,
+                        "apply_incremental_steps",
+                        "completed",
+                        "responseMode=" + responseMode,
+                        "completion_fallback_actionable_edits=" + completionActionableEditCount,
+                        0,
+                        0,
+                        "none",
+                        "none",
+                        Map.of(
+                            "planStepCount", completionPlanStepCount,
+                            "stepResultCount", 0,
+                            "completionActionableEditCount", completionActionableEditCount,
+                            "synthesizedFromCompletion", true,
+                            "reviewRequired", reviewRequired
+                        )
+                    );
+                }
                 completion.put("localProviderPrimaryUsed", localProviderPrimaryUsed);
                 completion.put("promptOriginalChars", parseIntSafe(codeStreamMeta.get("promptOriginalChars"), promptOriginalChars));
                 completion.put("promptFinalChars", parseIntSafe(codeStreamMeta.get("promptFinalChars"), promptFinalChars));
@@ -4164,9 +4389,13 @@ public class ApiSpringController {
                 completion.put("estimatedCostUsd", usageInfo.get("estimatedCostUsd"));
                 completion.put("model", effectiveModel);
                 completion.put("modelDecisionStep", "final");
-                completion.put("modelDecisionReason", "completed");
+                completion.put("modelDecisionReason", reviewRequired ? "review_required" : "completed");
                 completion.put("decision_step", "final");
-                completion.put("reason_code", "completed");
+                completion.put("status", reviewRequired ? "review_required" : "completed");
+                completion.put("reason_code", reviewRequired ? "review_required" : "completed");
+                if (reviewRequired) {
+                    completion.put("message", "Dang cho nguoi dung duyet cac buoc risk-gated truoc khi coi la hoan tat");
+                }
                 completion.put("requestId", requestId);
                 completion.put("followUpSuggestions", buildLocalFollowUpSuggestions(message, completionPayload, contextType, responseMode));
                 if (!base.baseRef().isBlank()) {
@@ -4262,6 +4491,7 @@ public class ApiSpringController {
                 codeTelemetry.put("agenticStepAcceptedCount", agenticStepAcceptedCount);
                 codeTelemetry.put("agenticStepSkippedCount", agenticStepSkippedCount);
                 codeTelemetry.put("agenticStepLowConfidenceCount", agenticStepLowConfidenceCount);
+                codeTelemetry.put("agenticStepApprovalPendingCount", agenticStepApprovalPendingCount);
                 codeTelemetry.put("agenticStepSkippedReasons", codeStreamMeta.getOrDefault("agenticStepSkippedReasons", Collections.emptyMap()));
                 codeTelemetry.put("estimatedSavedTokens", localPreAnalysisSavedTokensEstimate);
                 codeTelemetry.put("localPreAnalysisAttempted", codeStreamPreAnalysis.attempted());
@@ -4287,6 +4517,11 @@ public class ApiSpringController {
                 codeTurnMeta.put("source", "aiCodeStream");
                 codeTurnMeta.put("model", effectiveModel);
                 codeTurnMeta.put("responseMode", responseMode);
+                codeTurnMeta.put("requestId", requestId);
+                codeTurnMeta.put("status", reviewRequired ? "review_required" : "completed");
+                codeTurnMeta.put("reviewRequired", reviewRequired);
+                codeTurnMeta.put("agenticStepApprovalPendingCount", agenticStepApprovalPendingCount);
+                codeTurnMeta.put("agenticPendingApprovalSteps", codeStreamMeta.getOrDefault("agenticPendingApprovalSteps", Collections.emptyList()));
                 codeTurnMeta.put("promptTokens", promptTokens);
                 codeTurnMeta.put("completionTokens", completionTokens);
                 aiConversationContextService.recordTurnWithScopes(
@@ -4527,6 +4762,158 @@ public class ApiSpringController {
             "applied", applied,
             "dismissed", dismissed,
             "score", editCandidateFeedbackScore(applied, dismissed, samples)
+        ));
+        return ResponseEntity.ok(out);
+    }
+
+    @PostMapping(value = {"/ai-code-stream/agentic-approval-feedback", "/api/ai-code-stream/agentic-approval-feedback"}, consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Map<String, Object>> recordAgenticApprovalFeedback(@RequestBody Map<String, Object> body) {
+        Map<String, Object> out = new LinkedHashMap<>();
+
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            out.put("success", false);
+            out.put("message", "authentication_required");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(out);
+        }
+
+        if (!aiCodeStreamAgenticApprovalFeedbackEnabled) {
+            out.put("success", true);
+            out.put("message", "disabled");
+            return ResponseEntity.ok(out);
+        }
+
+        String requestId = firstNonBlankString(body.get("requestId"), body.get("jobId"), body.get("id"), "").trim();
+        String action = normalizeAgenticApprovalFeedbackAction(firstNonBlankString(body.get("action"), body.get("status"), ""));
+        String appId = firstNonBlankString(body.get("appId"), body.get("app_id"), authCtx.appId, "csm")
+            .trim()
+            .toLowerCase(Locale.ROOT);
+        String language = firstNonBlankString(body.get("language"), "").trim().toLowerCase(Locale.ROOT);
+        String contextType = firstNonBlankString(body.get("contextType"), body.get("context_type"), "").trim().toLowerCase(Locale.ROOT);
+        String pName = firstNonBlankString(body.get("pName"), body.get("p_name"), "").trim();
+        Integer pType = parseNullableInt(body.get("pType"), body.get("p_type"));
+        String responseMode = firstNonBlankString(body.get("responseMode"), body.get("response_mode"), "").trim().toLowerCase(Locale.ROOT);
+        String stepLabel = firstNonBlankString(body.get("stepLabel"), body.get("label"), body.get("stepDescription"), "").trim();
+        String riskLevel = firstNonBlankString(body.get("riskLevel"), body.get("risk_level"), "").trim().toLowerCase(Locale.ROOT);
+        int stepIndex = parseIntSafe(body.get("stepIndex"), 0);
+        int stepTotal = parseIntSafe(body.get("stepTotal"), 0);
+        int editCount = body.get("editCount") instanceof Number
+            ? Math.max(0, ((Number) body.get("editCount")).intValue())
+            : 0;
+
+        if (requestId.isBlank() || action.isBlank()) {
+            out.put("success", false);
+            out.put("message", "invalid_payload");
+            return ResponseEntity.badRequest().body(out);
+        }
+
+        String stage = "resolved".equals(action) ? "review_resolved" : "approval_action";
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("language", language);
+        meta.put("contextType", contextType);
+        meta.put("stepIndex", stepIndex);
+        meta.put("stepTotal", stepTotal);
+        meta.put("stepLabel", stepLabel);
+        meta.put("riskLevel", riskLevel);
+        meta.put("editCount", editCount);
+        Map<String, Object> sessionUpdate = aiConversationContextService.updateAgenticApprovalState(
+            authCtx.principalId,
+            appId,
+            contextType,
+            pName,
+            pType,
+            requestId,
+            stepIndex,
+            action
+        );
+        meta.put("sessionUpdated", Boolean.TRUE.equals(sessionUpdate.get("updated")));
+        meta.put("pendingCount", parseIntSafe(sessionUpdate.get("pendingCount"), 0));
+        aiQualityMetricsService.recordRequestTrace(
+            requestId,
+            "ai-code-stream",
+            stage,
+            action,
+            "agentic_review_feedback",
+            appId,
+            responseMode,
+            "local-ui",
+            0L,
+            meta
+        );
+
+        out.put("success", true);
+        out.put("message", "ok");
+        out.put("result", jsonOf(
+            "requestId", requestId,
+            "stage", stage,
+            "action", action,
+            "sessionUpdated", Boolean.TRUE.equals(sessionUpdate.get("updated")),
+            "pendingCount", parseIntSafe(sessionUpdate.get("pendingCount"), 0),
+            "status", String.valueOf(sessionUpdate.getOrDefault("status", "completed")),
+            "stepIndex", stepIndex,
+            "stepTotal", stepTotal,
+            "riskLevel", riskLevel,
+            "editCount", editCount
+        ));
+        return ResponseEntity.ok(out);
+    }
+
+    @GetMapping({"/ai-code-stream/agentic-review-state", "/api/ai-code-stream/agentic-review-state"})
+    public ResponseEntity<Map<String, Object>> getAgenticReviewState(
+        @RequestParam String appId,
+        @RequestParam String contextType,
+        @RequestParam String requestId,
+        @RequestParam(required = false) String language,
+        @RequestParam(required = false) String pName,
+        @RequestParam(required = false) Integer pType) {
+        Map<String, Object> out = new LinkedHashMap<>();
+
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            out.put("success", false);
+            out.put("message", "authentication_required");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(out);
+        }
+
+        String normalizedAppId = firstNonBlankString(appId, authCtx.appId, "csm").trim().toLowerCase(Locale.ROOT);
+        String normalizedContextType = firstNonBlankString(contextType, "").trim().toLowerCase(Locale.ROOT);
+        String normalizedRequestId = firstNonBlankString(requestId, "").trim();
+        String normalizedLanguage = firstNonBlankString(language, "").trim().toLowerCase(Locale.ROOT);
+        String normalizedPName = firstNonBlankString(pName, "").trim();
+
+        if (normalizedAppId.isBlank() || normalizedContextType.isBlank() || normalizedRequestId.isBlank()) {
+            out.put("success", false);
+            out.put("message", "invalid_params");
+            return ResponseEntity.badRequest().body(out);
+        }
+
+        Map<String, Object> reviewState = aiConversationContextService.getAgenticReviewState(
+            authCtx.principalId,
+            normalizedAppId,
+            normalizedContextType,
+            normalizedPName,
+            pType,
+            normalizedRequestId
+        );
+
+        out.put("success", true);
+        out.put("message", Boolean.TRUE.equals(reviewState.get("found")) ? "ok" : "not_found");
+        out.put("result", jsonOf(
+            "requestId", normalizedRequestId,
+            "appId", normalizedAppId,
+            "contextType", normalizedContextType,
+            "language", normalizedLanguage,
+            "pName", normalizedPName,
+            "pType", pType,
+            "found", Boolean.TRUE.equals(reviewState.get("found")),
+            "scope", String.valueOf(reviewState.getOrDefault("scope", "")),
+            "fromPersistence", Boolean.TRUE.equals(reviewState.get("fromPersistence")),
+            "status", String.valueOf(reviewState.getOrDefault("status", "completed")),
+            "reviewRequired", Boolean.TRUE.equals(reviewState.get("reviewRequired")),
+            "pendingCount", parseIntSafe(reviewState.get("pendingCount"), 0),
+            "agenticPendingApprovalSteps", reviewState.getOrDefault("agenticPendingApprovalSteps", List.of()),
+            "turnId", String.valueOf(reviewState.getOrDefault("turnId", "")),
+            "timestamp", String.valueOf(reviewState.getOrDefault("timestamp", ""))
         ));
         return ResponseEntity.ok(out);
     }
@@ -5243,6 +5630,27 @@ public class ApiSpringController {
         }
     }
 
+    private Integer parseNullableInt(Object... candidates) {
+        if (candidates == null || candidates.length == 0) {
+            return null;
+        }
+        for (Object raw : candidates) {
+            if (raw == null) {
+                continue;
+            }
+            String text = String.valueOf(raw).trim();
+            if (text.isEmpty()) {
+                continue;
+            }
+            try {
+                return Integer.parseInt(text);
+            } catch (Exception ignored) {
+                // try next candidate
+            }
+        }
+        return null;
+    }
+
     private Map<String, Object> normalizeEditorMetadata(Object raw) {
         if (!(raw instanceof Map<?, ?> source)) {
             return Collections.emptyMap();
@@ -5889,13 +6297,15 @@ public class ApiSpringController {
             String requestId,
             String providerText,
             List<String> planSteps,
+            Object structuredPlanStepsRaw,
+            Object workflowBlueprintRaw,
             String responseMode,
             String contextType,
             String effectiveCodeContext,
             Map<String, Object> stepStatsOut) {
         String safeText = String.valueOf(providerText == null ? "" : providerText).trim();
         if (safeText.isBlank()) {
-            writeAgenticStepStats(stepStatsOut, 0, 0, 0, 0, Collections.emptyMap());
+            writeAgenticStepStats(stepStatsOut, 0, 0, 0, 0, 0, Collections.emptyMap(), Collections.emptyList());
             return 0;
         }
 
@@ -5903,23 +6313,31 @@ public class ApiSpringController {
         int accepted = 0;
         int skipped = 0;
         int lowConfidence = 0;
+        int approvalPending = 0;
         Map<String, Integer> reasonCounts = new LinkedHashMap<>();
+        List<Map<String, Object>> approvalPendingSteps = new ArrayList<>();
         StepVerifierRuntimePolicy verifierPolicy = resolveStepVerifierRuntimePolicy(stepStatsOut);
         boolean verifierEnabled = aiLocalAgenticStepVerifierEnabled;
         int lowConfidenceThreshold = verifierPolicy.lowConfidenceThreshold;
         stepStatsOut.put("stepVerifierRuntimePolicy", verifierPolicy.toMap());
 
-        boolean isEdit = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
-            && !isMenuJsonContext(contextType);
+        boolean menuJsonEdit = isMenuJsonContext(contextType)
+            && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        boolean isEdit = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
         boolean isAnalyze = "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
-        int planSize = planSteps == null ? 0 : planSteps.size();
+        List<StepPlanDescriptor> stepDescriptors = resolveStepPlanDescriptors(planSteps, structuredPlanStepsRaw, workflowBlueprintRaw);
 
         if (isEdit) {
             // Salvage SEARCH/REPLACE blocks as canonicalized textEdits and emit them.
             try {
-                String salvaged = salvageSearchReplaceAsTextEdits(safeText, effectiveCodeContext);
+                String salvaged = menuJsonEdit
+                    ? salvagePropertyPatchAsTextEdits(safeText, effectiveCodeContext)
+                    : salvageSearchReplaceAsTextEdits(safeText, effectiveCodeContext);
                 String canonicalized = canonicalizeLineTextEditsPayload(salvaged, effectiveCodeContext);
                 List<Map<String, Object>> textEdits = parseNormalizedLineTextEdits(canonicalized);
+                Map<String, Object> canonicalMeta = parseCanonicalLineEditsMeta(canonicalized);
+                Object menuPatchOps = canonicalMeta.get("patchOps");
+                Object menuMergeStats = canonicalMeta.get("mergeStats");
                 textEdits = applyDeltaFirstAntiEchoLineTextEdits(textEdits, effectiveCodeContext);
                 DeterministicPatchValidationResult patchValidation = validateDeterministicLineTextEdits(textEdits, effectiveCodeContext);
                 textEdits = patchValidation.acceptedEdits;
@@ -5941,9 +6359,11 @@ public class ApiSpringController {
                 }
                 int total = textEdits.size();
                 for (int i = 0; i < total; i++) {
-                    String desc = (planSize > 0 && i < planSize)
-                        ? planSteps.get(i)
-                        : "Áp dụng thay đổi " + (i + 1);
+                    StepPlanDescriptor stepDescriptor = resolveStepPlanDescriptorAt(
+                        stepDescriptors,
+                        i,
+                        menuJsonEdit ? "Áp dụng patch menu " + (i + 1) : "Áp dụng thay đổi " + (i + 1));
+                    String desc = stepDescriptor.description();
                     StepEvidenceVerdict evidence = verifyEditStepEvidence(textEdits.get(i), effectiveCodeContext);
                     int qualityScore = evidence.score();
                     boolean evidenceAccepted = passesStepEvidence(evidence, verifierPolicy);
@@ -5958,9 +6378,11 @@ public class ApiSpringController {
                     boolean approvalRequired = ("high".equalsIgnoreCase(editRisk.riskLevel()) && aiAgenticApprovalHighRiskRequired)
                         || ("medium".equalsIgnoreCase(editRisk.riskLevel()) && aiAgenticApprovalMediumRiskRequired);
                     if (verifierEnabled && !evidenceAccepted) {
-                        sendEvent(emitter, jsonOf(
+                        Map<String, Object> payload = mapOf(
                             "stage", "agentic_step_result",
                             "requestId", requestId,
+                            "contextType", contextType,
+                            "responseMode", responseMode,
                             "stepIndex", i + 1,
                             "stepTotal", total,
                             "stepDescription", desc,
@@ -5975,7 +6397,9 @@ public class ApiSpringController {
                             "skipped", true,
                             "evidenceAnchors", evidence.anchors(),
                             "evidenceReason", evidence.reason(),
-                            "partial", i < total - 1));
+                            "partial", i < total - 1);
+                        appendStepPlanMetadata(payload, stepDescriptor);
+                        sendEvent(emitter, payload);
                         emitToolTrace(
                             emitter,
                             requestId,
@@ -5995,9 +6419,11 @@ public class ApiSpringController {
                         reasonCounts.merge(String.valueOf(evidence.reason() == null ? "unknown" : evidence.reason()), 1, Integer::sum);
                         continue;
                     }
-                    sendEvent(emitter, jsonOf(
+                    Map<String, Object> payload = mapOf(
                         "stage", "agentic_step_result",
                         "requestId", requestId,
+                        "contextType", contextType,
+                        "responseMode", responseMode,
                         "stepIndex", i + 1,
                         "stepTotal", total,
                         "stepDescription", desc,
@@ -6012,8 +6438,12 @@ public class ApiSpringController {
                         "evidenceAnchors", evidence.anchors(),
                         "patchValidator", patchValidation.toMetaMap(),
                         "patchDryRun", patchDryRun.toMetaMap(),
+                        "patchOps", menuJsonEdit && i == 0 ? menuPatchOps : null,
+                        "mergeStats", menuJsonEdit && i == 0 ? menuMergeStats : null,
                         "textEdits", List.of(textEdits.get(i)),
-                        "partial", i < total - 1));
+                        "partial", i < total - 1);
+                    appendStepPlanMetadata(payload, stepDescriptor);
+                    sendEvent(emitter, payload);
                     emitToolTrace(
                         emitter,
                         requestId,
@@ -6034,11 +6464,24 @@ public class ApiSpringController {
                     );
                     emitted += 1;
                     accepted += 1;
+                    if (approvalRequired) {
+                        approvalPending += 1;
+                        approvalPendingSteps.add(buildPendingApprovalStepSnapshot(
+                            i + 1,
+                            total,
+                            stepDescriptor,
+                            qualityScore,
+                            editRisk,
+                            patchValidation.toMetaMap(),
+                            patchDryRun.toMetaMap(),
+                            List.of(textEdits.get(i))
+                        ));
+                    }
                     if (qualityScore < lowConfidenceThreshold) {
                         lowConfidence += 1;
                     }
                 }
-                writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
+                writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, approvalPending, reasonCounts, approvalPendingSteps);
                 return total;
             } catch (Exception ignored) {
                 int fallbackEmitted = emitFallbackIncrementalStepResults(
@@ -6052,7 +6495,7 @@ public class ApiSpringController {
                 if (fallbackEmitted > 0) {
                     return fallbackEmitted;
                 }
-                writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
+                writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, approvalPending, reasonCounts, approvalPendingSteps);
                 return 0;
             }
         }
@@ -6069,10 +6512,9 @@ public class ApiSpringController {
             }
             if (sections.size() <= 1) {
                 StepEvidenceVerdict singleEvidence = verifyAnalyzeStepEvidence(safeText, effectiveCodeContext, true);
-                int singleScore = singleEvidence.score();
                 boolean singleAccepted = passesStepEvidence(singleEvidence, verifierPolicy);
                 if (!singleAccepted && verifierEnabled) {
-                    writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
+                    writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, approvalPending, reasonCounts, approvalPendingSteps);
                     return 0;
                 }
                 sections = new ArrayList<>(List.of(safeText));
@@ -6081,17 +6523,18 @@ public class ApiSpringController {
             }
             int total = sections.size();
             for (int i = 0; i < total; i++) {
-                String desc = (planSize > 0 && i < planSize)
-                    ? planSteps.get(i)
-                    : "Phân tích phần " + (i + 1);
+                StepPlanDescriptor stepDescriptor = resolveStepPlanDescriptorAt(stepDescriptors, i, "Phân tích phần " + (i + 1));
+                String desc = stepDescriptor.description();
                 String sectionText = sections.get(i);
                 StepEvidenceVerdict evidence = verifyAnalyzeStepEvidence(sectionText, effectiveCodeContext, i == 0);
                 int qualityScore = evidence.score();
                 boolean evidenceAccepted = passesStepEvidence(evidence, verifierPolicy);
                 if (verifierEnabled && !evidenceAccepted) {
-                    sendEvent(emitter, jsonOf(
+                    Map<String, Object> payload = mapOf(
                         "stage", "agentic_step_result",
                         "requestId", requestId,
+                        "contextType", contextType,
+                        "responseMode", responseMode,
                         "stepIndex", i + 1,
                         "stepTotal", total,
                         "stepDescription", desc,
@@ -6102,7 +6545,9 @@ public class ApiSpringController {
                         "skipped", true,
                         "evidenceAnchors", evidence.anchors(),
                         "evidenceReason", evidence.reason(),
-                        "partial", i < total - 1));
+                        "partial", i < total - 1);
+                    appendStepPlanMetadata(payload, stepDescriptor);
+                    sendEvent(emitter, payload);
                     emitToolTrace(
                         emitter,
                         requestId,
@@ -6122,9 +6567,11 @@ public class ApiSpringController {
                     reasonCounts.merge(String.valueOf(evidence.reason() == null ? "unknown" : evidence.reason()), 1, Integer::sum);
                     continue;
                 }
-                sendEvent(emitter, jsonOf(
+                Map<String, Object> payload = mapOf(
                     "stage", "agentic_step_result",
                     "requestId", requestId,
+                    "contextType", contextType,
+                    "responseMode", responseMode,
                     "stepIndex", i + 1,
                     "stepTotal", total,
                     "stepDescription", desc,
@@ -6134,7 +6581,9 @@ public class ApiSpringController {
                     "recoveryStrategy", verifierPolicy.strategyId,
                     "evidenceAnchors", evidence.anchors(),
                     "text", sectionText,
-                    "partial", i < total - 1));
+                    "partial", i < total - 1);
+                appendStepPlanMetadata(payload, stepDescriptor);
+                sendEvent(emitter, payload);
                 emitToolTrace(
                     emitter,
                     requestId,
@@ -6154,11 +6603,11 @@ public class ApiSpringController {
                     lowConfidence += 1;
                 }
             }
-            writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
+            writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, approvalPending, reasonCounts, approvalPendingSteps);
             return total;
         }
 
-        writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
+        writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, approvalPending, reasonCounts, approvalPendingSteps);
         return 0;
     }
 
@@ -6182,10 +6631,13 @@ public class ApiSpringController {
             int accepted = 0;
             int skipped = 0;
             int lowConfidence = 0;
+            int approvalPending = 0;
             Map<String, Integer> reasonCounts = new LinkedHashMap<>();
+            List<Map<String, Object>> approvalPendingSteps = new ArrayList<>();
             StepVerifierRuntimePolicy verifierPolicy = resolveStepVerifierRuntimePolicy(stepStatsOut);
             int lowConfidenceThreshold = verifierPolicy.lowConfidenceThreshold;
             int total = plan.steps.size();
+            List<StepPlanDescriptor> stepDescriptors = resolveStepPlanDescriptors(planSteps, null, null);
 
             for (int i = 0; i < total; i++) {
                 AiIncrementalStepExecutorService.ExecutionStep step = plan.steps.get(i);
@@ -6194,9 +6646,11 @@ public class ApiSpringController {
                     effectiveCodeContext,
                     Map.of("requestId", requestId, "contextType", contextType));
 
-                String desc = (planSteps != null && i < planSteps.size())
-                    ? planSteps.get(i)
-                    : String.valueOf(step == null ? "" : step.description);
+                StepPlanDescriptor stepDescriptor = resolveStepPlanDescriptorAt(
+                    stepDescriptors,
+                    i,
+                    String.valueOf(step == null ? "" : step.description));
+                String desc = stepDescriptor.description();
 
                 Map<String, Object> stepPatch = toMapSafe(stepResult == null ? null : stepResult.resultData);
                 Map<String, Object> textEdit = mapIncrementalStepToTextEdit(stepPatch, step == null ? "" : step.actionType, effectiveCodeContext);
@@ -6204,6 +6658,8 @@ public class ApiSpringController {
                     sendEvent(emitter, jsonOf(
                         "stage", "agentic_step_result",
                         "requestId", requestId,
+                        "contextType", contextType,
+                        "responseMode", "edit",
                         "stepIndex", i + 1,
                         "stepTotal", total,
                         "stepDescription", desc,
@@ -6245,9 +6701,11 @@ public class ApiSpringController {
                 boolean approvalRequired = ("high".equalsIgnoreCase(editRisk.riskLevel()) && aiAgenticApprovalHighRiskRequired)
                     || ("medium".equalsIgnoreCase(editRisk.riskLevel()) && aiAgenticApprovalMediumRiskRequired);
 
-                sendEvent(emitter, jsonOf(
+                Map<String, Object> payload = mapOf(
                     "stage", "agentic_step_result",
                     "requestId", requestId,
+                    "contextType", contextType,
+                    "responseMode", "edit",
                     "stepIndex", i + 1,
                     "stepTotal", total,
                     "stepDescription", desc,
@@ -6261,7 +6719,9 @@ public class ApiSpringController {
                     "approvalReasons", editRisk.reasons(),
                     "evidenceAnchors", evidence.anchors(),
                     "textEdits", List.of(textEdit),
-                    "partial", i < total - 1));
+                    "partial", i < total - 1);
+                appendStepPlanMetadata(payload, stepDescriptor);
+                sendEvent(emitter, payload);
                 emitToolTrace(
                     emitter,
                     requestId,
@@ -6282,12 +6742,25 @@ public class ApiSpringController {
                 );
                 emitted += 1;
                 accepted += 1;
+                if (approvalRequired) {
+                    approvalPending += 1;
+                    approvalPendingSteps.add(buildPendingApprovalStepSnapshot(
+                        i + 1,
+                        total,
+                        stepDescriptor,
+                        qualityScore,
+                        editRisk,
+                        null,
+                        null,
+                        List.of(textEdit)
+                    ));
+                }
                 if (qualityScore < lowConfidenceThreshold) {
                     lowConfidence += 1;
                 }
             }
 
-            writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, reasonCounts);
+            writeAgenticStepStats(stepStatsOut, emitted, accepted, skipped, lowConfidence, approvalPending, reasonCounts, approvalPendingSteps);
             return emitted;
         } catch (Exception ignored) {
             return 0;
@@ -6468,7 +6941,9 @@ public class ApiSpringController {
             int accepted,
             int skipped,
             int lowConfidence,
-            Map<String, Integer> reasonCounts) {
+            int approvalPending,
+            Map<String, Integer> reasonCounts,
+            List<Map<String, Object>> approvalPendingSteps) {
         if (stepStatsOut == null) {
             return;
         }
@@ -6476,7 +6951,65 @@ public class ApiSpringController {
         stepStatsOut.put("agenticStepAcceptedCount", Math.max(0, accepted));
         stepStatsOut.put("agenticStepSkippedCount", Math.max(0, skipped));
         stepStatsOut.put("agenticStepLowConfidenceCount", Math.max(0, lowConfidence));
+        stepStatsOut.put("agenticStepApprovalPendingCount", Math.max(0, approvalPending));
         stepStatsOut.put("agenticStepSkippedReasons", reasonCounts == null ? Collections.emptyMap() : new LinkedHashMap<>(reasonCounts));
+        stepStatsOut.put("agenticPendingApprovalSteps", approvalPendingSteps == null ? Collections.emptyList() : new ArrayList<>(approvalPendingSteps));
+    }
+
+    private Map<String, Object> buildPendingApprovalStepSnapshot(
+            int stepIndex,
+            int stepTotal,
+            StepPlanDescriptor stepDescriptor,
+            int qualityScore,
+            AssistantEditRiskResult editRisk,
+            Map<String, Object> patchValidator,
+            Map<String, Object> patchDryRun,
+            List<Map<String, Object>> textEdits) {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        String description = stepDescriptor == null ? "" : stepDescriptor.description();
+        snapshot.put("stage", "agentic_step_result_" + Math.max(1, stepIndex));
+        snapshot.put("label", "Step " + Math.max(1, stepIndex) + "/" + Math.max(1, stepTotal));
+        snapshot.put("detail", String.valueOf(description == null ? "" : description).trim());
+        snapshot.put("qualityScore", Math.max(0, qualityScore));
+        snapshot.put("riskScore", editRisk == null ? 0 : editRisk.riskScore());
+        snapshot.put("riskLevel", editRisk == null ? "" : String.valueOf(editRisk.riskLevel() == null ? "" : editRisk.riskLevel()));
+        snapshot.put("approvalRequired", true);
+        snapshot.put("approvalReasons", editRisk == null || editRisk.reasons() == null ? Collections.emptyList() : new ArrayList<>(editRisk.reasons()));
+        snapshot.put("approvalState", "pending");
+        snapshot.put("stepIndex", Math.max(1, stepIndex));
+        snapshot.put("stepTotal", Math.max(1, stepTotal));
+        snapshot.put("status", stepIndex < stepTotal ? "running" : "done");
+        snapshot.put("timestamp", System.currentTimeMillis());
+        snapshot.put("patchValidator", patchValidator == null ? Collections.emptyMap() : new LinkedHashMap<>(patchValidator));
+        snapshot.put("patchDryRun", patchDryRun == null ? Collections.emptyMap() : new LinkedHashMap<>(patchDryRun));
+        snapshot.put("pendingTextEdits", textEdits == null ? Collections.emptyList() : new ArrayList<>(textEdits));
+        appendStepPlanMetadata(snapshot, stepDescriptor);
+        return snapshot;
+    }
+
+    private StepPlanDescriptor resolveStepPlanDescriptorAt(
+            List<StepPlanDescriptor> stepDescriptors,
+            int index,
+            String fallbackDescription) {
+        if (stepDescriptors != null && index >= 0 && index < stepDescriptors.size() && stepDescriptors.get(index) != null) {
+            return stepDescriptors.get(index);
+        }
+        return new StepPlanDescriptor(
+            "step_" + Math.max(1, index + 1),
+            String.valueOf(fallbackDescription == null ? "" : fallbackDescription).trim(),
+            "inspect_context",
+            "",
+            "",
+            0);
+    }
+
+    private record StepPlanDescriptor(
+            String stepId,
+            String description,
+            String action,
+            String scope,
+            String targetPath,
+            int estimatedMs) {
     }
 
     @FunctionalInterface
@@ -6489,17 +7022,18 @@ public class ApiSpringController {
      * planned -> running -> done consistently for both code-stream and chat paths.
      */
     private static final class AgenticStepLifecycleDirector {
-        void emitLifecycle(List<String> rawSteps, int maxSteps, AgenticStepEventSink sink, String requestId, String responseMode) {
+        void emitLifecycle(List<StepPlanDescriptor> stepDescriptors, int maxSteps, AgenticStepEventSink sink, String requestId, String responseMode) {
             if (sink == null) {
                 return;
             }
-            List<String> safeSteps = rawSteps == null ? List.of() : rawSteps;
+            List<StepPlanDescriptor> safeSteps = stepDescriptors == null ? List.of() : stepDescriptors;
             int total = Math.min(Math.max(0, maxSteps), safeSteps.size());
             if (total <= 0) {
                 return;
             }
 
             for (int i = 0; i < total; i++) {
+                StepPlanDescriptor stepDescriptor = safeSteps.get(i);
                 Map<String, Object> planned = new LinkedHashMap<>();
                 planned.put("stage", "agentic_step");
                 planned.put("status", "planned");
@@ -6507,7 +7041,8 @@ public class ApiSpringController {
                 planned.put("current", i + 1);
                 planned.put("total", total);
                 planned.put("percent", Math.max(1, (int) Math.round(((i + 1) * 100.0) / Math.max(1, total))));
-                planned.put("message", String.valueOf(safeSteps.get(i) == null ? "" : safeSteps.get(i)));
+                planned.put("message", stepDescriptor == null ? "" : stepDescriptor.description());
+                appendStepPlanMetadata(planned, stepDescriptor);
                 if (!String.valueOf(requestId == null ? "" : requestId).isBlank()) {
                     planned.put("requestId", requestId);
                 }
@@ -6518,7 +7053,8 @@ public class ApiSpringController {
             }
 
             for (int i = 0; i < total; i++) {
-                String stepMessage = String.valueOf(safeSteps.get(i) == null ? "" : safeSteps.get(i));
+                StepPlanDescriptor stepDescriptor = safeSteps.get(i);
+                String stepMessage = stepDescriptor == null ? "" : stepDescriptor.description();
 
                 Map<String, Object> running = new LinkedHashMap<>();
                 running.put("stage", "agentic_step");
@@ -6528,6 +7064,7 @@ public class ApiSpringController {
                 running.put("total", total);
                 running.put("percent", Math.max(1, (int) Math.round(((i + 1) * 100.0) / Math.max(1, total))));
                 running.put("message", stepMessage);
+                appendStepPlanMetadata(running, stepDescriptor);
                 if (!String.valueOf(requestId == null ? "" : requestId).isBlank()) {
                     running.put("requestId", requestId);
                 }
@@ -6544,6 +7081,7 @@ public class ApiSpringController {
                 done.put("total", total);
                 done.put("percent", Math.max(1, (int) Math.round(((i + 1) * 100.0) / Math.max(1, total))));
                 done.put("message", stepMessage);
+                appendStepPlanMetadata(done, stepDescriptor);
                 if (!String.valueOf(requestId == null ? "" : requestId).isBlank()) {
                     done.put("requestId", requestId);
                 }
@@ -6557,9 +7095,15 @@ public class ApiSpringController {
 
     private static final AgenticStepLifecycleDirector AGENTIC_STEP_LIFECYCLE_DIRECTOR = new AgenticStepLifecycleDirector();
 
-    private void emitAgenticStepLifecycleToSse(SseEmitter emitter, String requestId, List<String> planSteps, int maxSteps) {
+    private void emitAgenticStepLifecycleToSse(
+            SseEmitter emitter,
+            String requestId,
+            List<String> planSteps,
+            Object structuredPlanStepsRaw,
+            Object workflowBlueprintRaw,
+            int maxSteps) {
         AGENTIC_STEP_LIFECYCLE_DIRECTOR.emitLifecycle(
-            planSteps,
+            resolveStepPlanDescriptors(planSteps, structuredPlanStepsRaw, workflowBlueprintRaw),
             maxSteps,
             payload -> {
                 try {
@@ -6573,14 +7117,102 @@ public class ApiSpringController {
         );
     }
 
-    private void emitAgenticStepLifecycleToChat(String appId, String responseMode, List<String> planSteps, int maxSteps) {
+    private void emitAgenticStepLifecycleToChat(
+            String appId,
+            String responseMode,
+            List<String> planSteps,
+            Object structuredPlanStepsRaw,
+            Object workflowBlueprintRaw,
+            int maxSteps) {
         AGENTIC_STEP_LIFECYCLE_DIRECTOR.emitLifecycle(
-            planSteps,
+            resolveStepPlanDescriptors(planSteps, structuredPlanStepsRaw, workflowBlueprintRaw),
             maxSteps,
             payload -> emitAiAssistantChatChunk(appId, payload),
             "",
             responseMode
         );
+    }
+
+    private static void appendStepPlanMetadata(Map<String, Object> payload, StepPlanDescriptor stepDescriptor) {
+        if (payload == null || stepDescriptor == null) {
+            return;
+        }
+        if (!String.valueOf(stepDescriptor.stepId() == null ? "" : stepDescriptor.stepId()).isBlank()) {
+            payload.put("stepId", stepDescriptor.stepId());
+        }
+        if (!String.valueOf(stepDescriptor.action() == null ? "" : stepDescriptor.action()).isBlank()) {
+            payload.put("stepAction", stepDescriptor.action());
+        }
+        if (!String.valueOf(stepDescriptor.scope() == null ? "" : stepDescriptor.scope()).isBlank()) {
+            payload.put("stepScope", stepDescriptor.scope());
+        }
+        if (!String.valueOf(stepDescriptor.targetPath() == null ? "" : stepDescriptor.targetPath()).isBlank()) {
+            payload.put("targetPath", stepDescriptor.targetPath());
+        }
+        if (stepDescriptor.estimatedMs() > 0) {
+            payload.put("estimatedMs", stepDescriptor.estimatedMs());
+        }
+    }
+
+    private List<StepPlanDescriptor> resolveStepPlanDescriptors(
+            List<String> rawSteps,
+            Object structuredPlanStepsRaw,
+            Object workflowBlueprintRaw) {
+        List<Map<String, Object>> structuredSteps = normalizeStructuredStepList(structuredPlanStepsRaw);
+        if (structuredSteps.isEmpty()) {
+            structuredSteps = normalizeStructuredStepList(workflowBlueprintRaw);
+        }
+        int total = Math.max(
+            rawSteps == null ? 0 : rawSteps.size(),
+            structuredSteps.size());
+        if (total <= 0) {
+            return List.of();
+        }
+        List<StepPlanDescriptor> out = new ArrayList<>();
+        for (int i = 0; i < total; i++) {
+            Map<String, Object> structured = i < structuredSteps.size()
+                ? structuredSteps.get(i)
+                : Collections.emptyMap();
+            String rawStep = (rawSteps != null && i < rawSteps.size())
+                ? String.valueOf(rawSteps.get(i) == null ? "" : rawSteps.get(i)).trim()
+                : "";
+            String description = firstNonBlank(
+                String.valueOf(structured.get("description") == null ? "" : structured.get("description")),
+                String.valueOf(structured.get("label") == null ? "" : structured.get("label")),
+                rawStep,
+                "Step " + (i + 1));
+            String stepId = firstNonBlank(
+                String.valueOf(structured.get("stepId") == null ? "" : structured.get("stepId")),
+                String.valueOf(structured.get("id") == null ? "" : structured.get("id")),
+                "step_" + (i + 1));
+            String action = firstNonBlank(
+                String.valueOf(structured.get("action") == null ? "" : structured.get("action")),
+                String.valueOf(structured.get("intent") == null ? "" : structured.get("intent")),
+                "inspect_context");
+            String scope = firstNonBlank(
+                String.valueOf(structured.get("scope") == null ? "" : structured.get("scope")),
+                String.valueOf(structured.get("targetScope") == null ? "" : structured.get("targetScope")));
+            String targetPath = firstNonBlank(
+                String.valueOf(structured.get("targetPath") == null ? "" : structured.get("targetPath")),
+                String.valueOf(structured.get("path") == null ? "" : structured.get("path")));
+            int estimatedMs = parseIntSafe(structured.get("estimatedMs"), 0);
+            out.add(new StepPlanDescriptor(stepId, description, action, scope, targetPath, estimatedMs));
+        }
+        return out;
+    }
+
+    private List<Map<String, Object>> normalizeStructuredStepList(Object raw) {
+        if (!(raw instanceof List<?> items) || items.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Object item : items) {
+            Map<String, Object> safe = toMapSafe(item);
+            if (!safe.isEmpty()) {
+                out.add(safe);
+            }
+        }
+        return out;
     }
 
     private String streamWithAutoContinue(
@@ -7125,6 +7757,9 @@ public class ApiSpringController {
     private String clampPromptForLocalProvider(String prompt, String contextType, String responseMode) {
         String safePrompt = String.valueOf(prompt == null ? "" : prompt);
         int configured = Math.max(4000, aiCodeStreamLocalProviderMaxPromptChars);
+        int contextWindow = Math.max(2048, aiLocalLlamaContextWindow);
+        int outputReserve = Math.max(256, aiLocalLlamaMaxTokens);
+        int promptBudgetTokens = Math.max(768, contextWindow - outputReserve - 384);
         int hardCap;
         if (isMenuJsonContext(contextType)) {
             hardCap = Math.min(configured, 22000);
@@ -7133,6 +7768,15 @@ public class ApiSpringController {
         } else {
             hardCap = Math.min(configured, 18000);
         }
+        int runtimeAwareCap;
+        if (isMenuJsonContext(contextType)) {
+            runtimeAwareCap = Math.max(5000, (int) Math.round(promptBudgetTokens * 2.4d));
+        } else if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            runtimeAwareCap = Math.max(7000, (int) Math.round(promptBudgetTokens * 3.2d));
+        } else {
+            runtimeAwareCap = Math.max(8000, (int) Math.round(promptBudgetTokens * 3.6d));
+        }
+        hardCap = Math.min(hardCap, runtimeAwareCap);
         if (isWeakLocalRuntime()) {
             hardCap = Math.min(hardCap, Math.max(6000, aiLocalRuntimeWeakProfileLocalPromptMaxChars));
         }
@@ -7909,6 +8553,26 @@ public class ApiSpringController {
             return rawResponse;
         }
 
+        String mergedMenuPayload = salvageMenuMergePreviewAsTextEdits(rawResponse, baseCode);
+        if (!String.valueOf(mergedMenuPayload == null ? "" : mergedMenuPayload)
+                .equals(String.valueOf(rawResponse == null ? "" : rawResponse))) {
+            return mergedMenuPayload;
+        }
+
+        String normalizedMenuDraft = extractMenuDraftForCompletion(raw, "menu_json");
+        if (!normalizedMenuDraft.isBlank() && !normalizedMenuDraft.equals(sourceCode)) {
+            List<Map<String, Object>> generated = buildLineTextEdits(sourceCode, normalizedMenuDraft);
+            if (!generated.isEmpty()) {
+                return buildCanonicalLineEditsEnvelope(
+                    raw,
+                    "Đã chuẩn hóa menu draft thành textEdits theo line",
+                    List.of("Chuẩn hóa toàn bộ menu JSON thành patch theo dòng"),
+                    generated,
+                    normalizedMenuDraft,
+                    Map.of("canonicalized", true, "source", "menu_full_draft"));
+            }
+        }
+
         String normalized = raw;
         if (normalized.startsWith("```json")) normalized = normalized.substring(7).trim();
         if (normalized.startsWith("```")) normalized = normalized.substring(3).trim();
@@ -7956,11 +8620,171 @@ public class ApiSpringController {
         }
     }
 
+    private String salvageMenuMergePreviewAsTextEdits(String rawResponse, String baseCode) {
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        String sourceCode = String.valueOf(baseCode == null ? "" : baseCode);
+        if (raw.isBlank() || sourceCode.isBlank()) {
+            return rawResponse;
+        }
+
+        Map<String, Object> mergePreview = resolveMenuStepMergePreview(raw, sourceCode);
+        String mergedResponse = str(mergePreview.get("mergedResponse"), "");
+        if (mergedResponse.isBlank() || mergedResponse.equals(sourceCode)) {
+            return rawResponse;
+        }
+
+        List<Map<String, Object>> generated = buildLineTextEdits(sourceCode, mergedResponse);
+        if (generated.isEmpty()) {
+            return rawResponse;
+        }
+
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("canonicalized", true);
+        meta.put("source", "menu_merge_preview");
+        Object patchOps = mergePreview.get("patchOps");
+        if (patchOps instanceof List<?> patchList && !patchList.isEmpty()) {
+            meta.put("patchOps", patchList);
+        }
+        Map<String, Object> mergeStats = new LinkedHashMap<>();
+        mergeStats.put("added", parseIntOrDefault(mergePreview.get("added"), 0));
+        mergeStats.put("edited", parseIntOrDefault(mergePreview.get("edited"), 0));
+        mergeStats.put("deleted", parseIntOrDefault(mergePreview.get("deleted"), 0));
+        meta.put("mergeStats", mergeStats);
+
+        return buildCanonicalLineEditsEnvelope(
+            rawResponse,
+            "Đã chuẩn hóa menu merge preview thành textEdits theo line",
+            List.of("Chuẩn hóa menu JSON đã merge với draft hiện tại thành patch theo dòng"),
+            generated,
+            mergedResponse,
+            meta);
+    }
+
+    private Map<String, Object> resolveMenuStepMergePreview(String rawResponse, String baseCode) {
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        String sourceCode = String.valueOf(baseCode == null ? "" : baseCode);
+        if (raw.isBlank() || sourceCode.isBlank()) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, Object> directPreview = buildMenuCompletionMergePreview(sourceCode, raw, "menu_json");
+        String directMerged = str(directPreview.get("mergedResponse"), "");
+        if (!directMerged.isBlank() && !directMerged.equals(sourceCode)) {
+            return directPreview;
+        }
+
+        String normalized = raw;
+        if (normalized.startsWith("```json")) normalized = normalized.substring(7).trim();
+        if (normalized.startsWith("```")) normalized = normalized.substring(3).trim();
+        if (normalized.endsWith("```")) normalized = normalized.substring(0, normalized.length() - 3).trim();
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> payload = objectMapper.readValue(normalized, Map.class);
+            if (payload == null || payload.isEmpty()) {
+                return Collections.emptyMap();
+            }
+
+            String draftCandidate = extractRealtimeDraftText(payload);
+            if (!draftCandidate.isBlank()) {
+                Map<String, Object> draftPreview = buildMenuCompletionMergePreview(sourceCode, draftCandidate, "menu_json");
+                String draftMerged = str(draftPreview.get("mergedResponse"), "");
+                if (!draftMerged.isBlank() && !draftMerged.equals(sourceCode)) {
+                    return draftPreview;
+                }
+            }
+
+            Object menuNode = payload.get("menu_node");
+            if (menuNode != null) {
+                Map<String, Object> nodePreview = buildMenuNodeStepMergePreview(sourceCode, menuNode);
+                if (!nodePreview.isEmpty()) {
+                    return nodePreview;
+                }
+            }
+
+            Object dataObj = payload.get("data");
+            if (dataObj instanceof Map<?, ?> dataMapRaw) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> dataMap = (Map<String, Object>) dataMapRaw;
+                String nestedDraftCandidate = extractRealtimeDraftText(dataMap);
+                if (!nestedDraftCandidate.isBlank()) {
+                    Map<String, Object> nestedDraftPreview = buildMenuCompletionMergePreview(sourceCode, nestedDraftCandidate, "menu_json");
+                    String nestedMerged = str(nestedDraftPreview.get("mergedResponse"), "");
+                    if (!nestedMerged.isBlank() && !nestedMerged.equals(sourceCode)) {
+                        return nestedDraftPreview;
+                    }
+                }
+
+                Object nestedMenuNode = dataMap.get("menu_node");
+                if (nestedMenuNode != null) {
+                    Map<String, Object> nestedNodePreview = buildMenuNodeStepMergePreview(sourceCode, nestedMenuNode);
+                    if (!nestedNodePreview.isEmpty()) {
+                        return nestedNodePreview;
+                    }
+                }
+
+                if (dataMap.get("menu") != null || dataMap.get("menus") != null) {
+                    String nestedMenuPayload = objectMapper.writeValueAsString(dataMap);
+                    Map<String, Object> nestedMenuPreview = buildMenuCompletionMergePreview(sourceCode, nestedMenuPayload, "menu_json");
+                    String nestedMenuMerged = str(nestedMenuPreview.get("mergedResponse"), "");
+                    if (!nestedMenuMerged.isBlank() && !nestedMenuMerged.equals(sourceCode)) {
+                        return nestedMenuPreview;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            return Collections.emptyMap();
+        }
+
+        return Collections.emptyMap();
+    }
+
+    private Map<String, Object> buildMenuNodeStepMergePreview(String baseCode, Object menuNode) {
+        String sourceCode = String.valueOf(baseCode == null ? "" : baseCode).trim();
+        if (sourceCode.isBlank() || menuNode == null) {
+            return Collections.emptyMap();
+        }
+        try {
+            AiMenuMergeService.MergeOutput mergeOut = aiMenuMergeService.mergeMenuNode(
+                sourceCode,
+                objectMapper.writeValueAsString(menuNode));
+            if (mergeOut == null || mergeOut.mergedMenu == null || mergeOut.mergedMenu.isEmpty()) {
+                return Collections.emptyMap();
+            }
+
+            Map<String, Object> wrapped = new LinkedHashMap<>();
+            wrapped.put("menu", mergeOut.mergedMenu);
+            String merged = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
+            String sanitizedMerged = normalizeMenuDraftJson(merged);
+            if (sanitizedMerged.isBlank()) {
+                sanitizedMerged = merged;
+            }
+            if (sanitizedMerged.isBlank() || sanitizedMerged.equals(sourceCode)) {
+                return Collections.emptyMap();
+            }
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("mergedResponse", sanitizedMerged);
+            out.put("patchOps", mergeOut.patchOps == null ? List.of() : mergeOut.patchOps);
+            out.put("added", mergeOut.added);
+            out.put("edited", mergeOut.edited);
+            out.put("deleted", mergeOut.deleted);
+            return out;
+        } catch (Exception ignored) {
+            return Collections.emptyMap();
+        }
+    }
+
     private String canonicalizeLineTextEditsPayload(String rawResponse, String baseCode) {
         String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
         String sourceCode = String.valueOf(baseCode == null ? "" : baseCode);
         if (raw.isBlank() || sourceCode.isBlank()) {
             return rawResponse;
+        }
+
+        String primaryCandidate = extractPrimaryStructuredEditCandidate(raw);
+        if (!primaryCandidate.isBlank()) {
+            raw = primaryCandidate;
         }
 
         List<Map<String, Object>> normalizedLineEdits = parseNormalizedLineTextEdits(raw);
@@ -8015,6 +8839,49 @@ public class ApiSpringController {
         }
 
         return rawResponse;
+    }
+
+    private String extractPrimaryStructuredEditCandidate(String rawResponse) {
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        if (raw.isBlank()) {
+            return "";
+        }
+
+        String markdownCandidate = cleanMarkdownFromJson(raw);
+        if (markdownCandidate != null && !markdownCandidate.isBlank()) {
+            return markdownCandidate.trim();
+        }
+
+        String likelyMenuCandidate = extractLikelyMenuJsonCandidate(raw);
+        if (!likelyMenuCandidate.isBlank()) {
+            return likelyMenuCandidate.trim();
+        }
+
+        int firstFence = raw.indexOf("```");
+        if (firstFence >= 0) {
+            int fenceContentStart = raw.indexOf('\n', firstFence);
+            if (fenceContentStart >= 0) {
+                int fenceEnd = raw.indexOf("```", fenceContentStart + 1);
+                if (fenceEnd > fenceContentStart) {
+                    String fenced = raw.substring(fenceContentStart + 1, fenceEnd).trim();
+                    if (!fenced.isBlank()) {
+                        return fenced;
+                    }
+                }
+            }
+        }
+
+        if (!raw.startsWith("{") && !raw.startsWith("[")) {
+            int firstBrace = raw.indexOf('{');
+            if (firstBrace >= 0) {
+                int matchingBrace = findMatchingBrace(raw, firstBrace);
+                if (matchingBrace > firstBrace) {
+                    return raw.substring(firstBrace, matchingBrace + 1).trim();
+                }
+            }
+        }
+
+        return raw;
     }
 
     private String buildCanonicalLineEditsEnvelope(
@@ -8156,6 +9023,30 @@ public class ApiSpringController {
         }
     }
 
+    private Map<String, Object> parseCanonicalLineEditsMeta(String rawResponse) {
+        String normalized = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        if (normalized.isBlank()) {
+            return Collections.emptyMap();
+        }
+        if (normalized.startsWith("```json")) normalized = normalized.substring(7).trim();
+        if (normalized.startsWith("```")) normalized = normalized.substring(3).trim();
+        if (normalized.endsWith("```")) normalized = normalized.substring(0, normalized.length() - 3).trim();
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> obj = objectMapper.readValue(normalized, Map.class);
+            Object metaObj = obj.get("meta");
+            if (!(metaObj instanceof Map<?, ?> metaMapRaw) || metaMapRaw.isEmpty()) {
+                return Collections.emptyMap();
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> metaMap = (Map<String, Object>) metaMapRaw;
+            return new LinkedHashMap<>(metaMap);
+        } catch (Exception ex) {
+            return Collections.emptyMap();
+        }
+    }
+
         private List<Map<String, Object>> suggestQuickFixes(
             String appId,
             String baseCode,
@@ -8281,6 +9172,20 @@ public class ApiSpringController {
         }
         if ("dismiss".equals(value) || "dismissed".equals(value) || "reject".equals(value) || "rejected".equals(value)) {
             return "dismissed";
+        }
+        return "";
+    }
+
+    private String normalizeAgenticApprovalFeedbackAction(String raw) {
+        String value = String.valueOf(raw == null ? "" : raw).trim().toLowerCase(Locale.ROOT);
+        if ("approve".equals(value) || "approved".equals(value) || "accept".equals(value) || "accepted".equals(value)) {
+            return "approved";
+        }
+        if ("reject".equals(value) || "rejected".equals(value) || "dismiss".equals(value) || "dismissed".equals(value)) {
+            return "rejected";
+        }
+        if ("resolve".equals(value) || "resolved".equals(value) || "complete".equals(value) || "completed".equals(value)) {
+            return "resolved";
         }
         return "";
     }
@@ -9635,6 +10540,19 @@ public class ApiSpringController {
         }
     }
 
+    private void sendEvent(SseEmitter emitter, Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            sendEvent(emitter, "{}");
+            return;
+        }
+        try {
+            sendEvent(emitter, objectMapper.writeValueAsString(payload));
+        } catch (Exception ex) {
+            logger.debug("Failed to serialize SSE event: {}", ex.getMessage());
+            sendEvent(emitter, "{}");
+        }
+    }
+
     private void sendErrorEvent(SseEmitter emitter, String error) {
         try {
             Map<String, Object> data = Map.of("stage", "error", "message", error);
@@ -9956,6 +10874,14 @@ public class ApiSpringController {
             "reason", String.valueOf(stats.getOrDefault("scopedRagQuery", compactToolDigest(String.valueOf(message == null ? "" : message), 120))),
             "expectedEvidence", "scoped_rag_hits"
         ));
+        List<String> menuSignals = listOfString(stats.get("menuSignals"), 8);
+        if ("menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType)) && !menuSignals.isEmpty()) {
+            tools.add(Map.of(
+                "intent", "menu_structure_probe",
+                "reason", String.join(" | ", menuSignals.subList(0, Math.min(3, menuSignals.size()))),
+                "expectedEvidence", "menu_signals"
+            ));
+        }
         if (bool(stats.get("symbolAwareRetrievalEnabled"), false)) {
             tools.add(Map.of(
                 "intent", "symbol_aware_retrieval",
@@ -14935,6 +15861,14 @@ public class ApiSpringController {
         }
     }
 
+    private Map<String, Object> mapOf(Object... keyValues) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < keyValues.length; i += 2) {
+            m.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
+        }
+        return m;
+    }
+
     private void enrichModelDecisionMetadata(Map<String, Object> payload, String fallbackModel) {
         if (payload == null) return;
         String model = String.valueOf(payload.getOrDefault("model", fallbackModel == null ? "" : fallbackModel)).trim();
@@ -16632,6 +17566,7 @@ public class ApiSpringController {
     }
 
 
+            @SuppressWarnings("unused")
             private LocalAssistantRoutePlan buildLocalAssistantRoutePlan(
                     String message,
                     String currentCode,
@@ -17062,6 +17997,30 @@ public class ApiSpringController {
         return keywords;
     }
 
+    private AiLocalWorkflowAdvisorService.IntentSnapshot toWorkflowIntentSnapshot(LocalIntentClassification intent) {
+        LocalIntentClassification safeIntent = intent == null ? LocalIntentClassification.unknown() : intent;
+        return new AiLocalWorkflowAdvisorService.IntentSnapshot(
+            safeIntent.type(),
+            safeIntent.action(),
+            safeIntent.confidence(),
+            safeIntent.nextStep(),
+            safeIntent.contextKind()
+        );
+    }
+
+    private LocalAssistantRoutePlan toLocalAssistantRoutePlan(AiLocalWorkflowAdvisorService.RoutePlan routePlan) {
+        if (routePlan == null) {
+            return new LocalAssistantRoutePlan("GENERAL_ANALYSIS", 50, "default_analysis", false, true);
+        }
+        return new LocalAssistantRoutePlan(
+            String.valueOf(routePlan.routeName() == null ? "GENERAL_ANALYSIS" : routePlan.routeName()),
+            routePlan.confidence(),
+            String.valueOf(routePlan.reasonCode() == null ? "default_analysis" : routePlan.reasonCode()),
+            routePlan.quickExit(),
+            routePlan.requiresDeepContext()
+        );
+    }
+
     // ─── INPUT INTENT CLASSIFIER ─────────────────────────────────────────────────
 
     private InputIntentClassificationResult classifyUserIntent(
@@ -17322,6 +18281,7 @@ public class ApiSpringController {
         }
     }
 
+    @SuppressWarnings("unused")
     private List<Map<String, Object>> buildToolIntentPlan(
             LocalAssistantRoutePlan routePlan,
             String responseMode,
@@ -18362,13 +19322,18 @@ public class ApiSpringController {
                 pName,
                 pType);
             String retrievalPlannedMessage = appendRetrievalPlannerHint(message, retrievalPlannerQuery);
-            LocalAssistantRoutePlan assistantRoutePlan = buildLocalAssistantRoutePlan(
-                message,
-                currentCode,
-                effectiveContextType,
-                responseMode,
-                attachments,
-                preclassifiedIntent);
+            AiLocalWorkflowAdvisorService.WorkflowAdvice workflowAdvice = aiLocalWorkflowAdvisorService.advise(
+                new AiLocalWorkflowAdvisorService.WorkflowRequest(
+                    message,
+                    currentCode,
+                    effectiveContextType,
+                    responseMode,
+                    attachments,
+                    retrievalPlannerQuery,
+                    toWorkflowIntentSnapshot(preclassifiedIntent)
+                )
+            );
+            LocalAssistantRoutePlan assistantRoutePlan = toLocalAssistantRoutePlan(workflowAdvice.routePlan());
 
             emitAiAssistantChatChunk(appId, Map.of(
                 "stage", "assistant_route_plan",
@@ -18377,6 +19342,8 @@ public class ApiSpringController {
                 "routeReason", assistantRoutePlan.reasonCode(),
                 "quickExit", assistantRoutePlan.quickExit(),
                 "requiresDeepContext", assistantRoutePlan.requiresDeepContext(),
+                "workspaceKind", workflowAdvice.workspaceKind(),
+                "weakMachineSafe", workflowAdvice.weakMachineSafe(),
                 "responseMode", responseMode,
                 "status", "running"));
             if (!retrievalPlannerQuery.isBlank()) {
@@ -18386,17 +19353,15 @@ public class ApiSpringController {
                     "responseMode", responseMode,
                     "status", "running"));
             }
-            List<Map<String, Object>> toolIntentPlan = buildToolIntentPlan(
-                assistantRoutePlan,
-                responseMode,
-                effectiveContextType,
-                retrievalPlannerQuery,
-                message);
+            List<Map<String, Object>> toolIntentPlan = workflowAdvice.toolPlan();
             if (!toolIntentPlan.isEmpty()) {
                 emitAiAssistantChatChunk(appId, Map.of(
                     "stage", "assistant_tool_intent_plan",
                     "toolCount", toolIntentPlan.size(),
                     "tools", toolIntentPlan,
+                    "ingestTargets", workflowAdvice.ingestTargets(),
+                    "executionBlueprint", workflowAdvice.executionBlueprint(),
+                    "attachmentInsights", workflowAdvice.attachmentInsights(),
                     "responseMode", responseMode,
                     "status", "running"));
 
@@ -18497,7 +19462,9 @@ public class ApiSpringController {
                         effectiveTaskType,
                         responseMode,
                         language,
-                        requestId);
+                        requestId,
+                        pName,
+                        pType);
                     if (orchestrationResult.enabled && orchestrationResult.earlyFinishResponse != null
                         && !orchestrationResult.earlyFinishResponse.isBlank()) {
                         logger.info("AI_EARLY_FINISH appId={} requestId={} operation={} routeName={} reasonCode={} — skipping heavy context build",
@@ -18923,7 +19890,13 @@ public class ApiSpringController {
                 List<String> orchestrationPlanSteps = orchestrationResult.planSteps == null
                     ? List.of()
                     : orchestrationResult.planSteps;
-                emitAgenticStepLifecycleToChat(appId, responseMode, orchestrationPlanSteps, 6);
+                emitAgenticStepLifecycleToChat(
+                    appId,
+                    responseMode,
+                    orchestrationPlanSteps,
+                    orchestrationStats.get("planStructuredSteps"),
+                    orchestrationStats.get("workflowExecutionBlueprint"),
+                    6);
 
                 emitAiAssistantChatChunk(appId, Map.of(
                     "stage", "scope_reasoning",
@@ -18937,6 +19910,31 @@ public class ApiSpringController {
                     "scopeMask", parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0),
                     "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")),
                     "scopeTags", orchestrationStats.getOrDefault("scannerScopeTags", List.of())));
+
+                    emitAiAssistantChatChunk(appId, Map.ofEntries(
+                        Map.entry("stage", "tool_search"),
+                        Map.entry("message", uiTextByLang(
+                            uiLang,
+                            "AI local đang dò đúng nguồn cần cập nhật từ Lucene/vector context",
+                            "Local AI is exploring the right sources to update from Lucene/vector context",
+                            "本地 AI 正在从 Lucene/向量上下文中探索正确的更新来源")),
+                        Map.entry("responseMode", responseMode),
+                        Map.entry("status", "completed"),
+                        Map.entry("scopeMask", parseIntSafe(orchestrationStats.get("scopedRagScopeMask"), parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0))),
+                        Map.entry("scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none"))),
+                        Map.entry("retrievalTopK", parseIntSafe(orchestrationStats.get("scopedRagTopK"), 0)),
+                        Map.entry("retrievalHitCount", parseIntSafe(orchestrationStats.get("scopedRagHitCount"), 0)),
+                        Map.entry("retrievalSourceCount", parseIntSafe(orchestrationStats.get("scopedRagSourceCount"), 0)),
+                        Map.entry("retrievalMaxChars", parseIntSafe(orchestrationStats.get("scopedRagMaxChars"), 0)),
+                        Map.entry("retrievalQuery", String.valueOf(orchestrationStats.getOrDefault("scopedRagQuery", ""))),
+                        Map.entry("retrievalEngineLabel", String.valueOf(orchestrationStats.getOrDefault("retrievalEngineLabel", ""))),
+                        Map.entry("menuSignals", orchestrationStats.getOrDefault("menuSignals", List.of())),
+                        Map.entry("symbolQueries", orchestrationStats.getOrDefault("symbolAwareRetrievalQueries", List.of())),
+                        Map.entry("targetedQueries", orchestrationStats.getOrDefault("scopedRagTargetedQueries", List.of())),
+                        Map.entry("focusTargets", orchestrationStats.getOrDefault("retrievalFocusTargets", List.of())),
+                        Map.entry("virtualContextPreview", orchestrationStats.getOrDefault("virtualContextPreview", List.of())),
+                        Map.entry("retrievalHits", orchestrationStats.getOrDefault("scopedRagTopHits", List.of())),
+                        Map.entry("adaptiveReasons", orchestrationStats.getOrDefault("scopedRagAdaptiveReasons", List.of()))));
 
                 int retrievalChars = parseIntSafe(orchestrationStats.get("scopedRagChars"), 0);
                 int retrievalMinChars = Math.max(0, parseIntSafe(orchestrationStats.get("scopedRagQualityMinChars"), 0));
@@ -20041,15 +21039,19 @@ public class ApiSpringController {
                 ));
             }
             
-            String completionResponseText = fullResponse.toString();
-            if ("analyze".equalsIgnoreCase(String.valueOf(responseMode))) {
-                completionResponseText = sanitizePromptEchoLeakage(completionResponseText);
+            String completionResponseText = sanitizePromptEchoLeakage(fullResponse.toString());
+            if ("analyze".equalsIgnoreCase(String.valueOf(responseMode))
+                || "edit".equalsIgnoreCase(String.valueOf(responseMode))) {
                 completionResponseText = stripAnalyzeLeakedDynamicContext(completionResponseText);
                 fullResponse.setLength(0);
                 fullResponse.append(completionResponseText);
             }
             if (isMenuJsonContext(effectiveContextType)) {
-                String sanitizedMenuResponse = normalizeMenuDraftJson(completionResponseText);
+                String sanitizedMenuResponse = sanitizeFinalMenuCompletionResponse(
+                    completionResponseText,
+                    responseMode,
+                    uiLang
+                );
                 if (!sanitizedMenuResponse.isBlank()) {
                     completionResponseText = sanitizedMenuResponse;
                     fullResponse.setLength(0);
@@ -24360,7 +25362,74 @@ public class ApiSpringController {
             || text.contains("github_merge_parse_empty")
             || text.contains("khong phai json menu")
             || text.contains("không phải json menu")
-            || text.contains("models exhausted");
+            || text.contains("models exhausted")
+            || text.contains("dyn_ctx_")
+            || text.contains("follow-up questions")
+            || text.contains("follow up questions")
+            || text.contains("{ or [.json")
+            || text.contains("could not extract json from content")
+            || text.contains("no matching brace found")
+            || hasSuspiciousRepeatedGarbageRun(text);
+    }
+
+    private String sanitizeFinalMenuCompletionResponse(String rawResponse, String responseMode, String uiLang) {
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse);
+        if (raw.isBlank()) {
+            return raw;
+        }
+
+        String extractedDraft = extractMenuDraftForCompletion(raw, "menu_json");
+        if (!extractedDraft.isBlank()) {
+            return extractedDraft;
+        }
+
+        String sanitized = stripMenuDraftTrailingNoise(
+            stripAnalyzeLeakedDynamicContext(
+                sanitizePromptEchoLeakage(raw)
+            )
+        ).trim();
+        if (!sanitized.isBlank()) {
+            String normalizedSanitized = normalizeMenuDraftJson(sanitized);
+            if (!normalizedSanitized.isBlank()) {
+                return normalizedSanitized;
+            }
+        }
+
+        boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        if (editMode && (containsInvalidFinalMenuSignals(raw) || containsInvalidFinalMenuSignals(sanitized) || looksLikeMalformedMenuJson(raw))) {
+            return buildMenuGroundingFailureResponse(uiLang, null, null);
+        }
+
+        return sanitized.isBlank() ? raw.trim() : sanitized;
+    }
+
+    private boolean looksLikeMalformedMenuJson(String raw) {
+        String text = String.valueOf(raw == null ? "" : raw).trim();
+        if (text.isBlank()) {
+            return false;
+        }
+        String lowered = text.toLowerCase(Locale.ROOT);
+        boolean menuLike = lowered.contains("\"menu\"")
+            || lowered.contains("dyn_ctx_currentmenu")
+            || lowered.contains("type_form")
+            || lowered.contains("table_name")
+            || lowered.contains("trigger");
+        if (!menuLike) {
+            return false;
+        }
+        long openBraces = text.chars().filter(ch -> ch == '{').count();
+        long closeBraces = text.chars().filter(ch -> ch == '}').count();
+        long openBrackets = text.chars().filter(ch -> ch == '[').count();
+        long closeBrackets = text.chars().filter(ch -> ch == ']').count();
+        return openBraces != closeBraces || openBrackets != closeBrackets;
+    }
+
+    private boolean hasSuspiciousRepeatedGarbageRun(String text) {
+        String safe = String.valueOf(text == null ? "" : text);
+        if (safe.isBlank()) {
+            return false;
+        }
+        return Pattern.compile("([a-z])\\1{63,}", Pattern.CASE_INSENSITIVE).matcher(safe).find();
     }
 
     private boolean isTransientUpstreamFailureFromRawText(String raw) {
@@ -24525,13 +25594,22 @@ public class ApiSpringController {
             .trim();
 
         String loweredAll = safe.toLowerCase(Locale.ROOT);
+    boolean hasDynamicContextLeak = loweredAll.contains("dyn_ctx_");
         int markerCount = 0;
         if (safe.contains("CODE_STRING_FIRST_REQUEST_CONTRACT")) markerCount++;
         if (safe.contains("obj['current_code']") || safe.contains("obj[\"current_code\"]")) markerCount++;
         if (safe.contains("QUY TẮC NGÔN NGỮ ĐẦU RA") || loweredAll.contains("output language rule")) markerCount++;
         if (loweredAll.contains("mandatory: respond only in chinese")) markerCount++;
         if (loweredAll.contains("## chú ý") || loweredAll.contains("## chu y")) markerCount++;
+        if (loweredAll.contains("## yêu cầu") || loweredAll.contains("## yeu cau")) markerCount++;
+        if (loweredAll.contains("## customer business memory") || loweredAll.contains("lucene vector rag")) markerCount += 2;
+        if (loweredAll.contains("## backend session context")) markerCount += 2;
+        if (loweredAll.contains("# csm ai menu master prompt") || loweredAll.contains("# csm ai code master prompt")) markerCount += 2;
+        if (loweredAll.contains("## auto_loaded_menu_system_knowledge")) markerCount += 2;
         if (loweredAll.contains("code_string_first_request_contract") && loweredAll.contains("plaintext")) markerCount++;
+        if (hasDynamicContextLeak) markerCount += 2;
+        if (loweredAll.contains("[local_orchestration_context]")) markerCount += 2;
+        if (loweredAll.contains("source=primary_flow") || loweredAll.contains("source=multimodal")) markerCount += 2;
 
         // Only sanitize when we are confident this is internal prompt echo.
         boolean likelyPromptEcho = markerCount >= 2;
@@ -24543,13 +25621,82 @@ public class ApiSpringController {
         String[] lines = safe.split("\\n");
         StringBuilder out = new StringBuilder(safe.length());
         boolean skipBlock = false;
+        boolean skipRagBlock = false;
+        boolean skipSessionBlock = false;
+        boolean skipPromptDocBlock = false;
+        int leakTailBudget = 0;
         int removedLines = 0;
         for (String rawLine : lines) {
             String line = String.valueOf(rawLine == null ? "" : rawLine).trim();
             String lowered = line.toLowerCase(Locale.ROOT);
 
+            if (skipRagBlock) {
+                if (lowered.startsWith("## ")) {
+                    skipRagBlock = false;
+                } else {
+                    removedLines++;
+                    continue;
+                }
+            }
+
+            if (skipSessionBlock) {
+                if (line.isBlank() || lowered.startsWith("## ")) {
+                    skipSessionBlock = false;
+                } else {
+                    removedLines++;
+                    continue;
+                }
+            }
+
+            if (skipPromptDocBlock) {
+                if (lowered.startsWith("## ") || lowered.startsWith("# ")) {
+                    skipPromptDocBlock = false;
+                } else {
+                    removedLines++;
+                    continue;
+                }
+            }
+
+            if (leakTailBudget > 0) {
+                boolean boundaryLine = line.isBlank()
+                    || lowered.startsWith("## ")
+                    || lowered.startsWith("### ")
+                    || lowered.startsWith("summary")
+                    || lowered.startsWith("changes")
+                    || lowered.startsWith("message")
+                    || lowered.startsWith("step ");
+                if (!boundaryLine) {
+                    leakTailBudget--;
+                    removedLines++;
+                    continue;
+                }
+                leakTailBudget = 0;
+            }
+
             if (line.startsWith("## CODE_STRING_FIRST_REQUEST_CONTRACT")) {
                 skipBlock = true;
+                removedLines++;
+                continue;
+            }
+            if (lowered.startsWith("## customer business memory") || lowered.contains("lucene vector rag")) {
+                skipRagBlock = true;
+                removedLines++;
+                continue;
+            }
+            if (lowered.startsWith("## backend session context")) {
+                skipSessionBlock = true;
+                removedLines++;
+                continue;
+            }
+            if (lowered.startsWith("# csm ai menu master prompt")
+                || lowered.startsWith("# csm ai code master prompt")
+                || lowered.startsWith("## auto_loaded_menu_system_knowledge")) {
+                skipPromptDocBlock = true;
+                removedLines++;
+                continue;
+            }
+            if (lowered.startsWith("## quy tắc ngôn ngữ đầu ra")
+                || lowered.startsWith("## quy tac ngon ngu dau ra")) {
                 removedLines++;
                 continue;
             }
@@ -24564,15 +25711,27 @@ public class ApiSpringController {
 
             boolean drop = lowered.startsWith("## chú ý")
                 || lowered.startsWith("## chu y")
+                || lowered.startsWith("## yêu cầu")
+                || lowered.startsWith("## yeu cau")
                 || lowered.startsWith("quy tắc ngôn ngữ đầu ra")
                 || lowered.startsWith("quy tac ngon ngu dau ra")
+                || lowered.startsWith("## quy tắc ngôn ngữ đầu ra")
+                || lowered.startsWith("## quy tac ngon ngu dau ra")
                 || lowered.contains("mandatory: respond only in chinese")
                 || lowered.contains("matching the user's input language")
                 || lowered.contains("obj['current_code']")
                 || lowered.contains("obj[\"current_code\"]")
+                || lowered.contains("dyn_ctx_")
+                || lowered.startsWith("### memory ")
+                || lowered.startsWith("source=primary_flow")
+                || lowered.startsWith("source=multimodal")
+                || lowered.startsWith("[local_orchestration_context]")
                 || lowered.startsWith("plaintext");
 
             if (drop) {
+                if (lowered.contains("dyn_ctx_") || lowered.startsWith("source=") || lowered.startsWith("[local_orchestration_context]")) {
+                    leakTailBudget = Math.max(leakTailBudget, 24);
+                }
                 removedLines++;
                 continue;
             }
@@ -24582,17 +25741,17 @@ public class ApiSpringController {
 
         String sanitized = out.toString().replaceAll("\\n{3,}", "\\n\\n").trim();
         if (sanitized.isBlank()) {
-            return safe;
+            return hasDynamicContextLeak ? "" : safe;
         }
 
         int originalLines = lines.length;
         if (removedLines <= 0 || removedLines >= Math.max(4, originalLines - 1)) {
-            return safe;
+            return hasDynamicContextLeak ? sanitized : safe;
         }
 
         // If cleanup erased too much text, prefer original answer to avoid killing model reasoning.
         if (sanitized.length() < Math.max(80, safe.length() / 3)) {
-            return safe;
+            return hasDynamicContextLeak ? sanitized : safe;
         }
 
         return sanitized;
@@ -24653,16 +25812,27 @@ public class ApiSpringController {
             return "";
         }
 
-        String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
-        if (raw.isBlank()) {
-            return "";
-        }
+        String originalRaw = String.valueOf(rawResponse == null ? "" : rawResponse);
+        String raw = originalRaw;
+        raw = sanitizePromptEchoLeakage(raw);
+        raw = stripAnalyzeLeakedDynamicContext(raw);
+        raw = stripMenuDraftTrailingNoise(stripMenuPromptEcho(raw)).trim();
 
         List<String> candidates = new ArrayList<>();
-        candidates.add(raw);
+        String likelyOriginalCandidate = extractLikelyMenuJsonCandidate(originalRaw);
+        if (!likelyOriginalCandidate.isBlank()) {
+            candidates.add(stripMenuDraftTrailingNoise(likelyOriginalCandidate).trim());
+        }
+        if (!raw.isBlank()) {
+            candidates.add(raw);
+        }
         String cleaned = cleanMarkdownFromJson(raw);
         if (cleaned != null && !cleaned.isBlank() && !cleaned.equals(raw)) {
-            candidates.add(cleaned.trim());
+            candidates.add(stripMenuDraftTrailingNoise(cleaned).trim());
+        }
+        String likelyMenuCandidate = extractLikelyMenuJsonCandidate(raw);
+        if (!likelyMenuCandidate.isBlank()) {
+            candidates.add(stripMenuDraftTrailingNoise(likelyMenuCandidate).trim());
         }
 
         for (String candidate : candidates) {
@@ -24675,15 +25845,108 @@ public class ApiSpringController {
         return "";
     }
 
-    private String mergeMenuCompletionWithBase(String baseDraftRaw, String aiDraftRaw, String contextType) {
+    private String stripMenuDraftTrailingNoise(String rawResponse) {
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        if (raw.isBlank()) {
+            return "";
+        }
+
+        String[] trailingMarkers = new String[] {
+            "FOLLOW-UP QUESTIONS",
+            "Follow-up questions",
+            "FOLLOW UP QUESTIONS",
+            "Câu hỏi tiếp theo",
+            "Next questions",
+            "Gợi ý tiếp theo"
+        };
+        int cutIndex = -1;
+        for (String marker : trailingMarkers) {
+            int idx = raw.indexOf(marker);
+            if (idx >= 0 && (cutIndex < 0 || idx < cutIndex)) {
+                cutIndex = idx;
+            }
+        }
+        if (cutIndex < 0) {
+            return raw;
+        }
+        return raw.substring(0, cutIndex).trim();
+    }
+
+    private String extractLikelyMenuJsonCandidate(String rawResponse) {
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        if (raw.isBlank()) {
+            return "";
+        }
+
+        List<String> candidates = new ArrayList<>();
+        int searchFrom = 0;
+        while (searchFrom < raw.length()) {
+            int menuKeyIdx = raw.indexOf("\"menu\"", searchFrom);
+            if (menuKeyIdx < 0) {
+                break;
+            }
+
+            int openBrace = raw.lastIndexOf('{', menuKeyIdx);
+            if (openBrace >= 0) {
+                int closeBrace = findMatchingBrace(raw, openBrace);
+                if (closeBrace > openBrace) {
+                    String candidate = raw.substring(openBrace, closeBrace + 1).trim();
+                    if (!candidate.isBlank()) {
+                        candidates.add(candidate);
+                    }
+                }
+            }
+
+            searchFrom = menuKeyIdx + 6;
+        }
+
+        candidates.sort((left, right) -> Integer.compare(right.length(), left.length()));
+        for (String candidate : candidates) {
+            String normalized = normalizeMenuDraftJson(candidate);
+            if (!normalized.isBlank()) {
+                return candidate;
+            }
+        }
+        return "";
+    }
+
+    private String stripMenuPromptEcho(String rawResponse) {
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse);
+        if (raw.isBlank()) {
+            return "";
+        }
+        String[] echoMarkers = new String[] {
+            "# CSM AI Menu Master Prompt v2",
+            "# CSM Multi-tenant AI Menu Master Prompt",
+            "## AUTO_LOADED_MENU_SYSTEM_KNOWLEDGE",
+            "## B) INPUT CONTRACT (FROM CHAT OR API)",
+            "## C) CORE MANDATE"
+        };
+        int earliest = -1;
+        for (String marker : echoMarkers) {
+            int idx = raw.indexOf(marker);
+            if (idx >= 0 && (earliest < 0 || idx < earliest)) {
+                earliest = idx;
+            }
+        }
+        if (earliest < 0) {
+            return raw;
+        }
+        return raw.substring(0, earliest).trim();
+    }
+
+    private Map<String, Object> buildMenuCompletionMergePreview(String baseDraftRaw, String aiDraftRaw, String contextType) {
+        Map<String, Object> out = new LinkedHashMap<>();
         String normalizedAiDraft = extractMenuDraftForCompletion(aiDraftRaw, contextType);
         if (normalizedAiDraft.isBlank()) {
-            return aiDraftRaw == null ? "" : aiDraftRaw;
+            out.put("mergedResponse", aiDraftRaw == null ? "" : aiDraftRaw);
+            return out;
         }
+        out.put("mergedResponse", normalizedAiDraft);
 
         String normalizedBaseDraft = extractMenuDraftForCompletion(baseDraftRaw, contextType);
         if (normalizedBaseDraft.isBlank()) {
-            return normalizedAiDraft;
+            return out;
         }
 
         try {
@@ -24698,16 +25961,26 @@ public class ApiSpringController {
                     mergeOut.edited,
                     mergeOut.deleted,
                     mergeOut.patchOps == null ? 0 : mergeOut.patchOps.size());
+                out.put("patchOps", mergeOut.patchOps == null ? List.of() : mergeOut.patchOps);
+                out.put("added", mergeOut.added);
+                out.put("edited", mergeOut.edited);
+                out.put("deleted", mergeOut.deleted);
                 if (!sanitizedMerged.isBlank()) {
-                    return sanitizedMerged;
+                    out.put("mergedResponse", sanitizedMerged);
+                    return out;
                 }
-                return merged;
+                out.put("mergedResponse", merged);
+                return out;
             }
         } catch (Exception ex) {
             logger.warn("ai-code-stream menu completion merge failed, fallback to normalized AI draft: {}", ex.getMessage());
         }
 
-        return normalizedAiDraft;
+        return out;
+    }
+
+    private String mergeMenuCompletionWithBase(String baseDraftRaw, String aiDraftRaw, String contextType) {
+        return str(buildMenuCompletionMergePreview(baseDraftRaw, aiDraftRaw, contextType).get("mergedResponse"), aiDraftRaw == null ? "" : aiDraftRaw);
     }
 
     private String normalizeMenuDraftJson(String text) {
@@ -25199,8 +26472,21 @@ public class ApiSpringController {
             return "{\"success\":false,\"errorCode\":\"LOCAL_PROVIDER_UNAVAILABLE\",\"message\":\"Local provider unavailable\"}";
         }
         String safeRequestId = String.valueOf(requestId == null ? "" : requestId).trim();
+        String preparedPrompt = prependMenuMasterPromptIfNeeded(prompt, contextType);
+        if (!preparedPrompt.isBlank()) {
+            String clampedPrompt = clampPromptForLocalProvider(preparedPrompt, contextType, isMenuJsonContext(contextType) ? "edit" : "analyze");
+            if (clampedPrompt.length() < preparedPrompt.length()) {
+                logger.info(
+                    "Local provider prompt re-clamped after master prompt prepend requestId={} contextType={} beforeChars={} afterChars={}",
+                    safeRequestId,
+                    contextType,
+                    preparedPrompt.length(),
+                    clampedPrompt.length());
+            }
+            preparedPrompt = clampedPrompt;
+        }
         return llamaCppNativeService.generateContentWithTaskTracking(
-            prependMenuMasterPromptIfNeeded(prompt, contextType),
+            preparedPrompt,
             safeRequestId.isBlank() ? null : safeRequestId);
     }
 
@@ -25209,8 +26495,7 @@ public class ApiSpringController {
         if (source.isBlank() || !isMenuJsonContext(contextType) || aiAssistantGatewayService == null) {
             return source;
         }
-        if (source.contains("# CSM Multi-tenant AI Menu Master Prompt")
-                || source.contains("## 1) ROLE AND MANDATE")) {
+        if (containsMenuMasterPromptSignature(source)) {
             return source;
         }
         try {
@@ -25241,6 +26526,18 @@ public class ApiSpringController {
             logger.warn("Failed to prepend menu master prompt for local provider: {}", ex.getMessage());
             return source;
         }
+    }
+
+    private boolean containsMenuMasterPromptSignature(String source) {
+        String text = String.valueOf(source == null ? "" : source).trim();
+        if (text.isBlank()) {
+            return false;
+        }
+        return text.contains("# CSM AI Menu Master Prompt v2")
+            || text.contains("# CSM Multi-tenant AI Menu Master Prompt")
+            || text.contains("## AUTO_LOADED_MENU_SYSTEM_KNOWLEDGE")
+            || (text.contains("## B) INPUT CONTRACT (FROM CHAT OR API)")
+                && text.contains("## C) CORE MANDATE"));
     }
 
     private String extractPromptAppIdRelaxed(String prompt) {
@@ -28921,6 +30218,10 @@ public class ApiSpringController {
         metrics.put("user", authCtx.principalId);
         metrics.put("is_dev", authCtx.dev);
         metrics.put("roles", authCtx.roles == null ? List.of() : authCtx.roles);
+        String safeAppId = String.valueOf(appId == null ? "" : appId).trim();
+        if (!safeAppId.isBlank()) {
+            metrics.put("embeddingRuntime", aiBusinessMemoryVectorService.getStats(safeAppId));
+        }
 
         return ResponseEntity.ok(metrics);
     }
@@ -29054,6 +30355,8 @@ public class ApiSpringController {
         String contextType = String.valueOf(request.getOrDefault("contextType", "code")).trim();
         String taskType = String.valueOf(request.getOrDefault("taskType", "code_assistant")).trim();
         String responseMode = normalizeAiAssistantResponseMode(request.get("responseMode"), message, contextType, taskType);
+        String pName = String.valueOf(request.getOrDefault("pName", "")).trim();
+        Integer pType = parseNullableInteger(request.get("pType"));
         List<Map<String, Object>> attachments = normalizeAiAssistantAttachments(request.get("attachments"));
 
         AiLocalOrchestrationService.OrchestrationResult result = aiLocalOrchestrationService.orchestrateResilient(
@@ -29065,7 +30368,9 @@ public class ApiSpringController {
             taskType,
             responseMode,
             language,
-            null);
+            null,
+            pName,
+            pType);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("success", true);
@@ -29249,13 +30554,10 @@ public class ApiSpringController {
                 .replaceAll("[^a-z0-9_:\\-]", "_")
                 .replaceAll("_+", "_");
 
-        AiConversationContextService.ConversationSession session = aiConversationContextService.getSession(
-            authCtx.principalId,
-            normalizedAppId,
-            normalizedContextType);
-        String resolvedScope = "user";
+        AiConversationContextService.ConversationSession session = null;
+        String resolvedScope = !codeTargetKey.isBlank() ? "code_target_shared" : "user";
 
-        if ((session == null || session.history.isEmpty()) && !codeTargetKey.isBlank()) {
+        if (!codeTargetKey.isBlank()) {
             session = aiConversationContextService.getSharedCodeTargetSession(
                 normalizedAppId,
                 normalizedContextType,
@@ -29265,20 +30567,16 @@ public class ApiSpringController {
         }
 
         if (session == null || session.history.isEmpty()) {
-            session = aiConversationContextService.getSharedAppSession(normalizedAppId, normalizedContextType);
-            resolvedScope = session != null && !session.history.isEmpty() ? "app_shared" : resolvedScope;
+            session = aiConversationContextService.getSession(
+                authCtx.principalId,
+                normalizedAppId,
+                normalizedContextType);
+            resolvedScope = session != null && !session.history.isEmpty() ? "user" : resolvedScope;
         }
 
         if (session == null || session.history.isEmpty()) {
-            session = aiConversationContextService.loadSessionFromPersistence(
-                authCtx.principalId,
-                normalizedAppId,
-                normalizedContextType,
-                "user",
-                "",
-                normalizedPName,
-                pType);
-            resolvedScope = session != null && !session.history.isEmpty() ? "user" : resolvedScope;
+            session = aiConversationContextService.getSharedAppSession(normalizedAppId, normalizedContextType);
+            resolvedScope = session != null && !session.history.isEmpty() ? "app_shared" : resolvedScope;
         }
 
         if ((session == null || session.history.isEmpty()) && !codeTargetKey.isBlank()) {
@@ -29291,6 +30589,18 @@ public class ApiSpringController {
                 normalizedPName,
                 pType);
             resolvedScope = session != null && !session.history.isEmpty() ? "code_target_shared" : resolvedScope;
+        }
+
+        if (session == null || session.history.isEmpty()) {
+            session = aiConversationContextService.loadSessionFromPersistence(
+                authCtx.principalId,
+                normalizedAppId,
+                normalizedContextType,
+                "user",
+                "",
+                normalizedPName,
+                pType);
+            resolvedScope = session != null && !session.history.isEmpty() ? "user" : resolvedScope;
         }
 
         if (session == null || session.history.isEmpty()) {

@@ -3,7 +3,6 @@ package net.phanmemmottrieu.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -41,8 +40,6 @@ public class AiExecutionPlannerService {
 
     @Value("${ai.execution.plan.step-merge-threshold:0.75}")
     private double stepMergeThreshold;
-
-    private final ObjectMapper objectMapper = new ObjectMapper();
 
     // ── Data Model ──────────────────────────────────────────────────────
 
@@ -132,7 +129,7 @@ public class AiExecutionPlannerService {
                 message.substring(0, Math.min(80, message.length())), workspaceContext);
 
         // Parse initial steps from message + context
-        List<ExecutionStep> initialSteps = parseStepsFromContext(message, workspaceContext, currentContent);
+        List<ExecutionStep> initialSteps = parseStepsFromContext(message, workspaceContext, currentContent, retrievedContext);
 
         // Assign scope boundaries
         assignScopeBoundaries(initialSteps, currentContent, workspaceContext);
@@ -182,33 +179,183 @@ public class AiExecutionPlannerService {
     private List<ExecutionStep> parseStepsFromContext(
         String message,
         String workspaceContext,
-        String currentContent
+        String currentContent,
+        String retrievedContext
     ) {
-        List<ExecutionStep> steps = new ArrayList<>();
+        List<ExecutionStep> steps = extractExplicitSteps(message, workspaceContext);
+        if (!steps.isEmpty()) {
+            return steps;
+        }
+        return synthesizeStepsFromIntent(message, workspaceContext, currentContent, retrievedContext);
+    }
 
-        // Pattern: "Step 1: ...", "Step N: ..."
+    private List<ExecutionStep> extractExplicitSteps(String message, String workspaceContext) {
+        List<ExecutionStep> steps = new ArrayList<>();
+        String safeMessage = String.valueOf(message == null ? "" : message);
         Pattern stepPattern = Pattern.compile("(?i)(?:step\\s*[0-9]+|[0-9]+\\.)\\s*([^\\n]+)");
-        Matcher matcher = stepPattern.matcher(message);
+        Matcher matcher = stepPattern.matcher(safeMessage);
 
         int stepId = 1;
         while (matcher.find() && steps.size() < maxSteps) {
             String description = matcher.group(1).trim();
-
-            // Classify step action
+            if (description.isEmpty()) {
+                continue;
+            }
             String action = inferStepAction(description);
             String scope = inferStepScope(description, workspaceContext);
-
-            ExecutionStep step = new ExecutionStep(stepId++, action, scope, description);
-            steps.add(step);
+            steps.add(new ExecutionStep(stepId++, action, scope, description));
         }
-
-        // If no structured steps found, create default plan
-        if (steps.isEmpty()) {
-            ExecutionStep defaultStep = new ExecutionStep(1, "process", workspaceContext, message);
-            steps.add(defaultStep);
-        }
-
         return steps;
+    }
+
+    private List<ExecutionStep> synthesizeStepsFromIntent(
+        String message,
+        String workspaceContext,
+        String currentContent,
+        String retrievedContext
+    ) {
+        String safeMessage = String.valueOf(message == null ? "" : message).trim();
+        String safeWorkspace = String.valueOf(workspaceContext == null ? "code" : workspaceContext).trim().toLowerCase(Locale.ROOT);
+        String safeCurrentContent = String.valueOf(currentContent == null ? "" : currentContent);
+        String safeRetrievedContext = String.valueOf(retrievedContext == null ? "" : retrievedContext).trim();
+        boolean analyzeOnly = isAnalyzeIntent(safeMessage);
+        boolean hasRetrievedContext = !safeRetrievedContext.isEmpty();
+        String primaryTarget = inferPrimaryTarget(safeMessage, safeRetrievedContext, safeWorkspace, safeCurrentContent);
+
+        List<ExecutionStep> steps = new ArrayList<>();
+        int stepId = 1;
+        if ("menu".equals(safeWorkspace)) {
+            steps.add(new ExecutionStep(
+                stepId++,
+                analyzeOnly ? "analyze" : "inspect",
+                "menu_tree",
+                "Anchor on current menu tree and preserve parentId hierarchy before changing anything"
+            ));
+            if (hasRetrievedContext) {
+                steps.add(new ExecutionStep(
+                    stepId++,
+                    "search",
+                    "menu_context",
+                    "Use scoped Lucene evidence to narrow the impacted menu area for " + primaryTarget
+                ));
+            }
+            steps.add(new ExecutionStep(
+                stepId++,
+                analyzeOnly ? "analyze" : inferStepAction(safeMessage),
+                "menu_item",
+                (analyzeOnly
+                    ? "Analyze the target menu nodes, tables, and triggers related to "
+                    : "Prepare a non-destructive menu patch for ") + primaryTarget
+            ));
+            steps.add(new ExecutionStep(
+                stepId++,
+                "analyze",
+                "menu_schema",
+                "Validate menu contract: icon normalization, table schema, trigger keys, and untouched sibling nodes"
+            ));
+        } else {
+            steps.add(new ExecutionStep(
+                stepId++,
+                analyzeOnly ? "analyze" : "inspect",
+                "code",
+                "Anchor on currentCode, nearby symbols, and the main execution surface for " + primaryTarget
+            ));
+            if (hasRetrievedContext) {
+                steps.add(new ExecutionStep(
+                    stepId++,
+                    "search",
+                    "context",
+                    "Use scoped Lucene evidence to collect related implementations, business rules, and reuse candidates"
+                ));
+            }
+            steps.add(new ExecutionStep(
+                stepId++,
+                analyzeOnly ? "analyze" : inferStepAction(safeMessage),
+                inferStepScope(primaryTarget, "code"),
+                (analyzeOnly
+                    ? "Analyze the control flow, side effects, and state changes around "
+                    : "Apply the required code change to ") + primaryTarget
+            ));
+            steps.add(new ExecutionStep(
+                stepId++,
+                analyzeOnly ? "analyze" : "refactor",
+                "code",
+                analyzeOnly
+                    ? "Summarize evidence-backed findings step by step for the editor timeline"
+                    : "Verify patch safety, minimize unrelated diffs, and prepare incremental edits for CodeMirror"
+            ));
+        }
+
+        if (steps.size() < maxSteps) {
+            steps.add(new ExecutionStep(
+                stepId,
+                "analyze",
+                safeWorkspace,
+                analyzeOnly
+                    ? "Return the final evidence-backed conclusion without reopening broader scope"
+                    : "Return incremental result batches and stop when all planned steps are complete"
+            ));
+        }
+        return steps.stream().limit(maxSteps).collect(Collectors.toCollection(ArrayList::new));
+    }
+
+    private boolean isAnalyzeIntent(String message) {
+        String safe = String.valueOf(message == null ? "" : message).toLowerCase(Locale.ROOT);
+        return safe.contains("phân tích")
+            || safe.contains("phan tich")
+            || safe.contains("analyze")
+            || safe.contains("explain")
+            || safe.contains("review")
+            || safe.contains("kiểm tra")
+            || safe.contains("kiem tra");
+    }
+
+    private String inferPrimaryTarget(
+        String message,
+        String retrievedContext,
+        String workspaceContext,
+        String currentContent
+    ) {
+        String safeMessage = String.valueOf(message == null ? "" : message).trim();
+        String safeRetrievedContext = String.valueOf(retrievedContext == null ? "" : retrievedContext);
+        String safeCurrentContent = String.valueOf(currentContent == null ? "" : currentContent);
+        String safeWorkspace = String.valueOf(workspaceContext == null ? "code" : workspaceContext).trim().toLowerCase(Locale.ROOT);
+
+        Pattern quotedTarget = Pattern.compile("['\"]([^'\"]{3,80})['\"]");
+        Matcher quotedMatcher = quotedTarget.matcher(safeMessage);
+        if (quotedMatcher.find()) {
+            return quotedMatcher.group(1).trim();
+        }
+
+        Pattern symbolPattern = "menu".equals(safeWorkspace)
+            ? Pattern.compile("(?i)\\b(menu|table|trigger|report|icon|node|parentId|children|path|label)\\b")
+            : Pattern.compile("(?i)\\b(class|method|function|api|service|controller|hook|component|query|state|effect)\\b");
+        Matcher symbolMatcher = symbolPattern.matcher(safeMessage + "\n" + safeRetrievedContext);
+        if (symbolMatcher.find()) {
+            return symbolMatcher.group(1).trim();
+        }
+
+        Pattern identifierPattern = "menu".equals(safeWorkspace)
+            ? Pattern.compile("(?i)\\b[a-z_][a-z0-9_]{2,}\\b")
+            : Pattern.compile("\\b[A-Za-z_][A-Za-z0-9_]{2,}\\b");
+        Matcher identifierMatcher = identifierPattern.matcher(safeMessage);
+        while (identifierMatcher.find()) {
+            String candidate = identifierMatcher.group().trim();
+            String lower = candidate.toLowerCase(Locale.ROOT);
+            if (Set.of("them", "sua", "xoa", "fix", "add", "edit", "delete", "menu", "code", "json", "step").contains(lower)) {
+                continue;
+            }
+            return candidate;
+        }
+
+        if (!safeCurrentContent.isEmpty()) {
+            Matcher contentMatcher = identifierPattern.matcher(safeCurrentContent);
+            if (contentMatcher.find()) {
+                return contentMatcher.group().trim();
+            }
+        }
+
+        return "menu".equals(safeWorkspace) ? "current menu scope" : "current code scope";
     }
 
     /**

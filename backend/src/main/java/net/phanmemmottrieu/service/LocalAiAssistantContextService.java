@@ -49,12 +49,19 @@ public class LocalAiAssistantContextService {
     private static final Pattern TOKEN_PATTERN = Pattern.compile("[\\p{L}\\p{N}_$\\-]{2,}");
     private static final Pattern JSON_KEY_PATTERN = Pattern.compile("\"([^\"]+)\"\\s*:");
     private static final Pattern IMPORT_PATTERN = Pattern.compile("(?m)^\\s*import\\s+");
+    private static final Pattern IMPORT_TARGET_PATTERN = Pattern.compile(
+        "(?m)^\\s*import\\s+(?:[^;\\n]*?\\s+from\\s+)?[\"']([^\"']+)[\"']|^\\s*import\\s+([A-Za-z0-9_.$]+)\\s*;"
+    );
     private static final Pattern FUNCTION_PATTERN = Pattern.compile(
         "(?m)(?:function\\s+[A-Za-z_$][A-Za-z0-9_$]*\\s*\\(|[A-Za-z_$][A-Za-z0-9_$]*\\s*=\\s*\\([^\\)]*\\)\\s*=>|(?:public|private|protected)?\\s*(?:static\\s+)?[A-Za-z_$][A-Za-z0-9_$<>\\[\\]]*\\s+[A-Za-z_$][A-Za-z0-9_$]*\\s*\\()"
     );
     private static final Pattern CLASS_PATTERN = Pattern.compile("(?m)\\b(class|interface|enum|record)\\b");
+    private static final Pattern CODE_SYMBOL_NAME_PATTERN = Pattern.compile(
+        "(?m)(?:(?:class|interface|enum|record)\\s+([A-Za-z_$][A-Za-z0-9_$]*)|function\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*\\(|(?:public|private|protected)?\\s*(?:static\\s+)?[A-Za-z_$][A-Za-z0-9_$<>\\[\\]]*\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*\\(|([A-Za-z_$][A-Za-z0-9_$]*)\\s*=\\s*\\([^\\)]*\\)\\s*=>)"
+    );
     private static final Pattern API_CALL_PATTERN = Pattern.compile("(?i)\\b(fetch\\s*\\(|axios\\.|request\\.|\\.post\\s*\\(|\\.get\\s*\\(|\\.put\\s*\\()", Pattern.MULTILINE);
-    private static final int VECTOR_DIMS = 128;
+    private static final Pattern MENU_TABLE_PATTERN = Pattern.compile("\"table_name\"\\s*:\\s*\"([^\"]+)\"");
+    private static final Pattern MENU_TYPE_FORM_PATTERN = Pattern.compile("\"type_form\"\\s*:\\s*(\\d+)");
     private static final List<String> MENU_EXTENSIONS = List.of("md", "markdown", "json", "txt", "yml", "yaml");
     private static final List<String> CODE_EXTENSIONS = List.of("java", "js", "jsx", "ts", "tsx", "vue", "html", "css", "scss", "less", "sql", "json");
     private static final List<String> IGNORED_DIR_NAMES = List.of("node_modules", "target", "dist", "build", ".git", "logs");
@@ -77,6 +84,7 @@ public class LocalAiAssistantContextService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Object indexLock = new Object();
 
+    private final AiLocalEmbeddingService aiLocalEmbeddingService;
     private final AiBusinessMemoryVectorService aiBusinessMemoryVectorService;
     private final AiMenuLearningMemoryService aiMenuLearningMemoryService;
 
@@ -104,6 +112,15 @@ public class LocalAiAssistantContextService {
     @Value("${ai.local.assistant.chunk-overlap-chars:180}")
     private int chunkOverlapChars;
 
+    @Value("${ai.local.assistant.structural-summary.max-symbols:10}")
+    private int structuralSummaryMaxSymbols;
+
+    @Value("${ai.local.assistant.structural-summary.max-dependencies:8}")
+    private int structuralSummaryMaxDependencies;
+
+    @Value("${ai.local.assistant.structural-summary.max-json-keys:12}")
+    private int structuralSummaryMaxJsonKeys;
+
     @Value("${ai.local.assistant.max-hits:6}")
     private int maxHits;
 
@@ -117,9 +134,11 @@ public class LocalAiAssistantContextService {
 
     @Autowired
     public LocalAiAssistantContextService(
+        AiLocalEmbeddingService aiLocalEmbeddingService,
         AiBusinessMemoryVectorService aiBusinessMemoryVectorService,
         @Autowired(required = false) AiMenuLearningMemoryService aiMenuLearningMemoryService
     ) {
+        this.aiLocalEmbeddingService = aiLocalEmbeddingService;
         this.aiBusinessMemoryVectorService = aiBusinessMemoryVectorService;
         this.aiMenuLearningMemoryService = aiMenuLearningMemoryService;
     }
@@ -486,9 +505,15 @@ public class LocalAiAssistantContextService {
                 doc.add(new StringField("chunkId", relativePath + "#" + i, Field.Store.YES));
                 doc.add(new StoredField("createdAtMs", System.currentTimeMillis()));
                 String summary = summarizeChunk(chunk);
+                String structuralSummary = buildStructuralSummary(relativePath, scope, ext, chunk);
                 doc.add(new TextField("summary", summary, Field.Store.YES));
+                if (!structuralSummary.isBlank()) {
+                    doc.add(new TextField("structure", structuralSummary, Field.Store.YES));
+                }
                 doc.add(new TextField("content", chunk, Field.Store.YES));
-                doc.add(new KnnFloatVectorField("vector", embedText(relativePath + "\n" + summary + "\n" + chunk)));
+                doc.add(new KnnFloatVectorField(
+                    "vector",
+                    embedDocumentText(relativePath + "\n" + summary + "\n" + structuralSummary + "\n" + trimTo(chunk, Math.min(1200, chunkMaxChars)))));
                 writer.addDocument(doc);
             }
         } catch (Exception ex) {
@@ -510,7 +535,11 @@ public class LocalAiAssistantContextService {
             }
             try (DirectoryReader reader = DirectoryReader.open(directory)) {
                 IndexSearcher searcher = new IndexSearcher(reader);
-                TopDocs docs = searcher.search(new KnnFloatVectorQuery("vector", embedText(queryText), Math.max(limit * 4, 16)), Math.max(limit * 4, 16));
+                String embeddingQuery = buildEmbeddingSearchQuery(queryText);
+                if (embeddingQuery.isBlank()) {
+                    return List.of();
+                }
+                TopDocs docs = searcher.search(new KnnFloatVectorQuery("vector", embedQueryText(embeddingQuery), Math.max(limit * 4, 16)), Math.max(limit * 4, 16));
                 for (ScoreDoc scoreDoc : docs.scoreDocs) {
                     Document doc = searcher.storedFields().document(scoreDoc.doc);
                     String scope = str(doc.get("scope"));
@@ -518,10 +547,11 @@ public class LocalAiAssistantContextService {
                     if (!matchesContext(scope, ext, contextType)) {
                         continue;
                     }
+                    String summary = mergeIndexedSummary(str(doc.get("summary")), str(doc.get("structure")));
                     candidates.add(new SearchHit(
                         str(doc.get("path")),
                         scope,
-                        str(doc.get("summary")),
+                        summary,
                         trimTo(str(doc.get("content")), 1600),
                         scoreDoc.score
                     ));
@@ -538,10 +568,11 @@ public class LocalAiAssistantContextService {
                         if (!matchesContext(scope, ext, contextType)) {
                             continue;
                         }
+                        String summary = mergeIndexedSummary(str(doc.get("summary")), str(doc.get("structure")));
                         candidates.add(new SearchHit(
                             str(doc.get("path")),
                             scope,
-                            str(doc.get("summary")),
+                            summary,
                             trimTo(str(doc.get("content")), 1200),
                             scoreDoc.score
                         ));
@@ -645,7 +676,7 @@ public class LocalAiAssistantContextService {
         if (!path.isAbsolute()) {
             path = Paths.get(System.getProperty("user.dir")).resolve(path).normalize();
         }
-        return path;
+        return path.resolve(aiLocalEmbeddingService.indexNamespace()).normalize();
     }
 
     private boolean shouldIndexFile(Path file) {
@@ -688,31 +719,12 @@ public class LocalAiAssistantContextService {
         return chunks;
     }
 
-    private float[] embedText(String text) {
-        float[] vector = new float[VECTOR_DIMS];
-        Matcher matcher = TOKEN_PATTERN.matcher(String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT));
-        int tokenCount = 0;
-        while (matcher.find()) {
-            String token = matcher.group();
-            int h = Math.abs(token.hashCode());
-            vector[h % VECTOR_DIMS] += 1.0f;
-            tokenCount++;
-        }
-        if (tokenCount == 0) {
-            return vector;
-        }
-        float norm = 0.0f;
-        for (float value : vector) {
-            norm += value * value;
-        }
-        norm = (float) Math.sqrt(norm);
-        if (norm <= 0.0f) {
-            return vector;
-        }
-        for (int i = 0; i < vector.length; i++) {
-            vector[i] = vector[i] / norm;
-        }
-        return vector;
+    private float[] embedQueryText(String text) {
+        return aiLocalEmbeddingService.embedQueryText(text);
+    }
+
+    private float[] embedDocumentText(String text) {
+        return aiLocalEmbeddingService.embedDocumentText(text);
     }
 
     private int countJsonNodes(JsonNode node, int current, int cap) {
@@ -829,6 +841,18 @@ public class LocalAiAssistantContextService {
         return new ArrayList<>(tokens);
     }
 
+    private String buildEmbeddingSearchQuery(String queryText) {
+        String normalized = String.valueOf(queryText == null ? "" : queryText).replace('\n', ' ').trim();
+        if (normalized.isBlank()) {
+            return "";
+        }
+        List<String> tokens = extractTopTokens(normalized, 28);
+        if (!tokens.isEmpty()) {
+            return trimTo(String.join(" ", tokens), 220);
+        }
+        return trimTo(normalized, 220);
+    }
+
     private String summarizeChunk(String chunk) {
         String source = String.valueOf(chunk == null ? "" : chunk).trim();
         if (source.isBlank()) {
@@ -840,6 +864,118 @@ public class LocalAiAssistantContextService {
             return head;
         }
         return head + " | tokens=" + String.join(",", tokens);
+    }
+
+    private String buildStructuralSummary(String relativePath, String scope, String ext, String chunk) {
+        if ("menu_json".equals(scope)) {
+            return buildMenuStructuralSummary(relativePath, chunk);
+        }
+        return buildCodeStructuralSummary(relativePath, ext, chunk);
+    }
+
+    private String buildCodeStructuralSummary(String relativePath, String ext, String chunk) {
+        List<String> imports = extractPatternValues(IMPORT_TARGET_PATTERN, chunk, Math.max(3, structuralSummaryMaxDependencies));
+        List<String> symbols = extractCodeSymbols(chunk, Math.max(4, structuralSummaryMaxSymbols));
+        List<String> requestTokens = extractTopTokens(chunk, Math.max(4, Math.min(8, structuralSummaryMaxSymbols)));
+        StringBuilder sb = new StringBuilder();
+        sb.append("kind=code");
+        if (!relativePath.isBlank()) {
+            sb.append(" path=").append(relativePath);
+        }
+        if (!ext.isBlank()) {
+            sb.append(" ext=").append(ext);
+        }
+        sb.append(" imports=").append(countMatches(IMPORT_PATTERN, chunk));
+        sb.append(" functions=").append(countMatches(FUNCTION_PATTERN, chunk));
+        sb.append(" types=").append(countMatches(CLASS_PATTERN, chunk));
+        sb.append(" apiCalls=").append(countMatches(API_CALL_PATTERN, chunk));
+        if (!imports.isEmpty()) {
+            sb.append(" deps=").append(String.join(",", imports));
+        }
+        if (!symbols.isEmpty()) {
+            sb.append(" symbols=").append(String.join(",", symbols));
+        }
+        if (!requestTokens.isEmpty()) {
+            sb.append(" anchors=").append(String.join(",", requestTokens));
+        }
+        return trimTo(sb.toString(), 420);
+    }
+
+    private String buildMenuStructuralSummary(String relativePath, String chunk) {
+        List<String> jsonKeys = extractPatternValues(JSON_KEY_PATTERN, chunk, Math.max(6, structuralSummaryMaxJsonKeys));
+        List<String> tableNames = extractPatternValues(MENU_TABLE_PATTERN, chunk, Math.max(3, structuralSummaryMaxDependencies));
+        List<String> typeForms = extractPatternValues(MENU_TYPE_FORM_PATTERN, chunk, 6);
+        StringBuilder sb = new StringBuilder();
+        sb.append("kind=menu");
+        if (!relativePath.isBlank()) {
+            sb.append(" path=").append(relativePath);
+        }
+        sb.append(" keys=").append(String.join(",", jsonKeys));
+        if (!tableNames.isEmpty()) {
+            sb.append(" tables=").append(String.join(",", tableNames));
+        }
+        if (!typeForms.isEmpty()) {
+            sb.append(" typeForms=").append(String.join(",", typeForms));
+        }
+        if (chunk.contains("\"trigger\"")) {
+            sb.append(" trigger=true");
+        }
+        if (chunk.contains("\"parentId\"") || chunk.contains("\"parentid\"")) {
+            sb.append(" hierarchy=true");
+        }
+        return trimTo(sb.toString(), 420);
+    }
+
+    private List<String> extractCodeSymbols(String source, int limit) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        Matcher matcher = CODE_SYMBOL_NAME_PATTERN.matcher(String.valueOf(source == null ? "" : source));
+        while (matcher.find() && values.size() < Math.max(1, limit)) {
+            String value = firstNonBlank(matcher.group(1), matcher.group(2), matcher.group(3), matcher.group(4));
+            if (!value.isBlank()) {
+                values.add(value);
+            }
+        }
+        return new ArrayList<>(values);
+    }
+
+    private List<String> extractPatternValues(Pattern pattern, String source, int limit) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (pattern == null) {
+            return List.of();
+        }
+        Matcher matcher = pattern.matcher(String.valueOf(source == null ? "" : source));
+        while (matcher.find() && values.size() < Math.max(1, limit)) {
+            String value = firstNonBlank(matcher.groupCount() >= 1 ? matcher.group(1) : "", matcher.groupCount() >= 2 ? matcher.group(2) : "");
+            if (!value.isBlank()) {
+                values.add(value);
+            }
+        }
+        return new ArrayList<>(values);
+    }
+
+    private String mergeIndexedSummary(String summary, String structuralSummary) {
+        String safeSummary = str(summary);
+        String safeStructure = str(structuralSummary);
+        if (safeStructure.isBlank()) {
+            return safeSummary;
+        }
+        if (safeSummary.isBlank()) {
+            return safeStructure;
+        }
+        return trimTo(safeSummary + " | structure=" + safeStructure, 600);
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            String safe = str(value);
+            if (!safe.isBlank()) {
+                return safe;
+            }
+        }
+        return "";
     }
 
     private String inferScope(String ext, Path file) {

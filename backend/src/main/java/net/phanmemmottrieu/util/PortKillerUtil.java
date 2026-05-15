@@ -24,6 +24,7 @@ public class PortKillerUtil {
     public static boolean killProcessOnPort(int port) {
         String os = System.getProperty("os.name").toLowerCase();
         int pid = -1;
+        long currentPid = ProcessHandle.current().pid();
 
         try {
             if (os.contains("win")) {
@@ -45,6 +46,10 @@ public class PortKillerUtil {
                 p.waitFor(); // Chờ lệnh netstat hoàn thành
 
                 if (pid != -1) {
+                    if (pid == currentPid) {
+                        logger.warn("Windows: Port {} is already held by current process PID {}, skipping self-termination.", port, pid);
+                        return false;
+                    }
                     logger.warn("Windows: Attempting to kill process PID {} on port {}", pid, port);
                     Runtime.getRuntime().exec("taskkill /F /PID " + pid).waitFor();
                     logger.warn("Windows: Process PID {} killed.", pid);
@@ -69,6 +74,10 @@ public class PortKillerUtil {
                 p.waitFor(); // Chờ lệnh lsof hoàn thành
 
                 if (pid != -1) {
+                    if (pid == currentPid) {
+                        logger.warn("Linux/macOS: Port {} is already held by current process PID {}, skipping self-termination.", port, pid);
+                        return false;
+                    }
                     logger.warn("Linux/macOS: Attempting to kill process PID {} on port {}", pid, port);
                     Runtime.getRuntime().exec("kill -9 " + pid).waitFor();
                     logger.warn("Linux/macOS: Process PID {} killed.", pid);

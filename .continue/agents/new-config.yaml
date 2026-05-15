@@ -1,0 +1,26 @@
+models:
+  - title: "Lê Anh CSM - Llama 3"
+    provider: ollama
+    model: llama3
+    apiBase: http://localhost:11434
+
+  - title: "DeepSeek Coder (Tối ưu Code)"
+    provider: ollama
+    model: deepseek-coder:6.7b
+    apiBase: http://localhost:11434
+
+tabAutocompleteModel:
+  title: "Starcoder2 (Gợi ý nhanh)"
+  provider: ollama
+  model: starcoder2:3b
+  apiBase: http://localhost:11434
+
+embeddingsProvider:
+  provider: ollama
+  model: nomic-embed-text
+
+contextProviders:
+  - name: code
+  - name: docs
+  - name: diff
+  - name: terminal
