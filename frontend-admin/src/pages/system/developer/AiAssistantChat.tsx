@@ -543,6 +543,8 @@ interface AiAssistantChatProps {
 	targetPType?: number
 	editorMetadata?: Record<string, unknown>
 	onCodeInsert?: (code: string) => void
+	/** Called immediately for each individual line-range edit — enables precise CodeMirror dispatch instead of full-file replacement */
+	onApplyLineEdit?: (edit: { startLine: number; endLine: number; replacement: string; action: string }) => void
 	onCitationNavigate?: (location: { path?: string; line?: number; token: string }) => void
 	onOpenQualityTrace?: (payload: { requestId: string; appId?: string }) => void
 	onUserMessage?: (payload: AiAssistantUserMessagePayload) => void
@@ -1801,6 +1803,9 @@ function parseExecutionRouteDirective(input: string): { cleanedMessage: string, 
 	const localPlanTokens = new Set([
 		"local-plan",
 		"localplan",
+		"local-only",
+		"localonly",
+		"local",
 		"local-ops",
 		"localops",
 		"local-execute",
@@ -2010,6 +2015,7 @@ export default function AiAssistantChat({
 	targetPType,
 	editorMetadata,
 	onCodeInsert,
+	onApplyLineEdit,
 	onCitationNavigate,
 	onOpenQualityTrace,
 	onUserMessage,
@@ -6531,6 +6537,68 @@ export default function AiAssistantChat({
 								pendingStreamChunkRef.current += stripInternalOrchestrationLeakLines(evt.chunk);
 								scheduleStreamFlush();
 							}
+							else if (evt.stage === "text_edit_apply" && (evt as any).textEdit) {
+								// Real-time line-edit: apply immediately to CodeMirror without waiting for full response
+								const rawEdit = (evt as any).textEdit as Record<string, unknown>;
+								const startLine = Math.max(1, Number(rawEdit.startLine ?? (rawEdit.range as any)?.startLine ?? 1));
+								const endLine = Math.max(startLine, Number(rawEdit.endLine ?? (rawEdit.range as any)?.endLine ?? startLine));
+								const replacement = String(rawEdit.replacement ?? rawEdit.text ?? rawEdit.newText ?? "");
+								const action = String(rawEdit.action ?? "edit").trim().toLowerCase();
+								const normalizedEdit = { ...rawEdit, startLine, endLine, replacement, action };
+								turnAllowAutoApplyRef.current = true;
+								localFlowVerifiedRef.current = true;
+								if (onApplyLineEdit) {
+									// Precise CodeMirror dispatch: only the affected line range changes
+									if (!undoSnapshotRef.current || undoSnapshotRef.current === (liveCodeRef.current || currentCode)) {
+										undoSnapshotRef.current = liveCodeRef.current || currentCode || "";
+										setCanUndoLastEdit(true);
+									}
+									onApplyLineEdit({ startLine, endLine, replacement, action });
+									const updatedCode = applyTextEditsToDraft(liveCodeRef.current || currentCode || "", [normalizedEdit]);
+									liveCodeRef.current = updatedCode;
+									lastAppliedCodeRef.current = updatedCode;
+								} else if (onCodeInsert) {
+									// Fallback: apply to accumulated code and push full replacement
+									const baseCode = liveCodeRef.current || currentCode || "";
+									const validation = validateStructuredTextEdits(baseCode, [normalizedEdit]);
+									if (validation.valid && validation.edits.length > 0) {
+										const nextCode = applyTextEditsToDraft(baseCode, validation.edits);
+										if (nextCode !== lastAppliedCodeRef.current) {
+											if (!undoSnapshotRef.current || undoSnapshotRef.current === baseCode) {
+												undoSnapshotRef.current = baseCode;
+												setCanUndoLastEdit(true);
+											}
+											onCodeInsert(nextCode);
+											liveCodeRef.current = nextCode;
+											lastAppliedCodeRef.current = nextCode;
+										}
+									}
+								}
+							}
+							else if (evt.stage === "text_edit_apply_done") {
+								const count = Number((evt as any).count ?? 0);
+								// If using onApplyLineEdit, liveCodeRef is already up to date.
+								// If using onCodeInsert fallback, ensure final state is committed.
+								if (!onApplyLineEdit && onCodeInsert) {
+									const finalCode = liveCodeRef.current;
+									if (finalCode && finalCode !== lastAppliedCodeRef.current) {
+										onCodeInsert(finalCode);
+										lastAppliedCodeRef.current = finalCode;
+									}
+								}
+								if (SHOW_DETAILED_PROGRESS_TIMELINE && count > 0) {
+									appendStageEvent({
+										...evtForTimeline,
+										stage: "text_edit_apply_done" as any,
+										message: uiText(
+											`Đã áp dụng ${count} thay đổi vào editor`,
+											`Applied ${count} edits to editor`,
+											`已将 ${count} 处更改应用到编辑器`,
+										),
+										percent: 90,
+									});
+								}
+							}
 							else if (evt.stage === "request_complete") {
 								const elapsedMs = Number((evt as any).elapsedMs || 0);
 								appendStageEvent({
@@ -7040,7 +7108,7 @@ export default function AiAssistantChat({
 				}
 			}
 		},
-		[appId, contextType, currentCode, isLoading, language, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatPatchValidatorReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus, formatStageLabel, renderProgressText],
+		[appId, contextType, currentCode, isLoading, language, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, onApplyLineEdit, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatPatchValidatorReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus, formatStageLabel, renderProgressText],
 	);
 
 	const handleRetryAgenticStep = useCallback((step: AgenticStep) => {

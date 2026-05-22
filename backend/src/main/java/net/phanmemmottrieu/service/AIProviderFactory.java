@@ -1,6 +1,7 @@
 package net.phanmemmottrieu.service;
 
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -14,16 +15,17 @@ import java.util.Map;
 
 /**
  * Factory để lựa chọn AI provider phù hợp dựa trên quota và availability.
- * 
+ *
  * Chiến lược:
  * 1. Chỉ sử dụng Gemini (theo quota miễn phí của các model)
  * 2. Trả về error nếu hết quota
- * 
+ *
  * @author Mr.Anh
  */
-@Slf4j
 @Service
 public class AIProviderFactory {
+
+  private static final Logger log = LoggerFactory.getLogger(AIProviderFactory.class);
 
   private final List<AIProvider> providers;
   

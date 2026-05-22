@@ -725,6 +725,46 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
     }
   }, [onChange, presentInlineSuggestion]);
 
+  // Real-time line-range edit: applies only the affected lines via CodeMirror dispatch.
+  // This is the precise equivalent of Claude Code's inline diff — no full file replacement.
+  const handleApplyLineEdit = useCallback((edit: {
+    startLine: number; endLine: number; replacement: string; action: string
+  }) => {
+    const view = editorViewRef.current;
+    if (!view) {
+      // No editor view yet — reconstruct full code and fall back to full insert
+      const lines = String(currentCode || "").split("\n");
+      const s = Math.max(0, edit.startLine - 1);
+      const e = Math.max(s, Math.min(edit.endLine - 1, lines.length - 1));
+      lines.splice(s, e - s + 1, ...edit.replacement.split("\n"));
+      handleCopilotCodeInsert(lines.join("\n"));
+      return;
+    }
+    try {
+      const doc = view.state.doc;
+      const safeStart = Math.max(1, Math.min(edit.startLine, doc.lines));
+      const safeEnd = Math.max(safeStart, Math.min(edit.endLine, doc.lines));
+      const startLineObj = doc.line(safeStart);
+      const endLineObj = doc.line(safeEnd);
+      // Dispatch a precise character-range change — only the target lines are touched
+      view.dispatch({
+        changes: { from: startLineObj.from, to: endLineObj.to, insert: edit.replacement },
+        scrollIntoView: true,
+      });
+      // Propagate the updated value back into React state
+      if (typeof onChange === "function") {
+        onChange(view.state.doc.toString(), undefined as any);
+      }
+    } catch {
+      // Dispatch failure — fall back to full code reconstruction
+      const lines = String(currentCode || "").split("\n");
+      const s = Math.max(0, edit.startLine - 1);
+      const e = Math.max(s, Math.min(edit.endLine - 1, lines.length - 1));
+      lines.splice(s, e - s + 1, ...edit.replacement.split("\n"));
+      handleCopilotCodeInsert(lines.join("\n"));
+    }
+  }, [currentCode, handleCopilotCodeInsert, onChange]);
+
   const handleCitationNavigate = useCallback((location: { path?: string; line?: number; token: string }) => {
     const delegated = aiAssistantOnCitationNavigate?.(location);
     if (delegated === true) {
@@ -1042,6 +1082,7 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
                   targetPType={aiAssistantPType}
                   editorMetadata={aiAssistantEditorMetadata}
                   onCodeInsert={handleCopilotCodeInsert}
+                  onApplyLineEdit={handleApplyLineEdit}
                   onCitationNavigate={handleCitationNavigate}
                   onOpenQualityTrace={aiAssistantOnOpenQualityTrace}
                   autoApplyCodeBlock={autoApplyEnabled}

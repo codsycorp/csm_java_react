@@ -53,6 +53,7 @@ import net.phanmemmottrieu.service.AiMenuMergeService;
 import net.phanmemmottrieu.service.AiAssistantMemoryManagerService;
 import net.phanmemmottrieu.service.GeminiStreamingService;
 import net.phanmemmottrieu.service.LocalTranslationService;
+import net.phanmemmottrieu.service.ComfyUIProcessService;
 import net.phanmemmottrieu.service.LocalAiAssistantContextService;
 import net.phanmemmottrieu.service.ApiCallInstrumentationService;
 import net.phanmemmottrieu.service.AiConversationContextService;
@@ -448,6 +449,7 @@ public class ApiSpringController {
     private final AiMenuLearningMemoryService aiMenuLearningMemoryService;
     private final AiPromptBudgetService aiPromptBudgetService;
     private final LlamaCppNativeService llamaCppNativeService;
+    private final ComfyUIProcessService comfyUIProcessService;
     private final AiPatternCacheService aiPatternCacheService;
     @SuppressWarnings("unused")
     private final LargeFileChunkingService largeFileChunkingService;
@@ -1415,6 +1417,7 @@ public class ApiSpringController {
             AiAssistantMemoryManagerService aiAssistantMemoryManagerService,
             GeminiStreamingService geminiStreamingService,
             LocalTranslationService localTranslationService,
+            ComfyUIProcessService comfyUIProcessService,
             ApiCallInstrumentationService apiCallInstrumentationService,
             AiConversationContextService aiConversationContextService,
             LocalAiAssistantContextService localAiAssistantContextService,
@@ -1450,6 +1453,7 @@ public class ApiSpringController {
         this.aiAssistantMemoryManagerService = aiAssistantMemoryManagerService;
         this.geminiStreamingService = geminiStreamingService;
         this.localTranslationService = localTranslationService;
+        this.comfyUIProcessService = comfyUIProcessService;
         this.apiCallInstrumentationService = apiCallInstrumentationService;
         this.aiConversationContextService = aiConversationContextService;
         this.localAiAssistantContextService = localAiAssistantContextService;
@@ -6283,6 +6287,98 @@ public class ApiSpringController {
     }
 
     /**
+     * For edit-mode local responses: parses textEdits from model JSON and emits one
+     * {@code text_edit_apply} SSE event per edit so the frontend can apply each change
+     * to CodeMirror immediately as a precise line-range operation.
+     * Falls back to raw chunk streaming for analyze mode or unparseable output.
+     */
+    private int emitLocalTextEditEvents(
+            SseEmitter emitter, String requestId, String text,
+            String contextType, String responseMode, int attempt) {
+        if (text == null || text.isBlank()) {
+            return 0;
+        }
+        // Analyze mode: stream raw text chunks; no structured parsing needed
+        if (!"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            return emitSyntheticLocalStreamChunks(emitter, requestId, text, attempt, false, attempt == 1);
+        }
+        try {
+            String safe = text.trim();
+            int jsonStart = safe.indexOf('{');
+            int jsonEnd = safe.lastIndexOf('}');
+            if (jsonStart < 0 || jsonEnd <= jsonStart) {
+                return emitSyntheticLocalStreamChunks(emitter, requestId, safe, attempt, false, attempt == 1);
+            }
+            JsonNode parsed = objectMapper.readTree(safe.substring(jsonStart, jsonEnd + 1));
+
+            // Emit summary + changes list as chat text for the streaming bubble
+            String summary = parsed.has("summary") ? parsed.get("summary").asText("").trim() : "";
+            if (!summary.isBlank()) {
+                StringBuilder chatMsg = new StringBuilder(summary);
+                JsonNode changesNode = parsed.get("changes");
+                if (changesNode != null && changesNode.isArray()) {
+                    for (JsonNode c : changesNode) {
+                        String ch = c.asText("").trim();
+                        if (!ch.isBlank()) {
+                            chatMsg.append("\n- ").append(ch);
+                        }
+                    }
+                }
+                sendEvent(emitter, jsonOf(
+                    "stage", "streaming",
+                    "requestId", requestId,
+                    "chunk", chatMsg.toString(),
+                    "attempt", attempt,
+                    "localProviderPrimary", attempt == 1));
+            }
+
+            // Case 1: textEdits array — emit each as an individual line-edit event
+            JsonNode editsNode = parsed.has("textEdits") ? parsed.get("textEdits") : parsed.get("text_edits");
+            if (editsNode != null && editsNode.isArray() && editsNode.size() > 0) {
+                int count = 0;
+                for (JsonNode edit : editsNode) {
+                    sendEvent(emitter, jsonOf(
+                        "stage", "text_edit_apply",
+                        "requestId", requestId,
+                        "attempt", attempt,
+                        "textEdit", edit));
+                    count++;
+                }
+                sendEvent(emitter, jsonOf(
+                    "stage", "text_edit_apply_done",
+                    "requestId", requestId,
+                    "count", count));
+                return count;
+            }
+
+            // Case 2: full code field — wrap as single full-file replace
+            JsonNode codeNode = parsed.get("code");
+            if (codeNode != null && !codeNode.asText("").isBlank()) {
+                String fullCode = codeNode.asText("");
+                int lineCount = fullCode.split("\\n", -1).length;
+                java.util.LinkedHashMap<String, Object> singleEdit = new java.util.LinkedHashMap<>();
+                singleEdit.put("startLine", 1);
+                singleEdit.put("endLine", lineCount);
+                singleEdit.put("replacement", fullCode);
+                singleEdit.put("action", "edit");
+                sendEvent(emitter, jsonOf(
+                    "stage", "text_edit_apply",
+                    "requestId", requestId,
+                    "attempt", attempt,
+                    "textEdit", singleEdit));
+                sendEvent(emitter, jsonOf(
+                    "stage", "text_edit_apply_done",
+                    "requestId", requestId,
+                    "count", 1));
+                return 1;
+            }
+        } catch (Exception ex) {
+            logger.debug("emitLocalTextEditEvents: JSON parse failed, fallback to raw chunks: {}", ex.getMessage());
+        }
+        return emitSyntheticLocalStreamChunks(emitter, requestId, text, attempt, false, attempt == 1);
+    }
+
+    /**
      * Emits {@code agentic_step_result} SSE events so the frontend can apply code
      * changes to CodeMirror step by step and animate the agentic-steps panel.
      *
@@ -7228,56 +7324,78 @@ public class ApiSpringController {
             boolean usePromptCache,
             Map<String, Object> streamMeta,
             String requestId) throws Exception {
-        if (isLocalModelName(model)) {
-            String localPrompt = clampPromptForLocalProvider(prompt, contextType, responseMode);
-            String localRaw = runLocalProviderWithProgress(emitter, requestId, localPrompt, contextType);
-            String localText = extractAiResultText(localRaw);
-            if ((localText == null || localText.isBlank()) && localRaw != null) {
-                localText = localRaw.trim();
-            }
-            if (localText == null) {
-                localText = "";
-            }
-            if (!localText.isBlank()) {
-                sendEvent(emitter, jsonOf(
-                    "stage", "streaming_started",
-                    "requestId", requestId,
-                    "model", "local_provider",
-                    "ttftMs", 0,
-                    "estimatedTotalChars", localText.length(),
-                    "percent", 12));
-                int chunks = emitSyntheticLocalStreamChunks(
-                    emitter,
-                    requestId,
-                    localText,
-                    1,
-                    false,
-                    true);
-                streamMeta.put("attemptsUsed", 1);
-                streamMeta.put("maxAttempts", 1);
-                streamMeta.put("providerCallsEstimate", 1);
-                streamMeta.put("providerFallbackUsed", false);
-                streamMeta.put("streamChunkCount", chunks);
-                streamMeta.put("streamedChars", localText.length());
-            }
-            return localText;
-        }
-
-        boolean editMode = "edit".equalsIgnoreCase(responseMode);
-        boolean menuJsonEditMode = editMode && isMenuJsonContext(contextType);
-        int autoContinueAttempts = editMode && aiCodeStreamAutoContinueEnabled ? Math.max(1, aiCodeStreamAutoContinueMaxAttempts) : 1;
-        if (menuJsonEditMode && aiMenuAutoContinueEnabled) {
-            autoContinueAttempts = Math.max(autoContinueAttempts, Math.max(1, aiMenuAutoContinueMaxAttempts));
-        }
-        int textEditRetryAttempts = (editMode && aiCodeStreamEditTextEditsRetryEnabled)
-                ? 1 + Math.max(0, aiCodeStreamEditTextEditsRetryMaxExtraAttempts)
+        if ("local_provider".equals(model)) {
+            // LOCAL PROVIDER: run with auto-continue for truncated output
+            String localBasePrompt = clampPromptForLocalProvider(prompt, contextType, responseMode);
+            int maxLocalAttempts = aiCodeStreamAutoContinueEnabled
+                ? Math.max(1, Math.min(3, aiCodeStreamAutoContinueMaxAttempts))
                 : 1;
-        int computedMaxAttempts = Math.max(autoContinueAttempts, textEditRetryAttempts);
-        // Cost guard: JSON edit is frequently strict-parse sensitive; avoid 3 expensive provider rounds.
-        if (editMode && "json".equalsIgnoreCase(language) && !isMenuJsonContext(contextType)) {
-            computedMaxAttempts = Math.min(computedMaxAttempts, 2);
+            try {
+                StringBuilder localAccumulated = new StringBuilder();
+                int totalChunks = 0;
+                int attemptsUsedLocal = 0;
+                for (int localAttempt = 1; localAttempt <= maxLocalAttempts; localAttempt++) {
+                    attemptsUsedLocal = localAttempt;
+                    if (localAttempt > 1) {
+                        sendEvent(emitter, jsonOf(
+                            "stage", "continuing",
+                            "status", "auto_continue",
+                            "model", "local_provider",
+                            "attempt", localAttempt,
+                            "maxAttempts", maxLocalAttempts,
+                            "message", "AI local đang tiếp tục hoàn thiện kết quả..."));
+                    }
+                    String currentLocalPrompt = localAttempt == 1
+                        ? localBasePrompt
+                        : clampPromptForLocalProvider(
+                            buildLocalAutoContinuePrompt(prompt, localAccumulated.toString(), contextType, responseMode),
+                            contextType, responseMode);
+                    String localRaw = runLocalProviderWithProgress(emitter, requestId, currentLocalPrompt, contextType);
+                    String localText = extractAiResultText(localRaw);
+                    if ((localText == null || localText.isBlank()) && localRaw != null) {
+                        localText = localRaw.trim();
+                    }
+                    if (localText == null) {
+                        localText = "";
+                    }
+                    if (!localText.isBlank()) {
+                        if (localAttempt == 1) {
+                            sendEvent(emitter, jsonOf(
+                                "stage", "streaming_started",
+                                "requestId", requestId,
+                                "model", "local_provider",
+                                "ttftMs", 0,
+                                "estimatedTotalChars", localText.length(),
+                                "percent", 12));
+                        }
+                        totalChunks += emitLocalTextEditEvents(
+                            emitter, requestId, localText, contextType, responseMode, localAttempt);
+                        localAccumulated.append(localText);
+                    }
+                    // Stop early if output looks structurally complete
+                    if (!looksLikeTruncatedLocalOutput(localText, contextType, responseMode)) {
+                        break;
+                    }
+                }
+                String finalLocalText = localAccumulated.toString();
+                if (streamMeta != null) {
+                    streamMeta.put("attemptsUsed", attemptsUsedLocal);
+                    streamMeta.put("maxAttempts", maxLocalAttempts);
+                    streamMeta.put("providerCallsEstimate", attemptsUsedLocal);
+                    streamMeta.put("providerFallbackUsed", false);
+                    streamMeta.put("streamChunkCount", totalChunks);
+                    streamMeta.put("streamedChars", finalLocalText.length());
+                }
+                return finalLocalText;
+            } catch (Exception e) {
+                logger.error("Local provider failed", e);
+                sendEvent(emitter, jsonOf(
+                    "stage", "error",
+                    "requestId", requestId,
+                    "message", "Lỗi khi gọi local provider: " + e.getMessage()));
+                return "";
+            }
         }
-        final int maxAttempts = computedMaxAttempts;
         String metricsAppId = str(streamMeta == null ? null : streamMeta.get("appId"), "");
         String currentPrompt = prompt;
         String lastRawResponse = "";
@@ -7289,6 +7407,8 @@ public class ApiSpringController {
         AtomicInteger streamChunkCount = new AtomicInteger(0);
         AtomicInteger streamedChars = new AtomicInteger(0);
         Map<String, Integer> retryReasonCounts = new HashMap<>();
+        int maxAttempts = Math.max(1, aiCodeStreamAutoContinueMaxAttempts);
+        boolean editMode = "edit".equalsIgnoreCase(responseMode);
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             final int attemptNo = attempt;
@@ -7327,61 +7447,6 @@ public class ApiSpringController {
                 } catch (Exception ignored) {
                 }
             };
-
-            if (isFirstAttemptWithCache) {
-                providerCalls.incrementAndGet();
-                geminiStreamingService.streamContentWithCache(
-                        systemContent,
-                        userMessage,
-                        model,
-                        chunkHandler,
-                        null,
-                        err -> errorHolder[0] = err,
-                        status -> {
-                            try {
-                                Map<String, Object> wrapped = new LinkedHashMap<>(status);
-                                String stage = str(wrapped.get("stage"), "");
-                                if ("claude_fallback".equalsIgnoreCase(stage) && !fallbackCountedThisAttempt[0]) {
-                                    fallbackCountedThisAttempt[0] = true;
-                                    providerFallbackTransitions.incrementAndGet();
-                                    recordQualityFallback(metricsAppId);
-                                }
-                                enrichModelDecisionMetadata(wrapped, model);
-                                wrapped.put("requestId", requestId);
-                                wrapped.put("attempt", attemptNo);
-                                wrapped.put("maxAttempts", maxAttempts);
-                                logAiCodeStreamStatusHeartbeat(requestId, model, wrapped, waitingLogBucket);
-                                sendEvent(emitter, objectMapper.writeValueAsString(wrapped));
-                            } catch (Exception ignored) {
-                            }
-                        });
-            } else {
-                providerCalls.incrementAndGet();
-                geminiStreamingService.streamContent(
-                        currentPrompt,
-                        model,
-                        chunkHandler,
-                        null,
-                        err -> errorHolder[0] = err,
-                        status -> {
-                            try {
-                                Map<String, Object> wrapped = new LinkedHashMap<>(status);
-                                String stage = str(wrapped.get("stage"), "");
-                                if ("claude_fallback".equalsIgnoreCase(stage) && !fallbackCountedThisAttempt[0]) {
-                                    fallbackCountedThisAttempt[0] = true;
-                                    providerFallbackTransitions.incrementAndGet();
-                                    recordQualityFallback(metricsAppId);
-                                }
-                                enrichModelDecisionMetadata(wrapped, model);
-                                wrapped.put("requestId", requestId);
-                                wrapped.put("attempt", attemptNo);
-                                wrapped.put("maxAttempts", maxAttempts);
-                                logAiCodeStreamStatusHeartbeat(requestId, model, wrapped, waitingLogBucket);
-                                sendEvent(emitter, objectMapper.writeValueAsString(wrapped));
-                            } catch (Exception ignored) {
-                            }
-                        });
-            }
 
             if (errorHolder[0] != null) {
                 logger.warn("ApiSpringController: ai-code-stream failed model={} attempt={}/{} error={}",
@@ -7784,6 +7849,57 @@ public class ApiSpringController {
             return safePrompt;
         }
         return truncateMiddle(safePrompt, hardCap);
+    }
+
+    private boolean looksLikeTruncatedLocalOutput(String text, String contextType, String responseMode) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        String t = text.trim();
+        int len = t.length();
+        // Short output is a deliberate brief answer, not truncation
+        if (len < 200) {
+            return false;
+        }
+        // Near the token output budget → check structural completeness
+        int estimatedMaxOutputChars = Math.max(600, aiLocalLlamaMaxTokens * 3);
+        if (len >= (int)(estimatedMaxOutputChars * 0.80)) {
+            if (isMenuJsonContext(contextType)) {
+                return !t.endsWith("}") && !t.endsWith("]");
+            }
+            return !t.endsWith("}") && !t.endsWith("]") && !t.endsWith(";");
+        }
+        // Detect JSON brace imbalance regardless of length
+        if (t.startsWith("{") || t.startsWith("[")) {
+            int opens = 0, closes = 0;
+            for (char c : t.toCharArray()) {
+                if (c == '{' || c == '[') opens++;
+                else if (c == '}' || c == ']') closes++;
+            }
+            // Allow imbalance > 1 to account for string literals containing braces
+            return opens > closes + 1;
+        }
+        return false;
+    }
+
+    private String buildLocalAutoContinuePrompt(String originalPrompt, String previousOutput, String contextType, String responseMode) {
+        // Compact continuation prompt sized for local model's limited context window
+        StringBuilder sb = new StringBuilder();
+        sb.append("KẾT QUẢ TRƯỚC BỊ CẮT GIỮA CHỪNG. Tiếp tục hoàn thành từ điểm dừng.\n\n");
+        if (isMenuJsonContext(contextType)) {
+            sb.append("Yêu cầu: Trả về JSON menu đầy đủ hợp lệ, không cắt. Không markdown, không code fence.\n\n");
+        } else {
+            sb.append("Yêu cầu: Trả về JSON đầy đủ hợp lệ: {\"summary\":\"...\",\"code\":\"...\",\"changes\":[...]}. Không markdown.\n\n");
+        }
+        // Concise original request (budget: 4000 chars for local model)
+        sb.append("--- YÊU CẦU GỐC ---\n");
+        sb.append(truncateMiddle(originalPrompt, 4000)).append("\n\n");
+        // Tail of previous output to give model context of where it stopped
+        String prevSuffix = previousOutput.length() > 2800
+            ? previousOutput.substring(previousOutput.length() - 2800)
+            : previousOutput;
+        sb.append("--- TIẾP TỪ ĐÂY ---\n").append(prevSuffix);
+        return sb.toString();
     }
 
     private boolean shouldUseLocalMapReduceBroadAnalysis(

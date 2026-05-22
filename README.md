@@ -1,3 +1,5 @@
+# Coderabbit Not redirected automatically? Copy and paste the following link into the extension to continue.
+dnNjb2RlOi8vY29kZXJhYmJpdC5jb2RlcmFiYml0LXZzY29kZS9hdXRoLWNhbGxiYWNrP2NvZGU9MTc4ODVjNTI1ZmYyNGUzYWZkMzUmc3RhdGU9MTVlMjNjYWMtNDBhMC00YzExLWFlZGYtNGVmODlmMzAzODViJnByb3ZpZGVyPWdpdGh1YiZzZWxmSG9zdGVkRG9tYWluPSZyZWRpcmVjdF91cmk9aHR0cHMlM0ElMkYlMkZhcHAuY29kZXJhYmJpdC5haSUyRmxvZ2lu
 # Chạy trên server Linux
 # CSM Server - Customer Success Manager
 
@@ -15,6 +17,7 @@ cd backend
 mvn spring-boot:run
 
 set -a && source ../config.env && set +a && mvn spring-boot:run
+set -a && source ../config.local-strong.env && set +a && mvn spring-boot:run
 
 set -a && source /Volumes/Datas/CSM/JavaProjects/csm_server/config.env && set +a && cd /Volumes/Datas/CSM/JavaProjects/csm_server/backend && mvn spring-boot:run
 # Frontend

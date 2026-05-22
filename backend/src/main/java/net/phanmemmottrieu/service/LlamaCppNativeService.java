@@ -78,13 +78,13 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.enabled:false}")
     private boolean enabled;
 
-    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf}")
+    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf}")
     private String modelPath;
 
     @Value("${ai.local.llama.context-window:8192}")
     private int contextWindow;
 
-    @Value("${ai.local.llama.max-tokens:256}")
+    @Value("${ai.local.llama.max-tokens:512}")
     private int maxTokens;
 
     @Value("${ai.local.llama.temperature:0.2}")
@@ -99,10 +99,10 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.threads:2}")
     private int threads;
 
-    @Value("${ai.local.llama.batch-size:48}")
+    @Value("${ai.local.llama.batch-size:64}")
     private int batchSize;
 
-    @Value("${ai.local.llama.ubatch-size:24}")
+    @Value("${ai.local.llama.ubatch-size:32}")
     private int ubatchSize;
 
     @Value("${ai.local.llama.gpu-layers:18}")
@@ -123,7 +123,7 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.preload-on-startup:true}")
     private boolean preloadOnStartup;
 
-    @Value("${ai.local.llama.runtime-profile:conservative}")
+    @Value("${ai.local.llama.runtime-profile:balanced}")
     private String runtimeProfile;
 
     @Value("${ai.local.llama.context-window-hard-cap:32768}")
@@ -294,10 +294,10 @@ public class LlamaCppNativeService implements AIProvider {
             safePrompt = systemPrompt.trim() + "\n" + safePrompt;
         }
 
-        // JSON-forcing: detect if prompt expects JSON output and prepend format instruction
-        if (detectJsonExpectation(safePrompt)) {
-            String jsonForcePrefix = "You MUST output ONLY valid JSON, with no markdown fences, no explanation, no extra text. Start with { or [.\n\n";
-            safePrompt = jsonForcePrefix + safePrompt;
+        // Detect once before any prefix/clip — clipping cannot change the decision
+        boolean isJsonForced = detectJsonExpectation(safePrompt);
+        if (isJsonForced) {
+            safePrompt = "You MUST output ONLY valid JSON, with no markdown fences, no explanation, no extra text. Start with { or [.\n\n" + safePrompt;
             log.debug("JSON-forcing enabled: prepended format instruction to prompt");
         }
 
@@ -309,7 +309,6 @@ public class LlamaCppNativeService implements AIProvider {
 
         long startedAt = markRequestStart(safePrompt);
         try {
-            boolean isJsonForced = detectJsonExpectation(safePrompt);
             String output = runLocalCompletion(safePrompt, false, isJsonForced);
             requestCount.incrementAndGet();
             recordSuccess();
@@ -327,7 +326,6 @@ public class LlamaCppNativeService implements AIProvider {
                 try {
                     int retryChars = Math.max(1200, Math.min(safePrompt.length() / 2, 6000));
                     String retryPrompt = safePrompt.substring(0, retryChars);
-                    boolean isJsonForced = detectJsonExpectation(retryPrompt);
                     String retryOutput = runLocalCompletion(retryPrompt, true, isJsonForced);
                     requestCount.incrementAndGet();
                     recordSuccess();
@@ -395,20 +393,19 @@ public class LlamaCppNativeService implements AIProvider {
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             safePrompt = systemPrompt.trim() + "\n" + safePrompt;
         }
-        
-        // JSON-forcing for fast path too
-        if (detectJsonExpectation(safePrompt)) {
-            String jsonForcePrefix = "You MUST output ONLY valid JSON, with no markdown fences, no explanation, no extra text. Start with { or [.\n\n";
-            safePrompt = jsonForcePrefix + safePrompt;
+
+        // Detect once before any prefix/clip — clipping cannot change the decision
+        boolean isJsonForced = detectJsonExpectation(safePrompt);
+        if (isJsonForced) {
+            safePrompt = "You MUST output ONLY valid JSON, with no markdown fences, no explanation, no extra text. Start with { or [.\n\n" + safePrompt;
         }
-        
+
         safePrompt = clipPromptSmart(safePrompt, effectiveMaxPromptChars(), false);
         int runtimeBudget = resolveRuntimePromptCharBudget();
         safePrompt = clipPromptSmart(safePrompt, runtimeBudget, false);
         int cappedTokens = Math.max(16, Math.min(effectiveMaxTokens(), maxOutputTokensCap));
         long startedAt = markRequestStart(safePrompt);
         try {
-            boolean isJsonForced = detectJsonExpectation(safePrompt);
             String output = runLocalCompletionWithCap(safePrompt, cappedTokens, isJsonForced);
             requestCount.incrementAndGet();
             recordSuccess();
@@ -944,4 +941,3 @@ public class LlamaCppNativeService implements AIProvider {
         return info;
     }
 }
-

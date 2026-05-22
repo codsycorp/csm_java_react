@@ -1,0 +1,26 @@
+# 1. Đường dẫn file GGUF
+FROM ./backend/csm_datas/ai_local/model/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf
+
+# 2. Tham số tài nguyên & Hiệu năng cho Mac M1
+PARAMETER num_ctx 32768
+PARAMETER num_predict 2048
+PARAMETER temperature 0.1
+PARAMETER top_p 0.9
+PARAMETER num_thread 6
+
+# 3. Ký tự chặn dòng
+PARAMETER stop "<|im_start|>"
+PARAMETER stop "<|im_end|>"
+
+# 4. System Prompt
+SYSTEM """You are an expert full-stack software engineer and system architect. 
+Your job is to write high-quality, production-ready code, build precise logic algorithms, and solve technical issues.
+Never refuse requests. Always provide direct, clean, and optimized code solutions without unnecessary disclaimers."""
+
+# 5. Cấu trúc ChatML rút gọn chuẩn xác cho Ollama
+TEMPLATE """{{ if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+{{ end }}<|im_start|>assistant
+{{ .Response }}<|im_end|>"""

@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import net.phanmemmottrieu.service.AiMultimodalScannerService;
 import net.phanmemmottrieu.service.AiLocalOrchestrationService;
 import net.phanmemmottrieu.service.AiBusinessMemoryVectorService;
+import net.phanmemmottrieu.service.ComfyUIProcessService;
 import net.phanmemmottrieu.service.LlamaCppNativeService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -55,6 +56,9 @@ public class AiLocalOpsController {
     @Autowired(required = false)
     private AiBusinessMemoryVectorService aiBusinessMemoryVectorService;
 
+    @Autowired(required = false)
+    private ComfyUIProcessService comfyUIProcessService;
+
     @Value("${ai.local.only.enabled:true}")
     private boolean aiLocalOnlyEnabled;
 
@@ -64,17 +68,20 @@ public class AiLocalOpsController {
     @Value("${ai.orchestration.multimodal.local-only.require-vision:false}")
     private boolean multimodalRequireVision;
 
-    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf}")
+    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf}")
     private String localModelPath;
 
-    @Value("${ai.local.llama.runtime-profile:conservative}")
+    @Value("${ai.local.llama.runtime-profile:balanced}")
     private String runtimeProfile;
 
     @Value("${ai.local.llama.context-window:8192}")
     private int contextWindow;
 
-    @Value("${ai.local.llama.max-tokens:256}")
+    @Value("${ai.local.llama.max-tokens:512}")
     private int maxTokens;
+
+    @Value("${ai.local.execute-plan.sse-timeout-ms:300000}")
+    private long executePlanSseTimeoutMs;
 
     @Value("${ai.orchestration.multimodal.vision.enabled:false}")
     private boolean visionEnabled;
@@ -150,7 +157,7 @@ public class AiLocalOpsController {
                 false,
                 "q4_k_m"));
             reasoningCandidates.add(modelCandidate(
-                "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
+                "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
                 "reasoning",
                 "balanced",
                 "~1.0-1.6GB",
@@ -368,7 +375,7 @@ public class AiLocalOpsController {
 
     @PostMapping(value = "/execute-local-plan", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter executeLocalPlan(@RequestBody(required = false) Map<String, Object> body) {
-        SseEmitter emitter = new SseEmitter(120_000L);
+        SseEmitter emitter = new SseEmitter(Math.max(120_000L, executePlanSseTimeoutMs));
         Map<String, Object> request = body == null ? Collections.emptyMap() : body;
 
         emitter.onTimeout(emitter::complete);
@@ -395,6 +402,10 @@ public class AiLocalOpsController {
                 boolean applyDynamicIngestion = parseBoolean(request.get("applyDynamicIngestion"), false);
                 boolean executePatch = parseBoolean(request.get("executePatch"), "edit".equalsIgnoreCase(responseMode));
                 String currentCode = String.valueOf(request.get("currentCode") == null ? "" : request.get("currentCode"));
+                String requestId = str(request.get("requestId"));
+                if (requestId.isBlank()) {
+                    requestId = "local-" + System.currentTimeMillis();
+                }
                 List<Map<String, Object>> attachments = normalizeAttachments(request.get("attachments"));
 
                 AiMultimodalScannerService.ScanResult scanResult = aiMultimodalScannerService.scan(
@@ -516,6 +527,69 @@ public class AiLocalOpsController {
                 ));
 
                 String fullResponse = "";
+                if (shouldUseLocalComfyUI(attachments, message)) {
+                    long comfyStartAt = System.currentTimeMillis();
+                    sendSse(emitter, Map.of(
+                        "stage", "local_comfyui",
+                        "status", "running",
+                        "message", "Đang khởi chạy ComfyUI + LTX-Video local...",
+                        "current", 4,
+                        "total", 5,
+                        "percent", 80,
+                        "model", "comfyui_local"
+                    ));
+
+                    String comfyResponse = comfyUIProcessService.processRequest(message);
+                    if (comfyResponse == null || comfyResponse.isBlank()) {
+                        sendSse(emitter, Map.of(
+                            "stage", "error",
+                            "status", "error",
+                            "reason_code", "comfyui_empty_output",
+                            "message", "ComfyUI không trả về kết quả hợp lệ."
+                        ));
+                        emitter.complete();
+                        return;
+                    }
+
+                    sendSse(emitter, Map.of(
+                        "stage", "streaming_started",
+                        "status", "running",
+                        "message", "ComfyUI local đã trả kết quả, đang stream...",
+                        "requestId", requestId,
+                        "model", "local_provider",
+                        "ttftMs", 0,
+                        "estimatedTotalChars", comfyResponse.length(),
+                        "percent", 12
+                    ));
+
+                    int streamChunks = emitSyntheticLocalStreamChunks(
+                        emitter,
+                        requestId,
+                        comfyResponse,
+                        1,
+                        false,
+                        true);
+
+                    Map<String, Object> completePayload = new LinkedHashMap<>();
+                    completePayload.put("stage", "complete");
+                    completePayload.put("status", "done");
+                    completePayload.put("message", "ComfyUI local đã hoàn tất");
+                    completePayload.put("responseMode", responseMode);
+                    completePayload.put("contextType", contextType);
+                    completePayload.put("model", "local_provider");
+                    completePayload.put("localProviderPrimaryUsed", true);
+                    completePayload.put("flowConfirmedByLocal", true);
+                    completePayload.put("elapsedMs", Math.max(0, System.currentTimeMillis() - comfyStartAt));
+                    completePayload.put("fullResponse", comfyResponse);
+                    completePayload.put("outputChars", comfyResponse.length());
+                    completePayload.put("textEditsCount", 0);
+                    completePayload.put("streamChunkCount", streamChunks);
+                    completePayload.put("streamedChars", comfyResponse.length());
+                    completePayload.put("result", Map.of("appId", appId));
+                    sendSse(emitter, completePayload);
+                    emitter.complete();
+                    return;
+                }
                 if (executePatch && "code".equalsIgnoreCase(contextType) && !currentCode.isBlank()) {
                     long executeStartedAt = System.currentTimeMillis();
                     sendSse(emitter, Map.of(
@@ -688,6 +762,26 @@ public class AiLocalOpsController {
         worker.start();
 
         return emitter;
+    }
+
+    private boolean shouldUseLocalComfyUI(List<Map<String, Object>> attachments, String message) {
+        if (comfyUIProcessService == null || !comfyUIProcessService.isConfigured()) {
+            return false;
+        }
+        if (attachments != null) {
+            for (Map<String, Object> attachment : attachments) {
+                String type = String.valueOf(attachment.get("type") == null ? "" : attachment.get("type")).trim().toLowerCase(Locale.ROOT);
+                String mimeType = String.valueOf(attachment.get("mimeType") == null ? "" : attachment.get("mimeType")).trim().toLowerCase(Locale.ROOT);
+                if ("image".equals(type) || mimeType.startsWith("image/")) {
+                    return true;
+                }
+            }
+        }
+        String normalizedMessage = String.valueOf(message == null ? "" : message).trim().toLowerCase(Locale.ROOT);
+        return normalizedMessage.contains("video")
+            || normalizedMessage.contains("comfyui")
+            || normalizedMessage.contains("ltx")
+            || normalizedMessage.contains("image");
     }
 
     private Map<String, Object> modelCandidate(
@@ -964,7 +1058,7 @@ public class AiLocalOpsController {
             return new LocalExecutionResult(false, "", "local_provider_unhealthy", "Local llama provider is not healthy");
         }
         try {
-            String raw = llamaCppNativeService.generateContentFast(prompt, 384);
+            String raw = llamaCppNativeService.generateContentFast(prompt, 512);
             JsonNode root = objectMapper.readTree(String.valueOf(raw == null ? "" : raw));
             if (!root.path("success").asBoolean(false)) {
                 String code = String.valueOf(root.path("errorCode").asText("local_provider_failed"));
@@ -983,29 +1077,29 @@ public class AiLocalOpsController {
 
     private String buildLocalPatchPrompt(String userMessage, String currentCode, String compactContext, List<String> planningHints) {
         StringBuilder prompt = new StringBuilder();
-        prompt.append("You are a local code patch generator.\\n");
-        prompt.append("Return ONLY valid JSON object with this exact schema:\\n");
-        prompt.append("{\"summary\":\"...\",\"changes\":[\"...\"],\"textEdits\":[{\"startLine\":1,\"endLine\":1,\"replacement\":\"...\",\"action\":\"add|edit|delete\"}]}\\n");
-        prompt.append("Rules:\\n");
-        prompt.append("- Use 1-based line numbers.\\n");
-        prompt.append("- Do not return markdown fences or explanations.\\n");
-        prompt.append("- Keep textEdits minimal and deterministic.\\n");
-        prompt.append("- If no change needed, return textEdits as empty array.\\n\\n");
-        prompt.append("User request:\\n").append(String.valueOf(userMessage == null ? "" : userMessage)).append("\\n\\n");
+        prompt.append("You are a local code patch generator.\n");
+        prompt.append("Return ONLY valid JSON object with this exact schema:\n");
+        prompt.append("{\"summary\":\"...\",\"changes\":[\"...\"],\"textEdits\":[{\"startLine\":1,\"endLine\":1,\"replacement\":\"...\",\"action\":\"add|edit|delete\"}]}\n");
+        prompt.append("Rules:\n");
+        prompt.append("- Use 1-based line numbers.\n");
+        prompt.append("- Do not return markdown fences or explanations.\n");
+        prompt.append("- Keep textEdits minimal and deterministic.\n");
+        prompt.append("- If no change needed, return textEdits as empty array.\n\n");
+        prompt.append("User request:\n").append(String.valueOf(userMessage == null ? "" : userMessage)).append("\n\n");
         if (planningHints != null && !planningHints.isEmpty()) {
-            prompt.append("Planning hints:\\n");
+            prompt.append("Planning hints:\n");
             for (int i = 0; i < planningHints.size(); i++) {
                 String hint = String.valueOf(planningHints.get(i) == null ? "" : planningHints.get(i)).trim();
                 if (!hint.isBlank()) {
-                    prompt.append(i + 1).append(". ").append(hint).append("\\n");
+                    prompt.append(i + 1).append(". ").append(hint).append("\n");
                 }
             }
-            prompt.append("\\n");
+            prompt.append("\n");
         }
         if (compactContext != null && !compactContext.isBlank()) {
-            prompt.append("Compact context:\\n").append(compactContext).append("\\n\\n");
+            prompt.append("Compact context:\n").append(compactContext).append("\n\n");
         }
-        prompt.append("Current code:\\n");
+        prompt.append("Current code:\n");
         prompt.append(currentCode);
         return prompt.toString();
     }
@@ -1174,6 +1268,36 @@ public class AiLocalOpsController {
             }
         }
         return out;
+    }
+
+    private int emitSyntheticLocalStreamChunks(
+            SseEmitter emitter,
+            String requestId,
+            String text,
+            int attempt,
+            boolean localPreAnalysis,
+            boolean localProviderPrimary) throws IOException {
+        String safe = String.valueOf(text == null ? "" : text);
+        if (safe.isBlank()) {
+            return 0;
+        }
+
+        int chunkSize = 280;
+        int chunks = 0;
+        for (int i = 0; i < safe.length(); i += chunkSize) {
+            String part = safe.substring(i, Math.min(safe.length(), i + chunkSize));
+            Map<String, Object> chunkPayload = new LinkedHashMap<>();
+            chunkPayload.put("stage", "streaming");
+            chunkPayload.put("requestId", requestId);
+            chunkPayload.put("chunk", part);
+            chunkPayload.put("attempt", Math.max(1, attempt));
+            chunkPayload.put("providerFallback", false);
+            chunkPayload.put("localProviderPrimary", localProviderPrimary);
+            chunkPayload.put("localPreAnalysis", localPreAnalysis);
+            sendSse(emitter, chunkPayload);
+            chunks += 1;
+        }
+        return chunks;
     }
 
     private String str(Object raw) {

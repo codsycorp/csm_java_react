@@ -52,6 +52,10 @@ public class LocalAiAssistantContextService {
     private static final Pattern IMPORT_TARGET_PATTERN = Pattern.compile(
         "(?m)^\\s*import\\s+(?:[^;\\n]*?\\s+from\\s+)?[\"']([^\"']+)[\"']|^\\s*import\\s+([A-Za-z0-9_.$]+)\\s*;"
     );
+    // Captures named/default imports + relative path: import { A, B } from './path'
+    private static final Pattern IMPORT_WITH_SYMBOLS_PATTERN = Pattern.compile(
+        "import\\s+(?:\\{([^}]*)\\}|([A-Za-z_$][A-Za-z0-9_$]*)(?:,\\s*\\{([^}]*)\\})?)\\s+from\\s+[\"']([./][^\"']+)[\"']"
+    );
     private static final Pattern FUNCTION_PATTERN = Pattern.compile(
         "(?m)(?:function\\s+[A-Za-z_$][A-Za-z0-9_$]*\\s*\\(|[A-Za-z_$][A-Za-z0-9_$]*\\s*=\\s*\\([^\\)]*\\)\\s*=>|(?:public|private|protected)?\\s*(?:static\\s+)?[A-Za-z_$][A-Za-z0-9_$<>\\[\\]]*\\s+[A-Za-z_$][A-Za-z0-9_$]*\\s*\\()"
     );
@@ -65,6 +69,12 @@ public class LocalAiAssistantContextService {
     private static final List<String> MENU_EXTENSIONS = List.of("md", "markdown", "json", "txt", "yml", "yaml");
     private static final List<String> CODE_EXTENSIONS = List.of("java", "js", "jsx", "ts", "tsx", "vue", "html", "css", "scss", "less", "sql", "json");
     private static final List<String> IGNORED_DIR_NAMES = List.of("node_modules", "target", "dist", "build", ".git", "logs");
+
+    // Per-slot context budget caps — prevents any single section from starving the others
+    private static final int BUDGET_IMPORT_FOLLOW   = 5_000;
+    private static final int BUDGET_SEMANTIC_SEARCH = 6_000;
+    private static final int BUDGET_BUSINESS_MEMORY = 3_200;
+    private static final int BUDGET_MENU_LEARNING   = 2_200;
 
     public record ContextBundle(
         String retrievalBlock,
@@ -243,19 +253,26 @@ public class LocalAiAssistantContextService {
         String queryText = buildQueryText(message, currentCode, language, pName, pType);
 
         if ("menu_json".equals(contextType)) {
+            // Menu context: business memory + menu learning memory
             String businessMemory = aiBusinessMemoryVectorService == null
                 ? ""
-                : aiBusinessMemoryVectorService.buildRagBlock(appId, queryText, Math.max(3, Math.min(6, maxHits)), Math.max(3000, maxRetrievalChars / 2));
+                : aiBusinessMemoryVectorService.buildRagBlock(appId, queryText, Math.max(3, Math.min(6, maxHits)), BUDGET_BUSINESS_MEMORY);
             if (!businessMemory.isBlank()) {
-                blocks.add(trimTo(businessMemory, Math.max(3000, maxRetrievalChars / 2)));
+                blocks.add(trimTo(businessMemory, BUDGET_BUSINESS_MEMORY));
             }
             if (aiMenuLearningMemoryService != null) {
                 String learned = String.valueOf(aiMenuLearningMemoryService.buildLearningContextBlock(appId, message) == null
                     ? ""
                     : aiMenuLearningMemoryService.buildLearningContextBlock(appId, message)).trim();
                 if (!learned.isBlank()) {
-                    blocks.add(trimTo(learned, Math.max(2200, maxRetrievalChars / 3)));
+                    blocks.add(trimTo(learned, BUDGET_MENU_LEARNING));
                 }
+            }
+        } else {
+            // Code context: import-following gives the most targeted file-specific context
+            String importFollow = buildImportFollowBlock(currentCode, BUDGET_IMPORT_FOLLOW);
+            if (!importFollow.isBlank()) {
+                blocks.add(importFollow);
             }
         }
 
@@ -273,11 +290,11 @@ public class LocalAiAssistantContextService {
                 sb.append("score: ").append(String.format(Locale.ROOT, "%.4f", hit.score())).append("\n");
                 sb.append("summary: ").append(hit.summary()).append("\n");
                 sb.append("content:\n").append(hit.content()).append("\n\n");
-                if (sb.length() >= Math.max(2200, maxRetrievalChars)) {
+                if (sb.length() >= BUDGET_SEMANTIC_SEARCH) {
                     break;
                 }
             }
-            blocks.add(trimTo(sb.toString(), Math.max(2200, maxRetrievalChars)));
+            blocks.add(trimTo(sb.toString(), BUDGET_SEMANTIC_SEARCH));
         }
 
         if (blocks.isEmpty()) {
@@ -286,6 +303,83 @@ public class LocalAiAssistantContextService {
 
         String joined = String.join("\n\n", blocks);
         return trimTo(joined, Math.max(3000, maxRetrievalChars));
+    }
+
+    private String buildImportFollowBlock(String currentCode, int budgetChars) {
+        if (currentCode == null || currentCode.isBlank()) {
+            return "";
+        }
+        // Parse import { symbols } from './relative/path' in currentCode
+        Matcher m = IMPORT_WITH_SYMBOLS_PATTERN.matcher(currentCode);
+        List<String> importQueries = new ArrayList<>();
+        LinkedHashSet<String> seenStems = new LinkedHashSet<>();
+        while (m.find() && importQueries.size() < 8) {
+            String namedImports = str(m.group(1));
+            String defaultImport = str(m.group(2));
+            String extraNamed = str(m.group(3));
+            String fromPath = str(m.group(4));
+            if (fromPath.isBlank()) {
+                continue;
+            }
+            // Extract filename stem (strip directory and extension)
+            String stem = fromPath.replaceAll(".*[/\\\\]", "").replaceAll("\\.[^.]*$", "");
+            if (stem.isBlank() || stem.length() < 2 || seenStems.contains(stem)) {
+                continue;
+            }
+            seenStems.add(stem);
+            // Build targeted query: file stem + imported symbol names
+            StringBuilder q = new StringBuilder(stem);
+            if (!namedImports.isBlank()) {
+                q.append(" ").append(namedImports.replaceAll("[,{}\\s]+", " ").trim());
+            }
+            if (!defaultImport.isBlank()) {
+                q.append(" ").append(defaultImport);
+            }
+            if (!extraNamed.isBlank()) {
+                q.append(" ").append(extraNamed.replaceAll("[,{}\\s]+", " ").trim());
+            }
+            String query = q.toString().replaceAll("\\s+", " ").trim();
+            if (!query.isBlank()) {
+                importQueries.add(trimTo(query, 120));
+            }
+        }
+        if (importQueries.isEmpty()) {
+            return "";
+        }
+        // Search Lucene for each import target (deduplicated by path)
+        LinkedHashSet<String> seenPaths = new LinkedHashSet<>();
+        List<SearchHit> importHits = new ArrayList<>();
+        for (String query : importQueries) {
+            List<SearchHit> hits = searchLocalSources(query, "code", 2);
+            for (SearchHit hit : hits) {
+                if (!seenPaths.contains(hit.path())) {
+                    seenPaths.add(hit.path());
+                    importHits.add(hit);
+                    if (importHits.size() >= 6) {
+                        break;
+                    }
+                }
+            }
+            if (importHits.size() >= 6) {
+                break;
+            }
+        }
+        if (importHits.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("## IMPORT_CONTEXT\n");
+        sb.append("Các file được import trực tiếp trong code hiện tại — dùng để hiểu đúng type, contract, và API.\n\n");
+        int charCount = sb.length();
+        for (SearchHit hit : importHits) {
+            String entry = "path: " + hit.path() + "\nsummary: " + hit.summary() + "\ncontent:\n" + hit.content() + "\n\n";
+            if (charCount + entry.length() > budgetChars) {
+                break;
+            }
+            sb.append(entry);
+            charCount += entry.length();
+        }
+        return charCount > 80 ? sb.toString() : "";
     }
 
     private String buildAnalysisBlock(

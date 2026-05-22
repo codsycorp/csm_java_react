@@ -24,8 +24,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Dịch vụ quản lý vòng đời và giới hạn sử dụng của các API key với khả năng lưu trạng thái.
@@ -40,8 +38,6 @@ import org.slf4j.LoggerFactory;
 @Slf4j
 @Service
 public class ApiKeyService {
-
-  private static final Logger log = LoggerFactory.getLogger(ApiKeyService.class);
 
   /** Resource trỏ đến file văn bản chứa danh sách các API key ban đầu. */
   @Value("${api.keys.file-path}")
