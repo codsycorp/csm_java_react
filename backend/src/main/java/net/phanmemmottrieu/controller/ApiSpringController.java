@@ -6287,14 +6287,17 @@ public class ApiSpringController {
     }
 
     /**
-     * For edit-mode local responses: parses textEdits from model JSON and emits one
-     * {@code text_edit_apply} SSE event per edit so the frontend can apply each change
-     * to CodeMirror immediately as a precise line-range operation.
+     * For edit-mode local responses: parses textEdits from model JSON or SEARCH/REPLACE blocks
+     * and emits one {@code text_edit_apply} SSE event per edit so the frontend can apply each
+     * change to CodeMirror immediately as a precise line-range operation.
      * Falls back to raw chunk streaming for analyze mode or unparseable output.
+     *
+     * @param currentCode The current editor code — required for SEARCH/REPLACE→textEdits conversion.
      */
     private int emitLocalTextEditEvents(
             SseEmitter emitter, String requestId, String text,
-            String contextType, String responseMode, int attempt) {
+            String contextType, String responseMode, int attempt,
+            String currentCode) {
         if (text == null || text.isBlank()) {
             return 0;
         }
@@ -6302,79 +6305,107 @@ public class ApiSpringController {
         if (!"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
             return emitSyntheticLocalStreamChunks(emitter, requestId, text, attempt, false, attempt == 1);
         }
+        String safeCode = String.valueOf(currentCode == null ? "" : currentCode);
         try {
             String safe = text.trim();
             int jsonStart = safe.indexOf('{');
             int jsonEnd = safe.lastIndexOf('}');
-            if (jsonStart < 0 || jsonEnd <= jsonStart) {
-                return emitSyntheticLocalStreamChunks(emitter, requestId, safe, attempt, false, attempt == 1);
-            }
-            JsonNode parsed = objectMapper.readTree(safe.substring(jsonStart, jsonEnd + 1));
+            if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                JsonNode parsed = objectMapper.readTree(safe.substring(jsonStart, jsonEnd + 1));
 
-            // Emit summary + changes list as chat text for the streaming bubble
-            String summary = parsed.has("summary") ? parsed.get("summary").asText("").trim() : "";
-            if (!summary.isBlank()) {
-                StringBuilder chatMsg = new StringBuilder(summary);
-                JsonNode changesNode = parsed.get("changes");
-                if (changesNode != null && changesNode.isArray()) {
-                    for (JsonNode c : changesNode) {
-                        String ch = c.asText("").trim();
-                        if (!ch.isBlank()) {
-                            chatMsg.append("\n- ").append(ch);
+                // Emit summary + changes list as chat text for the streaming bubble
+                String summary = parsed.has("summary") ? parsed.get("summary").asText("").trim() : "";
+                if (!summary.isBlank()) {
+                    StringBuilder chatMsg = new StringBuilder(summary);
+                    JsonNode changesNode = parsed.get("changes");
+                    if (changesNode != null && changesNode.isArray()) {
+                        for (JsonNode c : changesNode) {
+                            String ch = c.asText("").trim();
+                            if (!ch.isBlank()) {
+                                chatMsg.append("\n- ").append(ch);
+                            }
                         }
                     }
+                    sendEvent(emitter, jsonOf(
+                        "stage", "streaming",
+                        "requestId", requestId,
+                        "chunk", chatMsg.toString(),
+                        "attempt", attempt,
+                        "localProviderPrimary", attempt == 1));
                 }
-                sendEvent(emitter, jsonOf(
-                    "stage", "streaming",
-                    "requestId", requestId,
-                    "chunk", chatMsg.toString(),
-                    "attempt", attempt,
-                    "localProviderPrimary", attempt == 1));
-            }
 
-            // Case 1: textEdits array — emit each as an individual line-edit event
-            JsonNode editsNode = parsed.has("textEdits") ? parsed.get("textEdits") : parsed.get("text_edits");
-            if (editsNode != null && editsNode.isArray() && editsNode.size() > 0) {
-                int count = 0;
-                for (JsonNode edit : editsNode) {
+                // Case 1: textEdits array — emit each as an individual line-edit event
+                JsonNode editsNode = parsed.has("textEdits") ? parsed.get("textEdits") : parsed.get("text_edits");
+                if (editsNode != null && editsNode.isArray() && editsNode.size() > 0) {
+                    int count = 0;
+                    for (JsonNode edit : editsNode) {
+                        sendEvent(emitter, jsonOf(
+                            "stage", "text_edit_apply",
+                            "requestId", requestId,
+                            "attempt", attempt,
+                            "textEdit", edit));
+                        count++;
+                    }
+                    sendEvent(emitter, jsonOf(
+                        "stage", "text_edit_apply_done",
+                        "requestId", requestId,
+                        "count", count));
+                    return count;
+                }
+
+                // Case 2: full code field — wrap as single full-file replace
+                JsonNode codeNode = parsed.get("code");
+                if (codeNode != null && !codeNode.asText("").isBlank()) {
+                    String fullCode = codeNode.asText("");
+                    int lineCount = fullCode.split("\\n", -1).length;
+                    java.util.LinkedHashMap<String, Object> singleEdit = new java.util.LinkedHashMap<>();
+                    singleEdit.put("startLine", 1);
+                    singleEdit.put("endLine", lineCount);
+                    singleEdit.put("replacement", fullCode);
+                    singleEdit.put("action", "edit");
                     sendEvent(emitter, jsonOf(
                         "stage", "text_edit_apply",
                         "requestId", requestId,
                         "attempt", attempt,
-                        "textEdit", edit));
-                    count++;
+                        "textEdit", singleEdit));
+                    sendEvent(emitter, jsonOf(
+                        "stage", "text_edit_apply_done",
+                        "requestId", requestId,
+                        "count", 1));
+                    return 1;
                 }
-                sendEvent(emitter, jsonOf(
-                    "stage", "text_edit_apply_done",
-                    "requestId", requestId,
-                    "count", count));
-                return count;
-            }
-
-            // Case 2: full code field — wrap as single full-file replace
-            JsonNode codeNode = parsed.get("code");
-            if (codeNode != null && !codeNode.asText("").isBlank()) {
-                String fullCode = codeNode.asText("");
-                int lineCount = fullCode.split("\\n", -1).length;
-                java.util.LinkedHashMap<String, Object> singleEdit = new java.util.LinkedHashMap<>();
-                singleEdit.put("startLine", 1);
-                singleEdit.put("endLine", lineCount);
-                singleEdit.put("replacement", fullCode);
-                singleEdit.put("action", "edit");
-                sendEvent(emitter, jsonOf(
-                    "stage", "text_edit_apply",
-                    "requestId", requestId,
-                    "attempt", attempt,
-                    "textEdit", singleEdit));
-                sendEvent(emitter, jsonOf(
-                    "stage", "text_edit_apply_done",
-                    "requestId", requestId,
-                    "count", 1));
-                return 1;
             }
         } catch (Exception ex) {
-            logger.debug("emitLocalTextEditEvents: JSON parse failed, fallback to raw chunks: {}", ex.getMessage());
+            logger.debug("emitLocalTextEditEvents: JSON parse failed, trying SEARCH/REPLACE salvage: {}", ex.getMessage());
         }
+
+        // Case 3: SEARCH/REPLACE blocks — use the full salvage + canonicalize pipeline
+        // (this is what the master prompt instructs the model to output)
+        if (!safeCode.isBlank()) {
+            try {
+                String salvaged = salvageSearchReplaceAsTextEdits(text, safeCode);
+                String canonicalized = canonicalizeLineTextEditsPayload(salvaged, safeCode);
+                List<Map<String, Object>> parsedEdits = parseNormalizedLineTextEdits(canonicalized);
+                if (parsedEdits != null && !parsedEdits.isEmpty()) {
+                    logger.debug("emitLocalTextEditEvents: salvaged {} SEARCH/REPLACE edits via pipeline", parsedEdits.size());
+                    for (Map<String, Object> edit : parsedEdits) {
+                        sendEvent(emitter, jsonOf(
+                            "stage", "text_edit_apply",
+                            "requestId", requestId,
+                            "attempt", attempt,
+                            "textEdit", edit));
+                    }
+                    sendEvent(emitter, jsonOf(
+                        "stage", "text_edit_apply_done",
+                        "requestId", requestId,
+                        "count", parsedEdits.size()));
+                    return parsedEdits.size();
+                }
+            } catch (Exception ex2) {
+                logger.debug("emitLocalTextEditEvents: SEARCH/REPLACE salvage failed: {}", ex2.getMessage());
+            }
+        }
+
         return emitSyntheticLocalStreamChunks(emitter, requestId, text, attempt, false, attempt == 1);
     }
 
@@ -7326,7 +7357,18 @@ public class ApiSpringController {
             String requestId) throws Exception {
         if ("local_provider".equals(model)) {
             // LOCAL PROVIDER: run with auto-continue for truncated output
+            String localCurrentCode = streamMeta != null
+                ? String.valueOf(streamMeta.getOrDefault("currentCode", "")) : "";
             String localBasePrompt = clampPromptForLocalProvider(prompt, contextType, responseMode);
+            // Prepend a compact format reminder for edit mode so the model knows to output
+            // textEdits/SEARCH/REPLACE instead of plain text (overrides "brief and factual" bias).
+            if ("edit".equalsIgnoreCase(responseMode) && !localBasePrompt.contains("textEdits")) {
+                String editHint = "BẮT BUỘC: Trả về JSON thuần (không markdown, không giải thích):\n"
+                    + "{\"summary\":\"...\",\"textEdits\":[{\"startLine\":N,\"endLine\":N,\"replacement\":\"...\",\"action\":\"edit\"}]}\n"
+                    + "Hoặc dùng khối SEARCH/REPLACE:\n"
+                    + "<<<<<<< SEARCH\n[code cũ]\n=======\n[code mới]\n>>>>>>> REPLACE\n\n";
+                localBasePrompt = editHint + localBasePrompt;
+            }
             int maxLocalAttempts = aiCodeStreamAutoContinueEnabled
                 ? Math.max(1, Math.min(3, aiCodeStreamAutoContinueMaxAttempts))
                 : 1;
@@ -7352,10 +7394,16 @@ public class ApiSpringController {
                             contextType, responseMode);
                     String localRaw = runLocalProviderWithProgress(emitter, requestId, currentLocalPrompt, contextType);
                     String localText = extractAiResultText(localRaw);
-                    if ((localText == null || localText.isBlank()) && localRaw != null) {
-                        localText = localRaw.trim();
-                    }
-                    if (localText == null) {
+                    // Never fall back to streaming the raw provider-wrapper JSON — it
+                    // contains metadata (provider, timestamp, success) that is meaningless
+                    // to the user and causes garbage like '{"result":"","provider":"LlamaCppNative"...}'
+                    // to appear in the chat bubble.
+                    if (localText == null) localText = "";
+                    // Strip prompt-echo fragments (e.g. "### currentCode" echoed by the model
+                    // when the context window is nearly full and the model barely generates).
+                    if (!localText.isBlank() && isLikelyPromptEchoFragment(localText)) {
+                        logger.warn("Local model echoed prompt fragment (context full?), treating as empty. Fragment: {}",
+                            localText.length() > 80 ? localText.substring(0, 80) + "…" : localText);
                         localText = "";
                     }
                     if (!localText.isBlank()) {
@@ -7369,7 +7417,7 @@ public class ApiSpringController {
                                 "percent", 12));
                         }
                         totalChunks += emitLocalTextEditEvents(
-                            emitter, requestId, localText, contextType, responseMode, localAttempt);
+                            emitter, requestId, localText, contextType, responseMode, localAttempt, localCurrentCode);
                         localAccumulated.append(localText);
                     }
                     // Stop early if output looks structurally complete
@@ -7378,6 +7426,14 @@ public class ApiSpringController {
                     }
                 }
                 String finalLocalText = localAccumulated.toString();
+                if (finalLocalText.isBlank()) {
+                    sendEvent(emitter, jsonOf(
+                        "stage", "streaming",
+                        "requestId", requestId,
+                        "chunk", "⚠️ AI local không thể tạo phản hồi. Prompt quá lớn hoặc context bị đầy — hãy rút ngắn yêu cầu hoặc giảm lượng code đính kèm.",
+                        "attempt", 1,
+                        "localProviderPrimary", true));
+                }
                 if (streamMeta != null) {
                     streamMeta.put("attemptsUsed", attemptsUsedLocal);
                     streamMeta.put("maxAttempts", maxLocalAttempts);
@@ -7823,8 +7879,13 @@ public class ApiSpringController {
         String safePrompt = String.valueOf(prompt == null ? "" : prompt);
         int configured = Math.max(4000, aiCodeStreamLocalProviderMaxPromptChars);
         int contextWindow = Math.max(2048, aiLocalLlamaContextWindow);
-        int outputReserve = Math.max(256, aiLocalLlamaMaxTokens);
-        int promptBudgetTokens = Math.max(768, contextWindow - outputReserve - 384);
+        // Edit mode needs larger generation headroom to produce full textEdits JSON;
+        // analyze mode can use smaller reserve since answers can be shorter.
+        boolean editMode = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode));
+        int outputReserve = editMode
+            ? Math.max(768, aiLocalLlamaMaxTokens * 2)   // ≥1024 for edit (textEdits JSON)
+            : Math.max(256, aiLocalLlamaMaxTokens);      // ≥512 for analyze
+        int promptBudgetTokens = Math.max(768, contextWindow - outputReserve - 512);
         int hardCap;
         if (isMenuJsonContext(contextType)) {
             hardCap = Math.min(configured, 22000);
@@ -7882,14 +7943,31 @@ public class ApiSpringController {
         return false;
     }
 
+    private boolean isLikelyPromptEchoFragment(String text) {
+        if (text == null || text.length() > 300) return false;
+        String t = text.trim();
+        // These patterns indicate the model echoed a prompt section header instead of generating real content
+        return t.startsWith("### currentCode")
+            || t.startsWith("## CURRENT CODE")
+            || t.startsWith("--- CURRENT CODE")
+            || t.startsWith("## IMPORT_CONTEXT")
+            || t.startsWith("## SEMANTIC_CONTEXT")
+            || t.startsWith("## BACKEND SESSION CONTEXT")
+            || t.startsWith("# CSM AI")
+            || (t.startsWith("#") && t.length() < 60 && !t.contains("\n"));
+    }
+
     private String buildLocalAutoContinuePrompt(String originalPrompt, String previousOutput, String contextType, String responseMode) {
         // Compact continuation prompt sized for local model's limited context window
         StringBuilder sb = new StringBuilder();
         sb.append("KẾT QUẢ TRƯỚC BỊ CẮT GIỮA CHỪNG. Tiếp tục hoàn thành từ điểm dừng.\n\n");
         if (isMenuJsonContext(contextType)) {
             sb.append("Yêu cầu: Trả về JSON menu đầy đủ hợp lệ, không cắt. Không markdown, không code fence.\n\n");
+        } else if ("edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            sb.append("Yêu cầu: Tiếp tục hoàn thành JSON textEdits (không markdown, không code fence):\n");
+            sb.append("{\"summary\":\"...\",\"textEdits\":[{\"startLine\":N,\"endLine\":N,\"replacement\":\"...\",\"action\":\"edit\"}]}\n\n");
         } else {
-            sb.append("Yêu cầu: Trả về JSON đầy đủ hợp lệ: {\"summary\":\"...\",\"code\":\"...\",\"changes\":[...]}. Không markdown.\n\n");
+            sb.append("Yêu cầu: Tiếp tục hoàn thành câu trả lời. Không lặp lại phần đã viết.\n\n");
         }
         // Concise original request (budget: 4000 chars for local model)
         sb.append("--- YÊU CẦU GỐC ---\n");
