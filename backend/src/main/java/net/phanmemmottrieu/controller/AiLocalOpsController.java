@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import net.phanmemmottrieu.service.AiLocalRuntimeTierService;
 import net.phanmemmottrieu.service.AiMultimodalScannerService;
 import net.phanmemmottrieu.service.AiLocalOrchestrationService;
 import net.phanmemmottrieu.service.AiBusinessMemoryVectorService;
@@ -51,6 +52,9 @@ public class AiLocalOpsController {
     private AiLocalOrchestrationService aiLocalOrchestrationService;
 
     @Autowired(required = false)
+    private AiLocalRuntimeTierService aiLocalRuntimeTierService;
+
+    @Autowired(required = false)
     private AiMultimodalScannerService aiMultimodalScannerService;
 
     @Autowired(required = false)
@@ -68,7 +72,7 @@ public class AiLocalOpsController {
     @Value("${ai.orchestration.multimodal.local-only.require-vision:false}")
     private boolean multimodalRequireVision;
 
-    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf}")
+    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf}")
     private String localModelPath;
 
     @Value("${ai.local.llama.runtime-profile:balanced}")
@@ -123,6 +127,9 @@ public class AiLocalOpsController {
 
         out.put("success", true);
         out.put("policy", policy);
+        if (aiLocalRuntimeTierService != null) {
+            out.put("runtimeTier", aiLocalRuntimeTierService.describeRuntime());
+        }
         out.put("reasoning", reasoning);
         out.put("vision", vision);
         out.put("ready", aiLocalOnlyEnabled && reasoningHealthy && (!multimodalRequireVision || localVisionReady));
@@ -157,7 +164,7 @@ public class AiLocalOpsController {
                 false,
                 "q4_k_m"));
             reasoningCandidates.add(modelCandidate(
-                "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
+                "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
                 "reasoning",
                 "balanced",
                 "~1.0-1.6GB",

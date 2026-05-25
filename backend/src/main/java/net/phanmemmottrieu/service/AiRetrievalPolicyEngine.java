@@ -50,11 +50,11 @@ public class AiRetrievalPolicyEngine {
         public List<String> excluded;  // Scope tags that didn't match
     }
 
-    // Scope bitmask constants (align with AiMultimodalScannerService)
-    private static final int SCOPE_CODE = 1 << 0;      // 1
-    private static final int SCOPE_MENU = 1 << 1;      // 2
-    private static final int SCOPE_CONFIG = 1 << 2;    // 4
-    private static final int SCOPE_EXTERNAL = 1 << 3;  // 8
+    // Scope bitmask constants — exactly matching AiMultimodalScannerService
+    private static final int SCOPE_MENU = 1 << 0;      // 1 = AiMultimodalScannerService.SCOPE_MENU
+    private static final int SCOPE_CODE = 1 << 1;      // 2 = AiMultimodalScannerService.SCOPE_CODE
+    private static final int SCOPE_CONFIG = 1 << 2;    // 4 = AiMultimodalScannerService.SCOPE_UI_UX
+    private static final int SCOPE_EXTERNAL = 1 << 3;  // 8 = AiMultimodalScannerService.SCOPE_JSON_SCHEMA
 
     private static final Pattern FUNCTION_PATTERN = Pattern.compile("\\b(?:function|def|class|public|private|interface)\\s+[A-Za-z_][A-Za-z0-9_]*");
     private static final Pattern SYMBOL_IMPORT_PATTERN = Pattern.compile("\\b(?:import|from|require|use)\\b");

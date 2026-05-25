@@ -6078,6 +6078,12 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 <CodeMirror
                   aiAssistantLanguage="json"
                   aiAssistantContextType="menu_json"
+                  aiAssistantAutoApplyCodeBlock
+                  aiAssistantCurrentCode={
+                    editableAiDraftText
+                      || aiResultText
+                      || buildEditorMenuJson(decodedCurrentMenus)
+                  }
                   aiAssistantOnUserMessage={handleAiAssistantRequirementMessage}
                   value={
                     editableAiDraftText

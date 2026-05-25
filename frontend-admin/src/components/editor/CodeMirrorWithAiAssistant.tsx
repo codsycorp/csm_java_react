@@ -26,7 +26,6 @@ type CodeMirrorWithAiAssistantProps = ReactCodeMirrorProps & {
   aiAssistantInlineReview?: boolean;
   aiAssistantInlineSuggestedCode?: string | null;
   aiAssistantOnCitationNavigate?: (location: { path?: string; line?: number; token: string }) => boolean | void;
-  aiAssistantOnOpenQualityTrace?: (payload: { requestId: string; appId?: string }) => void;
   aiAssistantOnUserMessage?: (payload: AiAssistantUserMessagePayload) => void;
 };
 
@@ -400,7 +399,6 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
     aiAssistantInlineReview = true,
     aiAssistantInlineSuggestedCode,
     aiAssistantOnCitationNavigate,
-    aiAssistantOnOpenQualityTrace,
     aiAssistantOnUserMessage,
     value,
     height,
@@ -716,14 +714,32 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
   }, [aiAssistantInlineReview, autoApplyEnabled, currentCode, onChange]);
 
   const handleCopilotCodeInsert = useCallback((nextCode: string) => {
-    if (presentInlineSuggestion(nextCode)) {
+    const afterCode = String(nextCode || "");
+    // Full menu-tree replacements are normal for menu_json; inline diff preview blocks apply.
+    const skipInlinePreview = contextType === "menu_json" || autoApplyEnabled || !aiAssistantInlineReview;
+    if (!skipInlinePreview && presentInlineSuggestion(afterCode)) {
       return;
     }
 
-    if (typeof onChange === "function") {
-      onChange(nextCode, undefined as any);
+    const view = editorViewRef.current;
+    if (view) {
+      try {
+        const currentDoc = view.state.doc.toString();
+        if (afterCode && afterCode !== currentDoc) {
+          view.dispatch({
+            changes: { from: 0, to: view.state.doc.length, insert: afterCode },
+            scrollIntoView: true,
+          });
+        }
+      } catch {
+        // fall through to onChange-only apply
+      }
     }
-  }, [onChange, presentInlineSuggestion]);
+
+    if (typeof onChange === "function") {
+      onChange(afterCode, undefined as any);
+    }
+  }, [aiAssistantInlineReview, autoApplyEnabled, contextType, onChange, presentInlineSuggestion]);
 
   // Real-time line-range edit: applies only the affected lines via CodeMirror dispatch.
   // This is the precise equivalent of Claude Code's inline diff — no full file replacement.
@@ -1084,7 +1100,6 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
                   onCodeInsert={handleCopilotCodeInsert}
                   onApplyLineEdit={handleApplyLineEdit}
                   onCitationNavigate={handleCitationNavigate}
-                  onOpenQualityTrace={aiAssistantOnOpenQualityTrace}
                   autoApplyCodeBlock={autoApplyEnabled}
                   autoApplyPreferenceKey={autoApplyStorageKey}
                   onAutoApplyChange={handleAutoApplyChange}

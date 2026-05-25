@@ -1,25 +1,22 @@
 import { AI_TIMEOUT_MS } from "#src/api/ai";
-import { searchBusinessMemory } from "#src/api/ai/assistant-engine";
 import { extractCodeBlocks, extractLatestOpenCodeBlock } from "#src/pages/system/developer/codeUtils";
 import { validateCode, collectWorkspaceDiagnostics, CodeDiagnostic } from "#src/pages/system/developer/useCodeEditor";
 import { request } from "#src/utils";
 import {
 	BgColorsOutlined,
-	BulbOutlined,
 	ClearOutlined,
 	CloseOutlined,
 	CopyOutlined,
 	DeleteOutlined,
 	DislikeOutlined,
 	FileImageOutlined,
-	LineChartOutlined,
 	LikeOutlined,
 	PaperClipOutlined,
 	SendOutlined,
 	ThunderboltOutlined,
 	UndoOutlined,
 } from "@ant-design/icons";
-import { Button, Card, Empty, Input, message, Popconfirm, Segmented, Space, Spin, Tag, Tooltip } from "antd";
+import { Button, Card, Empty, Input, message, Popconfirm, Space, Spin, Tag, Tooltip } from "antd";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import styles from "./AiAssistantChat.module.css";
@@ -546,7 +543,6 @@ interface AiAssistantChatProps {
 	/** Called immediately for each individual line-range edit — enables precise CodeMirror dispatch instead of full-file replacement */
 	onApplyLineEdit?: (edit: { startLine: number; endLine: number; replacement: string; action: string }) => void
 	onCitationNavigate?: (location: { path?: string; line?: number; token: string }) => void
-	onOpenQualityTrace?: (payload: { requestId: string; appId?: string }) => void
 	onUserMessage?: (payload: AiAssistantUserMessagePayload) => void
 	autoApplyCodeBlock?: boolean
 	autoApplyPreferenceKey?: string
@@ -557,7 +553,6 @@ const CHAT_HISTORY_KEY = "codeeditor.aiassistant.chat.v1";
 const LEGACY_CHAT_HISTORY_KEY = "codeeditor.copilot.chat.v1";
 const CHAT_RUNTIME_KEY_PREFIX = "codeeditor.aiassistant.runtime.v1";
 const PROMPT_HISTORY_KEY_PREFIX = "codeeditor.aiassistant.promptHistory.v1";
-const BUSINESS_MEMORY_ENABLED_KEY = "aiassistant.businessMemory.enabled";
 const PROMPT_HISTORY_LIMIT = 50;
 const CHAT_STORAGE_LIMIT = 20;
 const MAX_ATTACHMENTS = 8;
@@ -790,6 +785,35 @@ function summarizeFileContent(file: File, textContent: string): string {
 
 function createAttachmentId(prefix: string): string {
 	return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+const menuEditorApplyFetchInflight = new Map<string, Promise<string>>();
+
+async function fetchMenuEditorApplyPayload(requestId: string): Promise<string> {
+	const safeRequestId = String(requestId || "").trim();
+	if (!safeRequestId)
+		return "";
+	const inflight = menuEditorApplyFetchInflight.get(safeRequestId);
+	if (inflight)
+		return inflight;
+	const task = (async () => {
+		try {
+			const response = await request.get("ai-code-stream/menu-editor-apply", {
+				searchParams: { requestId: safeRequestId },
+				timeout: AI_TIMEOUT_MS,
+			});
+			const payload = await response.json() as { success?: boolean; menuJson?: string };
+			if (!payload?.success)
+				return "";
+			return String(payload.menuJson || "").trim();
+		} catch {
+			return "";
+		} finally {
+			menuEditorApplyFetchInflight.delete(safeRequestId);
+		}
+	})();
+	menuEditorApplyFetchInflight.set(safeRequestId, task);
+	return task;
 }
 
 function extractMenuDraftForEditor(raw: unknown): string {
@@ -1588,6 +1612,130 @@ function summarizeMenuPatchOps(rawPatchOps: unknown, rawMergeStats?: unknown): {
 	return { addCount, editCount, deleteCount };
 }
 
+function buildMenuAuditCompletionSummary(params: {
+	userRequest?: string
+	auditSteps?: string[]
+	addCount: number
+	editCount: number
+	deleteCount: number
+	acceptedSteps: number
+	reviewRequired: boolean
+	uiText: (vi: string, en: string, zh: string) => string
+}): string {
+	const {
+		userRequest,
+		auditSteps,
+		addCount,
+		editCount,
+		deleteCount,
+		acceptedSteps,
+		reviewRequired,
+		uiText,
+	} = params;
+	const defaultSteps = [
+		uiText("Kiểm tra trigger từng menu theo chuẩn nghiệp vụ", "Verify each menu trigger against business rules", "按业务规范检查各菜单 trigger"),
+		uiText("Chuẩn hóa tham số đầu vào (table/f_header/f_cbo_query)", "Normalize input params (table/f_header/f_cbo_query)", "规范化输入参数 (table/f_header/f_cbo_query)"),
+		uiText("Bổ sung nhãn 3 ngôn ngữ (label/label_en/label_zh)", "Add 3-language labels (label/label_en/label_zh)", "补充三语标签 (label/label_en/label_zh)"),
+	];
+	const steps = (auditSteps && auditSteps.length > 0 ? auditSteps : defaultSteps)
+		.map(step => `• ${String(step || "").trim()}`)
+		.filter(line => line.length > 2);
+	const opsSummary = `+${Math.max(0, addCount)} ~${Math.max(0, editCount)} -${Math.max(0, deleteCount)}`;
+	const userLine = String(userRequest || "").trim().length > 16
+		? `\n\n${uiText("Yêu cầu", "Request", "请求")}: ${String(userRequest || "").trim().slice(0, 160)}${String(userRequest || "").trim().length > 160 ? "..." : ""}`
+		: "";
+	const reviewNote = reviewRequired
+		? uiText(" Một số bước đang chờ duyệt thủ công.", " Some steps are waiting for manual approval.", " 部分步骤仍在等待人工批准。")
+		: "";
+	return uiText(
+		`Đã hoàn tất rà soát và cập nhật menu local (${Math.max(1, acceptedSteps)} bước).\n\nCác hạng mục đã xử lý:\n${steps.join("\n")}\n\nKết quả: ${opsSummary} (thêm/sửa/xóa). Toàn bộ menu đã merge nằm trong editor CodeMirror.${reviewNote}${userLine}`,
+		`Completed local menu audit and update (${Math.max(1, acceptedSteps)} steps).\n\nItems handled:\n${steps.join("\n")}\n\nResult: ${opsSummary} (add/edit/delete). Full merged menu is in the CodeMirror editor.${reviewNote}${userLine}`,
+		`已完成本地菜单审计与更新（${Math.max(1, acceptedSteps)} 步）。\n\n已处理项：\n${steps.join("\n")}\n\n结果：${opsSummary}（增/改/删）。完整合并菜单已在 CodeMirror 编辑器中。${reviewNote}${userLine}`,
+	);
+}
+
+function looksLikeLargeMenuJsonPayload(raw: unknown): boolean {
+	const text = String(raw || "").trim();
+	if (text.length < 1500)
+		return false;
+	const head = text.slice(0, 800).toLowerCase();
+	return (head.includes("\"menu\"") || head.includes("'menu'"))
+		&& (head.includes("\"id\"") || head.includes("\"label\""));
+}
+
+function looksLikeRenderedMenuNodeLeak(raw: unknown): boolean {
+	const lines = String(raw || "").replace(/\r\n/g, "\n").split("\n").map(line => line.trim()).filter(Boolean);
+	if (lines.length < 4 || lines.length > 40)
+		return false;
+	const menuFieldKeys = new Set([
+		"id", "label", "trigger", "field_root", "report_name", "orientation",
+		"m_icons", "table_name", "type_menu", "m_show", "g_readonly",
+	]);
+	let keyHits = 0;
+	for (const line of lines) {
+		if (menuFieldKeys.has(line.toLowerCase()))
+			keyHits += 1;
+	}
+	return keyHits >= 3;
+}
+
+function looksLikeLegacyMenuEditSummary(raw: unknown): boolean {
+	return /^Đã áp \d+ bước cập nhật menu vào editor\.\s*Tóm tắt thay đổi:/i.test(String(raw || "").trim());
+}
+
+function parseMenuOpsSummaryFromText(raw: unknown): { addCount: number, editCount: number, deleteCount: number } {
+	const match = String(raw || "").match(/\+(\d+)\s*~(\d+)\s*-(\d+)/);
+	if (!match)
+		return { addCount: 0, editCount: 0, deleteCount: 0 };
+	return {
+		addCount: Math.max(0, Number(match[1]) || 0),
+		editCount: Math.max(0, Number(match[2]) || 0),
+		deleteCount: Math.max(0, Number(match[3]) || 0),
+	};
+}
+
+function buildMenuSummaryFromPersistedContext(params: {
+	assistantRaw: string
+	metadata: Record<string, unknown>
+	userRequest: string
+	uiText: (vi: string, en: string, zh: string) => string
+}): string {
+	const mergeStats = params.metadata.mergeStats && typeof params.metadata.mergeStats === "object"
+		? params.metadata.mergeStats as Record<string, unknown>
+		: undefined;
+	const parsedOps = parseMenuOpsSummaryFromText(params.assistantRaw);
+	const auditSteps = Array.isArray(params.metadata.menuAuditPlanSteps)
+		? params.metadata.menuAuditPlanSteps.map(item => String(item || "").trim()).filter(Boolean)
+		: undefined;
+	return buildMenuAuditCompletionSummary({
+		userRequest: params.userRequest,
+		auditSteps,
+		addCount: Math.max(0, Number(mergeStats?.added ?? parsedOps.addCount) || 0),
+		editCount: Math.max(0, Number(mergeStats?.edited ?? params.metadata.patchOpCount ?? parsedOps.editCount) || 0),
+		deleteCount: Math.max(0, Number(mergeStats?.deleted ?? parsedOps.deleteCount) || 0),
+		acceptedSteps: Math.max(1, Number(params.metadata.agenticStepAcceptedCount || params.metadata.agenticStepResultCount || 1) || 1),
+		reviewRequired: params.metadata.reviewRequired === true,
+		uiText: params.uiText,
+	});
+}
+
+function resolvePersistedAssistantDisplayText(params: {
+	assistantRaw: string
+	metadata: Record<string, unknown>
+	userRequest: string
+	uiText: (vi: string, en: string, zh: string) => string
+}): string {
+	const summaryFromMeta = String(params.metadata.assistantChatSummary || "").trim();
+	if (summaryFromMeta)
+		return summaryFromMeta;
+	const shouldRebuildMenuSummary = looksLikeLargeMenuJsonPayload(params.assistantRaw)
+		|| looksLikeRenderedMenuNodeLeak(params.assistantRaw)
+		|| looksLikeLegacyMenuEditSummary(params.assistantRaw);
+	if (!shouldRebuildMenuSummary)
+		return normalizeAssistantDisplayText(params.assistantRaw);
+	return buildMenuSummaryFromPersistedContext(params);
+}
+
 function buildStructuredEditCompletionSummary(params: {
 	contextType: "code" | "menu_json"
 	stepResultCount: number
@@ -1710,7 +1858,8 @@ function hasEditIntent(input: string): boolean {
 	if (!text)
 		return false;
 	const patterns = [
-		/\b(sua|chinh|chỉnh|update|modify|refactor|rewrite|fix|implement|generate|tao|tạo|viet|viết|chen|chèn|apply|patch|replace|doi|đổi)\b/i,
+		/\b(sua|sửa|chinh|chỉnh|update|modify|refactor|rewrite|fix|implement|generate|tao|tạo|viet|viết|chen|chèn|apply|patch|replace|doi|đổi)\b/i,
+		/(hãy\s+sửa|hay\s+sua|kiểm tra.*sửa|trigger.*sửa|nhãn\s+3\s+ngôn\s+ngữ)/i,
 		/\b(add|remove|delete|insert|edit)\b/i,
 		/\b(code\s+edit|edit\s+code|sua\s+code|chinh\s+code|chỉnh\s+code|json\s+patch|menu\s+patch|menu\s+design)\b/i,
 		/(修改|更新|重写|修复|生成|插入|替换|代码|菜单|json)/i,
@@ -1830,11 +1979,42 @@ async function readFileAsDataUrl(file: File): Promise<string> {
 	});
 }
 
+function sanitizeLoadedChatMessages(messages: ChatMessage[]): ChatMessage[] {
+	const viOnly = (vi: string, _en: string, _zh: string) => vi;
+	const out: ChatMessage[] = [];
+	for (const msg of messages) {
+		if (msg.role !== "assistant") {
+			out.push(msg);
+			continue;
+		}
+		const prevUser = [...out].reverse().find(item => item.role === "user");
+		const needsMenuSummary = looksLikeLargeMenuJsonPayload(msg.content)
+			|| looksLikeRenderedMenuNodeLeak(msg.content)
+			|| looksLikeLegacyMenuEditSummary(msg.content);
+		if (needsMenuSummary) {
+			out.push({
+				...msg,
+				content: buildMenuSummaryFromPersistedContext({
+					assistantRaw: msg.content,
+					metadata: {},
+					userRequest: prevUser?.content || "",
+					uiText: viOnly,
+				}),
+			});
+			continue;
+		}
+		out.push(msg);
+	}
+	return out;
+}
+
 function getChatHistory(): ChatMessage[] {
 	try {
 		const stored = localStorage.getItem(CHAT_HISTORY_KEY)
 		  ?? localStorage.getItem(LEGACY_CHAT_HISTORY_KEY);
-		return stored ? dedupeChatMessages(JSON.parse(stored)) : [];
+		return stored
+			? sanitizeLoadedChatMessages(dedupeChatMessages(JSON.parse(stored)))
+			: [];
 	}
 	catch {
 		return [];
@@ -2017,7 +2197,6 @@ export default function AiAssistantChat({
 	onCodeInsert,
 	onApplyLineEdit,
 	onCitationNavigate,
-	onOpenQualityTrace,
 	onUserMessage,
 }: AiAssistantChatProps) {
 	const { i18n } = useTranslation();
@@ -2056,15 +2235,10 @@ export default function AiAssistantChat({
 	const [showFullModelTrace, setShowFullModelTrace] = useState(false);
 	const [showMiniProgress, setShowMiniProgress] = useState(true);
 	const [isProgressDockCollapsed, setIsProgressDockCollapsed] = useState(false);
-	const [isUsageDockVisible, setIsUsageDockVisible] = useState(true);
+	const [isUsageDockVisible, setIsUsageDockVisible] = useState(false);
 	const [orchPreview, setOrchPreview] = useState<OrchestrationPreviewResult | null>(null);
 	const [orchPreviewLoading, setOrchPreviewLoading] = useState(false);
 	const [showOrchPreview, setShowOrchPreview] = useState(false);
-	const [businessMemoryEnabled, setBusinessMemoryEnabled] = useState<boolean>(() => {
-		try { return localStorage.getItem(BUSINESS_MEMORY_ENABLED_KEY) !== "false"; }
-		catch { return true; }
-	});
-	const [bmSearching, setBmSearching] = useState(false);
 	const [agenticSteps, setAgenticSteps] = useState<AgenticStep[]>([]);
 	const [agenticStepsCollapsed, setAgenticStepsCollapsed] = useState(false);
 	const [streamRequestId, setStreamRequestId] = useState("");
@@ -2092,7 +2266,6 @@ export default function AiAssistantChat({
 	const [backendProgressHint, setBackendProgressHint] = useState<{ stage: string, detail: string }>({ stage: "", detail: "" });
 	const [followUpSuggestions, setFollowUpSuggestions] = useState<string[]>([]);
 	const [canUndoLastEdit, setCanUndoLastEdit] = useState(false);
-	const [forcedResponseMode, setForcedResponseMode] = useState<"ask" | "edit" | null>(null);
 	const [processingApprovalStepId, setProcessingApprovalStepId] = useState("");
 	// Progress state: waiting for Gemini / streaming progress
 	const [geminiProgress, setGeminiProgress] = useState<{
@@ -2126,6 +2299,9 @@ export default function AiAssistantChat({
 	const turnAllowAutoApplyRef = useRef<boolean>(false);
 	const localFlowVerifiedRef = useRef<boolean>(false);
 	const deliveredAssistantResultRef = useRef<boolean>(false);
+	const menuAuditStepsRef = useRef<string[]>([]);
+	const lastUserRequestRef = useRef<string>("");
+	const [activeStreamResponseMode, setActiveStreamResponseMode] = useState<ResponseMode>("analyze");
 	const remoteHistoryLoadedScopeRef = useRef<string>("");
 	const remoteHistoryLoadingScopeRef = useRef<string>("");
 	const stageEventSignaturesRef = useRef<Set<string>>(new Set());
@@ -2740,7 +2916,15 @@ export default function AiAssistantChat({
 				const baseTs = Number.isFinite(parsedTime) ? parsedTime : Date.now() - Math.max(0, turns.length - i) * 1000;
 				const userText = String(turn.user_message || turn.userRequest || "").trim();
 				const assistantRaw = String(turn.assistant_message || turn.ai_response || turn.aiResponse || "").trim();
-				const assistantText = normalizeAssistantDisplayText(assistantRaw);
+				const metadata = turn.metadata && typeof turn.metadata === "object" && !Array.isArray(turn.metadata)
+					? turn.metadata as Record<string, unknown>
+					: {};
+				const assistantText = resolvePersistedAssistantDisplayText({
+					assistantRaw,
+					metadata,
+					userRequest: userText,
+					uiText,
+				});
 				const responseModeRaw = String(turn.response_mode || turn.responseMode || "").trim().toLowerCase();
 				const responseMode: ResponseMode | undefined = responseModeRaw === "edit"
 					? "edit"
@@ -2757,9 +2941,6 @@ export default function AiAssistantChat({
 					});
 				}
 				if (assistantText) {
-					const metadata = turn.metadata && typeof turn.metadata === "object" && !Array.isArray(turn.metadata)
-						? turn.metadata as Record<string, unknown>
-						: {};
 					const persistedReviewRequired = metadata.reviewRequired === true
 						|| String(metadata.status || "").trim().toLowerCase() === "review_required";
 					const persistedRequestId = String((turn as any).request_id || (turn as any).requestId || metadata.requestId || "").trim();
@@ -3181,19 +3362,12 @@ export default function AiAssistantChat({
 	}, [completionState]);
 
 	useEffect(() => {
-		if (completionState === "done") {
-			setIsUsageDockVisible(true);
-			const timer = window.setTimeout(() => {
-				setIsUsageDockVisible(false);
-			}, DONE_USAGE_DOCK_AUTO_HIDE_MS);
-			return () => window.clearTimeout(timer);
-		}
-		if (completionState === "review_required" || completionState === "stream_closed" || completionState === "error" || completionState === "cancelled") {
+		if (completionState === "error" || completionState === "review_required") {
 			setIsUsageDockVisible(true);
 			return;
 		}
-		if (completionState === "idle") {
-			setIsUsageDockVisible(true);
+		if (completionState === "done" || completionState === "idle" || completionState === "stream_closed" || completionState === "cancelled") {
+			setIsUsageDockVisible(false);
 		}
 	}, [completionState]);
 
@@ -4340,6 +4514,28 @@ export default function AiAssistantChat({
 		return;
 	}, []);
 
+	const applyMenuEditorCodeDirect = useCallback((rawMenuPayload: string): boolean => {
+		if (!onCodeInsert)
+			return false;
+		const nextCode = extractMenuDraftForEditor(rawMenuPayload);
+		if (!nextCode)
+			return false;
+		if (nextCode === lastAppliedCodeRef.current)
+			return false;
+		const baseCode = liveCodeRef.current || currentCode || "";
+		if (baseCode && baseCode !== nextCode) {
+			undoSnapshotRef.current = baseCode;
+			setCanUndoLastEdit(true);
+		}
+		onCodeInsert(nextCode);
+		liveCodeRef.current = nextCode;
+		lastAppliedCodeRef.current = nextCode;
+		lastRealtimeApplyAtRef.current = Date.now();
+		deliveredAssistantResultRef.current = true;
+		localFlowVerifiedRef.current = true;
+		return true;
+	}, [currentCode, onCodeInsert]);
+
 	const applyRealtimeCodeFromText = useCallback((rawText: string, force = false): boolean => {
 		if (!turnAllowAutoApplyRef.current || !localFlowVerifiedRef.current || !onCodeInsert)
 			return false;
@@ -4881,8 +5077,7 @@ export default function AiAssistantChat({
 		setOrchPreviewLoading(true);
 		setShowOrchPreview(true);
 		try {
-			// Backend classifier handles responseMode routing - don't infer frontend
-			const responseMode: ResponseMode = "analyze";
+			const inferredPreviewMode = inferResponseModeByIntent(msg, contextType);
 			const res = await request.post("ai-orchestration-preview", {
 				json: {
 					appId,
@@ -4893,8 +5088,10 @@ export default function AiAssistantChat({
 					pName: targetPName,
 					pType: targetPType,
 					editorMetadata: requestEditorMetadata,
-					taskType: responseMode,
-					responseMode,
+					taskType: contextType === "menu_json"
+						? (inferredPreviewMode === "edit" ? "menu_patch" : "menu_qa")
+						: "code_assistant",
+					responseMode: inferredPreviewMode,
 					attachments: pendingAttachments.map(a => ({
 						id: a.id,
 						name: a.name,
@@ -4992,36 +5189,7 @@ export default function AiAssistantChat({
 				));
 				return;
 			}
-			// Business Memory auto-inject: search relevant knowledge before sending
-			let bmAttachments: AiAssistantAttachment[] = [];
-			if (businessMemoryEnabled) {
-				try {
-					setBmSearching(true);
-					const bmHits = await searchBusinessMemory({ appId, q: cleanedMessage || normalizedText, k: 4 });
-					bmAttachments = bmHits
-						.filter(hit => Number(hit.score) > 0.05)
-						.slice(0, 4)
-						.map(hit => ({
-							id: `bm_${hit.chunkId}`,
-							name: hit.sourceName,
-							mimeType: "text/markdown",
-							size: hit.content.length,
-							kind: "text" as const,
-							contextRole: "business_logic" as const,
-							authoritative: true,
-							summary: hit.summary,
-							textContent: hit.content,
-							fullContext: true,
-						}));
-				}
-				catch {
-					// Silent fallback: business memory unavailable does not block chat
-				}
-				finally {
-					setBmSearching(false);
-				}
-			}
-			const outgoingAttachments = [...bmAttachments, ...pendingAttachments];
+			const outgoingAttachments = [...pendingAttachments];
 			onUserMessage?.({
 				message: cleanedMessage || normalizedText,
 				attachments: outgoingAttachments,
@@ -5049,12 +5217,10 @@ export default function AiAssistantChat({
 			const inferredResponseMode = inferResponseModeByIntent(cleanedMessage || normalizedText, contextType);
 			const explicitResponseMode: ResponseMode | undefined = useLocalPlanRoute
 				? (modeDirective.overrideMode ?? "edit")
-				: (forcedResponseMode === "edit"
-					? (modeDirective.overrideMode ?? "edit")
-					: forcedResponseMode === "ask"
-						? (modeDirective.overrideMode ?? "analyze")
-						: modeDirective.overrideMode);
+				: modeDirective.overrideMode;
 			const requestedResponseMode: ResponseMode = explicitResponseMode ?? inferredResponseMode;
+			const sendExplicitResponseMode = Boolean(explicitResponseMode);
+			setActiveStreamResponseMode(requestedResponseMode);
 
 			// Add placeholder for assistant response
 			const assistantMsg: ChatMessage = {
@@ -5074,14 +5240,17 @@ export default function AiAssistantChat({
 			setIsLoading(true);
 			setStageEvents([]);
 			setAgenticSteps([]);
-			setAgenticStepsCollapsed(false);
+			setAgenticStepsCollapsed(requestedResponseMode === "analyze");
+			lastAppliedCodeRef.current = "";
+			menuAuditStepsRef.current = [];
+			lastUserRequestRef.current = cleanedMessage || text;
 			setAiUsageSummary(prev => ({ ...prev, turn: null }));
 			setModelDecisionTrace([]);
 			setShowFullTimeline(false);
 			setShowFullModelTrace(false);
 			setShowMiniProgress(true);
 			setIsProgressDockCollapsed(false);
-			setIsUsageDockVisible(true);
+			setIsUsageDockVisible(false);
 			reviewResolutionFeedbackSentRef.current = "";
 			setStreamRequestId("");
 			setStreamJobId("");
@@ -5155,7 +5324,7 @@ export default function AiAssistantChat({
 						uiLanguage: String(i18n.resolvedLanguage || i18n.language || "vi"),
 						flowType,
 						taskType,
-						responseMode: explicitResponseMode,
+						...(sendExplicitResponseMode ? { responseMode: requestedResponseMode } : {}),
 						currentCode,
 						language,
 						contextType,
@@ -5463,9 +5632,11 @@ export default function AiAssistantChat({
 								const mode = String(evt.responseMode).trim().toLowerCase();
 								if (mode === "edit") {
 									turnAllowAutoApplyRef.current = true;
+									setActiveStreamResponseMode("edit");
 								}
 								else if (mode === "analyze") {
 									turnAllowAutoApplyRef.current = false;
+									setActiveStreamResponseMode("analyze");
 								}
 								setMessages((prev) => {
 									const updated = [...prev];
@@ -6178,6 +6349,80 @@ export default function AiAssistantChat({
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 							}
+							else if (evt.stage === "menu_editor_apply") {
+								const fetchReady = Boolean((evt as any).menuEditorApplyFetch === true);
+								const applyRequestId = String((evt as any).requestId || streamRequestId || "").trim();
+								const stepMergeStats = (evt as any).mergeStats;
+								if (stepMergeStats && contextType === "menu_json") {
+									const menuOpSummary = summarizeMenuPatchOps([], stepMergeStats);
+									setLocalFlowOps({
+										verified: true,
+										flow: "menu_json",
+										addCount: menuOpSummary.addCount,
+										editCount: menuOpSummary.editCount,
+										deleteCount: menuOpSummary.deleteCount,
+									});
+									localFlowVerifiedRef.current = true;
+								}
+								appendAgenticStep({
+									stage: "menu_editor_apply",
+									icon: "📥",
+									label: uiText("Nạp menu đã merge", "Load merged menu", "加载已合并菜单"),
+									detail: uiText(
+										`Đang áp ${Number((evt as any).menuEditorApplyChars || 0).toLocaleString()} ký tự vào editor`,
+										`Applying ${Number((evt as any).menuEditorApplyChars || 0).toLocaleString()} chars to editor`,
+										`正在将 ${Number((evt as any).menuEditorApplyChars || 0).toLocaleString()} 字符应用到编辑器`,
+									),
+									status: "running",
+								});
+								if (fetchReady && applyRequestId) {
+									void fetchMenuEditorApplyPayload(applyRequestId).then((menuJson) => {
+										if (menuJson) {
+											applyMenuEditorCodeDirect(menuJson);
+										}
+										setAgenticSteps((prev) => prev.map((step) =>
+											step.stage === "menu_editor_apply"
+												? {
+													...step,
+													status: "done" as const,
+													detail: menuJson
+														? step.detail
+														: uiText(
+															"Không tải được menu merge để áp vào editor",
+															"Could not fetch merged menu to apply to editor",
+															"无法获取已合并菜单以应用到编辑器",
+														),
+												}
+												: step,
+										));
+									});
+								}
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "menu_audit_progress") {
+								const stepDesc = String((evt as any).stepDescription || "").trim();
+								if (stepDesc && !menuAuditStepsRef.current.includes(stepDesc)) {
+									menuAuditStepsRef.current = [...menuAuditStepsRef.current, stepDesc];
+								}
+								const stepIndex = Number((evt as any).stepIndex || 1);
+								const stepTotal = Number((evt as any).stepTotal || 1);
+								appendAgenticStep({
+									stage: `menu_audit_progress_${stepIndex}`,
+									icon: "🔍",
+									label: uiText(
+										`Audit ${stepIndex}/${stepTotal}`,
+										`Audit ${stepIndex}/${stepTotal}`,
+										`审计 ${stepIndex}/${stepTotal}`,
+									),
+									detail: stepDesc || undefined,
+									stepIndex,
+									stepTotal,
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
 							else if (evt.stage === "agentic_step_result") {
 								// Step-by-step results from local agentic execution.
 								const stepIndex = Number((evt as any).stepIndex || 1);
@@ -6254,10 +6499,12 @@ export default function AiAssistantChat({
 								});
 								// Apply textEdits to CodeMirror immediately for edit-mode steps.
 								const stepTextEdits = (evt as any).textEdits;
-								if (approvalRequired || (Array.isArray(stepTextEdits) && stepTextEdits.length > 0)) {
+								const editorApplyDeferred = Boolean((evt as any).editorApplyDeferred === true);
+								if (approvalRequired || (Array.isArray(stepTextEdits) && stepTextEdits.length > 0) || editorApplyDeferred) {
 									deliveredAssistantResultRef.current = true;
 								}
-								if (stepContextType === "menu_json" && Array.isArray(stepPatchOps) && stepPatchOps.length > 0) {
+								if (stepContextType === "menu_json"
+									&& ((Array.isArray(stepPatchOps) && stepPatchOps.length > 0) || editorApplyDeferred || stepMergeStats)) {
 									const menuOpSummary = summarizeMenuPatchOps(stepPatchOps, stepMergeStats);
 									setLocalFlowOps({
 										verified: true,
@@ -6280,8 +6527,15 @@ export default function AiAssistantChat({
 										localFlowVerifiedRef.current = true;
 									}
 								}
-								if (!approvalRequired && Array.isArray(stepTextEdits) && stepTextEdits.length > 0) {
-									const editsPayload = JSON.stringify({ textEdits: stepTextEdits });
+								else if (editorApplyDeferred && stepContextType === "menu_json") {
+									localFlowVerifiedRef.current = true;
+								}
+								if (!approvalRequired && !editorApplyDeferred && Array.isArray(stepTextEdits) && stepTextEdits.length > 0) {
+									const stepEvent = evt as Record<string, unknown>;
+									const stepCode = String(stepEvent.code || "").trim();
+									const editsPayload = stepCode
+										? JSON.stringify({ code: stepCode, textEdits: stepTextEdits })
+										: JSON.stringify({ textEdits: stepTextEdits });
 									applyRealtimeCodeFromText(editsPayload, true);
 								}
 								// Append analysis text section to streaming content for analyze-mode steps.
@@ -6533,48 +6787,88 @@ export default function AiAssistantChat({
 									appendStageEvent({ stage: evt.stage as any, message: localizedEvtMessage, percent: evt.percent ?? 0 });
 								}
 							}
+							else if (evt.stage === "routing" && evt.responseMode) {
+								const mode = String(evt.responseMode).trim().toLowerCase();
+								setActiveStreamResponseMode(mode === "edit" ? "edit" : "analyze");
+								turnAllowAutoApplyRef.current = mode === "edit";
+							}
 							else if (evt.stage === "streaming" && evt.chunk) {
+								// Edit/menu patch: never stream raw LLM tokens into chat — apply via text_edit_apply only.
+								if (turnAllowAutoApplyRef.current) {
+									continue;
+								}
 								pendingStreamChunkRef.current += stripInternalOrchestrationLeakLines(evt.chunk);
 								scheduleStreamFlush();
 							}
-							else if (evt.stage === "text_edit_apply" && (evt as any).textEdit) {
-								// Real-time line-edit: apply immediately to CodeMirror without waiting for full response
-								const rawEdit = (evt as any).textEdit as Record<string, unknown>;
-								const startLine = Math.max(1, Number(rawEdit.startLine ?? (rawEdit.range as any)?.startLine ?? 1));
-								const endLine = Math.max(startLine, Number(rawEdit.endLine ?? (rawEdit.range as any)?.endLine ?? startLine));
-								const replacement = String(rawEdit.replacement ?? rawEdit.text ?? rawEdit.newText ?? "");
-								const action = String(rawEdit.action ?? "edit").trim().toLowerCase();
-								const normalizedEdit = { ...rawEdit, startLine, endLine, replacement, action };
-								turnAllowAutoApplyRef.current = true;
-								localFlowVerifiedRef.current = true;
-								if (onApplyLineEdit) {
-									// Precise CodeMirror dispatch: only the affected line range changes
-									if (!undoSnapshotRef.current || undoSnapshotRef.current === (liveCodeRef.current || currentCode)) {
-										undoSnapshotRef.current = liveCodeRef.current || currentCode || "";
-										setCanUndoLastEdit(true);
-									}
-									onApplyLineEdit({ startLine, endLine, replacement, action });
-									const updatedCode = applyTextEditsToDraft(liveCodeRef.current || currentCode || "", [normalizedEdit]);
-									liveCodeRef.current = updatedCode;
-									lastAppliedCodeRef.current = updatedCode;
-								} else if (onCodeInsert) {
-									// Fallback: apply to accumulated code and push full replacement
-									const baseCode = liveCodeRef.current || currentCode || "";
-									const validation = validateStructuredTextEdits(baseCode, [normalizedEdit]);
-									if (validation.valid && validation.edits.length > 0) {
-										const nextCode = applyTextEditsToDraft(baseCode, validation.edits);
-										if (nextCode !== lastAppliedCodeRef.current) {
-											if (!undoSnapshotRef.current || undoSnapshotRef.current === baseCode) {
-												undoSnapshotRef.current = baseCode;
-												setCanUndoLastEdit(true);
-											}
-											onCodeInsert(nextCode);
-											liveCodeRef.current = nextCode;
-											lastAppliedCodeRef.current = nextCode;
+						else if (evt.stage === "text_edit_apply" && (evt as any).textEdit) {
+							// Real-time line-edit: apply immediately to CodeMirror without waiting for full response
+							const rawEdit = (evt as any).textEdit as Record<string, unknown>;
+							const maybeStartLine = Number(
+								rawEdit.startLine ??
+								(rawEdit.range as any)?.startLine ??
+								rawEdit.start_line ??
+								(rawEdit.range as any)?.start_line ??
+								NaN,
+							);
+							const maybeEndLine = Number(
+								rawEdit.endLine ??
+								(rawEdit.range as any)?.endLine ??
+								rawEdit.end_line ??
+								(rawEdit.range as any)?.end_line ??
+								NaN,
+							);
+							const startLine = Number.isFinite(maybeStartLine) && maybeStartLine > 0
+								? Math.max(1, Math.floor(maybeStartLine))
+								: undefined;
+							const endLine = Number.isFinite(maybeEndLine) && maybeEndLine > 0
+								? Math.max(startLine ?? 1, Math.floor(maybeEndLine))
+								: undefined;
+							const replacement = String(
+								rawEdit.replacement ??
+								rawEdit.newText ??
+								rawEdit.text ??
+								rawEdit.replace ??
+								rawEdit.content ??
+								"",
+							);
+							const action = String(rawEdit.action ?? rawEdit.op ?? rawEdit.operation ?? "edit").trim().toLowerCase();
+							const normalizedEdit = {
+								...rawEdit,
+								...(startLine ? { startLine } : {}),
+								...(endLine ? { endLine } : {}),
+								replacement,
+								action,
+							};
+							turnAllowAutoApplyRef.current = true;
+							localFlowVerifiedRef.current = true;
+							if (onApplyLineEdit && startLine && endLine) {
+								// Precise CodeMirror dispatch: only the affected line range changes
+								if (!undoSnapshotRef.current || undoSnapshotRef.current === (liveCodeRef.current || currentCode)) {
+									undoSnapshotRef.current = liveCodeRef.current || currentCode || "";
+									setCanUndoLastEdit(true);
+								}
+								onApplyLineEdit({ startLine, endLine, replacement, action });
+								const updatedCode = applyTextEditsToDraft(liveCodeRef.current || currentCode || "", [normalizedEdit]);
+								liveCodeRef.current = updatedCode;
+								lastAppliedCodeRef.current = updatedCode;
+							} else if (onCodeInsert) {
+								// Fallback: apply to accumulated code and push full replacement
+								const baseCode = liveCodeRef.current || currentCode || "";
+								const validation = validateStructuredTextEdits(baseCode, [normalizedEdit]);
+								if (validation.valid && validation.edits.length > 0) {
+									const nextCode = applyTextEditsToDraft(baseCode, validation.edits);
+									if (nextCode !== lastAppliedCodeRef.current) {
+										if (!undoSnapshotRef.current || undoSnapshotRef.current === baseCode) {
+											undoSnapshotRef.current = baseCode;
+											setCanUndoLastEdit(true);
 										}
+										onCodeInsert(nextCode);
+										liveCodeRef.current = nextCode;
+										lastAppliedCodeRef.current = nextCode;
 									}
 								}
 							}
+						}
 							else if (evt.stage === "text_edit_apply_done") {
 								const count = Number((evt as any).count ?? 0);
 								// If using onApplyLineEdit, liveCodeRef is already up to date.
@@ -6665,6 +6959,12 @@ export default function AiAssistantChat({
 								const completionEventMeta = evt as Record<string, unknown>;
 								const agenticStepResultCount = Math.max(0, Number(completionEventMeta["agenticStepResultCount"] || 0));
 								const agenticStepAcceptedCount = Math.max(0, Number(completionEventMeta["agenticStepAcceptedCount"] || 0));
+								const qualityGateEarlyAudit = Boolean(completionEventMeta["qualityGateEarlyAudit"] === true);
+								const menuEditorApplyReady = Boolean(completionEventMeta["menuEditorApplyReady"] === true);
+								const completionTextEditsCount = Math.max(
+									0,
+									Number(completionEventMeta["textEditsCount"] || 0),
+								);
 								const completionTextEdits = Array.isArray(evt.textEdits) && evt.textEdits.length > 0
 									? evt.textEdits
 									: parseTextEditsOnlyPayload(evt.fullResponse || "") || [];
@@ -6672,9 +6972,17 @@ export default function AiAssistantChat({
 									? evt.patchOps
 									: [];
 								const hasStructuredStepResults = agenticStepResultCount > 0;
+								const completionMergeStats = evt.mergeStats;
+								const completionPatchOpCount = Math.max(
+									0,
+									Number(completionEventMeta["patchOpCount"] || 0),
+								);
 								const hasStructuredCompletionEdits = hasStructuredStepResults
 									|| completionTextEdits.length > 0
-									|| completionPatchOps.length > 0;
+									|| completionPatchOps.length > 0
+									|| completionPatchOpCount > 0
+									|| menuEditorApplyReady
+									|| (completionMergeStats && typeof completionMergeStats === "object");
 								const localFlowVerified = Boolean(
 									evt.flowConfirmedByLocal === true
 									|| (evt.localProviderPrimaryUsed === true && isMainFlow),
@@ -6689,9 +6997,29 @@ export default function AiAssistantChat({
 										setLocalFlowOpLines(buildCodeOperationPreviewLines(currentCode, completionTextEdits, 20));
 									}
 									else if (effectiveContextType === "menu_json") {
-										completionOpSummary = completionPatchOps.length > 0
-											? summarizeMenuPatchOps(completionPatchOps, evt.mergeStats)
-											: summarizeMenuOperations(currentCode, evt.fullResponse || "");
+										if (completionMergeStats && typeof completionMergeStats === "object") {
+											completionOpSummary = summarizeMenuPatchOps(completionPatchOps, completionMergeStats);
+										}
+										else if (completionPatchOps.length > 0) {
+											completionOpSummary = summarizeMenuPatchOps(completionPatchOps, undefined);
+										}
+										else if (completionPatchOpCount > 0) {
+											completionOpSummary = {
+												addCount: 0,
+												editCount: completionPatchOpCount,
+												deleteCount: 0,
+											};
+										}
+										else if (String(evt.fullResponse || "").trim()) {
+											completionOpSummary = summarizeMenuOperations(currentCode, evt.fullResponse || "");
+										}
+										else if (completionTextEditsCount > 0) {
+											completionOpSummary = {
+												addCount: 0,
+												editCount: completionTextEditsCount,
+												deleteCount: 0,
+											};
+										}
 										setLocalFlowOpLines([]);
 									}
 									setLocalFlowOps({
@@ -6779,20 +7107,41 @@ export default function AiAssistantChat({
 									setStreamJobId(effectiveStreamJobId);
 									void loadStreamPartsMeta(effectiveStreamJobId, 1, 20);
 								}
-								const shouldHideRawEditCompletionPayload = isEditModeEvt && isMainFlow && hasStructuredCompletionEdits;
-								if (evt.fullResponse || shouldHideRawEditCompletionPayload) {
-									deliveredAssistantResultRef.current = true;
-									streamingMessageRef.current = shouldHideRawEditCompletionPayload
-										? buildStructuredEditCompletionSummary({
-											contextType: effectiveContextType === "menu_json" ? "menu_json" : "code",
-											stepResultCount: agenticStepResultCount,
-											acceptedCount: agenticStepAcceptedCount,
+								const backendAssistantSummary = String(completionEventMeta["assistantChatSummary"] || "").trim();
+								const completionAuditSteps = Array.isArray(completionEventMeta["menuAuditPlanSteps"])
+									? (completionEventMeta["menuAuditPlanSteps"] as unknown[]).map(item => String(item || "").trim()).filter(Boolean)
+									: menuAuditStepsRef.current;
+								const resolveMenuCompletionChatText = () => {
+									if (backendAssistantSummary)
+										return backendAssistantSummary;
+									if (qualityGateEarlyAudit && effectiveContextType === "menu_json") {
+										return buildMenuAuditCompletionSummary({
+											userRequest: lastUserRequestRef.current,
+											auditSteps: completionAuditSteps,
 											addCount: completionOpSummary.addCount,
 											editCount: completionOpSummary.editCount,
 											deleteCount: completionOpSummary.deleteCount,
+											acceptedSteps: Math.max(1, agenticStepAcceptedCount || agenticStepResultCount || 1),
 											reviewRequired,
 											uiText,
-										})
+										});
+									}
+									return buildStructuredEditCompletionSummary({
+										contextType: effectiveContextType === "menu_json" ? "menu_json" : "code",
+										stepResultCount: agenticStepResultCount,
+										acceptedCount: agenticStepAcceptedCount,
+										addCount: completionOpSummary.addCount,
+										editCount: completionOpSummary.editCount,
+										deleteCount: completionOpSummary.deleteCount,
+										reviewRequired,
+										uiText,
+									});
+								};
+								const shouldHideRawEditCompletionPayload = isEditModeEvt && isMainFlow && hasStructuredCompletionEdits;
+								if (evt.fullResponse || shouldHideRawEditCompletionPayload || backendAssistantSummary) {
+									deliveredAssistantResultRef.current = true;
+									streamingMessageRef.current = shouldHideRawEditCompletionPayload || backendAssistantSummary
+										? resolveMenuCompletionChatText()
 										: stripInternalOrchestrationLeakLines(evt.fullResponse);
 									pendingStreamChunkRef.current = "";
 								}
@@ -6844,23 +7193,17 @@ export default function AiAssistantChat({
 								}
 								const shouldSynthesizeCompletionStep = isEditModeEvt
 									&& isMainFlow
-									&& !hasStructuredStepResults
-									&& (completionTextEdits.length > 0 || completionPatchOps.length > 0);
+									&& (!hasStructuredStepResults || qualityGateEarlyAudit)
+									&& (completionTextEdits.length > 0 || completionTextEditsCount > 0 || completionPatchOps.length > 0 || menuEditorApplyReady);
 								if (shouldSynthesizeCompletionStep) {
+									const completionSummaryText = resolveMenuCompletionChatText();
 									appendAgenticStep({
-										stage: "agentic_step_result_completion",
+										stage: qualityGateEarlyAudit ? "menu_audit_apply_completion" : "agentic_step_result_completion",
 										icon: reviewRequired ? "🛂" : "✏️",
-										label: uiText("Kết quả apply cuối", "Final applied result", "最终应用结果"),
-										detail: buildStructuredEditCompletionSummary({
-											contextType: effectiveContextType === "menu_json" ? "menu_json" : "code",
-											stepResultCount: Math.max(1, completionTextEdits.length || completionPatchOps.length),
-											acceptedCount: Math.max(1, completionTextEdits.length || completionPatchOps.length),
-											addCount: completionOpSummary.addCount,
-											editCount: completionOpSummary.editCount,
-											deleteCount: completionOpSummary.deleteCount,
-											reviewRequired,
-											uiText,
-										}),
+										label: qualityGateEarlyAudit
+											? uiText("Áp patch audit menu", "Apply menu audit patch", "应用菜单审计补丁")
+											: uiText("Kết quả apply cuối", "Final applied result", "最终应用结果"),
+										detail: completionSummaryText,
 										approvalRequired: reviewRequired,
 										approvalState: reviewRequired ? "pending" : undefined,
 										pendingTextEdits: reviewRequired && completionTextEdits.length > 0 ? completionTextEdits : undefined,
@@ -6906,15 +7249,49 @@ export default function AiAssistantChat({
 									));
 								}
 								flushStreamingToUI(true);
-								if (evt.fullResponse || completionTextEdits.length > 0) {
+								if (evt.fullResponse || completionTextEdits.length > 0 || menuEditorApplyReady) {
 									const blockAutoApplyByRisk = Boolean((evt as any).editRiskBlockAutoApply === true);
 									if (!blockAutoApplyByRisk && !reviewRequired) {
-										if (!hasStructuredStepResults) {
+										const completionFetchApply = Boolean(completionEventMeta["menuEditorApplyFetch"] === true);
+										const completionRequestId = String(evt.requestId || streamRequestId || "").trim();
+										if (isEditModeEvt && effectiveContextType === "menu_json") {
+											if (completionFetchApply && completionRequestId) {
+												void fetchMenuEditorApplyPayload(completionRequestId).then((menuJson) => {
+													if (menuJson) {
+														applyMenuEditorCodeDirect(menuJson);
+													}
+												});
+											}
+											else if (evt.fullResponse) {
+												const applied = applyMenuEditorCodeDirect(String(evt.fullResponse || ""));
+												if (!applied && onCodeInsert) {
+													const forcedDraft = extractMenuDraftForEditor(evt.fullResponse || "")
+														|| String(evt.fullResponse || "").trim();
+													if (forcedDraft && forcedDraft !== lastAppliedCodeRef.current) {
+														onCodeInsert(forcedDraft);
+														liveCodeRef.current = forcedDraft;
+														lastAppliedCodeRef.current = forcedDraft;
+														deliveredAssistantResultRef.current = true;
+													}
+												}
+											}
+										}
+										else {
+											const completionCode = extractMenuDraftForEditor(evt.fullResponse || "");
 											const completionTextEditsPayload = completionTextEdits.length > 0
-												? String(JSON.stringify({ textEdits: completionTextEdits }) || "")
+												? String(JSON.stringify({
+													...(completionCode ? { code: String(evt.fullResponse || "").trim() } : {}),
+													textEdits: completionTextEdits,
+												}) || "")
 												: "";
-											// Force final apply after backend settles mode to avoid debounce race.
-											applyRealtimeCodeFromText(completionTextEditsPayload || String(evt.fullResponse || ""), true);
+											const completionApplyPayload = completionTextEditsPayload
+												|| (completionCode ? String(evt.fullResponse || "") : "");
+											if (completionApplyPayload) {
+												applyRealtimeCodeFromText(completionApplyPayload, true);
+											}
+											else if (!hasStructuredStepResults) {
+												applyRealtimeCodeFromText(String(evt.fullResponse || ""), true);
+											}
 										}
 									}
 								}
@@ -7108,7 +7485,7 @@ export default function AiAssistantChat({
 				}
 			}
 		},
-		[appId, contextType, currentCode, isLoading, language, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, onApplyLineEdit, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatPatchValidatorReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus, formatStageLabel, renderProgressText],
+		[appId, contextType, currentCode, isLoading, language, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, onApplyLineEdit, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatPatchValidatorReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyMenuEditorCodeDirect, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus, formatStageLabel, renderProgressText],
 	);
 
 	const handleRetryAgenticStep = useCallback((step: AgenticStep) => {
@@ -7330,7 +7707,7 @@ export default function AiAssistantChat({
 		setMessages([]);
 		setAiUsageSummary({ turn: null, sessionCostUsd: 0, sessionTokens: 0 });
 		setIsProgressDockCollapsed(false);
-		setIsUsageDockVisible(true);
+		setIsUsageDockVisible(false);
 		setIsLoading(false);
 		reviewResolutionFeedbackSentRef.current = "";
 		setStreamRequestId("");
@@ -7353,26 +7730,6 @@ export default function AiAssistantChat({
 		navigator.clipboard.writeText(streamRequestId);
 		message.success(uiText("Đã sao chép requestId", "requestId copied", "requestId 已复制"));
 	}, [streamRequestId, uiText]);
-
-	const handleOpenQualityTrace = useCallback(() => {
-		const safeRequestId = String(streamRequestId || "").trim();
-		if (!safeRequestId || !onOpenQualityTrace)
-			return;
-		onOpenQualityTrace({
-			requestId: safeRequestId,
-			appId: String(appId || "").trim() || undefined,
-		});
-	}, [appId, onOpenQualityTrace, streamRequestId]);
-
-	const handleOpenMessageTrace = useCallback((msg: ChatMessage) => {
-		const safeRequestId = String(msg.requestId || "").trim();
-		if (!safeRequestId || !onOpenQualityTrace)
-			return;
-		onOpenQualityTrace({
-			requestId: safeRequestId,
-			appId: String(msg.appId || appId || "").trim() || undefined,
-		});
-	}, [appId, onOpenQualityTrace]);
 
 	const handleCopyJobId = useCallback(() => {
 		if (!streamJobId)
@@ -7737,17 +8094,6 @@ export default function AiAssistantChat({
 												<span className={styles.messageActionGroup}>
 													{msg.role === "assistant" && msg.serverTurnId && (
 														<>
-															{msg.requestId && onOpenQualityTrace && (
-																<span className={styles.feedbackMessageAction}>
-																	<Button
-																		type="text"
-																		size="small"
-																		icon={<LineChartOutlined />}
-																		onClick={() => handleOpenMessageTrace(msg)}
-																		title={uiText("Mở trace metrics", "Open trace metrics", "打开追踪指标")}
-																	/>
-																</span>
-															)}
 															<span className={styles.feedbackMessageAction}>
 																<Button
 																	type="text"
@@ -7831,17 +8177,6 @@ export default function AiAssistantChat({
 										<Button
 											type="text"
 											size="small"
-											icon={<LineChartOutlined />}
-											className={styles.requestActionBtn}
-											onClick={handleOpenQualityTrace}
-											title={uiText("Mở trace metrics", "Open trace metrics", "打开追踪指标")}
-											disabled={!onOpenQualityTrace}
-										/>
-									)}
-									{streamRequestId && (
-										<Button
-											type="text"
-											size="small"
 											icon={<CopyOutlined />}
 											className={styles.requestActionBtn}
 											onClick={handleCopyRequestId}
@@ -7894,16 +8229,6 @@ export default function AiAssistantChat({
 														{streamRequestId}
 													</span>
 												</button>
-											)}
-											{streamRequestId && onOpenQualityTrace && (
-												<Button
-													type="text"
-													size="small"
-													icon={<LineChartOutlined />}
-													className={styles.requestActionBtn}
-													onClick={handleOpenQualityTrace}
-													title={uiText("Mở trace metrics", "Open trace metrics", "打开追踪指标")}
-												/>
 											)}
 										</div>
 										<Space size={4}>
@@ -8053,7 +8378,7 @@ export default function AiAssistantChat({
 								)}
 							</div>
 						)}
-						{!isProgressDockCollapsed && agenticSteps.length >= 2 && (
+						{!isProgressDockCollapsed && agenticSteps.length >= 2 && activeStreamResponseMode !== "analyze" && (
 							<div className={`${styles.messageContent} ${styles.stageTimelineCard}`}>
 								<div
 									className={styles.stageTimelineHeader}
@@ -8346,7 +8671,7 @@ export default function AiAssistantChat({
 					</div>
 				)}
 
-				{isUsageDockVisible && (aiUsageSummary.turn || aiUsageSummary.sessionTokens > 0 || completionState === "stream_closed" || completionState === "error" || completionState === "cancelled") && (
+				{isUsageDockVisible && (completionState === "error" || completionState === "review_required" || localFlowOps || streamRequestId) && (
 					<div className={[
 						styles.usageDock,
 						completionState === "stream_closed" ? styles.usageDock_streamClosed : "",
@@ -8355,7 +8680,7 @@ export default function AiAssistantChat({
 					>
 						<div className={styles.usageDockHeader}>
 							<div className={styles.usageDockTitle}>
-								{uiText("Theo dõi chi phí AI", "AI Cost Tracking", "AI 成本跟踪")}
+								{uiText("Trạng thái request", "Request status", "请求状态")}
 							</div>
 							<div className={styles.usageDockBadges}>
 								{completionStateLabel && (
@@ -8382,16 +8707,6 @@ export default function AiAssistantChat({
 											req
 											{streamRequestId}
 										</span>
-										{onOpenQualityTrace && (
-											<Button
-												type="text"
-												size="small"
-												icon={<LineChartOutlined />}
-												className={styles.requestActionBtn}
-												onClick={handleOpenQualityTrace}
-												title={uiText("Mở trace metrics", "Open trace metrics", "打开追踪指标")}
-											/>
-										)}
 										<Button
 											type="text"
 											size="small"
@@ -8740,35 +9055,6 @@ export default function AiAssistantChat({
 								</span>
 							</div>
 						)}
-						{aiUsageSummary.turn && (
-							<div className={styles.usageDockRow}>
-								<span>{uiText("Lượt này", "This turn", "本轮")}</span>
-								<span>
-									{aiUsageSummary.turn.enabled
-										? `${formatCost(aiUsageSummary.turn.estimatedCostUsd)} · ${aiUsageSummary.turn.totalTokens.toLocaleString()} tokens`
-										: uiText("Đã tắt", "Disabled", "已关闭")}
-								</span>
-							</div>
-						)}
-						<div className={styles.usageDockRow}>
-							<span>{uiText("Tổng phiên", "Session total", "会话总计")}</span>
-							<span>
-								{formatCost(aiUsageSummary.sessionCostUsd)}
-								{" "}
-								·
-								{" "}
-								{aiUsageSummary.sessionTokens.toLocaleString()}
-								{" "}
-								tokens
-							</span>
-						</div>
-						{aiUsageSummary.turn?.model && (
-							<div className={styles.usageDockModel}>
-								{uiText("Model", "Model", "模型")}
-								:
-								{aiUsageSummary.turn.model}
-							</div>
-						)}
 					</div>
 				)}
 
@@ -9075,33 +9361,6 @@ export default function AiAssistantChat({
 								onClick={() => imageInputRef.current?.click()}
 							/>
 						</Tooltip>
-						<Tooltip title={uiText(
-							businessMemoryEnabled
-								? "Bộ nhớ nghiệp vụ BẬT — AI tự động tra cứu tài liệu nghiệp vụ trước mỗi câu hỏi"
-								: "Bộ nhớ nghiệp vụ TẮT — Click để bật tra cứu tài liệu nghiệp vụ",
-							businessMemoryEnabled
-								? "Business Memory ON — AI auto-searches knowledge base before each message"
-								: "Business Memory OFF — Click to enable knowledge base lookup",
-							businessMemoryEnabled ? "业务记忆已开启" : "业务记忆已关闭",
-						)}
-						>
-							<Button
-								type="text"
-								icon={<BulbOutlined />}
-								loading={bmSearching}
-								onClick={() => {
-									const next = !businessMemoryEnabled;
-									setBusinessMemoryEnabled(next);
-									try { localStorage.setItem(BUSINESS_MEMORY_ENABLED_KEY, String(next)); }
-									catch { /* ignore */ }
-									message.info(next
-										? uiText("Đã bật tra cứu nghiệp vụ", "Business memory enabled", "业务记忆已开启")
-										: uiText("Đã tắt tra cứu nghiệp vụ", "Business memory disabled", "业务记忆已关闭"),
-									);
-								}}
-								style={{ color: businessMemoryEnabled ? "#52c41a" : undefined }}
-							/>
-						</Tooltip>
 						<Tooltip title={uiText("Preview luồng orchestration (dev)", "Preview orchestration plan (dev)", "预览编排计划（开发）")}>
 							<Button
 								type="text"
@@ -9136,15 +9395,6 @@ export default function AiAssistantChat({
 								{uiText("Hoàn tác", "Undo edit", "撤销编辑")}
 							</Button>
 						)}
-						<Segmented
-							size="small"
-							value={forcedResponseMode ?? "ask"}
-							onChange={(val) => setForcedResponseMode(val === "edit" ? "edit" : "ask")}
-							options={[
-								{ value: "ask", label: "Ask" },
-								{ value: "edit", label: "Edit" },
-							]}
-						/>
 						<Button
 							type="primary"
 							icon={<SendOutlined />}

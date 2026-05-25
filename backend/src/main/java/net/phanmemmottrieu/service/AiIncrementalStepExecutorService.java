@@ -140,8 +140,13 @@ public class AiIncrementalStepExecutorService {
         try {
             // Extract JSON from markdown fence if present
             String jsonStr = extractJson(llmOutput);
+            if (jsonStr == null || jsonStr.isBlank()) {
+                log.warn("No JSON plan candidate found in LLM output");
+                plan.metadata.put("parseError", "no_json_candidate");
+                return plan;
+            }
+
             JsonNode root = objectMapper.readTree(jsonStr);
-            
             if (root.has("reasoning")) {
                 plan.reasoning = root.get("reasoning").asText("");
             }
@@ -463,22 +468,98 @@ public class AiIncrementalStepExecutorService {
     }
 
     private String extractJson(String text) {
-        // Try to extract JSON from markdown fence
-        Pattern pattern = Pattern.compile("```(?:json)?\\s*\\n?(.+?)\\n?```", Pattern.DOTALL);
+        if (text == null) {
+            return null;
+        }
+
+        String trimmed = text.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+
+        String fromFence = extractJsonFromFence(trimmed);
+        if (fromFence != null) {
+            return extractBalancedJson(fromFence);
+        }
+
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            return extractBalancedJson(trimmed);
+        }
+
+        int firstBrace = trimmed.indexOf('{');
+        int firstBracket = trimmed.indexOf('[');
+        int firstJsonStart = -1;
+        if (firstBrace >= 0 && firstBracket >= 0) {
+            firstJsonStart = Math.min(firstBrace, firstBracket);
+        } else if (firstBrace >= 0) {
+            firstJsonStart = firstBrace;
+        } else if (firstBracket >= 0) {
+            firstJsonStart = firstBracket;
+        }
+
+        if (firstJsonStart >= 0) {
+            return extractBalancedJson(trimmed.substring(firstJsonStart));
+        }
+
+        return null;
+    }
+
+    private String extractJsonFromFence(String text) {
+        Pattern pattern = Pattern.compile("```(?:json)?\\s*\\n(.+?)\\n?```", Pattern.DOTALL);
         Matcher matcher = pattern.matcher(text);
-        
         if (matcher.find()) {
             return matcher.group(1).trim();
         }
-        
-        // Try direct JSON parsing
-        text = text.trim();
-        if (text.startsWith("{") || text.startsWith("[")) {
-            return text;
+        return null;
+    }
+
+    private String extractBalancedJson(String text) {
+        if (text == null || text.isEmpty()) {
+            return null;
         }
-        
-        // Fallback: assume whole text is JSON
-        return text;
+
+        char open = text.charAt(0);
+        char close;
+        if (open == '{') {
+            close = '}';
+        } else if (open == '[') {
+            close = ']';
+        } else {
+            return null;
+        }
+
+        int depth = 0;
+        boolean inString = false;
+        boolean escape = false;
+
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (c == '\\') {
+                escape = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+            if (c == open) {
+                depth++;
+            } else if (c == close) {
+                depth--;
+                if (depth == 0) {
+                    return text.substring(0, i + 1).trim();
+                }
+            }
+        }
+
+        return null;
     }
 
     private Integer getIntParam(Map<String, Object> params, String key, Integer defaultValue) {

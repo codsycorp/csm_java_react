@@ -329,18 +329,48 @@ public class AiLocalEmbeddingService {
         }
 
         private float[] embedInternal(String text, EmbeddingIntent intent) {
-            float[] values;
-            synchronized (modelLock) {
-                values = ensureModelLoaded().embed(applyEmbeddingPrefix(nonBlank(text), intent));
+            // "encoder requires n_ubatch >= n_tokens" — the hard limit is n_ubatch (--ubatch-size),
+            // NOT n_batch. For Vietnamese+JSON, actual ratio is ~1.75 chars/token.
+            // Use 1.7 multiplier + 30-token safety margin so the first attempt almost never fails.
+            int maxTextChars = Math.max(64, (int) ((ubatchSize - 30) * 1.7));
+            String current = (text != null && text.length() > maxTextChars)
+                ? text.substring(0, maxTextChars) : text;
+
+            // Retry loop: halve on overflow — fully tokenizer-agnostic, works on any n_batch.
+            for (int attempt = 0; attempt < 6; attempt++) {
+                try {
+                    float[] values;
+                    synchronized (modelLock) {
+                        values = ensureModelLoaded().embed(applyEmbeddingPrefix(nonBlank(current), intent));
+                    }
+                    if (values == null || values.length == 0) {
+                        int safeDimensions = dimension();
+                        float[] fallback = new float[safeDimensions];
+                        fallback[0] = 1.0f;
+                        return fallback;
+                    }
+                    if (attempt > 0) {
+                        log.debug("Embedding succeeded after {} truncation(s), len={}", attempt, current.length());
+                    }
+                    recordDimensions(values.length);
+                    return normalize(copy(values), values.length);
+                } catch (RuntimeException ex) {
+                    String msg = ex.getMessage();
+                    if (msg != null && msg.contains("input is too large")
+                            && current != null && current.length() > 64) {
+                        current = current.substring(0, Math.max(64, current.length() / 2));
+                        log.debug("Embedding input too large, halving to {} chars (attempt {})", current.length(), attempt + 1);
+                    } else {
+                        throw ex;
+                    }
+                }
             }
-            if (values == null || values.length == 0) {
-                int safeDimensions = dimension();
-                float[] fallback = new float[safeDimensions];
-                fallback[0] = 1.0f;
-                return fallback;
-            }
-            recordDimensions(values.length);
-            return normalize(copy(values), values.length);
+            // After 6 halvings the text is tiny; return unit fallback rather than crashing.
+            log.warn("Embedding failed after 6 truncation attempts, returning fallback vector");
+            int safeDimensions = dimension();
+            float[] fallback = new float[safeDimensions];
+            fallback[0] = 1.0f;
+            return fallback;
         }
 
         @Override

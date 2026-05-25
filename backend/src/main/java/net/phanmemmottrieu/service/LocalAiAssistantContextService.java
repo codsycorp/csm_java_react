@@ -67,6 +67,7 @@ public class LocalAiAssistantContextService {
     private static final Pattern MENU_TABLE_PATTERN = Pattern.compile("\"table_name\"\\s*:\\s*\"([^\"]+)\"");
     private static final Pattern MENU_TYPE_FORM_PATTERN = Pattern.compile("\"type_form\"\\s*:\\s*(\\d+)");
     private static final List<String> MENU_EXTENSIONS = List.of("md", "markdown", "json", "txt", "yml", "yaml");
+    private static final List<String> STARTUP_MARKDOWN_EXTENSIONS = List.of("md", "markdown", "txt");
     private static final List<String> CODE_EXTENSIONS = List.of("java", "js", "jsx", "ts", "tsx", "vue", "html", "css", "scss", "less", "sql", "json");
     private static final List<String> IGNORED_DIR_NAMES = List.of("node_modules", "target", "dist", "build", ".git", "logs");
 
@@ -113,6 +114,9 @@ public class LocalAiAssistantContextService {
     @Value("${ai.local.assistant.index-refresh-ms:300000}")
     private long indexRefreshMs;
 
+    @Value("${ai.local.assistant.rebuild-on-startup:true}")
+    private boolean rebuildOnStartup;
+
     @Value("${ai.local.assistant.max-file-chars:800000}")
     private int maxFileChars;
 
@@ -130,6 +134,9 @@ public class LocalAiAssistantContextService {
 
     @Value("${ai.local.assistant.structural-summary.max-json-keys:12}")
     private int structuralSummaryMaxJsonKeys;
+
+    @Value("${ai.local.assistant.startup-index-only-markdown:true}")
+    private boolean startupIndexOnlyMarkdown;
 
     @Value("${ai.local.assistant.max-hits:6}")
     private int maxHits;
@@ -155,12 +162,19 @@ public class LocalAiAssistantContextService {
 
     @PostConstruct
     public void initIndex() {
-        if (enabled) {
-            try {
-                ensureIndexFresh();
-            } catch (Exception ex) {
-                log.warn("Local assistant index init on startup failed: {}", ex.getMessage(), ex);
-            }
+        if (!enabled) {
+            return;
+        }
+
+        if (!rebuildOnStartup) {
+            log.info("Local assistant index rebuild on startup disabled via ai.local.assistant.rebuild-on-startup=false");
+            return;
+        }
+
+        try {
+            ensureIndexFresh();
+        } catch (Exception ex) {
+            log.warn("Local assistant index init on startup failed: {}", ex.getMessage(), ex);
         }
     }
 
@@ -169,9 +183,11 @@ public class LocalAiAssistantContextService {
     }
 
     public boolean shouldForceLocalOnly(String contextType) {
-        // Hard local-only disabled: when local output fails quality gate, cloud fallback is always allowed
-        return false;
+        return enabled && forceLocalOnly && aiLocalOnlyGlobalFlag;
     }
+
+    @Value("${ai.local.only.enabled:true}")
+    private boolean aiLocalOnlyGlobalFlag;
 
     public SourceFileView loadIndexedSourceFile(String rawPath, String contextType) {
         if (!enabled) {
@@ -556,13 +572,20 @@ public class LocalAiAssistantContextService {
                 IndexWriterConfig config = new IndexWriterConfig();
                 try (IndexWriter writer = new IndexWriter(directory, config)) {
                     writer.deleteAll();
+                    log.info("Local assistant startup index scope markdownOnly={}", startupIndexOnlyMarkdown);
                     for (Path root : resolveSourceRoots()) {
                         if (!Files.exists(root)) {
                             continue;
                         }
                         try (Stream<Path> stream = Files.walk(root)) {
                             stream.filter(Files::isRegularFile)
-                                .filter(this::shouldIndexFile)
+                                .filter(path -> {
+                                    if (startupIndexOnlyMarkdown) {
+                                        String ext = extensionOf(path);
+                                        return STARTUP_MARKDOWN_EXTENSIONS.contains(ext);
+                                    }
+                                    return shouldIndexFile(path);
+                                })
                                 .forEach(path -> indexFile(writer, root, path));
                         }
                     }

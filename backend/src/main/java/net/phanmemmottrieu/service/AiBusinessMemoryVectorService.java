@@ -28,9 +28,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -56,6 +58,18 @@ public class AiBusinessMemoryVectorService {
     );
     private static final Pattern MENU_TABLE_PATTERN = Pattern.compile("\"table_name\"\\s*:\\s*\"([^\"]+)\"");
     private static final Pattern MENU_TYPE_FORM_PATTERN = Pattern.compile("\"type_form\"\\s*:\\s*(\\d+)");
+
+    // Semantic chunking: Java class-body method/field declarations
+    private static final Pattern JAVA_MEMBER_BOUNDARY = Pattern.compile(
+        "(?m)^    (?:@[A-Za-z]\\w*(?:\\s*\\([^)]*\\))?\\s*\\n    )?(?:public|private|protected|static|final|abstract|synchronized|override)\\s"
+    );
+    // Semantic chunking: TypeScript top-level function / class / const-arrow-function
+    private static final Pattern TS_DECLARATION_BOUNDARY = Pattern.compile(
+        "(?m)^(?:export\\s+)?(?:default\\s+)?(?:async\\s+)?(?:function\\s+[A-Za-z_$]|class\\s+[A-Za-z_$]|const\\s+[A-Za-z_$])"
+    );
+
+    // Content-hash cache: avoids re-embedding identical content between requests
+    private final ConcurrentHashMap<String, String> contentHashCache = new ConcurrentHashMap<>();
 
     private final AiLocalEmbeddingService aiLocalEmbeddingService;
 
@@ -269,6 +283,14 @@ public class AiBusinessMemoryVectorService {
             return new IndexSummary(safeAppId, safeSourceName, 0, 0, System.currentTimeMillis());
         }
 
+        // Content-hash check: skip full re-embedding if this exact content was already indexed
+        String cacheKey = safeAppId + ":" + safeSourceName;
+        String contentHash = md5Hex(safeMarkdown);
+        if (contentHash.equals(contentHashCache.get(cacheKey))) {
+            log.debug("Skip re-index {}/{}: content unchanged", safeAppId, safeSourceName);
+            return new IndexSummary(safeAppId, safeSourceName, 0, 0, System.currentTimeMillis());
+        }
+
         List<String> chunks = chunkMarkdown(safeMarkdown);
         if (chunks.isEmpty()) {
             return new IndexSummary(safeAppId, safeSourceName, 0, 0, System.currentTimeMillis());
@@ -292,7 +314,7 @@ public class AiBusinessMemoryVectorService {
                         int idx = 0;
                         for (String chunk : chunks) {
                             String safeChunk = String.valueOf(chunk == null ? "" : chunk).trim();
-                            if (safeChunk.isBlank()) {
+                            if (safeChunk.isBlank() || isLowSignalBinaryChunk(safeChunk)) {
                                 continue;
                             }
                             totalCharsRef[0] += safeChunk.length();
@@ -335,6 +357,7 @@ public class AiBusinessMemoryVectorService {
                 totalChars = totalCharsRef[0];
                 log.info("Indexed business memory appId={} source={} chunks={} chars={}", safeAppId, safeSourceName, indexedChunksRef[0], totalChars);
             }
+            contentHashCache.put(cacheKey, contentHash);
         } catch (Exception ex) {
             log.error("Failed to index business markdown appId={} source={}: {}", safeAppId, safeSourceName, ex.getMessage(), ex);
             return new IndexSummary(safeAppId, safeSourceName, 0, 0, nowMs);
@@ -860,47 +883,200 @@ public class AiBusinessMemoryVectorService {
         if (source.isBlank()) {
             return List.of();
         }
-
         int maxChars = Math.max(700, chunkMaxChars);
         int overlap = Math.max(0, Math.min(Math.max(80, chunkOverlapChars), Math.max(120, maxChars / 2)));
+        if (isStructuredJsonContent(source)) {
+            return chunkJsonStructure(source, maxChars, overlap);
+        }
+        if (isCodeContent(source)) {
+            return chunkCodeByDeclaration(source, maxChars, overlap);
+        }
+        return chunkByParagraph(source, maxChars, overlap);
+    }
+
+    /** Skip base64/office-binary blobs that pollute menu RAG and blow embedding batch limits. */
+    private boolean isLowSignalBinaryChunk(String chunk) {
+        String safe = String.valueOf(chunk == null ? "" : chunk).trim();
+        if (safe.length() < 120) {
+            return false;
+        }
+        if (safe.matches("(?s).*A{80,}.*")) {
+            return true;
+        }
+        if (safe.contains("word/") && safe.contains("xml") && safe.contains("PK")) {
+            return true;
+        }
+        long alnumSlash = safe.chars()
+            .filter(c -> Character.isLetterOrDigit(c) || c == '/' || c == '+' || c == '=' || c == '/')
+            .count();
+        long spaces = safe.chars().filter(Character::isWhitespace).count();
+        if (safe.length() > 400 && alnumSlash > safe.length() * 0.90 && spaces < safe.length() * 0.03) {
+            return true;
+        }
+        long upper = safe.chars().filter(c -> c >= 'A' && c <= 'Z').count();
+        return upper > safe.length() * 0.55;
+    }
+
+    private boolean isStructuredJsonContent(String s) {
+        if (s.isBlank()) return false;
+        char first = s.charAt(0);
+        if (first != '{' && first != '[') return false;
+        return s.contains("\":") && (
+            s.contains("\"menuId\"") || s.contains("\"parentId\"") || s.contains("\"table_name\"")
+            || s.contains("\"type_form\"") || s.contains("\"menuType\"") || s.contains("\"triggerList\"")
+            || s.contains("\"labelMap\"")
+        );
+    }
+
+    private boolean isCodeContent(String s) {
+        // Java class/interface/annotation indicators
+        if (s.contains("public class ") || s.contains("public interface ")
+                || s.contains("public enum ") || s.contains("public @interface ")
+                || s.contains("@Service") || s.contains("@Component")
+                || s.contains("@Controller") || s.contains("@Repository")) {
+            return true;
+        }
+        // TypeScript/React indicators — require at least two signals
+        int tsSignals = 0;
+        if (s.contains("export function ") || s.contains("export default ") || s.contains("export const ")) tsSignals++;
+        if (s.contains("from '") || s.contains("from \"") || s.contains("import {")) tsSignals++;
+        if (s.contains(": React.FC") || s.contains("useState(") || s.contains("useEffect(")) tsSignals++;
+        if (tsSignals >= 2) {
+            return true;
+        }
+        // DynamicCode runtime (browser globals, no import/export)
+        int dynamicSignals = 0;
+        if (s.contains("function ") || s.contains("async function ")) dynamicSignals++;
+        if (s.contains("const ") || s.contains("let ") || s.contains("var ")) dynamicSignals++;
+        if (s.contains("window.") || s.contains("document.") || s.contains("csmApi")) dynamicSignals++;
+        return dynamicSignals >= 2;
+    }
+
+    /** Chunk JSON menu structures by splitting top-level array elements. */
+    private List<String> chunkJsonStructure(String source, int maxChars, int overlap) {
+        if (source.startsWith("[")) {
+            List<String> elements = extractTopLevelArrayElements(source);
+            if (!elements.isEmpty()) {
+                return bundleElementsIntoChunks(elements, maxChars, overlap);
+            }
+        }
+        return chunkByParagraph(source, maxChars, overlap);
+    }
+
+    /** Depth-tracking split of a JSON array into top-level element strings. */
+    private List<String> extractTopLevelArrayElements(String source) {
+        List<String> elements = new ArrayList<>();
+        int depth = 0;
+        int elemStart = -1;
+        
+        for (int i = 0; i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (c == '{' || c == '[') {
+                if (depth == 1 && c == '{' && elemStart < 0) {
+                    elemStart = i;
+                }
+                depth++;
+            } else if (c == '}' || c == ']') {
+                depth--;
+                if (depth == 1 && elemStart >= 0) {
+                    // Sửa tại đây: Cắt chuỗi trực tiếp bằng substring và add thẳng vào list
+                    elements.add(source.substring(elemStart, i + 1));
+                    elemStart = -1;
+                }
+            }
+        }
+        return elements;
+    }
+
+    private List<String> bundleElementsIntoChunks(List<String> elements, int maxChars, int overlap) {
+        List<String> chunks = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String element : elements) {
+            String e = element.trim();
+            if (e.isBlank()) continue;
+            if (current.length() > 0 && current.length() + 2 + e.length() > maxChars) {
+                chunks.add(current.toString().trim());
+                current = new StringBuilder();
+            }
+            if (current.length() > 0) current.append(",\n");
+            current.append(e);
+        }
+        if (current.length() > 0) chunks.add(current.toString().trim());
+        return hardBound(chunks, maxChars, overlap);
+    }
+
+    /** Chunk Java/TypeScript code, splitting at method/class declaration boundaries. */
+    private List<String> chunkCodeByDeclaration(String source, int maxChars, int overlap) {
+        String[] blocks = source.split("\\n\\s*\\n");
+        List<String> chunks = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String block : blocks) {
+            String text = block.trim();
+            if (text.isBlank()) continue;
+            if (current.length() > 0 && current.length() + 2 + text.length() > maxChars) {
+                chunks.add(current.toString().trim());
+                String tail = overlap > 0 && current.length() > overlap
+                    ? current.substring(Math.max(0, current.length() - overlap)) : "";
+                current = new StringBuilder(tail);
+            }
+            if (current.length() > 0) current.append("\n\n");
+            current.append(text);
+        }
+        if (current.length() > 0) chunks.add(current.toString().trim());
+        // Sub-split oversized blocks at declaration boundaries
+        List<String> split = new ArrayList<>();
+        for (String chunk : chunks) {
+            if (chunk.length() <= maxChars) {
+                split.add(chunk);
+                continue;
+            }
+            String[] lines = chunk.split("\n");
+            StringBuilder cur = new StringBuilder();
+            for (String line : lines) {
+                boolean isDecl = JAVA_MEMBER_BOUNDARY.matcher(line).find()
+                    || TS_DECLARATION_BOUNDARY.matcher(line).find();
+                if (isDecl && cur.length() > maxChars / 3) {
+                    split.add(cur.toString().trim());
+                    cur = new StringBuilder();
+                }
+                if (cur.length() > 0) cur.append("\n");
+                cur.append(line);
+            }
+            if (cur.length() > 0) split.add(cur.toString().trim());
+        }
+        return hardBound(split, maxChars, overlap);
+    }
+
+    /** Existing paragraph-based chunking (unchanged logic, extracted for reuse). */
+    private List<String> chunkByParagraph(String source, int maxChars, int overlap) {
         String[] blocks = source.split("\\n\\s*\\n");
         if (blocks.length == 0) {
             return List.of(trimTo(source, maxChars));
         }
-
         List<String> chunks = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         for (String block : blocks) {
-            String text = String.valueOf(block == null ? "" : block).trim();
-            if (text.isBlank()) {
-                continue;
-            }
-
+            String text = block.trim();
+            if (text.isBlank()) continue;
             if (current.length() > 0 && current.length() + 2 + text.length() > maxChars) {
                 chunks.add(current.toString().trim());
                 String tail = overlap > 0 && current.length() > overlap
-                    ? current.substring(Math.max(0, current.length() - overlap))
-                    : "";
+                    ? current.substring(Math.max(0, current.length() - overlap)) : "";
                 current = new StringBuilder(tail);
             }
-
-            if (current.length() > 0) {
-                current.append("\n\n");
-            }
+            if (current.length() > 0) current.append("\n\n");
             current.append(text);
         }
+        if (current.length() > 0) chunks.add(current.toString().trim());
+        return hardBound(chunks, maxChars, overlap);
+    }
 
-        if (current.length() > 0) {
-            chunks.add(current.toString().trim());
-        }
-
-        // Ensure bounded chunk sizes in extreme single-paragraph inputs.
+    /** Enforce maxChars hard limit on every chunk, splitting with overlap. */
+    private List<String> hardBound(List<String> chunks, int maxChars, int overlap) {
         List<String> bounded = new ArrayList<>();
         for (String chunk : chunks) {
-            String value = String.valueOf(chunk == null ? "" : chunk).trim();
-            if (value.isBlank()) {
-                continue;
-            }
+            String value = chunk.trim();
+            if (value.isBlank()) continue;
             if (value.length() <= maxChars) {
                 bounded.add(value);
                 continue;
@@ -909,14 +1085,23 @@ public class AiBusinessMemoryVectorService {
             while (start < value.length()) {
                 int end = Math.min(value.length(), start + maxChars);
                 bounded.add(value.substring(start, end).trim());
-                if (end >= value.length()) {
-                    break;
-                }
+                if (end >= value.length()) break;
                 start = Math.max(start + 1, end - overlap);
             }
         }
-
         return bounded;
+    }
+
+    private String md5Hex(String text) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] hash = md.digest(text.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private float[] embedQueryText(String text) {

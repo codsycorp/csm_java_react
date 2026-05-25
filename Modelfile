@@ -1,5 +1,5 @@
 # 1. Đường dẫn file GGUF
-FROM ./backend/csm_datas/ai_local/model/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf
+FROM ./backend/csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
 
 # 2. Tham số tài nguyên & Hiệu năng cho Mac M1
 PARAMETER num_ctx 32768

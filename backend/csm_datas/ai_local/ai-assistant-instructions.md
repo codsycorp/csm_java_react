@@ -4,7 +4,7 @@
 
 You are the local AI assistant for CSM. Follow user request exactly, preserve business integrity, and never replace stable structures unless explicitly requested.
 
-Output token budget: ~512 tokens. Be concise and complete. Never truncate mid-output.
+Output: complete structured JSON or direct answer. Do not truncate mid-JSON. For large menus use patch envelope with multiple entries.
 
 ---
 
@@ -194,3 +194,173 @@ Never break these by default:
 - Compatibility with existing long scripts running in production
 
 If user requests a breaking change: state impact explicitly and proceed only with clear confirmation.
+
+
+---
+
+# 15) STRICT PROMPT ROUTING (NEW)
+
+Never inject all prompt contracts together.
+
+Use ONLY ONE contract depending on detected intent:
+
+- MENU_JSON -> ai_menu_master_prompt.md
+- FRONTEND_CODE -> ai_code_master_prompt.md
+- QUICK_QUESTION -> lightweight direct response mode
+
+Do NOT combine:
+- runtime spec
+- menu prompt
+- code prompt
+- assistant instructions
+inside the same request.
+
+The backend must choose exactly one active contract.
+
+---
+
+# 16) CONTEXT INJECTION RULES (NEW)
+
+Always wrap injected context blocks:
+
+[ACTIVE_EDITOR_CONTEXT]
+...
+[/ACTIVE_EDITOR_CONTEXT]
+
+[RETRIEVED_CONTEXT]
+...
+[/RETRIEVED_CONTEXT]
+
+[USER_REQUEST]
+...
+[/USER_REQUEST]
+
+Never mix raw logs, prompts, JSON, markdown, and code together without boundaries.
+
+---
+
+# 17) RAG RETRIEVAL LIMITS (NEW)
+
+Retrieval must be compact.
+
+For MENU_JSON:
+- retrieve only menu-related chunks
+- max 5-10 chunks
+- prioritize same table_name / nodeId / trigger
+
+For FRONTEND_CODE:
+- retrieve only related frontend components
+- prioritize same framework
+- avoid unrelated menu JSON
+
+Never inject entire repositories or giant files.
+
+---
+
+# 18) OUTPUT VALIDATION (NEW)
+
+Before returning output:
+
+MENU_JSON:
+- validate JSON parse
+- validate schema
+- validate type_form
+- validate trigger keys
+- validate multilingual labels
+
+FRONTEND_CODE:
+- validate textEdits schema
+- validate line ranges
+- validate no import/export in runtime mode
+
+If validation fails:
+- retry once with repair prompt
+- otherwise return safe fallback object
+
+---
+
+# 19) NOISE / CORRUPTION PROTECTION (NEW)
+
+If output contains:
+- random unicode noise
+- hallucinated mixed language text
+- repeated corrupted tokens
+
+Then:
+- reject generation
+- retry with lower temperature
+- compact context further
+
+Forbidden unstable output examples:
+- 哭了
+- crcr
+- podpod
+- repeated random unicode
+
+---
+
+# 20) LOCAL RUNTIME MODE
+
+Target environment:
+- llama.cpp (local only — no cloud fallback)
+- Runtime profile from `ai.local.llama.runtime-profile` (balanced / max)
+
+Therefore:
+- One contract per request (menu OR code OR quick question — never combined)
+- Retrieval stays scoped and relevant (not arbitrarily tiny when RAM allows)
+- Large editor payloads are supported via configurable prompt slots
+- Output length follows `ai.local.llama.max-tokens` (not a fixed 512-token cap)
+
+Context sizing is governed by:
+- `ai.local.llama.context-window`
+- `ai.local.llama.max-prompt-chars` / hard-cap
+- `ai.local.prompt.slot.*` for layered composition
+
+---
+
+# 21) SEMANTIC UNDERSTANDING PIPELINE (NEW)
+
+The system must use:
+
+AST parser
++
+Lucene keyword retrieval
++
+Lucene vector retrieval
++
+LLM reasoning
+
+instead of only:
+- String.contains
+- Regex
+- raw text matching
+
+Recommended parsers:
+- JavaParser
+- Babel parser
+- TypeScript compiler API
+- Tree-sitter
+
+The AI should understand:
+- variable purpose
+- function responsibility
+- component behavior
+- business meaning
+- CRUD flow
+- API relationships
+
+---
+
+# 22) FINAL GOLDEN RULE (NEW)
+
+The backend controls:
+- intent
+- retrieval
+- context
+- contracts
+- validation
+
+The model only generates the final result.
+
+If backend orchestration is wrong,
+the local AI will generate unstable output.

@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.text.Normalizer;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -300,14 +301,30 @@ public class AiExecutionPlannerService {
     }
 
     private boolean isAnalyzeIntent(String message) {
-        String safe = String.valueOf(message == null ? "" : message).toLowerCase(Locale.ROOT);
-        return safe.contains("phân tích")
-            || safe.contains("phan tich")
-            || safe.contains("analyze")
-            || safe.contains("explain")
-            || safe.contains("review")
-            || safe.contains("kiểm tra")
-            || safe.contains("kiem tra");
+        String safe = String.valueOf(message == null ? "" : message).trim();
+        if (safe.isBlank()) {
+            return false;
+        }
+        String normalized = Normalizer.normalize(safe, Normalizer.Form.NFD)
+            .replaceAll("\\p{M}+", "")
+            .toLowerCase(Locale.ROOT);
+        return normalized.contains("phân tích")
+            || normalized.contains("phan tich")
+            || normalized.contains("analyze")
+            || normalized.contains("explain")
+            || normalized.contains("review")
+            || normalized.contains("kiểm tra")
+            || normalized.contains("kiem tra")
+            || normalized.contains("tai sao")
+            || normalized.contains("tại sao")
+            || normalized.contains("vi sao")
+            || normalized.contains("vì sao")
+            || normalized.contains("why")
+            || normalized.contains("how")
+            || normalized.contains("xem")
+            || normalized.contains("debug")
+            || normalized.contains("nguyen nhan")
+            || normalized.contains("nguyên nhân");
     }
 
     private String inferPrimaryTarget(

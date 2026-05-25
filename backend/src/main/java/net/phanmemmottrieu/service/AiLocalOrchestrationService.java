@@ -168,6 +168,12 @@ public class AiLocalOrchestrationService {
     @Value("${ai.orchestration.multimodal.scope-rag.quality.retry-on-low:true}")
     private boolean scopedRagQualityRetryOnLow;
 
+    @Value("${ai.orchestration.evidence.surface-remediation.enabled:true}")
+    private boolean surfaceRemediationEnabled;
+
+    @Value("${ai.orchestration.evidence.surface-remediation.context-types:menu_json,code}")
+    private String surfaceRemediationContextTypes;
+
     @Value("${ai.orchestration.multimodal.scope-rag.adaptive.enabled:true}")
     private boolean adaptiveScopeRagEnabled;
 
@@ -182,6 +188,9 @@ public class AiLocalOrchestrationService {
 
     @Value("${ai.orchestration.multimodal.scope-rag.adaptive.max-max-chars:9000}")
     private int adaptiveScopeRagMaxMaxChars;
+
+    @Value("${ai.local.runtime.tier:}")
+    private String aiLocalRuntimeTier;
 
     @Value("${ai.local.symbol.aware.retrieval.enabled:true}")
     private boolean symbolAwareRetrievalEnabled;
@@ -390,6 +399,8 @@ public class AiLocalOrchestrationService {
         }
     }
 
+    // Import at top of imports section if needed
+
     private record FlowDecision(String routeName, boolean quickReply, String reason) {}
 
     private interface FlowHandler {
@@ -513,6 +524,63 @@ public class AiLocalOrchestrationService {
 
     public boolean isLocalVisionReady() {
         return aiMultimodalScannerService != null && aiMultimodalScannerService.isVisionRuntimeReady();
+    }
+
+    /**
+     * Validates menu JSON structure early to detect nodeId issues before orchestration.
+     * Returns a degraded result if menu JSON lacks nodeIds, instructing frontend to provide
+     * proper menu payload with "id" fields.
+     */
+    private OrchestrationResult validateMenuJsonStructure(
+        String appId,
+        String currentCode,
+        String requestId
+    ) {
+        if (currentCode == null || currentCode.isBlank()) {
+            OrchestrationResult result = new OrchestrationResult();
+            result.enabled = true;
+            result.compressedContextBlock = "";
+            result.toolStats.put("menu_json_validation", "empty_payload");
+            return null;  // proceed with empty menu
+        }
+
+        try {
+            Object parsed = new com.fasterxml.jackson.databind.ObjectMapper().readValue(currentCode, Object.class);
+            if (parsed instanceof java.util.List<?> list) {
+                // Check if any item has "id" field
+                for (Object item : list) {
+                    if (item instanceof java.util.Map<?, ?> map) {
+                        Object idVal = map.get("id");
+                        if (idVal != null && !String.valueOf(idVal).isBlank()) {
+                            return null;  // valid
+                        }
+                    }
+                }
+                // No nodeId found in any menu item
+                OrchestrationResult result = new OrchestrationResult();
+                result.enabled = false;
+                result.totalCharsBefore = currentCode.length();
+                result.compressedContextBlock = 
+                    "Menu JSON validation FAILED: No menu items with 'id' field found.\n" +
+                    "Frontend must send a valid menu JSON array where each item has an 'id' property.\n" +
+                    "Example: [{\"id\":\"menu_001\", \"label\":\"...\", ...}, ...]";
+                result.toolStats.put("menu_json_validation", "missing_nodeids");
+                result.toolStats.put("menu_item_count", list.size());
+                result.toolStats.put("request_id", requestId);
+                return result;  // return validation failure
+            }
+        } catch (Exception ex) {
+            log.warn("Menu JSON validation error requestId={}: {}", requestId, ex.getMessage());
+            OrchestrationResult result = new OrchestrationResult();
+            result.enabled = false;
+            result.compressedContextBlock = 
+                "Menu JSON parsing FAILED: " + ex.getMessage() + ".\n" +
+                "Frontend must send valid JSON array of menu items.";
+            result.toolStats.put("menu_json_validation", "parse_error");
+            result.toolStats.put("error_message", ex.getMessage());
+            return result;  // return validation failure
+        }
+        return null;  // proceed
     }
 
     public OrchestrationResult orchestrate(
@@ -812,6 +880,14 @@ public class AiLocalOrchestrationService {
         String safeCode = String.valueOf(currentCode == null ? "" : currentCode);
         List<Map<String, Object>> safeAttachments = attachments == null ? List.of() : attachments;
         String safeContextType = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase(Locale.ROOT);
+
+        // Early validation: menu JSON must have nodeIds ("id" field in each item)
+        if ("menu_json".equals(safeContextType)) {
+            OrchestrationResult menuValidation = validateMenuJsonStructure(appId, currentCode, requestId);
+            if (menuValidation != null && !menuValidation.enabled) {
+                return menuValidation;  // validation failed, return error
+            }
+        }
         String safeTaskType = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
         String safeMode = String.valueOf(responseMode == null ? "edit" : responseMode).trim().toLowerCase(Locale.ROOT);
         String safeLanguage = String.valueOf(language == null ? "" : language).trim().toLowerCase(Locale.ROOT);
@@ -1035,17 +1111,39 @@ public class AiLocalOrchestrationService {
                 }
 
                 if ("menu_json".equals(safeContextType) && !safeCode.isBlank() && (aggregateScopeMask & AiScopedContextIngestionService.SCOPE_MENU) != 0) {
+                    // Synchronous: menu data must be committed to Lucene before the retrieval search runs below.
+                    // Async would cause a race where searchWithScopes runs before the index directory is created.
                     AiScopedContextIngestionService.IngestionResult menuIngestion = aiScopedContextIngestionService.ingestMenu(
                         appId,
                         safeCode,
                         aggregateScopeMask,
-                        true,
+                        false,
                         effectiveRequestId
                     );
                     out.toolStats.put("scopedMenuIngestionStatus", menuIngestion.status);
                     out.toolStats.put("scopedMenuIngestionChunks", menuIngestion.chunksIngested);
                 }
-                if (!"menu_json".equals(safeContextType) && !safeCode.isBlank() && (aggregateScopeMask & AiScopedContextIngestionService.SCOPE_CODE) != 0) {
+                if (!"menu_json".equals(safeContextType)
+                        && !safeCode.isBlank()
+                        && (aggregateScopeMask & AiScopedContextIngestionService.SCOPE_CODE) != 0) {
+                    boolean skipHeavyIngestForLargeCode = safeCode.length() > 45000;
+                    if (skipHeavyIngestForLargeCode) {
+                        String editorKey = AiScopedContextIngestionService.buildEditorIngestKey(request.pName, request.pType);
+                        AiScopedContextIngestionService.IngestionResult largeIngest = aiScopedContextIngestionService.ingestLargeCodeAsync(
+                            appId,
+                            safeCode,
+                            aggregateScopeMask,
+                            effectiveRequestId,
+                            editorKey,
+                            safeMessage);
+                        out.toolStats.put("scopedCodeIngestionStatus", largeIngest.status);
+                        out.toolStats.put("scopedCodeIngestionMode", "async_large_code_vector");
+                        out.toolStats.put("scopedCodeIngestionEditorKey", editorKey);
+                        out.toolStats.put("scopedCodeIngestionChunks", largeIngest.chunksIngested);
+                        out.toolStats.put("scopedCodeIngestionChars", largeIngest.totalCharsIndexed);
+                        out.toolStats.put("lightweightLargeCodeContext", true);
+                        out.toolStats.put("lightweightCodeEdit", "edit".equals(safeMode));
+                    } else {
                     AiScopedContextIngestionService.IngestionResult codeIngestion = aiScopedContextIngestionService.ingestCode(
                         appId,
                         safeCode,
@@ -1054,7 +1152,9 @@ public class AiLocalOrchestrationService {
                         effectiveRequestId
                     );
                     out.toolStats.put("scopedCodeIngestionStatus", codeIngestion.status);
+                    out.toolStats.put("scopedCodeIngestionMode", "async_standard");
                     out.toolStats.put("scopedCodeIngestionChunks", codeIngestion.chunksIngested);
+                    }
                 }
             } catch (Exception ignored) {
                 // Continue with existing multimodal ingestion pipeline.
@@ -1155,8 +1255,15 @@ public class AiLocalOrchestrationService {
             }
         }
 
+        boolean lightweightCodeAnalyze = "analyze".equals(safeMode) && !"menu_json".equals(safeContextType);
+        if (lightweightCodeAnalyze) {
+            out.toolStats.put("lightweightCodeAnalyze", true);
+            out.toolStats.put("scopedCodeIngestionStatus", "skipped_analyze_fast_path");
+            out.toolStats.put("scopedRagEnabled", false);
+        }
         String scopedRagBlock = "";
-        if (scanResult.enabled()
+        if (!lightweightCodeAnalyze
+            && scanResult.enabled()
             && scopedRagEnabled
             && aggregateScopeMask > 0
             && aiBusinessMemoryVectorService != null
@@ -1195,8 +1302,18 @@ public class AiLocalOrchestrationService {
             boolean menuFlow = "menu_json".equals(safeContextType);
             StringBuilder symbolRagBlock = new StringBuilder();
             List<String> symbolQueries = List.of();
-            if (!menuFlow && symbolAwareRetrievalEnabled && !digest.codeSymbols.isEmpty()) {
-                symbolQueries = buildSymbolAwareQueries(digest.codeSymbols, maxCodeSymbols / 2);
+            if (!menuFlow && symbolAwareRetrievalEnabled) {
+                List<String> mergedSymbols = new ArrayList<>(prependLifecycleSymbolsFromRequest(safeMessage));
+                if (digest.codeSymbols != null && !digest.codeSymbols.isEmpty()) {
+                    for (String sym : digest.codeSymbols) {
+                        if (sym != null && !sym.isBlank() && !mergedSymbols.contains(sym)) {
+                            mergedSymbols.add(sym);
+                        }
+                    }
+                }
+                if (!mergedSymbols.isEmpty()) {
+                    symbolQueries = buildSymbolAwareQueries(mergedSymbols, maxCodeSymbols / 2);
+                }
                 if (!symbolQueries.isEmpty()) {
                     out.toolStats.put("symbolAwareRetrievalQueries", truncateLines(symbolQueries, 3, 140));
                 }
@@ -1315,7 +1432,7 @@ public class AiLocalOrchestrationService {
 
             // ─── Phase 3: Targeted Queries (derived from message/context) ───
             List<String> targetedQueries = deriveTargetedRetrievalQueries(safeMessage, digest, safeContextType);
-            if (!targetedQueries.isEmpty()) {
+            if (!targetedQueries.isEmpty() && !isWeakOrchestrationProfile()) {
                 int targetedTopK = Math.max(2, retrievalPlan.topK - 2);
                 int targetedMaxChars = Math.max(900, retrievalPlan.maxChars / 2);
                 StringBuilder targetedBlock = new StringBuilder();
@@ -1387,7 +1504,7 @@ public class AiLocalOrchestrationService {
             int scopedRagChars = scopedRagBlock == null ? 0 : scopedRagBlock.length();
             int retrievalMinChars = Math.max(400, scopedRagQualityMinChars);
             boolean retrievalQualityPassed = scopedRagChars >= retrievalMinChars;
-            if (!retrievalQualityPassed && scopedRagQualityRetryOnLow) {
+            if (!retrievalQualityPassed && scopedRagQualityRetryOnLow && !isWeakOrchestrationProfile()) {
                 int retryScopeMask = Math.max(1,
                     retrievalPlan.scopeMask
                         | defaultScopeMaskForContext(safeContextType, safeTaskType)
@@ -1418,6 +1535,39 @@ public class AiLocalOrchestrationService {
                 out.toolStats.put("scopedRagQualityRetryTopK", retryTopK);
                 out.toolStats.put("scopedRagQualityRetryMaxChars", retryMaxChars);
                 out.toolStats.put("scopedRagQualityRetryQuery", truncateLine(retryQuery, 180));
+            }
+
+            // Policy: low Lucene evidence → supplement with editor surface (menu/code), keeps agentic path extensible.
+            if (surfaceRemediationEnabled
+                    && isSurfaceRemediationContext(safeContextType)
+                    && !safeCode.isBlank()
+                    && !(isWeakOrchestrationProfile() && "edit".equals(safeMode))) {
+                int minEvidenceChars = Math.max(400, scopedRagQualityMinChars);
+                if (scopedRagChars < minEvidenceChars) {
+                    String surfaceAnchor = buildEditorSurfaceEvidenceAnchor(safeContextType, safeCode, safeMessage);
+                    if (!surfaceAnchor.isBlank()) {
+                        scopedRagBlock = scopedRagBlock == null || scopedRagBlock.isBlank()
+                            ? surfaceAnchor
+                            : surfaceAnchor + "\n\n" + scopedRagBlock;
+                        scopedRagChars = scopedRagBlock.length();
+                        retrievalQualityPassed = scopedRagChars >= minEvidenceChars;
+                        out.toolStats.put("scopedRagSurfaceRemediationApplied", true);
+                        out.toolStats.put("scopedRagSurfaceRemediationContext", safeContextType);
+                        out.toolStats.put("scopedRagQualityPassed", retrievalQualityPassed);
+                        out.toolStats.put("scopedRagQualityDeficit", Math.max(0, minEvidenceChars - scopedRagChars));
+                    }
+                }
+            }
+
+            int scopedRagTotalCap = Math.max(1600, scopedRagMaxChars);
+            if (isWeakOrchestrationProfile()) {
+                scopedRagTotalCap = Math.max(1200, scopedRagMaxChars);
+            }
+            if (scopedRagBlock != null && scopedRagBlock.length() > scopedRagTotalCap) {
+                scopedRagBlock = truncateMiddle(scopedRagBlock, scopedRagTotalCap);
+                scopedRagChars = scopedRagBlock.length();
+                out.toolStats.put("scopedRagTotalCapped", true);
+                out.toolStats.put("scopedRagTotalCap", scopedRagTotalCap);
             }
 
             out.toolStats.put("scopedRagQualityMinChars", retrievalMinChars);
@@ -1541,6 +1691,8 @@ public class AiLocalOrchestrationService {
             }
             applyExecutionPlanningStats(out, planning, safeContextType, safeMode, digest, scanResult);
             out.toolStats.put("executionPlanRetrievedContextChars", scopedRagChars);
+            // v7: expose for minimal prompt building in streamWithAutoContinue
+            out.toolStats.put("scopedRagBlock", scopedRagBlock == null ? "" : scopedRagBlock);
             out.planSteps = planSteps;
         }
 
@@ -2637,7 +2789,7 @@ public class AiLocalOrchestrationService {
             reasons.add("analyze_mode_context_boost");
         }
 
-        if (codeChars > 80000) {
+        if (codeChars > 80000 && !isWeakOrchestrationProfile()) {
             topK += 1;
             maxChars += 1200;
             reasons.add("large_code_context_boost");
@@ -2675,9 +2827,18 @@ public class AiLocalOrchestrationService {
         }
 
         topK = Math.max(Math.max(2, adaptiveScopeRagMinTopK), Math.min(Math.max(adaptiveScopeRagMinTopK, adaptiveScopeRagMaxTopK), topK));
-        maxChars = Math.max(Math.max(1200, adaptiveScopeRagMinMaxChars), Math.min(Math.max(adaptiveScopeRagMinMaxChars, adaptiveScopeRagMaxMaxChars), maxChars));
+        int adaptiveMaxChars = Math.max(Math.max(1200, adaptiveScopeRagMinMaxChars), Math.min(Math.max(adaptiveScopeRagMinMaxChars, adaptiveScopeRagMaxMaxChars), maxChars));
+        if (isWeakOrchestrationProfile()) {
+            adaptiveMaxChars = Math.min(adaptiveMaxChars, Math.max(1200, scopedRagMaxChars));
+        }
+        maxChars = adaptiveMaxChars;
 
         return new AdaptiveRetrievalPlan(scopeMask, topK, maxChars, query, true, reasons);
+    }
+
+    private boolean isWeakOrchestrationProfile() {
+        String tier = String.valueOf(aiLocalRuntimeTier == null ? "" : aiLocalRuntimeTier).trim().toLowerCase(Locale.ROOT);
+        return tier.contains("weak") || tier.contains("5gb") || tier.equals("v7");
     }
 
     private record AdaptiveRetrievalPlan(
@@ -2810,6 +2971,24 @@ public class AiLocalOrchestrationService {
      * Extracts function/class names and derives targeted search queries.
      * Format: "symbolName implementation behavior" or "symbolName usage"
      */
+    private List<String> prependLifecycleSymbolsFromRequest(String requestText) {
+        List<String> out = new ArrayList<>();
+        String lower = String.valueOf(requestText == null ? "" : requestText).toLowerCase(Locale.ROOT);
+        if (!(lower.contains("webview") || lower.contains("process") || lower.contains("proxy")
+                || lower.contains("tắt") || lower.contains("treo") || lower.contains("kill")
+                || lower.contains("resetip") || lower.contains("fnreset"))) {
+            return out;
+        }
+        String[] hints = {
+            "closeAllTabsAndCleanup", "fnResetIP", "waitForAllTabsClose",
+            "clearInterval", "CallMouseEvent", "sophutLamtuoi", "webview", "stopProcess"
+        };
+        for (String hint : hints) {
+            out.add(hint);
+        }
+        return out;
+    }
+
     private List<String> buildSymbolAwareQueries(List<String> codeSymbols, int limit) {
         List<String> out = new ArrayList<>();
         if (codeSymbols == null || codeSymbols.isEmpty()) {
@@ -4476,6 +4655,40 @@ public class AiLocalOrchestrationService {
                 }
                 sb.append("\n_[earlyFinish=code_profile — đã phân tích tại máy chủ, tiết kiệm token]_");
             }
+        }
+        return sb.toString().trim();
+    }
+
+    private boolean isSurfaceRemediationContext(String contextType) {
+        String configured = String.valueOf(surfaceRemediationContextTypes == null ? "" : surfaceRemediationContextTypes)
+            .trim()
+            .toLowerCase(Locale.ROOT);
+        if (configured.isBlank() || "*".equals(configured)) {
+            return true;
+        }
+        String ctx = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+        for (String raw : configured.split("[,;\\s]+")) {
+            if (ctx.equals(String.valueOf(raw).trim())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String buildEditorSurfaceEvidenceAnchor(String contextType, String surfaceContent, String userMessage) {
+        String surface = String.valueOf(surfaceContent == null ? "" : surfaceContent).trim();
+        if (surface.isBlank()) {
+            return "";
+        }
+        boolean menu = "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim());
+        StringBuilder sb = new StringBuilder();
+        sb.append(menu ? "## CURRENT_MENU_EVIDENCE (authoritative surface)\n"
+            : "## CURRENT_CODE_EVIDENCE (authoritative surface)\n");
+        sb.append("Supplemental evidence because scoped retrieval was thin. Reason from this surface + plan.\n\n");
+        sb.append(truncateMiddle(surface, Math.max(2000, scopedRagMaxChars)));
+        String focus = truncateLine(String.valueOf(userMessage == null ? "" : userMessage), 420);
+        if (!focus.isBlank()) {
+            sb.append("\n\n## TASK_FOCUS\n").append(focus);
         }
         return sb.toString().trim();
     }

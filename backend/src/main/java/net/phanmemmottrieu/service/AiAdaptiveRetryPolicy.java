@@ -135,9 +135,6 @@ public class AiAdaptiveRetryPolicy {
     @Value("${ai.retry.policy.topk-increase-factor:1.2}")
     private double topKInceaseFactor;
 
-    @Autowired(required = false)
-    private AiQualityMetricsService qualityMetricsService;
-
     // Per-request retry tracking (appId -> reason -> count)
     private final Map<String, Map<String, Integer>> retryCounters = new ConcurrentHashMap<>();
 
@@ -353,12 +350,7 @@ public class AiAdaptiveRetryPolicy {
      * Record retry decision for metrics.
      */
     private void recordRetryDecision(String appId, RetryReason reason, boolean willRetry) {
-        if (qualityMetricsService != null) {
-            try {
-                qualityMetricsService.recordRetryDecision(reason.code, willRetry);
-            } catch (Exception ignored) {
-            }
-        }
+        // Quality metrics dashboard removed.
     }
 
     /**

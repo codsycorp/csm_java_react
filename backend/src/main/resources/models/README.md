@@ -1,7 +1,7 @@
 Place your GGUF model file in this folder.
 
 Expected default file:
-  Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf
+  qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
 
 Configured by environment variables (config.env) and application.properties:
 

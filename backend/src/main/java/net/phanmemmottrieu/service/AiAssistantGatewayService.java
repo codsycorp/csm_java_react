@@ -72,6 +72,19 @@ public class AiAssistantGatewayService {
   @Value("${ai.context.dir:csm_datas/ai_local}")
   private String contextDir;
 
+  /** Local prompt slot budgets — large defaults for full local inference (no cloud fallback). */
+  @Value("${ai.local.prompt.slot.active-editor-chars:400000}")
+  private int localSlotActiveEditorChars;
+
+  @Value("${ai.local.prompt.slot.rag-context-chars:120000}")
+  private int localSlotRagContextChars;
+
+  @Value("${ai.local.prompt.slot.memory-chars:60000}")
+  private int localSlotMemoryChars;
+
+  @Value("${ai.local.prompt.slot.user-request-chars:32000}")
+  private int localSlotUserRequestChars;
+
   // Max chars to keep in the request history inside the context file
   private static final int CTX_MAX_HISTORY_CHARS = 8000;
   // Max chars to keep for previous result summary inside the context file
@@ -90,6 +103,443 @@ public class AiAssistantGatewayService {
     public String feedbackUpdatedAt;
     public String userMessage;
     public String assistantMessage;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Local-only prompt contracts (v7 slot-based minimal prompt)
+  // ───────────────────────────────────────────────────────────────────────────
+
+  public enum AiFlowIntent {
+    MENU_JSON,
+    FRONTEND_CODE,
+    QUICK_QUESTION
+  }
+
+  private static final String BASE_SYSTEM_MIN = """
+You are CSM AI Assistant.
+Follow the requested output contract exactly.
+Return only valid JSON without markdown or explanation unless explicitly asked.
+End immediately after the response.
+""";
+
+  private static final String BASE_SYSTEM_ANALYZE_MIN = """
+You are CSM AI Assistant.
+Follow the requested output contract exactly.
+Answer in plain text prose unless the contract explicitly requires JSON.
+End immediately after the response.
+""";
+
+  private static final String QUICK_QUESTION_CONTRACT_MIN = """
+You are CSM AI Assistant.
+Answer the user's question directly in the same language as the user request (Vietnamese, English, or Chinese).
+For code/debug questions: cite concrete symbols (functions, variables, timers, webview/process lifecycle).
+Use at least 4 short bullet points covering: observed behavior, likely root cause, relevant code paths, suggested fix/check.
+Do not output a single "reason:" line or JSON patch envelope.
+No JSON unless the user explicitly asked for a patch.
+No markdown code fences.
+No random text.
+End immediately after the answer.
+""";
+
+  private static final String FRONTEND_CODE_CONTRACT_MIN = """
+You are CSM Frontend Code Editor.
+
+Return ONLY valid JSON textEdits in edit mode:
+{
+  "summary": "",
+  "changes": [],
+  "textEdits": []
+}
+
+Rules:
+- startLine/endLine are 1-based line numbers in the FULL active editor file (not relative to REGION excerpts).
+- action is add/edit/delete.
+- No overlapping edits.
+- Linked-symbol edits (required when params/functions depend on each other):
+  patch ALL related call sites in the SAME response as multiple textEdits.
+  Example: webview close handler + cleanup + fnResetIP/proxy release must stay consistent.
+  List every touched symbol in "changes" (function names, flags, timers).
+- Do not change one branch while leaving dependent isRunning/shouldClose/proxy timers inconsistent.
+- For DynamicCode runtime: no import/export/require/module.exports.
+- Use browser globals only: window, document, window.React, window.ReactDOM, window.antd, window.seft, window.csmApi.
+- Keep code idempotent.
+If unsafe to patch atomically, return empty textEdits and explain in summary.
+End immediately after JSON.
+""";
+
+  private static final String MENU_JSON_CONTRACT_MIN = """
+You are CSM Menu JSON Editor.
+
+Return ONLY valid JSON.
+No markdown.
+No explanation.
+No random text.
+
+Patch mode schema (include at least one patch when user requests fixes):
+{
+  "status": "success",
+  "patches": [
+    {
+      "action": "edit",
+      "nodeId": "<existing-menu-node-id>",
+      "parentId": "<parent-id-or-empty>",
+      "path": "Module / Feature",
+      "before": null,
+      "after": {
+        "trigger": {"filter": "..."},
+        "label": "Nhãn tiếng Việt",
+        "label_en": "English label",
+        "label_zh": "中文标签"
+      },
+      "reason": "Fix trigger keys and 3-language labels"
+    }
+  ],
+  "i18n": {"vi": {}, "en": {}, "zh": {}},
+  "warnings": []
+}
+
+Rules:
+- Never return "success" with patches: [] when the user asked to check/fix/add menu fields.
+- Use status "need_more_context" with warnings when nodeId or safe context is missing.
+- Allowed patch action: add, edit, delete.
+""";
+
+  public String getMenuJsonContractMin() {
+    return MENU_JSON_CONTRACT_MIN;
+  }
+
+  public String getFrontendCodeContractMin() {
+    return FRONTEND_CODE_CONTRACT_MIN;
+  }
+
+  public AiFlowIntent classifyLocalIntent(String contextType, String responseMode, String message) {
+    String ctx = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
+    String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
+    if ("menu_json".equals(ctx)) {
+      return AiFlowIntent.MENU_JSON;
+    }
+    if ("code".equals(ctx) || "frontend_code".equals(ctx)) {
+      if ("analyze".equals(mode)) {
+        return AiFlowIntent.QUICK_QUESTION;
+      }
+      return AiFlowIntent.FRONTEND_CODE;
+    }
+    if ("edit".equals(mode)) {
+      return AiFlowIntent.FRONTEND_CODE;
+    }
+    return AiFlowIntent.QUICK_QUESTION;
+  }
+
+  public String buildLocalMinimalPrompt(
+      AiFlowIntent intent,
+      String activeEditorContent,
+      String ragContext,
+      String memory,
+      String userRequest) {
+    return buildLocalMinimalPrompt(intent, activeEditorContent, ragContext, memory, userRequest, "");
+  }
+
+  public String buildLocalMinimalPrompt(
+      AiFlowIntent intent,
+      String activeEditorContent,
+      String ragContext,
+      String memory,
+      String userRequest,
+      String uiLanguage) {
+    String contract = switch (intent) {
+      case MENU_JSON -> MENU_JSON_CONTRACT_MIN;
+      case FRONTEND_CODE -> FRONTEND_CODE_CONTRACT_MIN;
+      case QUICK_QUESTION -> QUICK_QUESTION_CONTRACT_MIN;
+    };
+    int editorCap = Math.max(4000, localSlotActiveEditorChars);
+    int ragCap = Math.max(1000, localSlotRagContextChars);
+    int memCap = Math.max(500, localSlotMemoryChars);
+    int reqCap = Math.max(500, localSlotUserRequestChars);
+    String safeEditor = trimToMax(String.valueOf(activeEditorContent == null ? "" : activeEditorContent), editorCap);
+    String safeRag = trimToMax(String.valueOf(ragContext == null ? "" : ragContext), ragCap);
+    String safeMem = trimToMax(String.valueOf(memory == null ? "" : memory), memCap);
+    String safeReq = trimToMax(String.valueOf(userRequest == null ? "" : userRequest), reqCap);
+
+    StringBuilder sb = new StringBuilder();
+    String baseSystem = intent == AiFlowIntent.QUICK_QUESTION ? BASE_SYSTEM_ANALYZE_MIN : BASE_SYSTEM_MIN;
+    sb.append(baseSystem).append("\n\n");
+    sb.append(buildPromptLanguageBlock(uiLanguage, userRequest));
+    sb.append(contract).append("\n\n");
+    if (intent == AiFlowIntent.MENU_JSON) {
+      if (!safeEditor.isBlank()) {
+        sb.append("[ACTIVE_EDITOR_MENU_JSON]\n").append(safeEditor).append("\n[/ACTIVE_EDITOR_MENU_JSON]\n\n");
+      }
+    } else if (intent == AiFlowIntent.FRONTEND_CODE) {
+      if (!safeEditor.isBlank()) {
+        sb.append("[ACTIVE_EDITOR_CODE]\n").append(safeEditor).append("\n[/ACTIVE_EDITOR_CODE]\n\n");
+      }
+    }
+    if (!safeRag.isBlank()) {
+      sb.append("[RETRIEVED_CONTEXT]\n").append(safeRag).append("\n[/RETRIEVED_CONTEXT]\n\n");
+    }
+    if (!safeMem.isBlank()) {
+      sb.append("[SESSION_MEMORY]\n").append(safeMem).append("\n[/SESSION_MEMORY]\n\n");
+    }
+    sb.append("[USER_REQUEST]\n").append(safeReq).append("\n[/USER_REQUEST]");
+    return sb.toString();
+  }
+
+  private String buildPromptLanguageBlock(String uiLanguage, String userRequest) {
+    String lang = String.valueOf(uiLanguage == null ? "" : uiLanguage).trim().toLowerCase(Locale.ROOT);
+    if (lang.isBlank()) {
+      lang = "vi";
+    }
+    String sample = trimToMax(String.valueOf(userRequest == null ? "" : userRequest).trim(), 160);
+    return switch (lang) {
+      case "en" -> """
+          [OUTPUT_LANGUAGE]
+          Reply in English only. Match the user's wording and tone.
+          Write JSON summary/changes fields in English when applicable.
+          User sample: %s
+          [/OUTPUT_LANGUAGE]
+
+          """.formatted(sample);
+      case "zh" -> """
+          [OUTPUT_LANGUAGE]
+          仅使用中文回复，与用户请求语气一致。
+          JSON 中的 summary/changes 字段也使用中文。
+          用户示例：%s
+          [/OUTPUT_LANGUAGE]
+
+          """.formatted(sample);
+      default -> """
+          [NGON_NGU_TRA_LOI]
+          Chỉ trả lời bằng tiếng Việt, đúng văn phong câu hỏi người dùng.
+          Các trường summary/changes trong JSON cũng dùng tiếng Việt.
+          Mẫu câu người dùng: %s
+          [/NGON_NGU_TRA_LOI]
+
+          """.formatted(sample);
+    };
+  }
+
+  public String generateLocalFlowContent(
+      AiFlowIntent intent,
+      String activeEditorContent,
+      String ragContext,
+      String memory,
+      String userRequest,
+      LlamaCppNativeService llamaService) {
+    LlamaCppNativeService svc = llamaService != null ? llamaService : llamaCppNativeService;
+    if (svc == null || !svc.isAvailable()) {
+      return "";
+    }
+    String prompt = buildLocalMinimalPrompt(intent, activeEditorContent, ragContext, memory, userRequest, "");
+    if (!prompt.contains("<|im_start|>assistant")) {
+      prompt = prompt + "\n<|im_end|>\n<|im_start|>assistant\n";
+    }
+    try {
+      String raw = svc.generateContentFast(prompt, Math.max(256, localLlamaMaxTokens));
+      String text = extractResultTextFromWrappedJson(raw);
+      if (text == null || text.isBlank()) {
+        text = raw == null ? "" : raw.trim();
+      }
+      return normalizeLocalStructuredOutput(text);
+    } catch (Exception ex) {
+      log.warn("generateLocalFlowContent failed: {}", ex.getMessage());
+      return "";
+    }
+  }
+
+  /**
+   * Clean model output without forcing fallback JSON — keeps local reasoning path open for retry/agentic layers.
+   */
+  public String normalizeLocalStructuredOutput(String rawOutput) {
+    if (rawOutput == null || rawOutput.isBlank()) {
+      return "";
+    }
+    String extracted = extractResultTextFromWrappedJson(rawOutput);
+    String cleaned = cleanAiOutput(extracted);
+    return cleaned.isBlank() ? extracted.trim() : cleaned;
+  }
+
+  /** Exposed for code-stream quality gate on menu edit responses. */
+  public boolean isMenuJsonOutputStructurallyValid(String rawOutput) {
+    if (rawOutput == null || rawOutput.isBlank()) {
+      return false;
+    }
+    return isValidMenuJsonOrPatch(cleanAiOutput(rawOutput));
+  }
+
+  /**
+   * True when menu JSON is structurally valid and would change the editor (non-empty patches/menu)
+   * or explicitly asks for more context.
+   */
+  public boolean isMenuJsonOutputActionable(String rawOutput) {
+    if (rawOutput == null || rawOutput.isBlank()) {
+      return false;
+    }
+    String text = cleanAiOutput(rawOutput);
+    if (!isValidMenuJsonOrPatch(text)) {
+      return false;
+    }
+    try {
+      Object parsed = objectMapper.readValue(text, Object.class);
+      if (parsed instanceof List<?> list) {
+        return !list.isEmpty();
+      }
+      if (!(parsed instanceof Map<?, ?> mapRaw)) {
+        return false;
+      }
+      @SuppressWarnings("unchecked")
+      Map<String, Object> map = (Map<String, Object>) mapRaw;
+      if (map.containsKey("status") && map.containsKey("patches")) {
+        String status = String.valueOf(map.get("status") == null ? "" : map.get("status")).trim();
+        if ("need_more_context".equalsIgnoreCase(status)) {
+          return true;
+        }
+        Object patchesObj = map.get("patches");
+        if (!(patchesObj instanceof List<?> patches) || patches.isEmpty()) {
+          return false;
+        }
+        for (Object patchObj : patches) {
+          if (!(patchObj instanceof Map<?, ?> patchMapRaw)) {
+            continue;
+          }
+          @SuppressWarnings("unchecked")
+          Map<String, Object> patchMap = (Map<String, Object>) patchMapRaw;
+          String action = String.valueOf(patchMap.get("action") == null ? "" : patchMap.get("action")).trim();
+          String nodeId = String.valueOf(patchMap.get("nodeId") == null ? "" : patchMap.get("nodeId")).trim();
+          if (action.isBlank() || nodeId.isBlank()) {
+            continue;
+          }
+          Object after = patchMap.get("after");
+          Object patchFields = patchMap.get("patch");
+          if (after instanceof Map<?, ?> afterMap && !afterMap.isEmpty()) {
+            return true;
+          }
+          if (patchFields instanceof Map<?, ?> fieldsMap && !fieldsMap.isEmpty()) {
+            return true;
+          }
+          if ("delete".equalsIgnoreCase(action)) {
+            return true;
+          }
+        }
+        return false;
+      }
+      Object menu = map.get("menu");
+      if (menu instanceof List<?> menuList) {
+        return !menuList.isEmpty();
+      }
+      if (map.containsKey("menu_node")) {
+        return true;
+      }
+      return !map.isEmpty();
+    } catch (Exception ignored) {
+      return false;
+    }
+  }
+
+  public String validateOrFallbackLocal(AiFlowIntent intent, String rawOutput) {
+    String normalized = normalizeLocalStructuredOutput(rawOutput);
+    if (normalized.isBlank()) {
+      return fallbackForLocalIntent(intent);
+    }
+    switch (intent) {
+      case MENU_JSON:
+        if (isValidMenuJsonOrPatch(normalized)) {
+          return normalized;
+        }
+        break;
+      case FRONTEND_CODE:
+        if (looksLikeCodeEditJson(normalized)) {
+          return normalized;
+        }
+        break;
+      case QUICK_QUESTION:
+        return normalized;
+      default:
+        break;
+    }
+    return fallbackForLocalIntent(intent);
+  }
+
+  private String fallbackForLocalIntent(AiFlowIntent intent) {
+    return switch (intent) {
+      case MENU_JSON -> """
+          {"status":"need_more_context","patches":[],"i18n":{"vi":{},"en":{},"zh":{}},"warnings":["Insufficient safe context"]}
+          """.trim();
+      case FRONTEND_CODE -> """
+          {"summary":"Không tạo được patch an toàn","changes":[],"textEdits":[]}
+          """.trim();
+      case QUICK_QUESTION -> "";
+    };
+  }
+
+  private String cleanAiOutput(String raw) {
+    if (raw == null) {
+      return "";
+    }
+    String text = raw.trim();
+    if (text.startsWith("```")) {
+      int firstNl = text.indexOf('\n');
+      int lastFence = text.lastIndexOf("```");
+      if (firstNl >= 0 && lastFence > firstNl) {
+        text = text.substring(firstNl + 1, lastFence).trim();
+      }
+    }
+    int jsonStart = text.indexOf('{');
+    int arrayStart = text.indexOf('[');
+    int start = -1;
+    if (jsonStart >= 0 && arrayStart >= 0) {
+      start = Math.min(jsonStart, arrayStart);
+    } else if (jsonStart >= 0) {
+      start = jsonStart;
+    } else if (arrayStart >= 0) {
+      start = arrayStart;
+    }
+    if (start > 0) {
+      text = text.substring(start).trim();
+    }
+    return text.trim();
+  }
+
+  private boolean isValidMenuJsonOrPatch(String text) {
+    if (text == null || text.isBlank()) {
+      return false;
+    }
+    try {
+      Object parsed = objectMapper.readValue(text, Object.class);
+      if (parsed instanceof List<?> list) {
+        return !list.isEmpty();
+      }
+      if (!(parsed instanceof Map<?, ?> mapRaw)) {
+        return false;
+      }
+      @SuppressWarnings("unchecked")
+      Map<String, Object> map = (Map<String, Object>) mapRaw;
+      if (map.containsKey("patches") || map.containsKey("status")) {
+        return true;
+      }
+      if (map.containsKey("menu") || map.containsKey("menu_node")) {
+        return true;
+      }
+      return map.containsKey("id") && map.containsKey("label");
+    } catch (Exception ignored) {
+      return false;
+    }
+  }
+
+  private boolean looksLikeCodeEditJson(String text) {
+    if (text == null || text.isBlank()) {
+      return false;
+    }
+    try {
+      Object parsed = objectMapper.readValue(text, Object.class);
+      if (!(parsed instanceof Map<?, ?> mapRaw)) {
+        return false;
+      }
+      @SuppressWarnings("unchecked")
+      Map<String, Object> map = (Map<String, Object>) mapRaw;
+      return map.containsKey("textEdits") || map.containsKey("summary");
+    } catch (Exception ignored) {
+      return false;
+    }
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -1222,8 +1672,8 @@ public class AiAssistantGatewayService {
   @Value("${ai.gateway.api-key:}")
   private String openAiApiKey;
 
-  // Hard gate to prevent outbound OpenAI/GitHub Models execution paths.
-  @Value("${ai.provider.force-gemini:true}")
+  // Hard gate removed — system is local-only; kept for config compatibility only.
+  @Value("${ai.provider.force-gemini:false}")
   private boolean forceGeminiProvider;
 
   private volatile Map<String, Set<String>> modelEndpointCache = Collections.emptyMap();
@@ -1257,13 +1707,17 @@ public class AiAssistantGatewayService {
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   private ContextBudgetManager contextBudgetManager;
 
-  // GeminiService: used as large-context fallback when own google.cloud.api-key is not set.
   @org.springframework.beans.factory.annotation.Autowired(required = false)
-  private GeminiService geminiService;
+  private LlamaCppNativeService llamaCppNativeService;
 
-  // GeminiStreamingService: streaming adapter for Gemini real-time chunks.
-  @org.springframework.beans.factory.annotation.Autowired(required = false)
-  private GeminiStreamingService geminiStreamingService;
+  @Value("${ai.local.only.enabled:true}")
+  private boolean localOnlyEnabled;
+
+  @Value("${ai.local.llama.max-prompt-chars:240000}")
+  private int localLlamaMaxPromptChars;
+
+  @Value("${ai.local.llama.max-tokens:1024}")
+  private int localLlamaMaxTokens;
 
   private String getApiToken() {
     String openAiEnvToken = System.getenv("OPENAI_API_KEY");
@@ -1337,124 +1791,11 @@ public class AiAssistantGatewayService {
   // FEATURE 3: Smart Model Selection
   // ═══════════════════════════════════════════════════════════════════════════
   private String selectOptimalModel(String taskType, int promptSize, boolean isCodeTask) {
-    if (!smartSelectionEnabled) {
-      return model; // Use default model
-    }
-
-    String taskLower = taskType == null ? "" : taskType.toLowerCase();
-
-    // Copilot-style routing matrix: planner -> mini/flash, complex solver -> pro/high-capacity.
-    if (taskLower.contains("planning_fast") || taskLower.contains("planner_fast")) {
-      List<String> candidates = resolveCandidateModels();
-      if (candidates.contains("gpt-4o-mini")) {
-        return "gpt-4o-mini";
-      }
-      if (candidates.contains("gpt-4.1-mini")) {
-        return "gpt-4.1-mini";
-      }
-      if (candidates.contains("codex-mini-latest")) {
-        return "codex-mini-latest";
-      }
-      boolean delegatedGeminiAvailable = geminiEnabled && geminiService != null;
-      if (delegatedGeminiAvailable) {
-        return "gemini:gemini-2.5-flash";
-      }
-      return model;
-    }
-
-    if (taskLower.contains("solver_complex")) {
-      boolean ownGeminiConfigured = geminiEnabled && !googleApiKey.isBlank() && !googleProjectId.isBlank();
-      boolean delegatedGeminiAvailable = geminiEnabled && geminiService != null;
-      if (ownGeminiConfigured || delegatedGeminiAvailable) {
-        return "gemini:" + geminiModel;
-      }
-      List<String> candidates = resolveCandidateModels();
-      if (candidates.contains("gpt-4.1")) {
-        return "gpt-4.1";
-      }
-      if (candidates.contains("gpt-4o")) {
-        return "gpt-4o";
-      }
-      return model;
-    }
-
-    if (taskLower.contains("solver_balanced")) {
-      List<String> candidates = resolveCandidateModels();
-      if (candidates.contains("gpt-4o-mini")) {
-        return "gpt-4o-mini";
-      }
-      if (candidates.contains("gpt-4.1-mini")) {
-        return "gpt-4.1-mini";
-      }
-    }
-
-    boolean isCodeGeneration = taskLower.contains("code") || taskLower.contains("java") || taskLower.contains("function");
-    boolean isMenuDesign = taskLower.contains("menu");
-
-    // For code generation tasks with moderate size, prefer code-optimized models
-    if (isCodeGeneration && promptSize < codeTaskThresholdChars) {
-      List<String> candidates = resolveCandidateModels();
-      if (candidates.contains("codex-mini-latest")) {
-        return "codex-mini-latest"; // Lightweight code model
-      }
-      if (candidates.contains("gpt-4.1-mini")) {
-        return "gpt-4.1-mini";
-      }
-    }
-
-    // Menu flow can be forced to stay on AI Assistant API even for large prompts.
-    if (isMenuDesign && menuForceGithubModels) {
-      List<String> candidates = resolveCandidateModels();
-      if (candidates.contains("gpt-4o")) {
-        return "gpt-4o";
-      }
-      if (candidates.contains("gpt-4o-mini")) {
-        return "gpt-4o-mini";
-      }
-      return model;
-    }
-
-    // For large contexts, use high-capacity models
-    if (promptSize > largeContextThresholdChars || (isMenuDesign && promptSize > menuGeminiThresholdChars)) {
-      boolean ownGeminiConfigured = geminiEnabled && !googleApiKey.isBlank() && !googleProjectId.isBlank();
-      boolean delegatedGeminiAvailable = geminiEnabled && geminiService != null;
-      if (ownGeminiConfigured || delegatedGeminiAvailable) {
-        return "gemini:" + geminiModel; // Mark for Gemini routing
-      }
-      List<String> candidates = resolveCandidateModels();
-      if (candidates.contains("gpt-4.1")) {
-        return "gpt-4.1";
-      }
-      if (candidates.contains("gpt-4o")) {
-        return "gpt-4o";
-      }
-    }
-
-    // Default fallback
-    return model;
+    return "local_provider";
   }
 
   private boolean shouldFastFallbackMenuToGemini(String selectedModel, int promptChars, boolean isMenuTask) {
-    if (!isMenuTask) {
-      return false;
-    }
-    boolean geminiAvailable = geminiEnabled && (!googleApiKey.isBlank() || geminiService != null);
-    if (!geminiAvailable) {
-      return false;
-    }
-    String normalizedSelected = String.valueOf(selectedModel == null ? "" : selectedModel)
-        .trim()
-        .toLowerCase(Locale.ROOT);
-    if (normalizedSelected.startsWith("gemini:")) {
-      return false;
-    }
-    String endpoint = resolveChatCompletionsEndpoint();
-    String effectiveToken = getEffectiveToken(endpoint);
-    // Avoid expensive chunk-map-reduce retries on GitHub when the primary menu model is already in cooldown.
-    boolean largeMenuContext = promptChars > Math.max(30000, directMaxChars);
-    boolean primaryMenuModelUnavailable = isModelTemporarilyUnavailable("gpt-4o", effectiveToken);
-    boolean selectedModelUnavailable = isModelTemporarilyUnavailable(selectedModel, effectiveToken);
-    return largeMenuContext && (primaryMenuModelUnavailable || selectedModelUnavailable);
+    return false;
   }
 
   private boolean looksLikeCodeTask(String text) {
@@ -1634,84 +1975,55 @@ public class AiAssistantGatewayService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // FEATURE 4: Gemini 1.5 Pro Integration
+  // Local llama.cpp provider (replaces Gemini/OpenAI when local-only enabled)
   // ═══════════════════════════════════════════════════════════════════════════
-  private String callGeminiWithContext(String prompt, int maxTokens, double temperature, ProgressListener progressListener) {
-    // Delegate to GeminiService (uses ApiKeyService pool) when own google.cloud.api-key is not configured.
-    boolean useSharedGeminiService = !geminiEnabled || googleApiKey.isBlank() || googleProjectId.isBlank();
-    if (useSharedGeminiService) {
-      if (geminiService == null) {
-        return createErrorJson("Gemini không được cấu hình (google.cloud.api-key trống và GeminiService không khả dụng)", "GEMINI_NOT_CONFIGURED");
-      }
-      // Use shared GeminiService (has ApiKey pool, model rotation, quota management)
-      try {
-        String fullPrompt = prompt;
-        if (fullPrompt.length() > 500000) {
-          return createErrorJson("Prompt quá lớn cho Gemini (tối đa 500K ký tự): " + fullPrompt.length(), "GEMINI_PROMPT_TOO_LARGE");
-        }
-        emitProgress(progressListener, progressPayload("gemini_call", "Đang gửi yêu cầu tới Gemini (large context)", 0, 1,
-            progressI18n("copilot.progress.message.gemini_request", null, null, null)));
-        log.info("callGeminiWithContext: delegating to GeminiService, promptChars={}", fullPrompt.length());
-        return geminiService.generateContent(fullPrompt);
-      } catch (Exception ex) {
-        log.error("GeminiService delegation failed", ex);
-        return createErrorJson("Lỗi gọi Gemini qua GeminiService: " + ex.getMessage(), "GEMINI_DELEGATE_ERROR");
-      }
+  private String callLocalProviderWithContext(String prompt, int maxTokens, double temperature, ProgressListener progressListener) {
+    if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
+      return createErrorJson("Local AI provider chưa sẵn sàng (llama.cpp)", "LOCAL_PROVIDER_UNAVAILABLE");
     }
-
+    String safePrompt = prompt == null ? "" : prompt.trim();
+    if (safePrompt.isBlank()) {
+      return createErrorJson("Prompt rỗng", "INVALID_PROMPT");
+    }
+    int maxPrompt = Math.max(8000, localLlamaMaxPromptChars);
+    String fittedPrompt = safePrompt.length() > maxPrompt
+        ? safePrompt.substring(0, maxPrompt)
+        : safePrompt;
+    if (safePrompt.length() > maxPrompt) {
+      log.warn("Local provider prompt clamped {} -> {} chars", safePrompt.length(), maxPrompt);
+    }
+    emitProgress(progressListener, progressPayload(
+        "local_inference",
+        "Đang gọi Local AI (llama.cpp)...",
+        0,
+        1,
+        progressI18n("copilot.progress.message.local_inference", null, null, null)));
     try {
-      String fullPrompt = prompt;
-
-      if (fullPrompt.length() > 1000000) {
-        return createErrorJson("Prompt vẫn quá lớn cho Gemini (tối đa 1M ký tự)", "GEMINI_PROMPT_TOO_LARGE");
+      int outTokens = Math.max(128, Math.min(Math.max(256, maxTokens), localLlamaMaxTokens));
+      String raw = llamaCppNativeService.generateContentFast(fittedPrompt, outTokens);
+      String text = extractResultTextFromWrappedJson(raw);
+      if (text == null || text.isBlank()) {
+        text = raw == null ? "" : raw.trim();
       }
-
-      Map<String, Object> body = new HashMap<>();
-      body.put("contents", List.of(Map.of(
-          "role", "user",
-          "parts", List.of(Map.of("text", fullPrompt))
-      )));
-      body.put("generationConfig", Map.of(
-          "temperature", temperature,
-          "maxOutputTokens", Math.min(maxTokens, geminiMaxTokens),
-          "topP", 0.95
-      ));
-
-      String url = geminiEndpoint + "/" + geminiModel + ":generateContent?key=" + googleApiKey;
-      HttpHeaders headers = new HttpHeaders();
-      headers.setContentType(MediaType.APPLICATION_JSON);
-
-      emitProgress(progressListener, progressPayload("gemini_call", "Đang gửi yêu cầu tới Gemini 1.5 Pro", 0, 1,
-          progressI18n("copilot.progress.message.gemini_request", null, null, null)));
-
-      ResponseEntity<String> response = restTemplate.postForEntity(url, new HttpEntity<>(body, headers), String.class);
-
-      if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-        @SuppressWarnings("unchecked")
-        Map<String, Object> result = objectMapper.readValue(response.getBody(), Map.class);
-        Object candidates = result.get("candidates");
-        if (candidates instanceof List<?> candList && !candList.isEmpty()) {
-          @SuppressWarnings("unchecked")
-          Map<String, Object> candidate = (Map<String, Object>) candList.get(0);
-          Object content = candidate.get("content");
-          if (content instanceof Map<?, ?> contentMap) {
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> parts = (List<Map<String, Object>>) contentMap.get("parts");
-            if (parts != null && !parts.isEmpty()) {
-              String text = String.valueOf(parts.get(0).get("text"));
-              log.info("Gemini 1.5 Pro response received: {} chars", text.length());
-              cacheResponse(prompt, text);
-              return createSuccessJson(text, "gemini_1_5_pro", null);
-            }
-          }
-        }
-      }
-
-      return createErrorJson("Gemini trả về phản hồi không hợp lệ", "GEMINI_INVALID_RESPONSE");
+      emitProgress(progressListener, progressPayload(
+          "complete",
+          "Local AI hoàn tất",
+          1,
+          1,
+          mergeProgress(
+              progressI18n("copilot.progress.message.local_inference_complete", null, null, null),
+              Map.of("provider", "local_provider", "outputChars", text.length()))));
+      cacheResponse(prompt, wrapTextAsChatCompletionsJson(text));
+      return wrapTextAsChatCompletionsJson(text);
     } catch (Exception ex) {
-      log.error("Gemini 1.5 Pro call failed", ex);
-      return createErrorJson("Lỗi gọi Gemini: " + ex.getMessage(), "GEMINI_ERROR");
+      log.error("Local provider inference failed: {}", ex.getMessage());
+      return createErrorJson("Local AI lỗi: " + ex.getMessage(), "LOCAL_PROVIDER_ERROR");
     }
+  }
+
+  /** Local inference — legacy name kept for internal call sites. */
+  private String callGeminiWithContext(String prompt, int maxTokens, double temperature, ProgressListener progressListener) {
+    return callLocalProviderWithContext(prompt, maxTokens, temperature, progressListener);
   }
 
   private String normalizeChatCompletionsEndpoint(String configuredUrl) {
@@ -2081,11 +2393,10 @@ public class AiAssistantGatewayService {
       return cachedResp;
     }
 
-    String endpoint = resolveChatCompletionsEndpoint();
-    String effectiveToken = getEffectiveToken(endpoint);
-    if (effectiveToken.isEmpty()) {
-      return createErrorJson("Thiếu token cho endpoint AI (set aiAssistant.api.key/openai.api.key hoặc env OPENAI_API_KEY)", "GITHUB_TOKEN_MISSING");
+    if (localOnlyEnabled && (llamaCppNativeService == null || !llamaCppNativeService.isAvailable())) {
+      return createErrorJson("Local AI provider chưa sẵn sàng (local-only mode)", "LOCAL_PROVIDER_UNAVAILABLE");
     }
+
     String trimmedPrompt = prompt.trim();
     String taskTypeHint = detectTaskTypeHint(trimmedPrompt);
     boolean isMenuTask = looksLikeMenuTask(trimmedPrompt);
@@ -2173,35 +2484,19 @@ public class AiAssistantGatewayService {
     }
 
     String selectedModel = selectOptimalModel(taskTypeHint, finalPrompt.length(), isCodeTask);
-    if (shouldFastFallbackMenuToGemini(selectedModel, finalPrompt.length(), isMenuTask)) {
-      log.info(
-          "Routing request to Gemini (fast-fallback) because menu context is large and primary AI Assistant model is in cooldown: selectedModel={}, promptChars={}, promptProfile={}, contextTypeHint={}",
-          selectedModel,
-          finalPrompt.length(),
-          selectedPromptProfile,
-          contextTypeHint);
-      String fastFallback = callGeminiWithContext(finalPrompt, maxOutputTokens, directTemperature, progressListener);
+    if (!localOnlyEnabled && shouldFastFallbackMenuToGemini(selectedModel, finalPrompt.length(), isMenuTask)) {
+      String fastFallback = callLocalProviderWithContext(finalPrompt, maxOutputTokens, directTemperature, progressListener);
       return applyCodeRuntimeGuardIfNeeded(fastFallback, shouldInjectCodeContext, contextTypeHint, selectedPromptProfile);
     }
     log.info(
-      "AI routing decision: taskTypeHint={}, isCodeTask={}, isMenuTask={}, contextTypeHint={}, promptProfile={}, injectedProjectContext={}, promptChars={}, directMaxChars={}, largeContextThresholdChars={}, selectedModel={}, geminiConfigured={}",
+      "AI local routing: taskTypeHint={}, isCodeTask={}, isMenuTask={}, contextTypeHint={}, promptProfile={}, promptChars={}, selectedModel={}",
         taskTypeHint,
         isCodeTask,
         isMenuTask,
         contextTypeHint,
         selectedPromptProfile,
-        injectedProjectContext,
         finalPrompt.length(),
-      directMaxChars,
-      largeContextThresholdChars,
-        selectedModel,
-        geminiEnabled && (!googleApiKey.isBlank() || geminiService != null));
-    if (selectedModel.startsWith("gemini:")) {
-      log.info("Routing request to Gemini because selectedModel={} for taskTypeHint={} promptChars={} promptProfile={} contextTypeHint={}",
-          selectedModel, taskTypeHint, finalPrompt.length(), selectedPromptProfile, contextTypeHint);
-      String geminiRouted = callGeminiWithContext(finalPrompt, maxOutputTokens, directTemperature, progressListener);
-      return applyCodeRuntimeGuardIfNeeded(geminiRouted, shouldInjectCodeContext, contextTypeHint, selectedPromptProfile);
-    }
+        selectedModel);
 
     emitProgress(progressListener, progressPayload(
       "preparing",
@@ -2333,122 +2628,26 @@ public class AiAssistantGatewayService {
     if (messages == null || messages.isEmpty()) {
       return createErrorJson("Messages rỗng", "INVALID_PROMPT");
     }
-    String endpoint = resolveChatCompletionsEndpoint();
-    String effectiveToken = getEffectiveToken(endpoint);
-    if (effectiveToken.isEmpty()) {
-      return createErrorJson("Thiếu token cho endpoint AI (set aiAssistant.api.key/openai.api.key hoặc env OPENAI_API_KEY)", "GITHUB_TOKEN_MISSING");
+    String flattenedPrompt = flattenChatMessages(messages);
+    String fittedPrompt = applyStreamingContextBudgetFitting(messages, flattenedPrompt);
+    String localRaw = callLocalProviderWithContext(
+        fittedPrompt,
+        maxOutputTokens,
+        directTemperature,
+        progressListener);
+    if (isErrorResponseJson(localRaw)) {
+      return localRaw;
     }
-    try {
-      String flattenedPrompt = flattenChatMessages(messages);
-      String fittedPrompt = applyStreamingContextBudgetFitting(messages, flattenedPrompt);
-      int streamingDirectSafeChars = Math.max(8000, Math.min(chatStreamDirectMaxChars, requestMaxChars - 1000));
-        int chunkThresholdChars = Math.max(10000, chunkModeThresholdChars);
-      int estimatedInputTokens = estimateTokens(fittedPrompt, Math.max(128, Math.min(1024, maxOutputTokens)));
-      boolean shouldChunkFallback = !fittedPrompt.isBlank()
-          && (fittedPrompt.length() > streamingDirectSafeChars
-            || fittedPrompt.length() > chunkThresholdChars
-              || estimatedInputTokens > Math.max(3000, chatStreamInputTokenSoftLimit));
-
-      if (shouldChunkFallback) {
-        emitProgress(progressListener, progressPayload(
-            "preparing",
-            "Ngữ cảnh quá lớn, chuyển sang chế độ chunk để giữ đầy đủ nội dung",
-            0,
-            1,
-          withOrchestrationMeta("preparing", 0, 1, mergeProgress(
-            progressI18n(
-              "copilot.progress.message.large_context_chunk_mode",
-              null,
-              "copilot.progress.detail.streaming_chunk_fallback",
-              Map.of(
-                "inputChars", flattenedPrompt.length(),
-                "fittedInputChars", fittedPrompt.length(),
-                "chunkModeThresholdChars", chunkThresholdChars,
-                "estimatedInputTokens", estimatedInputTokens,
-                "directCharsLimit", streamingDirectSafeChars,
-                "inputTokenSoftLimit", Math.max(3000, chatStreamInputTokenSoftLimit),
-                "mode", "streaming_chunked_fallback")),
-            Map.of(
-              "detail", "Ngu canh lon vuot nguong streaming direct, kich hoat chunk mode map-reduce",
-              "inputChars", flattenedPrompt.length(),
-              "fittedInputChars", fittedPrompt.length(),
-              "chunkModeThresholdChars", chunkThresholdChars,
-              "estimatedInputTokens", estimatedInputTokens,
-              "directCharsLimit", streamingDirectSafeChars,
-              "inputTokenSoftLimit", Math.max(3000, chatStreamInputTokenSoftLimit),
-              "mode", "streaming_chunked_fallback")))));
-
-        String chunkedResult = generateContent(fittedPrompt, progressListener);
-        if (isErrorResponseJson(chunkedResult)) {
-          return chunkedResult;
-        }
-        String finalText = extractResultTextFromWrappedJson(chunkedResult);
-        if (finalText == null || finalText.isBlank()) {
-          finalText = chunkedResult;
-        }
-        emitStreamingChunks(finalText, progressListener);
-        emitProgress(progressListener, progressPayload("complete", "Chat hoàn tất", 1, 1,
-          mergeProgress(progressI18n("copilot.progress.message.chat_complete", null, null, null), Map.of(
-                "mode", "streaming_chunked_fallback",
-                "inputChars", flattenedPrompt.length(),
-                "fittedInputChars", fittedPrompt.length(),
-              "estimatedInputTokens", estimatedInputTokens))));
-        return createSuccessJson(finalText, "streaming_chunked_fallback", Map.of(
-            "inputChars", flattenedPrompt.length(),
-              "fittedInputChars", fittedPrompt.length(),
-            "chunkModeThresholdChars", chunkThresholdChars,
-            "estimatedInputTokens", estimatedInputTokens,
-            "directCharsLimit", streamingDirectSafeChars,
-            "inputTokenSoftLimit", Math.max(3000, chatStreamInputTokenSoftLimit)));
-      }
-
-      StringBuilder fullResponse = new StringBuilder();
-
-        emitProgress(progressListener, progressPayload("streaming", "Bắt đầu streaming với Gemini", 0, 1,
-          progressI18n("copilot.progress.message.streaming_start", null, null, null)));
-
-      // Use GeminiStreamingService for real-time token streaming.
-      if (geminiStreamingService != null) {
-        geminiStreamingService.streamContent(fittedPrompt, null,
-            chunk -> {
-              fullResponse.append(chunk);
-              emitProgress(progressListener, progressPayload("streaming", "Nhận dữ liệu", 0, 1,
-                  mergeProgress(progressI18n("copilot.progress.message.receiving_data", null, null, null),
-                      Map.of("chunk", chunk))));
-            },
-            null, null);
-      } else {
-        // Fallback: non-streaming Gemini + fake chunk emission
-        String result = callGeminiWithContext(fittedPrompt, maxOutputTokens, 0.7, progressListener);
-        String extracted = extractResultTextFromWrappedJson(result);
-        String textToEmit = (extracted != null && !extracted.isBlank()) ? extracted : result;
-        fullResponse.append(textToEmit);
-        emitStreamingChunks(textToEmit, progressListener);
-      }
-
-      emitProgress(progressListener, progressPayload("complete", "Chat hoàn tất", 1, 1,
-        mergeProgress(progressI18n("copilot.progress.message.chat_complete", null, null, null),
-          Map.of("chunk", fullResponse.toString()))));
-      
-      return createSuccessJson(fullResponse.toString(), "streaming_chat", null);
-      
-    } catch (Exception ex) {
-      log.error("Chat streaming failed", ex);
-      if (isFallbackEligibleStreamingFailure(ex)) {
-        emitProgress(progressListener, progressPayload(
-            "ai_assistant_failed",
-            "AI Assistant API tạm không xử lý được, đang thử provider fallback",
-            0,
-            1,
-            mergeProgress(
-                progressI18n("copilot.progress.message.github_fallback", null, "copilot.progress.detail.github_fallback", Map.of("error", String.valueOf(ex.getMessage()))),
-                Map.of("error", String.valueOf(ex.getMessage())))));
-      } else {
-        emitProgress(progressListener, progressPayload("error", "Chat lỗi: " + ex.getMessage(), 0, 1,
-            progressI18n("copilot.progress.message.chat_error", Map.of("error", String.valueOf(ex.getMessage())), null, null)));
-      }
-      return createErrorJson("Chat streaming lỗi: " + ex.getMessage(), "CHAT_STREAMING_ERROR");
+    String finalText = extractResultTextFromWrappedJson(localRaw);
+    if (finalText == null || finalText.isBlank()) {
+      finalText = localRaw;
     }
+    emitStreamingChunks(finalText, progressListener);
+    emitProgress(progressListener, progressPayload("complete", "Chat hoàn tất (local)", 1, 1,
+        mergeProgress(progressI18n("copilot.progress.message.chat_complete", null, null, null), Map.of(
+            "mode", "local_streaming",
+            "provider", "local_provider"))));
+    return createSuccessJson(finalText, "local_streaming", Map.of("provider", "local_provider"));
   }
 
   private boolean isFallbackEligibleStreamingFailure(Exception ex) {
@@ -2804,24 +3003,12 @@ public class AiAssistantGatewayService {
   }
 
   private String generateDirectContent(String prompt, ProgressListener progressListener) {
-    // GitHub Models removed — route directly to Gemini.
-    try {
-      return callGeminiWithContext(prompt, maxOutputTokens, directTemperature, progressListener);
-    } catch (Exception ex) {
-      log.error("generateDirectContent: Gemini call failed", ex);
-      return createErrorJson("Lỗi gọi Gemini: " + ex.getMessage(), "GEMINI_ERROR");
-    }
+    return callLocalProviderWithContext(prompt, maxOutputTokens, directTemperature, progressListener);
   }
 
   private String generateLargePromptContent(String prompt, ProgressListener progressListener, AiMenuOperationScenario scenario) {
-    // GitHub Models chunk-map-reduce removed. Gemini Pro supports 1-2M context natively.
-    log.info("generateLargePromptContent: routing to Gemini large context, promptChars={}", prompt.length());
-    try {
-      return callGeminiWithContext(prompt, maxOutputTokens, directTemperature, progressListener);
-    } catch (Exception ex) {
-      log.error("generateLargePromptContent: Gemini call failed", ex);
-      return createErrorJson("Lỗi gọi Gemini large context: " + ex.getMessage(), "GEMINI_LARGE_CONTEXT_ERROR");
-    }
+    log.info("generateLargePromptContent: local provider, promptChars={}", prompt.length());
+    return callLocalProviderWithContext(prompt, maxOutputTokens, directTemperature, progressListener);
   }
 
   @SuppressWarnings("unused")
@@ -3216,124 +3403,9 @@ public class AiAssistantGatewayService {
   private String callChatCompletion(String prompt, int maxTokens, double temperature, ProgressListener progressListener,
       Map<String, Object> progressMeta) {
     if (prompt == null || prompt.isBlank()) {
-      throw new IllegalArgumentException("Prompt rỗng khi gọi AI Assistant API");
+      throw new IllegalArgumentException("Prompt rỗng khi gọi local AI");
     }
-
-    // Enforce Gemini-only provider while preserving legacy response parsing contract
-    // (many call-sites still expect a chat-completions shaped JSON payload).
-    if (forceGeminiProvider) {
-      String geminiText = callGeminiWithContext(prompt, maxTokens, temperature, progressListener);
-      return wrapTextAsChatCompletionsJson(geminiText);
-    }
-    if (prompt.length() > requestMaxChars) {
-      throw new IllegalArgumentException(
-          "Prompt request quá lớn cho model (" + prompt.length() + ">" + requestMaxChars + " ký tự)");
-    }
-
-    int estimatedInputTokens = estimateTokens(prompt, Math.max(256, maxTokens));
-    String taskTypeHint = detectTaskTypeHint(prompt);
-    boolean isCodeTask = looksLikeCodeTask(prompt);
-    boolean isMenuTask = "menu_design".equalsIgnoreCase(taskTypeHint) || looksLikeMenuTask(prompt);
-    String preferredModel = selectOptimalModel(taskTypeHint, prompt.length(), isCodeTask);
-    List<String> candidateModels = resolveCandidateModels(preferredModel.startsWith("gemini:") ? model : preferredModel);
-    if (isMenuTask) {
-      candidateModels = filterMenuAllowedModels(candidateModels);
-    }
-    if (candidateModels.isEmpty()) {
-      throw new IllegalStateException("No available AI Assistant models for this menu task after applying allowlist/cooldown");
-    }
-    List<String> failures = new ArrayList<>();
-    String baseEndpoint = resolveChatCompletionsEndpoint();
-    String effectiveToken = getEffectiveToken(baseEndpoint);
-
-    // Short-circuit: if the entire OpenAI account key is rate-limited, skip all models immediately.
-    long accountRateLimitUntil = openAiAccountRateLimitUntilMs;
-    if (accountRateLimitUntil > System.currentTimeMillis()) {
-      long remainingMs = accountRateLimitUntil - System.currentTimeMillis();
-      log.warn("OpenAI account key rate-limited for {}ms more — skipping all models, falling back to Gemini", remainingMs);
-      throw new IllegalStateException("Tất cả AI Assistant models đều thất bại. OpenAI account key rate-limited for "
-          + remainingMs + "ms more.");
-    }
-
-    for (String candidateModel : candidateModels) {
-      if (isModelTemporarilyUnavailable(candidateModel, effectiveToken)) {
-        long remainingMs = getModelUnavailableRemainingMs(candidateModel, effectiveToken);
-        String cooldownReason = getModelUnavailableReason(candidateModel, effectiveToken);
-        String skipReason = "model temporarily unavailable due to cached cooldown (reason=" + cooldownReason
-            + ", remaining " + remainingMs + " ms)";
-        log.info("Skip model '{}' because {}", candidateModel, skipReason);
-        failures.add(candidateModel + " -> cooldown: " + cooldownReason);
-        continue;
-      }
-
-      if (!supportsPromptSize(candidateModel, estimatedInputTokens, maxTokens)) {
-        String skipReason = "skip context too large for model";
-        log.info("Skip model '{}' for promptSize={} estimatedInputTokens={} maxTokens={} ({})",
-            candidateModel, prompt.length(), estimatedInputTokens, maxTokens, skipReason);
-        failures.add(candidateModel + " -> " + skipReason);
-        continue;
-      }
-
-      List<String> endpointOrder = resolveEndpointOrderForModel(candidateModel, effectiveToken);
-      for (String endpointPath : endpointOrder) {
-        String endpoint = resolveEndpointByPath(endpointPath);
-        String endpointToken = getEffectiveToken(endpoint);
-        HttpEntity<Map<String, Object>> request = buildRequestEntity(
-            endpointPath,
-            candidateModel,
-            prompt,
-            maxTokens,
-            temperature,
-            endpointToken);
-
-        try {
-          return executeWithRetry(request, prompt, maxTokens, progressListener,
-              mergeProgress(progressMeta, Map.of("model", candidateModel, "endpointPath", endpointPath)),
-              candidateModel,
-              endpoint,
-              endpointToken);
-        } catch (HttpClientErrorException ex) {
-          if (isUnknownModelError(ex)) {
-            String msg = "Model '" + candidateModel + "' không khả dụng/sai tên tại endpoint '"
-                + resolveEndpointByPath(endpointPath) + "' (status=" + ex.getStatusCode() + "). Đang thử model tiếp theo.";
-            log.warn(msg);
-            markModelTemporarilyUnavailable(candidateModel, endpointToken, modelUnknownCooldownMs, "unknown model for endpoint");
-            failures.add(candidateModel + " -> unknown model");
-            endpointOrder = Collections.emptyList();
-            break;
-          }
-          if (isPayloadTooLargeError(ex)) {
-            String msg = "Model '" + candidateModel + "' vượt giới hạn payload/token tại endpoint '"
-                + resolveEndpointByPath(endpointPath) + "' (status=" + ex.getStatusCode()
-                + "). Bỏ qua model này và thử model tiếp theo.";
-            log.warn(msg);
-            failures.add(candidateModel + " -> payload too large");
-            endpointOrder = Collections.emptyList();
-            break;
-          }
-          if (isUnsupportedApiForModelError(ex)) {
-            log.info("Model '{}' không hỗ trợ endpoint '{}' (status={}), thử endpoint khác nếu có",
-                candidateModel, endpointPath, ex.getStatusCode());
-            failures.add(candidateModel + " -> unsupported " + endpointPath);
-            continue;
-          }
-          throw ex;
-        } catch (IllegalStateException rateLimitedEx) {
-          String msg = rateLimitedEx.getMessage() == null ? "unknown error" : rateLimitedEx.getMessage();
-          if (msg.contains("rate limit") || msg.contains("quota")) {
-            log.warn("Model '{}' tạm không dùng được ({}). Đang thử model tiếp theo.", candidateModel, msg);
-            failures.add(candidateModel + " -> " + msg);
-            endpointOrder = Collections.emptyList();
-            break;
-          }
-          throw rateLimitedEx;
-        }
-      }
-    }
-
-    String failureSummary = failures.isEmpty() ? "Không có chi tiết lỗi" : String.join(" | ", failures);
-    throw new IllegalStateException("Tất cả AI Assistant models đều thất bại. Đã thử: "
-        + String.join(", ", candidateModels) + ". Chi tiết: " + failureSummary);
+    return callLocalProviderWithContext(prompt, maxTokens, temperature, progressListener);
   }
 
   private List<String> filterMenuAllowedModels(List<String> candidates) {
@@ -4547,7 +4619,7 @@ public class AiAssistantGatewayService {
     try {
       Map<String, Object> ok = new HashMap<>();
       ok.put("success", true);
-      ok.put("provider", "GitHubModels");
+      ok.put("provider", localOnlyEnabled ? "local_provider" : "GitHubModels");
       ok.put("mode", mode);
       ok.put("result", result);
       if (metadata != null && !metadata.isEmpty()) {

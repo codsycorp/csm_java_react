@@ -2,6 +2,55 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
+SCRIPT_DIR="$(pwd)"
+
+config_log() {
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [config] $*"
+}
+
+load_env_file() {
+    local file_path="$1"
+    if [ -f "$file_path" ]; then
+        set -a
+        # shellcheck source=/dev/null
+        source "$file_path"
+        set +a
+        config_log "Loaded $(basename "$file_path")"
+        return 0
+    fi
+    return 1
+}
+
+# Optional profile: ./start.sh strong | ./start.sh 5gb  OR  CSM_LOCAL_PROFILE=5gb ./start.sh
+if [ -z "${CSM_LOCAL_PROFILE:-}" ] && [ $# -ge 1 ]; then
+    case "$1" in
+        strong|local-strong|5gb|weak|local-5gb|fast)
+            CSM_LOCAL_PROFILE="$1"
+            shift
+            ;;
+    esac
+fi
+
+# 1) Base secrets + model paths
+load_env_file "$SCRIPT_DIR/config.env" || config_log "config.env not found (copy from config.env.example)"
+
+# 2) Profile overlay — explicit CSM_LOCAL_PROFILE wins; else auto by RAM if unset
+if [ -n "${CSM_LOCAL_PROFILE:-}" ]; then
+    case "$CSM_LOCAL_PROFILE" in
+        strong|local-strong)
+            load_env_file "$SCRIPT_DIR/config.local-strong.env" || config_log "config.local-strong.env not found"
+            ;;
+        5gb|weak|local-5gb)
+            load_env_file "$SCRIPT_DIR/config.local-5gb.env" || config_log "config.local-5gb.env not found"
+            ;;
+        fast)
+            config_log "CSM_LOCAL_PROFILE=fast — using start.sh weak-local defaults (no overlay file)"
+            ;;
+        *)
+            config_log "Unknown CSM_LOCAL_PROFILE=$CSM_LOCAL_PROFILE — ignored"
+            ;;
+    esac
+fi
 
 JAR_PREFIX="csm_server-"
 APP_PORT=9999
@@ -89,17 +138,28 @@ TOMCAT_MAX_CONNECTIONS="${TOMCAT_MAX_CONNECTIONS:-120}"
 TOMCAT_ACCEPT_COUNT="${TOMCAT_ACCEPT_COUNT:-40}"
 ENABLE_ALWAYS_PRETOUCH="${ENABLE_ALWAYS_PRETOUCH:-false}"
 
-# Spring profile selection for local-only weak servers.
-# - AI_LOCAL_MODE=fast  -> prod,weak-local
+# Spring profile selection for local-only servers.
+# Prefer SPRING_PROFILES_ACTIVE_OVERRIDE from config.local-*.env; else AI_LOCAL_MODE / auto RAM.
+# - AI_LOCAL_MODE=5gb   -> prod,local-5gb (RECOMMENDED: 5GB RAM / 2 CPU, v7 spec)
+# - AI_LOCAL_MODE=fast  -> prod,weak-local (minimal ctx, fastest but limited edit quality)
 # - AI_LOCAL_MODE=large -> prod,weak-local,weak-local-large
-# You can override fully via SPRING_PROFILES_ACTIVE_OVERRIDE.
-AI_LOCAL_MODE="${AI_LOCAL_MODE:-fast}"
+# Override fully via SPRING_PROFILES_ACTIVE_OVERRIDE or CSM_LOCAL_PROFILE + config.local-*.env
+if [ -z "${AI_LOCAL_MODE:-}" ] && [ -z "${CSM_LOCAL_PROFILE:-}" ] && [ "$total_mem_mb" -gt 0 ] && [ "$total_mem_mb" -lt 7000 ]; then
+    AI_LOCAL_MODE="5gb"
+elif [ -z "${AI_LOCAL_MODE:-}" ] && [ -z "${CSM_LOCAL_PROFILE:-}" ]; then
+    AI_LOCAL_MODE="fast"
+else
+    AI_LOCAL_MODE="${AI_LOCAL_MODE:-fast}"
+fi
 SPRING_PROFILES_ACTIVE_OVERRIDE="${SPRING_PROFILES_ACTIVE_OVERRIDE:-}"
 
 if [ -n "$SPRING_PROFILES_ACTIVE_OVERRIDE" ]; then
     EFFECTIVE_SPRING_PROFILES="$SPRING_PROFILES_ACTIVE_OVERRIDE"
 else
     case "$AI_LOCAL_MODE" in
+        5gb|v7|balanced)
+            EFFECTIVE_SPRING_PROFILES="prod,local-5gb"
+            ;;
         large)
             EFFECTIVE_SPRING_PROFILES="prod,weak-local,weak-local-large"
             ;;
@@ -110,14 +170,18 @@ else
 fi
 
 WEAK_MODE_ACTIVE="false"
-if [[ ",${EFFECTIVE_SPRING_PROFILES}," == *",weak-local,"* ]]; then
+if [[ ",${EFFECTIVE_SPRING_PROFILES}," == *",weak-local,"* ]] || [[ ",${EFFECTIVE_SPRING_PROFILES}," == *",local-5gb,"* ]]; then
     WEAK_MODE_ACTIVE="true"
 fi
 
 WEAK_LLAMA_CONTEXT_WINDOW="2048"
 WEAK_LLAMA_MAX_TOKENS="96"
 WEAK_LLAMA_MAX_PROMPT_CHARS="18000"
-if [ "$AI_LOCAL_MODE" = "large" ]; then
+if [ "$AI_LOCAL_MODE" = "5gb" ] || [ "$AI_LOCAL_MODE" = "v7" ] || [ "$AI_LOCAL_MODE" = "balanced" ]; then
+    WEAK_LLAMA_CONTEXT_WINDOW="8192"
+    WEAK_LLAMA_MAX_TOKENS="768"
+    WEAK_LLAMA_MAX_PROMPT_CHARS="32000"
+elif [ "$AI_LOCAL_MODE" = "large" ]; then
     WEAK_LLAMA_CONTEXT_WINDOW="3072"
     WEAK_LLAMA_MAX_TOKENS="384"
     WEAK_LLAMA_MAX_PROMPT_CHARS="80000"
@@ -141,7 +205,7 @@ if [ "$WEAK_MODE_ACTIVE" = "true" ]; then
         "--ai.local.llama.ubatch-size=16"
         "--ai.local.llama.context-window=${WEAK_LLAMA_CONTEXT_WINDOW}"
         "--ai.local.llama.max-tokens=${WEAK_LLAMA_MAX_TOKENS}"
-        "--ai.local.llama.max-prompt-chars=120000"
+        "--ai.local.llama.max-prompt-chars=${WEAK_LLAMA_MAX_PROMPT_CHARS}"
         "--ai.local.llama.preload-on-startup=false"
         "--ai.local.llama.max-concurrent-requests=1"
         "--ai.local.llama.acquire-timeout-ms=1200"
@@ -157,10 +221,9 @@ if [ "$WEAK_MODE_ACTIVE" = "true" ]; then
         "--ai.local.llama.wait-until-stable.poll-ms=250"
         "--ai.local.llama.wait-until-stable.log-interval-ms=5000"
         "--ai.local.llama.wait-until-stable.max-waiting-requests=3"
-        "--cache.warming.enabled=false"
         "--ai.code-stream.max-prompt-chars=32000"
         "--ai.code-stream.menu.max-prompt-chars=48000"
-        "--ai.code-stream.local-provider.max-prompt-chars=18000"
+        "--ai.code-stream.local-provider.max-prompt-chars=${WEAK_LLAMA_MAX_PROMPT_CHARS}"
         "--ai.code-stream.routing.retry-default-max-prompt-chars=28000"
     )
 fi
@@ -413,24 +476,16 @@ if [ -z "$jarName" ]; then
 fi
 
 log "Starting $jarName on port $APP_PORT with performance optimizations..."
-log "Spring profiles: $EFFECTIVE_SPRING_PROFILES (AI_LOCAL_MODE=$AI_LOCAL_MODE)"
+log "Spring profiles: $EFFECTIVE_SPRING_PROFILES (AI_LOCAL_MODE=$AI_LOCAL_MODE, CSM_LOCAL_PROFILE=${CSM_LOCAL_PROFILE:-auto})"
 if [ "$WEAK_MODE_ACTIVE" = "true" ]; then
     log "Weak mode runtime hard-overrides are enabled to prevent env drift"
 fi
 
-# Load environment variables from config.env (API keys, secrets)
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# config.env already loaded at startup; log key presence for deploy debugging
 if [ -f "$SCRIPT_DIR/config.env" ]; then
-    set -a
-    # shellcheck source=/dev/null
-    source "$SCRIPT_DIR/config.env"
-    set +a
-    log "Loaded config.env"
     log "  GEMINI_PRO_API_KEY : ${GEMINI_PRO_API_KEY:+(set, ${#GEMINI_PRO_API_KEY} chars)}"
     log "  GEMINI_API_KEY     : ${GEMINI_API_KEY:+(set, ${#GEMINI_API_KEY} chars)}"
     log "  GOOGLE_AI_GEMINI_API_KEY: ${GOOGLE_AI_GEMINI_API_KEY:+(set, ${#GOOGLE_AI_GEMINI_API_KEY} chars)}"
-else
-    log "⚠ WARNING: config.env not found at $SCRIPT_DIR/config.env — Gemini API keys may be missing"
 fi
 
 # Create logs directory for GC and error logs

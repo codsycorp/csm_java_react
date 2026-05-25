@@ -12,14 +12,14 @@ Hệ thống quản lý khách hàng và nội dung với Spring Boot + React/Vu
 ### Development
 
 ```bash
-# Backend
+# Dev máy mạnh (từ backend/)
 cd backend
-mvn spring-boot:run
-
-set -a && source ../config.env && set +a && mvn spring-boot:run
 set -a && source ../config.local-strong.env && set +a && mvn spring-boot:run
 
-set -a && source /Volumes/Datas/CSM/JavaProjects/csm_server/config.env && set +a && cd /Volumes/Datas/CSM/JavaProjects/csm_server/backend && mvn spring-boot:run
+# Server yếu 5GB (repo root)
+./run-server.sh
+
+# Lần đầu: cp config.env.example config.env
 # Frontend
 cd frontend
 pnpm install

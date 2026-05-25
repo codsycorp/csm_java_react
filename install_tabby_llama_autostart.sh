@@ -2,7 +2,7 @@
 
 set -e
 
-MODEL_PATH="/Volumes/Datas/CSM/JavaProjects/csm_server/backend/csm_datas/ai_local/model/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"
+MODEL_PATH="/Volumes/Datas/CSM/JavaProjects/csm_server/backend/csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
 
 LLAMA_PORT="8888"
 TABBY_PORT="8080"

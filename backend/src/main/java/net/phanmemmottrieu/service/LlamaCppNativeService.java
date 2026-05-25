@@ -78,7 +78,7 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.enabled:false}")
     private boolean enabled;
 
-    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf}")
+    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf}")
     private String modelPath;
 
     @Value("${ai.local.llama.context-window:8192}")
@@ -807,6 +807,10 @@ public class LlamaCppNativeService implements AIProvider {
      * Detect if prompt expects JSON output.
      * Returns true if prompt contains keywords suggesting JSON format requirement.
      */
+    public int getEffectiveMaxPromptCharsLimit() {
+        return effectiveMaxPromptChars();
+    }
+
     public int getEffectiveMaxTokensLimit() {
         return effectiveMaxTokens();
     }

@@ -62,6 +62,32 @@ public class LocalTranslationService {
         add("Tuyến đường", "Route", "路线");
         add("Hãng hàng không", "Airlines", "航空公司");
         add("Sân bay", "Airport", "机场");
+        // NPL / inventory domain
+        add("Nguyên liệu", "Materials", "原材料");
+        add("NPL", "Materials", "原材料");
+        add("Tồn kho", "Inventory", "库存");
+        add("Xuất NPL", "Material Issue", "原材料出库");
+        add("Nhập NPL", "Material Receipt", "原材料入库");
+        add("Thành phẩm", "Finished Products", "成品");
+        add("Nguyên phụ liệu", "Raw & Auxiliary Materials", "原辅料");
+        add("Báo cáo", "Report", "报表");
+        add("Theo", "By", "按");
+        add("ĐVT", "UOM", "单位");
+        add("Mã", "Code", "编码");
+        add("Tên", "Name", "名称");
+        add("Số lượng", "Quantity", "数量");
+        add("Đơn giá", "Unit Price", "单价");
+        add("Thành tiền", "Amount", "金额");
+        add("Ngày", "Date", "日期");
+        add("Kho", "Warehouse", "仓库");
+        add("Pallet", "Pallet", "托盘");
+        add("HSD", "Expiry Date", "有效期");
+        add("Nhóm", "Group", "组");
+        add("Loại", "Type", "类型");
+        add("Vị trí", "Location", "位置");
+        add("Ghi chú", "Note", "备注");
+        add("Từ ngày", "From Date", "起始日期");
+        add("Đến ngày", "To Date", "截止日期");
     }
 
     private static void add(String vi, String en, String zh) {

@@ -305,7 +305,7 @@ ai.orchestration.strict.local.scope=true             # ✓ Force strict local
 
 # Local LLM Provider (llama.cpp)
 ai.local.llama.enabled=true                          # ✓ Enable local
-ai.local.llama.model-path=./csm_datas/ai_local/model/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf
+ai.local.llama.model-path=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
 ai.local.llama.gpu-layers=999                        # Load all layers on GPU
 
 # Disable all cloud/remote paths

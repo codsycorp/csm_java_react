@@ -7,6 +7,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import jakarta.annotation.PreDestroy;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.regex.Pattern;
@@ -22,9 +24,9 @@ import java.util.regex.Pattern;
  * 4. Prune old indexes to prevent unbounded growth
  * 5. Support both sync (blocking) and async (non-blocking) indexing
  *
- * Scope masks:
- * - SCOPE_CODE (0x01): Current code file
- * - SCOPE_MENU (0x02): Current menu structure
+ * Scope masks (MUST match AiMultimodalScannerService constants exactly):
+ * - SCOPE_MENU (0x01): Current menu structure
+ * - SCOPE_CODE (0x02): Current code file
  * - SCOPE_CONFIG (0x04): Configuration/metadata
  * - SCOPE_EXTERNAL (0x08): Attachment data
  *
@@ -35,9 +37,9 @@ public class AiScopedContextIngestionService {
 
     private static final Logger log = LoggerFactory.getLogger(AiScopedContextIngestionService.class);
 
-    // Scope bit masks
-    public static final int SCOPE_CODE = 0x01;
-    public static final int SCOPE_MENU = 0x02;
+    // Scope bit masks — aligned with AiMultimodalScannerService.SCOPE_MENU/SCOPE_CODE
+    public static final int SCOPE_MENU = 0x01;
+    public static final int SCOPE_CODE = 0x02;
     public static final int SCOPE_CONFIG = 0x04;
     public static final int SCOPE_EXTERNAL = 0x08;
     public static final int SCOPE_ALL = 0x0F;
@@ -66,6 +68,15 @@ public class AiScopedContextIngestionService {
     @Value("${ai.context.ingestion.prune-old-indexes:true}")
     private boolean pruneOldIndexes;
 
+    @Value("${ai.context.ingestion.large-code.enabled:true}")
+    private boolean largeCodeIngestEnabled;
+
+    @Value("${ai.context.ingestion.large-code.threshold-chars:45000}")
+    private int largeCodeThresholdChars;
+
+    @Value("${ai.context.ingestion.large-code.max-chars:600000}")
+    private int largeCodeMaxChars;
+
     // Async ingestion queue
     private final ExecutorService asyncExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "AiScopedIngestor");
@@ -75,6 +86,8 @@ public class AiScopedContextIngestionService {
 
     // Track pending ingestions
     private final Map<String, IngestionTask> pendingTasks = new ConcurrentHashMap<>();
+    private final Map<String, IngestionTask> pendingLargeCodeTasks = new ConcurrentHashMap<>();
+    private final Map<String, String> largeCodeContentHashByEditorKey = new ConcurrentHashMap<>();
 
     private static final Pattern CODE_REQUEST_PATTERN = Pattern.compile("(?i)\\b(code|class|method|function|bug|fix|refactor|compile|build|java|typescript|ts|js|api)\\b");
     private static final Pattern MENU_REQUEST_PATTERN = Pattern.compile("(?i)\\b(menu|screen|form|field|tree|module|flow|trigger|report|json menu)\\b");
@@ -267,6 +280,132 @@ public class AiScopedContextIngestionService {
     @PreDestroy
     public void shutdown() {
         asyncExecutor.shutdownNow();
+    }
+
+    /**
+     * Stable Lucene source key for a DynamicCode editor instance (p_name + p_type).
+     */
+    public static String buildEditorIngestKey(String pName, Integer pType) {
+        String name = String.valueOf(pName == null ? "" : pName).trim();
+        if (name.isBlank()) {
+            name = "default";
+        }
+        String type = pType == null ? "0" : String.valueOf(pType);
+        return sanitizeEditorKeyToken(name) + "_t" + sanitizeEditorKeyToken(type);
+    }
+
+    /**
+     * Async symbol-aware chunk ingest for oversized editor code into Lucene KNN.
+     * Non-blocking: current request uses region plan; follow-up requests hit scoped RAG.
+     */
+    public IngestionResult ingestLargeCodeAsync(
+            String appId,
+            String currentCode,
+            int scopeMask,
+            String requestId,
+            String editorKey,
+            String messageHint) {
+        if (!enabled || !largeCodeIngestEnabled || currentCode == null || currentCode.isBlank()) {
+            return new IngestionResult(appId);
+        }
+        int effectiveScopeMask = scopeMask;
+        if ((effectiveScopeMask & SCOPE_CODE) == 0) {
+            effectiveScopeMask |= SCOPE_CODE;
+        }
+        if (currentCode.length() <= Math.max(12000, largeCodeThresholdChars)) {
+            return ingestCode(appId, currentCode, effectiveScopeMask, true, requestId);
+        }
+
+        String safeEditorKey = sanitizeEditorKeyToken(String.valueOf(editorKey == null ? "" : editorKey).trim());
+        if (safeEditorKey.isBlank()) {
+            safeEditorKey = "default_t0";
+        }
+        String taskKey = String.valueOf(appId == null ? "" : appId).trim() + ":" + safeEditorKey;
+        String trimmedCode = trimLargeCodeForIngestion(currentCode);
+        String contentHash = md5Hex(trimmedCode);
+
+        String cachedHash = largeCodeContentHashByEditorKey.get(taskKey);
+        if (contentHash.equals(cachedHash)) {
+            IngestionResult cached = new IngestionResult(appId);
+            cached.status = "cached_unchanged";
+            cached.scopeMask = effectiveScopeMask;
+            return cached;
+        }
+
+        IngestionTask existing = pendingLargeCodeTasks.get(taskKey);
+        if (existing != null && !existing.future.isDone()) {
+            IngestionResult pending = new IngestionResult(appId);
+            pending.status = "pending_async_large_code";
+            pending.scopeMask = effectiveScopeMask;
+            return pending;
+        }
+
+        long queueStartMs = System.currentTimeMillis();
+        contextTracer.startPhase("ingestion_large_code_async", requestId);
+
+        IngestionResult queued = new IngestionResult(appId);
+        queued.status = "pending_async_large_code";
+        queued.scopeMask = effectiveScopeMask;
+        queued.totalCharsIndexed = trimmedCode.length();
+
+        IngestionTask task = new IngestionTask();
+        pendingLargeCodeTasks.put(taskKey, task);
+
+        final String asyncAppId = String.valueOf(appId == null ? "" : appId).trim();
+        final int asyncScopeMask = effectiveScopeMask;
+        final String asyncEditorKey = safeEditorKey;
+        final String asyncMarkdown = buildLargeCodeIngestDocument(trimmedCode, safeEditorKey, messageHint);
+        final String asyncSourceSuffix = "editorCode_" + safeEditorKey;
+
+        asyncExecutor.submit(() -> {
+            try {
+                long startMs = System.currentTimeMillis();
+                AiBusinessMemoryVectorService.IndexSummary summary = businessMemoryVectorService.indexDynamicContext(
+                    asyncAppId,
+                    asyncSourceSuffix,
+                    asyncMarkdown,
+                    List.of("scope_code", "currentCode", "large_editor_code", "dynamic_code", asyncEditorKey),
+                    asyncScopeMask
+                );
+
+                IngestionResult done = new IngestionResult(asyncAppId);
+                done.scopeMask = asyncScopeMask;
+                done.chunksIngested = summary == null ? 0 : Math.max(0, summary.chunksIndexed());
+                done.totalCharsIndexed = trimmedCode.length();
+                done.ingestionTimeMs = System.currentTimeMillis() - startMs;
+                done.status = "completed_async_large_code";
+
+                if (pruneOldIndexes) {
+                    businessMemoryVectorService.pruneDynamicContext(asyncAppId);
+                }
+                largeCodeContentHashByEditorKey.put(taskKey, contentHash);
+                task.future.complete(done);
+
+                log.info(
+                    "Large code async vector ingest completed appId={} editorKey={} chunks={} chars={} time={}ms requestId={}",
+                    asyncAppId,
+                    asyncEditorKey,
+                    done.chunksIngested,
+                    done.totalCharsIndexed,
+                    done.ingestionTimeMs,
+                    requestId);
+            } catch (Exception ex) {
+                IngestionResult failed = new IngestionResult(asyncAppId);
+                failed.success = false;
+                failed.status = "failed_async_large_code";
+                failed.scopeMask = asyncScopeMask;
+                task.future.complete(failed);
+                log.warn("Large code async vector ingest failed appId={} editorKey={}: {}",
+                    asyncAppId, asyncEditorKey, ex.getMessage());
+            } finally {
+                pendingLargeCodeTasks.remove(taskKey, task);
+                contextTracer.endPhase("ingestion_large_code_async", requestId, System.currentTimeMillis() - queueStartMs);
+            }
+        });
+
+        queued.ingestionTimeMs = System.currentTimeMillis() - queueStartMs;
+        contextTracer.recordMetric(requestId, "ingestion_large_code_async_queued_chars", trimmedCode.length());
+        return queued;
     }
 
     /**
@@ -511,11 +650,65 @@ public class AiScopedContextIngestionService {
         return safe.substring(0, maxChars);
     }
 
+    private String trimLargeCodeForIngestion(String content) {
+        String safe = String.valueOf(content == null ? "" : content);
+        int maxChars = Math.max(largeCodeThresholdChars + 1, largeCodeMaxChars);
+        if (safe.length() <= maxChars) {
+            return safe;
+        }
+        return safe.substring(0, maxChars);
+    }
+
+    private String buildLargeCodeIngestDocument(String code, String editorKey, String messageHint) {
+        String safeCode = String.valueOf(code == null ? "" : code);
+        int lineCount = safeCode.isBlank() ? 0 : safeCode.split("\n", -1).length;
+        StringBuilder sb = new StringBuilder();
+        sb.append("# DynamicCode Editor Vector Index\n");
+        sb.append("editor_key: ").append(editorKey).append('\n');
+        sb.append("total_chars: ").append(safeCode.length()).append('\n');
+        sb.append("total_lines: ").append(lineCount).append('\n');
+        sb.append("chunk_strategy: symbol_aware_declaration_boundaries\n");
+        String hint = String.valueOf(messageHint == null ? "" : messageHint).replaceAll("\\s+", " ").trim();
+        if (!hint.isBlank()) {
+            sb.append("retrieval_hints: ").append(hint, 0, Math.min(hint.length(), 480)).append('\n');
+        }
+        sb.append("\n```javascript\n");
+        sb.append(safeCode);
+        if (!safeCode.endsWith("\n")) {
+            sb.append('\n');
+        }
+        sb.append("```\n");
+        return sb.toString();
+    }
+
+    private static String sanitizeEditorKeyToken(String raw) {
+        String safe = String.valueOf(raw == null ? "" : raw).trim();
+        if (safe.isBlank()) {
+            return "default";
+        }
+        return safe.replaceAll("[^a-zA-Z0-9_\\-]", "_");
+    }
+
+    private static String md5Hex(String text) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] bytes = md.digest(String.valueOf(text == null ? "" : text).getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(bytes.length * 2);
+            for (byte b : bytes) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception ex) {
+            return Integer.toHexString(String.valueOf(text == null ? "" : text).hashCode());
+        }
+    }
+
     /**
      * Clear pending tasks (useful for cleanup)
      */
     public void clearPendingTasks() {
         pendingTasks.clear();
-        log.info("Cleared {} pending ingestion tasks", pendingTasks.size());
+        pendingLargeCodeTasks.clear();
+        log.info("Cleared pending scoped ingestion tasks");
     }
 }

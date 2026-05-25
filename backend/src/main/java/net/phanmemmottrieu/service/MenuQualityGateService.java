@@ -1,5 +1,6 @@
 package net.phanmemmottrieu.service;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayDeque;
@@ -28,6 +29,9 @@ import java.util.regex.Pattern;
  */
 @Service
 public class MenuQualityGateService {
+
+    @Autowired(required = false)
+    private LocalTranslationService localTranslationService;
 
     public static class QualityIssue {
         public String severity; // error | warning | info
@@ -188,6 +192,7 @@ public class MenuQualityGateService {
 
         for (NodeCtx ctx : allNodes) {
             validateHierarchy(ctx, byId, report);
+            validateLabelI18n(ctx, report);
             validateIconContract(ctx, report);
             validateTypeForm(ctx, report);
             validateTableSchema(ctx, report);
@@ -346,6 +351,42 @@ public class MenuQualityGateService {
                 null,
                 ctx.path,
                 "icon is blank, fallback AppstoreOutlined is recommended"
+            ));
+        }
+    }
+
+    private void validateLabelI18n(NodeCtx ctx, QualityReport report) {
+        String label = asText(ctx.node.get("label"));
+        String labelEn = asText(ctx.node.get("label_en"));
+        String labelZh = asText(ctx.node.get("label_zh"));
+
+        if (label.isBlank()) {
+            report.issues.add(new QualityIssue(
+                "error",
+                "label_required",
+                "ERR_LABEL_MISSING_VI",
+                ctx.path,
+                "label (Vietnamese) is required"
+            ));
+        }
+
+        if (labelEn.isBlank()) {
+            report.issues.add(new QualityIssue(
+                "error",
+                "label_en_required",
+                "ERR_LABEL_MISSING_EN",
+                ctx.path,
+                "label_en (English) is required"
+            ));
+        }
+
+        if (labelZh.isBlank()) {
+            report.issues.add(new QualityIssue(
+                "error",
+                "label_zh_required",
+                "ERR_LABEL_MISSING_ZH",
+                ctx.path,
+                "label_zh (Chinese) is required"
             ));
         }
     }
@@ -525,6 +566,18 @@ public class MenuQualityGateService {
                 ));
             }
         }
+        if (triggerMap.isEmpty()) {
+            Integer typeForm = toInt(ctx.node.get("type_form"));
+            if (typeForm != null && (typeForm == 1 || typeForm == 2 || typeForm == 4 || typeForm == 5)) {
+                report.issues.add(new QualityIssue(
+                    "warning",
+                    "trigger_empty_for_runtime",
+                    "WARN_TRIGGER_EMPTY",
+                    ctx.path,
+                    "trigger is empty but type_form=" + typeForm + " usually expects business triggers"
+                ));
+            }
+        }
     }
 
     private void finalizeReport(
@@ -592,5 +645,454 @@ public class MenuQualityGateService {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    /**
+     * Builds a patch envelope from deterministic quality-gate findings (labels, trigger keys, icon).
+     * Used when the local model cannot produce actionable patches for broad menu audit requests.
+     */
+    public Map<String, Object> buildRepairPatchEnvelope(List<Map<String, Object>> menus, int maxPatches) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("status", "success");
+        out.put("i18n", Map.of("vi", Map.of(), "en", Map.of(), "zh", Map.of()));
+        List<Map<String, Object>> patches = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+
+        if (menus == null || menus.isEmpty() || maxPatches <= 0) {
+            out.put("patches", patches);
+            out.put("warnings", warnings);
+            return out;
+        }
+
+        QualityReport report = validateMenuJson(menus, "deterministic_menu_audit");
+        Map<String, NodeCtx> byId = indexNodes(menus);
+        Map<String, Map<String, Object>> afterByNodeId = new LinkedHashMap<>();
+        Map<String, LinkedHashSet<String>> removeFieldsByNodeId = new LinkedHashMap<>();
+        Map<String, List<String>> reasonPartsByNodeId = new LinkedHashMap<>();
+
+        for (QualityIssue issue : report.issues) {
+            if (issue == null) {
+                continue;
+            }
+            String nodeId = extractNodeIdFromIssuePath(issue.path, byId);
+            if (nodeId.isBlank()) {
+                continue;
+            }
+            NodeCtx ctx = byId.get(nodeId);
+            if (ctx == null) {
+                continue;
+            }
+
+            Map<String, Object> after = afterByNodeId.computeIfAbsent(nodeId, k -> new LinkedHashMap<>());
+            LinkedHashSet<String> removeFields = removeFieldsByNodeId.computeIfAbsent(nodeId, k -> new LinkedHashSet<>());
+            List<String> reasons = reasonPartsByNodeId.computeIfAbsent(nodeId, k -> new ArrayList<>());
+
+            String errorCode = asText(issue.errorCode);
+            if ("type_form_missing".equals(asText(issue.rule))) {
+                Integer inferred = inferTypeForm(ctx.node);
+                if (inferred != null) {
+                    after.put("type_form", inferred);
+                    reasons.add("type_form");
+                }
+                continue;
+            }
+            if (errorCode.isBlank()) {
+                continue;
+            }
+
+            switch (errorCode) {
+                case "ERR_LABEL_MISSING_EN" -> {
+                    String label = asText(ctx.node.get("label"));
+                    if (!label.isBlank()) {
+                        after.put("label_en", label);
+                        reasons.add("label_en");
+                    }
+                }
+                case "ERR_LABEL_MISSING_ZH" -> {
+                    String label = asText(ctx.node.get("label"));
+                    if (!label.isBlank()) {
+                        after.put("label_zh", label);
+                        reasons.add("label_zh");
+                    }
+                }
+                case "ERR_TRIGGER_KEY_INVALID" -> {
+                    Object triggerObj = ctx.node.get("trigger");
+                    if (triggerObj instanceof Map<?, ?> triggerMap) {
+                        Map<String, Object> cleaned = new LinkedHashMap<>();
+                        for (Map.Entry<?, ?> entry : triggerMap.entrySet()) {
+                            String key = String.valueOf(entry.getKey());
+                            if (VALID_TRIGGER_KEYS.contains(key)) {
+                                cleaned.put(key, entry.getValue());
+                            }
+                        }
+                        after.put("trigger", cleaned);
+                        reasons.add("trigger_keys");
+                    }
+                }
+                case "ERR_ICON_LEGACY_FIELD" -> applyLegacyIconRepair(ctx.node, after, removeFields, reasons);
+                case "ERR_TYPE_FORM_INVALID" -> {
+                    Integer coerced = coerceTypeForm(ctx.node.get("type_form"));
+                    if (coerced == null) {
+                        coerced = inferTypeForm(ctx.node);
+                    }
+                    if (coerced != null) {
+                        after.put("type_form", coerced);
+                        reasons.add("type_form");
+                    }
+                }
+                default -> {
+                    // no-op
+                }
+            }
+        }
+
+        for (NodeCtx ctx : byId.values()) {
+            String nodeId = asText(ctx.node.get("id"));
+            if (nodeId.isBlank()) {
+                continue;
+            }
+            String label = asText(ctx.node.get("label"));
+            if (label.isBlank()) {
+                continue;
+            }
+            Map<String, Object> after = afterByNodeId.computeIfAbsent(nodeId, k -> new LinkedHashMap<>());
+            List<String> reasons = reasonPartsByNodeId.computeIfAbsent(nodeId, k -> new ArrayList<>());
+            accumulateLabelI18nRepairs(ctx, after, reasons);
+            accumulateTableInputParamRepairs(ctx, after, reasons);
+            accumulateTriggerRepairs(ctx, after, reasons);
+            if (ctx.node.get("type_form") == null) {
+                Integer inferred = inferTypeForm(ctx.node);
+                if (inferred != null) {
+                    after.put("type_form", inferred);
+                    reasons.add("type_form");
+                }
+            } else {
+                Integer coerced = coerceTypeForm(ctx.node.get("type_form"));
+                if (coerced != null && !Objects.equals(coerced, toInt(ctx.node.get("type_form")))) {
+                    after.put("type_form", coerced);
+                    reasons.add("type_form");
+                }
+            }
+            LinkedHashSet<String> removeFields = removeFieldsByNodeId.computeIfAbsent(nodeId, k -> new LinkedHashSet<>());
+            applyLegacyIconRepair(ctx.node, after, removeFields, reasons);
+        }
+
+        for (Map.Entry<String, Map<String, Object>> entry : afterByNodeId.entrySet()) {
+            if (patches.size() >= maxPatches) {
+                warnings.add("Truncated repair patches at maxPatches=" + maxPatches);
+                break;
+            }
+            String nodeId = entry.getKey();
+            Map<String, Object> after = entry.getValue();
+            LinkedHashSet<String> removeFields = removeFieldsByNodeId.getOrDefault(nodeId, new LinkedHashSet<>());
+            if (after.isEmpty() && removeFields.isEmpty()) {
+                continue;
+            }
+            NodeCtx ctx = byId.get(nodeId);
+            if (ctx == null) {
+                continue;
+            }
+            List<String> reasons = reasonPartsByNodeId.getOrDefault(nodeId, List.of());
+            Map<String, Object> patch = new LinkedHashMap<>();
+            patch.put("action", "edit");
+            patch.put("nodeId", nodeId);
+            patch.put("parentId", asText(ctx.node.get("parentId")));
+            patch.put("path", ctx.path);
+            patch.put("before", null);
+            patch.put("after", after);
+            if (!removeFields.isEmpty()) {
+                patch.put("removeFields", new ArrayList<>(removeFields));
+            }
+            patch.put(
+                "reason",
+                reasons.isEmpty()
+                    ? "Deterministic quality-gate repair"
+                    : "Deterministic menu audit: fix " + String.join(", ", reasons)
+            );
+            patches.add(patch);
+        }
+
+        if (!patches.isEmpty()) {
+            warnings.add("Deterministic quality-gate repair (" + patches.size() + " patches). Review label_en/label_zh placeholders.");
+        }
+        out.put("patches", patches);
+        out.put("warnings", warnings);
+        return out;
+    }
+
+    private void accumulateLabelI18nRepairs(NodeCtx ctx, Map<String, Object> after, List<String> reasons) {
+        String label = asText(ctx.node.get("label"));
+        if (label.isBlank()) {
+            return;
+        }
+        String labelEn = asText(ctx.node.get("label_en"));
+        String labelZh = asText(ctx.node.get("label_zh"));
+        LabelParts parts = splitMenuLabelPrefix(label);
+
+        if (labelEn.isBlank() || labelEn.equals(label)) {
+            String translated = translateLabel(parts.core(), true);
+            after.put("label_en", parts.prefix() + (translated.isBlank() ? parts.core() : translated));
+            reasons.add("label_en");
+        }
+        if (labelZh.isBlank() || labelZh.equals(label)) {
+            String translated = translateLabel(parts.core(), false);
+            after.put("label_zh", parts.prefix() + (translated.isBlank() ? parts.core() : translated));
+            reasons.add("label_zh");
+        }
+    }
+
+    private void accumulateTableInputParamRepairs(NodeCtx ctx, Map<String, Object> after, List<String> reasons) {
+        Object tableObj = ctx.node.get("table");
+        if (!(tableObj instanceof List<?> fields) || fields.isEmpty()) {
+            return;
+        }
+        List<Map<String, Object>> fieldPatches = new ArrayList<>();
+        for (Object fieldObj : fields) {
+            if (!(fieldObj instanceof Map<?, ?> rawField)) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> field = (Map<String, Object>) rawField;
+            String fName = asText(field.get("f_name"));
+            if (fName.isBlank()) {
+                continue;
+            }
+            Map<String, Object> patch = new LinkedHashMap<>();
+            patch.put("f_name", fName);
+
+            String fHeader = asText(field.get("f_header"));
+            if (fHeader.isBlank()) {
+                fHeader = humanizeFieldName(fName);
+                patch.put("f_header", fHeader);
+            }
+
+            String fHeaderEn = asText(field.get("f_header_en"));
+            if (fHeaderEn.isBlank() && !fHeader.isBlank()) {
+                String translated = translateLabel(fHeader, true);
+                if (!translated.isBlank()) {
+                    patch.put("f_header_en", translated);
+                }
+            }
+            String fHeaderZh = asText(field.get("f_header_zh"));
+            if (fHeaderZh.isBlank() && !fHeader.isBlank()) {
+                String translated = translateLabel(fHeader, false);
+                if (!translated.isBlank()) {
+                    patch.put("f_header_zh", translated);
+                }
+            }
+
+            String fTypes = normalizeType(asText(field.get("f_types")));
+            if (COMBO_LIKE_TYPES.contains(fTypes) && asText(field.get("f_cbo_query")).isBlank()) {
+                Object fOptions = field.get("f_options");
+                if (!(fOptions instanceof List<?> opts) || opts.isEmpty()) {
+                    // Keep existing value; quality report already flags ERR_COMBO_QUERY_INVALID.
+                    // Do not invent business combo queries here.
+                }
+            }
+
+            if (patch.size() > 1) {
+                fieldPatches.add(patch);
+            }
+        }
+        if (!fieldPatches.isEmpty()) {
+            after.put("table", fieldPatches);
+            reasons.add("table_input_params");
+        }
+    }
+
+    private void accumulateTriggerRepairs(NodeCtx ctx, Map<String, Object> after, List<String> reasons) {
+        Object triggerObj = ctx.node.get("trigger");
+        Integer typeForm = toInt(ctx.node.get("type_form"));
+        if (typeForm == null) {
+            typeForm = inferTypeForm(ctx.node);
+        }
+
+        if (triggerObj instanceof Map<?, ?> triggerMap) {
+            Map<String, Object> cleaned = new LinkedHashMap<>();
+            boolean hadInvalid = false;
+            for (Map.Entry<?, ?> entry : triggerMap.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                if (VALID_TRIGGER_KEYS.contains(key)) {
+                    Object value = entry.getValue();
+                    if (value instanceof String text && text.isBlank()) {
+                        continue;
+                    }
+                    cleaned.put(key, value);
+                } else {
+                    hadInvalid = true;
+                }
+            }
+            if (hadInvalid || cleaned.size() != triggerMap.size()) {
+                after.put("trigger", cleaned);
+                reasons.add("trigger_keys");
+            } else if (cleaned.isEmpty() && typeForm != null && (typeForm == 1 || typeForm == 2 || typeForm == 4 || typeForm == 5)) {
+                after.put("trigger", cleaned);
+                reasons.add("trigger_empty");
+            }
+            return;
+        }
+
+        if (triggerObj == null && typeForm != null && (typeForm == 1 || typeForm == 2 || typeForm == 4 || typeForm == 5)) {
+            after.put("trigger", new LinkedHashMap<>());
+            reasons.add("trigger_missing");
+        }
+    }
+
+    private String translateLabel(String vietnameseCore, boolean english) {
+        if (vietnameseCore == null || vietnameseCore.isBlank()) {
+            return "";
+        }
+        if (localTranslationService != null) {
+            return english
+                ? localTranslationService.translateVietnameseToEnglish(vietnameseCore)
+                : localTranslationService.translateVietnameseToChinese(vietnameseCore);
+        }
+        return "";
+    }
+
+    private LabelParts splitMenuLabelPrefix(String label) {
+        String safe = asText(label);
+        if (safe.isBlank()) {
+            return new LabelParts("", "");
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+            .compile("^([A-Z0-9]+\\.\\s*)(.+)$")
+            .matcher(safe);
+        if (matcher.matches()) {
+            return new LabelParts(matcher.group(1), matcher.group(2).trim());
+        }
+        return new LabelParts("", safe);
+    }
+
+    private String humanizeFieldName(String fName) {
+        String raw = asText(fName);
+        if (raw.isBlank()) {
+            return "";
+        }
+        String spaced = raw.replace('_', ' ').replace('-', ' ').trim();
+        if (spaced.isBlank()) {
+            return raw;
+        }
+        String[] tokens = spaced.split("\\s+");
+        StringBuilder out = new StringBuilder();
+        for (String token : tokens) {
+            if (token.isBlank()) {
+                continue;
+            }
+            if (!out.isEmpty()) {
+                out.append(' ');
+            }
+            out.append(Character.toUpperCase(token.charAt(0)));
+            if (token.length() > 1) {
+                out.append(token.substring(1));
+            }
+        }
+        return out.toString();
+    }
+
+    private record LabelParts(String prefix, String core) {}
+
+    private void applyLegacyIconRepair(
+            Map<String, Object> node,
+            Map<String, Object> after,
+            Set<String> removeFields,
+            List<String> reasons) {
+        if (node == null || node.isEmpty()) {
+            return;
+        }
+        for (String forbidden : FORBIDDEN_ICON_FIELDS) {
+            if (!node.containsKey(forbidden) || isBlank(node.get(forbidden))) {
+                continue;
+            }
+            if (isBlank(node.get("icon")) && isBlank(after.get("icon"))) {
+                after.put("icon", node.get(forbidden));
+            }
+            removeFields.add(forbidden);
+            reasons.add("icon");
+        }
+    }
+
+    private Integer coerceTypeForm(Object rawType) {
+        Integer parsed = toInt(rawType);
+        if (parsed != null && VALID_TYPE_FORMS.contains(parsed)) {
+            return parsed;
+        }
+        String text = asText(rawType).toLowerCase(Locale.ROOT);
+        if (text.isBlank()) {
+            return null;
+        }
+        return switch (text) {
+            case "group", "0" -> 0;
+            case "crud", "1" -> 1;
+            case "master_detail", "master-detail", "2" -> 2;
+            case "link", "3" -> 3;
+            case "runtime", "4" -> 4;
+            case "report", "5" -> 5;
+            case "kanban", "6" -> 6;
+            default -> null;
+        };
+    }
+
+    private Integer inferTypeForm(Map<String, Object> node) {
+        if (node == null || node.isEmpty()) {
+            return null;
+        }
+        Object children = node.get("children");
+        if (children instanceof List<?> childList && !childList.isEmpty()) {
+            return 0;
+        }
+        if (!asText(node.get("report_name")).isBlank()) {
+            return 5;
+        }
+        Object triggerObj = node.get("trigger");
+        if (triggerObj instanceof Map<?, ?> triggerMap
+            && (triggerMap.containsKey("report_db") || triggerMap.containsKey("report_html"))) {
+            return 5;
+        }
+        if (!asText(node.get("table_name")).isBlank()) {
+            return 1;
+        }
+        if (!asText(node.get("v_link")).isBlank()) {
+            return 3;
+        }
+        return 0;
+    }
+
+    private Map<String, NodeCtx> indexNodes(List<Map<String, Object>> menus) {
+        Map<String, NodeCtx> byId = new LinkedHashMap<>();
+        List<NodeCtx> allNodes = new ArrayList<>();
+        Set<String> duplicateIds = new LinkedHashSet<>();
+        Deque<String> ancestorStack = new ArrayDeque<>();
+        for (int i = 0; i < menus.size(); i++) {
+            Object rootObj = menus.get(i);
+            if (rootObj instanceof Map<?, ?> rawRoot) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> root = (Map<String, Object>) rawRoot;
+                walkNode(root, "menu[" + i + "]", "", 0, ancestorStack, allNodes, byId, duplicateIds, new QualityReport());
+            }
+        }
+        return byId;
+    }
+
+    private String extractNodeIdFromIssuePath(String path, Map<String, NodeCtx> byId) {
+        String safePath = asText(path);
+        if (safePath.isBlank()) {
+            return "";
+        }
+        int open = safePath.lastIndexOf('(');
+        int close = safePath.lastIndexOf(')');
+        if (open >= 0 && close > open) {
+            String id = safePath.substring(open + 1, close).trim();
+            if (byId.containsKey(id)) {
+                return id;
+            }
+        }
+        if (safePath.startsWith("id=")) {
+            String id = safePath.substring(3).trim();
+            if (byId.containsKey(id)) {
+                return id;
+            }
+        }
+        return "";
     }
 }

@@ -16,7 +16,7 @@ import net.phanmemmottrieu.model.RegistrationResponse;
 import net.phanmemmottrieu.service.UserService;
 import net.phanmemmottrieu.service.ChatPersistenceService;
 import net.phanmemmottrieu.service.CRMService;
-import net.phanmemmottrieu.service.GeminiService;
+import net.phanmemmottrieu.service.LlamaCppNativeService;
 import net.phanmemmottrieu.util.PortKillerUtil;
 
 import java.util.HashMap;
@@ -85,7 +85,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     private CRMService crmService;
 
     @Autowired(required = false)
-    private GeminiService geminiService;
+    private LlamaCppNativeService llamaCppNativeService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ScheduledExecutorService chatAiScheduler = Executors.newScheduledThreadPool(2);
@@ -664,20 +664,16 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             return fallbackText;
         }
 
-        if (geminiService == null) {
-            logger.warn("Gemini service unavailable for {}: geminiService is null", purpose);
+        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
+            logger.warn("Local AI unavailable for {}: using fallback text", purpose);
             return fallbackText;
         }
 
         try {
-            if (!geminiService.isAvailable()) {
-                logger.warn("Gemini service unavailable for {}: service not ready", purpose);
-                return fallbackText;
-            }
-            String aiRaw = geminiService.generateContent(prompt);
+            String aiRaw = llamaCppNativeService.generateContentFast(prompt, 256);
             return extractAiText(aiRaw, fallbackText);
         } catch (Exception e) {
-            logger.warn("Gemini generation failed for {}: {}", purpose, e.getMessage());
+            logger.warn("Local AI generation failed for {}: {}", purpose, e.getMessage());
             return fallbackText;
         }
     }
