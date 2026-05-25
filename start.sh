@@ -481,6 +481,28 @@ if [ "$WEAK_MODE_ACTIVE" = "true" ]; then
     log "Weak mode runtime hard-overrides are enabled to prevent env drift"
 fi
 
+resolve_env_path() {
+    local raw="$1"
+    if [[ "$raw" = /* ]]; then
+        echo "$raw"
+    else
+        echo "$SCRIPT_DIR/$raw"
+    fi
+}
+
+if [ "${AI_LOCAL_LLAMA_ENABLED:-true}" != "false" ] && [ -n "${AI_LOCAL_LLAMA_MODEL_PATH:-}" ]; then
+    LLAMA_MODEL_FILE="$(resolve_env_path "$AI_LOCAL_LLAMA_MODEL_PATH")"
+    if [ ! -f "$LLAMA_MODEL_FILE" ]; then
+        log "ERROR: Local llama GGUF not found: $LLAMA_MODEL_FILE"
+        log "  mkdir -p $SCRIPT_DIR/csm_datas/ai_local/model"
+        log "  wget -O $SCRIPT_DIR/csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf \\"
+        log "    'https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf'"
+        log "  Or set AI_LOCAL_LLAMA_MODEL_PATH in config.env to an existing .gguf file."
+        exit 1
+    fi
+    log "Local llama model OK: $LLAMA_MODEL_FILE"
+fi
+
 # config.env already loaded at startup; log key presence for deploy debugging
 if [ -f "$SCRIPT_DIR/config.env" ]; then
     log "  GEMINI_PRO_API_KEY : ${GEMINI_PRO_API_KEY:+(set, ${#GEMINI_PRO_API_KEY} chars)}"
