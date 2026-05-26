@@ -5388,6 +5388,15 @@ public class ApiSpringController {
                     completion.remove("changedRanges");
                     completion.put("textEditsCount", 0);
                     codeStreamMeta.put("finalOutputGateRejected", true);
+                    completion.put("finalOutputGateRejected", true);
+                    if ("edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                            && isCodeContext(contextType)) {
+                        String gateReason = String.valueOf(finalOutputGate.toMetaMap().getOrDefault("reasonCode", "final_output_gate_rejected"));
+                        String gateDetail = String.valueOf(finalOutputGate.toMetaMap().getOrDefault("detail", gateReason));
+                        completion.put("status", "edit_apply_failed");
+                        completion.put("reason_code", gateReason);
+                        completion.put("message", "Patch không vượt qua kiểm tra cú pháp: " + gateDetail);
+                    }
                 }
                 Map<String, Object> outputShape = analyzeCodeStreamOutputShape(responseMode, contextType, completionPayload,
                     largeStructuredEditMode);
@@ -17004,15 +17013,23 @@ public class ApiSpringController {
         if (edit == null || edit.isEmpty()) {
             return false;
         }
-        String replacement = String.valueOf(edit.getOrDefault("replacement", "")).trim();
-        if (replacement.isBlank() || replacement.equals("...") || replacement.equals("\"...\"")) {
-            return false;
-        }
         int startLine = parseIntOrDefault(edit.get("startLine"), -1);
         if (startLine < 1) {
             startLine = parseIntOrDefault(edit.get("start_line"), -1);
         }
-        return startLine > 0;
+        int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+        if (endLine < 1) {
+            endLine = parseIntOrDefault(edit.get("end_line"), startLine);
+        }
+        if (startLine < 1 || endLine < startLine) {
+            return false;
+        }
+        String action = String.valueOf(edit.getOrDefault("action", "edit")).trim().toLowerCase(Locale.ROOT);
+        if ("delete".equals(action) || "remove".equals(action)) {
+            return true;
+        }
+        String replacement = String.valueOf(edit.getOrDefault("replacement", "")).trim();
+        return !replacement.isBlank() && !replacement.equals("...") && !replacement.equals("\"...\"");
     }
 
     private int countActionableLineTextEdits(String rawResponse) {
@@ -31294,6 +31311,24 @@ public class ApiSpringController {
             && htmlContent != null && !String.valueOf(htmlContent).isBlank();
     }
 
+    /** LMKT creative-params JSON ({@code personaKey}/{@code angle}/…) — not full SEO article. */
+    private boolean isCreativeParamsPayload(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return false;
+        }
+        if (payload.containsKey("personaKey") && payload.containsKey("contentPattern")) {
+            return true;
+        }
+        if (payload.containsKey("angle") && payload.get("persona") instanceof Map) {
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isSeoOrCreativeParamsPayload(Map<String, Object> payload) {
+        return isSeoContentPayload(payload) || isCreativeParamsPayload(payload);
+    }
+
     private void populateAiResponseFromRawContent(StandardResponse response, String rawContent, String uiLang) {
 
         // Try to parse as JSON first (GeminiService now returns JSON for both success and error)
@@ -31321,7 +31356,7 @@ public class ApiSpringController {
                 }
             }
 
-            if (isSeoContentPayload(parsedResult)) {
+            if (isSeoOrCreativeParamsPayload(parsedResult)) {
                 response.set("code", 200);
                 response.set("success", true);
                 response.set("data", parsedResult);
@@ -31392,7 +31427,7 @@ public class ApiSpringController {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> parsedData = (Map<String, Object>) contentObj;
 
-                    if (isSeoContentPayload(parsedData)) {
+                    if (isSeoOrCreativeParamsPayload(parsedData)) {
                         response.set("code", 200);
                         response.set("success", true);
                         response.set("data", parsedData);
@@ -31478,7 +31513,7 @@ public class ApiSpringController {
                 }
                 
                 if (parsedData != null) {
-                    if (isSeoContentPayload(parsedData)) {
+                    if (isSeoOrCreativeParamsPayload(parsedData)) {
                         response.set("code", 200);
                         response.set("success", true);
                         response.set("data", parsedData);

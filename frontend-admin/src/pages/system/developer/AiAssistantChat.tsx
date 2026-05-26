@@ -1382,6 +1382,31 @@ function looksLikeStructuredPayload(raw: unknown): boolean {
 	return text.startsWith("{") && (/"summary"\s*:/.test(text) || /"code"\s*:/.test(text));
 }
 
+function parseStructuredGateFallback(raw: unknown): string | null {
+	const candidate = extractValidJsonCandidate(String(raw || ""));
+	if (!candidate)
+		return null;
+	try {
+		const parsed = JSON.parse(candidate) as Record<string, unknown>;
+		if (!parsed || typeof parsed !== "object")
+			return null;
+		const code = typeof parsed.code === "string" ? parsed.code.trim() : "";
+		const edits = (parsed.textEdits ?? parsed.text_edits) as unknown;
+		if (code || (Array.isArray(edits) && edits.length > 0))
+			return null;
+		const summary = String(parsed.summary || "").trim();
+		const warnings = Array.isArray(parsed.warnings)
+			? parsed.warnings.map(item => String(item || "").trim()).filter(Boolean)
+			: [];
+		if (!summary && warnings.length === 0)
+			return null;
+		return [summary, ...warnings.map(w => `- ${w}`)].filter(Boolean).join("\n");
+	}
+	catch {
+		return null;
+	}
+}
+
 /** Parse a JSON payload that contains only textEdits (no full code field). */
 function parseTextEditsOnlyPayload(raw: unknown): any[] | null {
 	const candidate = extractValidJsonCandidate(String(raw || ""));
@@ -3131,6 +3156,15 @@ export default function AiAssistantChat({
 					"Describe the target edit more clearly or retry with a shorter prompt.",
 					"请更清楚地描述要修改的区域，或使用更短的提示重试。",
 				);
+			case "ast_guard_failed_unbalanced_paren":
+			case "ast_guard_failed_unbalanced_brace":
+			case "ast_guard_failed_unbalanced_bracket":
+			case "final_output_gate_rejected":
+				return uiText(
+					"Patch từ model làm hỏng cú pháp nguồn. Hãy thu hẹp vùng sửa hoặc mô tả thay đổi cụ thể hơn.",
+					"The model patch broke source syntax. Narrow the edit scope or describe a more specific change.",
+					"模型补丁破坏了源码语法。请缩小修改范围或描述更具体的更改。",
+				);
 			case "local_provider_circuit_open":
 				return uiText("Hãy chờ local provider hết cooldown rồi thử lại sau.", "Wait for the local provider cooldown to finish, then try again.", "请等待本地 provider 冷却结束后再重试。");
 			case "requirement_clarification_needed":
@@ -4539,6 +4573,7 @@ export default function AiAssistantChat({
 		const structuredPayload = parseStructuredAssistantPayload(nextText);
 		const shouldHideCodeInChat = Boolean(onCodeInsert) && turnAllowAutoApplyRef.current;
 		const showStructuredPlaceholder = !structuredPayload && looksLikeStructuredPayload(nextText);
+		const gateFallbackText = shouldHideCodeInChat ? parseStructuredGateFallback(nextText) : null;
 		const normalizedAssistantText = !structuredPayload && !shouldHideCodeInChat && !showStructuredPlaceholder
 			? normalizeAssistantDisplayText(nextText)
 			: "";
@@ -4549,6 +4584,8 @@ export default function AiAssistantChat({
 					? structuredPayload.changes.map(item => `- ${item}`).join("\n")
 					: "",
 			].filter(Boolean).join("\n\n").trim()
+			: gateFallbackText
+				? gateFallbackText
 			: showStructuredPlaceholder
 				? uiText(
 					"Trợ lý Ảo đang chuẩn bị kết quả cho editor...",
@@ -6892,6 +6929,26 @@ export default function AiAssistantChat({
 									appendStageEvent({ stage: evt.stage as any, message: localizedEvtMessage, percent: evt.percent ?? 0 });
 								}
 							}
+							else if (evt.stage === "final_output_gate") {
+								const gateStatus = String((evt as any).status || "").trim().toLowerCase();
+								if (evtReasonCode) {
+									lastReasonCode = evtReasonCode;
+								}
+								if (gateStatus === "rejected" && streamStartedInEditModeRef.current) {
+									showSystemToast("warning", {
+										summary: localizedEvtMessage || uiText(
+											"Patch không vượt qua kiểm tra cú pháp nên không áp dụng vào editor.",
+											"The patch failed syntax validation and was not applied to the editor.",
+											"补丁未通过语法校验，因此未应用到编辑器。",
+										),
+										nextStep: resolveSystemNextStep(evtReasonCode, evt.stage),
+										internalCode: String(evtReasonCode || "FINAL_OUTPUT_GATE_REJECTED").trim().toUpperCase(),
+									});
+								}
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
+									appendStageEvent(evtForTimeline);
+								}
+							}
 							else if (evt.stage === "routing" && evt.responseMode) {
 								const mode = String(evt.responseMode).trim().toLowerCase();
 								setActiveStreamResponseMode(mode === "edit" ? "edit" : "analyze");
@@ -7406,11 +7463,18 @@ export default function AiAssistantChat({
 										}
 									}
 								}
+								const finalOutputGateMeta = completionEventMeta["finalOutputGate"] as Record<string, unknown> | undefined;
+								const gateRejected = completionEventMeta["finalOutputGateRejected"] === true
+									|| finalOutputGateMeta?.passed === false
+									|| String(completionEventMeta["status"] || "").trim().toLowerCase() === "edit_apply_failed";
+								const completionReasonCode = gateRejected
+									? String(finalOutputGateMeta?.reasonCode || completionEventMeta["reason_code"] || "final_output_gate_rejected").trim()
+									: String(completionEventMeta["reason_code"] || lastReasonCode || "").trim();
 								if (markEditStreamFailureIfNeeded({
 									isEditMode: isEditModeEvt || streamStartedInEditModeRef.current,
 									reviewRequired,
 									editCandidateCount: completionEditCandidates.length,
-									reasonCode: String(completionEventMeta["reason_code"] || lastReasonCode || "").trim(),
+									reasonCode: completionReasonCode,
 								})) {
 									setIsLoading(false);
 									if (sseAbortRef.current === controller) {

@@ -1831,6 +1831,40 @@ Rules:
           + "containing exactly these fields: title, description, html_content. "
           + "No markdown fences, no explanation, and no extra text before or after the JSON.";
 
+  private static final String CREATIVE_PARAMS_SYSTEM_PROMPT =
+      "You are a creative-parameter selector for LMKT marketing content. "
+          + "The user prompt contains [CREATIVE_PARAMS_REQUEST] with KIND and an Output JSON schema. "
+          + "Pick ONE valid combination of creative parameters. DO NOT write article content, titles, or HTML. "
+          + "Return ONLY one valid JSON object on a single line matching the Output JSON schema in the prompt. "
+          + "No markdown fences, no explanation, no schema templates, no title/description/html_content fields.";
+
+  private static final Pattern CREATIVE_PARAMS_KIND_PATTERN =
+      Pattern.compile("(?im)^KIND:\\s*(\\S+)\\s*$");
+  private static final Pattern CREATIVE_PARAMS_SEED_PATTERN =
+      Pattern.compile("(?im)^SEED:\\s*(\\S+)\\s*$");
+  private static final Pattern CREATIVE_PARAMS_ALLOWED_PATTERN =
+      Pattern.compile("(?im)^Allowed\\s+(\\w+):\\s*(.+)$");
+
+  private static final List<String> DEFAULT_ANTI_AI_PERSONAS = List.of(
+      "investor", "family", "local_resident", "business_owner", "storyteller");
+  private static final List<String> DEFAULT_ANTI_AI_PATTERNS = List.of(
+      "investment_analysis", "family_story", "step_by_step_guide", "quick_tips", "landing_page");
+  private static final List<String> DEFAULT_ANTI_AI_SELLING = List.of(
+      "title_explicit", "content_subtle", "content_implicit");
+
+  @Value("${ai.seo.creative-params.max-tokens:384}")
+  private int seoCreativeParamsMaxTokens;
+
+  @Value("${ai.seo.creative-params.temperature:0.05}")
+  private double seoCreativeParamsTemperature;
+
+  @Value("${ai.seo.creative-params.fallback-enabled:true}")
+  private boolean seoCreativeParamsFallbackEnabled;
+
+  public boolean isCreativeParamsRequest(String prompt) {
+    return String.valueOf(prompt == null ? "" : prompt).contains("[CREATIVE_PARAMS_REQUEST]");
+  }
+
   public boolean isSeoContentTask(Map<String, Object> routeParams, String prompt) {
     if (routeParams != null) {
       String taskType = String.valueOf(routeParams.getOrDefault("taskType", "")).trim().toLowerCase(Locale.ROOT);
@@ -1870,6 +1904,15 @@ Rules:
 
     String trimmedPrompt = prompt.trim();
     String cachedResp = getCachedResponse(trimmedPrompt);
+    if (cachedResp != null && isCreativeParamsRequest(trimmedPrompt)) {
+      String cachedText = extractResultTextFromWrappedJson(cachedResp);
+      String kind = extractCreativeParamsKind(trimmedPrompt);
+      Map<String, Object> cachedParsed = parseCreativeParamsFromText(cachedText, kind);
+      if (!isValidCreativeParams(cachedParsed, kind, trimmedPrompt)) {
+        log.info("Bypassing stale creative-params cache entry (invalid shape)");
+        cachedResp = null;
+      }
+    }
     if (cachedResp != null) {
       emitProgress(progressListener, progressPayload("cache_hit", "Cached SEO response", 1, 1,
           progressI18n("copilot.progress.message.cache_hit", null, null, null)));
@@ -1878,6 +1921,10 @@ Rules:
 
     if (localOnlyEnabled && (llamaCppNativeService == null || !llamaCppNativeService.isAvailable())) {
       return createErrorJson("Local AI provider chưa sẵn sàng (local-only mode)", "LOCAL_PROVIDER_UNAVAILABLE");
+    }
+
+    if (isCreativeParamsRequest(trimmedPrompt)) {
+      return generateCreativeParams(trimmedPrompt, progressListener);
     }
 
     emitProgress(progressListener, progressPayload(
@@ -1891,6 +1938,353 @@ Rules:
         ? llamaCppNativeService.getEffectiveMaxTokensLimit()
         : Math.max(4096, maxOutputTokens);
     return callLocalProviderWithContext(trimmedPrompt, seoOutputTokens, directTemperature, progressListener, SEO_SYSTEM_PROMPT);
+  }
+
+  /**
+   * LMKT creative-params lane — small JSON only ({@code personaKey}, {@code angle}, …).
+   * Separate from full SEO article generation; uses low token cap + deterministic seed fallback.
+   */
+  private String generateCreativeParams(String prompt, ProgressListener progressListener) {
+    emitProgress(progressListener, progressPayload(
+        "creative_params",
+        "Đang chọn thông số sáng tạo (Local AI)...",
+        0,
+        1,
+        progressI18n("copilot.progress.message.local_inference", null, null, null)));
+
+    int tokenCap = llamaCppNativeService != null
+        ? llamaCppNativeService.getEffectiveMaxTokensLimit()
+        : Math.max(256, seoCreativeParamsMaxTokens);
+    int outTokens = Math.max(128, Math.min(seoCreativeParamsMaxTokens, tokenCap));
+
+    String raw = callLocalProviderWithContext(
+        prompt,
+        outTokens,
+        seoCreativeParamsTemperature,
+        progressListener,
+        CREATIVE_PARAMS_SYSTEM_PROMPT);
+    String text = extractResultTextFromWrappedJson(raw);
+    if (text == null || text.isBlank()) {
+      text = raw == null ? "" : raw.trim();
+    }
+
+    String kind = extractCreativeParamsKind(prompt);
+    Map<String, Object> parsed = parseCreativeParamsFromText(text, kind);
+    if (parsed == null && raw != null && !raw.equals(text)) {
+      parsed = parseCreativeParamsFromText(raw, kind);
+    }
+
+    if (isValidCreativeParams(parsed, kind, prompt)) {
+      try {
+        String json = objectMapper.writeValueAsString(parsed);
+        cacheResponse(prompt, wrapTextAsChatCompletionsJson(json));
+        emitProgress(progressListener, progressPayload(
+            "complete",
+            "Creative params hoàn tất",
+            1,
+            1,
+            mergeProgress(
+                progressI18n("copilot.progress.message.local_inference_complete", null, null, null),
+                Map.of("provider", "local_provider", "lane", "creative_params", "source", "model"))));
+        return wrapTextAsChatCompletionsJson(json);
+      } catch (Exception ex) {
+        log.warn("Creative params JSON serialize failed: {}", ex.getMessage());
+      }
+    }
+
+    if (!seoCreativeParamsFallbackEnabled) {
+      return createErrorJson("AI không trả về creative params JSON hợp lệ", "CREATIVE_PARAMS_INVALID");
+    }
+
+    Map<String, Object> fallback = buildDeterministicCreativeParamsFallback(prompt, kind);
+    try {
+      String json = objectMapper.writeValueAsString(fallback);
+      log.warn("Creative params model output invalid for kind={}; using deterministic seed fallback", kind);
+      cacheResponse(prompt, wrapTextAsChatCompletionsJson(json));
+      emitProgress(progressListener, progressPayload(
+          "complete",
+          "Creative params hoàn tất (fallback)",
+          1,
+          1,
+          mergeProgress(
+              progressI18n("copilot.progress.message.local_inference_complete", null, null, null),
+              Map.of("provider", "local_provider", "lane", "creative_params", "source", "seed_fallback"))));
+      return wrapTextAsChatCompletionsJson(json);
+    } catch (Exception ex) {
+      return createErrorJson("Creative params fallback failed: " + ex.getMessage(), "CREATIVE_PARAMS_FALLBACK_ERROR");
+    }
+  }
+
+  private String extractCreativeParamsKind(String prompt) {
+    Matcher matcher = CREATIVE_PARAMS_KIND_PATTERN.matcher(String.valueOf(prompt == null ? "" : prompt));
+    if (matcher.find()) {
+      return matcher.group(1).trim().toLowerCase(Locale.ROOT);
+    }
+    return "anti_ai";
+  }
+
+  private String extractCreativeParamsSeed(String prompt) {
+    Matcher matcher = CREATIVE_PARAMS_SEED_PATTERN.matcher(String.valueOf(prompt == null ? "" : prompt));
+    if (matcher.find()) {
+      return matcher.group(1).trim();
+    }
+    return String.valueOf(System.currentTimeMillis());
+  }
+
+  private Map<String, List<String>> extractCreativeParamsAllowedLists(String prompt) {
+    Map<String, List<String>> allowed = new LinkedHashMap<>();
+    Matcher matcher = CREATIVE_PARAMS_ALLOWED_PATTERN.matcher(String.valueOf(prompt == null ? "" : prompt));
+    while (matcher.find()) {
+      String key = matcher.group(1).trim();
+      String rawValues = matcher.group(2).trim();
+      List<String> values = new ArrayList<>();
+      for (String part : rawValues.split(",")) {
+        String token = part.trim();
+        if (!token.isBlank()) {
+          values.add(token);
+        }
+      }
+      if (!values.isEmpty()) {
+        allowed.put(key, values);
+      }
+    }
+    return allowed;
+  }
+
+  @SuppressWarnings("unchecked")
+  private Map<String, Object> parseCreativeParamsFromText(String text, String kind) {
+    if (text == null || text.isBlank()) {
+      return null;
+    }
+    String candidate = extractCreativeParamsJsonCandidate(text);
+    if (candidate == null || candidate.isBlank()) {
+      return null;
+    }
+    try {
+      Object parsed = objectMapper.readValue(candidate, Object.class);
+      if (!(parsed instanceof Map)) {
+        return null;
+      }
+      return (Map<String, Object>) parsed;
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
+  private String extractCreativeParamsJsonCandidate(String text) {
+    String trimmed = text.trim();
+    if (trimmed.startsWith("```json")) {
+      trimmed = trimmed.substring(7).trim();
+    } else if (trimmed.startsWith("```")) {
+      trimmed = trimmed.substring(3).trim();
+    }
+    if (trimmed.endsWith("```")) {
+      trimmed = trimmed.substring(0, trimmed.length() - 3).trim();
+    }
+
+    int firstBrace = trimmed.indexOf('{');
+    int lastBrace = trimmed.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      return trimmed.substring(firstBrace, lastBrace + 1);
+    }
+    return null;
+  }
+
+  private boolean isValidCreativeParams(Map<String, Object> payload, String kind, String prompt) {
+    if (payload == null || payload.isEmpty()) {
+      return false;
+    }
+    if (payload.containsKey("title") && payload.containsKey("html_content")) {
+      return false;
+    }
+    String normalizedKind = kind == null ? "anti_ai" : kind.toLowerCase(Locale.ROOT);
+    if ("anti_ai".equals(normalizedKind)) {
+      Map<String, List<String>> allowed = extractCreativeParamsAllowedLists(prompt);
+      List<String> personas = allowed.getOrDefault("personaKey", DEFAULT_ANTI_AI_PERSONAS);
+      List<String> patterns = allowed.getOrDefault("contentPattern", DEFAULT_ANTI_AI_PATTERNS);
+      List<String> selling = allowed.getOrDefault("sellingIntent", DEFAULT_ANTI_AI_SELLING);
+      String personaKey = stringValue(payload.get("personaKey"));
+      String contentPattern = stringValue(payload.get("contentPattern"));
+      String sellingIntent = stringValue(payload.get("sellingIntent"));
+      return personas.contains(personaKey)
+          && patterns.contains(contentPattern)
+          && selling.contains(sellingIntent)
+          && isUsableCreativeText(stringValue(payload.get("hook")), 3, 80)
+          && isUsableCreativeText(stringValue(payload.get("angle")), 3, 160)
+          && isUsableCreativeText(stringValue(payload.get("tone")), 3, 120);
+    }
+    if ("facebook_post".equals(normalizedKind)) {
+      return isUsableCreativeText(stringValue(payload.get("angle")), 3, 200)
+          && isValidCreativePersonaMap(payload.get("persona"));
+    }
+    if ("category_landing".equals(normalizedKind)) {
+      return isUsableCreativeText(stringValue(payload.get("angle")), 3, 200)
+          && isValidCreativePersonaMap(payload.get("persona"))
+          && isUsableCreativeText(stringValue(payload.get("role")), 3, 120)
+          && isUsableCreativeText(stringValue(payload.get("style")), 3, 120)
+          && isUsableCreativeText(stringValue(payload.get("avoid")), 3, 160)
+          && isUsableCreativeText(stringValue(payload.get("focus")), 3, 160);
+    }
+    return payload.containsKey("angle") || payload.containsKey("personaKey");
+  }
+
+  private boolean isValidCreativePersonaMap(Object personaObj) {
+    if (!(personaObj instanceof Map<?, ?> persona)) {
+      return false;
+    }
+    return isUsableCreativeText(stringValue(persona.get("label")), 2, 80)
+        && isUsableCreativeText(stringValue(persona.get("tone")), 2, 120)
+        && isUsableCreativeText(stringValue(persona.get("focus")), 2, 160);
+  }
+
+  private boolean isUsableCreativeText(String value, int minLen, int maxLen) {
+    if (value == null || value.isBlank()) {
+      return false;
+    }
+    String trimmed = value.trim();
+    if (trimmed.contains("<one of") || trimmed.contains("<string>") || trimmed.startsWith("<")) {
+      return false;
+    }
+    return trimmed.length() >= minLen && trimmed.length() <= maxLen;
+  }
+
+  private String stringValue(Object value) {
+    return value == null ? "" : String.valueOf(value).trim();
+  }
+
+  private Map<String, Object> buildDeterministicCreativeParamsFallback(String prompt, String kind) {
+    String seed = extractCreativeParamsSeed(prompt);
+    int hash = Math.abs(seed.hashCode());
+    String topic = extractCreativeParamsField(prompt, "TOPIC");
+    String industry = extractCreativeParamsField(prompt, "INDUSTRY");
+    String normalizedKind = kind == null ? "anti_ai" : kind.toLowerCase(Locale.ROOT);
+
+    if ("facebook_post".equals(normalizedKind)) {
+      return buildFacebookPostCreativeFallback(hash, topic, industry);
+    }
+    if ("category_landing".equals(normalizedKind)) {
+      return buildCategoryLandingCreativeFallback(hash, topic, industry);
+    }
+    return buildAntiAiCreativeFallback(prompt, hash, topic, industry);
+  }
+
+  private Map<String, Object> buildAntiAiCreativeFallback(
+      String prompt,
+      int hash,
+      String topic,
+      String industry) {
+    Map<String, List<String>> allowed = extractCreativeParamsAllowedLists(prompt);
+    List<String> personas = allowed.getOrDefault("personaKey", DEFAULT_ANTI_AI_PERSONAS);
+    List<String> patterns = allowed.getOrDefault("contentPattern", DEFAULT_ANTI_AI_PATTERNS);
+    List<String> selling = allowed.getOrDefault("sellingIntent", DEFAULT_ANTI_AI_SELLING);
+
+    String personaKey = personas.get(hash % personas.size());
+    String contentPattern = patterns.get((hash / 3) % patterns.size());
+    String sellingIntent = selling.get((hash / 7) % selling.size());
+
+    String hook = pickCreativeHook(hash, personaKey, topic);
+    String angle = pickCreativeAngle(hash, contentPattern, topic, industry);
+    String tone = pickCreativeTone(hash, personaKey);
+
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("personaKey", personaKey);
+    payload.put("contentPattern", contentPattern);
+    payload.put("sellingIntent", sellingIntent);
+    payload.put("hook", hook);
+    payload.put("angle", angle);
+    payload.put("tone", tone);
+    return payload;
+  }
+
+  private Map<String, Object> buildFacebookPostCreativeFallback(int hash, String topic, String industry) {
+    String[] personaLabels = {"Người mua tiềm năng", "Chủ đầu tư", "Cư dân khu vực", "Doanh nhân"};
+    String[] tones = {"Thân thiện, gần gũi", "Chuyên nghiệp, tin cậy", "Năng động, trẻ trung", "Tự nhiên, chân thật"};
+    String label = personaLabels[hash % personaLabels.length];
+    String tone = tones[(hash / 5) % tones.length];
+    String focus = topic.isBlank()
+        ? (industry.isBlank() ? "Giá trị thực tế" : industry)
+        : abbrevCreativeTopic(topic, 48);
+
+    Map<String, Object> persona = new LinkedHashMap<>();
+    persona.put("label", label);
+    persona.put("tone", tone);
+    persona.put("focus", focus);
+
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("angle", "Góc nhìn " + label.toLowerCase(Locale.ROOT) + " về " + focus);
+    payload.put("persona", persona);
+    return payload;
+  }
+
+  private Map<String, Object> buildCategoryLandingCreativeFallback(int hash, String topic, String industry) {
+    String[] roles = {"Chuyên gia tư vấn BĐS", "Biên tập viên nội dung", "Chuyên viên phân tích thị trường"};
+    String[] styles = {"Chuyên sâu, dễ hiểu", "Trực quan, thực tế", "Tin cậy, có số liệu"};
+    Map<String, Object> base = buildFacebookPostCreativeFallback(hash, topic, industry);
+    base.put("role", roles[hash % roles.length]);
+    base.put("style", styles[(hash / 11) % styles.length]);
+    base.put("avoid", "Lặp lại mẫu AI, giọng quảng cáo sáo rỗng");
+    base.put("focus", topic.isBlank() ? "Lợi ích thực tế cho người đọc" : abbrevCreativeTopic(topic, 64));
+    return base;
+  }
+
+  private String extractCreativeParamsField(String prompt, String fieldName) {
+    Pattern pattern = Pattern.compile("(?im)^" + Pattern.quote(fieldName) + ":\\s*(.+)$");
+    Matcher matcher = pattern.matcher(String.valueOf(prompt == null ? "" : prompt));
+    if (matcher.find()) {
+      return matcher.group(1).trim();
+    }
+    return "";
+  }
+
+  private String abbrevCreativeTopic(String topic, int maxLen) {
+    String trimmed = topic == null ? "" : topic.trim();
+    if (trimmed.length() <= maxLen) {
+      return trimmed.isBlank() ? "chủ đề hiện tại" : trimmed;
+    }
+    return trimmed.substring(0, Math.max(0, maxLen - 1)).trim() + "…";
+  }
+
+  private String pickCreativeHook(int hash, String personaKey, String topic) {
+    Map<String, String> byPersona = Map.of(
+        "investor", "Tiềm năng sinh lời rõ ràng",
+        "family", "Không gian cho cả gia đình",
+        "local_resident", "Sống giữa lõi khu vực",
+        "business_owner", "Vị trí kinh doanh đắc đá",
+        "storyteller", "Câu chuyện đáng kể");
+    String base = byPersona.getOrDefault(personaKey, "Góc nhìn mới lạ");
+    if (!topic.isBlank() && (hash % 2) == 0) {
+      return base;
+    }
+    return base;
+  }
+
+  private String pickCreativeAngle(int hash, String contentPattern, String topic, String industry) {
+    Map<String, String> byPattern = Map.of(
+        "investment_analysis", "Phân tích giá trị và dòng tiền",
+        "family_story", "Trải nghiệm sống thực tế cho gia đình",
+        "step_by_step_guide", "Hướng dẫn đánh giá từng bước",
+        "quick_tips", "Mẹo nhanh để ra quyết định",
+        "landing_page", "Landing tập trung chuyển đổi");
+    String angle = byPattern.getOrDefault(contentPattern, "Góc sáng tạo khác biệt");
+    if (!industry.isBlank() && (hash % 3) == 0) {
+      return angle + " trong " + abbrevCreativeTopic(industry, 32);
+    }
+    if (!topic.isBlank() && (hash % 5) != 0) {
+      return angle + " — " + abbrevCreativeTopic(topic, 40);
+    }
+    return angle;
+  }
+
+  private String pickCreativeTone(int hash, String personaKey) {
+    Map<String, String> byPersona = Map.of(
+        "investor", "Phân tích, khách quan",
+        "family", "Ấm áp, gần gũi",
+        "local_resident", "Thân thiện địa phương",
+        "business_owner", "Chuyên nghiệp, tin cậy",
+        "storyteller", "Kể chuyện cảm xúc");
+    String[] extras = {"Tự nhiên, không sáo", "Rõ ràng, súc tích", "Tin cậy, có căn cứ"};
+    String base = byPersona.getOrDefault(personaKey, "Tự nhiên, dễ đọc");
+    return (hash % 4) == 0 ? extras[hash % extras.length] : base;
   }
 
   private String detectTaskTypeHint(String prompt) {

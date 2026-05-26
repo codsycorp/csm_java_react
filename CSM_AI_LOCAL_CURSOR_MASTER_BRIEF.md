@@ -1,9 +1,15 @@
 # CSM AI LOCAL — MASTER BRIEF CHO CURSOR AI
 ## Một file duy nhất để yêu cầu Cursor làm lại / hoàn thiện hệ thống
 
-Version: **2.0** · 2026-05-23  
+Version: **2.1** · 2026-05-23  
 Repo: `csm_server`  
 **Single source of truth** — dùng file này khi yêu cầu Cursor implement / làm lại CSM AI Local **và** domain System Management liên quan RAG.
+
+### Changelog v2.1
+
+| Mục | Trạng thái |
+|-----|------------|
+| **SEO creative-params lane** (`[CREATIVE_PARAMS_REQUEST]`) tách khỏi full SEO article | ✅ Lane riêng + seed fallback |
 
 ### Changelog v2.0
 
@@ -138,6 +144,68 @@ enum AiFlowIntent {
 ```
 
 Chọn tại `AiAssistantGatewayService.classifyLocalIntent(contextType, responseMode, message)`.
+
+## C.2.1 Bốn lane HTTP — không trộn contract
+
+| Lane | Endpoint | Client | Output contract | RAG / master prompt |
+|------|----------|--------|-----------------|---------------------|
+| **Code editor** | `POST /api/ai-code-stream` (SSE) | `AiAssistantChat.tsx` | `textEdits` hoặc prose analyze | Region plan + scoped RAG + code master |
+| **Menu JSON** | `POST /api/ai-code-stream` hoặc sync AI | Admin menu designer | `{ menu: [...] }` / patch JSON | Menu master + menu gate |
+| **SEO article** | `POST /ai-generate-seo-content` | LMKT `generateSeoContentWithPrompt` | `{ title, description, html_content }` | **Không** inject code/menu master; system prompt SEO |
+| **SEO creative params** | `POST /ai-generate-seo-content` | LMKT `requestCreativeParams()` | `{ personaKey, contentPattern, … }` hoặc `{ angle, persona }` | **Lane riêng** — detect `[CREATIVE_PARAMS_REQUEST]` |
+
+**Quan trọng:** Creative params **không** dùng `SEO_SYSTEM_PROMPT` (title/html_content). Model 1.5B trên weak-5gb thường echo schema → backend **bắt buộc** có seed fallback deterministic.
+
+### Creative-params flow (LMKT)
+
+```
+auto-lmkt.js: buildCreativeParamsPrompt(kind)
+  → requestCreativeParams('anti_ai' | 'facebook_post' | 'category_landing')
+  → generateSeoContentWithPrompt(prompt)  // taskType: seo_content
+  → POST /ai-generate-seo-content
+       │
+       ▼
+ApiSpringController.getObjectFromAI()
+  → isSeoContentTask(taskType=seo_content) → fetchAiRawContent()
+  → AiAssistantGatewayService.generateSeoContent()
+       ├─ prompt contains [CREATIVE_PARAMS_REQUEST]?
+       │     YES → generateCreativeParams()
+       │            · CREATIVE_PARAMS_SYSTEM_PROMPT
+       │            · max tokens ≈ 384, temp ≈ 0.05
+       │            · parse JSON → validate allowlist từ prompt
+       │            · fail → buildDeterministicCreativeParamsFallback(SEED, KIND)
+       └─ NO  → full SEO article (title/description/html_content)
+       │
+       ▼
+populateAiResponseFromRawContent()
+  → isCreativeParamsPayload(data) || isSeoContentPayload(data)
+  → { success: true, data: { personaKey, … } }
+       │
+       ▼
+auto-lmkt.js: parseCreativeParamsResponse() → buildAntiAICreativeOverrides()
+```
+
+**Kinds & schema (client `buildCreativeParamsPrompt`):**
+
+| KIND | Trường bắt buộc |
+|------|-----------------|
+| `anti_ai` | `personaKey`, `contentPattern`, `sellingIntent`, `hook`, `angle`, `tone` |
+| `facebook_post` | `angle`, `persona.{label,tone,focus}` |
+| `category_landing` | `angle`, `persona`, `role`, `style`, `avoid`, `focus` |
+
+Config:
+
+```properties
+ai.seo.creative-params.max-tokens=384
+ai.seo.creative-params.temperature=0.05
+ai.seo.creative-params.fallback-enabled=true
+```
+
+Hàm backend:
+
+- `AiAssistantGatewayService.isCreativeParamsRequest()`
+- `AiAssistantGatewayService.generateCreativeParams()`
+- `ApiSpringController.isCreativeParamsPayload()`
 
 ## C.3 Routing edit vs analyze (model-driven)
 
