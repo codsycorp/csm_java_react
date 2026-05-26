@@ -11,7 +11,7 @@ Repo: `csm_server`
 |-----|------------|
 | P0 routing edit/analyze, region plan, async large-code ingest | ✅ Đã triển khai (v1.1) |
 | System admin UX: org tables, role_code, combo dedupe, data_app_ids | ✅ Commit `cba701ed` trên `main` |
-| **Phase 2 RAG:** tenant snapshot + ACL-filtered retrieval | ✅ Code xong, **chưa commit** (xem PHẦN P) |
+| **Phase 2 RAG:** tenant snapshot + ACL-filtered retrieval | ✅ Commit `e45eae92` trên `origin/main` |
 | Phase 3: embedding model riêng, BM25 hybrid, unified index, citations | ⏳ Roadmap |
 
 ---
@@ -920,7 +920,7 @@ P1 — Retrieval & large-code index [DONE]
   ☑ Region plan cho request hiện tại
   ☑ scopedRag hit editorCode_* chunks
 
-P1 — Tenant RAG Phase 2 [DONE — commit pending]
+P1 — Tenant RAG Phase 2 [DONE — e45eae92]
   ☑ AiTenantKnowledgeIngestionService
   ☑ AiRetrievalAuthContext + Resolver + ACL filter
   ☑ orchestrateResilient(..., authContext) từ controller
@@ -1025,7 +1025,7 @@ sequenceDiagram
 | Nhóm thay đổi | Commit | Ghi chú |
 |---------------|--------|---------|
 | System admin UX, combo dedupe, data_app_ids, role_code | `cba701ed` | Đã trên `origin/main` |
-| Phase 2 tenant RAG (3 class mới + 4 file sửa) | **Chưa commit** | Xem P.2 |
+| Phase 2 tenant RAG (3 class mới + 4 file sửa + brief v2.0) | `e45eae92` | Đã trên `origin/main` |
 
 ## P.2 Commit Phase 2 (khi user yêu cầu)
 
