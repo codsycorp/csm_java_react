@@ -375,6 +375,33 @@ public class ApiSpringController {
         }
     }
 
+    private static final class DeferredLargeCodeIngestRequest {
+        final String requestId;
+        final String appId;
+        final String code;
+        final String contextType;
+        final String message;
+        final String pName;
+        final Integer pType;
+
+        DeferredLargeCodeIngestRequest(
+                String requestId,
+                String appId,
+                String code,
+                String contextType,
+                String message,
+                String pName,
+                Integer pType) {
+            this.requestId = String.valueOf(requestId == null ? "" : requestId);
+            this.appId = String.valueOf(appId == null ? "" : appId);
+            this.code = String.valueOf(code == null ? "" : code);
+            this.contextType = String.valueOf(contextType == null ? "" : contextType);
+            this.message = String.valueOf(message == null ? "" : message);
+            this.pName = String.valueOf(pName == null ? "" : pName);
+            this.pType = pType;
+        }
+    }
+
     // ── Intent classification short-lived cache ───────────────────────────────
     // Shared between evaluateRequirementHardGuard and runMandatoryLocalPreAnalysis
     // within the same HTTP request (called milliseconds apart).
@@ -501,6 +528,18 @@ public class ApiSpringController {
 
     @Value("${ai.edit.task-planner.multi-slice-execution.enabled:true}")
     private boolean aiEditTaskPlannerMultiSliceExecutionEnabled;
+
+    /** Weak 1.5B: try per-symbol micro edits before bulk salvage (lifecycle webview/proxy). */
+    @Value("${ai.edit.local.symbol-micro-first.enabled:true}")
+    private boolean aiEditSymbolMicroFirstEnabled;
+
+    /** Regex/rule-based webview lifecycle patch when local LLM returns prompt-echo or fails AST gate. */
+    @Value("${ai.edit.lifecycle-deterministic-fallback.enabled:true}")
+    private boolean aiEditLifecycleDeterministicFallbackEnabled;
+
+    /** Reject textEdits in file header zone (user-agent comments) unless replacement is lifecycle code. */
+    @Value("${ai.edit.header-zone-protect-min-line:100}")
+    private int aiEditHeaderZoneProtectMinLine;
 
     // In-memory ring buffer for prompt-budget debug (max 200 entries, auto-rotated)
     private static final int PROMPT_DEBUG_LOG_MAX = 200;
@@ -1621,6 +1660,7 @@ public class ApiSpringController {
 
         aiCodeStreamExecutor.execute(() -> {
             String requestId = "";
+            DeferredLargeCodeIngestRequest deferredIngestRequest = null;
             try {
                 long requestStartedAtMs = System.currentTimeMillis();
                 requestId = firstNonBlankString(activeRequestIdRef.get(), Long.toHexString(System.currentTimeMillis()) + "-"
@@ -1940,13 +1980,14 @@ public class ApiSpringController {
                     && "edit".equalsIgnoreCase(responseMode)
                     && effectiveCodeContext.length() > 30000;
                 String editFocusedEarlyProviderText = "";
-                boolean skipHeavyOrchestrationForLargeCodeEdit = false;
+                boolean pipelineDeterministicLifecycle = false;
+                int pipelineDeterministicTextEdits = 0;
+                boolean skipHeavyOrchestrationForLargeCodeEdit = largeCodeEditRequest;
                 boolean largeLocalOnlyCodeEdit = largeCodeEditRequest
                     && effectiveCodeContext.length() > 45000
                     && (hardLocalOnlyFlow || aiLocalOnlyEnabled);
-                if (largeLocalOnlyCodeEdit) {
-                    skipHeavyOrchestrationForLargeCodeEdit = true;
-                }
+                boolean deferLargeCodeVectorIngestForEdit = largeCodeEditRequest
+                    && effectiveCodeContext.length() > 45000;
                 if ((broadAnalyzeRequest || codeDebugAnalyze || largeCodeEditRequest)
                         && promptCodeContext.length() > 30000
                         && aiCodeStreamLocalProviderEnabled) {
@@ -2017,55 +2058,33 @@ public class ApiSpringController {
                             && llamaCppNativeService != null
                             && llamaCppNativeService.isAvailable()) {
                         String lifecycleMessage = appendLifecycleSymbolHintToMessage(message);
-                        String multiSliceResult = "";
-                        if (aiEditTaskPlannerMultiSliceExecutionEnabled
-                                && editTaskPlan.multiSliceExecution()
-                                && aiEditTaskPlannerService != null) {
-                            multiSliceResult = tryMultiSliceEditFromPlan(
-                                emitter,
-                                requestId,
-                                lifecycleMessage,
-                                effectiveCodeContext,
-                                contextType,
-                                uiLang,
-                                editTaskPlan);
-                        }
-                        String focusedEarly = multiSliceResult.isBlank()
-                            ? tryEditFocusedLocalFallback(
-                                emitter,
-                                requestId,
-                                lifecycleMessage,
-                                effectiveCodeContext,
-                                contextType,
-                                uiLang,
-                                "")
-                            : multiSliceResult;
-                        if (acceptLocalCodeEditCandidate(focusedEarly, effectiveCodeContext, contextType)) {
-                            editFocusedEarlyProviderText = normalizeLocalCodeEditOutput(focusedEarly, effectiveCodeContext);
-                            if (countActionableLineTextEdits(editFocusedEarlyProviderText) <= 0) {
-                                logger.info(
-                                    "LOCAL_EDIT focused-early dropped after normalize (0 actionable edits) requestId={}",
-                                    requestId);
-                                editFocusedEarlyProviderText = "";
-                            } else if (!editsPassCodeAstGate(editFocusedEarlyProviderText, effectiveCodeContext)) {
-                                logger.info(
-                                    "LOCAL_EDIT focused-early dropped (AST gate failed) requestId={}",
-                                    requestId);
-                                editFocusedEarlyProviderText = "";
-                            } else {
+                        String pipelineResult = tryLocalLargeCodeEditPipeline(
+                            emitter,
+                            requestId,
+                            lifecycleMessage,
+                            effectiveCodeContext,
+                            contextType,
+                            uiLang,
+                            editTaskPlan);
+                        if (!pipelineResult.isBlank()
+                                && countActionableLineTextEdits(pipelineResult) > 0) {
+                            editFocusedEarlyProviderText = pipelineResult;
                             skipHeavyOrchestrationForLargeCodeEdit = true;
+                            if (pipelineResult.contains("__forceKillWebviewProcess")
+                                    || pipelineResult.contains("WEBVIEW_FORCE_KILL_ON_CLOSE")) {
+                                pipelineDeterministicLifecycle = true;
+                                pipelineDeterministicTextEdits = extractLineTextEditsCount(pipelineResult);
+                            }
                             logger.info(
-                                "LOCAL_EDIT focused-early before orchestration requestId={} sourceCodeChars={} textEdits={}",
+                                "LOCAL_EDIT pipeline succeeded before orchestration requestId={} sourceCodeChars={} textEdits={}",
                                 requestId,
                                 effectiveCodeContext.length(),
                                 countActionableLineTextEdits(editFocusedEarlyProviderText));
-                            }
-                        } else if (!focusedEarly.isBlank()) {
+                        } else if (!pipelineResult.isBlank()) {
                             logger.info(
-                                "LOCAL_EDIT focused-early skipped (not actionable yet) requestId={} rawChars={} salvageableEdits={}",
+                                "LOCAL_EDIT pipeline returned non-actionable output requestId={} chars={}",
                                 requestId,
-                                focusedEarly.length(),
-                                parseNormalizedLineTextEdits(focusedEarly).size());
+                                pipelineResult.length());
                         }
                     }
                     String condensedAnalyzeContext = buildAnalyzeCondensedPromptContext(
@@ -3003,7 +3022,13 @@ public class ApiSpringController {
                 }
 
                 Map<String, Object> codeStreamMeta = new LinkedHashMap<>();
-                if (!menuJsonContext && effectiveCodeContext.length() > 45000) {
+                if (pipelineDeterministicLifecycle) {
+                    codeStreamMeta.put("editDeterministicLifecyclePatchApplied", true);
+                    codeStreamMeta.put("editDeterministicLifecycleTextEdits", pipelineDeterministicTextEdits);
+                }
+                if (!menuJsonContext
+                        && effectiveCodeContext.length() > 45000
+                        && !deferLargeCodeVectorIngestForEdit) {
                     scheduleLargeEditorCodeVectorIngest(
                         emitter,
                         requestId,
@@ -3014,6 +3039,16 @@ public class ApiSpringController {
                         pName,
                         pType,
                         codeStreamMeta);
+                } else if (deferLargeCodeVectorIngestForEdit) {
+                    codeStreamMeta.put("deferLargeCodeVectorIngestForEdit", true);
+                    deferredIngestRequest = new DeferredLargeCodeIngestRequest(
+                        requestId,
+                        appId,
+                        effectiveCodeContext,
+                        contextType,
+                        message,
+                        pName,
+                        pType);
                 }
                 codeStreamMeta.put("codeDebugAnalyzeFastPath", codeDebugAnalyzeFastPath);
                 codeStreamMeta.put("runtimeTier", aiLocalRuntimeTierService.resolveTier().name());
@@ -3408,7 +3443,8 @@ public class ApiSpringController {
                             effectiveCodeContext,
                             contextType,
                             uiLang,
-                            "");
+                            "",
+                            false);
                         if (acceptLocalCodeEditCandidate(focusedFirst, effectiveCodeContext, contextType)) {
                             focusedFirst = normalizeLocalCodeEditOutput(focusedFirst, effectiveCodeContext);
                             providerRaw = focusedFirst;
@@ -4426,6 +4462,7 @@ public class ApiSpringController {
                                             responseMode,
                                             1,
                                             effectiveCodeContext);
+                                        recordStreamedTextEditEventCount(codeStreamMeta, localStreamChunks);
                                         if (localStreamChunks <= 0 && countActionableLineTextEdits(providerText) > 0) {
                                             int agenticApply = emitLocalAgenticStepResults(
                                                 emitter,
@@ -4691,6 +4728,7 @@ public class ApiSpringController {
                                         responseMode,
                                         1,
                                         effectiveCodeContext);
+                                    recordStreamedTextEditEventCount(codeStreamMeta, earlyChunks);
                                     if (earlySteps <= 0 && earlyChunks <= 0) {
                                         logger.warn(
                                             "LOCAL_OVERRIDE edit focused-early salvage rejected (no applyable edits) requestId={} chars={}",
@@ -4721,7 +4759,8 @@ public class ApiSpringController {
                                     effectiveCodeContext,
                                     contextType,
                                     uiLang,
-                                    lastLocalProviderText);
+                                    lastLocalProviderText,
+                                    false);
                                 if (!acceptLocalCodeEditCandidate(focusedEdit, effectiveCodeContext, contextType)) {
                                     focusedEdit = tryLocalLargeCodeEditRecovery(
                                         emitter,
@@ -4735,8 +4774,12 @@ public class ApiSpringController {
                                             : focusedEdit);
                                 }
                                 if (acceptLocalCodeEditCandidate(focusedEdit, effectiveCodeContext, contextType)) {
-                                    focusedEdit = normalizeLocalCodeEditOutput(focusedEdit, effectiveCodeContext);
-                                    if (!editsPassCodeAstGate(focusedEdit, effectiveCodeContext)) {
+                                    String focusedEditRaw = focusedEdit;
+                                    focusedEdit = finalizeLocalCodeEditOutput(focusedEditRaw, effectiveCodeContext);
+                                    if (focusedEdit.isBlank()) {
+                                        focusedEdit = normalizeLocalCodeEditOutput(focusedEditRaw, effectiveCodeContext);
+                                    }
+                                    if (!focusedEdit.isBlank() && !editsPassCodeAstGate(focusedEdit, effectiveCodeContext)) {
                                         logger.warn(
                                             "LOCAL_OVERRIDE edit focused fallback rejected (AST gate) requestId={} chars={}",
                                             requestId,
@@ -4768,6 +4811,7 @@ public class ApiSpringController {
                                         responseMode,
                                         1,
                                         effectiveCodeContext);
+                                    recordStreamedTextEditEventCount(codeStreamMeta, fallbackChunks);
                                     if (salvagedSteps <= 0 && fallbackChunks <= 0) {
                                         logger.warn(
                                             "LOCAL_OVERRIDE edit focused fallback rejected (no applyable edits) requestId={} chars={}",
@@ -4837,6 +4881,26 @@ public class ApiSpringController {
                                 localProviderPrimaryUsed = true;
                                 emitLocalOnlyAgenticStepsRecoveryTrace(
                                     emitter, requestId, responseMode, codeStreamMeta, "caller_forced_local");
+                            }
+                        }
+                        if (callerForcedLocal && rawResponse == null) {
+                            String deterministicPatch = "";
+                            if ("edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                                    && isCodeContext(contextType)) {
+                                deterministicPatch = tryEmitDeterministicLifecycleEditPatch(
+                                    emitter,
+                                    requestId,
+                                    message,
+                                    effectiveCodeContext,
+                                    contextType,
+                                    responseMode,
+                                    codeStreamMeta,
+                                    codeStreamOrchestration);
+                            }
+                            if (!deterministicPatch.isBlank()) {
+                                rawResponse = deterministicPatch;
+                                effectiveModel = "local_provider";
+                                localProviderPrimaryUsed = true;
                             }
                         }
                         if (callerForcedLocal && rawResponse == null) {
@@ -5595,8 +5659,23 @@ public class ApiSpringController {
                     contextType,
                     responseMode,
                     completionPayload,
-                    completion);
+                    completion,
+                    codeStreamMeta);
                 completion.put("finalOutputGate", finalOutputGate.toMetaMap());
+                int streamedTextEditEvents = parseIntSafe(codeStreamMeta.get("codeStreamTextEditsEmittedCount"), 0);
+                boolean ssePreAppliedEdits = streamedTextEditEvents > 0
+                    && (!readCompletionValidatedTextEditsFromMeta(codeStreamMeta).isEmpty()
+                        || bool(codeStreamMeta.get("editDeterministicLifecyclePatchApplied"), false));
+                if (!finalOutputGate.passed() && ssePreAppliedEdits) {
+                    logger.info(
+                        "FINAL_OUTPUT_GATE skipped rejection — {} SSE text_edit_apply already streamed requestId={}",
+                        streamedTextEditEvents,
+                        requestId);
+                    finalOutputGate = FinalOutputGateResult.pass("code_sse_preapplied");
+                    completion.put("finalOutputGate", finalOutputGate.toMetaMap());
+                    completion.put("flowConfirmedByLocal", true);
+                    completion.put("codeStreamTextEditsEmittedCount", streamedTextEditEvents);
+                }
                 if (!finalOutputGate.passed()) {
                     completionPayload = finalOutputGate.fallbackPayload();
                     completion.remove("textEdits");
@@ -5739,6 +5818,46 @@ public class ApiSpringController {
                     );
                 }
                 completion.put("localProviderPrimaryUsed", localProviderPrimaryUsed);
+                int emittedTextEditEvents = parseIntSafe(codeStreamMeta.get("codeStreamTextEditsEmittedCount"), 0);
+                if (emittedTextEditEvents > 0
+                        || bool(codeStreamMeta.get("deterministicLifecyclePatchApplied"), false)
+                        || parseIntSafe(codeStreamMeta.get("editDeterministicLifecycleTextEdits"), 0) > 0
+                        || (localProviderPrimaryUsed && isCodeContext(contextType))) {
+                    completion.put("flowConfirmedByLocal", true);
+                }
+                completion.put("codeStreamTextEditsEmittedCount", emittedTextEditEvents);
+                if (emittedTextEditEvents > 0) {
+                    completion.put("appliedTextEditCount", emittedTextEditEvents);
+                    if (agenticStepResultCount <= 0) {
+                        completion.put("agenticStepResultCount", emittedTextEditEvents);
+                        completion.put("agenticStepAcceptedCount", emittedTextEditEvents);
+                    }
+                    List<Map<String, Object>> streamedValidatedEdits = readCompletionValidatedTextEditsFromMeta(codeStreamMeta);
+                    if (!streamedValidatedEdits.isEmpty()
+                            && !(completion.get("textEdits") instanceof List<?> list && !list.isEmpty())) {
+                        completion.put("textEdits", streamedValidatedEdits);
+                        completion.put("textEditsCount", streamedValidatedEdits.size());
+                    }
+                }
+                boolean lifecyclePatchApplied = bool(codeStreamMeta.get("editDeterministicLifecyclePatchApplied"), false)
+                    || bool(codeStreamMeta.get("deterministicLifecyclePatchApplied"), false);
+                if (lifecyclePatchApplied && isCodeContext(contextType)
+                        && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+                    int lifecycleEditCount = Math.max(
+                        emittedTextEditEvents,
+                        parseIntSafe(codeStreamMeta.get("editDeterministicLifecycleTextEdits"), 0));
+                    List<Map<String, Object>> lifecycleEdits = readCompletionValidatedTextEditsFromMeta(codeStreamMeta);
+                    Map<String, Integer> lifecycleOps = summarizeTextEditOperationCounts(lifecycleEdits);
+                    String codeLifecycleSummary = buildCodeLifecycleAssistantChatSummary(
+                        message,
+                        Math.max(1, lifecycleEditCount > 0 ? lifecycleEditCount : emittedTextEditEvents),
+                        lifecycleOps.getOrDefault("add", 0),
+                        lifecycleOps.getOrDefault("edit", 0),
+                        lifecycleOps.getOrDefault("delete", 0),
+                        findFirstLifecyclePatchLine(lifecycleEdits));
+                    completion.put("assistantChatSummary", codeLifecycleSummary);
+                    completion.put("editDeterministicLifecyclePatchApplied", true);
+                }
                 completion.put("promptOriginalChars", parseIntSafe(codeStreamMeta.get("promptOriginalChars"), promptOriginalChars));
                 completion.put("promptFinalChars", parseIntSafe(codeStreamMeta.get("promptFinalChars"), promptFinalChars));
                 completion.put("promptCapChars", parseIntSafe(codeStreamMeta.get("promptCapChars"), effectivePromptCharCap));
@@ -6074,6 +6193,29 @@ public class ApiSpringController {
                     }
                 }
             } finally {
+                if (deferredIngestRequest != null && aiScopedContextIngestionService != null) {
+                    try {
+                        scheduleLargeEditorCodeVectorIngest(
+                            null,
+                            deferredIngestRequest.requestId,
+                            deferredIngestRequest.appId,
+                            deferredIngestRequest.code,
+                            deferredIngestRequest.contextType,
+                            deferredIngestRequest.message,
+                            deferredIngestRequest.pName,
+                            deferredIngestRequest.pType,
+                            null);
+                        logger.info(
+                            "Deferred large code vector ingest after edit requestId={} sourceChars={}",
+                            deferredIngestRequest.requestId,
+                            deferredIngestRequest.code.length());
+                    } catch (Exception ingestEx) {
+                        logger.warn(
+                            "Deferred large code vector ingest failed requestId={}: {}",
+                            deferredIngestRequest.requestId,
+                            ingestEx.getMessage());
+                    }
+                }
                 if (!requestId.isBlank()) {
                     activeCodeStreamWorkers.remove(requestId);
                 }
@@ -7018,7 +7160,7 @@ public class ApiSpringController {
                     int startLine = estimateLineAt(code, start);
                     int endLine = estimateLineAt(code, Math.max(start, end - 1));
                     String chunk = code.substring(start, end);
-                    excerpts.add("/* symbol: " + symbol + ", lines " + startLine + "-" + endLine + " */\\n" + chunk);
+                    excerpts.add("/* symbol: " + symbol + ", lines " + startLine + "-" + endLine + " */\n" + chunk);
                     hitsForSymbol++;
                 }
                 searchFrom = idx + Math.max(1, token.length());
@@ -7145,6 +7287,497 @@ public class ApiSpringController {
         return !anyNonDelete && totalDeletedLines > 8;
     }
 
+    /** Local 1.5B models often emit one giant edit — split into surgical chunks instead of rejecting. */
+    @Value("${ai.edit.surgical-max-line-span:40}")
+    private int maxSurgicalEditLineSpan;
+
+    private int effectiveSurgicalEditLineSpan() {
+        return Math.max(8, Math.min(120, maxSurgicalEditLineSpan));
+    }
+
+    private boolean exceedsSurgicalEditSpan(Map<String, Object> edit) {
+        int maxSpan = effectiveSurgicalEditLineSpan();
+        if (edit == null || edit.isEmpty()) {
+            return false;
+        }
+        int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+        int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+        if (startLine < 1 || endLine < startLine) {
+            return false;
+        }
+        int span = endLine - startLine + 1;
+        if (span > maxSpan) {
+            return true;
+        }
+        String action = String.valueOf(edit.getOrDefault("action", "edit")).trim().toLowerCase(Locale.ROOT);
+        if ("delete".equals(action) || "remove".equals(action)) {
+            return false;
+        }
+        String replacement = textEditReplacement(edit);
+        return countLines(replacement) > maxSpan;
+    }
+
+    private boolean containsOversizedSurgicalEdits(List<Map<String, Object>> textEdits) {
+        if (textEdits == null || textEdits.isEmpty()) {
+            return false;
+        }
+        for (Map<String, Object> edit : textEdits) {
+            if (exceedsSurgicalEditSpan(edit)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String textEditReplacement(Map<String, Object> edit) {
+        if (edit == null || edit.isEmpty()) {
+            return "";
+        }
+        String replacement = String.valueOf(edit.getOrDefault("replacement", "")).trim();
+        if (replacement.isBlank()) {
+            replacement = String.valueOf(edit.getOrDefault("replacementText", "")).trim();
+        }
+        if (replacement.isBlank()) {
+            replacement = String.valueOf(edit.getOrDefault("newText", "")).trim();
+        }
+        return replacement;
+    }
+
+    private static final Pattern[] PROMPT_ECHO_REPLACEMENT_LINE_PATTERNS = new Pattern[] {
+        Pattern.compile("(?i)^\\s*//.*fix webview"),
+        Pattern.compile("(?i)do not bulk-delete"),
+        Pattern.compile("(?i)small surgical edits"),
+        Pattern.compile("(?i)prefer __forceKillWebviewProcess"),
+        Pattern.compile("(?i)use action=edit with replacement"),
+        Pattern.compile("(?i)return only valid json"),
+        Pattern.compile("(?i)\\[EDIT_RULES\\]"),
+        Pattern.compile("(?i)\\[OUTPUT\\]"),
+        Pattern.compile("(?i)salvaged from model output"),
+        Pattern.compile("(?i)max 3 textEdits"),
+        Pattern.compile("(?i)line_number_rule")
+    };
+
+    private boolean replacementLineLooksLikePromptEcho(String line) {
+        if (line == null || line.isBlank()) {
+            return false;
+        }
+        for (Pattern pattern : PROMPT_ECHO_REPLACEMENT_LINE_PATTERNS) {
+            if (pattern.matcher(line).find()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int countPromptEchoSignals(String replacement) {
+        if (replacement == null || replacement.isBlank()) {
+            return 0;
+        }
+        int signals = 0;
+        for (Pattern pattern : PROMPT_ECHO_REPLACEMENT_LINE_PATTERNS) {
+            if (pattern.matcher(replacement).find()) {
+                signals++;
+            }
+        }
+        return signals;
+    }
+
+    private boolean isPromptEchoDominatedReplacement(String replacement) {
+        String repl = String.valueOf(replacement == null ? "" : replacement).trim();
+        if (repl.isBlank()) {
+            return false;
+        }
+        int signals = countPromptEchoSignals(repl);
+        if (signals >= 2) {
+            return true;
+        }
+        if (signals >= 1 && countLines(repl) > 12) {
+            return true;
+        }
+        String[] lines = repl.split("\n", -1);
+        int echoLines = 0;
+        for (String line : lines) {
+            if (replacementLineLooksLikePromptEcho(line)) {
+                echoLines++;
+            }
+        }
+        return echoLines >= 2 || (echoLines >= 1 && lines.length > 20);
+    }
+
+    private String sanitizeReplacementStripPromptEcho(String replacement) {
+        String repl = String.valueOf(replacement == null ? "" : replacement);
+        if (repl.isBlank()) {
+            return "";
+        }
+        String[] lines = repl.split("\n", -1);
+        StringBuilder sb = new StringBuilder();
+        for (String line : lines) {
+            if (replacementLineLooksLikePromptEcho(line)) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append('\n');
+            }
+            sb.append(line);
+        }
+        return sb.toString().strip();
+    }
+
+    private void putTextEditReplacement(Map<String, Object> edit, String replacement) {
+        if (edit == null) {
+            return;
+        }
+        edit.put("replacement", replacement == null ? "" : replacement);
+        edit.remove("replacementText");
+        edit.remove("newText");
+    }
+
+    /** Drop model outputs that echoed prompt instructions into replacement code. */
+    private List<Map<String, Object>> filterPromptEchoTextEdits(List<Map<String, Object>> edits) {
+        if (edits == null || edits.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> edit : edits) {
+            if (edit == null || edit.isEmpty()) {
+                continue;
+            }
+            String replacement = textEditReplacement(edit);
+            if (isPromptEchoDominatedReplacement(replacement)) {
+                logger.info(
+                    "Dropped prompt-echo dominated textEdit L{}-{} signals={}",
+                    edit.get("startLine"),
+                    edit.get("endLine"),
+                    countPromptEchoSignals(replacement));
+                continue;
+            }
+            String cleaned = sanitizeReplacementStripPromptEcho(replacement);
+            if (cleaned.isBlank()) {
+                String action = String.valueOf(edit.getOrDefault("action", "edit")).trim().toLowerCase(Locale.ROOT);
+                if (!"delete".equals(action) && !"remove".equals(action)) {
+                    continue;
+                }
+            }
+            if (!cleaned.equals(replacement)) {
+                Map<String, Object> copy = new LinkedHashMap<>(edit);
+                putTextEditReplacement(copy, cleaned);
+                out.add(copy);
+            } else {
+                out.add(edit);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Block spurious edits in the file header (user-agent comment lines 1–N).
+     * DynamicCode is a string buffer — lifecycle/webview patches must target symbol regions (fnRemoveTab, etc.).
+     */
+    private List<Map<String, Object>> filterHeaderZoneDestructiveEdits(
+            String sourceCode,
+            List<Map<String, Object>> edits) {
+        if (edits == null || edits.isEmpty()) {
+            return List.of();
+        }
+        int minLine = Math.max(20, aiEditHeaderZoneProtectMinLine);
+        String code = String.valueOf(sourceCode == null ? "" : sourceCode);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> edit : edits) {
+            if (edit == null || edit.isEmpty()) {
+                continue;
+            }
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+            if (startLine >= minLine) {
+                out.add(edit);
+                continue;
+            }
+            String replacement = textEditReplacement(edit);
+            String action = String.valueOf(edit.getOrDefault("action", "edit")).trim().toLowerCase(Locale.ROOT);
+            boolean lifecycleReplacement = replacement.contains("__forceKillWebviewProcess")
+                || replacement.contains("waitForProcessDeath")
+                || replacement.contains("WEBVIEW_FORCE_KILL_ON_CLOSE")
+                || replacement.contains("window.fnRemoveTab");
+            if (lifecycleReplacement) {
+                out.add(edit);
+                continue;
+            }
+            String currentSlice = code.isBlank() ? "" : extractCodeSliceByLineRange(code, startLine, endLine);
+            boolean headerSlice = currentSlice.contains("Mozilla/5.0")
+                || currentSlice.contains("AppleWebKit")
+                || startLine <= 5;
+            if (headerSlice || "delete".equals(action) || "remove".equals(action) || replacement.isBlank()) {
+                logger.warn(
+                    "Rejected header-zone textEdit L{}-{} (DynamicCode string protection minLine={})",
+                    startLine,
+                    endLine,
+                    minLine);
+                continue;
+            }
+            out.add(edit);
+        }
+        return out;
+    }
+
+    /**
+     * Weak local models often return one giant textEdit spanning 100+ lines.
+     * Split into maxSpan windows so AST gate + CodeMirror can apply incrementally.
+     */
+    private List<Map<String, Object>> decomposeOversizedTextEdits(
+            String sourceCode,
+            List<Map<String, Object>> edits) {
+        if (edits == null || edits.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> result = decomposeOversizedTextEditsOnce(sourceCode, edits);
+        for (int pass = 0; pass < 8 && containsOversizedSurgicalEdits(result); pass++) {
+            result = decomposeOversizedTextEditsOnce(sourceCode, result);
+        }
+        return dedupeAndSortTextEdits(result);
+    }
+
+    private List<Map<String, Object>> decomposeOversizedTextEditsOnce(
+            String sourceCode,
+            List<Map<String, Object>> edits) {
+        if (edits == null || edits.isEmpty()) {
+            return List.of();
+        }
+        int maxSpan = effectiveSurgicalEditLineSpan();
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> edit : edits) {
+            if (edit == null || edit.isEmpty()) {
+                continue;
+            }
+            if (!exceedsSurgicalEditSpan(edit)) {
+                out.add(edit);
+                continue;
+            }
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+            String action = String.valueOf(edit.getOrDefault("action", "edit")).trim().toLowerCase(Locale.ROOT);
+            String replacement = textEditReplacement(edit);
+
+            if ("delete".equals(action) || "remove".equals(action)) {
+                for (int ws = startLine; ws <= endLine; ws += maxSpan) {
+                    int we = Math.min(endLine, ws + maxSpan - 1);
+                    Map<String, Object> chunk = new LinkedHashMap<>();
+                    chunk.put("startLine", ws);
+                    chunk.put("endLine", we);
+                    chunk.put("replacement", "");
+                    chunk.put("action", "delete");
+                    out.add(chunk);
+                }
+                continue;
+            }
+
+            String[] replLines = replacement.split("\n", -1);
+            int sourceSpan = endLine - startLine + 1;
+            int totalReplLines = replLines.length;
+            int chunksBefore = out.size();
+
+            if (totalReplLines <= 1 && sourceSpan > maxSpan) {
+                for (int ws = startLine; ws <= endLine; ws += maxSpan) {
+                    int we = Math.min(endLine, ws + maxSpan - 1);
+                    Map<String, Object> chunk = new LinkedHashMap<>();
+                    chunk.put("startLine", ws);
+                    chunk.put("endLine", we);
+                    chunk.put("replacement", ws == startLine ? replacement : "");
+                    chunk.put("action", action);
+                    out.add(chunk);
+                }
+            } else {
+                int replCursor = 0;
+                int lineCursor = startLine;
+                while (lineCursor <= endLine && replCursor < totalReplLines) {
+                    int windowEnd = Math.min(endLine, lineCursor + maxSpan - 1);
+                    int windowSourceLines = windowEnd - lineCursor + 1;
+                    int replTake;
+                    if (totalReplLines >= sourceSpan) {
+                        replTake = Math.min(windowSourceLines, totalReplLines - replCursor);
+                    } else {
+                        int remainingSource = endLine - lineCursor + 1;
+                        int remainingRepl = totalReplLines - replCursor;
+                        replTake = Math.max(1, (int) Math.ceil((double) remainingRepl * windowSourceLines / remainingSource));
+                    }
+                    replTake = Math.min(replTake, maxSpan);
+                    replTake = Math.min(replTake, totalReplLines - replCursor);
+                    if (replTake <= 0) {
+                        break;
+                    }
+                    StringBuilder chunkRepl = new StringBuilder();
+                    for (int i = 0; i < replTake; i++) {
+                        if (i > 0) {
+                            chunkRepl.append('\n');
+                        }
+                        chunkRepl.append(replLines[replCursor + i]);
+                    }
+                    Map<String, Object> chunk = new LinkedHashMap<>();
+                    chunk.put("startLine", lineCursor);
+                    chunk.put("endLine", windowEnd);
+                    chunk.put("replacement", chunkRepl.toString());
+                    chunk.put("action", action);
+                    out.add(chunk);
+                    replCursor += replTake;
+                    lineCursor = windowEnd + 1;
+                }
+                // Replacement longer than source span: emit trailing lines as insert chunks (never dump into last chunk).
+                int insertAt = endLine + 1;
+                while (replCursor < totalReplLines) {
+                    int replTake = Math.min(maxSpan, totalReplLines - replCursor);
+                    StringBuilder chunkRepl = new StringBuilder();
+                    for (int i = 0; i < replTake; i++) {
+                        if (i > 0) {
+                            chunkRepl.append('\n');
+                        }
+                        chunkRepl.append(replLines[replCursor + i]);
+                    }
+                    Map<String, Object> chunk = new LinkedHashMap<>();
+                    chunk.put("startLine", insertAt);
+                    chunk.put("endLine", Math.max(startLine, endLine));
+                    chunk.put("replacement", chunkRepl.toString());
+                    chunk.put("action", "add");
+                    out.add(chunk);
+                    replCursor += replTake;
+                }
+                // Source span not fully consumed: delete remaining source windows with empty replacement.
+                while (lineCursor <= endLine) {
+                    int windowEnd = Math.min(endLine, lineCursor + maxSpan - 1);
+                    Map<String, Object> chunk = new LinkedHashMap<>();
+                    chunk.put("startLine", lineCursor);
+                    chunk.put("endLine", windowEnd);
+                    chunk.put("replacement", "");
+                    chunk.put("action", "edit");
+                    out.add(chunk);
+                    lineCursor = windowEnd + 1;
+                }
+            }
+            int chunkCount = out.size() - chunksBefore;
+            if (chunkCount > 1) {
+                logger.info(
+                    "Decomposed oversized textEdit L{}-{} into {} surgical chunks (maxSpan={})",
+                    startLine,
+                    endLine,
+                    chunkCount,
+                    maxSpan);
+            }
+        }
+        return out;
+    }
+
+    private String buildLineTextEditsPayloadJson(List<Map<String, Object>> edits, String summary) {
+        if (edits == null || edits.isEmpty()) {
+            return "";
+        }
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("summary", summary == null || summary.isBlank() ? "patch" : summary.trim());
+            payload.put("changes", List.of("applied"));
+            payload.put("textEdits", edits);
+            return objectMapper.writeValueAsString(payload);
+        } catch (Exception ex) {
+            logger.debug("buildLineTextEditsPayloadJson failed: {}", ex.getMessage());
+            return "";
+        }
+    }
+
+    /** Parse, decompose oversized edits, AST-gate, return canonical JSON payload or empty. */
+    private String finalizeLocalCodeEditOutput(String rawOutput, String fullCodeContext) {
+        String normalized = normalizeLocalCodeEditOutput(rawOutput, fullCodeContext);
+        if (normalized.isBlank()) {
+            return "";
+        }
+        List<Map<String, Object>> edits = parseNormalizedLineTextEdits(normalized);
+        if (edits.isEmpty()) {
+            return "";
+        }
+        edits = filterPromptEchoTextEdits(edits);
+        if (edits.isEmpty()) {
+            logger.info("finalizeLocalCodeEditOutput dropped all edits (prompt echo)");
+            return "";
+        }
+        edits = filterHeaderZoneDestructiveEdits(fullCodeContext, edits);
+        if (edits.isEmpty()) {
+            logger.info("finalizeLocalCodeEditOutput dropped all edits (header zone protection)");
+            return "";
+        }
+        edits = decomposeOversizedTextEdits(fullCodeContext, edits);
+        if (edits.isEmpty() || isBulkDeleteOnlyPatch(edits)) {
+            return "";
+        }
+        if (containsOversizedSurgicalEdits(edits)) {
+            logger.warn(
+                "finalizeLocalCodeEditOutput rejected: {} edits still oversized after decompose maxSpan={}",
+                edits.size(),
+                effectiveSurgicalEditLineSpan());
+            return "";
+        }
+        if (!editsPassCodeAstGateFromEdits(edits, fullCodeContext)) {
+            List<Map<String, Object>> incremental = filterEditsByIncrementalAstGate(fullCodeContext, edits);
+            if (incremental.isEmpty()) {
+                String simulated = simulateApplyLineTextEdits(fullCodeContext, edits);
+                String astError = validatePatchedCodeStructure(fullCodeContext, simulated);
+                logger.warn(
+                    "finalizeLocalCodeEditOutput AST gate failed: {} edits={} incrementalAccepted=0",
+                    astError.isBlank() ? "unknown" : astError,
+                    edits.size());
+                return "";
+            }
+            logger.info(
+                "finalizeLocalCodeEditOutput AST gate relaxed via incremental apply: accepted {}/{} edits",
+                incremental.size(),
+                edits.size());
+            edits = incremental;
+        }
+        String summary = "patch";
+        try {
+            JsonNode root = objectMapper.readTree(normalized);
+            if (root != null && root.has("summary")) {
+                summary = root.get("summary").asText(summary);
+            }
+        } catch (Exception ignored) {
+            // keep default summary
+        }
+        return buildLineTextEditsPayloadJson(edits, summary);
+    }
+
+    /**
+     * Apply edits one-by-one; keep only chunks that do not introduce delimiter/syntax failures.
+     * Lets local weak models deliver partial surgical patches instead of failing entirely.
+     */
+    private List<Map<String, Object>> filterEditsByIncrementalAstGate(
+            String baseCode,
+            List<Map<String, Object>> edits) {
+        if (edits == null || edits.isEmpty()) {
+            return List.of();
+        }
+        if (!aiLocalFinalOutputGateCodeBlockOnSyntaxFail) {
+            return edits;
+        }
+        String codeBase = String.valueOf(baseCode == null ? "" : baseCode);
+        List<Map<String, Object>> sorted = new ArrayList<>(edits);
+        sorted.sort((a, b) -> {
+            int sa = parseIntOrDefault(a == null ? null : a.get("startLine"), 1);
+            int sb = parseIntOrDefault(b == null ? null : b.get("startLine"), 1);
+            return Integer.compare(sa, sb);
+        });
+        List<Map<String, Object>> accepted = new ArrayList<>();
+        String current = codeBase;
+        for (Map<String, Object> edit : sorted) {
+            if (edit == null || edit.isEmpty() || !isActionableTextEditMap(edit)) {
+                continue;
+            }
+            String next = simulateApplyLineTextEdits(current, List.of(edit));
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+            String astError = validatePatchedCodeStructureNearLines(current, next, startLine, endLine, 80);
+            if (astError.isBlank()) {
+                accepted.add(edit);
+                current = next;
+            }
+        }
+        return accepted;
+    }
+
     private String buildLifecycleFocusedCondensedCode(String source, String message) {
         if (source == null || source.isBlank()) {
             return "";
@@ -7178,6 +7811,144 @@ public class ApiSpringController {
             }
         }
         return truncateMiddle(sb.toString().trim(), 18000);
+    }
+
+    /**
+     * Unified local edit pipeline for large DynamicCode (371k+ chars) on weak 1.5B models.
+     * Order: deterministic lifecycle → symbol micro-edit → multi-slice → focused fallback.
+     */
+    private String tryLocalLargeCodeEditPipeline(
+            SseEmitter emitter,
+            String requestId,
+            String message,
+            String effectiveCodeContext,
+            String contextType,
+            String uiLang,
+            AiEditTaskPlannerService.EditTaskPlan editTaskPlan) {
+        String source = String.valueOf(effectiveCodeContext == null ? "" : effectiveCodeContext);
+        if (source.isBlank()) {
+            return "";
+        }
+        boolean lifecycle = isLifecycleEditRequest(message);
+        boolean symbolMicroTried = false;
+
+        // Rule-based lifecycle patch first — weak 1.5B models echo prompt / corrupt line 1 otherwise.
+        if (lifecycle && aiEditLifecycleDeterministicFallbackEnabled) {
+            String deterministic = tryDeterministicLifecycleWebviewPatch(source, message);
+            if (!deterministic.isBlank() && countActionableLineTextEdits(deterministic) > 0) {
+                logger.info(
+                    "LOCAL_EDIT pipeline phase=deterministic_lifecycle requestId={} textEdits={}",
+                    requestId,
+                    extractLineTextEditsCount(deterministic));
+                sendEvent(emitter, jsonOf(
+                    "stage", "edit_deterministic_lifecycle",
+                    "status", "completed",
+                    "requestId", requestId,
+                    "textEdits", extractLineTextEditsCount(deterministic),
+                    "message", "Áp patch lifecycle webview/process (deterministic fallback)"));
+                return deterministic.trim();
+            }
+            logger.info(
+                "LOCAL_EDIT pipeline deterministic lifecycle skipped requestId={} (no actionable edits)",
+                requestId);
+        }
+
+        if (lifecycle && aiEditSymbolMicroFirstEnabled) {
+            symbolMicroTried = true;
+            String micro = trySymbolMicroEditFallback(
+                emitter, requestId, message, source, contextType, uiLang);
+            if (!micro.isBlank()) {
+                logger.info("LOCAL_EDIT pipeline phase=symbol_micro requestId={} textEdits={}",
+                    requestId, extractLineTextEditsCount(micro));
+                return micro.trim();
+            }
+        }
+
+        if (aiEditTaskPlannerMultiSliceExecutionEnabled
+                && editTaskPlan != null
+                && editTaskPlan.multiSliceExecution()
+                && aiEditTaskPlannerService != null) {
+            String multi = tryMultiSliceEditFromPlan(
+                emitter, requestId, message, source, contextType, uiLang, editTaskPlan);
+            if (!multi.isBlank()) {
+                String finalized = finalizeLocalCodeEditOutput(multi, source);
+                String result = finalized.isBlank() ? multi : finalized;
+                if (countActionableLineTextEdits(result) > 0) {
+                    logger.info("LOCAL_EDIT pipeline phase=multi_slice requestId={} textEdits={}",
+                        requestId, extractLineTextEditsCount(result));
+                    return result.trim();
+                }
+            }
+        }
+
+        String focused = tryEditFocusedLocalFallback(
+            emitter, requestId, message, source, contextType, uiLang, "", symbolMicroTried);
+        if (!focused.isBlank() && countActionableLineTextEdits(focused) > 0) {
+            logger.info("LOCAL_EDIT pipeline phase=focused_fallback requestId={} textEdits={}",
+                requestId, extractLineTextEditsCount(focused));
+            return focused.trim();
+        }
+
+        if (lifecycle && !symbolMicroTried) {
+            String micro = trySymbolMicroEditFallback(
+                emitter, requestId, message, source, contextType, uiLang);
+            if (!micro.isBlank()) {
+                return micro.trim();
+            }
+        }
+        return "";
+    }
+
+    private boolean isLifecycleSliceExcerpt(String excerpt) {
+        String lower = String.valueOf(excerpt == null ? "" : excerpt).toLowerCase(Locale.ROOT);
+        return lower.contains("fnremovetab")
+            || lower.contains("closealltabs")
+            || lower.contains("__forcekillwebviewprocess")
+            || lower.contains("webview.terminate")
+            || lower.contains("getprocessid")
+            || lower.contains("stopapp")
+            || lower.contains("window.tmrun")
+            || lower.contains("shouldchangeproxynow")
+            || lower.contains("fnresetip")
+            || lower.contains("waitforprocessdeath");
+    }
+
+    /** Prefix each excerpt line with absolute 1-based line number (helps weak models emit correct startLine/endLine). */
+    private int parseExcerptCommentLineStart(String excerpt) {
+        if (excerpt == null || excerpt.isBlank()) {
+            return -1;
+        }
+        Matcher matcher = Pattern.compile("lines\\s+(\\d+)\\s*-\\s*(\\d+)").matcher(excerpt);
+        if (matcher.find()) {
+            try {
+                return Integer.parseInt(matcher.group(1).trim());
+            } catch (Exception ignored) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    private String stripExcerptCommentHeader(String excerpt) {
+        if (excerpt == null) {
+            return "";
+        }
+        return excerpt.replaceFirst("(?s)/\\* symbol:[^*]*\\*/\\s*", "").trim();
+    }
+
+    private String addAbsoluteLineNumbersToExcerpt(String excerpt, int lineStart) {
+        if (excerpt == null || excerpt.isBlank() || lineStart < 1) {
+            return String.valueOf(excerpt == null ? "" : excerpt);
+        }
+        String[] lines = excerpt.split("\n", -1);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < lines.length; i++) {
+            sb.append(String.format(Locale.ROOT, "%5d | %s", lineStart + i, lines[i]));
+            if (i < lines.length - 1) {
+                sb.append('\n');
+            }
+        }
+        return sb.toString();
     }
 
     /**
@@ -7223,18 +7994,32 @@ public class ApiSpringController {
                 if (sliceCode.isBlank()) {
                     continue;
                 }
+                if (isLifecycleEditRequest(message) && !isLifecycleSliceExcerpt(sliceCode)) {
+                    logger.info(
+                        "LOCAL_EDIT multi-slice skip non-lifecycle slice {} requestId={} L{}-{}",
+                        slice.index(),
+                        requestId,
+                        slice.lineStart(),
+                        slice.lineEnd());
+                    continue;
+                }
+                String numberedSlice = addAbsoluteLineNumbersToExcerpt(sliceCode, slice.lineStart());
                 String sliceHeader = "/* SLICE " + slice.index() + "/" + slice.total()
-                    + " absolute lines " + slice.lineStart() + "-" + slice.lineEnd() + " */\n";
+                    + " | FULL FILE lines " + slice.lineStart() + "-" + slice.lineEnd() + " */\n";
                 String sliceObjective = aiEditTaskPlannerService.buildSliceObjective(slice, message);
-                sliceObjective = appendLifecycleEditRulesToRequest(sliceObjective, isLifecycleEditRequest(message));
+                if (isLifecycleEditRequest(message)) {
+                    sliceObjective = sliceObjective
+                        + "\n\n[OUTPUT] Return ONE textEdit (max 20 line span). Patch the numbered lines only."
+                        + " Do NOT paste instructions as code comments.";
+                }
                 if (fullFileLineCount > 0) {
                     sliceObjective = sliceObjective
-                        + "\n\n[LINE_NUMBER_RULE] startLine/endLine MUST be 1-based in FULL file ("
-                        + fullFileLineCount + " lines). Max 2 textEdits for this slice.";
+                        + "\n\n[LINE_NUMBER_RULE] startLine/endLine = absolute 1-based lines in FULL file ("
+                        + fullFileLineCount + " lines total). Numbers shown as N | code.";
                 }
                 String retryPrompt = aiAssistantGatewayService.buildLocalMinimalPrompt(
                     AiAssistantGatewayService.AiFlowIntent.FRONTEND_CODE,
-                    sliceHeader + sliceCode,
+                    sliceHeader + numberedSlice,
                     "",
                     "",
                     sliceObjective,
@@ -7256,7 +8041,7 @@ public class ApiSpringController {
                         + slice.lineStart() + "-" + slice.lineEnd()));
                 String raw = llamaCppNativeService.generateContentFast(
                     retryPrompt,
-                    Math.max(384, Math.min(1024, aiLocalLlamaMaxTokens)));
+                    Math.max(512, Math.min(1536, aiLocalLlamaMaxTokens)));
                 String text = extractAiResultText(raw);
                 if ((text == null || text.isBlank()) && raw != null) {
                     text = raw.trim();
@@ -7264,16 +8049,42 @@ public class ApiSpringController {
                 text = sanitizePromptEchoLeakage(String.valueOf(text == null ? "" : text));
                 String normalized = normalizeLocalCodeEditOutput(text, source);
                 List<Map<String, Object>> sliceEdits = parseNormalizedLineTextEdits(normalized);
+                if (sliceEdits.isEmpty() && text != null && !text.isBlank()) {
+                    String salvaged = salvageLooseCodeEditJson(text);
+                    if (!salvaged.isBlank()) {
+                        List<Map<String, Object>> salvagedEdits = parseNormalizedLineTextEdits(
+                            normalizeLocalCodeEditOutput(salvaged, source));
+                        salvagedEdits = filterPromptEchoTextEdits(salvagedEdits);
+                        if (!salvagedEdits.isEmpty()) {
+                            sliceEdits = salvagedEdits;
+                        }
+                    }
+                }
+                sliceEdits = remapRelativeSliceLineNumbers(sliceEdits, slice.lineStart(), slice.lineEnd());
                 sliceEdits = filterTextEditsToSliceWindow(sliceEdits, slice.lineStart(), slice.lineEnd(), 25);
+                sliceEdits = filterPromptEchoTextEdits(sliceEdits);
+                sliceEdits = decomposeOversizedTextEdits(source, sliceEdits);
+                sliceEdits = filterTextEditsToSliceWindow(sliceEdits, slice.lineStart(), slice.lineEnd(), 50);
                 if (sliceEdits.isEmpty()) {
+                    logger.warn(
+                        "LOCAL_EDIT multi-slice slice {} no actionable edits requestId={} lineRange=L{}-{} normalizedPreview={}",
+                        slice.index(),
+                        requestId,
+                        slice.lineStart(),
+                        slice.lineEnd(),
+                        truncateMiddle(String.valueOf(normalized == null ? "" : normalized), 240));
                     continue;
                 }
                 if (!editsPassCodeAstGateFromEdits(sliceEdits, source)) {
-                    logger.info(
-                        "LOCAL_EDIT multi-slice slice {} AST gate failed requestId={}",
-                        slice.index(),
-                        requestId);
-                    continue;
+                    List<Map<String, Object>> incremental = filterEditsByIncrementalAstGate(source, sliceEdits);
+                    if (incremental.isEmpty()) {
+                        logger.info(
+                            "LOCAL_EDIT multi-slice slice {} AST gate failed requestId={}",
+                            slice.index(),
+                            requestId);
+                        continue;
+                    }
+                    sliceEdits = incremental;
                 }
                 mergedEdits.addAll(sliceEdits);
                 sliceSuccess++;
@@ -7284,9 +8095,23 @@ public class ApiSpringController {
                 return "";
             }
             mergedEdits = dedupeAndSortTextEdits(mergedEdits);
-            if (!editsPassCodeAstGateFromEdits(mergedEdits, source)) {
-                logger.info("LOCAL_EDIT multi-slice merged AST gate failed requestId={} edits={}", requestId, mergedEdits.size());
+            mergedEdits = decomposeOversizedTextEdits(source, mergedEdits);
+            if (containsOversizedSurgicalEdits(mergedEdits)) {
+                logger.info("LOCAL_EDIT multi-slice merged still oversized after decompose requestId={} edits={}", requestId, mergedEdits.size());
                 return "";
+            }
+            if (!editsPassCodeAstGateFromEdits(mergedEdits, source)) {
+                List<Map<String, Object>> incremental = filterEditsByIncrementalAstGate(source, mergedEdits);
+                if (incremental.isEmpty()) {
+                    logger.info("LOCAL_EDIT multi-slice merged AST gate failed requestId={} edits={}", requestId, mergedEdits.size());
+                    return "";
+                }
+                logger.info(
+                    "LOCAL_EDIT multi-slice incremental AST accept requestId={} accepted={}/{}",
+                    requestId,
+                    incremental.size(),
+                    mergedEdits.size());
+                mergedEdits = incremental;
             }
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("summary", "Multi-slice edit: " + sliceSuccess + "/" + plan.slices().size() + " regions patched");
@@ -7305,7 +8130,8 @@ public class ApiSpringController {
                 sliceSuccess,
                 plan.slices().size(),
                 mergedEdits.size());
-            return json;
+            String finalized = finalizeLocalCodeEditOutput(json, source);
+            return finalized.isBlank() ? json : finalized;
         } catch (Exception ex) {
             logger.warn("LOCAL_EDIT multi-slice failed requestId={}: {}", requestId, ex.getMessage());
             return "";
@@ -7332,6 +8158,48 @@ public class ApiSpringController {
             if (startLine >= minLine && endLine <= maxLine + 50) {
                 out.add(edit);
             }
+        }
+        return out;
+    }
+
+    /**
+     * Local models often emit line numbers relative to the slice excerpt (1..N) instead of absolute file lines.
+     */
+    private List<Map<String, Object>> remapRelativeSliceLineNumbers(
+            List<Map<String, Object>> edits,
+            int sliceStart,
+            int sliceEnd) {
+        if (edits == null || edits.isEmpty() || sliceStart < 1 || sliceEnd < sliceStart) {
+            return edits == null ? List.of() : edits;
+        }
+        int sliceLineCount = sliceEnd - sliceStart + 1;
+        boolean looksRelative = true;
+        for (Map<String, Object> edit : edits) {
+            if (edit == null || edit.isEmpty()) {
+                continue;
+            }
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+            if (startLine >= sliceStart || endLine > sliceLineCount + 3) {
+                looksRelative = false;
+                break;
+            }
+        }
+        if (!looksRelative) {
+            return edits;
+        }
+        int offset = sliceStart - 1;
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> edit : edits) {
+            if (edit == null || edit.isEmpty()) {
+                continue;
+            }
+            Map<String, Object> remapped = new LinkedHashMap<>(edit);
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+            remapped.put("startLine", Math.max(1, startLine + offset));
+            remapped.put("endLine", Math.max(Math.max(1, startLine + offset), endLine + offset));
+            out.add(remapped);
         }
         return out;
     }
@@ -7368,10 +8236,8 @@ public class ApiSpringController {
             return base;
         }
         return base
-            + "\n\n[EDIT_RULES] Fix webview close / process kill / proxy hang with SMALL surgical edits."
-            + " Use action=edit with replacement text. Do NOT bulk-delete (>15 lines per edit)."
-            + " Prefer __forceKillWebviewProcess, waitForProcessDeath, fnRemoveTab, closeAllTabsAndCleanup."
-            + " Return ONLY valid JSON {\"textEdits\":[...]} — max 3 edits.";
+            + "\n\n[OUTPUT] Return ONLY JSON {\"textEdits\":[...]}. Max 3 edits; each edit spans ≤25 lines."
+            + " Patch existing functions — do NOT paste instructions as code comments.";
     }
 
     private String appendLifecycleSymbolHintToMessage(String message) {
@@ -7381,8 +8247,7 @@ public class ApiSpringController {
                 || lower.contains("tắt") || lower.contains("treo"))) {
             return base;
         }
-        return base + "\n[SYMBOL_FOCUS] closeAllTabsAndCleanup fnResetIP fnRemoveTab __forceKillWebviewProcess waitForProcessDeath runParallelProcessing clearInterval webview process proxy"
-            + "\n[EDIT_RULES] Surgical edits only — use action=edit with replacement. Do NOT bulk-delete line ranges (>15 lines). Max 3 textEdits.";
+        return base + "\n[FOCUS] __forceKillWebviewProcess closeAllTabsAndCleanup fnRemoveTab fnResetIP waitForProcessDeath";
     }
 
     private boolean isCodeStreamUsefulSymbol(String token) {
@@ -8066,6 +8931,14 @@ public class ApiSpringController {
         return chunks;
     }
 
+    private void recordStreamedTextEditEventCount(Map<String, Object> meta, int emittedChunks) {
+        if (meta == null || emittedChunks <= 0) {
+            return;
+        }
+        int previous = parseIntSafe(meta.get("codeStreamTextEditsEmittedCount"), 0);
+        meta.put("codeStreamTextEditsEmittedCount", previous + emittedChunks);
+    }
+
     /**
      * For edit-mode local responses: parses textEdits from model JSON or SEARCH/REPLACE blocks
      * and emits one {@code text_edit_apply} SSE event per edit so the frontend can apply each
@@ -8161,7 +9034,7 @@ public class ApiSpringController {
                 // Case 1: textEdits array — emit each as an individual line-edit event
                 JsonNode editsNode = findNestedJsonNode(parsed, "textEdits", "text_edits");
                 if (editsNode != null && editsNode.isArray() && editsNode.size() > 0) {
-                    int count = 0;
+                    List<Map<String, Object>> pendingEdits = new ArrayList<>();
                     for (JsonNode edit : editsNode) {
                         Map<String, Object> normalizedEdit = normalizeTextEditJsonNode(edit);
                         if (normalizedEdit.isEmpty()) {
@@ -8171,6 +9044,15 @@ public class ApiSpringController {
                         if (repText.equals("...") || repText.equals("\"...\"")) {
                             continue;
                         }
+                        pendingEdits.add(normalizedEdit);
+                    }
+                    pendingEdits = filterHeaderZoneDestructiveEdits(safeCode, pendingEdits);
+                    // Apply bottom-up: descending startLine keeps line numbers valid for sequential SSE apply
+                    pendingEdits.sort((a, b) -> Integer.compare(
+                        parseIntOrDefault(b.get("startLine"), 1),
+                        parseIntOrDefault(a.get("startLine"), 1)));
+                    int count = 0;
+                    for (Map<String, Object> normalizedEdit : pendingEdits) {
                         sendEvent(emitter, jsonOf(
                             "stage", "text_edit_apply",
                             "requestId", requestId,
@@ -8305,7 +9187,8 @@ public class ApiSpringController {
         if (endLine > 0) {
             edit.put("endLine", Math.max(startLine > 0 ? startLine : 1, endLine));
         }
-        String replacement = getFirstNonBlankText(editNode, "replacement", "newText", "text", "replace", "content");
+        String replacement = getFirstNonBlankText(
+            editNode, "replacement", "replacementText", "newText", "text", "replace", "content");
         if (!replacement.isBlank()) {
             edit.put("replacement", replacement);
         }
@@ -8491,6 +9374,9 @@ public class ApiSpringController {
                 textEdits = applyDeltaFirstAntiEchoLineTextEdits(
                     textEdits,
                     menuJsonEdit ? menuApplyBaseCode : effectiveCodeContext);
+                if (!menuJsonEdit) {
+                    textEdits = filterHeaderZoneDestructiveEdits(effectiveCodeContext, textEdits);
+                }
                 DeterministicPatchValidationResult patchValidation = validateDeterministicLineTextEdits(
                     textEdits,
                     menuJsonEdit ? menuApplyBaseCode : effectiveCodeContext,
@@ -11060,8 +11946,8 @@ public class ApiSpringController {
                 if (item instanceof Map<?, ?> map) {
                     boolean hasLine = map.get("startLine") != null || map.get("start_line") != null
                             || map.get("line") != null || map.get("range") instanceof Map<?, ?>;
-                    boolean hasReplace = map.get("replacement") != null || map.get("newText") != null
-                            || map.get("text") != null;
+                    boolean hasReplace = map.get("replacement") != null || map.get("replacementText") != null
+                            || map.get("newText") != null || map.get("text") != null;
                     if (hasLine && hasReplace) {
                         count++;
                     }
@@ -11964,9 +12850,10 @@ public class ApiSpringController {
                         startLine);
                 String replacement = String.valueOf(
                         map.get("replacement") != null ? map.get("replacement")
-                                : (map.get("newText") != null ? map.get("newText")
-                                        : (map.get("text") != null ? map.get("text")
-                                                : (map.get("replace") != null ? map.get("replace") : ""))));
+                                : (map.get("replacementText") != null ? map.get("replacementText")
+                                        : (map.get("newText") != null ? map.get("newText")
+                                                : (map.get("text") != null ? map.get("text")
+                                                        : (map.get("replace") != null ? map.get("replace") : "")))));
                 String action = String.valueOf(
                         map.get("action") != null ? map.get("action")
                                 : (map.get("type") != null ? map.get("type") : "edit"));
@@ -12852,6 +13739,8 @@ public class ApiSpringController {
             result.rejectionReason = "empty_input";
             return result;
         }
+        String code = String.valueOf(baseCode == null ? "" : baseCode);
+        textEdits = decomposeOversizedTextEdits(code, textEdits);
         if (!aiCodeStreamEditPatchValidatorEnabled) {
             result.acceptedEdits = textEdits;
             result.normalizedCount = textEdits.size();
@@ -12860,7 +13749,6 @@ public class ApiSpringController {
             return result;
         }
 
-        String code = String.valueOf(baseCode == null ? "" : baseCode);
         int baseLineCount = countLines(code);
         int maxAllowedLine = Math.max(1, baseLineCount + 1);
         int maxTotalReplacementChars = Math.max(20000, aiAssistantStructuredEditMaxReplacementChars);
@@ -12880,6 +13768,12 @@ public class ApiSpringController {
                 endLine = startLine;
             }
             if (startLine > maxAllowedLine || endLine > maxAllowedLine) {
+                continue;
+            }
+            if (filterHeaderZoneDestructiveEdits(code, List.of(edit)).isEmpty()) {
+                continue;
+            }
+            if (!relaxedLargeEdit && exceedsSurgicalEditSpan(edit)) {
                 continue;
             }
 
@@ -13034,6 +13928,55 @@ public class ApiSpringController {
         return "";
     }
 
+    private String extractCodeLinesWindow(String code, int startLine, int endLine) {
+        String text = String.valueOf(code == null ? "" : code);
+        if (text.isBlank()) {
+            return "";
+        }
+        String[] lines = text.split("\n", -1);
+        int from = Math.max(1, startLine);
+        int to = Math.min(lines.length, Math.max(from, endLine));
+        if (from > lines.length) {
+            return "";
+        }
+        return String.join("\n", Arrays.copyOfRange(lines, from - 1, to));
+    }
+
+    private String validatePatchedCodeStructureNearLines(
+            String originalCode,
+            String patchedCode,
+            int editStartLine,
+            int editEndLine,
+            int marginLines) {
+        String patched = String.valueOf(patchedCode == null ? "" : patchedCode);
+        if (patched.isBlank()) {
+            return "ast_guard_failed_empty";
+        }
+        if (looksLikeMenuJsonDocument(originalCode) || looksLikeMenuJsonDocument(patchedCode)) {
+            return "";
+        }
+        int margin = Math.max(20, marginLines);
+        int windowStart = Math.max(1, editStartLine - margin);
+        int windowEnd = editEndLine + margin;
+        String origWindow = extractCodeLinesWindow(originalCode, windowStart, windowEnd);
+        String patchedWindow = extractCodeLinesWindow(patchedCode, windowStart, windowEnd + margin);
+        String balanceError = detectUnbalancedCodeDelimiters(patchedWindow);
+        if (!balanceError.isBlank()) {
+            String origBalance = detectUnbalancedCodeDelimiters(origWindow);
+            if (origBalance.isBlank()) {
+                return balanceError;
+            }
+        }
+        String lang = detectCodeLanguageForAstGuard(originalCode, patched);
+        if ("java".equals(lang)) {
+            String javaError = detectLikelyJavaStructureIssues(patchedWindow);
+            if (!javaError.isBlank()) {
+                return javaError;
+            }
+        }
+        return "";
+    }
+
     private boolean editsPassCodeAstGate(String providerText, String baseCode) {
         if (!aiLocalFinalOutputGateCodeBlockOnSyntaxFail) {
             return true;
@@ -13041,7 +13984,11 @@ public class ApiSpringController {
         String codeBase = String.valueOf(baseCode == null ? "" : baseCode);
         List<Map<String, Object>> textEdits = parseNormalizedLineTextEdits(String.valueOf(providerText == null ? "" : providerText));
         textEdits = textEdits.stream().filter(this::isActionableTextEditMap).toList();
-        return editsPassCodeAstGateFromEdits(textEdits, codeBase);
+        textEdits = decomposeOversizedTextEdits(codeBase, textEdits);
+        if (editsPassCodeAstGateFromEdits(textEdits, codeBase)) {
+            return true;
+        }
+        return !filterEditsByIncrementalAstGate(codeBase, textEdits).isEmpty();
     }
 
     private boolean editsPassCodeAstGateFromEdits(List<Map<String, Object>> textEdits, String baseCode) {
@@ -13280,7 +14227,8 @@ public class ApiSpringController {
             String contextType,
             String responseMode,
             String completionPayload,
-            Map<String, Object> completion) {
+            Map<String, Object> completion,
+            Map<String, Object> codeStreamMeta) {
         if (!aiLocalFinalOutputGateEnabled) {
             return FinalOutputGateResult.pass("disabled");
         }
@@ -13293,7 +14241,8 @@ public class ApiSpringController {
             return validateMenuJsonFinalOutputGate(emitter, requestId, message, completionPayload);
         }
         if (isCodeContext(contextType) && aiLocalFinalOutputGateCodeEditEnabled && "edit".equals(mode)) {
-            return validateCodeEditFinalOutputGate(emitter, requestId, baseCode, completionPayload, completion);
+            return validateCodeEditFinalOutputGate(
+                emitter, requestId, baseCode, completionPayload, completion, codeStreamMeta);
         }
         return FinalOutputGateResult.pass("not_applicable");
     }
@@ -13449,8 +14398,25 @@ public class ApiSpringController {
             String requestId,
             String baseCode,
             String completionPayload,
-            Map<String, Object> completion) {
+            Map<String, Object> completion,
+            Map<String, Object> codeStreamMeta) {
         String codeBase = String.valueOf(baseCode == null ? "" : baseCode);
+        List<Map<String, Object>> metaValidated = readCompletionValidatedTextEditsFromMeta(codeStreamMeta);
+        if (!metaValidated.isEmpty()) {
+            String simulatedMeta = simulateApplyLineTextEdits(codeBase, metaValidated);
+            String astMeta = validatePatchedCodeStructure(codeBase, simulatedMeta);
+            if (astMeta.isBlank()) {
+                Map<String, Object> meta = new LinkedHashMap<>();
+                meta.put("syntaxValid", true);
+                meta.put("simulatedChars", simulatedMeta.length());
+                meta.put("textEditCount", metaValidated.size());
+                meta.put("runtimeViolations", 0);
+                meta.put("source", "completionValidatedTextEdits");
+                return new FinalOutputGateResult(
+                    true, "code_validated_meta", "none", "", completionPayload, meta);
+            }
+        }
+
         List<Map<String, Object>> textEdits = Collections.emptyList();
         Object completionEdits = completion == null ? null : completion.get("textEdits");
         if (completionEdits instanceof List<?> editList && !editList.isEmpty()) {
@@ -13510,6 +14476,12 @@ public class ApiSpringController {
         List<String> violations = new ArrayList<>();
         String text = String.valueOf(code == null ? "" : code);
         if (text.isBlank()) {
+            return violations;
+        }
+        // Deterministic CSM-AI lifecycle helpers use nw.require/process.kill — allowed in DynamicCode NW.js runtime.
+        if (text.contains("[CSM-AI] Webview process lifecycle helpers")
+                || text.contains("__forceKillWebviewProcess")
+                || text.contains("WEBVIEW_FORCE_KILL_ON_CLOSE")) {
             return violations;
         }
         if (Pattern.compile("(?m)^\\s*import\\s+.+$", Pattern.CASE_INSENSITIVE).matcher(text).find()) {
@@ -17359,6 +18331,20 @@ public class ApiSpringController {
         }
 
         List<Map<String, Object>> scraped = scrapeLooseTextEditObjects(text);
+        scraped = filterPromptEchoTextEdits(scraped);
+        scraped = scraped.stream().filter(edit -> {
+            if (edit == null || edit.isEmpty()) {
+                return false;
+            }
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+            int span = endLine - startLine + 1;
+            String replacement = textEditReplacement(edit);
+            if (span > 60 && isPromptEchoDominatedReplacement(replacement)) {
+                return false;
+            }
+            return span <= 120 || !isPromptEchoDominatedReplacement(replacement);
+        }).toList();
         if (!scraped.isEmpty()) {
             try {
                 Map<String, Object> envelope = new LinkedHashMap<>();
@@ -17463,7 +18449,8 @@ public class ApiSpringController {
             effectiveCodeContext,
             contextType,
             uiLang,
-            String.valueOf(brokenOutput == null ? "" : brokenOutput).isBlank() ? "" : brokenOutput);
+            String.valueOf(brokenOutput == null ? "" : brokenOutput).isBlank() ? "" : brokenOutput,
+            false);
         if (!retryFocused.isBlank() && acceptLocalCodeEditCandidate(retryFocused, effectiveCodeContext, contextType)) {
             return normalizeLocalCodeEditOutput(retryFocused, effectiveCodeContext);
         }
@@ -17471,6 +18458,16 @@ public class ApiSpringController {
             repaired = tryLocalTextEditsJsonRepair(retryFocused, message, excerpt);
             if (!repaired.isBlank() && acceptLocalCodeEditCandidate(repaired, effectiveCodeContext, contextType)) {
                 return normalizeLocalCodeEditOutput(repaired, effectiveCodeContext);
+            }
+        }
+        if (aiEditLifecycleDeterministicFallbackEnabled && isLifecycleEditRequest(message)) {
+            String deterministic = tryDeterministicLifecycleWebviewPatch(effectiveCodeContext, message);
+            if (!deterministic.isBlank() && acceptLocalCodeEditCandidate(deterministic, effectiveCodeContext, contextType)) {
+                logger.info(
+                    "LOCAL_EDIT recovery deterministic lifecycle requestId={} textEdits={}",
+                    requestId,
+                    extractLineTextEditsCount(deterministic));
+                return normalizeLocalCodeEditOutput(deterministic, effectiveCodeContext);
             }
         }
         return "";
@@ -17514,6 +18511,22 @@ public class ApiSpringController {
                 "(?is)\\{\\s*\"startLine\"\\s*:\\s*(\\d+)\\s*,\\s*\"endLine\"\\s*:\\s*(\\d+)\\s*,\\s*\"text\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"\\s*,\\s*\"action\"\\s*:\\s*\"([^\"]*)\"\\s*\\}"),
             3,
             4);
+        scrapeLooseTextEditObjectsWithPattern(
+            out,
+            text,
+            max,
+            Pattern.compile(
+                "(?is)\\{\\s*\"startLine\"\\s*:\\s*(\\d+)\\s*,\\s*\"endLine\"\\s*:\\s*(\\d+)\\s*,\\s*\"replacementText\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"\\s*,\\s*\"action\"\\s*:\\s*\"([^\"]*)\"\\s*\\}"),
+            3,
+            4);
+        scrapeLooseTextEditObjectsWithPattern(
+            out,
+            text,
+            max,
+            Pattern.compile(
+                "(?is)\\{\\s*\"startLine\"\\s*:\\s*(\\d+)\\s*,\\s*\"endLine\"\\s*:\\s*(\\d+)\\s*,\\s*\"action\"\\s*:\\s*\"([^\"]*)\"\\s*,\\s*\"replacementText\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"\\s*\\}"),
+            4,
+            3);
         return out;
     }
 
@@ -17613,7 +18626,15 @@ public class ApiSpringController {
         }
         if (countActionableLineTextEdits(normalized) > 0) {
             List<Map<String, Object>> edits = parseNormalizedLineTextEdits(normalized);
-            if (isBulkDeleteOnlyPatch(edits)) {
+            edits = filterPromptEchoTextEdits(edits);
+            if (edits.isEmpty()) {
+                return false;
+            }
+            edits = decomposeOversizedTextEdits(fullCodeContext, edits);
+            if (edits.isEmpty() || isBulkDeleteOnlyPatch(edits)) {
+                return false;
+            }
+            if (containsOversizedSurgicalEdits(edits)) {
                 return false;
             }
             return true;
@@ -17645,6 +18666,9 @@ public class ApiSpringController {
             return true;
         }
         String replacement = String.valueOf(edit.getOrDefault("replacement", "")).trim();
+        if (replacement.isBlank()) {
+            replacement = String.valueOf(edit.getOrDefault("replacementText", "")).trim();
+        }
         return !replacement.isBlank() && !replacement.equals("...") && !replacement.equals("\"...\"");
     }
 
@@ -17931,23 +18955,25 @@ public class ApiSpringController {
             codeStreamMeta.put("largeCodeAsyncIngestChars", ingest.totalCharsIndexed);
             codeStreamMeta.put("largeCodeAsyncIngestChunks", ingest.chunksIngested);
         }
-        emitToolTrace(
-            emitter,
-            requestId,
-            "large_code_vector_ingest",
-            "scheduled".equalsIgnoreCase(String.valueOf(ingest.status)) ? "running" : "completed",
-            "editorKey=" + editorKey + " sourceChars=" + code.length(),
-            "status=" + ingest.status + " chunks=" + ingest.chunksIngested,
-            Math.max(0L, ingest.ingestionTimeMs),
-            0,
-            "none",
-            String.valueOf(ingest.status == null ? "none" : ingest.status).toUpperCase(Locale.ROOT),
-            Map.of(
-                "editorKey", editorKey,
-                "sourceChars", code.length(),
-                "ingestMode", "async_large_code_vector"
-            )
-        );
+        if (emitter != null) {
+            emitToolTrace(
+                emitter,
+                requestId,
+                "large_code_vector_ingest",
+                "scheduled".equalsIgnoreCase(String.valueOf(ingest.status)) ? "running" : "completed",
+                "editorKey=" + editorKey + " sourceChars=" + code.length(),
+                "status=" + ingest.status + " chunks=" + ingest.chunksIngested,
+                Math.max(0L, ingest.ingestionTimeMs),
+                0,
+                "none",
+                String.valueOf(ingest.status == null ? "none" : ingest.status).toUpperCase(Locale.ROOT),
+                Map.of(
+                    "editorKey", editorKey,
+                    "sourceChars", code.length(),
+                    "ingestMode", "async_large_code_vector"
+                )
+            );
+        }
     }
 
     private LargeCodeRegionPlan buildLargeCodeRegionPlan(
@@ -18632,6 +19658,464 @@ public class ApiSpringController {
     }
 
     /**
+     * Rule-based lifecycle patch when weak local LLM echoes instructions or fails AST gate.
+     * Inserts webview force-kill helpers and hardens fnRemoveTab terminate path (seo.js pattern).
+     */
+    private String tryDeterministicLifecycleWebviewPatch(String source, String message) {
+        if (!aiEditLifecycleDeterministicFallbackEnabled || source == null || source.isBlank()) {
+            return "";
+        }
+        if (!isLifecycleEditRequest(message)) {
+            return "";
+        }
+        if (!source.contains("fnRemoveTab") && !source.contains("closeAllTabsAndCleanup")) {
+            return "";
+        }
+        List<Map<String, Object>> edits = new ArrayList<>();
+
+        int fnRemoveTabStart = findLineNumberContaining(source, "window.fnRemoveTab = function");
+        if (fnRemoveTabStart < 1) {
+            fnRemoveTabStart = findLineNumberContaining(source, "window.fnRemoveTab=");
+        }
+        if (fnRemoveTabStart < 1) {
+            fnRemoveTabStart = findLineNumberContaining(source, "fnRemoveTab = function");
+        }
+        if (fnRemoveTabStart < 1) {
+            fnRemoveTabStart = findLineNumberContaining(source, "fnRemoveTab=function");
+        }
+        int minLifecycleLine = Math.max(200, aiEditHeaderZoneProtectMinLine);
+        if (fnRemoveTabStart > 0 && fnRemoveTabStart < minLifecycleLine) {
+            logger.warn(
+                "Deterministic lifecycle patch skipped: fnRemoveTab at L{} < minLifecycleLine={}",
+                fnRemoveTabStart,
+                minLifecycleLine);
+            return "";
+        }
+
+        if (!source.contains("__forceKillWebviewProcess") && fnRemoveTabStart > minLifecycleLine) {
+            edits.add(buildAddLineTextEdit(fnRemoveTabStart, LIFECYCLE_WEBVIEW_HELPER_BLOCK));
+        }
+
+        if (fnRemoveTabStart > 0) {
+            if (findLineNumberContainingAfter(source, fnRemoveTabStart, "let partitionId = null;") > 0
+                    && findLineNumberContainingAfter(source, fnRemoveTabStart, "let processId = null;") < 1) {
+                int partitionLine = findLineNumberContainingAfter(source, fnRemoveTabStart, "let partitionId = null;");
+                if (partitionLine > 0) {
+                    edits.add(buildAddLineTextEdit(partitionLine + 1, "        let processId = null;"));
+                }
+            }
+            if (findLineNumberContainingAfter(source, fnRemoveTabStart, "getProcessId") < 1) {
+                int partitionLogLine = findLineNumberContainingAfter(
+                    source, fnRemoveTabStart, "[fnRemoveTab] 📦 Partition ID:");
+                if (partitionLogLine < 1) {
+                    partitionLogLine = findLineNumberContainingAfter(
+                        source, fnRemoveTabStart, "Partition ID:");
+                }
+                if (partitionLogLine > 0) {
+                    edits.add(buildAddLineTextEdit(partitionLogLine + 1, LIFECYCLE_FN_REMOVE_TAB_GET_PID_BLOCK));
+                }
+            }
+            int terminateStart = findLineNumberContainingAfter(
+                source, fnRemoveTabStart, "// BƯỚC 4: Terminate webview process");
+            if (terminateStart < 1) {
+                terminateStart = findLineNumberContainingAfter(
+                    source, fnRemoveTabStart, "Terminate webview process");
+            }
+            if (terminateStart > 0
+                    && findLineNumberContainingAfter(source, terminateStart, "__forceKillWebviewProcess(processId") < 1) {
+                int terminateEnd = findLineNumberContainingAfter(source, terminateStart, "} catch (termErr)");
+                if (terminateEnd > terminateStart) {
+                    terminateEnd = findNextLineContaining(source, terminateEnd, "            }");
+                    if (terminateEnd > terminateStart) {
+                        edits.add(buildReplaceLineRangeTextEdit(
+                            terminateStart,
+                            terminateEnd,
+                            LIFECYCLE_FN_REMOVE_TAB_TERMINATE_BLOCK));
+                    }
+                }
+            }
+        }
+
+        if (edits.isEmpty()) {
+            logger.info(
+                "LOCAL_EDIT deterministic lifecycle no edits fnRemoveTabLine={} hasForceKill={} hasGetProcessId={}",
+                fnRemoveTabStart,
+                source.contains("__forceKillWebviewProcess"),
+                findLineNumberContainingAfter(source, fnRemoveTabStart > 0 ? fnRemoveTabStart : 1, "getProcessId") > 0);
+            return "";
+        }
+        edits = dedupeAndSortTextEdits(edits);
+        edits = filterHeaderZoneDestructiveEdits(source, edits);
+        if (edits.isEmpty()) {
+            return "";
+        }
+        String json = buildLineTextEditsPayloadJson(
+            edits,
+            "Deterministic lifecycle: webview force-kill + fnRemoveTab hardening");
+        String finalized = finalizeLocalCodeEditOutput(json, source);
+        if (!finalized.isBlank()) {
+            return finalized;
+        }
+        List<Map<String, Object>> incremental = filterEditsByIncrementalAstGate(source, edits);
+        if (incremental.isEmpty()) {
+            logger.warn(
+                "LOCAL_EDIT deterministic lifecycle patch rejected by AST gate edits={} fnRemoveTabLine={}",
+                edits.size(),
+                fnRemoveTabStart);
+            return "";
+        }
+        logger.info(
+            "LOCAL_EDIT deterministic lifecycle partial AST accept edits={}/{} fnRemoveTabLine={}",
+            incremental.size(),
+            edits.size(),
+            fnRemoveTabStart);
+        return buildLineTextEditsPayloadJson(
+            incremental,
+            "Deterministic lifecycle (partial): webview force-kill");
+    }
+
+    private static final String LIFECYCLE_WEBVIEW_HELPER_BLOCK = """
+// [CSM-AI] Webview process lifecycle helpers — force-kill stuck renderer processes
+if (typeof window.WEBVIEW_FORCE_KILL_ON_CLOSE === 'undefined') {
+  window.WEBVIEW_FORCE_KILL_ON_CLOSE = true;
+}
+window.isProcessRunning = function(processId) {
+  if (!window.hasOwnProperty('process') || !processId) return false;
+  if (processId === process.pid) return true;
+  try { process.kill(processId, 0); return true; } catch (err) {
+    return err.code !== 'ESRCH';
+  }
+};
+window.__forceKillWebviewProcess = function(processId, partitionId) {
+  if (!window.hasOwnProperty('process') || !processId || processId === process.pid) return;
+  try {
+    if (process.platform === 'win32') {
+      try {
+        var nwRequire = (typeof nw !== 'undefined' && nw && typeof nw.require === 'function') ? nw.require : null;
+        if (nwRequire) {
+          nwRequire('child_process').execSync('taskkill /PID ' + processId + ' /T /F', { timeout: 5000 });
+        }
+      } catch (errWin) {
+        console.warn('[WebviewKill] Windows taskkill failed:', errWin.message);
+      }
+    } else {
+      process.kill(processId, 'SIGKILL');
+    }
+    console.warn('[WebviewKill] Force-killed PID=' + processId);
+  } catch (err) {
+    console.warn('[WebviewKill] Force-kill failed:', err.message);
+  }
+};
+window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
+  timeoutMs = timeoutMs || 10000;
+  pollIntervalMs = pollIntervalMs || 200;
+  return new Promise(function(resolve) {
+    if (!processId || !window.hasOwnProperty('process')) return resolve(true);
+    var startTime = Date.now();
+    var forceKillAttempted = false;
+    var checkInterval = setInterval(function() {
+      if (!window.isProcessRunning(processId)) {
+        clearInterval(checkInterval);
+        resolve(true);
+        return;
+      }
+      var elapsedMs = Date.now() - startTime;
+      if (elapsedMs > 3000 && !forceKillAttempted) {
+        forceKillAttempted = true;
+        window.__forceKillWebviewProcess(processId);
+      }
+      if (elapsedMs >= timeoutMs) {
+        clearInterval(checkInterval);
+        resolve(false);
+      }
+    }, pollIntervalMs);
+  });
+};
+""";
+
+    private static final String LIFECYCLE_FN_REMOVE_TAB_GET_PID_BLOCK = """
+            if (typeof webview.getProcessId === 'function') {
+              try {
+                processId = webview.getProcessId();
+                console.log(`[fnRemoveTab] 🔍 Webview process ID: ${processId}`);
+              } catch (pidErr) {
+                console.warn(`[fnRemoveTab] ⚠️ Cannot get process ID:`, pidErr.message);
+              }
+            }""";
+
+    private static final String LIFECYCLE_FN_REMOVE_TAB_TERMINATE_BLOCK = """
+            // BƯỚC 4: Terminate webview process (quan trọng!)
+            console.log(`[fnRemoveTab] 💀 Terminate webview process (PID: ${processId || 'unknown'})...`);
+            try {
+                if (typeof webview.getProcessId === 'function' && !processId) {
+                  try { processId = webview.getProcessId(); } catch (e) {}
+                }
+                if (typeof webview.terminate === 'function') {
+                    webview.terminate();
+                    console.log(`[fnRemoveTab] ✅ Terminate() called`);
+                }
+                if (processId && typeof window.__forceKillWebviewProcess === 'function') {
+                  setTimeout(function() {
+                    if (typeof window.isProcessRunning === 'function' && window.isProcessRunning(processId)) {
+                      console.warn(`[fnRemoveTab] ⚠️ Process ${processId} still alive — force kill`);
+                      window.__forceKillWebviewProcess(processId, partitionId);
+                    }
+                  }, 3000);
+                }
+            } catch (termErr) {
+                console.warn(`[fnRemoveTab] ⚠️ Lỗi terminate:`, termErr.message);
+                if (processId && typeof window.__forceKillWebviewProcess === 'function') {
+                  window.__forceKillWebviewProcess(processId, partitionId);
+                }
+            }""";
+
+    private int findLineNumberContaining(String source, String needle) {
+        if (source == null || needle == null || needle.isBlank()) {
+            return -1;
+        }
+        String[] lines = source.split("\n", -1);
+        for (int i = 0; i < lines.length; i++) {
+            if (lines[i].contains(needle)) {
+                return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    private int findLineNumberContainingAfter(String source, int minLine, String needle) {
+        if (source == null || needle == null || needle.isBlank() || minLine < 1) {
+            return -1;
+        }
+        String[] lines = source.split("\n", -1);
+        int startIdx = Math.min(lines.length, Math.max(0, minLine - 1));
+        for (int i = startIdx; i < lines.length; i++) {
+            if (lines[i].contains(needle)) {
+                return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    private int findNextLineContaining(String source, int fromLine, String needle) {
+        if (fromLine < 1) {
+            return -1;
+        }
+        return findLineNumberContainingAfter(source, fromLine + 1, needle);
+    }
+
+    private Map<String, Object> buildAddLineTextEdit(int startLine, String replacement) {
+        Map<String, Object> edit = new LinkedHashMap<>();
+        edit.put("startLine", Math.max(1, startLine));
+        edit.put("endLine", Math.max(1, startLine));
+        edit.put("action", "add");
+        edit.put("replacement", String.valueOf(replacement == null ? "" : replacement).trim());
+        return edit;
+    }
+
+    private Map<String, Object> buildReplaceLineRangeTextEdit(int startLine, int endLine, String replacement) {
+        Map<String, Object> edit = new LinkedHashMap<>();
+        edit.put("startLine", Math.max(1, startLine));
+        edit.put("endLine", Math.max(startLine, endLine));
+        edit.put("action", "edit");
+        edit.put("replacement", String.valueOf(replacement == null ? "" : replacement).trim());
+        return edit;
+    }
+
+    private String tryEmitDeterministicLifecycleEditPatch(
+            SseEmitter emitter,
+            String requestId,
+            String message,
+            String effectiveCodeContext,
+            String contextType,
+            String responseMode,
+            Map<String, Object> codeStreamMeta,
+            AiLocalOrchestrationService.OrchestrationResult codeStreamOrchestration) {
+        if (!aiEditLifecycleDeterministicFallbackEnabled
+                || !"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                || !isCodeContext(contextType)
+                || !isLifecycleEditRequest(message)) {
+            return "";
+        }
+        String patch = tryDeterministicLifecycleWebviewPatch(effectiveCodeContext, message);
+        if (patch.isBlank() || !acceptLocalCodeEditCandidate(patch, effectiveCodeContext, contextType)) {
+            return "";
+        }
+        int steps = emitLocalAgenticStepResults(
+            emitter,
+            requestId,
+            patch,
+            codeStreamOrchestration == null || codeStreamOrchestration.planSteps == null
+                ? List.of()
+                : codeStreamOrchestration.planSteps,
+            codeStreamMeta == null ? null : codeStreamMeta.get("planStructuredSteps"),
+            codeStreamMeta == null ? null : codeStreamMeta.get("workflowExecutionBlueprint"),
+            responseMode,
+            contextType,
+            effectiveCodeContext,
+            codeStreamMeta == null ? new LinkedHashMap<>() : codeStreamMeta);
+        int chunks = emitLocalTextEditEvents(
+            emitter,
+            requestId,
+            patch,
+            contextType,
+            responseMode,
+            1,
+            effectiveCodeContext);
+        recordStreamedTextEditEventCount(codeStreamMeta, chunks);
+        if (steps <= 0 && chunks <= 0) {
+            return "";
+        }
+        if (codeStreamMeta != null) {
+            codeStreamMeta.put("deterministicLifecyclePatchApplied", true);
+            codeStreamMeta.put("editDeterministicLifecycleTextEdits", extractLineTextEditsCount(patch));
+            codeStreamMeta.put("streamChunkCount", Math.max(chunks, steps));
+            codeStreamMeta.put("streamedChars", patch.length());
+        }
+        logger.info(
+            "LOCAL_EDIT deterministic lifecycle patch applied requestId={} textEdits={} stepResults={} chunks={}",
+            requestId,
+            extractLineTextEditsCount(patch),
+            steps,
+            chunks);
+        return patch;
+    }
+
+    /**
+     * Per-symbol micro edit: one small LLM call per lifecycle function when bulk salvage echoes prompt instructions.
+     */
+    private String trySymbolMicroEditFallback(
+            SseEmitter emitter,
+            String requestId,
+            String message,
+            String effectiveCodeContext,
+            String contextType,
+            String uiLang) {
+        if (llamaCppNativeService == null
+                || !llamaCppNativeService.isAvailable()
+                || aiAssistantGatewayService == null) {
+            return "";
+        }
+        String source = String.valueOf(effectiveCodeContext == null ? "" : effectiveCodeContext);
+        if (source.isBlank()) {
+            return "";
+        }
+        String[] symbols = {
+            "__forceKillWebviewProcess",
+            "closeAllTabsAndCleanup",
+            "fnRemoveTab",
+            "fnResetIP",
+            "waitForProcessDeath"
+        };
+        try {
+            sendEvent(emitter, jsonOf(
+                "stage", "edit_symbol_micro",
+                "status", "running",
+                "requestId", requestId,
+                "message", "Thử sửa từng hàm (symbol micro-edit)..."));
+            List<Map<String, Object>> mergedEdits = new ArrayList<>();
+            int fullFileLineCount = countLines(source);
+            for (String symbol : symbols) {
+                if (mergedEdits.size() >= 3) {
+                    break;
+                }
+                if (!source.contains(symbol)) {
+                    continue;
+                }
+                List<String> excerpts = buildCodeStreamRelatedSymbolExcerpts(source, symbol, "", 1, 2200);
+                if (excerpts.isEmpty()) {
+                    continue;
+                }
+                String excerpt = excerpts.get(0);
+                int excerptLineStart = parseExcerptCommentLineStart(excerpt);
+                String numberedExcerpt = excerptLineStart > 0
+                    ? "/* symbol: " + symbol + " | FULL FILE lines from " + excerptLineStart + " */\n"
+                        + addAbsoluteLineNumbersToExcerpt(stripExcerptCommentHeader(excerpt), excerptLineStart)
+                    : excerpt;
+                String objective = String.valueOf(message == null ? "" : message).trim()
+                    + "\n\nPatch ONLY `" + symbol + "`. ONE textEdit, max 20 lines span."
+                    + " Use line numbers shown as N | code.";
+                if (fullFileLineCount > 0) {
+                    objective = objective
+                        + "\nstartLine/endLine = absolute lines in FULL file ("
+                        + fullFileLineCount + " lines).";
+                }
+                String retryPrompt = aiAssistantGatewayService.buildLocalMinimalPrompt(
+                    AiAssistantGatewayService.AiFlowIntent.FRONTEND_CODE,
+                    numberedExcerpt,
+                    "",
+                    "",
+                    objective,
+                    resolveEffectiveUserLanguage(uiLang, message));
+                retryPrompt = clampPromptForLocalProvider(retryPrompt, contextType, "edit");
+                if (!retryPrompt.contains("<|im_start|>assistant")) {
+                    retryPrompt = retryPrompt + "\n<|im_end|>\n<|im_start|>assistant\n";
+                }
+                sendEvent(emitter, jsonOf(
+                    "stage", "edit_symbol_micro_step",
+                    "status", "running",
+                    "requestId", requestId,
+                    "symbol", symbol,
+                    "message", "Symbol micro-edit: " + symbol));
+                String raw = llamaCppNativeService.generateContentFast(
+                    retryPrompt,
+                    Math.max(384, Math.min(1024, aiLocalLlamaMaxTokens)));
+                String text = extractAiResultText(raw);
+                if ((text == null || text.isBlank()) && raw != null) {
+                    text = raw.trim();
+                }
+                text = sanitizePromptEchoLeakage(String.valueOf(text == null ? "" : text));
+                String finalized = finalizeLocalCodeEditOutput(text, source);
+                if (finalized.isBlank()) {
+                    String salvaged = salvageLooseCodeEditJson(text);
+                    finalized = finalizeLocalCodeEditOutput(salvaged, source);
+                }
+                if (finalized.isBlank()) {
+                    continue;
+                }
+                List<Map<String, Object>> edits = parseNormalizedLineTextEdits(finalized);
+                edits = filterPromptEchoTextEdits(edits);
+                for (Map<String, Object> edit : edits) {
+                    int span = parseIntOrDefault(edit.get("endLine"), 1) - parseIntOrDefault(edit.get("startLine"), 1) + 1;
+                    if (span <= 30 && isActionableTextEditMap(edit)) {
+                        mergedEdits.add(edit);
+                    }
+                }
+            }
+            if (mergedEdits.isEmpty()) {
+                logger.info("LOCAL_EDIT symbol micro-edit no accepted edits requestId={}", requestId);
+                return "";
+            }
+            mergedEdits = dedupeAndSortTextEdits(mergedEdits);
+            mergedEdits = filterPromptEchoTextEdits(mergedEdits);
+            mergedEdits = decomposeOversizedTextEdits(source, mergedEdits);
+            if (mergedEdits.isEmpty() || containsOversizedSurgicalEdits(mergedEdits)) {
+                return "";
+            }
+            if (!editsPassCodeAstGateFromEdits(mergedEdits, source)) {
+                mergedEdits = filterEditsByIncrementalAstGate(source, mergedEdits);
+            }
+            if (mergedEdits.isEmpty()) {
+                return "";
+            }
+            String json = buildLineTextEditsPayloadJson(mergedEdits, "Symbol micro-edit: " + mergedEdits.size() + " patches");
+            logger.info(
+                "LOCAL_EDIT symbol micro-edit succeeded requestId={} textEdits={}",
+                requestId,
+                mergedEdits.size());
+            sendEvent(emitter, jsonOf(
+                "stage", "edit_symbol_micro",
+                "status", "completed",
+                "requestId", requestId,
+                "textEdits", mergedEdits.size(),
+                "message", "Symbol micro-edit: " + mergedEdits.size() + " textEdits"));
+            return json;
+        } catch (Exception ex) {
+            logger.warn("LOCAL_EDIT symbol micro-edit failed requestId={}: {}", requestId, ex.getMessage());
+            return "";
+        }
+    }
+
+    /**
      * Last-resort edit path: symbol-focused condensed code + strict textEdits JSON contract when full prompt failed.
      */
     private String tryEditFocusedLocalFallback(
@@ -18641,7 +20125,8 @@ public class ApiSpringController {
             String effectiveCodeContext,
             String contextType,
             String uiLang,
-            String previousAttempt) {
+            String previousAttempt,
+            boolean symbolMicroAlreadyTried) {
         if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable() || aiAssistantGatewayService == null) {
             return "";
         }
@@ -18724,11 +20209,16 @@ public class ApiSpringController {
                 text = raw.trim();
             }
             text = sanitizePromptEchoLeakage(String.valueOf(text == null ? "" : text));
+            String finalized = finalizeLocalCodeEditOutput(text, source);
+            if (!finalized.isBlank()) {
+                return finalized.trim();
+            }
             String normalized = normalizeLocalCodeEditOutput(text, source);
             if (!normalized.isBlank()
                     && acceptLocalCodeEditCandidate(normalized, source, contextType)
                     && editsPassCodeAstGate(normalized, source)) {
-                return normalized.trim();
+                String normalizedFinal = finalizeLocalCodeEditOutput(normalized, source);
+                return (normalizedFinal.isBlank() ? normalized : normalizedFinal).trim();
             }
             if (!normalized.isBlank()) {
                 logger.warn(
@@ -18744,26 +20234,68 @@ public class ApiSpringController {
                     truncateMiddle(String.valueOf(text == null ? "" : text), 320));
             }
             String repaired = tryLocalTextEditsJsonRepair(text, message, condensedCode);
-            if (!repaired.isBlank()
-                    && acceptLocalCodeEditCandidate(repaired, source, contextType)
-                    && editsPassCodeAstGate(repaired, source)) {
+            finalized = finalizeLocalCodeEditOutput(repaired, source);
+            if (!finalized.isBlank()) {
                 logger.info(
-                    "Edit focused fallback inline JSON repair succeeded requestId={} textEdits={}",
+                    "Edit focused fallback JSON repair + decompose succeeded requestId={} textEdits={}",
                     requestId,
-                    extractLineTextEditsCount(repaired));
-                return repaired.trim();
+                    extractLineTextEditsCount(finalized));
+                return finalized.trim();
             }
-            String salvagedLoose = salvageLooseCodeEditJson(String.valueOf(text == null ? "" : text));
-            if (!salvagedLoose.isBlank()
-                    && acceptLocalCodeEditCandidate(salvagedLoose, source, contextType)
-                    && editsPassCodeAstGate(salvagedLoose, source)) {
+            String salvagedLoose = "";
+            List<Map<String, Object>> preSalvageEdits = parseNormalizedLineTextEdits(
+                normalizeLocalCodeEditOutput(String.valueOf(text == null ? "" : text), source));
+            preSalvageEdits = filterPromptEchoTextEdits(preSalvageEdits);
+            boolean bulkEchoSalvage = preSalvageEdits.stream().anyMatch(edit -> {
+                int span = parseIntOrDefault(edit.get("endLine"), 1)
+                    - parseIntOrDefault(edit.get("startLine"), 1) + 1;
+                return span > 25 && isPromptEchoDominatedReplacement(textEditReplacement(edit));
+            });
+            if (!bulkEchoSalvage) {
+                salvagedLoose = salvageLooseCodeEditJson(String.valueOf(text == null ? "" : text));
+            } else {
                 logger.info(
-                    "Edit focused fallback loose JSON salvage succeeded requestId={} textEdits={}",
-                    requestId,
-                    extractLineTextEditsCount(salvagedLoose));
-                return normalizeLocalCodeEditOutput(salvagedLoose, source).trim();
+                    "Edit focused fallback skipped loose salvage (prompt-echo bulk edit) requestId={}",
+                    requestId);
             }
-            return normalized.isBlank() ? "" : normalized.trim();
+            finalized = finalizeLocalCodeEditOutput(salvagedLoose, source);
+            if (!finalized.isBlank()) {
+                logger.info(
+                    "Edit focused fallback loose salvage + decompose succeeded requestId={} textEdits={}",
+                    requestId,
+                    extractLineTextEditsCount(finalized));
+                return finalized.trim();
+            }
+            if (!normalized.isBlank() && containsOversizedSurgicalEdits(parseNormalizedLineTextEdits(normalized))) {
+                List<Map<String, Object>> decomposed = decomposeOversizedTextEdits(
+                    source,
+                    parseNormalizedLineTextEdits(normalized));
+                logger.warn(
+                    "Edit focused fallback finalize failed requestId={} rawEdits={} decomposedEdits={} stillOversized={} preview={}",
+                    requestId,
+                    extractLineTextEditsCount(normalized),
+                    decomposed.size(),
+                    containsOversizedSurgicalEdits(decomposed),
+                    truncateMiddle(normalized, 320));
+            } else if (!normalized.isBlank()) {
+                logger.warn(
+                    "Edit focused fallback finalize failed requestId={} rawEdits={} preview={}",
+                    requestId,
+                    extractLineTextEditsCount(normalized),
+                    truncateMiddle(normalized, 320));
+            }
+            if (lifecycleEdit && !symbolMicroAlreadyTried) {
+                String micro = trySymbolMicroEditFallback(
+                    emitter, requestId, message, source, contextType, uiLang);
+                if (!micro.isBlank()) {
+                    logger.info(
+                        "Edit focused fallback recovered via symbol micro-edit requestId={} textEdits={}",
+                        requestId,
+                        extractLineTextEditsCount(micro));
+                    return micro.trim();
+                }
+            }
+            return "";
         } catch (Exception ex) {
             logger.warn("Edit focused fallback failed requestId={}: {}", requestId, ex.getMessage());
             return "";
@@ -21379,6 +22911,82 @@ public class ApiSpringController {
         return true;
     }
 
+    private Map<String, Integer> summarizeTextEditOperationCounts(List<Map<String, Object>> textEdits) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        counts.put("add", 0);
+        counts.put("edit", 0);
+        counts.put("delete", 0);
+        if (textEdits == null || textEdits.isEmpty()) {
+            return counts;
+        }
+        for (Map<String, Object> edit : textEdits) {
+            if (edit == null || edit.isEmpty()) {
+                continue;
+            }
+            String action = String.valueOf(edit.getOrDefault("action", "edit")).trim().toLowerCase(Locale.ROOT);
+            String replacement = String.valueOf(edit.getOrDefault("replacement", "")).trim();
+            if (action.contains("delete") || action.contains("remove")) {
+                counts.put("delete", counts.get("delete") + 1);
+            } else if (action.contains("insert") || action.contains("add") || action.contains("create")) {
+                counts.put("add", counts.get("add") + 1);
+            } else if (replacement.isBlank()) {
+                counts.put("delete", counts.get("delete") + 1);
+            } else {
+                counts.put("edit", counts.get("edit") + 1);
+            }
+        }
+        return counts;
+    }
+
+    private int findFirstLifecyclePatchLine(List<Map<String, Object>> textEdits) {
+        if (textEdits == null || textEdits.isEmpty()) {
+            return -1;
+        }
+        int min = Integer.MAX_VALUE;
+        for (Map<String, Object> edit : textEdits) {
+            if (edit == null) {
+                continue;
+            }
+            int line = parseIntOrDefault(edit.get("startLine"), -1);
+            if (line > 0 && line < min) {
+                min = line;
+            }
+        }
+        return min == Integer.MAX_VALUE ? -1 : min;
+    }
+
+    private String buildCodeLifecycleAssistantChatSummary(
+            String userMessage,
+            int appliedEditCount,
+            int addCount,
+            int editCount,
+            int deleteCount,
+            int firstPatchLine) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Đã vá lỗi lifecycle webview trong DynamicCode (")
+            .append(Math.max(1, appliedEditCount))
+            .append(" thay đổi");
+        if (firstPatchLine > 0) {
+            sb.append(", vùng fnRemoveTab · L").append(firstPatchLine);
+        }
+        sb.append(").\n\n");
+        sb.append("Local AI đã làm:\n");
+        sb.append("• Thêm helper force-kill process webview khi đóng tab nhưng process còn treo\n");
+        sb.append("• Lấy processId qua webview.getProcessId() trong fnRemoveTab\n");
+        sb.append("• Gọi terminate() rồi force-kill nếu process vẫn sống sau 3 giây\n");
+        sb.append("• Giảm rủi ro proxy hết hạn và quá tải do process zombie\n\n");
+        sb.append("Tóm tắt thay đổi: +").append(Math.max(0, addCount))
+            .append(" ~").append(Math.max(0, editCount))
+            .append(" -").append(Math.max(0, deleteCount))
+            .append(". CodeMirror đã được cập nhật trực tiếp.");
+        String userSnippet = String.valueOf(userMessage == null ? "" : userMessage).trim();
+        if (userSnippet.length() > 16) {
+            sb.append("\n\nYêu cầu: ");
+            sb.append(userSnippet.length() > 160 ? userSnippet.substring(0, 157) + "..." : userSnippet);
+        }
+        return sb.toString().trim();
+    }
+
     private String buildMenuEditorAssistantChatSummary(
             String userMessage,
             Map<String, Object> mergeStats,
@@ -22181,6 +23789,29 @@ public class ApiSpringController {
         }
         String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
         int modelMinConfidence = Math.max(40, Math.min(95, aiLocalRoutingModelDrivenMinConfidence));
+        int minConfidence = Math.max(40, Math.min(95, aiAssistantResponseModeLocalIntentMinConfidence));
+
+        // Client + explicit edit signals win over classifier analyze (brief PHẦN B #2).
+        if ("edit".equals(mode)) {
+            return "edit";
+        }
+        if (hasExplicitCodeEditIntent(message)) {
+            if (!"edit".equals(mode)) {
+                logger.info("[AI_RESPONSE_MODE] source=explicit_edit_intent mode=edit previousMode={} request={}",
+                    mode,
+                    String.valueOf(message).length() > 80 ? String.valueOf(message).substring(0, 80) + "…" : message);
+            }
+            return "edit";
+        }
+        if (intent != null && intent.isEditTask()) {
+            if (!"edit".equals(mode)) {
+                logger.info("[AI_RESPONSE_MODE] source=classified_intent mode=edit type={} confidence={} previousMode={}",
+                    intent.type(),
+                    intent.confidence(),
+                    mode);
+            }
+            return "edit";
+        }
 
         if (aiLocalRoutingModelDrivenEnabled && intent != null) {
             String fromIntent = intent.resolvedResponseMode();
@@ -22196,25 +23827,6 @@ public class ApiSpringController {
                 }
                 return fromIntent;
             }
-        }
-
-        if (hasExplicitCodeEditIntent(message)) {
-            if (!"edit".equals(mode)) {
-                logger.info("[AI_RESPONSE_MODE] source=explicit_edit_intent mode=edit previousMode={} request={}",
-                    mode,
-                    String.valueOf(message).length() > 80 ? String.valueOf(message).substring(0, 80) + "…" : message);
-            }
-            return "edit";
-        }
-        int minConfidence = Math.max(40, Math.min(95, aiAssistantResponseModeLocalIntentMinConfidence));
-        if (intent != null && intent.isEditTask() && intent.confidence() >= minConfidence) {
-            if (!"edit".equals(mode)) {
-                logger.info("[AI_RESPONSE_MODE] source=classified_intent mode=edit type={} confidence={} previousMode={}",
-                    intent.type(),
-                    intent.confidence(),
-                    mode);
-            }
-            return "edit";
         }
         if (mode.isBlank()) {
             if (intent != null && (intent.isQuestion() || intent.isGeneral() || intent.answerDirectly())) {
@@ -31950,8 +33562,32 @@ public class ApiSpringController {
         }
         Object title = payload.get("title");
         Object htmlContent = payload.get("html_content");
-        return title != null && !String.valueOf(title).isBlank()
-            && htmlContent != null && !String.valueOf(htmlContent).isBlank();
+        Object content = payload.get("content");
+        boolean hasBody = (htmlContent != null && !String.valueOf(htmlContent).isBlank())
+            || (content != null && !String.valueOf(content).isBlank());
+        return title != null && !String.valueOf(title).isBlank() && hasBody;
+    }
+
+    /** LMKT: alias html_content ↔ content so both index.ts and auto-lmkt.js schemas work without JS changes. */
+    private void normalizeLmktContentFieldAliases(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return;
+        }
+        Object content = payload.get("content");
+        Object htmlContent = payload.get("html_content");
+        boolean contentBlank = content == null || String.valueOf(content).isBlank();
+        boolean htmlBlank = htmlContent == null || String.valueOf(htmlContent).isBlank();
+        if (contentBlank && !htmlBlank) {
+            payload.put("content", htmlContent);
+        } else if (htmlBlank && !contentBlank) {
+            payload.put("html_content", content);
+        }
+    }
+
+    private void applyLmktSeoAliasesIfNeeded(Map<String, Object> payload) {
+        if (payload != null && isSeoContentPayload(payload)) {
+            normalizeLmktContentFieldAliases(payload);
+        }
     }
 
     /** LMKT creative-params JSON ({@code personaKey}/{@code angle}/…) — not full SEO article. */
@@ -32000,6 +33636,7 @@ public class ApiSpringController {
             }
 
             if (isSeoOrCreativeParamsPayload(parsedResult)) {
+                applyLmktSeoAliasesIfNeeded(parsedResult);
                 response.set("code", 200);
                 response.set("success", true);
                 response.set("data", parsedResult);
@@ -32071,6 +33708,7 @@ public class ApiSpringController {
                     Map<String, Object> parsedData = (Map<String, Object>) contentObj;
 
                     if (isSeoOrCreativeParamsPayload(parsedData)) {
+                        applyLmktSeoAliasesIfNeeded(parsedData);
                         response.set("code", 200);
                         response.set("success", true);
                         response.set("data", parsedData);
@@ -32157,6 +33795,7 @@ public class ApiSpringController {
                 
                 if (parsedData != null) {
                     if (isSeoOrCreativeParamsPayload(parsedData)) {
+                        applyLmktSeoAliasesIfNeeded(parsedData);
                         response.set("code", 200);
                         response.set("success", true);
                         response.set("data", parsedData);

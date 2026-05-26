@@ -155,6 +155,8 @@ Rules:
 - startLine/endLine are 1-based line numbers in the FULL active editor file (not relative to REGION excerpts).
 - action is add/edit/delete.
 - No overlapping edits.
+- Never paste prompt instructions, EDIT_RULES, or meta-comments into replacement code.
+- Each textEdit should span at most 25 lines unless replacing a whole small function.
 - Linked-symbol edits (required when params/functions depend on each other):
   patch ALL related call sites in the SAME response as multiple textEdits.
   Example: webview close handler + cleanup + fnResetIP/proxy release must stay consistent.
@@ -1826,10 +1828,21 @@ Rules:
         || normalized.contains("current_menu_full_json");
   }
 
+  /** Simple 3-field SEO (index.ts PROMPT_GENERATE_POST). */
   private static final String SEO_SYSTEM_PROMPT =
       "You are an expert SEO content writer. You MUST respond with ONLY a valid JSON object "
           + "containing exactly these fields: title, description, html_content. "
           + "No markdown fences, no explanation, and no extra text before or after the JSON.";
+
+  /**
+   * LMKT flexible lane — follow JSON schema in user prompt ({@code content}, {@code facebook_post}, …).
+   * Required because anti-AI / category / FB prompts define their own output fields, not html_content-only.
+   */
+  private static final String LMKT_SEO_SYSTEM_PROMPT =
+      "You are an expert marketing and SEO content writer for LMKT automation. "
+          + "Follow the JSON output schema defined in the user prompt exactly — field names, nesting, and languages. "
+          + "Return ONLY one valid JSON object. No markdown fences, no explanation, "
+          + "no schema templates, no extra text before or after the JSON.";
 
   private static final String CREATIVE_PARAMS_SYSTEM_PROMPT =
       "You are a creative-parameter selector for LMKT marketing content. "
@@ -1937,7 +1950,40 @@ Rules:
     int seoOutputTokens = llamaCppNativeService != null
         ? llamaCppNativeService.getEffectiveMaxTokensLimit()
         : Math.max(4096, maxOutputTokens);
-    return callLocalProviderWithContext(trimmedPrompt, seoOutputTokens, directTemperature, progressListener, SEO_SYSTEM_PROMPT);
+    return callLocalProviderWithContext(
+        trimmedPrompt,
+        seoOutputTokens,
+        directTemperature,
+        progressListener,
+        resolveSeoSystemPrompt(trimmedPrompt));
+  }
+
+  /** Pick system prompt: simple html_content SEO vs LMKT custom JSON schema (content, facebook_post, …). */
+  private String resolveSeoSystemPrompt(String prompt) {
+    String normalized = String.valueOf(prompt == null ? "" : prompt).toLowerCase(Locale.ROOT);
+    if (normalized.contains("[creative_params_request]")) {
+      return CREATIVE_PARAMS_SYSTEM_PROMPT;
+    }
+    boolean asksForContentField = normalized.contains("\"content\"")
+        || normalized.contains("`content`")
+        || normalized.contains("content_en")
+        || normalized.contains("facebook_post")
+        || normalized.contains("content_zh");
+    boolean asksForHtmlContentOnly = (normalized.contains("html_content") || normalized.contains("`html_content`"))
+        && !asksForContentField;
+    if (asksForHtmlContentOnly && looksLikeSimpleSeoPrompt(normalized)) {
+      return SEO_SYSTEM_PROMPT;
+    }
+    return LMKT_SEO_SYSTEM_PROMPT;
+  }
+
+  private boolean looksLikeSimpleSeoPrompt(String normalized) {
+    return normalized.contains("chuẩn seo")
+        || normalized.contains("chuan seo")
+        || normalized.contains("seo content")
+        || normalized.contains("viết bài")
+        || normalized.contains("viet bai")
+        || normalized.contains("prompt_generate_post");
   }
 
   /**

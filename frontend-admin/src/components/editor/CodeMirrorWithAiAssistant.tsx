@@ -746,13 +746,23 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
   const handleApplyLineEdit = useCallback((edit: {
     startLine: number; endLine: number; replacement: string; action: string
   }) => {
+    const action = String(edit.action || "edit").trim().toLowerCase();
+    const isAdd = action.includes("insert") || action.includes("add") || action.includes("create");
+    const isDelete = action.includes("delete") || action.includes("remove");
     const view = editorViewRef.current;
     if (!view) {
       // No editor view yet — reconstruct full code and fall back to full insert
       const lines = String(currentCode || "").split("\n");
       const s = Math.max(0, edit.startLine - 1);
       const e = Math.max(s, Math.min(edit.endLine - 1, lines.length - 1));
-      lines.splice(s, e - s + 1, ...edit.replacement.split("\n"));
+      const replacementLines = edit.replacement.split("\n");
+      if (isAdd) {
+        lines.splice(s, 0, ...replacementLines);
+      } else if (isDelete) {
+        lines.splice(s, e - s + 1);
+      } else {
+        lines.splice(s, e - s + 1, ...replacementLines);
+      }
       handleCopilotCodeInsert(lines.join("\n"));
       return;
     }
@@ -762,9 +772,16 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
       const safeEnd = Math.max(safeStart, Math.min(edit.endLine, doc.lines));
       const startLineObj = doc.line(safeStart);
       const endLineObj = doc.line(safeEnd);
-      // Dispatch a precise character-range change — only the target lines are touched
+      let from = startLineObj.from;
+      let to = endLineObj.to;
+      if (isAdd) {
+        // Insert BEFORE startLine — do not replace the anchor line
+        to = from;
+      } else if (isDelete && safeEnd < doc.lines) {
+        to = doc.line(safeEnd + 1).from;
+      }
       view.dispatch({
-        changes: { from: startLineObj.from, to: endLineObj.to, insert: edit.replacement },
+        changes: { from, to, insert: isDelete ? "" : edit.replacement },
         scrollIntoView: true,
       });
       // Propagate the updated value back into React state
@@ -776,7 +793,14 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
       const lines = String(currentCode || "").split("\n");
       const s = Math.max(0, edit.startLine - 1);
       const e = Math.max(s, Math.min(edit.endLine - 1, lines.length - 1));
-      lines.splice(s, e - s + 1, ...edit.replacement.split("\n"));
+      const replacementLines = edit.replacement.split("\n");
+      if (isAdd) {
+        lines.splice(s, 0, ...replacementLines);
+      } else if (isDelete) {
+        lines.splice(s, e - s + 1);
+      } else {
+        lines.splice(s, e - s + 1, ...replacementLines);
+      }
       handleCopilotCodeInsert(lines.join("\n"));
     }
   }, [currentCode, handleCopilotCodeInsert, onChange]);

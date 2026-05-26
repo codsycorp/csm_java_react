@@ -1305,6 +1305,29 @@
 	gap: 8px;
 }
 
+.composerPanel_unified {
+	gap: 0;
+}
+
+.composerUnifiedCard {
+	border: 1px solid var(--chat-border);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--chat-bg) 92%, var(--ant-color-fill-quaternary));
+	overflow: hidden;
+}
+
+.composerUnifiedSection {
+	border: none !important;
+	border-radius: 0 !important;
+	background: transparent !important;
+	border-top: 1px solid var(--chat-border) !important;
+}
+
+.composerUnifiedCard > .composerActivityBlock:first-child,
+.composerUnifiedCard > .composerUnifiedSection:first-child {
+	border-top: none !important;
+}
+
 .composerActivityBlock,
 .composerDiffBlock {
 	border: 1px solid var(--chat-border);
@@ -1375,6 +1398,85 @@
 	animation: composerPulse 1s ease-in-out infinite;
 }
 
+.composerRequestStatusHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.composerRequestCancelBtn {
+	flex: 0 0 auto;
+	margin-right: 6px;
+}
+
+.composerRequestProgressTrack {
+	height: 3px;
+	margin: 0 10px 6px;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--chat-border) 80%, transparent);
+	overflow: hidden;
+}
+
+.composerRequestProgressFill {
+	height: 100%;
+	border-radius: inherit;
+	background: var(--ant-color-primary);
+	transition: width 0.25s ease;
+}
+
+.composerRequestStatus_error {
+	border-color: var(--chat-state-error-border);
+	background: color-mix(in srgb, var(--chat-state-error-bg) 70%, var(--chat-bg));
+}
+
+.composerRequestStatus_warning {
+	border-color: var(--chat-state-warning-border);
+	background: color-mix(in srgb, var(--chat-state-warning-bg) 70%, var(--chat-bg));
+}
+
+.composerStatusDetail {
+	border-top: 1px solid var(--chat-border);
+	padding: 4px 0;
+}
+
+.composerStatusRow {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 10px;
+	padding: 3px 10px;
+	font-size: 10px;
+	line-height: 1.35;
+	color: var(--ant-color-text-secondary);
+}
+
+.composerStatusRow > span:last-child {
+	text-align: right;
+	word-break: break-word;
+}
+
+.composerStatusCopyBtn {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	cursor: pointer;
+	font-size: 10px;
+	color: var(--ant-color-text-secondary);
+}
+
+.composerStatusCopyBtn:hover {
+	color: var(--ant-color-primary);
+}
+
+.composerStatusUsageBody {
+	border-top: 1px solid var(--chat-border);
+	padding: 6px 8px 8px;
+}
+
 @keyframes composerPulse {
 	0%, 100% { opacity: 0.35; }
 	50% { opacity: 1; }
@@ -1421,6 +1523,16 @@
 
 .composerDiffLine_del {
 	background: color-mix(in srgb, #f85149 12%, transparent);
+}
+
+.composerDiffLine_label {
+	background: color-mix(in srgb, var(--ant-color-primary) 10%, transparent);
+	font-weight: 600;
+	color: var(--ant-color-primary);
+}
+
+.composerDiffLine_label .composerDiffPrefix {
+	color: var(--ant-color-primary);
 }
 
 .composerDiffPrefix {

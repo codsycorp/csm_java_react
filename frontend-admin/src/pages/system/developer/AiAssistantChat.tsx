@@ -587,6 +587,20 @@ const MAX_CHAT_INPUT_CHARS = 20000;
 const MAX_STRUCTURED_TEXT_EDITS = 160;
 const MAX_STRUCTURED_REPLACEMENT_CHARS = 800000;
 const SHOW_DETAILED_PROGRESS_TIMELINE = true;
+/** Edit-mode progress lives in Composer timeline; skip duplicate Agentic dock + workspace plan panels. */
+const COMPOSER_PRIMARY_EDIT_TIMELINE = true;
+/** Internal orchestration stages — hidden from Agentic dock when Composer primary (shown in Explored or omitted). */
+const COMPOSER_INTERNAL_AGENTIC_STAGES = new Set([
+	"edit_task_plan",
+	"edit_multi_slice",
+	"scope_reasoning_planner",
+	"assistant_route_plan",
+	"agentic_plan",
+	"agentic_plan_schema",
+	"agentic_step_verifier",
+	"agentic_step_contract",
+	"routing",
+]);
 const COMPACT_STAGE_EVENTS = 4;
 const COMPACT_MODEL_TRACE = 1;
 const DONE_DOCK_AUTO_COLLAPSE_MS = 3500;
@@ -1452,7 +1466,40 @@ function parseTextEditsOnlyPayload(raw: unknown): any[] | null {
 	}
 }
 
-function applyTextEditsToDraft(baseText: string, textEdits: any[]): string {
+	function isProtectedHeaderZoneEdit(baseText: string, edit: Record<string, unknown>): boolean {
+		const startLine = Math.max(1, Math.floor(Number(edit.startLine ?? 1)));
+		const endLine = Math.max(startLine, Math.floor(Number(edit.endLine ?? startLine)));
+		if (startLine > 20) {
+			return false;
+		}
+		const replacement = String(
+			edit.replacement ?? edit.replacementText ?? edit.text ?? edit.newText ?? "",
+		);
+		if (replacement.includes("__forceKillWebviewProcess")
+			|| replacement.includes("waitForProcessDeath")
+			|| replacement.includes("WEBVIEW_FORCE_KILL_ON_CLOSE")
+			|| replacement.includes("window.fnRemoveTab")) {
+			return false;
+		}
+		const lines = String(baseText || "").split("\n");
+		const slice = lines.slice(startLine - 1, endLine).join("\n");
+		const action = String(edit.action ?? edit.op ?? edit.operation ?? "edit").trim().toLowerCase();
+		return slice.includes("Mozilla/5.0")
+			|| slice.includes("AppleWebKit")
+			|| startLine <= 5
+			|| action === "delete"
+			|| action === "remove"
+			|| replacement.trim().length === 0;
+	}
+
+	function filterProtectedHeaderZoneEdits(baseText: string, textEdits: any[]): any[] {
+		if (!Array.isArray(textEdits) || textEdits.length === 0) {
+			return [];
+		}
+		return textEdits.filter((edit) => !isProtectedHeaderZoneEdit(baseText, edit as Record<string, unknown>));
+	}
+
+	function applyTextEditsToDraft(baseText: string, textEdits: any[]): string {
 	if (!Array.isArray(textEdits) || textEdits.length === 0)
 		return baseText;
 	const lines = String(baseText || "").split("\n");
@@ -1462,14 +1509,38 @@ function applyTextEditsToDraft(baseText: string, textEdits: any[]): string {
 		}
 		return Number(edit?.endLine ?? edit?.range?.endLine ?? edit?.range?.end?.line ?? edit?.startLine ?? 1);
 	};
-	const getReplacement = (edit: any): string => String(edit?.replacement ?? edit?.text ?? edit?.newText ?? "");
+	const getReplacement = (edit: any): string => String(edit?.replacement ?? edit?.replacementText ?? edit?.text ?? edit?.newText ?? edit?.replace ?? edit?.content ?? "");
+
+	const resolveEditAction = (edit: any): "add" | "delete" | "edit" => {
+		const action = String(edit?.action || "").trim().toLowerCase();
+		if (action.includes("delete") || action.includes("remove")) {
+			return "delete";
+		}
+		if (action.includes("insert") || action.includes("add") || action.includes("create")) {
+			return "add";
+		}
+		const replacement = getReplacement(edit);
+		const startLine = Math.max(1, normalizeLine(edit, "start"));
+		const endLine = Math.max(startLine, normalizeLine(edit, "end"));
+		if (!replacement.trim() && endLine >= startLine) {
+			return "delete";
+		}
+		return "edit";
+	};
 
 	const sorted = [...textEdits].sort((a, b) => normalizeLine(b, "start") - normalizeLine(a, "start"));
 	for (const edit of sorted) {
 		const startLine = Math.max(1, normalizeLine(edit, "start"));
 		const endLine = Math.max(startLine, normalizeLine(edit, "end"));
 		const replacementLines = getReplacement(edit).split("\n");
-		lines.splice(startLine - 1, endLine - startLine + 1, ...replacementLines);
+		const editAction = resolveEditAction(edit);
+		if (editAction === "add") {
+			lines.splice(startLine - 1, 0, ...replacementLines);
+		} else if (editAction === "delete") {
+			lines.splice(startLine - 1, endLine - startLine + 1);
+		} else {
+			lines.splice(startLine - 1, endLine - startLine + 1, ...replacementLines);
+		}
 	}
 	return lines.join("\n");
 }
@@ -1489,7 +1560,9 @@ function validateStructuredTextEdits(baseText: string, textEdits: any[]): { vali
 		const endRaw = Number(edit?.endLine ?? edit?.range?.endLine ?? edit?.range?.end?.line ?? startRaw);
 		const startLine = Math.max(1, Number.isFinite(startRaw) ? Math.floor(startRaw) : 1);
 		const endLine = Math.max(startLine, Number.isFinite(endRaw) ? Math.floor(endRaw) : startLine);
-		const replacement = String(edit?.replacement ?? edit?.text ?? edit?.newText ?? "");
+		const replacement = String(
+			edit?.replacement ?? edit?.replacementText ?? edit?.text ?? edit?.newText ?? edit?.replace ?? edit?.content ?? "",
+		);
 		return {
 			...edit,
 			startLine,
@@ -1528,7 +1601,7 @@ function summarizeTextEditOperations(textEdits: any[]): { addCount: number, edit
 	let deleteCount = 0;
 	for (const edit of Array.isArray(textEdits) ? textEdits : []) {
 		const action = String(edit?.action || "").trim().toLowerCase();
-		const replacement = String(edit?.replacement ?? edit?.text ?? edit?.newText ?? "");
+		const replacement = String(edit?.replacement ?? edit?.replacementText ?? edit?.text ?? edit?.newText ?? edit?.replace ?? edit?.content ?? "");
 		const startLine = Number(edit?.startLine ?? edit?.range?.startLine ?? edit?.range?.start?.line ?? edit?.line ?? 1);
 		const endLine = Number(edit?.endLine ?? edit?.range?.endLine ?? edit?.range?.end?.line ?? startLine);
 		const removedLines = Math.max(0, Math.floor((Number.isFinite(endLine) ? endLine : startLine) - (Number.isFinite(startLine) ? startLine : 1) + 1));
@@ -1783,6 +1856,26 @@ function resolvePersistedAssistantDisplayText(params: {
 	return buildMenuSummaryFromPersistedContext(params);
 }
 
+function classifyTextEditAction(edit: any, baseLines?: string[]): "add" | "delete" | "edit" {
+	const action = String(edit?.action || "").trim().toLowerCase();
+	if (action.includes("delete") || action.includes("remove")) {
+		return "delete";
+	}
+	if (action.includes("insert") || action.includes("add") || action.includes("create")) {
+		return "add";
+	}
+	const replacement = String(edit?.replacement ?? edit?.replacementText ?? edit?.text ?? edit?.newText ?? edit?.replace ?? edit?.content ?? "");
+	const startLine = Math.max(1, Math.floor(Number(edit?.startLine ?? edit?.line ?? 1)));
+	const endLine = Math.max(startLine, Math.floor(Number(edit?.endLine ?? startLine)));
+	if (!replacement.trim() && endLine >= startLine) {
+		return "delete";
+	}
+	if (replacement.trim() && endLine === startLine && baseLines && !baseLines[startLine - 1]) {
+		return "add";
+	}
+	return "edit";
+}
+
 function buildStructuredEditCompletionSummary(params: {
 	contextType: "code" | "menu_json"
 	stepResultCount: number
@@ -1792,6 +1885,7 @@ function buildStructuredEditCompletionSummary(params: {
 	deleteCount: number
 	reviewRequired: boolean
 	uiText: (vi: string, en: string, zh: string) => string
+	detailLines?: string[]
 }): string {
 	const {
 		contextType,
@@ -1802,33 +1896,73 @@ function buildStructuredEditCompletionSummary(params: {
 		deleteCount,
 		reviewRequired,
 		uiText,
+		detailLines,
 	} = params;
 	const effectiveAcceptedCount = Math.max(0, acceptedCount || stepResultCount || 0);
 	const opsSummary = `+${Math.max(0, addCount)} ~${Math.max(0, editCount)} -${Math.max(0, deleteCount)}`;
+	const detailBlock = Array.isArray(detailLines) && detailLines.length > 0
+		? `\n\n${detailLines.join("\n")}`
+		: "";
 	if (contextType === "menu_json") {
 		return reviewRequired
 			? uiText(
-				`Đã áp ${effectiveAcceptedCount} bước cập nhật menu vào editor. Tóm tắt thay đổi: ${opsSummary}. Một số bước đang chờ duyệt thủ công.`,
-				`Applied ${effectiveAcceptedCount} menu update steps to the editor. Change summary: ${opsSummary}. Some steps are waiting for manual approval.`,
-				`已将 ${effectiveAcceptedCount} 个菜单更新步骤应用到编辑器。变更摘要：${opsSummary}。部分步骤仍在等待人工批准。`,
+				`Đã áp ${effectiveAcceptedCount} bước cập nhật menu vào editor. Tóm tắt thay đổi: ${opsSummary}. Một số bước đang chờ duyệt thủ công.${detailBlock}`,
+				`Applied ${effectiveAcceptedCount} menu update steps to the editor. Change summary: ${opsSummary}. Some steps are waiting for manual approval.${detailBlock}`,
+				`已将 ${effectiveAcceptedCount} 个菜单更新步骤应用到编辑器。变更摘要：${opsSummary}。部分步骤仍在等待人工批准。${detailBlock}`,
 			)
 			: uiText(
-				`Đã áp ${effectiveAcceptedCount} bước cập nhật menu vào editor. Tóm tắt thay đổi: ${opsSummary}.`,
-				`Applied ${effectiveAcceptedCount} menu update steps to the editor. Change summary: ${opsSummary}.`,
-				`已将 ${effectiveAcceptedCount} 个菜单更新步骤应用到编辑器。变更摘要：${opsSummary}。`,
+				`Đã áp ${effectiveAcceptedCount} bước cập nhật menu vào editor. Tóm tắt thay đổi: ${opsSummary}.${detailBlock}`,
+				`Applied ${effectiveAcceptedCount} menu update steps to the editor. Change summary: ${opsSummary}.${detailBlock}`,
+				`已将 ${effectiveAcceptedCount} 个菜单更新步骤应用到编辑器。变更摘要：${opsSummary}。${detailBlock}`,
 			);
 	}
 	return reviewRequired
 		? uiText(
-			`Đã áp ${effectiveAcceptedCount} bước chỉnh sửa vào editor. Tóm tắt thay đổi: ${opsSummary}. Một số bước đang chờ duyệt thủ công.`,
-			`Applied ${effectiveAcceptedCount} edit steps to the editor. Change summary: ${opsSummary}. Some steps are waiting for manual approval.`,
-			`已将 ${effectiveAcceptedCount} 个编辑步骤应用到编辑器。变更摘要：${opsSummary}。部分步骤仍在等待人工批准。`,
+			`Đã áp ${effectiveAcceptedCount} bước chỉnh sửa vào editor. Tóm tắt thay đổi: ${opsSummary}. Một số bước đang chờ duyệt thủ công.${detailBlock}`,
+			`Applied ${effectiveAcceptedCount} edit steps to the editor. Change summary: ${opsSummary}. Some steps are waiting for manual approval.${detailBlock}`,
+			`已将 ${effectiveAcceptedCount} 个编辑步骤应用到编辑器。变更摘要：${opsSummary}。部分步骤仍在等待人工批准。${detailBlock}`,
 		)
 		: uiText(
-			`Đã áp ${effectiveAcceptedCount} bước chỉnh sửa vào editor. Tóm tắt thay đổi: ${opsSummary}.`,
-			`Applied ${effectiveAcceptedCount} edit steps to the editor. Change summary: ${opsSummary}.`,
-			`已将 ${effectiveAcceptedCount} 个编辑步骤应用到编辑器。变更摘要：${opsSummary}。`,
+			`Đã áp ${effectiveAcceptedCount} bước chỉnh sửa vào editor. Tóm tắt thay đổi: ${opsSummary}.${detailBlock}`,
+			`Applied ${effectiveAcceptedCount} edit steps to the editor. Change summary: ${opsSummary}.${detailBlock}`,
+			`已将 ${effectiveAcceptedCount} 个编辑步骤应用到编辑器。变更摘要：${opsSummary}。${detailBlock}`,
 		);
+}
+
+function buildLifecycleCodeEditSummary(params: {
+	appliedCount: number
+	addCount: number
+	editCount: number
+	deleteCount: number
+	regionHint?: string
+	uiText: (vi: string, en: string, zh: string) => string
+}): string {
+	const { appliedCount, addCount, editCount, deleteCount, regionHint, uiText } = params;
+	const opsSummary = `+${Math.max(0, addCount)} ~${Math.max(0, editCount)} -${Math.max(0, deleteCount)}`;
+	const region = regionHint || "fnRemoveTab / webview lifecycle";
+	return uiText(
+		`Đã vá lỗi lifecycle webview trong DynamicCode (${appliedCount} thay đổi, vùng ${region}).\n\n` +
+		`Local AI đã làm:\n` +
+		`• Thêm helper force-kill process webview khi tab đóng nhưng process còn treo\n` +
+		`• Lấy processId qua webview.getProcessId() trong fnRemoveTab\n` +
+		`• Gọi terminate() rồi force-kill (SIGKILL/taskkill) nếu process vẫn sống sau 3 giây\n` +
+		`• Giảm rủi ro proxy hết hạn và quá tải do process zombie\n\n` +
+		`Tóm tắt thay đổi: ${opsSummary}. CodeMirror đã được cập nhật trực tiếp.`,
+		`Patched webview lifecycle in DynamicCode (${appliedCount} changes, region ${region}).\n\n` +
+		`Local AI:\n` +
+		`• Added force-kill helpers when a tab closes but the renderer process hangs\n` +
+		`• Reads processId via webview.getProcessId() in fnRemoveTab\n` +
+		`• Calls terminate() then force-kills if the process is still alive after 3s\n` +
+		`• Reduces proxy expiry / overload from zombie processes\n\n` +
+		`Change summary: ${opsSummary}. CodeMirror was updated live.`,
+		`已在 DynamicCode 中修复 webview 生命周期（${appliedCount} 处变更，区域 ${region}）。\n\n` +
+		`本地 AI：\n` +
+		`• 添加 tab 关闭后 renderer 进程挂起时的 force-kill 辅助函数\n` +
+		`• 在 fnRemoveTab 中通过 webview.getProcessId() 获取 processId\n` +
+		`• 调用 terminate()，3 秒后仍存活则 force-kill\n` +
+		`• 降低僵尸进程导致代理过期/过载的风险\n\n` +
+		`变更摘要：${opsSummary}。已实时更新 CodeMirror。`,
+	);
 }
 
 function buildCodeOperationPreviewLines(baseText: string, textEdits: any[], maxItems = 20): LocalFlowOperationLine[] {
@@ -1841,7 +1975,7 @@ function buildCodeOperationPreviewLines(baseText: string, textEdits: any[], maxI
 		}
 		return Number(edit?.endLine ?? edit?.range?.endLine ?? edit?.range?.end?.line ?? edit?.startLine ?? 1);
 	};
-	const getReplacement = (edit: any): string => String(edit?.replacement ?? edit?.text ?? edit?.newText ?? "");
+	const getReplacement = (edit: any): string => String(edit?.replacement ?? edit?.replacementText ?? edit?.text ?? edit?.newText ?? edit?.replace ?? edit?.content ?? "");
 
 	const lines: LocalFlowOperationLine[] = [];
 	for (const edit of Array.isArray(textEdits) ? textEdits : []) {
@@ -1887,7 +2021,7 @@ interface ComposerActivityItem {
 }
 
 interface ComposerDiffLine {
-	kind: "add" | "del" | "ctx"
+	kind: "add" | "del" | "ctx" | "label"
 	text: string
 	lineNo?: number
 }
@@ -1897,6 +2031,24 @@ interface ComposerDiffBlock {
 	addCount: number
 	delCount: number
 	lines: ComposerDiffLine[]
+}
+
+function inferComposerDiffRegionLabel(edit: any): string {
+	const replacement = String(edit?.replacement ?? edit?.replacementText ?? edit?.text ?? edit?.newText ?? edit?.replace ?? edit?.content ?? "");
+	const startLine = Math.max(1, Math.floor(Number(edit?.startLine ?? edit?.line ?? 1)));
+	if (replacement.includes("__forceKillWebviewProcess") || replacement.includes("WEBVIEW_FORCE_KILL_ON_CLOSE")) {
+		return `Helper lifecycle webview · chèn trước L${startLine}`;
+	}
+	if (replacement.includes("getProcessId") || replacement.includes("processId")) {
+		return `fnRemoveTab · lấy PID · L${startLine}`;
+	}
+	if (replacement.includes("Terminate webview process") || replacement.includes("terminate()")) {
+		return `fnRemoveTab · terminate + force-kill · L${startLine}`;
+	}
+	if (replacement.includes("fnRemoveTab")) {
+		return `fnRemoveTab · L${startLine}`;
+	}
+	return `L${startLine}`;
 }
 
 function buildComposerDiffBlock(
@@ -1911,25 +2063,48 @@ function buildComposerDiffBlock(
 	let delCount = 0;
 	const normalizeStart = (edit: any) => Math.max(1, Math.floor(Number(edit?.startLine ?? edit?.line ?? 1)));
 	const normalizeEnd = (edit: any, start: number) => Math.max(start, Math.floor(Number(edit?.endLine ?? start)));
-	const getReplacement = (edit: any) => String(edit?.replacement ?? edit?.text ?? edit?.newText ?? "");
+	const getReplacement = (edit: any) => String(edit?.replacement ?? edit?.replacementText ?? edit?.text ?? edit?.newText ?? edit?.replace ?? edit?.content ?? "");
 
 	const sorted = [...(Array.isArray(textEdits) ? textEdits : [])].sort((a, b) => normalizeStart(a) - normalizeStart(b));
 	for (const edit of sorted) {
 		const startLine = normalizeStart(edit);
 		const endLine = normalizeEnd(edit, startLine);
 		const replacement = getReplacement(edit);
-		for (let i = startLine - 1; i < endLine && i < baseLines.length; i += 1) {
-			diffLines.push({ kind: "del", text: baseLines[i] ?? "", lineNo: i + 1 });
-			delCount += 1;
-			if (diffLines.length >= maxLines) {
-				break;
+		const editAction = classifyTextEditAction(edit, baseLines);
+		diffLines.push({ kind: "label", text: inferComposerDiffRegionLabel(edit) });
+		if (editAction === "add") {
+			if (startLine <= baseLines.length) {
+				diffLines.push({ kind: "ctx", text: baseLines[startLine - 1] ?? "", lineNo: startLine });
 			}
-		}
-		for (const line of replacement.split(/\r?\n/)) {
-			diffLines.push({ kind: "add", text: line });
-			addCount += 1;
-			if (diffLines.length >= maxLines) {
-				break;
+			for (const line of replacement.split(/\r?\n/)) {
+				diffLines.push({ kind: "add", text: line });
+				addCount += 1;
+				if (diffLines.length >= maxLines) {
+					break;
+				}
+			}
+		} else if (editAction === "delete") {
+			for (let i = startLine - 1; i < endLine && i < baseLines.length; i += 1) {
+				diffLines.push({ kind: "del", text: baseLines[i] ?? "", lineNo: i + 1 });
+				delCount += 1;
+				if (diffLines.length >= maxLines) {
+					break;
+				}
+			}
+		} else {
+			for (let i = startLine - 1; i < endLine && i < baseLines.length; i += 1) {
+				diffLines.push({ kind: "del", text: baseLines[i] ?? "", lineNo: i + 1 });
+				delCount += 1;
+				if (diffLines.length >= maxLines) {
+					break;
+				}
+			}
+			for (const line of replacement.split(/\r?\n/)) {
+				diffLines.push({ kind: "add", text: line });
+				addCount += 1;
+				if (diffLines.length >= maxLines) {
+					break;
+				}
 			}
 		}
 		if (diffLines.length >= maxLines) {
@@ -1971,6 +2146,7 @@ function summarizeComposerActivity(items: ComposerActivityItem[]): string {
 	const searches = items.filter(i => i.kind === "search").length;
 	const reads = items.filter(i => i.kind === "read").length;
 	const plans = items.filter(i => i.kind === "plan").length;
+	const edits = items.filter(i => i.kind === "edit").length;
 	const parts: string[] = [];
 	if (reads > 0) {
 		parts.push(`${reads} read${reads > 1 ? "s" : ""}`);
@@ -1980,6 +2156,9 @@ function summarizeComposerActivity(items: ComposerActivityItem[]): string {
 	}
 	if (plans > 0) {
 		parts.push(`${plans} plan step${plans > 1 ? "s" : ""}`);
+	}
+	if (edits > 0) {
+		parts.push(`${edits} edit${edits > 1 ? "s" : ""}`);
 	}
 	if (parts.length === 0) {
 		return `${items.length} step${items.length === 1 ? "" : "s"}`;
@@ -1991,6 +2170,7 @@ function summarizeComposerActivityVi(items: ComposerActivityItem[], uiText: (vi:
 	const searches = items.filter(i => i.kind === "search").length;
 	const reads = items.filter(i => i.kind === "read").length;
 	const plans = items.filter(i => i.kind === "plan").length;
+	const edits = items.filter(i => i.kind === "edit").length;
 	const parts: string[] = [];
 	if (reads > 0) {
 		parts.push(uiText(`${reads} lần đọc vùng`, `${reads} read${reads > 1 ? "s" : ""}`, `${reads} 次读取`));
@@ -2001,10 +2181,67 @@ function summarizeComposerActivityVi(items: ComposerActivityItem[], uiText: (vi:
 	if (plans > 0) {
 		parts.push(uiText(`${plans} bước plan`, `${plans} plan step${plans > 1 ? "s" : ""}`, `${plans} 个计划步骤`));
 	}
+	if (edits > 0) {
+		parts.push(uiText(`${edits} lần sửa vùng`, `${edits} edit${edits > 1 ? "s" : ""}`, `${edits} 次编辑`));
+	}
 	if (parts.length === 0) {
 		return uiText(`${items.length} bước`, `${items.length} step${items.length === 1 ? "" : "s"}`, `${items.length} 步`);
 	}
 	return parts.join(uiText(", ", ", ", "，"));
+}
+
+function summarizeRequestStatus(params: {
+	isLoading: boolean;
+	percent: number;
+	remainingSecs: number;
+	liveStepLabel: string;
+	completionSummaryLabel: string;
+	streamRequestId: string;
+}): string {
+	const { isLoading, percent, remainingSecs, liveStepLabel, completionSummaryLabel, streamRequestId } = params;
+	if (isLoading) {
+		const parts: string[] = [];
+		if (percent > 0) {
+			parts.push(`${Math.max(0, Math.min(100, percent))}%`);
+		}
+		if (remainingSecs > 0) {
+			parts.push(`~${remainingSecs}s`);
+		}
+		if (liveStepLabel) {
+			parts.push(liveStepLabel);
+		}
+		return parts.length > 0 ? parts.join(" · ") : "running";
+	}
+	const parts = [completionSummaryLabel].filter(Boolean);
+	if (streamRequestId) {
+		parts.push(streamRequestId.length > 18 ? `${streamRequestId.slice(0, 16)}…` : streamRequestId);
+	}
+	return parts.join(" · ") || "idle";
+}
+
+function summarizeRequestStatusVi(
+	params: Parameters<typeof summarizeRequestStatus>[0],
+	uiText: (vi: string, en: string, zh: string) => string,
+): string {
+	const { isLoading, percent, remainingSecs, liveStepLabel, completionSummaryLabel, streamRequestId } = params;
+	if (isLoading) {
+		const parts: string[] = [];
+		if (percent > 0) {
+			parts.push(`${Math.max(0, Math.min(100, percent))}%`);
+		}
+		if (remainingSecs > 0) {
+			parts.push(`~${remainingSecs}s`);
+		}
+		if (liveStepLabel) {
+			parts.push(liveStepLabel);
+		}
+		return parts.length > 0 ? parts.join(" · ") : uiText("đang chạy", "running", "运行中");
+	}
+	const parts = [completionSummaryLabel].filter(Boolean);
+	if (streamRequestId) {
+		parts.push(streamRequestId.length > 18 ? `${streamRequestId.slice(0, 16)}…` : streamRequestId);
+	}
+	return parts.join(" · ") || uiText("sẵn sàng", "ready", "就绪");
 }
 
 function summarizeChecklistForConfirm(rawChecklist: any): string {
@@ -2446,6 +2683,7 @@ export default function AiAssistantChat({
 	const [editTaskPlanCollapsed, setEditTaskPlanCollapsed] = useState(false);
 	const [composerActivity, setComposerActivity] = useState<ComposerActivityItem[]>([]);
 	const [composerActivityCollapsed, setComposerActivityCollapsed] = useState(false);
+	const [requestStatusCollapsed, setRequestStatusCollapsed] = useState(true);
 	const [composerDiffBlock, setComposerDiffBlock] = useState<ComposerDiffBlock | null>(null);
 	const [composerDiffCollapsed, setComposerDiffCollapsed] = useState(false);
 	const composerAppliedEditsRef = useRef<any[]>([]);
@@ -3427,6 +3665,12 @@ export default function AiAssistantChat({
 			|| reason.includes("final_output_gate")
 			|| reason.includes("ast_guard")
 			|| reason.includes("edit_apply_failed");
+		const destructiveSyntaxFailure = reason.includes("ast_guard")
+			|| reason.includes("unbalanced_paren")
+			|| reason.includes("unbalanced_brace")
+			|| reason.includes("unbalanced_bracket")
+			|| reason.includes("unclosed_string")
+			|| reason.includes("unclosed_comment");
 		if (!gateOrSyntaxFailure) {
 			if (textEditApplyCountRef.current > 0) {
 				return false;
@@ -3438,6 +3682,25 @@ export default function AiAssistantChat({
 		const startCode = editStreamStartCodeRef.current;
 		const applied = lastAppliedCodeRef.current ?? "";
 		if (!gateOrSyntaxFailure && startCode !== applied) {
+			return false;
+		}
+
+		// SSE line-edits already applied — keep editor unless syntax is structurally broken.
+		if (gateOrSyntaxFailure && textEditApplyCountRef.current > 0 && !destructiveSyntaxFailure) {
+			return false;
+		}
+
+		// Gate failed after a partial SSE apply — restore editor snapshot instead of leaving corrupt header edits.
+		if (gateOrSyntaxFailure && destructiveSyntaxFailure && textEditApplyCountRef.current > 0 && undoSnapshotRef.current && onCodeInsert) {
+			onCodeInsert(undoSnapshotRef.current);
+			liveCodeRef.current = undoSnapshotRef.current;
+			lastAppliedCodeRef.current = undoSnapshotRef.current;
+			textEditApplyCountRef.current = 0;
+			composerAppliedEditsRef.current = [];
+			setComposerDiffBlock(null);
+		}
+
+		if (!gateOrSyntaxFailure && textEditApplyCountRef.current > 0) {
 			return false;
 		}
 
@@ -3473,7 +3736,7 @@ export default function AiAssistantChat({
 			internalCode: String(opts.reasonCode || "EDIT_APPLY_FAILED").trim().toUpperCase(),
 		});
 		return true;
-	}, [buildEditApplyFailureNotice, resolveSystemNextStep, showSystemToast]);
+	}, [buildEditApplyFailureNotice, onCodeInsert, resolveSystemNextStep, showSystemToast]);
 
 	const appendModelDecisionTrace = useCallback((input: {
 		step: ModelDecisionTrace["step"]
@@ -3697,11 +3960,33 @@ export default function AiAssistantChat({
 	useEffect(() => {
 		if (completionState === "error" || completionState === "review_required") {
 			setIsUsageDockVisible(true);
+			setRequestStatusCollapsed(false);
 			return;
 		}
 		if (completionState === "done" || completionState === "idle" || completionState === "stream_closed" || completionState === "cancelled") {
 			setIsUsageDockVisible(false);
 		}
+	}, [completionState]);
+
+	useEffect(() => {
+		if (isLoading) {
+			setRequestStatusCollapsed(false);
+		}
+	}, [isLoading]);
+
+	useEffect(() => {
+		if (completionState === "done" || completionState === "stream_closed" || completionState === "cancelled") {
+			const timer = window.setTimeout(() => {
+				setRequestStatusCollapsed(true);
+				setComposerActivityCollapsed(true);
+			}, 4500);
+			return () => window.clearTimeout(timer);
+		}
+		if (completionState === "error") {
+			setComposerActivityCollapsed(false);
+			setRequestStatusCollapsed(false);
+		}
+		return undefined;
 	}, [completionState]);
 
 	// Persist final chat history to localStorage after stream completes so reload shows correct content.
@@ -4242,6 +4527,14 @@ export default function AiAssistantChat({
 		if (!hasValue)
 			return;
 
+		if (COMPOSER_PRIMARY_EDIT_TIMELINE && streamStartedInEditModeRef.current) {
+			const normalizedStatus = status.toLowerCase();
+			const normalizedStage = stage.toLowerCase();
+			if (normalizedStatus !== "error" && normalizedStatus !== "blocked" && normalizedStage !== "cancelled") {
+				return;
+			}
+		}
+
 		const overallPercentNum = Number(data?.overallPercent);
 		const percentNum = Number(data?.percent);
 		const currentNum = Number(data?.current);
@@ -4558,6 +4851,24 @@ export default function AiAssistantChat({
 		return "";
 	}, [buildDynamicIngestionParts, formatScopeReasoningLabel, stageEvents, uiText]);
 
+	const showRequestStatusPanel = isLoading || completionState !== "idle" || isUsageDockVisible;
+	const requestStatusSummaryParams = useMemo(() => ({
+		isLoading,
+		percent: geminiProgress.percent,
+		remainingSecs: geminiProgress.remainingSecs,
+		liveStepLabel: liveOrchestrationHintLabel || liveBackendStepLabel,
+		completionSummaryLabel,
+		streamRequestId: String(streamRequestId || "").trim(),
+	}), [
+		completionSummaryLabel,
+		geminiProgress.percent,
+		geminiProgress.remainingSecs,
+		isLoading,
+		liveBackendStepLabel,
+		liveOrchestrationHintLabel,
+		streamRequestId,
+	]);
+
 	const liveOrchestrationBadge = useMemo((): { label: string, tone: "scope" | "queued" | "indexed" | "retrieval_low" } | null => {
 		for (let i = stageEvents.length - 1; i >= 0; i -= 1) {
 			const event = stageEvents[i];
@@ -4631,10 +4942,44 @@ export default function AiAssistantChat({
 		[agenticSteps],
 	);
 
+	const useUnifiedComposerTimeline = COMPOSER_PRIMARY_EDIT_TIMELINE && activeStreamResponseMode === "edit";
+
+	const visibleAgenticSteps = useMemo(() => {
+		if (!COMPOSER_PRIMARY_EDIT_TIMELINE || activeStreamResponseMode !== "edit") {
+			return agenticSteps;
+		}
+		return agenticSteps.filter((step) => {
+			const stage = String(step.stage || "").trim();
+			if (COMPOSER_INTERNAL_AGENTIC_STAGES.has(stage) || stage.startsWith("edit_task_slice_")) {
+				return false;
+			}
+			if (stage.startsWith("agentic_step_") && !stage.includes("result")) {
+				return false;
+			}
+			if (step.approvalRequired || step.lowConfidence) {
+				return true;
+			}
+			return stage.includes("result") || stage.includes("completion") || stage.includes("audit");
+		});
+	}, [activeStreamResponseMode, agenticSteps]);
+
 	const pendingApprovalAgenticSteps = useMemo(
 		() => agenticSteps.filter(step => step.approvalRequired && step.approvalState === "pending"),
 		[agenticSteps],
 	);
+
+	const showLegacyProgressDock = useMemo(() => {
+		if (useUnifiedComposerTimeline) {
+			return pendingApprovalAgenticSteps.length > 0 || lowConfidenceAgenticSteps.length > 0;
+		}
+		return visibleAgenticSteps.length >= 1 || (SHOW_DETAILED_PROGRESS_TIMELINE && stageEvents.length > 0);
+	}, [
+		lowConfidenceAgenticSteps.length,
+		pendingApprovalAgenticSteps.length,
+		stageEvents.length,
+		useUnifiedComposerTimeline,
+		visibleAgenticSteps.length,
+	]);
 
 	useEffect(() => {
 		const shouldPersistReviewLoop = completionState === "review_required"
@@ -4905,7 +5250,8 @@ export default function AiAssistantChat({
 			if (!nextCode && baseCode) {
 				const rawEdits = parseTextEditsOnlyPayload(source);
 				if (rawEdits) {
-					const validation = validateStructuredTextEdits(baseCode, rawEdits);
+					const safeEdits = filterProtectedHeaderZoneEdits(baseCode, rawEdits);
+					const validation = validateStructuredTextEdits(baseCode, safeEdits);
 					if (validation.valid && validation.edits.length > 0) {
 						nextCode = applyTextEditsToDraft(baseCode, validation.edits);
 					}
@@ -5332,6 +5678,15 @@ export default function AiAssistantChat({
 	}, [appendStageEvent, geminiProgress.percent, geminiProgress.phase, isLoading, setAssistantLiveStatus, uiText]);
 
 	const appendAgenticStep = useCallback((partial: Omit<AgenticStep, "id" | "timestamp">) => {
+		if (COMPOSER_PRIMARY_EDIT_TIMELINE) {
+			const stage = String(partial.stage || "").trim();
+			if (COMPOSER_INTERNAL_AGENTIC_STAGES.has(stage) || stage.startsWith("edit_task_slice_")) {
+				return;
+			}
+			if (stage.startsWith("agentic_step_") && !stage.includes("result")) {
+				return;
+			}
+		}
 		setAgenticSteps((prev) => {
 			const existing = prev.findIndex(s => s.stage === partial.stage);
 			if (existing >= 0) {
@@ -5397,9 +5752,12 @@ export default function AiAssistantChat({
 			return;
 		}
 		const base = String(baseOverride ?? undoSnapshotRef.current ?? liveCodeRef.current ?? currentCode ?? "");
-		const fileLabel = targetPName
-			? `${targetPName}${contextType === "menu_json" ? ".json" : ".js"}`
-			: (contextType === "menu_json" ? "menu.json" : "editor.js");
+		const editorKey = targetPName
+			? `${String(targetPName).trim()}_t${typeof targetPType === "number" ? targetPType : 0}`
+			: (contextType === "menu_json" ? "menu" : "editor");
+		const fileLabel = contextType === "menu_json"
+			? uiText(`Menu JSON · ${editorKey}`, `Menu JSON · ${editorKey}`, `Menu JSON · ${editorKey}`)
+			: uiText(`DynamicCode · ${editorKey}`, `DynamicCode · ${editorKey}`, `DynamicCode · ${editorKey}`);
 		setComposerDiffBlock(buildComposerDiffBlock(base, edits, fileLabel));
 	}, [contextType, currentCode, targetPName]);
 
@@ -5631,7 +5989,6 @@ export default function AiAssistantChat({
 				? (modeDirective.overrideMode ?? "edit")
 				: modeDirective.overrideMode;
 			const requestedResponseMode: ResponseMode = explicitResponseMode ?? inferredResponseMode;
-			const sendExplicitResponseMode = Boolean(explicitResponseMode);
 			setActiveStreamResponseMode(requestedResponseMode);
 
 			// Add placeholder for assistant response
@@ -5752,7 +6109,7 @@ export default function AiAssistantChat({
 						uiLanguage: String(i18n.resolvedLanguage || i18n.language || "vi"),
 						flowType,
 						taskType,
-						...(sendExplicitResponseMode ? { responseMode: requestedResponseMode } : {}),
+						responseMode: requestedResponseMode,
 						currentCode: outgoingSnapshot.code,
 						language,
 						contextType,
@@ -6308,31 +6665,21 @@ export default function AiAssistantChat({
 									multiSlice: Boolean((evt as any).multiSliceExecution),
 									requestSummary: localizedEvtMessage || undefined,
 								});
-								setEditTaskPlanCollapsed(false);
+								setEditTaskPlanCollapsed(true);
+								const sliceSummary = normalizedSlices
+									.map((slice) => `L${slice.lineStart}–${slice.lineEnd}`)
+									.slice(0, 4)
+									.join(", ");
 								appendComposerActivity({
 									kind: "plan",
 									icon: "📋",
 									label: uiText(
-										`Lập kế hoạch ${normalizedSlices.length} vùng sửa${targetSymbols.length ? `: ${targetSymbols.slice(0, 3).join(", ")}` : ""}`,
-										`Planned ${normalizedSlices.length} edit regions${targetSymbols.length ? `: ${targetSymbols.slice(0, 3).join(", ")}` : ""}`,
-										`规划 ${normalizedSlices.length} 个编辑区域${targetSymbols.length ? `：${targetSymbols.slice(0, 3).join(", ")}` : ""}`,
+										`Lập kế hoạch ${normalizedSlices.length} vùng${targetSymbols.length ? `: ${targetSymbols.slice(0, 3).join(", ")}` : ""}${sliceSummary ? ` · ${sliceSummary}${normalizedSlices.length > 4 ? "…" : ""}` : ""}`,
+										`Planned ${normalizedSlices.length} edit regions${targetSymbols.length ? `: ${targetSymbols.slice(0, 3).join(", ")}` : ""}${sliceSummary ? ` · ${sliceSummary}${normalizedSlices.length > 4 ? "…" : ""}` : ""}`,
+										`规划 ${normalizedSlices.length} 个编辑区域${targetSymbols.length ? `：${targetSymbols.slice(0, 3).join(", ")}` : ""}${sliceSummary ? ` · ${sliceSummary}${normalizedSlices.length > 4 ? "…" : ""}` : ""}`,
 									),
 									status: "done",
 								});
-								for (const slice of normalizedSlices) {
-									const symHint = slice.symbols.length > 0 ? slice.symbols.slice(0, 2).join(", ") : slice.kind;
-									const fileLabel = targetPName || appId || "editor";
-									appendComposerActivity({
-										kind: "read",
-										icon: "📖",
-										label: uiText(
-											`Read ${fileLabel} · L${slice.lineStart}–${slice.lineEnd}${symHint ? ` · ${symHint}` : ""}`,
-											`Read ${fileLabel} · L${slice.lineStart}–${slice.lineEnd}${symHint ? ` · ${symHint}` : ""}`,
-											`Read ${fileLabel} · 第 ${slice.lineStart}–${slice.lineEnd} 行${symHint ? ` · ${symHint}` : ""}`,
-										),
-										status: "done",
-									});
-								}
 								appendAgenticStep({
 									stage: "edit_task_plan",
 									icon: "📋",
@@ -7168,15 +7515,28 @@ export default function AiAssistantChat({
 								}
 								if (!approvalRequired && !editorApplyDeferred && Array.isArray(stepTextEdits) && stepTextEdits.length > 0) {
 									const stepEvent = evt as Record<string, unknown>;
+									const codeBeforeApply = liveCodeRef.current || currentCode || "";
+									const safeStepEdits = filterProtectedHeaderZoneEdits(codeBeforeApply, stepTextEdits);
+									if (safeStepEdits.length === 0 && stepTextEdits.length > 0) {
+										appendComposerActivity({
+											kind: "apply",
+											icon: "⚠",
+											label: uiText(
+												"Chặn patch sai vùng header — không áp dụng qua agentic step",
+												"Blocked header-zone patch — skipped agentic step apply",
+												"已阻止头部区域补丁 — 跳过 agentic 步骤应用",
+											),
+											status: "done",
+										});
+									}
 									const stepCode = String(stepEvent.code || "").trim();
 									const editsPayload = stepCode
-										? JSON.stringify({ code: stepCode, textEdits: stepTextEdits })
-										: JSON.stringify({ textEdits: stepTextEdits });
-									const codeBeforeApply = liveCodeRef.current || currentCode || "";
-									if (applyRealtimeCodeFromText(editsPayload, true)) {
+										? JSON.stringify({ code: stepCode, textEdits: safeStepEdits })
+										: JSON.stringify({ textEdits: safeStepEdits });
+									if (safeStepEdits.length > 0 && applyRealtimeCodeFromText(editsPayload, true)) {
 										const codeAfterApply = liveCodeRef.current || currentCode || "";
 										if (codeAfterApply !== codeBeforeApply) {
-											textEditApplyCountRef.current += stepTextEdits.length;
+											textEditApplyCountRef.current += safeStepEdits.length;
 										}
 									}
 								}
@@ -7460,8 +7820,11 @@ export default function AiAssistantChat({
 							}
 							else if (evt.stage === "routing" && evt.responseMode) {
 								const mode = String(evt.responseMode).trim().toLowerCase();
-								setActiveStreamResponseMode(mode === "edit" ? "edit" : "analyze");
-								turnAllowAutoApplyRef.current = mode === "edit";
+								// Do not downgrade edit→analyze when this turn started as edit (client already sent responseMode).
+								if (!(streamStartedInEditModeRef.current && mode === "analyze")) {
+									setActiveStreamResponseMode(mode === "edit" ? "edit" : "analyze");
+									turnAllowAutoApplyRef.current = mode === "edit";
+								}
 							}
 							else if (evt.stage === "streaming" && evt.chunk) {
 								// Edit/menu patch: never stream raw LLM tokens into chat — apply via text_edit_apply only.
@@ -7496,6 +7859,7 @@ export default function AiAssistantChat({
 								: undefined;
 							const replacement = String(
 								rawEdit.replacement ??
+								rawEdit.replacementText ??
 								rawEdit.newText ??
 								rawEdit.text ??
 								rawEdit.replace ??
@@ -7510,6 +7874,20 @@ export default function AiAssistantChat({
 								replacement,
 								action,
 							};
+							const baseForGuard = liveCodeRef.current || currentCode || "";
+							if (isProtectedHeaderZoneEdit(baseForGuard, normalizedEdit)) {
+								appendComposerActivity({
+									kind: "apply",
+									icon: "⚠",
+									label: uiText(
+										`Chặn patch sai vùng (L${startLine}–${endLine}) — không sửa header DynamicCode`,
+										`Blocked out-of-scope patch (L${startLine}–${endLine}) — header zone protected`,
+										`已阻止越界补丁（第 ${startLine}–${endLine} 行）— 保护 DynamicCode 头部`,
+									),
+									status: "done",
+								});
+								continue;
+							}
 							turnAllowAutoApplyRef.current = true;
 							localFlowVerifiedRef.current = true;
 							let appliedEdit = false;
@@ -7579,6 +7957,22 @@ export default function AiAssistantChat({
 									if (finalCode && finalCode !== lastAppliedCodeRef.current) {
 										onCodeInsert(finalCode);
 										lastAppliedCodeRef.current = finalCode;
+									}
+								}
+								const appliedEdits = composerAppliedEditsRef.current;
+								if (onCitationNavigate && appliedEdits.length > 0) {
+									const firstLine = appliedEdits.reduce((min, edit) => {
+										const line = Math.max(1, Math.floor(Number(edit?.startLine ?? edit?.line ?? 1)));
+										return line < min ? line : min;
+									}, Number.POSITIVE_INFINITY);
+									const joined = appliedEdits.map(e => String(e?.replacement ?? "")).join("\n");
+									const token = joined.includes("__forceKillWebviewProcess")
+										? "__forceKillWebviewProcess"
+										: joined.includes("fnRemoveTab")
+											? "fnRemoveTab"
+											: "fnRemoveTab";
+									if (Number.isFinite(firstLine) && firstLine > 0) {
+										onCitationNavigate({ line: firstLine, token });
 									}
 								}
 								if (SHOW_DETAILED_PROGRESS_TIMELINE && count > 0) {
@@ -7661,19 +8055,28 @@ export default function AiAssistantChat({
 									|| String(completionEventMeta["status"] || "").trim().toLowerCase() === "edit_apply_failed";
 								const agenticStepResultCount = Math.max(0, Number(completionEventMeta["agenticStepResultCount"] || 0));
 								const agenticStepAcceptedCount = Math.max(0, Number(completionEventMeta["agenticStepAcceptedCount"] || 0));
+								const streamedTextEditCount = Math.max(
+									textEditApplyCountRef.current,
+									Number(completionEventMeta["codeStreamTextEditsEmittedCount"] || 0),
+									Number(completionEventMeta["appliedTextEditCount"] || 0),
+								);
+								const lifecyclePatchApplied = completionEventMeta["editDeterministicLifecyclePatchApplied"] === true
+									|| completionEventMeta["deterministicLifecyclePatchApplied"] === true;
 								const qualityGateEarlyAudit = Boolean(completionEventMeta["qualityGateEarlyAudit"] === true);
 								const menuEditorApplyReady = Boolean(completionEventMeta["menuEditorApplyReady"] === true);
 								const completionTextEditsCount = Math.max(
 									0,
 									Number(completionEventMeta["textEditsCount"] || 0),
 								);
-								const completionTextEdits = Array.isArray(evt.textEdits) && evt.textEdits.length > 0
-									? evt.textEdits
-									: parseTextEditsOnlyPayload(evt.fullResponse || "") || [];
+								const completionTextEdits = composerAppliedEditsRef.current.length > 0
+									? composerAppliedEditsRef.current
+									: (Array.isArray(evt.textEdits) && evt.textEdits.length > 0
+										? evt.textEdits
+										: parseTextEditsOnlyPayload(evt.fullResponse || "") || []);
 								const completionPatchOps = effectiveContextType === "menu_json" && Array.isArray(evt.patchOps)
 									? evt.patchOps
 									: [];
-								const hasStructuredStepResults = agenticStepResultCount > 0;
+								const hasStructuredStepResults = agenticStepResultCount > 0 || streamedTextEditCount > 0;
 								const completionMergeStats = evt.mergeStats;
 								const completionPatchOpCount = Math.max(
 									0,
@@ -7687,16 +8090,27 @@ export default function AiAssistantChat({
 									|| (completionMergeStats && typeof completionMergeStats === "object");
 								const localFlowVerified = Boolean(
 									evt.flowConfirmedByLocal === true
-									|| (evt.localProviderPrimaryUsed === true && isMainFlow),
+									|| (evt.localProviderPrimaryUsed === true && isMainFlow)
+									|| (isEditModeEvt && (textEditApplyCountRef.current > 0 || streamedTextEditCount > 0)),
 								);
 								const blockAutoApplyByRisk = Boolean((evt as any).editRiskBlockAutoApply === true);
 								localFlowVerifiedRef.current = localFlowVerified && isEditModeEvt && !blockAutoApplyByRisk;
 								let completionOpSummary = { addCount: 0, editCount: 0, deleteCount: 0 };
+								const effectiveAppliedStepCount = Math.max(
+									agenticStepAcceptedCount,
+									agenticStepResultCount,
+									streamedTextEditCount,
+									completionTextEdits.length,
+								);
 
 								if (localFlowVerifiedRef.current) {
 									if (effectiveContextType === "code") {
 										completionOpSummary = summarizeTextEditOperations(completionTextEdits);
-										setLocalFlowOpLines(buildCodeOperationPreviewLines(currentCode, completionTextEdits, 20));
+										setLocalFlowOpLines(buildCodeOperationPreviewLines(
+											undoSnapshotRef.current || currentCode,
+											completionTextEdits,
+											20,
+										));
 									}
 									else if (effectiveContextType === "menu_json") {
 										if (completionMergeStats && typeof completionMergeStats === "object") {
@@ -7817,6 +8231,7 @@ export default function AiAssistantChat({
 								const falseEditSuccess = (isEditModeEvt || streamStartedInEditModeRef.current)
 									&& isMainFlow
 									&& !reviewRequired
+									&& textEditApplyCountRef.current <= 0
 									&& (
 										gateRejectedEarly
 										|| completionOpTotal === 0 && textEditApplyCountRef.current === 0
@@ -7833,6 +8248,22 @@ export default function AiAssistantChat({
 								const resolveMenuCompletionChatText = () => {
 									if (backendAssistantSummary)
 										return backendAssistantSummary;
+									if (lifecyclePatchApplied && effectiveContextType === "code") {
+										const firstLine = completionTextEdits.reduce((min, edit) => {
+											const line = Math.max(1, Math.floor(Number(edit?.startLine ?? edit?.line ?? 1)));
+											return line < min ? line : min;
+										}, Number.POSITIVE_INFINITY);
+										return buildLifecycleCodeEditSummary({
+											appliedCount: effectiveAppliedStepCount,
+											addCount: completionOpSummary.addCount,
+											editCount: completionOpSummary.editCount,
+											deleteCount: completionOpSummary.deleteCount,
+											regionHint: Number.isFinite(firstLine) && firstLine > 0
+												? `fnRemoveTab · L${firstLine}`
+												: "fnRemoveTab",
+											uiText,
+										});
+									}
 									if (qualityGateEarlyAudit && effectiveContextType === "menu_json") {
 										return buildMenuAuditCompletionSummary({
 											userRequest: lastUserRequestRef.current,
@@ -7840,15 +8271,15 @@ export default function AiAssistantChat({
 											addCount: completionOpSummary.addCount,
 											editCount: completionOpSummary.editCount,
 											deleteCount: completionOpSummary.deleteCount,
-											acceptedSteps: Math.max(1, agenticStepAcceptedCount || agenticStepResultCount || 1),
+											acceptedSteps: Math.max(1, agenticStepAcceptedCount || agenticStepResultCount || effectiveAppliedStepCount || 1),
 											reviewRequired,
 											uiText,
 										});
 									}
 									return buildStructuredEditCompletionSummary({
 										contextType: effectiveContextType === "menu_json" ? "menu_json" : "code",
-										stepResultCount: agenticStepResultCount,
-										acceptedCount: agenticStepAcceptedCount,
+										stepResultCount: effectiveAppliedStepCount,
+										acceptedCount: Math.max(agenticStepAcceptedCount, streamedTextEditCount),
 										addCount: completionOpSummary.addCount,
 										editCount: completionOpSummary.editCount,
 										deleteCount: completionOpSummary.deleteCount,
@@ -8898,10 +9329,129 @@ export default function AiAssistantChat({
 
 				</div>
 
-				{(isLoading || composerActivity.length > 0 || composerDiffBlock) && (
-					<div className={styles.composerPanel}>
+				{(showRequestStatusPanel || composerActivity.length > 0 || composerDiffBlock) && (
+					<div className={[
+						styles.composerPanel,
+						useUnifiedComposerTimeline ? styles.composerPanel_unified : "",
+					].filter(Boolean).join(" ")}
+					>
+						<div className={useUnifiedComposerTimeline ? styles.composerUnifiedCard : undefined}>
+						{showRequestStatusPanel && (
+							<div className={[
+								styles.composerActivityBlock,
+								useUnifiedComposerTimeline ? styles.composerUnifiedSection : "",
+								completionState === "error" ? styles.composerRequestStatus_error : "",
+								completionState === "stream_closed" ? styles.composerRequestStatus_warning : "",
+							].filter(Boolean).join(" ")}
+							>
+								<div className={styles.composerRequestStatusHeader}>
+									<button
+										type="button"
+										className={styles.composerActivityHeader}
+										onClick={() => setRequestStatusCollapsed(c => !c)}
+									>
+										<span className={styles.composerActivityTitle}>
+											{isLoading
+												? uiText(
+													`Đang xử lý · ${summarizeRequestStatusVi(requestStatusSummaryParams, uiText)}`,
+													`Processing · ${summarizeRequestStatus(requestStatusSummaryParams)}`,
+													`处理中 · ${summarizeRequestStatusVi(requestStatusSummaryParams, uiText)}`,
+												)
+												: uiText(
+													`Trạng thái request · ${summarizeRequestStatusVi(requestStatusSummaryParams, uiText)}`,
+													`Request status · ${summarizeRequestStatus(requestStatusSummaryParams)}`,
+													`请求状态 · ${summarizeRequestStatusVi(requestStatusSummaryParams, uiText)}`,
+												)}
+										</span>
+										<span className={styles.composerCollapseHint}>
+											{requestStatusCollapsed ? "▼" : "▲"}
+										</span>
+									</button>
+									{isLoading && (
+										<Button
+											type="text"
+											size="small"
+											danger
+											icon={<CloseOutlined />}
+											className={styles.composerRequestCancelBtn}
+											onClick={handleCancelRequest}
+										>
+											{uiText("Hủy", "Cancel", "取消")}
+										</Button>
+									)}
+								</div>
+								{isLoading && geminiProgress.phase !== "idle" && (
+									<div className={styles.composerRequestProgressTrack}>
+										<div
+											className={styles.composerRequestProgressFill}
+											style={{ width: `${Math.max(2, Math.min(100, geminiProgress.percent))}%` }}
+										/>
+									</div>
+								)}
+								{!requestStatusCollapsed && (
+									<div className={styles.composerStatusDetail}>
+										{streamRequestId && (
+											<div className={styles.composerStatusRow}>
+												<span>requestId</span>
+												<button type="button" className={styles.composerStatusCopyBtn} onClick={handleCopyRequestId}>
+													{streamRequestId}
+													<CopyOutlined />
+												</button>
+											</div>
+										)}
+										{isLoading && liveBackendStepLabel && (
+											<div className={styles.composerStatusRow}>
+												<span>{uiText("Bước hiện tại", "Current step", "当前步骤")}</span>
+												<span>{liveBackendStepLabel}</span>
+											</div>
+										)}
+										{isLoading && geminiProgress.charsReceived > 0 && (
+											<div className={styles.composerStatusRow}>
+												<span>{uiText("Đã nhận", "Received", "已接收")}</span>
+												<span>{`${geminiProgress.charsReceived.toLocaleString()} ${uiText("ký tự", "chars", "字符")}`}</span>
+											</div>
+										)}
+										{!isLoading && completionSummaryLabel && (
+											<div className={styles.composerStatusRow}>
+												<span>{uiText("Kết quả", "Result", "结果")}</span>
+												<Tooltip title={completionDetailTooltip || completionSummaryLabel}>
+													<span>{completionSummaryLabel}</span>
+												</Tooltip>
+											</div>
+										)}
+										{completionState === "error" && completionErrorMessage && (
+											<div className={styles.composerStatusRow}>
+												<span>{uiText("Lý do", "Reason", "原因")}</span>
+												<span>{completionErrorMessage}</span>
+											</div>
+										)}
+										{completionMetrics.patchFallbackNoOp === true && (
+											<div className={styles.composerStatusRow}>
+												<span>{uiText("Patch", "Patch", "补丁")}</span>
+												<span>{uiText("fallback no-op", "fallback no-op", "回退 no-op")}</span>
+											</div>
+										)}
+										{localFlowOps && (
+											<div className={styles.composerStatusRow}>
+												<span>{uiText("Local flow", "Local flow", "本地流程")}</span>
+												<span>
+													{localFlowOps.verified
+														? `${localFlowOps.flow === "menu_json" ? "MENU" : "CODE"} +${localFlowOps.addCount} ~${localFlowOps.editCount} -${localFlowOps.deleteCount}`
+														: uiText("chưa xác nhận", "not verified", "未确认")}
+												</span>
+											</div>
+										)}
+									</div>
+								)}
+							</div>
+						)}
+
 						{composerActivity.length > 0 && (
-							<div className={styles.composerActivityBlock}>
+							<div className={[
+								styles.composerActivityBlock,
+								useUnifiedComposerTimeline ? styles.composerUnifiedSection : "",
+							].filter(Boolean).join(" ")}
+							>
 								<button
 									type="button"
 									className={styles.composerActivityHeader}
@@ -8941,7 +9491,11 @@ export default function AiAssistantChat({
 						)}
 
 						{composerDiffBlock && composerDiffBlock.lines.length > 0 && (
-							<div className={styles.composerDiffBlock}>
+							<div className={[
+								styles.composerDiffBlock,
+								useUnifiedComposerTimeline ? styles.composerUnifiedSection : "",
+							].filter(Boolean).join(" ")}
+							>
 								<button
 									type="button"
 									className={styles.composerDiffHeader}
@@ -8965,10 +9519,11 @@ export default function AiAssistantChat({
 													styles.composerDiffLine,
 													line.kind === "add" ? styles.composerDiffLine_add : "",
 													line.kind === "del" ? styles.composerDiffLine_del : "",
+													line.kind === "label" ? styles.composerDiffLine_label : "",
 												].filter(Boolean).join(" ")}
 											>
 												<span className={styles.composerDiffPrefix}>
-													{line.kind === "add" ? "+" : line.kind === "del" ? "-" : " "}
+													{line.kind === "add" ? "+" : line.kind === "del" ? "-" : line.kind === "label" ? "▸" : " "}
 												</span>
 												{line.lineNo ? (
 													<span className={styles.composerDiffLineNo}>{line.lineNo}</span>
@@ -8980,6 +9535,76 @@ export default function AiAssistantChat({
 								)}
 							</div>
 						)}
+
+						{isUsageDockVisible && !requestStatusCollapsed && showRequestStatusPanel
+							&& (completionState === "error" || completionState === "review_required" || localFlowOps || streamRequestId)
+							&& (quickFixSuggestions.length > 0 || editCandidates.length > 0 || (localFlowOps?.verified && localFlowOpLines.length > 0)) && (
+							<div className={styles.composerStatusUsageBody}>
+								{localFlowOps?.verified && localFlowOps.flow === "code" && filteredLocalFlowOpLines.length > 0 && (
+									<div className={styles.localOpsPreview}>
+										<div className={styles.localOpsPreviewHeader}>
+											<div className={styles.localOpsPreviewTitle}>
+												{uiText("Preview thay đổi", "Change preview", "变更预览")}
+											</div>
+										</div>
+										<div className={styles.localOpsPreviewList}>
+											{filteredLocalFlowOpLines.slice(0, 8).map((line, idx) => (
+												<div
+													key={`${line.action}_${line.lineLabel}_${idx}`}
+													className={`${styles.localOpsLine} ${styles[`localOpsLine_${line.action}`] || ""}`.trim()}
+												>
+													<span className={styles.localOpsLineTag}>
+														{line.action === "add" ? "+" : line.action === "delete" ? "-" : "~"}
+														{" "}
+														{line.lineLabel}
+													</span>
+													<span className={styles.localOpsLineText}>{renderOperationSnippetText(line.snippet)}</span>
+												</div>
+											))}
+										</div>
+									</div>
+								)}
+								{quickFixSuggestions.length > 0 && (
+									<div className={styles.quickFixPanel}>
+										<div className={styles.quickFixPanelHeader}>
+											{uiText("Quick-fix", "Quick-fix", "Quick-fix")}
+										</div>
+										<div className={styles.quickFixList}>
+											{quickFixSuggestions.slice(0, 3).map((fix) => (
+												<div key={fix.id} className={styles.quickFixItem}>
+													<div className={styles.quickFixText}>
+														<div className={styles.quickFixTitle}>{fix.title}</div>
+													</div>
+													<Button size="small" type="primary" onClick={() => applyQuickFixSuggestion(fix)}>
+														{uiText("Áp dụng", "Apply", "应用")}
+													</Button>
+												</div>
+											))}
+										</div>
+									</div>
+								)}
+								{editCandidates.length > 0 && completionState !== "error" && (
+									<div className={styles.quickFixPanel}>
+										<div className={styles.quickFixPanelHeader}>
+											{uiText("Patch candidates", "Patch candidates", "Patch 候选")}
+										</div>
+										<div className={styles.quickFixList}>
+											{editCandidates.slice(0, 2).map((candidate) => (
+												<div key={candidate.id} className={styles.quickFixItem}>
+													<div className={styles.quickFixText}>
+														<div className={styles.quickFixTitle}>{candidate.title}</div>
+													</div>
+													<Button size="small" type="primary" onClick={() => applyEditCandidate(candidate)}>
+														{uiText("Áp dụng", "Apply", "应用")}
+													</Button>
+												</div>
+											))}
+										</div>
+									</div>
+								)}
+							</div>
+						)}
+						</div>
 					</div>
 				)}
 
@@ -9003,229 +9628,9 @@ export default function AiAssistantChat({
 					</div>
 				)}
 
-				{(isLoading || completionState !== "idle") && (
+				{showLegacyProgressDock && (
 					<div className={styles.progressDock}>
-						{isProgressDockCollapsed && !isLoading && completionSummaryLabel && (
-							<div className={styles.progressDockCollapsedBar}>
-								<div className={styles.progressCompletionMain}>
-									<span className={styles.progressCompletionTitle}>
-										{uiText("Kết thúc xử lý", "Processing finished", "处理已结束")}
-									</span>
-									<span className={styles.progressCompletionStats}>{completionSummaryLabel}</span>
-									{streamRequestId && (
-										<span className={styles.progressRequestId}>
-											req
-											{streamRequestId}
-										</span>
-									)}
-								</div>
-								<div className={styles.progressCollapsedActions}>
-									{streamRequestId && (
-										<Button
-											type="text"
-											size="small"
-											icon={<CopyOutlined />}
-											className={styles.requestActionBtn}
-											onClick={handleCopyRequestId}
-											title={uiText("Sao chép requestId", "Copy requestId", "复制 requestId")}
-										/>
-									)}
-									<Button
-										type="link"
-										size="small"
-										className={styles.compactToggleBtn}
-										onClick={() => setIsProgressDockCollapsed(false)}
-									>
-										{uiText("Mở lại", "Expand", "展开")}
-									</Button>
-								</div>
-							</div>
-						)}
-						{!isProgressDockCollapsed && isLoading && geminiProgress.phase !== "idle" && (
-							showMiniProgress
-								? (
-									<div className={styles.progressMiniBar}>
-										<div className={styles.progressMiniMain}>
-											<span className={styles.progressMiniPhase}>
-												{normalizeAssistantProgressMessage(
-													geminiProgress.message,
-													geminiProgress.phase === "waiting"
-														? (isLocalProgressMessage(geminiProgress.message)
-															? uiText("AI local đang xử lý", "Local AI processing", "本地AI处理中")
-															: uiText("Đang xử lý", "Processing", "处理中"))
-														: (isLocalProgressMessage(geminiProgress.message)
-															? uiText("AI local đang stream", "Local AI streaming", "本地AI流式处理中")
-															: uiText("Đang streaming", "Streaming", "流式中")),
-												)}
-											</span>
-											<span className={styles.progressMiniStats}>
-												{`${Math.max(0, Math.min(100, geminiProgress.percent))}%`}
-												{geminiProgress.remainingSecs > 0 ? ` · ~${geminiProgress.remainingSecs}s` : ""}
-												{liveOrchestrationHintLabel ? ` · ${liveOrchestrationHintLabel}` : (liveBackendStepLabel ? ` · ${liveBackendStepLabel}` : "")}
-												{` · evt ${Math.max(0, lastProgressEventAgeSecs)}s`}
-											</span>
-											{liveOrchestrationBadge && (
-												<span className={`${styles.progressMiniStageBadge} ${styles[`progressMiniStageBadge_${liveOrchestrationBadge.tone}`] || ""}`.trim()}>
-													{liveOrchestrationBadge.label}
-												</span>
-											)}
-											{streamRequestId && (
-												<button type="button" className={styles.progressRequestIdButton} onClick={handleCopyRequestId}>
-													<span className={styles.progressRequestId}>
-														req
-														{streamRequestId}
-													</span>
-												</button>
-											)}
-										</div>
-										<Space size={4}>
-											<Button
-												type="text"
-												size="small"
-												danger
-												icon={<CloseOutlined />}
-												onClick={handleCancelRequest}
-											>
-												{uiText("Hủy", "Cancel", "取消")}
-											</Button>
-											<Button
-												type="link"
-												size="small"
-												className={styles.compactToggleBtn}
-												onClick={() => setShowMiniProgress(false)}
-											>
-												{uiText("Chi tiết", "Details", "详情")}
-											</Button>
-										</Space>
-									</div>
-								)
-								: (
-									<div className={styles.geminiProgressCard}>
-										<div className={styles.geminiProgressHeader}>
-											<span className={styles.geminiProgressIcon}>
-												{geminiProgress.phase === "waiting" ? "⏳" : "⚡"}
-											</span>
-											<span className={styles.geminiProgressLabel}>
-												{normalizeAssistantProgressMessage(
-													geminiProgress.message,
-													geminiProgress.phase === "waiting"
-														? (isLocalProgressMessage(geminiProgress.message)
-															? uiText("AI local đang xử lý...", "Local AI is processing...", "本地AI正在处理中...")
-															: uiText("Chuyên Gia đang xử lý...", "Expert is processing...", "专家正在处理中..."))
-														: (isLocalProgressMessage(geminiProgress.message)
-															? uiText("Đang nhận kết quả từ AI local...", "Receiving result from Local AI...", "正在接收本地AI结果...")
-															: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果...")),
-												)}
-											</span>
-											<span className={styles.geminiProgressCountdown}>
-												{geminiProgress.remainingSecs > 0 ? `~${geminiProgress.remainingSecs}s` : " "}
-											</span>
-											<span className={styles.geminiProgressCountdown}>
-												{`evt ${Math.max(0, lastProgressEventAgeSecs)}s`}
-											</span>
-											<Button
-												type="text"
-												size="small"
-												danger
-												icon={<CloseOutlined />}
-												onClick={handleCancelRequest}
-											>
-												{uiText("Hủy", "Cancel", "取消")}
-											</Button>
-											<Button
-												type="link"
-												size="small"
-												className={styles.compactToggleBtn}
-												onClick={() => setShowMiniProgress(true)}
-											>
-												{uiText("Mini", "Mini", "迷你")}
-											</Button>
-										</div>
-										<div className={styles.geminiProgressBarTrack}>
-											<div
-												className={`${styles.geminiProgressBarFill} ${geminiProgress.phase === "waiting" ? styles.geminiProgressBarWaiting : styles.geminiProgressBarStreaming}`}
-												style={{ width: `${Math.max(2, Math.min(100, geminiProgress.percent))}%` }}
-											/>
-										</div>
-										<div className={styles.geminiProgressMeta}>
-											{geminiProgress.phase === "streaming" && geminiProgress.charsReceived > 0
-													? (
-													<>
-														{geminiProgress.charsReceived.toLocaleString()}
-														{" "}
-															{isLocalProgressMessage(geminiProgress.message)
-																? uiText("ký tự từ AI local", "chars from Local AI", "来自本地AI的字符")
-																: uiText("ký tự nhận được", "chars received", "已接收字符")}
-														{geminiProgress.ttftMs != null && (
-															<span className={styles.geminiProgressTtft}>
-																{" "}
-																· TTFT
-																{geminiProgress.ttftMs}
-																ms
-															</span>
-														)}
-													</>
-													)
-													: geminiProgress.phase === "waiting" && geminiProgress.estimatedWaitSecs > 0
-													? uiText(
-														`Ước tính ~${geminiProgress.estimatedWaitSecs}s tổng thời gian`,
-														`Estimated total time ~${geminiProgress.estimatedWaitSecs}s`,
-														`预计总耗时约 ${geminiProgress.estimatedWaitSecs}s`,
-													)
-													: " "}
-											{liveBackendStepLabel && (
-												<div>
-													{uiText("Bước hiện tại", "Current step", "当前步骤")}
-													{": "}
-													{liveBackendStepLabel}
-												</div>
-											)}
-										</div>
-										{streamRequestId && (
-											<button type="button" className={styles.progressRequestIdButton} onClick={handleCopyRequestId}>
-												<div className={styles.progressMetaInline}>
-													req
-													{streamRequestId}
-												</div>
-											</button>
-										)}
-									</div>
-								)
-						)}
-						{!isProgressDockCollapsed && !isLoading && completionSummaryLabel && (
-							<div className={[
-								styles.progressCompletionBar,
-								completionState === "stream_closed" ? styles.progressCompletionBar_streamClosed : "",
-								completionState === "error" ? styles.progressCompletionBar_error : "",
-							].filter(Boolean).join(" ")}
-							>
-								<div className={styles.progressCompletionMain}>
-									<span className={styles.progressCompletionTitle}>
-										{uiText("Kết thúc xử lý", "Processing finished", "处理已结束")}
-									</span>
-									<Tooltip title={completionDetailTooltip || completionSummaryLabel}>
-										<span className={styles.progressCompletionStats}>{completionSummaryLabel}</span>
-									</Tooltip>
-									{streamRequestId && (
-										<span className={styles.progressRequestId}>
-											req
-											{streamRequestId}
-										</span>
-									)}
-								</div>
-								{streamRequestId && (
-									<Button
-										type="text"
-										size="small"
-										icon={<CopyOutlined />}
-										className={styles.requestActionBtn}
-										onClick={handleCopyRequestId}
-										title={uiText("Sao chép requestId", "Copy requestId", "复制 requestId")}
-									/>
-								)}
-							</div>
-						)}
-						{!isProgressDockCollapsed && (editTaskPlan?.slices?.length || 0) > 0 && (
+						{!isProgressDockCollapsed && !COMPOSER_PRIMARY_EDIT_TIMELINE && (editTaskPlan?.slices?.length || 0) > 0 && (
 							<div className={styles.workspacePlanPanel}>
 								<div
 									className={styles.workspacePlanHeader}
@@ -9305,7 +9710,7 @@ export default function AiAssistantChat({
 								)}
 							</div>
 						)}
-						{!isProgressDockCollapsed && (agenticSteps.length >= 1 || (editTaskPlan?.slices?.length || 0) > 0) && activeStreamResponseMode !== "analyze" && (
+						{!isProgressDockCollapsed && visibleAgenticSteps.length >= 1 && activeStreamResponseMode !== "analyze" && (
 							<div className={`${styles.messageContent} ${styles.stageTimelineCard}`}>
 								<div
 									className={styles.stageTimelineHeader}
@@ -9316,16 +9721,26 @@ export default function AiAssistantChat({
 										{agenticStepsCollapsed
 											? uiText(
 												completionState === "error"
-													? `${agenticSteps.length} bước agentic (request lỗi — không áp editor)`
-													: `${agenticSteps.length} bước agentic hoàn tất`,
+													? `${visibleAgenticSteps.length} bước agentic (request lỗi — không áp editor)`
+													: `${visibleAgenticSteps.length} bước agentic hoàn tất`,
 												completionState === "error"
-													? `${agenticSteps.length} agentic steps (request failed — not applied)`
-													: `${agenticSteps.length} agentic steps done`,
+													? `${visibleAgenticSteps.length} agentic steps (request failed — not applied)`
+													: `${visibleAgenticSteps.length} agentic steps done`,
 												completionState === "error"
-													? `${agenticSteps.length} 个 Agent 步骤（请求失败 — 未应用）`
-													: `${agenticSteps.length} 个 Agent 步骤完成`,
+													? `${visibleAgenticSteps.length} 个 Agent 步骤（请求失败 — 未应用）`
+													: `${visibleAgenticSteps.length} 个 Agent 步骤完成`,
 											)
-											: uiText("Agentic workflow", "Agentic workflow", "Agent 工作流")}
+											: uiText(
+												COMPOSER_PRIMARY_EDIT_TIMELINE && activeStreamResponseMode === "edit"
+													? "Chi tiết kỹ thuật"
+													: "Agentic workflow",
+												COMPOSER_PRIMARY_EDIT_TIMELINE && activeStreamResponseMode === "edit"
+													? "Technical details"
+													: "Agentic workflow",
+												COMPOSER_PRIMARY_EDIT_TIMELINE && activeStreamResponseMode === "edit"
+													? "技术详情"
+													: "Agent 工作流",
+											)}
 									</div>
 											<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
 												{pendingApprovalAgenticSteps.length > 0 && !agenticStepsCollapsed && (
@@ -9365,7 +9780,7 @@ export default function AiAssistantChat({
 								</div>
 								{!agenticStepsCollapsed && (
 									<div className={styles.stageTimelineList}>
-										{agenticSteps.map(step => (
+										{visibleAgenticSteps.map(step => (
 											<div key={step.id} className={styles.stageTimelineItem}>
 												<span className={styles.stageTimelineBullet} />
 												<div className={styles.stageTimelineText}>
@@ -9463,7 +9878,7 @@ export default function AiAssistantChat({
 								)}
 							</div>
 						)}
-						{!isProgressDockCollapsed && SHOW_DETAILED_PROGRESS_TIMELINE && stageEvents.length > 0 && !showMiniProgress && (
+						{!isProgressDockCollapsed && SHOW_DETAILED_PROGRESS_TIMELINE && stageEvents.length > 0 && (
 							<div className={`${styles.messageContent} ${styles.stageTimelineCard}`}>
 								<div className={styles.stageTimelineHeader}>
 									<div className={styles.stageTimelineTitle}>
@@ -9596,400 +10011,9 @@ export default function AiAssistantChat({
 								</div>
 							</div>
 						)}
-						{!isProgressDockCollapsed && isLoading && (
-							<div className={styles.progressDockSpinnerRow}>
-								<Spin size="small" />
-							</div>
-						)}
 					</div>
 				)}
 
-				{isUsageDockVisible && (completionState === "error" || completionState === "review_required" || localFlowOps || streamRequestId) && (
-					<div className={[
-						styles.usageDock,
-						completionState === "stream_closed" ? styles.usageDock_streamClosed : "",
-						completionState === "error" ? styles.usageDock_error : "",
-					].filter(Boolean).join(" ")}
-					>
-						<div className={styles.usageDockHeader}>
-							<div className={styles.usageDockTitle}>
-								{uiText("Trạng thái request", "Request status", "请求状态")}
-							</div>
-							<div className={styles.usageDockBadges}>
-								{completionStateLabel && (
-									<Tooltip title={completionDetailTooltip || completionStateLabel}>
-										<Tag color={completionState === "done" ? "green" : completionState === "review_required" ? "blue" : completionState === "stream_closed" ? "gold" : completionState === "error" ? "red" : completionState === "cancelled" ? "orange" : "default"}>
-											{completionStateLabel}
-										</Tag>
-									</Tooltip>
-								)}
-								{completionMetrics.patchFallbackNoOp === true && (
-									<Tooltip title={uiText(
-										"Patch local không hợp lệ, hệ thống đã fallback no-op an toàn.",
-										"Local patch was invalid, system applied a safe no-op fallback.",
-										"本地补丁无效，系统已回退为安全 no-op。",
-									)}>
-										<Tag color="orange">
-											{uiText("Patch fallback: no-op", "Patch fallback: no-op", "补丁回退：no-op")}
-										</Tag>
-									</Tooltip>
-								)}
-								{streamRequestId && (
-									<Tag>
-										<span className={styles.requestTagContent}>
-											req
-											{streamRequestId}
-										</span>
-										<Button
-											type="text"
-											size="small"
-											icon={<CopyOutlined />}
-											className={styles.requestActionBtn}
-											onClick={handleCopyRequestId}
-											title={uiText("Sao chép requestId", "Copy requestId", "复制 requestId")}
-										/>
-									</Tag>
-								)}
-							</div>
-						</div>
-						{completionSummaryLabel && (
-							<div className={styles.usageDockRow}>
-								<span>{uiText("Kết thúc", "Completion", "结束状态")}</span>
-								<span>{completionSummaryLabel}</span>
-							</div>
-						)}
-						{localFlowOps && (
-							<div className={styles.usageDockRow}>
-								<span>{uiText("Local flow", "Local flow", "本地流程")}</span>
-								<span>
-									{localFlowOps.verified
-										? (
-											<Space size={4} wrap>
-												<Tag color="green">
-													{localFlowOps.flow === "menu_json"
-														? uiText("Đã xác nhận MENU", "MENU verified", "已确认 MENU")
-														: uiText("Đã xác nhận CODE", "CODE verified", "已确认 CODE")}
-												</Tag>
-												<Tag>{`${uiText("Thêm", "Add", "新增")}: ${localFlowOps.addCount}`}</Tag>
-												<Tag>{`${uiText("Sửa", "Edit", "编辑")}: ${localFlowOps.editCount}`}</Tag>
-												<Tag>{`${uiText("Xóa", "Delete", "删除")}: ${localFlowOps.deleteCount}`}</Tag>
-											</Space>
-										)
-										: (
-											<Tooltip title={localFlowOps.reason || ""}>
-												<Tag color="orange">
-													{uiText("Chưa xác nhận local flow", "Local flow not verified", "本地流程未确认")}
-												</Tag>
-											</Tooltip>
-										)}
-								</span>
-							</div>
-						)}
-						{localFlowOps?.verified && localFlowOps.flow === "code" && localFlowOpLines.length > 0 && (
-							<div className={styles.localOpsPreview}>
-								<div className={styles.localOpsPreviewHeader}>
-									<div className={styles.localOpsPreviewTitle}>
-										{uiText("Preview thay đổi theo line", "Line-level operation preview", "按行操作预览")}
-									</div>
-									<Space size={4} wrap>
-										<Button
-											type={localFlowOpFilter === "all" ? "primary" : "default"}
-											size="small"
-											onClick={() => setLocalFlowOpFilter("all")}
-										>
-											{uiText("Tất cả", "All", "全部")}
-										</Button>
-										<Button
-											type={localFlowOpFilter === "add" ? "primary" : "default"}
-											size="small"
-											onClick={() => setLocalFlowOpFilter("add")}
-										>
-											{uiText("Thêm", "Add", "新增")}
-										</Button>
-										<Button
-											type={localFlowOpFilter === "edit" ? "primary" : "default"}
-											size="small"
-											onClick={() => setLocalFlowOpFilter("edit")}
-										>
-											{uiText("Sửa", "Edit", "编辑")}
-										</Button>
-										<Button
-											type={localFlowOpFilter === "delete" ? "primary" : "default"}
-											size="small"
-											onClick={() => setLocalFlowOpFilter("delete")}
-										>
-											{uiText("Xóa", "Delete", "删除")}
-										</Button>
-									</Space>
-								</div>
-								<div className={styles.localOpsPreviewList}>
-									{filteredLocalFlowOpLines.map((line, idx) => (
-										<div
-											key={`${line.action}_${line.lineLabel}_${idx}`}
-											className={`${styles.localOpsLine} ${styles[`localOpsLine_${line.action}`] || ""}`.trim()}
-										>
-											<span className={styles.localOpsLineTag}>
-												{line.action === "add" ? "+" : line.action === "delete" ? "-" : "~"}
-												{" "}
-												{line.lineLabel}
-											</span>
-											<span className={styles.localOpsLineText}>{renderOperationSnippetText(line.snippet)}</span>
-										</div>
-									))}
-									{filteredLocalFlowOpLines.length === 0 && (
-										<div className={styles.localOpsEmpty}>
-											{uiText("Không có dòng phù hợp bộ lọc.", "No lines match this filter.", "没有匹配该筛选条件的行。")}
-										</div>
-									)}
-								</div>
-							</div>
-						)}
-						{quickFixSuggestions.length > 0 && (
-							<div className={styles.quickFixPanel}>
-								<div className={styles.quickFixPanelHeader}>
-									{uiText("Quick-fix đề xuất", "Suggested quick fixes", "建议的 quick-fix")}
-								</div>
-								<div className={styles.quickFixList}>
-									{quickFixSuggestions.map((fix) => {
-										const canApply = Boolean(onCodeInsert) && contextType === "code";
-										return (
-											<div key={fix.id} className={styles.quickFixItem}>
-												<div className={styles.quickFixText}>
-													<div className={styles.quickFixTitle}>{fix.title}</div>
-													{fix.description && <div className={styles.quickFixDesc}>{fix.description}</div>}
-												</div>
-												<Space size={6}>
-													<Button
-														size="small"
-														type="primary"
-														disabled={!canApply}
-														loading={applyingQuickFixId === fix.id}
-														onClick={() => applyQuickFixSuggestion(fix)}
-													>
-														{uiText("Áp dụng", "Apply", "应用")}
-													</Button>
-													<Button
-														size="small"
-														onClick={() => dismissQuickFixSuggestion(fix)}
-													>
-														{uiText("Bỏ qua", "Dismiss", "忽略")}
-													</Button>
-												</Space>
-											</div>
-										);
-									})}
-								</div>
-							</div>
-						)}
-						{editCandidates.length > 0 && completionState !== "error" && (
-							<div className={styles.quickFixPanel}>
-								<div className={styles.quickFixPanelHeader}>
-									{uiText("Patch candidates", "Patch candidates", "Patch 候选方案")}
-								</div>
-								<div className={styles.quickFixList}>
-									{editCandidates.map((candidate) => {
-										const canApply = Boolean(onCodeInsert) && contextType === "code";
-										const opAdd = Number(candidate.ops?.add || 0);
-										const opEdit = Number(candidate.ops?.edit || 0);
-										const opDelete = Number(candidate.ops?.delete || 0);
-										const opSummary = `+${opAdd} ~${opEdit} -${opDelete}`;
-										const riskLabel = String(candidate.riskLevel || "").trim().toLowerCase();
-										const confidenceLabel = Number.isFinite(Number(candidate.confidence))
-											? `conf ${Math.round(Number(candidate.confidence))}`
-											: "";
-										const feedbackLabel = Number.isFinite(Number(candidate.feedbackScore))
-											? `score ${Number(candidate.feedbackScore).toFixed(2)}`
-											: "";
-										return (
-											<div key={candidate.id} className={styles.quickFixItem}>
-												<div className={styles.quickFixText}>
-													<div className={styles.quickFixTitle}>{candidate.title}</div>
-													{candidate.description && <div className={styles.quickFixDesc}>{candidate.description}</div>}
-													<div className={styles.quickFixDesc}>{opSummary}</div>
-													{(riskLabel || confidenceLabel || feedbackLabel) && (
-														<div className={styles.quickFixDesc}>
-															{[riskLabel ? `risk ${riskLabel}` : "", confidenceLabel, feedbackLabel].filter(Boolean).join(" · ")}
-														</div>
-													)}
-													{candidate.rationale && <div className={styles.quickFixDesc}>{candidate.rationale}</div>}
-												</div>
-												<Space size={6}>
-													<Button
-														size="small"
-														type="primary"
-														disabled={!canApply}
-														loading={applyingEditCandidateId === candidate.id}
-														onClick={() => applyEditCandidate(candidate)}
-													>
-														{uiText("Áp dụng", "Apply", "应用")}
-													</Button>
-													<Button
-														size="small"
-														loading={retryingEditCandidateId === candidate.id}
-														onClick={() => handleRetryEditCandidate(candidate)}
-													>
-														{uiText("Thử phương án khác", "Retry", "重试")}
-													</Button>
-													<Button
-														size="small"
-														onClick={() => dismissEditCandidate(candidate)}
-													>
-														{uiText("Bỏ qua", "Dismiss", "忽略")}
-													</Button>
-												</Space>
-											</div>
-										);
-									})}
-								</div>
-							</div>
-						)}
-						{streamJobId && (
-							<div className={styles.usageDockRow}>
-								<span>{uiText("Stream job", "Stream job", "流任务")}</span>
-								<span>
-									<Space size={4} wrap>
-										<Tag>
-											job
-											{streamJobId}
-										</Tag>
-										<Button type="text" size="small" icon={<CopyOutlined />} onClick={handleCopyJobId} />
-										<Button
-											type="link"
-											size="small"
-											className={styles.compactToggleBtn}
-											onClick={() => {
-												void loadStreamPartsManifest(streamJobId);
-												void loadStreamPartsMeta(streamJobId, 1, 20);
-											}}
-										>
-											{partsMetaLoading
-												? uiText("Đang tải...", "Loading...", "加载中...")
-												: uiText("Tải danh sách PART", "Load PART list", "加载 PART 列表")}
-										</Button>
-									</Space>
-								</span>
-							</div>
-						)}
-						{partsManifest && (
-							<div className={styles.usageDockRow}>
-								<span>{uiText("Lưu trữ", "Persistence", "持久化")}</span>
-								<span>
-									{uiText("Tổng PART", "Total PART", "总 PART")}
-									:
-									{" "}
-									{Math.max(0, Number(partsManifest.totalParts || 0)).toLocaleString("en-US")}
-									{partsManifest.totalChars != null && (
-										<>
-											{" · "}
-											{uiText("Ký tự", "Chars", "字符")}
-											:
-											{" "}
-											{Math.max(0, Number(partsManifest.totalChars || 0)).toLocaleString("en-US")}
-										</>
-									)}
-								</span>
-							</div>
-						)}
-						{partsMetaPage && partsMetaPage.items.length > 0 && (
-							<div className={styles.usageDockRow}>
-								<span>{uiText("PART theo trang", "PART pages", "分页 PART")}</span>
-								<span>
-									<Space size={4} wrap>
-										{partsMetaPage.items.map(item => (
-											<Button
-												key={`part_${item.partIndex}`}
-												type={selectedPartIndex === item.partIndex ? "primary" : "default"}
-												size="small"
-												onClick={() => {
-													void loadStreamPartContent(streamJobId, item.partIndex);
-												}}
-											>
-												{`P${item.partIndex}`}
-											</Button>
-										))}
-										<Button
-											type="link"
-											size="small"
-											className={styles.compactToggleBtn}
-											disabled={partsMetaPage.page <= 1 || partsMetaLoading}
-											onClick={() => {
-												void loadStreamPartsMeta(streamJobId, Math.max(1, partsMetaPage.page - 1), partsMetaPage.size);
-											}}
-										>
-											{uiText("Trang trước", "Prev", "上一页")}
-										</Button>
-										<Button
-											type="link"
-											size="small"
-											className={styles.compactToggleBtn}
-											disabled={partsMetaPage.page >= partsMetaPage.totalPages || partsMetaLoading}
-											onClick={() => {
-												void loadStreamPartsMeta(streamJobId, Math.min(partsMetaPage.totalPages, partsMetaPage.page + 1), partsMetaPage.size);
-											}}
-										>
-											{uiText("Trang sau", "Next", "下一页")}
-										</Button>
-										<Tag>
-											{partsMetaPage.page}
-											/
-											{Math.max(1, partsMetaPage.totalPages)}
-										</Tag>
-									</Space>
-								</span>
-							</div>
-						)}
-						{selectedPartIndex != null && (
-							<div className={styles.usageDockRow}>
-								<span>{uiText("Nội dung PART", "PART content", "PART 内容")}</span>
-								<span>
-									{selectedPartLoading
-										? uiText("Đang tải...", "Loading...", "加载中...")
-										: `${uiText("PART", "PART", "PART")} ${selectedPartIndex}: ${selectedPartContent.slice(0, 180).replace(/\s+/g, " ")}${selectedPartContent.length > 180 ? "..." : ""}`}
-								</span>
-							</div>
-						)}
-						{modelDecisionTrace.length > 0 && (
-							<div className={styles.usageDockRow}>
-								<span>{uiText("Luồng model", "Model trace", "模型路径")}</span>
-								<span>
-									{hiddenModelTraceCount > 0 && !showFullModelTrace && (
-										<Tag>{uiText(`+${hiddenModelTraceCount} cũ`, `+${hiddenModelTraceCount} older`, `+${hiddenModelTraceCount} 条旧记录`)}</Tag>
-									)}
-									<Space size={4} wrap>
-										{visibleModelDecisionTrace.map((trace) => {
-											const color = trace.step === "primary"
-												? "blue"
-												: trace.step === "fallback"
-													? "orange"
-													: "green";
-											const label = trace.step === "primary"
-												? uiText("Primary", "Primary", "主模型")
-												: trace.step === "fallback"
-													? uiText("Fallback", "Fallback", "回退")
-													: uiText("Final", "Final", "最终");
-											const text = `${label}: ${trace.model}`;
-											return (
-												<Tooltip key={trace.id} title={trace.reason || text}>
-													<Tag color={color}>{text}</Tag>
-												</Tooltip>
-											);
-										})}
-										<Button
-											type="link"
-											size="small"
-											className={styles.compactToggleBtn}
-											onClick={() => setShowFullModelTrace(prev => !prev)}
-										>
-											{showFullModelTrace
-												? uiText("Thu gọn", "Compact", "收起")
-												: uiText("Xem đầy đủ", "Expand", "展开")}
-										</Button>
-									</Space>
-								</span>
-							</div>
-						)}
-					</div>
-				)}
 
 				{/* Orchestration Preview Panel */}
 				{showOrchPreview && (

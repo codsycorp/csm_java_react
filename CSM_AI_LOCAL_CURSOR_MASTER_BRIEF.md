@@ -1,9 +1,41 @@
 # CSM AI LOCAL — MASTER BRIEF CHO CURSOR AI
 ## Một file duy nhất để yêu cầu Cursor làm lại / hoàn thiện hệ thống
 
-Version: **3.0** · 2026-05-26  
+Version: **3.3** · 2026-05-26  
 Repo: `csm_server`  
 **Single source of truth** — dùng file này khi yêu cầu Cursor implement / làm lại CSM AI Local **và** domain System Management liên quan RAG.
+
+### Changelog v3.3
+
+| Mục | Trạng thái |
+|-----|------------|
+| **Composer unified card** — một khung: Trạng thái request + Đã khám phá + diff (edit mode) | ✅ |
+| Ẩn **Tiến độ xử lý** / **N bước agentic** trùng khi `COMPOSER_PRIMARY_EDIT_TIMELINE` + edit | ✅ |
+| `appendStageEvent` bỏ qua mốc Chuẩn bị/orchestration thường trong edit (chỉ giữ error/blocked) | ✅ |
+| `COMPOSER_INTERNAL_AGENTIC_STAGES` — route/plan/schema không hiện dock Agentic | ✅ |
+| Tự thu gọn **Đã khám phá** sau khi hoàn tất; mở rộng khi lỗi | ✅ |
+
+### Changelog v3.2
+
+| Mục | Trạng thái |
+|-----|------------|
+| **PHẦN Y — LMKT lane** — hợp đồng đầy đủ `auto-lmkt.js` + `index.ts`, **không đổi JS** | ✅ |
+| Backend: `LMKT_SEO_SYSTEM_PROMPT` — follow schema user prompt (`content`, không ép `html_content`) | ✅ |
+| Backend: alias `html_content` ↔ `content` trước khi trả `data` | ✅ |
+| `isSeoContentPayload` nhận cả `content` lẫn `html_content` | ✅ |
+
+### Changelog v3.1
+
+| Mục | Trạng thái |
+|-----|------------|
+| **Composer timeline thống nhất** — một panel thay vì 3–4 block trùng (Explored + Trạng thái request + Agentic plan lặp) | ✅ |
+| `COMPOSER_PRIMARY_EDIT_TIMELINE` — ẩn duplicate `edit_task_plan` / slice steps trong Agentic dock | ✅ |
+| **Trạng thái request** gom vào Composer (header `Đang xử lý · …` / `Trạng thái request · …`, progress bar, req id) | ✅ |
+| Plan gọn: **1 dòng** `Lập kế hoạch N vùng · symbols · Lx–Ly…` (không spam N dòng Read) | ✅ |
+| Agentic dock edit mode → chỉ **「Chi tiết kỹ thuật」** (orch, verify, approval…) | ✅ |
+| Backend: alias JSON `replacementText` → `replacement`; remap line relative → absolute trong multi-slice | ✅ |
+| Panel **Ngữ cảnh editor** (slice click navigate) tắt khi Composer primary — navigate ⏳ roadmap U.9 | ⚠️ |
+| Patch cards nhiều block (`+138`, `+12` từng bước) như Cursor Agent — vẫn **1 diff block** tích lũy | ⏳ |
 
 ### Changelog v3.0
 
@@ -265,7 +297,7 @@ Chọn tại `AiAssistantGatewayService.classifyLocalIntent(contextType, respons
 |------|----------|--------|-----------------|---------------------|
 | **Code editor** | `POST /api/ai-code-stream` (SSE) | `AiAssistantChat.tsx` | `textEdits` hoặc prose analyze | Region plan + scoped RAG + code master |
 | **Menu JSON** | `POST /api/ai-code-stream` hoặc sync AI | Admin menu designer | `{ menu: [...] }` / patch JSON | Menu master + menu gate |
-| **SEO article** | `POST /ai-generate-seo-content` | LMKT `generateSeoContentWithPrompt` | `{ title, description, html_content }` | **Không** inject code/menu master; system prompt SEO |
+| **SEO article** | `POST /ai-generate-seo-content` | LMKT `generateSeoContentWithPrompt` | `{ title, description, html_content }` hoặc `{ title, content, content_en, … }` | **Không** inject code/menu master; system prompt LMKT flexible |
 | **SEO creative params** | `POST /ai-generate-seo-content` | LMKT `requestCreativeParams()` | `{ personaKey, contentPattern, … }` hoặc `{ angle, persona }` | **Lane riêng** — detect `[CREATIVE_PARAMS_REQUEST]` |
 
 **Quan trọng:** Creative params **không** dùng `SEO_SYSTEM_PROMPT` (title/html_content). Model 1.5B trên weak-5gb thường echo schema → backend **bắt buộc** có seed fallback deterministic.
@@ -288,7 +320,9 @@ ApiSpringController.getObjectFromAI()
        │            · max tokens ≈ 384, temp ≈ 0.05
        │            · parse JSON → validate allowlist từ prompt
        │            · fail → buildDeterministicCreativeParamsFallback(SEED, KIND)
-       └─ NO  → full SEO article (title/description/html_content)
+       └─ NO  → full SEO / LMKT article (schema theo user prompt)
+       │         · LMKT_SEO_SYSTEM_PROMPT (follow JSON schema in prompt)
+       │         · alias html_content ↔ content trước khi trả data
        │
        ▼
 populateAiResponseFromRawContent()
@@ -2025,39 +2059,54 @@ Sửa lỗi webview tắt process không kill, proxy treo khi chạy lại tự 
 
 > **Mục tiêu:** Xác nhận hệ thống **đã có** hay **còn thiếu** từng bước giống Copilot/Cursor; UI chat phải thể hiện rõ **file/ngữ cảnh → plan → từng bước thực thi**.
 
-## T.1 Ma trận đối chiếu (2026-05-26)
+## T.1 Ma trận đối chiếu (2026-05-26, cập nhật v3.1)
 
 | Bước Copilot/Cursor | CSM Backend | CSM Frontend (Trò chuyện) | Trạng thái |
 |---------------------|-------------|---------------------------|------------|
-| Hiểu intent user | `classifyIntentWithLocalAI` + `responseMode` | SSE `routing` | ✅ |
-| Xác định ngữ cảnh “file” | `pName`/`pType` + `currentCode` string | Tag **Editor context** (pName, language) — **pName là khóa logic, không phải path** | ✅ v2.5 |
-| Phân tích → vùng cần sửa | `AiEditTaskPlannerService.plan()` | SSE `edit_task_plan` + panel **Kế hoạch vùng** | ✅ v2.5 |
-| RAG / index (không full file vào model) | Lucene L1+L2 + condensed plan | Symbol list trong plan panel | ✅ |
-| Chia nhỏ thực thi | `tryMultiSliceEditFromPlan` | SSE `edit_multi_slice_step` + slice status ○…✓ | ✅ v2.5 |
-| Patch validate | AST gate + dry-run | Agentic step validator tags | ✅ |
-| Apply editor | `text_edit_apply` SSE | CodeMirror `onApplyLineEdit` | ✅ |
-| **Composer activity** (Explored · reads/searches) | SSE map ở trên | Block collapsible trong chat | ✅ v2.6 |
-| **Inline diff preview** (`seo.js +N -M`) | `text_edit_apply` tích lũy | `buildComposerDiffBlock` — label `{pName}.js` **chỉ để hiển thị** | ✅ v2.6 |
-| Nhảy tới dòng | Go to line | Click slice → `onCitationNavigate` | ✅ v2.5 |
-| LLM micro-plan riêng (64 token) | Chưa — heuristic planner | — | ⏳ Roadmap S.10 |
+| Hiểu intent user | `classifyIntentWithLocalAI` + `responseMode` | SSE `routing` → Composer `🧭 Edit mode` | ✅ |
+| Xác định ngữ cảnh “file” | `pName`/`pType` + `currentCode` string | Tag trong plan / `{pName}.js` diff header | ✅ |
+| Phân tích → vùng cần sửa | `AiEditTaskPlannerService.plan()` | SSE `edit_task_plan` → Composer **1 dòng plan** | ✅ v3.1 |
+| RAG / index (không full file vào model) | Lucene L1+L2 + async `dyn_ctx_*` | Composer `📦 Indexed` / `🔎 Searched` | ✅ |
+| Chia nhỏ thực thi | `tryMultiSliceEditFromPlan` | SSE `edit_multi_slice_step` → Composer `⚙️ Editing region` | ✅ |
+| Patch validate | AST gate + dry-run + `replacementText` alias | Chi tiết kỹ thuật (validator tags) | ✅ v3.1 |
+| Apply editor | `text_edit_apply` SSE | CodeMirror `onApplyLineEdit` + diff `+N -M` | ✅ |
+| **Composer activity** (Explored · reads/searches/edits) | SSE → `appendComposerActivity` | Block collapsible **Đã khám phá · …** | ✅ v3.1 |
+| **Inline diff preview** | `text_edit_apply` tích lũy | `buildComposerDiffBlock` — **1 block** `{pName}.js +N -M` | ✅ ⚠️ không nhiều card |
+| **Trạng thái request** (progress, req id, lỗi) | completion metrics SSE | Composer **Trạng thái request · …** (không usage dock riêng) | ✅ v3.1 |
+| Nhảy tới dòng (click slice) | — | `workspacePlanPanel` (chỉ khi `COMPOSER_PRIMARY=false`) | ⚠️ v3.1 |
+| Grepped `pattern in file.tsx` | Lucene / symbol search (không ripgrep path) | `Searched workspace context` (không label Grepped) | ⏳ |
+| Nhiều patch card trong chat (`+138`, `+12`…) | Một JSON textEdits merge | Một diff block tích lũy | ⏳ |
+| LLM micro-plan riêng (64 token) | Heuristic planner | — | ⏳ S.10 |
 | Multi-file workspace | `targetFileScopes` (hạn chế) | — | ⏳ Phase 3 |
 
-**Kết luận audit:** Luồng **plan → execute từng vùng → apply** đã có trên backend từ v2.4; v2.5 **hoàn thiện panel ngữ cảnh + slice plan**; v2.6 **thêm Composer UI trong chat** (activity log + diff inline) giống ảnh Cursor user gửi.
+**Kết luận audit v3.1:** Luồng **plan → multi-slice → apply** đã **đủ** so với ảnh Cursor user gửi về **logic backend + hiển thị tiến trình trong chat**. v3.1 **gom UI** giống Cursor Composer (Explored + request status, không trùng Agentic). Còn thiếu so với Cursor Agent UI: **Grepped** ripgrep-style, **nhiều diff card** từng bước, **click slice → jump line** khi Composer primary bật.
 
-## T.2 SSE stages — contract UI phải hiển thị
+## T.1b So sánh nhanh với 3 ảnh màn hình Cursor (2026-05-26)
 
-| `stage` | Khi nào | UI hiển thị |
-|---------|---------|-------------|
-| `routing` | Sau classify | Mode edit/analyze |
-| `edit_task_plan` | Planner xong | Panel slices + Composer **Read {pName} · Lx–Ly** (vùng trong string) |
-| `scope_reasoning` + `strategy=edit_task_planner_slices` | Condensed context | Step “Neo vùng code theo plan” |
-| `edit_multi_slice` | Bắt đầu/kết thúc multi-slice | Agentic step ⚙️/✅ |
-| `edit_multi_slice_step` | Mỗi slice LLM | Slice status `running` |
-| `text_edit_apply` / `_done` | Patch apply | Slice → `done` + **Composer diff +/-** |
-| `tool_search` | Lucene RAG | **Searched Lucene · …** trong Composer |
-| `tool_trace` / `edit_task_planner` | Telemetry | Composer + Agentic timeline |
+| Ảnh Cursor | CSM v3.1 | Đủ? |
+|------------|----------|-----|
+| Bảng audit plan→execute (backend ✅, frontend xử lý SSE) | Ma trận T.1 — khớp | ✅ |
+| `Explored 2 files, 1 search` + Grepped + Read Lx–Ly | `Đã khám phá · N lần đọc vùng, M lần tìm, K bước plan` — **không** dòng Grepped riêng | ⚠️ ~90% |
+| Patch blocks `AiAssistantChat.tsx +138` / `+12` / `+81 -1` | Một block `{pName}.js +N -M` tích lũy toàn request | ⚠️ logic apply ✅, UI card ⏳ |
+| Activity gọn, không lặp Agentic plan | `COMPOSER_PRIMARY_EDIT_TIMELINE=true` | ✅ v3.1 |
+| Trạng thái request / lints / completion | Block **Trạng thái request · HOÀN THÀNH · 45s** trong Composer | ✅ v3.1 |
 
-## T.3 UI Trò chuyện Trợ lý AI — layout mục tiêu (giống Cursor)
+## T.2 SSE stages — contract UI phải hiển thị (v3.1)
+
+| `stage` | Khi nào | UI hiển thị (Composer primary) |
+|---------|---------|----------------------------------|
+| `routing` | Sau classify | Composer `🧭 Chế độ edit → patch JSON → CodeMirror` |
+| `edit_task_plan` | Planner xong | Composer **1 dòng** `📋 Lập kế hoạch N vùng · symbols · Lx–Ly…` |
+| `scope_reasoning` + `strategy=edit_task_planner_slices` | Condensed context | **Không** mirror Agentic (ẩn khi `COMPOSER_PRIMARY`) |
+| `edit_multi_slice` | Bắt đầu/kết thúc multi-slice | Composer tổng kết; chi tiết trong **Chi tiết kỹ thuật** nếu cần |
+| `edit_multi_slice_step` | Mỗi slice LLM | Composer `⚙️ Editing region i/n · Lx–Ly` |
+| `text_edit_apply` / `_done` | Patch apply | Composer diff `+N -M` + `Applied Lx–Ly → CodeMirror` |
+| `tool_search` / `tool_trace` | Lucene / ingest | Composer `🔎 Searched` / `📦 Indexed` |
+| completion / error | Stream kết thúc | Composer **Trạng thái request · HOÀN THÀNH/LỖI · …** |
+
+**Không hiển thị trùng:** Agentic dock **không** lặp `edit_task_plan`, `edit_task_slice_*`, `edit_multi_slice` khi `COMPOSER_PRIMARY_EDIT_TIMELINE=true`.
+
+## T.3 UI Trò chuyện Trợ lý AI — layout mục tiêu (v3.1, giống Cursor)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -2065,54 +2114,59 @@ Sửa lỗi webview tắt process không kill, proxy treo khi chạy lại tự 
 ├─────────────────────────────────────────────────────────┤
 │  [Chat messages user / assistant]                        │
 ├─────────────────────────────────────────────────────────┤
-│  ▼ Explored · 2 reads, 1 search          [v2.6 Composer]│
-│     🧭 Edit mode → patch → CodeMirror                    │
-│     📋 Planned 4 edit regions · symbols                    │
-│     📖 Read seo · L5810–5890 · fnRemoveTab                 │
-│     🔎 Searched Lucene · dyn_ctx_editorCode_seo_t0       │
-│     ⚙️ Editing region 1/4 · L5810–5890                   │
-│     ✓ Applied L5810–5890 → CodeMirror                    │
+│  ▼ Trạng thái request · 67% · ~30s · indexing…  [Hủy]   │  ← v3.1
+│  ████████░░░░ progress bar (khi đang chạy)               │
+│  (mở rộng: requestId, bước hiện tại, lỗi, local flow)    │
 ├─────────────────────────────────────────────────────────┤
-│  seo.js  +12 -8                         [v2.6 diff block] │
+│  ▼ Đã khám phá · 5 lần đọc vùng, 1 lần tìm, 2 bước plan │  ← Composer
+│     🧭 Chế độ edit → patch JSON → CodeMirror            │
+│     📋 Lập kế hoạch 5 vùng · fnRemoveTab · L1776–1919…  │
+│     🔎 Searched workspace context · large_code_edit…     │
+│     📦 Indexed editor context · chunks=288               │
+│     ⚙️ Editing region 1/5 · L1776–1919                   │
+├─────────────────────────────────────────────────────────┤
+│  seo.js  +12 -8                         [Diff preview]    │
 │     -  old line (red)                                    │
 │     +  new line (green)                                  │
 ├─────────────────────────────────────────────────────────┤
-│  ▼ Ngữ cảnh editor  [seo] [javascript] [Code string]     │
-│     Kế hoạch: 4 vùng · multi-slice                       │
-│     ○ 1/4 · L5810–5890  __forceKillWebviewProcess        │
-│     … 2/4 · L5920–6010  fnRemoveTab                      │
-│     ✓ 3/4 · L6100–6180  closeAllTabsAndCleanup           │
-├─────────────────────────────────────────────────────────┤
-│  ▼ Agentic workflow (plan → slice → apply → gate)        │
+│  ▼ Chi tiết kỹ thuật (orch / verify / approval only)     │  ← v3.1, không lặp plan
 ├─────────────────────────────────────────────────────────┤
 │  [Input + gửi]                                           │
 └─────────────────────────────────────────────────────────┘
 ```
 
+**Đã bỏ / gom (v3.1):** progress dock riêng (mini bar, “Kết thúc xử lý”), usage dock **Trạng thái request** trùng, Agentic **Lập kế hoạch vùng sửa** lặp, panel **Ngữ cảnh editor** (khi `COMPOSER_PRIMARY_EDIT_TIMELINE=true`).
+
 **File:** `frontend-admin/src/pages/system/developer/AiAssistantChat.tsx`  
-**CSS:** `AiAssistantChat.module.css` → `.composerPanel` (v2.6), `.workspacePlanPanel` (v2.5)
+**CSS:** `AiAssistantChat.module.css` → `.composerPanel`, `.composerRequestProgressTrack`, `.composerStatusDetail`  
+**Flag:** `COMPOSER_PRIMARY_EDIT_TIMELINE = true` (dòng ~591)
 
-**Hành vi slice:** Click → `onCitationNavigate({ line, path: pName })` → CodeMirror scroll tới dòng (qua `CodeMirrorWithAiAssistant.handleCitationNavigate`).
+**Slice navigate:** Click slice nhảy dòng chỉ còn khi `COMPOSER_PRIMARY_EDIT_TIMELINE=false` (panel cũ). Roadmap → **U.9**.
 
-## T.4 Checklist nghiệm thu UI + plan
+## T.4 Checklist nghiệm thu UI + plan (v3.1)
 
 | # | Test | Pass |
 |---|------|------|
-| 1 | Gửi edit trên file >30k → SSE có `edit_task_plan` | ✓ |
-| 2 | Panel **Ngữ cảnh editor** hiện pName + language + slices | ✓ v2.5 |
-| 3 | Multi-slice: thấy `edit_multi_slice_step` và slice chuyển `…` running | ✓ v2.5 |
-| 4 | Click slice → editor nhảy dòng | ✓ (nếu parent wire navigate) |
-| 5 | `text_edit_apply_done` → slice ✓ | ✓ v2.5 |
-| 6 | Analyze mode: panel plan ẩn / không multi-slice | ✓ |
-| 7 | Composer **Explored · …** + diff **+N -M** trong chat | ✓ v2.6 |
+| 1 | Gửi edit trên string >30k → SSE có `edit_task_plan` | ✓ |
+| 2 | Composer **1 dòng plan** (không N dòng Read trùng Agentic) | ✓ v3.1 |
+| 3 | Multi-slice: Composer `Editing region i/n` | ✓ v3.1 |
+| 4 | Click slice → editor nhảy dòng | ⚠️ chỉ khi `COMPOSER_PRIMARY=false` |
+| 5 | `text_edit_apply` → diff `+N -M` + CodeMirror apply | ✓ |
+| 6 | Analyze mode: không multi-slice / không diff apply | ✓ |
+| 7 | Composer **Đã khám phá · …** + **Trạng thái request · …** | ✓ v3.1 |
+| 8 | Agentic **không** lặp plan/slice khi edit mode | ✓ v3.1 |
+| 9 | Model trả `replacementText` → backend chấp nhận apply | ✓ v3.1 |
+| 10 | Slice line relative (1..N) → remap absolute trước gate | ✓ v3.1 |
 
-## T.5 Còn thiếu so với Cursor thật (roadmap, không block vận hành)
+## T.5 Còn thiếu so với Cursor thật (roadmap)
 
 | Thiếu | Ảnh hưởng | Hướng xử lý |
 |-------|-----------|-------------|
-| Micro LLM plan JSON | Planner heuristic đôi khi sai vùng trên file rất lớn | S.10: 64-token plan call |
-| File tree / multi-file tabs | Chỉ 1 `currentCode` string / editor | `targetFileScopes` + workspace index (L1 repo, không phải DynamicCode buffer) |
-| ~~Inline diff preview trong chat~~ | ~~Chat chỉ summary khi edit~~ | ✅ v2.6 PHẦN U |
+| **Grepped `pattern in file`** | Không giống ảnh Cursor grep | Map `tool_trace` workspace search → label `Grepped … in {pName}` |
+| **Nhiều patch card** (`+138`, `+12` từng bước) | Một diff tích lũy | `appendComposerDiffBlock` per `text_edit_apply` batch |
+| **Click slice trong Composer** | Mất navigate khi primary UI | U.9: chip Lx–Ly clickable trong dòng plan |
+| Micro LLM plan JSON | Planner heuristic sai vùng file cực lớn | S.10: 64-token plan call |
+| File tree / multi-file | Chỉ 1 `currentCode` string | `targetFileScopes` + workspace index |
 | `@file` mention | User không tag file bằng @ | Frontend autocomplete từ index |
 
 ## T.6 Config & restart
@@ -2128,48 +2182,63 @@ Verify: DevTools → Network → SSE → filter `edit_task_plan`.
 
 ---
 
+## T.6 Config & restart
+
+Sau pull v3.1:
+
+```bash
+cd backend && set -a && source ../config.local-strong.env && set +a && mvn spring-boot:run
+# Frontend admin: reload dev server
+```
+
+Verify: DevTools → Network → SSE → `edit_task_plan`, `edit_multi_slice_step`, `text_edit_apply`. UI: một cột Composer (Trạng thái request + Đã khám phá + diff).
+
+---
+
 # PHẦN U — COMPOSER UI (GIỐNG CURSOR / COPILOT TRONG CHAT)
 
-> **Mục tiêu:** Màn **Trò chuyện Trợ lý AI** hiển thị quy trình làm việc **trong luồng chat** giống Cursor Composer / Copilot Chat — không chỉ progress dock ẩn phía dưới.
+> **Mục tiêu:** Màn **Trò chuyện Trợ lý AI** hiển thị quy trình làm việc **trong luồng chat** giống Cursor Composer / Copilot Chat — **một timeline gọn**, không lặp progress dock / Agentic / usage dock.
 
-## U.1 Ba khối UI (v2.6)
+## U.1 Bốn khối UI (v3.1)
 
 ```
-┌─ Chat messages (user / assistant prose) ─────────────────┐
-├─ ▼ Explored · 2 reads, 1 search          [Composer]      │
-│     🧭 Edit mode → patch → CodeMirror                    │
-│     📋 Planned 4 edit regions · __forceKillWebviewProcess│
-│     📖 Read seo · L5810–5890 · fnRemoveTab               │
-│     🔎 Searched Lucene · dyn_ctx_editorCode_seo_t0       │
-│     ⚙️ Editing region 1/4 · L5810–5890 …                 │
-├─ seo.js  +12 -8                         [Diff preview]   │
-│     -  window.stopApp = function () {                    │
-│     +  window.stopApp = function () { // kill process    │
-├─ ▼ Ngữ cảnh editor + slice plan         [v2.5 panel]     │
-├─ ▼ Agentic workflow                                      │
+┌─ Chat messages ──────────────────────────────────────────┐
+├─ ▼ Trạng thái request · …              [request status]  │
+│     progress bar · req id · lỗi · local flow (expand)    │
+├─ ▼ Đã khám phá · N reads, M searches, K plans, E edits │
+│     🧭 route · 📋 plan (1 dòng) · 🔎 search · ⚙️ edit     │
+├─ seo.js  +N -M                         [diff preview]    │
+├─ ▼ Chi tiết kỹ thuật (optional)       [orch/verify]     │
 └─ Input                                                   │
 ```
 
-| Khối | File CSS | Dữ liệu từ |
-|------|----------|------------|
-| **Composer activity** | `.composerPanel` `.composerActivityList` | SSE → `appendComposerActivity` |
-| **Inline diff** | `.composerDiffBlock` | `text_edit_apply` → `buildComposerDiffBlock` |
-| **Editor context + slices** | `.workspacePlanPanel` | SSE `edit_task_plan` |
+| Khối | CSS | Dữ liệu từ | v3.1 |
+|------|-----|------------|------|
+| **Trạng thái request** | `.composerRequestProgressTrack`, `.composerStatusDetail` | `isLoading`, `completionState`, `geminiProgress` | ✅ gom từ progress/usage dock |
+| **Composer activity** | `.composerActivityList` | `appendComposerActivity` | ✅ |
+| **Inline diff** | `.composerDiffBlock` | `buildComposerDiffBlock` | ✅ 1 block tích lũy |
+| **Chi tiết kỹ thuật** | `.stageTimelineCard` | `visibleAgenticSteps` (filtered) | ✅ không lặp plan |
+| ~~Ngữ cảnh editor~~ | `.workspacePlanPanel` | `edit_task_plan` | ⚠️ ẩn khi `COMPOSER_PRIMARY` |
 
-## U.2 Map SSE → dòng activity (Cursor vocabulary)
+**Constant:** `COMPOSER_PRIMARY_EDIT_TIMELINE = true` — `appendAgenticStep` bỏ qua stage `edit_task_plan`, `edit_task_slice_*`, `edit_multi_slice`, `scope_reasoning_planner`.
+
+## U.2 Map SSE → dòng activity (Cursor vocabulary, v3.1)
 
 | SSE / sự kiện | Dòng Composer hiển thị |
 |---------------|------------------------|
-| `routing` + `responseMode=edit` | `Edit mode → JSON patch → CodeMirror` |
-| `edit_task_plan` | `Planned N edit regions · symbols…` |
-| Mỗi slice trong plan | `Read {pName} · L{start}–{end} · {symbol}` — vùng dòng **trong code string**, không đọc file disk |
-| `tool_search` / retrieval hits | `Searched Lucene · {source}: {summary}` |
-| `tool_trace` *edit_task_planner* | `Planned edit regions · …` |
-| `tool_trace` *vector_ingest* | `Indexed editor context · …` |
-| `edit_multi_slice_step` | `Editing region i/n · Lx–Ly` |
-| `text_edit_apply` | `Applied Lx–Ly → CodeMirror` |
+| `routing` + `responseMode=edit` | `🧭 Chế độ edit → patch JSON → CodeMirror` |
+| `edit_task_plan` | **Một dòng** `📋 Lập kế hoạch N vùng · symbols · Lx–Ly…` (không N× Read) |
+| `tool_search` / retrieval | `🔎 Searched workspace context · …` |
+| `tool_trace` *vector_ingest* | `📦 Indexed editor context · chunks=…` |
+| `tool_trace` *edit_task_planner* | Gộp vào dòng plan (không duplicate) |
+| `edit_multi_slice_step` | `⚙️ Editing region i/n · Lx–Ly` |
+| `text_edit_apply` | Cập nhật diff `+N -M`; optional `Applied Lx–Ly → CodeMirror` |
 
-Header collapsible: **「Explored · X reads, Y searches」** — tương đương Cursor "Explored 2 files, 1 search" (CSM: **reads = vùng string**, không phải số file disk).
+Header collapsible:
+- **「Đã khám phá · X lần đọc vùng, Y lần tìm, Z bước plan, W lần sửa vùng」**
+- Tương đương Cursor "Explored 2 files, 1 search" — **reads = vùng trên code string**, không phải file disk.
+
+Header **「Trạng thái request · …」** / **「Đang xử lý · …」** — tương đương progress + req id Cursor (v3.1).
 
 ## U.3 Inline diff (giống Cursor diff block)
 
@@ -2217,35 +2286,88 @@ sequenceDiagram
     B->>UI: text_edit_apply_done / complete
 ```
 
-## U.5 File liên quan v2.6
+## U.5 Layout Composer (v3.3 — một card edit mode)
 
-| File | Thay đổi |
-|------|----------|
-| `AiAssistantChat.tsx` | `ComposerActivityItem`, `buildComposerDiffBlock`, SSE wiring, panel UI |
-| `AiAssistantChat.module.css` | `.composerPanel`, `.composerDiffLine_add/del` |
-| `AiEditTaskPlannerService.java` | Plan slices (backend) |
-| `ApiSpringController.java` | SSE stages + multi-slice |
+Khi `COMPOSER_PRIMARY_EDIT_TIMELINE=true` **và** `responseMode=edit`:
 
-## U.6 Checklist nghiệm thu Composer UI
+```txt
+┌─ composerUnifiedCard (một viền) ─────────────────────┐
+│ ▼ Trạng thái request · LỖI · 45s · req-id…    [Hủy] │  ← loading: Đang xử lý · %
+│   [progress bar 3px]                                  │
+│ ▼ Đã khám phá · 2 bước plan, 5 lần sửa vùng          │
+│   🧭 Chế độ edit → …                                  │
+│   📋 Lập kế hoạch N vùng · …                          │
+│   ⚙️ Editing region …                                 │
+│ ▼ seo.js  +138  -12                                   │
+└───────────────────────────────────────────────────────┘
+```
+
+**Không hiển thị** (edit mode, luồng bình thường):
+
+- Block **Tiến độ xử lý** + nhóm **Chuẩn bị** + “Đang ẩn N mốc cũ”
+- Dock **「N bước agentic hoàn tất」** khi chỉ còn bước nội bộ (route/plan/schema)
+
+**Vẫn hiện** progress dock khi: `review_required`, pending approval, low-confidence retry.
+
+| Flag / hằng | Vai trò |
+|-------------|---------|
+| `useUnifiedComposerTimeline` | `COMPOSER_PRIMARY && responseMode=edit` |
+| `COMPOSER_INTERNAL_AGENTIC_STAGES` | Stages không đưa vào Agentic dock |
+| `showLegacyProgressDock` | false trong edit trừ review/retry |
+| `appendStageEvent` early return | Edit stream: skip preparing/chunking; giữ error/blocked |
+
+Sau **done**: tự collapse Trạng thái request + Đã khám phá (~4.5s). **error**: giữ mở để xem Lý do / requestId.
+
+## U.6 Checklist nghiệm thu Composer UI (v3.3)
 
 | # | Test | Pass |
 |---|------|------|
-| 1 | Gửi edit → thấy block **Explored · …** trong chat (không chỉ dock) | ✓ v2.6 |
-| 2 | Có dòng **Read seo · Lxxxx–Lyyyy** | ✓ |
-| 3 | Có dòng **Searched Lucene** sau orchestration | ✓ |
-| 4 | Sau apply: block **seo.js +N -M** với dòng xanh/đỏ | ✓ |
-| 5 | Collapse/expand activity và diff | ✓ |
-| 6 | Analyze mode: không hiện diff apply | ✓ |
+| 1 | Edit mode: **một card** (status + Explored + diff), không 3 viền rời | ✓ v3.3 |
+| 2 | Edit mode: **không** block Tiến độ xử lý / Chuẩn bị / “ẩn N mốc” | ✓ v3.3 |
+| 3 | Edit mode: **không** “1 bước agentic hoàn tất” khi chỉ route nội bộ | ✓ v3.3 |
+| 4 | Block **Đã khám phá · …** + **Trạng thái request · …** | ✓ v3.1 |
+| 5 | Plan **1 dòng** (không N Read + Agentic trùng) | ✓ v3.1 |
+| 6 | Diff **seo.js +N -M** sau apply | ✓ |
+| 7 | Lỗi `LOCAL_OVERRIDE_*`: composer mở + Lý do; assistant message giữ Nguyên nhân / Việc cần làm tiếp | ✓ |
+| 8 | Analyze mode: vẫn có Tiến độ xử lý nếu cần debug | ✓ |
 
-## U.7 So sánh trực tiếp với ảnh Cursor user gửi
+## U.7 So sánh trực tiếp với ảnh Cursor user gửi (cập nhật v3.3)
 
-| Cursor screenshot | CSM v2.6 |
-|-------------------|----------|
-| "Explored 2 files, 1 search" | "Explored · 2 reads, 1 search" (**reads = slice/string regions**) |
-| "Grepped X in file" | "Searched Lucene · …" / tool_trace (index theo `editorKey`, không grep path) |
-| "Read file L7268-7307" | "Read seo · L5810–5890" (**dòng trên currentCode string**) |
-| Diff block `file.tsx +138` | `{pName}.js +12 -8` — nhãn logic + diff trên string |
-| Plan steps before code | edit_task_plan + multi-slice steps |
+| Cursor screenshot | CSM v3.3 | Đủ? |
+|-------------------|----------|-----|
+| "Explored 2 files, 1 search" | "Đã khám phá · … lần đọc vùng, … lần tìm" | ✅ |
+| "Grepped X in file" | "Searched workspace context" (Lucene, không Grepped) | ⏳ |
+| "Read file L7268-7307" | Plan line chứa `L7268–7307` (không dòng Read riêng) | ✅ gọn hơn Cursor |
+| Diff `file.tsx +138` / `+12` / `+81-1` (nhiều card) | **Một** `{pName}.js +N -M` tích lũy | ⚠️ apply ✅, UI card ⏳ |
+| Plan + execute visible in chat | Composer timeline + backend multi-slice | ✅ |
+| Không lặp panel Agentic plan | `COMPOSER_PRIMARY_EDIT_TIMELINE` + internal stage filter | ✅ v3.3 |
+| Request status gọn | Một card với Explored (v3.3) | ✅ v3.3 |
+| Không dock “Chuẩn bị” riêng | `appendStageEvent` skip edit prep | ✅ v3.3 |
+
+## U.8 Backend hardening edit path (v3.1)
+
+| Fix | File | Mô tả |
+|-----|------|-------|
+| `replacementText` → `replacement` | `ApiSpringController` | Model local hay trả sai key JSON → `textEdits=0` |
+| `remapRelativeSliceLineNumbers` | `tryMultiSliceEditFromPlan` | Model trả dòng 1..N trong slice → cộng offset absolute |
+| `Set.of()` duplicate token crash | `AiEditTaskPlannerService.isUsefulSymbol` | Fix `IllegalArgumentException` trên edit lớn |
+| `MAX_SURGICAL_EDIT_LINE_SPAN=40` | `acceptLocalCodeEditCandidate` + patch validator | Chặn salvage 200+ dòng (L1865–2095) trước AST gate — log `LOCAL_OVERRIDE … AST gate` |
+
+## U.9 Roadmap UI (để khớp 100% ảnh Cursor)
+
+1. **Grepped line** — `mapToolTraceToComposerActivity` thêm kind `grep` khi lane workspace symbol search.
+2. **Per-step diff cards** — push `ComposerDiffBlock[]` thay vì merge một block.
+3. **Clickable plan chips** — `L1776–1919` trong dòng plan → `onCitationNavigate` (thay `workspacePlanPanel`).
+4. **Async ingest UX** — message "Indexing 371k chars in background (~N min)" khi `chunks=0 pending`.
+
+## U.10 File liên quan
+
+| File | Thay đổi |
+|------|----------|
+| `AiAssistantChat.tsx` | v3.3: `useUnifiedComposerTimeline`, `showLegacyProgressDock`, `COMPOSER_INTERNAL_AGENTIC_STAGES`, unified card |
+| `AiAssistantChat.module.css` | v3.3: `.composerUnifiedCard`, `.composerUnifiedSection`, `.composerPanel_unified` |
+| `AiEditTaskPlannerService.java` | Plan slices |
+| `ApiSpringController.java` | SSE + multi-slice + `replacementText` + `remapRelativeSliceLineNumbers` |
 
 ---
 
@@ -2285,7 +2407,7 @@ Mọi `textEdit` **phải** dùng số dòng **tuyệt đối 1-based** trên **
 |-------|---------|
 | `startLine` | Dòng đầu (inclusive), ≥ 1 |
 | `endLine` | Dòng cuối (inclusive), ≥ startLine |
-| `replacement` | Nội dung thay thế; `\n` tách thành nhiều dòng |
+| `replacement` | Nội dung thay thế; `\n` tách thành nhiều dòng. Alias backend chấp nhận: `replacementText`, `newText`, `text` |
 | `action` | `edit` (mặc định) hoặc `add` (chèn tại startLine) |
 
 **Condensed slice trong prompt** (vd. `/* SLICE 2/4 lines 5810-5890 */`) chỉ để model **đọc ngữ cảnh**. Dòng trong `textEdits` **vẫn là 5810–5890 trên full string**, không reset về 1 trong slice.
@@ -2849,7 +2971,7 @@ Config: `ai.orchestration.multimodal.local-only=true`
 
 **Không** inject `ai_code_master_prompt` / menu master. Fallback deterministic khi model 1.5B fail.
 
-Chi tiết: **PHẦN C.2.1** (đã có).
+Chi tiết đầy đủ: **PHẦN Y** (LMKT zero-JS-change contract).
 
 ## X.9 Orchestration preview (dev)
 
@@ -2894,5 +3016,294 @@ Chi tiết: **PHẦN C.2.1** (đã có).
 
 ---
 
-**Hết master brief v3.0.**  
+# PHẦN Y — LMKT LANE (`auto-lmkt.js` · zero JS change)
+
+> **Nguyên tắc cứng:** Client LMKT (`lmkt/src/api/ai/auto-lmkt.js`, `lmkt/src/api/ai/index.ts`) **không được sửa**. Mọi tương thích nằm ở backend `ApiSpringController` + `AiAssistantGatewayService`.
+
+## Y.1 Kiến trúc tổng quan
+
+```mermaid
+flowchart TB
+  subgraph client [LMKT Client — không đổi]
+    ALM[auto-lmkt.js]
+    IDX[index.ts generateSeoContentWithPrompt]
+    ALM --> IDX
+  end
+
+  subgraph endpoint [Backend]
+    API["POST /ai-generate-seo-content"]
+    GOAI[getObjectFromAI]
+    POP[populateAiResponseFromRawContent]
+    GW[AiAssistantGatewayService.generateSeoContent]
+    CP[generateCreativeParams]
+    SEO[LMKT_SEO_SYSTEM_PROMPT inference]
+  end
+
+  IDX -->|sync hoặc async| API
+  API --> GOAI
+  GOAI -->|taskType seo_content| GW
+  GW -->|"[CREATIVE_PARAMS_REQUEST]"| CP
+  GW -->|bài viết / FB / ads / category| SEO
+  CP --> POP
+  SEO --> POP
+  POP -->|success + data JSON| IDX
+  IDX --> ALM
+```
+
+## Y.2 HTTP contract (bắt buộc khớp `index.ts`)
+
+### Endpoint
+
+`POST /ai-generate-seo-content` → `ApiSpringController.getObjectFromAI()`
+
+### Sync request (prompt &lt; 8000 ký tự)
+
+```json
+{
+  "prompt": "<full prompt string>",
+  "taskType": "seo_content"
+}
+```
+
+### Async request (prompt ≥ 8000 ký tự hoặc `preferAsync`)
+
+**Submit:**
+
+```json
+{
+  "prompt": "...",
+  "mode": "submit",
+  "async": true,
+  "taskType": "seo_content"
+}
+```
+
+**Poll:**
+
+```json
+{ "mode": "status", "jobId": "ai-job-<uuid>" }
+```
+
+**Cancel (optional):**
+
+```json
+{ "mode": "cancel", "jobId": "ai-job-<uuid>" }
+```
+
+### Response envelope (client đọc cả `data` lẫn `result`)
+
+Backend `StandardResponse` trả flat JSON:
+
+```json
+{
+  "code": 200,
+  "success": true,
+  "message": "Thành công",
+  "data": { /* parsed AI JSON */ }
+}
+```
+
+Client unwrap (không đổi):
+
+```javascript
+// auto-lmkt.js — mọi luồng AI
+let payload = result.data?.result || result.result || result.data;
+
+// parseCreativeParamsResponse
+normalized = normalized.result || normalized.data || normalized;
+```
+
+**Async completed:** `status` response `data.result` = toàn bộ envelope sync `{ success, code, data, message }`. `index.ts` trả thẳng object đó cho caller.
+
+### Lỗi + rawContent fallback
+
+Khi model trả text không parse được JSON:
+
+```json
+{
+  "code": 200,
+  "success": false,
+  "message": "AI trả về dữ liệu không phải JSON hợp lệ",
+  "rawContent": "<assistant text gốc>"
+}
+```
+
+`auto-lmkt.js` `processContent()` tự `parseSeoJsonString(rawContent)` — backend **phải** giữ field `rawContent`.
+
+## Y.3 Ba sub-lane trong cùng endpoint
+
+| Sub-lane | Trigger | System prompt | Output JSON |
+|----------|---------|---------------|-------------|
+| **Creative params** | Prompt chứa `[CREATIVE_PARAMS_REQUEST]` | `CREATIVE_PARAMS_SYSTEM_PROMPT` | Xem Y.4 |
+| **LMKT custom article** | Prompt có `"content"`, `content_en`, anti-AI schema, … | `LMKT_SEO_SYSTEM_PROMPT` | Xem Y.5 |
+| **Simple SEO** | `PROMPT_GENERATE_POST` / html_content-only | `SEO_SYSTEM_PROMPT` (3 field) | `{ title, description, html_content }` |
+
+Routing:
+
+1. `isSeoContentTask(params, prompt)` — `taskType` chứa `seo` **hoặc** heuristic SEO trong prompt
+2. `fetchAiRawContent()` → `generateSeoContent()` — **không** menu recovery / code master
+3. `isCreativeParamsRequest(prompt)` → lane creative (token cap ≈ 384, temp ≈ 0.05)
+
+## Y.4 Creative params (`requestCreativeParams`)
+
+### Call sites trong `auto-lmkt.js` (không đổi)
+
+| Hàm | KIND | Mục đích |
+|-----|------|----------|
+| `processContent()` | `anti_ai` | Chọn persona/pattern trước anti-AI article |
+| `createServiceCategoryContent()` | `category_landing` | Content trang danh mục dịch vụ |
+| (prompt builder) | `facebook_post` | FB post creative angle |
+
+### Prompt marker
+
+```
+[CREATIVE_PARAMS_REQUEST]
+SEED: <unique>
+KIND: anti_ai | facebook_post | category_landing
+...
+Output JSON: { ... }
+Allowed personaKey: ...
+```
+
+### Schema bắt buộc (backend validate + fallback)
+
+| KIND | Trường bắt buộc |
+|------|-----------------|
+| `anti_ai` | `personaKey`, `contentPattern`, `sellingIntent`, `hook`, `angle`, `tone` |
+| `facebook_post` | `angle`, `persona.{label,tone,focus}` |
+| `category_landing` | `angle`, `persona`, `role`, `style`, `avoid`, `focus` |
+
+### Fallback deterministic
+
+Khi model 1.5B echo schema / JSON invalid:
+
+- `buildDeterministicCreativeParamsFallback(SEED, KIND)` — hash seed → chọn allowlist từ prompt
+- Config: `ai.seo.creative-params.fallback-enabled=true`
+- Cache stale creative entry bị bypass nếu shape invalid
+
+### Client parse
+
+```javascript
+parseCreativeParamsResponse(response)
+  → null nếu success===false
+  → unwrap result/data → JSON.parse nếu string
+```
+
+Backend **phải** trả `{ success: true, data: { personaKey, ... } }` — không bọc thêm `data.result`.
+
+## Y.5 Full content generation (các luồng chính)
+
+### Call sites `generateSeoContentWithPrompt` trong `auto-lmkt.js`
+
+| Hàm | Schema output chính |
+|-----|---------------------|
+| `processContent()` | Anti-AI: `title`, `content`, `content_en`, `content_zh`, `description*`, `keywords*`, `excerpt*`, BĐS attrs |
+| `createServiceDetailPost()` | `parseAIResponse()` — bắt buộc có `content` hoặc `content_en/zh` |
+| `createServiceCategoryContent()` | Category multi-lang content object |
+| `generateFacebookPostContent()` | `{ facebook_post, hashtags[] }` |
+| `generateAdsCreativeWithAI()` | `{ headline, description, message, cta, keywords[] }` |
+| Bulk / manual flows (~L18809, L19899) | Custom prompt → JSON theo prompt |
+
+### Anti-AI schema (quan trọng — **không** phải html_content-only)
+
+Prompt yêu cầu field `content` (HTML), không `html_content`. Backend:
+
+- `resolveSeoSystemPrompt()` → `LMKT_SEO_SYSTEM_PROMPT` khi prompt có `"content"`
+- `normalizeLmktContentFieldAliases()` — nếu model trả `html_content`, copy sang `content` (và ngược lại cho simple SEO)
+
+### Client extract pattern (giữ nguyên)
+
+```javascript
+let seo = result.data?.result || result.result || result.data;
+if (typeof seo === 'string') seo = parseSeoJsonString(seo);
+if (!result.success) {
+  const raw = result?.rawContent || result?.data?.rawContent;
+  if (raw) seo = parseSeoJsonString(raw);
+}
+buildDetail(ctx, seo, images, videos, opts);
+```
+
+### Trường tối thiểu để lưu DB
+
+| Luồng | Bắt buộc |
+|-------|----------|
+| Anti-AI / service detail | `title` + (`content` hoặc `content_en/zh`) |
+| Simple SEO (`index.ts`) | `title`, `description`, `html_content` |
+| Facebook post | `facebook_post` + 4–6 hashtags |
+| Ads creative | `headline`, `description`, `message`, `cta`, `keywords` |
+
+## Y.6 Async job contract
+
+| Giai đoạn | Backend `data` payload |
+|-----------|------------------------|
+| Submit OK | `{ jobId, status: "queued", pollAfterMs, progress }` |
+| Running | `{ jobId, status: "running", progress, elapsedMs }` |
+| Completed | `{ jobId, status: "completed", result: { success, code, data, message } }` |
+| Failed | `{ jobId, status: "failed", result: { success: false, message, errorCode? } }` |
+
+Giới hạn:
+
+- `ai.prompt.max-chars` (mặc định 3_000_000) — endpoint guard
+- Client async khi prompt ≥ `VITE_AI_ASYNC_THRESHOLD_CHARS` (8000)
+- Client poll tối đa `VITE_AI_ASYNC_MAX_WAIT_MS` (45 phút)
+
+## Y.7 Config backend LMKT
+
+```properties
+# Creative params lane
+ai.seo.creative-params.max-tokens=384
+ai.seo.creative-params.temperature=0.05
+ai.seo.creative-params.fallback-enabled=true
+
+# Prompt size (sync + async submit)
+ai.prompt.max-chars=3000000
+
+# Local inference
+ai.local.llama.max-prompt-chars=500000
+ai.local.llama.max-prompt-chars-hard-cap=1000000
+```
+
+## Y.8 Hàm backend — checklist implement
+
+| Hàm | File | Vai trò |
+|-----|------|---------|
+| `getObjectFromAI()` | ApiSpringController | Entry sync/async/status/cancel |
+| `isSeoContentRequest()` | ApiSpringController | Delegate `isSeoContentTask` |
+| `fetchAiRawContent()` | ApiSpringController | SEO → `generateSeoContent`, không menu recovery |
+| `populateAiResponseFromRawContent()` | ApiSpringController | Unwrap chat.completion → parse JSON → `{ success, data }` |
+| `isSeoContentPayload()` | ApiSpringController | `title` + (`content` **or** `html_content`) |
+| `isCreativeParamsPayload()` | ApiSpringController | personaKey/pattern hoặc angle+persona |
+| `normalizeLmktContentFieldAliases()` | ApiSpringController | Alias cross-field trước response |
+| `generateSeoContent()` | AiAssistantGatewayService | Route creative vs article |
+| `resolveSeoSystemPrompt()` | AiAssistantGatewayService | LMKT flexible vs simple SEO |
+| `generateCreativeParams()` | AiAssistantGatewayService | Small JSON + validate + fallback |
+| `isValidCreativeParams()` | AiAssistantGatewayService | Allowlist từ prompt |
+
+## Y.9 Cấm (LMKT lane)
+
+```txt
+✗ Sửa auto-lmkt.js hoặc index.ts để “fix” backend
+✗ Inject ai_code_master_prompt / menu master vào SEO endpoint
+✗ Trả textEdits / SSE code-stream cho LMKT
+✗ Ép html_content-only system prompt khi user prompt định nghĩa "content"
+✗ Bỏ rawContent khi JSON parse fail (client cần fallback)
+✗ Ghi menu learning memory sau SEO request (chỉ menu lane)
+```
+
+## Y.10 Test checklist (không đổi JS)
+
+| # | Test | Pass |
+|---|------|------|
+| 1 | `requestCreativeParams('anti_ai')` → JSON hợp lệ hoặc seed fallback | ☐ |
+| 2 | `processContent()` anti-AI → `data.content` có HTML, lưu DB OK | ☐ |
+| 3 | Prompt ≥ 8k → async submit/poll → cùng envelope sync | ☐ |
+| 4 | Model trả markdown JSON → parse OK hoặc rawContent fallback | ☐ |
+| 5 | `PROMPT_GENERATE_POST` simple SEO → `html_content` (+ alias `content`) | ☐ |
+| 6 | Facebook post → `facebook_post` + hashtags | ☐ |
+| 7 | Creative cache stale → bypass + regenerate/fallback | ☐ |
+| 8 | Local-only bật, llama down → `LOCAL_PROVIDER_UNAVAILABLE` | ☐ |
+
+---
+
+**Hết master brief v3.3.**  
 Chỉ dùng file này khi yêu cầu Cursor AI implement / làm lại CSM AI Local hoặc domain System Management liên quan RAG.

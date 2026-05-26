@@ -165,6 +165,9 @@ else
             ;;
         fast|*)
             EFFECTIVE_SPRING_PROFILES="prod,weak-local"
+            if [ "${CSM_WARN_FAST_EDIT:-true}" = "true" ]; then
+                config_log "WARNING: AI_LOCAL_MODE=fast caps llama max-tokens=96 — code EDIT will fail. Use AI_LOCAL_MODE=5gb (see config.local-5gb.env) for edit on server."
+            fi
             ;;
     esac
 fi
