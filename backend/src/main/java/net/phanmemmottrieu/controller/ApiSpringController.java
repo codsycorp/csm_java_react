@@ -29558,6 +29558,11 @@ public class ApiSpringController {
             @SuppressWarnings("unchecked")
             Map<String, Object> parsed = objectMapper.readValue(rawContent, Map.class);
 
+            String fromChoices = extractChatCompletionAssistantText(parsed);
+            if (fromChoices != null && !fromChoices.isBlank()) {
+                return sanitizePromptEchoLeakage(fromChoices);
+            }
+
             Object topLevelSuccess = parsed.get("success");
             if (topLevelSuccess instanceof Boolean && !((Boolean) topLevelSuccess)) {
                 return "";
@@ -29595,6 +29600,27 @@ public class ApiSpringController {
         }
 
         return "";
+    }
+
+    @SuppressWarnings("unchecked")
+    private String extractChatCompletionAssistantText(Map<String, Object> parsed) {
+        if (parsed == null) {
+            return null;
+        }
+        Object choicesObj = parsed.get("choices");
+        if (!(choicesObj instanceof List<?> choices) || choices.isEmpty()) {
+            return null;
+        }
+        Object first = choices.get(0);
+        if (!(first instanceof Map<?, ?> firstMap)) {
+            return null;
+        }
+        Object messageObj = firstMap.get("message");
+        if (!(messageObj instanceof Map<?, ?> messageMap)) {
+            return null;
+        }
+        Object contentObj = messageMap.get("content");
+        return contentObj == null ? null : String.valueOf(contentObj);
     }
 
     private String sanitizePromptEchoLeakage(String text) {
@@ -31165,6 +31191,19 @@ public class ApiSpringController {
             // Parse JSON directly from rawContent
             @SuppressWarnings("unchecked")
             Map<String, Object> parsedResult = objectMapper.readValue(rawContent, Map.class);
+
+            // Local llama wraps output as OpenAI chat.completion — unwrap assistant text before SEO/menu parse.
+            if (parsedResult.containsKey("choices")
+                    && !parsedResult.containsKey("content")
+                    && !parsedResult.containsKey("result")) {
+                String assistantText = extractChatCompletionAssistantText(parsedResult);
+                if (assistantText != null && !assistantText.isBlank()) {
+                    Map<String, Object> unwrapped = new java.util.LinkedHashMap<>();
+                    unwrapped.put("provider", String.valueOf(parsedResult.getOrDefault("provider", "local_provider")));
+                    unwrapped.put("content", assistantText);
+                    parsedResult = unwrapped;
+                }
+            }
 
             Object topLevelSuccess = parsedResult.get("success");
             if (topLevelSuccess instanceof Boolean && !((Boolean) topLevelSuccess)) {

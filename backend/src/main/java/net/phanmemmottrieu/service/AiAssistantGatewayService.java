@@ -4698,10 +4698,11 @@ Rules:
       choice.put("finish_reason", "stop");
 
       Map<String, Object> payload = new LinkedHashMap<>();
-      payload.put("id", "gemini-compat-" + System.currentTimeMillis());
+      payload.put("id", "local-compat-" + System.currentTimeMillis());
       payload.put("object", "chat.completion");
       payload.put("created", System.currentTimeMillis() / 1000L);
-      payload.put("model", "gemini");
+      payload.put("model", "local_provider");
+      payload.put("provider", "local_provider");
       payload.put("choices", List.of(choice));
 
       return objectMapper.writeValueAsString(payload);

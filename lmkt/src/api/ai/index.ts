@@ -76,7 +76,7 @@ const AI_TIMEOUT_MS = Number.isFinite(AI_TIMEOUT_ENV) && AI_TIMEOUT_ENV > 0
 const AI_REQUEST_TIMEOUT: number | false = Number.isFinite(AI_TIMEOUT_ENV) && AI_TIMEOUT_ENV === 0
 	? false
 	: AI_TIMEOUT_MS;
-const AI_ASYNC_THRESHOLD_CHARS = Number(import.meta.env.VITE_AI_ASYNC_THRESHOLD_CHARS) || 200000;
+const AI_ASYNC_THRESHOLD_CHARS = Number(import.meta.env.VITE_AI_ASYNC_THRESHOLD_CHARS) || 8000;
 const AI_ASYNC_POLL_INTERVAL_MS = Number(import.meta.env.VITE_AI_ASYNC_POLL_INTERVAL_MS) || 4000;
 const AI_ASYNC_MAX_WAIT_MS = Number(import.meta.env.VITE_AI_ASYNC_MAX_WAIT_MS) || 45 * 60 * 1000;
 
@@ -84,6 +84,9 @@ export type AiProgressPayload = Record<string, any>;
 
 type GenerateSeoContentOptions = {
 	onProgress?: (progress: AiProgressPayload) => void;
+	/** Submit async job + poll — recommended for local llama on weak servers (avoids long HTTP hang). */
+	preferAsync?: boolean;
+	taskType?: string;
 };
 
 async function generateSeoContentWithPromptAsync(prompt: string, options?: GenerateSeoContentOptions): Promise<ApiResponse<any>> {
@@ -93,6 +96,7 @@ async function generateSeoContentWithPromptAsync(prompt: string, options?: Gener
 				prompt,
 				mode: "submit",
 				async: true,
+				taskType: options?.taskType || "seo_content",
 			},
 			timeout: AI_REQUEST_TIMEOUT,
 		})
@@ -262,13 +266,16 @@ export async function generateSeoContentWithPrompt(prompt: string, options?: Gen
 	};
 	
 	try {
-		if (prompt.length >= AI_ASYNC_THRESHOLD_CHARS) {
+		if (options?.preferAsync || prompt.length >= AI_ASYNC_THRESHOLD_CHARS) {
 			return await generateSeoContentWithPromptAsync(prompt, options);
 		}
 
 		const response = await request
 			.post("ai-generate-seo-content", {
-				json: requestBody,
+				json: {
+					...requestBody,
+					taskType: options?.taskType || "seo_content",
+				},
 				timeout: AI_REQUEST_TIMEOUT,
 			})
 			.json<ApiResponse<any>>(); // any để chấp nhận custom fields

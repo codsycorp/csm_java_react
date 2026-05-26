@@ -5669,6 +5669,15 @@ function parseSeoJsonString(seoString) {
   }
 }
 
+function extractSeoFromAiResult(result) {
+  let seo = result?.data?.result || result?.result || result?.data;
+  const wrappedContent = seo?.choices?.[0]?.message?.content;
+  if (wrappedContent) {
+    return parseSeoJsonString(String(wrappedContent));
+  }
+  return seo;
+}
+
 async function processContent(item, opts = {}) {
   const backendGuardMsg = getBackendGuardMessage();
   if (backendGuardMsg) {
@@ -5993,21 +6002,34 @@ async function processContent(item, opts = {}) {
     throw new Error("Prompt rỗng - không thể gọi AI!");
   }
   
-  console.log(`[processContent] ⏳ Gọi AI - BẮT ĐẦU CHỜ (có thể mất 30-60 giây) - ${new Date().toLocaleTimeString()}`);
-  thongbao(ti("⏳ Đang gọi AI... (Có thể mất 30-60 giây, vui lòng chờ)", "⏳ Calling AI... (may take 30-60 seconds, please wait)", "⏳ 正在调用AI...（可能需要30-60秒，请稍候）"));
+  console.log(`[processContent] ⏳ Gọi AI local — có thể mất 3-8 phút - ${new Date().toLocaleTimeString()}`);
+  thongbao(ti("⏳ Đang gọi AI local... (3-8 phút, vui lòng chờ)", "⏳ Calling local AI... (3-8 min, please wait)", "⏳ 正在调用本地AI...（约3-8分钟，请稍候）"));
   
   let result;
-  let aiTimeoutId = null;
+  let aiHeartbeatId = null;
+  const startAI = Date.now();
   try {
-    // 🟢 TIMEOUT SAFETY: Đăng ký timeout vào timerRegistry để đảm bảo cleanup
-    const aiTimeoutMs = 120000;  // 2 phút timeout
-    aiTimeoutId = setTimeout(() => {
-      console.error(`⏱️ [processContent] AI timeout sau ${aiTimeoutMs}ms`);
-    }, aiTimeoutMs);
-    timerRegistry.register('processContent_ai_' + Date.now(), aiTimeoutId, 'timeout');
+    aiHeartbeatId = setInterval(() => {
+      const elapsedSec = Math.round((Date.now() - startAI) / 1000);
+      console.log(`[processContent] ⏳ AI đang xử lý... ${elapsedSec}s`);
+      if (elapsedSec >= 90 && elapsedSec % 60 === 0) {
+        thongbao(ti(
+          `⏳ Vẫn đang chờ AI local... (${elapsedSec}s)`,
+          `⏳ Still waiting for local AI... (${elapsedSec}s)`,
+          `⏳ 仍在等待本地AI...（${elapsedSec}秒）`
+        ));
+      }
+    }, 30000);
     
-    const startAI = Date.now();
-    result = await generateFn(prompt);
+    result = await generateFn(prompt, {
+      preferAsync: true,
+      taskType: "seo_content",
+      onProgress: (progress) => {
+        if (progress?.message) {
+          console.log("[processContent] AI progress:", progress.message, progress);
+        }
+      }
+    });
     const durationAI = ((Date.now() - startAI) / 1000).toFixed(1);
     
     console.log(`[processContent] ✅ AI trả về - Mất ${durationAI}s - ${new Date().toLocaleTimeString()}`);
@@ -6017,24 +6039,22 @@ async function processContent(item, opts = {}) {
     console.log(`[DEBUG] result.result:`, result?.result);
     console.log(`[DEBUG] result.data:`, result?.data);
   } catch (aiError) {
-    // 🟢 CLEANUP: Xóa timeout nếu có lỗi
-    if (aiTimeoutId) {
-      timerRegistry.clear('processContent_ai_' + (aiTimeoutId.toString().match(/\d+/) || [Date.now()])[0]);
-    }
     const aiStatus = extractHttpStatusFromError(aiError);
     if ([401, 403, 404, 429, 500, 502, 503, 504].includes(aiStatus)) {
       activateBackendGuard(`AI API lỗi ${aiStatus}`, 2 * 60 * 1000);
     }
     console.error(`❌ [processContent] Lỗi gọi AI:`, aiError.message);
     throw new Error(`Lỗi gọi AI: ${aiError.message}`);
+  } finally {
+    if (aiHeartbeatId) clearInterval(aiHeartbeatId);
   }
   
   if (!result) {
     throw new Error("AI trả về null/undefined");
   }
 
-  // ✅ Backend trả format: result.data.result = SEO content
-  let seo = result.data?.result || result.result || result.data;
+  // ✅ Backend trả format: result.data = SEO JSON (hoặc legacy chat.completion wrapper)
+  let seo = extractSeoFromAiResult(result);
 
   // Fallback: backend có thể trả success=false khi không parse được JSON,
   // nhưng vẫn gửi rawContent để frontend tự phục hồi parse.
