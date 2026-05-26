@@ -8,7 +8,10 @@ import net.phanmemmottrieu.service.AiLocalRuntimeTierService;
 import net.phanmemmottrieu.service.AiMultimodalScannerService;
 import net.phanmemmottrieu.service.AiLocalOrchestrationService;
 import net.phanmemmottrieu.service.AiBusinessMemoryVectorService;
+import net.phanmemmottrieu.service.AiLocalEmbeddingService;
+import net.phanmemmottrieu.service.AiTenantKnowledgeIngestionService;
 import net.phanmemmottrieu.service.ComfyUIProcessService;
+import net.phanmemmottrieu.service.LocalAiAssistantContextService;
 import net.phanmemmottrieu.service.LlamaCppNativeService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -59,6 +62,15 @@ public class AiLocalOpsController {
 
     @Autowired(required = false)
     private AiBusinessMemoryVectorService aiBusinessMemoryVectorService;
+
+    @Autowired(required = false)
+    private LocalAiAssistantContextService localAiAssistantContextService;
+
+    @Autowired(required = false)
+    private AiTenantKnowledgeIngestionService aiTenantKnowledgeIngestionService;
+
+    @Autowired(required = false)
+    private AiLocalEmbeddingService aiLocalEmbeddingService;
 
     @Autowired(required = false)
     private ComfyUIProcessService comfyUIProcessService;
@@ -276,6 +288,102 @@ public class AiLocalOpsController {
             "Vision model chỉ bật khi cần quét ảnh để giảm tải tổng thể."
         ));
         return ResponseEntity.ok(out);
+    }
+
+    @GetMapping("/knowledge/status")
+    public ResponseEntity<Map<String, Object>> knowledgeStatus() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("success", true);
+        out.put("knowledgeBaseDir", resolveKnowledgeBaseDir().toString());
+        if (localAiAssistantContextService != null) {
+            out.put("workspaceIndex", localAiAssistantContextService.describeWorkspaceIndexStatus());
+        }
+        if (aiLocalEmbeddingService != null) {
+            out.put("embedding", aiLocalEmbeddingService.getStats());
+        } else if (aiBusinessMemoryVectorService != null) {
+            out.put("embedding", Map.of("note", "AiLocalEmbeddingService unavailable"));
+        }
+        out.put("businessMemoryIndexDir", resolveBusinessMemoryDir().toString());
+        out.put("menuLearningFiles", listMenuLearningFiles());
+        out.put("authorStyleDnaPath", resolveKnowledgeBaseDir().resolve("author_style_dna.md").toString());
+        out.put("authorStyleDnaExists", Files.isRegularFile(resolveKnowledgeBaseDir().resolve("author_style_dna.md")));
+        return ResponseEntity.ok(out);
+    }
+
+    @PostMapping("/knowledge/rebuild-workspace")
+    public ResponseEntity<Map<String, Object>> rebuildWorkspaceKnowledge(
+        @org.springframework.web.bind.annotation.RequestParam(value = "fullCode", defaultValue = "true") boolean fullCode,
+        @org.springframework.web.bind.annotation.RequestParam(value = "appId", defaultValue = "csm") String appId
+    ) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (localAiAssistantContextService == null) {
+            out.put("success", false);
+            out.put("errorCode", "WORKSPACE_INDEX_UNAVAILABLE");
+            return ResponseEntity.ok(out);
+        }
+        Map<String, Object> workspace = localAiAssistantContextService.forceRebuildWorkspaceIndex(fullCode);
+        out.put("success", true);
+        out.put("fullCodeScan", fullCode);
+        out.put("workspaceIndex", workspace);
+        if (aiTenantKnowledgeIngestionService != null) {
+            out.put("tenantKnowledge", aiTenantKnowledgeIngestionService.ingestTenantKnowledge(appId));
+        }
+        out.put("note", fullCode
+            ? "Full code scan indexed into workspace Lucene. Export pack with scripts/csm-knowledge-pack.sh export"
+            : "Markdown-only workspace index rebuilt");
+        return ResponseEntity.ok(out);
+    }
+
+    @PostMapping("/knowledge/ingest-tenant")
+    public ResponseEntity<Map<String, Object>> ingestTenantKnowledge(
+        @org.springframework.web.bind.annotation.RequestParam(value = "appId", defaultValue = "csm") String appId
+    ) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (aiTenantKnowledgeIngestionService == null) {
+            out.put("success", false);
+            out.put("errorCode", "TENANT_INGEST_UNAVAILABLE");
+            return ResponseEntity.ok(out);
+        }
+        out.put("success", true);
+        out.put("result", aiTenantKnowledgeIngestionService.ingestTenantKnowledge(appId));
+        return ResponseEntity.ok(out);
+    }
+
+    private Path resolveKnowledgeBaseDir() {
+        Path cwd = Paths.get(System.getProperty("user.dir", ".")).toAbsolutePath().normalize();
+        Path direct = cwd.resolve("csm_datas/ai_local");
+        if (Files.isDirectory(direct)) {
+            return direct;
+        }
+        return cwd.resolve("backend/csm_datas/ai_local").normalize();
+    }
+
+    private Path resolveBusinessMemoryDir() {
+        Path base = resolveKnowledgeBaseDir();
+        Path nested = base.resolve("ai_business_memory");
+        if (Files.isDirectory(nested)) {
+            return nested;
+        }
+        return base.resolve("ai_business_memory");
+    }
+
+    private List<String> listMenuLearningFiles() {
+        try {
+            Path base = resolveKnowledgeBaseDir();
+            if (!Files.isDirectory(base)) {
+                return List.of();
+            }
+            try (Stream<Path> stream = Files.list(base)) {
+                return stream
+                    .filter(Files::isRegularFile)
+                    .map(path -> path.getFileName().toString())
+                    .filter(name -> name.startsWith("ai_menu_learning_") && name.endsWith(".jsonl"))
+                    .sorted()
+                    .toList();
+            }
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 
     @PostMapping("/scan-dry-run")
@@ -955,7 +1063,8 @@ public class AiLocalOpsController {
     }
 
     private String detectRole(String lowerFileName) {
-        if (lowerFileName.contains("moondream") || lowerFileName.contains("-vl-") || lowerFileName.contains("vision")) {
+        if (lowerFileName.contains("moondream") || lowerFileName.contains("smolvlm")
+            || lowerFileName.contains("-vl-") || lowerFileName.contains("vision")) {
             return "vision";
         }
         return "reasoning";

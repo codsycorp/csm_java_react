@@ -2721,6 +2721,8 @@ export default function CodeEditor() {
 									</div>
 								)}
 								<CodeMirror
+									aiAssistantAppId={appId}
+									aiAssistantCurrentCode={aiLastCode}
 									onCreateEditor={(view) => {
 										editorScrollCleanupRef.current?.();
 										editorRef.current = view;

@@ -131,7 +131,9 @@ public class CsrfProtectionFilter extends OncePerRequestFilter {
             uri.startsWith("/api/chat-history-guest") || uri.startsWith("/chat-history-guest") ||
             uri.startsWith("/api/chat-history-app") || uri.startsWith("/chat-history-app") ||
             uri.startsWith("/api/chat-mark-read") || uri.startsWith("/chat-mark-read") ||
-            uri.startsWith("/api/chat-mark-all-read") || uri.startsWith("/chat-mark-all-read")) {
+            uri.startsWith("/api/chat-mark-all-read") || uri.startsWith("/chat-mark-all-read") ||
+            uri.startsWith("/api/monitoring/") ||
+            uri.startsWith("/api/ai-local") || uri.startsWith("/ai-local")) {
             filterChain.doFilter(request, response);
             return;
         }

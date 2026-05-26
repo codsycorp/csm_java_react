@@ -60,6 +60,10 @@ public class SecurityConfig {
             .requestMatchers(
                 "/api/monitoring/**"
             ).permitAll()
+            // Local AI ops (knowledge pack, health, models) — localhost / run-server dev
+            .requestMatchers(
+                "/api/ai-local/**", "/ai-local/**"
+            ).permitAll()
             // Public API endpoints (with/without /api prefix) - only auth endpoints
             .requestMatchers(
                 "/api/login", "/api/refresh-token", "/api/register", "/api/create-default-data",

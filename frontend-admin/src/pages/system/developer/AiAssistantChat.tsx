@@ -136,8 +136,30 @@ interface AgenticStep {
 	stepTotal?: number
 	patchValidator?: PatchValidatorMeta
 	patchDryRun?: PatchDryRunMeta
-	status: "planned" | "running" | "done"
+	status: "planned" | "running" | "done" | "error"
 	timestamp: number
+}
+
+/** Cursor/Copilot-style edit task plan slice (from SSE edit_task_plan). */
+interface EditTaskPlanSliceState {
+	index: number
+	total: number
+	kind: string
+	lineStart: number
+	lineEnd: number
+	symbols: string[]
+	objective?: string
+	excerptPreview?: string
+	status: "planned" | "running" | "done" | "error" | "skipped"
+}
+
+interface EditTaskPlanState {
+	flowType: string
+	language: string
+	targetSymbols: string[]
+	slices: EditTaskPlanSliceState[]
+	multiSlice: boolean
+	requestSummary?: string
 }
 
 interface OrchestrationPreviewResult {
@@ -1854,6 +1876,137 @@ function buildCodeOperationPreviewLines(baseText: string, textEdits: any[], maxI
 	return lines;
 }
 
+/** Cursor/Copilot Composer — activity line in chat (grep/read/plan/index/edit). */
+interface ComposerActivityItem {
+	id: string
+	kind: "search" | "read" | "plan" | "index" | "edit" | "apply" | "route" | "tool"
+	icon: string
+	label: string
+	status: "running" | "done" | "error"
+	timestamp: number
+}
+
+interface ComposerDiffLine {
+	kind: "add" | "del" | "ctx"
+	text: string
+	lineNo?: number
+}
+
+interface ComposerDiffBlock {
+	fileLabel: string
+	addCount: number
+	delCount: number
+	lines: ComposerDiffLine[]
+}
+
+function buildComposerDiffBlock(
+	baseText: string,
+	textEdits: any[],
+	fileLabel: string,
+	maxLines = 28,
+): ComposerDiffBlock {
+	const baseLines = String(baseText || "").split("\n");
+	const diffLines: ComposerDiffLine[] = [];
+	let addCount = 0;
+	let delCount = 0;
+	const normalizeStart = (edit: any) => Math.max(1, Math.floor(Number(edit?.startLine ?? edit?.line ?? 1)));
+	const normalizeEnd = (edit: any, start: number) => Math.max(start, Math.floor(Number(edit?.endLine ?? start)));
+	const getReplacement = (edit: any) => String(edit?.replacement ?? edit?.text ?? edit?.newText ?? "");
+
+	const sorted = [...(Array.isArray(textEdits) ? textEdits : [])].sort((a, b) => normalizeStart(a) - normalizeStart(b));
+	for (const edit of sorted) {
+		const startLine = normalizeStart(edit);
+		const endLine = normalizeEnd(edit, startLine);
+		const replacement = getReplacement(edit);
+		for (let i = startLine - 1; i < endLine && i < baseLines.length; i += 1) {
+			diffLines.push({ kind: "del", text: baseLines[i] ?? "", lineNo: i + 1 });
+			delCount += 1;
+			if (diffLines.length >= maxLines) {
+				break;
+			}
+		}
+		for (const line of replacement.split(/\r?\n/)) {
+			diffLines.push({ kind: "add", text: line });
+			addCount += 1;
+			if (diffLines.length >= maxLines) {
+				break;
+			}
+		}
+		if (diffLines.length >= maxLines) {
+			break;
+		}
+	}
+	return {
+		fileLabel,
+		addCount,
+		delCount,
+		lines: diffLines.slice(0, maxLines),
+	};
+}
+
+function mapToolTraceToComposerActivity(
+	toolName: string,
+	inputDigest: string,
+	outputDigest: string,
+	status: string,
+): Omit<ComposerActivityItem, "id" | "timestamp"> {
+	const lane = String(toolName || "tool").trim().toLowerCase();
+	const digest = [outputDigest, inputDigest].filter(Boolean).join(" · ");
+	const running = status === "running" || status === "start";
+	const lifecycle: ComposerActivityItem["status"] = status === "failed" ? "error" : (running ? "running" : "done");
+
+	if (lane.includes("edit_task_planner") || lane.includes("region_plan")) {
+		return { kind: "plan", icon: "📋", label: digest ? `Planned edit regions · ${digest}` : "Planned edit regions", status: lifecycle };
+	}
+	if (lane.includes("large_code") || lane.includes("vector_ingest") || lane.includes("ingestion") || lane.includes("ingest")) {
+		return { kind: "index", icon: "📦", label: digest ? `Indexed editor context · ${digest}` : "Indexed editor context", status: lifecycle };
+	}
+	if (lane.includes("orchestration") || lane.includes("retrieval") || lane.includes("rag") || lane.includes("lucene")) {
+		return { kind: "search", icon: "🔎", label: digest ? `Searched workspace context · ${digest}` : "Searched workspace context", status: lifecycle };
+	}
+	return { kind: "tool", icon: "⚙️", label: digest ? `Tool · ${toolName}: ${digest}` : `Tool · ${toolName}`, status: lifecycle };
+}
+
+function summarizeComposerActivity(items: ComposerActivityItem[]): string {
+	const searches = items.filter(i => i.kind === "search").length;
+	const reads = items.filter(i => i.kind === "read").length;
+	const plans = items.filter(i => i.kind === "plan").length;
+	const parts: string[] = [];
+	if (reads > 0) {
+		parts.push(`${reads} read${reads > 1 ? "s" : ""}`);
+	}
+	if (searches > 0) {
+		parts.push(`${searches} search${searches > 1 ? "es" : ""}`);
+	}
+	if (plans > 0) {
+		parts.push(`${plans} plan step${plans > 1 ? "s" : ""}`);
+	}
+	if (parts.length === 0) {
+		return `${items.length} step${items.length === 1 ? "" : "s"}`;
+	}
+	return parts.join(", ");
+}
+
+function summarizeComposerActivityVi(items: ComposerActivityItem[], uiText: (vi: string, en: string, zh: string) => string): string {
+	const searches = items.filter(i => i.kind === "search").length;
+	const reads = items.filter(i => i.kind === "read").length;
+	const plans = items.filter(i => i.kind === "plan").length;
+	const parts: string[] = [];
+	if (reads > 0) {
+		parts.push(uiText(`${reads} lần đọc vùng`, `${reads} read${reads > 1 ? "s" : ""}`, `${reads} 次读取`));
+	}
+	if (searches > 0) {
+		parts.push(uiText(`${searches} lần tìm`, `${searches} search${searches > 1 ? "es" : ""}`, `${searches} 次搜索`));
+	}
+	if (plans > 0) {
+		parts.push(uiText(`${plans} bước plan`, `${plans} plan step${plans > 1 ? "s" : ""}`, `${plans} 个计划步骤`));
+	}
+	if (parts.length === 0) {
+		return uiText(`${items.length} bước`, `${items.length} step${items.length === 1 ? "" : "s"}`, `${items.length} 步`);
+	}
+	return parts.join(uiText(", ", ", ", "，"));
+}
+
 function summarizeChecklistForConfirm(rawChecklist: any): string {
 	if (!rawChecklist)
 		return "";
@@ -1914,6 +2067,29 @@ function inferResponseModeByIntent(input: string, contextType: AiAssistantChatPr
 		return (hasEditIntent(text) || hasMenuPatchOnlyIntent(text)) ? "edit" : "analyze";
 	}
 	return hasEditIntent(text) ? "edit" : "analyze";
+}
+
+/** Outgoing code string + optional selection narrow-scope for AI local. No highlight → full string scope. */
+function resolveOutgoingEditorSnapshot(
+	currentCode: string,
+	liveCode: string,
+	metadata: Record<string, unknown>,
+): {
+	code: string
+	cursorLine?: number
+	selectionFromLine?: number
+	selectionToLine?: number
+} {
+	const code = String(liveCode || currentCode || "");
+	const cursorLine = Math.floor(Number(metadata.cursorLine ?? 0));
+	const selectionFromLine = Math.floor(Number(metadata.selectionFromLine ?? metadata.cursorLine ?? 0));
+	const selectionToLine = Math.floor(Number(metadata.selectionToLine ?? selectionFromLine ?? 0));
+	const hasSelection = Boolean(metadata.hasSelection) && selectionToLine > selectionFromLine;
+	return {
+		code,
+		...(cursorLine > 0 ? { cursorLine } : {}),
+		...(hasSelection && selectionFromLine > 0 ? { selectionFromLine, selectionToLine } : {}),
+	};
 }
 
 function hasMenuPatchOnlyIntent(input: string): boolean {
@@ -2266,6 +2442,13 @@ export default function AiAssistantChat({
 	const [showOrchPreview, setShowOrchPreview] = useState(false);
 	const [agenticSteps, setAgenticSteps] = useState<AgenticStep[]>([]);
 	const [agenticStepsCollapsed, setAgenticStepsCollapsed] = useState(false);
+	const [editTaskPlan, setEditTaskPlan] = useState<EditTaskPlanState | null>(null);
+	const [editTaskPlanCollapsed, setEditTaskPlanCollapsed] = useState(false);
+	const [composerActivity, setComposerActivity] = useState<ComposerActivityItem[]>([]);
+	const [composerActivityCollapsed, setComposerActivityCollapsed] = useState(false);
+	const [composerDiffBlock, setComposerDiffBlock] = useState<ComposerDiffBlock | null>(null);
+	const [composerDiffCollapsed, setComposerDiffCollapsed] = useState(false);
+	const composerAppliedEditsRef = useRef<any[]>([]);
 	const [streamRequestId, setStreamRequestId] = useState("");
 	const [streamJobId, setStreamJobId] = useState("");
 	const [completionState, setCompletionState] = useState<CompletionState>("idle");
@@ -3598,6 +3781,12 @@ export default function AiAssistantChat({
 			return uiText("Áp kết quả vào editor", "Applying results to editor", "将结果应用到编辑器");
 		case "scope_reasoning":
 			return uiText("Suy luận theo phạm vi", "Scope reasoning", "范围推理");
+		case "edit_task_plan":
+			return uiText("Lập kế hoạch vùng sửa", "Edit region plan", "编辑区域计划");
+		case "edit_multi_slice":
+			return uiText("Sửa từng vùng (multi-slice)", "Multi-slice edit", "分区域编辑");
+		case "edit_multi_slice_step":
+			return uiText("Thực thi vùng code", "Executing code region", "执行代码区域");
 		case "dynamic_ingestion":
 			return uiText("Nạp bộ nhớ động", "Dynamic ingestion", "动态入库");
 		case "agentic_plan_schema":
@@ -5154,6 +5343,66 @@ export default function AiAssistantChat({
 		});
 	}, []);
 
+	const upsertEditTaskPlanSliceStatus = useCallback((
+		sliceIndex: number,
+		status: EditTaskPlanSliceState["status"],
+	) => {
+		if (!Number.isFinite(sliceIndex) || sliceIndex <= 0) {
+			return;
+		}
+		setEditTaskPlan((prev) => {
+			if (!prev) {
+				return prev;
+			}
+			const slices = prev.slices.map((slice) => {
+				if (slice.index !== sliceIndex) {
+					return slice;
+				}
+				return { ...slice, status };
+			});
+			return { ...prev, slices };
+		});
+	}, []);
+
+	const handleEditPlanSliceNavigate = useCallback((slice: EditTaskPlanSliceState) => {
+		if (!onCitationNavigate || slice.lineStart <= 0) {
+			return;
+		}
+		const token = slice.symbols?.[0] || slice.kind || "region";
+		onCitationNavigate({
+			path: targetPName ? String(targetPName) : undefined,
+			line: slice.lineStart,
+			token,
+		});
+	}, [onCitationNavigate, targetPName]);
+
+	const appendComposerActivity = useCallback((partial: Omit<ComposerActivityItem, "id" | "timestamp">) => {
+		setComposerActivity((prev) => {
+			const existing = prev.findIndex(item => item.kind === partial.kind && item.label === partial.label);
+			if (existing >= 0) {
+				const updated = [...prev];
+				updated[existing] = { ...updated[existing], ...partial, timestamp: Date.now() };
+				return updated;
+			}
+			return [...prev, {
+				...partial,
+				id: `cact_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+				timestamp: Date.now(),
+			}];
+		});
+	}, []);
+
+	const refreshComposerDiffPreview = useCallback((edits: any[], baseOverride?: string) => {
+		if (!Array.isArray(edits) || edits.length === 0) {
+			return;
+		}
+		const base = String(baseOverride ?? undoSnapshotRef.current ?? liveCodeRef.current ?? currentCode ?? "");
+		const fileLabel = targetPName
+			? `${targetPName}${contextType === "menu_json" ? ".json" : ".js"}`
+			: (contextType === "menu_json" ? "menu.json" : "editor.js");
+		setComposerDiffBlock(buildComposerDiffBlock(base, edits, fileLabel));
+	}, [contextType, currentCode, targetPName]);
+
 	const handleApproveAgenticStep = useCallback(async (step: AgenticStep) => {
 		if (!step.pendingTextEdits || step.pendingTextEdits.length <= 0) {
 			return;
@@ -5231,15 +5480,25 @@ export default function AiAssistantChat({
 		setShowOrchPreview(true);
 		try {
 			const inferredPreviewMode = inferResponseModeByIntent(msg, contextType);
+			const outgoingSnapshot = resolveOutgoingEditorSnapshot(
+				currentCode,
+				liveCodeRef.current,
+				requestEditorMetadata,
+			);
 			const res = await request.post("ai-orchestration-preview", {
 				json: {
 					appId,
 					message: msg,
-					currentCode,
+					currentCode: outgoingSnapshot.code,
 					language,
 					contextType,
 					pName: targetPName,
 					pType: targetPType,
+					...(outgoingSnapshot.cursorLine ? { cursorLine: outgoingSnapshot.cursorLine } : {}),
+					...(outgoingSnapshot.selectionFromLine ? {
+						selectionFromLine: outgoingSnapshot.selectionFromLine,
+						selectionToLine: outgoingSnapshot.selectionToLine,
+					} : {}),
 					editorMetadata: requestEditorMetadata,
 					taskType: contextType === "menu_json"
 						? (inferredPreviewMode === "edit" ? "menu_patch" : "menu_qa")
@@ -5393,6 +5652,13 @@ export default function AiAssistantChat({
 			setIsLoading(true);
 			setStageEvents([]);
 			setAgenticSteps([]);
+			setEditTaskPlan(null);
+			setEditTaskPlanCollapsed(false);
+			setComposerActivity([]);
+			setComposerActivityCollapsed(false);
+			setComposerDiffBlock(null);
+			setComposerDiffCollapsed(false);
+			composerAppliedEditsRef.current = [];
 			setAgenticStepsCollapsed(requestedResponseMode === "analyze");
 			lastAppliedCodeRef.current = "";
 			menuAuditStepsRef.current = [];
@@ -5447,7 +5713,13 @@ export default function AiAssistantChat({
 			turnAllowAutoApplyRef.current = requestedResponseMode === "edit";
 			localFlowVerifiedRef.current = false;
 			textEditApplyCountRef.current = 0;
-			editStreamStartCodeRef.current = liveCodeRef.current || currentCode || "";
+			const outgoingSnapshot = resolveOutgoingEditorSnapshot(
+				currentCode,
+				liveCodeRef.current,
+				requestEditorMetadata,
+			);
+			liveCodeRef.current = outgoingSnapshot.code;
+			editStreamStartCodeRef.current = outgoingSnapshot.code;
 			streamStartedInEditModeRef.current = requestedResponseMode === "edit";
 			requestStartedAtRef.current = Date.now();
 			lastProgressEventAtRef.current = requestStartedAtRef.current;
@@ -5481,11 +5753,16 @@ export default function AiAssistantChat({
 						flowType,
 						taskType,
 						...(sendExplicitResponseMode ? { responseMode: requestedResponseMode } : {}),
-						currentCode,
+						currentCode: outgoingSnapshot.code,
 						language,
 						contextType,
 						pName: targetPName,
 						pType: targetPType,
+						...(outgoingSnapshot.cursorLine ? { cursorLine: outgoingSnapshot.cursorLine } : {}),
+						...(outgoingSnapshot.selectionFromLine ? {
+							selectionFromLine: outgoingSnapshot.selectionFromLine,
+							selectionToLine: outgoingSnapshot.selectionToLine,
+						} : {}),
 						editorMetadata: requestEditorMetadata,
 						attachments: outgoingAttachments.map((attachment) => {
 							const imageBase64 = attachment.kind === "image" && attachment.dataUrl
@@ -5789,10 +6066,22 @@ export default function AiAssistantChat({
 								if (mode === "edit") {
 									turnAllowAutoApplyRef.current = true;
 									setActiveStreamResponseMode("edit");
+									appendComposerActivity({
+										kind: "route",
+										icon: "🧭",
+										label: uiText("Chế độ edit → patch JSON → CodeMirror", "Edit mode → JSON patch → CodeMirror", "编辑模式 → JSON 补丁 → CodeMirror"),
+										status: "done",
+									});
 								}
 								else if (mode === "analyze") {
 									turnAllowAutoApplyRef.current = false;
 									setActiveStreamResponseMode("analyze");
+									appendComposerActivity({
+										kind: "route",
+										icon: "💬",
+										label: uiText("Chế độ analyze → trả lời prose", "Analyze mode → prose response", "分析模式 → 文本回复"),
+										status: "done",
+									});
 								}
 								setMessages((prev) => {
 									const updated = [...prev];
@@ -5992,6 +6281,178 @@ export default function AiAssistantChat({
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evt);
+							}
+							else if (evt.stage === "edit_task_plan") {
+								const rawSlices = Array.isArray((evt as any).slices) ? (evt as any).slices : [];
+								const targetSymbols = Array.isArray((evt as any).targetSymbols)
+									? (evt as any).targetSymbols.map((s: unknown) => String(s || "").trim()).filter(Boolean)
+									: [];
+								const normalizedSlices: EditTaskPlanSliceState[] = rawSlices.map((slice: any, idx: number) => ({
+									index: Number(slice?.index || idx + 1),
+									total: Number(slice?.total || rawSlices.length || 1),
+									kind: String(slice?.kind || "region"),
+									lineStart: Number(slice?.lineStart || 0),
+									lineEnd: Number(slice?.lineEnd || 0),
+									symbols: Array.isArray(slice?.symbols)
+										? slice.symbols.map((s: unknown) => String(s || "").trim()).filter(Boolean)
+										: [],
+									objective: String(slice?.objective || "").trim() || undefined,
+									excerptPreview: String(slice?.excerptPreview || "").trim() || undefined,
+									status: "planned",
+								}));
+								setEditTaskPlan({
+									flowType: String((evt as any).flowType || contextType || "code"),
+									language: String((evt as any).language || language || "javascript"),
+									targetSymbols,
+									slices: normalizedSlices,
+									multiSlice: Boolean((evt as any).multiSliceExecution),
+									requestSummary: localizedEvtMessage || undefined,
+								});
+								setEditTaskPlanCollapsed(false);
+								appendComposerActivity({
+									kind: "plan",
+									icon: "📋",
+									label: uiText(
+										`Lập kế hoạch ${normalizedSlices.length} vùng sửa${targetSymbols.length ? `: ${targetSymbols.slice(0, 3).join(", ")}` : ""}`,
+										`Planned ${normalizedSlices.length} edit regions${targetSymbols.length ? `: ${targetSymbols.slice(0, 3).join(", ")}` : ""}`,
+										`规划 ${normalizedSlices.length} 个编辑区域${targetSymbols.length ? `：${targetSymbols.slice(0, 3).join(", ")}` : ""}`,
+									),
+									status: "done",
+								});
+								for (const slice of normalizedSlices) {
+									const symHint = slice.symbols.length > 0 ? slice.symbols.slice(0, 2).join(", ") : slice.kind;
+									const fileLabel = targetPName || appId || "editor";
+									appendComposerActivity({
+										kind: "read",
+										icon: "📖",
+										label: uiText(
+											`Read ${fileLabel} · L${slice.lineStart}–${slice.lineEnd}${symHint ? ` · ${symHint}` : ""}`,
+											`Read ${fileLabel} · L${slice.lineStart}–${slice.lineEnd}${symHint ? ` · ${symHint}` : ""}`,
+											`Read ${fileLabel} · 第 ${slice.lineStart}–${slice.lineEnd} 行${symHint ? ` · ${symHint}` : ""}`,
+										),
+										status: "done",
+									});
+								}
+								appendAgenticStep({
+									stage: "edit_task_plan",
+									icon: "📋",
+									label: uiText("Lập kế hoạch vùng sửa", "Edit region plan", "编辑区域计划"),
+									detail: uiText(
+										`${normalizedSlices.length} vùng${targetSymbols.length ? ` · ${targetSymbols.slice(0, 4).join(", ")}` : ""}`,
+										`${normalizedSlices.length} regions${targetSymbols.length ? ` · ${targetSymbols.slice(0, 4).join(", ")}` : ""}`,
+										`${normalizedSlices.length} 个区域${targetSymbols.length ? ` · ${targetSymbols.slice(0, 4).join(", ")}` : ""}`,
+									),
+									status: "done",
+								});
+								for (const slice of normalizedSlices) {
+									const symHint = slice.symbols.length > 0 ? slice.symbols.slice(0, 3).join(", ") : slice.kind;
+									appendAgenticStep({
+										stage: `edit_task_slice_${slice.index}`,
+										icon: "📍",
+										label: uiText(
+											`Vùng ${slice.index}/${slice.total}: L${slice.lineStart}–${slice.lineEnd}`,
+											`Region ${slice.index}/${slice.total}: L${slice.lineStart}–${slice.lineEnd}`,
+											`区域 ${slice.index}/${slice.total}: 第 ${slice.lineStart}–${slice.lineEnd} 行`,
+										),
+										detail: symHint,
+										stepIndex: slice.index,
+										stepTotal: slice.total,
+										status: "planned",
+									});
+								}
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "edit_multi_slice") {
+								const sliceStatus = String((evt as any).status || "").trim().toLowerCase();
+								const acceptedSlices = Number((evt as any).acceptedSlices || 0);
+								const textEditsCount = Number((evt as any).textEdits || 0);
+								if (sliceStatus === "running") {
+									appendAgenticStep({
+										stage: "edit_multi_slice",
+										icon: "⚙️",
+										label: uiText("Sửa từng vùng", "Multi-slice edit", "分区域编辑"),
+										detail: localizedEvtMessage || undefined,
+										status: "running",
+									});
+								}
+								else if (sliceStatus === "completed") {
+									setEditTaskPlan((prev) => {
+										if (!prev) {
+											return prev;
+										}
+										return {
+											...prev,
+											slices: prev.slices.map(s => ({
+												...s,
+												status: s.status === "running" ? "done" : (s.status === "planned" ? "skipped" : s.status),
+											})),
+										};
+									});
+									appendAgenticStep({
+										stage: "edit_multi_slice",
+										icon: "✅",
+										label: uiText("Hoàn tất multi-slice", "Multi-slice complete", "分区域编辑完成"),
+										detail: uiText(
+											`${acceptedSlices} vùng · ${textEditsCount} textEdits`,
+											`${acceptedSlices} regions · ${textEditsCount} textEdits`,
+											`${acceptedSlices} 个区域 · ${textEditsCount} 个 textEdits`,
+										),
+										status: "done",
+									});
+								}
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "edit_multi_slice_step") {
+								const sliceIndex = Number((evt as any).sliceIndex || 0);
+								const sliceTotal = Number((evt as any).sliceTotal || 0);
+								const lineStart = Number((evt as any).lineStart || 0);
+								const lineEnd = Number((evt as any).lineEnd || 0);
+								const symbols = Array.isArray((evt as any).symbols)
+									? (evt as any).symbols.map((s: unknown) => String(s || "").trim()).filter(Boolean)
+									: [];
+								upsertEditTaskPlanSliceStatus(sliceIndex, "running");
+								appendComposerActivity({
+									kind: "edit",
+									icon: "⚙️",
+									label: uiText(
+										`Editing region ${sliceIndex}/${sliceTotal || "?"} · L${lineStart}–${lineEnd}`,
+										`Editing region ${sliceIndex}/${sliceTotal || "?"} · L${lineStart}–${lineEnd}`,
+										`正在编辑区域 ${sliceIndex}/${sliceTotal || "?"} · 第 ${lineStart}–${lineEnd} 行`,
+									),
+									status: "running",
+								});
+								appendAgenticStep({
+									stage: `edit_task_slice_${sliceIndex}`,
+									icon: "⚙️",
+									label: uiText(
+										`Đang sửa vùng ${sliceIndex}/${sliceTotal || "?"}: L${lineStart}–${lineEnd}`,
+										`Editing region ${sliceIndex}/${sliceTotal || "?"}: L${lineStart}–${lineEnd}`,
+										`正在编辑区域 ${sliceIndex}/${sliceTotal || "?"}: 第 ${lineStart}–${lineEnd} 行`,
+									),
+									detail: symbols.slice(0, 3).join(", ") || undefined,
+									stepIndex: sliceIndex,
+									stepTotal: sliceTotal || undefined,
+									status: "running",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "scope_reasoning" && String((evt as any).strategy || "") === "edit_task_planner_slices") {
+								appendAgenticStep({
+									stage: "scope_reasoning_planner",
+									icon: "🎯",
+									label: uiText("Neo vùng code theo plan", "Anchor regions from plan", "按计划锚定区域"),
+									detail: uiText(
+										`${Number((evt as any).regionCount || 0)} vùng · ${Number((evt as any).condensedChars || 0).toLocaleString()} chars`,
+										`${Number((evt as any).regionCount || 0)} regions · ${Number((evt as any).condensedChars || 0).toLocaleString()} chars`,
+										`${Number((evt as any).regionCount || 0)} 个区域 · ${Number((evt as any).condensedChars || 0).toLocaleString()} 字符`,
+									),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
 							}
 							else if (evt.stage === "assistant_tool_intent_plan") {
 								const tools = Array.isArray((evt as any).tools) ? (evt as any).tools : [];
@@ -6387,6 +6848,22 @@ export default function AiAssistantChat({
 									detail: detailParts.length > 0 ? detailParts.join(" · ") : localizedEvtMessage,
 									status: "done",
 								});
+								appendComposerActivity({
+									kind: "search",
+									icon: "🔎",
+									label: uiText(
+										retrievalHits.length > 0
+											? `Searched Lucene · ${retrievalHits.slice(0, 2).join(" | ")}`
+											: (detailParts.length > 0 ? detailParts.join(" · ") : "Searched workspace context"),
+										retrievalHits.length > 0
+											? `Searched Lucene · ${retrievalHits.slice(0, 2).join(" | ")}`
+											: (detailParts.length > 0 ? detailParts.join(" · ") : "Searched workspace context"),
+										retrievalHits.length > 0
+											? `搜索 Lucene · ${retrievalHits.slice(0, 2).join(" | ")}`
+											: (detailParts.length > 0 ? detailParts.join(" · ") : "搜索工作区上下文"),
+									),
+									status: "done",
+								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 							}
@@ -6455,6 +6932,8 @@ export default function AiAssistantChat({
 									detail: parts.join(" · "),
 									status: lifecycle,
 								});
+								const mappedActivity = mapToolTraceToComposerActivity(toolName, inputDigest, outputDigest, traceStatus);
+								appendComposerActivity(mappedActivity);
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
 									appendStageEvent({
 										...evtForTimeline,
@@ -7065,10 +7544,34 @@ export default function AiAssistantChat({
 							}
 							if (appliedEdit) {
 								textEditApplyCountRef.current += 1;
+								composerAppliedEditsRef.current = [...composerAppliedEditsRef.current, normalizedEdit];
+								refreshComposerDiffPreview(composerAppliedEditsRef.current);
+								appendComposerActivity({
+									kind: "apply",
+									icon: "✓",
+									label: uiText(
+										`Applied L${startLine}–${endLine} → CodeMirror`,
+										`Applied L${startLine}–${endLine} → CodeMirror`,
+										`已应用 第 ${startLine}–${endLine} 行 → CodeMirror`,
+									),
+									status: "done",
+								});
 							}
 						}
 							else if (evt.stage === "text_edit_apply_done") {
 								const count = Number((evt as any).count ?? 0);
+								setEditTaskPlan((prev) => {
+									if (!prev) {
+										return prev;
+									}
+									return {
+										...prev,
+										slices: prev.slices.map(s => ({
+											...s,
+											status: s.status === "error" ? "error" : "done",
+										})),
+									};
+								});
 								// If using onApplyLineEdit, liveCodeRef is already up to date.
 								// If using onCodeInsert fallback, ensure final state is committed.
 								if (!onApplyLineEdit && onCodeInsert) {
@@ -8395,6 +8898,91 @@ export default function AiAssistantChat({
 
 				</div>
 
+				{(isLoading || composerActivity.length > 0 || composerDiffBlock) && (
+					<div className={styles.composerPanel}>
+						{composerActivity.length > 0 && (
+							<div className={styles.composerActivityBlock}>
+								<button
+									type="button"
+									className={styles.composerActivityHeader}
+									onClick={() => setComposerActivityCollapsed(c => !c)}
+								>
+									<span className={styles.composerActivityTitle}>
+										{uiText(
+											`Đã khám phá · ${summarizeComposerActivityVi(composerActivity, uiText)}`,
+											`Explored · ${summarizeComposerActivity(composerActivity)}`,
+											`已探索 · ${summarizeComposerActivityVi(composerActivity, uiText)}`,
+										)}
+									</span>
+									<span className={styles.composerCollapseHint}>
+										{composerActivityCollapsed ? "▼" : "▲"}
+									</span>
+								</button>
+								{!composerActivityCollapsed && (
+									<div className={styles.composerActivityList}>
+										{composerActivity.map(item => (
+											<div
+												key={item.id}
+												className={[
+													styles.composerActivityItem,
+													styles[`composerActivityItem_${item.status}`] || "",
+												].filter(Boolean).join(" ")}
+											>
+												<span className={styles.composerActivityIcon}>{item.icon}</span>
+												<span className={styles.composerActivityLabel}>{item.label}</span>
+												{item.status === "running" && (
+													<span className={styles.composerActivitySpinner}>…</span>
+												)}
+											</div>
+										))}
+									</div>
+								)}
+							</div>
+						)}
+
+						{composerDiffBlock && composerDiffBlock.lines.length > 0 && (
+							<div className={styles.composerDiffBlock}>
+								<button
+									type="button"
+									className={styles.composerDiffHeader}
+									onClick={() => setComposerDiffCollapsed(c => !c)}
+								>
+									<span className={styles.composerDiffFile}>{composerDiffBlock.fileLabel}</span>
+									<span className={styles.composerDiffStats}>
+										<span className={styles.composerDiffAdd}>{`+${composerDiffBlock.addCount}`}</span>
+										<span className={styles.composerDiffDel}>{`-${composerDiffBlock.delCount}`}</span>
+									</span>
+									<span className={styles.composerCollapseHint}>
+										{composerDiffCollapsed ? "▼" : "▲"}
+									</span>
+								</button>
+								{!composerDiffCollapsed && (
+									<pre className={styles.composerDiffBody}>
+										{composerDiffBlock.lines.map((line, idx) => (
+											<div
+												key={`${line.kind}_${idx}_${line.lineNo ?? idx}`}
+												className={[
+													styles.composerDiffLine,
+													line.kind === "add" ? styles.composerDiffLine_add : "",
+													line.kind === "del" ? styles.composerDiffLine_del : "",
+												].filter(Boolean).join(" ")}
+											>
+												<span className={styles.composerDiffPrefix}>
+													{line.kind === "add" ? "+" : line.kind === "del" ? "-" : " "}
+												</span>
+												{line.lineNo ? (
+													<span className={styles.composerDiffLineNo}>{line.lineNo}</span>
+												) : null}
+												<span className={styles.composerDiffText}>{line.text || " "}</span>
+											</div>
+										))}
+									</pre>
+								)}
+							</div>
+						)}
+					</div>
+				)}
+
 				{/* Follow-up question suggestions (shown after response completes) */}
 				{!isLoading && completionState === "done" && followUpSuggestions.length > 0 && (
 					<div style={{ padding: "6px 12px 2px", display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -8637,7 +9225,87 @@ export default function AiAssistantChat({
 								)}
 							</div>
 						)}
-						{!isProgressDockCollapsed && agenticSteps.length >= 2 && activeStreamResponseMode !== "analyze" && (
+						{!isProgressDockCollapsed && (editTaskPlan?.slices?.length || 0) > 0 && (
+							<div className={styles.workspacePlanPanel}>
+								<div
+									className={styles.workspacePlanHeader}
+									onClick={() => setEditTaskPlanCollapsed(c => !c)}
+								>
+									<div className={styles.workspacePlanTitleRow}>
+										<span className={styles.workspacePlanTitle}>
+											{uiText("Ngữ cảnh editor", "Editor context", "编辑器上下文")}
+										</span>
+										<Tag color="blue">{String(targetPName || appId || "editor")}</Tag>
+										<Tag>{String(editTaskPlan?.language || language || "javascript")}</Tag>
+										<Tag color={contextType === "menu_json" ? "purple" : "geekblue"}>
+											{contextType === "menu_json"
+												? uiText("JSON Menu", "JSON Menu", "JSON 菜单")
+												: uiText("Code string", "Code string", "代码字符串")}
+										</Tag>
+									</div>
+									<Button type="link" size="small" className={styles.compactToggleBtn}>
+										{editTaskPlanCollapsed
+											? uiText("Mở plan", "Expand plan", "展开计划")
+											: uiText("Thu plan", "Collapse plan", "收起计划")}
+									</Button>
+								</div>
+								{!editTaskPlanCollapsed && (
+									<div className={styles.workspacePlanBody}>
+										<div className={styles.workspacePlanSummary}>
+											{uiText(
+												`Kế hoạch: ${editTaskPlan?.slices.length || 0} vùng${editTaskPlan?.multiSlice ? " · multi-slice" : ""}`,
+												`Plan: ${editTaskPlan?.slices.length || 0} regions${editTaskPlan?.multiSlice ? " · multi-slice" : ""}`,
+												`计划：${editTaskPlan?.slices.length || 0} 个区域${editTaskPlan?.multiSlice ? " · 分区域" : ""}`,
+											)}
+											{(editTaskPlan?.targetSymbols?.length || 0) > 0 && (
+												<span className={styles.workspacePlanSymbols}>
+													{editTaskPlan?.targetSymbols.slice(0, 6).join(" · ")}
+												</span>
+											)}
+										</div>
+										<div className={styles.workspaceSliceList}>
+											{(editTaskPlan?.slices || []).map(slice => (
+												<button
+													key={`plan_slice_${slice.index}`}
+													type="button"
+													className={[
+														styles.workspaceSliceItem,
+														styles[`workspaceSliceItem_${slice.status}`] || "",
+													].filter(Boolean).join(" ")}
+													onClick={() => handleEditPlanSliceNavigate(slice)}
+													title={uiText(
+														"Nhấn để nhảy tới dòng trong editor",
+														"Click to jump to line in editor",
+														"点击跳转到编辑器行",
+													)}
+												>
+													<span className={styles.workspaceSliceStatus}>
+														{slice.status === "done"
+															? "✓"
+															: slice.status === "running"
+																? "…"
+																: slice.status === "error"
+																	? "✗"
+																	: "○"}
+													</span>
+													<span className={styles.workspaceSliceLabel}>
+														{uiText(
+															`${slice.index}/${slice.total} · L${slice.lineStart}–${slice.lineEnd}`,
+															`${slice.index}/${slice.total} · L${slice.lineStart}–${slice.lineEnd}`,
+															`${slice.index}/${slice.total} · 第 ${slice.lineStart}–${slice.lineEnd} 行`,
+														)}
+													</span>
+													<span className={styles.workspaceSliceMeta}>
+														{slice.symbols.slice(0, 2).join(", ") || slice.kind}
+													</span>
+												</button>
+											))}
+										</div>
+									</div>
+								)}
+							</div>
+						)}
+						{!isProgressDockCollapsed && (agenticSteps.length >= 1 || (editTaskPlan?.slices?.length || 0) > 0) && activeStreamResponseMode !== "analyze" && (
 							<div className={`${styles.messageContent} ${styles.stageTimelineCard}`}>
 								<div
 									className={styles.stageTimelineHeader}

@@ -277,6 +277,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (uri.startsWith("/api/monitoring/")) {
             return false;
         }
+
+        // Local AI ops — knowledge pack scripts, health, models (see CSM_AI_LOCAL_CURSOR_MASTER_BRIEF PHẦN R)
+        if (uri.startsWith("/api/ai-local") || uri.startsWith("/ai-local")) {
+            return false;
+        }
         
         // Chat endpoints - không cần authentication
         // Guest: /chat-history-guest (load chat riêng guest)

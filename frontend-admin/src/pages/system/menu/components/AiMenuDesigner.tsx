@@ -6076,9 +6076,17 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 </div>
 
                 <CodeMirror
+                  aiAssistantAppId={appId}
                   aiAssistantLanguage="json"
                   aiAssistantContextType="menu_json"
                   aiAssistantAutoApplyCodeBlock
+                  aiAssistantPName={appId ? `menu_designer_${appId}` : "menu_designer"}
+                  aiAssistantPType={0}
+                  aiAssistantEditorMetadata={{
+                    source: "AiMenuDesigner",
+                    appId: String(appId || ""),
+                    bufferScope: "menu_json",
+                  }}
                   aiAssistantCurrentCode={
                     editableAiDraftText
                       || aiResultText

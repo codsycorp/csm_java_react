@@ -1178,3 +1178,268 @@
 		max-width: 90%;
 	}
 }
+
+/* Cursor/Copilot-style workspace + edit task plan panel */
+.workspacePlanPanel {
+	margin: 0 12px 8px;
+	border: 1px solid var(--chat-accent-info-border);
+	border-radius: 8px;
+	background: var(--chat-accent-info-soft);
+	overflow: hidden;
+}
+
+.workspacePlanHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 6px 10px;
+	cursor: pointer;
+	border-bottom: 1px solid color-mix(in srgb, var(--chat-accent-info-border) 60%, transparent);
+}
+
+.workspacePlanTitleRow {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	min-width: 0;
+}
+
+.workspacePlanTitle {
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--chat-accent-info);
+}
+
+.workspacePlanBody {
+	padding: 8px 10px 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.workspacePlanSummary {
+	font-size: 11px;
+	color: var(--ant-color-text-secondary);
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.workspacePlanSymbols {
+	font-size: 10px;
+	color: var(--ant-color-text-tertiary);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.workspaceSliceList {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	max-height: 140px;
+	overflow-y: auto;
+}
+
+.workspaceSliceItem {
+	display: grid;
+	grid-template-columns: 18px 1fr auto;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	text-align: left;
+	border: 1px solid color-mix(in srgb, var(--chat-border) 80%, transparent);
+	border-radius: 6px;
+	background: var(--chat-bg);
+	padding: 5px 8px;
+	cursor: pointer;
+	font-size: 11px;
+}
+
+.workspaceSliceItem:hover {
+	border-color: var(--chat-accent-info-border);
+	background: color-mix(in srgb, var(--chat-accent-info-soft) 40%, var(--chat-bg));
+}
+
+.workspaceSliceItem_running {
+	border-color: color-mix(in srgb, #722ed1 35%, transparent);
+	background: color-mix(in srgb, #722ed1 8%, var(--chat-bg));
+}
+
+.workspaceSliceItem_done {
+	border-color: color-mix(in srgb, #52c41a 35%, transparent);
+}
+
+.workspaceSliceItem_error {
+	border-color: color-mix(in srgb, #ff4d4f 35%, transparent);
+}
+
+.workspaceSliceStatus {
+	font-size: 12px;
+	line-height: 1;
+	color: var(--ant-color-text-secondary);
+}
+
+.workspaceSliceLabel {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	color: var(--ant-color-text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.workspaceSliceMeta {
+	font-size: 10px;
+	color: var(--ant-color-text-tertiary);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 120px;
+}
+
+/* Cursor/Copilot Composer panel — activity + inline diff in chat */
+.composerPanel {
+	margin: 0 12px 10px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.composerActivityBlock,
+.composerDiffBlock {
+	border: 1px solid var(--chat-border);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--chat-bg) 92%, var(--ant-color-fill-quaternary));
+	overflow: hidden;
+}
+
+.composerActivityHeader,
+.composerDiffHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	width: 100%;
+	padding: 8px 10px;
+	border: none;
+	background: transparent;
+	cursor: pointer;
+	text-align: left;
+}
+
+.composerActivityTitle,
+.composerDiffFile {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--ant-color-text);
+}
+
+.composerCollapseHint {
+	font-size: 10px;
+	color: var(--ant-color-text-tertiary);
+}
+
+.composerActivityList {
+	border-top: 1px solid var(--chat-border);
+	padding: 4px 0;
+	max-height: 180px;
+	overflow-y: auto;
+}
+
+.composerActivityItem {
+	display: grid;
+	grid-template-columns: 20px 1fr auto;
+	align-items: start;
+	gap: 8px;
+	padding: 4px 10px;
+	font-size: 11px;
+	color: var(--ant-color-text-secondary);
+}
+
+.composerActivityItem_running {
+	color: var(--ant-color-text);
+}
+
+.composerActivityIcon {
+	line-height: 1.2;
+}
+
+.composerActivityLabel {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	line-height: 1.35;
+	word-break: break-word;
+}
+
+.composerActivitySpinner {
+	color: #722ed1;
+	animation: composerPulse 1s ease-in-out infinite;
+}
+
+@keyframes composerPulse {
+	0%, 100% { opacity: 0.35; }
+	50% { opacity: 1; }
+}
+
+.composerDiffStats {
+	display: inline-flex;
+	gap: 8px;
+	font-size: 11px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	margin-left: auto;
+}
+
+.composerDiffAdd {
+	color: #3fb950;
+}
+
+.composerDiffDel {
+	color: #f85149;
+}
+
+.composerDiffBody {
+	margin: 0;
+	padding: 0;
+	border-top: 1px solid var(--chat-border);
+	max-height: 220px;
+	overflow: auto;
+	font-size: 11px;
+	line-height: 1.45;
+}
+
+.composerDiffLine {
+	display: grid;
+	grid-template-columns: 14px 36px 1fr;
+	gap: 6px;
+	padding: 1px 8px;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.composerDiffLine_add {
+	background: color-mix(in srgb, #3fb950 14%, transparent);
+}
+
+.composerDiffLine_del {
+	background: color-mix(in srgb, #f85149 12%, transparent);
+}
+
+.composerDiffPrefix {
+	font-weight: 700;
+}
+
+.composerDiffLine_add .composerDiffPrefix {
+	color: #3fb950;
+}
+
+.composerDiffLine_del .composerDiffPrefix {
+	color: #f85149;
+}
+
+.composerDiffLineNo {
+	color: var(--ant-color-text-tertiary);
+	text-align: right;
+}
+
+.composerDiffText {
+	color: var(--ant-color-text);
+}

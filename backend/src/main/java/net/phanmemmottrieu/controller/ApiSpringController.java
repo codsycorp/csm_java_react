@@ -70,6 +70,7 @@ import net.phanmemmottrieu.service.AiPatternCacheService;
 import net.phanmemmottrieu.service.AiIncrementalStepExecutorService;
 import net.phanmemmottrieu.service.AiAdaptiveRetryPolicy;
 import net.phanmemmottrieu.service.AiLocalRuntimeTierService;
+import net.phanmemmottrieu.service.AiEditTaskPlannerService;
 import net.phanmemmottrieu.service.AiLocalWorkflowAdvisorService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
@@ -494,6 +495,12 @@ public class ApiSpringController {
 
     @Autowired(required = false)
     private AiAdaptiveRetryPolicy aiAdaptiveRetryPolicy;
+
+    @Autowired(required = false)
+    private AiEditTaskPlannerService aiEditTaskPlannerService;
+
+    @Value("${ai.edit.task-planner.multi-slice-execution.enabled:true}")
+    private boolean aiEditTaskPlannerMultiSliceExecutionEnabled;
 
     // In-memory ring buffer for prompt-budget debug (max 200 entries, auto-rotated)
     private static final int PROMPT_DEBUG_LOG_MAX = 200;
@@ -1676,6 +1683,21 @@ public class ApiSpringController {
                 int cursorLine = parseIntSafe(body.get("cursorLine"), -1);
                 int contextWindowLines = parseIntSafe(body.get("contextWindowLines"), 50);
                 Map<String, Object> editorMetadata = normalizeEditorMetadata(body.get("editorMetadata"));
+                if (cursorLine <= 0 && editorMetadata != null && !editorMetadata.isEmpty()) {
+                    cursorLine = parseIntSafe(editorMetadata.get("cursorLine"), cursorLine);
+                }
+                int selectionFromLine = parseIntSafe(body.get("selectionFromLine"), -1);
+                int selectionToLine = parseIntSafe(body.get("selectionToLine"), -1);
+                if (selectionFromLine <= 0 && editorMetadata != null && !editorMetadata.isEmpty()) {
+                    selectionFromLine = parseIntSafe(editorMetadata.get("selectionFromLine"), -1);
+                    selectionToLine = parseIntSafe(editorMetadata.get("selectionToLine"), selectionFromLine);
+                }
+                final boolean hasEditorSelection = editorMetadata != null
+                    && Boolean.TRUE.equals(editorMetadata.get("hasSelection"))
+                    && selectionFromLine > 0
+                    && selectionToLine >= selectionFromLine;
+                final int plannerSelectionFromLine = selectionFromLine;
+                final int plannerSelectionToLine = selectionToLine;
                 String baseContentRef = str(body.get("baseContentRef"), "");
                 String baseContent = truncate(strKeep(body.get("baseContent"), ""), Math.max(100000, aiCodeStreamMaxBaseContentChars));
                 boolean preserveBaseContent = bool(body.get("preserveBaseContent"), false);
@@ -1825,9 +1847,61 @@ public class ApiSpringController {
                 }
                 effectiveCodeContext = truncate(effectiveCodeContext, Math.max(MAX_CODE_CHARS, aiCodeStreamMaxBaseContentChars));
                 CodeWindowContext focusWindow = extractCodeWindowByLine(effectiveCodeContext, cursorLine, contextWindowLines);
-                String promptCodeContext = focusWindow != null && !focusWindow.code().isBlank()
+                // Planner scope: selection only when user highlighted; otherwise full code string.
+                int planFocusStartLine = -1;
+                int planFocusEndLine = -1;
+                if (hasEditorSelection) {
+                    planFocusStartLine = plannerSelectionFromLine;
+                    planFocusEndLine = plannerSelectionToLine;
+                }
+                String promptCodeContext = (hasEditorSelection && focusWindow != null && !focusWindow.code().isBlank())
                     ? focusWindow.code()
                     : effectiveCodeContext;
+                AiEditTaskPlannerService.EditTaskPlan editTaskPlan = aiEditTaskPlannerService == null
+                    ? AiEditTaskPlannerService.EditTaskPlan.disabled()
+                    : aiEditTaskPlannerService.plan(
+                        message,
+                        contextType,
+                        language,
+                        responseMode,
+                        effectiveCodeContext,
+                        cursorLine,
+                        planFocusStartLine,
+                        planFocusEndLine);
+                if (editTaskPlan.enabled()) {
+                    sendEvent(emitter, jsonOf(
+                        "stage", "edit_task_plan",
+                        "status", "ready",
+                        "requestId", requestId,
+                        "contextType", contextType,
+                        "responseMode", responseMode,
+                        "language", editTaskPlan.language(),
+                        "flowType", editTaskPlan.flowType(),
+                        "targetSymbols", editTaskPlan.targetSymbols(),
+                        "ragQueries", editTaskPlan.ragQueries(),
+                        "sliceCount", editTaskPlan.slices() == null ? 0 : editTaskPlan.slices().size(),
+                        "multiSliceExecution", editTaskPlan.multiSliceExecution(),
+                        "slices", editTaskPlan.slices() == null
+                            ? List.of()
+                            : editTaskPlan.slices().stream().map(AiEditTaskPlannerService.EditTaskSlice::toMap).toList(),
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Đã phân tích yêu cầu và xác định " + (editTaskPlan.slices() == null ? 0 : editTaskPlan.slices().size()) + " vùng code/menu cần xử lý",
+                            "Request analyzed — " + (editTaskPlan.slices() == null ? 0 : editTaskPlan.slices().size()) + " code/menu regions identified",
+                            "已分析请求并确定 " + (editTaskPlan.slices() == null ? 0 : editTaskPlan.slices().size()) + " 个代码/菜单区域")));
+                    emitToolTrace(
+                        emitter,
+                        requestId,
+                        "edit_task_planner",
+                        "completed",
+                        "symbols=" + (editTaskPlan.targetSymbols() == null ? 0 : editTaskPlan.targetSymbols().size()),
+                        "slices=" + (editTaskPlan.slices() == null ? 0 : editTaskPlan.slices().size()),
+                        0,
+                        0,
+                        "none",
+                        "none",
+                        editTaskPlan.toTelemetryMap());
+                }
                 boolean menuJsonContext = isMenuJsonContext(contextType);
                 boolean menuChunkedContextApplied = false;
 
@@ -1876,14 +1950,37 @@ public class ApiSpringController {
                 if ((broadAnalyzeRequest || codeDebugAnalyze || largeCodeEditRequest)
                         && promptCodeContext.length() > 30000
                         && aiCodeStreamLocalProviderEnabled) {
+                    int regionCap = Math.max(18000, Math.min(32000, aiCodeStreamMaxCurrentCodeChars));
+                    String plannerCondensed = editTaskPlan.enabled() && aiEditTaskPlannerService != null
+                        ? aiEditTaskPlannerService.buildCondensedContextFromPlan(editTaskPlan, effectiveCodeContext, regionCap)
+                        : "";
+                    if (!plannerCondensed.isBlank() && plannerCondensed.length() < promptCodeContext.length()) {
+                        int before = promptCodeContext.length();
+                        promptCodeContext = plannerCondensed;
+                        sendEvent(emitter, jsonOf(
+                            "stage", "scope_reasoning",
+                            "status", "running",
+                            "requestId", requestId,
+                            "message", largeCodeEditRequest
+                                ? "Task planner: xác định vùng symbol/lifecycle trước khi emit textEdits"
+                                : "Task planner: ưu tiên vùng code liên quan yêu cầu user",
+                            "strategy", "edit_task_planner_slices",
+                            "regionCount", editTaskPlan.slices() == null ? 0 : editTaskPlan.slices().size(),
+                            "sourceChars", effectiveCodeContext.length(),
+                            "condensedChars", plannerCondensed.length(),
+                            "reductionChars", Math.max(0, before - plannerCondensed.length()),
+                            "targetSymbols", editTaskPlan.targetSymbols(),
+                            "regions", editTaskPlan.slices() == null
+                                ? List.of()
+                                : editTaskPlan.slices().stream().map(AiEditTaskPlannerService.EditTaskSlice::toMap).toList()));
+                    } else {
                     LargeCodeRegionPlan regionPlan = buildLargeCodeRegionPlan(
                         message,
                         effectiveCodeContext,
                         focusWindow == null ? "" : focusWindow.code(),
                         cursorLine,
                         contextWindowLines,
-                        Math.max(18000, Math.min(32000, aiCodeStreamMaxCurrentCodeChars))
-                    );
+                        regionCap);
                     if (regionPlan.applied() && regionPlan.condensedChars() < promptCodeContext.length()) {
                         int before = promptCodeContext.length();
                         promptCodeContext = regionPlan.condensedContext();
@@ -1915,18 +2012,34 @@ public class ApiSpringController {
                             Map.of("strategy", "cursor+symbol+lucene_hotspots")
                         );
                     }
+                    }
                     if (largeCodeEditRequest
                             && llamaCppNativeService != null
                             && llamaCppNativeService.isAvailable()) {
                         String lifecycleMessage = appendLifecycleSymbolHintToMessage(message);
-                        String focusedEarly = tryEditFocusedLocalFallback(
-                            emitter,
-                            requestId,
-                            lifecycleMessage,
-                            effectiveCodeContext,
-                            contextType,
-                            uiLang,
-                            "");
+                        String multiSliceResult = "";
+                        if (aiEditTaskPlannerMultiSliceExecutionEnabled
+                                && editTaskPlan.multiSliceExecution()
+                                && aiEditTaskPlannerService != null) {
+                            multiSliceResult = tryMultiSliceEditFromPlan(
+                                emitter,
+                                requestId,
+                                lifecycleMessage,
+                                effectiveCodeContext,
+                                contextType,
+                                uiLang,
+                                editTaskPlan);
+                        }
+                        String focusedEarly = multiSliceResult.isBlank()
+                            ? tryEditFocusedLocalFallback(
+                                emitter,
+                                requestId,
+                                lifecycleMessage,
+                                effectiveCodeContext,
+                                contextType,
+                                uiLang,
+                                "")
+                            : multiSliceResult;
                         if (acceptLocalCodeEditCandidate(focusedEarly, effectiveCodeContext, contextType)) {
                             editFocusedEarlyProviderText = normalizeLocalCodeEditOutput(focusedEarly, effectiveCodeContext);
                             if (countActionableLineTextEdits(editFocusedEarlyProviderText) <= 0) {
@@ -2130,9 +2243,17 @@ public class ApiSpringController {
                             null
                         );
                     } else {
+                    String orchestrationMessage = message;
+                    if (editTaskPlan.enabled()
+                            && editTaskPlan.targetSymbols() != null
+                            && !editTaskPlan.targetSymbols().isEmpty()) {
+                        orchestrationMessage = orchestrationMessage
+                            + "\n[PLANNER_SYMBOLS] "
+                            + String.join(" ", editTaskPlan.targetSymbols().stream().limit(12).toList());
+                    }
                     codeStreamOrchestration = aiLocalOrchestrationService.orchestrateResilient(
                         appId,
-                        message,
+                        orchestrationMessage,
                         effectiveCodeContext,
                         orchestrationAttachments,
                         contextType,
@@ -6856,13 +6977,24 @@ public class ApiSpringController {
         }
 
         LinkedHashSet<String> symbols = new LinkedHashSet<>();
+        if (isLifecycleEditRequest(message)) {
+            String[] lifecycleFirst = {
+                "__forceKillWebviewProcess", "fnRemoveTab", "closeAllTabsAndCleanup", "stopApp",
+                "fnResetIP", "waitForProcessDeath", "clearInterval", "runParallelProcessing", "webview"
+            };
+            for (String hint : lifecycleFirst) {
+                if (code.toLowerCase(Locale.ROOT).contains(hint.toLowerCase(Locale.ROOT))) {
+                    symbols.add(hint);
+                }
+            }
+        }
         symbols.addAll(extractCodeStreamSymbolCandidates(message, Math.max(8, maxItems * 2)));
         symbols.addAll(extractCodeStreamSymbolCandidates(focusCode, Math.max(12, maxItems * 3)));
         if (symbols.isEmpty()) {
             return excerpts;
         }
 
-        String lowerCode = code.toLowerCase();
+        String lowerCode = code.toLowerCase(Locale.ROOT);
         List<Integer> anchors = new ArrayList<>();
         int safeWindow = Math.max(900, excerptChars);
         int half = Math.max(300, safeWindow / 2);
@@ -6871,22 +7003,26 @@ public class ApiSpringController {
             if (symbol == null || symbol.isBlank()) {
                 continue;
             }
-            String token = symbol.toLowerCase();
-            int idx = lowerCode.indexOf(token);
-            if (idx < 0) {
-                continue;
+            String token = symbol.toLowerCase(Locale.ROOT);
+            int searchFrom = 0;
+            int hitsForSymbol = 0;
+            while (searchFrom < lowerCode.length() && hitsForSymbol < 2 && excerpts.size() < maxItems) {
+                int idx = lowerCode.indexOf(token, searchFrom);
+                if (idx < 0) {
+                    break;
+                }
+                if (!isNearExistingAnchor(anchors, idx, Math.max(500, safeWindow / 2))) {
+                    anchors.add(idx);
+                    int start = Math.max(0, idx - half);
+                    int end = Math.min(code.length(), start + safeWindow);
+                    int startLine = estimateLineAt(code, start);
+                    int endLine = estimateLineAt(code, Math.max(start, end - 1));
+                    String chunk = code.substring(start, end);
+                    excerpts.add("/* symbol: " + symbol + ", lines " + startLine + "-" + endLine + " */\\n" + chunk);
+                    hitsForSymbol++;
+                }
+                searchFrom = idx + Math.max(1, token.length());
             }
-            if (isNearExistingAnchor(anchors, idx, Math.max(500, safeWindow / 2))) {
-                continue;
-            }
-
-            anchors.add(idx);
-            int start = Math.max(0, idx - half);
-            int end = Math.min(code.length(), start + safeWindow);
-            int startLine = estimateLineAt(code, start);
-            int endLine = estimateLineAt(code, Math.max(start, end - 1));
-            String chunk = code.substring(start, end);
-            excerpts.add("/* symbol: " + symbol + ", lines " + startLine + "-" + endLine + " */\\n" + chunk);
             if (excerpts.size() >= maxItems) {
                 break;
             }
@@ -7013,6 +7149,21 @@ public class ApiSpringController {
         if (source == null || source.isBlank()) {
             return "";
         }
+        if (aiEditTaskPlannerService != null) {
+            AiEditTaskPlannerService.EditTaskPlan plan = aiEditTaskPlannerService.plan(
+                message + " webview process proxy closeAllTabsAndCleanup fnResetIP __forceKillWebviewProcess",
+                "code",
+                "javascript",
+                "edit",
+                source,
+                -1,
+                -1,
+                -1);
+            String fromPlanner = aiEditTaskPlannerService.buildCondensedContextFromPlan(plan, source, 18000);
+            if (!fromPlanner.isBlank()) {
+                return fromPlanner;
+            }
+        }
         String symbolQuery = String.valueOf(message == null ? "" : message).trim()
             + " closeAllTabsAndCleanup fnResetIP fnRemoveTab __forceKillWebviewProcess"
             + " waitForProcessDeath __waitForWebviewExit isProcessRunning runParallelProcessing webview";
@@ -7027,6 +7178,188 @@ public class ApiSpringController {
             }
         }
         return truncateMiddle(sb.toString().trim(), 18000);
+    }
+
+    /**
+     * Cursor-style incremental edit: one LLM call per planned slice, merge textEdits, validate on full code string.
+     */
+    private String tryMultiSliceEditFromPlan(
+            SseEmitter emitter,
+            String requestId,
+            String message,
+            String effectiveCodeContext,
+            String contextType,
+            String uiLang,
+            AiEditTaskPlannerService.EditTaskPlan plan) {
+        if (aiEditTaskPlannerService == null
+                || aiAssistantGatewayService == null
+                || llamaCppNativeService == null
+                || !llamaCppNativeService.isAvailable()
+                || plan == null
+                || !plan.enabled()
+                || plan.slices() == null
+                || plan.slices().isEmpty()) {
+            return "";
+        }
+        try {
+            sendEvent(emitter, jsonOf(
+                "stage", "edit_multi_slice",
+                "status", "running",
+                "requestId", requestId,
+                "sliceCount", plan.slices().size(),
+                "message", uiTextByLang(
+                    uiLang,
+                    "Thực hiện sửa từng vùng code (multi-slice) như Cursor/Copilot",
+                    "Applying incremental multi-slice edits (Cursor/Copilot style)",
+                    "按区域增量编辑（Cursor/Copilot 模式）")));
+            String source = String.valueOf(effectiveCodeContext == null ? "" : effectiveCodeContext);
+            List<Map<String, Object>> mergedEdits = new ArrayList<>();
+            int fullFileLineCount = countLines(source);
+            int sliceSuccess = 0;
+
+            for (AiEditTaskPlannerService.EditTaskSlice slice : plan.slices()) {
+                String sliceCode = aiEditTaskPlannerService.extractSliceExcerpt(
+                    source, slice.lineStart(), slice.lineEnd(), 6000);
+                if (sliceCode.isBlank()) {
+                    continue;
+                }
+                String sliceHeader = "/* SLICE " + slice.index() + "/" + slice.total()
+                    + " absolute lines " + slice.lineStart() + "-" + slice.lineEnd() + " */\n";
+                String sliceObjective = aiEditTaskPlannerService.buildSliceObjective(slice, message);
+                sliceObjective = appendLifecycleEditRulesToRequest(sliceObjective, isLifecycleEditRequest(message));
+                if (fullFileLineCount > 0) {
+                    sliceObjective = sliceObjective
+                        + "\n\n[LINE_NUMBER_RULE] startLine/endLine MUST be 1-based in FULL file ("
+                        + fullFileLineCount + " lines). Max 2 textEdits for this slice.";
+                }
+                String retryPrompt = aiAssistantGatewayService.buildLocalMinimalPrompt(
+                    AiAssistantGatewayService.AiFlowIntent.FRONTEND_CODE,
+                    sliceHeader + sliceCode,
+                    "",
+                    "",
+                    sliceObjective,
+                    resolveEffectiveUserLanguage(uiLang, message));
+                retryPrompt = clampPromptForLocalProvider(retryPrompt, contextType, "edit");
+                if (!retryPrompt.contains("<|im_start|>assistant")) {
+                    retryPrompt = retryPrompt + "\n<|im_end|>\n<|im_start|>assistant\n";
+                }
+                sendEvent(emitter, jsonOf(
+                    "stage", "edit_multi_slice_step",
+                    "status", "running",
+                    "requestId", requestId,
+                    "sliceIndex", slice.index(),
+                    "sliceTotal", slice.total(),
+                    "lineStart", slice.lineStart(),
+                    "lineEnd", slice.lineEnd(),
+                    "symbols", slice.symbols(),
+                    "message", "Slice " + slice.index() + "/" + slice.total() + ": lines "
+                        + slice.lineStart() + "-" + slice.lineEnd()));
+                String raw = llamaCppNativeService.generateContentFast(
+                    retryPrompt,
+                    Math.max(384, Math.min(1024, aiLocalLlamaMaxTokens)));
+                String text = extractAiResultText(raw);
+                if ((text == null || text.isBlank()) && raw != null) {
+                    text = raw.trim();
+                }
+                text = sanitizePromptEchoLeakage(String.valueOf(text == null ? "" : text));
+                String normalized = normalizeLocalCodeEditOutput(text, source);
+                List<Map<String, Object>> sliceEdits = parseNormalizedLineTextEdits(normalized);
+                sliceEdits = filterTextEditsToSliceWindow(sliceEdits, slice.lineStart(), slice.lineEnd(), 25);
+                if (sliceEdits.isEmpty()) {
+                    continue;
+                }
+                if (!editsPassCodeAstGateFromEdits(sliceEdits, source)) {
+                    logger.info(
+                        "LOCAL_EDIT multi-slice slice {} AST gate failed requestId={}",
+                        slice.index(),
+                        requestId);
+                    continue;
+                }
+                mergedEdits.addAll(sliceEdits);
+                sliceSuccess++;
+            }
+
+            if (mergedEdits.isEmpty()) {
+                logger.info("LOCAL_EDIT multi-slice no accepted edits requestId={} slices={}", requestId, plan.slices().size());
+                return "";
+            }
+            mergedEdits = dedupeAndSortTextEdits(mergedEdits);
+            if (!editsPassCodeAstGateFromEdits(mergedEdits, source)) {
+                logger.info("LOCAL_EDIT multi-slice merged AST gate failed requestId={} edits={}", requestId, mergedEdits.size());
+                return "";
+            }
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("summary", "Multi-slice edit: " + sliceSuccess + "/" + plan.slices().size() + " regions patched");
+            payload.put("textEdits", mergedEdits);
+            String json = objectMapper.writeValueAsString(payload);
+            sendEvent(emitter, jsonOf(
+                "stage", "edit_multi_slice",
+                "status", "completed",
+                "requestId", requestId,
+                "acceptedSlices", sliceSuccess,
+                "textEdits", mergedEdits.size(),
+                "message", "Multi-slice: " + mergedEdits.size() + " textEdits từ " + sliceSuccess + " vùng"));
+            logger.info(
+                "LOCAL_EDIT multi-slice succeeded requestId={} slices={}/{} textEdits={}",
+                requestId,
+                sliceSuccess,
+                plan.slices().size(),
+                mergedEdits.size());
+            return json;
+        } catch (Exception ex) {
+            logger.warn("LOCAL_EDIT multi-slice failed requestId={}: {}", requestId, ex.getMessage());
+            return "";
+        }
+    }
+
+    private List<Map<String, Object>> filterTextEditsToSliceWindow(
+            List<Map<String, Object>> edits,
+            int sliceStart,
+            int sliceEnd,
+            int lineMargin) {
+        if (edits == null || edits.isEmpty()) {
+            return List.of();
+        }
+        int minLine = Math.max(1, sliceStart - Math.max(0, lineMargin));
+        int maxLine = sliceEnd + Math.max(0, lineMargin);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> edit : edits) {
+            if (edit == null || edit.isEmpty()) {
+                continue;
+            }
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+            if (startLine >= minLine && endLine <= maxLine + 50) {
+                out.add(edit);
+            }
+        }
+        return out;
+    }
+
+    private List<Map<String, Object>> dedupeAndSortTextEdits(List<Map<String, Object>> edits) {
+        if (edits == null || edits.isEmpty()) {
+            return List.of();
+        }
+        edits.sort((a, b) -> {
+            int sa = parseIntOrDefault(a.get("startLine"), 1);
+            int sb = parseIntOrDefault(b.get("startLine"), 1);
+            return Integer.compare(sa, sb);
+        });
+        List<Map<String, Object>> out = new ArrayList<>();
+        int prevEnd = 0;
+        for (Map<String, Object> edit : edits) {
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+            if (startLine <= prevEnd) {
+                continue;
+            }
+            if (isBulkDeleteOnlyPatch(List.of(edit))) {
+                continue;
+            }
+            out.add(edit);
+            prevEnd = endLine;
+        }
+        return out;
     }
 
     private String appendLifecycleEditRulesToRequest(String userRequest, boolean lifecycle) {

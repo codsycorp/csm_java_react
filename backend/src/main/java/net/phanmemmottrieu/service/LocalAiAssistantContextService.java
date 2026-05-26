@@ -34,6 +34,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -560,19 +561,63 @@ public class LocalAiAssistantContextService {
             if (lastIndexedAtMs > 0L && (refreshedNow - lastIndexedAtMs) < Math.max(10000L, indexRefreshMs) && Files.isDirectory(indexPath)) {
                 return;
             }
-            rebuildIndex(indexPath);
+            rebuildIndex(indexPath, null);
             lastIndexedAtMs = System.currentTimeMillis();
         }
     }
 
-    private void rebuildIndex(Path indexPath) {
+    /**
+     * Force rebuild workspace Lucene index. Used by knowledge-pack script on strong machine
+     * before exporting portable pack to weak servers.
+     */
+    public Map<String, Object> forceRebuildWorkspaceIndex(boolean fullCodeScan) {
+        synchronized (indexLock) {
+            Path indexPath = resolveIndexPath();
+            rebuildIndex(indexPath, fullCodeScan);
+            lastIndexedAtMs = System.currentTimeMillis();
+            return describeWorkspaceIndexStatus();
+        }
+    }
+
+    public Map<String, Object> describeWorkspaceIndexStatus() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        Path indexPath = resolveIndexPath();
+        out.put("indexPath", indexPath.toString());
+        out.put("sourceRoots", resolveSourceRoots().stream().map(Path::toString).toList());
+        out.put("startupIndexOnlyMarkdown", startupIndexOnlyMarkdown);
+        out.put("lastIndexedAtMs", lastIndexedAtMs);
+        out.put("embeddingDimensions", aiLocalEmbeddingService.dimension());
+        out.put("embeddingProvider", aiLocalEmbeddingService.providerKey());
+        out.put("embeddingIndexNamespace", aiLocalEmbeddingService.indexNamespace());
+        int docCount = 0;
+        try {
+            if (Files.isDirectory(indexPath)) {
+                try (Directory directory = FSDirectory.open(indexPath)) {
+                    if (DirectoryReader.indexExists(directory)) {
+                        try (DirectoryReader reader = DirectoryReader.open(directory)) {
+                            docCount = reader.numDocs();
+                        }
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            out.put("indexReadError", ex.getMessage());
+        }
+        out.put("documentCount", docCount);
+        return out;
+    }
+
+    private void rebuildIndex(Path indexPath, Boolean fullCodeScanOverride) {
+        boolean markdownOnly = fullCodeScanOverride != null
+            ? !fullCodeScanOverride
+            : startupIndexOnlyMarkdown;
         try {
             Files.createDirectories(indexPath);
             try (Directory directory = FSDirectory.open(indexPath)) {
                 IndexWriterConfig config = new IndexWriterConfig();
                 try (IndexWriter writer = new IndexWriter(directory, config)) {
                     writer.deleteAll();
-                    log.info("Local assistant startup index scope markdownOnly={}", startupIndexOnlyMarkdown);
+                    log.info("Local assistant startup index scope markdownOnly={}", markdownOnly);
                     for (Path root : resolveSourceRoots()) {
                         if (!Files.exists(root)) {
                             continue;
@@ -580,7 +625,7 @@ public class LocalAiAssistantContextService {
                         try (Stream<Path> stream = Files.walk(root)) {
                             stream.filter(Files::isRegularFile)
                                 .filter(path -> {
-                                    if (startupIndexOnlyMarkdown) {
+                                    if (markdownOnly) {
                                         String ext = extensionOf(path);
                                         return STARTUP_MARKDOWN_EXTENSIONS.contains(ext);
                                     }
