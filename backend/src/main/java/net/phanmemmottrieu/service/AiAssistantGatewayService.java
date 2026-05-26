@@ -1826,6 +1826,73 @@ Rules:
         || normalized.contains("current_menu_full_json");
   }
 
+  private static final String SEO_SYSTEM_PROMPT =
+      "You are an expert SEO content writer. You MUST respond with ONLY a valid JSON object "
+          + "containing exactly these fields: title, description, html_content. "
+          + "No markdown fences, no explanation, and no extra text before or after the JSON.";
+
+  public boolean isSeoContentTask(Map<String, Object> routeParams, String prompt) {
+    if (routeParams != null) {
+      String taskType = String.valueOf(routeParams.getOrDefault("taskType", "")).trim().toLowerCase(Locale.ROOT);
+      if (taskType.contains("seo")) {
+        return true;
+      }
+    }
+    return looksLikeSeoContentPrompt(prompt);
+  }
+
+  private boolean looksLikeSeoContentPrompt(String text) {
+    String normalized = String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT);
+    if (normalized.isBlank()) {
+      return false;
+    }
+    boolean hasSeoFields = (normalized.contains("html_content") || normalized.contains("`html_content`"))
+        && (normalized.contains("\"title\"") || normalized.contains("`title`"))
+        && (normalized.contains("description") || normalized.contains("`description`"));
+    boolean hasSeoIntent = normalized.contains("chuẩn seo")
+        || normalized.contains("chuan seo")
+        || normalized.contains("seo content")
+        || normalized.contains("viết bài")
+        || normalized.contains("viet bai");
+    return hasSeoFields || (hasSeoIntent && normalized.contains("json"));
+  }
+
+  /**
+   * Lightweight local-only path for /ai-generate-seo-content — no menu/code master prompt injection.
+   */
+  public String generateSeoContent(String prompt, ProgressListener progressListener) {
+    if (!enabled) {
+      return createErrorJson("AI Assistant API fallback đang tắt", "GITHUB_MODELS_DISABLED");
+    }
+    if (prompt == null || prompt.trim().isEmpty()) {
+      return createErrorJson("Prompt không được để trống", "INVALID_PROMPT");
+    }
+
+    String trimmedPrompt = prompt.trim();
+    String cachedResp = getCachedResponse(trimmedPrompt);
+    if (cachedResp != null) {
+      emitProgress(progressListener, progressPayload("cache_hit", "Cached SEO response", 1, 1,
+          progressI18n("copilot.progress.message.cache_hit", null, null, null)));
+      return cachedResp;
+    }
+
+    if (localOnlyEnabled && (llamaCppNativeService == null || !llamaCppNativeService.isAvailable())) {
+      return createErrorJson("Local AI provider chưa sẵn sàng (local-only mode)", "LOCAL_PROVIDER_UNAVAILABLE");
+    }
+
+    emitProgress(progressListener, progressPayload(
+        "seo_generation",
+        "Đang tạo nội dung SEO (Local AI)...",
+        0,
+        1,
+        progressI18n("copilot.progress.message.local_inference", null, null, null)));
+
+    int seoOutputTokens = llamaCppNativeService != null
+        ? llamaCppNativeService.getEffectiveMaxTokensLimit()
+        : Math.max(4096, maxOutputTokens);
+    return callLocalProviderWithContext(trimmedPrompt, seoOutputTokens, directTemperature, progressListener, SEO_SYSTEM_PROMPT);
+  }
+
   private String detectTaskTypeHint(String prompt) {
     String normalized = String.valueOf(prompt == null ? "" : prompt).toLowerCase(Locale.ROOT);
     if (normalized.contains("orchestration_routing_tier=planner_fast")) {
@@ -1978,6 +2045,15 @@ Rules:
   // Local llama.cpp provider (replaces Gemini/OpenAI when local-only enabled)
   // ═══════════════════════════════════════════════════════════════════════════
   private String callLocalProviderWithContext(String prompt, int maxTokens, double temperature, ProgressListener progressListener) {
+    return callLocalProviderWithContext(prompt, maxTokens, temperature, progressListener, null);
+  }
+
+  private String callLocalProviderWithContext(
+      String prompt,
+      int maxTokens,
+      double temperature,
+      ProgressListener progressListener,
+      String systemPromptOverride) {
     if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
       return createErrorJson("Local AI provider chưa sẵn sàng (llama.cpp)", "LOCAL_PROVIDER_UNAVAILABLE");
     }
@@ -1999,8 +2075,13 @@ Rules:
         1,
         progressI18n("copilot.progress.message.local_inference", null, null, null)));
     try {
-      int outTokens = Math.max(128, Math.min(Math.max(256, maxTokens), localLlamaMaxTokens));
-      String raw = llamaCppNativeService.generateContentFast(fittedPrompt, outTokens);
+      int tokenCap = llamaCppNativeService != null
+          ? llamaCppNativeService.getEffectiveMaxTokensLimit()
+          : localLlamaMaxTokens;
+      int outTokens = Math.max(128, Math.min(Math.max(256, maxTokens), tokenCap));
+      String raw = systemPromptOverride != null
+          ? llamaCppNativeService.generateContentFast(fittedPrompt, outTokens, systemPromptOverride)
+          : llamaCppNativeService.generateContentFast(fittedPrompt, outTokens);
       String text = extractResultTextFromWrappedJson(raw);
       if (text == null || text.isBlank()) {
         text = raw == null ? "" : raw.trim();

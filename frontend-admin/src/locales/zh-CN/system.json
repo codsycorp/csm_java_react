@@ -2,6 +2,7 @@
 	"role": {
 		"name": "角色名称",
 		"id": "角色标识",
+		"code": "权限组代码",
 		"addRole": "新增角色",
 		"editRole": "编辑角色",
 		"assignMenu": "分配菜单"
@@ -53,7 +54,10 @@
 			"all": "全部"
 		},
 		"level": {
-			"manager": "管理层",
+			"admin": "管理员",
+			"director": "总监",
+			"manager": "分支经理",
+			"deptHead": "部门主管",
 			"teamLead": "组长",
 			"staff": "员工"
 		},

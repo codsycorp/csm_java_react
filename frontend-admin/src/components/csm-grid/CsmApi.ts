@@ -1,4 +1,5 @@
 import { request } from "#src/utils";
+import { ensureAuthSessionReady } from "#src/utils/request/auth-session";
 import { AI_TIMEOUT_MS } from "#src/api/ai/index";
 import { useTabsStore, useUserStore } from "#src/store";
 
@@ -792,9 +793,14 @@ export async function updateTableData<T extends Record<string, any>>(params: {
 		// Ignore serialization errors in debug logging
 	}
 	
-	const res = await request
-		.post<ApiResponse<string>>("update-table-data", { json: payload, ignoreLoading: true })
-		.json<ApiResponse<string>>();
+	const res = await ensureAuthSessionReady().then((ready) => {
+		if (!ready) {
+			throw new Error("Phiên đăng nhập không hợp lệ hoặc đã hết hạn");
+		}
+		return request
+			.post<ApiResponse<string>>("update-table-data", { json: payload, ignoreLoading: true })
+			.json<ApiResponse<string>>();
+	});
 	try {
 		console.log("📥 updateTableData response JSON:", JSON.stringify(res));
 	} catch {

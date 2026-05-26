@@ -765,6 +765,9 @@ public class InitHandler {
                         buildFieldConfig("actived", "common.active", 1, "checkbox", "left"));
         }
 
+        private static final String PERMISSION_GROUP_QUERY_JSON =
+                        "{\"query\":[{\"obj_name\":\"csm_roles\",\"fields\":[\"id\",\"role_name\",\"role_code\"],\"value_field\":\"id\",\"label_field\":\"role_name\",\"obj_where\":{\"field\":\"id\",\"type\":\"like\",\"value\":\"\"}}]}";
+
         private List<Map<String, Object>> buildSubUserFields() {
                 return List.of(
                         buildFieldConfig("id", "ID", 1, "number", "right"),
@@ -775,7 +778,8 @@ public class InitHandler {
                         buildFieldConfig("phoneNumber", "common.phoneNumber", 1, "string", "left"),
                         buildFieldConfig("full_name", "common.fullName", 1, "string", "left"),
                         buildFieldConfig("source_app_token", "Source App Token", 1, "string", "left"),
-                        buildFieldConfig("group_id", "common.groupId", 1, "string", "left"),
+                        buildFieldConfig("group_id", "system.userPermission.fields.permissionGroups", 1, "co", "left",
+                                        Map.of("f_cbo_query", PERMISSION_GROUP_QUERY_JSON)),
                         buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
                         buildFieldConfig("refresh_token", "Refresh Token", 1, "string", "left"),
                         buildFieldConfig("refresh", "Refresh Alias", 1, "string", "left"),

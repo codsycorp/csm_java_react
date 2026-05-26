@@ -17,15 +17,106 @@ const SYSTEM_CSM_TABLES = new Set([
   "sys_reactnative",
 ]);
 
+const TENANT_ORG_TABLES = new Set([
+  "csm_roles",
+  "csm_depts",
+  "csm_branches",
+]);
+
+function pickTenantAppId(preferredAppId: unknown, fallbackAppId: unknown): string {
+  const preferred = String(preferredAppId || "").trim();
+  if (preferred && preferred !== "csm") return preferred;
+
+  const fallback = String(fallbackAppId || "").trim();
+  if (fallback && fallback !== "csm") return fallback;
+
+  return preferred || fallback || "csm";
+}
+
 export function resolveComboQueryAppId(tableName: unknown, preferredAppId: unknown, fallbackAppId: unknown): string {
   const normalizedTable = String(tableName || "").trim().toLowerCase();
   if (SYSTEM_CSM_TABLES.has(normalizedTable)) return "csm";
+  if (TENANT_ORG_TABLES.has(normalizedTable)) return pickTenantAppId(preferredAppId, fallbackAppId);
 
   const preferred = String(preferredAppId || "").trim();
   if (preferred) return preferred;
 
   const fallback = String(fallbackAppId || "").trim();
   return fallback || "csm";
+}
+
+export function getComboTableRows(database: Record<string, any> | undefined, tableName: string): any[] {
+  const source = database?.[tableName];
+  if (Array.isArray(source)) return source;
+  if (Array.isArray(source?.rows)) return source.rows;
+  return [];
+}
+
+export function buildRoleComboValueEnum(rows: any[]): Record<string, { text: string }> {
+  const enumObj: Record<string, { text: string }> = {};
+  (rows || []).forEach((row) => {
+    const id = String(row?.id ?? "").trim();
+    const roleCode = String(row?.role_code ?? "").trim();
+    const roleName = String(row?.role_name ?? "").trim();
+    const label = roleName || roleCode || id;
+    if (!label) return;
+    if (id) enumObj[id] = { text: label };
+    if (roleCode && roleCode !== id) enumObj[roleCode] = { text: label };
+  });
+  return enumObj;
+}
+
+export function buildRoleComboOptions(rows: any[]): ComboOption[] {
+  const seenIds = new Set<string>();
+  const seenCodes = new Set<string>();
+  const options: ComboOption[] = [];
+  (rows || []).forEach((row) => {
+    const id = String(row?.id ?? "").trim();
+    const roleName = String(row?.role_name ?? "").trim();
+    const roleCode = String(row?.role_code ?? "").trim().toUpperCase();
+    const label = roleName || roleCode || id;
+    if (!id || seenIds.has(id)) return;
+    if (roleCode && seenCodes.has(roleCode)) return;
+    seenIds.add(id);
+    if (roleCode) seenCodes.add(roleCode);
+    options.push({ value: id, label });
+  });
+  return options.sort((a, b) => String(a.label).localeCompare(String(b.label)));
+}
+
+export function buildRoleComboSelectEnum(rows: any[]): Record<string, { text: string }> {
+  const enumObj: Record<string, { text: string }> = {};
+  buildRoleComboOptions(rows).forEach((opt) => {
+    enumObj[String(opt.value)] = { text: opt.label };
+  });
+  return enumObj;
+}
+
+export function resolveRoleComboLabel(value: unknown, database: Record<string, any> | undefined): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const rows = getComboTableRows(database, "csm_roles");
+  const matched = rows.find((row) => (
+    raw === String(row?.id ?? "").trim() || raw === String(row?.role_code ?? "").trim()
+  ));
+  if (!matched) return raw;
+  return String(matched?.role_name ?? matched?.role_code ?? raw).trim() || raw;
+}
+
+export function mergeRowsById(primaryRows: any[], extraRows: any[]): any[] {
+  const merged = new Map<string, any>();
+  const seenRoleCodes = new Set<string>();
+  const register = (row: any) => {
+    const id = String(row?.id ?? "").trim();
+    const roleCode = String(row?.role_code ?? "").trim().toUpperCase();
+    if (!id || merged.has(id)) return;
+    if (roleCode && seenRoleCodes.has(roleCode)) return;
+    merged.set(id, row);
+    if (roleCode) seenRoleCodes.add(roleCode);
+  };
+  (primaryRows || []).forEach(register);
+  (extraRows || []).forEach(register);
+  return Array.from(merged.values());
 }
 
 export function safeEvalWhere(expr: string): any {

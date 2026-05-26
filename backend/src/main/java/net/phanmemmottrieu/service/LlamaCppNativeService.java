@@ -359,19 +359,35 @@ public class LlamaCppNativeService implements AIProvider {
      * @param maxOutputTokensCap hard cap on generated tokens (e.g. 48 for JSON classification)
      */
     public String generateContentFast(String prompt, int maxOutputTokensCap) {
-        return generateContentFastWithTaskTracking(prompt, maxOutputTokensCap, null);
+        return generateContentFast(prompt, maxOutputTokensCap, null);
+    }
+
+    /**
+     * Fast variant with optional system-prompt override.
+     * Pass empty string to skip the default system prompt entirely.
+     */
+    public String generateContentFast(String prompt, int maxOutputTokensCap, String systemPromptOverride) {
+        return generateContentFastWithTaskTracking(prompt, maxOutputTokensCap, null, systemPromptOverride);
     }
     
     /**
      * Fast variant with task tracking for cancellation.
      */
     public String generateContentFastWithTaskTracking(String prompt, int maxOutputTokensCap, String requestId) {
+        return generateContentFastWithTaskTracking(prompt, maxOutputTokensCap, requestId, null);
+    }
+
+    public String generateContentFastWithTaskTracking(
+            String prompt,
+            int maxOutputTokensCap,
+            String requestId,
+            String systemPromptOverride) {
         if (requestId != null && !requestId.isBlank()) {
             registerActiveInferenceTask(requestId);
         }
         
         try {
-            return generateContentFastInternal(prompt, maxOutputTokensCap);
+            return generateContentFastInternal(prompt, maxOutputTokensCap, systemPromptOverride);
         } finally {
             if (requestId != null && !requestId.isBlank()) {
                 unregisterActiveInferenceTask(requestId);
@@ -380,6 +396,10 @@ public class LlamaCppNativeService implements AIProvider {
     }
 
     private String generateContentFastInternal(String prompt, int maxOutputTokensCap) {
+        return generateContentFastInternal(prompt, maxOutputTokensCap, null);
+    }
+
+    private String generateContentFastInternal(String prompt, int maxOutputTokensCap, String systemPromptOverride) {
         String safePrompt = String.valueOf(prompt == null ? "" : prompt).trim();
         if (safePrompt.isBlank()) {
             return createErrorJson("Prompt khong duoc de trong", "INVALID_PROMPT");
@@ -390,8 +410,11 @@ public class LlamaCppNativeService implements AIProvider {
         if (isCircuitOpen()) {
             return createErrorJson("Local llama circuit open", "CIRCUIT_OPEN");
         }
-        if (systemPrompt != null && !systemPrompt.isBlank()) {
-            safePrompt = systemPrompt.trim() + "\n" + safePrompt;
+        String effectiveSystemPrompt = systemPromptOverride != null
+            ? systemPromptOverride
+            : systemPrompt;
+        if (effectiveSystemPrompt != null && !effectiveSystemPrompt.isBlank()) {
+            safePrompt = effectiveSystemPrompt.trim() + "\n" + safePrompt;
         }
 
         // Detect once before any prefix/clip — clipping cannot change the decision
@@ -840,12 +863,18 @@ public class LlamaCppNativeService implements AIProvider {
             || lower.contains("respond in json")
             || lower.contains("json object")
             || lower.contains("json array")
+            || lower.contains("đối tượng json")
+            || lower.contains("doi tuong json")
+            || lower.contains("trả về") && lower.contains("json")
+            || lower.contains("tra ve") && lower.contains("json")
             || lower.contains("```json")
             || lower.contains("\"summary\"")
             || lower.contains("\"code\"")
             || lower.contains("\"changes\"")
             || lower.contains("\"textedits\"")
-            || lower.contains("\"text_edits\"");
+            || lower.contains("\"text_edits\"")
+            || (lower.contains("\"html_content\"") && lower.contains("\"title\""))
+            || (lower.contains("`html_content`") && lower.contains("`title`"));
     }
 
     // ── Task Cancellation Helpers ──────────────────────────────────────────────────

@@ -2,6 +2,7 @@
 	"role": {
 		"name": "Tên Vai Trò",
 		"id": "Mã Vai Trò",
+		"code": "Mã nhóm quyền",
 		"addRole": "Thêm Vai Trò",
 		"editRole": "Chỉnh Sửa Vai Trò",
 		"assignMenu": "Gán Menu"
@@ -53,7 +54,10 @@
 			"all": "Tất cả"
 		},
 		"level": {
-			"manager": "Quản lý",
+			"admin": "Quản trị",
+			"director": "Giám đốc",
+			"manager": "Quản lý chi nhánh",
+			"deptHead": "Trưởng phòng",
 			"teamLead": "Trưởng nhóm",
 			"staff": "Nhân viên"
 		},

@@ -28131,7 +28131,9 @@ public class ApiSpringController {
         }
 
         try {
-            rawContent = fetchAiRawContentWithMenuRecovery(prompt, null, params);
+            rawContent = isSeoContentRequest(params, prompt)
+                ? fetchAiRawContent(prompt, null, params)
+                : fetchAiRawContentWithMenuRecovery(prompt, null, params);
         } catch (RuntimeException e) {
             response.set("code", 200);
             response.set("success", false);
@@ -28157,15 +28159,17 @@ public class ApiSpringController {
 
         // After a successful menu-design generation, persist the session context file
         // so the next call can continue from where this one left off — no need to re-send history.
-        try {
-            String promptAppId = this.aiAssistantGatewayService.extractAppIdFromPrompt(prompt);
-            if (promptAppId != null && !promptAppId.isBlank()) {
-                String requestText = extractRequestTextFromPrompt(prompt);
-                this.aiAssistantGatewayService.updateAppContextFile(promptAppId, requestText, rawContent);
-                this.aiMenuLearningMemoryService.recordSuccessfulMenuGeneration(promptAppId, requestText, rawContent);
+        if (!isSeoContentRequest(params, prompt)) {
+            try {
+                String promptAppId = this.aiAssistantGatewayService.extractAppIdFromPrompt(prompt);
+                if (promptAppId != null && !promptAppId.isBlank()) {
+                    String requestText = extractRequestTextFromPrompt(prompt);
+                    this.aiAssistantGatewayService.updateAppContextFile(promptAppId, requestText, rawContent);
+                    this.aiMenuLearningMemoryService.recordSuccessfulMenuGeneration(promptAppId, requestText, rawContent);
+                }
+            } catch (Exception ctxEx) {
+                logger.warn("Could not update AI context file after generation: {}", ctxEx.getMessage());
             }
-        } catch (Exception ctxEx) {
-            logger.warn("Could not update AI context file after generation: {}", ctxEx.getMessage());
         }
 
         if (shouldExposeRoutingDebug(params)) {
@@ -28178,6 +28182,10 @@ public class ApiSpringController {
         populateAiResponseFromRawContent(response, rawContent, uiLang);
     }
 
+    private boolean isSeoContentRequest(Map<String, Object> params, String prompt) {
+        return this.aiAssistantGatewayService.isSeoContentTask(params, prompt);
+    }
+
     private String fetchAiRawContent(String prompt, AiAssistantGatewayService.ProgressListener progressListener, Map<String, Object> params) {
         String safePrompt = prompt == null ? "" : prompt;
         if (params != null) {
@@ -28185,6 +28193,9 @@ public class ApiSpringController {
         }
         if (progressListener != null) {
             progressListener.onProgress(createAiJobProgress("local_provider", "Đang gọi Local AI...", 0, 1, null));
+        }
+        if (isSeoContentRequest(params, safePrompt)) {
+            return this.aiAssistantGatewayService.generateSeoContent(safePrompt, progressListener);
         }
         return this.aiAssistantGatewayService.generateContent(safePrompt, progressListener);
     }
@@ -28196,45 +28207,44 @@ public class ApiSpringController {
         String safePrompt = String.valueOf(prompt == null ? "" : prompt);
         boolean runMenuRecovery = shouldRunMenuAutoContinue(safePrompt, params);
 
-        if (runMenuRecovery && progressListener != null) {
-            Map<String, Object> phaseMeta = new HashMap<>();
-            phaseMeta.put("phase", "phase_0_local_enrichment");
-            phaseMeta.put("step", "Xử lý cục bộ không cần API");
-            progressListener.onProgress(createAiJobProgress(
-                "phase_0_local_enrichment",
-                "Pha 0/3: Xử lý cục bộ để giảm chi phí API",
-                0,
-                3,
-                phaseMeta));
-        }
-
-        // PHASE 0: Local Translation Enrichment (No API cost)
-        long phase0Start = System.currentTimeMillis();
-        try {
-            String localEnrichedJson = applyLocalEnrichmentToMenuJson(safePrompt);
-            long phase0Duration = System.currentTimeMillis() - phase0Start;
-            
+        if (runMenuRecovery) {
             if (progressListener != null) {
-                Map<String, Object> meta = new HashMap<>();
-                meta.put("phase", "phase_0_local_enrichment");
-                meta.put("durationMs", phase0Duration);
-                meta.put("method", "local_heuristic");
+                Map<String, Object> phaseMeta = new HashMap<>();
+                phaseMeta.put("phase", "phase_0_local_enrichment");
+                phaseMeta.put("step", "Xử lý cục bộ không cần API");
                 progressListener.onProgress(createAiJobProgress(
-                    "phase_0_local_enrichment_completed",
-                    "Pha 0/3 hoàn tất: Đã bổ sung translations cục bộ",
-                    1,
+                    "phase_0_local_enrichment",
+                    "Pha 0/3: Xử lý cục bộ để giảm chi phí API",
+                    0,
                     3,
-                    meta));
+                    phaseMeta));
             }
 
-            apiCallInstrumentationService.recordLocalTranslation("menu_local_enrichment", 1, phase0Duration);
-            
-            // Use locally enriched JSON for further processing
-            safePrompt = localEnrichedJson;
-        } catch (Exception e) {
-            logger.debug("Local enrichment failed, falling back to full AI", e);
-            apiCallInstrumentationService.recordLocalTranslation("menu_local_enrichment_failed", 0, 
-                System.currentTimeMillis() - phase0Start);
+            long phase0Start = System.currentTimeMillis();
+            try {
+                String localEnrichedJson = applyLocalEnrichmentToMenuJson(safePrompt);
+                long phase0Duration = System.currentTimeMillis() - phase0Start;
+
+                if (progressListener != null) {
+                    Map<String, Object> meta = new HashMap<>();
+                    meta.put("phase", "phase_0_local_enrichment");
+                    meta.put("durationMs", phase0Duration);
+                    meta.put("method", "local_heuristic");
+                    progressListener.onProgress(createAiJobProgress(
+                        "phase_0_local_enrichment_completed",
+                        "Pha 0/3 hoàn tất: Đã bổ sung translations cục bộ",
+                        1,
+                        3,
+                        meta));
+                }
+
+                apiCallInstrumentationService.recordLocalTranslation("menu_local_enrichment", 1, phase0Duration);
+                safePrompt = localEnrichedJson;
+            } catch (Exception e) {
+                logger.debug("Local enrichment failed, falling back to full AI", e);
+                apiCallInstrumentationService.recordLocalTranslation("menu_local_enrichment_failed", 0,
+                    System.currentTimeMillis() - phase0Start);
+            }
         }
 
         if (runMenuRecovery && progressListener != null) {
@@ -31178,6 +31188,16 @@ public class ApiSpringController {
         }
     }
 
+    private boolean isSeoContentPayload(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return false;
+        }
+        Object title = payload.get("title");
+        Object htmlContent = payload.get("html_content");
+        return title != null && !String.valueOf(title).isBlank()
+            && htmlContent != null && !String.valueOf(htmlContent).isBlank();
+    }
+
     private void populateAiResponseFromRawContent(StandardResponse response, String rawContent, String uiLang) {
 
         // Try to parse as JSON first (GeminiService now returns JSON for both success and error)
@@ -31203,6 +31223,20 @@ public class ApiSpringController {
                     unwrapped.put("content", assistantText);
                     parsedResult = unwrapped;
                 }
+            }
+
+            if (isSeoContentPayload(parsedResult)) {
+                response.set("code", 200);
+                response.set("success", true);
+                response.set("data", parsedResult);
+                response.set("provider", String.valueOf(parsedResult.getOrDefault("provider", "local_provider")));
+                response.set("message", uiTextByLang(
+                    uiLang,
+                    "Thành công",
+                    "Success",
+                    "成功"));
+                logger.info("Successfully processed direct SEO JSON payload");
+                return;
             }
 
             Object topLevelSuccess = parsedResult.get("success");
@@ -31261,6 +31295,20 @@ public class ApiSpringController {
                     // Content is already parsed JSON object - return as data
                     @SuppressWarnings("unchecked")
                     Map<String, Object> parsedData = (Map<String, Object>) contentObj;
+
+                    if (isSeoContentPayload(parsedData)) {
+                        response.set("code", 200);
+                        response.set("success", true);
+                        response.set("data", parsedData);
+                        response.set("provider", provider);
+                        response.set("message", uiTextByLang(
+                            uiLang,
+                            "Thành công",
+                            "Success",
+                            "成功"));
+                        logger.info("Successfully processed nested SEO JSON content from provider: {}", provider);
+                        return;
+                    }
 
                     Object nestedSuccess = parsedData.get("success");
                     if (nestedSuccess instanceof Boolean && !((Boolean) nestedSuccess)) {
@@ -31334,6 +31382,19 @@ public class ApiSpringController {
                 }
                 
                 if (parsedData != null) {
+                    if (isSeoContentPayload(parsedData)) {
+                        response.set("code", 200);
+                        response.set("success", true);
+                        response.set("data", parsedData);
+                        response.set("provider", provider);
+                        response.set("message", uiTextByLang(
+                            uiLang,
+                            "Thành công",
+                            "Success",
+                            "成功"));
+                        logger.info("Successfully parsed SEO JSON content from provider: {}", provider);
+                        return;
+                    }
                     // Successfully extracted and parsed JSON
                     response.set("code", 200);
                     response.set("success", true);
@@ -31542,12 +31603,20 @@ public class ApiSpringController {
                     "开始处理 AI 请求"), 0, 1, null));
 
                 StandardResponse syncResponse = new StandardResponse();
-                String rawContent = fetchAiRawContentWithMenuRecovery(prompt, progress -> {
-                    if (!isAiJobCancelled(job)) {
-                        Map<String, Object> mergedProgress = enrichAiProgressWithMergePreview(progress, params);
-                        updateAiAsyncJobProgress(job, enrichAiProgressWithLineTextEdits(mergedProgress, job));
-                    }
-                }, params);
+                boolean seoRequest = isSeoContentRequest(params, prompt);
+                String rawContent = seoRequest
+                    ? fetchAiRawContent(prompt, progress -> {
+                        if (!isAiJobCancelled(job)) {
+                            Map<String, Object> mergedProgress = enrichAiProgressWithMergePreview(progress, params);
+                            updateAiAsyncJobProgress(job, enrichAiProgressWithLineTextEdits(mergedProgress, job));
+                        }
+                    }, params)
+                    : fetchAiRawContentWithMenuRecovery(prompt, progress -> {
+                        if (!isAiJobCancelled(job)) {
+                            Map<String, Object> mergedProgress = enrichAiProgressWithMergePreview(progress, params);
+                            updateAiAsyncJobProgress(job, enrichAiProgressWithLineTextEdits(mergedProgress, job));
+                        }
+                    }, params);
                 if (isAiJobCancelled(job)) {
                     return;
                 }
@@ -31567,15 +31636,17 @@ public class ApiSpringController {
                         }
                     }
                     // Persist session context file for next AI call continuity
-                    try {
-                        String promptAppId = this.aiAssistantGatewayService.extractAppIdFromPrompt(prompt);
-                        if (promptAppId != null && !promptAppId.isBlank()) {
-                            String requestText = extractRequestTextFromPrompt(prompt);
-                            this.aiAssistantGatewayService.updateAppContextFile(promptAppId, requestText, rawContent);
-                            this.aiMenuLearningMemoryService.recordSuccessfulMenuGeneration(promptAppId, requestText, rawContent);
+                    if (!seoRequest) {
+                        try {
+                            String promptAppId = this.aiAssistantGatewayService.extractAppIdFromPrompt(prompt);
+                            if (promptAppId != null && !promptAppId.isBlank()) {
+                                String requestText = extractRequestTextFromPrompt(prompt);
+                                this.aiAssistantGatewayService.updateAppContextFile(promptAppId, requestText, rawContent);
+                                this.aiMenuLearningMemoryService.recordSuccessfulMenuGeneration(promptAppId, requestText, rawContent);
+                            }
+                        } catch (Exception ctxEx) {
+                            logger.warn("Could not update AI context file (async): {}", ctxEx.getMessage());
                         }
-                    } catch (Exception ctxEx) {
-                        logger.warn("Could not update AI context file (async): {}", ctxEx.getMessage());
                     }
                     updateAiAsyncJobProgress(job, createAiJobProgress("parsing", uiTextByLang(
                         uiLang,
@@ -31598,9 +31669,9 @@ public class ApiSpringController {
                 updateAiAsyncJobProgress(job, createAiJobProgress(ok ? "completed" : "failed",
                     ok ? uiTextByLang(
                         uiLang,
-                        "Đã hoàn tất tạo menu AI",
-                        "AI generation completed",
-                        "AI 生成已完成")
+                        seoRequest ? "Đã hoàn tất tạo nội dung SEO" : "Đã hoàn tất tạo menu AI",
+                        seoRequest ? "SEO content generation completed" : "AI generation completed",
+                        seoRequest ? "SEO 内容生成已完成" : "AI 生成已完成")
                        : String.valueOf(resultPayload.getOrDefault("message", uiTextByLang(
                         uiLang,
                         "AI xử lý thất bại",

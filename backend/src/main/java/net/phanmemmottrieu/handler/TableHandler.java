@@ -2466,8 +2466,9 @@ public class TableHandler {
     private static String scopeFromRoleLevel(Object roleLevel) {
         String normalized = safeStr(roleLevel).toLowerCase(Locale.ROOT);
         return switch (normalized) {
+            case "admin", "director", "giam_doc" -> "ALL";
             case "manager", "quan_ly", "management" -> "BRANCH";
-            case "team_lead", "truong_nhom", "leader", "lead" -> "DEPARTMENT";
+            case "dept_head", "truong_phong", "team_lead", "truong_nhom", "leader", "lead" -> "DEPARTMENT";
             case "staff", "employee", "nhan_vien", "member" -> "OWNER";
             default -> "NONE";
         };

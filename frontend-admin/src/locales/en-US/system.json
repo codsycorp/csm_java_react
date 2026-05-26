@@ -2,6 +2,7 @@
 	"role": {
 		"name": "Role Name",
 		"id": "Role Id",
+		"code": "Permission Group Code",
 		"addRole": "Add Role",
 		"editRole": "Edit Role",
 		"assignMenu": "Assign Menu"
@@ -53,7 +54,10 @@
 			"all": "All data"
 		},
 		"level": {
-			"manager": "Manager",
+			"admin": "Administrator",
+			"director": "Director",
+			"manager": "Branch Manager",
+			"deptHead": "Department Head",
 			"teamLead": "Team Lead",
 			"staff": "Staff"
 		},

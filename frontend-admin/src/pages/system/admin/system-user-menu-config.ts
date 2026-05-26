@@ -164,7 +164,10 @@ export const BRANCH_SELECT_QUERY_BY_DEPT_JSON = JSON.stringify({
 
 export const ROLE_LEVEL_OPTIONS_JSON = JSON.stringify({
 	options: [
+		{ value: "admin", label: "system.userPermission.level.admin" },
+		{ value: "director", label: "system.userPermission.level.director" },
 		{ value: "manager", label: "system.userPermission.level.manager" },
+		{ value: "dept_head", label: "system.userPermission.level.deptHead" },
 		{ value: "team_lead", label: "system.userPermission.level.teamLead" },
 		{ value: "staff", label: "system.userPermission.level.staff" },
 	],
@@ -187,7 +190,9 @@ export const PERMISSION_GROUP_QUERY_JSON = JSON.stringify({
 	query: [
 		{
 			obj_name: "csm_roles",
-			fields: ["id", "role_name"],
+			fields: ["id", "role_name", "role_code"],
+			value_field: "id",
+			label_field: "role_name",
 			obj_where: { field: "id", type: "like", value: "" },
 		},
 	],
@@ -361,7 +366,7 @@ export const SUB_USER_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "login_identifier", f_header: "common.loginIdentifier", f_show: 1, f_types: "string", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.login_identifier },
 	{ f_name: "user_address", f_header: "common.address", f_show: 0, f_types: "json", f_align: "left" },
 	{ f_name: "app_id", f_header: "common.menu.apps", f_show: 0, f_types: "co_ro", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.app_id } as any,
-	{ f_name: "group_id", f_header: "common.groupId", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: PERMISSION_GROUP_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.group_id },
+	{ f_name: "group_id", f_header: "system.userPermission.fields.permissionGroups", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: PERMISSION_GROUP_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.group_id },
 	{ f_name: "app_token", f_header: "common.appToken", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.pass },
 	{ f_name: "permissionPreset", f_header: "system.userPermission.fields.permissionPreset", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: ACTION_PRESET_OPTIONS_JSON },
@@ -1637,10 +1642,22 @@ function beforeSave(row, seft) {
 	}
 	function scopeFromRoleLevel(level) {
 		const normalized = String(level || "").trim().toLowerCase();
-		if (normalized === "manager") return "BRANCH";
-		if (normalized === "team_lead") return "DEPARTMENT";
-		if (normalized === "staff") return "OWNER";
+		if (normalized === "admin" || normalized === "director" || normalized === "giam_doc") return "ALL";
+		if (normalized === "manager" || normalized === "quan_ly") return "BRANCH";
+		if (normalized === "dept_head" || normalized === "truong_phong" || normalized === "team_lead" || normalized === "truong_nhom" || normalized === "leader" || normalized === "lead") return "DEPARTMENT";
+		if (normalized === "staff" || normalized === "nhan_vien" || normalized === "employee" || normalized === "member") return "OWNER";
 		return "NONE";
+	}
+	function buildRoleCodeFromName(name) {
+		const text = String(name || "").trim();
+		if (!text) return "";
+		return text
+			.normalize("NFD")
+			.replace(/[\u0300-\u036f]/g, "")
+			.replace(/đ/gi, "d")
+			.replace(/[^a-zA-Z0-9]+/g, "_")
+			.replace(/^_+|_+$/g, "")
+			.toUpperCase();
 	}
 	function findRow(tableName, fieldName, value) {
 		const rows = Array.isArray(seft?.database?.[tableName])
@@ -1679,7 +1696,11 @@ function beforeSave(row, seft) {
 		return true;
 	}
 
-	const roleCode = String(row.role_code || "").trim();
+	let roleCode = String(row.role_code || "").trim();
+	if (!roleCode) {
+		roleCode = buildRoleCodeFromName(row.role_name);
+		if (roleCode) row.role_code = roleCode;
+	}
 	if (!roleCode) {
 		window.$message?.error(tr({
 			vi: "Cần nhập mã nhóm quyền (role_code)",
@@ -1784,6 +1805,35 @@ export function mergeMenuTableFields(
 				f_show: 0,
 				f_width: Math.max(Number(field?.f_width || 0), Number(SYSTEM_USER_FIELD_WIDTHS.app_id || 0)) || field?.f_width,
 				f_cbo_query: field?.f_cbo_query || APP_ID_QUERY_JSON,
+			};
+		}
+		if (fName === "data_app_ids") {
+			return {
+				...field,
+				f_header: translateLabel("system.userPermission.fields.dataAppIds"),
+				f_header_vi: translateLabelByLang("system.userPermission.fields.dataAppIds", "vi"),
+				f_header_en: translateLabelByLang("system.userPermission.fields.dataAppIds", "en"),
+				f_header_zh: translateLabelByLang("system.userPermission.fields.dataAppIds", "zh"),
+				f_types: "multi_tag",
+				f_width: Math.max(Number(field?.f_width || 0), Number(SYSTEM_USER_FIELD_WIDTHS.data_app_ids || 0)) || field?.f_width,
+				f_cbo_query: field?.f_cbo_query || APP_ID_QUERY_JSON,
+			};
+		}
+		if (fName === "group_id" || fName === "permissionGroups") {
+			const defaultField = defaultFields.find((item) => item.f_name === fName);
+			const headerKey = fName === "group_id"
+				? "system.userPermission.fields.permissionGroups"
+				: String(defaultField?.f_header || "system.userPermission.fields.permissionGroups");
+			const currentType = String(field?.f_types || "").trim().toLowerCase();
+			return {
+				...field,
+				f_header: translateLabel(headerKey),
+				f_header_vi: translateLabelByLang(headerKey, "vi"),
+				f_header_en: translateLabelByLang(headerKey, "en"),
+				f_header_zh: translateLabelByLang(headerKey, "zh"),
+				f_types: currentType.includes("co") ? field.f_types : (defaultField?.f_types || "co"),
+				f_width: Math.max(Number(field?.f_width || 0), Number(SYSTEM_USER_FIELD_WIDTHS[fName] || 0)) || field?.f_width,
+				f_cbo_query: field?.f_cbo_query || defaultField?.f_cbo_query || PERMISSION_GROUP_QUERY_JSON,
 			};
 		}
 		return field;
@@ -1973,7 +2023,7 @@ export function adaptSystemUserConfigForActor(
 			? config.table.map((field: any) => {
 				const fName = String(field?.f_name || "");
 				const hiddenByActor = SYSTEM_USER_INTERNAL_FIELD_NAMES.has(fName)
-					|| fName === "app_id"
+					|| (fName === "app_id" && actorType !== "dev")
 					|| (fName === "data_app_ids" && actorType !== "dev")
 					|| (actorType === "dev" && SYSTEM_USER_PERMISSION_FIELD_NAMES.has(fName));
 				if (hiddenByActor) {

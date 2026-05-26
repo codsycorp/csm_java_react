@@ -15,7 +15,7 @@ import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { PERMISSION_BITS, hasAnyPermissionBit, hasPermissionBit, parseMenuBitIndex, toPermissionBigInt } from "#src/utils/permission-bitfield";
 import { formatDateForDisplay, formatDateForStorage, parseDateValueToDayjs, resolveDateLocaleFormat } from "#src/utils/dateControl";
-import { resolveComboQueryAppId } from "./combo-utils";
+import { resolveComboQueryAppId, buildRoleComboValueEnum, buildRoleComboSelectEnum, resolveRoleComboLabel, getComboTableRows, buildRoleComboOptions } from "./combo-utils";
 import dayjs from "dayjs";
 
 // Minimal types (kept local to avoid wider type churn)
@@ -507,7 +507,10 @@ function getLegacyFallbackComboQuery(fieldNameRaw: unknown): string {
 	if (fieldName === "role_level") {
 		return JSON.stringify({
 			options: [
+				{ value: "admin", label: "system.userPermission.level.admin" },
+				{ value: "director", label: "system.userPermission.level.director" },
 				{ value: "manager", label: "system.userPermission.level.manager" },
+				{ value: "dept_head", label: "system.userPermission.level.deptHead" },
 				{ value: "team_lead", label: "system.userPermission.level.teamLead" },
 				{ value: "staff", label: "system.userPermission.level.staff" },
 			],
@@ -552,7 +555,9 @@ function getLegacyFallbackComboQuery(fieldNameRaw: unknown): string {
 			query: [
 				{
 					obj_name: "csm_roles",
-					fields: ["id", "role_name"],
+					fields: ["id", "role_name", "role_code"],
+					value_field: "id",
+					label_field: "role_name",
 					obj_where: { field: "id", type: "like", value: "" },
 				},
 			],
@@ -1043,7 +1048,7 @@ export function CsmDynamicGrid({
 	// 🔄 Track database version để force re-compute selectEnums khi missing tables được fetch
 	const [databaseVersion, setDatabaseVersion] = useState(0);
 	const globalTableFetchCache = useRef(new Map<string, Promise<any>>()).current;
-	const hasFetchedComboTables = useRef(false); // Track if we already fetched combo tables on mount
+	const lastComboFetchSignatureRef = useRef("");
 	const [_selectedRow, setSelectedRow] = useState<Row | null>(null);
 	const [selectedDetailRow, setSelectedDetailRow] = useState<Row | null>(null); // For detail tabs panel
 	const [editorOpen, setEditorOpen] = useState(false);
@@ -1149,18 +1154,30 @@ export function CsmDynamicGrid({
 		closeEditor();
 		setSearchTerm("");
 		setDatabaseVersion(0);
-		hasFetchedComboTables.current = false;
+		lastComboFetchSignatureRef.current = "";
 		globalTableFetchCache.clear();
 	}, [closeEditor, effectiveGridInstanceKey, globalTableFetchCache]);
 
 	// Enable socket for real-time database updates
 	useSocket({ enabled: true });
+
+	const comboFetchSignature = useMemo(() => {
+		const comboFields = (m_configs?.table || []).filter((f: TableField) => {
+			const types = resolveEffectiveFieldTypes(f);
+			return isComboLikeType(types);
+		});
+		return comboFields
+			.map((f) => `${String(f.f_name || "")}:${String(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name) || "")}`)
+			.sort()
+			.join("|");
+	}, [m_configs?.table]);
 	
-	// 🔄 Auto-fetch missing combo tables ONCE on mount
+	// 🔄 Auto-fetch missing combo tables when field config becomes available
 	useEffect(() => {
-		// Only fetch once per component lifecycle
-		if (hasFetchedComboTables.current) return;
-		hasFetchedComboTables.current = true;
+		if (!comboFetchSignature || comboFetchSignature === lastComboFetchSignatureRef.current) {
+			return;
+		}
+		lastComboFetchSignatureRef.current = comboFetchSignature;
 		
 		console.log('[CsmDynamicGrid] Scanning combo queries for missing tables...');
 		
@@ -1253,7 +1270,7 @@ export function CsmDynamicGrid({
 			console.log('[CsmDynamicGrid] All combo tables fetched, triggering re-compute...');
 			setDatabaseVersion(v => v + 1);
 		});
-	}, []); // Empty deps = run once on mount
+	}, [comboFetchSignature, userAppId, appId, decrypt]);
 
 	const resolveQueryAppIdByTable = useCallback((tableName: string, queryAppId?: string): string => {
 		return resolveComboQueryAppId(tableName, queryAppId, userAppId || appId || "csm");
@@ -1889,7 +1906,7 @@ export function CsmDynamicGrid({
 									}
 								}
 							});
-							
+
 							if (Object.keys(enumObj).length > 0) {
 								console.log(`[selectEnums] ✅ Query result for ${f.f_name}:`, enumObj);
 								map[f.f_name] = enumObj;
@@ -2095,6 +2112,12 @@ export function CsmDynamicGrid({
 					console.error(`[selectEnums] Dynamic code execution error for ${f.f_name}:`, err);
 				}
 			});
+		(["group_id", "permissionGroups"] as const).forEach((fieldName) => {
+			const roleRows = getComboTableRows(database, "csm_roles");
+			if (roleRows.length === 0) return;
+			if (map[fieldName] && Object.keys(map[fieldName]).length > 0) return;
+			map[fieldName] = buildRoleComboSelectEnum(roleRows);
+		});
 		console.log('[selectEnums] Final map:', map);
 		return map;
 	}, [m_configs.table, database, decrypt, context, m_configs, m_configs.selectEnumsOverride, databaseVersion, ensureTableInDatabase, i18n.language, t]); // 🔄 Re-compute when database/language changes
@@ -2359,9 +2382,23 @@ export function CsmDynamicGrid({
 						const rawLabel = ve[valueKey]?.text;
 						const disp = rawLabel
 							? (rawLabel.includes(".") ? t(rawLabel) : rawLabel)
-							: valueKey;
+							: (["group_id", "permissionGroups"].includes(f.f_name)
+								? resolveRoleComboLabel(valueKey, database)
+								: valueKey);
 						return React.createElement(Tag, {
 							color: optionColorMap[valueKey] || getAutoTagColor(valueKey),
+							style: { fontSize: 12 },
+						}, disp);
+					};
+				} else if (isSelect && ["group_id", "permissionGroups"].includes(f.f_name)) {
+					col.render = (_dom, entity) => {
+						const raw = entity[f.f_name];
+						if (raw == null || raw === "") return null;
+						const valueKey = String(raw).trim();
+						if (!valueKey) return null;
+						const disp = resolveRoleComboLabel(valueKey, database);
+						return React.createElement(Tag, {
+							color: getAutoTagColor(valueKey),
 							style: { fontSize: 12 },
 						}, disp);
 					};
@@ -3987,7 +4024,6 @@ export function CsmDynamicGrid({
 		if (!enableInlineCellEdit && editorOpen) {
 			setEditingRecord(null);
 			setCloneData(null);
-			onAdd?.();
 			return;
 		}
 		if (actionClickGuardRef.current) {
@@ -4031,7 +4067,6 @@ export function CsmDynamicGrid({
 				// If has master-detail nodes, open form modal for complete data entry
 				setEditingRecord(newRow);
 				setEditorOpen(true);
-				onAdd?.();
 			} else {
 				// Add to beginning of data array for inline editing
 				setData((prev) => {
@@ -4046,13 +4081,11 @@ export function CsmDynamicGrid({
 				setSelectedRow(newRow);
 				// Mark this row to be editable once it appears in the table
 				setPendingEditableRowId(newRowKey);
-				onAdd?.();
 			}
 		} else {
 			// Modal-based add
 			setEditingRecord(null);
 			setEditorOpen(true);
-			onAdd?.();
 		}
 	}
 	function handleEdit(record: Row) {
@@ -4798,7 +4831,7 @@ export function CsmDynamicGrid({
 						}
 						message.success(cmd === "create" ? t("common.addSuccess") : t("common.updateSuccess"));
 						runSideEffectTrigger("update_db", values);
-						onAdd?.();
+						onDataChange?.();
 						return;
 					}
 					
@@ -4911,7 +4944,7 @@ export function CsmDynamicGrid({
 					}
 					message.success(cmd === "create" ? t("common.addSuccess") : t("common.updateSuccess"));
 					runSideEffectTrigger("update_db", effectiveUpdatedValues);
-					onAdd?.();
+					onDataChange?.();
 					} finally {
 						submitInFlightRef.current = false;
 					}

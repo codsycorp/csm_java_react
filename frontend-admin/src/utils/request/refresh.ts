@@ -4,12 +4,14 @@ import { fetchRefreshToken } from "#src/api/user";
 
 import { useAuthStore, useUserStore } from "#src/store";
 import ky from "ky";
+import { applyAuthHeadersToRequest } from "./auth-session";
 import { AUTH_HEADER } from "./constants";
 import { goLogin } from "./go-login";
 
 let isRefreshing = false;
 
 function retryOriginalRequest(request: Request, options: Options) {
+	applyAuthHeadersToRequest(request);
 	return ky(request.url, {
 		...options,
 		// request.url is absolute at this point; keep prefix disabled to avoid base URL duplication.
@@ -17,6 +19,7 @@ function retryOriginalRequest(request: Request, options: Options) {
 		method: request.method,
 		headers: request.headers,
 		body: request.body,
+		credentials: "include",
 	});
 }
 

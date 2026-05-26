@@ -11,6 +11,7 @@ import { clearAllClientState } from "#src/utils/app-reset";
 
 // Local utilities
 import { AUTH_HEADER, CLIENT_ID_HEADER, LANG_HEADER } from "./constants";
+import { getAuthCredentials, hasAuthSession, readPersistedAuthState } from "./auth-session";
 import { handleErrorResponse } from "./error-response";
 import { globalProgress } from "./global-progress";
 import { goLogin } from "./go-login";
@@ -25,23 +26,6 @@ let is401HandlingInProgress = false;
 
 // Helper: Lấy CSRF token từ cookie chỉ theo domain của VITE_API_BASE_URL
 import { useAuthStore } from "#src/store/auth";
-
-function readPersistedAuthState(): { token?: string; refreshToken?: string; csrfToken?: string } {
-	try {
-		const raw = localStorage.getItem("access-token");
-		if (!raw)
-			return {};
-		const parsed = JSON.parse(raw);
-		const state = parsed?.state || {};
-		return {
-			token: typeof state.token === "string" ? state.token : undefined,
-			refreshToken: typeof state.refreshToken === "string" ? state.refreshToken : undefined,
-			csrfToken: typeof state.csrfToken === "string" ? state.csrfToken : undefined,
-		};
-	} catch {
-		return {};
-	}
-}
 
 function getCsrfToken() {
 	// Ưu tiên đồng bộ với cookie để tránh mismatch
@@ -76,16 +60,7 @@ function getClientId() {
 
 
 function hasAuthState() {
-	try {
-		const authState = useAuthStore.getState();
-		if (authState?.token || authState?.refreshToken || getCsrfToken()) {
-			return true;
-		}
-		const persisted = readPersistedAuthState();
-		return Boolean(persisted.token || persisted.refreshToken || persisted.csrfToken);
-	} catch {
-		return false;
-	}
+	return hasAuthSession();
 }
 
 function shouldForceSubuserScope(payload: any): boolean {
@@ -180,7 +155,7 @@ const defaultConfig: Options = {
 				}
 
 				try {
-					const refreshToken = useAuthStore.getState().refreshToken || readPersistedAuthState().refreshToken;
+					const refreshToken = getAuthCredentials().refreshToken;
 					if (refreshToken) {
 						request.headers.set('X-Refresh-Token', refreshToken);
 					}
@@ -193,7 +168,7 @@ const defaultConfig: Options = {
 								// Backend filter prioritizes csm-token over refresh token, so sending both breaks refresh flow.
 								if (!isWhiteRequest && !isRefreshTokenRequest) {
 									try {
-										const token = useAuthStore.getState().token || readPersistedAuthState().token;
+										const token = getAuthCredentials().token;
 										if (token) {
 											// Attach custom csm-token header (used by some backend handlers)
 											request.headers.set(AUTH_HEADER, `${token}`);
@@ -263,9 +238,14 @@ const defaultConfig: Options = {
 							   return response;
 						   }
 					   
-					   // Prevent multiple simultaneous 401 handling
+					   // Prevent multiple simultaneous 401 handling — queue behind active refresh instead of returning raw 401.
 					   if (is401HandlingInProgress) {
-						   return response;
+						   try {
+							   return await refreshTokenAndRetry(request, options);
+						   } catch (queuedRefreshError) {
+							   console.warn("[Auth] Queued refresh retry failed:", queuedRefreshError);
+							   return response;
+						   }
 					   }
 					   
 					   is401HandlingInProgress = true;

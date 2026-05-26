@@ -24,7 +24,7 @@ import { useAppStore } from "#src/store/app";
 import { usePermissionStore } from "#src/store";
 import { useUserStore } from "#src/store/user";
 import { getTableData } from "./CsmApi";
-import { normalizeComboOptions, resolveComboQueryAppId } from "./combo-utils";
+import { normalizeComboOptions, resolveComboQueryAppId, buildRoleComboOptions, getComboTableRows, buildRoleComboValueEnum, buildRoleComboSelectEnum, resolveRoleComboLabel } from "./combo-utils";
 import { formatDateForStorage, parseDateValueToDayjs, resolveDateLocaleFormat } from "#src/utils/dateControl";
 
 // Helper: safeEval for trigger execution (same as CsmDynamicGrid)
@@ -496,6 +496,13 @@ export function buildDetailGridSelectEnums(
     } catch (err) {
       console.error(`[buildDetailGridSelectEnums] Error parsing ${f.f_name}:`, err);
     }
+  });
+
+  (["group_id", "permissionGroups"] as const).forEach((fieldName) => {
+    const roleRows = getComboTableRows(database, "csm_roles");
+    if (roleRows.length === 0) return;
+    if (result[fieldName] && Object.keys(result[fieldName]).length > 0) return;
+    result[fieldName] = buildRoleComboSelectEnum(roleRows);
   });
 
   return result;
@@ -1134,6 +1141,47 @@ function MultilingualTabs({ fields, form }: { fields: TableField[]; form: any })
   );
 }
 
+function parseFieldComboQuery(field: TableField, decrypt?: (s: string) => string): any | null {
+  const rawQuery = String(field?.f_cbo_query || "").trim();
+  if (!rawQuery) return null;
+  let resolvedQuery = rawQuery;
+  if (decrypt) {
+    try {
+      resolvedQuery = decrypt(rawQuery) || rawQuery;
+    } catch {
+      resolvedQuery = rawQuery;
+    }
+  }
+  try {
+    return JSON.parse(resolvedQuery);
+  } catch {
+    try {
+      return new Function(`return (${resolvedQuery})`)();
+    } catch {
+      return null;
+    }
+  }
+}
+
+function extractCascadeParentFields(fields: TableField[], decrypt?: (s: string) => string): string[] {
+  const parents = new Set<string>();
+  fields.forEach((field) => {
+    const parsed = parseFieldComboQuery(field, decrypt);
+    const cascadeFrom = String(parsed?.cascadeFrom || "").trim();
+    if (cascadeFrom) parents.add(cascadeFrom);
+  });
+  return Array.from(parents);
+}
+
+function extractCascadeChildFields(fields: TableField[], parentField: string, decrypt?: (s: string) => string): string[] {
+  const normalizedParent = String(parentField || "").trim();
+  if (!normalizedParent) return [];
+  return fields
+    .filter((field) => String(parseFieldComboQuery(field, decrypt)?.cascadeFrom || "").trim() === normalizedParent)
+    .map((field) => String(field.f_name || "").trim())
+    .filter(Boolean);
+}
+
 function getFieldComponent(
   f: TableField,
   form: any,
@@ -1147,7 +1195,9 @@ function getFieldComponent(
   menusPermissions?: Record<string | number, number>,
   decrypt?: (s: string) => string,
   translate?: (key: string, defaultValue?: string) => string,
-  currentLang?: string
+  currentLang?: string,
+  record?: Row | null,
+  onFieldChange?: (fieldName: string, value: unknown) => void,
 ) {
   const types = resolveEffectiveFieldTypes(f); // infer special types even when DB sends generic f_types
   const key = f.f_name;
@@ -1156,9 +1206,11 @@ function getFieldComponent(
   const dateLocaleFormat = resolveDateLocaleFormat(lang);
   const fieldLabel = resolveFieldLabel(f, lang, translate);
   const initialVal = fieldValues?.[key];
+  const recordId = String(record?.id ?? fieldValues?.id ?? form.getFieldValue("id") ?? "").trim();
+  const isExistingRecord = Boolean(recordId);
   
   // Kiểu Readonly: chứa 'ro' trong f_types - chỉ hiển thị, không cho edit
-  const isReadonly = types.indexOf('ro') !== -1;
+  const isReadonly = types.indexOf('ro') !== -1 || (key === "role_code" && isExistingRecord);
 
   const parseStringArray = (raw: any): string[] => {
     if (Array.isArray(raw)) {
@@ -1690,11 +1742,31 @@ function getFieldComponent(
   // Kiểu Select/CBO (combobox) - hỗ trợ thêm alias select/cbo cho tương thích dữ liệu cũ
   if (isComboLikeType(types)) {
     const rawOptions = selectOptions?.[key];
-    const enumObj = selectEnums?.[key];
     const cascadeConfig = resolveCascadeSelectOptions(f, form, database, decrypt, localizeLabel);
-    const localizedOptions = cascadeConfig.options ?? buildSelectOptions(rawOptions, enumObj, localizeLabel);
+    const roleFieldNames = new Set(["group_id", "permissiongroups", "group_rights", "grouprights"]);
+    const roleRows = roleFieldNames.has(String(key || "").trim().toLowerCase())
+      ? getComboTableRows(database, "csm_roles")
+      : [];
+    let localizedOptions = cascadeConfig.options;
+    if (roleRows.length > 0) {
+      localizedOptions = buildRoleComboOptions(roleRows).map((opt) => ({
+        value: opt.value,
+        label: localizeLabel ? localizeLabel(opt.label) : opt.label,
+      }));
+    } else {
+      localizedOptions = cascadeConfig.options ?? buildSelectOptions(rawOptions, selectEnums?.[key], localizeLabel);
+    }
     const rawSelectValue = form.getFieldValue(key) ?? initialVal;
     const selectValue = normalizeSelectValue(rawSelectValue, localizedOptions);
+    if (selectValue != null && String(selectValue).trim() !== "") {
+      const hasSelectedOption = localizedOptions.some((option) => String(option.value).trim() === String(selectValue).trim());
+      if (!hasSelectedOption) {
+        const fallbackLabel = roleFieldNames.has(String(key || "").trim().toLowerCase())
+          ? resolveRoleComboLabel(selectValue, database)
+          : String(selectValue);
+        localizedOptions = [{ value: selectValue, label: fallbackLabel }, ...localizedOptions];
+      }
+    }
 
     return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
       <Select 
@@ -1706,7 +1778,10 @@ function getFieldComponent(
         disabled={isReadonly || (Boolean(cascadeConfig.cascadeFrom) && !cascadeConfig.hasParentValue)}
         placeholder={translate ? translate("common.select", `Select ${fieldLabel}`) : `Select ${fieldLabel}`}
         value={selectValue}
-        onChange={val => form.setFieldsValue({ [key]: val })}
+        onChange={(val) => {
+          form.setFieldsValue({ [key]: val });
+          onFieldChange?.(key, val);
+        }}
       />
     </Form.Item>;
   }
@@ -1720,7 +1795,7 @@ function getFieldComponent(
   
   // Mặc định: ed (text input)
   return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
-    <Input id={key} disabled={isReadonly} />
+    <Input id={key} readOnly={isReadonly} />
   </Form.Item>;
 }
 
@@ -1978,6 +2053,31 @@ export function CsmEditModal({
       : [];
   }, [m_configs]);
 
+  const decryptComboQuery = useCallback((val: string) => {
+    let decoded = val;
+    try {
+      decoded = csmDecrypt(val);
+      if (/%/.test(decoded)) {
+        decoded = decodeURIComponent(decoded);
+      }
+    } catch {}
+    return decoded;
+  }, []);
+
+  const cascadeParentFields = useMemo(
+    () => extractCascadeParentFields(dynamicFields, decryptComboQuery),
+    [dynamicFields, decryptComboQuery],
+  );
+  Form.useWatch(cascadeParentFields.length > 0 ? cascadeParentFields : ["__cascade_watch__"], form);
+
+  const handleFieldChange = useCallback((fieldName: string) => {
+    const childFields = extractCascadeChildFields(dynamicFields, fieldName, decryptComboQuery);
+    if (childFields.length > 0) {
+      form.setFieldsValue(Object.fromEntries(childFields.map((child) => [child, undefined])));
+    }
+    setFormUpdated((prev) => prev + 1);
+  }, [dynamicFields, decryptComboQuery, form]);
+
   useEffect(() => {
     if (!open) {
       // Reset form when modal closes
@@ -2154,7 +2254,9 @@ export function CsmEditModal({
       }, 0);
       return () => clearTimeout(timer);
     } else {
-      // ...existing code...
+      form.resetFields();
+      setValuesReady(true);
+      setFormUpdated((prev) => prev + 1);
     }
   }, [form, open, record, dynamicFields, selectEnums, selectOptions, t]);
 
@@ -2372,18 +2474,11 @@ export function CsmEditModal({
                             appId,
                             permissions,
                             menusPermissions,
-                            (val: string) => {
-                              let decoded = val;
-                              try {
-                                decoded = csmDecrypt(val);
-                                if (/%/.test(decoded)) {
-                                  decoded = decodeURIComponent(decoded);
-                                }
-                              } catch {}
-                              return decoded;
-                            },
+                            decryptComboQuery,
                             (key: string, defaultValue?: string) => t(key, defaultValue || ""),
-                            i18n.language
+                            i18n.language,
+                            record,
+                            handleFieldChange,
                           )}
                         </div>
                       ))}
@@ -2403,18 +2498,11 @@ export function CsmEditModal({
                       appId,
                       permissions,
                       menusPermissions,
-                      (val: string) => {
-                        let decoded = val;
-                        try {
-                          decoded = csmDecrypt(val);
-                          if (/%/.test(decoded)) {
-                            decoded = decodeURIComponent(decoded);
-                          }
-                        } catch {}
-                        return decoded;
-                      },
+                      decryptComboQuery,
                       (key: string, defaultValue?: string) => t(key, defaultValue || ""),
-                      i18n.language
+                      i18n.language,
+                      record,
+                      handleFieldChange,
                     )}
                   </div>
                 ))}
