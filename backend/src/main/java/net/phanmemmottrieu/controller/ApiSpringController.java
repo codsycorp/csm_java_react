@@ -3251,7 +3251,8 @@ public class ApiSpringController {
                     if (editFocusedEarlyProviderText.isBlank() && !earlyFocusedFromMeta.isBlank()) {
                         editFocusedEarlyProviderText = earlyFocusedFromMeta;
                     }
-                    if (!editFocusedEarlyProviderText.isBlank()) {
+                    if (!editFocusedEarlyProviderText.isBlank()
+                            && countActionableLineTextEdits(editFocusedEarlyProviderText) > 0) {
                         providerRaw = editFocusedEarlyProviderText;
                         providerText = editFocusedEarlyProviderText;
                         editFocusedPrimaryApplied = true;
@@ -4531,12 +4532,19 @@ public class ApiSpringController {
                                         responseMode,
                                         1,
                                         effectiveCodeContext);
-                                    codeStreamMeta.put("streamChunkCount", earlyChunks);
-                                    codeStreamMeta.put("streamedChars", earlySalvage.length());
-                                    codeStreamMeta.put("editFocusedEarlySalvageApplied", true);
-                                    rawResponse = earlySalvage;
-                                    effectiveModel = "local_provider";
-                                    localProviderPrimaryUsed = true;
+                                    if (earlyChunks <= 0) {
+                                        logger.warn(
+                                            "LOCAL_OVERRIDE edit focused-early salvage rejected (no applyable edits) requestId={} chars={}",
+                                            requestId,
+                                            earlySalvage.length());
+                                    } else {
+                                        codeStreamMeta.put("streamChunkCount", earlyChunks);
+                                        codeStreamMeta.put("streamedChars", earlySalvage.length());
+                                        codeStreamMeta.put("editFocusedEarlySalvageApplied", true);
+                                        rawResponse = earlySalvage;
+                                        effectiveModel = "local_provider";
+                                        localProviderPrimaryUsed = true;
+                                    }
                                 }
                                 if (rawResponse == null) {
                                 String focusedEdit = tryEditFocusedLocalFallback(
@@ -4587,12 +4595,19 @@ public class ApiSpringController {
                                         responseMode,
                                         1,
                                         effectiveCodeContext);
-                                    codeStreamMeta.put("streamChunkCount", fallbackChunks);
-                                    codeStreamMeta.put("streamedChars", focusedEdit.length());
-                                    codeStreamMeta.put("editFocusedFallbackApplied", true);
-                                    rawResponse = focusedEdit;
-                                    effectiveModel = "local_provider";
-                                    localProviderPrimaryUsed = true;
+                                    if (fallbackChunks <= 0) {
+                                        logger.warn(
+                                            "LOCAL_OVERRIDE edit focused fallback rejected (no applyable edits) requestId={} chars={}",
+                                            requestId,
+                                            focusedEdit.length());
+                                    } else {
+                                        codeStreamMeta.put("streamChunkCount", fallbackChunks);
+                                        codeStreamMeta.put("streamedChars", focusedEdit.length());
+                                        codeStreamMeta.put("editFocusedFallbackApplied", true);
+                                        rawResponse = focusedEdit;
+                                        effectiveModel = "local_provider";
+                                        localProviderPrimaryUsed = true;
+                                    }
                                 }
                                 }
                             }
@@ -16975,14 +16990,74 @@ public class ApiSpringController {
         if (normalized.isBlank()) {
             return false;
         }
-        if (extractLineTextEditsCount(normalized) > 0 || !parseNormalizedLineTextEdits(normalized).isEmpty()) {
+        if (countActionableLineTextEdits(normalized) > 0) {
             return true;
         }
-        // Code edit must produce actionable line edits — prose-only JSON salvage is not applyable.
+        // Code edit must produce actionable line edits — prose-only / placeholder salvage is not applyable.
         if (isCodeContext(contextType)) {
             return false;
         }
         return shouldAcceptLocalCodeStreamOutput(normalized, "edit", contextType);
+    }
+
+    private boolean isActionableTextEditMap(Map<String, Object> edit) {
+        if (edit == null || edit.isEmpty()) {
+            return false;
+        }
+        String replacement = String.valueOf(edit.getOrDefault("replacement", "")).trim();
+        if (replacement.isBlank() || replacement.equals("...") || replacement.equals("\"...\"")) {
+            return false;
+        }
+        int startLine = parseIntOrDefault(edit.get("startLine"), -1);
+        if (startLine < 1) {
+            startLine = parseIntOrDefault(edit.get("start_line"), -1);
+        }
+        return startLine > 0;
+    }
+
+    private int countActionableLineTextEdits(String rawResponse) {
+        String normalized = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        if (normalized.isBlank()) {
+            return 0;
+        }
+        int fromParsed = 0;
+        for (Map<String, Object> edit : parseNormalizedLineTextEdits(normalized)) {
+            if (isActionableTextEditMap(edit)) {
+                fromParsed++;
+            }
+        }
+        if (fromParsed > 0) {
+            return fromParsed;
+        }
+        String jsonCandidate = normalized;
+        if (!normalized.startsWith("{")) {
+            String extracted = extractJsonObjectCandidate(normalized);
+            if (!extracted.isBlank()) {
+                jsonCandidate = extracted;
+            }
+        }
+        try {
+            JsonNode parsed = objectMapper.readTree(jsonCandidate);
+            JsonNode editsNode = findNestedJsonNode(parsed, "textEdits", "text_edits");
+            if (editsNode != null && editsNode.isArray()) {
+                int count = 0;
+                for (JsonNode edit : editsNode) {
+                    if (isActionableTextEditMap(normalizeTextEditJsonNode(edit))) {
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    return count;
+                }
+            }
+            JsonNode codeNode = findNestedJsonNode(parsed, "code");
+            if (codeNode != null && !codeNode.asText("").isBlank()) {
+                return 1;
+            }
+        } catch (Exception ex) {
+            logger.debug("countActionableLineTextEdits parse failed: {}", ex.getMessage());
+        }
+        return 0;
     }
 
     private boolean shouldAcceptLocalCodeStreamOutput(String output, String responseMode, String contextType) {
