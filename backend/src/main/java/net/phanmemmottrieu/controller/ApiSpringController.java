@@ -4745,9 +4745,9 @@ public class ApiSpringController {
                                 Map.of("blocked", true)
                             );
                             sendErrorEvent(emitter, uiTextByLang(uiLang,
-                                buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang),
-                                buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext),
-                                buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext)));
+                                buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang, responseMode),
+                                buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext, responseMode),
+                                buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext, responseMode)));
                             return;
                         }
                         if (localOnlyHardRoute) {
@@ -4894,9 +4894,9 @@ public class ApiSpringController {
                                         + " Hãy chỉ rõ node, ví dụ: 'Sửa node id=xxx, đặt label=...'"));
                             }
                             sendErrorEvent(emitter, uiTextByLang(uiLang,
-                                buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang),
-                                buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext),
-                                buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext)));
+                                buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang, responseMode),
+                                buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext, responseMode),
+                                buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext, responseMode)));
                             return;
                         }
                         if (hasImages) {
@@ -4964,9 +4964,9 @@ public class ApiSpringController {
                                 "reason_code", "local_only_no_final_output",
                                 "message", "Local-only: khong tao duoc output cuoi cung."));
                             sendErrorEvent(emitter, uiTextByLang(uiLang,
-                                buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang),
-                                buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext),
-                                buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext)));
+                                buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang, responseMode),
+                                buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext, responseMode),
+                                buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext, responseMode)));
                             return;
                             }
                         } else {
@@ -4989,9 +4989,9 @@ public class ApiSpringController {
                 if (rawResponse == null) {
                     if (hardLocalOnlyFlow) {
                         sendErrorEvent(emitter, uiTextByLang(uiLang,
-                            buildLocalOnlyFailureMessage("", effectiveCodeContext, uiLang),
-                            buildLocalOnlyFailureMessageEn("", effectiveCodeContext),
-                            buildLocalOnlyFailureMessageZh("", effectiveCodeContext)));
+                            buildLocalOnlyFailureMessage("", effectiveCodeContext, uiLang, responseMode),
+                            buildLocalOnlyFailureMessageEn("", effectiveCodeContext, responseMode),
+                            buildLocalOnlyFailureMessageZh("", effectiveCodeContext, responseMode)));
                         return;
                     }
                     if (!shouldFallbackToDefaultOnSimpleFailure || hasImages || aiLocalOnlyEnabled) {
@@ -6960,7 +6960,10 @@ public class ApiSpringController {
             return;
         }
         String[] hints = {
-            "closeAllTabsAndCleanup", "closeAllTabs", "fnResetIP", "waitForAllTabsClose",
+            "closeAllTabsAndCleanup", "closeAllTabs", "fnResetIP", "fnRemoveTab",
+            "waitForAllTabsClose", "waitForProcessDeath", "__forceKillWebviewProcess",
+            "__waitForWebviewExit", "isProcessRunning", "runParallelProcessing",
+            "runSequentiallyWithReduce", "WEBVIEW_FORCE_KILL_ON_CLOSE",
             "CallMouseEvent", "clearInterval", "sophutLamtuoi", "stopProcess", "killProcess", "webview"
         };
         for (String hint : hints) {
@@ -6971,6 +6974,73 @@ public class ApiSpringController {
         }
     }
 
+    private boolean isLifecycleEditRequest(String message) {
+        String lower = String.valueOf(message == null ? "" : message).toLowerCase(Locale.ROOT);
+        return lower.contains("webview") || lower.contains("process") || lower.contains("proxy")
+            || lower.contains("tắt") || lower.contains("tat") || lower.contains("treo")
+            || lower.contains("kill") || lower.contains("interval");
+    }
+
+    private boolean isBulkDeleteOnlyPatch(List<Map<String, Object>> textEdits) {
+        if (textEdits == null || textEdits.isEmpty()) {
+            return false;
+        }
+        boolean anyNonDelete = false;
+        int totalDeletedLines = 0;
+        for (Map<String, Object> edit : textEdits) {
+            if (edit == null || edit.isEmpty()) {
+                continue;
+            }
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+            if (startLine < 1 || endLine < startLine) {
+                continue;
+            }
+            String action = String.valueOf(edit.getOrDefault("action", "edit")).trim().toLowerCase(Locale.ROOT);
+            if ("delete".equals(action) || "remove".equals(action)) {
+                totalDeletedLines += (endLine - startLine + 1);
+                if ((endLine - startLine + 1) > 20) {
+                    return true;
+                }
+            } else {
+                anyNonDelete = true;
+            }
+        }
+        return !anyNonDelete && totalDeletedLines > 8;
+    }
+
+    private String buildLifecycleFocusedCondensedCode(String source, String message) {
+        if (source == null || source.isBlank()) {
+            return "";
+        }
+        String symbolQuery = String.valueOf(message == null ? "" : message).trim()
+            + " closeAllTabsAndCleanup fnResetIP fnRemoveTab __forceKillWebviewProcess"
+            + " waitForProcessDeath __waitForWebviewExit isProcessRunning runParallelProcessing webview";
+        List<String> excerpts = buildCodeStreamRelatedSymbolExcerpts(source, symbolQuery, "", 8, 3200);
+        if (excerpts.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String excerpt : excerpts) {
+            if (excerpt != null && !excerpt.isBlank()) {
+                sb.append(excerpt).append("\n\n");
+            }
+        }
+        return truncateMiddle(sb.toString().trim(), 18000);
+    }
+
+    private String appendLifecycleEditRulesToRequest(String userRequest, boolean lifecycle) {
+        String base = String.valueOf(userRequest == null ? "" : userRequest).trim();
+        if (!lifecycle) {
+            return base;
+        }
+        return base
+            + "\n\n[EDIT_RULES] Fix webview close / process kill / proxy hang with SMALL surgical edits."
+            + " Use action=edit with replacement text. Do NOT bulk-delete (>15 lines per edit)."
+            + " Prefer __forceKillWebviewProcess, waitForProcessDeath, fnRemoveTab, closeAllTabsAndCleanup."
+            + " Return ONLY valid JSON {\"textEdits\":[...]} — max 3 edits.";
+    }
+
     private String appendLifecycleSymbolHintToMessage(String message) {
         String base = String.valueOf(message == null ? "" : message).trim();
         String lower = base.toLowerCase(Locale.ROOT);
@@ -6978,7 +7048,8 @@ public class ApiSpringController {
                 || lower.contains("tắt") || lower.contains("treo"))) {
             return base;
         }
-        return base + "\n[SYMBOL_FOCUS] closeAllTabsAndCleanup fnResetIP waitForAllTabsClose clearInterval webview process proxy";
+        return base + "\n[SYMBOL_FOCUS] closeAllTabsAndCleanup fnResetIP fnRemoveTab __forceKillWebviewProcess waitForProcessDeath runParallelProcessing clearInterval webview process proxy"
+            + "\n[EDIT_RULES] Surgical edits only — use action=edit with replacement. Do NOT bulk-delete line ranges (>15 lines). Max 3 textEdits.";
     }
 
     private boolean isCodeStreamUsefulSymbol(String token) {
@@ -12503,6 +12574,11 @@ public class ApiSpringController {
             result.rejectionReason = "all_filtered_pre_normalize";
             return result;
         }
+        if (isBulkDeleteOnlyPatch(normalized)) {
+            result.rejectedCount = Math.max(0, result.inputCount);
+            result.rejectionReason = "bulk_delete_only_rejected";
+            return result;
+        }
 
         normalized.sort((a, b) -> {
             int sa = parseIntOrDefault(a.get("startLine"), 1);
@@ -17203,6 +17279,10 @@ public class ApiSpringController {
             return false;
         }
         if (countActionableLineTextEdits(normalized) > 0) {
+            List<Map<String, Object>> edits = parseNormalizedLineTextEdits(normalized);
+            if (isBulkDeleteOnlyPatch(edits)) {
+                return false;
+            }
             return true;
         }
         // Code edit must produce actionable line edits — prose-only / placeholder salvage is not applyable.
@@ -18242,6 +18322,11 @@ public class ApiSpringController {
                 "messageKey", "copilot.progress.message.edit_focused_fallback"));
             String symbolAwareMessage = appendLifecycleSymbolHintToMessage(message);
             String source = String.valueOf(effectiveCodeContext == null ? "" : effectiveCodeContext);
+            boolean lifecycleEdit = isLifecycleEditRequest(symbolAwareMessage);
+            String condensedCode = lifecycleEdit
+                ? buildLifecycleFocusedCondensedCode(source, symbolAwareMessage)
+                : "";
+            if (condensedCode.isBlank()) {
             LargeCodeRegionPlan regionPlan = buildLargeCodeRegionPlan(
                 symbolAwareMessage,
                 source,
@@ -18249,13 +18334,14 @@ public class ApiSpringController {
                 -1,
                 50,
                 Math.max(10000, Math.min(18000, aiLocalOrchestrationLargeCodeRegionPlanMaxChars)));
-            String condensedCode = regionPlan.applied()
+            condensedCode = regionPlan.applied()
                 ? regionPlan.condensedContext()
                 : buildAnalyzeCondensedPromptContext(
                     source,
                     symbolAwareMessage,
                     "",
                     Math.max(8000, Math.min(14000, aiCodeStreamMaxCurrentCodeChars / 6)));
+            }
             if (condensedCode.isBlank()) {
                 List<String> excerpts = buildCodeStreamRelatedSymbolExcerpts(source, symbolAwareMessage, "", 4, 2200);
                 if (!excerpts.isEmpty()) {
@@ -18271,7 +18357,9 @@ public class ApiSpringController {
             if (condensedCode.isBlank()) {
                 return "";
             }
-            String userRequest = String.valueOf(message == null ? "" : message).trim();
+            String userRequest = appendLifecycleEditRulesToRequest(
+                String.valueOf(message == null ? "" : message).trim(),
+                lifecycleEdit);
             int fullFileLineCount = countLines(source);
             if (fullFileLineCount > 0) {
                 userRequest = userRequest
@@ -18323,7 +18411,9 @@ public class ApiSpringController {
                     truncateMiddle(String.valueOf(text == null ? "" : text), 320));
             }
             String repaired = tryLocalTextEditsJsonRepair(text, message, condensedCode);
-            if (!repaired.isBlank() && acceptLocalCodeEditCandidate(repaired, source, contextType)) {
+            if (!repaired.isBlank()
+                    && acceptLocalCodeEditCandidate(repaired, source, contextType)
+                    && editsPassCodeAstGate(repaired, source)) {
                 logger.info(
                     "Edit focused fallback inline JSON repair succeeded requestId={} textEdits={}",
                     requestId,
@@ -18331,7 +18421,9 @@ public class ApiSpringController {
                 return repaired.trim();
             }
             String salvagedLoose = salvageLooseCodeEditJson(String.valueOf(text == null ? "" : text));
-            if (!salvagedLoose.isBlank() && acceptLocalCodeEditCandidate(salvagedLoose, source, contextType)) {
+            if (!salvagedLoose.isBlank()
+                    && acceptLocalCodeEditCandidate(salvagedLoose, source, contextType)
+                    && editsPassCodeAstGate(salvagedLoose, source)) {
                 logger.info(
                     "Edit focused fallback loose JSON salvage succeeded requestId={} textEdits={}",
                     requestId,
@@ -21059,11 +21151,13 @@ public class ApiSpringController {
         }
     }
 
-    private String buildLocalOnlyFailureMessage(String lastProviderText, String baseCode, String uiLang) {
+    private String buildLocalOnlyFailureMessage(String lastProviderText, String baseCode, String uiLang, String responseMode) {
         String audit = summarizeMenuQualityAuditForUser(baseCode, 8);
         String last = String.valueOf(lastProviderText == null ? "" : lastProviderText).trim();
         boolean codeLike = looksLikeCodeEditorContext(baseCode);
-        String base = last.contains("\"textEdits\"")
+        boolean editFlow = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode).trim())
+            || last.contains("\"textEdits\"");
+        String base = editFlow
             ? "Local AI không tạo được patch an toàn cho yêu cầu này (chế độ local-only)."
             : "Local AI chưa trả lời phân tích đủ tốt cho yêu cầu này (chế độ local-only).";
         if (!audit.isBlank() && !codeLike) {
@@ -21077,10 +21171,14 @@ public class ApiSpringController {
         if (base.contains("phân tích")) {
             return base + " Hãy thử hỏi cụ thể hơn (tên hàm/webview/process) hoặc chọn vùng code liên quan.";
         }
-        if (codeLike) {
-            return base + " Hãy thử chỉ rõ hàm/vùng code (vd. webview close, process kill, fnResetIP, closeAllTabs) hoặc chia nhỏ yêu cầu.";
+        if (codeLike || editFlow) {
+            return base + " Hãy thử chỉ rõ hàm/vùng code (vd. __forceKillWebviewProcess, fnRemoveTab, closeAllTabsAndCleanup, fnResetIP) hoặc chọn vùng code trong editor rồi gửi lại.";
         }
         return base + " Hãy thử chỉ rõ node (id/label) hoặc chia nhỏ yêu cầu.";
+    }
+
+    private String buildLocalOnlyFailureMessage(String lastProviderText, String baseCode, String uiLang) {
+        return buildLocalOnlyFailureMessage(lastProviderText, baseCode, uiLang, "");
     }
 
     private boolean looksLikeCodeEditorContext(String baseCode) {
@@ -21095,35 +21193,49 @@ public class ApiSpringController {
             || s.contains("=>") || s.length() > 8000;
     }
 
-    private String buildLocalOnlyFailureMessageEn(String lastProviderText, String baseCode) {
+    private String buildLocalOnlyFailureMessageEn(String lastProviderText, String baseCode, String responseMode) {
         String audit = summarizeMenuQualityAuditForUser(baseCode, 8);
         String last = String.valueOf(lastProviderText == null ? "" : lastProviderText).trim();
         boolean codeLike = looksLikeCodeEditorContext(baseCode);
-        String base = last.contains("\"textEdits\"")
+        boolean editFlow = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode).trim())
+            || last.contains("\"textEdits\"");
+        String base = editFlow
             ? "Local AI could not produce a safe patch for this request (local-only mode)."
             : "Local AI could not produce a good enough analysis for this request (local-only mode).";
         if (!audit.isBlank() && !codeLike) {
             return base + "\n\n" + audit;
         }
-        return base + (base.contains("analysis")
-            ? " Try naming a function/webview/process or narrowing the question."
-            : (codeLike
-                ? " Try naming a function/line range (e.g. fnResetIP, closeAllTabs) or splitting the request."
+        return base + (editFlow || codeLike
+            ? " Try naming a function/line range (e.g. __forceKillWebviewProcess, fnRemoveTab, closeAllTabsAndCleanup) or selecting that region in the editor."
+            : (base.contains("analysis")
+                ? " Try naming a function/webview/process or narrowing the question."
                 : " Try specifying node id/label or splitting the request."));
     }
 
-    private String buildLocalOnlyFailureMessageZh(String lastProviderText, String baseCode) {
+    private String buildLocalOnlyFailureMessageEn(String lastProviderText, String baseCode) {
+        return buildLocalOnlyFailureMessageEn(lastProviderText, baseCode, "");
+    }
+
+    private String buildLocalOnlyFailureMessageZh(String lastProviderText, String baseCode, String responseMode) {
         String audit = summarizeMenuQualityAuditForUser(baseCode, 8);
         String last = String.valueOf(lastProviderText == null ? "" : lastProviderText).trim();
-        String base = last.contains("\"textEdits\"")
+        boolean editFlow = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode).trim())
+            || last.contains("\"textEdits\"");
+        String base = editFlow
             ? "本地 AI 无法为此请求生成安全补丁（仅本地，不使用云端）。"
             : "本地 AI 未能给出足够好的分析回答（仅本地，不使用云端）。";
         if (!audit.isBlank()) {
             return base + "\n\n" + audit;
         }
-        return base + (base.contains("分析")
-            ? " 请尝试指定函数/webview/process 或缩小问题范围。"
-            : " 请指定节点 id/label 或拆分请求。");
+        return base + (editFlow
+            ? " 请尝试指定函数/行范围（例如 __forceKillWebviewProcess、fnRemoveTab、closeAllTabsAndCleanup）或在编辑器中选中相关区域。"
+            : (base.contains("分析")
+                ? " 请尝试指定函数/webview/process 或缩小问题范围。"
+                : " 请指定节点 id/label 或拆分请求。"));
+    }
+
+    private String buildLocalOnlyFailureMessageZh(String lastProviderText, String baseCode) {
+        return buildLocalOnlyFailureMessageZh(lastProviderText, baseCode, "");
     }
 
     private String summarizeMenuQualityAuditForUser(String baseCode, int maxIssues) {

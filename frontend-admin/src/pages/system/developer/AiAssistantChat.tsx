@@ -3140,9 +3140,9 @@ export default function AiAssistantChat({
 				return uiText("Hãy khởi động hoặc kiểm tra local provider rồi thử lại.", "Start or verify the local provider, then try again.", "请先启动或检查本地 provider，然后再试一次。");
 			case "local_override_no_cloud_fallback":
 				return uiText(
-					"Hãy thu hẹp vùng sửa, mô tả cụ thể hơn, hoặc thử lại sau khi kiểm tra log backend theo requestId.",
-					"Try narrowing the edit scope, using a more specific prompt, or retry after checking backend logs by requestId.",
-					"请缩小修改范围、使用更具体的提示，或在按 requestId 检查后端日志后重试。",
+					"Local AI không tạo được patch an toàn (chế độ local-only). Hãy chọn vùng code quanh __forceKillWebviewProcess / fnRemoveTab / closeAllTabsAndCleanup rồi gửi lại, hoặc kiểm tra log backend theo requestId.",
+					"Local AI could not produce a safe patch (local-only). Select the region around __forceKillWebviewProcess / fnRemoveTab / closeAllTabsAndCleanup and retry, or check backend logs by requestId.",
+					"本地 AI 无法生成安全补丁（仅本地）。请选中 __forceKillWebviewProcess / fnRemoveTab / closeAllTabsAndCleanup 附近代码区域后重试，或按 requestId 检查后端日志。",
 				);
 			case "local_only_no_cloud_fallback":
 			case "local_only_no_final_output":
@@ -8647,9 +8647,15 @@ export default function AiAssistantChat({
 									<div className={styles.stageTimelineTitle}>
 										{agenticStepsCollapsed
 											? uiText(
-												`${agenticSteps.length} bước agentic hoàn tất`,
-												`${agenticSteps.length} agentic steps done`,
-												`${agenticSteps.length} 个 Agent 步骤完成`,
+												completionState === "error"
+													? `${agenticSteps.length} bước agentic (request lỗi — không áp editor)`
+													: `${agenticSteps.length} bước agentic hoàn tất`,
+												completionState === "error"
+													? `${agenticSteps.length} agentic steps (request failed — not applied)`
+													: `${agenticSteps.length} agentic steps done`,
+												completionState === "error"
+													? `${agenticSteps.length} 个 Agent 步骤（请求失败 — 未应用）`
+													: `${agenticSteps.length} 个 Agent 步骤完成`,
 											)
 											: uiText("Agentic workflow", "Agentic workflow", "Agent 工作流")}
 									</div>
