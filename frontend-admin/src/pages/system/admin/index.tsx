@@ -691,6 +691,14 @@ function enforceLegacyReadonlySystemUserFields(fields: any[], actorType?: System
 				f_cbo_query: currentQuery || APP_ID_QUERY_JSON,
 			};
 		}
+		if (fName === "data_app_ids") {
+			const currentQuery = String(field?.f_cbo_query || "").trim();
+			return {
+				...field,
+				f_types: "multi_tag",
+				f_cbo_query: currentQuery || APP_ID_QUERY_JSON,
+			};
+		}
 		if (fName === "parent_account_id") {
 			const currentType = String(field?.f_types || "").trim().toLowerCase();
 			if (currentType.includes("ro"))
@@ -2038,6 +2046,9 @@ export default function AdminPage(props: any = {}) {
 
 			// Extract dependency tables from trigger config
 			const dependencyTables = new Set<string>();
+			if (isSystemUserRoute && primaryTable === "csm_accounts") {
+				dependencyTables.add("sys_apps");
+			}
 			if (runtimeMenu.trigger && typeof runtimeMenu.trigger === "object") {
 				Object.values(runtimeMenu.trigger).forEach((trigger: any) => {
 					if (trigger?.query && Array.isArray(trigger.query)) {
@@ -2058,7 +2069,9 @@ export default function AdminPage(props: any = {}) {
 					const tableAppId = resolveTableAppId(depTable);
 					const tableFilter: any = JSON.parse(JSON.stringify(defaultFilter));
 					const depResponse = await getTableData<any>({
-						app_id: (depTable === "csm_accounts" || depTable === "csm_group_members") ? "csm" : tableAppId,
+						app_id: depTable === "sys_apps" || depTable === "csm_accounts" || depTable === "csm_group_members"
+							? "csm"
+							: tableAppId,
 						obj_name: depTable,
 						where: tableFilter,
 						...(shouldRequestOnlyMySubusers(depTable) ? { only_my_subusers: true } : {}),

@@ -82,7 +82,7 @@ function resolveEffectiveFieldTypes(field: Partial<TableField> | Record<string, 
 
   const fieldName = String(field?.f_name ?? "").trim().toLowerCase();
   if (["menuspermissions", "menuspermissionsadd", "menuspermissionsdeny"].includes(fieldName)) return "menu_tree";
-  if (["permissions", "permissionsadd", "permissionsdeny"].includes(fieldName)) return "multi_tag";
+  if (["permissions", "permissionsadd", "permissionsdeny", "data_app_ids"].includes(fieldName)) return "multi_tag";
   if (["permissionpreset", "datascope", "role_level", "branch_id", "dept_id", "department_id", "group_id", "roles", "permissiongroups", "status", "app_id"].includes(fieldName)) return "co";
   if (["is_global", "actived", "active", "dev", "enabled", "disabled"].includes(fieldName) || /^is_/.test(fieldName) || /^has_/.test(fieldName)) return "checkbox";
 
@@ -997,6 +997,81 @@ function normalizeSelectValue(value: any, options: SelectOption[]): any {
   return normalizeOne(value);
 }
 
+function isMultiSelectLikeType(rawTypes: unknown): boolean {
+  const types = String(rawTypes || "").toLowerCase();
+  return /multi_tag|menu_tree|multi_select|tag|etag/.test(types);
+}
+
+function parseMultiTagRawValue(input: any): string[] {
+  if (Array.isArray(input)) {
+    return Array.from(new Set(
+      input
+        .map((item) => {
+          if (item && typeof item === "object") {
+            return String(item.value ?? item.ma ?? item.id ?? item.key ?? item.label ?? item.ten ?? item.text ?? "").trim();
+          }
+          return String(item ?? "").trim();
+        })
+        .filter(Boolean),
+    ));
+  }
+  if (typeof input === "string") {
+    const text = input.trim();
+    if (!text) return [];
+    if (text.startsWith("[") || text.startsWith("{")) {
+      try {
+        return parseMultiTagRawValue(JSON.parse(text));
+      } catch {
+        return text.split(",").map((item) => item.trim()).filter(Boolean);
+      }
+    }
+    return text.split(/[,;\n]/g).map((item) => item.trim()).filter(Boolean);
+  }
+  if (input == null) return [];
+  return [String(input).trim()].filter(Boolean);
+}
+
+function buildMultiTagSelectOptions(
+  field: TableField,
+  key: string,
+  selectOptions: Record<string, { label: string; value: any }[]> | undefined,
+  selectEnums: Record<string, Record<string, { text: string }>> | undefined,
+  localizeLabel: (value: unknown) => string,
+): SelectOption[] {
+  const rawFromField = Array.isArray((field as any).f_options) ? (field as any).f_options : [];
+  if (rawFromField.length > 0) {
+    return rawFromField.map((opt: any) => {
+      if (opt && typeof opt === "object") {
+        const value = opt.value ?? opt.ma ?? opt.id ?? opt.key;
+        const label = localizeLabel(opt.label ?? opt.ten ?? opt.text ?? value);
+        return { value, label };
+      }
+      const value = String(opt ?? "");
+      return { value, label: localizeLabel(value) };
+    });
+  }
+  return buildSelectOptions(
+    Array.isArray(selectOptions?.[key]) ? selectOptions[key] : undefined,
+    selectEnums?.[key],
+    localizeLabel,
+  );
+}
+
+function normalizeMultiTagValues(input: any, options: SelectOption[]): string[] {
+  const parsed = parseMultiTagRawValue(input);
+  if (options.length === 0) return parsed;
+  return Array.from(new Set(
+    parsed
+      .map((item) => {
+        const directMatch = options.find((option) => option.value === item);
+        if (directMatch) return directMatch.value;
+        const looseMatch = options.find((option) => String(option.value).trim() === String(item).trim());
+        return looseMatch ? looseMatch.value : item;
+      })
+      .filter(Boolean),
+  ));
+}
+
 // Key-value editor for JSON fields
 function JSONKeyValueEditor({ name, form }: { name: string; form: any }) {
   const getPairs = useCallback(() => {
@@ -1653,50 +1728,8 @@ function getFieldComponent(
   }
   // Kiểu Multi Tag / Tag legacy aliases
   if (/^multi_tag$|^multi_select$|(^|[\s,;|])tag([\s,;|]|$)|(^|[\s,;|])etag([\s,;|]|$)/.test(types)) {
-    const rawTagOptions = Array.isArray((f as any).f_options)
-      ? (f as any).f_options
-      : (Array.isArray(selectOptions?.[key]) ? selectOptions?.[key] : []);
-    const tagOptions = rawTagOptions.map((opt: any) => {
-      if (opt && typeof opt === "object") {
-        const value = opt.value ?? opt.ma ?? opt.id ?? opt.key;
-        const label = localizeLabel(opt.label ?? opt.ten ?? opt.text ?? value);
-        return { ...opt, value, label };
-      }
-      const value = String(opt ?? "");
-      return { value, label: localizeLabel(value) };
-    });
-
-    const normalizeTagValues = (input: any): string[] => {
-      if (Array.isArray(input)) {
-        return Array.from(new Set(
-          input
-            .map((item) => {
-              if (item && typeof item === "object") {
-                return String(item.value ?? item.ma ?? item.id ?? item.key ?? item.label ?? item.ten ?? item.text ?? "").trim();
-              }
-              return String(item ?? "").trim();
-            })
-            .filter(Boolean),
-        ));
-      }
-      if (typeof input === "string") {
-        const text = input.trim();
-        if (!text) return [];
-        if (text.startsWith("[") || text.startsWith("{")) {
-          try {
-            const parsed = JSON.parse(text);
-            return normalizeTagValues(parsed);
-          } catch {
-            return text.split(",").map((item) => item.trim()).filter(Boolean);
-          }
-        }
-        return text.split(",").map((item) => item.trim()).filter(Boolean);
-      }
-      if (input == null) return [];
-      return [String(input).trim()].filter(Boolean);
-    };
-
-    const normalizedInitial = normalizeTagValues(form.getFieldValue(key) ?? initialVal);
+    const tagOptions = buildMultiTagSelectOptions(f, key, selectOptions, selectEnums, localizeLabel);
+    const normalizedInitial = normalizeMultiTagValues(form.getFieldValue(key) ?? initialVal, tagOptions);
     const selectMode = tagOptions.length > 0 ? "multiple" : "tags";
 
     return <Form.Item key={key} name={key} label={fieldLabel} initialValue={normalizedInitial}>
@@ -1708,7 +1741,7 @@ function getFieldComponent(
         optionFilterProp="label"
         allowClear
         onChange={(nextValue) => {
-          const normalized = normalizeTagValues(nextValue);
+          const normalized = normalizeMultiTagValues(nextValue, tagOptions);
           form.setFieldsValue({ [key]: normalized });
         }}
       />
@@ -2205,7 +2238,19 @@ export function CsmEditModal({
           }
         }
 
-        if (isComboLikeType(types)) {
+        if (isMultiSelectLikeType(types)) {
+          const tagOptions = buildMultiTagSelectOptions(
+            f,
+            key,
+            selectOptions,
+            selectEnums,
+            (label) => {
+              const text = String(label == null ? "" : label);
+              return text.includes(".") ? t(text) : text;
+            },
+          );
+          convertedValues[key] = normalizeMultiTagValues(convertedValues[key], tagOptions);
+        } else if (isComboLikeType(types)) {
           const normalizedOptions = buildSelectOptions(
             selectOptions?.[key],
             selectEnums?.[key],
@@ -2674,9 +2719,32 @@ export function CsmEditModal({
                         }
 
                         if (/^multi_tag$|^multi_select$|(^|[\s,;|])tag([\s,;|]|$)|(^|[\s,;|])etag([\s,;|]|$)/.test(types)) {
+                          const tagOptions = buildMultiTagSelectOptions(
+                            field as TableField,
+                            actualFieldName,
+                            selectOptions,
+                            selectEnums,
+                            (label) => {
+                              const text = String(label == null ? "" : label);
+                              return text.includes(".") ? t(text) : text;
+                            },
+                          );
+                          const selectMode = tagOptions.length > 0 ? "multiple" : "tags";
                           return (
                             <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                              <Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} />
+                              <Select
+                                mode={selectMode as any}
+                                style={{ width: "100%" }}
+                                tokenSeparators={[","]}
+                                options={tagOptions}
+                                optionFilterProp="label"
+                                allowClear
+                                onChange={(nextValue) => {
+                                  form.setFieldsValue({
+                                    [actualFieldName]: normalizeMultiTagValues(nextValue, tagOptions),
+                                  });
+                                }}
+                              />
                             </Form.Item>
                           );
                         }

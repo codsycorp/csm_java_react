@@ -275,7 +275,7 @@ function resolveEffectiveFieldTypes(field: Partial<TableField> | Record<string, 
 
 	const fieldName = String(field?.f_name ?? "").trim().toLowerCase();
 	if (["menuspermissions", "menuspermissionsadd", "menuspermissionsdeny"].includes(fieldName)) return "menu_tree";
-	if (["permissions", "permissionsadd", "permissionsdeny"].includes(fieldName)) return "multi_tag";
+	if (["permissions", "permissionsadd", "permissionsdeny", "data_app_ids"].includes(fieldName)) return "multi_tag";
 	if (["permissionpreset", "datascope", "role_level", "branch_id", "dept_id", "department_id", "group_id", "roles", "permissiongroups", "status", "app_id"].includes(fieldName)) return "co";
 	if (["is_global", "actived", "active", "dev", "enabled", "disabled"].includes(fieldName) || /^is_/.test(fieldName) || /^has_/.test(fieldName)) return "checkbox";
 
