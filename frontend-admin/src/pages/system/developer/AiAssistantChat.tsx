@@ -3145,10 +3145,11 @@ export default function AiAssistantChat({
 					"请缩小修改范围、使用更具体的提示，或在按 requestId 检查后端日志后重试。",
 				);
 			case "local_only_no_cloud_fallback":
+			case "local_only_no_final_output":
 				return uiText(
-					"Local provider không tạo được patch hợp lệ trên file lớn. Hãy thu hẹp vùng sửa hoặc mô tả dòng/hàm cụ thể.",
-					"The local provider could not produce a valid patch on this large file. Narrow the edit scope or specify exact lines/functions.",
-					"本地 provider 无法在此大文件上生成有效补丁。请缩小修改范围或指定具体行/函数。",
+					"Local provider không tạo được patch hợp lệ trên file lớn. Hãy thu hẹp vùng sửa hoặc mô tả dòng/hàm cụ thể (vd. webview close, process kill, fnResetIP).",
+					"The local provider could not produce a valid patch on this large file. Narrow the edit scope or specify exact lines/functions (e.g. webview close, process kill, fnResetIP).",
+					"本地 provider 无法在此大文件上生成有效补丁。请缩小修改范围或指定具体行/函数（例如 webview close、process kill、fnResetIP）。",
 				);
 			case "edit_apply_failed":
 				return uiText(
@@ -3233,19 +3234,27 @@ export default function AiAssistantChat({
 		reviewRequired?: boolean
 		editCandidateCount?: number
 		reasonCode?: string
+		forceFailure?: boolean
 	}): boolean => {
 		if (!opts.isEditMode || opts.reviewRequired) {
 			return false;
 		}
-		if (textEditApplyCountRef.current > 0) {
-			return false;
-		}
-		if ((opts.editCandidateCount ?? 0) > 0) {
-			return false;
+		const reason = String(opts.reasonCode || "").trim().toLowerCase();
+		const gateOrSyntaxFailure = opts.forceFailure === true
+			|| reason.includes("final_output_gate")
+			|| reason.includes("ast_guard")
+			|| reason.includes("edit_apply_failed");
+		if (!gateOrSyntaxFailure) {
+			if (textEditApplyCountRef.current > 0) {
+				return false;
+			}
+			if ((opts.editCandidateCount ?? 0) > 0) {
+				return false;
+			}
 		}
 		const startCode = editStreamStartCodeRef.current;
 		const applied = lastAppliedCodeRef.current ?? "";
-		if (startCode !== applied) {
+		if (!gateOrSyntaxFailure && startCode !== applied) {
 			return false;
 		}
 
@@ -6678,7 +6687,13 @@ export default function AiAssistantChat({
 									const editsPayload = stepCode
 										? JSON.stringify({ code: stepCode, textEdits: stepTextEdits })
 										: JSON.stringify({ textEdits: stepTextEdits });
-									applyRealtimeCodeFromText(editsPayload, true);
+									const codeBeforeApply = liveCodeRef.current || currentCode || "";
+									if (applyRealtimeCodeFromText(editsPayload, true)) {
+										const codeAfterApply = liveCodeRef.current || currentCode || "";
+										if (codeAfterApply !== codeBeforeApply) {
+											textEditApplyCountRef.current += stepTextEdits.length;
+										}
+									}
 								}
 								// Append analysis text section to streaming content for analyze-mode steps.
 								const stepText = String((evt as any).text || "").trim();
@@ -7125,6 +7140,10 @@ export default function AiAssistantChat({
 								const isMainFlow = effectiveContextType === "code" || effectiveContextType === "menu_json";
 								const isEditModeEvt = String(evt.responseMode || "").trim().toLowerCase() === "edit";
 								const completionEventMeta = evt as Record<string, unknown>;
+								const finalOutputGateMetaEarly = completionEventMeta["finalOutputGate"] as Record<string, unknown> | undefined;
+								const gateRejectedEarly = completionEventMeta["finalOutputGateRejected"] === true
+									|| finalOutputGateMetaEarly?.passed === false
+									|| String(completionEventMeta["status"] || "").trim().toLowerCase() === "edit_apply_failed";
 								const agenticStepResultCount = Math.max(0, Number(completionEventMeta["agenticStepResultCount"] || 0));
 								const agenticStepAcceptedCount = Math.max(0, Number(completionEventMeta["agenticStepAcceptedCount"] || 0));
 								const qualityGateEarlyAudit = Boolean(completionEventMeta["qualityGateEarlyAudit"] === true);
@@ -7279,6 +7298,17 @@ export default function AiAssistantChat({
 								const completionAuditSteps = Array.isArray(completionEventMeta["menuAuditPlanSteps"])
 									? (completionEventMeta["menuAuditPlanSteps"] as unknown[]).map(item => String(item || "").trim()).filter(Boolean)
 									: menuAuditStepsRef.current;
+								const completionOpTotal = completionOpSummary.addCount + completionOpSummary.editCount + completionOpSummary.deleteCount;
+								const falseEditSuccess = (isEditModeEvt || streamStartedInEditModeRef.current)
+									&& isMainFlow
+									&& !reviewRequired
+									&& (
+										gateRejectedEarly
+										|| completionOpTotal === 0 && textEditApplyCountRef.current === 0
+									);
+								const completionReasonCodeEarly = gateRejectedEarly
+									? String(finalOutputGateMetaEarly?.reasonCode || completionEventMeta["reason_code"] || "final_output_gate_rejected").trim()
+									: String(completionEventMeta["reason_code"] || lastReasonCode || "").trim();
 								const resolveMenuCompletionChatText = () => {
 									if (backendAssistantSummary)
 										return backendAssistantSummary;
@@ -7306,7 +7336,7 @@ export default function AiAssistantChat({
 									});
 								};
 								const shouldHideRawEditCompletionPayload = isEditModeEvt && isMainFlow && hasStructuredCompletionEdits;
-								if (evt.fullResponse || shouldHideRawEditCompletionPayload || backendAssistantSummary) {
+								if (!falseEditSuccess && (evt.fullResponse || shouldHideRawEditCompletionPayload || backendAssistantSummary)) {
 									deliveredAssistantResultRef.current = true;
 									streamingMessageRef.current = shouldHideRawEditCompletionPayload || backendAssistantSummary
 										? resolveMenuCompletionChatText()
@@ -7464,17 +7494,17 @@ export default function AiAssistantChat({
 									}
 								}
 								const finalOutputGateMeta = completionEventMeta["finalOutputGate"] as Record<string, unknown> | undefined;
-								const gateRejected = completionEventMeta["finalOutputGateRejected"] === true
-									|| finalOutputGateMeta?.passed === false
-									|| String(completionEventMeta["status"] || "").trim().toLowerCase() === "edit_apply_failed";
+								const gateRejected = gateRejectedEarly
+									|| finalOutputGateMeta?.passed === false;
 								const completionReasonCode = gateRejected
-									? String(finalOutputGateMeta?.reasonCode || completionEventMeta["reason_code"] || "final_output_gate_rejected").trim()
-									: String(completionEventMeta["reason_code"] || lastReasonCode || "").trim();
+									? String(finalOutputGateMeta?.reasonCode || finalOutputGateMetaEarly?.reasonCode || completionEventMeta["reason_code"] || "final_output_gate_rejected").trim()
+									: completionReasonCodeEarly;
 								if (markEditStreamFailureIfNeeded({
 									isEditMode: isEditModeEvt || streamStartedInEditModeRef.current,
 									reviewRequired,
 									editCandidateCount: completionEditCandidates.length,
 									reasonCode: completionReasonCode,
+									forceFailure: falseEditSuccess || gateRejected,
 								})) {
 									setIsLoading(false);
 									if (sseAbortRef.current === controller) {

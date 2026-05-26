@@ -1929,12 +1929,24 @@ public class ApiSpringController {
                             "");
                         if (acceptLocalCodeEditCandidate(focusedEarly, effectiveCodeContext, contextType)) {
                             editFocusedEarlyProviderText = normalizeLocalCodeEditOutput(focusedEarly, effectiveCodeContext);
+                            if (countActionableLineTextEdits(editFocusedEarlyProviderText) <= 0) {
+                                logger.info(
+                                    "LOCAL_EDIT focused-early dropped after normalize (0 actionable edits) requestId={}",
+                                    requestId);
+                                editFocusedEarlyProviderText = "";
+                            } else if (!editsPassCodeAstGate(editFocusedEarlyProviderText, effectiveCodeContext)) {
+                                logger.info(
+                                    "LOCAL_EDIT focused-early dropped (AST gate failed) requestId={}",
+                                    requestId);
+                                editFocusedEarlyProviderText = "";
+                            } else {
                             skipHeavyOrchestrationForLargeCodeEdit = true;
                             logger.info(
                                 "LOCAL_EDIT focused-early before orchestration requestId={} sourceCodeChars={} textEdits={}",
                                 requestId,
                                 effectiveCodeContext.length(),
-                                extractLineTextEditsCount(editFocusedEarlyProviderText));
+                                countActionableLineTextEdits(editFocusedEarlyProviderText));
+                            }
                         } else if (!focusedEarly.isBlank()) {
                             logger.info(
                                 "LOCAL_EDIT focused-early skipped (not actionable yet) requestId={} rawChars={} salvageableEdits={}",
@@ -4293,6 +4305,25 @@ public class ApiSpringController {
                                             responseMode,
                                             1,
                                             effectiveCodeContext);
+                                        if (localStreamChunks <= 0 && countActionableLineTextEdits(providerText) > 0) {
+                                            int agenticApply = emitLocalAgenticStepResults(
+                                                emitter,
+                                                requestId,
+                                                providerText,
+                                                codeStreamOrchestration.planSteps,
+                                                codeStreamMeta.get("planStructuredSteps"),
+                                                codeStreamMeta.get("workflowExecutionBlueprint"),
+                                                responseMode,
+                                                contextType,
+                                                effectiveCodeContext,
+                                                codeStreamMeta);
+                                            if (agenticApply > 0) {
+                                                stepResultCount = Math.max(stepResultCount, agenticApply);
+                                                codeStreamMeta.put("agenticStepsAppliedViaStepEvents", true);
+                                                emitLocalOnlyAgenticStepsRecoveryTrace(
+                                                    emitter, requestId, responseMode, codeStreamMeta, "local_accepted_step_events");
+                                            }
+                                        }
                                         storeCompletionValidatedTextEditsInMeta(
                                             codeStreamMeta,
                                             providerText,
@@ -4504,8 +4535,15 @@ public class ApiSpringController {
                                 }
                                 String earlySalvage = str(codeStreamMeta.get("editFocusedEarlyProviderText"), "");
                                 if (!earlySalvage.isBlank()
+                                        && countActionableLineTextEdits(earlySalvage) > 0
                                         && acceptLocalCodeEditCandidate(earlySalvage, effectiveCodeContext, contextType)) {
                                     earlySalvage = normalizeLocalCodeEditOutput(earlySalvage, effectiveCodeContext);
+                                    if (!editsPassCodeAstGate(earlySalvage, effectiveCodeContext)) {
+                                        logger.warn(
+                                            "LOCAL_OVERRIDE edit focused-early salvage rejected (AST gate) requestId={} chars={}",
+                                            requestId,
+                                            earlySalvage.length());
+                                    } else {
                                     int earlySteps = emitLocalAgenticStepResults(
                                         emitter,
                                         requestId,
@@ -4532,18 +4570,26 @@ public class ApiSpringController {
                                         responseMode,
                                         1,
                                         effectiveCodeContext);
-                                    if (earlyChunks <= 0) {
+                                    if (earlySteps <= 0 && earlyChunks <= 0) {
                                         logger.warn(
                                             "LOCAL_OVERRIDE edit focused-early salvage rejected (no applyable edits) requestId={} chars={}",
                                             requestId,
                                             earlySalvage.length());
                                     } else {
-                                        codeStreamMeta.put("streamChunkCount", earlyChunks);
+                                        if (earlyChunks <= 0 && earlySteps > 0) {
+                                            codeStreamMeta.put("agenticStepsAppliedViaStepEvents", true);
+                                        }
+                                        codeStreamMeta.put("streamChunkCount", Math.max(earlyChunks, earlySteps));
                                         codeStreamMeta.put("streamedChars", earlySalvage.length());
                                         codeStreamMeta.put("editFocusedEarlySalvageApplied", true);
                                         rawResponse = earlySalvage;
                                         effectiveModel = "local_provider";
                                         localProviderPrimaryUsed = true;
+                                        if (earlySteps > 0 && earlyChunks <= 0) {
+                                            emitLocalOnlyAgenticStepsRecoveryTrace(
+                                                emitter, requestId, responseMode, codeStreamMeta, "focused_early_salvage");
+                                        }
+                                    }
                                     }
                                 }
                                 if (rawResponse == null) {
@@ -4595,18 +4641,26 @@ public class ApiSpringController {
                                         responseMode,
                                         1,
                                         effectiveCodeContext);
-                                    if (fallbackChunks <= 0) {
+                                    if (salvagedSteps <= 0 && fallbackChunks <= 0) {
                                         logger.warn(
                                             "LOCAL_OVERRIDE edit focused fallback rejected (no applyable edits) requestId={} chars={}",
                                             requestId,
                                             focusedEdit.length());
                                     } else {
-                                        codeStreamMeta.put("streamChunkCount", fallbackChunks);
+                                        if (fallbackChunks <= 0 && salvagedSteps > 0) {
+                                            codeStreamMeta.put("agenticStepsAppliedViaStepEvents", true);
+                                        }
+                                        codeStreamMeta.put("editFocusedFallbackProviderText", focusedEdit);
+                                        codeStreamMeta.put("streamChunkCount", Math.max(fallbackChunks, salvagedSteps));
                                         codeStreamMeta.put("streamedChars", focusedEdit.length());
                                         codeStreamMeta.put("editFocusedFallbackApplied", true);
                                         rawResponse = focusedEdit;
                                         effectiveModel = "local_provider";
                                         localProviderPrimaryUsed = true;
+                                        if (salvagedSteps > 0 && fallbackChunks <= 0) {
+                                            emitLocalOnlyAgenticStepsRecoveryTrace(
+                                                emitter, requestId, responseMode, codeStreamMeta, "focused_fallback");
+                                        }
                                     }
                                 }
                                 }
@@ -4644,6 +4698,17 @@ public class ApiSpringController {
                                     effectiveModel = "local_provider";
                                     localProviderPrimaryUsed = true;
                                 }
+                            }
+                        }
+                        if (callerForcedLocal && rawResponse == null) {
+                            String agenticRecovered = tryRecoverLocalOnlyRawResponseFromAgenticSteps(
+                                codeStreamMeta, lastLocalProviderText, effectiveCodeContext, contextType);
+                            if (agenticRecovered != null && !agenticRecovered.isBlank()) {
+                                rawResponse = agenticRecovered;
+                                effectiveModel = "local_provider";
+                                localProviderPrimaryUsed = true;
+                                emitLocalOnlyAgenticStepsRecoveryTrace(
+                                    emitter, requestId, responseMode, codeStreamMeta, "caller_forced_local");
                             }
                         }
                         if (callerForcedLocal && rawResponse == null) {
@@ -4783,6 +4848,17 @@ public class ApiSpringController {
                             }
                         }
                         if (localOnlyHardRoute && rawResponse == null) {
+                            String agenticRecovered = tryRecoverLocalOnlyRawResponseFromAgenticSteps(
+                                codeStreamMeta, lastLocalProviderText, effectiveCodeContext, contextType);
+                            if (agenticRecovered != null && !agenticRecovered.isBlank()) {
+                                rawResponse = agenticRecovered;
+                                effectiveModel = "local_provider";
+                                localProviderPrimaryUsed = true;
+                                emitLocalOnlyAgenticStepsRecoveryTrace(
+                                    emitter, requestId, responseMode, codeStreamMeta, "local_only_hard_route");
+                            }
+                        }
+                        if (localOnlyHardRoute && rawResponse == null) {
                             logger.warn("LOCAL_ONLY_HARD_ROUTE local quality gate failed, no usable output requestId={} contextType={}",
                                 requestId, contextType);
                             emitToolTrace(
@@ -4845,7 +4921,17 @@ public class ApiSpringController {
                                 "多模态云端路径已被完全移除。请启用本地视觉/本地提供方来处理该请求。"));
                             return;
                         } else if (hardLocalOnlyFlow || localOnlyHardRoute) {
-                            logger.warn("LOCAL_ONLY blocked cloud streaming path requestId={} contextType={}",
+                            String agenticRecovered = tryRecoverLocalOnlyRawResponseFromAgenticSteps(
+                                codeStreamMeta, lastLocalProviderText, effectiveCodeContext, contextType);
+                            if (agenticRecovered != null && !agenticRecovered.isBlank()) {
+                                rawResponse = agenticRecovered;
+                                effectiveModel = "local_provider";
+                                localProviderPrimaryUsed = true;
+                                emitLocalOnlyAgenticStepsRecoveryTrace(
+                                    emitter, requestId, responseMode, codeStreamMeta, "local_only_final");
+                            }
+                            if (rawResponse == null) {
+                            logger.warn("LOCAL_ONLY no final output (cloud removed) requestId={} contextType={}",
                                 requestId, contextType);
                             emitToolTrace(
                                 emitter,
@@ -4853,28 +4939,29 @@ public class ApiSpringController {
                                 "apply_incremental_steps",
                                 "failed",
                                 "responseMode=" + responseMode,
-                                "reason=local_only_cloud_path_blocked",
+                                "reason=local_only_no_final_output",
                                 0,
                                 0,
                                 "LOCAL_ONLY",
-                                "CLOUD_PATH_BLOCKED",
+                                "NO_FINAL_OUTPUT",
                                 Map.of("contextType", String.valueOf(contextType == null ? "" : contextType))
                             );
                             sendEvent(emitter, jsonOf(
                                 "stage", "route_policy",
-                                "status", "local_only_cloud_blocked",
+                                "status", "local_only_no_final_output",
                                 "requestId", requestId,
                                 "policy", "local_only_hard",
                                 "modelDecisionStep", "final",
-                                "modelDecisionReason", "local_only_no_cloud_fallback",
+                                "modelDecisionReason", "local_only_no_final_output",
                                 "decision_step", "final",
-                                "reason_code", "local_only_no_cloud_fallback",
-                                "message", "Local-only: khong chuyen sang cloud streaming."));
+                                "reason_code", "local_only_no_final_output",
+                                "message", "Local-only: khong tao duoc output cuoi cung."));
                             sendErrorEvent(emitter, uiTextByLang(uiLang,
                                 buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang),
                                 buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext),
                                 buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext)));
                             return;
+                            }
                         } else {
                             rawResponse = streamWithAutoContinue(
                                     emitter,
@@ -8010,6 +8097,16 @@ public class ApiSpringController {
                     }
                     return 0;
                 }
+                if (!menuJsonEdit && !editsPassCodeAstGateFromEdits(textEdits, effectiveCodeContext)) {
+                    writeAgenticStepStats(stepStatsOut, 0, 0, 0, 0, 0, Collections.emptyMap(), Collections.emptyList());
+                    if (stepStatsOut != null) {
+                        stepStatsOut.put("agenticStepsAstGateRejected", true);
+                    }
+                    return 0;
+                }
+                if (stepStatsOut != null) {
+                    stepStatsOut.put("agenticStepsCanonicalProviderText", canonicalized);
+                }
                 if (menuJsonEdit && stepStatsOut != null) {
                     storeQualityGateMenuApplyArtifacts(canonicalized, textEdits, menuPatchOps, menuMergeStats, stepStatsOut);
                 }
@@ -8606,6 +8703,76 @@ public class ApiSpringController {
             }
         }
         return out;
+    }
+
+    private int countAgenticStepsAccepted(Map<String, Object> meta) {
+        return parseIntSafe(meta == null ? null : meta.get("agenticStepAcceptedCount"), 0);
+    }
+
+    private String tryRecoverLocalOnlyRawResponseFromAgenticSteps(
+            Map<String, Object> codeStreamMeta,
+            String lastLocalProviderText,
+            String effectiveCodeContext,
+            String contextType) {
+        if (countAgenticStepsAccepted(codeStreamMeta) <= 0) {
+            return null;
+        }
+        if (bool(codeStreamMeta.get("agenticStepsAstGateRejected"), false)) {
+            return null;
+        }
+        String canonical = str(codeStreamMeta.get("agenticStepsCanonicalProviderText"), "");
+        if (!canonical.isBlank() && editsPassCodeAstGate(canonical, effectiveCodeContext)) {
+            return canonical;
+        }
+        String early = str(codeStreamMeta.get("editFocusedEarlyProviderText"), "");
+        if (!early.isBlank() && countActionableLineTextEdits(early) > 0
+                && editsPassCodeAstGate(early, effectiveCodeContext)) {
+            return normalizeLocalCodeEditOutput(early, effectiveCodeContext);
+        }
+        String focused = str(codeStreamMeta.get("editFocusedFallbackProviderText"), "");
+        if (!focused.isBlank() && countActionableLineTextEdits(focused) > 0
+                && editsPassCodeAstGate(focused, effectiveCodeContext)) {
+            return normalizeLocalCodeEditOutput(focused, effectiveCodeContext);
+        }
+        String last = String.valueOf(lastLocalProviderText == null ? "" : lastLocalProviderText).trim();
+        if (!last.isBlank() && countActionableLineTextEdits(last) > 0
+                && editsPassCodeAstGate(last, effectiveCodeContext)) {
+            return normalizeLocalCodeEditOutput(last, effectiveCodeContext);
+        }
+        return null;
+    }
+
+    private void emitLocalOnlyAgenticStepsRecoveryTrace(
+            SseEmitter emitter,
+            String requestId,
+            String responseMode,
+            Map<String, Object> codeStreamMeta,
+            String source) {
+        int accepted = countAgenticStepsAccepted(codeStreamMeta);
+        codeStreamMeta.put("localOnlyRecoveredFromAgenticSteps", true);
+        codeStreamMeta.put("localOnlyRecoveredFromAgenticStepsSource", source);
+        sendEvent(emitter, jsonOf(
+            "stage", "tool_apply",
+            "status", "completed",
+            "requestId", requestId,
+            "stepResultCount", accepted,
+            "recoveredFromAgenticSteps", true,
+            "message", "Da ap patch qua agentic step events (local-only recovery)"));
+        emitToolTrace(
+            emitter,
+            requestId,
+            "apply_incremental_steps",
+            "completed",
+            "responseMode=" + responseMode,
+            "agentic_steps_recovered=" + accepted + " source=" + source,
+            0,
+            0,
+            "none",
+            "none",
+            Map.of(
+                "agenticStepAcceptedCount", accepted,
+                "recoveredFromAgenticSteps", true,
+                "recoverySource", source));
     }
 
     private void writeAgenticStepStats(
@@ -12443,6 +12610,29 @@ public class ApiSpringController {
         }
 
         return "";
+    }
+
+    private boolean editsPassCodeAstGate(String providerText, String baseCode) {
+        if (!aiLocalFinalOutputGateCodeBlockOnSyntaxFail) {
+            return true;
+        }
+        String codeBase = String.valueOf(baseCode == null ? "" : baseCode);
+        List<Map<String, Object>> textEdits = parseNormalizedLineTextEdits(String.valueOf(providerText == null ? "" : providerText));
+        textEdits = textEdits.stream().filter(this::isActionableTextEditMap).toList();
+        return editsPassCodeAstGateFromEdits(textEdits, codeBase);
+    }
+
+    private boolean editsPassCodeAstGateFromEdits(List<Map<String, Object>> textEdits, String baseCode) {
+        if (!aiLocalFinalOutputGateCodeBlockOnSyntaxFail) {
+            return true;
+        }
+        if (textEdits == null || textEdits.isEmpty()) {
+            return false;
+        }
+        String codeBase = String.valueOf(baseCode == null ? "" : baseCode);
+        String simulated = simulateApplyLineTextEdits(codeBase, textEdits);
+        String astError = validatePatchedCodeStructure(codeBase, simulated);
+        return astError.isBlank();
     }
 
     private String detectCodeLanguageForAstGuard(String originalCode, String patchedCode) {
@@ -20859,8 +21049,8 @@ public class ApiSpringController {
         String last = String.valueOf(lastProviderText == null ? "" : lastProviderText).trim();
         boolean codeLike = looksLikeCodeEditorContext(baseCode);
         String base = last.contains("\"textEdits\"")
-            ? "Local AI không tạo được patch an toàn cho yêu cầu này (local-only, không dùng cloud)."
-            : "Local AI chưa trả lời phân tích đủ tốt cho yêu cầu này (local-only, không dùng cloud).";
+            ? "Local AI không tạo được patch an toàn cho yêu cầu này (chế độ local-only)."
+            : "Local AI chưa trả lời phân tích đủ tốt cho yêu cầu này (chế độ local-only).";
         if (!audit.isBlank() && !codeLike) {
             return base + "\n\n" + audit;
         }
@@ -20873,7 +21063,7 @@ public class ApiSpringController {
             return base + " Hãy thử hỏi cụ thể hơn (tên hàm/webview/process) hoặc chọn vùng code liên quan.";
         }
         if (codeLike) {
-            return base + " Hãy thử chỉ rõ hàm/vùng code (vd. fnResetIP, closeAllTabs) hoặc chia nhỏ yêu cầu.";
+            return base + " Hãy thử chỉ rõ hàm/vùng code (vd. webview close, process kill, fnResetIP, closeAllTabs) hoặc chia nhỏ yêu cầu.";
         }
         return base + " Hãy thử chỉ rõ node (id/label) hoặc chia nhỏ yêu cầu.";
     }
@@ -20895,8 +21085,8 @@ public class ApiSpringController {
         String last = String.valueOf(lastProviderText == null ? "" : lastProviderText).trim();
         boolean codeLike = looksLikeCodeEditorContext(baseCode);
         String base = last.contains("\"textEdits\"")
-            ? "Local AI could not produce a safe patch for this request (local-only, no cloud)."
-            : "Local AI could not produce a good enough analysis for this request (local-only, no cloud).";
+            ? "Local AI could not produce a safe patch for this request (local-only mode)."
+            : "Local AI could not produce a good enough analysis for this request (local-only mode).";
         if (!audit.isBlank() && !codeLike) {
             return base + "\n\n" + audit;
         }
