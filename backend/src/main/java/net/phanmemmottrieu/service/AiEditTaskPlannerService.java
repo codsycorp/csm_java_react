@@ -624,7 +624,7 @@ public class AiEditTaskPlannerService {
         Set<String> deny = Set.of(
             "the", "and", "for", "with", "code", "line", "json", "menu", "edit", "fix", "hãy", "sửa",
             "return", "const", "let", "var", "new", "null", "true", "false", "this", "that", "void",
-            "public", "private", "function", "class", "when", "that", "from", "with", "your"
+            "public", "private", "function", "class", "when", "from", "your"
         );
         if (deny.contains(t.toLowerCase(Locale.ROOT))) {
             return false;
