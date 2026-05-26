@@ -2298,6 +2298,9 @@ export default function AiAssistantChat({
 	const lastSmoothScrollAtRef = useRef<number>(0);
 	const turnAllowAutoApplyRef = useRef<boolean>(false);
 	const localFlowVerifiedRef = useRef<boolean>(false);
+	const textEditApplyCountRef = useRef<number>(0);
+	const editStreamStartCodeRef = useRef<string>("");
+	const streamStartedInEditModeRef = useRef<boolean>(false);
 	const deliveredAssistantResultRef = useRef<boolean>(false);
 	const menuAuditStepsRef = useRef<string[]>([]);
 	const lastUserRequestRef = useRef<string>("");
@@ -3110,6 +3113,18 @@ export default function AiAssistantChat({
 				return uiText("Hãy kiểm tra lại bạn đang ở luồng code hay menu rồi gửi lại yêu cầu cho đúng ngữ cảnh.", "Check whether you are in code flow or menu flow, then resend the request with the correct context.", "请确认你当前处于代码流还是菜单流，然后按正确上下文重新发送请求。");
 			case "local_provider_unavailable":
 				return uiText("Hãy khởi động hoặc kiểm tra local provider rồi thử lại.", "Start or verify the local provider, then try again.", "请先启动或检查本地 provider，然后再试一次。");
+			case "local_override_no_cloud_fallback":
+				return uiText(
+					"Hãy thu hẹp vùng sửa, mô tả cụ thể hơn, hoặc thử lại sau khi kiểm tra log backend theo requestId.",
+					"Try narrowing the edit scope, using a more specific prompt, or retry after checking backend logs by requestId.",
+					"请缩小修改范围、使用更具体的提示，或在按 requestId 检查后端日志后重试。",
+				);
+			case "edit_apply_failed":
+				return uiText(
+					"Hãy mô tả rõ vùng cần sửa hoặc thử lại với prompt ngắn hơn.",
+					"Describe the target edit more clearly or retry with a shorter prompt.",
+					"请更清楚地描述要修改的区域，或使用更短的提示重试。",
+				);
 			case "local_provider_circuit_open":
 				return uiText("Hãy chờ local provider hết cooldown rồi thử lại sau.", "Wait for the local provider cooldown to finish, then try again.", "请等待本地 provider 冷却结束后再重试。");
 			case "requirement_clarification_needed":
@@ -3141,6 +3156,76 @@ export default function AiAssistantChat({
 		}
 		message.error(content);
 	}, [formatSystemNotice]);
+
+	const buildEditApplyFailureNotice = useCallback((reasonCode?: string) => {
+		const code = String(reasonCode || "").trim().toLowerCase();
+		const isLocalOverride = code.includes("local_override");
+		const summary = isLocalOverride
+			? uiText(
+				`${assistantBrandLabel} không tạo được thay đổi mã hợp lệ trên local provider.`,
+				`${assistantBrandLabel} could not produce valid code edits on the local provider.`,
+				`${assistantBrandLabel} 无法在本地 provider 上生成有效的代码修改。`,
+			)
+			: uiText(
+				`${assistantBrandLabel} không áp dụng được thay đổi nào vào editor.`,
+				`${assistantBrandLabel} did not apply any edits to the editor.`,
+				`${assistantBrandLabel} 未能将任何修改应用到编辑器。`,
+			);
+		return formatSystemNotice({
+			summary,
+			nextStep: resolveSystemNextStep(code || "edit_apply_failed", "edit_apply_failed"),
+			internalCode: code || "EDIT_APPLY_FAILED",
+		});
+	}, [assistantBrandLabel, formatSystemNotice, resolveSystemNextStep, uiText]);
+
+	const markEditStreamFailureIfNeeded = useCallback((opts: {
+		isEditMode: boolean
+		reviewRequired?: boolean
+		editCandidateCount?: number
+		reasonCode?: string
+	}): boolean => {
+		if (!opts.isEditMode || opts.reviewRequired) {
+			return false;
+		}
+		if (textEditApplyCountRef.current > 0) {
+			return false;
+		}
+		if ((opts.editCandidateCount ?? 0) > 0) {
+			return false;
+		}
+		const startCode = editStreamStartCodeRef.current;
+		const applied = lastAppliedCodeRef.current ?? "";
+		if (startCode !== applied) {
+			return false;
+		}
+
+		const notice = buildEditApplyFailureNotice(opts.reasonCode);
+		const summaryLine = notice.split("\n").find(line => line.trim()) || notice;
+		setMessages((prev) => {
+			const updated = [...prev];
+			for (let i = updated.length - 1; i >= 0; i -= 1) {
+				const lastMsg = updated[i];
+				if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
+					lastMsg.content = notice;
+					lastMsg.codeBlocks = [];
+					lastMsg.responseMode = "edit";
+					lastMsg.timestamp = Date.now();
+					break;
+				}
+			}
+			return updated;
+		});
+		setCompletionState("error");
+		setCompletionErrorMessage(summaryLine);
+		setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+		setBackendProgressHint({ stage: "", detail: "" });
+		showSystemToast("error", {
+			summary: summaryLine,
+			nextStep: resolveSystemNextStep(opts.reasonCode, "edit_apply_failed"),
+			internalCode: String(opts.reasonCode || "EDIT_APPLY_FAILED").trim().toUpperCase(),
+		});
+		return true;
+	}, [buildEditApplyFailureNotice, resolveSystemNextStep, showSystemToast]);
 
 	const appendModelDecisionTrace = useCallback((input: {
 		step: ModelDecisionTrace["step"]
@@ -5293,6 +5378,9 @@ export default function AiAssistantChat({
 			}
 			turnAllowAutoApplyRef.current = requestedResponseMode === "edit";
 			localFlowVerifiedRef.current = false;
+			textEditApplyCountRef.current = 0;
+			editStreamStartCodeRef.current = liveCodeRef.current || currentCode || "";
+			streamStartedInEditModeRef.current = requestedResponseMode === "edit";
 			requestStartedAtRef.current = Date.now();
 			lastProgressEventAtRef.current = requestStartedAtRef.current;
 			lastProgressWatchdogAlertAtRef.current = 0;
@@ -6841,6 +6929,7 @@ export default function AiAssistantChat({
 							};
 							turnAllowAutoApplyRef.current = true;
 							localFlowVerifiedRef.current = true;
+							let appliedEdit = false;
 							if (onApplyLineEdit && startLine && endLine) {
 								// Precise CodeMirror dispatch: only the affected line range changes
 								if (!undoSnapshotRef.current || undoSnapshotRef.current === (liveCodeRef.current || currentCode)) {
@@ -6851,6 +6940,7 @@ export default function AiAssistantChat({
 								const updatedCode = applyTextEditsToDraft(liveCodeRef.current || currentCode || "", [normalizedEdit]);
 								liveCodeRef.current = updatedCode;
 								lastAppliedCodeRef.current = updatedCode;
+								appliedEdit = true;
 							} else if (onCodeInsert) {
 								// Fallback: apply to accumulated code and push full replacement
 								const baseCode = liveCodeRef.current || currentCode || "";
@@ -6865,8 +6955,12 @@ export default function AiAssistantChat({
 										onCodeInsert(nextCode);
 										liveCodeRef.current = nextCode;
 										lastAppliedCodeRef.current = nextCode;
+										appliedEdit = true;
 									}
 								}
+							}
+							if (appliedEdit) {
+								textEditApplyCountRef.current += 1;
 							}
 						}
 							else if (evt.stage === "text_edit_apply_done") {
@@ -7295,6 +7389,19 @@ export default function AiAssistantChat({
 										}
 									}
 								}
+								if (markEditStreamFailureIfNeeded({
+									isEditMode: isEditModeEvt || streamStartedInEditModeRef.current,
+									reviewRequired,
+									editCandidateCount: completionEditCandidates.length,
+									reasonCode: String(completionEventMeta["reason_code"] || lastReasonCode || "").trim(),
+								})) {
+									setIsLoading(false);
+									if (sseAbortRef.current === controller) {
+										sseAbortRef.current = null;
+									}
+									turnAllowAutoApplyRef.current = false;
+									continue;
+								}
 								setCompletionState(reviewRequired ? "review_required" : "done");
 								setIsLoading(false);
 								if (sseAbortRef.current === controller) {
@@ -7350,6 +7457,22 @@ export default function AiAssistantChat({
 										+ String(pendingStreamChunkRef.current || "")
 									).trim().length > 0
 								);
+								const localOverrideEditFailure = effectiveReasonCode.includes("local_override")
+									&& streamStartedInEditModeRef.current
+									&& textEditApplyCountRef.current === 0
+									&& editStreamStartCodeRef.current === (lastAppliedCodeRef.current ?? "");
+								if (localOverrideEditFailure) {
+									markEditStreamFailureIfNeeded({
+										isEditMode: true,
+										reasonCode: effectiveReasonCode,
+									});
+									setIsLoading(false);
+									if (sseAbortRef.current === controller) {
+										sseAbortRef.current = null;
+									}
+									turnAllowAutoApplyRef.current = false;
+									continue;
+								}
 								if (hasDeliveredContent) {
 									flushStreamingToUI(true);
 									receivedCompleteEvent = true;
@@ -7434,6 +7557,17 @@ export default function AiAssistantChat({
 					}
 					flushStreamingToUI(true);
 					const hasDeliveredContent = deliveredAssistantResultRef.current || String(streamingMessageRef.current || "").trim().length > 0;
+					if (markEditStreamFailureIfNeeded({
+						isEditMode: streamStartedInEditModeRef.current,
+						reasonCode: lastReasonCode,
+					})) {
+						setIsLoading(false);
+						if (sseAbortRef.current === controller) {
+							sseAbortRef.current = null;
+						}
+						turnAllowAutoApplyRef.current = false;
+					}
+					else {
 					setCompletionState(hasDeliveredContent ? "done" : "stream_closed");
 					setCompletionMetrics({
 						elapsedMs: Math.max(0, Date.now() - requestStartedAtRef.current),
@@ -7452,6 +7586,7 @@ export default function AiAssistantChat({
 							message: uiText("Đã nhận xong dữ liệu trả về", "Stream closed after response", "响应流已完成"),
 							percent: 100,
 						});
+					}
 					}
 				}
 			}
@@ -7485,7 +7620,7 @@ export default function AiAssistantChat({
 				}
 			}
 		},
-		[appId, contextType, currentCode, isLoading, language, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, onApplyLineEdit, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatPatchValidatorReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyMenuEditorCodeDirect, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus, formatStageLabel, renderProgressText],
+		[appId, contextType, currentCode, isLoading, language, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, onApplyLineEdit, pendingAttachments, targetPName, targetPType, requestEditorMetadata, uiText, formatModelDecisionReason, formatPatchValidatorReason, formatSystemNotice, resolveSystemNextStep, showSystemToast, appendStageEvent, appendModelDecisionTrace, applyMenuEditorCodeDirect, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom, promptHistoryStorageKey, setAssistantLiveStatus, formatStageLabel, renderProgressText, markEditStreamFailureIfNeeded],
 	);
 
 	const handleRetryAgenticStep = useCallback((step: AgenticStep) => {

@@ -16978,6 +16978,10 @@ public class ApiSpringController {
         if (extractLineTextEditsCount(normalized) > 0 || !parseNormalizedLineTextEdits(normalized).isEmpty()) {
             return true;
         }
+        // Code edit must produce actionable line edits — prose-only JSON salvage is not applyable.
+        if (isCodeContext(contextType)) {
+            return false;
+        }
         return shouldAcceptLocalCodeStreamOutput(normalized, "edit", contextType);
     }
 

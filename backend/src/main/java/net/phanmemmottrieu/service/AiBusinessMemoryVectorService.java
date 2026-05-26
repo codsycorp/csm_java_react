@@ -311,66 +311,87 @@ public class AiBusinessMemoryVectorService {
 
         Path appPath = resolveAppIndexPath(safeAppId);
         int totalChars = 0;
+        int indexedChunks = 0;
         long nowMs = System.currentTimeMillis();
         ReentrantLock appLock = appWriteLocks.computeIfAbsent(safeAppId, key -> new ReentrantLock());
         appLock.lock();
         try {
             Files.createDirectories(appPath);
-            try (Directory dir = FSDirectory.open(appPath)) {
-                int[] indexedChunksRef = {0};
-                int[] totalCharsRef = {0};
-                withWriteLockRetry(safeAppId, "indexMarkdown", () -> {
-                    IndexWriterConfig cfg = new IndexWriterConfig();
-                    try (IndexWriter writer = new IndexWriter(dir, cfg)) {
-                        writer.deleteDocuments(new Term("sourceName", safeSourceName));
+            for (int attempt = 0; attempt < 2; attempt++) {
+                try {
+                    ensureCompatibleIndexDimension(appPath);
+                    int[] indexedChunksRef = {0};
+                    int[] totalCharsRef = {0};
+                    try (Directory dir = FSDirectory.open(appPath)) {
+                        withWriteLockRetry(safeAppId, "indexMarkdown", () -> {
+                            IndexWriterConfig cfg = new IndexWriterConfig();
+                            try (IndexWriter writer = new IndexWriter(dir, cfg)) {
+                                writer.deleteDocuments(new Term("sourceName", safeSourceName));
 
-                        int idx = 0;
-                        for (String chunk : chunks) {
-                            String safeChunk = String.valueOf(chunk == null ? "" : chunk).trim();
-                            if (safeChunk.isBlank() || isLowSignalBinaryChunk(safeChunk)) {
-                                continue;
+                                int idx = 0;
+                                for (String chunk : chunks) {
+                                    String safeChunk = String.valueOf(chunk == null ? "" : chunk).trim();
+                                    if (safeChunk.isBlank() || isLowSignalBinaryChunk(safeChunk)) {
+                                        continue;
+                                    }
+                                    totalCharsRef[0] += safeChunk.length();
+                                    String chunkId = safeSourceName + "#" + idx;
+
+                                    Document doc = new Document();
+                                    doc.add(new StringField("appId", safeAppId, Field.Store.YES));
+                                    doc.add(new StringField("sourceName", safeSourceName, Field.Store.YES));
+                                    doc.add(new StringField("chunkId", chunkId, Field.Store.YES));
+                                    doc.add(new StoredField("createdAtMs", nowMs));
+                                    doc.add(new StoredField("scopeMask", Math.max(0, scopeMask)));
+
+                                    for (String scopeTag : scopeTagsFromMask(scopeMask)) {
+                                        doc.add(new StringField("scopeTag", scopeTag, Field.Store.YES));
+                                    }
+
+                                    String compactTags = normalizeTags(tags);
+                                    if (!compactTags.isBlank()) {
+                                        doc.add(new TextField("tags", compactTags, Field.Store.YES));
+                                    }
+
+                                    String summary = summarizeForIndex(safeChunk, 240);
+                                    String structuralSummary = buildStructuralSummary(safeSourceName, safeChunk, compactTags);
+                                    doc.add(new TextField("summary", summary, Field.Store.YES));
+                                    if (!structuralSummary.isBlank()) {
+                                        doc.add(new TextField("structure", structuralSummary, Field.Store.YES));
+                                    }
+                                    doc.add(new TextField("content", safeChunk, Field.Store.YES));
+                                    doc.add(new KnnFloatVectorField(
+                                        "vector",
+                                        embedDocumentText(summary + "\n" + structuralSummary + "\n" + trimTo(safeChunk, Math.min(1400, chunkMaxChars)))));
+                                    writer.addDocument(doc);
+                                    idx++;
+                                }
+                                indexedChunksRef[0] = idx;
+                                writer.commit();
                             }
-                            totalCharsRef[0] += safeChunk.length();
-                            String chunkId = safeSourceName + "#" + idx;
-
-                            Document doc = new Document();
-                            doc.add(new StringField("appId", safeAppId, Field.Store.YES));
-                            doc.add(new StringField("sourceName", safeSourceName, Field.Store.YES));
-                            doc.add(new StringField("chunkId", chunkId, Field.Store.YES));
-                            doc.add(new StoredField("createdAtMs", nowMs));
-                            doc.add(new StoredField("scopeMask", Math.max(0, scopeMask)));
-
-                            for (String scopeTag : scopeTagsFromMask(scopeMask)) {
-                                doc.add(new StringField("scopeTag", scopeTag, Field.Store.YES));
-                            }
-
-                            String compactTags = normalizeTags(tags);
-                            if (!compactTags.isBlank()) {
-                                doc.add(new TextField("tags", compactTags, Field.Store.YES));
-                            }
-
-                            String summary = summarizeForIndex(safeChunk, 240);
-                            String structuralSummary = buildStructuralSummary(safeSourceName, safeChunk, compactTags);
-                            doc.add(new TextField("summary", summary, Field.Store.YES));
-                            if (!structuralSummary.isBlank()) {
-                                doc.add(new TextField("structure", structuralSummary, Field.Store.YES));
-                            }
-                            doc.add(new TextField("content", safeChunk, Field.Store.YES));
-                            doc.add(new KnnFloatVectorField(
-                                "vector",
-                                embedDocumentText(summary + "\n" + structuralSummary + "\n" + trimTo(safeChunk, Math.min(1400, chunkMaxChars)))));
-                            writer.addDocument(doc);
-                            idx++;
-                        }
-                        indexedChunksRef[0] = idx;
-                        writer.commit();
+                            return null;
+                        });
                     }
-                    return null;
-                });
-                totalChars = totalCharsRef[0];
-                log.info("Indexed business memory appId={} source={} chunks={} chars={}", safeAppId, safeSourceName, indexedChunksRef[0], totalChars);
+                    indexedChunks = indexedChunksRef[0];
+                    totalChars = totalCharsRef[0];
+                    writeIndexDimensionMarker(appPath);
+                    log.info("Indexed business memory appId={} source={} chunks={} chars={}", safeAppId, safeSourceName, indexedChunks, totalChars);
+                    contentHashCache.put(cacheKey, contentHash);
+                    break;
+                } catch (Exception ex) {
+                    if (attempt == 0 && isVectorDimensionMismatch(ex)) {
+                        log.warn(
+                            "Vector dimension mismatch appId={} source={} — rebuilding index ({}).",
+                            safeAppId,
+                            safeSourceName,
+                            ex.getMessage()
+                        );
+                        wipeIndexDirectory(appPath);
+                        continue;
+                    }
+                    throw ex;
+                }
             }
-            contentHashCache.put(cacheKey, contentHash);
         } catch (Exception ex) {
             log.error("Failed to index business markdown appId={} source={}: {}", safeAppId, safeSourceName, ex.getMessage(), ex);
             return new IndexSummary(safeAppId, safeSourceName, 0, 0, nowMs);
@@ -378,7 +399,7 @@ public class AiBusinessMemoryVectorService {
             appLock.unlock();
         }
 
-        return new IndexSummary(safeAppId, safeSourceName, chunks.size(), totalChars, nowMs);
+        return new IndexSummary(safeAppId, safeSourceName, indexedChunks, totalChars, nowMs);
     }
 
     public List<SearchHit> search(String appId, String queryText, Integer kOverride) {
@@ -882,6 +903,67 @@ public class AiBusinessMemoryVectorService {
             safe = "default";
         }
         return root.resolve(aiLocalEmbeddingService.indexNamespace()).resolve(safe).toAbsolutePath().normalize();
+    }
+
+    private static final String INDEX_DIMENSION_MARKER = ".vector_dim";
+
+    private void ensureCompatibleIndexDimension(Path appPath) throws Exception {
+        int expected = aiLocalEmbeddingService.dimension();
+        if (expected <= 0 || appPath == null || !Files.isDirectory(appPath)) {
+            return;
+        }
+        Path marker = appPath.resolve(INDEX_DIMENSION_MARKER);
+        if (!Files.isRegularFile(marker)) {
+            return;
+        }
+        String raw = Files.readString(marker, StandardCharsets.UTF_8).trim();
+        int stored = Integer.parseInt(raw);
+        if (stored != expected) {
+            log.warn("Business memory index dimension changed {} -> {} at {} — wiping index", stored, expected, appPath);
+            wipeIndexDirectory(appPath);
+        }
+    }
+
+    private void writeIndexDimensionMarker(Path appPath) {
+        if (appPath == null) {
+            return;
+        }
+        try {
+            int dim = aiLocalEmbeddingService.dimension();
+            if (dim > 0) {
+                Files.writeString(appPath.resolve(INDEX_DIMENSION_MARKER), Integer.toString(dim), StandardCharsets.UTF_8);
+            }
+        } catch (Exception ex) {
+            log.debug("Could not write vector dimension marker for {}: {}", appPath, ex.getMessage());
+        }
+    }
+
+    private void wipeIndexDirectory(Path appPath) throws Exception {
+        if (appPath == null || !Files.exists(appPath)) {
+            return;
+        }
+        try (var walk = Files.walk(appPath)) {
+            walk.sorted(Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    Files.deleteIfExists(path);
+                } catch (Exception deleteEx) {
+                    log.debug("Failed deleting index path {}: {}", path, deleteEx.getMessage());
+                }
+            });
+        }
+        Files.createDirectories(appPath);
+    }
+
+    private boolean isVectorDimensionMismatch(Throwable ex) {
+        Throwable current = ex;
+        while (current != null) {
+            String message = String.valueOf(current.getMessage() == null ? "" : current.getMessage()).toLowerCase(Locale.ROOT);
+            if (message.contains("dimensions must be") || message.contains("vector's dimensions")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private String sanitizeAppId(String rawAppId) {
