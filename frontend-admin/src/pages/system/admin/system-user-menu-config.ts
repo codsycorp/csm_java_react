@@ -289,6 +289,7 @@ const SYSTEM_USER_FIELD_WIDTHS: Record<string, number> = {
 	phoneNumber: 160,
 	full_name: 200,
 	app_id: 220,
+	data_app_ids: 280,
 	permissionGroups: 220,
 	permissionsAdd: 220,
 	permissionsDeny: 220,
@@ -310,6 +311,7 @@ export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "full_name", f_header: "common.fullName", f_show: 1, f_types: "string", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.full_name },
 	{ f_name: "user_address", f_header: "common.address", f_show: 0, f_types: "json", f_align: "left" },
 	{ f_name: "app_id", f_header: "common.menu.apps", f_show: 0, f_types: "co_ro", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.app_id } as any,
+	{ f_name: "data_app_ids", f_header: "system.userPermission.fields.dataAppIds", f_show: 1, f_types: "multi_tag", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.data_app_ids } as any,
 	{ f_name: "dev", f_header: "system.userPermission.option.dev", f_show: 1, f_types: "checkbox", f_align: "left" },
 	{ f_name: "app_token", f_header: "common.appToken", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.pass },
@@ -887,6 +889,11 @@ function beforeSave(row, seft) {
 		delete row.permissionSchemaVersion;
 	}
 	if (row.actived == null) row.actived = true;
+	const menuAppId = String(row.app_id || getCurrentAppId() || "").trim();
+	row.data_app_ids = uniqueList(row.data_app_ids).filter((item) => {
+		if (!menuAppId) return true;
+		return String(item || "").trim().toLowerCase() !== menuAppId.toLowerCase();
+	});
 	return row;
 }
 `;
@@ -1316,6 +1323,7 @@ function beforeSave(row, seft) {
 		delete row.permissionSchemaVersion;
 	}
 	if (row.actived == null) row.actived = true;
+	delete row.data_app_ids;
 	return row;
 }
 `;
@@ -1966,6 +1974,7 @@ export function adaptSystemUserConfigForActor(
 				const fName = String(field?.f_name || "");
 				const hiddenByActor = SYSTEM_USER_INTERNAL_FIELD_NAMES.has(fName)
 					|| fName === "app_id"
+					|| (fName === "data_app_ids" && actorType !== "dev")
 					|| (actorType === "dev" && SYSTEM_USER_PERMISSION_FIELD_NAMES.has(fName));
 				if (hiddenByActor) {
 					return { ...field, f_show: 0 };

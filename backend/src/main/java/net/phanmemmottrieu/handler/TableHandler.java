@@ -191,14 +191,11 @@ public class TableHandler {
 
         // Kiểm tra quyền ghi cross-app cho create-table
         UserAccessContext accessCtx = resolveCurrentUserAccessContext();
-        if (accessCtx != null && !accessCtx.isDev) {
-            String userAppId = accessCtx.appId == null ? "" : accessCtx.appId.trim();
-            if (!userAppId.isEmpty() && !userAppId.equalsIgnoreCase(appId)) {
-                logger.warn("[Security] Từ chối create-table cross-app: user.app_id={} request.app_id={}", userAppId, appId);
-                response.set("success", false);
-                response.set("message", "Bạn không có quyền tạo bảng trong ứng dụng '" + appId + "'");
-                return;
-            }
+        if (accessCtx != null && !accessCtx.isDev && !canAccessAppData(accessCtx, appId)) {
+            logger.warn("[Security] Từ chối create-table cross-app: user.app_id={} request.app_id={}", accessCtx.appId, appId);
+            response.set("success", false);
+            response.set("message", "Bạn không có quyền tạo bảng trong ứng dụng '" + appId + "'");
+            return;
         }
 
         // Lấy id và struct từ obj_table
@@ -308,6 +305,7 @@ public class TableHandler {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> updatedRow = (Map<String, Object>) updatedRowObj;
                 decryptPassForDisplay(tblname, List.of(updatedRow));
+                trimLargeCodeFieldsInUpdatedRow(tblname, updatedRow);
             }
         }
 
@@ -465,6 +463,21 @@ public class TableHandler {
         }
     }
 
+    /** Avoid echoing multi-MB p_code back to client — prevents JSON serialization OOM / nginx 500. */
+    private void trimLargeCodeFieldsInUpdatedRow(String tblname, Map<String, Object> updatedRow) {
+        if (updatedRow == null || !"sys_autos".equals(tblname)) {
+            return;
+        }
+        Object pCode = updatedRow.get("p_code");
+        if (pCode == null) {
+            return;
+        }
+        String text = String.valueOf(pCode);
+        if (text.length() > 8192) {
+            updatedRow.put("p_code", "[saved:" + text.length() + " chars]");
+        }
+    }
+
     private Map<String, Object> handleTableOperation(Map<String, Object> msg, boolean isUpdate) {
         try {
             String appId = msg.get("app_id").toString();
@@ -555,17 +568,13 @@ public class TableHandler {
             // - User app thường: chỉ được thao tác đúng app_id của chính mình.
             // Bảng hệ thống (csm_*, sys_*) có access control riêng qua validateSystemUserTableAccess.
             if (!tblname.startsWith("csm_") && !tblname.startsWith("sys_")) {
-                if (accessContext != null && !accessContext.isDev) {
-                    String userAppId = safeStr(accessContext.appId);
-                    boolean isSystemAppUser = "csm".equalsIgnoreCase(userAppId);
-                    if (!isSystemAppUser && !userAppId.isEmpty() && !userAppId.equalsIgnoreCase(appId)) {
-                        String action = isUpdate ? "write" : "read";
-                        logger.warn("[Security] Cross-app {} denied: user.app_id={}, request.app_id={}, table={}", action, userAppId, appId, tblname);
-                        if (isUpdate) {
-                            return errorResponse("Bạn không có quyền thay đổi dữ liệu của ứng dụng '" + appId + "'");
-                        }
-                        return errorResponse("Bạn không có quyền xem dữ liệu của ứng dụng '" + appId + "'");
+                if (accessContext != null && !accessContext.isDev && !canAccessAppData(accessContext, appId)) {
+                    String action = isUpdate ? "write" : "read";
+                    logger.warn("[Security] Cross-app {} denied: user.app_id={}, request.app_id={}, table={}", action, accessContext.appId, appId, tblname);
+                    if (isUpdate) {
+                        return errorResponse("Bạn không có quyền thay đổi dữ liệu của ứng dụng '" + appId + "'");
                     }
+                    return errorResponse("Bạn không có quyền xem dữ liệu của ứng dụng '" + appId + "'");
                 }
             }
 
@@ -1461,6 +1470,7 @@ public class TableHandler {
                 Collections.emptySet(),
                 "NONE",
                 Collections.emptyList(),
+                Collections.emptyList(),
                 Collections.emptyList()
             );
         }
@@ -1570,11 +1580,26 @@ public class TableHandler {
             effectivePermissions = permissionsFromToken(parsedToken);
         }
 
+        List<String> resolvedDataAppIds = new ArrayList<>();
+        boolean isSubUserToken = "user".equalsIgnoreCase(appTokenRole);
+        if (!isSubUserToken) {
+            if (principal instanceof User userPrincipal) {
+                if (userPrincipal.getDataAppIds() != null) {
+                    resolvedDataAppIds.addAll(userPrincipal.getDataAppIds());
+                }
+            } else if (principal instanceof Map<?, ?> principalDataMap) {
+                resolvedDataAppIds.addAll(toStringList(principalDataMap.get("data_app_ids")));
+                if (resolvedDataAppIds.isEmpty()) {
+                    resolvedDataAppIds.addAll(toStringList(principalDataMap.get("dataAppIds")));
+                }
+            }
+        }
+        resolvedDataAppIds = excludeMenuAppFromDataAppIds(resolvedDataAppIds, userAppId);
+
         if (Boolean.TRUE.equals(dev)) {
             effectivePermissions = mergeUniqueCaseInsensitive(effectivePermissions, List.of("dev", "admin", "scope:all"));
         }
 
-        boolean isSubUserToken = "user".equalsIgnoreCase(appTokenRole);
         boolean isAdminByDefaultPolicy = !Boolean.TRUE.equals(dev) && !isSubUserToken;
 
         boolean isAdmin = isAdminByDefaultPolicy
@@ -1602,8 +1627,77 @@ public class TableHandler {
             branchCandidates,
             dataScope,
             effectivePermissions,
-            menusPermissions
+            menusPermissions,
+            resolvedDataAppIds
         );
+    }
+
+    private boolean canAccessAppData(UserAccessContext accessContext, String targetAppId) {
+        if (accessContext == null) {
+            return true;
+        }
+        String normalizedTarget = safeStr(targetAppId);
+        if (normalizedTarget.isBlank()) {
+            return true;
+        }
+        if (accessContext.isDev) {
+            return true;
+        }
+        String userAppId = safeStr(accessContext.appId);
+        if ("csm".equalsIgnoreCase(userAppId)) {
+            return true;
+        }
+        if (userAppId.equalsIgnoreCase(normalizedTarget)) {
+            return true;
+        }
+        if (accessContext.allowedDataAppIds != null) {
+            for (String allowed : accessContext.allowedDataAppIds) {
+                if (allowed != null && allowed.equalsIgnoreCase(normalizedTarget)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void normalizeDataAppIdsField(Map<String, Object> objUpdate, UserAccessContext accessContext) {
+        if (objUpdate == null || accessContext == null) {
+            return;
+        }
+
+        List<String> requested = excludeMenuAppFromDataAppIds(
+            toStringList(objUpdate.get("data_app_ids")),
+            safeStr(objUpdate.get("app_id")).isBlank() ? safeStr(accessContext.appId) : safeStr(objUpdate.get("app_id"))
+        );
+
+        if (accessContext.isDev || "csm".equalsIgnoreCase(safeStr(accessContext.appId))) {
+            objUpdate.put("data_app_ids", requested);
+            return;
+        }
+
+        List<String> parentAllowed = accessContext.allowedDataAppIds == null
+            ? new ArrayList<>()
+            : excludeMenuAppFromDataAppIds(accessContext.allowedDataAppIds, accessContext.appId);
+
+        List<String> resolved = requested.isEmpty()
+            ? new ArrayList<>(parentAllowed)
+            : intersectPreserveOrder(requested, parentAllowed);
+        objUpdate.put("data_app_ids", excludeMenuAppFromDataAppIds(resolved, safeStr(objUpdate.get("app_id"))));
+    }
+
+    private List<String> excludeMenuAppFromDataAppIds(List<String> apps, String menuAppId) {
+        String menu = safeStr(menuAppId);
+        if (menu.isBlank()) {
+            return apps == null ? new ArrayList<>() : new ArrayList<>(apps);
+        }
+        List<String> out = new ArrayList<>();
+        for (String item : apps == null ? Collections.<String>emptyList() : apps) {
+            String value = safeStr(item);
+            if (!value.isBlank() && !value.equalsIgnoreCase(menu)) {
+                out.add(value);
+            }
+        }
+        return out;
     }
 
     private String extractAppIdFromEncryptedAppToken(Object rawToken) {
@@ -2432,6 +2526,7 @@ public class TableHandler {
                 objUpdate.put("menusPermissions", new ArrayList<>(inheritedMenus));
             }
             objUpdate.put("dataScope", "ALL");
+            normalizeDataAppIdsField(objUpdate, accessContext);
             return;
         }
 
@@ -2551,6 +2646,7 @@ public class TableHandler {
                 objUpdate.put("permissionPreset", "");
             }
         }
+        normalizeDataAppIdsField(objUpdate, accessContext);
     }
 
     private boolean hasPermissionMutationPayload(Map<String, Object> objUpdate) {
@@ -2567,7 +2663,8 @@ public class TableHandler {
             || objUpdate.containsKey("permissionsDeny")
             || objUpdate.containsKey("menusPermissionsAdd")
             || objUpdate.containsKey("menusPermissionsDeny")
-            || objUpdate.containsKey("dataScope");
+            || objUpdate.containsKey("dataScope")
+            || objUpdate.containsKey("data_app_ids");
     }
 
     private void normalizeManagedSubUserPermissions(Map<String, Object> objUpdate, UserAccessContext accessContext) {
@@ -2576,6 +2673,7 @@ public class TableHandler {
         }
 
         normalizePermissionGroupAliases(objUpdate);
+        objUpdate.remove("data_app_ids");
 
         if (accessContext.preferredOwner != null && !accessContext.preferredOwner.isBlank()) {
             objUpdate.put("parent_account_id", accessContext.preferredOwner);
@@ -2866,6 +2964,7 @@ public class TableHandler {
         private final String dataScope;
         private final List<String> permissions;
         private final List<String> menusPermissions;
+        private final List<String> allowedDataAppIds;
         private final String preferredOwner;
         private final String preferredDepartment;
         private final String preferredBranch;
@@ -2880,7 +2979,8 @@ public class TableHandler {
             Set<String> branchCandidates,
             String dataScope,
             List<String> permissions,
-            List<String> menusPermissions
+            List<String> menusPermissions,
+            List<String> allowedDataAppIds
         ) {
             this.isAdmin = isAdmin;
             this.isDev = isDev;
@@ -2892,6 +2992,7 @@ public class TableHandler {
             this.dataScope = dataScope != null ? dataScope : "NONE";
             this.permissions = permissions != null ? new ArrayList<>(permissions) : Collections.emptyList();
             this.menusPermissions = menusPermissions != null ? new ArrayList<>(menusPermissions) : Collections.emptyList();
+            this.allowedDataAppIds = allowedDataAppIds != null ? new ArrayList<>(allowedDataAppIds) : Collections.emptyList();
             this.preferredOwner = this.ownerCandidates.stream().findFirst().orElse("");
             this.preferredDepartment = this.departmentCandidates.stream().findFirst().orElse("");
             this.preferredBranch = this.branchCandidates.stream().findFirst().orElse("");
@@ -2958,14 +3059,10 @@ public class TableHandler {
     
         String command = msg.getOrDefault("command", "").toString().toLowerCase(Locale.ROOT);
 
-        // Kiểm tra quyền ghi cross-app: chỉ dev mới được phép ghi vào index của app_id khác.
-        // Admin/sub-user chỉ được ghi vào index của chính app_id họ thuộc về.
-        if (accessContext != null && !accessContext.isDev) {
-            String userAppId = accessContext.appId == null ? "" : accessContext.appId.trim();
-            if (!userAppId.isEmpty() && !userAppId.equalsIgnoreCase(appId)) {
-                logger.warn("[Security] Từ chối ghi index cross-app: user.app_id={} request.app_id={}", userAppId, appId);
-                return errorResponse("Bạn không có quyền thay đổi dữ liệu của ứng dụng '" + appId + "'");
-            }
+        // Kiểm tra quyền ghi cross-app: dev/csm hoặc app nằm trong data_app_ids.
+        if (accessContext != null && !accessContext.isDev && !canAccessAppData(accessContext, appId)) {
+            logger.warn("[Security] Từ chối ghi index cross-app: user.app_id={} request.app_id={}", accessContext.appId, appId);
+            return errorResponse("Bạn không có quyền thay đổi dữ liệu của ứng dụng '" + appId + "'");
         }
 
         List<String> pkFields = List.of("id");

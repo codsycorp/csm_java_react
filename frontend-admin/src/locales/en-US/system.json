@@ -28,7 +28,8 @@
 			"permissionSchemaVersion": "Version",
 			"dataScope": "Scope",
 			"deptId": "Department",
-			"branchId": "Branch"
+			"branchId": "Branch",
+			"dataAppIds": "Additional data apps (beyond menu app)"
 		},
 		"group": {
 			"systemAdmin": "System Admin Group",

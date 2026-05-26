@@ -28,7 +28,8 @@
 			"permissionSchemaVersion": "版本",
 			"dataScope": "数据范围",
 			"deptId": "部门",
-			"branchId": "分支"
+			"branchId": "分支",
+			"dataAppIds": "附加数据应用（不含菜单应用）"
 		},
 		"group": {
 			"systemAdmin": "系统管理员组",

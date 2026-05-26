@@ -6,7 +6,7 @@
  * FILE: auto-upload-lmkt.js
  * MỤC ĐÍCH: Quản lý nội dung cho 2 domain khác nhau:
  *   1. LMKT (h-holding.vn): Bất Động Sản - 6 Dự Án
- *   2. Phanmemmottrieu.net: 5 Lĩnh Vực Kinh Doanh
+ *   2. csmbridge.net: 5 Lĩnh Vực Kinh Doanh
  */
 
 // ========== PROTECTION AGAINST DOUBLE-LOAD ==========
@@ -646,7 +646,7 @@ const decryptHtmlContent = (data) => {
  * ========== CẤU TRÚC CHÍNH ==========
  * 
  * 1. DOMAIN_OPTIONS: Cấu hình domain
- *    - phanmemmottrieu.net → app_id: "wuweb" (Phần mềm + 4 lĩnh vực khác)
+ *    - csmbridge.net → app_id: "wuweb" (Phần mềm + 4 lĩnh vực khác)
  *    - h-holding.vn → app_id: "lmkt" (Bất động sản - 6 dự án)
  *    - domain: TOÀN BỘ danh sách (VD: "h-holding.vn,h-holding.com.vn,localhost:3333")
  * 
@@ -767,10 +767,10 @@ const decryptHtmlContent = (data) => {
  * 
  * ⚠️ Domain phải là TOÀN BỘ danh sách:
  *    - LMKT: "h-holding.vn,h-holding.com.vn,localhost:3333"
- *    - Phanmemmottrieu: "phanmemmottrieu.net,localhost:3333"
+ *    - Phanmemmottrieu: "csmbridge.net,localhost:3333"
  * 
  * ⚠️ Mỗi domain phải có app_id đúng:
- *    - phanmemmottrieu.net → app_id: "wuweb"
+ *    - csmbridge.net → app_id: "wuweb"
  *    - h-holding.vn → app_id: "lmkt"
  * 
  * ⚠️ AI output phải là JSON hợp lệ (không có markdown wrapper)
@@ -793,7 +793,7 @@ const decryptHtmlContent = (data) => {
  * 
  * Ví dụ:
  *   LMKT → h-holding.vn → app_id: "lmkt" → Lấy data từ app LMKT
- *   Phanmemmottrieu → phanmemmottrieu.net → app_id: "wuweb" → Lấy data từ app Phanmemmottrieu
+ *   Phanmemmottrieu → csmbridge.net → app_id: "wuweb" → Lấy data từ app Phanmemmottrieu
  */
 const DEFAULT_UPLOAD_ENDPOINT = "/upload.shtml";
 const UPLOAD_ENDPOINT_COOLDOWN_MS = 2 * 60 * 1000;
@@ -864,7 +864,7 @@ function getCandidateUploadEndpoints(ctx = {}) {
 // Domain Options
 const DOMAIN_OPTIONS = {
   phanmemmottrieu: {
-    value: "csmbridge.net,phanmemmottrieu.net,localhost:3333",
+    value: "csmbridge.net,localhost:3333",
     label: "Phần Mềm Một Triệu (Multi-Industry)",
     app_id: "wuweb"
   },
@@ -876,7 +876,7 @@ const DOMAIN_OPTIONS = {
 };
 
 /**
- * INDUSTRY_TYPES: Cấu hình cho 5 lĩnh vực của phanmemmottrieu.net
+ * INDUSTRY_TYPES: Cấu hình cho 5 lĩnh vực của csmbridge.net
  * 
  * Mỗi lĩnh vực có:
  * - name, name_en, name_zh: Tên 3 ngôn ngữ
@@ -891,7 +891,7 @@ const DOMAIN_OPTIONS = {
  *   → Kết hợp với user prompt → Gửi cho AI
  *   → AI viết content theo hướng dẫn này
  */
-// Industry Types cho phanmemmottrieu.net
+// Industry Types cho csmbridge.net
 const INDUSTRY_TYPES = {
   "bat-dong-san": {
     name: "Bất Động Sản",
@@ -5370,7 +5370,7 @@ function buildDetail(ctx, seo, imgs, vids, opts = {}) {
     // Metadata
     image: featuredImage,
     author: author,
-    avatar: opts.avatar || "https://www.csmbridge.net/media/icon.png",
+    avatar: opts.avatar || "https://csmbridge.net/media/icon.png",
     publishDate: now.split("T")[0],
     readTime: readTime,
     views: 0,
@@ -5573,76 +5573,6 @@ function normalizeJsonString(raw) {
   return output;
 }
 
-function extractJsonObjectString(input) {
-  const str = String(input || "").trim();
-  const firstBrace = str.indexOf("{");
-  if (firstBrace === -1) return str;
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let i = firstBrace; i < str.length; i += 1) {
-    const ch = str[i];
-
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) continue;
-
-    if (ch === "{") depth += 1;
-    if (ch === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return str.slice(firstBrace, i + 1);
-      }
-    }
-  }
-
-  return str.slice(firstBrace);
-}
-
-function attemptJsonRepair(rawJson) {
-  let repaired = String(rawJson || "")
-    .replace(/\uFEFF/g, "")
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
-
-  repaired = normalizeJsonString(repaired);
-
-  // Remove trailing commas before object/array closure.
-  repaired = repaired.replace(/,\s*([}\]])/g, "$1");
-
-  // Recover missing comma between JSON values and next object key.
-  repaired = repaired.replace(/([}\]"\d]|true|false|null)\s*(?="(?:[^"\\]|\\.)+"\s*:)/g, "$1,");
-
-  return repaired;
-}
-
-function logJsonParseErrorContext(tag, candidate, error) {
-  const msg = error?.message || "";
-  const matched = msg.match(/position\s+(\d+)/i);
-  if (!matched) {
-    console.error(`${tag} ${msg}`);
-    return;
-  }
-  const pos = Number(matched[1]);
-  const start = Math.max(0, pos - 80);
-  const end = Math.min(candidate.length, pos + 80);
-  const snippet = candidate.slice(start, end);
-  console.error(`${tag} ${msg} | around[${start}:${end}] =`, snippet);
-}
-
 function parseSeoJsonString(seoString) {
   let jsonStr = (seoString || "").trim();
 
@@ -5652,30 +5582,25 @@ function parseSeoJsonString(seoString) {
     jsonStr = match[1].trim();
   }
 
-  jsonStr = extractJsonObjectString(jsonStr);
+  const firstBrace = jsonStr.indexOf("{");
+  const lastBrace = jsonStr.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    jsonStr = jsonStr.slice(firstBrace, lastBrace + 1);
+  }
 
   try {
     return JSON.parse(jsonStr);
   } catch (parseErr) {
-    logJsonParseErrorContext('[processContent] ❌ parseSeoJsonString primary parse failed:', jsonStr, parseErr);
+    const repaired = normalizeJsonString(
+      jsonStr
+        .replace(/\uFEFF/g, "")
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, "'")
+        .replace(/,\s*([}\]])/g, "$1")
+    );
 
-    const repaired = attemptJsonRepair(jsonStr);
-    try {
-      return JSON.parse(repaired);
-    } catch (repairErr) {
-      logJsonParseErrorContext('[processContent] ❌ parseSeoJsonString repair parse failed:', repaired, repairErr);
-      throw repairErr;
-    }
+    return JSON.parse(repaired);
   }
-}
-
-function extractSeoFromAiResult(result) {
-  let seo = result?.data?.result || result?.result || result?.data;
-  const wrappedContent = seo?.choices?.[0]?.message?.content;
-  if (wrappedContent) {
-    return parseSeoJsonString(String(wrappedContent));
-  }
-  return seo;
 }
 
 async function processContent(item, opts = {}) {
@@ -6002,34 +5927,21 @@ async function processContent(item, opts = {}) {
     throw new Error("Prompt rỗng - không thể gọi AI!");
   }
   
-  console.log(`[processContent] ⏳ Gọi AI local — có thể mất 3-8 phút - ${new Date().toLocaleTimeString()}`);
-  thongbao(ti("⏳ Đang gọi AI local... (3-8 phút, vui lòng chờ)", "⏳ Calling local AI... (3-8 min, please wait)", "⏳ 正在调用本地AI...（约3-8分钟，请稍候）"));
+  console.log(`[processContent] ⏳ Gọi AI - BẮT ĐẦU CHỜ (có thể mất 30-60 giây) - ${new Date().toLocaleTimeString()}`);
+  thongbao(ti("⏳ Đang gọi AI... (Có thể mất 30-60 giây, vui lòng chờ)", "⏳ Calling AI... (may take 30-60 seconds, please wait)", "⏳ 正在调用AI...（可能需要30-60秒，请稍候）"));
   
   let result;
-  let aiHeartbeatId = null;
-  const startAI = Date.now();
+  let aiTimeoutId = null;
   try {
-    aiHeartbeatId = setInterval(() => {
-      const elapsedSec = Math.round((Date.now() - startAI) / 1000);
-      console.log(`[processContent] ⏳ AI đang xử lý... ${elapsedSec}s`);
-      if (elapsedSec >= 90 && elapsedSec % 60 === 0) {
-        thongbao(ti(
-          `⏳ Vẫn đang chờ AI local... (${elapsedSec}s)`,
-          `⏳ Still waiting for local AI... (${elapsedSec}s)`,
-          `⏳ 仍在等待本地AI...（${elapsedSec}秒）`
-        ));
-      }
-    }, 30000);
+    // 🟢 TIMEOUT SAFETY: Đăng ký timeout vào timerRegistry để đảm bảo cleanup
+    const aiTimeoutMs = 120000;  // 2 phút timeout
+    aiTimeoutId = setTimeout(() => {
+      console.error(`⏱️ [processContent] AI timeout sau ${aiTimeoutMs}ms`);
+    }, aiTimeoutMs);
+    timerRegistry.register('processContent_ai_' + Date.now(), aiTimeoutId, 'timeout');
     
-    result = await generateFn(prompt, {
-      preferAsync: true,
-      taskType: "seo_content",
-      onProgress: (progress) => {
-        if (progress?.message) {
-          console.log("[processContent] AI progress:", progress.message, progress);
-        }
-      }
-    });
+    const startAI = Date.now();
+    result = await generateFn(prompt);
     const durationAI = ((Date.now() - startAI) / 1000).toFixed(1);
     
     console.log(`[processContent] ✅ AI trả về - Mất ${durationAI}s - ${new Date().toLocaleTimeString()}`);
@@ -6039,22 +5951,24 @@ async function processContent(item, opts = {}) {
     console.log(`[DEBUG] result.result:`, result?.result);
     console.log(`[DEBUG] result.data:`, result?.data);
   } catch (aiError) {
+    // 🟢 CLEANUP: Xóa timeout nếu có lỗi
+    if (aiTimeoutId) {
+      timerRegistry.clear('processContent_ai_' + (aiTimeoutId.toString().match(/\d+/) || [Date.now()])[0]);
+    }
     const aiStatus = extractHttpStatusFromError(aiError);
     if ([401, 403, 404, 429, 500, 502, 503, 504].includes(aiStatus)) {
       activateBackendGuard(`AI API lỗi ${aiStatus}`, 2 * 60 * 1000);
     }
     console.error(`❌ [processContent] Lỗi gọi AI:`, aiError.message);
     throw new Error(`Lỗi gọi AI: ${aiError.message}`);
-  } finally {
-    if (aiHeartbeatId) clearInterval(aiHeartbeatId);
   }
   
   if (!result) {
     throw new Error("AI trả về null/undefined");
   }
 
-  // ✅ Backend trả format: result.data = SEO JSON (hoặc legacy chat.completion wrapper)
-  let seo = extractSeoFromAiResult(result);
+  // ✅ Backend trả format: result.data.result = SEO content
+  let seo = result.data?.result || result.result || result.data;
 
   // Fallback: backend có thể trả success=false khi không parse được JSON,
   // nhưng vẫn gửi rawContent để frontend tự phục hồi parse.
@@ -7855,7 +7769,7 @@ function ensureAdsApiTestPanel() {
     campaignNameField.input.value = campaignNameField.input.value.trim() || `Test Ads ${today}`;
     objectiveField.input.value = objectiveField.input.value.trim() || "OUTCOME_TRAFFIC";
     budgetField.input.value = budgetField.input.value.trim() || "50000";
-    linkField.input.value = linkField.input.value.trim() || "https://www.csmbridge.net";
+    linkField.input.value = linkField.input.value.trim() || "https://csmbridge.net";
     headlineField.input.value = headlineField.input.value.trim() || "Uu dai dac biet hom nay";
     descriptionField.input.value = descriptionField.input.value.trim() || "Nhan tu van nhanh va uu dai ngay";
     messageField.input.value = messageField.input.value.trim() || "Dang ky de nhan thong tin chi tiet va uu dai moi nhat.";
@@ -8193,7 +8107,7 @@ async function ensureUI() {
       ));
     }
     
-    const selectedDomain = domainConfig.value; // Get full domain value like "phanmemmottrieu.net,localhost:3333"
+    const selectedDomain = domainConfig.value; // Get full domain value like "csmbridge.net,localhost:3333"
     const selectedService = serviceFieldValue;
     const selectedProject = globalSettings.project || "";
     
@@ -15836,7 +15750,7 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
  * Input: Options object
  *   {
  *     app_id: "wuweb" | "lmkt",
- *     domain: "phanmemmottrieu.net",
+ *     domain: "csmbridge.net",
  *     categorySlug: "phan-mem",
  *     categoryName: "Phần Mềm",
  *     description: "...",

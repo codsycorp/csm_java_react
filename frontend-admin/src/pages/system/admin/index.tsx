@@ -261,6 +261,7 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 					roles: "[]",
 					permissions: "[]",
 					menusPermissions: "[]",
+					data_app_ids: "[]",
 					permissionBitfield: "0",
 					permissionSchemaVersion: "v3",
 					dataScope: "NONE",
@@ -746,6 +747,7 @@ function localizeSystemUserTableFields(
 		email: "common.email",
 		phoneNumber: "common.phoneNumber",
 		app_id: "common.menu.apps",
+		data_app_ids: "system.userPermission.fields.dataAppIds",
 		actived: "common.active",
 	};
 	return fields.map((field) => {
@@ -940,6 +942,7 @@ const SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR: Record<SystemUserActorType, string[]>
 		"email",
 		"phoneNumber",
 		"app_id",
+		"data_app_ids",
 		"pass",
 		"actived",
 	],
@@ -1197,6 +1200,7 @@ export default function AdminPage(props: any = {}) {
 		if (Array.isArray(base?.table) && base.table.length > 0) {
 			runtimeConfig.table = enrichRequiredFieldConfigs(base.table, {
 				app_id: { f_types: systemUserActorType === "dev" ? "co" : "co_ro", f_cbo_query: APP_ID_QUERY_JSON },
+				data_app_ids: { f_types: "multi_tag", f_cbo_query: APP_ID_QUERY_JSON },
 				pass: { f_types: "password" },
 				user_address: { f_types: "json" },
 				menusPermissions: { f_types: "menu_tree", f_options: MENU_PERMISSION_OPTIONS },

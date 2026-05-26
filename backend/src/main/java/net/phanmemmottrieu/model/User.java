@@ -27,7 +27,9 @@ public class User {
     private String phoneNumber; // THÊM TRƯỜNG NÀY
     private Boolean actived;
     private String appToken; // Lưu app_token đã giải mã khi trả về cho client (hoặc mã hóa nếu không giải mã)
-    private String appId; // THÊM TRƯỜNG NÀY: Dùng để lưu app_id
+    private String appId; // THÊM TRƯỜNG NÀY: Dùng để lưu app_id (menu home — single app)
+    /** Apps allowed for API data read/write; menu app_id is always included when resolved. */
+    private List<String> dataAppIds;
     private String fullName; // THÊM TRƯỜNG NÀY: Dùng để lưu tên đầy đủ
     @JsonRawValue
     private String userAddress; // THÊM TRƯỜNG NÀY: Dùng để lưu địa chỉ người dùng
@@ -161,6 +163,14 @@ public class User {
 
     public void setAppId(String appId) {
         this.appId = appId;
+    }
+
+    public List<String> getDataAppIds() {
+        return dataAppIds;
+    }
+
+    public void setDataAppIds(List<String> dataAppIds) {
+        this.dataAppIds = dataAppIds;
     }
 
     public String getFullName() {

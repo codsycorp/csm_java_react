@@ -967,6 +967,8 @@ public class UserService {
 
         user.setPermissions(effectivePermissions);
         user.setMenusPermissions(effectiveMenus);
+        // Sub-user: chỉ truy cập app menu của tài khoản cha, không có data_app_ids bổ sung.
+        user.setDataAppIds(Collections.emptyList());
         logger.info("[mapSubUserRecordToUser] Effective permissions for {} => perms={}, menus={}", subUserRecord.get("login_identifier"), effectivePermissions, effectiveMenus);
 
         long normalizedBitfield = PermissionBitfieldUtil.buildBitfield(user.getPermissions(), user.getMenusPermissions(), user.getDev());
@@ -1127,7 +1129,12 @@ public class UserService {
                 logger.warn("[mapMainAccountToUser] Error extracting app_id from app_token for user {}: {}", user.getEmail(), e.getMessage());
             }
         }
+        String recordAppId = String.valueOf(userRecord.getOrDefault("app_id", "")).trim();
+        if ((appId == null || appId.isBlank()) && !recordAppId.isBlank()) {
+            appId = recordAppId;
+        }
         user.setAppId(appId);
+        user.setDataAppIds(resolveEffectiveDataAppIds(userRecord, appId, false));
         
         user.setFullName((String) userRecord.get("full_name"));
         user.setAvatar((String) userRecord.get("avatar"));
@@ -1246,6 +1253,7 @@ public class UserService {
                 user.setMenusPermissions(new ArrayList<>(List.of(currentAppId)));
             }
             user.setDataScope("ALL");
+            user.setDataAppIds(resolveEffectiveDataAppIds(userRecord, currentAppId, true));
         } else if (isMainAccount) {
             // Main account users always have full admin-level access to their app_id.
             // Ensure permissions include admin + scope:all + full action set so the
@@ -1890,6 +1898,29 @@ public class UserService {
                 out.add(token);
             }
         });
+        return out;
+    }
+
+    private List<String> resolveEffectiveDataAppIds(Map<String, Object> record, String menuAppId, boolean isDev) {
+        List<String> explicit = toStringListFlexible(record == null ? null : record.get("data_app_ids"));
+        return excludeMenuAppFromDataAppIds(explicit, menuAppId);
+    }
+
+    private List<String> excludeMenuAppFromDataAppIds(List<String> apps, String menuAppId) {
+        String menu = menuAppId == null ? "" : menuAppId.trim();
+        if (menu.isEmpty()) {
+            return apps == null ? new ArrayList<>() : new ArrayList<>(apps);
+        }
+        List<String> out = new ArrayList<>();
+        for (String item : apps == null ? Collections.<String>emptyList() : apps) {
+            if (item == null) {
+                continue;
+            }
+            String value = item.trim();
+            if (!value.isEmpty() && !value.equalsIgnoreCase(menu)) {
+                out.add(value);
+            }
+        }
         return out;
     }
 

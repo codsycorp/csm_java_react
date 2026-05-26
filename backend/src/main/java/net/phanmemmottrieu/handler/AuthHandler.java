@@ -159,6 +159,7 @@ public class AuthHandler {
         userInfo.put("dept_id", u.getDeptId());
         userInfo.put("branch_id", u.getBranchId());
         userInfo.put("app_id", u.getAppId());
+        userInfo.put("data_app_ids", u.getDataAppIds() == null ? Collections.emptyList() : u.getDataAppIds());
         userInfo.put("app_token", u.getAppToken());
         userInfo.put("dev", u.getDev());
         userInfo.put("account_type", isSubUser ? "sub-user" : "main");

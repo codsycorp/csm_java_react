@@ -28,7 +28,8 @@
 			"permissionSchemaVersion": "Phiên bản",
 			"dataScope": "Phạm vi",
 			"deptId": "Phòng ban",
-			"branchId": "Chi nhánh"
+			"branchId": "Chi nhánh",
+			"dataAppIds": "Ứng dụng dữ liệu bổ sung (ngoài app menu)"
 		},
 		"group": {
 			"systemAdmin": "Nhóm Quản trị hệ thống",
