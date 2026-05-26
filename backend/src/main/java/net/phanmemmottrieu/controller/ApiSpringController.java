@@ -4615,6 +4615,12 @@ public class ApiSpringController {
                                 }
                                 if (acceptLocalCodeEditCandidate(focusedEdit, effectiveCodeContext, contextType)) {
                                     focusedEdit = normalizeLocalCodeEditOutput(focusedEdit, effectiveCodeContext);
+                                    if (!editsPassCodeAstGate(focusedEdit, effectiveCodeContext)) {
+                                        logger.warn(
+                                            "LOCAL_OVERRIDE edit focused fallback rejected (AST gate) requestId={} chars={}",
+                                            requestId,
+                                            focusedEdit.length());
+                                    } else {
                                     int salvagedSteps = emitLocalAgenticStepResults(
                                         emitter,
                                         requestId,
@@ -4661,6 +4667,7 @@ public class ApiSpringController {
                                             emitLocalOnlyAgenticStepsRecoveryTrace(
                                                 emitter, requestId, responseMode, codeStreamMeta, "focused_fallback");
                                         }
+                                    }
                                     }
                                 }
                                 }
@@ -5308,7 +5315,8 @@ public class ApiSpringController {
                         completion.put("lineRanges", lineRanges);
                         completion.put("changedRanges", lineRanges);
 
-                        if (aiCodeStreamMultiCandidateEnabled) {
+                        if (aiCodeStreamMultiCandidateEnabled
+                                && editsPassCodeAstGateFromEdits(canonicalTextEdits, effectiveCodeContext)) {
                             List<Map<String, Object>> editCandidates = buildEditCandidates(
                                 appId,
                                 language,
@@ -5483,6 +5491,8 @@ public class ApiSpringController {
                         completion.put("status", "edit_apply_failed");
                         completion.put("reason_code", gateReason);
                         completion.put("message", "Patch không vượt qua kiểm tra cú pháp: " + gateDetail);
+                        completion.remove("editCandidates");
+                        completion.remove("quickFixes");
                     }
                 }
                 Map<String, Object> outputShape = analyzeCodeStreamOutputShape(responseMode, contextType, completionPayload,
@@ -5637,8 +5647,11 @@ public class ApiSpringController {
                 completion.put("modelDecisionStep", "final");
                 completion.put("modelDecisionReason", reviewRequired ? "review_required" : "completed");
                 completion.put("decision_step", "final");
-                completion.put("status", reviewRequired ? "review_required" : "completed");
-                completion.put("reason_code", reviewRequired ? "review_required" : "completed");
+                boolean finalGateRejected = bool(completion.get("finalOutputGateRejected"), false);
+                if (!finalGateRejected) {
+                    completion.put("status", reviewRequired ? "review_required" : "completed");
+                    completion.put("reason_code", reviewRequired ? "review_required" : "completed");
+                }
                 if (reviewRequired) {
                     completion.put("message", "Dang cho nguoi dung duyet cac buoc risk-gated truoc khi coi la hoan tat");
                 }
@@ -18291,7 +18304,9 @@ public class ApiSpringController {
             }
             text = sanitizePromptEchoLeakage(String.valueOf(text == null ? "" : text));
             String normalized = normalizeLocalCodeEditOutput(text, source);
-            if (!normalized.isBlank() && acceptLocalCodeEditCandidate(normalized, source, contextType)) {
+            if (!normalized.isBlank()
+                    && acceptLocalCodeEditCandidate(normalized, source, contextType)
+                    && editsPassCodeAstGate(normalized, source)) {
                 return normalized.trim();
             }
             if (!normalized.isBlank()) {
@@ -28059,13 +28074,6 @@ public class ApiSpringController {
         String detected = inferAiAssistantResponseModeFromText(message);
 
         if ("edit".equals(mode)) {
-            // Code assistant may still send "edit" by default even for pure analysis asks.
-            // Prefer analyze mode when user intent is clearly analysis.
-            if (!"menu_json".equals(normalizedContextType)
-                    && !normalizedTaskType.contains("menu")
-                    && "analyze".equals(detected)) {
-                return "analyze";
-            }
             return "edit";
         }
         if ("analyze".equals(mode)) {

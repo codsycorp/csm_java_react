@@ -3260,6 +3260,12 @@ export default function AiAssistantChat({
 
 		const notice = buildEditApplyFailureNotice(opts.reasonCode);
 		const summaryLine = notice.split("\n").find(line => line.trim()) || notice;
+		setEditCandidates([]);
+		setQuickFixSuggestions([]);
+		setLocalFlowOps(prev => prev
+			? { ...prev, verified: false, reason: summaryLine }
+			: null);
+		setLocalFlowOpLines([]);
 		setMessages((prev) => {
 			const updated = [...prev];
 			for (let i = updated.length - 1; i >= 0; i -= 1) {
@@ -6950,6 +6956,15 @@ export default function AiAssistantChat({
 									lastReasonCode = evtReasonCode;
 								}
 								if (gateStatus === "rejected" && streamStartedInEditModeRef.current) {
+									setEditCandidates([]);
+									setQuickFixSuggestions([]);
+									setLocalFlowOps(prev => prev
+										? { ...prev, verified: false, reason: localizedEvtMessage || uiText(
+											"Patch không vượt qua kiểm tra cú pháp nên không áp dụng vào editor.",
+											"The patch failed syntax validation and was not applied to the editor.",
+											"补丁未通过语法校验，因此未应用到编辑器。",
+										) }
+										: null);
 									showSystemToast("warning", {
 										summary: localizedEvtMessage || uiText(
 											"Patch không vượt qua kiểm tra cú pháp nên không áp dụng vào editor.",
@@ -7112,9 +7127,6 @@ export default function AiAssistantChat({
 									setQuickFixSuggestions(completionQuickFixes);
 								}
 								const completionEditCandidates = normalizeEditCandidates(completionPayload.editCandidates);
-								if (completionEditCandidates.length > 0) {
-									setEditCandidates(completionEditCandidates);
-								}
 								const usage = normalizeUsagePayload(evt.usage || {
 									model: evt.model,
 									promptTokens: evt.promptTokens,
@@ -7309,6 +7321,12 @@ export default function AiAssistantChat({
 								const completionReasonCodeEarly = gateRejectedEarly
 									? String(finalOutputGateMetaEarly?.reasonCode || completionEventMeta["reason_code"] || "final_output_gate_rejected").trim()
 									: String(completionEventMeta["reason_code"] || lastReasonCode || "").trim();
+								if (!falseEditSuccess && !gateRejectedEarly && completionEditCandidates.length > 0) {
+									setEditCandidates(completionEditCandidates);
+								} else if (falseEditSuccess || gateRejectedEarly) {
+									setEditCandidates([]);
+									setQuickFixSuggestions([]);
+								}
 								const resolveMenuCompletionChatText = () => {
 									if (backendAssistantSummary)
 										return backendAssistantSummary;
@@ -9089,7 +9107,7 @@ export default function AiAssistantChat({
 								</div>
 							</div>
 						)}
-						{editCandidates.length > 0 && (
+						{editCandidates.length > 0 && completionState !== "error" && (
 							<div className={styles.quickFixPanel}>
 								<div className={styles.quickFixPanelHeader}>
 									{uiText("Patch candidates", "Patch candidates", "Patch 候选方案")}
