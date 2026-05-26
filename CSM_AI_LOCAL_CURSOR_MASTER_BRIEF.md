@@ -1,9 +1,18 @@
 # CSM AI LOCAL — MASTER BRIEF CHO CURSOR AI
 ## Một file duy nhất để yêu cầu Cursor làm lại / hoàn thiện hệ thống
 
-Version: **1.1** · 2026-05  
+Version: **2.0** · 2026-05-23  
 Repo: `csm_server`  
-**Single source of truth** — không còn file spec AI local khác ở root repo.
+**Single source of truth** — dùng file này khi yêu cầu Cursor implement / làm lại CSM AI Local **và** domain System Management liên quan RAG.
+
+### Changelog v2.0
+
+| Mục | Trạng thái |
+|-----|------------|
+| P0 routing edit/analyze, region plan, async large-code ingest | ✅ Đã triển khai (v1.1) |
+| System admin UX: org tables, role_code, combo dedupe, data_app_ids | ✅ Commit `cba701ed` trên `main` |
+| **Phase 2 RAG:** tenant snapshot + ACL-filtered retrieval | ✅ Code xong, **chưa commit** (xem PHẦN P) |
+| Phase 3: embedding model riêng, BM25 hybrid, unified index, citations | ⏳ Roadmap |
 
 ---
 
@@ -13,9 +22,11 @@ Copy toàn bộ file (hoặc @-mention file này) vào Cursor Chat, kèm prompt 
 
 ```txt
 Đọc @CSM_AI_LOCAL_CURSOR_MASTER_BRIEF.md và triển khai đầy đủ theo spec Cursor-aligned.
-Ưu tiên: (1) routing edit/analyze đúng, (2) prompt nhỏ trên file lớn, (3) edit trả textEdits apply CodeMirror.
+Ưu tiên: (1) routing edit/analyze đúng, (2) prompt nhỏ trên file lớn, (3) edit trả textEdits apply CodeMirror,
+(4) tenant RAG + ACL filter khi hỏi domain org/permission/menu.
 Không over-engineer. Sửa đúng các file đã liệt kê. Compile backend + không phá frontend SSE.
 Máy target: local-5gb (5GB RAM, 2 CPU, qwen2.5-coder-1.5b Q4_K_M).
+Sau khi xong: commit + push theo PHẦN P nếu user yêu cầu đồng bộ git.
 ```
 
 ---
@@ -63,7 +74,7 @@ Cursor AI **phải** đảm bảo các lỗi sau không còn:
 
 # PHẦN C — KIẾN TRÚC MỤC TIÊU
 
-## C.1 Hai AI (Router + Worker)
+## C.1 Hai AI (Router + Worker) + RAG layer
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -74,8 +85,11 @@ Cursor AI **phải** đảm bảo các lỗi sau không còn:
                              │
 ┌────────────────────────────▼────────────────────────────────────┐
 │ Context layer (không vào model hết)                             │
+│ · AiTenantKnowledgeIngestionService — DB snapshot org/roles     │
 │ · AiScopedContextIngestionService — async vector ingest (large) │
 │ · AiLocalOrchestrationService — scoped RAG, plan (bounded)      │
+│ · AiRetrievalAuthContextResolver — ACL trước async SSE thread   │
+│ · AiBusinessMemoryVectorService — Lucene KNN + ACL tag filter   │
 │ · buildLargeCodeRegionPlan — condensed editor (request hiện tại)│
 │ · scopedRagBlock top-K (hit index từ ingest trước / cùng phiên) │
 └────────────────────────────┬────────────────────────────────────┘
@@ -91,6 +105,27 @@ Cursor AI **phải** đảm bảo các lỗi sau không còn:
 │ analyze: streaming chunks | edit: text_edit_apply                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+## C.4 RAG pipeline — 5 bước (Collect → Query)
+
+```mermaid
+flowchart LR
+    A[1. Collect] --> B[2. Chunk]
+    B --> C[3. Embed]
+    C --> D[4. Index Lucene KNN]
+    D --> E[5. Query + ACL filter]
+    E --> F[Minimal prompt slot]
+```
+
+| Bước | Nguồn dữ liệu | Service / hàm |
+|------|---------------|---------------|
+| **1 Collect** | Attachments, editor `currentCode`, menu JSON, multimodal scan, **tenant DB snapshot** (`csm_roles`, `csm_depts`, `csm_branches`), domain rules markdown | `AiScopedContextIngestionService`, `AiTenantKnowledgeIngestionService`, `AiMultimodalScannerService` |
+| **2 Chunk** | Code theo declaration; markdown theo section; menu theo node | `chunkCodeByDeclaration`, `indexMarkdown`, `indexDynamicContext` |
+| **3 Embed** | Vector per chunk (nomic / hash fallback) | `AiBusinessMemoryVectorService.embedText` |
+| **4 Index** | Lucene KNN per `appId`, tags + scope mask | `indexDynamicContext`, `indexMarkdown`, `searchWithScopes` |
+| **5 Query** | Symbol-aware queries + scope mask + **ACL tag filter** | `AiRetrievalPolicyEngine`, `buildRagBlockWithScopes`, `passesRetrievalAuthFilter` |
+
+**Nguyên tắc:** Collect/Index đủ vào Lucene; model chỉ nhận top-K slice qua `[RETRIEVED_CONTEXT]` (≤2800 chars weak).
 
 ## C.2 Ba flow intent (chỉ một contract mỗi request)
 
@@ -168,23 +203,27 @@ Body chính (frontend `AiAssistantChat.tsx`):
 
 1. **Route** — `decideRouteForCodeStream` → thường `LOCAL_ONLY` khi `ai.local.only.enabled=true`
 2. **Classify** — AI#1 → `responseMode`, `preclassifiedIntent`
-3. **Orchestration** (bounded) — `AiLocalOrchestrationService.orchestrateResilient`
+3. **Resolve ACL** — `AiRetrievalAuthContextResolver.resolve()` **trên request thread** (trước async SSE)
+4. **Orchestration** (bounded) — `AiLocalOrchestrationService.orchestrateResilient(..., authContext)`
+   - `ingestTenantKnowledge(appId)` — snapshot org + domain rules (debounce 60s/app)
+   - `bindRetrievalAuthContext(authContext)` → RAG search
    - Scan attachments → scope mask
    - Ingest: menu sync / code async / skip large edit lightweight
-   - RAG: `buildRagBlockWithScopes(topK=3, maxChars≈2800)`
+   - RAG: `buildRagBlockWithScopes(topK=3, maxChars≈2800)` + ACL filter
    - Output: `scopedRagBlock`, `planSteps`, `compressedContextBlock`
-4. **Condense editor** — `promptCodeContext`:
+   - `clearRetrievalAuthContext()` trong finally
+5. **Condense editor** — `promptCodeContext`:
    - Nếu `currentCode` > 30k → `buildLargeCodeRegionPlan` (~13–22k chars)
    - Symbol lifecycle từ message (fnResetIP, closeAllTabsAndCleanup, …)
-5. **Prompt** — `resolveLocalProviderPrompt` → `composeLayeredLocalProviderPrompt` → `buildLocalMinimalPrompt` → `clampPromptForLocalProvider`
-6. **Generation fast path (weak + large + edit):**
+6. **Prompt** — `resolveLocalProviderPrompt` → `composeLayeredLocalProviderPrompt` → `buildLocalMinimalPrompt` → `clampPromptForLocalProvider`
+7. **Generation fast path (weak + large + edit):**
    - Nếu `edit` + `code` + weak + code >30k → **`tryEditFocusedLocalFallback()` TRƯỚC** primary LLM
    - Thành công → skip prompt nặng
-7. **Primary LLM** — `runLocalProviderWithProgress` (local_provider)
-8. **Normalize / validate** — `normalizeLocalStructuredOutput`, `shouldAcceptLocalCodeStreamOutput`
-9. **Adaptive retry** (edit, bounded) — prompt ngắn trên weak; không append full original 12k+
-10. **Fallback cuối** — `tryEditFocusedLocalFallback` nếu primary fail
-11. **Emit SSE** — analyze stream | edit text_edit_apply | error LOCAL_OVERRIDE
+8. **Primary LLM** — `runLocalProviderWithProgress` (local_provider)
+9. **Normalize / validate** — `normalizeLocalStructuredOutput`, `shouldAcceptLocalCodeStreamOutput`
+10. **Adaptive retry** (edit, bounded) — prompt ngắn trên weak; không append full original 12k+
+11. **Fallback cuối** — `tryEditFocusedLocalFallback` nếu primary fail
+12. **Emit SSE** — analyze stream | edit text_edit_apply | error LOCAL_OVERRIDE
 
 ## D.3 Frontend SSE handling
 
@@ -209,11 +248,14 @@ File apply: `CodeMirrorWithAiAssistant.tsx` → `handleApplyLineEdit` → `view.
 
 | File | Trách nhiệm | Việc Cursor phải làm |
 |------|-------------|----------------------|
-| `backend/src/main/java/net/phanmemmottrieu/controller/ApiSpringController.java` | SSE, classify, prompt, gates, fallback | Routing, region plan, focused-first, failure messages, clamp |
+| `backend/src/main/java/net/phanmemmottrieu/controller/ApiSpringController.java` | SSE, classify, prompt, gates, fallback | Routing, region plan, focused-first, failure messages, clamp; **`resolveRetrievalAuthContext()` → orchestrateResilient(..., authContext)** |
 | `backend/src/main/java/net/phanmemmottrieu/service/AiScopedContextIngestionService.java` | Async ingest currentCode/menu → Lucene | `ingestLargeCodeAsync`, `buildEditorIngestKey` |
-| `backend/src/main/java/net/phanmemmottrieu/service/AiLocalOrchestrationService.java` | RAG, agentic | Lifecycle symbol prepend; large code → async ingest |
+| `backend/src/main/java/net/phanmemmottrieu/service/AiLocalOrchestrationService.java` | RAG, agentic | Lifecycle symbol prepend; large code → async ingest; **`ingestTenantKnowledge` + auth bind** |
 | `backend/src/main/java/net/phanmemmottrieu/service/AiAssistantGatewayService.java` | Minimal prompt, validate | Slot budget, contracts, language block |
-| `backend/src/main/java/net/phanmemmottrieu/service/AiBusinessMemoryVectorService.java` | Lucene KNN RAG | topK/maxChars theo weak profile |
+| `backend/src/main/java/net/phanmemmottrieu/service/AiBusinessMemoryVectorService.java` | Lucene KNN RAG | topK/maxChars; `bindRetrievalAuthContext`; `passesRetrievalAuthFilter` |
+| `backend/src/main/java/net/phanmemmottrieu/service/AiTenantKnowledgeIngestionService.java` | **Mới** — tenant org snapshot + domain rules | `ingestTenantKnowledge(appId)`; tags `acl:tenant`, `knowledge:org` |
+| `backend/src/main/java/net/phanmemmottrieu/service/AiRetrievalAuthContext.java` | **Mới** — ACL context cho retrieval | principal, appId, dev, csmAdmin, roles, dataScope, branch/dept ids |
+| `backend/src/main/java/net/phanmemmottrieu/service/AiRetrievalAuthContextResolver.java` | **Mới** — resolve từ Spring Security | Gọi trước async SSE trong controller |
 | `backend/src/main/java/net/phanmemmottrieu/service/AiScopedContextIngestionService.java` | Ingest menu/code | async/sync policy |
 | `backend/src/main/java/net/phanmemmottrieu/service/AiRetrievalPolicyEngine.java` | topK adaptive | Weak machine cap |
 | `backend/src/main/java/net/phanmemmottrieu/service/LlamaCppNativeService.java` | JNI inference | context-window, max-tokens, prompt cap |
@@ -234,6 +276,32 @@ File apply: `CodeMirrorWithAiAssistant.tsx` → `handleApplyLineEdit` → `view.
 |------|----------------------|
 | `frontend-admin/src/pages/system/developer/AiAssistantChat.tsx` | Không hardcode `responseMode=analyze`; SSE router; progress không misleading |
 | `frontend-admin/src/.../CodeMirrorWithAiAssistant.tsx` | `handleApplyLineEdit` 1-based lines |
+
+## E.4 Frontend — System Management (domain org/permission, không phải AI chat)
+
+Các thay đổi này **ảnh hưởng UX admin** và **là nguồn truth** cho tenant RAG domain rules. Cursor phải giữ đồng bộ với `AiTenantKnowledgeIngestionService.buildDomainRulesMarkdown()`.
+
+| File | Trách nhiệm | Quy tắc bắt buộc |
+|------|-------------|------------------|
+| `frontend-admin/src/pages/system/admin/index.tsx` | Grid dept/branch/roles/sub-user | `shouldHideDeptBranchField()` ẩn audit + permission internals; branch→dept cascade; merge role combo dedupe by `role_code` |
+| `frontend-admin/src/pages/system/admin/system-user-menu-config.ts` | Form schema, beforeSave | `PERMISSION_GROUP_BEFORE_SAVE` auto `role_code` từ `role_name`; `role_level` → dataScope; field `data_app_ids` multi_tag |
+| `frontend-admin/src/pages/system/admin/combo-utils.ts` | Role combo options | **Một option per role id**; dedupe by `role_code` (không thêm cả id lẫn role_code làm 2 option) |
+| `frontend-admin/src/components/CsmEditModal.tsx` | Form modal | `group_id` dùng id-only options; clear `dept_id` khi đổi `branch_id` |
+| `frontend-admin/src/components/CsmDynamicGrid.tsx` | Dynamic grid | Role combo id-only |
+| `frontend-admin/src/locales/vi/system.json` (+ en/zh) | i18n | `system.role.code`, `role_level` labels, `data_app_ids` |
+
+**Org model (AI + UI phải hiểu giống nhau):**
+
+```
+Branch (csm_branches)
+  └── Department (csm_depts.branch_id required)
+        └── Permission group (csm_roles) — optional branch_id/dept_id scope
+              └── Sub-user (csm_group_members.group_id → csm_roles.id)
+```
+
+**Ẩn trên grid dept/branch:** `created_by`, `updated_by`, `create_time`, `update_time`, `dept_full_name`, `branch_full_name`, `is_global`, permission internals, `dept_id` trên branch grid.
+
+**role_level → dataScope:** admin/director=ALL, manager=BRANCH, dept_head/team_lead=DEPARTMENT, staff=OWNER.
 
 ---
 
@@ -482,6 +550,84 @@ Orchestration stats: `scopedCodeIngestionMode=async_large_code_vector`.
 ✗ Tạo service ingest mới nếu đã sửa được AiScopedContextIngestionService
 ```
 
+## F.12 Tenant knowledge ingest + ACL retrieval (Phase 2 — BẮT BUỘC GIỮ)
+
+> **Mục tiêu:** AI local hiểu org/permission thực tế của tenant khi user hỏi/sửa menu, sub-user, nhóm quyền — không chỉ dựa prompt tĩnh.
+
+### F.12.1 AiTenantKnowledgeIngestionService
+
+Gọi đầu `orchestrate()` / `orchestrateResilient()`:
+
+```java
+aiTenantKnowledgeIngestionService.ingestTenantKnowledge(appId);
+```
+
+| Source | Nội dung | Tags |
+|--------|----------|------|
+| `tenant_knowledge_org_snapshot` | Markdown rows từ DB: `csm_roles`, `csm_depts`, `csm_branches` | `acl:tenant`, `knowledge:tenant`, `knowledge:org` |
+| `tenant_knowledge_domain_rules` | Static rules (org hierarchy, combo cascade, role_code, hidden fields) | `acl:tenant`, `knowledge:domain_rules`, `knowledge:permissions` |
+
+- Debounce: **60s/appId** (`recently_indexed` nếu gọi lại sớm)
+- Non-csm app: `merge-csm-roles=true` → merge roles từ app `csm` dedupe by `role_code`
+- Max rows/table: `ai.context.ingestion.tenant-snapshot.max-rows-per-table=120`
+
+**Domain rules markdown** phải khớp frontend (PHẦN E.4). Khi sửa UX admin → cập nhật `buildDomainRulesMarkdown()` **và** file frontend tương ứng.
+
+### F.12.2 AiRetrievalAuthContext + filter
+
+**Resolve trên request thread** (SecurityContext mất sau async):
+
+```java
+// ApiSpringController — trước CompletableFuture / SseEmitter worker
+AiRetrievalAuthContext authContext = retrievalAuthContextResolver.resolve();
+orchestrationService.orchestrateResilient(..., authContext);
+```
+
+**Orchestration:**
+
+```java
+businessMemoryVectorService.bindRetrievalAuthContext(authContext);
+try { /* RAG search */ }
+finally { businessMemoryVectorService.clearRetrievalAuthContext(); }
+```
+
+**Tag filter** (`passesRetrievalAuthFilter`):
+
+| Tag | Rule |
+|-----|------|
+| (no `acl:`) | Pass — public/project chunks |
+| `acl:admin` | Block cho non-admin retrieval |
+| `acl:tenant` | Require authenticated |
+| `branch:{id}` | Pass nếu user scope ALL hoặc branch match |
+| `dept:{id}` | Pass nếu user scope ALL/BRANCH hoặc dept match |
+
+Config: `ai.retrieval.auth.filter-enabled=true` (tắt = pass all, chỉ dev debug).
+
+### F.12.3 Config tenant snapshot
+
+```properties
+ai.context.ingestion.tenant-snapshot.enabled=true
+ai.context.ingestion.tenant-snapshot.tables=csm_roles,csm_depts,csm_branches
+ai.context.ingestion.tenant-snapshot.merge-csm-roles=true
+ai.context.ingestion.tenant-snapshot.max-rows-per-table=120
+ai.retrieval.auth.filter-enabled=true
+```
+
+### F.12.4 Telemetry
+
+Orchestration stats có thể gồm: `tenantKnowledgeIngestStatus=indexed|skipped:recently_indexed|skipped:disabled`.
+
+Log: `Tenant knowledge indexed appId=... orgChunks=... ruleChunks=...`
+
+### F.12.5 CẤM
+
+```txt
+✗ Resolve SecurityContext bên trong async SSE thread (authContext null → filter sai)
+✗ Index tenant snapshot mỗi chunk riêng lẻ không debounce (DB hammer)
+✗ Domain rules markdown lệch frontend (AI trả lời sai combo/role_code)
+✗ Thêm option combo group_id cả id lẫn role_code (duplicate UI)
+```
+
 ## F.10 Frontend
 
 **AiAssistantChat.tsx:**
@@ -601,6 +747,12 @@ ai.assistant.edit-structured.required=true
 ai.code-stream.edit.patch-validator.enabled=true
 
 ai.local.runtime.weak-profile.local-provider.max-prompt-chars=18000
+
+# Phase 2 — tenant RAG
+ai.context.ingestion.tenant-snapshot.enabled=true
+ai.context.ingestion.tenant-snapshot.tables=csm_roles,csm_depts,csm_branches
+ai.context.ingestion.tenant-snapshot.merge-csm-roles=true
+ai.retrieval.auth.filter-enabled=true
 ```
 
 Launch:
@@ -705,6 +857,23 @@ cd backend && mvn compile -DskipTests
 
 Exit code 0.
 
+## J.5 Tenant / permission domain (Phase 2)
+
+**Input (analyze):** `Nhóm quyền sub-user đang hiện trùng option — nguyên nhân và cách sửa?`
+
+| Kiểm tra | Pass |
+|----------|------|
+| Log `Tenant knowledge indexed` hoặc `skipped:recently_indexed` | ✓ |
+| RAG block mention dedupe `role_code`, one option per id | ✓ |
+| Không leak org data ngoài ACL user | ✓ |
+
+**Input (analyze):** `Khi đổi chi nhánh thì phòng ban combo phải làm gì?`
+
+| Kiểm tra | Pass |
+|----------|------|
+| Trả lời cascade branch→dept, clear stale dept_id | ✓ |
+| Khớp `buildDomainRulesMarkdown()` + frontend cascade | ✓ |
+
 ---
 
 # PHẦN K — CẤM TUYỆT ĐỐI (DO NOT)
@@ -721,6 +890,8 @@ Exit code 0.
 ✗ Skip ingest hoàn toàn khi code >45k (phải async vector ingest)
 ✗ Adaptive retry append original prompt 12k+ trên weak machine
 ✗ Over-engineer thêm service/layer mới nếu sửa được trong file hiện có
+✗ Domain rules RAG lệch code frontend system admin
+✗ Combo group_id duplicate (id + role_code as separate options)
 ```
 
 ---
@@ -728,34 +899,49 @@ Exit code 0.
 # PHẦN L — ƯU TIÊN THỰC HIỆN (THỨ TỰ CHO CURSOR)
 
 ```
-P0 — Routing & mode
-  □ resolvedResponseMode: EDIT_* → edit
-  □ Classifier post-parse force edit
-  □ Frontend không hardcode analyze
+P0 — Routing & mode [DONE]
+  ☑ resolvedResponseMode: EDIT_* → edit
+  ☑ Classifier post-parse force edit
+  ☑ Frontend không hardcode analyze
 
-P0 — Prompt budget
-  □ Region plan >30k
-  □ composeLayered weak edit: rag="" memory skip
-  □ clampPromptForLocalProvider ≤18k weak
+P0 — Prompt budget [DONE]
+  ☑ Region plan >30k
+  ☑ composeLayered weak edit: rag="" memory skip
+  ☑ clampPromptForLocalProvider ≤18k weak
 
-P0 — Edit path
-  □ edit-focused-first trước primary LLM
-  □ tryEditFocusedLocalFallback + salvage JSON
-  □ shouldAcceptLocalCodeStreamOutput + code failure message
+P0 — Edit path [DONE]
+  ☑ edit-focused-first trước primary LLM
+  ☑ tryEditFocusedLocalFallback + salvage JSON
+  ☑ shouldAcceptLocalCodeStreamOutput + code failure message
 
-P1 — Retrieval & large-code index
-  □ Lifecycle symbol prepend (controller + orchestration)
-  □ Async large-code vector ingest (>45k) — KHÔNG skip hoàn toàn
-  □ Region plan cho request hiện tại (condensed ~13–22k)
-  □ scopedRag hit editorCode_* chunks từ request trước
+P1 — Retrieval & large-code index [DONE]
+  ☑ Lifecycle symbol prepend (controller + orchestration)
+  ☑ Async large-code vector ingest (>45k)
+  ☑ Region plan cho request hiện tại
+  ☑ scopedRag hit editorCode_* chunks
 
-P1 — Gates
-  □ sanitizePromptEchoLeakage
-  □ weak adaptive retry short prompt
+P1 — Tenant RAG Phase 2 [DONE — commit pending]
+  ☑ AiTenantKnowledgeIngestionService
+  ☑ AiRetrievalAuthContext + Resolver + ACL filter
+  ☑ orchestrateResilient(..., authContext) từ controller
+  ☑ Config tenant-snapshot + auth filter
+
+P1 — System admin UX [DONE — cba701ed]
+  ☑ shouldHideDeptBranchField, branch→dept cascade
+  ☑ role_code editable on add, auto-generate beforeSave
+  ☑ buildRoleComboOptions dedupe by role_code
+  ☑ data_app_ids multi_tag field + i18n
+
+P2 — Phase 3 roadmap [TODO]
+  □ Embedding model riêng (không dùng chat GGUF / hash fallback)
+  □ Unified Lucene index (business memory + workspace)
+  □ Hybrid BM25 + vector retrieval
+  □ Citations / source refs trong analyze response
+  □ UserAccessContext parity với TableHandler (full branch/dept tree)
 
 P2 — Polish
   □ Agentic progress không block fast path
-  □ Log telemetry: promptChars, textEditsCount, focused-first flag
+  □ Log telemetry: promptChars, textEditsCount, tenantKnowledge status
 ```
 
 ---
@@ -777,7 +963,8 @@ sequenceDiagram
     FE->>API: POST /api/ai-code-stream
     API->>C: classifyIntentWithLocalAI
     C-->>API: responseMode edit|analyze
-    API->>O: orchestrate (bounded ingest/RAG)
+    API->>O: orchestrate (bounded ingest/RAG + tenant knowledge)
+    O->>O: ingestTenantKnowledge(appId)
     O-->>API: scopedRagBlock, planSteps
     API->>API: buildLargeCodeRegionPlan if large
     API->>API: scheduleLargeEditorCodeVectorIngest if >45k (async)
@@ -809,9 +996,10 @@ sequenceDiagram
 1. **Minimize diff** — sửa đúng chỗ trong file lớn (`ApiSpringController` ~34k lines); không refactor toàn file.
 2. **Match conventions** — naming, logging style, `@Value` config keys như codebase hiện tại.
 3. **Không thêm test** trừ khi user yêu cầu; compile là đủ cho pass cơ bản.
-4. **Không commit** trừ khi user yêu cầu.
-5. **Comments** — chỉ cho logic không hiển nhiên (lifecycle symbol boost, weak edit light path).
+4. **Không commit** trừ khi user yêu cầu — khi user yêu cầu đồng bộ git, làm theo **PHẦN P**.
+5. **Comments** — chỉ cho logic không hiển nhiên (lifecycle symbol boost, weak edit light path, ACL bind).
 6. Document thay đổi ngắn trong PR description nếu user tạo PR sau.
+7. **Domain rules sync:** sửa UX system admin → cập nhật cả frontend (E.4) và `buildDomainRulesMarkdown()` (F.12).
 
 ---
 
@@ -819,13 +1007,76 @@ sequenceDiagram
 
 | File | Mục đích |
 |------|----------|
-| `CSM_AI_LOCAL_CURSOR_MASTER_BRIEF.md` | **File này** — spec + checklist triển khai |
+| `CSM_AI_LOCAL_CURSOR_MASTER_BRIEF.md` | **File này** — spec + checklist triển khai (duy nhất ở root) |
 | `backend/csm_datas/ai_local/ai_code_master_prompt.md` | Contract runtime code edit (load theo intent) |
 | `backend/csm_datas/ai_local/ai_menu_master_prompt.md` | Contract runtime menu edit |
 | `backend/csm_datas/ai_local/ai-assistant-instructions.md` | Policy runtime (không nhét full vào prompt) |
 | `backend/src/main/resources/application-local-5gb.properties` | Profile máy 5 GB |
+| `backend/src/main/resources/application.properties` | Defaults incl. tenant-snapshot + auth filter |
+
+> Các file `CSM_AI_LOCAL_*.md` khác ở root (nếu còn) là **draft cũ** — không dùng làm spec; merge nội dung vào file này rồi xóa hoặc bỏ qua.
 
 ---
 
-**Hết master brief.**  
-Chỉ dùng file này khi yêu cầu Cursor AI implement / làm lại CSM AI Local.
+# PHẦN P — GIT ĐỒNG BỘ (CHO CURSOR / DEV)
+
+## P.1 Trạng thái commit (2026-05-23)
+
+| Nhóm thay đổi | Commit | Ghi chú |
+|---------------|--------|---------|
+| System admin UX, combo dedupe, data_app_ids, role_code | `cba701ed` | Đã trên `origin/main` |
+| Phase 2 tenant RAG (3 class mới + 4 file sửa) | **Chưa commit** | Xem P.2 |
+
+## P.2 Commit Phase 2 (khi user yêu cầu)
+
+```bash
+cd /Volumes/Datas/CSM/JavaProjects/csm_server
+
+# Verify compile
+cd backend && mvn compile -DskipTests && cd ..
+
+git add \
+  CSM_AI_LOCAL_CURSOR_MASTER_BRIEF.md \
+  backend/src/main/java/net/phanmemmottrieu/service/AiRetrievalAuthContext.java \
+  backend/src/main/java/net/phanmemmottrieu/service/AiRetrievalAuthContextResolver.java \
+  backend/src/main/java/net/phanmemmottrieu/service/AiTenantKnowledgeIngestionService.java \
+  backend/src/main/java/net/phanmemmottrieu/service/AiBusinessMemoryVectorService.java \
+  backend/src/main/java/net/phanmemmottrieu/service/AiLocalOrchestrationService.java \
+  backend/src/main/java/net/phanmemmottrieu/controller/ApiSpringController.java \
+  backend/src/main/resources/application.properties
+
+git commit -m "$(cat <<'EOF'
+feat: tenant org RAG snapshot and ACL-filtered retrieval for local AI
+
+Index csm_roles/depts/branches plus domain rules into Lucene; filter retrieval
+by auth context so orchestration answers org/permission questions accurately.
+EOF
+)"
+
+git push origin main   # chỉ khi user yêu cầu push
+```
+
+## P.3 Quy tắc cho AI agent
+
+1. **Luôn đọc file này trước** khi sửa AI local hoặc system admin domain.
+2. **Cập nhật changelog + PHẦN L** khi hoàn thành mục mới.
+3. **Không commit** trừ khi user nói rõ "commit", "push", "đồng bộ git".
+4. Sau commit Phase 2 → sửa bảng P.1 (đánh dấu đã commit, ghi hash).
+5. Draft MD ở root (`CSM_AI_LOCAL_*.md` khác) — merge vào đây, không tạo spec song song.
+
+## P.4 Verify sau deploy / restart
+
+```bash
+# Backend log khi chat AI lần đầu mỗi appId (trong 60s):
+# Tenant knowledge indexed appId=csm orgChunks=N ruleChunks=M
+
+# Frontend system admin:
+# - Sub-user group_id: không duplicate options
+# - Thêm nhóm quyền: role_code tự sinh từ role_name
+# - Đổi branch: dept combo filter + clear dept_id
+```
+
+---
+
+**Hết master brief v2.0.**  
+Chỉ dùng file này khi yêu cầu Cursor AI implement / làm lại CSM AI Local hoặc domain System Management liên quan RAG.

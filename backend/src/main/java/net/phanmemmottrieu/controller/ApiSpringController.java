@@ -59,6 +59,8 @@ import net.phanmemmottrieu.service.AiConversationContextService;
 import net.phanmemmottrieu.service.MenuQualityGateService;
 import net.phanmemmottrieu.service.TokenOptimizationService;
 import net.phanmemmottrieu.service.AiLocalOrchestrationService;
+import net.phanmemmottrieu.service.AiRetrievalAuthContext;
+import net.phanmemmottrieu.service.AiRetrievalAuthContextResolver;
 import net.phanmemmottrieu.service.AiScopedContextIngestionService;
 import net.phanmemmottrieu.service.AiMenuLearningMemoryService;
 import net.phanmemmottrieu.service.AiPromptBudgetService;
@@ -482,6 +484,9 @@ public class ApiSpringController {
     @SuppressWarnings("unused")
     private final LargeFileChunkingService largeFileChunkingService;
     private final AiLocalWorkflowAdvisorService aiLocalWorkflowAdvisorService;
+
+    @Autowired(required = false)
+    private AiRetrievalAuthContextResolver aiRetrievalAuthContextResolver;
     private final AiLocalRuntimeTierService aiLocalRuntimeTierService;
 
     @Autowired(required = false)
@@ -1598,6 +1603,7 @@ public class ApiSpringController {
             sendErrorEvent(emitter, blockedMessage);
             return emitter;
         }
+        final AiRetrievalAuthContext streamRetrievalAuth = resolveRetrievalAuthContext();
         String requestedAppId = firstNonBlankString(body.get("appId"), body.get("app_id"));
         String userAppId = firstNonBlankString(authCtx.appId);
         if (!isCsmAdmin(authCtx)) {
@@ -2123,7 +2129,8 @@ public class ApiSpringController {
                         language,
                         requestId,
                         pName,
-                        pType);
+                        pType,
+                        streamRetrievalAuth);
 
                     if (shouldAttemptOrchestrationEvidenceRefine(codeStreamOrchestration)
                             && !aiLocalRuntimeTierService.shouldSkipOrchestrationRefine()) {
@@ -2165,7 +2172,8 @@ public class ApiSpringController {
                                 language,
                                 requestId + "_refine_" + refineAttempt,
                                 pName,
-                                pType
+                                pType,
+                                streamRetrievalAuth
                             );
                             OrchestrationEvidenceSnapshot refinedSnapshot = snapshotOrchestrationEvidence(refined);
                             boolean promoted = shouldPromoteRefinedOrchestration(baseSnapshot, refinedSnapshot, codeStreamOrchestration, refined);
@@ -2297,7 +2305,8 @@ public class ApiSpringController {
                                     language,
                                     requestId + "_dag_replan_" + replanAttempt,
                                     pName,
-                                    pType
+                                    pType,
+                                    streamRetrievalAuth
                                 );
                                 OrchestrationEvidenceSnapshot replannedSnapshot = snapshotOrchestrationEvidence(replanned);
                                 boolean promoted = shouldPromoteRefinedOrchestration(baseSnapshot, replannedSnapshot, codeStreamOrchestration, replanned);
@@ -20104,6 +20113,13 @@ public class ApiSpringController {
         boolean authenticated;
     }
 
+    private AiRetrievalAuthContext resolveRetrievalAuthContext() {
+        if (aiRetrievalAuthContextResolver == null) {
+            return AiRetrievalAuthContext.ANONYMOUS;
+        }
+        return aiRetrievalAuthContextResolver.resolveCurrent();
+    }
+
     private UserAuthContext extractUserAuthContext() {
         UserAuthContext context = new UserAuthContext();
         org.springframework.security.core.Authentication authentication =
@@ -23561,7 +23577,8 @@ public class ApiSpringController {
                         language,
                         requestId,
                         pName,
-                        pType);
+                        pType,
+                        resolveRetrievalAuthContext());
                     if (orchestrationResult.enabled && orchestrationResult.earlyFinishResponse != null
                         && !orchestrationResult.earlyFinishResponse.isBlank()) {
                         logger.info("AI_EARLY_FINISH appId={} requestId={} operation={} routeName={} reasonCode={} — skipping heavy context build",
@@ -35022,7 +35039,8 @@ public class ApiSpringController {
             language,
             null,
             pName,
-            pType);
+            pType,
+            resolveRetrievalAuthContext());
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("success", true);

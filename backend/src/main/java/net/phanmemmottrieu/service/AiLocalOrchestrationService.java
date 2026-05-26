@@ -302,6 +302,9 @@ public class AiLocalOrchestrationService {
     @Autowired(required = false)
     private AiAgenticWebSearchService aiAgenticWebSearchService;
 
+    @Autowired(required = false)
+    private AiTenantKnowledgeIngestionService aiTenantKnowledgeIngestionService;
+
     // Builder + Prototype: immutable orchestration input without deep copy overhead.
     private static final class OrchestrationRequest {
         final String appId;
@@ -711,6 +714,50 @@ public class AiLocalOrchestrationService {
         }
     }
 
+    public OrchestrationResult orchestrateResilient(
+        String appId,
+        String message,
+        String currentCode,
+        List<Map<String, Object>> attachments,
+        String contextType,
+        String taskType,
+        String responseMode,
+        String language,
+        String requestId,
+        String pName,
+        Integer pType,
+        AiRetrievalAuthContext retrievalAuthContext
+    ) {
+        if (aiBusinessMemoryVectorService != null) {
+            aiBusinessMemoryVectorService.bindRetrievalAuthContext(retrievalAuthContext);
+        }
+        try {
+            OrchestrationResult out = orchestrateResilient(
+                appId,
+                message,
+                currentCode,
+                attachments,
+                contextType,
+                taskType,
+                responseMode,
+                language,
+                requestId,
+                pName,
+                pType
+            );
+            if (retrievalAuthContext != null && out != null && out.toolStats != null) {
+                out.toolStats.put("retrievalAuthFilterEnabled", retrievalAuthContext.isFilterEnabled());
+                out.toolStats.put("retrievalAuthPrincipalId", retrievalAuthContext.getPrincipalId());
+                out.toolStats.put("retrievalAuthDataScope", retrievalAuthContext.getDataScope());
+            }
+            return out;
+        } finally {
+            if (aiBusinessMemoryVectorService != null) {
+                aiBusinessMemoryVectorService.clearRetrievalAuthContext();
+            }
+        }
+    }
+
     private OrchestrationResult tryOrchestrateWithRecovery(
         String appId,
         String message,
@@ -920,6 +967,19 @@ public class AiLocalOrchestrationService {
         OrchestrationResult out = new OrchestrationResult();
         out.enabled = true;
         out.toolStats.put("requestId", effectiveRequestId);
+
+        if (aiTenantKnowledgeIngestionService != null) {
+            try {
+                AiTenantKnowledgeIngestionService.IngestSummary tenantSummary =
+                    aiTenantKnowledgeIngestionService.ingestTenantKnowledge(appId);
+                out.toolStats.put("tenantKnowledgeIngestStatus", tenantSummary.status());
+                out.toolStats.put("tenantKnowledgeIngestChunks", tenantSummary.chunksIndexed());
+                out.toolStats.put("tenantKnowledgeIngestChars", tenantSummary.charsIndexed());
+            } catch (Exception tenantIngestEx) {
+                out.toolStats.put("tenantKnowledgeIngestStatus", "failed");
+                out.toolStats.put("tenantKnowledgeIngestError", tenantIngestEx.getMessage());
+            }
+        }
 
         int messageChars = safeMessage.length();
         int codeChars = safeCode.length();

@@ -128,6 +128,19 @@ public class AiBusinessMemoryVectorService {
     private int structuralSummaryMaxDependencies;
 
     private final ConcurrentHashMap<String, ReentrantLock> appWriteLocks = new ConcurrentHashMap<>();
+    private final ThreadLocal<AiRetrievalAuthContext> retrievalAuthContextHolder = new ThreadLocal<>();
+
+    public void bindRetrievalAuthContext(AiRetrievalAuthContext authContext) {
+        if (authContext == null) {
+            retrievalAuthContextHolder.remove();
+            return;
+        }
+        retrievalAuthContextHolder.set(authContext);
+    }
+
+    public void clearRetrievalAuthContext() {
+        retrievalAuthContextHolder.remove();
+    }
 
     public record SearchHit(
         String appId,
@@ -411,7 +424,7 @@ public class AiBusinessMemoryVectorService {
                     TopDocs docs = searcher.search(query, vectorFanout);
 
                     for (ScoreDoc sd : docs.scoreDocs) {
-                        SearchHit hit = toSearchHit(searcher, sd, safeAppId, scopeMask);
+                        SearchHit hit = toSearchHit(searcher, sd, safeAppId, scopeMask, currentRetrievalAuth());
                         if (hit == null) {
                             continue;
                         }
@@ -433,7 +446,7 @@ public class AiBusinessMemoryVectorService {
                 if (candidateMap.isEmpty()) {
                     TopDocs latest = searcher.search(scopeFilter == null ? new MatchAllDocsQuery() : scopeFilter, Math.max(candidateCap, 8));
                     for (ScoreDoc sd : latest.scoreDocs) {
-                        SearchHit hit = toSearchHit(searcher, sd, safeAppId, scopeMask);
+                        SearchHit hit = toSearchHit(searcher, sd, safeAppId, scopeMask, currentRetrievalAuth());
                         if (hit == null) {
                             continue;
                         }
@@ -571,7 +584,18 @@ public class AiBusinessMemoryVectorService {
         return out.toString().trim();
     }
 
-    private SearchHit toSearchHit(IndexSearcher searcher, ScoreDoc scoreDoc, String safeAppId, int scopeMask) throws Exception {
+    private AiRetrievalAuthContext currentRetrievalAuth() {
+        AiRetrievalAuthContext ctx = retrievalAuthContextHolder.get();
+        return ctx != null ? ctx : AiRetrievalAuthContext.ANONYMOUS;
+    }
+
+    private SearchHit toSearchHit(
+        IndexSearcher searcher,
+        ScoreDoc scoreDoc,
+        String safeAppId,
+        int scopeMask,
+        AiRetrievalAuthContext authContext
+    ) throws Exception {
         if (searcher == null || scoreDoc == null) {
             return null;
         }
@@ -581,6 +605,10 @@ public class AiBusinessMemoryVectorService {
             return null;
         }
         if (scopeMask > 0 && !matchesScope(d, scopeMask)) {
+            return null;
+        }
+        String tags = String.valueOf(d.get("tags") == null ? "" : d.get("tags"));
+        if (!passesRetrievalAuthFilter(tags, authContext)) {
             return null;
         }
         String sourceName = String.valueOf(d.get("sourceName") == null ? "" : d.get("sourceName")).trim();
@@ -598,6 +626,56 @@ public class AiBusinessMemoryVectorService {
             scoreDoc.score,
             parseLongSafe(d.get("createdAtMs"), 0L)
         );
+    }
+
+    boolean passesRetrievalAuthFilter(String tags, AiRetrievalAuthContext authContext) {
+        AiRetrievalAuthContext auth = authContext == null ? AiRetrievalAuthContext.ANONYMOUS : authContext;
+        if (!auth.isFilterEnabled()) {
+            return true;
+        }
+        if (auth.isCsmAdminOrDev()) {
+            return true;
+        }
+        String normalizedTags = String.valueOf(tags == null ? "" : tags).toLowerCase(Locale.ROOT);
+        if (!normalizedTags.contains("acl:")) {
+            return true;
+        }
+        if (normalizedTags.contains("acl:admin")) {
+            return false;
+        }
+        if (normalizedTags.contains("acl:tenant") && !auth.isAuthenticated()) {
+            return false;
+        }
+        if (auth.hasBranchRestriction() && normalizedTags.contains("branch:")) {
+            String branchTag = extractTagValue(normalizedTags, "branch:");
+            if (!branchTag.isBlank() && !auth.getBranchIds().contains(branchTag)) {
+                return false;
+            }
+        }
+        if (auth.hasDepartmentRestriction() && normalizedTags.contains("dept:")) {
+            String deptTag = extractTagValue(normalizedTags, "dept:");
+            if (!deptTag.isBlank() && !auth.getDeptIds().contains(deptTag)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private String extractTagValue(String tags, String prefix) {
+        int idx = tags.indexOf(prefix);
+        if (idx < 0) {
+            return "";
+        }
+        int start = idx + prefix.length();
+        int end = tags.indexOf(' ', start);
+        if (end < 0) {
+            end = tags.length();
+        }
+        return tags.substring(start, end).trim();
+    }
+
+    private SearchHit toSearchHit(IndexSearcher searcher, ScoreDoc scoreDoc, String safeAppId, int scopeMask) throws Exception {
+        return toSearchHit(searcher, scoreDoc, safeAppId, scopeMask, currentRetrievalAuth());
     }
 
     private String buildHitKey(SearchHit hit) {
