@@ -13,7 +13,9 @@ import net.phanmemmottrieu.service.AiLocalTalkingHeadService;
 import net.phanmemmottrieu.service.AiCharacterExtractService;
 import net.phanmemmottrieu.service.AiCharacterProfileService;
 import net.phanmemmottrieu.service.AiMediaCharacterDirectorRenderService;
+import net.phanmemmottrieu.service.AiMediaMartialCinematicRenderService;
 import net.phanmemmottrieu.service.AiMediaTemplateProRenderService;
+import net.phanmemmottrieu.service.MartialStoryboardTemplates;
 import net.phanmemmottrieu.service.AiMultimodalScannerService;
 import net.phanmemmottrieu.service.AiLocalOrchestrationService;
 import net.phanmemmottrieu.service.AiBusinessMemoryVectorService;
@@ -102,6 +104,9 @@ public class AiLocalOpsController {
 
     @Autowired(required = false)
     private AiMediaTalkingPresenterRenderService aiMediaTalkingPresenterRenderService;
+
+    @Autowired(required = false)
+    private AiMediaMartialCinematicRenderService aiMediaMartialCinematicRenderService;
 
     @Autowired(required = false)
     private AiLocalPiperTtsService aiLocalPiperTtsService;
@@ -205,6 +210,13 @@ public class AiLocalOpsController {
         if (aiLocalTalkingHeadService != null) {
             out.put("talkingHead", aiLocalTalkingHeadService.describeStatus());
         }
+        Map<String, Object> martial = new LinkedHashMap<>();
+        martial.put("enabled", aiMediaMartialCinematicRenderService != null && aiMediaMartialCinematicRenderService.isEnabled());
+        martial.put("engine", "martial_cinematic");
+        martial.put("ready", aiMediaMartialCinematicRenderService != null && aiMediaMartialCinematicRenderService.isEnabled()
+            && bundledFfmpegService != null && bundledFfmpegService.isReady()
+            && aiCharacterExtractService != null && aiCharacterExtractService.isEnabled());
+        out.put("martialCinematic", martial);
         out.put("ready", aiLocalOnlyEnabled && reasoningHealthy && (!multimodalRequireVision || localVisionReady));
 
         return ResponseEntity.ok(out);
@@ -575,6 +587,25 @@ public class AiLocalOpsController {
         return ResponseEntity.ok(out);
     }
 
+    @PostMapping("/plan-martial-storyboard")
+    public ResponseEntity<Map<String, Object>> planMartialStoryboard(@RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> request = body == null ? Collections.emptyMap() : body;
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (aiMediaMartialCinematicRenderService == null || !aiMediaMartialCinematicRenderService.isEnabled()) {
+            out.put("success", false);
+            out.put("errorCode", "MARTIAL_UNAVAILABLE");
+            out.put("message", "Martial cinematic chưa bật");
+            return ResponseEntity.ok(out);
+        }
+        String message = str(request.get("message"));
+        int durationSec = parseIntSafe(request.get("durationSec"), 18);
+        MartialStoryboardTemplates.MartialPlan plan = aiMediaMartialCinematicRenderService.planStoryboard(message, durationSec);
+        out.putAll(plan.toMap());
+        out.put("lane", "martial_storyboard");
+        out.put("hint", "Template 4 cảnh cố định — rooftop neon, dodge, combo, hero. Không cần LLM.");
+        return ResponseEntity.ok(out);
+    }
+
     @PostMapping("/extract-character")
     public ResponseEntity<Map<String, Object>> extractCharacter(@RequestBody(required = false) Map<String, Object> body) {
         Map<String, Object> request = body == null ? Collections.emptyMap() : body;
@@ -648,6 +679,38 @@ public class AiLocalOpsController {
                     out.put("engineUpgradeNote", "template_pro → talking_presenter");
                 }
                 out.put("hint", "S3 Talking Presenter — TTS local + nhân vật nói dialogue từng cảnh (ai-talk-*.mp4)");
+            }
+            return ResponseEntity.ok(out);
+        }
+
+        if ("martial_cinematic".equals(renderEngine) || "martial".equals(renderEngine)) {
+            if (aiMediaMartialCinematicRenderService == null || !aiMediaMartialCinematicRenderService.isEnabled()) {
+                out.put("success", false);
+                out.put("errorCode", "MARTIAL_UNAVAILABLE");
+                out.put("message", "AiMediaMartialCinematicRenderService không khả dụng hoặc chưa bật");
+                return ResponseEntity.ok(out);
+            }
+            if (img.bytes().length == 0) {
+                out.put("success", false);
+                out.put("errorCode", "MISSING_IMAGE");
+                out.put("message", "Thiếu ảnh nhân vật (attachments[0])");
+                return ResponseEntity.ok(out);
+            }
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> scenes = request.get("storyboardScenes") instanceof List<?> list
+                ? (List<Map<String, Object>>) list
+                : null;
+
+            AiMediaMartialCinematicRenderService.MartialResult mr = aiMediaMartialCinematicRenderService.render(
+                new AiMediaMartialCinematicRenderService.MartialRequest(
+                    message, outputMode, appId, durationSec,
+                    img.bytes(), img.mime(), scenes
+                )
+            );
+            out.putAll(mr.toMap());
+            if (mr.success()) {
+                out.put("lane", "media_render");
+                out.put("hint", "Martial cinematic — cutout + rooftop Java2D + FFmpeg motion (ai-martial-*.mp4)");
             }
             return ResponseEntity.ok(out);
         }

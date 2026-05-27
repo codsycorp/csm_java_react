@@ -8067,6 +8067,13 @@ async function testAiLanePlanStoryboard(ctx, { message, durationSec, characterHi
   }, ctx);
 }
 
+async function testAiLanePlanMartialStoryboard(ctx, { message, durationSec }) {
+  return callAiLocalJsonApi("/ai-local/plan-martial-storyboard", {
+    message: message || "",
+    durationSec: durationSec || 18
+  }, ctx);
+}
+
 async function testAiLaneExtractCharacter(ctx, { attachments, appId }) {
   return callAiLocalJsonApi("/ai-local/extract-character", {
     appId: appId || ctx?.app_id || "csm",
@@ -8510,39 +8517,83 @@ function ensureAiLaneTestPanel() {
     "POST",
     "/ai-local/render-media-script",
     ti(
-      "1 HTTP sync — client chờ render xong (TTS+FFmpeg trong JVM) rồi nhận ai-talk-*.mp4. Không sidecar, không poll.",
-      "Single sync HTTP — client waits until render completes, returns ai-talk-*.mp4. No sidecar, no poll.",
-      "单次同步HTTP，等待渲染完成返回 ai-talk-*.mp4。"
+      "1 HTTP sync — renderEngine=talking_presenter (TTS) hoặc martial_cinematic (rooftop võ thuật). FFmpeg trong JVM.",
+      "Single sync HTTP — talking_presenter (TTS) or martial_cinematic (rooftop martial). Bundled FFmpeg.",
+      "单次同步HTTP — talking_presenter 或 martial_cinematic。"
     )
   ));
+  const MARTIAL_PRESET_SCRIPT = ti(
+    "Kịch bản: Video võ thuật cinematic 18 giây — nhân vật từ ảnh user trên nóc nhà neon.\nCảnh 1: Quay lưng, thành phố phía sau.\nCảnh 2: Né đòn slow motion.\nCảnh 3: Combo kick + elbow.\nCảnh 4: Hero shot rim light.\nCaption TikTok: Khi võ thuật gặp neon rooftop 🥋 #vothuat #martialarts #cinematic",
+    "Script: 18s martial cinematic — user photo on neon rooftop.\nScene 1: Back to city.\nScene 2: Dodge slow-mo.\nScene 3: Kick + elbow combo.\nScene 4: Hero rim light.",
+    "18秒武术电影感脚本 — 霓虹屋顶。"
+  );
   const videoScriptField = mkTextarea(
     ti("message (kịch bản)", "message (script)", "message（脚本）"),
     "ai-lane-video-script",
     ti("Kịch bản hiển thị trên ảnh/video...", "Script shown on image/video...", "显示在图片/视频上的脚本..."),
-    draft.videoScript || draft.script || "Kịch bản: Nhân vật giới thiệu căn hộ Vinhomes Central Park, tone chuyên nghiệp, 30 giây.",
+    draft.videoScript || draft.script || MARTIAL_PRESET_SCRIPT,
     4
   );
   const renderGrid = document.createElement("div");
   renderGrid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:8px";
-  const renderEngineField = mkField("renderEngine", "ai-lane-render-engine", "talking_presenter", draft.renderEngine || "talking_presenter");
-  renderEngineField.input.readOnly = true;
-  renderEngineField.input.title = ti(
-    "talking_presenter — TTS + nhân vật nói (S3). Bundled Java — macOS say / espeak / Piper",
-    "talking_presenter — TTS + talking head (S3, bundled Java)",
-    "talking_presenter"
-  );
+  const renderEngineBox = document.createElement("div");
+  renderEngineBox.style.cssText = "display:flex;flex-direction:column;gap:4px";
+  const renderEngineLabel = document.createElement("label");
+  renderEngineLabel.htmlFor = "ai-lane-render-engine";
+  renderEngineLabel.textContent = "renderEngine";
+  renderEngineLabel.style.cssText = `font-size:12px;font-weight:600;color:${theme.text}`;
+  const renderEngineSelect = document.createElement("select");
+  renderEngineSelect.id = "ai-lane-render-engine";
+  renderEngineSelect.style.cssText = `padding:8px;border:1px solid ${theme.border};border-radius:4px;background:${theme.inputBg};color:${theme.text};font-size:12px`;
+  [
+    { v: "martial_cinematic", l: ti("martial_cinematic — võ thuật rooftop", "martial_cinematic — rooftop martial", "martial_cinematic") },
+    { v: "talking_presenter", l: ti("talking_presenter — TTS nói", "talking_presenter — TTS speech", "talking_presenter") }
+  ].forEach((opt) => {
+    const o = document.createElement("option");
+    o.value = opt.v;
+    o.textContent = opt.l;
+    renderEngineSelect.appendChild(o);
+  });
+  renderEngineSelect.value = draft.renderEngine === "talking_presenter" ? "talking_presenter" : "martial_cinematic";
+  renderEngineBox.append(renderEngineLabel, renderEngineSelect);
+  const renderEngineField = { box: renderEngineBox, input: renderEngineSelect };
   const engineNote = document.createElement("div");
-  engineNote.style.cssText = `font-size:11px;color:${theme.textSecondary};margin-top:-4px`;
-  engineNote.textContent = ti(
-    "Engine: talking_presenter → ai-talk-*.mp4 có tiếng. TTS + FFmpeg chạy trong backend — không cần sidecar.",
-    "Engine: talking_presenter → ai-talk-*.mp4 with speech (bundled Java)",
-    "内置 Java TTS+FFmpeg"
-  );
+  engineNote.id = "ai-lane-engine-note";
+  engineNote.style.cssText = `font-size:11px;color:${theme.textSecondary};margin-top:-4px;grid-column:1/-1`;
+  const updateEngineNote = () => {
+    const eng = renderEngineSelect.value;
+    if (eng === "martial_cinematic") {
+      engineNote.textContent = ti(
+        "martial_cinematic → ai-martial-*.mp4 · cutout + Java2D rooftop + FFmpeg motion. Cần ảnh chân dung.",
+        "martial_cinematic → ai-martial-*.mp4 · cutout + compositing + FFmpeg",
+        "martial_cinematic 本地合成"
+      );
+      renderRunBtn.textContent = ti("▶ Render Martial Cinematic", "▶ Render Martial Cinematic", "▶ 武术渲染");
+      durationField.input.value = String(Math.max(15, Number(durationField.input.value) || 18));
+    } else {
+      engineNote.textContent = ti(
+        "talking_presenter → ai-talk-*.mp4 có tiếng TTS. FFmpeg + TTS trong backend.",
+        "talking_presenter → ai-talk-*.mp4 with TTS speech",
+        "talking_presenter TTS"
+      );
+      renderRunBtn.textContent = ti("▶ Render Talking Presenter", "▶ Render Talking Presenter", "▶ S3渲染");
+    }
+  };
+  renderEngineSelect.addEventListener("change", () => { updateEngineNote(); saveDraft(); });
   const outputModeField = mkField("outputMode", "ai-lane-output-mode", "both", draft.outputMode || "both");
-  const durationField = mkField("durationSec", "ai-lane-duration", "15", String(draft.durationSec || 15), "number");
+  const durationField = mkField("durationSec", "ai-lane-duration", "18", String(draft.durationSec || 18), "number");
   renderGrid.append(renderEngineField.box, outputModeField.box, durationField.box);
   renderGrid.appendChild(engineNote);
   let cachedStoryboardScenes = null;
+  const fillMartialPresetBtn = mkBtn(ti("🥋 Preset võ thuật", "🥋 Martial preset", "🥋 武术预设"), "#531dab");
+  fillMartialPresetBtn.onclick = () => {
+    videoScriptField.input.value = MARTIAL_PRESET_SCRIPT;
+    renderEngineSelect.value = "martial_cinematic";
+    durationField.input.value = "18";
+    updateEngineNote();
+    saveDraft();
+    aiLaneTesterNotify(ti("✅ Đã điền preset võ thuật cinematic", "✅ Martial preset filled", "✅ 武术预设"), "success");
+  };
   const planStoryboardBtn = mkBtn(ti("📋 Plan storyboard", "📋 Plan storyboard", "📋 分镜"), "#722ed1");
   const extractCharBtn = mkBtn(ti("✂️ Extract nhân vật", "✂️ Extract character", "✂️ 抠图"), "#13c2c2");
   const storyboardResult = mkResultBox("ai-lane-storyboard-result", ti("Storyboard JSON", "Storyboard JSON", "分镜JSON"));
@@ -8556,11 +8607,12 @@ function ensureAiLaneTestPanel() {
   videoUseScanImageCb.type = "checkbox";
   videoUseScanImageCb.checked = true;
   videoUseScanImage.append(videoUseScanImageCb, document.createTextNode(ti("Dùng ảnh nhân vật từ tab Scan", "Use character image from Scan tab", "使用Scan页角色图")));
-  const renderRunBtn = mkBtn(ti("▶ Render Talking Presenter", "▶ Render Talking Presenter", "▶ S3渲染"), "#fa8c16");
+  const renderRunBtn = mkBtn(ti("▶ Render Martial Cinematic", "▶ Render Martial Cinematic", "▶ 武术渲染"), "#fa8c16");
+  updateEngineNote();
   const sseDebugBtn = mkBtn(ti("🔧 SSE debug (ComfyUI)", "🔧 SSE debug (ComfyUI)", "🔧 SSE调试"), "#595959");
   const renderActionRow = document.createElement("div");
   renderActionRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;margin-top:8px";
-  renderActionRow.append(planStoryboardBtn, extractCharBtn, renderRunBtn, sseDebugBtn);
+  renderActionRow.append(fillMartialPresetBtn, planStoryboardBtn, extractCharBtn, renderRunBtn, sseDebugBtn);
   const mediaPreview = document.createElement("div");
   mediaPreview.id = "ai-lane-media-preview";
   mediaPreview.style.cssText = `margin-top:12px;padding:12px;border:1px solid ${theme.border};border-radius:8px;background:${theme.inputBg};display:none`;
@@ -8741,12 +8793,14 @@ function ensureAiLaneTestPanel() {
     const rembgOk = Boolean(health?.characterExtract?.ready);
     const ttsOk = Boolean(health?.tts?.ready);
     const talkOk = Boolean(health?.talkingHead?.ready);
+    const martialOk = Boolean(health?.martialCinematic?.ready);
     const readyOk = Boolean(health?.ready);
     healthBar.append(
       renderAiLaneBadge(theme, reasoningOk, "Reasoning", reasoningOk ? "healthy" : "down"),
       renderAiLaneBadge(theme, visionOk, "Vision", visionOk ? "ready" : "off"),
       renderAiLaneBadge(theme, ffmpegOk, "FFmpeg", ffmpegOk ? "bundled" : "down"),
       renderAiLaneBadge(theme, rembgOk, "Rembg", rembgOk ? "bundled" : "down"),
+      renderAiLaneBadge(theme, martialOk, "Martial", martialOk ? "ready" : "off"),
       renderAiLaneBadge(theme, ttsOk, "TTS", ttsOk ? "ready" : "down"),
       renderAiLaneBadge(theme, talkOk, "Talk", talkOk ? "ready" : "down"),
       renderAiLaneBadge(theme, readyOk, "Ready", readyOk ? "yes" : "no"),
@@ -8912,7 +8966,14 @@ function ensureAiLaneTestPanel() {
     mediaPreview.style.display = "block";
     mediaPreviewLinks.innerHTML = "";
     const engine = result?.renderEngine || "talking_presenter";
-    mediaPreviewLinks.innerHTML += `<div style="opacity:.85;font-size:11px;margin-bottom:6px">Engine: <strong>${engine}</strong>${engine === "talking_presenter" ? " — nhân vật nói TTS từng cảnh (ai-talk-*)" : engine === "character_director" ? " — cutout animate" : ""}</div>`;
+    const engineHint = engine === "martial_cinematic"
+      ? " — rooftop neon võ thuật (ai-martial-*)"
+      : engine === "talking_presenter"
+        ? " — nhân vật nói TTS từng cảnh (ai-talk-*)"
+        : engine === "character_director"
+          ? " — cutout animate"
+          : "";
+    mediaPreviewLinks.innerHTML += `<div style="opacity:.85;font-size:11px;margin-bottom:6px">Engine: <strong>${engine}</strong>${engineHint}</div>`;
     const sceneUrls = Array.isArray(result?.sceneImageUrls) ? result.sceneImageUrls : [];
     if (sceneUrls.length) {
       mediaPreviewLinks.innerHTML += `<div style="margin-bottom:8px;font-size:11px">🎞 ${sceneUrls.length} scene(s):</div>`;
@@ -8961,25 +9022,27 @@ function ensureAiLaneTestPanel() {
     try {
       const ctx = resolveContext();
       const attachments = await buildAttachmentsFromFile();
-      const body = {
-        message,
-        durationSec: Number(durationField.input.value) || 15,
-        characterHint: ti("Nhân vật từ ảnh user", "Character from user photo", "用户照片角色"),
-        attachments
-      };
-      appendAiLaneTesterLog(logArea, "POST /ai-local/plan-media-storyboard", {
+      const isMartial = renderEngineSelect.value === "martial_cinematic";
+      const body = isMartial
+        ? { message, durationSec: Number(durationField.input.value) || 18 }
+        : {
+          message,
+          durationSec: Number(durationField.input.value) || 15,
+          characterHint: ti("Nhân vật từ ảnh user", "Character from user photo", "用户照片角色"),
+          attachments
+        };
+      const endpoint = isMartial ? "/ai-local/plan-martial-storyboard" : "/ai-local/plan-media-storyboard";
+      appendAiLaneTesterLog(logArea, `POST ${endpoint}`, {
         ...body,
         attachments: attachments.map((a) => ({ ...a, base64Data: `[${a.base64Data?.length || 0} chars]` }))
       });
-      const result = await testAiLanePlanStoryboard(ctx, body);
+      const result = isMartial
+        ? await testAiLanePlanMartialStoryboard(ctx, body)
+        : await testAiLanePlanStoryboard(ctx, body);
       appendAiLaneTesterLog(logArea, "Storyboard plan", result);
       if (!result?.success) throw new Error(result?.message || "Plan storyboard thất bại");
       cachedStoryboardScenes = result?.scenes || result?.storyboardScenes || null;
-      if (result?.characterProfile) {
-        storyboardResult.body.innerHTML = `<pre style="white-space:pre-wrap;margin:0;font-size:11px">${JSON.stringify({ characterProfile: result.characterProfile, plan: result }, null, 2)}</pre>`;
-      } else {
-        storyboardResult.body.innerHTML = `<pre style="white-space:pre-wrap;margin:0;font-size:11px">${JSON.stringify(result, null, 2)}</pre>`;
-      }
+      storyboardResult.body.innerHTML = `<pre style="white-space:pre-wrap;margin:0;font-size:11px">${JSON.stringify(result, null, 2)}</pre>`;
       storyboardResult.show();
       aiLaneTesterNotify(ti(`✅ Storyboard ${cachedStoryboardScenes?.length || 0} cảnh`, `✅ Storyboard ${cachedStoryboardScenes?.length || 0} scenes`, `✅ 分镜 ${cachedStoryboardScenes?.length || 0} 场景`), "success");
     } catch (e) {
@@ -9038,21 +9101,27 @@ function ensureAiLaneTestPanel() {
     try {
       const ctx = resolveContext();
       let attachments = [];
-      if (videoUseScanImageCb.checked) {
+      const isMartial = renderEngineSelect.value === "martial_cinematic";
+      if (videoUseScanImageCb.checked || isMartial) {
         attachments = await buildAttachmentsFromFile();
         if (!attachments.length) {
-          throw new Error(ti("Chọn ảnh nhân vật (tab Scan) — ảnh được lưu draft sau khi chọn", "Select character image (Scan tab) — saved to draft after pick", "请选择角色图"));
+          throw new Error(ti("Chọn ảnh nhân vật (tab Scan) — martial cần ảnh chân dung", "Select character image (Scan tab) — martial requires portrait", "请选择角色图"));
         }
       }
       const messageForPlan = message;
       if (!cachedStoryboardScenes || !cachedStoryboardScenes.length) {
-        appendAiLaneTesterLog(logArea, ti("Auto plan storyboard trước render", "Auto plan storyboard before render", "渲染前自动分镜"), { message: messageForPlan });
-        const planResult = await testAiLanePlanStoryboard(ctx, {
-          message: messageForPlan,
-          durationSec: Number(durationField.input.value) || 15,
-          characterHint: ti("Nhân vật từ ảnh user", "Character from user photo", "用户照片角色"),
-          attachments
-        });
+        appendAiLaneTesterLog(logArea, ti("Auto plan storyboard trước render", "Auto plan storyboard before render", "渲染前自动分镜"), { message: messageForPlan, engine: renderEngineSelect.value });
+        const planResult = isMartial
+          ? await testAiLanePlanMartialStoryboard(ctx, {
+            message: messageForPlan,
+            durationSec: Number(durationField.input.value) || 18
+          })
+          : await testAiLanePlanStoryboard(ctx, {
+            message: messageForPlan,
+            durationSec: Number(durationField.input.value) || 15,
+            characterHint: ti("Nhân vật từ ảnh user", "Character from user photo", "用户照片角色"),
+            attachments
+          });
         if (!planResult?.success) {
           throw new Error(planResult?.message || ti("Plan storyboard thất bại", "Storyboard plan failed", "分镜失败"));
         }
@@ -9062,9 +9131,9 @@ function ensureAiLaneTestPanel() {
       const body = {
         message,
         outputMode: outputModeField.input.value.trim() || "both",
-        durationSec: Number(durationField.input.value) || 15,
+        durationSec: Number(durationField.input.value) || (isMartial ? 18 : 15),
         appId: ctx.app_id || "csm",
-        renderEngine: renderEngineField.input.value.trim() || "talking_presenter",
+        renderEngine: renderEngineSelect.value.trim() || "martial_cinematic",
         storyboardScenes: cachedStoryboardScenes || undefined,
         attachments
       };
@@ -9082,7 +9151,9 @@ function ensureAiLaneTestPanel() {
           "warning"
         );
       }
-      if (String(result?.videoUrl || "").includes("ai-talk-")) {
+      if (String(result?.videoUrl || "").includes("ai-martial-")) {
+        aiLaneTesterNotify(ti("✅ Martial cinematic — ai-martial-*.mp4", "✅ Martial cinematic rendered", "✅ 武术视频完成"), "success");
+      } else if (String(result?.videoUrl || "").includes("ai-talk-")) {
         aiLaneTesterNotify(ti("✅ S3 Talking Presenter — video có thoại TTS", "✅ S3 with TTS speech", "✅ S3完成"), "success");
       }
       showMediaPreview(result);

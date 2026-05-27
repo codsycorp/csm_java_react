@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -274,6 +275,117 @@ public class BundledFfmpegService {
         if (result.exitCode() != 0 || !Files.isRegularFile(wavPath) || Files.size(wavPath) <= 0) {
             throw new IllegalStateException("convertToWav failed: " + summarizeFfmpegError(result.output()));
         }
+    }
+
+    /**
+     * Martial cinematic — một composite PNG + motion preset (dolly, dodge shake, hero rim).
+     */
+    public void martialSceneToMp4(Path compositePath, Path videoPath, int durationSec, String motionPreset) throws Exception {
+        Files.createDirectories(videoPath.getParent());
+        Files.deleteIfExists(videoPath);
+        int dur = Math.max(1, durationSec);
+        int frames = dur * 30;
+        String preset = String.valueOf(motionPreset == null ? "" : motionPreset).toLowerCase();
+        String zoompan = buildMartialZoompan(preset, frames);
+        List<String> args = List.of(
+            "-y",
+            "-loop", "1",
+            "-i", compositePath.toAbsolutePath().toString(),
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920," + zoompan,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-t", String.valueOf(dur),
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            videoPath.toAbsolutePath().toString()
+        );
+        FfmpegResult result = run(args, DEFAULT_TIMEOUT_SEC);
+        if (result.exitCode() != 0 || !Files.isRegularFile(videoPath) || Files.size(videoPath) <= 0) {
+            throw new IllegalStateException("martialSceneToMp4 failed: " + summarizeFfmpegError(result.output()));
+        }
+        log.info("martialSceneToMp4 ok preset={} video={}", preset, videoPath.getFileName());
+    }
+
+    /** Martial combo — chuỗi frame PNG → clip MP4. */
+    public void martialPoseSequenceToMp4(List<Path> framePaths, Path videoPath, int durationSec) throws Exception {
+        if (framePaths == null || framePaths.isEmpty()) {
+            throw new IllegalArgumentException("Không có frame cho pose sequence");
+        }
+        Files.createDirectories(videoPath.getParent());
+        Files.deleteIfExists(videoPath);
+        int dur = Math.max(1, durationSec);
+        double fps = Math.max(1.0, framePaths.size() / (double) dur);
+        Path listFile = Files.createTempFile("martial-frames-", ".txt");
+        try {
+            StringBuilder sb = new StringBuilder();
+            for (Path frame : framePaths) {
+                sb.append("file '").append(frame.toAbsolutePath()).append("'\n");
+                sb.append("duration ").append(String.format(Locale.ROOT, "%.3f", 1.0 / fps)).append("\n");
+            }
+            sb.append("file '").append(framePaths.get(framePaths.size() - 1).toAbsolutePath()).append("'\n");
+            Files.writeString(listFile, sb.toString());
+
+            List<String> args = List.of(
+                "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", listFile.toAbsolutePath().toString(),
+                "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-t", String.valueOf(dur),
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                videoPath.toAbsolutePath().toString()
+            );
+            FfmpegResult result = run(args, DEFAULT_TIMEOUT_SEC);
+            if (result.exitCode() != 0 || !Files.isRegularFile(videoPath) || Files.size(videoPath) <= 0) {
+                Path first = framePaths.get(0);
+                imageKenBurnsToMp4(first, videoPath, dur);
+            }
+        } finally {
+            Files.deleteIfExists(listFile);
+        }
+        log.info("martialPoseSequenceToMp4 ok frames={} video={}", framePaths.size(), videoPath.getFileName());
+    }
+
+    /** Color grade cinematic sau khi concat các scene. */
+    public void applyCinematicGrade(Path inputPath, Path outputPath) throws Exception {
+        Files.createDirectories(outputPath.getParent());
+        Files.deleteIfExists(outputPath);
+        String vf = "eq=contrast=1.08:brightness=-0.03:saturation=1.12,"
+            + "colorbalance=rs=-0.04:gs=0.02:bs=0.06,"
+            + "vignette=PI/5";
+        List<String> args = List.of(
+            "-y",
+            "-i", inputPath.toAbsolutePath().toString(),
+            "-vf", vf,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-c:a", "copy",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            outputPath.toAbsolutePath().toString()
+        );
+        FfmpegResult result = run(args, DEFAULT_TIMEOUT_SEC);
+        if (result.exitCode() != 0 || !Files.isRegularFile(outputPath) || Files.size(outputPath) <= 0) {
+            Files.copy(inputPath, outputPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static String buildMartialZoompan(String preset, int frames) {
+        if (preset.contains("dodge")) {
+            return "zoompan=z='1.06+0.025*sin(2*PI*on/45)':"
+                + "x='iw/2-(iw/zoom/2)+28*sin(12*PI*on/" + frames + ")':"
+                + "y='ih/2-(ih/zoom/2)+8*sin(2*PI*on/30)':d=" + frames + ":s=1080x1920:fps=30";
+        }
+        if (preset.contains("hero")) {
+            return "zoompan=z='min(zoom+0.0006,1.14)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)-on*0.15':d="
+                + frames + ":s=1080x1920:fps=30";
+        }
+        // dolly_up default — hero reveal
+        return "zoompan=z='min(zoom+0.0009,1.12)':x='iw/2-(iw/zoom/2)':y='max(ih/2-(ih/zoom/2)-on*0.25,0)':d="
+            + frames + ":s=1080x1920:fps=30";
     }
 
     /** Ghép nhiều clip MP4 cùng codec (scene clips). */
