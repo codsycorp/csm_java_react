@@ -1,1 +1,0 @@
-import{u as t,O as s,j as o,bx as a,B as e}from"./ui-core.BqmAgYBd.js";function r(){const{t:r}=t(),i=s();return o.jsx(a,{status:"500",title:"500",subTitle:r("common.500SubTitle"),extra:o.jsx(e,{type:"primary",onClick:()=>{i("/")},children:r("common.backHome")})})}export{r as default};

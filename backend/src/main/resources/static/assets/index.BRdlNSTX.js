@@ -1,1 +1,0 @@
-import{j as r}from"./index.GLCnxDGq.js";import"./vendor-antd.Cc6gAqJ2.js";import{B as t}from"./index.DabIbVx9.js";import"./vendor-react.Cfs_Iq82.js";function e(){return r.jsx(t,{children:"Settings"})}export{e as default};

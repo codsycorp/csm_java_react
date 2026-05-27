@@ -75,6 +75,19 @@ backend/csm_datas/ai_local/model/*.gguf*
 backend/csm_datas/ai_local/ai_local_assistant_index/
 backend/csm_datas/ai_local/ai_business_memory/
 
+# Do not bundle frontend build / secrets in classpath resources (use backend/csm_datas/public/ + frontend/dist)
+backend/src/main/resources/public/
+backend/src/main/resources/static/assets/
+backend/src/main/resources/static/src/
+backend/src/main/resources/static/index.html
+backend/src/main/resources/static/Logo.png
+backend/src/main/resources/static/logo192.png
+backend/src/main/resources/static/logo512.png
+backend/src/main/resources/static/favicon.ico
+backend/src/main/resources/static/icon.*
+backend/src/main/resources/csm_datas/
+backend/src/main/resources/secrets/
+
 # Lock files (optional - uncomment if you want to ignore them)
 # pnpm-lock.yaml
 # package-lock.json

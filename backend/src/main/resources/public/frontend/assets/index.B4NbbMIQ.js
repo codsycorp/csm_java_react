@@ -1,1 +1,0 @@
-import{j as i}from"./ui-core.BqmAgYBd.js";import e from"./CodeEditor.CehBiTPF.js";import"./index.DVv5eHZw.js";function o(){return i.jsx("div",{style:{height:"100%",display:"flex",flexDirection:"column"},children:i.jsx(e,{})})}export{o as default};
