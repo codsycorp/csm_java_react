@@ -7244,6 +7244,25 @@ export default function AiAssistantChat({
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 							}
+							else if (evt.stage === "agent_harness_trace") {
+								const harness = (evt as any).agentHarness as Record<string, unknown> | undefined;
+								const summary = String(harness?.summaryVi || localizedEvtMessage || "").trim();
+								if (summary) {
+									appendComposerActivity({
+										kind: "route",
+										icon: "🧭",
+										label: summary,
+										status: "done",
+									});
+								}
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
+									appendStageEvent({
+										...evtForTimeline,
+										stage: "agent_harness_trace",
+										message: summary || uiText("Agent harness trace", "Agent harness trace", "Agent harness 追踪"),
+									});
+								}
+							}
 							else if (evt.stage === "tool_trace") {
 								const toolName = String((evt as any).toolName || "").trim() || "tool";
 								const toolLane = toolName.toLowerCase().replace(/[^a-z0-9_]+/g, "_");

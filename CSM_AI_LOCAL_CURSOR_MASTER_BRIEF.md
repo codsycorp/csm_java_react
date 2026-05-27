@@ -1,9 +1,19 @@
 # CSM AI LOCAL — MASTER BRIEF CHO CURSOR AI
 ## Một file duy nhất để yêu cầu Cursor làm lại / hoàn thiện hệ thống
 
-Version: **3.3** · 2026-05-26  
+Version: **3.4** · 2026-05-26  
 Repo: `csm_server`  
 **Single source of truth** — dùng file này khi yêu cầu Cursor implement / làm lại CSM AI Local **và** domain System Management liên quan RAG.
+
+### Changelog v3.4
+
+| Mục | Trạng thái |
+|-----|------------|
+| **PHẦN Z — Agent Harness (R/M/C/S/O/G)** — map kiến trúc 6 thành phần + 3 bottleneck | ✅ |
+| `AiAgentHarnessTraceService` — telemetry M/C/S/G mỗi request | ✅ |
+| SSE `agent_harness_trace` + completion `agentHarness` | ✅ |
+| Composer hiển thị dòng 🧭 summary (context · memory trust · skill · governance) | ✅ |
+| Lifecycle webview patch: add/insert đúng, SSE bottom-up, summary tiếng Việt | ✅ (v3.3 commit) |
 
 ### Changelog v3.3
 
@@ -253,6 +263,7 @@ Cursor AI **phải** đảm bảo các lỗi sau không còn:
 ┌────────────────────────────▼────────────────────────────────────┐
 │ Gates → SSE → Frontend                                          │
 │ analyze: streaming chunks | edit: text_edit_apply                 │
+│ agent_harness_trace: M/C/S/O/G summary (PHẦN Z)                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -469,6 +480,7 @@ File apply: `CodeMirrorWithAiAssistant.tsx` → `handleApplyLineEdit` → `view.
 | `backend/src/main/java/net/phanmemmottrieu/controller/ApiSpringController.java` | SSE, classify, prompt, gates, fallback | Routing, region plan, focused-first, failure messages, clamp; **`resolveRetrievalAuthContext()` → orchestrateResilient(..., authContext)** |
 | `backend/src/main/java/net/phanmemmottrieu/service/AiScopedContextIngestionService.java` | Async ingest currentCode/menu → Lucene | `ingestLargeCodeAsync`, `buildEditorIngestKey` |
 | `backend/src/main/java/net/phanmemmottrieu/service/AiLocalOrchestrationService.java` | RAG, agentic | Lifecycle symbol prepend; large code → async ingest; **`ingestTenantKnowledge` + auth bind** |
+| `backend/src/main/java/net/phanmemmottrieu/service/AiAgentHarnessTraceService.java` | Agent harness telemetry | Map R/M/C/S/O/G + 3 bottlenecks → SSE `agent_harness_trace` — **PHẦN Z** |
 | `backend/src/main/java/net/phanmemmottrieu/service/AiAssistantGatewayService.java` | Minimal prompt, validate | Slot budget, contracts, language block |
 | `backend/src/main/java/net/phanmemmottrieu/service/AiBusinessMemoryVectorService.java` | Lucene KNN RAG | topK/maxChars; `bindRetrievalAuthContext`; `passesRetrievalAuthFilter` |
 | `backend/src/main/java/net/phanmemmottrieu/service/AiTenantKnowledgeIngestionService.java` | **Mới** — tenant org snapshot + domain rules | `ingestTenantKnowledge(appId)`; tags `acl:tenant`, `knowledge:org` |
@@ -3305,5 +3317,146 @@ ai.local.llama.max-prompt-chars-hard-cap=1000000
 
 ---
 
-**Hết master brief v3.3.**  
+# PHẦN Z — AGENT HARNESS (6 THÀNH PHẦN + 3 BOTTLENECK)
+
+> **Mục tiêu:** CSM AI Local không chỉ “chạy được” mà phải **truy vết được** theo mô hình agent harness chuyên nghiệp: Memory → Context → Reasoning → Skills → Orchestration → Governance → Environment.
+
+## Z.1 Sáu thành phần (R/M/C/S/O/G) — map sang CSM
+
+| Thành phần | Vai trò harness | Implementation CSM | File chính |
+|------------|-----------------|-------------------|------------|
+| **R — Reasoning** | Foundation model | `LlamaCppNativeService` + `AiAssistantGatewayService.buildLocalMinimalPrompt` | Gateway, JNI |
+| **M — Memory** | Lưu tri thức bền, truy hồi có tin cậy | Lucene KNN `AiBusinessMemoryVectorService`, menu learning, knowledge pack | PHẦN R |
+| **C — Context** | Dựng input mỗi turn (chọn lọc, không nhồi hết) | Region plan, Edit Task Planner slice, focused context, prompt budget | `ApiSpringController`, `AiEditTaskPlannerService` |
+| **S — Skills** | Router tool/subagent, dispatch + verify | Deterministic lifecycle, multi-slice, symbol micro, analyze fast path | `tryLocalLargeCodeEditPipeline` |
+| **O — Orchestration** | Vòng điều khiển | `AiLocalOrchestrationService.orchestrateResilient`, intent classifier, workflow advisor | Orchestration service |
+| **G — Governance** | Verify + permission + audit + rollback | AST gate, final output gate, semantic sandbox, header zone protect, undo snapshot UI | `ApiSpringController` gates |
+
+```mermaid
+flowchart LR
+    M[Memory Lucene/RAG] --> C[Context Constructor]
+    C --> R[Reasoning 1.5B local]
+    R --> S[Skill Router]
+    S --> T[Tools: lifecycle patch / textEdits / analyze]
+    T --> G[Governance verify]
+    G --> E[Environment: CodeMirror currentCode]
+    G --> M
+```
+
+## Z.2 Ba bottleneck hệ thống — trạng thái CSM
+
+| Bottleneck | Không phải… | Mà là… | CSM đã có | Còn thiếu / roadmap |
+|------------|-------------|--------|-----------|---------------------|
+| **Context Governance** | Dung lượng | Chọn lọc + truy vết | Region plan, planner slice, `promptOriginal→Final`, `RequestContextTracer` | UI drill-down từng vùng đã chọn (Composer ⏳) |
+| **Trustworthy Memory** | Lưu trữ | Tin cậy khi truy hồi | ACL filter, `AiRetrievalPolicyEngine`, trust score trong harness | BM25 hybrid + citation line (Phase 3) |
+| **Skill Routing** | Có tool | Dispatch đúng + verify | Pipeline lifecycle → micro → multi-slice; harness `dispatchedSkill` | Auto-retry skill khác khi verify fail (⏳) |
+
+## Z.3 Agent Harness Trace (telemetry)
+
+Mỗi request `ai-code-stream` khi hoàn tất emit:
+
+**SSE:** `stage=agent_harness_trace`  
+**Completion:** `agentHarness` object
+
+```json
+{
+  "version": "1",
+  "requestId": "job_…",
+  "bottlenecks": {
+    "contextGovernance": {
+      "selectedPromptChars": 12000,
+      "editorChars": 371408,
+      "compressionRatio": 0.032,
+      "regionPlanApplied": true,
+      "traceRequestId": "job_…"
+    },
+    "trustworthyMemory": {
+      "scopedRagChars": 2400,
+      "trustScore": 78,
+      "trusted": true,
+      "retrievalPolicyId": "symbol_focused"
+    },
+    "skillRouting": {
+      "dispatchedSkill": "deterministic_lifecycle_webview",
+      "verified": true,
+      "appliedTextEdits": 3
+    }
+  },
+  "harness": {
+    "memory": { "status": "trusted", "detail": "…" },
+    "context": { "status": "compacted", "detail": "371408 → 12000 prompt chars" },
+    "reasoning": { "status": "local", "model": "local_provider" },
+    "skills": { "status": "verified", "skill": "deterministic_lifecycle_webview" },
+    "orchestration": { "status": "active", "planSteps": 2 },
+    "governance": { "status": "passed", "reasonCode": "code_validated_meta" }
+  },
+  "summaryVi": "Ngữ cảnh: 12000/371408 ký tự · Memory trust 78% · Skill: deterministic_lifecycle_webview · Governance: đạt"
+}
+```
+
+**Service:** `AiAgentHarnessTraceService.java`  
+**Frontend:** Composer activity 🧭 hiển thị `summaryVi` trong panel **Đã khám phá**.
+
+## Z.4 Skill dispatch matrix (edit code lớn)
+
+| Thứ tự | Skill | Khi nào | Verify |
+|--------|-------|---------|--------|
+| 1 | `deterministic_lifecycle_webview` | Yêu cầu lifecycle + có `fnRemoveTab` | AST gate + SSE apply + governance |
+| 2 | `symbol_micro_edit` | Lifecycle nhưng deterministic skip | Per-symbol LLM ≤3 edits |
+| 3 | `multi_slice_edit` | Edit Task Planner có plan | Merge + incremental AST |
+| 4 | `focused_large_code_edit` | Fallback 1.5B | Relaxed verifier large file |
+| 5 | `code_text_edits` | Edit thường | Standard gate |
+
+**Quy tắc:** Weak 1.5B **không** được sửa header DynamicCode (L&lt;100) — governance `filterHeaderZoneDestructiveEdits`.
+
+## Z.5 Governance loop (bắt buộc trước Environment)
+
+```txt
+Model output
+  → parse textEdits / prose
+  → validateDeterministicLineTextEdits (dry-run)
+  → AST gate (paren/brace balanced)
+  → runtime rules (DynamicCode: no bare require in user zone)
+  → semantic sandbox (risk score)
+  → final output gate
+  → SSE text_edit_apply (bottom-up line order for add/insert)
+  → CodeMirror Environment
+  → completion agentHarness + assistantChatSummary (tiếng Việt)
+```
+
+Rollback: frontend `undoSnapshotRef` + không rollback khi gate fail **không** phá syntax (chỉ AST/unbalanced).
+
+## Z.6 Checklist đánh giá “tạm ổn” vs harness
+
+| # | Câu hỏi | Pass nếu |
+|---|---------|----------|
+| 1 | Context có được **chọn lọc** không nhồi 371k vào model? | `compressionRatio` &lt; 0.2 trên file lớn |
+| 2 | Memory recall có **trust score** ≥ 55 hoặc không dùng RAG? | `trustworthyMemory.trusted=true` |
+| 3 | Skill có **dispatch đúng** lifecycle khi user hỏi webview/proxy? | `dispatchedSkill=deterministic_lifecycle_*` |
+| 4 | Governance **chặn** patch header/syntax hỏng? | Gate reject + không apply |
+| 5 | User hiểu AI đã làm gì? | `assistantChatSummary` / harness `summaryVi` |
+| 6 | CodeMirror nhận patch **đúng vùng**? | add=insert-before, navigate L fnRemoveTab |
+
+## Z.7 Roadmap harness (không block hiện tại)
+
+| Phase | Mục tiêu |
+|-------|----------|
+| Z.7.1 | Composer panel mở rộng 6 harness cards (M/C/R/S/O/G) |
+| Z.7.2 | Memory trust dưới ngưỡng → tự thu RAG, chỉ dùng planner slice |
+| Z.7.3 | Skill auto-fallback chain khi `skillRouting.verified=false` |
+| Z.7.4 | Ghi harness trace vào `ai_telemetry` dashboard |
+
+## Z.8 File liên quan
+
+| File | Vai trò |
+|------|---------|
+| `AiAgentHarnessTraceService.java` | Build harness JSON |
+| `ApiSpringController.java` | Emit `agent_harness_trace`, lifecycle pipeline |
+| `RequestContextTracer.java` | Phase timing (orchestration, ingest, intent) |
+| `AiAssistantChat.tsx` | Composer 🧭 summary |
+| `AiLocalOrchestrationService.java` | O-loop + RAG tool stats |
+
+---
+
+**Hết master brief v3.4.**  
 Chỉ dùng file này khi yêu cầu Cursor AI implement / làm lại CSM AI Local hoặc domain System Management liên quan RAG.

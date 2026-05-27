@@ -48,6 +48,7 @@ import net.phanmemmottrieu.service.WebScraperService;
 import net.phanmemmottrieu.service.GoogleIndexService;
 import net.phanmemmottrieu.service.GoogleIndexQueueService;
 import net.phanmemmottrieu.service.ChatPersistenceService;
+import net.phanmemmottrieu.service.AiAgentHarnessTraceService;
 import net.phanmemmottrieu.service.AiAssistantGatewayService;
 import net.phanmemmottrieu.service.AiMenuMergeService;
 import net.phanmemmottrieu.service.AiAssistantMemoryManagerService;
@@ -525,6 +526,9 @@ public class ApiSpringController {
 
     @Autowired(required = false)
     private AiEditTaskPlannerService aiEditTaskPlannerService;
+
+    @Autowired(required = false)
+    private AiAgentHarnessTraceService aiAgentHarnessTraceService;
 
     @Value("${ai.edit.task-planner.multi-slice-execution.enabled:true}")
     private boolean aiEditTaskPlannerMultiSliceExecutionEnabled;
@@ -1982,6 +1986,7 @@ public class ApiSpringController {
                 String editFocusedEarlyProviderText = "";
                 boolean pipelineDeterministicLifecycle = false;
                 int pipelineDeterministicTextEdits = 0;
+                boolean largeCodeRegionPlanApplied = false;
                 boolean skipHeavyOrchestrationForLargeCodeEdit = largeCodeEditRequest;
                 boolean largeLocalOnlyCodeEdit = largeCodeEditRequest
                     && effectiveCodeContext.length() > 45000
@@ -2023,6 +2028,7 @@ public class ApiSpringController {
                         contextWindowLines,
                         regionCap);
                     if (regionPlan.applied() && regionPlan.condensedChars() < promptCodeContext.length()) {
+                        largeCodeRegionPlanApplied = true;
                         int before = promptCodeContext.length();
                         promptCodeContext = regionPlan.condensedContext();
                         sendEvent(emitter, jsonOf(
@@ -3022,6 +3028,9 @@ public class ApiSpringController {
                 }
 
                 Map<String, Object> codeStreamMeta = new LinkedHashMap<>();
+                if (largeCodeRegionPlanApplied) {
+                    codeStreamMeta.put("largeCodeRegionPlanApplied", true);
+                }
                 if (pipelineDeterministicLifecycle) {
                     codeStreamMeta.put("editDeterministicLifecyclePatchApplied", true);
                     codeStreamMeta.put("editDeterministicLifecycleTextEdits", pipelineDeterministicTextEdits);
@@ -5932,6 +5941,33 @@ public class ApiSpringController {
                         if (!auditPlanStepsForSummary.isEmpty()) {
                             completion.put("menuAuditPlanSteps", auditPlanStepsForSummary);
                         }
+                    }
+                }
+                codeStreamMeta.put("focusedContextApplied", focusedContextApplied);
+                codeStreamMeta.put("focusedContextLuceneTopKCount", focusedContextTelemetry.luceneTopKCount());
+                if (aiAgentHarnessTraceService != null) {
+                    try {
+                        int harnessAppliedEdits = Math.max(
+                            emittedTextEditEvents,
+                            parseIntSafe(completion.get("appliedTextEditCount"), 0));
+                        Map<String, Object> agentHarness = aiAgentHarnessTraceService.buildHarnessTrace(
+                            requestId,
+                            codeStreamMeta,
+                            codeStreamOrchestration,
+                            finalOutputGate.toMetaMap(),
+                            responseMode,
+                            contextType,
+                            effectiveModel,
+                            harnessAppliedEdits);
+                        completion.put("agentHarness", agentHarness);
+                        sendEvent(emitter, jsonOf(
+                            "stage", "agent_harness_trace",
+                            "status", "completed",
+                            "requestId", requestId,
+                            "agentHarness", agentHarness,
+                            "message", String.valueOf(agentHarness.getOrDefault("summaryVi", ""))));
+                    } catch (Exception harnessEx) {
+                        logger.debug("agent_harness_trace skipped requestId={}: {}", requestId, harnessEx.getMessage());
                     }
                 }
                 completion.put("timestamp", System.currentTimeMillis());
