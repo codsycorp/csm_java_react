@@ -11,7 +11,7 @@ import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
 import CsmCrmWorkspace from "#src/components/csm-crm/CsmCrmWorkspace";
 import { CsmKanbanBoard } from "#src/components/csm-kanban";
-import { generateSeoContent, csm_ai_generate_seo_content, generateSeoContentWithPrompt, formatSeoPrompt, PROMPT_GENERATE_POST } from "#src/api/ai";
+import { generateSeoContent, csm_ai_generate_seo_content, generateSeoContentWithPrompt, generateSeoAntiAiOneShot, formatSeoPrompt, PROMPT_GENERATE_POST } from "#src/api/ai";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { usePreferences } from "#src/hooks";
@@ -1050,7 +1050,7 @@ ${resolvedContainerSelector} select {
         get() {
           return {
             generateSeoContent, csm_ai_generate_seo_content,
-            generateSeoContentWithPrompt, formatSeoPrompt,
+            generateSeoContentWithPrompt, generateSeoAntiAiOneShot, formatSeoPrompt,
             PROMPT_GENERATE_POST
           };
         },
@@ -1554,7 +1554,7 @@ ${resolvedContainerSelector} select {
         get() {
           return {
             generateSeoContent, csm_ai_generate_seo_content,
-            generateSeoContentWithPrompt, formatSeoPrompt,
+            generateSeoContentWithPrompt, generateSeoAntiAiOneShot, formatSeoPrompt,
             PROMPT_GENERATE_POST
           };
         },
@@ -1729,6 +1729,7 @@ ${resolvedContainerSelector} select {
       csm_ai_generate_seo_content: csm_ai_generate_seo_content,
       generateSeoContent: generateSeoContent,
       generateSeoContentWithPrompt: generateSeoContentWithPrompt,
+      generateSeoAntiAiOneShot: generateSeoAntiAiOneShot,
       formatSeoPrompt: formatSeoPrompt,
       PROMPT_GENERATE_POST: PROMPT_GENERATE_POST,
       

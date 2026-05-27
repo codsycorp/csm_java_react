@@ -90,13 +90,25 @@ type GenerateSeoContentOptions = {
 };
 
 async function generateSeoContentWithPromptAsync(prompt: string, options?: GenerateSeoContentOptions): Promise<ApiResponse<any>> {
+	return submitSeoContentJobAsync(
+		{
+			prompt,
+			taskType: options?.taskType || "seo_content",
+		},
+		options,
+	);
+}
+
+async function submitSeoContentJobAsync(
+	body: Record<string, unknown>,
+	options?: GenerateSeoContentOptions,
+): Promise<ApiResponse<any>> {
 	const submitResponse = await request
 		.post("ai-generate-seo-content", {
 			json: {
-				prompt,
+				...body,
 				mode: "submit",
 				async: true,
-				taskType: options?.taskType || "seo_content",
 			},
 			timeout: AI_REQUEST_TIMEOUT,
 		})
@@ -162,6 +174,51 @@ async function generateSeoContentWithPromptAsync(prompt: string, options?: Gener
 		message: "Hết thời gian chờ xử lý async AI",
 		success: false,
 	};
+}
+
+export type SeoAntiAiOneShotContext = {
+	industry: string;
+	topic: string;
+	content?: string;
+	domainKey?: string;
+	property?: string;
+	location?: string;
+	business?: string;
+	seed?: string;
+};
+
+/**
+ * LMKT anti-AI SEO: một HTTP request — backend chạy creative-params + bài viết nội bộ.
+ * Luồng tách biệt `/ai-code-stream` (menu/code). Mặc định async poll vì 2 bước inference.
+ */
+export async function generateSeoAntiAiOneShot(
+	seoContext: SeoAntiAiOneShotContext,
+	options?: GenerateSeoContentOptions,
+) {
+	try {
+		const body = {
+			seoPipeline: "anti_ai_one_shot",
+			taskType: options?.taskType || "seo_content",
+			seoContext,
+		};
+		if (options?.preferAsync !== false) {
+			return await submitSeoContentJobAsync(body, options);
+		}
+		const response = await request
+			.post("ai-generate-seo-content", {
+				json: body,
+				timeout: AI_REQUEST_TIMEOUT,
+			})
+			.json<ApiResponse<any>>();
+		return response;
+	} catch (error: any) {
+		return {
+			code: -1,
+			result: {} as any,
+			message: error.message || "Unknown error occurred",
+			success: false,
+		};
+	}
 }
 
 /**

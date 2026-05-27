@@ -50,6 +50,7 @@ import net.phanmemmottrieu.service.GoogleIndexQueueService;
 import net.phanmemmottrieu.service.ChatPersistenceService;
 import net.phanmemmottrieu.service.AiAgentHarnessTraceService;
 import net.phanmemmottrieu.service.AiAssistantGatewayService;
+import net.phanmemmottrieu.service.AiSeoContentPipelineService;
 import net.phanmemmottrieu.service.AiMenuMergeService;
 import net.phanmemmottrieu.service.AiAssistantMemoryManagerService;
 import net.phanmemmottrieu.service.LocalTranslationService;
@@ -517,6 +518,7 @@ public class ApiSpringController {
     @Autowired(required = false)
     private AiRetrievalAuthContextResolver aiRetrievalAuthContextResolver;
     private final AiLocalRuntimeTierService aiLocalRuntimeTierService;
+    private final AiSeoContentPipelineService aiSeoContentPipelineService;
 
     @Autowired(required = false)
     private AiIncrementalStepExecutorService aiIncrementalStepExecutorService;
@@ -1571,7 +1573,8 @@ public class ApiSpringController {
             AiPatternCacheService aiPatternCacheService,
             @Autowired(required = false) LargeFileChunkingService largeFileChunkingService,
             AiLocalWorkflowAdvisorService aiLocalWorkflowAdvisorService,
-            AiLocalRuntimeTierService aiLocalRuntimeTierService
+            AiLocalRuntimeTierService aiLocalRuntimeTierService,
+            @Autowired(required = false) AiSeoContentPipelineService aiSeoContentPipelineService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -1607,6 +1610,7 @@ public class ApiSpringController {
         this.largeFileChunkingService = largeFileChunkingService;
         this.aiLocalWorkflowAdvisorService = aiLocalWorkflowAdvisorService;
         this.aiLocalRuntimeTierService = aiLocalRuntimeTierService;
+        this.aiSeoContentPipelineService = aiSeoContentPipelineService;
     }
 
     @PostMapping(
@@ -30502,6 +30506,7 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         boolean asyncRequested = "submit".equals(mode)
                 || Boolean.TRUE.equals(params.get("async"))
                 || "true".equalsIgnoreCase(String.valueOf(params.get("async")));
+        boolean seoOneShot = isSeoOneShotPipelineRequest(params);
 
         if (asyncRequested) {
             handleAiAsyncSubmit(response, prompt, params);
@@ -30509,6 +30514,40 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         }
 
         String rawContent;
+
+        if (seoOneShot) {
+            try {
+                rawContent = fetchSeoOneShotRawContent(params, null);
+            } catch (RuntimeException e) {
+                response.set("code", 200);
+                response.set("success", false);
+                response.set("message", uiTextByLang(
+                    uiLang,
+                    "Lỗi pipeline SEO one-shot: " + e.getMessage(),
+                    "SEO one-shot pipeline error: " + e.getMessage(),
+                    "SEO 一次性流水线错误：" + e.getMessage()));
+                logger.error("SEO one-shot pipeline failed: {}", e.getMessage(), e);
+                return;
+            }
+            if (rawContent == null || rawContent.isEmpty()) {
+                response.set("code", 200);
+                response.set("success", false);
+                response.set("message", uiTextByLang(
+                    uiLang,
+                    "Không nhận được nội dung hợp lệ từ pipeline SEO.",
+                    "No valid content received from SEO pipeline.",
+                    "未收到来自 SEO 流水线的有效内容。"));
+                return;
+            }
+            if (shouldExposeRoutingDebug(params)) {
+                Object routingDecision = params != null ? params.get("_providerRoutingDecision") : null;
+                if (routingDecision != null) {
+                    response.set("providerRoutingDecision", routingDecision);
+                }
+            }
+            populateAiResponseFromRawContent(response, rawContent, uiLang);
+            return;
+        }
 
         if (prompt == null || prompt.isEmpty()) {
             response.set("code", 200);
@@ -30588,6 +30627,20 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
 
     private boolean isSeoContentRequest(Map<String, Object> params, String prompt) {
         return this.aiAssistantGatewayService.isSeoContentTask(params, prompt);
+    }
+
+    private boolean isSeoOneShotPipelineRequest(Map<String, Object> params) {
+        return aiSeoContentPipelineService != null && aiSeoContentPipelineService.isOneShotPipelineRequest(params);
+    }
+
+    private String fetchSeoOneShotRawContent(
+            Map<String, Object> params,
+            AiAssistantGatewayService.ProgressListener progressListener) {
+        if (params != null) {
+            params.put("_providerRoutingDecision", "local_only_seo_pipeline");
+        }
+        Map<String, Object> seoContext = aiSeoContentPipelineService.extractSeoContext(params);
+        return aiSeoContentPipelineService.runAntiAiOneShot(seoContext, progressListener);
     }
 
     private String fetchAiRawContent(String prompt, AiAssistantGatewayService.ProgressListener progressListener, Map<String, Object> params) {
@@ -33994,7 +34047,8 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
 
     private void handleAiAsyncSubmit(StandardResponse response, String prompt, Map<String, Object> params) {
         String uiLang = resolveClientUiLanguage(params);
-        if (prompt == null || prompt.isEmpty()) {
+        boolean seoOneShot = isSeoOneShotPipelineRequest(params);
+        if (!seoOneShot && (prompt == null || prompt.isEmpty())) {
             response.set("code", 200);
             response.set("success", false);
             response.set("message", uiTextByLang(
@@ -34005,7 +34059,7 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             return;
         }
 
-        if (prompt.length() > maxPromptChars) {
+        if (!seoOneShot && prompt.length() > maxPromptChars) {
             response.set("code", 200);
             response.set("success", false);
             response.set("message", uiTextByLang(
@@ -34052,8 +34106,15 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                     "开始处理 AI 请求"), 0, 1, null));
 
                 StandardResponse syncResponse = new StandardResponse();
-                boolean seoRequest = isSeoContentRequest(params, prompt);
-                String rawContent = seoRequest
+                boolean seoRequest = seoOneShot || isSeoContentRequest(params, prompt);
+                String rawContent = seoOneShot
+                    ? fetchSeoOneShotRawContent(params, progress -> {
+                        if (!isAiJobCancelled(job)) {
+                            Map<String, Object> mergedProgress = enrichAiProgressWithMergePreview(progress, params);
+                            updateAiAsyncJobProgress(job, enrichAiProgressWithLineTextEdits(mergedProgress, job));
+                        }
+                    })
+                    : seoRequest
                     ? fetchAiRawContent(prompt, progress -> {
                         if (!isAiJobCancelled(job)) {
                             Map<String, Object> mergedProgress = enrichAiProgressWithMergePreview(progress, params);

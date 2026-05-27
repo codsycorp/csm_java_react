@@ -5898,32 +5898,43 @@ async function processContent(item, opts = {}) {
   // QUAN TRỌNG: Thêm timestamp để tránh cache hit khi prompt giống nhau
   // Backend có cache response 1 giờ, nếu prompt giống nhau sẽ trả về kết quả cũ
   const uniqueSeed = `[UNIQUE_${Date.now()}_${Math.random().toString(36).substr(2, 9)}]`;
-  const creative = await requestCreativeParams('anti_ai', {
-    industry,
-    topic: content,
-    domainKey,
-    property: ctx.project,
-    location: opts.location,
-    business: opts.business
-  }, ctx.helperAi);
-  const creativeOverrides = buildAntiAICreativeOverrides(creative);
+  const seoOneShotDisabled = typeof import.meta !== 'undefined' && import.meta.env?.VITE_AI_SEO_ONE_SHOT === 'false';
+  const oneShotFn = ctx.helperAi?.generateSeoAntiAiOneShot;
+  const useSeoOneShot = !seoOneShotDisabled && typeof oneShotFn === 'function';
 
-  const prompt = getAntiAIPrompt(industry, content, articleHistory, {
-    domainKey,
-    ...creativeOverrides,
-    ...opts
-  }, imagesToPrompt, uniqueSeed);
-  
   const generateFn = ctx.helperAi?.generateSeoContentWithPrompt;
-  if (!generateFn) throw new Error("generateSeoContentWithPrompt không khả dụng");
+  if (!useSeoOneShot && !generateFn) throw new Error("generateSeoContentWithPrompt không khả dụng");
+  if (useSeoOneShot && !oneShotFn) throw new Error("generateSeoAntiAiOneShot không khả dụng");
+
+  let prompt = null;
+  if (!useSeoOneShot) {
+    const creative = await requestCreativeParams('anti_ai', {
+      industry,
+      topic: content,
+      domainKey,
+      property: ctx.project,
+      location: opts.location,
+      business: opts.business
+    }, ctx.helperAi);
+    const creativeOverrides = buildAntiAICreativeOverrides(creative);
+
+    prompt = getAntiAIPrompt(industry, content, articleHistory, {
+      domainKey,
+      ...creativeOverrides,
+      ...opts
+    }, imagesToPrompt, uniqueSeed);
+  }
   
   // DEBUG: Kiểm tra prompt content
-  console.log(`[DEBUG] Prompt length: ${prompt?.length || 0} characters`);
-  console.log(`[DEBUG] Prompt preview (first 500 chars):\n${prompt?.substring(0, 500)}`);
+  if (prompt) {
+    console.log(`[DEBUG] Prompt length: ${prompt?.length || 0} characters`);
+    console.log(`[DEBUG] Prompt preview (first 500 chars):\n${prompt?.substring(0, 500)}`);
+  } else {
+    console.log(`[processContent] 🚀 SEO one-shot: 1 HTTP request (creative + bài viết trên backend)`);
+  }
   console.log(`[DEBUG] helperAi object:`, ctx.helperAi);
-  console.log(`[DEBUG] generateFn type:`, typeof generateFn);
   
-  if (!prompt || prompt.trim().length === 0) {
+  if (!useSeoOneShot && (!prompt || prompt.trim().length === 0)) {
     throw new Error("Prompt rỗng - không thể gọi AI!");
   }
   
@@ -5941,7 +5952,19 @@ async function processContent(item, opts = {}) {
     timerRegistry.register('processContent_ai_' + Date.now(), aiTimeoutId, 'timeout');
     
     const startAI = Date.now();
-    result = await generateFn(prompt);
+    if (useSeoOneShot) {
+      result = await oneShotFn({
+        industry,
+        topic: content,
+        domainKey,
+        property: ctx.project,
+        location: opts.location,
+        business: opts.business,
+        seed: uniqueSeed.replace(/[\[\]]/g, '')
+      }, { preferAsync: true });
+    } else {
+      result = await generateFn(prompt);
+    }
     const durationAI = ((Date.now() - startAI) / 1000).toFixed(1);
     
     console.log(`[processContent] ✅ AI trả về - Mất ${durationAI}s - ${new Date().toLocaleTimeString()}`);

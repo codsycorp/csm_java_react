@@ -14,9 +14,9 @@ import net.phanmemmottrieu.model.LoginRequest;
 import net.phanmemmottrieu.model.LoginResponse;
 import net.phanmemmottrieu.model.RegistrationResponse;
 import net.phanmemmottrieu.service.UserService;
+import net.phanmemmottrieu.service.AiGuestWebChatService;
 import net.phanmemmottrieu.service.ChatPersistenceService;
 import net.phanmemmottrieu.service.CRMService;
-import net.phanmemmottrieu.service.LlamaCppNativeService;
 import net.phanmemmottrieu.util.PortKillerUtil;
 
 import java.util.HashMap;
@@ -85,7 +85,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     private CRMService crmService;
 
     @Autowired(required = false)
-    private LlamaCppNativeService llamaCppNativeService;
+    private AiGuestWebChatService aiGuestWebChatService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ScheduledExecutorService chatAiScheduler = Executors.newScheduledThreadPool(2);
@@ -105,16 +105,55 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     // Keep auto-sent backend messages in memory until guest replies, then persist to DB.
     private final Map<String, java.util.List<ChatMessage>> pendingAutoMessagesByGuest = new ConcurrentHashMap<>();
     private final Map<String, Long> pendingAutoMessagesUpdatedAt = new ConcurrentHashMap<>();
-    private static final String POLITE_GENERIC_WELCOME = "Chào anh/chị, em là tư vấn viên hỗ trợ. Anh/chị đang quan tâm thông tin nào để em hỗ trợ nhanh và đúng nhu cầu ạ? Nếu thuận tiện, anh/chị để lại số điện thoại hoặc Zalo để bên em liên hệ lại.";
-    private static final long CHAT_RECALL_WINDOW_MS = 2 * 60 * 1000L;
-
-    private static final long AUTO_WELCOME_DELAY_MS = 60_000L;
-    private static final long AUTO_NO_ADMIN_REPLY_DELAY_MS = 90_000L;
-    private static final long AUTO_WELCOME_COOLDOWN_MS = 24 * 60 * 60 * 1000L;
-    private static final long PENDING_AUTO_MESSAGE_TTL_MS = 6 * 60 * 60 * 1000L;
-    private static final int MAX_PENDING_AUTO_MESSAGES_PER_GUEST = 3;
     private static final String AI_ASSISTANT_USER_ID = "ai_assistant";
     private static final String DEFAULT_SUPPORT_USERNAME = "Tu van vien";
+
+    private long resolveWelcomeDelayMs() {
+        return aiGuestWebChatService != null ? aiGuestWebChatService.getWelcomeDelayMs() : 60_000L;
+    }
+
+    private long resolveNoAdminReplyDelayMs() {
+        return aiGuestWebChatService != null ? aiGuestWebChatService.getNoAdminReplyDelayMs() : 90_000L;
+    }
+
+    private long resolveWelcomeCooldownMs() {
+        return aiGuestWebChatService != null ? aiGuestWebChatService.getWelcomeCooldownMs() : AUTO_WELCOME_COOLDOWN_MS;
+    }
+
+    private String fallbackWelcomeByLocale(String preferredLocale) {
+        if (aiGuestWebChatService != null) {
+            return aiGuestWebChatService.fallbackWelcome(preferredLocale);
+        }
+        return "Chào anh/chị, em là tư vấn viên hỗ trợ. Anh/chị đang quan tâm thông tin nào để em hỗ trợ nhanh và đúng nhu cầu ạ?";
+    }
+
+    private String fallbackNoAdminReplyByLanguage(String guestMessage, String preferredLocale) {
+        if (aiGuestWebChatService != null) {
+            return aiGuestWebChatService.fallbackNoAdminReply(guestMessage, preferredLocale);
+        }
+        return "Em đã nhận được tin nhắn của anh/chị. Tư vấn viên sẽ phản hồi sớm.";
+    }
+
+    private String generateChatAutoAiContent(String prompt, String fallbackText, String purpose, String guestKey) {
+        if (aiGuestWebChatService != null) {
+            return aiGuestWebChatService.generateReply(prompt, fallbackText, purpose, guestKey);
+        }
+        return fallbackText;
+    }
+
+    private String sanitizeGuestWelcomeText(String messageText, String eventType, String preferredLocale) {
+        if (aiGuestWebChatService != null) {
+            return aiGuestWebChatService.sanitizeAutoReplyText(messageText, eventType, preferredLocale);
+        }
+        return messageText == null ? "" : messageText.trim();
+    }
+
+    // Extract appId from room patterns: guest:{appId};{phone}, app:{appId}, user:{appId};..., private:{appId};...
+
+    private static final long AUTO_WELCOME_COOLDOWN_MS = 24 * 60 * 60 * 1000L;
+    private static final long CHAT_RECALL_WINDOW_MS = 2 * 60 * 1000L;
+    private static final long PENDING_AUTO_MESSAGE_TTL_MS = 6 * 60 * 60 * 1000L;
+    private static final int MAX_PENDING_AUTO_MESSAGES_PER_GUEST = 3;
 
     // Extract appId from room patterns: guest:{appId};{phone}, app:{appId}, user:{appId};..., private:{appId};...
     private String parseAppIdFromRoom(String room) {
@@ -180,30 +219,6 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         if (locale.startsWith("es")) return "es";
         if (locale.startsWith("ar")) return "ar";
         return locale;
-    }
-
-    private String humanLanguageName(String localeCode) {
-        String code = normalizeLocale(localeCode);
-        if (code == null || code.isBlank()) {
-            return "tiếng Việt";
-        }
-        return switch (code) {
-            case "vi" -> "tiếng Việt";
-            case "en" -> "English";
-            case "zh" -> "中文";
-            default -> code;
-        };
-    }
-
-    private String fallbackWelcomeByLocale(String preferredLocale) {
-        String code = normalizeLocale(preferredLocale);
-        if ("en".equals(code)) {
-            return "Hello, I am a support consultant. What information are you interested in so I can assist quickly and accurately? If convenient, please leave your phone number or Zalo for follow-up.";
-        }
-        if ("zh".equals(code)) {
-            return "您好，我是客服顾问。请问您目前想了解哪方面信息？我会尽快为您提供准确支持。若方便，请留下电话或Zalo，方便我们后续联系。";
-        }
-        return POLITE_GENERIC_WELCOME;
     }
 
     private String resolveGuestPreferredLocale(String appId, String guestIdentity, UUID sessionId) {
@@ -616,258 +631,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         }
         long timeSinceWelcome = System.currentTimeMillis() - lastWelcomeTime;
         // If less than 24 hours have passed, consider it recently scheduled
-        return timeSinceWelcome < AUTO_WELCOME_COOLDOWN_MS;
-    }
-
-    private String extractAiText(String raw, String fallbackText) {
-        if (raw == null || raw.isBlank()) return fallbackText;
-        try {
-            Map<?, ?> rawParsed = objectMapper.readValue(raw, Map.class);
-            Map<String, Object> parsed = new HashMap<>();
-            for (Map.Entry<?, ?> entry : rawParsed.entrySet()) {
-                if (entry.getKey() != null) {
-                    parsed.put(String.valueOf(entry.getKey()), entry.getValue());
-                }
-            }
-            Object successObj = parsed.get("success");
-            boolean success = !(successObj instanceof Boolean) || (Boolean) successObj;
-            if (!success) {
-                return fallbackText;
-            }
-
-            Object result = parsed.get("result");
-            if (result instanceof String s && !s.isBlank()) {
-                return s.trim();
-            }
-
-            if (result instanceof Map<?, ?> map) {
-                Object text = map.get("message");
-                if (text == null) text = map.get("text");
-                if (text == null) text = map.get("reply");
-                if (text instanceof String s && !s.isBlank()) {
-                    return s.trim();
-                }
-                return objectMapper.writeValueAsString(map);
-            }
-
-            if (result != null) {
-                return String.valueOf(result).trim();
-            }
-        } catch (Exception ignored) {
-            // Some providers may return plain text; fallback to raw.
-        }
-        return raw.trim().isEmpty() ? fallbackText : raw.trim();
-    }
-
-    private String generateChatAutoAiContent(String prompt, String fallbackText, String purpose) {
-        if (prompt == null || prompt.isBlank()) {
-            return fallbackText;
-        }
-
-        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
-            logger.warn("Local AI unavailable for {}: using fallback text", purpose);
-            return fallbackText;
-        }
-
-        try {
-            String aiRaw = llamaCppNativeService.generateContentFast(prompt, 256);
-            return extractAiText(aiRaw, fallbackText);
-        } catch (Exception e) {
-            logger.warn("Local AI generation failed for {}: {}", purpose, e.getMessage());
-            return fallbackText;
-        }
-    }
-
-    private String buildWelcomePrompt(String appId, String guestPhone, String preferredLocale) {
-        String guestDescription = (guestPhone == null || guestPhone.isBlank())
-                ? "Khach moi chua de lai so dien thoai"
-                : "Khach co phone=" + guestPhone;
-        String localeName = humanLanguageName(preferredLocale);
-        return "Ban la nhan vien cham soc khach hang website appId=" + appId + ". "
-            + guestDescription + " vua mo cua so chat va chua gui tin nhan. "
-                + "Hay viet DUY NHAT 1 tin nhan lich su, chuyen nghiep, than thien, ngan gon (toi da 180 ky tu). "
-                + "Muc tieu: chao khach, hoi nhu cau can ho tro, sau do moi xin thong tin lien he mot cach tinh te. "
-                + "BAT BUOC tra loi bang ngon ngu: " + localeName + ". "
-                + "Xung ho tu nhien theo kieu em/anh chi, khong qua than mat. "
-                + "TUYET DOI KHONG nhac den appId, ma app, ma he thong, thong tin ky thuat hoac noi bo. "
-                + "KHONG dung placeholder nhu [Ten ban], [Ten cong ty]. "
-                + "KHONG tu xung ten nhan vien/cong ty neu khong co du lieu xac thuc. "
-                + "Khong nhac den AI, khong markdown, chi tra ve noi dung tin nhan.";
-    }
-
-    private String safeSnippet(String text, int maxLen) {
-        if (text == null) {
-            return "";
-        }
-        String normalized = text.replaceAll("\\s+", " ").trim();
-        if (normalized.length() <= maxLen) {
-            return normalized;
-        }
-        return normalized.substring(0, maxLen);
-    }
-
-    private String buildRecentGuestConversationContext(String appId, String guestIdentity, String guestPhone, int maxMessages) {
-        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) {
-            return "";
-        }
-
-        try {
-            java.util.List<ChatMessage> history = chatPersistenceService.getHistoryByGuestIdentity(appId, guestIdentity, guestPhone, Math.max(12, maxMessages * 2));
-            if (history == null || history.isEmpty()) {
-                return "";
-            }
-
-            java.util.List<String> lines = new java.util.ArrayList<>();
-            int start = Math.max(0, history.size() - Math.max(1, maxMessages));
-            for (int i = start; i < history.size(); i++) {
-                ChatMessage msg = history.get(i);
-                if (msg == null) {
-                    continue;
-                }
-                String text = safeSnippet(msg.getMessage(), 220);
-                if (text.isBlank()) {
-                    continue;
-                }
-                String eventType = msg.getEventType();
-                if (eventType != null && eventType.startsWith("ai_auto_")) {
-                    continue;
-                }
-                String speaker = Boolean.TRUE.equals(msg.getIsAdmin()) ? "Tu van vien" : "Khach";
-                lines.add("- " + speaker + ": " + text);
-            }
-
-            return String.join("\n", lines);
-        } catch (Exception e) {
-            logger.debug("Unable to build guest conversation context for appId={}, guestIdentity={}: {}", appId, guestIdentity, e.getMessage());
-            return "";
-        }
-    }
-
-    private String buildNoAdminReplyPrompt(String appId,
-                                           String guestIdentity,
-                                           String guestPhone,
-                                           String guestMessage,
-                                           String preferredLocale) {
-        String sanitizedGuestMessage = guestMessage == null ? "" : guestMessage.replace('"', '\'').trim();
-        if (sanitizedGuestMessage.length() > 400) {
-            sanitizedGuestMessage = sanitizedGuestMessage.substring(0, 400);
-        }
-        String localeName = humanLanguageName(preferredLocale);
-        String conversationContext = buildRecentGuestConversationContext(appId, guestIdentity, guestPhone, 8);
-
-        return "Bạn là tư vấn viên chăm sóc khách hàng website appId=" + appId + ". "
-                + "Khách vừa gửi tin nhắn nhưng chưa có admin phản hồi ngay. "
-                + "Hãy viết DUY NHẤT 1 tin nhắn trả lời ngắn gọn, lịch sự, hữu ích (tối đa 220 ký tự), "
-                + "phải bám sát ý khách đang hỏi và nối tiếp đúng ngữ cảnh hội thoại gần nhất. "
-                + "Giữ giọng tư vấn chuyên nghiệp, không áp lực bán hàng. "
-                + "QUAN TRỌNG: Trả lời bằng ĐÚNG ngôn ngữ này: " + localeName + ". "
-                + "Không nhắc đến AI/hệ thống/appId/thông tin kỹ thuật nội bộ, không markdown. "
-                + (conversationContext.isBlank() ? "" : "Ngữ cảnh hội thoại gần nhất:\n" + conversationContext + "\n")
-                + "Tin nhắn khách: \"" + sanitizedGuestMessage + "\"";
-    }
-
-    private String detectGuestLanguageHint(String text) {
-        if (text == null || text.isBlank()) {
-            return "vi";
-        }
-
-        String normalized = text.trim();
-
-        if (normalized.matches(".*[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴÈÉẸẺẼÊỀẾỆỂỄÌÍỊỈĨÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠÙÚỤỦŨƯỪỨỰỬỮỲÝỴỶỸĐ].*")) {
-            return "vi";
-        }
-
-        String folded = Normalizer.normalize(normalized, Normalizer.Form.NFD)
-                .replaceAll("\\p{M}+", "")
-                .toLowerCase(Locale.ROOT);
-
-        if (folded.matches(".*\\b(xin chao|chao|toi|mua|gia|tu van|ho tro|bao nhieu|lien he|so dien thoai)\\b.*")) {
-            return "vi";
-        }
-        if (normalized.matches(".*[\\u3040-\\u30ff].*")) {
-            return "ja";
-        }
-        if (normalized.matches(".*[\\u4e00-\\u9fff].*")) {
-            return "zh";
-        }
-        if (normalized.matches(".*[\\uac00-\\ud7af].*")) {
-            return "ko";
-        }
-        if (normalized.matches(".*[\\u0600-\\u06ff].*")) {
-            return "ar";
-        }
-        if (folded.matches(".*\\b(hola|gracias|precio|comprar)\\b.*")) {
-            return "es";
-        }
-        if (folded.matches(".*\\b(bonjour|merci|prix|acheter)\\b.*")) {
-            return "fr";
-        }
-        if (folded.matches(".*\\b(hallo|danke|preis|kaufen)\\b.*")) {
-            return "de";
-        }
-
-        return "en";
-    }
-
-    private String fallbackNoAdminReplyByLanguage(String guestMessage, String preferredLocale) {
-        String languageHint = normalizeLocale(preferredLocale);
-        if (languageHint == null || languageHint.isBlank()) {
-            languageHint = detectGuestLanguageHint(guestMessage);
-        }
-        if ("vi".equals(languageHint)) {
-            return "Em đã nhận được tin nhắn của anh/chị. Tư vấn viên sẽ phản hồi sớm. Trong lúc chờ, anh/chị có thể mô tả thêm nhu cầu để bên em hỗ trợ chính xác hơn.";
-        }
-        if ("es".equals(languageHint)) {
-            return "Gracias por tu mensaje. Nuestro asesor responderá en breve. Mientras tanto, puedes compartir más detalles de tu necesidad para ayudarte mejor.";
-        }
-        if ("fr".equals(languageHint)) {
-            return "Merci pour votre message. Notre conseiller vous répondra rapidement. En attendant, vous pouvez préciser votre besoin pour un meilleur accompagnement.";
-        }
-        if ("de".equals(languageHint)) {
-            return "Danke für Ihre Nachricht. Unser Berater antwortet in Kürze. In der Zwischenzeit können Sie Ihr Anliegen genauer beschreiben.";
-        }
-        return "Thanks for your message. Our consultant will reply shortly. In the meantime, please share a bit more detail so we can support you better.";
-    }
-
-    private String sanitizeGuestWelcomeText(String messageText, String eventType, String preferredLocale) {
-        if (messageText == null) return "";
-        String normalized = messageText.replaceAll("\\s+", " ").trim();
-        if (normalized.isEmpty()) return normalized;
-
-        if (eventType == null || !eventType.startsWith("ai_auto_")) {
-            return normalized;
-        }
-
-        String folded = Normalizer.normalize(normalized, Normalizer.Form.NFD)
-                .replaceAll("\\p{M}+", "")
-                .toLowerCase(Locale.ROOT);
-
-        boolean hasBracketPlaceholder = normalized.matches(".*\\[[^\\]]{1,40}\\].*");
-        boolean hasTemplateToken = folded.contains("ten ban")
-                || folded.contains("ten cong ty")
-                || folded.contains("name")
-                || folded.contains("company");
-        boolean hasTechnicalSelfIntro = folded.contains("appid")
-            || folded.contains("app id")
-            || folded.contains("nhan vien ho tro tu")
-            || folded.contains("nhan vien ho tro den tu")
-            || folded.contains("minh la nhan vien ho tro tu");
-        boolean hasPromptLeakage = folded.contains("bat buoc")
-            || folded.contains("duy nhat 1")
-            || folded.contains("toi da")
-            || folded.contains("khong markdown")
-            || folded.contains("tra loi bang")
-            || folded.contains("muc tieu:")
-            || folded.contains("hay viet");
-
-        if (hasBracketPlaceholder || hasTemplateToken || hasTechnicalSelfIntro || hasPromptLeakage) {
-            if (eventType.startsWith("ai_auto_no_admin_reply")) {
-                return fallbackNoAdminReplyByLanguage(null, preferredLocale);
-            }
-            return fallbackWelcomeByLocale(preferredLocale);
-        }
-
-        return normalized;
+        return timeSinceWelcome < resolveWelcomeCooldownMs();
     }
 
     private boolean hasHumanAdminReplyAfter(String appId, String guestIdentity, String guestPhone, Long guestMessageTimestamp) {
@@ -934,8 +698,11 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                     return;
                 }
 
-                String prompt = buildNoAdminReplyPrompt(appId, guestIdentity, guestPhone, guestMessage, preferredLocale);
-                String text = generateChatAutoAiContent(prompt, fallbackText, "guest_no_admin_reply");
+                String inferenceGuestKey = guestKey(appId, guestIdentity);
+                String prompt = aiGuestWebChatService != null
+                    ? aiGuestWebChatService.buildNoAdminReplyPrompt(appId, guestIdentity, guestPhone, guestMessage, preferredLocale)
+                    : "";
+                String text = generateChatAutoAiContent(prompt, fallbackText, "guest_no_admin_reply", inferenceGuestKey);
                 dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, text, "ai_auto_no_admin_reply", preferredLocale);
             } catch (Exception e) {
                 logger.warn("Failed to send AI no-reply fallback for {}:{} - {}", appId, guestIdentity, e.getMessage());
@@ -943,7 +710,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             } finally {
                 pendingGuestNoReplyTasks.remove(key);
             }
-        }, AUTO_NO_ADMIN_REPLY_DELAY_MS, TimeUnit.MILLISECONDS);
+        }, resolveNoAdminReplyDelayMs(), TimeUnit.MILLISECONDS);
 
         pendingGuestNoReplyTasks.put(key, future);
     }
@@ -1042,13 +809,16 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                     return;
                 }
 
-                if (hasRecentAutoWelcome(appId, guestIdentity, guestPhone, AUTO_WELCOME_COOLDOWN_MS)) {
+                if (hasRecentAutoWelcome(appId, guestIdentity, guestPhone, resolveWelcomeCooldownMs())) {
                     logger.info("⏭️ Skip delayed AI welcome because a welcome was recently sent - appId={}, guestIdentity={}", appId, guestIdentity);
                     return;
                 }
 
-                String prompt = buildWelcomePrompt(appId, guestPhone, normalizedLocale);
-                String text = generateChatAutoAiContent(prompt, fallbackWelcome, "guest_welcome");
+                String inferenceGuestKey = guestKey(appId, guestIdentity);
+                String prompt = aiGuestWebChatService != null
+                    ? aiGuestWebChatService.buildWelcomePrompt(appId, guestPhone, normalizedLocale)
+                    : "";
+                String text = generateChatAutoAiContent(prompt, fallbackWelcome, "guest_welcome", inferenceGuestKey);
                 dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, text, "ai_auto_welcome", normalizedLocale);
                 // Record the welcome send time for app+phone to prevent duplicates across identity changes
                 if (appPhoneKeyFinal != null) {
@@ -1064,7 +834,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             } finally {
                 pendingGuestWelcomeTasks.remove(key);
             }
-        }, AUTO_WELCOME_DELAY_MS, TimeUnit.MILLISECONDS);
+        }, resolveWelcomeDelayMs(), TimeUnit.MILLISECONDS);
 
         pendingGuestWelcomeTasks.put(key, future);
     }
@@ -2550,7 +2320,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         chatAiScheduler.scheduleAtFixedRate(() -> {
             try {
                 long now = System.currentTimeMillis();
-                long staleThresholdMs = now - AUTO_WELCOME_COOLDOWN_MS;
+                long staleThresholdMs = now - resolveWelcomeCooldownMs();
                 long pendingStaleThresholdMs = now - PENDING_AUTO_MESSAGE_TTL_MS;
                 
                 int removedCount = 0;

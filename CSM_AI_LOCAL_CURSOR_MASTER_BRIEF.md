@@ -1,9 +1,22 @@
 # CSM AI LOCAL — MASTER BRIEF CHO CURSOR AI
 ## Một file duy nhất để yêu cầu Cursor làm lại / hoàn thiện hệ thống
 
-Version: **3.4** · 2026-05-26  
+Version: **3.5** · 2026-05-26  
 Repo: `csm_server`  
 **Single source of truth** — dùng file này khi yêu cầu Cursor implement / làm lại CSM AI Local **và** domain System Management liên quan RAG.
+
+### Changelog v3.5
+
+| Mục | Trạng thái |
+|-----|------------|
+| **PHẦN AA — Guest Web Chat lane** — Socket.IO + local fast AI, tách code/SEO | ✅ |
+| **Bundled-only models** — chỉ `csm_datas/ai_local/model`, không tải 7B/0.5B | ✅ |
+| Tune máy yếu: guest 192 tok / SEO article 4096 tok / embedding nomic | ✅ |
+| `AiGuestWebChatService` — prompt, sanitize, semaphore, per-guest cooldown | ✅ |
+| `AiSeoContentPipelineService` — SEO one-shot `anti_ai_one_shot` (Y.11) | ✅ |
+| `generateSeoAntiAiOneShot()` — client 1 HTTP, backend 2 bước nội bộ | ✅ |
+| Guest chat dùng **system prompt riêng** (không inject code master prompt) | ✅ |
+| Config `ai.guest-chat.*` + `ai.seo.pipeline.*` | ✅ |
 
 ### Changelog v3.4
 
@@ -1318,14 +1331,14 @@ Tất cả GGUF đặt tại (đường dẫn tương đối từ `backend/`):
 
 ```txt
 backend/csm_datas/ai_local/model/
-├── qwen2.5-coder-1.5b-instruct-q4_k_m.gguf          # worker (required)
-├── qwen2.5-coder-0.5b-instruct-q4_k_m.gguf          # optional ultra-light
-├── nomic-embed-text-v1.5.Q4_K_M.gguf                  # embedding (strong)
+├── qwen2.5-coder-1.5b-instruct-q4_k_m.gguf          # TEXT LLM worker (required) — code + SEO + guest chat
+├── nomic-embed-text-v1.5.Q4_K_M.gguf                  # embedding RAG (required, tách khỏi chat)
+├── Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf                 # vision OCR — KHÔNG dùng SEO/chat text
 ├── SmolVLM2-256M-Video-Instruct-Q8_0.gguf             # vision weak
 ├── mmproj-SmolVLM2-256M-Video-Instruct-Q8_0.gguf
-├── SmolVLM2-500M-Video-Instruct-Q8_0.gguf             # vision strong
-├── mmproj-SmolVLM2-500M-Video-Instruct-Q8_0.gguf
-└── Qwen2-VL-2B-Instruct-Q4_K_M.gguf                   # vision OCR strong
+```
+
+**Không có trong bundle (KHÔNG tải thêm):** qwen2.5-coder-0.5b, Qwen2.5-7B-Instruct, model cloud API.
 ```
 
 `AiLocalOpsController` (`GET /api/ai-local/models`) quét thư mục này và gợi ý theo RAM budget.
@@ -3267,6 +3280,10 @@ ai.seo.creative-params.max-tokens=384
 ai.seo.creative-params.temperature=0.05
 ai.seo.creative-params.fallback-enabled=true
 
+# SEO one-shot pipeline + article token cap
+ai.seo.pipeline.enabled=true
+ai.seo.article.max-tokens=8192
+
 # Prompt size (sync + async submit)
 ai.prompt.max-chars=3000000
 
@@ -3290,6 +3307,8 @@ ai.local.llama.max-prompt-chars-hard-cap=1000000
 | `resolveSeoSystemPrompt()` | AiAssistantGatewayService | LMKT flexible vs simple SEO |
 | `generateCreativeParams()` | AiAssistantGatewayService | Small JSON + validate + fallback |
 | `isValidCreativeParams()` | AiAssistantGatewayService | Allowlist từ prompt |
+| `runAntiAiOneShot()` | AiSeoContentPipelineService | Creative + article nội bộ, 1 response |
+| `extractSeoContext()` | AiSeoContentPipelineService | Parse `seoContext` từ params |
 
 ## Y.9 Cấm (LMKT lane)
 
@@ -3314,6 +3333,236 @@ ai.local.llama.max-prompt-chars-hard-cap=1000000
 | 6 | Facebook post → `facebook_post` + hashtags | ☐ |
 | 7 | Creative cache stale → bypass + regenerate/fallback | ☐ |
 | 8 | Local-only bật, llama down → `LOCAL_PROVIDER_UNAVAILABLE` | ☐ |
+| 9 | `seoPipeline=anti_ai_one_shot` → 1 HTTP, progress 2 bước, JSON 12 field | ☐ |
+| 10 | `VITE_AI_SEO_ONE_SHOT=false` → fallback 2-call cũ (creative + article) | ☐ |
+
+## Y.11 SEO one-shot pipeline (`anti_ai_one_shot`) — v3.5
+
+> **Mục tiêu UX:** Người dùng LMKT **gửi 1 lần, chờ đến xong, nhận 1 lần** bài viết anti-AI chuẩn SEO. Backend chạy 2 bước inference **nội bộ** (creative params → article). **Tách biệt hoàn toàn** `/ai-code-stream` (menu/code JSON).
+
+### Lane matrix (không trộn · **chỉ model bundled**)
+
+> **Quy tắc cứng:** Mọi lane text dùng **một file duy nhất**  
+> `backend/csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf`  
+> **Không** tải 7B/0.5B/model ngoài repo. Vision (`Qwen2.5-VL-3B`, SmolVLM2) **không** route SEO/chat.
+
+| Lane | Endpoint | Client | Model (bundled) |
+|------|----------|--------|-----------------|
+| Code / menu edit | `POST /ai-code-stream` (SSE) | `AiAssistantChat.tsx` | `qwen2.5-coder-1.5b` Q4_K_M |
+| SEO creative params | `POST /ai-generate-seo-content` + `[CREATIVE_PARAMS_REQUEST]` | pipeline / legacy | Cùng 1.5B · max 384 tok |
+| SEO bài viết LMKT | Cùng endpoint, `LMKT_SEO_SYSTEM_PROMPT` | `generateSeoContentWithPrompt` | Cùng 1.5B · max **4096** tok |
+| SEO one-shot | `seoPipeline: anti_ai_one_shot` | `generateSeoAntiAiOneShot()` | Cùng 1.5B · 2 bước nội bộ · VI **900–1200 từ** |
+| **Guest web chat** | Socket.IO `chat` | `ChatHistoryContext` | Cùng 1.5B · **192 tok** · `generateContentFast` |
+
+**Máy chủ yếu (2 CPU, ~5GB RAM):** Guest chat `max-concurrent=1`, SEO luôn async poll, embedding tách `nomic-embed-text-v1.5.Q4_K_M.gguf` (không dùng chung weights chat).
+
+### HTTP contract one-shot
+
+**Submit (khuyến nghị — 2 bước inference):**
+
+```json
+{
+  "seoPipeline": "anti_ai_one_shot",
+  "taskType": "seo_content",
+  "mode": "submit",
+  "async": true,
+  "seoContext": {
+    "industry": "bat-dong-san",
+    "topic": "<nội dung gốc Zalo/FB>",
+    "domainKey": "lmkt",
+    "property": "<project>",
+    "location": "<optional>",
+    "business": "<optional>"
+  }
+}
+```
+
+**Sync:** bỏ `mode`/`async` — cùng body, client chờ trực tiếp (chỉ khi server đủ mạnh).
+
+**Không cần `prompt`** khi `seoPipeline` set — backend tự build creative + article prompt.
+
+### Backend flow
+
+```txt
+Client 1× POST /ai-generate-seo-content
+  → AiSeoContentPipelineService.runAntiAiOneShot()
+      Step 1: generateSeoContent([CREATIVE_PARAMS_REQUEST])  ~384 tokens
+      Step 2: generateSeoContent(compact anti-AI article)    ~8192 tokens
+  → populateAiResponseFromRawContent → { success, data: { title, content, ... } }
+```
+
+**Service:** `AiSeoContentPipelineService.java`  
+**Config:**
+
+```properties
+ai.seo.pipeline.enabled=true
+ai.seo.article.max-tokens=4096
+ai.seo.article.target-words-vi=900-1200
+```
+
+### Client (`processContent` anti-AI)
+
+- Mặc định: `generateSeoAntiAiOneShot()` qua `window.csmAI` (DynamicCode page expose).
+- Tắt one-shot (legacy 2 HTTP): `VITE_AI_SEO_ONE_SHOT=false`.
+- Các luồng khác (`facebook_post`, `category_landing`, ads) **giữ nguyên** `generateSeoContentWithPrompt`.
+
+### Cấm bổ sung
+
+```txt
+✗ Route SEO one-shot qua /ai-code-stream hoặc code master prompt
+✗ Tải model ngoài backend/csm_datas/ai_local/model (7B, 0.5B, API cloud…)
+✗ Dùng Qwen2.5-VL-3B / SmolVLM2 cho SEO text hoặc guest chat (vision-only)
+✗ Ép bài 1500–2000 từ trên 1.5B — dùng target 900–1200 từ + JSON đủ 12 field
+```
+
+---
+
+# PHẦN AA — GUEST WEB CHAT LANE (Socket.IO · fast local AI)
+
+> **Mục tiêu:** Khách truy cập website chat qua widget → hệ thống **tự trả lời nhanh** bằng local AI khi admin chưa online, **không quá tải** llama instance dùng chung với code-stream/SEO long-form.
+
+## AA.1 Kiến trúc tổng quan (tách lane)
+
+```mermaid
+flowchart TB
+  subgraph client [Website / LMKT Guest]
+    WH[wu_contact.tsx / InternalChatBox]
+    CHC[ChatHistoryContext.tsx]
+    WH --> CHC
+  end
+
+  subgraph socket [Socket.IO — SocketIOConfig.java]
+    JOIN[join guest room]
+    CHAT[chat event]
+    SCHED[chatAiScheduler pool=2]
+    DISP[dispatchAiMessageToGuest]
+  end
+
+  subgraph ai [Guest AI lane — tách biệt]
+    GWS[AiGuestWebChatService]
+    FAST[LlamaCppNativeService.generateContentFast]
+    GWS -->|max 256 tokens + system prompt riêng| FAST
+  end
+
+  CHC -->|socket.emit chat| CHAT
+  JOIN -->|triggerWelcomeOnGuestJoin| SCHED
+  CHAT -->|guest message, no admin| SCHED
+  SCHED -->|delay 60s / 90s| GWS
+  GWS --> DISP
+  DISP -->|message event| CHC
+```
+
+**Không trộn với:**
+
+| Lane | Vì sao tách |
+|------|-------------|
+| `/ai-code-stream` | SSE textEdits, code master prompt, orchestration nặng |
+| `/ai-generate-seo-content` | JSON 12 field, 8192 tokens, async job dài |
+| Guest chat | Plain text ≤280 chars, fast path, scheduled debounce |
+
+## AA.2 Hai sub-flow tự động
+
+| Flow | Trigger | Delay | Event type | Mục đích |
+|------|---------|-------|------------|----------|
+| **Auto welcome** | Guest join room (chưa có phone, chưa có history) | `ai.guest-chat.welcome-delay-ms` (60s) | `ai_auto_welcome` | Chào + hỏi nhu cầu + mời liên hệ |
+| **No-admin reply** | Guest gửi tin, admin human chưa trả lời | `ai.guest-chat.no-admin-reply-delay-ms` (90s) | `ai_auto_no_admin_reply` | Giữ khách, bám ngữ cảnh hội thoại |
+
+**Cancel rules:**
+
+- Admin (human) reply → `cancelGuestNoReplyTask`
+- Guest disconnect → cleanup transient + notify admin
+- Welcome cooldown 24h / app+phone / guestKey — tránh spam
+
+## AA.3 AiGuestWebChatService — overload protection
+
+| Guard | Config / hành vi |
+|-------|------------------|
+| Bật/tắt lane | `ai.guest-chat.enabled=true` |
+| Max inference đồng thời | `ai.guest-chat.max-concurrent=2` (Semaphore) |
+| Output cap | `ai.guest-chat.max-output-tokens=256` → `generateContentFast` |
+| Per-guest cooldown | `ai.guest-chat.per-guest-cooldown-ms=45000` |
+| Circuit breaker | `llama.isCircuitOpen()` → fallback text ngay |
+| System prompt riêng | `ai.guest-chat.system-prompt` — **không** dùng `ai.local.llama.system-prompt` (code assistant) |
+| Saturated / down | Trả fallback VI/EN/ZH/… — chat vẫn hoạt động |
+
+## AA.4 Prompt & sanitize
+
+| Hàm | Vai trò |
+|-----|---------|
+| `buildWelcomePrompt()` | Chào guest mới, max ~180 ký tự, đúng locale |
+| `buildNoAdminReplyPrompt()` | Bám tin khách + 8 message context gần nhất |
+| `sanitizeAutoReplyText()` | Chặn prompt leakage, `[placeholder]`, appId leak |
+| `fallbackWelcome()` / `fallbackNoAdminReply()` | Template đa ngôn ngữ khi AI fail |
+
+**Persist:** Auto messages queue in-memory (`pendingAutoMessagesByGuest`) → flush DB khi guest reply lần đầu.
+
+## AA.5 Frontend contract (không đổi)
+
+| File | Vai trò |
+|------|---------|
+| `frontend-web/src/contexts/ChatHistoryContext.tsx` | Guest/admin send `socket.emit("chat", msg)` |
+| `lmkt/src/contexts/ChatHistoryContext.tsx` | LMKT guest-only variant |
+| `frontend-web/src/pages/website/wu_contact.tsx` | Widget liên hệ |
+| `InternalChatBox.tsx` | Admin xem + trả lời |
+
+Guest room: `guest:{appId};{guestSessionId}` · Admin room: `app:{appId}`
+
+## AA.6 Config (`application.properties`)
+
+```properties
+ai.guest-chat.enabled=true
+ai.guest-chat.max-concurrent=1
+ai.guest-chat.max-output-tokens=192
+ai.guest-chat.per-guest-cooldown-ms=45000
+ai.guest-chat.welcome-delay-ms=60000
+ai.guest-chat.no-admin-reply-delay-ms=90000
+ai.guest-chat.welcome-cooldown-ms=86400000
+ai.guest-chat.system-prompt=Bạn là tư vấn viên website...
+```
+
+## AA.7 File backend
+
+| File | Vai trò |
+|------|---------|
+| `SocketIOConfig.java` | Socket events, scheduling, dispatch, room join |
+| `AiGuestWebChatService.java` | Local fast inference + prompts + guards |
+| `LlamaCppNativeService.java` | `generateContentFast(prompt, cap, systemPromptOverride)` |
+| `ChatPersistenceService.java` | History for context + persist after guest reply |
+
+## AA.8 Model — chỉ bundled (`csm_datas/ai_local/model`)
+
+| File GGUF | Vai trò | Dùng cho lane |
+|-----------|---------|---------------|
+| `qwen2.5-coder-1.5b-instruct-q4_k_m.gguf` | **Text LLM duy nhất** | Code, SEO, guest chat |
+| `nomic-embed-text-v1.5.Q4_K_M.gguf` | Embedding RAG | Memory — **tách** khỏi chat weights |
+| `Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf` | Vision/OCR | Multimodal — **không** SEO/chat |
+| SmolVLM2 + mmproj | Vision nhẹ | Multimodal — **không** SEO/chat |
+
+**Guest chat trên 1.5B:** `generateContentFast` + `ai.guest-chat.system-prompt` + max **192** output tokens + `max-concurrent=1`.
+
+**Priority khi tải cao:** Guest saturated → fallback text ngay; SEO one-shot chạy async — không block socket.
+
+## AA.9 Cấm
+
+```txt
+✗ Route guest chat qua /ai-code-stream hoặc /ai-generate-seo-content
+✗ Inject ai_code_master_prompt / menu master vào guest welcome
+✗ Gọi generateContent (full tokens) thay vì generateContentFast
+✗ Bỏ fallback text khi circuit open / saturated
+✗ Persist auto message trước khi guest reply (trừ flush sau reply)
+```
+
+## AA.10 Test checklist
+
+| # | Test | Pass |
+|---|------|------|
+| 1 | Guest join → sau 60s nhận welcome (hoặc fallback nếu AI down) | ☐ |
+| 2 | Guest gửi tin, admin không trả lời → sau 90s AI reply bám context | ☐ |
+| 3 | Admin trả lời trước 90s → skip AI no-reply | ☐ |
+| 4 | Circuit open → fallback, không hang socket | ☐ |
+| 5 | 3 guest cùng lúc, max-concurrent=1 → 2 guest fallback text, không crash | ☐ |
+| 6 | Prompt leak / `[Ten]` → sanitize → fallback | ☐ |
+| 7 | Guest reply → auto messages flush DB | ☐ |
 
 ---
 

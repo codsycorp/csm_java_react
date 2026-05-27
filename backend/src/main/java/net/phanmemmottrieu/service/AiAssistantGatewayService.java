@@ -1874,6 +1874,9 @@ Rules:
   @Value("${ai.seo.creative-params.fallback-enabled:true}")
   private boolean seoCreativeParamsFallbackEnabled;
 
+    @Value("${ai.seo.article.max-tokens:4096}")
+    private int seoArticleMaxTokens;
+
   public boolean isCreativeParamsRequest(String prompt) {
     return String.valueOf(prompt == null ? "" : prompt).contains("[CREATIVE_PARAMS_REQUEST]");
   }
@@ -1947,15 +1950,37 @@ Rules:
         1,
         progressI18n("copilot.progress.message.local_inference", null, null, null)));
 
-    int seoOutputTokens = llamaCppNativeService != null
+    int tokenCap = llamaCppNativeService != null
         ? llamaCppNativeService.getEffectiveMaxTokensLimit()
         : Math.max(4096, maxOutputTokens);
+    int seoOutputTokens = Math.max(2048, Math.min(seoArticleMaxTokens, tokenCap));
     return callLocalProviderWithContext(
         trimmedPrompt,
         seoOutputTokens,
         directTemperature,
         progressListener,
         resolveSeoSystemPrompt(trimmedPrompt));
+  }
+
+  /** Parse creative-params JSON from wrapped chat-completions or raw assistant text (SEO pipeline). */
+  public Map<String, Object> extractCreativeParamsFromProviderRaw(String wrappedOrRaw, String kind) {
+    String normalizedKind = kind == null ? "anti_ai" : kind.trim().toLowerCase(Locale.ROOT);
+    String text = extractResultTextFromWrappedJson(wrappedOrRaw);
+    if (text == null || text.isBlank()) {
+      text = wrappedOrRaw == null ? "" : wrappedOrRaw.trim();
+    }
+    Map<String, Object> parsed = parseCreativeParamsFromText(text, normalizedKind);
+    if (!isValidCreativeParams(parsed, normalizedKind, wrappedOrRaw == null ? "" : wrappedOrRaw)) {
+      parsed = parseCreativeParamsFromText(wrappedOrRaw, normalizedKind);
+    }
+    if (!isValidCreativeParams(parsed, normalizedKind, wrappedOrRaw == null ? "" : wrappedOrRaw)) {
+      parsed = buildDeterministicCreativeParamsFallback(wrappedOrRaw == null ? "" : wrappedOrRaw, normalizedKind);
+    }
+    return parsed == null ? Map.of() : parsed;
+  }
+
+  public String createErrorJson(String message, String errorCode) {
+    return createErrorJsonInternal(message, errorCode);
   }
 
   /** Pick system prompt: simple html_content SEO vs LMKT custom JSON schema (content, facebook_post, …). */
@@ -5339,7 +5364,7 @@ Rules:
         || text.contains("print(");
   }
 
-  private String createErrorJson(String message, String errorCode) {
+  private String createErrorJsonInternal(String message, String errorCode) {
     try {
       Map<String, Object> err = new HashMap<>();
       err.put("success", false);
