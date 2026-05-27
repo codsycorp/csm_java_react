@@ -199,8 +199,9 @@ public class AiSeoContentPipelineService {
             - attributes_title*: 60-80 ký tự SEO
             - attributes_description*: 150-160 ký tự
             - attributes_keywords*: 5-8 từ khóa, phẩy ngăn cách
-            - Model local 1.5B: ưu tiên JSON hợp lệ đủ 12 field hơn độ dài cực đại
+            - Model local 1.5B: JSON hợp lệ đủ 12 field quan trọng hơn độ dài; content VI ~500-900 từ
             - Tránh văn phong AI; viết như chuyên gia thực tế
+            - Kết thúc JSON ngay sau field cuối — không thêm text ngoài JSON
             """).formatted(
             domainKey,
             industry,

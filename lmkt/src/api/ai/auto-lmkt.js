@@ -5931,7 +5931,7 @@ async function processContent(item, opts = {}) {
     console.log(`[DEBUG] Prompt length: ${prompt?.length || 0} characters`);
     console.log(`[DEBUG] Prompt preview (first 500 chars):\n${prompt?.substring(0, 500)}`);
   } else {
-    console.log(`[processContent] 🚀 SEO one-shot: 1 HTTP request (creative + bài viết trên backend)`);
+    console.log(`[processContent] 🚀 SEO one-shot: 1 HTTP sync (chờ JSON cuối, backend 2 bước nội bộ)`);
   }
   console.log(`[DEBUG] helperAi object:`, ctx.helperAi);
   
@@ -5939,14 +5939,14 @@ async function processContent(item, opts = {}) {
     throw new Error("Prompt rỗng - không thể gọi AI!");
   }
   
-  console.log(`[processContent] ⏳ Gọi AI - BẮT ĐẦU CHỜ (có thể mất 30-60 giây) - ${new Date().toLocaleTimeString()}`);
-  thongbao(ti("⏳ Đang gọi AI... (Có thể mất 30-60 giây, vui lòng chờ)", "⏳ Calling AI... (may take 30-60 seconds, please wait)", "⏳ 正在调用AI...（可能需要30-60秒，请稍候）"));
+  console.log(`[processContent] ⏳ Gọi AI - BẮT ĐẦU CHỜ (SEO one-shot có thể mất 3-10 phút trên server yếu) - ${new Date().toLocaleTimeString()}`);
+  thongbao(ti("⏳ Đang gọi AI... (SEO one-shot, có thể mất vài phút)", "⏳ Calling AI... (SEO one-shot, may take several minutes)", "⏳ 正在调用AI...（SEO一次性，可能需要几分钟）"));
   
   let result;
   let aiTimeoutId = null;
   try {
     // 🟢 TIMEOUT SAFETY: Đăng ký timeout vào timerRegistry để đảm bảo cleanup
-    const aiTimeoutMs = 120000;  // 2 phút timeout
+    const aiTimeoutMs = useSeoOneShot ? 20 * 60 * 1000 : 120000;
     aiTimeoutId = setTimeout(() => {
       console.error(`⏱️ [processContent] AI timeout sau ${aiTimeoutMs}ms`);
     }, aiTimeoutMs);
@@ -5962,7 +5962,9 @@ async function processContent(item, opts = {}) {
         location: opts.location,
         business: opts.business,
         seed: uniqueSeed.replace(/[\[\]]/g, '')
-      }, { preferAsync: true });
+      }, {
+        preferAsync: false,
+      });
     } else {
       result = await generateFn(prompt);
     }

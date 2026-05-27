@@ -19,7 +19,7 @@ import java.util.concurrent.Semaphore;
 
 /**
  * Local AI lane for website guest chat (Socket.IO).
- * Fast, short replies — isolated from code-stream / menu / SEO long-form lanes.
+ * Sync inference only — waits for final reply text; never uses async job poll or code-stream SSE.
  */
 @Service
 public class AiGuestWebChatService {

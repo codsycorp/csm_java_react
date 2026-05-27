@@ -3354,18 +3354,24 @@ ai.local.llama.max-prompt-chars-hard-cap=1000000
 | SEO one-shot | `seoPipeline: anti_ai_one_shot` | `generateSeoAntiAiOneShot()` | Cùng 1.5B · 2 bước nội bộ · VI **900–1200 từ** |
 | **Guest web chat** | Socket.IO `chat` | `ChatHistoryContext` | Cùng 1.5B · **192 tok** · `generateContentFast` |
 
-**Máy chủ yếu (2 CPU, ~5GB RAM):** Guest chat `max-concurrent=1`, SEO luôn async poll, embedding tách `nomic-embed-text-v1.5.Q4_K_M.gguf` (không dùng chung weights chat).
+**Máy chủ yếu (2 CPU, ~5GB RAM):** Guest chat `max-concurrent=1`; SEO **sync 1 HTTP** (không async job poll); embedding tách `nomic-embed-text-v1.5.Q4_K_M.gguf`.
+
+### Lane UX matrix (client vs backend)
+
+| Lane | Client UX | Backend nội bộ | Async job poll |
+|------|-----------|----------------|----------------|
+| Code / menu | SSE `/ai-code-stream` | planner + edits | Không (SSE) |
+| SEO one-shot / SEO prompt | **1 POST, chờ JSON cuối** | creative → article (2 inference) | **Không** (`ai.seo.client-sync-only=true`) |
+| Guest web chat | Socket `message` event | `generateContentFast` sync | **Không** |
 
 ### HTTP contract one-shot
 
-**Submit (khuyến nghị — 2 bước inference):**
+**Sync (mặc định — khuyến nghị):**
 
 ```json
 {
   "seoPipeline": "anti_ai_one_shot",
   "taskType": "seo_content",
-  "mode": "submit",
-  "async": true,
   "seoContext": {
     "industry": "bat-dong-san",
     "topic": "<nội dung gốc Zalo/FB>",
@@ -3377,7 +3383,9 @@ ai.local.llama.max-prompt-chars-hard-cap=1000000
 }
 ```
 
-**Sync:** bỏ `mode`/`async` — cùng body, client chờ trực tiếp (chỉ khi server đủ mạnh).
+Client: `generateSeoAntiAiOneShot()` — **không** gửi `mode/submit/async` trừ khi debug với `preferAsync: true` (server vẫn có thể ép sync khi `ai.seo.client-sync-only=true`).
+
+**Legacy async (chỉ debug / menu lane):** `mode: submit`, `async: true` — **không dùng** cho SEO production.
 
 **Không cần `prompt`** khi `seoPipeline` set — backend tự build creative + article prompt.
 
@@ -3396,8 +3404,9 @@ Client 1× POST /ai-generate-seo-content
 
 ```properties
 ai.seo.pipeline.enabled=true
-ai.seo.article.max-tokens=4096
-ai.seo.article.target-words-vi=900-1200
+ai.seo.client-sync-only=true
+ai.seo.article.max-tokens=1536
+ai.seo.article.target-words-vi=600-900
 ```
 
 ### Client (`processContent` anti-AI)
@@ -3540,7 +3549,7 @@ ai.guest-chat.system-prompt=Bạn là tư vấn viên website...
 
 **Guest chat trên 1.5B:** `generateContentFast` + `ai.guest-chat.system-prompt` + max **192** output tokens + `max-concurrent=1`.
 
-**Priority khi tải cao:** Guest saturated → fallback text ngay; SEO one-shot chạy async — không block socket.
+**Priority khi tải cao:** Guest saturated → fallback text ngay; SEO sync giữ 1 HTTP (semaphore llama); code/menu vẫn SSE — không trộn lane.
 
 ## AA.9 Cấm
 

@@ -5864,7 +5864,7 @@ async function processContent(item, opts = {}) {
     }, 30000);
     
     result = await generateFn(prompt, {
-      preferAsync: true,
+      preferAsync: false,
       taskType: "seo_content",
       onProgress: (progress) => {
         if (progress?.message) {

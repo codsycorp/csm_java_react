@@ -5,11 +5,33 @@ import { useTranslation } from "react-i18next";
 interface AppVersionMonitorProps {
 	// 轮训时间，单位：分钟，默认 1 分钟
 	checkUpdatesInterval?: number
-	// 检查更新的地址
+	// 检查更新的地址（默认 import.meta.env.BASE_URL — cùng thư mục deploy với index.html）
 	checkUpdateUrl?: string
 }
 
-export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = import.meta.env.VITE_BASE_URL ?? "/" }: AppVersionMonitorProps) {
+const VERSION_DISMISS_KEY = "csm_app_version_dismissed";
+
+declare const __APP_INFO__: { buildVersion?: string; lastBuildTime?: string };
+
+function getEmbeddedBuildVersion(): string | null {
+	try {
+		if (typeof __APP_INFO__ !== "undefined") {
+			return __APP_INFO__.buildVersion || __APP_INFO__.lastBuildTime || null;
+		}
+	}
+	catch {
+		// ignore
+	}
+	return null;
+}
+
+function resolveProbeBase(checkUpdateUrl?: string): string {
+	const base = checkUpdateUrl ?? import.meta.env.BASE_URL ?? import.meta.env.VITE_BASE_URL ?? "/";
+	const normalized = String(base).trim() || "/";
+	return normalized.endsWith("/") ? normalized : `${normalized}/`;
+}
+
+export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl }: AppVersionMonitorProps) {
 	let isCheckingUpdates = false;
 	const { t } = useTranslation();
 	const currentVersionTag = useRef("");
@@ -17,10 +39,11 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 	const timer = useRef<ReturnType<typeof setInterval>>();
 	const consecutiveFailures = useRef(0);
 	const cooldownUntil = useRef(0);
+	const probeBase = resolveProbeBase(checkUpdateUrl);
 
 	function buildProbeUrl(path: string) {
 		try {
-			const normalizedBase = String(checkUpdateUrl || "/").trim() || "/";
+			const normalizedBase = probeBase;
 			const base = /^https?:\/\//i.test(normalizedBase)
 				? normalizedBase
 				: `${location.origin}${normalizedBase.startsWith("/") ? "" : "/"}${normalizedBase}`;
@@ -45,9 +68,10 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 					[
 						createElement(
 							Button,
-
 							{
 								onClick() {
+									sessionStorage.setItem(VERSION_DISMISS_KEY, versionTag);
+									lastVersionTag.current = versionTag;
 									window.$notification?.destroy();
 								},
 								key: "cancel",
@@ -59,6 +83,7 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 							{
 								type: "primary",
 								onClick() {
+									sessionStorage.removeItem(VERSION_DISMISS_KEY);
 									lastVersionTag.current = currentVersionTag.current;
 									location.reload();
 								},
@@ -72,7 +97,7 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 		});
 	}
 
-	async function getVersionTag(isCache: boolean = false) {
+	async function getVersionTag() {
 		try {
 			if (
 				location.hostname === "localhost"
@@ -92,9 +117,8 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-			// Check version from a JSON file in the OSS directory
 			const response = await fetch(buildProbeUrl("version.json"), {
-				cache: !isCache ? "no-cache" : "default",
+				cache: "no-store",
 				method: "GET",
 				signal: controller.signal,
 			});
@@ -109,9 +133,8 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 			const fallbackController = new AbortController();
 			const fallbackTimeoutId = setTimeout(() => fallbackController.abort(), 5000);
 
-			// Fallback to checking headers if JSON file is not available
 			const fallbackResponse = await fetch(buildProbeUrl("fversion"), {
-				cache: !isCache ? "no-cache" : "default",
+				cache: "no-store",
 				method: "HEAD",
 				signal: fallbackController.signal,
 			});
@@ -121,17 +144,14 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 				consecutiveFailures.current = 0;
 				return fallbackResponse.headers.get("etag") || fallbackResponse.headers.get("last-modified");
 			}
-			
-			// Silently return null if both methods fail (no need to log error)
+
 			return null;
 		}
 		catch (error) {
 			consecutiveFailures.current += 1;
 			if (consecutiveFailures.current >= 3) {
-				// Pause probing for a short period to avoid noisy retries after network changes.
 				cooldownUntil.current = Date.now() + 5 * 60 * 1000;
 			}
-			// Only log errors in development mode
 			if (import.meta.env.DEV) {
 				console.warn("Failed to fetch version tag:", error);
 			}
@@ -145,10 +165,17 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 			return;
 		}
 
-		if (lastVersionTag.current !== versionTag) {
-			clearInterval(timer.current);
-			handleNotice(versionTag);
+		if (lastVersionTag.current === versionTag) {
+			return;
 		}
+
+		if (sessionStorage.getItem(VERSION_DISMISS_KEY) === versionTag) {
+			lastVersionTag.current = versionTag;
+			return;
+		}
+
+		clearInterval(timer.current);
+		handleNotice(versionTag);
 	}
 
 	function handleVisibilitychange() {
@@ -171,13 +198,17 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 			return;
 		}
 
-		// 首次运行时，获取当前版本号（防止 Nginx 缓存了 index.html）
 		if (!lastVersionTag.current) {
-			const currentVersionTag = await getVersionTag(true);
-			if (!currentVersionTag) {
-				return;
+			const embedded = getEmbeddedBuildVersion();
+			if (embedded) {
+				lastVersionTag.current = embedded;
 			}
-			lastVersionTag.current = currentVersionTag;
+			else {
+				const serverVersion = await getVersionTag();
+				if (serverVersion) {
+					lastVersionTag.current = serverVersion;
+				}
+			}
 		}
 
 		timer.current = setInterval(
@@ -192,11 +223,9 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 	}
 
 	useEffect(() => {
-		/* Mounted */
 		start();
 		document.addEventListener("visibilitychange", handleVisibilitychange);
 
-		/* UnMounted */
 		return () => {
 			stop();
 			document.removeEventListener("visibilitychange", handleVisibilitychange);

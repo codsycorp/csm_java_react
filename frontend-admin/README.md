@@ -20,6 +20,8 @@ pnpm dev
 pnpm build
 ```
 
+Build tạo `dist/version.json` (cùng timestamp với bundle). Khi deploy lên server, copy **toàn bộ** `dist/` vào `csm_datas/public/{rp_index}/` (ví dụ `admin/`) — `sys_la_routers.rp_index` phải khớp thư mục đó. Backend phục vụ `/version.json` theo domain → `{rp_index}/version.json`.
+
 ## Ghi chu
 
 - App nay la source rieng, khong goi cheo sang `frontend-web`.

@@ -10,12 +10,15 @@ import svgrPlugin from "vite-plugin-svgr";
 import path from "path";
 import compression from "vite-plugin-compression";
 import autoResourceHints from "./vite-plugin-resource-hints.js";
+import versionJsonPlugin from "./vite-plugin-version-json.js";
 
 import { dependencies, devDependencies, name, version } from "./package.json";
 
+const buildVersion = dayjs().format("YYYYMMDDHHmmss");
 const __APP_INFO__ = {
 	pkg: { dependencies, devDependencies, name, version },
 	lastBuildTime: dayjs(new Date()).format("YYYY-MM-DD HH:mm:ss"),
+	buildVersion,
 };
 
 const isDev = process.env.NODE_ENV === "development";
@@ -47,6 +50,7 @@ export default defineConfig({
 			}
 		},
 		autoResourceHints(),
+		versionJsonPlugin({ version: buildVersion }),
 	],
 	resolve: {
 		alias: {

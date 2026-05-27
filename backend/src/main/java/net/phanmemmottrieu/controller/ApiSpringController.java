@@ -582,6 +582,10 @@ public class ApiSpringController {
     @Value("${ai.async.poll-min-ms:3000}")
     private long aiAsyncPollMinMs;
 
+    /** SEO lane: one HTTP holds until final JSON — no async job submit/poll from client. */
+    @Value("${ai.seo.client-sync-only:true}")
+    private boolean seoClientSyncOnly;
+
     @Value("${ai.assistant.attachment-retrieval.enabled:true}")
     private boolean aiAssistantAttachmentRetrievalEnabled;
 
@@ -30507,6 +30511,14 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 || Boolean.TRUE.equals(params.get("async"))
                 || "true".equalsIgnoreCase(String.valueOf(params.get("async")));
         boolean seoOneShot = isSeoOneShotPipelineRequest(params);
+        boolean seoContentLane = seoOneShot || isSeoContentRequest(params, prompt);
+
+        // SEO + guest-facing content: sync only — client waits for validated final payload (see brief Y.11 / AA).
+        if (asyncRequested && seoClientSyncOnly && seoContentLane) {
+            logger.info("SEO lane: ignoring async submit — running sync until final result (seoPipeline={}, taskType={})",
+                params.get("seoPipeline"), params.get("taskType"));
+            asyncRequested = false;
+        }
 
         if (asyncRequested) {
             handleAiAsyncSubmit(response, prompt, params);

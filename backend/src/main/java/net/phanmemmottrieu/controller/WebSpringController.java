@@ -1075,34 +1075,89 @@ public class WebSpringController {
         return ext;
     }
 
-    /** AppVersionMonitor probe — prefer csm_datas/public/version.json, else index.html mtime. */
-    private ResponseEntity<byte[]> serveVersionJson() {
+    /** Resolve React build folder (rp_index) for domain — used by version.json per frontend app. */
+    private String resolveRpIndexForDomain(String hostHeader) {
+        if (hostHeader == null || hostHeader.isBlank()) {
+            return "";
+        }
+        String domain = hostHeader.replace("www.", "").trim();
+        int colon = domain.indexOf(':');
+        if (colon > 0) {
+            domain = domain.substring(0, colon);
+        }
         try {
-            File versionFile = recordManager.getStaticFile("version.json");
-            if (versionFile != null && versionFile.isFile()) {
-                byte[] content = Files.readAllBytes(versionFile.toPath());
-                return ResponseEntity.ok()
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .cacheControl(CacheControl.noCache())
-                        .body(content);
+            SearchFilter filter = new SearchFilter();
+            filter.setOperator("AND");
+            filter.setConditions(List.of(
+                    RecordManager.createCondition("domain_name", "eq", domain),
+                    RecordManager.createCondition("f_case", "eq", ""),
+                    RecordManager.createCondition("rp_index", "isnotnull", null),
+                    RecordManager.createCondition("rp_index", "noteq", ""),
+                    RecordManager.createCondition("run", "eq", 1)));
+            Map<String, Object> result = recordManager.filter("csm", "sys_la_routers", filter);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rows = (List<Map<String, Object>>) result.getOrDefault("rows", new ArrayList<>());
+            if (!rows.isEmpty()) {
+                Object rpIndexObject = rows.get(0).get("rp_index");
+                if (rpIndexObject instanceof String rpIndex && !rpIndex.isBlank()) {
+                    return rpIndex.replaceAll("^/+|/+$", "");
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to resolve rp_index for version.json (domain={}): {}", domain, e.getMessage());
+        }
+        return "";
+    }
+
+    /**
+     * AppVersionMonitor probe — stable version only (never time-based).
+     * Order: {rp_index}/version.json → version.json → {rp_index}/index.html mtime → bundled fallback.
+     */
+    private ResponseEntity<byte[]> serveVersionJson(String hostHeader) {
+        try {
+            String rpIndex = resolveRpIndexForDomain(hostHeader);
+            List<String> versionCandidates = new ArrayList<>();
+            if (!rpIndex.isEmpty()) {
+                versionCandidates.add(rpIndex + "/version.json");
+            }
+            versionCandidates.add("version.json");
+
+            for (String relativePath : versionCandidates) {
+                File versionFile = recordManager.getStaticFile(relativePath);
+                if (versionFile != null && versionFile.isFile()) {
+                    byte[] content = Files.readAllBytes(versionFile.toPath());
+                    return ResponseEntity.ok()
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .cacheControl(CacheControl.noCache())
+                            .body(content);
+                }
             }
 
-            File indexFile = recordManager.getStaticFile("index.html");
-            String versionTag;
-            if (indexFile != null && indexFile.isFile()) {
-                versionTag = String.valueOf(Files.getLastModifiedTime(indexFile.toPath()).toMillis());
-            } else {
-                versionTag = String.valueOf(System.currentTimeMillis() / 60000L);
+            if (!rpIndex.isEmpty()) {
+                File indexFile = recordManager.getStaticFile(rpIndex + "/index.html");
+                if (indexFile != null && indexFile.isFile()) {
+                    String versionTag = String.valueOf(Files.getLastModifiedTime(indexFile.toPath()).toMillis());
+                    String payload = "{\"version\":\"" + versionTag + "\"}";
+                    return ResponseEntity.ok()
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .cacheControl(CacheControl.noCache())
+                            .body(payload.getBytes(StandardCharsets.UTF_8));
+                }
             }
-            String payload = "{\"version\":\"" + versionTag + "\"}";
-            return ResponseEntity.ok()
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .cacheControl(CacheControl.noCache())
-                    .body(payload.getBytes(StandardCharsets.UTF_8));
+
+            try (var in = getClass().getClassLoader().getResourceAsStream("static/version.json")) {
+                if (in != null) {
+                    byte[] content = in.readAllBytes();
+                    return ResponseEntity.ok()
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .cacheControl(CacheControl.noCache())
+                            .body(content);
+                }
+            }
         } catch (Exception e) {
             logger.warn("Failed to serve version.json: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new byte[0]);
         }
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new byte[0]);
     }
 
     /** PWA manifest — avoid SPA HTML fallback (causes Manifest syntax error in DevTools). */
@@ -1770,7 +1825,7 @@ public class WebSpringController {
                             .body(errorXml.getBytes(StandardCharsets.UTF_8));
                 }
             } else if (linkP.equals("/version.json")) {
-                ResponseEntity<byte[]> versionResponse = serveVersionJson();
+                ResponseEntity<byte[]> versionResponse = serveVersionJson(hostHeader);
                 if (versionResponse != null) {
                     return versionResponse;
                 }

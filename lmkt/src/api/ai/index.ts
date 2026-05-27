@@ -84,7 +84,7 @@ export type AiProgressPayload = Record<string, any>;
 
 type GenerateSeoContentOptions = {
 	onProgress?: (progress: AiProgressPayload) => void;
-	/** Submit async job + poll — recommended for local llama on weak servers (avoids long HTTP hang). */
+	/** Chỉ bật khi debug — SEO production dùng sync 1 HTTP (backend ép sync khi ai.seo.client-sync-only=true). */
 	preferAsync?: boolean;
 	taskType?: string;
 };
@@ -188,8 +188,8 @@ export type SeoAntiAiOneShotContext = {
 };
 
 /**
- * LMKT anti-AI SEO: một HTTP request — backend chạy creative-params + bài viết nội bộ.
- * Luồng tách biệt `/ai-code-stream` (menu/code). Mặc định async poll vì 2 bước inference.
+ * LMKT anti-AI SEO: một HTTP sync — client chờ đến khi backend trả JSON cuối (2 bước inference nội bộ).
+ * Luồng tách biệt `/ai-code-stream` (menu/code SSE). Không dùng async job poll trừ khi preferAsync: true.
  */
 export async function generateSeoAntiAiOneShot(
 	seoContext: SeoAntiAiOneShotContext,
@@ -201,7 +201,7 @@ export async function generateSeoAntiAiOneShot(
 			taskType: options?.taskType || "seo_content",
 			seoContext,
 		};
-		if (options?.preferAsync !== false) {
+		if (options?.preferAsync === true) {
 			return await submitSeoContentJobAsync(body, options);
 		}
 		const response = await request
@@ -323,7 +323,7 @@ export async function generateSeoContentWithPrompt(prompt: string, options?: Gen
 	};
 	
 	try {
-		if (options?.preferAsync || prompt.length >= AI_ASYNC_THRESHOLD_CHARS) {
+		if (options?.preferAsync === true) {
 			return await generateSeoContentWithPromptAsync(prompt, options);
 		}
 

@@ -1953,7 +1953,7 @@ Rules:
     int tokenCap = llamaCppNativeService != null
         ? llamaCppNativeService.getEffectiveMaxTokensLimit()
         : Math.max(4096, maxOutputTokens);
-    int seoOutputTokens = Math.max(2048, Math.min(seoArticleMaxTokens, tokenCap));
+    int seoOutputTokens = Math.max(256, Math.min(seoArticleMaxTokens, tokenCap));
     return callLocalProviderWithContext(
         trimmedPrompt,
         seoOutputTokens,

@@ -426,7 +426,11 @@ public class LlamaCppNativeService implements AIProvider {
         safePrompt = clipPromptSmart(safePrompt, effectiveMaxPromptChars(), false);
         int runtimeBudget = resolveRuntimePromptCharBudget();
         safePrompt = clipPromptSmart(safePrompt, runtimeBudget, false);
-        int cappedTokens = Math.max(16, Math.min(effectiveMaxTokens(), maxOutputTokensCap));
+        int requestedCap = Math.max(16, maxOutputTokensCap);
+        int globalCap = Math.max(16, effectiveMaxTokens());
+        // Guest/classify paths pass small caps (≤ global). SEO one-shot passes ai.seo.article.max-tokens — honor it.
+        int effectiveCap = requestedCap > globalCap ? requestedCap : Math.min(requestedCap, globalCap);
+        int cappedTokens = Math.max(16, effectiveCap);
         long startedAt = markRequestStart(safePrompt);
         try {
             String output = runLocalCompletionWithCap(safePrompt, cappedTokens, isJsonForced);

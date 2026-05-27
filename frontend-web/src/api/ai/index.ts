@@ -265,7 +265,7 @@ export async function generateSeoContentWithPrompt(prompt: string, options?: Gen
 	};
 	
 	try {
-		if (options?.preferAsync || prompt.length >= AI_ASYNC_THRESHOLD_CHARS) {
+		if (options?.preferAsync === true) {
 			return await generateSeoContentWithPromptAsync(prompt, options);
 		}
 
