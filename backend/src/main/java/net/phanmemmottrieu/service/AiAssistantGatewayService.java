@@ -3293,15 +3293,45 @@ Rules:
     }
     try {
       Map<String, Object> wrapper = objectMapper.readValue(raw, Map.class);
+
+      Object choicesObj = wrapper.get("choices");
+      if (choicesObj instanceof List<?> choices && !choices.isEmpty()) {
+        Object first = choices.get(0);
+        if (first instanceof Map<?, ?> firstMap) {
+          Object messageObj = firstMap.get("message");
+          if (messageObj instanceof Map<?, ?> messageMap) {
+            Object contentObj = messageMap.get("content");
+            if (contentObj != null && !String.valueOf(contentObj).isBlank()) {
+              return String.valueOf(contentObj);
+            }
+          }
+          Object textObj = firstMap.get("text");
+          if (textObj != null && !String.valueOf(textObj).isBlank()) {
+            return String.valueOf(textObj);
+          }
+        }
+      }
+
       Object result = wrapper.get("result");
-      if (result == null) {
-        Object message = wrapper.get("message");
-        return message == null ? raw : String.valueOf(message);
+      if (result instanceof String text && !text.isBlank()) {
+        return text;
       }
-      if (result instanceof String) {
-        return (String) result;
+      if (result != null) {
+        return objectMapper.writeValueAsString(result);
       }
-      return objectMapper.writeValueAsString(result);
+
+      Object content = wrapper.get("content");
+      if (content != null && !String.valueOf(content).isBlank()) {
+        return String.valueOf(content);
+      }
+
+      Object message = wrapper.get("message");
+      if (message != null && !String.valueOf(message).isBlank()
+          && !wrapper.containsKey("success") && !wrapper.containsKey("code")) {
+        return String.valueOf(message);
+      }
+
+      return raw;
     } catch (Exception ex) {
       return raw;
     }

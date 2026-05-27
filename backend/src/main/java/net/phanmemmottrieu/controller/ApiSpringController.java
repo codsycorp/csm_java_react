@@ -33669,6 +33669,21 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         return title != null && !String.valueOf(title).isBlank() && hasBody;
     }
 
+    /** SEO-shaped JSON but title/body still blank — do not report success to client. */
+    private boolean isEmptySeoAttemptPayload(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return false;
+        }
+        boolean hasSeoKeys = payload.containsKey("title")
+            || payload.containsKey("content")
+            || payload.containsKey("html_content")
+            || payload.containsKey("attributes_title");
+        if (!hasSeoKeys) {
+            return false;
+        }
+        return !isSeoContentPayload(payload);
+    }
+
     /** LMKT: alias html_content ↔ content; bổ sung meta EN/ZH nếu model local thiếu field. */
     private void normalizeLmktContentFieldAliases(Map<String, Object> payload) {
         if (payload == null || payload.isEmpty()) {
@@ -33751,6 +33766,20 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                     "Success",
                     "成功"));
                 logger.info("Successfully processed direct SEO JSON payload");
+                return;
+            }
+
+            if (isEmptySeoAttemptPayload(parsedResult)) {
+                response.set("code", 200);
+                response.set("success", false);
+                response.set("data", parsedResult);
+                response.set("errorCode", "SEO_GENERATION_FAILED");
+                response.set("message", uiTextByLang(
+                    uiLang,
+                    "Model local không tạo được bài SEO đủ title và content.",
+                    "Local model did not produce SEO content with title and body.",
+                    "本地模型未生成包含标题和正文的 SEO 内容。"));
+                logger.warn("Rejected empty SEO payload at top level");
                 return;
             }
 
@@ -33910,6 +33939,20 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                             "Success",
                             "成功"));
                         logger.info("Successfully parsed SEO JSON content from provider: {}", provider);
+                        return;
+                    }
+                    if (isEmptySeoAttemptPayload(parsedData)) {
+                        response.set("code", 200);
+                        response.set("success", false);
+                        response.set("data", parsedData);
+                        response.set("provider", provider);
+                        response.set("errorCode", "SEO_GENERATION_FAILED");
+                        response.set("message", uiTextByLang(
+                            uiLang,
+                            "Model local không tạo được bài SEO đủ title và content.",
+                            "Local model did not produce SEO content with title and body.",
+                            "本地模型未生成包含标题和正文的 SEO 内容。"));
+                        logger.warn("Rejected empty SEO payload parsed from provider string: {}", provider);
                         return;
                     }
                     // Successfully extracted and parsed JSON

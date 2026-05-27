@@ -143,14 +143,24 @@ public class AiSeoContentPipelineService {
             String retryRaw = aiAssistantGatewayService.generateSeoContent(retryPrompt, progressListener);
             mergeSeoArticleMaps(merged, parseSeoArticleMap(retryRaw));
             fillMissingSeoMetaFields(merged);
-            try {
-                return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(merged);
-            } catch (Exception ex) {
-                log.warn("SEO retry serialize failed: {}", ex.getMessage());
+            if (hasRecoverableSeoContent(merged)) {
+                try {
+                    return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(merged);
+                } catch (Exception ex) {
+                    log.warn("SEO retry serialize failed: {}", ex.getMessage());
+                }
+            } else {
+                log.warn("SEO retry still empty after merge — returning error JSON");
             }
         }
 
-        return normalizeSeoArticleJson(articleRaw);
+        if (hasRecoverableSeoContent(merged)) {
+            return normalizeSeoArticleJson(articleRaw);
+        }
+
+        return aiAssistantGatewayService.createErrorJson(
+            "Model local không tạo được bài SEO đủ title và content. Thử lại hoặc dùng model lớn hơn.",
+            "SEO_GENERATION_FAILED");
     }
 
     private String buildSeoArticleRetryPrompt(
@@ -160,7 +170,6 @@ public class AiSeoContentPipelineService {
             Map<String, Object> creative,
             Map<String, Object> ctx,
             Map<String, Object> partial) {
-        String base = buildCompactAntiAiArticlePrompt(industry, topic, domainKey, creative, ctx);
         StringBuilder missing = new StringBuilder();
         for (String field : SEO_REQUIRED_FIELDS) {
             if (isBlank(partial.get(field))) {
@@ -168,8 +177,19 @@ public class AiSeoContentPipelineService {
                 missing.append(field);
             }
         }
-        return base + "\n\n[RETRY] Lần trước thiếu field: " + missing
-            + ". BẮT BUỘC trả JSON đủ 12 field. Giữ topic/industry. Chỉ JSON, không markdown.";
+        String persona = str(creative.get("personaKey"), "storyteller");
+        String angle = str(creative.get("angle"), topic);
+        return """
+            Viết bài SEO tiếng Việt + EN + ZH. Trả về ĐÚNG 1 JSON object thuần (không markdown, không giải thích).
+            Topic: %s
+            Industry: %s
+            Domain: %s
+            Persona: %s
+            Angle: %s
+            Lần trước thiếu field: %s
+            BẮT BUỘC đủ 12 key: title, content, content_en, content_zh, attributes_title, attributes_title_en, attributes_title_zh, attributes_description, attributes_description_en, attributes_description_zh, attributes_keywords, attributes_keywords_en, attributes_keywords_zh.
+            content/content_en/content_zh là HTML. title và attributes_* không rỗng.
+            """.formatted(topic, industry, domainKey, persona, angle, missing);
     }
 
     @SuppressWarnings("unchecked")
@@ -185,21 +205,136 @@ public class AiSeoContentPipelineService {
                 text = articleRaw.trim();
             }
             text = stripMarkdownJsonFence(text);
+            text = extractJsonBlockFromText(text);
             Map<String, Object> parsed = mapper.readValue(text, Map.class);
-            if (parsed.containsKey("title") || parsed.containsKey("content")) {
-                out.putAll(parsed);
+            if (isSeoArticleShape(parsed)) {
+                mergeSeoArticleMaps(out, parsed);
             } else if (parsed.get("data") instanceof Map<?, ?> dataMap) {
+                Map<String, Object> nested = new LinkedHashMap<>();
                 for (Map.Entry<?, ?> e : dataMap.entrySet()) {
-                    if (e.getKey() != null) out.put(String.valueOf(e.getKey()), e.getValue());
+                    if (e.getKey() != null) nested.put(String.valueOf(e.getKey()), e.getValue());
                 }
-            } else {
-                out.putAll(parsed);
+                if (isSeoArticleShape(nested)) {
+                    mergeSeoArticleMaps(out, nested);
+                }
             }
             fillMissingSeoMetaFields(out);
         } catch (Exception ex) {
             log.warn("SEO parseSeoArticleMap failed: {}", ex.getMessage());
         }
         return out;
+    }
+
+    private static boolean isSeoArticleShape(Map<String, Object> parsed) {
+        if (parsed == null || parsed.isEmpty()) {
+            return false;
+        }
+        return parsed.containsKey("title")
+            || parsed.containsKey("content")
+            || parsed.containsKey("html_content")
+            || parsed.containsKey("attributes_title");
+    }
+
+    private static boolean hasRecoverableSeoContent(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return false;
+        }
+        String title = String.valueOf(payload.getOrDefault("title", payload.get("attributes_title"))).trim();
+        String body = String.valueOf(payload.getOrDefault("content", payload.get("html_content"))).trim();
+        return !title.isEmpty() && !body.isEmpty();
+    }
+
+    /** Pick the JSON object with the most filled SEO fields from noisy LLM output. */
+    static String extractJsonBlockFromText(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        String t = text.trim();
+        int retryCut = t.indexOf("[RETRY]");
+        if (retryCut > 0) {
+            t = t.substring(0, retryCut).trim();
+        }
+        t = t.replace("Không cần explanation.", "").trim();
+
+        String bestJson = null;
+        int bestScore = -1;
+        for (int i = 0; i < t.length(); i++) {
+            if (t.charAt(i) != '{') {
+                continue;
+            }
+            int end = findMatchingJsonBrace(t, i);
+            if (end <= i) {
+                continue;
+            }
+            String candidate = t.substring(i, end + 1);
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                Map<String, Object> parsed = mapper.readValue(candidate, Map.class);
+                if (!isSeoArticleShape(parsed)) {
+                    continue;
+                }
+                int score = scoreFilledSeoFields(parsed);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestJson = candidate;
+                }
+            } catch (Exception ignored) {
+                // try next block
+            }
+        }
+        if (bestJson != null) {
+            return bestJson;
+        }
+
+        int start = t.indexOf('{');
+        int end = t.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            return t.substring(start, end + 1);
+        }
+        return t;
+    }
+
+    private static int findMatchingJsonBrace(String text, int openIdx) {
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = openIdx; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+                continue;
+            }
+            if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    private static int scoreFilledSeoFields(Map<String, Object> parsed) {
+        int score = 0;
+        for (String field : SEO_REQUIRED_FIELDS) {
+            Object value = parsed.get(field);
+            if (!isBlank(value)) {
+                score++;
+            }
+        }
+        return score;
     }
 
     private static void mergeSeoArticleMaps(Map<String, Object> target, Map<String, Object> patch) {

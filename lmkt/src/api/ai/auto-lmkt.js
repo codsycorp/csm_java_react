@@ -8145,26 +8145,54 @@ const AI_LANE_SEO_REQUIRED_FIELDS = [
 
 function extractSeoPayloadFromApiResult(result) {
   let seo = null;
+
+  const unwrapSeoCandidate = (candidate) => {
+    if (candidate == null) return null;
+    if (typeof candidate === "string") {
+      try { return parseSeoJsonString(candidate); } catch (_e) { return null; }
+    }
+    if (typeof candidate !== "object") return null;
+
+    if (candidate.title || candidate.content || candidate.html_content || candidate.attributes_title) {
+      return candidate;
+    }
+
+    const choices = candidate.choices;
+    if (Array.isArray(choices) && choices.length > 0) {
+      const msgContent = choices[0]?.message?.content ?? choices[0]?.text;
+      if (typeof msgContent === "string" && msgContent.trim()) {
+        try { return parseSeoJsonString(msgContent); } catch (_e) { /* fall through */ }
+      }
+    }
+
+    if (typeof candidate.content === "string" && candidate.content.trim().startsWith("{")) {
+      try { return parseSeoJsonString(candidate.content); } catch (_e) { /* fall through */ }
+    }
+
+    return candidate;
+  };
+
   const candidates = [
     result?.data?.result,
     result?.result,
     result?.data
   ];
   for (let i = 0; i < candidates.length; i += 1) {
-    const c = candidates[i];
-    if (c && typeof c === "object" && (c.title || c.content || c.html_content || c.attributes_title)) {
-      seo = c;
+    const parsed = unwrapSeoCandidate(candidates[i]);
+    if (isRecoverableSeoPayload(parsed)) {
+      seo = parsed;
       break;
     }
+    if (parsed && typeof parsed === "object" && !seo) {
+      seo = parsed;
+    }
   }
-  if (!seo && result && typeof result === "object") seo = result;
-
-  if (typeof seo === "string") {
-    try { seo = parseSeoJsonString(seo); } catch (_e) { seo = null; }
+  if (!seo && result && typeof result === "object") {
+    seo = unwrapSeoCandidate(result);
   }
 
   if (!isRecoverableSeoPayload(seo)) {
-    const rawContent = result?.rawContent || result?.data?.rawContent;
+    const rawContent = result?.rawContent || result?.data?.rawContent || result?.data?.content;
     if (typeof rawContent === "string" && rawContent.trim()) {
       try {
         seo = parseSeoJsonString(rawContent);
@@ -8176,6 +8204,20 @@ function extractSeoPayloadFromApiResult(result) {
     seo.content = seo.html_content;
   }
   return normalizeSeoLanePayload(seo);
+}
+
+function seoLaneFailureMessage(result, fallback = "SEO failed — không parse được JSON") {
+  const apiMsg = String(result?.message || result?.data?.message || "").trim();
+  if (apiMsg && apiMsg !== "Thành công" && apiMsg !== "Success" && apiMsg !== "成功") {
+    return apiMsg;
+  }
+  if (result?.errorCode === "SEO_GENERATION_FAILED" || result?.data?.errorCode === "SEO_GENERATION_FAILED") {
+    return "Model local không tạo đủ title và content — thử lại hoặc dùng model lớn hơn.";
+  }
+  if (result?.success === true || result?.data?.success === true) {
+    return "SEO thất bại — backend báo thành công nhưng payload rỗng hoặc không parse được.";
+  }
+  return fallback;
 }
 
 function isRecoverableSeoPayload(seo) {
@@ -8782,7 +8824,7 @@ function ensureAiLaneTestPanel() {
       const seo = extractSeoPayloadFromApiResult(result);
       appendAiLaneTesterLog(logArea, `SEO response (${elapsedSec}s)`, result);
       if (!isRecoverableSeoPayload(seo)) {
-        throw new Error(result?.message || result?.data?.message || "SEO failed — không parse được JSON");
+        throw new Error(seoLaneFailureMessage(result));
       }
       renderSeoChecklist(seo, elapsedSec, true);
       seoProgress.textContent = ti(`✅ Hoàn tất sau ${elapsedSec}s`, `✅ Done in ${elapsedSec}s`, `✅ 完成 ${elapsedSec}s`);
