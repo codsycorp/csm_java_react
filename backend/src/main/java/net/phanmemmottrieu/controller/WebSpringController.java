@@ -1074,6 +1074,63 @@ public class WebSpringController {
         }
         return ext;
     }
+
+    /** AppVersionMonitor probe — prefer csm_datas/public/version.json, else index.html mtime. */
+    private ResponseEntity<byte[]> serveVersionJson() {
+        try {
+            File versionFile = recordManager.getStaticFile("version.json");
+            if (versionFile != null && versionFile.isFile()) {
+                byte[] content = Files.readAllBytes(versionFile.toPath());
+                return ResponseEntity.ok()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .cacheControl(CacheControl.noCache())
+                        .body(content);
+            }
+
+            File indexFile = recordManager.getStaticFile("index.html");
+            String versionTag;
+            if (indexFile != null && indexFile.isFile()) {
+                versionTag = String.valueOf(Files.getLastModifiedTime(indexFile.toPath()).toMillis());
+            } else {
+                versionTag = String.valueOf(System.currentTimeMillis() / 60000L);
+            }
+            String payload = "{\"version\":\"" + versionTag + "\"}";
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .cacheControl(CacheControl.noCache())
+                    .body(payload.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            logger.warn("Failed to serve version.json: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new byte[0]);
+        }
+    }
+
+    /** PWA manifest — avoid SPA HTML fallback (causes Manifest syntax error in DevTools). */
+    private ResponseEntity<byte[]> serveWebManifestJson() {
+        try {
+            File manifestFile = recordManager.getStaticFile("manifest.json");
+            if (manifestFile != null && manifestFile.isFile()) {
+                byte[] content = Files.readAllBytes(manifestFile.toPath());
+                return ResponseEntity.ok()
+                        .contentType(MediaType.parseMediaType("application/manifest+json"))
+                        .cacheControl(CacheControl.maxAge(1, TimeUnit.DAYS).cachePublic())
+                        .body(content);
+            }
+
+            try (var in = getClass().getClassLoader().getResourceAsStream("static/manifest.json")) {
+                if (in != null) {
+                    byte[] content = in.readAllBytes();
+                    return ResponseEntity.ok()
+                            .contentType(MediaType.parseMediaType("application/manifest+json"))
+                            .cacheControl(CacheControl.maxAge(1, TimeUnit.DAYS).cachePublic())
+                            .body(content);
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to serve manifest.json: {}", e.getMessage());
+        }
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new byte[0]);
+    }
     
     /**
      * Check SSR rate limit for IP address
@@ -1711,6 +1768,16 @@ public class WebSpringController {
                     return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                             .contentType(MediaType.APPLICATION_XML)
                             .body(errorXml.getBytes(StandardCharsets.UTF_8));
+                }
+            } else if (linkP.equals("/version.json")) {
+                ResponseEntity<byte[]> versionResponse = serveVersionJson();
+                if (versionResponse != null) {
+                    return versionResponse;
+                }
+            } else if (linkP.equals("/manifest.json")) {
+                ResponseEntity<byte[]> manifestResponse = serveWebManifestJson();
+                if (manifestResponse != null) {
+                    return manifestResponse;
                 }
             }
 

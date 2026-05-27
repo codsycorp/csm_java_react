@@ -12,6 +12,7 @@ import path from "path";
 import compression from "vite-plugin-compression";
 import { constants as zlibConstants } from "node:zlib";
 import autoResourceHints from "./vite-plugin-resource-hints.js";
+import versionJsonPlugin from "./vite-plugin-version-json.js";
 
 import { dependencies, devDependencies, name, version } from "./package.json";
 
@@ -53,6 +54,7 @@ export default defineVitestConfig(({ mode }) => {
 			}
 		},
 		autoResourceHints(),
+		versionJsonPlugin(),
 	],
 	resolve: {
 		alias: {

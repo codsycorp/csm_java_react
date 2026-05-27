@@ -5898,7 +5898,8 @@ async function processContent(item, opts = {}) {
   // QUAN TRỌNG: Thêm timestamp để tránh cache hit khi prompt giống nhau
   // Backend có cache response 1 giờ, nếu prompt giống nhau sẽ trả về kết quả cũ
   const uniqueSeed = `[UNIQUE_${Date.now()}_${Math.random().toString(36).substr(2, 9)}]`;
-  const seoOneShotDisabled = typeof import.meta !== 'undefined' && import.meta.env?.VITE_AI_SEO_ONE_SHOT === 'false';
+  // DynamicCode chạy classic script — KHÔNG dùng import.meta (SyntaxError ngoài module)
+  const seoOneShotDisabled = typeof window !== 'undefined' && window.VITE_AI_SEO_ONE_SHOT === 'false';
   const oneShotFn = ctx.helperAi?.generateSeoAntiAiOneShot;
   const useSeoOneShot = !seoOneShotDisabled && typeof oneShotFn === 'function';
 

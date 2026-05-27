@@ -773,10 +773,17 @@ public class RecordManager {
         logger.info("Cleanup completed: All Lucene resources have been processed.");
     }
     public File getStaticFile(String relativePath) {
-        String basePath = DIR_PATH + "/public/"; // Ví dụ: /path/to/app/public/
-        File file = new File(basePath, relativePath); // Ví dụ: /path/to/app/public/assets/dxdatagrid/css/icons/dxicons.woff2
+        String basePath = DIR_PATH + "/public/";
+        String normalized = relativePath == null ? "" : relativePath.trim();
+        while (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        if (normalized.contains("..")) {
+            logger.warn("Rejected unsafe static path: {}", relativePath);
+            return null;
+        }
+        File file = new File(basePath, normalized);
     
-        // logger.debug() instead of logger.info() to reduce verbose logging for every static file request
         logger.debug("DIR_PATH value: {}", DIR_PATH);
         logger.debug("Calculated basePath: {}", basePath);
         logger.debug("Requested relativePath: {}", relativePath);
