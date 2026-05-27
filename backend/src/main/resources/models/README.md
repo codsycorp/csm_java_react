@@ -3,6 +3,9 @@ Place your GGUF model file in this folder.
 Expected default file:
   qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
 
+Character cutout (Lane 5 S1):
+  u2netp.onnx  (~4.7MB, auto-downloaded to csm_datas/models/u2netp.onnx on first extract)
+
 Configured by environment variables (config.env) and application.properties:
 
   AI_LOCAL_LLAMA_MODEL_PATH      path to .gguf file

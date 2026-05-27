@@ -28,6 +28,9 @@ backend/csm_datas/database/
 backend/csm_datas/lucene_index/
 backend/csm_datas/public/
 
+# Auto-downloaded ONNX models (u2netp for character cutout)
+backend/csm_datas/models/*.onnx
+
 # Logs
 *.log
 logs/

@@ -3233,23 +3233,53 @@ function getThemeTokens() {
   }
 }
 
+function readPersistedAccessToken() {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem("access-token") : null;
+    if (!raw) return "";
+    const parsed = JSON.parse(raw);
+    return String(parsed?.state?.token || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function resolveAuthToken(seftObj) {
+  const win = typeof window !== "undefined" ? window : {};
+  const seft = seftObj || win.seft || {};
+  const candidates = [
+    readPersistedAccessToken(),
+    win.csmToken,
+    win.csmCurrentUser?.token,
+    seft?.user?.token,
+    seft?.Uinfos?.appToken,
+    win.csmCurrentUser?.app_token,
+    seft?.user?.app_token,
+    win.seft?.Uinfos?.appToken
+  ];
+  for (let i = 0; i < candidates.length; i += 1) {
+    const token = String(candidates[i] || "").trim();
+    if (token) return token;
+  }
+  return "";
+}
+
 function resolveContext(seftObj) {
   const win = typeof window !== 'undefined' ? window : {};
-  const app_id = (seftObj && seftObj.app_id) || "wuweb";
-  const domainFromSeft = seftObj && seftObj.domain;
+  const seft = seftObj || win.seft || {};
+  const app_id = seft.app_id || seft.appId || "wuweb";
+  const domainFromSeft = seft.domain;
   const domainFromHost = normalizeDomain(win.location?.hostname);
   const domain = domainFromSeft || domainFromHost || "csmbridge.net";
 
-  const apiBase = (seftObj && seftObj.domain_api_url)
+  const apiBase = seft.domain_api_url
     || win.domain_api_url
     || (win.location?.origin ? `${win.location.origin}/api` : "");
 
-  const token = (seftObj && seftObj.Uinfos?.appToken)
-    || win.csmToken
-    || "";
+  const token = resolveAuthToken(seft);
 
   return {
-    seftObj,
+    seftObj: seft,
     app_id,
     domain,
     apiBase,
@@ -6607,6 +6637,10 @@ function ensureMainFeatureTabs() {
     {
       id: 'ads-api-test-panel',
       label: ti('📢 Kiểm thử API quảng cáo', '📢 Ads API test', '📢 广告 API 测试')
+    },
+    {
+      id: 'ai-lane-test-panel',
+      label: ti('🧪 Test AI Lane (4a/4b/5)', '🧪 AI Lane test (4a/4b/5)', '🧪 AI通道测试')
     }
   ];
 
@@ -7817,6 +7851,1276 @@ function ensureAdsApiTestPanel() {
   const container = ensureUnifiedUIContainer();
   if (container) {
     container.appendChild(wrapper);
+  }
+
+  return wrapper;
+}
+
+// ========== AI LANE TEST PANEL (SEO / scan-dry-run / execute-local-plan) ==========
+const AI_LANE_TEST_STORAGE_KEY = "csm_ai_lane_tester_draft_v2";
+
+function readAiLaneTesterDraft() {
+  try {
+    const raw = localStorage.getItem(AI_LANE_TEST_STORAGE_KEY);
+    const draft = raw ? JSON.parse(raw) : {};
+    if (!draft.renderEngine || draft.renderEngine === "template_pro" || draft.renderEngine === "character_director") {
+      draft.renderEngine = "talking_presenter";
+    }
+    return draft;
+  } catch (e) {
+    console.warn("⚠️ [AiLaneTest] Không đọc được draft:", e.message);
+    return { renderEngine: "talking_presenter" };
+  }
+}
+
+function writeAiLaneTesterDraft(draft = {}) {
+  try {
+    localStorage.setItem(AI_LANE_TEST_STORAGE_KEY, JSON.stringify(draft));
+  } catch (e) {
+    console.warn("⚠️ [AiLaneTest] Không lưu được draft:", e.message);
+  }
+}
+
+function appendAiLaneTesterLog(logEl, title, data) {
+  if (!logEl) return;
+  const timestamp = new Date().toLocaleTimeString();
+  const payload = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  const next = `[${timestamp}] ${title}\n${payload}\n\n${logEl.value || ""}`;
+  logEl.value = next.trim();
+}
+
+function aiLaneTesterNotify(message, type = "info") {
+  if (type === "success" && typeof thongbao === "function") return thongbao(message);
+  if (type === "error" && typeof canhbao === "function") return canhbao(message);
+  if (typeof thongbao === "function") return thongbao(message);
+  console.log(message);
+}
+
+function resolveAiLocalApiBase(ctx) {
+  const base = String(ctx?.apiBase || "").replace(/\/+$/, "");
+  return base || (typeof window !== "undefined" && window.location?.origin
+    ? `${window.location.origin}/api`
+    : "");
+}
+
+async function callAiLocalJsonApi(path, body, ctx, options = {}) {
+  const apiBase = resolveAiLocalApiBase(ctx);
+  if (!apiBase) throw new Error("Thiếu apiBase — không gọi được AI local API");
+  const url = `${apiBase}${path.startsWith("/") ? path : `/${path}`}`;
+  const payload = body == null ? undefined : JSON.stringify({
+    mode: "sync",
+    async: false,
+    ...body
+  });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: buildApiHeaders(ctx),
+    credentials: "include",
+    body: payload,
+    signal: options.signal
+  });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (_e) {
+    data = { raw: text };
+  }
+  if (!response.ok) {
+    throw new Error(data?.message || data?.error || text || `HTTP ${response.status}`);
+  }
+  return data;
+}
+
+async function readFileAsBase64(file) {
+  if (!file) return "";
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error("Không đọc được file ảnh"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function testAiLaneHealth(ctx) {
+  const apiBase = resolveAiLocalApiBase(ctx);
+  const response = await fetch(`${apiBase}/ai-local/health`, { credentials: "include" });
+  const text = await response.text();
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch (_e) {
+    return { raw: text };
+  }
+}
+
+async function testAiLaneSeoOneShot(ctx, seoContext = {}) {
+  const helperAi = ctx?.helperAi || (typeof window !== "undefined" ? window.csmAI : null);
+  const oneShotFn = helperAi?.generateSeoAntiAiOneShot;
+  const payload = {
+    industry: seoContext.industry || "bat-dong-san",
+    topic: seoContext.topic || "",
+    domainKey: seoContext.domainKey || "lmkt",
+    property: seoContext.property || "",
+    location: seoContext.location || "",
+    business: seoContext.business || ""
+  };
+  if (!payload.topic.trim()) {
+    throw new Error("Thiếu topic — nhập chủ đề bài SEO");
+  }
+
+  // Giống guest web chat: 1 HTTP sync — client chờ đến khi backend trả JSON cuối (không async poll).
+  if (typeof oneShotFn === "function") {
+    return oneShotFn(payload, { taskType: "seo_content", preferAsync: false });
+  }
+
+  const apiBase = resolveAiLocalApiBase(ctx);
+  const response = await fetch(`${apiBase}/ai-generate-seo-content`, {
+    method: "POST",
+    headers: buildApiHeaders(ctx),
+    credentials: "include",
+    body: JSON.stringify({
+      mode: "sync",
+      async: false,
+      seoPipeline: "anti_ai_one_shot",
+      taskType: "seo_content",
+      seoContext: payload
+    })
+  });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (_e) {
+    data = { raw: text };
+  }
+  if (!response.ok) {
+    throw new Error(data?.message || text || `HTTP ${response.status}`);
+  }
+  return data;
+}
+
+async function testAiLaneScanDryRun(ctx, { message, attachments }) {
+  return callAiLocalJsonApi("/ai-local/scan-dry-run", {
+    message: message || "",
+    contextType: "business",
+    taskType: "media_script",
+    responseMode: "plan",
+    attachments: attachments || []
+  }, ctx);
+}
+
+function resolveBackendMediaOrigin(ctx) {
+  const apiBase = String(ctx?.apiBase || "").trim();
+  if (/^https?:\/\//i.test(apiBase)) {
+    return apiBase.replace(/\/api\/?$/i, "");
+  }
+  return "";
+}
+
+function resolveAppMediaUrl(relativePath) {
+  if (!relativePath) return "";
+  const raw = String(relativePath).trim();
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const clean = raw.replace(/^\//, "");
+  const ctx = typeof resolveContext === "function" ? resolveContext() : {};
+
+  // Production: media serve từ domain web công khai
+  const domain = String(ctx.domain || "").split(",")[0].trim().replace(/^https?:\/\//i, "");
+  if (domain && !/localhost|127\.0\.0\.1/i.test(domain)) {
+    return `https://${domain}/${clean}`;
+  }
+
+  // Dev: trỏ thẳng backend origin (15300), không qua /api/ — tránh JWT 401
+  const backendOrigin = resolveBackendMediaOrigin(ctx);
+  if (backendOrigin) {
+    return `${backendOrigin}/${clean}`;
+  }
+
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return `${window.location.origin}/${clean}`;
+  }
+  return `/${clean}`;
+}
+
+async function testAiLaneRenderMedia(ctx, { message, attachments, outputMode, durationSec, appId, renderEngine, storyboardScenes }) {
+  return callAiLocalJsonApi("/ai-local/render-media-script", {
+    message: message || "",
+    outputMode: outputMode || "both",
+    durationSec: durationSec || 15,
+    appId: appId || ctx?.app_id || "csm",
+    renderEngine: renderEngine || "talking_presenter",
+    storyboardScenes: storyboardScenes || undefined,
+    attachments: attachments || []
+  }, ctx);
+}
+
+async function testAiLanePlanStoryboard(ctx, { message, durationSec, characterHint, attachments }) {
+  return callAiLocalJsonApi("/ai-local/plan-media-storyboard", {
+    message: message || "",
+    durationSec: durationSec || 15,
+    characterHint: characterHint || "",
+    attachments: attachments || []
+  }, ctx);
+}
+
+async function testAiLaneExtractCharacter(ctx, { attachments, appId }) {
+  return callAiLocalJsonApi("/ai-local/extract-character", {
+    appId: appId || ctx?.app_id || "csm",
+    attachments: attachments || []
+  }, ctx);
+}
+
+async function testAiLaneExecuteLocalPlan(ctx, { message, attachments, onEvent }) {
+  const apiBase = resolveAiLocalApiBase(ctx);
+  if (!apiBase) throw new Error("Thiếu apiBase");
+  const response = await fetch(`${apiBase}/ai-local/execute-local-plan`, {
+    method: "POST",
+    headers: {
+      ...buildApiHeaders(ctx),
+      Accept: "text/event-stream"
+    },
+    credentials: "include",
+    body: JSON.stringify({
+      message: message || "",
+      contextType: "business",
+      taskType: "media_script",
+      responseMode: "plan",
+      executePatch: false,
+      applyDynamicIngestion: false,
+      attachments: attachments || []
+    })
+  });
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(errText || `HTTP ${response.status}`);
+  }
+  if (!response.body) {
+    return { events: [], note: "No SSE body" };
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const events = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() || "";
+    for (const part of parts) {
+      const lines = part.split("\n");
+      let eventName = "message";
+      let dataLine = "";
+      for (const line of lines) {
+        if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        if (line.startsWith("data:")) dataLine += line.slice(5).trim();
+      }
+      if (!dataLine) continue;
+      let parsed = dataLine;
+      try {
+        parsed = JSON.parse(dataLine);
+      } catch (_e) {
+        // keep raw string
+      }
+      const evt = { event: eventName, data: parsed };
+      events.push(evt);
+      if (typeof onEvent === "function") onEvent(evt);
+    }
+  }
+  return { events };
+}
+
+const AI_LANE_SEO_REQUIRED_FIELDS = [
+  "title", "content", "content_en", "content_zh",
+  "attributes_title", "attributes_title_en", "attributes_title_zh",
+  "attributes_description", "attributes_description_en", "attributes_description_zh",
+  "attributes_keywords", "attributes_keywords_en", "attributes_keywords_zh"
+];
+
+function extractSeoPayloadFromApiResult(result) {
+  let seo = null;
+  const candidates = [
+    result?.data?.result,
+    result?.result,
+    result?.data
+  ];
+  for (let i = 0; i < candidates.length; i += 1) {
+    const c = candidates[i];
+    if (c && typeof c === "object" && (c.title || c.content || c.html_content || c.attributes_title)) {
+      seo = c;
+      break;
+    }
+  }
+  if (!seo && result && typeof result === "object") seo = result;
+
+  if (typeof seo === "string") {
+    try { seo = parseSeoJsonString(seo); } catch (_e) { seo = null; }
+  }
+
+  if (!isRecoverableSeoPayload(seo)) {
+    const rawContent = result?.rawContent || result?.data?.rawContent;
+    if (typeof rawContent === "string" && rawContent.trim()) {
+      try {
+        seo = parseSeoJsonString(rawContent);
+      } catch (_e) { /* ignore */ }
+    }
+  }
+
+  if (seo && typeof seo === "object" && seo.content == null && seo.html_content) {
+    seo.content = seo.html_content;
+  }
+  return normalizeSeoLanePayload(seo);
+}
+
+function isRecoverableSeoPayload(seo) {
+  if (!seo || typeof seo !== "object") return false;
+  const title = String(seo.title || seo.attributes_title || "").trim();
+  const body = String(seo.content || seo.html_content || "").trim();
+  return Boolean(title && body);
+}
+
+function plainTextExcerpt(htmlOrText, maxLen = 160) {
+  const plain = String(htmlOrText || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (!plain) return "";
+  if (plain.length <= maxLen) return plain;
+  return plain.slice(0, Math.max(0, maxLen - 3)).trim() + "...";
+}
+
+function keywordsFromTitle(title, keywordsFallback = "") {
+  const t = String(title || "").trim();
+  const fb = String(keywordsFallback || "").trim();
+  if (t) {
+    const base = t.length > 72 ? t.slice(0, 72).trim() : t;
+    return fb ? `${base}, ${fb}` : base;
+  }
+  return fb;
+}
+
+/** Bổ sung meta EN/ZH khi model local thiếu — khớp backend AiSeoContentPipelineService. */
+function normalizeSeoLanePayload(seo) {
+  if (!seo || typeof seo !== "object") return seo;
+  const out = { ...seo };
+  const pick = (...vals) => {
+    for (const v of vals) {
+      const s = String(v == null ? "" : v).trim();
+      if (s) return s;
+    }
+    return "";
+  };
+  if (!String(out.attributes_description_zh || "").trim()) {
+    out.attributes_description_zh = pick(
+      out.attributes_description_en,
+      plainTextExcerpt(out.content_zh, 160),
+      out.attributes_description
+    );
+  }
+  if (!String(out.attributes_keywords_en || "").trim()) {
+    out.attributes_keywords_en = pick(
+      out.attributes_keywords,
+      keywordsFromTitle(out.attributes_title_en, out.attributes_keywords)
+    );
+  }
+  if (!String(out.attributes_keywords_zh || "").trim()) {
+    out.attributes_keywords_zh = pick(
+      out.attributes_keywords,
+      keywordsFromTitle(out.attributes_title_zh, out.attributes_keywords)
+    );
+  }
+  return out;
+}
+
+function buildSeoFieldChecklist(seo) {
+  const data = seo && typeof seo === "object" ? seo : {};
+  return AI_LANE_SEO_REQUIRED_FIELDS.map((field) => {
+    const raw = data[field];
+    const text = raw == null ? "" : String(raw).trim();
+    const len = text.length;
+    let note = len ? `${len} ký tự` : "thiếu";
+    if (field === "content" && len > 0 && len < 200) note += " (ngắn)";
+    if (field.startsWith("attributes_description") && len > 0 && (len < 120 || len > 180)) {
+      note += " (nên 150–160)";
+    }
+    return { field, ok: len > 0, len, note };
+  });
+}
+
+function renderAiLaneBadge(theme, ok, label, detail = "") {
+  const el = document.createElement("span");
+  el.style.cssText = [
+    "display:inline-flex;align-items:center;gap:6px",
+    "padding:4px 10px;border-radius:999px;font-size:11px;font-weight:600",
+    ok
+      ? `background:${theme.successBg || "#f6ffed"};color:${theme.successText || "#389e0d"};border:1px solid ${theme.successBorder || "#b7eb8f"}`
+      : `background:${theme.warningBg || "#fff7e6"};color:${theme.warningText || "#d48806"};border:1px solid ${theme.warningBorder || "#ffd591"}`
+  ].join(";");
+  el.textContent = detail ? `${label}: ${detail}` : label;
+  el.dataset.ok = ok ? "1" : "0";
+  return el;
+}
+
+function createAiLaneEndpointBox(theme, method, path, contract) {
+  const box = document.createElement("div");
+  box.style.cssText = `margin-bottom:12px;padding:10px;border-radius:8px;background:${theme.infoBg};border:1px solid ${theme.border};font-size:12px;line-height:1.55;color:${theme.infoText || theme.text}`;
+  box.innerHTML = `<strong>${method} ${path}</strong><br><span style="opacity:.9">${contract}</span>`;
+  return box;
+}
+
+function ensureAiLaneTestPanel() {
+  if (document.getElementById("ai-lane-test-panel")) return;
+
+  const theme = getThemeTokens();
+  const draft = readAiLaneTesterDraft();
+  const ctx = resolveContext();
+
+  const wrapper = document.createElement("div");
+  wrapper.id = "ai-lane-test-panel";
+  wrapper.style.cssText = getFeatureCardStyle(theme) + ";margin-top:16px;";
+
+  const titleRow = document.createElement("div");
+  titleRow.style.cssText = "display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:8px";
+  const title = document.createElement("div");
+  title.textContent = ti("🧪 Kiểm thử AI Lane (Production)", "🧪 AI Lane Test (Production)", "🧪 AI通道测试（生产）");
+  title.style.cssText = getFeatureTitleStyle(theme) + ";margin-bottom:0";
+  const metaCol = document.createElement("div");
+  metaCol.style.cssText = `font-size:11px;color:${theme.textSecondary};text-align:right;line-height:1.5`;
+  const apiBaseText = resolveAiLocalApiBase(ctx) || "(chưa có apiBase)";
+  const tokenOk = Boolean(ctx.token) || typeof ctx.helperAi?.generateSeoAntiAiOneShot === "function";
+  metaCol.innerHTML = `API: <code>${apiBaseText}</code><br>Auth: ${ctx.token ? "✅ csm-token" : tokenOk ? "✅ csmAI helper" : "⚠️ thiếu token (SEO sẽ lỗi)"}`;
+  titleRow.append(title, metaCol);
+
+  const healthBar = document.createElement("div");
+  healthBar.id = "ai-lane-health-bar";
+  healthBar.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0 12px 0";
+  const healthRefreshBtn = document.createElement("button");
+  healthRefreshBtn.type = "button";
+  healthRefreshBtn.textContent = ti("🔄 Health", "🔄 Health", "🔄 健康");
+  healthRefreshBtn.style.cssText = "padding:4px 10px;border:1px solid #52c41a;background:#f6ffed;color:#389e0d;border-radius:999px;font-size:11px;cursor:pointer";
+  healthBar.append(
+    renderAiLaneBadge(theme, false, ti("Reasoning", "Reasoning", "推理"), "?"),
+    renderAiLaneBadge(theme, false, ti("Vision", "Vision", "视觉"), "?"),
+    renderAiLaneBadge(theme, false, ti("Ready", "Ready", "就绪"), "?"),
+    healthRefreshBtn
+  );
+
+  const subTabHeader = document.createElement("div");
+  subTabHeader.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px";
+  const subTabDefs = [
+    { id: "seo", label: ti("Lane 4a — SEO sync", "Lane 4a — SEO sync", "通道4a — SEO同步") },
+    { id: "scan", label: ti("Lane 4b — Scan (phân tích)", "Lane 4b — Scan (analysis)", "通道4b — 扫描分析") },
+    { id: "video", label: ti("Lane 5 — Render ảnh/video", "Lane 5 — Render image/video", "通道5 — 渲染") },
+    { id: "log", label: ti("Raw log", "Raw log", "原始日志") }
+  ];
+  const subTabPanels = {};
+  const subTabButtons = {};
+
+  const subTabContent = document.createElement("div");
+  subTabContent.id = "ai-lane-subtab-content";
+
+  const mkField = (labelText, id, placeholder = "", value = "", type = "text") => {
+    const box = document.createElement("div");
+    box.style.cssText = "display:flex;flex-direction:column;gap:4px";
+    const label = document.createElement("label");
+    label.htmlFor = id;
+    label.textContent = labelText;
+    label.style.cssText = `font-size:12px;font-weight:600;color:${theme.text}`;
+    const input = document.createElement("input");
+    input.id = id;
+    input.type = type;
+    input.value = value || "";
+    input.placeholder = placeholder;
+    input.style.cssText = `padding:8px;border:1px solid ${theme.border};border-radius:4px;background:${theme.inputBg};color:${theme.text};font-size:12px`;
+    box.append(label, input);
+    return { box, input };
+  };
+
+  const mkTextarea = (labelText, id, placeholder = "", value = "", rows = 3) => {
+    const box = document.createElement("div");
+    box.style.cssText = "display:flex;flex-direction:column;gap:4px";
+    const label = document.createElement("label");
+    label.htmlFor = id;
+    label.textContent = labelText;
+    label.style.cssText = `font-size:12px;font-weight:600;color:${theme.text}`;
+    const input = document.createElement("textarea");
+    input.id = id;
+    input.value = value || "";
+    input.placeholder = placeholder;
+    input.rows = rows;
+    input.style.cssText = `padding:8px;border:1px solid ${theme.border};border-radius:4px;background:${theme.inputBg};color:${theme.text};font-size:12px;resize:vertical`;
+    box.append(label, input);
+    return { box, input };
+  };
+
+  const mkBtn = (text, bg = "#1677ff") => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = text;
+    btn.style.cssText = `padding:8px 14px;border:none;background:${bg};color:#fff;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600`;
+    return btn;
+  };
+
+  const mkResultBox = (id, titleText) => {
+    const box = document.createElement("div");
+    box.id = id;
+    box.style.cssText = `margin-top:12px;padding:10px;border:1px solid ${theme.border};border-radius:8px;background:${theme.inputBg};display:none`;
+    const head = document.createElement("div");
+    head.textContent = titleText;
+    head.style.cssText = `font-size:12px;font-weight:700;margin-bottom:8px;color:${theme.text}`;
+    const body = document.createElement("div");
+    body.className = "ai-lane-result-body";
+    body.style.cssText = "font-size:12px;line-height:1.55;color:" + theme.textSecondary;
+    box.append(head, body);
+    return { box, body, show: () => { box.style.display = "block"; } };
+  };
+
+  // ---- Lane 4a SEO ----
+  const panelSeo = document.createElement("div");
+  panelSeo.dataset.laneTab = "seo";
+  panelSeo.appendChild(createAiLaneEndpointBox(
+    theme,
+    "POST",
+    "/ai-generate-seo-content",
+    ti(
+      "1 HTTP sync — client chờ backend xong rồi nhận JSON 12 field (giống guest chat, không poll/async). Body: seoContext + taskType seo_content.",
+      "Single sync HTTP — client waits until backend returns 12-field JSON (like guest chat, no poll/async).",
+      "单次同步HTTP，客户端等待返回12字段JSON（同访客聊天，无轮询）。"
+    )
+  ));
+  const seoGrid = document.createElement("div");
+  seoGrid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px";
+  const topicField = mkTextarea(
+    ti("seoContext.topic *", "seoContext.topic *", "seoContext.topic *"),
+    "ai-lane-topic",
+    ti("Chủ đề bài viết BĐS...", "Property article topic...", "房产文章主题..."),
+    draft.topic || "Căn hộ 2PN Vinhomes Central Park view sông, 80m2, giá 5 tỷ",
+    3
+  );
+  const industryField = mkField("seoContext.industry", "ai-lane-industry", "bat-dong-san", draft.industry || "bat-dong-san");
+  const domainKeyField = mkField("seoContext.domainKey", "ai-lane-domain-key", "lmkt", draft.domainKey || "lmkt");
+  const propertyField = mkField("seoContext.property", "ai-lane-property", "Vinhomes Central Park", draft.property || "Vinhomes Central Park");
+  const locationField = mkField("seoContext.location", "ai-lane-location", "Quận 1, TP.HCM", draft.location || "Quận 1, TP.HCM");
+  const businessField = mkField("seoContext.business", "ai-lane-business", "CSM Bridge", draft.business || "CSM Bridge");
+  seoGrid.append(topicField.box, industryField.box, domainKeyField.box, propertyField.box, locationField.box, businessField.box);
+  const seoProgress = document.createElement("div");
+  seoProgress.id = "ai-lane-seo-progress";
+  seoProgress.style.cssText = `display:none;margin:10px 0;padding:8px 10px;border-radius:6px;background:${theme.infoBg};font-size:12px;color:${theme.infoText}`;
+  const seoRunBtn = mkBtn(ti("▶ Chạy SEO one-shot (sync)", "▶ Run SEO one-shot (sync)", "▶ 运行SEO一次性"), "#1677ff");
+  const seoFillBtn = mkBtn(ti("⚡ Điền mẫu", "⚡ Fill sample", "⚡ 填示例"), "#595959");
+  const seoActionRow = document.createElement("div");
+  seoActionRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;margin-top:10px";
+  seoActionRow.append(seoRunBtn, seoFillBtn);
+  const seoResult = mkResultBox("ai-lane-seo-result", ti("Kết quả SEO + checklist 12 field", "SEO result + 12-field checklist", "SEO结果+12字段检查"));
+  panelSeo.append(seoGrid, seoActionRow, seoProgress, seoResult.box);
+
+  // ---- Lane 4b Scan ----
+  const panelScan = document.createElement("div");
+  panelScan.dataset.laneTab = "scan";
+  panelScan.style.display = "none";
+  panelScan.appendChild(createAiLaneEndpointBox(
+    theme,
+    "POST",
+    "/ai-local/scan-dry-run",
+    ti(
+      "1 HTTP sync — phân tích xong mới trả JSON (không poll). Chỉ metadata/Vision, không tạo file → Lane 5 để render.",
+      "Single sync HTTP — returns JSON when analysis completes (no poll). No files — use Lane 5 to render.",
+      "单次同步HTTP，分析完成返回JSON。"
+    )
+  ));
+  const scriptField = mkTextarea(
+    ti("message (kịch bản)", "message (script)", "message（脚本）"),
+    "ai-lane-script",
+    ti("Kịch bản 30s, nhân vật giới thiệu căn hộ...", "30s script, character introduces property...", "30秒脚本..."),
+    draft.script || "Kịch bản: Nhân vật giới thiệu căn hộ Vinhomes, tone chuyên nghiệp, 30 giây. Dùng ảnh đính kèm làm reference nhân vật.",
+    4
+  );
+  const imageMeta = document.createElement("div");
+  imageMeta.id = "ai-lane-image-meta";
+  imageMeta.style.cssText = `font-size:11px;color:${theme.textSecondary};margin-top:4px`;
+  imageMeta.textContent = ti("Chưa chọn ảnh", "No image selected", "未选图片");
+  const imagePreview = document.createElement("img");
+  imagePreview.id = "ai-lane-image-preview";
+  imagePreview.alt = "character preview";
+  imagePreview.style.cssText = "display:none;max-width:160px;max-height:160px;margin-top:8px;border-radius:8px;border:1px solid " + theme.border;
+  const imageInput = document.createElement("input");
+  imageInput.id = "ai-lane-image";
+  imageInput.type = "file";
+  imageInput.accept = "image/jpeg,image/png,image/webp";
+  imageInput.style.cssText = `padding:6px;border:1px solid ${theme.border};border-radius:4px;background:${theme.inputBg};color:${theme.text};font-size:12px;width:100%`;
+  const imageLabel = document.createElement("label");
+  imageLabel.htmlFor = "ai-lane-image";
+  imageLabel.textContent = ti("attachments[0] — ảnh nhân vật (base64Data)", "attachments[0] — character image", "attachments[0] — 角色图");
+  imageLabel.style.cssText = `font-size:12px;font-weight:600;color:${theme.text};display:block;margin-bottom:4px`;
+  const scanRunBtn = mkBtn(ti("▶ Chạy scan-dry-run", "▶ Run scan-dry-run", "▶ 运行scan-dry-run"), "#722ed1");
+  const scanResult = mkResultBox("ai-lane-scan-result", ti("Vision / technical summary", "Vision / technical summary", "Vision/技术摘要"));
+  panelScan.append(scriptField.box, imageLabel, imageInput, imageMeta, imagePreview, scanRunBtn, scanResult.box);
+
+  // ---- Lane 5 Render media ----
+  const panelVideo = document.createElement("div");
+  panelVideo.dataset.laneTab = "video";
+  panelVideo.style.display = "none";
+  panelVideo.appendChild(createAiLaneEndpointBox(
+    theme,
+    "POST",
+    "/ai-local/render-media-script",
+    ti(
+      "1 HTTP sync — client chờ render xong (TTS+FFmpeg trong JVM) rồi nhận ai-talk-*.mp4. Không sidecar, không poll.",
+      "Single sync HTTP — client waits until render completes, returns ai-talk-*.mp4. No sidecar, no poll.",
+      "单次同步HTTP，等待渲染完成返回 ai-talk-*.mp4。"
+    )
+  ));
+  const videoScriptField = mkTextarea(
+    ti("message (kịch bản)", "message (script)", "message（脚本）"),
+    "ai-lane-video-script",
+    ti("Kịch bản hiển thị trên ảnh/video...", "Script shown on image/video...", "显示在图片/视频上的脚本..."),
+    draft.videoScript || draft.script || "Kịch bản: Nhân vật giới thiệu căn hộ Vinhomes Central Park, tone chuyên nghiệp, 30 giây.",
+    4
+  );
+  const renderGrid = document.createElement("div");
+  renderGrid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:8px";
+  const renderEngineField = mkField("renderEngine", "ai-lane-render-engine", "talking_presenter", draft.renderEngine || "talking_presenter");
+  renderEngineField.input.readOnly = true;
+  renderEngineField.input.title = ti(
+    "talking_presenter — TTS + nhân vật nói (S3). Bundled Java — macOS say / espeak / Piper",
+    "talking_presenter — TTS + talking head (S3, bundled Java)",
+    "talking_presenter"
+  );
+  const engineNote = document.createElement("div");
+  engineNote.style.cssText = `font-size:11px;color:${theme.textSecondary};margin-top:-4px`;
+  engineNote.textContent = ti(
+    "Engine: talking_presenter → ai-talk-*.mp4 có tiếng. TTS + FFmpeg chạy trong backend — không cần sidecar.",
+    "Engine: talking_presenter → ai-talk-*.mp4 with speech (bundled Java)",
+    "内置 Java TTS+FFmpeg"
+  );
+  const outputModeField = mkField("outputMode", "ai-lane-output-mode", "both", draft.outputMode || "both");
+  const durationField = mkField("durationSec", "ai-lane-duration", "15", String(draft.durationSec || 15), "number");
+  renderGrid.append(renderEngineField.box, outputModeField.box, durationField.box);
+  renderGrid.appendChild(engineNote);
+  let cachedStoryboardScenes = null;
+  const planStoryboardBtn = mkBtn(ti("📋 Plan storyboard", "📋 Plan storyboard", "📋 分镜"), "#722ed1");
+  const extractCharBtn = mkBtn(ti("✂️ Extract nhân vật", "✂️ Extract character", "✂️ 抠图"), "#13c2c2");
+  const storyboardResult = mkResultBox("ai-lane-storyboard-result", ti("Storyboard JSON", "Storyboard JSON", "分镜JSON"));
+  const charPreview = document.createElement("img");
+  charPreview.id = "ai-lane-char-cutout";
+  charPreview.alt = "character cutout";
+  charPreview.style.cssText = "display:none;max-width:140px;max-height:180px;margin-top:8px;border-radius:8px;border:1px solid " + theme.border;
+  const videoUseScanImage = document.createElement("label");
+  videoUseScanImage.style.cssText = `display:flex;align-items:center;gap:8px;font-size:12px;color:${theme.text};margin:8px 0`;
+  const videoUseScanImageCb = document.createElement("input");
+  videoUseScanImageCb.type = "checkbox";
+  videoUseScanImageCb.checked = true;
+  videoUseScanImage.append(videoUseScanImageCb, document.createTextNode(ti("Dùng ảnh nhân vật từ tab Scan", "Use character image from Scan tab", "使用Scan页角色图")));
+  const renderRunBtn = mkBtn(ti("▶ Render Talking Presenter", "▶ Render Talking Presenter", "▶ S3渲染"), "#fa8c16");
+  const sseDebugBtn = mkBtn(ti("🔧 SSE debug (ComfyUI)", "🔧 SSE debug (ComfyUI)", "🔧 SSE调试"), "#595959");
+  const renderActionRow = document.createElement("div");
+  renderActionRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;margin-top:8px";
+  renderActionRow.append(planStoryboardBtn, extractCharBtn, renderRunBtn, sseDebugBtn);
+  const mediaPreview = document.createElement("div");
+  mediaPreview.id = "ai-lane-media-preview";
+  mediaPreview.style.cssText = `margin-top:12px;padding:12px;border:1px solid ${theme.border};border-radius:8px;background:${theme.inputBg};display:none`;
+  const mediaPreviewTitle = document.createElement("div");
+  mediaPreviewTitle.style.cssText = `font-size:12px;font-weight:700;margin-bottom:8px;color:${theme.text}`;
+  mediaPreviewTitle.textContent = ti("Output file (ảnh / video)", "Output file (image / video)", "输出文件");
+  const mediaPreviewLinks = document.createElement("div");
+  mediaPreviewLinks.id = "ai-lane-media-links";
+  mediaPreviewLinks.style.cssText = "font-size:11px;margin-bottom:10px;word-break:break-all";
+  const mediaPreviewImg = document.createElement("img");
+  mediaPreviewImg.id = "ai-lane-render-image";
+  mediaPreviewImg.style.cssText = "display:none;max-width:100%;max-height:360px;border-radius:8px;border:1px solid " + theme.border;
+  const mediaPreviewVideo = document.createElement("video");
+  mediaPreviewVideo.id = "ai-lane-render-video";
+  mediaPreviewVideo.controls = true;
+  mediaPreviewVideo.style.cssText = "display:none;max-width:100%;max-height:360px;margin-top:10px;border-radius:8px;background:#000";
+  mediaPreview.append(mediaPreviewTitle, mediaPreviewLinks, mediaPreviewImg, mediaPreviewVideo);
+  const sseTimeline = document.createElement("div");
+  sseTimeline.id = "ai-lane-sse-timeline";
+  sseTimeline.style.cssText = `margin-top:12px;padding:10px;border:1px dashed ${theme.border};border-radius:8px;background:${theme.bg};max-height:180px;overflow:auto;font-size:11px;font-family:monospace;display:none`;
+  const videoResult = mkResultBox("ai-lane-video-result", ti("Chi tiết API", "API details", "API详情"));
+  panelVideo.append(videoScriptField.box, renderGrid, videoUseScanImage, renderActionRow, storyboardResult.box, charPreview, mediaPreview, sseTimeline, videoResult.box);
+
+  // ---- Raw log ----
+  const panelLog = document.createElement("div");
+  panelLog.dataset.laneTab = "log";
+  panelLog.style.display = "none";
+  const logArea = document.createElement("textarea");
+  logArea.id = "ai-lane-test-log";
+  logArea.readOnly = true;
+  logArea.placeholder = ti("JSON log đầy đủ...", "Full JSON log...", "完整JSON日志...");
+  logArea.style.cssText = `width:100%;min-height:320px;padding:10px;border:1px solid ${theme.border};border-radius:6px;background:${theme.bg};color:${theme.text};font-family:monospace;font-size:11px`;
+  const clearLogBtn = mkBtn(ti("🗑 Xóa log", "🗑 Clear log", "🗑 清日志"), "#8c8c8c");
+  clearLogBtn.onclick = () => { logArea.value = ""; };
+  panelLog.append(clearLogBtn, logArea);
+
+  subTabPanels.seo = panelSeo;
+  subTabPanels.scan = panelScan;
+  subTabPanels.video = panelVideo;
+  subTabPanels.log = panelLog;
+
+  const activateSubTab = (tabId) => {
+    Object.entries(subTabPanels).forEach(([id, panel]) => {
+      panel.style.display = id === tabId ? "block" : "none";
+    });
+    Object.entries(subTabButtons).forEach(([id, btn]) => {
+      const active = id === tabId;
+      btn.style.background = active ? theme.primary : theme.inputBg;
+      btn.style.color = active ? "#fff" : theme.text;
+      btn.style.borderColor = active ? theme.primary : theme.border;
+    });
+  };
+
+  subTabDefs.forEach((def) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = def.label;
+    btn.style.cssText = `padding:6px 12px;border:1px solid ${theme.border};border-radius:8px;background:${theme.inputBg};color:${theme.text};cursor:pointer;font-size:12px`;
+    btn.onclick = () => activateSubTab(def.id);
+    subTabButtons[def.id] = btn;
+    subTabHeader.appendChild(btn);
+    subTabContent.appendChild(subTabPanels[def.id]);
+  });
+  activateSubTab("seo");
+
+  wrapper.append(titleRow, healthBar, subTabHeader, subTabContent);
+
+  const saveDraft = () => {
+    const draft = {
+      topic: topicField.input.value,
+      industry: industryField.input.value,
+      domainKey: domainKeyField.input.value,
+      property: propertyField.input.value,
+      location: locationField.input.value,
+      business: businessField.input.value,
+      script: scriptField.input.value,
+      videoScript: videoScriptField.input.value,
+      outputMode: outputModeField.input.value,
+      durationSec: durationField.input.value,
+      renderEngine: renderEngineField.input.value
+    };
+    const existing = readAiLaneTesterDraft();
+    if (existing.characterImageBase64) {
+      draft.characterImageBase64 = existing.characterImageBase64;
+      draft.characterImageName = existing.characterImageName;
+      draft.characterImageMime = existing.characterImageMime;
+    }
+    writeAiLaneTesterDraft(draft);
+  };
+
+  const persistCharacterImageDraft = (file, base64Data) => {
+    if (!base64Data) return;
+    const draft = readAiLaneTesterDraft();
+    draft.characterImageBase64 = base64Data;
+    draft.characterImageName = file?.name || draft.characterImageName || "character.jpg";
+    draft.characterImageMime = file?.type || draft.characterImageMime || "image/jpeg";
+    writeAiLaneTesterDraft(draft);
+  };
+
+  [
+    topicField.input, industryField.input, domainKeyField.input,
+    propertyField.input, locationField.input, businessField.input,
+    scriptField.input, videoScriptField.input, outputModeField.input, durationField.input, renderEngineField.input
+  ].forEach((input) => {
+    input.addEventListener("change", saveDraft);
+    input.addEventListener("blur", saveDraft);
+  });
+
+  const setLoading = (btn, loading, loadingText) => {
+    if (!btn) return;
+    btn.disabled = loading;
+    btn.dataset.originalText = btn.dataset.originalText || btn.textContent;
+    btn.textContent = loading ? loadingText : btn.dataset.originalText;
+  };
+
+  const collectSeoContext = () => ({
+    industry: industryField.input.value.trim() || "bat-dong-san",
+    topic: topicField.input.value.trim(),
+    domainKey: domainKeyField.input.value.trim() || "lmkt",
+    property: propertyField.input.value.trim(),
+    location: locationField.input.value.trim(),
+    business: businessField.input.value.trim() || "CSM Bridge"
+  });
+
+  const buildAttachmentsFromFile = async () => {
+    const file = imageInput.files && imageInput.files[0];
+    if (file) {
+      const base64Data = await readFileAsBase64(file);
+      persistCharacterImageDraft(file, base64Data);
+      return [{
+        name: file.name || "character.jpg",
+        kind: "image",
+        type: "image",
+        mimeType: file.type || "image/jpeg",
+        base64Data
+      }];
+    }
+    const saved = readAiLaneTesterDraft();
+    if (saved.characterImageBase64) {
+      return [{
+        name: saved.characterImageName || "character.jpg",
+        kind: "image",
+        type: "image",
+        mimeType: saved.characterImageMime || "image/jpeg",
+        base64Data: saved.characterImageBase64
+      }];
+    }
+    return [];
+  };
+
+  if (draft.characterImageBase64) {
+    imageMeta.textContent = `${draft.characterImageName || "character.jpg"} · ${draft.characterImageMime || "image/jpeg"} · (đã lưu draft)`;
+    imagePreview.src = `data:${draft.characterImageMime || "image/jpeg"};base64,${draft.characterImageBase64}`;
+    imagePreview.style.display = "block";
+  }
+
+  imageInput.addEventListener("change", async () => {
+    const file = imageInput.files && imageInput.files[0];
+    if (!file) {
+      imageMeta.textContent = ti("Chưa chọn ảnh", "No image selected", "未选图片");
+      imagePreview.style.display = "none";
+      return;
+    }
+    imageMeta.textContent = `${file.name} · ${file.type || "image/*"} · ${Math.round(file.size / 1024)} KB`;
+    imagePreview.src = URL.createObjectURL(file);
+    imagePreview.style.display = "block";
+    try {
+      const base64Data = await readFileAsBase64(file);
+      persistCharacterImageDraft(file, base64Data);
+    } catch (_e) { /* ignore */ }
+  });
+
+  const renderHealthBar = (health) => {
+    healthBar.innerHTML = "";
+    const reasoningOk = Boolean(health?.reasoning?.healthy);
+    const visionOk = Boolean(health?.vision?.localVisionReady);
+    const ffmpegOk = Boolean(health?.ffmpeg?.ready);
+    const rembgOk = Boolean(health?.characterExtract?.ready);
+    const ttsOk = Boolean(health?.tts?.ready);
+    const talkOk = Boolean(health?.talkingHead?.ready);
+    const readyOk = Boolean(health?.ready);
+    healthBar.append(
+      renderAiLaneBadge(theme, reasoningOk, "Reasoning", reasoningOk ? "healthy" : "down"),
+      renderAiLaneBadge(theme, visionOk, "Vision", visionOk ? "ready" : "off"),
+      renderAiLaneBadge(theme, ffmpegOk, "FFmpeg", ffmpegOk ? "bundled" : "down"),
+      renderAiLaneBadge(theme, rembgOk, "Rembg", rembgOk ? "bundled" : "down"),
+      renderAiLaneBadge(theme, ttsOk, "TTS", ttsOk ? "ready" : "down"),
+      renderAiLaneBadge(theme, talkOk, "Talk", talkOk ? "ready" : "down"),
+      renderAiLaneBadge(theme, readyOk, "Ready", readyOk ? "yes" : "no"),
+      healthRefreshBtn
+    );
+  };
+
+  const refreshHealth = async () => {
+    setLoading(healthRefreshBtn, true, "...");
+    try {
+      const h = await testAiLaneHealth(resolveContext());
+      renderHealthBar(h);
+      appendAiLaneTesterLog(logArea, "GET /ai-local/health", h);
+    } catch (e) {
+      appendAiLaneTesterLog(logArea, "Health error", e.message || String(e));
+    } finally {
+      setLoading(healthRefreshBtn, false, "...");
+    }
+  };
+  healthRefreshBtn.onclick = refreshHealth;
+
+  const renderSeoChecklist = (seo, elapsedSec, apiOk) => {
+    const checklist = buildSeoFieldChecklist(seo);
+    const passCount = checklist.filter((x) => x.ok).length;
+    seoResult.body.innerHTML = "";
+    const summary = document.createElement("div");
+    summary.style.cssText = `margin-bottom:10px;padding:8px;border-radius:6px;background:${passCount === 12 ? theme.successBg : theme.warningBg};color:${theme.text}`;
+    summary.innerHTML = `<strong>${apiOk ? "✅ API success" : "⚠️ API"}</strong> · ${elapsedSec}s · ${passCount}/12 field · title: <em>${(seo?.title || "").slice(0, 80)}</em>`;
+    seoResult.body.appendChild(summary);
+    const table = document.createElement("div");
+    table.style.cssText = "display:grid;gap:4px";
+    checklist.forEach((row) => {
+      const line = document.createElement("div");
+      line.style.cssText = "display:flex;justify-content:space-between;gap:8px;font-family:monospace;font-size:11px";
+      line.innerHTML = `<span>${row.ok ? "✅" : "❌"} ${row.field}</span><span>${row.note}</span>`;
+      table.appendChild(line);
+    });
+    seoResult.body.appendChild(table);
+    if (seo?.content) {
+      const preview = document.createElement("div");
+      preview.style.cssText = `margin-top:10px;padding:8px;border-top:1px dashed ${theme.border};max-height:120px;overflow:auto;font-size:11px`;
+      preview.textContent = String(seo.content).replace(/<[^>]+>/g, " ").slice(0, 600);
+      seoResult.body.appendChild(preview);
+    }
+    seoResult.show();
+  };
+
+  seoRunBtn.onclick = async () => {
+    const seoContext = collectSeoContext();
+    if (!seoContext.topic) {
+      aiLaneTesterNotify(ti("⚠️ Nhập seoContext.topic", "⚠️ Enter seoContext.topic", "⚠️ 请输入topic"), "error");
+      activateSubTab("seo");
+      return;
+    }
+    const ctx = resolveContext();
+    const hasSeoHelper = typeof ctx.helperAi?.generateSeoAntiAiOneShot === "function";
+    if (!ctx.token && !hasSeoHelper) {
+      aiLaneTesterNotify(ti("⚠️ Thiếu csm-token — đăng nhập admin trước", "⚠️ Missing csm-token — login first", "⚠️ 缺少token"), "error");
+      return;
+    }
+    saveDraft();
+    const requestBody = { seoPipeline: "anti_ai_one_shot", taskType: "seo_content", seoContext };
+    appendAiLaneTesterLog(logArea, "POST /ai-generate-seo-content", requestBody);
+    seoProgress.style.display = "block";
+    seoProgress.textContent = ti(
+      "⏳ Đang chờ backend (1 HTTP sync, có thể 1–15 phút)...",
+      "⏳ Waiting for backend (single sync HTTP, 1–15 min)...",
+      "⏳ 等待后端（单次同步）..."
+    );
+    setLoading(seoRunBtn, true, ti("⏳ Đang chạy...", "⏳ Running...", "⏳ 运行中..."));
+    try {
+      const started = Date.now();
+      const result = await testAiLaneSeoOneShot(ctx, seoContext);
+      const elapsedSec = Math.round((Date.now() - started) / 1000);
+      const seo = extractSeoPayloadFromApiResult(result);
+      appendAiLaneTesterLog(logArea, `SEO response (${elapsedSec}s)`, result);
+      if (!isRecoverableSeoPayload(seo)) {
+        throw new Error(result?.message || result?.data?.message || "SEO failed — không parse được JSON");
+      }
+      renderSeoChecklist(seo, elapsedSec, true);
+      seoProgress.textContent = ti(`✅ Hoàn tất sau ${elapsedSec}s`, `✅ Done in ${elapsedSec}s`, `✅ 完成 ${elapsedSec}s`);
+      const passCount = buildSeoFieldChecklist(seo).filter((x) => x.ok).length;
+      if (passCount < 12) {
+        aiLaneTesterNotify(ti(`⚠️ SEO ${passCount}/12 field — một số meta EN/ZH vẫn thiếu`, `⚠️ SEO ${passCount}/12 fields incomplete`, `⚠️ SEO ${passCount}/12`), "warning");
+      } else {
+        aiLaneTesterNotify(ti("✅ SEO one-shot OK — đủ 12 field", "✅ SEO one-shot OK — 12/12 fields", "✅ SEO完成 12/12"), "success");
+      }
+    } catch (e) {
+      seoProgress.textContent = ti("❌ Lỗi: ", "❌ Error: ", "❌ 错误: ") + (e.message || e);
+      appendAiLaneTesterLog(logArea, "SEO error", e.message || String(e));
+      aiLaneTesterNotify(`SEO: ${e.message || e}`, "error");
+    } finally {
+      setLoading(seoRunBtn, false, ti("⏳ Đang chạy...", "⏳ Running...", "⏳ 运行中..."));
+    }
+  };
+
+  seoFillBtn.onclick = () => {
+    topicField.input.value = "Căn hộ 2PN Vinhomes Central Park view sông, 80m2, giá 5 tỷ";
+    industryField.input.value = "bat-dong-san";
+    domainKeyField.input.value = "lmkt";
+    propertyField.input.value = "Vinhomes Central Park";
+    locationField.input.value = "Quận 1, TP.HCM";
+    businessField.input.value = "CSM Bridge";
+    saveDraft();
+    aiLaneTesterNotify(ti("✅ Đã điền mẫu SEO", "✅ SEO sample filled", "✅ 已填SEO示例"), "success");
+  };
+
+  scanRunBtn.onclick = async () => {
+    const message = scriptField.input.value.trim();
+    if (!message) {
+      aiLaneTesterNotify(ti("⚠️ Nhập message (kịch bản)", "⚠️ Enter message script", "⚠️ 请输入脚本"), "error");
+      activateSubTab("scan");
+      return;
+    }
+    saveDraft();
+    setLoading(scanRunBtn, true, "...");
+    try {
+      const attachments = await buildAttachmentsFromFile();
+      const body = { message, contextType: "business", taskType: "media_script", responseMode: "plan", attachments };
+      appendAiLaneTesterLog(logArea, "POST /ai-local/scan-dry-run", { ...body, attachments: attachments.map((a) => ({ ...a, base64Data: `[${a.base64Data?.length || 0} chars]` })) });
+      const result = await testAiLaneScanDryRun(resolveContext(), { message, attachments });
+      appendAiLaneTesterLog(logArea, "Scan response", result);
+      const decisions = result?.scanner?.decisions || [];
+      scanResult.body.innerHTML = "";
+      const head = document.createElement("div");
+      head.style.marginBottom = "8px";
+      head.innerHTML = `<strong>imageCount:</strong> ${result?.scanner?.imageCount ?? 0} · <strong>ingestCount:</strong> ${result?.scanner?.ingestCount ?? 0} · <strong>vision:</strong> ${result?.policy?.multimodalRequireVision ? "required" : "optional"}`;
+      scanResult.body.appendChild(head);
+      decisions.forEach((d, i) => {
+        const block = document.createElement("div");
+        block.style.cssText = `margin-top:8px;padding:8px;border:1px solid ${theme.border};border-radius:6px;background:${theme.bg}`;
+        const summary = d?.technicalSummary || d?.reason || JSON.stringify(d);
+        block.innerHTML = `<div style="font-weight:600;margin-bottom:4px">${d?.kind || "item"} #${i + 1} · ${d?.sourceId || ""}</div><pre style="white-space:pre-wrap;margin:0;font-size:11px">${summary}</pre>`;
+        scanResult.body.appendChild(block);
+      });
+      if (result?.scanner?.compactContext) {
+        const ctxBox = document.createElement("pre");
+        ctxBox.style.cssText = "margin-top:8px;font-size:11px;white-space:pre-wrap;max-height:100px;overflow:auto";
+        ctxBox.textContent = String(result.scanner.compactContext).slice(0, 1200);
+        scanResult.body.appendChild(ctxBox);
+      }
+      scanResult.show();
+      const hint = document.createElement("div");
+      hint.style.cssText = `margin-top:10px;padding:8px;border-radius:6px;background:${theme.warningBg};color:${theme.warningText};font-size:12px`;
+      hint.textContent = ti(
+        "Scan chỉ phân tích — không có file output. Chuyển sang tab Lane 5 Render để nhận ảnh/video.",
+        "Scan is analysis only — no files. Switch to Lane 5 Render for image/video output.",
+        "扫描仅分析。请到通道5渲染获取文件。"
+      );
+      scanResult.body.appendChild(hint);
+      aiLaneTesterNotify(ti("✅ Scan xong (phân tích)", "✅ Scan done (analysis)", "✅ 扫描完成"), "success");
+    } catch (e) {
+      appendAiLaneTesterLog(logArea, "Scan error", e.message || String(e));
+      aiLaneTesterNotify(`Scan: ${e.message || e}`, "error");
+    } finally {
+      setLoading(scanRunBtn, false, "...");
+    }
+  };
+
+  const showMediaPreview = (result) => {
+    const imageUrl = resolveAppMediaUrl(result?.imageUrl);
+    const videoUrl = resolveAppMediaUrl(result?.videoUrl);
+    mediaPreview.style.display = "block";
+    mediaPreviewLinks.innerHTML = "";
+    const engine = result?.renderEngine || "talking_presenter";
+    mediaPreviewLinks.innerHTML += `<div style="opacity:.85;font-size:11px;margin-bottom:6px">Engine: <strong>${engine}</strong>${engine === "talking_presenter" ? " — nhân vật nói TTS từng cảnh (ai-talk-*)" : engine === "character_director" ? " — cutout animate" : ""}</div>`;
+    const sceneUrls = Array.isArray(result?.sceneImageUrls) ? result.sceneImageUrls : [];
+    if (sceneUrls.length) {
+      mediaPreviewLinks.innerHTML += `<div style="margin-bottom:8px;font-size:11px">🎞 ${sceneUrls.length} scene(s):</div>`;
+      const gallery = document.createElement("div");
+      gallery.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px";
+      sceneUrls.forEach((u, i) => {
+        const href = resolveAppMediaUrl(u);
+        const thumb = document.createElement("a");
+        thumb.href = href;
+        thumb.target = "_blank";
+        thumb.rel = "noopener";
+        thumb.title = u;
+        thumb.innerHTML = `<img src="${href}" alt="scene ${i + 1}" style="width:120px;height:68px;object-fit:cover;border-radius:6px;border:1px solid ${theme.border}">`;
+        gallery.appendChild(thumb);
+      });
+      mediaPreviewLinks.appendChild(gallery);
+    }
+    if (result?.imageUrl) {
+      mediaPreviewLinks.innerHTML += `<div>🖼 imageUrl: <a href="${imageUrl}" target="_blank" rel="noopener">${result.imageUrl}</a></div>`;
+      mediaPreviewImg.src = imageUrl;
+      mediaPreviewImg.style.display = "block";
+    } else {
+      mediaPreviewImg.style.display = "none";
+    }
+    if (result?.videoUrl) {
+      mediaPreviewLinks.innerHTML += `<div>🎬 videoUrl: <a href="${videoUrl}" target="_blank" rel="noopener">${result.videoUrl}</a></div>`;
+      mediaPreviewVideo.src = videoUrl;
+      mediaPreviewVideo.type = "video/mp4";
+      mediaPreviewVideo.controls = true;
+      mediaPreviewVideo.preload = "metadata";
+      mediaPreviewVideo.style.display = "block";
+      mediaPreviewVideo.load();
+    } else {
+      mediaPreviewVideo.style.display = "none";
+    }
+  };
+
+  planStoryboardBtn.onclick = async () => {
+    const message = videoScriptField.input.value.trim() || scriptField.input.value.trim();
+    if (!message) {
+      aiLaneTesterNotify(ti("⚠️ Nhập kịch bản", "⚠️ Enter script", "⚠️ 请输入脚本"), "error");
+      return;
+    }
+    saveDraft();
+    setLoading(planStoryboardBtn, true, "...");
+    try {
+      const ctx = resolveContext();
+      const attachments = await buildAttachmentsFromFile();
+      const body = {
+        message,
+        durationSec: Number(durationField.input.value) || 15,
+        characterHint: ti("Nhân vật từ ảnh user", "Character from user photo", "用户照片角色"),
+        attachments
+      };
+      appendAiLaneTesterLog(logArea, "POST /ai-local/plan-media-storyboard", {
+        ...body,
+        attachments: attachments.map((a) => ({ ...a, base64Data: `[${a.base64Data?.length || 0} chars]` }))
+      });
+      const result = await testAiLanePlanStoryboard(ctx, body);
+      appendAiLaneTesterLog(logArea, "Storyboard plan", result);
+      if (!result?.success) throw new Error(result?.message || "Plan storyboard thất bại");
+      cachedStoryboardScenes = result?.scenes || result?.storyboardScenes || null;
+      if (result?.characterProfile) {
+        storyboardResult.body.innerHTML = `<pre style="white-space:pre-wrap;margin:0;font-size:11px">${JSON.stringify({ characterProfile: result.characterProfile, plan: result }, null, 2)}</pre>`;
+      } else {
+        storyboardResult.body.innerHTML = `<pre style="white-space:pre-wrap;margin:0;font-size:11px">${JSON.stringify(result, null, 2)}</pre>`;
+      }
+      storyboardResult.show();
+      aiLaneTesterNotify(ti(`✅ Storyboard ${cachedStoryboardScenes?.length || 0} cảnh`, `✅ Storyboard ${cachedStoryboardScenes?.length || 0} scenes`, `✅ 分镜 ${cachedStoryboardScenes?.length || 0} 场景`), "success");
+    } catch (e) {
+      appendAiLaneTesterLog(logArea, "Storyboard error", e.message || String(e));
+      aiLaneTesterNotify(`Storyboard: ${e.message || e}`, "error");
+    } finally {
+      setLoading(planStoryboardBtn, false, "...");
+    }
+  };
+
+  extractCharBtn.onclick = async () => {
+    saveDraft();
+    setLoading(extractCharBtn, true, "...");
+    try {
+      const ctx = resolveContext();
+      const attachments = await buildAttachmentsFromFile();
+      if (!attachments.length) {
+        throw new Error(ti("Chọn ảnh nhân vật ở tab Scan trước", "Select character image on Scan tab first", "请先在Scan页选择角色图"));
+      }
+      const body = { appId: ctx.app_id || "csm", attachments };
+      appendAiLaneTesterLog(logArea, "POST /ai-local/extract-character", {
+        ...body,
+        attachments: attachments.map((a) => ({ ...a, base64Data: `[${a.base64Data?.length || 0} chars]` }))
+      });
+      const result = await testAiLaneExtractCharacter(ctx, body);
+      appendAiLaneTesterLog(logArea, "Extract character", result);
+      if (!result?.success) throw new Error(result?.message || "Extract thất bại");
+      const cutoutUrl = resolveAppMediaUrl(result?.cutoutUrl || result?.characterImageUrl || result?.imageUrl);
+      if (cutoutUrl) {
+        charPreview.src = cutoutUrl;
+        charPreview.style.display = "block";
+      }
+      aiLaneTesterNotify(
+        result?.hasAlpha
+          ? ti("✅ Cutout PNG có alpha", "✅ Cutout PNG with alpha", "✅ 透明抠图完成")
+          : ti("⚠️ Passthrough (rembg ONNX chưa sẵn sàng — restart backend, model tự tải lần đầu)", "⚠️ Passthrough (bundled ONNX not ready — restart backend)", "⚠️ 未抠图，检查 ONNX"),
+        result?.hasAlpha ? "success" : "warning"
+      );
+    } catch (e) {
+      appendAiLaneTesterLog(logArea, "Extract error", e.message || String(e));
+      aiLaneTesterNotify(`Extract: ${e.message || e}`, "error");
+    } finally {
+      setLoading(extractCharBtn, false, "...");
+    }
+  };
+
+  renderRunBtn.onclick = async () => {
+    const message = videoScriptField.input.value.trim() || scriptField.input.value.trim();
+    if (!message) {
+      aiLaneTesterNotify(ti("⚠️ Nhập kịch bản", "⚠️ Enter script", "⚠️ 请输入脚本"), "error");
+      activateSubTab("video");
+      return;
+    }
+    saveDraft();
+    setLoading(renderRunBtn, true, ti("⏳ Chờ backend render...", "⏳ Waiting for render...", "⏳ 等待渲染..."));
+    try {
+      const ctx = resolveContext();
+      let attachments = [];
+      if (videoUseScanImageCb.checked) {
+        attachments = await buildAttachmentsFromFile();
+        if (!attachments.length) {
+          throw new Error(ti("Chọn ảnh nhân vật (tab Scan) — ảnh được lưu draft sau khi chọn", "Select character image (Scan tab) — saved to draft after pick", "请选择角色图"));
+        }
+      }
+      const messageForPlan = message;
+      if (!cachedStoryboardScenes || !cachedStoryboardScenes.length) {
+        appendAiLaneTesterLog(logArea, ti("Auto plan storyboard trước render", "Auto plan storyboard before render", "渲染前自动分镜"), { message: messageForPlan });
+        const planResult = await testAiLanePlanStoryboard(ctx, {
+          message: messageForPlan,
+          durationSec: Number(durationField.input.value) || 15,
+          characterHint: ti("Nhân vật từ ảnh user", "Character from user photo", "用户照片角色"),
+          attachments
+        });
+        if (!planResult?.success) {
+          throw new Error(planResult?.message || ti("Plan storyboard thất bại", "Storyboard plan failed", "分镜失败"));
+        }
+        cachedStoryboardScenes = planResult?.scenes || planResult?.storyboardScenes || null;
+        appendAiLaneTesterLog(logArea, "Auto plan storyboard (before render)", planResult);
+      }
+      const body = {
+        message,
+        outputMode: outputModeField.input.value.trim() || "both",
+        durationSec: Number(durationField.input.value) || 15,
+        appId: ctx.app_id || "csm",
+        renderEngine: renderEngineField.input.value.trim() || "talking_presenter",
+        storyboardScenes: cachedStoryboardScenes || undefined,
+        attachments
+      };
+      appendAiLaneTesterLog(logArea, "POST /ai-local/render-media-script", {
+        ...body,
+        attachments: attachments.map((a) => ({ ...a, base64Data: `[${a.base64Data?.length || 0} chars]` }))
+      });
+      const started = Date.now();
+      const result = await testAiLaneRenderMedia(ctx, body);
+      appendAiLaneTesterLog(logArea, `Render (${Math.round((Date.now() - started) / 1000)}s)`, result);
+      if (!result?.success) throw new Error(result?.message || "Render thất bại");
+      if (String(result?.videoUrl || "").includes("ai-pro-") || String(result?.videoUrl || "").includes("ai-dir-")) {
+        aiLaneTesterNotify(
+          ti("⚠️ Engine cũ (ai-pro/ai-dir) — dùng talking_presenter + restart backend", "⚠️ Old engine output", "⚠️ 旧引擎"),
+          "warning"
+        );
+      }
+      if (String(result?.videoUrl || "").includes("ai-talk-")) {
+        aiLaneTesterNotify(ti("✅ S3 Talking Presenter — video có thoại TTS", "✅ S3 with TTS speech", "✅ S3完成"), "success");
+      }
+      showMediaPreview(result);
+      videoResult.body.innerHTML = `<pre style="white-space:pre-wrap;margin:0;font-size:11px">${JSON.stringify(result, null, 2)}</pre>`;
+      videoResult.show();
+      if (result?.videoUrl) {
+        aiLaneTesterNotify(ti("✅ Đã render file ảnh + video", "✅ Rendered image + video", "✅ 已渲染图片+视频"), "success");
+      } else if (result?.imageUrl) {
+        aiLaneTesterNotify(
+          result?.message || ti("⚠️ Chỉ render được ảnh (video lỗi FFmpeg)", "⚠️ Image only (video FFmpeg failed)", "⚠️ 仅渲染图片"),
+          "warning"
+        );
+      } else {
+        aiLaneTesterNotify(ti("✅ Render xong", "✅ Render done", "✅ 渲染完成"), "success");
+      }
+    } catch (e) {
+      appendAiLaneTesterLog(logArea, "Render error", e.message || String(e));
+      aiLaneTesterNotify(`Render: ${e.message || e}`, "error");
+    } finally {
+      setLoading(renderRunBtn, false, ti("⏳ Chờ backend render...", "⏳ Waiting for render...", "⏳ 等待渲染..."));
+    }
+  };
+
+  sseDebugBtn.onclick = async () => {
+    let message = videoScriptField.input.value.trim();
+    if (!message) {
+      aiLaneTesterNotify(ti("⚠️ Nhập kịch bản", "⚠️ Enter script", "⚠️ 请输入脚本"), "error");
+      return;
+    }
+    if (!/video|comfyui|ltx|image|ảnh|hình/i.test(message)) {
+      message += "\n\nTạo video (ComfyUI/LTX nếu cấu hình).";
+    }
+    saveDraft();
+    setLoading(sseDebugBtn, true, "...");
+    sseTimeline.style.display = "block";
+    sseTimeline.innerHTML = "";
+    try {
+      let attachments = [];
+      if (videoUseScanImageCb.checked) attachments = await buildAttachmentsFromFile();
+      appendAiLaneTesterLog(logArea, "POST /ai-local/execute-local-plan (SSE debug)", { message, attachmentCount: attachments.length });
+      const result = await testAiLaneExecuteLocalPlan(resolveContext(), {
+        message,
+        attachments,
+        onEvent: (evt) => {
+          const d = evt?.data || {};
+          const line = document.createElement("div");
+          line.textContent = `[${new Date().toLocaleTimeString()}] ${d.stage || d.status || "?"} — ${d.message || ""}`;
+          sseTimeline.appendChild(line);
+        }
+      });
+      appendAiLaneTesterLog(logArea, "SSE debug complete", { eventCount: result.events?.length });
+      aiLaneTesterNotify(ti("✅ SSE debug xong", "✅ SSE debug done", "✅ SSE调试完成"), "success");
+    } catch (e) {
+      appendAiLaneTesterLog(logArea, "SSE error", e.message || String(e));
+      aiLaneTesterNotify(`SSE: ${e.message || e}`, "error");
+    } finally {
+      setLoading(sseDebugBtn, false, "...");
+    }
+  };
+
+  const container = ensureUnifiedUIContainer();
+  if (container) container.appendChild(wrapper);
+
+  refreshHealth();
+
+  if (typeof window !== "undefined") {
+    window.csmLmktAiLaneTest = {
+      refreshHealth,
+      health: () => testAiLaneHealth(resolveContext()),
+      seoOneShot: (seoContext) => testAiLaneSeoOneShot(resolveContext(), seoContext),
+      scanDryRun: (opts) => testAiLaneScanDryRun(resolveContext(), opts || {}),
+      renderMedia: (opts) => testAiLaneRenderMedia(resolveContext(), opts || {}),
+      planStoryboard: (opts) => testAiLanePlanStoryboard(resolveContext(), opts || {}),
+      extractCharacter: (opts) => testAiLaneExtractCharacter(resolveContext(), opts || {}),
+      resolveAppMediaUrl,
+      executeLocalPlan: (opts) => testAiLaneExecuteLocalPlan(resolveContext(), opts || {}),
+      buildSeoFieldChecklist,
+      appendLog: (title, data) => appendAiLaneTesterLog(logArea, title, data),
+      activateTab: activateSubTab
+    };
   }
 
   return wrapper;
@@ -17837,6 +19141,7 @@ function updateDescriptionPreview() {
 ensureGlobalSettingsPanel(); // ✅ Call directly, MutationObserver will fix if needed
 ensureUI();
 ensureAdsApiTestPanel();
+ensureAiLaneTestPanel();
 ensureServiceContentUI();
 
 // ============================================================
@@ -20765,6 +22070,7 @@ function initAllUI() {
 
     if (CSM_AUTO_INIT_NON_CORE_UI) {
       ensureAdsApiTestPanel();
+      ensureAiLaneTestPanel();
       await ensureServiceContentUI();
     }
 
@@ -20970,6 +22276,7 @@ async function refreshDynamicUIModules(reason = 'theme-change') {
     await ensureGlobalSettingsPanel();
     await ensureUI();
     ensureAdsApiTestPanel();
+    ensureAiLaneTestPanel();
     await ensureServiceContentUI();
     createFacebookPostUI();
     ensureMainFeatureTabs();

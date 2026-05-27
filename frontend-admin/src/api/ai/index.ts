@@ -216,6 +216,8 @@ export async function generateSeoAntiAiOneShot(
 ) {
 	try {
 		const body = {
+			mode: "sync",
+			async: false,
 			seoPipeline: "anti_ai_one_shot",
 			taskType: options?.taskType || "seo_content",
 			seoContext,

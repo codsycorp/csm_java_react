@@ -36,6 +36,15 @@ public class AiSeoContentPipelineService {
     @Value("${ai.seo.article.target-words-vi:900-1200}")
     private String seoArticleTargetWordsVi;
 
+    private static final List<String> SEO_REQUIRED_FIELDS = List.of(
+        "title", "content", "content_en", "content_zh",
+        "attributes_title", "attributes_title_en", "attributes_title_zh",
+        "attributes_description", "attributes_description_en", "attributes_description_zh",
+        "attributes_keywords", "attributes_keywords_en", "attributes_keywords_zh");
+
+    @Value("${ai.seo.pipeline.article-retry.enabled:true}")
+    private boolean articleRetryEnabled;
+
     public boolean isEnabled() {
         return seoPipelineEnabled && aiAssistantGatewayService != null;
     }
@@ -94,6 +103,7 @@ public class AiSeoContentPipelineService {
 
         String articlePrompt = buildCompactAntiAiArticlePrompt(industry, topic, domainKey, creative, ctx);
         String articleRaw = aiAssistantGatewayService.generateSeoContent(articlePrompt, progressListener);
+        String normalized = finalizeSeoArticle(articleRaw, industry, topic, domainKey, creative, ctx, progressListener);
 
         if (progressListener != null) {
             progressListener.onProgress(Map.of(
@@ -102,13 +112,215 @@ public class AiSeoContentPipelineService {
                 "percent", 100));
         }
 
-        log.info("SEO_PIPELINE anti_ai_one_shot done creativeKeys={} articleRawChars={}",
+        log.info("SEO_PIPELINE anti_ai_one_shot done creativeKeys={} articleRawChars={} missingAfter={}",
             creative.keySet(),
-            articleRaw == null ? 0 : articleRaw.length());
-        return articleRaw;
+            normalized == null ? 0 : normalized.length(),
+            countMissingRequiredFields(parseSeoArticleMap(normalized)));
+        return normalized;
+    }
+
+    private String finalizeSeoArticle(
+            String articleRaw,
+            String industry,
+            String topic,
+            String domainKey,
+            Map<String, Object> creative,
+            Map<String, Object> ctx,
+            AiAssistantGatewayService.ProgressListener progressListener) {
+        Map<String, Object> merged = parseSeoArticleMap(articleRaw);
+        int missing = countMissingRequiredFields(merged);
+        boolean errorJson = isProviderErrorJson(articleRaw);
+
+        if (articleRetryEnabled && (errorJson || missing > 0 || merged.isEmpty())) {
+            log.info("SEO_PIPELINE article retry once (errorJson={} missingFields={})", errorJson, missing);
+            if (progressListener != null) {
+                progressListener.onProgress(Map.of(
+                    "stage", "seo_pipeline_article_retry",
+                    "message", "Model thiếu field — retry 1 lần trong cùng HTTP...",
+                    "percent", 70));
+            }
+            String retryPrompt = buildSeoArticleRetryPrompt(industry, topic, domainKey, creative, ctx, merged);
+            String retryRaw = aiAssistantGatewayService.generateSeoContent(retryPrompt, progressListener);
+            mergeSeoArticleMaps(merged, parseSeoArticleMap(retryRaw));
+            fillMissingSeoMetaFields(merged);
+            try {
+                return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(merged);
+            } catch (Exception ex) {
+                log.warn("SEO retry serialize failed: {}", ex.getMessage());
+            }
+        }
+
+        return normalizeSeoArticleJson(articleRaw);
+    }
+
+    private String buildSeoArticleRetryPrompt(
+            String industry,
+            String topic,
+            String domainKey,
+            Map<String, Object> creative,
+            Map<String, Object> ctx,
+            Map<String, Object> partial) {
+        String base = buildCompactAntiAiArticlePrompt(industry, topic, domainKey, creative, ctx);
+        StringBuilder missing = new StringBuilder();
+        for (String field : SEO_REQUIRED_FIELDS) {
+            if (isBlank(partial.get(field))) {
+                if (missing.length() > 0) missing.append(", ");
+                missing.append(field);
+            }
+        }
+        return base + "\n\n[RETRY] Lần trước thiếu field: " + missing
+            + ". BẮT BUỘC trả JSON đủ 12 field. Giữ topic/industry. Chỉ JSON, không markdown.";
     }
 
     @SuppressWarnings("unchecked")
+    private Map<String, Object> parseSeoArticleMap(String articleRaw) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (articleRaw == null || articleRaw.isBlank()) {
+            return out;
+        }
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            String text = aiAssistantGatewayService.extractProviderText(articleRaw);
+            if (text == null || text.isBlank()) {
+                text = articleRaw.trim();
+            }
+            text = stripMarkdownJsonFence(text);
+            Map<String, Object> parsed = mapper.readValue(text, Map.class);
+            if (parsed.containsKey("title") || parsed.containsKey("content")) {
+                out.putAll(parsed);
+            } else if (parsed.get("data") instanceof Map<?, ?> dataMap) {
+                for (Map.Entry<?, ?> e : dataMap.entrySet()) {
+                    if (e.getKey() != null) out.put(String.valueOf(e.getKey()), e.getValue());
+                }
+            } else {
+                out.putAll(parsed);
+            }
+            fillMissingSeoMetaFields(out);
+        } catch (Exception ex) {
+            log.warn("SEO parseSeoArticleMap failed: {}", ex.getMessage());
+        }
+        return out;
+    }
+
+    private static void mergeSeoArticleMaps(Map<String, Object> target, Map<String, Object> patch) {
+        if (patch == null || patch.isEmpty()) return;
+        for (Map.Entry<String, Object> entry : patch.entrySet()) {
+            if (entry.getKey() == null || isBlank(entry.getValue())) continue;
+            target.put(entry.getKey(), String.valueOf(entry.getValue()).trim());
+        }
+    }
+
+    private static int countMissingRequiredFields(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return SEO_REQUIRED_FIELDS.size();
+        }
+        int missing = 0;
+        for (String field : SEO_REQUIRED_FIELDS) {
+            if (isBlank(payload.get(field))) missing++;
+        }
+        return missing;
+    }
+
+    private static boolean isProviderErrorJson(String raw) {
+        if (raw == null || raw.isBlank()) return true;
+        String lower = raw.toLowerCase(Locale.ROOT);
+        return lower.contains("\"success\":false") || lower.contains("\"error\":true")
+            || lower.contains("local_provider_unavailable") || lower.contains("local_inference_failed");
+    }
+
+    private static String stripMarkdownJsonFence(String text) {
+        String t = text == null ? "" : text.trim();
+        if (t.startsWith("```")) {
+            int start = t.indexOf('{');
+            int end = t.lastIndexOf('}');
+            if (start >= 0 && end > start) {
+                return t.substring(start, end + 1);
+            }
+        }
+        return t;
+    }
+
+    /**
+     * Model local 1.5B đôi khi thiếu meta EN/ZH — bổ sung fallback để đủ 12 field LMKT.
+     */
+    public String normalizeSeoArticleJson(String articleRaw) {
+        Map<String, Object> map = parseSeoArticleMap(articleRaw);
+        if (map.isEmpty()) {
+            return articleRaw;
+        }
+        fillMissingSeoMetaFields(map);
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(map);
+        } catch (Exception ex) {
+            log.warn("SEO normalize serialize failed: {}", ex.getMessage());
+            return articleRaw;
+        }
+    }
+
+    public void fillMissingSeoMetaFields(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return;
+        }
+        fillIfBlank(payload, "attributes_description_zh",
+            payload.get("attributes_description_en"),
+            plainTextExcerpt(payload.get("content_zh"), 160),
+            payload.get("attributes_description"));
+
+        fillIfBlank(payload, "attributes_keywords_en",
+            payload.get("attributes_keywords"),
+            keywordsFromTitle(payload.get("attributes_title_en"), payload.get("attributes_keywords")));
+
+        fillIfBlank(payload, "attributes_keywords_zh",
+            payload.get("attributes_keywords"),
+            keywordsFromTitle(payload.get("attributes_title_zh"), payload.get("attributes_keywords")));
+    }
+
+    private static void fillIfBlank(Map<String, Object> payload, String key, Object... candidates) {
+        if (!isBlank(payload.get(key))) {
+            return;
+        }
+        for (Object candidate : candidates) {
+            if (!isBlank(candidate)) {
+                payload.put(key, String.valueOf(candidate).trim());
+                return;
+            }
+        }
+    }
+
+    private static boolean isBlank(Object value) {
+        return value == null || String.valueOf(value).trim().isEmpty();
+    }
+
+    private static String plainTextExcerpt(Object htmlOrText, int maxLen) {
+        if (htmlOrText == null) {
+            return "";
+        }
+        String plain = String.valueOf(htmlOrText)
+            .replaceAll("<[^>]+>", " ")
+            .replaceAll("\\s+", " ")
+            .trim();
+        if (plain.isEmpty()) {
+            return "";
+        }
+        if (plain.length() <= maxLen) {
+            return plain;
+        }
+        return plain.substring(0, Math.max(0, maxLen - 3)).trim() + "...";
+    }
+
+    private static String keywordsFromTitle(Object titleObj, Object keywordsFallback) {
+        String title = String.valueOf(titleObj == null ? "" : titleObj).trim();
+        String fallback = String.valueOf(keywordsFallback == null ? "" : keywordsFallback).trim();
+        if (!title.isEmpty()) {
+            String base = title.length() > 72 ? title.substring(0, 72).trim() : title;
+            if (!fallback.isEmpty()) {
+                return base + ", " + fallback;
+            }
+            return base;
+        }
+        return fallback;
+    }
+
     public Map<String, Object> extractSeoContext(Map<String, Object> params) {
         Map<String, Object> out = new LinkedHashMap<>();
         if (params == null) {

@@ -215,6 +215,13 @@
       <version>3.5.0</version>
     </dependency>
 
+    <!-- ONNX Runtime — bundled character cutout (u2netp), no Python sidecar -->
+    <dependency>
+      <groupId>com.microsoft.onnxruntime</groupId>
+      <artifactId>onnxruntime</artifactId>
+      <version>1.19.2</version>
+    </dependency>
+
     <dependency>
       <groupId>org.apache.lucene</groupId>
       <artifactId>lucene-codecs</artifactId>

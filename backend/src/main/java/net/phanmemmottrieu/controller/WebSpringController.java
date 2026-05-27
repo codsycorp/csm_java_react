@@ -133,7 +133,7 @@ public class WebSpringController {
     private static final long STATIC_DETECT_TTL_MS = 5 * 60 * 1000; // cache static detection 5 minutes
     private static final Set<String> STATIC_EXTENSIONS = Set.of(
         "js", "css", "png", "jpg", "jpeg", "gif", "svg", "ico",
-        "woff", "woff2", "ttf", "eot", "webp", "mp4", "webm", "json", "xml", "map"
+        "woff", "woff2", "ttf", "eot", "webp", "mp4", "webm", "mov", "m4v", "json", "xml", "map"
     );
     private static final Set<String> UPLOAD_IMAGE_EXTENSIONS = Set.of(
         "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"
@@ -1075,6 +1075,173 @@ public class WebSpringController {
         return ext;
     }
 
+    /** Chuẩn hóa URI web: bỏ /api prefix cho app_images, bỏ slash cuối. */
+    private String normalizeIncomingWebPath(String uri) {
+        if (uri == null || uri.isBlank()) {
+            return "/";
+        }
+        String path = uri;
+        if (path.startsWith("/api/app_images/")) {
+            path = path.substring(4);
+        }
+        if (path.length() > 1 && path.endsWith("/")) {
+            path = path.substring(0, path.length() - 1);
+        }
+        return path;
+    }
+
+    /** Disk path cho upload public: csm_datas/public/app_images/{appId}/{file} */
+    private Path resolveAppImagesDiskPath(String normalizedPath) {
+        if (normalizedPath == null || !normalizedPath.startsWith("/app_images/")) {
+            return null;
+        }
+        String relPath = normalizedPath.substring("/app_images/".length());
+        if (relPath.isEmpty() || relPath.contains("..")) {
+            return null;
+        }
+        int firstSlash = relPath.indexOf('/');
+        if (firstSlash <= 0) {
+            return null;
+        }
+        String appId = relPath.substring(0, firstSlash);
+        String fileName = relPath.substring(firstSlash + 1);
+        if (appId.isBlank() || fileName.isBlank() || fileName.contains("..")) {
+            return null;
+        }
+        Path filePath = Paths.get(appDataDir, "public", "app_images", appId, fileName).normalize();
+        Path root = Paths.get(appDataDir, "public", "app_images", appId).normalize();
+        if (!filePath.startsWith(root) || !Files.isRegularFile(filePath)) {
+            return null;
+        }
+        return filePath;
+    }
+
+    private boolean isVideoOrAudioFile(String lowerCaseName) {
+        return lowerCaseName.endsWith(".mp4") || lowerCaseName.endsWith(".webm")
+            || lowerCaseName.endsWith(".mov") || lowerCaseName.endsWith(".m4v")
+            || lowerCaseName.endsWith(".mkv") || lowerCaseName.endsWith(".avi")
+            || lowerCaseName.endsWith(".ogg") || lowerCaseName.endsWith(".mp3")
+            || lowerCaseName.endsWith(".wav") || lowerCaseName.endsWith(".m4a");
+    }
+
+    private String contentTypeFromFileName(String lowerCaseName, String probed) {
+        if (lowerCaseName.endsWith(".mp4") || lowerCaseName.endsWith(".m4v")) return "video/mp4";
+        if (lowerCaseName.endsWith(".webm")) return "video/webm";
+        if (lowerCaseName.endsWith(".mov")) return "video/quicktime";
+        if (lowerCaseName.endsWith(".mkv")) return "video/x-matroska";
+        if (lowerCaseName.endsWith(".avi")) return "video/x-msvideo";
+        if (lowerCaseName.endsWith(".ogg")) return "video/ogg";
+        if (lowerCaseName.endsWith(".mp3")) return "audio/mpeg";
+        if (lowerCaseName.endsWith(".wav")) return "audio/wav";
+        if (lowerCaseName.endsWith(".m4a")) return "audio/mp4";
+        if (lowerCaseName.endsWith(".png")) return "image/png";
+        if (lowerCaseName.endsWith(".jpg") || lowerCaseName.endsWith(".jpeg")) return "image/jpeg";
+        if (lowerCaseName.endsWith(".gif")) return "image/gif";
+        if (lowerCaseName.endsWith(".svg")) return "image/svg+xml";
+        if (lowerCaseName.endsWith(".webp")) return "image/webp";
+        if (lowerCaseName.endsWith(".woff")) return "font/woff";
+        if (lowerCaseName.endsWith(".woff2")) return "font/woff2";
+        if (lowerCaseName.endsWith(".ttf")) return "font/ttf";
+        if (lowerCaseName.endsWith(".eot")) return "application/vnd.ms-fontobject";
+        if (lowerCaseName.endsWith(".js")) return "application/javascript";
+        if (lowerCaseName.endsWith(".css")) return "text/css";
+        if (lowerCaseName.endsWith(".json")) return MediaType.APPLICATION_JSON_VALUE;
+        if (lowerCaseName.endsWith(".html") || lowerCaseName.endsWith(".htm")) return MediaType.TEXT_HTML_VALUE;
+        if (probed != null && !probed.isBlank()) return probed;
+        return MediaType.APPLICATION_OCTET_STREAM_VALUE;
+    }
+
+    /** Phục vụ file nhị phân (video/audio/…) với Range bytes cho trình duyệt. */
+    private ResponseEntity<byte[]> serveBinaryMediaFile(Path mediaPath, HttpServletRequest request) throws IOException {
+        String lowerCaseName = mediaPath.getFileName().toString().toLowerCase(Locale.ROOT);
+        String contentType = contentTypeFromFileName(lowerCaseName, Files.probeContentType(mediaPath));
+        long fileSize = Files.size(mediaPath);
+        long lastModified = Files.getLastModifiedTime(mediaPath).toMillis();
+        String eTag = "\"" + Long.toHexString(lastModified) + "-" + fileSize + "\"";
+
+        String ifNoneMatch = request.getHeader("If-None-Match");
+        if (ifNoneMatch != null && ifNoneMatch.equals(eTag)) {
+            return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+                    .header(HttpHeaders.ETAG, eTag)
+                    .header(HttpHeaders.CACHE_CONTROL, "public, max-age=86400")
+                    .build();
+        }
+
+        String rangeHeader = request.getHeader(HttpHeaders.RANGE);
+        if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+            String spec = rangeHeader.substring(6).trim();
+            int dash = spec.indexOf('-');
+            if (dash >= 0) {
+                long start = spec.substring(0, dash).isBlank() ? 0L : Long.parseLong(spec.substring(0, dash));
+                long end = (dash == spec.length() - 1 || spec.substring(dash + 1).isBlank())
+                    ? fileSize - 1
+                    : Long.parseLong(spec.substring(dash + 1));
+                if (start < 0 || end >= fileSize || start > end) {
+                    return ResponseEntity.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                            .header(HttpHeaders.CONTENT_RANGE, "bytes */" + fileSize)
+                            .build();
+                }
+                int length = (int) (end - start + 1);
+                byte[] chunk = new byte[length];
+                try (var in = Files.newInputStream(mediaPath)) {
+                    long skipped = in.skip(start);
+                    if (skipped < start) {
+                        return ResponseEntity.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                                .header(HttpHeaders.CONTENT_RANGE, "bytes */" + fileSize)
+                                .build();
+                    }
+                    int read = in.read(chunk);
+                    if (read <= 0) {
+                        chunk = new byte[0];
+                    } else if (read < length) {
+                        chunk = java.util.Arrays.copyOf(chunk, read);
+                    }
+                }
+                return ResponseEntity.status(HttpStatus.PARTIAL_CONTENT)
+                        .header(HttpHeaders.CACHE_CONTROL, "public, max-age=86400")
+                        .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                        .header(HttpHeaders.CONTENT_RANGE, "bytes " + start + "-" + end + "/" + fileSize)
+                        .header(HttpHeaders.ETAG, eTag)
+                        .header("X-Content-Type-Options", "nosniff")
+                        .contentType(MediaType.parseMediaType(contentType))
+                        .contentLength(chunk.length)
+                        .lastModified(lastModified)
+                        .body(chunk);
+            }
+        }
+
+        byte[] content = Files.readAllBytes(mediaPath);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "public, max-age=86400")
+                .header(HttpHeaders.ACCEPT_RANGES, "bytes")
+                .header(HttpHeaders.ETAG, eTag)
+                .header("X-Content-Type-Options", "nosniff")
+                .contentType(MediaType.parseMediaType(contentType))
+                .contentLength(content.length)
+                .lastModified(lastModified)
+                .body(content);
+    }
+
+    /**
+     * Entry point cho mọi GET /app_images/{appId}/{file} — video/audio serve trực tiếp, ảnh qua pipeline tối ưu.
+     */
+    private ResponseEntity<byte[]> serveAppImagesAsset(String normalizedPath, Map<String, String> queryParams, HttpServletRequest request) {
+        Path diskPath = resolveAppImagesDiskPath(normalizedPath);
+        if (diskPath == null) {
+            return null;
+        }
+        String lowerCaseName = diskPath.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (isVideoOrAudioFile(lowerCaseName)) {
+            try {
+                return serveBinaryMediaFile(diskPath, request);
+            } catch (Exception ex) {
+                logger.error("❌ Lỗi phục vụ media app_images {}: {}", normalizedPath, ex.getMessage());
+                return null;
+            }
+        }
+        return serveOptimizedLegacyImage(normalizedPath, queryParams, request);
+    }
+
     /** Resolve React build folder (rp_index) for domain — used by version.json per frontend app. */
     private String resolveRpIndexForDomain(String hostHeader) {
         if (hostHeader == null || hostHeader.isBlank()) {
@@ -1531,21 +1698,37 @@ public class WebSpringController {
         response.setIsApi(false);
         
         try {
-            // Check if this is an API request (host api.* OR URI /api/)
             String host = request.getHeader("Host");
             String uri = request.getRequestURI();
-            boolean isApi = (host != null && host.startsWith("api.")) || uri.startsWith("/api/");
-            
+            String method = request.getMethod();
+            String normalizedPath = normalizeIncomingWebPath(uri);
+
+            // API host hoặc /api/* (trừ static upload bị proxy nhầm)
+            boolean isApi = (host != null && host.startsWith("api."))
+                || (uri.startsWith("/api/") && !normalizedPath.startsWith("/app_images/"));
+
             if (isApi) {
-                logger.warn("⚠️ API request reached WebSpringController (should go to ApiSpringController): {} {}", 
-                    request.getMethod(), uri);
+                logger.warn("⚠️ API request reached WebSpringController (should go to ApiSpringController): {} {}",
+                    method, uri);
                 return ResponseEntity.status(404)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body("{\"code\":404,\"success\":false,\"message\":\"API endpoint not found\"}".getBytes());
             }
-            
-            // Get request URI once at the beginning
-            String path = request.getRequestURI();
+
+            // Public uploads — phục vụ sớm, không rơi xuống SSR / JWT
+            if (normalizedPath.startsWith("/app_images/")
+                && ("GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method))) {
+                ResponseEntity<byte[]> asset = serveAppImagesAsset(normalizedPath, queryParams, request);
+                if (asset != null) {
+                    return asset;
+                }
+                logger.warn("⚠️ app_images not found: {}", normalizedPath);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .contentType(MediaType.TEXT_PLAIN)
+                        .body(new byte[0]);
+            }
+
+            String path = normalizedPath;
             
             // --- BẮT ĐẦU THAY ĐỔI TẠI ĐÂY ---
         // Tạo một Map mới để lưu trữ các header với key đã được chuyển đổi sang
@@ -1556,11 +1739,7 @@ public class WebSpringController {
         }
         // --- KẾT THÚC THAY ĐỔI TẠI ĐÂY ---
         
-        // Normalize path early for consistent endpoint comparisons
-        String normalizedPath = path;
-        if (normalizedPath.length() > 1 && normalizedPath.endsWith("/")) {
-            normalizedPath = normalizedPath.substring(0, normalizedPath.length() - 1);
-        }
+        // normalizedPath đã chuẩn hóa ở đầu method
         String linkP = normalizedPath.toLowerCase();
         
         String xfHeader = request.getHeader("X-Forwarded-For");
@@ -1570,8 +1749,7 @@ public class WebSpringController {
         } else {
             Ip_Client = xfHeader.split(",")[0].trim();
         }
-        String method = request.getMethod();
-        // path already declared at the beginning of method
+        // method + path đã khai báo ở đầu method
         
         // ✅ FIX: Support Nginx proxy - check X-Forwarded-Host FIRST
         // When nginx proxy passes requests, it sends X-Forwarded-Host (real domain)
@@ -1840,54 +2018,17 @@ public class WebSpringController {
             logger.debug("Đường dẫn {} và tham số 1 {} tham số 2 {} kiểm tra xem có phải đường dẫn động hay không {}",
                     normalizedPath, requestParams, queryParams, isDynamicPath); // Log requestParams for debugging
             if (!isDynamicPath) {
-                // 🔧 Optimize legacy static images that were uploaded before /images.shtml existed
-                if (normalizedPath.startsWith("/app_images/")) {
-                    ResponseEntity<byte[]> optimized = serveOptimizedLegacyImage(normalizedPath, queryParams, request);
-                    if (optimized != null) {
-                        return optimized;
-                    }
-                }
-
                 File file = recordManager.getStaticFile(normalizedPath);
                 if (file != null && file.exists() && file.isFile()) {
                     try {
                         Path filePath = file.toPath();
                         byte[] content = Files.readAllBytes(filePath);
-                        String contentType = Files.probeContentType(filePath);
                         String lowerCasePath = normalizedPath.toLowerCase();
-
-                        // ✅ Determine MIME type with fallback (prioritize extension over probeContentType)
-                        if (lowerCasePath.endsWith(".js")) {
-                            contentType = "application/javascript";
-                        } else if (lowerCasePath.endsWith(".css")) {
-                            contentType = "text/css";
-                        } else if (lowerCasePath.endsWith(".json")) {
-                            contentType = MediaType.APPLICATION_JSON_VALUE;
-                        } else if (lowerCasePath.endsWith(".html") || lowerCasePath.endsWith(".htm")) {
-                            contentType = MediaType.TEXT_HTML_VALUE;
-                        } else if (lowerCasePath.endsWith(".png")) {
-                            contentType = "image/png";
-                        } else if (lowerCasePath.endsWith(".jpg") || lowerCasePath.endsWith(".jpeg")) {
-                            contentType = "image/jpeg";
-                        } else if (lowerCasePath.endsWith(".gif")) {
-                            contentType = "image/gif";
-                        } else if (lowerCasePath.endsWith(".svg")) {
-                            contentType = "image/svg+xml";
-                        } else if (lowerCasePath.endsWith(".woff")) {
-                            contentType = "font/woff";
-                        } else if (lowerCasePath.endsWith(".woff2")) {
-                            contentType = "font/woff2";
-                        } else if (lowerCasePath.endsWith(".ttf")) {
-                            contentType = "font/ttf";
-                        } else if (lowerCasePath.endsWith(".eot")) {
-                            contentType = "application/vnd.ms-fontobject";
-                        } else if (contentType == null) {
-                            // Only fallback to octet-stream if we can't determine type
-                            contentType = MediaType.APPLICATION_OCTET_STREAM_VALUE;
-                        }
+                        String contentType = contentTypeFromFileName(lowerCasePath, Files.probeContentType(filePath));
 
                         logger.debug("✅ Phục vụ file tĩnh: {} với Content-Type: {}", normalizedPath, contentType);
                         return ResponseEntity.ok()
+                                .header(HttpHeaders.ACCEPT_RANGES, isVideoOrAudioFile(lowerCasePath) ? "bytes" : "none")
                                 .contentType(MediaType.parseMediaType(contentType))
                                 .body(content);
                     } catch (IOException e) {
@@ -3723,26 +3864,19 @@ public class WebSpringController {
 
     private ResponseEntity<byte[]> serveOptimizedLegacyImage(String normalizedPath, Map<String, String> queryParams, HttpServletRequest request) {
         try {
-            String relPath = normalizedPath.substring("/app_images/".length());
-            if (relPath.isEmpty()) return null;
-
-            int firstSlash = relPath.indexOf('/');
-            if (firstSlash <= 0) return null;
-            String appId = relPath.substring(0, firstSlash);
-            String imageName = relPath.substring(firstSlash + 1);
-            if (imageName.isEmpty()) return null;
-
-            Path imageFilePath = Paths.get(appDataDir, "public", "app_images", appId, imageName);
-            File imageFile = imageFilePath.toFile();
-            if (!imageFile.exists() || !imageFile.isFile()) {
+            Path imageFilePath = resolveAppImagesDiskPath(normalizedPath);
+            if (imageFilePath == null) {
                 return null;
             }
+            File imageFile = imageFilePath.toFile();
+            String imageName = imageFilePath.getFileName().toString();
+            String appId = imageFilePath.getParent().getFileName().toString();
 
+            String lowerCaseName = imageName.toLowerCase(Locale.ROOT);
             String widthParam = queryParams.getOrDefault("w", queryParams.getOrDefault("width", null));
             String qualityParam = queryParams.getOrDefault("q", queryParams.getOrDefault("quality", null));
 
             String contentType = Files.probeContentType(imageFilePath);
-            String lowerCaseName = imageName.toLowerCase();
             if (contentType == null) {
                 if (lowerCaseName.endsWith(".png")) contentType = "image/png";
                 else if (lowerCaseName.endsWith(".jpg") || lowerCaseName.endsWith(".jpeg")) contentType = "image/jpeg";

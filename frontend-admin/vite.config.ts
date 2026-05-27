@@ -29,6 +29,8 @@ const isDev = process.env.NODE_ENV === "development";
 export default defineVitestConfig(({ mode }) => {
 	const env = loadEnv(mode, process.cwd(), "");
 	const apiBaseUrl = env.VITE_API_BASE_URL || "http://localhost:8080";
+	// Static media lives on web root (/app_images), NOT under /api/
+	const apiServerOrigin = apiBaseUrl.replace(/\/api\/?$/, "");
 
 	return {
 	base: "/",
@@ -76,6 +78,10 @@ export default defineVitestConfig(({ mode }) => {
 				target: apiBaseUrl,
 				changeOrigin: true,
 				rewrite: path => path.replace(/^\/api/, ""),
+			},
+			"/app_images": {
+				target: apiServerOrigin,
+				changeOrigin: true,
 			},
 		},
 		hmr: {

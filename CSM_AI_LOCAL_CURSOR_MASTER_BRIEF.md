@@ -1,9 +1,20 @@
 # CSM AI LOCAL — MASTER BRIEF CHO CURSOR AI
 ## Một file duy nhất để yêu cầu Cursor làm lại / hoàn thiện hệ thống
 
-Version: **3.5** · 2026-05-26  
+Version: **3.6** · 2026-05-27  
 Repo: `csm_server`  
 **Single source of truth** — dùng file này khi yêu cầu Cursor implement / làm lại CSM AI Local **và** domain System Management liên quan RAG.
+
+### Changelog v3.6
+
+| Mục | Trạng thái |
+|-----|------------|
+| **PHẦN AB — 5 luồng sản xuất canonical** — map yêu cầu nghiệp vụ → endpoint → file | ✅ |
+| SEO + guest chat: **sync 1 response** — không async job poll client (`ai.seo.client-sync-only`) | ✅ |
+| Token cap 1.5B realistic: article **1536** (prod) / **1024** (weak-local) | ✅ |
+| `LlamaCppNativeService`: SEO lane honor explicit output cap (không kẹt global 96 tok) | ✅ |
+| AppVersionMonitor + `version.json` theo `{rp_index}/` domain | ✅ |
+| Nginx `/ai-generate-seo-content` timeout 900s | ✅ |
 
 ### Changelog v3.5
 
@@ -11,7 +22,7 @@ Repo: `csm_server`
 |-----|------------|
 | **PHẦN AA — Guest Web Chat lane** — Socket.IO + local fast AI, tách code/SEO | ✅ |
 | **Bundled-only models** — chỉ `csm_datas/ai_local/model`, không tải 7B/0.5B | ✅ |
-| Tune máy yếu: guest 192 tok / SEO article 4096 tok / embedding nomic | ✅ |
+| Tune máy yếu: guest 192 tok / SEO article 1536 tok (sync) / embedding nomic | ✅ |
 | `AiGuestWebChatService` — prompt, sanitize, semaphore, per-guest cooldown | ✅ |
 | `AiSeoContentPipelineService` — SEO one-shot `anti_ai_one_shot` (Y.11) | ✅ |
 | `generateSeoAntiAiOneShot()` — client 1 HTTP, backend 2 bước nội bộ | ✅ |
@@ -42,7 +53,7 @@ Repo: `csm_server`
 
 | Mục | Trạng thái |
 |-----|------------|
-| **PHẦN Y — LMKT lane** — hợp đồng đầy đủ `auto-lmkt.js` + `index.ts`, **không đổi JS** | ✅ |
+| **PHẦN Y — LMKT lane** — hợp đồng `auto-lmkt.js` + `index.ts`, backend tương thích | ✅ |
 | Backend: `LMKT_SEO_SYSTEM_PROMPT` — follow schema user prompt (`content`, không ép `html_content`) | ✅ |
 | Backend: alias `html_content` ↔ `content` trước khi trả `data` | ✅ |
 | `isSeoContentPayload` nhận cả `content` lẫn `html_content` | ✅ |
@@ -161,6 +172,7 @@ Copy toàn bộ file (hoặc @-mention file này) vào Cursor Chat, kèm prompt 
 
 ```txt
 Đọc @CSM_AI_LOCAL_CURSOR_MASTER_BRIEF.md và triển khai đầy đủ theo spec Cursor-aligned.
+Bám **PHẦN AB — 5 luồng sản xuất** (menu / code / suy luận / SEO+guest / ảnh-video).
 Ưu tiên: (1) routing edit/analyze đúng, (2) prompt nhỏ trên file lớn, (3) edit trả textEdits apply CodeMirror,
 (4) tenant RAG + ACL filter khi hỏi domain org/permission/menu.
 (5) Mọi patch tính trên **full currentCode string** (1-based lines) — KHÔNG coi như file path (PHẦN V).
@@ -315,14 +327,22 @@ Chọn tại `AiAssistantGatewayService.classifyLocalIntent(contextType, respons
 
 **Luồng nội dung không patch (analyze, attachment, tenant, SEO…):** **PHẦN X.0 + X**.
 
-## C.2.1 Bốn lane HTTP — không trộn contract
+## C.2.1 Năm lane sản xuất — không trộn contract
 
-| Lane | Endpoint | Client | Output contract | RAG / master prompt |
-|------|----------|--------|-----------------|---------------------|
-| **Code editor** | `POST /api/ai-code-stream` (SSE) | `AiAssistantChat.tsx` | `textEdits` hoặc prose analyze | Region plan + scoped RAG + code master |
-| **Menu JSON** | `POST /api/ai-code-stream` hoặc sync AI | Admin menu designer | `{ menu: [...] }` / patch JSON | Menu master + menu gate |
-| **SEO article** | `POST /ai-generate-seo-content` | LMKT `generateSeoContentWithPrompt` | `{ title, description, html_content }` hoặc `{ title, content, content_en, … }` | **Không** inject code/menu master; system prompt LMKT flexible |
-| **SEO creative params** | `POST /ai-generate-seo-content` | LMKT `requestCreativeParams()` | `{ personaKey, contentPattern, … }` hoặc `{ angle, persona }` | **Lane riêng** — detect `[CREATIVE_PARAMS_REQUEST]` |
+> **Canonical:** Chi tiết nghiệp vụ từng lane → **PHẦN AB**. Bảng dưới là map kỹ thuật ngắn.
+
+| # | Lane (nghiệp vụ) | Endpoint / transport | Client chính | Output cuối user nhận | Master prompt / RAG |
+|---|------------------|----------------------|--------------|----------------------|---------------------|
+| **1** | **Quản lý Menu** — phân tích nghiệp vụ → bước theo bảng, nhãn 3 ngôn ngữ, trigger | `POST /api/ai-code-stream` (SSE) | `AiMenuDesigner.tsx` | Menu JSON hợp lệ / patches | `ai_menu_master_prompt.md` + tenant RAG + orchestration steps |
+| **2** | **Trình biên tập mã** — DynamicCode, sửa/nâng cấp trên code string | `POST /api/ai-code-stream` (SSE) | `CodeEditor.tsx` / `CodeMirrorWithAiAssistant` | `textEdits` apply lên buffer | `ai_code_master_prompt.md` + region plan + scoped RAG |
+| **3** | **Suy luận nhanh** — mọi yêu cầu ngoài lane 1–2 | `POST /api/ai-code-stream` (SSE analyze) | `AiAssistantChat.tsx` | Prose streaming (không patch) | Classifier + `GENERAL_ANALYSIS` / `FAST_*` + RAG nhẹ |
+| **4a** | **SEO bài viết** — LMKT anti-AI / ads / FB / category | `POST /ai-generate-seo-content` **sync** | `auto-lmkt.js` → `generateSeoAntiAiOneShot()` | JSON 12 field (LMKT) hoặc `{title,description,html_content}` | `LMKT_SEO_SYSTEM_PROMPT` — **không** code/menu master |
+| **4b** | **Guest web chat** — trả lời khách tự động | Socket.IO `chat` | `ChatHistoryContext` / widget | 1 tin nhắn text hoàn chỉnh | `ai.guest-chat.system-prompt` — sync `generateContentFast` |
+| **5** | **Ảnh / video từ kịch bản** — scan → mô tả → (roadmap) render | Vision sidecar + Java ingest | Attachment / ops API | Mô tả kỹ thuật → Lucene; **⏳** output media file | SmolVLM / Qwen-VL sidecar — **không** vào text worker prompt |
+
+**Quy tắc UX (lane 1–4):** Client **chờ kết quả cuối hợp lệ** — không poll async job (`mode: status`) trên SEO/guest. Lane 1–3 dùng SSE nhưng user thấy **một** kết quả apply cuối (patch hoặc prose xong). Backend lane 4a có thể chạy 2 inference nội bộ (creative → article) trong **một** HTTP sync.
+
+**Lane 1 vs 2:** Cùng endpoint SSE nhưng `contextType=menu_json` vs `code` → master prompt, gate output, planner scope **khác hẳn**.
 
 **Quan trọng:** Creative params **không** dùng `SEO_SYSTEM_PROMPT` (title/html_content). Model 1.5B trên weak-5gb thường echo schema → backend **bắt buộc** có seed fallback deterministic.
 
@@ -3002,17 +3022,19 @@ Chi tiết đầy đủ: **PHẦN Y** (LMKT zero-JS-change contract).
 
 `POST /api/ai-orchestration-preview` — từ `AiAssistantChat` (nút preview / debug): xem plan steps, RAG scope **không** gọi LLM worker chính.
 
-## X.10 Ma trận: message user → luồng thực tế
+## X.10 Ma trận: message user → luồng thực tế (→ PHẦN AB)
 
-| User gửi (ví dụ) | contextType | responseMode | Luồng |
-|------------------|-------------|--------------|-------|
-| "Sửa lỗi webview…" (không bôi đen) | code | edit | Full string scope → planner symbols / `code_full` → textEdits |
-| "Sửa đoạn này" (có bôi đen) | code | edit | Selection scope → patch vùng chọn |
-| "Tại sao webview treo?" | code | analyze | QUICK_QUESTION prose + RAG |
-| "Sub-user duplicate combo?" | code* | analyze | Tenant RAG prose (J.5) |
-| Đính kèm `spec.md` + hỏi | any | analyze | Attachment authoritative + prose |
-| Thiết kế menu JSON | menu_json | edit | menu_full / node slices → patches |
-| SEO bài viết | — | — | LMKT endpoint (X.8) |
+| User gửi (ví dụ) | AB Lane | contextType | responseMode | Luồng |
+|------------------|---------|-------------|--------------|-------|
+| "Thêm menu đơn hàng…" | **1** | menu_json | edit | Menu master → orchestration → patches |
+| "Sửa lỗi webview…" (không bôi đen) | **2** | code | edit | Full string → planner → textEdits |
+| "Sửa đoạn này" (có bôi đen) | **2** | code | edit | Selection scope → patch vùng chọn |
+| "Tại sao webview treo?" | **3** | code | analyze | QUICK_QUESTION prose + RAG |
+| "Sub-user duplicate combo?" | **3** | code* | analyze | Tenant RAG prose (J.5) |
+| Đính kèm `spec.md` + hỏi | **3** | any | analyze | Attachment + prose |
+| SEO bài viết LMKT | **4a** | — | — | Sync `/ai-generate-seo-content` |
+| Khách chat website | **4b** | — | — | Socket.IO guest lane |
+| Ảnh UI + hỏi layout | **5** | any | analyze | Multimodal scan → RAG (render ⏳) |
 
 \*Chat có thể mở từ Code Editor nhưng câu hỏi **không** yêu cầu sửa buffer.
 
@@ -3041,15 +3063,208 @@ Chi tiết đầy đủ: **PHẦN Y** (LMKT zero-JS-change contract).
 
 ---
 
-# PHẦN Y — LMKT LANE (`auto-lmkt.js` · zero JS change)
+# PHẦN AB — 5 LUỒNG AI LOCAL (CANONICAL · v3.6)
 
-> **Nguyên tắc cứng:** Client LMKT (`lmkt/src/api/ai/auto-lmkt.js`, `lmkt/src/api/ai/index.ts`) **không được sửa**. Mọi tương thích nằm ở backend `ApiSpringController` + `AiAssistantGatewayService`.
+> **Mục tiêu vận hành:** Hệ thống đã tương đối ổn định — mỗi loại yêu cầu khách **một lane riêng**, client **chờ kết quả cuối hợp lệ**, backend có thể nhiều bước nội bộ nhưng **không** để user poll job/pipeline.
+
+```mermaid
+flowchart TB
+  subgraph L1 [Lane 1 — Quản lý Menu]
+    M1[User + md hệ thống + menu JSON optional]
+    M2[AiMenuDesigner / menu_json SSE]
+    M3[Menu master + orchestration + steps]
+    M4[Menu JSON / patches hợp lệ]
+    M1 --> M2 --> M3 --> M4
+  end
+
+  subgraph L2 [Lane 2 — Biên tập mã]
+    C1[User + DynamicCode patterns + code optional]
+    C2[CodeEditor / code SSE]
+    C3[Code master + region plan + textEdits]
+    C4[Patch apply CodeMirror]
+    C1 --> C2 --> C3 --> C4
+  end
+
+  subgraph L3 [Lane 3 — Suy luận nhanh]
+    G1[Câu hỏi ngoài menu/code edit]
+    G2[classify + WorkflowAdvisor]
+    G3[Prose stream / RAG nhẹ]
+    G1 --> G2 --> G3
+  end
+
+  subgraph L4 [Lane 4 — SEO + Guest]
+    S1[SEO: auto-lmkt sync HTTP]
+    S2[Guest: Socket.IO sync reply]
+  end
+
+  subgraph L5 [Lane 5 — Ảnh Video]
+    V1[Kịch bản + ảnh đính kèm]
+    V2[Vision scan → Lucene]
+    V3["⏳ Java render pipeline"]
+    V1 --> V2 --> V3
+  end
+```
+
+## AB.1 Luồng 1 — Quản lý Menu (`Quản Lý menu`)
+
+**Màn hình:** `frontend-admin` → Menu → **AI Menu Designer** (`AiMenuDesigner.tsx`)
+
+**Input khách gửi:**
+
+| Thành phần | Bắt buộc | Ghi chú |
+|------------|----------|---------|
+| Nội dung yêu cầu nghiệp vụ | ✅ | "Thêm module X", "Sửa trigger đơn hàng", … |
+| Chuẩn md hệ thống | ✅ (backend) | `ai_menu_master_prompt.md` — khung sườn bảng, `f_types`, trigger, flowType |
+| JSON menu hiện tại | Optional | Thiếu → thiết kế mới; có → nâng cấp / patch theo yêu cầu |
+
+**Backend phải làm (thứ tự):**
+
+1. **Classify** `EDIT_MENU` → `responseMode=edit` bắt buộc
+2. **Phân tích nghiệp vụ** → agentic plan: bước nào, bảng nào (`m_configs`, `sys_*`), field nào
+3. **Nhãn cột 3 ngôn ngữ** (`f_header`, `f_header_vi/en/zh`) — đúng contract menu master
+4. **Trigger / type_form / tbl_services** — khớp nghiệp vụ, không generic
+5. **Worker** sinh menu JSON hoặc `patches` → gate validate → SSE apply
+
+**File then chốt:**
+
+| Layer | File |
+|-------|------|
+| Client | `AiMenuDesigner.tsx`, `CodeMirrorWithAiAssistant.tsx` |
+| SSE | `ApiSpringController` → `/api/ai-code-stream` |
+| Master | `backend/csm_datas/ai_local/ai_menu_master_prompt.md` |
+| Gate | `MenuQualityGateService.java` |
+| Planner | `AiEditTaskPlannerService` (khi patch trên JSON lớn) |
+
+**Weak server:** Orchestration bounded; ingest menu async; không nhồi full JSON + master + code vào một prompt.
+
+## AB.2 Luồng 2 — Trình biên tập mã (`Trình biên tập mã` / DynamicCode)
+
+**Màn hình:** `CodeEditor.tsx` (DynamicCode `p_name` + `p_type`)
+
+**Input khách gửi:**
+
+| Thành phần | Bắt buộc | Ghi chú |
+|------------|----------|---------|
+| Yêu cầu (sửa lỗi, nâng cấp, thêm tính năng) | ✅ | "sửa webview", "fix timerRegistry", … |
+| `currentCode` (code string) | Optional | Thiếu → hỏi/plan trên pattern; có → patch chính xác dòng |
+| Cursor / selection | Khuyến nghị | Không bôi đen → scope **full string** (v2.9); có selection → slice vùng chọn |
+
+**Backend phải hiểu DynamicCode CSM:**
+
+- Một buffer string, không file path — **PHẦN V**
+- Pattern: `ctx.helperApi`, `timerRegistry`, `thongbao`, `processContent`, webview lifecycle, …
+- Master: `ai_code_master_prompt.md` + RAG scoped theo `pName_pType`
+
+**Output:** `textEdits` (1-based lines) → CodeMirror apply → user thấy code đã sửa.
+
+## AB.3 Luồng 3 — Suy luận nhanh (ngoài lane 1–2)
+
+**Khi nào:** Câu hỏi **không** yêu cầu sửa menu JSON hay code string — giải thích, phân tích, domain, attachment, tenant org.
+
+**Route:**
+
+```
+classifyIntentWithLocalAI()
+  → AiLocalWorkflowAdvisorService (workspaceKind: general | code | menu)
+  → GENERAL_ANALYSIS | FAST_DIRECT_ANSWER | QUICK_QUESTION
+  → prose SSE (responseMode=analyze)
+```
+
+**Cấm:** Trả `textEdits` / menu patch trên lane này. Fast exit cho chào hỏi (<200ms).
+
+**File:** `AiIntentClassifierService`, `AiLocalWorkflowAdvisorService`, `ApiSpringController.classifyUserIntent`
+
+## AB.4 Luồng 4 — SEO bài viết + Guest chat
+
+### 4a — SEO (LMKT / automation)
+
+| | |
+|--|--|
+| **Client** | `auto-lmkt.js` → `window.csmAI.generateSeoAntiAiOneShot()` |
+| **HTTP** | **1 POST sync** `/ai-generate-seo-content` — **không** `mode: submit` / poll job |
+| **Backend nội bộ** | `AiSeoContentPipelineService`: creative params → article (2× inference) |
+| **Output** | `{ success, data: { title, content, content_en, attributes_*, … } }` |
+| **Config** | `ai.seo.client-sync-only=true`, `ai.seo.article.max-tokens=1536` |
+
+Legacy 2 HTTP (creative + article riêng): `window.VITE_AI_SEO_ONE_SHOT='false'`.
+
+### 4b — Guest web chat
+
+| | |
+|--|--|
+| **Transport** | Socket.IO — **không** REST AI job |
+| **Service** | `AiGuestWebChatService.generateReply()` — **blocking** đến khi có text |
+| **Output** | 1 message hoàn chỉnh hoặc fallback đa ngôn ngữ |
+| **Overload** | Semaphore + cooldown + circuit → fallback, không treo widget |
+
+Chi tiết: **PHẦN AA**, **PHẦN Y.11**.
+
+## AB.5 Luồng 5 — Ảnh / video từ kịch bản (⏳ một phần)
+
+**Yêu cầu nghiệp vụ:** Kịch bản + hình ảnh đầu vào → kết hợp backend Java → file ảnh/video đầu ra.
+
+**Hiện có (✅):**
+
+| Bước | Thành phần |
+|------|------------|
+| Scan ảnh UI/diagram | `AiMultimodalScannerService` |
+| Vision sidecar | SmolVLM2-256M (+ mmproj) — **PHẦN Q** |
+| Index mô tả | Lucene `dyn_ctx_multimodal_*` → RAG lane 1–3 |
+| Ops / dry-run | `POST /api/ai-local/scan-dry-run` |
+| Video | Extract frame (ffmpeg) → từng frame như image — **chưa** native video gen |
+
+**Roadmap (⏳):**
+
+```txt
+Kịch bản text + assets
+  → (optional) vision mô tả layout/frame
+  → Java pipeline render (template + FFmpeg / image compositor)
+  → lưu csm_datas/public/… → trả URL cho client
+```
+
+**Cấm trên 5GB:** Load Qwen2.5-VL-3B cùng lúc text worker; feed raw base64 vào Qwen2.5-Coder prompt.
+
+## AB.6 Ma trận tổng hợp — không trộn
+
+| Cấm | Lý do |
+|-----|-------|
+| SEO qua `/ai-code-stream` | Master prompt code/menu làm hỏng JSON 12 field |
+| Guest chat qua `/ai-generate-seo-content` | Contract và latency khác |
+| Menu master vào SEO lane | Token waste + sai schema |
+| Async job poll cho SEO/guest | User cần 1 kết quả cuối, không jobId |
+| Vision model trong text worker | RAM 5GB không đủ |
+
+## AB.7 Máy chủ yếu — ưu tiên lane
+
+| Tình huống | Hành vi |
+|------------|---------|
+| Guest chat saturated | Fallback text ngay — chat không chết |
+| SEO sync đang chạy | 1 HTTP giữ connection; cap 1024–1536 tok output |
+| Menu/code SSE dài | Region plan + async ingest; không sync 371k vào Lucene mỗi request |
+| Vision scan | Sidecar on-demand → unload sau scan |
+
+## AB.8 Checklist nghiệm thu 5 luồng
+
+| # | Test | Pass |
+|---|------|------|
+| 1 | Menu: yêu cầu nghiệp vụ → JSON có bảng/trigger/3 ngôn ngữ | ☐ |
+| 2 | Code: sửa DynamicCode → textEdits apply đúng dòng | ☐ |
+| 3 | Hỏi giải thích (không sửa) → prose, không patch | ☐ |
+| 4a | SEO one-shot → 1 HTTP sync, JSON 12 field | ☐ |
+| 4b | Guest chat → 1 tin sync, fallback khi overload | ☐ |
+| 5 | Ảnh attach → scan → mô tả trong RAG (render file ⏳) | ☐ |
+
+---
+
+# PHẦN Y — LMKT LANE (`auto-lmkt.js` · contract ổn định)
+
+> **Nguyên tắc:** Client LMKT giữ contract HTTP/JSON ổn định; ưu tiên sửa backend (`ApiSpringController`, `AiSeoContentPipelineService`, `AiAssistantGatewayService`). Thay đổi JS chỉ khi bắt buộc (ví dụ sync one-shot, `window` flags DynamicCode).
 
 ## Y.1 Kiến trúc tổng quan
 
 ```mermaid
 flowchart TB
-  subgraph client [LMKT Client — không đổi]
+  subgraph client [LMKT Client]
     ALM[auto-lmkt.js]
     IDX[index.ts generateSeoContentWithPrompt]
     ALM --> IDX
@@ -3064,7 +3279,7 @@ flowchart TB
     SEO[LMKT_SEO_SYSTEM_PROMPT inference]
   end
 
-  IDX -->|sync hoặc async| API
+  IDX -->|sync 1 HTTP| API
   API --> GOAI
   GOAI -->|taskType seo_content| GW
   GW -->|"[CREATIVE_PARAMS_REQUEST]"| CP
@@ -3321,7 +3536,7 @@ ai.local.llama.max-prompt-chars-hard-cap=1000000
 ✗ Ghi menu learning memory sau SEO request (chỉ menu lane)
 ```
 
-## Y.10 Test checklist (không đổi JS)
+## Y.10 Test checklist (LMKT contract)
 
 | # | Test | Pass |
 |---|------|------|
@@ -3350,7 +3565,7 @@ ai.local.llama.max-prompt-chars-hard-cap=1000000
 |------|----------|--------|-----------------|
 | Code / menu edit | `POST /ai-code-stream` (SSE) | `AiAssistantChat.tsx` | `qwen2.5-coder-1.5b` Q4_K_M |
 | SEO creative params | `POST /ai-generate-seo-content` + `[CREATIVE_PARAMS_REQUEST]` | pipeline / legacy | Cùng 1.5B · max 384 tok |
-| SEO bài viết LMKT | Cùng endpoint, `LMKT_SEO_SYSTEM_PROMPT` | `generateSeoContentWithPrompt` | Cùng 1.5B · max **4096** tok |
+| SEO bài viết LMKT | Cùng endpoint, `LMKT_SEO_SYSTEM_PROMPT` | `generateSeoAntiAiOneShot()` sync | Cùng 1.5B · max **1536** tok |
 | SEO one-shot | `seoPipeline: anti_ai_one_shot` | `generateSeoAntiAiOneShot()` | Cùng 1.5B · 2 bước nội bộ · VI **900–1200 từ** |
 | **Guest web chat** | Socket.IO `chat` | `ChatHistoryContext` | Cùng 1.5B · **192 tok** · `generateContentFast` |
 
@@ -3487,8 +3702,8 @@ flowchart TB
 | Guard | Config / hành vi |
 |-------|------------------|
 | Bật/tắt lane | `ai.guest-chat.enabled=true` |
-| Max inference đồng thời | `ai.guest-chat.max-concurrent=2` (Semaphore) |
-| Output cap | `ai.guest-chat.max-output-tokens=256` → `generateContentFast` |
+| Max inference đồng thời | `ai.guest-chat.max-concurrent=1` (Semaphore) |
+| Output cap | `ai.guest-chat.max-output-tokens=192` → `generateContentFast` |
 | Per-guest cooldown | `ai.guest-chat.per-guest-cooldown-ms=45000` |
 | Circuit breaker | `llama.isCircuitOpen()` → fallback text ngay |
 | System prompt riêng | `ai.guest-chat.system-prompt` — **không** dùng `ai.local.llama.system-prompt` (code assistant) |
@@ -3716,5 +3931,5 @@ Rollback: frontend `undoSnapshotRef` + không rollback khi gate fail **không** 
 
 ---
 
-**Hết master brief v3.4.**  
+**Hết master brief v3.6.**  
 Chỉ dùng file này khi yêu cầu Cursor AI implement / làm lại CSM AI Local hoặc domain System Management liên quan RAG.

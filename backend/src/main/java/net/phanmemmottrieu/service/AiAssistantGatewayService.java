@@ -1962,6 +1962,11 @@ Rules:
         resolveSeoSystemPrompt(trimmedPrompt));
   }
 
+  /** Unwrap llama chat-completions / provider JSON → plain assistant text (SEO article JSON). */
+  public String extractProviderText(String wrappedOrRaw) {
+    return extractResultTextFromWrappedJson(wrappedOrRaw);
+  }
+
   /** Parse creative-params JSON from wrapped chat-completions or raw assistant text (SEO pipeline). */
   public Map<String, Object> extractCreativeParamsFromProviderRaw(String wrappedOrRaw, String kind) {
     String normalizedKind = kind == null ? "anti_ai" : kind.trim().toLowerCase(Locale.ROOT);

@@ -40,6 +40,11 @@ public class MainRouterController {
 
         logger.info("📥 Request từ host {} đến URI {}", host, uri);
 
+        // Static uploads (app_images) — web route, không phải API JSON
+        if (uri.startsWith("/api/app_images/")) {
+            return webSpringController.handleWebRequest(request, headers, queryParams, requestBody);
+        }
+
         // API routing
         if ((host != null && host.startsWith("api.")) || uri.startsWith("/api/")) {
             if (uri.startsWith("/api/")) {

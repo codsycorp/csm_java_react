@@ -30,6 +30,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
+        // Static media — public, không cần JWT (kể cả khi lỡ proxy vào /api/app_images/...)
+        if (isPublicStaticMediaPath(request.getRequestURI())) {
+            filterChain.doFilter(request, response);
+            return;
+        }
         // Chỉ xử lý các request API (theo logic MainRouterController)
         if (!isApiRequest(request)) {
             filterChain.doFilter(request, response);
@@ -226,6 +231,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String uri = request.getRequestURI();
         String host = request.getHeader("Host");
         return (host != null && host.startsWith("api.")) || uri.startsWith("/api/");
+    }
+
+    private boolean isPublicStaticMediaPath(String uri) {
+        if (uri == null || uri.isBlank()) {
+            return false;
+        }
+        String path = uri.endsWith("/") ? uri.substring(0, uri.length() - 1) : uri;
+        return path.startsWith("/app_images/") || path.startsWith("/api/app_images/");
     }
 
     private boolean isGetTableDataRequest(HttpServletRequest request) {

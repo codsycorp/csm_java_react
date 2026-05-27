@@ -33669,7 +33669,7 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         return title != null && !String.valueOf(title).isBlank() && hasBody;
     }
 
-    /** LMKT: alias html_content ↔ content so both index.ts and auto-lmkt.js schemas work without JS changes. */
+    /** LMKT: alias html_content ↔ content; bổ sung meta EN/ZH nếu model local thiếu field. */
     private void normalizeLmktContentFieldAliases(Map<String, Object> payload) {
         if (payload == null || payload.isEmpty()) {
             return;
@@ -33682,6 +33682,9 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             payload.put("content", htmlContent);
         } else if (htmlBlank && !contentBlank) {
             payload.put("html_content", content);
+        }
+        if (aiSeoContentPipelineService != null) {
+            aiSeoContentPipelineService.fillMissingSeoMetaFields(payload);
         }
     }
 

@@ -5,11 +5,21 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import net.phanmemmottrieu.service.AiLocalRuntimeTierService;
+import net.phanmemmottrieu.service.AiMediaScriptRenderService;
+import net.phanmemmottrieu.service.AiMediaStoryboardPlannerService;
+import net.phanmemmottrieu.service.AiMediaTalkingPresenterRenderService;
+import net.phanmemmottrieu.service.AiLocalPiperTtsService;
+import net.phanmemmottrieu.service.AiLocalTalkingHeadService;
+import net.phanmemmottrieu.service.AiCharacterExtractService;
+import net.phanmemmottrieu.service.AiCharacterProfileService;
+import net.phanmemmottrieu.service.AiMediaCharacterDirectorRenderService;
+import net.phanmemmottrieu.service.AiMediaTemplateProRenderService;
 import net.phanmemmottrieu.service.AiMultimodalScannerService;
 import net.phanmemmottrieu.service.AiLocalOrchestrationService;
 import net.phanmemmottrieu.service.AiBusinessMemoryVectorService;
 import net.phanmemmottrieu.service.AiLocalEmbeddingService;
 import net.phanmemmottrieu.service.AiTenantKnowledgeIngestionService;
+import net.phanmemmottrieu.service.BundledFfmpegService;
 import net.phanmemmottrieu.service.ComfyUIProcessService;
 import net.phanmemmottrieu.service.LocalAiAssistantContextService;
 import net.phanmemmottrieu.service.LlamaCppNativeService;
@@ -75,6 +85,36 @@ public class AiLocalOpsController {
     @Autowired(required = false)
     private ComfyUIProcessService comfyUIProcessService;
 
+    @Autowired(required = false)
+    private AiMediaScriptRenderService aiMediaScriptRenderService;
+
+    @Autowired(required = false)
+    private AiMediaStoryboardPlannerService aiMediaStoryboardPlannerService;
+
+    @Autowired(required = false)
+    private AiCharacterExtractService aiCharacterExtractService;
+
+    @Autowired(required = false)
+    private AiMediaTemplateProRenderService aiMediaTemplateProRenderService;
+
+    @Autowired(required = false)
+    private AiMediaCharacterDirectorRenderService aiMediaCharacterDirectorRenderService;
+
+    @Autowired(required = false)
+    private AiMediaTalkingPresenterRenderService aiMediaTalkingPresenterRenderService;
+
+    @Autowired(required = false)
+    private AiLocalPiperTtsService aiLocalPiperTtsService;
+
+    @Autowired(required = false)
+    private AiLocalTalkingHeadService aiLocalTalkingHeadService;
+
+    @Autowired(required = false)
+    private AiCharacterProfileService aiCharacterProfileService;
+
+    @Autowired(required = false)
+    private BundledFfmpegService bundledFfmpegService;
+
     @Value("${ai.local.only.enabled:true}")
     private boolean aiLocalOnlyEnabled;
 
@@ -137,6 +177,19 @@ public class AiLocalOpsController {
         vision.put("endpoint", visionEndpoint == null ? "" : visionEndpoint);
         vision.put("localVisionReady", localVisionReady);
 
+        Map<String, Object> ffmpeg = new LinkedHashMap<>();
+        ffmpeg.put("provider", "jave-all-deps-bundled");
+        ffmpeg.put("ready", bundledFfmpegService != null && bundledFfmpegService.isReady());
+        ffmpeg.put("executablePath", bundledFfmpegService != null ? bundledFfmpegService.getExecutablePath() : "");
+
+        Map<String, Object> characterExtract = new LinkedHashMap<>();
+        if (aiCharacterExtractService != null) {
+            characterExtract.putAll(aiCharacterExtractService.describeStatus());
+        } else {
+            characterExtract.put("provider", "onnxruntime-u2netp-bundled");
+            characterExtract.put("ready", false);
+        }
+
         out.put("success", true);
         out.put("policy", policy);
         if (aiLocalRuntimeTierService != null) {
@@ -144,6 +197,14 @@ public class AiLocalOpsController {
         }
         out.put("reasoning", reasoning);
         out.put("vision", vision);
+        out.put("ffmpeg", ffmpeg);
+        out.put("characterExtract", characterExtract);
+        if (aiLocalPiperTtsService != null) {
+            out.put("tts", aiLocalPiperTtsService.describeStatus());
+        }
+        if (aiLocalTalkingHeadService != null) {
+            out.put("talkingHead", aiLocalTalkingHeadService.describeStatus());
+        }
         out.put("ready", aiLocalOnlyEnabled && reasoningHealthy && (!multimodalRequireVision || localVisionReady));
 
         return ResponseEntity.ok(out);
@@ -483,9 +544,268 @@ public class AiLocalOpsController {
         out.put("scanner", scanner);
         out.put("ingestCandidates", ingestCandidates);
         out.put("plan", planSteps);
-        out.put("note", "Dry-run only: no Lucene index write, no model execution, no cloud call");
+        out.put("note", "Dry-run only: phân tích ảnh/kịch bản — KHÔNG xuất file ảnh/video. Dùng POST /ai-local/render-media-script để render file thật.");
 
         return ResponseEntity.ok(out);
+    }
+
+    @PostMapping("/plan-media-storyboard")
+    public ResponseEntity<Map<String, Object>> planMediaStoryboard(@RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> request = body == null ? Collections.emptyMap() : body;
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (aiMediaStoryboardPlannerService == null || !aiMediaStoryboardPlannerService.isEnabled()) {
+            out.put("success", false);
+            out.put("errorCode", "PLANNER_UNAVAILABLE");
+            out.put("message", "Storyboard planner chưa bật");
+            return ResponseEntity.ok(out);
+        }
+        String message = str(request.get("message"));
+        int durationSec = parseIntSafe(request.get("durationSec"), 15);
+        String characterHint = str(request.get("characterHint"));
+        Map<String, Object> characterProfile = null;
+        ImageAttachment img = resolveFirstImageAttachment(request, aiMediaScriptRenderService);
+        if (img.bytes().length > 0 && aiCharacterProfileService != null) {
+            characterProfile = aiCharacterProfileService.analyze(img.bytes(), img.mime(), message);
+            out.put("characterProfile", characterProfile);
+        }
+        AiMediaStoryboardPlannerService.StoryboardPlan plan = aiMediaStoryboardPlannerService.plan(
+            message, characterHint, durationSec, characterProfile);
+        out.putAll(plan.toMap());
+        out.put("lane", "media_storyboard");
+        return ResponseEntity.ok(out);
+    }
+
+    @PostMapping("/extract-character")
+    public ResponseEntity<Map<String, Object>> extractCharacter(@RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> request = body == null ? Collections.emptyMap() : body;
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (aiCharacterExtractService == null || !aiCharacterExtractService.isEnabled()) {
+            out.put("success", false);
+            out.put("errorCode", "EXTRACT_UNAVAILABLE");
+            out.put("message", "Character extract chưa bật");
+            return ResponseEntity.ok(out);
+        }
+        String appId = normalizeOrDefault(request.get("appId"), "csm");
+        ImageAttachment img = resolveFirstImageAttachment(request, aiMediaScriptRenderService);
+        if (img.bytes().length == 0) {
+            out.put("success", false);
+            out.put("errorCode", "MISSING_IMAGE");
+            out.put("message", "Thiếu attachments[0] ảnh nhân vật");
+            return ResponseEntity.ok(out);
+        }
+        AiCharacterExtractService.ExtractResult result = aiCharacterExtractService.extract(img.bytes(), img.mime(), appId);
+        out.putAll(result.toMap());
+        out.put("lane", "character_extract");
+        out.put("hint", "Character cutout bundled ONNX u2netp — model tự tải lần đầu vào csm_datas/models/u2netp.onnx");
+        return ResponseEntity.ok(out);
+    }
+
+    @PostMapping("/render-media-script")
+    public ResponseEntity<Map<String, Object>> renderMediaScript(@RequestBody(required = false) Map<String, Object> body) {
+        Map<String, Object> request = body == null ? Collections.emptyMap() : body;
+        Map<String, Object> out = new LinkedHashMap<>();
+
+        String renderEngine = normalizeOrDefault(request.get("renderEngine"), "talking_presenter").toLowerCase(Locale.ROOT);
+        boolean engineUpgraded = "template_pro".equals(renderEngine);
+        if (engineUpgraded) {
+            renderEngine = "talking_presenter";
+        }
+        String message = str(request.get("message"));
+        String outputMode = normalizeOrDefault(request.get("outputMode"), "both");
+        String appId = normalizeOrDefault(request.get("appId"), "csm");
+        int durationSec = parseIntSafe(request.get("durationSec"), 15);
+        ImageAttachment img = resolveFirstImageAttachment(request, aiMediaScriptRenderService);
+
+        if ("talking_presenter".equals(renderEngine) || "talking".equals(renderEngine)) {
+            if (aiMediaTalkingPresenterRenderService == null) {
+                out.put("success", false);
+                out.put("errorCode", "TALKING_PRESENTER_UNAVAILABLE");
+                out.put("message", "AiMediaTalkingPresenterRenderService không khả dụng");
+                return ResponseEntity.ok(out);
+            }
+            if (img.bytes().length == 0) {
+                out.put("success", false);
+                out.put("errorCode", "MISSING_IMAGE");
+                out.put("message", "Thiếu ảnh nhân vật (attachments[0])");
+                return ResponseEntity.ok(out);
+            }
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> scenes = request.get("storyboardScenes") instanceof List<?> list
+                ? (List<Map<String, Object>>) list
+                : null;
+
+            AiMediaTalkingPresenterRenderService.PresenterResult pr = aiMediaTalkingPresenterRenderService.render(
+                new AiMediaTalkingPresenterRenderService.PresenterRequest(
+                    message, outputMode, appId, durationSec,
+                    img.bytes(), img.mime(), scenes
+                )
+            );
+            out.putAll(pr.toMap());
+            if (pr.success()) {
+                out.put("lane", "media_render");
+                if (engineUpgraded) {
+                    out.put("engineUpgraded", true);
+                    out.put("engineUpgradeNote", "template_pro → talking_presenter");
+                }
+                out.put("hint", "S3 Talking Presenter — TTS local + nhân vật nói dialogue từng cảnh (ai-talk-*.mp4)");
+            }
+            return ResponseEntity.ok(out);
+        }
+
+        if ("character_director".equals(renderEngine)) {
+            if (aiMediaCharacterDirectorRenderService == null) {
+                out.put("success", false);
+                out.put("errorCode", "CHARACTER_DIRECTOR_UNAVAILABLE");
+                out.put("message", "AiMediaCharacterDirectorRenderService không khả dụng");
+                return ResponseEntity.ok(out);
+            }
+            if (img.bytes().length == 0) {
+                out.put("success", false);
+                out.put("errorCode", "MISSING_IMAGE");
+                out.put("message", "Thiếu ảnh nhân vật (attachments[0])");
+                return ResponseEntity.ok(out);
+            }
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> scenes = request.get("storyboardScenes") instanceof List<?> list
+                ? (List<Map<String, Object>>) list
+                : null;
+
+            AiMediaCharacterDirectorRenderService.DirectorResult dr = aiMediaCharacterDirectorRenderService.render(
+                new AiMediaCharacterDirectorRenderService.DirectorRequest(
+                    message, outputMode, appId, durationSec,
+                    img.bytes(), img.mime(), scenes, null
+                )
+            );
+            out.putAll(dr.toMap());
+            if (dr.success()) {
+                out.put("lane", "media_render");
+                if (engineUpgraded) {
+                    out.put("engineUpgraded", true);
+                    out.put("engineUpgradeNote", "template_pro → character_director");
+                }
+                out.put("hint", "Character Director — AI nhận diện nhân vật + storyboard hành động + animate cutout theo dialogue từng cảnh");
+            }
+            return ResponseEntity.ok(out);
+        }
+
+        if ("template_pro".equals(renderEngine)) {
+            if (aiMediaTemplateProRenderService == null) {
+                out.put("success", false);
+                out.put("errorCode", "TEMPLATE_PRO_UNAVAILABLE");
+                out.put("message", "AiMediaTemplateProRenderService không khả dụng");
+                return ResponseEntity.ok(out);
+            }
+            if (img.bytes().length == 0) {
+                out.put("success", false);
+                out.put("errorCode", "MISSING_IMAGE");
+                out.put("message", "Thiếu ảnh nhân vật (attachments[0])");
+                return ResponseEntity.ok(out);
+            }
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> scenes = request.get("storyboardScenes") instanceof List<?> list
+                ? (List<Map<String, Object>>) list
+                : null;
+
+            AiMediaTemplateProRenderService.TemplateProResult tp = aiMediaTemplateProRenderService.render(
+                new AiMediaTemplateProRenderService.TemplateProRequest(
+                    message,
+                    outputMode,
+                    appId,
+                    durationSec,
+                    img.bytes(),
+                    img.mime(),
+                    scenes,
+                    null
+                )
+            );
+            out.putAll(tp.toMap());
+            if (tp.success()) {
+                out.put("lane", "media_render");
+                out.put("hint", "Template Pro — multi-scene + character compositor + FFmpeg concat");
+            }
+            return ResponseEntity.ok(out);
+        }
+
+        if (aiMediaScriptRenderService == null || !aiMediaScriptRenderService.isEnabled()) {
+            out.put("success", false);
+            out.put("errorCode", "RENDER_UNAVAILABLE");
+            out.put("message", "AiMediaScriptRenderService chưa bật hoặc không khả dụng");
+            return ResponseEntity.ok(out);
+        }
+
+        if (img.bytes().length == 0) {
+            out.put("success", false);
+            out.put("errorCode", "MISSING_IMAGE");
+            out.put("message", "Thiếu ảnh nhân vật (attachments[0].base64Data)");
+            return ResponseEntity.ok(out);
+        }
+
+        AiMediaScriptRenderService.RenderResult result = aiMediaScriptRenderService.render(
+            new AiMediaScriptRenderService.RenderRequest(
+                message,
+                outputMode,
+                appId,
+                durationSec,
+                img.bytes(),
+                img.mime(),
+                img.name()
+            )
+        );
+
+        out.putAll(result.toMap());
+        if (result.success()) {
+            out.put("lane", "media_render");
+            out.put("renderEngine", "slideshow");
+            out.put("aiVideoGeneration", Map.of(
+                "available", false,
+                "reason", "slideshow 1 frame — dùng renderEngine=template_pro cho multi-scene",
+                "comfyuiConfigured", comfyUIProcessService != null && comfyUIProcessService.isConfigured(),
+                "comfyuiAvailable", comfyUIProcessService != null && comfyUIProcessService.isAvailable()
+            ));
+            out.put("hint", "File lưu tại public/app_images — mở imageUrl/videoUrl trên domain web");
+        }
+        return ResponseEntity.ok(out);
+    }
+
+    private record ImageAttachment(byte[] bytes, String mime, String name) {}
+
+    private ImageAttachment resolveFirstImageAttachment(Map<String, Object> request, AiMediaScriptRenderService renderService) {
+        List<Map<String, Object>> attachments = normalizeAttachments(request.get("attachments"));
+        byte[] imageBytes = new byte[0];
+        String imageMime = "image/jpeg";
+        String imageName = "character.jpg";
+        for (Map<String, Object> att : attachments) {
+            if (att == null) continue;
+            String kind = str(att.get("kind")).toLowerCase(Locale.ROOT);
+            String type = str(att.get("type")).toLowerCase(Locale.ROOT);
+            String mime = str(att.get("mimeType"));
+            if (!"image".equals(kind) && !type.contains("image") && !mime.startsWith("image/")) {
+                continue;
+            }
+            String base64Data = str(att.get("base64Data"));
+            if (base64Data.isBlank()) {
+                base64Data = str(att.get("dataUrl"));
+            }
+            if (renderService != null) {
+                imageBytes = renderService.decodeBase64Image(base64Data);
+            } else {
+                imageBytes = decodeBase64ImageFallback(base64Data);
+            }
+            if (!mime.isBlank()) imageMime = mime;
+            if (!str(att.get("name")).isBlank()) imageName = str(att.get("name"));
+            break;
+        }
+        return new ImageAttachment(imageBytes, imageMime, imageName);
+    }
+
+    private byte[] decodeBase64ImageFallback(String raw) {
+        String value = String.valueOf(raw == null ? "" : raw).trim();
+        if (value.isBlank()) return new byte[0];
+        int comma = value.indexOf(',');
+        if (value.startsWith("data:") && comma > 0) {
+            value = value.substring(comma + 1);
+        }
+        return java.util.Base64.getDecoder().decode(value.replaceAll("\\s+", ""));
     }
 
     @PostMapping(value = "/execute-local-plan", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -1164,6 +1484,19 @@ public class AiLocalOpsController {
             return fallback;
         }
         return "true".equals(value) || "1".equals(value) || "yes".equals(value) || "y".equals(value);
+    }
+
+    private int parseIntSafe(Object raw, int fallback) {
+        if (raw instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            String value = str(raw);
+            if (value.isBlank()) return fallback;
+            return Integer.parseInt(value);
+        } catch (Exception ignored) {
+            return fallback;
+        }
     }
 
     private LocalExecutionResult runLocalPatchGeneration(String prompt) {
