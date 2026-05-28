@@ -1370,7 +1370,7 @@ sequenceDiagram
 │ VAI TRÒ 3 — VISION / VIDEO (sidecar riêng, ON-DEMAND — không trong JVM) │
 │ weak-5gb: SmolVLM2-256M-Video Q8_0 + mmproj (~280MB disk, ~400–700MB RAM)│
 │ strong:   SmolVLM2-500M-Video hoặc Qwen2-VL-2B Q4_K_M                   │
-│ Process:  llama-server :8090 + Python proxy :8091                       │
+│ Process:  llama-server :8090 (Java gọi /v1/chat/completions trực tiếp) │
 │ Việc:     ảnh UI/diagram → mô tả kỹ thuật → ingest Lucene → worker RAG  │
 │ Video:    extract frame (ffmpeg) → vision từng frame → merge → Lucene   │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -1455,14 +1455,14 @@ Cần `curl` hoặc `pip install huggingface_hub` (`huggingface-cli`).
 
 ```bash
 AI_ORCHESTRATION_MULTIMODAL_VISION_ENABLED=true
-AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8091/
+AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8090/v1/chat/completions
 AI_ORCHESTRATION_MULTIMODAL_VISION_TIMEOUT_MS=12000
 ```
 
 **Bước 4 — Restart backend**, verify:
 
 ```bash
-curl -s http://127.0.0.1:8091/health
+curl -s http://127.0.0.1:8090/health
 curl -s http://127.0.0.1:15300/api/ai-local/health | jq .vision
 ```
 
@@ -1474,14 +1474,14 @@ sequenceDiagram
     participant FE as AiAssistantChat
     participant API as ApiSpringController
     participant S as AiMultimodalScannerService
-    participant V as Vision sidecar :8091
+    participant V as llama-server vision :8090
     participant L as Lucene KNN
     participant W as Qwen2.5-Coder worker
 
     U->>FE: message + image/video frame
     FE->>API: POST /api/ai-code-stream
     API->>S: scan(attachments)
-    S->>V: POST {prompt, imageBase64} (nếu vision enabled)
+    S->>V: POST /v1/chat/completions (OpenAI vision, nếu enabled)
     V-->>S: {description: "UI layout..."}
     S->>L: indexDynamicContext dyn_ctx_multimodal_* (async)
     API->>L: scoped RAG top-K (scope_ui_ux, scope_code)
@@ -1514,7 +1514,7 @@ AI_EMBEDDING_LLAMA_ENABLED=false
 
 # Vision — sidecar, tắt mặc định; bật khi chạy start-ai-local-vision.sh
 AI_ORCHESTRATION_MULTIMODAL_VISION_ENABLED=false
-AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8091/
+AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8090/v1/chat/completions
 AI_ORCHESTRATION_MULTIMODAL_LOCAL_ONLY_REQUIRE_VISION=false
 ```
 
@@ -1526,7 +1526,7 @@ AI_EMBEDDING_PROVIDER=llama_cpp_embedding
 AI_EMBEDDING_LLAMA_ENABLED=true
 AI_LOCAL_LLAMA_EMBEDDING_MODEL_PATH=./csm_datas/ai_local/model/nomic-embed-text-v1.5.Q4_K_M.gguf
 AI_ORCHESTRATION_MULTIMODAL_VISION_ENABLED=true
-AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8091/
+AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8090/v1/chat/completions
 ```
 
 ## Q.8 Đa ngôn ngữ lập trình — kỳ vọng thực tế
@@ -1841,7 +1841,7 @@ AI_EMBEDDING_HASH_DIMENSIONS=128
 |------|----------|
 | `CSM_AI_LOCAL_CURSOR_MASTER_BRIEF.md` | **File này** — spec + checklist triển khai (duy nhất ở root) |
 | `scripts/download-ai-local-models.sh` | Tải GGUF theo profile 5gb/strong |
-| `scripts/start-ai-local-vision.sh` | Sidecar SmolVLM2 + proxy :8091 |
+| `scripts/start-ai-local-vision.sh` | Sidecar SmolVLM2 llama-server :8090 |
 | `scripts/csm-knowledge-pack.sh` | Export/import Lucene + learning portable |
 | `backend/csm_datas/ai_local/author_style_dna.md` | ADN phong cách — cập nhật hàng tuần |
 | `backend/csm_datas/ai_local/ai_code_master_prompt.md` | Contract runtime code edit (load theo intent) |

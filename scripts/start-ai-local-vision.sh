@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Start local vision sidecar for CSM (weak-5gb friendly).
-# Runs llama-server (SmolVLM2) + Python proxy matching AiMultimodalScannerService contract.
+# Runs llama-server (SmolVLM2). Java backend calls OpenAI-compatible /v1/chat/completions directly.
 #
 # Usage:
 #   ./scripts/start-ai-local-vision.sh           # SmolVLM2-256M-Video (default weak)
@@ -8,7 +8,7 @@
 #
 # Then set in config.env:
 #   AI_ORCHESTRATION_MULTIMODAL_VISION_ENABLED=true
-#   AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8091/
+#   AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8090/v1/chat/completions
 
 set -euo pipefail
 
@@ -17,7 +17,6 @@ MODEL_DIR="$REPO_ROOT/backend/csm_datas/ai_local/model"
 VARIANT="${1:-256m}"
 
 LLAMA_PORT="${AI_LOCAL_VISION_LLAMA_PORT:-8090}"
-PROXY_PORT="${AI_LOCAL_VISION_PROXY_PORT:-8091}"
 THREADS="${AI_LOCAL_VISION_THREADS:-1}"
 CTX="${AI_LOCAL_VISION_CTX:-4096}"
 
@@ -57,7 +56,6 @@ if [ -n "$MMPROJ" ] && [ ! -f "$MMPROJ" ]; then
 fi
 
 pkill -f "llama-server.*--port $LLAMA_PORT" 2>/dev/null || true
-pkill -f "ai-local-vision-proxy.py" 2>/dev/null || true
 sleep 1
 
 LLAMA_ARGS=(
@@ -77,28 +75,20 @@ echo "Starting llama-server (vision) on :$LLAMA_PORT ..."
 llama-server "${LLAMA_ARGS[@]}" &
 LLAMA_PID=$!
 
-export AI_LOCAL_VISION_LLAMA_URL="http://127.0.0.1:${LLAMA_PORT}/v1/chat/completions"
-export AI_LOCAL_VISION_PROXY_PORT="$PROXY_PORT"
-
-echo "Starting vision proxy on :$PROXY_PORT ..."
-python3 "$REPO_ROOT/scripts/ai-local-vision-proxy.py" &
-PROXY_PID=$!
-
 cleanup() {
-  kill "$PROXY_PID" 2>/dev/null || true
   kill "$LLAMA_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
 echo ""
 echo "Vision sidecar ready."
-echo "  Proxy (CSM endpoint): http://127.0.0.1:${PROXY_PORT}/"
-echo "  llama-server:         http://127.0.0.1:${LLAMA_PORT}/"
+echo "  llama-server: http://127.0.0.1:${LLAMA_PORT}/"
+echo "  chat API:     http://127.0.0.1:${LLAMA_PORT}/v1/chat/completions"
 echo ""
 echo "config.env:"
 echo "  AI_ORCHESTRATION_MULTIMODAL_VISION_ENABLED=true"
-echo "  AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:${PROXY_PORT}/"
+echo "  AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:${LLAMA_PORT}/v1/chat/completions"
 echo ""
 echo "Press Ctrl+C to stop."
 
-wait "$PROXY_PID"
+wait "$LLAMA_PID"

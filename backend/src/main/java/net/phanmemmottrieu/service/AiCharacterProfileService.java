@@ -6,9 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -30,7 +28,7 @@ public class AiCharacterProfileService {
     private static final Pattern JSON_BLOCK = Pattern.compile("```(?:json)?\\s*([\\s\\S]*?)```", Pattern.CASE_INSENSITIVE);
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final WebClient.Builder webClientBuilder;
+    private final AiLocalLlamaVisionClient aiLocalLlamaVisionClient;
 
     @Autowired(required = false)
     private LlamaCppNativeService llamaCppNativeService;
@@ -38,14 +36,8 @@ public class AiCharacterProfileService {
     @Value("${ai.orchestration.multimodal.vision.enabled:false}")
     private boolean visionEnabled;
 
-    @Value("${ai.orchestration.multimodal.vision.endpoint:}")
-    private String visionEndpoint;
-
-    @Value("${ai.orchestration.multimodal.vision.timeout-ms:8000}")
-    private long visionTimeoutMs;
-
-    public AiCharacterProfileService(WebClient.Builder webClientBuilder) {
-        this.webClientBuilder = webClientBuilder;
+    public AiCharacterProfileService(AiLocalLlamaVisionClient aiLocalLlamaVisionClient) {
+        this.aiLocalLlamaVisionClient = aiLocalLlamaVisionClient;
     }
 
     public Map<String, Object> analyze(byte[] imageBytes, String mimeType, String scriptHint) {
@@ -85,7 +77,7 @@ public class AiCharacterProfileService {
     }
 
     private String invokeCharacterVision(byte[] imageBytes, String mimeType) {
-        if (!visionEnabled || visionEndpoint == null || visionEndpoint.isBlank()) {
+        if (!visionEnabled || !aiLocalLlamaVisionClient.isConfigured()) {
             return "";
         }
         if (imageBytes == null || imageBytes.length == 0) {
@@ -100,33 +92,15 @@ public class AiCharacterProfileService {
                 - Tư thế / biểu cảm
                 - Gợi ý cách đặt nhân vật trong video (closeup, medium shot)
                 """;
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("prompt", prompt);
-            payload.put("imageBase64", Base64.getEncoder().encodeToString(imageBytes));
-            payload.put("mimeType", mimeType == null ? "image/jpeg" : mimeType);
-
-            WebClient client = webClientBuilder.baseUrl(visionEndpoint.trim()).build();
-            String raw = client.post()
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(payload)
-                .retrieve()
-                .bodyToMono(String.class)
-                .timeout(java.time.Duration.ofMillis(Math.max(500L, visionTimeoutMs)))
-                .block();
-            if (raw == null || raw.isBlank()) {
+            String description = aiLocalLlamaVisionClient.describeImage(
+                prompt,
+                Base64.getEncoder().encodeToString(imageBytes),
+                mimeType == null ? "image/jpeg" : mimeType
+            );
+            if (description.isBlank()) {
                 return "";
             }
-            try {
-                JsonNode node = objectMapper.readTree(raw);
-                for (String key : new String[]{"description", "text", "content", "response"}) {
-                    String v = node.path(key).asText("").trim();
-                    if (!v.isBlank()) {
-                        return v.length() > 1200 ? v.substring(0, 1197) + "..." : v;
-                    }
-                }
-            } catch (Exception ignored) {
-                return raw.length() > 1200 ? raw.substring(0, 1197) + "..." : raw;
-            }
+            return description.length() > 1200 ? description.substring(0, 1197) + "..." : description;
         } catch (Exception ex) {
             log.debug("Character vision failed: {}", ex.getMessage());
         }

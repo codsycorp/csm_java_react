@@ -2,19 +2,14 @@ package net.phanmemmottrieu.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -23,8 +18,6 @@ import java.util.Set;
 
 @Service
 public class AiMultimodalScannerService {
-
-    private static final Logger log = LoggerFactory.getLogger(AiMultimodalScannerService.class);
 
     public static final int SCOPE_MENU = 1;
     public static final int SCOPE_CODE = 1 << 1;
@@ -70,10 +63,10 @@ public class AiMultimodalScannerService {
     }
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final WebClient.Builder webClientBuilder;
+    private final AiLocalLlamaVisionClient aiLocalLlamaVisionClient;
 
-    public AiMultimodalScannerService(WebClient.Builder webClientBuilder) {
-        this.webClientBuilder = webClientBuilder;
+    public AiMultimodalScannerService(AiLocalLlamaVisionClient aiLocalLlamaVisionClient) {
+        this.aiLocalLlamaVisionClient = aiLocalLlamaVisionClient;
     }
 
     @Value("${ai.orchestration.multimodal.scanner.enabled:true}")
@@ -102,9 +95,6 @@ public class AiMultimodalScannerService {
 
     @Value("${ai.orchestration.multimodal.vision.prompt:Describe this UI or diagram in technical terms useful for implementation. Mention layout, key controls, visual style tokens, and actionable IDs/selectors if visible.}")
     private String visionPrompt;
-
-    @Value("${ai.orchestration.multimodal.vision.timeout-ms:6000}")
-    private long visionTimeoutMs;
 
     public boolean isVisionRuntimeReady() {
         return visionEnabled && !String.valueOf(visionEndpoint == null ? "" : visionEndpoint).isBlank();
@@ -397,41 +387,12 @@ public class AiMultimodalScannerService {
     }
 
     private String invokeLocalVision(String base64Data, String mimeType) {
-        try {
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("prompt", String.valueOf(visionPrompt == null ? "" : visionPrompt).trim());
-            payload.put("imageBase64", base64Data);
-            payload.put("mimeType", mimeType);
-
-            WebClient client = webClientBuilder.baseUrl(String.valueOf(visionEndpoint).trim()).build();
-            String raw = client.post()
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(payload)
-                .retrieve()
-                .bodyToMono(String.class)
-                .timeout(java.time.Duration.ofMillis(Math.max(500L, visionTimeoutMs)))
-                .block();
-            if (raw == null || raw.isBlank()) {
-                return "";
-            }
-
-            try {
-                JsonNode node = objectMapper.readTree(raw);
-                String description = str(node.path("description").asText(""));
-                if (description.isBlank()) {
-                    description = str(node.path("text").asText(""));
-                }
-                if (description.isBlank()) {
-                    description = str(node.path("content").asText(""));
-                }
-                return description;
-            } catch (Exception ignored) {
-                return trimTo(compactWhitespace(raw), 1200);
-            }
-        } catch (Exception ex) {
-            log.debug("Local vision scan failed: {}", ex.getMessage());
-            return "";
-        }
+        String description = aiLocalLlamaVisionClient.describeImage(
+            String.valueOf(visionPrompt == null ? "" : visionPrompt).trim(),
+            base64Data,
+            mimeType
+        );
+        return trimTo(description, 1200);
     }
 
     private String buildCompactContext(List<ScanDecision> decisions, String contextType, String taskType, String responseMode) {
