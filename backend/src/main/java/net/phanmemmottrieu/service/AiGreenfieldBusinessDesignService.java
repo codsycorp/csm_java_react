@@ -243,10 +243,12 @@ public class AiGreenfieldBusinessDesignService {
         String safeContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase(Locale.ROOT);
         List<Map<String, Object>> safeAttachments = attachments == null ? List.of() : attachments;
 
-        boolean hasEditor = !safeCode.isBlank();
+        boolean menuFlow = "menu_json".equals(safeContext);
+        boolean menuEffectivelyEmpty = menuFlow && isEffectivelyEmptyMenu(safeCode);
+
+        boolean hasEditor = !safeCode.isBlank() && !menuEffectivelyEmpty;
         boolean hasSamples = hasSampleSignals(safeAttachments, safeMessage, editorMetadata);
         boolean greenfield = !hasEditor;
-        boolean menuFlow = "menu_json".equals(safeContext);
 
         if ("analyze".equals(safeMode) && hasEditor && !hasSamples && !isAnalyzeBusinessQuestion(safeMessage)) {
             return ComprehensionResult.skipped();
@@ -341,6 +343,15 @@ public class AiGreenfieldBusinessDesignService {
         ComprehensionResult comprehension,
         String contextType
     ) {
+        return applyDeterministicSeedIfNeeded(providerText, comprehension, contextType, "");
+    }
+
+    public String applyDeterministicSeedIfNeeded(
+        String providerText,
+        ComprehensionResult comprehension,
+        String contextType,
+        String currentMenuCode
+    ) {
         if (!deterministicSeedFallback || comprehension == null || !comprehension.activated()) {
             return providerText;
         }
@@ -354,15 +365,24 @@ public class AiGreenfieldBusinessDesignService {
                 return providerText;
             }
         }
-        if (!comprehension.greenfield()) {
+        boolean menuFlow = "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType));
+        boolean emptyMenu = menuFlow && isEffectivelyEmptyMenu(currentMenuCode);
+        if (!comprehension.greenfield() && !emptyMenu) {
             return providerText;
         }
-        boolean menuFlow = "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType));
         String seed = menuFlow
             ? buildDeterministicMenuSeed(comprehension.businessSpec())
             : buildDeterministicCodeSeed(comprehension.businessSpec());
-        log.info("BusinessComprehension deterministic seed fallback menuFlow={} chars={}", menuFlow, seed.length());
+        log.info("BusinessComprehension deterministic seed fallback menuFlow={} emptyMenu={} chars={}",
+            menuFlow, emptyMenu, seed.length());
         return seed;
+    }
+
+    private boolean isEffectivelyEmptyMenu(String menuJson) {
+        if (String.valueOf(menuJson == null ? "" : menuJson).trim().isBlank()) {
+            return true;
+        }
+        return parseMenuRoots(menuJson).isEmpty();
     }
 
     /** Analyze requests asking what the code does business-wise (not narrow symbol debug). */
@@ -477,6 +497,18 @@ public class AiGreenfieldBusinessDesignService {
         CodeBusinessScan codeScan
     ) {
         if (isAnalyzeBusinessQuestion(userRequest)) {
+            return buildHeuristicBusinessSpec(
+                userRequest,
+                sampleMenuDigest,
+                sampleCodeDigest,
+                activeEditorDigest,
+                menuFlow,
+                scenario,
+                menuScan,
+                codeScan);
+        }
+        if (menuFlow && scenario == InputScenario.A_GREENFIELD
+                && (menuScan == null || menuScan.totalNodes() <= 0)) {
             return buildHeuristicBusinessSpec(
                 userRequest,
                 sampleMenuDigest,
@@ -1181,11 +1213,11 @@ public class AiGreenfieldBusinessDesignService {
     }
 
     private String buildDeterministicMenuSeed(BusinessSpec spec) {
-        int modules = Math.max(1, menuSeedModuleCount);
-        List<Map<String, Object>> menu = new ArrayList<>();
         List<String> moduleNames = spec.modules() == null || spec.modules().isEmpty()
             ? List.of("Module chính")
             : spec.modules();
+        int modules = Math.min(8, Math.max(menuSeedModuleCount, moduleNames.size()));
+        List<Map<String, Object>> menu = new ArrayList<>();
         for (int i = 0; i < modules && i < moduleNames.size(); i++) {
             String name = moduleNames.get(i);
             Map<String, Object> group = new LinkedHashMap<>();
@@ -1222,10 +1254,46 @@ public class AiGreenfieldBusinessDesignService {
         node.put("label", moduleName);
         node.put("label_en", moduleName);
         node.put("label_zh", moduleName);
+        node.put("icon", "AppstoreOutlined");
         node.put("type_form", 1);
+        node.put("row_type_edit", 0);
         node.put("table_name", table);
-        node.put("trigger", Map.of("filter", "status=1"));
+        node.put("table", buildSeedTableFields(moduleName));
+        node.put("trigger", Map.of("load_db", "return (row) => true"));
         return node;
+    }
+
+    private List<Map<String, Object>> buildSeedTableFields(String moduleName) {
+        List<Map<String, Object>> fields = new ArrayList<>();
+        fields.add(seedField("id", "ID", "ed", 0, 1, 0));
+        fields.add(seedField("ten", "Tên", "ed", 1, 0, 1));
+        if (moduleName != null && moduleName.toLowerCase(Locale.ROOT).contains("trạng thái")) {
+            fields.add(seedComboField("trang_thai", "Trạng thái", 2));
+        }
+        return fields;
+    }
+
+    private Map<String, Object> seedField(
+        String name, String header, String types, int stt, int pkid, int show) {
+        Map<String, Object> field = new LinkedHashMap<>();
+        field.put("f_name", name);
+        field.put("f_header", header);
+        field.put("f_types", types);
+        field.put("f_show", show);
+        field.put("f_stt", stt);
+        field.put("f_pkid", pkid);
+        field.put("f_width", pkid == 1 ? "80" : "200");
+        field.put("f_dec", 0);
+        field.put("f_align", "left");
+        field.put("f_cbo_query", "");
+        return field;
+    }
+
+    private Map<String, Object> seedComboField(String name, String header, int stt) {
+        Map<String, Object> field = seedField(name, header, "co", stt, 0, 1);
+        field.put("f_cbo_query",
+            "{\"query\":[],\"options\":[{\"ma\":\"active\",\"ten\":\"Hoạt động\"},{\"ma\":\"inactive\",\"ten\":\"Ngưng\"}]}");
+        return field;
     }
 
     private String specTableName(String moduleName, int index) {
@@ -1241,21 +1309,50 @@ public class AiGreenfieldBusinessDesignService {
             : "Module";
         String code = """
             // CSM DynamicCode greenfield scaffold (PHẦN AC deterministic fallback)
-            window.seft = window.seft || {};
-            var ctx = window.seft;
-            ctx.helperApi = ctx.helperApi || {};
+            (function initDynamicCodeScaffold() {
+              if (typeof window !== 'undefined' && window.__CSM_DC_SCAFFOLD_LOADED__) {
+                return;
+              }
+              if (typeof window !== 'undefined') {
+                window.__CSM_DC_SCAFFOLD_LOADED__ = true;
+              }
+              window.seft = window.seft || {};
+              var ctx = window.seft;
+              ctx.helperApi = ctx.helperApi || {};
 
-            function init_%s() {
-              // TODO: bind grid/form per BusinessSpec
-            }
+              function resolveContainer() {
+                var id = ctx.containerId || window.csmDynamicCodeContainerId || 'context-auto';
+                return document.getElementById(id)
+                  || document.getElementById('context-auto')
+                  || document.getElementById('dynamic-code-root');
+              }
 
-            function load_%s() {
-              return ctx.helperApi.post({ action: 'list', table: '%s' });
-            }
+              function init_%s() {
+                var container = resolveContainer();
+                if (!container) {
+                  console.warn('[DynamicCode] container not found');
+                  return;
+                }
+                // TODO: bind grid/form per BusinessSpec — module: %s
+              }
 
-            init_%s();
+              function load_%s() {
+                if (window.csmApi && typeof window.csmApi.getTableData === 'function') {
+                  return window.csmApi.getTableData({ app_id: ctx.appId || ctx.app_id, obj_name: '%s' });
+                }
+                return Promise.resolve({ rows: [] });
+              }
+
+              init_%s();
+              window.__dynamicCodeDispose = function () {
+                if (typeof window !== 'undefined') {
+                  window.__CSM_DC_SCAFFOLD_LOADED__ = false;
+                }
+              };
+            })();
             """.formatted(
             sanitizeSymbol(module),
+            module.replace("\"", "'"),
             sanitizeSymbol(module),
             specTableName(module, 1),
             sanitizeSymbol(module));
@@ -1281,13 +1378,77 @@ public class AiGreenfieldBusinessDesignService {
 
     private List<String> extractModulesFromText(String text) {
         List<String> out = new ArrayList<>();
-        String safe = String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT);
-        for (String token : List.of("module", "menu", "quản lý", "quan ly", "đơn hàng", "don hang", "khách hàng", "khach hang")) {
-            if (safe.contains(token) && !out.contains(token)) {
-                out.add(token);
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return out;
+        }
+        String lower = safe.toLowerCase(Locale.ROOT)
+            .replace('đ', 'd').replace('Đ', 'd');
+        addNamedModuleIfContains(out, lower, safe, "xuat nhap ton", "Quản lý xuất nhập tồn");
+        addNamedModuleIfContains(out, lower, safe, "xuất nhập tồn", "Quản lý xuất nhập tồn");
+        addNamedModuleIfContains(out, lower, safe, "ban hang", "Quản lý bán hàng");
+        addNamedModuleIfContains(out, lower, safe, "bán hàng", "Quản lý bán hàng");
+        addNamedModuleIfContains(out, lower, safe, "cong no nha cung cap", "Công nợ nhà cung cấp");
+        addNamedModuleIfContains(out, lower, safe, "công nợ nhà cung cấp", "Công nợ nhà cung cấp");
+        addNamedModuleIfContains(out, lower, safe, "cong no khach hang", "Công nợ khách hàng");
+        addNamedModuleIfContains(out, lower, safe, "công nợ khách hàng", "Công nợ khách hàng");
+        addNamedModuleIfContains(out, lower, safe, "bao cao", "Báo cáo kinh doanh");
+        addNamedModuleIfContains(out, lower, safe, "báo cáo", "Báo cáo kinh doanh");
+        addNamedModuleIfContains(out, lower, safe, "ket qua kinh doanh", "Theo dõi kết quả kinh doanh");
+        addNamedModuleIfContains(out, lower, safe, "kết quả kinh doanh", "Theo dõi kết quả kinh doanh");
+        for (String segment : safe.split("[,;]+")) {
+            String cleaned = segment.trim();
+            if (cleaned.length() < 4) {
+                continue;
+            }
+            String segLower = cleaned.toLowerCase(Locale.ROOT);
+            if (segLower.contains("json menu")
+                || segLower.contains("viết đầy đủ")
+                || segLower.contains("viet day du")
+                || segLower.contains("cho tôi")
+                || segLower.contains("chương trình quản lý")
+                || segLower.contains("chuong trinh quan ly")) {
+                continue;
+            }
+            if (cleaned.length() > 72) {
+                cleaned = cleaned.substring(0, 69) + "...";
+            }
+            if (!containsModuleLabel(out, cleaned)) {
+                out.add(cleaned);
+            }
+            if (out.size() >= 8) {
+                break;
+            }
+        }
+        if (out.isEmpty()) {
+            for (String token : List.of("module", "menu", "quản lý", "quan ly", "đơn hàng", "don hang", "khách hàng", "khach hang")) {
+                if (lower.contains(token) && !out.contains(token)) {
+                    out.add(token);
+                }
             }
         }
         return out;
+    }
+
+    private void addNamedModuleIfContains(
+            List<String> out,
+            String lower,
+            String original,
+            String needle,
+            String label) {
+        if (lower.contains(needle) && !containsModuleLabel(out, label)) {
+            out.add(label);
+        }
+    }
+
+    private boolean containsModuleLabel(List<String> modules, String label) {
+        String target = String.valueOf(label == null ? "" : label).trim().toLowerCase(Locale.ROOT);
+        for (String module : modules) {
+            if (String.valueOf(module == null ? "" : module).trim().toLowerCase(Locale.ROOT).equals(target)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<String> extractTablesFromText(String text) {

@@ -1570,7 +1570,17 @@ function parseTextEditsOnlyPayload(raw: unknown): any[] | null {
 	}
 }
 
+	function isMenuJsonDraftSource(baseText: string): boolean {
+		const text = String(baseText || "").trim();
+		if (!text) return false;
+		if (text.startsWith("[") && text.includes('"id"') && text.includes('"label"')) return true;
+		return text.startsWith("{") && text.includes('"menu"');
+	}
+
 	function isProtectedHeaderZoneEdit(baseText: string, edit: Record<string, unknown>): boolean {
+		if (isMenuJsonDraftSource(baseText)) {
+			return false;
+		}
 		const startLine = Math.max(1, Math.floor(Number(edit.startLine ?? 1)));
 		const endLine = Math.max(startLine, Math.floor(Number(edit.endLine ?? startLine)));
 		if (startLine > 20) {
@@ -3674,6 +3684,13 @@ export default function AiAssistantChat({
 			case "local_provider_unavailable":
 				return uiText("Hãy khởi động hoặc kiểm tra local provider rồi thử lại.", "Start or verify the local provider, then try again.", "请先启动或检查本地 provider，然后再试一次。");
 			case "local_override_no_cloud_fallback":
+				if (contextType === "menu_json") {
+					return uiText(
+						"Local AI không tạo được patch menu an toàn (chế độ local-only). Hãy mô tả rõ module (xuất nhập tồn, công nợ NCC/KH, báo cáo) hoặc gửi lại khi menu trống `{ \"menu\": [] }`.",
+						"Local AI could not produce a safe menu patch (local-only). Describe modules clearly (inventory, AP/AR, reports) or retry with an empty `{ \"menu\": [] }` base.",
+						"本地 AI 无法生成安全菜单补丁（仅本地）。请明确模块（进销存、供应商/客户往来、报表）或在 `{ \"menu\": [] }` 空菜单下重试。",
+					);
+				}
 				return uiText(
 					"Local AI không tạo được patch an toàn (chế độ local-only). Hãy chọn vùng code quanh __forceKillWebviewProcess / fnRemoveTab / closeAllTabsAndCleanup rồi gửi lại, hoặc kiểm tra log backend theo requestId.",
 					"Local AI could not produce a safe patch (local-only). Select the region around __forceKillWebviewProcess / fnRemoveTab / closeAllTabsAndCleanup and retry, or check backend logs by requestId.",
@@ -3710,7 +3727,7 @@ export default function AiAssistantChat({
 			default:
 				return String(fallback || "").trim() || uiText("Bạn có thể thử lại, hoặc kiểm tra log backend nếu lỗi còn lặp lại.", "Try again, or inspect backend logs if the issue keeps happening.", "你可以重试；如果问题持续出现，请检查后端日志。");
 		}
-	}, [uiText]);
+	}, [contextType, uiText]);
 
 	const showSystemToast = useCallback((kind: "info" | "warning" | "error", input: {
 		summary: string
@@ -8377,13 +8394,20 @@ export default function AiAssistantChat({
 									? (completionEventMeta["menuAuditPlanSteps"] as unknown[]).map(item => String(item || "").trim()).filter(Boolean)
 									: menuAuditStepsRef.current;
 								const completionOpTotal = completionOpSummary.addCount + completionOpSummary.editCount + completionOpSummary.deleteCount;
+								const editStreamStartCode = editStreamStartCodeRef.current ?? "";
+								const editStreamAppliedCode = lastAppliedCodeRef.current ?? "";
+								const editorMenuApplied = editStreamAppliedCode !== editStreamStartCode;
 								const falseEditSuccess = (isEditModeEvt || streamStartedInEditModeRef.current)
 									&& isMainFlow
 									&& !reviewRequired
 									&& textEditApplyCountRef.current <= 0
+									&& !editorMenuApplied
 									&& (
 										gateRejectedEarly
-										|| completionOpTotal === 0 && textEditApplyCountRef.current === 0
+										|| (completionOpTotal === 0
+											&& !hasStructuredStepResults
+											&& !menuEditorApplyReady
+											&& textEditApplyCountRef.current === 0)
 									);
 								const completionReasonCodeEarly = gateRejectedEarly
 									? String(finalOutputGateMetaEarly?.reasonCode || completionEventMeta["reason_code"] || "final_output_gate_rejected").trim()

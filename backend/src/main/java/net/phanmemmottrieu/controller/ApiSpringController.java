@@ -3786,10 +3786,47 @@ public class ApiSpringController {
                     }
                     boolean skipPrimaryForEarlyFocused = !editFocusedEarlyProviderText.isBlank()
                         || bool(codeStreamMeta.get("editFocusedEarlyExit"), false);
+                    boolean menuGreenfieldFastPathApplied = false;
+                    if (!editFocusedPrimaryApplied
+                            && !analyzeFocusedPrimaryApplied
+                            && isMenuJsonContext(contextType)
+                            && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                            && businessComprehensionResult != null
+                            && businessComprehensionResult.activated()
+                            && businessComprehensionResult.greenfield()
+                            && aiGreenfieldBusinessDesignService != null) {
+                        String editorMenuBase = resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext);
+                        if (countMenuNodesFromDraft(editorMenuBase) <= 0) {
+                            String seeded = aiGreenfieldBusinessDesignService.applyDeterministicSeedIfNeeded(
+                                "",
+                                businessComprehensionResult,
+                                contextType,
+                                editorMenuBase);
+                            if (!seeded.isBlank()
+                                    && (aiAssistantGatewayService == null
+                                        || aiAssistantGatewayService.isMenuJsonOutputActionable(seeded))) {
+                                providerText = seeded;
+                                providerRaw = seeded;
+                                lastLocalProviderText = seeded;
+                                localProviderPrimaryUsed = true;
+                                effectiveModel = "local_heuristic_menu_seed";
+                                menuGreenfieldFastPathApplied = true;
+                                codeStreamMeta.put("businessComprehensionDeterministicSeed", true);
+                                codeStreamMeta.put("menuGreenfieldFastPath", true);
+                                primeMenuGreenfieldSeedArtifacts(codeStreamMeta, seeded, editorMenuBase, contextType);
+                                logger.info(
+                                    "MENU_GREENFIELD_FAST_PATH requestId={} seedChars={} menuNodes={}",
+                                    requestId,
+                                    seeded.length(),
+                                    countMenuNodesFromDraft(seeded));
+                            }
+                        }
+                    }
                     if (!editFocusedPrimaryApplied
                             && !analyzeFocusedPrimaryApplied
                             && !skipHeavyPrimaryForLargeEdit
-                            && !skipPrimaryForEarlyFocused) {
+                            && !skipPrimaryForEarlyFocused
+                            && !menuGreenfieldFastPathApplied) {
                     logger.info(
                         "AI_CODE_STREAM local prompt requestId={} responseMode={} promptCodeChars={} localProviderPromptChars={}",
                         requestId,
@@ -4232,7 +4269,8 @@ public class ApiSpringController {
                             String seeded = aiGreenfieldBusinessDesignService.applyDeterministicSeedIfNeeded(
                                 providerText,
                                 businessComprehensionResult,
-                                contextType);
+                                contextType,
+                                resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext));
                             if (!seeded.isBlank()) {
                                 providerText = seeded;
                                 lastLocalProviderText = seeded;
@@ -4244,6 +4282,11 @@ public class ApiSpringController {
                                 }
                                 if (localAccepted) {
                                     codeStreamMeta.put("businessComprehensionDeterministicSeed", true);
+                                    primeMenuGreenfieldSeedArtifacts(
+                                        codeStreamMeta,
+                                        seeded,
+                                        resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext),
+                                        contextType);
                                 }
                             }
                         }
@@ -5192,6 +5235,54 @@ public class ApiSpringController {
                                 localProviderPrimaryUsed = true;
                             }
                         }
+                        if (callerForcedLocal && rawResponse == null
+                                && isMenuJsonContext(contextType)
+                                && aiGreenfieldBusinessDesignService != null
+                                && businessComprehensionResult != null
+                                && businessComprehensionResult.activated()) {
+                            String editorMenuBase = resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext);
+                            if (countMenuNodesFromDraft(editorMenuBase) <= 0) {
+                                String seeded = aiGreenfieldBusinessDesignService.applyDeterministicSeedIfNeeded(
+                                    "",
+                                    businessComprehensionResult,
+                                    contextType,
+                                    editorMenuBase);
+                                if (!seeded.isBlank()
+                                        && (aiAssistantGatewayService == null
+                                            || aiAssistantGatewayService.isMenuJsonOutputActionable(seeded))) {
+                                    int seededSteps = emitLocalAgenticStepResults(
+                                        emitter,
+                                        requestId,
+                                        seeded,
+                                        codeStreamOrchestration == null || codeStreamOrchestration.planSteps == null
+                                            ? List.of()
+                                            : codeStreamOrchestration.planSteps,
+                                        codeStreamMeta.get("planStructuredSteps"),
+                                        codeStreamMeta.get("workflowExecutionBlueprint"),
+                                        responseMode,
+                                        contextType,
+                                        editorMenuBase,
+                                        codeStreamMeta);
+                                    if (seededSteps > 0) {
+                                        rawResponse = seeded;
+                                        effectiveModel = "local_provider";
+                                        localProviderPrimaryUsed = true;
+                                        codeStreamMeta.put("businessComprehensionDeterministicSeed", true);
+                                        codeStreamMeta.put("emptyMenuGreenfieldSeed", true);
+                                        primeMenuGreenfieldSeedArtifacts(
+                                            codeStreamMeta,
+                                            seeded,
+                                            editorMenuBase,
+                                            contextType);
+                                        logger.info(
+                                            "LOCAL_OVERRIDE empty-menu deterministic seed applied requestId={} steps={} chars={}",
+                                            requestId,
+                                            seededSteps,
+                                            seeded.length());
+                                    }
+                                }
+                            }
+                        }
                         if (callerForcedLocal && rawResponse == null) {
                             logger.warn("LOCAL_OVERRIDE local provider returned no usable output, blocking cloud fallback per caller request requestId={} contextType={}",
                                 requestId, contextType);
@@ -5219,9 +5310,9 @@ public class ApiSpringController {
                                 Map.of("blocked", true)
                             );
                             sendErrorEvent(emitter, uiTextByLang(uiLang,
-                                buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang, responseMode),
-                                buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext, responseMode),
-                                buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext, responseMode)));
+                                buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang, responseMode, contextType),
+                                buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext, responseMode, contextType),
+                                buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext, responseMode, contextType)));
                             return;
                         }
                         if (localOnlyHardRoute) {
@@ -5368,9 +5459,9 @@ public class ApiSpringController {
                                         + " Hãy chỉ rõ node, ví dụ: 'Sửa node id=xxx, đặt label=...'"));
                             }
                             sendErrorEvent(emitter, uiTextByLang(uiLang,
-                                buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang, responseMode),
-                                buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext, responseMode),
-                                buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext, responseMode)));
+                                buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang, responseMode, contextType),
+                                buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext, responseMode, contextType),
+                                buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext, responseMode, contextType)));
                             return;
                         }
                         if (hasImages) {
@@ -5438,9 +5529,9 @@ public class ApiSpringController {
                                 "reason_code", "local_only_no_final_output",
                                 "message", "Local-only: khong tao duoc output cuoi cung."));
                             sendErrorEvent(emitter, uiTextByLang(uiLang,
-                                buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang, responseMode),
-                                buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext, responseMode),
-                                buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext, responseMode)));
+                                buildLocalOnlyFailureMessage(lastLocalProviderText, effectiveCodeContext, uiLang, responseMode, contextType),
+                                buildLocalOnlyFailureMessageEn(lastLocalProviderText, effectiveCodeContext, responseMode, contextType),
+                                buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext, responseMode, contextType)));
                             return;
                             }
                         } else {
@@ -5463,9 +5554,9 @@ public class ApiSpringController {
                 if (rawResponse == null) {
                     if (hardLocalOnlyFlow) {
                         sendErrorEvent(emitter, uiTextByLang(uiLang,
-                            buildLocalOnlyFailureMessage("", effectiveCodeContext, uiLang, responseMode),
-                            buildLocalOnlyFailureMessageEn("", effectiveCodeContext, responseMode),
-                            buildLocalOnlyFailureMessageZh("", effectiveCodeContext, responseMode)));
+                            buildLocalOnlyFailureMessage("", effectiveCodeContext, uiLang, responseMode, contextType),
+                            buildLocalOnlyFailureMessageEn("", effectiveCodeContext, responseMode, contextType),
+                            buildLocalOnlyFailureMessageZh("", effectiveCodeContext, responseMode, contextType)));
                         return;
                     }
                     if (!shouldFallbackToDefaultOnSimpleFailure || hasImages || aiLocalOnlyEnabled) {
@@ -6120,11 +6211,27 @@ public class ApiSpringController {
                     );
                 }
                 completion.put("localProviderPrimaryUsed", localProviderPrimaryUsed);
+                if (bool(codeStreamMeta.get("businessComprehensionDeterministicSeed"), false)) {
+                    completion.put("businessComprehensionDeterministicSeed", true);
+                }
+                if (bool(codeStreamMeta.get("menuGreenfieldFastPath"), false)) {
+                    completion.put("menuGreenfieldFastPath", true);
+                }
+                if (isMenuJsonContext(contextType)
+                        && countMenuNodesFromDraft(completionPayload)
+                            > countMenuNodesFromDraft(resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext))) {
+                    completion.put("menuEditorApplyReady", true);
+                }
                 int emittedTextEditEvents = parseIntSafe(codeStreamMeta.get("codeStreamTextEditsEmittedCount"), 0);
                 if (emittedTextEditEvents > 0
                         || bool(codeStreamMeta.get("deterministicLifecyclePatchApplied"), false)
                         || parseIntSafe(codeStreamMeta.get("editDeterministicLifecycleTextEdits"), 0) > 0
-                        || (localProviderPrimaryUsed && isCodeContext(contextType))) {
+                        || (localProviderPrimaryUsed && isCodeContext(contextType))
+                        || (localProviderPrimaryUsed
+                            && isMenuJsonContext(contextType)
+                            && (agenticStepAcceptedCount > 0
+                                || bool(codeStreamMeta.get("businessComprehensionDeterministicSeed"), false)
+                                || bool(codeStreamMeta.get("menuGreenfieldFastPath"), false)))) {
                     completion.put("flowConfirmedByLocal", true);
                 }
                 completion.put("codeStreamTextEditsEmittedCount", emittedTextEditEvents);
@@ -7798,6 +7905,18 @@ public class ApiSpringController {
         return out;
     }
 
+    /** True when editor content is a CSM menu JSON draft (not DynamicCode). */
+    private boolean isMenuJsonDraftSource(String sourceCode) {
+        String s = String.valueOf(sourceCode == null ? "" : sourceCode).trim();
+        if (s.isBlank()) {
+            return false;
+        }
+        if (s.startsWith("[") && s.contains("\"id\"") && s.contains("\"label\"")) {
+            return true;
+        }
+        return s.startsWith("{") && s.contains("\"menu\"");
+    }
+
     /**
      * Block spurious edits in the file header (user-agent comment lines 1–N).
      * DynamicCode is a string buffer — lifecycle/webview patches must target symbol regions (fnRemoveTab, etc.).
@@ -7807,6 +7926,9 @@ public class ApiSpringController {
             List<Map<String, Object>> edits) {
         if (edits == null || edits.isEmpty()) {
             return List.of();
+        }
+        if (isMenuJsonDraftSource(sourceCode)) {
+            return edits;
         }
         int minLine = Math.max(20, aiEditHeaderZoneProtectMinLine);
         String code = String.valueOf(sourceCode == null ? "" : sourceCode);
@@ -8898,6 +9020,13 @@ public class ApiSpringController {
             if (!menuKnowledge.isBlank()) {
                 sb.append("## AUTO_LOADED_MENU_SYSTEM_KNOWLEDGE\n");
                 sb.append(menuKnowledge).append("\n\n");
+            }
+        } else if (!isMenuJsonContext(contextType)) {
+            String codeKnowledge = aiAssistantGatewayService.buildAiAssistantCodeKnowledgeBlock(
+                appId, contextType, "code_assistant");
+            if (!codeKnowledge.isBlank()) {
+                sb.append("## AUTO_LOADED_CODE_SYSTEM_KNOWLEDGE\n");
+                sb.append(codeKnowledge).append("\n\n");
             }
         }
 
@@ -23759,9 +23888,19 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
     }
 
     private String buildLocalOnlyFailureMessage(String lastProviderText, String baseCode, String uiLang, String responseMode) {
+        return buildLocalOnlyFailureMessage(lastProviderText, baseCode, uiLang, responseMode, "");
+    }
+
+    private String buildLocalOnlyFailureMessage(
+            String lastProviderText,
+            String baseCode,
+            String uiLang,
+            String responseMode,
+            String contextType) {
         String audit = summarizeMenuQualityAuditForUser(baseCode, 8);
         String last = String.valueOf(lastProviderText == null ? "" : lastProviderText).trim();
-        boolean codeLike = looksLikeCodeEditorContext(baseCode);
+        boolean menuJson = isMenuJsonContext(contextType) || isMenuJsonDraftSource(baseCode);
+        boolean codeLike = !menuJson && looksLikeCodeEditorContext(baseCode);
         boolean editFlow = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode).trim())
             || last.contains("\"textEdits\"");
         String base = editFlow
@@ -23777,6 +23916,12 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         }
         if (base.contains("phân tích")) {
             return base + " Hãy thử hỏi cụ thể hơn (tên hàm/webview/process) hoặc chọn vùng code liên quan.";
+        }
+        if (menuJson && editFlow) {
+            boolean emptyMenu = countMenuNodesFromDraft(baseCode) <= 0;
+            return base + (emptyMenu
+                ? " Menu đang trống — hãy mô tả rõ các module (vd. xuất nhập tồn, công nợ NCC/KH, báo cáo) hoặc thử gửi lại yêu cầu \"viết đầy đủ json menu\"."
+                : " Hãy chỉ rõ node id/label cần sửa hoặc chia nhỏ yêu cầu theo từng module menu.");
         }
         if (codeLike || editFlow) {
             return base + " Hãy thử chỉ rõ hàm/vùng code (vd. __forceKillWebviewProcess, fnRemoveTab, closeAllTabsAndCleanup, fnResetIP) hoặc chọn vùng code trong editor rồi gửi lại.";
@@ -23801,9 +23946,18 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
     }
 
     private String buildLocalOnlyFailureMessageEn(String lastProviderText, String baseCode, String responseMode) {
+        return buildLocalOnlyFailureMessageEn(lastProviderText, baseCode, responseMode, "");
+    }
+
+    private String buildLocalOnlyFailureMessageEn(
+            String lastProviderText,
+            String baseCode,
+            String responseMode,
+            String contextType) {
         String audit = summarizeMenuQualityAuditForUser(baseCode, 8);
         String last = String.valueOf(lastProviderText == null ? "" : lastProviderText).trim();
-        boolean codeLike = looksLikeCodeEditorContext(baseCode);
+        boolean menuJson = isMenuJsonContext(contextType) || isMenuJsonDraftSource(baseCode);
+        boolean codeLike = !menuJson && looksLikeCodeEditorContext(baseCode);
         boolean editFlow = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode).trim())
             || last.contains("\"textEdits\"");
         String base = editFlow
@@ -23811,6 +23965,12 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             : "Local AI could not produce a good enough analysis for this request (local-only mode).";
         if (!audit.isBlank() && !codeLike) {
             return base + "\n\n" + audit;
+        }
+        if (menuJson && editFlow) {
+            boolean emptyMenu = countMenuNodesFromDraft(baseCode) <= 0;
+            return base + (emptyMenu
+                ? " The menu is empty — describe modules clearly (inventory, AP/AR, reports) or resend a full-menu request."
+                : " Try specifying node id/label or splitting the request by menu module.");
         }
         return base + (editFlow || codeLike
             ? " Try naming a function/line range (e.g. __forceKillWebviewProcess, fnRemoveTab, closeAllTabsAndCleanup) or selecting that region in the editor."
@@ -23824,17 +23984,33 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
     }
 
     private String buildLocalOnlyFailureMessageZh(String lastProviderText, String baseCode, String responseMode) {
+        return buildLocalOnlyFailureMessageZh(lastProviderText, baseCode, responseMode, "");
+    }
+
+    private String buildLocalOnlyFailureMessageZh(
+            String lastProviderText,
+            String baseCode,
+            String responseMode,
+            String contextType) {
         String audit = summarizeMenuQualityAuditForUser(baseCode, 8);
         String last = String.valueOf(lastProviderText == null ? "" : lastProviderText).trim();
+        boolean menuJson = isMenuJsonContext(contextType) || isMenuJsonDraftSource(baseCode);
+        boolean codeLike = !menuJson && looksLikeCodeEditorContext(baseCode);
         boolean editFlow = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode).trim())
             || last.contains("\"textEdits\"");
         String base = editFlow
             ? "本地 AI 无法为此请求生成安全补丁（仅本地，不使用云端）。"
             : "本地 AI 未能给出足够好的分析回答（仅本地，不使用云端）。";
-        if (!audit.isBlank()) {
+        if (!audit.isBlank() && !codeLike) {
             return base + "\n\n" + audit;
         }
-        return base + (editFlow
+        if (menuJson && editFlow) {
+            boolean emptyMenu = countMenuNodesFromDraft(baseCode) <= 0;
+            return base + (emptyMenu
+                ? " 菜单为空 — 请明确模块（进销存、供应商/客户往来、报表）或重新发送完整菜单请求。"
+                : " 请指定节点 id/label 或按模块拆分请求。");
+        }
+        return base + (editFlow || codeLike
             ? " 请尝试指定函数/行范围（例如 __forceKillWebviewProcess、fnRemoveTab、closeAllTabsAndCleanup）或在编辑器中选中相关区域。"
             : (base.contains("分析")
                 ? " 请尝试指定函数/webview/process 或缩小问题范围。"
@@ -33552,6 +33728,27 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         return base + hint;
     }
 
+    private void primeMenuGreenfieldSeedArtifacts(
+            Map<String, Object> codeStreamMeta,
+            String seededMenuJson,
+            String editorBase,
+            String contextType) {
+        if (codeStreamMeta == null || String.valueOf(seededMenuJson == null ? "" : seededMenuJson).trim().isBlank()) {
+            return;
+        }
+        String base = String.valueOf(editorBase == null ? "" : editorBase).trim();
+        Map<String, Object> mergePreview = buildMenuCompletionMergePreview(base, seededMenuJson, contextType);
+        String merged = str(mergePreview.get("mergedResponse"), seededMenuJson);
+        if (merged.isBlank()) {
+            return;
+        }
+        String formatted = formatMenuEditorApplyPayload(base, merged);
+        codeStreamMeta.put("qualityGateMergedMenuJson", formatted);
+        if (!mergePreview.isEmpty()) {
+            codeStreamMeta.put("qualityGateMergePreview", mergePreview);
+        }
+    }
+
     private String finalizeBroadMenuAuditWithLocalOutput(
             Map<String, Object> codeStreamMeta,
             String llmOutput,
@@ -33661,6 +33858,15 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             meta.put("qualityGateCompletionMergeStats", normalizeMenuBatchMergeStats(null, textEdits.size()));
         }
         String mergedMenu = str(meta.get("qualityGateMergedMenuJson"), "");
+        if (mergedMenu.isBlank() && !textEdits.isEmpty()) {
+            String editorBase = str(meta.get("editorMenuBaseCode"), "");
+            if (!editorBase.isBlank()) {
+                mergedMenu = simulateApplyLineTextEdits(editorBase, textEdits);
+                if (!mergedMenu.isBlank()) {
+                    meta.put("qualityGateMergedMenuJson", mergedMenu);
+                }
+            }
+        }
         if (mergedMenu.isBlank() && canonicalizedPayload != null && !canonicalizedPayload.isBlank()) {
             try {
                 @SuppressWarnings("unchecked")

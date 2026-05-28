@@ -1100,7 +1100,7 @@ Rules:
 - Multi-slice: mỗi slice LLM vẫn trả dòng **tuyệt đối**; backend merge rồi gate lại trên full string
 - Frontend `applyTextEditsToDraft` + `handleApplyLineEdit` dùng cùng semantics (splice dòng, sort desc khi batch)
 - DynamicCode: browser only; **no** import/export/require/Node APIs
-- Allowed globals: `window`, `document`, `window.React`, `window.antd`, `window.csmApi`, …
+- Allowed globals: `window`, `document`, `window.React`, `window.antd`, `window.csmApi`, `window.seft`, …
 - Fallback:
 
 ```json
@@ -1111,7 +1111,49 @@ Rules:
 }
 ```
 
-## G.2 MENU_JSON — edit mode
+### G.1.1 DynamicCode runtime (code lane — tách khỏi menu JSON)
+
+**Luồng UI:** Quản lý hệ thống → **Trình biên tập mã** (`CodeEditor.tsx`) — `contextType=code`, `flowType=code_editor`, `taskType=code_assistant`.
+
+**Lưu trữ:** `sys_autos` (`p_name`, `p_type=0`, `p_code` encrypted). Ví dụ: `seo`, `csang`, `broadcast_csang`.
+
+**Ba điểm chạy** (`DynamicCodeMenu` → `dynamic-code/index.tsx`):
+
+| Entry | File | autoCodeName | containerId |
+|-------|------|--------------|-------------|
+| Trang chủ | `homepage/index.tsx` | `broadcast_{appId}` | `broadcast-auto-root-homepage` |
+| Auto setup | `AutoSetup.tsx` | `{app_id}` hoặc `inlineCode` | `context-auto` |
+| Menu admin | AdminPage type_form=4 | `auto_code_name` | scoped `dynamic-code-root-*` |
+
+**Execute:** `new Function("seft", containerId, scopedWindow, scopedDocument, code)` — browser only.
+
+**Pattern mẫu:**
+
+| File | Pattern |
+|------|---------|
+| `pages/auto/seo.js` | Legacy monolith, `#context-auto`, `CsmDynamicGrid`, `window.seft` |
+| `lmkt/.../auto-kqxs.js` | IIFE + `ReactDOM.createRoot` + `__dynamicCodeDispose` |
+| `lmkt/.../auto-lmkt.js` | `__AUTO_*_LOADED__` guard, `uiTranslations` vi/en/zh |
+
+**Nạp kiến thức AI local (backend auto-load, lane code only):**
+
+| File | Slot prompt |
+|------|-------------|
+| `ai_code_runtime_compact.md` | `[SYSTEM_MASTER_DIGEST]` Comprehend |
+| `ai_code_runtime_contract.md` | `AUTO_LOADED_CODE_SYSTEM_KNOWLEDGE` worker |
+| `ai_code_master_prompt.md` | Master schema v7 |
+
+**Tách lane:** Backend `flow_guard` — `code_editor`↔`code`, `menu_manager`↔`menu_json`. Không inject `AUTO_LOADED_MENU_*` khi `contextType=code`.
+
+**Greenfield code:** `{ "code": "<full JS>", "summary": "..." }` — scaffold `window.seft` + container guard.
+
+
+**Luồng UI thực tế:**
+
+| Màn hình | contextType | flowType | Editor buffer |
+|----------|-------------|----------|---------------|
+| Quản lý hệ thống → **Quản lý menu** (tab AI) | `menu_json` | `menu_manager` | JSON menu string |
+| Quản lý hệ thống → **Trình biên tập mã** | `code` | `code_editor` | JS DynamicCode |
 
 Patch envelope:
 
@@ -1135,7 +1177,34 @@ Patch envelope:
 
 Fallback: `{ "status": "need_more_context", "patches": [], "warnings": [...] }`
 
-Required menu fields: `id`, `parentId`, `label`, `label_en`, `label_zh`, `icon`, `path`, `type_form`, `table_name`, `trigger`, `children`.
+Required menu fields: `id`, `parentId`, `label`, `label_en`, `label_zh`, `icon`, `path`, `type_form`, `table_name`, `table[]` (f_*), `trigger`, `children`.
+
+### G.2.1 Runtime component contract (menu JSON → UI)
+
+Click sidebar → `/system/grid/:menuId` → `AdminPage` dispatch (first match):
+
+| type_form / signal | Component | Fields bắt buộc |
+|--------------------|-----------|-----------------|
+| 6 hoặc `kanban_config` | `CsmKanbanBoard` | `kanban_config`, `table_name`, `table[]` |
+| 4 hoặc `auto_code_name` | DynamicCodeMenu | `auto_code_name` (lane code, không menu JSON) |
+| `report_name` + `report_db` | `CsmReport` | `report_name`, `trigger.report_db`, `table[]` filter |
+| 2 + `nodes[]` | `CsmMasterDetail` | master `table_name`; tab: `nodes[].table_name` = **field JSON array trong master** |
+| 1 | `CsmDynamicGrid` + `CsmEditModal` | `table_name`, `table[]`, `trigger`; `row_type_edit` 0=popup |
+
+**Nạp kiến thức cho AI local (backend auto-load):**
+
+| File | Vai trò | Slot prompt |
+|------|---------|-------------|
+| `backend/csm_datas/ai_local/ai_menu_runtime_compact.md` | Digest ~2.4k — routing + type_form + f_* | `[SYSTEM_MASTER_DIGEST]` Pass 1 Comprehend |
+| `backend/csm_datas/ai_local/ai_menu_runtime_contract.md` | Contract đầy đủ + ví dụ node | `AUTO_LOADED_MENU_SYSTEM_KNOWLEDGE` worker |
+| `backend/csm_datas/ai_local/ai_menu_master_prompt.md` | Schema patch/greenfield v7 | Cùng block auto-load |
+| `frontend-admin/.../menu-design-system.ts` | Mirror frontend (MenuRequirementForm) | Chưa auto-sync — tham chiếu dev |
+
+`AiAssistantGatewayService.buildAiAssistantMenuKnowledgeBlock()` scan `ai_menu_*.md` trong `csm_datas/ai_local/`.  
+`ApiSpringController.buildCodingPrompt()` inject block khi `contextType=menu_json`.  
+`sample_menu_compact` từ `AiMenuDesigner` → `[SAMPLE_MENU_DIGEST]` (pattern mẫu tenant).
+
+**Master-Detail — sai lầm thường gặp:** tab `nodes[].table_name` là tên **field** master (vd `chi_tiet`), không phải bảng DB `bh_donhang_ct`. Nếu detail có bảng DB riêng → 2 menu `type_form=1` + FK combo.
 
 ## G.3 ANALYZE / QUICK_QUESTION
 
@@ -3459,7 +3528,7 @@ Kịch bản text + assets
 
 ## AB.7 Máy chủ yếu — ưu tiên lane
 
-| Tình huống | Hành vi |
+| Tình huống | Hành vi | 
 |------------|---------|
 | Guest chat saturated | Fallback text ngay — chat không chết |
 | SEO sync đang chạy | 1 HTTP giữ connection; cap 1024–1536 tok output |
@@ -3596,6 +3665,34 @@ USER_REQUEST
 | **Spec markdown** | Yêu cầu nghiệp vụ authoritative | Attachment `system_requirement` | `indexMarkdown` |
 | **Tenant snapshot** | Role/dept/branch, quyền menu | Tự động backend | `AiTenantKnowledgeIngestionService` |
 | **Editor hiện tại** | Nghiệp vụ đang chạy — **ACTIVE_EDITOR_DIGEST** | `currentCode` string | `extractActiveMenuDigest` / `compactCodeDigest` |
+| **Runtime contract** | type_form → CsmDynamicGrid/Report/Kanban/MD | `ai_menu_runtime_*.md` | Auto-load menu lane only |
+| **DynamicCode contract** | seft/csmApi/React mount, 3 entry points | `ai_code_runtime_*.md` | Auto-load **code lane only** |
+
+## AC.2.1 Menu JSON phải khớp runtime (acceptance)
+
+AI local **PASS** khi menu sinh ra:
+
+1. Leaf `type_form=1/2/6` có `table_name` + `table[]` ≥1 field `f_pkid=1`
+2. Combo (`f_types` co/coro/cbo/cp) có `f_cbo_query` string hợp lệ
+3. `type_form=2` tab detail dùng field master, không bảng DB ảo
+4. Report có `report_name` + `trigger.report_db`
+5. Kanban có `kanban_config.stages[]` object `{id,label,color}`
+6. `MenuQualityGateService` không có error severity
+
+Deterministic seed (`AiGreenfieldBusinessDesignService.buildDeterministicMenuSeed`) phải có `table[]` + `load_db` tối thiểu để grid không trống cột khi model yếu.
+
+## AC.2.2 DynamicCode JS phải khớp runtime (acceptance)
+
+AI local **PASS** lane code khi:
+
+1. Request có `contextType=code` + `flowType=code_editor` (không lẫn menu_json)
+2. Output edit = `textEdits` với dòng **tuyệt đối** trên full `currentCode`
+3. Code mới không dùng import/require; mount qua `seft.containerId` / `#context-auto`
+4. IIFE/guard `__AUTO_*_LOADED__` nếu module có side-effect init
+5. React app có `__dynamicCodeDispose` khi dùng createRoot
+6. Greenfield scaffold có `window.seft` + container null-check
+
+Deterministic seed code: `window.seft` + `initModule()` + container resolve — không trả menu JSON.
 
 ## AC.3 Pipeline 4 pass (bắt buộc trên local-5gb)
 

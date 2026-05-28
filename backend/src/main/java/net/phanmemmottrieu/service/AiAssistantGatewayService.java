@@ -360,6 +360,17 @@ Rules:
   /** Compact CSM master rules for Comprehend pass (menu or code lane). */
   public String buildSystemMasterDigestCompact(String appId, boolean menuFlow, int maxChars) {
     int cap = Math.max(800, maxChars);
+    if (menuFlow) {
+      String compactMenu = loadMenuKnowledgeFileByName("ai_menu_runtime_compact.md", cap);
+      if (!compactMenu.isBlank()) {
+        return compactMenu;
+      }
+    } else {
+      String compactCode = loadMenuKnowledgeFileByName("ai_code_runtime_compact.md", cap);
+      if (!compactCode.isBlank()) {
+        return compactCode;
+      }
+    }
     String block = menuFlow
         ? buildAiAssistantMenuKnowledgeBlock(appId, "menu_json", "menu_design")
         : trimToMax(String.valueOf(getCodeMasterPrompt() == null ? "" : getCodeMasterPrompt()), cap);
@@ -367,6 +378,28 @@ Rules:
       block = trimToMax(String.valueOf(getCodeMasterPrompt() == null ? "" : getCodeMasterPrompt()), cap);
     }
     return trimToMax(block, cap);
+  }
+
+  /** Load a single menu knowledge markdown file (for compact comprehend digest). */
+  private String loadMenuKnowledgeFileByName(String fileName, int maxChars) {
+    if (fileName == null || fileName.isBlank()) {
+      return "";
+    }
+    Path path = Paths.get(contextDir, fileName);
+    if (!Files.isRegularFile(path)) {
+      return "";
+    }
+    try {
+      String text = Files.readString(path, StandardCharsets.UTF_8);
+      if (text == null || text.isBlank()) {
+        return "";
+      }
+      int cap = Math.max(800, maxChars);
+      return trimToMax(text.trim(), cap);
+    } catch (Exception ex) {
+      log.warn("Could not read menu knowledge file {}: {}", fileName, ex.getMessage());
+      return "";
+    }
   }
 
   /** PHẦN AC greenfield worker guardrail appended to minimal prompt on weak local models. */
@@ -1356,6 +1389,98 @@ Rules:
     return "## AUTO-LOADED MENU KNOWLEDGE\n"
         + "Use these markdown references as high-priority context for menu design requests.\n\n"
         + String.join("\n\n", sections);
+  }
+
+  /**
+   * Build DynamicCode knowledge context block for AI Assistant / CodeEditor requests.
+   * Auto-loads ai_code_*.md files when request is detected as code lane (NOT menu_json).
+   */
+  public String buildAiAssistantCodeKnowledgeBlock(String appId, String contextType, String taskType) {
+    if (isMenuDesignContext(contextType, taskType)) {
+      return "";
+    }
+    if (!isCodeDesignContext(contextType, taskType)) {
+      return "";
+    }
+
+    List<String> sections = new ArrayList<>();
+    List<String> mdFiles = loadCodeKnowledgeFiles();
+    for (String entry : mdFiles) {
+      if (entry == null || entry.isBlank()) {
+        continue;
+      }
+      sections.add(entry);
+    }
+
+    String appContext = loadAppContextFile(appId);
+    if (!appContext.isBlank()) {
+      sections.add("### Session memory (ai_context_" + sanitizeAppName(appId) + ".md)\n" + appContext.trim());
+    }
+
+    if (sections.isEmpty()) {
+      return "";
+    }
+
+    return "## AUTO-LOADED DYNAMICCODE KNOWLEDGE\n"
+        + "Lane: code_editor / contextType=code ONLY. Do NOT apply menu JSON patch rules.\n"
+        + "Use these references for sys_autos JavaScript (DynamicCodeMenu runtime).\n\n"
+        + String.join("\n\n", sections);
+  }
+
+  private boolean isCodeDesignContext(String contextType, String taskType) {
+    String normalizedContext = contextType == null ? "" : contextType.trim().toLowerCase(Locale.ROOT);
+    String normalizedTask = taskType == null ? "" : taskType.trim().toLowerCase(Locale.ROOT);
+    if ("menu_json".equals(normalizedContext)) {
+      return false;
+    }
+    return "code".equals(normalizedContext)
+        || "frontend_code".equals(normalizedContext)
+        || "code_assistant".equals(normalizedTask)
+        || "code_editor".equals(normalizedTask);
+  }
+
+  private List<String> loadCodeKnowledgeFiles() {
+    Path dir = Paths.get(contextDir);
+    if (!Files.isDirectory(dir)) {
+      return Collections.emptyList();
+    }
+
+    final int maxCharsPerFile = 60000;
+    final int maxFiles = 12;
+    List<String> sections = new ArrayList<>();
+
+    try (var stream = Files.list(dir)) {
+      List<Path> markdownFiles = stream
+          .filter(Files::isRegularFile)
+          .filter(path -> {
+            String fileName = path.getFileName().toString().toLowerCase();
+            return fileName.endsWith(".md")
+                && fileName.startsWith("ai_code_");
+          })
+          .sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase()))
+          .limit(maxFiles)
+          .toList();
+
+      for (Path path : markdownFiles) {
+        try {
+          String text = Files.readString(path, StandardCharsets.UTF_8);
+          if (text == null || text.isBlank()) {
+            continue;
+          }
+          String trimmed = text.trim();
+          if (trimmed.length() > maxCharsPerFile) {
+            trimmed = trimmed.substring(0, maxCharsPerFile) + "\n...[truncated]";
+          }
+          sections.add("### " + path.getFileName() + "\n" + trimmed);
+        } catch (Exception readEx) {
+          log.warn("Could not read code knowledge file {}: {}", path, readEx.getMessage());
+        }
+      }
+    } catch (Exception e) {
+      log.warn("Could not scan code knowledge directory {}: {}", dir, e.getMessage());
+    }
+
+    return sections;
   }
 
   private boolean isMenuDesignContext(String contextType, String taskType) {
