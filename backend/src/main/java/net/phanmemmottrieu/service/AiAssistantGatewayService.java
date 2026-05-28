@@ -310,10 +310,36 @@ Rules:
       String tenantRag,
       boolean menuFlow,
       String inputScenario) {
+    return buildComprehendPrompt(
+        userRequest,
+        sampleMenuDigest,
+        sampleCodeDigest,
+        "",
+        "",
+        tenantRag,
+        menuFlow,
+        inputScenario);
+  }
+
+  public String buildComprehendPrompt(
+      String userRequest,
+      String sampleMenuDigest,
+      String sampleCodeDigest,
+      String activeEditorDigest,
+      String systemMasterDigest,
+      String tenantRag,
+      boolean menuFlow,
+      String inputScenario) {
     StringBuilder sb = new StringBuilder();
     sb.append(COMPREHEND_CONTRACT_MIN).append("\n\n");
     sb.append("Lane: ").append(menuFlow ? "menu_json" : "frontend_code").append("\n");
     sb.append("Input scenario: ").append(String.valueOf(inputScenario == null ? "" : inputScenario)).append("\n\n");
+    if (!String.valueOf(systemMasterDigest == null ? "" : systemMasterDigest).isBlank()) {
+      sb.append("[SYSTEM_MASTER_DIGEST]\n").append(systemMasterDigest).append("\n[/SYSTEM_MASTER_DIGEST]\n\n");
+    }
+    if (!String.valueOf(activeEditorDigest == null ? "" : activeEditorDigest).isBlank()) {
+      sb.append("[ACTIVE_EDITOR_DIGEST]\n").append(activeEditorDigest).append("\n[/ACTIVE_EDITOR_DIGEST]\n\n");
+    }
     if (!String.valueOf(sampleMenuDigest == null ? "" : sampleMenuDigest).isBlank()) {
       sb.append("[SAMPLE_MENU_DIGEST]\n").append(sampleMenuDigest).append("\n[/SAMPLE_MENU_DIGEST]\n\n");
     }
@@ -328,6 +354,18 @@ Rules:
         .append("\n[/USER_REQUEST]\n\n");
     sb.append("Return ONLY one JSON object matching BusinessSpec schema. No markdown.\n");
     return sb.toString();
+  }
+
+  /** Compact CSM master rules for Comprehend pass (menu or code lane). */
+  public String buildSystemMasterDigestCompact(String appId, boolean menuFlow, int maxChars) {
+    int cap = Math.max(800, maxChars);
+    String block = menuFlow
+        ? buildAiAssistantMenuKnowledgeBlock(appId, "menu_json", "menu_design")
+        : trimToMax(String.valueOf(getCodeMasterPrompt() == null ? "" : getCodeMasterPrompt()), cap);
+    if (block.isBlank() && !menuFlow) {
+      block = trimToMax(String.valueOf(getCodeMasterPrompt() == null ? "" : getCodeMasterPrompt()), cap);
+    }
+    return trimToMax(block, cap);
   }
 
   /** PHẦN AC greenfield worker guardrail appended to minimal prompt on weak local models. */
@@ -358,17 +396,23 @@ Rules:
 
   private static final String COMPREHEND_CONTRACT_MIN = """
       [BUSINESS_COMPREHEND_CONTRACT]
-      You are a CSM ERP business analyst. Infer domain from USER_REQUEST + optional sample digests.
-      Merge sample patterns with user_delta — user request wins on conflict.
+      You are a CSM ERP business analyst. BEFORE any code/menu output you MUST comprehend business:
+      1) What the CURRENT editor (ACTIVE_EDITOR_DIGEST) already implements — modules, tables, triggers, flows.
+      2) What the CSM system allows (SYSTEM_MASTER_DIGEST + TENANT_RAG).
+      3) What the customer wants changed (USER_REQUEST) — this wins on conflict vs samples.
+      Merge sample + current editor + user delta. Never ignore existing business when editor is non-empty.
       Output JSON only:
       {
-        "domain_summary": "...",
+        "domain_summary": "Tổng hợp nghiệp vụ sau khi merge current + yêu cầu",
+        "existing_business_summary": "Nghiệp vụ menu/code HIỆN TẠI trong editor",
         "modules": ["..."],
         "tables": ["..."],
         "flows": ["..."],
         "triggers_learned_from_sample": ["..."],
+        "triggers_from_current_editor": ["..."],
         "code_patterns_from_sample": ["..."],
-        "user_delta": "...",
+        "code_patterns_from_current_editor": ["..."],
+        "user_delta": "Phần khách hàng yêu cầu thêm/sửa so với hiện trạng",
         "assumptions": ["..."],
         "risks": ["..."]
       }

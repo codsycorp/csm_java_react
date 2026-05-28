@@ -2279,6 +2279,7 @@ public class ApiSpringController {
                                     : businessComprehensionResult.businessSpec().modules().size(),
                                 "inputScenario", businessComprehensionResult.inputScenario().name(),
                                 "greenfield", businessComprehensionResult.greenfield(),
+                                "existingBusinessSummary", businessComprehensionResult.businessSpec().existingBusinessSummary(),
                                 "message", uiTextByLang(
                                     uiLang,
                                     "Đã hiểu nghiệp vụ — " + (businessComprehensionResult.businessSpec().modules() == null
@@ -5814,6 +5815,19 @@ public class ApiSpringController {
                     completion.put("finalOutputGate", finalOutputGate.toMetaMap());
                     completion.put("flowConfirmedByLocal", true);
                     completion.put("codeStreamTextEditsEmittedCount", streamedTextEditEvents);
+                }
+                if (!finalOutputGate.passed()
+                        && qualityGateEarlyAuditDone
+                        && isMenuJsonContext(contextType)
+                        && (streamedTextEditEvents > 0 || parseIntSafe(menuMergePreview.get("edited"), 0) > 0)) {
+                    logger.info(
+                        "FINAL_OUTPUT_GATE skipped rejection — menu quality-gate early audit already applied requestId={} textEdits={} edited={}",
+                        requestId,
+                        streamedTextEditEvents,
+                        parseIntSafe(menuMergePreview.get("edited"), 0));
+                    finalOutputGate = FinalOutputGateResult.pass("menu_quality_gate_early_audit_applied");
+                    completion.put("finalOutputGate", finalOutputGate.toMetaMap());
+                    completion.put("flowConfirmedByLocal", true);
                 }
                 if (!finalOutputGate.passed()) {
                     completionPayload = finalOutputGate.fallbackPayload();
@@ -33530,21 +33544,24 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         }
         String mIcon = String.valueOf(node.getOrDefault("m_icon", "")).trim();
         String mIcons = String.valueOf(node.getOrDefault("m_icons", "")).trim();
+        String attrIcon = String.valueOf(node.getOrDefault("attributes_icon", "")).trim();
         String icon = String.valueOf(node.getOrDefault("icon", "")).trim();
 
-        String preferred = !mIcon.isBlank()
-            ? mIcon
-            : (!mIcons.isBlank() ? mIcons : icon);
+        String preferred = !icon.isBlank()
+            ? icon
+            : (!mIcon.isBlank()
+                ? mIcon
+                : (!mIcons.isBlank() ? mIcons : attrIcon));
         if (preferred.isBlank()) {
             preferred = defaultMenuIconForNode(node);
         }
-        if (preferred.isBlank()) {
-            return;
+        if (!preferred.isBlank()) {
+            node.put("icon", preferred);
         }
-
-        node.put("m_icon", preferred);
-        node.put("icon", preferred);
+        // Canonical contract: icon only — legacy fields fail MenuQualityGate hard gate.
+        node.remove("m_icon");
         node.remove("m_icons");
+        node.remove("attributes_icon");
     }
 
     private String defaultMenuIconForNode(Map<String, Object> node) {

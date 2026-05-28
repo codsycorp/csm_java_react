@@ -145,6 +145,7 @@ public class MenuQualityGateService {
 
     public QualityReport validateMenuJson(List<Map<String, Object>> menus, String requirement) {
         QualityReport report = new QualityReport();
+        migrateLegacyIconFieldsDeep(menus);
 
         if (menus == null || menus.isEmpty()) {
             report.issues.add(new QualityIssue(
@@ -1009,6 +1010,43 @@ public class MenuQualityGateService {
             }
             removeFields.add(forbidden);
             reasons.add("icon");
+        }
+    }
+
+    /**
+     * Migrate m_icon / m_icons / attributes_icon → canonical {@code icon} in-place (recursive).
+     * Prevents hard-gate false rejects on legacy editor data after deterministic menu audit merges.
+     */
+    public void migrateLegacyIconFieldsDeep(List<Map<String, Object>> menus) {
+        if (menus == null || menus.isEmpty()) {
+            return;
+        }
+        for (Map<String, Object> menu : menus) {
+            migrateLegacyIconFieldsOnNode(menu);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void migrateLegacyIconFieldsOnNode(Map<String, Object> node) {
+        if (node == null || node.isEmpty()) {
+            return;
+        }
+        for (String forbidden : FORBIDDEN_ICON_FIELDS) {
+            if (!node.containsKey(forbidden) || isBlank(node.get(forbidden))) {
+                continue;
+            }
+            if (isBlank(node.get("icon"))) {
+                node.put("icon", node.get(forbidden));
+            }
+            node.remove(forbidden);
+        }
+        Object children = node.get("children");
+        if (children instanceof List<?> childList) {
+            for (Object child : childList) {
+                if (child instanceof Map<?, ?> childMap) {
+                    migrateLegacyIconFieldsOnNode((Map<String, Object>) childMap);
+                }
+            }
         }
     }
 

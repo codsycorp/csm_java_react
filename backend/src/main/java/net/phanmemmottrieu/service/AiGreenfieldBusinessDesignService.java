@@ -40,11 +40,14 @@ public class AiGreenfieldBusinessDesignService {
 
     public record BusinessSpec(
         String domainSummary,
+        String existingBusinessSummary,
         List<String> modules,
         List<String> tables,
         List<String> flows,
         List<String> triggersLearnedFromSample,
+        List<String> triggersFromCurrentEditor,
         List<String> codePatternsFromSample,
+        List<String> codePatternsFromCurrentEditor,
         String userDelta,
         List<String> assumptions,
         List<String> risks
@@ -52,11 +55,14 @@ public class AiGreenfieldBusinessDesignService {
         public Map<String, Object> toMap() {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("domain_summary", domainSummary == null ? "" : domainSummary);
+            m.put("existing_business_summary", existingBusinessSummary == null ? "" : existingBusinessSummary);
             m.put("modules", modules == null ? List.of() : modules);
             m.put("tables", tables == null ? List.of() : tables);
             m.put("flows", flows == null ? List.of() : flows);
             m.put("triggers_learned_from_sample", triggersLearnedFromSample == null ? List.of() : triggersLearnedFromSample);
+            m.put("triggers_from_current_editor", triggersFromCurrentEditor == null ? List.of() : triggersFromCurrentEditor);
             m.put("code_patterns_from_sample", codePatternsFromSample == null ? List.of() : codePatternsFromSample);
+            m.put("code_patterns_from_current_editor", codePatternsFromCurrentEditor == null ? List.of() : codePatternsFromCurrentEditor);
             m.put("user_delta", userDelta == null ? "" : userDelta);
             m.put("assumptions", assumptions == null ? List.of() : assumptions);
             m.put("risks", risks == null ? List.of() : risks);
@@ -64,7 +70,7 @@ public class AiGreenfieldBusinessDesignService {
         }
 
         public static BusinessSpec empty() {
-            return new BusinessSpec("", List.of(), List.of(), List.of(), List.of(), List.of(), "", List.of(), List.of());
+            return new BusinessSpec("", "", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), "", List.of(), List.of());
         }
     }
 
@@ -132,6 +138,12 @@ public class AiGreenfieldBusinessDesignService {
     @Autowired(required = false)
     private AiAssistantGatewayService aiAssistantGatewayService;
 
+    @Autowired(required = false)
+    private AiTenantKnowledgeIngestionService aiTenantKnowledgeIngestionService;
+
+    @Autowired(required = false)
+    private AiBusinessMemoryVectorService aiBusinessMemoryVectorService;
+
     @Value("${ai.local.business-comprehension.enabled:true}")
     private boolean enabled;
 
@@ -140,6 +152,9 @@ public class AiGreenfieldBusinessDesignService {
 
     @Value("${ai.local.business-comprehension.required-on-sample-attachment:true}")
     private boolean requiredOnSampleAttachment;
+
+    @Value("${ai.local.business-comprehension.required-on-edit-with-editor:true}")
+    private boolean requiredOnEditWithEditor;
 
     @Value("${ai.local.business-comprehension.comprehend-max-tokens:512}")
     private int comprehendMaxTokens;
@@ -158,6 +173,12 @@ public class AiGreenfieldBusinessDesignService {
 
     @Value("${ai.local.business-comprehension.tenant-rag-max-chars:2800}")
     private int tenantRagMaxChars;
+
+    @Value("${ai.local.business-comprehension.active-editor-digest-max-chars:6000}")
+    private int activeEditorDigestMaxChars;
+
+    @Value("${ai.local.business-comprehension.system-master-digest-max-chars:2400}")
+    private int systemMasterDigestMaxChars;
 
     @Value("${ai.local.greenfield.enabled:true}")
     private boolean greenfieldEnabled;
@@ -200,7 +221,7 @@ public class AiGreenfieldBusinessDesignService {
         if ("analyze".equals(safeMode) && hasEditor && !hasSamples) {
             return ComprehensionResult.skipped();
         }
-        if (!shouldActivate(greenfield, hasSamples, safeMode)) {
+        if (!shouldActivate(greenfield, hasSamples, hasEditor, safeMode)) {
             return ComprehensionResult.skipped();
         }
 
@@ -208,14 +229,18 @@ public class AiGreenfieldBusinessDesignService {
         String operationScenario = extractOperationScenario(safeMessage, greenfield, menuFlow);
         String sampleMenuDigest = extractSampleMenuDigest(safeAttachments, safeMessage, editorMetadata);
         String sampleCodeDigest = extractSampleCodeDigest(safeAttachments, safeMessage, menuFlow);
+        String activeEditorDigest = extractActiveEditorDigest(safeCode, menuFlow);
+        String systemMasterDigest = resolveSystemMasterDigest(appId, menuFlow);
+        String tenantRag = resolveTenantRagSnippet(appId, safeMessage, menuFlow);
         String userRequest = trimToMax(safeMessage, userRequestMaxChars);
-        String tenantRag = trimToMax(String.valueOf(tenantRagSnippet == null ? "" : tenantRagSnippet), tenantRagMaxChars);
 
         BusinessSpec spec = buildBusinessSpec(
             appId,
             userRequest,
             sampleMenuDigest,
             sampleCodeDigest,
+            activeEditorDigest,
+            systemMasterDigest,
             tenantRag,
             menuFlow,
             scenario);
@@ -224,18 +249,24 @@ public class AiGreenfieldBusinessDesignService {
             operationScenario,
             menuFlow,
             greenfield,
-            editTaskPlan);
+            editTaskPlan,
+            safeMessage);
         String block = buildWorkerPromptBlock(spec, plan, workerPromptBlockMaxChars);
 
         Map<String, Object> telemetry = new LinkedHashMap<>();
         telemetry.put("inputScenario", scenario.name());
         telemetry.put("greenfield", greenfield);
+        telemetry.put("hasEditor", hasEditor);
         telemetry.put("hasSamples", hasSamples);
         telemetry.put("operationScenario", operationScenario);
         telemetry.put("moduleCount", spec.modules() == null ? 0 : spec.modules().size());
         telemetry.put("stepCount", plan.steps() == null ? 0 : plan.steps().size());
         telemetry.put("sampleMenuDigestChars", sampleMenuDigest.length());
         telemetry.put("sampleCodeDigestChars", sampleCodeDigest.length());
+        telemetry.put("activeEditorDigestChars", activeEditorDigest.length());
+        telemetry.put("systemMasterDigestChars", systemMasterDigest.length());
+        telemetry.put("tenantRagChars", tenantRag.length());
+        telemetry.put("existingBusinessSummary", spec.existingBusinessSummary());
 
         log.info(
             "BusinessComprehension scenario={} greenfield={} modules={} steps={} menuFlow={}",
@@ -285,14 +316,17 @@ public class AiGreenfieldBusinessDesignService {
         return seed;
     }
 
-    private boolean shouldActivate(boolean greenfield, boolean hasSamples, String responseMode) {
+    private boolean shouldActivate(boolean greenfield, boolean hasSamples, boolean hasEditor, String responseMode) {
+        if (!"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            return hasSamples && requiredOnSampleAttachment;
+        }
         if (hasSamples && requiredOnSampleAttachment) {
             return true;
         }
-        if (greenfield && requiredOnGreenfield && "edit".equalsIgnoreCase(responseMode)) {
+        if (greenfield && requiredOnGreenfield) {
             return true;
         }
-        if (greenfield && requiredOnGreenfield && hasSamples) {
+        if (hasEditor && requiredOnEditWithEditor) {
             return true;
         }
         return false;
@@ -350,6 +384,8 @@ public class AiGreenfieldBusinessDesignService {
         String userRequest,
         String sampleMenuDigest,
         String sampleCodeDigest,
+        String activeEditorDigest,
+        String systemMasterDigest,
         String tenantRag,
         boolean menuFlow,
         InputScenario scenario
@@ -362,6 +398,8 @@ public class AiGreenfieldBusinessDesignService {
                     userRequest,
                     sampleMenuDigest,
                     sampleCodeDigest,
+                    activeEditorDigest,
+                    systemMasterDigest,
                     tenantRag,
                     menuFlow,
                     scenario.name());
@@ -374,7 +412,13 @@ public class AiGreenfieldBusinessDesignService {
                 log.warn("BusinessSpec LLM comprehend failed, using heuristic: {}", ex.getMessage());
             }
         }
-        return buildHeuristicBusinessSpec(userRequest, sampleMenuDigest, sampleCodeDigest, menuFlow, scenario);
+        return buildHeuristicBusinessSpec(
+            userRequest,
+            sampleMenuDigest,
+            sampleCodeDigest,
+            activeEditorDigest,
+            menuFlow,
+            scenario);
     }
 
     private BusinessSpec parseBusinessSpecJson(String raw) {
@@ -389,11 +433,14 @@ public class AiGreenfieldBusinessDesignService {
             JsonNode root = objectMapper.readTree(json);
             return new BusinessSpec(
                 root.path("domain_summary").asText(""),
+                root.path("existing_business_summary").asText(""),
                 readStringList(root.get("modules")),
                 readStringList(root.get("tables")),
                 readStringList(root.get("flows")),
                 readStringList(root.get("triggers_learned_from_sample")),
+                readStringList(root.get("triggers_from_current_editor")),
                 readStringList(root.get("code_patterns_from_sample")),
+                readStringList(root.get("code_patterns_from_current_editor")),
                 root.path("user_delta").asText(""),
                 readStringList(root.get("assumptions")),
                 readStringList(root.get("risks")));
@@ -407,44 +454,78 @@ public class AiGreenfieldBusinessDesignService {
         String userRequest,
         String sampleMenuDigest,
         String sampleCodeDigest,
+        String activeEditorDigest,
         boolean menuFlow,
         InputScenario scenario
     ) {
-        List<String> modules = extractModulesFromText(userRequest);
+        List<String> modules = extractModulesFromText(activeEditorDigest);
+        if (modules.isEmpty()) {
+            modules = extractModulesFromText(userRequest);
+        }
         if (modules.isEmpty() && !sampleMenuDigest.isBlank()) {
             modules = extractModulesFromText(sampleMenuDigest);
         }
-        List<String> tables = extractTablesFromText(userRequest + " " + sampleMenuDigest);
-        List<String> triggers = extractTriggerHints(sampleMenuDigest);
-        List<String> codePatterns = extractCodePatterns(sampleCodeDigest);
+        List<String> tables = extractTablesFromText(
+            userRequest + " " + sampleMenuDigest + " " + activeEditorDigest);
+        List<String> triggersSample = extractTriggerHints(sampleMenuDigest);
+        List<String> triggersCurrent = extractTriggerHints(activeEditorDigest);
+        List<String> triggers = mergeStringLists(triggersCurrent, triggersSample);
+        List<String> codePatternsSample = extractCodePatterns(sampleCodeDigest);
+        List<String> codePatternsCurrent = extractCodePatterns(activeEditorDigest);
+        List<String> codePatterns = mergeStringLists(codePatternsCurrent, codePatternsSample);
         List<String> flows = new ArrayList<>();
         if (menuFlow) {
-            flows.add("list → form → save");
+            flows.add("list → form → save → trigger/filter");
         } else {
             flows.add("init → load data → bind events → save");
         }
         List<String> assumptions = new ArrayList<>();
         List<String> risks = new ArrayList<>();
         if (scenario == InputScenario.A_GREENFIELD) {
-            assumptions.add("Greenfield — dùng scaffold CSM chuẩn khi model yếu");
-            risks.add("Thiếu mẫu — cần xác nhận module/bảng nếu output không đủ");
+            assumptions.add("Greenfield — dùng scaffold CSM chuẩn + master prompt khi model yếu");
+            risks.add("Thiếu mẫu/editor — cần xác nhận module/bảng nếu output không đủ");
+        } else if (scenario == InputScenario.C_EDIT_EXISTING) {
+            assumptions.add("Giữ cấu trúc nghiệp vụ hiện có — chỉ sửa theo user_delta");
+            risks.add("Menu/code lớn — worker chỉ nhận digest + plan slices");
         }
         if (modules.isEmpty()) {
-            modules = List.of(menuFlow ? "Module chính" : "DynamicCode module");
+            modules = List.of(menuFlow ? "Module hiện tại" : "DynamicCode module");
         }
+        String existingSummary = trimToMax(
+            activeEditorDigest.isBlank()
+                ? "Chưa có editor — chỉ dựa yêu cầu + hệ thống"
+                : activeEditorDigest,
+            600);
         String summary = menuFlow
-            ? "Thiết kế menu CSM: " + String.join(", ", modules.stream().limit(4).toList())
+            ? "Menu CSM: " + String.join(", ", modules.stream().limit(4).toList())
             : "DynamicCode CSM: " + String.join(", ", modules.stream().limit(4).toList());
+        if (!existingSummary.isBlank() && scenario == InputScenario.C_EDIT_EXISTING) {
+            summary = summary + " | Hiện trạng: " + trimToMax(existingSummary, 200);
+        }
         return new BusinessSpec(
             summary,
+            existingSummary,
             modules,
             tables,
             flows,
-            triggers,
-            codePatterns,
+            triggersSample,
+            triggersCurrent,
+            codePatternsSample,
+            codePatternsCurrent,
             trimToMax(userRequest, 500),
             assumptions,
             risks);
+    }
+
+    private List<String> mergeStringLists(List<String> first, List<String> second) {
+        LinkedHashSet<String> merged = new LinkedHashSet<>();
+        if (first != null) {
+            merged.addAll(first);
+        }
+        if (second != null) {
+            merged.addAll(second);
+        }
+        return new ArrayList<>(merged);
     }
 
     private ExecutionPlan buildExecutionPlan(
@@ -452,21 +533,51 @@ public class AiGreenfieldBusinessDesignService {
         String operationScenario,
         boolean menuFlow,
         boolean greenfield,
-        AiEditTaskPlannerService.EditTaskPlan editTaskPlan
+        AiEditTaskPlannerService.EditTaskPlan editTaskPlan,
+        String userMessage
     ) {
         List<ExecutionStep> steps = new ArrayList<>();
         int idx = 1;
-        if (spec.modules() != null) {
+        String msgLower = String.valueOf(userMessage == null ? "" : userMessage).toLowerCase(Locale.ROOT);
+
+        if (!greenfield && menuFlow) {
+            if (msgLower.contains("trigger") || msgLower.contains("nghiệp vụ") || msgLower.contains("nghiep vu")) {
+                steps.add(new ExecutionStep(
+                    "s" + idx++,
+                    "audit_and_patch_triggers",
+                    "all_menu_nodes",
+                    List.of("trigger.filter", "trigger.load_db", "trigger.update")));
+            }
+            if (msgLower.contains("ngôn ngữ") || msgLower.contains("ngon ngu") || msgLower.contains("label")
+                    || msgLower.contains("i18n") || msgLower.contains("en") || msgLower.contains("zh")) {
+                steps.add(new ExecutionStep(
+                    "s" + idx++,
+                    "enrich_i18n_labels",
+                    "menu_nodes_and_table_columns",
+                    List.of("label", "label_en", "label_zh", "f_label", "f_label_en", "f_label_zh")));
+            }
+            if (msgLower.contains("cột") || msgLower.contains("cot") || msgLower.contains("bảng") || msgLower.contains("table")) {
+                steps.add(new ExecutionStep(
+                    "s" + idx++,
+                    "patch_table_columns",
+                    "table[]",
+                    List.of("f_types", "f_header", "f_cbo_query", "f_show")));
+            }
+        }
+
+        if (spec.modules() != null && steps.size() < 6) {
             for (String module : spec.modules()) {
                 if (module == null || module.isBlank()) {
                     continue;
                 }
                 steps.add(new ExecutionStep(
                     "s" + idx++,
-                    menuFlow ? "create_menu_module" : "implement_code_region",
+                    greenfield
+                        ? (menuFlow ? "create_menu_module" : "implement_code_region")
+                        : "incremental_edit_module",
                     module.trim(),
                     menuFlow ? List.of("type_form", "table_name", "trigger", "i18n") : List.of("ctx.helperApi", "lifecycle")));
-                if (steps.size() >= 6) {
+                if (steps.size() >= 8) {
                     break;
                 }
             }
@@ -495,6 +606,12 @@ public class AiGreenfieldBusinessDesignService {
             : (menuFlow ? "patches_or_full_tree" : "textEdits");
         List<String> acceptance = new ArrayList<>();
         acceptance.add("Khớp yêu cầu user: " + trimToMax(spec.userDelta(), 120));
+        if (spec.existingBusinessSummary() != null && !spec.existingBusinessSummary().isBlank()) {
+            acceptance.add("Không phá nghiệp vụ hiện có: " + trimToMax(spec.existingBusinessSummary(), 100));
+        }
+        if (spec.triggersFromCurrentEditor() != null && !spec.triggersFromCurrentEditor().isEmpty()) {
+            acceptance.add("Giữ trigger hiện có trừ khi user yêu cầu sửa");
+        }
         if (!spec.triggersLearnedFromSample().isEmpty()) {
             acceptance.add("Trigger bám mẫu: " + String.join(", ", spec.triggersLearnedFromSample().stream().limit(3).toList()));
         }
@@ -513,6 +630,9 @@ public class AiGreenfieldBusinessDesignService {
         StringBuilder sb = new StringBuilder();
         sb.append("## BUSINESS_COMPREHENSION (internal — follow strictly)\n");
         sb.append("Domain: ").append(spec.domainSummary()).append("\n");
+        if (spec.existingBusinessSummary() != null && !spec.existingBusinessSummary().isBlank()) {
+            sb.append("Existing business (editor): ").append(trimToMax(spec.existingBusinessSummary(), 500)).append("\n");
+        }
         if (spec.modules() != null && !spec.modules().isEmpty()) {
             sb.append("Modules: ").append(String.join(", ", spec.modules().stream().limit(8).toList())).append("\n");
         }
@@ -521,6 +641,11 @@ public class AiGreenfieldBusinessDesignService {
         }
         if (!spec.userDelta().isBlank()) {
             sb.append("User delta: ").append(spec.userDelta()).append("\n");
+        }
+        if (spec.triggersFromCurrentEditor() != null && !spec.triggersFromCurrentEditor().isEmpty()) {
+            sb.append("Triggers from current editor: ")
+                .append(String.join("; ", spec.triggersFromCurrentEditor().stream().limit(5).toList()))
+                .append("\n");
         }
         if (spec.triggersLearnedFromSample() != null && !spec.triggersLearnedFromSample().isEmpty()) {
             sb.append("Triggers from sample: ")
@@ -908,5 +1033,155 @@ public class AiGreenfieldBusinessDesignService {
 
     private String str(Object o) {
         return String.valueOf(o == null ? "" : o).trim();
+    }
+
+    private String extractActiveEditorDigest(String currentCode, boolean menuFlow) {
+        String code = String.valueOf(currentCode == null ? "" : currentCode).trim();
+        if (code.isBlank()) {
+            return "";
+        }
+        return menuFlow ? extractActiveMenuDigest(code) : compactCodeDigest(code);
+    }
+
+    private String extractActiveMenuDigest(String raw) {
+        List<Map<String, Object>> roots = parseMenuRoots(raw);
+        if (roots.isEmpty()) {
+            return compactMenuDigest(raw);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("CURRENT_MENU_BUSINESS_DIGEST\n");
+        walkMenuDigestNodes(roots, sb, 0, 0);
+        return trimToMax(sb.toString().trim(), activeEditorDigestMaxChars);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> parseMenuRoots(String raw) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (objectMapper == null || raw.isBlank()) {
+            return out;
+        }
+        try {
+            Object parsed = objectMapper.readValue(raw, Object.class);
+            if (parsed instanceof List<?> list) {
+                for (Object item : list) {
+                    if (item instanceof Map<?, ?> m) {
+                        out.add((Map<String, Object>) m);
+                    }
+                }
+            } else if (parsed instanceof Map<?, ?> map) {
+                Object menu = map.get("menu");
+                if (menu instanceof List<?> list) {
+                    for (Object item : list) {
+                        if (item instanceof Map<?, ?> m) {
+                            out.add((Map<String, Object>) m);
+                        }
+                    }
+                } else if (isLikelyMenuNodeMap(map)) {
+                    out.add((Map<String, Object>) map);
+                }
+            }
+        } catch (Exception ex) {
+            log.debug("parseMenuRoots failed: {}", ex.getMessage());
+        }
+        return out;
+    }
+
+    private boolean isLikelyMenuNodeMap(Map<?, ?> map) {
+        return map.containsKey("id") || map.containsKey("label") || map.containsKey("type_form");
+    }
+
+    @SuppressWarnings("unchecked")
+    private int walkMenuDigestNodes(List<?> nodes, StringBuilder sb, int depth, int count) {
+        if (nodes == null || count >= 80) {
+            return count;
+        }
+        for (Object nodeObj : nodes) {
+            if (!(nodeObj instanceof Map<?, ?> rawNode)) {
+                continue;
+            }
+            Map<String, Object> node = (Map<String, Object>) rawNode;
+            String id = str(node.get("id"));
+            String label = str(node.get("label"));
+            String typeForm = str(node.get("type_form"));
+            String table = str(node.get("table_name"));
+            String indent = "  ".repeat(Math.min(depth, 4));
+            sb.append(indent)
+                .append("- id=").append(id.isBlank() ? "?" : id)
+                .append(" | label=").append(label.isBlank() ? "?" : label);
+            if (!typeForm.isBlank()) {
+                sb.append(" | type_form=").append(typeForm);
+            }
+            if (!table.isBlank()) {
+                sb.append(" | table=").append(table);
+            }
+            Object trigger = node.get("trigger");
+            if (trigger != null && !String.valueOf(trigger).isBlank() && !"{}".equals(String.valueOf(trigger).trim())) {
+                sb.append(" | trigger=").append(trimToMax(String.valueOf(trigger).replaceAll("\\s+", " "), 120));
+            }
+            String labelEn = str(node.get("label_en"));
+            String labelZh = str(node.get("label_zh"));
+            if (labelEn.isBlank() || labelZh.isBlank()) {
+                sb.append(" | i18n_gap=en:").append(labelEn.isBlank() ? "missing" : "ok")
+                    .append(",zh:").append(labelZh.isBlank() ? "missing" : "ok");
+            }
+            sb.append("\n");
+            count++;
+            Object children = node.get("children");
+            if (children instanceof List<?> childList && !childList.isEmpty()) {
+                count = walkMenuDigestNodes(childList, sb, depth + 1, count);
+            }
+            if (count >= 80) {
+                break;
+            }
+        }
+        return count;
+    }
+
+    private String resolveSystemMasterDigest(String appId, boolean menuFlow) {
+        if (aiAssistantGatewayService == null) {
+            return "";
+        }
+        return aiAssistantGatewayService.buildSystemMasterDigestCompact(
+            appId,
+            menuFlow,
+            systemMasterDigestMaxChars);
+    }
+
+    private String resolveTenantRagSnippet(String appId, String message, boolean menuFlow) {
+        if (aiTenantKnowledgeIngestionService != null && appId != null && !appId.isBlank()) {
+            try {
+                aiTenantKnowledgeIngestionService.ingestTenantKnowledge(appId);
+            } catch (Exception ex) {
+                log.debug("Tenant ingest before comprehend skipped: {}", ex.getMessage());
+            }
+        }
+        if (aiBusinessMemoryVectorService == null || appId == null || appId.isBlank()) {
+            return "";
+        }
+        try {
+            int scope = menuFlow
+                ? AiScopedContextIngestionService.SCOPE_MENU
+                : AiScopedContextIngestionService.SCOPE_CODE;
+            List<AiBusinessMemoryVectorService.SearchHit> hits =
+                aiBusinessMemoryVectorService.searchWithScopes(appId, message, 3, scope);
+            if (hits == null || hits.isEmpty()) {
+                hits = aiBusinessMemoryVectorService.search(appId, message, 3);
+            }
+            StringBuilder sb = new StringBuilder();
+            for (AiBusinessMemoryVectorService.SearchHit hit : hits) {
+                if (hit == null) {
+                    continue;
+                }
+                String text = !hit.content().isBlank() ? hit.content() : hit.summary();
+                if (text == null || text.isBlank()) {
+                    continue;
+                }
+                sb.append("- ").append(text.trim()).append("\n");
+            }
+            return trimToMax(sb.toString().trim(), tenantRagMaxChars);
+        } catch (Exception ex) {
+            log.debug("Tenant RAG snippet failed: {}", ex.getMessage());
+            return "";
+        }
     }
 }
