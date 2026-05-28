@@ -3481,7 +3481,10 @@ public class ApiSpringController {
                         contextType,
                         responseMode,
                         codeStreamOrchestration,
-                        uiLang);
+                        uiLang,
+                        str(codeStreamMeta.get("businessComprehensionBlock"), ""),
+                        Boolean.TRUE.equals(codeStreamMeta.get("businessComprehensionGreenfield")),
+                        str(codeStreamMeta.get("businessComprehensionOperationScenario"), "new_build"));
                     String providerRaw = null;
                     String providerText = null;
                     String llmEffectiveCodeContext = effectiveCodeContext;
@@ -3509,7 +3512,10 @@ public class ApiSpringController {
                                 contextType,
                                 responseMode,
                                 codeStreamOrchestration,
-                                uiLang);
+                                uiLang,
+                                str(codeStreamMeta.get("businessComprehensionBlock"), ""),
+                                Boolean.TRUE.equals(codeStreamMeta.get("businessComprehensionGreenfield")),
+                                str(codeStreamMeta.get("businessComprehensionOperationScenario"), "new_build"));
                             sendEvent(emitter, jsonOf(
                                 "stage", "menu_audit_progress",
                                 "requestId", requestId,
@@ -11054,7 +11060,10 @@ public class ApiSpringController {
             String contextType,
             String responseMode,
             AiLocalOrchestrationService.OrchestrationResult orchestration,
-            String uiLang) {
+            String uiLang,
+            String businessComprehensionBlock,
+            boolean businessComprehensionGreenfield,
+            String businessComprehensionOperationScenario) {
         String mode = String.valueOf(aiLocalPromptCompositionMode == null ? "auto" : aiLocalPromptCompositionMode)
             .trim()
             .toLowerCase(Locale.ROOT);
@@ -11074,7 +11083,10 @@ public class ApiSpringController {
             contextType,
             responseMode,
             orchestration,
-            uiLang);
+            uiLang,
+            businessComprehensionBlock,
+            businessComprehensionGreenfield,
+            businessComprehensionOperationScenario);
         return clampPromptForLocalProvider(layered, contextType, responseMode);
     }
 
@@ -11084,7 +11096,10 @@ public class ApiSpringController {
             String contextType,
             String responseMode,
             AiLocalOrchestrationService.OrchestrationResult orchestration,
-            String uiLang) {
+            String uiLang,
+            String businessComprehensionBlock,
+            boolean businessComprehensionGreenfield,
+            String businessComprehensionOperationScenario) {
         if (aiAssistantGatewayService == null) {
             return clampPromptForLocalProvider(message, contextType, responseMode);
         }
@@ -11156,13 +11171,22 @@ public class ApiSpringController {
                 editorPayload = condensed;
             }
         }
+        String businessBlock = String.valueOf(businessComprehensionBlock == null ? "" : businessComprehensionBlock).trim();
+        if (businessComprehensionGreenfield && aiAssistantGatewayService != null) {
+            String greenfieldContract = aiAssistantGatewayService.buildGreenfieldWorkerContract(
+                intent,
+                String.valueOf(businessComprehensionOperationScenario == null ? "new_build" : businessComprehensionOperationScenario),
+                true);
+            businessBlock = (businessBlock + "\n" + greenfieldContract).trim();
+        }
         return aiAssistantGatewayService.buildLocalMinimalPrompt(
             intent,
             editorPayload,
             rag,
             memory.toString(),
             message,
-            resolveEffectiveUserLanguage(uiLang, message));
+            resolveEffectiveUserLanguage(uiLang, message),
+            businessBlock);
     }
 
     private String buildOrchestrationPlanningDigest(AiLocalOrchestrationService.OrchestrationResult orchestration) {
