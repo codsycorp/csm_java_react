@@ -286,6 +286,95 @@ Rules:
     return sb.toString();
   }
 
+  public String buildLocalMinimalPrompt(
+      AiFlowIntent intent,
+      String activeEditorContent,
+      String ragContext,
+      String memory,
+      String userRequest,
+      String uiLanguage,
+      String businessComprehensionBlock) {
+    String base = buildLocalMinimalPrompt(intent, activeEditorContent, ragContext, memory, userRequest, uiLanguage);
+    String block = String.valueOf(businessComprehensionBlock == null ? "" : businessComprehensionBlock).trim();
+    if (block.isBlank()) {
+      return base;
+    }
+    return base + "\n\n" + block + "\n";
+  }
+
+  /** PHẦN AC Pass 1 — comprehend prompt (max ~512 output tokens). */
+  public String buildComprehendPrompt(
+      String userRequest,
+      String sampleMenuDigest,
+      String sampleCodeDigest,
+      String tenantRag,
+      boolean menuFlow,
+      String inputScenario) {
+    StringBuilder sb = new StringBuilder();
+    sb.append(COMPREHEND_CONTRACT_MIN).append("\n\n");
+    sb.append("Lane: ").append(menuFlow ? "menu_json" : "frontend_code").append("\n");
+    sb.append("Input scenario: ").append(String.valueOf(inputScenario == null ? "" : inputScenario)).append("\n\n");
+    if (!String.valueOf(sampleMenuDigest == null ? "" : sampleMenuDigest).isBlank()) {
+      sb.append("[SAMPLE_MENU_DIGEST]\n").append(sampleMenuDigest).append("\n[/SAMPLE_MENU_DIGEST]\n\n");
+    }
+    if (!String.valueOf(sampleCodeDigest == null ? "" : sampleCodeDigest).isBlank()) {
+      sb.append("[SAMPLE_CODE_DIGEST]\n").append(sampleCodeDigest).append("\n[/SAMPLE_CODE_DIGEST]\n\n");
+    }
+    if (!String.valueOf(tenantRag == null ? "" : tenantRag).isBlank()) {
+      sb.append("[TENANT_RAG]\n").append(tenantRag).append("\n[/TENANT_RAG]\n\n");
+    }
+    sb.append("[USER_REQUEST]\n")
+        .append(trimToMax(String.valueOf(userRequest == null ? "" : userRequest), Math.max(500, localSlotUserRequestChars)))
+        .append("\n[/USER_REQUEST]\n\n");
+    sb.append("Return ONLY one JSON object matching BusinessSpec schema. No markdown.\n");
+    return sb.toString();
+  }
+
+  /** PHẦN AC greenfield worker guardrail appended to minimal prompt on weak local models. */
+  public String buildGreenfieldWorkerContract(AiFlowIntent intent, String operationScenario, boolean greenfield) {
+    if (!greenfield) {
+      return "";
+    }
+    String scenario = String.valueOf(operationScenario == null ? "new_build" : operationScenario).trim().toLowerCase(Locale.ROOT);
+    if (intent == AiFlowIntent.MENU_JSON) {
+      return """
+          ## GREENFIELD MENU CONTRACT
+          operation_scenario=%s
+          - Return COMPLETE menu JSON envelope: { "menu": [...], "notes": [], "warnings": [] }
+          - Every functional node needs type_form, table_name (type 1/2/6), trigger, vi/en/zh labels.
+          - Do NOT return empty menu when user asked to create/design.
+          """.formatted(scenario);
+    }
+    if (intent == AiFlowIntent.FRONTEND_CODE) {
+      return """
+          ## GREENFIELD CODE CONTRACT
+          - Return JSON envelope: { "code": "<full DynamicCode string>", "summary": "...", "changes": [] }
+          - Include window.seft / ctx.helperApi CSM patterns.
+          - Do NOT return empty code when user asked to create module.
+          """;
+    }
+    return "";
+  }
+
+  private static final String COMPREHEND_CONTRACT_MIN = """
+      [BUSINESS_COMPREHEND_CONTRACT]
+      You are a CSM ERP business analyst. Infer domain from USER_REQUEST + optional sample digests.
+      Merge sample patterns with user_delta — user request wins on conflict.
+      Output JSON only:
+      {
+        "domain_summary": "...",
+        "modules": ["..."],
+        "tables": ["..."],
+        "flows": ["..."],
+        "triggers_learned_from_sample": ["..."],
+        "code_patterns_from_sample": ["..."],
+        "user_delta": "...",
+        "assumptions": ["..."],
+        "risks": ["..."]
+      }
+      [/BUSINESS_COMPREHEND_CONTRACT]
+      """;
+
   private String buildPromptLanguageBlock(String uiLanguage, String userRequest) {
     String lang = String.valueOf(uiLanguage == null ? "" : uiLanguage).trim().toLowerCase(Locale.ROOT);
     if (lang.isBlank()) {

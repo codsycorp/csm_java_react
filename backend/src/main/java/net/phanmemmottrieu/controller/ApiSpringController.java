@@ -73,6 +73,7 @@ import net.phanmemmottrieu.service.AiIncrementalStepExecutorService;
 import net.phanmemmottrieu.service.AiAdaptiveRetryPolicy;
 import net.phanmemmottrieu.service.AiLocalRuntimeTierService;
 import net.phanmemmottrieu.service.AiEditTaskPlannerService;
+import net.phanmemmottrieu.service.AiGreenfieldBusinessDesignService;
 import net.phanmemmottrieu.service.AiLocalWorkflowAdvisorService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
@@ -528,6 +529,9 @@ public class ApiSpringController {
 
     @Autowired(required = false)
     private AiEditTaskPlannerService aiEditTaskPlannerService;
+
+    @Autowired(required = false)
+    private AiGreenfieldBusinessDesignService aiGreenfieldBusinessDesignService;
 
     @Autowired(required = false)
     private AiAgentHarnessTraceService aiAgentHarnessTraceService;
@@ -1920,6 +1924,8 @@ public class ApiSpringController {
                         cursorLine,
                         planFocusStartLine,
                         planFocusEndLine);
+                AiGreenfieldBusinessDesignService.ComprehensionResult businessComprehensionResult =
+                    AiGreenfieldBusinessDesignService.ComprehensionResult.skipped();
                 if (editTaskPlan.enabled()) {
                     sendEvent(emitter, jsonOf(
                         "stage", "edit_task_plan",
@@ -2235,6 +2241,92 @@ public class ApiSpringController {
                         "none",
                         null
                     );
+                    if (!codeDebugAnalyzeFastPath
+                            && aiGreenfieldBusinessDesignService != null
+                            && aiGreenfieldBusinessDesignService.isEnabled()) {
+                        sendEvent(emitter, jsonOf(
+                            "stage", "business_comprehend",
+                            "status", "running",
+                            "requestId", requestId,
+                            "message", uiTextByLang(
+                                uiLang,
+                                "Đang phân tích nghiệp vụ (Comprehend) từ yêu cầu và mẫu tham chiếu",
+                                "Analyzing business context (Comprehend) from request and reference samples",
+                                "正在从请求和参考样本分析业务（Comprehend）")));
+                        businessComprehensionResult = aiGreenfieldBusinessDesignService.runComprehensionPipeline(
+                            appId,
+                            message,
+                            effectiveCodeContext,
+                            orchestrationAttachments,
+                            contextType,
+                            responseMode,
+                            "",
+                            editTaskPlan,
+                            editorMetadata);
+                        if (businessComprehensionResult.activated()) {
+                            if (aiEditTaskPlannerService != null) {
+                                editTaskPlan = aiEditTaskPlannerService.enrichFromBusinessSpec(
+                                    editTaskPlan,
+                                    businessComprehensionResult.businessSpec(),
+                                    businessComprehensionResult.executionPlan());
+                            }
+                            sendEvent(emitter, jsonOf(
+                                "stage", "business_comprehend",
+                                "status", "completed",
+                                "requestId", requestId,
+                                "modules", businessComprehensionResult.businessSpec().modules() == null
+                                    ? 0
+                                    : businessComprehensionResult.businessSpec().modules().size(),
+                                "inputScenario", businessComprehensionResult.inputScenario().name(),
+                                "greenfield", businessComprehensionResult.greenfield(),
+                                "message", uiTextByLang(
+                                    uiLang,
+                                    "Đã hiểu nghiệp vụ — " + (businessComprehensionResult.businessSpec().modules() == null
+                                        ? 0
+                                        : businessComprehensionResult.businessSpec().modules().size()) + " module",
+                                    "Business context ready — "
+                                        + (businessComprehensionResult.businessSpec().modules() == null
+                                        ? 0
+                                        : businessComprehensionResult.businessSpec().modules().size()) + " modules",
+                                    "业务理解完成 — "
+                                        + (businessComprehensionResult.businessSpec().modules() == null
+                                        ? 0
+                                        : businessComprehensionResult.businessSpec().modules().size()) + " 个模块")));
+                            sendEvent(emitter, jsonOf(
+                                "stage", "business_plan",
+                                "status", "ready",
+                                "requestId", requestId,
+                                "operationScenario", businessComprehensionResult.operationScenario(),
+                                "outputContract", businessComprehensionResult.executionPlan().outputContract(),
+                                "stepCount", businessComprehensionResult.executionPlan().steps() == null
+                                    ? 0
+                                    : businessComprehensionResult.executionPlan().steps().size(),
+                                "targetSymbols", editTaskPlan.targetSymbols(),
+                                "sliceCount", editTaskPlan.slices() == null ? 0 : editTaskPlan.slices().size(),
+                                "message", uiTextByLang(
+                                    uiLang,
+                                    "Đã lập kế hoạch thực thi (ExecutionPlan)",
+                                    "Execution plan ready (ExecutionPlan)",
+                                    "执行计划已就绪 (ExecutionPlan)")));
+                            emitToolTrace(
+                                emitter,
+                                requestId,
+                                "business_comprehension",
+                                "completed",
+                                "scenario=" + businessComprehensionResult.inputScenario().name(),
+                                compactToolDigest(businessComprehensionResult.businessSpec().domainSummary(), 180),
+                                0,
+                                0,
+                                "none",
+                                "none",
+                                businessComprehensionResult.telemetry());
+                            if (!businessComprehensionResult.promptInjectionBlock().isBlank()) {
+                                messageWithReuse = messageWithReuse
+                                    + "\n\n"
+                                    + businessComprehensionResult.promptInjectionBlock();
+                            }
+                        }
+                    }
                     if (codeDebugAnalyzeFastPath) {
                         sendEvent(emitter, jsonOf(
                             "stage", "assistant_orchestration",
@@ -3068,6 +3160,13 @@ public class ApiSpringController {
                         pType);
                 }
                 codeStreamMeta.put("codeDebugAnalyzeFastPath", codeDebugAnalyzeFastPath);
+                if (businessComprehensionResult.activated()) {
+                    codeStreamMeta.put("businessComprehensionActive", true);
+                    codeStreamMeta.put("businessComprehensionGreenfield", businessComprehensionResult.greenfield());
+                    codeStreamMeta.put("businessComprehensionOperationScenario", businessComprehensionResult.operationScenario());
+                    codeStreamMeta.put("businessComprehensionBlock", businessComprehensionResult.promptInjectionBlock());
+                    codeStreamMeta.put("businessComprehensionTelemetry", businessComprehensionResult.telemetry());
+                }
                 codeStreamMeta.put("runtimeTier", aiLocalRuntimeTierService.resolveTier().name());
                 codeStreamMeta.put("weakMachine", aiLocalRuntimeTierService.isWeakMachine());
                 codeStreamMeta.put("appId", appId);
@@ -3972,6 +4071,29 @@ public class ApiSpringController {
                                 if (retryScore > previousScore && retryText != null && !retryText.isBlank()) {
                                     providerText = retryText;
                                     previousScore = retryScore;
+                                }
+                            }
+                        }
+
+                        if (!localAccepted
+                                && aiGreenfieldBusinessDesignService != null
+                                && businessComprehensionResult.activated()
+                                && businessComprehensionResult.greenfield()) {
+                            String seeded = aiGreenfieldBusinessDesignService.applyDeterministicSeedIfNeeded(
+                                providerText,
+                                businessComprehensionResult,
+                                contextType);
+                            if (!seeded.isBlank()) {
+                                providerText = seeded;
+                                lastLocalProviderText = seeded;
+                                if (isMenuJsonContext(contextType)) {
+                                    localAccepted = aiAssistantGatewayService == null
+                                        || aiAssistantGatewayService.isMenuJsonOutputActionable(seeded);
+                                } else {
+                                    localAccepted = seeded.length() > 80;
+                                }
+                                if (localAccepted) {
+                                    codeStreamMeta.put("businessComprehensionDeterministicSeed", true);
                                 }
                             }
                         }
@@ -8572,6 +8694,12 @@ public class ApiSpringController {
             sb.append("Khi ngữ cảnh chưa đủ, phải dựa vào CURRENT STATE + STATIC ANALYSIS + LOCAL_SEMANTIC_SEARCH_CONTEXT bên dưới.\n\n");
         }
 
+        if ("edit".equalsIgnoreCase(responseMode) && promptCurrentCode.isBlank()) {
+            sb.append("## GREENFIELD_EDITOR\n");
+            sb.append("Editor đang trống — tạo output đầy đủ theo BUSINESS_COMPREHENSION / yêu cầu user.\n");
+            sb.append("Menu: { \"menu\": [FULL_TREE] }. Code: { \"code\": \"...\" } envelope.\n\n");
+        }
+
         if (!localContextBundle.retrievalBlock().isBlank()) {
             sb.append(localContextBundle.retrievalBlock()).append("\n\n");
         }
@@ -10447,8 +10575,20 @@ public class ApiSpringController {
                     ? String.valueOf(streamMeta.getOrDefault("scopedRagBlock", "")) : "";
                 String localMem = streamMeta != null
                     ? String.valueOf(streamMeta.getOrDefault("continuityMemory", "")) : "";
+                String businessBlock = streamMeta != null
+                    ? String.valueOf(streamMeta.getOrDefault("businessComprehensionBlock", "")).trim() : "";
+                String greenfieldContract = "";
+                if (streamMeta != null
+                        && Boolean.TRUE.equals(streamMeta.get("businessComprehensionGreenfield"))
+                        && aiAssistantGatewayService != null) {
+                    greenfieldContract = aiAssistantGatewayService.buildGreenfieldWorkerContract(
+                        localIntent,
+                        String.valueOf(streamMeta.getOrDefault("businessComprehensionOperationScenario", "new_build")),
+                        true);
+                }
+                String combinedBusiness = (businessBlock + "\n" + greenfieldContract).trim();
                 localBasePrompt = aiAssistantGatewayService.buildLocalMinimalPrompt(
-                    localIntent, localCurrentCode, localRag, localMem, userMessage);
+                    localIntent, localCurrentCode, localRag, localMem, userMessage, "", combinedBusiness);
             } else {
                 localBasePrompt = clampPromptForLocalProvider(prompt, contextType, responseMode);
             }

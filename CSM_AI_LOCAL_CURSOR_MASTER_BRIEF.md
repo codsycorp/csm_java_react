@@ -1,9 +1,27 @@
 # CSM AI LOCAL — MASTER BRIEF CHO CURSOR AI
 ## Một file duy nhất để yêu cầu Cursor làm lại / hoàn thiện hệ thống
 
-Version: **3.6** · 2026-05-27  
+Version: **3.8** · 2026-05-27  
 Repo: `csm_server`  
 **Single source of truth** — dùng file này khi yêu cầu Cursor implement / làm lại CSM AI Local **và** domain System Management liên quan RAG.
+
+### Changelog v3.8
+
+| Mục | Trạng thái |
+|-----|------------|
+| **AC.0** — ma trận 3 kịch bản: greenfield thuần / greenfield + mẫu / sửa trên editor có sẵn | ✅ Spec |
+| Greenfield **không** có code/menu **và không** có mẫu — bắt buộc Comprehend từ yêu cầu + tenant RAG + master prompt | ✅ Spec |
+| Có mẫu code **và** mẫu menu — **bắt buộc** merge nghiệp vụ trước Plan (không nhảy thẳng Worker) | ✅ Spec |
+| Config `ai.local.business-comprehension.*` trong PHẦN H | ✅ Spec |
+
+### Changelog v3.7
+
+| Mục | Trạng thái |
+|-----|------------|
+| **PHẦN AC — Business Comprehension & Planning** — mẫu code + mẫu menu JSON → suy luận nghiệp vụ → kế hoạch → output chính xác | ✅ Spec (implement ⏳) |
+| Greenfield **và** có mẫu tham chiếu — bắt buộc Pass Comprehend trước Worker | ✅ Spec |
+| Slot budget + 2-pass infer trên **local-5gb** (5GB RAM / 2 CPU) — ổn định, không OOM | ✅ Spec |
+| AB.1 / AB.2 / AB.8 bổ sung input mẫu + checklist nghiệm thu | ✅ |
 
 ### Changelog v3.6
 
@@ -173,11 +191,13 @@ Copy toàn bộ file (hoặc @-mention file này) vào Cursor Chat, kèm prompt 
 ```txt
 Đọc @CSM_AI_LOCAL_CURSOR_MASTER_BRIEF.md và triển khai đầy đủ theo spec Cursor-aligned.
 Bám **PHẦN AB — 5 luồng sản xuất** (menu / code / suy luận / SEO+guest / ảnh-video).
+Bám **PHẦN AC — Business Comprehension & Planning** khi có mẫu code/menu JSON hoặc greenfield.
 Ưu tiên: (1) routing edit/analyze đúng, (2) prompt nhỏ trên file lớn, (3) edit trả textEdits apply CodeMirror,
 (4) tenant RAG + ACL filter khi hỏi domain org/permission/menu.
 (5) Mọi patch tính trên **full currentCode string** (1-based lines) — KHÔNG coi như file path (PHẦN V).
+(6) Pass Comprehend → Plan trước Worker; giữ infer tuần tự max-concurrent=1 trên local-5gb (PHẦN AC).
 Không over-engineer. Sửa đúng các file đã liệt kê. Compile backend + không phá frontend SSE.
-Máy target: local-5gb (5GB RAM, 2 CPU, qwen2.5-coder-1.5b Q4_K_M).
+Máy target: local-5gb (5GB RAM, 2 CPU, qwen2.5-coder-1.5b Q4_K_M) — **bắt buộc ổn định**.
 Sau khi xong: commit + push theo PHẦN P nếu user yêu cầu đồng bộ git.
 ```
 
@@ -1022,6 +1042,18 @@ ai.context.ingestion.tenant-snapshot.enabled=true
 ai.context.ingestion.tenant-snapshot.tables=csm_roles,csm_depts,csm_branches
 ai.context.ingestion.tenant-snapshot.merge-csm-roles=true
 ai.retrieval.auth.filter-enabled=true
+
+# PHẦN AC — Business Comprehension (local-5gb safe)
+ai.local.business-comprehension.enabled=true
+ai.local.business-comprehension.required-on-greenfield=true
+ai.local.business-comprehension.required-on-sample-attachment=true
+ai.local.business-comprehension.comprehend-max-tokens=512
+ai.local.business-comprehension.worker-max-tokens=768
+ai.local.business-comprehension.sequential-infer=true
+ai.local.business-comprehension.deterministic-seed-fallback=true
+ai.local.greenfield.enabled=true
+ai.local.greenfield.menu-seed-module-count=1
+ai.local.greenfield.code-scaffold-template=csm_dynamiccode_v1
 ```
 
 Launch:
@@ -1214,6 +1246,13 @@ P2 — Knowledge Mastery [v2.3]
   □ ai_code_learning jsonl sau edit thành công (v2.4)
   □ Hybrid BM25 + vector retrieval
   □ Citations trong analyze response
+
+P1 — Business Comprehension & Planning [v3.7 — PHẦN AC]
+  □ AiGreenfieldBusinessDesignService (BusinessSpec + digest mẫu)
+  □ Pass Comprehend → Plan tuần tự trước Worker (local-5gb safe)
+  □ SSE business_comprehend / business_plan
+  □ Greenfield menu + code với mẫu attachment
+  □ Checklist AC.7 trên ./run-server.sh
 
 P2 — Polish
   □ Agentic progress không block fast path
@@ -3063,7 +3102,9 @@ Chi tiết đầy đủ: **PHẦN Y** (LMKT zero-JS-change contract).
 
 ---
 
-# PHẦN AB — 5 LUỒNG AI LOCAL (CANONICAL · v3.6)
+# PHẦN AB — 5 LUỒNG AI LOCAL (CANONICAL · v3.7)
+
+> **Bổ sung v3.7–v3.8:** Mọi lane menu/code edit **bắt buộc PHẦN AC** khi greenfield hoặc có mẫu tham chiếu. Target ổn định: **`./run-server.sh` / local-5gb** (5GB RAM, 2 CPU).
 
 > **Mục tiêu vận hành:** Hệ thống đã tương đối ổn định — mỗi loại yêu cầu khách **một lane riêng**, client **chờ kết quả cuối hợp lệ**, backend có thể nhiều bước nội bộ nhưng **không** để user poll job/pipeline.
 
@@ -3116,14 +3157,17 @@ flowchart TB
 | Nội dung yêu cầu nghiệp vụ | ✅ | "Thêm module X", "Sửa trigger đơn hàng", … |
 | Chuẩn md hệ thống | ✅ (backend) | `ai_menu_master_prompt.md` — khung sườn bảng, `f_types`, trigger, flowType |
 | JSON menu hiện tại | Optional | Thiếu → thiết kế mới; có → nâng cấp / patch theo yêu cầu |
+| **Mẫu menu JSON** (reference / sample) | Khuyến nghị mạnh | Attachment `legacy_json` hoặc `sample_menu_compact` — **PHẦN AC** |
+| **Mẫu code DynamicCode** | Khuyến nghị mạnh | Attachment `reference_code` / `business_logic` — AI học pattern trước khi sửa/tạo |
 
 **Backend phải làm (thứ tự):**
 
 1. **Classify** `EDIT_MENU` → `responseMode=edit` bắt buộc
-2. **Phân tích nghiệp vụ** → agentic plan: bước nào, bảng nào (`m_configs`, `sys_*`), field nào
-3. **Nhãn cột 3 ngôn ngữ** (`f_header`, `f_header_vi/en/zh`) — đúng contract menu master
-4. **Trigger / type_form / tbl_services** — khớp nghiệp vụ, không generic
-5. **Worker** sinh menu JSON hoặc `patches` → gate validate → SSE apply
+2. **Comprehend (PHẦN AC)** — đọc mẫu menu + mẫu code (nếu có) → `BusinessSpec` nghiệp vụ đầy đủ
+3. **Plan** — lập kế hoạch module/bảng/trigger/label 3 ngôn ngữ khớp yêu cầu user + mẫu
+4. **Nhãn cột 3 ngôn ngữ** (`f_header`, `f_header_vi/en/zh`) — đúng contract menu master
+5. **Trigger / type_form / tbl_services** — khớp nghiệp vụ, không generic
+6. **Worker** sinh menu JSON hoặc `patches` → gate validate → SSE apply
 
 **File then chốt:**
 
@@ -3146,7 +3190,9 @@ flowchart TB
 | Thành phần | Bắt buộc | Ghi chú |
 |------------|----------|---------|
 | Yêu cầu (sửa lỗi, nâng cấp, thêm tính năng) | ✅ | "sửa webview", "fix timerRegistry", … |
-| `currentCode` (code string) | Optional | Thiếu → hỏi/plan trên pattern; có → patch chính xác dòng |
+| `currentCode` (code string) | Optional | Thiếu → greenfield scaffold; có → patch chính xác dòng |
+| **Mẫu code tham chiếu** | Khuyến nghị mạnh | Module tương tự trong attachment — AI **bắt buộc** Comprehend trước (PHẦN AC) |
+| **Mẫu menu JSON** | Khuyến nghị (cross-lane) | Giúp đồng bộ trigger/table naming khi code gọi menu API |
 | Cursor / selection | Khuyến nghị | Không bôi đen → scope **full string** (v2.9); có selection → slice vùng chọn |
 
 **Backend phải hiểu DynamicCode CSM:**
@@ -3253,6 +3299,244 @@ Kịch bản text + assets
 | 4a | SEO one-shot → 1 HTTP sync, JSON 12 field | ☐ |
 | 4b | Guest chat → 1 tin sync, fallback khi overload | ☐ |
 | 5 | Ảnh attach → scan → mô tả trong RAG (render file ⏳) | ☐ |
+| 6 | **AC:** Có mẫu menu + yêu cầu → BusinessSpec + plan trước JSON/patches | ☐ |
+| 7 | **AC:** Có mẫu code + yêu cầu → BusinessSpec + plan trước textEdits/full code | ☐ |
+| 8 | **AC:** Greenfield thuần (không editor, không mẫu) → menu/code apply được trên 5GB | ☐ |
+| 9 | **AC:** Greenfield + mẫu code **và** mẫu menu → BusinessSpec merge → output chính xác | ☐ |
+| 10 | **AC:** 2 request liên tiếp trên server 5GB — không OOM, max-concurrent=1 | ☐ |
+
+---
+
+# PHẦN AC — BUSINESS COMPREHENSION & PLANNING (GREENFIELD + MẪU CODE / MENU)
+
+> **Yêu cầu sản phẩm (bắt buộc):**
+>
+> 1. **Tư duy nghiệp vụ khách hàng** — hiểu module, bảng, luồng, trigger, quyền, pattern code CSM.
+> 2. **Thiết kế chính xác** menu JSON và/hoặc DynamicCode — kể cả **từ đầu** khi editor **chưa có** code/menu.
+> 3. **Khi có mẫu** code và/hoặc menu JSON — AI **bắt buộc tự suy nghĩ** đọc hiểu mẫu, **kết hợp** yêu cầu user, **lập kế hoạch đầy đủ**, rồi mới trả kết quả.
+> 4. **Vận hành:** Luôn ổn định trên **máy chủ yếu 5GB RAM / 2 CPU** (`local-5gb`, `./run-server.sh`).
+>
+> **Cấm:** Nhảy thẳng từ user message → Worker mà không qua Comprehend + Plan (trừ Lane 3 analyze thuần).
+
+## AC.0 Ba kịch bản đầu vào (ma trận bắt buộc)
+
+| # | Editor | Mẫu menu | Mẫu code | AI phải làm | Output |
+|---|--------|----------|----------|-------------|--------|
+| **A** | Trống | ❌ | ❌ | Comprehend từ **USER_REQUEST** + tenant RAG + **master prompt** (`ai_menu_*` / `ai_code_*`) → Plan → Worker + **seed scaffold** nếu model yếu | Full menu tree hoặc full code CSM |
+| **B** | Trống hoặc có | ✅ (attachment / sampleMenus) | ❌ hoặc ✅ | Comprehend **digest mẫu** (không full paste) + merge user delta → Plan → Worker | Menu JSON / code khớp pattern mẫu |
+| **C** | Có code/menu | Optional | Optional | Comprehend (nếu có mẫu hoặc multi-module) → Plan slices → **`textEdits` / patches** trên full string | Patch apply CodeMirror |
+
+**Kịch bản B — cả mẫu menu và mẫu code cùng lúc:**
+
+```txt
+USER_REQUEST
+  + SAMPLE_MENU_DIGEST  → triggers, type_form, tbl, i18n labels
+  + SAMPLE_CODE_DIGEST  → ctx.helperApi, lifecycle, form/list pattern
+  + TENANT_RAG          → role/dept/branch
+        ↓
+  BusinessSpec (merge — không ưu tiên mẫu hơn user)
+        ↓
+  ExecutionPlan (bước menu trước hay code trước — theo yêu cầu)
+        ↓
+  Worker (tuần tự từng deliverable nếu cần 2 output)
+```
+
+**Kịch bản A — greenfield thuần (không mẫu):**
+
+- Nguồn nghiệp vụ: message user + attachment spec `.md` (nếu có) + Lucene tenant + **menu_type_catalog** / **code master** (backend load, không từ user).
+- Plan **bắt buộc** liệt kê `assumptions` + `risks` trong `BusinessSpec`.
+- Worker: `operation_scenario=new_build` (menu) hoặc contract `{ "code": "..." }` (code).
+- Fail model → **deterministic seed** (1 module menu CSM chuẩn / header DynamicCode `window.seft` + `ctx.helperApi`) — tương tự SEO `buildDeterministicCreativeParamsFallback`.
+
+## AC.1 Khi nào kích hoạt
+
+| Tín hiệu | Kích hoạt Comprehend → Plan |
+|----------|----------------------------|
+| Attachment `legacy_json` / `reference_code` / `business_logic` / `system_requirement` | ✅ Luôn |
+| `sample_menu_compact` / `sampleMenus` trong payload menu (`request_schema` v2) | ✅ Luôn |
+| Editor **trống** + yêu cầu tạo mới (**greenfield**, kể cả **không** mẫu — kịch bản A) | ✅ Luôn |
+| Editor **trống** + có mẫu code và/hoặc mẫu menu (kịch bản B) | ✅ Luôn — **merge** cả hai digest |
+| Editor **có** code/menu lớn + yêu cầu sửa phức tạp (kịch bản C) | ✅ Khuyến nghị |
+| Câu analyze đơn giản, không sửa | ❌ Lane 3 — không Comprehend patch |
+
+**Nguyên tắc:**
+
+- Mẫu **không** thay thế yêu cầu user — merge `learned_from_sample` + `user_delta`.
+- Greenfield **không** mẫu vẫn phải Comprehend — nguồn là master prompt + tenant, không được skip vì “thiếu input”.
+
+## AC.2 Nguồn mẫu (input)
+
+| Nguồn | Vai trò | Frontend | Backend ingest |
+|-------|---------|----------|----------------|
+| **Mẫu menu JSON** | Cấu trúc module, `type_form`, trigger, i18n | `AiMenuDesigner` → `sampleMenus`, context file `legacy_json` | `AiScopedContextIngestionService.ingestMenu` (sync khi cần RAG) |
+| **Mẫu code DynamicCode** | Pattern `ctx.helperApi`, lifecycle, form/list | Attachment `reference_code` / `business_logic` | Chunk → Lucene `dyn_ctx_*` (async nếu >45k) |
+| **Spec markdown** | Yêu cầu nghiệp vụ authoritative | Attachment `system_requirement` | `indexMarkdown` |
+| **Tenant snapshot** | Role/dept/branch, quyền menu | Tự động backend | `AiTenantKnowledgeIngestionService` |
+| **Editor hiện tại** | Surface cần sửa | `currentCode` string | Region plan / planner slices |
+
+## AC.3 Pipeline 4 pass (bắt buộc trên local-5gb)
+
+```mermaid
+flowchart LR
+  subgraph P1 [Pass 1 Comprehend]
+    S[Mẫu menu + mẫu code + tenant RAG]
+    B[BusinessSpec JSON]
+    S --> B
+  end
+  subgraph P2 [Pass 2 Plan]
+    B --> PL[ExecutionPlan: modules steps risks]
+    U[USER_REQUEST] --> PL
+  end
+  subgraph P3 [Pass 3 Worker]
+    PL --> W[Sinh menu JSON / textEdits / full code]
+  end
+  subgraph P4 [Pass 4 Gate]
+    W --> G[MenuQualityGate / AST / pattern CSM]
+    G --> OUT[Apply editor]
+  end
+```
+
+### Pass 1 — Comprehend (suy luận nghiệp vụ)
+
+**Input slot (weak-5gb cap):**
+
+| Slot | Max chars (5GB) | Nội dung |
+|------|-----------------|----------|
+| `[SAMPLE_MENU_DIGEST]` | 4000 | Compact tree: module, id, type_form, table_name, trigger keys |
+| `[SAMPLE_CODE_DIGEST]` | 6000 | Symbol list + anchor excerpts (lifecycle, API calls) — **không** full file |
+| `[TENANT_RAG]` | 2800 | Roles, branches, domain rules |
+| `[USER_REQUEST]` | 3200 | Yêu cầu user nguyên văn |
+
+**Output `BusinessSpec` (JSON nội bộ, không stream user):**
+
+```json
+{
+  "domain_summary": "Quản lý đơn hàng B2B — list, form, duyệt, in",
+  "modules": ["Đơn hàng", "Khách hàng"],
+  "tables": ["m_configs", "sys_orders"],
+  "flows": ["list → form → save → approve"],
+  "triggers_learned_from_sample": ["filter status=1", "tbl_services=order"],
+  "code_patterns_from_sample": ["ctx.helperApi.post", "timerRegistry", "fnResetIP"],
+  "user_delta": "Thêm cột ghi chú + sửa trigger theo chi nhận",
+  "assumptions": ["Giữ cấu trúc module mẫu, chỉ mở rộng leaf form"],
+  "risks": ["Thiếu role_code — dùng admin_full tạm"]
+}
+```
+
+**Triển khai đích:** `AiGreenfieldBusinessDesignService.buildBusinessSpec(...)` — gọi `generateContentFast` **một lần**, max-tokens ≈ **512**, temp thấp.
+
+**SSE (optional, Composer):** `stage=business_comprehend`, `status=completed`, `modules=N`.
+
+### Pass 2 — Plan (lập kế hoạch đầy đủ)
+
+**Input:** `BusinessSpec` + contract lane (menu vs code) + `operation_scenario` (`new_build` | `incremental_update`).
+
+**Output `ExecutionPlan` (JSON nội bộ):**
+
+```json
+{
+  "scenario": "incremental_update",
+  "steps": [
+    { "id": "s1", "action": "patch_menu_trigger", "target": "node order_list", "fields": ["trigger.filter"] },
+    { "id": "s2", "action": "textEdits", "symbols": ["loadOrderGrid", "onSaveOrder"], "lines_hint": "5810-5920" }
+  ],
+  "output_contract": "patches | textEdits | full_code",
+  "acceptance": ["Trigger khớp mẫu order module", "Label vi/en/zh đủ 3 ngôn ngữ"]
+}
+```
+
+**Triển khai đích:** tái sử dụng `AiEditTaskPlannerService.plan(...)` + enrich từ `BusinessSpec`; menu dùng `detected_modules` / `detected_tables` từ `AiMenuDesigner` payload.
+
+**SSE:** `stage=business_plan`, `sliceCount`, `targetSymbols` — **1 dòng** Composer (PHẦN U).
+
+### Pass 3 — Worker (sinh output)
+
+| Lane | Greenfield (editor trống) | Có editor + mẫu |
+|------|---------------------------|-----------------|
+| Menu | `{ "menu": [FULL_TREE] }` từ Plan + master prompt | `patches` hoặc full tree incremental |
+| Code | `{ "code": "..." }` scaffold CSM | `textEdits` 1-based trên **full** `currentCode` |
+
+**Prompt worker chỉ nhận:** `BusinessSpec` (rút gọn ≤2k chars) + `ExecutionPlan` + excerpt editor (region plan) — **không** nhét lại full mẫu.
+
+### Pass 4 — Gate + retry có kiểm soát
+
+| Gate | Fail → |
+|------|--------|
+| `MenuQualityGateService` | Retry worker **1 lần** với lỗi gate trong prompt; vẫn fail → `need_more_context` |
+| Code AST / pattern CSM | `tryEditFocusedLocalFallback` → deterministic lifecycle (PHẦN F) |
+| Model echo schema | `validateOrFallbackLocal` + seed scaffold (menu 1-module / code header CSM) |
+
+## AC.4 Slot budget — đảm bảo ổn định 5GB / 2 CPU
+
+| Quy tắc | Giá trị local-5gb |
+|---------|-------------------|
+| Infer LLM song song | **max-concurrent-requests=1** |
+| Comprehend + Plan + Worker | **Tuần tự** — không 3 infer cùng lúc |
+| Tổng prompt 1 infer | ≤ **32000** chars (`ai.local.llama.max-prompt-chars`) |
+| Worker effective prompt weak | ≤ **18000** (`weak-profile.local-provider.max-prompt-chars`) |
+| Comprehend max-tokens | **512** |
+| Plan (planner) | Heuristic + 0–1 infer ngắn |
+| Worker max-tokens | **768** (edit) |
+| Mẫu menu/code raw | Index Lucene → top-K vào `[RETRIEVED_CONTEXT]` — **không** paste full vào prompt |
+| Mẫu >45k chars | Async vector ingest; request hiện tại dùng digest + region plan |
+| Vision sidecar | On-demand; **unload** sau scan — không cùng lúc Comprehend |
+| JVM heap | **1536m** — `./run-server.sh`, profile `local-5gb` |
+
+**Load shedding:** `ai.local.llama.load-shed.enabled=true` — từ chối infer mới khi free heap <384MB; trả message rõ ràng, không treo SSE.
+
+## AC.5 Hợp đồng với Lane 1 & 2
+
+| Tình huống | Kịch bản | `operation_scenario` | Output contract |
+|------------|----------|---------------------|-----------------|
+| Không menu editor, **không** mẫu | **A** | `new_build` | Full `{ "menu": [...] }` + seed fallback |
+| Không menu editor + có mẫu menu | **B** | `new_build` | Full tree bám pattern mẫu |
+| Có menu editor + mẫu + sửa | **B/C** | `incremental_update` | Full tree hoặc `patches` |
+| Không code editor, **không** mẫu | **A** | greenfield code | `{ "code": "..." }` scaffold CSM |
+| Không code editor + có mẫu code | **B** | greenfield code | `{ "code": "..." }` clone pattern |
+| Có code editor + mẫu + sửa | **C** | incremental | `textEdits` (ưu tiên) |
+| Có **cả** mẫu menu + mẫu code | **B** | theo lane | Plan nêu thứ tự deliverable; Worker tuần tự |
+
+**Frontend bắt buộc gửi:**
+
+- Menu: `buildAiMenuGeneratePayload` / `buildAiMenuRefinePayload` — đã có `sample_menu_compact`, `detected_modules`
+- Code: attachment `contextRole` đúng + `authoritative=true` cho spec/mẫu chính
+
+## AC.6 File triển khai (Cursor checklist)
+
+| # | File | Việc |
+|---|------|------|
+| 1 | `AiGreenfieldBusinessDesignService.java` | **Mới** — detect sample/greenfield, Pass 1–2, digest mẫu |
+| 2 | `AiAssistantGatewayService.java` | Contract COMPREHEND + GREENFIELD menu/code |
+| 3 | `ApiSpringController.java` | Hook trước `buildCodingPrompt` / orchestration; SSE stages |
+| 4 | `AiEditTaskPlannerService.java` | Enrich plan từ `BusinessSpec` |
+| 5 | `AiLocalOrchestrationService.java` | Ingest mẫu attachment trước RAG search |
+| 6 | `application-local-5gb.properties` | `ai.local.greenfield.*`, token caps |
+| 7 | `AiMenuDesigner.tsx` | Đảm bảo sample + scenario luôn gửi khi có mẫu |
+| 8 | `CodeEditor.tsx` | Gợi ý attach mẫu module khi editor trống |
+
+## AC.7 Checklist nghiệm thu (local-5gb server)
+
+| # | Test | Pass |
+|---|------|------|
+| AC.1 | Đính kèm mẫu menu JSON + yêu cầu "thêm module X giống mẫu" → JSON có trigger/table/3 ngôn ngữ | ☐ |
+| AC.2 | Đính kèm mẫu code + yêu cầu "clone pattern list/form" → full code hoặc textEdits apply | ☐ |
+| AC.3 | Editor trống + mẫu code + yêu cầu tạo module mới → output không rỗng, gate pass | ☐ |
+| AC.3b | Editor trống + **không mẫu** + mô tả nghiệp vụ → menu/code scaffold apply (kịch bản A) | ☐ |
+| AC.3c | Mẫu menu **+** mẫu code + yêu cầu → BusinessSpec merge đủ cả hai | ☐ |
+| AC.4 | Log/SSE có `business_comprehend` + `business_plan` (hoặc `edit_task_plan` enriched) | ☐ |
+| AC.5 | Prompt worker ≤18k chars effective trên weak (telemetry `promptChars`) | ☐ |
+| AC.6 | 2 request edit liên tiếp — không OOM, thời gian <3 phút/request typ. | ☐ |
+| AC.7 | Không load vision + worker + comprehend cùng lúc (RAM 5GB) | ☐ |
+
+## AC.8 Cấm (DO NOT) — 5GB
+
+| Cấm | Lý do |
+|-----|-------|
+| Paste full mẫu menu 200+ node vào prompt worker | OOM + model truncate |
+| Bỏ qua Comprehend khi có attachment authoritative | Patch sai nghiệp vụ |
+| Song song 2+ `generateContentFast` trên 1 JVM 5GB | RAM spike |
+| Trả `success` + `patches:[]` khi user yêu cầu sửa cụ thể | Gate phải reject |
+| Dùng cloud fallback khi `ai.local.only.enabled=true` | Policy local-only |
 
 ---
 

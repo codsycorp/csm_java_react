@@ -1170,6 +1170,16 @@ public class AiLocalOrchestrationService {
                     out.toolStats.put("scopedIngestionScopeSummary", scopeAnalysis.describe());
                 }
 
+                if (safeCode.isBlank() && !safeAttachments.isEmpty()) {
+                    ingestSampleAttachmentsWhenEditorEmpty(
+                        appId,
+                        safeAttachments,
+                        safeContextType,
+                        aggregateScopeMask,
+                        effectiveRequestId,
+                        out);
+                }
+
                 if ("menu_json".equals(safeContextType) && !safeCode.isBlank() && (aggregateScopeMask & AiScopedContextIngestionService.SCOPE_MENU) != 0) {
                     // Synchronous: menu data must be committed to Lucene before the retrieval search runs below.
                     // Async would cause a race where searchWithScopes runs before the index directory is created.
@@ -4751,5 +4761,65 @@ public class AiLocalOrchestrationService {
             sb.append("\n\n## TASK_FOCUS\n").append(focus);
         }
         return sb.toString().trim();
+    }
+
+    /**
+     * PHẦN AC — index sample menu/code attachments into Lucene when editor surface is empty (greenfield).
+     */
+    private void ingestSampleAttachmentsWhenEditorEmpty(
+        String appId,
+        List<Map<String, Object>> attachments,
+        String contextType,
+        int scopeMask,
+        String requestId,
+        OrchestrationResult out
+    ) {
+        if (aiScopedContextIngestionService == null || attachments == null || attachments.isEmpty()) {
+            return;
+        }
+        int ingested = 0;
+        for (Map<String, Object> attachment : attachments) {
+            if (attachment == null || attachment.isEmpty()) {
+                continue;
+            }
+            String role = str(attachment.get("contextRole")).toLowerCase(Locale.ROOT);
+            boolean authoritative = Boolean.TRUE.equals(attachment.get("authoritative"));
+            boolean sampleRole = "legacy_json".equals(role)
+                || "reference_code".equals(role)
+                || "business_logic".equals(role)
+                || "system_requirement".equals(role);
+            if (!sampleRole && !authoritative) {
+                continue;
+            }
+            String body = str(attachment.get("textContent"));
+            if (body.isBlank()) {
+                body = str(attachment.get("content"));
+            }
+            if (body.isBlank()) {
+                continue;
+            }
+            try {
+                boolean menuSample = "menu_json".equalsIgnoreCase(contextType)
+                    || "legacy_json".equals(role)
+                    || str(attachment.get("kind")).equalsIgnoreCase("json");
+                AiScopedContextIngestionService.IngestionResult result;
+                if (menuSample) {
+                    result = aiScopedContextIngestionService.ingestMenu(
+                        appId, body, scopeMask | AiScopedContextIngestionService.SCOPE_MENU, false, requestId);
+                } else {
+                    result = aiScopedContextIngestionService.ingestCode(
+                        appId, body, scopeMask | AiScopedContextIngestionService.SCOPE_CODE, false, requestId);
+                }
+                if (result != null && result.chunksIngested > 0) {
+                    ingested++;
+                }
+            } catch (Exception ex) {
+                log.debug("Sample attachment ingest skipped: {}", ex.getMessage());
+            }
+        }
+        if (ingested > 0) {
+            out.toolStats.put("sampleAttachmentIngestCount", ingested);
+            out.toolStats.put("sampleAttachmentIngestStatus", "completed");
+        }
     }
 }

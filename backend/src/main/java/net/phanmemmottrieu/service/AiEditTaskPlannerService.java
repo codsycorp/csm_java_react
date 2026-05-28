@@ -160,6 +160,72 @@ public class AiEditTaskPlannerService {
     }
 
     /**
+     * PHẦN AC — enrich planner output with BusinessSpec modules/symbols when comprehend pipeline ran.
+     */
+    public EditTaskPlan enrichFromBusinessSpec(
+        EditTaskPlan base,
+        AiGreenfieldBusinessDesignService.BusinessSpec spec,
+        AiGreenfieldBusinessDesignService.ExecutionPlan executionPlan
+    ) {
+        if (base == null || !base.enabled() || spec == null) {
+            return base;
+        }
+        LinkedHashSet<String> symbols = new LinkedHashSet<>();
+        if (base.targetSymbols() != null) {
+            symbols.addAll(base.targetSymbols());
+        }
+        if (spec.codePatternsFromSample() != null) {
+            for (String pattern : spec.codePatternsFromSample()) {
+                if (pattern != null && !pattern.isBlank()) {
+                    symbols.add(pattern);
+                }
+            }
+        }
+        if (executionPlan != null && executionPlan.steps() != null) {
+            for (AiGreenfieldBusinessDesignService.ExecutionStep step : executionPlan.steps()) {
+                if (step == null || step.fields() == null) {
+                    continue;
+                }
+                symbols.addAll(step.fields());
+            }
+        }
+        Map<String, Object> meta = new LinkedHashMap<>();
+        if (base.meta() != null) {
+            meta.putAll(base.meta());
+        }
+        meta.put("businessComprehension", true);
+        if (spec.modules() != null && !spec.modules().isEmpty()) {
+            meta.put("businessModules", spec.modules());
+        }
+        if (spec.domainSummary() != null && !spec.domainSummary().isBlank()) {
+            meta.put("businessDomainSummary", spec.domainSummary());
+        }
+        if (executionPlan != null && executionPlan.outputContract() != null) {
+            meta.put("businessOutputContract", executionPlan.outputContract());
+        }
+        List<String> ragQueries = new ArrayList<>(base.ragQueries() == null ? List.of() : base.ragQueries());
+        if (spec.modules() != null) {
+            for (String module : spec.modules()) {
+                if (module != null && !module.isBlank() && ragQueries.size() < 8) {
+                    ragQueries.add(module.trim());
+                }
+            }
+        }
+        return new EditTaskPlan(
+            true,
+            base.requestSummary(),
+            base.flowType(),
+            base.language(),
+            base.responseMode(),
+            new ArrayList<>(symbols),
+            ragQueries,
+            base.slices(),
+            base.multiSliceExecution(),
+            meta
+        );
+    }
+
+    /**
      * Build condensed editor context from planner slices (Cursor-style region injection).
      */
     public String buildCondensedContextFromPlan(EditTaskPlan plan, String fullCode, int maxChars) {
