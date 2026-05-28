@@ -236,8 +236,9 @@ public class AiGreenfieldBusinessDesignService {
         if (!isEnabled()) {
             return ComprehensionResult.skipped();
         }
-        String safeMessage = String.valueOf(message == null ? "" : message).trim();
+        // currentCode may be a retrieved slice (≤32k) for large-file analyze — not the full editor string.
         String safeCode = String.valueOf(currentCode == null ? "" : currentCode);
+        String safeMessage = String.valueOf(message == null ? "" : message).trim();
         String safeMode = String.valueOf(responseMode == null ? "edit" : responseMode).trim().toLowerCase(Locale.ROOT);
         String safeContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase(Locale.ROOT);
         List<Map<String, Object>> safeAttachments = attachments == null ? List.of() : attachments;
@@ -247,10 +248,10 @@ public class AiGreenfieldBusinessDesignService {
         boolean greenfield = !hasEditor;
         boolean menuFlow = "menu_json".equals(safeContext);
 
-        if ("analyze".equals(safeMode) && hasEditor && !hasSamples) {
+        if ("analyze".equals(safeMode) && hasEditor && !hasSamples && !isAnalyzeBusinessQuestion(safeMessage)) {
             return ComprehensionResult.skipped();
         }
-        if (!shouldActivate(greenfield, hasSamples, hasEditor, safeMode)) {
+        if (!shouldActivate(greenfield, hasSamples, hasEditor, safeMode, safeMessage)) {
             return ComprehensionResult.skipped();
         }
 
@@ -289,8 +290,12 @@ public class AiGreenfieldBusinessDesignService {
             greenfield,
             editTaskPlan,
             safeMessage,
-            menuScan);
-        String block = buildWorkerPromptBlock(spec, plan, workerPromptBlockMaxChars);
+            menuScan,
+            safeMode,
+            codeScan);
+        String block = "analyze".equals(safeMode)
+            ? buildAnalyzeBusinessPromptBlock(spec, plan, codeScan, menuFlow, workerPromptBlockMaxChars)
+            : buildWorkerPromptBlock(spec, plan, workerPromptBlockMaxChars);
 
         Map<String, Object> telemetry = new LinkedHashMap<>();
         telemetry.put("inputScenario", scenario.name());
@@ -360,8 +365,43 @@ public class AiGreenfieldBusinessDesignService {
         return seed;
     }
 
-    private boolean shouldActivate(boolean greenfield, boolean hasSamples, boolean hasEditor, String responseMode) {
-        if (!"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+    /** Analyze requests asking what the code does business-wise (not narrow symbol debug). */
+    public static boolean isAnalyzeBusinessQuestion(String message) {
+        String text = String.valueOf(message == null ? "" : message).trim().toLowerCase(Locale.ROOT);
+        if (text.isBlank()) {
+            return false;
+        }
+        String normalized = text
+            .replace('đ', 'd').replace('Đ', 'd')
+            .replaceAll("[^a-z0-9\\s]", " ")
+            .replaceAll("\\s+", " ")
+            .trim();
+        int businessHits = 0;
+        for (String token : List.of(
+                "nghiep vu", "business logic", "business", "chuc nang", "lam gi", "lam nghiep vu",
+                "phan tich", "phân tích", "logic", "luong xu ly", "luong nghiep", "toan bo",
+                "tong the", "end to end", "module", "kien truc", "dong du lieu")) {
+            if (normalized.contains(token) || text.contains(token)) {
+                businessHits++;
+            }
+        }
+        int narrowHits = 0;
+        for (String token : List.of("ham ", "function ", "method ", "dong ", "line ", "bug", "fix", "sua loi")) {
+            if (normalized.contains(token.trim()) || text.contains(token)) {
+                narrowHits++;
+            }
+        }
+        if (businessHits >= 1 && narrowHits <= 1) {
+            return true;
+        }
+        return businessHits >= 2;
+    }
+
+    private boolean shouldActivate(boolean greenfield, boolean hasSamples, boolean hasEditor, String responseMode, String message) {
+        if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            if (hasEditor && isAnalyzeBusinessQuestion(message)) {
+                return true;
+            }
             return hasSamples && requiredOnSampleAttachment;
         }
         if (hasSamples && requiredOnSampleAttachment) {
@@ -436,6 +476,17 @@ public class AiGreenfieldBusinessDesignService {
         MenuBusinessScan menuScan,
         CodeBusinessScan codeScan
     ) {
+        if (isAnalyzeBusinessQuestion(userRequest)) {
+            return buildHeuristicBusinessSpec(
+                userRequest,
+                sampleMenuDigest,
+                sampleCodeDigest,
+                activeEditorDigest,
+                menuFlow,
+                scenario,
+                menuScan,
+                codeScan);
+        }
         if (llamaCppNativeService != null
                 && llamaCppNativeService.isAvailable()
                 && aiAssistantGatewayService != null) {
@@ -526,7 +577,7 @@ public class AiGreenfieldBusinessDesignService {
             }
             existingSummary = buildMenuExistingSummary(menuScan, activeEditorDigest);
         } else if (!menuFlow && codeScan != null && !codeScan.symbols().isEmpty()) {
-            modules = codeScan.symbols().stream().limit(8).toList();
+            modules = inferBusinessModulesFromCodeScan(codeScan);
             tables = new ArrayList<>(codeScan.tables());
             triggersCurrent = List.of();
             codePatternsCurrent = mergeStringLists(codeScan.lifecyclePatterns(), codeScan.apiPatterns());
@@ -644,8 +695,16 @@ public class AiGreenfieldBusinessDesignService {
 
     private String buildCodeExistingSummary(CodeBusinessScan scan, String digestFallback) {
         StringBuilder sb = new StringBuilder();
+        boolean kqxs = scan.lifecyclePatterns() != null && scan.lifecyclePatterns().stream()
+            .anyMatch(p -> p != null && p.toLowerCase(Locale.ROOT).contains("kqxs"));
+        if (kqxs) {
+            sb.append("Module KQXS/broadcast xổ số (React UI động, view-only/proxy config, theme, nhập số/lịch sử)");
+        }
         if (!scan.symbols().isEmpty()) {
-            sb.append("Symbols: ").append(String.join(", ", scan.symbols().stream().limit(12).toList()));
+            if (sb.length() > 0) {
+                sb.append("; ");
+            }
+            sb.append("Hàm/UI chính: ").append(String.join(", ", scan.symbols().stream().limit(8).toList()));
         }
         if (!scan.tables().isEmpty()) {
             sb.append("; bảng: ").append(String.join(", ", scan.tables().stream().limit(6).toList()));
@@ -661,6 +720,43 @@ public class AiGreenfieldBusinessDesignService {
             built = trimToMax(digestFallback, 1200);
         }
         return trimToMax(built, 1200);
+    }
+
+    private List<String> inferBusinessModulesFromCodeScan(CodeBusinessScan scan) {
+        List<String> modules = new ArrayList<>();
+        if (scan == null) {
+            return modules;
+        }
+        String joined = String.join(" ",
+            scan.lifecyclePatterns() == null ? "" : String.join(" ", scan.lifecyclePatterns()));
+        if (joined.toLowerCase(Locale.ROOT).contains("kqxs")) {
+            modules.add("KQXS Broadcast UI");
+            modules.add("Proxy/Theme config");
+            modules.add("Lottery data entry");
+        }
+        if (scan.apiPatterns() != null) {
+            for (String api : scan.apiPatterns()) {
+                if (api != null && api.toLowerCase(Locale.ROOT).contains("helperapi")) {
+                    modules.add("CSM helperApi integration");
+                    break;
+                }
+            }
+        }
+        if (modules.isEmpty() && scan.symbols() != null) {
+            for (String sym : scan.symbols()) {
+                if (sym == null || sym.isBlank()) {
+                    continue;
+                }
+                if (sym.startsWith("Fallback") || sym.equals("onKeyDown") || sym.equals("allow")) {
+                    continue;
+                }
+                modules.add(sym);
+                if (modules.size() >= 6) {
+                    break;
+                }
+            }
+        }
+        return modules;
     }
 
     private String formatTypeFormCounts(Map<String, Integer> counts) {
@@ -692,8 +788,14 @@ public class AiGreenfieldBusinessDesignService {
         boolean greenfield,
         AiEditTaskPlannerService.EditTaskPlan editTaskPlan,
         String userMessage,
-        MenuBusinessScan menuScan
+        MenuBusinessScan menuScan,
+        String responseMode,
+        CodeBusinessScan codeScan
     ) {
+        String safeMode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
+        if ("analyze".equals(safeMode)) {
+            return buildAnalyzeExecutionPlan(spec, operationScenario, menuFlow, userMessage, codeScan);
+        }
         List<ExecutionStep> steps = new ArrayList<>();
         int idx = 1;
         String msgLower = String.valueOf(userMessage == null ? "" : userMessage).toLowerCase(Locale.ROOT);
@@ -791,6 +893,101 @@ public class AiGreenfieldBusinessDesignService {
             steps,
             outputContract,
             acceptance);
+    }
+
+    private ExecutionPlan buildAnalyzeExecutionPlan(
+        BusinessSpec spec,
+        String operationScenario,
+        boolean menuFlow,
+        String userMessage,
+        CodeBusinessScan codeScan
+    ) {
+        List<ExecutionStep> steps = new ArrayList<>();
+        steps.add(new ExecutionStep(
+            "a1",
+            "summarize_business_purpose",
+            menuFlow ? "menu_editor" : "code_editor",
+            List.of("domain", "user_goal")));
+        steps.add(new ExecutionStep(
+            "a2",
+            "map_data_and_control_flow",
+            "editor_surface",
+            List.of("load", "save", "branch", "state")));
+        if (codeScan != null && !codeScan.lifecyclePatterns().isEmpty()) {
+            steps.add(new ExecutionStep(
+                "a3",
+                "explain_lifecycle_and_integrations",
+                String.join(",", codeScan.lifecyclePatterns().stream().limit(4).toList()),
+                codeScan.apiPatterns() == null ? List.of() : codeScan.apiPatterns().stream().limit(4).toList()));
+        } else {
+            steps.add(new ExecutionStep(
+                "a3",
+                "explain_side_effects_and_outputs",
+                "editor_surface",
+                List.of("api", "persistence", "ui")));
+        }
+        List<String> acceptance = new ArrayList<>();
+        acceptance.add("Trả lời prose tiếng Việt — không JSON, không textEdits, không lặp block nội bộ");
+        acceptance.add("Giải thích nghiệp vụ/luồng xử lý dựa trên code đã quét");
+        if (spec != null && spec.userDelta() != null && !spec.userDelta().isBlank()) {
+            acceptance.add("Trả lời đúng câu hỏi: " + trimToMax(spec.userDelta(), 120));
+        }
+        return new ExecutionPlan(
+            operationScenario.isBlank() ? "business_analysis" : operationScenario,
+            steps,
+            "analyze_prose_vi",
+            acceptance);
+    }
+
+    public String buildAnalyzeBusinessPromptBlock(
+        BusinessSpec spec,
+        ExecutionPlan plan,
+        CodeBusinessScan codeScan,
+        boolean menuFlow,
+        int maxChars
+    ) {
+        if (spec == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("## BUSINESS_CONTEXT (internal — do NOT copy into answer)\n");
+        sb.append("Purpose: ").append(inferAnalyzeBusinessPurpose(spec, codeScan, menuFlow)).append("\n");
+        if (spec.existingBusinessSummary() != null && !spec.existingBusinessSummary().isBlank()) {
+            sb.append("Editor business: ").append(trimToMax(spec.existingBusinessSummary(), 600)).append("\n");
+        }
+        if (spec.flows() != null && !spec.flows().isEmpty()) {
+            sb.append("Flows: ").append(String.join(" | ", spec.flows().stream().limit(4).toList())).append("\n");
+        }
+        if (codeScan != null && !codeScan.tables().isEmpty()) {
+            sb.append("Tables: ").append(String.join(", ", codeScan.tables().stream().limit(6).toList())).append("\n");
+        }
+        if (!spec.userDelta().isBlank()) {
+            sb.append("User question: ").append(spec.userDelta()).append("\n");
+        }
+        sb.append("Answer contract: Vietnamese prose explaining business logic (4–6 sections). ");
+        sb.append("Do NOT repeat this block, Steps, Output contract, or ASSUMPTIONS/RISKS.\n");
+        sb.append("[/BUSINESS_CONTEXT]\n");
+        return trimToMax(sb.toString(), Math.max(700, maxChars));
+    }
+
+    private String inferAnalyzeBusinessPurpose(BusinessSpec spec, CodeBusinessScan codeScan, boolean menuFlow) {
+        if (codeScan != null && codeScan.lifecyclePatterns() != null) {
+            boolean kqxs = codeScan.lifecyclePatterns().stream()
+                .anyMatch(p -> p != null && (p.toLowerCase(Locale.ROOT).contains("kqxs")
+                    || p.toLowerCase(Locale.ROOT).contains("autokqxs")));
+            if (kqxs) {
+                return "Module KQXS/broadcast xổ số — UI React động, cấu hình proxy/theme, nhập liệu và hiển thị kết quả";
+            }
+        }
+        String domain = spec == null ? "" : String.valueOf(spec.domainSummary() == null ? "" : spec.domainSummary());
+        if (domain.toLowerCase(Locale.ROOT).contains("kqxs")
+            || domain.toLowerCase(Locale.ROOT).contains("autokqxs")) {
+            return "Module KQXS/broadcast — quản lý hiển thị và luồng dữ liệu xổ số trên DynamicCode";
+        }
+        if (menuFlow) {
+            return "Menu CSM — điều hướng module, form/list, trigger và lưu dữ liệu nghiệp vụ";
+        }
+        return "DynamicCode frontend — UI + tương tác + đồng bộ dữ liệu qua helperApi/recordManager";
     }
 
     public String buildWorkerPromptBlock(BusinessSpec spec, ExecutionPlan plan, int maxChars) {
@@ -1387,13 +1584,17 @@ public class AiGreenfieldBusinessDesignService {
         }
         List<String> tables = extractTablesFromText(text);
         List<String> lifecycle = new ArrayList<>();
-        for (String anchor : List.of("fnResetIP", "closeAllTabs", "timerRegistry", "window.seft", "webview")) {
+        for (String anchor : List.of(
+                "fnResetIP", "closeAllTabs", "timerRegistry", "window.seft", "webview",
+                "csmKqxsViewOnly", "autoKqxs", "getKqxsProxyConfig", "broadcast_kqxs", "kqxs_")) {
             if (text.contains(anchor)) {
                 lifecycle.add(anchor);
             }
         }
         List<String> apiPatterns = new ArrayList<>();
-        for (String anchor : List.of("ctx.helperApi", "ctx.api", "helperApi.", "loadCombo", "saveData")) {
+        for (String anchor : List.of(
+                "ctx.helperApi", "ctx.api", "helperApi.", "loadCombo", "saveData",
+                "helperApi", "recordManager", "loadDataToUser", "saveDataToUser")) {
             if (text.contains(anchor)) {
                 apiPatterns.add(anchor);
             }

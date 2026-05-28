@@ -1107,13 +1107,97 @@ function decodeJsonLikeString(value: string): string {
 	}
 }
 
+function looksLikeStructuredBusinessAnalysisProse(raw: unknown): boolean {
+	const text = String(raw || "").trim();
+	if (!text)
+		return false;
+	const numberedSections = text.match(/^\d+\)\s+/gm);
+	if (numberedSections && numberedSections.length >= 3)
+		return true;
+	return /^\d+\)\s+(Mục tiêu nghiệp vụ|Luồng chính|Thành phần nghiệp vụ|Rủi ro|Điểm cần xác nhận)/im.test(text);
+}
+
+function looksLikeAnalyzeBusinessQuestion(raw: unknown): boolean {
+	const text = String(raw || "").trim().toLowerCase();
+	if (!text)
+		return false;
+	return /(phân tích|phan tich|nghiệp vụ|nghiep vu|business logic|toàn bộ logic|toan bo logic)/i.test(text)
+		&& /(code|logic|này|naay|đang|dang|lam gi|làm gì)/i.test(text);
+}
+
+function looksLikeIntentClassifyJsonPayload(raw: string): boolean {
+	const candidate = String(raw || "").trim();
+	if (!candidate.includes("{"))
+		return false;
+	return /"type"\s*:/i.test(candidate)
+		&& /"confidence"\s*:/i.test(candidate)
+		&& /(?:EDIT_MENU|EDIT_CODE|QUESTION|GENERAL)/i.test(candidate);
+}
+
+function looksLikeOrchestrationKeywordJson(parsed: unknown): boolean {
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+		return false;
+	const keys = Object.keys(parsed as Record<string, unknown>);
+	if (keys.length === 0 || keys.length > 6)
+		return false;
+	const orchestrationKeys = new Set([
+		"intentkeywords",
+		"codesymbols",
+		"contexttype",
+		"tasktype",
+		"request",
+		"responsemode",
+		"nextstep",
+		"contextkind",
+	]);
+	return keys.every(key => orchestrationKeys.has(String(key || "").trim().toLowerCase()));
+}
+
+function looksLikeSymbolKeywordList(raw: unknown): boolean {
+	if (!Array.isArray(raw) || raw.length === 0 || raw.length > 12)
+		return false;
+	return raw.every((item) => {
+		const token = String(item || "").trim();
+		return token.length >= 2
+			&& token.length <= 32
+			&& /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(token);
+	});
+}
+
+function resolveRawAssistantCompletionText(evt: Record<string, unknown> | null | undefined): string {
+	if (!evt)
+		return "";
+	return String(
+		evt.fullResponse
+		?? evt.content
+		?? evt.assistantChatText
+		?? "",
+	).trim();
+}
+
+function shouldBypassAnalyzeProseNormalization(
+	raw: unknown,
+	opts?: { heuristicPrimary?: boolean; responseMode?: string },
+): boolean {
+	if (opts?.heuristicPrimary === true)
+		return true;
+	if (String(opts?.responseMode || "").trim().toLowerCase() === "analyze"
+		&& looksLikeStructuredBusinessAnalysisProse(raw))
+		return true;
+	return looksLikeStructuredBusinessAnalysisProse(raw);
+}
+
 function renderLooseJsonLikeAnswer(raw: unknown): string | null {
 	const text = String(raw || "").trim();
 	if (!text)
 		return null;
+	if (looksLikeStructuredBusinessAnalysisProse(text))
+		return null;
 	const start = Math.max(text.indexOf("{"), text.indexOf("["));
 	const candidate = start >= 0 ? text.slice(start).trim() : text;
 	if (!(candidate.startsWith("{") || candidate.startsWith("[")))
+		return null;
+	if (!looksLikeIntentClassifyJsonPayload(candidate) && text.length > 240)
 		return null;
 
 	const quoted = Array.from(candidate.matchAll(/"((?:[^"\\]|\\.)*)"/g))
@@ -1156,13 +1240,29 @@ function sanitizeBrokenConversationalWrapper(raw: unknown): string | null {
 }
 
 function normalizeConversationalJsonAnswer(raw: unknown): string | null {
-	const candidate = extractValidJsonCandidate(String(raw || ""));
+	const source = String(raw || "").trim();
+	if (!source)
+		return null;
+	if (looksLikeStructuredBusinessAnalysisProse(source))
+		return null;
+
+	const candidate = extractValidJsonCandidate(source);
 	if (candidate) {
 		try {
 			const parsed = JSON.parse(candidate);
+			if (looksLikeOrchestrationKeywordJson(parsed) || looksLikeSymbolKeywordList(parsed))
+				return null;
+			if (looksLikeIntentClassifyJsonPayload(candidate))
+				return null;
 			const rendered = renderJsonAnswerForChat(parsed, 0).trim();
-			if (rendered)
-				return rendered;
+			if (!rendered)
+				return null;
+			const renderedBullets = rendered.split("\n")
+				.map(line => line.replace(/^-\s*/, "").trim())
+				.filter(Boolean);
+			if (looksLikeSymbolKeywordList(renderedBullets))
+				return null;
+			return rendered;
 		}
 		catch {
 			// Fall through to truncated JSON-like fallback.
@@ -1274,6 +1374,9 @@ function normalizeAssistantDisplayText(raw: unknown): string {
 	if (!text)
 		return "";
 
+	if (looksLikeStructuredBusinessAnalysisProse(text))
+		return normalizeBrokenListLineBreaks(text);
+
 	const structuredPayload = parseStructuredAssistantPayload(text);
 	if (structuredPayload) {
 		const structuredText = [
@@ -1336,6 +1439,7 @@ function stripInternalOrchestrationLeakLines(raw: unknown): string {
 		if (leakTailBudget > 0) {
 			const boundaryLine = !lowered
 				|| /^\d{1,2}:\d{2}(:\d{2})?\s*(am|pm)?$/.test(lowered)
+				|| /^\d+\)\s+/.test(lowered)
 				|| lowered.startsWith("## ")
 				|| lowered.startsWith("### ");
 			if (!boundaryLine) {
@@ -1848,6 +1952,15 @@ function resolvePersistedAssistantDisplayText(params: {
 	const summaryFromMeta = String(params.metadata.assistantChatSummary || "").trim();
 	if (summaryFromMeta)
 		return summaryFromMeta;
+	const heuristicPrimary = params.metadata.analyzeBusinessHeuristicPrimary === true
+		|| String(params.metadata.model || "").trim() === "local_heuristic_analyze"
+		|| String(params.metadata.source || "").trim() === "aiCodeStreamAnalyzeBusinessHeuristic";
+	if (shouldBypassAnalyzeProseNormalization(params.assistantRaw, {
+		heuristicPrimary,
+		responseMode: String(params.metadata.responseMode || "analyze"),
+	})) {
+		return normalizeBrokenListLineBreaks(params.assistantRaw);
+	}
 	const shouldRebuildMenuSummary = looksLikeLargeMenuJsonPayload(params.assistantRaw)
 		|| looksLikeRenderedMenuNodeLeak(params.assistantRaw)
 		|| looksLikeLegacyMenuEditSummary(params.assistantRaw);
@@ -2747,6 +2860,7 @@ export default function AiAssistantChat({
 	const textEditApplyCountRef = useRef<number>(0);
 	const editStreamStartCodeRef = useRef<string>("");
 	const streamStartedInEditModeRef = useRef<boolean>(false);
+	const analyzeHeuristicPrimaryStreamRef = useRef<boolean>(false);
 	const deliveredAssistantResultRef = useRef<boolean>(false);
 	const menuAuditStepsRef = useRef<string[]>([]);
 	const lastUserRequestRef = useRef<string>("");
@@ -5110,7 +5224,9 @@ export default function AiAssistantChat({
 			pendingStreamChunkRef.current = "";
 		}
 
-		const nextText = stripInternalOrchestrationLeakLines(streamingMessageRef.current || "");
+		const nextText = analyzeHeuristicPrimaryStreamRef.current
+			? String(streamingMessageRef.current || "")
+			: stripInternalOrchestrationLeakLines(streamingMessageRef.current || "");
 		streamingMessageRef.current = nextText;
 		if (nextText.trim()) {
 			deliveredAssistantResultRef.current = true;
@@ -5123,8 +5239,12 @@ export default function AiAssistantChat({
 		const shouldHideCodeInChat = Boolean(onCodeInsert) && turnAllowAutoApplyRef.current;
 		const showStructuredPlaceholder = !structuredPayload && looksLikeStructuredPayload(nextText);
 		const gateFallbackText = shouldHideCodeInChat ? parseStructuredGateFallback(nextText) : null;
+		const bypassAnalyzeNormalize = analyzeHeuristicPrimaryStreamRef.current
+			|| shouldBypassAnalyzeProseNormalization(nextText, { heuristicPrimary: analyzeHeuristicPrimaryStreamRef.current });
 		const normalizedAssistantText = !structuredPayload && !shouldHideCodeInChat && !showStructuredPlaceholder
-			? normalizeAssistantDisplayText(nextText)
+			? bypassAnalyzeNormalize
+				? normalizeBrokenListLineBreaks(nextText)
+				: normalizeAssistantDisplayText(nextText)
 			: "";
 		const displayText = structuredPayload
 			? [
@@ -6078,6 +6198,9 @@ export default function AiAssistantChat({
 			liveCodeRef.current = outgoingSnapshot.code;
 			editStreamStartCodeRef.current = outgoingSnapshot.code;
 			streamStartedInEditModeRef.current = requestedResponseMode === "edit";
+			analyzeHeuristicPrimaryStreamRef.current = requestedResponseMode === "analyze"
+				&& contextType === "code"
+				&& looksLikeAnalyzeBusinessQuestion(cleanedMessage || normalizedText);
 			requestStartedAtRef.current = Date.now();
 			lastProgressEventAtRef.current = requestStartedAtRef.current;
 			lastProgressWatchdogAlertAtRef.current = 0;
@@ -7710,6 +7833,10 @@ export default function AiAssistantChat({
 									appendStageEvent(evtForTimeline);
 							}
 							else if (evt.stage === "streaming_started") {
+								const streamModel = String(evt.model || "").trim().toLowerCase();
+								if (streamModel === "local_heuristic_analyze") {
+									analyzeHeuristicPrimaryStreamRef.current = true;
+								}
 								const startedText = String(evt.model || "").trim().toLowerCase() === "local_provider"
 									? uiText("AI local bắt đầu stream kết quả...", "Local AI started streaming the result...", "本地AI开始流式返回结果...")
 									: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果...");
@@ -7850,7 +7977,9 @@ export default function AiAssistantChat({
 								if (turnAllowAutoApplyRef.current) {
 									continue;
 								}
-								pendingStreamChunkRef.current += stripInternalOrchestrationLeakLines(evt.chunk);
+								pendingStreamChunkRef.current += analyzeHeuristicPrimaryStreamRef.current
+									? String(evt.chunk || "")
+									: stripInternalOrchestrationLeakLines(evt.chunk);
 								scheduleStreamFlush();
 							}
 						else if (evt.stage === "text_edit_apply" && (evt as any).textEdit) {
@@ -8068,6 +8197,7 @@ export default function AiAssistantChat({
 								const isMainFlow = effectiveContextType === "code" || effectiveContextType === "menu_json";
 								const isEditModeEvt = String(evt.responseMode || "").trim().toLowerCase() === "edit";
 								const completionEventMeta = evt as Record<string, unknown>;
+								const completionRawText = resolveRawAssistantCompletionText(completionEventMeta);
 								const finalOutputGateMetaEarly = completionEventMeta["finalOutputGate"] as Record<string, unknown> | undefined;
 								const gateRejectedEarly = completionEventMeta["finalOutputGateRejected"] === true
 									|| finalOutputGateMetaEarly?.passed === false
@@ -8185,8 +8315,8 @@ export default function AiAssistantChat({
 									elapsedMs: Number.isFinite(Number(evt.elapsedMs))
 										? Number(evt.elapsedMs)
 										: Math.max(0, Date.now() - requestStartedAtRef.current),
-									outputChars: evt.fullResponse
-										? evt.fullResponse.length
+									outputChars: completionRawText
+										? completionRawText.length
 										: Number.isFinite(Number(evt.charsReceived))
 											? Number(evt.charsReceived)
 											: streamingMessageRef.current.length + pendingStreamChunkRef.current.length,
@@ -8307,12 +8437,39 @@ export default function AiAssistantChat({
 									});
 								};
 								const shouldHideRawEditCompletionPayload = isEditModeEvt && isMainFlow && hasStructuredCompletionEdits;
-								if (!falseEditSuccess && (evt.fullResponse || shouldHideRawEditCompletionPayload || backendAssistantSummary)) {
+								const heuristicAnalyzePrimary = (evt as any).analyzeBusinessHeuristicPrimary === true
+									|| String((evt as any).outputShape || "").trim() === "analyze_business_prose"
+									|| String(evt.model || "").trim() === "local_heuristic_analyze"
+									|| analyzeHeuristicPrimaryStreamRef.current;
+								if (!falseEditSuccess && (completionRawText || shouldHideRawEditCompletionPayload || backendAssistantSummary)) {
 									deliveredAssistantResultRef.current = true;
-									streamingMessageRef.current = shouldHideRawEditCompletionPayload || backendAssistantSummary
+									if (heuristicAnalyzePrimary) {
+										analyzeHeuristicPrimaryStreamRef.current = true;
+									}
+									const resolvedCompletionText = shouldHideRawEditCompletionPayload || backendAssistantSummary
 										? resolveMenuCompletionChatText()
-										: stripInternalOrchestrationLeakLines(evt.fullResponse);
+										: heuristicAnalyzePrimary && completionRawText
+											? completionRawText
+											: shouldBypassAnalyzeProseNormalization(completionRawText, { heuristicPrimary: heuristicAnalyzePrimary })
+												? completionRawText
+												: stripInternalOrchestrationLeakLines(completionRawText);
+									streamingMessageRef.current = resolvedCompletionText;
 									pendingStreamChunkRef.current = "";
+									if (heuristicAnalyzePrimary && resolvedCompletionText) {
+										setMessages((prev) => {
+											const updated = [...prev];
+											for (let i = updated.length - 1; i >= 0; i -= 1) {
+												const lastMsg = updated[i];
+												if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
+													lastMsg.content = resolvedCompletionText;
+													lastMsg.responseMode = "analyze";
+													lastMsg.timestamp = Date.now();
+													break;
+												}
+											}
+											return updated;
+										});
+									}
 								}
 								else if (useLocalPlanRoute && evt.result) {
 									deliveredAssistantResultRef.current = true;

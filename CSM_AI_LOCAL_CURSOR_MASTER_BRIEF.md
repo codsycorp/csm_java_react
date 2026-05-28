@@ -1,9 +1,29 @@
 # CSM AI LOCAL — MASTER BRIEF CHO CURSOR AI
 ## Một file duy nhất để yêu cầu Cursor làm lại / hoàn thiện hệ thống
 
-Version: **3.9** · 2026-05-28  
+Version: **3.11** · 2026-05-28  
 Repo: `csm_server`  
 **Single source of truth** — dùng file này khi yêu cầu Cursor implement / làm lại CSM AI Local **và** domain System Management liên quan RAG.
+
+### Changelog v3.11
+
+| Mục | Trạng thái |
+|-----|------------|
+| **PHẦN C.5 — Nguyên lý context Cursor-like** — AI không “nhớ” cả codebase; Index → Retrieve → Context Builder → LLM/Heuristic | ✅ Spec + ✅ Implement |
+| Analyze nghiệp vụ file lớn: **retrieve** top-K (BM25 in-memory + symbol + head/tail) → `CodeBusinessScan` trên slice ≤32k — **không** scan/prompt 400k+ vào model | ✅ Implement |
+| Lane 3b trên **1.5B**: prose heuristic + Comprehend scan trên retrieved context; **không** kỳ vọng LLM hiểu nghiệp vụ lớn | ✅ Spec |
+| Khuyến nghị model: **7B** (`qwen2.5-coder:7b`) cho comprehend/plan; **14B** tốt hơn; 1.5B = autocomplete / patch ngắn | ✅ Spec |
+| `analyze_business_fast_path`: heuristic intent + Comprehend heuristic-only + early stream (không build prompt 97k) | ✅ Implement |
+
+### Changelog v3.10
+
+| Mục | Trạng thái |
+|-----|------------|
+| **Analyze nghiệp vụ trên editor có code** — `isAnalyzeBusinessQuestion()` → Comprehend nhẹ (`CodeBusinessScan` + `BusinessSpec` digest) | ✅ Implement |
+| File lớn + analyze nghiệp vụ: retrieve condensed context 18–32k (không selection-only ~2k) | ✅ Implement |
+| Analyze code: **luôn** `composeLayeredLocalProviderPrompt`; **không** gắn `[LOCAL_ORCHESTRATION_CONTEXT]` (tránh echo Tier-3 stats) | ✅ Implement |
+| Guardrail `looksLikeOrchestrationRuntimeDigest` — bắt output `intentKeywords`/`codeSymbols` → heuristic prose | ✅ Implement |
+| Tokenize orchestration: `TOKEN_PATTERN` Unicode `\p{L}` (fix artifact `ang`/`nghi` từ tiếng Việt) | ✅ Implement |
 
 ### Changelog v3.9
 
@@ -28,7 +48,7 @@ Repo: `csm_server`
 
 | Mục | Trạng thái |
 |-----|------------|
-| **PHẦN AC — Business Comprehension & Planning** — mẫu code + mẫu menu JSON → suy luận nghiệp vụ → kế hoạch → output chính xác | ✅ Spec (implement ⏳) |
+| **PHẦN AC — Business Comprehension & Planning** — mẫu code + mẫu menu JSON → suy luận nghiệp vụ → kế hoạch → output chính xác | ✅ Spec + ✅ Implement |
 | Greenfield **và** có mẫu tham chiếu — bắt buộc Pass Comprehend trước Worker | ✅ Spec |
 | Slot budget + 2-pass infer trên **local-5gb** (5GB RAM / 2 CPU) — ổn định, không OOM | ✅ Spec |
 | AB.1 / AB.2 / AB.8 bổ sung input mẫu + checklist nghiệm thu | ✅ |
@@ -346,6 +366,109 @@ flowchart LR
 
 **Nguyên tắc:** Collect/Index đủ vào Lucene; model chỉ nhận top-K slice qua `[RETRIEVED_CONTEXT]` (≤2800 chars weak).
 
+## C.5 Kiến trúc Cursor-like — AI không “nhớ” cả codebase
+
+> **Điểm then chốt:** Model **không** hiểu toàn project. Nó chỉ hiểu **phần code được retrieve đúng lúc**. Cursor, Copilot, Claude Code, Devin đều dùng cùng mô hình — CSM bắt buộc tuân theo.
+
+```txt
+Codebase (currentCode string + workspace index)
+        ↓
+Indexing (chunk + embed + metadata)
+        ↓
+Search / RAG (BM25 + Lucene KNN + symbol graph)
+        ↓
+Context Builder (condensed slice + tenant RAG + digest)
+        ↓
+LLM hoặc Heuristic Planner (slot budget)
+        ↓
+Patch Generator / Prose (textEdits hoặc stream)
+        ↓
+CodeMirror apply (patch luôn trên FULL currentCode — số dòng tuyệt đối)
+```
+
+### C.5.1 Vì sao không nhét toàn bộ code vào model?
+
+| Thực tế CSM | Hệ quả |
+|-------------|--------|
+| DynamicCode 400k+ chars, multi-stack (Java/RocksDB/Lucene/React/Node) | Hàng triệu token nếu paste nguyên file |
+| Model local 1.5B–7B, context 32k–128k | **Không đủ** load full source + hiểu mọi nghiệp vụ cùng lúc |
+| `currentCode` là **string HTTP** (không phải git workspace) | Backend **phải** index/chunk; không có magic “đọc cả repo” |
+
+**Quy tắc vận hành:**
+
+```txt
+NẠP ĐỦ VÀO HỆ THỐNG (ingest + Lucene + metadata)
+KHÔNG NẠP HẾT VÀO MODEL (top-K + condensed + slot budget)
+PATCH LUÔN TRÊN FULL currentCode (textEdits absolute line — PHẦN V)
+```
+
+### C.5.2 Pipeline parse → chunk → embed → retrieve (đã có trong repo)
+
+| Bước | Cursor làm | CSM tương đương |
+|------|------------|-----------------|
+| Parse source | class / method / imports / call graph | `chunkCodeByDeclaration`, `scanCodeBusinessStructure`, symbol regex |
+| Chunk | function-level slices | `AiScopedContextIngestionService`, `buildAnalyzeCondensedPromptContext` |
+| Embed | vector per chunk | `AiBusinessMemoryVectorService.embedText` → Lucene KNN |
+| Vector store | Qdrant / … | **Lucene KNN** per `appId` (`dyn_ctx_*`) |
+| Query | semantic + keyword | `buildCodeStreamLuceneExcerpts` (BM25 in-request), `searchWithScopes`, symbol-aware retrieval |
+| Context builder | top-K ghép prompt | `buildAnalyzeCondensedPromptContext`, `composeLayeredLocalProviderPrompt`, `buildLocalMinimalPrompt` |
+
+### C.5.3 Metadata graph (mục tiêu — bổ sung dần)
+
+Không chỉ vector — cần **graph + metadata** để multi-step agent:
+
+```json
+{
+  "file": "RecordManager.java",
+  "class": "RecordManager",
+  "method": "createRecord",
+  "dependsOn": ["LuceneIndexer", "RocksDB"],
+  "route": "API → Controller → Service → RocksDB → Lucene"
+}
+```
+
+**Hiện có:** symbol lists, lifecycle anchors, `CodeBusinessScan`, menu node scan, tenant snapshot.  
+**Roadmap:** package/class/method graph, API route map, RocksDB table, Lucene field, WebSocket event — index theo **package / class / method / route / table / field**.
+
+### C.5.4 Model tier — khả năng thực tế
+
+| Model | Vai trò trong CSM | Không dùng cho |
+|-------|-------------------|----------------|
+| **qwen2.5-coder-1.5b** (M1 dev / weak-5gb) | Autocomplete, patch ngắn, classify ~64 tok, **heuristic analyze prose** sau retrieve | Comprehend LLM nghiệp vụ lớn, full-file reasoning |
+| **qwen2.5-coder:7b** (khuyến nghị server) | Comprehend, plan slices, analyze có LLM sau RAG | Nhét full 400k vào prompt |
+| **14b+** | Plan phức tạp, multi-file | Thay thế RAG |
+
+**Lane 3b (analyze nghiệp vụ) trên 1.5B:**
+
+```txt
+User: "phân tích nghiệp vụ code này"
+  → retrieve condensed 18–32k (BM25 + symbol + head/tail)
+  → CodeBusinessScan + BusinessSpec heuristic (NO Comprehend LLM)
+  → buildAnalyzeBusinessPrimaryAnswer → stream prose 6 section
+  → KHÔNG buildCodingPrompt 97k, KHÔNG orchestration Tier-3 stats
+```
+
+### C.5.5 Index theo gì (Java codebase lớn)
+
+| Trục index | Ví dụ |
+|------------|-------|
+| package / class / method | `RecordManager.createRecord` |
+| route / API | `ApiSpringController`, `@PostMapping` |
+| RocksDB table | `csm_accounts`, `csm.index` |
+| Lucene field | searchable fields per table |
+| WebSocket event | `join_room`, chat events |
+| DynamicCode editor | `dyn_ctx_editorCode_{pName}_t{pType}` async KNN |
+
+**Công thức mạnh nhất cho CSM:**
+
+```txt
+Lucene BM25 (in-request + persisted)
++ Lucene Vector (KNN per appId)
++ Metadata / symbol graph
++ qwen2.5-coder-1.5b (worker nhỏ)
+≠ cố nhét toàn bộ currentCode vào context model
+```
+
 ## C.2 Ba flow intent (chỉ một contract mỗi request)
 
 ```java
@@ -450,12 +573,23 @@ ai.local.routing.model-driven.min-confidence=55
 ai.local.analyze.guardrail.heuristic-fallback.enabled=false
 ```
 
+**Analyze nghiệp vụ trên code có sẵn (v3.10):**
+
+| Tín hiệu | Hành vi backend |
+|----------|-----------------|
+| `responseMode=analyze` + câu hỏi nghiệp vụ (`phân tích`, `nghiệp vụ`, `logic`, `làm gì`…) | `AiGreenfieldBusinessDesignService.isAnalyzeBusinessQuestion()` → Comprehend nhẹ + inject `promptInjectionBlock` |
+| File editor >30k + analyze nghiệp vụ | `buildAnalyzeCondensedPromptContext` trên **full** `currentCode` (không chỉ selection/focus) |
+| Analyze code lane | Luôn layered prompt; **cấm** append `[LOCAL_ORCHESTRATION_CONTEXT]` vào message worker |
+| Model echo metadata (`intentKeywords`, `codeSymbols`, …) | `looksLikeOrchestrationRuntimeDigest` → heuristic fallback hoặc thông báo lỗi |
+
 Hàm liên quan:
 
 - `classifyIntentWithLocalAI()`
 - `reconcileCodeResponseModeWithIntent()`
 - `inferAiAssistantResponseModeFromText()`
 - `LocalIntentClassification.resolvedResponseMode()` — **isEditTask() trước explicit analyze**
+- `AiGreenfieldBusinessDesignService.isAnalyzeBusinessQuestion()` — Comprehend trên analyze nghiệp vụ
+- `looksLikeOrchestrationRuntimeDigest()` — guardrail chống echo Tier-3 orchestration stats
 
 ---
 
@@ -1142,6 +1276,23 @@ Cursor **phải** verify các case sau trên profile **local-5gb**, file Dynamic
 | Không `text_edit_apply` | ✓ |
 | Hoàn thành < ~3 phút trên 2 CPU | ✓ |
 
+## J.1b Analyze nghiệp vụ — file lớn (KQXS / broadcast)
+
+**Input:** `Hãy phân tích các logic có trên code này đang làm nghiệp vụ gì?` — editor `broadcast_kqxs` / `auto-kqxs.js` (~400k+ chars)
+
+**Nguyên lý (v3.11):** Backend **đọc** full `currentCode` để index/chunk **một lần**; model/heuristic chỉ nhận **retrieved slice** (`resolveAnalyzeBusinessScanContext` ≤32k). **Không** scan regex 400k trong heuristic; **không** build prompt 97k.
+
+| Kiểm tra | Pass |
+|----------|------|
+| Log `responseMode=analyze`, `analyze_business_fast_path` | ✓ |
+| SSE `business_comprehend` completed (Comprehend **heuristic-only**, no LLM on 1.5B) | ✓ |
+| Log `heuristic_analyze_business_question` — **không** 3× intent classify LLM | ✓ |
+| `fullCodeChars` ≈ 400k+ nhưng `retrievedContextChars` / scan context ≤ 32k | ✓ |
+| **Không** echo `intentKeywords` / `codeSymbols` / Tier-3 stats | ✓ |
+| Response **prose 6 section tiếng Việt** (KQXS, lottery, broadcast, proxy, theme…) | ✓ |
+| `model=local_heuristic_analyze`, `earlyExit=true`, elapsed **< 15s** M1 | ✓ |
+| Async `ingestLargeCodeAsync` scheduled (request sau hit scoped KNN) | ✓ |
+
 ## J.2 Edit
 
 **Input:** `Hãy sửa lỗi khi webview tắt process vẫn không tắt...`
@@ -1215,6 +1366,11 @@ Exit code 0.
 ✗ textEdits với startLine/endLine relative trong slice excerpt — phải absolute trên full string
 ✗ Validate patch chỉ trên condensed excerpt mà không dry-run full currentCode
 ✗ Apply full doc replace khi đã có text_edit_apply line-range (trừ menu full-tree fallback)
+✗ Dùng selection-only làm promptCodeContext cho analyze nghiệp vụ trên file >30k (phải **retrieve** condensed 18–32k — không scan/prompt full 400k)
+✗ Coi model 1.5B “hiểu” nghiệp vụ lớn khi nhét nguyên currentCode vào prompt — phải RAG + heuristic/7B
+✗ Feed toàn bộ repo / full DynamicCode 400k vào LLM context vì “cho AI hiểu hết”
+✗ Gắn `[LOCAL_ORCHESTRATION_CONTEXT]` / Tier-3 runtime stats vào prompt analyze code (model echo metadata)
+✗ Coi output `intentKeywords:` / `codeSymbols:` là câu trả lời hợp lệ — phải qua guardrail + heuristic fallback
 ```
 
 ---
@@ -1263,12 +1419,16 @@ P2 — Knowledge Mastery [v2.3]
   □ Hybrid BM25 + vector retrieval
   □ Citations trong analyze response
 
-P1 — Business Comprehension & Planning [v3.9 — PHẦN AC]
+P1 — Business Comprehension & Planning [v3.9–v3.10 — PHẦN AC]
   ☑ AiGreenfieldBusinessDesignService (BusinessSpec + editor/sample/system digest)
   ☑ Pass Comprehend → Plan tuần tự trước Worker (local-5gb safe)
   ☑ SSE business_comprehend / business_plan (+ existingBusinessSummary)
   ☑ required-on-edit-with-editor (kịch bản 2 — editor có sẵn)
   ☑ Greenfield + mẫu attachment (kịch bản 1)
+  ☑ Analyze nghiệp vụ: retrieve → CodeBusinessScan → heuristic prose (v3.11, PHẦN C.5)
+  □ Code graph metadata (class/method/route/table) — roadmap C.5.3
+  □ Khuyến nghị deploy qwen2.5-coder:7b trên server cho Comprehend LLM (1.5B = dev/M1 only)
+  ☑ Guardrail orchestration stats echo + layered analyze prompt (v3.10)
   □ Checklist AC.7 trên ./run-server.sh
 
 P2 — Polish
@@ -3344,7 +3504,8 @@ Kịch bản text + assets
 >
 > **Vận hành:** Luôn ổn định trên **máy chủ yếu 5GB RAM / 2 CPU** (`local-5gb`, `./run-server.sh`).
 >
-> **Cấm:** Worker không có `BusinessSpec` + `ExecutionPlan` (trừ Lane 3 analyze thuần, không sửa).
+> **Cấm:** Worker không có `BusinessSpec` + `ExecutionPlan` (trừ Lane 3 analyze thuần / debug hẹp, không sửa).
+> **Lane 3b (v3.11):** Analyze **nghiệp vụ** trên editor có code → **Retrieve** slice → `CodeBusinessScan` + BusinessSpec **heuristic** → prose 6 section; **không** nhét full file vào model; **không** bắt buộc ExecutionPlan Worker patch. Chi tiết **PHẦN C.5**.
 
 ## AC.0b Business Thinking Mandate (v3.9)
 
@@ -3418,7 +3579,8 @@ USER_REQUEST
 | Editor **trống** + có mẫu code và/hoặc mẫu menu (kịch bản B) | ✅ Luôn — **merge** cả hai digest |
 | Editor **có** code/menu + `responseMode=edit` (kịch bản C — **bắt buộc v3.9**) | ✅ Luôn — `required-on-edit-with-editor=true` |
 | Editor **có** code/menu lớn + yêu cầu sửa phức tạp (kịch bản C) | ✅ Luôn (đã gộp vào dòng trên) |
-| Câu analyze đơn giản, không sửa | ❌ Lane 3 — không Comprehend patch |
+| Editor **có** code + `responseMode=analyze` + câu **phân tích nghiệp vụ** (`isAnalyzeBusinessQuestion`) | ✅ Comprehend nhẹ — scan code + BusinessSpec digest (Lane 3b) |
+| Câu analyze debug hẹp (symbol/bug/hàm cụ thể) hoặc chat nhanh không hỏi nghiệp vụ | ❌ Lane 3 — không Comprehend patch |
 
 **Nguyên tắc:**
 
@@ -3590,6 +3752,7 @@ flowchart LR
 | AC.3b | Editor trống + **không mẫu** + mô tả nghiệp vụ → menu/code scaffold apply (kịch bản A) | ☐ |
 | AC.3c | Mẫu menu **+** mẫu code + yêu cầu → BusinessSpec merge đủ cả hai | ☐ |
 | AC.4 | Editor **có** menu 80k+ + yêu cầu sửa trigger/i18n → SSE `business_comprehend` + plan steps | ☐ |
+| AC.4b | Editor **có** code 400k+ (KQXS) + analyze nghiệp vụ → `business_comprehend` + prose (không stats echo) | ☐ |
 | AC.5 | `existingBusinessSummary` trong SSE phản ánh nghiệp vụ editor (không rỗng) | ☐ |
 | AC.6 | 2 request edit liên tiếp — không OOM, thời gian <3 phút/request typ. | ☐ |
 | AC.7 | Không load vision + worker + comprehend cùng lúc (RAM 5GB) | ☐ |
@@ -3603,6 +3766,8 @@ flowchart LR
 | Song song 2+ `generateContentFast` trên 1 JVM 5GB | RAM spike |
 | Trả `success` + `patches:[]` khi user yêu cầu sửa cụ thể | Gate phải reject |
 | Dùng cloud fallback khi `ai.local.only.enabled=true` | Policy local-only |
+| Echo Tier-3 orchestration stats (`intentKeywords`, `codeSymbols`) làm câu trả lời analyze | Model 1.5B hay echo metadata — guardrail bắt buộc |
+| Selection-only prompt trên analyze nghiệp vụ file lớn | Chỉ thấy ~50 dòng đầu — phải condensed full file |
 
 ---
 

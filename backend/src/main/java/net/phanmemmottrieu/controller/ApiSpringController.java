@@ -1813,7 +1813,14 @@ public class ApiSpringController {
                     }
                 }
 
-                LocalIntentClassification preclassifiedIntent = classifyIntentWithLocalAI(message, false, uiLang);
+                boolean earlyAnalyzeBusinessQuestion = "analyze".equalsIgnoreCase(
+                        String.valueOf(responseMode == null ? "" : responseMode).trim())
+                    && isCodeContext(contextType)
+                    && !isMenuJsonContext(contextType)
+                    && AiGreenfieldBusinessDesignService.isAnalyzeBusinessQuestion(message);
+                LocalIntentClassification preclassifiedIntent = earlyAnalyzeBusinessQuestion
+                    ? buildAnalyzeBusinessHeuristicIntent(message, contextType)
+                    : classifyIntentWithLocalAI(message, false, uiLang);
                 responseMode = reconcileCodeResponseModeWithIntent(
                     responseMode,
                     message,
@@ -1913,7 +1920,30 @@ public class ApiSpringController {
                 String promptCodeContext = (hasEditorSelection && focusWindow != null && !focusWindow.code().isBlank())
                     ? focusWindow.code()
                     : effectiveCodeContext;
-                AiEditTaskPlannerService.EditTaskPlan editTaskPlan = aiEditTaskPlannerService == null
+                boolean analyzeBusinessQuestion = AiGreenfieldBusinessDesignService.isAnalyzeBusinessQuestion(message);
+                boolean analyzeBusinessFastPath = "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode).trim())
+                    && isCodeContext(contextType)
+                    && !isMenuJsonContext(contextType)
+                    && analyzeBusinessQuestion;
+                String analyzeBusinessScanContext = analyzeBusinessQuestion
+                    ? resolveAnalyzeBusinessScanContext(
+                        effectiveCodeContext,
+                        message,
+                        focusWindow == null ? "" : focusWindow.code())
+                    : effectiveCodeContext;
+                if (analyzeBusinessFastPath
+                        && !analyzeBusinessScanContext.isBlank()
+                        && analyzeBusinessScanContext.length() < effectiveCodeContext.length()) {
+                    promptCodeContext = analyzeBusinessScanContext;
+                } else if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                        && isCodeContext(contextType)
+                        && !isMenuJsonContext(contextType)
+                        && analyzeBusinessQuestion
+                        && effectiveCodeContext.length() > promptCodeContext.length() * 2
+                        && !analyzeBusinessScanContext.isBlank()) {
+                    promptCodeContext = analyzeBusinessScanContext;
+                }
+                AiEditTaskPlannerService.EditTaskPlan editTaskPlan = analyzeBusinessFastPath || aiEditTaskPlannerService == null
                     ? AiEditTaskPlannerService.EditTaskPlan.disabled()
                     : aiEditTaskPlannerService.plan(
                         message,
@@ -1984,13 +2014,15 @@ public class ApiSpringController {
                     }
                 }
 
+                LocalIntentClassification routingIntent = fastPathIntent != null ? fastPathIntent : preclassifiedIntent;
                 boolean codeDebugAnalyze = aiLocalRoutingModelDrivenEnabled
-                    ? isModelDrivenCodeContextAnalyze(preclassifiedIntent, responseMode)
+                    ? isModelDrivenCodeContextAnalyze(routingIntent, responseMode)
                     : shouldPreferCodeContextPipeline(message, contextType, responseMode);
-                boolean codeDebugAnalyzeFastPath = codeDebugAnalyze
+                boolean codeDebugAnalyzeFastPath = (codeDebugAnalyze || analyzeBusinessFastPath)
                     && "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode).trim())
                     && !hasExplicitCodeEditIntent(message)
-                    && !(aiLocalRoutingModelDrivenEnabled && preclassifiedIntent != null && preclassifiedIntent.isEditTask());
+                    && (analyzeBusinessFastPath
+                        || !(aiLocalRoutingModelDrivenEnabled && preclassifiedIntent != null && preclassifiedIntent.isEditTask()));
                 boolean broadAnalyzeRequest = !menuJsonContext
                     && "analyze".equalsIgnoreCase(responseMode)
                     && (codeDebugAnalyze || isBroadAnalysisRequest(message, fastPathIntent));
@@ -2007,8 +2039,9 @@ public class ApiSpringController {
                     && (hardLocalOnlyFlow || aiLocalOnlyEnabled);
                 boolean deferLargeCodeVectorIngestForEdit = largeCodeEditRequest
                     && effectiveCodeContext.length() > 45000;
-                if ((broadAnalyzeRequest || codeDebugAnalyze || largeCodeEditRequest)
-                        && promptCodeContext.length() > 30000
+                if (!analyzeBusinessFastPath
+                        && (broadAnalyzeRequest || codeDebugAnalyze || largeCodeEditRequest)
+                        && effectiveCodeContext.length() > 30000
                         && aiCodeStreamLocalProviderEnabled) {
                     int regionCap = Math.max(18000, Math.min(32000, aiCodeStreamMaxCurrentCodeChars));
                     String plannerCondensed = editTaskPlan.enabled() && aiEditTaskPlannerService != null
@@ -2140,6 +2173,31 @@ public class ApiSpringController {
                     }
                 }
 
+                if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                        && isCodeContext(contextType)
+                        && !menuJsonContext
+                        && effectiveCodeContext.length() > 30000
+                        && promptCodeContext.length() < Math.min(12000, effectiveCodeContext.length() / 3)) {
+                    String expandedAnalyzeContext = buildAnalyzeCondensedPromptContext(
+                        effectiveCodeContext,
+                        message,
+                        focusWindow == null ? "" : focusWindow.code(),
+                        Math.max(18000, Math.min(32000, aiCodeStreamMaxCurrentCodeChars)));
+                    if (!expandedAnalyzeContext.isBlank() && expandedAnalyzeContext.length() > promptCodeContext.length()) {
+                        int beforeExpand = promptCodeContext.length();
+                        promptCodeContext = expandedAnalyzeContext;
+                        sendEvent(emitter, jsonOf(
+                            "stage", "context_compression",
+                            "status", "analyze_full_file_condensed",
+                            "detailKey", "copilot.progress.detail.analyze_condensed_context",
+                            "contextType", contextType,
+                            "message", "Phân tích nghiệp vụ: mở rộng từ selection sang condensed context toàn file",
+                            "charsBefore", beforeExpand,
+                            "charsAfter", promptCodeContext.length(),
+                            "requestId", requestId));
+                    }
+                }
+
                 if ("edit".equalsIgnoreCase(responseMode)
                         && !menuJsonContext
                         && effectiveCodeContext.length() <= 45000
@@ -2241,22 +2299,50 @@ public class ApiSpringController {
                         "none",
                         null
                     );
-                    if (!codeDebugAnalyzeFastPath
+                    if ((!codeDebugAnalyzeFastPath || analyzeBusinessQuestion)
                             && aiGreenfieldBusinessDesignService != null
                             && aiGreenfieldBusinessDesignService.isEnabled()) {
+                        if (analyzeBusinessFastPath && effectiveCodeContext.length() > 45000) {
+                            scheduleLargeEditorCodeVectorIngest(
+                                emitter,
+                                requestId,
+                                appId,
+                                effectiveCodeContext,
+                                contextType,
+                                message,
+                                pName,
+                                pType,
+                                null);
+                        }
+                        String comprehendCodeContext = analyzeBusinessQuestion
+                                && !analyzeBusinessScanContext.isBlank()
+                                && analyzeBusinessScanContext.length() < effectiveCodeContext.length()
+                            ? analyzeBusinessScanContext
+                            : effectiveCodeContext;
                         sendEvent(emitter, jsonOf(
                             "stage", "business_comprehend",
                             "status", "running",
                             "requestId", requestId,
+                            "fullCodeChars", effectiveCodeContext.length(),
+                            "retrievedContextChars", comprehendCodeContext.length(),
+                            "contextStrategy", comprehendCodeContext.length() < effectiveCodeContext.length()
+                                ? "rag_condensed_analyze"
+                                : "full_editor_string",
                             "message", uiTextByLang(
                                 uiLang,
-                                "Đang phân tích nghiệp vụ (Comprehend) từ yêu cầu và mẫu tham chiếu",
-                                "Analyzing business context (Comprehend) from request and reference samples",
-                                "正在从请求和参考样本分析业务（Comprehend）")));
+                                analyzeBusinessFastPath
+                                    ? "Retrieve + scan nghiệp vụ trên slice code (không nạp hết file vào model)"
+                                    : "Đang phân tích nghiệp vụ (Comprehend) từ yêu cầu và mẫu tham chiếu",
+                                analyzeBusinessFastPath
+                                    ? "Retrieve + scan business on code slice (not full file in model)"
+                                    : "Analyzing business context (Comprehend) from request and reference samples",
+                                analyzeBusinessFastPath
+                                    ? "检索 + 在代码片段上扫描业务（不全量注入模型）"
+                                    : "正在从请求和参考样本分析业务（Comprehend）")));
                         businessComprehensionResult = aiGreenfieldBusinessDesignService.runComprehensionPipeline(
                             appId,
                             message,
-                            effectiveCodeContext,
+                            comprehendCodeContext,
                             orchestrationAttachments,
                             contextType,
                             responseMode,
@@ -2264,7 +2350,8 @@ public class ApiSpringController {
                             editTaskPlan,
                             editorMetadata);
                         if (businessComprehensionResult.activated()) {
-                            if (aiEditTaskPlannerService != null) {
+                            if (aiEditTaskPlannerService != null
+                                    && !"analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
                                 editTaskPlan = aiEditTaskPlannerService.enrichFromBusinessSpec(
                                     editTaskPlan,
                                     businessComprehensionResult.businessSpec(),
@@ -2321,31 +2408,36 @@ public class ApiSpringController {
                                 "none",
                                 "none",
                                 businessComprehensionResult.telemetry());
-                            if (!businessComprehensionResult.promptInjectionBlock().isBlank()) {
+                            if (!businessComprehensionResult.promptInjectionBlock().isBlank()
+                                    && !"analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
                                 messageWithReuse = messageWithReuse
                                     + "\n\n"
                                     + businessComprehensionResult.promptInjectionBlock();
                             }
                         }
                     }
-                    if (codeDebugAnalyzeFastPath) {
+                    if (codeDebugAnalyzeFastPath || analyzeBusinessFastPath) {
                         sendEvent(emitter, jsonOf(
                             "stage", "assistant_orchestration",
                             "status", "skipped",
                             "requestId", requestId,
-                            "message", "Code debug analyze fast path: skip heavy orchestration/ingestion to reduce latency",
-                            "reason_code", "code_debug_analyze_fast_path"));
+                            "message", analyzeBusinessFastPath
+                                ? "Analyze business fast path: skip heavy orchestration; heuristic-first on full code"
+                                : "Code debug analyze fast path: skip heavy orchestration/ingestion to reduce latency",
+                            "reason_code", analyzeBusinessFastPath
+                                ? "analyze_business_fast_path"
+                                : "code_debug_analyze_fast_path"));
                         emitToolTrace(
                             emitter,
                             requestId,
                             "orchestration_resilient",
                             "skipped",
-                            "code_debug_analyze_fast_path",
+                            analyzeBusinessFastPath ? "analyze_business_fast_path" : "code_debug_analyze_fast_path",
                             compactToolDigest(message, 180),
                             0,
                             0,
                             "none",
-                            "CODE_DEBUG_ANALYZE_FAST_PATH",
+                            analyzeBusinessFastPath ? "ANALYZE_BUSINESS_FAST_PATH" : "CODE_DEBUG_ANALYZE_FAST_PATH",
                             null
                         );
                     } else if (skipHeavyOrchestrationForLargeCodeEdit) {
@@ -2656,6 +2748,8 @@ public class ApiSpringController {
                     emitToolDagLifecycle(emitter, requestId, codeStreamOrchestration);
 
                     MultiFilePatchPlanPreview multiFilePatchPlan = (!skipHeavyOrchestrationForLargeCodeEdit
+                            && !analyzeBusinessFastPath
+                            && !codeDebugAnalyzeFastPath
                             && !(largeCodeEditRequest && effectiveCodeContext.length() > 45000))
                         ? buildMultiFilePatchPlanPreview(
                             message,
@@ -2925,9 +3019,12 @@ public class ApiSpringController {
                             Map.of("planStepCount", planSteps.size())
                         );
 
-                        messageWithReuse = messageWithReuse
-                            + "\n\n[LOCAL_ORCHESTRATION_CONTEXT]\n"
-                            + codeStreamOrchestration.compressedContextBlock;
+                        if (!("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                                && isCodeContext(contextType))) {
+                            messageWithReuse = messageWithReuse
+                                + "\n\n[LOCAL_ORCHESTRATION_CONTEXT]\n"
+                                + codeStreamOrchestration.compressedContextBlock;
+                        }
 
                         sendEvent(emitter, jsonOf(
                             "stage", "context_compression",
@@ -3006,6 +3103,24 @@ public class ApiSpringController {
                     );
                     streamCompletedRef.set(true);
                     emitter.complete();
+                    return;
+                }
+
+                if (analyzeBusinessFastPath
+                        && tryCompleteAnalyzeBusinessHeuristicEarly(
+                            emitter,
+                            requestId,
+                            authCtx,
+                            appId,
+                            contextType,
+                            pName,
+                            pType,
+                            message,
+                            effectiveCodeContext,
+                            analyzeBusinessScanContext,
+                            businessComprehensionResult,
+                            requestStartedAtMs,
+                            streamCompletedRef)) {
                     return;
                 }
 
@@ -3161,6 +3276,7 @@ public class ApiSpringController {
                         pType);
                 }
                 codeStreamMeta.put("codeDebugAnalyzeFastPath", codeDebugAnalyzeFastPath);
+                codeStreamMeta.put("analyzeBusinessFastPath", analyzeBusinessFastPath);
                 if (businessComprehensionResult.activated()) {
                     codeStreamMeta.put("businessComprehensionActive", true);
                     codeStreamMeta.put("businessComprehensionGreenfield", businessComprehensionResult.greenfield());
@@ -3621,6 +3737,29 @@ public class ApiSpringController {
                         && isWeakLocalRuntime()
                         && promptCodeContext.length() > 30000;
                     if (!editFocusedPrimaryApplied
+                            && analyzeBusinessFastPath) {
+                        String businessPrimary = buildAnalyzeBusinessPrimaryAnswer(
+                            analyzeBusinessScanContext,
+                            message,
+                            contextType,
+                            businessComprehensionResult,
+                            effectiveCodeContext,
+                            pName);
+                        if (!businessPrimary.isBlank() && !isLowSignalAnalyzeOutput(businessPrimary)) {
+                            providerRaw = businessPrimary;
+                            providerText = businessPrimary;
+                            analyzeFocusedPrimaryApplied = true;
+                            codeStreamMeta.put("analyzeBusinessHeuristicPrimary", true);
+                            localProviderPrimaryUsed = true;
+                            effectiveModel = "local_provider";
+                            logger.info(
+                                "LOCAL_ANALYZE business-heuristic-primary requestId={} sourceCodeChars={} answerChars={}",
+                                requestId,
+                                effectiveCodeContext.length(),
+                                businessPrimary.length());
+                        }
+                    }
+                    if (!editFocusedPrimaryApplied
                             && weakLargeCodeAnalyze
                             && llamaCppNativeService != null
                             && llamaCppNativeService.isAvailable()) {
@@ -3706,7 +3845,9 @@ public class ApiSpringController {
                             providerText = sanitizePromptEchoLeakage(providerText);
                             providerText = stripAnalyzeLeakedDynamicContext(providerText);
                         }
-                        if (!qualityGateEarlyAudit && aiLocalAnalyzeBroadGapFillEnabled && shouldRunBroadAnalysisGapFill(
+                        if (!qualityGateEarlyAudit
+                                && !analyzeBusinessFastPath
+                                && aiLocalAnalyzeBroadGapFillEnabled && shouldRunBroadAnalysisGapFill(
                                 message,
                                 responseMode,
                                 contextType,
@@ -3750,7 +3891,8 @@ public class ApiSpringController {
 
                         if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
                                 && aiLocalAnalyzeLowConfidenceRetryEnabled
-                                && !codeDebugAnalyzeFastPath) {
+                                && !codeDebugAnalyzeFastPath
+                                && !analyzeBusinessFastPath) {
                             int analyzeConfidence = scoreAnalyzeAnswerConfidence(providerText, effectiveCodeContext, message);
                             if (analyzeConfidence < Math.max(1, aiLocalAnalyzeLowConfidenceRetryMinScore)) {
                                 sendEvent(emitter, jsonOf(
@@ -3812,7 +3954,7 @@ public class ApiSpringController {
                             if (!recoveredAnalyze.isBlank() && !isLowSignalAnalyzeOutput(recoveredAnalyze)) {
                                 providerText = recoveredAnalyze;
                                 codeStreamMeta.put("analyzeFocusedFallbackApplied", true);
-                            } else if (isAnalyzeHeuristicFallbackEnabled()) {
+                            } else if (isAnalyzeHeuristicFallbackEnabled(message)) {
                                 String heuristic = buildHeuristicBusinessLogicAnalysis(
                                     effectiveCodeContext,
                                     message,
@@ -3851,6 +3993,7 @@ public class ApiSpringController {
                         if (localAccepted
                                 && !qualityGateEarlyAudit
                                 && !codeDebugAnalyzeFastPath
+                                && !analyzeBusinessFastPath
                                 && aiLocalAnalyzeBroadGapFillEnabled
                                 && shouldRunBroadAnalysisGapFill(
                                     message,
@@ -11070,7 +11213,8 @@ public class ApiSpringController {
         boolean useLayered = switch (mode) {
             case "layered" -> true;
             case "orchestration_full" -> false;
-            default -> String.valueOf(assembledPrompt == null ? "" : assembledPrompt).length()
+            default -> "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                    || String.valueOf(assembledPrompt == null ? "" : assembledPrompt).length()
                     > Math.max(8000, aiLocalPromptCompositionAutoOrchestrationMaxChars)
                 || isWeakLocalRuntime();
         };
@@ -11419,6 +11563,75 @@ public class ApiSpringController {
         // Context metadata echo — model echoed Lucene/analysis file-stats context
         if (t.startsWith("{\"p1\":{\"lineCount\"") || t.contains("\"functionLikeCount\"")
                 || t.contains("\"importCount\":") && t.contains("\"typeLikeCount\"")) return true;
+        if (looksLikeOrchestrationRuntimeDigest(t)) return true;
+        if (looksLikeLeakedBusinessComprehensionBlock(t)) return true;
+        return false;
+    }
+
+    /** Model echoed internal BUSINESS_COMPREHENSION / BUSINESS_CONTEXT block instead of user prose. */
+    private boolean looksLikeLeakedBusinessComprehensionBlock(String text) {
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return false;
+        }
+        String lowered = safe.toLowerCase(Locale.ROOT);
+        if (lowered.contains("business_comprehension (internal")
+            || lowered.contains("business_context (internal")
+            || lowered.contains("[/business_comprehension]")
+            || lowered.contains("[/business_context]")) {
+            return true;
+        }
+        int markerHits = 0;
+        for (String marker : List.of(
+                "plan scenario:", "output contract:", "incremental_edit_module",
+                "### assumptions:", "### risks:", "user delta:", "existing business (editor):")) {
+            if (lowered.contains(marker)) {
+                markerHits++;
+            }
+        }
+        return markerHits >= 3;
+    }
+
+    private String stripLeakedBusinessComprehensionBlock(String text) {
+        String safe = String.valueOf(text == null ? "" : text);
+        if (safe.isBlank()) {
+            return "";
+        }
+        String stripped = safe
+            .replaceAll("(?is)##+\\s*BUSINESS_COMPREHENSION\\s*\\(internal[^\\[]*\\[/BUSINESS_COMPREHENSION\\]\\s*", "")
+            .replaceAll("(?is)##+\\s*BUSINESS_CONTEXT\\s*\\(internal[^\\[]*\\[/BUSINESS_CONTEXT\\]\\s*", "")
+            .replaceAll("(?is)###+\\s*ASSUMPTIONS:.*?###+\\s*RISKS:.*?$", "")
+            .replaceAll("(?is)^Plan scenario:.*?(?=\\n\\n|$)", "")
+            .replaceAll("(?is)^Output contract:.*?(?=\\n\\n|$)", "")
+            .replaceAll("(?is)^Steps:\\s*\\n(?:- .*\\n)+", "")
+            .trim();
+        return stripped.replaceAll("\\n{3,}", "\\n\\n").trim();
+    }
+
+    /** Model echoed Tier-3 orchestration tool digest (intentKeywords/codeSymbols stats) instead of prose. */
+    private boolean looksLikeOrchestrationRuntimeDigest(String text) {
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return false;
+        }
+        String lowered = safe.toLowerCase(Locale.ROOT);
+        int markerHits = 0;
+        for (String marker : List.of(
+                "intentkeywords", "codesymbols", "codesymbolcount", "menusignalcount",
+                "attachmentitemcount", "attachmenttextchars", "planner_symbols")) {
+            if (lowered.contains(marker)) {
+                markerHits++;
+            }
+        }
+        if (markerHits >= 2) {
+            return true;
+        }
+        if (lowered.contains("intentkeywords") && lowered.contains("intents:")) {
+            return true;
+        }
+        if (lowered.contains("\"stats\"") && lowered.contains("\"intents\"") && markerHits >= 1) {
+            return true;
+        }
         return false;
     }
 
@@ -19087,6 +19300,26 @@ public class ApiSpringController {
         return false;
     }
 
+    private String resolveAnalyzeBusinessScanContext(
+            String fullCode,
+            String message,
+            String focusCode) {
+        String code = String.valueOf(fullCode == null ? "" : fullCode);
+        if (code.isBlank()) {
+            return "";
+        }
+        int retrieveThreshold = Math.max(30000, aiCodeStreamAnalyzeSlidingWindowThresholdChars);
+        int cap = Math.max(18000, Math.min(32000, aiCodeStreamMaxCurrentCodeChars));
+        if (code.length() <= retrieveThreshold) {
+            return code.length() <= cap ? code : truncateMiddle(code, cap);
+        }
+        String condensed = buildAnalyzeCondensedPromptContext(code, message, focusCode, cap);
+        if (!condensed.isBlank()) {
+            return condensed;
+        }
+        return truncateMiddle(code, cap);
+    }
+
     private String buildAnalyzeCondensedPromptContext(
             String fullCode,
             String message,
@@ -19666,8 +19899,32 @@ public class ApiSpringController {
         text = dedupeAnalyzeNarrativeBlocks(text);
         text = normalizeAnalyzeFinalOutput(text);
 
+        if (looksLikeOrchestrationRuntimeDigest(text)) {
+            if (aiLocalAnalyzeGuardrailEnabled && isAnalyzeHeuristicFallbackEnabled(requestText)) {
+                String fallback = buildHeuristicBusinessLogicAnalysis(currentCode, requestText, contextType);
+                if (!fallback.isBlank()) {
+                    return fallback;
+                }
+            }
+            return "AI local trả về metadata nội bộ thay vì phân tích nghiệp vụ. Vui lòng thử lại.";
+        }
+
+        if (looksLikeLeakedBusinessComprehensionBlock(text)) {
+            String stripped = stripLeakedBusinessComprehensionBlock(text);
+            if (!stripped.isBlank() && !looksLikeLeakedBusinessComprehensionBlock(stripped)) {
+                text = stripped;
+            } else if (aiLocalAnalyzeGuardrailEnabled && isAnalyzeHeuristicFallbackEnabled(requestText)) {
+                String fallback = buildHeuristicBusinessLogicAnalysis(currentCode, requestText, contextType);
+                if (!fallback.isBlank()) {
+                    return fallback;
+                }
+            } else {
+                return "AI local trả về block nội bộ thay vì phân tích nghiệp vụ. Vui lòng thử lại.";
+            }
+        }
+
         if (looksLikeCssDomFragment(text)) {
-            if (aiLocalAnalyzeGuardrailEnabled && isAnalyzeHeuristicFallbackEnabled()) {
+            if (aiLocalAnalyzeGuardrailEnabled && isAnalyzeHeuristicFallbackEnabled(requestText)) {
                 String fallback = buildHeuristicBusinessLogicAnalysis(currentCode, requestText, contextType);
                 return fallback.isBlank()
                     ? "AI local không phân tích được nội dung này. Vui lòng thử rút gọn đoạn code hoặc diễn đạt lại yêu cầu."
@@ -19684,7 +19941,7 @@ public class ApiSpringController {
                 return checklistFallback;
             }
         }
-        if (aiLocalAnalyzeGuardrailEnabled && isAnalyzeHeuristicFallbackEnabled() && isLowSignalAnalyzeOutput(text)) {
+        if (aiLocalAnalyzeGuardrailEnabled && isAnalyzeHeuristicFallbackEnabled(requestText) && isLowSignalAnalyzeOutput(text)) {
             String fallback = buildHeuristicBusinessLogicAnalysis(currentCode, requestText, contextType);
             if (!fallback.isBlank()) {
                 return fallback;
@@ -20539,6 +20796,12 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         if (safe.length() < Math.max(80, aiLocalAnalyzeLowSignalMinLength)) {
             return true;
         }
+        if (looksLikeOrchestrationRuntimeDigest(safe)) {
+            return true;
+        }
+        if (looksLikeLeakedBusinessComprehensionBlock(safe)) {
+            return true;
+        }
         if (safe.matches("(?is)^reason\\s*:\\s*.+$") && !safe.contains("\n-") && !safe.contains("\n*")) {
             return true;
         }
@@ -21004,6 +21267,18 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
     }
 
     private String buildHeuristicBusinessLogicAnalysis(String currentCode, String requestText, String contextType) {
+        return buildHeuristicBusinessLogicAnalysis(
+            currentCode,
+            requestText,
+            contextType,
+            looksLikeKqxsBroadcastCode(currentCode));
+    }
+
+    private String buildHeuristicBusinessLogicAnalysis(
+            String currentCode,
+            String requestText,
+            String contextType,
+            boolean forceKqxsProfile) {
         String code = String.valueOf(currentCode == null ? "" : currentCode);
         if (code.isBlank()) {
             return "Không đủ ngữ cảnh code để phân tích nghiệp vụ. Hãy gửi thêm đoạn code cần phân tích.";
@@ -21032,10 +21307,20 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         Matcher fnMatcher = Pattern.compile("(?m)(?:function\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*\\(|const\\s+([A-Za-z_$][A-Za-z0-9_$]*)\\s*=\\s*\\([^\\)]*\\)\\s*=>|class\\s+([A-Za-z_$][A-Za-z0-9_$]*))").matcher(analysisCode);
         while (fnMatcher.find()) {
             String name = firstNonBlank(fnMatcher.group(1), fnMatcher.group(2), fnMatcher.group(3));
-            if (!name.isBlank()) {
+            if (isValidHeuristicSymbolName(name)) {
                 functionNames.add(name);
             }
             if (functionNames.size() >= 16) {
+                break;
+            }
+        }
+        Matcher windowFnMatcher = Pattern.compile("(?m)(?:window\\.)?([A-Za-z_$][A-Za-z0-9_$]*)\\s*=\\s*function\\s*\\(").matcher(analysisCode);
+        while (windowFnMatcher.find()) {
+            String name = String.valueOf(windowFnMatcher.group(1) == null ? "" : windowFnMatcher.group(1)).trim();
+            if (isValidHeuristicSymbolName(name)) {
+                functionNames.add(name);
+            }
+            if (functionNames.size() >= 20) {
                 break;
             }
         }
@@ -21067,7 +21352,7 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         Matcher branchMatcher = Pattern.compile("(?m)\\bif\\s*\\(([^\\)]{1,120})\\)").matcher(analysisCode);
         while (branchMatcher.find()) {
             String expr = String.valueOf(branchMatcher.group(1) == null ? "" : branchMatcher.group(1)).trim();
-            if (!expr.isBlank()) {
+            if (isValidHeuristicBranchCondition(expr)) {
                 branchConditions.add(expr.replaceAll("\\s+", " "));
             }
             if (branchConditions.size() >= 12) {
@@ -21077,7 +21362,7 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         Matcher switchMatcher = Pattern.compile("(?m)\\bswitch\\s*\\(([^\\)]{1,100})\\)").matcher(analysisCode);
         while (switchMatcher.find()) {
             String expr = String.valueOf(switchMatcher.group(1) == null ? "" : switchMatcher.group(1)).trim();
-            if (!expr.isBlank()) {
+            if (isValidHeuristicBranchCondition(expr)) {
                 branchConditions.add("switch(" + expr.replaceAll("\\s+", " ") + ")");
             }
             if (branchConditions.size() >= 12) {
@@ -21121,7 +21406,13 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
 
         StringBuilder sb = new StringBuilder();
         sb.append("1) Mục tiêu nghiệp vụ\n");
-        if (looksLikeReactUiCode(analysisCode)) {
+        boolean kqxsProfile = forceKqxsProfile || looksLikeKqxsBroadcastCode(analysisCode);
+        if (kqxsProfile) {
+            sb.append("- Module KQXS/broadcast xổ số: UI React động (autoKqxs), hiển thị/nhập kết quả, cấu hình proxy/theme.\n");
+            sb.append("- Hỗ trợ chế độ view-only (`csmKqxsViewOnly`) và fallback UI khi thiếu Ant Design.\n");
+            riskHints.add("Khi người dùng chọn danh mục, cần đảm bảo dữ liệu đã được cập nhật; nếu không sẽ gây lỗi hiển thị/ghép kết quả.");
+            riskHints.add("Đồng bộ API/lịch sử KQXS trước khi render bảng kết quả hoặc chuyển tab danh mục.");
+        } else if (looksLikeReactUiCode(analysisCode)) {
             sb.append("- Điều phối UI + xử lý tương tác + đồng bộ state theo dữ liệu đầu vào.\n");
         } else if (looksLikeJavaServiceCode(analysisCode)) {
             sb.append("- Validate yêu cầu, điều phối service, và thực thi side effects có kiểm soát.\n");
@@ -21133,7 +21424,14 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         }
 
         sb.append("\n2) Luồng xử lý chính\n");
-        sb.append("- Nhận input -> chuẩn hóa/đọc state -> rẽ nhánh điều kiện -> thực thi side effect -> cập nhật output/state.\n");
+        if (kqxsProfile) {
+            sb.append("- Bootstrap IIFE `autoKqxsReactAntdSelfContained`: mount React UI (Ant Design hoặc Fallback shim).\n");
+            sb.append("- Đọc cấu hình runtime: `csmKqxsProxyConfig`, `csmKqxsThemeOverrides`, `csmKqxsViewOnly`, auto daily update.\n");
+            sb.append("- Người dùng chọn danh mục/ngày → gọi API/proxy lấy KQXS → chuẩn hóa → render bảng/nhập số.\n");
+            sb.append("- Lưu/cập nhật qua helperApi/recordManager; đồng bộ theme và proxy trước khi hiển thị.\n");
+        } else {
+            sb.append("- Nhận input -> chuẩn hóa/đọc state -> rẽ nhánh điều kiện -> thực thi side effect -> cập nhật output/state.\n");
+        }
         if (!functionNames.isEmpty()) {
             sb.append("- Chuỗi hàm nổi bật theo code hiện tại: ").append(String.join(" -> ", limitList(functionNames, 6))).append(".\n");
         }
@@ -21142,7 +21440,12 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         }
 
         sb.append("\n3) Thành phần/hàm quan trọng\n");
-        if (!functionNames.isEmpty()) {
+        if (kqxsProfile) {
+            List<String> kqxsComponents = extractKqxsBusinessComponents(analysisCode, functionNames);
+            for (String item : kqxsComponents) {
+                sb.append("- ").append(item).append("\n");
+            }
+        } else if (!functionNames.isEmpty()) {
             for (String fn : limitList(functionNames, 10)) {
                 sb.append("- ").append(fn).append("\n");
             }
@@ -21151,7 +21454,11 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         }
 
         sb.append("\n4) Điều kiện rẽ nhánh\n");
-        if (!branchConditions.isEmpty()) {
+        if (kqxsProfile) {
+            for (String branch : extractKqxsBusinessBranches()) {
+                sb.append("- ").append(branch).append("\n");
+            }
+        } else if (!branchConditions.isEmpty()) {
             for (String cond : limitList(branchConditions, 12)) {
                 sb.append("- ").append(cond).append("\n");
             }
@@ -21160,17 +21467,23 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         }
 
         sb.append("\n5) Đầu vào/đầu ra/side effects\n");
-        if (!inputSignals.isEmpty()) {
-            sb.append("- Đầu vào chính: ").append(String.join(", ", limitList(inputSignals, 10))).append(".\n");
-        }
-        if (!outputSignals.isEmpty()) {
-            sb.append("- Đầu ra/cập nhật: ").append(String.join(", ", limitList(outputSignals, 10))).append(".\n");
-        }
-        if (!sideEffects.isEmpty()) {
-            sb.append("- Side effects: ").append(String.join(", ", limitList(sideEffects, 10))).append(".\n");
-            sb.append("- Lưu ý kiểm soát retry/idempotency/error-path tại các điểm side effect.\n");
+        if (kqxsProfile) {
+            sb.append("- Đầu vào: cấu hình proxy/theme (`csmKqxsProxyConfig`, `csmKqxsThemeOverrides`), chọn danh mục/ngày, chế độ view-only.\n");
+            sb.append("- Đầu ra: bảng/nhập kết quả KQXS, cập nhật UI React, trạng thái đồng bộ auto daily update.\n");
+            sb.append("- Side effects: gọi helperApi/proxy lấy dữ liệu xổ số, lưu qua recordManager/saveData, mount/unmount React UI.\n");
         } else {
-            sb.append("- Chưa phát hiện side effect mạnh trong đoạn hiện tại.\n");
+            if (!inputSignals.isEmpty()) {
+                sb.append("- Đầu vào chính: ").append(String.join(", ", limitList(inputSignals, 10))).append(".\n");
+            }
+            if (!outputSignals.isEmpty()) {
+                sb.append("- Đầu ra/cập nhật: ").append(String.join(", ", limitList(outputSignals, 10))).append(".\n");
+            }
+            if (!sideEffects.isEmpty()) {
+                sb.append("- Side effects: ").append(String.join(", ", limitList(sideEffects, 10))).append(".\n");
+                sb.append("- Lưu ý kiểm soát retry/idempotency/error-path tại các điểm side effect.\n");
+            } else {
+                sb.append("- Chưa phát hiện side effect mạnh trong đoạn hiện tại.\n");
+            }
         }
 
         sb.append("\n6) Rủi ro và gợi ý\n");
@@ -21206,6 +21519,96 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             }
         }
         return out;
+    }
+
+    private static final Set<String> HEURISTIC_JS_KEYWORDS = Set.of(
+        "function", "class", "const", "let", "var", "return", "if", "else", "for", "while", "switch",
+        "case", "break", "continue", "try", "catch", "finally", "throw", "new", "this", "typeof",
+        "instanceof", "import", "export", "default", "async", "await", "yield", "null", "undefined",
+        "true", "false", "void", "delete", "in", "of", "super", "extends", "implements", "interface",
+        "package", "public", "private", "protected", "static", "native", "synchronized", "transient",
+        "volatile", "strictfp", "enum", "goto", "debugger", "with", "arguments", "eval");
+
+    private boolean isValidHeuristicSymbolName(String name) {
+        String safe = String.valueOf(name == null ? "" : name).trim();
+        if (safe.length() < 3 || safe.length() > 80) {
+            return false;
+        }
+        if (!safe.matches("[A-Za-z_$][A-Za-z0-9_$]*")) {
+            return false;
+        }
+        if (HEURISTIC_JS_KEYWORDS.contains(safe.toLowerCase(Locale.ROOT))) {
+            return false;
+        }
+        return !safe.matches("(?i)^(div|span|flex|grid|auto|none|row|column|text|number|input|button)$");
+    }
+
+    private boolean isValidHeuristicBranchCondition(String expr) {
+        String safe = String.valueOf(expr == null ? "" : expr).trim();
+        if (safe.length() < 10 || safe.length() > 160) {
+            return false;
+        }
+        if (safe.matches("^[\\W@:]+$")) {
+            return false;
+        }
+        String lowered = safe.toLowerCase(Locale.ROOT);
+        if (HEURISTIC_JS_KEYWORDS.contains(lowered)) {
+            return false;
+        }
+        if (lowered.matches("^(function|@|:|;|,|\\.|\\|\\||&&)$")) {
+            return false;
+        }
+        return safe.matches(".*[A-Za-z_$][A-Za-z0-9_$]{2,}.*");
+    }
+
+    private List<String> extractKqxsBusinessComponents(String code, Set<String> functionNames) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        String safe = String.valueOf(code == null ? "" : code);
+        if (safe.contains("autoKqxsReactAntdSelfContained") || safe.contains("autoKqxs")) {
+            out.add("Entry IIFE `autoKqxsReactAntdSelfContained`: bootstrap UI broadcast KQXS self-contained");
+        }
+        if (safe.contains("getKqxsProxyConfig") || safe.contains("csmKqxsProxyConfig") || safe.contains("kqxsProxyConfig")) {
+            out.add("`getKqxsProxyConfig` / `csmKqxsProxyConfig`: cấu hình proxy/API lấy dữ liệu xổ số");
+        }
+        if (safe.contains("normalizeThemeOverrides") || safe.contains("getThemeOverrides") || safe.contains("csmKqxsThemeOverrides")) {
+            out.add("Theme runtime: `normalizeThemeOverrides`, `getThemeOverrides`, `csmKqxsThemeOverrides`");
+        }
+        if (safe.contains("csmKqxsViewOnly") || safe.contains("KQXS_VIEW_ONLY")) {
+            out.add("Chế độ view-only (`csmKqxsViewOnly`): khóa thao tác sửa, chỉ hiển thị kết quả");
+        }
+        if (safe.contains("csmKqxsAutoDailyUpdate") || safe.contains("kqxsAutoDailyUpdate")) {
+            out.add("Auto daily update: tự đồng bộ KQXS theo lịch/cấu hình `csmKqxsAutoDailyUpdate`");
+        }
+        if (safe.contains("FallbackCard") || safe.contains("FallbackRow") || safe.contains("FallbackInputNumber")) {
+            out.add("Fallback UI (FallbackCard/Row/Input…): shim Ant Design khi thư viện chưa sẵn sàng");
+        }
+        if (safe.contains("helperApi") || safe.contains("loadCombo") || safe.contains("saveData") || safe.contains("recordManager")) {
+            out.add("Tầng dữ liệu: helperApi / loadCombo / saveData / recordManager — nạp và lưu kết quả KQXS");
+        }
+        if (safe.contains("chuyenNgay") || safe.contains("CongNgay") || safe.contains("ddmmyyyyToIso")) {
+            out.add("Tiện ích ngày tháng: `chuyenNgay`, `CongNgay`, `ddmmyyyyToIso` — chuẩn hóa lịch quay số");
+        }
+        for (String fn : limitList(functionNames, 8)) {
+            if (fn.startsWith("Fallback") || fn.startsWith("getKqxs") || fn.startsWith("normalize")
+                    || fn.startsWith("detect") || fn.startsWith("load") || fn.startsWith("save")
+                    || fn.startsWith("render") || fn.contains("Kqxs") || fn.contains("kqxs")) {
+                out.add("Hàm `" + fn + "`");
+            }
+        }
+        if (out.isEmpty()) {
+            out.add("Module KQXS/broadcast: UI React + proxy/theme config + nhập/hiển thị kết quả xổ số");
+        }
+        return new ArrayList<>(out);
+    }
+
+    private List<String> extractKqxsBusinessBranches() {
+        return List.of(
+            "Chế độ view-only (`csmKqxsViewOnly` / `KQXS_VIEW_ONLY`): chỉ hiển thị kết quả, khóa thao tác nhập/sửa",
+            "Thiếu hoặc lỗi cấu hình proxy (`csmKqxsProxyConfig` / `getKqxsProxyConfig`): fallback API hoặc báo lỗi trước khi render",
+            "Người dùng chọn danh mục hoặc ngày quay số: gọi proxy/helperApi nạp KQXS rồi chuẩn hóa trước khi hiển thị",
+            "Bật auto daily update (`csmKqxsAutoDailyUpdate`): đồng bộ kết quả theo lịch/cấu hình runtime",
+            "Ant Design chưa sẵn sàng: dùng FallbackCard/Row/Input shim thay vì component Ant gốc",
+            "Đổi theme runtime (`csmKqxsThemeOverrides` / `normalizeThemeOverrides`): áp dụng trước khi render bảng kết quả");
     }
 
     private String firstNonBlank(String... values) {
@@ -21263,7 +21666,19 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 || lowered.startsWith("source: dyn_ctx_")
                 || lowered.startsWith("request=")
                 || lowered.startsWith("intentkeywords=")
+                || lowered.startsWith("intentkeywords:")
                 || lowered.startsWith("codesymbols=")
+                || lowered.startsWith("codesymbols:")
+                || lowered.startsWith("codesymbolcount:")
+                || lowered.startsWith("attachmentcount:")
+                || lowered.startsWith("plan scenario:")
+                || lowered.startsWith("output contract:")
+                || lowered.startsWith("### assumptions:")
+                || lowered.startsWith("### risks:")
+                || lowered.startsWith("## business_comprehension")
+                || lowered.startsWith("## business_context")
+                || lowered.contains("[/business_comprehension]")
+                || lowered.contains("[/business_context]")
                 || lowered.startsWith("contexttype=")
                 || lowered.startsWith("tasktype=")
                 || lowered.startsWith("orchestration_dynamic_memory_source=")
@@ -21475,6 +21890,30 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         return safe.startsWith("{") || safe.startsWith("[") || safe.contains("\"menu\"") || safe.contains("\"children\"");
     }
 
+    private boolean looksLikeKqxsEditorKey(String pName) {
+        String safe = String.valueOf(pName == null ? "" : pName).trim().toLowerCase(Locale.ROOT);
+        if (safe.isBlank()) {
+            return false;
+        }
+        return safe.contains("kqxs")
+            || safe.contains("broadcast_kqxs")
+            || safe.contains("auto-kqxs")
+            || safe.contains("autokqxs");
+    }
+
+    private boolean looksLikeKqxsBroadcastCode(String code) {
+        String safe = String.valueOf(code == null ? "" : code).toLowerCase(Locale.ROOT);
+        if (safe.isBlank()) {
+            return false;
+        }
+        return safe.contains("autokqxs")
+            || safe.contains("kqxs_view_only")
+            || safe.contains("csmkqxs")
+            || safe.contains("getkqxsproxyconfig")
+            || safe.contains("broadcast_kqxs")
+            || safe.contains("kqxs_dynamic");
+    }
+
     private boolean looksLikeReactUiCode(String code) {
         String safe = String.valueOf(code == null ? "" : code).toLowerCase(Locale.ROOT);
         if (safe.isBlank()) {
@@ -21569,6 +22008,11 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         String draft = String.valueOf(rendered == null ? "" : rendered).trim();
         if (draft.isBlank()) {
             return "";
+        }
+        if (draft.contains("1) Mục tiêu nghiệp vụ")
+                && draft.contains("6) Rủi ro")
+                && draft.length() >= 400) {
+            return draft;
         }
         if (!aiLocalAnalyzeLanguageAlignmentEnabled
                 || llamaCppNativeService == null
@@ -23586,6 +24030,155 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         return classifyIntentWithLocalAI(requestText, false, "");
     }
 
+    private LocalIntentClassification buildAnalyzeBusinessHeuristicIntent(String requestText, String contextType) {
+        logger.info("[AI_INTENT_CLASSIFY] heuristic analyze-business route request={}",
+            String.valueOf(requestText == null ? "" : requestText).length() > 80
+                ? String.valueOf(requestText).substring(0, 80) + "…"
+                : requestText);
+        logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} pass={} confidence={} nextStep={} contextKind={}",
+            "heuristic_analyze_business_question",
+            "first",
+            99,
+            "load_code_context",
+            "code");
+        return new LocalIntentClassification(
+            "QUESTION",
+            "modify",
+            99,
+            "load_code_context",
+            "code",
+            "heuristic_analyze_business_question",
+            "analyze");
+    }
+
+    private boolean tryCompleteAnalyzeBusinessHeuristicEarly(
+            SseEmitter emitter,
+            String requestId,
+            UserAuthContext authCtx,
+            String appId,
+            String contextType,
+            String pName,
+            Integer pType,
+            String message,
+            String fullCodeContext,
+            String retrievedScanContext,
+            AiGreenfieldBusinessDesignService.ComprehensionResult comprehension,
+            long requestStartedAtMs,
+            AtomicBoolean streamCompletedRef) {
+        long startedAtMs = System.currentTimeMillis();
+        try {
+            String scanContext = String.valueOf(retrievedScanContext == null ? "" : retrievedScanContext).trim();
+            if (scanContext.isBlank()) {
+                scanContext = resolveAnalyzeBusinessScanContext(fullCodeContext, message, "");
+            }
+            String answer = buildAnalyzeBusinessPrimaryAnswer(
+                scanContext,
+                message,
+                contextType,
+                comprehension,
+                fullCodeContext,
+                pName);
+            if (answer.isBlank() || isLowSignalAnalyzeOutput(answer)) {
+                return false;
+            }
+            int fullChars = String.valueOf(fullCodeContext == null ? "" : fullCodeContext).length();
+            int retrievedChars = scanContext.length();
+            logger.info(
+                "LOCAL_ANALYZE business-heuristic-primary requestId={} fullCodeChars={} retrievedContextChars={} answerChars={} earlyExit=true",
+                requestId,
+                fullChars,
+                retrievedChars,
+                answer.length());
+            sendEvent(emitter, jsonOf(
+                "stage", "routing",
+                "responseMode", "analyze",
+                "requestId", requestId,
+                "message", "Analyze business fast path: heuristic primary (skip heavy prompt/infer)"));
+            sendEvent(emitter, jsonOf(
+                "stage", "streaming_started",
+                "requestId", requestId,
+                "model", "local_heuristic_analyze",
+                "ttftMs", Math.max(0L, System.currentTimeMillis() - startedAtMs),
+                "estimatedTotalChars", answer.length(),
+                "percent", 20));
+            int chunkCount = emitSyntheticLocalStreamChunks(emitter, requestId, answer, 1, false, true);
+            long elapsedMs = Math.max(0L, System.currentTimeMillis() - requestStartedAtMs);
+            Map<String, Object> completion = new LinkedHashMap<>();
+            completion.put("stage", "complete");
+            completion.put("fullResponse", answer);
+            completion.put("content", answer);
+            completion.put("assistantChatText", answer);
+            completion.put("responseMode", "analyze");
+            completion.put("outputShape", "analyze_business_prose");
+            completion.put("streamChunkCount", chunkCount);
+            completion.put("streamedChars", answer.length());
+            completion.put("localProviderPrimaryUsed", true);
+            completion.put("analyzeBusinessHeuristicPrimary", true);
+            completion.put("analyzeBusinessFastPath", true);
+            completion.put("promptTokens", 0);
+            completion.put("completionTokens", estimateTokens(answer));
+            completion.put("model", "local_heuristic_analyze");
+            completion.put("modelDecisionStep", "final");
+            completion.put("modelDecisionReason", "analyze_business_heuristic_early_exit");
+            completion.put("decision_step", "final");
+            completion.put("reason_code", "completed");
+            completion.put("requestId", requestId);
+            completion.put("timestamp", System.currentTimeMillis());
+            sendEvent(emitter, objectMapper.writeValueAsString(completion));
+            logger.info(
+                "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType=code responseMode=analyze model=local_heuristic_analyze "
+                    + "outputChars={} streamedChars={} streamChunkCount={} agenticStepResultCount=0 inferenceElapsedMs=0 elapsedMs={}",
+                requestId,
+                appId,
+                answer.length(),
+                answer.length(),
+                chunkCount,
+                elapsedMs);
+            Map<String, Object> turnMeta = new LinkedHashMap<>();
+            turnMeta.put("source", "aiCodeStreamAnalyzeBusinessHeuristic");
+            turnMeta.put("model", "local_heuristic_analyze");
+            turnMeta.put("responseMode", "analyze");
+            turnMeta.put("analyzeBusinessFastPath", true);
+            turnMeta.put("analyzeBusinessHeuristicPrimary", true);
+            turnMeta.put("fullCodeChars", fullChars);
+            turnMeta.put("retrievedContextChars", retrievedChars);
+            turnMeta.put("contextStrategy", retrievedChars < fullChars ? "rag_condensed_analyze" : "full_editor_string");
+            turnMeta.put("completionTokens", estimateTokens(answer));
+            aiConversationContextService.recordTurnWithScopes(
+                authCtx.principalId,
+                appId,
+                contextType,
+                pName,
+                pType,
+                message,
+                answer,
+                turnMeta);
+            emitRequestCompleteEvent(
+                emitter,
+                requestId,
+                "ai-code-stream",
+                requestStartedAtMs,
+                "ok",
+                Map.of(
+                    "model", "local_heuristic_analyze",
+                    "streamedChars", answer.length(),
+                    "streamChunkCount", chunkCount,
+                    "analyzeBusinessFastPath", true));
+            streamCompletedRef.set(true);
+            emitter.complete();
+            logger.info(
+                "ApiSpringController: ai-code-stream complete requestId={} appId={} model=local_heuristic_analyze elapsedMs={} outputChars={}",
+                requestId,
+                appId,
+                elapsedMs,
+                answer.length());
+            return true;
+        } catch (Exception ex) {
+            logger.warn("Analyze business heuristic early exit failed, continue standard pipeline: {}", ex.getMessage());
+            return false;
+        }
+    }
+
     private LocalIntentClassification classifyIntentWithLocalAI(String requestText, boolean bypassCache) {
         return classifyIntentWithLocalAI(requestText, bypassCache, "");
     }
@@ -23812,6 +24405,7 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
 
         if (lowConfidence
             && shouldRunIntentSecondPass(requestText, editMode, menuContext)
+            && !AiGreenfieldBusinessDesignService.isAnalyzeBusinessQuestion(requestText)
             && !String.valueOf(requestText == null ? "" : requestText).trim().isBlank()) {
             LocalIntentClassification secondPass = classifyIntentWithLocalAI(requestText, true);
             LocalIntentClassification normalizedSecondRoute = normalizeClassifierRoute(secondPass);
@@ -24077,7 +24671,117 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
     }
 
     private boolean isAnalyzeHeuristicFallbackEnabled() {
+        return isAnalyzeHeuristicFallbackEnabled("");
+    }
+
+    private boolean isAnalyzeHeuristicFallbackEnabled(String requestText) {
+        if (AiGreenfieldBusinessDesignService.isAnalyzeBusinessQuestion(requestText)) {
+            return aiLocalAnalyzeHeuristicFallbackEnabled;
+        }
         return aiLocalAnalyzeHeuristicFallbackEnabled && !aiLocalRoutingModelDrivenEnabled;
+    }
+
+    /**
+     * Deterministic primary answer for analyze-business on weak local runtimes: full 6-section Vietnamese prose
+     * enriched from BusinessComprehend when available — avoids 1.5B model echoing orchestration metadata.
+     */
+    private String buildAnalyzeBusinessPrimaryAnswer(
+            String retrievedScanContext,
+            String message,
+            String contextType,
+            AiGreenfieldBusinessDesignService.ComprehensionResult comprehension) {
+        return buildAnalyzeBusinessPrimaryAnswer(
+            retrievedScanContext,
+            message,
+            contextType,
+            comprehension,
+            retrievedScanContext,
+            "");
+    }
+
+    private String buildAnalyzeBusinessPrimaryAnswer(
+            String retrievedScanContext,
+            String message,
+            String contextType,
+            AiGreenfieldBusinessDesignService.ComprehensionResult comprehension,
+            String fullCodeContext,
+            String pName) {
+        String scanCode = String.valueOf(retrievedScanContext == null ? "" : retrievedScanContext);
+        String fullCode = String.valueOf(fullCodeContext == null ? "" : fullCodeContext);
+        boolean kqxsHint = looksLikeKqxsBroadcastCode(scanCode)
+            || looksLikeKqxsBroadcastCode(fullCode)
+            || looksLikeKqxsEditorKey(pName);
+        String base = buildHeuristicBusinessLogicAnalysis(scanCode, message, contextType, kqxsHint);
+        if (base.isBlank()) {
+            return base;
+        }
+        if (comprehension == null || !comprehension.activated() || comprehension.businessSpec() == null) {
+            return base;
+        }
+        AiGreenfieldBusinessDesignService.BusinessSpec spec = comprehension.businessSpec();
+        String domainSummary = String.valueOf(spec.domainSummary() == null ? "" : spec.domainSummary()).trim();
+        String existingSummary = String.valueOf(spec.existingBusinessSummary() == null ? "" : spec.existingBusinessSummary()).trim();
+        List<String> modules = spec.modules() == null ? List.of() : spec.modules();
+        List<String> flows = spec.flows() == null ? List.of() : spec.flows();
+        List<String> risks = spec.risks() == null ? List.of() : spec.risks();
+        if (domainSummary.isBlank() && existingSummary.isBlank() && modules.isEmpty()) {
+            return base;
+        }
+        StringBuilder section1 = new StringBuilder();
+        section1.append("1) Mục tiêu nghiệp vụ\n");
+        if (!domainSummary.isBlank()) {
+            section1.append("- ").append(domainSummary).append("\n");
+        }
+        if (!existingSummary.isBlank()) {
+            section1.append("- Hiện trạng: ").append(existingSummary).append("\n");
+        }
+        if (!modules.isEmpty()) {
+            section1.append("- Module: ").append(String.join("; ", limitList(new LinkedHashSet<>(modules), 8))).append("\n");
+        }
+        if (!flows.isEmpty()) {
+            section1.append("- Luồng nghiệp vụ: ").append(String.join("; ", limitList(new LinkedHashSet<>(flows), 6))).append("\n");
+        }
+        int sec2Idx = base.indexOf("\n2) Luồng");
+        String merged = (section1.toString().trim() + (sec2Idx > 0 ? base.substring(sec2Idx) : ("\n" + base)))
+            .replaceAll("\\n{3,}", "\\n\\n")
+            .trim();
+        if (kqxsHint || looksLikeKqxsBroadcastCode(fullCode)) {
+            int sec3Idx = merged.indexOf("\n3) Thành phần");
+            int sec4Idx = sec3Idx >= 0 ? merged.indexOf("\n4) ", sec3Idx + 1) : -1;
+            if (sec3Idx >= 0 && sec4Idx > sec3Idx) {
+                StringBuilder sec3 = new StringBuilder("\n3) Thành phần/hàm quan trọng\n");
+                LinkedHashSet<String> fnSet = new LinkedHashSet<>();
+                Matcher m = Pattern.compile("(?m)`([A-Za-z_$][A-Za-z0-9_$]*)`").matcher(base);
+                while (m.find()) {
+                    String sym = m.group(1);
+                    if (isValidHeuristicSymbolName(sym)) {
+                        fnSet.add(sym);
+                    }
+                }
+                String componentSource = fullCode.length() > scanCode.length() ? fullCode : scanCode;
+                for (String item : extractKqxsBusinessComponents(componentSource, fnSet)) {
+                    sec3.append("- ").append(item).append("\n");
+                }
+                if (!modules.isEmpty()) {
+                    sec3.append("- Module nghiệp vụ (Comprehend): ")
+                        .append(String.join("; ", limitList(new LinkedHashSet<>(modules), 6)))
+                        .append("\n");
+                }
+                merged = merged.substring(0, sec3Idx) + sec3.toString().trim() + merged.substring(sec4Idx);
+            }
+        }
+        if (!risks.isEmpty()) {
+            int sec6Idx = merged.indexOf("\n6) Rủi ro");
+            if (sec6Idx >= 0) {
+                String prefix = merged.substring(0, sec6Idx);
+                StringBuilder sec6 = new StringBuilder("\n6) Rủi ro và gợi ý\n");
+                for (String risk : limitList(new LinkedHashSet<>(risks), 6)) {
+                    sec6.append("- ").append(risk).append("\n");
+                }
+                merged = prefix + sec6.toString().trim();
+            }
+        }
+        return merged.trim();
     }
 
     private String resolveEffectiveUserLanguage(String uiLang, String message) {
@@ -30350,7 +31054,6 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         String mode = String.valueOf(rawMode == null ? "" : rawMode).trim().toLowerCase();
         String normalizedContextType = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
         String normalizedTaskType = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase(Locale.ROOT);
-        String detected = inferAiAssistantResponseModeFromText(message);
 
         if ("edit".equals(mode)) {
             return "edit";
@@ -30358,6 +31061,12 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         if ("analyze".equals(mode)) {
             return "analyze";
         }
+        if ("code".equals(normalizedContextType)
+                && AiGreenfieldBusinessDesignService.isAnalyzeBusinessQuestion(message)) {
+            return "analyze";
+        }
+
+        String detected = inferAiAssistantResponseModeFromText(message);
 
         if ("edit".equals(detected) || "analyze".equals(detected)) {
             return detected;

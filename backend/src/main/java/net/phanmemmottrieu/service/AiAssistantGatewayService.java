@@ -126,6 +126,7 @@ End immediately after the response.
 You are CSM AI Assistant.
 Follow the requested output contract exactly.
 Answer in plain text prose unless the contract explicitly requires JSON.
+Never repeat internal blocks such as BUSINESS_CONTEXT, BUSINESS_COMPREHENSION, Steps, or Output contract.
 End immediately after the response.
 """;
 

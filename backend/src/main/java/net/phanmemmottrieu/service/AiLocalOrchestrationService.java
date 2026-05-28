@@ -63,7 +63,7 @@ public class AiLocalOrchestrationService {
         }
     }
 
-    private static final Pattern TOKEN_PATTERN = Pattern.compile("[a-zA-Z0-9_\\-]{3,}");
+    private static final Pattern TOKEN_PATTERN = Pattern.compile("[\\p{L}\\p{N}_\\-]{3,}", Pattern.UNICODE_CHARACTER_CLASS);
     private static final Pattern CODE_SYMBOL_PATTERN = Pattern.compile(
         "(?m)^\\s*(?:public|private|protected)?\\s*(?:static\\s+)?(?:class|interface|enum|record|void|int|long|double|float|boolean|String|def|function)\\s+[A-Za-z_][A-Za-z0-9_]*.*$");
     private static final Pattern BRANCH_SIGNAL_PATTERN = Pattern.compile("(?i)\\b(if|else\\s+if|switch|case|catch|throw|return)\\b");
