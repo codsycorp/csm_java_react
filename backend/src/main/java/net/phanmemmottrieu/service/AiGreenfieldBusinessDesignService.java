@@ -200,6 +200,9 @@ public class AiGreenfieldBusinessDesignService {
     @Value("${ai.local.business-comprehension.user-request-max-chars:3200}")
     private int userRequestMaxChars;
 
+    @Value("${ai.local.business-comprehension.menu-greenfield-fast-path.enabled:true}")
+    private boolean menuGreenfieldFastPathEnabled;
+
     @Value("${ai.local.business-comprehension.tenant-rag-max-chars:2800}")
     private int tenantRagMaxChars;
 
@@ -376,6 +379,44 @@ public class AiGreenfieldBusinessDesignService {
         log.info("BusinessComprehension deterministic seed fallback menuFlow={} emptyMenu={} chars={}",
             menuFlow, emptyMenu, seed.length());
         return seed;
+    }
+
+    /**
+     * Rich ERP menu design prompts must reach the LLM worker — not the 1-node heuristic fast path.
+     */
+    public boolean shouldUseMenuGreenfieldFastPath(String userMessage) {
+        if (!menuGreenfieldFastPathEnabled) {
+            return false;
+        }
+        return !isRichGreenfieldMenuDesignRequest(userMessage);
+    }
+
+    public boolean isRichGreenfieldMenuDesignRequest(String message) {
+        String lower = normalizeForMatch(String.valueOf(message == null ? "" : message));
+        if (lower.isBlank()) {
+            return false;
+        }
+        int domainHits = 0;
+        if (lower.contains("ban hang") || lower.contains("bán hàng")) {
+            domainHits++;
+        }
+        if (lower.contains("xuat nhap ton") || lower.contains("xuất nhập tồn") || lower.contains("nhap kho")
+            || lower.contains("nhập kho") || lower.contains("xuat kho") || lower.contains("xuất kho")) {
+            domainHits++;
+        }
+        if (lower.contains("cong no") || lower.contains("công nợ")) {
+            domainHits++;
+        }
+        if (lower.contains("bao cao") || lower.contains("báo cáo") || lower.contains("ket qua kinh doanh")
+            || lower.contains("kết quả kinh doanh")) {
+            domainHits++;
+        }
+        boolean explicitFullMenu = lower.contains("viet day du json menu")
+            || lower.contains("viết đầy đủ json menu")
+            || lower.contains("json menu day du")
+            || lower.contains("full menu")
+            || lower.contains("toan bo menu");
+        return domainHits >= 2 || (explicitFullMenu && domainHits >= 1);
     }
 
     private boolean isEffectivelyEmptyMenu(String menuJson) {
@@ -619,9 +660,10 @@ public class AiGreenfieldBusinessDesignService {
             }
             existingSummary = buildCodeExistingSummary(codeScan, activeEditorDigest);
         } else {
-            modules = extractModulesFromText(activeEditorDigest);
-            if (modules.isEmpty()) {
-                modules = extractModulesFromText(userRequest);
+            // Greenfield: user request wins — never treat empty editor JSON as a "module name"
+            modules = extractModulesFromText(userRequest);
+            if (modules.isEmpty() && !looksLikeJsonMenuEnvelope(activeEditorDigest)) {
+                modules = extractModulesFromText(activeEditorDigest);
             }
             if (modules.isEmpty() && !sampleMenuDigest.isBlank()) {
                 modules = extractModulesFromText(sampleMenuDigest);
@@ -1213,9 +1255,21 @@ public class AiGreenfieldBusinessDesignService {
     }
 
     private String buildDeterministicMenuSeed(BusinessSpec spec) {
-        List<String> moduleNames = spec.modules() == null || spec.modules().isEmpty()
-            ? List.of("Module chính")
-            : spec.modules();
+        List<String> moduleNames = sanitizeModuleNames(
+            spec.modules() == null ? List.of() : spec.modules(),
+            String.valueOf(spec.userDelta() == null ? "" : spec.userDelta()));
+        if (moduleNames.isEmpty()) {
+            moduleNames = extractModulesFromText(String.valueOf(spec.userDelta() == null ? "" : spec.userDelta()));
+        }
+        if (shouldBuildRichErpMenuSeed(spec.userDelta(), moduleNames)) {
+            String rich = buildRichSalesInventoryFinanceMenuSeed(spec);
+            if (!rich.isBlank()) {
+                return rich;
+            }
+        }
+        if (moduleNames.isEmpty()) {
+            moduleNames = List.of("Module chính");
+        }
         int modules = Math.min(8, Math.max(menuSeedModuleCount, moduleNames.size()));
         List<Map<String, Object>> menu = new ArrayList<>();
         for (int i = 0; i < modules && i < moduleNames.size(); i++) {
@@ -1382,6 +1436,9 @@ public class AiGreenfieldBusinessDesignService {
         if (safe.isBlank()) {
             return out;
         }
+        if (looksLikeJsonMenuEnvelope(safe)) {
+            return out;
+        }
         String lower = safe.toLowerCase(Locale.ROOT)
             .replace('đ', 'd').replace('Đ', 'd');
         addNamedModuleIfContains(out, lower, safe, "xuat nhap ton", "Quản lý xuất nhập tồn");
@@ -1402,6 +1459,9 @@ public class AiGreenfieldBusinessDesignService {
                 continue;
             }
             String segLower = cleaned.toLowerCase(Locale.ROOT);
+            if (looksLikeJsonMenuEnvelope(cleaned) || cleaned.startsWith("{") || cleaned.startsWith("[")) {
+                continue;
+            }
             if (segLower.contains("json menu")
                 || segLower.contains("viết đầy đủ")
                 || segLower.contains("viet day du")
@@ -1428,6 +1488,297 @@ public class AiGreenfieldBusinessDesignService {
             }
         }
         return out;
+    }
+
+    private String normalizeForMatch(String text) {
+        return String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT)
+            .replace('đ', 'd').replace('Đ', 'd')
+            .replaceAll("[^a-z0-9\\s]", " ")
+            .replaceAll("\\s+", " ")
+            .trim();
+    }
+
+    private boolean looksLikeJsonMenuEnvelope(String text) {
+        String t = String.valueOf(text == null ? "" : text).trim();
+        if (!t.startsWith("{") && !t.startsWith("[")) {
+            return false;
+        }
+        String lower = t.toLowerCase(Locale.ROOT);
+        return lower.contains("\"menu\"")
+            || (lower.contains("\"children\"") && lower.contains("type_form"))
+            || lower.matches("\\{\\s*\"menu\"\\s*:\\s*\\[\\s*\\]\\s*\\}");
+    }
+
+    private List<String> sanitizeModuleNames(List<String> modules, String userRequestFallback) {
+        List<String> out = new ArrayList<>();
+        if (modules != null) {
+            for (String module : modules) {
+                String m = String.valueOf(module == null ? "" : module).trim();
+                if (m.isBlank() || looksLikeJsonMenuEnvelope(m) || m.startsWith("{")) {
+                    continue;
+                }
+                if (!containsModuleLabel(out, m)) {
+                    out.add(m);
+                }
+            }
+        }
+        if (out.isEmpty() && !userRequestFallback.isBlank()) {
+            out.addAll(extractModulesFromText(userRequestFallback));
+        }
+        return out;
+    }
+
+    private boolean shouldBuildRichErpMenuSeed(String userDelta, List<String> modules) {
+        if (isRichGreenfieldMenuDesignRequest(userDelta)) {
+            return true;
+        }
+        if (modules == null || modules.size() < 2) {
+            return false;
+        }
+        int erpHits = 0;
+        for (String module : modules) {
+            String lower = normalizeForMatch(module);
+            if (lower.contains("ban hang") || lower.contains("xuat nhap") || lower.contains("cong no")
+                || lower.contains("bao cao") || lower.contains("kinh doanh")) {
+                erpHits++;
+            }
+        }
+        return erpHits >= 2;
+    }
+
+    private String buildRichSalesInventoryFinanceMenuSeed(BusinessSpec spec) {
+        List<Map<String, Object>> menu = new ArrayList<>();
+        menu.add(buildSeedGroup(
+            "grp_danhmuc", "Danh mục", "Master Data", "主数据", "AppstoreOutlined",
+            List.of(
+                buildSeedGridNode("dm_khachhang", "dm_khachhang", "Khách hàng", "Customers", "客户",
+                    "UserOutlined", List.of("ma_kh", "ten_kh", "dien_thoai", "email")),
+                buildSeedGridNode("dm_nhacungcap", "dm_nhacungcap", "Nhà cung cấp", "Vendors", "供应商",
+                    "ShopOutlined", List.of("ma_ncc", "ten_ncc", "dien_thoai")),
+                buildSeedGridNode("dm_sanpham", "dm_sanpham", "Sản phẩm", "Products", "产品",
+                    "TagsOutlined", List.of("ma_sp", "ten_sp", "don_gia", "dvt")),
+                buildSeedGridNode("dm_kho", "dm_kho", "Kho hàng", "Warehouses", "仓库",
+                    "DatabaseOutlined", List.of("ma_kho", "ten_kho"))
+            )));
+        menu.add(buildSeedGroup(
+            "grp_banhang", "Bán hàng", "Sales", "销售", "ShoppingCartOutlined",
+            List.of(
+                buildSeedMasterDetailNode(
+                    "bh_donhang", "bh_donhang", "Đơn hàng", "Sales Orders", "销售订单",
+                    "SolutionOutlined",
+                    List.of("ma_dh", "ngay_dh", "id_khach_hang", "tong_tien", "trang_thai"),
+                    "chi_tiet",
+                    List.of("ma_sp", "so_luong", "don_gia", "thanh_tien")),
+                buildSeedGridNode("bh_phieuxuat", "bh_phieuxuat", "Phiếu xuất bán", "Delivery Notes", "出库单",
+                    "ExportOutlined", List.of("ma_px", "ngay_xuat", "id_khach_hang"))
+            )));
+        menu.add(buildSeedGroup(
+            "grp_kho", "Xuất nhập tồn", "Inventory IOX", "进销存", "InboxOutlined",
+            List.of(
+                buildSeedGridNode("kho_phieunhap", "kho_phieunhap", "Phiếu nhập kho", "Goods Receipt", "入库单",
+                    "LoginOutlined", List.of("ma_pn", "ngay_nhap", "id_ncc")),
+                buildSeedGridNode("kho_phieuxuat", "kho_phieuxuat", "Phiếu xuất kho", "Goods Issue", "出库单",
+                    "LogoutOutlined", List.of("ma_pxk", "ngay_xuat", "id_kho")),
+                buildSeedGridNode("kho_tonkho", "kho_tonkho", "Tồn kho", "Stock On Hand", "库存",
+                    "HistoryOutlined", List.of("ma_kho", "ma_sp", "so_luong_ton"))
+            )));
+        menu.add(buildSeedGroup(
+            "grp_congno", "Công nợ", "AR/AP", "往来", "DollarOutlined",
+            List.of(
+                buildSeedGridNode("cn_phaithu_kh", "cn_phaithu_kh", "Công nợ phải thu KH", "Accounts Receivable", "应收",
+                    "ArrowDownOutlined", List.of("id_khach_hang", "so_du", "han_tt")),
+                buildSeedGridNode("cn_phaitra_ncc", "cn_phaitra_ncc", "Công nợ phải trả NCC", "Accounts Payable", "应付",
+                    "ArrowUpOutlined", List.of("id_ncc", "so_du", "han_tt")),
+                buildSeedGridNode("tc_phieuthu", "tc_phieuthu", "Phiếu thu", "Receipt Voucher", "收款单",
+                    "PlusCircleOutlined", List.of("ma_pt", "ngay_thu", "so_tien", "id_khach_hang")),
+                buildSeedGridNode("tc_phieuchi", "tc_phieuchi", "Phiếu chi", "Payment Voucher", "付款单",
+                    "MinusCircleOutlined", List.of("ma_pc", "ngay_chi", "so_tien", "id_ncc"))
+            )));
+        menu.add(buildSeedGroup(
+            "grp_baocao", "Báo cáo", "Reports", "报表", "BarChartOutlined",
+            List.of(
+                buildSeedReportNode("bc_doanh_so", "Báo cáo doanh số", "Sales Report", "销售报表",
+                    "LineChartOutlined", "bc_doanh_so"),
+                buildSeedReportNode("bc_xnt", "Báo cáo XNT", "Inventory IOX Report", "进销存报表",
+                    "HistoryOutlined", "bc_xnt"),
+                buildSeedReportNode("bc_cong_no", "Báo cáo công nợ", "Debt Report", "往来报表",
+                    "ClockCircleOutlined", "bc_cong_no"),
+                buildSeedReportNode("bc_ketqua_kd", "Kết quả kinh doanh", "P&L Report", "损益表",
+                    "PieChartOutlined", "bc_ket_qua_kd")
+            )));
+
+        List<String> coverageModules = List.of(
+            "Danh mục", "Bán hàng", "Xuất nhập tồn", "Công nợ", "Báo cáo");
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("menu", menu);
+        envelope.put("notes", List.of(
+            "Deterministic ERP menu scaffold (XNT + công nợ + báo cáo) — CSM schema type_form/table[]/trigger",
+            "Review table_name và trigger trước khi go-live"));
+        envelope.put("warnings", spec.risks() == null ? List.of() : spec.risks());
+        envelope.put("coverage_modules", coverageModules.stream()
+            .map(m -> Map.of("module", m, "status", "covered"))
+            .toList());
+        try {
+            return objectMapper.writeValueAsString(envelope);
+        } catch (Exception ex) {
+            log.warn("Rich ERP menu seed serialization failed: {}", ex.getMessage());
+            return "";
+        }
+    }
+
+    private Map<String, Object> buildSeedGroup(
+        String id,
+        String labelVi,
+        String labelEn,
+        String labelZh,
+        String icon,
+        List<Map<String, Object>> children
+    ) {
+        Map<String, Object> group = new LinkedHashMap<>();
+        group.put("id", id);
+        group.put("menu_id", id);
+        group.put("label", labelVi);
+        group.put("label_en", labelEn);
+        group.put("label_zh", labelZh);
+        group.put("icon", icon);
+        group.put("type_form", 0);
+        group.put("parentId", null);
+        group.put("m_show", true);
+        for (Map<String, Object> child : children) {
+            child.put("parentId", id);
+        }
+        group.put("children", children);
+        return group;
+    }
+
+    private Map<String, Object> buildSeedGridNode(
+        String id,
+        String tableName,
+        String labelVi,
+        String labelEn,
+        String labelZh,
+        String icon,
+        List<String> dataFields
+    ) {
+        Map<String, Object> node = new LinkedHashMap<>();
+        node.put("id", id);
+        node.put("menu_id", id);
+        node.put("label", labelVi);
+        node.put("label_en", labelEn);
+        node.put("label_zh", labelZh);
+        node.put("icon", icon);
+        node.put("type_form", 1);
+        node.put("row_type_edit", 0);
+        node.put("table_name", tableName);
+        node.put("m_show", true);
+        node.put("table", buildSeedTableFromFieldNames(dataFields));
+        node.put("trigger", Map.of("load_db", "return (row) => true"));
+        return node;
+    }
+
+    private Map<String, Object> buildSeedMasterDetailNode(
+        String id,
+        String tableName,
+        String labelVi,
+        String labelEn,
+        String labelZh,
+        String icon,
+        List<String> masterFields,
+        String detailFieldName,
+        List<String> detailFields
+    ) {
+        Map<String, Object> node = buildSeedGridNode(id, tableName, labelVi, labelEn, labelZh, icon, masterFields);
+        node.put("type_form", 2);
+        Map<String, Object> detailTab = new LinkedHashMap<>();
+        detailTab.put("id", id + "_ct");
+        detailTab.put("menu_id", id + "_ct");
+        detailTab.put("label", "Chi tiết");
+        detailTab.put("label_en", "Line Items");
+        detailTab.put("label_zh", "明细");
+        detailTab.put("table_name", detailFieldName);
+        detailTab.put("type_form", 1);
+        detailTab.put("table", buildSeedTableFromFieldNames(detailFields));
+        detailTab.put("trigger", Map.of(
+            "update", "data.thanh_tien=(Number(data.so_luong||0)*Number(data.don_gia||0)); return data;"));
+        node.put("nodes", List.of(detailTab));
+        return node;
+    }
+
+    private Map<String, Object> buildSeedReportNode(
+        String id,
+        String labelVi,
+        String labelEn,
+        String labelZh,
+        String icon,
+        String reportKey
+    ) {
+        Map<String, Object> node = new LinkedHashMap<>();
+        node.put("id", id);
+        node.put("menu_id", id);
+        node.put("label", labelVi);
+        node.put("label_en", labelEn);
+        node.put("label_zh", labelZh);
+        node.put("icon", icon);
+        node.put("type_form", 1);
+        node.put("table_name", "rp_filter");
+        node.put("report_name", "/uploads/templates/" + reportKey + ".docx");
+        node.put("orientation", "p");
+        node.put("m_show", true);
+        List<Map<String, Object>> fields = new ArrayList<>();
+        fields.add(seedField("id", "ID", "ed", 0, 1, 0));
+        fields.add(seedField("tu_ngay", "Từ ngày", "date", 1, 0, 1));
+        fields.add(seedField("den_ngay", "Đến ngày", "date", 2, 0, 1));
+        node.put("table", fields);
+        node.put("trigger", Map.of(
+            "report_db", "return (db['" + reportKey + "'] && db['" + reportKey + "'].rows) || [];"));
+        return node;
+    }
+
+    private List<Map<String, Object>> buildSeedTableFromFieldNames(List<String> fieldNames) {
+        List<Map<String, Object>> fields = new ArrayList<>();
+        fields.add(seedField("id", "ID", "ed", 0, 1, 0));
+        int stt = 1;
+        for (String name : fieldNames) {
+            String fName = String.valueOf(name == null ? "" : name).trim();
+            if (fName.isBlank() || "id".equalsIgnoreCase(fName)) {
+                continue;
+            }
+            String header = fName.replace('_', ' ');
+            String types = "ed";
+            if (fName.contains("ngay") || fName.contains("date")) {
+                types = "date";
+            } else if (fName.contains("tien") || fName.contains("gia") || fName.contains("so_du")) {
+                types = "price";
+            } else if (fName.contains("so_luong") || fName.contains("sl")) {
+                types = "nummeric";
+            } else if (fName.startsWith("id_") || fName.endsWith("_id")) {
+                types = "co";
+            }
+            Map<String, Object> field = seedField(fName, capitalizeWords(header), types, stt++, 0, 1);
+            if ("co".equals(types)) {
+                field.put("f_cbo_query", "{\"query\":[],\"options\":[]}");
+            }
+            fields.add(field);
+        }
+        return fields;
+    }
+
+    private String capitalizeWords(String raw) {
+        String[] parts = String.valueOf(raw == null ? "" : raw).trim().split("\\s+");
+        StringBuilder sb = new StringBuilder();
+        for (String part : parts) {
+            if (part.isEmpty()) {
+                continue;
+            }
+            if (!sb.isEmpty()) {
+                sb.append(' ');
+            }
+            sb.append(Character.toUpperCase(part.charAt(0)));
+            if (part.length() > 1) {
+                sb.append(part.substring(1));
+            }
+        }
+        return sb.toString();
     }
 
     private void addNamedModuleIfContains(

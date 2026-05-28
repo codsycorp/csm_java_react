@@ -3794,7 +3794,8 @@ public class ApiSpringController {
                             && businessComprehensionResult != null
                             && businessComprehensionResult.activated()
                             && businessComprehensionResult.greenfield()
-                            && aiGreenfieldBusinessDesignService != null) {
+                            && aiGreenfieldBusinessDesignService != null
+                            && aiGreenfieldBusinessDesignService.shouldUseMenuGreenfieldFastPath(message)) {
                         String editorMenuBase = resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext);
                         if (countMenuNodesFromDraft(editorMenuBase) <= 0) {
                             String seeded = aiGreenfieldBusinessDesignService.applyDeterministicSeedIfNeeded(
