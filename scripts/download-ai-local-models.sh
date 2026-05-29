@@ -2,7 +2,9 @@
 # Download GGUF models for CSM AI Local into backend/csm_datas/ai_local/model/
 #
 # Usage:
-#   ./scripts/download-ai-local-models.sh 5gb            # weak server 1.5B (5GB RAM, 2 CPU)
+#   ./scripts/download-ai-local-models.sh server       # prod server (dual-3b → csm_datas/)
+#   ./scripts/download-ai-local-models.sh 5gb          # alias server (legacy)
+#   ./scripts/download-ai-local-models.sh dual-3b      # M1 dev (→ backend/csm_datas/)
 #   ./scripts/download-ai-local-models.sh strong         # dev machine 32GB
 #   ./scripts/download-ai-local-models.sh vision-weak    # SmolVLM2-256M video only
 #   ./scripts/download-ai-local-models.sh embed          # nomic embed only
@@ -14,10 +16,21 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MODEL_DIR="$REPO_ROOT/backend/csm_datas/ai_local/model"
-mkdir -p "$MODEL_DIR"
 
-PROFILE="${1:-5gb}"
+resolve_model_dir() {
+  case "${1:-server}" in
+    5gb|weak|server|prod)
+      echo "$REPO_ROOT/csm_datas/ai_local/model"
+      ;;
+    *)
+      echo "$REPO_ROOT/backend/csm_datas/ai_local/model"
+      ;;
+  esac
+}
+
+PROFILE="${1:-server}"
+MODEL_DIR="$(resolve_model_dir "$PROFILE")"
+mkdir -p "$MODEL_DIR"
 
 log() { printf '[download-ai-local-models] %s\n' "$*"; }
 
@@ -100,15 +113,15 @@ list_models() {
 
 case "$PROFILE" in
   dual-3b|m1|3b)
-    log "Profile dual-3b — CODE Coder-3B + SEO Instruct-3B (Q4_K_M, ~4GB total)"
+    log "Profile dual-3b — CODE Coder-3B + SEO Instruct-3B → $MODEL_DIR"
     download_reasoning_coder_3b
     download_reasoning_instruct_3b_seo
     ;;
-  5gb|weak)
-    log "Profile 5gb — reasoning 1.5B + vision SmolVLM2-256M-Video (sidecar, on-demand)"
-    download_reasoning_1_5b
-    download_vision_smolvlm256_video
-    log "Optional: run with 'embed' profile for nomic (enable only when vision sidecar is stopped)"
+  5gb|weak|server|prod)
+    log "Profile server — dual-lane Coder-3B + Instruct-3B (swap) → $MODEL_DIR"
+    download_reasoning_coder_3b
+    download_reasoning_instruct_3b_seo
+    log "Optional: run with 'vision-weak' for SmolVLM2 sidecar OCR"
     ;;
   strong|dev)
     log "Profile strong — reasoning 1.5B + nomic embed + Qwen2-VL-2B"
@@ -141,7 +154,7 @@ case "$PROFILE" in
     ;;
   *)
     echo "Unknown profile: $PROFILE"
-    echo "Profiles: dual-3b | 5gb | strong | vision-weak | vision-strong | embed | ultra | list"
+    echo "Profiles: server | dual-3b | 5gb | strong | vision-weak | vision-strong | embed | ultra | list"
     exit 1
     ;;
 esac

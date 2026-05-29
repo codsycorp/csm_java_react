@@ -1,5 +1,5 @@
 #!/bin/bash
-# Server production yếu (~5GB RAM / 2 CPU)
+# Server production — dual-lane 3B (swap), JVM bounded cho RAM ~6GB+
 # Usage: ./run-server.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"

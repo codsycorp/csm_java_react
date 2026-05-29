@@ -517,7 +517,10 @@ public class LlamaCppNativeService implements AIProvider {
         if (!enabled) {
             return false;
         }
-        return Files.isRegularFile(resolveModelPath(seoModelPath));
+        if (Files.isRegularFile(resolveModelPath(seoModelPath))) {
+            return true;
+        }
+        return !swapModelsOnLaneChange && isAvailable();
     }
 
     public LocalModelLane getActiveModelLane() {
@@ -898,6 +901,13 @@ public class LlamaCppNativeService implements AIProvider {
             }
 
             Path path = resolveModelPath(configuredPathForLane(target));
+            if (!Files.isRegularFile(path) && target == LocalModelLane.SEO) {
+                Path codePath = resolveModelPath(modelPath);
+                if (Files.isRegularFile(codePath)) {
+                    log.warn("SEO lane GGUF missing at {} — using CODE model {}", path, codePath);
+                    path = codePath;
+                }
+            }
             if (!Files.isRegularFile(path)) {
                 throw new IllegalStateException("Model GGUF not found for lane "
                     + target + ": " + path);

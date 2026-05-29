@@ -498,11 +498,24 @@ if [ "${AI_LOCAL_LLAMA_ENABLED:-true}" != "false" ] && [ -n "${AI_LOCAL_LLAMA_MO
     if [ ! -f "$LLAMA_MODEL_FILE" ]; then
         log "ERROR: Local llama GGUF not found: $LLAMA_MODEL_FILE"
         log "  mkdir -p $SCRIPT_DIR/csm_datas/ai_local/model"
-        log "  ./scripts/download-ai-local-models.sh dual-3b"
+        if [ "${AI_LOCAL_MODE:-}" = "5gb" ] || [ "${CSM_LOCAL_PROFILE:-}" = "5gb" ]; then
+            log "  ./scripts/download-ai-local-models.sh server"
+        else
+            log "  ./scripts/download-ai-local-models.sh dual-3b"
+        fi
         log "  Or set AI_LOCAL_LLAMA_MODEL_PATH / AI_LOCAL_LLAMA_SEO_MODEL_PATH in config.env."
         exit 1
     fi
     log "Local llama model OK: $LLAMA_MODEL_FILE"
+    if [ "${AI_LOCAL_LLAMA_SWAP_MODELS:-false}" = "true" ] && [ -n "${AI_LOCAL_LLAMA_SEO_MODEL_PATH:-}" ]; then
+        SEO_MODEL_FILE="$(resolve_env_path "$AI_LOCAL_LLAMA_SEO_MODEL_PATH")"
+        if [ ! -f "$SEO_MODEL_FILE" ]; then
+            log "ERROR: Local llama SEO GGUF not found: $SEO_MODEL_FILE"
+            log "  ./scripts/download-ai-local-models.sh server"
+            exit 1
+        fi
+        log "Local llama SEO model OK: $SEO_MODEL_FILE"
+    fi
 fi
 
 # config.env already loaded at startup; log key presence for deploy debugging
