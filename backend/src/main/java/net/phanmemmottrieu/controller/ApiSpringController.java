@@ -1180,6 +1180,12 @@ public class ApiSpringController {
     @Value("${ai.local.llama.max-tokens:4096}")
     private int aiLocalLlamaMaxTokens;
 
+    @Value("${ai.local.business-comprehension.worker-max-tokens:1536}")
+    private int aiLocalBusinessComprehensionWorkerMaxTokens;
+
+    @Value("${ai.local.greenfield.menu-auto-continue-max-attempts:3}")
+    private int aiLocalMenuGreenfieldAutoContinueMaxAttempts;
+
     @Value("${ai.local.chunking.chunk-size-chars:7000}")
     private int aiLocalChunkingChunkSizeChars;
 
@@ -2339,6 +2345,10 @@ public class ApiSpringController {
                                 analyzeBusinessFastPath
                                     ? "检索 + 在代码片段上扫描业务（不全量注入模型）"
                                     : "正在从请求和参考样本分析业务（Comprehend）")));
+                        emitAgentHandoff(emitter, requestId, "Supervisor", "Retriever", "comprehend_context",
+                            "RAG + editor digest → Comprehend");
+                        emitAgentHandoff(emitter, requestId, "Retriever", "Planner", "business_comprehend",
+                            "Pass 1 BusinessSpec");
                         businessComprehensionResult = aiGreenfieldBusinessDesignService.runComprehensionPipeline(
                             appId,
                             message,
@@ -2396,6 +2406,45 @@ public class ApiSpringController {
                                     "Đã lập kế hoạch thực thi (ExecutionPlan)",
                                     "Execution plan ready (ExecutionPlan)",
                                     "执行计划已就绪 (ExecutionPlan)")));
+                            if (isMenuJsonContext(contextType)
+                                    && businessComprehensionResult.greenfield()
+                                    && aiGreenfieldBusinessDesignService != null) {
+                                emitRagCitations(
+                                    emitter,
+                                    requestId,
+                                    appId,
+                                    message,
+                                    true,
+                                    "comprehend",
+                                    uiLang);
+                            }
+                            if (isMenuJsonContext(contextType)
+                                    && businessComprehensionResult.greenfield()
+                                    && aiGreenfieldBusinessDesignService != null) {
+                                emitAgentHandoff(emitter, requestId, "Planner", "Executor", "greenfield_plan",
+                                    "planned_structure[] ready");
+                                String reasoningProse = aiGreenfieldBusinessDesignService.buildBusinessReasoningProseVi(
+                                    businessComprehensionResult.businessSpec(),
+                                    businessComprehensionResult.executionPlan(),
+                                    message,
+                                    true);
+                                List<String> plannedModules = aiGreenfieldBusinessDesignService.listPlannedModuleLabels(
+                                    businessComprehensionResult.businessSpec(),
+                                    message);
+                                if (!reasoningProse.isBlank()) {
+                                    sendEvent(emitter, jsonOf(
+                                        "stage", "business_reasoning",
+                                        "status", "ready",
+                                        "requestId", requestId,
+                                        "modules", plannedModules,
+                                        "moduleCount", plannedModules.size(),
+                                        "stepCount", businessComprehensionResult.executionPlan().steps() == null
+                                            ? 0
+                                            : businessComprehensionResult.executionPlan().steps().size(),
+                                        "message", reasoningProse,
+                                        "domainSummary", businessComprehensionResult.businessSpec().domainSummary()));
+                                }
+                            }
                             emitToolTrace(
                                 emitter,
                                 requestId,
@@ -2890,6 +2939,13 @@ public class ApiSpringController {
                             "retrievalHits", orchestrationStats.getOrDefault("scopedRagTopHits", List.of()),
                             "adaptiveReasons", orchestrationStats.getOrDefault("scopedRagAdaptiveReasons", List.of())
                         ));
+                        emitRagCitationsFromHits(
+                            emitter,
+                            requestId,
+                            orchestrationStats.getOrDefault("scopedRagTopHits", List.of()),
+                            String.valueOf(orchestrationStats.getOrDefault("scopedRagQuery", message)),
+                            "tool_search",
+                            uiLang);
                         int retrievalChars = parseIntSafe(orchestrationStats.get("scopedRagChars"), 0);
                         int retrievalMinChars = Math.max(0, parseIntSafe(orchestrationStats.get("scopedRagQualityMinChars"), 0));
                         boolean retrievalQualityPassed = bool(
@@ -3283,6 +3339,24 @@ public class ApiSpringController {
                     codeStreamMeta.put("businessComprehensionOperationScenario", businessComprehensionResult.operationScenario());
                     codeStreamMeta.put("businessComprehensionBlock", businessComprehensionResult.promptInjectionBlock());
                     codeStreamMeta.put("businessComprehensionTelemetry", businessComprehensionResult.telemetry());
+                    if (isMenuJsonContext(contextType)
+                            && businessComprehensionResult.greenfield()
+                            && aiGreenfieldBusinessDesignService != null) {
+                        String reasoningProse = aiGreenfieldBusinessDesignService.buildBusinessReasoningProseVi(
+                            businessComprehensionResult.businessSpec(),
+                            businessComprehensionResult.executionPlan(),
+                            message,
+                            true);
+                        if (!reasoningProse.isBlank()) {
+                            codeStreamMeta.put("businessReasoningProse", reasoningProse);
+                        }
+                        List<String> plannedModules = aiGreenfieldBusinessDesignService.listPlannedModuleLabels(
+                            businessComprehensionResult.businessSpec(),
+                            message);
+                        if (!plannedModules.isEmpty()) {
+                            codeStreamMeta.put("businessPlannedModules", plannedModules);
+                        }
+                    }
                 }
                 codeStreamMeta.put("runtimeTier", aiLocalRuntimeTierService.resolveTier().name());
                 codeStreamMeta.put("weakMachine", aiLocalRuntimeTierService.isWeakMachine());
@@ -3834,14 +3908,220 @@ public class ApiSpringController {
                         responseMode,
                         promptCodeContext.length(),
                         String.valueOf(localProviderPrompt == null ? "" : localProviderPrompt).length());
-                    providerRaw = useMapReduceBroadAnalysis
-                        ? runLocalProviderMapReduceBroadAnalysis(
+                    boolean emptyMenuGreenfield = isMenuJsonContext(contextType)
+                        && Boolean.TRUE.equals(codeStreamMeta.get("businessComprehensionGreenfield"))
+                        && countMenuNodesFromDraft(
+                            resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext)) <= 0;
+                    if (emptyMenuGreenfield) {
+                        codeStreamMeta.put("menuGreenfieldFullDraft", true);
+                        boolean scaffoldFirstApplied = false;
+                        if (businessComprehensionResult != null
+                                && businessComprehensionResult.activated()
+                                && aiGreenfieldBusinessDesignService != null
+                                && aiGreenfieldBusinessDesignService.isMenuGreenfieldScaffoldFirstEnabled()
+                                && AiGreenfieldBusinessDesignService.isComprehensiveGreenfieldMenuRequest(message)) {
+                            AiGreenfieldBusinessDesignService.BusinessSpec scaffoldSpec =
+                                aiGreenfieldBusinessDesignService.enrichBusinessSpecForMenuGreenfield(
+                                businessComprehensionResult.businessSpec(),
+                                message);
+                            List<Map<String, Object>> plannedModules = scaffoldSpec.plannedStructure() == null
+                                ? List.of()
+                                : scaffoldSpec.plannedStructure();
+                            int moduleTotal = plannedModules.size();
+                            int moduleIndex = 0;
+                            for (Map<String, Object> plannedRow : plannedModules) {
+                                if (plannedRow == null) {
+                                    continue;
+                                }
+                                moduleIndex++;
+                                String moduleLabel = String.valueOf(plannedRow.getOrDefault("module", "")).trim();
+                                int typeForm = plannedRow.get("type_form") instanceof Number n
+                                    ? n.intValue()
+                                    : 1;
+                                String legoPiece = String.valueOf(plannedRow.getOrDefault("lego_piece", "grid_crud")).trim();
+                                sendEvent(emitter, jsonOf(
+                                    "stage", "menu_module_step",
+                                    "status", "completed",
+                                    "requestId", requestId,
+                                    "moduleIndex", moduleIndex,
+                                    "moduleTotal", moduleTotal,
+                                    "module", moduleLabel,
+                                    "typeForm", typeForm,
+                                    "legoPiece", legoPiece,
+                                    "message", uiTextByLang(
+                                        uiLang,
+                                        "Ráp module " + moduleIndex + "/" + moduleTotal + ": " + moduleLabel,
+                                        "Assemble module " + moduleIndex + "/" + moduleTotal + ": " + moduleLabel,
+                                        "组装模块 " + moduleIndex + "/" + moduleTotal + "：" + moduleLabel)));
+                            }
+                            String scaffold = aiGreenfieldBusinessDesignService.buildGreenfieldMenuScaffoldJson(
+                                businessComprehensionResult.businessSpec(),
+                                message);
+                            int scaffoldNodes = countMenuNodesFromDraft(scaffold);
+                            if (!scaffold.isBlank() && scaffoldNodes >= 12) {
+                                final String repairedMenu = applyDeterministicMenuRepairs(scaffold);
+                                String finalMenu = repairedMenu;
+                                if (aiGreenfieldBusinessDesignService.isMenuModuleEnrichEnabled()) {
+                                    long enrichStarted = System.currentTimeMillis();
+                                    final String enrichRequestId = requestId;
+                                    final String enrichUiLang = uiLang;
+                                    finalMenu = aiGreenfieldBusinessDesignService.enrichGreenfieldMenuByModule(
+                                        repairedMenu,
+                                        scaffoldSpec,
+                                        message,
+                                        event -> sendEvent(emitter, jsonOf(
+                                            "stage", "menu_module_enrich",
+                                            "status", event.status(),
+                                            "requestId", enrichRequestId,
+                                            "moduleIndex", event.moduleIndex(),
+                                            "moduleTotal", event.moduleTotal(),
+                                            "module", event.moduleLabel(),
+                                            "nodeId", event.nodeId(),
+                                            "usedLlm", event.usedLlm(),
+                                            "message", uiTextByLang(
+                                                enrichUiLang,
+                                                event.detail(),
+                                                event.detail(),
+                                                event.detail()))),
+                                        (fromAgent, toAgent, action, detail) -> emitAgentHandoff(
+                                            emitter, enrichRequestId, fromAgent, toAgent, action, detail),
+                                        appId);
+                                    emitRagCitations(
+                                        emitter,
+                                        requestId,
+                                        appId,
+                                        message,
+                                        true,
+                                        "module_enrich",
+                                        uiLang);
+                                    codeStreamMeta.put("menuGreenfieldModuleEnrich", true);
+                                    codeStreamMeta.put("menuGreenfieldModuleEnrichMs",
+                                        System.currentTimeMillis() - enrichStarted);
+                                    logger.info(
+                                        "MENU_GREENFIELD module-enrich requestId={} elapsedMs={}",
+                                        requestId,
+                                        System.currentTimeMillis() - enrichStarted);
+                                }
+                                emitAgentHandoff(emitter, requestId, "Planner", "Executor", "scaffold_assemble",
+                                    scaffoldNodes + " nodes");
+                                sendEvent(emitter, jsonOf(
+                                    "stage", "menu_scaffold_assemble",
+                                    "status", "completed",
+                                    "requestId", requestId,
+                                    "menuNodes", scaffoldNodes,
+                                    "message", uiTextByLang(
+                                        uiLang,
+                                        "Đã lập kế hoạch + ráp Lego (" + scaffoldNodes + " node)"
+                                            + (codeStreamMeta.containsKey("menuGreenfieldModuleEnrich")
+                                                ? " + enrich từng module"
+                                                : " — bỏ qua worker LLM mỏng"),
+                                        "Business plan + Lego assemble (" + scaffoldNodes + " nodes)"
+                                            + (codeStreamMeta.containsKey("menuGreenfieldModuleEnrich")
+                                                ? " + per-module enrich"
+                                                : ", skipped thin LLM worker"),
+                                        "业务计划 + Lego 组装（" + scaffoldNodes + " 节点）"
+                                            + (codeStreamMeta.containsKey("menuGreenfieldModuleEnrich")
+                                                ? " + 逐模块丰富"
+                                                : "，跳过薄弱 LLM worker"))));
+                                boolean greenfieldGatePassed = true;
+                                if (aiGreenfieldBusinessDesignService.isGreenfieldGateBeforeApplyEnabled()) {
+                                    emitAgentHandoff(emitter, requestId, "Executor", "Reviewer", "gate_before_apply",
+                                        "AD-R2 Trusted Knowledge");
+                                    AiGreenfieldBusinessDesignService.GreenfieldApplyGateResult applyGate =
+                                        aiGreenfieldBusinessDesignService.gateGreenfieldMenuForApply(finalMenu, message);
+                                    codeStreamMeta.put("menuGreenfieldGateBeforeApply", true);
+                                    codeStreamMeta.put("menuGreenfieldGateScore", applyGate.qualityScore());
+                                    codeStreamMeta.put("menuGreenfieldGatePassed", applyGate.passesHardGate());
+                                    if (!applyGate.passesHardGate()) {
+                                        greenfieldGatePassed = false;
+                                        logger.warn(
+                                            "MENU_GREENFIELD gate-before-apply rejected requestId={} score={} detail={}",
+                                            requestId,
+                                            applyGate.qualityScore(),
+                                            applyGate.issueSummary());
+                                        sendEvent(emitter, jsonOf(
+                                            "stage", "final_output_gate",
+                                            "status", "rejected",
+                                            "requestId", requestId,
+                                            "contextType", "menu_json",
+                                            "gateType", "greenfield_before_apply",
+                                            "reason_code", "menu_quality_hard_gate_failed",
+                                            "detail", applyGate.issueSummary(),
+                                            "qualityScore", applyGate.qualityScore(),
+                                            "message", uiTextByLang(
+                                                uiLang,
+                                                "Menu chưa đạt quality gate — chưa áp vào editor: " + applyGate.issueSummary(),
+                                                "Menu failed quality gate — not applied: " + applyGate.issueSummary(),
+                                                "菜单未通过质量门 — 未应用：" + applyGate.issueSummary())));
+                                        emitAgentHandoff(emitter, requestId, "Reviewer", "Planner", "gate_rejected",
+                                            applyGate.issueSummary());
+                                    } else if (!applyGate.menuJson().isBlank()) {
+                                        finalMenu = applyGate.menuJson();
+                                        emitAgentHandoff(emitter, requestId, "Reviewer", "Executor", "gate_passed",
+                                            "qualityScore=" + applyGate.qualityScore());
+                                    }
+                                }
+                                if (greenfieldGatePassed) {
+                                int greenfieldApplyChunks = emitGreenfieldMenuFullFileReplace(
+                                    emitter,
+                                    requestId,
+                                    finalMenu,
+                                    resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext),
+                                    codeStreamMeta);
+                                if (greenfieldApplyChunks > 0) {
+                                    emitAgentHandoff(emitter, requestId, "Executor", "Supervisor", "apply_complete",
+                                        "full-file replace " + finalMenu.length() + " chars");
+                                    logger.info(
+                                        "MENU_GREENFIELD full-file apply requestId={} chars={} chunks={}",
+                                        requestId,
+                                        finalMenu.length(),
+                                        greenfieldApplyChunks);
+                                }
+                                providerRaw = wrapLocalProviderResult(finalMenu);
+                                providerText = finalMenu;
+                                lastLocalProviderText = finalMenu;
+                                localProviderPrimaryUsed = true;
+                                effectiveModel = codeStreamMeta.containsKey("menuGreenfieldModuleEnrich")
+                                    ? "local_scaffold_assemble+module_enrich"
+                                    : "local_scaffold_assemble";
+                                scaffoldFirstApplied = true;
+                                codeStreamMeta.put("menuGreenfieldScaffoldFirst", true);
+                                codeStreamMeta.put("menuGreenfieldScaffoldNodes", scaffoldNodes);
+                                logger.info(
+                                    "MENU_GREENFIELD scaffold-first requestId={} scaffoldNodes={} chars={} skippedLlmWorker=true moduleEnrich={}",
+                                    requestId,
+                                    scaffoldNodes,
+                                    finalMenu.length(),
+                                    codeStreamMeta.containsKey("menuGreenfieldModuleEnrich"));
+                                } else {
+                                    scaffoldFirstApplied = false;
+                                    providerText = "";
+                                    lastLocalProviderText = "";
+                                    localProviderPrimaryUsed = false;
+                                }
+                            }
+                        }
+                        if (!scaffoldFirstApplied) {
+                        providerRaw = runLocalMenuGreenfieldProviderWithAutoContinue(
                             emitter,
                             requestId,
+                            localProviderPrompt,
+                            contextType,
+                            responseMode,
                             message,
-                            llmEffectiveCodeContext,
-                            contextType)
-                        : runLocalProviderWithProgress(emitter, requestId, localProviderPrompt, contextType, responseMode);
+                            str(codeStreamMeta.get("businessComprehensionBlock"), ""),
+                            businessComprehensionResult);
+                        }
+                    } else {
+                        providerRaw = useMapReduceBroadAnalysis
+                            ? runLocalProviderMapReduceBroadAnalysis(
+                                emitter,
+                                requestId,
+                                message,
+                                llmEffectiveCodeContext,
+                                contextType)
+                            : runLocalProviderWithProgress(emitter, requestId, localProviderPrompt, contextType, responseMode);
+                    }
                     providerText = extractAiResultText(providerRaw);
                     if (broadAuditPrepared) {
                         providerText = finalizeBroadMenuAuditWithLocalOutput(
@@ -3869,11 +4149,15 @@ public class ApiSpringController {
                     if (isMenuJsonContext(contextType)
                             && providerText != null
                             && !providerText.isBlank()
-                            && !bool(codeStreamMeta.get("qualityGateEarlyAudit"), false)
-                            && !isLikelyJsonPayload(providerText)) {
-                        String extractedJson = extractJsonObjectCandidate(providerText);
-                        if (!extractedJson.isBlank()) {
-                            providerText = extractedJson;
+                            && !bool(codeStreamMeta.get("qualityGateEarlyAudit"), false)) {
+                        String draftSalvage = extractMenuDraftForCompletion(providerText, contextType);
+                        if (!draftSalvage.isBlank() && countMenuNodesFromDraft(draftSalvage) > 0) {
+                            providerText = applyDeterministicMenuRepairs(draftSalvage);
+                        } else if (!isLikelyJsonPayload(providerText)) {
+                            String extractedJson = extractJsonObjectCandidate(providerText);
+                            if (!extractedJson.isBlank()) {
+                                providerText = extractedJson;
+                            }
                         }
                     }
                     if (providerText != null && !providerText.isBlank()) {
@@ -4198,12 +4482,26 @@ public class ApiSpringController {
                                     )
                                 );
 
-                                String retryRaw = runLocalProviderWithProgress(emitter, requestId, retryPrompt, contextType, responseMode);
+                                int retryMaxTokens = isMenuJsonContext(contextType)
+                                    && countMenuNodesFromDraft(
+                                        resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext)) <= 0
+                                    ? Math.max(
+                                        aiLocalLlamaMaxTokens,
+                                        Math.max(768, aiLocalBusinessComprehensionWorkerMaxTokens))
+                                    : 0;
+                                String retryRaw = runLocalProviderWithProgress(
+                                    emitter, requestId, retryPrompt, contextType, responseMode, retryMaxTokens);
                                 String retryText = extractAiResultText(retryRaw);
                                 if ((retryText == null || retryText.isBlank()) && retryRaw != null) {
                                     retryText = retryRaw.trim();
                                 }
                                 retryText = sanitizePromptEchoLeakage(String.valueOf(retryText == null ? "" : retryText));
+                                if (isMenuJsonContext(contextType) && retryText != null && !retryText.isBlank()) {
+                                    String retryDraft = extractMenuDraftForCompletion(retryText, contextType);
+                                    if (!retryDraft.isBlank() && countMenuNodesFromDraft(retryDraft) > 0) {
+                                        retryText = retryDraft;
+                                    }
+                                }
 
                                 int retryScore = scoreLocalEditOutputQuality(retryText, effectiveCodeContext, contextType, responseMode);
                                 boolean retryAccepted = shouldAcceptLocalCodeStreamOutput(retryText, responseMode, contextType);
@@ -4294,7 +4592,8 @@ public class ApiSpringController {
 
                         if (!localAccepted
                                 && isMenuJsonContext(contextType)
-                                && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+                                && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                                && !isMenuGreenfieldFullDraftApply(codeStreamMeta)) {
                             String gateSalvaged = trySalvageMenuEditViaQualityGate(
                                 message,
                                 resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext),
@@ -4324,7 +4623,11 @@ public class ApiSpringController {
                                 && !codeStreamOrchestration.planSteps.isEmpty();
                             int stepResultCount = parseIntSafe(codeStreamMeta.get("agenticStepResultCount"), 0);
                             boolean qualityGateEarlyAuditActive = bool(codeStreamMeta.get("qualityGateEarlyAudit"), false);
-                            if (!qualityGateEarlyAuditActive && hasOrchestrationSteps && !codeDebugAnalyzeFastPath) {
+                            boolean skipAgenticForGreenfieldFullDraft = isMenuGreenfieldFullDraftApply(codeStreamMeta);
+                            if (!qualityGateEarlyAuditActive
+                                    && hasOrchestrationSteps
+                                    && !codeDebugAnalyzeFastPath
+                                    && !skipAgenticForGreenfieldFullDraft) {
                                 stepResultCount = emitLocalAgenticStepResults(
                                     emitter,
                                     requestId,
@@ -4781,12 +5084,43 @@ public class ApiSpringController {
                                 recordQualityFallback(appId);
                             } else {
                                 int localStreamChunks = 0;
-                                boolean suppressRawStream = aiLocalSuppressRawStreamWhenStepsApplied && stepResultCount > 0;
+                                boolean suppressRawStream = aiLocalSuppressRawStreamWhenStepsApplied
+                                    && stepResultCount > 0
+                                    && !bool(codeStreamMeta.get("menuGreenfieldFullDraft"), false);
+                                boolean menuEditStream = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                                    && isMenuJsonContext(contextType);
                                 boolean editTextEditsStream = "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
                                     && isCodeContext(contextType)
                                     && extractLineTextEditsCount(providerText) > 0;
                                 if (!suppressRawStream) {
-                                    if (editTextEditsStream) {
+                                    if (menuEditStream && isMenuGreenfieldFullDraftApply(codeStreamMeta)
+                                            && bool(codeStreamMeta.get("menuGreenfieldFullReplaceApplied"), false)) {
+                                        localStreamChunks = parseIntSafe(codeStreamMeta.get("codeStreamTextEditsEmittedCount"), 0);
+                                    } else if (menuEditStream) {
+                                        String menuApplyBase = resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext);
+                                        localStreamChunks = emitLocalTextEditEvents(
+                                            emitter,
+                                            requestId,
+                                            providerText,
+                                            contextType,
+                                            responseMode,
+                                            1,
+                                            menuApplyBase);
+                                        if (localStreamChunks <= 0 && providerText != null && !providerText.isBlank()) {
+                                            String salvagedMenu = salvagePropertyPatchAsTextEdits(providerText, menuApplyBase);
+                                            if (!String.valueOf(salvagedMenu).equals(String.valueOf(providerText))) {
+                                                localStreamChunks = emitLocalTextEditEvents(
+                                                    emitter,
+                                                    requestId,
+                                                    salvagedMenu,
+                                                    contextType,
+                                                    responseMode,
+                                                    1,
+                                                    menuApplyBase);
+                                            }
+                                        }
+                                        recordStreamedTextEditEventCount(codeStreamMeta, localStreamChunks);
+                                    } else if (editTextEditsStream) {
                                         localStreamChunks = emitLocalTextEditEvents(
                                             emitter,
                                             requestId,
@@ -5974,6 +6308,27 @@ public class ApiSpringController {
                     String editorMenuBase = resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext);
                     menuMergePreview = buildMenuCompletionMergePreview(editorMenuBase, completionPayload, contextType);
                     completionPayload = str(menuMergePreview.get("mergedResponse"), completionPayload);
+                    int editorBaseNodes = countMenuNodesFromDraft(editorMenuBase);
+                    int mergedNodes = countMenuNodesFromDraft(completionPayload);
+                    if (mergedNodes > editorBaseNodes || editorBaseNodes <= 0) {
+                        completion.put("menuEditorApplyReady", true);
+                    }
+                    if (editorBaseNodes <= 0 && mergedNodes > 0 && !menuMergePreview.containsKey("added")) {
+                        menuMergePreview = new LinkedHashMap<>(menuMergePreview);
+                        menuMergePreview.put("added", mergedNodes);
+                        menuMergePreview.put("edited", 0);
+                        menuMergePreview.put("deleted", 0);
+                    }
+                    if (mergedNodes > editorBaseNodes
+                            && parseIntSafe(completion.get("textEditsCount"), 0) <= 0
+                            && parseIntSafe(codeStreamMeta.get("codeStreamTextEditsEmittedCount"), 0) <= 0
+                            && !isMenuGreenfieldFullDraftApply(codeStreamMeta)) {
+                        List<Map<String, Object>> menuCompletionEdits = buildLineTextEdits(editorMenuBase, completionPayload);
+                        if (!menuCompletionEdits.isEmpty()) {
+                            completion.put("textEdits", menuCompletionEdits);
+                            completion.put("textEditsCount", menuCompletionEdits.size());
+                        }
+                    }
                 }
                 if (isMenuJsonContext(contextType) && !qualityGateEarlyAuditDone) {
                     String sanitizedMenuPayload = normalizeMenuDraftJson(completionPayload);
@@ -6218,6 +6573,12 @@ public class ApiSpringController {
                 if (bool(codeStreamMeta.get("menuGreenfieldFastPath"), false)) {
                     completion.put("menuGreenfieldFastPath", true);
                 }
+                if (bool(codeStreamMeta.get("menuGreenfieldScaffoldFirst"), false)) {
+                    completion.put("menuGreenfieldScaffoldFirst", true);
+                }
+                if (bool(codeStreamMeta.get("menuGreenfieldFullReplaceApplied"), false)) {
+                    completion.put("menuGreenfieldFullReplaceApplied", true);
+                }
                 if (isMenuJsonContext(contextType)
                         && countMenuNodesFromDraft(completionPayload)
                             > countMenuNodesFromDraft(resolveMenuEditorBaseCode(codeStreamMeta, effectiveCodeContext))) {
@@ -6232,7 +6593,8 @@ public class ApiSpringController {
                             && isMenuJsonContext(contextType)
                             && (agenticStepAcceptedCount > 0
                                 || bool(codeStreamMeta.get("businessComprehensionDeterministicSeed"), false)
-                                || bool(codeStreamMeta.get("menuGreenfieldFastPath"), false)))) {
+                                || bool(codeStreamMeta.get("menuGreenfieldFastPath"), false)
+                                || bool(codeStreamMeta.get("menuGreenfieldFullDraft"), false)))) {
                     completion.put("flowConfirmedByLocal", true);
                 }
                 completion.put("codeStreamTextEditsEmittedCount", emittedTextEditEvents);
@@ -6329,7 +6691,8 @@ public class ApiSpringController {
                     }
                     boolean shouldSummarizeMenuChat = qualityGateEarlyAuditDone
                         || deferLargeMenuEditorApply
-                        || completionPayload.length() > 12_000;
+                        || completionPayload.length() > 12_000
+                        || !String.valueOf(codeStreamMeta.getOrDefault("businessReasoningProse", "")).trim().isBlank();
                     if (shouldSummarizeMenuChat) {
                         menuEditorChatSummary = buildMenuEditorAssistantChatSummary(
                             message,
@@ -6338,6 +6701,11 @@ public class ApiSpringController {
                             qualityGateEarlyAuditDone,
                             auditPlanStepsForSummary,
                             Math.max(1, agenticStepAcceptedCount > 0 ? agenticStepAcceptedCount : agenticStepResultCount));
+                        String businessReasoning = String.valueOf(
+                            codeStreamMeta.getOrDefault("businessReasoningProse", "")).trim();
+                        if (!businessReasoning.isBlank()) {
+                            menuEditorChatSummary = businessReasoning + "\n\n---\n\n" + menuEditorChatSummary;
+                        }
                         completion.put("assistantChatSummary", menuEditorChatSummary);
                         if (!auditPlanStepsForSummary.isEmpty()) {
                             completion.put("menuAuditPlanSteps", auditPlanStepsForSummary);
@@ -9404,6 +9772,194 @@ public class ApiSpringController {
         meta.put("codeStreamTextEditsEmittedCount", previous + emittedChunks);
     }
 
+    /** AF.6 — explicit multi-agent handoff SSE (LangGraph / Supervisor diagram). */
+    private void emitAgentHandoff(
+            SseEmitter emitter,
+            String requestId,
+            String fromAgent,
+            String toAgent,
+            String action,
+            String detail) {
+        if (emitter == null || fromAgent == null || toAgent == null) {
+            return;
+        }
+        sendEvent(emitter, jsonOf(
+            "stage", "agent_handoff",
+            "requestId", requestId,
+            "fromAgent", fromAgent,
+            "toAgent", toAgent,
+            "action", String.valueOf(action == null ? "" : action),
+            "detail", String.valueOf(detail == null ? "" : detail),
+            "message", fromAgent + " → " + toAgent + ": " + String.valueOf(action == null ? "" : action)));
+    }
+
+    /** AD-R6 — RAG citation rows for Composer / usage dock (greenfield + tool_search). */
+    private void emitRagCitations(
+            SseEmitter emitter,
+            String requestId,
+            String appId,
+            String query,
+            boolean menuFlow,
+            String phase,
+            String uiLang) {
+        if (emitter == null || aiGreenfieldBusinessDesignService == null || appId == null || appId.isBlank()) {
+            return;
+        }
+        List<Map<String, Object>> citations = aiGreenfieldBusinessDesignService.searchRagCitations(
+            appId,
+            query,
+            menuFlow,
+            0);
+        if (citations == null || citations.isEmpty()) {
+            return;
+        }
+        sendEvent(emitter, jsonOf(
+            "stage", "rag_citations",
+            "status", "ready",
+            "requestId", requestId,
+            "phase", String.valueOf(phase == null ? "" : phase),
+            "query", truncate(String.valueOf(query == null ? "" : query), 200),
+            "count", citations.size(),
+            "citations", citations,
+            "message", uiTextByLang(
+                uiLang,
+                citations.size() + " nguồn RAG (trigger/combo/menu mẫu)",
+                citations.size() + " RAG sources (trigger/combo/menu patterns)",
+                citations.size() + " 个 RAG 来源（trigger/combo/菜单模式）")));
+    }
+
+    /** AD-R6 — reuse scoped retrieval hits from orchestration as citation SSE. */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> copyHitsToCitationRows(Object hitsObj) {
+        if (!(hitsObj instanceof List<?> hits) || hits.isEmpty()) {
+            return List.of();
+        }
+        List<Map<String, Object>> citations = new ArrayList<>();
+        for (Object item : hits) {
+            if (!(item instanceof Map<?, ?> raw)) {
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            raw.forEach((k, v) -> row.put(String.valueOf(k), v));
+            citations.add(row);
+            if (citations.size() >= 8) {
+                break;
+            }
+        }
+        return citations;
+    }
+
+    private void emitRagCitationsFromHits(
+            SseEmitter emitter,
+            String requestId,
+            Object hitsObj,
+            String query,
+            String phase,
+            String uiLang) {
+        List<Map<String, Object>> citations = copyHitsToCitationRows(hitsObj);
+        if (emitter == null || citations.isEmpty()) {
+            return;
+        }
+        sendEvent(emitter, jsonOf(
+            "stage", "rag_citations",
+            "status", "ready",
+            "requestId", requestId,
+            "phase", String.valueOf(phase == null ? "" : phase),
+            "query", truncate(String.valueOf(query == null ? "" : query), 200),
+            "count", citations.size(),
+            "citations", citations,
+            "message", uiTextByLang(
+                uiLang,
+                citations.size() + " nguồn RAG từ Lucene scoped search",
+                citations.size() + " RAG sources from scoped Lucene search",
+                citations.size() + " 个 RAG 来源（Lucene 范围检索）")));
+    }
+
+    private void emitRagCitationsChat(
+            String appId,
+            Object hitsObj,
+            String query,
+            String phase,
+            String uiLang) {
+        List<Map<String, Object>> citations = copyHitsToCitationRows(hitsObj);
+        if (appId == null || appId.isBlank() || citations.isEmpty()) {
+            return;
+        }
+        emitAiAssistantChatChunk(appId, Map.of(
+            "stage", "rag_citations",
+            "status", "ready",
+            "phase", String.valueOf(phase == null ? "" : phase),
+            "query", truncate(String.valueOf(query == null ? "" : query), 200),
+            "count", citations.size(),
+            "citations", citations,
+            "message", uiTextByLang(
+                uiLang,
+                citations.size() + " nguồn RAG từ Lucene scoped search",
+                citations.size() + " RAG sources from scoped Lucene search",
+                citations.size() + " 个 RAG 来源（Lucene 范围检索）")));
+    }
+
+    /** Greenfield scaffold-first: full menu draft ready — skip agentic textEdits decompose path. */
+    private boolean isMenuGreenfieldFullDraftApply(Map<String, Object> meta) {
+        if (meta == null) {
+            return false;
+        }
+        return bool(meta.get("menuGreenfieldScaffoldFirst"), false)
+            || bool(meta.get("menuGreenfieldFullDraft"), false)
+            || bool(meta.get("menuGreenfieldFullReplaceApplied"), false);
+    }
+
+    /**
+     * AF.8 — Apply entire greenfield menu in one SSE replace (no surgical decompose on L2-3).
+     * Empty editor + comprehensive scaffold must not go through buildLineTextEdits → 12 chunks.
+     */
+    private int emitGreenfieldMenuFullFileReplace(
+            SseEmitter emitter,
+            String requestId,
+            String menuJson,
+            String editorBase,
+            Map<String, Object> meta) {
+        if (menuJson == null || menuJson.isBlank()) {
+            return 0;
+        }
+        String safeBase = String.valueOf(editorBase == null ? "" : editorBase);
+        String draft = extractMenuDraftForCompletion(menuJson, "menu_json");
+        if (draft.isBlank()) {
+            draft = menuJson.trim();
+        }
+        draft = formatMenuEditorApplyPayload(safeBase, draft);
+        if (draft.isBlank()) {
+            return 0;
+        }
+        if (menuDraftJsonSemanticallyEqual(draft, safeBase)) {
+            return 0;
+        }
+        int endLine = Math.max(1, safeBase.split("\\n", -1).length);
+        java.util.LinkedHashMap<String, Object> singleEdit = new java.util.LinkedHashMap<>();
+        singleEdit.put("startLine", 1);
+        singleEdit.put("endLine", endLine);
+        singleEdit.put("replacement", draft);
+        singleEdit.put("action", safeBase.isBlank() ? "add" : "edit");
+        sendEvent(emitter, jsonOf(
+            "stage", "text_edit_apply",
+            "requestId", requestId,
+            "attempt", 1,
+            "menuGreenfieldFullReplace", true,
+            "textEdit", singleEdit));
+        sendEvent(emitter, jsonOf(
+            "stage", "text_edit_apply_done",
+            "requestId", requestId,
+            "count", 1,
+            "menuGreenfieldFullReplace", true));
+        if (meta != null) {
+            meta.put("menuGreenfieldFullReplaceApplied", true);
+            meta.put("qualityGateMergedMenuJson", draft);
+            meta.put("editorMenuBaseCode", draft);
+            recordStreamedTextEditEventCount(meta, 1);
+        }
+        return 1;
+    }
+
     /**
      * For edit-mode local responses: parses textEdits from model JSON or SEARCH/REPLACE blocks
      * and emits one {@code text_edit_apply} SSE event per edit so the frontend can apply each
@@ -9461,6 +10017,38 @@ public class ApiSpringController {
                         "chunk", chatMsg.toString(),
                         "attempt", attempt,
                         "localProviderPrimary", attempt == 1));
+                }
+
+                // Case 0a (menu_json greenfield): full { "menu": [...] } draft — replace entire editor
+                if (isMenuJsonContext(contextType)
+                        && parsed.has("menu")
+                        && parsed.get("menu").isArray()
+                        && parsed.get("menu").size() > 0
+                        && !parsed.has("patches")) {
+                    String menuDraft = extractMenuDraftForCompletion(safe.substring(jsonStart, jsonEnd + 1), contextType);
+                    if (!menuDraft.isBlank()) {
+                        String trimmedBase = safeCode.trim();
+                        String trimmedDraft = menuDraft.trim();
+                        int baseNodes = countMenuNodesFromDraft(trimmedBase);
+                        if (baseNodes <= 0 || !trimmedDraft.equals(trimmedBase)) {
+                            int endLine = Math.max(1, safeCode.split("\\n", -1).length);
+                            java.util.LinkedHashMap<String, Object> singleEdit = new java.util.LinkedHashMap<>();
+                            singleEdit.put("startLine", 1);
+                            singleEdit.put("endLine", endLine);
+                            singleEdit.put("replacement", trimmedDraft);
+                            singleEdit.put("action", trimmedBase.isBlank() ? "add" : "edit");
+                            sendEvent(emitter, jsonOf(
+                                "stage", "text_edit_apply",
+                                "requestId", requestId,
+                                "attempt", attempt,
+                                "textEdit", singleEdit));
+                            sendEvent(emitter, jsonOf(
+                                "stage", "text_edit_apply_done",
+                                "requestId", requestId,
+                                "count", 1));
+                            return 1;
+                        }
+                    }
                 }
 
                 // Case 0 (menu_json only): patches array — apply via buildMenuCompletionMergePreview → full-file replace
@@ -9795,6 +10383,10 @@ public class ApiSpringController {
             Map<String, Object> stepStatsOut) {
         String safeText = String.valueOf(providerText == null ? "" : providerText).trim();
         if (safeText.isBlank()) {
+            writeAgenticStepStats(stepStatsOut, 0, 0, 0, 0, 0, Collections.emptyMap(), Collections.emptyList());
+            return 0;
+        }
+        if (stepStatsOut != null && isMenuGreenfieldFullDraftApply(stepStatsOut)) {
             writeAgenticStepStats(stepStatsOut, 0, 0, 0, 0, 0, Collections.emptyMap(), Collections.emptyList());
             return 0;
         }
@@ -11532,10 +12124,21 @@ public class ApiSpringController {
             String prompt,
             String contextType,
             String responseMode) throws Exception {
+        return runLocalProviderWithProgress(emitter, requestId, prompt, contextType, responseMode, 0);
+    }
+
+    private String runLocalProviderWithProgress(
+            SseEmitter emitter,
+            String requestId,
+            String prompt,
+            String contextType,
+            String responseMode,
+            int maxOutputTokensOverride) throws Exception {
         int estimatedWaitSecs = estimateLocalProviderWaitSecs(prompt);
         long startedAt = System.currentTimeMillis();
         Future<String> future = aiCodeStreamExecutor.submit(() ->
-            generateDirectLocalContentWithMenuMasterPrompt(prompt, contextType, requestId, responseMode));
+            generateDirectLocalContentWithMenuMasterPrompt(
+                prompt, contextType, requestId, responseMode, maxOutputTokensOverride));
 
         sendEvent(emitter, jsonOf(
                 "stage", "waiting_gemini",
@@ -11610,6 +12213,235 @@ public class ApiSpringController {
                 future.cancel(true);
                 throw ex;
             }
+        }
+    }
+
+    /**
+     * Greenfield empty-menu: higher output token budget + auto-continue when JSON is truncated.
+     */
+    private String runLocalMenuGreenfieldProviderWithAutoContinue(
+            SseEmitter emitter,
+            String requestId,
+            String prompt,
+            String contextType,
+            String responseMode,
+            String userMessage,
+            String businessComprehensionBlock,
+            AiGreenfieldBusinessDesignService.ComprehensionResult comprehension) throws Exception {
+        int maxOutputTokens = Math.max(
+            aiLocalLlamaMaxTokens,
+            Math.max(1536, aiLocalBusinessComprehensionWorkerMaxTokens));
+        int maxAttempts = Math.max(1, Math.min(3, aiLocalMenuGreenfieldAutoContinueMaxAttempts));
+        StringBuilder accumulated = new StringBuilder();
+        String lastRaw = "";
+        int previousMenuNodes = 0;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            if (attempt > 1) {
+                sendEvent(emitter, jsonOf(
+                    "stage", "continuing",
+                    "status", "auto_continue",
+                    "model", "local_provider",
+                    "attempt", attempt,
+                    "maxAttempts", maxAttempts,
+                    "message", "AI local đang tiếp tục hoàn thiện menu JSON..."));
+            }
+            String attemptPrompt;
+            if (attempt == 1) {
+                attemptPrompt = prompt;
+            } else {
+                String salvagedSoFar = extractMenuDraftForCompletion(accumulated.toString(), contextType);
+                int salvagedNodes = countMenuNodesFromDraft(salvagedSoFar);
+                if (salvagedNodes > 0 && salvagedNodes <= previousMenuNodes) {
+                    attemptPrompt = clampPromptForLocalProvider(
+                        buildLocalGreenfieldRegeneratePrompt(userMessage, businessComprehensionBlock),
+                        contextType,
+                        responseMode);
+                } else if (isThinGreenfieldMenuForRequest(userMessage, salvagedSoFar)) {
+                    attemptPrompt = clampPromptForLocalProvider(
+                        buildLocalGreenfieldExpandPrompt(userMessage, salvagedSoFar, businessComprehensionBlock),
+                        contextType,
+                        responseMode);
+                } else {
+                    attemptPrompt = clampPromptForLocalProvider(
+                        buildLocalAutoContinuePrompt(prompt, accumulated.toString(), contextType, responseMode),
+                        contextType,
+                        responseMode);
+                }
+            }
+            lastRaw = runLocalProviderWithProgress(
+                emitter, requestId, attemptPrompt, contextType, responseMode, maxOutputTokens);
+            String text = extractAiResultText(lastRaw);
+            if ((text == null || text.isBlank()) && lastRaw != null) {
+                text = lastRaw.trim();
+            }
+            text = sanitizePromptEchoLeakage(String.valueOf(text == null ? "" : text));
+            if (!text.isBlank()) {
+                if (attempt > 1 && isThinGreenfieldMenuForRequest(userMessage, extractMenuDraftForCompletion(text, contextType))) {
+                    // Expansion attempt returned a full replacement draft — prefer latest complete tree.
+                    accumulated.setLength(0);
+                }
+                accumulated.append(text);
+            }
+            String salvaged = extractMenuDraftForCompletion(accumulated.toString(), contextType);
+            if (!salvaged.isBlank() && countMenuNodesFromDraft(salvaged) > 0) {
+                salvaged = applyDeterministicMenuRepairs(salvaged);
+                int menuNodes = countMenuNodesFromDraft(salvaged);
+                boolean truncated = looksLikeTruncatedLocalOutput(accumulated.toString(), contextType, responseMode)
+                    && !isStructurallyCompleteMenuDraft(salvaged);
+                boolean needsExpansion = attempt < maxAttempts
+                    && !truncated
+                    && isThinGreenfieldMenuForRequest(userMessage, salvaged);
+                previousMenuNodes = menuNodes;
+                if (!needsExpansion) {
+                    salvaged = maybeApplyGreenfieldMenuScaffold(requestId, userMessage, comprehension, salvaged);
+                    logger.info(
+                        "MENU_GREENFIELD auto-continue complete requestId={} attempts={} menuNodes={} chars={}",
+                        requestId,
+                        attempt,
+                        countMenuNodesFromDraft(salvaged),
+                        salvaged.length());
+                    return wrapLocalProviderResult(salvaged);
+                }
+                logger.info(
+                    "MENU_GREENFIELD expand continue requestId={} attempt={} menuNodes={} chars={}",
+                    requestId,
+                    attempt,
+                    menuNodes,
+                    salvaged.length());
+                continue;
+            }
+            if (!looksLikeTruncatedLocalOutput(accumulated.toString(), contextType, responseMode)) {
+                break;
+            }
+        }
+        String finalSalvaged = applyDeterministicMenuRepairs(
+            extractMenuDraftForCompletion(accumulated.toString(), contextType));
+        finalSalvaged = maybeApplyGreenfieldMenuScaffold(requestId, userMessage, comprehension, finalSalvaged);
+        if (!finalSalvaged.isBlank()) {
+            return wrapLocalProviderResult(finalSalvaged);
+        }
+        if (!accumulated.isEmpty()) {
+            return wrapLocalProviderResult(accumulated.toString());
+        }
+        return lastRaw;
+    }
+
+    /** User asked for a full/comprehensive menu but local model returned a tiny tree. */
+    private String maybeApplyGreenfieldMenuScaffold(
+            String requestId,
+            String userMessage,
+            AiGreenfieldBusinessDesignService.ComprehensionResult comprehension,
+            String menuDraft) {
+        String salvaged = String.valueOf(menuDraft == null ? "" : menuDraft).trim();
+        if (salvaged.isBlank()
+                || aiGreenfieldBusinessDesignService == null
+                || comprehension == null
+                || !comprehension.activated()
+                || !isThinGreenfieldMenuForRequest(userMessage, salvaged)) {
+            return menuDraft;
+        }
+        String scaffold = aiGreenfieldBusinessDesignService.buildGreenfieldMenuScaffoldJson(
+            comprehension.businessSpec(),
+            userMessage);
+        int scaffoldNodes = countMenuNodesFromDraft(scaffold);
+        int draftNodes = countMenuNodesFromDraft(salvaged);
+        if (scaffold.isBlank() || scaffoldNodes <= draftNodes) {
+            return menuDraft;
+        }
+        String merged = applyDeterministicMenuRepairs(scaffold);
+        logger.info(
+            "MENU_GREENFIELD scaffold assemble requestId={} llmNodes={} scaffoldNodes={} chars={}",
+            requestId,
+            draftNodes,
+            scaffoldNodes,
+            merged.length());
+        return merged;
+    }
+
+    private boolean isThinGreenfieldMenuForRequest(String userMessage, String salvagedMenu) {
+        String msg = String.valueOf(userMessage == null ? "" : userMessage).toLowerCase(Locale.ROOT);
+        String menu = String.valueOf(salvagedMenu == null ? "" : salvagedMenu).trim();
+        if (menu.isBlank()) {
+            return false;
+        }
+        int nodes = countMenuNodesFromDraft(menu);
+        if (nodes <= 0) {
+            return false;
+        }
+        boolean comprehensive = msg.contains("đầy đủ")
+            || msg.contains("day du")
+            || msg.contains("toàn bộ")
+            || msg.contains("toan bo")
+            || msg.contains("full menu")
+            || msg.contains("complete menu")
+            || (msg.contains("báo cáo") && (msg.contains("bán hàng") || msg.contains("xuất nhập") || msg.contains("công nợ")))
+            || (msg.contains("xuất nhập") && msg.contains("công nợ"));
+        if (!comprehensive) {
+            return false;
+        }
+        return nodes < 12 || menu.length() < 8000;
+    }
+
+    /** Valid closed menu JSON — do not treat near token cap as truncation. */
+    private boolean isStructurallyCompleteMenuDraft(String menuDraft) {
+        String raw = String.valueOf(menuDraft == null ? "" : menuDraft).trim();
+        if (raw.isBlank() || !raw.startsWith("{") || !raw.endsWith("}")) {
+            return false;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(raw);
+            JsonNode menu = root.get("menu");
+            return menu != null && menu.isArray() && menu.size() > 0;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String buildLocalGreenfieldExpandPrompt(String userMessage, String currentMenuDraft, String businessComprehensionBlock) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("GREENFIELD MENU — MỞ RỘNG CÂY MENU (editor trống hoặc quá ngắn).\n");
+        sb.append("User yêu cầu menu ĐẦY ĐỦ ERP. Menu hiện quá ngắn — bổ sung module còn thiếu theo USER_REQUEST.\n");
+        sb.append("Mục tiêu: ít nhất 12 nodes, nhiều module cấp 1 (type_form=0) + leaf CRUD (type_form=1) + báo cáo (type_form=5).\n");
+        sb.append("Trả về JSON duy nhất: { \"menu\": [ ... ] } — cây menu hoàn chỉnh, KHÔNG patches, KHÔNG markdown.\n");
+        sb.append("Mỗi node bắt buộc: id, parentId, label, label_en, label_zh, icon, type_form.\n");
+        sb.append("Leaf CRUD: table_name, table[] (f_pkid=1), trigger.\n");
+        sb.append("Gợi ý nhóm: Bán hàng/Xuất, Mua hàng/Nhập, Sản phẩm, Tồn kho, NCC, KH, Công nợ NCC, Công nợ KH, Báo cáo KD.\n\n");
+        sb.append("--- USER_REQUEST ---\n");
+        sb.append(truncateMiddle(String.valueOf(userMessage == null ? "" : userMessage), 2000)).append("\n\n");
+        if (!String.valueOf(businessComprehensionBlock == null ? "" : businessComprehensionBlock).isBlank()) {
+            sb.append("--- BUSINESS COMPREHEND ---\n");
+            sb.append(truncateMiddle(businessComprehensionBlock, 1200)).append("\n\n");
+        }
+        sb.append("--- MENU HIỆN TẠI (mở rộng, giữ id hợp lệ) ---\n");
+        sb.append(truncateMiddle(String.valueOf(currentMenuDraft == null ? "" : currentMenuDraft), 2400));
+        return sb.toString();
+    }
+
+    private String buildLocalGreenfieldRegeneratePrompt(String userMessage, String businessComprehensionBlock) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("GREENFIELD MENU — TẠO LẠI CÂY MENU ĐẦY ĐỦ.\n");
+        sb.append("Lần trước menu quá ngắn. Tạo menu ERP mới hoàn chỉnh theo USER_REQUEST — KHÔNG patches.\n");
+        sb.append("JSON duy nhất: { \"menu\": [ ... ] } — ít nhất 12 nodes, label + label_en + label_zh đầy đủ.\n\n");
+        sb.append("--- USER_REQUEST ---\n");
+        sb.append(truncateMiddle(String.valueOf(userMessage == null ? "" : userMessage), 2400)).append("\n\n");
+        if (!String.valueOf(businessComprehensionBlock == null ? "" : businessComprehensionBlock).isBlank()) {
+            sb.append("--- BUSINESS COMPREHEND ---\n");
+            sb.append(truncateMiddle(businessComprehensionBlock, 1600));
+        }
+        return sb.toString();
+    }
+
+    private String wrapLocalProviderResult(String text) {
+        try {
+            Map<String, Object> success = new LinkedHashMap<>();
+            success.put("success", true);
+            success.put("result", String.valueOf(text == null ? "" : text).trim());
+            success.put("provider", llamaCppNativeService == null ? "local_provider" : llamaCppNativeService.getName());
+            success.put("timestamp", System.currentTimeMillis());
+            return objectMapper.writeValueAsString(success);
+        } catch (Exception ex) {
+            return "{\"success\":true,\"result\":\"" + String.valueOf(text == null ? "" : text)
+                .replace("\\", "\\\\").replace("\"", "\\\"") + "\"}";
         }
     }
 
@@ -11770,7 +12602,7 @@ public class ApiSpringController {
         StringBuilder sb = new StringBuilder();
         sb.append("KẾT QUẢ TRƯỚC BỊ CẮT GIỮA CHỪNG. Tiếp tục hoàn thành từ điểm dừng.\n\n");
         if (isMenuJsonContext(contextType)) {
-            sb.append("Yêu cầu: Trả về JSON menu đầy đủ hợp lệ, không cắt. Không markdown, không code fence.\n\n");
+            sb.append("Yêu cầu: Trả về JSON menu đầy đủ hợp lệ { \"menu\": [...] }, không patches, không cắt. Không markdown, không code fence.\n\n");
         } else if ("edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
             sb.append("Yêu cầu: Tiếp tục hoàn thành JSON textEdits (không markdown, không code fence):\n");
             sb.append("{\"summary\":\"...\",\"textEdits\":[{\"startLine\":N,\"endLine\":N,\"replacement\":\"...\",\"action\":\"edit\"}]}\n\n");
@@ -12332,12 +13164,21 @@ public class ApiSpringController {
             String menuContract = aiAssistantGatewayService == null
                 ? ""
                 : aiAssistantGatewayService.getMenuJsonContractMin();
+            boolean emptyMenu = countMenuNodesFromDraft(currentCode) <= 0;
             StringBuilder menuSb = new StringBuilder();
-            menuSb.append("MENU EDIT RETRY (reason=").append(reason).append("):\n");
-            menuSb.append("- Previous output was empty or not actionable (e.g. patches: []).\n");
-            menuSb.append("- Return patch envelope JSON with at least one patch (action + nodeId + after fields).\n");
-            menuSb.append("- Use real node ids from CURRENT MENU JSON below; do not invent ids.\n");
-            menuSb.append("- If nodeId cannot be determined, return status need_more_context with warnings.\n\n");
+            if (emptyMenu) {
+                menuSb.append("MENU GREENFIELD FULL DRAFT RETRY (reason=").append(reason).append("):\n");
+                menuSb.append("- Menu is EMPTY. Return ONLY { \"menu\": [ ... ] } with a complete tree.\n");
+                menuSb.append("- Do NOT use patches format. Do NOT return need_more_context.\n");
+                menuSb.append("- Design modules from USER_REQUEST + BUSINESS_COMPREHENSION below.\n");
+                menuSb.append("- Valid JSON only — start with { and end with }.\n\n");
+            } else {
+                menuSb.append("MENU EDIT RETRY (reason=").append(reason).append("):\n");
+                menuSb.append("- Previous output was empty or not actionable (e.g. patches: []).\n");
+                menuSb.append("- Return patch envelope JSON with at least one patch (action + nodeId + after fields).\n");
+                menuSb.append("- Use real node ids from CURRENT MENU JSON below; do not invent ids.\n");
+                menuSb.append("- If nodeId cannot be determined, return status need_more_context with warnings.\n\n");
+            }
             if (!menuContract.isBlank()) {
                 menuSb.append(menuContract).append("\n\n");
             }
@@ -14846,11 +15687,34 @@ public class ApiSpringController {
             return FinalOutputGateResult.pass("menu_json_parse_only");
         }
 
-        List<Map<String, Object>> menus = extractMenuRootNodesForQualityGate(normalized);
+        Object parsedMenuRoot;
+        List<Map<String, Object>> menus;
+        try {
+            parsedMenuRoot = objectMapper.readValue(normalized, Object.class);
+            menus = extractMenuRootNodesFromParsedObject(parsedMenuRoot);
+        } catch (Exception ex) {
+            return rejectMenuFinalGate(
+                emitter, requestId, "menu_json_parse_failed", "json_parse_error",
+                "Menu output is not valid JSON");
+        }
         if (menus.isEmpty()) {
             return rejectMenuFinalGate(
                 emitter, requestId, "menu_json_empty_nodes", "no_menu_nodes",
                 "Menu JSON parsed but contains no menu nodes");
+        }
+
+        int repairedNodes = menuQualityGateService.repairMenuTreeInPlace(menus);
+        if (repairedNodes > 0) {
+            try {
+                payload = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(parsedMenuRoot);
+                normalized = payload;
+                logger.info(
+                    "FINAL_OUTPUT_GATE menu deterministic repair requestId={} nodes={}",
+                    requestId,
+                    repairedNodes);
+            } catch (Exception ex) {
+                logger.debug("Could not serialize repaired menu JSON: {}", ex.getMessage());
+            }
         }
 
         MenuQualityGateService.QualityReport report =
@@ -14861,8 +15725,12 @@ public class ApiSpringController {
         meta.put("passesHardGate", report.passesHardGate);
         meta.put("errorCount", report.getErrors().size());
         meta.put("warningCount", report.getWarnings().size());
+        if (repairedNodes > 0) {
+            meta.put("deterministicRepairs", repairedNodes);
+        }
         if (report.passesHardGate) {
-            return new FinalOutputGateResult(true, "menu_quality_gate", "none", "", payload, meta);
+            String gateType = repairedNodes > 0 ? "menu_quality_gate_repaired" : "menu_quality_gate";
+            return new FinalOutputGateResult(true, gateType, "none", "", payload, meta);
         }
 
         String issueSummary = report.getErrors().stream()
@@ -27511,6 +28379,13 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                         Map.entry("retrievalHits", orchestrationStats.getOrDefault("scopedRagTopHits", List.of())),
                         Map.entry("adaptiveReasons", orchestrationStats.getOrDefault("scopedRagAdaptiveReasons", List.of()))));
 
+                    emitRagCitationsChat(
+                        appId,
+                        orchestrationStats.getOrDefault("scopedRagTopHits", List.of()),
+                        String.valueOf(orchestrationStats.getOrDefault("scopedRagQuery", message)),
+                        "tool_search",
+                        uiLang);
+
                 int retrievalChars = parseIntSafe(orchestrationStats.get("scopedRagChars"), 0);
                 int retrievalMinChars = Math.max(0, parseIntSafe(orchestrationStats.get("scopedRagQualityMinChars"), 0));
                 boolean retrievalQualityPassed = bool(
@@ -33546,7 +34421,15 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         out.put("mergedResponse", normalizedAiDraft);
 
         String normalizedBaseDraft = extractMenuDraftForCompletion(baseDraftRaw, contextType);
-        if (normalizedBaseDraft.isBlank()) {
+        int baseNodes = countMenuNodesFromDraft(
+            normalizedBaseDraft.isBlank() ? String.valueOf(baseDraftRaw == null ? "" : baseDraftRaw) : normalizedBaseDraft);
+        if (normalizedBaseDraft.isBlank() || baseNodes <= 0) {
+            int addedNodes = countMenuNodesFromDraft(normalizedAiDraft);
+            if (addedNodes > 0) {
+                out.put("added", addedNodes);
+                out.put("edited", 0);
+                out.put("deleted", 0);
+            }
             return out;
         }
 
@@ -33566,7 +34449,6 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 out.put("added", mergeOut.added);
                 out.put("edited", mergeOut.edited);
                 out.put("deleted", mergeOut.deleted);
-                int baseNodes = countMenuNodesFromDraft(normalizedBaseDraft);
                 int sanitizedNodes = countMenuNodesFromDraft(sanitizedMerged);
                 if (!sanitizedMerged.isBlank()
                         && (baseNodes <= 0
@@ -34158,26 +35040,58 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         }
         try {
             Object parsed = objectMapper.readValue(raw, Object.class);
-            List<Map<String, Object>> menus = new ArrayList<>();
-            if (parsed instanceof List<?> list) {
-                for (Object item : list) {
-                    if (item instanceof Map<?, ?> mapItem) {
-                        menus.add((Map<String, Object>) mapItem);
-                    }
+            return extractMenuRootNodesFromParsedObject(parsed);
+        } catch (Exception ignored) {
+            return Collections.emptyList();
+        }
+    }
+
+    /** Mutable root menu nodes from already-parsed JSON (array root or {@code { menu: [...] }}). */
+    private List<Map<String, Object>> extractMenuRootNodesFromParsedObject(Object parsed) {
+        List<Map<String, Object>> menus = new ArrayList<>();
+        if (parsed instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> mapItem) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> menuNode = (Map<String, Object>) mapItem;
+                    menus.add(menuNode);
                 }
-            } else if (parsed instanceof Map<?, ?> map) {
-                Object menu = map.get("menu");
-                if (menu instanceof List<?> menuList) {
-                    for (Object item : menuList) {
-                        if (item instanceof Map<?, ?> mapItem) {
-                            menus.add((Map<String, Object>) mapItem);
-                        }
+            }
+        } else if (parsed instanceof Map<?, ?> map) {
+            Object menu = map.get("menu");
+            if (menu instanceof List<?> menuList) {
+                for (Object item : menuList) {
+                    if (item instanceof Map<?, ?> mapItem) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> menuNode = (Map<String, Object>) mapItem;
+                        menus.add(menuNode);
                     }
                 }
             }
-            return menus;
-        } catch (Exception ignored) {
-            return Collections.emptyList();
+        }
+        return menus;
+    }
+
+    /** Fill missing label_en/label_zh (and related schema) before quality gate — weak local models often omit i18n. */
+    private String applyDeterministicMenuRepairs(String payload) {
+        String normalized = normalizeMenuDraftJson(payload);
+        if (normalized.isBlank() || menuQualityGateService == null) {
+            return payload;
+        }
+        try {
+            Object parsed = objectMapper.readValue(normalized, Object.class);
+            List<Map<String, Object>> menus = extractMenuRootNodesFromParsedObject(parsed);
+            if (menus.isEmpty()) {
+                return payload;
+            }
+            int repaired = menuQualityGateService.repairMenuTreeInPlace(menus);
+            if (repaired <= 0) {
+                return payload;
+            }
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(parsed);
+        } catch (Exception ex) {
+            logger.debug("applyDeterministicMenuRepairs failed: {}", ex.getMessage());
+            return payload;
         }
     }
 
@@ -34596,6 +35510,15 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             String contextType,
             String requestId,
             String responseMode) {
+        return generateDirectLocalContentWithMenuMasterPrompt(prompt, contextType, requestId, responseMode, 0);
+    }
+
+    private String generateDirectLocalContentWithMenuMasterPrompt(
+            String prompt,
+            String contextType,
+            String requestId,
+            String responseMode,
+            int maxOutputTokensOverride) {
         if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
             return "{\"success\":false,\"errorCode\":\"LOCAL_PROVIDER_UNAVAILABLE\",\"message\":\"Local provider unavailable\"}";
         }
@@ -34635,6 +35558,12 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 && containsMinimalLocalPromptSignature(preparedPrompt)
                 && !preparedPrompt.contains("<|im_start|>assistant")) {
             preparedPrompt = preparedPrompt + "\n<|im_end|>\n<|im_start|>assistant\n";
+        }
+        if (maxOutputTokensOverride > 0) {
+            return llamaCppNativeService.generateContentFastWithTaskTracking(
+                preparedPrompt,
+                maxOutputTokensOverride,
+                safeRequestId.isBlank() ? null : safeRequestId);
         }
         return llamaCppNativeService.generateContentWithTaskTracking(
             preparedPrompt,

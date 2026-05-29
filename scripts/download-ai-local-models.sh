@@ -2,7 +2,7 @@
 # Download GGUF models for CSM AI Local into backend/csm_datas/ai_local/model/
 #
 # Usage:
-#   ./scripts/download-ai-local-models.sh 5gb          # weak server (5GB RAM, 2 CPU)
+#   ./scripts/download-ai-local-models.sh 5gb            # weak server 1.5B (5GB RAM, 2 CPU)
 #   ./scripts/download-ai-local-models.sh strong         # dev machine 32GB
 #   ./scripts/download-ai-local-models.sh vision-weak    # SmolVLM2-256M video only
 #   ./scripts/download-ai-local-models.sh embed          # nomic embed only

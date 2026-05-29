@@ -170,7 +170,11 @@ If unsafe to patch atomically, return empty textEdits and explain in summary.
 End immediately after JSON.
 """;
 
-  private static final String MENU_JSON_CONTRACT_MIN = """
+  @Value("${ai.local.prompt.slot.contract-chars:14000}")
+  private int localSlotContractChars;
+
+  /** Fallback only when ai_menu_master_prompt.md is unreadable. */
+  private static final String MENU_JSON_CONTRACT_FALLBACK = """
 You are CSM Menu JSON Editor.
 
 Return ONLY valid JSON.
@@ -207,13 +211,116 @@ Rules:
 - Allowed patch action: add, edit, delete.
 """;
 
+  /** Lego structure MD — allowlist only; see csm_datas/ai_local/README.md */
+  private static final List<String> MENU_KNOWLEDGE_ALLOWLIST = List.of(
+      "ai_menu_structure_runtime.md",
+      "ai_menu_runtime_compact.md",
+      "ai_menu_dev_workflow_compact.md",
+      "ai_menu_greenfield_worker_contract.md",
+      "ai_greenfield_pipeline_contract.md");
+
+  private static final List<String> CODE_KNOWLEDGE_ALLOWLIST = List.of(
+      "ai_code_runtime_compact.md",
+      "ai_code_greenfield_worker_contract.md");
+
   public String getMenuJsonContractMin() {
-    return MENU_JSON_CONTRACT_MIN;
+    return resolveMenuJsonContractForLocal();
   }
 
-  public String getFrontendCodeContractMin() {
-    return FRONTEND_CODE_CONTRACT_MIN;
+  /** Menu worker contract: master prompt file + runtime digest — not hardcoded Java templates. */
+  public String resolveMenuJsonContractForLocal() {
+    try {
+      String master = getMasterPrompt();
+      if (master != null && !master.isBlank()) {
+        int cap = Math.max(6000, localSlotContractChars);
+        String trimmed = trimToMax(master.trim(), cap);
+        String runtime = loadMenuKnowledgeFileByName("ai_menu_runtime_compact.md", Math.min(2400, cap / 3));
+        if (!runtime.isBlank()) {
+          return trimToMax(trimmed + "\n\n" + runtime, cap);
+        }
+        return trimmed;
+      }
+    } catch (Exception ex) {
+      log.warn("Master menu prompt unavailable, using fallback contract: {}", ex.getMessage());
+    }
+    return MENU_JSON_CONTRACT_FALLBACK;
   }
+
+  /**
+   * Greenfield / menu trống: structure-first — không ưu tiên patch schema từ master prompt.
+   * Nghiệp vụ lấy từ USER_REQUEST + BUSINESS_COMPREHENSION, không từ template ERP.
+   */
+  public String resolveMenuJsonContractForGreenfield() {
+    int cap = Math.max(6000, localSlotContractChars);
+    String structure = loadKnowledgeContract("ai_menu_structure_runtime.md", Math.min(3600, cap / 2));
+    String workflow = loadMenuKnowledgeFileByName("ai_menu_dev_workflow_compact.md", Math.min(2800, cap / 3));
+    String runtime = loadMenuKnowledgeFileByName("ai_menu_runtime_compact.md", Math.min(2000, cap / 4));
+    String greenfield = loadKnowledgeContract("ai_menu_greenfield_worker_contract.md", 1200);
+    StringBuilder sb = new StringBuilder();
+    if (!structure.isBlank()) {
+      sb.append(structure);
+    }
+    if (!workflow.isBlank()) {
+      if (sb.length() > 0) {
+        sb.append("\n\n");
+      }
+      sb.append(workflow);
+    }
+    if (!runtime.isBlank()) {
+      if (sb.length() > 0) {
+        sb.append("\n\n");
+      }
+      sb.append(runtime);
+    }
+    if (!greenfield.isBlank()) {
+      if (sb.length() > 0) {
+        sb.append("\n\n");
+      }
+      sb.append(greenfield.replace("%s", "new_build"));
+    }
+    String pipeline = loadKnowledgeContract("ai_greenfield_pipeline_contract.md", 1400);
+    if (!pipeline.isBlank()) {
+      if (sb.length() > 0) {
+        sb.append("\n\n");
+      }
+      sb.append(pipeline);
+    }
+    String combined = sb.toString().trim();
+    if (!combined.isBlank()) {
+      return trimToMax(combined, cap);
+    }
+    return resolveMenuJsonContractForLocal();
+  }
+
+  private String loadKnowledgeContract(String fileName, int maxChars) {
+    String text = loadMenuKnowledgeFileByName(fileName, maxChars);
+    if (!text.isBlank()) {
+      return text;
+    }
+    Path path = Paths.get(contextDir, fileName);
+    if (Files.isRegularFile(path)) {
+      try {
+        return trimToMax(Files.readString(path, StandardCharsets.UTF_8).trim(), Math.max(400, maxChars));
+      } catch (Exception ex) {
+        log.debug("Could not read knowledge contract {}: {}", fileName, ex.getMessage());
+      }
+    }
+    return "";
+  }
+
+  private String resolveComprehendContract() {
+    String fromFile = loadKnowledgeContract("ai_business_comprehend_contract.md", 3200);
+    if (!fromFile.isBlank()) {
+      return fromFile;
+    }
+    return COMPREHEND_CONTRACT_FALLBACK;
+  }
+
+  private static final String COMPREHEND_CONTRACT_FALLBACK = """
+      [BUSINESS_COMPREHEND_CONTRACT]
+      Derive modules from USER_REQUEST + LIVE_APP_MENU + TENANT_RAG. Output JSON BusinessSpec only.
+      [/BUSINESS_COMPREHEND_CONTRACT]
+      """;
 
   public AiFlowIntent classifyLocalIntent(String contextType, String responseMode, String message) {
     String ctx = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase(Locale.ROOT);
@@ -249,16 +356,18 @@ Rules:
       String memory,
       String userRequest,
       String uiLanguage) {
-    String contract = switch (intent) {
-      case MENU_JSON -> MENU_JSON_CONTRACT_MIN;
-      case FRONTEND_CODE -> FRONTEND_CODE_CONTRACT_MIN;
-      case QUICK_QUESTION -> QUICK_QUESTION_CONTRACT_MIN;
-    };
     int editorCap = Math.max(4000, localSlotActiveEditorChars);
     int ragCap = Math.max(1000, localSlotRagContextChars);
     int memCap = Math.max(500, localSlotMemoryChars);
     int reqCap = Math.max(500, localSlotUserRequestChars);
     String safeEditor = trimToMax(String.valueOf(activeEditorContent == null ? "" : activeEditorContent), editorCap);
+    String contract = switch (intent) {
+      case MENU_JSON -> isEffectivelyEmptyMenuEditor(safeEditor)
+          ? resolveMenuJsonContractForGreenfield()
+          : resolveMenuJsonContractForLocal();
+      case FRONTEND_CODE -> FRONTEND_CODE_CONTRACT_MIN;
+      case QUICK_QUESTION -> QUICK_QUESTION_CONTRACT_MIN;
+    };
     String safeRag = trimToMax(String.valueOf(ragContext == null ? "" : ragContext), ragCap);
     String safeMem = trimToMax(String.valueOf(memory == null ? "" : memory), memCap);
     String safeReq = trimToMax(String.valueOf(userRequest == null ? "" : userRequest), reqCap);
@@ -269,7 +378,19 @@ Rules:
     sb.append(buildPromptLanguageBlock(uiLanguage, userRequest));
     sb.append(contract).append("\n\n");
     if (intent == AiFlowIntent.MENU_JSON) {
-      if (!safeEditor.isBlank()) {
+      if (isEffectivelyEmptyMenuEditor(safeEditor)) {
+        sb.append("""
+            [GREENFIELD_EMPTY_MENU]
+            Current menu is EMPTY ({ "menu": [] }). Do NOT return patches or need_more_context.
+            Return ONLY one JSON object: { "menu": [ ...complete tree... ], "notes": [], "warnings": [] }
+            STRUCTURE: follow ai_menu_structure_runtime (type_form, f_*, trigger, saveMenuStruct) — Lego pieces only.
+            BUSINESS: build tree ONLY for modules in BUSINESS_COMPREHENSION / USER_REQUEST — no fixed ERP template.
+            Mirror dev workflow: group(0) → leaves; MD tabs use children[]; every leaf label+label_en+label_zh.
+            Start with { and end with } — no markdown fences, no prose before/after JSON.
+            [/GREENFIELD_EMPTY_MENU]
+
+            """);
+      } else if (!safeEditor.isBlank()) {
         sb.append("[ACTIVE_EDITOR_MENU_JSON]\n").append(safeEditor).append("\n[/ACTIVE_EDITOR_MENU_JSON]\n\n");
       }
     } else if (intent == AiFlowIntent.FRONTEND_CODE) {
@@ -282,6 +403,12 @@ Rules:
     }
     if (!safeMem.isBlank()) {
       sb.append("[SESSION_MEMORY]\n").append(safeMem).append("\n[/SESSION_MEMORY]\n\n");
+    }
+    if (intent == AiFlowIntent.MENU_JSON && !isEffectivelyEmptyMenuEditor(safeEditor)) {
+      String devWorkflow = loadMenuKnowledgeFileByName("ai_menu_dev_workflow_compact.md", 2800);
+      if (!devWorkflow.isBlank()) {
+        sb.append("[DEV_WORKFLOW]\n").append(devWorkflow).append("\n[/DEV_WORKFLOW]\n\n");
+      }
     }
     sb.append("[USER_REQUEST]\n").append(safeReq).append("\n[/USER_REQUEST]");
     return sb.toString();
@@ -332,7 +459,7 @@ Rules:
       boolean menuFlow,
       String inputScenario) {
     StringBuilder sb = new StringBuilder();
-    sb.append(COMPREHEND_CONTRACT_MIN).append("\n\n");
+    sb.append(resolveComprehendContract()).append("\n\n");
     sb.append("Lane: ").append(menuFlow ? "menu_json" : "frontend_code").append("\n");
     sb.append("Input scenario: ").append(String.valueOf(inputScenario == null ? "" : inputScenario)).append("\n\n");
     if (!String.valueOf(systemMasterDigest == null ? "" : systemMasterDigest).isBlank()) {
@@ -353,17 +480,37 @@ Rules:
     sb.append("[USER_REQUEST]\n")
         .append(trimToMax(String.valueOf(userRequest == null ? "" : userRequest), Math.max(500, localSlotUserRequestChars)))
         .append("\n[/USER_REQUEST]\n\n");
-    sb.append("Return ONLY one JSON object matching BusinessSpec schema. No markdown.\n");
+    if (menuFlow && isGreenfieldMenuComprehend(inputScenario, activeEditorDigest)) {
+      String pipeline = loadKnowledgeContract("ai_greenfield_pipeline_contract.md", 1400);
+      if (!pipeline.isBlank()) {
+        sb.append(pipeline).append("\n\n");
+      }
+    }
+    sb.append("Return ONLY one JSON object matching BusinessSpec schema (include planned_structure[] for menu). No markdown.\n");
     return sb.toString();
+  }
+
+  /** Greenfield menu Comprehend — inject pipeline anti-noise contract (PHẦN AF.12). */
+  private static boolean isGreenfieldMenuComprehend(String inputScenario, String activeEditorDigest) {
+    String scenario = String.valueOf(inputScenario == null ? "" : inputScenario).trim().toUpperCase(Locale.ROOT);
+    if ("A_GREENFIELD".equals(scenario) || "B_WITH_SAMPLES".equals(scenario)) {
+      return true;
+    }
+    String editor = String.valueOf(activeEditorDigest == null ? "" : activeEditorDigest).trim();
+    return editor.isBlank() || editor.contains("\"menu\": []") || editor.contains("menu empty");
   }
 
   /** Compact CSM master rules for Comprehend pass (menu or code lane). */
   public String buildSystemMasterDigestCompact(String appId, boolean menuFlow, int maxChars) {
     int cap = Math.max(800, maxChars);
     if (menuFlow) {
-      String compactMenu = loadMenuKnowledgeFileByName("ai_menu_runtime_compact.md", cap);
-      if (!compactMenu.isBlank()) {
-        return compactMenu;
+      int third = Math.max(400, cap / 3);
+      String structure = loadMenuKnowledgeFileByName("ai_menu_structure_runtime.md", third);
+      String compactMenu = loadMenuKnowledgeFileByName("ai_menu_runtime_compact.md", third);
+      String devWorkflow = loadMenuKnowledgeFileByName("ai_menu_dev_workflow_compact.md", third);
+      String merged = (structure + "\n\n" + compactMenu + "\n\n" + devWorkflow).trim();
+      if (!merged.isBlank()) {
+        return trimToMax(merged, cap);
       }
     } else {
       String compactCode = loadMenuKnowledgeFileByName("ai_code_runtime_compact.md", cap);
@@ -402,6 +549,25 @@ Rules:
     }
   }
 
+  /** True when editor holds no menu nodes (blank or `{ "menu": [] }`). */
+  private boolean isEffectivelyEmptyMenuEditor(String menuJson) {
+    String text = String.valueOf(menuJson == null ? "" : menuJson).trim();
+    if (text.isBlank()) {
+      return true;
+    }
+    try {
+      @SuppressWarnings("unchecked")
+      Map<String, Object> map = objectMapper.readValue(text, Map.class);
+      Object menu = map.get("menu");
+      if (menu instanceof List<?> list) {
+        return list.isEmpty();
+      }
+      return !map.containsKey("menu");
+    } catch (Exception ignored) {
+      return text.contains("\"menu\":[]") || text.contains("\"menu\": []");
+    }
+  }
+
   /** PHẦN AC greenfield worker guardrail appended to minimal prompt on weak local models. */
   public String buildGreenfieldWorkerContract(AiFlowIntent intent, String operationScenario, boolean greenfield) {
     if (!greenfield) {
@@ -409,49 +575,30 @@ Rules:
     }
     String scenario = String.valueOf(operationScenario == null ? "new_build" : operationScenario).trim().toLowerCase(Locale.ROOT);
     if (intent == AiFlowIntent.MENU_JSON) {
-      return """
-          ## GREENFIELD MENU CONTRACT
-          operation_scenario=%s
-          - Return COMPLETE menu JSON envelope: { "menu": [...], "notes": [], "warnings": [] }
-          - Every functional node needs type_form, table_name (type 1/2/6), trigger, vi/en/zh labels.
-          - Do NOT return empty menu when user asked to create/design.
-          """.formatted(scenario);
+      String template = loadKnowledgeContract("ai_menu_greenfield_worker_contract.md", 1600);
+      if (template.isBlank()) {
+        template = """
+            ## GREENFIELD MENU CONTRACT
+            operation_scenario=%s
+            - Design from USER_REQUEST + learned LIVE_APP_MENU + TENANT_RAG + runtime contract only.
+            """.formatted(scenario);
+      } else {
+        template = template.replace("%s", scenario);
+      }
+      return template;
     }
     if (intent == AiFlowIntent.FRONTEND_CODE) {
-      return """
-          ## GREENFIELD CODE CONTRACT
-          - Return JSON envelope: { "code": "<full DynamicCode string>", "summary": "...", "changes": [] }
-          - Include window.seft / ctx.helperApi CSM patterns.
-          - Do NOT return empty code when user asked to create module.
-          """;
+      String template = loadKnowledgeContract("ai_code_greenfield_worker_contract.md", 1200);
+      if (template.isBlank()) {
+        return """
+            ## GREENFIELD CODE CONTRACT
+            - Return { "code", "summary", "changes" } from learned code patterns + runtime contract.
+            """;
+      }
+      return template.replace("%s", scenario);
     }
     return "";
   }
-
-  private static final String COMPREHEND_CONTRACT_MIN = """
-      [BUSINESS_COMPREHEND_CONTRACT]
-      You are a CSM ERP business analyst. BEFORE any code/menu output you MUST comprehend business:
-      1) What the CURRENT editor (ACTIVE_EDITOR_DIGEST) already implements — modules, tables, triggers, flows.
-      2) What the CSM system allows (SYSTEM_MASTER_DIGEST + TENANT_RAG).
-      3) What the customer wants changed (USER_REQUEST) — this wins on conflict vs samples.
-      Merge sample + current editor + user delta. Never ignore existing business when editor is non-empty.
-      Output JSON only:
-      {
-        "domain_summary": "Tổng hợp nghiệp vụ sau khi merge current + yêu cầu",
-        "existing_business_summary": "Nghiệp vụ menu/code HIỆN TẠI trong editor",
-        "modules": ["..."],
-        "tables": ["..."],
-        "flows": ["..."],
-        "triggers_learned_from_sample": ["..."],
-        "triggers_from_current_editor": ["..."],
-        "code_patterns_from_sample": ["..."],
-        "code_patterns_from_current_editor": ["..."],
-        "user_delta": "Phần khách hàng yêu cầu thêm/sửa so với hiện trạng",
-        "assumptions": ["..."],
-        "risks": ["..."]
-      }
-      [/BUSINESS_COMPREHEND_CONTRACT]
-      """;
 
   private String buildPromptLanguageBlock(String uiLanguage, String userRequest) {
     String lang = String.valueOf(uiLanguage == null ? "" : uiLanguage).trim().toLowerCase(Locale.ROOT);
@@ -485,6 +632,18 @@ Rules:
 
           """.formatted(sample);
     };
+  }
+
+  public String getFrontendCodeContractMin() {
+    try {
+      String master = getCodeMasterPrompt();
+      if (master != null && !master.isBlank()) {
+        return trimToMax(master.trim(), Math.max(6000, localSlotContractChars));
+      }
+    } catch (Exception ex) {
+      log.warn("Code master prompt unavailable, using inline contract: {}", ex.getMessage());
+    }
+    return FRONTEND_CODE_CONTRACT_MIN;
   }
 
   public String generateLocalFlowContent(
@@ -1446,38 +1605,26 @@ Rules:
     }
 
     final int maxCharsPerFile = 60000;
-    final int maxFiles = 12;
     List<String> sections = new ArrayList<>();
 
-    try (var stream = Files.list(dir)) {
-      List<Path> markdownFiles = stream
-          .filter(Files::isRegularFile)
-          .filter(path -> {
-            String fileName = path.getFileName().toString().toLowerCase();
-            return fileName.endsWith(".md")
-                && fileName.startsWith("ai_code_");
-          })
-          .sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase()))
-          .limit(maxFiles)
-          .toList();
-
-      for (Path path : markdownFiles) {
-        try {
-          String text = Files.readString(path, StandardCharsets.UTF_8);
-          if (text == null || text.isBlank()) {
-            continue;
-          }
-          String trimmed = text.trim();
-          if (trimmed.length() > maxCharsPerFile) {
-            trimmed = trimmed.substring(0, maxCharsPerFile) + "\n...[truncated]";
-          }
-          sections.add("### " + path.getFileName() + "\n" + trimmed);
-        } catch (Exception readEx) {
-          log.warn("Could not read code knowledge file {}: {}", path, readEx.getMessage());
-        }
+    for (String fileName : CODE_KNOWLEDGE_ALLOWLIST) {
+      Path path = dir.resolve(fileName);
+      if (!Files.isRegularFile(path)) {
+        continue;
       }
-    } catch (Exception e) {
-      log.warn("Could not scan code knowledge directory {}: {}", dir, e.getMessage());
+      try {
+        String text = Files.readString(path, StandardCharsets.UTF_8);
+        if (text == null || text.isBlank()) {
+          continue;
+        }
+        String trimmed = text.trim();
+        if (trimmed.length() > maxCharsPerFile) {
+          trimmed = trimmed.substring(0, maxCharsPerFile) + "\n...[truncated]";
+        }
+        sections.add("### " + fileName + "\n" + trimmed);
+      } catch (Exception readEx) {
+        log.warn("Could not read code knowledge file {}: {}", path, readEx.getMessage());
+      }
     }
 
     return sections;
@@ -1505,41 +1652,26 @@ Rules:
     }
 
     final int maxCharsPerFile = 60000;
-    final int maxFiles = 12;
     List<String> sections = new ArrayList<>();
 
-    try (var stream = Files.list(dir)) {
-      List<Path> markdownFiles = stream
-          .filter(Files::isRegularFile)
-          .filter(path -> {
-            String fileName = path.getFileName().toString().toLowerCase();
-            return fileName.endsWith(".md")
-                && (fileName.startsWith("ai_menu_")
-                || fileName.startsWith("ai_system_")
-                || fileName.contains("system_structure")
-                || fileName.contains("architecture"));
-          })
-          .sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase()))
-          .limit(maxFiles)
-          .toList();
-
-      for (Path path : markdownFiles) {
-        try {
-          String text = Files.readString(path, StandardCharsets.UTF_8);
-          if (text == null || text.isBlank()) {
-            continue;
-          }
-          String trimmed = text.trim();
-          if (trimmed.length() > maxCharsPerFile) {
-            trimmed = trimmed.substring(0, maxCharsPerFile) + "\n...[truncated]";
-          }
-          sections.add("### " + path.getFileName() + "\n" + trimmed);
-        } catch (Exception readEx) {
-          log.warn("Could not read menu knowledge file {}: {}", path, readEx.getMessage());
-        }
+    for (String fileName : MENU_KNOWLEDGE_ALLOWLIST) {
+      Path path = dir.resolve(fileName);
+      if (!Files.isRegularFile(path)) {
+        continue;
       }
-    } catch (Exception e) {
-      log.warn("Could not scan menu knowledge directory {}: {}", dir, e.getMessage());
+      try {
+        String text = Files.readString(path, StandardCharsets.UTF_8);
+        if (text == null || text.isBlank()) {
+          continue;
+        }
+        String trimmed = text.trim();
+        if (trimmed.length() > maxCharsPerFile) {
+          trimmed = trimmed.substring(0, maxCharsPerFile) + "\n...[truncated]";
+        }
+        sections.add("### " + fileName + "\n" + trimmed);
+      } catch (Exception readEx) {
+        log.warn("Could not read menu knowledge file {}: {}", path, readEx.getMessage());
+      }
     }
 
     return sections;

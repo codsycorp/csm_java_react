@@ -1,45 +1,28 @@
-# CSM Menu Runtime — Compact Digest (Comprehend / SYSTEM_MASTER)
+# CSM Menu Runtime — Compact (Comprehend SYSTEM_MASTER digest)
 
-Version: 1.0 — dùng cho Pass 1 BusinessSpec (cap ~2400 chars).
+Version: 2.0 · cap ~2400 chars · **structure only + dispatch** — business from USER_REQUEST
 
-## Luồng admin thực tế
+## Lego tách biệt
 
-- **Quản lý hệ thống → Quản lý menu** (`AiMenuDesigner`, `contextType=menu_json`, `flowType=menu_manager`): AI sửa JSON menu → `saveMenuStruct` → sidebar `/system/grid/:menuId`.
-- **Quản lý hệ thống → Trình biên tập mã** (`CodeEditor`, `contextType=code`, `flowType=code_editor`): AI sửa JS trong `sys_autos`, **không** sinh menu JSON.
+- **Structure:** type_form, f_*, trigger, saveMenuStruct — `ai_menu_structure_runtime.md`
+- **Business:** modules/tables từ USER_REQUEST — Pass 1 Comprehend — **không** template ERP
 
-## AdminPage dispatch (ưu tiên, file `admin/index.tsx`)
+## Admin flow
 
-1. `type_form=6` hoặc có `kanban_config` → **CsmKanbanBoard**
-2. `auto_code_name` hoặc `type_form=4` → **DynamicCodeMenu**
-3. `report_name` + (`type_form=5` hoặc `trigger.report_db`) → **CsmReport**
-4. `type_form=2` + `nodes[]` → **CsmMasterDetail** (master grid + tab detail)
-5. `type_form=1` / `table_name` / `trigger.load_db` → **CsmDynamicGrid** + **CsmEditModal** (popup nếu `row_type_edit=0`)
+Quản lý menu → AI JSON → `saveMenuStruct` → sidebar → click → `/system/grid/:menuId`
 
-## type_form bắt buộc
+## AdminPage dispatch
 
-| type | Component | Bắt buộc |
-|------|-----------|----------|
-| 0 | Sidebar group | `children[]` không rỗng; **không** `table_name` |
-| 1 | CsmDynamicGrid | `table_name`, `table[]` (f_*), `trigger` |
-| 2 | CsmMasterDetail | master `table_name` + `nodes[]`; tab con: `table_name` = **tên field JSON array trong master** (không phải bảng DB riêng) |
-| 3 | Router link | `dynamic_link_url` |
-| 4 | DynamicCode | `auto_code_name` |
-| 5/ report | CsmReport | `report_name`, `trigger.report_db`, `table[]` filter |
-| 6 | CsmKanbanBoard | `kanban_config` + `table_name` + `table[]` cho modal sửa |
+6/kanban → Kanban | 4/auto_code_name → DynamicCode | report_name → Report | 2+nodes → MasterDetail | 1 → Grid+Modal
 
-## Field schema (runtime chỉ đọc f_*)
+## type_form
 
-- PK: `{f_name:"id",f_pkid:1,f_types:"ed",f_show:0,...}`
-- Combo: `f_types` = co/coro/cbo/cp + **f_cbo_query** string (JSON query, options tĩnh, hoặc JS)
-- Trigger trong object `trigger`: `load_db`, `beforeSave`, `update`, `report_db`, …
+0=group(children) | 1=grid(table[],trigger) | 2=MD(tab table_name=field master) | 3=link | 4=code | 5/report | 6=kanban
 
-## Sai lầm hay gặp (AI tránh)
+## Field/trigger
 
-- Leaf `type_form=0` → click không mở gì
-- Detail tab dùng bảng DB riêng thay vì field master → dùng 2 menu type_form=1 hoặc type_form=2 đúng pattern
-- Combo `f_types="ed"` + f_cbo_query → select hỏng
-- Thiếu `table[]` → grid trống cột
+f_* only; PK f_pkid=1; combo f_cbo_query; trigger load_db/beforeSave/update/report_db
 
-## Output greenfield
+## Greenfield output
 
-`{ "menu": [...], "notes": [], "warnings": [], "coverage_modules": [...] }`
+{ "menu": [...], "notes": [], "warnings": [], "coverage_modules": [] }

@@ -1,9 +1,101 @@
 # CSM AI LOCAL — MASTER BRIEF CHO CURSOR AI
 ## Một file duy nhất để yêu cầu Cursor làm lại / hoàn thiện hệ thống
 
-Version: **3.11** · 2026-05-28  
+Version: **3.19** · 2026-05-26  
 Repo: `csm_server`  
 **Single source of truth** — dùng file này khi yêu cầu Cursor implement / làm lại CSM AI Local **và** domain System Management liên quan RAG.
+
+### Changelog v3.19
+
+| Mục | Trạng thái |
+|-----|------------|
+| **AD-R6** — SSE `rag_citations` + usage dock **Nguồn tham chiếu** (score, freshness, excerpt) | ✅ Implement |
+| **AD-R1 partial** — `freshnessScore` + `contentExcerpt` per hit trong `scopedRagTopHits` / `tool_search` | ✅ Implement |
+| **Live menu pattern index** — `indexLiveMenuLeafPatterns` từ `index.menu` → Lucene `LIVE_MENU_PATTERN` | ✅ Implement |
+| **`applyLiveMenuPatternHints`** — merge trigger/combo từ tenant khi Java rules còn minimal | ✅ Implement |
+| Config `ai.local.rag.citations.max-hits`, `live-menu-pattern-index.*` | ✅ |
+
+### Changelog v3.18
+
+| Mục | Trạng thái |
+|-----|------------|
+| **AD-R2** — Gate **trước** `text_edit_apply` greenfield (`gateGreenfieldMenuForApply`) | ✅ Implement |
+| **AD-R3** — Reviewer fail → Planner replan per module (`menu-module-replan.*`) | ✅ Implement |
+| SSE **`agent_handoff`** — Supervisor/Retriever/Planner/Executor/Reviewer explicit | ✅ Implement |
+| **`applyGreenfieldCsmBusinessRules`** — trigger/combo/MD deterministic (1.5B-safe) | ✅ Implement |
+| Skip agentic decompose khi `menuGreenfieldFullDraftApply` | ✅ Implement |
+| **AF.17** — Agent Registry (1 trang cheat sheet) | ✅ Spec |
+
+### Changelog v3.17
+
+| Mục | Trạng thái |
+|-----|------------|
+| **PHẦN AF — bổ sung đầy đủ** AF.8 diagram AD-R4, AF.12 anti-rác, AF.13 config, AF.14 log grep, AF.15 SSE schema, AF.16 Cursor checklist AF-C* | ✅ Spec |
+| `ai_greenfield_pipeline_contract.md` — inject Comprehend + greenfield worker (cấm one-shot / template ERP) | ✅ Implement |
+| Test script `test-greenfield-menu-sse.sh` — thêm `menu_module_step` + `menu_module_enrich` | ✅ |
+| PHẦN K — cross-ref AF.12 DO NOT greenfield | ✅ |
+
+### Changelog v3.16
+
+| Mục | Trạng thái |
+|-----|------------|
+| **AD-R4 — Per-module enrich loop** (scaffold → enrich từng leaf → gate) | ✅ Implement |
+| `enrichGreenfieldMenuByModule()` — Java i18n + LLM 1.5B optional per module | ✅ |
+| SSE `menu_module_step` + `menu_module_enrich` | ✅ |
+| Scaffold fixes: report `parentId`, dedupe planned, root title XNT | ✅ |
+| Config `menu-module-enrich.*` | ✅ |
+
+### Changelog v3.15
+
+| Mục | Trạng thái |
+|-----|------------|
+| **PHẦN AF — Đối chiếu 9 sơ đồ quy trình agent (user reference)** | ✅ Spec + ✅ Map CSM |
+| AF.1 — Observation → Reasoning → Action | ✅ Map SSE + Comprehend |
+| AF.2 — Agentic AI vs AI Agents | ✅ CSM = Agentic (Comprehend+Plan+Scaffold); cấm one-shot |
+| AF.3 — Supervisor → Agents → Tools | ✅ Map AD.3 chi tiết |
+| AF.4 — LangChain RAG pipeline | ✅ Map Lucene ingest + retrieve |
+| AF.5 — LangGraph (Nodes/Edges/State/Conditional) | ✅ Partial — thiếu loop Reviewer→Planner |
+| AF.6 — Multi-agent handoff (agent_main→tools→back) | ✅ Partial — monolithic thread |
+| AF.7 — Taxonomy AI Agent (Goal/Utility/Learning) | ✅ Map BusinessSpec + harness |
+| AF.8 — **Quy trình canonical đúng** trên hệ thống CSM | ✅ Synthesized pipeline |
+| Cập nhật AD.3.2: **scaffold-first** + `business_reasoning` SSE | ✅ |
+
+### Changelog v3.14
+
+| Mục | Trạng thái |
+|-----|------------|
+| **PHẦN AE — Bản chất tư duy AI Local & 3 con đường “học” hệ thống** | ✅ Spec + ✅ Map CSM |
+| AE.1 — 4 bước hộp đen (Embedding → Attention → Semantic Mapping → Token Gen) | ✅ Map pipeline CSM |
+| AE.2 — RAG vs Fine-tuning vs In-Context Learning | ✅ CSM = RAG + In-Context (+ scaffold Java) |
+| AE.3 — 3 tầng Guardrails (System Prompt / Context / Output Validation) | ✅ Map gates + contracts |
+| Ghi chú model: **bundled 1.5B Q4** — không fine-tune; greenfield scaffold-first | ✅ |
+
+### Changelog v3.13
+
+| Mục | Trạng thái |
+|-----|------------|
+| **PHẦN AD — Distributed Agent Architecture** — map 3 sơ đồ kiến trúc (Trusted Knowledge pipeline / 6 engineering pillars / Supervisor multi-agent) | ✅ Spec + ✅ Audit code |
+| **AD.1** Metadata Filter → Freshness → Re-rank → Validation → Trusted Knowledge | ✅ Partial — chi tiết gap |
+| **AD.2** AI Agent = Distributed Systems Engineering (Orchestration / State / Security / Evaluation / Governance / Reliability) | ✅ Partial — map PHẦN Z |
+| **AD.3** Supervisor + Retriever / Planner / Executor / Reviewer | ✅ Partial — monolithic supervisor |
+| **AD.4** Greenfield menu Pass 3 **Scaffold Assemble** (Java) khi LLM mỏng | ✅ Implement |
+| `enrichBusinessSpecForMenuGreenfield()` — expand `planned_structure[]` từ USER_REQUEST | ✅ Implement |
+| `buildGreenfieldMenuScaffoldJson()` + `maybeApplyGreenfieldMenuScaffold()` | ✅ Implement |
+| `MenuQualityGateService.accumulateTriggerRepairs()` — array → object | ✅ Implement |
+| Config `ai.local.greenfield.menu-scaffold-enabled=true` (default) | ✅ |
+
+### Changelog v3.12
+
+| Mục | Trạng thái |
+|-----|------------|
+| **A.5 — Mô hình Lego CSM** — Học cấu trúc → Comprehend nghiệp vụ → Plan mảnh → Lắp ghép → Gate | ✅ Spec |
+| **E.2 — LEGO MD registry** — chỉ allowlist inject; archive không nạp model | ✅ Spec + ✅ Implement |
+| `backend/csm_datas/ai_local/README.md` — index file inject vs không inject | ✅ |
+| `ai_menu_structure_runtime.md` — catalog mảnh Lego (type_form, f_*, trigger, save) | ✅ |
+| Greenfield menu: `resolveMenuJsonContractForGreenfield()` structure-first — **không** patch-first | ✅ Implement |
+| `MENU_KNOWLEDGE_ALLOWLIST` / `CODE_KNOWLEDGE_ALLOWLIST` — **cấm** glob `ai_menu_*.md` | ✅ Implement |
+| Archive: `archive/ai_menu_runtime_contract.md`, `archive/ai_code_runtime_contract.md` — dev reference only | ✅ |
+| `buildSystemMasterDigestCompact` — Comprehend menu gồm structure + compact + dev_workflow | ✅ Implement |
 
 ### Changelog v3.11
 
@@ -12,7 +104,7 @@ Repo: `csm_server`
 | **PHẦN C.5 — Nguyên lý context Cursor-like** — AI không “nhớ” cả codebase; Index → Retrieve → Context Builder → LLM/Heuristic | ✅ Spec + ✅ Implement |
 | Analyze nghiệp vụ file lớn: **retrieve** top-K (BM25 in-memory + symbol + head/tail) → `CodeBusinessScan` trên slice ≤32k — **không** scan/prompt 400k+ vào model | ✅ Implement |
 | Lane 3b trên **1.5B**: prose heuristic + Comprehend scan trên retrieved context; **không** kỳ vọng LLM hiểu nghiệp vụ lớn | ✅ Spec |
-| Khuyến nghị model: **7B** (`qwen2.5-coder:7b`) cho comprehend/plan; **14B** tốt hơn; 1.5B = autocomplete / patch ngắn | ✅ Spec |
+| Khuyến nghị model: **1.5B Q4** bundled + Java scaffold/plan; không 7B/14B trong repo (superseded v3.17 — PHẦN AE.0) | ✅ Spec |
 | `analyze_business_fast_path`: heuristic intent + Comprehend heuristic-only + early stream (không build prompt 97k) | ✅ Implement |
 
 ### Changelog v3.10
@@ -220,6 +312,7 @@ Copy toàn bộ file (hoặc @-mention file này) vào Cursor Chat, kèm prompt 
 
 ```txt
 Đọc @CSM_AI_LOCAL_CURSOR_MASTER_BRIEF.md và triển khai đầy đủ theo spec Cursor-aligned.
+Bám **PHẦN A.5 — Mô hình Lego CSM** (học cấu trúc → phân tích nghiệp vụ → lắp ghép).
 Bám **PHẦN AB — 5 luồng sản xuất** (menu / code / suy luận / SEO+guest / ảnh-video).
 Bám **PHẦN AC — Business Comprehension & Planning** — **bắt buộc** trên mọi lane menu/code edit:
 - Editor **trống** → hiểu hệ thống CSM + yêu cầu khách (kịch bản 1).
@@ -229,6 +322,9 @@ Khi có thêm mẫu attachment → merge vào Comprehend, không thay thế yêu
 (4) tenant RAG + ACL filter khi hỏi domain org/permission/menu.
 (5) Mọi patch tính trên **full currentCode string** (1-based lines) — KHÔNG coi như file path (PHẦN V).
 (6) Pass Comprehend → Plan trước Worker; giữ infer tuần tự max-concurrent=1 trên local-5gb (PHẦN AC).
+(7) Bám **PHẦN AD** — Trusted Knowledge pipeline + Supervisor multi-agent; greenfield menu mỏng → scaffold assemble (AD.4).
+(8) Đọc **PHẦN AE** — bản chất tư duy LLM (không phải nhận thức) + 3 con đường học hệ thống + 3 tầng guardrail.
+(9) Đọc **PHẦN AF** — đối chiếu **9 sơ đồ quy trình agent** (O-R-A, Supervisor, LangChain RAG, LangGraph) → làm đúng trên CSM.
 Không over-engineer. Sửa đúng các file đã liệt kê. Compile backend + không phá frontend SSE.
 Máy target: local-5gb (5GB RAM, 2 CPU, qwen2.5-coder-1.5b Q4_K_M) — **bắt buộc ổn định**.
 Sau khi xong: commit + push theo PHẦN P nếu user yêu cầu đồng bộ git.
@@ -280,7 +376,125 @@ Ma trận màn hình gọi `AiAssistantChat` / props bắt buộc → **PHẦN W
 ```txt
 NẠP ĐỦ VÀO HỆ THỐNG  (ingest + index)
 KHÔNG NẠP HẾT VÀO MODEL  (minimal prompt + slot budget)
+HIỂU CSM NHƯ LEGO  (structure MD → business từ USER_REQUEST → ghép mảnh — không template ERP cố định)
 ```
+
+## A.5 Mô hình Lego CSM (Structure → Business → Assembly)
+
+> **Triết lý v3.12:** AI local **không** học “menu bán hàng mẫu” hay cây ERP cứng. AI học **mảnh Lego** (cấu trúc runtime CSM) một lần, rồi mỗi yêu cầu khách: **phân tích nghiệp vụ** → **chọn mảnh** → **lắp ghép** thành menu JSON hoặc DynamicCode.
+
+### A.5.1 Bốn phase (Lego pipeline)
+
+```mermaid
+flowchart TB
+  subgraph P0 [Phase 0 — Học mảnh Lego static]
+    S1[ai_menu_structure_runtime.md]
+    S2[ai_menu_runtime_compact.md / ai_code_runtime_compact.md]
+    S3[ai_menu_dev_workflow_compact.md]
+    S1 --> S2 --> S3
+  end
+
+  subgraph P1 [Phase 1 — Comprehend nghiệp vụ]
+    U[USER_REQUEST]
+    E[ACTIVE_EDITOR_DIGEST / LIVE_APP_MENU]
+    R[TENANT_RAG]
+    C[ai_business_comprehend_contract.md]
+    U --> BS[BusinessSpec JSON]
+    E --> BS
+    R --> BS
+    C --> BS
+  end
+
+  subgraph P2 [Phase 2 — Plan lắp ghép]
+    BS --> EP[ExecutionPlan: module → type_form → bảng → trigger]
+  end
+
+  subgraph P3 [Phase 3 — Worker lắp ghép]
+    EP --> W{Editor trống?}
+    W -->|yes greenfield| GF["LLM Worker → { menu: [...] }"]
+    GF --> SC{Menu mỏng?}
+    SC -->|yes| SA["Scaffold Assemble Java\nbuildGreenfieldMenuScaffoldJson"]
+    SC -->|no| G
+    SA --> G
+    W -->|no edit| ED["{ patches: [...] } hoặc textEdits"]
+  end
+
+  subgraph P4 [Phase 4 — Gate]
+    G[MenuQualityGate / JSON validate / AST]
+    ED --> G
+    G --> OUT[Apply CodeMirror / saveMenuStruct]
+  end
+
+  P0 --> P1
+  P1 --> P2
+  P2 --> P3
+  P3 --> P4
+```
+
+### A.5.2 Catalog mảnh Lego (Phase 0 — menu)
+
+Nguồn canonical: `backend/csm_datas/ai_local/ai_menu_structure_runtime.md` (mirror `use-menu.ts`, `menu-type-resolver.ts`, `MenuRequirementForm`, `saveMenuStruct`).
+
+| Mảnh Lego | type_form / signal | Output UI | Field bắt buộc |
+|-----------|-------------------|-----------|----------------|
+| Nhóm menu | `0` | Sidebar group | `id`, `label`, `children[]` |
+| Grid CRUD | `1` | `CsmDynamicGrid` + modal | `table_name`, `table[]` (f_*), `trigger` |
+| Master-Detail | `2` | `CsmMasterDetail` | master `table_name`; tab `nodes[].table_name` = **tên field JSON array** trong master |
+| Link ngoài | `3` | redirect | `path` |
+| DynamicCode menu | `4` | AdminPage → code runtime | `auto_code_name` |
+| Báo cáo | `report_name` + `report_db` | `CsmReport` | `report_name`, `trigger.report_db`, filter `table[]` |
+| Kanban | `6` / `kanban_config` | `CsmKanbanBoard` | `kanban_config`, `table_name`, `table[]` |
+
+**Quy tắc lắp ghép:**
+
+- Click sidebar → `/system/grid/:menuId` — mọi node leaf phải có `id` unique trong cây.
+- Lưu tenant: encrypt → `index.menu` (`saveMenuStruct`) — AI **không** bịa path lưu khác.
+- Master-Detail: tab detail **không** trỏ thẳng bảng DB con nếu master lưu JSON array — dùng đúng tên field.
+- Nghiệp vụ (tên module, bảng, luồng) **chỉ** từ `USER_REQUEST` + `LIVE_APP_MENU` + RAG — **không** từ file template domain.
+
+**Mảnh Lego code lane:** `ai_code_runtime_compact.md` — IIFE, `window.seft`, container guard, `new Function(...)`, pattern `auto-kqxs.js` / `auto-lmkt.js`.
+
+### A.5.3 Phase 1–2 — Từ yêu cầu khách → kế hoạch
+
+**Pass 1 Comprehend** (`ai_business_comprehend_contract.md`):
+
+- Input: `USER_REQUEST` (cao nhất), `ACTIVE_EDITOR_DIGEST`, `LIVE_APP_MENU` / sample, `SYSTEM_MASTER_DIGEST`, `TENANT_RAG`.
+- Output nội bộ `BusinessSpec`: `modules`, `tables`, `flows`, `user_delta`, `existing_business_summary`.
+- **Cấm:** sinh cây “Danh mục / Bán hàng / XNT” nếu user không nói.
+
+**Pass 2 Plan** → `ExecutionPlan`:
+
+- Mỗi module → chọn mảnh: group (`0`), grid (`1`), MD (`2`), report, kanban, link (`3`), code menu (`4`).
+- Ghi acceptance: id/label i18n, `table_name`, trigger cần có, thứ tự lắp (menu trước / code sau).
+
+### A.5.4 Phase 3 — Worker lắp ghép
+
+| Tình huống | Contract stack | JSON envelope |
+|------------|----------------|---------------|
+| Menu **trống** (greenfield) | `resolveMenuJsonContractForGreenfield()`: structure → dev_workflow → compact → greenfield_worker | `{ "menu": [ ... ] }` — **không** `patches` |
+| Menu **có sẵn** (edit) | `ai_menu_master_prompt.md` + compact + dev_workflow | `{ "patches": [ add/edit/delete ] }` |
+| Code greenfield | `ai_code_greenfield_worker_contract.md` + compact | `{ "code": "...", "summary": "..." }` |
+| Code edit | `ai_code_master_prompt.md` + compact | `textEdits` 1-based trên full buffer |
+
+Runtime bổ sung (không phải MD): `LIVE_APP_MENU` digest từ `index.menu` tenant, attachment sample, region plan trên file lớn.
+
+### A.5.5 Registry MD inject (chỉ file cần thiết)
+
+Chi tiết bảng đầy đủ: `backend/csm_datas/ai_local/README.md` và **E.2** dưới đây.
+
+**INJECT:** allowlist trong `AiAssistantGatewayService` — `MENU_KNOWLEDGE_ALLOWLIST`, `CODE_KNOWLEDGE_ALLOWLIST`.
+
+**KHÔNG INJECT vào minimal prompt:**
+
+- `ai-assistant-instructions.md` — policy chat riêng
+- `author_style_dna.md` — L0 RAG phong cách (optional)
+- `archive/*_runtime_contract.md` — tham chiếu dev, đã thay bằng compact + structure
+
+**Cấm triển khai:**
+
+- Glob load mọi `ai_menu_*.md` / paste full instructions + master + code string một lần
+- Java seed cây menu ERP (`buildRichSalesInventory...`) hoặc MD canonical domain
+- Greenfield retry yêu cầu `patches` khi editor trống
 
 ---
 
@@ -368,7 +582,8 @@ flowchart LR
 
 ## C.5 Kiến trúc Cursor-like — AI không “nhớ” cả codebase
 
-> **Điểm then chốt:** Model **không** hiểu toàn project. Nó chỉ hiểu **phần code được retrieve đúng lúc**. Cursor, Copilot, Claude Code, Devin đều dùng cùng mô hình — CSM bắt buộc tuân theo.
+> **Điểm then chốt:** Model **không** hiểu toàn project. Nó chỉ hiểu **phần code được retrieve đúng lúc**. Cursor, Copilot, Claude Code, Devin đều dùng cùng mô hình — CSM bắt buộc tuân theo.  
+> **Lý thuyết sâu hơn:** PHẦN **AE** — bản chất Attention/Token Probability + 3 con đường học (RAG / In-Context / không fine-tune).
 
 ```txt
 Codebase (currentCode string + workspace index)
@@ -693,13 +908,54 @@ File apply: `CodeMirrorWithAiAssistant.tsx` → `handleApplyLineEdit` → `view.
 | `backend/src/main/resources/application-local-5gb.properties` | Profile 5GB | Config mục tiêu |
 | `backend/src/main/resources/application.properties` | Defaults | Không revert model-driven flags |
 
-## E.2 Backend — prompt assets (chỉ load MỘT theo intent)
+## E.2 Backend — prompt assets (Lego MD registry · chỉ allowlist inject)
 
-| File | Khi nào |
+> Index đầy đủ: `backend/csm_datas/ai_local/README.md` · Java: `AiAssistantGatewayService.MENU_KNOWLEDGE_ALLOWLIST` / `CODE_KNOWLEDGE_ALLOWLIST`
+
+### E.2.1 Menu lane (`contextType=menu_json`)
+
+| File | Phase Lego | Khi nào load |
+|------|------------|--------------|
+| `ai_business_comprehend_contract.md` | 1 Comprehend | Pass 1 — mọi greenfield/edit có business pipeline |
+| `ai_menu_structure_runtime.md` | 0 Structure | Greenfield (menu trống) — **catalog mảnh Lego** |
+| `ai_menu_runtime_compact.md` | 0 Structure | Comprehend digest + worker edit |
+| `ai_menu_dev_workflow_compact.md` | 0 Structure | Comprehend + edit menu có sẵn |
+| `ai_menu_greenfield_worker_contract.md` | 3 Assembly | Greenfield worker — full `{ "menu": [...] }` |
+| `ai_menu_master_prompt.md` | 3 Assembly | Edit menu có sẵn — schema `patches` |
+
+**Greenfield stack** (`resolveMenuJsonContractForGreenfield`): structure → dev_workflow → runtime_compact → greenfield_worker — **không** master patch-first.
+
+**Runtime data (không phải MD):** `LIVE_APP_MENU` (`index.menu`), `[SAMPLE_MENU_DIGEST]`, `[TENANT_RAG]`.
+
+### E.2.2 Code lane (`contextType=code`)
+
+| File | Phase Lego | Khi nào load |
+|------|------------|--------------|
+| `ai_business_comprehend_contract.md` | 1 Comprehend | Pass 1 |
+| `ai_code_runtime_compact.md` | 0 Structure | Comprehend + worker |
+| `ai_code_greenfield_worker_contract.md` | 3 Assembly | Greenfield code |
+| `ai_code_master_prompt.md` | 3 Assembly | Edit DynamicCode — `textEdits` |
+
+### E.2.3 Không inject vào minimal prompt
+
+| File | Vai trò |
 |------|---------|
-| `backend/csm_datas/ai_local/ai_code_master_prompt.md` | FRONTEND_CODE edit |
-| `backend/csm_datas/ai_local/ai_menu_master_prompt.md` | MENU_JSON edit |
-| `backend/csm_datas/ai_local/ai-assistant-instructions.md` | Policy — **không** nhét full vào mọi prompt |
+| `ai-assistant-instructions.md` | Policy chat — route riêng |
+| `author_style_dna.md` | L0 RAG phong cách code (optional pack) |
+| `archive/ai_menu_runtime_contract.md` | Dev reference — thay bằng structure + compact |
+| `archive/ai_code_runtime_contract.md` | Dev reference — thay bằng compact |
+
+### E.2.4 Java load rules (bắt buộc)
+
+```java
+// AiAssistantGatewayService — KHÔNG glob ai_menu_*.md
+MENU_KNOWLEDGE_ALLOWLIST = structure, runtime_compact, dev_workflow_compact, greenfield_worker
+CODE_KNOWLEDGE_ALLOWLIST = runtime_compact, greenfield_worker
+buildAiAssistantMenuKnowledgeBlock() → loadMenuKnowledgeFiles() theo allowlist
+resolveMenuJsonContractForGreenfield() → structure-first (editor trống)
+resolveMenuJsonContractForLocal() → master prompt + compact (edit)
+buildSystemMasterDigestCompact(menuFlow=true) → structure + compact + dev_workflow
+```
 
 ## E.3 Frontend — bắt buộc
 
@@ -1135,13 +1391,15 @@ Rules:
 | `lmkt/.../auto-kqxs.js` | IIFE + `ReactDOM.createRoot` + `__dynamicCodeDispose` |
 | `lmkt/.../auto-lmkt.js` | `__AUTO_*_LOADED__` guard, `uiTranslations` vi/en/zh |
 
-**Nạp kiến thức AI local (backend auto-load, lane code only):**
+**Nạp kiến thức AI local (backend allowlist — lane code only):**
 
-| File | Slot prompt |
-|------|-------------|
-| `ai_code_runtime_compact.md` | `[SYSTEM_MASTER_DIGEST]` Comprehend |
-| `ai_code_runtime_contract.md` | `AUTO_LOADED_CODE_SYSTEM_KNOWLEDGE` worker |
-| `ai_code_master_prompt.md` | Master schema v7 |
+| File | Phase | Slot prompt |
+|------|-------|-------------|
+| `ai_code_runtime_compact.md` | 0 Structure | `[SYSTEM_MASTER_DIGEST]` Comprehend |
+| `ai_code_greenfield_worker_contract.md` | 3 Assembly | Greenfield worker |
+| `ai_code_master_prompt.md` | 3 Assembly | Edit — schema v7 + textEdits |
+
+**Không inject:** `archive/ai_code_runtime_contract.md` (dev reference only).
 
 **Tách lane:** Backend `flow_guard` — `code_editor`↔`code`, `menu_manager`↔`menu_json`. Không inject `AUTO_LOADED_MENU_*` khi `contextType=code`.
 
@@ -1191,18 +1449,22 @@ Click sidebar → `/system/grid/:menuId` → `AdminPage` dispatch (first match):
 | 2 + `nodes[]` | `CsmMasterDetail` | master `table_name`; tab: `nodes[].table_name` = **field JSON array trong master** |
 | 1 | `CsmDynamicGrid` + `CsmEditModal` | `table_name`, `table[]`, `trigger`; `row_type_edit` 0=popup |
 
-**Nạp kiến thức cho AI local (backend auto-load):**
+**Nạp kiến thức cho AI local (backend allowlist — lane menu only):**
 
-| File | Vai trò | Slot prompt |
-|------|---------|-------------|
-| `backend/csm_datas/ai_local/ai_menu_runtime_compact.md` | Digest ~2.4k — routing + type_form + f_* | `[SYSTEM_MASTER_DIGEST]` Pass 1 Comprehend |
-| `backend/csm_datas/ai_local/ai_menu_runtime_contract.md` | Contract đầy đủ + ví dụ node | `AUTO_LOADED_MENU_SYSTEM_KNOWLEDGE` worker |
-| `backend/csm_datas/ai_local/ai_menu_master_prompt.md` | Schema patch/greenfield v7 | Cùng block auto-load |
-| `frontend-admin/.../menu-design-system.ts` | Mirror frontend (MenuRequirementForm) | Chưa auto-sync — tham chiếu dev |
+| File | Phase | Slot prompt |
+|------|-------|-------------|
+| `ai_menu_structure_runtime.md` | 0 Structure | Greenfield worker — **Lego catalog** |
+| `ai_menu_runtime_compact.md` | 0 Structure | `[SYSTEM_MASTER_DIGEST]` Pass 1 Comprehend + edit worker |
+| `ai_menu_dev_workflow_compact.md` | 0 Structure | Comprehend + edit (mirror dev workflow) |
+| `ai_menu_greenfield_worker_contract.md` | 3 Assembly | Greenfield — `{ "menu": [...] }` |
+| `ai_menu_master_prompt.md` | 3 Assembly | Edit — schema patch v7 |
+| `ai_business_comprehend_contract.md` | 1 Comprehend | Pass 1 BusinessSpec |
 
-`AiAssistantGatewayService.buildAiAssistantMenuKnowledgeBlock()` scan `ai_menu_*.md` trong `csm_datas/ai_local/`.  
-`ApiSpringController.buildCodingPrompt()` inject block khi `contextType=menu_json`.  
-`sample_menu_compact` từ `AiMenuDesigner` → `[SAMPLE_MENU_DIGEST]` (pattern mẫu tenant).
+**Không inject:** `archive/ai_menu_runtime_contract.md`, `ai-assistant-instructions.md` (full paste).
+
+`AiAssistantGatewayService.loadMenuKnowledgeFiles()` — **chỉ** `MENU_KNOWLEDGE_ALLOWLIST` (4 file worker); comprehend contract load riêng.  
+`ApiSpringController` greenfield: `resolveMenuJsonContractForGreenfield()` khi editor trống.  
+`sample_menu_compact` từ `AiMenuDesigner` → `[SAMPLE_MENU_DIGEST]`; tenant live → `LIVE_APP_MENU` / `index.menu`.
 
 **Master-Detail — sai lầm thường gặp:** tab `nodes[].table_name` là tên **field** master (vd `chi_tiet`), không phải bảng DB `bh_donhang_ct`. Nếu detail có bảng DB riêng → 2 menu `type_form=1` + FK combo.
 
@@ -1266,10 +1528,12 @@ ai.local.business-comprehension.required-on-sample-attachment=true
 ai.local.business-comprehension.required-on-edit-with-editor=true
 ai.local.business-comprehension.active-editor-digest-max-chars=6000
 ai.local.business-comprehension.system-master-digest-max-chars=2400
-ai.local.business-comprehension.comprehend-max-tokens=512
-ai.local.business-comprehension.worker-max-tokens=768
+ai.local.business-comprehension.comprehend-max-tokens=768
+ai.local.business-comprehension.worker-max-tokens=1536
 ai.local.business-comprehension.sequential-infer=true
 ai.local.business-comprehension.deterministic-seed-fallback=true
+ai.local.business-comprehension.deterministic-seed-fallback.menu-greenfield.enabled=false
+ai.local.business-comprehension.menu-greenfield-fast-path.enabled=false
 ai.local.greenfield.enabled=true
 ai.local.greenfield.menu-seed-module-count=1
 ai.local.greenfield.code-scaffold-template=csm_dynamiccode_v1
@@ -1436,10 +1700,14 @@ Exit code 0.
 ✗ Validate patch chỉ trên condensed excerpt mà không dry-run full currentCode
 ✗ Apply full doc replace khi đã có text_edit_apply line-range (trừ menu full-tree fallback)
 ✗ Dùng selection-only làm promptCodeContext cho analyze nghiệp vụ trên file >30k (phải **retrieve** condensed 18–32k — không scan/prompt full 400k)
-✗ Coi model 1.5B “hiểu” nghiệp vụ lớn khi nhét nguyên currentCode vào prompt — phải RAG + heuristic/7B
+✗ Coi model 1.5B “hiểu” nghiệp vụ lớn khi nhét nguyên currentCode vào prompt — phải RAG + Java scaffold/plan (PHẦN AE.0, AF.8)
 ✗ Feed toàn bộ repo / full DynamicCode 400k vào LLM context vì “cho AI hiểu hết”
 ✗ Gắn `[LOCAL_ORCHESTRATION_CONTEXT]` / Tier-3 runtime stats vào prompt analyze code (model echo metadata)
 ✗ Coi output `intentKeywords:` / `codeSymbols:` là câu trả lời hợp lệ — phải qua guardrail + heuristic fallback
+✗ Greenfield menu comprehensive mà chỉ worker 1-shot — phải scaffold-first + module enrich (PHẦN **AF.8**, **AF.12**)
+✗ Bật `menu-greenfield-fast-path` / `deterministic-seed-fallback.menu-greenfield` ngoài debug — gây menu mỏng 1 module
+✗ Bỏ qua `ai_greenfield_pipeline_contract.md` khi sửa Comprehend/greenfield worker
+✗ Duplicate module / báo cáo flat root / trigger array — xem AF.12.1
 ```
 
 ---
@@ -3612,7 +3880,7 @@ Kịch bản text + assets
 
 | # | Editor | Mẫu menu | Mẫu code | AI phải làm | Output |
 |---|--------|----------|----------|-------------|--------|
-| **A** | Trống | ❌ | ❌ | Comprehend từ **USER_REQUEST** + tenant RAG + **master prompt** (`ai_menu_*` / `ai_code_*`) → Plan → Worker + **seed scaffold** nếu model yếu | Full menu tree hoặc full code CSM |
+| **A** | Trống | ❌ | ❌ | Comprehend từ **USER_REQUEST** + tenant RAG + **Lego structure digest** (A.5) → Plan chọn mảnh → Worker greenfield | Full menu tree hoặc full code CSM — **không** template ERP |
 | **B** | Trống hoặc có | ✅ (attachment / sampleMenus) | ❌ hoặc ✅ | Comprehend **digest mẫu** (không full paste) + merge user delta → Plan → Worker | Menu JSON / code khớp pattern mẫu |
 | **C** | Có code/menu | Optional | Optional | **Bắt buộc** Comprehend editor hiện tại + delta user → Plan slices → patches/textEdits | Patch apply CodeMirror |
 
@@ -3654,7 +3922,9 @@ USER_REQUEST
 **Nguyên tắc:**
 
 - Mẫu **không** thay thế yêu cầu user — merge `learned_from_sample` + `user_delta`.
-- Greenfield **không** mẫu vẫn phải Comprehend — nguồn là master prompt + tenant, không được skip vì “thiếu input”.
+- Greenfield **không** mẫu vẫn phải Comprehend — nguồn là master prompt + tenant RAG + menu đã index Lucene, **không** skip vì “thiếu input”.
+- Greenfield menu **không** dùng template ERP cứng trong Java (`buildRichSalesInventoryFinanceMenuSeed` đã bỏ). Thiết kế từ: **USER_REQUEST → Comprehend LLM → ExecutionPlan → Worker LLM** + `[LEARNED tenant RAG]` + `ai_menu_runtime_*.md`.
+- `menu-greenfield-fast-path` và `deterministic-seed-fallback.menu-greenfield` **mặc định tắt** — chỉ bật khi debug model yếu; fallback tối thiểu 1 module, không phải cây ERP cố định.
 
 ## AC.2 Nguồn mẫu (input)
 
@@ -3666,6 +3936,7 @@ USER_REQUEST
 | **Tenant snapshot** | Role/dept/branch, quyền menu | Tự động backend | `AiTenantKnowledgeIngestionService` |
 | **Editor hiện tại** | Nghiệp vụ đang chạy — **ACTIVE_EDITOR_DIGEST** | `currentCode` string | `extractActiveMenuDigest` / `compactCodeDigest` |
 | **Runtime contract** | type_form → CsmDynamicGrid/Report/Kanban/MD | `ai_menu_runtime_*.md` | Auto-load menu lane only |
+| **Dev workflow thực tế** | Lưu index.menu, quy trình dev detail.tsx | `ai_menu_dev_workflow_compact.md` | Auto-load + LIVE_APP_MENU từ DB |
 | **DynamicCode contract** | seft/csmApi/React mount, 3 entry points | `ai_code_runtime_*.md` | Auto-load **code lane only** |
 
 ## AC.2.1 Menu JSON phải khớp runtime (acceptance)
@@ -3679,7 +3950,7 @@ AI local **PASS** khi menu sinh ra:
 5. Kanban có `kanban_config.stages[]` object `{id,label,color}`
 6. `MenuQualityGateService` không có error severity
 
-Deterministic seed (`AiGreenfieldBusinessDesignService.buildDeterministicMenuSeed`) phải có `table[]` + `load_db` tối thiểu để grid không trống cột khi model yếu.
+Deterministic seed (`buildDeterministicMenuSeed`) chỉ dùng **fallback tối thiểu** (1 module + `table[]` + `load_db`) khi LLM trả rỗng **và** `deterministic-seed-fallback.menu-greenfield.enabled=true`. Không dùng scaffold ERP domain cố định.
 
 ## AC.2.2 DynamicCode JS phải khớp runtime (acceptance)
 
@@ -3722,7 +3993,7 @@ flowchart LR
 
 | Slot | Max chars (5GB) | Nội dung |
 |------|-----------------|----------|
-| `[SYSTEM_MASTER_DIGEST]` | 2400 | `ai_menu_*` / `ai_code_*` master — quy tắc CSM |
+| `[SYSTEM_MASTER_DIGEST]` | 2400 | Menu: `ai_menu_structure_runtime` (excerpt) + compact + dev_workflow; Code: `ai_code_runtime_compact` |
 | `[ACTIVE_EDITOR_DIGEST]` | 6000 | Menu: id, label, type_form, table, trigger, i18n gap; Code: symbols + anchors |
 | `[SAMPLE_MENU_DIGEST]` | 4000 | Compact tree từ attachment / sample_menu_compact |
 | `[SAMPLE_CODE_DIGEST]` | 6000 | Symbol list + lifecycle/API excerpts — **không** full file |
@@ -3782,6 +4053,20 @@ flowchart LR
 | Code | `{ "code": "..." }` scaffold CSM | `textEdits` 1-based trên **full** `currentCode` |
 
 **Prompt worker chỉ nhận:** `BusinessSpec` (rút gọn ≤2k chars) + `ExecutionPlan` + excerpt editor (region plan) — **không** nhét lại full mẫu.
+
+#### Pass 3b — Scaffold Assemble (greenfield menu, v3.13 · PHẦN AD.3.2)
+
+Khi Worker LLM trả menu **mỏng** (`isThinGreenfieldMenuForRequest`: request “đầy đủ” + `<12` node hoặc `<8000` chars):
+
+1. `enrichBusinessSpecForMenuGreenfield()` — bổ sung `planned_structure[]` từ từ khóa USER_REQUEST (XNT, công nợ, báo cáo).
+2. `buildGreenfieldMenuScaffoldJson()` — Java ráp **1 node / module** với `table[]`, `trigger` object, nhóm báo cáo.
+3. `maybeApplyGreenfieldMenuScaffold()` — thay menu LLM nếu scaffold có nhiều node hơn.
+
+**Ưu tiên fallback:** Scaffold (12+ node) **trước** deterministic seed 1-module (`deterministic-seed-fallback.menu-greenfield`).
+
+```properties
+ai.local.greenfield.menu-scaffold-enabled=true
+```
 
 ### Pass 4 — Gate + retry có kiểm soát
 
@@ -4531,6 +4816,8 @@ Rollback: frontend `undoSnapshotRef` + không rollback khi gate fail **không** 
 | Z.7.3 | Skill auto-fallback chain khi `skillRouting.verified=false` |
 | Z.7.4 | Ghi harness trace vào `ai_telemetry` dashboard |
 
+> **Mở rộng kiến trúc agent (3 sơ đồ user):** xem **PHẦN AD** — Trusted Knowledge pipeline, Distributed Systems Engineering, Supervisor multi-agent.
+
 ## Z.8 File liên quan
 
 | File | Vai trò |
@@ -4543,5 +4830,934 @@ Rollback: frontend `undoSnapshotRef` + không rollback khi gate fail **không** 
 
 ---
 
-**Hết master brief v3.6.**  
+# PHẦN AD — DISTRIBUTED AGENT ARCHITECTURE (3 SƠ ĐỒ KIẾN TRÚC)
+
+> **Mục tiêu v3.13:** Đối chiếu **3 sơ đồ kiến trúc agent chuyên nghiệp** (user reference) với code CSM hiện tại — trả lời rõ **làm được gì**, **còn thiếu gì**, **bổ sung gì** để greenfield menu/code đủ nghiệp vụ (không còn 1 folder + 4 form mỏng).
+>
+> **Kết luận ngắn:** CSM **đã có ~70% khung** (orchestration, RAG filter, plan, gate, harness telemetry) nhưng chạy dạng **Supervisor monolithic** trong `ApiSpringController` + services — **chưa** tách process/agent riêng. Greenfield menu **đã bổ sung Pass 3 Scaffold Assemble (Java)** để bù khi LLM 7B/1.5B collapse.
+
+## AD.0 Ba sơ đồ — tóm tắt đối chiếu
+
+| Sơ đồ | Ý nghĩa | CSM hiện tại | Mức độ |
+|-------|---------|--------------|--------|
+| **1 — Trusted Knowledge pipeline** | Metadata filter → Freshness → Re-rank → Validation → Trusted output | RAG + gate + harness trust score | ✅ ~75% |
+| **2 — AI Agent = Distributed Systems Engineering** | 6 trụ: Orchestration, State, Security, Evaluation, Governance, Reliability | Map PHẦN Z R/M/C/S/O/G + bottlenecks | ✅ ~65% |
+| **3 — Supervisor multi-agent** | Retriever / Planner / Executor / Reviewer dưới Supervisor | Cùng request thread, role tách **logic** không tách **process** | ✅ ~70% |
+
+---
+
+## AD.1 Sơ đồ 1 — Trusted Knowledge Pipeline
+
+```mermaid
+flowchart TB
+  MF[1 Metadata Filter] --> FS[2 Freshness Score]
+  FS --> RR[3 Re-ranking]
+  RR --> VAL[4 Validation]
+  VAL --> TK[5 Trusted Knowledge]
+```
+
+### AD.1.1 Map từng bước → CSM
+
+| Bước sơ đồ | Ý nghĩa chuẩn | Implementation CSM | File / service | Trạng thái |
+|------------|---------------|-------------------|----------------|------------|
+| **1 Metadata Filter** | Lọc chunk theo scope, ACL, loại tri thức | `scopeMask` + `scopeTag` Lucene filter; `passesRetrievalAuthFilter` (acl:tenant/admin/branch/dept); exclude orchestration digest noise | `AiBusinessMemoryVectorService.buildScopeFilterQuery`, `matchesScope`, `passesRetrievalAuthFilter` | ✅ Implement |
+| **2 Freshness Score** | Ưu tiên tri thức mới / editor snapshot hiện tại | `createdAtMs` boost trong `scoreHit` (+0.12 ≤15 phút, +0.05 ≤1 giờ); dynamic context ingest trước retrieve (`dyn_ctx_currentMenu`); **`freshnessScore` 0..1** trong `scopedRagTopHits` | `AiBusinessMemoryVectorService.scoreHit`, `computeFreshnessScore`, `AiLocalOrchestrationService.summarizeSearchHits` | ✅ Partial — score expose UI; rerank vẫn implicit trong KNN |
+| **3 Re-ranking** | Vector top-K → lexical + domain rerank | `rerankHits` (token overlap + source boost menu/seo); `LocalAiAssistantContextService.rerankSearchHits`; `AiRetrievalPolicyEngine` adaptive topK | `AiBusinessMemoryVectorService`, `AiRetrievalPolicyEngine` | ✅ Implement |
+| **4 Validation** | Schema / business rules trước khi tin output | `MenuQualityGateService.validateMenuJson` + `repairMenuTreeInPlace`; `FINAL_OUTPUT_GATE`; AST gate code; step/plan verifier | `ApiSpringController`, `MenuQualityGateService` | ✅ Implement |
+| **5 Trusted Knowledge** | Chỉ đưa vào prompt / apply editor khi đạt ngưỡng tin cậy | `AiAgentHarnessTraceService` → `trustScore` ≥55 → `memoryTrusted`; gate `passesHardGate` trước completion meta | `AiAgentHarnessTraceService`, SSE `agent_harness_trace` | ✅ Partial — apply editor có thể xảy ra trước gate reject (greenfield) |
+
+### AD.1.2 Luồng thực tế trên request menu greenfield
+
+```txt
+USER_REQUEST
+  → ingest tenant org + domain rules (AiTenantKnowledgeIngestionService)
+  → ingest currentMenu dyn_ctx (AiScopedContextIngestionService)
+  → [1] scope filter + ACL trên vector search
+  → [2] createdAt boost (implicit trong rerank)
+  → [3] rerankHits + AiRetrievalPolicyEngine topK
+  → Comprehend LLM → BusinessSpec + planned_structure
+  → enrichBusinessSpecForMenuGreenfield (Java expand modules)
+  → Worker LLM (Pass 3a)
+  → maybeApplyGreenfieldMenuScaffold nếu menu mỏng (Pass 3b)
+  → [4] repairMenuTreeInPlace + FINAL_OUTPUT_GATE
+  → [5] harness trustScore + SSE apply CodeMirror
+```
+
+### AD.1.3 Gap & roadmap (sơ đồ 1)
+
+| Gap | Hậu quả | Roadmap |
+|-----|----------|---------|
+| Freshness không expose score riêng | Khó debug “vì sao chunk cũ thắng chunk mới” | ✅ **AD-R1 partial** — `freshnessScore` + `contentExcerpt` trong `tool_search` / `rag_citations` |
+| Citation line | User không thấy nguồn chunk | ✅ **AD-R6** — SSE `rag_citations` + usage dock Composer |
+| Trusted Knowledge vs apply order | Menu mỏng vẫn apply rồi gate reject | ✅ **AD-R2** `gateGreenfieldMenuForApply` trước apply |
+| BM25 hybrid chưa có | Vector-only trên index lạnh yếu | **AF-R11** Phase 3 roadmap |
+
+---
+
+## AD.2 Sơ đồ 2 — AI Agent = Distributed Systems Engineering
+
+```txt
+System Orchestration · State Management · Security
+Evaluation · Governance · Reliability Engineering
+        ↓
+   AI Agent = Distributed Systems Engineering
+```
+
+### AD.2.1 Map 6 trụ → CSM (mở rộng PHẦN Z)
+
+| Trụ engineering | Vai trò | CSM map | Trạng thái | Ghi chú |
+|-----------------|---------|---------|------------|---------|
+| **System Orchestration** | Điều phối pipeline, DAG, retry | `AiLocalOrchestrationService.orchestrateResilient`, tool DAG `n1..n6`, `FlowDirector`, `ApiSpringController` ai-code-stream | ✅ | Monolithic thread pool |
+| **State Management** | Context session, plan state, editor snapshot | `ai_conversation_history`, `BusinessSpec`, orchestration route cache, `undoSnapshotRef` frontend | ⚠️ Partial | Không có state machine versioned per job |
+| **Security** | ACL RAG, auth filter, sandbox | `passesRetrievalAuthFilter`, semantic sandbox risk, header zone protect | ⚠️ Partial | Không isolate tenant index vật lý |
+| **Evaluation** | Đo chất lượng output / retrieval | Harness trace, quality score, step verifier, telemetry `AI_TELEMETRY` | ✅ Partial | Không auto A/B model |
+| **Governance** | Gate, audit, policy | FINAL_OUTPUT_GATE, AST gate, `AiAgentHarnessTraceService.governance` | ✅ | |
+| **Reliability Engineering** | Timeout, fallback, degrade graceful | `orchestrateResilient`, adaptive retry, deterministic lifecycle fallback, **scaffold assemble** greenfield | ✅ Partial | 7B greenfield ~8–12 phút — cần prompt budget |
+
+### AD.2.2 Ba bottleneck (PHẦN Z.2) = “distributed systems” thực tế
+
+| Bottleneck | Liên hệ sơ đồ 2 | CSM |
+|------------|-----------------|-----|
+| Context Governance | State + Orchestration | Region plan, compression ratio trong harness |
+| Trustworthy Memory | Security + Evaluation | ACL + trustScore |
+| Skill Routing | Orchestration + Reliability | Lifecycle → multi-slice → focused fallback |
+
+---
+
+## AD.3 Sơ đồ 3 — Supervisor Multi-Agent Orchestration
+
+```mermaid
+flowchart TB
+  SUP[Supervisor Agent — Orchestration]
+  SUP --> RET[Retriever — Retrieve docs]
+  SUP --> PLN[Planner — Plan steps]
+  SUP --> EXE[Executor — Run actions]
+  SUP --> REV[Reviewer — Check output]
+  RET --> PLN
+  PLN --> EXE
+  EXE --> REV
+  REV -->|fail| PLN
+  REV -->|pass| OUT[Trusted output → CodeMirror]
+```
+
+### AD.3.1 Map 4 sub-agent → service CSM
+
+| Sub-agent sơ đồ | Hành động | Role CSM tương đương | File chính | Trạng thái |
+|-----------------|-----------|---------------------|------------|------------|
+| **Supervisor** | Route, delegate, merge, SSE lifecycle | `ApiSpringController` ai-code-stream + `AiLocalOrchestrationService` + intent classifier 2-pass | `ApiSpringController`, `AiLocalOrchestrationService` | ✅ Monolithic |
+| **Retriever** | Retrieve docs / RAG / symbol | `AiBusinessMemoryVectorService.search`, tenant ingest, symbol excerpts, `AiGreenfieldBusinessDesignService` tenant RAG snippet | Vector + orchestration | ✅ |
+| **Planner** | Plan steps, module breakdown | Pass 1 Comprehend (`AiGreenfieldBusinessDesignService`); `AiExecutionPlannerService`; `AiEditTaskPlannerService` (edit slices); `enrichBusinessSpecForMenuGreenfield` | Greenfield + edit planner | ✅ Partial — greenfield plan module **Java enrich** khi LLM thiếu |
+| **Executor** | Run actions / generate | `LlamaCppNativeService` worker; deterministic lifecycle; **`buildGreenfieldMenuScaffoldJson`** (Java executor) | Gateway + Greenfield service | ✅ Partial |
+| **Reviewer** | Check output | `MenuQualityGateService`; FINAL_OUTPUT_GATE; step verifier; `isThinGreenfieldMenuForRequest` trigger re-expand | Gate services | ✅ Partial — chưa loop Reviewer→Planner tự động khi menu mỏng |
+
+### AD.3.2 Greenfield menu — pipeline đúng ý user (Comprehend → Plan từng node → Assemble)
+
+**Vấn đề thực tế (job `job_1780035993863_rbf2hf`):** Comprehend `modules=3` nhưng Worker 7B trả **5 node** mỏng; auto-continue dừng sớm; gate reject `trigger must be an object`.
+
+**Pipeline mục tiêu (v3.13–v3.15 implement):**
+
+```mermaid
+flowchart TB
+  U[USER_REQUEST đầy đủ XNT/công nợ/báo cáo]
+  U --> C[Pass 1 Comprehend LLM/heuristic]
+  C --> BR[SSE business_reasoning prose Java]
+  C --> E[Pass 2 enrich planned_structure Java]
+  E --> SF{scaffold-first enabled + comprehensive?}
+  SF -->|yes + empty menu| A[Pass 3b Scaffold Assemble Java — skip LLM worker]
+  SF -->|no| W[Pass 3a Worker LLM optional]
+  W --> S{isThinGreenfieldMenu?}
+  S -->|yes| A
+  S -->|no| R[repairMenuTreeInPlace]
+  A --> R
+  R --> G[Reviewer: MenuQualityGate]
+  G -->|fail| W2[Retry worker 1 lần — roadmap: replan module]
+  G -->|pass| CM[CodeMirror apply]
+```
+
+| Pass | Mô tả | Implement |
+|------|-------|-----------|
+| **Pass 1** | LLM Comprehend → `BusinessSpec` (domain, modules, flows) | `AiGreenfieldBusinessDesignService.runComprehensionPipeline` |
+| **Pass 1b UX** | Prose “tư duy nghiệp vụ” hiển thị chat (không thêm LLM) | SSE `business_reasoning` + `buildBusinessReasoningProseVi()` |
+| **Pass 2** | Plan: `planned_structure[]` — mỗi row = 1 module Lego (type_form, table_hint, lego_piece) | `enrichBusinessSpecForMenuGreenfield` + `expandPlannedStructureFromUserWording` |
+| **Pass 3a** | Worker LLM sinh `{ menu: [...] }` — **bỏ qua** nếu scaffold-first | `runLocalMenuGreenfieldProviderWithAutoContinue` |
+| **Pass 3b** | **Assemble deterministic** từ plan — 12–18+ node, trigger object, table[] theo module | `buildGreenfieldMenuScaffoldJson` + scaffold-first hook trong `ApiSpringController` |
+| **Reviewer** | Repair trigger array→object, i18n, hard gate | `MenuQualityGateService.repairMenuTreeInPlace` + FINAL_OUTPUT_GATE |
+
+**Module mở rộng từ USER_REQUEST (keyword):**
+
+| Từ khóa user | Module planned_structure |
+|--------------|-------------------------|
+| xuất nhập / tồn | Danh mục SP, KH, NCC, Phiếu bán/nhập, Tồn kho |
+| công nợ khách | Công nợ khách hàng |
+| công nợ NCC | Công nợ nhà cung cấp |
+| báo cáo | Báo cáo doanh thu, tồn kho, công nợ (type_form=5, nhóm `reports_group`) |
+
+**Config:**
+
+```properties
+ai.local.greenfield.menu-scaffold-enabled=true
+ai.local.greenfield.menu-scaffold-first.enabled=true
+```
+
+**Log kỳ vọng khi scaffold-first (1.5B, request “đầy đủ”):**
+
+```txt
+MENU_GREENFIELD scaffold-first requestId=… scaffoldNodes=15+ chars=… skippedLlmWorker=true
+```
+
+**Log kỳ vọng khi scaffold thay LLM mỏng (fallback sau worker):**
+
+```txt
+MENU_GREENFIELD scaffold assemble requestId=… llmNodes=5 scaffoldNodes=15+ chars=…
+```
+
+### AD.3.3 Gap Supervisor loop (sơ đồ 3)
+
+| Gap | Hiện tại | Roadmap |
+|-----|----------|---------|
+| Reviewer fail → replan tự động | Gate reject, không gọi lại Planner | ✅ **AD-R3** `menu-module-replan` per leaf |
+| Executor per-module | Một worker prompt 4k+ token | ✅ Module enrich tuần tự sau scaffold (AD-R4) |
+| Supervisor tách process | Cùng `pool-6-thread-1` | AD-R5: job queue + stage SSE (optional) |
+| Retriever citation UI | Chỉ log embedding | ✅ **AD-R6** — `rag_citations` SSE + usage dock; `tool_search.retrievalHits` enriched |
+
+---
+
+## AD.4 Ma trận “làm được / chưa làm được” — trả lời trực tiếp user
+
+| Yêu cầu user | Làm được? | Chi tiết |
+|--------------|-----------|----------|
+| Phân tích **đầy đủ** nghiệp vụ trước khi sinh menu | ⚠️ Một phần | Comprehend LLM + Java enrich modules; LLM 7B vẫn có thể under-spec |
+| Lập kế hoạch **từng node** đầy đủ tính năng | ✅ Sau v3.13 | `planned_structure[]` + scaffold 1 node/module |
+| Ráp **menu hoàn chỉnh** trả user | ✅ Sau v3.13 | Scaffold thay menu mỏng; LLM có thể enrich label sau |
+| Pipeline Metadata→Freshness→Rerank→Validate→Trusted | ✅ ~85% | Freshness score UI ✅; gate-before-apply ✅; BM25 ❌ |
+| Supervisor + 4 agent riêng | ⚠️ Logic only | Cùng codebase, không microservice agent |
+| 6 trụ Distributed Systems Engineering | ✅ ~65% | State/Security/Reliability còn roadmap |
+
+---
+
+## AD.5 Checklist nghiệm thu (greenfield menu đầy đủ)
+
+| # | Test | Pass nếu |
+|---|------|----------|
+| AD-T1 | Prompt: “Viết đầy đủ json menu … XNT, công nợ KH/NCC, báo cáo KD” | Log `scaffold assemble` **hoặc** `menuNodes ≥ 12` |
+| AD-T2 | Mỗi leaf type_form=1 có `table[]` ≥3 field + `trigger.load_db` object | Gate không lỗi `trigger must be an object` |
+| AD-T3 | Nhóm báo cáo type_form=5 under `reports_group` | ≥3 report nodes |
+| AD-T4 | Harness `trustScore` + `governance.passed` trong completion | Composer 🧭 summary |
+| AD-T5 | CodeMirror apply + diff hiển thị +N lớn (không chỉ +5) | Frontend merge stats |
+
+---
+
+## AD.6 File liên quan (v3.13)
+
+| File | Vai trò AD |
+|------|------------|
+| `AiGreenfieldBusinessDesignService.java` | Comprehend, enrich plan, scaffold assemble |
+| `ApiSpringController.java` | Supervisor flow, scaffold hook, auto-continue, gate |
+| `MenuQualityGateService.java` | Reviewer — validate + trigger repair |
+| `AiBusinessMemoryVectorService.java` | Retriever — filter, rerank, freshness boost |
+| `AiAgentHarnessTraceService.java` | Trusted Knowledge telemetry |
+| `AiLocalOrchestrationService.java` | Orchestration DAG + RAG policy |
+| `AiRetrievalPolicyEngine.java` | Adaptive topK / scope |
+| `application-local-5gb.properties` | Token caps, scaffold flag |
+
+---
+
+## AD.7 Quan hệ với các PHẦN khác
+
+| PHẦN | Liên kết AD |
+|------|-------------|
+| **A.5** Lego pipeline | AD.3.2 = Phase 3 bổ sung scaffold |
+| **AC** Business Comprehension | AD.3 Pass 1–2 |
+| **Z** Agent Harness | AD.2 = 6 trú engineering |
+| **R** Knowledge / RAG | AD.1 bước 1–3 |
+| **C.5** Cursor-like context | Retriever slice, không nhồi full editor |
+| **AE** Bản chất tư duy LLM | Nền tảng lý thuyết cho AD + AC |
+| **AF** 9 sơ đồ quy trình agent | AD + AC + LangChain/LangGraph map |
+
+---
+
+# PHẦN AF — ĐỐI CHIẾU 9 SƠ ĐỒ QUY TRÌNH AGENT → LÀM ĐÚNG TRÊN CSM
+
+> **Mục đích:** User cung cấp **9 sơ đồ tham chiếu** (O-R-A, Agentic vs Agent, Supervisor, LangChain RAG, LangGraph, handoff, taxonomy). PHẦN này trả lời: **quy trình CSM hiện tại khớp sơ đồ nào**, **lệch ở đâu**, **phải chạy thế nào** trên hệ thống thật (`ApiSpringController` → services → SSE → CodeMirror). **AF.8–AF.16** = pipeline canonical + anti-rác + config + checklist Cursor.
+
+## AF.0 Bảng tóm tắt 9 sơ đồ
+
+| # | Sơ đồ (user reference) | Ý nghĩa cốt lõi | CSM map | Khớp |
+|---|------------------------|-----------------|---------|------|
+| **1** | Observation → Reasoning → Action | RAG ingest + Comprehend → Plan/Scaffold → Gate/Apply | ✅ ~95% |
+| **2** | Agentic AI **vs** AI Agents | CSM **phải** Agentic; cấm coi worker 1-shot là đủ | ✅ Spec |
+| **3** | Supervisor → Agent 1/2/3 → Tools | Retriever/Planner/Executor/Reviewer monolithic | ✅ ~90% |
+| **4** | LangChain components + RAG loop | Ingest chunk→embed→store; query→retrieve→LLM | ✅ ~95% |
+| **5** | LangGraph — cyclic graph | Linear + scaffold + **AD-R3 replan** + **AD-R2 gate** | ✅ ~90% |
+| **6** | LangChain (linear) vs LangGraph (graph) | Sequential + Java conditional + revisit loop | ✅ ~90% |
+| **7** | Handoff agent_main → agent_loan → tools | Comprehend → scaffold → enrich + **`agent_handoff` SSE** | ✅ ~95% |
+| **8** | LangGraph: Nodes / Edges / State / Conditional | `codeStreamMeta`, `BusinessSpec`, conditional gate/replan | ✅ ~90% |
+| **9** | What is AI Agent (taxonomy) | Goal-Based (`BusinessSpec`) + Utility (gate score) | ✅ ~90% |
+
+---
+
+## AF.1 Sơ đồ 1 — Observation → Reasoning → Action
+
+```txt
+OBSERVATION          REASONING                    ACTION
+"It's raining"  →  "I shouldn't get wet"   →  "I'll take an umbrella"
+```
+
+### AF.1.1 Map CSM (menu greenfield)
+
+| Phase sơ đồ | CSM — quan sát / suy luận / hành động | SSE / service |
+|-------------|----------------------------------------|---------------|
+| **Observation** | User message + editor trống + tenant RAG + sample attachment + Lucene top-K | Ingest `dyn_ctx_currentMenu`; `AiBusinessMemoryVectorService.search` |
+| **Reasoning** | Comprehend → `BusinessSpec`; enrich `planned_structure[]`; prose nghiệp vụ | `business_comprehend`, `business_plan`, **`business_reasoning`** |
+| **Action** | Scaffold → **module enrich** → repair → gate → apply CodeMirror | `menu_scaffold_assemble`, **`menu_module_step`**, **`menu_module_enrich`**, `text_edit_apply` |
+
+```mermaid
+flowchart LR
+  O[Observation: USER_REQUEST + RAG + editor digest]
+  R[Reasoning: Comprehend + Plan + business_reasoning prose]
+  A[Action: Scaffold/Worker + Gate + CodeMirror]
+  O --> R --> A
+```
+
+**Làm đúng:** User **phải thấy** bước Reasoning trong chat (`business_reasoning`) trước khi menu xuất hiện — không im lặng rồi diff.
+
+**Làm sai (cấm):** Nhảy thẳng worker 1-shot không Comprehend (fast-path tắt mặc định).
+
+---
+
+## AF.2 Sơ đồ 2 — Agentic AI vs AI Agents
+
+| | **Agentic AI** (mục tiêu CSM) | **AI Agents** (cấm làm mặc định) |
+|---|------------------------------|----------------------------------|
+| Hành vi | Multi-step, học qua RAG, suy luận nghiệp vụ | Chờ instruction, 1 task, rule cố định |
+| CSM | Comprehend → Plan → Scaffold/Worker → Reviewer loop | Chỉ `runLocalProvider` 1 prompt → JSON |
+| Model 1.5B | Java Plan/Scaffold **bù** reasoning yếu | Worker alone → menu 4–5 node mỏng |
+
+> **Quy tắc Cursor:** Greenfield ERP “đầy đủ” = **Agentic pipeline** (PHẦN AC + AD.3.2), **không** phải “AI Agent” one-shot.
+
+---
+
+## AF.3 Sơ đồ 3 — Supervisor Multi-Agent
+
+```txt
+User ──question──► Supervisor ──delegate──► Agent 1/2/3 ──tools──► [Tools]
+         ▲              │                        │
+         └──final response◄──report──────────────┘
+```
+
+### AF.3.1 Map role → CSM (monolithic supervisor)
+
+| Role sơ đồ | Agent CSM | Service / hook |
+|------------|-----------|----------------|
+| **Supervisor** | Route lane, SSE lifecycle, merge meta | `ApiSpringController.streamCodeAssistant` |
+| **Agent Retriever** | Vector search, ACL, symbol slice | `AiBusinessMemoryVectorService`, `AiLocalOrchestrationService` |
+| **Agent Planner** | Comprehend + `planned_structure[]` | `AiGreenfieldBusinessDesignService`, `AiEditTaskPlannerService` |
+| **Agent Executor** | LLM worker **hoặc** Java scaffold | `LlamaCppNativeService`, `buildGreenfieldMenuScaffoldJson` |
+| **Agent Reviewer** | MenuQualityGate, AST gate, harness | `MenuQualityGateService`, `AiAgentHarnessTraceService` |
+| **Tools** | Lucene, ingest, repair, saveMenuStruct contract | Vector index, `repairMenuTreeInPlace`, MD contracts |
+
+**Gap so với sơ đồ:** Agents **không** tách process/JVM — cùng thread `pool-6-thread-1`. Logic đúng, hình thức chưa micro-agent.
+
+---
+
+## AF.4 Sơ đồ 4 — LangChain = RAG Pipeline
+
+### AF.4.1 Ingestion (offline / per-request)
+
+```txt
+Documents → Chunk → Embedding → Vector Store
+```
+
+| LangChain | CSM |
+|-----------|-----|
+| Document Loaders | Attachment digest, tenant org MD, `ai_local/*.md` contracts |
+| Chunking | `AI_BUSINESS_MEMORY_CHUNK_MAX_CHARS=2200`, overlap 220 |
+| Embedding | `nomic-embed-text` / hash fallback |
+| Vector Store | **Lucene KNN** per `appId` (`AiBusinessMemoryVectorService`) |
+
+### AF.4.2 Query loop (runtime)
+
+```txt
+User Question → Question Embedding → Semantic Search → Ranked Results → LLM → Answer
+```
+
+| LangChain | CSM |
+|-----------|-----|
+| Question | `[USER_REQUEST]` + intent classify |
+| Semantic Search | `search()` + `scopeMask` + ACL |
+| Ranked Results | `rerankHits` + freshness boost → `[RETRIEVED_CONTEXT]`; **UI:** `rag_citations` / `retrievalHits` với `contentExcerpt` |
+| LLM | Comprehend (Pass 1) + Worker (Pass 3a) — **Plan/Scaffold có thể không cần LLM** |
+| Answer | `{ menu }` / `textEdits` sau Gate |
+
+**Làm đúng:** RAG = “sách giáo khoa” (PHẦN AE.2.1); LLM không bịa tên bảng — lấy từ chunk + `BusinessSpec`.
+
+---
+
+## AF.5 Sơ đồ 5–6–8 — LangGraph (graph vs linear)
+
+### AF.5.1 LangChain (linear) — CSM **đang giống**
+
+```txt
+A → B → C   (Pass 1 → Pass 2 → Pass 3 → Pass 4)
+```
+
+Phù hợp: SEO one-shot, patch ngắn, guest chat.
+
+### AF.5.2 LangGraph (cyclic) — CSM **cần thêm**
+
+```txt
+Node 1 → Conditional Edge → Node 2/3/4 → … → END
+         ↑______________________________|
+              (revisit on fail)
+```
+
+| LangGraph component | CSM hiện tại | Target |
+|---------------------|--------------|--------|
+| **State** | `codeStreamMeta`, `BusinessSpec`, `agent_state`-like trong job | ✅ Partial |
+| **Nodes** | Comprehend, Plan, Worker, Scaffold, Gate | ✅ |
+| **Edges** | Tuần tự cố định | ✅ |
+| **Conditional Edges** | `scaffold-first?`, `isThinGreenfieldMenu?`, gate pass/fail | ✅ Partial |
+| **Revisit loop** | Worker retry 1 lần; **AD-R4** enrich per leaf ✅; **AD-R3** Reviewer→Planner replan ✅ | ✅ ~90% |
+
+**Kết luận:** CSM = **LangChain pipeline + Java conditional branches + AD-R3/R4 revisit + AD-R2 gate**. Micro-agent JVM = roadmap **AD-R5** (AF-R10).
+
+---
+
+## AF.6 Sơ đồ 7 — Multi-agent Handoff (agent_main → specialist → tools)
+
+```txt
+AGENT_MAIN: HANDOFF agent_loan
+AGENT_LOAN: CALL calculate_dti → tool result → ANSWER → END
+```
+
+### AF.6.1 Map greenfield menu
+
+| Step handoff | CSM tương đương |
+|--------------|-----------------|
+| `AGENT_MAIN` route | Supervisor classify `menu_json` + greenfield |
+| `HANDOFF agent_loan` | Delegate Comprehend lane → `AiGreenfieldBusinessDesignService` |
+| `CALLING TOOL` | Retriever search; Java `enrichBusinessSpecForMenuGreenfield`; scaffold assemble |
+| Tool observation | `BusinessSpec`, `planned_structure[]`, Lucene hits; **`rag_citations`** (phase `comprehend` / `tool_search` / `module_enrich`) |
+| `ANSWER → END` | Gate pass → `text_edit_apply` → SSE complete |
+
+**Telemetry:** `menu_module_step` (plan) + `menu_module_enrich` (execute per leaf) + SSE **`agent_handoff`** + **`rag_citations`** (Retriever evidence).
+
+---
+
+## AF.7 Sơ đồ 9 — Taxonomy AI Agent
+
+| Loại agent (sơ đồ) | CSM map |
+|---------------------|---------|
+| Simple Reflex | ❌ Không dùng — cấm if-then template ERP |
+| Model-Based Reflex | Editor digest + `existing_business_summary` |
+| **Goal-Based** | `BusinessSpec.modules` + `user_delta` + acceptance trong plan |
+| **Utility-Based** | `MenuQualityGateService` score; harness `trustScore` ≥55 |
+| Learning | RAG ingest + Knowledge Pack export — **không** fine-tune |
+
+CSM target = **Goal-Based + Utility-Based** agent: có mục tiêu nghiệp vụ rõ + gate chọn output “tốt nhất”.
+
+---
+
+## AF.8 Quy trình canonical — làm đúng trên hệ thống CSM
+
+> **Một diagram tổng hợp** — gộp 9 sơ đồ + PHẦN A.5 + AC.3 + AD.3 + **AD-R4 module enrich**.
+
+```mermaid
+flowchart TB
+  subgraph OBS [AF.1 Observation]
+    UR[USER_REQUEST]
+    ED[ACTIVE_EDITOR_DIGEST]
+    RAG[Lucene RAG top-K + ACL]
+    ATT[Sample attachment digest]
+  end
+
+  subgraph REASON [AF.1 Reasoning — Agentic]
+    C1[Pass 1 Comprehend LLM/heuristic]
+    PC[ai_greenfield_pipeline_contract inject]
+    BR[SSE business_reasoning]
+    C2[Pass 2 Plan planned_structure Java enrich]
+    MS[SSE menu_module_step per planned row]
+  end
+
+  subgraph ACT [AF.1 Action]
+    SF{scaffold-first comprehensive?}
+    SC[Pass 3b Scaffold Java ≥12 nodes]
+    ME[Pass 3c AD-R4 enrichGreenfieldMenuByModule]
+    WK[Pass 3a Worker LLM 1.5B fallback]
+    RP[repairMenuTreeInPlace]
+    GV[Pass 4 Gate + Harness]
+    CM[CodeMirror text_edit_apply]
+  end
+
+  UR --> C1
+  ED --> C1
+  RAG --> C1
+  ATT --> C1
+  PC -.-> C1
+  C1 --> BR
+  C1 --> C2
+  C2 --> MS
+  MS --> SF
+  SF -->|empty editor + đầy đủ| SC
+  SF -->|else| WK
+  SC --> ME
+  ME -->|SSE menu_module_enrich| RP
+  WK -->|thin menu| SC
+  WK -->|ok| RP
+  RP --> GV
+  GV -->|pass| CM
+  GV -->|fail retry once| WK
+  GV -->|AD-R3 roadmap| C2
+```
+
+### AF.8.1 Thứ tự bắt buộc (local-5gb · 1.5B)
+
+| # | Bước | Bắt buộc | Không được skip | Service / log |
+|---|------|----------|-----------------|---------------|
+| 0 | Inject `ai_greenfield_pipeline_contract.md` | ✅ greenfield menu | | `AiAssistantGatewayService` |
+| 1 | Ingest dyn_ctx + tenant rules | ✅ | | orchestration |
+| 2 | RAG retrieve (scope+ACL) | ✅ | | `AiBusinessMemoryVectorService` |
+| 3 | Pass 1 Comprehend | ✅ greenfield | fast-path OFF | `runComprehensionPipeline` |
+| 4 | SSE `business_reasoning` | ✅ UX | | controller SSE |
+| 5 | Pass 2 `planned_structure[]` + normalize + dedupe | ✅ request “đầy đủ” | | `enrichBusinessSpecForMenuGreenfield` |
+| 6 | SSE `menu_module_step` (plan visibility) | ✅ comprehensive | | `ApiSpringController` |
+| 7 | Pass 3b scaffold-first **hoặc** 3a worker | ✅ | worker alone on 1.5B comprehensive | `buildGreenfieldMenuScaffoldJson` |
+| 8 | Pass 3c module enrich (Java i18n + LLM optional) | ✅ default ON | | `enrichGreenfieldMenuByModule` |
+| 9 | Pass 4 Gate **trước** tin output | ⚠️ partial | AD-R2 hard block | `MenuQualityGateService` |
+| 10 | Apply CodeMirror + harness meta | ✅ | | `text_edit_apply` |
+
+### AF.8.2 SSE stages Composer phải handle
+
+| `stage` | Payload chính | Ý nghĩa (sơ đồ) | File frontend |
+|---------|---------------|-----------------|---------------|
+| `business_comprehend` | `modules`, `source` | Observation → parse nghiệp vụ | `AiAssistantChat.tsx` |
+| `business_plan` | `plannedStructure`, `moduleTotal` | Reasoning → module list | same |
+| `business_reasoning` | `reasoning`, `modules[]` prose | Reasoning prose (cloud-like UX) | same |
+| `menu_module_step` | `moduleIndex`, `moduleTotal`, `module`, `typeForm`, `legoPiece` | Plan → Executor handoff (AF.6) | same |
+| `menu_scaffold_assemble` | `menuNodes`, `message` | Action deterministic scaffold | same |
+| `menu_module_enrich` | `moduleIndex`, `nodeId`, `usedLlm`, `status` | AD-R4 per-leaf Executor | same |
+| **`rag_citations`** | `phase`, `query`, `count`, `citations[]` (`source`, `score`, `freshnessScore`, `contentExcerpt`, `sourceCategory`) | **AD-R6** Retriever evidence UI | same |
+| `agent_handoff` | `fromAgent`, `toAgent`, `action`, `detail` | AF.6 multi-agent handoff | same |
+| `text_edit_apply` | `textEdits` / full menu | Action → editor | same |
+| `agent_harness_trace` | `trustScore`, traces | Utility / governance (AF.7) | same |
+
+### AF.8.3 Meta keys job (debug / harness)
+
+| Key | Ý nghĩa |
+|-----|---------|
+| `menuGreenfieldScaffoldFirst` | scaffold-first path đã chạy |
+| `menuGreenfieldScaffoldNodes` | số node sau scaffold |
+| `menuGreenfieldModuleEnrich` | AD-R4 enrich đã chạy |
+| `menuGreenfieldModuleEnrichMs` | thời gian enrich |
+| `businessComprehensionGreenfield` | editor trống |
+| `businessComprehensionDeterministicSeed` | ⚠️ fast-path seed — phải **false** mặc định |
+
+---
+
+## AF.9 Gap — làm **đúng chính xác** còn thiếu gì
+
+| Gap | Sơ đồ yêu cầu | CSM hiện tại | Roadmap / ghi chú |
+|-----|---------------|--------------|-------------------|
+| **AF-R1** | Reasoning visible | ✅ `business_reasoning` + `menu_module_step` | Giữ |
+| **AF-R2** | LangGraph revisit full loop | ✅ **AD-R3** Reviewer→Planner per module replan | Giữ |
+| **AF-R3** | Gate before apply | ✅ **AD-R2** `gateGreenfieldMenuForApply` block apply | Giữ |
+| **AF-R4** | Handoff telemetry | ✅ SSE **`agent_handoff`** + module enrich | Giữ |
+| **AF-R5** | Agentic not one-shot | ✅ scaffold-first + pipeline contract | Cấm bật fast-path greenfield |
+| **AF-R6** | RAG citation UI | ✅ **`rag_citations` SSE** + usage dock + `tool_search` hits (max 5) | Giữ |
+| **AF-R7** | Per-module Executor | ✅ **AD-R4** + CSM business rules Java | Giữ |
+| **AF-R8** | Anti-noise contract in prompt | ✅ `ai_greenfield_pipeline_contract.md` | Comprehend + greenfield worker |
+| **AF-R9** | Report nesting + dedupe | ✅ Java normalize + scaffold | Regression test AF-T9/T10 |
+| **AF-R10** | Micro-agent separate JVM | Monolithic thread (by design) | **AD-R5** optional job queue |
+| **AF-R11** | BM25 hybrid RAG | Vector KNN only | Phase 3 roadmap |
+
+---
+
+## AF.10 Checklist nghiệm thu — khớp 9 sơ đồ
+
+| # | Test | Pass = khớp sơ đồ |
+|---|------|-------------------|
+| AF-T1 | Greenfield “đầy đủ XNT+công nợ+báo cáo” | O-R-A: reasoning SSE + scaffold ≥12 node |
+| AF-T2 | Không có `business_reasoning` trong chat | ❌ Fail AF.1 |
+| AF-T3 | Worker 1-shot 5 node, không scaffold | ❌ Fail AF.2 (AI Agent mode) |
+| AF-T4 | Log `scaffold-first skippedLlmWorker=true` | ✅ Agentic + conditional |
+| AF-T5 | Gate `trigger must be an object` | ❌ Fail AF.1 Action |
+| AF-T6 | Harness trustScore trong completion | ✅ Utility-Based (AF.7) |
+| AF-T7 | Thời gian ≪ 800s (1.5B scaffold-first) | ✅ Reliability |
+| AF-T8 | SSE `menu_module_step` ≥1 và `menu_module_enrich` ≥1 | ✅ AD-R4 LangGraph-like loop |
+| AF-T9 | Báo cáo nằm dưới `reports_group`, không flat `biz_root` | ✅ Scaffold structure |
+| AF-T10 | Không duplicate module cùng nghiệp vụ | ✅ normalizePlannedStructure |
+| AF-T11 | `table_name` readable snake_case, không `m_c_ng_n_*` | ✅ i18n slug repair |
+| AF-T12 | SSE `agent_handoff` ≥3 (Supervisor→…→Reviewer) | ✅ AF.6 handoff |
+| AF-T13 | Gate fail → **không** apply editor (`gate-before-apply`) | ✅ AD-R2 |
+| AF-T14 | Module có `beforeSave`/`update`/`f_cbo_query` trên phiếu MD | ✅ CSM business rules Java |
+| AF-T15 | SSE `rag_citations` ≥1 (phase `comprehend` hoặc `tool_search`) | ✅ AD-R6 Retriever UI |
+| AF-T16 | Log `LIVE_MENU_PATTERN indexed` khi tenant có `index.menu` | ✅ Live menu pattern index |
+
+**Script:** `./scripts/test-greenfield-menu-sse.sh` (AF-T1, T2, T4, T8, T12, T15 partial).
+
+---
+
+## AF.11 Quan hệ với các PHẦN khác
+
+| PHẦN | Liên kết AF |
+|------|-------------|
+| **A.5** Lego | Action = lắp mảnh từ `planned_structure` |
+| **AC** | Reasoning = Pass 1–2 |
+| **AD** | Supervisor + Trusted Knowledge + AD-R4 |
+| **AE** | LLM hộp đen + RAG + Guardrails |
+| **C.5** | Observation = retrieve slice |
+| **K** | DO NOT — **AF.12** bổ sung greenfield |
+| **U** Composer | SSE Reasoning + module enrich visibility |
+| **Z** Harness | Utility-Based agent |
+
+---
+
+## AF.12 Mandate chống rác — Cursor **không được làm sai**
+
+> File inject: `backend/csm_datas/ai_local/ai_greenfield_pipeline_contract.md` — **bắt buộc** nạp Comprehend greenfield + greenfield worker.
+
+### AF.12.1 Cấm hành vi (map PHẦN K)
+
+```txt
+✗ Greenfield comprehensive → chỉ gọi worker LLM 1-shot (bỏ scaffold-first)
+✗ Bật menu-greenfield-fast-path hoặc deterministic-seed-fallback.menu-greenfield (trừ debug)
+✗ Comprehend bỏ qua USER_REQUEST → bịa cây ERP mẫu cố định
+✗ planned_structure[] trùng module / báo cáo flat dưới root
+✗ trigger dạng array thay vì object
+✗ table_name slug vô nghĩa từ label tiếng Việt
+✗ Skip SSE business_reasoning / menu_module_* (user không thấy suy luận)
+✗ Tải model 7B/14B — bundled chỉ 1.5B Q4 (PHẦN AE.0)
+✗ Cursor sửa pipeline → thêm service mới thay vì mở rộng AiGreenfieldBusinessDesignService
+```
+
+### AF.12.2 Config mặc định an toàn (`application-local-5gb.properties`)
+
+| Property | Giá trị **đúng** | Nếu sai → hậu quả |
+|----------|------------------|-------------------|
+| `ai.local.business-comprehension.menu-greenfield-fast-path.enabled` | `false` | Nhảy Comprehend, menu mỏng |
+| `ai.local.business-comprehension.deterministic-seed-fallback.menu-greenfield.enabled` | `false` | Seed 1 module thay ERP đầy đủ |
+| `ai.local.business-comprehension.required-on-greenfield` | `true` | Bỏ Pass 1 |
+| `ai.local.greenfield.menu-scaffold-first.enabled` | `true` | Worker 1.5B one-shot |
+| `ai.local.greenfield.menu-module-enrich.enabled` | `true` | Thiếu AD-R4 per leaf |
+| `ai.local.greenfield.menu-scaffold-enabled` | `true` | Không có Java assemble |
+| `ai.local.rag.citations.max-hits` | `5` | Usage dock / SSE thiếu nguồn |
+| `ai.local.greenfield.live-menu-pattern-index.enabled` | `true` | Không học trigger/combo từ menu dev |
+
+---
+
+## AF.13 Config reference — greenfield menu (copy-paste)
+
+```properties
+# Comprehend — greenfield
+ai.local.business-comprehension.required-on-greenfield=true
+ai.local.business-comprehension.menu-greenfield-fast-path.enabled=false
+ai.local.business-comprehension.deterministic-seed-fallback.menu-greenfield.enabled=false
+
+# Scaffold + AD-R4
+ai.local.greenfield.enabled=true
+ai.local.greenfield.menu-scaffold-enabled=true
+ai.local.greenfield.menu-scaffold-first.enabled=true
+ai.local.greenfield.menu-module-enrich.enabled=true
+ai.local.greenfield.menu-module-enrich.max-modules=16
+ai.local.greenfield.menu-module-enrich.max-tokens=384
+ai.local.greenfield.menu-auto-continue-max-attempts=3
+
+# AD-R2 / AD-R3 — gate + replan
+ai.local.greenfield.gate-before-apply.enabled=true
+ai.local.greenfield.menu-module-replan.enabled=true
+ai.local.greenfield.menu-module-replan.max-attempts=1
+
+# AD-R6 — RAG citation UI + live menu pattern index
+ai.local.rag.citations.max-hits=5
+ai.local.greenfield.live-menu-pattern-index.enabled=true
+ai.local.greenfield.live-menu-pattern-index.max-leaves=120
+```
+
+Model: `qwen2.5-coder-1.5b-instruct-q4_k_m.gguf` only.
+
+---
+
+## AF.14 Log grep — xác nhận pipeline đúng
+
+```bash
+# Sau request greenfield (jobId / requestId):
+grep 'MENU_GREENFIELD scaffold-first' backend/logs/console.log
+grep 'module-enrich modules=' backend/logs/console.log
+grep 'LIVE_MENU_PATTERN indexed' backend/logs/console.log
+grep 'rag_citations' backend/logs/console.log   # SSE stage (nếu log SSE)
+grep 'BusinessSpec comprehend source=' backend/logs/console.log
+grep 'skippedLlmWorker=true' backend/logs/console.log
+
+# Fail patterns:
+grep 'MENU_GREENFIELD_FAST_PATH' backend/logs/console.log          # fast-path — không mong muốn
+grep 'trigger must be an object' backend/logs/console.log
+grep 'buildGreenfieldMenuScaffoldJson failed' backend/logs/console.log
+```
+
+**Pass mẫu:** `scaffold-first … skippedLlmWorker=true moduleEnrich=true` + `module-enrich modules=12 llmCalls=…`.
+
+---
+
+## AF.15 File map — đụng greenfield đúng chỗ
+
+| File | Vai trò AF |
+|------|------------|
+| `AiGreenfieldBusinessDesignService.java` | Comprehend, plan enrich, scaffold, **AD-R4 enrich**, **AD-R6** `searchRagCitations`, **live menu pattern index** |
+| `ApiSpringController.java` | SSE stages, scaffold-first branch, **`emitRagCitations`** |
+| `AiLocalOrchestrationService.java` | `summarizeSearchHits` + `freshnessScore` / `contentExcerpt` |
+| `AiBusinessMemoryVectorService.java` | KNN + **`computeFreshnessScore`** |
+| `MenuQualityGateService.java` | Gate + trigger repair |
+| `AiAssistantGatewayService.java` | Contracts inject, comprehend prompt |
+| `AiAssistantChat.tsx` | SSE UI all stages AF.8.2 + **`rag_citations`** handler + usage dock |
+| `ai_greenfield_pipeline_contract.md` | Anti-rác prompt |
+| `ai_business_comprehend_contract.md` | Pass 1 schema |
+| `ai_menu_greenfield_worker_contract.md` | Worker fallback only |
+
+---
+
+## AF.16 Checklist Cursor (AF-C*) — trước khi merge
+
+| ID | Câu hỏi | Pass |
+|----|---------|------|
+| AF-C1 | Comprehensive greenfield vẫn chạy scaffold-first? | ✅ |
+| AF-C2 | `ai_greenfield_pipeline_contract.md` trong allowlist + inject? | ✅ |
+| AF-C3 | SSE handler có `menu_module_step` + `menu_module_enrich`? | ✅ |
+| AF-C4 | Không bật fast-path/seed mặc định? | ✅ |
+| AF-C5 | Báo cáo under `reports_group` trong scaffold? | ✅ |
+| AF-C6 | AF.8 Mermaid + AF.10 checklist cập nhật trong brief? | ✅ |
+| AF-C7 | AD-R5/R10 (micro-JVM) vẫn ghi **roadmap**, không claim done? | ✅ |
+| AF-C8 | SSE `rag_citations` + usage dock hiển thị hit (AD-R6)? | ✅ |
+
+---
+
+# PHẦN AE — BẢN CHẤT TƯ DUY AI LOCAL & “HỌC” HỆ THỐNG NGHIỆP VỤ
+
+> **Mục đích:** Giải thích **kỹ thuật hệ thống** — AI Local không có “nhận thức” như con người; “tư duy” là **ánh xạ từ không gian ngữ cảnh (Context Space) sang không gian xác suất token (Token Probability)**. PHẦN này map lý thuyết chung → **CSM đã implement gì**, **còn thiếu gì**, để Cursor/dev không kỳ vọng sai (ví dụ: 1.5B “hiểu ERP” khi nhét 400k chars).
+
+## AE.0 Nguyên lý cốt lõi
+
+```txt
+AI Local KHÔNG “biết” hệ thống của bạn sẵn từ pre-training.
+AI Local CHỈ làm đúng khi:
+  (1) Context sạch, có cấu trúc, có constraints
+  (2) Retrieval đúng chunk (RAG + metadata filter)
+  (3) Output bị validate trước khi chạm production (Gate)
+  (4) Phần suy luận nghiệp vụ nặng → Java deterministic (scaffold/plan) khi model yếu (1.5B)
+```
+
+**Model bundled CSM (2026):** `qwen2.5-coder-1.5b-instruct-q4_k_m.gguf` — server 5GB và dev strong. **Không** fine-tune trong repo; **không** tải 7B/14B vào bundle.
+
+---
+
+## AE.1 Luồng tư duy bên trong hộp đen LLM (4 bước)
+
+```txt
+[Input Request + Context] → [Embedding & Tokenization] → [Attention] → [Semantic Mapping] → [Token Generation]
+```
+
+| Bước lý thuyết | Bản chất | CSM — xảy ra ở đâu | Giới hạn thực tế |
+|----------------|----------|---------------------|------------------|
+| **1. Embedding & Tokenization** | Text → token → vector nhiều chiều | `LlamaCppNativeService` + embedding nomic cho RAG index | Prompt >32k chars bị cap (`ai.local.llama.max-prompt-chars`) |
+| **2. Attention (Self-Attention)** | Liên kết khái niệm trong **cùng** context window | Chỉ trong slice prompt worker (~8k ctx 1.5B) | **Không** “nhớ” phiên trước trừ conversation digest + Lucene |
+| **3. Semantic Mapping** | Tính luồng logic nhất theo constraints prompt | System/master contracts MD + `BusinessSpec` injection + RAG block | 1.5B mapping yếu → **Java enrich** `planned_structure[]`, scaffold assemble |
+| **4. Token Generation** | Dự đoán token tiếp theo xác suất cao | Worker stream JSON / prose; temperature thấp edit | Menu greenfield: **scaffold-first** bỏ worker nếu request “đầy đủ” |
+
+```mermaid
+flowchart LR
+  subgraph CSMSystem [CSM — ngoài LLM]
+    IN[USER_REQUEST + attachments]
+    IDX[Index Lucene KNN]
+    RET[Retrieve + ACL + rerank]
+    COMP[Comprehend + Plan Java/LLM]
+    CTX[Context Builder slot budget]
+  end
+  subgraph LLMBox [Hộp đen LLM 1.5B]
+    EMB[1 Tokenize + Embed]
+    ATT[2 Attention]
+    MAP[3 Semantic map]
+    GEN[4 Generate tokens]
+  end
+  subgraph After [Sau LLM]
+    GATE[Output Validation]
+    ENV[CodeMirror / saveMenuStruct]
+  end
+  IN --> IDX --> RET --> COMP --> CTX
+  CTX --> EMB --> ATT --> MAP --> GEN
+  GEN --> GATE --> ENV
+  COMP -.->|scaffold-first| GATE
+```
+
+> **Quan trọng:** CSM **tách** phần “hiểu nghiệp vụ đủ module” (Comprehend + Plan + scaffold Java) khỏi phần “sinh token” (LLM). Cloud chat trông “thông minh” vì model lớn + prose dài; CSM 1.5B **bù bằng kiến trúc**, không bù bằng kích thước model.
+
+---
+
+## AE.2 Ba con đường để AI “học và hiểu” hệ thống của bạn
+
+Pre-trained model chỉ có kiến thức nền tổng quát. Ba con đường nạp tri thức domain:
+
+### AE.2.1 RAG — “Sách giáo khoa” theo thời gian thực ✅ **CSM chính**
+
+| Khía cạnh | Mô tả chung | CSM implementation |
+|-----------|-------------|-------------------|
+| Ý tưởng | Số hóa tài liệu/schema/API → vector DB; query → top-K chunk → dán prompt | **Lucene KNN** per `appId` (không Chroma/Milvus riêng) |
+| Ingest | Chunk + embed + metadata | `AiBusinessMemoryVectorService`, `AiScopedContextIngestionService`, `AiTenantKnowledgeIngestionService` |
+| Retrieve | Similarity + filter | `scopeMask`, ACL tags, `AiRetrievalPolicyEngine`, `rerankHits`, freshness boost `createdAtMs` |
+| Ưu điểm | Giảm hallucination — “nói có sách mách có chứng” | Tenant org snapshot, domain rules MD, dyn_ctx editor |
+| Roadmap | BM25 hybrid, citation line | Phase 3 RAG (PHẦN changelog v3.6) |
+
+**Pipeline tin cậy (map sơ đồ Metadata → Trusted Knowledge — PHẦN AD.1):**
+
+```txt
+Metadata Filter (scope + ACL)
+  → Freshness boost (implicit rerank)
+  → Re-ranking (lexical + domain tags)
+  → Validation (gate trước/sau apply)
+  → Trusted Knowledge (harness trustScore ≥55)
+```
+
+### AE.2.2 Fine-tuning — Thay đổi weights não bộ ❌ **CSM không dùng**
+
+| Khía cạnh | Mô tả chung | CSM |
+|-----------|-------------|-----|
+| Ý tưởng | Huấn luyện lại LoRA trên cặp [bài toán → output chuẩn] | **Không** trong repo |
+| Lý do skip | Tốn GPU, drift, khó portable giữa máy 5GB và dev | Thay bằng **Knowledge Pack** export/import (PHẦN R) + contracts MD |
+| Thay thế CSM | — | `author_style_dna.md`, menu learning Lucene, portable pack script |
+
+> Cursor rule: **Không** thêm fine-tune pipeline trừ khi product owner yêu cầu explicit — ưu tiên RAG + In-Context + Java scaffold.
+
+### AE.2.3 In-Context Learning (Few-shot trong prompt) ✅ **CSM bổ trợ**
+
+| Khía cạnh | Mô tả chung | CSM implementation |
+|-----------|-------------|-------------------|
+| Ý tưởng | Quy tắc + 2–3 ví dụ trong prompt | `ai_menu_structure_runtime.md`, `ai_*_compact.md`, sample digest |
+| Menu greenfield | Structure-first Lego catalog | `MENU_KNOWLEDGE_ALLOWLIST`, `resolveMenuJsonContractForGreenfield()` |
+| Có mẫu attachment | Pattern từ sample menu/code | `SAMPLE_MENU_DIGEST`, `SAMPLE_CODE_DIGEST` trong Comprehend (PHẦN AC) |
+| Business reasoning | Prose plan trước worker | SSE `business_reasoning` + `buildBusinessReasoningProseVi()` (Java, không thêm LLM) |
+
+**Kết hợp CSM (khuyến nghị vận hành):**
+
+```txt
+RAG (sự thật runtime) + In-Context (Lego contracts MD) + Java Plan/Scaffold (logic nghiệp vụ)
+  → LLM 1.5B chỉ enrich label/patch nhỏ
+  → Gate validate trước CodeMirror
+```
+
+---
+
+## AE.3 Ba tầng Guardrails — làm đúng yêu cầu nghiệp vụ
+
+| Tầng | Nhiệm vụ đối với AI | CSM — file / service | Kết quả |
+|------|---------------------|----------------------|---------|
+| **1. System Prompt (định hình tư duy)** | Vai trò Solution Architect; ép output contract (JSON only, không prose thừa) | `AiAssistantGatewayService.buildLocalMinimalPrompt`, `ai_*_worker_contract.md`, `resolveMenuJsonContractForGreenfield()` | Worker không lan man; edit = `textEdits` / `{menu}` |
+| **2. Context Injection (cung cấp sự thật)** | RAG đúng schema/API/table; không bịa tên bảng | Lucene scoped RAG, tenant snapshot, `[ACTIVE_EDITOR_DIGEST]`, `BusinessSpec` block | Model biết “nguyên liệu” thật |
+| **3. Output Validation (lọc đầu ra)** | Regex/schema/AST trước khi thực thi | `MenuQualityGateService`, FINAL_OUTPUT_GATE, AST gate code, semantic sandbox, `repairMenuTreeInPlace` | An toàn; trigger object; không apply patch hỏng |
+
+```txt
+Model output
+  → parse JSON / textEdits
+  → repairMenuTreeInPlace (deterministic)
+  → MenuQualityGate / AST gate
+  → FINAL_OUTPUT_GATE
+  → SSE text_edit_apply → CodeMirror
+  → agentHarness governance meta
+```
+
+**Lưu ý greenfield menu (1.5B):** Tầng 2 + **Java scaffold** quan trọng hơn tầng 1 — LLM 1.5B không đủ tin cậy để generate cả cây ERP một shot. `menu-scaffold-first.enabled=true` (PHẦN AD.4).
+
+---
+
+## AE.4 Chìa khóa cốt lõi — map sang CSM
+
+> **Luồng tư duy AI Local mạnh hay yếu phụ thuộc độ sạch của Context** — không phải kích thước model.
+
+| Điều kiện “context sạch” | CSM làm gì |
+|--------------------------|------------|
+| Cấu trúc DB/menu tường minh | `ai_menu_structure_runtime.md` — Lego catalog (type_form, f_*, trigger) |
+| Quy tắc logic rõ | `ai_business_comprehend_contract.md`, tenant domain rules |
+| Yêu cầu user là delta | `USER_REQUEST` thắng mâu thuẫn (PHẦN AC.0b) |
+| Không nhồi 400k vào model | Region plan + RAG top-K (PHẦN C.5) |
+| Nghiệp vụ phức tạp + model 1.5B | `planned_structure[]` + `buildGreenfieldMenuScaffoldJson()` |
+
+**Kỳ vọng thực tế với 1.5B:**
+
+| Tác vụ | Kỳ vọng |
+|--------|---------|
+| Patch ngắn / symbol micro / lifecycle deterministic | ✅ Tốt |
+| Analyze prose (slice + heuristic) | ✅ Chấp nhận được |
+| Comprehend LLM full ERP một shot | ⚠️ Yếu — fallback heuristic + Java enrich |
+| Menu greenfield “đầy đủ XNT/công nợ/báo cáo” | ✅ **Scaffold Java 15+ node** + gate; LLM optional enrich |
+| Tương đương Developer Middle-Senior **chỉ bằng LLM** | ❌ Không — cần **pipeline** (AC + AD + AE) |
+
+---
+
+## AE.5 Checklist cho Cursor — không hiểu sai bản chất AI
+
+| # | Câu hỏi | Pass nếu |
+|---|---------|----------|
+| AE-C1 | Có nhét full `currentCode` 400k vào prompt? | ❌ Cấm — index + slice |
+| AE-C2 | Có fine-tune model trong repo? | ❌ Cấm — RAG + contracts |
+| AE-C3 | Greenfield menu phức tạp có scaffold/plan trước LLM? | ✅ `scaffold-first` hoặc `planned_structure` |
+| AE-C4 | Output có qua gate trước editor? | ✅ MenuQualityGate + FINAL_OUTPUT_GATE |
+| AE-C5 | User thấy “tư duy nghiệp vụ” trong chat? | ✅ SSE `business_reasoning` + module list |
+| AE-C6 | RAG chunk có ACL + scope filter? | ✅ `passesRetrievalAuthFilter` |
+
+---
+
+## AE.6 Quan hệ với các PHẦN khác
+
+| PHẦN | Liên kết AE |
+|------|-------------|
+| **A.5** Lego | In-Context Learning — catalog mảnh |
+| **C.1–C.5** Architecture | AE.1 hộp đen + AE.2.1 RAG |
+| **AC** Comprehend | AE.2.3 + semantic mapping nghiệp vụ |
+| **AD** Distributed agent | AE orchestration ngoài LLM |
+| **AF** 9 sơ đồ quy trình | AE = lý thuyết LLM; AF = O-R-A + LangGraph map |
+| **Z** Harness | AE.3 tầng 3 + trustScore |
+| **K** Cấm tuyệt đối | Không fine-tune; không full-file prompt |
+
+---
+
+## AF.17 Agent Registry — cheat sheet (Types of AI Agents trên CSM)
+
+> **Một trang** — map sơ đồ LangChain/LangGraph user reference → code thật. Agents chạy **logic** tách role, **cùng thread** `pool-6-thread-1` (không micro-JVM — xem AF-R10).
+
+| Agent (sơ đồ) | Vai trò | Service / method | SSE `stage` |
+|---------------|---------|----------------|-------------|
+| **Supervisor** | Route lane, lifecycle, merge meta | `ApiSpringController.streamCodeAssistant` | `started`, `complete` |
+| **Retriever** | Ingest + vector search + ACL + **live menu pattern index** | `AiBusinessMemoryVectorService`, `AiLocalOrchestrationService`, `indexLiveMenuLeafPatterns` | `tool_search`, **`rag_citations`** |
+| **Planner** | Comprehend + `planned_structure[]` | `AiGreenfieldBusinessDesignService.runComprehensionPipeline`, `enrichBusinessSpecForMenuGreenfield` | `business_comprehend`, `business_plan`, `business_reasoning`, `menu_module_step` |
+| **Executor** | Scaffold / LLM worker + **pattern hints merge** | `buildGreenfieldMenuScaffoldJson`, `enrichGreenfieldMenuByModule`, `applyLiveMenuPatternHints`, `applyGreenfieldCsmBusinessRules` | `menu_scaffold_assemble`, `menu_module_enrich` |
+| **Reviewer** | Quality gate + trusted apply | `MenuQualityGateService`, `gateGreenfieldMenuForApply` | `final_output_gate`, `agent_handoff` Reviewer→* |
+| **Tools** | Lucene, repair, contracts | `repairMenuTreeInPlace`, `ai_*_contract.md`, `applyGreenfieldCsmBusinessRules` | `tool_apply` |
+
+### Handoff chain (greenfield menu — khớp hình LangChain RAG + LangGraph)
+
+```txt
+Supervisor ──► Retriever (RAG ingest/search + **LIVE_MENU_PATTERN** index)
+     ──► Planner (Comprehend + planned_structure)
+     ──► Executor (scaffold + module enrich + CSM rules + **pattern hints**)
+     ──► Reviewer (gateGreenfieldMenuForApply)
+     ──► Executor (full-file text_edit_apply) ──► Supervisor (complete)
+          ▲_________________________|
+          Reviewer fail → Planner (AD-R3 replan module)
+```
+
+SSE: `agent_handoff` + **`rag_citations`** (`phase`: `comprehend` | `tool_search` | `module_enrich`).
+
+Payload `citations[]` mỗi row: `source`, `summary`, `score`, `freshnessScore`, `contentExcerpt`, `sourceCategory` (`live_menu_pattern`, `current_menu`, …).
+
+Config (`application-local-5gb.properties`):
+
+```properties
+ai.local.greenfield.gate-before-apply.enabled=true
+ai.local.greenfield.menu-module-replan.enabled=true
+ai.local.greenfield.menu-module-replan.max-attempts=1
+ai.local.rag.citations.max-hits=5
+ai.local.greenfield.live-menu-pattern-index.enabled=true
+ai.local.greenfield.live-menu-pattern-index.max-leaves=120
+```
+
+---
+
+**Hết master brief v3.19.**  
 Chỉ dùng file này khi yêu cầu Cursor AI implement / làm lại CSM AI Local hoặc domain System Management liên quan RAG.

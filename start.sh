@@ -140,7 +140,7 @@ ENABLE_ALWAYS_PRETOUCH="${ENABLE_ALWAYS_PRETOUCH:-false}"
 
 # Spring profile selection for local-only servers.
 # Prefer SPRING_PROFILES_ACTIVE_OVERRIDE from config.local-*.env; else AI_LOCAL_MODE / auto RAM.
-# - AI_LOCAL_MODE=5gb   -> prod,local-5gb (RECOMMENDED: 5GB RAM / 2 CPU, v7 spec)
+# - AI_LOCAL_MODE=5gb     -> prod,local-5gb (5GB RAM / 2 CPU, 1.5B)
 # - AI_LOCAL_MODE=fast  -> prod,weak-local (minimal ctx, fastest but limited edit quality)
 # - AI_LOCAL_MODE=large -> prod,weak-local,weak-local-large
 # Override fully via SPRING_PROFILES_ACTIVE_OVERRIDE or CSM_LOCAL_PROFILE + config.local-*.env

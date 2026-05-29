@@ -445,6 +445,72 @@ function parsePreviewCitationSources(block: string): Array<{
 	return sources;
 }
 
+type PreviewCitationSource = {
+	title: string
+	path?: string
+	scope?: string
+	score?: string
+	summary?: string
+	content?: string
+	sourceCategory?: string
+	freshnessScore?: number
+}
+
+function mapRagCitationRows(rows: unknown[]): PreviewCitationSource[] {
+	if (!Array.isArray(rows)) {
+		return [];
+	}
+	const out: PreviewCitationSource[] = [];
+	for (const item of rows) {
+		if (!item || typeof item !== "object") {
+			continue;
+		}
+		const row = item as Record<string, unknown>;
+		const source = String(row.source || "").trim();
+		const summary = String(row.summary || "").trim();
+		const scoreNum = Number(row.score || 0);
+		const score = scoreNum > 0 ? scoreNum.toFixed(3) : "";
+		const sourceCategory = String(row.sourceCategory || "").trim();
+		const contentExcerpt = String(row.contentExcerpt || row.content || "").trim();
+		const freshnessScore = Number(row.freshnessScore || 0);
+		out.push({
+			title: source || summary || `Source ${out.length + 1}`,
+			path: source || undefined,
+			scope: sourceCategory || undefined,
+			score: score || undefined,
+			summary: summary || undefined,
+			content: contentExcerpt || undefined,
+			sourceCategory: sourceCategory || undefined,
+			freshnessScore: freshnessScore > 0 ? freshnessScore : undefined,
+		});
+		if (out.length >= 8) {
+			break;
+		}
+	}
+	return out;
+}
+
+function mergePreviewCitationSources(
+	primary: PreviewCitationSource[],
+	secondary: PreviewCitationSource[],
+	maxItems = 8,
+): PreviewCitationSource[] {
+	const merged: PreviewCitationSource[] = [];
+	const seen = new Set<string>();
+	for (const src of [...primary, ...secondary]) {
+		const key = `${src.title}|${src.summary || ""}|${src.content || ""}`;
+		if (seen.has(key)) {
+			continue;
+		}
+		seen.add(key);
+		merged.push(src);
+		if (merged.length >= maxItems) {
+			break;
+		}
+	}
+	return merged;
+}
+
 function parseCitationLocation(raw: string): { path?: string; line?: number } {
 	const text = String(raw || "").trim();
 	if (!text) {
@@ -2139,6 +2205,7 @@ interface ComposerActivityItem {
 	kind: "search" | "read" | "plan" | "index" | "edit" | "apply" | "route" | "tool"
 	icon: string
 	label: string
+	detail?: string
 	status: "running" | "done" | "error"
 	timestamp: number
 }
@@ -2831,6 +2898,7 @@ export default function AiAssistantChat({
 	const [applyingEditCandidateId, setApplyingEditCandidateId] = useState("");
 	const [retryingEditCandidateId, setRetryingEditCandidateId] = useState("");
 	const [assistantCitationTokens, setAssistantCitationTokens] = useState<string[]>([]);
+	const [ragCitationSources, setRagCitationSources] = useState<PreviewCitationSource[]>([]);
 	const [lastProgressEventAgeSecs, setLastProgressEventAgeSecs] = useState(0);
 	const [backendProgressHint, setBackendProgressHint] = useState<{ stage: string, detail: string }>({ stage: "", detail: "" });
 	const [followUpSuggestions, setFollowUpSuggestions] = useState<string[]>([]);
@@ -2894,8 +2962,11 @@ export default function AiAssistantChat({
 		: modelDecisionTrace.slice(-COMPACT_MODEL_TRACE);
 	const hiddenModelTraceCount = Math.max(0, modelDecisionTrace.length - visibleModelDecisionTrace.length);
 	const previewSources = useMemo(
-		() => parsePreviewCitationSources(orchPreview?.compressedContextBlock || ""),
-		[orchPreview?.compressedContextBlock],
+		() => mergePreviewCitationSources(
+			ragCitationSources,
+			parsePreviewCitationSources(orchPreview?.compressedContextBlock || ""),
+		),
+		[orchPreview?.compressedContextBlock, ragCitationSources],
 	);
 	const visibleCitationTokens = useMemo(
 		() => assistantCitationTokens.slice(0, 8),
@@ -5338,13 +5409,13 @@ export default function AiAssistantChat({
 		return;
 	}, []);
 
-	const applyMenuEditorCodeDirect = useCallback((rawMenuPayload: string): boolean => {
+	const applyMenuEditorCodeDirect = useCallback((rawMenuPayload: string, force = false): boolean => {
 		if (!onCodeInsert)
 			return false;
 		const nextCode = extractMenuDraftForEditor(rawMenuPayload);
 		if (!nextCode)
 			return false;
-		if (nextCode === lastAppliedCodeRef.current)
+		if (!force && nextCode === lastAppliedCodeRef.current)
 			return false;
 		const baseCode = liveCodeRef.current || currentCode || "";
 		if (baseCode && baseCode !== nextCode) {
@@ -6183,6 +6254,7 @@ export default function AiAssistantChat({
 			setApplyingEditCandidateId("");
 			setRetryingEditCandidateId("");
 			setAssistantCitationTokens([]);
+			setRagCitationSources([]);
 			setFollowUpSuggestions([]);
 			setCanUndoLastEdit(false);
 			setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
@@ -7112,6 +7184,47 @@ export default function AiAssistantChat({
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
 							}
+							else if (evt.stage === "rag_citations") {
+								const count = Number((evt as any).count || 0);
+								const phase = String((evt as any).phase || "").trim();
+								const query = String((evt as any).query || "").trim();
+								const citationRows = Array.isArray((evt as any).citations) ? (evt as any).citations : [];
+								const mapped = mapRagCitationRows(citationRows);
+								if (mapped.length > 0) {
+									setRagCitationSources(prev => mergePreviewCitationSources(mapped, prev));
+								}
+								appendAgenticStep({
+									stage: "rag_citations",
+									icon: count > 0 ? "📚" : "○",
+									label: uiText("Trích dẫn RAG", "RAG citations", "RAG 引用"),
+									detail: uiText(
+										count > 0
+											? `${count} nguồn${phase ? ` · ${phase}` : ""}${query ? ` · ${query.slice(0, 72)}` : ""}`
+											: "không có trích dẫn RAG",
+										count > 0
+											? `${count} sources${phase ? ` · ${phase}` : ""}${query ? ` · ${query.slice(0, 72)}` : ""}`
+											: "no RAG citations",
+										count > 0
+											? `${count} 个来源${phase ? ` · ${phase}` : ""}${query ? ` · ${query.slice(0, 72)}` : ""}`
+											: "无 RAG 引用",
+									),
+									status: "done",
+								});
+								appendComposerActivity({
+									kind: "route",
+									icon: "📚",
+									label: mapped.length > 0
+										? uiText(
+											`RAG · ${mapped.slice(0, 2).map(src => src.title).join(" · ")}`,
+											`RAG · ${mapped.slice(0, 2).map(src => src.title).join(" · ")}`,
+											`RAG · ${mapped.slice(0, 2).map(src => src.title).join(" · ")}`,
+										)
+										: uiText("RAG citations · không có hit", "RAG citations · no hits", "RAG 引用 · 无命中"),
+									status: "done",
+								});
+								if (SHOW_DETAILED_PROGRESS_TIMELINE)
+									appendStageEvent(evtForTimeline);
+							}
 							else if (evt.stage === "assistant_citations") {
 								const count = Number((evt as any).count || 0);
 								const sources = Number((evt as any).sources || 0);
@@ -7176,8 +7289,16 @@ export default function AiAssistantChat({
 								const virtualContextPreview = Array.isArray((evt as any).virtualContextPreview)
 									? (evt as any).virtualContextPreview.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 3)
 									: [];
-								const retrievalHits = Array.isArray((evt as any).retrievalHits)
+								const retrievalHitRows = Array.isArray((evt as any).retrievalHits)
 									? (evt as any).retrievalHits
+									: [];
+								if (retrievalHitRows.length > 0) {
+									const mappedHits = mapRagCitationRows(retrievalHitRows);
+									if (mappedHits.length > 0) {
+										setRagCitationSources(prev => mergePreviewCitationSources(mappedHits, prev));
+									}
+								}
+								const retrievalHits = retrievalHitRows
 										.map((item: any) => {
 											const source = String(item?.source || "").trim();
 											const summary = String(item?.summary || "").trim();
@@ -7206,6 +7327,8 @@ export default function AiAssistantChat({
 															return uiText("module workspace", "workspace module", "工作区模块");
 														case "dynamic_context":
 															return uiText("ngữ cảnh động", "dynamic context", "动态上下文");
+														case "live_menu_pattern":
+															return uiText("mẫu menu live", "live menu pattern", "实时菜单模式");
 														default:
 															return "";
 													}
@@ -7233,8 +7356,7 @@ export default function AiAssistantChat({
 											return `${source || summary}${scoreLabel}${reasonLabel}`;
 										})
 										.filter(Boolean)
-										.slice(0, 2)
-									: [];
+										.slice(0, 5);
 								const adaptiveReasons = Array.isArray((evt as any).adaptiveReasons)
 									? (evt as any).adaptiveReasons.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 2)
 									: [];
@@ -7383,6 +7505,157 @@ export default function AiAssistantChat({
 								});
 								if (SHOW_DETAILED_PROGRESS_TIMELINE)
 									appendStageEvent(evtForTimeline);
+							}
+							else if (evt.stage === "business_comprehend") {
+								const moduleCount = Number((evt as any).modules || 0);
+								const statusRaw = String((evt as any).status || "").trim().toLowerCase();
+								if (statusRaw === "running") {
+									appendComposerActivity({
+										kind: "plan",
+										icon: "🧠",
+										label: uiText("Đang phân tích nghiệp vụ (Comprehend)…", "Analyzing business (Comprehend)…", "正在分析业务（Comprehend）…"),
+										status: "running",
+									});
+								} else if (statusRaw === "completed") {
+									appendComposerActivity({
+										kind: "plan",
+										icon: "🧠",
+										label: uiText(
+											`Đã hiểu nghiệp vụ — ${moduleCount} module`,
+											`Business context — ${moduleCount} modules`,
+											`业务理解 — ${moduleCount} 个模块`,
+										),
+										status: "done",
+									});
+									const domainSummary = String((evt as any).existingBusinessSummary || (evt as any).domainSummary || "").trim();
+									if (domainSummary) {
+										appendComposerActivity({
+											kind: "read",
+											icon: "📋",
+											label: domainSummary.length > 120 ? `${domainSummary.slice(0, 117)}…` : domainSummary,
+											status: "done",
+										});
+									}
+								}
+							}
+							else if (evt.stage === "business_plan") {
+								const stepCount = Number((evt as any).stepCount || 0);
+								appendComposerActivity({
+									kind: "plan",
+									icon: "🗺️",
+									label: uiText(
+										`Kế hoạch thực thi — ${stepCount} bước`,
+										`Execution plan — ${stepCount} steps`,
+										`执行计划 — ${stepCount} 步`,
+									),
+									status: "done",
+								});
+							}
+							else if (evt.stage === "business_reasoning") {
+								const prose = String((evt as any).message || localizedEvtMessage || "").trim();
+								const modules = Array.isArray((evt as any).modules)
+									? (evt as any).modules.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+									: [];
+								if (prose) {
+									streamingMessageRef.current = prose;
+									setMessages((prev) => {
+										const updated = [...prev];
+										for (let i = updated.length - 1; i >= 0; i -= 1) {
+											const lastMsg = updated[i];
+											if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
+												lastMsg.content = prose;
+												lastMsg.timestamp = Date.now();
+												break;
+											}
+										}
+										return updated;
+									});
+								}
+								appendComposerActivity({
+									kind: "plan",
+									icon: "🧠",
+									label: uiText("Phân tích nghiệp vụ + lộ trình module", "Business analysis + module roadmap", "业务分析 + 模块路线"),
+									status: "done",
+								});
+								for (const moduleLabel of modules.slice(0, 16)) {
+									appendComposerActivity({
+										kind: "plan",
+										icon: "📦",
+										label: moduleLabel,
+										status: "done",
+									});
+								}
+							}
+							else if (evt.stage === "menu_scaffold_assemble") {
+								const menuNodes = Number((evt as any).menuNodes || 0);
+								appendComposerActivity({
+									kind: "edit",
+									icon: "🧩",
+									label: uiText(
+										`Ráp menu Lego — ${menuNodes} node (Java)`,
+										`Lego menu assembled — ${menuNodes} nodes (Java)`,
+										`Lego 菜单组装 — ${menuNodes} 节点（Java）`,
+									),
+									status: "done",
+								});
+							}
+							else if (evt.stage === "menu_module_step") {
+								const moduleLabel = String((evt as any).module || "").trim();
+								const moduleIndex = Number((evt as any).moduleIndex || 0);
+								const moduleTotal = Number((evt as any).moduleTotal || 0);
+								const typeForm = Number((evt as any).typeForm || 1);
+								const legoIcon = typeForm === 5 ? "📊" : typeForm === 0 ? "📁" : "🧱";
+								appendComposerActivity({
+									kind: "plan",
+									icon: legoIcon,
+									label: moduleTotal > 0
+										? uiText(
+											`Module ${moduleIndex}/${moduleTotal}: ${moduleLabel}`,
+											`Module ${moduleIndex}/${moduleTotal}: ${moduleLabel}`,
+											`模块 ${moduleIndex}/${moduleTotal}：${moduleLabel}`,
+										)
+										: moduleLabel,
+									status: "done",
+								});
+							}
+							else if (evt.stage === "menu_module_enrich") {
+								const moduleLabel = String((evt as any).module || "").trim();
+								const moduleIndex = Number((evt as any).moduleIndex || 0);
+								const moduleTotal = Number((evt as any).moduleTotal || 0);
+								const enrichStatus = String((evt as any).status || "completed").trim();
+								const usedLlm = Boolean((evt as any).usedLlm);
+								const isRunning = enrichStatus === "running";
+								appendComposerActivity({
+									kind: "edit",
+									icon: usedLlm ? "✨" : "🏷️",
+									label: moduleTotal > 0
+										? uiText(
+											`${isRunning ? "Enrich" : "Đã enrich"} ${moduleIndex}/${moduleTotal}: ${moduleLabel}${usedLlm ? " (LLM)" : ""}`,
+											`${isRunning ? "Enrich" : "Enriched"} ${moduleIndex}/${moduleTotal}: ${moduleLabel}${usedLlm ? " (LLM)" : ""}`,
+											`${isRunning ? "丰富" : "已丰富"} ${moduleIndex}/${moduleTotal}：${moduleLabel}${usedLlm ? " (LLM)" : ""}`,
+										)
+										: moduleLabel,
+									status: isRunning ? "running" : "done",
+								});
+							}
+							else if (evt.stage === "agent_handoff") {
+								const fromAgent = String((evt as any).fromAgent || "").trim();
+								const toAgent = String((evt as any).toAgent || "").trim();
+								const action = String((evt as any).action || "").trim();
+								const detail = String((evt as any).detail || "").trim();
+								if (fromAgent && toAgent) {
+									appendComposerActivity({
+										kind: "route",
+										icon: "🔀",
+										label: uiText(
+											`${fromAgent} → ${toAgent}${action ? `: ${action}` : ""}`,
+											`${fromAgent} → ${toAgent}${action ? `: ${action}` : ""}`,
+											`${fromAgent} → ${toAgent}${action ? `：${action}` : ""}`,
+										),
+										detail: detail || undefined,
+										status: "done",
+									});
+								}
 							}
 							else if (evt.stage === "agent_harness_trace") {
 								const harness = (evt as any).agentHarness as Record<string, unknown> | undefined;
@@ -8056,7 +8329,21 @@ export default function AiAssistantChat({
 							turnAllowAutoApplyRef.current = true;
 							localFlowVerifiedRef.current = true;
 							let appliedEdit = false;
-							if (onApplyLineEdit && startLine && endLine) {
+							const menuGreenfieldFullReplace = Boolean((evt as any).menuGreenfieldFullReplace === true);
+							if (menuGreenfieldFullReplace && onCodeInsert && replacement.trim().startsWith("{")) {
+								const fullMenu = extractMenuDraftForEditor(replacement) || replacement.trim();
+								if (fullMenu && fullMenu !== lastAppliedCodeRef.current) {
+									if (!undoSnapshotRef.current || undoSnapshotRef.current === (liveCodeRef.current || currentCode)) {
+										undoSnapshotRef.current = liveCodeRef.current || currentCode || "";
+										setCanUndoLastEdit(true);
+									}
+									onCodeInsert(fullMenu);
+									liveCodeRef.current = fullMenu;
+									lastAppliedCodeRef.current = fullMenu;
+									appliedEdit = true;
+								}
+							}
+							else if (onApplyLineEdit && startLine && endLine) {
 								// Precise CodeMirror dispatch: only the affected line range changes
 								if (!undoSnapshotRef.current || undoSnapshotRef.current === (liveCodeRef.current || currentCode)) {
 									undoSnapshotRef.current = liveCodeRef.current || currentCode || "";
@@ -8605,15 +8892,22 @@ export default function AiAssistantChat({
 										const completionFetchApply = Boolean(completionEventMeta["menuEditorApplyFetch"] === true);
 										const completionRequestId = String(evt.requestId || streamRequestId || "").trim();
 										if (isEditModeEvt && effectiveContextType === "menu_json") {
+											const forceGreenfieldFullApply = Boolean(
+												completionEventMeta["menuGreenfieldScaffoldFirst"] === true
+												|| completionEventMeta["menuGreenfieldFullReplaceApplied"] === true,
+											);
 											if (completionFetchApply && completionRequestId) {
 												void fetchMenuEditorApplyPayload(completionRequestId).then((menuJson) => {
 													if (menuJson) {
-														applyMenuEditorCodeDirect(menuJson);
+														applyMenuEditorCodeDirect(menuJson, forceGreenfieldFullApply);
 													}
 												});
 											}
 											else if (evt.fullResponse) {
-												const applied = applyMenuEditorCodeDirect(String(evt.fullResponse || ""));
+												const applied = applyMenuEditorCodeDirect(
+													String(evt.fullResponse || ""),
+													forceGreenfieldFullApply,
+												);
 												if (!applied && onCodeInsert) {
 													const forcedDraft = extractMenuDraftForEditor(evt.fullResponse || "")
 														|| String(evt.fullResponse || "").trim();
@@ -9679,7 +9973,14 @@ export default function AiAssistantChat({
 												].filter(Boolean).join(" ")}
 											>
 												<span className={styles.composerActivityIcon}>{item.icon}</span>
-												<span className={styles.composerActivityLabel}>{item.label}</span>
+												<div style={{ minWidth: 0 }}>
+													<span className={styles.composerActivityLabel}>{item.label}</span>
+													{item.detail && (
+														<div style={{ fontSize: 10, opacity: 0.88, marginTop: 2, lineHeight: 1.35, wordBreak: "break-word" }}>
+															{item.detail}
+														</div>
+													)}
+												</div>
 												{item.status === "running" && (
 													<span className={styles.composerActivitySpinner}>…</span>
 												)}
@@ -10296,6 +10597,9 @@ export default function AiAssistantChat({
 														<Tag color="blue">#{idx + 1}</Tag>
 														<span style={{ fontSize: 11, fontWeight: 600, wordBreak: "break-word" }}>{src.title}</span>
 														{src.score && <Tag color="geekblue">score {src.score}</Tag>}
+														{typeof src.freshnessScore === "number" && src.freshnessScore > 0 && (
+															<Tag color="green">fresh {src.freshnessScore.toFixed(2)}</Tag>
+														)}
 														{src.scope && <Tag color="cyan">{src.scope}</Tag>}
 													</div>
 													{src.path && (

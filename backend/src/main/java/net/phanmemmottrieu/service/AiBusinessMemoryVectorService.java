@@ -152,6 +152,24 @@ public class AiBusinessMemoryVectorService {
         long createdAtMs
     ) {}
 
+    /** AD-R1 — recency boost for citation telemetry (0..1). */
+    public static double computeFreshnessScore(long createdAtMs) {
+        if (createdAtMs <= 0L) {
+            return 0.0;
+        }
+        long ageMs = Math.max(0L, System.currentTimeMillis() - createdAtMs);
+        if (ageMs <= 15L * 60_000L) {
+            return 1.0;
+        }
+        if (ageMs <= 60L * 60_000L) {
+            return 0.5;
+        }
+        if (ageMs <= 24L * 60 * 60_000L) {
+            return 0.2;
+        }
+        return 0.1;
+    }
+
     public record IndexSummary(
         String appId,
         String sourceName,

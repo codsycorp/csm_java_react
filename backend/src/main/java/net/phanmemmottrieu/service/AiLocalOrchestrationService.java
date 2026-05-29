@@ -159,6 +159,10 @@ public class AiLocalOrchestrationService {
     @Value("${ai.orchestration.multimodal.scope-rag.top-k:6}")
     private int scopedRagTopK;
 
+    /** AD-R6 — richer citation rows for Composer / usage dock. */
+    @Value("${ai.local.rag.citations.max-hits:5}")
+    private int ragCitationsMaxHits;
+
     @Value("${ai.orchestration.multimodal.scope-rag.max-chars:5000}")
     private int scopedRagMaxChars;
 
@@ -1661,7 +1665,14 @@ public class AiLocalOrchestrationService {
             out.toolStats.put("scopedRagSourceCount", countUniqueHitSources(retrievalHits));
             out.toolStats.put(
                 "scopedRagTopHits",
-                summarizeSearchHits(retrievalHits, 3, retrievalPlan.query, request.appId, safeContextType, request.pName, request.pType)
+                summarizeSearchHits(
+                    retrievalHits,
+                    Math.max(1, ragCitationsMaxHits),
+                    retrievalPlan.query,
+                    request.appId,
+                    safeContextType,
+                    request.pName,
+                    request.pType)
             );
             out.toolStats.put(
                 "virtualContextPreview",
@@ -3894,6 +3905,9 @@ public class AiLocalOrchestrationService {
             row.put("sourceCategory", sourceCategory);
             row.put("matchedTokens", collectMatchedHitTokens(hit, queryTokens, 3));
             row.put("recent", isRecentHit(hit));
+            row.put("freshnessScore", Math.round(AiBusinessMemoryVectorService.computeFreshnessScore(hit.createdAtMs()) * 1000.0) / 1000.0);
+            String excerptSource = !hit.content().isBlank() ? hit.content() : hit.summary();
+            row.put("contentExcerpt", truncateLine(excerptSource, 220));
             out.add(row);
             if (out.size() >= Math.max(1, limit)) {
                 break;

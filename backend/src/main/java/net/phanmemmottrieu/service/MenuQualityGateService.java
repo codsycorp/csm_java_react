@@ -649,6 +649,128 @@ public class MenuQualityGateService {
     }
 
     /**
+     * Deterministic in-place repair for weak local models (i18n labels, trigger keys, type_form, icon).
+     * Mutates the menu tree referenced by {@code menus} and nested {@code children}.
+     *
+     * @return number of nodes touched
+     */
+    public int repairMenuTreeInPlace(List<Map<String, Object>> menus) {
+        if (menus == null || menus.isEmpty()) {
+            return 0;
+        }
+        int repairedNodes = 0;
+        Deque<Map<String, Object>> stack = new ArrayDeque<>();
+        for (Map<String, Object> root : menus) {
+            if (root != null && !root.isEmpty()) {
+                stack.push(root);
+            }
+        }
+        while (!stack.isEmpty()) {
+            Map<String, Object> node = stack.pop();
+            migrateLegacyIconFieldsOnNode(node);
+
+            Map<String, Object> after = new LinkedHashMap<>();
+            List<String> reasons = new ArrayList<>();
+            NodeCtx ctx = new NodeCtx(node, "", "", "", 0);
+            accumulateLabelI18nRepairs(ctx, after, reasons);
+            accumulateTableInputParamRepairs(ctx, after, reasons);
+            accumulateTriggerRepairs(ctx, after, reasons);
+            if (node.get("type_form") == null) {
+                Integer inferred = inferTypeForm(node);
+                if (inferred != null) {
+                    after.put("type_form", inferred);
+                    reasons.add("type_form");
+                }
+            } else {
+                Integer coerced = coerceTypeForm(node.get("type_form"));
+                if (coerced != null && !Objects.equals(coerced, toInt(node.get("type_form")))) {
+                    after.put("type_form", coerced);
+                    reasons.add("type_form");
+                }
+            }
+            LinkedHashSet<String> removeFields = new LinkedHashSet<>();
+            applyLegacyIconRepair(node, after, removeFields, reasons);
+
+            if (applyAfterPatchToNode(node, after, removeFields)) {
+                repairedNodes++;
+            }
+
+            Object children = node.get("children");
+            if (children instanceof List<?> childList) {
+                for (Object child : childList) {
+                    if (child instanceof Map<?, ?> childMap) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> childNode = (Map<String, Object>) childMap;
+                        stack.push(childNode);
+                    }
+                }
+            }
+        }
+        return repairedNodes;
+    }
+
+    private boolean applyAfterPatchToNode(
+            Map<String, Object> node,
+            Map<String, Object> after,
+            LinkedHashSet<String> removeFields) {
+        if ((after == null || after.isEmpty()) && (removeFields == null || removeFields.isEmpty())) {
+            return false;
+        }
+        if (removeFields != null) {
+            for (String field : removeFields) {
+                node.remove(field);
+            }
+        }
+        if (after == null || after.isEmpty()) {
+            return removeFields != null && !removeFields.isEmpty();
+        }
+        for (Map.Entry<String, Object> entry : after.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            if ("table".equals(key) && value instanceof List<?> patches) {
+                mergeTableFieldPatches(node, patches);
+            } else {
+                node.put(key, value);
+            }
+        }
+        return true;
+    }
+
+    private void mergeTableFieldPatches(Map<String, Object> node, List<?> patches) {
+        Object tableObj = node.get("table");
+        if (!(tableObj instanceof List<?> fields) || patches == null || patches.isEmpty()) {
+            return;
+        }
+        for (Object patchObj : patches) {
+            if (!(patchObj instanceof Map<?, ?> patchRaw)) {
+                continue;
+            }
+            String fName = asText(patchRaw.get("f_name"));
+            if (fName.isBlank()) {
+                continue;
+            }
+            for (Object fieldObj : fields) {
+                if (!(fieldObj instanceof Map<?, ?> fieldRaw)) {
+                    continue;
+                }
+                if (!fName.equals(asText(fieldRaw.get("f_name")))) {
+                    continue;
+                }
+                @SuppressWarnings("unchecked")
+                Map<String, Object> field = (Map<String, Object>) fieldRaw;
+                for (Map.Entry<?, ?> entry : patchRaw.entrySet()) {
+                    String key = String.valueOf(entry.getKey());
+                    if ("f_name".equals(key)) {
+                        continue;
+                    }
+                    field.put(key, entry.getValue());
+                }
+                break;
+            }
+        }
+    }
+
+    /**
      * Builds a patch envelope from deterministic quality-gate findings (labels, trigger keys, icon).
      * Used when the local model cannot produce actionable patches for broad menu audit requests.
      */
@@ -908,6 +1030,18 @@ public class MenuQualityGateService {
             typeForm = inferTypeForm(ctx.node);
         }
 
+        if (triggerObj instanceof List<?> triggerList) {
+            Map<String, Object> converted = convertTriggerArrayToObject(triggerList, typeForm);
+            if (!converted.isEmpty()) {
+                after.put("trigger", converted);
+                reasons.add("trigger_array_to_object");
+            } else if (typeForm != null && (typeForm == 1 || typeForm == 2 || typeForm == 4 || typeForm == 5)) {
+                after.put("trigger", defaultTriggerForTypeForm(typeForm));
+                reasons.add("trigger_array_fallback");
+            }
+            return;
+        }
+
         if (triggerObj instanceof Map<?, ?> triggerMap) {
             Map<String, Object> cleaned = new LinkedHashMap<>();
             boolean hadInvalid = false;
@@ -934,9 +1068,63 @@ public class MenuQualityGateService {
         }
 
         if (triggerObj == null && typeForm != null && (typeForm == 1 || typeForm == 2 || typeForm == 4 || typeForm == 5)) {
-            after.put("trigger", new LinkedHashMap<>());
+            after.put("trigger", defaultTriggerForTypeForm(typeForm));
             reasons.add("trigger_missing");
         }
+    }
+
+    /** Weak local models often emit trigger as [{type, action}] — normalize to { load_db: "..." }. */
+    private Map<String, Object> convertTriggerArrayToObject(List<?> triggerList, Integer typeForm) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        if (triggerList == null || triggerList.isEmpty()) {
+            return out;
+        }
+        for (Object item : triggerList) {
+            if (!(item instanceof Map<?, ?> row)) {
+                continue;
+            }
+            String typeKey = asText(row.get("type"));
+            if (typeKey.isBlank()) {
+                typeKey = asText(row.get("key"));
+            }
+            if (typeKey.isBlank()) {
+                typeKey = asText(row.get("name"));
+            }
+            String action = asText(row.get("action"));
+            if (action.isBlank()) {
+                action = asText(row.get("value"));
+            }
+            if (action.isBlank()) {
+                action = asText(row.get("handler"));
+            }
+            if (!typeKey.isBlank() && VALID_TRIGGER_KEYS.contains(typeKey)) {
+                out.put(typeKey, action.isBlank() ? defaultTriggerBodyForKey(typeKey) : action);
+            }
+        }
+        if (out.isEmpty() && typeForm != null) {
+            return defaultTriggerForTypeForm(typeForm);
+        }
+        return out;
+    }
+
+    private Map<String, Object> defaultTriggerForTypeForm(int typeForm) {
+        if (typeForm == 5) {
+            return new LinkedHashMap<>(Map.of("report_db", "(self, data, bang)"));
+        }
+        if (typeForm == 1 || typeForm == 2 || typeForm == 4) {
+            return new LinkedHashMap<>(Map.of("load_db", "(self, data, bang)"));
+        }
+        return new LinkedHashMap<>();
+    }
+
+    private String defaultTriggerBodyForKey(String key) {
+        if ("report_db".equals(key)) {
+            return "(self, data, bang)";
+        }
+        if ("load_db".equals(key) || "update_db".equals(key) || "delete_db".equals(key)) {
+            return "(self, data, bang)";
+        }
+        return "(self, data, bang)";
     }
 
     private String translateLabel(String vietnameseCore, boolean english) {
