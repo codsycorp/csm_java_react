@@ -1841,8 +1841,20 @@ public class ApiSpringController {
                     }
                 }
 
-                LocalIntentClassification preclassifiedIntent =
-                    classifyIntentWithLocalAI(message, false, uiLang, contextType);
+                LocalIntentClassification preclassifiedIntent;
+                if (isMenuJsonContext(contextType) && "analyze".equalsIgnoreCase(responseMode)) {
+                    preclassifiedIntent = new LocalIntentClassification(
+                        "QUESTION",
+                        "ask",
+                        95,
+                        "answer_direct",
+                        "menu_json",
+                        "",
+                        "analyze",
+                        "Menu analyze fast path — skip intent LLM");
+                } else {
+                    preclassifiedIntent = classifyIntentWithLocalAI(message, false, uiLang, contextType);
+                }
                 responseMode = reconcileCodeResponseModeWithIntent(
                     responseMode,
                     message,
@@ -1852,6 +1864,45 @@ public class ApiSpringController {
                 if (responseMode.isBlank()) {
                     responseMode = "analyze";
                 }
+
+                // Menu analyze: resolve editor JSON early and exit before intent/orchestration/LLM when heuristic suffices.
+                if (isMenuJsonContext(contextType) && "analyze".equalsIgnoreCase(responseMode)) {
+                    pruneBaseContentCache();
+                    AiCodeBaseContentResolution menuAnalyzeBase = resolveBaseContent(
+                        appId, baseContentRef, baseContent, currentCodeRaw);
+                    String menuAnalyzeContext = currentCodeRaw;
+                    if (preserveBaseContent && !menuAnalyzeBase.baseContent().isBlank()) {
+                        menuAnalyzeContext = menuAnalyzeBase.baseContent();
+                    } else if (menuAnalyzeContext.isBlank() && !menuAnalyzeBase.baseContent().isBlank()) {
+                        menuAnalyzeContext = menuAnalyzeBase.baseContent();
+                    }
+                    menuAnalyzeContext = resolveMenuJsonEditorContext(menuAnalyzeContext, menuAnalyzeBase.baseContent());
+                    logger.info(
+                        "MENU_ANALYZE ultra-early probe requestId={} appId={} menuContextChars={} pName={}",
+                        requestId,
+                        appId,
+                        menuAnalyzeContext.length(),
+                        pName);
+                    if (tryCompleteAnalyzeBusinessHeuristicEarly(
+                            emitter,
+                            requestId,
+                            authCtx,
+                            appId,
+                            contextType,
+                            pName,
+                            pType,
+                            message,
+                            menuAnalyzeContext,
+                            menuAnalyzeContext,
+                            AiGreenfieldBusinessDesignService.ComprehensionResult.skipped(),
+                            "",
+                            requestStartedAtMs,
+                            streamCompletedRef)) {
+                        streamCompletedRef.set(true);
+                        return;
+                    }
+                }
+
                 String editorObservation = isMenuJsonContext(contextType)
                     ? "Editor đang mở JSON menu (menu_json)"
                     : isCodeContext(contextType)
@@ -3884,9 +3935,7 @@ public class ApiSpringController {
                         if (businessPrimary.isBlank()) {
                             businessPrimary = "Không đủ JSON menu trong editor để phân tích nghiệp vụ. Hãy mở menu cần phân tích trong CodeMirror.";
                         }
-                        if (!businessPrimary.isBlank()
-                                && (isMenuAnalyzeDeterministicAnswer(businessPrimary, contextType)
-                                    || !isLowSignalAnalyzeOutput(businessPrimary, contextType))) {
+                        if (!businessPrimary.isBlank()) {
                             providerRaw = businessPrimary;
                             providerText = businessPrimary;
                             analyzeFocusedPrimaryApplied = true;
@@ -4355,17 +4404,25 @@ public class ApiSpringController {
                         }
 
                         if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
-                                && isMenuJsonContext(contextType)
-                                && isLowSignalAnalyzeOutput(String.valueOf(providerText == null ? "" : providerText), contextType)) {
-                            String heuristic = buildHeuristicBusinessLogicAnalysis(
-                                effectiveCodeContext,
-                                message,
-                                contextType);
-                            if (!heuristic.isBlank()
-                                    && (isMenuAnalyzeDeterministicAnswer(heuristic, contextType)
-                                        || !isLowSignalAnalyzeOutput(heuristic, contextType))) {
-                                providerText = heuristic;
-                                codeStreamMeta.put("analyzeHeuristicFallbackApplied", true);
+                                && isMenuJsonContext(contextType)) {
+                            String providerAnalyzeText = String.valueOf(providerText == null ? "" : providerText);
+                            boolean needsMenuHeuristicFallback = isLowSignalAnalyzeOutput(providerAnalyzeText, contextType)
+                                || looksLikeGenericMenuHallucination(providerAnalyzeText);
+                            if (needsMenuHeuristicFallback) {
+                                String heuristic = buildHeuristicBusinessLogicAnalysis(
+                                    effectiveCodeContext,
+                                    message,
+                                    contextType);
+                                if (!heuristic.isBlank()) {
+                                    providerText = heuristic;
+                                    codeStreamMeta.put("analyzeHeuristicFallbackApplied", true);
+                                    codeStreamMeta.put("menuHallucinationReplaced", looksLikeGenericMenuHallucination(providerAnalyzeText));
+                                    logger.info(
+                                        "LOCAL_ANALYZE menu-heuristic-fallback requestId={} replacedHallucination={} answerChars={}",
+                                        requestId,
+                                        looksLikeGenericMenuHallucination(providerAnalyzeText),
+                                        heuristic.length());
+                                }
                             }
                         }
 
@@ -5974,6 +6031,28 @@ public class ApiSpringController {
                                 buildLocalOnlyFailureMessageZh(lastLocalProviderText, effectiveCodeContext, responseMode, contextType)));
                             return;
                             }
+                        } else if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                                && isMenuJsonContext(contextType)
+                                && tryCompleteAnalyzeBusinessHeuristicEarly(
+                                    emitter,
+                                    requestId,
+                                    authCtx,
+                                    appId,
+                                    contextType,
+                                    pName,
+                                    pType,
+                                    message,
+                                    effectiveCodeContext,
+                                    analyzeBusinessScanContext,
+                                    businessComprehensionResult,
+                                    menuAnalyzeComprehendProse,
+                                    requestStartedAtMs,
+                                    streamCompletedRef)) {
+                            logger.info(
+                                "MENU_ANALYZE last-chance heuristic exit requestId={} menuChars={}",
+                                requestId,
+                                effectiveCodeContext.length());
+                            return;
                         } else {
                             rawResponse = streamWithAutoContinue(
                                     emitter,
@@ -20739,13 +20818,19 @@ public class ApiSpringController {
             || text.contains("Phân tích nghiệp vụ (menu hiện có)")
             || text.contains("Module / nhóm menu")
             || text.contains("Module / node")
-            || text.contains("node menu");
+            || text.contains("node menu")
+            || text.contains("**Tổng quan:**")
+            || text.contains("**Các phân hệ nghiệp vụ:**");
         boolean menuEvidence = text.contains("type_form")
             || text.contains("table_name")
             || text.contains("Trigger / hành vi")
             || text.contains("Bảng dữ liệu")
             || text.contains("**Module")
-            || text.contains("Luồng nghiệp vụ");
+            || text.contains("Luồng nghiệp vụ")
+            || text.contains("**Luồng nghiệp vụ")
+            || text.contains("Phân hệ nghiệp vụ")
+            || text.contains("Quản lý nguyên phụ liệu")
+            || text.contains("Quản lý thành phẩm");
         return menuHeader && menuEvidence;
     }
 
@@ -20758,6 +20843,29 @@ public class ApiSpringController {
             && !text.contains("type_form")
             && !text.contains("node menu");
         return englishTimeline || vietTimeline;
+    }
+
+    /** LLM hallucination when menu JSON was not in context — generic CRM/stack prose instead of type_form/table scan. */
+    private boolean looksLikeGenericMenuHallucination(String text) {
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return false;
+        }
+        if (isMenuAnalyzeHeuristicProse(safe)) {
+            return false;
+        }
+        if (safe.contains("type_form") || safe.contains("table_name") || safe.contains("Phân tích nghiệp vụ menu")) {
+            return false;
+        }
+        String lower = safe.toLowerCase(Locale.ROOT);
+        boolean genericCrm = (lower.contains("customer service management")
+                || lower.contains("quản lý khách hàng")
+                || lower.contains("chăm sóc khách hàng"))
+            && !lower.contains("type_form");
+        boolean genericStack = (lower.contains("node.js") || lower.contains("mongodb") || lower.contains("react native"))
+            && (lower.contains("express") || lower.contains("angular") || lower.contains("dialogflow"));
+        boolean genericPm = lower.contains("framework back-end") || lower.contains("chatbot:");
+        return genericCrm || genericStack || genericPm || looksLikeGenericProjectTimelineAnalyze(safe);
     }
 
     private String resolveAnalyzeBusinessScanContext(
@@ -25667,6 +25775,14 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 } else {
                     return false;
                 }
+            }
+            // Menu analyze must never fall through to LLM (1.5B hallucinates CRM/stack without JSON in prompt).
+            if (isMenuJsonContext(contextType)) {
+                return finishAnalyzeBusinessHeuristicEarly(
+                    emitter, requestId, authCtx, appId, contextType, pName, pType, message,
+                    fullCodeContext, scanContext, answer,
+                    "local_heuristic_analyze", "analyze_menu_heuristic_forced",
+                    startedAtMs, requestStartedAtMs, streamCompletedRef);
             }
             if (!isMenuAnalyzeDeterministicAnswer(answer, contextType)
                     && isLowSignalAnalyzeOutput(answer, contextType)) {

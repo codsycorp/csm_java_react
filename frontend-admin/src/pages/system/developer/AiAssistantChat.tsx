@@ -2487,7 +2487,22 @@ function inferResponseModeByIntent(input: string, contextType: AiAssistantChatPr
 		return undefined;
 	}
 	const directive = parseResponseModeDirective(text);
-	return directive.overrideMode;
+	if (directive.overrideMode) {
+		return directive.overrideMode;
+	}
+	const normalized = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+	const asksAnalyze = /\b(phân tích|phan tich|analyze|analysis|giải thích|giai thich|explain|tom tat|tóm tắt|summary|mô tả|mo ta|describe)\b/.test(normalized);
+	const asksEdit = /\b(sửa|sua|edit|apply|patch|cập nhật|cap nhat|update|modify|thêm|them|add|xóa|xoa|delete|remove)\b/.test(normalized);
+	if (asksAnalyze && !asksEdit) {
+		return "analyze";
+	}
+	if (asksEdit && !asksAnalyze) {
+		return "edit";
+	}
+	if (contextType === "menu_json" && asksAnalyze) {
+		return "analyze";
+	}
+	return undefined;
 }
 
 /** Outgoing code string + optional selection narrow-scope for AI local. No highlight → full string scope. */

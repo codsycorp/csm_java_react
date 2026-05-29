@@ -2213,84 +2213,73 @@ public class AiGreenfieldBusinessDesignService {
 
     /**
      * Deterministic menu business analysis from editor JSON — for analyze fast path without LLM.
+     * Default tone is business-facing (phân hệ, luồng, vai trò); technical appendix only on request.
      */
     public String buildHeuristicMenuBusinessAnalysisProse(String menuJson, String requestText) {
         MenuBusinessScan scan = scanMenuBusinessStructure(String.valueOf(menuJson == null ? "" : menuJson));
         if (scan.totalNodes() <= 0) {
             return "";
         }
+        boolean technicalDetail = wantsTechnicalMenuAnalysisDetail(requestText);
         StringBuilder sb = new StringBuilder();
         sb.append("## Phân tích nghiệp vụ menu\n\n");
-        sb.append("**Phạm vi:** ").append(scan.totalNodes()).append(" node menu");
-        if (!scan.moduleLabels().isEmpty()) {
-            sb.append(" — ").append(String.join(", ", scan.moduleLabels().stream().limit(8).toList()));
-        }
-        sb.append("\n\n");
 
-        if (!scan.moduleLabels().isEmpty()) {
-            sb.append("**Module / nhóm menu (**").append(scan.moduleLabels().size()).append("**):\n");
+        String domain = inferMenuBusinessDomainSummary(scan);
+        sb.append("**Tổng quan:** ").append(scan.totalNodes()).append(" chức năng menu");
+        if (!domain.isBlank()) {
+            sb.append(" — ").append(domain);
+        }
+        sb.append(".\n\n");
+
+        List<MenuBusinessArea> areas = inferMenuBusinessAreas(scan);
+        if (!areas.isEmpty()) {
+            sb.append("**Các phân hệ nghiệp vụ:**\n");
             int idx = 1;
-            for (String module : scan.moduleLabels().stream().limit(24).toList()) {
-                if (!String.valueOf(module).isBlank()) {
-                    sb.append(idx++).append(". ").append(module.trim()).append("\n");
+            for (MenuBusinessArea area : areas) {
+                sb.append(idx++).append(". **").append(area.name()).append("** — ")
+                    .append(area.summary()).append("\n");
+                if (!area.matchedModules().isEmpty()) {
+                    sb.append("   - Menu: ")
+                        .append(String.join(", ", area.matchedModules().stream().limit(8).toList()))
+                        .append("\n");
                 }
             }
             sb.append("\n");
-        }
-
-        if (!scan.tables().isEmpty()) {
-            sb.append("**Bảng dữ liệu (**").append(scan.tables().size()).append("**): ")
-                .append(String.join(", ", scan.tables().stream().limit(16).toList()))
+        } else if (!scan.moduleLabels().isEmpty()) {
+            sb.append("**Nhóm chức năng chính:** ")
+                .append(String.join(", ", scan.moduleLabels().stream().limit(12).toList()))
                 .append("\n\n");
         }
 
-        if (!scan.typeFormCounts().isEmpty()) {
-            sb.append("**Loại form (type_form):** ");
-            List<String> typeParts = new ArrayList<>();
-            scan.typeFormCounts().forEach((type, count) ->
-                typeParts.add("type " + type + "=" + count));
-            sb.append(String.join(", ", typeParts.stream().limit(10).toList())).append("\n\n");
-        }
-
-        if (!scan.triggerSummaries().isEmpty()) {
-            sb.append("**Trigger / hành vi nghiệp vụ:**\n");
-            for (String trigger : scan.triggerSummaries().stream().limit(12).toList()) {
-                if (!String.valueOf(trigger).isBlank()) {
-                    sb.append("- ").append(trigger.trim()).append("\n");
-                }
+        List<String> flows = inferMenuBusinessFlows(scan, areas);
+        if (!flows.isEmpty()) {
+            sb.append("**Luồng nghiệp vụ điển hình:**\n");
+            for (String flow : flows) {
+                sb.append("- ").append(flow).append("\n");
             }
             sb.append("\n");
         }
 
-        sb.append("**Luồng nghiệp vụ (suy luận từ cấu trúc menu):**\n");
-        sb.append("- Người dùng điều hướng theo cây menu → mở form/báo cáo theo `type_form` và `table_name`.\n");
-        if (!scan.tables().isEmpty()) {
-            sb.append("- Dữ liệu CRUD/grid gắn với bảng: ")
-                .append(String.join(", ", scan.tables().stream().limit(6).toList()))
-                .append(".\n");
+        List<String> roles = inferMenuBusinessRoles(scan, areas);
+        if (!roles.isEmpty()) {
+            sb.append("**Vai trò người dùng:**\n");
+            for (String role : roles) {
+                sb.append("- ").append(role).append("\n");
+            }
+            sb.append("\n");
         }
-        if (!scan.triggerSummaries().isEmpty()) {
-            sb.append("- Trigger điều phối mở form, query, hoặc luồng con khi chọn node.\n");
-        }
-        sb.append("\n");
 
-        List<String> risks = new ArrayList<>();
-        if (!scan.emptyTriggerNodeIds().isEmpty()) {
-            risks.add(scan.emptyTriggerNodeIds().size() + " node thiếu trigger (id: "
-                + String.join(", ", scan.emptyTriggerNodeIds().stream().limit(5).toList()) + ")");
-        }
-        if (!scan.nodesMissingI18n().isEmpty()) {
-            risks.add(scan.nodesMissingI18n().size() + " node thiếu label_en/label_zh");
-        }
-        if (scan.tableColumnI18nGaps() > 0) {
-            risks.add(scan.tableColumnI18nGaps() + " cột bảng thiếu i18n");
-        }
+        List<String> risks = buildMenuBusinessRisksPlain(scan);
         if (!risks.isEmpty()) {
-            sb.append("**Góc nhìn chất lượng / rủi ro:**\n");
+            sb.append("**Điểm cần lưu ý:**\n");
             for (String risk : risks) {
                 sb.append("- ").append(risk).append("\n");
             }
             sb.append("\n");
+        }
+
+        if (technicalDetail) {
+            appendTechnicalMenuAnalysisAppendix(sb, scan);
         }
 
         String req = String.valueOf(requestText == null ? "" : requestText).trim();
@@ -2299,6 +2288,295 @@ public class AiGreenfieldBusinessDesignService {
         }
         sb.append("*Chế độ **phân tích** — chỉ mô tả nghiệp vụ; không sửa JSON menu trong editor.*\n");
         return sb.toString().trim();
+    }
+
+    private record MenuBusinessArea(String name, String summary, List<String> matchedModules) {}
+
+    private boolean wantsTechnicalMenuAnalysisDetail(String requestText) {
+        String msg = normalizeMenuMatchText(String.valueOf(requestText == null ? "" : requestText));
+        if (msg.isBlank()) {
+            return false;
+        }
+        return msg.contains("ky thuat")
+            || msg.contains("technical")
+            || msg.contains("chi tiet ky thuat")
+            || msg.contains("type form")
+            || msg.contains("typeform")
+            || msg.contains("type_form")
+            || msg.contains("trigger code")
+            || msg.contains("ma trigger")
+            || msg.contains("table name")
+            || msg.contains("table_name")
+            || msg.contains("schema")
+            || msg.contains("developer")
+            || msg.contains("dev mode");
+    }
+
+    private String normalizeMenuMatchText(String text) {
+        return java.text.Normalizer.normalize(String.valueOf(text == null ? "" : text), java.text.Normalizer.Form.NFD)
+            .toLowerCase(Locale.ROOT)
+            .replaceAll("\\p{M}+", "")
+            .replaceAll("\\s+", " ")
+            .trim();
+    }
+
+    private String inferMenuBusinessDomainSummary(MenuBusinessScan scan) {
+        String blob = normalizeMenuMatchText(String.join(" ", scan.moduleLabels()))
+            + " " + normalizeMenuMatchText(String.join(" ", scan.tables()));
+        List<String> themes = new ArrayList<>();
+        if (matchesAny(blob, "npl", "nguyen phu lieu", "nguyenphulieu")) {
+            themes.add("nguyên phụ liệu");
+        }
+        if (matchesAny(blob, "thanh pham", "thanhpham")) {
+            themes.add("thành phẩm");
+        }
+        if (matchesAny(blob, "vat tu", "vattu", " hld_vt", "nhapvt", "xuatvt")) {
+            themes.add("vật tư");
+        }
+        if (matchesAny(blob, "kho", "kiem kho", "ton kho", "nhap", "xuat")) {
+            themes.add("xuất nhập kho");
+        }
+        if (matchesAny(blob, "nha cung", "ncc", "danhgiancc", "danh gia")) {
+            themes.add("nhà cung cấp");
+        }
+        if (matchesAny(blob, "bao cao", "report")) {
+            themes.add("báo cáo");
+        }
+        if (matchesAny(blob, "khach hang", "nhan vien", "bo phan", "danh muc")) {
+            themes.add("danh mục dùng chung");
+        }
+        if (themes.isEmpty()) {
+            return "quản lý nghiệp vụ qua cây menu và màn hình nghiệp vụ";
+        }
+        return "tập trung vào " + String.join(", ", themes.stream().distinct().limit(5).toList());
+    }
+
+    private boolean matchesAny(String blob, String... needles) {
+        for (String needle : needles) {
+            if (blob.contains(normalizeMenuMatchText(needle))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<MenuBusinessArea> inferMenuBusinessAreas(MenuBusinessScan scan) {
+        LinkedHashMap<String, MenuBusinessAreaBuilder> buckets = new LinkedHashMap<>();
+        buckets.put("npl", new MenuBusinessAreaBuilder(
+            "Quản lý nguyên phụ liệu",
+            "Theo dõi nhập — xuất — tồn nguyên phụ liệu, kiểm kho và đối chiếu số liệu kho NPL.",
+            List.of("npl", "nguyen phu lieu", "nguyenphulieu")));
+        buckets.put("tp", new MenuBusinessAreaBuilder(
+            "Quản lý thành phẩm",
+            "Ghi nhận phiếu nhập/xuất thành phẩm, kiểm kho và báo cáo liên quan.",
+            List.of("thanh pham", "thanhpham")));
+        buckets.put("vt", new MenuBusinessAreaBuilder(
+            "Quản lý vật tư",
+            "Quản lý vật tư phụ trợ: nhập, xuất, kiểm kho và theo dõi tồn.",
+            List.of("vat tu", "vattu", " vt")));
+        buckets.put("ncc", new MenuBusinessAreaBuilder(
+            "Nhà cung cấp & đánh giá",
+            "Theo dõi nhà cung cấp, đánh giá chất lượng/phục vụ và báo cáo tình trạng NCC.",
+            List.of("nha cung", "ncc", "danh gia", "danhgia")));
+        buckets.put("bc", new MenuBusinessAreaBuilder(
+            "Báo cáo & tổng hợp",
+            "Các báo cáo tổng hợp, truy vấn theo kho/thời gian/mã hàng để hỗ trợ ra quyết định.",
+            List.of("bao cao", "bc ", "report")));
+        buckets.put("dm", new MenuBusinessAreaBuilder(
+            "Danh mục & thiết lập",
+            "Danh mục dùng chung: kho, bộ phận, khách hàng, nhân viên và cấu hình nền.",
+            List.of("danh muc", "chuc nang", "kho", "khach hang", "nhan vien", "bo phan")));
+
+        LinkedHashSet<String> assigned = new LinkedHashSet<>();
+        for (String module : scan.moduleLabels()) {
+            if (String.valueOf(module).isBlank()) {
+                continue;
+            }
+            String norm = normalizeMenuMatchText(module);
+            for (MenuBusinessAreaBuilder builder : buckets.values()) {
+                if (builder.matches(norm) && assigned.add(module.trim())) {
+                    builder.modules.add(module.trim());
+                    break;
+                }
+            }
+        }
+
+        inferMenuBusinessAreasFromTables(scan.tables(), buckets);
+
+        List<MenuBusinessArea> out = new ArrayList<>();
+        for (MenuBusinessAreaBuilder builder : buckets.values()) {
+            if (!builder.modules.isEmpty()) {
+                out.add(builder.build());
+            }
+        }
+        return out;
+    }
+
+    private void inferMenuBusinessAreasFromTables(List<String> tables, LinkedHashMap<String, MenuBusinessAreaBuilder> buckets) {
+        if (tables == null || tables.isEmpty()) {
+            return;
+        }
+        for (String table : tables) {
+            String t = normalizeMenuMatchText(table);
+            if (t.contains("npl") || t.contains("nguyenphulieu")) {
+                buckets.get("npl").tablesHit++;
+            } else if (t.contains("thanhpham") || t.contains("nhaptp") || t.contains("xuattp")) {
+                buckets.get("tp").tablesHit++;
+            } else if (t.contains("vattu") || t.contains("nhapvt") || t.contains("xuatvt")) {
+                buckets.get("vt").tablesHit++;
+            } else if (t.contains("danhgiancc") || t.contains("danh_gia")) {
+                buckets.get("ncc").tablesHit++;
+            } else if (t.contains("kho") || t.contains("khachhang") || t.contains("nhanvien") || t.contains("bophan")) {
+                buckets.get("dm").tablesHit++;
+            }
+        }
+        for (MenuBusinessAreaBuilder builder : buckets.values()) {
+            if (builder.modules.isEmpty() && builder.tablesHit >= 2) {
+                builder.modules.add("(dữ liệu: " + builder.tablesHit + " bảng liên quan)");
+            }
+        }
+    }
+
+    private static final class MenuBusinessAreaBuilder {
+        final String name;
+        final String summary;
+        final List<String> keywords;
+        final LinkedHashSet<String> modules = new LinkedHashSet<>();
+        int tablesHit;
+
+        MenuBusinessAreaBuilder(String name, String summary, List<String> keywords) {
+            this.name = name;
+            this.summary = summary;
+            this.keywords = keywords;
+        }
+
+        boolean matches(String normalizedLabel) {
+            for (String keyword : keywords) {
+                if (normalizedLabel.contains(normalizeKeyword(keyword))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static String normalizeKeyword(String keyword) {
+            return java.text.Normalizer.normalize(String.valueOf(keyword == null ? "" : keyword), java.text.Normalizer.Form.NFD)
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("\\p{M}+", "")
+                .trim();
+        }
+
+        MenuBusinessArea build() {
+            return new MenuBusinessArea(name, summary, new ArrayList<>(modules));
+        }
+    }
+
+    private List<String> inferMenuBusinessFlows(MenuBusinessScan scan, List<MenuBusinessArea> areas) {
+        List<String> flows = new ArrayList<>();
+        String blob = normalizeMenuMatchText(String.join(" ", scan.moduleLabels()))
+            + " " + normalizeMenuMatchText(String.join(" ", scan.tables()));
+        if (matchesAny(blob, "nhap", "nhaptp", "nhapnpl", "nhapvt")) {
+            flows.add("Ghi nhận phiếu nhập → cập nhật tồn kho → đối chiếu trên báo cáo/kiểm kho.");
+        }
+        if (matchesAny(blob, "xuat", "xuattp", "xuatnpl", "xuatvt")) {
+            flows.add("Lập phiếu xuất → trừ tồn theo kho/mã hàng → theo dõi trên báo cáo xuất nhập tồn.");
+        }
+        if (matchesAny(blob, "kiem kho", "ton kho")) {
+            flows.add("Kiểm kho định kỳ → so sánh sổ sách với thực tế → xử lý chênh lệch (nếu có quy trình).");
+        }
+        if (matchesAny(blob, "danhgiancc", "danh gia", "ncc")) {
+            flows.add("Theo dõi nhà cung cấp → đánh giá chất lượng/dịch vụ → báo cáo tình trạng NCC.");
+        }
+        if (flows.isEmpty() && !areas.isEmpty()) {
+            flows.add("Người dùng chọn phân hệ trên menu → mở màn hình nghiệp vụ tương ứng → nhập liệu hoặc xem báo cáo.");
+        }
+        int formCount = scan.typeFormCounts().getOrDefault("1", 0);
+        int reportCount = scan.typeFormCounts().getOrDefault("2", 0);
+        if (formCount > 0 && reportCount > 0 && flows.size() < 4) {
+            flows.add("Kết hợp màn hình nhập liệu (phiếu/danh sách) và báo cáo truy vấn để vận hành hàng ngày.");
+        }
+        return flows.stream().limit(5).toList();
+    }
+
+    private List<String> inferMenuBusinessRoles(MenuBusinessScan scan, List<MenuBusinessArea> areas) {
+        List<String> roles = new ArrayList<>();
+        String blob = normalizeMenuMatchText(String.join(" ", scan.moduleLabels()))
+            + " " + normalizeMenuMatchText(String.join(" ", scan.tables()));
+        if (matchesAny(blob, "kho", "nhap", "xuat", "kiem kho", "npl", "thanh pham", "vat tu")) {
+            roles.add("Thủ kho / điều phối kho: thao tác phiếu nhập — xuất, kiểm kho và đối chiếu tồn.");
+        }
+        if (matchesAny(blob, "nha cung", "ncc", "danh gia")) {
+            roles.add("Bộ phận mua hàng: quản lý NCC, đánh giá và theo dõi báo cáo liên quan.");
+        }
+        if (matchesAny(blob, "bao cao", "report")) {
+            roles.add("Quản lý / kế toán: xem báo cáo tổng hợp theo kho, thời gian và mã hàng.");
+        }
+        if (roles.isEmpty() && !areas.isEmpty()) {
+            roles.add("Người dùng nghiệp vụ: thao tác theo phân hệ menu được phân quyền.");
+        }
+        return roles.stream().limit(4).toList();
+    }
+
+    private List<String> buildMenuBusinessRisksPlain(MenuBusinessScan scan) {
+        List<String> risks = new ArrayList<>();
+        if (!scan.emptyTriggerNodeIds().isEmpty()) {
+            risks.add(scan.emptyTriggerNodeIds().size()
+                + " menu có thể chưa gắn đầy đủ thao tác khi mở — nên rà soát cấu hình vận hành.");
+        }
+        if (!scan.nodesMissingI18n().isEmpty()) {
+            risks.add("Một phần menu chưa có nhãn đa ngôn ngữ ("
+                + scan.nodesMissingI18n().size() + " mục) — ảnh hưởng nếu triển khai song ngữ.");
+        }
+        if (scan.tableColumnI18nGaps() > 0) {
+            risks.add("Một số cột dữ liệu trên form chưa đủ nhãn đa ngôn ngữ.");
+        }
+        LinkedHashSet<String> dupModules = findDuplicateModuleLabels(scan.moduleLabels());
+        if (!dupModules.isEmpty()) {
+            risks.add("Có nhóm menu trùng/tương tự tên ("
+                + String.join(", ", dupModules.stream().limit(4).toList())
+                + ") — dễ gây nhầm lẫn cho người dùng.");
+        }
+        return risks;
+    }
+
+    private LinkedHashSet<String> findDuplicateModuleLabels(List<String> labels) {
+        LinkedHashSet<String> dupes = new LinkedHashSet<>();
+        Map<String, String> seen = new LinkedHashMap<>();
+        for (String label : labels) {
+            if (label == null || label.isBlank()) {
+                continue;
+            }
+            String key = normalizeMenuMatchText(label);
+            if (seen.containsKey(key)) {
+                dupes.add(seen.get(key));
+                dupes.add(label.trim());
+            } else {
+                seen.put(key, label.trim());
+            }
+        }
+        return dupes;
+    }
+
+    private void appendTechnicalMenuAnalysisAppendix(StringBuilder sb, MenuBusinessScan scan) {
+        sb.append("**Phụ lục kỹ thuật (menu JSON):**\n");
+        if (!scan.tables().isEmpty()) {
+            sb.append("- Bảng dữ liệu (").append(scan.tables().size()).append("): ")
+                .append(String.join(", ", scan.tables().stream().limit(16).toList()))
+                .append("\n");
+        }
+        if (!scan.typeFormCounts().isEmpty()) {
+            sb.append("- Loại form (type_form): ");
+            List<String> typeParts = new ArrayList<>();
+            scan.typeFormCounts().forEach((type, count) -> typeParts.add("type " + type + "=" + count));
+            sb.append(String.join(", ", typeParts.stream().limit(10).toList())).append("\n");
+        }
+        if (!scan.triggerSummaries().isEmpty()) {
+            sb.append("- Trigger / hành vi:\n");
+            for (String trigger : scan.triggerSummaries().stream().limit(8).toList()) {
+                sb.append("  - ").append(trigger.trim()).append("\n");
+            }
+        }
+        sb.append("\n");
     }
 
     /**
