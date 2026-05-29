@@ -498,9 +498,8 @@ if [ "${AI_LOCAL_LLAMA_ENABLED:-true}" != "false" ] && [ -n "${AI_LOCAL_LLAMA_MO
     if [ ! -f "$LLAMA_MODEL_FILE" ]; then
         log "ERROR: Local llama GGUF not found: $LLAMA_MODEL_FILE"
         log "  mkdir -p $SCRIPT_DIR/csm_datas/ai_local/model"
-        log "  wget -O $SCRIPT_DIR/csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf \\"
-        log "    'https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf'"
-        log "  Or set AI_LOCAL_LLAMA_MODEL_PATH in config.env to an existing .gguf file."
+        log "  ./scripts/download-ai-local-models.sh dual-3b"
+        log "  Or set AI_LOCAL_LLAMA_MODEL_PATH / AI_LOCAL_LLAMA_SEO_MODEL_PATH in config.env."
         exit 1
     fi
     log "Local llama model OK: $LLAMA_MODEL_FILE"

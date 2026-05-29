@@ -3687,6 +3687,15 @@ ${usedTitles}
 ✅ Tránh dùng AI phrases như "vị trí đắc địa", "tiềm năng sinh lời" (dùng alternatives thay thế)
 ✅ Tiêu đề nêu rõ bản chất bài viết (không clickbait)
 ✅ Bài viết khác hoàn toàn với các bài trước (tránh rập khuôn)${lmktExtraRules}
+
+========== 3 NGÔN NGỮ — 1 JSON DUY NHẤT (BẮT BUỘC CÙNG LÚC) ==========
+Trả về ĐỦ 15 field ngôn ngữ trong CÙNG 1 JSON object (không gọi thêm lần 2):
+🇻🇳 VI: title, description, content, keywords, excerpt
+🇬🇧 EN: title_en, description_en, content_en, keywords_en, excerpt_en — tiếng Anh thật, KHÁC VI
+🇨🇳 ZH: title_zh, description_zh, content_zh, keywords_zh, excerpt_zh — tiếng Trung Giản thể thật, KHÁC VI
+❗ description*/excerpt*: văn bản thuần, KHÔNG HTML
+❗ content_en/content_zh: HTML đầy đủ h3/h4/p, thoát ý, KHÔNG copy-paste từ content VI
+❗ TUYỆT ĐỐI KHÔNG để title_en=title hoặc content_en=content
 `;
 }
 
@@ -5929,9 +5938,11 @@ async function processContent(item, opts = {}) {
   // Backend có cache response 1 giờ, nếu prompt giống nhau sẽ trả về kết quả cũ
   const uniqueSeed = `[UNIQUE_${Date.now()}_${Math.random().toString(36).substr(2, 9)}]`;
   // DynamicCode chạy classic script — KHÔNG dùng import.meta (SyntaxError ngoài module)
-  const seoOneShotDisabled = typeof window !== 'undefined' && window.VITE_AI_SEO_ONE_SHOT === 'false';
+  // SEO lane: mặc định classic (getAntiAIPrompt + 1 HTTP sync) — khác hoàn toàn luồng menu/code.
+  // Chỉ bật one-shot backend khi VITE_AI_SEO_ONE_SHOT=true (seoContext, không full prompt).
+  const seoOneShotEnabled = typeof window !== 'undefined' && window.VITE_AI_SEO_ONE_SHOT === 'true';
   const oneShotFn = ctx.helperAi?.generateSeoAntiAiOneShot;
-  const useSeoOneShot = !seoOneShotDisabled && typeof oneShotFn === 'function';
+  const useSeoOneShot = seoOneShotEnabled && typeof oneShotFn === 'function';
 
   const generateFn = ctx.helperAi?.generateSeoContentWithPrompt;
   if (!useSeoOneShot && !generateFn) throw new Error("generateSeoContentWithPrompt không khả dụng");
@@ -5939,19 +5950,9 @@ async function processContent(item, opts = {}) {
 
   let prompt = null;
   if (!useSeoOneShot) {
-    const creative = await requestCreativeParams('anti_ai', {
-      industry,
-      topic: content,
-      domainKey,
-      property: ctx.project,
-      location: opts.location,
-      business: opts.business
-    }, ctx.helperAi);
-    const creativeOverrides = buildAntiAICreativeOverrides(creative);
-
+    // getAntiAIPrompt tự chọn persona/pattern ngẫu nhiên — không cần gọi creative-params riêng.
     prompt = getAntiAIPrompt(industry, content, articleHistory, {
       domainKey,
-      ...creativeOverrides,
       ...opts
     }, imagesToPrompt, uniqueSeed);
   }
@@ -5961,7 +5962,7 @@ async function processContent(item, opts = {}) {
     console.log(`[DEBUG] Prompt length: ${prompt?.length || 0} characters`);
     console.log(`[DEBUG] Prompt preview (first 500 chars):\n${prompt?.substring(0, 500)}`);
   } else {
-    console.log(`[processContent] 🚀 SEO one-shot: 1 HTTP sync (chờ JSON cuối, backend 2 bước nội bộ)`);
+    console.log(`[processContent] 🚀 SEO one-shot: 1 HTTP sync (seoContext → backend viết bài)`);
   }
   console.log(`[DEBUG] helperAi object:`, ctx.helperAi);
   
@@ -7958,8 +7959,6 @@ async function testAiLaneHealth(ctx) {
 }
 
 async function testAiLaneSeoOneShot(ctx, seoContext = {}) {
-  const helperAi = ctx?.helperAi || (typeof window !== "undefined" ? window.csmAI : null);
-  const oneShotFn = helperAi?.generateSeoAntiAiOneShot;
   const payload = {
     industry: seoContext.industry || "bat-dong-san",
     topic: seoContext.topic || "",
@@ -7972,9 +7971,19 @@ async function testAiLaneSeoOneShot(ctx, seoContext = {}) {
     throw new Error("Thiếu topic — nhập chủ đề bài SEO");
   }
 
-  // Giống guest web chat: 1 HTTP sync — client chờ đến khi backend trả JSON cuối (không async poll).
-  if (typeof oneShotFn === "function") {
-    return oneShotFn(payload, { taskType: "seo_content", preferAsync: false });
+  // Luồng SEO: build full prompt như production (getAntiAIPrompt) — 1 HTTP sync, không dùng schema placeholder backend.
+  const uniqueSeed = `[UNIQUE_${Date.now()}_${Math.random().toString(36).slice(2, 9)}]`;
+  const prompt = getAntiAIPrompt(payload.industry, payload.topic, [], {
+    domainKey: payload.domainKey,
+    property: payload.property,
+    location: payload.location,
+    business: payload.business
+  }, [], uniqueSeed);
+
+  const helperAi = ctx?.helperAi || (typeof window !== "undefined" ? window.csmAI : null);
+  const generateFn = helperAi?.generateSeoContentWithPrompt;
+  if (typeof generateFn === "function") {
+    return generateFn(prompt, { taskType: "seo_content", preferAsync: false });
   }
 
   const apiBase = resolveAiLocalApiBase(ctx);
@@ -7985,9 +7994,8 @@ async function testAiLaneSeoOneShot(ctx, seoContext = {}) {
     body: JSON.stringify({
       mode: "sync",
       async: false,
-      seoPipeline: "anti_ai_one_shot",
       taskType: "seo_content",
-      seoContext: payload
+      prompt
     })
   });
   const text = await response.text();
@@ -8286,7 +8294,15 @@ function normalizeSeoLanePayload(seo) {
 
 function buildSeoFieldChecklist(seo) {
   const data = seo && typeof seo === "object" ? seo : {};
-  return AI_LANE_SEO_REQUIRED_FIELDS.map((field) => {
+  const viContent = String(data.content || data.html_content || "").trim();
+  const viTitle = String(data.title || "").trim();
+  const localePairs = [
+    ["content_en", viContent, "EN phải khác VI"],
+    ["content_zh", viContent, "ZH phải khác VI"],
+    ["title_en", viTitle, "EN phải khác VI"],
+    ["title_zh", viTitle, "ZH phải khác VI"],
+  ];
+  const rows = AI_LANE_SEO_REQUIRED_FIELDS.map((field) => {
     const raw = data[field];
     const text = raw == null ? "" : String(raw).trim();
     const len = text.length;
@@ -8295,8 +8311,13 @@ function buildSeoFieldChecklist(seo) {
     if (field.startsWith("attributes_description") && len > 0 && (len < 120 || len > 180)) {
       note += " (nên 150–160)";
     }
-    return { field, ok: len > 0, len, note };
+    const pair = localePairs.find(([f]) => f === field);
+    if (pair && len > 0 && text === pair[1]) {
+      note += ` ⚠️ ${pair[2]}`;
+    }
+    return { field, ok: len > 0 && !(pair && text === pair[1]), len, note };
   });
+  return rows;
 }
 
 function renderAiLaneBadge(theme, ok, label, detail = "") {
@@ -8856,14 +8877,17 @@ function ensureAiLaneTestPanel() {
       return;
     }
     const ctx = resolveContext();
-    const hasSeoHelper = typeof ctx.helperAi?.generateSeoAntiAiOneShot === "function";
+    const hasSeoHelper = typeof ctx.helperAi?.generateSeoContentWithPrompt === "function";
     if (!ctx.token && !hasSeoHelper) {
       aiLaneTesterNotify(ti("⚠️ Thiếu csm-token — đăng nhập admin trước", "⚠️ Missing csm-token — login first", "⚠️ 缺少token"), "error");
       return;
     }
     saveDraft();
-    const requestBody = { seoPipeline: "anti_ai_one_shot", taskType: "seo_content", seoContext };
-    appendAiLaneTesterLog(logArea, "POST /ai-generate-seo-content", requestBody);
+    appendAiLaneTesterLog(logArea, "POST /ai-generate-seo-content", {
+      taskType: "seo_content",
+      mode: "sync",
+      prompt: "(getAntiAIPrompt — built from seoContext.topic)"
+    });
     seoProgress.style.display = "block";
     seoProgress.textContent = ti(
       "⏳ Đang chờ backend (1 HTTP sync, có thể 1–15 phút)...",

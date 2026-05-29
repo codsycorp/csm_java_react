@@ -33154,16 +33154,25 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
 
         if (seoOneShot) {
             try {
-                rawContent = fetchSeoOneShotRawContent(params, null);
+                String seoPrompt = extractPromptAsString(params);
+                if (seoPrompt != null && !seoPrompt.isBlank()) {
+                    rawContent = fetchAiRawContent(seoPrompt, null, params);
+                    if (aiSeoContentPipelineService != null) {
+                        String topicHint = AiSeoContentPipelineService.extractTopicFromPrompt(seoPrompt);
+                        rawContent = aiSeoContentPipelineService.postProcessSeoRaw(rawContent, topicHint, null);
+                    }
+                } else {
+                    rawContent = fetchSeoOneShotRawContent(params, null);
+                }
             } catch (RuntimeException e) {
                 response.set("code", 200);
                 response.set("success", false);
                 response.set("message", uiTextByLang(
                     uiLang,
-                    "Lỗi pipeline SEO one-shot: " + e.getMessage(),
-                    "SEO one-shot pipeline error: " + e.getMessage(),
-                    "SEO 一次性流水线错误：" + e.getMessage()));
-                logger.error("SEO one-shot pipeline failed: {}", e.getMessage(), e);
+                    "Lỗi tạo bài SEO: " + e.getMessage(),
+                    "SEO generation error: " + e.getMessage(),
+                    "SEO 生成错误：" + e.getMessage()));
+                logger.error("SEO lane failed: {}", e.getMessage(), e);
                 return;
             }
             if (rawContent == null || rawContent.isEmpty()) {
@@ -33171,9 +33180,9 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 response.set("success", false);
                 response.set("message", uiTextByLang(
                     uiLang,
-                    "Không nhận được nội dung hợp lệ từ pipeline SEO.",
-                    "No valid content received from SEO pipeline.",
-                    "未收到来自 SEO 流水线的有效内容。"));
+                    "Không nhận được nội dung hợp lệ từ dịch vụ SEO.",
+                    "No valid content received from SEO service.",
+                    "未收到来自 SEO 服务的有效内容。"));
                 return;
             }
             if (shouldExposeRoutingDebug(params)) {
@@ -33214,6 +33223,10 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             rawContent = isSeoContentRequest(params, prompt)
                 ? fetchAiRawContent(prompt, null, params)
                 : fetchAiRawContentWithMenuRecovery(prompt, null, params);
+            if (isSeoContentRequest(params, prompt) && aiSeoContentPipelineService != null) {
+                String topicHint = AiSeoContentPipelineService.extractTopicFromPrompt(prompt);
+                rawContent = aiSeoContentPipelineService.postProcessSeoRaw(rawContent, topicHint, null);
+            }
         } catch (RuntimeException e) {
             response.set("code", 200);
             response.set("success", false);
@@ -33274,7 +33287,7 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             Map<String, Object> params,
             AiAssistantGatewayService.ProgressListener progressListener) {
         if (params != null) {
-            params.put("_providerRoutingDecision", "local_only_seo_pipeline");
+            params.put("_providerRoutingDecision", "local_only_seo_lane");
         }
         Map<String, Object> seoContext = aiSeoContentPipelineService.extractSeoContext(params);
         return aiSeoContentPipelineService.runAntiAiOneShot(seoContext, progressListener);
@@ -36457,8 +36470,29 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             payload.put("html_content", content);
         }
         if (aiSeoContentPipelineService != null) {
+            aiSeoContentPipelineService.normalizeSeoArticleForLmktClient(payload);
             aiSeoContentPipelineService.fillMissingSeoMetaFields(payload);
         }
+    }
+
+    private boolean rejectSeoTemplateEcho(StandardResponse response, Map<String, Object> payload, String uiLang) {
+        if (payload == null || aiSeoContentPipelineService == null) {
+            return false;
+        }
+        if (!AiSeoContentPipelineService.isSeoTemplateEcho(payload)) {
+            return false;
+        }
+        response.set("code", 200);
+        response.set("success", false);
+        response.set("data", payload);
+        response.set("errorCode", "SEO_TEMPLATE_ECHO");
+        response.set("message", uiTextByLang(
+            uiLang,
+            "Model trả về mô tả schema thay vì bài viết thật — thử lại hoặc gửi full prompt từ getAntiAIPrompt.",
+            "Model returned schema placeholders instead of real article — retry or send full getAntiAIPrompt.",
+            "模型返回了 schema 占位符而非真实文章。"));
+        logger.warn("Rejected SEO template-echo payload");
+        return true;
     }
 
     private void applyLmktSeoAliasesIfNeeded(Map<String, Object> payload) {
@@ -36514,6 +36548,9 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
 
             if (isSeoOrCreativeParamsPayload(parsedResult)) {
                 applyLmktSeoAliasesIfNeeded(parsedResult);
+                if (rejectSeoTemplateEcho(response, parsedResult, uiLang)) {
+                    return;
+                }
                 response.set("code", 200);
                 response.set("success", true);
                 response.set("data", parsedResult);
@@ -36600,6 +36637,9 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
 
                     if (isSeoOrCreativeParamsPayload(parsedData)) {
                         applyLmktSeoAliasesIfNeeded(parsedData);
+                        if (rejectSeoTemplateEcho(response, parsedData, uiLang)) {
+                            return;
+                        }
                         response.set("code", 200);
                         response.set("success", true);
                         response.set("data", parsedData);
@@ -36687,6 +36727,9 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 if (parsedData != null) {
                     if (isSeoOrCreativeParamsPayload(parsedData)) {
                         applyLmktSeoAliasesIfNeeded(parsedData);
+                        if (rejectSeoTemplateEcho(response, parsedData, uiLang)) {
+                            return;
+                        }
                         response.set("code", 200);
                         response.set("success", true);
                         response.set("data", parsedData);

@@ -129,7 +129,7 @@ public class AiLocalOpsController {
     @Value("${ai.orchestration.multimodal.local-only.require-vision:false}")
     private boolean multimodalRequireVision;
 
-    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf}")
+    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-3b-instruct-q4_k_m.gguf}")
     private String localModelPath;
 
     @Value("${ai.local.llama.runtime-profile:balanced}")
@@ -247,6 +247,22 @@ public class AiLocalOpsController {
                 "~0.4-0.7GB",
                 true,
                 false,
+                "q4_k_m"));
+            reasoningCandidates.add(modelCandidate(
+                "qwen2.5-coder-3b-instruct-q4_k_m.gguf",
+                "reasoning-code",
+                "balanced",
+                "~2.0-2.4GB",
+                true,
+                true,
+                "q4_k_m"));
+            reasoningCandidates.add(modelCandidate(
+                "qwen2.5-3b-instruct-q4_k_m.gguf",
+                "reasoning-seo",
+                "balanced",
+                "~2.0-2.4GB",
+                true,
+                true,
                 "q4_k_m"));
             reasoningCandidates.add(modelCandidate(
                 "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",

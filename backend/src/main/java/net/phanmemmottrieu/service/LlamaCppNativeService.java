@@ -80,8 +80,22 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.enabled:false}")
     private boolean enabled;
 
-    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf}")
+    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-3b-instruct-q4_k_m.gguf}")
     private String modelPath;
+
+    /** SEO lane — Qwen2.5-3B-Instruct (natural language, không dùng Coder). */
+    @Value("${ai.local.llama.seo-model-path:./csm_datas/ai_local/model/qwen2.5-3b-instruct-q4_k_m.gguf}")
+    private String seoModelPath;
+
+    /** M1/8GB: chỉ giữ 1 GGUF trong RAM — swap khi đổi lane code ↔ seo. */
+    @Value("${ai.local.llama.swap-models-on-lane-change:true}")
+    private boolean swapModelsOnLaneChange;
+
+    /** Lane đang load trong JVM (code = Coder-3B, seo = Instruct-3B). */
+    public enum LocalModelLane {
+        CODE,
+        SEO
+    }
 
     @Value("${ai.local.llama.context-window:8192}")
     private int contextWindow;
@@ -166,6 +180,7 @@ public class LlamaCppNativeService implements AIProvider {
     }
 
     private volatile LlamaModel model;
+    private volatile LocalModelLane activeModelLane;
     private volatile boolean shuttingDown = false;
     private final Object modelLock = new Object();
 
@@ -249,6 +264,15 @@ public class LlamaCppNativeService implements AIProvider {
         }
 
         log.info("Local llama model path verified: {}", path);
+        Path seoPath = resolveModelPath(seoModelPath);
+        if (Files.isRegularFile(seoPath)) {
+            log.info("Local llama SEO model path verified: {}", seoPath);
+        } else {
+            log.warn("Local llama SEO model not found at {} — SEO lane sẽ fail cho đến khi có GGUF Qwen2.5-3B-Instruct",
+                seoPath);
+        }
+        log.info("Local llama dual-lane: code={} | seo={} | swapOnLaneChange={}",
+            path.getFileName(), seoPath.getFileName(), swapModelsOnLaneChange);
         log.info("Local llama profile={} effective caps: contextWindow={} (hardCap={}), maxPromptChars={} (hardCap={}), maxTokens={} (hardCap={}), batchSize={}, ubatchSize={}, gpuLayers={}, disableKvOffload={}",
             resolveRuntimeProfile(),
             effectiveContextWindow(), contextWindowHardCap,
@@ -257,8 +281,8 @@ public class LlamaCppNativeService implements AIProvider {
             effectiveBatchSize(), effectiveUbatchSize(), effectiveGpuLayers(), disableKvOffload);
         if (preloadOnStartup) {
             try {
-                ensureModelLoaded();
-                log.info("Local llama model preloaded successfully");
+                ensureModelLoaded(LocalModelLane.CODE);
+                log.info("Local llama CODE model preloaded successfully");
             } catch (Exception ex) {
                 String msg = "Failed to preload local llama model: " + ex.getMessage();
                 if (failFast) {
@@ -465,7 +489,7 @@ public class LlamaCppNativeService implements AIProvider {
      * @param maxOutputTokensCap hard cap on generated tokens (e.g. 48 for JSON classification)
      */
     public String generateContentFast(String prompt, int maxOutputTokensCap) {
-        return generateContentFast(prompt, maxOutputTokensCap, null);
+        return generateContentFast(prompt, maxOutputTokensCap, null, LocalModelLane.CODE);
     }
 
     /**
@@ -473,7 +497,35 @@ public class LlamaCppNativeService implements AIProvider {
      * Pass empty string to skip the default system prompt entirely.
      */
     public String generateContentFast(String prompt, int maxOutputTokensCap, String systemPromptOverride) {
-        return generateContentFastWithTaskTracking(prompt, maxOutputTokensCap, null, systemPromptOverride);
+        return generateContentFast(prompt, maxOutputTokensCap, systemPromptOverride, LocalModelLane.CODE);
+    }
+
+    public String generateContentFast(
+            String prompt,
+            int maxOutputTokensCap,
+            String systemPromptOverride,
+            LocalModelLane lane) {
+        return generateContentFastWithTaskTracking(prompt, maxOutputTokensCap, null, systemPromptOverride, lane);
+    }
+
+    /** SEO lane — Qwen2.5-3B-Instruct. */
+    public String generateContentFastForSeo(String prompt, int maxOutputTokensCap, String systemPromptOverride) {
+        return generateContentFast(prompt, maxOutputTokensCap, systemPromptOverride, LocalModelLane.SEO);
+    }
+
+    public boolean isSeoModelAvailable() {
+        if (!enabled) {
+            return false;
+        }
+        return Files.isRegularFile(resolveModelPath(seoModelPath));
+    }
+
+    public LocalModelLane getActiveModelLane() {
+        return activeModelLane;
+    }
+
+    public String getSeoModelPathConfig() {
+        return String.valueOf(seoModelPath == null ? "" : seoModelPath);
     }
     
     /**
@@ -488,12 +540,22 @@ public class LlamaCppNativeService implements AIProvider {
             int maxOutputTokensCap,
             String requestId,
             String systemPromptOverride) {
+        return generateContentFastWithTaskTracking(
+            prompt, maxOutputTokensCap, requestId, systemPromptOverride, LocalModelLane.CODE);
+    }
+
+    public String generateContentFastWithTaskTracking(
+            String prompt,
+            int maxOutputTokensCap,
+            String requestId,
+            String systemPromptOverride,
+            LocalModelLane lane) {
         if (requestId != null && !requestId.isBlank()) {
             registerActiveInferenceTask(requestId);
         }
-        
+
         try {
-            return generateContentFastInternal(prompt, maxOutputTokensCap, systemPromptOverride);
+            return generateContentFastInternal(prompt, maxOutputTokensCap, systemPromptOverride, lane);
         } finally {
             if (requestId != null && !requestId.isBlank()) {
                 unregisterActiveInferenceTask(requestId);
@@ -502,16 +564,28 @@ public class LlamaCppNativeService implements AIProvider {
     }
 
     private String generateContentFastInternal(String prompt, int maxOutputTokensCap) {
-        return generateContentFastInternal(prompt, maxOutputTokensCap, null);
+        return generateContentFastInternal(prompt, maxOutputTokensCap, null, LocalModelLane.CODE);
     }
 
     private String generateContentFastInternal(String prompt, int maxOutputTokensCap, String systemPromptOverride) {
+        return generateContentFastInternal(prompt, maxOutputTokensCap, systemPromptOverride, LocalModelLane.CODE);
+    }
+
+    private String generateContentFastInternal(
+            String prompt,
+            int maxOutputTokensCap,
+            String systemPromptOverride,
+            LocalModelLane lane) {
         String safePrompt = String.valueOf(prompt == null ? "" : prompt).trim();
         if (safePrompt.isBlank()) {
             return createErrorJson("Prompt khong duoc de trong", "INVALID_PROMPT");
         }
-        if (!isAvailable()) {
-            return createErrorJson("Local llama provider chua san sang", "LOCAL_PROVIDER_UNAVAILABLE");
+        if (!isAvailableForLane(lane)) {
+            return createErrorJson(
+                lane == LocalModelLane.SEO
+                    ? "Local llama SEO model chua san sang (kiem tra ai.local.llama.seo-model-path)"
+                    : "Local llama provider chua san sang",
+                "LOCAL_PROVIDER_UNAVAILABLE");
         }
         if (isCircuitOpen()) {
             return createErrorJson("Local llama circuit open", "CIRCUIT_OPEN");
@@ -539,7 +613,7 @@ public class LlamaCppNativeService implements AIProvider {
         int cappedTokens = Math.max(16, effectiveCap);
         long startedAt = markRequestStart(safePrompt);
         try {
-            String output = runLocalCompletionWithCap(safePrompt, cappedTokens, isJsonForced);
+            String output = runLocalCompletionWithCap(safePrompt, cappedTokens, isJsonForced, lane);
             requestCount.incrementAndGet();
             recordSuccess();
             markRequestFinish(startedAt, output, null);
@@ -587,6 +661,10 @@ public class LlamaCppNativeService implements AIProvider {
         out.put("circuitCooldownMs", circuitCooldownMs);
         out.put("circuitCooldownRemainingMs", cooldownRemainingMs);
         out.put("modelPath", String.valueOf(modelPath == null ? "" : modelPath));
+        out.put("seoModelPath", String.valueOf(seoModelPath == null ? "" : seoModelPath));
+        out.put("seoModelAvailable", isSeoModelAvailable());
+        out.put("activeModelLane", activeModelLane == null ? "" : activeModelLane.name());
+        out.put("swapModelsOnLaneChange", swapModelsOnLaneChange);
         out.put("effectiveContextWindow", effectiveContextWindow());
         out.put("effectiveMaxTokens", effectiveMaxTokens());
         out.put("effectiveMaxPromptChars", effectiveMaxPromptChars());
@@ -618,8 +696,16 @@ public class LlamaCppNativeService implements AIProvider {
     }
 
     private String runLocalCompletionWithCap(String prompt, int nPredictCap, boolean isJsonForced) {
+        return runLocalCompletionWithCap(prompt, nPredictCap, isJsonForced, LocalModelLane.CODE);
+    }
+
+    private String runLocalCompletionWithCap(
+            String prompt,
+            int nPredictCap,
+            boolean isJsonForced,
+            LocalModelLane lane) {
         InferenceParameters inference = buildInferenceParameters(prompt, false, isJsonForced, nPredictCap);
-        LlamaModel localModel = ensureModelLoaded();
+        LlamaModel localModel = ensureModelLoaded(lane);
         synchronized (modelLock) {
             return localModel.complete(inference);
         }
@@ -627,7 +713,7 @@ public class LlamaCppNativeService implements AIProvider {
 
     private String runLocalCompletion(String prompt, boolean degradedMode, boolean isJsonForced) {
         InferenceParameters inference = buildInferenceParameters(prompt, degradedMode, isJsonForced, 0);
-        LlamaModel localModel = ensureModelLoaded();
+        LlamaModel localModel = ensureModelLoaded(LocalModelLane.CODE);
         synchronized (modelLock) {
             return localModel.complete(inference);
         }
@@ -641,7 +727,7 @@ public class LlamaCppNativeService implements AIProvider {
             String requestId,
             LocalTokenStreamListener listener) {
         InferenceParameters inference = buildInferenceParameters(prompt, degradedMode, isJsonForced, maxOutputTokensCap);
-        LlamaModel localModel = ensureModelLoaded();
+        LlamaModel localModel = ensureModelLoaded(LocalModelLane.CODE);
         StringBuilder accumulated = new StringBuilder();
         long inferStartedAt = System.currentTimeMillis();
         boolean firstTokenEmitted = false;
@@ -754,6 +840,7 @@ public class LlamaCppNativeService implements AIProvider {
 
         LlamaModel toClose = model;
         model = null;
+        activeModelLane = null;
         if (toClose == null) {
             return;
         }
@@ -770,23 +857,50 @@ public class LlamaCppNativeService implements AIProvider {
     }
 
     private LlamaModel ensureModelLoaded() {
-        if (shuttingDown) {
-            throw new IllegalStateException("Local llama provider is shutting down");
+        return ensureModelLoaded(LocalModelLane.CODE);
+    }
+
+    private boolean isAvailableForLane(LocalModelLane lane) {
+        if (!enabled) {
+            return false;
         }
-        LlamaModel current = model;
-        if (current != null) {
-            return current;
+        if (lane == LocalModelLane.SEO) {
+            return isSeoModelAvailable();
         }
+        return isAvailable();
+    }
+
+    private String configuredPathForLane(LocalModelLane lane) {
+        if (lane == LocalModelLane.SEO) {
+            String seo = String.valueOf(seoModelPath == null ? "" : seoModelPath).trim();
+            if (!seo.isBlank()) {
+                return seo;
+            }
+        }
+        return modelPath;
+    }
+
+    private LlamaModel ensureModelLoaded(LocalModelLane lane) {
+        LocalModelLane target = lane == null ? LocalModelLane.CODE : lane;
         synchronized (modelLock) {
             if (shuttingDown) {
                 throw new IllegalStateException("Local llama provider is shutting down");
             }
-            if (model != null) {
+            if (model != null && activeModelLane == target) {
                 return model;
             }
-            Path path = resolveModelPath(modelPath);
+            if (model != null && activeModelLane != target) {
+                log.info("Swapping local llama model lane {} -> {} (swap={})",
+                    activeModelLane, target, swapModelsOnLaneChange);
+                closeModelQuietly(model);
+                model = null;
+                activeModelLane = null;
+            }
+
+            Path path = resolveModelPath(configuredPathForLane(target));
             if (!Files.isRegularFile(path)) {
-                throw new IllegalStateException("Model GGUF not found: " + path);
+                throw new IllegalStateException("Model GGUF not found for lane "
+                    + target + ": " + path);
             }
 
             ModelParameters parameters = new ModelParameters()
@@ -805,9 +919,22 @@ public class LlamaCppNativeService implements AIProvider {
                 parameters.disableKvOffload();
             }
 
-            log.info("Loading local GGUF model via llama.cpp JNI: {}", path.toAbsolutePath());
+            log.info("Loading local GGUF model via llama.cpp JNI (lane={}): {}",
+                target, path.toAbsolutePath());
             model = new LlamaModel(parameters);
+            activeModelLane = target;
             return model;
+        }
+    }
+
+    private static void closeModelQuietly(LlamaModel toClose) {
+        if (toClose == null) {
+            return;
+        }
+        try {
+            toClose.close();
+        } catch (Exception ignored) {
+            // ignore
         }
     }
 
@@ -1018,6 +1145,10 @@ public class LlamaCppNativeService implements AIProvider {
 
     public int getEffectiveMaxTokensLimit() {
         return effectiveMaxTokens();
+    }
+
+    public int getMaxTokensHardCap() {
+        return Math.max(256, maxTokensHardCap);
     }
 
     private boolean detectJsonExpectation(String prompt) {

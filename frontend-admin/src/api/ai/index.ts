@@ -207,6 +207,8 @@ export type SeoAntiAiOneShotContext = {
 	location?: string;
 	business?: string;
 	seed?: string;
+	/** Full getAntiAIPrompt() — ưu tiên hơn seoPipeline compact backend */
+	prompt?: string;
 };
 
 /** LMKT anti-AI: một HTTP sync — backend 2 bước nội bộ, client nhận JSON cuối một lần. */
@@ -215,13 +217,18 @@ export async function generateSeoAntiAiOneShot(
 	options?: GenerateSeoContentOptions,
 ) {
 	try {
-		const body = {
+		const prompt = String(seoContext?.prompt || "").trim();
+		const body: Record<string, unknown> = {
 			mode: "sync",
 			async: false,
-			seoPipeline: "anti_ai_one_shot",
 			taskType: options?.taskType || "seo_content",
-			seoContext,
 		};
+		if (prompt) {
+			body.prompt = prompt;
+		} else {
+			body.seoPipeline = "anti_ai_one_shot";
+			body.seoContext = seoContext;
+		}
 		if (options?.preferAsync === true) {
 			return await submitSeoContentJobAsync(body, options);
 		}

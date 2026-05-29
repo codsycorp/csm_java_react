@@ -2257,9 +2257,14 @@ Rules:
    */
   private static final String LMKT_SEO_SYSTEM_PROMPT =
       "You are an expert marketing and SEO content writer for LMKT automation. "
-          + "Follow the JSON output schema defined in the user prompt exactly — field names, nesting, and languages. "
-          + "Return ONLY one valid JSON object. No markdown fences, no explanation, "
-          + "no schema templates, no extra text before or after the JSON.";
+          + "Write REAL article content based on SOURCE_TEXT in the user prompt — never copy schema descriptions or placeholder examples. "
+          + "Return ONE valid JSON object with ALL required fields in THREE languages in a single response: "
+          + "Vietnamese (title, description, content, keywords, excerpt), "
+          + "English (title_en, description_en, content_en, keywords_en, excerpt_en), "
+          + "and Simplified Chinese (title_zh, description_zh, content_zh, keywords_zh, excerpt_zh). "
+          + "English and Chinese fields MUST be real translations — never copy Vietnamese text. "
+          + "Follow the JSON output schema defined in the user prompt exactly. "
+          + "No markdown fences, no explanation, no placeholder text, no extra text before or after the JSON.";
 
   private static final String CREATIVE_PARAMS_SYSTEM_PROMPT =
       "You are a creative-parameter selector for LMKT marketing content. "
@@ -2293,6 +2298,9 @@ Rules:
 
     @Value("${ai.seo.article.max-tokens:4096}")
     private int seoArticleMaxTokens;
+
+  @Value("${ai.seo.locale-translate.max-tokens:768}")
+  private int seoLocaleTranslateMaxTokens;
 
   public boolean isCreativeParamsRequest(String prompt) {
     return String.valueOf(prompt == null ? "" : prompt).contains("[CREATIVE_PARAMS_REQUEST]");
@@ -2352,8 +2360,11 @@ Rules:
       return cachedResp;
     }
 
-    if (localOnlyEnabled && (llamaCppNativeService == null || !llamaCppNativeService.isAvailable())) {
-      return createErrorJson("Local AI provider chưa sẵn sàng (local-only mode)", "LOCAL_PROVIDER_UNAVAILABLE");
+    if (localOnlyEnabled && (llamaCppNativeService == null
+        || !llamaCppNativeService.isSeoModelAvailable())) {
+      return createErrorJson(
+          "Local SEO model (Qwen2.5-3B-Instruct) chưa sẵn sàng — kiểm tra ai.local.llama.seo-model-path",
+          "LOCAL_SEO_MODEL_UNAVAILABLE");
     }
 
     if (isCreativeParamsRequest(trimmedPrompt)) {
@@ -2367,16 +2378,18 @@ Rules:
         1,
         progressI18n("copilot.progress.message.local_inference", null, null, null)));
 
-    int tokenCap = llamaCppNativeService != null
-        ? llamaCppNativeService.getEffectiveMaxTokensLimit()
-        : Math.max(4096, maxOutputTokens);
-    int seoOutputTokens = Math.max(256, Math.min(seoArticleMaxTokens, tokenCap));
+    int seoOutputTokens = trimmedPrompt.contains("[SEO_LOCALE_TRANSLATE]")
+        ? resolveSeoLocaleTranslateOutputTokens()
+        : resolveSeoArticleOutputTokens();
+    log.info("SEO generateSeoContent max_output_tokens={} (locale={})",
+        seoOutputTokens, trimmedPrompt.contains("[SEO_LOCALE_TRANSLATE]"));
     return callLocalProviderWithContext(
         trimmedPrompt,
         seoOutputTokens,
         directTemperature,
         progressListener,
-        resolveSeoSystemPrompt(trimmedPrompt));
+        resolveSeoSystemPrompt(trimmedPrompt),
+        LlamaCppNativeService.LocalModelLane.SEO);
   }
 
   /** Unwrap llama chat-completions / provider JSON → plain assistant text (SEO article JSON). */
@@ -2405,11 +2418,37 @@ Rules:
     return createErrorJsonInternal(message, errorCode);
   }
 
+  /** SEO trilingual JSON — dùng ai.seo.article.max-tokens, không bị cap bởi ai.local.llama.max-tokens (768 M1). */
+  private int resolveSeoArticleOutputTokens() {
+    int configured = Math.max(768, seoArticleMaxTokens);
+    if (llamaCppNativeService == null) {
+      return configured;
+    }
+    int hardCap = llamaCppNativeService.getMaxTokensHardCap();
+    return Math.min(configured, hardCap);
+  }
+
+  /** Dịch EN/ZH — JSON nhỏ (2–4 keys), cap thấp hơn bài VI. */
+  private int resolveSeoLocaleTranslateOutputTokens() {
+    int configured = Math.max(256, seoLocaleTranslateMaxTokens);
+    if (llamaCppNativeService == null) {
+      return configured;
+    }
+    int hardCap = llamaCppNativeService.getMaxTokensHardCap();
+    return Math.min(configured, hardCap);
+  }
+
   /** Pick system prompt: simple html_content SEO vs LMKT custom JSON schema (content, facebook_post, …). */
   private String resolveSeoSystemPrompt(String prompt) {
     String normalized = String.valueOf(prompt == null ? "" : prompt).toLowerCase(Locale.ROOT);
     if (normalized.contains("[creative_params_request]")) {
       return CREATIVE_PARAMS_SYSTEM_PROMPT;
+    }
+    if (normalized.contains("[seo_locale_translate]")) {
+      return "You are a professional EN/ZH translator for real estate SEO content. "
+          + "Translate Vietnamese source into real English and Simplified Chinese. "
+          + "Return ONLY one valid JSON object with the locale fields requested. "
+          + "Never copy Vietnamese text into _en or _zh fields. No markdown.";
     }
     boolean asksForContentField = normalized.contains("\"content\"")
         || normalized.contains("`content`")
@@ -2932,7 +2971,7 @@ Rules:
   // Local llama.cpp provider (replaces Gemini/OpenAI when local-only enabled)
   // ═══════════════════════════════════════════════════════════════════════════
   private String callLocalProviderWithContext(String prompt, int maxTokens, double temperature, ProgressListener progressListener) {
-    return callLocalProviderWithContext(prompt, maxTokens, temperature, progressListener, null);
+    return callLocalProviderWithContext(prompt, maxTokens, temperature, progressListener, null, LlamaCppNativeService.LocalModelLane.CODE);
   }
 
   private String callLocalProviderWithContext(
@@ -2941,7 +2980,26 @@ Rules:
       double temperature,
       ProgressListener progressListener,
       String systemPromptOverride) {
-    if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
+    return callLocalProviderWithContext(
+        prompt, maxTokens, temperature, progressListener, systemPromptOverride, LlamaCppNativeService.LocalModelLane.CODE);
+  }
+
+  private String callLocalProviderWithContext(
+      String prompt,
+      int maxTokens,
+      double temperature,
+      ProgressListener progressListener,
+      String systemPromptOverride,
+      LlamaCppNativeService.LocalModelLane modelLane) {
+    if (llamaCppNativeService == null) {
+      return createErrorJson("Local AI provider chưa sẵn sàng (llama.cpp)", "LOCAL_PROVIDER_UNAVAILABLE");
+    }
+    if (modelLane == LlamaCppNativeService.LocalModelLane.SEO && !llamaCppNativeService.isSeoModelAvailable()) {
+      return createErrorJson(
+          "Local SEO model chưa sẵn sàng — đặt qwen2.5-3b-instruct-q4_k_m.gguf vào ai.local.llama.seo-model-path",
+          "LOCAL_SEO_MODEL_UNAVAILABLE");
+    }
+    if (modelLane == LlamaCppNativeService.LocalModelLane.CODE && !llamaCppNativeService.isAvailable()) {
       return createErrorJson("Local AI provider chưa sẵn sàng (llama.cpp)", "LOCAL_PROVIDER_UNAVAILABLE");
     }
     String safePrompt = prompt == null ? "" : prompt.trim();
@@ -2962,13 +3020,18 @@ Rules:
         1,
         progressI18n("copilot.progress.message.local_inference", null, null, null)));
     try {
-      int tokenCap = llamaCppNativeService != null
-          ? llamaCppNativeService.getEffectiveMaxTokensLimit()
-          : localLlamaMaxTokens;
-      int outTokens = Math.max(128, Math.min(Math.max(256, maxTokens), tokenCap));
+      int globalCap = llamaCppNativeService.getEffectiveMaxTokensLimit();
+      int hardCap = llamaCppNativeService.getMaxTokensHardCap();
+      int desired = Math.max(256, maxTokens);
+      // SEO lane passes ai.seo.article.max-tokens (> global 768 on M1) — honor up to hard cap.
+      int outTokens = desired > globalCap
+          ? Math.min(desired, hardCap)
+          : Math.min(desired, globalCap);
+      log.debug("Local provider out_tokens={} (requested={} globalCap={} hardCap={})",
+          outTokens, maxTokens, globalCap, hardCap);
       String raw = systemPromptOverride != null
-          ? llamaCppNativeService.generateContentFast(fittedPrompt, outTokens, systemPromptOverride)
-          : llamaCppNativeService.generateContentFast(fittedPrompt, outTokens);
+          ? llamaCppNativeService.generateContentFast(fittedPrompt, outTokens, systemPromptOverride, modelLane)
+          : llamaCppNativeService.generateContentFast(fittedPrompt, outTokens, null, modelLane);
       String text = extractResultTextFromWrappedJson(raw);
       if (text == null || text.isBlank()) {
         text = raw == null ? "" : raw.trim();

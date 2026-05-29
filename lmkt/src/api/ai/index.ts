@@ -177,32 +177,39 @@ async function submitSeoContentJobAsync(
 }
 
 export type SeoAntiAiOneShotContext = {
-	industry: string;
-	topic: string;
+	industry?: string;
+	topic?: string;
 	content?: string;
 	domainKey?: string;
 	property?: string;
 	location?: string;
 	business?: string;
 	seed?: string;
+	/** Full prompt từ getAntiAIPrompt — ưu tiên hơn seoContext-only */
+	prompt?: string;
 };
 
 /**
- * LMKT anti-AI SEO: một HTTP sync — client chờ đến khi backend trả JSON cuối (2 bước inference nội bộ).
- * Luồng tách biệt `/ai-code-stream` (menu/code SSE). Không dùng async job poll trừ khi preferAsync: true.
+ * LMKT anti-AI SEO (tùy chọn): một HTTP sync — client gửi seoContext, chờ JSON bài viết đầy đủ.
+ * Luồng production mặc định: generateSeoContentWithPrompt(getAntiAIPrompt(...)) — tách biệt menu/code SSE.
  */
 export async function generateSeoAntiAiOneShot(
 	seoContext: SeoAntiAiOneShotContext,
 	options?: GenerateSeoContentOptions,
 ) {
 	try {
-		const body = {
+		const prompt = String(seoContext?.prompt || "").trim();
+		const body: Record<string, unknown> = {
 			mode: "sync",
 			async: false,
-			seoPipeline: "anti_ai_one_shot",
 			taskType: options?.taskType || "seo_content",
-			seoContext,
 		};
+		if (prompt) {
+			body.prompt = prompt;
+		} else {
+			body.seoPipeline = "anti_ai_one_shot";
+			body.seoContext = seoContext;
+		}
 		if (options?.preferAsync === true) {
 			return await submitSeoContentJobAsync(body, options);
 		}

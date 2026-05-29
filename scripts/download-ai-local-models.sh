@@ -6,6 +6,7 @@
 #   ./scripts/download-ai-local-models.sh strong         # dev machine 32GB
 #   ./scripts/download-ai-local-models.sh vision-weak    # SmolVLM2-256M video only
 #   ./scripts/download-ai-local-models.sh embed          # nomic embed only
+#   ./scripts/download-ai-local-models.sh dual-3b       # Coder-3B + Instruct-3B (M1 dual-lane)
 #   ./scripts/download-ai-local-models.sh list           # show disk usage
 #
 # Requires: curl OR huggingface-cli (pip install huggingface_hub)
@@ -50,6 +51,16 @@ download_hf() {
   done
 }
 
+download_reasoning_coder_3b() {
+  download_hf "Qwen/Qwen2.5-Coder-3B-Instruct-GGUF" \
+    "qwen2.5-coder-3b-instruct-q4_k_m.gguf"
+}
+
+download_reasoning_instruct_3b_seo() {
+  download_hf "Qwen/Qwen2.5-3B-Instruct-GGUF" \
+    "qwen2.5-3b-instruct-q4_k_m.gguf"
+}
+
 download_reasoning_1_5b() {
   download_hf "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF" \
     "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
@@ -88,6 +99,11 @@ list_models() {
 }
 
 case "$PROFILE" in
+  dual-3b|m1|3b)
+    log "Profile dual-3b — CODE Coder-3B + SEO Instruct-3B (Q4_K_M, ~4GB total)"
+    download_reasoning_coder_3b
+    download_reasoning_instruct_3b_seo
+    ;;
   5gb|weak)
     log "Profile 5gb — reasoning 1.5B + vision SmolVLM2-256M-Video (sidecar, on-demand)"
     download_reasoning_1_5b
@@ -125,7 +141,7 @@ case "$PROFILE" in
     ;;
   *)
     echo "Unknown profile: $PROFILE"
-    echo "Profiles: 5gb | strong | vision-weak | vision-strong | embed | ultra | list"
+    echo "Profiles: dual-3b | 5gb | strong | vision-weak | vision-strong | embed | ultra | list"
     exit 1
     ;;
 esac
