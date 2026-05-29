@@ -47,6 +47,9 @@ public class AiScopedContextIngestionService {
     @Autowired
     private AiBusinessMemoryVectorService businessMemoryVectorService;
 
+    @Autowired(required = false)
+    private AiGraphRagService aiGraphRagService;
+
     @Autowired
     private RequestContextTracer contextTracer;
 
@@ -378,6 +381,7 @@ public class AiScopedContextIngestionService {
                 if (pruneOldIndexes) {
                     businessMemoryVectorService.pruneDynamicContext(asyncAppId);
                 }
+                ingestGraphFromCode(asyncAppId, "dyn_ctx_" + asyncSourceSuffix, trimmedCode, asyncScopeMask);
                 largeCodeContentHashByEditorKey.put(taskKey, contentHash);
                 task.future.complete(done);
 
@@ -554,6 +558,7 @@ public class AiScopedContextIngestionService {
             if (pruneOldIndexes) {
                 businessMemoryVectorService.pruneDynamicContext(appId);
             }
+            ingestGraphFromCode(appId, "dyn_ctx_currentCode", currentCode, scopeMask);
         } catch (Exception e) {
             result.success = false;
             result.status = "failed";
@@ -610,6 +615,7 @@ public class AiScopedContextIngestionService {
             if (pruneOldIndexes) {
                 businessMemoryVectorService.pruneDynamicContext(appId);
             }
+            ingestGraphFromMenu(appId, "dyn_ctx_currentMenu", currentMenu, scopeMask);
         } catch (Exception e) {
             result.success = false;
             result.status = "failed";
@@ -639,6 +645,28 @@ public class AiScopedContextIngestionService {
         });
 
         return result;
+    }
+
+    private void ingestGraphFromCode(String appId, String sourceName, String code, int scopeMask) {
+        if (aiGraphRagService == null || !aiGraphRagService.isEnabled()) {
+            return;
+        }
+        try {
+            aiGraphRagService.ingestFromCode(appId, sourceName, code, scopeMask);
+        } catch (Exception ex) {
+            log.debug("GraphRAG code ingest skipped appId={}: {}", appId, ex.getMessage());
+        }
+    }
+
+    private void ingestGraphFromMenu(String appId, String sourceName, String menuJson, int scopeMask) {
+        if (aiGraphRagService == null || !aiGraphRagService.isEnabled()) {
+            return;
+        }
+        try {
+            aiGraphRagService.ingestFromMenu(appId, sourceName, menuJson, scopeMask);
+        } catch (Exception ex) {
+            log.debug("GraphRAG menu ingest skipped appId={}: {}", appId, ex.getMessage());
+        }
     }
 
     private String trimForIngestion(String content) {

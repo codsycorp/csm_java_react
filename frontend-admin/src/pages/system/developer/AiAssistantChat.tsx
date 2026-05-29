@@ -7265,6 +7265,13 @@ export default function AiAssistantChat({
 								const retrievalMaxChars = Number((evt as any).retrievalMaxChars || 0);
 								const scopeSummary = String((evt as any).scopeSummary || "").trim();
 								const retrievalEngineLabel = String((evt as any).retrievalEngineLabel || "").trim();
+								const graphRagEnabled = Boolean((evt as any).graphRagEnabled);
+								const graphRagNodeCount = Number((evt as any).graphRagNodeCount || 0);
+								const graphRagEdgeCount = Number((evt as any).graphRagEdgeCount || 0);
+								const graphRagCommunityCount = Number((evt as any).graphRagCommunityCount || 0);
+								const graphRagSeedNodes = Number((evt as any).graphRagSeedNodes || 0);
+								const graphRagExpandedNodes = Number((evt as any).graphRagExpandedNodes || 0);
+								const graphRagChars = Number((evt as any).graphRagChars || 0);
 								const retrievalQuery = String((evt as any).retrievalQuery || "").trim();
 								const menuSignals = Array.isArray((evt as any).menuSignals)
 									? (evt as any).menuSignals.map((item: unknown) => String(item || "").trim()).filter(Boolean).slice(0, 4)
@@ -7410,6 +7417,13 @@ export default function AiAssistantChat({
 								if (symbolQueries.length > 0) {
 									detailParts.push(buildPrefixedList("neo symbol", "symbol probes", "符号探针", symbolQueries));
 								}
+								if (graphRagEnabled && (graphRagNodeCount > 0 || graphRagExpandedNodes > 0 || graphRagCommunityCount > 0)) {
+									detailParts.push(uiText(
+										`GraphRAG: ${graphRagNodeCount} node · ${graphRagEdgeCount} cạnh · ${graphRagCommunityCount} community · seed ${graphRagSeedNodes} → mở rộng ${graphRagExpandedNodes}${graphRagChars > 0 ? ` · ${graphRagChars} chars` : ""}`,
+										`GraphRAG: ${graphRagNodeCount} nodes · ${graphRagEdgeCount} edges · ${graphRagCommunityCount} communities · seed ${graphRagSeedNodes} → expanded ${graphRagExpandedNodes}${graphRagChars > 0 ? ` · ${graphRagChars} chars` : ""}`,
+										`GraphRAG: ${graphRagNodeCount} 节点 · ${graphRagEdgeCount} 边 · ${graphRagCommunityCount} 社区 · 种子 ${graphRagSeedNodes} → 扩展 ${graphRagExpandedNodes}${graphRagChars > 0 ? ` · ${graphRagChars} 字符` : ""}`,
+									));
+								}
 								if (targetedQueries.length > 0) {
 									detailParts.push(buildPrefixedList("neo đích", "targeted probes", "定向探针", targetedQueries));
 								}
@@ -7428,7 +7442,9 @@ export default function AiAssistantChat({
 									if (isMenuSearchFlow) {
 										const normalizedEngineLabel = retrievalEngineLabel.toLowerCase();
 										if (!normalizedEngineLabel || normalizedEngineLabel.includes("code scope") || normalizedEngineLabel.includes("symbol retrieval")) {
-											return "menu schema + trigger retrieval";
+											return graphRagEnabled
+												? "menu schema + graphRAG + trigger retrieval"
+												: "menu schema + trigger retrieval";
 										}
 									}
 									return retrievalEngineLabel || scopeSummary;
@@ -7451,17 +7467,23 @@ export default function AiAssistantChat({
 								});
 								appendComposerActivity({
 									kind: "search",
-									icon: "🔎",
+									icon: graphRagEnabled ? "🕸️" : "🔎",
 									label: uiText(
-										retrievalHits.length > 0
-											? `Searched Lucene · ${retrievalHits.slice(0, 2).join(" | ")}`
-											: (detailParts.length > 0 ? detailParts.join(" · ") : "Searched workspace context"),
-										retrievalHits.length > 0
-											? `Searched Lucene · ${retrievalHits.slice(0, 2).join(" | ")}`
-											: (detailParts.length > 0 ? detailParts.join(" · ") : "Searched workspace context"),
-										retrievalHits.length > 0
-											? `搜索 Lucene · ${retrievalHits.slice(0, 2).join(" | ")}`
-											: (detailParts.length > 0 ? detailParts.join(" · ") : "搜索工作区上下文"),
+										graphRagEnabled && graphRagExpandedNodes > 0
+											? `GraphRAG · ${graphRagExpandedNodes} node · ${graphRagCommunityCount} community`
+											: (retrievalHits.length > 0
+												? `Searched Lucene · ${retrievalHits.slice(0, 2).join(" | ")}`
+												: (detailParts.length > 0 ? detailParts.join(" · ") : "Searched workspace context")),
+										graphRagEnabled && graphRagExpandedNodes > 0
+											? `GraphRAG · ${graphRagExpandedNodes} nodes · ${graphRagCommunityCount} communities`
+											: (retrievalHits.length > 0
+												? `Searched Lucene · ${retrievalHits.slice(0, 2).join(" | ")}`
+												: (detailParts.length > 0 ? detailParts.join(" · ") : "Searched workspace context")),
+										graphRagEnabled && graphRagExpandedNodes > 0
+											? `GraphRAG · ${graphRagExpandedNodes} 节点 · ${graphRagCommunityCount} 社区`
+											: (retrievalHits.length > 0
+												? `搜索 Lucene · ${retrievalHits.slice(0, 2).join(" | ")}`
+												: (detailParts.length > 0 ? detailParts.join(" · ") : "搜索工作区上下文")),
 									),
 									status: "done",
 								});

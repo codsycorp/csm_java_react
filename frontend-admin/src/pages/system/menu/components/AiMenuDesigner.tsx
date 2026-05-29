@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Card, Grid, Input, Progress, message, Select, Space, Switch, Tag, Tooltip } from "antd";
+import { Alert, Button, Card, Grid, Input, message, Select, Space, Switch, Tag, Tooltip } from "antd";
 import CodeMirror from "#src/components/editor/CodeMirrorWithAiAssistant";
 import { json } from "@codemirror/lang-json";
 import { vscodeDark, vscodeLight } from "@uiw/codemirror-theme-vscode";
@@ -3373,7 +3373,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   // ── Common state ──────────────────────────────────────────────────────────
   const [requestText, setRequestText] = useState("");
   const [latestAiAssistantPrompt, setLatestAiAssistantPrompt] = useState("");
-  const [latestAiAssistantAttachmentCount, setLatestAiAssistantAttachmentCount] = useState(0);
   const [storedRequest, setStoredRequest] = useState("");
   const [storedRecordMeta, setStoredRecordMeta] = useState<AiRequestRecord | null>(null);
   const [aiResultText, setAiResultText] = useState("");
@@ -4702,16 +4701,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     () => transformMenuTriggers(Array.isArray(currentMenus) ? currentMenus : [], "decode"),
     [currentMenus],
   );
-  const latestAiAssistantPromptPreview = useMemo(
-    () => compactAiRealtimeText(latestAiAssistantPrompt, 220),
-    [latestAiAssistantPrompt],
-  );
-
   const handleAiAssistantRequirementMessage = (payload: AiAssistantUserMessagePayload) => {
     const nextText = String(payload?.message || "").trim();
     const derivedContextFiles = mapAiAssistantAttachmentsToContextFiles(payload?.attachments || []);
-    const attachmentCount = Array.isArray(payload?.attachments) ? payload.attachments.length : 0;
-    setLatestAiAssistantAttachmentCount(attachmentCount);
     if (nextText) {
       setLatestAiAssistantPrompt(nextText);
       setRequestText(nextText);
@@ -4727,20 +4719,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         return merged.slice(0, MAX_CONTEXT_FILES);
       });
     }
-    appendAiRealtimeLogs([{
-      level: "info",
-      message: uiText(
-        "Đã đồng bộ yêu cầu từ chat AI vào menu designer",
-        "Synced AI chat request into menu designer",
-        "已将 AI 聊天请求同步到菜单设计器",
-      ),
-      detail: [
-        nextText ? `prompt=${compactAiRealtimeText(nextText, 140)}` : "",
-        attachmentCount > 0 ? `attachments=${attachmentCount}` : "",
-        derivedContextFiles.length > 0 ? `contextFiles+=${derivedContextFiles.length}` : "",
-      ].filter(Boolean).join(" • "),
-      fingerprint: buildAiRealtimeFingerprint(["assistant_sync", nextText, attachmentCount, derivedContextFiles.length]),
-    }]);
     if (!nextText && derivedContextFiles.length === 0) return;
   };
 
@@ -5566,12 +5544,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
               <Space wrap>
                 <Tag color="geekblue">{`app_id: ${appId || "-"}`}</Tag>
-                {(loading || aiProgress) && (
-                  <Tag color="processing">{`${uiText("Bước", "Step", "步骤")} ${Math.max(0, Number(aiProgress?.current ?? 0))}/${Math.max(1, Number(aiProgress?.total ?? 1))}`}</Tag>
-                )}
-                {(loading || aiProgress) && (
-                  <Tag color="cyan">{`${uiText("Mô hình", "Model", "模型")}: ${aiRuntimeModel || uiText("đang xác định", "resolving", "识别中")}`}</Tag>
-                )}
                 <Tooltip title={aiLiveEditEnabled
                   ? (t("system.menu.aiDesigner.editor.livePatchHintOn") || "AI có thể sửa trực tiếp từng dòng / nhiều dòng trong editor khi đang chạy")
                   : (t("system.menu.aiDesigner.editor.livePatchHintOff") || "AI chỉ cập nhật editor khi hoàn tất")}
@@ -5608,127 +5580,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           }}
         >
         <div style={{ width: "100%" }}>
-        {aiProgress && (
-          <Alert
-            type={aiProgress.status === "failed" ? "error" : aiProgress.status === "completed" ? "success" : "info"}
-            showIcon
-            style={{ marginBottom: 16 }}
-            message={
-              t(`system.menu.aiDesigner.progressStatus.${describeAiProgressKey(aiProgress)}`)
-              || (t("system.menu.aiDesigner.progressStatus.running") as string)
-            }
-            description={
-              <>
-                <Progress
-                  percent={Math.max(0, Math.min(100, Number(aiProgress.percent ?? 0)))}
-                  status={aiProgress.status === "failed" ? "exception" : aiProgress.status === "completed" ? "success" : "active"}
-                />
-                <div style={{ marginTop: 8, fontSize: 12, color: "var(--ant-color-text-secondary)" }}>
-                  {`${uiText("Giai đoạn", "Stage", "阶段")}: ${String(aiProgress.stage || "running")} • ${uiText("Bước", "Step", "步骤")}: ${Math.max(0, Number(aiProgress.current ?? 0))}/${Math.max(1, Number(aiProgress.total ?? 1))}${aiRuntimeModel ? ` • ${uiText("Mô hình", "Model", "模型")}: ${aiRuntimeModel}` : ""}`}
-                </div>
-                {aiProgress.message && (
-                  <div style={{ marginTop: 6, fontSize: 13, color: "var(--ant-color-text)" }}>
-                    {aiProgress.message}
-                  </div>
-                )}
-              </>
-            }
-          />
-        )}
-
-        {latestAiAssistantPromptPreview && (
-          <Alert
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-            message={uiText("Yêu cầu gần nhất từ chat AI menu", "Latest menu AI chat request", "最近的菜单 AI 聊天请求")}
-            description={[
-              latestAiAssistantPromptPreview,
-              latestAiAssistantAttachmentCount > 0
-                ? uiText(
-                    `attachments đã sync: ${latestAiAssistantAttachmentCount}`,
-                    `synced attachments: ${latestAiAssistantAttachmentCount}`,
-                    `已同步附件：${latestAiAssistantAttachmentCount}`,
-                  )
-                : "",
-            ].filter(Boolean).join(" • ")}
-          />
-        )}
-
-        {aiRealtimeLogs.length > 0 && (
-          <Card
-            size="small"
-            style={{ marginBottom: 16 }}
-            title={t("system.menu.aiDesigner.realtimeLogsTitle") || "AI Realtime Monitor"}
-            extra={(
-              <Space>
-                <Tag color={socketConnected ? "success" : "default"}>
-                  {socketConnected ? uiText("Socket trực tuyến", "Socket online", "Socket 在线") : uiText("Socket ngoại tuyến", "Socket offline", "Socket 离线")}
-                </Tag>
-                <Button size="small" onClick={() => setAiRealtimeLogs([])}>
-                  {t("system.menu.aiDesigner.realtimeLogsClear") || "Xóa log"}
-                </Button>
-              </Space>
-            )}
-          >
-            <Space wrap style={{ marginBottom: 10 }}>
-              <Tag color="processing">
-                {`${uiText("Bước", "Step", "步骤")} ${Math.max(0, Number(aiProgress?.current ?? 0))}/${Math.max(1, Number(aiProgress?.total ?? 1))}`}
-              </Tag>
-              <Tag color="blue">{`${uiText("Giai đoạn", "Stage", "阶段")}: ${String(aiProgress?.stage || "running")}`}</Tag>
-              <Tag color="cyan">{`${uiText("Mô hình", "Model", "模型")}: ${aiRuntimeModel || uiText("đang xác định", "resolving", "识别中")}`}</Tag>
-              <Tag color="gold">{`${uiText("Cập nhật", "Progress", "进度")}: ${Math.max(0, Math.min(100, Number(aiProgress?.percent ?? 0)))}%`}</Tag>
-            </Space>
-
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 10 }}
-              message={String(aiProgress?.message || uiText("AI đang xử lý...", "AI is processing...", "AI 正在处理中..."))}
-              description={
-                aiRealtimeLogs.length > 0
-                  ? `${uiText("Mới nhất", "Latest", "最新")} ${formatAiRealtimeClock(aiRealtimeLogs[aiRealtimeLogs.length - 1].ts)}: ${aiRealtimeLogs[aiRealtimeLogs.length - 1].message}${aiRealtimeLogs[aiRealtimeLogs.length - 1].detail ? ` • ${aiRealtimeLogs[aiRealtimeLogs.length - 1].detail}` : ""}`
-                  : uiText("Đang chờ cập nhật từ backend", "Waiting for backend updates", "等待后端更新")
-              }
-            />
-
-            <div
-              style={{
-                maxHeight: 190,
-                overflowY: "auto",
-                border: "1px solid var(--ant-color-border)",
-                borderRadius: 8,
-                padding: 8,
-                background: "var(--ant-color-fill-quaternary)",
-              }}
-            >
-              {aiRealtimeLogs.slice(-8).reverse().map((entry) => {
-                const tagColor = entry.level === "error"
-                  ? "error"
-                  : entry.level === "warning"
-                    ? "warning"
-                    : entry.level === "success"
-                      ? "success"
-                      : "processing";
-                return (
-                  <div key={entry.id} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: "1px dashed var(--ant-color-border-secondary)" }}>
-                    <Space size={6} wrap>
-                      <Tag color={tagColor}>{entry.level.toUpperCase()}</Tag>
-                      <span style={{ color: "var(--ant-color-text-description)", fontSize: 12 }}>{formatAiRealtimeClock(entry.ts)}</span>
-                      <span style={{ fontWeight: 500, fontSize: 13 }}>{entry.message}</span>
-                    </Space>
-                    {entry.detail && (
-                      <div style={{ marginTop: 3, fontSize: 12, color: "var(--ant-color-text-secondary)", wordBreak: "break-word" }}>
-                        {entry.detail}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-        )}
-
         {aiStopReason && (
           <Alert
             type="warning"

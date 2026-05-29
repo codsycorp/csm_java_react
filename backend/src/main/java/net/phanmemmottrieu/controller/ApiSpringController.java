@@ -1948,6 +1948,9 @@ public class ApiSpringController {
                     effectiveCodeContext = base.baseContent();
                 }
                 effectiveCodeContext = truncate(effectiveCodeContext, Math.max(MAX_CODE_CHARS, aiCodeStreamMaxBaseContentChars));
+                if (isMenuJsonContext(contextType)) {
+                    effectiveCodeContext = resolveMenuJsonEditorContext(effectiveCodeContext, base.baseContent());
+                }
                 CodeWindowContext focusWindow = extractCodeWindowByLine(effectiveCodeContext, cursorLine, contextWindowLines);
                 // Planner scope: selection only when user highlighted; otherwise full code string.
                 int planFocusStartLine = -1;
@@ -1967,8 +1970,10 @@ public class ApiSpringController {
                     ? resolveAnalyzeBusinessScanContext(
                         effectiveCodeContext,
                         message,
-                        focusWindow == null ? "" : focusWindow.code())
+                        focusWindow == null ? "" : focusWindow.code(),
+                        contextType)
                     : effectiveCodeContext;
+                String menuAnalyzeComprehendProse = "";
                 if (analyzeBusinessFastPath
                         && !analyzeBusinessScanContext.isBlank()
                         && analyzeBusinessScanContext.length() < effectiveCodeContext.length()) {
@@ -2459,6 +2464,7 @@ public class ApiSpringController {
                                     businessComprehensionResult.executionPlan(),
                                     message);
                                 if (!analyzeProse.isBlank()) {
+                                    menuAnalyzeComprehendProse = analyzeProse;
                                     sendEvent(emitter, jsonOf(
                                         "stage", "business_reasoning",
                                         "status", "ready",
@@ -2514,6 +2520,25 @@ public class ApiSpringController {
                                     + businessComprehensionResult.promptInjectionBlock();
                             }
                         }
+                    }
+                    if (analyzeBusinessFastPath
+                            && isMenuJsonContext(contextType)
+                            && tryCompleteAnalyzeBusinessHeuristicEarly(
+                                emitter,
+                                requestId,
+                                authCtx,
+                                appId,
+                                contextType,
+                                pName,
+                                pType,
+                                message,
+                                effectiveCodeContext,
+                                analyzeBusinessScanContext,
+                                businessComprehensionResult,
+                                menuAnalyzeComprehendProse,
+                                requestStartedAtMs,
+                                streamCompletedRef)) {
+                        return;
                     }
                     if (codeDebugAnalyzeFastPath || analyzeBusinessFastPath) {
                         sendEvent(emitter, jsonOf(
@@ -2968,27 +2993,12 @@ public class ApiSpringController {
                             "retrievalAdaptive", bool(orchestrationStats.get("scopedRagAdaptive"), false),
                             "retrievalAdaptiveReasons", orchestrationStats.getOrDefault("scopedRagAdaptiveReasons", List.of())
                         ));
-                        sendEvent(emitter, jsonOf(
-                            "stage", "tool_search",
-                            "status", "completed",
-                            "requestId", requestId,
-                            "message", "Searched scoped Lucene/vector context from current code, menu, and attachments",
-                            "scopeMask", effectiveScopeMask,
-                            "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")),
-                            "retrievalTopK", parseIntSafe(orchestrationStats.get("scopedRagTopK"), 0),
-                            "retrievalHitCount", parseIntSafe(orchestrationStats.get("scopedRagHitCount"), 0),
-                            "retrievalSourceCount", parseIntSafe(orchestrationStats.get("scopedRagSourceCount"), 0),
-                            "retrievalMaxChars", parseIntSafe(orchestrationStats.get("scopedRagMaxChars"), 0),
-                            "retrievalQuery", String.valueOf(orchestrationStats.getOrDefault("scopedRagQuery", "")),
-                            "retrievalEngineLabel", String.valueOf(orchestrationStats.getOrDefault("retrievalEngineLabel", "")),
-                            "menuSignals", orchestrationStats.getOrDefault("menuSignals", List.of()),
-                            "symbolQueries", orchestrationStats.getOrDefault("symbolAwareRetrievalQueries", List.of()),
-                            "targetedQueries", orchestrationStats.getOrDefault("scopedRagTargetedQueries", List.of()),
-                            "focusTargets", orchestrationStats.getOrDefault("retrievalFocusTargets", List.of()),
-                            "virtualContextPreview", orchestrationStats.getOrDefault("virtualContextPreview", List.of()),
-                            "retrievalHits", orchestrationStats.getOrDefault("scopedRagTopHits", List.of()),
-                            "adaptiveReasons", orchestrationStats.getOrDefault("scopedRagAdaptiveReasons", List.of())
-                        ));
+                        sendEvent(emitter, jsonOfMap(buildToolSearchEventPayload(
+                            orchestrationStats,
+                            effectiveScopeMask,
+                            requestId,
+                            "Searched scoped Lucene/vector context from current code, menu, and attachments"
+                        )));
                         emitRagCitationsFromHits(
                             emitter,
                             requestId,
@@ -3225,6 +3235,7 @@ public class ApiSpringController {
                             effectiveCodeContext,
                             analyzeBusinessScanContext,
                             businessComprehensionResult,
+                            menuAnalyzeComprehendProse,
                             requestStartedAtMs,
                             streamCompletedRef)) {
                     return;
@@ -3861,6 +3872,35 @@ public class ApiSpringController {
                         && isWeakLocalRuntime()
                         && promptCodeContext.length() > 30000;
                     if (!editFocusedPrimaryApplied
+                            && analyzeBusinessFastPath
+                            && isMenuJsonContext(contextType)) {
+                        String businessPrimary = buildAnalyzeBusinessPrimaryAnswer(
+                            analyzeBusinessScanContext,
+                            message,
+                            contextType,
+                            businessComprehensionResult,
+                            effectiveCodeContext,
+                            pName);
+                        if (businessPrimary.isBlank()) {
+                            businessPrimary = "Không đủ JSON menu trong editor để phân tích nghiệp vụ. Hãy mở menu cần phân tích trong CodeMirror.";
+                        }
+                        if (!businessPrimary.isBlank()
+                                && (isMenuAnalyzeDeterministicAnswer(businessPrimary, contextType)
+                                    || !isLowSignalAnalyzeOutput(businessPrimary, contextType))) {
+                            providerRaw = businessPrimary;
+                            providerText = businessPrimary;
+                            analyzeFocusedPrimaryApplied = true;
+                            codeStreamMeta.put("analyzeBusinessHeuristicPrimary", true);
+                            codeStreamMeta.put("menuAnalyzeSkipLlmPrimary", true);
+                            localProviderPrimaryUsed = true;
+                            effectiveModel = "local_heuristic_analyze";
+                            logger.info(
+                                "LOCAL_ANALYZE menu-heuristic-primary requestId={} fullCodeChars={} answerChars={} skipLlm=true",
+                                requestId,
+                                effectiveCodeContext.length(),
+                                businessPrimary.length());
+                        }
+                    } else if (!editFocusedPrimaryApplied
                             && analyzeBusinessFastPath) {
                         String businessPrimary = buildAnalyzeBusinessPrimaryAnswer(
                             analyzeBusinessScanContext,
@@ -3869,7 +3909,7 @@ public class ApiSpringController {
                             businessComprehensionResult,
                             effectiveCodeContext,
                             pName);
-                        if (!businessPrimary.isBlank() && !isLowSignalAnalyzeOutput(businessPrimary)) {
+                        if (!businessPrimary.isBlank() && !isLowSignalAnalyzeOutput(businessPrimary, contextType)) {
                             providerRaw = businessPrimary;
                             providerText = businessPrimary;
                             analyzeFocusedPrimaryApplied = true;
@@ -4316,16 +4356,16 @@ public class ApiSpringController {
 
                         if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
                                 && isMenuJsonContext(contextType)
-                                && isLowSignalAnalyzeOutput(String.valueOf(providerText == null ? "" : providerText))) {
-                            if (isAnalyzeHeuristicFallbackEnabled(message)) {
-                                String heuristic = buildHeuristicBusinessLogicAnalysis(
-                                    effectiveCodeContext,
-                                    message,
-                                    contextType);
-                                if (!heuristic.isBlank() && !isLowSignalAnalyzeOutput(heuristic)) {
-                                    providerText = heuristic;
-                                    codeStreamMeta.put("analyzeHeuristicFallbackApplied", true);
-                                }
+                                && isLowSignalAnalyzeOutput(String.valueOf(providerText == null ? "" : providerText), contextType)) {
+                            String heuristic = buildHeuristicBusinessLogicAnalysis(
+                                effectiveCodeContext,
+                                message,
+                                contextType);
+                            if (!heuristic.isBlank()
+                                    && (isMenuAnalyzeDeterministicAnswer(heuristic, contextType)
+                                        || !isLowSignalAnalyzeOutput(heuristic, contextType))) {
+                                providerText = heuristic;
+                                codeStreamMeta.put("analyzeHeuristicFallbackApplied", true);
                             }
                         }
 
@@ -16980,6 +17020,15 @@ public class ApiSpringController {
                 "expectedEvidence", "symbol_context"
             ));
         }
+        if (bool(stats.get("graphRagEnabled"), false)) {
+            tools.add(Map.of(
+                "intent", "graph_rag_retrieval",
+                "reason", "nodes=" + parseIntSafe(stats.get("graphRagNodeCount"), 0)
+                    + " communities=" + parseIntSafe(stats.get("graphRagCommunityCount"), 0)
+                    + " expanded=" + parseIntSafe(stats.get("graphRagExpandedNodes"), 0),
+                "expectedEvidence", "metadata_graph"
+            ));
+        }
         if (bool(stats.get("typeAwareInjectionEnabled"), false)) {
             tools.add(Map.of(
                 "intent", "type_aware_injection",
@@ -17502,6 +17551,69 @@ public class ApiSpringController {
         String raw = String.valueOf(value).trim();
         if (raw.isEmpty()) return defaultValue;
         return "true".equalsIgnoreCase(raw) || "1".equals(raw) || "yes".equalsIgnoreCase(raw);
+    }
+
+    private void putGraphRagOrchestrationFields(Map<String, Object> target, Map<String, Object> stats) {
+        if (target == null) {
+            return;
+        }
+        target.put("graphRagEnabled", bool(stats == null ? null : stats.get("graphRagEnabled"), false));
+        target.put("graphRagNodeCount", parseIntSafe(stats == null ? null : stats.get("graphRagNodeCount"), 0));
+        target.put("graphRagEdgeCount", parseIntSafe(stats == null ? null : stats.get("graphRagEdgeCount"), 0));
+        target.put("graphRagCommunityCount", parseIntSafe(stats == null ? null : stats.get("graphRagCommunityCount"), 0));
+        target.put("graphRagSeedNodes", parseIntSafe(stats == null ? null : stats.get("graphRagSeedNodes"), 0));
+        target.put("graphRagExpandedNodes", parseIntSafe(stats == null ? null : stats.get("graphRagExpandedNodes"), 0));
+        target.put("graphRagChars", parseIntSafe(stats == null ? null : stats.get("graphRagChars"), 0));
+    }
+
+    private Map<String, Object> buildToolSearchEventPayload(
+        Map<String, Object> orchestrationStats,
+        int scopeMask,
+        String requestId,
+        String message
+    ) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("stage", "tool_search");
+        payload.put("status", "completed");
+        payload.put("requestId", requestId);
+        payload.put("message", message);
+        payload.put("scopeMask", scopeMask);
+        payload.put("scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")));
+        payload.put("retrievalTopK", parseIntSafe(orchestrationStats.get("scopedRagTopK"), 0));
+        payload.put("retrievalHitCount", parseIntSafe(orchestrationStats.get("scopedRagHitCount"), 0));
+        payload.put("retrievalSourceCount", parseIntSafe(orchestrationStats.get("scopedRagSourceCount"), 0));
+        payload.put("retrievalMaxChars", parseIntSafe(orchestrationStats.get("scopedRagMaxChars"), 0));
+        payload.put("retrievalQuery", String.valueOf(orchestrationStats.getOrDefault("scopedRagQuery", "")));
+        payload.put("retrievalEngineLabel", String.valueOf(orchestrationStats.getOrDefault("retrievalEngineLabel", "")));
+        payload.put("menuSignals", orchestrationStats.getOrDefault("menuSignals", List.of()));
+        payload.put("symbolQueries", orchestrationStats.getOrDefault("symbolAwareRetrievalQueries", List.of()));
+        payload.put("targetedQueries", orchestrationStats.getOrDefault("scopedRagTargetedQueries", List.of()));
+        payload.put("focusTargets", orchestrationStats.getOrDefault("retrievalFocusTargets", List.of()));
+        payload.put("virtualContextPreview", orchestrationStats.getOrDefault("virtualContextPreview", List.of()));
+        payload.put("retrievalHits", orchestrationStats.getOrDefault("scopedRagTopHits", List.of()));
+        payload.put("adaptiveReasons", orchestrationStats.getOrDefault("scopedRagAdaptiveReasons", List.of()));
+        putGraphRagOrchestrationFields(payload, orchestrationStats);
+        return payload;
+    }
+
+    private Map<String, Object> buildAssistantToolSearchChunk(
+        Map<String, Object> orchestrationStats,
+        String responseMode,
+        String uiLang
+    ) {
+        int scopeMask = parseIntSafe(orchestrationStats.get("scopedRagScopeMask"), parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0));
+        Map<String, Object> payload = buildToolSearchEventPayload(
+            orchestrationStats,
+            scopeMask,
+            "",
+            uiTextByLang(
+                uiLang,
+                "AI local đang dò đúng nguồn cần cập nhật từ Lucene/vector context",
+                "Local AI is exploring the right sources to update from Lucene/vector context",
+                "本地 AI 正在从 Lucene/向量上下文中探索正确的更新来源")
+        );
+        payload.put("responseMode", responseMode);
+        return payload;
     }
 
     private String truncate(String text, int maxChars) {
@@ -20566,16 +20678,111 @@ public class ApiSpringController {
         return false;
     }
 
+    private String resolveMenuJsonEditorContext(String primaryCode, String fallbackCode) {
+        String code = unwrapMenuJsonEditorPayload(String.valueOf(primaryCode == null ? "" : primaryCode));
+        if (code.isBlank()) {
+            code = unwrapMenuJsonEditorPayload(String.valueOf(fallbackCode == null ? "" : fallbackCode));
+        }
+        return code;
+    }
+
+    private String unwrapMenuJsonEditorPayload(String raw) {
+        String safe = String.valueOf(raw == null ? "" : raw).trim();
+        if (safe.isBlank()) {
+            return "";
+        }
+        if (safe.startsWith("{") || safe.startsWith("[")) {
+            return safe;
+        }
+        String compact = safe.replaceAll("\\s+", "");
+        if (compact.length() < 24 || compact.length() % 4 != 0) {
+            return safe;
+        }
+        try {
+            byte[] decoded = java.util.Base64.getDecoder().decode(compact);
+            if (decoded == null || decoded.length == 0) {
+                return safe;
+            }
+            String asText = new String(decoded, java.nio.charset.StandardCharsets.UTF_8).trim();
+            if (asText.startsWith("{") || asText.startsWith("[")) {
+                return asText;
+            }
+        } catch (Exception ignored) {
+            // Not base64 menu payload — keep original string for downstream error messaging.
+        }
+        return safe;
+    }
+
+    private boolean isMenuAnalyzeDeterministicAnswer(String text, String contextType) {
+        if (!isMenuJsonContext(contextType)) {
+            return false;
+        }
+        String safe = String.valueOf(text == null ? "" : text).trim();
+        if (safe.isBlank()) {
+            return false;
+        }
+        if (isMenuAnalyzeHeuristicProse(safe)) {
+            return true;
+        }
+        if (safe.contains("Phân tích nghiệp vụ (menu hiện có)")) {
+            return true;
+        }
+        return safe.startsWith("Không đủ JSON menu")
+            || safe.startsWith("Không đọc được cấu trúc menu JSON");
+    }
+
+    private boolean isMenuAnalyzeHeuristicProse(String text) {
+        if (text.length() < Math.max(80, aiLocalAnalyzeLowSignalMinLength)) {
+            return false;
+        }
+        boolean menuHeader = text.contains("Phân tích nghiệp vụ menu")
+            || text.contains("Phân tích nghiệp vụ (menu hiện có)")
+            || text.contains("Module / nhóm menu")
+            || text.contains("Module / node")
+            || text.contains("node menu");
+        boolean menuEvidence = text.contains("type_form")
+            || text.contains("table_name")
+            || text.contains("Trigger / hành vi")
+            || text.contains("Bảng dữ liệu")
+            || text.contains("**Module")
+            || text.contains("Luồng nghiệp vụ");
+        return menuHeader && menuEvidence;
+    }
+
+    private boolean looksLikeGenericProjectTimelineAnalyze(String text) {
+        String lower = text.toLowerCase(Locale.ROOT);
+        boolean englishTimeline = lower.contains("phase 1")
+            && (lower.contains("plan and design") || lower.contains("development (1-2 months)"));
+        boolean vietTimeline = lower.contains("tổng thời gian dự kiến")
+            && lower.contains("tháng")
+            && !text.contains("type_form")
+            && !text.contains("node menu");
+        return englishTimeline || vietTimeline;
+    }
+
     private String resolveAnalyzeBusinessScanContext(
             String fullCode,
             String message,
             String focusCode) {
+        return resolveAnalyzeBusinessScanContext(fullCode, message, focusCode, "");
+    }
+
+    private String resolveAnalyzeBusinessScanContext(
+            String fullCode,
+            String message,
+            String focusCode,
+            String contextType) {
         String code = String.valueOf(fullCode == null ? "" : fullCode);
         if (code.isBlank()) {
             return "";
         }
-        int retrieveThreshold = Math.max(30000, aiCodeStreamAnalyzeSlidingWindowThresholdChars);
         int cap = Math.max(18000, Math.min(32000, aiCodeStreamMaxCurrentCodeChars));
+        if (isMenuJsonContext(contextType)) {
+            // Menu scan runs in Java (MenuBusinessScan) — keep parseable JSON, never code-style head/tail truncation.
+            int menuCap = Math.max(cap, 512_000);
+            return code.length() <= menuCap ? code : truncateMiddle(code, menuCap);
+        }
+        int retrieveThreshold = Math.max(30000, aiCodeStreamAnalyzeSlidingWindowThresholdChars);
         if (code.length() <= retrieveThreshold) {
             return code.length() <= cap ? code : truncateMiddle(code, cap);
         }
@@ -22055,8 +22262,18 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
     );
 
     private boolean isLowSignalAnalyzeOutput(String text) {
+        return isLowSignalAnalyzeOutput(text, "");
+    }
+
+    private boolean isLowSignalAnalyzeOutput(String text, String contextType) {
         String safe = String.valueOf(text == null ? "" : text).trim();
         if (safe.isBlank()) {
+            return true;
+        }
+        if (isMenuJsonContext(contextType) && isMenuAnalyzeHeuristicProse(safe)) {
+            return false;
+        }
+        if (isMenuJsonContext(contextType) && looksLikeGenericProjectTimelineAnalyze(safe)) {
             return true;
         }
         if (safe.length() < Math.max(80, aiLocalAnalyzeLowSignalMinLength)) {
@@ -22117,7 +22334,7 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 }
             }
         }
-        if (contentLines >= 4) {
+        if (contentLines >= 4 && !isMenuJsonContext(contextType)) {
             double evidenceDensity = (double) evidenceLines / contentLines;
             double vacuousRatio = (double) vacuousLines / contentLines;
             // low signal: almost no code references + majority are vague short bullets
@@ -23568,8 +23785,12 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         for (int i = 0; i + 1 < keyValues.length; i += 2) {
             m.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
         }
+        return jsonOfMap(m);
+    }
+
+    private String jsonOfMap(Map<String, Object> payload) {
         try {
-            return objectMapper.writeValueAsString(m);
+            return objectMapper.writeValueAsString(payload == null ? Map.of() : payload);
         } catch (Exception e) {
             return "{}";
         }
@@ -25414,13 +25635,24 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             String fullCodeContext,
             String retrievedScanContext,
             AiGreenfieldBusinessDesignService.ComprehensionResult comprehension,
+            String menuComprehendProse,
             long requestStartedAtMs,
             AtomicBoolean streamCompletedRef) {
         long startedAtMs = System.currentTimeMillis();
         try {
+            String precomputed = String.valueOf(menuComprehendProse == null ? "" : menuComprehendProse).trim();
+            if (!precomputed.isBlank()
+                    && (isMenuAnalyzeDeterministicAnswer(precomputed, contextType)
+                        || !isLowSignalAnalyzeOutput(precomputed, contextType))) {
+                return finishAnalyzeBusinessHeuristicEarly(
+                    emitter, requestId, authCtx, appId, contextType, pName, pType, message,
+                    fullCodeContext, retrievedScanContext, precomputed,
+                    "local_comprehend_analyze", "analyze_menu_comprehend_early_exit",
+                    startedAtMs, requestStartedAtMs, streamCompletedRef);
+            }
             String scanContext = String.valueOf(retrievedScanContext == null ? "" : retrievedScanContext).trim();
             if (scanContext.isBlank()) {
-                scanContext = resolveAnalyzeBusinessScanContext(fullCodeContext, message, "");
+                scanContext = resolveAnalyzeBusinessScanContext(fullCodeContext, message, "", contextType);
             }
             String answer = buildAnalyzeBusinessPrimaryAnswer(
                 scanContext,
@@ -25429,17 +25661,54 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 comprehension,
                 fullCodeContext,
                 pName);
-            if (answer.isBlank() || isLowSignalAnalyzeOutput(answer)) {
+            if (answer.isBlank()) {
+                if (isMenuJsonContext(contextType)) {
+                    answer = "Không đủ JSON menu trong editor để phân tích nghiệp vụ. Hãy mở menu cần phân tích trong CodeMirror.";
+                } else {
+                    return false;
+                }
+            }
+            if (!isMenuAnalyzeDeterministicAnswer(answer, contextType)
+                    && isLowSignalAnalyzeOutput(answer, contextType)) {
                 return false;
             }
+            return finishAnalyzeBusinessHeuristicEarly(
+                emitter, requestId, authCtx, appId, contextType, pName, pType, message,
+                fullCodeContext, scanContext, answer,
+                "local_heuristic_analyze", "analyze_business_heuristic_early_exit",
+                startedAtMs, requestStartedAtMs, streamCompletedRef);
+        } catch (Exception ex) {
+            logger.warn("Analyze business heuristic early exit failed, continue standard pipeline: {}", ex.getMessage());
+            return false;
+        }
+    }
+
+    private boolean finishAnalyzeBusinessHeuristicEarly(
+            SseEmitter emitter,
+            String requestId,
+            UserAuthContext authCtx,
+            String appId,
+            String contextType,
+            String pName,
+            Integer pType,
+            String message,
+            String fullCodeContext,
+            String retrievedScanContext,
+            String answer,
+            String modelLabel,
+            String reasonCode,
+            long startedAtMs,
+            long requestStartedAtMs,
+            AtomicBoolean streamCompletedRef) throws Exception {
             int fullChars = String.valueOf(fullCodeContext == null ? "" : fullCodeContext).length();
-            int retrievedChars = scanContext.length();
+            int retrievedChars = String.valueOf(retrievedScanContext == null ? "" : retrievedScanContext).length();
             logger.info(
-                "LOCAL_ANALYZE business-heuristic-primary requestId={} fullCodeChars={} retrievedContextChars={} answerChars={} earlyExit=true",
+                "LOCAL_ANALYZE business-heuristic-primary requestId={} fullCodeChars={} retrievedContextChars={} answerChars={} earlyExit=true model={}",
                 requestId,
                 fullChars,
                 retrievedChars,
-                answer.length());
+                answer.length(),
+                modelLabel);
             sendEvent(emitter, jsonOf(
                 "stage", "routing",
                 "responseMode", "analyze",
@@ -25448,7 +25717,7 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             sendEvent(emitter, jsonOf(
                 "stage", "streaming_started",
                 "requestId", requestId,
-                "model", "local_heuristic_analyze",
+                "model", modelLabel,
                 "ttftMs", Math.max(0L, System.currentTimeMillis() - startedAtMs),
                 "estimatedTotalChars", answer.length(),
                 "percent", 20));
@@ -25468,26 +25737,28 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             completion.put("analyzeBusinessFastPath", true);
             completion.put("promptTokens", 0);
             completion.put("completionTokens", estimateTokens(answer));
-            completion.put("model", "local_heuristic_analyze");
+            completion.put("model", modelLabel);
             completion.put("modelDecisionStep", "final");
-            completion.put("modelDecisionReason", "analyze_business_heuristic_early_exit");
+            completion.put("modelDecisionReason", reasonCode);
             completion.put("decision_step", "final");
             completion.put("reason_code", "completed");
             completion.put("requestId", requestId);
             completion.put("timestamp", System.currentTimeMillis());
             sendEvent(emitter, objectMapper.writeValueAsString(completion));
             logger.info(
-                "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType=code responseMode=analyze model=local_heuristic_analyze "
+                "AI_TELEMETRY flow=ai-code-stream requestId={} appId={} contextType={} responseMode=analyze model={} "
                     + "outputChars={} streamedChars={} streamChunkCount={} agenticStepResultCount=0 inferenceElapsedMs=0 elapsedMs={}",
                 requestId,
                 appId,
+                contextType,
+                modelLabel,
                 answer.length(),
                 answer.length(),
                 chunkCount,
                 elapsedMs);
             Map<String, Object> turnMeta = new LinkedHashMap<>();
             turnMeta.put("source", "aiCodeStreamAnalyzeBusinessHeuristic");
-            turnMeta.put("model", "local_heuristic_analyze");
+            turnMeta.put("model", modelLabel);
             turnMeta.put("responseMode", "analyze");
             turnMeta.put("analyzeBusinessFastPath", true);
             turnMeta.put("analyzeBusinessHeuristicPrimary", true);
@@ -25511,23 +25782,20 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 requestStartedAtMs,
                 "ok",
                 Map.of(
-                    "model", "local_heuristic_analyze",
+                    "model", modelLabel,
                     "streamedChars", answer.length(),
                     "streamChunkCount", chunkCount,
                     "analyzeBusinessFastPath", true));
             streamCompletedRef.set(true);
             emitter.complete();
             logger.info(
-                "ApiSpringController: ai-code-stream complete requestId={} appId={} model=local_heuristic_analyze elapsedMs={} outputChars={}",
+                "ApiSpringController: ai-code-stream complete requestId={} appId={} model={} elapsedMs={} outputChars={}",
                 requestId,
                 appId,
+                modelLabel,
                 elapsedMs,
                 answer.length());
             return true;
-        } catch (Exception ex) {
-            logger.warn("Analyze business heuristic early exit failed, continue standard pipeline: {}", ex.getMessage());
-            return false;
-        }
     }
 
     private LocalIntentClassification classifyIntentWithLocalAI(String requestText, boolean bypassCache) {
@@ -26076,7 +26344,8 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         boolean kqxsHint = looksLikeKqxsBroadcastCode(scanCode)
             || looksLikeKqxsBroadcastCode(fullCode)
             || looksLikeKqxsEditorKey(pName);
-        String base = buildHeuristicBusinessLogicAnalysis(scanCode, message, contextType, kqxsHint);
+        String heuristicSource = isMenuJsonContext(contextType) && !fullCode.isBlank() ? fullCode : scanCode;
+        String base = buildHeuristicBusinessLogicAnalysis(heuristicSource, message, contextType, kqxsHint);
         if (base.isBlank()) {
             return base;
         }
@@ -28674,30 +28943,11 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                     "scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none")),
                     "scopeTags", orchestrationStats.getOrDefault("scannerScopeTags", List.of())));
 
-                    emitAiAssistantChatChunk(appId, Map.ofEntries(
-                        Map.entry("stage", "tool_search"),
-                        Map.entry("message", uiTextByLang(
-                            uiLang,
-                            "AI local đang dò đúng nguồn cần cập nhật từ Lucene/vector context",
-                            "Local AI is exploring the right sources to update from Lucene/vector context",
-                            "本地 AI 正在从 Lucene/向量上下文中探索正确的更新来源")),
-                        Map.entry("responseMode", responseMode),
-                        Map.entry("status", "completed"),
-                        Map.entry("scopeMask", parseIntSafe(orchestrationStats.get("scopedRagScopeMask"), parseIntSafe(orchestrationStats.get("scannerScopeMask"), 0))),
-                        Map.entry("scopeSummary", String.valueOf(orchestrationStats.getOrDefault("scannerScopeSummary", "none"))),
-                        Map.entry("retrievalTopK", parseIntSafe(orchestrationStats.get("scopedRagTopK"), 0)),
-                        Map.entry("retrievalHitCount", parseIntSafe(orchestrationStats.get("scopedRagHitCount"), 0)),
-                        Map.entry("retrievalSourceCount", parseIntSafe(orchestrationStats.get("scopedRagSourceCount"), 0)),
-                        Map.entry("retrievalMaxChars", parseIntSafe(orchestrationStats.get("scopedRagMaxChars"), 0)),
-                        Map.entry("retrievalQuery", String.valueOf(orchestrationStats.getOrDefault("scopedRagQuery", ""))),
-                        Map.entry("retrievalEngineLabel", String.valueOf(orchestrationStats.getOrDefault("retrievalEngineLabel", ""))),
-                        Map.entry("menuSignals", orchestrationStats.getOrDefault("menuSignals", List.of())),
-                        Map.entry("symbolQueries", orchestrationStats.getOrDefault("symbolAwareRetrievalQueries", List.of())),
-                        Map.entry("targetedQueries", orchestrationStats.getOrDefault("scopedRagTargetedQueries", List.of())),
-                        Map.entry("focusTargets", orchestrationStats.getOrDefault("retrievalFocusTargets", List.of())),
-                        Map.entry("virtualContextPreview", orchestrationStats.getOrDefault("virtualContextPreview", List.of())),
-                        Map.entry("retrievalHits", orchestrationStats.getOrDefault("scopedRagTopHits", List.of())),
-                        Map.entry("adaptiveReasons", orchestrationStats.getOrDefault("scopedRagAdaptiveReasons", List.of()))));
+                    emitAiAssistantChatChunk(appId, buildAssistantToolSearchChunk(
+                        orchestrationStats,
+                        responseMode,
+                        uiLang
+                    ));
 
                     emitRagCitationsChat(
                         appId,

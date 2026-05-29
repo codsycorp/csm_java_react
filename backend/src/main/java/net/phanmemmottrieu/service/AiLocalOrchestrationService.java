@@ -100,6 +100,9 @@ public class AiLocalOrchestrationService {
     private AiRetrievalPolicyEngine aiRetrievalPolicyEngine;
 
     @Autowired(required = false)
+    private AiGraphRagService aiGraphRagService;
+
+    @Autowired(required = false)
     private AiAdaptiveRetryPolicy aiAdaptiveRetryPolicy;
 
     @Autowired(required = false)
@@ -210,6 +213,15 @@ public class AiLocalOrchestrationService {
 
     @Value("${ai.local.symbol.aware.retrieval.min-symbols:2}")
     private int symbolAwareRetrievalMinSymbols;
+
+    @Value("${ai.graphrag.enabled:true}")
+    private boolean graphRagEnabled;
+
+    @Value("${ai.graphrag.retrieval.enabled:true}")
+    private boolean graphRagRetrievalEnabled;
+
+    @Value("${ai.graphrag.retrieval.max-chars:3200}")
+    private int graphRagRetrievalMaxChars;
 
     @Value("${ai.code.stream.type.aware.injection.enabled:true}")
     private boolean typeAwareInjectionEnabled;
@@ -1452,6 +1464,49 @@ public class AiLocalOrchestrationService {
                 }
             }
 
+            // ─── Phase 1.25: GraphRAG (metadata graph + community summaries + neighborhood expansion) ───
+            StringBuilder graphRagBlock = new StringBuilder();
+            if (graphRagEnabled && graphRagRetrievalEnabled && aiGraphRagService != null && aiGraphRagService.isEnabled()) {
+                if (menuFlow && !safeCode.isBlank()) {
+                    aiGraphRagService.ingestFromMenu(appId, "dyn_ctx_currentMenu", safeCode, aggregateScopeMask);
+                } else if (!menuFlow && !safeCode.isBlank()) {
+                    aiGraphRagService.ingestFromCode(appId, "dyn_ctx_currentCode", safeCode, aggregateScopeMask);
+                }
+                List<String> graphSeedSymbols = new ArrayList<>();
+                if (digest.codeSymbols != null) {
+                    graphSeedSymbols.addAll(digest.codeSymbols);
+                }
+                if (digest.menuSignals != null) {
+                    graphSeedSymbols.addAll(digest.menuSignals);
+                }
+                int graphScopeMask = menuFlow
+                    ? AiScopedContextIngestionService.SCOPE_MENU
+                    : AiScopedContextIngestionService.SCOPE_CODE;
+                AiGraphRagService.GraphRetrievalResult graphResult = aiGraphRagService.retrieve(
+                    appId,
+                    safeMessage,
+                    graphSeedSymbols,
+                    graphScopeMask
+                );
+                String graphBlock = aiGraphRagService.buildGraphRagBlock(
+                    appId,
+                    safeMessage,
+                    graphSeedSymbols,
+                    graphScopeMask,
+                    graphRagRetrievalMaxChars
+                );
+                if (graphBlock != null && !graphBlock.isBlank()) {
+                    graphRagBlock.append(graphBlock);
+                    out.toolStats.put("graphRagEnabled", true);
+                    out.toolStats.put("graphRagNodeCount", graphResult.nodeCount());
+                    out.toolStats.put("graphRagEdgeCount", graphResult.edgeCount());
+                    out.toolStats.put("graphRagCommunityCount", graphResult.communityCount());
+                    out.toolStats.put("graphRagSeedNodes", graphResult.seedNodeIds().size());
+                    out.toolStats.put("graphRagExpandedNodes", graphResult.expandedNodeIds().size());
+                    out.toolStats.put("graphRagChars", graphRagBlock.length());
+                }
+            }
+
             // ─── Phase 1.5: Type-Aware Context Injection (enhance symbol results with type hints) ───
             StringBuilder typeHintsBlock = new StringBuilder();
             if (!menuFlow && typeAwareInjectionEnabled && !safeCode.isBlank()) {
@@ -1509,8 +1564,8 @@ public class AiLocalOrchestrationService {
                 request.pType
             ));
             out.toolStats.put("retrievalEngineLabel", menuFlow
-                ? "menu schema + trigger retrieval"
-                : "code scope + symbol retrieval");
+                ? "menu schema + graphRAG + trigger retrieval"
+                : "code scope + symbol + graphRAG retrieval");
             scopedRagBlock = aiBusinessMemoryVectorService.buildRagBlockWithScopes(
                 appId,
                 retrievalPlan.query,
@@ -1519,10 +1574,13 @@ public class AiLocalOrchestrationService {
                 retrievalPlan.maxChars
             );
             
-            // Prepend type hints and symbol results (highest priority: types > symbols > vector search)
+            // Prepend type hints, graphRAG, and symbol results (highest priority: types > graph > symbols > vector search)
             StringBuilder ragBlockWithContext = new StringBuilder();
             if (typeHintsBlock.length() > 0) {
                 ragBlockWithContext.append(typeHintsBlock.toString()).append("\n\n");
+            }
+            if (graphRagBlock.length() > 0) {
+                ragBlockWithContext.append(graphRagBlock.toString()).append("\n\n");
             }
             if (symbolRagBlock.length() > 0) {
                 ragBlockWithContext.append(symbolRagBlock.toString()).append("\n\n");
