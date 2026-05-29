@@ -1,9 +1,34 @@
 # CSM AI LOCAL — MASTER BRIEF CHO CURSOR AI
 ## Một file duy nhất để yêu cầu Cursor làm lại / hoàn thiện hệ thống
 
-Version: **3.19** · 2026-05-26  
+Version: **3.21** · 2026-05-26  
 Repo: `csm_server`  
 **Single source of truth** — dùng file này khi yêu cầu Cursor implement / làm lại CSM AI Local **và** domain System Management liên quan RAG.
+
+### Changelog v3.21
+
+| Mục | Trạng thái |
+|-----|------------|
+| **BM25 hybrid RAG (P1)** — `AiLocalLuceneHybridSearchHelper`: KNN fanout + BM25 multi-field → weighted fuse → existing rerank | ✅ Implement |
+| Business memory `searchWithScopes()` hybrid path | ✅ `ai.business.memory.search.hybrid-bm25.*` |
+| Workspace L1 `searchLocalSources()` hybrid path | ✅ `ai.local.assistant.search.hybrid-bm25.*` |
+| Default weights vector 0.55 / BM25 0.45; fanout multiplier 4 | ✅ |
+| **AF-R11** / AD.4 pipeline BM25 | ✅ (cross-encoder vẫn roadmap) |
+
+### Changelog v3.20
+
+| Mục | Trạng thái |
+|-----|------------|
+| **R.13 — Memory Maturity Scorecard** — đánh giá trung thực “AI có học tốt hơn mỗi ngày không?” | ✅ Spec |
+| **L4 Code learning** — `AiCodeLearningMemoryService` → `ai_code_learning_{appId}.jsonl` | ✅ Implement |
+| Ghi memory sau `text_edit_apply` / agentic step accepted (ai-code-stream edit) | ✅ Implement |
+| Retrieve code learning trong `LocalAiAssistantContextService` + contract prepend | ✅ Implement |
+| Knowledge pack export/import `ai_code_learning_*.jsonl` | ✅ |
+| Ops API `codeLearningFiles` trong `/api/ai-local/knowledge/status` | ✅ |
+| Config `ai.code.learning.*` | ✅ |
+| **Session memory map** — 3 scope + TF-IDF compress + memory trust ≥55 | ✅ Spec (đã có code) |
+| **Flow context policy** — `AiLocalFlowContextPolicy` per analyze/edit menu/code | ✅ Cross-ref |
+| **Context window auto-fit** — KV không over-provision trên weak 5GB | ✅ Cross-ref |
 
 ### Changelog v3.19
 
@@ -2091,7 +2116,8 @@ MODEL WEIGHTS    = Qwen2.5-Coder 1.5B                      (cố định, không
 | **L1** | Workspace DNA | `LocalAiAssistantContextService` → `ai_local_assistant_index/` | Toàn bộ source roots: Java, TS, DynamicCode patterns, structural summary per chunk | ✅ Pack |
 | **L2** | Business memory | `AiBusinessMemoryVectorService` → `ai_business_memory/{appId}/` | Code editor async chunks, multimodal ingest, menu, tenant org | ✅ Pack |
 | **L3** | Domain rules | `AiTenantKnowledgeIngestionService` | `csm_roles`, `csm_depts`, `csm_branches` + markdown rules | ✅ Pack (re-ingest 60s debounce) |
-| **L4** | Daily learning | `AiMenuLearningMemoryService` → `ai_menu_learning_{appId}.jsonl` | Menu patch thành công, critical rules extracted | ✅ Pack |
+| **L4 menu** | Daily menu learning | `AiMenuLearningMemoryService` → `ai_menu_learning_{appId}.jsonl` | Menu patch/generation thành công, critical rules extracted | ✅ Pack |
+| **L4 code** | Daily code learning | `AiCodeLearningMemoryService` → `ai_code_learning_{appId}.jsonl` | Code edit thành công (patch/agentic step), symbols + surgical rules | ✅ Pack |
 | **L0** | Author Style DNA | `author_style_dna.md` | **Bạn viết tay** — triết lý, naming, anti-patterns, bảng quyết định theo ngày | ✅ Pack |
 
 ```mermaid
@@ -2101,6 +2127,7 @@ flowchart TB
         B[Business memory L2]
         T[Tenant snapshot L3]
         M[Menu learning L4]
+        C[Code learning L4]
         A[author_style_dna.md L0]
     end
     subgraph store [Lucene KNN per embedding namespace]
@@ -2117,6 +2144,7 @@ flowchart TB
     B --> IX2
     T --> IX2
     M --> RAG
+    C --> RAG
     A --> IX1
     IX1 --> RAG
     IX2 --> RAG
@@ -2171,15 +2199,18 @@ Sáng / deploy
 Mỗi chat request
   └─ orchestrateResilient
        ├─ scoped RAG (L1+L2+L3)
-       ├─ menu learning block (L4) nếu menu intent
+       ├─ menu learning block (L4 menu) nếu menu intent
+       ├─ code learning block (L4 code) nếu code edit intent
        └─ region plan nếu code lớn
 
 Sau menu edit THÀNH CÔNG
-  └─ AiMenuLearningMemoryService.recordSuccess(appId, request, resultJson)
+  └─ AiMenuLearningMemoryService.recordSuccessfulMenuGeneration(appId, request, resultJson)
        → ai_menu_learning_{appId}.jsonl
 
-Sau code edit THÀNH CÔNG (roadmap v2.4)
-  └─ ai_code_learning_{appId}.jsonl — patch summary, symbols touched, lines delta
+Sau code edit THÀNH CÔNG (ai-code-stream, responseMode=edit)
+  └─ AiCodeLearningMemoryService.recordSuccessfulCodeEdit(...)
+       → ai_code_learning_{appId}.jsonl — patch summary, symbols touched, surgical rules
+       (menu_json chỉ ghi khi có patchOpCount > 0 — full menu regen dùng menu learning)
 
 Cuối tuần (máy mạnh)
   └─ cập nhật author_style_dna.md
@@ -2237,6 +2268,7 @@ csm_datas/ai_local/
   ai_business_memory/            # Lucene per appId
   ai_local_assistant_index/      # workspace DNA
   ai_menu_learning_*.jsonl       # daily menu learning
+  ai_code_learning_*.jsonl       # daily code edit learning
   author_style_dna.md
   ai_*_master_prompt.md
   ai-assistant-instructions.md
@@ -2266,6 +2298,7 @@ csm_datas/ai_local/
 3. Workspace L1 — file/class cùng pattern gần nhất
 4. Business memory L2 — DynamicCode chunks đã ingest async
 5. Menu learning L4 — nếu menu intent
+6. Code learning L4 — nếu code edit intent (Java/TS/DynamicCode)
 
 **Prompt worker chỉ nhận top-K** — không full repo. Model 1.5B **bám style** nhờ:
 
@@ -2278,14 +2311,17 @@ csm_datas/ai_local/
 | Hành động của bạn | AI học qua |
 |-------------------|------------|
 | Sửa `author_style_dna.md` mục “Quyết định theo ngày” | L0 RAG |
-| Accept menu patch trong UI | L4 jsonl |
+| Accept menu patch trong UI | L4 menu jsonl |
+| Accept code patch / agentic step trong ai-code-stream | L4 code jsonl |
 | Chat thành công + conversation history | Session context |
 | Refactor lớn trong repo | L1 rebuild weekly → export pack |
 
-**Roadmap v2.4 — Code learning jsonl:**
+**Code learning jsonl (v3.20 — đã implement):**
 
-- Sau `text_edit_apply` thành công → ghi `{request, summary, symbols, lineDelta}` vào `ai_code_learning_{appId}.jsonl`
-- Pattern giống `AiMenuLearningMemoryService`
+- Sau `text_edit_apply` / `agenticStepAcceptedCount > 0` trong ai-code-stream (`responseMode=edit`)
+- Ghi `{request, contextType, targetFile, patchOpCount, summary, symbols}` vào `ai_code_learning_{appId}.jsonl`
+- Pattern Lucene KNN giống `AiMenuLearningMemoryService`
+- Retrieve qua `LocalAiAssistantContextService.buildCompressedContextBlocks()` + contract prepend FRONTEND_CODE
 
 ## R.10 Config khuyến nghị
 
@@ -2318,7 +2354,8 @@ AI_EMBEDDING_HASH_DIMENSIONS=128
 | 3 | Chat “combo group_id duplicate” → RAG mention role_code dedupe | ✓ |
 | 4 | Export pack → import máy khác → cùng câu trả lời RAG | ✓ |
 | 5 | Menu edit success → `ai_menu_learning_csm.jsonl` tăng dòng | ✓ |
-| 6 | Weak 5GB không chạy full scan mỗi startup | ✓ |
+| 6 | Code edit success → `ai_code_learning_csm.jsonl` tăng dòng | ✓ |
+| 7 | Weak 5GB không chạy full scan mỗi startup | ✓ |
 
 ## R.12 CẤM
 
@@ -2328,7 +2365,135 @@ AI_EMBEDDING_HASH_DIMENSIONS=128
 ✗ Bỏ qua author_style_dna.md — đây là ADN phong cách duy nhất do bạn kiểm soát
 ✗ Full sync ingest 371k mỗi request thay vì async + pack
 ✗ Feed toàn bộ repo vào prompt vì “cho AI hiểu hết”
+✗ Nhầm “học mỗi ngày” = weights thay đổi — CSM học qua RAG + JSONL + session
 ```
+
+## R.13 Memory Maturity Scorecard — AI agent đã “đủ thông minh” chưa?
+
+> **Câu trả lời ngắn (2026-05-26):** Kiến trúc memory **đạt mức production cho local 1.5B/5GB** (~**82/100** sau v3.20). AI **cải thiện theo ngày** qua retrieval + learning entries — **không** qua fine-tune weights. Chưa đạt cloud-grade reasoning hay self-eval loop tự động.
+
+### R.13.1 Bảng chấm điểm
+
+| Thành phần | Service / artifact | Điểm | Ghi chú |
+|------------|-------------------|------|---------|
+| **L0 Author DNA** | `author_style_dna.md` | 70/100 | Phụ thuộc bạn cập nhật tay — không tự sinh |
+| **L1 Workspace RAG** | `LocalAiAssistantContextService` | 85/100 | Weak 5GB: markdown-only startup; full DNA qua pack |
+| **L2 Business memory** | `AiBusinessMemoryVectorService` | 88/100 | Async ingest + scoped bitmask |
+| **L3 Tenant org** | `AiTenantKnowledgeIngestionService` | 80/100 | Debounce 60s; cần re-ingest sau đổi org |
+| **L4 Menu learning** | `AiMenuLearningMemoryService` | 90/100 | Lucene KNN per request; dedupe digest |
+| **L4 Code learning** | `AiCodeLearningMemoryService` | 85/100 | **v3.20** — ghi sau edit thành công |
+| **Session continuity** | `AiConversationContextService` | 75/100 | 3 scope; weak profile cap 0–900 chars/turn |
+| **Memory trust gate** | `AiAgentHarnessTraceService` | 80/100 | `trustScore ≥ 55` → trusted; UI hiển thị |
+| **Flow-aware context** | `AiLocalFlowContextPolicy` | 88/100 | Analyze ≠ Edit — RAG top-k/chars khác nhau |
+| **O→R→A routing** | `classifyIntentWithLocalAI` + SSE `intent_reasoning` | 85/100 | Model-driven; không keyword cứng |
+| **Daily auto-eval** | — | 40/100 | **Gap** — chưa có regression harness tự chạy |
+
+**Tổng hợp:** ~**82/100** — đủ cho agent local surgical edit + menu greenfield có scaffold Java; chưa “tự học trong weights”.
+
+### R.13.2 “Học mỗi ngày” nghĩa là gì trong CSM?
+
+```txt
+CÓ (tự động):
+  • Mỗi menu edit OK     → +1 entry ai_menu_learning_*.jsonl
+  • Mỗi code edit OK     → +1 entry ai_code_learning_*.jsonl
+  • Mỗi chat turn        → session history (user/app_shared/code_target)
+  • Tenant/org thay đổi  → L3 re-ingest (debounced)
+  • Request tiếp theo    → top-K retrieval ưu tiên entry mới + score cao
+
+KHÔNG (by design):
+  • Fine-tune Qwen 1.5B nightly
+  • Model “nhớ” repo trong weights
+  • Tự sửa author_style_dna.md không qua bạn
+```
+
+**Thông minh lên theo thời gian** khi: (1) bạn accept nhiều patch đúng → JSONL dày hơn; (2) pack workspace đầy đủ; (3) `author_style_dna.md` phản ánh quyết định mới.
+
+### R.13.3 Sơ đồ memory đầy đủ (4 layer + session)
+
+```mermaid
+flowchart TB
+    subgraph persistent [Persistent — copy được]
+        L0[author_style_dna L0]
+        L1[workspace index L1]
+        L2[business memory L2]
+        L3[tenant snapshot L3]
+        L4M[menu learning L4]
+        L4C[code learning L4]
+    end
+    subgraph session [Session — per user/app/target]
+        S1[user scope]
+        S2[app_shared]
+        S3[code_target_shared]
+    end
+    subgraph request [Mỗi request]
+        FC[AiLocalFlowContextPolicy]
+        ORCH[orchestrateResilient]
+        TRUST[memoryTrustScore]
+        PROMPT[minimal prompt ≤18k]
+        LLM[Qwen 1.5B worker]
+    end
+    L0 --> ORCH
+    L1 --> ORCH
+    L2 --> ORCH
+    L3 --> ORCH
+    L4M --> ORCH
+    L4C --> ORCH
+    S1 --> ORCH
+    S2 --> ORCH
+    S3 --> ORCH
+    FC --> ORCH
+    ORCH --> TRUST
+    TRUST --> PROMPT
+    PROMPT --> LLM
+    LLM -->|edit OK| L4M
+    LLM -->|edit OK| L4C
+    LLM -->|turn| session
+```
+
+### R.13.4 Flow context + RAM (v3.19–3.20)
+
+| Flow preset | RAG | Top-K | Max chars | Ghi chú |
+|-------------|-----|-------|-----------|---------|
+| `ANALYZE_MENU` | scoped, nhẹ | thấp | ~8k | `[MENU_BUSINESS_SCAN]` digest; không patch |
+| `EDIT_MENU` | full scoped | cao | ~18k | menu learning L4 |
+| `ANALYZE_CODE` | scoped | thấp | ~10k | sliding window analyze |
+| `EDIT_CODE` | full + code L4 | cao | ~18k | import-follow + code learning |
+| `QUICK` | tắt/giảm | 0–2 | ~4k | câu hỏi ngắn |
+
+**Context window auto-fit** (`ai.local.llama.context-window-auto-fit=true`): KV cache sized từ prompt budget + max_tokens — tránh over-provision RAM trên 5GB.
+
+### R.13.5 Config memory v3.20
+
+```properties
+ai.menu.learning.enabled=true
+ai.code.learning.enabled=true
+ai.code.learning.max-entries-per-app=240
+ai.code.learning.retrieve-max-items=4
+ai.code.learning.retrieve-max-chars=10000
+ai.local.llama.context-window-auto-fit=true
+ai.local.routing.model-driven.enabled=true
+```
+
+### R.13.6 Checklist “memory đủ thông minh”
+
+| # | Kiểm tra | Pass |
+|---|----------|------|
+| 1 | `GET /api/ai-local/knowledge/status` → `menuLearningFiles` + `codeLearningFiles` | ✓ |
+| 2 | Menu edit → dòng mới trong `ai_menu_learning_{appId}.jsonl` | ✓ |
+| 3 | Code edit (agentic/patch) → dòng mới trong `ai_code_learning_{appId}.jsonl` | ✓ |
+| 4 | Request edit code tương tự → prompt có `AUTO-LEARNED CODE FIXES` | ✓ |
+| 5 | SSE `agent_harness_trace` → `memoryTrust.trustScore` ≥ 55 khi RAG đủ | ✓ |
+| 6 | Analyze menu → không apply patch; có `intent_reasoning` | ✓ |
+| 7 | Export pack → import máy khác → cùng learning files | ✓ |
+
+### R.13.7 Roadmap memory (gap còn lại)
+
+| Gap | Ưu tiên | Hướng |
+|-----|---------|-------|
+| Automated daily eval/regression | P1 | Harness chạy 10 câu golden → so score |
+| Session budget weak profile quá thấp | P2 | Tăng cap có điều kiện khi trust cao |
+| L0 auto-suggest từ accepted patches | P3 | Draft PR vào `author_style_dna.md` — human approve |
+| Fine-tune local | — | **Cấm** trên 5GB — dùng pack |
 
 ---
 
@@ -4890,7 +5055,7 @@ USER_REQUEST
 | Freshness không expose score riêng | Khó debug “vì sao chunk cũ thắng chunk mới” | ✅ **AD-R1 partial** — `freshnessScore` + `contentExcerpt` trong `tool_search` / `rag_citations` |
 | Citation line | User không thấy nguồn chunk | ✅ **AD-R6** — SSE `rag_citations` + usage dock Composer |
 | Trusted Knowledge vs apply order | Menu mỏng vẫn apply rồi gate reject | ✅ **AD-R2** `gateGreenfieldMenuForApply` trước apply |
-| BM25 hybrid chưa có | Vector-only trên index lạnh yếu | **AF-R11** Phase 3 roadmap |
+| BM25 hybrid chưa có | Vector-only trên index lạnh yếu | ✅ **AF-R11** — Lucene BM25 + KNN fuse (`AiLocalLuceneHybridSearchHelper`); cross-encoder vẫn roadmap |
 
 ---
 
@@ -5029,7 +5194,7 @@ MENU_GREENFIELD scaffold assemble requestId=… llmNodes=5 scaffoldNodes=15+ cha
 | Phân tích **đầy đủ** nghiệp vụ trước khi sinh menu | ⚠️ Một phần | Comprehend LLM + Java enrich modules; LLM 7B vẫn có thể under-spec |
 | Lập kế hoạch **từng node** đầy đủ tính năng | ✅ Sau v3.13 | `planned_structure[]` + scaffold 1 node/module |
 | Ráp **menu hoàn chỉnh** trả user | ✅ Sau v3.13 | Scaffold thay menu mỏng; LLM có thể enrich label sau |
-| Pipeline Metadata→Freshness→Rerank→Validate→Trusted | ✅ ~85% | Freshness score UI ✅; gate-before-apply ✅; BM25 ❌ |
+| Pipeline Metadata→Freshness→Rerank→Validate→Trusted | ✅ ~90% | Freshness score UI ✅; gate-before-apply ✅; BM25 hybrid ✅ (cross-encoder ❌) |
 | Supervisor + 4 agent riêng | ⚠️ Logic only | Cùng codebase, không microservice agent |
 | 6 trụ Distributed Systems Engineering | ✅ ~65% | State/Security/Reliability còn roadmap |
 
@@ -5368,7 +5533,7 @@ flowchart TB
 | **AF-R8** | Anti-noise contract in prompt | ✅ `ai_greenfield_pipeline_contract.md` | Comprehend + greenfield worker |
 | **AF-R9** | Report nesting + dedupe | ✅ Java normalize + scaffold | Regression test AF-T9/T10 |
 | **AF-R10** | Micro-agent separate JVM | Monolithic thread (by design) | **AD-R5** optional job queue |
-| **AF-R11** | BM25 hybrid RAG | Vector KNN only | Phase 3 roadmap |
+| **AF-R11** | BM25 hybrid RAG | ✅ KNN + BM25 fuse + rerank | Cross-encoder rerank roadmap |
 
 ---
 
@@ -5759,5 +5924,5 @@ ai.local.greenfield.live-menu-pattern-index.max-leaves=120
 
 ---
 
-**Hết master brief v3.19.**  
+**Hết master brief v3.20.**  
 Chỉ dùng file này khi yêu cầu Cursor AI implement / làm lại CSM AI Local hoặc domain System Management liên quan RAG.

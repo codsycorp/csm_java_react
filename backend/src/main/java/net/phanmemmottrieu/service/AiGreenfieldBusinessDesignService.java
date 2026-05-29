@@ -355,10 +355,10 @@ public class AiGreenfieldBusinessDesignService {
         boolean hasEditor = !safeCode.isBlank() && !menuEffectivelyEmpty;
         boolean hasSamples = hasSampleSignals(safeAttachments, safeMessage, editorMetadata);
         boolean greenfield = !hasEditor;
-
-        if ("analyze".equals(safeMode) && hasEditor && !hasSamples && !isAnalyzeBusinessQuestion(safeMessage)) {
-            return ComprehensionResult.skipped();
+        if ("analyze".equals(safeMode) && menuFlow && hasEditor) {
+            greenfield = false;
         }
+
         if (!shouldActivate(greenfield, hasSamples, hasEditor, safeMode, safeMessage)) {
             return ComprehensionResult.skipped();
         }
@@ -408,8 +408,9 @@ public class AiGreenfieldBusinessDesignService {
             menuFlow,
             scenario,
             menuScan,
-            codeScan);
-        if (menuFlow && greenfield) {
+            codeScan,
+            "analyze".equals(safeMode));
+        if (menuFlow && greenfield && !"analyze".equals(safeMode)) {
             spec = enrichBusinessSpecForMenuGreenfield(spec, userRequest);
         }
         ExecutionPlan plan = buildExecutionPlan(
@@ -522,41 +523,15 @@ public class AiGreenfieldBusinessDesignService {
         return parseMenuRoots(menuJson).isEmpty();
     }
 
-    /** Analyze requests asking what the code does business-wise (not narrow symbol debug). */
+    /** @deprecated Routing uses classifier responseMode — do not match keywords. */
+    @Deprecated
     public static boolean isAnalyzeBusinessQuestion(String message) {
-        String text = String.valueOf(message == null ? "" : message).trim().toLowerCase(Locale.ROOT);
-        if (text.isBlank()) {
-            return false;
-        }
-        String normalized = text
-            .replace('đ', 'd').replace('Đ', 'd')
-            .replaceAll("[^a-z0-9\\s]", " ")
-            .replaceAll("\\s+", " ")
-            .trim();
-        int businessHits = 0;
-        for (String token : List.of(
-                "nghiep vu", "business logic", "business", "chuc nang", "lam gi", "lam nghiep vu",
-                "phan tich", "phân tích", "logic", "luong xu ly", "luong nghiep", "toan bo",
-                "tong the", "end to end", "module", "kien truc", "dong du lieu")) {
-            if (normalized.contains(token) || text.contains(token)) {
-                businessHits++;
-            }
-        }
-        int narrowHits = 0;
-        for (String token : List.of("ham ", "function ", "method ", "dong ", "line ", "bug", "fix", "sua loi")) {
-            if (normalized.contains(token.trim()) || text.contains(token)) {
-                narrowHits++;
-            }
-        }
-        if (businessHits >= 1 && narrowHits <= 1) {
-            return true;
-        }
-        return businessHits >= 2;
+        return false;
     }
 
     private boolean shouldActivate(boolean greenfield, boolean hasSamples, boolean hasEditor, String responseMode, String message) {
         if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
-            if (hasEditor && isAnalyzeBusinessQuestion(message)) {
+            if (hasEditor) {
                 return true;
             }
             return hasSamples && requiredOnSampleAttachment;
@@ -631,9 +606,10 @@ public class AiGreenfieldBusinessDesignService {
         boolean menuFlow,
         InputScenario scenario,
         MenuBusinessScan menuScan,
-        CodeBusinessScan codeScan
+        CodeBusinessScan codeScan,
+        boolean analyzeMode
     ) {
-        if (isAnalyzeBusinessQuestion(userRequest)) {
+        if (analyzeMode) {
             return buildLearnedContextBusinessSpec(
                 userRequest, sampleMenuDigest, sampleCodeDigest, activeEditorDigest,
                 menuFlow, scenario, menuScan, codeScan);
@@ -2170,6 +2146,193 @@ public class AiGreenfieldBusinessDesignService {
             out.addAll(enriched.modules().stream().filter(m -> !String.valueOf(m).isBlank()).toList());
         }
         return out.stream().distinct().limit(24).toList();
+    }
+
+    /**
+     * Prose business analysis for Composer — analyze-only menu (no Lego apply plan).
+     */
+    public String buildAnalyzeMenuReasoningProseVi(
+            BusinessSpec spec,
+            ExecutionPlan plan,
+            String userMessage) {
+        if (spec == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Phân tích nghiệp vụ (menu hiện có)\n\n");
+        String domain = String.valueOf(spec.domainSummary() == null ? "" : spec.domainSummary()).trim();
+        if (!domain.isBlank()) {
+            sb.append("**Phạm vi:** ").append(domain).append("\n\n");
+        }
+        String existing = String.valueOf(spec.existingBusinessSummary() == null ? "" : spec.existingBusinessSummary()).trim();
+        if (!existing.isBlank()) {
+            sb.append("**Hiện trạng editor:** ").append(trimToMax(existing, 900)).append("\n\n");
+        }
+        List<String> modules = spec.modules() == null ? List.of() : spec.modules();
+        if (!modules.isEmpty()) {
+            sb.append("**Module / node (**").append(modules.size()).append("**):\n");
+            int idx = 1;
+            for (String module : modules.stream().limit(20).toList()) {
+                if (!String.valueOf(module).isBlank()) {
+                    sb.append(idx++).append(". ").append(module.trim()).append("\n");
+                }
+            }
+            sb.append("\n");
+        }
+        List<String> flows = spec.flows() == null ? List.of() : spec.flows();
+        if (!flows.isEmpty()) {
+            sb.append("**Luồng nghiệp vụ:** ").append(String.join(" → ", flows.stream().limit(6).toList())).append("\n\n");
+        }
+        List<String> tables = spec.tables() == null ? List.of() : spec.tables();
+        if (!tables.isEmpty()) {
+            sb.append("**Bảng liên quan:** ").append(String.join(", ", tables.stream().limit(10).toList())).append("\n\n");
+        }
+        if (plan != null && plan.steps() != null && !plan.steps().isEmpty()) {
+            sb.append("**Góc nhìn phân tích (không sửa editor):**\n");
+            int stepIdx = 1;
+            for (ExecutionStep step : plan.steps()) {
+                if (step == null) {
+                    continue;
+                }
+                String action = String.valueOf(step.action() == null ? "" : step.action()).trim();
+                String target = String.valueOf(step.target() == null ? "" : step.target()).trim();
+                if (action.isBlank() && target.isBlank()) {
+                    continue;
+                }
+                sb.append(stepIdx++).append(". ").append(action.isBlank() ? target : action);
+                if (!target.isBlank() && !action.isBlank()) {
+                    sb.append(" — ").append(target);
+                }
+                sb.append("\n");
+            }
+            sb.append("\n");
+        }
+        sb.append("*Chế độ **phân tích** — trả lời prose; **không** áp patch/menu vào CodeMirror trừ khi bạn yêu cầu sửa rõ ràng.*\n");
+        return sb.toString().trim();
+    }
+
+    /**
+     * Deterministic menu business analysis from editor JSON — for analyze fast path without LLM.
+     */
+    public String buildHeuristicMenuBusinessAnalysisProse(String menuJson, String requestText) {
+        MenuBusinessScan scan = scanMenuBusinessStructure(String.valueOf(menuJson == null ? "" : menuJson));
+        if (scan.totalNodes() <= 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Phân tích nghiệp vụ menu\n\n");
+        sb.append("**Phạm vi:** ").append(scan.totalNodes()).append(" node menu");
+        if (!scan.moduleLabels().isEmpty()) {
+            sb.append(" — ").append(String.join(", ", scan.moduleLabels().stream().limit(8).toList()));
+        }
+        sb.append("\n\n");
+
+        if (!scan.moduleLabels().isEmpty()) {
+            sb.append("**Module / nhóm menu (**").append(scan.moduleLabels().size()).append("**):\n");
+            int idx = 1;
+            for (String module : scan.moduleLabels().stream().limit(24).toList()) {
+                if (!String.valueOf(module).isBlank()) {
+                    sb.append(idx++).append(". ").append(module.trim()).append("\n");
+                }
+            }
+            sb.append("\n");
+        }
+
+        if (!scan.tables().isEmpty()) {
+            sb.append("**Bảng dữ liệu (**").append(scan.tables().size()).append("**): ")
+                .append(String.join(", ", scan.tables().stream().limit(16).toList()))
+                .append("\n\n");
+        }
+
+        if (!scan.typeFormCounts().isEmpty()) {
+            sb.append("**Loại form (type_form):** ");
+            List<String> typeParts = new ArrayList<>();
+            scan.typeFormCounts().forEach((type, count) ->
+                typeParts.add("type " + type + "=" + count));
+            sb.append(String.join(", ", typeParts.stream().limit(10).toList())).append("\n\n");
+        }
+
+        if (!scan.triggerSummaries().isEmpty()) {
+            sb.append("**Trigger / hành vi nghiệp vụ:**\n");
+            for (String trigger : scan.triggerSummaries().stream().limit(12).toList()) {
+                if (!String.valueOf(trigger).isBlank()) {
+                    sb.append("- ").append(trigger.trim()).append("\n");
+                }
+            }
+            sb.append("\n");
+        }
+
+        sb.append("**Luồng nghiệp vụ (suy luận từ cấu trúc menu):**\n");
+        sb.append("- Người dùng điều hướng theo cây menu → mở form/báo cáo theo `type_form` và `table_name`.\n");
+        if (!scan.tables().isEmpty()) {
+            sb.append("- Dữ liệu CRUD/grid gắn với bảng: ")
+                .append(String.join(", ", scan.tables().stream().limit(6).toList()))
+                .append(".\n");
+        }
+        if (!scan.triggerSummaries().isEmpty()) {
+            sb.append("- Trigger điều phối mở form, query, hoặc luồng con khi chọn node.\n");
+        }
+        sb.append("\n");
+
+        List<String> risks = new ArrayList<>();
+        if (!scan.emptyTriggerNodeIds().isEmpty()) {
+            risks.add(scan.emptyTriggerNodeIds().size() + " node thiếu trigger (id: "
+                + String.join(", ", scan.emptyTriggerNodeIds().stream().limit(5).toList()) + ")");
+        }
+        if (!scan.nodesMissingI18n().isEmpty()) {
+            risks.add(scan.nodesMissingI18n().size() + " node thiếu label_en/label_zh");
+        }
+        if (scan.tableColumnI18nGaps() > 0) {
+            risks.add(scan.tableColumnI18nGaps() + " cột bảng thiếu i18n");
+        }
+        if (!risks.isEmpty()) {
+            sb.append("**Góc nhìn chất lượng / rủi ro:**\n");
+            for (String risk : risks) {
+                sb.append("- ").append(risk).append("\n");
+            }
+            sb.append("\n");
+        }
+
+        String req = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (!req.isBlank()) {
+            sb.append("**Yêu cầu người dùng:** ").append(trimToMax(req, 240)).append("\n\n");
+        }
+        sb.append("*Chế độ **phân tích** — chỉ mô tả nghiệp vụ; không sửa JSON menu trong editor.*\n");
+        return sb.toString().trim();
+    }
+
+    /**
+     * Compact deterministic menu scan for worker prompt slot (analyze menu — no full JSON in model).
+     */
+    public String buildMenuBusinessScanDigest(String menuJson, int maxChars) {
+        MenuBusinessScan scan = scanMenuBusinessStructure(String.valueOf(menuJson == null ? "" : menuJson));
+        if (scan.totalNodes() <= 0) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("nodes=").append(scan.totalNodes());
+        if (!scan.moduleLabels().isEmpty()) {
+            sb.append(" | modules: ").append(String.join(", ", scan.moduleLabels().stream().limit(12).toList()));
+        }
+        if (!scan.tables().isEmpty()) {
+            sb.append(" | tables: ").append(String.join(", ", scan.tables().stream().limit(10).toList()));
+        }
+        if (!scan.typeFormCounts().isEmpty()) {
+            sb.append(" | type_form: ");
+            List<String> parts = new ArrayList<>();
+            scan.typeFormCounts().forEach((k, v) -> parts.add(k + "=" + v));
+            sb.append(String.join(",", parts.stream().limit(8).toList()));
+        }
+        if (!scan.triggerSummaries().isEmpty()) {
+            sb.append(" | triggers: ").append(String.join("; ", scan.triggerSummaries().stream().limit(6).toList()));
+        }
+        if (!scan.emptyTriggerNodeIds().isEmpty()) {
+            sb.append(" | missing_trigger: ").append(scan.emptyTriggerNodeIds().size());
+        }
+        if (!scan.nodesMissingI18n().isEmpty()) {
+            sb.append(" | missing_i18n: ").append(scan.nodesMissingI18n().size());
+        }
+        return trimToMax(sb.toString().trim(), Math.max(400, maxChars));
     }
 
     /**

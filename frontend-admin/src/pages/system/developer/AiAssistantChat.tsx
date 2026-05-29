@@ -1183,14 +1183,6 @@ function looksLikeStructuredBusinessAnalysisProse(raw: unknown): boolean {
 	return /^\d+\)\s+(Mục tiêu nghiệp vụ|Luồng chính|Thành phần nghiệp vụ|Rủi ro|Điểm cần xác nhận)/im.test(text);
 }
 
-function looksLikeAnalyzeBusinessQuestion(raw: unknown): boolean {
-	const text = String(raw || "").trim().toLowerCase();
-	if (!text)
-		return false;
-	return /(phân tích|phan tich|nghiệp vụ|nghiep vu|business logic|toàn bộ logic|toan bo logic)/i.test(text)
-		&& /(code|logic|này|naay|đang|dang|lam gi|làm gì)/i.test(text);
-}
-
 function looksLikeIntentClassifyJsonPayload(raw: string): boolean {
 	const candidate = String(raw || "").trim();
 	if (!candidate.includes("{"))
@@ -2458,18 +2450,23 @@ function summarizeChecklistForConfirm(rawChecklist: any): string {
 	return parts.join("\n").trim();
 }
 
-function hasEditIntent(input: string): boolean {
+function hasExplicitEditIntent(input: string): boolean {
 	const text = String(input || "").trim().toLowerCase();
-	if (!text)
+	if (!text) {
 		return false;
+	}
 	const patterns = [
 		/\b(sua|sửa|chinh|chỉnh|update|modify|refactor|rewrite|fix|implement|generate|tao|tạo|viet|viết|chen|chèn|apply|patch|replace|doi|đổi)\b/i,
 		/(hãy\s+sửa|hay\s+sua|kiểm tra.*sửa|trigger.*sửa|nhãn\s+3\s+ngôn\s+ngữ)/i,
 		/\b(add|remove|delete|insert|edit)\b/i,
 		/\b(code\s+edit|edit\s+code|sua\s+code|chinh\s+code|chỉnh\s+code|json\s+patch|menu\s+patch|menu\s+design)\b/i,
-		/(修改|更新|重写|修复|生成|插入|替换|代码|菜单|json)/i,
+		/(修改|更新|重写|修复|生成|插入|替换|代码|菜单)/i,
 	];
 	return patterns.some(pattern => pattern.test(text));
+}
+
+function hasEditIntent(input: string): boolean {
+	return hasExplicitEditIntent(input);
 }
 
 function hasConversationalQuestionIntent(input: string): boolean {
@@ -2484,16 +2481,13 @@ function hasConversationalQuestionIntent(input: string): boolean {
 	return !hasEdit && patterns.some(pattern => pattern.test(text));
 }
 
-function inferResponseModeByIntent(input: string, contextType: AiAssistantChatProps["contextType"]): ResponseMode {
+function inferResponseModeByIntent(input: string, contextType: AiAssistantChatProps["contextType"]): ResponseMode | undefined {
 	const text = String(input || "").trim();
-	if (!text)
-		return "analyze";
-	if (hasConversationalQuestionIntent(text))
-		return "analyze";
-	if (contextType === "menu_json") {
-		return (hasEditIntent(text) || hasMenuPatchOnlyIntent(text)) ? "edit" : "analyze";
+	if (!text) {
+		return undefined;
 	}
-	return hasEditIntent(text) ? "edit" : "analyze";
+	const directive = parseResponseModeDirective(text);
+	return directive.overrideMode;
 }
 
 /** Outgoing code string + optional selection narrow-scope for AI local. No highlight → full string scope. */
@@ -6069,7 +6063,7 @@ export default function AiAssistantChat({
 					taskType: contextType === "menu_json"
 						? (inferredPreviewMode === "edit" ? "menu_patch" : "menu_qa")
 						: "code_assistant",
-					responseMode: inferredPreviewMode,
+					...(inferredPreviewMode ? { responseMode: inferredPreviewMode } : {}),
 					attachments: pendingAttachments.map(a => ({
 						id: a.id,
 						name: a.name,
@@ -6196,8 +6190,8 @@ export default function AiAssistantChat({
 			const explicitResponseMode: ResponseMode | undefined = useLocalPlanRoute
 				? (modeDirective.overrideMode ?? "edit")
 				: modeDirective.overrideMode;
-			const requestedResponseMode: ResponseMode = explicitResponseMode ?? inferredResponseMode;
-			setActiveStreamResponseMode(requestedResponseMode);
+			const requestedResponseMode: ResponseMode | undefined = explicitResponseMode ?? inferredResponseMode;
+			setActiveStreamResponseMode(requestedResponseMode ?? "analyze");
 
 			// Add placeholder for assistant response
 			const assistantMsg: ChatMessage = {
@@ -6277,6 +6271,7 @@ export default function AiAssistantChat({
 				});
 			}
 			turnAllowAutoApplyRef.current = requestedResponseMode === "edit";
+			streamStartedInEditModeRef.current = requestedResponseMode === "edit";
 			localFlowVerifiedRef.current = false;
 			textEditApplyCountRef.current = 0;
 			const outgoingSnapshot = resolveOutgoingEditorSnapshot(
@@ -6286,10 +6281,7 @@ export default function AiAssistantChat({
 			);
 			liveCodeRef.current = outgoingSnapshot.code;
 			editStreamStartCodeRef.current = outgoingSnapshot.code;
-			streamStartedInEditModeRef.current = requestedResponseMode === "edit";
-			analyzeHeuristicPrimaryStreamRef.current = requestedResponseMode === "analyze"
-				&& contextType === "code"
-				&& looksLikeAnalyzeBusinessQuestion(cleanedMessage || normalizedText);
+			analyzeHeuristicPrimaryStreamRef.current = false;
 			requestStartedAtRef.current = Date.now();
 			lastProgressEventAtRef.current = requestStartedAtRef.current;
 			lastProgressWatchdogAlertAtRef.current = 0;
@@ -6307,9 +6299,9 @@ export default function AiAssistantChat({
 				setStreamJobId(requestJobId);
 				const flowType = contextType === "menu_json" ? "menu_manager" : "code_editor";
 				const taskType = contextType === "menu_json"
-					? (requestedResponseMode === "analyze"
-						? "menu_qa"
-						: (hasMenuPatchOnlyIntent(cleanedMessage || normalizedText) ? "menu_patch" : "menu_design"))
+					? (requestedResponseMode === "edit"
+						? (hasMenuPatchOnlyIntent(cleanedMessage || normalizedText) ? "menu_patch" : "menu_design")
+						: "menu_qa")
 					: "code_assistant";
 				const response = await request.post(useLocalPlanRoute ? "ai-local/execute-local-plan" : "ai-code-stream", {
 					json: {
@@ -6321,7 +6313,7 @@ export default function AiAssistantChat({
 						uiLanguage: String(i18n.resolvedLanguage || i18n.language || "vi"),
 						flowType,
 						taskType,
-						responseMode: requestedResponseMode,
+						...(requestedResponseMode ? { responseMode: requestedResponseMode } : {}),
 						currentCode: outgoingSnapshot.code,
 						language,
 						contextType,
@@ -8150,6 +8142,7 @@ export default function AiAssistantChat({
 									percent: evt.percent ?? prev.percent,
 									message: localizedEvtMessage || prev.message,
 									charsReceived: evt.charsReceived ?? prev.charsReceived,
+									ttftMs: evt.ttftMs ?? prev.ttftMs,
 									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
 								}));
 							}
@@ -8256,15 +8249,44 @@ export default function AiAssistantChat({
 							}
 							else if (evt.stage === "routing" && evt.responseMode) {
 								const mode = String(evt.responseMode).trim().toLowerCase();
-								// Do not downgrade edit→analyze when this turn started as edit (client already sent responseMode).
-								if (!(streamStartedInEditModeRef.current && mode === "analyze")) {
-									setActiveStreamResponseMode(mode === "edit" ? "edit" : "analyze");
-									turnAllowAutoApplyRef.current = mode === "edit";
+								setActiveStreamResponseMode(mode === "edit" ? "edit" : "analyze");
+								turnAllowAutoApplyRef.current = mode === "edit";
+								if (mode === "edit") {
+									streamStartedInEditModeRef.current = true;
+								}
+							}
+							else if (evt.stage === "intent_reasoning") {
+								const reasoning = String((evt as any).reasoning || (evt as any).message || "").trim();
+								const action = String((evt as any).action || "").trim().toLowerCase();
+								if (reasoning) {
+									appendComposerActivity({
+										kind: "plan",
+										icon: "🧠",
+										label: uiText(
+											`Suy luận: ${reasoning}`,
+											`Reasoning: ${reasoning}`,
+											`推理：${reasoning}`,
+										),
+										status: "done",
+									});
+								}
+								if (action === "edit" || action === "analyze") {
+									setActiveStreamResponseMode(action);
+									turnAllowAutoApplyRef.current = action === "edit";
 								}
 							}
 							else if (evt.stage === "streaming" && evt.chunk) {
 								// Edit/menu patch: never stream raw LLM tokens into chat — apply via text_edit_apply only.
 								if (turnAllowAutoApplyRef.current) {
+									const chunkLen = String(evt.chunk || "").length;
+									if (chunkLen > 0) {
+										setGeminiProgress(prev => ({
+											...prev,
+											phase: "streaming",
+											charsReceived: (prev.charsReceived || 0) + chunkLen,
+											ttftMs: evt.ttftMs ?? prev.ttftMs,
+										}));
+									}
 									continue;
 								}
 								pendingStreamChunkRef.current += analyzeHeuristicPrimaryStreamRef.current
@@ -8273,6 +8295,20 @@ export default function AiAssistantChat({
 								scheduleStreamFlush();
 							}
 						else if (evt.stage === "text_edit_apply" && (evt as any).textEdit) {
+							// Backend classifier chose analyze — never mutate CodeMirror.
+							if (activeStreamResponseMode === "analyze") {
+								appendComposerActivity({
+									kind: "apply",
+									icon: "⛔",
+									label: uiText(
+										"Bỏ qua patch — chế độ phân tích (analyze)",
+										"Skipped patch — analyze mode",
+										"跳过补丁 — 分析模式",
+									),
+									status: "done",
+								});
+								continue;
+							}
 							// Real-time line-edit: apply immediately to CodeMirror without waiting for full response
 							const rawEdit = (evt as any).textEdit as Record<string, unknown>;
 							const maybeStartLine = Number(
@@ -9903,6 +9939,14 @@ export default function AiAssistantChat({
 											<div className={styles.composerStatusRow}>
 												<span>{uiText("Đã nhận", "Received", "已接收")}</span>
 												<span>{`${geminiProgress.charsReceived.toLocaleString()} ${uiText("ký tự", "chars", "字符")}`}</span>
+											</div>
+										)}
+										{isLoading && typeof geminiProgress.ttftMs === "number" && geminiProgress.ttftMs > 0 && (
+											<div className={styles.composerStatusRow}>
+												<span>{uiText("TTFT", "TTFT", "首 token")}</span>
+												<span className={styles.geminiProgressTtft}>
+													{`${(geminiProgress.ttftMs / 1000).toFixed(2)}s`}
+												</span>
 											</div>
 										)}
 										{!isLoading && completionSummaryLabel && (

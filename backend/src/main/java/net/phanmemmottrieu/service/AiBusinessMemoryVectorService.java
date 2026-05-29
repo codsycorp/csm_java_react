@@ -100,6 +100,18 @@ public class AiBusinessMemoryVectorService {
     @Value("${ai.business.memory.search.rerank.max-candidates:18}")
     private int rerankMaxCandidates;
 
+    @Value("${ai.business.memory.search.hybrid-bm25.enabled:true}")
+    private boolean hybridBm25Enabled;
+
+    @Value("${ai.business.memory.search.hybrid-bm25.vector-weight:0.55}")
+    private float hybridVectorWeight;
+
+    @Value("${ai.business.memory.search.hybrid-bm25.bm25-weight:0.45}")
+    private float hybridBm25Weight;
+
+    @Value("${ai.business.memory.search.hybrid-bm25.fanout-multiplier:4}")
+    private int hybridBm25FanoutMultiplier;
+
     @Value("${ai.business.memory.dynamic.enabled:true}")
     private boolean dynamicMemoryEnabled;
 
@@ -438,9 +450,12 @@ public class AiBusinessMemoryVectorService {
         }
 
         int vectorFanout = Math.max(k * Math.max(3, rerankVectorFanoutMultiplier), 12);
+        int bm25Fanout = AiLocalLuceneHybridSearchHelper.resolveFanout(k, hybridBm25FanoutMultiplier, 12);
         int candidateCap = Math.max(k, Math.max(8, rerankMaxCandidates));
         LinkedHashMap<String, SearchHit> candidateMap = new LinkedHashMap<>();
+        LinkedHashMap<String, AiLocalLuceneHybridSearchHelper.HybridCandidate<SearchHit>> hybridCandidates = new LinkedHashMap<>();
         List<String> queryVariants = buildQueryVariants(safeQuery, rerankEnabled ? rerankMaxQueryVariants : 1);
+        AiRetrievalAuthContext authContext = currentRetrievalAuth();
         try (Directory dir = FSDirectory.open(appPath)) {
             if (!DirectoryReader.indexExists(dir)) {
                 return List.of();
@@ -454,45 +469,57 @@ public class AiBusinessMemoryVectorService {
                         continue;
                     }
                     String embeddingVariant = buildEmbeddingQueryVariant(safeVariant);
-                    if (embeddingVariant.isBlank()) {
-                        continue;
-                    }
-                    Query query = scopeFilter == null
-                        ? new KnnFloatVectorQuery("vector", embedQueryText(embeddingVariant), vectorFanout)
-                        : new KnnFloatVectorQuery("vector", embedQueryText(embeddingVariant), vectorFanout, scopeFilter);
-                    TopDocs docs = searcher.search(query, vectorFanout);
-
-                    for (ScoreDoc sd : docs.scoreDocs) {
-                        SearchHit hit = toSearchHit(searcher, sd, safeAppId, scopeMask, currentRetrievalAuth());
-                        if (hit == null) {
-                            continue;
-                        }
-                        String key = buildHitKey(hit);
-                        SearchHit existing = candidateMap.get(key);
-                        if (existing == null || hit.score() > existing.score()) {
-                            candidateMap.put(key, hit);
-                        }
-                        if (candidateMap.size() >= candidateCap) {
-                            break;
+                    if (!embeddingVariant.isBlank()) {
+                        Query vectorQuery = scopeFilter == null
+                            ? new KnnFloatVectorQuery("vector", embedQueryText(embeddingVariant), vectorFanout)
+                            : new KnnFloatVectorQuery("vector", embedQueryText(embeddingVariant), vectorFanout, scopeFilter);
+                        if (hybridBm25Enabled) {
+                            AiLocalLuceneHybridSearchHelper.collectVectorHits(
+                                searcher,
+                                vectorQuery,
+                                vectorFanout,
+                                (activeSearcher, scoreDoc) -> safeToSearchHit(activeSearcher, scoreDoc, safeAppId, scopeMask, authContext),
+                                hybridCandidates,
+                                this::buildHitKey);
+                        } else {
+                            TopDocs docs = searcher.search(vectorQuery, vectorFanout);
+                            mergeVectorTopDocs(searcher, docs, safeAppId, scopeMask, authContext, candidateMap, candidateCap);
                         }
                     }
-                    if (candidateMap.size() >= candidateCap) {
+                    if (hybridBm25Enabled) {
+                        Query bm25Query = AiLocalLuceneHybridSearchHelper.buildBusinessBm25Query(safeVariant, scopeFilter);
+                        AiLocalLuceneHybridSearchHelper.collectBm25Hits(
+                            searcher,
+                            bm25Query,
+                            bm25Fanout,
+                            (activeSearcher, scoreDoc) -> safeToSearchHit(activeSearcher, scoreDoc, safeAppId, scopeMask, authContext),
+                            hybridCandidates,
+                            this::buildHitKey);
+                    }
+                    if (!hybridBm25Enabled && candidateMap.size() >= candidateCap) {
+                        break;
+                    }
+                    if (hybridBm25Enabled && hybridCandidates.size() >= candidateCap) {
                         break;
                     }
                 }
 
-                // Fallback: if vector ranking gives no hits (cold index), return recent docs.
-                if (candidateMap.isEmpty()) {
+                boolean noHits = hybridBm25Enabled ? hybridCandidates.isEmpty() : candidateMap.isEmpty();
+                if (noHits) {
                     TopDocs latest = searcher.search(scopeFilter == null ? new MatchAllDocsQuery() : scopeFilter, Math.max(candidateCap, 8));
-                    for (ScoreDoc sd : latest.scoreDocs) {
-                        SearchHit hit = toSearchHit(searcher, sd, safeAppId, scopeMask, currentRetrievalAuth());
-                        if (hit == null) {
-                            continue;
+                    if (hybridBm25Enabled) {
+                        for (ScoreDoc sd : latest.scoreDocs) {
+                            SearchHit hit = toSearchHit(searcher, sd, safeAppId, scopeMask, authContext);
+                            if (hit == null) {
+                                continue;
+                            }
+                            hybridCandidates.putIfAbsent(buildHitKey(hit), new AiLocalLuceneHybridSearchHelper.HybridCandidate<>(hit));
+                            if (hybridCandidates.size() >= candidateCap) {
+                                break;
+                            }
                         }
-                        candidateMap.putIfAbsent(buildHitKey(hit), hit);
-                        if (candidateMap.size() >= candidateCap) {
-                            break;
-                        }
+                    } else {
+                        mergeVectorTopDocs(searcher, latest, safeAppId, scopeMask, authContext, candidateMap, candidateCap);
                     }
                 }
             }
@@ -501,7 +528,24 @@ public class AiBusinessMemoryVectorService {
             return List.of();
         }
 
-        List<SearchHit> hits = new ArrayList<>(candidateMap.values());
+        List<SearchHit> hits;
+        if (hybridBm25Enabled) {
+            hits = AiLocalLuceneHybridSearchHelper.fuseAndRank(
+                hybridCandidates,
+                hybridVectorWeight,
+                hybridBm25Weight,
+                (hit, fusedScore) -> new SearchHit(
+                    hit.appId(),
+                    hit.sourceName(),
+                    hit.chunkId(),
+                    hit.summary(),
+                    hit.content(),
+                    fusedScore,
+                    hit.createdAtMs()),
+                candidateCap);
+        } else {
+            hits = new ArrayList<>(candidateMap.values());
+        }
         if (hits.isEmpty()) {
             return List.of();
         }
@@ -525,6 +569,8 @@ public class AiBusinessMemoryVectorService {
         out.put("embeddingProvider", aiLocalEmbeddingService.providerKey());
         out.put("embeddingDimensions", aiLocalEmbeddingService.dimension());
         out.put("embeddingRuntime", aiLocalEmbeddingService.getStats());
+        out.put("rerankEnabled", rerankEnabled);
+        out.put("hybridBm25Enabled", hybridBm25Enabled);
 
         if (!enabled || safeAppId.isBlank() || !Files.isDirectory(appPath)) {
             out.put("documents", 0);
@@ -626,6 +672,46 @@ public class AiBusinessMemoryVectorService {
     private AiRetrievalAuthContext currentRetrievalAuth() {
         AiRetrievalAuthContext ctx = retrievalAuthContextHolder.get();
         return ctx != null ? ctx : AiRetrievalAuthContext.ANONYMOUS;
+    }
+
+    private void mergeVectorTopDocs(
+            IndexSearcher searcher,
+            TopDocs docs,
+            String safeAppId,
+            int scopeMask,
+            AiRetrievalAuthContext authContext,
+            LinkedHashMap<String, SearchHit> candidateMap,
+            int candidateCap) throws Exception {
+        if (docs == null || docs.scoreDocs == null) {
+            return;
+        }
+        for (ScoreDoc sd : docs.scoreDocs) {
+            SearchHit hit = toSearchHit(searcher, sd, safeAppId, scopeMask, authContext);
+            if (hit == null) {
+                continue;
+            }
+            String key = buildHitKey(hit);
+            SearchHit existing = candidateMap.get(key);
+            if (existing == null || hit.score() > existing.score()) {
+                candidateMap.put(key, hit);
+            }
+            if (candidateMap.size() >= candidateCap) {
+                break;
+            }
+        }
+    }
+
+    private SearchHit safeToSearchHit(
+            IndexSearcher searcher,
+            ScoreDoc scoreDoc,
+            String safeAppId,
+            int scopeMask,
+            AiRetrievalAuthContext authContext) {
+        try {
+            return toSearchHit(searcher, scoreDoc, safeAppId, scopeMask, authContext);
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     private SearchHit toSearchHit(

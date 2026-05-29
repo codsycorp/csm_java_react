@@ -64,6 +64,7 @@ import net.phanmemmottrieu.service.AiLocalOrchestrationService;
 import net.phanmemmottrieu.service.AiRetrievalAuthContext;
 import net.phanmemmottrieu.service.AiRetrievalAuthContextResolver;
 import net.phanmemmottrieu.service.AiScopedContextIngestionService;
+import net.phanmemmottrieu.service.AiCodeLearningMemoryService;
 import net.phanmemmottrieu.service.AiMenuLearningMemoryService;
 import net.phanmemmottrieu.service.AiPromptBudgetService;
 import net.phanmemmottrieu.service.LlamaCppNativeService;
@@ -317,7 +318,8 @@ public class ApiSpringController {
         String nextStep,
         String contextKind,
         String raw,
-        String responseMode) {
+        String responseMode,
+        String reasoning) {
         LocalIntentClassification(
                 String type,
                 String action,
@@ -325,7 +327,18 @@ public class ApiSpringController {
                 String nextStep,
                 String contextKind,
                 String raw) {
-            this(type, action, confidence, nextStep, contextKind, raw, "");
+            this(type, action, confidence, nextStep, contextKind, raw, "", "");
+        }
+
+        LocalIntentClassification(
+                String type,
+                String action,
+                int confidence,
+                String nextStep,
+                String contextKind,
+                String raw,
+                String responseMode) {
+            this(type, action, confidence, nextStep, contextKind, raw, responseMode, "");
         }
 
         boolean isEditTask() { return "EDIT_MENU".equals(type) || "EDIT_CODE".equals(type); }
@@ -362,7 +375,7 @@ public class ApiSpringController {
             return answerDirectly() && !needsMenuContext() && !needsCodeContext();
         }
         static LocalIntentClassification unknown() {
-            return new LocalIntentClassification("GENERAL", "other", 0, "unknown", "none", "", "");
+            return new LocalIntentClassification("GENERAL", "other", 0, "unknown", "none", "", "", "");
         }
     }
 
@@ -508,6 +521,7 @@ public class ApiSpringController {
     private final AiLocalOrchestrationService aiLocalOrchestrationService;
     private final AiScopedContextIngestionService aiScopedContextIngestionService;
     private final AiMenuLearningMemoryService aiMenuLearningMemoryService;
+    private final AiCodeLearningMemoryService aiCodeLearningMemoryService;
     private final AiPromptBudgetService aiPromptBudgetService;
     private final LlamaCppNativeService llamaCppNativeService;
     private final ComfyUIProcessService comfyUIProcessService;
@@ -1180,6 +1194,12 @@ public class ApiSpringController {
     @Value("${ai.local.llama.max-tokens:4096}")
     private int aiLocalLlamaMaxTokens;
 
+    @Value("${ai.local.llama.token-streaming.enabled:true}")
+    private boolean aiLocalLlamaTokenStreamingEnabled;
+
+    @Value("${ai.local.llama.token-streaming.min-chars:32}")
+    private int aiLocalLlamaTokenStreamingMinChars;
+
     @Value("${ai.local.business-comprehension.worker-max-tokens:1536}")
     private int aiLocalBusinessComprehensionWorkerMaxTokens;
 
@@ -1582,6 +1602,7 @@ public class ApiSpringController {
             AiLocalOrchestrationService aiLocalOrchestrationService,
             @Autowired(required = false) AiScopedContextIngestionService aiScopedContextIngestionService,
             AiMenuLearningMemoryService aiMenuLearningMemoryService,
+            @Autowired(required = false) AiCodeLearningMemoryService aiCodeLearningMemoryService,
             AiPromptBudgetService aiPromptBudgetService,
             @Autowired(required = false) LlamaCppNativeService llamaCppNativeService,
             AiPatternCacheService aiPatternCacheService,
@@ -1618,6 +1639,7 @@ public class ApiSpringController {
         this.aiLocalOrchestrationService = aiLocalOrchestrationService;
         this.aiScopedContextIngestionService = aiScopedContextIngestionService;
         this.aiMenuLearningMemoryService = aiMenuLearningMemoryService;
+        this.aiCodeLearningMemoryService = aiCodeLearningMemoryService;
         this.aiPromptBudgetService = aiPromptBudgetService;
         this.llamaCppNativeService = llamaCppNativeService;
         this.aiPatternCacheService = aiPatternCacheService;
@@ -1819,14 +1841,8 @@ public class ApiSpringController {
                     }
                 }
 
-                boolean earlyAnalyzeBusinessQuestion = "analyze".equalsIgnoreCase(
-                        String.valueOf(responseMode == null ? "" : responseMode).trim())
-                    && isCodeContext(contextType)
-                    && !isMenuJsonContext(contextType)
-                    && AiGreenfieldBusinessDesignService.isAnalyzeBusinessQuestion(message);
-                LocalIntentClassification preclassifiedIntent = earlyAnalyzeBusinessQuestion
-                    ? buildAnalyzeBusinessHeuristicIntent(message, contextType)
-                    : classifyIntentWithLocalAI(message, false, uiLang);
+                LocalIntentClassification preclassifiedIntent =
+                    classifyIntentWithLocalAI(message, false, uiLang, contextType);
                 responseMode = reconcileCodeResponseModeWithIntent(
                     responseMode,
                     message,
@@ -1836,6 +1852,23 @@ public class ApiSpringController {
                 if (responseMode.isBlank()) {
                     responseMode = "analyze";
                 }
+                String editorObservation = isMenuJsonContext(contextType)
+                    ? "Editor đang mở JSON menu (menu_json)"
+                    : isCodeContext(contextType)
+                        ? "Editor đang mở mã nguồn (code)"
+                        : "Không có editor code/menu";
+                sendEvent(emitter, jsonOf(
+                    "stage", "intent_reasoning",
+                    "status", "resolved",
+                    "requestId", requestId,
+                    "observation", editorObservation,
+                    "reasoning", preclassifiedIntent == null ? "" : preclassifiedIntent.reasoning(),
+                    "action", responseMode,
+                    "intentType", preclassifiedIntent == null ? "" : preclassifiedIntent.type(),
+                    "intentConfidence", preclassifiedIntent == null ? 0 : preclassifiedIntent.confidence(),
+                    "message", preclassifiedIntent == null || preclassifiedIntent.reasoning().isBlank()
+                        ? ("Observation → Action: " + responseMode)
+                        : preclassifiedIntent.reasoning()));
                 sendEvent(emitter, jsonOf(
                     "stage", "routing",
                     "status", "resolved",
@@ -1926,11 +1959,10 @@ public class ApiSpringController {
                 String promptCodeContext = (hasEditorSelection && focusWindow != null && !focusWindow.code().isBlank())
                     ? focusWindow.code()
                     : effectiveCodeContext;
-                boolean analyzeBusinessQuestion = AiGreenfieldBusinessDesignService.isAnalyzeBusinessQuestion(message);
-                boolean analyzeBusinessFastPath = "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode).trim())
-                    && isCodeContext(contextType)
-                    && !isMenuJsonContext(contextType)
-                    && analyzeBusinessQuestion;
+                boolean analyzeBusinessQuestion = "analyze".equalsIgnoreCase(
+                        String.valueOf(responseMode == null ? "" : responseMode).trim())
+                    && (isCodeContext(contextType) || isMenuJsonContext(contextType));
+                boolean analyzeBusinessFastPath = analyzeBusinessQuestion;
                 String analyzeBusinessScanContext = analyzeBusinessQuestion
                     ? resolveAnalyzeBusinessScanContext(
                         effectiveCodeContext,
@@ -1949,7 +1981,11 @@ public class ApiSpringController {
                         && !analyzeBusinessScanContext.isBlank()) {
                     promptCodeContext = analyzeBusinessScanContext;
                 }
-                AiEditTaskPlannerService.EditTaskPlan editTaskPlan = analyzeBusinessFastPath || aiEditTaskPlannerService == null
+                AiEditTaskPlannerService.EditTaskPlan editTaskPlan = analyzeBusinessFastPath
+                        || (isMenuJsonContext(contextType)
+                            && "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                            && analyzeBusinessQuestion)
+                        || aiEditTaskPlannerService == null
                     ? AiEditTaskPlannerService.EditTaskPlan.disabled()
                     : aiEditTaskPlannerService.plan(
                         message,
@@ -2407,7 +2443,8 @@ public class ApiSpringController {
                                     "Execution plan ready (ExecutionPlan)",
                                     "执行计划已就绪 (ExecutionPlan)")));
                             if (isMenuJsonContext(contextType)
-                                    && businessComprehensionResult.greenfield()
+                                    && "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                                    && businessComprehensionResult.activated()
                                     && aiGreenfieldBusinessDesignService != null) {
                                 emitRagCitations(
                                     emitter,
@@ -2417,9 +2454,22 @@ public class ApiSpringController {
                                     true,
                                     "comprehend",
                                     uiLang);
-                            }
-                            if (isMenuJsonContext(contextType)
+                                String analyzeProse = aiGreenfieldBusinessDesignService.buildAnalyzeMenuReasoningProseVi(
+                                    businessComprehensionResult.businessSpec(),
+                                    businessComprehensionResult.executionPlan(),
+                                    message);
+                                if (!analyzeProse.isBlank()) {
+                                    sendEvent(emitter, jsonOf(
+                                        "stage", "business_reasoning",
+                                        "status", "ready",
+                                        "requestId", requestId,
+                                        "analyzeOnly", true,
+                                        "message", analyzeProse,
+                                        "domainSummary", businessComprehensionResult.businessSpec().domainSummary()));
+                                }
+                            } else if (isMenuJsonContext(contextType)
                                     && businessComprehensionResult.greenfield()
+                                    && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
                                     && aiGreenfieldBusinessDesignService != null) {
                                 emitAgentHandoff(emitter, requestId, "Planner", "Executor", "greenfield_plan",
                                     "planned_structure[] ready");
@@ -3901,7 +3951,8 @@ public class ApiSpringController {
                             && !analyzeFocusedPrimaryApplied
                             && !skipHeavyPrimaryForLargeEdit
                             && !skipPrimaryForEarlyFocused
-                            && !menuGreenfieldFastPathApplied) {
+                            && !menuGreenfieldFastPathApplied
+                            && !("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode)))) {
                     logger.info(
                         "AI_CODE_STREAM local prompt requestId={} responseMode={} promptCodeChars={} localProviderPromptChars={}",
                         requestId,
@@ -4264,7 +4315,23 @@ public class ApiSpringController {
                         }
 
                         if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                                && isMenuJsonContext(contextType)
+                                && isLowSignalAnalyzeOutput(String.valueOf(providerText == null ? "" : providerText))) {
+                            if (isAnalyzeHeuristicFallbackEnabled(message)) {
+                                String heuristic = buildHeuristicBusinessLogicAnalysis(
+                                    effectiveCodeContext,
+                                    message,
+                                    contextType);
+                                if (!heuristic.isBlank() && !isLowSignalAnalyzeOutput(heuristic)) {
+                                    providerText = heuristic;
+                                    codeStreamMeta.put("analyzeHeuristicFallbackApplied", true);
+                                }
+                            }
+                        }
+
+                        if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
                                 && isCodeContext(contextType)
+                                && !isMenuJsonContext(contextType)
                                 && isLowSignalAnalyzeOutput(String.valueOf(providerText == null ? "" : providerText))) {
                             String recoveredAnalyze = tryAnalyzeFocusedLocalFallback(
                                 emitter,
@@ -4668,9 +4735,7 @@ public class ApiSpringController {
                                 }
                             }
                             boolean stepContractRequired = hasOrchestrationSteps
-                                && ("edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
-                                || ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
-                                    && isMenuJsonContext(contextType)))
+                                && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
                                 && !(isCodeContext(contextType)
                                     && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
                                     && (hardLocalOnlyFlow || localOnlyHardRoute || isWeakLocalRuntime() || skipHeavyOrchestrationForLargeCodeEdit
@@ -6896,6 +6961,18 @@ public class ApiSpringController {
                     message,
                     conversationAssistantText,
                     codeTurnMeta);
+
+                recordSuccessfulCodeLearningIfApplicable(
+                    appId,
+                    message,
+                    contextType,
+                    pName,
+                    responseMode,
+                    codeTurnMeta,
+                    outputShape,
+                    agenticStepAcceptedCount,
+                    conversationAssistantText,
+                    rawResponse);
 
                 logger.info("ApiSpringController: ai-code-stream complete requestId={} appId={} model={} elapsedMs={} outputChars={}",
                     requestId, appId, effectiveModel, (System.currentTimeMillis() - requestStartedAtMs), rawResponse.length());
@@ -9972,11 +10049,22 @@ public class ApiSpringController {
             SseEmitter emitter, String requestId, String text,
             String contextType, String responseMode, int attempt,
             String currentCode) {
+        return emitLocalTextEditEvents(emitter, requestId, text, contextType, responseMode, attempt, currentCode, false);
+    }
+
+    private int emitLocalTextEditEvents(
+            SseEmitter emitter, String requestId, String text,
+            String contextType, String responseMode, int attempt,
+            String currentCode,
+            boolean skipStreamingChunks) {
         if (text == null || text.isBlank()) {
             return 0;
         }
         // Analyze mode: stream raw text chunks; no structured parsing needed
         if (!"edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
+            if (skipStreamingChunks) {
+                return 0;
+            }
             return emitSyntheticLocalStreamChunks(emitter, requestId, text, attempt, false, attempt == 1);
         }
         String safeCode = String.valueOf(currentCode == null ? "" : currentCode);
@@ -10000,7 +10088,7 @@ public class ApiSpringController {
 
                 // Emit summary + changes list as chat text for the streaming bubble
                 String summary = parsed.has("summary") ? parsed.get("summary").asText("").trim() : "";
-                if (!summary.isBlank()) {
+                if (!summary.isBlank() && !skipStreamingChunks) {
                     StringBuilder chatMsg = new StringBuilder(summary);
                     JsonNode changesNode = parsed.get("changes");
                     if (changesNode != null && changesNode.isArray()) {
@@ -10387,6 +10475,11 @@ public class ApiSpringController {
             return 0;
         }
         if (stepStatsOut != null && isMenuGreenfieldFullDraftApply(stepStatsOut)) {
+            writeAgenticStepStats(stepStatsOut, 0, 0, 0, 0, 0, Collections.emptyMap(), Collections.emptyList());
+            return 0;
+        }
+        if (isMenuJsonContext(contextType)
+                && "analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))) {
             writeAgenticStepStats(stepStatsOut, 0, 0, 0, 0, 0, Collections.emptyMap(), Collections.emptyList());
             return 0;
         }
@@ -11502,7 +11595,8 @@ public class ApiSpringController {
                         : clampPromptForLocalProvider(
                             buildLocalAutoContinuePrompt(prompt, localAccumulated.toString(), contextType, responseMode),
                             contextType, responseMode);
-                    String localRaw = runLocalProviderWithProgress(emitter, requestId, currentLocalPrompt, contextType, responseMode);
+                    String localRaw = runLocalProviderWithProgress(
+                        emitter, requestId, currentLocalPrompt, contextType, responseMode, 0, streamMeta);
                     String localText = extractAiResultText(localRaw);
                     // Never fall back to streaming the raw provider-wrapper JSON — it
                     // contains metadata (provider, timestamp, success) that is meaningless
@@ -11517,17 +11611,26 @@ public class ApiSpringController {
                         localText = "";
                     }
                     if (!localText.isBlank()) {
-                        if (localAttempt == 1) {
+                        boolean liveTokenStreamed = streamMeta != null
+                            && Boolean.TRUE.equals(streamMeta.get("liveTokenStreamed"));
+                        if (!liveTokenStreamed && localAttempt == 1) {
                             sendEvent(emitter, jsonOf(
                                 "stage", "streaming_started",
                                 "requestId", requestId,
                                 "model", "local_provider",
-                                "ttftMs", 0,
+                                "ttftMs", parseLongOrDefault(streamMeta == null ? null : streamMeta.get("liveTokenTtftMs"), 0L),
                                 "estimatedTotalChars", localText.length(),
                                 "percent", 12));
                         }
                         totalChunks += emitLocalTextEditEvents(
-                            emitter, requestId, localText, contextType, responseMode, localAttempt, localCurrentCode);
+                            emitter,
+                            requestId,
+                            localText,
+                            contextType,
+                            responseMode,
+                            localAttempt,
+                            localCurrentCode,
+                            liveTokenStreamed);
                         localAccumulated.append(localText);
                     }
                     // Stop early if output looks structurally complete
@@ -11549,7 +11652,8 @@ public class ApiSpringController {
                     streamMeta.put("maxAttempts", maxLocalAttempts);
                     streamMeta.put("providerCallsEstimate", attemptsUsedLocal);
                     streamMeta.put("providerFallbackUsed", false);
-                    streamMeta.put("streamChunkCount", totalChunks);
+                    int liveChunks = parseIntSafe(streamMeta.get("liveTokenStreamChunkCount"), 0);
+                    streamMeta.put("streamChunkCount", Math.max(totalChunks, liveChunks));
                     streamMeta.put("streamedChars", finalLocalText.length());
                 }
                 return finalLocalText;
@@ -12045,6 +12149,15 @@ public class ApiSpringController {
                 true);
             businessBlock = (businessBlock + "\n" + greenfieldContract).trim();
         }
+        String menuBusinessScanDigest = "";
+        if ("analyze".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                && isMenuJsonContext(contextType)
+                && aiGreenfieldBusinessDesignService != null
+                && !editorPayload.isBlank()) {
+            menuBusinessScanDigest = aiGreenfieldBusinessDesignService.buildMenuBusinessScanDigest(
+                editorPayload,
+                1400);
+        }
         return aiAssistantGatewayService.buildLocalMinimalPrompt(
             intent,
             editorPayload,
@@ -12052,7 +12165,8 @@ public class ApiSpringController {
             memory.toString(),
             message,
             resolveEffectiveUserLanguage(uiLang, message),
-            businessBlock);
+            businessBlock,
+            menuBusinessScanDigest);
     }
 
     private String buildOrchestrationPlanningDigest(AiLocalOrchestrationService.OrchestrationResult orchestration) {
@@ -12124,10 +12238,164 @@ public class ApiSpringController {
             String prompt,
             String contextType,
             String responseMode) throws Exception {
-        return runLocalProviderWithProgress(emitter, requestId, prompt, contextType, responseMode, 0);
+        return runLocalProviderWithProgress(emitter, requestId, prompt, contextType, responseMode, 0, null);
     }
 
     private String runLocalProviderWithProgress(
+            SseEmitter emitter,
+            String requestId,
+            String prompt,
+            String contextType,
+            String responseMode,
+            int maxOutputTokensOverride) throws Exception {
+        return runLocalProviderWithProgress(emitter, requestId, prompt, contextType, responseMode, maxOutputTokensOverride, null);
+    }
+
+    private String runLocalProviderWithProgress(
+            SseEmitter emitter,
+            String requestId,
+            String prompt,
+            String contextType,
+            String responseMode,
+            int maxOutputTokensOverride,
+            Map<String, Object> progressMeta) throws Exception {
+        if (aiLocalLlamaTokenStreamingEnabled
+                && llamaCppNativeService != null
+                && llamaCppNativeService.isAvailable()) {
+            return runLocalProviderTokenStreaming(emitter, requestId, prompt, contextType, responseMode, maxOutputTokensOverride, progressMeta);
+        }
+        return runLocalProviderBlockingWithProgress(emitter, requestId, prompt, contextType, responseMode, maxOutputTokensOverride);
+    }
+
+    private String runLocalProviderTokenStreaming(
+            SseEmitter emitter,
+            String requestId,
+            String prompt,
+            String contextType,
+            String responseMode,
+            int maxOutputTokensOverride,
+            Map<String, Object> progressMeta) throws Exception {
+        int estimatedWaitSecs = estimateLocalProviderWaitSecs(prompt);
+        long startedAt = System.currentTimeMillis();
+        sendEvent(emitter, jsonOf(
+            "stage", "waiting_gemini",
+            "requestId", requestId,
+            "message", "AI local dang nap model va khoi tao context...",
+            "messageKey", "copilot.progress.message.local_loading",
+            "messageArgs", jsonOf(
+                "elapsedSecs", 0,
+                "estimatedWaitSecs", estimatedWaitSecs),
+            "waitState", "local_inference",
+            "localPhase", "loading",
+            "percent", 4,
+            "elapsedMs", 0,
+            "estimatedWaitSecs", estimatedWaitSecs,
+            "remainingEstimateSecs", estimatedWaitSecs));
+
+        java.util.concurrent.atomic.AtomicBoolean streamStarted = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicLong recordedTtftMs = new java.util.concurrent.atomic.AtomicLong(-1L);
+        java.util.concurrent.atomic.AtomicInteger streamedChars = new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.concurrent.atomic.AtomicInteger streamChunkCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        StringBuilder pendingChunk = new StringBuilder();
+        int minChars = Math.max(8, aiLocalLlamaTokenStreamingMinChars);
+
+        LlamaCppNativeService.LocalTokenStreamListener listener = (piece, ttftMs, firstToken) -> {
+            if (Thread.currentThread().isInterrupted()
+                    || (llamaCppNativeService != null && llamaCppNativeService.isCancelled(requestId))) {
+                return false;
+            }
+            String safePiece = String.valueOf(piece == null ? "" : piece);
+            if (safePiece.isEmpty()) {
+                return true;
+            }
+            if (firstToken && streamStarted.compareAndSet(false, true)) {
+                long effectiveTtft = ttftMs >= 0 ? ttftMs : Math.max(0L, System.currentTimeMillis() - startedAt);
+                recordedTtftMs.set(effectiveTtft);
+                logger.info("ApiSpringController: ai-code-stream first-token requestId={} model=local_provider ttftMs={}",
+                    requestId, effectiveTtft);
+                sendEvent(emitter, jsonOf(
+                    "stage", "streaming_started",
+                    "requestId", requestId,
+                    "model", "local_provider",
+                    "ttftMs", effectiveTtft,
+                    "estimatedTotalChars", 0,
+                    "percent", 12));
+                if (progressMeta != null) {
+                    progressMeta.put("liveTokenStreamed", true);
+                    progressMeta.put("liveTokenTtftMs", effectiveTtft);
+                }
+            }
+            pendingChunk.append(safePiece);
+            if (firstToken || pendingChunk.length() >= minChars) {
+                String chunk = pendingChunk.toString();
+                pendingChunk.setLength(0);
+                streamedChars.addAndGet(chunk.length());
+                streamChunkCount.incrementAndGet();
+                sendEvent(emitter, jsonOf(
+                    "stage", "streaming",
+                    "requestId", requestId,
+                    "chunk", chunk,
+                    "attempt", 1,
+                    "localProviderPrimary", true,
+                    "localPreAnalysis", false,
+                    "ttftMs", recordedTtftMs.get()));
+                int chars = streamedChars.get();
+                sendEvent(emitter, jsonOf(
+                    "stage", "streaming_progress",
+                    "requestId", requestId,
+                    "charsReceived", chars,
+                    "percent", Math.min(95, 12 + (chars / 120)),
+                    "ttftMs", recordedTtftMs.get()));
+            }
+            return true;
+        };
+
+        String rawJson = generateDirectLocalContentStreamingWithMenuMasterPrompt(
+            prompt,
+            contextType,
+            requestId,
+            responseMode,
+            maxOutputTokensOverride,
+            listener);
+
+        if (pendingChunk.length() > 0) {
+            String tail = pendingChunk.toString();
+            streamedChars.addAndGet(tail.length());
+            streamChunkCount.incrementAndGet();
+            sendEvent(emitter, jsonOf(
+                "stage", "streaming",
+                "requestId", requestId,
+                "chunk", tail,
+                "attempt", 1,
+                "localProviderPrimary", true,
+                "localPreAnalysis", false,
+                "ttftMs", recordedTtftMs.get()));
+        }
+
+        if (progressMeta != null) {
+            progressMeta.put("liveTokenStreamed", streamStarted.get());
+            progressMeta.put("liveTokenStreamChunkCount", streamChunkCount.get());
+            progressMeta.put("liveTokenStreamedChars", streamedChars.get());
+            if (recordedTtftMs.get() >= 0) {
+                progressMeta.put("liveTokenTtftMs", recordedTtftMs.get());
+            }
+        }
+
+        long elapsedMs = Math.max(0L, System.currentTimeMillis() - startedAt);
+        if (!streamStarted.get()) {
+            sendEvent(emitter, jsonOf(
+                "stage", "waiting_gemini",
+                "requestId", requestId,
+                "message", "AI local hoan tat nhung khong co token output",
+                "waitState", "local_inference",
+                "localPhase", "postprocess",
+                "percent", 90,
+                "elapsedMs", elapsedMs));
+        }
+        return rawJson;
+    }
+
+    private String runLocalProviderBlockingWithProgress(
             SseEmitter emitter,
             String requestId,
             String prompt,
@@ -22278,6 +22546,18 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             String contextType,
             boolean forceKqxsProfile) {
         String code = String.valueOf(currentCode == null ? "" : currentCode);
+        if (isMenuJsonContext(contextType)) {
+            if (code.isBlank()) {
+                return "Không đủ JSON menu trong editor để phân tích nghiệp vụ. Hãy mở menu cần phân tích trong CodeMirror.";
+            }
+            if (aiGreenfieldBusinessDesignService != null) {
+                String menuAnalysis = aiGreenfieldBusinessDesignService.buildHeuristicMenuBusinessAnalysisProse(code, requestText);
+                if (!menuAnalysis.isBlank()) {
+                    return menuAnalysis;
+                }
+            }
+            return "Không đọc được cấu trúc menu JSON hợp lệ từ editor.";
+        }
         if (code.isBlank()) {
             return "Không đủ ngữ cảnh code để phân tích nghiệp vụ. Hãy gửi thêm đoạn code cần phân tích.";
         }
@@ -24173,6 +24453,53 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         return null;
     }
 
+    private void recordSuccessfulCodeLearningIfApplicable(
+        String appId,
+        String message,
+        String contextType,
+        String targetFile,
+        String responseMode,
+        Map<String, Object> turnMeta,
+        Map<String, Object> outputShape,
+        int agenticStepAcceptedCount,
+        String assistantSummary,
+        String rawResponse
+    ) {
+        if (aiCodeLearningMemoryService == null || appId == null || appId.isBlank()) {
+            return;
+        }
+        String mode = String.valueOf(responseMode == null ? "" : responseMode).trim();
+        if (!"edit".equalsIgnoreCase(mode)) {
+            return;
+        }
+
+        int patchOpCount = parseIntSafe(turnMeta == null ? null : turnMeta.get("patchOpCount"), 0);
+        int textEditsCount = parseIntSafe(outputShape == null ? null : outputShape.get("textEditsCount"), 0);
+        int effectivePatchCount = Math.max(patchOpCount, Math.max(textEditsCount, Math.max(0, agenticStepAcceptedCount)));
+        if (effectivePatchCount <= 0) {
+            return;
+        }
+
+        String ctx = String.valueOf(contextType == null ? "" : contextType).trim();
+        boolean menuJsonContext = "menu_json".equalsIgnoreCase(ctx);
+        if (menuJsonContext && patchOpCount <= 0) {
+            return;
+        }
+
+        try {
+            aiCodeLearningMemoryService.recordSuccessfulCodeEdit(
+                appId,
+                message,
+                ctx,
+                targetFile,
+                effectivePatchCount,
+                assistantSummary,
+                rawResponse);
+        } catch (Exception ex) {
+            logger.debug("Code learning memory skipped appId={}: {}", appId, ex.getMessage());
+        }
+    }
+
     /**
      * Extract the human-readable requirement text from the prompt JSON.
      * Looks in current_task.requirement_text first, then app_context.requirement_text.
@@ -25072,28 +25399,7 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
      * Falls back to GENERAL if model unavailable or output unparseable.
      */
     private LocalIntentClassification classifyIntentWithLocalAI(String requestText) {
-        return classifyIntentWithLocalAI(requestText, false, "");
-    }
-
-    private LocalIntentClassification buildAnalyzeBusinessHeuristicIntent(String requestText, String contextType) {
-        logger.info("[AI_INTENT_CLASSIFY] heuristic analyze-business route request={}",
-            String.valueOf(requestText == null ? "" : requestText).length() > 80
-                ? String.valueOf(requestText).substring(0, 80) + "…"
-                : requestText);
-        logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} pass={} confidence={} nextStep={} contextKind={}",
-            "heuristic_analyze_business_question",
-            "first",
-            99,
-            "load_code_context",
-            "code");
-        return new LocalIntentClassification(
-            "QUESTION",
-            "modify",
-            99,
-            "load_code_context",
-            "code",
-            "heuristic_analyze_business_question",
-            "analyze");
+        return classifyIntentWithLocalAI(requestText, false, "", "");
     }
 
     private boolean tryCompleteAnalyzeBusinessHeuristicEarly(
@@ -25225,10 +25531,18 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
     }
 
     private LocalIntentClassification classifyIntentWithLocalAI(String requestText, boolean bypassCache) {
-        return classifyIntentWithLocalAI(requestText, bypassCache, "");
+        return classifyIntentWithLocalAI(requestText, bypassCache, "", "");
     }
 
     private LocalIntentClassification classifyIntentWithLocalAI(String requestText, boolean bypassCache, String uiLang) {
+        return classifyIntentWithLocalAI(requestText, bypassCache, uiLang, "");
+    }
+
+    private LocalIntentClassification classifyIntentWithLocalAI(
+            String requestText,
+            boolean bypassCache,
+            String uiLang,
+            String contextType) {
         if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()
                 || llamaCppNativeService.isCircuitOpen()) {
             return LocalIntentClassification.unknown();
@@ -25298,23 +25612,33 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             }
         }
 
-        // ── Local AI classification call with reduced token budget ───────────
+        // ── Local AI classification — Observation → Reasoning → Action ───────
         String effectiveLang = resolveEffectiveUserLanguage(uiLang, safe);
         String langRule = buildClassifierLanguageRule(effectiveLang);
+        String editorContext = isMenuJsonContext(contextType)
+            ? "menu_json (user is editing CSM menu JSON in CodeMirror)"
+            : isCodeContext(contextType)
+                ? "code (user is editing DynamicCode / source in CodeMirror)"
+                : "none (no code/menu editor)";
         String classifyPrompt = "<|im_start|>system\n"
-            + "Classify intent for routing. Output one JSON object only.\n"
-            + "Schema: {\"type\":\"EDIT_MENU|EDIT_CODE|QUESTION|GENERAL\",\"action\":\"add|modify|delete|ask|search|other\",\"responseMode\":\"edit|analyze\",\"nextStep\":\"answer_direct|load_menu_context|load_code_context|clarify\",\"contextKind\":\"menu|code|none\",\"confidence\":0-100}.\n"
-            + "Rules:\n"
-            + "- responseMode=edit when user asks to fix/change/patch/implement code or menu (e.g. sua, sua loi, fix, patch, them, xoa).\n"
-            + "- responseMode=analyze when user only asks why/how/explain/review/debug without asking to change code.\n"
-            + "- QUESTION/GENERAL + no explicit code/menu target => nextStep=answer_direct, contextKind=none, responseMode=analyze.\n"
-            + "- QUESTION about code behavior/architecture/debug => nextStep=load_code_context, contextKind=code, responseMode=analyze.\n"
-            + "- EDIT_MENU only when request clearly changes menu/json nodes.\n"
-            + "- EDIT_CODE only when request clearly changes source code.\n"
-            + "- Prefer direct answer when uncertain and request has no code/menu signal.\n"
+            + "You route CSM AI assistant requests using Observation → Reasoning → Action.\n"
+            + "Output one JSON object only.\n"
+            + "Schema: {\"type\":\"EDIT_MENU|EDIT_CODE|QUESTION|GENERAL\",\"action\":\"add|modify|delete|ask|search|other\","
+            + "\"responseMode\":\"edit|analyze\",\"nextStep\":\"answer_direct|load_menu_context|load_code_context|clarify\","
+            + "\"contextKind\":\"menu|code|none\",\"confidence\":0-100,\"reasoning\":\"one short sentence explaining edit vs analyze\"}.\n"
+            + "OBSERVATION rules:\n"
+            + "- Read EDITOR_CONTEXT + USER_REQUEST together. Mentioning json/menu/code alone does NOT mean edit.\n"
+            + "REASONING rules:\n"
+            + "- responseMode=edit ONLY when user clearly wants to change/apply/fix/add/remove/update something IN the editor.\n"
+            + "- responseMode=analyze when user wants to understand/explain/review/describe/analyze WITHOUT applying changes.\n"
+            + "- Questions like 'what does this do', 'explain business', 'analyze menu structure' => analyze + load_*_context.\n"
+            + "- EDIT_MENU when menu_json editor and user wants structural/menu changes.\n"
+            + "- EDIT_CODE when code editor and user wants source changes.\n"
+            + "- General chat with no editor relevance => answer_direct, contextKind=none, responseMode=analyze.\n"
+            + "ACTION: set responseMode, type, nextStep, contextKind from your reasoning.\n"
             + langRule
             + "<|im_end|>\n"
-            + "<|im_start|>user\nREQUEST: " + safe + "<|im_end|>\n"
+            + "<|im_start|>user\nEDITOR_CONTEXT: " + editorContext + "\nUSER_REQUEST: " + safe + "<|im_end|>\n"
             + "<|im_start|>assistant\n";
 
         try {
@@ -25345,6 +25669,10 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             if (!List.of("edit", "analyze").contains(classifiedResponseMode)) {
                 classifiedResponseMode = "";
             }
+            String reasoning = String.valueOf(parsed.getOrDefault("reasoning", "")).trim();
+            if (reasoning.length() > 320) {
+                reasoning = reasoning.substring(0, 320) + "…";
+            }
 
             // Normalize type to known values
             if (!List.of("EDIT_MENU","EDIT_CODE","QUESTION","GENERAL").contains(type)) type = "GENERAL";
@@ -25374,17 +25702,20 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                     contextKind);
             }
 
-            logger.info("[AI_INTENT_CLASSIFY] type={} action={} nextStep={} contextKind={} confidence={} request={}",
-                type, action, nextStep, contextKind, confidence, safe.length() > 80 ? safe.substring(0, 80) + "…" : safe);
-            logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} pass={} maxTokens={} confidence={} nextStep={} contextKind={}",
+            logger.info("[AI_INTENT_CLASSIFY] type={} action={} nextStep={} contextKind={} confidence={} responseMode={} reasoning={} request={}",
+                type, action, nextStep, contextKind, confidence, classifiedResponseMode,
+                reasoning.length() > 80 ? reasoning.substring(0, 80) + "…" : reasoning,
+                safe.length() > 80 ? safe.substring(0, 80) + "…" : safe);
+            logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} pass={} maxTokens={} confidence={} nextStep={} contextKind={} responseMode={}",
                 "classify_success",
                 bypassCache ? "second" : "first",
                 classifyMaxTokens,
                 confidence,
                 nextStep,
-                contextKind);
+                contextKind,
+                classifiedResponseMode);
             LocalIntentClassification result = new LocalIntentClassification(
-                type, action, confidence, nextStep, contextKind, candidate, classifiedResponseMode);
+                type, action, confidence, nextStep, contextKind, candidate, classifiedResponseMode, reasoning);
             if (!bypassCache) {
                 intentClassifyCache.put(cacheKey, new Object[]{ result, System.currentTimeMillis() });
                 if (result.confidence() >= resolveIntentAdaptiveCacheMinConfidence(safe)
@@ -25450,7 +25781,6 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
 
         if (lowConfidence
             && shouldRunIntentSecondPass(requestText, editMode, menuContext)
-            && !AiGreenfieldBusinessDesignService.isAnalyzeBusinessQuestion(requestText)
             && !String.valueOf(requestText == null ? "" : requestText).trim().isBlank()) {
             LocalIntentClassification secondPass = classifyIntentWithLocalAI(requestText, true);
             LocalIntentClassification normalizedSecondRoute = normalizeClassifierRoute(secondPass);
@@ -25645,32 +25975,17 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             String contextType,
             LocalIntentClassification intent,
             String uiLang) {
-        if (!"code".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim())) {
-            return responseMode;
-        }
         String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
         int modelMinConfidence = Math.max(40, Math.min(95, aiLocalRoutingModelDrivenMinConfidence));
-        int minConfidence = Math.max(40, Math.min(95, aiAssistantResponseModeLocalIntentMinConfidence));
 
-        // Client + explicit edit signals win over classifier analyze (brief PHẦN B #2).
-        if ("edit".equals(mode)) {
-            return "edit";
+        // Explicit client directive (/edit, /analyze) wins.
+        if ("edit".equals(mode) || "analyze".equals(mode)) {
+            return mode;
         }
-        if (hasExplicitCodeEditIntent(message)) {
-            if (!"edit".equals(mode)) {
-                logger.info("[AI_RESPONSE_MODE] source=explicit_edit_intent mode=edit previousMode={} request={}",
-                    mode,
-                    String.valueOf(message).length() > 80 ? String.valueOf(message).substring(0, 80) + "…" : message);
-            }
-            return "edit";
-        }
+
         if (intent != null && intent.isEditTask()) {
-            if (!"edit".equals(mode)) {
-                logger.info("[AI_RESPONSE_MODE] source=classified_intent mode=edit type={} confidence={} previousMode={}",
-                    intent.type(),
-                    intent.confidence(),
-                    mode);
-            }
+            logger.info("[AI_RESPONSE_MODE] source=classified_edit_task mode=edit type={} confidence={} contextType={}",
+                intent.type(), intent.confidence(), contextType);
             return "edit";
         }
 
@@ -25679,26 +25994,34 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             if (!fromIntent.isBlank() && intent.confidence() >= modelMinConfidence) {
                 if (!fromIntent.equals(mode)) {
                     logger.info(
-                        "[AI_RESPONSE_MODE] source=model_driven_classifier mode={} type={} confidence={} previousMode={} uiLang={}",
+                        "[AI_RESPONSE_MODE] source=model_driven_classifier mode={} type={} confidence={} contextType={} reasoning={}",
                         fromIntent,
                         intent.type(),
                         intent.confidence(),
-                        mode,
-                        resolveEffectiveUserLanguage(uiLang, message));
+                        contextType,
+                        intent.reasoning().length() > 120
+                            ? intent.reasoning().substring(0, 120) + "…"
+                            : intent.reasoning());
                 }
                 return fromIntent;
             }
         }
-        if (mode.isBlank()) {
-            if (intent != null && (intent.isQuestion() || intent.isGeneral() || intent.answerDirectly())) {
-                return "analyze";
+
+        if (!aiLocalRoutingModelDrivenEnabled) {
+            if (hasExplicitCodeEditIntent(message)) {
+                return "edit";
             }
-            if (hasCodeOrRuntimeDebugSignal(message) && !hasExplicitCodeEditIntent(message)) {
-                return "analyze";
+            if (isMenuJsonContext(contextType) || isCodeContext(contextType)) {
+                if (hasCodeOrRuntimeDebugSignal(message) && !hasExplicitCodeEditIntent(message)) {
+                    return "analyze";
+                }
             }
-            return "analyze";
         }
-        return responseMode;
+
+        if (isMenuJsonContext(contextType) || isCodeContext(contextType)) {
+            return intent != null && intent.isEditTask() ? "edit" : "analyze";
+        }
+        return mode.isBlank() ? "analyze" : responseMode;
     }
 
     private boolean isModelDrivenCodeContextAnalyze(LocalIntentClassification intent, String responseMode) {
@@ -25720,9 +26043,6 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
     }
 
     private boolean isAnalyzeHeuristicFallbackEnabled(String requestText) {
-        if (AiGreenfieldBusinessDesignService.isAnalyzeBusinessQuestion(requestText)) {
-            return aiLocalAnalyzeHeuristicFallbackEnabled;
-        }
         return aiLocalAnalyzeHeuristicFallbackEnabled && !aiLocalRoutingModelDrivenEnabled;
     }
 
@@ -32113,9 +32433,14 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
         if ("analyze".equals(mode)) {
             return "analyze";
         }
-        if ("code".equals(normalizedContextType)
-                && AiGreenfieldBusinessDesignService.isAnalyzeBusinessQuestion(message)) {
-            return "analyze";
+
+        String directive = detectAiAssistantResponseModeFromMessage(message);
+        if ("edit".equals(directive) || "analyze".equals(directive)) {
+            return directive;
+        }
+
+        if (aiLocalRoutingModelDrivenEnabled) {
+            return "";
         }
 
         String detected = inferAiAssistantResponseModeFromText(message);
@@ -32128,24 +32453,19 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             return "edit";
         }
 
-        if (!aiLocalRoutingModelDrivenEnabled
-                && ("code".equals(normalizedContextType) || normalizedTaskType.contains("code"))
+        if (("code".equals(normalizedContextType) || normalizedTaskType.contains("code"))
                 && hasCodeOrRuntimeDebugSignal(message)) {
             return "analyze";
         }
 
-        // Menu design/update should default to edit mode when caller doesn't provide explicit responseMode.
+        // Legacy: menu defaults edit when caller doesn't provide explicit responseMode.
         if ("menu_json".equals(normalizedContextType)
                 || normalizedTaskType.contains("menu")) {
             return "edit";
         }
 
-        // Code: model-driven → analyze unless explicit edit keywords; legacy → edit default.
         if ("code".equals(normalizedContextType)
                 || normalizedTaskType.contains("code")) {
-            if (aiLocalRoutingModelDrivenEnabled) {
-                return hasExplicitCodeEditIntent(message) ? "edit" : "analyze";
-            }
             return "edit";
         }
         return "analyze";
@@ -35523,10 +35843,55 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             return "{\"success\":false,\"errorCode\":\"LOCAL_PROVIDER_UNAVAILABLE\",\"message\":\"Local provider unavailable\"}";
         }
         String safeRequestId = String.valueOf(requestId == null ? "" : requestId).trim();
+        String preparedPrompt = prepareDirectLocalProviderPrompt(prompt, contextType, responseMode, requestId);
+        if (maxOutputTokensOverride > 0) {
+            return llamaCppNativeService.generateContentFastWithTaskTracking(
+                preparedPrompt,
+                maxOutputTokensOverride,
+                safeRequestId.isBlank() ? null : safeRequestId);
+        }
+        return llamaCppNativeService.generateContentWithTaskTracking(
+            preparedPrompt,
+            safeRequestId.isBlank() ? null : safeRequestId);
+    }
+
+    private String generateDirectLocalContentStreamingWithMenuMasterPrompt(
+            String prompt,
+            String contextType,
+            String requestId,
+            String responseMode,
+            int maxOutputTokensOverride,
+            LlamaCppNativeService.LocalTokenStreamListener listener) {
+        if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()) {
+            return "{\"success\":false,\"errorCode\":\"LOCAL_PROVIDER_UNAVAILABLE\",\"message\":\"Local provider unavailable\"}";
+        }
+        String safeRequestId = String.valueOf(requestId == null ? "" : requestId).trim();
+        String preparedPrompt = prepareDirectLocalProviderPrompt(prompt, contextType, responseMode, requestId);
+        if (maxOutputTokensOverride > 0) {
+            return llamaCppNativeService.generateContentStreamingWithTaskTracking(
+                preparedPrompt,
+                maxOutputTokensOverride,
+                safeRequestId.isBlank() ? null : safeRequestId,
+                listener);
+        }
+        return llamaCppNativeService.generateContentStreamingWithTaskTracking(
+            preparedPrompt,
+            safeRequestId.isBlank() ? null : safeRequestId,
+            listener);
+    }
+
+    private String prepareDirectLocalProviderPrompt(
+            String prompt,
+            String contextType,
+            String responseMode,
+            String requestId) {
+        String safeRequestId = String.valueOf(requestId == null ? "" : requestId).trim();
         String preparedPrompt = String.valueOf(prompt == null ? "" : prompt).trim();
         String effectiveResponseMode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
         if (effectiveResponseMode.isBlank()) {
-            effectiveResponseMode = isMenuJsonContext(contextType) || isCodeContext(contextType) ? "edit" : "analyze";
+            effectiveResponseMode = aiLocalRoutingModelDrivenEnabled
+                ? "analyze"
+                : (isMenuJsonContext(contextType) || isCodeContext(contextType) ? "edit" : "analyze");
         }
         if (isCodeContext(contextType) && "edit".equals(effectiveResponseMode)) {
             String requestText = extractRequestTextFromPrompt(preparedPrompt);
@@ -35551,23 +35916,12 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             }
             preparedPrompt = clampedPrompt;
         }
-        // Append Qwen2.5 instruct chat-template assistant primer so the model generates a full response
-        // instead of outputting only a few tokens before <|im_end|>. Applies only to structured prompts
-        // that were built by buildLocalMinimalPrompt (identified by block markers).
         if (!preparedPrompt.isBlank()
                 && containsMinimalLocalPromptSignature(preparedPrompt)
                 && !preparedPrompt.contains("<|im_start|>assistant")) {
             preparedPrompt = preparedPrompt + "\n<|im_end|>\n<|im_start|>assistant\n";
         }
-        if (maxOutputTokensOverride > 0) {
-            return llamaCppNativeService.generateContentFastWithTaskTracking(
-                preparedPrompt,
-                maxOutputTokensOverride,
-                safeRequestId.isBlank() ? null : safeRequestId);
-        }
-        return llamaCppNativeService.generateContentWithTaskTracking(
-            preparedPrompt,
-            safeRequestId.isBlank() ? null : safeRequestId);
+        return preparedPrompt;
     }
 
     private String prependLocalContractIfNeeded(String prompt, String contextType, String responseMode) {
@@ -35595,6 +35949,18 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 String learningBlock = "";
                 if (aiMenuLearningMemoryService != null && !promptAppId.isBlank()) {
                     String learnedContext = aiMenuLearningMemoryService.buildLearningContextBlock(promptAppId, requestText);
+                    learningBlock = String.valueOf(learnedContext == null ? "" : learnedContext).trim();
+                }
+                return contract
+                    + "\n\n"
+                    + (learningBlock.isBlank() ? "" : learningBlock + "\n\n")
+                    + source;
+            }
+            if (intent == AiAssistantGatewayService.AiFlowIntent.FRONTEND_CODE) {
+                String promptAppId = extractPromptAppIdRelaxed(source);
+                String learningBlock = "";
+                if (aiCodeLearningMemoryService != null && !promptAppId.isBlank()) {
+                    String learnedContext = aiCodeLearningMemoryService.buildLearningContextBlock(promptAppId, requestText);
                     learningBlock = String.valueOf(learnedContext == null ? "" : learnedContext).trim();
                 }
                 return contract

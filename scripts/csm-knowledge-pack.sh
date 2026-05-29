@@ -82,6 +82,7 @@ write_manifest() {
     "ai_business_memory",
     "ai_local_assistant_index",
     "ai_menu_learning_*.jsonl",
+    "ai_code_learning_*.jsonl",
     "author_style_dna.md",
     "ai_code_master_prompt.md",
     "ai_menu_master_prompt.md",
@@ -106,6 +107,7 @@ cmd_status() {
   echo ""
   du -sh "$dir"/* 2>/dev/null || true
   ls -la "$dir"/ai_menu_learning_*.jsonl 2>/dev/null || log "(no menu learning files yet)"
+  ls -la "$dir"/ai_code_learning_*.jsonl 2>/dev/null || log "(no code learning files yet)"
   if [ -f "$dir/author_style_dna.md" ]; then
     log "author_style_dna.md: present ($(wc -l < "$dir/author_style_dna.md") lines)"
   else
@@ -152,6 +154,9 @@ cmd_export() {
     fi
   done
   for f in "$dir"/ai_menu_learning_*.jsonl; do
+    [ -f "$f" ] && cp "$f" "$PACK_STAGING/csm_datas/ai_local/"
+  done
+  for f in "$dir"/ai_code_learning_*.jsonl; do
     [ -f "$f" ] && cp "$f" "$PACK_STAGING/csm_datas/ai_local/"
   done
   tar -czf "$out" -C "$PACK_STAGING" .

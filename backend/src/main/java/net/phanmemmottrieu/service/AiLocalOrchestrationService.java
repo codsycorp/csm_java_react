@@ -105,6 +105,9 @@ public class AiLocalOrchestrationService {
     @Autowired(required = false)
     private AiLocalWorkflowAdvisorService aiLocalWorkflowAdvisorService;
 
+    @Autowired(required = false)
+    private AiLocalFlowContextPolicy aiLocalFlowContextPolicy;
+
     public AiLocalOrchestrationService(
         AiSpeculativeExecutionService aiSpeculativeExecutionService,
         @Autowired(required = false) AiMultimodalScannerService aiMultimodalScannerService,
@@ -1335,8 +1338,31 @@ public class AiLocalOrchestrationService {
             out.toolStats.put("scopedCodeIngestionStatus", "skipped_analyze_fast_path");
             out.toolStats.put("scopedRagEnabled", false);
         }
+        boolean flowRagEnabled = true;
+        if (aiLocalFlowContextPolicy != null) {
+            AiLocalFlowContextPolicy.FlowKind flowKind = aiLocalFlowContextPolicy.resolveFlow(
+                safeContextType,
+                safeMode,
+                safeTaskType);
+            AiLocalFlowContextPolicy.RagFlowPreset flowPreset = aiLocalFlowContextPolicy.ragPreset(
+                flowKind,
+                isWeakOrchestrationProfile());
+            flowRagEnabled = flowPreset.ragEnabled();
+            out.toolStats.put("flowContextKind", flowKind.name());
+            out.toolStats.put("flowRagPresetLabel", flowPreset.label());
+            out.toolStats.put("flowRagPresetTopK", flowPreset.topK());
+            out.toolStats.put("flowRagPresetMaxChars", flowPreset.maxChars());
+            AiLocalFlowContextPolicy.ContextWindowFit ctxFit = aiLocalFlowContextPolicy.contextWindowFit(
+                flowKind,
+                Math.max(4000, scopedRagMaxChars * 4),
+                768,
+                isWeakOrchestrationProfile());
+            out.toolStats.put("flowContextWindowFitTokens", ctxFit.suggestedContextTokens());
+            out.toolStats.put("flowContextWindowFitNote", ctxFit.note());
+        }
         String scopedRagBlock = "";
         if (!lightweightCodeAnalyze
+            && flowRagEnabled
             && scanResult.enabled()
             && scopedRagEnabled
             && aggregateScopeMask > 0
@@ -2830,12 +2856,26 @@ public class AiLocalOrchestrationService {
         );
 
         int scopeMask = Math.max(1, aggregateScopeMask);
-        // Use policy-decided topK if provided (policyTopK > 0); otherwise fall back to default
         int topK = policyTopK > 0 ? policyTopK : Math.max(2, scopedRagTopK);
         int maxChars = Math.max(1600, scopedRagMaxChars);
         List<String> reasons = new ArrayList<>();
         if (policyTopK > 0) {
             reasons.add("policy_engine_adaptive_topk");
+        }
+
+        if (aiLocalFlowContextPolicy != null) {
+            AiLocalFlowContextPolicy.RagFlowPreset flowPreset = aiLocalFlowContextPolicy.ragPreset(
+                safeContextType,
+                safeMode,
+                safeTaskType,
+                isWeakOrchestrationProfile());
+            scopeMask = aiLocalFlowContextPolicy.mergeScopeMask(scopeMask, flowPreset.scopeMask());
+            if (policyTopK <= 0) {
+                topK = flowPreset.topK();
+            }
+            maxChars = Math.max(maxChars, flowPreset.maxChars());
+            reasons.addAll(aiLocalFlowContextPolicy.presetReasonTags(flowPreset.flow()));
+            reasons.add("flow_rag_preset:" + flowPreset.label());
         }
 
         RecoveryHints recoveryHints = recoveryHintsContext.get();
@@ -2853,21 +2893,17 @@ public class AiLocalOrchestrationService {
         }
 
         if ("menu_json".equals(safeContextType) || safeTaskType.contains("menu")) {
-            topK += 1;
-            maxChars += 800;
-            reasons.add("menu_context_boost");
+            reasons.add("menu_context_signal");
+        }
+
+        if ("analyze".equals(safeMode)) {
+            reasons.add("analyze_mode_signal");
         }
 
         if (retrievalProfile.topKBoost() > 0 || retrievalProfile.maxCharsBoost() > 0) {
             topK += retrievalProfile.topKBoost();
             maxChars += retrievalProfile.maxCharsBoost();
             reasons.add("abstract_factory_profile_boost");
-        }
-
-        if ("analyze".equals(safeMode)) {
-            topK += 1;
-            maxChars += 600;
-            reasons.add("analyze_mode_context_boost");
         }
 
         if (codeChars > 80000 && !isWeakOrchestrationProfile()) {

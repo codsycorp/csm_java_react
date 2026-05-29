@@ -3,6 +3,7 @@ package net.phanmemmottrieu.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import de.kherud.llama.InferenceParameters;
 import de.kherud.llama.LlamaModel;
+import de.kherud.llama.LlamaOutput;
 import de.kherud.llama.ModelParameters;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -19,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -129,6 +131,9 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.context-window-hard-cap:32768}")
     private int contextWindowHardCap;
 
+    @Value("${ai.local.llama.context-window-auto-fit:true}")
+    private boolean contextWindowAutoFit;
+
     @Value("${ai.local.llama.max-prompt-chars-hard-cap:1000000}")
     private int maxPromptCharsHardCap;
 
@@ -144,8 +149,21 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.circuit.hard-cooldown-ms:900000}")
     private long cbHardCooldownMs;
 
+    @Value("${ai.local.llama.token-streaming.enabled:true}")
+    private boolean tokenStreamingEnabled;
+
     @Value("${ai.local.llama.threads.reserve-for-system:1}")
     private int reserveSystemCores;
+
+    /** Callback for true token streaming via {@link LlamaModel#generate(InferenceParameters)}. */
+    @FunctionalInterface
+    public interface LocalTokenStreamListener {
+        /**
+         * @param ttftMs time-to-first-token when {@code firstToken}; otherwise {@code -1}
+         * @return {@code false} to abort generation early
+         */
+        boolean onToken(String text, long ttftMs, boolean firstToken);
+    }
 
     private volatile LlamaModel model;
     private volatile boolean shuttingDown = false;
@@ -275,6 +293,33 @@ public class LlamaCppNativeService implements AIProvider {
         }
     }
 
+    /**
+     * Stream tokens as they are generated; returns the same JSON envelope as {@link #generateContent(String)}.
+     */
+    public String generateContentStreamingWithTaskTracking(
+            String prompt,
+            String requestId,
+            LocalTokenStreamListener listener) {
+        return generateContentStreamingWithTaskTracking(prompt, 0, requestId, listener);
+    }
+
+    public String generateContentStreamingWithTaskTracking(
+            String prompt,
+            int maxOutputTokensCap,
+            String requestId,
+            LocalTokenStreamListener listener) {
+        if (requestId != null && !requestId.isBlank()) {
+            registerActiveInferenceTask(requestId);
+        }
+        try {
+            return generateContentStreamingInternal(prompt, maxOutputTokensCap, null, requestId, listener);
+        } finally {
+            if (requestId != null && !requestId.isBlank()) {
+                unregisterActiveInferenceTask(requestId);
+            }
+        }
+    }
+
     private String generateContentInternal(String prompt) {
         String safePrompt = String.valueOf(prompt == null ? "" : prompt).trim();
         if (safePrompt.isBlank()) {
@@ -350,6 +395,67 @@ public class LlamaCppNativeService implements AIProvider {
             recordFailure(firstErr);
             markRequestFinish(startedAt, "", firstErr);
             return createErrorJson("Local llama inference failed: " + firstErr, "LOCAL_INFERENCE_FAILED");
+        }
+    }
+
+    private String generateContentStreamingInternal(
+            String prompt,
+            int maxOutputTokensCap,
+            String systemPromptOverride,
+            String requestId,
+            LocalTokenStreamListener listener) {
+        String safePrompt = String.valueOf(prompt == null ? "" : prompt).trim();
+        if (safePrompt.isBlank()) {
+            return createErrorJson("Prompt khong duoc de trong", "INVALID_PROMPT");
+        }
+        if (!isAvailable()) {
+            return createErrorJson("Local llama provider chua san sang (kiem tra model-path va config)", "LOCAL_PROVIDER_UNAVAILABLE");
+        }
+        if (isCircuitOpen()) {
+            long remainSecs = Math.max(0, (circuitCooldownMs - (System.currentTimeMillis() - circuitOpenedAt)) / 1000L);
+            return createErrorJson("Local llama circuit open – skipping inference (cooldown " + remainSecs + "s remaining)", "CIRCUIT_OPEN");
+        }
+
+        String effectiveSystemPrompt = systemPromptOverride != null ? systemPromptOverride : systemPrompt;
+        if (effectiveSystemPrompt != null && !effectiveSystemPrompt.isBlank()) {
+            safePrompt = effectiveSystemPrompt.trim() + "\n" + safePrompt;
+        }
+
+        boolean isJsonForced = detectJsonExpectation(safePrompt);
+        if (isJsonForced) {
+            safePrompt = "You MUST output ONLY valid JSON, with no markdown fences, no explanation, no extra text. Start with { or [.\n\n" + safePrompt;
+        }
+
+        boolean fastCapPath = maxOutputTokensCap > 0;
+        safePrompt = clipPromptSmart(safePrompt, effectiveMaxPromptChars(), !fastCapPath);
+        safePrompt = clipPromptSmart(safePrompt, resolveRuntimePromptCharBudget(), !fastCapPath);
+
+        long startedAt = markRequestStart(safePrompt);
+        try {
+            String output = runLocalCompletionStreaming(
+                safePrompt,
+                false,
+                isJsonForced,
+                maxOutputTokensCap,
+                requestId,
+                listener);
+            requestCount.incrementAndGet();
+            recordSuccess();
+            markRequestFinish(startedAt, output, null);
+
+            Map<String, Object> success = new HashMap<>();
+            success.put("success", true);
+            success.put("result", String.valueOf(output == null ? "" : output).trim());
+            success.put("provider", getName());
+            success.put("timestamp", System.currentTimeMillis());
+            success.put("tokenStreaming", tokenStreamingEnabled && listener != null);
+            return objectMapper.writeValueAsString(success);
+        } catch (Exception ex) {
+            String err = String.valueOf(ex.getMessage());
+            log.error("Local llama streaming inference failed: {}", err);
+            recordFailure(err);
+            markRequestFinish(startedAt, "", err);
+            return createErrorJson("Local llama streaming inference failed: " + err, "LOCAL_INFERENCE_FAILED");
         }
     }
 
@@ -512,44 +618,82 @@ public class LlamaCppNativeService implements AIProvider {
     }
 
     private String runLocalCompletionWithCap(String prompt, int nPredictCap, boolean isJsonForced) {
+        InferenceParameters inference = buildInferenceParameters(prompt, false, isJsonForced, nPredictCap);
         LlamaModel localModel = ensureModelLoaded();
-        int ctx = Math.max(1024, effectiveContextWindow());
-        int promptTokens = estimateTokensByChars(prompt.length());
-        int availableForOutput = Math.max(16, ctx - promptTokens - 256);
-        int nPredict = Math.max(16, Math.min(nPredictCap, availableForOutput));
-        // Use lower temperature for JSON outputs
-        float temp = isJsonForced ? 0.05f : Math.max(0f, temperature);
-        InferenceParameters inference = new InferenceParameters(prompt)
-                .setNPredict(nPredict)
-                .setTemperature(temp)
-                .setTopP(isJsonForced ? 0.5f : Math.max(0.1f, Math.min(1f, topP)))
-                .setTopK(isJsonForced ? 10 : Math.max(1, topK))
-                // Stop at ChatML end-of-turn marker so model doesn't generate fake user turns.
-                .setStopStrings("<|im_end|>", "<|im_start|>")
-                // Penalize immediate repetition to prevent tail loop runaway.
-                .setRepeatPenalty(1.15f);
         synchronized (modelLock) {
             return localModel.complete(inference);
         }
     }
 
     private String runLocalCompletion(String prompt, boolean degradedMode, boolean isJsonForced) {
+        InferenceParameters inference = buildInferenceParameters(prompt, degradedMode, isJsonForced, 0);
         LlamaModel localModel = ensureModelLoaded();
-        int nPredict = resolveAdaptiveNPredict(prompt, degradedMode);
-        // Use lower temperature for JSON outputs to ensure valid formatting
-        float temp = isJsonForced ? 0.05f : (degradedMode ? Math.min(temperature, 0.1f) : Math.max(0f, temperature));
-        InferenceParameters inference = new InferenceParameters(prompt)
-                .setNPredict(nPredict)
-                .setTemperature(temp)
-                .setTopP(isJsonForced ? 0.5f : Math.max(0.1f, Math.min(1f, topP)))
-                .setTopK(isJsonForced ? 10 : Math.max(1, topK))
-                // Stop at ChatML end-of-turn marker so model doesn't generate fake user turns.
-                .setStopStrings("<|im_end|>", "<|im_start|>")
-                // Penalize immediate repetition to prevent tail loop runaway.
-                .setRepeatPenalty(1.15f);
         synchronized (modelLock) {
             return localModel.complete(inference);
         }
+    }
+
+    private String runLocalCompletionStreaming(
+            String prompt,
+            boolean degradedMode,
+            boolean isJsonForced,
+            int maxOutputTokensCap,
+            String requestId,
+            LocalTokenStreamListener listener) {
+        InferenceParameters inference = buildInferenceParameters(prompt, degradedMode, isJsonForced, maxOutputTokensCap);
+        LlamaModel localModel = ensureModelLoaded();
+        StringBuilder accumulated = new StringBuilder();
+        long inferStartedAt = System.currentTimeMillis();
+        boolean firstTokenEmitted = false;
+        synchronized (modelLock) {
+            for (LlamaOutput output : localModel.generate(inference)) {
+                if (requestId != null && isCancelled(requestId)) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (Thread.currentThread().isInterrupted()) {
+                    break;
+                }
+                String piece = output == null ? "" : String.valueOf(output.text);
+                if (!piece.isEmpty()) {
+                    accumulated.append(piece);
+                    if (listener != null && tokenStreamingEnabled) {
+                        boolean isFirst = !firstTokenEmitted;
+                        long ttftMs = isFirst ? Math.max(0L, System.currentTimeMillis() - inferStartedAt) : -1L;
+                        if (!listener.onToken(piece, ttftMs, isFirst)) {
+                            break;
+                        }
+                        firstTokenEmitted = true;
+                    }
+                }
+            }
+        }
+        return accumulated.toString();
+    }
+
+    private InferenceParameters buildInferenceParameters(
+            String prompt,
+            boolean degradedMode,
+            boolean isJsonForced,
+            int maxOutputTokensCap) {
+        int nPredict = maxOutputTokensCap > 0
+            ? resolveCappedNPredict(prompt, maxOutputTokensCap)
+            : resolveAdaptiveNPredict(prompt, degradedMode);
+        float temp = isJsonForced ? 0.05f : (degradedMode ? Math.min(temperature, 0.1f) : Math.max(0f, temperature));
+        return new InferenceParameters(prompt)
+            .setNPredict(nPredict)
+            .setTemperature(temp)
+            .setTopP(isJsonForced ? 0.5f : Math.max(0.1f, Math.min(1f, topP)))
+            .setTopK(isJsonForced ? 10 : Math.max(1, topK))
+            .setStopStrings("<|im_end|>", "<|im_start|>")
+            .setRepeatPenalty(1.15f);
+    }
+
+    private int resolveCappedNPredict(String prompt, int maxOutputTokensCap) {
+        int ctx = Math.max(1024, effectiveContextWindow());
+        int promptTokens = estimateTokensByChars(String.valueOf(prompt == null ? "" : prompt).length());
+        int availableForOutput = Math.max(16, ctx - promptTokens - 256);
+        return Math.max(16, Math.min(Math.max(16, maxOutputTokensCap), availableForOutput));
     }
 
     private int resolveAdaptiveNPredict(String prompt, boolean degradedMode) {
@@ -766,7 +910,41 @@ public class LlamaCppNativeService implements AIProvider {
                 break;
         }
         int hardCap = Math.max(1024, contextWindowHardCap);
-        return Math.min(Math.min(hardCap, profileCap), Math.max(512, contextWindow));
+        int configured = Math.max(512, contextWindow);
+        int capped = Math.min(Math.min(hardCap, profileCap), configured);
+        if (!contextWindowAutoFit) {
+            return capped;
+        }
+        int fitFromBudget = computeAutoFitContextTokens();
+        int target = Math.min(capped, Math.max(2048, fitFromBudget));
+        log.debug(
+            "Context window auto-fit configured={} fitFromBudget={} target={} profileCap={}",
+            configured,
+            fitFromBudget,
+            target,
+            profileCap);
+        return target;
+    }
+
+    /** Derive minimal ctx slots from prompt char budget + max output — reduces KV RAM vs over-provisioning. */
+    private int computeAutoFitContextTokens() {
+        int promptChars = Math.min(effectiveMaxPromptChars(), resolveWeakSafePromptCharsForFit());
+        int promptTokens = Math.max(1024, (promptChars + 3) / 4);
+        int outputReserve = Math.max(256, effectiveMaxTokens());
+        int margin = resolveRuntimeProfile() == RuntimeProfile.CONSERVATIVE ? 384 : 512;
+        int raw = promptTokens + outputReserve + margin;
+        return ((Math.max(2048, raw) + 511) / 512) * 512;
+    }
+
+    private int resolveWeakSafePromptCharsForFit() {
+        if (resolveRuntimeProfile() == RuntimeProfile.CONSERVATIVE) {
+            return Math.min(effectiveMaxPromptChars(), 18000);
+        }
+        String profile = String.valueOf(runtimeProfile == null ? "" : runtimeProfile).trim().toLowerCase(Locale.ROOT);
+        if ("balanced".equals(profile) && contextWindow <= 8192) {
+            return Math.min(effectiveMaxPromptChars(), 20000);
+        }
+        return effectiveMaxPromptChars();
     }
 
     private int effectiveMaxPromptChars() {

@@ -422,7 +422,33 @@ Rules:
       String userRequest,
       String uiLanguage,
       String businessComprehensionBlock) {
+    return buildLocalMinimalPrompt(
+        intent,
+        activeEditorContent,
+        ragContext,
+        memory,
+        userRequest,
+        uiLanguage,
+        businessComprehensionBlock,
+        "");
+  }
+
+  public String buildLocalMinimalPrompt(
+      AiFlowIntent intent,
+      String activeEditorContent,
+      String ragContext,
+      String memory,
+      String userRequest,
+      String uiLanguage,
+      String businessComprehensionBlock,
+      String menuBusinessScanDigest) {
     String base = buildLocalMinimalPrompt(intent, activeEditorContent, ragContext, memory, userRequest, uiLanguage);
+    String scan = trimToMax(String.valueOf(menuBusinessScanDigest == null ? "" : menuBusinessScanDigest), 1400);
+    if (!scan.isBlank() && intent == AiFlowIntent.MENU_JSON) {
+      base = base.replace(
+          "\n[USER_REQUEST]",
+          "\n[MENU_BUSINESS_SCAN]\n" + scan + "\n[/MENU_BUSINESS_SCAN]\n\n[USER_REQUEST]");
+    }
     String block = String.valueOf(businessComprehensionBlock == null ? "" : businessComprehensionBlock).trim();
     if (block.isBlank()) {
       return base;

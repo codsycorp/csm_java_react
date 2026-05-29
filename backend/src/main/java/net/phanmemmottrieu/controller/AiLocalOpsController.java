@@ -378,6 +378,7 @@ public class AiLocalOpsController {
         }
         out.put("businessMemoryIndexDir", resolveBusinessMemoryDir().toString());
         out.put("menuLearningFiles", listMenuLearningFiles());
+        out.put("codeLearningFiles", listCodeLearningFiles());
         out.put("authorStyleDnaPath", resolveKnowledgeBaseDir().resolve("author_style_dna.md").toString());
         out.put("authorStyleDnaExists", Files.isRegularFile(resolveKnowledgeBaseDir().resolve("author_style_dna.md")));
         return ResponseEntity.ok(out);
@@ -451,6 +452,25 @@ public class AiLocalOpsController {
                     .filter(Files::isRegularFile)
                     .map(path -> path.getFileName().toString())
                     .filter(name -> name.startsWith("ai_menu_learning_") && name.endsWith(".jsonl"))
+                    .sorted()
+                    .toList();
+            }
+        } catch (Exception ignored) {
+            return List.of();
+        }
+    }
+
+    private List<String> listCodeLearningFiles() {
+        try {
+            Path base = resolveKnowledgeBaseDir();
+            if (!Files.isDirectory(base)) {
+                return List.of();
+            }
+            try (Stream<Path> stream = Files.list(base)) {
+                return stream
+                    .filter(Files::isRegularFile)
+                    .map(path -> path.getFileName().toString())
+                    .filter(name -> name.startsWith("ai_code_learning_") && name.endsWith(".jsonl"))
                     .sorted()
                     .toList();
             }

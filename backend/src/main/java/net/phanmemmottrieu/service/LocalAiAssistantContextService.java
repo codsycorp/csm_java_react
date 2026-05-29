@@ -14,6 +14,7 @@ import org.apache.lucene.index.IndexWriterConfig;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.KnnFloatVectorQuery;
 import org.apache.lucene.search.MatchAllDocsQuery;
+import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.store.Directory;
@@ -77,6 +78,7 @@ public class LocalAiAssistantContextService {
     private static final int BUDGET_SEMANTIC_SEARCH = 6_000;
     private static final int BUDGET_BUSINESS_MEMORY = 3_200;
     private static final int BUDGET_MENU_LEARNING   = 2_200;
+    private static final int BUDGET_CODE_LEARNING   = 2_200;
 
     public record ContextBundle(
         String retrievalBlock,
@@ -99,6 +101,7 @@ public class LocalAiAssistantContextService {
     private final AiLocalEmbeddingService aiLocalEmbeddingService;
     private final AiBusinessMemoryVectorService aiBusinessMemoryVectorService;
     private final AiMenuLearningMemoryService aiMenuLearningMemoryService;
+    private final AiCodeLearningMemoryService aiCodeLearningMemoryService;
 
     @Value("${ai.local.assistant.enabled:true}")
     private boolean enabled;
@@ -148,17 +151,31 @@ public class LocalAiAssistantContextService {
     @Value("${ai.local.assistant.max-analysis-chars:500000}")
     private int maxAnalysisChars;
 
+    @Value("${ai.local.assistant.search.hybrid-bm25.enabled:true}")
+    private boolean hybridBm25Enabled;
+
+    @Value("${ai.local.assistant.search.hybrid-bm25.vector-weight:0.55}")
+    private float hybridVectorWeight;
+
+    @Value("${ai.local.assistant.search.hybrid-bm25.bm25-weight:0.45}")
+    private float hybridBm25Weight;
+
+    @Value("${ai.local.assistant.search.hybrid-bm25.fanout-multiplier:4}")
+    private int hybridBm25FanoutMultiplier;
+
     private volatile long lastIndexedAtMs = 0L;
 
     @Autowired
     public LocalAiAssistantContextService(
         AiLocalEmbeddingService aiLocalEmbeddingService,
         AiBusinessMemoryVectorService aiBusinessMemoryVectorService,
-        @Autowired(required = false) AiMenuLearningMemoryService aiMenuLearningMemoryService
+        @Autowired(required = false) AiMenuLearningMemoryService aiMenuLearningMemoryService,
+        @Autowired(required = false) AiCodeLearningMemoryService aiCodeLearningMemoryService
     ) {
         this.aiLocalEmbeddingService = aiLocalEmbeddingService;
         this.aiBusinessMemoryVectorService = aiBusinessMemoryVectorService;
         this.aiMenuLearningMemoryService = aiMenuLearningMemoryService;
+        this.aiCodeLearningMemoryService = aiCodeLearningMemoryService;
     }
 
     @PostConstruct
@@ -290,6 +307,14 @@ public class LocalAiAssistantContextService {
             String importFollow = buildImportFollowBlock(currentCode, BUDGET_IMPORT_FOLLOW);
             if (!importFollow.isBlank()) {
                 blocks.add(importFollow);
+            }
+            if (aiCodeLearningMemoryService != null && appId != null && !appId.isBlank()) {
+                String learned = String.valueOf(aiCodeLearningMemoryService.buildLearningContextBlock(appId, message) == null
+                    ? ""
+                    : aiCodeLearningMemoryService.buildLearningContextBlock(appId, message)).trim();
+                if (!learned.isBlank()) {
+                    blocks.add(trimTo(learned, BUDGET_CODE_LEARNING));
+                }
             }
         }
 
@@ -684,70 +709,139 @@ public class LocalAiAssistantContextService {
     }
 
     private List<SearchHit> searchLocalSources(String queryText, String contextType, int limit) {
-        List<SearchHit> out = new ArrayList<>();
-        List<SearchHit> candidates = new ArrayList<>();
         Path indexPath = resolveIndexPath();
         if (!Files.isDirectory(indexPath)) {
-            return out;
+            return List.of();
+        }
+
+        int safeLimit = Math.max(1, limit);
+        int fanout = AiLocalLuceneHybridSearchHelper.resolveFanout(safeLimit, Math.max(4, hybridBm25FanoutMultiplier), 16);
+        int candidateCap = Math.max(safeLimit * 3, fanout);
+        String embeddingQuery = buildEmbeddingSearchQuery(queryText);
+        if (embeddingQuery.isBlank()) {
+            return List.of();
         }
 
         try (Directory directory = FSDirectory.open(indexPath)) {
             if (!DirectoryReader.indexExists(directory)) {
-                return out;
+                return List.of();
             }
             try (DirectoryReader reader = DirectoryReader.open(directory)) {
                 IndexSearcher searcher = new IndexSearcher(reader);
-                String embeddingQuery = buildEmbeddingSearchQuery(queryText);
-                if (embeddingQuery.isBlank()) {
-                    return List.of();
+                LinkedHashMap<String, AiLocalLuceneHybridSearchHelper.HybridCandidate<SearchHit>> hybridCandidates = new LinkedHashMap<>();
+                List<SearchHit> vectorOnlyCandidates = new ArrayList<>();
+
+                Query vectorQuery = new KnnFloatVectorQuery("vector", embedQueryText(embeddingQuery), fanout);
+                if (hybridBm25Enabled) {
+                    AiLocalLuceneHybridSearchHelper.collectVectorHits(
+                        searcher,
+                        vectorQuery,
+                        fanout,
+                        (activeSearcher, scoreDoc) -> toWorkspaceSearchHit(activeSearcher, scoreDoc, contextType),
+                        hybridCandidates,
+                        this::workspaceHitKey);
+                    Query bm25Query = AiLocalLuceneHybridSearchHelper.buildWorkspaceBm25Query(queryText);
+                    AiLocalLuceneHybridSearchHelper.collectBm25Hits(
+                        searcher,
+                        bm25Query,
+                        fanout,
+                        (activeSearcher, scoreDoc) -> toWorkspaceSearchHit(activeSearcher, scoreDoc, contextType),
+                        hybridCandidates,
+                        this::workspaceHitKey);
+                } else {
+                    TopDocs docs = searcher.search(vectorQuery, fanout);
+                    appendWorkspaceVectorHits(searcher, docs, contextType, vectorOnlyCandidates, candidateCap);
                 }
-                TopDocs docs = searcher.search(new KnnFloatVectorQuery("vector", embedQueryText(embeddingQuery), Math.max(limit * 4, 16)), Math.max(limit * 4, 16));
-                for (ScoreDoc scoreDoc : docs.scoreDocs) {
-                    Document doc = searcher.storedFields().document(scoreDoc.doc);
-                    String scope = str(doc.get("scope"));
-                    String ext = str(doc.get("ext"));
-                    if (!matchesContext(scope, ext, contextType)) {
-                        continue;
-                    }
-                    String summary = mergeIndexedSummary(str(doc.get("summary")), str(doc.get("structure")));
-                    candidates.add(new SearchHit(
-                        str(doc.get("path")),
-                        scope,
-                        summary,
-                        trimTo(str(doc.get("content")), 1600),
-                        scoreDoc.score
-                    ));
-                    if (candidates.size() >= Math.max(4, limit * 4)) {
-                        break;
-                    }
-                }
-                if (candidates.isEmpty()) {
-                    TopDocs fallback = searcher.search(new MatchAllDocsQuery(), Math.max(limit * 2, 8));
+
+                if (hybridBm25Enabled && hybridCandidates.isEmpty()) {
+                    TopDocs fallback = searcher.search(new MatchAllDocsQuery(), Math.max(safeLimit * 2, 8));
                     for (ScoreDoc scoreDoc : fallback.scoreDocs) {
-                        Document doc = searcher.storedFields().document(scoreDoc.doc);
-                        String scope = str(doc.get("scope"));
-                        String ext = str(doc.get("ext"));
-                        if (!matchesContext(scope, ext, contextType)) {
+                        SearchHit hit = toWorkspaceSearchHit(searcher, scoreDoc, contextType);
+                        if (hit == null) {
                             continue;
                         }
-                        String summary = mergeIndexedSummary(str(doc.get("summary")), str(doc.get("structure")));
-                        candidates.add(new SearchHit(
-                            str(doc.get("path")),
-                            scope,
-                            summary,
-                            trimTo(str(doc.get("content")), 1200),
-                            scoreDoc.score
-                        ));
-                        if (candidates.size() >= Math.max(4, limit * 4)) {
+                        hybridCandidates.putIfAbsent(
+                            workspaceHitKey(hit),
+                            new AiLocalLuceneHybridSearchHelper.HybridCandidate<>(hit));
+                        if (hybridCandidates.size() >= candidateCap) {
                             break;
                         }
                     }
+                } else if (!hybridBm25Enabled && vectorOnlyCandidates.isEmpty()) {
+                    TopDocs fallback = searcher.search(new MatchAllDocsQuery(), Math.max(safeLimit * 2, 8));
+                    appendWorkspaceVectorHits(searcher, fallback, contextType, vectorOnlyCandidates, candidateCap);
                 }
+
+                List<SearchHit> candidates;
+                if (hybridBm25Enabled) {
+                    candidates = AiLocalLuceneHybridSearchHelper.fuseAndRank(
+                        hybridCandidates,
+                        hybridVectorWeight,
+                        hybridBm25Weight,
+                        (hit, fusedScore) -> new SearchHit(hit.path(), hit.scope(), hit.summary(), hit.content(), fusedScore),
+                        candidateCap);
+                } else {
+                    candidates = vectorOnlyCandidates;
+                }
+                return rerankSearchHits(queryText, candidates, safeLimit);
             }
         } catch (Exception ex) {
             log.debug("Local assistant semantic search failed: {}", ex.getMessage());
+            return List.of();
         }
-        return rerankSearchHits(queryText, candidates, limit);
+    }
+
+    private void appendWorkspaceVectorHits(
+            IndexSearcher searcher,
+            TopDocs docs,
+            String contextType,
+            List<SearchHit> out,
+            int cap) {
+        if (docs == null || docs.scoreDocs == null) {
+            return;
+        }
+        for (ScoreDoc scoreDoc : docs.scoreDocs) {
+            SearchHit hit = toWorkspaceSearchHit(searcher, scoreDoc, contextType);
+            if (hit == null) {
+                continue;
+            }
+            out.add(hit);
+            if (out.size() >= cap) {
+                break;
+            }
+        }
+    }
+
+    private SearchHit toWorkspaceSearchHit(IndexSearcher searcher, ScoreDoc scoreDoc, String contextType) {
+        if (searcher == null || scoreDoc == null) {
+            return null;
+        }
+        try {
+            Document doc = searcher.storedFields().document(scoreDoc.doc);
+            String scope = str(doc.get("scope"));
+            String ext = str(doc.get("ext"));
+            if (!matchesContext(scope, ext, contextType)) {
+                return null;
+            }
+            String summary = mergeIndexedSummary(str(doc.get("summary")), str(doc.get("structure")));
+            return new SearchHit(
+                str(doc.get("path")),
+                scope,
+                summary,
+                trimTo(str(doc.get("content")), 1600),
+                scoreDoc.score);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private String workspaceHitKey(SearchHit hit) {
+        if (hit == null) {
+            return "";
+        }
+        String path = str(hit.path());
+        String summary = str(hit.summary());
+        return path + "|" + summary.hashCode();
     }
 
     private List<SearchHit> rerankSearchHits(String queryText, List<SearchHit> candidates, int limit) {
