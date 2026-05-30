@@ -111,6 +111,7 @@ async function submitSeoContentJobAsync(
 				async: true,
 			},
 			timeout: AI_REQUEST_TIMEOUT,
+			retry: { limit: 0 },
 		})
 		.json<ApiResponse<any>>();
 
@@ -137,6 +138,7 @@ async function submitSeoContentJobAsync(
 					jobId,
 				},
 				timeout: AI_REQUEST_TIMEOUT,
+				retry: { limit: 0 },
 			})
 			.json<ApiResponse<any>>();
 
@@ -217,14 +219,21 @@ export async function generateSeoAntiAiOneShot(
 			.post("ai-generate-seo-content", {
 				json: body,
 				timeout: AI_REQUEST_TIMEOUT,
+				retry: { limit: 0 },
 			})
 			.json<ApiResponse<any>>();
 		return response;
 	} catch (error: any) {
+		const status = error?.response?.status;
+		const hint = status === 404
+			? "Endpoint /ai-generate-seo-content không tìm thấy — redeploy backend + reload nginx."
+			: status === 504
+				? "Nginx/backend timeout — tăng proxy_read_timeout hoặc kiểm tra model SEO local."
+				: "";
 		return {
 			code: -1,
 			result: {} as any,
-			message: error.message || "Unknown error occurred",
+			message: [error.message || "Unknown error occurred", hint].filter(Boolean).join(" — "),
 			success: false,
 		};
 	}
@@ -343,15 +352,22 @@ export async function generateSeoContentWithPrompt(prompt: string, options?: Gen
 					taskType: options?.taskType || "seo_content",
 				},
 				timeout: AI_REQUEST_TIMEOUT,
+				retry: { limit: 0 },
 			})
 			.json<ApiResponse<any>>(); // any để chấp nhận custom fields
 		
 		return response;
 	} catch (error: any) {
+		const status = error?.response?.status;
+		const hint = status === 404
+			? "Endpoint /ai-generate-seo-content không tìm thấy — redeploy backend + reload nginx."
+			: status === 504
+				? "Nginx/backend timeout — tăng proxy_read_timeout hoặc kiểm tra model SEO local."
+				: "";
 		return {
 			code: -1,
 			result: {} as any,
-			message: error.message || "Unknown error occurred",
+			message: [error.message || "Unknown error occurred", hint].filter(Boolean).join(" — "),
 			success: false
 		};
 	}

@@ -1684,8 +1684,11 @@ public class WebSpringController {
         return escaped;
     }
 
+    /**
+     * Web entry — invoked only via {@link MainRouterController} (not a direct {@code @RequestMapping})
+     * so API paths on {@code api.*} never hit this handler and return spurious HTTP 404.
+     */
     @SuppressWarnings("unchecked")
-    @RequestMapping("/**") // Handles all web requests
     public ResponseEntity<byte[]> handleWebRequest(
             HttpServletRequest request,
             @RequestHeader(required = false) Map<String, String> headers,

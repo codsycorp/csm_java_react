@@ -313,6 +313,7 @@ Repo: `csm_server`
 | **SmolVLM2-256M-Video** cho máy 5GB / 2 CPU | ✅ Khuyến nghị chính |
 | **Lucene vector + multimodal ingest** (ảnh → text → RAG → worker) | ✅ Luồng tích hợp |
 | Script `download-ai-local-models.sh`, `start-ai-local-vision.sh` | ✅ Repo root `/scripts` |
+| **Q.12 Roadmap SmolVLM GGUF in-JVM** (binding mtmd / lane swap / native vision service) | ✅ Spec roadmap |
 
 ### Changelog v2.1
 
@@ -2088,6 +2089,92 @@ AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8090/v1/chat/comple
 ✗ Bật nomic embed + vision sidecar + preload coder cùng lúc không giám sát RAM
 ✗ Feed ảnh base64 trực tiếp vào prompt Qwen2.5-Coder (model không multimodal)
 ✗ Kỳ vọng model 1.5B sửa file 371k không chọn vùng code
+```
+
+## Q.12 Roadmap — SmolVLM GGUF in-JVM (không sidecar `:8090`)
+
+> **Production hiện tại (v3.x):** Vai trò 3 vẫn là **sidecar on-demand** (Q.1, Q.5). Mục này mô tả **các đường khả thi** để sau này load `SmolVLM2-256M-Video-Instruct-Q8_0.gguf` + `mmproj-...gguf` **trong cùng JVM** như Qwen Coder — **chưa triển khai** trong repo.
+
+### Q.12.1 Vì sao sidecar trước, in-JVM sau
+
+| Ràng buộc | Sidecar (hiện tại) | In-JVM (mục tiêu) |
+|-----------|-------------------|-------------------|
+| RAM 5GB | Tách ~400–700MB khỏi heap Spring; **unload** sau scan | Phải **swap lane** hoặc unload Qwen trước khi infer vision |
+| `de.kherud:llama:4.1.0` (CSM) | Chỉ text GGUF | **Không** có `setMmproj` / image input |
+| Ops | Cần `llama-server` binary | Chỉ jar + `jllama` native (đã bundle) |
+
+### Q.12.2 Bốn hướng in-JVM (theo thứ tự khuyến nghị)
+
+**Hướng A — Nâng Java binding có mtmd (khuyến nghị khi upstream sẵn sàng)**
+
+- Upstream `kherud/java-llama.cpp` issue #103 (VLM) vẫn mở trên bản gốc.
+- Fork downstream **đã có multimodal** (PR #189): `ModelParameters.setMmproj`, `ContentPart.imageBytes`, `ChatMessage.userMultimodal(...)`, build link `libmtmd` vào `jllama`.
+- Việc CSM cần làm (roadmap):
+  1. Đánh giá merge/fork dependency thay `de.kherud:llama:4.1.0`.
+  2. Thêm **`AiLocalLlamaVisionNativeService`** (lane `VISION` tách `CODE`/`SEO`) — load 2 file GGUF SmolVLM + mmproj, **swap model** giống `LlamaCppNativeService.ensureModelLoaded`.
+  3. `AiMultimodalScannerService.invokeLocalVision()` gọi native trước; fallback HTTP sidecar nếu native tắt.
+  4. Weak-5gb: **max-concurrent=1**, vision infer xong → **close/unload** vision weights trước khi gọi Qwen worker.
+
+**Hướng B — JNI tự wrap llama.cpp `mtmd`**
+
+- Tự build `jllama` + `mtmd` cho Linux/macOS server, expose Java API riêng.
+- Effort cao, bảo trì nặng — chỉ khi không dùng được fork/binding A.
+
+**Hướng C — Managed sidecar (không in-JVM, nhưng “chỉ jar”)**
+
+- `AiLocalVisionSidecarService`: Java `ProcessBuilder` spawn `llama-server` với GGUF đã có; user **không** SSH/script.
+- Vẫn process + port local — **không** thuộc in-JVM; giữ làm bước trung gian trước khi A sẵn sàng.
+
+**Hướng D — ONNX vision khác (không dùng SmolVLM GGUF)**
+
+- Dùng `onnxruntime` (đã có cho rembg) + model caption/OCR `.onnx`.
+- **Không** tái sử dụng file SmolVLM256 GGUF hiện có; layout mockup thường yếu hơn SmolVLM.
+
+### Q.12.3 Kiến trúc mục tiêu in-JVM (lane swap)
+
+```
+Request có ảnh mockup UI
+  → AiMultimodalScannerService
+  → AiLocalLlamaVisionNativeService (lane VISION, SmolVLM256+mmproj in-JVM)
+  → mô tả text → Lucene dyn_ctx_*
+  → unload vision / swap lane CODE
+  → LlamaCppNativeService (Qwen Coder) + RAG → textEdits / menu JSON
+```
+
+Config roadmap (chưa có trong `application.properties`):
+
+```bash
+AI_ORCHESTRATION_MULTIMODAL_VISION_NATIVE_ENABLED=false
+AI_ORCHESTRATION_MULTIMODAL_VISION_MODEL_PATH=./csm_datas/ai_local/model/SmolVLM2-256M-Video-Instruct-Q8_0.gguf
+AI_ORCHESTRATION_MULTIMODAL_VISION_MMPROJ_PATH=./csm_datas/ai_local/model/mmproj-SmolVLM2-256M-Video-Instruct-Q8_0.gguf
+AI_ORCHESTRATION_MULTIMODAL_VISION_UNLOAD_AFTER_SCAN=true
+```
+
+### Q.12.4 RAM weak-5gb khi bật in-JVM
+
+| Thời điểm | Cho phép |
+|-----------|----------|
+| Infer vision | Qwen **unload** (swap) hoặc chưa load |
+| Infer code/menu | SmolVLM **unload** |
+| Cùng lúc Qwen3B + SmolVLM256 + nomic | ❌ (giữ Q.11) |
+
+### Q.12.5 Checklist nghiệm thu in-JVM (khi implement)
+
+| # | Test | Pass |
+|---|------|------|
+| 1 | `./scripts/download-ai-local-models.sh vision-weak` — đủ model + mmproj | ☐ |
+| 2 | `VISION_NATIVE_ENABLED=true`, **không** chạy `:8090` | ☐ |
+| 3 | Screenshot UI → scanner log `Vision:` (native, không HTTP) | ☐ |
+| 4 | Sau scan, worker Qwen infer bình thường (swap OK) | ☐ |
+| 5 | 2 request ảnh liên tiếp trên 5GB — không OOM | ☐ |
+| 6 | Fallback: native fail → sidecar HTTP (nếu endpoint bật) | ☐ |
+
+### Q.12.6 Cấm khi triển khai in-JVM
+
+```txt
+✗ Giữ SmolVLM + Qwen Coder loaded cùng lúc trên profile weak-5gb
+✗ Feed base64 ảnh vào prompt text Qwen (vẫn cấm — Q.11)
+✗ Thay sidecar bằng in-JVM trên prod trước khi pass Q.12.5
 ```
 
 ---

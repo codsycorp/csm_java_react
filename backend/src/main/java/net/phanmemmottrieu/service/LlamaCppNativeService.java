@@ -1,10 +1,10 @@
 package net.phanmemmottrieu.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import de.kherud.llama.InferenceParameters;
-import de.kherud.llama.LlamaModel;
-import de.kherud.llama.LlamaOutput;
-import de.kherud.llama.ModelParameters;
+import net.ladenthin.llama.InferenceParameters;
+import net.ladenthin.llama.LlamaModel;
+import net.ladenthin.llama.LlamaOutput;
+import net.ladenthin.llama.ModelParameters;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -525,6 +525,27 @@ public class LlamaCppNativeService implements AIProvider {
 
     public LocalModelLane getActiveModelLane() {
         return activeModelLane;
+    }
+
+    /**
+     * Unloads the text worker GGUF so the vision lane can load on memory-constrained hosts (Q.12 lane swap).
+     */
+    public void unloadLoadedModelForVisionSwap() {
+        synchronized (modelLock) {
+            if (model == null) {
+                return;
+            }
+            log.info("Unloading local llama worker for vision swap (lane={})", activeModelLane);
+            closeModelQuietly(model);
+            model = null;
+            activeModelLane = null;
+        }
+    }
+
+    public boolean isWorkerModelLoaded() {
+        synchronized (modelLock) {
+            return model != null;
+        }
     }
 
     public String getSeoModelPathConfig() {

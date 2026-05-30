@@ -32994,7 +32994,17 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 if (!validDataUrl) {
                     continue;
                 }
+                String base64Data = String.valueOf(rawMap.get("base64Data") == null ? "" : rawMap.get("base64Data")).trim();
+                if (base64Data.isBlank() && dataUrl.startsWith("data:image/")) {
+                    int comma = dataUrl.indexOf(',');
+                    if (comma > 0 && comma + 1 < dataUrl.length()) {
+                        base64Data = dataUrl.substring(comma + 1).trim();
+                    }
+                }
                 next.put("dataUrl", dataUrl);
+                if (!base64Data.isBlank()) {
+                    next.put("base64Data", base64Data);
+                }
                 normalized.add(next);
                 if (normalized.size() >= 8) {
                     break;

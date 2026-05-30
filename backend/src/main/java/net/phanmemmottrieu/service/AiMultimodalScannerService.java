@@ -2,6 +2,7 @@ package net.phanmemmottrieu.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -64,9 +65,14 @@ public class AiMultimodalScannerService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AiLocalLlamaVisionClient aiLocalLlamaVisionClient;
+    private final AiLocalLlamaVisionNativeService aiLocalLlamaVisionNativeService;
 
-    public AiMultimodalScannerService(AiLocalLlamaVisionClient aiLocalLlamaVisionClient) {
+    public AiMultimodalScannerService(
+        AiLocalLlamaVisionClient aiLocalLlamaVisionClient,
+        @Autowired(required = false) AiLocalLlamaVisionNativeService aiLocalLlamaVisionNativeService
+    ) {
         this.aiLocalLlamaVisionClient = aiLocalLlamaVisionClient;
+        this.aiLocalLlamaVisionNativeService = aiLocalLlamaVisionNativeService;
     }
 
     @Value("${ai.orchestration.multimodal.scanner.enabled:true}")
@@ -97,7 +103,13 @@ public class AiMultimodalScannerService {
     private String visionPrompt;
 
     public boolean isVisionRuntimeReady() {
-        return visionEnabled && !String.valueOf(visionEndpoint == null ? "" : visionEndpoint).isBlank();
+        if (!visionEnabled) {
+            return false;
+        }
+        if (aiLocalLlamaVisionNativeService != null && aiLocalLlamaVisionNativeService.isReady()) {
+            return true;
+        }
+        return !String.valueOf(visionEndpoint == null ? "" : visionEndpoint).isBlank();
     }
 
     public ScanResult scan(
@@ -228,7 +240,7 @@ public class AiMultimodalScannerService {
         String name = str(att.get("name"));
         String mimeType = str(att.get("mimeType"));
         String summary = str(att.get("summary"));
-        String base64Data = str(att.get("base64Data"));
+        String base64Data = resolveImageBase64(att);
         String sourceId = "image:" + (name.isBlank() ? ("attachment_" + index) : name);
 
         int scopeMask = SCOPE_UI_UX;
@@ -242,7 +254,7 @@ public class AiMultimodalScannerService {
         boolean hasImagePayload = !base64Data.isBlank() && base64Data.length() <= Math.max(120000, maxImageBase64Chars);
         String technicalSummary = summarizeImageFromMetadata(name, mimeType, summary, base64Data, hasImagePayload);
 
-        if (hasImagePayload && visionEnabled && visionEndpoint != null && !visionEndpoint.isBlank()) {
+        if (hasImagePayload && visionEnabled && isVisionRuntimeReady()) {
             String visionText = invokeLocalVision(base64Data, mimeType);
             if (!visionText.isBlank()) {
                 technicalSummary = technicalSummary + "\nVision: " + trimTo(visionText, 1200);
@@ -387,12 +399,33 @@ public class AiMultimodalScannerService {
     }
 
     private String invokeLocalVision(String base64Data, String mimeType) {
-        String description = aiLocalLlamaVisionClient.describeImage(
-            String.valueOf(visionPrompt == null ? "" : visionPrompt).trim(),
-            base64Data,
-            mimeType
-        );
+        String prompt = String.valueOf(visionPrompt == null ? "" : visionPrompt).trim();
+        if (aiLocalLlamaVisionNativeService != null && aiLocalLlamaVisionNativeService.isReady()) {
+            String nativeDescription = aiLocalLlamaVisionNativeService.describeImage(prompt, base64Data, mimeType);
+            if (!nativeDescription.isBlank()) {
+                return trimTo(nativeDescription, 1200);
+            }
+        }
+        String description = aiLocalLlamaVisionClient.describeImage(prompt, base64Data, mimeType);
         return trimTo(description, 1200);
+    }
+
+    private String resolveImageBase64(Map<String, Object> att) {
+        if (att == null) {
+            return "";
+        }
+        String base64Data = str(att.get("base64Data"));
+        if (!base64Data.isBlank()) {
+            return base64Data;
+        }
+        String dataUrl = str(att.get("dataUrl"));
+        if (dataUrl.startsWith("data:image/")) {
+            int comma = dataUrl.indexOf(',');
+            if (comma > 0 && comma + 1 < dataUrl.length()) {
+                return dataUrl.substring(comma + 1).trim();
+            }
+        }
+        return "";
     }
 
     private String buildCompactContext(List<ScanDecision> decisions, String contextType, String taskType, String responseMode) {

@@ -1,7 +1,7 @@
 package net.phanmemmottrieu.service;
 
-import de.kherud.llama.LlamaModel;
-import de.kherud.llama.ModelParameters;
+import net.ladenthin.llama.LlamaModel;
+import net.ladenthin.llama.ModelParameters;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

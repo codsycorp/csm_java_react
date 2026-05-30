@@ -17,6 +17,7 @@ import net.phanmemmottrieu.service.AiMediaMartialCinematicRenderService;
 import net.phanmemmottrieu.service.AiMediaTemplateProRenderService;
 import net.phanmemmottrieu.service.MartialStoryboardTemplates;
 import net.phanmemmottrieu.service.AiMultimodalScannerService;
+import net.phanmemmottrieu.service.AiLocalLlamaVisionNativeService;
 import net.phanmemmottrieu.service.AiLocalOrchestrationService;
 import net.phanmemmottrieu.service.AiBusinessMemoryVectorService;
 import net.phanmemmottrieu.service.AiLocalEmbeddingService;
@@ -120,6 +121,9 @@ public class AiLocalOpsController {
     @Autowired(required = false)
     private BundledFfmpegService bundledFfmpegService;
 
+    @Autowired(required = false)
+    private AiLocalLlamaVisionNativeService aiLocalLlamaVisionNativeService;
+
     @Value("${ai.local.only.enabled:true}")
     private boolean aiLocalOnlyEnabled;
 
@@ -181,6 +185,15 @@ public class AiLocalOpsController {
         vision.put("enabled", visionEnabled);
         vision.put("endpoint", visionEndpoint == null ? "" : visionEndpoint);
         vision.put("localVisionReady", localVisionReady);
+        if (aiLocalLlamaVisionNativeService != null) {
+            vision.put("native", aiLocalLlamaVisionNativeService.describeStatus());
+        } else {
+            Map<String, Object> nativeVision = new LinkedHashMap<>();
+            nativeVision.put("provider", "llama.cpp-native-vision");
+            nativeVision.put("enabled", false);
+            nativeVision.put("ready", false);
+            vision.put("native", nativeVision);
+        }
 
         Map<String, Object> ffmpeg = new LinkedHashMap<>();
         ffmpeg.put("provider", "jave-all-deps-bundled");
