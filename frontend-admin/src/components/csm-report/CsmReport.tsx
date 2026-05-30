@@ -1,36 +1,70 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Form, Input, InputNumber, Select, Space, DatePicker, TimePicker, message, Card } from "antd";
 import dayjs from "dayjs";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 import ImageModule from "docxtemplater-image-module-free";
-// NOTE: docx2html will try to require "jsdom" if it detects Node.
-// We load it lazily inside the browser code path and ensure `process` is undefined
-// so it picks the browser implementation, avoiding dynamic require of jsdom.
-// Do NOT import at top-level.
-// import docx2html from "docx2html";
 import html2pdf from "html2pdf.js";
 
 import { csmDecrypt } from "../csm-grid/CsmCrypto";
-import { getTableData, type Where } from "../csm-grid/CsmApi";
-import { normalizeComboOptions, parseStaticComboQuery, resolveComboQueryAppId } from "../csm-grid/combo-utils";
+import {
+  buildDetailGridSelectEnums,
+  buildSelectOptions,
+  ensureTableInDatabase,
+  globalTableFetchCache,
+  resolveCascadeSelectOptions,
+} from "../csm-grid/CsmEditModal";
+import {
+  buildRoleComboOptions,
+  collectComboTableFetchRequests,
+  getComboTableRows,
+  getLegacyFallbackComboQuery,
+  isComboLikeType,
+  isMultiSelectLikeType,
+  parseFieldOptions,
+  resolveEffectiveFieldTypes,
+  resolveEffectiveComboQueryText,
+} from "../csm-grid/combo-utils";
 import { useAppStore } from "#src/store";
-import LunarCalendar from "#src/utils/lunarCalendar";
-import DateUtils from "#src/utils/dateUtils";
+import LunarCalendar, { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong } from "#src/utils/lunarCalendar";
+import { dateFormat, chuyenNgay, TruNgayRaSoNgay, CongNgay, CongGio, validateEmail, validatePhone, DateUtils } from "#src/utils/dateUtils";
 import { useEnterToTab } from "#src/hooks/useEnterToTab";
 import { formatDateForStorage, resolveDateLocaleFormat } from "#src/utils/dateControl";
 import { useTranslation } from "react-i18next";
 
 type Row = Record<string, any>;
-type Database = Record<string, { rows: Row[] }>;
+
+const CO = "[CsmReport.co]";
+
+function previewText(value: unknown, max = 120): string {
+  const text = String(value ?? "").trim();
+  if (!text) return "(empty)";
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function resolveComboQueryPreview(field: any, decryptFn?: (input: string) => string): string {
+  const raw = String(field?.f_cbo_query || getLegacyFallbackComboQuery(field?.f_name) || "").trim();
+  if (!raw) return "(empty)";
+  if (!decryptFn) return previewText(raw);
+  try {
+    return previewText(decryptFn(raw) || raw);
+  } catch {
+    return previewText(raw);
+  }
+}
+
+function getTableRowCount(database: Record<string, any>, tableName: string): number {
+  const tableData = database?.[tableName];
+  if (Array.isArray(tableData)) return tableData.length;
+  if (Array.isArray(tableData?.rows)) return tableData.rows.length;
+  return 0;
+}
 
 export interface CsmReportProps {
   appId?: string;
   m_configs: any; // Menu config (includes table fields, trigger, report_name, orientation, p_width, p_height)
   decrypt?: (s: string) => string;
 }
-
-interface Option { ma: any; ten: string }
 
 function isDataUrl(url: string): boolean {
   return typeof url === "string" && url.startsWith("data:");
@@ -46,12 +80,6 @@ async function fetchArrayBuffer(src: string): Promise<ArrayBuffer> {
   return await res.arrayBuffer();
 }
 
-function ensureReturn(code: string): string {
-  const trimmed = code?.trim() || "";
-  if (!trimmed) return "return null";
-  return trimmed.includes("return ") ? trimmed : `return (${trimmed})`;
-}
-
 function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): ((...a: TArgs) => TReturn) | null {
   try {
     // eslint-disable-next-line no-new-func
@@ -64,26 +92,33 @@ function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): (
 }
 
 export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps) {
-  const { i18n } = useTranslation();
+  const { i18n, t } = useTranslation();
   const dateLocaleFormat = useMemo(() => resolveDateLocaleFormat(i18n.language), [i18n.language]);
   const [form] = Form.useForm();
-  const [optionsSelect, setOptionsSelect] = useState<Record<string, any>>({});
   const [reportSrc, setReportSrc] = useState<string>("");
+  const [databaseVersion, setDatabaseVersion] = useState(0);
+  const [formUpdated, setFormUpdated] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
-  
-  // Enable Enter to Tab functionality for all inputs in the form
+  const lastComboFetchSignatureRef = useRef("");
+
   useEnterToTab(containerRef);
-  
-  // Get database from global AppStore instead of props
+
   const database = useAppStore(state => state.database);
-  const databaseRef = useRef(database);
+  const setTableData = useAppStore(state => state.setTableData);
 
-  // Update refs when database changes
-  useEffect(() => {
-    databaseRef.current = database;
-  }, [database]);
+  const effectiveAppId = useMemo(() => {
+    if (appId) return appId;
+    try {
+      return useAppStore.getState().getCurrentAppId?.() || "csm";
+    } catch {
+      return "csm";
+    }
+  }, [appId]);
 
-  const tableName: string = m_configs.table_name || m_configs.id;
+  const reportDecrypt = useCallback((input: string) => {
+    return resolveEffectiveComboQueryText(input, decrypt);
+  }, [decrypt]);
+
   const fields = useMemo(() => {
     const tableFields: any[] = (m_configs.table || [])
       .filter((f: any) => Number(f.f_show) === 1 && f.f_name?.toLowerCase() !== "id")
@@ -91,191 +126,315 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
     return tableFields.filter((f: any) => f.f_name?.toLowerCase() !== "parent_id");
   }, [m_configs]);
 
-  function getKey(tb: string, f: string) { return `${tb}_^_${f}`; }
-
-  function buildOptionsFromDb(objName: string, fields: string[], objWhere?: string): { options: Option[], where?: any, data?: Row[] } {
-    const objTBL = database[objName];
-    const out: { options: Option[], where?: any, data?: Row[] } = { options: [] };
-    if (!objTBL) return out;
-    out.data = objTBL.rows;
-    out.options = objTBL.rows.map((o: Row) => ({ ma: o[fields[0]], ten: o[fields[1]] }));
-    out.options.sort((a, b) => a.ten.localeCompare(b.ten));
-    if (objWhere) {
-      const fn = safeEval(["data"], ensureReturn(objWhere));
-      try { out.where = fn?.({}) ?? undefined; } catch { /* ignore */ }
-    }
-    return out;
-  }
-
-  function setOptions(tb: string, f: string, value: any) {
-    setOptionsSelect(prev => ({ ...prev, [getKey(tb, f)]: value }));
-  }
-
-  async function getOptionsSelect(f_cbo_query: string, tb_name: string, f_name: string): Promise<void> {
-    const key = getKey(tb_name, f_name);
-    setOptionsSelect(prev => ({ ...prev, [key]: { options: [] } }));
-    if (!f_cbo_query) return;
-
-    let resolvedQuery = String(f_cbo_query);
-    if (decrypt) {
-      try {
-        const dec = decrypt(resolvedQuery);
-        if (dec) resolvedQuery = dec;
-      } catch (err) {
-        console.warn("Decrypt error:", err);
-      }
-    }
-
-    try {
-      let objQa: any = null;
-      const staticParsed = parseStaticComboQuery(resolvedQuery);
-
-      if (staticParsed) {
-        if (Array.isArray(staticParsed)) {
-          objQa = { options: staticParsed, query: [] };
-        } else if (staticParsed && typeof staticParsed === "object") {
-          if (Array.isArray(staticParsed.options) || Array.isArray(staticParsed.query)) {
-            objQa = staticParsed;
-          } else {
-            objQa = {
-              options: Object.entries(staticParsed).map(([ma, ten]) => ({ ma, ten })),
-              query: [],
-            };
-          }
-        }
-      }
-
-      if (!objQa) {
-        const codeBody = resolvedQuery.includes("return ") ? resolvedQuery : `return (${resolvedQuery})`;
-        const fn = safeEval(["seft", "data"], codeBody);
-        if (!fn) {
-          console.warn("Failed to eval f_cbo_query for", f_name);
-          return;
-        }
-        objQa = fn({ m_configs }, databaseRef.current) || {};
-      }
-      
-      // Skip grid select
-      if (objQa.hasOwnProperty("f_grid") && objQa.hasOwnProperty("f_grid_fields")) {
-        setOptions(tb_name, f_name, objQa);
-        return;
-      }
-
-      let options: any[] = [];
-
-      // Case 1: query API get-table-data (like CsmDynamicGrid)
-      if (Array.isArray(objQa.query) && objQa.query.length > 0) {
-        const queryItem = objQa.query[0];
-        const obj_name = queryItem.obj_name || "";
-        const fieldsQ = queryItem.fields || [];
-        const obj_where = queryItem.obj_where || "";
-
-        if (obj_name !== "" && fieldsQ.length === 2) {
-          try {
-            // Get app_id
-            let queryAppId = appId;
-            if (!queryAppId) {
-              try { queryAppId = useAppStore.getState().getCurrentAppId(); } catch {}
-            }
-            queryAppId = resolveComboQueryAppId(obj_name, queryItem.app_id, queryAppId || "csm");
-
-            if (queryAppId) {
-              // Default WHERE condition
-              const defaultWhere: Where = {
-                operator: "AND",
-                conditions: [
-                  {
-                    field: "id",
-                    type: "like",
-                    value: ""
-                  }
-                ]
-              };
-
-              // Xây dựng điều kiện WHERE từ obj_where nếu có
-              const where: Where = obj_where
-                ? typeof obj_where === "string" 
-                  ? safeEval(["data"], (obj_where.includes("return ") ? "" : "return ") + obj_where)?.({}) as any ?? defaultWhere 
-                  : obj_where
-                : defaultWhere;
-
-              // Fetch from API
-              const res = await getTableData<Row>({
-                app_id: queryAppId,
-                obj_name,
-                where,
-              });
-
-              const rows = res?.rows || [];
-              options = rows.map((row: any) => ({
-                ma: row[fieldsQ[0]] != null ? row[fieldsQ[0]] : "",
-                ten: row[fieldsQ[1]] != null ? row[fieldsQ[1]] : "",
-              }));
-            } else {
-              // Fallback to database
-              const out = buildOptionsFromDb(obj_name, fieldsQ, obj_where);
-              options = out.options;
-            }
-          } catch (error) {
-            console.error("Error loading select options from API:", error);
-            // Fallback to database
-            const out = buildOptionsFromDb(obj_name, fieldsQ, obj_where);
-            options = out.options;
-          }
-        }
-      }
-
-      // Case 2: static options
-      if (options.length === 0 && Array.isArray(objQa.options) && objQa.options.length > 0) {
-        options = normalizeComboOptions(objQa.options).map((item) => ({ ma: item.value, ten: item.label }));
-      }
-
-      if (options.length === 0 && objQa && typeof objQa === "object" && !Array.isArray(objQa)) {
-        const keyValues = Object.entries(objQa)
-          .filter(([k]) => k !== "query" && k !== "options")
-          .map(([ma, ten]) => ({ ma, ten }));
-        options = normalizeComboOptions(keyValues).map((item) => ({ ma: item.value, ten: item.label }));
-      }
-
-      if (options.length === 0) {
-        console.warn("No options found for", f_name);
-        return;
-      }
-
-      // Sort and set
-      const sorted = normalizeComboOptions(options)
-        .map((item) => ({ ma: item.value, ten: item.label }))
-        .sort((a: any, b: any) => {
-        const aText = String(a.ten || a.label || "");
-        const bText = String(b.ten || b.label || "");
-        return aText.localeCompare(bText);
-      });
-
-      setOptions(tb_name, f_name, { 
-        fields: ["ma", "ten"], 
-        data: sorted, 
-        options: sorted 
-      });
-    } catch (err) {
-      console.error("Error in getOptionsSelect:", err);
-    }
-  }
+  const comboFetchSignature = useMemo(() => {
+    const comboFields = (m_configs.table || []).filter((f: any) => {
+      const types = resolveEffectiveFieldTypes(f);
+      return isComboLikeType(types);
+    });
+    return comboFields
+      .map((f: any) => `${String(f.f_name || "")}:${String(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name) || "")}`)
+      .sort()
+      .join("|");
+  }, [m_configs.table]);
 
   useEffect(() => {
-    // Preload select options from f_cbo_query fields
-    fields.forEach((Obj: any) => {
-      if (String(Obj.f_types).includes("co") && Obj.f_cbo_query) {
-        getOptionsSelect(Obj.f_cbo_query, tableName, Obj.f_name);
+    if (!comboFetchSignature || comboFetchSignature === lastComboFetchSignatureRef.current) return;
+    lastComboFetchSignatureRef.current = comboFetchSignature;
+
+    console.log(`${CO} Scanning combo queries for missing tables...`);
+    console.log(`${CO} comboFetchSignature:`, previewText(comboFetchSignature, 200));
+
+    const requests = collectComboTableFetchRequests(m_configs.table || [], {
+      decrypt: reportDecrypt,
+      fallbackAppId: effectiveAppId,
+    });
+
+    if (requests.length === 0) {
+      console.warn(`${CO} No combo tables to prefetch`);
+      return;
+    }
+
+    console.log(`${CO} Found ${requests.length} combo tables to prefetch:`, requests);
+
+    Promise.all(
+      requests.map(({ tableName, appId: queryAppId, whereClause }) => {
+        console.log(`${CO} Prefetch start: table=${tableName}, app=${queryAppId}, where=`, whereClause);
+        return ensureTableInDatabase(tableName, queryAppId, useAppStore.getState().database, whereClause, setTableData)
+          .then((started) => {
+            console.log(`${CO} Prefetch ${tableName}:`, started ? "started/waiting" : "already cached");
+            return started;
+          })
+          .catch((err) => {
+            console.error(`${CO} Prefetch FAILED ${tableName}:`, err);
+            return null;
+          });
+      }),
+    ).then(() => {
+      console.log(`${CO} All combo prefetches settled, bump databaseVersion`);
+      setDatabaseVersion((v) => v + 1);
+    });
+  }, [comboFetchSignature, effectiveAppId, reportDecrypt, setTableData, m_configs.table]);
+
+  useEffect(() => {
+    if (globalTableFetchCache.size === 0) return;
+
+    console.log(`${CO} Waiting for ${globalTableFetchCache.size} in-flight table fetch(es)...`);
+
+    const checkInterval = setInterval(() => {
+      if (globalTableFetchCache.size === 0) {
+        console.log(`${CO} All in-flight table fetches completed, bump databaseVersion`);
+        setDatabaseVersion((v) => v + 1);
+        clearInterval(checkInterval);
+      }
+    }, 500);
+
+    return () => clearInterval(checkInterval);
+  }, [globalTableFetchCache.size, databaseVersion]);
+
+  const cascadeParentFields = useMemo(() => {
+    const parents = new Set<string>();
+    (m_configs.table || []).forEach((field: any) => {
+      const rawQuery = String(field?.f_cbo_query || getLegacyFallbackComboQuery(field?.f_name) || "").trim();
+      if (!rawQuery) return;
+      let resolvedQuery = rawQuery;
+      try {
+        resolvedQuery = reportDecrypt(rawQuery) || rawQuery;
+      } catch {
+        resolvedQuery = rawQuery;
+      }
+      const parsed = (() => {
+        try {
+          return JSON.parse(resolvedQuery);
+        } catch {
+          try {
+            return new Function(`return (${resolvedQuery})`)();
+          } catch {
+            return null;
+          }
+        }
+      })();
+      const cascadeFrom = String(parsed?.cascadeFrom || "").trim().toLowerCase();
+      if (cascadeFrom) parents.add(cascadeFrom);
+    });
+    return Array.from(parents);
+  }, [m_configs.table, reportDecrypt]);
+
+  Form.useWatch(cascadeParentFields.length > 0 ? cascadeParentFields : ["__cascade_watch__"], form);
+
+  const selectEnums = useMemo(() => {
+    console.log(`${CO} selectEnums useMemo triggered`);
+    console.log(`${CO} m_configs.table count:`, (m_configs.table || []).length);
+    console.log(`${CO} database keys:`, Object.keys(database || {}));
+    console.log(`${CO} decrypt available:`, Boolean(decrypt));
+    console.log(`${CO} effectiveAppId:`, effectiveAppId);
+    console.log(`${CO} databaseVersion:`, databaseVersion);
+
+    const seftContext = {
+      appId: effectiveAppId,
+      setTableData,
+      m_configs,
+      context: {},
+      INT,
+      jdFromDate,
+      jdToDate,
+      NewMoon,
+      KinhDoMatTroi,
+      SunLongitude,
+      getSunLongitude,
+      getNewMoonDay,
+      getLunarMonth11,
+      getLeapMonthOffset,
+      duong_qua_am,
+      am_qua_duong,
+      LunarCalendar,
+      dateFormat,
+      chuyenNgay,
+      TruNgayRaSoNgay,
+      CongNgay,
+      CongGio,
+      validateEmail,
+      validatePhone,
+      DateUtils,
+    };
+    const built = buildDetailGridSelectEnums(m_configs.table || [], database, reportDecrypt, seftContext);
+    console.log(`${CO} buildDetailGridSelectEnums keys:`, Object.keys(built));
+    return built;
+  }, [m_configs.table, database, reportDecrypt, m_configs, databaseVersion, effectiveAppId, setTableData, formUpdated, decrypt]);
+
+  const comboFieldDiagnostics = useMemo(() => {
+    const allCoFields = (m_configs.table || []).filter((f: any) => {
+      const types = resolveEffectiveFieldTypes(f);
+      return isComboLikeType(types);
+    });
+
+    console.log(`${CO} Found ${allCoFields.length} combo-like fields:`,
+      allCoFields.map((f: any) => ({
+        name: f.f_name,
+        rawTypes: f.f_types,
+        effectiveTypes: resolveEffectiveFieldTypes(f),
+        f_show: f.f_show,
+        has_query: Boolean(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name)),
+      })),
+    );
+
+    return allCoFields.map((field: any) => {
+      const fieldKey = String(field.f_name || "").trim();
+      const types = resolveEffectiveFieldTypes(field);
+      const enumObj = selectEnums[fieldKey];
+      const enumCount = enumObj ? Object.keys(enumObj).length : 0;
+      const staticOptions = parseFieldOptions(field.f_options);
+      const cascadeConfig = resolveCascadeSelectOptions(field, form, database, reportDecrypt, (label) => String(label ?? ""));
+      const roleFieldNames = new Set(["group_id", "permissiongroups", "group_rights", "grouprights"]);
+      const roleRows = roleFieldNames.has(fieldKey.toLowerCase()) ? getComboTableRows(database, "csm_roles") : [];
+      let renderOptionCount = 0;
+      let renderSource = "none";
+
+      if (roleRows.length > 0) {
+        renderOptionCount = buildRoleComboOptions(roleRows).length;
+        renderSource = "csm_roles";
+      } else if (cascadeConfig.options) {
+        renderOptionCount = cascadeConfig.options.length;
+        renderSource = cascadeConfig.cascadeFrom ? `cascade:${cascadeConfig.cascadeFrom}` : "cascade";
+      } else {
+        const built = buildSelectOptions(undefined, enumObj, (label) => String(label ?? ""));
+        renderOptionCount = built.length;
+        renderSource = "selectEnums";
+      }
+
+      const queryPreview = resolveComboQueryPreview(field, reportDecrypt);
+      let referencedTables: string[] = [];
+      if (queryPreview.startsWith("{") || queryPreview.startsWith("[")) {
+        try {
+          const parsed = JSON.parse(queryPreview.replace(/\.\.\.$/, ""));
+          if (Array.isArray(parsed?.query)) {
+            referencedTables = parsed.query.map((q: any) => String(q?.obj_name || "")).filter(Boolean);
+          }
+        } catch {
+          // ignore parse errors in diagnostic
+        }
+      } else if (queryPreview.startsWith("f_grid:")) {
+        referencedTables = [queryPreview.split(":")[1]].filter(Boolean);
+      }
+
+      const tableStats = referencedTables.map((tableName) => {
+        const tableData = database?.[tableName] as any;
+        return {
+          tableName,
+          rowCount: getTableRowCount(database, tableName),
+          appId: String(tableData?.app_id || tableData?.appId || ""),
+        };
+      });
+
+      const inFilterForm = fields.some((f: any) => f.f_name === fieldKey);
+
+      return {
+        name: fieldKey,
+        types,
+        f_show: field.f_show,
+        inFilterForm,
+        isMulti: isMultiSelectLikeType(types),
+        staticOptionCount: staticOptions.length,
+        enumOptionCount: enumCount,
+        renderOptionCount,
+        renderSource,
+        cascadeFrom: cascadeConfig.cascadeFrom || null,
+        hasParentValue: cascadeConfig.hasParentValue,
+        queryPreview,
+        tableStats,
+        sampleEnum: enumCount > 0 ? Object.entries(enumObj).slice(0, 3) : null,
+        sampleRenderOptions: renderOptionCount > 0
+          ? (cascadeConfig.options ?? buildSelectOptions(undefined, enumObj)).slice(0, 3)
+          : null,
+      };
+    });
+  }, [m_configs.table, selectEnums, database, reportDecrypt, fields, form, formUpdated]);
+
+  useEffect(() => {
+    console.log(`${CO} ===== COMBO DIAGNOSTIC =====`);
+    console.log(`${CO} menu:`, m_configs?.label || m_configs?.name || m_configs?.table_name || m_configs?.id);
+    console.log(`${CO} filter form fields:`, fields.map((f: any) => f.f_name));
+    console.log(`${CO} cascadeParentFields:`, cascadeParentFields);
+    console.log(`${CO} globalTableFetchCache.size:`, globalTableFetchCache.size);
+    comboFieldDiagnostics.forEach((item: {
+      name: string;
+      renderOptionCount: number;
+      renderSource: string;
+      [key: string]: unknown;
+    }) => {
+      if (item.renderOptionCount === 0) {
+        console.warn(`${CO} EMPTY options for "${item.name}":`, item);
+      } else {
+        console.log(`${CO} OK "${item.name}": ${item.renderOptionCount} options via ${item.renderSource}`, item);
       }
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    console.log(`${CO} ===== END COMBO DIAGNOSTIC =====`);
+  }, [comboFieldDiagnostics, fields, cascadeParentFields, m_configs]);
+
+  const localizeLabel = useCallback((label: unknown) => {
+    const text = String(label ?? "");
+    return text.includes(".") ? t(text) : text;
+  }, [t]);
+
+  function renderComboField(field: any) {
+    const width = Number(field.f_width) || 200;
+    const name = field.f_name;
+    const fieldKey = String(name || "").trim();
+    const formName = fieldKey.toLowerCase();
+    const label = field.f_header;
+    const roleFieldNames = new Set(["group_id", "permissiongroups", "group_rights", "grouprights"]);
+    const cascadeConfig = resolveCascadeSelectOptions(field, form, database, reportDecrypt, localizeLabel);
+    const roleRows = roleFieldNames.has(formName)
+      ? getComboTableRows(database, "csm_roles")
+      : [];
+
+    let options = cascadeConfig.options;
+    if (roleRows.length > 0) {
+      options = buildRoleComboOptions(roleRows).map((opt) => ({
+        value: opt.value,
+        label: localizeLabel(opt.label),
+      }));
+    } else {
+      options = cascadeConfig.options ?? buildSelectOptions(undefined, selectEnums[fieldKey], localizeLabel);
+    }
+
+    if (!options?.length) {
+      console.warn(`${CO} RENDER empty Select for "${fieldKey}"`, {
+        f_types: field.f_types,
+        effectiveTypes: resolveEffectiveFieldTypes(field),
+        queryPreview: resolveComboQueryPreview(field, reportDecrypt),
+        enumOptionCount: selectEnums[fieldKey] ? Object.keys(selectEnums[fieldKey]).length : 0,
+        cascadeFrom: cascadeConfig.cascadeFrom,
+        hasParentValue: cascadeConfig.hasParentValue,
+        roleRowCount: roleRows.length,
+      });
+    } else {
+      console.log(`${CO} RENDER "${fieldKey}": ${options.length} options`, options.slice(0, 3));
+    }
+
+    return (
+      <Form.Item key={fieldKey} name={formName} label={label}>
+        <Select
+          style={{ width }}
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          disabled={Boolean(cascadeConfig.cascadeFrom) && !cascadeConfig.hasParentValue}
+          placeholder={`Chọn ${label}`}
+          options={options || []}
+          onChange={(val) => {
+            form.setFieldsValue({ [formName]: val });
+            setFormUpdated((v) => v + 1);
+          }}
+        />
+      </Form.Item>
+    );
+  }
 
   function renderField(field: any) {
     const width = Number(field.f_width) || 200;
     const name = field.f_name;
     const label = field.f_header;
-    const types = String(field.f_types);
+    const types = resolveEffectiveFieldTypes(field);
 
     if (types.includes("ro")) {
       return null; // read-only in filter form
@@ -309,21 +468,8 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
         </Form.Item>
       );
     }
-    if (types.includes("co")) {
-      const opt = optionsSelect[getKey(tableName, name)] || { options: [] };
-      const normalizedOptions = normalizeComboOptions(opt.options || []);
-      return (
-        <Form.Item key={name} name={name.toLowerCase()} label={label}>
-          <Select
-            style={{ width }}
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            placeholder={`Chọn ${label}`}
-            options={normalizedOptions.map((o) => ({ value: o.value, label: o.label }))}
-          />
-        </Form.Item>
-      );
+    if (isComboLikeType(types) && !isMultiSelectLikeType(types)) {
+      return renderComboField(field);
     }
     return (
       <Form.Item key={name} name={name.toLowerCase()} label={label}>

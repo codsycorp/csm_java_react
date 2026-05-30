@@ -17,6 +17,20 @@ function strtr(str: string, from: string, to: string): string {
   return out;
 }
 
+function looksLikePlainComboJson(text: string): boolean {
+  const trimmed = String(text || "").trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object") return false;
+    return Array.isArray((parsed as any).query)
+      || Array.isArray((parsed as any).options)
+      || Boolean((parsed as any).cascadeFrom);
+  } catch {
+    return false;
+  }
+}
+
 export function csmEncrypt(d_code: string): string {
   if (!d_code) return "";
   // Browser environment
@@ -41,6 +55,11 @@ export function csmDecrypt(e_code: string): string {
 		}
 		
 		const swapped = strtr(e_code, WRITEBY + PHONE, PHONE + WRITEBY);
+
+		// f_cbo_query is sometimes stored with strtr-only obfuscation (plain JSON after swap).
+		if (looksLikePlainComboJson(swapped)) {
+			return swapped;
+		}
 
 		function padBase64(s: string): string {
 			const rem = s.length % 4;

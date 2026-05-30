@@ -3,6 +3,7 @@ import { createTableStruct, type CreateTableStruct, getTableData } from "#src/co
 import { ensureAuthSessionReady } from "#src/utils/request/auth-session";
 // Patch lại label đa ngữ cho menuData theo i18n hiện tại
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
+import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import CsmMasterDetail from "#src/components/csm-grid/CsmMasterDetail";
 import { CsmKanbanBoard } from "#src/components/csm-kanban";
 import CsmReport from "#src/components/csm-report/CsmReport";
@@ -2336,6 +2337,7 @@ export default function AdminPage(props: any = {}) {
 				<CsmReport
 					appId={effectiveAppId}
 					m_configs={runtimeMenuData}
+					decrypt={csmDecrypt}
 				/>
 			</div>
 		);

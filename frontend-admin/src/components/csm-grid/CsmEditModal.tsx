@@ -24,7 +24,7 @@ import { useAppStore } from "#src/store/app";
 import { usePermissionStore } from "#src/store";
 import { useUserStore } from "#src/store/user";
 import { getTableData } from "./CsmApi";
-import { normalizeComboOptions, resolveComboQueryAppId, buildRoleComboOptions, getComboTableRows, buildRoleComboValueEnum, buildRoleComboSelectEnum, resolveRoleComboLabel } from "./combo-utils";
+import { normalizeComboOptions, resolveComboQueryAppId, buildRoleComboOptions, getComboTableRows, buildRoleComboValueEnum, buildRoleComboSelectEnum, resolveRoleComboLabel, parseFieldOptions, getLegacyFallbackComboQuery, resolveEffectiveComboQueryText } from "./combo-utils";
 import { formatDateForStorage, parseDateValueToDayjs, resolveDateLocaleFormat } from "#src/utils/dateControl";
 
 // Helper: safeEval for trigger execution (same as CsmDynamicGrid)
@@ -73,7 +73,7 @@ function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): (
 // ============================================================================
 // GLOBAL CACHE: Tự động fetch missing tables cho combo queries
 // ============================================================================
-const globalTableFetchCache = new Map<string, Promise<any>>();
+export const globalTableFetchCache = new Map<string, Promise<any>>();
 
 function resolveEffectiveFieldTypes(field: Partial<TableField> | Record<string, any> | null | undefined): string {
   const explicit = String(field?.f_types ?? (field as any)?.f_type ?? "").trim().toLowerCase();
@@ -116,20 +116,33 @@ function resolveMediaUrl(pathValue: string): string {
  * Fetch table data nếu chưa có trong database
  * Returns true nếu đang fetch, false nếu đã có data
  */
-async function ensureTableInDatabase(
+export async function ensureTableInDatabase(
   tableName: string,
   appId: string,
   database: any,
-  whereClause?: any
+  whereClause?: any,
+  setTableData?: (tableName: string, data: { id: string; rows: any[]; app_id?: string }) => void,
 ): Promise<boolean> {
+  const hasUsableWhere = Boolean(
+    whereClause
+    && (
+      (typeof whereClause === "string" && whereClause.trim())
+      || (typeof whereClause === "object" && (
+        (whereClause.field && whereClause.type)
+        || (whereClause.operator && Array.isArray(whereClause.conditions))
+      ))
+    )
+  );
+  const effectiveWhereClause = hasUsableWhere
+    ? whereClause
+    : { field: "id", type: "like", value: "" };
+
   // Include where clause in cache key to handle different filters on same table
-  const whereSuffix = whereClause ? `::${JSON.stringify(whereClause)}` : '';
+  const whereSuffix = effectiveWhereClause ? `::${JSON.stringify(effectiveWhereClause)}` : '';
   const cacheKey = `${appId}::${tableName}${whereSuffix}`;
   
   // ✅ IMPORTANT: If whereClause exists, ALWAYS fetch (API requires obj_where to return data)
-  // Don't check existing data because previous fetch might have different/no where clause
-  if (!whereClause) {
-    // Only check existing data if no where clause
+  if (!hasUsableWhere) {
     const existing = database[tableName];
     if (existing && (Array.isArray(existing) || (existing.rows && Array.isArray(existing.rows)))) {
       const rowCount = Array.isArray(existing) ? existing.length : existing.rows?.length || 0;
@@ -137,7 +150,7 @@ async function ensureTableInDatabase(
       const isMatchingApp = !storedAppId || storedAppId === appId;
       if (rowCount > 0 && isMatchingApp) {
         console.log(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows, app: ${storedAppId || "unknown"})`);
-        return false; // Already have data
+        return false;
       }
       if (rowCount > 0 && !isMatchingApp) {
         console.log(`🔄 [AutoFetch] Table ${tableName} exists for app ${storedAppId}, refetching for app ${appId}`);
@@ -147,13 +160,11 @@ async function ensureTableInDatabase(
     console.log(`🔍 [AutoFetch] Query has where clause, will fetch ${tableName} with filter (ignore existing data)`);
   }
 
-  // Check if currently fetching this specific query (same table + same where)
   if (globalTableFetchCache.has(cacheKey)) {
-    // Already fetching, wait for it
     console.log(`⏳ [AutoFetch] Already fetching ${tableName} with same where clause, waiting...`);
     try {
       await globalTableFetchCache.get(cacheKey);
-      return true; // Was fetching
+      return true;
     } catch (err) {
       console.warn(`[ensureTableInDatabase] Failed to fetch ${tableName}:`, err);
       globalTableFetchCache.delete(cacheKey);
@@ -161,45 +172,53 @@ async function ensureTableInDatabase(
     }
   }
 
-  // Start fetching
-  console.log(`🔄 [AutoFetch] Fetching missing table: ${tableName} (app: ${appId})`, whereClause ? 'with where:' : '', whereClause);
+  console.log(`🔄 [AutoFetch] Fetching missing table: ${tableName} (app: ${appId})`, `with where:`, effectiveWhereClause);
   
-  // Build request params - include where if provided
   const requestParams: any = {
     app_id: appId,
     obj_name: tableName,
+    where: effectiveWhereClause,
   };
-  if (whereClause) {
-    requestParams.where = whereClause;
-  }
   
   const fetchPromise = getTableData<any>(requestParams)
     .then((response) => {
-      const rows = response?.rows || [];
+      const rows = (() => {
+        if (Array.isArray(response?.rows)) return response.rows;
+        if (Array.isArray(response?.data)) return response.data;
+        if (Array.isArray((response as any)?.data?.rows)) return (response as any).data.rows;
+        if (Array.isArray((response as any)?.result?.list)) return (response as any).result.list;
+        return [];
+      })();
       console.log(`✅ [AutoFetch] Fetched ${tableName}: ${rows.length} rows`);
-      // Mutate database object directly (will trigger re-render in parent)
-      database[tableName] = {
+      const payload = {
+        id: tableName,
         rows,
         total: response?.total || rows.length,
         app_id: appId,
       };
+      if (setTableData) {
+        setTableData(tableName, payload);
+      } else {
+        database[tableName] = payload;
+      }
       globalTableFetchCache.delete(cacheKey);
       return rows;
     })
     .catch((err) => {
       console.error(`❌ [AutoFetch] Failed to fetch ${tableName}:`, err);
       globalTableFetchCache.delete(cacheKey);
-      // Set empty data để avoid repeated failures
-      database[tableName] = { rows: [], total: 0, app_id: appId };
+      const emptyPayload = { rows: [], total: 0, app_id: appId };
+      if (setTableData) {
+        setTableData(tableName, { id: tableName, ...emptyPayload });
+      } else {
+        database[tableName] = emptyPayload;
+      }
       throw err;
     });
 
   globalTableFetchCache.set(cacheKey, fetchPromise);
-  
-  // Kick off fetch but don't wait
-  fetchPromise.catch(() => {}); // Ignore error (already logged)
-  
-  return true; // Started fetching
+  fetchPromise.catch(() => {});
+  return true;
 }
 
 // Helper: Build selectEnums từ trigger f_cbo_query (Vue compatible)
@@ -251,28 +270,42 @@ export function buildDetailGridSelectEnums(
     const isCombo = isComboLikeType(types);
     if (!isCombo) return;
 
-    const rawQuery = f.f_cbo_query;
+    const optionsFromField = parseFieldOptions(f.f_options);
+    if (optionsFromField.length > 0) {
+      const enumObj = toEnumObj(optionsFromField.map((opt) => ({ ma: opt.value, ten: opt.label })));
+      if (Object.keys(enumObj).length > 0) {
+        result[f.f_name] = enumObj;
+        return;
+      }
+    }
+
+    const rawQuery = f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name);
     if (!rawQuery) return;
 
-    let q = rawQuery;
-    if (decrypt) {
-      try {
-        q = decrypt(rawQuery);
-      } catch {}
-    }
+    let q = resolveEffectiveComboQueryText(rawQuery, decrypt);
 
     try {
       // f_grid:table:display:value
       if (q.startsWith('f_grid:')) {
         const parts = q.split(':');
         const [_, tableName, displayField = 'ten', valueField = 'id'] = parts;
-        if (database?.[tableName]?.rows) {
-          const options = database[tableName].rows.map((row: any) => ({
+        const tableData = database?.[tableName];
+        const rows = Array.isArray(tableData) ? tableData : tableData?.rows;
+        if (Array.isArray(rows) && rows.length > 0) {
+          const options = rows.map((row: any) => ({
             ma: row[valueField] ?? row.id,
             ten: row[displayField] ?? ''
           }));
           const enumObj = toEnumObj(options);
           if (Object.keys(enumObj).length > 0) result[f.f_name] = enumObj;
+        } else if (tableName) {
+          const appId = seftContext?.appId || 'csm';
+          const cacheKey = `${appId}::${tableName}`;
+          if (!globalTableFetchCache.has(cacheKey)) {
+            ensureTableInDatabase(tableName, appId, database, undefined, seftContext?.setTableData).catch((err) => {
+              console.error(`Failed to auto-fetch table ${tableName}:`, err);
+            });
+          }
         }
         return;
       }
@@ -360,7 +393,7 @@ export function buildDetailGridSelectEnums(
               
               console.log(`⚠️ [ComboQuery] Query has where clause but no data, fetching table "${tableName}" with filter...`);
               // Kick off fetch with where clause (fire-and-forget) - will populate database when done
-              ensureTableInDatabase(tableName, appId, database, whereClause).catch(err => {
+              ensureTableInDatabase(tableName, appId, database, whereClause, seftContext?.setTableData).catch(err => {
                 console.error(`Failed to auto-fetch table ${tableName}:`, err);
               });
               // Return early for this query - will have data on next render after fetch completes
@@ -377,7 +410,7 @@ export function buildDetailGridSelectEnums(
               
               console.warn(`⚠️ [ComboQuery] Table "${tableName}" ${tableExists ? `exists for app ${tableAppId || "unknown"} but is empty/mismatched` : 'not found'}. Auto-fetching...`);
               // Kick off fetch without where clause
-              ensureTableInDatabase(tableName, appId, database).catch(err => {
+              ensureTableInDatabase(tableName, appId, database, undefined, seftContext?.setTableData).catch(err => {
                 console.error(`Failed to auto-fetch table ${tableName}:`, err);
               });
               // Return early for this query - will have data on next render after fetch completes
@@ -627,6 +660,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
   const detailGridSelectEnums = useMemo(() => {
     const seftContext = {
       appId, // 🔄 Pass appId for auto-fetch logic
+      setTableData,
       m_configs: node,
       context: {},
       // Lunar calendar utilities
@@ -892,7 +926,7 @@ type SelectOption = {
   value: any;
 };
 
-function buildSelectOptions(
+export function buildSelectOptions(
   rawOptions: { label: string; value: any }[] | undefined,
   enumObj: Record<string, { text: string }> | undefined,
   localizeLabel?: (value: unknown) => string
@@ -917,24 +951,17 @@ function buildSelectOptions(
   }));
 }
 
-function resolveCascadeSelectOptions(
+export function resolveCascadeSelectOptions(
   field: TableField,
   form: any,
   database: Record<string, any> | undefined,
   decrypt?: (s: string) => string,
   localizeLabel?: (value: unknown) => string,
 ): { options: SelectOption[] | null; cascadeFrom?: string; hasParentValue: boolean } {
-  const rawQuery = String(field?.f_cbo_query || "").trim();
+  const rawQuery = String(field?.f_cbo_query || getLegacyFallbackComboQuery(field?.f_name) || "").trim();
   if (!rawQuery) return { options: null, hasParentValue: true };
 
-  let resolvedQuery = rawQuery;
-  if (decrypt) {
-    try {
-      resolvedQuery = decrypt(rawQuery) || rawQuery;
-    } catch {
-      resolvedQuery = rawQuery;
-    }
-  }
+  const resolvedQuery = resolveEffectiveComboQueryText(rawQuery, decrypt);
 
   let parsed: any = null;
   try {
@@ -1219,14 +1246,7 @@ function MultilingualTabs({ fields, form }: { fields: TableField[]; form: any })
 function parseFieldComboQuery(field: TableField, decrypt?: (s: string) => string): any | null {
   const rawQuery = String(field?.f_cbo_query || "").trim();
   if (!rawQuery) return null;
-  let resolvedQuery = rawQuery;
-  if (decrypt) {
-    try {
-      resolvedQuery = decrypt(rawQuery) || rawQuery;
-    } catch {
-      resolvedQuery = rawQuery;
-    }
-  }
+  const resolvedQuery = resolveEffectiveComboQueryText(rawQuery, decrypt);
   try {
     return JSON.parse(resolvedQuery);
   } catch {
