@@ -668,8 +668,9 @@ Không chỉ vector — cần **graph + metadata** để multi-step agent:
 }
 ```
 
-**Hiện có:** symbol lists, lifecycle anchors, `CodeBusinessScan`, menu node scan, tenant snapshot.  
-**Roadmap:** package/class/method graph, API route map, RocksDB table, Lucene field, WebSocket event — index theo **package / class / method / route / table / field**.
+**Hiện có:** `AiGraphRagService` → persist `{appId}/graph.json` tại `csm_datas/ai_local/ai_metadata_graph/` (ingest code/menu → nodes/edges/communities); symbol lists, lifecycle anchors, `CodeBusinessScan`, menu node scan, tenant snapshot.  
+**Roadmap:** package/class/method graph đầy đủ, API route map, RocksDB table, Lucene field, WebSocket event — index theo **package / class / method / route / table / field**.  
+**Copy giữa máy:** export/import qua `./scripts/csm-knowledge-pack.sh` (pack 1.1+) — **không** commit runtime graph lên git (`.gitignore`).
 
 ### C.5.4 Model tier — khả năng thực tế
 
@@ -2350,12 +2351,13 @@ AI_EMBEDDING_HASH_DIMENSIONS=128
 **Pack gồm:**
 
 ```txt
-manifest.json                    # embeddingDimensions, provider, createdAt
+manifest.json                    # packVersion 1.1+, embeddingDimensions, provider, createdAt
 csm_datas/ai_local/
-  ai_business_memory/            # Lucene per appId
-  ai_local_assistant_index/      # workspace DNA
-  ai_menu_learning_*.jsonl       # daily menu learning
-  ai_code_learning_*.jsonl       # daily code edit learning
+  ai_business_memory/            # Lucene L2 per appId
+  ai_local_assistant_index/      # workspace DNA L1
+  ai_metadata_graph/             # GraphRAG C.5.3 — {appId}/graph.json (symbol/metadata graph)
+  ai_menu_learning_*.jsonl       # daily menu learning L4
+  ai_code_learning_*.jsonl       # daily code edit learning L4
   author_style_dna.md
   ai_*_master_prompt.md
   ai-assistant-instructions.md
@@ -2503,6 +2505,7 @@ flowchart TB
         L0[author_style_dna L0]
         L1[workspace index L1]
         L2[business memory L2]
+        L2G[metadata graph GraphRAG]
         L3[tenant snapshot L3]
         L4M[menu learning L4]
         L4C[code learning L4]
@@ -2522,6 +2525,7 @@ flowchart TB
     L0 --> ORCH
     L1 --> ORCH
     L2 --> ORCH
+    L2G --> ORCH
     L3 --> ORCH
     L4M --> ORCH
     L4C --> ORCH

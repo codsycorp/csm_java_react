@@ -74,6 +74,7 @@ backend/csm_datas/ai_local/model/*.gguf
 backend/csm_datas/ai_local/model/*.gguf*
 backend/csm_datas/ai_local/ai_local_assistant_index/
 backend/csm_datas/ai_local/ai_business_memory/
+backend/csm_datas/ai_local/ai_metadata_graph/
 
 # Do not bundle frontend build / secrets in classpath resources (use backend/csm_datas/public/ + frontend/dist)
 backend/src/main/resources/public/

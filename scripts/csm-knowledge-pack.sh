@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CSM Knowledge Pack — quét, nạp, export/import Lucene vector + learning memory
+# CSM Knowledge Pack — quét, nạp, export/import Lucene vector + GraphRAG metadata graph + learning memory
 # để chép sang máy khác mà AI local không phải học lại từ đầu.
 #
 # Usage:
@@ -73,7 +73,7 @@ write_manifest() {
   local embed_provider="${3:-hash}"
   cat > "$dest_dir/manifest.json" <<EOF
 {
-  "packVersion": "1.0",
+  "packVersion": "1.1",
   "createdAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
   "repo": "csm_server",
   "embeddingDimensions": ${embed_dim},
@@ -81,6 +81,7 @@ write_manifest() {
   "includes": [
     "ai_business_memory",
     "ai_local_assistant_index",
+    "ai_metadata_graph",
     "ai_menu_learning_*.jsonl",
     "ai_code_learning_*.jsonl",
     "author_style_dna.md",
@@ -88,7 +89,7 @@ write_manifest() {
     "ai_menu_master_prompt.md",
     "ai-assistant-instructions.md"
   ],
-  "importNotes": "On weak-5gb keep AI_EMBEDDING_PROVIDER=hash when embeddingDimensions=128. Do not re-embed on import — copy Lucene dirs as-is."
+  "importNotes": "On weak-5gb keep AI_EMBEDDING_PROVIDER=hash when embeddingDimensions=128. Do not re-embed on import — copy Lucene dirs and ai_metadata_graph as-is. Pack 1.0 without ai_metadata_graph still imports; graph rebuilds on next code/menu ingest."
 }
 EOF
 }
@@ -112,6 +113,13 @@ cmd_status() {
     log "author_style_dna.md: present ($(wc -l < "$dir/author_style_dna.md") lines)"
   else
     log "author_style_dna.md: missing — copy template from repo and customize"
+  fi
+  if [ -d "$dir/ai_metadata_graph" ]; then
+    local graph_count
+    graph_count="$(find "$dir/ai_metadata_graph" -name 'graph.json' 2>/dev/null | wc -l | tr -d ' ')"
+    log "ai_metadata_graph: present ($graph_count app graph(s))"
+  else
+    log "ai_metadata_graph: missing — GraphRAG rebuilds on code/menu ingest (AiGraphRagService)"
   fi
 }
 
@@ -147,7 +155,7 @@ cmd_export() {
   rm -rf "$PACK_STAGING"
   mkdir -p "$PACK_STAGING/csm_datas/ai_local"
   write_manifest "$PACK_STAGING" "$embed_dim" "$embed_provider"
-  for item in ai_business_memory ai_local_assistant_index author_style_dna.md \
+  for item in ai_business_memory ai_local_assistant_index ai_metadata_graph author_style_dna.md \
     ai_code_master_prompt.md ai_menu_master_prompt.md ai-assistant-instructions.md; do
     if [ -e "$dir/$item" ]; then
       cp -R "$dir/$item" "$PACK_STAGING/csm_datas/ai_local/" 2>/dev/null || cp "$dir/$item" "$PACK_STAGING/csm_datas/ai_local/"
@@ -184,6 +192,13 @@ cmd_import() {
   log "Pack embeddingDimensions=$pack_dim — target weak-5gb should use AI_EMBEDDING_PROVIDER=hash when dim=128"
   mkdir -p "$dir"
   cp -R "$tmp/csm_datas/ai_local/"* "$dir/"
+  if [ -d "$tmp/csm_datas/ai_local/ai_metadata_graph" ]; then
+    local graph_count
+    graph_count="$(find "$tmp/csm_datas/ai_local/ai_metadata_graph" -name 'graph.json' 2>/dev/null | wc -l | tr -d ' ')"
+    log "ai_metadata_graph: imported ($graph_count app graph(s))"
+  else
+    log "ai_metadata_graph: not in pack — GraphRAG rebuilds on next code/menu ingest"
+  fi
   log "Imported into $dir"
   log "Restart backend. Verify: ./scripts/csm-knowledge-pack.sh status"
 }
