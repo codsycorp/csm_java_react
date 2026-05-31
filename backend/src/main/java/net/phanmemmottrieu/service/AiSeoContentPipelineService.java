@@ -667,9 +667,13 @@ public class AiSeoContentPipelineService {
         }
         String persona = str(creative.get("personaKey"), "storyteller");
         String angle = str(creative.get("angle"), topic);
+        String strategyHint = isSoftwareTechSeoContext(industry, domainKey, topic)
+            ? buildSoftwareTechSeoStrategyBlock(industry, topic) + "\n\n"
+            : "";
         return """
             VIẾT 1 JSON HOÀN CHỈNH — ĐỦ 3 NGÔN NGỮ TRONG 1 LẦN (KHÔNG markdown, KHÔNG giải thích).
 
+            %s
             SOURCE_TEXT / Topic: %s
             Industry: %s | Domain: %s | Persona: %s | Angle: %s
             Lỗi lần trước: %s
@@ -684,7 +688,7 @@ public class AiSeoContentPipelineService {
             🇨🇳 ZH: *_zh — tiếng Trung Giản thể THẬT, KHÁC bản VI, content_zh HTML tiếng Trung
             description/excerpt*: văn bản thuần, KHÔNG thẻ HTML
             KHÔNG copy title/content sang _en/_zh. KHÔNG placeholder schema.
-            """.formatted(topic, industry, domainKey, persona, angle,
+            """.formatted(strategyHint, topic, industry, domainKey, persona, angle,
             issues.length() > 0 ? issues : "thiếu hoặc sai locale");
     }
 
@@ -1630,6 +1634,73 @@ public class AiSeoContentPipelineService {
             String.join(", ", DEFAULT_ANTI_AI_SELLING)).trim();
     }
 
+    private static final List<String> SOFTWARE_TECH_INDUSTRY_KEYS = List.of(
+        "phan-mem", "software", "cong-nghe", "technology", "it-services");
+
+    /**
+     * SEO giải pháp công nghệ (csmbridge / phanmemmottrieu) — long-tail, GEO, EEAT, topic cluster.
+     * Không áp dụng cho LMKT BĐS.
+     */
+    static boolean isSoftwareTechSeoContext(String industry, String domainKey, String topic) {
+        if ("lmkt".equalsIgnoreCase(str(domainKey, ""))) {
+            return false;
+        }
+        if ("bat-dong-san".equalsIgnoreCase(str(industry, ""))) {
+            return false;
+        }
+        if ("phanmemmottrieu".equalsIgnoreCase(str(domainKey, ""))) {
+            return true;
+        }
+        String ind = str(industry, "").toLowerCase(Locale.ROOT);
+        for (String key : SOFTWARE_TECH_INDUSTRY_KEYS) {
+            if (ind.contains(key)) {
+                return true;
+            }
+        }
+        String t = str(topic, "").toLowerCase(Locale.ROOT);
+        return t.contains("phần mềm") || t.contains("phan mem") || t.contains("crm")
+            || t.contains("erp") || t.contains("tích hợp") || t.contains("tich hop")
+            || t.contains(" api") || t.contains("tự động hóa") || t.contains("tu dong hoa")
+            || t.contains("chatbot") || t.contains("giải pháp") || t.contains("giai phap")
+            || t.contains("chuyển đổi số") || t.contains("chuyen doi so")
+            || t.contains("đồng bộ dữ liệu") || t.contains("dong bo du lieu");
+    }
+
+    private static String buildSoftwareTechSeoStrategyBlock(String industry, String topic) {
+        return """
+            ========== CHIẾN LƯỢC SEO GIẢI PHÁP CÔNG NGHỆ (2025+) ==========
+            Định vị thương hiệu: Hub giải pháp công nghệ chuyên sâu — KHÔNG phải "đơn vị gia công" hay "viết phần mềm theo yêu cầu".
+            Khách tìm chuyên gia giải quyết bài toán kinh doanh, không tìm "người viết code".
+
+            TỪ KHÓA — ưu tiên long-tail theo Search Intent (5-8 cụm trong keywords, tránh từ khóa ngắn cạnh tranh cao):
+            A) Giải pháp theo ngành dọc — VD: phần mềm quản lý [ngành], CRM cho [chuỗi bán lẻ/sản xuất/BĐS...]
+            B) Tích hợp & tối ưu — VD: tích hợp API, đồng bộ dữ liệu đa nền tảng, tối ưu chi phí cloud
+            C) AI & Automation — VD: chatbot AI nội bộ, tự động hóa CSKH/marketing (chỉ khi phù hợp topic)
+
+            TOPIC CLUSTER: xác định vai trò bài (pillar hoặc sub-topic). Cuối content thêm <h4>Đọc thêm trong cụm chủ đề</h4>
+            với 2-3 gợi ý internal link (anchor text + chủ đề vệ tinh liên quan topic).
+
+            GEO (AI Search): đoạn mở <p> đầu tiên trả lời thẳng câu hỏi người tìm trong 1-2 câu.
+            EEAT: ưu tiên case study / kinh nghiệm triển khai thực tế — con số, trước/sau, bài toán cụ thể từ SOURCE_TEXT.
+            CẤM keyword stuffing và cụm sáo rỗng: "giải pháp toàn diện", "dịch vụ uy tín hàng đầu", "công nghệ 4.0".
+
+            Industry: %s | Topic gốc: %s
+            """.formatted(str(industry, "phan-mem"), str(topic, "").length() > 120
+            ? str(topic, "").substring(0, 120) + "..." : str(topic, ""));
+    }
+
+    private static String buildSoftwareTechContentStructureGuide(String contentPattern) {
+        String base = """
+            CẤU TRÚC BÀI GIẢI PHÁP (Topic Cluster + GEO + EEAT):
+            1) <p> Trả lời trực diện câu hỏi tìm kiếm (1-2 câu, GEO)
+            2) <h3> Bài toán kinh doanh / pain point cụ thể
+            3) <h3> Cách tiếp cận (tích hợp/tối ưu thay vì đập đi xây lại nếu phù hợp)
+            4) <h3> Kết quả thực tế — case study, số liệu từ SOURCE_TEXT (EEAT)
+            5) <h4> Đọc thêm trong cụm chủ đề — 2-3 gợi ý internal link
+            """;
+        return base + buildLmktContentStructureGuide(contentPattern);
+    }
+
     /** Pass 1 — chỉ tiếng Việt; EN/ZH do ensureTrilingualLocales xử lý. */
     private String buildCompactViOnlyArticlePrompt(
             String industry,
@@ -1644,21 +1715,35 @@ public class AiSeoContentPipelineService {
         String location = str(ctx.get("location"), "");
         String uniqueSeed = "[UNIQUE_" + System.currentTimeMillis() + "]";
         PersonaSpec persona = personaSpec(personaKey);
-        String suggestedTitle = suggestTitleFromTopic(topic, personaKey, location);
+        boolean softwareTech = isSoftwareTechSeoContext(industry, domainKey, topic);
+        String suggestedTitle = softwareTech
+            ? suggestSoftwareTechTitleFromTopic(topic, personaKey)
+            : suggestTitleFromTopic(topic, personaKey, location);
+        String strategyBlock = softwareTech
+            ? buildSoftwareTechSeoStrategyBlock(industry, topic) + "\n\n"
+            : "";
+        String contentGuide = softwareTech
+            ? buildSoftwareTechContentStructureGuide(contentPattern)
+            : "HTML h3/h4/p, bám topic";
+        String avoidPhrases = softwareTech
+            ? "CẤM \"viết phần mềm theo yêu cầu\", \"gia công phần mềm\", \"vị trí đắc địa\", keyword stuffing"
+            : "tránh \"vị trí đắc địa\"";
 
         return ("""
             [SYSTEM CONFIG]: %s | Persona_%s | Pattern_%s
             [SOURCE_TEXT]: %s
             [INDUSTRY]: %s
 
+            %s
             Viết bài SEO tiếng Việt. Trả CHỈ 1 JSON hợp lệ — KHÔNG markdown, KHÔNG giải thích.
             CẤM dùng dấu ... hoặc bỏ trống field. Mỗi value phải là nội dung THẬT từ SOURCE_TEXT.
 
             Keys (tiếng Việt only): title, description, content, keywords, excerpt, author, readTime, tags
 
-            - title: "%s" hoặc hay hơn (~55-80 ký tự)
-            - content: HTML h3/h4/p, %s từ, bám topic, tránh "vị trí đắc địa"
-            - description/excerpt: văn bản thuần từ bài
+            - title: "%s" hoặc hay hơn (~55-80 ký tự, long-tail giải quyết bài toán kinh doanh)
+            - content: %s, %s từ, %s
+            - keywords: 5-8 cụm long-tail (ngành dọc / tích hợp / AI-automation — chọn nhóm phù hợp topic)
+            - description/excerpt: văn bản thuần từ bài; mở đầu trả lời thẳng câu hỏi người tìm
             - author: "%s" | readTime: ước lượng | tags: ["%s"]
             - Hook: %s | Angle: %s | Giọng: %s
 
@@ -1669,8 +1754,11 @@ public class AiSeoContentPipelineService {
             contentPattern,
             topic,
             industry,
+            strategyBlock,
             suggestedTitle,
+            contentGuide,
             seoArticleTargetWordsVi,
+            avoidPhrases,
             persona.label(),
             industry,
             hook,
@@ -1698,13 +1786,32 @@ public class AiSeoContentPipelineService {
         PatternSpec pattern = patternSpec(contentPattern);
         String structureGuide = buildLmktContentStructureGuide(contentPattern);
         String suggestedTitle = suggestTitleFromTopic(topic, personaKey, location);
-        String realEstateRules = "bat-dong-san".equalsIgnoreCase(industry) || "lmkt".equalsIgnoreCase(domainKey)
+        boolean softwareTech = isSoftwareTechSeoContext(industry, domainKey, topic);
+        String realEstateRules = !softwareTech
+            && ("bat-dong-san".equalsIgnoreCase(industry) || "lmkt".equalsIgnoreCase(domainKey))
             ? """
 
             ========== TRÍCH XUẤT BĐS (chỉ từ SOURCE_TEXT, không bịa) ==========
             attributes_area, attributes_dimensions, attributes_bedrooms, attributes_bathrooms, attributes_floors,
             attributes_frontWidth, attributes_roadWidth, attributes_location, attributes_price, attributes_contact,
             propertyType, transactionType, legalStatus, furnished — không có thì "".
+            """
+            : "";
+        String softwareStrategyBlock = softwareTech
+            ? buildSoftwareTechSeoStrategyBlock(industry, topic) + "\n\n"
+            : "";
+        String structureGuideEffective = softwareTech
+            ? buildSoftwareTechContentStructureGuide(contentPattern)
+            : structureGuide;
+        String suggestedTitleEffective = softwareTech
+            ? suggestSoftwareTechTitleFromTopic(topic, personaKey)
+            : suggestedTitle;
+        String contentRulesExtra = softwareTech
+            ? """
+            - keywords: 5-8 cụm long-tail (ngành dọc / tích hợp hệ thống / AI-automation)
+            - Mở bài: trả lời thẳng câu hỏi người tìm trong 1-2 câu (GEO)
+            - Cuối bài: mục internal link gợi ý (Topic Cluster)
+            - CẤM: "viết phần mềm theo yêu cầu", "gia công outsource", keyword stuffing
             """
             : "";
 
@@ -1716,6 +1823,7 @@ public class AiSeoContentPipelineService {
             [SOURCE_TEXT]:
             %s
 
+            %s
             ========== METADATA GỢI Ý (tham khảo, viết lại cho hay hơn) ==========
             Tiêu đề gợi ý: "%s"
             Property: %s | Location: %s | Business: %s
@@ -1731,9 +1839,10 @@ public class AiSeoContentPipelineService {
 
             Hook: %s | Angle: %s | Tone viết: %s
 
-            ANTI-AI VOICE: Tránh "vị trí đắc địa", "tiềm năng sinh lời", "sự kết hợp hoàn hảo".
+            ANTI-AI VOICE: Tránh "vị trí đắc địa", "tiềm năng sinh lời", "sự kết hợp hoàn hảo"%s.
             Dùng con số cụ thể từ SOURCE_TEXT, ví dụ thực tế, giọng %s.
 
+            %s
             %s
 
             ========== YÊU CẦU ĐẦU RA ==========
@@ -1761,7 +1870,8 @@ public class AiSeoContentPipelineService {
             topic,
             industry,
             topic,
-            suggestedTitle,
+            softwareStrategyBlock,
+            suggestedTitleEffective,
             property.isBlank() ? "(từ SOURCE_TEXT)" : property,
             location.isBlank() ? "(từ SOURCE_TEXT)" : location,
             business.isBlank() ? "(từ SOURCE_TEXT)" : business,
@@ -1771,12 +1881,14 @@ public class AiSeoContentPipelineService {
             pattern.name(),
             pattern.tone(),
             String.join(" → ", pattern.structure()),
-            structureGuide,
+            structureGuideEffective,
             hook,
             angle,
             tone,
+            softwareTech ? ", \"giải pháp toàn diện\", \"công nghệ 4.0\"" : "",
             persona.label(),
             realEstateRules,
+            contentRulesExtra,
             seoArticleTargetWordsVi,
             persona.label(),
             industry).trim();
@@ -1848,6 +1960,18 @@ public class AiSeoContentPipelineService {
             return "Phân tích: " + base;
         }
         return base;
+    }
+
+    /** Long-tail benefit-driven title — không dùng mẫu Bán/Cho thuê BĐS. */
+    private static String suggestSoftwareTechTitleFromTopic(String topic, String personaKey) {
+        String base = topic.length() > 68 ? topic.substring(0, 68).trim() + "..." : topic.trim();
+        return switch (str(personaKey, "business_owner")) {
+            case "investor" -> "ROI & chi phí: " + base;
+            case "family" -> "Vận hành thực tế: " + base;
+            case "storyteller" -> "Case study triển khai: " + base;
+            case "local_resident" -> "Thực tế doanh nghiệp vừa và nhỏ: " + base;
+            default -> "Giải pháp cho bài toán: " + base;
+        };
     }
 
     private static String buildLmktContentStructureGuide(String patternKey) {

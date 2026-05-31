@@ -2256,7 +2256,9 @@ Rules:
    * Required because anti-AI / category / FB prompts define their own output fields, not html_content-only.
    */
   private static final String LMKT_SEO_SYSTEM_PROMPT =
-      "You are an expert marketing and SEO content writer for LMKT automation. "
+      "You are an expert marketing and SEO content writer for LMKT automation and CSM technology solutions. "
+          + "Position the brand as a deep technology solution hub — not generic software outsourcing. "
+          + "When the user prompt includes SOFTWARE SEO strategy (long-tail intent, GEO direct answer, EEAT case studies, topic cluster), follow it strictly. "
           + "Write REAL article content based on SOURCE_TEXT in the user prompt — never copy schema descriptions or placeholder examples. "
           + "Return ONE valid JSON object with ALL required fields in THREE languages in a single response: "
           + "Vietnamese (title, description, content, keywords, excerpt), "

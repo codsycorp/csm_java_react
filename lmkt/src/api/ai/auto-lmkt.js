@@ -992,10 +992,11 @@ const INDUSTRY_TYPES = {
     attributes_keywords: "phần mềm, giải pháp công nghệ, ứng dụng quản lý, tự động hóa doanh nghiệp",
     attributes_keywords_en: "software, technology solutions, management apps, business automation",
     attributes_keywords_zh: "软件, 技术解决方案, 管理应用程序, 企业自动化",
-    prompt_role: "chuyên gia công nghệ giải thích đơn giản",
-    prompt_style: "So sánh trước - sau khi dùng phần mềm",
-    prompt_avoid: "Tránh thuật ngữ kỹ thuật khó hiểu",
-    prompt_focus: "Tập trung vào lợi ích cụ thể, tính năng giải quyết vấn đề thực tế",
+    prompt_role: "chuyên gia giải quyết bài toán kinh doanh bằng công nghệ (không phải đơn vị gia công code)",
+    prompt_style: "Case study thực tế, long-tail search intent, trả lời thẳng câu hỏi ngay đoạn mở",
+    prompt_avoid: "Tránh 'viết phần mềm theo yêu cầu', keyword stuffing, thuật ngữ outsource, câu quảng cáo sáo rỗng",
+    prompt_focus: "Long-tail theo ngành dọc / tích hợp hệ thống / AI-automation; EEAT với số liệu triển khai; Topic Cluster + internal link",
+    title_requirement: "⚠️ TIÊU ĐỀ long-tail (~55-80 ký tự): bài toán kinh doanh + giải pháp cụ thể. KHÔNG dùng mẫu Bán/Cho thuê BĐS.",
     color: "#1890ff"
   },
   "cho-thue-xe": {
@@ -1589,8 +1590,77 @@ const TITLE_TEMPLATES_FOR_PHANMEM = {
   guide: "Format: [Động từ giao dịch: bán/cho thuê/sang nhượng] + [Loại & địa chỉ cụ thể] - [Hook hấp dẫn: con số, lý do, tính năng]"
 };
 
+/** Tiêu đề long-tail cho giải pháp công nghệ — không dùng mẫu Bán/Cho thuê BĐS */
+const TITLE_TEMPLATES_FOR_SOFTWARE = {
+  label: "Tiêu đề giải pháp công nghệ — long-tail, bài toán kinh doanh",
+  templates: [
+    "Giải pháp {solution} cho {business} — {hook}",
+    "Cách {business} {hook} với {solution}",
+    "{solution}: {hook} (case study triển khai thực tế)",
+    "Tích hợp {solution} — {hook} cho doanh nghiệp {business}",
+    "{hook}: {solution} tối ưu chi phí & vận hành",
+    "Case study: {business} {hook} nhờ {solution}",
+    "{solution} vs xây mới — {hook}",
+    "Tự động hóa {business}: {hook} với {solution}"
+  ]
+};
+
+/** SEO giải pháp công nghệ 2025+ — long-tail, GEO, EEAT, topic cluster */
+function isSoftwareTechSeoContext(industry, domainKey, topic = "") {
+  if (domainKey === "lmkt") return false;
+  if (industry === "bat-dong-san") return false;
+  if (domainKey === "phanmemmottrieu") return true;
+  const ind = String(industry || "").toLowerCase();
+  if (["phan-mem", "software", "cong-nghe", "technology", "it-services"].some(k => ind.includes(k))) {
+    return true;
+  }
+  const t = String(topic || "").toLowerCase();
+  return /phần mềm|phan mem|crm|erp|tích hợp|tich hop|\bapi\b|tự động hóa|tu dong hoa|chatbot|giải pháp|giai phap|chuyển đổi số|chuyen doi so|đồng bộ dữ liệu|dong bo du lieu/.test(t);
+}
+
+function buildSoftwareTechSeoStrategyBlock(industry, topic) {
+  const shortTopic = String(topic || "").length > 120 ? String(topic).slice(0, 120) + "..." : String(topic || "");
+  return `
+========== CHIẾN LƯỢC SEO GIẢI PHÁP CÔNG NGHỆ (2025+) ==========
+Định vị thương hiệu: Hub giải pháp công nghệ chuyên sâu — KHÔNG phải "đơn vị gia công" hay "viết phần mềm theo yêu cầu".
+Khách tìm chuyên gia giải quyết bài toán kinh doanh, không tìm "người viết code".
+
+TỪ KHÓA — ưu tiên long-tail theo Search Intent (5-8 cụm trong keywords):
+A) Giải pháp theo ngành dọc — phần mềm quản lý [ngành], CRM cho [chuỗi bán lẻ/sản xuất...]
+B) Tích hợp & tối ưu — tích hợp API, đồng bộ dữ liệu đa nền tảng, tối ưu chi phí cloud
+C) AI & Automation — chatbot AI nội bộ, tự động hóa CSKH/marketing (khi phù hợp topic)
+
+TOPIC CLUSTER: xác định vai trò bài (pillar/sub-topic). Cuối content thêm <h4>Đọc thêm trong cụm chủ đề</h4> với 2-3 gợi ý internal link.
+
+GEO: đoạn <p> đầu trả lời thẳng câu hỏi người tìm trong 1-2 câu.
+EEAT: case study / kinh nghiệm triển khai — con số, trước/sau từ SOURCE_TEXT.
+CẤM: keyword stuffing, "giải pháp toàn diện", "công nghệ 4.0", "viết phần mềm theo yêu cầu".
+
+Industry: ${industry || "phan-mem"} | Topic: ${shortTopic}
+`;
+}
+
+function generateTitleForSoftware(industry, opts = {}) {
+  const templates = TITLE_TEMPLATES_FOR_SOFTWARE.templates;
+  const randomTemplate = templates[Math.floor(Math.random() * templates.length)];
+  const solution = opts.solution || opts.property || "hệ thống quản lý";
+  const business = opts.business || "doanh nghiệp";
+  const hook = opts.hook || "tiết kiệm 40% thời gian vận hành";
+  let title = randomTemplate
+    .replace(/{solution}/g, solution)
+    .replace(/{business}/g, business)
+    .replace(/{hook}/g, hook);
+  if (title.length > 85) {
+    title = title.substring(0, 82) + "...";
+  }
+  return title;
+}
+
 // ===== HELPER: GENERATE TITLE FOR PHANMEMMOTTRIEU =====
 function generateTitleForPhanmem(industry, opts = {}) {
+  if (isSoftwareTechSeoContext(industry, "phanmemmottrieu", opts.topic || opts.hook || "")) {
+    return generateTitleForSoftware(industry, opts);
+  }
   const templates = TITLE_TEMPLATES_FOR_PHANMEM.templates;
   const randomTemplate = templates[Math.floor(Math.random() * templates.length)];
   
@@ -3418,6 +3488,7 @@ function generateSlug(text, projectName = "") {
 function getAntiAIPrompt(industry, topic, articleHistory = [], opts = {}) {
   const industryConfig = INDUSTRY_TYPES[industry] || INDUSTRY_TYPES["bat-dong-san"];
   const isLmkt = opts.domainKey === "lmkt";
+  const isSoftwareTech = !isLmkt && isSoftwareTechSeoContext(industry, opts.domainKey || "phanmemmottrieu", topic);
   
   // ===== CHỌN BUYER PERSONA NGẪU NHIÊN =====
   const personaKeys = Object.keys(BUYER_PERSONAS_V2);
@@ -3439,8 +3510,15 @@ function getAntiAIPrompt(industry, topic, articleHistory = [], opts = {}) {
   if (isLmkt) {
     // LMKT: Tiêu đề dựa trên topic context + persona + pattern
     generatedTitle = generateTitleForLmkt(topic, selectedPersonaKey, selectedPatternKey, opts);
+  } else if (isSoftwareTech) {
+    generatedTitle = generateTitleForSoftware(industry, {
+      solution: opts.property || topic.split(/[,—\-–]/)[0]?.trim() || "giải pháp công nghệ",
+      business: opts.business || "doanh nghiệp",
+      hook: opts.hook || "giải quyết bài toán vận hành cụ thể",
+      topic
+    });
   } else {
-    // Phanmemmottrieu: Tiêu đề luôn có [Bán/Cho thuê] + [Địa chỉ] + [Hook]
+    // Phanmemmottrieu (BĐS / legacy): Tiêu đề có [Bán/Cho thuê] + [Địa chỉ] + [Hook]
     generatedTitle = generateTitleForPhanmem(industry, {
       property: opts.property || "dịch vụ",
       location: opts.location || "Quận 7",
@@ -3482,7 +3560,13 @@ function getAntiAIPrompt(industry, topic, articleHistory = [], opts = {}) {
   // ===== HƯỚNG DẪN TIÊU ĐỀ LINH HOẠT =====
   const titleRequirement = isLmkt 
     ? "⚠️ TIÊU ĐỀ PHẢI LIÊN QUAN TRỰC TIẾP nội dung bài. Ý nghĩa BÁN/CHO THUÊ có thể xuất hiện ở tiêu đề HOẶC lồng ghép tinh tế trong nội dung. Nếu có trong tiêu đề thì dùng từ thường, không viết hoa toàn bộ."
-    : (industryConfig.title_requirement || "");
+    : isSoftwareTech
+      ? (industryConfig.title_requirement || "⚠️ TIÊU ĐỀ long-tail: bài toán kinh doanh + giải pháp. KHÔNG Bán/Cho thuê BĐS.")
+      : (industryConfig.title_requirement || "");
+  
+  const softwareSeoStrategyBlock = isSoftwareTech
+    ? buildSoftwareTechSeoStrategyBlock(industry, topic)
+    : "";
   
   const contentStructureGuide = (() => {
     switch(selectedPatternKey) {
@@ -3590,6 +3674,7 @@ Không được tự tạo dữ liệu. Nếu không thấy, để chuỗi rỗn
 ${topic}
 """
 
+${softwareSeoStrategyBlock}
 ========== GENERATED METADATA ==========
 📌 Tiêu đề Dự Kiến: "${generatedTitle}"
 🔑 Keywords Dự Kiến: ${generatedKeywords}
@@ -3687,6 +3772,14 @@ ${usedTitles}
 ✅ Tránh dùng AI phrases như "vị trí đắc địa", "tiềm năng sinh lời" (dùng alternatives thay thế)
 ✅ Tiêu đề nêu rõ bản chất bài viết (không clickbait)
 ✅ Bài viết khác hoàn toàn với các bài trước (tránh rập khuôn)${lmktExtraRules}
+${isSoftwareTech ? `
+✅ GEO: đoạn mở trả lời thẳng câu hỏi người tìm (1-2 câu)
+✅ EEAT: case study / số liệu triển khai từ SOURCE_TEXT
+✅ Topic Cluster: cuối bài gợi ý 2-3 internal link liên quan
+✅ keywords: 5-8 long-tail (ngành dọc / tích hợp / AI-automation)
+❌ CẤM: "viết phần mềm theo yêu cầu", keyword stuffing, "giải pháp toàn diện"
+` : ""}
+${titleRequirement ? `\n========== TIÊU ĐỀ ==========\n${titleRequirement}` : ""}
 
 ========== 3 NGÔN NGỮ — 1 JSON DUY NHẤT (BẮT BUỘC CÙNG LÚC) ==========
 Trả về ĐỦ 15 field ngôn ngữ trong CÙNG 1 JSON object (không gọi thêm lần 2):
