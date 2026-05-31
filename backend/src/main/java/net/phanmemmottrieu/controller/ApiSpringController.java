@@ -1841,31 +1841,23 @@ public class ApiSpringController {
                     }
                 }
 
-                LocalIntentClassification preclassifiedIntent;
-                if (isMenuJsonContext(contextType) && "analyze".equalsIgnoreCase(responseMode)) {
-                    preclassifiedIntent = new LocalIntentClassification(
-                        "QUESTION",
-                        "ask",
-                        95,
-                        "answer_direct",
-                        "menu_json",
-                        "",
-                        "analyze",
-                        "Menu analyze fast path — skip intent LLM");
-                } else {
-                    preclassifiedIntent = classifyIntentWithLocalAI(message, false, uiLang, contextType);
-                }
+                String menuIntentSnapshot = isMenuJsonContext(contextType)
+                    ? unwrapMenuJsonEditorPayload(currentCodeRaw)
+                    : "";
+                LocalIntentClassification preclassifiedIntent = classifyIntentWithLocalAI(
+                    message, false, uiLang, contextType, menuIntentSnapshot);
                 responseMode = reconcileCodeResponseModeWithIntent(
                     responseMode,
                     message,
                     contextType,
                     preclassifiedIntent,
-                    uiLang);
+                    uiLang,
+                    menuIntentSnapshot);
                 if (responseMode.isBlank()) {
-                    responseMode = "analyze";
+                    responseMode = resolveDefaultResponseModeAfterReconcile(preclassifiedIntent, contextType);
                 }
 
-                // Menu analyze: resolve editor JSON early and exit before intent/orchestration/LLM when heuristic suffices.
+                // Menu analyze (Lane 3b): heuristic prose only when editor has parseable menu JSON — never for greenfield write.
                 if (isMenuJsonContext(contextType) && "analyze".equalsIgnoreCase(responseMode)) {
                     pruneBaseContentCache();
                     AiCodeBaseContentResolution menuAnalyzeBase = resolveBaseContent(
@@ -1877,6 +1869,13 @@ public class ApiSpringController {
                         menuAnalyzeContext = menuAnalyzeBase.baseContent();
                     }
                     menuAnalyzeContext = resolveMenuJsonEditorContext(menuAnalyzeContext, menuAnalyzeBase.baseContent());
+                    if (shouldSkipMenuAnalyzeHeuristicFastPath(message, menuAnalyzeContext, preclassifiedIntent)) {
+                        logger.info(
+                            "MENU_ANALYZE skip heuristic fast-path requestId={} appId={} menuContextChars={} reason=greenfield_or_edit_intent",
+                            requestId,
+                            appId,
+                            menuAnalyzeContext.length());
+                    } else {
                     logger.info(
                         "MENU_ANALYZE ultra-early probe requestId={} appId={} menuContextChars={} pName={}",
                         requestId,
@@ -1900,6 +1899,7 @@ public class ApiSpringController {
                             streamCompletedRef)) {
                         streamCompletedRef.set(true);
                         return;
+                    }
                     }
                 }
 
@@ -4454,7 +4454,9 @@ public class ApiSpringController {
 
                         lastLocalProviderText = String.valueOf(providerText == null ? "" : providerText).trim();
 
+                        boolean greenfieldMenuFullApplied = bool(codeStreamMeta.get("menuGreenfieldFullReplaceApplied"), false);
                         boolean localAccepted = qualityGateEarlyAudit
+                            || greenfieldMenuFullApplied
                             || shouldAcceptLocalCodeStreamOutput(
                                 providerText,
                                 responseMode,
@@ -4788,6 +4790,11 @@ public class ApiSpringController {
                             int stepResultCount = parseIntSafe(codeStreamMeta.get("agenticStepResultCount"), 0);
                             boolean qualityGateEarlyAuditActive = bool(codeStreamMeta.get("qualityGateEarlyAudit"), false);
                             boolean skipAgenticForGreenfieldFullDraft = isMenuGreenfieldFullDraftApply(codeStreamMeta);
+                            if (skipAgenticForGreenfieldFullDraft) {
+                                stepResultCount = Math.max(
+                                    stepResultCount,
+                                    parseIntSafe(codeStreamMeta.get("codeStreamTextEditsEmittedCount"), 0));
+                            }
                             if (!qualityGateEarlyAuditActive
                                     && hasOrchestrationSteps
                                     && !codeDebugAnalyzeFastPath
@@ -4833,6 +4840,7 @@ public class ApiSpringController {
                             }
                             boolean stepContractRequired = hasOrchestrationSteps
                                 && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
+                                && !skipAgenticForGreenfieldFullDraft
                                 && !(isCodeContext(contextType)
                                     && "edit".equalsIgnoreCase(String.valueOf(responseMode == null ? "" : responseMode))
                                     && (hardLocalOnlyFlow || localOnlyHardRoute || isWeakLocalRuntime() || skipHeavyOrchestrationForLargeCodeEdit
@@ -5730,6 +5738,25 @@ public class ApiSpringController {
                                 rawResponse = deterministicPatch;
                                 effectiveModel = "local_provider";
                                 localProviderPrimaryUsed = true;
+                            }
+                        }
+                        if (callerForcedLocal && rawResponse == null
+                                && bool(codeStreamMeta.get("menuGreenfieldFullReplaceApplied"), false)) {
+                            String mergedMenu = str(codeStreamMeta.get("qualityGateMergedMenuJson"), "");
+                            if (mergedMenu.isBlank()) {
+                                mergedMenu = String.valueOf(lastLocalProviderText == null ? "" : lastLocalProviderText).trim();
+                            }
+                            if (!mergedMenu.isBlank()) {
+                                rawResponse = mergedMenu;
+                                effectiveModel = codeStreamMeta.containsKey("menuGreenfieldModuleEnrich")
+                                    ? "local_scaffold_assemble+module_enrich"
+                                    : "local_scaffold_assemble";
+                                localProviderPrimaryUsed = true;
+                                codeStreamMeta.put("localOverrideRecoveredFromGreenfieldFullReplace", true);
+                                logger.info(
+                                    "LOCAL_OVERRIDE recovered greenfield full-file menu requestId={} chars={}",
+                                    requestId,
+                                    mergedMenu.length());
                             }
                         }
                         if (callerForcedLocal && rawResponse == null
@@ -6778,7 +6805,8 @@ public class ApiSpringController {
                             && (agenticStepAcceptedCount > 0
                                 || bool(codeStreamMeta.get("businessComprehensionDeterministicSeed"), false)
                                 || bool(codeStreamMeta.get("menuGreenfieldFastPath"), false)
-                                || bool(codeStreamMeta.get("menuGreenfieldFullDraft"), false)))) {
+                                || bool(codeStreamMeta.get("menuGreenfieldFullDraft"), false)
+                                || bool(codeStreamMeta.get("menuGreenfieldFullReplaceApplied"), false)))) {
                     completion.put("flowConfirmedByLocal", true);
                 }
                 completion.put("codeStreamTextEditsEmittedCount", emittedTextEditEvents);
@@ -20765,6 +20793,33 @@ public class ApiSpringController {
         return code;
     }
 
+    /**
+     * Lane 3b menu analyze heuristic applies only when editor has parseable menu JSON.
+     * Greenfield write (AC.0 kịch bản A) must use Comprehend → scaffold → Worker — not heuristic prose.
+     */
+    private boolean shouldSkipMenuAnalyzeHeuristicFastPath(
+            String message,
+            String menuContext,
+            LocalIntentClassification intent) {
+        if (hasExplicitCodeEditIntent(message)) {
+            return true;
+        }
+        if (intent != null && intent.isEditTask()) {
+            return true;
+        }
+        String menu = String.valueOf(menuContext == null ? "" : menuContext).trim();
+        if (menu.isBlank() || menu.length() < 48) {
+            return true;
+        }
+        if (aiGreenfieldBusinessDesignService != null) {
+            String menuScan = aiGreenfieldBusinessDesignService.buildHeuristicMenuBusinessAnalysisProse(menu, "");
+            if (menuScan.isBlank()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private String unwrapMenuJsonEditorPayload(String raw) {
         String safe = String.valueOf(raw == null ? "" : raw).trim();
         if (safe.isBlank()) {
@@ -25771,6 +25826,9 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 pName);
             if (answer.isBlank()) {
                 if (isMenuJsonContext(contextType)) {
+                    if (shouldSkipMenuAnalyzeHeuristicFastPath(message, fullCodeContext, null)) {
+                        return false;
+                    }
                     answer = "Không đủ JSON menu trong editor để phân tích nghiệp vụ. Hãy mở menu cần phân tích trong CodeMirror.";
                 } else {
                     return false;
@@ -25778,6 +25836,9 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             }
             // Menu analyze must never fall through to LLM (1.5B hallucinates CRM/stack without JSON in prompt).
             if (isMenuJsonContext(contextType)) {
+                if (shouldSkipMenuAnalyzeHeuristicFastPath(message, fullCodeContext, null)) {
+                    return false;
+                }
                 return finishAnalyzeBusinessHeuristicEarly(
                     emitter, requestId, authCtx, appId, contextType, pName, pType, message,
                     fullCodeContext, scanContext, answer,
@@ -25919,7 +25980,7 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
     }
 
     private LocalIntentClassification classifyIntentWithLocalAI(String requestText, boolean bypassCache, String uiLang) {
-        return classifyIntentWithLocalAI(requestText, bypassCache, uiLang, "");
+        return classifyIntentWithLocalAI(requestText, bypassCache, uiLang, "", "");
     }
 
     private LocalIntentClassification classifyIntentWithLocalAI(
@@ -25927,6 +25988,15 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             boolean bypassCache,
             String uiLang,
             String contextType) {
+        return classifyIntentWithLocalAI(requestText, bypassCache, uiLang, contextType, "");
+    }
+
+    private LocalIntentClassification classifyIntentWithLocalAI(
+            String requestText,
+            boolean bypassCache,
+            String uiLang,
+            String contextType,
+            String menuEditorSnapshot) {
         if (llamaCppNativeService == null || !llamaCppNativeService.isAvailable()
                 || llamaCppNativeService.isCircuitOpen()) {
             return LocalIntentClassification.unknown();
@@ -26004,6 +26074,22 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             : isCodeContext(contextType)
                 ? "code (user is editing DynamicCode / source in CodeMirror)"
                 : "none (no code/menu editor)";
+        String menuSnapshotLine = "";
+        if (isMenuJsonContext(contextType)) {
+            String menuSnapshot = truncateMiddle(
+                unwrapMenuJsonEditorPayload(String.valueOf(menuEditorSnapshot == null ? "" : menuEditorSnapshot).trim()),
+                480);
+            int menuNodes = countMenuNodesFromDraft(menuSnapshot);
+            if (menuSnapshot.isBlank()) {
+                menuSnapshotLine = "EDITOR_MENU_SNAPSHOT: (empty editor — greenfield)\n";
+            } else {
+                menuSnapshotLine = "EDITOR_MENU_SNAPSHOT: "
+                    + menuNodes
+                    + " module(s): "
+                    + menuSnapshot
+                    + "\n";
+            }
+        }
         String classifyPrompt = "<|im_start|>system\n"
             + "You route CSM AI assistant requests using Observation → Reasoning → Action.\n"
             + "Output one JSON object only.\n"
@@ -26011,18 +26097,21 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             + "\"responseMode\":\"edit|analyze\",\"nextStep\":\"answer_direct|load_menu_context|load_code_context|clarify\","
             + "\"contextKind\":\"menu|code|none\",\"confidence\":0-100,\"reasoning\":\"one short sentence explaining edit vs analyze\"}.\n"
             + "OBSERVATION rules:\n"
-            + "- Read EDITOR_CONTEXT + USER_REQUEST together. Mentioning json/menu/code alone does NOT mean edit.\n"
+            + "- Read EDITOR_CONTEXT + EDITOR_MENU_SNAPSHOT + USER_REQUEST together. Mentioning json/menu/code alone does NOT mean edit.\n"
+            + "- Empty/greenfield menu (0 modules) + user asks to write/create/design/build a menu => greenfield menu creation.\n"
             + "REASONING rules:\n"
             + "- responseMode=edit ONLY when user clearly wants to change/apply/fix/add/remove/update something IN the editor.\n"
             + "- responseMode=analyze when user wants to understand/explain/review/describe/analyze WITHOUT applying changes.\n"
             + "- Questions like 'what does this do', 'explain business', 'analyze menu structure' => analyze + load_*_context.\n"
-            + "- EDIT_MENU when menu_json editor and user wants structural/menu changes.\n"
+            + "- EDIT_MENU when menu_json editor and user wants structural/menu changes or greenfield menu creation.\n"
             + "- EDIT_CODE when code editor and user wants source changes.\n"
             + "- General chat with no editor relevance => answer_direct, contextKind=none, responseMode=analyze.\n"
             + "ACTION: set responseMode, type, nextStep, contextKind from your reasoning.\n"
             + langRule
             + "<|im_end|>\n"
-            + "<|im_start|>user\nEDITOR_CONTEXT: " + editorContext + "\nUSER_REQUEST: " + safe + "<|im_end|>\n"
+            + "<|im_start|>user\nEDITOR_CONTEXT: " + editorContext + "\n"
+            + menuSnapshotLine
+            + "USER_REQUEST: " + safe + "<|im_end|>\n"
             + "<|im_start|>assistant\n";
 
         try {
@@ -26084,6 +26173,29 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                     confidence,
                     nextStep,
                     contextKind);
+            }
+
+            if (isMenuJsonContext(contextType)
+                    && countMenuNodesFromDraft(unwrapMenuJsonEditorPayload(menuEditorSnapshot)) <= 0
+                    && hasExplicitCodeEditIntent(normalizedRequest)
+                    && !"EDIT_MENU".equals(type)) {
+                type = "EDIT_MENU";
+                action = "add";
+                classifiedResponseMode = "edit";
+                contextKind = "menu";
+                nextStep = "load_menu_context";
+                confidence = Math.max(confidence, 88);
+                if (reasoning.isBlank()) {
+                    reasoning = "Greenfield menu editor is empty and user asked to create/write menu JSON.";
+                }
+                logger.info("[AI_INTENT_CLASSIFY] post-guard rewired to EDIT_MENU for empty-menu create request request={}",
+                    normalizedRequest.length() > 80 ? normalizedRequest.substring(0, 80) + "…" : normalizedRequest);
+                logger.info("[AI_INTENT_CLASSIFY_TELEMETRY] reason_code={} confidence={} nextStep={} contextKind={} responseMode={}",
+                    "post_guard_greenfield_menu_edit",
+                    confidence,
+                    nextStep,
+                    contextKind,
+                    classifiedResponseMode);
             }
 
             logger.info("[AI_INTENT_CLASSIFY] type={} action={} nextStep={} contextKind={} confidence={} responseMode={} reasoning={} request={}",
@@ -26359,29 +26471,59 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
             String contextType,
             LocalIntentClassification intent,
             String uiLang) {
+        return reconcileCodeResponseModeWithIntent(
+            responseMode, message, contextType, intent, uiLang, "");
+    }
+
+    private String reconcileCodeResponseModeWithIntent(
+            String responseMode,
+            String message,
+            String contextType,
+            LocalIntentClassification intent,
+            String uiLang,
+            String menuEditorSnapshot) {
         String mode = String.valueOf(responseMode == null ? "" : responseMode).trim().toLowerCase(Locale.ROOT);
         int modelMinConfidence = Math.max(40, Math.min(95, aiLocalRoutingModelDrivenMinConfidence));
 
-        // Explicit client directive (/edit, /analyze) wins.
-        if ("edit".equals(mode) || "analyze".equals(mode)) {
-            return mode;
+        String messageDirective = detectAiAssistantResponseModeFromMessage(message);
+        if ("edit".equals(messageDirective) || "analyze".equals(messageDirective)) {
+            return messageDirective;
         }
 
+        // F.1: natural-language edit/generation intent (e.g. "Viết json menu …") wins over uncertain classifier.
+        if (hasExplicitCodeEditIntent(message)) {
+            logger.info(
+                "[AI_RESPONSE_MODE] source=explicit_edit_intent mode=edit contextType={}",
+                contextType);
+            return "edit";
+        }
+
+        if (isGreenfieldMenuCreationContext(message, contextType, menuEditorSnapshot)) {
+            logger.info(
+                "[AI_RESPONSE_MODE] source=greenfield_menu_observation mode=edit contextType={} menuChars={}",
+                contextType,
+                String.valueOf(menuEditorSnapshot == null ? "" : menuEditorSnapshot).trim().length());
+            return "edit";
+        }
+
+        // F.1: EDIT_* classifier always edit (Brief B#2).
         if (intent != null && intent.isEditTask()) {
             logger.info("[AI_RESPONSE_MODE] source=classified_edit_task mode=edit type={} confidence={} contextType={}",
                 intent.type(), intent.confidence(), contextType);
             return "edit";
         }
 
+        // F.1: model-driven classifier — trust local AI only when confidence meets threshold.
         if (aiLocalRoutingModelDrivenEnabled && intent != null) {
             String fromIntent = intent.resolvedResponseMode();
             if (!fromIntent.isBlank() && intent.confidence() >= modelMinConfidence) {
                 if (!fromIntent.equals(mode)) {
                     logger.info(
-                        "[AI_RESPONSE_MODE] source=model_driven_classifier mode={} type={} confidence={} contextType={} reasoning={}",
+                        "[AI_RESPONSE_MODE] source=model_driven_classifier mode={} type={} confidence={} min={} contextType={} reasoning={}",
                         fromIntent,
                         intent.type(),
                         intent.confidence(),
+                        modelMinConfidence,
                         contextType,
                         intent.reasoning().length() > 120
                             ? intent.reasoning().substring(0, 120) + "…"
@@ -26389,23 +26531,105 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
                 }
                 return fromIntent;
             }
+            if (!fromIntent.isBlank() && intent.confidence() < modelMinConfidence) {
+                logger.info(
+                    "[AI_RESPONSE_MODE] source=model_driven_classifier_low_confidence_deferred mode={} type={} confidence={} min={} contextType={} reasoning={}",
+                    fromIntent,
+                    intent.type(),
+                    intent.confidence(),
+                    modelMinConfidence,
+                    contextType,
+                    intent.reasoning().length() > 120
+                        ? intent.reasoning().substring(0, 120) + "…"
+                        : intent.reasoning());
+            }
         }
 
-        if (!aiLocalRoutingModelDrivenEnabled) {
-            if (hasExplicitCodeEditIntent(message)) {
-                return "edit";
-            }
-            if (isMenuJsonContext(contextType) || isCodeContext(contextType)) {
-                if (hasCodeOrRuntimeDebugSignal(message) && !hasExplicitCodeEditIntent(message)) {
-                    return "analyze";
-                }
+        if ("edit".equals(mode)) {
+            return mode;
+        }
+        if ("analyze".equals(mode)) {
+            return mode;
+        }
+
+        if (intent != null) {
+            String fromIntent = intent.resolvedResponseMode();
+            if (!fromIntent.isBlank()) {
+                logger.info(
+                    "[AI_RESPONSE_MODE] source=classifier_fallback mode={} type={} confidence={} contextType={}",
+                    fromIntent,
+                    intent.type(),
+                    intent.confidence(),
+                    contextType);
+                return fromIntent;
             }
         }
 
-        if (isMenuJsonContext(contextType) || isCodeContext(contextType)) {
-            return intent != null && intent.isEditTask() ? "edit" : "analyze";
+        if (isMenuJsonContext(contextType)) {
+            // D.1: menu lane defaults edit when classifier + client mode both unset.
+            return "edit";
         }
         return mode.isBlank() ? "analyze" : responseMode;
+    }
+
+    private String resolveDefaultResponseModeAfterReconcile(
+            LocalIntentClassification intent,
+            String contextType) {
+        if (intent != null) {
+            String fromIntent = intent.resolvedResponseMode();
+            if (!fromIntent.isBlank()) {
+                return fromIntent;
+            }
+        }
+        if (isMenuJsonContext(contextType)) {
+            return "edit";
+        }
+        return "analyze";
+    }
+
+    /**
+     * Structural observation: menu_json editor has no modules yet and user asks to design/create menu content.
+     * Not a keyword analyze override — uses editor snapshot + creation intent together.
+     */
+    private boolean isGreenfieldMenuCreationContext(
+            String message,
+            String contextType,
+            String menuEditorSnapshot) {
+        if (!isMenuJsonContext(contextType)) {
+            return false;
+        }
+        String menu = unwrapMenuJsonEditorPayload(String.valueOf(menuEditorSnapshot == null ? "" : menuEditorSnapshot).trim());
+        if (countMenuNodesFromDraft(menu) > 0) {
+            return false;
+        }
+        return hasMenuDesignCreateIntent(message);
+    }
+
+    private boolean hasMenuDesignCreateIntent(String requestText) {
+        String safe = String.valueOf(requestText == null ? "" : requestText).trim();
+        if (safe.isBlank()) {
+            return false;
+        }
+        String normalized = Normalizer.normalize(safe, Normalizer.Form.NFD)
+            .replaceAll("\\p{M}+", "")
+            .toLowerCase(Locale.ROOT);
+        Pattern[] patterns = {
+            Pattern.compile(
+                "\\b(viet|tao|thi\\s+ke|design|build|generate|create|lap|bo\\s+sung|them\\s+module)\\b.*\\b(menu|json\\s+menu|menu\\s+json)\\b",
+                Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE),
+            Pattern.compile(
+                "\\b(menu|json\\s+menu|menu\\s+json)\\b.*\\b(day\\s+du|dau\\s+day|full|complete|comprehensive|greenfield|tu\\s+dau)\\b",
+                Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE),
+            Pattern.compile(
+                "\\bjson\\s+menu\\b",
+                Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE),
+        };
+        for (Pattern pattern : patterns) {
+            if (pattern.matcher(normalized).find()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isModelDrivenCodeContextAnalyze(LocalIntentClassification intent, String responseMode) {
@@ -32817,11 +33041,6 @@ window.waitForProcessDeath = function(processId, timeoutMs, pollIntervalMs) {
 
         if (hasExplicitCodeEditIntent(message)) {
             return "edit";
-        }
-
-        if (("code".equals(normalizedContextType) || normalizedTaskType.contains("code"))
-                && hasCodeOrRuntimeDebugSignal(message)) {
-            return "analyze";
         }
 
         // Legacy: menu defaults edit when caller doesn't provide explicit responseMode.
