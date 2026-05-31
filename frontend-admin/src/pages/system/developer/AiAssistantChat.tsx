@@ -2481,28 +2481,14 @@ function hasConversationalQuestionIntent(input: string): boolean {
 	return !hasEdit && patterns.some(pattern => pattern.test(text));
 }
 
-function inferResponseModeByIntent(input: string, contextType: AiAssistantChatProps["contextType"]): ResponseMode | undefined {
+/** F.10 / D.1 — only slash directives; backend local classifier decides edit vs analyze. */
+function inferResponseModeByIntent(input: string, _contextType?: AiAssistantChatProps["contextType"]): ResponseMode | undefined {
 	const text = String(input || "").trim();
 	if (!text) {
 		return undefined;
 	}
 	const directive = parseResponseModeDirective(text);
-	if (directive.overrideMode) {
-		return directive.overrideMode;
-	}
-	const normalized = text.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-	const asksAnalyze = /\b(phân tích|phan tich|analyze|analysis|giải thích|giai thich|explain|tom tat|tóm tắt|summary|mô tả|mo ta|describe)\b/.test(normalized);
-	const asksEdit = /\b(sửa|sua|edit|apply|patch|cập nhật|cap nhat|update|modify|thêm|them|add|xóa|xoa|delete|remove)\b/.test(normalized);
-	if (asksAnalyze && !asksEdit) {
-		return "analyze";
-	}
-	if (asksEdit && !asksAnalyze) {
-		return "edit";
-	}
-	if (contextType === "menu_json" && asksAnalyze) {
-		return "analyze";
-	}
-	return undefined;
+	return directive.overrideMode;
 }
 
 /** Outgoing code string + optional selection narrow-scope for AI local. No highlight → full string scope. */
@@ -6201,12 +6187,15 @@ export default function AiAssistantChat({
 				})),
 			};
 
-			const inferredResponseMode = inferResponseModeByIntent(cleanedMessage || normalizedText, contextType);
+			// F.10 / D.1: only send responseMode for /edit, /analyze, /local-plan — backend classifier decides otherwise.
 			const explicitResponseMode: ResponseMode | undefined = useLocalPlanRoute
 				? (modeDirective.overrideMode ?? "edit")
 				: modeDirective.overrideMode;
-			const requestedResponseMode: ResponseMode | undefined = explicitResponseMode ?? inferredResponseMode;
-			setActiveStreamResponseMode(requestedResponseMode ?? "analyze");
+			const requestedResponseMode: ResponseMode | undefined = explicitResponseMode;
+			// F.10: no client keyword routing — backend intent_reasoning / routing SSE sets mode.
+			if (requestedResponseMode) {
+				setActiveStreamResponseMode(requestedResponseMode);
+			}
 
 			// Add placeholder for assistant response
 			const assistantMsg: ChatMessage = {
@@ -8332,8 +8321,11 @@ export default function AiAssistantChat({
 								scheduleStreamFlush();
 							}
 						else if (evt.stage === "text_edit_apply" && (evt as any).textEdit) {
-							// Backend classifier chose analyze — never mutate CodeMirror.
-							if (activeStreamResponseMode === "analyze") {
+							const menuGreenfieldFullReplaceEvt = Boolean((evt as any).menuGreenfieldFullReplace === true);
+							// Backend classifier chose analyze — never mutate CodeMirror (except AF.8 full-file greenfield).
+							if (activeStreamResponseMode === "analyze"
+								&& !turnAllowAutoApplyRef.current
+								&& !menuGreenfieldFullReplaceEvt) {
 								appendComposerActivity({
 									kind: "apply",
 									icon: "⛔",
