@@ -23,6 +23,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -139,6 +143,16 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.preload-on-startup:true}")
     private boolean preloadOnStartup;
 
+    @Value("${ai.local.llama.native.skip-warmup:false}")
+    private boolean nativeSkipWarmup;
+
+    @Value("${ai.local.llama.native.disable-fit:false}")
+    private boolean nativeDisableFit;
+
+    /** Unload GGUF from native RAM after idle (ms). 0 = keep loaded. Weak 5GB: 120000. */
+    @Value("${ai.local.llama.unload-after-idle-ms:0}")
+    private long unloadAfterIdleMs;
+
     @Value("${ai.local.llama.runtime-profile:balanced}")
     private String runtimeProfile;
 
@@ -183,6 +197,12 @@ public class LlamaCppNativeService implements AIProvider {
     private volatile LocalModelLane activeModelLane;
     private volatile boolean shuttingDown = false;
     private final Object modelLock = new Object();
+    private final ScheduledExecutorService idleUnloadScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "llama-idle-unload");
+        t.setDaemon(true);
+        return t;
+    });
+    private volatile ScheduledFuture<?> idleUnloadFuture;
 
     private enum RuntimeProfile {
         CONSERVATIVE,
@@ -689,6 +709,10 @@ public class LlamaCppNativeService implements AIProvider {
         out.put("seoModelAvailable", isSeoModelAvailable());
         out.put("activeModelLane", activeModelLane == null ? "" : activeModelLane.name());
         out.put("swapModelsOnLaneChange", swapModelsOnLaneChange);
+        out.put("unloadAfterIdleMs", unloadAfterIdleMs);
+        out.put("nativeSkipWarmup", nativeSkipWarmup);
+        out.put("nativeDisableFit", nativeDisableFit);
+        out.put("workerModelLoaded", isWorkerModelLoaded());
         out.put("effectiveContextWindow", effectiveContextWindow());
         out.put("effectiveMaxTokens", effectiveMaxTokens());
         out.put("effectiveMaxPromptChars", effectiveMaxPromptChars());
@@ -696,6 +720,7 @@ public class LlamaCppNativeService implements AIProvider {
     }
 
     private long markRequestStart(String prompt) {
+        cancelIdleUnloadSchedule();
         long now = System.currentTimeMillis();
         inFlightRequests.incrementAndGet();
         lastRequestStartedAtMs.set(now);
@@ -717,6 +742,38 @@ public class LlamaCppNativeService implements AIProvider {
             failedRequestCount.incrementAndGet();
         }
         inFlightRequests.updateAndGet(v -> Math.max(0, v - 1));
+        if (inFlightRequests.get() == 0) {
+            scheduleIdleUnloadAfterRequest();
+        }
+    }
+
+    private void cancelIdleUnloadSchedule() {
+        ScheduledFuture<?> pending = idleUnloadFuture;
+        if (pending != null) {
+            pending.cancel(false);
+            idleUnloadFuture = null;
+        }
+    }
+
+    private void scheduleIdleUnloadAfterRequest() {
+        if (unloadAfterIdleMs <= 0 || shuttingDown) {
+            return;
+        }
+        cancelIdleUnloadSchedule();
+        idleUnloadFuture = idleUnloadScheduler.schedule(() -> {
+            if (shuttingDown || inFlightRequests.get() > 0) {
+                return;
+            }
+            synchronized (modelLock) {
+                if (shuttingDown || inFlightRequests.get() > 0 || model == null) {
+                    return;
+                }
+                log.info("Idle unload: releasing llama GGUF after {}ms idle (free native RAM)", unloadAfterIdleMs);
+                closeModelQuietly(model);
+                model = null;
+                activeModelLane = null;
+            }
+        }, unloadAfterIdleMs, TimeUnit.MILLISECONDS);
     }
 
     private String runLocalCompletionWithCap(String prompt, int nPredictCap, boolean isJsonForced) {
@@ -855,6 +912,8 @@ public class LlamaCppNativeService implements AIProvider {
     @PreDestroy
     public void close() {
         shuttingDown = true;
+        cancelIdleUnloadSchedule();
+        idleUnloadScheduler.shutdownNow();
 
         for (Thread taskThread : activeInferenceTasks.values()) {
             if (taskThread != null) {
@@ -949,6 +1008,12 @@ public class LlamaCppNativeService implements AIProvider {
             if (disableKvOffload) {
                 parameters.disableKvOffload();
             }
+            if (nativeDisableFit || resolveRuntimeProfile() == RuntimeProfile.CONSERVATIVE) {
+                parameters.setFit(false);
+            }
+            if (nativeSkipWarmup || resolveRuntimeProfile() == RuntimeProfile.CONSERVATIVE) {
+                parameters.skipWarmup();
+            }
 
             log.info("Loading local GGUF model via llama.cpp JNI (lane={}): {}",
                 target, path.toAbsolutePath());
@@ -970,7 +1035,9 @@ public class LlamaCppNativeService implements AIProvider {
     }
 
     private int effectiveBatchSize() {
-        return Math.max(32, Math.min(512, batchSize));
+        int maxBatch = resolveRuntimeProfile() == RuntimeProfile.CONSERVATIVE ? 128 : 512;
+        int minBatch = resolveRuntimeProfile() == RuntimeProfile.CONSERVATIVE ? 16 : 32;
+        return Math.max(minBatch, Math.min(maxBatch, batchSize));
     }
 
     private int effectiveUbatchSize() {
@@ -1057,7 +1124,7 @@ public class LlamaCppNativeService implements AIProvider {
         int profileCap;
         switch (resolveRuntimeProfile()) {
             case CONSERVATIVE:
-                profileCap = 8192;
+                profileCap = contextWindow <= 8192 ? 6144 : 8192;
                 break;
             case MAX:
                 profileCap = 32768;
