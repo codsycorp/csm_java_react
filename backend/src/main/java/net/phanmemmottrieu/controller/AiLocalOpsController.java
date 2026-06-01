@@ -133,7 +133,7 @@ public class AiLocalOpsController {
     @Value("${ai.orchestration.multimodal.local-only.require-vision:false}")
     private boolean multimodalRequireVision;
 
-    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-3b-instruct-q4_k_m.gguf}")
+    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf}")
     private String localModelPath;
 
     @Value("${ai.local.llama.runtime-profile:balanced}")
@@ -254,29 +254,21 @@ public class AiLocalOpsController {
 
         if (reasoningCandidates.isEmpty()) {
             reasoningCandidates.add(modelCandidate(
-                "qwen2.5-coder-0.5b-instruct-q4_k_m.gguf",
+                "qwen2.5-coder-1.5b-instruct-q8_0.gguf",
                 "reasoning",
-                "very-light",
-                "~0.4-0.7GB",
-                true,
-                false,
-                "q4_k_m"));
-            reasoningCandidates.add(modelCandidate(
-                "qwen2.5-coder-3b-instruct-q4_k_m.gguf",
-                "reasoning-code",
                 "balanced",
-                "~2.0-2.4GB",
+                "~1.6-2.0GB",
                 true,
                 true,
-                "q4_k_m"));
+                "q8_0"));
             reasoningCandidates.add(modelCandidate(
-                "qwen2.5-3b-instruct-q4_k_m.gguf",
-                "reasoning-seo",
+                "qwen2.5-coder-1.5b-instruct-q5_k_m.gguf",
+                "reasoning",
                 "balanced",
-                "~2.0-2.4GB",
+                "~1.1-1.7GB",
                 true,
                 true,
-                "q4_k_m"));
+                "q5_k_m"));
             reasoningCandidates.add(modelCandidate(
                 "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
                 "reasoning",
@@ -286,13 +278,13 @@ public class AiLocalOpsController {
                 true,
                 "q4_k_m"));
             reasoningCandidates.add(modelCandidate(
-                "qwen2.5-coder-1.5b-instruct-q2_k.gguf",
+                "qwen2.5-coder-0.5b-instruct-q4_k_m.gguf",
                 "reasoning",
-                "ultra-low-ram",
-                "~0.7-1.2GB",
+                "very-light",
+                "~0.4-0.7GB",
+                true,
                 false,
-                false,
-                "q2_k"));
+                "q4_k_m"));
         }
 
         if (visionCandidates.isEmpty()) {
@@ -324,11 +316,12 @@ public class AiLocalOpsController {
         ));
 
         Map<String, Object> quantizationGuide = new LinkedHashMap<>();
-        quantizationGuide.put("recommendedOrderWeakMachine", List.of("q4_k_m", "q2_k", "q4_0", "q5_k_m", "q8_0"));
+        quantizationGuide.put("recommendedOrderWeakMachine", List.of("q8_0", "q5_k_m", "q4_k_m", "q4_0", "q2_k"));
         quantizationGuide.put("notes", List.of(
-            "q4_k_m thường cân bằng tốt giữa chất lượng/tốc độ/RAM cho máy yếu",
-            "q2_k tiết kiệm RAM hơn nhưng có thể giảm độ chính xác khi planning dài",
-            "q8_0 chất lượng cao hơn nhưng tốn RAM đáng kể"
+            "q8_0 — worker mặc định CSM (1 GGUF M1 + Linux 5GB + strong): chất lượng SEO/code đa ngữ cao nhất ở size 1.5B",
+            "q5_k_m — fallback nhẹ hơn Q8 một chút",
+            "q4_k_m — tiết kiệm RAM hơn trên máy cực yếu",
+            "q2_k — chỉ khi RAM cực thấp, có thể giảm độ chính xác"
         ));
 
         out.put("success", true);
@@ -383,7 +376,7 @@ public class AiLocalOpsController {
         out.put("includeVision", withVision);
         out.put("reasoningRecommended", reasoningRecommended);
         out.put("visionRecommended", visionRecommended);
-        out.put("quantizationPriorityWeakMachine", List.of("q4_k_m", "q2_k", "q4_0", "q5_k_m", "q8_0"));
+        out.put("quantizationPriorityWeakMachine", List.of("q8_0", "q5_k_m", "q4_k_m", "q2_k", "q4_0"));
         out.put("notes", List.of(
             "Với máy yếu nên ưu tiên q4_k_m trước, sau đó q2_k khi thiếu RAM.",
             "Ưu tiên 0.5B/1.1B/1.5B cho reasoning để giữ RAM dưới ngưỡng.",
@@ -1559,11 +1552,11 @@ public class AiLocalOpsController {
 
     private int scoreWeakMachine(String role, String quantization, String profile) {
         int score = 40;
-        if ("q4_k_m".equals(quantization)) score += 35;
+        if ("q8_0".equals(quantization)) score += 40;
+        else if ("q4_k_m".equals(quantization)) score += 35;
         else if ("q2_k".equals(quantization)) score += 25;
         else if ("q4_0".equals(quantization) || "q4_k_s".equals(quantization)) score += 18;
         else if ("q5_k_m".equals(quantization) || "q5_0".equals(quantization)) score += 8;
-        else if ("q8_0".equals(quantization)) score -= 12;
 
         if ("very-light".equals(profile)) score += 15;
         else if ("ultra-low-ram".equals(profile)) score += 12;

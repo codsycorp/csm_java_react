@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
-# Download GGUF models for CSM AI Local into backend/csm_datas/ai_local/model/
+# Download GGUF models for CSM AI Local
+#
+# TEXT WORKER (bắt buộc — 1 file duy nhất mọi máy, PHẦN Q master brief):
+#   qwen2.5-coder-1.5b-instruct-q8_0.gguf
 #
 # Usage:
-#   ./scripts/download-ai-local-models.sh server       # prod server (dual-3b → csm_datas/)
-#   ./scripts/download-ai-local-models.sh 5gb          # alias server (legacy)
-#   ./scripts/download-ai-local-models.sh dual-3b      # M1 dev (→ backend/csm_datas/)
-#   ./scripts/download-ai-local-models.sh strong         # dev machine 32GB
-#   ./scripts/download-ai-local-models.sh vision-weak    # SmolVLM2-256M video only
-#   ./scripts/download-ai-local-models.sh embed          # nomic embed only
-#   ./scripts/download-ai-local-models.sh dual-3b       # Coder-3B + Instruct-3B (M1 dual-lane)
-#   ./scripts/download-ai-local-models.sh list           # show disk usage
+#   ./scripts/download-ai-local-models.sh worker     # default — Coder-1.5B Q8_0 (M1 + Linux 5GB + strong)
+#   ./scripts/download-ai-local-models.sh server   # same worker → csm_datas/ (prod jar)
+#   ./scripts/download-ai-local-models.sh m1-16gb  # same worker → backend/csm_datas/
+#   ./scripts/download-ai-local-models.sh 5gb      # alias server
+#   ./scripts/download-ai-local-models.sh strong   # worker + nomic embed + vision optional
+#   ./scripts/download-ai-local-models.sh vision-weak
+#   ./scripts/download-ai-local-models.sh embed
+#   ./scripts/download-ai-local-models.sh list
 #
-# Requires: curl OR huggingface-cli (pip install huggingface_hub)
+# Legacy aliases (dual-3b, dual-3b, 3b) → worker 1.5B Q8_0 + warning
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CSM_WORKER_GGUF="qwen2.5-coder-1.5b-instruct-q8_0.gguf"
 
 resolve_model_dir() {
   case "${1:-server}" in
@@ -28,13 +32,11 @@ resolve_model_dir() {
   esac
 }
 
-PROFILE="${1:-server}"
+PROFILE="${1:-worker}"
 MODEL_DIR="$(resolve_model_dir "$PROFILE")"
 mkdir -p "$MODEL_DIR"
 
 log() { printf '[download-ai-local-models] %s\n' "$*"; }
-
-have_hf_cli() { command -v hf >/dev/null 2>&1 || command -v huggingface-cli >/dev/null 2>&1; }
 
 download_hf() {
   local repo="$1"
@@ -64,24 +66,9 @@ download_hf() {
   done
 }
 
-download_reasoning_coder_3b() {
-  download_hf "Qwen/Qwen2.5-Coder-3B-Instruct-GGUF" \
-    "qwen2.5-coder-3b-instruct-q4_k_m.gguf"
-}
-
-download_reasoning_instruct_3b_seo() {
-  download_hf "Qwen/Qwen2.5-3B-Instruct-GGUF" \
-    "qwen2.5-3b-instruct-q4_k_m.gguf"
-}
-
-download_reasoning_1_5b() {
-  download_hf "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF" \
-    "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
-}
-
-download_reasoning_0_5b() {
-  download_hf "Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF" \
-    "qwen2.5-coder-0.5b-instruct-q4_k_m.gguf"
+download_worker_1_5b_q8() {
+  log "Text worker (single GGUF all machines): $CSM_WORKER_GGUF"
+  download_hf "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF" "$CSM_WORKER_GGUF"
 }
 
 download_embed_nomic() {
@@ -111,21 +98,21 @@ list_models() {
   ls -lh "$MODEL_DIR"/*.gguf 2>/dev/null || log "(no .gguf files yet)"
 }
 
+warn_legacy() {
+  log "WARN: profile '$1' deprecated — CSM dùng 1 GGUF duy nhất: $CSM_WORKER_GGUF (PHẦN Q)"
+}
+
 case "$PROFILE" in
-  dual-3b|m1|3b)
-    log "Profile dual-3b — CODE Coder-3B + SEO Instruct-3B → $MODEL_DIR"
-    download_reasoning_coder_3b
-    download_reasoning_instruct_3b_seo
+  worker|m1-16gb|m1-safe|m1|5gb|weak|server|prod)
+    download_worker_1_5b_q8
     ;;
-  5gb|weak|server|prod)
-    log "Profile server — dual-lane Coder-3B + Instruct-3B (swap) → $MODEL_DIR"
-    download_reasoning_coder_3b
-    download_reasoning_instruct_3b_seo
-    log "Optional: run with 'vision-weak' for SmolVLM2 sidecar OCR"
+  dual-3b|3b|m1-1.5b)
+    warn_legacy "$PROFILE"
+    download_worker_1_5b_q8
     ;;
   strong|dev)
-    log "Profile strong — reasoning 1.5B + nomic embed + Qwen2-VL-2B"
-    download_reasoning_1_5b
+    log "Profile strong — worker 1.5B Q8_0 + nomic embed + vision optional"
+    download_worker_1_5b_q8
     download_embed_nomic
     download_vision_qwen2vl_2b
     download_vision_smolvlm500_video
@@ -140,21 +127,13 @@ case "$PROFILE" in
   embed)
     download_embed_nomic
     ;;
-  ultra)
-    download_reasoning_0_5b
-    download_reasoning_1_5b
-    download_embed_nomic
-    download_vision_smolvlm256_video
-    download_vision_smolvlm500_video
-    download_vision_qwen2vl_2b
-    ;;
   list)
     list_models
     exit 0
     ;;
   *)
     echo "Unknown profile: $PROFILE"
-    echo "Profiles: server | dual-3b | 5gb | strong | vision-weak | vision-strong | embed | ultra | list"
+    echo "Profiles: worker | server | m1-16gb | 5gb | strong | vision-weak | vision-strong | embed | list"
     exit 1
     ;;
 esac

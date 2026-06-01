@@ -53,19 +53,6 @@
     <lombok.version>1.18.30</lombok.version>
   </properties>
 
-  <repositories>
-    <repository>
-      <id>central-snapshots</id>
-      <url>https://central.sonatype.com/repository/maven-snapshots/</url>
-      <releases>
-        <enabled>false</enabled>
-      </releases>
-      <snapshots>
-        <enabled>true</enabled>
-      </snapshots>
-    </repository>
-  </repositories>
-
   <dependencies>
     <!-- JWT -->
     <dependency>
@@ -313,11 +300,11 @@
       <version>1.1.0</version>
     </dependency>
 
-    <!-- Native llama.cpp JNI bindings (text + mtmd/VLM via net.ladenthin fork — Q.12) -->
+    <!-- Native llama.cpp JNI bindings (runs GGUF directly in JVM, no extra service) -->
     <dependency>
-      <groupId>net.ladenthin</groupId>
+      <groupId>de.kherud</groupId>
       <artifactId>llama</artifactId>
-      <version>5.0.2-SNAPSHOT</version>
+      <version>4.1.0</version>
     </dependency>
 
     <dependency>

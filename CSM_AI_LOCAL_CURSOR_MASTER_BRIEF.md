@@ -1,9 +1,23 @@
 # CSM AI LOCAL — MASTER BRIEF CHO CURSOR AI
 ## Một file duy nhất để yêu cầu Cursor làm lại / hoàn thiện hệ thống
 
-Version: **3.21** · 2026-05-26  
+Version: **3.22** · 2026-06-01  
 Repo: `csm_server`  
 **Single source of truth** — dùng file này khi yêu cầu Cursor implement / làm lại CSM AI Local **và** domain System Management liên quan RAG.
+
+### Changelog v3.22 (2026-06-01 — M1 dev ổn định + SEO 1.5B Q8_0)
+
+| Mục | Trạng thái |
+|-----|------------|
+| **Text worker duy nhất** — `qwen2.5-coder-1.5b-instruct-q8_0.gguf` trên M1 / 5GB / strong (bỏ dual-lane 3B Q4) | ✅ Config + brief |
+| **JNI** — `de.kherud:llama:4.1.0` (ổn định M1); **không** dùng `net.ladenthin:5.0.2-SNAPSHOT` (exit 137 / native lỗi) | ✅ `backend/pom.xml` |
+| **Mac M1 dev** — `config.local-m1.env` + `./run-dev-m1.sh` (heap 2560m, devtools off, source config trước mvn) | ✅ |
+| **Vision in-JVM** — **tắt** trên M1; `AiLocalLlamaVisionNativeService` stub → sidecar `:8090` only (Q.12 roadmap) | ✅ |
+| **Không dùng `llama-cli`** để test/debug — chỉ in-JVM Spring Boot + sidecar `llama-server` | ✅ Quy ước ops |
+| **SEO LMKT VI-first** — pass 1 chỉ VI → dịch EN/ZH riêng (2–3 lần gọi nhỏ, retry + prompt compact) | ✅ `AiSeoContentPipelineService` |
+| SEO locale: `ai.seo.locale-translate.max-tokens=1024`, `max-retries=2`, `max-source-chars=900`, VI **350–500 từ** | ✅ M1 + `application.properties` |
+| Metal bootstrap (`LlamaMetalResourceBootstrap`, `setup-llama-metal-macos.sh`) — **dự phòng** khi nâng binding có mtmd; **không** gọi từ `Main` với kherud | ✅ Dormant |
+| `config.env.example` — worker + SEO path Q8_0; embedding mặc định nomic | ✅ |
 
 ### Changelog v3.21
 
@@ -93,7 +107,7 @@ Repo: `csm_server`
 | AE.1 — 4 bước hộp đen (Embedding → Attention → Semantic Mapping → Token Gen) | ✅ Map pipeline CSM |
 | AE.2 — RAG vs Fine-tuning vs In-Context Learning | ✅ CSM = RAG + In-Context (+ scaffold Java) |
 | AE.3 — 3 tầng Guardrails (System Prompt / Context / Output Validation) | ✅ Map gates + contracts |
-| Ghi chú model: **bundled 1.5B Q4** — không fine-tune; greenfield scaffold-first | ✅ |
+| Ghi chú model: **bundled 1.5B Q8_0** — không fine-tune; greenfield scaffold-first | ✅ |
 
 ### Changelog v3.13
 
@@ -129,7 +143,7 @@ Repo: `csm_server`
 | **PHẦN C.5 — Nguyên lý context Cursor-like** — AI không “nhớ” cả codebase; Index → Retrieve → Context Builder → LLM/Heuristic | ✅ Spec + ✅ Implement |
 | Analyze nghiệp vụ file lớn: **retrieve** top-K (BM25 in-memory + symbol + head/tail) → `CodeBusinessScan` trên slice ≤32k — **không** scan/prompt 400k+ vào model | ✅ Implement |
 | Lane 3b trên **1.5B**: prose heuristic + Comprehend scan trên retrieved context; **không** kỳ vọng LLM hiểu nghiệp vụ lớn | ✅ Spec |
-| Khuyến nghị model: **1.5B Q4** bundled + Java scaffold/plan; không 7B/14B trong repo (superseded v3.17 — PHẦN AE.0) | ✅ Spec |
+| Khuyến nghị model: **1.5B Q8_0** bundled + Java scaffold/plan; không 7B/14B trong repo (superseded v3.17 — PHẦN AE.0) | ✅ Spec |
 | `analyze_business_fast_path`: heuristic intent + Comprehend heuristic-only + early stream (không build prompt 97k) | ✅ Implement |
 
 ### Changelog v3.10
@@ -352,7 +366,7 @@ Khi có thêm mẫu attachment → merge vào Comprehend, không thay thế yêu
 (8) Đọc **PHẦN AE** — bản chất tư duy LLM (không phải nhận thức) + 3 con đường học hệ thống + 3 tầng guardrail.
 (9) Đọc **PHẦN AF** — đối chiếu **9 sơ đồ quy trình agent** (O-R-A, Supervisor, LangChain RAG, LangGraph) → làm đúng trên CSM.
 Không over-engineer. Sửa đúng các file đã liệt kê. Compile backend + không phá frontend SSE.
-Máy target: local-5gb (5GB RAM, 2 CPU, qwen2.5-coder-1.5b Q4_K_M) — **bắt buộc ổn định**.
+Máy target: local-5gb (5GB RAM, 2 CPU, qwen2.5-coder-1.5b **Q8_0**) — **bắt buộc ổn định**.
 Sau khi xong: commit + push theo PHẦN P nếu user yêu cầu đồng bộ git.
 ```
 
@@ -1868,9 +1882,9 @@ sequenceDiagram
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ VAI TRÒ 1 — REASONING / CODE WORKER (luôn trong JVM, llama.cpp JNI)     │
-│ Model: Qwen2.5-Coder-1.5B-Instruct Q4_K_M                               │
-│ File:  backend/csm_datas/ai_local/model/qwen2.5-coder-1.5b-...gguf      │
-│ RAM:   ~1.0–1.6 GB khi infer | Threads: 1 trên weak-5gb                 │
+│ Model: Qwen2.5-Coder-1.5B-Instruct Q8_0 (1 GGUF — M1 + Linux 5GB + strong) │
+│ File:  backend/csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf │
+│ RAM:   ~1.6–2.0 GB khi infer | Threads: 1 trên weak-5gb                 │
 │ Việc:  classify (64 tok), analyze prose, edit JSON textEdits            │
 │ Ngôn ngữ: JS/TS, Java, Python, SQL, JSON menu, vi/en/zh prompt          │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -1914,7 +1928,7 @@ sequenceDiagram
 
 | Vai trò | Model | Quant | Disk | RAM infer | 5GB | Strong | Ghi chú |
 |---------|-------|-------|------|-----------|-----|--------|---------|
-| **Code worker** | Qwen2.5-Coder-1.5B-Instruct | Q4_K_M | ~986MB | ~1.0–1.6GB | ✅ **default** | ✅ | Đa ngôn ngữ lập trình tốt ở size 1.5B |
+| **Code worker** | Qwen2.5-Coder-1.5B-Instruct | **Q8_0** | ~1.6GB | ~1.6–2.0GB | ✅ **default** | ✅ | **1 GGUF duy nhất** — code + SEO + guest chat |
 | Code ultra-light | Qwen2.5-Coder-0.5B-Instruct | Q4_K_M | ~491MB | ~0.5–0.9GB | ✅ fallback | — | Khi 1.5B OOM hoặc classify-only |
 | **Embedding** | hash fallback | — | 0 | ~0 | ✅ **default weak** | — | Lucene KNN 128D, không mismatch dim |
 | Embedding quality | nomic-embed-text-v1.5 | Q4_K_M | ~84MB | ~0.2–0.4GB | ⚠️ tắt vision trước | ✅ **default strong** | Vi + code retrieval tốt hơn hash |
@@ -1927,19 +1941,20 @@ sequenceDiagram
 
 ## Q.3 Thư mục model (bắt buộc)
 
-Tất cả GGUF đặt tại (đường dẫn tương đối từ `backend/`):
+**Chính sách 2026-06:** Cùng **một** file GGUF text worker trên M1 dev, Linux 5GB prod, và máy strong — không dual-lane 3B, không swap SEO model.
+
+Tất cả GGUF đặt tại (đường dẫn tương đối từ `backend/` hoặc `csm_datas/` trên server):
 
 ```txt
 backend/csm_datas/ai_local/model/
-├── qwen2.5-coder-1.5b-instruct-q4_k_m.gguf          # TEXT LLM worker (required) — code + SEO + guest chat
+├── qwen2.5-coder-1.5b-instruct-q8_0.gguf          # TEXT LLM worker (required) — code + SEO + guest chat
 ├── nomic-embed-text-v1.5.Q4_K_M.gguf                  # embedding RAG (required, tách khỏi chat)
 ├── Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf                 # vision OCR — KHÔNG dùng SEO/chat text
 ├── SmolVLM2-256M-Video-Instruct-Q8_0.gguf             # vision weak
 ├── mmproj-SmolVLM2-256M-Video-Instruct-Q8_0.gguf
 ```
 
-**Không có trong bundle (KHÔNG tải thêm):** qwen2.5-coder-0.5b, Qwen2.5-7B-Instruct, model cloud API.
-```
+**Không có trong bundle (KHÔNG tải thêm):** qwen2.5-coder-3b*, dual-lane SEO, qwen2.5-coder-0.5b (fallback thủ công), Qwen2.5-7B-Instruct, model cloud API.
 
 `AiLocalOpsController` (`GET /api/ai-local/models`) quét thư mục này và gợi ý theo RAM budget.
 
@@ -1954,6 +1969,9 @@ chmod +x scripts/download-ai-local-models.sh scripts/start-ai-local-vision.sh
 
 # Máy dev mạnh — thêm nomic + Qwen2-VL-2B
 ./scripts/download-ai-local-models.sh strong
+
+# M1 dev 16GB — worker Q8_0 + sidecar vision (config.local-m1.env)
+./scripts/download-ai-local-models.sh m1-16gb   # alias → worker Q8_0
 
 # Chỉ vision weak
 ./scripts/download-ai-local-models.sh vision-weak
@@ -2028,8 +2046,10 @@ sequenceDiagram
 ### weak-5gb (`config.local-5gb.env`)
 
 ```bash
-# Worker — giữ nguyên
-AI_LOCAL_LLAMA_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
+# Worker — 1 GGUF (code + SEO + guest chat)
+AI_LOCAL_LLAMA_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf
+AI_LOCAL_LLAMA_SEO_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf
+AI_LOCAL_LLAMA_SWAP_MODELS=false
 AI_LOCAL_LLAMA_THREADS=1
 
 # Embedding — hash (không load thêm model)
@@ -2045,13 +2065,37 @@ AI_ORCHESTRATION_MULTIMODAL_LOCAL_ONLY_REQUIRE_VISION=false
 ### strong (`config.local-strong.env`)
 
 ```bash
-AI_LOCAL_LLAMA_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
+AI_LOCAL_LLAMA_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf
+AI_LOCAL_LLAMA_SEO_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf
+AI_LOCAL_LLAMA_SWAP_MODELS=false
 AI_EMBEDDING_PROVIDER=llama_cpp_embedding
 AI_EMBEDDING_LLAMA_ENABLED=true
 AI_LOCAL_LLAMA_EMBEDDING_MODEL_PATH=./csm_datas/ai_local/model/nomic-embed-text-v1.5.Q4_K_M.gguf
 AI_ORCHESTRATION_MULTIMODAL_VISION_ENABLED=true
 AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8090/v1/chat/completions
 ```
+
+### m1-16gb (`config.local-m1.env` + `application-local-m1.properties`)
+
+```bash
+# Dev MacBook M1 16GB — cd backend && ./run-dev-m1.sh
+HEAP_SIZE=2560m
+AI_LOCAL_LLAMA_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf
+AI_LOCAL_LLAMA_SEO_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf
+AI_LOCAL_LLAMA_SWAP_MODELS=false
+AI_LOCAL_LLAMA_THREADS=4
+AI_LOCAL_LLAMA_CONTEXT_WINDOW=12288
+AI_LOCAL_LLAMA_MAX_TOKENS=1024
+AI_SEO_ARTICLE_MAX_TOKENS=2048
+AI_SEO_LOCALE_TRANSLATE_MAX_TOKENS=1024
+AI_SEO_ARTICLE_TARGET_WORDS_VI=350-500
+AI_EMBEDDING_PROVIDER=hash
+AI_ORCHESTRATION_MULTIMODAL_VISION_ENABLED=true
+AI_ORCHESTRATION_MULTIMODAL_VISION_NATIVE_ENABLED=false   # sidecar :8090 only
+AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8090/v1/chat/completions
+```
+
+**Quy ước M1 (2026-06):** Text worker **in-JVM** qua `de.kherud:llama:4.1.0`. **Không** `llama-cli`. **Không** preload vision in-JVM. Nếu OOM khi load Q8_0 → kiểm tra heap (`-Xmx2560m`) và không chạy sidecar vision cùng lúc preload.
 
 ## Q.8 Đa ngôn ngữ lập trình — kỳ vọng thực tế
 
@@ -2083,6 +2127,19 @@ AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8090/v1/chat/comple
 | 5 | Worker vẫn dùng Qwen2.5-Coder-1.5B, prompt ≤18k weak edit | ✓ |
 | 6 | Không load Qwen2.5-VL-3B cùng lúc worker trên 5GB | ✓ |
 
+### Q.10.1 Checklist M1 dev 16GB (2026-06)
+
+| # | Test | Pass |
+|---|------|------|
+| 1 | `./scripts/download-ai-local-models.sh m1-16gb` — có `qwen2.5-coder-1.5b-instruct-q8_0.gguf` | ☐ |
+| 2 | `cd backend && ./run-dev-m1.sh` — Spring Boot start, heap 2560m, **không** exit 137 | ☐ |
+| 3 | `POST /api/ai-code-stream` — chat/code SSE OK | ☐ |
+| 4 | `POST /api/ai-generate-seo-content` — không `SEO_GENERATION_FAILED` locale EN/ZH | ☐ |
+| 5 | Vision: sidecar `:8090` (native in-JVM **tắt**); scan ảnh qua HTTP | ☐ |
+| 6 | **Không** dùng `llama-cli` để debug load model | ☐ |
+
+**JNI dependency (pom):** `de.kherud:llama:4.1.0` — không snapshot `net.ladenthin` trên Mac cho đến khi Q.12 hoàn tất.
+
 ## Q.11 CẤM trên máy 5GB
 
 ```txt
@@ -2094,15 +2151,16 @@ AI_ORCHESTRATION_MULTIMODAL_VISION_ENDPOINT=http://127.0.0.1:8090/v1/chat/comple
 
 ## Q.12 Roadmap — SmolVLM GGUF in-JVM (không sidecar `:8090`)
 
-> **Production hiện tại (v3.x):** Vai trò 3 vẫn là **sidecar on-demand** (Q.1, Q.5). Mục này mô tả **các đường khả thi** để sau này load `SmolVLM2-256M-Video-Instruct-Q8_0.gguf` + `mmproj-...gguf` **trong cùng JVM** như Qwen Coder — **chưa triển khai** trong repo.
+> **Production hiện tại (v3.22):** Vai trò 3 vẫn là **sidecar on-demand** (Q.1, Q.5). `AiLocalLlamaVisionNativeService` tồn tại nhưng **stub** (native disabled) — M1/5GB dùng HTTP `:8090`. In-JVM SmolVLM chỉ khi nâng binding có `setMmproj` (Q.12.2 hướng A).
 
 ### Q.12.1 Vì sao sidecar trước, in-JVM sau
 
 | Ràng buộc | Sidecar (hiện tại) | In-JVM (mục tiêu) |
 |-----------|-------------------|-------------------|
 | RAM 5GB | Tách ~400–700MB khỏi heap Spring; **unload** sau scan | Phải **swap lane** hoặc unload Qwen trước khi infer vision |
-| `de.kherud:llama:4.1.0` (CSM) | Chỉ text GGUF | **Không** có `setMmproj` / image input |
-| Ops | Cần `llama-server` binary | Chỉ jar + `jllama` native (đã bundle) |
+| `de.kherud:llama:4.1.0` (CSM **v3.22**) | Chỉ text GGUF — **ổn định M1** | **Không** có `setMmproj` / image input |
+| `net.ladenthin:5.0.2-SNAPSHOT` | — | **Cấm prod M1** — exit 137 / native broken (2026-06) |
+| Ops | Cần `llama-server` binary (sidecar) | Chỉ jar + binding mtmd khi upstream sẵn sàng |
 
 ### Q.12.2 Bốn hướng in-JVM (theo thứ tự khuyến nghị)
 
@@ -4711,15 +4769,15 @@ ai.local.llama.max-prompt-chars-hard-cap=1000000
 ### Lane matrix (không trộn · **chỉ model bundled**)
 
 > **Quy tắc cứng:** Mọi lane text dùng **một file duy nhất**  
-> `backend/csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf`  
+> `backend/csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf`  
 > **Không** tải 7B/0.5B/model ngoài repo. Vision (`Qwen2.5-VL-3B`, SmolVLM2) **không** route SEO/chat.
 
 | Lane | Endpoint | Client | Model (bundled) |
 |------|----------|--------|-----------------|
-| Code / menu edit | `POST /ai-code-stream` (SSE) | `AiAssistantChat.tsx` | `qwen2.5-coder-1.5b` Q4_K_M |
+| Code / menu edit | `POST /ai-code-stream` (SSE) | `AiAssistantChat.tsx` | `qwen2.5-coder-1.5b` Q8_0 |
 | SEO creative params | `POST /ai-generate-seo-content` + `[CREATIVE_PARAMS_REQUEST]` | pipeline / legacy | Cùng 1.5B · max 384 tok |
-| SEO bài viết LMKT | Cùng endpoint, `LMKT_SEO_SYSTEM_PROMPT` | `generateSeoAntiAiOneShot()` sync | Cùng 1.5B · max **1536** tok |
-| SEO one-shot | `seoPipeline: anti_ai_one_shot` | `generateSeoAntiAiOneShot()` | Cùng 1.5B · 2 bước nội bộ · VI **900–1200 từ** |
+| SEO bài viết LMKT | Cùng endpoint, `LMKT_SEO_SYSTEM_PROMPT` | `generateSeoAntiAiOneShot()` sync | Cùng 1.5B · max **2048** tok (M1) |
+| SEO one-shot | `seoPipeline: anti_ai_one_shot` | `generateSeoAntiAiOneShot()` | Cùng 1.5B · **VI-first** → dịch EN/ZH (2–4 inference nhỏ) · VI **350–500 từ** |
 | **Guest web chat** | Socket.IO `chat` | `ChatHistoryContext` | Cùng 1.5B · **192 tok** · `generateContentFast` |
 
 **Máy chủ yếu (2 CPU, ~5GB RAM):** Guest chat `max-concurrent=1`; SEO **sync 1 HTTP** (không async job poll); embedding tách `nomic-embed-text-v1.5.Q4_K_M.gguf`.
@@ -4910,7 +4968,7 @@ ai.guest-chat.system-prompt=Bạn là tư vấn viên website...
 
 | File GGUF | Vai trò | Dùng cho lane |
 |-----------|---------|---------------|
-| `qwen2.5-coder-1.5b-instruct-q4_k_m.gguf` | **Text LLM duy nhất** | Code, SEO, guest chat |
+| `qwen2.5-coder-1.5b-instruct-q8_0.gguf` | **Text LLM duy nhất** | Code, SEO, guest chat |
 | `nomic-embed-text-v1.5.Q4_K_M.gguf` | Embedding RAG | Memory — **tách** khỏi chat weights |
 | `Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf` | Vision/OCR | Multimodal — **không** SEO/chat |
 | SmolVLM2 + mmproj | Vision nhẹ | Multimodal — **không** SEO/chat |
@@ -5729,7 +5787,7 @@ ai.local.greenfield.live-menu-pattern-index.enabled=true
 ai.local.greenfield.live-menu-pattern-index.max-leaves=120
 ```
 
-Model: `qwen2.5-coder-1.5b-instruct-q4_k_m.gguf` only.
+Model: `qwen2.5-coder-1.5b-instruct-q8_0.gguf` only.
 
 ---
 
@@ -5801,7 +5859,7 @@ AI Local CHỈ làm đúng khi:
   (4) Phần suy luận nghiệp vụ nặng → Java deterministic (scaffold/plan) khi model yếu (1.5B)
 ```
 
-**Model bundled CSM (2026):** `qwen2.5-coder-1.5b-instruct-q4_k_m.gguf` — server 5GB và dev strong. **Không** fine-tune trong repo; **không** tải 7B/14B vào bundle.
+**Model bundled CSM (2026):** `qwen2.5-coder-1.5b-instruct-q8_0.gguf` — server 5GB và dev strong. **Không** fine-tune trong repo; **không** tải 7B/14B vào bundle.
 
 ---
 
@@ -6015,5 +6073,5 @@ ai.local.greenfield.live-menu-pattern-index.max-leaves=120
 
 ---
 
-**Hết master brief v3.20.**  
+**Hết master brief v3.22.**  
 Chỉ dùng file này khi yêu cầu Cursor AI implement / làm lại CSM AI Local hoặc domain System Management liên quan RAG.

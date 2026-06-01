@@ -1,22 +1,21 @@
-Place GGUF model files in `backend/csm_datas/ai_local/model/`.
+Place GGUF model files in `backend/csm_datas/ai_local/model/` (dev) or `csm_datas/ai_local/model/` (prod jar).
 
-Dual-lane (default):
+## Text worker — **1 file duy nhất** (M1 + Linux 5GB + strong dev)
 
-| Lane | Model | Config key |
-|------|-------|------------|
-| CODE (menu JSON, DynamicCode, ai-code-stream) | `qwen2.5-coder-3b-instruct-q4_k_m.gguf` | `ai.local.llama.model-path` |
-| SEO (bài viết, dịch EN/ZH) | `qwen2.5-3b-instruct-q4_k_m.gguf` | `ai.local.llama.seo-model-path` |
+| File | Vai trò |
+|------|---------|
+| `qwen2.5-coder-1.5b-instruct-q8_0.gguf` | Code, menu JSON, SEO, guest chat |
 
-M1/16GB: `ai.local.llama.swap-models-on-lane-change=true` — chỉ 1 GGUF trong RAM, tự swap khi đổi lane.
+Tải: `./scripts/download-ai-local-models.sh worker`
 
-Character cutout (Lane 5 S1):
-  u2netp.onnx  (~4.7MB, auto-downloaded to csm_datas/models/u2netp.onnx on first extract)
+Config keys (cùng path cho CODE + SEO):
 
-Environment variables:
+```
+AI_LOCAL_LLAMA_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf
+AI_LOCAL_LLAMA_SEO_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf
+AI_LOCAL_LLAMA_SWAP_MODELS=false
+```
 
-  AI_LOCAL_LLAMA_MODEL_PATH      CODE lane .gguf
-  AI_LOCAL_LLAMA_SEO_MODEL_PATH  SEO lane .gguf
-  AI_LOCAL_LLAMA_SWAP_MODELS     true/false (default true on M1)
+Character cutout (Lane 5): `u2netp.onnx` — auto-downloaded on first use.
 
-If ai.local.llama.fail-fast=true and the CODE model file is missing, backend startup will fail with a clear error.
-SEO model missing → SEO API fails; code/menu still works.
+If `ai.local.llama.fail-fast=true` and the worker file is missing, startup fails with a clear error.

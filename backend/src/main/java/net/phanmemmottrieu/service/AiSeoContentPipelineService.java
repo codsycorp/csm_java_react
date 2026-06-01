@@ -57,6 +57,14 @@ public class AiSeoContentPipelineService {
     @Value("${ai.seo.locale-translate.fallback-on-incomplete:true}")
     private boolean localeTranslateFallbackEnabled;
 
+    /** Số lần thử lại dịch từng locale (en/zh) trên model 1.5B. */
+    @Value("${ai.seo.locale-translate.max-retries:2}")
+    private int localeTranslateMaxRetries;
+
+    /** Cắt content VI trước khi gửi prompt dịch — tránh vượt ctx model nhỏ. */
+    @Value("${ai.seo.locale-translate.max-source-chars:900}")
+    private int localeTranslateMaxSourceChars;
+
     private static final List<String> SEO_CORE_LOCALE_FIELDS = List.of(
         "title", "content", "title_en", "content_en", "title_zh", "content_zh");
 
@@ -393,6 +401,12 @@ public class AiSeoContentPipelineService {
         fillDerivedLocaleMetaFields(merged);
         syncAttributesFromLocales(merged);
 
+        if (!hasMinimalTrilingualSeo(merged)) {
+            ensureTrilingualLocalesWithRetry(merged, progressListener);
+            fillDerivedLocaleMetaFields(merged);
+            syncAttributesFromLocales(merged);
+        }
+
         if (hasCompleteTrilingualSeo(merged) || hasMinimalTrilingualSeo(merged)) {
             return serializeSeoArticleOrThrow(merged);
         }
@@ -432,21 +446,27 @@ public class AiSeoContentPipelineService {
         }
         clearStaleLocaleCopies(payload);
 
-        if (progressListener != null) {
-            progressListener.onProgress(Map.of(
-                "stage", "seo_locale_translate",
-                "message", "Đang dịch sang tiếng Anh...",
-                "percent", 82));
+        int maxAttempts = Math.max(1, localeTranslateMaxRetries + 1);
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            if (hasMinimalTrilingualSeo(payload)) {
+                break;
+            }
+            boolean compact = attempt > 0;
+            if (progressListener != null) {
+                progressListener.onProgress(Map.of(
+                    "stage", "seo_locale_translate",
+                    "message", compact ? "Dịch EN (lần " + (attempt + 1) + ", prompt rút gọn)..." : "Đang dịch sang tiếng Anh...",
+                    "percent", 82));
+            }
+            translateSingleLocale(payload, "en", progressListener, compact);
+            if (progressListener != null) {
+                progressListener.onProgress(Map.of(
+                    "stage", "seo_locale_translate",
+                    "message", compact ? "Dịch ZH (lần " + (attempt + 1) + ", prompt rút gọn)..." : "Đang dịch sang tiếng Trung...",
+                    "percent", 88));
+            }
+            translateSingleLocale(payload, "zh", progressListener, compact);
         }
-        translateSingleLocale(payload, "en", progressListener);
-
-        if (progressListener != null) {
-            progressListener.onProgress(Map.of(
-                "stage", "seo_locale_translate",
-                "message", "Đang dịch sang tiếng Trung...",
-                "percent", 88));
-        }
-        translateSingleLocale(payload, "zh", progressListener);
 
         if (hasMinimalTrilingualSeo(payload)) {
             log.info("SEO_LANE locale split ok (en+zh)");
@@ -458,6 +478,39 @@ public class AiSeoContentPipelineService {
         String raw = aiAssistantGatewayService.generateSeoContent(
             buildMinimalLocaleTranslatePrompt(payload), progressListener);
         mergeLocaleTranslateFields(payload, parseLocaleTranslateMap(raw));
+    }
+
+    private void translateSingleLocale(
+            Map<String, Object> payload,
+            String lang,
+            AiAssistantGatewayService.ProgressListener progressListener) {
+        translateSingleLocale(payload, lang, progressListener, false);
+    }
+
+    private void translateSingleLocale(
+            Map<String, Object> payload,
+            String lang,
+            AiAssistantGatewayService.ProgressListener progressListener,
+            boolean compact) {
+        if (!needsSingleLocaleTranslate(payload, lang)) {
+            return;
+        }
+        log.info("SEO_LANE locale translate {} (title+content, compact={})", lang, compact);
+        String raw = aiAssistantGatewayService.generateSeoContent(
+            compact
+                ? buildSingleLocaleTranslatePromptCompact(payload, lang)
+                : buildSingleLocaleTranslatePrompt(payload, lang),
+            progressListener);
+        mergeLocaleTranslateFields(payload, parseLocaleTranslateMap(raw));
+    }
+
+    private String truncateForLocaleTranslate(String htmlOrText) {
+        String text = str(htmlOrText, "");
+        int cap = Math.max(400, localeTranslateMaxSourceChars);
+        if (text.length() <= cap) {
+            return text;
+        }
+        return text.substring(0, cap);
     }
 
     /** Xóa field EN/ZH đang copy VI hoặc còn tiếng Việt — tránh merge bỏ qua bản dịch mới. */
@@ -488,19 +541,6 @@ public class AiSeoContentPipelineService {
                 payload.remove(field);
             }
         }
-    }
-
-    private void translateSingleLocale(
-            Map<String, Object> payload,
-            String lang,
-            AiAssistantGatewayService.ProgressListener progressListener) {
-        if (!needsSingleLocaleTranslate(payload, lang)) {
-            return;
-        }
-        log.info("SEO_LANE locale translate {} (title+content)", lang);
-        String raw = aiAssistantGatewayService.generateSeoContent(
-            buildSingleLocaleTranslatePrompt(payload, lang), progressListener);
-        mergeLocaleTranslateFields(payload, parseLocaleTranslateMap(raw));
     }
 
     private static boolean needsSingleLocaleTranslate(Map<String, Object> payload, String lang) {
@@ -1391,10 +1431,7 @@ public class AiSeoContentPipelineService {
     /** Dịch 4 field cốt lõi — prompt ngắn cho model yếu. */
     private String buildMinimalLocaleTranslatePrompt(Map<String, Object> vi) {
         String title = str(vi.get("title"), "");
-        String content = str(vi.get("content"), str(vi.get("html_content"), ""));
-        if (content.length() > 1800) {
-            content = content.substring(0, 1800);
-        }
+        String content = truncateForLocaleTranslate(str(vi.get("content"), str(vi.get("html_content"), "")));
         return ("""
             [SEO_LOCALE_TRANSLATE]
             Dịch sang tiếng Anh và tiếng Trung Giản thể. CHỈ 1 JSON, không markdown, không ...
@@ -1408,17 +1445,14 @@ public class AiSeoContentPipelineService {
             title_en, title_zh, content_en, content_zh
 
             title_en/title_zh: ~55-80 ký tự, KHÔNG tiếng Việt.
-            content_en/content_zh: HTML cùng cấu trúc, dịch tự nhiên, KHÔNG copy VI.
+            content_en/content_zh: HTML 2-4 đoạn <p> hoặc h3+p, dịch tự nhiên, KHÔNG copy VI.
             """).formatted(title, content).trim();
     }
 
     /** Một ngôn ngữ / một lần gọi — JSON 2 keys, dễ parse với model 1.5B. */
     private String buildSingleLocaleTranslatePrompt(Map<String, Object> vi, String lang) {
         String title = str(vi.get("title"), "");
-        String content = str(vi.get("content"), str(vi.get("html_content"), ""));
-        if (content.length() > 2200) {
-            content = content.substring(0, 2200);
-        }
+        String content = truncateForLocaleTranslate(str(vi.get("content"), str(vi.get("html_content"), "")));
         boolean en = "en".equalsIgnoreCase(lang);
         String langLabel = en ? "English" : "Simplified Chinese (简体中文)";
         String titleKey = en ? "title_en" : "title_zh";
@@ -1437,12 +1471,36 @@ public class AiSeoContentPipelineService {
 
             Rules:
             - %s: professional %s headline, 55-80 chars, must differ from Vietnamese title
-            - %s: HTML (h3/h4/p), same structure, natural %s translation
+            - %s: HTML (h3/h4/p), 2-5 paragraphs, natural %s translation (~120-200 words)
             """).formatted(
             langLabel, titleKey, contentKey,
             title, content,
             titleKey, en ? "English" : "Chinese",
             contentKey, en ? "English" : "Chinese").trim();
+    }
+
+    /** Retry dịch — plain text excerpt, output HTML ngắn (model 1.5B). */
+    private String buildSingleLocaleTranslatePromptCompact(Map<String, Object> vi, String lang) {
+        String title = str(vi.get("title"), "");
+        String plain = plainTextExcerpt(vi.get("content"), Math.min(600, localeTranslateMaxSourceChars));
+        boolean en = "en".equalsIgnoreCase(lang);
+        String titleKey = en ? "title_en" : "title_zh";
+        String contentKey = en ? "content_en" : "content_zh";
+        String langLabel = en ? "English" : "Simplified Chinese";
+        return ("""
+            [SEO_LOCALE_TRANSLATE]
+            Translate to %s. Return ONLY JSON: {"%s":"...","%s":"..."}
+
+            VI title: %s
+            VI summary: %s
+
+            %s: %s headline, no Vietnamese.
+            %s: HTML with <p> tags only, 2-3 short paragraphs in %s.
+            """).formatted(
+            langLabel, titleKey, contentKey,
+            title, plain,
+            titleKey, langLabel,
+            contentKey, langLabel).trim();
     }
 
     private String buildLocaleTranslatePrompt(Map<String, Object> vi) {

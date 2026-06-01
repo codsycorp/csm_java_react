@@ -1,10 +1,10 @@
 package net.phanmemmottrieu.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import net.ladenthin.llama.InferenceParameters;
-import net.ladenthin.llama.LlamaModel;
-import net.ladenthin.llama.LlamaOutput;
-import net.ladenthin.llama.ModelParameters;
+import de.kherud.llama.InferenceParameters;
+import de.kherud.llama.LlamaModel;
+import de.kherud.llama.LlamaOutput;
+import de.kherud.llama.ModelParameters;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
@@ -84,18 +84,18 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.enabled:false}")
     private boolean enabled;
 
-    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-3b-instruct-q4_k_m.gguf}")
+    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf}")
     private String modelPath;
 
-    /** SEO lane — Qwen2.5-3B-Instruct (natural language, không dùng Coder). */
-    @Value("${ai.local.llama.seo-model-path:./csm_datas/ai_local/model/qwen2.5-3b-instruct-q4_k_m.gguf}")
+    /** SEO lane — cùng worker 1.5B Q8_0 (single GGUF, PHẦN Q). */
+    @Value("${ai.local.llama.seo-model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf}")
     private String seoModelPath;
 
-    /** M1/8GB: chỉ giữ 1 GGUF trong RAM — swap khi đổi lane code ↔ seo. */
-    @Value("${ai.local.llama.swap-models-on-lane-change:true}")
+    /** Legacy: swap khi CODE/SEO khác file GGUF (mặc định false — 1 worker duy nhất). */
+    @Value("${ai.local.llama.swap-models-on-lane-change:false}")
     private boolean swapModelsOnLaneChange;
 
-    /** Lane đang load trong JVM (code = Coder-3B, seo = Instruct-3B). */
+    /** Lane logic (code vs seo prompts) — cùng model weights khi single GGUF. */
     public enum LocalModelLane {
         CODE,
         SEO
@@ -288,7 +288,7 @@ public class LlamaCppNativeService implements AIProvider {
         if (Files.isRegularFile(seoPath)) {
             log.info("Local llama SEO model path verified: {}", seoPath);
         } else {
-            log.warn("Local llama SEO model not found at {} — SEO lane sẽ fail cho đến khi có GGUF Qwen2.5-3B-Instruct",
+            log.warn("Local llama SEO model not found at {} — SEO lane sẽ fail cho đến khi có qwen2.5-coder-1.5b-instruct-q8_0.gguf",
                 seoPath);
         }
         log.info("Local llama dual-lane: code={} | seo={} | swapOnLaneChange={}",
@@ -528,7 +528,7 @@ public class LlamaCppNativeService implements AIProvider {
         return generateContentFastWithTaskTracking(prompt, maxOutputTokensCap, null, systemPromptOverride, lane);
     }
 
-    /** SEO lane — Qwen2.5-3B-Instruct. */
+    /** SEO lane — cùng worker qwen2.5-coder-1.5b-instruct-q8_0.gguf. */
     public String generateContentFastForSeo(String prompt, int maxOutputTokensCap, String systemPromptOverride) {
         return generateContentFast(prompt, maxOutputTokensCap, systemPromptOverride, LocalModelLane.SEO);
     }
@@ -1008,9 +1008,6 @@ public class LlamaCppNativeService implements AIProvider {
             if (disableKvOffload) {
                 parameters.disableKvOffload();
             }
-            if (nativeDisableFit || resolveRuntimeProfile() == RuntimeProfile.CONSERVATIVE) {
-                parameters.setFit(false);
-            }
             if (nativeSkipWarmup || resolveRuntimeProfile() == RuntimeProfile.CONSERVATIVE) {
                 parameters.skipWarmup();
             }
@@ -1047,10 +1044,7 @@ public class LlamaCppNativeService implements AIProvider {
 
     private int effectiveGpuLayers() {
         // -1 means auto/all according to backend, otherwise clamp to safe positive range.
-        if (gpuLayers < 0) {
-            return -1;
-        }
-        return Math.max(0, Math.min(80, gpuLayers));
+        return gpuLayers < 0 ? -1 : Math.max(0, Math.min(80, gpuLayers));
     }
 
     private int effectiveThreads() {
