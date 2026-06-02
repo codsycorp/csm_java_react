@@ -3334,6 +3334,28 @@ function resolveAuthToken(seftObj) {
   return "";
 }
 
+function normalizeCsmApiBase(raw) {
+  const trimmed = String(raw || "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  try {
+    const url = new URL(trimmed);
+    const host = (url.hostname || "").toLowerCase();
+    // api.* — cùng pattern get-table-data / update-table-data (không thêm /api).
+    if (host.startsWith("api.")) {
+      return `${url.protocol}//${url.host}`;
+    }
+    const path = (url.pathname || "/").replace(/\/+$/, "");
+    if (!path || path === "/") {
+      return `${url.protocol}//${url.host}/api`;
+    }
+    return path.endsWith("/api")
+      ? `${url.protocol}//${url.host}${path}`
+      : `${url.protocol}//${url.host}${path}/api`;
+  } catch (_e) {
+    return trimmed;
+  }
+}
+
 function resolveContext(seftObj) {
   const win = typeof window !== 'undefined' ? window : {};
   const seft = seftObj || win.seft || {};
@@ -3342,9 +3364,10 @@ function resolveContext(seftObj) {
   const domainFromHost = normalizeDomain(win.location?.hostname);
   const domain = domainFromSeft || domainFromHost || "csmbridge.net";
 
-  const apiBase = seft.domain_api_url
+  const rawApiBase = seft.domain_api_url
     || win.domain_api_url
     || (win.location?.origin ? `${win.location.origin}/api` : "");
+  const apiBase = normalizeCsmApiBase(rawApiBase);
 
   const token = resolveAuthToken(seft);
 
@@ -7991,10 +8014,12 @@ function aiLaneTesterNotify(message, type = "info") {
 }
 
 function resolveAiLocalApiBase(ctx) {
-  const base = String(ctx?.apiBase || "").replace(/\/+$/, "");
-  return base || (typeof window !== "undefined" && window.location?.origin
-    ? `${window.location.origin}/api`
-    : "");
+  const fromCtx = normalizeCsmApiBase(ctx?.apiBase || "");
+  if (fromCtx) return fromCtx;
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return normalizeCsmApiBase(`${window.location.origin}/api`);
+  }
+  return "";
 }
 
 async function callAiLocalJsonApi(path, body, ctx, options = {}) {

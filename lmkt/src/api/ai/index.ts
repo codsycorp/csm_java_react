@@ -68,6 +68,8 @@ Dựa vào các dữ liệu đầu vào, hãy viết một bài viết hoàn ch�
 
 // Long-running AI generation can take several minutes with server-side chunk/retry flow.
 // Set VITE_AI_TIMEOUT_MS=0 to disable client timeout for this endpoint.
+// Route: cùng pattern get-table-data / update-table-data — POST qua ky prefixUrl + "ai-generate-seo-content"
+// (dev: /api/ai-generate-seo-content → Vite proxy; prod: https://api.csmbridge.net/ai-generate-seo-content)
 const AI_TIMEOUT_ENV = Number(import.meta.env.VITE_AI_TIMEOUT_MS);
 const AI_TIMEOUT_FALLBACK_MS = 30 * 60 * 1000;
 const AI_TIMEOUT_MS = Number.isFinite(AI_TIMEOUT_ENV) && AI_TIMEOUT_ENV > 0
@@ -226,7 +228,9 @@ export async function generateSeoAntiAiOneShot(
 	} catch (error: any) {
 		const status = error?.response?.status;
 		const hint = status === 404
-			? "Endpoint /ai-generate-seo-content không tìm thấy — redeploy backend + reload nginx."
+			? "Endpoint /ai-generate-seo-content không tìm thấy — redeploy backend jar mới + reload nginx."
+			: status === 401
+				? "Chưa đăng nhập hoặc phiên hết hạn — đăng nhập lại LMKT (csm-token / refreshToken cookie)."
 			: status === 504
 				? "Nginx/backend timeout — tăng proxy_read_timeout hoặc kiểm tra model SEO local."
 				: "";
@@ -360,7 +364,9 @@ export async function generateSeoContentWithPrompt(prompt: string, options?: Gen
 	} catch (error: any) {
 		const status = error?.response?.status;
 		const hint = status === 404
-			? "Endpoint /ai-generate-seo-content không tìm thấy — redeploy backend + reload nginx."
+			? "Endpoint /ai-generate-seo-content không tìm thấy — redeploy backend jar mới + reload nginx."
+			: status === 401
+				? "Chưa đăng nhập hoặc phiên hết hạn — đăng nhập lại LMKT (csm-token / refreshToken cookie)."
 			: status === 504
 				? "Nginx/backend timeout — tăng proxy_read_timeout hoặc kiểm tra model SEO local."
 				: "";

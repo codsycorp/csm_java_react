@@ -65,8 +65,11 @@ function getClientId() {
 const API_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 10000;
 
 const defaultConfig: Options = {
-   // The input argument cannot start with a slash / when using prefixUrl option.
-   prefixUrl: import.meta.env.VITE_API_BASE_URL,
+	// Giống frontend-admin: dev qua Vite proxy /api → backend; prod gọi thẳng api host.
+	// Endpoint không có slash đầu: get-table-data, update-table-data, ai-generate-seo-content.
+	prefixUrl: import.meta.env.DEV
+		? "/api"
+		: (import.meta.env.VITE_API_BASE_URL || "/api"),
    timeout: API_TIMEOUT,
    credentials: 'include', // LUÔN gửi cookie lên backend
    retry: {

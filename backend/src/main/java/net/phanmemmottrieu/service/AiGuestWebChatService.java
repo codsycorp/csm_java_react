@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Iterator;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 
@@ -64,8 +65,61 @@ public class AiGuestWebChatService {
     @Value("${ai.guest-chat.system-prompt:Bạn là tư vấn viên website chuyên nghiệp. Trả lời ngắn gọn, lịch sự, đúng ngôn ngữ khách. Không markdown. Không nhắc AI/hệ thống/appId.}")
     private String guestChatSystemPrompt;
 
+    /** Fail-fast when code/SEO lane already holds llama (avoid guest thread blocking on modelLock). */
+    @Value("${ai.guest-chat.skip-when-worker-busy:true}")
+    private boolean skipWhenWorkerBusy;
+
+    /** Skip AI when JVM free heap below threshold (weak 5GB protection). 0 = disabled. */
+    @Value("${ai.guest-chat.min-free-heap-mb:0}")
+    private int minFreeHeapMb;
+
+    /** Cap delayed welcome/no-reply tasks waiting on chatAiScheduler. */
+    @Value("${ai.guest-chat.max-pending-scheduled:12}")
+    private int maxPendingScheduled;
+
+    private static final int GUEST_COOLDOWN_MAP_MAX_ENTRIES = 4096;
+
     public boolean isEnabled() {
         return guestChatAiEnabled;
+    }
+
+    public int getMaxConcurrentInferences() {
+        return maxConcurrentInferences;
+    }
+
+    public int getMaxOutputTokens() {
+        return maxOutputTokens;
+    }
+
+    public int getMaxPendingScheduled() {
+        return Math.max(1, maxPendingScheduled);
+    }
+
+    /**
+     * Returns true when too many guest AI jobs are already queued (welcome + no-admin-reply).
+     */
+    public boolean isSchedulingSaturated(int pendingWelcomeTasks, int pendingNoReplyTasks) {
+        int pending = Math.max(0, pendingWelcomeTasks) + Math.max(0, pendingNoReplyTasks);
+        return pending >= getMaxPendingScheduled();
+    }
+
+    public Map<String, Object> describeStatus(LlamaCppNativeService llama) {
+        Map<String, Object> out = new HashMap<>();
+        out.put("enabled", guestChatAiEnabled);
+        out.put("maxConcurrent", maxConcurrentInferences);
+        out.put("maxOutputTokens", maxOutputTokens);
+        out.put("perGuestCooldownMs", perGuestCooldownMs);
+        out.put("skipWhenWorkerBusy", skipWhenWorkerBusy);
+        out.put("minFreeHeapMb", minFreeHeapMb);
+        out.put("maxPendingScheduled", getMaxPendingScheduled());
+        out.put("guestCooldownEntries", lastInferenceByGuestKey.size());
+        if (llama != null) {
+            out.put("workerInferenceInProgress", llama.isInferenceInProgress());
+            out.put("workerInFlightCount", llama.getInFlightRequestCount());
+            out.put("workerCircuitOpen", llama.isCircuitOpen());
+            out.put("workerHealthy", llama.isHealthy());
+        }
+        return out;
     }
 
     public long getWelcomeDelayMs() {
@@ -148,6 +202,18 @@ public class AiGuestWebChatService {
             log.warn("Local AI circuit open for {}: using fallback text", purpose);
             return fallbackText;
         }
+        if (skipWhenWorkerBusy && llamaCppNativeService.isInferenceInProgress()) {
+            log.info("Guest chat AI skipped — local worker busy (purpose={})", purpose);
+            return fallbackText;
+        }
+        if (minFreeHeapMb > 0) {
+            long freeHeapMb = Runtime.getRuntime().freeMemory() / (1024L * 1024L);
+            if (freeHeapMb < minFreeHeapMb) {
+                log.warn("Guest chat AI skipped — low free heap {}MB < {}MB (purpose={})",
+                    freeHeapMb, minFreeHeapMb, purpose);
+                return fallbackText;
+            }
+        }
         if (guestKey != null && isOnGuestCooldown(guestKey)) {
             log.info("Guest chat AI cooldown active for {} purpose={} — fallback", guestKey, purpose);
             return fallbackText;
@@ -167,6 +233,7 @@ public class AiGuestWebChatService {
             String text = extractAiText(aiRaw, fallbackText);
             if (guestKey != null && !guestKey.isBlank()) {
                 lastInferenceByGuestKey.put(guestKey.trim(), System.currentTimeMillis());
+                trimGuestCooldownMapIfNeeded();
             }
             return text;
         } catch (Exception e) {
@@ -243,6 +310,29 @@ public class AiGuestWebChatService {
         }
         Long last = lastInferenceByGuestKey.get(guestKey.trim());
         return last != null && System.currentTimeMillis() - last < perGuestCooldownMs;
+    }
+
+    private void trimGuestCooldownMapIfNeeded() {
+        if (lastInferenceByGuestKey.size() <= GUEST_COOLDOWN_MAP_MAX_ENTRIES) {
+            return;
+        }
+        long cutoff = System.currentTimeMillis() - Math.max(perGuestCooldownMs * 4L, 86_400_000L);
+        for (Iterator<Map.Entry<String, Long>> it = lastInferenceByGuestKey.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<String, Long> entry = it.next();
+            if (entry.getValue() == null || entry.getValue() < cutoff) {
+                it.remove();
+            }
+        }
+        if (lastInferenceByGuestKey.size() > GUEST_COOLDOWN_MAP_MAX_ENTRIES) {
+            int toRemove = lastInferenceByGuestKey.size() - GUEST_COOLDOWN_MAP_MAX_ENTRIES;
+            for (String key : lastInferenceByGuestKey.keySet()) {
+                if (toRemove <= 0) {
+                    break;
+                }
+                lastInferenceByGuestKey.remove(key);
+                toRemove--;
+            }
+        }
     }
 
     private String buildRecentGuestConversationContext(

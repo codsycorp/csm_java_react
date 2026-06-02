@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import net.phanmemmottrieu.service.AiGuestWebChatService;
 import net.phanmemmottrieu.service.AiLocalRuntimeTierService;
 import net.phanmemmottrieu.service.AiMediaScriptRenderService;
 import net.phanmemmottrieu.service.AiMediaStoryboardPlannerService;
@@ -124,6 +125,9 @@ public class AiLocalOpsController {
     @Autowired(required = false)
     private AiLocalLlamaVisionNativeService aiLocalLlamaVisionNativeService;
 
+    @Autowired(required = false)
+    private AiGuestWebChatService aiGuestWebChatService;
+
     @Value("${ai.local.only.enabled:true}")
     private boolean aiLocalOnlyEnabled;
 
@@ -181,6 +185,18 @@ public class AiLocalOpsController {
         reasoning.put("runtimeProfile", runtimeProfile);
         reasoning.put("contextWindow", contextWindow);
         reasoning.put("maxTokens", maxTokens);
+        if (reasoningBeanPresent) {
+            reasoning.put("inFlightRequests", llamaCppNativeService.getInFlightRequestCount());
+            reasoning.put("inferenceInProgress", llamaCppNativeService.isInferenceInProgress());
+        }
+
+        Map<String, Object> guestChat = new LinkedHashMap<>();
+        if (aiGuestWebChatService != null) {
+            guestChat.putAll(aiGuestWebChatService.describeStatus(llamaCppNativeService));
+        } else {
+            guestChat.put("enabled", false);
+            guestChat.put("beanPresent", false);
+        }
 
         vision.put("enabled", visionEnabled);
         vision.put("endpoint", visionEndpoint == null ? "" : visionEndpoint);
@@ -214,6 +230,7 @@ public class AiLocalOpsController {
             out.put("runtimeTier", aiLocalRuntimeTierService.describeRuntime());
         }
         out.put("reasoning", reasoning);
+        out.put("guestChat", guestChat);
         out.put("vision", vision);
         out.put("ffmpeg", ffmpeg);
         out.put("characterExtract", characterExtract);
@@ -261,30 +278,6 @@ public class AiLocalOpsController {
                 true,
                 true,
                 "q8_0"));
-            reasoningCandidates.add(modelCandidate(
-                "qwen2.5-coder-1.5b-instruct-q5_k_m.gguf",
-                "reasoning",
-                "balanced",
-                "~1.1-1.7GB",
-                true,
-                true,
-                "q5_k_m"));
-            reasoningCandidates.add(modelCandidate(
-                "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf",
-                "reasoning",
-                "balanced",
-                "~1.0-1.6GB",
-                true,
-                true,
-                "q4_k_m"));
-            reasoningCandidates.add(modelCandidate(
-                "qwen2.5-coder-0.5b-instruct-q4_k_m.gguf",
-                "reasoning",
-                "very-light",
-                "~0.4-0.7GB",
-                true,
-                false,
-                "q4_k_m"));
         }
 
         if (visionCandidates.isEmpty()) {

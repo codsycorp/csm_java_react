@@ -691,6 +691,15 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         String key = guestKey(appId, guestIdentity);
         String fallbackText = fallbackNoAdminReplyByLanguage(guestMessage, preferredLocale);
 
+        if (aiGuestWebChatService != null
+            && aiGuestWebChatService.isSchedulingSaturated(
+                pendingGuestWelcomeTasks.size(), pendingGuestNoReplyTasks.size())) {
+            logger.warn("Guest AI scheduling saturated — no-reply fallback text only appId={} guestIdentity={}",
+                appId, guestIdentity);
+            dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, fallbackText, "ai_auto_no_admin_reply_fallback", preferredLocale);
+            return;
+        }
+
         ScheduledFuture<?> future = chatAiScheduler.schedule(() -> {
             try {
                 if (hasHumanAdminReplyAfter(appId, guestIdentity, guestPhone, guestMessageTimestamp)) {
@@ -801,6 +810,14 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         final String normalizedLocale = normalizeLocale(preferredLocale);
         final String fallbackWelcome = fallbackWelcomeByLocale(normalizedLocale);
         final String appPhoneKeyFinal = appPhoneKey;
+
+        if (aiGuestWebChatService != null
+            && aiGuestWebChatService.isSchedulingSaturated(
+                pendingGuestWelcomeTasks.size(), pendingGuestNoReplyTasks.size())) {
+            logger.warn("Guest AI scheduling saturated — skip welcome AI appId={} guestIdentity={}", appId, guestIdentity);
+            return;
+        }
+
         Future<?> future = chatAiScheduler.schedule(() -> {
             try {
                 java.util.List<ChatMessage> latestHistory = chatPersistenceService.getHistoryByGuestIdentity(appId, guestIdentity, guestPhone, 5);

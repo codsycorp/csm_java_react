@@ -212,6 +212,15 @@ public class LlamaCppNativeService implements AIProvider {
 
     // ── Circuit breaker helpers ────────────────────────────────────────────────
 
+    /** True when any lane holds the native worker (SEO, code-stream, guest chat, …). */
+    public boolean isInferenceInProgress() {
+        return inFlightRequests.get() > 0;
+    }
+
+    public int getInFlightRequestCount() {
+        return inFlightRequests.get();
+    }
+
     /** Returns true when the circuit is open (model is in cooldown and should be skipped). */
     public boolean isCircuitOpen() {
         long openedAt = circuitOpenedAt;
