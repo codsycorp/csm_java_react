@@ -1,3 +1,4 @@
+import ky, { HTTPError } from "ky";
 import { request } from "#src/utils";
 import type { SeoContentParams, SeoContentResult, GenerateSeoContentRequest } from "./types";
 
@@ -91,6 +92,56 @@ type GenerateSeoContentOptions = {
 	taskType?: string;
 };
 
+/** Fallback URLs khi ky prefixUrl trả 404 — cùng pattern get-table-data trên api.* host. */
+function resolveSeoDirectPostUrls(): string[] {
+	const urls = new Set<string>();
+	if (import.meta.env.DEV && typeof window !== "undefined") {
+		urls.add(`${window.location.origin.replace(/\/+$/, "")}/api/ai-generate-seo-content`);
+	}
+	const raw = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
+	if (raw.startsWith("http")) {
+		try {
+			const u = new URL(raw);
+			const host = u.hostname.toLowerCase();
+			if (host.startsWith("api.")) {
+				urls.add(`${u.origin}/ai-generate-seo-content`);
+			}
+			const path = (u.pathname || "").replace(/\/+$/, "");
+			urls.add(`${u.origin}${path}/ai-generate-seo-content`.replace(/([^:]\/)\/+/g, "$1"));
+			urls.add(`${u.origin}/api/ai-generate-seo-content`);
+		} catch {
+			// ignore invalid VITE_API_BASE_URL
+		}
+	}
+	return [...urls];
+}
+
+async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiResponse<any>> {
+	const requestOptions = {
+		json,
+		timeout: AI_REQUEST_TIMEOUT,
+		retry: { limit: 0 },
+	};
+	try {
+		return await request.post("ai-generate-seo-content", requestOptions).json<ApiResponse<any>>();
+	} catch (err: unknown) {
+		const status = err instanceof HTTPError ? err.response.status : 0;
+		if (status !== 404) throw err;
+		let lastErr: unknown = err;
+		for (const url of resolveSeoDirectPostUrls()) {
+			try {
+				return await ky.post(url, { ...requestOptions, credentials: "include" }).json<ApiResponse<any>>();
+			} catch (fallbackErr) {
+				lastErr = fallbackErr;
+				if (!(fallbackErr instanceof HTTPError) || fallbackErr.response.status !== 404) {
+					throw fallbackErr;
+				}
+			}
+		}
+		throw lastErr;
+	}
+}
+
 async function generateSeoContentWithPromptAsync(prompt: string, options?: GenerateSeoContentOptions): Promise<ApiResponse<any>> {
 	return submitSeoContentJobAsync(
 		{
@@ -105,17 +156,11 @@ async function submitSeoContentJobAsync(
 	body: Record<string, unknown>,
 	options?: GenerateSeoContentOptions,
 ): Promise<ApiResponse<any>> {
-	const submitResponse = await request
-		.post("ai-generate-seo-content", {
-			json: {
-				...body,
-				mode: "submit",
-				async: true,
-			},
-			timeout: AI_REQUEST_TIMEOUT,
-			retry: { limit: 0 },
-		})
-		.json<ApiResponse<any>>();
+	const submitResponse = await postSeoGenerateContent({
+		...body,
+		mode: "submit",
+		async: true,
+	});
 
 	const submitPayload = (submitResponse?.result || (submitResponse as any)?.data || {}) as Record<string, any>;
 	const jobId = submitPayload?.jobId;
@@ -194,7 +239,47 @@ export type SeoAntiAiOneShotContext = {
 };
 
 /**
- * LMKT anti-AI SEO (tùy chọn): một HTTP sync — client gửi seoContext, chờ JSON bài viết đầy đủ.
+ * LMKT SEO Writer 2026: một HTTP sync — E-E-A-T, FAQ schema, semantic SEO (local AI).
+ */
+export async function generateSeoWriter2026OneShot(
+	seoContext: SeoAntiAiOneShotContext,
+	options?: GenerateSeoContentOptions,
+) {
+	try {
+		const prompt = String(seoContext?.prompt || "").trim();
+		const body: Record<string, unknown> = {
+			mode: "sync",
+			async: false,
+			taskType: options?.taskType || "seo_writer_2026",
+			seoPipeline: "seo_writer_2026",
+			seoContext: prompt ? { ...seoContext, prompt } : seoContext,
+		};
+		if (prompt) {
+			body.prompt = prompt;
+		}
+		if (options?.preferAsync === true) {
+			return await submitSeoContentJobAsync(body, options);
+		}
+		return await postSeoGenerateContent(body);
+	} catch (error: any) {
+		const status = error?.response?.status;
+		const hint = status === 404
+			? "Endpoint /ai-generate-seo-content không tìm thấy — redeploy backend jar mới + reload nginx."
+			: status === 401
+				? "Chưa đăng nhập hoặc phiên hết hạn — đăng nhập lại LMKT (csm-token / refreshToken cookie)."
+			: status === 504
+				? "Nginx/backend timeout — tăng proxy_read_timeout hoặc kiểm tra model SEO local."
+				: "";
+		return {
+			code: -1,
+			result: {} as any,
+			message: [error.message || "Unknown error occurred", hint].filter(Boolean).join(" — "),
+			success: false,
+		};
+	}
+}
+
+/**
  * Luồng production mặc định: generateSeoContentWithPrompt(getAntiAIPrompt(...)) — tách biệt menu/code SSE.
  */
 export async function generateSeoAntiAiOneShot(
@@ -217,14 +302,7 @@ export async function generateSeoAntiAiOneShot(
 		if (options?.preferAsync === true) {
 			return await submitSeoContentJobAsync(body, options);
 		}
-		const response = await request
-			.post("ai-generate-seo-content", {
-				json: body,
-				timeout: AI_REQUEST_TIMEOUT,
-				retry: { limit: 0 },
-			})
-			.json<ApiResponse<any>>();
-		return response;
+		return await postSeoGenerateContent(body);
 	} catch (error: any) {
 		const status = error?.response?.status;
 		const hint = status === 404
@@ -298,14 +376,7 @@ export async function generateSeoContent(params: SeoContentParams, customPrompt?
 	};
 	
 	try {
-		const response = await request
-			.post("ai-generate-seo-content", {
-				json: requestBody,
-				timeout: AI_REQUEST_TIMEOUT,
-			})
-			.json<ApiResponse<SeoContentResult>>();
-		
-		return response;
+		return await postSeoGenerateContent(requestBody);
 	} catch (error: any) {
 		return {
 			code: -1,
@@ -349,18 +420,10 @@ export async function generateSeoContentWithPrompt(prompt: string, options?: Gen
 			return await generateSeoContentWithPromptAsync(prompt, options);
 		}
 
-		const response = await request
-			.post("ai-generate-seo-content", {
-				json: {
-					...requestBody,
-					taskType: options?.taskType || "seo_content",
-				},
-				timeout: AI_REQUEST_TIMEOUT,
-				retry: { limit: 0 },
-			})
-			.json<ApiResponse<any>>(); // any để chấp nhận custom fields
-		
-		return response;
+		return await postSeoGenerateContent({
+			...requestBody,
+			taskType: options?.taskType || "seo_content",
+		});
 	} catch (error: any) {
 		const status = error?.response?.status;
 		const hint = status === 404

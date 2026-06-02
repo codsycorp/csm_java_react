@@ -1,3 +1,4 @@
+import ky, { HTTPError } from "ky";
 import { request } from "#src/utils";
 import type { SeoContentParams, SeoContentResult, GenerateSeoContentRequest } from "./types";
 
@@ -109,6 +110,55 @@ function resolveAiOptions(options?: GenerateSeoContentOptions): GenerateSeoConte
 	};
 }
 
+function resolveSeoDirectPostUrls(): string[] {
+	const urls = new Set<string>();
+	if (import.meta.env.DEV && typeof window !== "undefined") {
+		urls.add(`${window.location.origin.replace(/\/+$/, "")}/api/ai-generate-seo-content`);
+	}
+	const raw = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
+	if (raw.startsWith("http")) {
+		try {
+			const u = new URL(raw);
+			const host = u.hostname.toLowerCase();
+			if (host.startsWith("api.")) {
+				urls.add(`${u.origin}/ai-generate-seo-content`);
+			}
+			const path = (u.pathname || "").replace(/\/+$/, "");
+			urls.add(`${u.origin}${path}/ai-generate-seo-content`.replace(/([^:]\/)\/+/g, "$1"));
+			urls.add(`${u.origin}/api/ai-generate-seo-content`);
+		} catch {
+			// ignore
+		}
+	}
+	return [...urls];
+}
+
+async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiResponse<any>> {
+	const requestOptions = {
+		json,
+		timeout: AI_REQUEST_TIMEOUT,
+		retry: { limit: 0 },
+	};
+	try {
+		return await request.post("ai-generate-seo-content", requestOptions).json<ApiResponse<any>>();
+	} catch (err: unknown) {
+		const status = err instanceof HTTPError ? err.response.status : 0;
+		if (status !== 404) throw err;
+		let lastErr: unknown = err;
+		for (const url of resolveSeoDirectPostUrls()) {
+			try {
+				return await ky.post(url, { ...requestOptions, credentials: "include" }).json<ApiResponse<any>>();
+			} catch (fallbackErr) {
+				lastErr = fallbackErr;
+				if (!(fallbackErr instanceof HTTPError) || fallbackErr.response.status !== 404) {
+					throw fallbackErr;
+				}
+			}
+		}
+		throw lastErr;
+	}
+}
+
 async function generateSeoContentWithPromptAsync(prompt: string, options?: GenerateSeoContentOptions): Promise<ApiResponse<any>> {
 	const resolvedOptions = resolveAiOptions(options);
 	return submitSeoContentJobAsync(
@@ -125,16 +175,11 @@ async function submitSeoContentJobAsync(
 	body: Record<string, unknown>,
 	options?: GenerateSeoContentOptions,
 ): Promise<ApiResponse<any>> {
-	const submitResponse = await request
-		.post("ai-generate-seo-content", {
-			json: {
-				...body,
-				mode: "submit",
-				async: true,
-			},
-			timeout: AI_REQUEST_TIMEOUT,
-		})
-		.json<ApiResponse<any>>();
+	const submitResponse = await postSeoGenerateContent({
+		...body,
+		mode: "submit",
+		async: true,
+	});
 
 	const submitPayload = (submitResponse?.result || (submitResponse as any)?.data || {}) as Record<string, any>;
 	const jobId = submitPayload?.jobId;
@@ -232,13 +277,7 @@ export async function generateSeoAntiAiOneShot(
 		if (options?.preferAsync === true) {
 			return await submitSeoContentJobAsync(body, options);
 		}
-		const response = await request
-			.post("ai-generate-seo-content", {
-				json: body,
-				timeout: AI_REQUEST_TIMEOUT,
-			})
-			.json<ApiResponse<any>>();
-		return response;
+		return await postSeoGenerateContent(body);
 	} catch (error: any) {
 		return {
 			code: -1,
@@ -304,14 +343,7 @@ export async function generateSeoContent(params: SeoContentParams, customPrompt?
 	};
 	
 	try {
-		const response = await request
-			.post("ai-generate-seo-content", {
-				json: requestBody,
-				timeout: AI_REQUEST_TIMEOUT,
-			})
-			.json<ApiResponse<SeoContentResult>>();
-		
-		return response;
+		return await postSeoGenerateContent(requestBody);
 	} catch (error: any) {
 		return {
 			code: -1,
@@ -356,18 +388,11 @@ export async function generateSeoContentWithPrompt(prompt: string, options?: Gen
 			return await generateSeoContentWithPromptAsync(prompt, resolvedOptions);
 		}
 
-		const response = await request
-			.post("ai-generate-seo-content", {
-				json: {
-					...requestBody,
-					taskType: resolvedOptions.taskType || "seo_content",
-					menuDesignByDev: resolvedOptions.menuDesignByDev,
-				},
-				timeout: AI_REQUEST_TIMEOUT,
-			})
-			.json<ApiResponse<any>>(); // any để chấp nhận custom fields
-		
-		return response;
+		return await postSeoGenerateContent({
+			...requestBody,
+			taskType: resolvedOptions.taskType || "seo_content",
+			menuDesignByDev: resolvedOptions.menuDesignByDev,
+		});
 	} catch (error: any) {
 		return {
 			code: -1,

@@ -31,6 +31,9 @@ public class AiSeoContentPipelineService {
     @Autowired
     private AiAssistantGatewayService aiAssistantGatewayService;
 
+    @Autowired(required = false)
+    private AiSeoWriter2026Prompts aiSeoWriter2026Prompts;
+
     @Value("${ai.seo.pipeline.enabled:true}")
     private boolean seoPipelineEnabled;
 
@@ -88,7 +91,9 @@ public class AiSeoContentPipelineService {
             return false;
         }
         String pipeline = String.valueOf(params.getOrDefault("seoPipeline", "")).trim().toLowerCase(Locale.ROOT);
-        return "anti_ai_one_shot".equals(pipeline) || "seo_article_one_shot".equals(pipeline);
+        return "anti_ai_one_shot".equals(pipeline)
+            || "seo_article_one_shot".equals(pipeline)
+            || "seo_writer_2026".equals(pipeline);
     }
 
     /**
@@ -106,7 +111,8 @@ public class AiSeoContentPipelineService {
         String clientPrompt = str(ctx.get("prompt"), "");
         if (!clientPrompt.isBlank()) {
             log.info("SEO_LANE using client prompt (chars={})", clientPrompt.length());
-            String articleRaw = aiAssistantGatewayService.generateSeoContent(clientPrompt, progressListener);
+            String enrichedPrompt = enrichPromptWithWriter2026(clientPrompt, ctx);
+            String articleRaw = aiAssistantGatewayService.generateSeoContent(enrichedPrompt, progressListener, ctx);
             return finalizeSeoArticle(articleRaw, str(ctx.get("industry"), "bat-dong-san"),
                 str(ctx.get("topic"), str(ctx.get("content"), "")),
                 str(ctx.get("domainKey"), "lmkt"),
@@ -136,8 +142,10 @@ public class AiSeoContentPipelineService {
                 "percent", 15));
         }
 
-        String articlePrompt = buildCompactViOnlyArticlePrompt(industry, topic, domainKey, creative, ctx);
-        String articleRaw = aiAssistantGatewayService.generateSeoContent(articlePrompt, progressListener);
+        String articlePrompt = isSeoWriter2026Pipeline(ctx)
+            ? buildSeoWriter2026ArticlePrompt(industry, topic, domainKey, creative, ctx)
+            : buildCompactViOnlyArticlePrompt(industry, topic, domainKey, creative, ctx);
+        String articleRaw = aiAssistantGatewayService.generateSeoContent(articlePrompt, progressListener, ctx);
         String normalized = finalizeViFirstSeoArticle(articleRaw, industry, topic, domainKey, creative, ctx, progressListener);
 
         if (progressListener != null) {
@@ -309,7 +317,7 @@ public class AiSeoContentPipelineService {
                 retryPrompt = buildSeoArticleRetryPrompt(industry, topic, domainKey, creative, ctx, merged);
             }
             int scoreBeforeRetry = scoreFilledSeoFields(merged);
-            String retryRaw = aiAssistantGatewayService.generateSeoContent(retryPrompt, progressListener);
+            String retryRaw = aiAssistantGatewayService.generateSeoContent(retryPrompt, progressListener, ctx);
             Map<String, Object> retryParsed = parseSeoArticleMap(retryRaw);
             if (scoreFilledSeoFields(retryParsed) > scoreBeforeRetry) {
                 mergeSeoArticleMaps(merged, retryParsed);
@@ -379,7 +387,7 @@ public class AiSeoContentPipelineService {
                 Cấm dùng ... hoặc bỏ trống field. content HTML ~350-500 từ.
                 """;
             Map<String, Object> retryParsed = parseSeoArticleMap(
-                aiAssistantGatewayService.generateSeoContent(retryPrompt, progressListener));
+                aiAssistantGatewayService.generateSeoContent(retryPrompt, progressListener, ctx));
             if (scoreFilledSeoFields(retryParsed) > scoreFilledSeoFields(merged)) {
                 merged = retryParsed;
                 promotePartialSeoFields(merged);
@@ -1649,7 +1657,8 @@ public class AiSeoContentPipelineService {
                 }
             }
         }
-        for (String key : List.of("industry", "topic", "content", "domainKey", "property", "location", "business", "seed")) {
+        for (String key : List.of("industry", "topic", "content", "domainKey", "property", "location", "business", "seed",
+            "seoPipeline", "taskType", "prompt")) {
             if (params.containsKey(key) && params.get(key) != null) {
                 out.put(key, params.get(key));
             }
@@ -1787,7 +1796,7 @@ public class AiSeoContentPipelineService {
             ? "CẤM \"viết phần mềm theo yêu cầu\", \"gia công phần mềm\", \"vị trí đắc địa\", keyword stuffing"
             : "tránh \"vị trí đắc địa\"";
 
-        return ("""
+        String base = ("""
             [SYSTEM CONFIG]: %s | Persona_%s | Pattern_%s
             [SOURCE_TEXT]: %s
             [INDUSTRY]: %s
@@ -1822,6 +1831,48 @@ public class AiSeoContentPipelineService {
             hook,
             angle,
             persona.label()).trim();
+        return appendWriter2026IfEnabled(base, ctx);
+    }
+
+    /** Explicit seo_writer_2026 pipeline — full 2026 structure + optional meta fields. */
+    private String buildSeoWriter2026ArticlePrompt(
+            String industry,
+            String topic,
+            String domainKey,
+            Map<String, Object> creative,
+            Map<String, Object> ctx) {
+        String base = buildCompactViOnlyArticlePrompt(industry, topic, domainKey, creative, ctx);
+        return base + """
+
+            [SEO_WRITER_2026 EXTENDED]
+            JSON keys bổ sung (optional, nếu vừa token): urlSlug, outline, faqSchemaJson, internalLinkSuggestions (array string).
+            urlSlug: slug tiếng Việt không dấu, ngắn.
+            outline: markdown ngắn liệt kê H1/H2/H3/H4 đã dùng.
+            faqSchemaJson: object JSON-LD @type FAQPage hợp lệ (mainEntity Question/Answer).
+            internalLinkSuggestions: ["anchor → /path-gợi-ý", ...]
+            content HTML: mở bài trả lời Search Intent trong 2 câu (Featured Snippet / AI Overview).
+            """;
+    }
+
+    private boolean isSeoWriter2026Pipeline(Map<String, Object> ctx) {
+        if (ctx == null || aiSeoWriter2026Prompts == null) {
+            return false;
+        }
+        return aiSeoWriter2026Prompts.isExplicitWriter2026Request(ctx, str(ctx.get("prompt"), ""));
+    }
+
+    private String enrichPromptWithWriter2026(String clientPrompt, Map<String, Object> ctx) {
+        return appendWriter2026IfEnabled(clientPrompt, ctx);
+    }
+
+    private String appendWriter2026IfEnabled(String prompt, Map<String, Object> ctx) {
+        if (aiSeoWriter2026Prompts == null || !aiSeoWriter2026Prompts.shouldApplyWriter2026(ctx, prompt)) {
+            return prompt;
+        }
+        if (prompt.contains(aiSeoWriter2026Prompts.markerTag())) {
+            return prompt;
+        }
+        return prompt + "\n\n" + aiSeoWriter2026Prompts.userPromptBlock(seoArticleTargetWordsVi);
     }
 
     private String buildCompactAntiAiArticlePrompt(

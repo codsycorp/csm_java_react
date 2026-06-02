@@ -2304,6 +2304,9 @@ Rules:
   @Value("${ai.seo.locale-translate.max-tokens:768}")
   private int seoLocaleTranslateMaxTokens;
 
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private AiSeoWriter2026Prompts aiSeoWriter2026Prompts;
+
   public boolean isCreativeParamsRequest(String prompt) {
     return String.valueOf(prompt == null ? "" : prompt).contains("[CREATIVE_PARAMS_REQUEST]");
   }
@@ -2338,6 +2341,10 @@ Rules:
    * Lightweight local-only path for /ai-generate-seo-content — no menu/code master prompt injection.
    */
   public String generateSeoContent(String prompt, ProgressListener progressListener) {
+    return generateSeoContent(prompt, progressListener, null);
+  }
+
+  public String generateSeoContent(String prompt, ProgressListener progressListener, Map<String, Object> routeParams) {
     if (!enabled) {
       return createErrorJson("AI Assistant API fallback đang tắt", "GITHUB_MODELS_DISABLED");
     }
@@ -2383,14 +2390,16 @@ Rules:
     int seoOutputTokens = trimmedPrompt.contains("[SEO_LOCALE_TRANSLATE]")
         ? resolveSeoLocaleTranslateOutputTokens()
         : resolveSeoArticleOutputTokens();
-    log.info("SEO generateSeoContent max_output_tokens={} (locale={})",
-        seoOutputTokens, trimmedPrompt.contains("[SEO_LOCALE_TRANSLATE]"));
+    log.info("SEO generateSeoContent max_output_tokens={} (locale={}, writer2026={})",
+        seoOutputTokens,
+        trimmedPrompt.contains("[SEO_LOCALE_TRANSLATE]"),
+        aiSeoWriter2026Prompts != null && aiSeoWriter2026Prompts.shouldApplyWriter2026(routeParams, trimmedPrompt));
     return callLocalProviderWithContext(
         trimmedPrompt,
         seoOutputTokens,
         directTemperature,
         progressListener,
-        resolveSeoSystemPrompt(trimmedPrompt),
+        resolveSeoSystemPrompt(trimmedPrompt, routeParams),
         LlamaCppNativeService.LocalModelLane.SEO);
   }
 
@@ -2442,6 +2451,10 @@ Rules:
 
   /** Pick system prompt: simple html_content SEO vs LMKT custom JSON schema (content, facebook_post, …). */
   private String resolveSeoSystemPrompt(String prompt) {
+    return resolveSeoSystemPrompt(prompt, null);
+  }
+
+  private String resolveSeoSystemPrompt(String prompt, Map<String, Object> routeParams) {
     String normalized = String.valueOf(prompt == null ? "" : prompt).toLowerCase(Locale.ROOT);
     if (normalized.contains("[creative_params_request]")) {
       return CREATIVE_PARAMS_SYSTEM_PROMPT;
@@ -2451,6 +2464,19 @@ Rules:
           + "Translate Vietnamese source into real English and Simplified Chinese. "
           + "Return ONLY one valid JSON object with the locale fields requested. "
           + "Never copy Vietnamese text into _en or _zh fields. No markdown.";
+    }
+    if (aiSeoWriter2026Prompts != null && aiSeoWriter2026Prompts.shouldApplyWriter2026(routeParams, prompt)) {
+      boolean asksForContentField = normalized.contains("\"content\"")
+          || normalized.contains("`content`")
+          || normalized.contains("content_en")
+          || normalized.contains("facebook_post")
+          || normalized.contains("content_zh");
+      boolean asksForHtmlContentOnly = (normalized.contains("html_content") || normalized.contains("`html_content`"))
+          && !asksForContentField;
+      if (asksForHtmlContentOnly && looksLikeSimpleSeoPrompt(normalized)) {
+        return aiSeoWriter2026Prompts.systemPromptForSimpleHtmlJson();
+      }
+      return aiSeoWriter2026Prompts.systemPromptForLmktJson();
     }
     boolean asksForContentField = normalized.contains("\"content\"")
         || normalized.contains("`content`")

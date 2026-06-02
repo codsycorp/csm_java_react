@@ -6061,8 +6061,9 @@ async function processContent(item, opts = {}) {
   const useSeoOneShot = seoOneShotEnabled && typeof oneShotFn === 'function';
 
   const generateFn = ctx.helperAi?.generateSeoContentWithPrompt;
-  if (!useSeoOneShot && !generateFn) throw new Error("generateSeoContentWithPrompt không khả dụng");
-  if (useSeoOneShot && !oneShotFn) throw new Error("generateSeoAntiAiOneShot không khả dụng");
+  if (!useSeoOneShot && !generateFn && !resolveAiLocalApiBase(ctx)) {
+    throw new Error("generateSeoContentWithPrompt không khả dụng và thiếu apiBase");
+  }
 
   let prompt = null;
   if (!useSeoOneShot) {
@@ -6100,21 +6101,20 @@ async function processContent(item, opts = {}) {
     timerRegistry.register('processContent_ai_' + Date.now(), aiTimeoutId, 'timeout');
     
     const startAI = Date.now();
-    if (useSeoOneShot) {
-      result = await oneShotFn({
-        industry,
-        topic: content,
-        domainKey,
-        property: ctx.project,
-        location: opts.location,
-        business: opts.business,
-        seed: uniqueSeed.replace(/[\[\]]/g, '')
-      }, {
-        preferAsync: false,
-      });
-    } else {
-      result = await generateFn(prompt);
-    }
+    const oneShotPayload = useSeoOneShot ? {
+      industry,
+      topic: content,
+      domainKey,
+      property: ctx.project,
+      location: opts.location,
+      business: opts.business,
+      seed: uniqueSeed.replace(/[\[\]]/g, '')
+    } : null;
+    result = await callSeoGenerateContentApi(ctx, {
+      useSeoOneShot,
+      oneShotPayload,
+      prompt,
+    });
     const durationAI = ((Date.now() - startAI) / 1000).toFixed(1);
     
     console.log(`[processContent] ✅ AI trả về - Mất ${durationAI}s - ${new Date().toLocaleTimeString()}`);
@@ -8022,6 +8022,82 @@ function resolveAiLocalApiBase(ctx) {
   return "";
 }
 
+/**
+ * Gọi POST /ai-generate-seo-content — ưu tiên window.csmAI, fallback fetch trực tiếp (cùng pattern get-table-data).
+ */
+async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
+  const helperAi = ctx?.helperAi || (typeof window !== "undefined" ? window.csmAI : null);
+
+  const invokeHelper = async () => {
+    if (useSeoOneShot && typeof helperAi?.generateSeoAntiAiOneShot === "function") {
+      return helperAi.generateSeoAntiAiOneShot(oneShotPayload, { preferAsync: false });
+    }
+    if (typeof helperAi?.generateSeoContentWithPrompt === "function") {
+      return helperAi.generateSeoContentWithPrompt(prompt, { preferAsync: false, taskType: "seo_content" });
+    }
+    return null;
+  };
+
+  try {
+    const viaHelper = await invokeHelper();
+    if (viaHelper != null) return viaHelper;
+  } catch (helperErr) {
+    const st = extractHttpStatusFromError(helperErr);
+    if (st !== 404) throw helperErr;
+    console.warn("[SEO] window.csmAI trả 404 — fallback fetch trực tiếp:", helperErr?.message);
+  }
+
+  const apiBase = resolveAiLocalApiBase(ctx);
+  if (!apiBase) {
+    throw new Error("Thiếu apiBase (domain_api_url) — không gọi được POST /ai-generate-seo-content");
+  }
+
+  const body = { mode: "sync", async: false, taskType: "seo_content" };
+  if (useSeoOneShot) {
+    body.seoPipeline = "anti_ai_one_shot";
+    body.seoContext = oneShotPayload;
+  } else {
+    body.prompt = prompt;
+  }
+
+  const candidateUrls = [...new Set([
+    `${apiBase}/ai-generate-seo-content`,
+    `${apiBase.replace(/\/api\/?$/, "")}/ai-generate-seo-content`,
+    `${apiBase}/api/ai-generate-seo-content`,
+  ].filter(Boolean))];
+
+  let lastError = null;
+  for (const url of candidateUrls) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: buildApiHeaders(ctx),
+      credentials: "include",
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (_e) {
+      data = { raw: text };
+    }
+    if (response.status === 404) {
+      lastError = new Error(`HTTP 404 — ${url}`);
+      continue;
+    }
+    if (!response.ok) {
+      const authHint = response.status === 401
+        ? " — đăng nhập lại admin LMKT (csm-token / refreshToken cookie)"
+        : "";
+      throw new Error((data?.message || text || `HTTP ${response.status}`) + authHint);
+    }
+    return data;
+  }
+  throw lastError || new Error(
+    "POST /ai-generate-seo-content không tìm thấy — redeploy backend jar mới + reload nginx"
+  );
+}
+
 async function callAiLocalJsonApi(path, body, ctx, options = {}) {
   const apiBase = resolveAiLocalApiBase(ctx);
   if (!apiBase) throw new Error("Thiếu apiBase — không gọi được AI local API");
@@ -8098,35 +8174,11 @@ async function testAiLaneSeoOneShot(ctx, seoContext = {}) {
     business: payload.business
   }, [], uniqueSeed);
 
-  const helperAi = ctx?.helperAi || (typeof window !== "undefined" ? window.csmAI : null);
-  const generateFn = helperAi?.generateSeoContentWithPrompt;
-  if (typeof generateFn === "function") {
-    return generateFn(prompt, { taskType: "seo_content", preferAsync: false });
-  }
-
-  const apiBase = resolveAiLocalApiBase(ctx);
-  const response = await fetch(`${apiBase}/ai-generate-seo-content`, {
-    method: "POST",
-    headers: buildApiHeaders(ctx),
-    credentials: "include",
-    body: JSON.stringify({
-      mode: "sync",
-      async: false,
-      taskType: "seo_content",
-      prompt
-    })
+  return callSeoGenerateContentApi(ctx, {
+    useSeoOneShot: false,
+    oneShotPayload: null,
+    prompt,
   });
-  const text = await response.text();
-  let data = {};
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch (_e) {
-    data = { raw: text };
-  }
-  if (!response.ok) {
-    throw new Error(data?.message || text || `HTTP ${response.status}`);
-  }
-  return data;
 }
 
 async function testAiLaneScanDryRun(ctx, { message, attachments }) {
