@@ -11,6 +11,8 @@
 #   ./scripts/download-ai-local-models.sh 5gb      # alias server
 #   ./scripts/download-ai-local-models.sh strong   # worker + nomic embed + vision optional
 #   ./scripts/download-ai-local-models.sh vision-weak
+#   ./scripts/download-ai-local-models.sh vision-qwen2vl-2b   # Qwen2-VL-2B Q4_K_M (sidecar strong)
+#   ./scripts/download-ai-local-models.sh qwen2-vl-2b-server # → csm_datas/ (prod jar)
 #   ./scripts/download-ai-local-models.sh embed
 #   ./scripts/download-ai-local-models.sh list
 #
@@ -127,13 +129,21 @@ case "$PROFILE" in
   embed)
     download_embed_nomic
     ;;
+  qwen2-vl-2b|vision-qwen2vl-2b)
+    download_vision_qwen2vl_2b
+    ;;
+  qwen2-vl-2b-server|vision-qwen2vl-2b-server)
+    MODEL_DIR="$REPO_ROOT/csm_datas/ai_local/model"
+    mkdir -p "$MODEL_DIR"
+    download_vision_qwen2vl_2b
+    ;;
   list)
     list_models
     exit 0
     ;;
   *)
     echo "Unknown profile: $PROFILE"
-    echo "Profiles: worker | server | m1-16gb | 5gb | strong | vision-weak | vision-strong | embed | list"
+    echo "Profiles: worker | server | m1-16gb | 5gb | strong | vision-weak | vision-strong | qwen2-vl-2b | qwen2-vl-2b-server | embed | list"
     exit 1
     ;;
 esac
