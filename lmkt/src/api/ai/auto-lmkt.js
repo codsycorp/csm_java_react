@@ -680,7 +680,7 @@ const decryptHtmlContent = (data) => {
  *
  * BƯỚC 4: Nhấn "Tạo Content"
  *         ↓ Script build prompt với 12 fields
- *         ↓ Gọi AI (generateSeoContentWithPrompt)
+ *         ↓ Gọi AI (invokeSeoAiLocal → POST /ai-generate-seo-content → AI local SEO lane)
  *         ↓ AI trả về JSON với 12 fields (4 nhóm x 3 ngôn ngữ):
  *           • content, content_en, content_zh (HTML 1500-2000 từ)
  *           • attributes_title, attributes_title_en, attributes_title_zh (60-80 ký tự)
@@ -725,7 +725,7 @@ const decryptHtmlContent = (data) => {
  * 
  * ========== CÔNG NGHỆ ==========
  * 
- * - AI Backend: window.csmAI.generateSeoContentWithPrompt()
+ * - AI Backend: invokeSeoAiLocal() → POST /ai-generate-seo-content (backend AI local)
  * - Database: window.csmApi.updateTableData()
  * - Target Table: web_services
  * - AI Output: 12 fields (4 nhóm x 3 ngôn ngữ)
@@ -3397,14 +3397,69 @@ function getCsrfTokenFromCookie() {
   }
 }
 
+function getRefreshTokenForApi() {
+  try {
+    const fromLs = localStorage.getItem("refreshToken");
+    if (fromLs && String(fromLs).trim()) return String(fromLs).trim();
+  } catch (_e) { /* ignore */ }
+  try {
+    const match = typeof document !== "undefined"
+      ? document.cookie.match(/(?:^|; )refreshToken=([^;]*)/)
+      : null;
+    if (match) return decodeURIComponent(match[1]).trim();
+  } catch (_e) { /* ignore */ }
+  return "";
+}
+
+function getClientIdForApi() {
+  try {
+    const match = typeof document !== "undefined"
+      ? document.cookie.match(/(?:^|; )csm_client_id=([^;]*)/)
+      : null;
+    if (match) return decodeURIComponent(match[1]).trim();
+  } catch (_e) { /* ignore */ }
+  try {
+    const fromLs = localStorage.getItem("csm_client_id");
+    if (fromLs && String(fromLs).trim()) return String(fromLs).trim();
+  } catch (_e) { /* ignore */ }
+  return "";
+}
+
+function resolveUiLangHeader() {
+  try {
+    if (typeof window !== "undefined" && window.__CSM_LANG__) {
+      return String(window.__CSM_LANG__);
+    }
+    const stored = localStorage.getItem("language") || localStorage.getItem("csm-lang") || "";
+    if (stored === "vi") return "vi-VN";
+    if (stored === "en") return "en-US";
+    if (stored === "zh") return "zh-CN";
+    if (stored) return stored;
+  } catch (_e) { /* ignore */ }
+  return "vi-VN";
+}
+
 function buildApiHeaders(ctx = {}) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (ctx.token) {
-    headers['csm-token'] = ctx.token;
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    "csm-lang": resolveUiLangHeader(),
+  };
+  const token = ctx.token || resolveAuthToken(ctx.seftObj);
+  if (token) {
+    headers["csm-token"] = token;
   }
   const csrfToken = getCsrfTokenFromCookie();
   if (csrfToken) {
-    headers['X-CSRF-Token'] = csrfToken;
+    headers["X-CSRF-Token"] = csrfToken;
+  }
+  const refreshToken = getRefreshTokenForApi();
+  if (refreshToken) {
+    headers["X-Refresh-Token"] = refreshToken;
+  }
+  const clientId = getClientIdForApi();
+  if (clientId) {
+    headers["X-Client-Id"] = clientId;
   }
   return headers;
 }
@@ -6057,13 +6112,7 @@ async function processContent(item, opts = {}) {
   // SEO lane: mặc định classic (getAntiAIPrompt + 1 HTTP sync) — khác hoàn toàn luồng menu/code.
   // Chỉ bật one-shot backend khi VITE_AI_SEO_ONE_SHOT=true (seoContext, không full prompt).
   const seoOneShotEnabled = typeof window !== 'undefined' && window.VITE_AI_SEO_ONE_SHOT === 'true';
-  const oneShotFn = ctx.helperAi?.generateSeoAntiAiOneShot;
-  const useSeoOneShot = seoOneShotEnabled && typeof oneShotFn === 'function';
-
-  const generateFn = ctx.helperAi?.generateSeoContentWithPrompt;
-  if (!useSeoOneShot && !generateFn && !resolveAiLocalApiBase(ctx)) {
-    throw new Error("generateSeoContentWithPrompt không khả dụng và thiếu apiBase");
-  }
+  const useSeoOneShot = seoOneShotEnabled;
 
   let prompt = null;
   if (!useSeoOneShot) {
@@ -6081,7 +6130,7 @@ async function processContent(item, opts = {}) {
   } else {
     console.log(`[processContent] 🚀 SEO one-shot: 1 HTTP sync (seoContext → backend viết bài)`);
   }
-  console.log(`[DEBUG] helperAi object:`, ctx.helperAi);
+  console.log(`[DEBUG] SEO endpoint: ${resolveSeoApiEndpoint(ctx)}`);
   
   if (!useSeoOneShot && (!prompt || prompt.trim().length === 0)) {
     throw new Error("Prompt rỗng - không thể gọi AI!");
@@ -6091,10 +6140,11 @@ async function processContent(item, opts = {}) {
   thongbao(ti("⏳ Đang gọi AI... (SEO one-shot, có thể mất vài phút)", "⏳ Calling AI... (SEO one-shot, may take several minutes)", "⏳ 正在调用AI...（SEO一次性，可能需要几分钟）"));
   
   let result;
+  let seo;
   let aiTimeoutId = null;
   try {
     // 🟢 TIMEOUT SAFETY: Đăng ký timeout vào timerRegistry để đảm bảo cleanup
-    const aiTimeoutMs = useSeoOneShot ? 20 * 60 * 1000 : 120000;
+    const aiTimeoutMs = 20 * 60 * 1000;
     aiTimeoutId = setTimeout(() => {
       console.error(`⏱️ [processContent] AI timeout sau ${aiTimeoutMs}ms`);
     }, aiTimeoutMs);
@@ -6110,11 +6160,15 @@ async function processContent(item, opts = {}) {
       business: opts.business,
       seed: uniqueSeed.replace(/[\[\]]/g, '')
     } : null;
-    result = await callSeoGenerateContentApi(ctx, {
-      useSeoOneShot,
-      oneShotPayload,
-      prompt,
-    });
+
+    const seoInvoke = useSeoOneShot
+      ? await invokeSeoAiLocal(ctx, { useSeoOneShot: true, seoContext: oneShotPayload, expect: "article" })
+      : await invokeSeoAiLocal(ctx, { prompt, expect: "article" });
+    result = seoInvoke.api;
+    if (!seoInvoke.ok) {
+      throw new Error(seoInvoke.error || seoLaneFailureMessage(result));
+    }
+    seo = seoInvoke.payload;
     const durationAI = ((Date.now() - startAI) / 1000).toFixed(1);
     
     console.log(`[processContent] ✅ AI trả về - Mất ${durationAI}s - ${new Date().toLocaleTimeString()}`);
@@ -6140,36 +6194,13 @@ async function processContent(item, opts = {}) {
     throw new Error("AI trả về null/undefined");
   }
 
-  // ✅ Backend trả format: result.data.result = SEO content
-  let seo = result.data?.result || result.result || result.data;
-
-  // Fallback: backend có thể trả success=false khi không parse được JSON,
-  // nhưng vẫn gửi rawContent để frontend tự phục hồi parse.
-  if (!result.success) {
-    const rawContent = result?.rawContent || result?.data?.rawContent;
-    if (typeof rawContent === 'string' && rawContent.trim()) {
-      console.warn('[processContent] ⚠️ AI returned success=false, attempting to parse rawContent fallback...');
-      try {
-        seo = parseSeoJsonString(rawContent);
-        console.log('[processContent] ✅ Recovered SEO JSON from rawContent fallback');
-      } catch (rawParseErr) {
-        console.error('[processContent] ❌ Failed parsing rawContent fallback:', rawParseErr);
-        throw new Error(`AI failed: ${result.message || 'Không có message'}`);
-      }
-    } else {
-      throw new Error(`AI failed: ${result.message || 'Không có message'}`);
-    }
-  }
-  
-  // ✅ XỬ LÝ TRƯỜNG HỢP AI TRẢ VỀ MARKDOWN-WRAPPED JSON STRING
-  if (typeof seo === 'string') {
+  if (typeof seo === "string") {
     console.warn('[processContent] ⚠️ SEO data is string, attempting to parse...');
     try {
       seo = parseSeoJsonString(seo);
       console.log('[processContent] ✅ Successfully parsed SEO from string');
     } catch (parseErr) {
       console.error('[processContent] ❌ Failed to parse SEO string:', parseErr);
-      console.error('[processContent] 📋 String value:', seo.substring(0, 500));
       throw new Error('Dữ liệu SEO không hợp lệ - không thể parse JSON');
     }
   }
@@ -7355,10 +7386,6 @@ async function callAdsCampaignApi(platform, payload = {}) {
 
 async function generateAdsCreativeWithAI(input = {}) {
   const ctx = resolveContext();
-  const helperAi = (ctx && ctx.helperAi) || (typeof window !== "undefined" ? window.csmAI : null);
-  if (!helperAi || typeof helperAi.generateSeoContentWithPrompt !== "function") {
-    throw new Error("Không tìm thấy AI helper (window.csmAI.generateSeoContentWithPrompt)");
-  }
 
   const brief = String(input.brief || "").trim();
   const targetUrl = String(input.target_url || "").trim();
@@ -7392,15 +7419,8 @@ JSON SCHEMA:
 }
 `;
 
-  const aiResponse = await helperAi.generateSeoContentWithPrompt(prompt);
-  if (!aiResponse || aiResponse.success === false) {
-    throw new Error(aiResponse?.message || "AI không trả về kết quả hợp lệ");
-  }
-
-  let aiData = aiResponse.data?.result || aiResponse.result || aiResponse.data || aiResponse;
-  if (typeof aiData === "string") {
-    aiData = parseSeoJsonString(aiData);
-  }
+  const aiResponse = await invokeSeoJsonFromPrompt(ctx, prompt);
+  let aiData = aiResponse;
 
   const headline = String(aiData?.headline || aiData?.title || campaignName || "").trim();
   const description = String(aiData?.description || aiData?.desc || "").trim();
@@ -8022,36 +8042,60 @@ function resolveAiLocalApiBase(ctx) {
   return "";
 }
 
+function resolvePrimaryDomain(ctx) {
+  const domain = String(ctx?.domain || "csmbridge.net").split(",")[0].trim();
+  return domain.replace(/^www\./i, "");
+}
+
+/** URL SEO sync — luôn api.* host (giống fetch DevTools: api.csmbridge.net/ai-generate-seo-content). */
+function resolveSeoApiEndpoint(ctx) {
+  const seft = ctx?.seftObj || (typeof window !== "undefined" ? window.seft : {}) || {};
+  const candidates = [
+    seft.domain_api_url,
+    typeof window !== "undefined" ? window.domain_api_url : "",
+    ctx?.apiBase,
+  ];
+  for (let i = 0; i < candidates.length; i += 1) {
+    const base = normalizeCsmApiBase(String(candidates[i] || "").trim());
+    if (base && /^https?:\/\/api\./i.test(base)) {
+      return `${base.replace(/\/+$/, "")}/ai-generate-seo-content`;
+    }
+  }
+  return `https://api.${resolvePrimaryDomain(ctx)}/ai-generate-seo-content`;
+}
+
+function resolveSeoApiEndpointCandidates(ctx) {
+  const primary = resolveSeoApiEndpoint(ctx);
+  const domain = resolvePrimaryDomain(ctx);
+  const urls = new Set([
+    primary,
+    primary.includes("/api/ai-generate-seo-content")
+      ? primary.replace("/api/ai-generate-seo-content", "/ai-generate-seo-content")
+      : primary.replace("/ai-generate-seo-content", "/api/ai-generate-seo-content"),
+    `https://api.${domain}/ai-generate-seo-content`,
+    `https://api.${domain}/api/ai-generate-seo-content`,
+    `https://admin.${domain}/api/ai-generate-seo-content`,
+  ]);
+  return [...urls].filter(Boolean);
+}
+
+function isNginxNotFoundHtml(text) {
+  const s = String(text || "").toLowerCase();
+  return s.includes("<title>404 not found</title>")
+    || (s.includes("404 not found") && s.includes("<center>nginx</center>"));
+}
+
+/** @deprecated Dùng invokeSeoAiLocal — giữ alias trả raw API response. */
+async function callSeoPromptDirect(ctx, prompt) {
+  const { api } = await invokeSeoAiLocal(ctx, { prompt, expect: "api" });
+  return api;
+}
+
 /**
- * Gọi POST /ai-generate-seo-content — ưu tiên window.csmAI, fallback fetch trực tiếp (cùng pattern get-table-data).
+ * POST /ai-generate-seo-content — fetch trực tiếp (contract giống admin ky client).
+ * Body: { mode:"sync", async:false, taskType:"seo_content", prompt } hoặc seoPipeline one-shot.
  */
 async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
-  const helperAi = ctx?.helperAi || (typeof window !== "undefined" ? window.csmAI : null);
-
-  const invokeHelper = async () => {
-    if (useSeoOneShot && typeof helperAi?.generateSeoAntiAiOneShot === "function") {
-      return helperAi.generateSeoAntiAiOneShot(oneShotPayload, { preferAsync: false });
-    }
-    if (typeof helperAi?.generateSeoContentWithPrompt === "function") {
-      return helperAi.generateSeoContentWithPrompt(prompt, { preferAsync: false, taskType: "seo_content" });
-    }
-    return null;
-  };
-
-  try {
-    const viaHelper = await invokeHelper();
-    if (viaHelper != null) return viaHelper;
-  } catch (helperErr) {
-    const st = extractHttpStatusFromError(helperErr);
-    if (st !== 404) throw helperErr;
-    console.warn("[SEO] window.csmAI trả 404 — fallback fetch trực tiếp:", helperErr?.message);
-  }
-
-  const apiBase = resolveAiLocalApiBase(ctx);
-  if (!apiBase) {
-    throw new Error("Thiếu apiBase (domain_api_url) — không gọi được POST /ai-generate-seo-content");
-  }
-
   const body = { mode: "sync", async: false, taskType: "seo_content" };
   if (useSeoOneShot) {
     body.seoPipeline = "anti_ai_one_shot";
@@ -8060,42 +8104,151 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
     body.prompt = prompt;
   }
 
-  const candidateUrls = [...new Set([
-    `${apiBase}/ai-generate-seo-content`,
-    `${apiBase.replace(/\/api\/?$/, "")}/ai-generate-seo-content`,
-    `${apiBase}/api/ai-generate-seo-content`,
-  ].filter(Boolean))];
-
+  const candidateUrls = resolveSeoApiEndpointCandidates(ctx);
+  const timeoutMs = 20 * 60 * 1000;
   let lastError = null;
-  for (const url of candidateUrls) {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: buildApiHeaders(ctx),
-      credentials: "include",
-      body: JSON.stringify(body),
-    });
-    const text = await response.text();
-    let data = {};
+
+  for (let u = 0; u < candidateUrls.length; u += 1) {
+    const url = candidateUrls[u];
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    let timeoutId = null;
+    if (controller) {
+      timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    }
+
+    console.log(`[SEO] POST ${url} promptChars=${body.prompt ? body.prompt.length : 0} oneShot=${!!useSeoOneShot}`);
+
     try {
-      data = text ? JSON.parse(text) : {};
-    } catch (_e) {
-      data = { raw: text };
+      const response = await fetch(url, {
+        method: "POST",
+        headers: buildApiHeaders(ctx),
+        credentials: "include",
+        body: JSON.stringify(body),
+        signal: controller ? controller.signal : undefined,
+      });
+      const text = await response.text();
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (_e) {
+        data = { raw: text };
+      }
+      if (response.status === 404 || isNginxNotFoundHtml(text)) {
+        lastError = new Error(
+          `HTTP 404 nginx — ${url}. Thử redeploy nginx location /ai-generate-seo-content hoặc dùng admin/api fallback.`
+        );
+        continue;
+      }
+      if (!response.ok) {
+        const authHint = response.status === 401
+          ? " — đăng nhập lại admin LMKT (csm-token / refreshToken cookie)"
+          : "";
+        throw new Error((data?.message || text || `HTTP ${response.status}`) + authHint);
+      }
+      return data;
+    } catch (fetchErr) {
+      if (fetchErr && fetchErr.name === "AbortError") {
+        throw new Error(`SEO timeout sau ${Math.round(timeoutMs / 60000)} phút — thử lại hoặc rút gọn prompt`);
+      }
+      if (extractHttpStatusFromError(fetchErr) === 404) {
+        lastError = fetchErr;
+        continue;
+      }
+      throw fetchErr;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
-    if (response.status === 404) {
-      lastError = new Error(`HTTP 404 — ${url}`);
-      continue;
-    }
-    if (!response.ok) {
-      const authHint = response.status === 401
-        ? " — đăng nhập lại admin LMKT (csm-token / refreshToken cookie)"
-        : "";
-      throw new Error((data?.message || text || `HTTP ${response.status}`) + authHint);
-    }
-    return data;
   }
+
   throw lastError || new Error(
-    "POST /ai-generate-seo-content không tìm thấy — redeploy backend jar mới + reload nginx"
+    "POST /ai-generate-seo-content không tìm thấy — kiểm tra domain_api_url trỏ api.* và redeploy backend"
   );
+}
+
+/**
+ * Luồng SEO thống nhất — mọi viết bài qua POST /ai-generate-seo-content → backend AI local SEO lane.
+ *
+ * opts.prompt          — prompt đầy đủ (ưu tiên)
+ * opts.seoContext      — { industry, topic, domainKey, ... } khi one-shot backend
+ * opts.industry/topic  — shortcut build getAntiAIPrompt()
+ * opts.expect          — "api" | "article" | "json" (mặc định "api")
+ * opts.useSeoOneShot   — ép one-shot pipeline (seoContext, không gửi full prompt)
+ */
+async function invokeSeoAiLocal(ctx, opts = {}) {
+  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
+  const expect = opts.expect || "api";
+  let prompt = opts.prompt != null ? String(opts.prompt) : "";
+  let useSeoOneShot = opts.useSeoOneShot;
+  let oneShotPayload = opts.seoContext || opts.oneShotPayload || null;
+
+  if (useSeoOneShot == null) {
+    if (oneShotPayload && !prompt.trim()) {
+      useSeoOneShot = true;
+    } else if (typeof window !== "undefined" && window.VITE_AI_SEO_ONE_SHOT === "true" && !prompt.trim()) {
+      useSeoOneShot = true;
+    } else {
+      useSeoOneShot = false;
+    }
+  }
+
+  if (!useSeoOneShot && !prompt.trim() && opts.industry && opts.topic) {
+    const uniqueSeed = opts.uniqueSeed || `[UNIQUE_${Date.now()}_${Math.random().toString(36).slice(2, 9)}]`;
+    prompt = getAntiAIPrompt(
+      opts.industry,
+      opts.topic,
+      opts.articleHistory || [],
+      opts.promptOpts || {},
+      opts.images || [],
+      uniqueSeed
+    );
+  }
+
+  if (!useSeoOneShot && !prompt.trim()) {
+    throw new Error("Thiếu prompt SEO — không thể gọi AI local");
+  }
+  if (useSeoOneShot && !oneShotPayload) {
+    throw new Error("Thiếu seoContext — không thể gọi SEO one-shot");
+  }
+
+  const api = await callSeoGenerateContentApi(safeCtx, {
+    useSeoOneShot: !!useSeoOneShot,
+    oneShotPayload,
+    prompt: useSeoOneShot ? null : prompt,
+  });
+
+  if (expect === "api") {
+    return { ok: api?.success !== false, api, payload: null, error: null };
+  }
+
+  const payload = expect === "article"
+    ? extractSeoPayloadFromApiResult(api)
+    : extractJsonPayloadFromApiResult(api);
+
+  if (expect === "article") {
+    if (!isRecoverableSeoPayload(payload)) {
+      return { ok: false, api, payload, error: seoLaneFailureMessage(api) };
+    }
+    return { ok: true, api, payload, error: null };
+  }
+
+  if (!payload || typeof payload !== "object") {
+    return { ok: false, api, payload: null, error: seoLaneFailureMessage(api, "AI không trả về JSON hợp lệ") };
+  }
+  return { ok: true, api, payload, error: null };
+}
+
+/** Viết bài SEO chuẩn (getAntiAIPrompt hoặc prompt có sẵn) — trả { api, payload }. */
+async function invokeSeoArticleFromPrompt(ctx, prompt) {
+  const out = await invokeSeoAiLocal(ctx, { prompt, expect: "article" });
+  if (!out.ok) throw new Error(out.error || "SEO article failed");
+  return out;
+}
+
+/** Task phụ (FB post, ads, creative-params) — trả object JSON từ model. */
+async function invokeSeoJsonFromPrompt(ctx, prompt) {
+  const out = await invokeSeoAiLocal(ctx, { prompt, expect: "json" });
+  if (!out.ok) throw new Error(out.error || "AI không trả về JSON hợp lệ");
+  return out.payload;
 }
 
 async function callAiLocalJsonApi(path, body, ctx, options = {}) {
@@ -8167,18 +8320,44 @@ async function testAiLaneSeoOneShot(ctx, seoContext = {}) {
 
   // Luồng SEO: build full prompt như production (getAntiAIPrompt) — 1 HTTP sync, không dùng schema placeholder backend.
   const uniqueSeed = `[UNIQUE_${Date.now()}_${Math.random().toString(36).slice(2, 9)}]`;
-  const prompt = getAntiAIPrompt(payload.industry, payload.topic, [], {
-    domainKey: payload.domainKey,
-    property: payload.property,
-    location: payload.location,
-    business: payload.business
-  }, [], uniqueSeed);
+  return invokeSeoAiLocal(ctx, {
+    industry: payload.industry,
+    topic: payload.topic,
+    promptOpts: {
+      domainKey: payload.domainKey,
+      property: payload.property,
+      location: payload.location,
+      business: payload.business
+    },
+    uniqueSeed,
+    expect: "api",
+  }).then((out) => out.api);
+}
 
-  return callSeoGenerateContentApi(ctx, {
-    useSeoOneShot: false,
-    oneShotPayload: null,
-    prompt,
+async function testAiLaneSeoOneShotLegacyFetch(ctx, seoContext, prompt) {
+  const apiBase = resolveAiLocalApiBase(ctx);
+  const response = await fetch(`${apiBase}/ai-generate-seo-content`, {
+    method: "POST",
+    headers: buildApiHeaders(ctx),
+    credentials: "include",
+    body: JSON.stringify({
+      mode: "sync",
+      async: false,
+      taskType: "seo_content",
+      prompt
+    })
   });
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (_e) {
+    data = { raw: text };
+  }
+  if (!response.ok) {
+    throw new Error(data?.message || text || `HTTP ${response.status}`);
+  }
+  return data;
 }
 
 async function testAiLaneScanDryRun(ctx, { message, attachments }) {
@@ -8328,34 +8507,52 @@ const AI_LANE_SEO_REQUIRED_FIELDS = [
   "attributes_keywords", "attributes_keywords_en", "attributes_keywords_zh"
 ];
 
+function unwrapApiJsonCandidate(candidate) {
+  if (candidate == null) return null;
+  if (typeof candidate === "string") {
+    try { return parseSeoJsonString(candidate); } catch (_e) { return null; }
+  }
+  if (typeof candidate !== "object") return null;
+
+  if (candidate.title || candidate.content || candidate.html_content || candidate.attributes_title
+      || candidate.facebook_post || candidate.post_content || candidate.headline || candidate.angle) {
+    return candidate;
+  }
+
+  const choices = candidate.choices;
+  if (Array.isArray(choices) && choices.length > 0) {
+    const msgContent = choices[0]?.message?.content ?? choices[0]?.text;
+    if (typeof msgContent === "string" && msgContent.trim()) {
+      try { return parseSeoJsonString(msgContent); } catch (_e) { /* fall through */ }
+    }
+  }
+
+  if (typeof candidate.content === "string" && candidate.content.trim().startsWith("{")) {
+    try { return parseSeoJsonString(candidate.content); } catch (_e) { /* fall through */ }
+  }
+
+  return candidate;
+}
+
+/** Trích JSON bất kỳ từ response /ai-generate-seo-content (FB, ads, creative-params, ...). */
+function extractJsonPayloadFromApiResult(result) {
+  if (!result) return null;
+
+  const candidates = [result?.data?.result, result?.result, result?.data, result];
+  for (let i = 0; i < candidates.length; i += 1) {
+    const parsed = unwrapApiJsonCandidate(candidates[i]);
+    if (parsed && typeof parsed === "object") return parsed;
+  }
+
+  const rawContent = result?.rawContent || result?.data?.rawContent || result?.data?.content;
+  if (typeof rawContent === "string" && rawContent.trim()) {
+    try { return parseSeoJsonString(rawContent); } catch (_e) { /* ignore */ }
+  }
+  return null;
+}
+
 function extractSeoPayloadFromApiResult(result) {
   let seo = null;
-
-  const unwrapSeoCandidate = (candidate) => {
-    if (candidate == null) return null;
-    if (typeof candidate === "string") {
-      try { return parseSeoJsonString(candidate); } catch (_e) { return null; }
-    }
-    if (typeof candidate !== "object") return null;
-
-    if (candidate.title || candidate.content || candidate.html_content || candidate.attributes_title) {
-      return candidate;
-    }
-
-    const choices = candidate.choices;
-    if (Array.isArray(choices) && choices.length > 0) {
-      const msgContent = choices[0]?.message?.content ?? choices[0]?.text;
-      if (typeof msgContent === "string" && msgContent.trim()) {
-        try { return parseSeoJsonString(msgContent); } catch (_e) { /* fall through */ }
-      }
-    }
-
-    if (typeof candidate.content === "string" && candidate.content.trim().startsWith("{")) {
-      try { return parseSeoJsonString(candidate.content); } catch (_e) { /* fall through */ }
-    }
-
-    return candidate;
-  };
 
   const candidates = [
     result?.data?.result,
@@ -8363,7 +8560,7 @@ function extractSeoPayloadFromApiResult(result) {
     result?.data
   ];
   for (let i = 0; i < candidates.length; i += 1) {
-    const parsed = unwrapSeoCandidate(candidates[i]);
+    const parsed = unwrapApiJsonCandidate(candidates[i]);
     if (isRecoverableSeoPayload(parsed)) {
       seo = parsed;
       break;
@@ -8373,15 +8570,20 @@ function extractSeoPayloadFromApiResult(result) {
     }
   }
   if (!seo && result && typeof result === "object") {
-    seo = unwrapSeoCandidate(result);
+    seo = unwrapApiJsonCandidate(result);
   }
 
   if (!isRecoverableSeoPayload(seo)) {
-    const rawContent = result?.rawContent || result?.data?.rawContent || result?.data?.content;
-    if (typeof rawContent === "string" && rawContent.trim()) {
-      try {
-        seo = parseSeoJsonString(rawContent);
-      } catch (_e) { /* ignore */ }
+    const fromJson = extractJsonPayloadFromApiResult(result);
+    if (isRecoverableSeoPayload(fromJson)) {
+      seo = fromJson;
+    } else {
+      const rawContent = result?.rawContent || result?.data?.rawContent || result?.data?.content;
+      if (typeof rawContent === "string" && rawContent.trim()) {
+        try {
+          seo = parseSeoJsonString(rawContent);
+        } catch (_e) { /* ignore */ }
+      }
     }
   }
 
@@ -9047,8 +9249,7 @@ function ensureAiLaneTestPanel() {
       return;
     }
     const ctx = resolveContext();
-    const hasSeoHelper = typeof ctx.helperAi?.generateSeoContentWithPrompt === "function";
-    if (!ctx.token && !hasSeoHelper) {
+    if (!ctx.token) {
       aiLaneTesterNotify(ti("⚠️ Thiếu csm-token — đăng nhập admin trước", "⚠️ Missing csm-token — login first", "⚠️ 缺少token"), "error");
       return;
     }
@@ -11309,12 +11510,8 @@ async function createFacebookPostPromptWithCreative(industry, productInfo, custo
 async function generateFacebookPostContent(webArticle = {}, helperAi, opts = {}) {
   try {
     const basePrompt = createFacebookPostPrompt(webArticle, '', opts);
-    
-    if (!helperAi?.generateSeoContentWithPrompt) {
-      console.warn('⚠️ [GenerateFBPost] helperAi.generateSeoContentWithPrompt not available');
-      return null;
-    }
-    
+    const ctx = resolveContext();
+
     const hasMandatoryHashtags = (data) => {
       if (!data || typeof data !== 'object') return false;
       const list = Array.isArray(data.hashtags) ? data.hashtags.filter(Boolean) : [];
@@ -11331,14 +11528,13 @@ async function generateFacebookPostContent(webArticle = {}, helperAi, opts = {})
         : `${basePrompt}\n\n[HARD RETRY]\nOutput trước chưa hợp lệ vì thiếu hashtag bắt buộc. Hãy trả JSON hợp lệ với 4-6 hashtags và facebook_post có hashtag ở CUỐI bài.`;
 
       console.log(`🤖 [GenerateFBPost] Gọi AI sinh Facebook post... (attempt ${attempt}/2)`);
-      const result = await helperAi.generateSeoContentWithPrompt(prompt);
-
-      if (!result?.success) {
-        console.warn('⚠️ [GenerateFBPost] AI failed:', result?.message);
+      let fbPostData;
+      try {
+        fbPostData = await invokeSeoJsonFromPrompt(ctx, prompt);
+      } catch (seoErr) {
+        console.warn('⚠️ [GenerateFBPost] AI failed:', seoErr?.message || seoErr);
         continue;
       }
-
-      let fbPostData = result.data?.result || result.result || result.data;
 
       if (typeof fbPostData === 'string') {
         try {
@@ -13706,10 +13902,6 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
 
   const buildUniqueFanpageContent = async (pageName, index) => {
     try {
-      if (!helperAi?.generateSeoContentWithPrompt) {
-        return defaultFacebookContent;
-      }
-
       const firstMsg = Array.isArray(messages) && messages.length > 0 ? messages[0] : {};
       const personaKey = personaPool[index % personaPool.length];
       const fbPostData = await generateFacebookPostContent(
@@ -17440,24 +17632,15 @@ async function createServiceCategoryContent(opts = {}) {
   }, ctx.helperAi);
 
   const prompt = getCategoryContentPrompt(categoryName, description, userPrompt, domainKey, categoryData, creative || {});
-  const generateFn = ctx.helperAi?.generateSeoContentWithPrompt;
-  
-  if (!generateFn) throw new Error("generateSeoContentWithPrompt không khả dụng");
-  
+
   console.log(`[DEBUG] Prompt length: ${prompt?.length || 0}`);
-  
+
   const startAI = Date.now();
-  const result = await generateFn(prompt);
+  const { payload: contentData } = await invokeSeoArticleFromPrompt(ctx, prompt);
   const durationAI = ((Date.now() - startAI) / 1000).toFixed(1);
   
   console.log(`[createServiceCategoryContent] AI trả về sau ${durationAI}s`);
-  console.log(`[DEBUG] Result:`, result);
   
-  if (!result?.success) {
-    throw new Error(`AI failed: ${result?.message || 'Không có message'}`);
-  }
-  
-  const contentData = result.result || result.data;
   if (!contentData) {
     throw new Error("AI response không có content");
   }
@@ -17799,21 +17982,18 @@ async function ensureServiceContentUI() {
     }
 
     const aiPrompt = buildCategoryPrompt(categoryData, finalPrompt, globalSettings.domainKey);
-    if (!window.csmAI?.generateSeoContentWithPrompt) {
-      throw new Error("🤖 Không tìm thấy AI Helper - Chưa kích hoạt csmAI");
-    }
+    const ctx = resolveContext();
 
     const startTime = Date.now();
-    const aiResponse = await window.csmAI.generateSeoContentWithPrompt(aiPrompt);
+    const { payload: articlePayload } = await invokeSeoArticleFromPrompt(ctx, aiPrompt);
     const duration = Math.round((Date.now() - startTime) / 1000);
-    const contentData = parseAIResponse(aiResponse, { encodeContent: false });
+    const contentData = parseAIResponse(articlePayload, { encodeContent: false });
 
     if (!contentData.content) {
       throw new Error("AI trả về content rỗng");
     }
 
     const templateData = findCategoryTemplate(globalSettings.domainKey, categorySlug) || categoryData;
-    const ctx = resolveContext();
     const domainConfigForSave = DOMAIN_OPTIONS[globalSettings.domainKey];
     ctx.app_id = domainConfigForSave?.app_id || ctx.app_id;
     ctx.domain = domainConfigForSave?.value || ctx.domain;
@@ -18682,18 +18862,13 @@ async function createServiceDetailPost(opts = {}) {
   // STEP 3: Gọi AI
   thongbao(ti("🤖 Đang gọi AI tạo nội dung...", "🤖 Calling AI to generate content...", "🤖 正在调用 AI 生成内容..."));
   
-  if (!context.helperAi?.generateSeoContentWithPrompt) {
-    throw new Error("Không tìm thấy AI Helper - chưa kích hoạt csmAI");
-  }
-  
   const startTime = Date.now();
-  const aiResponse = await context.helperAi.generateSeoContentWithPrompt(prompt);
+  const { payload: articlePayload } = await invokeSeoArticleFromPrompt(context, prompt);
   const aiDuration = Math.round((Date.now() - startTime) / 1000);
   
   console.log(`AI response received in ${aiDuration}s`);
   
-  // STEP 4: Parse AI response
-  const seoData = parseAIResponse(aiResponse, { encodeContent: false });
+  const seoData = parseAIResponse(articlePayload, { encodeContent: false });
   
   if (!seoData.content) {
     throw new Error("AI không trả về content");
@@ -19076,10 +19251,8 @@ Output JSON:
 async function requestCreativeParams(kind, context = {}, helperAi = null) {
   try {
     const prompt = buildCreativeParamsPrompt(kind, context);
-    const generateFn = helperAi?.generateSeoContentWithPrompt || window.csmAI?.generateSeoContentWithPrompt;
-    if (!generateFn) return null;
-    const response = await generateFn(prompt);
-    return parseCreativeParamsResponse(response);
+    const ctx = resolveContext();
+    return await invokeSeoJsonFromPrompt(ctx, prompt);
   } catch (error) {
     console.warn('Không thể lấy creative params:', error);
     return null;
@@ -20403,9 +20576,6 @@ async function buildFacebookAutoQueueFromInput() {
     const industry = globalSettings.industry;
     const customInstructions = document.getElementById('fb-custom-instructions')?.value || '';
     if (!industry) throw new Error('Chưa chọn lĩnh vực trong Cài Đặt Chung.');
-    if (!window.csmAI?.generateSeoContentWithPrompt) {
-      throw new Error('Không tìm thấy AI engine');
-    }
 
     const delayMs = FACEBOOK_POST_COOLDOWN_MIN_MS; // 5 phút delay giữa mỗi bài
     const delaySecs = Math.round(delayMs / 1000);
@@ -20444,7 +20614,7 @@ async function buildFacebookAutoQueueFromInput() {
         // BƯỚC 1: Gọi AI tạo nội dung
         showFacebookMessage(`🤖 [${page.name}] [${i + 1}/${items.length}] Đang gọi AI tạo nội dung...`, 'info');
         const prompt = await createFacebookPostPromptWithCreative(industry, productInfo, customInstructions);
-        const aiResponse = await window.csmAI.generateSeoContentWithPrompt(prompt);
+        const aiResponse = await invokeSeoJsonFromPrompt(ctx, prompt);
         const parsed = parseFacebookAIResponse(aiResponse);
         
         const trendingHashtags = getFacebookTrendingHashtags(industry, 8);
@@ -21531,13 +21701,8 @@ async function handleFacebookPreview() {
     showFacebookMessage(ti('🤖 AI đang tạo nội dung...', '🤖 AI is generating content...', '🤖 AI 正在生成内容...'), 'info');
     
     const prompt = await createFacebookPostPromptWithCreative(industry, productInfo, customInstructions);
-    
-    let aiResponse;
-    if (window.csmAI && window.csmAI.generateSeoContentWithPrompt) {
-      aiResponse = await window.csmAI.generateSeoContentWithPrompt(prompt);
-    } else {
-      throw new Error('Không tìm thấy AI engine');
-    }
+    const ctx = resolveContext();
+    const aiResponse = await invokeSeoJsonFromPrompt(ctx, prompt);
     
     const parsed = parseFacebookAIResponse(aiResponse);
     const trendingHashtags = getFacebookTrendingHashtags(industry, 8);
