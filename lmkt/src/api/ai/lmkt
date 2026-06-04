@@ -930,15 +930,16 @@ function shouldMigrateRowDomain(domainValue, targetDomainKey) {
   return resolveDomainKeyFromValue(current) === targetDomainKey;
 }
 
-async function fetchAllTableRowsPaginated({ appId, objName, where, pageSize = 200, onBatch }) {
-  if (!window.csmApi?.getTableData) {
-    throw new Error("window.csmApi.getTableData không khả dụng");
+async function fetchAllTableRowsPaginated({ appId, objName, where, pageSize = 200, onBatch, api }) {
+  const tableApi = api || window.csmApi;
+  if (!tableApi?.getTableData) {
+    throw new Error("getTableData không khả dụng");
   }
   let lastkey;
   const all = [];
   let page = 0;
   while (true) {
-    const res = await window.csmApi.getTableData({
+    const res = await tableApi.getTableData({
       app_id: appId,
       obj_name: objName,
       where: where || undefined,
@@ -1347,6 +1348,348 @@ function ensureDomainMigrationPanel(theme) {
 
   btnRow.append(scanBtn, dryRunBtn, migrateBtn);
   panel.append(title, hint, targetPreview, scopeRow, checkWrap, btnRow, logPre);
+  return panel;
+}
+
+function articleBelongsToDomainKey(article, domainKey) {
+  if (!article) return false;
+  return resolveDomainKeyFromValue(article.domain) === domainKey;
+}
+
+async function fetchActiveArticlesForDomainKey(domainKey, ctx = {}, options = {}) {
+  const appId = DOMAIN_OPTIONS[domainKey]?.app_id || ctx.app_id;
+  const api = ctx.helperApi || window.csmApi;
+  const scopeServiceType = options.scopeServiceType || "";
+  const where = scopeServiceType
+    ? {
+        operator: "AND",
+        conditions: [
+          { field: "service_type", type: "eq", value: scopeServiceType },
+          { field: "status", type: "eq", value: "active" }
+        ]
+      }
+    : { field: "status", type: "eq", value: "active" };
+
+  const rows = await fetchAllTableRowsPaginated({
+    appId,
+    objName: "web_service_detail",
+    where,
+    api,
+    onBatch: options.onBatch
+  });
+  return rows.filter((row) => articleBelongsToDomainKey(row, domainKey));
+}
+
+function formatDuplicateDomainReportText(report) {
+  const lines = [
+    `🌐 Domain key: ${report.domainKey} → ${report.canonicalDomain}`,
+    report.scopeServiceType ? `🔎 Lọc service_type: ${report.scopeServiceType}` : "🔎 Phạm vi: mọi lĩnh vực/dự án trong domain",
+    `📰 Tổng bài active (mọi biến thể domain): ${report.totalArticles}`,
+    "",
+    "📋 Biến thể domain trong DB:",
+    ...Object.entries(report.domainVariants || {}).map(([d, n]) => `   • ${d}: ${n} bài`),
+    "",
+    "📂 Số bài theo service_type:",
+    ...Object.entries(report.byServiceType || {}).map(([st, n]) => `   • ${st}: ${n} bài`),
+    "",
+    `🔁 Nhóm trùng: ${report.duplicateGroupCount} (sẽ xóa ~${report.articlesToRemove} bài cũ, giữ bài mới nhất/nhóm)`,
+  ];
+  if (report.duplicateGroupCount > 0) {
+    lines.push("", "📊 Nhóm trùng theo service_type:");
+    Object.entries(report.duplicateGroupsByServiceType || {}).forEach(([st, n]) => {
+      lines.push(`   • ${st}: ${n} nhóm`);
+    });
+    const samples = (report.duplicateGroups || []).slice(0, 8);
+    if (samples.length) {
+      lines.push("", "📝 Mẫu (tối đa 8 nhóm):");
+      samples.forEach((g, i) => {
+        const keep = g.keepArticle?.title || g.keepArticle?.slug || "?";
+        lines.push(`   ${i + 1}. Giữ: ${String(keep).slice(0, 60)} — xóa ${g.removeArticles?.length || 0} bài`);
+      });
+    }
+  }
+  return lines.join("\n");
+}
+
+async function scanDuplicatesByDomain(domainKey, options = {}) {
+  const ctx = options.ctx || resolveContext();
+  ctx.app_id = DOMAIN_OPTIONS[domainKey]?.app_id || ctx.app_id;
+
+  const articles = await fetchActiveArticlesForDomainKey(domainKey, ctx, {
+    scopeServiceType: options.scopeServiceType || "",
+    onBatch: options.onBatch
+  });
+
+  const byServiceType = {};
+  const domainVariants = {};
+  articles.forEach((a) => {
+    const st = String(a.service_type || "(none)");
+    byServiceType[st] = (byServiceType[st] || 0) + 1;
+    const d = String(a.domain || "(trống)").trim();
+    domainVariants[d] = (domainVariants[d] || 0) + 1;
+  });
+
+  const findOpts = {
+    titleThreshold: options.titleThreshold ?? 0.75,
+    contentHashThreshold: options.contentHashThreshold !== false,
+    imageThreshold: options.imageThreshold ?? 0.5,
+    thumbnailThreshold: options.thumbnailThreshold ?? 0.85
+  };
+
+  const duplicateGroups = articles.length >= 2
+    ? await findDuplicateArticles(articles, findOpts)
+    : [];
+
+  const articlesToRemove = duplicateGroups.reduce(
+    (sum, g) => sum + (g.removeArticles?.length || 0),
+    0
+  );
+  const duplicateGroupsByServiceType = {};
+  duplicateGroups.forEach((g) => {
+    const st = String(g.keepArticle?.service_type || "(none)");
+    duplicateGroupsByServiceType[st] = (duplicateGroupsByServiceType[st] || 0) + 1;
+  });
+
+  return {
+    domainKey,
+    canonicalDomain: canonicalDomainForKey(domainKey),
+    scopeServiceType: options.scopeServiceType || "",
+    totalArticles: articles.length,
+    duplicateGroupCount: duplicateGroups.length,
+    articlesToRemove,
+    byServiceType,
+    domainVariants,
+    duplicateGroupsByServiceType,
+    duplicateGroups
+  };
+}
+
+async function cleanupDuplicatesByDomain(domainKey, options = {}) {
+  const scan = options.preloadedScan || await scanDuplicatesByDomain(domainKey, options);
+
+  if (scan.totalArticles < 2) {
+    return {
+      success: false,
+      message: ti(
+        `❌ Không đủ bài (${scan.totalArticles}) để kiểm tra trùng`,
+        `❌ Not enough articles (${scan.totalArticles}) to check duplicates`,
+        `❌ 文章不足（${scan.totalArticles}）无法查重`
+      ),
+      duplicateCount: 0,
+      cleanedCount: 0,
+      scan
+    };
+  }
+
+  if (!scan.duplicateGroupCount) {
+    return {
+      success: true,
+      message: ti("✅ Không tìm thấy bài trùng trong domain", "✅ No duplicates in domain", "✅ 该域名下无重复文章"),
+      duplicateCount: 0,
+      cleanedCount: 0,
+      scan
+    };
+  }
+
+  if (options.dryRun) {
+    return {
+      success: true,
+      dryRun: true,
+      message: ti(
+        `[DRY-RUN] Sẽ xóa ${scan.articlesToRemove} bài / ${scan.duplicateGroupCount} nhóm`,
+        `[DRY-RUN] Would delete ${scan.articlesToRemove} posts in ${scan.duplicateGroupCount} groups`,
+        `[DRY-RUN] 将删除 ${scan.articlesToRemove} 篇 / ${scan.duplicateGroupCount} 组`
+      ),
+      duplicateCount: scan.duplicateGroupCount,
+      cleanedCount: 0,
+      wouldDelete: scan.articlesToRemove,
+      scan
+    };
+  }
+
+  const ctx = options.ctx || resolveContext();
+  const cleanupResult = await cleanupDuplicateArticles(scan.duplicateGroups, ctx);
+  return {
+    success: cleanupResult.success,
+    message: cleanupResult.message,
+    duplicateCount: scan.duplicateGroupCount,
+    cleanedCount: cleanupResult.deletedCount,
+    failedCount: cleanupResult.failedCount,
+    scan,
+    details: scan.duplicateGroups.map((g) => ({
+      kept: g.keepArticle?.title,
+      removed: (g.removeArticles || []).map((a) => a.title),
+      service_type: g.keepArticle?.service_type
+    }))
+  };
+}
+
+function ensureDomainDuplicateCleanupPanel(theme) {
+  if (!theme) theme = getThemeTokens();
+  let panel = document.getElementById("domain-duplicate-cleanup-panel");
+  if (panel) return panel;
+
+  panel = document.createElement("div");
+  panel.id = "domain-duplicate-cleanup-panel";
+  panel.style.cssText = `margin-top:14px;padding:12px;border:1px solid ${theme.border};border-radius:8px;background:${theme.surface || theme.bg};`;
+
+  const title = document.createElement("div");
+  title.style.cssText = `font-weight:700;margin-bottom:6px;color:${theme.text};font-size:13px;`;
+  title.textContent = ti(
+    "🧹 Dọn tin trùng theo domain (toàn bộ)",
+    "🧹 Cleanup duplicates by domain (full)",
+    "🧹 按域名清理重复文章（全部）"
+  );
+
+  const hint = document.createElement("div");
+  hint.style.cssText = `font-size:12px;color:${theme.muted || theme.textSecondary};line-height:1.5;margin-bottom:10px;`;
+  hint.innerHTML = ti(
+    "Quét <strong>mọi bài active</strong> thuộc domain đang chọn (gồm <code>phanmemmottrieu.net</code>, <code>csmbridge.net,localhost:3333</code>, …), phát hiện trùng theo tiêu đề/nội dung/ảnh, xóa bài cũ giữ bài mới. Khác nút «Dọn tin trùng» ở khu Zalo (chỉ 1 lĩnh vực/dự án).",
+    "Scan <strong>all active posts</strong> for the selected domain (including legacy domain strings), detect duplicates by title/content/images, delete older posts. Unlike the Zalo «Cleanup duplicates» button (single industry/project only).",
+    "扫描所选域名下<strong>全部 active 文章</strong>（含旧域名字符串），按标题/内容/图片查重并删除旧文。与 Zalo 区「清理重复」按钮不同（后者仅单个行业/项目）。"
+  );
+
+  const targetPreview = document.createElement("div");
+  targetPreview.id = "domain-dedup-target";
+  targetPreview.style.cssText = `font-size:12px;margin-bottom:8px;color:${theme.text};`;
+
+  const scopeRow = document.createElement("label");
+  scopeRow.style.cssText = `display:flex;align-items:center;gap:6px;font-size:12px;color:${theme.text};margin-bottom:8px;cursor:pointer;`;
+  const scopeOnlyCurrent = document.createElement("input");
+  scopeOnlyCurrent.type = "checkbox";
+  scopeOnlyCurrent.id = "domain-dedup-scope-current";
+  scopeOnlyCurrent.checked = false;
+  scopeRow.appendChild(scopeOnlyCurrent);
+  scopeRow.appendChild(document.createTextNode(ti(
+    "Chỉ lĩnh vực/dự án đang chọn (giống nút Zalo)",
+    "Only current industry/project (like Zalo button)",
+    "仅当前行业/项目（同 Zalo 按钮）"
+  )));
+
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;";
+
+  const scanBtn = createButton(ti("🔍 Quét trùng domain", "🔍 Scan domain duplicates", "🔍 扫描域名重复"), "#595959");
+  const dryRunBtn = createButton(ti("🧪 Chạy thử (không xóa)", "🧪 Dry run (no delete)", "🧪 试运行（不删除）"), "#fa8c16");
+  const cleanupBtn = createButton(ti("🧹 Dọn trùng & xóa bài cũ", "🧹 Cleanup & delete old", "🧹 清理并删除旧文"), "#ff7a45");
+
+  const logPre = document.createElement("pre");
+  logPre.id = "domain-dedup-log";
+  logPre.style.cssText = `margin:0;padding:10px;max-height:260px;overflow:auto;font-size:11px;line-height:1.45;white-space:pre-wrap;border:1px solid ${theme.border};border-radius:6px;background:${theme.inputBg};color:${theme.text};`;
+
+  let lastScan = null;
+
+  const refreshTarget = () => {
+    const gs = getGlobalSettings();
+    targetPreview.textContent = ti(
+      `Domain: ${canonicalDomainForKey(gs.domainKey)} — app ${DOMAIN_OPTIONS[gs.domainKey]?.app_id || "?"}`,
+      `Domain: ${canonicalDomainForKey(gs.domainKey)} — app ${DOMAIN_OPTIONS[gs.domainKey]?.app_id || "?"}`,
+      `域名：${canonicalDomainForKey(gs.domainKey)} — app ${DOMAIN_OPTIONS[gs.domainKey]?.app_id || "?"}`
+    );
+  };
+
+  const appendLog = (text) => {
+    const ts = new Date().toLocaleTimeString();
+    logPre.textContent = `[${ts}] ${text}\n\n${logPre.textContent || ""}`.trim();
+  };
+
+  const getScopeServiceType = () => {
+    const gs = getGlobalSettings();
+    if (!scopeOnlyCurrent.checked) return "";
+    return gs.isLmkt ? gs.project : gs.industry;
+  };
+
+  scanBtn.onclick = async () => {
+    refreshTarget();
+    const gs = getGlobalSettings();
+    scanBtn.disabled = dryRunBtn.disabled = cleanupBtn.disabled = true;
+    logPre.textContent = "";
+    appendLog(ti("Đang tải bài và phân tích trùng (có thể vài phút)...", "Loading posts and detecting duplicates...", "正在加载并分析重复..."));
+    try {
+      const ctx = resolveContext();
+      ctx.app_id = DOMAIN_OPTIONS[gs.domainKey]?.app_id || ctx.app_id;
+      lastScan = await scanDuplicatesByDomain(gs.domainKey, {
+        ctx,
+        scopeServiceType: getScopeServiceType(),
+        onBatch: (p) => appendLog(ti(`Đã tải ${p.total} dòng...`, `Loaded ${p.total} rows...`, `已加载 ${p.total} 行...`))
+      });
+      logPre.textContent = formatDuplicateDomainReportText(lastScan);
+      thongbao(ti(
+        `Quét xong: ${lastScan.duplicateGroupCount} nhóm, ~${lastScan.articlesToRemove} bài sẽ xóa`,
+        `Scan done: ${lastScan.duplicateGroupCount} groups, ~${lastScan.articlesToRemove} to delete`,
+        `扫描完成：${lastScan.duplicateGroupCount} 组，约删除 ${lastScan.articlesToRemove} 篇`
+      ));
+    } catch (e) {
+      appendLog(ti("Lỗi: ", "Error: ", "错误：") + (e.message || e));
+      canhbao(e.message || String(e));
+    } finally {
+      scanBtn.disabled = dryRunBtn.disabled = cleanupBtn.disabled = false;
+    }
+  };
+
+  dryRunBtn.onclick = async () => {
+    if (!lastScan?.duplicateGroupCount) {
+      return canhbao(ti("Chạy «Quét trùng domain» trước", "Run «Scan domain duplicates» first", "请先「扫描域名重复」"));
+    }
+    dryRunBtn.disabled = cleanupBtn.disabled = true;
+    try {
+      const gs = getGlobalSettings();
+      const ctx = resolveContext();
+      const result = await cleanupDuplicatesByDomain(gs.domainKey, {
+        ctx,
+        scopeServiceType: getScopeServiceType(),
+        dryRun: true
+      });
+      appendLog(result.message);
+    } catch (e) {
+      appendLog(ti("Lỗi dry-run: ", "Dry-run error: ", "试运行错误：") + (e.message || e));
+    } finally {
+      dryRunBtn.disabled = cleanupBtn.disabled = false;
+    }
+  };
+
+  cleanupBtn.onclick = async () => {
+    if (!lastScan?.duplicateGroupCount) {
+      return canhbao(ti("Không có nhóm trùng — quét lại", "No duplicate groups — scan again", "无重复组 — 请重新扫描"));
+    }
+    const gs = getGlobalSettings();
+    const ok = confirm(ti(
+      `Xóa ~${lastScan.articlesToRemove} bài cũ trong ${lastScan.duplicateGroupCount} nhóm trùng?\n\nDomain: ${lastScan.canonicalDomain}\n\nHành động không hoàn tác.`,
+      `Delete ~${lastScan.articlesToRemove} old posts in ${lastScan.duplicateGroupCount} duplicate groups?\n\nDomain: ${lastScan.canonicalDomain}\n\nCannot undo.`,
+      `删除约 ${lastScan.articlesToRemove} 篇旧文（${lastScan.duplicateGroupCount} 组）？\n\n域名：${lastScan.canonicalDomain}\n\n不可撤销。`
+    ));
+    if (!ok) return;
+
+    cleanupBtn.disabled = scanBtn.disabled = dryRunBtn.disabled = true;
+    try {
+      const ctx = resolveContext();
+      appendLog(ti("Đang xóa bài trùng...", "Deleting duplicates...", "正在删除重复文章..."));
+      const result = await cleanupDuplicatesByDomain(gs.domainKey, {
+        ctx,
+        scopeServiceType: getScopeServiceType(),
+        dryRun: false
+      });
+      appendLog(result.message + (result.failedCount ? `\n⚠️ Lỗi: ${result.failedCount}` : ""));
+      thongbao(result.message);
+      lastScan = await scanDuplicatesByDomain(gs.domainKey, {
+        ctx,
+        scopeServiceType: getScopeServiceType()
+      });
+      logPre.textContent = formatDuplicateDomainReportText(lastScan);
+    } catch (e) {
+      appendLog(ti("Lỗi: ", "Error: ", "错误：") + (e.message || e));
+      canhbao(e.message || String(e));
+    } finally {
+      cleanupBtn.disabled = scanBtn.disabled = dryRunBtn.disabled = false;
+    }
+  };
+
+  const domainSelect = () => document.getElementById("global-domain-select");
+  if (domainSelect()) domainSelect().addEventListener("change", refreshTarget);
+  refreshTarget();
+
+  btnRow.append(scanBtn, dryRunBtn, cleanupBtn);
+  panel.append(title, hint, targetPreview, scopeRow, btnRow, logPre);
   return panel;
 }
 
@@ -7687,9 +8030,10 @@ function ensureGlobalSettingsPanel() {
   `;
   
   const domainMigrationSection = ensureDomainMigrationPanel(theme);
+  const domainDuplicateSection = ensureDomainDuplicateCleanupPanel(theme);
 
   // Append title and container to wrapper
-  wrapper.append(title, settingsContainer, domainMigrationSection, facebookCommonSection);
+  wrapper.append(title, settingsContainer, domainMigrationSection, domainDuplicateSection, facebookCommonSection);
 
   // Insert settings UI into container
   const container = ensureUnifiedUIContainer();
