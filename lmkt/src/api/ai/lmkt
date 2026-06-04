@@ -875,6 +875,52 @@ const DOMAIN_OPTIONS = {
   }
 };
 
+/** Danh sách domain đầy đủ theo domainKey (dùng khi lưu DB / Zalo config). */
+function canonicalDomainForKey(domainKey) {
+  const opt = DOMAIN_OPTIONS[domainKey];
+  if (opt?.value) return opt.value;
+  return domainKey === "lmkt"
+    ? "h-holding.vn,h-holding.com.vn,localhost:3333"
+    : "csmbridge.net,localhost:3333";
+}
+
+function parseDomainList(domainValue) {
+  return String(domainValue || "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+function hostBelongsToDomainList(host, domainListValue) {
+  const h = String(host || "").trim().toLowerCase().replace(/^www\./, "");
+  if (!h) return false;
+  return parseDomainList(domainListValue).some((entry) => {
+    const e = entry.toLowerCase().replace(/^www\./, "");
+    return h === e || h.endsWith(`.${e}`) || e.includes(h) || h.includes(e);
+  });
+}
+
+/** Map domain cũ (phanmemmottrieu.net, chỉ csmbridge.net, …) → domainKey. */
+function resolveDomainKeyFromValue(domainValue) {
+  if (!domainValue) return "";
+  const raw = String(domainValue).trim();
+  const lower = raw.toLowerCase();
+  for (const [key, option] of Object.entries(DOMAIN_OPTIONS)) {
+    if (option.value === raw) return key;
+    if (hostBelongsToDomainList(lower, option.value)) return key;
+  }
+  if (lower.includes("h-holding") || lower.includes("lmkt")) return "lmkt";
+  if (lower.includes("phanmemmottrieu") || lower.includes("csmbridge") || lower === "localhost:3333") {
+    return "phanmemmottrieu";
+  }
+  return "";
+}
+
+/** Chuẩn hóa domain lưu DB — Phanmemmottrieu luôn "csmbridge.net,localhost:3333". */
+function migrateLegacyPhanmemDomain(domainValue) {
+  const key = resolveDomainKeyFromValue(domainValue);
+  if (key === "phanmemmottrieu") return canonicalDomainForKey("phanmemmottrieu");
+  if (key === "lmkt") return canonicalDomainForKey("lmkt");
+  return domainValue || canonicalDomainForKey("phanmemmottrieu");
+}
+
 /**
  * INDUSTRY_TYPES: Cấu hình cho 5 lĩnh vực của csmbridge.net
  * 
@@ -5729,20 +5775,14 @@ function getAppIdFromDomainOptions(domainValue) {
     console.warn(`[getAppIdFromDomainOptions] domain is empty, returning default "wuweb"`);
     return "wuweb";
   }
-  
-  // 🔍 Lookup trong DOMAIN_OPTIONS để tìm config khớp
-  for (const [key, option] of Object.entries(DOMAIN_OPTIONS)) {
-    if (option.value === domainValue) {
-      console.log(`[getAppIdFromDomainOptions] ✅ Found match: domain="${domainValue}" → app_id="${option.app_id}" (key: ${key})`);
-      return option.app_id;
-    }
+
+  const domainKey = resolveDomainKeyFromValue(domainValue);
+  if (domainKey && DOMAIN_OPTIONS[domainKey]) {
+    console.log(`[getAppIdFromDomainOptions] ✅ domain="${domainValue}" → app_id="${DOMAIN_OPTIONS[domainKey].app_id}" (key: ${domainKey})`);
+    return DOMAIN_OPTIONS[domainKey].app_id;
   }
-  
-  // ⚠️ Nếu không tìm được exact match, log warning
-  console.warn(`[getAppIdFromDomainOptions] ⚠️ No exact match for domain="${domainValue}"`);
-  console.warn(`[getAppIdFromDomainOptions] Available DOMAIN_OPTIONS:`, Object.entries(DOMAIN_OPTIONS).map(([k, v]) => `${k}:"${v.value}"`).join(", "));
-  
-  // Fallback: return default
+
+  console.warn(`[getAppIdFromDomainOptions] ⚠️ No match for domain="${domainValue}"`);
   return "wuweb";
 }
 
@@ -5909,7 +5949,7 @@ async function processContent(item, opts = {}) {
   
   if (latestConfig) {
     // ✅ Dùng TOÀN BỘ settings từ config đã load (ưu tiên tuyệt đối)
-    ctx.domain = latestConfig.domain;
+    ctx.domain = migrateLegacyPhanmemDomain(latestConfig.domain);
     ctx.service_type = latestConfig.service_type;
     
     // ✅ CHỈ GÁN PROJECT NẾU DOMAIN LÀ LMKT
@@ -5936,7 +5976,7 @@ async function processContent(item, opts = {}) {
     console.log(`   - Primary Domain: ${ctx.primary_domain || '(random)'}`);
   } else {
     // ✅ Fallback to opts nếu không có config
-    ctx.domain = opts.domain || ctx.domain || "h-holding.vn";
+    ctx.domain = migrateLegacyPhanmemDomain(opts.domain || ctx.domain || canonicalDomainForKey("lmkt"));
     ctx.service_type = opts.service_type || ctx.service_type || "bat-dong-san";
     
     // ✅ CHỈ GÁN PROJECT NẾU DOMAIN LÀ LMKT
@@ -7298,13 +7338,13 @@ function getGlobalSettings() {
   const domainSelect = document.getElementById("global-domain-select");
   const industrySelect = document.getElementById("global-industry-select");
   const projectSelect = document.getElementById("global-project-select");
-  
-  const domain = domainSelect?.value || "phanmemmottrieu";
-  const isLmkt = domain === "lmkt";
-  
+
+  const domainKey = domainSelect?.value || "phanmemmottrieu";
+  const isLmkt = domainKey === "lmkt";
+
   return {
-    domain,
-    domainKey: domain,
+    domainKey,
+    domain: canonicalDomainForKey(domainKey),
     isLmkt,
     industry: industrySelect?.value || "bat-dong-san",
     project: projectSelect?.value || "du-an-quan-9"
@@ -15139,10 +15179,7 @@ function ensureZaloMultiGroupUI(container) {
     // Ưu tiên dùng domain_key nếu có, fallback sang reverse mapping
     let domainKey = row.domain_key;
     if (!domainKey) {
-      domainKey = Object.keys(DOMAIN_OPTIONS).find(key => {
-        const domainValues = DOMAIN_OPTIONS[key]?.value || '';
-        return domainValues.includes(row.domain) || row.domain?.includes(DOMAIN_OPTIONS[key]?.value?.split(',')[0]);
-      }) || 'phanmemmottrieu';
+      domainKey = resolveDomainKeyFromValue(row.domain) || "phanmemmottrieu";
     }
     
     const domainSelect = document.getElementById("global-domain-select");
@@ -16124,7 +16161,7 @@ function ensureZaloMultiGroupUI(container) {
     
     // Tạo config object
     const configData = {
-      domain: DOMAIN_OPTIONS[globalSettings.domainKey]?.value || 'phanmemmottrieu',
+      domain: canonicalDomainForKey(globalSettings.domainKey),
       domain_key: globalSettings.domainKey,
       service_type: globalSettings.industry,
       project: globalSettings.project,
@@ -16634,16 +16671,18 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
  * ========================================================
  */
 function getDomainInfo() {
-  const hostname = window.location.hostname;
-  
-  if (hostname.includes('phanmemmottrieu')) {
-    return DOMAIN_OPTIONS.phanmemmottrieu;
-  } else if (hostname.includes('h-holding') || hostname.includes('lmkt')) {
+  const hostname = (window.location.hostname || "").toLowerCase();
+
+  if (hostname.includes("h-holding") || hostname.includes("lmkt")) {
     return DOMAIN_OPTIONS.lmkt;
-  } else if (hostname === 'localhost') {
-    return null; // User chọn từ dropdown
   }
-  
+  if (hostname.includes("phanmemmottrieu")
+      || hostname.includes("csmbridge")
+      || hostname === "localhost"
+      || hostname === "127.0.0.1") {
+    return DOMAIN_OPTIONS.phanmemmottrieu;
+  }
+
   return null;
 }
 
@@ -17405,13 +17444,7 @@ TRƯỚC KHI TRẢ VỀ JSON, BẠN PHẢI:
 async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
   console.log(`[upsertServiceCategoryContent] Bắt đầu cập nhật ${categorySlug} - ${new Date().toLocaleTimeString()}`);
 
-  const domainKey = Object.keys(DOMAIN_OPTIONS).find(key => {
-    const domainValue = DOMAIN_OPTIONS[key]?.value || '';
-    const primaryDomain = domainValue.split(',')[0];
-    return domainValue === ctx.domain
-      || domainValue.includes(ctx.domain)
-      || (primaryDomain && ctx.domain.includes(primaryDomain));
-  }) || '';
+  const domainKey = resolveDomainKeyFromValue(ctx.domain) || "";
 
   const selectedCategoryData = contentData.selectedCategoryData || {};
   const baseCategory = findCategoryTemplate(domainKey || 'phanmemmottrieu', categorySlug) || selectedCategoryData || {};
@@ -17592,7 +17625,7 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
 async function createServiceCategoryContent(opts = {}) {
   const ctx = resolveContext();
   ctx.app_id = opts.app_id || ctx.app_id;
-  ctx.domain = opts.domain || ctx.domain;
+  ctx.domain = migrateLegacyPhanmemDomain(opts.domain || ctx.domain);
   
   const categorySlug = opts.categorySlug;
   const categoryName = opts.categoryName;
@@ -17612,9 +17645,7 @@ async function createServiceCategoryContent(opts = {}) {
   
   // BUILD PROMPT: Kết hợp config + user prompt
   // Xác định domainKey từ ctx.domain
-  const domainKey = Object.keys(DOMAIN_OPTIONS).find(key => 
-    DOMAIN_OPTIONS[key].value === ctx.domain
-  ) || '';
+  const domainKey = resolveDomainKeyFromValue(ctx.domain) || "";
   
   // Category data object
   const categoryData = {
@@ -18768,7 +18799,7 @@ async function createServiceDetailPost(opts = {}) {
   const context = ctx || resolveContext();
   const domainConfig = DOMAIN_OPTIONS[globalSettings.domainKey];
   context.app_id = domainConfig?.app_id || context.app_id;
-  context.domain = domainConfig?.value || context.domain;
+  context.domain = migrateLegacyPhanmemDomain(domainConfig?.value || context.domain);
 
   console.log(`[createServiceDetailPost] Bắt đầu tạo bài: "${title}"`);
   
