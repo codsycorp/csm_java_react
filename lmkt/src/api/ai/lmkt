@@ -921,6 +921,435 @@ function migrateLegacyPhanmemDomain(domainValue) {
   return domainValue || canonicalDomainForKey("phanmemmottrieu");
 }
 
+/** Bản ghi có domain cũ cần đổi sang canonical của domainKey đã chọn. */
+function shouldMigrateRowDomain(domainValue, targetDomainKey) {
+  const canonical = canonicalDomainForKey(targetDomainKey);
+  const current = String(domainValue || "").trim();
+  if (!current) return true;
+  if (current === canonical) return false;
+  return resolveDomainKeyFromValue(current) === targetDomainKey;
+}
+
+async function fetchAllTableRowsPaginated({ appId, objName, where, pageSize = 200, onBatch }) {
+  if (!window.csmApi?.getTableData) {
+    throw new Error("window.csmApi.getTableData không khả dụng");
+  }
+  let lastkey;
+  const all = [];
+  let page = 0;
+  while (true) {
+    const res = await window.csmApi.getTableData({
+      app_id: appId,
+      obj_name: objName,
+      where: where || undefined,
+      take: pageSize,
+      lastkey
+    }).catch(() => ({ rows: [] }));
+    const batch = res.rows || res.data || [];
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    all.push(...batch);
+    page += 1;
+    if (typeof onBatch === "function") onBatch({ page, batchSize: batch.length, total: all.length });
+    lastkey = res.lastkey;
+    if (!lastkey || batch.length < pageSize) break;
+  }
+  return all;
+}
+
+function summarizeDomainMigrationRows(rows, targetDomainKey) {
+  const canonical = canonicalDomainForKey(targetDomainKey);
+  const byOld = {};
+  const pending = [];
+  (rows || []).forEach((row) => {
+    const from = String(row.domain || "").trim() || "(trống)";
+    if (!shouldMigrateRowDomain(row.domain, targetDomainKey)) return;
+    byOld[from] = (byOld[from] || 0) + 1;
+    pending.push(row);
+  });
+  return { canonical, byOld, pending, totalScanned: (rows || []).length };
+}
+
+async function scanDomainMigrationInventory(domainKey, options = {}) {
+  const appId = DOMAIN_OPTIONS[domainKey]?.app_id;
+  if (!appId) throw new Error(`Không có app_id cho domainKey: ${domainKey}`);
+
+  const canonical = canonicalDomainForKey(domainKey);
+  const scopeServiceType = options.scopeServiceType || "";
+  const where = scopeServiceType
+    ? { field: "service_type", type: "eq", value: scopeServiceType }
+    : undefined;
+  const onBatch = options.onBatch;
+
+  const report = {
+    domainKey,
+    targetDomain: canonical,
+    scopeServiceType: scopeServiceType || null,
+    web_service_detail: { totalScanned: 0, pending: 0, byOld: {} },
+    web_services: { totalScanned: 0, pending: 0, byOld: {} },
+    zalo_configs: { totalScanned: 0, pending: 0, byOld: {} },
+    totalPending: 0
+  };
+
+  if (options.includeDetail !== false) {
+    const detailRows = await fetchAllTableRowsPaginated({
+      appId,
+      objName: "web_service_detail",
+      where,
+      onBatch: (p) => onBatch && onBatch({ table: "web_service_detail", ...p })
+    });
+    const s = summarizeDomainMigrationRows(detailRows, domainKey);
+    report.web_service_detail = {
+      totalScanned: s.totalScanned,
+      pending: s.pending.length,
+      byOld: s.byOld,
+      _pendingRows: s.pending
+    };
+  }
+
+  if (options.includeServices !== false) {
+    const serviceRows = await fetchAllTableRowsPaginated({
+      appId,
+      objName: "web_services",
+      where,
+      onBatch: (p) => onBatch && onBatch({ table: "web_services", ...p })
+    });
+    const s = summarizeDomainMigrationRows(serviceRows, domainKey);
+    report.web_services = {
+      totalScanned: s.totalScanned,
+      pending: s.pending.length,
+      byOld: s.byOld,
+      _pendingRows: s.pending
+    };
+  }
+
+  if (options.includeZaloConfigs !== false && typeof loadDataOptionUser === "function") {
+    const configs = loadDataOptionUser().filter((x) => x && x.config_for_zalo);
+    const byOld = {};
+    const pending = [];
+    configs.forEach((cfg) => {
+      const from = String(cfg.domain || "").trim() || "(trống)";
+      if (!shouldMigrateRowDomain(cfg.domain, domainKey)) return;
+      if (scopeServiceType && String(cfg.service_type || "") !== scopeServiceType) return;
+      byOld[from] = (byOld[from] || 0) + 1;
+      pending.push(cfg);
+    });
+    report.zalo_configs = {
+      totalScanned: configs.length,
+      pending: pending.length,
+      byOld,
+      _pendingRows: pending
+    };
+  }
+
+  report.totalPending =
+    report.web_service_detail.pending
+    + report.web_services.pending
+    + report.zalo_configs.pending;
+
+  return report;
+}
+
+function formatDomainMigrationReportText(report) {
+  const lines = [
+    `🎯 Domain đích (${report.domainKey}): ${report.targetDomain}`,
+    report.scopeServiceType ? `🔎 Lọc service_type/project: ${report.scopeServiceType}` : "🔎 Phạm vi: toàn bộ app",
+    "",
+    `📰 web_service_detail: ${report.web_service_detail.pending}/${report.web_service_detail.totalScanned} cần đổi`,
+    ...Object.entries(report.web_service_detail.byOld || {}).map(([d, n]) => `   • ${d} → ${n} bản ghi`),
+    "",
+    `📁 web_services: ${report.web_services.pending}/${report.web_services.totalScanned} cần đổi`,
+    ...Object.entries(report.web_services.byOld || {}).map(([d, n]) => `   • ${d} → ${n} bản ghi`),
+    "",
+    `⚙️ Cấu hình Zalo: ${report.zalo_configs.pending}/${report.zalo_configs.totalScanned} cần đổi`,
+    ...Object.entries(report.zalo_configs.byOld || {}).map(([d, n]) => `   • ${d} → ${n} config`),
+    "",
+    `📊 Tổng cộng: ${report.totalPending} mục cần migrate`
+  ];
+  return lines.join("\n");
+}
+
+async function updateTableRowDomain(row, { appId, objName, targetDomain, pkFields }) {
+  const oldDomain = row.domain;
+  const objUpdate = {
+    ...row,
+    domain: targetDomain,
+    updated_at: new Date().toISOString()
+  };
+  const pk = pkFields || ["slug", "domain", "status"];
+  const where = {};
+  pk.forEach((f) => {
+    if (f === "domain") where.domain = oldDomain;
+    else where[f] = row[f] != null ? row[f] : (f === "status" ? "active" : row[f]);
+  });
+  await window.csmApi.updateTableData({
+    app_id: appId,
+    obj_name: objName,
+    command: "update",
+    obj_update: objUpdate,
+    pk_fields: pk,
+    where
+  });
+}
+
+async function executeDomainMigration(report, options = {}) {
+  const { dryRun = false, onProgress } = options;
+  const domainKey = report.domainKey;
+  const targetDomain = report.targetDomain;
+  const appId = DOMAIN_OPTIONS[domainKey]?.app_id;
+  const stats = { detail: 0, services: 0, zalo: 0, errors: [] };
+
+  const bump = (msg) => onProgress && onProgress(msg);
+
+  const migrateRows = async (rows, objName, pkFields, statKey) => {
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      bump(`${dryRun ? "[DRY-RUN] " : ""}${objName} ${i + 1}/${rows.length}: ${row.slug || row.id || row.service_code || "?"}`);
+      if (dryRun) {
+        stats[statKey] += 1;
+        continue;
+      }
+      try {
+        await updateTableRowDomain(row, { appId, objName, targetDomain, pkFields });
+        stats[statKey] += 1;
+      } catch (e) {
+        stats.errors.push({ objName, id: row.slug || row.id, message: e.message || String(e) });
+      }
+    }
+  };
+
+  if (report.web_service_detail._pendingRows?.length) {
+    await migrateRows(
+      report.web_service_detail._pendingRows,
+      "web_service_detail",
+      ["slug", "domain", "status"],
+      "detail"
+    );
+  }
+  if (report.web_services._pendingRows?.length) {
+    await migrateRows(
+      report.web_services._pendingRows,
+      "web_services",
+      ["slug", "domain", "status"],
+      "services"
+    );
+  }
+
+  if (report.zalo_configs._pendingRows?.length && typeof loadDataOptionUser === "function") {
+    const pendingIds = new Set(report.zalo_configs._pendingRows.map((c) => c.id));
+    const all = loadDataOptionUser();
+    let changed = 0;
+    const next = all.map((item) => {
+      if (!pendingIds.has(item.id)) return item;
+      changed += 1;
+      return {
+        ...item,
+        domain: targetDomain,
+        domain_key: domainKey
+      };
+    });
+    if (!dryRun && changed > 0) {
+      await new Promise((resolve, reject) => {
+        saveDataOptionUser(next, (ok, err) => (ok ? resolve() : reject(new Error(err || "Lưu Zalo config thất bại"))));
+      });
+    }
+    stats.zalo = changed;
+  }
+
+  return stats;
+}
+
+function ensureDomainMigrationPanel(theme) {
+  if (!theme) theme = getThemeTokens();
+  let panel = document.getElementById("domain-migration-panel");
+  if (panel) return panel;
+
+  panel = document.createElement("div");
+  panel.id = "domain-migration-panel";
+  panel.style.cssText = `margin-top:14px;padding:12px;border:1px solid ${theme.border};border-radius:8px;background:${theme.surface || theme.bg};`;
+
+  const title = document.createElement("div");
+  title.style.cssText = `font-weight:700;margin-bottom:6px;color:${theme.text};font-size:13px;`;
+  title.textContent = ti(
+    "🔁 Chuẩn hóa domain (dữ liệu cũ → mới)",
+    "🔁 Domain normalization (legacy → canonical)",
+    "🔁 域名规范化（旧数据 → 新标准）"
+  );
+
+  const hint = document.createElement("div");
+  hint.style.cssText = `font-size:12px;color:${theme.muted || theme.textSecondary};line-height:1.5;margin-bottom:10px;`;
+  hint.innerHTML = ti(
+    "Quét và cập nhật <strong>web_service_detail</strong>, <strong>web_services</strong>, <strong>cấu hình Zalo</strong> từ domain cũ (VD: <code>phanmemmottrieu.net</code>) sang giá trị chuẩn theo <strong>Cài Đặt Chung → Tên miền</strong>. Phanmemmottrieu: <code>csmbridge.net,localhost:3333</code>.",
+    "Scan and update <strong>web_service_detail</strong>, <strong>web_services</strong>, and <strong>Zalo configs</strong> from legacy domains (e.g. <code>phanmemmottrieu.net</code>) to the canonical value from <strong>General Settings → Domain</strong>. Phanmemmottrieu: <code>csmbridge.net,localhost:3333</code>.",
+    "扫描并更新 <strong>web_service_detail</strong>、<strong>web_services</strong>、<strong>Zalo 配置</strong>，将旧域名（如 <code>phanmemmottrieu.net</code>）迁移为 <strong>常规设置 → 域名</strong> 中的标准值。Phanmemmottrieu：<code>csmbridge.net,localhost:3333</code>。"
+  );
+
+  const targetPreview = document.createElement("div");
+  targetPreview.id = "domain-migration-target";
+  targetPreview.style.cssText = `font-size:12px;margin-bottom:8px;color:${theme.text};`;
+
+  const scopeRow = document.createElement("label");
+  scopeRow.style.cssText = `display:flex;align-items:center;gap:6px;font-size:12px;color:${theme.text};margin-bottom:8px;cursor:pointer;`;
+  const scopeOnlyCurrent = document.createElement("input");
+  scopeOnlyCurrent.type = "checkbox";
+  scopeOnlyCurrent.id = "domain-migration-scope-current";
+  scopeOnlyCurrent.checked = false;
+  scopeRow.appendChild(scopeOnlyCurrent);
+  scopeRow.appendChild(document.createTextNode(ti(
+    "Chỉ lĩnh vực/dự án đang chọn (service_type)",
+    "Only current industry/project (service_type)",
+    "仅当前行业/项目 (service_type)"
+  )));
+
+  const checkWrap = document.createElement("div");
+  checkWrap.style.cssText = "display:flex;flex-wrap:wrap;gap:12px;margin-bottom:10px;font-size:12px;color:" + theme.text;
+  ["detail", "services", "zalo"].forEach((key) => {
+    const lbl = document.createElement("label");
+    lbl.style.cssText = "display:flex;align-items:center;gap:4px;cursor:pointer;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.id = `domain-migration-include-${key}`;
+    cb.checked = true;
+    lbl.appendChild(cb);
+    const labels = {
+      detail: ti("Bài chi tiết", "Detail posts", "详情文章"),
+      services: ti("Danh mục web_services", "web_services categories", "web_services 分类"),
+      zalo: ti("Config Zalo", "Zalo configs", "Zalo 配置")
+    };
+    lbl.appendChild(document.createTextNode(labels[key]));
+    checkWrap.appendChild(lbl);
+  });
+
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;";
+
+  const scanBtn = createButton(ti("🔍 Quét dữ liệu cũ", "🔍 Scan legacy data", "🔍 扫描旧数据"), "#595959");
+  const dryRunBtn = createButton(ti("🧪 Chạy thử (không lưu)", "🧪 Dry run", "🧪 试运行"), "#fa8c16");
+  const migrateBtn = createButton(ti("✅ Migrate & lưu DB", "✅ Migrate & save", "✅ 迁移并保存"), "#1677ff");
+
+  const logPre = document.createElement("pre");
+  logPre.id = "domain-migration-log";
+  logPre.style.cssText = `margin:0;padding:10px;max-height:220px;overflow:auto;font-size:11px;line-height:1.45;white-space:pre-wrap;border:1px solid ${theme.border};border-radius:6px;background:${theme.inputBg};color:${theme.text};`;
+
+  const refreshTargetLabel = () => {
+    const gs = getGlobalSettings();
+    const canonical = canonicalDomainForKey(gs.domainKey);
+    targetPreview.textContent = ti(
+      `Domain đích: ${canonical} (key: ${gs.domainKey})`,
+      `Target domain: ${canonical} (key: ${gs.domainKey})`,
+      `目标域名：${canonical}（key：${gs.domainKey}）`
+    );
+  };
+
+  const appendLog = (text) => {
+    const ts = new Date().toLocaleTimeString();
+    logPre.textContent = `[${ts}] ${text}\n\n${logPre.textContent || ""}`.trim();
+  };
+
+  let lastReport = null;
+
+  scanBtn.onclick = async () => {
+    refreshTargetLabel();
+    const gs = getGlobalSettings();
+    scanBtn.disabled = dryRunBtn.disabled = migrateBtn.disabled = true;
+    logPre.textContent = "";
+    appendLog(ti("Đang quét...", "Scanning...", "扫描中..."));
+    try {
+      const scopeServiceType = scopeOnlyCurrent.checked
+        ? (gs.isLmkt ? gs.project : gs.industry)
+        : "";
+      lastReport = await scanDomainMigrationInventory(gs.domainKey, {
+        scopeServiceType,
+        includeDetail: document.getElementById("domain-migration-include-detail")?.checked !== false,
+        includeServices: document.getElementById("domain-migration-include-services")?.checked !== false,
+        includeZaloConfigs: document.getElementById("domain-migration-include-zalo")?.checked !== false,
+        onBatch: (p) => appendLog(`${p.table || "?"} — đã tải ${p.total} dòng...`)
+      });
+      logPre.textContent = formatDomainMigrationReportText(lastReport);
+      thongbao(ti(`Quét xong: ${lastReport.totalPending} mục cần migrate`, `Scan done: ${lastReport.totalPending} items to migrate`, `扫描完成：${lastReport.totalPending} 项待迁移`));
+    } catch (e) {
+      appendLog(ti("Lỗi: ", "Error: ", "错误：") + (e.message || e));
+      canhbao(e.message || String(e));
+    } finally {
+      scanBtn.disabled = dryRunBtn.disabled = migrateBtn.disabled = false;
+    }
+  };
+
+  dryRunBtn.onclick = async () => {
+    if (!lastReport || !lastReport.totalPending) {
+      return canhbao(ti("Chạy «Quét dữ liệu cũ» trước", "Run «Scan legacy data» first", "请先运行«扫描旧数据»"));
+    }
+    dryRunBtn.disabled = migrateBtn.disabled = true;
+    try {
+      const stats = await executeDomainMigration(lastReport, {
+        dryRun: true,
+        onProgress: (m) => appendLog(m)
+      });
+      appendLog(ti(
+        `DRY-RUN xong — detail:${stats.detail}, services:${stats.services}, zalo:${stats.zalo}`,
+        `DRY-RUN done — detail:${stats.detail}, services:${stats.services}, zalo:${stats.zalo}`,
+        `试运行完成 — detail:${stats.detail}, services:${stats.services}, zalo:${stats.zalo}`
+      ));
+    } catch (e) {
+      appendLog(ti("Lỗi dry-run: ", "Dry-run error: ", "试运行错误：") + (e.message || e));
+    } finally {
+      dryRunBtn.disabled = migrateBtn.disabled = false;
+    }
+  };
+
+  migrateBtn.onclick = async () => {
+    if (!lastReport || !lastReport.totalPending) {
+      return canhbao(ti("Không có dữ liệu cần migrate — quét lại", "Nothing to migrate — scan again", "无需迁移 — 请重新扫描"));
+    }
+    const gs = getGlobalSettings();
+    const ok = confirm(ti(
+      `Migrate ${lastReport.totalPending} mục sang domain:\n${lastReport.targetDomain}\n\n(app: ${DOMAIN_OPTIONS[gs.domainKey]?.app_id})\n\nTiếp tục?`,
+      `Migrate ${lastReport.totalPending} items to:\n${lastReport.targetDomain}\n\n(app: ${DOMAIN_OPTIONS[gs.domainKey]?.app_id})\n\nContinue?`,
+      `将 ${lastReport.totalPending} 项迁移到：\n${lastReport.targetDomain}\n\n(app: ${DOMAIN_OPTIONS[gs.domainKey]?.app_id})\n\n继续？`
+    ));
+    if (!ok) return;
+
+    migrateBtn.disabled = scanBtn.disabled = dryRunBtn.disabled = true;
+    try {
+      const stats = await executeDomainMigration(lastReport, {
+        dryRun: false,
+        onProgress: (m) => appendLog(m)
+      });
+      const errLine = stats.errors.length
+        ? `\n⚠️ Lỗi: ${stats.errors.length} (xem console)`
+        : "";
+      appendLog(ti(
+        `✅ Hoàn tất — detail:${stats.detail}, services:${stats.services}, zalo:${stats.zalo}${errLine}`,
+        `✅ Done — detail:${stats.detail}, services:${stats.services}, zalo:${stats.zalo}${errLine}`,
+        `✅ 完成 — detail:${stats.detail}, services:${stats.services}, zalo:${stats.zalo}${errLine}`
+      ));
+      if (stats.errors.length) console.warn("[DomainMigration] errors:", stats.errors);
+      thongbao(ti("Migrate domain hoàn tất", "Domain migration completed", "域名迁移完成"));
+      lastReport = await scanDomainMigrationInventory(gs.domainKey, {
+        scopeServiceType: scopeOnlyCurrent.checked ? (gs.isLmkt ? gs.project : gs.industry) : "",
+        includeDetail: document.getElementById("domain-migration-include-detail")?.checked !== false,
+        includeServices: document.getElementById("domain-migration-include-services")?.checked !== false,
+        includeZaloConfigs: document.getElementById("domain-migration-include-zalo")?.checked !== false
+      });
+      logPre.textContent = formatDomainMigrationReportText(lastReport);
+    } catch (e) {
+      appendLog(ti("Lỗi migrate: ", "Migration error: ", "迁移错误：") + (e.message || e));
+      canhbao(e.message || String(e));
+    } finally {
+      migrateBtn.disabled = scanBtn.disabled = dryRunBtn.disabled = false;
+    }
+  };
+
+  const domainSelect = () => document.getElementById("global-domain-select");
+  if (domainSelect()) {
+    domainSelect().addEventListener("change", refreshTargetLabel);
+  }
+  refreshTargetLabel();
+
+  btnRow.append(scanBtn, dryRunBtn, migrateBtn);
+  panel.append(title, hint, targetPreview, scopeRow, checkWrap, btnRow, logPre);
+  return panel;
+}
+
 /**
  * INDUSTRY_TYPES: Cấu hình cho 5 lĩnh vực của csmbridge.net
  * 
@@ -7257,8 +7686,10 @@ function ensureGlobalSettingsPanel() {
     </div>
   `;
   
+  const domainMigrationSection = ensureDomainMigrationPanel(theme);
+
   // Append title and container to wrapper
-  wrapper.append(title, settingsContainer, facebookCommonSection);
+  wrapper.append(title, settingsContainer, domainMigrationSection, facebookCommonSection);
 
   // Insert settings UI into container
   const container = ensureUnifiedUIContainer();
@@ -19516,65 +19947,13 @@ async function deleteCategoryBySlug(domainKey, slug) {
  */
 async function updateDetailDomainByServiceType(domainKey, serviceType) {
   try {
-    const domainValue = DOMAIN_OPTIONS[domainKey]?.value;
-    const appId = DOMAIN_OPTIONS[domainKey]?.app_id;
-
-    if (!domainValue || !appId) {
-      throw new Error("Không tìm thấy domain hoặc app_id");
-    }
-
-    if (!window.csmApi?.getTableData || !window.csmApi?.updateTableData) {
-      throw new Error("Không tìm thấy window.csmApi.getTableData/updateTableData");
-    }
-
-    let lastkey = undefined;
-    let updated = 0;
-    const take = 200;
-
-    while (true) {
-      const rows = await window.csmApi.getTableData({
-        app_id: appId,
-        obj_name: "web_service_detail",
-        where: {
-          field: "service_type",
-          type: "eq",
-          value: serviceType
-        },
-        take,
-        lastkey
-      }).catch(() => ({ rows: [] }));
-
-      const data = rows.rows || rows.data || [];
-      if (!Array.isArray(data) || data.length === 0) break;
-
-      for (const row of data) {
-        const objUpdate = {
-          ...row,
-          domain: domainValue,
-          updated_at: new Date().toISOString()
-        };
-
-        await window.csmApi.updateTableData({
-          app_id: appId,
-          obj_name: "web_service_detail",
-          command: "update",
-          obj_update: objUpdate,
-          pk_fields: ["slug", "domain", "status"],
-          where: {
-            slug: row.slug,
-            domain: row.domain,
-            status: row.status || "active"
-          }
-        });
-
-        updated += 1;
-      }
-
-      lastkey = rows.lastkey;
-      if (!lastkey || data.length < take) break;
-    }
-
-    const message = `✅ Đã cập nhật domain cho ${updated} tin chi tiết`;
+    const report = await scanDomainMigrationInventory(domainKey, {
+      scopeServiceType: serviceType,
+      includeServices: false,
+      includeZaloConfigs: false
+    });
+    const stats = await executeDomainMigration(report, { dryRun: false });
+    const message = `✅ Đã cập nhật domain cho ${stats.detail} tin chi tiết`;
     if (window.showNotification) {
       window.showNotification({ type: 'success', message, duration: 3 });
     } else {
