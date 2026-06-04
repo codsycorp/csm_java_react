@@ -8,9 +8,8 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Central runtime tier for AI local on constrained servers (v7 target: 5GB RAM, 2 CPU).
- * Principle: ingest/index the full source in RocksDB/Lucene, keep each LLM prompt small,
- * skip CPU-heavy orchestration loops on weak machines while preserving edit accuracy gates.
+ * Central runtime tier for AI local on constrained servers.
+ * Production server: balanced-8gb (8GB RAM, 4 CPU, 7B). weak-local profile uses CONSTRAINED.
  */
 @Service
 public class AiLocalRuntimeTierService {
@@ -18,7 +17,8 @@ public class AiLocalRuntimeTierService {
     public enum Tier {
         STRONG,
         BALANCED,
-        WEAK_5GB
+        /** weak-local / fast profile — small heap, skip heavy orchestration loops */
+        CONSTRAINED
     }
 
     @Value("${ai.local.runtime.tier:auto}")
@@ -30,20 +30,20 @@ public class AiLocalRuntimeTierService {
     @Value("${ai.local.runtime.weak-profile.cores-threshold:2}")
     private int weakCoresThreshold;
 
-    @Value("${ai.local.runtime.weak-profile.heap-gb-threshold:6}")
+    @Value("${ai.local.runtime.weak-profile.heap-gb-threshold:3}")
     private int weakHeapGbThreshold;
 
-    @Value("${ai.local.runtime.weak-5gb.skip-orchestration-refine:true}")
-    private boolean skipOrchestrationRefineOnWeak;
+    @Value("${ai.local.runtime.constrained.skip-orchestration-refine:true}")
+    private boolean skipOrchestrationRefineOnConstrained;
 
-    @Value("${ai.local.runtime.weak-5gb.skip-orchestration-dag-replan:true}")
-    private boolean skipOrchestrationDagReplanOnWeak;
+    @Value("${ai.local.runtime.constrained.skip-orchestration-dag-replan:true}")
+    private boolean skipOrchestrationDagReplanOnConstrained;
 
-    @Value("${ai.local.runtime.weak-5gb.skip-intent-second-pass:true}")
-    private boolean skipIntentSecondPassOnWeak;
+    @Value("${ai.local.runtime.constrained.skip-intent-second-pass:true}")
+    private boolean skipIntentSecondPassOnConstrained;
 
-    @Value("${ai.local.runtime.weak-5gb.single-orchestration-pass:true}")
-    private boolean singleOrchestrationPassOnWeak;
+    @Value("${ai.local.runtime.constrained.single-orchestration-pass:true}")
+    private boolean singleOrchestrationPassOnConstrained;
 
     public Tier resolveTier() {
         String configured = String.valueOf(configuredTier == null ? "auto" : configuredTier)
@@ -51,41 +51,41 @@ public class AiLocalRuntimeTierService {
             .toLowerCase(Locale.ROOT);
         return switch (configured) {
             case "strong", "max" -> Tier.STRONG;
-            case "balanced", "standard" -> Tier.BALANCED;
-            case "weak", "weak-5gb", "5gb", "v7" -> Tier.WEAK_5GB;
-            default -> detectWeakMachine() ? Tier.WEAK_5GB : Tier.BALANCED;
+            case "balanced", "balanced-8gb", "8gb", "standard" -> Tier.BALANCED;
+            case "weak", "constrained", "weak-local", "fast" -> Tier.CONSTRAINED;
+            default -> detectConstrainedMachine() ? Tier.CONSTRAINED : Tier.BALANCED;
         };
     }
 
     public boolean isWeakMachine() {
-        return resolveTier() == Tier.WEAK_5GB;
+        return resolveTier() == Tier.CONSTRAINED;
     }
 
-    public boolean detectWeakMachine() {
+    public boolean detectConstrainedMachine() {
         if (!weakProfileDetectionEnabled) {
             return false;
         }
         int cores = Math.max(1, Runtime.getRuntime().availableProcessors());
         long heapGb = Math.max(1L, Runtime.getRuntime().maxMemory() / (1024L * 1024L * 1024L));
         return cores <= Math.max(1, weakCoresThreshold)
-            || heapGb <= Math.max(2, weakHeapGbThreshold);
+            && heapGb <= Math.max(2, weakHeapGbThreshold);
     }
 
     public boolean shouldSkipOrchestrationRefine() {
-        return isWeakMachine() && skipOrchestrationRefineOnWeak;
+        return isWeakMachine() && skipOrchestrationRefineOnConstrained;
     }
 
     public boolean shouldSkipOrchestrationDagReplan() {
-        return isWeakMachine() && skipOrchestrationDagReplanOnWeak;
+        return isWeakMachine() && skipOrchestrationDagReplanOnConstrained;
     }
 
     public boolean shouldSkipIntentClassifySecondPass() {
-        return isWeakMachine() && skipIntentSecondPassOnWeak;
+        return isWeakMachine() && skipIntentSecondPassOnConstrained;
     }
 
-    /** One resilient orchestration call; no evidence-refine / DAG-replan loops on weak tier. */
+    /** One resilient orchestration call; no evidence-refine / DAG-replan loops on constrained tier. */
     public boolean preferSingleOrchestrationPass() {
-        return isWeakMachine() && singleOrchestrationPassOnWeak;
+        return isWeakMachine() && singleOrchestrationPassOnConstrained;
     }
 
     public Map<String, Object> describeRuntime() {
@@ -95,7 +95,7 @@ public class AiLocalRuntimeTierService {
         out.put("configuredTier", String.valueOf(configuredTier == null ? "auto" : configuredTier));
         out.put("cores", Runtime.getRuntime().availableProcessors());
         out.put("heapMaxGb", Runtime.getRuntime().maxMemory() / (1024L * 1024L * 1024L));
-        out.put("weakMachineDetected", detectWeakMachine());
+        out.put("constrainedMachineDetected", detectConstrainedMachine());
         out.put("skipOrchestrationRefine", shouldSkipOrchestrationRefine());
         out.put("skipOrchestrationDagReplan", shouldSkipOrchestrationDagReplan());
         out.put("skipIntentSecondPass", shouldSkipIntentClassifySecondPass());

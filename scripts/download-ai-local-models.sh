@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Download GGUF models for CSM AI Local
 #
-# TEXT WORKER (bắt buộc — 1 file duy nhất mọi máy, PHẦN Q master brief):
-#   qwen2.5-coder-1.5b-instruct-q8_0.gguf
+# TEXT WORKER (mặc định): qwen2.5-coder-7b-instruct-q4_k_m.gguf
+# Tùy chọn RAM thấp: qwen2.5-coder-1.5b-instruct-q8_0.gguf (profile worker-1.5b)
 #
 # Usage:
-#   ./scripts/download-ai-local-models.sh worker     # default — Coder-1.5B Q8_0 (M1 + Linux 5GB + strong)
-#   ./scripts/download-ai-local-models.sh server   # same worker → csm_datas/ (prod jar)
-#   ./scripts/download-ai-local-models.sh m1-16gb  # same worker → backend/csm_datas/
-#   ./scripts/download-ai-local-models.sh 5gb      # alias server
+#   ./scripts/download-ai-local-models.sh            # default — 7B Q4_K_M
+#   ./scripts/download-ai-local-models.sh 8gb       # prod/server → csm_datas/
+#   ./scripts/download-ai-local-models.sh server   # alias 8gb
+#   ./scripts/download-ai-local-models.sh m1-16gb  # dev M1 → backend/csm_datas/
+#   ./scripts/download-ai-local-models.sh worker-1.5b  # legacy 1.5B Q8_0 only
 #   ./scripts/download-ai-local-models.sh strong   # worker + nomic embed + vision optional
 #   ./scripts/download-ai-local-models.sh vision-weak
 #   ./scripts/download-ai-local-models.sh vision-qwen2vl-2b   # Qwen2-VL-2B Q4_K_M (sidecar strong)
@@ -21,11 +22,12 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CSM_WORKER_GGUF="qwen2.5-coder-1.5b-instruct-q8_0.gguf"
+CSM_WORKER_GGUF_7B="qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+CSM_WORKER_GGUF_1_5B="qwen2.5-coder-1.5b-instruct-q8_0.gguf"
 
 resolve_model_dir() {
   case "${1:-server}" in
-    5gb|weak|server|prod)
+    8gb|7b|server|prod)
       echo "$REPO_ROOT/csm_datas/ai_local/model"
       ;;
     *)
@@ -34,7 +36,7 @@ resolve_model_dir() {
   esac
 }
 
-PROFILE="${1:-worker}"
+PROFILE="${1:-8gb}"
 MODEL_DIR="$(resolve_model_dir "$PROFILE")"
 mkdir -p "$MODEL_DIR"
 
@@ -68,9 +70,14 @@ download_hf() {
   done
 }
 
+download_worker_7b_q4() {
+  log "Text worker (server 8GB): $CSM_WORKER_GGUF_7B"
+  download_hf "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF" "$CSM_WORKER_GGUF_7B"
+}
+
 download_worker_1_5b_q8() {
-  log "Text worker (single GGUF all machines): $CSM_WORKER_GGUF"
-  download_hf "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF" "$CSM_WORKER_GGUF"
+  log "Text worker (dev / máy yếu): $CSM_WORKER_GGUF_1_5B"
+  download_hf "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF" "$CSM_WORKER_GGUF_1_5B"
 }
 
 download_embed_nomic() {
@@ -101,20 +108,26 @@ list_models() {
 }
 
 warn_legacy() {
-  log "WARN: profile '$1' deprecated — CSM dùng 1 GGUF duy nhất: $CSM_WORKER_GGUF (PHẦN Q)"
+  log "WARN: profile '$1' deprecated — dùng $CSM_WORKER_GGUF_7B (worker-1.5b chỉ khi thiếu RAM)"
 }
 
 case "$PROFILE" in
-  worker|m1-16gb|m1-safe|m1|5gb|weak|server|prod)
+  8gb|7b|server|prod)
+    download_worker_7b_q4
+    ;;
+  worker-1.5b|m1-1.5b)
     download_worker_1_5b_q8
     ;;
-  dual-3b|3b|m1-1.5b)
+  worker|m1-16gb|m1-safe|m1)
+    download_worker_7b_q4
+    ;;
+  dual-3b|3b)
     warn_legacy "$PROFILE"
-    download_worker_1_5b_q8
+    download_worker_7b_q4
     ;;
   strong|dev)
-    log "Profile strong — worker 1.5B Q8_0 + nomic embed + vision optional"
-    download_worker_1_5b_q8
+    log "Profile strong — worker 7B Q4_K_M + nomic embed + vision optional"
+    download_worker_7b_q4
     download_embed_nomic
     download_vision_qwen2vl_2b
     download_vision_smolvlm500_video
@@ -143,7 +156,7 @@ case "$PROFILE" in
     ;;
   *)
     echo "Unknown profile: $PROFILE"
-    echo "Profiles: worker | server | m1-16gb | 5gb | strong | vision-weak | vision-strong | qwen2-vl-2b | qwen2-vl-2b-server | embed | list"
+    echo "Profiles: 8gb | server | m1-16gb | m1 | strong | worker-1.5b | vision-weak | vision-strong | qwen2-vl-2b | embed | list"
     exit 1
     ;;
 esac

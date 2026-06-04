@@ -21,10 +21,10 @@ load_env_file() {
     return 1
 }
 
-# Optional profile: ./start.sh strong | ./start.sh 5gb  OR  CSM_LOCAL_PROFILE=5gb ./start.sh
+# Optional profile: ./start.sh strong | ./start.sh 8gb  OR  CSM_LOCAL_PROFILE=8gb ./start.sh
 if [ -z "${CSM_LOCAL_PROFILE:-}" ] && [ $# -ge 1 ]; then
     case "$1" in
-        strong|local-strong|5gb|weak|local-5gb|fast)
+        strong|local-strong|8gb|7b|local-8gb|fast|weak|weak-local)
             CSM_LOCAL_PROFILE="$1"
             shift
             ;;
@@ -40,8 +40,8 @@ if [ -n "${CSM_LOCAL_PROFILE:-}" ]; then
         strong|local-strong)
             load_env_file "$SCRIPT_DIR/config.local-strong.env" || config_log "config.local-strong.env not found"
             ;;
-        5gb|weak|local-5gb)
-            load_env_file "$SCRIPT_DIR/config.local-5gb.env" || config_log "config.local-5gb.env not found"
+        8gb|7b|local-8gb)
+            load_env_file "$SCRIPT_DIR/config.local-8gb.env" || config_log "config.local-8gb.env not found"
             ;;
         fast)
             config_log "CSM_LOCAL_PROFILE=fast — using start.sh weak-local defaults (no overlay file)"
@@ -108,7 +108,8 @@ if [ -z "${HEAP_SIZE:-}" ]; then
         elif [ "$total_mem_mb" -lt 7000 ]; then
             HEAP_SIZE="1536m"
         elif [ "$total_mem_mb" -lt 12000 ]; then
-            HEAP_SIZE="3g"
+            # 8GB máy + 7B GGUF in-process (~4.5GB native): heap JVM phải thấp
+            HEAP_SIZE="1536m"
         else
             HEAP_SIZE="6g"
         fi
@@ -127,6 +128,8 @@ if [[ "${HEAP_SIZE}" =~ ^([0-9]+)([mMgG])$ ]]; then
     fi
     if [ "$total_mem_mb" -gt 0 ] && [ "$total_mem_mb" -lt 7000 ] && [ "$heap_mb" -gt 1536 ]; then
         HEAP_SIZE="1536m"
+    elif [ "$total_mem_mb" -gt 0 ] && [ "$total_mem_mb" -lt 11000 ] && [ "$heap_mb" -gt 2048 ]; then
+        HEAP_SIZE="2048m"
     fi
 fi
 
@@ -140,12 +143,14 @@ ENABLE_ALWAYS_PRETOUCH="${ENABLE_ALWAYS_PRETOUCH:-false}"
 
 # Spring profile selection for local-only servers.
 # Prefer SPRING_PROFILES_ACTIVE_OVERRIDE from config.local-*.env; else AI_LOCAL_MODE / auto RAM.
-# - AI_LOCAL_MODE=5gb     -> prod,local-5gb (5GB RAM / 2 CPU, 1.5B)
+# - AI_LOCAL_MODE=8gb     -> prod,local-8gb (8GB RAM / 4 CPU, 7B Q4_K_M)
 # - AI_LOCAL_MODE=fast  -> prod,weak-local (minimal ctx, fastest but limited edit quality)
 # - AI_LOCAL_MODE=large -> prod,weak-local,weak-local-large
 # Override fully via SPRING_PROFILES_ACTIVE_OVERRIDE or CSM_LOCAL_PROFILE + config.local-*.env
-if [ -z "${AI_LOCAL_MODE:-}" ] && [ -z "${CSM_LOCAL_PROFILE:-}" ] && [ "$total_mem_mb" -gt 0 ] && [ "$total_mem_mb" -lt 7000 ]; then
-    AI_LOCAL_MODE="5gb"
+if [ -z "${AI_LOCAL_MODE:-}" ] && [ -z "${CSM_LOCAL_PROFILE:-}" ] && [ "$total_mem_mb" -ge 7000 ] && [ "$total_mem_mb" -lt 12000 ]; then
+    AI_LOCAL_MODE="8gb"
+elif [ -z "${AI_LOCAL_MODE:-}" ] && [ -z "${CSM_LOCAL_PROFILE:-}" ] && [ "$total_mem_mb" -gt 0 ] && [ "$total_mem_mb" -lt 7000 ]; then
+    AI_LOCAL_MODE="fast"
 elif [ -z "${AI_LOCAL_MODE:-}" ] && [ -z "${CSM_LOCAL_PROFILE:-}" ]; then
     AI_LOCAL_MODE="fast"
 else
@@ -157,8 +162,8 @@ if [ -n "$SPRING_PROFILES_ACTIVE_OVERRIDE" ]; then
     EFFECTIVE_SPRING_PROFILES="$SPRING_PROFILES_ACTIVE_OVERRIDE"
 else
     case "$AI_LOCAL_MODE" in
-        5gb|v7|balanced)
-            EFFECTIVE_SPRING_PROFILES="prod,local-5gb"
+        8gb|7b|7B|balanced)
+            EFFECTIVE_SPRING_PROFILES="prod,local-8gb"
             ;;
         large)
             EFFECTIVE_SPRING_PROFILES="prod,weak-local,weak-local-large"
@@ -166,24 +171,28 @@ else
         fast|*)
             EFFECTIVE_SPRING_PROFILES="prod,weak-local"
             if [ "${CSM_WARN_FAST_EDIT:-true}" = "true" ]; then
-                config_log "WARNING: AI_LOCAL_MODE=fast caps llama max-tokens=96 — code EDIT will fail. Use AI_LOCAL_MODE=5gb (see config.local-5gb.env) for edit on server."
+                config_log "WARNING: AI_LOCAL_MODE=fast caps llama max-tokens=96 — code EDIT will fail. Use AI_LOCAL_MODE=8gb (see config.local-8gb.env) for production server."
             fi
             ;;
     esac
 fi
 
-WEAK_MODE_ACTIVE="false"
-if [[ ",${EFFECTIVE_SPRING_PROFILES}," == *",weak-local,"* ]] || [[ ",${EFFECTIVE_SPRING_PROFILES}," == *",local-5gb,"* ]]; then
-    WEAK_MODE_ACTIVE="true"
+WEAK_LOCAL_MODE="false"
+LOCAL_8GB_MODE="false"
+if [[ ",${EFFECTIVE_SPRING_PROFILES}," == *",weak-local,"* ]]; then
+    WEAK_LOCAL_MODE="true"
+fi
+if [[ ",${EFFECTIVE_SPRING_PROFILES}," == *",local-8gb,"* ]]; then
+    LOCAL_8GB_MODE="true"
 fi
 
 WEAK_LLAMA_CONTEXT_WINDOW="2048"
 WEAK_LLAMA_MAX_TOKENS="96"
 WEAK_LLAMA_MAX_PROMPT_CHARS="18000"
-if [ "$AI_LOCAL_MODE" = "5gb" ] || [ "$AI_LOCAL_MODE" = "v7" ] || [ "$AI_LOCAL_MODE" = "balanced" ]; then
-    WEAK_LLAMA_CONTEXT_WINDOW="6144"
-    WEAK_LLAMA_MAX_TOKENS="512"
-    WEAK_LLAMA_MAX_PROMPT_CHARS="24000"
+if [ "$LOCAL_8GB_MODE" = "true" ] || [ "$AI_LOCAL_MODE" = "8gb" ] || [ "$AI_LOCAL_MODE" = "7b" ] || [ "$AI_LOCAL_MODE" = "7B" ] || [ "$AI_LOCAL_MODE" = "balanced" ]; then
+    WEAK_LLAMA_CONTEXT_WINDOW="12288"
+    WEAK_LLAMA_MAX_TOKENS="1024"
+    WEAK_LLAMA_MAX_PROMPT_CHARS="32000"
 elif [ "$AI_LOCAL_MODE" = "large" ]; then
     WEAK_LLAMA_CONTEXT_WINDOW="3072"
     WEAK_LLAMA_MAX_TOKENS="384"
@@ -191,7 +200,17 @@ elif [ "$AI_LOCAL_MODE" = "large" ]; then
 fi
 
 WEAK_SPRING_ARGS=()
-if [ "$WEAK_MODE_ACTIVE" = "true" ]; then
+if [ "$LOCAL_8GB_MODE" = "true" ]; then
+    WEAK_SPRING_ARGS=(
+        "--chat.ai.auto-message.local-generation.enabled=true"
+        "--chat.ai.auto-message.rate-limit.enabled=true"
+        "--chat.ai.auto-message.rate-limit.min-interval-ms=180000"
+        "--chat.ai.auto-message.rate-limit.window-ms=900000"
+        "--chat.ai.auto-message.rate-limit.max-per-window=2"
+        "--cache.warming.enabled=false"
+        "--ai.orchestration.speculative.enabled=false"
+    )
+elif [ "$WEAK_LOCAL_MODE" = "true" ]; then
     WEAK_SPRING_ARGS=(
         "--chat.ai.auto-message.local-generation.enabled=true"
         "--chat.ai.auto-message.rate-limit.enabled=true"
@@ -484,8 +503,10 @@ fi
 
 log "Starting $jarName on port $APP_PORT with performance optimizations..."
 log "Spring profiles: $EFFECTIVE_SPRING_PROFILES (AI_LOCAL_MODE=$AI_LOCAL_MODE, CSM_LOCAL_PROFILE=${CSM_LOCAL_PROFILE:-auto})"
-if [ "$WEAK_MODE_ACTIVE" = "true" ]; then
-    log "Weak mode runtime hard-overrides are enabled to prevent env drift"
+if [ "$LOCAL_8GB_MODE" = "true" ]; then
+    log "Profile local-8gb: text worker 7B — llama tuning from application-local-8gb.properties"
+elif [ "$WEAK_LOCAL_MODE" = "true" ]; then
+    log "Profile weak-local: conservative llama hard-overrides enabled"
 fi
 
 resolve_env_path() {
@@ -502,11 +523,7 @@ if [ "${AI_LOCAL_LLAMA_ENABLED:-true}" != "false" ] && [ -n "${AI_LOCAL_LLAMA_MO
     if [ ! -f "$LLAMA_MODEL_FILE" ]; then
         log "ERROR: Local llama GGUF not found: $LLAMA_MODEL_FILE"
         log "  mkdir -p $SCRIPT_DIR/csm_datas/ai_local/model"
-        if [ "${AI_LOCAL_MODE:-}" = "5gb" ] || [ "${CSM_LOCAL_PROFILE:-}" = "5gb" ]; then
-            log "  ./scripts/download-ai-local-models.sh server"
-        else
-            log "  ./scripts/download-ai-local-models.sh dual-3b"
-        fi
+        log "  ./scripts/download-ai-local-models.sh 8gb"
         log "  Or set AI_LOCAL_LLAMA_MODEL_PATH / AI_LOCAL_LLAMA_SEO_MODEL_PATH in config.env."
         exit 1
     fi

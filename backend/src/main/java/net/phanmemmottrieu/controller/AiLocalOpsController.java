@@ -137,7 +137,7 @@ public class AiLocalOpsController {
     @Value("${ai.orchestration.multimodal.local-only.require-vision:false}")
     private boolean multimodalRequireVision;
 
-    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf}")
+    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-7b-instruct-q4_k_m.gguf}")
     private String localModelPath;
 
     @Value("${ai.local.llama.runtime-profile:balanced}")
@@ -271,13 +271,13 @@ public class AiLocalOpsController {
 
         if (reasoningCandidates.isEmpty()) {
             reasoningCandidates.add(modelCandidate(
-                "qwen2.5-coder-1.5b-instruct-q8_0.gguf",
+                "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
                 "reasoning",
                 "balanced",
-                "~1.6-2.0GB",
+                "~4.2-5.0GB",
                 true,
                 true,
-                "q8_0"));
+                "q4_k_m"));
         }
 
         if (visionCandidates.isEmpty()) {
@@ -311,7 +311,8 @@ public class AiLocalOpsController {
         Map<String, Object> quantizationGuide = new LinkedHashMap<>();
         quantizationGuide.put("recommendedOrderWeakMachine", List.of("q8_0", "q5_k_m", "q4_k_m", "q4_0", "q2_k"));
         quantizationGuide.put("notes", List.of(
-            "q8_0 — worker mặc định CSM (1 GGUF M1 + Linux 5GB + strong): chất lượng SEO/code đa ngữ cao nhất ở size 1.5B",
+            "q4_k_m — worker mặc định server 8GB: qwen2.5-coder-7b (SEO/code chất lượng cao hơn 1.5B)",
+            "q8_0 — dev M1 / máy yếu: qwen2.5-coder-1.5b khi thiếu RAM",
             "q5_k_m — fallback nhẹ hơn Q8 một chút",
             "q4_k_m — tiết kiệm RAM hơn trên máy cực yếu",
             "q2_k — chỉ khi RAM cực thấp, có thể giảm độ chính xác"

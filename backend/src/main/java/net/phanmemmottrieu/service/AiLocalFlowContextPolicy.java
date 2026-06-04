@@ -8,7 +8,7 @@ import java.util.Locale;
 
 /**
  * Flow-aware context + RAG presets for AI Local (analyze/edit × menu/code).
- * Replaces ad-hoc boosts with explicit per-flow budgets aligned to weak-5gb slot caps.
+ * Replaces ad-hoc boosts with explicit per-flow budgets aligned to local slot caps.
  */
 @Component
 public class AiLocalFlowContextPolicy {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start local vision sidecar for CSM (weak-5gb friendly).
+# Start local vision sidecar for CSM (low-RAM friendly).
 # Runs llama-server (SmolVLM2). Java backend calls OpenAI-compatible /v1/chat/completions directly.
 #
 # Usage:

@@ -921,6 +921,111 @@ function migrateLegacyPhanmemDomain(domainValue) {
   return domainValue || canonicalDomainForKey("phanmemmottrieu");
 }
 
+/**
+ * API get-table-data: KHÔNG có e_where → backend không trả dữ liệu.
+ * Luôn dùng các helper dưới đây, không gọi getTableData với where undefined.
+ */
+function tableWhereEq(field, value) {
+  return { field: String(field), type: "eq", value };
+}
+
+function tableWhereActive() {
+  return tableWhereEq("status", "active");
+}
+
+function tableWhereAnd(conditions = []) {
+  const conds = (conditions || []).filter(Boolean);
+  if (!conds.length) return tableWhereActive();
+  if (conds.length === 1) return conds[0];
+  return { operator: "AND", conditions: conds };
+}
+
+function normalizeTableWhere(where) {
+  if (!where) return tableWhereActive();
+  if (where.field || where.operator) return where;
+  return tableWhereActive();
+}
+
+/** Các giá trị domain cần query riêng (eq) — gộp kết quả, dedupe theo PK. */
+function domainQueryValuesForKey(domainKey) {
+  const canonical = canonicalDomainForKey(domainKey);
+  const set = new Set([canonical]);
+  if (domainKey === "phanmemmottrieu") {
+    [
+      "phanmemmottrieu.net",
+      "www.phanmemmottrieu.net",
+      "csmbridge.net",
+      "www.csmbridge.net",
+      "phanmemmottrieu.net,localhost:3333",
+      "csmbridge.net,localhost:3333",
+      "localhost:3333",
+      "phanmemmottrieu"
+    ].forEach((d) => set.add(d));
+  }
+  if (domainKey === "lmkt") {
+    [
+      "h-holding.vn",
+      "www.h-holding.vn",
+      "h-holding.com.vn",
+      "www.h-holding.com.vn",
+      "h-holding.vn,h-holding.com.vn,localhost:3333"
+    ].forEach((d) => set.add(d));
+  }
+  return [...set].filter(Boolean);
+}
+
+function rowDedupeKey(row, objName) {
+  if (objName === "web_services") {
+    return `svc::${row.slug || row.service_code || row.id || ""}::${row.domain || ""}`;
+  }
+  return `det::${row.slug || row.id || ""}::${row.domain || ""}::${row.status || "active"}`;
+}
+
+/**
+ * Tải rows theo từng biến thể domain + where bắt buộc (status=active, optional service_type).
+ */
+async function fetchTableRowsForDomainKey({
+  appId,
+  objName,
+  domainKey,
+  scopeServiceType = "",
+  api,
+  onBatch
+}) {
+  const domainValues = domainQueryValuesForKey(domainKey);
+  const seen = new Set();
+  const merged = [];
+
+  for (let i = 0; i < domainValues.length; i += 1) {
+    const domainValue = domainValues[i];
+    const conditions = [
+      tableWhereEq("domain", domainValue),
+      tableWhereActive()
+    ];
+    if (scopeServiceType) {
+      conditions.unshift(tableWhereEq("service_type", scopeServiceType));
+    }
+    const where = tableWhereAnd(conditions);
+
+    const rows = await fetchAllTableRowsPaginated({
+      appId,
+      objName,
+      where,
+      api,
+      onBatch: (p) => onBatch && onBatch({ domainValue, objName, ...p })
+    });
+
+    rows.forEach((row) => {
+      const key = rowDedupeKey(row, objName);
+      if (seen.has(key)) return;
+      seen.add(key);
+      merged.push(row);
+    });
+  }
+
+  return merged;
+}
+
 /** Bản ghi có domain cũ cần đổi sang canonical của domainKey đã chọn. */
 function shouldMigrateRowDomain(domainValue, targetDomainKey) {
   const canonical = canonicalDomainForKey(targetDomainKey);
@@ -930,30 +1035,175 @@ function shouldMigrateRowDomain(domainValue, targetDomainKey) {
   return resolveDomainKeyFromValue(current) === targetDomainKey;
 }
 
-async function fetchAllTableRowsPaginated({ appId, objName, where, pageSize = 200, onBatch, api }) {
+/** Backend: không gửi take → filter() trả hết rows khớp where; có take → tối đa 1000/trang. */
+const TABLE_FETCH_PAGE_MAX = 1000;
+
+/**
+ * AdvancedRateLimitFilter (backend): 50 req/s, 500 req/phút / IP.
+ * Migrate & quét DB: throttle + bulk-update theo batch (giống CsmDynamicGrid import).
+ */
+const API_RATE_SAFE = {
+  REQUESTS_PER_MINUTE_TARGET: 35,
+  MIN_INTERVAL_MS: 1700,
+  BULK_BATCH_DEFAULT: 20,
+  BULK_BATCH_LARGE: 30,
+  BULK_INTERVAL_MS: 380,
+  BULK_INTERVAL_LARGE_MS: 450,
+  BULK_PAUSE_EVERY: 6,
+  BULK_PAUSE_MS: 1400,
+  BULK_PAUSE_LARGE_MS: 1800,
+  RETRY_MAX: 4
+};
+
+let apiThrottleNextAt = 0;
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+async function apiThrottleWait() {
+  const guardMsg = getBackendGuardMessage();
+  if (guardMsg) {
+    const remain = Math.max(500, backendGuardState.pausedUntil - Date.now());
+    await sleepMs(remain);
+  }
+  const wait = apiThrottleNextAt - Date.now();
+  if (wait > 0) await sleepMs(wait);
+  apiThrottleNextAt = Date.now() + API_RATE_SAFE.MIN_INTERVAL_MS;
+}
+
+function isRateLimitedApiError(error) {
+  const status = extractHttpStatusFromError(error);
+  if (status === 429) return true;
+  const msg = String(error?.message || error || "").toLowerCase();
+  return msg.includes("429") || msg.includes("rate limit") || msg.includes("too many request");
+}
+
+function parseApiRetryAfterMs(error) {
+  const err = error || {};
+  const headerValue = err?.response?.headers?.get?.("retry-after")
+    ?? err?.response?.headers?.["retry-after"]
+    ?? err?.headers?.get?.("retry-after")
+    ?? err?.headers?.["retry-after"];
+  if (headerValue == null) return undefined;
+  const raw = String(headerValue).trim();
+  if (!raw) return undefined;
+  const sec = Number(raw);
+  if (Number.isFinite(sec) && sec > 0) return Math.ceil(sec * 1000);
+  const retryAt = Date.parse(raw);
+  if (Number.isFinite(retryAt)) {
+    const delta = retryAt - Date.now();
+    return delta > 0 ? delta : 0;
+  }
+  return undefined;
+}
+
+async function withApiRetry(task, retries = API_RATE_SAFE.RETRY_MAX) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    await apiThrottleWait();
+    try {
+      return await task();
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries) break;
+      const limited = isRateLimitedApiError(error);
+      if (limited) {
+        const retryAfter = parseApiRetryAfterMs(error) || 60000;
+        activateBackendGuard(ti("API rate limit (429)", "API rate limit (429)", "API 限流 (429)"), retryAfter);
+        apiThrottleNextAt = Date.now() + retryAfter;
+      }
+      const backoffMs = parseApiRetryAfterMs(error)
+        ?? (limited ? (1400 + attempt * 1200) : (450 + attempt * 550));
+      await sleepMs(backoffMs);
+    }
+  }
+  throw lastError;
+}
+
+function buildDomainMigrationOperation(row, targetDomain, pkFields) {
+  const oldDomain = row.domain;
+  const objUpdate = {
+    ...row,
+    domain: targetDomain,
+    updated_at: new Date().toISOString()
+  };
+  const pk = pkFields || ["slug", "domain", "status"];
+  const where = {};
+  pk.forEach((f) => {
+    if (f === "domain") where.domain = oldDomain;
+    else where[f] = row[f] != null ? row[f] : (f === "status" ? "active" : row[f]);
+  });
+  return { command: "update", obj_update: objUpdate, where };
+}
+
+function extractTableRows(res) {
+  const batch = res?.rows || res?.data || [];
+  return Array.isArray(batch) ? batch : [];
+}
+
+function extractTableCursor(res) {
+  const c = res?.lastkey ?? res?.nextCursor;
+  return c != null && c !== "" ? String(c) : null;
+}
+
+/**
+ * Tải toàn bộ bản ghi khớp where (mặc định một request, không giới hạn 200).
+ * Chỉ phân trang khi response truncated hoặc khi truyền pageSize (tối đa 1000/trang).
+ */
+async function fetchAllTableRowsPaginated({ appId, objName, where, pageSize, onBatch, api }) {
   const tableApi = api || window.csmApi;
   if (!tableApi?.getTableData) {
     throw new Error("getTableData không khả dụng");
   }
-  let lastkey;
+  const safeWhere = normalizeTableWhere(where);
   const all = [];
   let page = 0;
+  let lastkey;
+  let take;
+
+  const useFixedPageSize = Number(pageSize) > 0;
+  if (useFixedPageSize) {
+    take = Math.min(Math.floor(Number(pageSize)), TABLE_FETCH_PAGE_MAX);
+  }
+
   while (true) {
-    const res = await tableApi.getTableData({
+    const payload = {
       app_id: appId,
       obj_name: objName,
-      where: where || undefined,
-      take: pageSize,
-      lastkey
-    }).catch(() => ({ rows: [] }));
-    const batch = res.rows || res.data || [];
-    if (!Array.isArray(batch) || batch.length === 0) break;
+      where: safeWhere
+    };
+    if (take) {
+      payload.take = take;
+      if (lastkey) payload.lastkey = lastkey;
+    }
+
+    const res = await withApiRetry(() => tableApi.getTableData(payload)).catch(() => ({ rows: [] }));
+    const batch = extractTableRows(res);
+    if (!batch.length && !extractTableCursor(res)) break;
+
     all.push(...batch);
     page += 1;
-    if (typeof onBatch === "function") onBatch({ page, batchSize: batch.length, total: all.length });
-    lastkey = res.lastkey;
-    if (!lastkey || batch.length < pageSize) break;
+    if (typeof onBatch === "function") {
+      onBatch({
+        page,
+        batchSize: batch.length,
+        total: all.length,
+        mode: take ? "page" : "full"
+      });
+    }
+
+    const cursor = extractTableCursor(res);
+    const truncated = res?.truncated === true;
+
+    if (!truncated && !useFixedPageSize) break;
+    if (!cursor) break;
+    if (useFixedPageSize && batch.length < take) break;
+
+    if (!take) take = TABLE_FETCH_PAGE_MAX;
+    lastkey = cursor;
   }
+
   return all;
 }
 
@@ -971,15 +1221,20 @@ function summarizeDomainMigrationRows(rows, targetDomainKey) {
 }
 
 async function scanDomainMigrationInventory(domainKey, options = {}) {
-  const appId = DOMAIN_OPTIONS[domainKey]?.app_id;
+  const ctx = options.ctx || {};
+  const appId = DOMAIN_OPTIONS[domainKey]?.app_id || ctx.app_id;
   if (!appId) throw new Error(`Không có app_id cho domainKey: ${domainKey}`);
 
   const canonical = canonicalDomainForKey(domainKey);
   const scopeServiceType = options.scopeServiceType || "";
-  const where = scopeServiceType
-    ? { field: "service_type", type: "eq", value: scopeServiceType }
-    : undefined;
   const onBatch = options.onBatch;
+  const fetchOpts = {
+    appId,
+    domainKey,
+    scopeServiceType,
+    api: ctx.helperApi || window.csmApi,
+    onBatch
+  };
 
   const report = {
     domainKey,
@@ -992,10 +1247,9 @@ async function scanDomainMigrationInventory(domainKey, options = {}) {
   };
 
   if (options.includeDetail !== false) {
-    const detailRows = await fetchAllTableRowsPaginated({
-      appId,
+    const detailRows = await fetchTableRowsForDomainKey({
+      ...fetchOpts,
       objName: "web_service_detail",
-      where,
       onBatch: (p) => onBatch && onBatch({ table: "web_service_detail", ...p })
     });
     const s = summarizeDomainMigrationRows(detailRows, domainKey);
@@ -1008,10 +1262,9 @@ async function scanDomainMigrationInventory(domainKey, options = {}) {
   }
 
   if (options.includeServices !== false) {
-    const serviceRows = await fetchAllTableRowsPaginated({
-      appId,
+    const serviceRows = await fetchTableRowsForDomainKey({
+      ...fetchOpts,
       objName: "web_services",
-      where,
       onBatch: (p) => onBatch && onBatch({ table: "web_services", ...p })
     });
     const s = summarizeDomainMigrationRows(serviceRows, domainKey);
@@ -1070,26 +1323,112 @@ function formatDomainMigrationReportText(report) {
 }
 
 async function updateTableRowDomain(row, { appId, objName, targetDomain, pkFields }) {
-  const oldDomain = row.domain;
-  const objUpdate = {
-    ...row,
-    domain: targetDomain,
-    updated_at: new Date().toISOString()
-  };
   const pk = pkFields || ["slug", "domain", "status"];
-  const where = {};
-  pk.forEach((f) => {
-    if (f === "domain") where.domain = oldDomain;
-    else where[f] = row[f] != null ? row[f] : (f === "status" ? "active" : row[f]);
-  });
-  await window.csmApi.updateTableData({
+  const op = buildDomainMigrationOperation(row, targetDomain, pk);
+  await withApiRetry(() => window.csmApi.updateTableData({
     app_id: appId,
     obj_name: objName,
     command: "update",
-    obj_update: objUpdate,
+    obj_update: op.obj_update,
     pk_fields: pk,
-    where
-  });
+    where: op.where
+  }));
+}
+
+async function migrateTableRowsRateSafe(rows, {
+  appId,
+  objName,
+  targetDomain,
+  pkFields,
+  dryRun,
+  onProgress,
+  stats,
+  statKey
+}) {
+  if (!rows?.length) return;
+  const total = rows.length;
+  const batchSize = total >= 1000
+    ? API_RATE_SAFE.BULK_BATCH_LARGE
+    : API_RATE_SAFE.BULK_BATCH_DEFAULT;
+  const minBatchIntervalMs = total >= 1000
+    ? API_RATE_SAFE.BULK_INTERVAL_LARGE_MS
+    : API_RATE_SAFE.BULK_INTERVAL_MS;
+  const pauseEvery = API_RATE_SAFE.BULK_PAUSE_EVERY;
+  const pauseMs = total >= 1000
+    ? API_RATE_SAFE.BULK_PAUSE_LARGE_MS
+    : API_RATE_SAFE.BULK_PAUSE_MS;
+  const bulkApi = window.csmApi?.bulkUpdateTableData;
+  let nextAllowedAt = 0;
+  let done = 0;
+
+  for (let start = 0, batchNo = 0; start < total; start += batchSize, batchNo += 1) {
+    const waitMs = nextAllowedAt - Date.now();
+    if (waitMs > 0) await sleepMs(waitMs);
+    nextAllowedAt = Date.now() + minBatchIntervalMs;
+
+    const chunk = rows.slice(start, Math.min(start + batchSize, total));
+    const label = chunk[0]?.slug || chunk[0]?.id || chunk[0]?.service_code || "?";
+    if (onProgress) {
+      onProgress(
+        `${dryRun ? "[DRY-RUN] " : ""}${objName} ${done + 1}-${done + chunk.length}/${total} (${label}…)${bulkApi && !dryRun ? " [bulk]" : ""}`
+      );
+    }
+
+    if (dryRun) {
+      stats[statKey] += chunk.length;
+      done += chunk.length;
+      if (batchNo > 0 && batchNo % pauseEvery === 0) await sleepMs(pauseMs);
+      continue;
+    }
+
+    if (bulkApi) {
+      try {
+        await withApiRetry(() => bulkApi({
+          app_id: appId,
+          obj_name: objName,
+          pk_fields: pkFields,
+          continue_on_error: true,
+          operations: chunk.map((row) => buildDomainMigrationOperation(row, targetDomain, pkFields))
+        }));
+        stats[statKey] += chunk.length;
+        done += chunk.length;
+      } catch (batchErr) {
+        for (let i = 0; i < chunk.length; i += 1) {
+          const row = chunk[i];
+          try {
+            await updateTableRowDomain(row, { appId, objName, targetDomain, pkFields });
+            stats[statKey] += 1;
+            done += 1;
+          } catch (e) {
+            stats.errors.push({ objName, id: row.slug || row.id, message: e.message || String(e) });
+          }
+        }
+        stats.errors.push({
+          objName,
+          id: `batch@${start}`,
+          message: (batchErr && batchErr.message) || String(batchErr)
+        });
+      }
+    } else {
+      for (let i = 0; i < chunk.length; i += 1) {
+        const row = chunk[i];
+        try {
+          await updateTableRowDomain(row, { appId, objName, targetDomain, pkFields });
+          stats[statKey] += 1;
+          done += 1;
+        } catch (e) {
+          stats.errors.push({ objName, id: row.slug || row.id, message: e.message || String(e) });
+        }
+      }
+    }
+
+    if (batchNo > 0 && (batchNo + 1) % pauseEvery === 0) {
+      if (onProgress) {
+        onProgress(ti("⏸ Nghỉ ngắn tránh rate limit…", "⏸ Brief pause to avoid rate limit…", "⏸ 短暂暂停避免限流…"));
+      }
+      await sleepMs(pauseMs);
+    }
+  }
 }
 
 async function executeDomainMigration(report, options = {}) {
@@ -1099,23 +1438,17 @@ async function executeDomainMigration(report, options = {}) {
   const appId = DOMAIN_OPTIONS[domainKey]?.app_id;
   const stats = { detail: 0, services: 0, zalo: 0, errors: [] };
 
-  const bump = (msg) => onProgress && onProgress(msg);
-
   const migrateRows = async (rows, objName, pkFields, statKey) => {
-    for (let i = 0; i < rows.length; i += 1) {
-      const row = rows[i];
-      bump(`${dryRun ? "[DRY-RUN] " : ""}${objName} ${i + 1}/${rows.length}: ${row.slug || row.id || row.service_code || "?"}`);
-      if (dryRun) {
-        stats[statKey] += 1;
-        continue;
-      }
-      try {
-        await updateTableRowDomain(row, { appId, objName, targetDomain, pkFields });
-        stats[statKey] += 1;
-      } catch (e) {
-        stats.errors.push({ objName, id: row.slug || row.id, message: e.message || String(e) });
-      }
-    }
+    await migrateTableRowsRateSafe(rows, {
+      appId,
+      objName,
+      targetDomain,
+      pkFields,
+      dryRun,
+      onProgress,
+      stats,
+      statKey
+    });
   };
 
   if (report.web_service_detail._pendingRows?.length) {
@@ -1179,9 +1512,9 @@ function ensureDomainMigrationPanel(theme) {
   const hint = document.createElement("div");
   hint.style.cssText = `font-size:12px;color:${theme.muted || theme.textSecondary};line-height:1.5;margin-bottom:10px;`;
   hint.innerHTML = ti(
-    "Quét và cập nhật <strong>web_service_detail</strong>, <strong>web_services</strong>, <strong>cấu hình Zalo</strong> từ domain cũ (VD: <code>phanmemmottrieu.net</code>) sang giá trị chuẩn theo <strong>Cài Đặt Chung → Tên miền</strong>. Phanmemmottrieu: <code>csmbridge.net,localhost:3333</code>.",
-    "Scan and update <strong>web_service_detail</strong>, <strong>web_services</strong>, and <strong>Zalo configs</strong> from legacy domains (e.g. <code>phanmemmottrieu.net</code>) to the canonical value from <strong>General Settings → Domain</strong>. Phanmemmottrieu: <code>csmbridge.net,localhost:3333</code>.",
-    "扫描并更新 <strong>web_service_detail</strong>、<strong>web_services</strong>、<strong>Zalo 配置</strong>，将旧域名（如 <code>phanmemmottrieu.net</code>）迁移为 <strong>常规设置 → 域名</strong> 中的标准值。Phanmemmottrieu：<code>csmbridge.net,localhost:3333</code>。"
+    "Quét và cập nhật <strong>web_service_detail</strong>, <strong>web_services</strong>, <strong>cấu hình Zalo</strong> từ domain cũ (VD: <code>phanmemmottrieu.net</code>) sang giá trị chuẩn theo <strong>Cài Đặt Chung → Tên miền</strong>. Phanmemmottrieu: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & lưu DB: ghi theo lô <code>bulk-update</code>, ~35 API/phút, tự chờ khi 429 (giới hạn server 500/phút/IP).</span>",
+    "Scan and update <strong>web_service_detail</strong>, <strong>web_services</strong>, and <strong>Zalo configs</strong> from legacy domains (e.g. <code>phanmemmottrieu.net</code>) to the canonical value from <strong>General Settings → Domain</strong>. Phanmemmottrieu: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & save: batched <code>bulk-update</code>, ~35 API calls/min, auto-waits on 429 (server cap 500/min/IP).</span>",
+    "扫描并更新 <strong>web_service_detail</strong>、<strong>web_services</strong>、<strong>Zalo 配置</strong>，将旧域名迁移为标准域名。Phanmemmottrieu：<code>csmbridge.net,localhost:3333</code>。<br><span style=\"opacity:.85\">✅ 迁移保存：分批 bulk-update，约 35 次 API/分钟，遇 429 自动等待（服务端 500 次/分钟/IP）。</span>"
   );
 
   const targetPreview = document.createElement("div");
@@ -1310,6 +1643,12 @@ function ensureDomainMigrationPanel(theme) {
     if (!ok) return;
 
     migrateBtn.disabled = scanBtn.disabled = dryRunBtn.disabled = true;
+    const pending = lastReport.totalPending || 0;
+    appendLog(ti(
+      `Bắt đầu migrate ${pending} mục (bulk, throttle ~${API_RATE_SAFE.REQUESTS_PER_MINUTE_TARGET} API/phút)…`,
+      `Starting migrate ${pending} items (bulk, ~${API_RATE_SAFE.REQUESTS_PER_MINUTE_TARGET} API/min)…`,
+      `开始迁移 ${pending} 项（bulk，约 ${API_RATE_SAFE.REQUESTS_PER_MINUTE_TARGET} API/分钟）…`
+    ));
     try {
       const stats = await executeDomainMigration(lastReport, {
         dryRun: false,
@@ -1359,21 +1698,11 @@ function articleBelongsToDomainKey(article, domainKey) {
 async function fetchActiveArticlesForDomainKey(domainKey, ctx = {}, options = {}) {
   const appId = DOMAIN_OPTIONS[domainKey]?.app_id || ctx.app_id;
   const api = ctx.helperApi || window.csmApi;
-  const scopeServiceType = options.scopeServiceType || "";
-  const where = scopeServiceType
-    ? {
-        operator: "AND",
-        conditions: [
-          { field: "service_type", type: "eq", value: scopeServiceType },
-          { field: "status", type: "eq", value: "active" }
-        ]
-      }
-    : { field: "status", type: "eq", value: "active" };
-
-  const rows = await fetchAllTableRowsPaginated({
+  const rows = await fetchTableRowsForDomainKey({
     appId,
     objName: "web_service_detail",
-    where,
+    domainKey,
+    scopeServiceType: options.scopeServiceType || "",
     api,
     onBatch: options.onBatch
   });
@@ -1638,7 +1967,8 @@ function ensureDomainDuplicateCleanupPanel(theme) {
       const result = await cleanupDuplicatesByDomain(gs.domainKey, {
         ctx,
         scopeServiceType: getScopeServiceType(),
-        dryRun: true
+        dryRun: true,
+        preloadedScan: lastScan
       });
       appendLog(result.message);
     } catch (e) {
@@ -1667,7 +1997,8 @@ function ensureDomainDuplicateCleanupPanel(theme) {
       const result = await cleanupDuplicatesByDomain(gs.domainKey, {
         ctx,
         scopeServiceType: getScopeServiceType(),
-        dryRun: false
+        dryRun: false,
+        preloadedScan: lastScan
       });
       appendLog(result.message + (result.failedCount ? `\n⚠️ Lỗi: ${result.failedCount}` : ""));
       thongbao(result.message);
@@ -3557,38 +3888,20 @@ async function cleanupDuplicateArticles(duplicateGroups = [], ctx = {}) {
  * @returns {Object} - Kết quả cleanup
  */
 async function cleanupDuplicatesByServiceType(domainValue, serviceType, projectCode = "", ctx = {}) {
+  const domainKey = resolveDomainKeyFromValue(domainValue) || "phanmemmottrieu";
+  const scopeServiceType = serviceType || projectCode || "";
   console.log(`\n[cleanupDuplicatesByServiceType] === START ===`);
-  console.log(`   Domain: ${domainValue}`);
-  console.log(`   Service Type: ${serviceType}`);
-  console.log(`   Project: ${projectCode || "(none)"}`);
+  console.log(`   Domain key: ${domainKey} (input: ${domainValue})`);
+  console.log(`   Service Type: ${scopeServiceType}`);
   
-  // ✅ Determine app_id from domain
-  const appId = getAppIdFromDomainOptions(domainValue) || "wuweb";
+  const appId = DOMAIN_OPTIONS[domainKey]?.app_id || getAppIdFromDomainOptions(domainValue) || "wuweb";
+  ctx.app_id = ctx.app_id || appId;
   
   try {
-    // 1️⃣ Lấy tất cả bài viết của service type này cùng domain
-    console.log(`\n   📥 Đang tải bài viết của "${serviceType}" trên domain "${domainValue}"...`);
-    
-    const where = {
-      operator: "AND",
-      conditions: [
-        { field: "service_type", type: "eq", value: serviceType || projectCode || "" },
-        { field: "domain", type: "eq", value: domainValue },
-        { field: "status", type: "eq", value: "active" }
-      ]
-    };
-    
-    const fetchResult = await ctx.helperApi.getTableData({
-      app_id: appId,
-      obj_name: "web_service_detail",
-      where,
-      take: 500 // Limit để không quá tải
-    }).catch(err => {
-      console.error(`❌ Lỗi tải dữ liệu:`, err);
-      return { rows: [], error: err.message };
+    console.log(`\n   📥 Đang tải bài (where domain+status+service_type, mọi biến thể domain)...`);
+    const articles = await fetchActiveArticlesForDomainKey(domainKey, ctx, {
+      scopeServiceType
     });
-    
-    const articles = fetchResult.rows || fetchResult.data || [];
     console.log(`   📊 Tải được ${articles.length} bài viết`);
     
     if (articles.length < 2) {
@@ -3763,27 +4076,12 @@ async function cleanupBrokenFeaturedImagesByServiceType(domainValue, serviceType
   const appId = getAppIdFromDomainOptions(domainValue) || "wuweb";
 
   try {
-    console.log(`\n   📥 Đang tải bài viết để kiểm tra ảnh đại diện...`);
-    const where = {
-      operator: "AND",
-      conditions: [
-        { field: "service_type", type: "eq", value: serviceType || projectCode || "" },
-        { field: "domain", type: "eq", value: domainValue },
-        { field: "status", type: "eq", value: "active" }
-      ]
-    };
-
-    const fetchResult = await ctx.helperApi.getTableData({
-      app_id: appId,
-      obj_name: "web_service_detail",
-      where,
-      take: 500
-    }).catch((err) => {
-      console.error(`❌ Lỗi tải dữ liệu:`, err);
-      return { rows: [], error: err.message };
+    const domainKey = resolveDomainKeyFromValue(domainValue) || "phanmemmottrieu";
+    ctx.app_id = ctx.app_id || appId;
+    console.log(`\n   📥 Đang tải toàn bộ bài (where + mọi biến thể domain)...`);
+    const articles = await fetchActiveArticlesForDomainKey(domainKey, ctx, {
+      scopeServiceType: serviceType || projectCode || ""
     });
-
-    const articles = fetchResult.rows || fetchResult.data || [];
     console.log(`   📊 Tải được ${articles.length} bài viết`);
 
     if (articles.length === 0) {
@@ -5114,21 +5412,19 @@ async function syncServiceDefinitionsFromServer(force = false) {
     // Helper: so sánh boolean kể cả khi DB trả về string "true"/"false"
     const isTruthy = (val) => val === true || val === 'true' || val === 1 || val === '1';
 
-    // Lấy tất cả rows có status=active, giới hạn 500 để tránh tràn RAM
-    const queryWhere = { field: "status", type: "eq", value: "active" };
+    const queryWhere = tableWhereActive();
 
     // ===== 1️⃣ Sync LMKT Projects =====
-    const lmktData = await window.csmApi.getTableData({
-      app_id: "lmkt",
-      obj_name: "web_services",
-      where: queryWhere,
-      take: 500
-    }).catch(err => {
+    const lmktRowsRaw = await fetchAllTableRowsPaginated({
+      appId: "lmkt",
+      objName: "web_services",
+      where: queryWhere
+    }).catch((err) => {
       console.error('❌ [syncServiceDefs] LMKT fetch error:', err);
-      return { rows: [] };
+      return [];
     });
 
-    const lmktRows = (lmktData?.rows || lmktData?.data || []).filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
+    const lmktRows = lmktRowsRaw.filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
     if (Array.isArray(lmktRows) && lmktRows.length > 0) {
       // Merge vào LMKT_PROJECT_DEFS (giữ lại items cũ, thêm mới)
       const existingSlugs = new Set(LMKT_PROJECT_DEFS.map(p => p.service_code));
@@ -5184,17 +5480,16 @@ async function syncServiceDefinitionsFromServer(force = false) {
     }
     
     // ===== 2️⃣ Sync Phanmemmottrieu Service Types =====
-    const pmtData = await window.csmApi.getTableData({
-      app_id: "wuweb",
-      obj_name: "web_services",
-      where: queryWhere,
-      take: 500
-    }).catch(err => {
+    const pmtRowsRaw = await fetchAllTableRowsPaginated({
+      appId: "wuweb",
+      objName: "web_services",
+      where: queryWhere
+    }).catch((err) => {
       console.error('❌ [syncServiceDefs] PMT fetch error:', err);
-      return { rows: [] };
+      return [];
     });
 
-    const pmtRows = (pmtData?.rows || pmtData?.data || []).filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
+    const pmtRows = pmtRowsRaw.filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
     let pmtSynced = 0;
     
     if (Array.isArray(pmtRows) && pmtRows.length > 0) {

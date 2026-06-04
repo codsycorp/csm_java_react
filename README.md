@@ -16,7 +16,7 @@ Hệ thống quản lý khách hàng và nội dung với Spring Boot + React/Vu
 cd backend
 set -a && source ../config.local-strong.env && set +a && mvn spring-boot:run
 
-# Server yếu 5GB (repo root)
+# Server production 8GB / 4 CPU (repo root)
 ./run-server.sh
 
 # Lần đầu: cp config.env.example config.env

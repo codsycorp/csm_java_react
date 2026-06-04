@@ -1,7 +1,7 @@
 [GREENFIELD_PIPELINE_CONTRACT]
 CSM menu greenfield = **Agentic pipeline** (PHẦN AF.8), NOT one-shot LLM worker.
 
-## Mandatory order (1.5B · local-5gb)
+## Mandatory order (7B · local-8gb)
 1. Pass 1 Comprehend → BusinessSpec + planned_structure[] (from USER_REQUEST only)
 2. SSE business_reasoning + business_plan (user must see reasoning)
 3. Pass 2 Java enrich: normalizePlannedStructureForGreenfield, dedupe modules

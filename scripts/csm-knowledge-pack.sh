@@ -11,7 +11,7 @@
 #
 # Quy trình khuyến nghị:
 #   1. Trên máy MẠNH: rebuild --full-code → export → copy file .tar.gz
-#   2. Trên máy YẾU 5GB: import → restart backend (giữ AI_EMBEDDING_PROVIDER=hash nếu dim=128)
+#   2. Trên server 8GB: import → restart backend (giữ AI_EMBEDDING_PROVIDER=hash nếu dim=128)
 
 set -euo pipefail
 
@@ -89,7 +89,7 @@ write_manifest() {
     "ai_menu_master_prompt.md",
     "ai-assistant-instructions.md"
   ],
-  "importNotes": "On weak-5gb keep AI_EMBEDDING_PROVIDER=hash when embeddingDimensions=128. Do not re-embed on import — copy Lucene dirs and ai_metadata_graph as-is. Pack 1.0 without ai_metadata_graph still imports; graph rebuilds on next code/menu ingest."
+  "importNotes": "On server (hash 128D) keep AI_EMBEDDING_PROVIDER=hash when embeddingDimensions=128. Do not re-embed on import — copy Lucene dirs and ai_metadata_graph as-is. Pack 1.0 without ai_metadata_graph still imports; graph rebuilds on next code/menu ingest."
 }
 EOF
 }
@@ -189,7 +189,7 @@ cmd_import() {
   python3 -m json.tool "$manifest"
   local pack_dim
   pack_dim="$(python3 -c "import json; print(json.load(open('$manifest')).get('embeddingDimensions',128))")"
-  log "Pack embeddingDimensions=$pack_dim — target weak-5gb should use AI_EMBEDDING_PROVIDER=hash when dim=128"
+  log "Pack embeddingDimensions=$pack_dim — server should use AI_EMBEDDING_PROVIDER=hash when dim=128"
   mkdir -p "$dir"
   cp -R "$tmp/csm_datas/ai_local/"* "$dir/"
   if [ -d "$tmp/csm_datas/ai_local/ai_metadata_graph" ]; then

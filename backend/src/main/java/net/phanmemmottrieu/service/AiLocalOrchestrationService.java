@@ -3013,7 +3013,7 @@ public class AiLocalOrchestrationService {
 
     private boolean isWeakOrchestrationProfile() {
         String tier = String.valueOf(aiLocalRuntimeTier == null ? "" : aiLocalRuntimeTier).trim().toLowerCase(Locale.ROOT);
-        return tier.contains("weak") || tier.contains("5gb") || tier.equals("v7");
+        return tier.contains("weak") || tier.contains("constrained") || tier.equals("fast");
     }
 
     private record AdaptiveRetrievalPlan(

@@ -7,7 +7,7 @@ set -a
 # shellcheck source=/dev/null
 source "$ROOT/config.local-m1.env"
 set +a
-echo "[run-dev-m1] HEAP=${HEAP_SIZE} worker=qwen2.5-coder-1.5b-instruct-q8_0.gguf (de.kherud JNI, devtools off)"
+echo "[run-dev-m1] HEAP=${HEAP_SIZE} worker=qwen2.5-coder-7b-instruct-q4_k_m.gguf (de.kherud JNI, devtools off)"
 exec mvn spring-boot:run \
   -Dspring-boot.run.jvmArguments="-Xms${HEAP_INIT} -Xmx${HEAP_SIZE} -Dspring.devtools.restart.enabled=false" \
   "$@"
