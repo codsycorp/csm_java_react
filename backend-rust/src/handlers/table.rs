@@ -60,8 +60,39 @@ impl TableHandler {
         r.set("success", success);
         if let Some(msg) = result.get("message") {
             r.set("message", msg.clone());
+        } else {
+            r.set("message", if success { "ok" } else { "error" });
         }
-        r.set("result", Value::Object(result));
+
+        if !success {
+            return r;
+        }
+
+        // Inline all result fields at top-level to match Java's response.setProperties(result)
+        let app_id = params.get("app_id").and_then(|v| v.as_str()).unwrap_or("default");
+        let table = params.get("obj_name").and_then(|v| v.as_str()).unwrap_or("");
+        r.set("id", table);
+
+        // rows from handle_table_operation
+        if let Some(rows) = result.get("rows") {
+            r.set("rows", rows.clone());
+        }
+        // pagination cursor
+        if let Some(cursor) = result.get("nextCursor") {
+            r.set("nextCursor", cursor.clone());
+        }
+
+        // fetch struct (fieldsPK / fields) from index — mirrors Java's ensureTableStructReadyForOperation
+        let struct_filter = crate::model::SearchFilter::eq("id", table);
+        let struct_record = self.record_manager.find(app_id, "index", &struct_filter);
+        if let Some(Value::Object(struct_map)) = struct_record.get("struct") {
+            if let Some(pk) = struct_map.get("fieldsPK") {
+                r.set("fieldsPK", pk.clone());
+            }
+            if let Some(fields) = struct_map.get("fields") {
+                r.set("fields", fields.clone());
+            }
+        }
         r
     }
 
@@ -73,12 +104,33 @@ impl TableHandler {
         let result = self.handle_table_operation(params, true, auth);
         let mut r = StandardResponse::new();
         let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
-        r.set("code", if success { 200 } else { 403 });
+        r.set("code", if success { 200 } else { 400 });
         r.set("success", success);
-        if let Some(msg) = result.get("message") {
-            r.set("message", msg.clone());
+        r.set(
+            "message",
+            result
+                .get("message")
+                .cloned()
+                .unwrap_or_else(|| Value::String(if success { "ok".into() } else { "error".into() })),
+        );
+
+        // Mirror Java's copyIfPresent for fields the client needs
+        for key in &["command", "socket_actions", "updated_row", "obj_name", "app_id"] {
+            if let Some(v) = result.get(*key) {
+                r.set(*key, v.clone());
+            }
         }
-        r.set("result", Value::Object(result));
+        // ensure obj_name / app_id come through even if result didn't copy them
+        if r.get("obj_name").is_none() {
+            if let Some(v) = params.get("obj_name") {
+                r.set("obj_name", v.clone());
+            }
+        }
+        if r.get("app_id").is_none() {
+            if let Some(v) = params.get("app_id") {
+                r.set("app_id", v.clone());
+            }
+        }
         r
     }
 
@@ -107,11 +159,15 @@ impl TableHandler {
 
         if !table.starts_with("csm_") && !table.starts_with("sys_") {
             if let Some(user) = auth {
-                if !user.dev && user.app_id != app_id && user.app_id != "csm" {
+                if !user.can_access_app_data(app_id) {
+                    let action = if is_update { "write" } else { "read" };
                     out.insert("success".into(), Value::Bool(false));
                     out.insert(
                         "message".into(),
-                        Value::String(format!("Cross-app access denied for '{app_id}'")),
+                        Value::String(format!(
+                            "Cross-app {action} denied for '{app_id}' (user.app_id='{}')",
+                            user.app_id
+                        )),
                     );
                     return out;
                 }
@@ -125,30 +181,81 @@ impl TableHandler {
             .unwrap_or_default();
 
         if is_update {
-            let record: Map<String, Value> = params
+            let command = params
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("create")
+                .to_ascii_lowercase();
+
+            let obj_update: Map<String, Value> = params
                 .get("obj_update")
                 .or_else(|| params.get("data"))
                 .and_then(|v| v.as_object())
                 .cloned()
                 .unwrap_or_default();
-            match self.record_manager.create_record(app_id, table, record, None) {
-                Ok(cmd) => {
-                    out.insert("success".into(), Value::Bool(true));
-                    out.insert("message".into(), Value::String(format!("Record {cmd}")));
-                }
-                Err(e) => {
+
+            if command == "delete" {
+                // obj_update contains the record with primary key values.
+                // e_where is a SearchFilter (field/type/value structure), not a flat record map —
+                // so we must NOT pass e_where directly to delete_record.
+                // If obj_update is empty, fall back to finding the record via the filter.
+                let target = if !obj_update.is_empty() {
+                    obj_update.clone()
+                } else if let Ok(sf) = serde_json::from_value::<SearchFilter>(
+                    params.get("e_where").cloned().unwrap_or(Value::Null),
+                ) {
+                    self.record_manager.find(app_id, table, &sf)
+                } else {
+                    obj_update.clone()
+                };
+
+                if target.is_empty() {
                     out.insert("success".into(), Value::Bool(false));
-                    out.insert("message".into(), Value::String(e.to_string()));
+                    out.insert("message".into(), Value::String("Record not found for delete".into()));
+                } else {
+                    match self.record_manager.delete_record(app_id, table, &target) {
+                        Ok(()) => {
+                            out.insert("success".into(), Value::Bool(true));
+                            out.insert("command".into(), Value::String("delete".into()));
+                            out.insert("message".into(), Value::String("Record deleted".into()));
+                            out.insert("updated_row".into(), Value::Object(target));
+                        }
+                        Err(e) => {
+                            out.insert("success".into(), Value::Bool(false));
+                            out.insert("message".into(), Value::String(e.to_string()));
+                        }
+                    }
+                }
+            } else {
+                match self.record_manager.create_record(app_id, table, obj_update.clone(), None) {
+                    Ok(cmd) => {
+                        out.insert("success".into(), Value::Bool(true));
+                        out.insert("command".into(), Value::String(cmd));
+                        out.insert("message".into(), Value::String("ok".into()));
+                        out.insert("updated_row".into(), Value::Object(obj_update));
+                        out.insert("obj_name".into(), Value::String(table.to_string()));
+                        out.insert("app_id".into(), Value::String(app_id.to_string()));
+                    }
+                    Err(e) => {
+                        out.insert("success".into(), Value::Bool(false));
+                        out.insert("message".into(), Value::String(e.to_string()));
+                    }
                 }
             }
         } else {
             let take = params.get("take").and_then(|v| v.as_u64()).unwrap_or(500) as usize;
             let cursor = params.get("cursor").and_then(|v| v.as_str());
+            let lastkey = params.get("lastkey").and_then(|v| v.as_str()).or(cursor);
             let data = self.record_manager.filter_with_pagination(
-                app_id, table, &filter, cursor, None, take,
+                app_id, table, &filter, lastkey, None, take,
             );
+            // Extract rows array and expose at top level (mirrors Java's "rows" key)
+            let rows = data.get("data").cloned().unwrap_or(Value::Array(vec![]));
             out.insert("success".into(), Value::Bool(true));
-            out.insert("data".into(), Value::Object(data));
+            out.insert("rows".into(), rows);
+            if let Some(cursor_val) = data.get("nextCursor") {
+                out.insert("nextCursor".into(), cursor_val.clone());
+            }
         }
         out
     }
@@ -191,6 +298,10 @@ impl TableHandler {
         let mut r = StandardResponse::new();
         let app_id = params.get("app_id").and_then(|v| v.as_str()).unwrap_or("default");
         let table = params.get("obj_name").and_then(|v| v.as_str()).unwrap_or("");
+        let continue_on_error = params
+            .get("continue_on_error")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         let ops = params
             .get("operations")
             .and_then(|v| v.as_array())
@@ -198,22 +309,83 @@ impl TableHandler {
             .unwrap_or_default();
         let total = ops.len();
         let mut success_count = 0usize;
-        for op in ops {
-            if let Some(obj) = op.as_object() {
-                if self
-                    .record_manager
-                    .create_record(app_id, table, obj.clone(), None)
-                    .is_ok()
-                {
-                    success_count += 1;
+        let mut failed_count = 0usize;
+        let mut results: Vec<Value> = Vec::with_capacity(total);
+
+        for (i, op) in ops.into_iter().enumerate() {
+            let mut op_result = Map::new();
+            op_result.insert("index".into(), Value::Number(i.into()));
+
+            let Some(obj) = op.as_object() else {
+                failed_count += 1;
+                op_result.insert("success".into(), Value::Bool(false));
+                op_result.insert("message".into(), Value::String("Invalid operation".into()));
+                results.push(Value::Object(op_result));
+                if !continue_on_error { break; }
+                continue;
+            };
+
+            let op_app_id = obj.get("app_id").and_then(|v| v.as_str()).unwrap_or(app_id);
+            let op_table = obj.get("obj_name").and_then(|v| v.as_str()).unwrap_or(table);
+            let command = obj.get("command").and_then(|v| v.as_str()).unwrap_or("create").to_ascii_lowercase();
+
+            let obj_update: Map<String, Value> = obj
+                .get("obj_update")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_else(|| obj.clone());
+
+            let (item_ok, cmd_str, msg) = if command == "delete" {
+                // obj_update has pk values; e_where is a SearchFilter (not a flat map)
+                let target = if !obj_update.is_empty() {
+                    obj_update.clone()
+                } else if let Ok(sf) = serde_json::from_value::<SearchFilter>(
+                    obj.get("e_where").cloned().unwrap_or(Value::Null),
+                ) {
+                    self.record_manager.find(op_app_id, op_table, &sf)
+                } else {
+                    obj_update.clone()
+                };
+                if target.is_empty() {
+                    (false, "delete".to_string(), "Record not found for delete".to_string())
+                } else {
+                    match self.record_manager.delete_record(op_app_id, op_table, &target) {
+                        Ok(()) => (true, "delete".to_string(), "ok".to_string()),
+                        Err(e) => (false, "delete".to_string(), e.to_string()),
+                    }
                 }
-            }
+            } else {
+                match self.record_manager.create_record(op_app_id, op_table, obj_update.clone(), None) {
+                    Ok(cmd) => (true, cmd, "ok".to_string()),
+                    Err(e) => (false, command.clone(), e.to_string()),
+                }
+            };
+
+            if item_ok { success_count += 1; } else { failed_count += 1; }
+            op_result.insert("success".into(), Value::Bool(item_ok));
+            op_result.insert("command".into(), Value::String(cmd_str));
+            op_result.insert("message".into(), Value::String(msg));
+            op_result.insert("updated_row".into(), Value::Object(obj_update));
+            results.push(Value::Object(op_result));
+
+            if !item_ok && !continue_on_error { break; }
         }
-        r.set("code", 200);
-        r.set("success", true);
+
+        let all_success = failed_count == 0;
+        let partial = success_count > 0 && failed_count > 0;
+        r.set("code", if all_success { 200 } else if partial { 207 } else { 400 });
+        r.set("success", all_success);
+        r.set("partial", partial);
+        r.set(
+            "message",
+            if all_success { "Bulk update thành công" }
+            else if partial { "Bulk update hoàn tất với một số lỗi" }
+            else { "Bulk update thất bại" },
+        );
         r.set("total", total);
         r.set("successCount", success_count);
-        r.set("failedCount", total.saturating_sub(success_count));
+        r.set("failedCount", failed_count);
+        r.set("results", Value::Array(results));
         r
     }
 

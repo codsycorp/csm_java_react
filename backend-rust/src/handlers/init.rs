@@ -128,6 +128,9 @@ impl InitHandler {
         let first_user_init = self.init_user_schemas()?;
         if first_user_init {
             self.create_default_admin()?;
+        } else {
+            // Ensure admin user exists even in pre-existing databases
+            self.ensure_admin_user()?;
         }
 
         self.seed_system_menu_if_missing()?;
@@ -193,25 +196,59 @@ impl InitHandler {
         Ok(true)
     }
 
+    fn ensure_admin_user(&self) -> anyhow::Result<()> {
+        let filter = crate::model::SearchFilter {
+            operator: "AND".into(),
+            field: "username".into(),
+            filter_type: "eqIgnoreCase".into(),
+            value: serde_json::Value::String("admin".into()),
+            conditions: vec![],
+        };
+        let existing = self.record_manager.find("csm", "csm_accounts", &filter);
+        // Recreate if missing or if the existing record lacks the correct dev app_token
+        let needs_create = existing.is_empty() || {
+            let app_token = existing.get("app_token").and_then(|v| v.as_str()).unwrap_or("");
+            if app_token.is_empty() {
+                true
+            } else {
+                self.record_manager.csm_decrypt(app_token)
+                    .map(|d| !d.ends_with("_____1"))
+                    .unwrap_or(true)
+            }
+        };
+        if needs_create {
+            self.create_default_admin()?;
+        }
+        Ok(())
+    }
+
     fn create_default_admin(&self) -> anyhow::Result<()> {
         let pass = self
             .record_manager
             .csm_encrypt("admin_____123456789admin");
-        let app_token_raw = "csm|admin|admin|admin";
+        // Format: {appId}_____{principal}_____{role}_____{accessRight}
+        // accessRight=1 means dev access
+        let app_token_raw = "csm_____admin_____admin_____1";
         let app_token = self.record_manager.csm_encrypt(app_token_raw);
         let mut admin = Map::new();
         admin.insert("id".into(), json!(Uuid::new_v4().to_string()));
         admin.insert("username".into(), json!("admin"));
+        admin.insert("email".into(), serde_json::Value::Null);
+        admin.insert("phoneNumber".into(), serde_json::Value::Null);
         admin.insert("pass".into(), json!(pass));
-        admin.insert("app_token".into(), json!(app_token));
+        admin.insert("app_token".into(), json!(app_token.clone()));
+        admin.insert("refresh".into(), json!(app_token));
         admin.insert("app_id".into(), json!("csm"));
         admin.insert("roles".into(), json!(["admin"]));
-        admin.insert("permissions".into(), json!(["*"]));
+        admin.insert("permissions".into(), json!(["admin"]));
         admin.insert("menusPermissions".into(), json!(["*"]));
+        admin.insert("actived".into(), json!(true));
         admin.insert("dev".into(), json!(true));
         admin.insert("login_version".into(), json!(1));
+        admin.insert("full_name".into(), json!("Admin User"));
+        admin.insert("avatar".into(), json!("https://avatars.githubusercontent.com/u/47056890"));
         self.record_manager
-            .create_record("csm", "csm_accounts", admin, None)?;
+            .create_record("csm", "csm_accounts", admin, Some(vec!["id".into()]))?;
         Ok(())
     }
 

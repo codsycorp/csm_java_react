@@ -805,6 +805,7 @@ impl RecordManager {
         None
     }
 
+
     fn load_record_by_key(
         &self,
         db: &DbHandle,

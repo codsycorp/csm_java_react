@@ -16,8 +16,11 @@ pub struct User {
     pub username: Option<String>,
     pub phone_number: Option<String>,
     pub actived: Option<bool>,
+    #[serde(rename = "app_token")]
     pub app_token: Option<String>,
+    #[serde(rename = "app_id")]
     pub app_id: Option<String>,
+    #[serde(rename = "data_app_ids", alias = "dataAppIds")]
     pub data_app_ids: Option<Vec<String>>,
     pub full_name: Option<String>,
     pub user_address: Option<Value>,
@@ -91,6 +94,28 @@ impl User {
                 .or_else(|| record.get("login_version"))
                 .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                 .map(|v| v as i32);
+        }
+        if user.app_id.is_none() {
+            user.app_id = record
+                .get("app_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+        }
+        if user.app_token.is_none() {
+            user.app_token = record
+                .get("app_token")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+        }
+        if user.data_app_ids.is_none() {
+            user.data_app_ids = parse_string_list(
+                record
+                    .get("data_app_ids")
+                    .or_else(|| record.get("dataAppIds")),
+            );
+        }
+        if user.dev.is_none() {
+            user.dev = record.get("dev").and_then(|v| v.as_bool());
         }
         user
     }

@@ -78,7 +78,7 @@ async fn dispatch_api(
         "/role-item" => state.role_handler.handle_role_item(method.as_str(), &params),
         "/role-menu" => state.role_handler.handle_role_menu(),
         "/menu-by-role-id" => state.menu_handler.handle_menu_by_role_id(&params),
-        "/menu-list" => state.menu_handler.handle_menu_list(),
+        "/menu-list" => state.menu_handler.handle_menu_list(auth.as_ref()),
         "/menu-item" => state.menu_handler.handle_menu_item(method.as_str(), &params),
         // ── Home / Dashboard ──
         "/notifications" => state.home_handler.handle_notifications(),

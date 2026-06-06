@@ -100,6 +100,7 @@ impl AuthHandler {
         let csrf = Uuid::new_v4().to_string();
         result.insert("csrfToken".into(), Value::String(csrf.clone()));
 
+        self.enrich_account_meta(&user, &mut result);
         self.enrich_async_routes(&user, &mut result);
 
         response.set("code", 200);
@@ -140,6 +141,7 @@ impl AuthHandler {
             .or_else(|| self.user_service.find_by_app_token(&auth.app_token));
         if let Some(user) = user {
             let mut info = user.to_info_map();
+            self.enrich_account_meta(&user, &mut info);
             self.enrich_bitfield(&user, &mut info);
             response.set("code", 200);
             response.set("success", true);
@@ -265,13 +267,43 @@ impl AuthHandler {
 
     pub fn handle_get_async_routes(&self, auth_user: Option<&crate::security::AuthUser>) -> StandardResponse {
         let mut response = StandardResponse::new();
+
+        let Some(auth) = auth_user else {
+            response.set("code", 401);
+            response.set("success", false);
+            response.set("message", "Not authenticated");
+            return response;
+        };
+
         let filter = SearchFilter::eq("id", "accessRights");
         let index = self.record_manager.find("csm", "index", &filter);
-        let routes = index.get("data").cloned().unwrap_or(json!([]));
+        let all_routes = match index.get("data") {
+            Some(Value::Array(arr)) => arr.clone(),
+            _ => {
+                response.set("code", 200);
+                response.set("success", true);
+                response.set("message", "ok");
+                response.set("result", json!([]));
+                return response;
+            }
+        };
+
+        let user_role = auth.permissions.first().cloned();
+        let is_dev = auth.dev;
+        let menus = &auth.menus_permissions;
+
+        let filtered = filter_routes_by_role(
+            &all_routes,
+            user_role.as_deref(),
+            menus,
+            is_dev,
+            &mut std::collections::HashSet::new(),
+        );
+
         response.set("code", 200);
         response.set("success", true);
-        response.set("result", routes);
-        let _ = auth_user;
+        response.set("message", "ok");
+        response.set("result", Value::Array(filtered));
         response
     }
 
@@ -285,7 +317,38 @@ impl AuthHandler {
                 }
             }
         }
-        false
+        // Fall back to stored dev field
+        user.dev.unwrap_or(false)
+    }
+
+    /// Decrypt app_token and return (login_identifier, role, is_sub_user).
+    fn parse_app_token_meta(&self, app_token: Option<&str>) -> (String, String, bool) {
+        let token = match app_token {
+            Some(t) if !t.is_empty() => t,
+            _ => return (String::new(), String::new(), false),
+        };
+        if let Ok(decrypted) = self.record_manager.csm_decrypt(token) {
+            let parts: Vec<&str> = decrypted.split("_____").collect();
+            let login_identifier = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
+            let role = parts.get(2).map(|s| s.to_string()).unwrap_or_default();
+            let is_sub_user = role.eq_ignore_ascii_case("user");
+            return (login_identifier, role, is_sub_user);
+        }
+        (String::new(), String::new(), false)
+    }
+
+    /// Enrich user info map with account_type, is_sub_user, login_identifier from app_token.
+    fn enrich_account_meta(&self, user: &User, info: &mut Map<String, Value>) {
+        let (login_identifier, _role, is_sub_user) =
+            self.parse_app_token_meta(user.app_token.as_deref());
+        info.insert(
+            "account_type".into(),
+            Value::String(if is_sub_user { "sub-user" } else { "main" }.into()),
+        );
+        info.insert("is_sub_user".into(), Value::Bool(is_sub_user));
+        if !login_identifier.is_empty() {
+            info.insert("login_identifier".into(), Value::String(login_identifier));
+        }
     }
 
     fn enrich_async_routes(&self, user: &User, result: &mut Map<String, Value>) {
@@ -314,4 +377,78 @@ impl AuthHandler {
             Value::String(PermissionBitfieldUtil::resolve_data_scope(bitfield)),
         );
     }
+}
+
+/// Mirror of Java's filterRoutesByRoleAndMenus — recursively filter routes by role, menus, dev flag.
+fn filter_routes_by_role(
+    routes: &[Value],
+    user_role: Option<&str>,
+    allowed_menu_paths: &[String],
+    is_dev: bool,
+    seen: &mut std::collections::HashSet<String>,
+) -> Vec<Value> {
+    let mut out = Vec::new();
+    for route in routes {
+        let path = match route.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p.to_string(),
+            None => continue,
+        };
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+
+        let mut current = route.clone();
+
+        // Recurse children first
+        if let Some(Value::Array(children)) = route.get("children") {
+            let filtered_children =
+                filter_routes_by_role(children, user_role, allowed_menu_paths, is_dev, seen);
+            if let Value::Object(ref mut m) = current {
+                m.insert("children".into(), Value::Array(filtered_children));
+            }
+        }
+
+        let handle = route.get("handle");
+        let roles: Vec<String> = handle
+            .and_then(|h| h.get("roles"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let has_role_access = user_role
+            .map(|r| roles.iter().any(|role| role == r))
+            .unwrap_or(false);
+        let has_menu_access = allowed_menu_paths.iter().any(|m| m == &path);
+
+        let is_system_route = path == "/system" || path.starts_with("/system/");
+        let is_dev_only = path == "/system/menu"
+            || path.starts_with("/system/menu/")
+            || path == "/system/developer"
+            || path.starts_with("/system/developer/")
+            || path == "/system/broadcast"
+            || path.starts_with("/system/broadcast/");
+
+        let is_admin_system = user_role == Some("admin") && is_system_route && !is_dev_only;
+
+        let has_children = current
+            .get("children")
+            .and_then(|v| v.as_array())
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+
+        let include = if is_system_route {
+            is_dev || has_role_access || is_admin_system || has_children
+        } else {
+            has_role_access || has_menu_access || has_children
+        };
+
+        if include {
+            out.push(current);
+        }
+    }
+    out
 }

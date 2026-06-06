@@ -132,18 +132,31 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
     for token in bearer_token(headers).into_iter().chain(csm_token(headers)) {
         if state.jwt.validate_token(&token) {
             if let Some(user) = state.user_service.resolve_from_jwt_with_util(&state.jwt, &token) {
-                return Some(AuthUser::from_user(user));
+                return Some(enrich_auth_user(state, AuthUser::from_user(user)));
             }
         }
     }
 
     if let Some(rt) = refresh_token_from_request(headers) {
         if let Some(user) = state.user_service.find_by_refresh_token(&rt) {
-            return Some(AuthUser::from_user(user));
+            return Some(enrich_auth_user(state, AuthUser::from_user(user)));
         }
     }
 
     None
+}
+
+fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
+    if !user.dev {
+        if let Ok(decrypted) = state.record_manager.csm_decrypt(&user.app_token) {
+            if let Some(access_right) = decrypted.split("_____").last() {
+                if let Ok(n) = access_right.parse::<i32>() {
+                    user.dev = n > 0;
+                }
+            }
+        }
+    }
+    user
 }
 
 fn csm_token(headers: &HeaderMap) -> Option<String> {
