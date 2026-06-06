@@ -28,7 +28,8 @@ const isDev = process.env.NODE_ENV === "development";
 // https://vitejs.dev/config/
 export default defineVitestConfig(({ mode }) => {
 	const env = loadEnv(mode, process.cwd(), "");
-	const apiBaseUrl = env.VITE_API_BASE_URL || "http://localhost:8080";
+	// Rust backend default :15300 (Java was :8080)
+	const apiBaseUrl = env.VITE_API_BASE_URL || "http://localhost:15300";
 	// Static media lives on web root (/app_images), NOT under /api/
 	const apiServerOrigin = apiBaseUrl.replace(/\/api\/?$/, "");
 

@@ -24,6 +24,7 @@ frontend/dist/
 lmkt/dist/
 
 # Database & Data files
+csm_datas/
 backend/csm_datas/database/
 backend/csm_datas/lucene_index/
 backend/csm_datas/public/
