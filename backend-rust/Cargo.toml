@@ -42,7 +42,7 @@ uuid = { version = "1", features = ["v4"] }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 rdkafka = { version = "0.36", features = ["cmake-build"], optional = true }
 
-# HTTP client (AI gateways, scrapers)
+# HTTP client
 reqwest = { version = "0.12", features = ["json", "stream", "multipart", "cookies"] }
 
 # Real-time chat
@@ -50,9 +50,6 @@ socketioxide = { version = "0.15", features = ["state"] }
 
 # Media / AI sidecars
 tokio-process = "0.2"
-
-# Local AI — native llama.cpp in-process (giống Java de.kherud.llama)
-llama-cpp-2 = { version = "0.1.146", default-features = false, features = ["openmp", "metal"] }
 
 # Config & logging
 dotenvy = "0.15"
@@ -77,6 +74,14 @@ encoding_rs = "0.8"
 http-body-util = "0.1"
 scraper = "0.22"
 askama = { version = "0.12", features = ["with-axum"] }
+
+# Local AI — platform-specific GPU backend
+# macOS: Metal  |  Linux CPU-only: ["openmp"]  |  Linux NVIDIA: thêm "cuda"
+[target.'cfg(target_os = "macos")'.dependencies]
+llama-cpp-2 = { version = "0.1.146", default-features = false, features = ["openmp", "metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+llama-cpp-2 = { version = "0.1.146", default-features = false, features = ["openmp"] }
 
 [features]
 default = []
