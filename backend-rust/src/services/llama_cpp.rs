@@ -1,82 +1,90 @@
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::pin::Pin;
 
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
-use tracing::warn;
+use futures_util::Stream;
+use tokio::sync::mpsc;
 
 use crate::config::AppConfig;
 
+use super::llama_native::{self, NativeConfig};
+
+/// Native llama.cpp inference — in-process, giống Java `de.kherud.llama`.
+#[derive(Clone)]
 pub struct LlamaCppService {
-    model_path: PathBuf,
-    max_tokens: u32,
+    config: NativeConfig,
+    default_max_tokens: u32,
 }
 
 impl LlamaCppService {
-    pub fn new(config: &AppConfig) -> Self {
+    pub fn new(app: &AppConfig) -> Self {
+        let model_path = app
+            .ai_local_llama_model_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("./csm_datas/ai_local/model/model.gguf"));
+
         Self {
-            model_path: config
-                .ai_local_llama_model_path
-                .clone()
-                .unwrap_or_else(|| PathBuf::from("./csm_datas/ai_local/model/model.gguf")),
-            max_tokens: 512,
+            config: NativeConfig {
+                model_path,
+                context_window: app.ai_local_llama_context_window,
+                max_tokens: app.ai_local_llama_max_tokens,
+                max_prompt_chars: app.ai_local_llama_max_prompt_chars,
+                threads: app.ai_local_llama_threads,
+                temperature: app.ai_local_llama_temperature,
+                top_p: app.ai_local_llama_top_p,
+                top_k: app.ai_local_llama_top_k,
+                gpu_layers: app.ai_local_llama_gpu_layers,
+            },
+            default_max_tokens: app.ai_local_llama_max_tokens,
         }
     }
 
     pub fn is_available(&self) -> bool {
-        self.model_path.exists()
+        llama_native::model_file_exists(&self.config.model_path)
+    }
+
+    pub async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
+        self.complete_with_tokens(prompt, self.default_max_tokens).await
+    }
+
+    pub async fn complete_with_tokens(&self, prompt: &str, max_tokens: u32) -> anyhow::Result<String> {
+        let config = self.config.clone();
+        let prompt = prompt.to_string();
+        tokio::task::spawn_blocking(move || llama_native::generate(&config, &prompt, Some(max_tokens)))
+            .await?
     }
 
     pub async fn stream_completion(
         &self,
         prompt: &str,
-    ) -> anyhow::Result<impl futures_util::Stream<Item = String> + Send> {
-        let model = self.model_path.display().to_string();
-        let prompt_owned = prompt.to_string();
-        let max_tokens = self.max_tokens;
+    ) -> anyhow::Result<Pin<Box<dyn Stream<Item = String> + Send>>> {
+        let config = self.config.clone();
+        let prompt = prompt.to_string();
+        let max_tokens = self.default_max_tokens;
+        let (tx, mut rx) = mpsc::channel::<String>(128);
+
+        tokio::task::spawn_blocking(move || {
+            let result = llama_native::generate_with_callback(
+                &config,
+                &prompt,
+                Some(max_tokens),
+                |piece| {
+                    if tx.blocking_send(piece.to_string()).is_err() {
+                        return Err(anyhow::anyhow!("stream consumer dropped"));
+                    }
+                    Ok(())
+                },
+            );
+            if let Err(e) = result {
+                let _ = tx.blocking_send(format!("// Local AI error: {e}"));
+            }
+        });
 
         let stream = async_stream::stream! {
-            let mut child = match Command::new("llama-cli")
-                .args([
-                    "-m", &model,
-                    "-p", &prompt_owned,
-                    "-n", &max_tokens.to_string(),
-                    "--no-display-prompt",
-                ])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!("llama-cli not found: {e}");
-                    yield format!("// Local AI unavailable: {e}\n");
-                    return;
-                }
-            };
-
-            if let Some(stdout) = child.stdout.take() {
-                let mut reader = BufReader::new(stdout).lines();
-                while let Ok(Some(line)) = reader.next_line().await {
-                    if !line.is_empty() {
-                        yield line;
-                    }
-                }
+            while let Some(chunk) = rx.recv().await {
+                yield chunk;
             }
-            let _ = child.wait().await;
         };
 
-        Ok(stream)
-    }
-
-    pub async fn complete(&self, prompt: &str) -> anyhow::Result<String> {
-        let mut out = String::new();
-        let mut stream = Box::pin(self.stream_completion(prompt).await?);
-        use futures_util::StreamExt;
-        while let Some(chunk) = stream.next().await {
-            out.push_str(&chunk);
-            out.push('\n');
-        }
-        Ok(out)
+        Ok(Box::pin(stream))
     }
 }

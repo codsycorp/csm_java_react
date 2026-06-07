@@ -51,6 +51,9 @@ socketioxide = { version = "0.15", features = ["state"] }
 # Media / AI sidecars
 tokio-process = "0.2"
 
+# Local AI — native llama.cpp in-process (giống Java de.kherud.llama)
+llama-cpp-2 = { version = "0.1.146", default-features = false, features = ["openmp", "metal"] }
+
 # Config & logging
 dotenvy = "0.15"
 tracing = "0.1"
@@ -70,6 +73,7 @@ mime = "0.3"
 mime_guess = "2"
 rand = "0.8"
 bytes = "1"
+encoding_rs = "0.8"
 http-body-util = "0.1"
 scraper = "0.22"
 askama = { version = "0.12", features = ["with-axum"] }
@@ -79,7 +83,7 @@ default = []
 kafka = ["rdkafka"]
 
 [profile.release]
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 4
 opt-level = 3
 strip = true

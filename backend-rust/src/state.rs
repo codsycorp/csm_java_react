@@ -11,7 +11,8 @@ use crate::handlers::{
 use crate::security::jwt::JwtUtil;
 use crate::services::{
     cache::CacheService, chat::ChatPersistenceService, crm::CrmService,
-    crm_analytics::CrmAnalyticsService, permission::PermissionService, user::UserService,
+    crm_analytics::CrmAnalyticsService, llama_cpp::LlamaCppService, permission::PermissionService,
+    user::UserService,
 };
 
 #[derive(Clone)]
@@ -25,6 +26,7 @@ pub struct AppState {
     pub crm_service: Arc<CrmService>,
     pub chat_service: Arc<ChatPersistenceService>,
     pub http_client: Client,
+    pub llama: LlamaCppService,
     pub auth_handler: Arc<AuthHandler>,
     pub table_handler: Arc<TableHandler>,
     pub crm_handler: Arc<CrmHandler>,
@@ -68,6 +70,8 @@ impl AppState {
         let init_handler = Arc::new(InitHandler::new(record_manager.clone()));
         let seo_handler = Arc::new(SeoHandler::new(record_manager.clone()));
 
+        let llama = LlamaCppService::new(&config);
+
         Ok(Self {
             config,
             record_manager,
@@ -80,6 +84,7 @@ impl AppState {
             http_client: Client::builder()
                 .timeout(std::time::Duration::from_secs(900))
                 .build()?,
+            llama,
             auth_handler,
             table_handler,
             crm_handler,

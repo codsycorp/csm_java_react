@@ -70,7 +70,7 @@ impl LocalOrchestrationService {
                 attempted: true,
                 handled_locally: true,
                 reason_code: "greeting_fast_path".into(),
-                cloud_context: String::new(),
+                local_context: String::new(),
                 early_response: "Xin chào! Tôi là trợ lý code CSM. Hãy mô tả thay đổi bạn cần.".into(),
                 saved_chars: req.current_code.len(),
             };

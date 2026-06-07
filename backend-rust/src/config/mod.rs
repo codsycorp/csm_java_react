@@ -38,8 +38,15 @@ pub struct AppConfig {
     pub jwt_secret: String,
     pub redis: RedisConfig,
     pub auth_rate_limit: AuthRateLimitConfig,
-    pub ai_local_enabled: bool,
     pub ai_local_llama_model_path: Option<PathBuf>,
+    pub ai_local_llama_context_window: u32,
+    pub ai_local_llama_max_tokens: u32,
+    pub ai_local_llama_max_prompt_chars: usize,
+    pub ai_local_llama_threads: i32,
+    pub ai_local_llama_temperature: f32,
+    pub ai_local_llama_top_p: f32,
+    pub ai_local_llama_top_k: i32,
+    pub ai_local_llama_gpu_layers: u32,
 }
 
 impl AppConfig {
@@ -73,12 +80,66 @@ impl AppConfig {
                 max_requests_per_minute: env_u32("AUTH_RATE_LIMIT_MAX", 120),
                 window_ms: env_u64("AUTH_RATE_LIMIT_WINDOW_MS", 60_000),
             },
-            ai_local_enabled: env_bool("AI_LOCAL_ONLY_ENABLED", true),
             ai_local_llama_model_path: std::env::var("AI_LOCAL_LLAMA_MODEL_PATH")
                 .ok()
                 .map(PathBuf::from),
+            ai_local_llama_context_window: env_u32("AI_LOCAL_LLAMA_CONTEXT_WINDOW", 8192),
+            ai_local_llama_max_tokens: env_u32("AI_LOCAL_LLAMA_MAX_TOKENS", 2048),
+            ai_local_llama_max_prompt_chars: env_usize("AI_LOCAL_LLAMA_MAX_PROMPT_CHARS", 32_000),
+            ai_local_llama_threads: env_i32("AI_LOCAL_LLAMA_THREADS", 4),
+            ai_local_llama_temperature: env_f32("AI_LOCAL_LLAMA_TEMPERATURE", 0.2),
+            ai_local_llama_top_p: env_f32("AI_LOCAL_LLAMA_TOP_P", 0.9),
+            ai_local_llama_top_k: env_i32("AI_LOCAL_LLAMA_TOP_K", 40),
+            ai_local_llama_gpu_layers: env_u32("AI_LOCAL_LLAMA_GPU_LAYERS", default_gpu_layers()),
         })
     }
+
+    pub fn llama_native_config(&self) -> crate::services::llama_native::NativeConfig {
+        crate::services::llama_native::NativeConfig {
+            model_path: self
+                .ai_local_llama_model_path
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("./csm_datas/ai_local/model/model.gguf")),
+            context_window: self.ai_local_llama_context_window,
+            max_tokens: self.ai_local_llama_max_tokens,
+            max_prompt_chars: self.ai_local_llama_max_prompt_chars,
+            threads: self.ai_local_llama_threads,
+            temperature: self.ai_local_llama_temperature,
+            top_p: self.ai_local_llama_top_p,
+            top_k: self.ai_local_llama_top_k,
+            gpu_layers: self.ai_local_llama_gpu_layers,
+        }
+    }
+}
+
+fn default_gpu_layers() -> u32 {
+    if cfg!(target_os = "macos") {
+        // 999 = offload all layers; Metal backend ignores values > actual layer count
+        999
+    } else {
+        0
+    }
+}
+
+fn env_i32(key: &str, default: i32) -> i32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_f32(key: &str, default: f32) -> f32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }
 
 fn env_string(key: &str, default: &str) -> String {
@@ -103,13 +164,6 @@ fn env_u64(key: &str, default: u64) -> u64 {
     std::env::var(key)
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
-}
-
-fn env_bool(key: &str, default: bool) -> bool {
-    std::env::var(key)
-        .ok()
-        .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(default)
 }
 

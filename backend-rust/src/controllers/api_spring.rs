@@ -5,7 +5,6 @@ use serde_json::{json, Map, Value};
 use crate::model::StandardResponse;
 use crate::services::ai::code_stream;
 use crate::services::ai::services::AiServices;
-use crate::services::ai::orchestration::AiOrchestrationService;
 use crate::state::AppState;
 
 pub fn handle(state: &AppState, path: &str, params: &Map<String, Value>) -> StandardResponse {
@@ -50,10 +49,7 @@ pub fn handle(state: &AppState, path: &str, params: &Map<String, Value>) -> Stan
             json!({ "cancelled": code_stream::cancel_stream(id) })
         }
         "/ai-tasks/active" => json!({ "tasks": [] }),
-        other => {
-            let svc = AiOrchestrationService::new(state.http_client.clone());
-            return block_on_placeholder(svc, other, params);
-        }
+        other => return ai_endpoint_placeholder(other, params),
     };
 
     r.set("result", result);
@@ -95,12 +91,12 @@ fn quality_check(params: &Map<String, Value>) -> Value {
     AiServices::invoke("MenuQualityGateService", params)
 }
 
-fn block_on_placeholder(svc: AiOrchestrationService, path: &str, params: &Map<String, Value>) -> StandardResponse {
+fn ai_endpoint_placeholder(path: &str, params: &Map<String, Value>) -> StandardResponse {
     let mut r = StandardResponse::new();
     r.set("code", 200);
     r.set("success", true);
     r.set("message", format!("AI endpoint: {path}"));
-    r.set("result", json!({ "path": path, "ready": true }));
-    let _ = (svc, params);
+    r.set("result", json!({ "path": path, "ready": true, "provider": "local" }));
+    let _ = params;
     r
 }

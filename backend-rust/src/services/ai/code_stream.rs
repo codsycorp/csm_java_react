@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use tracing::info;
 
 use crate::security::auth::AuthUser;
-use crate::services::ai::orchestration::AiOrchestrationService;
+use crate::services::ai::policy::{local_pre_status, local_unavailable_hint, streaming_model_label};
 use crate::services::ai::services::AiServices;
 use crate::services::llama_cpp::LlamaCppService;
 use crate::state::AppState;
@@ -138,31 +138,16 @@ pub async fn token_stream(
     prompt: &str,
 ) -> Pin<Box<dyn Stream<Item = String> + Send>> {
     let llama = LlamaCppService::new(&state.config);
-    if llama.is_available() && req.model != "cloud-only" {
+    if llama.is_available() {
         if let Ok(s) = llama.stream_completion(prompt).await {
             return Box::pin(s);
         }
     }
-    if let Ok(key) = std::env::var("GEMINI_API_KEY") {
-        if !key.is_empty() {
-            let orch = AiOrchestrationService::new(state.http_client.clone());
-            if let Ok(text) = orch.call_gemini(&key, prompt).await {
-                let chunks: Vec<String> = text
-                    .chars()
-                    .collect::<Vec<_>>()
-                    .chunks(80)
-                    .map(|c| c.iter().collect())
-                    .collect();
-                return Box::pin(stream::iter(chunks));
-            }
-        }
-    }
+
+    let hint = local_unavailable_hint();
     let msg = req.message.clone();
     Box::pin(stream::once(async move {
-        format!(
-            "// Local model unavailable. Message: {}\n// Configure AI_LOCAL_LLAMA_MODEL_PATH or GEMINI_API_KEY\n",
-            msg
-        )
+        format!("// {hint}\n// Message: {msg}\n")
     }))
 }
 
@@ -200,11 +185,12 @@ pub async fn run_pipeline(
         "local_pre_analysis",
         json!({
             "requestId": rid,
-            "status": if pre.handled_locally { "completed_local" } else { "cloud_context_ready" },
+            "status": local_pre_status(pre.handled_locally),
             "attempted": pre.attempted,
             "handledLocally": pre.handled_locally,
             "reason_code": pre.reason_code,
-            "hasCloudContext": !pre.cloud_context.is_empty(),
+            "localOnlyEnabled": true,
+            "hasLocalContext": !pre.local_context.is_empty(),
         }),
     );
 
@@ -239,7 +225,7 @@ pub async fn run_pipeline(
         "streaming_started",
         json!({
             "requestId": rid,
-            "model": if LlamaCppService::new(&state.config).is_available() { "llama.cpp" } else { "gemini" },
+            "model": streaming_model_label(&state.config),
             "estimatedTotalChars": prompt_chars / 4,
             "percent": 15,
         }),
@@ -299,7 +285,7 @@ pub struct LocalPreAnalysis {
     pub attempted: bool,
     pub handled_locally: bool,
     pub reason_code: String,
-    pub cloud_context: String,
+    pub local_context: String,
     pub early_response: String,
     pub saved_chars: usize,
 }
@@ -310,7 +296,7 @@ impl LocalPreAnalysis {
             attempted: false,
             handled_locally: false,
             reason_code: "local_v2_skip_legacy_pre_analysis".into(),
-            cloud_context: String::new(),
+            local_context: String::new(),
             early_response: String::new(),
             saved_chars: 0,
         }

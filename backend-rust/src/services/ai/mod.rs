@@ -4,6 +4,7 @@
 pub mod code_stream;
 pub mod local_ops;
 pub mod orchestration;
+pub mod policy;
 pub mod registry;
 pub mod services;
 

@@ -8,8 +8,9 @@ use crate::security::auth::AuthUser;
 use crate::services::chat::ChatPersistenceService;
 use crate::services::user::UserService;
 
+// Mirrors Java TableHandler.RESERVED_INDEX_IDS exactly
 const RESERVED_INDEX_IDS: &[&str] = &[
-    "menu", "menuR", "roleList", "deptList", "permissionList", "routers",
+    "menu", "menuList", "menuR", "roleList", "accessRights", "menu_permissions",
 ];
 
 pub struct TableHandler {
@@ -56,28 +57,29 @@ impl TableHandler {
         let result = self.handle_table_operation(params, false, auth);
         let mut r = StandardResponse::new();
         let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
-        r.set("code", if success { 200 } else { 403 });
+        // Java always returns HTTP 200 (Spring default); code field is 200/400 in JSON body only.
+        // Rust's StandardResponse maps code→HTTP status, so always use 200 to match Java behavior.
+        r.set("code", 200);
         r.set("success", success);
-        if let Some(msg) = result.get("message") {
-            r.set("message", msg.clone());
-        } else {
-            r.set("message", if success { "ok" } else { "error" });
-        }
+        r.set(
+            "message",
+            result.get("message").cloned().unwrap_or_else(|| {
+                Value::String(if success { "ok".into() } else { "error".into() })
+            }),
+        );
 
         if !success {
             return r;
         }
 
-        // Inline all result fields at top-level to match Java's response.setProperties(result)
+        // Mirrors Java's response.setProperties(result) — inline all result keys
         let app_id = params.get("app_id").and_then(|v| v.as_str()).unwrap_or("default");
         let table = params.get("obj_name").and_then(|v| v.as_str()).unwrap_or("");
         r.set("id", table);
 
-        // rows from handle_table_operation
         if let Some(rows) = result.get("rows") {
             r.set("rows", rows.clone());
         }
-        // pagination cursor
         if let Some(cursor) = result.get("nextCursor") {
             r.set("nextCursor", cursor.clone());
         }
@@ -104,7 +106,8 @@ impl TableHandler {
         let result = self.handle_table_operation(params, true, auth);
         let mut r = StandardResponse::new();
         let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(true);
-        r.set("code", if success { 200 } else { 400 });
+        // Java: HTTP 200 always, code field in JSON body is 200/400
+        r.set("code", 200);
         r.set("success", success);
         r.set(
             "message",

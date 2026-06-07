@@ -28,10 +28,8 @@ impl AiLocalOpsService {
             .map(|p| p.exists())
             .unwrap_or(false);
 
-        let ai_enabled = self.config.ai_local_enabled;
-
         let policy = json!({
-            "localOnlyEnabled": ai_enabled,
+            "localOnlyEnabled": true,
             "multimodalLocalOnly": true,
             "multimodalRequireVision": false
         });
@@ -40,7 +38,7 @@ impl AiLocalOpsService {
             "provider": "llama.cpp-native",
             "beanPresent": model_exists,
             "available": model_exists,
-            "healthy": model_exists && ai_enabled,
+            "healthy": model_exists,
             "circuitOpen": false,
             "modelPath": model_path,
             "runtimeProfile": "balanced",
@@ -93,7 +91,7 @@ impl AiLocalOpsService {
             "ready": false
         });
 
-        let ready = ai_enabled && model_exists;
+        let ready = model_exists;
 
         json!({
             "success": true,
@@ -183,7 +181,7 @@ impl AiLocalOpsService {
 
         json!({
             "success": true,
-            "localOnlyEnabled": self.config.ai_local_enabled,
+            "localOnlyEnabled": true,
             "configuredReasoningModel": model_path,
             "configuredModelQuantization": detect_quantization(&model_path),
             "configuredModelExists": model_exists,
@@ -195,24 +193,8 @@ impl AiLocalOpsService {
     }
 
     pub async fn run_llama_sidecar(&self, prompt: &str) -> anyhow::Result<String> {
-        let model = self
-            .config
-            .ai_local_llama_model_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("./csm_datas/ai_local/model/model.gguf"));
-
-        let output = tokio::process::Command::new("llama-cli")
-            .args(["-m", &model.display().to_string(), "-p", prompt, "--no-display-prompt"])
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(anyhow::anyhow!(
-                "llama-cli failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        use crate::services::llama_cpp::LlamaCppService;
+        LlamaCppService::new(&self.config).complete(prompt).await
     }
 }
 

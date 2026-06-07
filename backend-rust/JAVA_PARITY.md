@@ -28,12 +28,14 @@ cd backend-rust
 # Dùng chung RocksDB: csm_datas/database/
 ```
 
-## Cấu hình AI
+## Cấu hình AI (native in-process — không cần llama-cli / llama-server)
 
 ```env
-# config.env
 AI_LOCAL_LLAMA_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-7b-instruct-q4_k_m.gguf
-GEMINI_API_KEY=...   # fallback cloud
+AI_LOCAL_LLAMA_CONTEXT_WINDOW=8192
+AI_LOCAL_LLAMA_MAX_TOKENS=2048
+AI_LOCAL_LLAMA_THREADS=4
+AI_LOCAL_LLAMA_GPU_LAYERS=18   # Mac Metal; 0 = CPU only
 ```
 
 ## Cấu trúc chính

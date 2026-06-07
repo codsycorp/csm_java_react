@@ -4,6 +4,7 @@ pub mod chat;
 pub mod crm;
 pub mod crm_analytics;
 pub mod llama_cpp;
+pub mod llama_native;
 pub mod media;
 pub mod permission;
 pub mod user;
