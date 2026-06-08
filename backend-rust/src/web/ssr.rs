@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::sync::LazyLock;
+use tracing::info;
 
 use crate::model::SearchFilter;
 use crate::state::AppState;
@@ -15,6 +15,47 @@ struct CacheEntry<T> {
 
 static SSR_CACHE: LazyLock<DashMap<String, CacheEntry<String>>> = LazyLock::new(DashMap::new);
 const CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+
+// ─── Route struct (mirrors sys_la_routers fields used for SSR) ────────────────
+
+#[derive(Default, Clone)]
+pub struct ResolvedRoute {
+    pub rp_index: String,
+    pub app_id: String,
+    pub tbl_services: String,
+    pub tbl_service_detail: String,
+    pub f_title: String,
+    pub f_keyword: String,
+    pub f_logo: String,
+    pub app_type: String,
+    pub domain: String,
+}
+
+impl ResolvedRoute {
+    fn from_row(row: &serde_json::Map<String, Value>) -> Self {
+        let s = |k: &str| {
+            row.get(k)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim_matches('/')
+                .trim()
+                .to_string()
+        };
+        ResolvedRoute {
+            rp_index: s("rp_index"),
+            app_id: s("app_id"),
+            tbl_services: s("tbl_services"),
+            tbl_service_detail: s("tbl_service_detail"),
+            f_title: s("f_title"),
+            f_keyword: s("f_keyword"),
+            f_logo: s("f_logo"),
+            app_type: s("app_type"),
+            domain: s("domain_name"),
+        }
+    }
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
 
 pub fn render_page(state: &AppState, uri: &str, host: Option<&str>) -> String {
     let cache_key = format!("{}:{}", host.unwrap_or("default"), uri);
@@ -35,139 +76,253 @@ pub fn render_page(state: &AppState, uri: &str, host: Option<&str>) -> String {
     html
 }
 
+/// Expose rp_index lookup for router.rs (static asset fallback)
+pub fn resolve_rp_index_pub(state: &AppState, host: Option<&str>) -> String {
+    resolve_route(state, host, "/").rp_index
+}
+
+// ─── Core SSR builder ─────────────────────────────────────────────────────────
+
 fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>) -> String {
-    let app_id = resolve_app_id(state, host);
-    let route = match_dynamic_route(state, &app_id, uri);
+    let route = resolve_route(state, host, uri);
+    let domain = extract_domain(host);
 
-    let title = route
-        .as_ref()
-        .and_then(|r| r.get("title").and_then(|v| v.as_str()))
-        .unwrap_or("CSM");
-    let component = route
-        .as_ref()
-        .and_then(|r| r.get("component").and_then(|v| v.as_str()))
-        .unwrap_or("/");
-
-    // Lấy rp_index từ database (giống Java resolveRpIndexForDomain)
-    // rp_index là tên thư mục frontend: "admin", "lmkt", "web", ...
-    let rp_index = resolve_rp_index(state, host);
-
-    // Thử đọc index.html thực tế từ public/{rp_index}/index.html
-    // Giống Java: File reactTemplateFile = recordManager.getStaticFile(rp_index + "/index.html")
+    let rp_index = &route.rp_index;
     let index_path = if rp_index.is_empty() {
         "index.html".to_string()
     } else {
         format!("{rp_index}/index.html")
     };
 
+    let protocol = "https";
+    let host_str = host.unwrap_or(&domain);
+    let canonical = format!("{protocol}://{host_str}{uri}");
+
+    let page_title = if route.f_title.is_empty() { "CSM".to_string() } else { route.f_title.clone() };
+    let page_description = route.f_keyword.clone();
+    let og_image = if route.f_logo.is_empty() {
+        String::new()
+    } else if route.f_logo.starts_with("http") {
+        route.f_logo.clone()
+    } else {
+        format!("{protocol}://{host_str}/{}", route.f_logo.trim_start_matches('/'))
+    };
+
+    // Load categories from tbl_services
+    let categories = load_categories(state, &route, &domain);
+
+    // Build SSR route map
+    let ssr_routes = json!({ uri: { "title": page_title, "description": page_description } });
+
+    // Build window globals — same names Java uses
+    let app_config = json!({ "f_logo": og_image, "f_title": page_title });
+    let initial_data = json!({
+        "pageTitle": page_title,
+        "pageDescription": page_description,
+        "canonicalUrl": canonical,
+        "ogImage": og_image,
+        "currentPagePath": uri,
+        "app_id": route.app_id,
+    });
+
+    let scripts = build_scripts(&app_config, &initial_data, &categories, &ssr_routes);
+
     if let Some(file_path) = state.record_manager.get_static_file(&index_path) {
         if let Ok(mut html) = std::fs::read_to_string(&file_path) {
-            // Inject SSR data vào <head> (giống Java inject templateData)
-            let ssr_script = format!(
-                r#"<script>window.__CSM_SSR__={{uri:"{uri}",component:"{component}",appId:"{app_id}"}};</script>"#
-            );
-            // Chèn trước </head>
-            if let Some(pos) = html.find("</head>") {
-                html.insert_str(pos, &ssr_script);
-            } else {
-                html.push_str(&ssr_script);
-            }
+            inject_into_html(&mut html, &scripts);
             return html;
         }
     }
 
-    // Fallback: sinh HTML tổng hợp nếu không tìm được index.html
+    info!("SSR fallback (index.html not found for rp_index={})", rp_index);
+    fallback_html(&page_title, uri, &route.app_id, &scripts)
+}
+
+// ─── Route resolution — 3 priorities (mirrors Java handleWebRequest) ──────────
+
+fn resolve_route(state: &AppState, host: Option<&str>, path: &str) -> ResolvedRoute {
+    let domain = extract_domain(host);
+    if domain.is_empty() {
+        return ResolvedRoute::default();
+    }
+
+    // fCase: strip .shtml, normalize "/" to ""
+    let f_case = {
+        let p = path.replace(".shtml", "").trim().to_string();
+        if p == "/" { String::new() } else { p }
+    };
+
+    // Priority 1: exact domain + f_case
+    if let Some(route) = query_route(state, &[
+        SearchFilter::eq("domain_name", domain.as_str()),
+        SearchFilter::eq("f_case", f_case.as_str()),
+        SearchFilter::eq("run", 1i64),
+    ]) {
+        return route;
+    }
+
+    // Priority 2: domain + f_case="" + rp_index set (React SSR catch-all)
+    if let Some(route) = query_route(state, &[
+        SearchFilter::eq("domain_name", domain.as_str()),
+        SearchFilter::eq("f_case", ""),
+        SearchFilter { field: "rp_index".into(), filter_type: "isnotnull".into(), ..Default::default() },
+        SearchFilter { field: "rp_index".into(), filter_type: "noteq".into(), value: Value::String("".into()), ..Default::default() },
+        SearchFilter::eq("run", 1i64),
+    ]) {
+        return route;
+    }
+
+    // Priority 3a: domain + app_type=web
+    if let Some(route) = query_route(state, &[
+        SearchFilter::eq("domain_name", domain.as_str()),
+        SearchFilter::eq("app_type", "web"),
+        SearchFilter::eq("run", 1i64),
+    ]) {
+        return route;
+    }
+
+    // Priority 3b: global default (domain_name="" f_case="default")
+    if let Some(route) = query_route(state, &[
+        SearchFilter::eq("domain_name", ""),
+        SearchFilter::eq("f_case", "default"),
+        SearchFilter::eq("run", 1i64),
+    ]) {
+        return route;
+    }
+
+    ResolvedRoute { domain: domain.clone(), ..Default::default() }
+}
+
+fn query_route(state: &AppState, conditions: &[SearchFilter]) -> Option<ResolvedRoute> {
+    let filter = SearchFilter {
+        operator: "AND".into(),
+        conditions: conditions.to_vec(),
+        ..Default::default()
+    };
+    let result = state.record_manager.filter("csm", "sys_la_routers", &filter);
+    let rows = result
+        .get("rows")
+        .or_else(|| result.get("data"))
+        .and_then(|v| v.as_array())?;
+    let row = rows.first()?.as_object()?;
+    Some(ResolvedRoute::from_row(row))
+}
+
+// ─── Categories (mirrors Java: filter tbl_services by status=active AND domain like domain) ─
+
+fn load_categories(state: &AppState, route: &ResolvedRoute, domain: &str) -> Value {
+    if route.app_id.is_empty() || route.tbl_services.is_empty() {
+        return json!([]);
+    }
+    let filter = SearchFilter {
+        operator: "AND".into(),
+        conditions: vec![
+            SearchFilter::eq("status", "active"),
+            SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.to_string()), ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let result = state.record_manager.filter(&route.app_id, &route.tbl_services, &filter);
+    let rows = result
+        .get("rows")
+        .or_else(|| result.get("data"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    // Map to fields frontend expects (same as Java catObj)
+    let cats: Vec<Value> = rows.iter().filter_map(|r| {
+        let obj = r.as_object()?;
+        let s = |k: &str| obj.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let b = |k: &str| -> bool {
+            match obj.get(k) {
+                Some(Value::Bool(b)) => *b,
+                Some(Value::Number(n)) => n.as_i64().unwrap_or(0) == 1,
+                Some(Value::String(s)) => s.eq_ignore_ascii_case("true") || s == "1",
+                _ => false,
+            }
+        };
+        Some(json!({
+            "slug": s("slug"),
+            "service_code": s("service_code"),
+            "category": s("category"),
+            "is_service": b("is_service"),
+            "is_group_slug": b("is_group_slug"),
+            "group_slug": s("group_slug"),
+            "attributes_icon": s("attributes_icon"),
+            "attributes_color": s("attributes_color"),
+            "attributes_description": s("attributes_description"),
+        }))
+    }).collect();
+
+    Value::Array(cats)
+}
+
+// ─── HTML injection helpers ────────────────────────────────────────────────────
+
+fn build_scripts(
+    app_config: &Value,
+    initial_data: &Value,
+    categories: &Value,
+    ssr_routes: &Value,
+) -> String {
+    let safe = |v: &Value| serde_json::to_string(v).unwrap_or_else(|_| "{}".into())
+        .replace("</", "<\\/");
+
+    format!(
+        "<script>window.__APP_CONFIG__={ac};</script>\
+         <script>window.__INITIAL_REACT_DATA__={id};</script>\
+         <script>window.__SSR_WEBSITE_CATEGORIES__={cats};</script>\
+         <script>window.__SSR_WEBSITE_ROUTES__={routes};</script>\
+         <script>window.__SSR_DYNAMIC_CODE_TEMPLATES__={{}};</script>",
+        ac = safe(app_config),
+        id = safe(initial_data),
+        cats = safe(categories),
+        routes = safe(ssr_routes),
+    )
+}
+
+fn inject_into_html(html: &mut String, scripts: &str) {
+    let lower = html.to_lowercase();
+    if let Some(pos) = lower.find("</head>") {
+        html.insert_str(pos, scripts);
+    } else if let Some(pos) = lower.find("</body>") {
+        html.insert_str(pos, scripts);
+    } else {
+        html.push_str(scripts);
+    }
+}
+
+fn fallback_html(title: &str, uri: &str, app_id: &str, scripts: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html lang="vi">
 <head>
   <meta charset="utf-8"/>
   <title>{title}</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <script>window.__CSM_SSR__={{uri:"{uri}",component:"{component}",appId:"{app_id}"}};</script>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  {scripts}
 </head>
-<body>
-  <div id="root"></div>
-  <script type="module" src="/assets/main.js"></script>
-</body>
+<body><div id="root"></div><script type="module" src="/assets/main.js"></script></body>
 </html>"#
     )
 }
 
-pub fn resolve_rp_index_pub(state: &AppState, host: Option<&str>) -> String {
-    resolve_rp_index(state, host)
-}
+// ─── Domain helpers ────────────────────────────────────────────────────────────
 
-/// Giống Java resolveRpIndexForDomain: tìm rp_index trong sys_la_routers theo domain
-fn resolve_rp_index(state: &AppState, host: Option<&str>) -> String {
+fn extract_domain(host: Option<&str>) -> String {
     let h = match host {
         Some(h) if !h.is_empty() => h,
         _ => return String::new(),
     };
-    // Bỏ www. và port (giống Java)
-    let domain = h
-        .trim_start_matches("www.")
+    h.trim_start_matches("www.")
         .split(':')
         .next()
         .unwrap_or(h)
-        .to_lowercase();
-
-    // Query sys_la_routers: domain_name=domain AND f_case="" AND run=1
-    // run is stored as integer 1 in Java (not string "1")
-    let filter = SearchFilter {
-        operator: "AND".into(),
-        conditions: vec![
-            SearchFilter::eq("domain_name", domain.as_str()),
-            SearchFilter::eq("f_case", ""),
-            SearchFilter::eq("run", 1i64),
-        ],
-        ..Default::default()
-    };
-    let result = state.record_manager.filter("csm", "sys_la_routers", &filter);
-    // Kết quả có thể nằm trong "rows" hoặc "data"
-    let rows = result
-        .get("rows")
-        .or_else(|| result.get("data"))
-        .and_then(|v| v.as_array());
-    if let Some(rows) = rows {
-        for row in rows {
-            if let Some(rp) = row.get("rp_index").and_then(|v| v.as_str()) {
-                let rp = rp.trim_matches('/').trim();
-                if !rp.is_empty() {
-                    return rp.to_string();
-                }
-            }
-        }
-    }
-    String::new()
+        .to_lowercase()
 }
 
-fn resolve_app_id(state: &AppState, host: Option<&str>) -> String {
-    if let Some(h) = host {
-        let filter = SearchFilter::eq("domain", h);
-        let rec = state.record_manager.find("csm", "sys_apps", &filter);
-        if let Some(id) = rec.get("app_id").and_then(|v| v.as_str()) {
-            return id.to_string();
-        }
-    }
-    "csm".into()
-}
-
-fn match_dynamic_route(state: &AppState, app_id: &str, uri: &str) -> Option<HashMap<String, Value>> {
-    let filter = SearchFilter::eq("app_id", app_id);
-    let page = state.record_manager.filter(app_id, "sys_la_routers", &filter);
-    let routes = page.get("data").and_then(|v| v.as_array())?;
-
-    for route in routes {
-        if let Some(obj) = route.as_object() {
-            let path = obj.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            if path == uri || uri.starts_with(&format!("{path}/")) {
-                return Some(obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
-            }
-        }
-    }
-    None
-}
+// ─── Sitemap builder ──────────────────────────────────────────────────────────
 
 pub fn build_sitemap(state: &AppState, app_id: &str) -> String {
     let filter = SearchFilter::eq("app_id", app_id);

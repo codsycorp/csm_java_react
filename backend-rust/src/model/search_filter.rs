@@ -52,7 +52,12 @@ impl SearchFilter {
 
         let actual = record.get(&filter.field);
         match actual {
-            None => false,
+            // field absent: treat as null for isnotnull/isnull, false for everything else
+            None => match filter.filter_type.as_str() {
+                "isnull" | "isNull" => true,
+                "isnotnull" | "notNull" => false,
+                _ => false,
+            },
             Some(actual) => Self::evaluate_condition(actual, &filter.filter_type, &filter.value),
         }
     }
@@ -111,6 +116,19 @@ impl SearchFilter {
                     }
                 }
                 false
+            }
+            "isnotnull" | "notNull" => !matches!(actual, Value::Null),
+            "isnull" | "isNull" => matches!(actual, Value::Null),
+            // noteq: not equal, also handles string vs number like "1" vs 1
+            "noteq" | "notEq" => {
+                if actual == expected {
+                    return false;
+                }
+                // also treat empty string as matching null for noteq
+                if matches!(actual, Value::Null) {
+                    return expected.as_str().map(|s| !s.is_empty()).unwrap_or(true);
+                }
+                true
             }
             _ => false,
         }
