@@ -100,6 +100,9 @@ jobs:
               systemctl enable csm-rust
             fi
 
-            systemctl restart csm-rust
-            sleep 3
-            systemctl status csm-rust --no-pager | head -15
+            systemctl restart csm-rust || true
+            sleep 5
+            echo "=== STATUS ==="
+            systemctl status csm-rust --no-pager || true
+            echo "=== LOG ==="
+            journalctl -u csm-rust -n 50 --no-pager || true
