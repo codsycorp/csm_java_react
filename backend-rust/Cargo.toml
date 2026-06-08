@@ -28,7 +28,7 @@ serde_json = "1"
 serde_urlencoded = "0.7"
 
 # Data layer
-rocksdb = "0.22"
+rocksdb = "0.23"
 tantivy = "0.22"
 
 # Auth & security

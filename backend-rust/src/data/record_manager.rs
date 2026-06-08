@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use parking_lot::Mutex;
 use rocksdb::{BlockBasedOptions, DBCompressionType, Options, WriteBatch, DB};
 use serde_json::{json, Map, Value};
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::config::{ensure_dir, AppConfig};
@@ -271,18 +271,21 @@ impl RecordManager {
     }
 
     pub fn find(&self, app_id: &str, table_name: &str, filter: &SearchFilter) -> Map<String, Value> {
-        if let Ok(db) = self.get_db(app_id, table_name) {
-            if let Some(record) = self.try_find_by_pk_variants(&db, app_id, table_name, filter) {
-                return record;
-            }
-            if let Some(record) = self.try_find_direct_eq(&db, app_id, table_name, filter) {
-                return record;
-            }
-            if let Some(record) = self.try_find_by_scan(&db, filter, is_simple_eq_filter(filter)) {
-                return record;
+        match self.get_db(app_id, table_name) {
+            Err(e) => { warn!("RocksDB open failed for {app_id}/{table_name}: {e:#}"); Map::new() }
+            Ok(db) => {
+                if let Some(record) = self.try_find_by_pk_variants(&db, app_id, table_name, filter) {
+                    return record;
+                }
+                if let Some(record) = self.try_find_direct_eq(&db, app_id, table_name, filter) {
+                    return record;
+                }
+                if let Some(record) = self.try_find_by_scan(&db, filter, is_simple_eq_filter(filter)) {
+                    return record;
+                }
+                Map::new()
             }
         }
-        Map::new()
     }
 
     pub fn filter(
@@ -306,20 +309,23 @@ impl RecordManager {
         let take = take.min(MAX_FILTER_TAKE);
         let mut records: Vec<Map<String, Value>> = Vec::new();
 
-        if let Ok(db) = self.get_db(app_id, table_name) {
-            let iter = db.db.iterator(rocksdb::IteratorMode::Start);
-            for item in iter {
-                if records.len() >= take.saturating_mul(4) {
-                    break;
-                }
-                if let Ok((key, value)) = item {
-                    let key_str = String::from_utf8_lossy(&key);
-                    if key_str.starts_with("__meta_") {
-                        continue;
+        match self.get_db(app_id, table_name) {
+            Err(e) => warn!("RocksDB open failed for {app_id}/{table_name}: {e:#}"),
+            Ok(db) => {
+                let iter = db.db.iterator(rocksdb::IteratorMode::Start);
+                for item in iter {
+                    if records.len() >= take.saturating_mul(4) {
+                        break;
                     }
-                    if let Ok(Value::Object(record)) = serde_json::from_slice(&value) {
-                        if SearchFilter::matches(&record, search_filter) {
-                            records.push(record);
+                    if let Ok((key, value)) = item {
+                        let key_str = String::from_utf8_lossy(&key);
+                        if key_str.starts_with("__meta_") {
+                            continue;
+                        }
+                        if let Ok(Value::Object(record)) = serde_json::from_slice(&value) {
+                            if SearchFilter::matches(&record, search_filter) {
+                                records.push(record);
+                            }
                         }
                     }
                 }
@@ -353,16 +359,19 @@ impl RecordManager {
 
     pub fn full_scan(&self, app_id: &str, table_name: &str) -> Map<String, Value> {
         let mut records = Vec::new();
-        if let Ok(db) = self.get_db(app_id, table_name) {
-            let iter = db.db.iterator(rocksdb::IteratorMode::Start);
-            for item in iter {
-                if let Ok((key, value)) = item {
-                    let key_str = String::from_utf8_lossy(&key);
-                    if key_str.starts_with("__meta_") {
-                        continue;
-                    }
-                    if let Ok(Value::Object(record)) = serde_json::from_slice(&value) {
-                        records.push(Value::Object(record));
+        match self.get_db(app_id, table_name) {
+            Err(e) => warn!("RocksDB open failed for {app_id}/{table_name}: {e:#}"),
+            Ok(db) => {
+                let iter = db.db.iterator(rocksdb::IteratorMode::Start);
+                for item in iter {
+                    if let Ok((key, value)) = item {
+                        let key_str = String::from_utf8_lossy(&key);
+                        if key_str.starts_with("__meta_") {
+                            continue;
+                        }
+                        if let Ok(Value::Object(record)) = serde_json::from_slice(&value) {
+                            records.push(Value::Object(record));
+                        }
                     }
                 }
             }
