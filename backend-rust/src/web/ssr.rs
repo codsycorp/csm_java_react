@@ -48,6 +48,35 @@ fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>) -> String {
         .and_then(|r| r.get("component").and_then(|v| v.as_str()))
         .unwrap_or("/");
 
+    // Lấy rp_index từ database (giống Java resolveRpIndexForDomain)
+    // rp_index là tên thư mục frontend: "admin", "lmkt", "web", ...
+    let rp_index = resolve_rp_index(state, host);
+
+    // Thử đọc index.html thực tế từ public/{rp_index}/index.html
+    // Giống Java: File reactTemplateFile = recordManager.getStaticFile(rp_index + "/index.html")
+    let index_path = if rp_index.is_empty() {
+        "index.html".to_string()
+    } else {
+        format!("{rp_index}/index.html")
+    };
+
+    if let Some(file_path) = state.record_manager.get_static_file(&index_path) {
+        if let Ok(mut html) = std::fs::read_to_string(&file_path) {
+            // Inject SSR data vào <head> (giống Java inject templateData)
+            let ssr_script = format!(
+                r#"<script>window.__CSM_SSR__={{uri:"{uri}",component:"{component}",appId:"{app_id}"}};</script>"#
+            );
+            // Chèn trước </head>
+            if let Some(pos) = html.find("</head>") {
+                html.insert_str(pos, &ssr_script);
+            } else {
+                html.push_str(&ssr_script);
+            }
+            return html;
+        }
+    }
+
+    // Fallback: sinh HTML tổng hợp nếu không tìm được index.html
     format!(
         r#"<!DOCTYPE html>
 <html lang="vi">
@@ -55,14 +84,57 @@ fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>) -> String {
   <meta charset="utf-8"/>
   <title>{title}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <script>window.__CSM_SSR__={{uri:"{uri}",component:"{component}",appId:"{app_id}"}}</script>
+  <script>window.__CSM_SSR__={{uri:"{uri}",component:"{component}",appId:"{app_id}"}};</script>
 </head>
 <body>
-  <div id="root" data-uri="{uri}" data-component="{component}"></div>
+  <div id="root"></div>
   <script type="module" src="/assets/main.js"></script>
 </body>
 </html>"#
     )
+}
+
+/// Giống Java resolveRpIndexForDomain: tìm rp_index trong sys_la_routers theo domain
+fn resolve_rp_index(state: &AppState, host: Option<&str>) -> String {
+    let h = match host {
+        Some(h) if !h.is_empty() => h,
+        _ => return String::new(),
+    };
+    // Bỏ www. và port (giống Java)
+    let domain = h
+        .trim_start_matches("www.")
+        .split(':')
+        .next()
+        .unwrap_or(h)
+        .to_lowercase();
+
+    // Query sys_la_routers: domain_name=domain AND f_case="" AND run=1
+    let filter = SearchFilter {
+        operator: "AND".into(),
+        conditions: vec![
+            SearchFilter::eq("domain_name", domain.as_str()),
+            SearchFilter::eq("f_case", ""),
+            SearchFilter::eq("run", "1"),
+        ],
+        ..Default::default()
+    };
+    let result = state.record_manager.filter("csm", "sys_la_routers", &filter);
+    // Kết quả có thể nằm trong "rows" hoặc "data"
+    let rows = result
+        .get("rows")
+        .or_else(|| result.get("data"))
+        .and_then(|v| v.as_array());
+    if let Some(rows) = rows {
+        for row in rows {
+            if let Some(rp) = row.get("rp_index").and_then(|v| v.as_str()) {
+                let rp = rp.trim_matches('/').trim();
+                if !rp.is_empty() {
+                    return rp.to_string();
+                }
+            }
+        }
+    }
+    String::new()
 }
 
 fn resolve_app_id(state: &AppState, host: Option<&str>) -> String {
