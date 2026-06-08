@@ -6,7 +6,7 @@ on:
     paths:
       - "backend-rust/**"
       - ".github/workflows/deploy-rust.yml"
-  workflow_dispatch:  # cho phép chạy thủ công từ GitHub UI
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,24 +15,20 @@ env:
 jobs:
   build-and-deploy:
     name: Build (Ubuntu) → Deploy → Restart
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
-      # ── 1. Checkout ──────────────────────────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── 2. Install Rust toolchain ─────────────────────────────────────────────
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # ── 3. Cache (build lần sau ~2-3 phút thay vì 15-20 phút) ───────────────
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend-rust
 
-      # ── 4. Install system deps (llama.cpp, RocksDB cần cmake + clang) ────────
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
@@ -40,14 +36,14 @@ jobs:
             cmake pkg-config libclang-dev clang \
             libssl-dev libzstd-dev libbz2-dev liblz4-dev libsnappy-dev
 
-      # ── 5. Build ─────────────────────────────────────────────────────────────
       - name: Build release-server
         working-directory: backend-rust
         run: |
           cargo build --profile release-server
           ls -lh target/release-server/csm_server
+          # In ra các thư viện dynamic cần thiết để cài đúng trên server
+          ldd target/release-server/csm_server
 
-      # ── 6. Upload binary lên server ──────────────────────────────────────────
       - name: Upload binary to server
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -58,7 +54,6 @@ jobs:
           target: "/root/la_server/"
           strip_components: 3
 
-      # ── 7. Swap binary + tạo service nếu chưa có + restart ──────────────────
       - name: Deploy & restart service
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -72,10 +67,11 @@ jobs:
 
             chmod +x $BINARY
 
-            # Tạo systemd service nếu chưa có
-            if [ ! -f /etc/systemd/system/csm-rust.service ]; then
-              echo "Tạo systemd service csm-rust..."
-              cat > /etc/systemd/system/csm-rust.service <<EOF
+            # Cài thư viện runtime còn thiếu
+            apt-get install -y libssl3 libzstd1 libbz2-1.0 liblz4-1 libsnappy1v5 2>/dev/null || true
+
+            # Luôn ghi đè service file để đảm bảo path đúng
+            cat > /etc/systemd/system/csm-rust.service <<SVCEOF
             [Unit]
             Description=CSM Rust Backend
             After=network.target
@@ -83,9 +79,9 @@ jobs:
             [Service]
             Type=simple
             User=root
-            WorkingDirectory=$DEPLOY_DIR
-            EnvironmentFile=$DEPLOY_DIR/config.env
-            ExecStart=$BINARY
+            WorkingDirectory=/root/la_server
+            EnvironmentFile=/root/la_server/config.env
+            ExecStart=/root/la_server/csm_server
             Restart=always
             RestartSec=5
             MemoryMax=6G
@@ -95,14 +91,13 @@ jobs:
 
             [Install]
             WantedBy=multi-user.target
-            EOF
-              systemctl daemon-reload
-              systemctl enable csm-rust
-            fi
+            SVCEOF
 
+            systemctl daemon-reload
+            systemctl enable csm-rust
             systemctl restart csm-rust || true
             sleep 5
             echo "=== STATUS ==="
             systemctl status csm-rust --no-pager || true
             echo "=== LOG ==="
-            journalctl -u csm-rust -n 50 --no-pager || true
+            journalctl -u csm-rust -n 30 --no-pager || true
