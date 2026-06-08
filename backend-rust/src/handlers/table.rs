@@ -252,12 +252,17 @@ impl TableHandler {
             let data = self.record_manager.filter_with_pagination(
                 app_id, table, &filter, lastkey, None, take,
             );
-            // Extract rows array and expose at top level (mirrors Java's "rows" key)
-            let rows = data.get("data").cloned().unwrap_or(Value::Array(vec![]));
+            let rows = data.get("rows")
+                .or_else(|| data.get("data"))
+                .cloned()
+                .unwrap_or(Value::Array(vec![]));
             out.insert("success".into(), Value::Bool(true));
             out.insert("rows".into(), rows);
             if let Some(cursor_val) = data.get("nextCursor") {
                 out.insert("nextCursor".into(), cursor_val.clone());
+            }
+            if let Some(tc) = data.get("totalCount") {
+                out.insert("totalCount".into(), tc.clone());
             }
         }
         out

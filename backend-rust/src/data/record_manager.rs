@@ -308,15 +308,14 @@ impl RecordManager {
     ) -> Map<String, Value> {
         let take = take.min(MAX_FILTER_TAKE);
         let mut records: Vec<Map<String, Value>> = Vec::new();
+        // Dedup by id (mirrors Java buildRecordDedupKey)
+        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         match self.get_db(app_id, table_name) {
             Err(e) => warn!("RocksDB open failed for {app_id}/{table_name}: {e:#}"),
             Ok(db) => {
                 let iter = db.db.iterator(rocksdb::IteratorMode::Start);
                 for item in iter {
-                    if records.len() >= take.saturating_mul(4) {
-                        break;
-                    }
                     if let Ok((key, value)) = item {
                         let key_str = String::from_utf8_lossy(&key);
                         if key_str.starts_with("__meta_") {
@@ -324,7 +323,15 @@ impl RecordManager {
                         }
                         if let Ok(Value::Object(record)) = serde_json::from_slice(&value) {
                             if SearchFilter::matches(&record, search_filter) {
-                                records.push(record);
+                                // Dedup: prefer id field, fall back to RocksDB key
+                                let dedup = record
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from)
+                                    .unwrap_or_else(|| key_str.to_string());
+                                if seen_ids.insert(dedup) {
+                                    records.push(record);
+                                }
                             }
                         }
                     }
@@ -334,26 +341,43 @@ impl RecordManager {
 
         records.sort_by(|a, b| compare_records_desc(a, b));
 
+        let total_count = records.len();
+
+        // cursor semantics match Java filterWithPagination:
+        // cursor = first key of NEXT page → startIndex = indexOf(cursor), no +1
         let start = if let Some(c) = cursor {
             records
                 .iter()
                 .position(|r| record_key(r).as_deref() == Some(c))
-                .map(|i| i + 1)
                 .unwrap_or(0)
         } else {
             offset.unwrap_or(0)
+        };
+
+        let end = (start + take).min(total_count);
+
+        // nextCursor = first key of the page after this one (Java convention)
+        let next_cursor: Option<String> = if end < total_count {
+            records.get(end).and_then(|r| record_key(r))
+        } else {
+            None
         };
 
         let slice: Vec<Value> = records
             .into_iter()
             .skip(start)
             .take(take)
-            .map(|r| Value::Object(r))
+            .map(Value::Object)
             .collect();
 
         let mut result = Map::new();
+        // "rows" is the primary key (matches Java); "data" kept as alias for internal callers
+        result.insert("rows".into(), Value::Array(slice.clone()));
         result.insert("data".into(), Value::Array(slice));
-        result.insert("total".into(), json!(start + take));
+        result.insert("totalCount".into(), json!(total_count));
+        if let Some(nc) = next_cursor {
+            result.insert("nextCursor".into(), Value::String(nc));
+        }
         result
     }
 
