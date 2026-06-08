@@ -35,15 +35,15 @@ jobs:
         run: |
           apt-get update -qq
           apt-get install -y --no-install-recommends \
-            build-essential cmake pkg-config libclang-dev clang \
+            build-essential cmake ninja-build pkg-config libclang-dev clang \
             libssl-dev libzstd-dev libbz2-dev liblz4-dev libsnappy-dev
+          ninja --version && cmake --version
 
       - name: Build release-server
         working-directory: backend-rust
         env:
-          CMAKE_MAKE_PROGRAM: /usr/bin/make
+          CMAKE_GENERATOR: Ninja
         run: |
-          which make && make --version
           cargo build --profile release-server
           ls -lh target/release-server/csm_server
           echo "=== Shared libs required ==="
