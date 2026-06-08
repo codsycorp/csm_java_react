@@ -99,6 +99,10 @@ impl AuthHandler {
         result.insert("refreshToken".into(), Value::String(refresh_token.clone()));
         let csrf = Uuid::new_v4().to_string();
         result.insert("csrfToken".into(), Value::String(csrf.clone()));
+        // Legacy typo alias for user_address (matches Java)
+        if let Some(addr) = user.user_address.clone() {
+            result.insert("user_adress".into(), addr);
+        }
 
         self.enrich_account_meta(&user, &mut result);
         self.enrich_async_routes(&user, &mut result);
@@ -354,8 +358,20 @@ impl AuthHandler {
     fn enrich_async_routes(&self, user: &User, result: &mut Map<String, Value>) {
         let filter = SearchFilter::eq("id", "accessRights");
         let index = self.record_manager.find("csm", "index", &filter);
-        if let Some(routes) = index.get("data") {
-            result.insert("asyncRoutes".into(), routes.clone());
+        if let Some(Value::Array(all_routes)) = index.get("data") {
+            let user_role = user.permissions.as_ref()
+                .and_then(|p| p.first())
+                .cloned();
+            let is_dev = user.dev.unwrap_or(false);
+            let menus = user.menus_permissions.clone().unwrap_or_default();
+            let filtered = filter_routes_by_role(
+                all_routes,
+                user_role.as_deref(),
+                &menus,
+                is_dev,
+                &mut std::collections::HashSet::new(),
+            );
+            result.insert("asyncRoutes".into(), Value::Array(filtered));
         }
         self.enrich_bitfield(user, result);
     }
