@@ -109,12 +109,13 @@ fn resolve_rp_index(state: &AppState, host: Option<&str>) -> String {
         .to_lowercase();
 
     // Query sys_la_routers: domain_name=domain AND f_case="" AND run=1
+    // run is stored as integer 1 in Java (not string "1")
     let filter = SearchFilter {
         operator: "AND".into(),
         conditions: vec![
             SearchFilter::eq("domain_name", domain.as_str()),
             SearchFilter::eq("f_case", ""),
-            SearchFilter::eq("run", "1"),
+            SearchFilter::eq("run", 1i64),
         ],
         ..Default::default()
     };

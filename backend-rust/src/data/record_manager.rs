@@ -648,7 +648,8 @@ impl RecordManager {
     }
 
     pub fn get_static_file(&self, relative_path: &str) -> Option<PathBuf> {
-        let path = self.data_dir.join(relative_path.trim_start_matches('/'));
+        // Java: basePath = DIR_PATH + "/public/" — all static files live under {data_dir}/public/
+        let path = self.data_dir.join("public").join(relative_path.trim_start_matches('/'));
         if path.exists() && path.is_file() {
             Some(path)
         } else {
