@@ -94,6 +94,10 @@ fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>) -> String {
     )
 }
 
+pub fn resolve_rp_index_pub(state: &AppState, host: Option<&str>) -> String {
+    resolve_rp_index(state, host)
+}
+
 /// Giống Java resolveRpIndexForDomain: tìm rp_index trong sys_la_routers theo domain
 fn resolve_rp_index(state: &AppState, host: Option<&str>) -> String {
     let h = match host {
