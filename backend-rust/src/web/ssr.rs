@@ -354,19 +354,173 @@ fn extract_domain(host: Option<&str>) -> String {
         .to_lowercase()
 }
 
-// ─── Sitemap builder ──────────────────────────────────────────────────────────
+/// Public wrapper so router.rs and api/router.rs can extract domain without duplicating logic.
+pub fn domain_from_host(host: Option<&str>) -> String {
+    extract_domain(host)
+}
 
-pub fn build_sitemap(state: &AppState, app_id: &str) -> String {
-    let filter = SearchFilter::eq("app_id", app_id);
-    let page = state.record_manager.filter(app_id, "sys_la_routers", &filter);
-    let mut urls = String::from(r#"<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">"#);
-    if let Some(routes) = page.get("data").and_then(|v| v.as_array()) {
-        for route in routes {
-            if let Some(path) = route.get("path").and_then(|v| v.as_str()) {
-                urls.push_str(&format!("<url><loc>https://example.com{path}</loc></url>"));
+// ─── Sitemap builder — per-domain, mirrors Java generateSitemapXml ────────────
+
+pub fn build_sitemap(state: &AppState, host: Option<&str>) -> String {
+    let domain = extract_domain(host);
+    let base_url = format!("https://{}", host.unwrap_or(domain.as_str()));
+
+    let mut xml = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">",
+    );
+    xml.push_str(&sitemap_url_entry(&format!("{base_url}/"), None, "daily", "1.0"));
+
+    let route_filter = SearchFilter {
+        operator: "AND".into(),
+        conditions: vec![
+            SearchFilter::eq("domain_name", domain.as_str()),
+            SearchFilter::eq("run", 1i64),
+        ],
+        ..Default::default()
+    };
+    let route_result = state.record_manager.filter("csm", "sys_la_routers", &route_filter);
+    let route_rows = route_result
+        .get("rows")
+        .or_else(|| route_result.get("data"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut seen = std::collections::HashSet::new();
+    seen.insert("/".to_string());
+
+    for row in &route_rows {
+        let s = |k: &str| {
+            row.get(k)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        };
+        let app_id = s("app_id");
+        let tbl_services = s("tbl_services");
+        let tbl_detail = s("tbl_service_detail");
+        if app_id.is_empty() {
+            continue;
+        }
+
+        let like_domain = SearchFilter {
+            field: "domain".into(),
+            filter_type: "like".into(),
+            value: Value::String(domain.clone()),
+            ..Default::default()
+        };
+
+        // Category paths from tbl_services
+        if !tbl_services.is_empty() {
+            let cat_filter = SearchFilter {
+                operator: "AND".into(),
+                conditions: vec![SearchFilter::eq("status", "active"), like_domain.clone()],
+                ..Default::default()
+            };
+            let cats = state.record_manager.filter(&app_id, &tbl_services, &cat_filter);
+            if let Some(rows) = cats
+                .get("rows")
+                .or_else(|| cats.get("data"))
+                .and_then(|v| v.as_array())
+            {
+                for r in rows {
+                    let slug = r
+                        .get("slug")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim_end_matches(".shtml")
+                        .trim()
+                        .to_string();
+                    if slug.is_empty() {
+                        continue;
+                    }
+                    let path = format!("/{slug}");
+                    if seen.insert(path.clone()) {
+                        let lm = sitemap_lastmod(r);
+                        xml.push_str(&sitemap_url_entry(
+                            &format!("{base_url}{path}"),
+                            lm.as_deref(),
+                            "weekly",
+                            "0.8",
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Detail paths from tbl_service_detail
+        if !tbl_detail.is_empty() {
+            let det_filter = SearchFilter {
+                operator: "AND".into(),
+                conditions: vec![SearchFilter::eq("status", "active"), like_domain.clone()],
+                ..Default::default()
+            };
+            let details = state.record_manager.filter(&app_id, &tbl_detail, &det_filter);
+            if let Some(rows) = details
+                .get("rows")
+                .or_else(|| details.get("data"))
+                .and_then(|v| v.as_array())
+            {
+                for r in rows {
+                    let svc_type = r
+                        .get("service_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    let slug = r
+                        .get("slug")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .trim_end_matches(".shtml")
+                        .trim()
+                        .to_string();
+                    if slug.is_empty() {
+                        continue;
+                    }
+                    let path = if svc_type.is_empty() {
+                        format!("/{slug}")
+                    } else {
+                        format!("/{svc_type}/{slug}")
+                    };
+                    if seen.insert(path.clone()) {
+                        let lm = sitemap_lastmod(r);
+                        xml.push_str(&sitemap_url_entry(
+                            &format!("{base_url}{path}"),
+                            lm.as_deref(),
+                            "weekly",
+                            "0.8",
+                        ));
+                    }
+                }
             }
         }
     }
-    urls.push_str("</urlset>");
-    urls
+
+    xml.push_str("\n</urlset>");
+    xml
+}
+
+fn sitemap_url_entry(url: &str, lastmod: Option<&str>, changefreq: &str, priority: &str) -> String {
+    let mut s = format!(
+        "\n  <url>\n    <loc>{url}</loc>\n"
+    );
+    if let Some(lm) = lastmod.filter(|s| !s.is_empty()) {
+        s.push_str(&format!("    <lastmod>{}</lastmod>\n", &lm[..lm.len().min(10)]));
+    }
+    s.push_str(&format!(
+        "    <changefreq>{changefreq}</changefreq>\n    <priority>{priority}</priority>\n  </url>"
+    ));
+    s
+}
+
+fn sitemap_lastmod(row: &Value) -> Option<String> {
+    for key in &["updated_at", "publish_date", "modified_at", "updatedAt", "created_at"] {
+        if let Some(v) = row.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            return Some(v.to_string());
+        }
+    }
+    None
 }

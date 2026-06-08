@@ -25,14 +25,26 @@ pub fn api_routes(state: AppState) -> Router<AppState> {
         .layer(from_fn_with_state(state, auth_middleware))
 }
 
+/// X-Forwarded-Host first (set by nginx), then Host. Mirrors Java's hostHeader resolution.
+fn extract_host(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get("x-forwarded-host")
+        .and_then(|h| h.to_str().ok())
+        .filter(|h| !h.is_empty())
+        .map(|h| h.to_lowercase())
+        .or_else(|| {
+            headers
+                .get(header::HOST)
+                .and_then(|h| h.to_str().ok())
+                .map(|h| h.to_lowercase())
+        })
+}
+
 async fn catch_all(State(state): State<AppState>, req: Request<Body>) -> Response {
     let method = req.method().clone();
     let uri = req.uri().path().to_string();
-    let host = req
-        .headers()
-        .get(header::HOST)
-        .and_then(|h| h.to_str().ok())
-        .map(String::from);
+    let query_str = req.uri().query().map(|q| q.to_string()).unwrap_or_default();
+    let host = extract_host(req.headers());
     let auth = req.extensions().get::<AuthUser>().cloned();
 
     info!("Request host={:?} uri={}", host, uri);
@@ -42,6 +54,18 @@ async fn catch_all(State(state): State<AppState>, req: Request<Body>) -> Respons
     }
 
     let is_api = is_api_request(&uri, host.as_deref()) || crate::api::paths::is_bare_api_path(&uri);
+
+    // SSR JSON endpoints — web-facing, return JSON, handled before API dispatch.
+    // Mirrors Java WebSpringController: /ssr/categories, /ssr/tags, /ssr/reviews.
+    if !is_api {
+        match uri.as_str() {
+            "/ssr/categories" => return serve_ssr_categories(&state, host.as_deref()).await,
+            "/ssr/tags" => return serve_ssr_tags(&state, host.as_deref(), &query_str).await,
+            "/ssr/reviews" => return serve_ssr_reviews(&state, host.as_deref(), &query_str).await,
+            _ => {}
+        }
+    }
+
     if is_api {
         let clean_path = uri
             .strip_prefix("/api")
@@ -52,6 +76,89 @@ async fn catch_all(State(state): State<AppState>, req: Request<Body>) -> Respons
     }
 
     crate::web::router::handle_web_path(&state, &uri, host.as_deref()).await
+}
+
+async fn serve_ssr_categories(state: &AppState, host: Option<&str>) -> Response {
+    use crate::model::SearchFilter;
+    let domain = crate::web::ssr::domain_from_host(host);
+    let filter = SearchFilter {
+        operator: "AND".into(),
+        conditions: vec![
+            SearchFilter::eq("status", "active"),
+            SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain), ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let result = state.record_manager.filter("web", "web_services", &filter);
+    let rows = result.get("rows").or_else(|| result.get("data"))
+        .and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let total = rows.len();
+    (StatusCode::OK, axum::Json(json!({
+        "success": true,
+        "data": rows.clone(),
+        "rows": rows,
+        "total": total,
+        "totalCount": total,
+    }))).into_response()
+}
+
+async fn serve_ssr_tags(state: &AppState, host: Option<&str>, qs: &str) -> Response {
+    use crate::model::SearchFilter;
+    let domain = crate::web::ssr::domain_from_host(host);
+    let service_ids_raw = qs_param(qs, "service_ids").unwrap_or_default();
+    let mut tags_map = serde_json::Map::new();
+    for id in service_ids_raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let filter = SearchFilter {
+            operator: "AND".into(),
+            conditions: vec![
+                SearchFilter::eq("service_id", id),
+                SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.clone()), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let result = state.record_manager.filter("web", "web_service_tags", &filter);
+        let rows = result.get("rows").or_else(|| result.get("data"))
+            .and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let tags: Vec<Value> = rows.iter()
+            .filter_map(|r| r.get("tag")?.as_str().filter(|t| !t.is_empty()).map(|t| Value::String(t.to_string())))
+            .collect();
+        tags_map.insert(id.to_string(), Value::Array(tags));
+    }
+    (StatusCode::OK, axum::Json(json!({"success": true, "data": tags_map}))).into_response()
+}
+
+async fn serve_ssr_reviews(state: &AppState, host: Option<&str>, qs: &str) -> Response {
+    use crate::model::SearchFilter;
+    let domain = crate::web::ssr::domain_from_host(host);
+    let service_ids_raw = qs_param(qs, "service_ids").unwrap_or_default();
+    let mut reviews_map = serde_json::Map::new();
+    for id in service_ids_raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let filter = SearchFilter {
+            operator: "AND".into(),
+            conditions: vec![
+                SearchFilter::eq("service_id", id),
+                SearchFilter::eq("status", "approved"),
+                SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.clone()), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let result = state.record_manager.filter("web", "web_service_reviews", &filter);
+        let rows = result.get("rows").or_else(|| result.get("data"))
+            .and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        reviews_map.insert(id.to_string(), Value::Array(rows));
+    }
+    (StatusCode::OK, axum::Json(json!({"success": true, "data": reviews_map}))).into_response()
+}
+
+fn qs_param(qs: &str, key: &str) -> Option<String> {
+    for part in qs.split('&') {
+        if let Some((k, v)) = part.split_once('=') {
+            if k == key {
+                return Some(urlencoding::decode(v).map(|s| s.into_owned()).unwrap_or_else(|_| v.to_string()));
+            }
+        }
+    }
+    None
 }
 
 async fn dispatch_api(
