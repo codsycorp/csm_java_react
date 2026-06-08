@@ -44,7 +44,7 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get install -y --no-install-recommends \
-            cmake pkg-config libclang-dev clang \
+            build-essential cmake pkg-config libclang-dev clang \
             libssl-dev libzstd-dev libbz2-dev liblz4-dev libsnappy-dev
 
       - name: Build release-server
