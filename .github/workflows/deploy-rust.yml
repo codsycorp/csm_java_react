@@ -58,8 +58,8 @@ jobs:
           target: "/root/csm_server_new/"
           strip_components: 3
 
-      # ── 7. Swap binary + restart service ─────────────────────────────────────
-      - name: Restart service
+      # ── 7. Swap binary + tạo service nếu chưa có + restart ──────────────────
+      - name: Deploy & restart service
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -67,9 +67,41 @@ jobs:
           password: ${{ secrets.DEPLOY_PASSWORD }}
           script: |
             set -e
-            mkdir -p /root/csm_server/backend-rust/target/release
-            mv /root/csm_server_new/csm_server /root/csm_server/backend-rust/target/release/csm_server
-            chmod +x /root/csm_server/backend-rust/target/release/csm_server
+            DEPLOY_DIR=/root/csm_server
+            BINARY=$DEPLOY_DIR/backend-rust/target/release/csm_server
+
+            mkdir -p $DEPLOY_DIR/backend-rust/target/release
+            mv /root/csm_server_new/csm_server $BINARY
+            chmod +x $BINARY
+
+            # Tạo systemd service nếu chưa có
+            if [ ! -f /etc/systemd/system/csm-rust.service ]; then
+              echo "Tạo systemd service..."
+              cat > /etc/systemd/system/csm-rust.service <<EOF
+            [Unit]
+            Description=CSM Rust Backend
+            After=network.target
+
+            [Service]
+            Type=simple
+            User=root
+            WorkingDirectory=$DEPLOY_DIR
+            EnvironmentFile=$DEPLOY_DIR/config.env
+            ExecStart=$BINARY
+            Restart=always
+            RestartSec=5
+            MemoryMax=6G
+            LimitNOFILE=65536
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+              systemctl daemon-reload
+              systemctl enable csm-rust
+            fi
+
             systemctl restart csm-rust
             sleep 3
-            systemctl status csm-rust --no-pager | head -10
+            systemctl status csm-rust --no-pager | head -15
