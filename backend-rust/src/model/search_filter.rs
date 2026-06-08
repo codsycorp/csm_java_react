@@ -64,7 +64,20 @@ impl SearchFilter {
 
     fn evaluate_condition(actual: &Value, op: &str, expected: &Value) -> bool {
         match op {
-            "eq" => actual == expected,
+            "eq" => {
+                if actual == expected {
+                    return true;
+                }
+                // Coerce number ↔ string (DB may store run=1 as integer or "1" as string)
+                let as_f64 = |v: &Value| {
+                    v.as_f64()
+                        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+                };
+                if let (Some(a), Some(e)) = (as_f64(actual), as_f64(expected)) {
+                    return (a - e).abs() < f64::EPSILON;
+                }
+                false
+            }
             "eqIgnoreCase" => {
                 if let (Some(a), Some(e)) = (actual.as_str(), expected.as_str()) {
                     a.trim().eq_ignore_ascii_case(e.trim())

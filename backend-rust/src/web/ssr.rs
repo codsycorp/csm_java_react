@@ -76,9 +76,41 @@ pub fn render_page(state: &AppState, uri: &str, host: Option<&str>) -> String {
     html
 }
 
-/// Expose rp_index lookup for router.rs (static asset fallback)
+/// Expose rp_index lookup for router.rs (static asset fallback).
+/// Mirrors Java resolveRpIndexForDomain: only returns routes where rp_index is actually set.
+/// Does NOT use resolve_route() because Priority 1 may return a route with empty rp_index.
 pub fn resolve_rp_index_pub(state: &AppState, host: Option<&str>) -> String {
-    resolve_route(state, host, "/").rp_index
+    let domain = extract_domain(host);
+    if domain.is_empty() {
+        return String::new();
+    }
+    let filter = SearchFilter {
+        operator: "AND".into(),
+        conditions: vec![
+            SearchFilter::eq("domain_name", domain.as_str()),
+            SearchFilter::eq("f_case", ""),
+            SearchFilter { field: "rp_index".into(), filter_type: "isnotnull".into(), ..Default::default() },
+            SearchFilter { field: "rp_index".into(), filter_type: "noteq".into(), value: Value::String(String::new()), ..Default::default() },
+            SearchFilter::eq("run", 1i64),
+        ],
+        ..Default::default()
+    };
+    let result = state.record_manager.filter("csm", "sys_la_routers", &filter);
+    let rows = result
+        .get("rows")
+        .or_else(|| result.get("data"))
+        .and_then(|v| v.as_array());
+    if let Some(rows) = rows {
+        for row in rows {
+            if let Some(rp) = row.get("rp_index").and_then(|v| v.as_str()) {
+                let rp = rp.trim_matches('/').trim();
+                if !rp.is_empty() {
+                    return rp.to_string();
+                }
+            }
+        }
+    }
+    String::new()
 }
 
 // ─── Core SSR builder ─────────────────────────────────────────────────────────
