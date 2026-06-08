@@ -62,6 +62,14 @@ pub async fn handle_web_path(state: &AppState, uri: &str, host: Option<&str>, qu
         "/version.json" => return serve_version_json(state, host).await,
         "/manifest.json" => return serve_manifest_json(state).await,
         "/page_struct_js.shtml" => return serve_page_struct_js(state, query_str).await,
+        "/ssr/categories" => return serve_ssr_categories(state, host, query_str).await,
+        "/ssr/tags" => return serve_ssr_tags(state, host, query_str).await,
+        "/ssr/reviews" => return serve_ssr_reviews(state, host, query_str).await,
+        "/kqxs/station" => return serve_kqxs_station(state, query_str).await,
+        "/kqxs/stations" => return serve_kqxs_stations(state, query_str).await,
+        "/kqxs/table-range" => return serve_kqxs_table_range(state, query_str).await,
+        "/kqxs/tonghop" => return serve_kqxs_tonghop(state, query_str).await,
+        "/vpts" => return serve_vpts(state, query_str).await,
         p if p.starts_with("/images.shtml") => return serve_images_shtml(state, query_str).await,
         p if p.starts_with("/app_images/") => return serve_static_path(state, p, None).await,
         _ => {}
@@ -311,10 +319,38 @@ async fn serve_manifest_json(state: &AppState) -> Response {
 /// decrypt p_code, return as text/javascript.
 async fn serve_page_struct_js(state: &AppState, query_str: &str) -> Response {
     let name = qs_param(query_str, "name");
-    if name.is_empty() {
-        return (StatusCode::BAD_REQUEST, "name param required").into_response();
+    let apt = qs_param(query_str, "apt");
+    let apd = qs_param(query_str, "apd");
+
+    // Primary path: apt + apd present → query {apd}/index (or {name}/index) by id=apt
+    // Java: if apd != "false" use apd as app_id, else use name as app_id; get "struct" field (Base64-encoded)
+    if !apt.is_empty() && !apd.is_empty() {
+        let app_id_for_struct = if apd != "false" { apd.as_str() } else { name.as_str() };
+        if !app_id_for_struct.is_empty() {
+            let filter = crate::model::SearchFilter::eq("id", apt.as_str());
+            let result = state.record_manager.filter(app_id_for_struct, "index", &filter);
+            if let Some(rows) = result.get("rows").or_else(|| result.get("data")).and_then(|v| v.as_array()) {
+                if let Some(first) = rows.first() {
+                    let struct_b64 = first.get("struct").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                    if !struct_b64.is_empty() {
+                        if let Ok(bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &struct_b64) {
+                            return (
+                                StatusCode::OK,
+                                [(header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+                                 (header::CACHE_CONTROL, "public, max-age=300")],
+                                bytes,
+                            ).into_response();
+                        }
+                    }
+                }
+            }
+        }
     }
 
+    // Fallback: query csm/sys_autos by p_name=name AND p_type=0, decrypt p_code
+    if name.is_empty() {
+        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], Vec::<u8>::new()).into_response();
+    }
     let filter = crate::model::SearchFilter {
         operator: "AND".into(),
         conditions: vec![
@@ -328,24 +364,18 @@ async fn serve_page_struct_js(state: &AppState, query_str: &str) -> Response {
         if let Some(first) = rows.first() {
             let p_code = first.get("p_code").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
             if !p_code.is_empty() {
-                let js = if let Ok(decrypted) = state.record_manager.csm_decrypt(&p_code) {
-                    decrypted
-                } else {
-                    p_code
-                };
+                let js = state.record_manager.csm_decrypt(&p_code).unwrap_or(p_code);
                 return (
                     StatusCode::OK,
-                    [
-                        (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
-                        (header::CACHE_CONTROL, "public, max-age=300"),
-                    ],
+                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+                     (header::CACHE_CONTROL, "public, max-age=300")],
                     js,
                 ).into_response();
             }
         }
     }
 
-    (StatusCode::NOT_FOUND, "not found").into_response()
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/javascript")], Vec::<u8>::new()).into_response()
 }
 
 /// Mirrors Java serveImage: serve image from app_images dir with ETag/304 caching.
@@ -448,6 +478,183 @@ async fn serve_upload_cmd(state: &AppState, query_str: &str) -> Response {
         }
         _ => json_error("Unknown cmd"),
     }
+}
+
+// ─── /ssr/categories, /ssr/tags, /ssr/reviews ─────────────────────────────────
+
+async fn serve_ssr_categories(state: &AppState, host: Option<&str>, _query_str: &str) -> Response {
+    let domain = crate::web::ssr::domain_from_host(host);
+    let filter = crate::model::SearchFilter {
+        operator: "AND".into(),
+        conditions: vec![
+            crate::model::SearchFilter::eq("status", "active"),
+            crate::model::SearchFilter {
+                field: "domain".into(),
+                filter_type: "like".into(),
+                value: serde_json::Value::String(domain.clone()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let result = state.record_manager.filter("web", "web_services", &filter);
+    let rows = result.get("rows").or_else(|| result.get("data"))
+        .and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let total = rows.len();
+    json_ok(&serde_json::json!({ "success": true, "data": rows, "rows": rows, "total": total, "totalCount": total }))
+}
+
+async fn serve_ssr_tags(state: &AppState, host: Option<&str>, query_str: &str) -> Response {
+    let domain = crate::web::ssr::domain_from_host(host);
+    let service_ids_raw = qs_param(query_str, "service_ids");
+    let service_ids: Vec<&str> = service_ids_raw.split(',').filter(|s| !s.is_empty()).collect();
+    let mut tags_map = serde_json::Map::new();
+    for service_id in service_ids {
+        let filter = crate::model::SearchFilter {
+            operator: "AND".into(),
+            conditions: vec![
+                crate::model::SearchFilter::eq("service_id", service_id),
+                crate::model::SearchFilter {
+                    field: "domain".into(),
+                    filter_type: "like".into(),
+                    value: serde_json::Value::String(domain.clone()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let result = state.record_manager.filter("web", "web_service_tags", &filter);
+        let rows = result.get("rows").or_else(|| result.get("data"))
+            .and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let tags: Vec<serde_json::Value> = rows.iter()
+            .filter_map(|r| r.get("tag")?.as_str().filter(|s| !s.is_empty()).map(|s| serde_json::Value::String(s.to_string())))
+            .collect();
+        tags_map.insert(service_id.to_string(), serde_json::Value::Array(tags));
+    }
+    json_ok(&serde_json::json!({ "success": true, "data": tags_map }))
+}
+
+async fn serve_ssr_reviews(state: &AppState, host: Option<&str>, query_str: &str) -> Response {
+    let domain = crate::web::ssr::domain_from_host(host);
+    let service_ids_raw = qs_param(query_str, "service_ids");
+    let service_ids: Vec<&str> = service_ids_raw.split(',').filter(|s| !s.is_empty()).collect();
+    let mut reviews_map = serde_json::Map::new();
+    for service_id in service_ids {
+        let filter = crate::model::SearchFilter {
+            operator: "AND".into(),
+            conditions: vec![
+                crate::model::SearchFilter::eq("service_id", service_id),
+                crate::model::SearchFilter::eq("status", "approved"),
+                crate::model::SearchFilter {
+                    field: "domain".into(),
+                    filter_type: "like".into(),
+                    value: serde_json::Value::String(domain.clone()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let result = state.record_manager.filter("web", "web_service_reviews", &filter);
+        let rows = result.get("rows").or_else(|| result.get("data"))
+            .and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        reviews_map.insert(service_id.to_string(), serde_json::Value::Array(rows));
+    }
+    json_ok(&serde_json::json!({ "success": true, "data": reviews_map }))
+}
+
+// ─── /kqxs/* endpoints ────────────────────────────────────────────────────────
+
+async fn serve_kqxs_station(state: &AppState, query_str: &str) -> Response {
+    let obj_name = qs_param(query_str, "obj_name");
+    let date = qs_param(query_str, "date");
+    if obj_name.is_empty() || !obj_name.starts_with("kqxs_") {
+        return json_error("Invalid obj_name");
+    }
+    let mut conditions = vec![
+        crate::model::SearchFilter::eq("status", "active"),
+    ];
+    if !date.is_empty() {
+        conditions.push(crate::model::SearchFilter::eq("date", date.as_str()));
+    }
+    let filter = crate::model::SearchFilter { operator: "AND".into(), conditions, ..Default::default() };
+    let result = state.record_manager.filter("kqxs", &obj_name, &filter);
+    let rows = result.get("rows").or_else(|| result.get("data")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    json_ok(&serde_json::json!({ "success": true, "data": rows, "rows": rows, "total": rows.len() }))
+}
+
+async fn serve_kqxs_stations(state: &AppState, query_str: &str) -> Response {
+    let mien = qs_param(query_str, "mien");
+    let thu = qs_param(query_str, "thu");
+    let mut conditions = vec![];
+    if !mien.is_empty() { conditions.push(crate::model::SearchFilter::eq("mien", mien.as_str())); }
+    if !thu.is_empty() { conditions.push(crate::model::SearchFilter::eq("thu", thu.as_str())); }
+    let filter = crate::model::SearchFilter { operator: "AND".into(), conditions, ..Default::default() };
+    let result = state.record_manager.filter("kqxs", "kqxs_lichxoso", &filter);
+    let rows = result.get("rows").or_else(|| result.get("data")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    json_ok(&serde_json::json!({ "success": true, "data": rows, "rows": rows, "total": rows.len() }))
+}
+
+async fn serve_kqxs_table_range(state: &AppState, query_str: &str) -> Response {
+    let obj_name = qs_param(query_str, "obj_name");
+    let from = qs_param(query_str, "from");
+    let to = qs_param(query_str, "to");
+    if obj_name.is_empty() || !obj_name.starts_with("kqxs_") {
+        return json_error("Invalid obj_name");
+    }
+    let mut conditions = vec![];
+    if !from.is_empty() {
+        conditions.push(crate::model::SearchFilter { field: "date".into(), filter_type: "gte".into(), value: serde_json::Value::String(from), ..Default::default() });
+    }
+    if !to.is_empty() {
+        conditions.push(crate::model::SearchFilter { field: "date".into(), filter_type: "lte".into(), value: serde_json::Value::String(to), ..Default::default() });
+    }
+    let filter = crate::model::SearchFilter { operator: "AND".into(), conditions, ..Default::default() };
+    let result = state.record_manager.filter("kqxs", &obj_name, &filter);
+    let rows = result.get("rows").or_else(|| result.get("data")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    json_ok(&serde_json::json!({ "success": true, "data": rows, "rows": rows, "total": rows.len() }))
+}
+
+async fn serve_kqxs_tonghop(state: &AppState, query_str: &str) -> Response {
+    let ma_duoi = qs_param(query_str, "ma_duoi");
+    let tu_ngay = qs_param(query_str, "tu_ngay");
+    let den_ngay = qs_param(query_str, "den_ngay");
+    let mut conditions = vec![];
+    if !ma_duoi.is_empty() { conditions.push(crate::model::SearchFilter::eq("ma_duoi", ma_duoi.as_str())); }
+    if !tu_ngay.is_empty() {
+        conditions.push(crate::model::SearchFilter { field: "ngay".into(), filter_type: "gte".into(), value: serde_json::Value::String(tu_ngay), ..Default::default() });
+    }
+    if !den_ngay.is_empty() {
+        conditions.push(crate::model::SearchFilter { field: "ngay".into(), filter_type: "lte".into(), value: serde_json::Value::String(den_ngay), ..Default::default() });
+    }
+    let filter = crate::model::SearchFilter { operator: "AND".into(), conditions, ..Default::default() };
+    let result = state.record_manager.filter("kqxs", "kqxs_tonghop", &filter);
+    let rows = result.get("rows").or_else(|| result.get("data")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    json_ok(&serde_json::json!({ "success": true, "data": rows, "rows": rows, "total": rows.len() }))
+}
+
+async fn serve_vpts(state: &AppState, query_str: &str) -> Response {
+    let obj_name = qs_param(query_str, "obj_name");
+    let valid_tables = [
+        "vpts_danhngon", "vpts_dongcong", "vpts_tamsat", "vpts_khongminh",
+        "vpts_thapnhitruc", "vpts_nguyenbinhkhiem", "vpts_cuutinh", "vpts_gionuoclon",
+        "vpts_kiethungtinhthoi", "vpts_cathungthan", "vpts_giokhongvong",
+        "vpts_lucnham", "vpts_tietkhi", "vpts_saotot", "vpts_saoxau",
+    ];
+    if obj_name.is_empty() || !valid_tables.contains(&obj_name.as_str()) {
+        return json_error("Invalid obj_name");
+    }
+    let filter = crate::model::SearchFilter { operator: "AND".into(), conditions: vec![], ..Default::default() };
+    let result = state.record_manager.filter("vpts", &obj_name, &filter);
+    let rows = result.get("rows").or_else(|| result.get("data")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    json_ok(&serde_json::json!({ "success": true, "data": rows, "rows": rows, "total": rows.len() }))
+}
+
+fn json_ok(body: &serde_json::Value) -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        body.to_string(),
+    ).into_response()
 }
 
 fn json_error(msg: &str) -> Response {

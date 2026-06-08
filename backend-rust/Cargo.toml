@@ -9,6 +9,7 @@ default-run = "csm_server"
 [dependencies]
 # HTTP server
 axum = { version = "0.8", features = ["macros", "multipart"] }
+multer = "3"
 axum-extra = { version = "0.10", features = ["cookie"] }
 tower = { version = "0.5", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "compression-gzip", "trace", "limit"] }

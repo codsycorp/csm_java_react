@@ -195,25 +195,9 @@ fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>, query_str: &s
     initial_data_map.insert("currentPagePath".into(), Value::String(uri.to_string()));
     initial_data_map.insert("app_id".into(), Value::String(route.app_id.clone()));
 
-    // Inject SSR service data if route has service tables configured (mirrors Java injectServiceDetailList)
+    // Phase 2 SSR: path-based routing — home/detail/category (mirrors Java resolveServiceListingForRoute)
     if !route.app_id.is_empty() && !route.tbl_service_detail.is_empty() {
-        // Determine service_type: query param first, then slug from path
-        let service_type = params.get("service_type")
-            .filter(|s| !s.is_empty())
-            .cloned()
-            .or_else(|| extract_slug_from_path(uri))
-            .unwrap_or_default();
-
-        let page = params.get("page").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).max(1);
-        let page_size = params.get("take")
-            .and_then(|v| v.parse::<usize>().ok())
-            .or_else(|| params.get("pageSize").and_then(|v| v.parse().ok()))
-            .unwrap_or(10)
-            .min(50)
-            .max(1);
-        let search_q = params.get("q").map(|s| s.trim().to_string()).unwrap_or_default();
-
-        let svc_data = load_ssr_service_data(state, &route, &domain, &service_type, page, page_size, &search_q, &params);
+        let svc_data = resolve_service_listing(state, &route, &domain, uri, &params);
         for (k, v) in svc_data {
             initial_data_map.insert(k, v);
         }
@@ -442,8 +426,7 @@ fn load_dynamic_code_templates(state: &AppState, code_names: &[String]) -> Value
 
 // ─── SSR service data — mirrors Java injectServiceDetailList ──────────────────
 
-/// Load paginated service detail records for SSR page injection.
-/// Mirrors Java: query tbl_service_detail with service_type + domain filters + pagination.
+#[allow(dead_code)]
 fn load_ssr_service_data(
     state: &AppState,
     route: &ResolvedRoute,
@@ -565,6 +548,356 @@ fn load_ssr_service_data(
         data.insert("lastkey".into(), Value::String(nc));
     }
     data
+}
+
+// ─── Phase 2 SSR: path-based service listing (mirrors Java resolveServiceListingForRoute) ──
+
+fn resolve_service_listing(
+    state: &AppState,
+    route: &ResolvedRoute,
+    domain: &str,
+    path: &str,
+    params: &HashMap<String, String>,
+) -> Map<String, Value> {
+    let mut out = Map::new();
+
+    let page = params.get("page").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).max(1);
+    let page_size = params.get("pageSize")
+        .or_else(|| params.get("take"))
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(12)
+        .clamp(1, 100);
+    let lang = params.get("hl").map(|s| s.as_str()).unwrap_or("vi");
+    let last_key = params.get("lastkey").map(|s| s.as_str()).unwrap_or("");
+
+    let path_no_ext = path.replace(".shtml", "");
+    let trimmed = path_no_ext.trim_start_matches('/');
+    let segs: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
+    let is_home = segs.is_empty();
+
+    // CASE 1: Homepage — active_home=1 OR featured=1
+    if is_home {
+        let filter = SearchFilter {
+            operator: "AND".into(),
+            conditions: vec![
+                SearchFilter::eq("status", "active"),
+                SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.into()), ..Default::default() },
+                SearchFilter {
+                    operator: "OR".into(),
+                    conditions: vec![
+                        SearchFilter { field: "active_home".into(), filter_type: "in".into(), value: json!([1, "1", true]), ..Default::default() },
+                        SearchFilter { field: "featured".into(), filter_type: "in".into(), value: json!([1, "1", true]), ..Default::default() },
+                    ],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let result = state.record_manager.filter(&route.app_id, &route.tbl_service_detail, &filter);
+        let rows = rows_from(&result);
+        let details: Vec<Value> = rows.iter().filter_map(|r| r.as_object()).map(|r| map_detail_lite(r, lang)).collect();
+        out.insert("homeDetailList".into(), Value::Array(details));
+        return out;
+    }
+
+    // CASE 2: Detail page — /{service_code}/{slug} (2+ segments)
+    if segs.len() >= 2 {
+        let service_code = segs[0];
+        let detail_slug = segs[segs.len() - 1];
+        let filter = SearchFilter {
+            operator: "AND".into(),
+            conditions: vec![
+                SearchFilter::eq("service_type", service_code),
+                SearchFilter::eq("slug", detail_slug),
+                SearchFilter::eq("status", "active"),
+                SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.into()), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let row = state.record_manager.find(&route.app_id, &route.tbl_service_detail, &filter);
+        if !row.is_empty() {
+            let cur_id = row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            out.insert("serviceDetail".into(), Value::Object(map_detail_full_obj(&row, lang)));
+            out.insert("serviceCode".into(), Value::String(service_code.into()));
+            insert_related(state, route, domain, service_code, &cur_id, lang, page_size, &mut out);
+            return out;
+        }
+    }
+
+    // CASE 2.5: Try detail by slug only (1 segment) before falling to category
+    if segs.len() == 1 {
+        let slug_only = segs[0];
+        let filter = SearchFilter {
+            operator: "AND".into(),
+            conditions: vec![
+                SearchFilter::eq("slug", slug_only),
+                SearchFilter::eq("status", "active"),
+                SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.into()), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let row = state.record_manager.find(&route.app_id, &route.tbl_service_detail, &filter);
+        if !row.is_empty() {
+            let service_type = row.get("service_type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let cur_id = row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            out.insert("serviceDetail".into(), Value::Object(map_detail_full_obj(&row, lang)));
+            out.insert("serviceCode".into(), Value::String(service_type.clone()));
+            if !service_type.is_empty() {
+                insert_related(state, route, domain, &service_type, &cur_id, lang, page_size, &mut out);
+            }
+            return out;
+        }
+    }
+
+    // CASE 3: Category page — find service in tbl_services by slug/service_code
+    let slug = segs.last().copied().unwrap_or("");
+    if slug.is_empty() || route.tbl_services.is_empty() {
+        return out;
+    }
+
+    let svc_filter = SearchFilter {
+        operator: "AND".into(),
+        conditions: vec![
+            SearchFilter::eq("service_code", slug),
+            SearchFilter::eq("status", "active"),
+            SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.into()), ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let service = state.record_manager.find(&route.app_id, &route.tbl_services, &svc_filter);
+
+    let service_code: String = if !service.is_empty() {
+        let found = service.get("service_code").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if found.is_empty() { service.get("id").and_then(|v| v.as_str()).unwrap_or(slug).to_string() } else { found }
+    } else {
+        slug.to_string()
+    };
+
+    if !service.is_empty() {
+        let cat = map_service_category(&service, lang);
+        let page_content = cat.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        if !page_content.is_empty() {
+            out.insert("pageContent".into(), Value::String(page_content));
+        }
+        out.insert("serviceCategory".into(), Value::Object(cat));
+    }
+
+    // Build detail listing conditions
+    let mut det_conds = vec![
+        SearchFilter::eq("service_type", service_code.as_str()),
+        SearchFilter::eq("status", "active"),
+        SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.into()), ..Default::default() },
+    ];
+
+    if let Some(q) = params.get("q").filter(|s| !s.is_empty()) {
+        det_conds.push(SearchFilter {
+            operator: "OR".into(),
+            conditions: vec![
+                SearchFilter { field: "title".into(), filter_type: "like".into(), value: Value::String(q.clone()), ..Default::default() },
+                SearchFilter { field: "excerpt".into(), filter_type: "like".into(), value: Value::String(q.clone()), ..Default::default() },
+                SearchFilter { field: "keywords".into(), filter_type: "like".into(), value: Value::String(q.clone()), ..Default::default() },
+            ],
+            ..Default::default()
+        });
+    }
+    for (param, field) in &[
+        ("propertyType", "attributes_propertyType"), ("transactionType", "attributes_transactionType"),
+        ("category", "attributes_category"), ("platform", "attributes_platform"),
+        ("brand", "attributes_brand"), ("location", "attributes_location"),
+        ("legalStatus", "attributes_legalStatus"), ("furnished", "attributes_furnished"),
+    ] {
+        if let Some(v) = params.get(*param).filter(|s| !s.is_empty() && *s != "all") {
+            det_conds.push(SearchFilter { field: (*field).into(), filter_type: "like".into(), value: Value::String(v.clone()), ..Default::default() });
+        }
+    }
+    for (param, field, op) in &[
+        ("price_min", "attributes_price", "gte"), ("price_max", "attributes_price", "lte"),
+        ("area_min", "attributes_area", "gte"), ("area_max", "attributes_area", "lte"),
+    ] {
+        if let Some(v) = params.get(*param).and_then(|s| s.parse::<f64>().ok()) {
+            let n = serde_json::Number::from_f64(v).map(Value::Number).unwrap_or(Value::Null);
+            det_conds.push(SearchFilter { field: (*field).into(), filter_type: (*op).into(), value: n, ..Default::default() });
+        }
+    }
+
+    let det_filter = SearchFilter { operator: "AND".into(), conditions: det_conds, ..Default::default() };
+    let det_result = state.record_manager.filter(&route.app_id, &route.tbl_service_detail, &det_filter);
+    let mut all_rows = rows_from(&det_result);
+
+    // Sort by id DESC (newest first)
+    all_rows.sort_by(|a, b| {
+        let ia = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let ib = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        match (ia.parse::<i64>(), ib.parse::<i64>()) {
+            (Ok(na), Ok(nb)) => nb.cmp(&na),
+            _ => ib.cmp(ia),
+        }
+    });
+
+    let total_count = all_rows.len();
+    let start_index = if !last_key.is_empty() {
+        all_rows.iter().position(|r| r.get("id").and_then(|v| v.as_str()).unwrap_or("") == last_key)
+            .map(|i| i + 1).unwrap_or(0)
+    } else {
+        page.saturating_sub(1) * page_size
+    };
+    let end_index = (start_index + page_size).min(total_count);
+    let page_rows: Vec<Value> = all_rows[start_index..end_index].iter()
+        .filter_map(|r| r.as_object())
+        .map(|r| map_detail_lite(r, lang))
+        .collect();
+    let next_cursor = if end_index < total_count {
+        all_rows[end_index.saturating_sub(1)].get("id").and_then(|v| v.as_str()).map(String::from)
+    } else {
+        None
+    };
+    let page_computed = if page_size > 0 { start_index / page_size + 1 } else { 1 };
+
+    out.insert("serviceDetailList".into(), Value::Array(page_rows));
+    out.insert("totalCount".into(), json!(total_count));
+    out.insert("page".into(), json!(page_computed));
+    out.insert("pageSize".into(), json!(page_size));
+    out.insert("take".into(), json!(page_size));
+    out.insert("paginationMode".into(), Value::String("cursor".into()));
+    if let Some(nc) = next_cursor {
+        out.insert("nextCursor".into(), Value::String(nc.clone()));
+        out.insert("lastkey".into(), Value::String(nc));
+    }
+    out
+}
+
+fn insert_related(
+    state: &AppState,
+    route: &ResolvedRoute,
+    domain: &str,
+    service_type: &str,
+    cur_id: &str,
+    lang: &str,
+    take: usize,
+    out: &mut Map<String, Value>,
+) {
+    let filter = SearchFilter {
+        operator: "AND".into(),
+        conditions: vec![
+            SearchFilter::eq("service_type", service_type),
+            SearchFilter::eq("status", "active"),
+            SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.into()), ..Default::default() },
+        ],
+        ..Default::default()
+    };
+    let result = state.record_manager.filter(&route.app_id, &route.tbl_service_detail, &filter);
+    let related: Vec<Value> = rows_from(&result).iter()
+        .filter_map(|r| r.as_object())
+        .filter(|r| r.get("id").and_then(|v| v.as_str()).unwrap_or("") != cur_id)
+        .take(take)
+        .map(|r| map_detail_lite(r, lang))
+        .collect();
+    out.insert("relatedDetailList".into(), Value::Array(related));
+}
+
+fn rows_from(result: &Map<String, Value>) -> Vec<Value> {
+    result.get("rows").or_else(|| result.get("data"))
+        .and_then(|v| v.as_array()).cloned().unwrap_or_default()
+}
+
+fn map_detail_lite(row: &serde_json::Map<String, Value>, lang: &str) -> Value {
+    let s = |k: &str| row.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let b_flag = |k: &str| -> bool {
+        match row.get(k) {
+            Some(Value::Bool(b)) => *b,
+            Some(Value::Number(n)) => n.as_i64().unwrap_or(0) == 1,
+            Some(Value::String(sv)) => sv == "1" || sv.eq_ignore_ascii_case("true"),
+            _ => false,
+        }
+    };
+    let lang_s = |base: &str| -> String {
+        if lang != "vi" {
+            let v = s(&format!("{}_{}", base, lang));
+            if !v.is_empty() { return v; }
+        }
+        s(base)
+    };
+
+    let mut m = serde_json::Map::new();
+    m.insert("id".into(), Value::String(s("id")));
+    m.insert("domain".into(), Value::String(s("domain")));
+    m.insert("service_type".into(), Value::String(s("service_type")));
+    m.insert("title".into(), Value::String(lang_s("title")));
+    m.insert("slug".into(), Value::String(s("slug")));
+    m.insert("excerpt".into(), Value::String(lang_s("excerpt")));
+    m.insert("thumbnail".into(), Value::String(s("thumbnail")));
+    m.insert("cover".into(), Value::String(s("cover")));
+    m.insert("images".into(), Value::String(s("images")));
+    m.insert("videos".into(), Value::String(s("videos")));
+    m.insert("album".into(), Value::String(s("album")));
+    m.insert("video".into(), Value::String(s("video")));
+    m.insert("video_url".into(), Value::String(s("video_url")));
+    m.insert("tags".into(), Value::String(s("tags")));
+    m.insert("keywords".into(), Value::String(lang_s("keywords")));
+    m.insert("meta_description".into(), Value::String(s("meta_description")));
+    m.insert("featured".into(), Value::Bool(b_flag("featured")));
+    m.insert("activeHome".into(), Value::Bool(b_flag("active_home")));
+    m.insert("status".into(), Value::String(s("status")));
+    m.insert("author".into(), Value::String(s("author")));
+    for (k, v) in row {
+        if k.starts_with("attributes_") || k.starts_with("specifications_") {
+            m.insert(k.clone(), v.clone());
+        }
+    }
+    if let Some(v) = row.get("publish_date") { m.insert("publish_date".into(), v.clone()); }
+    if let Some(v) = row.get("expiry_date") { m.insert("expiry_date".into(), v.clone()); }
+    Value::Object(m)
+}
+
+fn map_detail_full_obj(row: &serde_json::Map<String, Value>, lang: &str) -> serde_json::Map<String, Value> {
+    let mut m = match map_detail_lite(row, lang) {
+        Value::Object(o) => o,
+        _ => serde_json::Map::new(),
+    };
+    let s = |k: &str| row.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let lang_s = |base: &str| -> String {
+        if lang != "vi" {
+            let v = s(&format!("{}_{}", base, lang));
+            if !v.is_empty() { return v; }
+        }
+        s(base)
+    };
+    m.insert("content".into(), Value::String(lang_s("content")));
+    m.insert("seo_meta".into(), Value::String(s("seo_meta")));
+    m.insert("dien_thoai".into(), Value::String(s("dien_thoai")));
+    m.remove("attributes");
+    m.remove("specifications");
+    m
+}
+
+fn map_service_category(row: &serde_json::Map<String, Value>, lang: &str) -> serde_json::Map<String, Value> {
+    let s = |k: &str| row.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let lang_s = |base: &str| -> String {
+        if lang != "vi" {
+            let v = s(&format!("{}_{}", base, lang));
+            if !v.is_empty() { return v; }
+        }
+        s(base)
+    };
+    let mut m = serde_json::Map::new();
+    m.insert("id".into(), Value::String(s("id")));
+    m.insert("domain".into(), Value::String(s("domain")));
+    m.insert("name".into(), Value::String(s("name")));
+    m.insert("service_code".into(), Value::String(s("service_code")));
+    m.insert("slug".into(), Value::String(s("service_code")));
+    m.insert("status".into(), Value::String(s("status")));
+    m.insert("icon".into(), Value::String(s("icon")));
+    m.insert("sort_order".into(), Value::String(s("sort_order")));
+    m.insert("seo_meta".into(), Value::String(s("seo_meta")));
+    m.insert("parent_id".into(), Value::String(s("parent_id")));
+    m.insert("content".into(), Value::String(lang_s("content")));
+    m.insert("description".into(), Value::String(lang_s("description")));
+    m.insert("category".into(), Value::String(lang_s("category")));
+    m.insert("title".into(), Value::String(lang_s("title")));
+    if let Some(v) = row.get("attributes") { m.insert("attributes".into(), v.clone()); }
+    if let Some(v) = row.get("config") { m.insert("config".into(), v.clone()); }
+    if let Some(v) = row.get("updated_at") { m.insert("updated_at".into(), v.clone()); }
+    m
 }
 
 // ─── HTML injection helpers ────────────────────────────────────────────────────

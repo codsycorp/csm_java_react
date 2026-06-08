@@ -675,6 +675,7 @@ dependencies = [
  "llama-cpp-2",
  "mime",
  "mime_guess",
+ "multer",
  "once_cell",
  "parking_lot 0.12.5",
  "rand",

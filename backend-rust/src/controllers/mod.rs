@@ -52,6 +52,7 @@ pub fn routes(state: AppState) -> Router<AppState> {
         .route("/api/media/call-status", get(media_call_status))
         .route("/api/upload", post(web_upload))
         .route("/upload", post(web_upload))
+        .route("/upload.shtml", post(web_upload_shtml))
         .layer(from_fn_with_state(state, auth_middleware))
 }
 
@@ -174,6 +175,14 @@ async fn web_upload(
     multipart: axum::extract::Multipart,
 ) -> impl axum::response::IntoResponse {
     crate::web::upload::handle_upload(State(state), multipart).await
+}
+
+async fn web_upload_shtml(
+    State(state): State<AppState>,
+    query: axum::extract::Query<std::collections::HashMap<String, String>>,
+    req: axum::extract::Request<axum::body::Body>,
+) -> impl axum::response::IntoResponse {
+    crate::web::upload::handle_upload_shtml(state, query.0, req).await
 }
 
 async fn media_call_status() -> Json<serde_json::Value> {
