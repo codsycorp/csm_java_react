@@ -44,11 +44,13 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get install -y --no-install-recommends \
-            build-essential cmake pkg-config libclang-dev clang \
+            build-essential ninja-build cmake pkg-config libclang-dev clang \
             libssl-dev libzstd-dev libbz2-dev liblz4-dev libsnappy-dev
 
       - name: Build release-server
         working-directory: backend-rust
+        env:
+          CMAKE_GENERATOR: Ninja
         run: |
           cargo build --profile release-server
           ls -lh target/release-server/csm_server
