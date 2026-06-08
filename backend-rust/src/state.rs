@@ -14,6 +14,7 @@ use crate::services::{
     crm_analytics::CrmAnalyticsService, llama_cpp::LlamaCppService, permission::PermissionService,
     user::UserService,
 };
+use crate::socket::SocketIo;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -35,10 +36,12 @@ pub struct AppState {
     pub home_handler: Arc<HomeHandler>,
     pub init_handler: Arc<InitHandler>,
     pub seo_handler: Arc<SeoHandler>,
+    /// Socket.IO handle for server-side broadcasting (mirrors Java SocketIOServer inject)
+    pub socket_io: Arc<SocketIo>,
 }
 
 impl AppState {
-    pub async fn new(config: AppConfig) -> anyhow::Result<Self> {
+    pub async fn new(config: AppConfig, socket_io: SocketIo) -> anyhow::Result<Self> {
         let record_manager = Arc::new(RecordManager::new(config.clone())?);
         let jwt = Arc::new(JwtUtil::new(&config.jwt_secret));
         let user_service = Arc::new(UserService::new(record_manager.clone()));
@@ -93,6 +96,7 @@ impl AppState {
             home_handler,
             init_handler,
             seo_handler,
+            socket_io: Arc::new(socket_io),
         })
     }
 }

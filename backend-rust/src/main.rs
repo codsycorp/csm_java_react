@@ -40,8 +40,14 @@ async fn main() -> anyhow::Result<()> {
     );
     info!("Data directory: {}", config.data_dir.display());
 
-    let state = AppState::new(config.clone()).await?;
+    // Socket.IO layer created first so SocketIo handle can be stored in AppState
+    let (socket_layer, socket_io) = socket::new_layer();
+
+    let state = AppState::new(config.clone(), socket_io).await?;
     state.record_manager.init()?;
+
+    // Wire socket event handlers now that AppState is ready
+    socket::register(&state.socket_io, state.clone());
 
     // Seed default schemas in background — must not block HTTP bind (large RocksDB)
     let init = state.init_handler.clone();
@@ -49,32 +55,23 @@ async fn main() -> anyhow::Result<()> {
         init.auto_init_default_data();
     });
 
-    let app = build_app(state.clone());
+    let app = build_app(state.clone(), socket_layer);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-
-    // Socket.IO on separate port (mirrors Java socket.server.port)
-    let socket_state = state.clone();
-    let socket_port = config.socket.port;
-    tokio::spawn(async move {
-        if let Err(e) = socket::start_socket_server(socket_state, socket_port).await {
-            tracing::error!("Socket.IO server error: {e}");
-        }
-    });
-
-    info!("HTTP server listening on http://{}", addr);
+    info!("HTTP server listening on http://{} (Socket.IO on same port)", addr);
     axum::serve(listener, app).await?;
 
     Ok(())
 }
 
-fn build_app(state: AppState) -> Router {
-    // All traffic goes through api::catch_all (API + SSR). Do NOT add a separate web
-    // fallback here — it would bypass /login and other bare API paths.
+fn build_app(state: AppState, socket_layer: socket::SocketIoLayer) -> Router {
+    // Socket.IO layer on the main server — realtime.domain.com → nginx → same port
+    // as the main HTTP server. No separate port needed.
     Router::new()
         .merge(controllers::routes(state.clone()))
         .merge(api::router::api_routes(state.clone()))
+        .layer(socket_layer)
         .layer(security::middleware::security_layers())
         .with_state(state)
 }

@@ -42,6 +42,7 @@ pub async fn handle_web_path(state: &AppState, uri: &str, host: Option<&str>) ->
     match uri {
         "/robots.txt" => return text_response("User-agent: *\nAllow: /\n"),
         "/sitemap.xml" => return text_response(&crate::web::ssr::build_sitemap(state, "csm")),
+        "/version.json" => return serve_version_json(state, host).await,
         p if p.starts_with("/app_images/") => return serve_static_path(state, p, None).await,
         _ => {}
     }
@@ -97,6 +98,63 @@ fn file_response(path: &std::path::Path, bytes: Vec<u8>) -> Response {
 
 pub async fn serve_static(state: &AppState, uri: &str) -> Response {
     serve_static_path(state, uri, None).await
+}
+
+/// Mirrors Java WebSpringController.serveVersionJson:
+/// tries {rp_index}/version.json → version.json → derives mtime from {rp_index}/index.html
+async fn serve_version_json(state: &AppState, host: Option<&str>) -> Response {
+    let rp_index = crate::web::ssr::resolve_rp_index_pub(state, host);
+
+    // 1. {rp_index}/version.json
+    if !rp_index.is_empty() {
+        let p = format!("{rp_index}/version.json");
+        if let Some(path) = state.record_manager.get_static_file(&p) {
+            if let Ok(bytes) = tokio::fs::read(&path).await {
+                return (
+                    axum::http::StatusCode::OK,
+                    [(header::CONTENT_TYPE, "application/json; charset=utf-8"),
+                     (header::CACHE_CONTROL, "no-cache")],
+                    bytes,
+                ).into_response();
+            }
+        }
+    }
+
+    // 2. version.json at root
+    if let Some(path) = state.record_manager.get_static_file("version.json") {
+        if let Ok(bytes) = tokio::fs::read(&path).await {
+            return (
+                axum::http::StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json; charset=utf-8"),
+                 (header::CACHE_CONTROL, "no-cache")],
+                bytes,
+            ).into_response();
+        }
+    }
+
+    // 3. Derive version from index.html mtime
+    if !rp_index.is_empty() {
+        let idx = format!("{rp_index}/index.html");
+        if let Some(path) = state.record_manager.get_static_file(&idx) {
+            if let Ok(meta) = tokio::fs::metadata(&path).await {
+                if let Ok(modified) = meta.modified() {
+                    let ms = modified
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis();
+                    let payload = format!("{{\"version\":\"{ms}\"}}");
+                    return (
+                        axum::http::StatusCode::OK,
+                        [(header::CONTENT_TYPE, "application/json; charset=utf-8"),
+                         (header::CACHE_CONTROL, "no-cache")],
+                        payload.into_bytes(),
+                    ).into_response();
+                }
+            }
+        }
+    }
+
+    (axum::http::StatusCode::NOT_FOUND, "version.json not found").into_response()
 }
 
 fn text_response(body: &str) -> Response {
