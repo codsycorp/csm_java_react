@@ -11,13 +11,25 @@ on:
 env:
   CARGO_TERM_COLOR: always
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  DEBIAN_FRONTEND: noninteractive
 
 jobs:
   build-and-deploy:
-    name: Build (Ubuntu) → Deploy → Restart
-    runs-on: ubuntu-22.04
+    name: Build (Ubuntu 20.04) → Deploy → Restart
+    runs-on: ubuntu-latest
+    # Build trong container Ubuntu 20.04 → binary dùng glibc 2.31
+    # tương thích server Ubuntu 20.04 (không cần glibc 2.38+)
+    container:
+      image: ubuntu:20.04
+      options: --user root
 
     steps:
+      - name: Install prerequisites
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends \
+            curl git ca-certificates openssh-client
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -31,8 +43,7 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
+          apt-get install -y --no-install-recommends \
             cmake pkg-config libclang-dev clang \
             libssl-dev libzstd-dev libbz2-dev liblz4-dev libsnappy-dev
 
@@ -41,7 +52,6 @@ jobs:
         run: |
           cargo build --profile release-server
           ls -lh target/release-server/csm_server
-          # In ra các thư viện dynamic cần thiết để cài đúng trên server
           ldd target/release-server/csm_server
 
       - name: Upload binary to server
@@ -67,11 +77,8 @@ jobs:
 
             chmod +x $BINARY
 
-            # Cài thư viện runtime còn thiếu
-            apt-get install -y libssl3 libzstd1 libbz2-1.0 liblz4-1 libsnappy1v5 2>/dev/null || true
-
-            # Luôn ghi đè service file để đảm bảo path đúng
-            cat > /etc/systemd/system/csm-rust.service <<SVCEOF
+            # Luôn ghi đè service file
+            cat > /etc/systemd/system/csm-rust.service << 'SVCEOF'
             [Unit]
             Description=CSM Rust Backend
             After=network.target
