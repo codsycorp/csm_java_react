@@ -1,18 +1,11 @@
 #!/bin/bash
-# deploy-rust-linux.sh — Cross-compile trên Mac, upload binary lên Linux server
-# Không cần Rust/build tools trên server. Server chỉ cần SSH access.
-#
-# Yêu cầu trên Mac:
-#   cargo install cross   (1 lần)
-#   Docker Desktop đang chạy
-#
+# deploy-rust-linux.sh — Git push → build trên server → restart service
 # Dùng: ./deploy-rust-linux.sh user@server-ip [/path/on/server]
 
 set -euo pipefail
 
 SERVER="${1:-${DEPLOY_SERVER:-}}"
 SERVER_PATH="${2:-${DEPLOY_PATH:-/root/csm_server}}"
-TARGET="x86_64-unknown-linux-gnu"
 
 if [ -z "$SERVER" ]; then
     echo "Usage: $0 user@server-ip [/path/on/server]"
@@ -20,57 +13,94 @@ if [ -z "$SERVER" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RUST_DIR="$SCRIPT_DIR/backend-rust"
-BINARY="$RUST_DIR/target/$TARGET/release/csm_server"
 
 echo "=== CSM Rust Deploy → $SERVER:$SERVER_PATH ==="
 
-# ── Bước 1: Cross-compile trên Mac ──────────────────────────────────────────
+# ── Bước 1: Cài build tools + swap (chỉ chạy nếu chưa có) ──────────────────
 echo ""
-echo "▶ [1/3] Cross-compile cho Linux ($TARGET)..."
+echo "▶ [1/4] Setup server (bỏ qua nếu đã setup)..."
+ssh "$SERVER" bash <<'SETUP'
+set -e
 
-# Kiểm tra cross tool
-if ! command -v cross &>/dev/null; then
-    echo "Cài cross..."
-    cargo install cross --git https://github.com/cross-rs/cross
+# Rust
+if ! command -v cargo &>/dev/null; then
+    echo "→ Cài Rust..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+fi
+source "$HOME/.cargo/env" 2>/dev/null || true
+
+# Build dependencies
+if command -v apt-get &>/dev/null && ! command -v cmake &>/dev/null; then
+    echo "→ Cài build tools..."
+    apt-get update -qq
+    apt-get install -y --no-install-recommends \
+        build-essential cmake pkg-config libclang-dev clang \
+        libssl-dev libzstd-dev libbz2-dev liblz4-dev libsnappy-dev git
 fi
 
-# Kiểm tra Docker
-if ! docker info &>/dev/null 2>&1; then
-    echo "❌ Docker chưa chạy. Mở Docker Desktop rồi thử lại."
-    exit 1
+# Swap 4GB (cần cho link step llama.cpp + RocksDB trên RAM thấp)
+if [ ! -f /swapfile ]; then
+    echo "→ Tạo swap 4GB..."
+    fallocate -l 4G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=4096
+    chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab 2>/dev/null || true
 fi
 
-cd "$RUST_DIR"
-cross build --release --target "$TARGET"
+echo "Setup OK — RAM: $(free -h | awk '/Mem:/{print $2}'), Swap: $(free -h | awk '/Swap:/{print $2}')"
+SETUP
 
-echo "✅ Build xong: $(ls -lh "$BINARY")"
-
-# ── Bước 2: Upload binary + config lên server ────────────────────────────────
+# ── Bước 2: Git pull ─────────────────────────────────────────────────────────
 echo ""
-echo "▶ [2/3] Upload lên server..."
-
-# Tạo thư mục trên server
-ssh "$SERVER" "mkdir -p $SERVER_PATH/bin $SERVER_PATH/csm_datas/database \
-    $SERVER_PATH/csm_datas/backups $SERVER_PATH/csm_datas/lucene_index \
-    $SERVER_PATH/csm_datas/ai_local/model"
-
-# Upload binary (~20MB, không cần upload source)
-scp "$BINARY" "$SERVER:$SERVER_PATH/bin/csm_server"
-ssh "$SERVER" "chmod +x $SERVER_PATH/bin/csm_server"
-
-# Upload config (secrets không commit git)
-scp "$SCRIPT_DIR/config.env" "$SERVER:$SERVER_PATH/config.env"
-
-echo "✅ Upload xong"
-
-# ── Bước 3: Tạo/restart systemd service ─────────────────────────────────────
-echo ""
-echo "▶ [3/3] Khởi động service..."
-
-ssh "$SERVER" bash -s "$SERVER_PATH" <<'REMOTE'
+echo "▶ [2/4] Pull code mới nhất..."
+ssh "$SERVER" bash -s "$SERVER_PATH" <<'PULL'
 set -e
 P="$1"
+if [ ! -d "$P/.git" ]; then
+    echo "→ Clone repo lần đầu..."
+    mkdir -p "$(dirname "$P")"
+    git clone https://github.com/codsycorp/csm_java_react.git "$P"
+else
+    cd "$P" && git fetch origin && git reset --hard origin/main
+fi
+echo "Code: $(git -C "$P" log --oneline -1)"
+PULL
+
+# ── Bước 3: Build trên server ────────────────────────────────────────────────
+echo ""
+echo "▶ [3/4] Build release (lần đầu ~15-20 phút, lần sau ~2-3 phút)..."
+ssh "$SERVER" bash -s "$SERVER_PATH" <<'BUILD'
+set -e
+source "$HOME/.cargo/env" 2>/dev/null || true
+export PATH="$HOME/.cargo/bin:$PATH"
+cd "$1/backend-rust"
+
+echo "Cargo: $(cargo --version)"
+
+# release-server profile: lto=off, codegen-units=16 → ít RAM hơn khi link
+# JOBS=2 → không bị OOM trên server 8GB
+CARGO_BUILD_JOBS=2 cargo build --profile release-server 2>&1
+
+BINARY="target/release-server/csm_server"
+echo "✅ $(ls -lh $BINARY)"
+
+# Copy sang release/ để service dùng path cố định
+cp "$BINARY" target/release/csm_server
+BUILD
+
+# ── Bước 4: Upload config + restart service ──────────────────────────────────
+echo ""
+echo "▶ [4/4] Config và khởi động..."
+
+# Upload config.env (secrets không commit git)
+scp "$SCRIPT_DIR/config.env" "$SERVER:$SERVER_PATH/config.env"
+
+ssh "$SERVER" bash -s "$SERVER_PATH" <<'SERVICE'
+set -e
+P="$1"
+BINARY="$P/backend-rust/target/release/csm_server"
+
+mkdir -p "$P/csm_datas/database" "$P/csm_datas/backups" \
+         "$P/csm_datas/lucene_index" "$P/csm_datas/ai_local/model"
 
 cat > /etc/systemd/system/csm-rust.service <<EOF
 [Unit]
@@ -82,7 +112,7 @@ Type=simple
 User=root
 WorkingDirectory=$P
 EnvironmentFile=$P/config.env
-ExecStart=$P/bin/csm_server
+ExecStart=$BINARY
 Restart=always
 RestartSec=5
 MemoryMax=6G
@@ -99,12 +129,10 @@ systemctl enable csm-rust
 systemctl restart csm-rust
 sleep 2
 systemctl status csm-rust --no-pager | head -15
-REMOTE
+SERVICE
 
 echo ""
-echo "✅ Deploy xong! Binary chạy trực tiếp, không cần Rust trên server."
+echo "✅ Deploy xong!"
 echo ""
-echo "Lệnh hữu ích:"
-echo "  Log    : ssh $SERVER 'journalctl -u csm-rust -f'"
-echo "  Stop   : ssh $SERVER 'systemctl stop csm-rust'"
-echo "  Restart: ssh $SERVER 'systemctl restart csm-rust'"
+echo "Log  : ssh $SERVER 'journalctl -u csm-rust -f'"
+echo "Stop : ssh $SERVER 'systemctl stop csm-rust'"
