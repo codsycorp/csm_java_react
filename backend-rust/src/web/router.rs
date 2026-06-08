@@ -43,6 +43,7 @@ pub async fn handle_web_path(state: &AppState, uri: &str, host: Option<&str>) ->
         "/robots.txt" => return text_response("User-agent: *\nAllow: /\n"),
         "/sitemap.xml" => return text_response(&crate::web::ssr::build_sitemap(state, "csm")),
         "/version.json" => return serve_version_json(state, host).await,
+        "/manifest.json" => return serve_manifest_json(state, host).await,
         p if p.starts_with("/app_images/") => return serve_static_path(state, p, None).await,
         _ => {}
     }
@@ -155,6 +156,38 @@ async fn serve_version_json(state: &AppState, host: Option<&str>) -> Response {
     }
 
     (axum::http::StatusCode::NOT_FOUND, "version.json not found").into_response()
+}
+
+/// Try {rp_index}/manifest.json → root manifest.json → generate a basic PWA manifest.
+async fn serve_manifest_json(state: &AppState, host: Option<&str>) -> Response {
+    let rp_index = crate::web::ssr::resolve_rp_index_pub(state, host);
+
+    let json_headers = [
+        (header::CONTENT_TYPE, "application/manifest+json; charset=utf-8"),
+        (header::CACHE_CONTROL, "public, max-age=3600"),
+    ];
+
+    if !rp_index.is_empty() {
+        let p = format!("{rp_index}/manifest.json");
+        if let Some(path) = state.record_manager.get_static_file(&p) {
+            if let Ok(bytes) = tokio::fs::read(&path).await {
+                return (StatusCode::OK, json_headers, bytes).into_response();
+            }
+        }
+    }
+
+    if let Some(path) = state.record_manager.get_static_file("manifest.json") {
+        if let Ok(bytes) = tokio::fs::read(&path).await {
+            return (StatusCode::OK, json_headers, bytes).into_response();
+        }
+    }
+
+    // Minimal PWA manifest so browsers don't 404-loop
+    let name = host.unwrap_or("CSM").trim_end_matches('/');
+    let payload = format!(
+        r##"{{"name":"{name}","short_name":"CSM","start_url":"/","display":"standalone","background_color":"#ffffff","theme_color":"#000000","icons":[]}}"##
+    );
+    (StatusCode::OK, json_headers, payload.into_bytes()).into_response()
 }
 
 fn text_response(body: &str) -> Response {

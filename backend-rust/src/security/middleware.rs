@@ -37,19 +37,11 @@ pub fn security_layers() -> ServiceBuilder<
 }
 
 fn cors_layer() -> CorsLayer {
+    // Mirrors Java: addAllowedOriginPattern("*") + allowCredentials(true).
+    // mirror_request() reflects the request Origin back as ACAO, which satisfies
+    // the browser's SameSite + credentials requirement for any subdomain/domain.
     CorsLayer::new()
-        .allow_origin([
-            "https://www.h-holding.vn".parse().unwrap(),
-            "https://www.h-holding.com.vn".parse().unwrap(),
-            "https://www.phanmemmottrieu.net".parse().unwrap(),
-            "https://www.csmbridge.net".parse().unwrap(),
-            "http://localhost:15300".parse().unwrap(),
-            "http://localhost:3333".parse().unwrap(),
-            "http://localhost:5173".parse().unwrap(),
-            "http://127.0.0.1:15300".parse().unwrap(),
-            "http://127.0.0.1:3333".parse().unwrap(),
-            "http://127.0.0.1:5173".parse().unwrap(),
-        ])
+        .allow_origin(tower_http::cors::AllowOrigin::mirror_request())
         .allow_methods([
             Method::GET,
             Method::POST,
