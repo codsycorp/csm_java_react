@@ -40,7 +40,10 @@ jobs:
 
       - name: Build release-server
         working-directory: backend-rust
+        env:
+          CMAKE_MAKE_PROGRAM: /usr/bin/make
         run: |
+          which make && make --version
           cargo build --profile release-server
           ls -lh target/release-server/csm_server
           echo "=== Shared libs required ==="
