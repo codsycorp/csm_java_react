@@ -75,7 +75,7 @@ async fn catch_all(State(state): State<AppState>, req: Request<Body>) -> Respons
         return dispatch_api(&state, &method, &clean_path, params, auth).await;
     }
 
-    crate::web::router::handle_web_path(&state, &uri, host.as_deref()).await
+    crate::web::router::handle_web_path(&state, &uri, host.as_deref(), &query_str).await
 }
 
 async fn serve_ssr_categories(state: &AppState, host: Option<&str>) -> Response {

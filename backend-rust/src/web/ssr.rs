@@ -1,7 +1,8 @@
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::sync::LazyLock;
 use tracing::info;
 
@@ -29,6 +30,8 @@ pub struct ResolvedRoute {
     pub f_logo: String,
     pub app_type: String,
     pub domain: String,
+    pub gsv: String,
+    pub gtag: String,
 }
 
 impl ResolvedRoute {
@@ -37,42 +40,53 @@ impl ResolvedRoute {
             row.get(k)
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
-                .trim_matches('/')
                 .trim()
                 .to_string()
         };
+        let s_trim = |k: &str| s(k).trim_matches('/').trim().to_string();
         ResolvedRoute {
-            rp_index: s("rp_index"),
-            app_id: s("app_id"),
-            tbl_services: s("tbl_services"),
-            tbl_service_detail: s("tbl_service_detail"),
+            rp_index: s_trim("rp_index"),
+            app_id: s_trim("app_id"),
+            tbl_services: s_trim("tbl_services"),
+            tbl_service_detail: s_trim("tbl_service_detail"),
             f_title: s("f_title"),
             f_keyword: s("f_keyword"),
             f_logo: s("f_logo"),
             app_type: s("app_type"),
             domain: s("domain_name"),
+            gsv: s("gsv"),
+            gtag: s("gtag"),
         }
     }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-pub fn render_page(state: &AppState, uri: &str, host: Option<&str>) -> String {
-    let cache_key = format!("{}:{}", host.unwrap_or("default"), uri);
+pub fn render_page(state: &AppState, uri: &str, host: Option<&str>, query_str: &str) -> String {
+    // Include query_str in cache key for paginated/filtered pages
+    let cache_key = if query_str.is_empty() {
+        format!("{}:{}", host.unwrap_or("default"), uri)
+    } else {
+        format!("{}:{}?{}", host.unwrap_or("default"), uri, query_str)
+    };
+
     if let Some(entry) = SSR_CACHE.get(&cache_key) {
         if entry.expires > Instant::now() {
             return entry.data.clone();
         }
     }
 
-    let html = build_ssr_html(state, uri, host);
-    SSR_CACHE.insert(
-        cache_key,
-        CacheEntry {
-            data: html.clone(),
-            expires: Instant::now() + CACHE_TTL,
-        },
-    );
+    let html = build_ssr_html(state, uri, host, query_str);
+    // Only cache clean URLs to avoid cache explosion; paginated pages have short-lived data
+    if query_str.is_empty() {
+        SSR_CACHE.insert(
+            cache_key,
+            CacheEntry {
+                data: html.clone(),
+                expires: Instant::now() + CACHE_TTL,
+            },
+        );
+    }
     html
 }
 
@@ -115,7 +129,7 @@ pub fn resolve_rp_index_pub(state: &AppState, host: Option<&str>) -> String {
 
 // ─── Core SSR builder ─────────────────────────────────────────────────────────
 
-fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>) -> String {
+fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>, query_str: &str) -> String {
     let route = resolve_route(state, host, uri);
     let domain = extract_domain(host);
 
@@ -140,27 +154,80 @@ fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>) -> String {
         format!("{protocol}://{host_str}/{}", route.f_logo.trim_start_matches('/'))
     };
 
-    // Load categories from tbl_services
-    let categories = load_categories(state, &route, &domain);
+    let base_url = format!("{protocol}://{host_str}");
 
-    // Build SSR route map
-    let ssr_routes = json!({ uri: { "title": page_title, "description": page_description } });
-
-    // Build window globals — same names Java uses
-    let app_config = json!({ "f_logo": og_image, "f_title": page_title });
-    let initial_data = json!({
-        "pageTitle": page_title,
-        "pageDescription": page_description,
-        "canonicalUrl": canonical,
-        "ogImage": og_image,
-        "currentPagePath": uri,
-        "app_id": route.app_id,
+    // Build window.meta object — mirrors Java's Thymeleaf meta map.
+    // Injected to override the unprocessed Thymeleaf default: window.meta = /*[[${meta}]]*/ {}
+    let meta = json!({
+        "site_name": &base_url,
+        "url": &canonical,
+        "gsv": &route.gsv,
+        "gtag": &route.gtag,
+        "title": &page_title,
+        "title2": &page_title,
+        "f_title": &page_title,
+        "description": &page_description,
+        "f_description": &page_description,
+        "keywords": &page_description,
+        "f_keyword": &page_description,
+        "image": &og_image,
+        "f_logo": &og_image,
+        "og_image": &og_image,
+        "id": &route.app_id,
+        "app_id": &route.app_id,
     });
 
-    let scripts = build_scripts(&app_config, &initial_data, &categories, &ssr_routes);
+    // Parse query params for SSR service data + pagination
+    let params = parse_qs(query_str);
+
+    // Load categories (full fields + dedup) and dynamic code templates together
+    let (categories, dynamic_templates) = load_categories_full(state, &route, &domain);
+
+    // Build SSR route map
+    let ssr_routes = json!({ uri: { "title": &page_title, "description": &page_description } });
+
+    // Build initial data (base fields, service data merged in below)
+    let mut initial_data_map = Map::new();
+    initial_data_map.insert("pageTitle".into(), Value::String(page_title.clone()));
+    initial_data_map.insert("pageDescription".into(), Value::String(page_description.clone()));
+    initial_data_map.insert("canonicalUrl".into(), Value::String(canonical.clone()));
+    initial_data_map.insert("ogImage".into(), Value::String(og_image.clone()));
+    initial_data_map.insert("currentPagePath".into(), Value::String(uri.to_string()));
+    initial_data_map.insert("app_id".into(), Value::String(route.app_id.clone()));
+
+    // Inject SSR service data if route has service tables configured (mirrors Java injectServiceDetailList)
+    if !route.app_id.is_empty() && !route.tbl_service_detail.is_empty() {
+        // Determine service_type: query param first, then slug from path
+        let service_type = params.get("service_type")
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .or_else(|| extract_slug_from_path(uri))
+            .unwrap_or_default();
+
+        let page = params.get("page").and_then(|v| v.parse::<usize>().ok()).unwrap_or(1).max(1);
+        let page_size = params.get("take")
+            .and_then(|v| v.parse::<usize>().ok())
+            .or_else(|| params.get("pageSize").and_then(|v| v.parse().ok()))
+            .unwrap_or(10)
+            .min(50)
+            .max(1);
+        let search_q = params.get("q").map(|s| s.trim().to_string()).unwrap_or_default();
+
+        let svc_data = load_ssr_service_data(state, &route, &domain, &service_type, page, page_size, &search_q, &params);
+        for (k, v) in svc_data {
+            initial_data_map.insert(k, v);
+        }
+    }
+
+    let initial_data = Value::Object(initial_data_map);
+    let app_config = json!({ "f_logo": og_image, "f_title": page_title });
+    let scripts = build_scripts(&app_config, &initial_data, &categories, &ssr_routes, &dynamic_templates, &meta);
 
     if let Some(file_path) = state.record_manager.get_static_file(&index_path) {
         if let Ok(mut html) = std::fs::read_to_string(&file_path) {
+            // Process Thymeleaf attributes so SEO meta tags have real values
+            preprocess_html(&mut html, &page_title, &page_description, &canonical,
+                &og_image, &base_url, &og_image);
             inject_into_html(&mut html, &scripts);
             return html;
         }
@@ -240,17 +307,26 @@ fn query_route(state: &AppState, conditions: &[SearchFilter]) -> Option<Resolved
     Some(ResolvedRoute::from_row(row))
 }
 
-// ─── Categories (mirrors Java: filter tbl_services by status=active AND domain like domain) ─
+// ─── Categories — full fields + dedup, mirrors Java catListByDomainActive ─────
 
-fn load_categories(state: &AppState, route: &ResolvedRoute, domain: &str) -> Value {
+/// Returns `(categories_array, dynamic_templates_map)`.
+/// Categories include all Java fields: color, icon, multilingual, dynamicCodeName, etc.
+/// Deduplicates by (service_code|slug) + group_slug + is_service, matching Java.
+fn load_categories_full(state: &AppState, route: &ResolvedRoute, domain: &str) -> (Value, Value) {
     if route.app_id.is_empty() || route.tbl_services.is_empty() {
-        return json!([]);
+        return (json!([]), json!({}));
     }
+
     let filter = SearchFilter {
         operator: "AND".into(),
         conditions: vec![
             SearchFilter::eq("status", "active"),
-            SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.to_string()), ..Default::default() },
+            SearchFilter {
+                field: "domain".into(),
+                filter_type: "like".into(),
+                value: Value::String(domain.to_string()),
+                ..Default::default()
+            },
         ],
         ..Default::default()
     };
@@ -262,9 +338,15 @@ fn load_categories(state: &AppState, route: &ResolvedRoute, domain: &str) -> Val
         .cloned()
         .unwrap_or_default();
 
-    // Map to fields frontend expects (same as Java catObj)
-    let cats: Vec<Value> = rows.iter().filter_map(|r| {
-        let obj = r.as_object()?;
+    let mut cats: Vec<Value> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut dynamic_code_names: Vec<String> = Vec::new();
+
+    for r in &rows {
+        let obj = match r.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
         let s = |k: &str| obj.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
         let b = |k: &str| -> bool {
             match obj.get(k) {
@@ -274,20 +356,215 @@ fn load_categories(state: &AppState, route: &ResolvedRoute, domain: &str) -> Val
                 _ => false,
             }
         };
-        Some(json!({
-            "slug": s("slug"),
-            "service_code": s("service_code"),
+
+        let slug = s("slug");
+        let service_code = s("service_code");
+        let is_service = b("is_service");
+        let is_group_slug = b("is_group_slug");
+        let is_group_slug_default = b("is_group_slug_default");
+        let group_slug = s("group_slug");
+
+        // Dedup key mirrors Java: (service_code|slug) + group_slug + is_service
+        let key_part = if !service_code.is_empty() { service_code.as_str() } else { slug.as_str() };
+        let dedup_key = format!("{}|{}|{}", key_part, group_slug, if is_service { "1" } else { "0" });
+        if !seen.insert(dedup_key) {
+            continue;
+        }
+
+        let dynamic_code_name = s("dynamic_code_name");
+        if !dynamic_code_name.is_empty() && !dynamic_code_names.contains(&dynamic_code_name) {
+            dynamic_code_names.push(dynamic_code_name.clone());
+        }
+
+        // All fields Java's catObj includes
+        cats.push(json!({
+            "slug": slug,
+            "service_code": service_code,
             "category": s("category"),
-            "is_service": b("is_service"),
-            "is_group_slug": b("is_group_slug"),
-            "group_slug": s("group_slug"),
+            "category_en": s("category_en"),
+            "category_zh": s("category_zh"),
+            "is_service": is_service,
+            "is_group_slug": is_group_slug,
+            "is_group_slug_default": is_group_slug_default,
+            "group_slug": group_slug,
+            "color": s("attributes_color"),
+            "icon": s("attributes_icon"),
+            "description": s("attributes_description"),
+            "description_en": s("attributes_description_en"),
+            "description_zh": s("attributes_description_zh"),
+            "dynamicCodeName": dynamic_code_name,
+            // Keep legacy field names for backwards compat with existing frontend code
             "attributes_icon": s("attributes_icon"),
             "attributes_color": s("attributes_color"),
             "attributes_description": s("attributes_description"),
-        }))
-    }).collect();
+        }));
+    }
 
-    Value::Array(cats)
+    let dynamic_templates = load_dynamic_code_templates(state, &dynamic_code_names);
+    (Value::Array(cats), dynamic_templates)
+}
+
+/// Query csm/sys_autos for each dynamic code name, decrypt p_code, return {name: code} map.
+/// Mirrors Java: getSysAuto(name, 0) → csm_decrypt(p_code).
+fn load_dynamic_code_templates(state: &AppState, code_names: &[String]) -> Value {
+    let mut templates = Map::new();
+
+    for name in code_names {
+        if name.is_empty() {
+            continue;
+        }
+        let filter = SearchFilter {
+            operator: "AND".into(),
+            conditions: vec![
+                SearchFilter::eq("p_name", name.as_str()),
+                SearchFilter::eq("p_type", 0i64),
+            ],
+            ..Default::default()
+        };
+        let result = state.record_manager.filter("csm", "sys_autos", &filter);
+        if let Some(rows) = result.get("rows").or_else(|| result.get("data")).and_then(|v| v.as_array()) {
+            if let Some(first) = rows.first() {
+                let p_code = first.get("p_code").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+                if !p_code.is_empty() {
+                    // Skip if decryption fails — mirrors Java which logs a warning and skips
+                    if let Ok(decrypted) = state.record_manager.csm_decrypt(&p_code) {
+                        if !decrypted.is_empty() {
+                            templates.insert(name.clone(), Value::String(decrypted));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Value::Object(templates)
+}
+
+// ─── SSR service data — mirrors Java injectServiceDetailList ──────────────────
+
+/// Load paginated service detail records for SSR page injection.
+/// Mirrors Java: query tbl_service_detail with service_type + domain filters + pagination.
+fn load_ssr_service_data(
+    state: &AppState,
+    route: &ResolvedRoute,
+    domain: &str,
+    service_type: &str,
+    page: usize,
+    page_size: usize,
+    search_q: &str,
+    params: &HashMap<String, String>,
+) -> Map<String, Value> {
+    let mut conditions: Vec<SearchFilter> = Vec::new();
+
+    // Filter by service_type if specified
+    if !service_type.is_empty() {
+        conditions.push(SearchFilter::eq("service_type", service_type));
+    }
+
+    // Domain: LIKE domain OR IS NULL OR = "" (mirrors Java domain filter)
+    conditions.push(SearchFilter {
+        operator: "OR".into(),
+        conditions: vec![
+            SearchFilter {
+                field: "domain".into(),
+                filter_type: "like".into(),
+                value: Value::String(domain.to_string()),
+                ..Default::default()
+            },
+            SearchFilter { field: "domain".into(), filter_type: "isnull".into(), ..Default::default() },
+            SearchFilter::eq("domain", ""),
+        ],
+        ..Default::default()
+    });
+
+    // status = active
+    conditions.push(SearchFilter::eq("status", "active"));
+
+    // Search query across title fields (mirrors Java q param)
+    if !search_q.is_empty() {
+        conditions.push(SearchFilter {
+            operator: "OR".into(),
+            conditions: vec![
+                SearchFilter { field: "title".into(), filter_type: "like".into(), value: Value::String(search_q.to_string()), ..Default::default() },
+                SearchFilter { field: "title_en".into(), filter_type: "like".into(), value: Value::String(search_q.to_string()), ..Default::default() },
+                SearchFilter { field: "title_zh".into(), filter_type: "like".into(), value: Value::String(search_q.to_string()), ..Default::default() },
+            ],
+            ..Default::default()
+        });
+    }
+
+    // Property-specific filters (real estate domain — mirrors Java)
+    for (param_key, field_name) in &[
+        ("propertyType", "property_type"),
+        ("transactionType", "transaction_type"),
+        ("address", "address"),
+        ("legalStatus", "legal_status"),
+        ("furnished", "furnished"),
+    ] {
+        if let Some(v) = params.get(*param_key).filter(|s| !s.is_empty()) {
+            conditions.push(SearchFilter::eq(*field_name, v.as_str()));
+        }
+    }
+    for (param_key, field_name) in &[
+        ("price_min", "price"),
+        ("bedrooms", "bedrooms"),
+        ("bathrooms", "bathrooms"),
+        ("floors", "floors"),
+        ("frontWidth", "front_width"),
+    ] {
+        if let Some(v) = params.get(*param_key).and_then(|s| s.parse::<i64>().ok()) {
+            conditions.push(SearchFilter {
+                field: field_name.to_string(),
+                filter_type: "gte".into(),
+                value: Value::Number(v.into()),
+                ..Default::default()
+            });
+        }
+    }
+    if let Some(v) = params.get("price_max").and_then(|s| s.parse::<i64>().ok()) {
+        conditions.push(SearchFilter {
+            field: "price".into(),
+            filter_type: "lte".into(),
+            value: Value::Number(v.into()),
+            ..Default::default()
+        });
+    }
+
+    let filter = SearchFilter {
+        operator: "AND".into(),
+        conditions,
+        ..Default::default()
+    };
+
+    let offset = page.saturating_sub(1) * page_size;
+    let result = state.record_manager.filter_with_pagination(
+        &route.app_id,
+        &route.tbl_service_detail,
+        &filter,
+        None,
+        Some(offset),
+        page_size,
+    );
+
+    let rows = result.get("rows").or_else(|| result.get("data"))
+        .and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let total_count = result.get("totalCount").and_then(|v| v.as_i64()).unwrap_or(rows.len() as i64);
+    let next_cursor = result.get("nextCursor").and_then(|v| v.as_str()).map(String::from);
+
+    let mut data = Map::new();
+    data.insert("serviceDetailList".into(), Value::Array(rows));
+    data.insert("totalCount".into(), json!(total_count));
+    data.insert("page".into(), json!(page));
+    data.insert("pageSize".into(), json!(page_size));
+    data.insert("take".into(), json!(page_size));
+    data.insert("paginationMode".into(), Value::String("page".into()));
+    data.insert("service_type".into(), Value::String(service_type.to_string()));
+    data.insert("search_query".into(), Value::String(search_q.to_string()));
+    if let Some(nc) = next_cursor {
+        data.insert("nextCursor".into(), Value::String(nc.clone()));
+        data.insert("lastkey".into(), Value::String(nc));
+    }
+    data
 }
 
 // ─── HTML injection helpers ────────────────────────────────────────────────────
@@ -297,21 +574,152 @@ fn build_scripts(
     initial_data: &Value,
     categories: &Value,
     ssr_routes: &Value,
+    dynamic_templates: &Value,
+    meta: &Value,
 ) -> String {
     let safe = |v: &Value| serde_json::to_string(v).unwrap_or_else(|_| "{}".into())
         .replace("</", "<\\/");
 
+    // window.meta overrides the unprocessed Thymeleaf default: window.meta = /*[[${meta}]]*/ {}
+    // window.__INITIAL_DATA__ mirrors __INITIAL_REACT_DATA__ for legacy compat (same Thymeleaf slot)
+    // window.menus = [] matches Java's templateData.put("menus", new ArrayList<>())
     format!(
-        "<script>window.__APP_CONFIG__={ac};</script>\
+        "<script>window.meta={m};window.__INITIAL_DATA__={id};window.menus=[];</script>\
+         <script>window.__APP_CONFIG__={ac};</script>\
          <script>window.__INITIAL_REACT_DATA__={id};</script>\
          <script>window.__SSR_WEBSITE_CATEGORIES__={cats};</script>\
          <script>window.__SSR_WEBSITE_ROUTES__={routes};</script>\
-         <script>window.__SSR_DYNAMIC_CODE_TEMPLATES__={{}};</script>",
+         <script>window.__SSR_DYNAMIC_CODE_TEMPLATES__={tmpl};</script>",
+        m = safe(meta),
         ac = safe(app_config),
         id = safe(initial_data),
         cats = safe(categories),
         routes = safe(ssr_routes),
+        tmpl = safe(dynamic_templates),
     )
+}
+
+/// Process Thymeleaf attributes in the HTML with real route values.
+/// Replaces th:text, th:content, th:href on known SEO elements so crawlers see real meta.
+/// Also clears unresolved th:inline="javascript" inline expressions (Thymeleaf comment syntax).
+pub fn preprocess_html(html: &mut String, title: &str, description: &str, canonical: &str,
+    image: &str, site_name: &str, logo: &str) {
+    // <title th:text="...">fallback</title>  →  <title>Real Title</title>
+    if let Some(start) = html.find("<title") {
+        if let Some(end) = html[start..].find("</title>") {
+            let tag_end = html[start..start + end].find('>').unwrap_or(0);
+            let before = &html[..start];
+            let after = &html[start + end + 8..];
+            *html = format!("{}<title>{}</title>{}", before, html_esc(title), after);
+        }
+    }
+
+    // Replace th:content and th:href attribute values on <meta> and <link> tags.
+    // We do simple targeted replacements for the key SEO elements.
+    let replace_meta = |html: &mut String, name_attr: &str, val: &str| {
+        // Find <meta name="X" ... th:content="..."> and set content="val"
+        // Strategy: insert content=val, remove th:content=...
+        let target = format!("name=\"{}\"", name_attr);
+        if let Some(pos) = html.find(&target) {
+            if let Some(end) = html[pos..].find('>') {
+                let tag = html[pos..pos + end].to_string();
+                let new_tag = remove_th_content_attr(&tag, val);
+                html.replace_range(pos..pos + end, &new_tag);
+            }
+        }
+    };
+
+    // canonical link
+    replace_link_href(html, "canonical", canonical);
+    replace_meta(html, "description", description);
+    replace_meta(html, "keywords", description);
+    replace_og_content(html, "og:url", canonical);
+    replace_og_content(html, "og:site_name", site_name);
+    replace_og_content(html, "og:title", title);
+    replace_og_content(html, "og:description", description);
+    replace_og_content(html, "og:image", image);
+    replace_og_content(html, "twitter:title", title);
+    replace_og_content(html, "twitter:description", description);
+    replace_og_content(html, "twitter:image", image);
+
+    // icon links
+    replace_link_href_rel(html, "icon", logo);
+    replace_link_href_rel(html, "apple-touch-icon", logo);
+
+    // <base th:href="..."> → <base href="site_name">
+    if let Some(pos) = html.find("<base ") {
+        if let Some(end) = html[pos..].find('>') {
+            let new_base = format!("<base href=\"{}\" />", html_esc(site_name));
+            html.replace_range(pos..pos + end + 1, &new_base);
+        }
+    }
+
+    // <body ... th:attr="data-app-id=..."> — strip th:attr and th:name
+    // These are irrelevant to React rendering; remove them to avoid confusing parsers.
+    strip_th_attrs(html, "th:name");
+    strip_th_attrs(html, "th:attr");
+}
+
+fn html_esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+fn remove_th_content_attr(tag: &str, val: &str) -> String {
+    // Remove existing th:content="..." and ensure content="val" is present
+    let re = regex::Regex::new(r#"\s*th:content="[^"]*""#).unwrap();
+    let mut t = re.replace(tag, "").to_string();
+    // Remove old content="..."
+    let re2 = regex::Regex::new(r#"\s*content="[^"]*""#).unwrap();
+    t = re2.replace(&t, "").to_string();
+    format!("{} content=\"{}\"", t, html_esc(val))
+}
+
+fn replace_link_href(html: &mut String, rel: &str, href: &str) {
+    let target = format!("rel=\"{}\"", rel);
+    if let Some(pos) = html.find(&target) {
+        if let Some(end) = html[pos..].find('>') {
+            let tag = html[pos..pos + end].to_string();
+            let re = regex::Regex::new(r#"\s*th:href="[^"]*""#).unwrap();
+            let mut t = re.replace(&tag, "").to_string();
+            let re2 = regex::Regex::new(r#"\s*href="[^"]*""#).unwrap();
+            t = re2.replace(&t, "").to_string();
+            let new_tag = format!("{} href=\"{}\"", t, html_esc(href));
+            html.replace_range(pos..pos + end, &new_tag);
+        }
+    }
+}
+
+fn replace_link_href_rel(html: &mut String, rel: &str, href: &str) {
+    // Targets <link rel="icon" or rel="apple-touch-icon"
+    replace_link_href(html, rel, href);
+}
+
+fn replace_og_content(html: &mut String, property: &str, val: &str) {
+    let target = format!("property=\"{}\"", property);
+    if let Some(pos) = html.find(&target) {
+        if let Some(end) = html[pos..].find('>') {
+            let tag = html[pos..pos + end].to_string();
+            let re = regex::Regex::new(r#"\s*th:content="[^"]*""#).unwrap();
+            let mut t = re.replace(&tag, "").to_string();
+            let re2 = regex::Regex::new(r#"\s*content="[^"]*""#).unwrap();
+            t = re2.replace(&t, "").to_string();
+            let new_tag = format!("{} content=\"{}\"", t, html_esc(val));
+            html.replace_range(pos..pos + end, &new_tag);
+        }
+    }
+}
+
+fn strip_th_attrs(html: &mut String, attr: &str) {
+    while let Some(pos) = html.find(attr) {
+        if let Some(end) = html[pos..].find('"').and_then(|q1| {
+            html[pos + q1 + 1..].find('"').map(|q2| pos + q1 + 1 + q2 + 1)
+        }) {
+            // Remove from the attribute name up to and including the closing quote
+            html.replace_range(pos..end, "");
+        } else {
+            break;
+        }
+    }
 }
 
 fn inject_into_html(html: &mut String, scripts: &str) {
@@ -325,7 +733,7 @@ fn inject_into_html(html: &mut String, scripts: &str) {
     }
 }
 
-fn fallback_html(title: &str, uri: &str, app_id: &str, scripts: &str) -> String {
+fn fallback_html(title: &str, _uri: &str, _app_id: &str, scripts: &str) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html lang="vi">
@@ -338,6 +746,32 @@ fn fallback_html(title: &str, uri: &str, app_id: &str, scripts: &str) -> String 
 <body><div id="root"></div><script type="module" src="/assets/main.js"></script></body>
 </html>"#
     )
+}
+
+// ─── Query string parser ───────────────────────────────────────────────────────
+
+fn parse_qs(qs: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for part in qs.split('&') {
+        if let Some((k, v)) = part.split_once('=') {
+            if !k.is_empty() {
+                let decoded = urlencoding::decode(v)
+                    .map(|s| s.into_owned())
+                    .unwrap_or_else(|_| v.to_string());
+                map.insert(k.to_string(), decoded);
+            }
+        }
+    }
+    map
+}
+
+/// Extract the first path segment as a candidate service_type slug.
+/// e.g. "/nha-dat/slug-detail" → "nha-dat"
+fn extract_slug_from_path(uri: &str) -> Option<String> {
+    let p = uri.trim_start_matches('/');
+    let p = p.replace(".shtml", "");
+    let slug = p.split('/').next().unwrap_or("").trim().to_string();
+    if slug.is_empty() { None } else { Some(slug) }
 }
 
 // ─── Domain helpers ────────────────────────────────────────────────────────────
@@ -387,7 +821,7 @@ pub fn build_sitemap(state: &AppState, host: Option<&str>) -> String {
         .cloned()
         .unwrap_or_default();
 
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     seen.insert("/".to_string());
 
     for row in &route_rows {
@@ -504,9 +938,7 @@ pub fn build_sitemap(state: &AppState, host: Option<&str>) -> String {
 }
 
 fn sitemap_url_entry(url: &str, lastmod: Option<&str>, changefreq: &str, priority: &str) -> String {
-    let mut s = format!(
-        "\n  <url>\n    <loc>{url}</loc>\n"
-    );
+    let mut s = format!("\n  <url>\n    <loc>{url}</loc>\n");
     if let Some(lm) = lastmod.filter(|s| !s.is_empty()) {
         s.push_str(&format!("    <lastmod>{}</lastmod>\n", &lm[..lm.len().min(10)]));
     }

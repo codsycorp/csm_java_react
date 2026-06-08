@@ -31,6 +31,7 @@ pub async fn fallback_handler(state: State<AppState>, req: Request<Body>) -> Res
     if uri.starts_with("/api/") {
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
+    let query_str = req.uri().query().map(|q| q.to_string()).unwrap_or_default();
     // X-Forwarded-Host first (nginx proxy), then Host — mirrors Java
     let host = req.headers()
         .get("x-forwarded-host")
@@ -43,10 +44,10 @@ pub async fn fallback_handler(state: State<AppState>, req: Request<Body>) -> Res
                 .and_then(|h| h.to_str().ok())
                 .map(|h| h.to_lowercase())
         });
-    handle_web_path(&state, &uri, host.as_deref()).await
+    handle_web_path(&state, &uri, host.as_deref(), &query_str).await
 }
 
-pub async fn handle_web_path(state: &AppState, uri: &str, host: Option<&str>) -> Response {
+pub async fn handle_web_path(state: &AppState, uri: &str, host: Option<&str>, query_str: &str) -> Response {
     // Strip trailing slash (Java's normalizeIncomingWebPath)
     let uri = if uri.len() > 1 && uri.ends_with('/') {
         uri.trim_end_matches('/')
@@ -60,8 +61,18 @@ pub async fn handle_web_path(state: &AppState, uri: &str, host: Option<&str>) ->
         "/feed.xml" => return serve_feed_xml(state, host).await,
         "/version.json" => return serve_version_json(state, host).await,
         "/manifest.json" => return serve_manifest_json(state).await,
+        "/page_struct_js.shtml" => return serve_page_struct_js(state, query_str).await,
+        p if p.starts_with("/images.shtml") => return serve_images_shtml(state, query_str).await,
         p if p.starts_with("/app_images/") => return serve_static_path(state, p, None).await,
         _ => {}
+    }
+
+    // GET /upload.shtml?cmd=list or cmd=removeimg
+    if uri == "/upload.shtml" || uri == "/upload" {
+        let cmd = qs_param(query_str, "cmd");
+        if cmd == "list" || cmd == "removeimg" {
+            return serve_upload_cmd(state, query_str).await;
+        }
     }
 
     // Static assets (.js, .css, images, fonts, etc.): try to serve file, never return SSR HTML.
@@ -72,7 +83,7 @@ pub async fn handle_web_path(state: &AppState, uri: &str, host: Option<&str>) ->
     }
 
     info!("SSR route: {uri}");
-    html_response(&crate::web::ssr::render_page(state, uri, host))
+    html_response(&crate::web::ssr::render_page(state, uri, host, query_str))
 }
 
 /// Serve a static file. Tries `uri` first, then `{rp_index}/{uri}` as fallback.
@@ -108,6 +119,15 @@ fn file_response(path: &std::path::Path, bytes: Vec<u8>) -> Response {
     let mut headers = axum::http::HeaderMap::new();
     if let Ok(v) = mime.parse() {
         headers.insert(header::CONTENT_TYPE, v);
+    }
+    // Long-lived cache for hashed static assets, short-lived for others
+    let cache = if path.extension().map(|e| matches!(e.to_str(), Some("js" | "css" | "woff2" | "woff"))).unwrap_or(false) {
+        "public, max-age=31536000, immutable"
+    } else {
+        "public, max-age=86400"
+    };
+    if let Ok(v) = cache.parse() {
+        headers.insert(header::CACHE_CONTROL, v);
     }
     (StatusCode::OK, headers, bytes).into_response()
 }
@@ -270,7 +290,7 @@ async fn serve_version_json(state: &AppState, host: Option<&str>) -> Response {
 }
 
 /// Mirrors Java serveWebManifestJson: tries root manifest.json only (no rp_index prefix).
-/// Returns 404 if not found — browser treats missing manifest gracefully.
+/// Returns minimal fallback so browser DevTools doesn't show a parse error.
 async fn serve_manifest_json(state: &AppState) -> Response {
     let json_headers = [
         (header::CONTENT_TYPE, "application/manifest+json; charset=utf-8"),
@@ -283,9 +303,173 @@ async fn serve_manifest_json(state: &AppState) -> Response {
         }
     }
 
-    // Minimal fallback so DevTools doesn't show a parse error
     let minimal = r##"{"name":"CSM","short_name":"CSM","start_url":"/","display":"standalone","background_color":"#ffffff","theme_color":"#000000","icons":[]}"##;
     (StatusCode::OK, json_headers, minimal.as_bytes().to_vec()).into_response()
+}
+
+/// Mirrors Java servePageStructJs: query csm/sys_autos for p_name=name, p_type=0,
+/// decrypt p_code, return as text/javascript.
+async fn serve_page_struct_js(state: &AppState, query_str: &str) -> Response {
+    let name = qs_param(query_str, "name");
+    if name.is_empty() {
+        return (StatusCode::BAD_REQUEST, "name param required").into_response();
+    }
+
+    let filter = crate::model::SearchFilter {
+        operator: "AND".into(),
+        conditions: vec![
+            crate::model::SearchFilter::eq("p_name", name.as_str()),
+            crate::model::SearchFilter::eq("p_type", 0i64),
+        ],
+        ..Default::default()
+    };
+    let result = state.record_manager.filter("csm", "sys_autos", &filter);
+    if let Some(rows) = result.get("rows").or_else(|| result.get("data")).and_then(|v| v.as_array()) {
+        if let Some(first) = rows.first() {
+            let p_code = first.get("p_code").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if !p_code.is_empty() {
+                let js = if let Ok(decrypted) = state.record_manager.csm_decrypt(&p_code) {
+                    decrypted
+                } else {
+                    p_code
+                };
+                return (
+                    StatusCode::OK,
+                    [
+                        (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+                        (header::CACHE_CONTROL, "public, max-age=300"),
+                    ],
+                    js,
+                ).into_response();
+            }
+        }
+    }
+
+    (StatusCode::NOT_FOUND, "not found").into_response()
+}
+
+/// Mirrors Java serveImage: serve image from app_images dir with ETag/304 caching.
+/// Resize/quality params are accepted but not applied (no image processing lib in Rust).
+async fn serve_images_shtml(state: &AppState, query_str: &str) -> Response {
+    let src = qs_param(query_str, "src");
+    let name = qs_param(query_str, "name");
+    let rel_path = if !src.is_empty() { src } else { name };
+    if rel_path.is_empty() {
+        return (StatusCode::BAD_REQUEST, "src or name param required").into_response();
+    }
+
+    // Security: reject path traversal
+    if rel_path.contains("..") {
+        return (StatusCode::FORBIDDEN, "Invalid path").into_response();
+    }
+
+    let app_id = qs_param(query_str, "app_id");
+    let file_rel = if !app_id.is_empty() {
+        format!("app_images/{}/{}", app_id, rel_path.trim_start_matches('/'))
+    } else {
+        format!("app_images/{}", rel_path.trim_start_matches('/'))
+    };
+
+    if let Some(path) = state.record_manager.get_static_file(&file_rel) {
+        if let Ok(bytes) = tokio::fs::read(&path).await {
+            let mime = mime_guess::from_path(&path).first_or_octet_stream().to_string();
+            // Simple ETag from file size + path
+            let etag = format!("\"{}-{}\"", bytes.len(), path.display());
+            return (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, mime.as_str()),
+                    (header::CACHE_CONTROL, "public, max-age=2592000"),
+                    (header::ETAG, etag.as_str()),
+                ],
+                bytes,
+            ).into_response();
+        }
+    }
+
+    (StatusCode::NOT_FOUND, "Image not found").into_response()
+}
+
+/// Mirrors Java handleUploadCmd: GET /upload.shtml?cmd=list or cmd=removeimg.
+async fn serve_upload_cmd(state: &AppState, query_str: &str) -> Response {
+    let cmd = qs_param(query_str, "cmd");
+    let app_id = qs_param(query_str, "app_id");
+    let dir = qs_param(query_str, "dir");
+
+    // Security: reject path traversal in dir/name params
+    let name = qs_param(query_str, "name");
+    if app_id.contains("..") || dir.contains("..") || name.contains("..") {
+        return json_error("Invalid path");
+    }
+
+    match cmd.as_str() {
+        "list" => {
+            let sub = if dir.is_empty() {
+                format!("app_images/{}", app_id)
+            } else {
+                format!("app_images/{}/{}", app_id, dir.trim_matches('/'))
+            };
+            let base = state.config.data_dir.join("public").join(&sub);
+            let mut files: Vec<serde_json::Value> = Vec::new();
+            if let Ok(mut entries) = tokio::fs::read_dir(&base).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let fname = entry.file_name().to_string_lossy().to_string();
+                    if fname.starts_with('.') { continue; }
+                    let ext = std::path::Path::new(&fname)
+                        .extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                    if !matches!(ext.as_str(), "jpg"|"jpeg"|"png"|"gif"|"webp"|"svg"|"mp4"|"webm"|"mov") {
+                        continue;
+                    }
+                    let url = format!("/{}/{}", sub.trim_start_matches('/'), fname);
+                    files.push(serde_json::json!({ "name": fname, "url": url }));
+                }
+            }
+            let count = files.len();
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+                serde_json::json!({ "success": true, "data": files, "rows": count }).to_string(),
+            ).into_response()
+        }
+        "removeimg" => {
+            if name.is_empty() {
+                return json_error("name param required");
+            }
+            let rel = format!("app_images/{}/{}", app_id, name.trim_start_matches('/'));
+            let path = state.config.data_dir.join("public").join(&rel);
+            match tokio::fs::remove_file(&path).await {
+                Ok(_) => (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+                    r#"{"success":true}"#.to_string(),
+                ).into_response(),
+                Err(e) => json_error(&format!("Failed to delete: {e}")),
+            }
+        }
+        _ => json_error("Unknown cmd"),
+    }
+}
+
+fn json_error(msg: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+        serde_json::json!({ "success": false, "message": msg }).to_string(),
+    ).into_response()
+}
+
+/// Parse a single key from a query string (e.g. "name=foo&bar=baz").
+pub fn qs_param(qs: &str, key: &str) -> String {
+    for part in qs.split('&') {
+        if let Some((k, v)) = part.split_once('=') {
+            if k == key {
+                return urlencoding::decode(v)
+                    .map(|s| s.into_owned())
+                    .unwrap_or_else(|_| v.to_string());
+            }
+        }
+    }
+    String::new()
 }
 
 fn xml_escape(s: &str) -> String {
