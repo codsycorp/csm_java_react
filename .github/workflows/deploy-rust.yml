@@ -55,7 +55,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.DEPLOY_PASSWORD }}
           source: "backend-rust/target/release-server/csm_server"
-          target: "/root/csm_server_new/"
+          target: "/root/la_server/"
           strip_components: 3
 
       # ── 7. Swap binary + tạo service nếu chưa có + restart ──────────────────
@@ -67,16 +67,14 @@ jobs:
           password: ${{ secrets.DEPLOY_PASSWORD }}
           script: |
             set -e
-            DEPLOY_DIR=/root/csm_server
-            BINARY=$DEPLOY_DIR/backend-rust/target/release/csm_server
+            DEPLOY_DIR=/root/la_server
+            BINARY=$DEPLOY_DIR/csm_server
 
-            mkdir -p $DEPLOY_DIR/backend-rust/target/release
-            mv /root/csm_server_new/csm_server $BINARY
             chmod +x $BINARY
 
             # Tạo systemd service nếu chưa có
             if [ ! -f /etc/systemd/system/csm-rust.service ]; then
-              echo "Tạo systemd service..."
+              echo "Tạo systemd service csm-rust..."
               cat > /etc/systemd/system/csm-rust.service <<EOF
             [Unit]
             Description=CSM Rust Backend
