@@ -35,12 +35,14 @@ impl AuthUser {
             dev,
             app_id,
             data_app_ids,
+            is_sub_user,
             ..
         }: crate::model::User,
-        is_sub_user: bool,
+        is_sub_user_hint: bool,
     ) -> Self {
         let permissions = permissions.unwrap_or_default();
         let is_dev = dev.unwrap_or(false);
+        let is_sub_user = is_sub_user.unwrap_or(is_sub_user_hint);
         Self {
             user_id: id.unwrap_or_default(),
             username: username.unwrap_or_default(),

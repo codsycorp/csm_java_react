@@ -8,6 +8,8 @@ use crate::data::RecordManager;
 use crate::model::{SearchFilter, StandardResponse, User};
 use crate::security::jwt::JwtUtil;
 use crate::services::user::UserService;
+use crate::security::auth::AuthUser;
+use crate::security::permission_resolver::{apply_resolved_to_info_map, resolve_effective_permissions};
 use crate::util::PermissionBitfieldUtil;
 
 pub struct AuthHandler {
@@ -61,17 +63,6 @@ impl AuthHandler {
 
         let is_dev = self.resolve_dev_flag(&user);
         user.dev = Some(is_dev);
-        if is_dev {
-            let permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
-                &user.permissions.clone().unwrap_or_default(),
-                &["dev".into(), "admin".into(), "scope:all".into()],
-            );
-            user.permissions = Some(permissions);
-            if let Some(app_id) = user.app_id.as_ref().filter(|s| !s.is_empty()) {
-                user.menus_permissions = Some(vec![app_id.clone()]);
-            }
-            user.data_scope = Some("ALL".into());
-        }
 
         let next_version = user.login_version.unwrap_or(0) + 1;
         let refresh_token = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
@@ -119,16 +110,27 @@ impl AuthHandler {
         self.enrich_account_meta(&user, &mut result);
         self.enrich_async_routes(&user, &mut result);
 
+        let auth_user = AuthUser::from_user(
+            user.clone(),
+            user.is_sub_user.unwrap_or(false),
+        );
+        let resolved = resolve_effective_permissions(&auth_user, &self.record_manager);
+        apply_resolved_to_info_map(&resolved, &mut result);
+
         if let Some(app_id) = user.app_id.as_ref().filter(|s| !s.is_empty()) {
             result.insert("app_id".into(), Value::String(app_id.clone()));
         }
         if let Some(data_app_ids) = user.data_app_ids.as_ref() {
-            result.insert(
-                "data_app_ids".into(),
-                Value::Array(data_app_ids.iter().cloned().map(Value::String).collect()),
-            );
+            if !resolved.is_sub_user {
+                result.insert(
+                    "data_app_ids".into(),
+                    Value::Array(data_app_ids.iter().cloned().map(Value::String).collect()),
+                );
+            } else {
+                result.insert("data_app_ids".into(), Value::Array(vec![]));
+            }
         }
-        result.insert("dev".into(), Value::Bool(user.dev.unwrap_or(false)));
+        result.insert("dev".into(), Value::Bool(resolved.is_dev));
 
         response.set("code", 200);
         response.set("success", true);
@@ -229,8 +231,22 @@ impl AuthHandler {
             user.dev = Some(is_dev);
             let mut info = user.to_info_map();
             self.enrich_account_meta(&user, &mut info);
-            self.enrich_user_info_with_bitfield(&user, &mut info);
-            info.insert("dev".into(), Value::Bool(is_dev));
+
+            let auth_user = AuthUser::from_user(
+                user.clone(),
+                user.is_sub_user.unwrap_or(auth.is_sub_user),
+            );
+            let resolved = resolve_effective_permissions(&auth_user, &self.record_manager);
+            apply_resolved_to_info_map(&resolved, &mut info);
+            info.insert("dev".into(), Value::Bool(resolved.is_dev));
+
+            if let Some(app_id) = user.app_id.as_ref().filter(|s| !s.is_empty()) {
+                info.insert("app_id".into(), Value::String(app_id.clone()));
+            }
+            if let Some(app_token) = user.app_token.as_ref().filter(|s| !s.is_empty()) {
+                info.insert("app_token".into(), Value::String(app_token.clone()));
+            }
+
             response.set("code", 200);
             response.set("success", true);
             response.set("message", "ok");
@@ -448,7 +464,7 @@ impl AuthHandler {
             }
         };
 
-        let user_role = auth.permissions.first().cloned();
+        let user_role = pick_user_role(&auth.permissions);
         let is_dev = auth.dev;
         let menus = auth.menus_permissions.as_deref().unwrap_or(&[]);
 
@@ -515,9 +531,7 @@ impl AuthHandler {
         let filter = SearchFilter::eq("id", "accessRights");
         let index = self.record_manager.find("csm", "index", &filter);
         if let Some(Value::Array(all_routes)) = index.get("data") {
-            let user_role = user.permissions.as_ref()
-                .and_then(|p| p.first())
-                .cloned();
+            let user_role = pick_user_role(user.permissions.as_deref().unwrap_or(&[]));
             let is_dev = user.dev.unwrap_or(false);
             let menus = user.menus_permissions.clone().unwrap_or_default();
             let filtered = filter_routes_by_role(
@@ -638,6 +652,14 @@ fn string_list_from_value(value: Option<&Value>) -> Vec<String> {
         Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
         _ => vec![],
     }
+}
+
+fn pick_user_role(permissions: &[String]) -> Option<String> {
+    permissions
+        .iter()
+        .find(|p| p.eq_ignore_ascii_case("admin"))
+        .cloned()
+        .or_else(|| permissions.first().cloned())
 }
 
 /// Mirror of Java's filterRoutesByRoleAndMenus — recursively filter routes by role, menus, dev flag.

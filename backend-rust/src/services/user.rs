@@ -6,7 +6,7 @@ use tracing::{info, warn};
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, User};
 use crate::util::{parse_app_token, is_dev_access_right, PermissionBitfieldUtil};
-use crate::security::user_access::has_any_action_permission;
+use crate::security::permission_resolver::has_any_action_permission;
 
 const CSM_APP_ID: &str = "csm";
 const ACCOUNTS_TABLE: &str = "csm_accounts";

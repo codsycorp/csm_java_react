@@ -16,7 +16,8 @@ use tower_http::{
 use tracing::warn;
 
 use crate::security::auth::AuthUser;
-use crate::util::{parse_app_token, is_dev_access_right, is_sub_user_role, PermissionBitfieldUtil};
+use crate::security::permission_resolver::{apply_resolved_to_auth, resolve_effective_permissions};
+use crate::util::{parse_app_token, is_sub_user_role, PermissionBitfieldUtil};
 use crate::security::rate_limit::RateLimiter;
 use crate::state::AppState;
 
@@ -169,45 +170,32 @@ fn auth_user_from_model(state: &AppState, user: crate::model::User) -> AuthUser 
 }
 
 fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
-    if user.app_token.is_empty() {
-        return user;
-    }
-
-    let mut is_dev = user.dev;
-    if let Ok(decrypted) = state.record_manager.csm_decrypt(&user.app_token) {
-        let parts: Vec<&str> = decrypted.split("_____").collect();
-        if let Some(app_id) = parts.first().copied().filter(|s| !s.is_empty()) {
+    if !user.app_token.is_empty() {
+        if let Ok(decrypted) = state.record_manager.csm_decrypt(&user.app_token) {
+            let parts: Vec<&str> = decrypted.split("_____").collect();
+            if let Some(app_id) = parts.first().copied().filter(|s| !s.is_empty()) {
+                user.app_id = app_id.to_string();
+            }
+            if let Some(last) = parts.last() {
+                if let Ok(n) = last.parse::<i32>() {
+                    user.dev = n > 0;
+                }
+            }
+            if parts.len() >= 3 {
+                user.is_sub_user = is_sub_user_role(parts[2]);
+            }
+        } else if let Some(app_id) = user
+            .app_token
+            .split("_____")
+            .next()
+            .filter(|s| !s.is_empty())
+        {
             user.app_id = app_id.to_string();
         }
-        if let Some(last) = parts.last() {
-            if let Ok(n) = last.parse::<i32>() {
-                is_dev = n > 0;
-            }
-        }
-    } else if let Some(app_id) = user
-        .app_token
-        .split("_____")
-        .next()
-        .filter(|s| !s.is_empty())
-    {
-        user.app_id = app_id.to_string();
     }
 
-    user.dev = is_dev;
-    user.is_sub_user = is_sub_user_role(
-        &parse_app_token(&state.record_manager, &user.app_token).role,
-    );
-    if is_dev {
-        user.permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
-            &user.permissions,
-            &["dev".into(), "admin".into(), "scope:all".into()],
-        );
-        if !user.app_id.is_empty() {
-            user.menus_permissions = Some(vec![user.app_id.clone()]);
-        }
-        user.data_scope = "ALL".into();
-    }
-
+    let resolved = resolve_effective_permissions(&user, &state.record_manager);
+    apply_resolved_to_auth(&mut user, &resolved);
     user
 }
 
