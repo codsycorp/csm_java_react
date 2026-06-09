@@ -55,23 +55,31 @@ async fn main() -> anyhow::Result<()> {
         init.auto_init_default_data();
     });
 
-    let app = build_app(state.clone(), socket_layer);
+    // Socket.IO on dedicated port (mirrors Java socket.server.port=15301)
+    let socket_addr = SocketAddr::from(([0, 0, 0, 0], config.socket.port));
+    let socket_listener = tokio::net::TcpListener::bind(socket_addr).await?;
+    info!("Socket.IO server listening on :{}", config.socket.port);
+    let socket_app = Router::new().layer(socket_layer);
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(socket_listener, socket_app).await {
+            tracing::error!("Socket.IO server error: {}", e);
+        }
+    });
 
+    // HTTP API server on main port
+    let http_app = build_app(state.clone());
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    info!("HTTP server listening on http://{} (Socket.IO on same port)", addr);
-    axum::serve(listener, app).await?;
+    info!("HTTP server listening on http://{}", addr);
+    axum::serve(listener, http_app).await?;
 
     Ok(())
 }
 
-fn build_app(state: AppState, socket_layer: socket::SocketIoLayer) -> Router {
-    // Socket.IO layer on the main server — realtime.domain.com → nginx → same port
-    // as the main HTTP server. No separate port needed.
+fn build_app(state: AppState) -> Router {
     Router::new()
         .merge(controllers::routes(state.clone()))
         .merge(api::router::api_routes(state.clone()))
-        .layer(socket_layer)
         .layer(security::middleware::security_layers())
         .with_state(state)
 }
