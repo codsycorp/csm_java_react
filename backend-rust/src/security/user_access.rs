@@ -210,7 +210,7 @@ pub fn is_allowed_autosetup_template_read(
     let eq_values = collect_eq_values(filter);
     let p_type = eq_values.get("p_type").map(String::as_str).unwrap_or("");
     let p_name = eq_values.get("p_name").map(String::as_str).unwrap_or("");
-    if p_type != "0" || p_name.is_empty() || ctx.app_id.is_empty() {
+    if !is_p_type_zero_str(p_type) || p_name.is_empty() || ctx.app_id.is_empty() {
         return false;
     }
     is_same_or_broadcast_variant(&ctx.app_id, p_name)
@@ -238,11 +238,14 @@ pub fn filter_sys_autos_rows(
     let filtered: Vec<Value> = arr
         .iter()
         .filter(|row| {
-            let p_type = row.get("p_type").and_then(|v| v.as_str()).unwrap_or("");
-            let p_name = row.get("p_name").and_then(|v| v.as_str()).unwrap_or("");
-            p_type == "0"
-                && requested_p_name == p_name
-                && is_same_or_broadcast_variant(&ctx.app_id, requested_p_name)
+            let p_name = field_value_as_str(row.get("p_name"));
+            if !is_p_type_zero(row.get("p_type")) {
+                return false;
+            }
+            if requested_p_name != p_name {
+                return false;
+            }
+            is_same_or_broadcast_variant(&ctx.app_id, requested_p_name)
         })
         .cloned()
         .collect();
@@ -399,11 +402,51 @@ fn collect_eq_values_inner(filter: &SearchFilter, out: &mut std::collections::Ha
     if !filter.filter_type.eq_ignore_ascii_case("eq") || filter.field.is_empty() {
         return;
     }
-    if let Some(value) = filter.value.as_str() {
+    if let Some(normalized) = normalize_eq_filter_value(&filter.value) {
         out.entry(filter.field.clone())
-            .or_insert_with(|| value.to_string());
-    } else if filter.value.is_number() {
-        out.entry(filter.field.clone())
-            .or_insert_with(|| filter.value.to_string());
+            .or_insert(normalized);
+    }
+}
+
+/// Mirrors Java `safeStr` for filter/row field comparison (string or numeric JSON values).
+fn normalize_eq_filter_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
+fn field_value_as_str(value: Option<&Value>) -> String {
+    value
+        .and_then(|v| normalize_eq_filter_value(v))
+        .unwrap_or_default()
+}
+
+fn is_p_type_zero_str(raw: &str) -> bool {
+    let t = raw.trim();
+    t == "0" || t.parse::<i64>().ok() == Some(0)
+}
+
+fn is_p_type_zero(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::Number(n)) => {
+            n.as_i64() == Some(0)
+                || n.as_f64().map(|f| f.abs() < f64::EPSILON).unwrap_or(false)
+        }
+        Some(Value::String(s)) => {
+            let t = s.trim();
+            t == "0" || t.parse::<i64>().ok() == Some(0)
+        }
+        Some(Value::Bool(false)) => true,
+        _ => false,
     }
 }
