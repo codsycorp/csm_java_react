@@ -295,10 +295,11 @@ impl TableHandler {
             return out;
         }
 
-        // "index" is exempted from cross-app check (mirrors Java's handleIndexTableOperation
-        // which is dispatched before the cross-app guard — any authenticated user may read
-        // the index/schema of any app, e.g. a 'lmkt' user reading 'csm' index for schemas).
-        // csm_* and sys_* tables have their own access control via validateSystemUserTableAccess.
+        if table == "index" {
+            return self.handle_index_table_operation(app_id, params, is_update, auth);
+        }
+
+        // "index" is exempted from cross-app check — handled above.
         if table != "index" && !table.starts_with("csm_") && !table.starts_with("sys_") {
             if let Some(user) = auth {
                 if !user.can_access_app_data(app_id) {
@@ -609,4 +610,241 @@ impl TableHandler {
         }
         r
     }
+
+    /// Mirrors Java `TableHandler.handleIndexTableOperation`.
+    fn handle_index_table_operation(
+        &self,
+        app_id: &str,
+        params: &Map<String, Value>,
+        is_update: bool,
+        auth: Option<&AuthUser>,
+    ) -> Map<String, Value> {
+        let mut out = Map::new();
+        let filter: SearchFilter = params
+            .get("e_where")
+            .or_else(|| params.get("filter"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        let take = parse_usize_param(params.get("take"));
+        let offset = parse_usize_param(params.get("offset"));
+        let limit = parse_usize_param(params.get("limit"));
+        let lastkey = params
+            .get("lastkey")
+            .or_else(|| params.get("cursor"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let filter_result = if let Some(lim) = limit.filter(|&n| n > 0) {
+            let safe_offset = offset.unwrap_or(0);
+            self.record_manager
+                .filter_with_pagination(app_id, "index", &filter, None, Some(safe_offset), lim)
+        } else if let Some(t) = take.filter(|&n| n > 0) {
+            self.record_manager.filter_with_pagination(
+                app_id,
+                "index",
+                &filter,
+                lastkey.as_deref(),
+                None,
+                t,
+            )
+        } else {
+            self.record_manager.filter(app_id, "index", &filter)
+        };
+
+        let tables: Vec<Map<String, Value>> = filter_result
+            .get("rows")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_object().cloned())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if !is_update {
+            let rows = extract_index_read_rows(&tables);
+            out.insert("success".into(), Value::Bool(true));
+            out.insert("id".into(), Value::String("index".into()));
+            out.insert("rows".into(), Value::Array(rows));
+            if let Some(cursor) = filter_result.get("nextCursor") {
+                out.insert("nextCursor".into(), cursor.clone());
+            }
+            return out;
+        }
+
+        if let Some(user) = auth {
+            if !user.dev && !user.can_access_app_data(app_id) {
+                out.insert("success".into(), Value::Bool(false));
+                out.insert(
+                    "message".into(),
+                    Value::String(format!(
+                        "Bạn không có quyền thay đổi dữ liệu của ứng dụng '{app_id}'"
+                    )),
+                );
+                return out;
+            }
+        }
+
+        let command = params
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+
+        let obj_update: Map<String, Value> = params
+            .get("obj_update")
+            .or_else(|| params.get("data"))
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+
+        if obj_update.is_empty() {
+            out.insert("success".into(), Value::Bool(false));
+            out.insert("message".into(), Value::String("Thiếu dữ liệu cập nhật".into()));
+            return out;
+        }
+
+        let record_id = obj_update.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let mut existing_rows = tables;
+        if !record_id.is_empty() && existing_rows.is_empty() {
+            let id_filter = SearchFilter::eq("id", record_id);
+            existing_rows = self
+                .record_manager
+                .filter(app_id, "index", &id_filter)
+                .get("rows")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_object().cloned())
+                        .collect()
+                })
+                .unwrap_or_default();
+        }
+
+        match command.as_str() {
+            "create" => {
+                if record_id.is_empty() {
+                    out.insert("success".into(), Value::Bool(false));
+                    out.insert(
+                        "message".into(),
+                        Value::String("Thiếu giá trị khóa chính 'id'".into()),
+                    );
+                    return out;
+                }
+                if self
+                    .record_manager
+                    .exists_by_primary_key(app_id, "index", &obj_update, &["id".to_string()])
+                {
+                    out.insert("success".into(), Value::Bool(false));
+                    out.insert(
+                        "message".into(),
+                        Value::String("Trùng khóa chính (id) cho bảng index".into()),
+                    );
+                    return out;
+                }
+                if !existing_rows.is_empty() {
+                    // fall through to update semantics like Java
+                } else {
+                    match self.record_manager.create_record(app_id, "index", obj_update.clone(), None)
+                    {
+                        Ok(cmd) => {
+                            self.emit_update_notification(app_id, "index", &cmd, &obj_update);
+                            out.insert("success".into(), Value::Bool(true));
+                            out.insert("command".into(), Value::String(cmd));
+                            out.insert("message".into(), Value::String("Thao tác thành công".into()));
+                            out.insert("updated_row".into(), Value::Object(obj_update));
+                            return out;
+                        }
+                        Err(e) => {
+                            out.insert("success".into(), Value::Bool(false));
+                            out.insert("message".into(), Value::String(e.to_string()));
+                            return out;
+                        }
+                    }
+                }
+            }
+            "delete" => {
+                for row in &existing_rows {
+                    if row.get("id").and_then(|v| v.as_str()) == Some(record_id) {
+                        if self.record_manager.delete_record(app_id, "index", row).is_ok() {
+                            self.emit_update_notification(app_id, "index", "delete", row);
+                            out.insert("success".into(), Value::Bool(true));
+                            out.insert("command".into(), Value::String("delete".into()));
+                            out.insert("message".into(), Value::String("Thao tác thành công".into()));
+                            return out;
+                        }
+                    }
+                }
+                out.insert("success".into(), Value::Bool(false));
+                out.insert("message".into(), Value::String("Không tìm thấy bản ghi index".into()));
+                return out;
+            }
+            "update" | "" => {}
+            _ => {
+                out.insert("success".into(), Value::Bool(false));
+                out.insert(
+                    "message".into(),
+                    Value::String("Lệnh không hợp lệ cho bảng index".into()),
+                );
+                return out;
+            }
+        }
+
+        // update (also used when create finds existing row)
+        for row in existing_rows {
+            if row.get("id").and_then(|v| v.as_str()) == Some(record_id) {
+                let mut merged = row;
+                for (k, v) in obj_update {
+                    merged.insert(k, v);
+                }
+                match self.record_manager.create_record(app_id, "index", merged.clone(), None) {
+                    Ok(cmd) => {
+                        self.emit_update_notification(app_id, "index", &cmd, &merged);
+                        out.insert("success".into(), Value::Bool(true));
+                        out.insert("command".into(), Value::String(cmd));
+                        out.insert("message".into(), Value::String("Thao tác thành công".into()));
+                        out.insert("updated_row".into(), Value::Object(merged));
+                        return out;
+                    }
+                    Err(e) => {
+                        out.insert("success".into(), Value::Bool(false));
+                        out.insert("message".into(), Value::String(e.to_string()));
+                        return out;
+                    }
+                }
+            }
+        }
+
+        out.insert("success".into(), Value::Bool(false));
+        out.insert("message".into(), Value::String("Không tìm thấy bản ghi index".into()));
+        out
+    }
+}
+
+fn parse_usize_param(value: Option<&Value>) -> Option<usize> {
+    let v = value?;
+    v.as_u64()
+        .map(|n| n as usize)
+        .or_else(|| v.as_i64().and_then(|n| (n >= 0).then_some(n as usize)))
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+}
+
+/// Java: when exactly one index row is returned, unwrap `.data` array or return the row itself.
+fn extract_index_read_rows(tables: &[Map<String, Value>]) -> Vec<Value> {
+    if tables.len() == 1 {
+        let record = &tables[0];
+        if let Some(Value::Array(data)) = record.get("data") {
+            let items: Vec<Value> = data
+                .iter()
+                .filter_map(|item| item.as_object().map(|m| Value::Object(m.clone())))
+                .collect();
+            return items;
+        }
+        return vec![Value::Object(record.clone())];
+    }
+    tables
+        .iter()
+        .map(|row| Value::Object(row.clone()))
+        .collect()
 }

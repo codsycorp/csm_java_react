@@ -203,7 +203,7 @@ impl AuthHandler {
         if let Some(user) = user {
             let mut info = user.to_info_map();
             self.enrich_account_meta(&user, &mut info);
-            self.enrich_bitfield(&user, &mut info);
+            self.enrich_user_info_with_bitfield(&user, &mut info);
             response.set("code", 200);
             response.set("success", true);
             response.set("message", "ok");
@@ -423,7 +423,7 @@ impl AuthHandler {
 
         let user_role = auth.permissions.first().cloned();
         let is_dev = auth.dev;
-        let menus = &auth.menus_permissions;
+        let menus = auth.menus_permissions.as_deref().unwrap_or(&[]);
 
         let filtered = filter_routes_by_role(
             &all_routes,
@@ -505,10 +505,45 @@ impl AuthHandler {
         self.enrich_bitfield(user, result);
     }
 
-    fn enrich_bitfield(&self, user: &User, info: &mut Map<String, Value>) {
-        let perms = user.permissions.clone().unwrap_or_default();
-        let menus = user.menus_permissions.clone().unwrap_or_default();
-        let bitfield = PermissionBitfieldUtil::build_bitfield(&perms, &menus, user.dev.unwrap_or(false));
+    /// Mirrors Java `enrichUserInfoWithBitfield` — merge list fields with stored bitfield tokens.
+    fn enrich_user_info_with_bitfield(&self, user: &User, info: &mut Map<String, Value>) {
+        let stored_bitfield = user
+            .permission_bitfield
+            .as_deref()
+            .or_else(|| info.get("permissionBitfield").and_then(|v| v.as_str()));
+
+        let base_permissions = string_list_from_value(
+            info.get("permissions").or_else(|| info.get("roles")),
+        );
+        let base_menus = string_list_from_value(info.get("menusPermissions"));
+
+        let permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+            &base_permissions,
+            &PermissionBitfieldUtil::permissions_from_bitfield(stored_bitfield),
+        );
+        let menus_permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+            &base_menus,
+            &PermissionBitfieldUtil::menus_from_bitfield(stored_bitfield),
+        );
+
+        let dev = user.dev.unwrap_or(false)
+            || info.get("dev").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        let bitfield =
+            PermissionBitfieldUtil::build_bitfield(&permissions, &menus_permissions, dev);
+
+        info.insert(
+            "roles".into(),
+            Value::Array(permissions.iter().cloned().map(Value::String).collect()),
+        );
+        info.insert(
+            "permissions".into(),
+            Value::Array(permissions.iter().cloned().map(Value::String).collect()),
+        );
+        info.insert(
+            "menusPermissions".into(),
+            Value::Array(menus_permissions.iter().cloned().map(Value::String).collect()),
+        );
         info.insert(
             "permissionBitfield".into(),
             Value::String(PermissionBitfieldUtil::to_compact_token(bitfield)),
@@ -521,6 +556,59 @@ impl AuthHandler {
             "dataScope".into(),
             Value::String(PermissionBitfieldUtil::resolve_data_scope(bitfield)),
         );
+    }
+
+    /// Login/async-routes enrichment — build bitfield from stored list fields (Java login path).
+    fn enrich_bitfield(&self, user: &User, info: &mut Map<String, Value>) {
+        let permissions = user.permissions.clone().unwrap_or_default();
+        let menus = user.menus_permissions.clone().unwrap_or_default();
+        let dev = user.dev.unwrap_or(false);
+
+        if !info.contains_key("permissions") {
+            info.insert(
+                "permissions".into(),
+                Value::Array(permissions.iter().cloned().map(Value::String).collect()),
+            );
+        }
+        if !info.contains_key("roles") {
+            info.insert(
+                "roles".into(),
+                Value::Array(permissions.iter().cloned().map(Value::String).collect()),
+            );
+        }
+        if !info.contains_key("menusPermissions") {
+            if let Some(menus_permissions) = &user.menus_permissions {
+                info.insert(
+                    "menusPermissions".into(),
+                    Value::Array(menus_permissions.iter().cloned().map(Value::String).collect()),
+                );
+            }
+        }
+
+        let bitfield = PermissionBitfieldUtil::build_bitfield(&permissions, &menus, dev);
+        info.insert(
+            "permissionBitfield".into(),
+            Value::String(PermissionBitfieldUtil::to_compact_token(bitfield)),
+        );
+        info.insert(
+            "permissionSchemaVersion".into(),
+            Value::String(PermissionBitfieldUtil::SCHEMA_V3.into()),
+        );
+        info.insert(
+            "dataScope".into(),
+            Value::String(PermissionBitfieldUtil::resolve_data_scope(bitfield)),
+        );
+    }
+}
+
+fn string_list_from_value(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
+        _ => vec![],
     }
 }
 

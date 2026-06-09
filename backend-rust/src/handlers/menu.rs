@@ -32,7 +32,7 @@ impl MenuHandler {
             if is_privileged {
                 all_menus
             } else {
-                filter_menus_by_permissions(&all_menus, &user.menus_permissions)
+                filter_menus_by_permissions(&all_menus, user.menus_permissions.as_deref())
             }
         } else {
             vec![]
@@ -126,10 +126,12 @@ impl MenuHandler {
     }
 }
 
-fn filter_menus_by_permissions(menus: &[Value], allowed_ids: &[String]) -> Vec<Value> {
-    if allowed_ids.is_empty() {
-        return vec![];
-    }
+fn filter_menus_by_permissions(menus: &[Value], allowed_ids: Option<&[String]>) -> Vec<Value> {
+    // Java: null allowedMenuIds → return all menus unchanged
+    let Some(allowed_ids) = allowed_ids else {
+        return menus.to_vec();
+    };
+
     menus
         .iter()
         .filter_map(|menu| {
@@ -139,9 +141,13 @@ fn filter_menus_by_permissions(menus: &[Value], allowed_ids: &[String]) -> Vec<V
             }
             let mut filtered_menu = menu.clone();
             if let Some(children) = menu.get("children").and_then(|v| v.as_array()) {
-                let filtered_children = filter_menus_by_permissions(children, allowed_ids);
+                let filtered_children = filter_menus_by_permissions(children, Some(allowed_ids));
                 if let Value::Object(ref mut m) = filtered_menu {
-                    m.insert("children".into(), Value::Array(filtered_children));
+                    if !filtered_children.is_empty() {
+                        m.insert("children".into(), Value::Array(filtered_children));
+                    } else {
+                        m.remove("children");
+                    }
                 }
             }
             Some(filtered_menu)

@@ -316,6 +316,7 @@ impl UserService {
             .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
         user.menus_permissions = record
             .get("menusPermissions")
+            .or_else(|| record.get("menus_permissions"))
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
         // app_id: prefer sub-user's own app_token (decrypted), then record's app_id field,
