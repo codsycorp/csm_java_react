@@ -199,15 +199,76 @@ impl CrmService {
 
     pub fn get_crm_stats(&self, app_id: &str, _from: Option<&str>, _to: Option<&str>) -> Map<String, Value> {
         let rows = self.get_customers(app_id, None, None, None, 0, 5000);
+        let purchases = extract_rows(
+            &self
+                .record_manager
+                .filter(app_id, TABLE_PURCHASES, &SearchFilter::default()),
+        );
         let mut by_status = Map::new();
+        let mut by_source = Map::new();
+        let mut contacted_customers = 0usize;
+        let mut converted_customers = 0usize;
+
         for r in &rows {
-            let st = r.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let c = by_status.get(st).and_then(|v| v.as_u64()).unwrap_or(0) + 1;
-            by_status.insert(st.into(), json!(c));
+            let status = r
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("new")
+                .to_ascii_lowercase();
+            let count = by_status
+                .get(&status)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                + 1;
+            by_status.insert(status.clone(), json!(count));
+
+            if matches!(status.as_str(), "contacted" | "follow_up" | "purchased") {
+                contacted_customers += 1;
+            }
+            if status == "purchased" {
+                converted_customers += 1;
+            }
+
+            let source = r
+                .get("source")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("unknown")
+                .to_string();
+            let source_count = by_source
+                .get(&source)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0)
+                + 1;
+            by_source.insert(source, json!(source_count));
         }
+
+        let mut total_revenue = 0.0f64;
+        let total_purchases = purchases.len();
+        for purchase in &purchases {
+            total_revenue += purchase
+                .get("price")
+                .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                .unwrap_or(0.0);
+        }
+
+        let total_customers = rows.len();
         let mut stats = Map::new();
-        stats.insert("total".into(), json!(rows.len()));
-        stats.insert("byStatus".into(), Value::Object(by_status));
+        stats.insert("total_customers".into(), json!(total_customers));
+        stats.insert("new_customers".into(), json!(total_customers));
+        stats.insert("contacted_customers".into(), json!(contacted_customers));
+        stats.insert("converted_customers".into(), json!(converted_customers));
+        stats.insert("total_purchases".into(), json!(total_purchases));
+        stats.insert("total_revenue".into(), json!(total_revenue));
+        stats.insert("by_status".into(), Value::Object(by_status));
+        stats.insert("by_source".into(), Value::Object(by_source));
+        stats.insert("conversion_rate".into(), json!(
+            if contacted_customers > 0 {
+                converted_customers as f64 / contacted_customers as f64
+            } else {
+                0.0
+            }
+        ));
         stats
     }
 

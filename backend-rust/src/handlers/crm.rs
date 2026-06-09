@@ -133,8 +133,8 @@ impl CrmHandler {
         r
     }
 
-    pub fn handle_crm_stats(&self, params: &Map<String, Value>) -> StandardResponse {
-        let app_id = Self::app_id(params, None);
+    pub fn handle_crm_stats(&self, params: &Map<String, Value>, auth: Option<&AuthUser>) -> StandardResponse {
+        let app_id = Self::app_id(params, auth);
         let from = params.get("fromDate").and_then(|v| v.as_str());
         let to = params.get("toDate").and_then(|v| v.as_str());
         let mut r = StandardResponse::new();

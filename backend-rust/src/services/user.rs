@@ -464,6 +464,22 @@ impl UserService {
                 user.app_id = Some(app_id.to_string());
             }
         }
+
+        let mut permissions = user.permissions.take().unwrap_or_default();
+        permissions = PermissionBitfieldUtil::subtract_case_insensitive(
+            &permissions,
+            &["admin".into(), "dev".into()],
+        );
+        user.permissions = Some(permissions.clone());
+
+        let menus_permissions = user.menus_permissions.clone().unwrap_or_default();
+        let is_dev = user.dev.unwrap_or(false);
+        let bitfield =
+            PermissionBitfieldUtil::build_bitfield(&permissions, &menus_permissions, is_dev);
+        user.permission_bitfield = Some(PermissionBitfieldUtil::to_compact_token(bitfield));
+        user.permission_schema_version = Some(PermissionBitfieldUtil::SCHEMA_V3.into());
+        user.data_scope = Some(PermissionBitfieldUtil::resolve_data_scope(bitfield));
+
         Some(user)
     }
 }

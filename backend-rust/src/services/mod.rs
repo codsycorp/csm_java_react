@@ -6,5 +6,6 @@ pub mod crm_analytics;
 pub mod llama_cpp;
 pub mod llama_native;
 pub mod media;
+pub mod googlebot;
 pub mod permission;
 pub mod user;

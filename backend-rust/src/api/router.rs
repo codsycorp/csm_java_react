@@ -198,7 +198,7 @@ async fn dispatch_api(
         "/home/pie" => state.home_handler.handle_home_pie(),
         "/home/line" => state.home_handler.handle_home_line(&params),
         "/home/googlebot" => state.home_handler.handle_googlebot_stats(&params),
-        "/home/googlebot/delete" => state.home_handler.handle_googlebot_stats(&params),
+        "/home/googlebot/delete" => state.home_handler.handle_googlebot_delete(&params),
         // ── Table / Data ──
         "/restoredb" => state.table_handler.restore_db(&params),
         "/backupdb" => state.table_handler.backup_db(&params),
@@ -255,7 +255,7 @@ async fn dispatch_api(
         "/crm/customer/purchase" => state.crm_handler.handle_purchase(&params),
         "/crm/customer/contact" => state.crm_handler.handle_contact(&params),
         "/crm/birthdays" => state.crm_handler.handle_birthdays(&params),
-        "/crm/stats" => state.crm_handler.handle_crm_stats(&params),
+        "/crm/stats" => state.crm_handler.handle_crm_stats(&params, auth.as_ref()),
         "/crm/website-stats" => state.crm_handler.handle_website_stats(&params),
         "/crm/ads-stats" => state.crm_handler.handle_ads_stats(&params),
         "/crm/ads" if *method == Method::POST => state.crm_handler.handle_create_ad(&params),

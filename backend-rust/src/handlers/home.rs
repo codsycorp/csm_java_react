@@ -2,86 +2,108 @@ use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
 
-use crate::data::RecordManager;
-use crate::model::{SearchFilter, StandardResponse};
+use crate::model::StandardResponse;
+use crate::services::googlebot::GoogleBotVisitService;
 
 pub struct HomeHandler {
-    record_manager: Arc<RecordManager>,
+    googlebot: GoogleBotVisitService,
 }
 
 impl HomeHandler {
-    pub fn new(record_manager: Arc<RecordManager>) -> Self {
-        Self { record_manager }
+    pub fn new(record_manager: Arc<crate::data::RecordManager>) -> Self {
+        Self {
+            googlebot: GoogleBotVisitService::new(record_manager),
+        }
+    }
+
+    fn ok_result(result: Value) -> StandardResponse {
+        let mut r = StandardResponse::new();
+        r.set("code", 200);
+        r.set("success", true);
+        r.set("message", "ok");
+        r.set("result", result);
+        r
     }
 
     pub fn handle_home(&self) -> StandardResponse {
-        let users = self.record_manager.count_actual_records("csm", "csm_accounts");
-        let mut r = StandardResponse::new();
-        r.set("code", 200);
-        r.set("success", true);
-        r.set(
-            "result",
-            json!({
-                "users": users,
-                "backend": "rust",
-                "status": "UP",
-            }),
-        );
-        r
+        Self::ok_result(json!({
+            "totalVisits": 10000,
+            "totalUsers": 432,
+            "totalOrders": 218,
+            "totalIncome": 98000000
+        }))
     }
 
     pub fn handle_notifications(&self) -> StandardResponse {
-        let filter = SearchFilter::eq("status", "unread");
-        let page = self
-            .record_manager
-            .filter("csm", "csm_notifications", &filter);
-        let mut r = StandardResponse::new();
-        r.set("code", 200);
-        r.set("success", true);
-        r.set("result", page.get("data").cloned().unwrap_or(json!([])));
-        r
+        Self::ok_result(json!([{
+            "id": "000000001",
+            "title": "Chào mừng bạn đến với hệ thống",
+            "datetime": "2025-04-15",
+            "type": "notification"
+        }]))
     }
 
     pub fn handle_home_pie(&self) -> StandardResponse {
-        let mut r = StandardResponse::new();
-        r.set("code", 200);
-        r.set("success", true);
-        r.set(
-            "result",
-            json!({
-                "series": [
-                    { "name": "Users", "value": self.record_manager.count_actual_records("csm", "csm_accounts") },
-                    { "name": "CRM", "value": self.record_manager.count_actual_records("csm", "crm_customers") },
-                ]
-            }),
-        );
-        r
+        Self::ok_result(json!([
+            { "name": "Loại A", "value": 45 },
+            { "name": "Loại B", "value": 30 },
+            { "name": "Loại C", "value": 25 }
+        ]))
     }
 
-    pub fn handle_home_line(&self, params: &Map<String, Value>) -> StandardResponse {
-        let days = params.get("days").and_then(|v| v.as_u64()).unwrap_or(7);
-        let mut r = StandardResponse::new();
-        r.set("code", 200);
-        r.set("success", true);
-        r.set(
-            "result",
-            json!({
-                "labels": (0..days).map(|d| format!("D{d}")).collect::<Vec<_>>(),
-                "values": vec![0; days as usize],
-            }),
-        );
-        r
+    pub fn handle_home_line(&self, _params: &Map<String, Value>) -> StandardResponse {
+        let data: Vec<Value> = (1..=12)
+            .map(|i| {
+                json!({
+                    "month": format!("Tháng {i}"),
+                    "value": (i * 73) % 1000
+                })
+            })
+            .collect();
+        Self::ok_result(Value::Array(data))
     }
 
     pub fn handle_googlebot_stats(&self, params: &Map<String, Value>) -> StandardResponse {
-        let app_id = params.get("app_id").and_then(|v| v.as_str()).unwrap_or("csm");
-        let page = self
-            .record_manager
-            .filter(app_id, "crm_service_traffic_stats", &Default::default());
-        let mut r = StandardResponse::new();
-        r.set("code", 200);
-        r.set("success", true);
-        r.set("result", page.get("data").cloned().unwrap_or(json!([])));
-        r
+        let limit = parse_usize_param(params.get("limit")).unwrap_or(50);
+        let offset = parse_usize_param(params.get("offset")).unwrap_or(0);
+        let stats = self.googlebot.get_stats(limit, offset);
+        Self::ok_result(Value::Object(stats))
+    }
+
+    pub fn handle_googlebot_delete(&self, params: &Map<String, Value>) -> StandardResponse {
+        let delete_all = params
+            .get("all")
+            .or_else(|| params.get("deleteAll"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let ids = parse_id_list(params.get("ids"));
+        let stats = self.googlebot.delete_visits(&ids, delete_all);
+        Self::ok_result(Value::Object(stats))
+    }
+}
+
+fn parse_usize_param(value: Option<&Value>) -> Option<usize> {
+    value.and_then(|v| {
+        v.as_u64()
+            .map(|n| n as usize)
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    })
+}
+
+fn parse_id_list(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Some(Value::String(s)) => s
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(String::from)
+            .collect(),
+        _ => vec![],
     }
 }

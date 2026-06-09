@@ -162,6 +162,7 @@ fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
         return user;
     }
 
+    let mut is_dev = user.dev;
     if let Ok(decrypted) = state.record_manager.csm_decrypt(&user.app_token) {
         let parts: Vec<&str> = decrypted.split("_____").collect();
         if let Some(app_id) = parts.first().copied().filter(|s| !s.is_empty()) {
@@ -169,9 +170,7 @@ fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
         }
         if let Some(last) = parts.last() {
             if let Ok(n) = last.parse::<i32>() {
-                if n > 0 {
-                    user.dev = true;
-                }
+                is_dev = n > 0;
             }
         }
     } else if let Some(app_id) = user
@@ -181,6 +180,17 @@ fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
         .filter(|s| !s.is_empty())
     {
         user.app_id = app_id.to_string();
+    }
+
+    user.dev = is_dev;
+    if is_dev {
+        user.permissions = crate::util::PermissionBitfieldUtil::merge_unique_case_insensitive(
+            &user.permissions,
+            &["dev".into(), "admin".into(), "scope:all".into()],
+        );
+        if !user.app_id.is_empty() {
+            user.menus_permissions = Some(vec![user.app_id.clone()]);
+        }
     }
 
     user

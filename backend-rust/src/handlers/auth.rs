@@ -61,6 +61,18 @@ impl AuthHandler {
 
         let is_dev = self.resolve_dev_flag(&user);
         user.dev = Some(is_dev);
+        if is_dev {
+            let permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                &user.permissions.clone().unwrap_or_default(),
+                &["dev".into(), "admin".into(), "scope:all".into()],
+            );
+            user.permissions = Some(permissions);
+            if let Some(app_id) = user.app_id.as_ref().filter(|s| !s.is_empty()) {
+                user.menus_permissions = Some(vec![app_id.clone()]);
+            }
+            user.data_scope = Some("ALL".into());
+        }
+
         let next_version = user.login_version.unwrap_or(0) + 1;
         let refresh_token = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
         let ip = params
@@ -116,6 +128,7 @@ impl AuthHandler {
                 Value::Array(data_app_ids.iter().cloned().map(Value::String).collect()),
             );
         }
+        result.insert("dev".into(), Value::Bool(user.dev.unwrap_or(false)));
 
         response.set("code", 200);
         response.set("success", true);
@@ -211,9 +224,13 @@ impl AuthHandler {
             .find_by_id(&auth.user_id)
             .or_else(|| self.user_service.find_by_app_token(&auth.app_token));
         if let Some(user) = user {
+            let is_dev = self.resolve_dev_flag(&user);
+            let mut user = user;
+            user.dev = Some(is_dev);
             let mut info = user.to_info_map();
             self.enrich_account_meta(&user, &mut info);
             self.enrich_user_info_with_bitfield(&user, &mut info);
+            info.insert("dev".into(), Value::Bool(is_dev));
             response.set("code", 200);
             response.set("success", true);
             response.set("message", "ok");
@@ -536,7 +553,8 @@ impl AuthHandler {
             &PermissionBitfieldUtil::menus_from_bitfield(stored_bitfield),
         );
 
-        let dev = user.dev.unwrap_or(false)
+        let dev = self.resolve_dev_flag(&user)
+            || user.dev.unwrap_or(false)
             || info.get("dev").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let bitfield =

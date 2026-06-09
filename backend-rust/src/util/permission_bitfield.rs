@@ -219,6 +219,18 @@ impl PermissionBitfieldUtil {
         merged
     }
 
+    pub fn subtract_case_insensitive(base: &[String], deny: &[String]) -> Vec<String> {
+        let deny_keys: HashSet<String> = deny
+            .iter()
+            .map(|v| v.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        base.iter()
+            .filter(|value| !deny_keys.contains(&value.trim().to_ascii_lowercase()))
+            .cloned()
+            .collect()
+    }
+
     pub fn resolve_data_scope(bitfield: u64) -> String {
         resolve_data_scope_v3(normalize_to_single_token(bitfield))
     }
