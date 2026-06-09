@@ -13,6 +13,7 @@ use tower_http::{
     cors::CorsLayer,
     trace::TraceLayer,
 };
+use tracing::warn;
 
 use crate::security::auth::AuthUser;
 use crate::security::rate_limit::RateLimiter;
@@ -68,6 +69,18 @@ pub fn is_api_request(uri: &str, host: Option<&str>) -> bool {
     host.map(|h| h.starts_with("api.")).unwrap_or(false) || uri.starts_with("/api/")
 }
 
+fn resolve_host(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("x-forwarded-host")
+        .and_then(|h| h.to_str().ok())
+        .filter(|h| !h.is_empty())
+        .or_else(|| headers.get(header::HOST).and_then(|h| h.to_str().ok()))
+}
+
+fn is_get_table_data_request(uri: &str) -> bool {
+    uri == "/api/get-table-data" || uri == "/get-table-data"
+}
+
 pub fn is_public_api_path(method: &Method, path: &str) -> bool {
     let clean = path.strip_prefix("/api").unwrap_or(path);
     if *method == Method::OPTIONS {
@@ -95,10 +108,7 @@ pub async fn auth_middleware(
     next: Next,
 ) -> Response {
     let uri = req.uri().path().to_string();
-    let host = req
-        .headers()
-        .get(header::HOST)
-        .and_then(|h| h.to_str().ok());
+    let host = resolve_host(req.headers());
 
     if !is_api_request(&uri, host) || is_public_api_path(req.method(), &uri) {
         return next.run(req).await;
@@ -107,6 +117,15 @@ pub async fn auth_middleware(
     if let Some(user) = resolve_auth_user(&state, req.headers()) {
         req.extensions_mut().insert(user);
         return next.run(req).await;
+    }
+
+    if is_get_table_data_request(&uri) {
+        let has_csm_token = req.headers().get("csm-token").and_then(|h| h.to_str().ok()).map(|s| !s.is_empty()).unwrap_or(false);
+        let has_authorization = req.headers().get(header::AUTHORIZATION).and_then(|h| h.to_str().ok()).map(|s| !s.is_empty()).unwrap_or(false);
+        let has_refresh_header = req.headers().get("x-refresh-token").and_then(|h| h.to_str().ok()).map(|s| !s.is_empty()).unwrap_or(false);
+        let has_refresh_cookie = cookie_value(req.headers(), "refreshToken").is_some();
+        warn!("[GET_TABLE_DATA][AUTH] reject-missing-or-invalid-auth host={:?} csm-token={} authorization={} x-refresh-token={} refreshCookie={}",
+            host, has_csm_token, has_authorization, has_refresh_header, has_refresh_cookie);
     }
 
     (

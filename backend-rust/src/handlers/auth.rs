@@ -112,11 +112,68 @@ impl AuthHandler {
         response.set("message", "ok");
         response.set("result", Value::Object(result));
 
-        let cookie_refresh = format!(
-            "refreshToken={refresh_token}; Path=/; HttpOnly; Max-Age={}; SameSite=Lax",
-            7 * 24 * 60 * 60
-        );
-        let cookie_csrf = format!("CSRF-TOKEN={csrf}; Path=/; SameSite=Lax");
+        // Build cookie attributes similar to Java AuthHandler
+        let host = params.get("_host").and_then(|v| v.as_str()).unwrap_or("");
+        let origin = params.get("_origin").and_then(|v| v.as_str()).unwrap_or("");
+        let referer = params.get("_referer").and_then(|v| v.as_str()).unwrap_or("");
+        let ua = params.get("_user_agent").and_then(|v| v.as_str()).unwrap_or("");
+
+        let mut is_localhost = host == "localhost" || host == "127.0.0.1" || origin.contains("localhost") || origin.contains("127.0.0.1") || referer.contains("localhost") || referer.contains("127.0.0.1");
+        let ua_lc = ua.to_lowercase();
+        let is_node_webkit = ua_lc.contains("nwjs") || ua_lc.contains("node-webkit");
+        if is_node_webkit {
+            let origin_l = origin.to_lowercase();
+            let referer_l = referer.to_lowercase();
+            let is_file_like = origin_l == "null" || origin_l.starts_with("file://") || origin_l.starts_with("app://") || referer_l == "null" || referer_l.starts_with("file://") || referer_l.starts_with("app://");
+            if is_file_like || is_localhost {
+                is_localhost = true;
+            }
+        }
+
+        // determine cross-site by comparing origin host vs server host
+        let mut is_cross_site = false;
+        if let Ok(orig_url) = url::Url::parse(origin) {
+            if let Some(origin_host) = orig_url.host_str() {
+                if !origin_host.eq_ignore_ascii_case(host) {
+                    is_cross_site = true;
+                }
+            }
+        }
+
+        // compute domain attribute (root two labels) when host is a normal domain
+        let mut domain_attr: Option<String> = None;
+        if !is_localhost && host.contains('.') {
+            let parts: Vec<&str> = host.split('.').collect();
+            if parts.len() >= 2 {
+                let root = parts[parts.len() - 2..].join(".");
+                domain_attr = Some(format!(".{}", root));
+            }
+        }
+
+        let max_age = 7 * 24 * 60 * 60;
+        let expires = (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc2822();
+
+        let mut cookie_refresh = format!("refreshToken={refresh_token}; Path=/; HttpOnly; Max-Age={}", max_age);
+        if let Some(d) = &domain_attr {
+            cookie_refresh.push_str(&format!("; Domain={}", d));
+        }
+        if is_cross_site && !is_localhost {
+            cookie_refresh.push_str("; Secure; SameSite=None");
+        } else {
+            cookie_refresh.push_str("; SameSite=Lax");
+        }
+        cookie_refresh.push_str(&format!("; Expires={}", expires));
+
+        let mut cookie_csrf = format!("CSRF-TOKEN={csrf}; Path=/");
+        if let Some(d) = &domain_attr {
+            cookie_csrf.push_str(&format!("; Domain={}", d));
+        }
+        if is_cross_site && !is_localhost {
+            cookie_csrf.push_str("; SameSite=None; Secure");
+        } else {
+            cookie_csrf.push_str("; SameSite=Lax");
+        }
+
         response.extra_headers.append(
             axum::http::header::SET_COOKIE,
             cookie_refresh.parse().unwrap(),
@@ -175,13 +232,30 @@ impl AuthHandler {
         response.set("code", 200);
         response.set("success", true);
         response.set("message", "Logged out");
+        // Clear cookies; include domain when available
+        let host = params.get("_host").and_then(|v| v.as_str()).unwrap_or("");
+        let mut domain_attr: Option<String> = None;
+        if host.contains('.') && !(host == "localhost" || host == "127.0.0.1") {
+            let parts: Vec<&str> = host.split('.').collect();
+            if parts.len() >= 2 {
+                let root = parts[parts.len() - 2..].join(".");
+                domain_attr = Some(format!(".{}", root));
+            }
+        }
+
+        let mut del_refresh = String::from("refreshToken=; Path=/; Max-Age=0; HttpOnly; Expires=Thu, 01 Jan 1970 00:00:00 GMT;");
+        let mut del_csrf = String::from("CSRF-TOKEN=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT;");
+        if let Some(d) = domain_attr {
+            del_refresh.push_str(&format!(" Domain={};", d));
+            del_csrf.push_str(&format!(" Domain={};", d));
+        }
         response.extra_headers.append(
             axum::http::header::SET_COOKIE,
-            "refreshToken=; Path=/; Max-Age=0; HttpOnly".parse().unwrap(),
+            del_refresh.parse().unwrap(),
         );
         response.extra_headers.append(
             axum::http::header::SET_COOKIE,
-            "CSRF-TOKEN=; Path=/; Max-Age=0".parse().unwrap(),
+            del_csrf.parse().unwrap(),
         );
         response
     }
@@ -245,11 +319,66 @@ impl AuthHandler {
             }),
         );
 
-        let cookie_refresh = format!(
-            "refreshToken={new_refresh}; Path=/; HttpOnly; Max-Age={}; SameSite=Lax",
-            7 * 24 * 60 * 60
-        );
-        let cookie_csrf = format!("CSRF-TOKEN={csrf}; Path=/; SameSite=Lax");
+        // mirror Java logic: set Domain, SameSite, Secure and Expires when appropriate
+        let host = params.get("_host").and_then(|v| v.as_str()).unwrap_or("");
+        let origin = params.get("_origin").and_then(|v| v.as_str()).unwrap_or("");
+        let referer = params.get("_referer").and_then(|v| v.as_str()).unwrap_or("");
+        let ua = params.get("_user_agent").and_then(|v| v.as_str()).unwrap_or("");
+
+        let mut is_localhost = host == "localhost" || host == "127.0.0.1" || origin.contains("localhost") || origin.contains("127.0.0.1") || referer.contains("localhost") || referer.contains("127.0.0.1");
+        let ua_lc = ua.to_lowercase();
+        let is_node_webkit = ua_lc.contains("nwjs") || ua_lc.contains("node-webkit");
+        if is_node_webkit {
+            let origin_l = origin.to_lowercase();
+            let referer_l = referer.to_lowercase();
+            let is_file_like = origin_l == "null" || origin_l.starts_with("file://") || origin_l.starts_with("app://") || referer_l == "null" || referer_l.starts_with("file://") || referer_l.starts_with("app://");
+            if is_file_like || is_localhost {
+                is_localhost = true;
+            }
+        }
+
+        let mut is_cross_site = false;
+        if let Ok(orig_url) = url::Url::parse(origin) {
+            if let Some(origin_host) = orig_url.host_str() {
+                if !origin_host.eq_ignore_ascii_case(host) {
+                    is_cross_site = true;
+                }
+            }
+        }
+
+        let mut domain_attr: Option<String> = None;
+        if !is_localhost && host.contains('.') {
+            let parts: Vec<&str> = host.split('.').collect();
+            if parts.len() >= 2 {
+                let root = parts[parts.len() - 2..].join(".");
+                domain_attr = Some(format!(".{}", root));
+            }
+        }
+
+        let max_age = 7 * 24 * 60 * 60;
+        let expires = (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc2822();
+
+        let mut cookie_refresh = format!("refreshToken={new_refresh}; Path=/; HttpOnly; Max-Age={}", max_age);
+        if let Some(d) = &domain_attr {
+            cookie_refresh.push_str(&format!("; Domain={}", d));
+        }
+        if is_cross_site && !is_localhost {
+            cookie_refresh.push_str("; Secure; SameSite=None");
+        } else {
+            cookie_refresh.push_str("; SameSite=Lax");
+        }
+        cookie_refresh.push_str(&format!("; Expires={}", expires));
+
+        let mut cookie_csrf = format!("CSRF-TOKEN={csrf}; Path=/");
+        if let Some(d) = &domain_attr {
+            cookie_csrf.push_str(&format!("; Domain={}", d));
+        }
+        if is_cross_site && !is_localhost {
+            cookie_csrf.push_str("; SameSite=None; Secure");
+        } else {
+            cookie_csrf.push_str("; SameSite=Lax");
+        }
+
         response.extra_headers.append(
             axum::http::header::SET_COOKIE,
             cookie_refresh.parse().unwrap(),

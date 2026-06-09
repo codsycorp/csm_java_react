@@ -417,6 +417,16 @@ async fn parse_request_params(req: Request<Body>) -> Map<String, Value> {
     if let Some(ip) = client_ip {
         params.insert("_client_ip".into(), Value::String(ip));
     }
+    // Inject host/origin/referer so handlers can decide SameSite/Domain like Java backend
+    if let Some(h) = extract_host(&parts.headers) {
+        params.insert("_host".into(), Value::String(h));
+    }
+    if let Some(origin) = parts.headers.get("origin").and_then(|h| h.to_str().ok()) {
+        params.insert("_origin".into(), Value::String(origin.into()));
+    }
+    if let Some(referer) = parts.headers.get("referer").and_then(|h| h.to_str().ok()) {
+        params.insert("_referer".into(), Value::String(referer.into()));
+    }
 
     params
 }

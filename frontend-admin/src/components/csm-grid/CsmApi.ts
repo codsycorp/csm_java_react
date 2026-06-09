@@ -743,13 +743,18 @@ export async function getTableData<T>(params: {
 		...(Number.isInteger(params.offset) ? { offset: params.offset } : {}),
 		...(Number.isInteger(params.limit) ? { limit: params.limit } : {}),
 	};
-	const promise = request
-		.post<ApiListResponse<T>>("get-table-data", {
-			json: payload,
-			ignoreLoading: true,
-			timeout: TABLE_DATA_TIMEOUT_MS,
-		})
-		.json<ApiListResponse<T>>()
+	const promise = ensureAuthSessionReady().then((ready) => {
+		if (!ready) {
+			throw new Error("Phiên đăng nhập không hợp lệ hoặc đã hết hạn");
+		}
+		return request
+			.post<ApiListResponse<T>>("get-table-data", {
+				json: payload,
+				ignoreLoading: true,
+				timeout: TABLE_DATA_TIMEOUT_MS,
+			})
+			.json<ApiListResponse<T>>();
+	})
 		.catch((err) => {
 			// On error, ensure we don't keep a failed promise in cache
 			try { cache.delete(cacheKey); } catch {}

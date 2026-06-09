@@ -486,20 +486,12 @@ export async function fetchTableDataWithSearchFilter<T>(
 		e_where: searchFilter,
 	};
 
-	const baseUrl = import.meta.env?.VITE_BASE_URL || "";
-	const url = `${baseUrl}/get-table-data`;
-
 	try {
-		const res = await fetch(url, {
-			method: "POST",
-			credentials: "same-origin",
-			headers: {
-				"Content-Type": "application/json",
-				"Accept": "application/json",
-			},
-			body: JSON.stringify(payload),
-		});
-		const data: { rows?: T[] } = await res.json();
+		const data = await request
+			.post<{ rows?: T[] }>("get-table-data", {
+				json: payload,
+			})
+			.json<{ rows?: T[] }>();
 		return Array.isArray(data?.rows) ? data.rows : [];
 	} catch (error) {
 		console.error("Error fetching table data with search filter:", error);
