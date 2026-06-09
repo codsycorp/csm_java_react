@@ -221,9 +221,30 @@ impl RecordManager {
         };
 
         if primary_keys.is_empty() {
+            // Java fallback: if no fieldsPK schema, use "id" field as default PK.
+            // Only generate UUID key when record truly has no id (pure create, never update).
+            if let Some(id_val) = record.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                let base = url_encode_key(id_val);
+                let candidates = storage_key_candidates(app_id, table_name, &base);
+                let found = candidates.iter().find(|c| db.db.get(c.as_bytes()).ok().flatten().is_some());
+                let actual_key = found.cloned().unwrap_or_else(|| base.clone());
+                let cmd = if found.is_some() { "update" } else { "create" };
+                let json = serde_json::to_vec(&record)?;
+                let mut batch = WriteBatch::default();
+                batch.put(actual_key.as_bytes(), &json);
+                if cmd == "create" {
+                    self.increment_meta_count(&db, &mut batch, 1)?;
+                }
+                db.db.write(batch)?;
+                return Ok(cmd.to_string());
+            }
+            // Truly no id — UUID fallback (matches Java createRecordWithUUID)
             let key = format!("{table_name}_{}", Uuid::new_v4());
             let json = serde_json::to_vec(&record)?;
-            db.db.put(key.as_bytes(), &json)?;
+            let mut batch = WriteBatch::default();
+            batch.put(key.as_bytes(), &json);
+            self.increment_meta_count(&db, &mut batch, 1)?;
+            db.db.write(batch)?;
             return Ok("create".into());
         }
 
@@ -570,12 +591,19 @@ impl RecordManager {
     }
 
     /// Read schema row from `index` table by entry id without going through `find()`.
+    /// Java's generateKey stores index records at url_encode(id) — the bare canonical key.
+    /// We must try all storage_key_candidates to find whichever format Java used.
     fn get_index_schema_entry(&self, app_id: &str, entry_id: &str) -> Result<Map<String, Value>> {
         let db = self.get_db(app_id, "index")?;
-        let key = format!("{app_id}_index_{entry_id}");
-        if let Some(bytes) = db.db.get(key.as_bytes())? {
-            if let Ok(Value::Object(obj)) = serde_json::from_slice(&bytes) {
-                return Ok(obj);
+        let base = url_encode_key(entry_id);
+        // Java stores at bare key (e.g. "csm_accounts"); legacy may use "index_..." or "app_index_..."
+        for key in storage_key_candidates(app_id, "index", &base) {
+            if let Some(bytes) = db.db.get(key.as_bytes())? {
+                if bytes.len() <= MAX_SAFE_FIND_RECORD_BYTES {
+                    if let Ok(Value::Object(obj)) = serde_json::from_slice(&bytes) {
+                        return Ok(obj);
+                    }
+                }
             }
         }
         Ok(Map::new())
@@ -722,7 +750,8 @@ impl RecordManager {
     ) -> Map<String, Value> {
         let pk_fields = match self.get_table_search_keys(app_id, table_name, "fieldsPK") {
             Ok(f) if !f.is_empty() => f,
-            _ => return Map::new(),
+            // Schema absent or empty fieldsPK — fall back to "id" (Java default)
+            _ => vec!["id".to_string()],
         };
         let key_base = match self.build_primary_key(app_id, table_name, record, &pk_fields) {
             Ok(k) => k,
