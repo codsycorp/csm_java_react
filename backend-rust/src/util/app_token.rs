@@ -40,3 +40,17 @@ pub fn is_sub_user_role(role: &str) -> bool {
 pub fn is_dev_access_right(access_right: i32) -> bool {
     access_right > 0
 }
+
+/// Resolve menu home `app_id` from encrypted/plain `app_token` — never returns ciphertext.
+pub fn app_id_from_token(record_manager: &RecordManager, token: Option<&str>) -> Option<String> {
+    let token = token?.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let meta = parse_app_token(record_manager, token);
+    if meta.app_id.is_empty() {
+        None
+    } else {
+        Some(meta.app_id)
+    }
+}

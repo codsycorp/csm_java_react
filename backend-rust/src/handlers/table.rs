@@ -213,8 +213,17 @@ impl TableHandler {
         }
 
         // Mirrors Java's response.setProperties(result) — inline all result keys
-        let app_id = params.get("app_id").and_then(|v| v.as_str()).unwrap_or("default");
+        let filter: SearchFilter = params
+            .get("e_where")
+            .or_else(|| params.get("filter"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
         let table = params.get("obj_name").and_then(|v| v.as_str()).unwrap_or("");
+        let app_id = if table == "index" {
+            resolve_menu_index_app_id(params, auth, &filter)
+        } else {
+            resolve_request_app_id(params, auth)
+        };
         r.set("id", table);
 
         if let Some(rows) = result.get("rows") {
@@ -226,7 +235,7 @@ impl TableHandler {
 
         // fetch struct (fieldsPK / fields) from index — mirrors Java's ensureTableStructReadyForOperation
         let struct_filter = crate::model::SearchFilter::eq("id", table);
-        let struct_record = self.record_manager.find(app_id, "index", &struct_filter);
+        let struct_record = self.record_manager.find(&app_id, "index", &struct_filter);
         if let Some(Value::Object(struct_map)) = struct_record.get("struct") {
             if let Some(pk) = struct_map.get("fieldsPK") {
                 r.set("fieldsPK", pk.clone());
@@ -284,16 +293,21 @@ impl TableHandler {
         auth: Option<&AuthUser>,
     ) -> Map<String, Value> {
         let mut out = Map::new();
-        let app_id_owned = resolve_request_app_id(params, auth);
-        let app_id = app_id_owned.as_str();
         let table = params.get("obj_name").and_then(|v| v.as_str()).unwrap_or("");
-        let access = UserAccessContext::from_auth(auth, &self.record_manager);
 
         let filter: SearchFilter = params
             .get("e_where")
             .or_else(|| params.get("filter"))
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
+
+        let app_id_owned = if table == "index" && !is_update {
+            resolve_menu_index_app_id(params, auth, &filter)
+        } else {
+            resolve_request_app_id(params, auth)
+        };
+        let app_id = app_id_owned.as_str();
+        let access = UserAccessContext::from_auth(auth, &self.record_manager);
 
         let allow_scoped_autosetup = is_allowed_autosetup_template_read(
             app_id,
@@ -909,4 +923,53 @@ fn resolve_request_app_id(params: &Map<String, Value>, auth: Option<&AuthUser>) 
         }
     }
     "default".to_string()
+}
+
+const MENU_INDEX_IDS: &[&str] = &["menu", "menuR", "menuList"];
+
+/// Navigation menu reads must follow the logged-in user's menu home app (from app_token).
+/// Dev and `app_id=csm` operators may cross-app; others only when `can_access_app_data` allows it.
+fn resolve_menu_index_app_id(
+    params: &Map<String, Value>,
+    auth: Option<&AuthUser>,
+    filter: &SearchFilter,
+) -> String {
+    let requested = resolve_request_app_id(params, auth);
+    if !is_menu_index_filter(filter) {
+        return requested;
+    }
+    let Some(user) = auth else {
+        return requested;
+    };
+    if user.dev {
+        return requested;
+    }
+    let home = user.app_id.trim();
+    if home.is_empty() {
+        return requested;
+    }
+    // System operator account keeps cross-app menu reads.
+    if home.eq_ignore_ascii_case("csm") {
+        return requested;
+    }
+    if user.can_access_app_data(&requested) {
+        return requested;
+    }
+    home.to_string()
+}
+
+fn is_menu_index_filter(filter: &SearchFilter) -> bool {
+    if !filter.conditions.is_empty() {
+        return filter
+            .conditions
+            .iter()
+            .any(is_menu_index_filter);
+    }
+    if filter.field != "id" || filter.filter_type != "eq" {
+        return false;
+    }
+    filter
+        .value
+        .as_str()
+        .is_some_and(|id| MENU_INDEX_IDS.iter().any(|m| m.eq_ignore_ascii_case(id)))
 }

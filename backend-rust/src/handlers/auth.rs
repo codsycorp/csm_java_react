@@ -8,7 +8,7 @@ use crate::data::RecordManager;
 use crate::model::{SearchFilter, StandardResponse, User};
 use crate::security::jwt::JwtUtil;
 use crate::services::user::UserService;
-use crate::util::PermissionBitfieldUtil;
+use crate::util::{app_id_from_token, PermissionBitfieldUtil};
 
 pub struct AuthHandler {
     record_manager: Arc<RecordManager>,
@@ -61,6 +61,7 @@ impl AuthHandler {
 
         let is_dev = self.resolve_dev_flag(&user);
         user.dev = Some(is_dev);
+        apply_app_id_from_token(&self.record_manager, &mut user);
 
         let next_version = user.login_version.unwrap_or(0) + 1;
         let refresh_token = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
@@ -230,6 +231,7 @@ impl AuthHandler {
             let is_dev = self.resolve_dev_flag(&user);
             let mut user = user;
             user.dev = Some(is_dev);
+            apply_app_id_from_token(&self.record_manager, &mut user);
             let mut info = user.to_info_map();
             self.enrich_account_meta(&user, &mut info);
             self.enrich_user_info_with_bitfield(&user, &mut info);
@@ -670,6 +672,13 @@ fn string_list_from_value(value: Option<&Value>) -> Vec<String> {
             .collect(),
         Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
         _ => vec![],
+    }
+}
+
+/// Always derive menu home app_id from decrypted app_token (Java mapMainAccountToUser parity).
+fn apply_app_id_from_token(record_manager: &RecordManager, user: &mut User) {
+    if let Some(app_id) = app_id_from_token(record_manager, user.app_token.as_deref()) {
+        user.app_id = Some(app_id);
     }
 }
 

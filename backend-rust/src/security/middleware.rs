@@ -16,7 +16,7 @@ use tower_http::{
 use tracing::warn;
 
 use crate::security::auth::AuthUser;
-use crate::util::{parse_app_token, is_sub_user_role};
+use crate::util::{app_id_from_token, parse_app_token, is_sub_user_role};
 use crate::security::rate_limit::RateLimiter;
 use crate::state::AppState;
 
@@ -174,8 +174,8 @@ fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
     }
 
     let meta = parse_app_token(&state.record_manager, &user.app_token);
-    if !meta.app_id.is_empty() {
-        user.app_id = meta.app_id;
+    if let Some(app_id) = app_id_from_token(&state.record_manager, Some(&user.app_token)) {
+        user.app_id = app_id;
     }
     user.dev = meta.access_right > 0;
     user.is_sub_user = user.is_sub_user || is_sub_user_role(&meta.role);

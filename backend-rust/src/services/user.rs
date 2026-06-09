@@ -5,7 +5,7 @@ use tracing::{info, warn};
 
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, User};
-use crate::util::{parse_app_token, is_dev_access_right, PermissionBitfieldUtil};
+use crate::util::{app_id_from_token, parse_app_token, is_dev_access_right, PermissionBitfieldUtil};
 use crate::security::user_access::has_any_action_permission;
 
 const CSM_APP_ID: &str = "csm";
@@ -775,20 +775,7 @@ fn string_list_from_value(value: Option<&Value>) -> Vec<String> {
 }
 
 fn extract_app_id_from_token(record_manager: &RecordManager, token: Option<&str>) -> Option<String> {
-    let token = token?.trim();
-    if token.is_empty() {
-        return None;
-    }
-    if let Ok(decrypted) = record_manager.csm_decrypt(token) {
-        if let Some(part) = decrypted.split("_____").next().filter(|s| !s.is_empty()) {
-            return Some(part.to_string());
-        }
-    }
-    token
-        .split("_____")
-        .next()
-        .filter(|s| !s.is_empty())
-        .map(String::from)
+    app_id_from_token(record_manager, token)
 }
 
 fn extract_access_right_from_token(record_manager: &RecordManager, token: &str) -> Option<i32> {
