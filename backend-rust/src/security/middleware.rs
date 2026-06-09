@@ -177,7 +177,8 @@ fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
     if let Some(app_id) = app_id_from_token(&state.record_manager, Some(&user.app_token)) {
         user.app_id = app_id;
     }
-    user.dev = meta.access_right > 0;
+    // Mirror Java User.getDev(): keep DB/session dev flag; token access_right is additive.
+    user.dev = user.dev || meta.access_right > 0;
     user.is_sub_user = user.is_sub_user || is_sub_user_role(&meta.role);
     if user.dev {
         user.data_scope = "ALL".into();

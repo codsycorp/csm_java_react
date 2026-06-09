@@ -29,6 +29,9 @@ impl UserAccessContext {
         };
         let is_sub_user = user.is_sub_user || is_sub_user_role(&token_meta.role);
         let menus_permissions = user.menus_permissions.clone().unwrap_or_default();
+        let app_id = crate::util::app_id_from_token(record_manager, Some(&user.app_token))
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| user.app_id.clone());
 
         let mut permissions = user.permissions.clone();
         let parsed_token = PermissionBitfieldUtil::parse_security_token(user.permission_bitfield.as_deref());
@@ -62,7 +65,7 @@ impl UserAccessContext {
             ))
         };
 
-        if !user.dev && is_admin && has_legacy_full_app_scope(&menus_permissions, &user.app_id) {
+        if !user.dev && is_admin && has_legacy_full_app_scope(&menus_permissions, &app_id) {
             data_scope = "ALL".into();
             permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
                 &permissions,
@@ -83,7 +86,7 @@ impl UserAccessContext {
             is_admin,
             is_dev: user.dev,
             is_sub_user,
-            app_id: user.app_id.clone(),
+            app_id,
             permissions,
             menus_permissions,
             data_scope,
@@ -448,5 +451,97 @@ fn is_p_type_zero(value: Option<&Value>) -> bool {
         }
         Some(Value::Bool(false)) => true,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+    use crate::data::RecordManager;
+    use crate::model::SearchFilter;
+    use std::sync::Arc;
+
+    fn lmkt_broadcast_filter() -> SearchFilter {
+        SearchFilter {
+            operator: "AND".into(),
+            conditions: vec![
+                SearchFilter::eq("p_name", "broadcast_lmkt"),
+                SearchFilter::eq("p_type", 0i64),
+            ],
+            ..Default::default()
+        }
+    }
+
+    fn lmkt_ctx(is_dev: bool) -> UserAccessContext {
+        UserAccessContext {
+            is_admin: !is_dev,
+            is_dev,
+            is_sub_user: false,
+            app_id: "lmkt".into(),
+            permissions: vec!["admin".into(), "view".into()],
+            menus_permissions: vec![],
+            data_scope: "ALL".into(),
+            data_app_ids: vec![],
+            owner_candidates: vec![],
+        }
+    }
+
+    #[test]
+    fn broadcast_variant_matches_home_app() {
+        assert!(is_same_or_broadcast_variant("lmkt", "broadcast_lmkt"));
+        assert!(is_same_or_broadcast_variant("lmkt", "lmkt"));
+        assert!(!is_same_or_broadcast_variant("csm", "broadcast_lmkt"));
+    }
+
+    #[test]
+    fn autosetup_read_allowed_for_broadcast_home_template() {
+        let filter = lmkt_broadcast_filter();
+        let ctx = lmkt_ctx(false);
+        assert!(is_allowed_autosetup_template_read(
+            "csm",
+            "sys_autos",
+            false,
+            &filter,
+            Some(&ctx),
+        ));
+    }
+
+    #[test]
+    fn sys_autos_broadcast_lmkt_row_survives_non_dev_filter() {
+        std::env::set_var("APP_DATA_DIR", "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas");
+        std::env::set_var(
+            "ROCKSDB_ROOT_DIR",
+            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/database",
+        );
+        let config = AppConfig::from_env().expect("config");
+        let rm = Arc::new(RecordManager::new(config).expect("record manager"));
+        let filter = lmkt_broadcast_filter();
+        let data = rm.filter("csm", "sys_autos", &filter);
+        let rows = data.get("rows").cloned().unwrap_or(Value::Array(vec![]));
+        let raw_count = rows.as_array().map(|a| a.len()).unwrap_or(0);
+        assert!(raw_count > 0, "expected broadcast_lmkt row in RocksDB");
+
+        let ctx = lmkt_ctx(false);
+        let filtered = filter_sys_autos_rows(rows, &filter, Some(&ctx));
+        let filtered_count = filtered.as_array().map(|a| a.len()).unwrap_or(0);
+        assert_eq!(filtered_count, raw_count, "non-dev lmkt user should keep broadcast row");
+
+        let first = filtered.as_array().and_then(|a| a.first()).expect("row");
+        assert_eq!(
+            first.get("p_name").and_then(|v| v.as_str()),
+            Some("broadcast_lmkt")
+        );
+        assert!(is_p_type_zero(first.get("p_type")));
+        let p_code = first
+            .get("p_code")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert!(!p_code.is_empty(), "p_code must be returned for client decrypt");
+        let decrypted = rm.csm_decrypt(p_code).expect("p_code decrypt");
+        assert!(
+            !decrypted.trim().is_empty(),
+            "decrypted broadcast home template must not be empty"
+        );
     }
 }
