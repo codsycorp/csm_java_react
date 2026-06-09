@@ -5,7 +5,8 @@ use tracing::{info, warn};
 
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, User};
-use crate::util::PermissionBitfieldUtil;
+use crate::util::{parse_app_token, is_dev_access_right, PermissionBitfieldUtil};
+use crate::security::user_access::has_any_action_permission;
 
 const CSM_APP_ID: &str = "csm";
 const ACCOUNTS_TABLE: &str = "csm_accounts";
@@ -374,6 +375,7 @@ impl UserService {
             if menus_permissions.is_empty() && !app_id.is_empty() {
                 menus_permissions = vec![app_id.clone()];
             }
+            user.data_scope = Some("ALL".into());
         }
 
         user.permissions = Some(permissions.clone());
@@ -388,6 +390,7 @@ impl UserService {
         user.permission_bitfield = Some(PermissionBitfieldUtil::to_compact_token(bitfield));
         user.permission_schema_version = Some(PermissionBitfieldUtil::SCHEMA_V3.into());
         user.data_scope = Some(PermissionBitfieldUtil::resolve_data_scope(bitfield));
+        user.is_sub_user = Some(false);
         user
     }
 
@@ -402,20 +405,50 @@ impl UserService {
         None
     }
 
+    fn find_role_by_code(&self, app_id: &str, role_code: &str) -> Option<Map<String, Value>> {
+        if role_code.trim().is_empty() {
+            return None;
+        }
+        let effective_app_id = if app_id.trim().is_empty() {
+            CSM_APP_ID
+        } else {
+            app_id
+        };
+        for field in ["role_code", "id"] {
+            let filter = SearchFilter::eq(field, role_code);
+            let record = self
+                .record_manager
+                .find(effective_app_id, "csm_roles", &filter);
+            if !record.is_empty() {
+                return Some(record);
+            }
+        }
+        None
+    }
+
+    /// Mirrors Java `mapSubUserRecordToUser`.
     fn map_sub_user(&self, record: &Map<String, Value>) -> Option<User> {
         let parent_key = record.get("parent_account_id").and_then(|v| v.as_str())?;
-        let mut user = if let Some(parent_record) = self.find_parent_account(parent_key) {
-            self.map_record_to_user(&parent_record, false)
-        } else {
-            self.find_by_id(parent_key)?
-        };
-        user.id = record.get("id").and_then(|v| v.as_str()).map(String::from);
-        user.username = record
-            .get("login_identifier")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        let parent_record = self.find_parent_account(parent_key)?;
+        let mut user = self.map_record_to_user(&parent_record, false);
+
+        if let Some(id) = record.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            user.id = Some(id.to_string());
+        }
+        if let Some(login) = record.get("login_identifier").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            user.username = Some(login.to_string());
+            if user.email.as_deref().unwrap_or("").is_empty() {
+                user.email = Some(login.to_string());
+            }
+        }
         if let Some(email) = record.get("email").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
             user.email = Some(email.to_string());
+        }
+        if let Some(username) = record.get("username").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            user.username = Some(username.to_string());
+        }
+        if let Some(phone) = record.get("phoneNumber").and_then(|v| v.as_str()) {
+            user.phone_number = Some(phone.to_string());
         }
         if let Some(full_name) = record.get("full_name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
             user.full_name = Some(full_name.to_string());
@@ -426,62 +459,235 @@ impl UserService {
         if let Some(pass) = record.get("pass").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
             user.password = Some(pass.to_string());
         }
-        user.permissions = record
-            .get("permissions")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
-        user.menus_permissions = record
-            .get("menusPermissions")
-            .or_else(|| record.get("menus_permissions"))
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
+        if let Some(actived) = record.get("actived").and_then(|v| v.as_bool()) {
+            user.actived = Some(actived);
+        }
+
+        if let Some(refresh) = record
+            .get("refresh")
+            .or_else(|| record.get("refresh_token"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            user.refresh_token = Some(refresh.to_string());
+        }
+        user.login_version = record
+            .get("login_version")
+            .or_else(|| record.get("loginVersion"))
+            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            .map(|v| v as i32)
+            .or(Some(0));
+
+        if let Some(scope) = record.get("dataScope").or_else(|| record.get("data_scope")).and_then(|v| v.as_str()) {
+            user.data_scope = Some(scope.to_string());
+        }
+        if let Some(dept) = record.get("dept_id").and_then(|v| v.as_str()) {
+            user.dept_id = Some(dept.to_string());
+        }
+        if let Some(branch) = record.get("branch_id").and_then(|v| v.as_str()) {
+            user.branch_id = Some(branch.to_string());
+        }
+
+        let mut direct_permissions = string_list_from_value(record.get("permissions"));
+        let mut direct_menus = string_list_from_value(
+            record
+                .get("menusPermissions")
+                .or_else(|| record.get("menus_permissions")),
+        );
+        let permissions_add = string_list_from_value(record.get("permissionsAdd"));
+        let permissions_deny = string_list_from_value(record.get("permissionsDeny"));
+        let menus_add = string_list_from_value(
+            record
+                .get("menusPermissionsAdd")
+                .or_else(|| record.get("menus_permissions_add")),
+        );
+        let menus_deny = string_list_from_value(
+            record
+                .get("menusPermissionsDeny")
+                .or_else(|| record.get("menus_permissions_deny")),
+        );
+
+        if let Some(sub_token) = record.get("app_token").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            user.app_token = Some(sub_token.to_string());
+            let meta = parse_app_token(&self.record_manager, sub_token);
+            if !meta.app_id.is_empty() {
+                user.app_id = Some(meta.app_id);
+            }
+            user.dev = Some(is_dev_access_right(meta.access_right));
+        }
+
+        let group_id = record.get("group_id").and_then(|v| v.as_str()).unwrap_or("");
+        let role_lookup_app_id = user
+            .app_id
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                record
+                    .get("app_id")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .or_else(|| {
+                parent_record
+                    .get("app_id")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .unwrap_or_default();
+
+        let mut has_authoritative_role = false;
+        let mut role_bitfield: Option<String> = None;
+        if !group_id.is_empty() {
+            if let Some(role_record) = self.find_role_by_code(&role_lookup_app_id, group_id) {
+                has_authoritative_role = true;
+                role_bitfield = role_record
+                    .get("permissionBitfield")
+                    .or_else(|| role_record.get("permission_bitfield"))
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(String::from);
+
+                let role_perms = string_list_from_value(role_record.get("permissions"));
+                if !role_perms.is_empty() {
+                    direct_permissions = role_perms;
+                } else if let Some(raw) = role_bitfield.as_deref() {
+                    direct_permissions =
+                        PermissionBitfieldUtil::permissions_from_bitfield(Some(raw));
+                }
+
+                let role_menus = string_list_from_value(
+                    role_record
+                        .get("menusPermissions")
+                        .or_else(|| role_record.get("menus_permissions")),
+                );
+                if !role_menus.is_empty() {
+                    direct_menus = role_menus;
+                } else if let Some(raw) = role_bitfield.as_deref() {
+                    direct_menus = PermissionBitfieldUtil::menus_from_bitfield(Some(raw));
+                }
+            }
+
+            if (direct_menus.is_empty() || direct_permissions.is_empty())
+                && !has_authoritative_role
+            {
+                if let Some(group) = find_group_right(&parent_record, group_id) {
+                    let group_perms = string_list_from_value(group.get("permissions"));
+                    if !group_perms.is_empty() {
+                        direct_permissions = group_perms;
+                    }
+                    let group_menus = string_list_from_value(
+                        group
+                            .get("menusPermissions")
+                            .or_else(|| group.get("menus_permissions")),
+                    );
+                    if !group_menus.is_empty() {
+                        direct_menus = group_menus;
+                    }
+                }
+            }
+        }
 
         let sub_bitfield = record
             .get("permissionBitfield")
             .or_else(|| record.get("permission_bitfield"))
             .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty());
-        if let Some(raw) = sub_bitfield {
-            let perms = PermissionBitfieldUtil::permissions_from_bitfield(Some(raw));
-            let menus = PermissionBitfieldUtil::menus_from_bitfield(Some(raw));
-            if !perms.is_empty() {
-                user.permissions = Some(perms);
-            }
-            if !menus.is_empty() {
-                user.menus_permissions = Some(menus);
-            }
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+
+        let mut bitfield_from_record = sub_bitfield.clone();
+        if has_authoritative_role
+            && role_bitfield.is_some()
+            && direct_permissions.is_empty()
+            && direct_menus.is_empty()
+        {
+            bitfield_from_record = role_bitfield;
         }
 
-        user.data_app_ids = Some(vec![]);
-        if let Some(sub_token) = record.get("app_token").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-            user.app_token = Some(sub_token.to_string());
-            if let Some(app_id) = extract_app_id_from_token(&self.record_manager, Some(sub_token)) {
-                user.app_id = Some(app_id);
-            }
+        let (mut effective_permissions, mut effective_menus) =
+            if let Some(raw) = bitfield_from_record.as_deref() {
+                (
+                    PermissionBitfieldUtil::permissions_from_bitfield(Some(raw)),
+                    PermissionBitfieldUtil::menus_from_bitfield(Some(raw)),
+                )
+            } else {
+                (direct_permissions.clone(), direct_menus.clone())
+            };
+
+        effective_permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+            &effective_permissions,
+            &permissions_add,
+        );
+        effective_permissions = PermissionBitfieldUtil::subtract_case_insensitive(
+            &effective_permissions,
+            &permissions_deny,
+        );
+        effective_menus =
+            PermissionBitfieldUtil::merge_unique_case_insensitive(&effective_menus, &menus_add);
+        effective_menus =
+            PermissionBitfieldUtil::subtract_case_insensitive(&effective_menus, &menus_deny);
+
+        if effective_permissions.is_empty() && !direct_permissions.is_empty() {
+            effective_permissions = direct_permissions;
         }
-        if user.app_id.as_deref().unwrap_or("").is_empty() {
-            if let Some(app_id) = record.get("app_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-                user.app_id = Some(app_id.to_string());
-            }
+        if effective_menus.is_empty() && !direct_menus.is_empty() {
+            effective_menus = direct_menus;
         }
 
-        let mut permissions = user.permissions.take().unwrap_or_default();
-        permissions = PermissionBitfieldUtil::subtract_case_insensitive(
-            &permissions,
+        effective_permissions = PermissionBitfieldUtil::subtract_case_insensitive(
+            &effective_permissions,
             &["admin".into(), "dev".into()],
         );
-        user.permissions = Some(permissions.clone());
+        if !has_any_action_permission(&effective_permissions) {
+            effective_permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                &effective_permissions,
+                &["view".into()],
+            );
+        }
+        if effective_permissions.is_empty() {
+            effective_permissions = vec!["view".into(), "scope:owner".into()];
+        }
 
-        let menus_permissions = user.menus_permissions.clone().unwrap_or_default();
-        let is_dev = user.dev.unwrap_or(false);
-        let bitfield =
-            PermissionBitfieldUtil::build_bitfield(&permissions, &menus_permissions, is_dev);
+        user.permissions = Some(effective_permissions.clone());
+        user.menus_permissions = if effective_menus.is_empty() {
+            None
+        } else {
+            Some(effective_menus.clone())
+        };
+        user.data_app_ids = Some(vec![]);
+        user.is_sub_user = Some(true);
+        user.dev = Some(false);
+
+        let bitfield = PermissionBitfieldUtil::build_bitfield(
+            &effective_permissions,
+            &effective_menus,
+            false,
+        );
         user.permission_bitfield = Some(PermissionBitfieldUtil::to_compact_token(bitfield));
         user.permission_schema_version = Some(PermissionBitfieldUtil::SCHEMA_V3.into());
         user.data_scope = Some(PermissionBitfieldUtil::resolve_data_scope(bitfield));
 
         Some(user)
     }
+}
+
+fn find_group_right<'a>(
+    parent_record: &'a Map<String, Value>,
+    group_id: &str,
+) -> Option<&'a Map<String, Value>> {
+    parent_record
+        .get("group_rights")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| {
+            arr.iter().find_map(|item| {
+                let obj = item.as_object()?;
+                let gid = obj.get("group_id").and_then(|v| v.as_str()).unwrap_or("");
+                if gid == group_id {
+                    Some(obj)
+                } else {
+                    None
+                }
+            })
+        })
 }
 
 fn sync_refresh_fields(merged: &mut Map<String, Value>, fields: &Map<String, Value>) {

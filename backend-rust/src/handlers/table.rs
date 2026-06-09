@@ -5,6 +5,11 @@ use serde_json::{Map, Value};
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, StandardResponse};
 use crate::security::auth::AuthUser;
+use crate::security::user_access::{
+    filter_sys_autos_rows, is_allowed_autosetup_template_read, resolve_required_action,
+    validate_permission_group_app_boundary, validate_system_user_table_access, UserAccessContext,
+    validate_action_permission,
+};
 use crate::services::chat::ChatPersistenceService;
 use crate::services::user::UserService;
 use crate::socket::SocketIo;
@@ -282,6 +287,51 @@ impl TableHandler {
         let app_id_owned = resolve_request_app_id(params, auth);
         let app_id = app_id_owned.as_str();
         let table = params.get("obj_name").and_then(|v| v.as_str()).unwrap_or("");
+        let access = UserAccessContext::from_auth(auth, &self.record_manager);
+
+        let filter: SearchFilter = params
+            .get("e_where")
+            .or_else(|| params.get("filter"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        let allow_scoped_autosetup = is_allowed_autosetup_template_read(
+            app_id,
+            table,
+            is_update,
+            &filter,
+            access.as_ref(),
+        );
+
+        if !allow_scoped_autosetup {
+            if let Some(message) =
+                validate_action_permission(access.as_ref(), &resolve_required_action(params, is_update))
+            {
+                out.insert("success".into(), Value::Bool(false));
+                out.insert("message".into(), Value::String(message));
+                return out;
+            }
+        }
+
+        if let Some(message) = validate_system_user_table_access(
+            table,
+            is_update,
+            params,
+            &filter,
+            access.as_ref(),
+        ) {
+            out.insert("success".into(), Value::Bool(false));
+            out.insert("message".into(), Value::String(message));
+            return out;
+        }
+
+        if let Some(message) =
+            validate_permission_group_app_boundary(app_id, table, access.as_ref())
+        {
+            out.insert("success".into(), Value::Bool(false));
+            out.insert("message".into(), Value::String(message));
+            return out;
+        }
 
         if RESERVED_INDEX_IDS.contains(&table) {
             out.insert("success".into(), Value::Bool(false));
@@ -293,32 +343,25 @@ impl TableHandler {
         }
 
         if table == "index" {
-            return self.handle_index_table_operation(app_id, params, is_update, auth);
+            return self.handle_index_table_operation(app_id, params, is_update, access.as_ref());
         }
 
-        // "index" is exempted from cross-app check — handled above.
-        if table != "index" && !table.starts_with("csm_") && !table.starts_with("sys_") {
-            if let Some(user) = auth {
-                if !user.can_access_app_data(app_id) {
+        // Cross-app protection for business tables — mirrors Java (dev/csm bypass via can_access_app_data).
+        if !table.starts_with("csm_") && !table.starts_with("sys_") {
+            if let Some(ctx) = access.as_ref() {
+                if !ctx.is_dev && !ctx.can_access_app_data(app_id) {
                     let action = if is_update { "write" } else { "read" };
                     out.insert("success".into(), Value::Bool(false));
                     out.insert(
                         "message".into(),
                         Value::String(format!(
-                            "Cross-app {action} denied for '{app_id}' (user.app_id='{}')",
-                            user.app_id
+                            "Bạn không có quyền {action} dữ liệu của ứng dụng '{app_id}'"
                         )),
                     );
                     return out;
                 }
             }
         }
-
-        let filter: SearchFilter = params
-            .get("e_where")
-            .or_else(|| params.get("filter"))
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
 
         if is_update {
             let command = params
@@ -421,10 +464,13 @@ impl TableHandler {
             let data = self.record_manager.filter_with_pagination(
                 app_id, table, &filter, lastkey, None, take,
             );
-            let rows = data.get("rows")
+            let mut rows = data.get("rows")
                 .or_else(|| data.get("data"))
                 .cloned()
                 .unwrap_or(Value::Array(vec![]));
+            if app_id == "csm" && table == "sys_autos" {
+                rows = filter_sys_autos_rows(rows, &filter, access.as_ref());
+            }
             out.insert("success".into(), Value::Bool(true));
             out.insert("rows".into(), rows);
             if let Some(cursor_val) = data.get("nextCursor") {
@@ -614,7 +660,7 @@ impl TableHandler {
         app_id: &str,
         params: &Map<String, Value>,
         is_update: bool,
-        auth: Option<&AuthUser>,
+        access: Option<&UserAccessContext>,
     ) -> Map<String, Value> {
         let mut out = Map::new();
         let filter: SearchFilter = params
@@ -623,7 +669,6 @@ impl TableHandler {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
 
-        let data_app_id = resolve_index_app_id(app_id, auth, &filter, is_update);
         let take = parse_usize_param(params.get("take"));
         let offset = parse_usize_param(params.get("offset"));
         let limit = parse_usize_param(params.get("limit"));
@@ -636,10 +681,10 @@ impl TableHandler {
         let filter_result = if let Some(lim) = limit.filter(|&n| n > 0) {
             let safe_offset = offset.unwrap_or(0);
             self.record_manager
-                .filter_with_pagination(&data_app_id, "index", &filter, None, Some(safe_offset), lim)
+                .filter_with_pagination(app_id, "index", &filter, None, Some(safe_offset), lim)
         } else if let Some(t) = take.filter(|&n| n > 0) {
             self.record_manager.filter_with_pagination(
-                &data_app_id,
+                app_id,
                 "index",
                 &filter,
                 lastkey.as_deref(),
@@ -647,7 +692,7 @@ impl TableHandler {
                 t,
             )
         } else {
-            self.record_manager.filter(&data_app_id, "index", &filter)
+            self.record_manager.filter(app_id, "index", &filter)
         };
 
         let tables: Vec<Map<String, Value>> = filter_result
@@ -661,19 +706,6 @@ impl TableHandler {
             .unwrap_or_default();
 
         if !is_update {
-            if let Some(user) = auth {
-                if !user.dev && !user.can_access_app_data(&data_app_id) {
-                    out.insert("success".into(), Value::Bool(false));
-                    out.insert(
-                        "message".into(),
-                        Value::String(format!(
-                            "Bạn không có quyền xem dữ liệu của ứng dụng '{data_app_id}'"
-                        )),
-                    );
-                    return out;
-                }
-            }
-
             let rows = extract_index_read_rows(&tables);
             out.insert("success".into(), Value::Bool(true));
             out.insert("id".into(), Value::String("index".into()));
@@ -684,17 +716,17 @@ impl TableHandler {
             return out;
         }
 
-        if let Some(user) = auth {
-            if !user.dev && !user.can_access_app_data(&data_app_id) {
+        if let Some(ctx) = access {
+            if !ctx.is_dev && !ctx.can_access_app_data(app_id) {
                 out.insert("success".into(), Value::Bool(false));
-                out.insert(
-                    "message".into(),
-                    Value::String(format!(
-                        "Bạn không có quyền thay đổi dữ liệu của ứng dụng '{data_app_id}'"
-                    )),
-                );
-                return out;
-            }
+                    out.insert(
+                        "message".into(),
+                        Value::String(format!(
+                            "Bạn không có quyền thay đổi dữ liệu của ứng dụng '{app_id}'"
+                        )),
+                    );
+                    return out;
+                }
         }
 
         let command = params
@@ -722,7 +754,7 @@ impl TableHandler {
             let id_filter = SearchFilter::eq("id", record_id);
             existing_rows = self
                 .record_manager
-                .filter(&data_app_id, "index", &id_filter)
+                .filter(app_id, "index", &id_filter)
                 .get("rows")
                 .and_then(|v| v.as_array())
                 .map(|arr| {
@@ -745,7 +777,7 @@ impl TableHandler {
                 }
                 if self
                     .record_manager
-                    .exists_by_primary_key(&data_app_id, "index", &obj_update, &["id".to_string()])
+                    .exists_by_primary_key(app_id, "index", &obj_update, &["id".to_string()])
                 {
                     out.insert("success".into(), Value::Bool(false));
                     out.insert(
@@ -757,10 +789,10 @@ impl TableHandler {
                 if !existing_rows.is_empty() {
                     // fall through to update semantics like Java
                 } else {
-                    match self.record_manager.create_record(&data_app_id, "index", obj_update.clone(), None)
+                    match self.record_manager.create_record(app_id, "index", obj_update.clone(), None)
                     {
                         Ok(cmd) => {
-                            self.emit_update_notification(&data_app_id, "index", &cmd, &obj_update);
+                            self.emit_update_notification(app_id, "index", &cmd, &obj_update);
                             out.insert("success".into(), Value::Bool(true));
                             out.insert("command".into(), Value::String(cmd));
                             out.insert("message".into(), Value::String("Thao tác thành công".into()));
@@ -778,8 +810,8 @@ impl TableHandler {
             "delete" => {
                 for row in &existing_rows {
                     if row.get("id").and_then(|v| v.as_str()) == Some(record_id) {
-                        if self.record_manager.delete_record(&data_app_id, "index", row).is_ok() {
-                            self.emit_update_notification(&data_app_id, "index", "delete", row);
+                        if self.record_manager.delete_record(app_id, "index", row).is_ok() {
+                            self.emit_update_notification(app_id, "index", "delete", row);
                             out.insert("success".into(), Value::Bool(true));
                             out.insert("command".into(), Value::String("delete".into()));
                             out.insert("message".into(), Value::String("Thao tác thành công".into()));
@@ -809,9 +841,9 @@ impl TableHandler {
                 for (k, v) in obj_update {
                     merged.insert(k, v);
                 }
-                match self.record_manager.create_record(&data_app_id, "index", merged.clone(), None) {
+                match self.record_manager.create_record(app_id, "index", merged.clone(), None) {
                     Ok(cmd) => {
-                        self.emit_update_notification(&data_app_id, "index", &cmd, &merged);
+                        self.emit_update_notification(app_id, "index", &cmd, &merged);
                         out.insert("success".into(), Value::Bool(true));
                         out.insert("command".into(), Value::String(cmd));
                         out.insert("message".into(), Value::String("Thao tác thành công".into()));
@@ -877,72 +909,4 @@ fn resolve_request_app_id(params: &Map<String, Value>, auth: Option<&AuthUser>) 
         }
     }
     "default".to_string()
-}
-
-/// Index/menu reads must follow the authenticated user's home app unless dev/csm explicitly switches app.
-fn resolve_index_app_id(
-    requested: &str,
-    auth: Option<&AuthUser>,
-    filter: &SearchFilter,
-    is_update: bool,
-) -> String {
-    let requested = requested.trim();
-    let index_id = index_filter_target_id(filter);
-    let is_menu_query = index_id
-        .as_deref()
-        .is_some_and(|id| id.eq_ignore_ascii_case("menu"));
-
-    let Some(user) = auth else {
-        return if requested.is_empty() {
-            "default".to_string()
-        } else {
-            requested.to_string()
-        };
-    };
-
-    let user_app = user.app_id.trim();
-    if user_app.is_empty() {
-        return if requested.is_empty() {
-            "default".to_string()
-        } else {
-            requested.to_string()
-        };
-    }
-
-    if is_menu_query && !is_update && !user.dev && !user_app.eq_ignore_ascii_case("csm") {
-        return user_app.to_string();
-    }
-
-    if user.dev || user_app.eq_ignore_ascii_case("csm") {
-        if !requested.is_empty() && user.can_access_app_data(requested) {
-            return requested.to_string();
-        }
-        return user_app.to_string();
-    }
-
-    if !requested.is_empty() && user.can_access_app_data(requested) {
-        return requested.to_string();
-    }
-
-    user_app.to_string()
-}
-
-fn index_filter_target_id(filter: &SearchFilter) -> Option<String> {
-    if filter.field.eq_ignore_ascii_case("id")
-        && filter.filter_type.eq_ignore_ascii_case("eq")
-    {
-        return filter
-            .value
-            .as_str()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(String::from);
-    }
-
-    for condition in &filter.conditions {
-        if let Some(id) = index_filter_target_id(condition) {
-            return Some(id);
-        }
-    }
-    None
 }

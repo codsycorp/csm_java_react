@@ -33,6 +33,7 @@ pub struct User {
     pub dept_id: Option<String>,
     pub branch_id: Option<String>,
     pub dev: Option<bool>,
+    pub is_sub_user: Option<bool>,
     #[serde(alias = "login_version")]
     pub login_version: Option<i32>,
 }

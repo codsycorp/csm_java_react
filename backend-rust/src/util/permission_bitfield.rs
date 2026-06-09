@@ -234,6 +234,17 @@ impl PermissionBitfieldUtil {
     pub fn resolve_data_scope(bitfield: u64) -> String {
         resolve_data_scope_v3(normalize_to_single_token(bitfield))
     }
+
+    /// Mirrors Java `TableHandler.hasAdminPrivilegeFromToken`.
+    pub fn has_admin_privilege(bitfield: u64) -> bool {
+        let token = normalize_to_single_token(bitfield);
+        Self::has_bit(token, ACTION_VIEW as i32)
+            && Self::has_bit(token, ACTION_CREATE as i32)
+            && Self::has_bit(token, ACTION_EDIT as i32)
+            && Self::has_bit(token, ACTION_DELETE as i32)
+            && Self::has_bit(token, ACTION_EXPORT as i32)
+            && Self::resolve_data_scope(token).eq_ignore_ascii_case("ALL")
+    }
 }
 
 fn resolve_data_scope_v3(token: u64) -> String {

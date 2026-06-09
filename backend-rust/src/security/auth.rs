@@ -4,11 +4,16 @@ use serde_json::Value;
 pub struct AuthUser {
     pub user_id: String,
     pub username: String,
+    pub email: String,
+    pub phone_number: String,
     pub app_token: String,
     pub login_version: i32,
     pub permissions: Vec<String>,
     pub menus_permissions: Option<Vec<String>>,
+    pub permission_bitfield: Option<String>,
+    pub data_scope: String,
     pub dev: bool,
+    pub is_sub_user: bool,
     pub app_id: String,
     pub data_app_ids: Vec<String>,
     pub extra: serde_json::Map<String, Value>,
@@ -19,26 +24,36 @@ impl AuthUser {
         crate::model::User {
             id,
             username,
+            email,
+            phone_number,
             app_token,
             login_version,
             permissions,
             menus_permissions,
+            permission_bitfield,
+            data_scope,
             dev,
             app_id,
             data_app_ids,
             ..
         }: crate::model::User,
+        is_sub_user: bool,
     ) -> Self {
         let permissions = permissions.unwrap_or_default();
         let is_dev = dev.unwrap_or(false);
         Self {
             user_id: id.unwrap_or_default(),
             username: username.unwrap_or_default(),
+            email: email.unwrap_or_default(),
+            phone_number: phone_number.unwrap_or_default(),
             app_token: app_token.unwrap_or_default(),
             login_version: login_version.unwrap_or(0),
             menus_permissions,
+            permission_bitfield,
+            data_scope: data_scope.unwrap_or_default(),
             permissions,
             dev: is_dev,
+            is_sub_user,
             app_id: app_id.unwrap_or_default(),
             data_app_ids: data_app_ids.unwrap_or_default(),
             extra: serde_json::Map::new(),
@@ -59,6 +74,9 @@ impl AuthUser {
         }
         if self.app_id.eq_ignore_ascii_case(target) {
             return true;
+        }
+        if self.is_sub_user {
+            return false;
         }
         self.data_app_ids
             .iter()

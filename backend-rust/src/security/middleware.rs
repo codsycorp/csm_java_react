@@ -16,6 +16,7 @@ use tower_http::{
 use tracing::warn;
 
 use crate::security::auth::AuthUser;
+use crate::util::{parse_app_token, is_dev_access_right, is_sub_user_role, PermissionBitfieldUtil};
 use crate::security::rate_limit::RateLimiter;
 use crate::state::AppState;
 
@@ -143,18 +144,28 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
     for token in bearer_token(headers).into_iter().chain(csm_token(headers)) {
         if state.jwt.validate_token(&token) {
             if let Some(user) = state.user_service.resolve_from_jwt_with_util(&state.jwt, &token) {
-                return Some(enrich_auth_user(state, AuthUser::from_user(user)));
+                return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
         }
     }
 
     if let Some(rt) = refresh_token_from_request(headers) {
         if let Some(user) = state.user_service.find_by_refresh_token(&rt) {
-            return Some(enrich_auth_user(state, AuthUser::from_user(user)));
+            return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
         }
     }
 
     None
+}
+
+fn auth_user_from_model(state: &AppState, user: crate::model::User) -> AuthUser {
+    let meta = user
+        .app_token
+        .as_deref()
+        .map(|token| parse_app_token(&state.record_manager, token))
+        .unwrap_or_default();
+    let is_sub_user = user.is_sub_user.unwrap_or_else(|| is_sub_user_role(&meta.role));
+    AuthUser::from_user(user, is_sub_user)
 }
 
 fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
@@ -183,14 +194,18 @@ fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
     }
 
     user.dev = is_dev;
+    user.is_sub_user = is_sub_user_role(
+        &parse_app_token(&state.record_manager, &user.app_token).role,
+    );
     if is_dev {
-        user.permissions = crate::util::PermissionBitfieldUtil::merge_unique_case_insensitive(
+        user.permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
             &user.permissions,
             &["dev".into(), "admin".into(), "scope:all".into()],
         );
         if !user.app_id.is_empty() {
             user.menus_permissions = Some(vec![user.app_id.clone()]);
         }
+        user.data_scope = "ALL".into();
     }
 
     user
