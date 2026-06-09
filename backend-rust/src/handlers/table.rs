@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
-use crate::data::RecordManager;
+use crate::data::{RecordManager, DEFAULT_FILTER_TAKE};
 use crate::model::{SearchFilter, StandardResponse};
 use crate::security::auth::AuthUser;
 use crate::security::user_access::{
@@ -472,12 +472,27 @@ impl TableHandler {
                 }
             }
         } else {
-            let take = params.get("take").and_then(|v| v.as_u64()).unwrap_or(500) as usize;
-            let cursor = params.get("cursor").and_then(|v| v.as_str());
-            let lastkey = params.get("lastkey").and_then(|v| v.as_str()).or(cursor);
-            let data = self.record_manager.filter_with_pagination(
-                app_id, table, &filter, lastkey, None, take,
-            );
+            // Mirror Java handleSelectTableOperation: paginate only when client asks for it.
+            let limit = params.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
+            let take = params.get("take").and_then(|v| v.as_u64()).map(|n| n as usize);
+            let lastkey = params
+                .get("lastkey")
+                .and_then(|v| v.as_str())
+                .or_else(|| params.get("cursor").and_then(|v| v.as_str()));
+
+            let data = if take.is_some() || lastkey.is_some() || limit.is_some() {
+                let take_val = take.or(limit).unwrap_or(DEFAULT_FILTER_TAKE);
+                self.record_manager.filter_with_pagination(
+                    app_id,
+                    table,
+                    &filter,
+                    lastkey,
+                    None,
+                    take_val,
+                )
+            } else {
+                self.record_manager.filter(app_id, table, &filter)
+            };
             let mut rows = data.get("rows")
                 .or_else(|| data.get("data"))
                 .cloned()

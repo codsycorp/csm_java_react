@@ -562,34 +562,80 @@ async fn serve_ssr_reviews(state: &AppState, host: Option<&str>, query_str: &str
 
 // ─── /kqxs/* endpoints ────────────────────────────────────────────────────────
 
+fn normalize_kqxs_yyyymmdd(date_str: &str) -> Option<String> {
+    let s = date_str.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if s.contains('/') {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() == 3 {
+            return Some(format!("{}{}{}", parts[2], parts[1], parts[0]));
+        }
+        return None;
+    }
+    let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() == 8 {
+        Some(digits)
+    } else {
+        None
+    }
+}
+
 async fn serve_kqxs_station(state: &AppState, query_str: &str) -> Response {
     let obj_name = qs_param(query_str, "obj_name");
     let date = qs_param(query_str, "date");
     if obj_name.is_empty() || !obj_name.starts_with("kqxs_") {
-        return json_error("Invalid obj_name");
+        return json_error("Invalid station");
     }
-    let mut conditions = vec![
-        crate::model::SearchFilter::eq("status", "active"),
-    ];
-    if !date.is_empty() {
-        conditions.push(crate::model::SearchFilter::eq("date", date.as_str()));
-    }
-    let filter = crate::model::SearchFilter { operator: "AND".into(), conditions, ..Default::default() };
+    let Some(formatted) = normalize_kqxs_yyyymmdd(&date) else {
+        return json_error("Invalid date format");
+    };
+    let filter = crate::model::SearchFilter::eq("field_ngay", formatted);
     let result = state.record_manager.filter("kqxs", &obj_name, &filter);
-    let rows = result.get("rows").or_else(|| result.get("data")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    json_ok(&serde_json::json!({ "success": true, "data": rows, "rows": rows, "total": rows.len() }))
+    let rows = result
+        .get("rows")
+        .or_else(|| result.get("data"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    json_ok(&serde_json::json!({ "success": true, "rows": rows }))
 }
 
 async fn serve_kqxs_stations(state: &AppState, query_str: &str) -> Response {
     let mien = qs_param(query_str, "mien");
     let thu = qs_param(query_str, "thu");
     let mut conditions = vec![];
-    if !mien.is_empty() { conditions.push(crate::model::SearchFilter::eq("mien", mien.as_str())); }
-    if !thu.is_empty() { conditions.push(crate::model::SearchFilter::eq("thu", thu.as_str())); }
-    let filter = crate::model::SearchFilter { operator: "AND".into(), conditions, ..Default::default() };
+    if !mien.is_empty() {
+        conditions.push(crate::model::SearchFilter::eq("mien", mien.as_str()));
+    }
+    if !thu.is_empty() {
+        conditions.push(crate::model::SearchFilter::eq("thu", thu.as_str()));
+    }
+    let filter = if conditions.is_empty() {
+        crate::model::SearchFilter {
+            field: "id".into(),
+            filter_type: "gt".into(),
+            value: serde_json::Value::String("0".into()),
+            ..Default::default()
+        }
+    } else if conditions.len() == 1 {
+        conditions.into_iter().next().unwrap()
+    } else {
+        crate::model::SearchFilter {
+            operator: "AND".into(),
+            conditions,
+            ..Default::default()
+        }
+    };
     let result = state.record_manager.filter("kqxs", "kqxs_lichxoso", &filter);
-    let rows = result.get("rows").or_else(|| result.get("data")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    json_ok(&serde_json::json!({ "success": true, "data": rows, "rows": rows, "total": rows.len() }))
+    let rows = result
+        .get("rows")
+        .or_else(|| result.get("data"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    json_ok(&serde_json::json!({ "success": true, "rows": rows }))
 }
 
 async fn serve_kqxs_table_range(state: &AppState, query_str: &str) -> Response {
@@ -597,37 +643,111 @@ async fn serve_kqxs_table_range(state: &AppState, query_str: &str) -> Response {
     let from = qs_param(query_str, "from");
     let to = qs_param(query_str, "to");
     if obj_name.is_empty() || !obj_name.starts_with("kqxs_") {
-        return json_error("Invalid obj_name");
+        return json_error("Invalid table");
     }
+    let from_ymd = normalize_kqxs_yyyymmdd(&from);
+    let to_ymd = normalize_kqxs_yyyymmdd(&to);
     let mut conditions = vec![];
-    if !from.is_empty() {
-        conditions.push(crate::model::SearchFilter { field: "date".into(), filter_type: "gte".into(), value: serde_json::Value::String(from), ..Default::default() });
+    if let Some(from_val) = from_ymd {
+        conditions.push(crate::model::SearchFilter {
+            field: "field_ngay".into(),
+            filter_type: "gte".into(),
+            value: serde_json::Value::String(from_val),
+            ..Default::default()
+        });
     }
-    if !to.is_empty() {
-        conditions.push(crate::model::SearchFilter { field: "date".into(), filter_type: "lte".into(), value: serde_json::Value::String(to), ..Default::default() });
+    if let Some(to_val) = to_ymd {
+        conditions.push(crate::model::SearchFilter {
+            field: "field_ngay".into(),
+            filter_type: "lte".into(),
+            value: serde_json::Value::String(to_val),
+            ..Default::default()
+        });
     }
-    let filter = crate::model::SearchFilter { operator: "AND".into(), conditions, ..Default::default() };
+    let filter = if conditions.is_empty() {
+        crate::model::SearchFilter {
+            field: "id".into(),
+            filter_type: "gt".into(),
+            value: serde_json::Value::String("0".into()),
+            ..Default::default()
+        }
+    } else if conditions.len() == 1 {
+        conditions.into_iter().next().unwrap()
+    } else {
+        crate::model::SearchFilter {
+            operator: "AND".into(),
+            conditions,
+            ..Default::default()
+        }
+    };
     let result = state.record_manager.filter("kqxs", &obj_name, &filter);
-    let rows = result.get("rows").or_else(|| result.get("data")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    json_ok(&serde_json::json!({ "success": true, "data": rows, "rows": rows, "total": rows.len() }))
+    let rows = result
+        .get("rows")
+        .or_else(|| result.get("data"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    json_ok(&serde_json::json!({ "success": true, "rows": rows }))
 }
 
 async fn serve_kqxs_tonghop(state: &AppState, query_str: &str) -> Response {
     let ma_duoi = qs_param(query_str, "ma_duoi");
     let tu_ngay = qs_param(query_str, "tu_ngay");
     let den_ngay = qs_param(query_str, "den_ngay");
-    let mut conditions = vec![];
-    if !ma_duoi.is_empty() { conditions.push(crate::model::SearchFilter::eq("ma_duoi", ma_duoi.as_str())); }
-    if !tu_ngay.is_empty() {
-        conditions.push(crate::model::SearchFilter { field: "ngay".into(), filter_type: "gte".into(), value: serde_json::Value::String(tu_ngay), ..Default::default() });
+    let from_ymd = normalize_kqxs_yyyymmdd(&tu_ngay);
+    let to_ymd = normalize_kqxs_yyyymmdd(&den_ngay);
+    if from_ymd.is_none() || to_ymd.is_none() {
+        return json_error("Invalid date range");
     }
-    if !den_ngay.is_empty() {
-        conditions.push(crate::model::SearchFilter { field: "ngay".into(), filter_type: "lte".into(), value: serde_json::Value::String(den_ngay), ..Default::default() });
+    let mut conditions = vec![
+        crate::model::SearchFilter::eq("ma_duoi", ma_duoi.as_str()),
+        crate::model::SearchFilter {
+            field: "field_ngay".into(),
+            filter_type: "gte".into(),
+            value: serde_json::Value::String(from_ymd.unwrap()),
+            ..Default::default()
+        },
+        crate::model::SearchFilter {
+            field: "field_ngay".into(),
+            filter_type: "lte".into(),
+            value: serde_json::Value::String(to_ymd.unwrap()),
+            ..Default::default()
+        },
+    ];
+    for (param, field) in [
+        ("l2c", "l2c"),
+        ("tky", "tky"),
+        ("ktn", "ktn"),
+        ("ktd", "ktd"),
+        ("tnd", "tnd"),
+        ("nhom_so", "nhom_so"),
+        ("nhom_so_triet", "nhom_so_triet"),
+        ("so_nhap", "so_nhap"),
+        ("triet_tieu", "triet_tieu"),
+        ("triet_duoi", "triet_duoi"),
+        ("show_nhom", "show_nhom"),
+        ("show_tk", "show_tk"),
+        ("loai_tim", "loai_tim"),
+        ("ket_qua_filter", "ket_qua_filter"),
+    ] {
+        let val = qs_param(query_str, param);
+        if !val.is_empty() {
+            conditions.push(crate::model::SearchFilter::eq(field, val.as_str()));
+        }
     }
-    let filter = crate::model::SearchFilter { operator: "AND".into(), conditions, ..Default::default() };
-    let result = state.record_manager.filter("kqxs", "kqxs_tonghop", &filter);
-    let rows = result.get("rows").or_else(|| result.get("data")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    json_ok(&serde_json::json!({ "success": true, "data": rows, "rows": rows, "total": rows.len() }))
+    let filter = crate::model::SearchFilter {
+        operator: "AND".into(),
+        conditions,
+        ..Default::default()
+    };
+    let result = state.record_manager.filter("tonghop", "kqxs_tonghop", &filter);
+    let rows = result
+        .get("rows")
+        .or_else(|| result.get("data"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    json_ok(&serde_json::json!({ "success": true, "rows": rows }))
 }
 
 async fn serve_vpts(state: &AppState, query_str: &str) -> Response {

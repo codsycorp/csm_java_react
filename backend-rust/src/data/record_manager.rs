@@ -19,7 +19,7 @@ pub const WRITEBY: &str = "base._co.osa";
 
 const BATCH_SIZE: usize = 50;
 const MAX_FILTER_TAKE: usize = 1000;
-const DEFAULT_FILTER_TAKE: usize = 500;
+pub const DEFAULT_FILTER_TAKE: usize = 500;
 const MAX_FIND_SCAN_RECORDS: usize = 2000;
 const MAX_SAFE_FIND_RECORD_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SAFE_JSON_RECORD_BYTES: usize = 32 * 1024 * 1024;
@@ -337,21 +337,23 @@ impl RecordManager {
         table_name: &str,
         search_filter: &SearchFilter,
     ) -> Map<String, Value> {
-        self.filter_with_pagination(app_id, table_name, search_filter, None, None, DEFAULT_FILTER_TAKE)
+        let records = self.collect_filtered_records(app_id, table_name, search_filter);
+        let total_count = records.len();
+        let slice: Vec<Value> = records.into_iter().map(Value::Object).collect();
+        let mut result = Map::new();
+        result.insert("rows".into(), Value::Array(slice.clone()));
+        result.insert("data".into(), Value::Array(slice));
+        result.insert("totalCount".into(), json!(total_count));
+        result
     }
 
-    pub fn filter_with_pagination(
+    fn collect_filtered_records(
         &self,
         app_id: &str,
         table_name: &str,
         search_filter: &SearchFilter,
-        cursor: Option<&str>,
-        offset: Option<usize>,
-        take: usize,
-    ) -> Map<String, Value> {
-        let take = take.min(MAX_FILTER_TAKE);
+    ) -> Vec<Map<String, Value>> {
         let mut records: Vec<Map<String, Value>> = Vec::new();
-        // Dedup by id (mirrors Java buildRecordDedupKey)
         let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         match self.get_db(app_id, table_name) {
@@ -366,11 +368,16 @@ impl RecordManager {
                         }
                         if let Ok(Value::Object(record)) = serde_json::from_slice(&value) {
                             if SearchFilter::matches(&record, search_filter) {
-                                // Dedup: prefer id field, fall back to RocksDB key
                                 let dedup = record
                                     .get("id")
                                     .and_then(|v| v.as_str())
                                     .map(String::from)
+                                    .or_else(|| {
+                                        record
+                                            .get("id")
+                                            .and_then(|v| v.as_i64())
+                                            .map(|n| n.to_string())
+                                    })
                                     .unwrap_or_else(|| key_str.to_string());
                                 if seen_ids.insert(dedup) {
                                     records.push(record);
@@ -383,7 +390,20 @@ impl RecordManager {
         }
 
         records.sort_by(|a, b| compare_records_desc(a, b));
+        records
+    }
 
+    pub fn filter_with_pagination(
+        &self,
+        app_id: &str,
+        table_name: &str,
+        search_filter: &SearchFilter,
+        cursor: Option<&str>,
+        offset: Option<usize>,
+        take: usize,
+    ) -> Map<String, Value> {
+        let take = take.min(MAX_FILTER_TAKE);
+        let records = self.collect_filtered_records(app_id, table_name, search_filter);
         let total_count = records.len();
 
         // cursor semantics match Java filterWithPagination:

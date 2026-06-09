@@ -99,11 +99,15 @@ impl SearchFilter {
                 .map(|arr| !arr.contains(actual))
                 .unwrap_or(true),
             "like" => {
-                if let (Some(a), Some(e)) = (actual.as_str(), expected.as_str()) {
-                    a.to_lowercase().contains(&e.to_lowercase())
-                } else {
-                    false
+                if let Some(e) = expected.as_str() {
+                    if e.is_empty() {
+                        return true;
+                    }
+                    if let Some(a) = value_as_compare_str(actual) {
+                        return a.to_lowercase().contains(&e.to_lowercase());
+                    }
                 }
+                false
             }
             "prefix" => {
                 if let (Some(a), Some(e)) = (actual.as_str(), expected.as_str()) {
@@ -149,14 +153,84 @@ impl SearchFilter {
 }
 
 fn compare_values(a: &Value, b: &Value) -> i32 {
-    match (a.as_f64(), b.as_f64()) {
-        (Some(aa), Some(bb)) => aa.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal) as i32,
-        _ => {
-            if let (Some(aa), Some(bb)) = (a.as_str(), b.as_str()) {
-                aa.cmp(bb) as i32
-            } else {
-                0
-            }
-        }
+    if let (Some(aa), Some(bb)) = (compare_as_number(a), compare_as_number(b)) {
+        return aa
+            .partial_cmp(&bb)
+            .unwrap_or(std::cmp::Ordering::Equal) as i32;
+    }
+    if let (Some(aa), Some(bb)) = (a.as_str(), b.as_str()) {
+        return aa.cmp(bb) as i32;
+    }
+    0
+}
+
+fn compare_as_number(v: &Value) -> Option<f64> {
+    v.as_f64()
+        .or_else(|| v.as_i64().map(|n| n as f64))
+        .or_else(|| v.as_u64().map(|n| n as f64))
+        .or_else(|| {
+            v.as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .and_then(|s| s.parse::<f64>().ok())
+        })
+}
+
+fn value_as_compare_str(v: &Value) -> Option<String> {
+    v.as_str().map(String::from).or_else(|| {
+        v.as_i64()
+            .map(|n| n.to_string())
+            .or_else(|| v.as_u64().map(|n| n.to_string()))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn compare_values_coerces_yyyymmdd_number_and_string() {
+        assert!(compare_values(&json!("20250606"), &json!(20250606)) == 0);
+        assert!(compare_values(&json!(20250607), &json!("20250606")) > 0);
+        assert!(compare_values(&json!("20250605"), &json!(20250606)) < 0);
+    }
+
+    #[test]
+    fn like_empty_matches_any_scalar_id() {
+        let filter = SearchFilter {
+            field: "id".into(),
+            filter_type: "like".into(),
+            value: json!(""),
+            ..Default::default()
+        };
+        let mut row = serde_json::Map::new();
+        row.insert("id".into(), json!(12345));
+        assert!(SearchFilter::matches(&row, &filter));
+    }
+
+    #[test]
+    fn field_ngay_range_matches_numeric_storage() {
+        let filter = SearchFilter {
+            operator: "AND".into(),
+            conditions: vec![
+                SearchFilter {
+                    field: "field_ngay".into(),
+                    filter_type: "gte".into(),
+                    value: json!("20250601"),
+                    ..Default::default()
+                },
+                SearchFilter {
+                    field: "field_ngay".into(),
+                    filter_type: "lte".into(),
+                    value: json!("20250630"),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut row = serde_json::Map::new();
+        row.insert("field_ngay".into(), json!(20250606));
+        assert!(SearchFilter::matches(&row, &filter));
     }
 }
