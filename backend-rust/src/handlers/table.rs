@@ -279,11 +279,8 @@ impl TableHandler {
         auth: Option<&AuthUser>,
     ) -> Map<String, Value> {
         let mut out = Map::new();
-        let app_id = params
-            .get("app_id")
-            .and_then(|v| v.as_str())
-            .or_else(|| auth.map(|a| a.app_id.as_str()))
-            .unwrap_or("default");
+        let app_id_owned = resolve_request_app_id(params, auth);
+        let app_id = app_id_owned.as_str();
         let table = params.get("obj_name").and_then(|v| v.as_str()).unwrap_or("");
 
         if RESERVED_INDEX_IDS.contains(&table) {
@@ -407,7 +404,7 @@ impl TableHandler {
                         let response_row = Self::trim_large_code_fields(table, final_obj.clone());
                         out.insert("updated_row".into(), Value::Object(response_row));
                         out.insert("obj_name".into(), Value::String(table.to_string()));
-                        out.insert("app_id".into(), Value::String(app_id.to_string()));
+                        out.insert("app_id".into(), Value::String(app_id_owned.clone()));
                         // Notify connected clients (mirrors Java sendUpdateNotification)
                         self.emit_update_notification(app_id, table, &cmd, &final_obj);
                     }
@@ -663,6 +660,19 @@ impl TableHandler {
             .unwrap_or_default();
 
         if !is_update {
+            if let Some(user) = auth {
+                if !user.dev && !user.can_access_app_data(app_id) {
+                    out.insert("success".into(), Value::Bool(false));
+                    out.insert(
+                        "message".into(),
+                        Value::String(format!(
+                            "Bạn không có quyền xem dữ liệu của ứng dụng '{app_id}'"
+                        )),
+                    );
+                    return out;
+                }
+            }
+
             let rows = extract_index_read_rows(&tables);
             out.insert("success".into(), Value::Bool(true));
             out.insert("id".into(), Value::String("index".into()));
@@ -847,4 +857,23 @@ fn extract_index_read_rows(tables: &[Map<String, Value>]) -> Vec<Value> {
         .iter()
         .map(|row| Value::Object(row.clone()))
         .collect()
+}
+
+/// Resolve target app for table operations — prefer explicit request, else authenticated user's app.
+fn resolve_request_app_id(params: &Map<String, Value>, auth: Option<&AuthUser>) -> String {
+    if let Some(app_id) = params
+        .get("app_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return app_id.to_string();
+    }
+    if let Some(user) = auth {
+        let user_app = user.app_id.trim();
+        if !user_app.is_empty() {
+            return user_app.to_string();
+        }
+    }
+    "default".to_string()
 }

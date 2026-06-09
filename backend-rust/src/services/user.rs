@@ -5,6 +5,7 @@ use tracing::{info, warn};
 
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, User};
+use crate::util::PermissionBitfieldUtil;
 
 const CSM_APP_ID: &str = "csm";
 const ACCOUNTS_TABLE: &str = "csm_accounts";
@@ -26,7 +27,7 @@ impl UserService {
         let filter = SearchFilter::eq("id", user_id);
         let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
         if !record.is_empty() {
-            return Some(User::from_record(&record));
+            return Some(self.map_record_to_user(&record, true));
         }
         let sub = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
         if !sub.is_empty() {
@@ -42,7 +43,12 @@ impl UserService {
         let filter = SearchFilter::eq("app_token", app_token);
         let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
         if !record.is_empty() {
-            return Some(User::from_record(&record));
+            return Some(self.map_record_to_user(&record, true));
+        }
+
+        let sub = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
+        if !sub.is_empty() {
+            return self.map_sub_user(&sub);
         }
         None
     }
@@ -157,7 +163,7 @@ impl UserService {
             return None;
         }
 
-        Some(User::from_record(record))
+        Some(self.map_record_to_user(record, true))
     }
 
     pub fn update_session_token(
@@ -263,7 +269,7 @@ impl UserService {
         if r.is_empty() {
             None
         } else {
-            Some((User::from_record(&r), r))
+            Some((self.map_record_to_user(&r, true), r))
         }
     }
 
@@ -289,10 +295,120 @@ impl UserService {
         actived && stored == Some(encoded.as_str())
     }
 
+    /// Mirrors Java `mapRecordToUser` / `mapMainAccountToUser`.
+    fn map_record_to_user(&self, record: &Map<String, Value>, is_main_account: bool) -> User {
+        let mut user = User::from_record(record);
+
+        let app_id = extract_app_id_from_token(&self.record_manager, user.app_token.as_deref())
+            .or_else(|| {
+                record
+                    .get("app_id")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .or(user.app_id.clone())
+            .unwrap_or_default();
+        if !app_id.is_empty() {
+            user.app_id = Some(app_id.clone());
+        }
+
+        user.data_app_ids = Some(resolve_effective_data_app_ids(
+            record,
+            user.app_id.as_deref().unwrap_or(""),
+            user.dev.unwrap_or(false),
+        ));
+
+        let mut permissions = string_list_from_value(record.get("permissions"));
+        let mut menus_permissions = string_list_from_value(
+            record
+                .get("menusPermissions")
+                .or_else(|| record.get("menus_permissions")),
+        );
+
+        let raw_bitfield = record
+            .get("permissionBitfield")
+            .or_else(|| record.get("permission_bitfield"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        if raw_bitfield.is_some() {
+            permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                &permissions,
+                &PermissionBitfieldUtil::permissions_from_bitfield(raw_bitfield),
+            );
+            menus_permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                &menus_permissions,
+                &PermissionBitfieldUtil::menus_from_bitfield(raw_bitfield),
+            );
+        }
+
+        let mut is_dev = user.dev.unwrap_or(false);
+        if let Some(token) = user.app_token.as_deref() {
+            if let Some(access_right) = extract_access_right_from_token(&self.record_manager, token) {
+                is_dev = access_right > 0;
+            }
+        }
+        user.dev = Some(is_dev);
+
+        if is_dev {
+            permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                &permissions,
+                &["dev".into(), "admin".into(), "scope:all".into()],
+            );
+            if !app_id.is_empty() {
+                menus_permissions = vec![app_id.clone()];
+            }
+            user.data_app_ids = Some(resolve_effective_data_app_ids(record, &app_id, true));
+        } else if is_main_account {
+            permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                &permissions,
+                &[
+                    "admin".into(),
+                    "scope:all".into(),
+                    "view".into(),
+                    "create".into(),
+                    "edit".into(),
+                    "delete".into(),
+                    "export".into(),
+                ],
+            );
+            if menus_permissions.is_empty() && !app_id.is_empty() {
+                menus_permissions = vec![app_id.clone()];
+            }
+        }
+
+        user.permissions = Some(permissions.clone());
+        user.menus_permissions = if menus_permissions.is_empty() {
+            None
+        } else {
+            Some(menus_permissions.clone())
+        };
+
+        let bitfield =
+            PermissionBitfieldUtil::build_bitfield(&permissions, &menus_permissions, is_dev);
+        user.permission_bitfield = Some(PermissionBitfieldUtil::to_compact_token(bitfield));
+        user.permission_schema_version = Some(PermissionBitfieldUtil::SCHEMA_V3.into());
+        user.data_scope = Some(PermissionBitfieldUtil::resolve_data_scope(bitfield));
+        user
+    }
+
+    fn find_parent_account(&self, parent_key: &str) -> Option<Map<String, Value>> {
+        for field in ["id", "app_id", "email", "username", "phoneNumber"] {
+            let filter = SearchFilter::eq(field, parent_key);
+            let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+            if !record.is_empty() {
+                return Some(record);
+            }
+        }
+        None
+    }
+
     fn map_sub_user(&self, record: &Map<String, Value>) -> Option<User> {
-        let parent_id = record.get("parent_account_id").and_then(|v| v.as_str())?;
-        let parent = self.find_by_id(parent_id)?;
-        let mut user = parent;
+        let parent_key = record.get("parent_account_id").and_then(|v| v.as_str())?;
+        let mut user = if let Some(parent_record) = self.find_parent_account(parent_key) {
+            self.map_record_to_user(&parent_record, false)
+        } else {
+            self.find_by_id(parent_key)?
+        };
         user.id = record.get("id").and_then(|v| v.as_str()).map(String::from);
         user.username = record
             .get("login_identifier")
@@ -319,16 +435,28 @@ impl UserService {
             .or_else(|| record.get("menus_permissions"))
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
-        // app_id: prefer sub-user's own app_token (decrypted), then record's app_id field,
-        // then fall through to parent's app_id (already set via user = parent).
-        // Mirrors Java mapSubUserRecordToUser: tokenParts[0] = appId from csm_decrypt(app_token).
+
+        let sub_bitfield = record
+            .get("permissionBitfield")
+            .or_else(|| record.get("permission_bitfield"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        if let Some(raw) = sub_bitfield {
+            let perms = PermissionBitfieldUtil::permissions_from_bitfield(Some(raw));
+            let menus = PermissionBitfieldUtil::menus_from_bitfield(Some(raw));
+            if !perms.is_empty() {
+                user.permissions = Some(perms);
+            }
+            if !menus.is_empty() {
+                user.menus_permissions = Some(menus);
+            }
+        }
+
+        user.data_app_ids = Some(vec![]);
         if let Some(sub_token) = record.get("app_token").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
             user.app_token = Some(sub_token.to_string());
-            if let Ok(decrypted) = self.record_manager.csm_decrypt(sub_token) {
-                let parts: Vec<&str> = decrypted.splitn(2, "_____").collect();
-                if let Some(app_id) = parts.first().filter(|s| !s.is_empty()) {
-                    user.app_id = Some(app_id.to_string());
-                }
+            if let Some(app_id) = extract_app_id_from_token(&self.record_manager, Some(sub_token)) {
+                user.app_id = Some(app_id);
             }
         }
         if user.app_id.as_deref().unwrap_or("").is_empty() {
@@ -364,4 +492,59 @@ fn login_field(user: &User, identifier: &str) -> String {
         return user.phone_number.clone().unwrap_or_default();
     }
     identifier.to_string()
+}
+
+fn string_list_from_value(value: Option<&Value>) -> Vec<String> {
+    match value {
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
+        _ => vec![],
+    }
+}
+
+fn extract_app_id_from_token(record_manager: &RecordManager, token: Option<&str>) -> Option<String> {
+    let token = token?.trim();
+    if token.is_empty() {
+        return None;
+    }
+    if let Ok(decrypted) = record_manager.csm_decrypt(token) {
+        if let Some(part) = decrypted.split("_____").next().filter(|s| !s.is_empty()) {
+            return Some(part.to_string());
+        }
+    }
+    token
+        .split("_____")
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+fn extract_access_right_from_token(record_manager: &RecordManager, token: &str) -> Option<i32> {
+    let decrypted = record_manager.csm_decrypt(token).ok()?;
+    decrypted
+        .split("_____")
+        .last()?
+        .parse::<i32>()
+        .ok()
+}
+
+fn resolve_effective_data_app_ids(record: &Map<String, Value>, menu_app_id: &str, _is_dev: bool) -> Vec<String> {
+    let explicit = string_list_from_value(
+        record
+            .get("data_app_ids")
+            .or_else(|| record.get("dataAppIds")),
+    );
+    exclude_menu_app_from_data_app_ids(&explicit, menu_app_id)
+}
+
+fn exclude_menu_app_from_data_app_ids(apps: &[String], menu_app_id: &str) -> Vec<String> {
+    let menu = menu_app_id.trim();
+    apps.iter()
+        .map(|s| s.trim())
+        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case(menu))
+        .map(String::from)
+        .collect()
 }
