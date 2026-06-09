@@ -57,6 +57,22 @@ impl TableHandler {
         merged
     }
 
+    /// Trim large code fields in the updated_row response (mirrors Java trimLargeCodeFieldsInUpdatedRow).
+    /// For sys_autos: replaces p_code > 8192 chars with "[saved:N chars]" to prevent nginx/response bloat.
+    /// Applied only to the response row, NOT to what is stored in RocksDB.
+    fn trim_large_code_fields(table: &str, mut row: Map<String, Value>) -> Map<String, Value> {
+        const MAX_CODE_BYTES: usize = 8192;
+        if table == "sys_autos" {
+            if let Some(Value::String(code)) = row.get("p_code") {
+                if code.len() > MAX_CODE_BYTES {
+                    let n = code.len();
+                    row.insert("p_code".into(), Value::String(format!("[saved:{n} chars]")));
+                }
+            }
+        }
+        row
+    }
+
     /// Handle _changePassword / _oldPassword / _newPassword pattern (mirrors Java handlePasswordChangePayload).
     /// Returns (modified obj_update, optional error message).
     fn handle_password_change(
@@ -387,7 +403,8 @@ impl TableHandler {
                         out.insert("success".into(), Value::Bool(true));
                         out.insert("command".into(), Value::String(cmd.clone()));
                         out.insert("message".into(), Value::String("ok".into()));
-                        out.insert("updated_row".into(), Value::Object(final_obj.clone()));
+                        let response_row = Self::trim_large_code_fields(table, final_obj.clone());
+                        out.insert("updated_row".into(), Value::Object(response_row));
                         out.insert("obj_name".into(), Value::String(table.to_string()));
                         out.insert("app_id".into(), Value::String(app_id.to_string()));
                         // Notify connected clients (mirrors Java sendUpdateNotification)
@@ -534,7 +551,8 @@ impl TableHandler {
             op_result.insert("success".into(), Value::Bool(item_ok));
             op_result.insert("command".into(), Value::String(cmd_str));
             op_result.insert("message".into(), Value::String(msg));
-            op_result.insert("updated_row".into(), Value::Object(saved_row));
+            let response_row = Self::trim_large_code_fields(op_table, saved_row);
+            op_result.insert("updated_row".into(), Value::Object(response_row));
             results.push(Value::Object(op_result));
 
             if !item_ok && !continue_on_error { break; }
