@@ -148,20 +148,24 @@ impl RecordManager {
             .rocksdb_root
             .join(&safe_app)
             .join(&safe_table);
+
+        // Create the directory first so canonicalize() can resolve the absolute path.
+        // The sanitize_segment() calls above already reject "..", "/", etc., so
+        // the starts_with check below is a defence-in-depth safety net only.
+        std::fs::create_dir_all(&db_path)?;
+
         let db_root = self
             .config
             .rocksdb_root
             .canonicalize()
             .unwrap_or_else(|_| self.config.rocksdb_root.clone());
-        // Path may not exist yet before create_dir_all — compare via normalized join
         let resolved = db_path
             .canonicalize()
-            .unwrap_or_else(|_| self.config.rocksdb_root.join(&safe_app).join(&safe_table));
+            .unwrap_or_else(|_| db_path.clone());
         if !resolved.starts_with(&db_root) {
+            let _ = std::fs::remove_dir_all(&db_path);
             return Err(anyhow!("RocksDB path escapes database root"));
         }
-
-        std::fs::create_dir_all(&db_path)?;
 
         let mut block_opts = BlockBasedOptions::default();
         block_opts.set_bloom_filter(10.0, false);
@@ -229,9 +233,18 @@ impl RecordManager {
             }
         }
 
-        let key = self.build_primary_key(app_id, table_name, &record, &primary_keys)?;
-        let existing = db.db.get(key.as_bytes())?;
-        let command = if existing.is_some() { "update" } else { "create" };
+        let key_base = self.build_primary_key(app_id, table_name, &record, &primary_keys)?;
+
+        // Find which key format already holds this record.
+        // Java stores records as "app_table_pkvalue"; Rust uses bare "pkvalue".
+        // Checking all candidate variants prevents creating duplicate records when
+        // updating Java-migrated data, which would cause stale data on reload.
+        let candidates = storage_key_candidates(app_id, table_name, &key_base);
+        let found_key = candidates.iter().find(|c| {
+            db.db.get(c.as_bytes()).ok().flatten().is_some()
+        });
+        let actual_key = found_key.cloned().unwrap_or_else(|| key_base.clone());
+        let command = if found_key.is_some() { "update" } else { "create" };
 
         let json = serde_json::to_vec(&record)?;
         if json.len() > MAX_SAFE_JSON_RECORD_BYTES {
@@ -239,7 +252,7 @@ impl RecordManager {
         }
 
         let mut batch = WriteBatch::default();
-        batch.put(key.as_bytes(), &json);
+        batch.put(actual_key.as_bytes(), &json);
         if command == "create" {
             self.increment_meta_count(&db, &mut batch, 1)?;
         }
@@ -262,9 +275,17 @@ impl RecordManager {
         } else {
             self.get_table_search_keys(app_id, table_name, "fieldsPK")?
         };
-        let key = self.build_primary_key(app_id, table_name, record, &primary_keys)?;
+        let key_base = self.build_primary_key(app_id, table_name, record, &primary_keys)?;
+
+        // Find the actual key (Java may have stored with app_table_ prefix)
+        let candidates = storage_key_candidates(app_id, table_name, &key_base);
+        let actual_key = candidates.iter()
+            .find(|c| db.db.get(c.as_bytes()).ok().flatten().is_some())
+            .cloned()
+            .unwrap_or_else(|| key_base.clone());
+
         let mut batch = WriteBatch::default();
-        batch.delete(key.as_bytes());
+        batch.delete(actual_key.as_bytes());
         self.increment_meta_count(&db, &mut batch, -1)?;
         db.db.write(batch)?;
         Ok(())
