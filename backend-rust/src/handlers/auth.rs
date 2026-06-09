@@ -107,6 +107,16 @@ impl AuthHandler {
         self.enrich_account_meta(&user, &mut result);
         self.enrich_async_routes(&user, &mut result);
 
+        if let Some(app_id) = user.app_id.as_ref().filter(|s| !s.is_empty()) {
+            result.insert("app_id".into(), Value::String(app_id.clone()));
+        }
+        if let Some(data_app_ids) = user.data_app_ids.as_ref() {
+            result.insert(
+                "data_app_ids".into(),
+                Value::Array(data_app_ids.iter().cloned().map(Value::String).collect()),
+            );
+        }
+
         response.set("code", 200);
         response.set("success", true);
         response.set("message", "ok");

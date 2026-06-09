@@ -30,10 +30,7 @@ impl AuthUser {
         }: crate::model::User,
     ) -> Self {
         let permissions = permissions.unwrap_or_default();
-        let is_dev = dev.unwrap_or(false)
-            || permissions
-                .iter()
-                .any(|p| p.eq_ignore_ascii_case("dev"));
+        let is_dev = dev.unwrap_or(false);
         Self {
             user_id: id.unwrap_or_default(),
             username: username.unwrap_or_default(),

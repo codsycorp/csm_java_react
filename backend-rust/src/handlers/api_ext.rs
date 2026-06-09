@@ -1,28 +1,93 @@
+use reqwest::Client;
 use serde_json::{json, Map, Value};
 
 use crate::model::StandardResponse;
 use crate::state::AppState;
 
-pub async fn handle_scrape_web(state: &AppState, params: &Map<String, Value>) -> StandardResponse {
-    let url = params.get("url").and_then(|v| v.as_str()).unwrap_or("");
-    if url.is_empty() {
-        let mut r = StandardResponse::new();
-        r.set("success", false);
-        r.set("error", "url required");
-        return r;
+fn param_str<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    params.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+}
+
+/// Java `handleWebScrape` uses `link`; keep `url` as fallback for older callers.
+fn scrape_target_url(params: &Map<String, Value>) -> Option<&str> {
+    param_str(params, "link").or_else(|| param_str(params, "url"))
+}
+
+async fn scrape_http_client(state: &AppState, params: &Map<String, Value>) -> Result<Client, String> {
+    let Some(server) = param_str(params, "proxyServer") else {
+        return Ok(state.http_client.clone());
+    };
+
+    let proxy_url = if server.starts_with("http://") || server.starts_with("https://") {
+        server.to_string()
+    } else {
+        format!("http://{server}")
+    };
+
+    let mut proxy = reqwest::Proxy::http(&proxy_url).map_err(|e| e.to_string())?;
+    if let (Some(username), Some(password)) = (
+        param_str(params, "proxyUsername"),
+        param_str(params, "proxyPassword"),
+    ) {
+        proxy = proxy.basic_auth(username, password);
     }
-    match state.http_client.get(url).send().await {
+
+    Client::builder()
+        .timeout(std::time::Duration::from_secs(900))
+        .proxy(proxy)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+pub async fn handle_scrape_web(state: &AppState, params: &Map<String, Value>) -> StandardResponse {
+    let Some(link) = scrape_target_url(params) else {
+        let mut r = StandardResponse::new();
+        r.set("code", 400);
+        r.set("success", false);
+        r.set("message", "Missing 'link' parameter for web scraping.");
+        return r;
+    };
+
+    let client = match scrape_http_client(state, params).await {
+        Ok(c) => c,
+        Err(e) => {
+            let mut r = StandardResponse::new();
+            r.set("code", 500);
+            r.set("success", false);
+            r.set("message", format!("Invalid proxy configuration: {e}"));
+            return r;
+        }
+    };
+
+    match client
+        .get(link)
+        .header(
+            reqwest::header::USER_AGENT,
+            "Mozilla/5.0 (compatible; CSMBridge/1.0; +https://csmbridge.net)",
+        )
+        .send()
+        .await
+    {
         Ok(resp) => {
             let html = resp.text().await.unwrap_or_default();
             let mut r = StandardResponse::new();
-            r.set("success", true);
-            r.set("html", html.chars().take(50_000).collect::<String>());
+            if html.is_empty() {
+                r.set("code", 500);
+                r.set("success", false);
+                r.set("message", format!("Failed to retrieve content from {link}"));
+            } else {
+                r.set("code", 200);
+                r.set("success", true);
+                r.set("message", "Scraping successful");
+                r.set("data", html.chars().take(500_000).collect::<String>());
+            }
             r
         }
         Err(e) => {
             let mut r = StandardResponse::new();
+            r.set("code", 500);
             r.set("success", false);
-            r.set("error", e.to_string());
+            r.set("message", format!("Internal server error during scraping: {e}"));
             r
         }
     }

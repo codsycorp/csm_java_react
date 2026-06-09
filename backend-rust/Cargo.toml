@@ -44,7 +44,7 @@ redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 rdkafka = { version = "0.36", features = ["cmake-build"], optional = true }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json", "stream", "multipart", "cookies"] }
+reqwest = { version = "0.12", features = ["json", "stream", "multipart", "cookies", "socks"] }
 
 # Real-time chat
 socketioxide = { version = "0.15", features = ["state", "v4"] }

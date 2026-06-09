@@ -158,15 +158,31 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
 }
 
 fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
-    if !user.dev {
-        if let Ok(decrypted) = state.record_manager.csm_decrypt(&user.app_token) {
-            if let Some(access_right) = decrypted.split("_____").last() {
-                if let Ok(n) = access_right.parse::<i32>() {
-                    user.dev = n > 0;
+    if user.app_token.is_empty() {
+        return user;
+    }
+
+    if let Ok(decrypted) = state.record_manager.csm_decrypt(&user.app_token) {
+        let parts: Vec<&str> = decrypted.split("_____").collect();
+        if let Some(app_id) = parts.first().copied().filter(|s| !s.is_empty()) {
+            user.app_id = app_id.to_string();
+        }
+        if let Some(last) = parts.last() {
+            if let Ok(n) = last.parse::<i32>() {
+                if n > 0 {
+                    user.dev = true;
                 }
             }
         }
+    } else if let Some(app_id) = user
+        .app_token
+        .split("_____")
+        .next()
+        .filter(|s| !s.is_empty())
+    {
+        user.app_id = app_id.to_string();
     }
+
     user
 }
 
