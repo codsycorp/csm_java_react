@@ -13,23 +13,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run remote deploy via SSH
-        uses: appleboy/ssh-action@v0.1.7
+        uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT }}
-          # optional: known_hosts to verify server fingerprint
-          known_hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
           script: |
             set -e
-            # adjust REMOTE_DIR to your repo path on the server
-            REMOTE_DIR=${{ secrets.REMOTE_DIR }}
-            if [ -z "$REMOTE_DIR" ]; then
-              echo "REMOTE_DIR not set; using home directory"
-              REMOTE_DIR="$HOME"
-            fi
-            cd "$REMOTE_DIR"
+            cd /root/la_server
             # ensure repository is present and updated
             if [ -d .git ]; then
               git fetch --all --prune
