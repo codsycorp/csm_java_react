@@ -67,12 +67,22 @@ impl TableHandler {
             .filter_map(|f| row.get(f).map(|v| (f.clone(), v.clone())))
             .collect();
 
+        let message = if action == "delete" {
+            format!("Table '{}' has been deleted.", table)
+        } else {
+            format!("Table '{}' has been {}d.", table, action)
+        };
         let notification = serde_json::json!({
             "appId": app_id,
             "table": table,
             "action": action,
+            "obj_name": table,
+            "cmd": action,
             "primaryKeys": primary_keys,
             "dataRow": row,
+            "data": row,
+            "message": message,
+            "success": true,
         });
 
         let _ = self.socket_io.to(app_id.to_string()).emit("csm_msg_update", &notification);
