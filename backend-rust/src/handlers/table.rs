@@ -217,7 +217,11 @@ impl TableHandler {
             return out;
         }
 
-        if !table.starts_with("csm_") && !table.starts_with("sys_") {
+        // "index" is exempted from cross-app check (mirrors Java's handleIndexTableOperation
+        // which is dispatched before the cross-app guard — any authenticated user may read
+        // the index/schema of any app, e.g. a 'lmkt' user reading 'csm' index for schemas).
+        // csm_* and sys_* tables have their own access control via validateSystemUserTableAccess.
+        if table != "index" && !table.starts_with("csm_") && !table.starts_with("sys_") {
             if let Some(user) = auth {
                 if !user.can_access_app_data(app_id) {
                     let action = if is_update { "write" } else { "read" };
