@@ -8,8 +8,6 @@ use crate::data::RecordManager;
 use crate::model::{SearchFilter, StandardResponse, User};
 use crate::security::jwt::JwtUtil;
 use crate::services::user::UserService;
-use crate::security::auth::AuthUser;
-use crate::security::permission_resolver::{apply_resolved_to_info_map, resolve_effective_permissions};
 use crate::util::PermissionBitfieldUtil;
 
 pub struct AuthHandler {
@@ -97,40 +95,43 @@ impl AuthHandler {
             next_version,
         );
 
-        let mut result = user.to_info_map();
+        let mut result = Map::new();
         result.insert("token".into(), Value::String(jwt_token));
-        result.insert("refreshToken".into(), Value::String(refresh_token.clone()));
-        let csrf = Uuid::new_v4().to_string();
-        result.insert("csrfToken".into(), Value::String(csrf.clone()));
-        // Legacy typo alias for user_address (matches Java)
-        if let Some(addr) = user.user_address.clone() {
-            result.insert("user_adress".into(), addr);
+        if let Some(app_token) = user.app_token.as_ref().filter(|s| !s.is_empty()) {
+            result.insert("app_token".into(), Value::String(app_token.clone()));
         }
-
-        self.enrich_account_meta(&user, &mut result);
-        self.enrich_async_routes(&user, &mut result);
-
-        let auth_user = AuthUser::from_user(
-            user.clone(),
-            user.is_sub_user.unwrap_or(false),
-        );
-        let resolved = resolve_effective_permissions(&auth_user, &self.record_manager);
-        apply_resolved_to_info_map(&resolved, &mut result);
-
         if let Some(app_id) = user.app_id.as_ref().filter(|s| !s.is_empty()) {
             result.insert("app_id".into(), Value::String(app_id.clone()));
         }
-        if let Some(data_app_ids) = user.data_app_ids.as_ref() {
-            if !resolved.is_sub_user {
-                result.insert(
-                    "data_app_ids".into(),
-                    Value::Array(data_app_ids.iter().cloned().map(Value::String).collect()),
-                );
-            } else {
-                result.insert("data_app_ids".into(), Value::Array(vec![]));
-            }
+        result.insert("refreshToken".into(), Value::String(refresh_token.clone()));
+        if let Some(id) = user.id.as_ref() {
+            result.insert("userId".into(), Value::String(id.clone()));
         }
-        result.insert("dev".into(), Value::Bool(resolved.is_dev));
+        if let Some(username) = user.username.as_ref() {
+            result.insert("username".into(), Value::String(username.clone()));
+        }
+        if let Some(email) = user.email.as_ref() {
+            result.insert("email".into(), Value::String(email.clone()));
+        }
+        if let Some(phone) = user.phone_number.as_ref() {
+            result.insert("phoneNumber".into(), Value::String(phone.clone()));
+        }
+        if let Some(full_name) = user.full_name.as_ref() {
+            result.insert("full_name".into(), Value::String(full_name.clone()));
+        }
+        if let Some(avatar) = user.avatar.as_ref() {
+            result.insert("avatar".into(), Value::String(avatar.clone()));
+        }
+        if let Some(addr) = user.user_address.clone() {
+            result.insert("user_address".into(), addr.clone());
+            result.insert("user_adress".into(), addr);
+        }
+        let csrf = Uuid::new_v4().to_string();
+        result.insert("csrfToken".into(), Value::String(csrf.clone()));
+
+        self.enrich_account_meta(&user, &mut result);
+        self.enrich_async_routes(&user, &mut result);
+        result.insert("dev".into(), Value::Bool(is_dev));
 
         response.set("code", 200);
         response.set("success", true);
@@ -231,21 +232,19 @@ impl AuthHandler {
             user.dev = Some(is_dev);
             let mut info = user.to_info_map();
             self.enrich_account_meta(&user, &mut info);
-
-            let auth_user = AuthUser::from_user(
-                user.clone(),
-                user.is_sub_user.unwrap_or(auth.is_sub_user),
-            );
-            let resolved = resolve_effective_permissions(&auth_user, &self.record_manager);
-            apply_resolved_to_info_map(&resolved, &mut info);
-            info.insert("dev".into(), Value::Bool(resolved.is_dev));
-
+            self.enrich_user_info_with_bitfield(&user, &mut info);
+            info.insert("dev".into(), Value::Bool(is_dev));
             if let Some(app_id) = user.app_id.as_ref().filter(|s| !s.is_empty()) {
                 info.insert("app_id".into(), Value::String(app_id.clone()));
             }
             if let Some(app_token) = user.app_token.as_ref().filter(|s| !s.is_empty()) {
                 info.insert("app_token".into(), Value::String(app_token.clone()));
             }
+            let data_app_ids = user.data_app_ids.clone().unwrap_or_default();
+            info.insert(
+                "data_app_ids".into(),
+                Value::Array(data_app_ids.iter().cloned().map(Value::String).collect()),
+            );
 
             response.set("code", 200);
             response.set("success", true);
@@ -464,14 +463,30 @@ impl AuthHandler {
             }
         };
 
-        let user_role = pick_user_role(&auth.permissions);
-        let is_dev = auth.dev;
-        let menus = auth.menus_permissions.as_deref().unwrap_or(&[]);
+        let fresh_user = self
+            .user_service
+            .find_by_id(&auth.user_id)
+            .or_else(|| self.user_service.find_by_app_token(&auth.app_token));
+        let (permissions, menus, is_dev) = if let Some(user) = fresh_user {
+            (
+                user.permissions.unwrap_or_default(),
+                user.menus_permissions.unwrap_or_default(),
+                user.dev.unwrap_or(false),
+            )
+        } else {
+            (
+                auth.permissions.clone(),
+                auth.menus_permissions.clone().unwrap_or_default(),
+                auth.dev,
+            )
+        };
+
+        let user_role = permissions.first().cloned();
 
         let filtered = filter_routes_by_role(
             &all_routes,
             user_role.as_deref(),
-            menus,
+            &menus,
             is_dev,
             &mut std::collections::HashSet::new(),
         );
@@ -531,7 +546,11 @@ impl AuthHandler {
         let filter = SearchFilter::eq("id", "accessRights");
         let index = self.record_manager.find("csm", "index", &filter);
         if let Some(Value::Array(all_routes)) = index.get("data") {
-            let user_role = pick_user_role(user.permissions.as_deref().unwrap_or(&[]));
+            let user_role = user
+                .permissions
+                .as_ref()
+                .and_then(|p| p.first())
+                .cloned();
             let is_dev = user.dev.unwrap_or(false);
             let menus = user.menus_permissions.clone().unwrap_or_default();
             let filtered = filter_routes_by_role(
@@ -652,14 +671,6 @@ fn string_list_from_value(value: Option<&Value>) -> Vec<String> {
         Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
         _ => vec![],
     }
-}
-
-fn pick_user_role(permissions: &[String]) -> Option<String> {
-    permissions
-        .iter()
-        .find(|p| p.eq_ignore_ascii_case("admin"))
-        .cloned()
-        .or_else(|| permissions.first().cloned())
 }
 
 /// Mirror of Java's filterRoutesByRoleAndMenus — recursively filter routes by role, menus, dev flag.

@@ -2,9 +2,7 @@ use serde_json::Value;
 
 use crate::model::SearchFilter;
 use crate::security::auth::AuthUser;
-use crate::security::permission_resolver::{
-    has_action_permission, resolve_effective_permissions,
-};
+use crate::util::{parse_app_token, PermissionBitfieldUtil, is_sub_user_role};
 
 /// Mirrors Java `TableHandler.UserAccessContext`.
 #[derive(Debug, Clone)]
@@ -21,19 +19,75 @@ pub struct UserAccessContext {
 }
 
 impl UserAccessContext {
+    /// Mirrors Java `TableHandler.resolveCurrentUserAccessContext`.
     pub fn from_auth(user: Option<&AuthUser>, record_manager: &crate::data::RecordManager) -> Option<Self> {
         let user = user?;
-        let resolved = resolve_effective_permissions(user, record_manager);
+        let token_meta = if !user.app_token.is_empty() {
+            parse_app_token(record_manager, &user.app_token)
+        } else {
+            Default::default()
+        };
+        let is_sub_user = user.is_sub_user || is_sub_user_role(&token_meta.role);
+        let menus_permissions = user.menus_permissions.clone().unwrap_or_default();
+
+        let mut permissions = user.permissions.clone();
+        let parsed_token = PermissionBitfieldUtil::parse_security_token(user.permission_bitfield.as_deref());
+        if parsed_token.is_some() {
+            permissions =
+                PermissionBitfieldUtil::permissions_from_bitfield(user.permission_bitfield.as_deref());
+        }
+
+        if user.dev {
+            permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                &permissions,
+                &["dev".into(), "admin".into(), "scope:all".into()],
+            );
+        }
+
+        let is_admin_by_default = !user.dev && !is_sub_user;
+        let is_admin = is_admin_by_default
+            || permissions.iter().any(|p| p.eq_ignore_ascii_case("admin"))
+            || token_meta.role.eq_ignore_ascii_case("admin")
+            || parsed_token.is_some_and(PermissionBitfieldUtil::has_admin_privilege);
+
+        let mut data_scope = if let Some(token) = parsed_token {
+            PermissionBitfieldUtil::resolve_data_scope(token)
+        } else if !user.data_scope.is_empty() {
+            user.data_scope.clone()
+        } else {
+            PermissionBitfieldUtil::resolve_data_scope(PermissionBitfieldUtil::build_bitfield(
+                &permissions,
+                &menus_permissions,
+                user.dev,
+            ))
+        };
+
+        if !user.dev && is_admin && has_legacy_full_app_scope(&menus_permissions, &user.app_id) {
+            data_scope = "ALL".into();
+            permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                &permissions,
+                &["admin".into(), "scope:all".into()],
+            );
+        }
+        if user.dev {
+            data_scope = "ALL".into();
+        }
+
+        let data_app_ids = if is_sub_user {
+            vec![]
+        } else {
+            user.data_app_ids.clone()
+        };
 
         Some(Self {
-            is_admin: resolved.is_admin,
-            is_dev: resolved.is_dev,
-            is_sub_user: resolved.is_sub_user,
-            app_id: resolved.app_id,
-            permissions: resolved.permissions,
-            menus_permissions: resolved.menus_permissions,
-            data_scope: resolved.data_scope,
-            data_app_ids: resolved.data_app_ids,
+            is_admin,
+            is_dev: user.dev,
+            is_sub_user,
+            app_id: user.app_id.clone(),
+            permissions,
+            menus_permissions,
+            data_scope,
+            data_app_ids,
             owner_candidates: collect_owner_candidates(user),
         })
     }
@@ -59,15 +113,45 @@ impl UserAccessContext {
     }
 }
 
+pub fn has_legacy_full_app_scope(menus_permissions: &[String], app_id: &str) -> bool {
+    let normalized_app_id = app_id.trim().to_ascii_lowercase();
+    if normalized_app_id.is_empty() || menus_permissions.is_empty() {
+        return false;
+    }
+    menus_permissions.iter().any(|menu| {
+        let normalized = menu.trim().to_ascii_lowercase();
+        normalized == normalized_app_id
+            || normalized == format!("app:{normalized_app_id}")
+            || normalized == format!("/{normalized_app_id}")
+    })
+}
+
+pub fn has_action_permission(permissions: &[String], action: &str) -> bool {
+    let expected = action.trim().to_ascii_lowercase();
+    if expected.is_empty() {
+        return false;
+    }
+    permissions.iter().any(|permission| {
+        let normalized = permission.trim().to_ascii_lowercase();
+        normalized == expected || normalized == "admin"
+    })
+}
+
+pub fn has_any_action_permission(permissions: &[String]) -> bool {
+    for action in ["view", "create", "edit", "delete", "export", "admin", "dev"] {
+        if has_action_permission(permissions, action) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Mirrors Java `validateActionPermissionForCurrentUser` — only dev bypasses.
 pub fn validate_action_permission(ctx: Option<&UserAccessContext>, required_action: &str) -> Option<String> {
     let Some(ctx) = ctx else {
         return None;
     };
     if ctx.is_dev {
-        return None;
-    }
-    // Main admin default policy — mirrors Java effective access via admin token.
-    if ctx.is_admin {
         return None;
     }
     if required_action.is_empty() {
@@ -103,7 +187,6 @@ pub fn resolve_required_action(params: &serde_json::Map<String, serde_json::Valu
     }
 }
 
-/// Mirrors Java `isAllowedAutoSetupTemplateReadRequest` for csm.sys_autos reads.
 pub fn is_allowed_autosetup_template_read(
     app_id: &str,
     table_name: &str,
@@ -166,7 +249,6 @@ pub fn filter_sys_autos_rows(
     Value::Array(filtered)
 }
 
-/// Mirrors Java `validateSystemUserTableAccess`.
 pub fn validate_system_user_table_access(
     table_name: &str,
     is_update: bool,
@@ -184,7 +266,6 @@ pub fn validate_system_user_table_access(
     Some("Bảng csm_accounts chỉ dành cho tài khoản dev. Admin/Sub-user vui lòng thao tác trên csm_group_members.".into())
 }
 
-/// Mirrors Java `validatePermissionGroupAppBoundary`.
 pub fn validate_permission_group_app_boundary(
     app_id: &str,
     table_name: &str,
@@ -219,8 +300,7 @@ fn is_allowed_self_csm_accounts_access(
     }
 
     let eq_values = collect_eq_values(filter);
-    let owner_candidates = &ctx.owner_candidates;
-    let has_self_identity = matches_eq_candidate(&eq_values, owner_candidates, &[
+    let has_self_identity = matches_eq_candidate(&eq_values, &ctx.owner_candidates, &[
         "id", "username", "email", "phoneNumber", "phone_number", "app_token", "appToken", "source_app_token",
     ]);
 

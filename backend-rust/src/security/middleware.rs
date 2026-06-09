@@ -16,8 +16,7 @@ use tower_http::{
 use tracing::warn;
 
 use crate::security::auth::AuthUser;
-use crate::security::permission_resolver::{apply_resolved_to_auth, resolve_effective_permissions};
-use crate::util::{parse_app_token, is_sub_user_role, PermissionBitfieldUtil};
+use crate::util::{parse_app_token, is_sub_user_role};
 use crate::security::rate_limit::RateLimiter;
 use crate::state::AppState;
 
@@ -170,32 +169,19 @@ fn auth_user_from_model(state: &AppState, user: crate::model::User) -> AuthUser 
 }
 
 fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
-    if !user.app_token.is_empty() {
-        if let Ok(decrypted) = state.record_manager.csm_decrypt(&user.app_token) {
-            let parts: Vec<&str> = decrypted.split("_____").collect();
-            if let Some(app_id) = parts.first().copied().filter(|s| !s.is_empty()) {
-                user.app_id = app_id.to_string();
-            }
-            if let Some(last) = parts.last() {
-                if let Ok(n) = last.parse::<i32>() {
-                    user.dev = n > 0;
-                }
-            }
-            if parts.len() >= 3 {
-                user.is_sub_user = is_sub_user_role(parts[2]);
-            }
-        } else if let Some(app_id) = user
-            .app_token
-            .split("_____")
-            .next()
-            .filter(|s| !s.is_empty())
-        {
-            user.app_id = app_id.to_string();
-        }
+    if user.app_token.is_empty() {
+        return user;
     }
 
-    let resolved = resolve_effective_permissions(&user, &state.record_manager);
-    apply_resolved_to_auth(&mut user, &resolved);
+    let meta = parse_app_token(&state.record_manager, &user.app_token);
+    if !meta.app_id.is_empty() {
+        user.app_id = meta.app_id;
+    }
+    user.dev = meta.access_right > 0;
+    user.is_sub_user = user.is_sub_user || is_sub_user_role(&meta.role);
+    if user.dev {
+        user.data_scope = "ALL".into();
+    }
     user
 }
 

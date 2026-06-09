@@ -6,7 +6,7 @@ use tracing::{info, warn};
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, User};
 use crate::util::{parse_app_token, is_dev_access_right, PermissionBitfieldUtil};
-use crate::security::permission_resolver::has_any_action_permission;
+use crate::security::user_access::has_any_action_permission;
 
 const CSM_APP_ID: &str = "csm";
 const ACCOUNTS_TABLE: &str = "csm_accounts";
@@ -111,22 +111,45 @@ impl UserService {
         token: &str,
     ) -> Option<User> {
         let claims = jwt.parse_claims(token).ok()?;
-        let mut user = None;
-
-        if !claims.uid.is_empty() {
-            user = self.find_by_id(&claims.uid);
+        let subject = claims.sub.trim();
+        let token_user_id = claims.uid.trim();
+        if subject.is_empty() {
+            return None;
         }
 
-        if user.is_none() && !claims.sub.is_empty() {
+        let mut user = if !token_user_id.is_empty() {
+            self.find_by_id(token_user_id)
+        } else {
+            None
+        };
+
+        // JWT subject is usually encrypted app_token — mirror Java JwtAuthenticationFilter.
+        if looks_like_app_token(subject) {
+            if let Some(by_token) = self.find_by_app_token(subject) {
+                if !token_user_id.is_empty() {
+                    let resolved_id = by_token.id.as_deref().unwrap_or("");
+                    if resolved_id != token_user_id {
+                        return None;
+                    }
+                }
+                user = Some(by_token);
+            }
+        }
+
+        if user.is_none() {
             user = self
-                .find_by_app_token(&claims.sub)
-                .or_else(|| self.find_by_id(&claims.sub))
-                .or_else(|| self.find_account("email", &claims.sub).map(|(u, _)| u))
-                .or_else(|| self.find_account("username", &claims.sub).map(|(u, _)| u))
-                .or_else(|| self.find_account("phoneNumber", &claims.sub).map(|(u, _)| u));
+                .find_by_app_token(subject)
+                .or_else(|| self.find_by_id(subject))
+                .or_else(|| self.find_account("email", subject).map(|(u, _)| u))
+                .or_else(|| self.find_account("username", subject).map(|(u, _)| u))
+                .or_else(|| self.find_account("phoneNumber", subject).map(|(u, _)| u));
         }
 
         let mut user = user?;
+
+        if !subject_matches_user(subject, &user) {
+            return None;
+        }
 
         if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
             if let Some(fresh) = self.find_by_app_token(&app_token) {
@@ -688,6 +711,30 @@ fn find_group_right<'a>(
                 }
             })
         })
+}
+
+fn looks_like_app_token(subject: &str) -> bool {
+    subject.contains("_____") || (subject.len() > 40 && !subject.contains('.'))
+}
+
+fn subject_matches_user(subject: &str, user: &User) -> bool {
+    let subject = subject.trim();
+    if subject.is_empty() {
+        return false;
+    }
+    if user.app_token.as_deref() == Some(subject) {
+        return true;
+    }
+    if user.id.as_deref() == Some(subject) {
+        return true;
+    }
+    if user.email.as_deref() == Some(subject) {
+        return true;
+    }
+    if user.username.as_deref() == Some(subject) {
+        return true;
+    }
+    user.phone_number.as_deref() == Some(subject)
 }
 
 fn sync_refresh_fields(merged: &mut Map<String, Value>, fields: &Map<String, Value>) {

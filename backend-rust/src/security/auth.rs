@@ -77,9 +77,6 @@ impl AuthUser {
         if self.app_id.eq_ignore_ascii_case(target) {
             return true;
         }
-        if self.is_sub_user {
-            return false;
-        }
         self.data_app_ids
             .iter()
             .any(|a| a.eq_ignore_ascii_case(target))
