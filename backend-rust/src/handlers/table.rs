@@ -57,6 +57,68 @@ impl TableHandler {
         merged
     }
 
+    /// Handle _changePassword / _oldPassword / _newPassword pattern (mirrors Java handlePasswordChangePayload).
+    /// Returns (modified obj_update, optional error message).
+    fn handle_password_change(
+        &self,
+        app_id: &str,
+        table: &str,
+        mut obj_update: Map<String, Value>,
+        filter: &SearchFilter,
+    ) -> (Map<String, Value>, Option<String>) {
+        let change_flag = obj_update.remove("_changePassword");
+        let old_pw = obj_update.remove("_oldPassword")
+            .and_then(|v| match v { Value::String(s) => Some(s), _ => None })
+            .unwrap_or_default();
+        let new_pw = obj_update.remove("_newPassword")
+            .and_then(|v| match v { Value::String(s) => Some(s), _ => None })
+            .unwrap_or_default();
+
+        let is_change = change_flag.as_ref().and_then(|v| v.as_bool()).unwrap_or(false)
+            || change_flag.as_ref().and_then(|v| v.as_str())
+                .map(|s| s.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+
+        if !is_change {
+            return (obj_update, None);
+        }
+        if new_pw.is_empty() {
+            return (obj_update, Some("Mật khẩu mới không được để trống".into()));
+        }
+
+        let existing = self.record_manager.find(app_id, table, filter);
+        if existing.is_empty() {
+            return (obj_update, Some("Không xác định được tài khoản để đổi mật khẩu".into()));
+        }
+
+        let login_id = if table == "csm_accounts" {
+            existing.get("username").or_else(|| existing.get("email")).or_else(|| existing.get("phoneNumber"))
+        } else {
+            existing.get("login_identifier")
+        }
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+        if login_id.is_empty() {
+            return (obj_update, Some("Không xác định được tài khoản để đổi mật khẩu".into()));
+        }
+
+        if !old_pw.is_empty() {
+            let stored = existing.get("pass").and_then(|v| v.as_str()).unwrap_or("");
+            if !stored.is_empty() {
+                let expected = self.record_manager.csm_encrypt(&format!("{login_id}_____{old_pw}"));
+                if expected != stored {
+                    return (obj_update, Some("Mật khẩu cũ không chính xác".into()));
+                }
+            }
+        }
+
+        let encrypted = self.record_manager.csm_encrypt(&format!("{login_id}_____{new_pw}"));
+        obj_update.insert("pass".into(), Value::String(encrypted));
+        (obj_update, None)
+    }
+
     /// Broadcast csm_msg_update to app room + csm admin room.
     /// Mirrors Java socketIOConfig.sendUpdateNotification(appId, table, action, pkValues, row).
     fn emit_update_notification(&self, app_id: &str, table: &str, action: &str, row: &Map<String, Value>) {
@@ -293,9 +355,33 @@ impl TableHandler {
                     }
                 }
             } else {
-                // Merge incoming fields on top of the existing record to avoid overwriting
-                // fields the client didn't include — mirrors Java's newRow.putAll(objUpdate).
-                let final_obj = self.merge_with_existing(app_id, table, obj_update);
+                // Handle _changePassword pattern before merging (mirrors Java handlePasswordChangePayload).
+                let (obj_update, pw_err) = self.handle_password_change(app_id, table, obj_update, &filter);
+                if let Some(err) = pw_err {
+                    out.insert("success".into(), Value::Bool(false));
+                    out.insert("message".into(), Value::String(err));
+                    return out;
+                }
+
+                // Merge incoming fields on top of the existing record.
+                // When obj_update lacks PK fields (e.g. profile update sends only full_name/avatar),
+                // use the e_where filter to locate the record first — mirrors Java's filter-then-merge.
+                let has_filter = !filter.conditions.is_empty() || !filter.field.is_empty();
+                let final_obj = if has_filter {
+                    let existing = self.record_manager.find(app_id, table, &filter);
+                    if !existing.is_empty() {
+                        let mut merged = existing;
+                        for (k, v) in obj_update {
+                            merged.insert(k, v);
+                        }
+                        merged
+                    } else {
+                        self.merge_with_existing(app_id, table, obj_update)
+                    }
+                } else {
+                    self.merge_with_existing(app_id, table, obj_update)
+                };
+
                 match self.record_manager.create_record(app_id, table, final_obj.clone(), None) {
                     Ok(cmd) => {
                         out.insert("success".into(), Value::Bool(true));

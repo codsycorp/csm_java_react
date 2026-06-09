@@ -298,6 +298,18 @@ impl UserService {
             .get("login_identifier")
             .and_then(|v| v.as_str())
             .map(String::from);
+        if let Some(email) = record.get("email").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            user.email = Some(email.to_string());
+        }
+        if let Some(full_name) = record.get("full_name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            user.full_name = Some(full_name.to_string());
+        }
+        if let Some(avatar) = record.get("avatar").and_then(|v| v.as_str()) {
+            user.avatar = Some(avatar.to_string());
+        }
+        if let Some(pass) = record.get("pass").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            user.password = Some(pass.to_string());
+        }
         user.permissions = record
             .get("permissions")
             .and_then(|v| v.as_array())
@@ -306,6 +318,23 @@ impl UserService {
             .get("menusPermissions")
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
+        // app_id: prefer sub-user's own app_token (decrypted), then record's app_id field,
+        // then fall through to parent's app_id (already set via user = parent).
+        // Mirrors Java mapSubUserRecordToUser: tokenParts[0] = appId from csm_decrypt(app_token).
+        if let Some(sub_token) = record.get("app_token").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            user.app_token = Some(sub_token.to_string());
+            if let Ok(decrypted) = self.record_manager.csm_decrypt(sub_token) {
+                let parts: Vec<&str> = decrypted.splitn(2, "_____").collect();
+                if let Some(app_id) = parts.first().filter(|s| !s.is_empty()) {
+                    user.app_id = Some(app_id.to_string());
+                }
+            }
+        }
+        if user.app_id.as_deref().unwrap_or("").is_empty() {
+            if let Some(app_id) = record.get("app_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                user.app_id = Some(app_id.to_string());
+            }
+        }
         Some(user)
     }
 }
