@@ -690,6 +690,39 @@ impl RecordManager {
         }
     }
 
+    /// Read the existing record by its primary-key values — direct RocksDB lookup.
+    /// Used by TableHandler to merge incoming obj_update on top of the stored record
+    /// (mirrors Java: existingRow = recordManager.findRecord(); newRow.putAll(objUpdate)).
+    pub fn find_existing_by_pk_values(
+        &self,
+        app_id: &str,
+        table_name: &str,
+        record: &Map<String, Value>,
+    ) -> Map<String, Value> {
+        let pk_fields = match self.get_table_search_keys(app_id, table_name, "fieldsPK") {
+            Ok(f) if !f.is_empty() => f,
+            _ => return Map::new(),
+        };
+        let key_base = match self.build_primary_key(app_id, table_name, record, &pk_fields) {
+            Ok(k) => k,
+            Err(_) => return Map::new(),
+        };
+        let db = match self.get_db(app_id, table_name) {
+            Ok(db) => db,
+            Err(_) => return Map::new(),
+        };
+        for candidate in storage_key_candidates(app_id, table_name, &key_base) {
+            if let Ok(Some(bytes)) = db.db.get(candidate.as_bytes()) {
+                if bytes.len() <= MAX_SAFE_FIND_RECORD_BYTES {
+                    if let Ok(Value::Object(obj)) = serde_json::from_slice(&bytes) {
+                        return obj;
+                    }
+                }
+            }
+        }
+        Map::new()
+    }
+
     fn build_primary_key(
         &self,
         _app_id: &str,

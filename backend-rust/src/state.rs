@@ -52,6 +52,8 @@ impl AppState {
         let crm_analytics = Arc::new(CrmAnalyticsService::new(crm_service.clone()));
         let chat_service = Arc::new(ChatPersistenceService::new(record_manager.clone()));
 
+        let socket_io = Arc::new(socket_io);
+
         let auth_handler = Arc::new(AuthHandler::new(
             record_manager.clone(),
             user_service.clone(),
@@ -61,6 +63,7 @@ impl AppState {
             record_manager.clone(),
             user_service.clone(),
             chat_service.clone(),
+            (*socket_io).clone(),
         ));
         let crm_handler = Arc::new(CrmHandler::new(
             crm_service.clone(),
@@ -96,7 +99,7 @@ impl AppState {
             home_handler,
             init_handler,
             seo_handler,
-            socket_io: Arc::new(socket_io),
+            socket_io,
         })
     }
 }

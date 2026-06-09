@@ -7,6 +7,7 @@ use crate::model::{SearchFilter, StandardResponse};
 use crate::security::auth::AuthUser;
 use crate::services::chat::ChatPersistenceService;
 use crate::services::user::UserService;
+use crate::socket::SocketIo;
 
 // Mirrors Java TableHandler.RESERVED_INDEX_IDS exactly
 const RESERVED_INDEX_IDS: &[&str] = &[
@@ -19,6 +20,7 @@ pub struct TableHandler {
     user_service: Arc<UserService>,
     #[allow(dead_code)]
     chat_service: Arc<ChatPersistenceService>,
+    socket_io: SocketIo,
 }
 
 impl TableHandler {
@@ -26,11 +28,56 @@ impl TableHandler {
         record_manager: Arc<RecordManager>,
         user_service: Arc<UserService>,
         chat_service: Arc<ChatPersistenceService>,
+        socket_io: SocketIo,
     ) -> Self {
         Self {
             record_manager,
             user_service,
             chat_service,
+            socket_io,
+        }
+    }
+
+    /// Read existing record by its PK values then overlay obj_update on top.
+    /// Mirrors Java: newRow = new LinkedHashMap<>(existingRow); newRow.putAll(objUpdate).
+    fn merge_with_existing(
+        &self,
+        app_id: &str,
+        table: &str,
+        obj_update: Map<String, Value>,
+    ) -> Map<String, Value> {
+        let existing = self.record_manager.find_existing_by_pk_values(app_id, table, &obj_update);
+        if existing.is_empty() {
+            return obj_update;
+        }
+        let mut merged = existing;
+        for (k, v) in obj_update {
+            merged.insert(k, v);
+        }
+        merged
+    }
+
+    /// Broadcast csm_msg_update to app room + csm admin room.
+    /// Mirrors Java socketIOConfig.sendUpdateNotification(appId, table, action, pkValues, row).
+    fn emit_update_notification(&self, app_id: &str, table: &str, action: &str, row: &Map<String, Value>) {
+        let pk_fields = self.record_manager
+            .get_table_search_keys(app_id, table, "fieldsPK")
+            .unwrap_or_default();
+        let primary_keys: Map<String, Value> = pk_fields.iter()
+            .filter_map(|f| row.get(f).map(|v| (f.clone(), v.clone())))
+            .collect();
+
+        let notification = serde_json::json!({
+            "appId": app_id,
+            "table": table,
+            "action": action,
+            "primaryKeys": primary_keys,
+            "dataRow": row,
+        });
+
+        let _ = self.socket_io.to(app_id.to_string()).emit("csm_msg_update", &notification);
+        if app_id != "csm" {
+            let _ = self.socket_io.to("csm".to_string()).emit("csm_msg_update", &notification);
         }
     }
 
@@ -221,7 +268,9 @@ impl TableHandler {
                             out.insert("success".into(), Value::Bool(true));
                             out.insert("command".into(), Value::String("delete".into()));
                             out.insert("message".into(), Value::String("Record deleted".into()));
-                            out.insert("updated_row".into(), Value::Object(target));
+                            out.insert("updated_row".into(), Value::Object(target.clone()));
+                            // Notify connected clients (mirrors Java sendUpdateNotification)
+                            self.emit_update_notification(app_id, table, "delete", &target);
                         }
                         Err(e) => {
                             out.insert("success".into(), Value::Bool(false));
@@ -230,14 +279,19 @@ impl TableHandler {
                     }
                 }
             } else {
-                match self.record_manager.create_record(app_id, table, obj_update.clone(), None) {
+                // Merge incoming fields on top of the existing record to avoid overwriting
+                // fields the client didn't include — mirrors Java's newRow.putAll(objUpdate).
+                let final_obj = self.merge_with_existing(app_id, table, obj_update);
+                match self.record_manager.create_record(app_id, table, final_obj.clone(), None) {
                     Ok(cmd) => {
                         out.insert("success".into(), Value::Bool(true));
-                        out.insert("command".into(), Value::String(cmd));
+                        out.insert("command".into(), Value::String(cmd.clone()));
                         out.insert("message".into(), Value::String("ok".into()));
-                        out.insert("updated_row".into(), Value::Object(obj_update));
+                        out.insert("updated_row".into(), Value::Object(final_obj.clone()));
                         out.insert("obj_name".into(), Value::String(table.to_string()));
                         out.insert("app_id".into(), Value::String(app_id.to_string()));
+                        // Notify connected clients (mirrors Java sendUpdateNotification)
+                        self.emit_update_notification(app_id, table, &cmd, &final_obj);
                     }
                     Err(e) => {
                         out.insert("success".into(), Value::Bool(false));
@@ -343,7 +397,7 @@ impl TableHandler {
                 .cloned()
                 .unwrap_or_else(|| obj.clone());
 
-            let (item_ok, cmd_str, msg) = if command == "delete" {
+            let (item_ok, cmd_str, msg, saved_row) = if command == "delete" {
                 // obj_update has pk values; e_where is a SearchFilter (not a flat map)
                 let target = if !obj_update.is_empty() {
                     obj_update.clone()
@@ -355,25 +409,32 @@ impl TableHandler {
                     obj_update.clone()
                 };
                 if target.is_empty() {
-                    (false, "delete".to_string(), "Record not found for delete".to_string())
+                    (false, "delete".to_string(), "Record not found for delete".to_string(), obj_update)
                 } else {
                     match self.record_manager.delete_record(op_app_id, op_table, &target) {
-                        Ok(()) => (true, "delete".to_string(), "ok".to_string()),
-                        Err(e) => (false, "delete".to_string(), e.to_string()),
+                        Ok(()) => (true, "delete".to_string(), "ok".to_string(), target),
+                        Err(e) => (false, "delete".to_string(), e.to_string(), obj_update),
                     }
                 }
             } else {
-                match self.record_manager.create_record(op_app_id, op_table, obj_update.clone(), None) {
-                    Ok(cmd) => (true, cmd, "ok".to_string()),
-                    Err(e) => (false, command.clone(), e.to_string()),
+                // Merge incoming fields on top of existing record (mirrors Java newRow.putAll)
+                let final_obj = self.merge_with_existing(op_app_id, op_table, obj_update);
+                match self.record_manager.create_record(op_app_id, op_table, final_obj.clone(), None) {
+                    Ok(cmd) => (true, cmd, "ok".to_string(), final_obj),
+                    Err(e) => (false, command.clone(), e.to_string(), Map::new()),
                 }
             };
 
-            if item_ok { success_count += 1; } else { failed_count += 1; }
+            if item_ok {
+                success_count += 1;
+                self.emit_update_notification(op_app_id, op_table, &cmd_str, &saved_row);
+            } else {
+                failed_count += 1;
+            }
             op_result.insert("success".into(), Value::Bool(item_ok));
             op_result.insert("command".into(), Value::String(cmd_str));
             op_result.insert("message".into(), Value::String(msg));
-            op_result.insert("updated_row".into(), Value::Object(obj_update));
+            op_result.insert("updated_row".into(), Value::Object(saved_row));
             results.push(Value::Object(op_result));
 
             if !item_ok && !continue_on_error { break; }
