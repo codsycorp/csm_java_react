@@ -206,11 +206,9 @@ pub async fn serve_feed_xml(state: &AppState, host: Option<&str>) -> Response {
                 format!("/{svc_type}/{slug_clean}")
             };
             let url = format!("{base_url}{path}");
-            let lastmod = ["updated_at", "publish_date", "modified_at", "created_at"]
-                .iter()
-                .find_map(|k| row.get(*k)?.as_str().filter(|s| !s.is_empty()))
-                .map(|s| &s[..s.len().min(10)])
-                .unwrap_or("");
+            let lastmod = crate::util::resolve_lastmod_from_row(row)
+                .map(|s| crate::util::extract_date_only(&s))
+                .unwrap_or_default();
             feed.push_str(&format!(
                 "    <item>\n      <title><![CDATA[{title}]]></title>\n      <link>{url}</link>\n      <guid>{url}</guid>\n"
             ));

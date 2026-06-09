@@ -8,6 +8,7 @@ use tracing::info;
 
 use crate::model::SearchFilter;
 use crate::state::AppState;
+use crate::util::{compare_related_post_rows_desc, extract_date_only, resolve_lastmod_from_row};
 
 struct CacheEntry<T> {
     data: T,
@@ -1132,13 +1133,11 @@ fn resolve_service_listing(
     let det_result = state.record_manager.filter(&route.app_id, &route.tbl_service_detail, &det_filter);
     let mut all_rows = rows_from(&det_result);
 
-    // Sort by id DESC (newest first)
+    // Sort by publish_date/updated_at/created_at DESC, then id (mirrors Java SSR)
     all_rows.sort_by(|a, b| {
-        let ia = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        let ib = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        match (ia.parse::<i64>(), ib.parse::<i64>()) {
-            (Ok(na), Ok(nb)) => nb.cmp(&na),
-            _ => ib.cmp(ia),
+        match (a.as_object(), b.as_object()) {
+            (Some(oa), Some(ob)) => compare_related_post_rows_desc(oa, ob),
+            _ => std::cmp::Ordering::Equal,
         }
     });
 
@@ -1787,7 +1786,10 @@ pub fn build_sitemap(state: &AppState, host: Option<&str>) -> String {
 fn sitemap_url_entry(url: &str, lastmod: Option<&str>, changefreq: &str, priority: &str) -> String {
     let mut s = format!("\n  <url>\n    <loc>{url}</loc>\n");
     if let Some(lm) = lastmod.filter(|s| !s.is_empty()) {
-        s.push_str(&format!("    <lastmod>{}</lastmod>\n", &lm[..lm.len().min(10)]));
+        let date_only = extract_date_only(lm);
+        if !date_only.is_empty() {
+            s.push_str(&format!("    <lastmod>{date_only}</lastmod>\n"));
+        }
     }
     s.push_str(&format!(
         "    <changefreq>{changefreq}</changefreq>\n    <priority>{priority}</priority>\n  </url>"
@@ -1796,10 +1798,5 @@ fn sitemap_url_entry(url: &str, lastmod: Option<&str>, changefreq: &str, priorit
 }
 
 fn sitemap_lastmod(row: &Value) -> Option<String> {
-    for key in &["updated_at", "publish_date", "modified_at", "updatedAt", "created_at"] {
-        if let Some(v) = row.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-            return Some(v.to_string());
-        }
-    }
-    None
+    resolve_lastmod_from_row(row)
 }

@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::config::{ensure_dir, AppConfig};
 use crate::model::SearchFilter;
+use crate::util::compare_records_desc;
 
 pub const PHONE: &str = "0937.528.839";
 pub const WRITEBY: &str = "base._co.osa";
@@ -1022,38 +1023,6 @@ fn value_to_string(v: &Value) -> String {
 
 fn record_key(record: &Map<String, Value>) -> Option<String> {
     record.get("id").and_then(|v| v.as_str()).map(String::from)
-}
-
-fn compare_records_desc(a: &Map<String, Value>, b: &Map<String, Value>) -> std::cmp::Ordering {
-    let ta = resolve_sort_ts(a);
-    let tb = resolve_sort_ts(b);
-    tb.cmp(&ta).then_with(|| {
-        let ida = record_key(a).unwrap_or_default();
-        let idb = record_key(b).unwrap_or_default();
-        idb.cmp(&ida)
-    })
-}
-
-fn resolve_sort_ts(record: &Map<String, Value>) -> i64 {
-    for field in ["publish_date", "updated_at", "created_at", "id"] {
-        if let Some(v) = record.get(field) {
-            if let Some(n) = v.as_i64() {
-                if n > 0 && n < 1_000_000_000_000 {
-                    return n * 1000;
-                }
-                return n.max(0);
-            }
-            if let Some(s) = v.as_str() {
-                if let Ok(n) = s.parse::<i64>() {
-                    if n > 0 && n < 1_000_000_000_000 {
-                        return n * 1000;
-                    }
-                    return n.max(0);
-                }
-            }
-        }
-    }
-    0
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
