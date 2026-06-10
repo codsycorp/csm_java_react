@@ -28,7 +28,11 @@ impl UserService {
         let filter = SearchFilter::eq("id", user_id);
         let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
         if !record.is_empty() {
-            return Some(self.map_record_to_user(&record, true));
+            let user = self.map_record_to_user(&record, true);
+            if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
+                return self.find_by_app_token(&app_token).or(Some(user));
+            }
+            return Some(user);
         }
         let sub = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
         if !sub.is_empty() {

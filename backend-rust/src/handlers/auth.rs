@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::data::RecordManager;
@@ -516,19 +516,21 @@ impl AuthHandler {
         };
 
         let fresh_user = auth_user.and_then(|auth| self.resolve_fresh_user(auth));
-        let (permissions, menus, is_dev) = if let Some(user) = fresh_user {
-            (
-                user.permissions.unwrap_or_default(),
-                user.menus_permissions.unwrap_or_default(),
-                user.dev.unwrap_or(false),
-            )
-        } else {
-            (
-                auth.permissions.clone(),
-                auth.menus_permissions.clone().unwrap_or_default(),
-                auth.dev,
-            )
-        };
+
+        // Mirror Java handleGetAsyncRoutes: authenticated principal first, DB only to fill gaps.
+        let mut permissions = auth.permissions.clone();
+        let mut menus = auth.menus_permissions.clone().unwrap_or_default();
+        let mut is_dev = auth.dev;
+
+        if let Some(user) = fresh_user {
+            if permissions.is_empty() {
+                permissions = user.permissions.clone().unwrap_or_default();
+            }
+            if menus.is_empty() {
+                menus = user.menus_permissions.clone().unwrap_or_default();
+            }
+            is_dev = self.resolve_dev_flag(&user) || user.dev.unwrap_or(false) || auth.dev;
+        }
 
         let user_role = permissions.first().cloned();
 
@@ -548,15 +550,24 @@ impl AuthHandler {
     }
 
     fn resolve_fresh_user(&self, auth: &crate::security::AuthUser) -> Option<User> {
-        if !auth.app_token.is_empty() {
-            if let Some(user) = self.user_service.find_by_app_token(&auth.app_token) {
-                return Some(user);
-            }
+        let user = if !auth.app_token.is_empty() {
+            self.user_service.find_by_app_token(&auth.app_token)
+        } else if !auth.user_id.is_empty() {
+            self.user_service.find_by_id(&auth.user_id)
+        } else {
+            None
+        }?;
+
+        let resolved_id = user.id.as_deref().unwrap_or("");
+        if !auth.user_id.is_empty() && !resolved_id.is_empty() && resolved_id != auth.user_id {
+            warn!(
+                "[resolve_fresh_user] Reject stale user record auth_id={} resolved_id={} app_token={}",
+                auth.user_id, resolved_id, auth.app_token
+            );
+            return None;
         }
-        if !auth.user_id.is_empty() {
-            return self.user_service.find_by_id(&auth.user_id);
-        }
-        None
+
+        Some(user)
     }
 
     fn resolve_dev_flag(&self, user: &User) -> bool {

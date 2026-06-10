@@ -169,6 +169,8 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
             {
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
+            // Valid JWT for this request must not fall back to another user's refresh token.
+            return None;
         }
     }
 
@@ -236,12 +238,19 @@ fn csm_token(headers: &HeaderMap) -> Option<String> {
 }
 
 fn refresh_token_from_request(headers: &HeaderMap) -> Option<String> {
-    headers
+    let cookie = cookie_value(headers, "refreshToken");
+    let header = headers
         .get("x-refresh-token")
         .and_then(|h| h.to_str().ok())
         .filter(|t| !t.is_empty())
-        .map(String::from)
-        .or_else(|| cookie_value(headers, "refreshToken"))
+        .map(String::from);
+
+    match (cookie, header) {
+        (Some(c), Some(h)) if c != h => Some(c),
+        (Some(c), _) => Some(c),
+        (_, Some(h)) => Some(h),
+        _ => None,
+    }
 }
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
