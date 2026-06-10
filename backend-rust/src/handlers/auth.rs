@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
 
 use crate::data::RecordManager;
@@ -52,35 +52,22 @@ impl AuthHandler {
             return response;
         }
 
-        let Some(mut user) = self
+        let Some(user) = self
             .user_service
             .find_by_login_and_password(login_id, password)
         else {
             response.set("code", 401);
             response.set("success", false);
-            response.set("message", "Sai thông tin đăng nhập.");
+            response.set("message", "Định danh hoặc mật khẩu không hợp lệ");
             return response;
         };
 
-        if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
-            if let Some(canonical) = self.user_service.find_by_app_token(&app_token) {
-                user = canonical;
-            }
-        }
-
-        let is_sub_user = user.is_sub_user.unwrap_or(false)
-            || self
-                .parse_app_token_meta(user.app_token.as_deref())
-                .2;
-        let is_dev = if is_sub_user {
-            false
-        } else {
-            self.resolve_dev_flag(&user)
-        };
+        // Mirror Java AuthHandler.handleLogin: dev from app_token access_right only.
+        let is_dev = self.resolve_dev_flag(&user);
+        let mut user = user;
         user.dev = Some(is_dev);
-        apply_app_id_from_token(&self.record_manager, &mut user);
 
-        let next_version = user.login_version.unwrap_or(0) + 1;
+        let next_version = user.login_version.map(|v| v + 1).unwrap_or(1);
         let refresh_token = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
         let ip = params
             .get("_client_ip")
@@ -236,65 +223,24 @@ impl AuthHandler {
     pub fn handle_user_info(
         &self,
         auth_user: Option<&crate::security::AuthUser>,
-        params: &Map<String, Value>,
+        _params: &Map<String, Value>,
     ) -> StandardResponse {
         let mut response = StandardResponse::new();
-
-        // Mirror Java AuthHandler.handleUserInfo: bind to JWT principal, not a stale refresh session.
-        // When csm-token is sent, always resolve from that JWT first (same request token the client logged in with).
-        let user = params
-            .get("csm-token")
-            .and_then(|v| v.as_str())
-            .filter(|t| !t.is_empty())
-            .and_then(|token| {
-                if self.jwt.validate_token(token) {
-                    self.user_service.resolve_from_jwt_with_util(&self.jwt, token)
-                } else {
-                    None
-                }
-            })
-            .or_else(|| auth_user.and_then(|auth| self.resolve_fresh_user(auth)));
-
-        let Some(user) = user else {
+        let Some(auth) = auth_user else {
             response.set("code", 401);
             response.set("success", false);
-            response.set(
-                "message",
-                if auth_user.is_some() {
-                    "User not found"
-                } else {
-                    "Not authenticated"
-                },
-            );
+            response.set("message", "Not authenticated");
             return response;
         };
 
-        let is_sub_user = user.is_sub_user.unwrap_or(false)
-            || self.parse_app_token_meta(user.app_token.as_deref()).2;
-        let is_dev = if is_sub_user {
-            false
-        } else {
-            self.resolve_dev_flag(&user)
-        };
-        let mut user = user;
-        user.dev = Some(is_dev);
-        user.is_sub_user = Some(is_sub_user);
-        apply_app_id_from_token(&self.record_manager, &mut user);
+        // Mirror Java AuthHandler.handleUserInfo: fresh DB by principal id, then app_token; fallback to principal.
+        let user = self
+            .resolve_fresh_user(auth)
+            .unwrap_or_else(|| self.user_from_auth(auth));
+
         let mut info = user.to_info_map();
         self.enrich_account_meta(&user, &mut info);
         self.enrich_user_info_with_bitfield(&user, &mut info);
-        info.insert("dev".into(), Value::Bool(is_dev));
-        if let Some(app_id) = user.app_id.as_ref().filter(|s| !s.is_empty()) {
-            info.insert("app_id".into(), Value::String(app_id.clone()));
-        }
-        if let Some(app_token) = user.app_token.as_ref().filter(|s| !s.is_empty()) {
-            info.insert("app_token".into(), Value::String(app_token.clone()));
-        }
-        let data_app_ids = user.data_app_ids.clone().unwrap_or_default();
-        info.insert(
-            "data_app_ids".into(),
-            Value::Array(data_app_ids.iter().cloned().map(Value::String).collect()),
-        );
 
         response.set("code", 200);
         response.set("success", true);
@@ -570,7 +516,7 @@ impl AuthHandler {
     }
 
     fn resolve_fresh_user(&self, auth: &crate::security::AuthUser) -> Option<User> {
-        // Mirror Java handleUserInfo: findUserById first, then findUserByAppToken.
+        // Mirror Java handleUserInfo: findUserById(principal.id) then findUserByAppToken(principal.app_token).
         let mut fresh = None;
         if !auth.user_id.is_empty() {
             fresh = self.user_service.find_by_id(&auth.user_id);
@@ -579,6 +525,28 @@ impl AuthHandler {
             fresh = self.user_service.find_by_app_token(&auth.app_token);
         }
         fresh
+    }
+
+    fn user_from_auth(&self, auth: &crate::security::AuthUser) -> User {
+        User {
+            id: Some(auth.user_id.clone()),
+            username: Some(auth.username.clone()),
+            email: Some(auth.email.clone()),
+            phone_number: Some(auth.phone_number.clone()),
+            app_token: Some(auth.app_token.clone()),
+            app_id: Some(auth.app_id.clone()),
+            permissions: Some(auth.permissions.clone()),
+            menus_permissions: auth.menus_permissions.clone(),
+            permission_bitfield: auth.permission_bitfield.clone(),
+            data_scope: Some(auth.data_scope.clone()),
+            dev: Some(auth.dev),
+            is_sub_user: Some(auth.is_sub_user),
+            data_app_ids: Some(auth.data_app_ids.clone()),
+            dept_id: Some(auth.dept_id.clone()),
+            branch_id: Some(auth.branch_id.clone()),
+            login_version: Some(auth.login_version),
+            ..Default::default()
+        }
     }
 
     fn resolve_dev_flag(&self, user: &User) -> bool {
@@ -660,15 +628,10 @@ impl AuthHandler {
         );
         let base_menus = string_list_from_value(info.get("menusPermissions"));
 
-        let dev = if user.is_sub_user.unwrap_or(false)
-            || self.parse_app_token_meta(user.app_token.as_deref()).2
-        {
-            false
-        } else {
-            self.resolve_dev_flag(user)
-                || user.dev.unwrap_or(false)
-                || info.get("dev").and_then(|v| v.as_bool()).unwrap_or(false)
-        };
+        let dev = info
+            .get("dev")
+            .and_then(|v| v.as_bool())
+            .unwrap_or_else(|| user.dev.unwrap_or(false));
 
         let mut permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
             &base_permissions,

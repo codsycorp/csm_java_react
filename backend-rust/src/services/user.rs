@@ -25,15 +25,12 @@ impl UserService {
         if user_id.is_empty() {
             return None;
         }
+        // Mirror Java UserService.findUserById — direct id lookup, no app_token redirect.
         for candidate in token_user_id_candidates(user_id) {
             let filter = SearchFilter::eq("id", candidate.as_str());
             let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
             if !record.is_empty() {
-                let user = self.map_record_to_user(&record, true);
-                if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
-                    return self.find_by_app_token(&app_token).or(Some(user));
-                }
-                return Some(user);
+                return Some(self.map_record_to_user(&record, true));
             }
             let sub = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
             if !sub.is_empty() {
@@ -269,7 +266,7 @@ impl UserService {
         fields.insert("login_version".into(), json!(login_version));
         fields.insert("loginVersion".into(), json!(login_version));
 
-        if !self.apply_session_fields(user, &fields) {
+        if !self.write_session_fields(user, &fields) {
             warn!(
                 "update_session_token: session not persisted for user id={:?}",
                 user.id
@@ -286,42 +283,71 @@ impl UserService {
         fields.insert("refresh_token_ua".into(), Value::Null);
         fields.insert("refresh_token_expiry".into(), Value::Null);
 
-        if self.apply_session_fields(user, &fields) {
-            return;
-        }
-
-        if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
-            self.update_by_id(id, &fields);
+        if !self.write_session_fields(user, &fields) {
+            if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
+                self.update_by_id(id, &fields);
+            }
         }
     }
 
-    fn apply_session_fields(&self, user: &User, fields: &Map<String, Value>) -> bool {
+    /// Mirror Java UserService.updateSessionToken / clearSessionToken write order.
+    fn write_session_fields(&self, user: &User, fields: &Map<String, Value>) -> bool {
         if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
-            let filter = SearchFilter::eq("id", id);
-            let sub = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
-            if !sub.is_empty() {
-                self.write_sub_user_record(id, fields);
+            if self.update_sub_user_field_by_id(id, fields) {
                 return true;
             }
-
-            // Main account: mirror update_by_id alias writes (app_token + refresh + id keys).
-            self.update_by_id(id, fields);
-            return true;
         }
 
         if let Some(app_token) = user.app_token.as_deref().filter(|s| !s.is_empty()) {
             if self.is_sub_user_by_app_token(app_token) {
-                return false;
+                if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
+                    let _ = self.update_sub_user_field_by_id(id, fields);
+                }
+                return true;
             }
+
             let filter = SearchFilter::eq("app_token", app_token);
             let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
-            if let Some(id) = record.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-                self.update_by_id(id, fields);
+            if !record.is_empty() {
+                let mut merged = record;
+                merged.extend(fields.clone());
+                sync_refresh_fields(&mut merged, fields);
+                let _ = self.record_manager.create_record(
+                    CSM_APP_ID,
+                    ACCOUNTS_TABLE,
+                    merged,
+                    Some(vec!["app_token".into()]),
+                );
                 return true;
             }
         }
 
+        if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
+            self.update_user_field_by_id(id, fields);
+            return true;
+        }
+
         false
+    }
+
+    fn update_sub_user_field_by_id(&self, user_id: &str, fields: &Map<String, Value>) -> bool {
+        let filter = SearchFilter::eq("id", user_id);
+        let record = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
+        if record.is_empty() {
+            return false;
+        }
+        self.write_sub_user_record(user_id, fields);
+        true
+    }
+
+    fn update_user_field_by_id(&self, user_id: &str, fields: &Map<String, Value>) {
+        let filter = SearchFilter::eq("id", user_id);
+        let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+        if record.is_empty() {
+            warn!("[update_user_field_by_id] User not found by id={user_id}");
+            return;
+        }
+        self.update_by_id(user_id, fields);
     }
 
     fn write_sub_user_record(&self, user_id: &str, fields: &Map<String, Value>) {

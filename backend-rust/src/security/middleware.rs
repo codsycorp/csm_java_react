@@ -165,17 +165,19 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
 
     let csm = csm_token(headers);
     if let Some(token) = csm.as_ref() {
-        if state.jwt.validate_token(token) {
-            if let Some(user) =
-                state
-                    .user_service
-                    .resolve_from_jwt_with_util(&state.jwt, token)
-            {
-                return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
+        if !token.is_empty() {
+            if state.jwt.validate_token(token) {
+                if let Some(user) =
+                    state
+                        .user_service
+                        .resolve_from_jwt_with_util(&state.jwt, token)
+                {
+                    return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
+                }
+                // Mirror Java JwtAuthenticationFilter: valid csm-token but resolution failed → refresh fallback.
+                warn!("[JWT] csm-token auth resolution failed, fallback to refresh-token path");
             }
-            // Valid csm-token but user/version mismatch — never bind another user's refresh session.
-            warn!("[JWT] csm-token valid but auth resolution failed, rejecting request");
-            return None;
+            // Invalid JWT format/signature: continue to refresh-token fallback (Java parity).
         }
     }
 
@@ -184,6 +186,22 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
             let client_ip = client_ip_from_headers(headers);
             let client_ua = user_agent_from_headers(headers);
             if refresh_session_valid(&user, &client_ip, &client_ua) {
+                // When client sent a valid csm-token JWT with uid, do not bind another user's refresh session.
+                if let Some(token) = csm.as_ref().filter(|t| state.jwt.validate_token(t)) {
+                    if let Ok(claims) = state.jwt.parse_claims(token) {
+                        let token_uid = claims.uid.trim();
+                        if !token_uid.is_empty() {
+                            let refresh_id = user.id.as_deref().unwrap_or("");
+                            if !crate::services::user::user_ids_match(refresh_id, token_uid) {
+                                warn!(
+                                    "[JWT] Reject refresh fallback: csm-token uid={} refresh user id={}",
+                                    token_uid, refresh_id
+                                );
+                                return None;
+                            }
+                        }
+                    }
+                }
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
             state.user_service.clear_session_token(&user);
