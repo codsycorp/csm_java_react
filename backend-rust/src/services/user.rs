@@ -42,7 +42,26 @@ impl UserService {
             return None;
         }
         let filter = SearchFilter::eq("app_token", app_token);
-        let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+        let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+        let rows = filtered
+            .get("rows")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut account_rows: Vec<Map<String, Value>> = rows
+            .into_iter()
+            .filter_map(|v| v.as_object().cloned())
+            .collect();
+
+        let record = if account_rows.is_empty() {
+            self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter)
+        } else if account_rows.len() == 1 {
+            account_rows.pop().unwrap()
+        } else {
+            pick_best_account_record(&account_rows)?
+        };
+
         if !record.is_empty() {
             return Some(self.map_record_to_user(&record, true));
         }
@@ -66,7 +85,19 @@ impl UserService {
             }
             let sub = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
             if !sub.is_empty() {
-                return self.map_sub_user(&sub);
+                if record_refresh_expired(&sub) {
+                    return None;
+                }
+                let user = self.map_sub_user(&sub)?;
+                let stored = user.refresh_token.as_deref().unwrap_or("");
+                if stored != refresh_token {
+                    warn!(
+                        "[find_by_refresh_token] Reject stale sub-user refresh token for login_identifier={:?}",
+                        sub.get("login_identifier")
+                    );
+                    return None;
+                }
+                return Some(user);
             }
         }
         None
@@ -170,11 +201,7 @@ impl UserService {
         record: &Map<String, Value>,
         refresh_token: &str,
     ) -> Option<User> {
-        let expiry = record
-            .get("refresh_token_expiry")
-            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-            .unwrap_or(0);
-        if expiry > 0 && expiry <= chrono::Utc::now().timestamp_millis() {
+        if record_refresh_expired(record) {
             return None;
         }
 
@@ -187,7 +214,24 @@ impl UserService {
             return None;
         }
 
-        Some(self.map_record_to_user(record, true))
+        let mut user = self.map_record_to_user(record, true);
+
+        // Re-fetch canonical record by app_token to avoid stale refresh alias rows (Java parity).
+        if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
+            if let Some(canonical) = self.find_by_app_token(&app_token) {
+                let canonical_refresh = canonical.refresh_token.as_deref().unwrap_or("");
+                if canonical_refresh != refresh_token {
+                    warn!(
+                        "[find_by_refresh_token] Reject stale refresh token for user {:?}",
+                        canonical.email
+                    );
+                    return None;
+                }
+                user = canonical;
+            }
+        }
+
+        Some(user)
     }
 
     pub fn update_session_token(
@@ -206,24 +250,104 @@ impl UserService {
         fields.insert("refresh_token_ua".into(), Value::String(ua.into()));
         fields.insert("refresh_token_expiry".into(), json!(expiry_ms));
         fields.insert("login_version".into(), json!(login_version));
-        if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
-            self.update_by_id(id, &fields);
-        } else {
-            warn!("update_session_token: missing user id, session not persisted");
+        fields.insert("loginVersion".into(), json!(login_version));
+
+        if !self.apply_session_fields(user, &fields) {
+            warn!(
+                "update_session_token: session not persisted for user id={:?}",
+                user.id
+            );
         }
     }
 
     /// Mirror Java UserService.clearSessionToken — invalidate refresh session metadata.
     pub fn clear_session_token(&self, user: &User) {
         let mut fields = Map::new();
-        fields.insert("refresh_token".into(), Value::String(String::new()));
-        fields.insert("refresh".into(), Value::String(String::new()));
+        fields.insert("refresh_token".into(), Value::Null);
+        fields.insert("refresh".into(), Value::Null);
         fields.insert("refresh_token_ip".into(), Value::Null);
         fields.insert("refresh_token_ua".into(), Value::Null);
         fields.insert("refresh_token_expiry".into(), Value::Null);
+
+        if self.apply_session_fields(user, &fields) {
+            return;
+        }
+
         if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
             self.update_by_id(id, &fields);
         }
+    }
+
+    fn apply_session_fields(&self, user: &User, fields: &Map<String, Value>) -> bool {
+        if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
+            let filter = SearchFilter::eq("id", id);
+            let sub = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
+            if !sub.is_empty() {
+                self.write_sub_user_record(id, fields);
+                return true;
+            }
+        }
+
+        if let Some(app_token) = user.app_token.as_deref().filter(|s| !s.is_empty()) {
+            if self.is_sub_user_by_app_token(app_token) {
+                if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
+                    self.write_sub_user_record(id, fields);
+                }
+                return true;
+            }
+
+            let filter = SearchFilter::eq("app_token", app_token);
+            let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+            if !record.is_empty() {
+                let mut merged = record;
+                merged.extend(fields.clone());
+                sync_refresh_fields(&mut merged, fields);
+                let _ = self.record_manager.create_record(
+                    CSM_APP_ID,
+                    ACCOUNTS_TABLE,
+                    merged,
+                    Some(vec!["app_token".into()]),
+                );
+                return true;
+            }
+        }
+
+        if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
+            self.update_by_id(id, fields);
+            return true;
+        }
+
+        false
+    }
+
+    fn write_sub_user_record(&self, user_id: &str, fields: &Map<String, Value>) {
+        let filter = SearchFilter::eq("id", user_id);
+        let record = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
+        if record.is_empty() {
+            warn!("write_sub_user_record: sub-user not found id={user_id}");
+            return;
+        }
+        let mut merged = record;
+        merged.extend(fields.clone());
+        sync_refresh_fields(&mut merged, fields);
+        merged.insert("id".into(), json!(user_id));
+        let _ = self.record_manager.create_record(
+            CSM_APP_ID,
+            SUB_ACCOUNTS_TABLE,
+            merged,
+            Some(vec!["id".into(), "login_identifier".into()]),
+        );
+    }
+
+    fn is_sub_user_by_app_token(&self, app_token: &str) -> bool {
+        if app_token.is_empty() {
+            return false;
+        }
+        let filter = SearchFilter::eq("app_token", app_token);
+        !self
+            .record_manager
+            .find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter)
+            .is_empty()
     }
 
     pub fn update_by_id(&self, user_id: &str, fields: &Map<String, Value>) {
@@ -510,6 +634,17 @@ impl UserService {
         {
             user.refresh_token = Some(refresh.to_string());
         }
+        user.refresh_token_ip = record
+            .get("refresh_token_ip")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        user.refresh_token_ua = record
+            .get("refresh_token_ua")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        user.refresh_token_expiry = record
+            .get("refresh_token_expiry")
+            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
         user.login_version = record
             .get("login_version")
             .or_else(|| record.get("loginVersion"))
@@ -763,6 +898,79 @@ fn sync_refresh_fields(merged: &mut Map<String, Value>, fields: &Map<String, Val
         if let Some(v) = fields.get("refresh") {
             merged.insert("refresh_token".into(), v.clone());
         }
+    }
+}
+
+fn record_refresh_expired(record: &Map<String, Value>) -> bool {
+    let expiry = record
+        .get("refresh_token_expiry")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(0);
+    expiry > 0 && expiry <= chrono::Utc::now().timestamp_millis()
+}
+
+fn pick_best_account_record(rows: &[Map<String, Value>]) -> Option<Map<String, Value>> {
+    let mut best: Option<Map<String, Value>> = None;
+    let mut best_version = i32::MIN;
+    let mut best_expiry = i64::MIN;
+
+    for row in rows {
+        if row.is_empty() {
+            continue;
+        }
+
+        let mut version = parse_int_safe(row.get("login_version"));
+        if version == 0 {
+            version = parse_int_safe(row.get("loginVersion"));
+        }
+        let expiry = parse_long_safe(row.get("refresh_token_expiry"));
+        let has_stable_id = row
+            .get("id")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.is_empty());
+
+        let better = match &best {
+            None => true,
+            Some(current) => {
+                if version > best_version {
+                    true
+                } else if version == best_version && expiry > best_expiry {
+                    true
+                } else if version == best_version && expiry == best_expiry && has_stable_id {
+                    let best_has_stable_id = current
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|s| !s.is_empty());
+                    !best_has_stable_id
+                } else {
+                    false
+                }
+            }
+        };
+
+        if better {
+            best = Some(row.clone());
+            best_version = version;
+            best_expiry = expiry;
+        }
+    }
+
+    best
+}
+
+fn parse_int_safe(value: Option<&Value>) -> i32 {
+    match value {
+        Some(Value::Number(n)) => n.as_i64().unwrap_or(0) as i32,
+        Some(Value::String(s)) => s.parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn parse_long_safe(value: Option<&Value>) -> i64 {
+    match value {
+        Some(Value::Number(n)) => n.as_i64().unwrap_or(0),
+        Some(Value::String(s)) => s.parse().unwrap_or(0),
+        _ => 0,
     }
 }
 

@@ -1,6 +1,4 @@
 import { useAuthStore, usePermissionStore, usePreferencesStore, useTabsStore, useUserStore } from "#src/store";
-import { clearBroadcastHomeAutoCodeCache } from "#src/api/system/menu";
-import { clearGetTableDataCache } from "#src/components/csm-grid/CsmApi";
 import { clearGuestToken } from "#src/utils/guest-auth";
 import { globalProgress } from "#src/utils/request/global-progress";
 import { message } from "#src/utils/static-antd";
@@ -92,10 +90,6 @@ export function clearAllClientState() {
 
   // Clear guest token if any
   try { clearGuestToken(); } catch {}
-
-  // Clear module-level API caches so permissions/menus never leak between sessions
-  try { clearBroadcastHomeAutoCodeCache(); } catch {}
-  try { clearGetTableDataCache(); } catch {}
 
   // Restore system preferences after reset
   if (savedPreferences) {

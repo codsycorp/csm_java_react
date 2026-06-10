@@ -146,9 +146,33 @@ pub async fn auth_middleware(
 }
 
 fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> {
-    for token in bearer_token(headers).into_iter().chain(csm_token(headers)) {
+    // Mirror Java: invalid Bearer must hard-fail without refresh-token fallback.
+    if headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|h| h.starts_with("Bearer "))
+    {
+        if let Some(token) = bearer_token(headers) {
+            if state.jwt.validate_token(&token) {
+                if let Some(user) =
+                    state
+                        .user_service
+                        .resolve_from_jwt_with_util(&state.jwt, &token)
+                {
+                    return Some(enrich_auth_user(
+                        state,
+                        auth_user_from_model(state, user),
+                    ));
+                }
+            }
+        }
+        return None;
+    }
+
+    if let Some(token) = csm_token(headers) {
         if state.jwt.validate_token(&token) {
-            if let Some(user) = state.user_service.resolve_from_jwt_with_util(&state.jwt, &token) {
+            if let Some(user) = state.user_service.resolve_from_jwt_with_util(&state.jwt, &token)
+            {
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
         }

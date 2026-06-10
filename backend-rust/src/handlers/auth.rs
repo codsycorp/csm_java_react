@@ -79,18 +79,20 @@ impl AuthHandler {
         let ip = params
             .get("_client_ip")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .map(normalize_client_ip)
+            .unwrap_or_default();
         let ua = params
             .get("_user_agent")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .map(normalize_user_agent)
+            .unwrap_or_default();
         let expiry = chrono::Utc::now().timestamp_millis() + 7 * 24 * 60 * 60 * 1000;
 
         self.user_service.update_session_token(
             &user,
             &refresh_token,
-            ip,
-            ua,
+            &ip,
+            &ua,
             expiry,
             next_version,
         );
@@ -234,10 +236,7 @@ impl AuthHandler {
             return response;
         };
 
-        let user = self
-            .user_service
-            .find_by_id(&auth.user_id)
-            .or_else(|| self.user_service.find_by_app_token(&auth.app_token));
+        let user = self.resolve_fresh_user(auth);
         if let Some(user) = user {
             let is_sub_user = user.is_sub_user.unwrap_or(false)
                 || self.parse_app_token_meta(user.app_token.as_deref()).2;
@@ -278,17 +277,24 @@ impl AuthHandler {
         response
     }
 
-    pub fn handle_logout(&self, params: &Map<String, Value>) -> StandardResponse {
+    pub fn handle_logout(
+        &self,
+        auth_user: Option<&crate::security::AuthUser>,
+        params: &Map<String, Value>,
+    ) -> StandardResponse {
         let mut response = StandardResponse::new();
-        if let Some(token) = params.get("refreshToken").and_then(|v| v.as_str()) {
-            if let Some(user) = self.user_service.find_by_refresh_token(token) {
-                self.user_service.update_by_id(
-                    user.id.as_deref().unwrap_or(""),
-                    &Map::from_iter([
-                        ("refresh_token".into(), Value::String(String::new())),
-                        ("refresh".into(), Value::String(String::new())),
-                    ]),
+
+        if let Some(auth) = auth_user {
+            if let Some(user) = self.resolve_fresh_user(auth) {
+                self.user_service.clear_session_token(&user);
+                info!(
+                    "[LOGOUT] Invalidated refreshToken for user id={:?}",
+                    user.id
                 );
+            }
+        } else if let Some(token) = params.get("refreshToken").and_then(|v| v.as_str()) {
+            if let Some(user) = self.user_service.find_by_refresh_token(token) {
+                self.user_service.clear_session_token(&user);
             }
         }
         response.set("code", 200);
@@ -504,10 +510,7 @@ impl AuthHandler {
             }
         };
 
-        let fresh_user = self
-            .user_service
-            .find_by_id(&auth.user_id)
-            .or_else(|| self.user_service.find_by_app_token(&auth.app_token));
+        let fresh_user = auth_user.and_then(|auth| self.resolve_fresh_user(auth));
         let (permissions, menus, is_dev) = if let Some(user) = fresh_user {
             (
                 user.permissions.unwrap_or_default(),
@@ -537,6 +540,18 @@ impl AuthHandler {
         response.set("message", "ok");
         response.set("result", Value::Array(filtered));
         response
+    }
+
+    fn resolve_fresh_user(&self, auth: &crate::security::AuthUser) -> Option<User> {
+        if !auth.app_token.is_empty() {
+            if let Some(user) = self.user_service.find_by_app_token(&auth.app_token) {
+                return Some(user);
+            }
+        }
+        if !auth.user_id.is_empty() {
+            return self.user_service.find_by_id(&auth.user_id);
+        }
+        None
     }
 
     fn resolve_dev_flag(&self, user: &User) -> bool {

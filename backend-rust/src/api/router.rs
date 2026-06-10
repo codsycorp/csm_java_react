@@ -181,7 +181,7 @@ async fn dispatch_api(
         "/create-default-data" => state.init_handler.handle_create_default_data(),
         "/user-info" => state.auth_handler.handle_user_info(auth.as_ref()),
         "/login" => state.auth_handler.handle_login(&params),
-        "/logout" => state.auth_handler.handle_logout(&params),
+        "/logout" => state.auth_handler.handle_logout(auth.as_ref(), &params),
         "/refresh-token" => state.auth_handler.handle_refresh_token(&params),
         "/register" => state.auth_handler.handle_register(&params),
         "/create-sub-user" => state.auth_handler.handle_register(&params),
