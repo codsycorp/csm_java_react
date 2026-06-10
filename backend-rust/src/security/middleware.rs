@@ -67,7 +67,9 @@ fn cors_layer() -> CorsLayer {
 }
 
 pub fn is_api_request(uri: &str, host: Option<&str>) -> bool {
-    host.map(|h| h.starts_with("api.")).unwrap_or(false) || uri.starts_with("/api/")
+    host.map(|h| h.starts_with("api.")).unwrap_or(false)
+        || uri.starts_with("/api/")
+        || crate::api::paths::is_direct_ai_path(uri)
 }
 
 fn resolve_host(headers: &HeaderMap) -> Option<&str> {

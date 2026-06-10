@@ -60,7 +60,7 @@ impl AppConfig {
         Ok(Self {
             server: ServerConfig {
                 host: env_string("SERVER_HOST", "0.0.0.0"),
-                port: env_u16("SERVER_PORT", 15300),
+                port: env_u16("SERVER_PORT", 9999),
             },
             socket: SocketConfig {
                 host: env_string("SOCKET_SERVER_HOST", "0.0.0.0"),
@@ -70,7 +70,7 @@ impl AppConfig {
             rocksdb_root,
             rocksdb_backup,
             lucene_index_root,
-            jwt_secret: env_string("JWT_SECRET", ""),
+            jwt_secret: env_string("JWT_SECRET", "change-me-to-a-strong-secretge"),
             redis: RedisConfig {
                 host: env_string("REDIS_HOST", "localhost"),
                 port: env_u16("REDIS_PORT", 6379),

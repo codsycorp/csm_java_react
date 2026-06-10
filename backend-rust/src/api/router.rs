@@ -58,6 +58,7 @@ async fn catch_all(State(state): State<AppState>, req: Request<Body>) -> Respons
     // and receive the SPA index.html instead of an empty-param API 400 error.
     let is_admin_host = host.as_deref().map(|h| h.starts_with("admin.")).unwrap_or(false);
     let is_api = is_api_request(&uri, host.as_deref())
+        || crate::api::paths::is_direct_ai_path(&uri)
         || (!is_admin_host && crate::api::paths::is_bare_api_path(&uri));
 
     // SSR JSON endpoints — web-facing, return JSON, handled before API dispatch.

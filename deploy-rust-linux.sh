@@ -111,8 +111,10 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$P
-EnvironmentFile=$P/config.env
-ExecStart=$BINARY
+            EnvironmentFile=$P/config.env
+            Environment=SERVER_PORT=9999
+            Environment=SOCKET_SERVER_PORT=15301
+            ExecStart=$BINARY
 Restart=always
 RestartSec=5
 MemoryMax=6G

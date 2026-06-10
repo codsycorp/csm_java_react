@@ -80,6 +80,8 @@ jobs:
             User=root
             WorkingDirectory=/root/la_server
             EnvironmentFile=/root/la_server/config.env
+            Environment=SERVER_PORT=9999
+            Environment=SOCKET_SERVER_PORT=15301
             ExecStart=/root/la_server/csm_server
             Restart=always
             RestartSec=5

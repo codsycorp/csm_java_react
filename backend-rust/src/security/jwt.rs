@@ -75,7 +75,7 @@ impl JwtUtil {
 fn derive_key_bytes(secret: &str) -> Vec<u8> {
     let raw = secret.trim();
     let bytes = if raw.is_empty() {
-        b"default-dev-secret-change-me".to_vec()
+        b"change-me-to-a-strong-secretge".to_vec()
     } else {
         raw.as_bytes().to_vec()
     };

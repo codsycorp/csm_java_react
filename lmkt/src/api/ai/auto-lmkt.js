@@ -9244,8 +9244,11 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
         data = { raw: text };
       }
       if (response.status === 404 || isNginxNotFoundHtml(text)) {
+        const nginx404 = isNginxNotFoundHtml(text);
         lastError = new Error(
-          `HTTP 404 nginx — ${url}. Thử redeploy nginx location /ai-generate-seo-content hoặc dùng admin/api fallback.`
+          nginx404
+            ? `HTTP 404 nginx — ${url}. Thử redeploy nginx location /ai-generate-seo-content hoặc dùng admin/api fallback.`
+            : (data?.message || text || `HTTP 404 — ${url}`)
         );
         continue;
       }
