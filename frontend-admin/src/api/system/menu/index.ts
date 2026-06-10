@@ -24,6 +24,14 @@ export async function loadBroadcastHomeAutoCode(appIdParam: string): Promise<str
 				]
 			}
 		});
+		if (response && (response as any).success === false) {
+			console.warn(
+				"Failed to load broadcast home auto_code:",
+				(response as any).message || "permission denied",
+			);
+			broadcastHomeAutoCodeCache[appIdParam] = null;
+			return null;
+		}
 		const rows = (response as any)?.rows || (response as any)?.data || [];
 		if (!rows.length) {
 			broadcastHomeAutoCodeCache[appIdParam] = null;

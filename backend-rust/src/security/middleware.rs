@@ -178,6 +178,13 @@ fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
     let meta = parse_app_token(&state.record_manager, &user.app_token);
     if let Some(app_id) = app_id_from_token(&state.record_manager, Some(&user.app_token)) {
         user.app_id = app_id;
+    } else if user.app_id.is_empty() {
+        if let Some(menus) = &user.menus_permissions {
+            let resolved = crate::security::user_access::resolve_primary_app_id_from_menus(menus);
+            if !resolved.is_empty() {
+                user.app_id = resolved;
+            }
+        }
     }
     user.is_sub_user = user.is_sub_user || is_sub_user_role(&meta.role);
     if user.is_sub_user {

@@ -42,16 +42,21 @@ impl UserAccessContext {
             Default::default()
         };
         let is_sub_user = user.is_sub_user || is_sub_user_role(&token_meta.role);
-        let menus_permissions = user.menus_permissions.clone().unwrap_or_default();
-        let app_id = crate::util::app_id_from_token(record_manager, Some(&user.app_token))
+        let mut menus_permissions = user.menus_permissions.clone().unwrap_or_default();
+        let mut app_id = crate::util::app_id_from_token(record_manager, Some(&user.app_token))
             .filter(|id| !id.is_empty())
             .unwrap_or_else(|| user.app_id.clone());
+        if app_id.is_empty() {
+            app_id = resolve_primary_app_id_from_menus(&menus_permissions);
+        }
 
         let mut permissions = user.permissions.clone();
         let parsed_token = PermissionBitfieldUtil::parse_security_token(user.permission_bitfield.as_deref());
         if parsed_token.is_some() {
-            permissions =
+            let from_token =
                 PermissionBitfieldUtil::permissions_from_bitfield(user.permission_bitfield.as_deref());
+            permissions =
+                PermissionBitfieldUtil::merge_unique_case_insensitive(&permissions, &from_token);
         }
 
         if user.dev {
@@ -100,6 +105,27 @@ impl UserAccessContext {
         }
         if user.dev {
             data_scope = "ALL".into();
+        }
+
+        // Mirror Java mapMainAccountToUser: main accounts always operate with full app admin scope.
+        if is_admin_by_default && !is_sub_user && !user.dev {
+            permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                &permissions,
+                &[
+                    "admin".into(),
+                    "scope:all".into(),
+                    "view".into(),
+                    "create".into(),
+                    "edit".into(),
+                    "delete".into(),
+                    "export".into(),
+                ],
+            );
+            if menus_permissions.is_empty() && !app_id.is_empty() {
+                menus_permissions = vec![app_id.clone()];
+            }
+            data_scope = "ALL".into();
+            is_admin = true;
         }
 
         let owner_candidates = collect_owner_candidates(user);
@@ -337,15 +363,11 @@ pub fn validate_permission_group_app_boundary(
     if ctx.is_dev || table_name != "csm_roles" {
         return None;
     }
-    let context_app = ctx.app_id.trim();
     let target_app = app_id.trim();
-    if context_app.is_empty() || target_app.is_empty() {
+    if target_app.is_empty() || ctx.can_access_app_data(target_app) {
         return None;
     }
-    if !context_app.eq_ignore_ascii_case(target_app) {
-        return Some("Bạn chỉ được quản lý Nhóm quyền trong app_id của chính mình.".into());
-    }
-    None
+    Some("Bạn chỉ được quản lý Nhóm quyền trong app_id của chính mình.".into())
 }
 
 fn is_allowed_self_csm_accounts_access(
@@ -881,6 +903,9 @@ fn resolve_autosetup_effective_app_id(ctx: &UserAccessContext, requested_p_name:
         if has_legacy_full_app_scope(&ctx.menus_permissions, &target) {
             return target;
         }
+        if ctx.can_access_app_data(&target) && (ctx.is_admin || ctx.is_dev) {
+            return target;
+        }
         if ctx
             .data_app_ids
             .iter()
@@ -888,9 +913,38 @@ fn resolve_autosetup_effective_app_id(ctx: &UserAccessContext, requested_p_name:
         {
             return target;
         }
+        let primary_menu_app = resolve_primary_app_id_from_menus(&ctx.menus_permissions);
+        if !primary_menu_app.is_empty() && is_same_or_broadcast_variant(&primary_menu_app, requested) {
+            return primary_menu_app;
+        }
     }
 
     ctx.app_id.clone()
+}
+
+/// Resolve a single app id token from legacy menusPermissions (e.g. `lmkt`, `app:lmkt`).
+pub fn resolve_primary_app_id_from_menus(menus_permissions: &[String]) -> String {
+    for menu in menus_permissions {
+        let token = menu.trim();
+        if token.is_empty() || token == "*" {
+            continue;
+        }
+        let lower = token.to_ascii_lowercase();
+        if let Some(app) = lower.strip_prefix("app:") {
+            let app = app.trim();
+            if !app.is_empty() {
+                return app.to_string();
+            }
+            continue;
+        }
+        if lower.starts_with('/') {
+            continue;
+        }
+        if !token.contains(':') {
+            return token.to_string();
+        }
+    }
+    String::new()
 }
 
 fn autosetup_target_app_from_p_name(requested_p_name: &str) -> Option<String> {
@@ -1072,6 +1126,49 @@ mod tests {
         assert!(is_same_or_broadcast_variant("lmkt", "broadcast_lmkt"));
         assert!(is_same_or_broadcast_variant("lmkt", "lmkt"));
         assert!(!is_same_or_broadcast_variant("csm", "broadcast_lmkt"));
+    }
+
+    #[test]
+    fn main_account_default_policy_grants_all_scope_and_autosetup() {
+        let filter = lmkt_broadcast_filter();
+        let user = AuthUser {
+            user_id: "admin-1".into(),
+            username: "admin".into(),
+            email: "admin@test.com".into(),
+            phone_number: String::new(),
+            app_token: String::new(),
+            login_version: 0,
+            permissions: vec![],
+            menus_permissions: Some(vec!["lmkt".into()]),
+            permission_bitfield: None,
+            data_scope: String::new(),
+            dev: false,
+            is_sub_user: false,
+            app_id: String::new(),
+            data_app_ids: vec![],
+            dept_id: String::new(),
+            branch_id: String::new(),
+            extra: serde_json::Map::new(),
+        };
+        std::env::set_var("APP_DATA_DIR", "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas");
+        std::env::set_var(
+            "ROCKSDB_ROOT_DIR",
+            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/database",
+        );
+        let config = AppConfig::from_env().expect("config");
+        let rm = RecordManager::new(config).expect("record manager");
+        let ctx = UserAccessContext::from_auth(Some(&user), &rm).expect("context");
+        assert!(ctx.is_admin);
+        assert_eq!(ctx.data_scope, "ALL");
+        assert_eq!(ctx.app_id, "lmkt");
+        assert!(has_action_permission(&ctx.permissions, "view"));
+        assert!(is_allowed_autosetup_template_read(
+            "csm",
+            "sys_autos",
+            false,
+            &filter,
+            Some(&ctx),
+        ));
     }
 
     #[test]
