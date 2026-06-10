@@ -59,7 +59,15 @@ impl AuthHandler {
             return response;
         };
 
-        let is_dev = self.resolve_dev_flag(&user);
+        let is_sub_user = user.is_sub_user.unwrap_or(false)
+            || self
+                .parse_app_token_meta(user.app_token.as_deref())
+                .2;
+        let is_dev = if is_sub_user {
+            false
+        } else {
+            self.resolve_dev_flag(&user)
+        };
         user.dev = Some(is_dev);
         apply_app_id_from_token(&self.record_manager, &mut user);
 
@@ -228,9 +236,16 @@ impl AuthHandler {
             .find_by_id(&auth.user_id)
             .or_else(|| self.user_service.find_by_app_token(&auth.app_token));
         if let Some(user) = user {
-            let is_dev = self.resolve_dev_flag(&user);
+            let is_sub_user = user.is_sub_user.unwrap_or(false)
+                || self.parse_app_token_meta(user.app_token.as_deref()).2;
+            let is_dev = if is_sub_user {
+                false
+            } else {
+                self.resolve_dev_flag(&user)
+            };
             let mut user = user;
             user.dev = Some(is_dev);
+            user.is_sub_user = Some(is_sub_user);
             apply_app_id_from_token(&self.record_manager, &mut user);
             let mut info = user.to_info_map();
             self.enrich_account_meta(&user, &mut info);
@@ -579,18 +594,42 @@ impl AuthHandler {
         );
         let base_menus = string_list_from_value(info.get("menusPermissions"));
 
-        let permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+        let dev = if user.is_sub_user.unwrap_or(false)
+            || self.parse_app_token_meta(user.app_token.as_deref()).2
+        {
+            false
+        } else {
+            self.resolve_dev_flag(user)
+                || user.dev.unwrap_or(false)
+                || info.get("dev").and_then(|v| v.as_bool()).unwrap_or(false)
+        };
+
+        let mut permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
             &base_permissions,
             &PermissionBitfieldUtil::permissions_from_bitfield(stored_bitfield),
         );
-        let menus_permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+        let mut menus_permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
             &base_menus,
             &PermissionBitfieldUtil::menus_from_bitfield(stored_bitfield),
         );
 
-        let dev = self.resolve_dev_flag(&user)
-            || user.dev.unwrap_or(false)
-            || info.get("dev").and_then(|v| v.as_bool()).unwrap_or(false);
+        if user.is_sub_user.unwrap_or(false)
+            || self.parse_app_token_meta(user.app_token.as_deref()).2
+        {
+            permissions = PermissionBitfieldUtil::subtract_case_insensitive(
+                &permissions,
+                &["admin".into(), "dev".into(), "scope:all".into()],
+            );
+            if !permissions.iter().any(|p| {
+                let n = p.to_ascii_lowercase();
+                n == "view" || n == "create" || n == "edit" || n == "delete" || n == "export"
+            }) {
+                permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                    &permissions,
+                    &["view".into(), "scope:owner".into()],
+                );
+            }
+        }
 
         let bitfield =
             PermissionBitfieldUtil::build_bitfield(&permissions, &menus_permissions, dev);

@@ -16,6 +16,8 @@ pub struct AuthUser {
     pub is_sub_user: bool,
     pub app_id: String,
     pub data_app_ids: Vec<String>,
+    pub dept_id: String,
+    pub branch_id: String,
     pub extra: serde_json::Map<String, Value>,
 }
 
@@ -36,13 +38,19 @@ impl AuthUser {
             app_id,
             data_app_ids,
             is_sub_user,
+            dept_id,
+            branch_id,
             ..
         }: crate::model::User,
         is_sub_user_hint: bool,
     ) -> Self {
         let permissions = permissions.unwrap_or_default();
-        let is_dev = dev.unwrap_or(false);
         let is_sub_user = is_sub_user.unwrap_or(is_sub_user_hint);
+        let is_dev = if is_sub_user {
+            false
+        } else {
+            dev.unwrap_or(false)
+        };
         Self {
             user_id: id.unwrap_or_default(),
             username: username.unwrap_or_default(),
@@ -57,7 +65,13 @@ impl AuthUser {
             dev: is_dev,
             is_sub_user,
             app_id: app_id.unwrap_or_default(),
-            data_app_ids: data_app_ids.unwrap_or_default(),
+            data_app_ids: if is_sub_user {
+                vec![]
+            } else {
+                data_app_ids.unwrap_or_default()
+            },
+            dept_id: dept_id.unwrap_or_default(),
+            branch_id: branch_id.unwrap_or_default(),
             extra: serde_json::Map::new(),
         }
     }

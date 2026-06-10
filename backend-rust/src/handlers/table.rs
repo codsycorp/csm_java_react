@@ -6,9 +6,10 @@ use crate::data::{RecordManager, DEFAULT_FILTER_TAKE};
 use crate::model::{SearchFilter, StandardResponse};
 use crate::security::auth::AuthUser;
 use crate::security::user_access::{
-    filter_sys_autos_rows, is_allowed_autosetup_template_read, resolve_required_action,
-    validate_permission_group_app_boundary, validate_system_user_table_access, UserAccessContext,
-    validate_action_permission,
+    apply_table_read_row_filters, filter_sys_autos_rows, is_allowed_autosetup_template_read,
+    merge_only_my_subusers_filter, resolve_required_action, validate_action_permission,
+    validate_permission_group_app_boundary, validate_system_user_table_access,
+    filter_rows_for_update, UserAccessContext,
 };
 use crate::services::chat::ChatPersistenceService;
 use crate::services::user::UserService;
@@ -295,7 +296,7 @@ impl TableHandler {
         let mut out = Map::new();
         let table = params.get("obj_name").and_then(|v| v.as_str()).unwrap_or("");
 
-        let filter: SearchFilter = params
+        let mut filter: SearchFilter = params
             .get("e_where")
             .or_else(|| params.get("filter"))
             .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -308,6 +309,18 @@ impl TableHandler {
         };
         let app_id = app_id_owned.as_str();
         let access = UserAccessContext::from_auth(auth, &self.record_manager);
+
+        let only_my_subusers = params
+            .get("only_my_subusers")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        filter = merge_only_my_subusers_filter(
+            table,
+            is_update,
+            only_my_subusers,
+            filter,
+            access.as_ref(),
+        );
 
         let allow_scoped_autosetup = is_allowed_autosetup_template_read(
             app_id,
@@ -384,12 +397,60 @@ impl TableHandler {
                 .unwrap_or("create")
                 .to_ascii_lowercase();
 
-            let obj_update: Map<String, Value> = params
+            // csm_group_members: enforce parent_account_id on create — mirror Java.
+            if table == "csm_group_members" {
+                if let Some(ctx) = access.as_ref() {
+                    if !ctx.is_dev {
+                        if command == "delete" && ctx.is_sub_user {
+                            out.insert("success".into(), Value::Bool(false));
+                            out.insert(
+                                "message".into(),
+                                Value::String(
+                                    "Sub-user không có quyền xóa sub-user trên bảng csm_group_members"
+                                        .into(),
+                                ),
+                            );
+                            return out;
+                        }
+                    }
+                }
+            }
+
+            let mut obj_update: Map<String, Value> = params
                 .get("obj_update")
                 .or_else(|| params.get("data"))
                 .and_then(|v| v.as_object())
                 .cloned()
                 .unwrap_or_default();
+
+            if table == "csm_group_members" {
+                if let Some(ctx) = access.as_ref() {
+                    if !ctx.is_dev && command == "create" {
+                        let preferred_parent = if ctx.app_id.is_empty() {
+                            ctx.parent_account_candidates
+                                .first()
+                                .cloned()
+                                .unwrap_or_default()
+                        } else {
+                            ctx.app_id.clone()
+                        };
+                        if preferred_parent.is_empty() {
+                            out.insert("success".into(), Value::Bool(false));
+                            out.insert(
+                                "message".into(),
+                                Value::String(
+                                    "Không xác định được parent_account_id để tạo sub-user".into(),
+                                ),
+                            );
+                            return out;
+                        }
+                        obj_update.insert(
+                            "parent_account_id".into(),
+                            Value::String(preferred_parent),
+                        );
+                    }
+                }
+            }
 
             if command == "delete" {
                 // obj_update contains the record with primary key values.
@@ -409,6 +470,36 @@ impl TableHandler {
                 if target.is_empty() {
                     out.insert("success".into(), Value::Bool(false));
                     out.insert("message".into(), Value::String("Record not found for delete".into()));
+                } else if let Some(ctx) = access.as_ref() {
+                    let scoped = filter_rows_for_update(
+                        table,
+                        vec![target.clone()],
+                        ctx,
+                        app_id,
+                        &self.record_manager,
+                    );
+                    if scoped.is_empty() {
+                        out.insert("success".into(), Value::Bool(false));
+                        out.insert(
+                            "message".into(),
+                            Value::String("Không tìm thấy bản ghi để xóa".into()),
+                        );
+                    } else {
+                        let row = scoped[0].clone();
+                        match self.record_manager.delete_record(app_id, table, &row) {
+                            Ok(()) => {
+                                out.insert("success".into(), Value::Bool(true));
+                                out.insert("command".into(), Value::String("delete".into()));
+                                out.insert("message".into(), Value::String("Record deleted".into()));
+                                out.insert("updated_row".into(), Value::Object(row.clone()));
+                                self.emit_update_notification(app_id, table, "delete", &row);
+                            }
+                            Err(e) => {
+                                out.insert("success".into(), Value::Bool(false));
+                                out.insert("message".into(), Value::String(e.to_string()));
+                            }
+                        }
+                    }
                 } else {
                     match self.record_manager.delete_record(app_id, table, &target) {
                         Ok(()) => {
@@ -499,6 +590,24 @@ impl TableHandler {
                 .unwrap_or(Value::Array(vec![]));
             if app_id == "csm" && table == "sys_autos" {
                 rows = filter_sys_autos_rows(rows, &filter, access.as_ref());
+            } else if let Value::Array(arr) = &rows {
+                let row_maps: Vec<Map<String, Value>> = arr
+                    .iter()
+                    .filter_map(|v| v.as_object().cloned())
+                    .collect();
+                let filtered = apply_table_read_row_filters(
+                    app_id,
+                    table,
+                    row_maps,
+                    access.as_ref(),
+                    &self.record_manager,
+                );
+                rows = Value::Array(
+                    filtered
+                        .into_iter()
+                        .map(Value::Object)
+                        .collect(),
+                );
             }
             out.insert("success".into(), Value::Bool(true));
             out.insert("rows".into(), rows);

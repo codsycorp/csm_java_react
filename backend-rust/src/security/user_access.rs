@@ -1,8 +1,16 @@
-use serde_json::Value;
+use serde_json::{Map, Value};
 
+use crate::data::RecordManager;
 use crate::model::SearchFilter;
 use crate::security::auth::AuthUser;
 use crate::util::{parse_app_token, PermissionBitfieldUtil, is_sub_user_role};
+
+const OWNER_SCOPE_FIELDS: &[&str] = &[
+    "created_by", "create_by", "owner_id", "owner", "user_id", "userid", "account_id",
+    "parent_account_id",
+];
+const DEPARTMENT_SCOPE_FIELDS: &[&str] = &["dept_id", "department_id", "team_id"];
+const BRANCH_SCOPE_FIELDS: &[&str] = &["branch_id", "branchId"];
 
 /// Mirrors Java `TableHandler.UserAccessContext`.
 #[derive(Debug, Clone)]
@@ -16,6 +24,12 @@ pub struct UserAccessContext {
     pub data_scope: String,
     pub data_app_ids: Vec<String>,
     pub owner_candidates: Vec<String>,
+    pub parent_account_candidates: Vec<String>,
+    pub department_candidates: Vec<String>,
+    pub branch_candidates: Vec<String>,
+    pub preferred_owner: String,
+    pub preferred_department: String,
+    pub preferred_branch: String,
 }
 
 impl UserAccessContext {
@@ -47,11 +61,22 @@ impl UserAccessContext {
             );
         }
 
+        if is_sub_user {
+            permissions = PermissionBitfieldUtil::subtract_case_insensitive(
+                &permissions,
+                &["admin".into(), "dev".into(), "scope:all".into()],
+            );
+        }
+
         let is_admin_by_default = !user.dev && !is_sub_user;
-        let is_admin = is_admin_by_default
-            || permissions.iter().any(|p| p.eq_ignore_ascii_case("admin"))
-            || token_meta.role.eq_ignore_ascii_case("admin")
-            || parsed_token.is_some_and(PermissionBitfieldUtil::has_admin_privilege);
+        let mut is_admin = if is_sub_user {
+            false
+        } else {
+            is_admin_by_default
+                || permissions.iter().any(|p| p.eq_ignore_ascii_case("admin"))
+                || token_meta.role.eq_ignore_ascii_case("admin")
+                || parsed_token.is_some_and(PermissionBitfieldUtil::has_admin_privilege)
+        };
 
         let mut data_scope = if let Some(token) = parsed_token {
             PermissionBitfieldUtil::resolve_data_scope(token)
@@ -65,16 +90,31 @@ impl UserAccessContext {
             ))
         };
 
-        if !user.dev && is_admin && has_legacy_full_app_scope(&menus_permissions, &app_id) {
+        if !user.dev && !is_sub_user && is_admin && has_legacy_full_app_scope(&menus_permissions, &app_id) {
             data_scope = "ALL".into();
             permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
                 &permissions,
                 &["admin".into(), "scope:all".into()],
             );
+            is_admin = true;
         }
         if user.dev {
             data_scope = "ALL".into();
         }
+
+        let owner_candidates = collect_owner_candidates(user);
+        let parent_account_candidates = collect_parent_account_candidates(user);
+        let department_candidates = collect_department_candidates(user);
+        let branch_candidates = collect_branch_candidates(user);
+        let preferred_owner = owner_candidates
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        let preferred_department = department_candidates
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        let preferred_branch = branch_candidates.first().cloned().unwrap_or_default();
 
         let data_app_ids = if is_sub_user {
             vec![]
@@ -91,7 +131,13 @@ impl UserAccessContext {
             menus_permissions,
             data_scope,
             data_app_ids,
-            owner_candidates: collect_owner_candidates(user),
+            owner_candidates,
+            parent_account_candidates,
+            department_candidates,
+            branch_candidates,
+            preferred_owner,
+            preferred_department,
+            preferred_branch,
         })
     }
 
@@ -266,6 +312,10 @@ pub fn validate_system_user_table_access(
     if table_name != "csm_accounts" || ctx.is_dev {
         return None;
     }
+    // Sub-user must always operate on csm_group_members — mirror Java isAllowedSelfCsmAccountsAccess.
+    if ctx.is_sub_user || !ctx.is_admin {
+        return Some("Bảng csm_accounts chỉ dành cho tài khoản dev. Admin/Sub-user vui lòng thao tác trên csm_group_members.".into());
+    }
     if is_allowed_self_csm_accounts_access(is_update, params, filter, ctx) {
         return None;
     }
@@ -336,8 +386,25 @@ fn collect_owner_candidates(user: &AuthUser) -> Vec<String> {
         user.username.as_str(),
         user.email.as_str(),
         user.phone_number.as_str(),
-        user.app_id.as_str(),
         user.app_token.as_str(),
+    ] {
+        let normalized = normalized_identity(value);
+        if !normalized.is_empty() {
+            out.push(normalized);
+        }
+    }
+    out
+}
+
+/// Mirrors Java parentAccountCandidates (id, app_id, username, email, phoneNumber).
+fn collect_parent_account_candidates(user: &AuthUser) -> Vec<String> {
+    let mut out = Vec::new();
+    for value in [
+        user.user_id.as_str(),
+        user.app_id.as_str(),
+        user.username.as_str(),
+        user.email.as_str(),
+        user.phone_number.as_str(),
     ] {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
@@ -345,6 +412,429 @@ fn collect_owner_candidates(user: &AuthUser) -> Vec<String> {
         }
     }
     out
+}
+
+fn collect_department_candidates(user: &AuthUser) -> Vec<String> {
+    let normalized = normalized_identity(&user.dept_id);
+    if normalized.is_empty() {
+        vec![]
+    } else {
+        vec![normalized]
+    }
+}
+
+fn collect_branch_candidates(user: &AuthUser) -> Vec<String> {
+    let normalized = normalized_identity(&user.branch_id);
+    if normalized.is_empty() {
+        vec![]
+    } else {
+        vec![normalized]
+    }
+}
+
+fn normalized_identity(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase()
+}
+
+fn field_value_as_identity(value: Option<&Value>) -> String {
+    value
+        .and_then(|v| match v {
+            Value::String(s) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            }
+            Value::Number(n) => Some(n.to_string()),
+            Value::Bool(b) => Some(b.to_string()),
+            _ => None,
+        })
+        .map(|s| normalized_identity(&s))
+        .unwrap_or_default()
+}
+
+/// Apply Java `handleSelectTableOperation` row filters after fetch.
+pub fn apply_table_read_row_filters(
+    app_id: &str,
+    table_name: &str,
+    rows: Vec<Map<String, Value>>,
+    ctx: Option<&UserAccessContext>,
+    record_manager: &RecordManager,
+) -> Vec<Map<String, Value>> {
+    let Some(ctx) = ctx else {
+        return rows;
+    };
+    let mut data = filter_managed_account_descendants(table_name, rows, ctx, app_id, record_manager);
+    data = apply_data_scope_row_filter(table_name, data, ctx);
+    data = filter_main_account_rows(table_name, data, record_manager);
+    if table_name == "csm_accounts" {
+        data = mask_self_account_rows_for_non_dev(data, ctx);
+    }
+    decrypt_pass_for_display(table_name, &mut data, record_manager);
+    data
+}
+
+/// Optional read scope: only_my_subusers=true on csm_group_members.
+pub fn merge_only_my_subusers_filter(
+    table_name: &str,
+    is_update: bool,
+    only_my_subusers: bool,
+    existing: SearchFilter,
+    ctx: Option<&UserAccessContext>,
+) -> SearchFilter {
+    if is_update || table_name != "csm_group_members" || !only_my_subusers {
+        return existing;
+    }
+    let Some(ctx) = ctx else {
+        return existing;
+    };
+    if ctx.parent_account_candidates.is_empty() {
+        return existing;
+    }
+    let scope = build_field_scope_filter(&ctx.parent_account_candidates, "parent_account_id");
+    let Some(scope) = scope else {
+        return existing;
+    };
+    if existing.field.is_empty() && existing.conditions.is_empty() {
+        return scope;
+    }
+    SearchFilter {
+        operator: "AND".into(),
+        conditions: vec![existing, scope],
+        ..Default::default()
+    }
+}
+
+pub fn filter_rows_for_update(
+    table_name: &str,
+    records: Vec<Map<String, Value>>,
+    ctx: &UserAccessContext,
+    app_id: &str,
+    record_manager: &RecordManager,
+) -> Vec<Map<String, Value>> {
+    let is_system_users_table = table_name == "csm_accounts";
+    let is_sub_user_table = table_name == "csm_group_members";
+    let is_admin_non_dev = ctx.is_admin && !ctx.is_dev;
+
+    let mut records = records;
+    if is_system_users_table && !ctx.is_dev {
+        let visible = resolve_managed_account_visible_id_set(app_id, ctx, record_manager);
+        records.retain(|row| {
+            visible.contains(&field_value_as_identity(row.get("id")))
+        });
+    }
+    if is_sub_user_table && (is_admin_non_dev || ctx.is_dev) {
+        records.retain(|row| is_owned_sub_user_row(row, ctx));
+    }
+    apply_data_scope_row_filter(table_name, records, ctx)
+}
+
+fn filter_managed_account_descendants(
+    table_name: &str,
+    rows: Vec<Map<String, Value>>,
+    access: &UserAccessContext,
+    app_id: &str,
+    record_manager: &RecordManager,
+) -> Vec<Map<String, Value>> {
+    if table_name != "csm_accounts" || rows.is_empty() || access.is_dev {
+        return rows;
+    }
+    let visible = resolve_managed_account_visible_id_set(app_id, access, record_manager);
+    if visible.is_empty() {
+        return vec![];
+    }
+    rows.into_iter()
+        .filter(|row| visible.contains(&field_value_as_identity(row.get("id"))))
+        .collect()
+}
+
+fn resolve_managed_account_visible_id_set(
+    app_id: &str,
+    access: &UserAccessContext,
+    record_manager: &RecordManager,
+) -> std::collections::HashSet<String> {
+    if access.is_dev || access.owner_candidates.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    let filter = SearchFilter {
+        field: "id".into(),
+        filter_type: "like".into(),
+        value: Value::String(String::new()),
+        ..Default::default()
+    };
+    let all_rows_result = record_manager.filter(app_id, "csm_accounts", &filter);
+    let all_rows = rows_as_maps(all_rows_result.get("rows"));
+    build_managed_account_visible_id_set(&all_rows, access)
+}
+
+fn build_managed_account_visible_id_set(
+    rows: &[Map<String, Value>],
+    access: &UserAccessContext,
+) -> std::collections::HashSet<String> {
+    if rows.is_empty() || access.owner_candidates.is_empty() {
+        return std::collections::HashSet::new();
+    }
+
+    let mut reachable_parents: std::collections::HashSet<String> =
+        access.owner_candidates.iter().cloned().collect();
+    let mut visible_ids = std::collections::HashSet::new();
+    let mut changed = true;
+
+    while changed {
+        changed = false;
+        for row in rows {
+            if is_self_managed_account_row(row, access) {
+                let self_id = field_value_as_identity(row.get("id"));
+                if !self_id.is_empty() && visible_ids.insert(self_id.clone()) {
+                    changed = true;
+                }
+                let before = reachable_parents.len();
+                for key in ["id", "username", "email", "phoneNumber", "app_token"] {
+                    collect_candidate(&mut reachable_parents, row.get(key));
+                }
+                if reachable_parents.len() != before {
+                    changed = true;
+                }
+            }
+
+            let parent = field_value_as_identity(row.get("parent_account_id"));
+            if parent.is_empty() || !reachable_parents.contains(&parent) {
+                continue;
+            }
+            let row_id = field_value_as_identity(row.get("id"));
+            if row_id.is_empty() {
+                continue;
+            }
+            if visible_ids.insert(row_id.clone()) {
+                changed = true;
+            }
+            let before = reachable_parents.len();
+            for key in ["id", "username", "email", "phoneNumber"] {
+                collect_candidate(&mut reachable_parents, row.get(key));
+            }
+            if reachable_parents.len() != before {
+                changed = true;
+            }
+        }
+    }
+
+    visible_ids
+}
+
+fn is_self_managed_account_row(row: &Map<String, Value>, access: &UserAccessContext) -> bool {
+    if access.owner_candidates.is_empty() {
+        return false;
+    }
+    for key in ["id", "username", "email", "phoneNumber", "app_token"] {
+        let normalized = field_value_as_identity(row.get(key));
+        if !normalized.is_empty() && access.owner_candidates.contains(&normalized) {
+            return true;
+        }
+    }
+    false
+}
+
+fn collect_candidate(target: &mut std::collections::HashSet<String>, value: Option<&Value>) {
+    let normalized = field_value_as_identity(value);
+    if !normalized.is_empty() {
+        target.insert(normalized);
+    }
+}
+
+fn is_owned_sub_user_row(row: &Map<String, Value>, access: &UserAccessContext) -> bool {
+    if access.parent_account_candidates.is_empty() {
+        return false;
+    }
+    let parent = row
+        .get("parent_account_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    contains_identifier_candidate_ignore_case(&access.parent_account_candidates, parent)
+}
+
+fn contains_identifier_candidate_ignore_case(candidates: &[String], value: &str) -> bool {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return false;
+    }
+    candidates
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(normalized))
+}
+
+fn build_field_scope_filter(candidates: &[String], field_name: &str) -> Option<SearchFilter> {
+    let conditions: Vec<SearchFilter> = candidates
+        .iter()
+        .filter(|c| !c.trim().is_empty())
+        .map(|candidate| SearchFilter::eq(field_name, candidate.trim()))
+        .collect();
+    match conditions.len() {
+        0 => None,
+        1 => Some(conditions.into_iter().next().unwrap()),
+        _ => Some(SearchFilter {
+            operator: "OR".into(),
+            conditions,
+            ..Default::default()
+        }),
+    }
+}
+
+fn is_data_scope_exempt_table(table_name: &str) -> bool {
+    matches!(
+        table_name,
+        "index"
+            | "csm_accounts"
+            | "csm_group_members"
+            | "csm_roles"
+            | "csm_permissions"
+            | "csm_role_permissions"
+            | "csm_user_roles"
+            | "csm_user_depts"
+            | "csm_depts"
+            | "csm_menu"
+            | "sys_autos"
+    )
+}
+
+fn apply_data_scope_row_filter(
+    table_name: &str,
+    rows: Vec<Map<String, Value>>,
+    access: &UserAccessContext,
+) -> Vec<Map<String, Value>> {
+    if rows.is_empty() || access.is_dev || is_data_scope_exempt_table(table_name) {
+        return rows;
+    }
+    let scope = access.data_scope.to_ascii_uppercase();
+    if scope == "ALL" || scope == "NONE" {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|row| row_matches_data_scope(row, access))
+        .collect()
+}
+
+fn row_matches_data_scope(row: &Map<String, Value>, access: &UserAccessContext) -> bool {
+    let scope = access.data_scope.to_ascii_uppercase();
+    match scope.as_str() {
+        "OWNER" => matches_by_fields(row, OWNER_SCOPE_FIELDS, &access.owner_candidates),
+        "DEPARTMENT" => {
+            matches_by_fields(row, DEPARTMENT_SCOPE_FIELDS, &access.department_candidates)
+        }
+        "BRANCH" => matches_by_fields(row, BRANCH_SCOPE_FIELDS, &access.branch_candidates),
+        _ => true,
+    }
+}
+
+fn matches_by_fields(
+    row: &Map<String, Value>,
+    fields: &[&str],
+    allowed_values: &[String],
+) -> bool {
+    if allowed_values.is_empty() {
+        return false;
+    }
+    let allowed: std::collections::HashSet<&str> =
+        allowed_values.iter().map(|s| s.as_str()).collect();
+    for field in fields {
+        let normalized = field_value_as_identity(row.get(*field));
+        if !normalized.is_empty() {
+            return allowed.contains(normalized.as_str());
+        }
+    }
+    false
+}
+
+fn filter_main_account_rows(
+    table_name: &str,
+    rows: Vec<Map<String, Value>>,
+    record_manager: &RecordManager,
+) -> Vec<Map<String, Value>> {
+    if table_name != "csm_accounts" || rows.is_empty() {
+        return rows;
+    }
+    rows.into_iter()
+        .filter(|row| {
+            let role = extract_role_from_app_token(row.get("app_token"), record_manager);
+            !role.eq_ignore_ascii_case("user")
+        })
+        .collect()
+}
+
+fn extract_role_from_app_token(value: Option<&Value>, record_manager: &RecordManager) -> String {
+    let token = value.and_then(|v| v.as_str()).unwrap_or("").trim();
+    if token.is_empty() {
+        return String::new();
+    }
+    parse_app_token(record_manager, token).role
+}
+
+fn mask_self_account_rows_for_non_dev(
+    rows: Vec<Map<String, Value>>,
+    access: &UserAccessContext,
+) -> Vec<Map<String, Value>> {
+    if rows.is_empty() || access.is_dev {
+        return rows;
+    }
+    const KEEP: &[&str] = &[
+        "id",
+        "username",
+        "email",
+        "phoneNumber",
+        "full_name",
+        "avatar",
+        "app_id",
+        "app_token",
+        "user_address",
+    ];
+    rows.into_iter()
+        .map(|row| {
+            let mut masked = Map::new();
+            for key in KEEP {
+                if let Some(v) = row.get(*key) {
+                    masked.insert((*key).into(), v.clone());
+                }
+            }
+            masked
+        })
+        .collect()
+}
+
+fn decrypt_pass_for_display(
+    table_name: &str,
+    rows: &mut [Map<String, Value>],
+    record_manager: &RecordManager,
+) {
+    if table_name != "csm_accounts" && table_name != "csm_group_members" {
+        return;
+    }
+    for row in rows.iter_mut() {
+        let Some(Value::String(pass)) = row.get("pass") else {
+            continue;
+        };
+        if pass.is_empty() {
+            continue;
+        }
+        if let Ok(decrypted) = record_manager.csm_decrypt(pass) {
+            if let Some((_, raw)) = decrypted.split_once("_____") {
+                row.insert("pass".into(), Value::String(raw.to_string()));
+            } else {
+                row.insert("pass".into(), Value::String(decrypted));
+            }
+        }
+    }
+}
+
+fn rows_as_maps(value: Option<&Value>) -> Vec<Map<String, Value>> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|item| item.as_object().cloned())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn matches_eq_candidate(
@@ -460,6 +950,7 @@ mod tests {
     use crate::config::AppConfig;
     use crate::data::RecordManager;
     use crate::model::SearchFilter;
+    use crate::security::AuthUser;
     use std::sync::Arc;
 
     fn lmkt_broadcast_filter() -> SearchFilter {
@@ -484,7 +975,47 @@ mod tests {
             data_scope: "ALL".into(),
             data_app_ids: vec![],
             owner_candidates: vec![],
+            parent_account_candidates: vec![],
+            department_candidates: vec![],
+            branch_candidates: vec![],
+            preferred_owner: String::new(),
+            preferred_department: String::new(),
+            preferred_branch: String::new(),
         }
+    }
+
+    #[test]
+    fn sub_user_never_admin_in_access_context() {
+        std::env::set_var("APP_DATA_DIR", "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas");
+        std::env::set_var(
+            "ROCKSDB_ROOT_DIR",
+            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/database",
+        );
+        let config = AppConfig::from_env().expect("config");
+        let rm = RecordManager::new(config).expect("record manager");
+        let user = AuthUser {
+            user_id: "sub-1".into(),
+            username: "subuser".into(),
+            email: "sub@example.com".into(),
+            phone_number: String::new(),
+            app_token: String::new(),
+            login_version: 0,
+            permissions: vec!["admin".into(), "view".into(), "scope:all".into()],
+            menus_permissions: Some(vec!["lmkt".into()]),
+            permission_bitfield: None,
+            data_scope: "ALL".into(),
+            dev: false,
+            is_sub_user: true,
+            app_id: "lmkt".into(),
+            data_app_ids: vec![],
+            dept_id: String::new(),
+            branch_id: String::new(),
+            extra: serde_json::Map::new(),
+        };
+        let ctx = UserAccessContext::from_auth(Some(&user), &rm).expect("context");
+        assert!(!ctx.is_admin, "sub-user must not be treated as admin");
+        assert!(ctx.is_sub_user);
+        assert!(!ctx.permissions.iter().any(|p| p.eq_ignore_ascii_case("admin")));
     }
 
     #[test]
