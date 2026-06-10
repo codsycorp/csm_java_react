@@ -233,7 +233,7 @@ impl AuthHandler {
             return response;
         };
 
-        // Prefer csm-token JWT when sent; fall back to middleware principal (Java SecurityContext).
+        // Prefer csm-token JWT when sent; never fall back to a different middleware principal.
         if let Some(token) = params
             .get("csm-token")
             .and_then(|v| v.as_str())
@@ -253,6 +253,10 @@ impl AuthHandler {
                     response.set("result", Value::Object(info));
                     return response;
                 }
+                response.set("code", 401);
+                response.set("success", false);
+                response.set("message", "Invalid or expired session token");
+                return response;
             }
         }
 

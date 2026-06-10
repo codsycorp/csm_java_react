@@ -139,7 +139,7 @@ export function PasswordLogin() {
 					dev: loginRes?.result?.dev,
 				};
 
-				return fetchUserInfo(userInfoHeaders).then((response: any) => {
+				return fetchUserInfo(userInfoHeaders, { omitRefreshToken: true }).then((response: any) => {
 					const userInfoResult = response?.result || loginFallbackUser;
 					if (userInfoResult) {
 						useUserStore.setState({ ...userInfoResult });

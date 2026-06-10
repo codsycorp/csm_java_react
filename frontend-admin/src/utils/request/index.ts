@@ -136,13 +136,14 @@ const defaultConfig: Options = {
 				}
 				const isRefreshTokenRequest = [`/${refreshTokenPath}`].some(url => request.url.endsWith(url));
 				const isWhiteRequest = requestWhiteList.some(url => request.url.endsWith(url));
+				const omitRefreshToken = Boolean((options as any)?.omitRefreshToken);
 
 				// Login: never send stale session headers.
 				if (isWhiteRequest) {
 					request.headers.delete("X-Refresh-Token");
 					request.headers.delete(AUTH_HEADER);
 					request.headers.delete("csm-token");
-				} else {
+				} else if (!omitRefreshToken) {
 					// NWJS + browser: send refreshToken header (required for /refresh-token when cookie unavailable).
 					const isNwjs = typeof (window as any).nw !== 'undefined' ||
 					              navigator.userAgent.toLowerCase().includes('nwjs') ||

@@ -264,19 +264,6 @@ impl UserService {
                     }
                 }
             }
-            // Valid JWT may lead pickBest by one version right after login (duplicate rows).
-            if claims.ver == current_version + 1
-                && (!token_user_id.is_empty()
-                    && user_ids_match(user.id.as_deref().unwrap_or(""), token_user_id)
-                    || subject_matches_user(subject, &user))
-            {
-                warn!(
-                    "[JWT] Accept fresh token ver={} ahead of stale DB ver={} for subject={}",
-                    claims.ver, current_version, subject
-                );
-                user.login_version = Some(claims.ver);
-                return Some(user);
-            }
             warn!(
                 "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
                 subject, claims.ver, current_version
@@ -408,6 +395,51 @@ impl UserService {
             }
 
             let filter = SearchFilter::eq("app_token", app_token);
+            let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+            let account_rows: Vec<Map<String, Value>> = filtered
+                .get("rows")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|v| v.as_object().cloned())
+                .collect();
+
+            if !account_rows.is_empty() {
+                let mut persisted = false;
+                for row in &account_rows {
+                    let mut merged = row.clone();
+                    merged.extend(fields.clone());
+                    sync_refresh_fields(&mut merged, fields);
+                    match self.record_manager.create_record(
+                        CSM_APP_ID,
+                        ACCOUNTS_TABLE,
+                        merged.clone(),
+                        Some(vec!["app_token".into()]),
+                    ) {
+                        Ok(cmd) => {
+                            persisted = true;
+                            info!(
+                                "[SESSION] synced duplicate row cmd={} user_id={:?} login_version={:?}",
+                                cmd,
+                                user.id,
+                                fields.get("login_version")
+                            );
+                            self.apply_user_record_update(&merged);
+                        }
+                        Err(err) => {
+                            warn!(
+                                "[SESSION] duplicate row write failed user_id={:?}: {}",
+                                user.id, err
+                            );
+                        }
+                    }
+                }
+                if persisted {
+                    return true;
+                }
+            }
+
             let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
             if !record.is_empty() {
                 let mut merged = record;
