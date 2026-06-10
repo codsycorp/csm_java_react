@@ -760,6 +760,35 @@ impl RecordManager {
         }
     }
 
+    /// Read a record using an explicit PK field list (mirrors Java createRecord custom PK).
+    pub fn find_by_custom_pk(
+        &self,
+        app_id: &str,
+        table_name: &str,
+        record: &Map<String, Value>,
+        pk_fields: &[&str],
+    ) -> Map<String, Value> {
+        let pk_vec: Vec<String> = pk_fields.iter().map(|s| (*s).to_string()).collect();
+        let key_base = match self.build_primary_key(app_id, table_name, record, &pk_vec) {
+            Ok(k) => k,
+            Err(_) => return Map::new(),
+        };
+        let db = match self.get_db(app_id, table_name) {
+            Ok(db) => db,
+            Err(_) => return Map::new(),
+        };
+        for candidate in storage_key_candidates(app_id, table_name, &key_base) {
+            if let Ok(Some(bytes)) = db.db.get(candidate.as_bytes()) {
+                if bytes.len() <= MAX_SAFE_FIND_RECORD_BYTES {
+                    if let Ok(Value::Object(obj)) = serde_json::from_slice(&bytes) {
+                        return obj;
+                    }
+                }
+            }
+        }
+        Map::new()
+    }
+
     /// Read the existing record by its primary-key values — direct RocksDB lookup.
     /// Used by TableHandler to merge incoming obj_update on top of the stored record
     /// (mirrors Java: existingRow = recordManager.findRecord(); newRow.putAll(objUpdate)).

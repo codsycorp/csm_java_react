@@ -80,13 +80,16 @@ impl UserService {
         None
     }
 
-    /// Direct RocksDB read of the app_token primary-key row (Java updateSessionToken target).
+    /// Direct RocksDB read of the app_token PK row (Java: createRecord with List.of("app_token")).
     fn find_app_token_pk_record(&self, app_token: &str) -> Option<Map<String, Value>> {
         let mut probe = Map::new();
         probe.insert("app_token".into(), Value::String(app_token.into()));
-        let record = self
-            .record_manager
-            .find_existing_by_pk_values(CSM_APP_ID, ACCOUNTS_TABLE, &probe);
+        let record = self.record_manager.find_by_custom_pk(
+            CSM_APP_ID,
+            ACCOUNTS_TABLE,
+            &probe,
+            &["app_token"],
+        );
         if record.is_empty() {
             None
         } else {
@@ -294,6 +297,19 @@ impl UserService {
                     }
                 }
             }
+            // Signed JWT is authoritative when DB PK row lags by exactly one login increment.
+            if claims.ver == current_version + 1
+                && !token_user_id.is_empty()
+                && user_ids_match(user.id.as_deref().unwrap_or(""), token_user_id)
+                && subject_matches_user(subject, &user)
+            {
+                warn!(
+                    "[JWT] Trust signed token ver={} over stale PK/login row ver={} uid={}",
+                    claims.ver, current_version, token_user_id
+                );
+                user.login_version = Some(claims.ver);
+                return Some(user);
+            }
             warn!(
                 "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
                 subject, claims.ver, current_version
@@ -449,10 +465,26 @@ impl UserService {
             match self.record_manager.create_record(
                 CSM_APP_ID,
                 ACCOUNTS_TABLE,
-                record,
+                record.clone(),
                 Some(vec!["app_token".into()]),
             ) {
                 Ok(cmd) => {
+                    if let Some(written_ver) = fields.get("login_version").and_then(|v| v.as_i64()) {
+                        if let Some(check) = self.find_app_token_pk_record(app_token) {
+                            let pk_ver = parse_int_safe(check.get("login_version"));
+                            let pk_ver = if pk_ver == 0 {
+                                parse_int_safe(check.get("loginVersion"))
+                            } else {
+                                pk_ver
+                            };
+                            if pk_ver as i64 != written_ver {
+                                warn!(
+                                    "[SESSION] verify mismatch user_id={:?} expected_ver={} pk_ver={}",
+                                    user.id, written_ver, pk_ver
+                                );
+                            }
+                        }
+                    }
                     info!(
                         "[SESSION] persisted app_token PK cmd={} user_id={:?} login_version={:?}",
                         cmd,
