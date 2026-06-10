@@ -233,53 +233,73 @@ impl AuthHandler {
         response
     }
 
-    pub fn handle_user_info(&self, auth_user: Option<&crate::security::AuthUser>) -> StandardResponse {
+    pub fn handle_user_info(
+        &self,
+        auth_user: Option<&crate::security::AuthUser>,
+        params: &Map<String, Value>,
+    ) -> StandardResponse {
         let mut response = StandardResponse::new();
-        let Some(auth) = auth_user else {
+
+        // Mirror Java AuthHandler.handleUserInfo: bind to JWT principal, not a stale refresh session.
+        // When csm-token is sent, always resolve from that JWT first (same request token the client logged in with).
+        let user = params
+            .get("csm-token")
+            .and_then(|v| v.as_str())
+            .filter(|t| !t.is_empty())
+            .and_then(|token| {
+                if self.jwt.validate_token(token) {
+                    self.user_service.resolve_from_jwt_with_util(&self.jwt, token)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| auth_user.and_then(|auth| self.resolve_fresh_user(auth)));
+
+        let Some(user) = user else {
             response.set("code", 401);
             response.set("success", false);
-            response.set("message", "Not authenticated");
+            response.set(
+                "message",
+                if auth_user.is_some() {
+                    "User not found"
+                } else {
+                    "Not authenticated"
+                },
+            );
             return response;
         };
 
-        let user = self.resolve_fresh_user(auth);
-        if let Some(user) = user {
-            let is_sub_user = user.is_sub_user.unwrap_or(false)
-                || self.parse_app_token_meta(user.app_token.as_deref()).2;
-            let is_dev = if is_sub_user {
-                false
-            } else {
-                self.resolve_dev_flag(&user)
-            };
-            let mut user = user;
-            user.dev = Some(is_dev);
-            user.is_sub_user = Some(is_sub_user);
-            apply_app_id_from_token(&self.record_manager, &mut user);
-            let mut info = user.to_info_map();
-            self.enrich_account_meta(&user, &mut info);
-            self.enrich_user_info_with_bitfield(&user, &mut info);
-            info.insert("dev".into(), Value::Bool(is_dev));
-            if let Some(app_id) = user.app_id.as_ref().filter(|s| !s.is_empty()) {
-                info.insert("app_id".into(), Value::String(app_id.clone()));
-            }
-            if let Some(app_token) = user.app_token.as_ref().filter(|s| !s.is_empty()) {
-                info.insert("app_token".into(), Value::String(app_token.clone()));
-            }
-            let data_app_ids = user.data_app_ids.clone().unwrap_or_default();
-            info.insert(
-                "data_app_ids".into(),
-                Value::Array(data_app_ids.iter().cloned().map(Value::String).collect()),
-            );
-
-            response.set("code", 200);
-            response.set("success", true);
-            response.set("message", "ok");
-            response.set("result", Value::Object(info));
+        let is_sub_user = user.is_sub_user.unwrap_or(false)
+            || self.parse_app_token_meta(user.app_token.as_deref()).2;
+        let is_dev = if is_sub_user {
+            false
         } else {
-            response.set("code", 401);
-            response.set("success", false);
-            response.set("message", "User not found");
+            self.resolve_dev_flag(&user)
+        };
+        let mut user = user;
+        user.dev = Some(is_dev);
+        user.is_sub_user = Some(is_sub_user);
+        apply_app_id_from_token(&self.record_manager, &mut user);
+        let mut info = user.to_info_map();
+        self.enrich_account_meta(&user, &mut info);
+        self.enrich_user_info_with_bitfield(&user, &mut info);
+        info.insert("dev".into(), Value::Bool(is_dev));
+        if let Some(app_id) = user.app_id.as_ref().filter(|s| !s.is_empty()) {
+            info.insert("app_id".into(), Value::String(app_id.clone()));
         }
+        if let Some(app_token) = user.app_token.as_ref().filter(|s| !s.is_empty()) {
+            info.insert("app_token".into(), Value::String(app_token.clone()));
+        }
+        let data_app_ids = user.data_app_ids.clone().unwrap_or_default();
+        info.insert(
+            "data_app_ids".into(),
+            Value::Array(data_app_ids.iter().cloned().map(Value::String).collect()),
+        );
+
+        response.set("code", 200);
+        response.set("success", true);
+        response.set("message", "ok");
+        response.set("result", Value::Object(info));
         response
     }
 
@@ -550,27 +570,15 @@ impl AuthHandler {
     }
 
     fn resolve_fresh_user(&self, auth: &crate::security::AuthUser) -> Option<User> {
-        let user = if !auth.app_token.is_empty() {
-            self.user_service.find_by_app_token(&auth.app_token)
-        } else if !auth.user_id.is_empty() {
-            self.user_service.find_by_id(&auth.user_id)
-        } else {
-            None
-        }?;
-
-        let resolved_id = user.id.as_deref().unwrap_or("");
-        if !auth.user_id.is_empty()
-            && !resolved_id.is_empty()
-            && !crate::services::user::user_ids_match(resolved_id, &auth.user_id)
-        {
-            warn!(
-                "[resolve_fresh_user] Reject stale user record auth_id={} resolved_id={} app_token={}",
-                auth.user_id, resolved_id, auth.app_token
-            );
-            return None;
+        // Mirror Java handleUserInfo: findUserById first, then findUserByAppToken.
+        let mut fresh = None;
+        if !auth.user_id.is_empty() {
+            fresh = self.user_service.find_by_id(&auth.user_id);
         }
-
-        Some(user)
+        if fresh.is_none() && !auth.app_token.is_empty() {
+            fresh = self.user_service.find_by_app_token(&auth.app_token);
+        }
+        fresh
     }
 
     fn resolve_dev_flag(&self, user: &User) -> bool {

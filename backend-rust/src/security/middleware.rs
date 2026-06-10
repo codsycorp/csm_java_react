@@ -163,15 +163,20 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
         return None;
     }
 
-    if let Some(token) = csm_token(headers) {
-        if state.jwt.validate_token(&token) {
-            if let Some(user) = state.user_service.resolve_from_jwt_with_util(&state.jwt, &token)
+    let csm = csm_token(headers);
+    if let Some(token) = csm.as_ref() {
+        if state.jwt.validate_token(token) {
+            if let Some(user) =
+                state
+                    .user_service
+                    .resolve_from_jwt_with_util(&state.jwt, token)
             {
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
+            // Valid csm-token but user/version mismatch — never bind another user's refresh session.
+            warn!("[JWT] csm-token valid but auth resolution failed, rejecting request");
+            return None;
         }
-        // Client sent csm-token explicitly — never authenticate as another user via refresh.
-        return None;
     }
 
     if let Some(rt) = refresh_token_from_request(headers) {
@@ -238,19 +243,13 @@ fn csm_token(headers: &HeaderMap) -> Option<String> {
 }
 
 fn refresh_token_from_request(headers: &HeaderMap) -> Option<String> {
-    let cookie = cookie_value(headers, "refreshToken");
-    let header = headers
+    // Mirror Java JwtAuthenticationFilter: X-Refresh-Token header first, then cookie.
+    headers
         .get("x-refresh-token")
         .and_then(|h| h.to_str().ok())
         .filter(|t| !t.is_empty())
-        .map(String::from);
-
-    match (cookie, header) {
-        (Some(c), Some(h)) if c != h => Some(c),
-        (Some(c), _) => Some(c),
-        (_, Some(h)) => Some(h),
-        _ => None,
-    }
+        .map(String::from)
+        .or_else(|| cookie_value(headers, "refreshToken"))
 }
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {

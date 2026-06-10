@@ -179,7 +179,7 @@ async fn dispatch_api(
     let response = match path {
         // ── Init / Auth ──
         "/create-default-data" => state.init_handler.handle_create_default_data(),
-        "/user-info" => state.auth_handler.handle_user_info(auth.as_ref()),
+        "/user-info" => state.auth_handler.handle_user_info(auth.as_ref(), &params),
         "/login" => state.auth_handler.handle_login(&params),
         "/logout" => state.auth_handler.handle_logout(auth.as_ref(), &params),
         "/refresh-token" => state.auth_handler.handle_refresh_token(&params),

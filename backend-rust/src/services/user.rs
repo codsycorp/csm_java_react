@@ -49,13 +49,7 @@ impl UserService {
         }
         let filter = SearchFilter::eq("app_token", app_token);
 
-        // Primary: direct app_token PK lookup — same row updateSessionToken writes to.
-        let direct = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
-        if !direct.is_empty() {
-            return Some(self.map_record_to_user(&direct, true));
-        }
-
-        // Fallback for legacy/migrated data with duplicate alias rows.
+        // Mirror Java UserService.findUserByAppToken: filter + pickBest first, then direct find.
         let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
         let rows = filtered
             .get("rows")
@@ -70,6 +64,11 @@ impl UserService {
 
         if let Some(record) = pick_best_account_record(&account_rows) {
             return Some(self.map_record_to_user(&record, true));
+        }
+
+        let direct = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+        if !direct.is_empty() {
+            return Some(self.map_record_to_user(&direct, true));
         }
 
         let sub = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
@@ -154,46 +153,48 @@ impl UserService {
             return None;
         }
 
+        // Mirror Java JwtAuthenticationFilter.setAuthenticationFromToken order.
         let mut user = None;
         if !token_user_id.is_empty() {
             user = self.find_by_id(token_user_id);
         }
+        if user.is_none() {
+            user = self
+                .find_by_id(subject)
+                .or_else(|| self.find_account("email", subject).map(|(u, _)| u))
+                .or_else(|| self.find_account("username", subject).map(|(u, _)| u))
+                .or_else(|| self.find_account("phoneNumber", subject).map(|(u, _)| u))
+                .or_else(|| self.find_by_app_token(subject));
+        }
 
-        // JWT subject is usually encrypted app_token — mirror Java JwtAuthenticationFilter.
+        // JWT subject is usually encrypted app_token — always re-resolve when it looks like one.
         if looks_like_app_token(subject) {
-            if let Some(by_token) = self.find_by_app_token(subject) {
+            if let Some(by_subject) = self.find_by_app_token(subject) {
                 if !token_user_id.is_empty() {
-                    let resolved_id = by_token.id.as_deref().unwrap_or("");
+                    let resolved_id = by_subject.id.as_deref().unwrap_or("");
                     if !user_ids_match(resolved_id, token_user_id) {
+                        warn!(
+                            "[JWT] Subject app_token resolved to different user subject={} tokenUid={} resolvedUid={}",
+                            subject, token_user_id, resolved_id
+                        );
                         return None;
                     }
                 }
-                user = Some(by_token);
+                user = Some(by_subject);
             }
-        }
-
-        if user.is_none() {
-            user = self
-                .find_by_app_token(subject)
-                .or_else(|| self.find_by_id(subject))
-                .or_else(|| self.find_account("email", subject).map(|(u, _)| u))
-                .or_else(|| self.find_account("username", subject).map(|(u, _)| u))
-                .or_else(|| self.find_account("phoneNumber", subject).map(|(u, _)| u));
         }
 
         let mut user = user?;
 
         if !subject_matches_user(subject, &user) {
+            warn!(
+                "[JWT] Subject mismatch subject={} resolvedUserId={:?} resolvedUsername={:?}",
+                subject, user.id, user.username
+            );
             return None;
         }
 
-        if !token_user_id.is_empty() {
-            let resolved_id = user.id.as_deref().unwrap_or("");
-            if !user_ids_match(resolved_id, token_user_id) {
-                return None;
-            }
-        }
-
+        // Re-fetch canonical row by app_token (Java: avoid stale id/refresh alias rows).
         if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
             if let Some(fresh) = self.find_by_app_token(&app_token) {
                 user = fresh;
@@ -202,6 +203,10 @@ impl UserService {
 
         let current_version = user.login_version.unwrap_or(0);
         if current_version > 0 && claims.ver != current_version {
+            warn!(
+                "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
+                subject, claims.ver, current_version
+            );
             return None;
         }
 
