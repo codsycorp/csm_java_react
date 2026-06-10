@@ -312,12 +312,7 @@ impl UserService {
                 let mut merged = record;
                 merged.extend(fields.clone());
                 sync_refresh_fields(&mut merged, fields);
-                let _ = self.record_manager.create_record(
-                    CSM_APP_ID,
-                    ACCOUNTS_TABLE,
-                    merged,
-                    Some(vec!["app_token".into()]),
-                );
+                self.apply_user_record_update(&merged);
                 return true;
             }
         }
@@ -420,7 +415,11 @@ impl UserService {
         sync_refresh_fields(&mut merged, fields);
         merged.insert("id".into(), json!(user_id));
 
-        // Mirror Java applyUserRecordUpdate: app_token + refresh aliases + canonical PK
+        self.apply_user_record_update(&merged);
+    }
+
+    /// Mirror Java UserService.applyUserRecordUpdate — app_token PK, refresh alias, then default row.
+    fn apply_user_record_update(&self, merged: &Map<String, Value>) {
         if merged
             .get("app_token")
             .and_then(|v| v.as_str())
@@ -433,6 +432,7 @@ impl UserService {
                 Some(vec!["app_token".into()]),
             );
         }
+
         let refresh_val = merged
             .get("refresh")
             .or_else(|| merged.get("refresh_token"))
@@ -446,7 +446,8 @@ impl UserService {
                 Some(vec!["refresh".into()]),
             );
         }
-        let _ = self.record_manager.create_record(CSM_APP_ID, ACCOUNTS_TABLE, merged, None);
+
+        let _ = self.record_manager.create_record(CSM_APP_ID, ACCOUNTS_TABLE, merged.clone(), None);
     }
 
     fn find_by_email(&self, email: &str) -> Option<(User, Map<String, Value>)> {

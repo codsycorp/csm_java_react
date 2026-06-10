@@ -186,22 +186,6 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
             let client_ip = client_ip_from_headers(headers);
             let client_ua = user_agent_from_headers(headers);
             if refresh_session_valid(&user, &client_ip, &client_ua) {
-                // When client sent a valid csm-token JWT with uid, do not bind another user's refresh session.
-                if let Some(token) = csm.as_ref().filter(|t| state.jwt.validate_token(t)) {
-                    if let Ok(claims) = state.jwt.parse_claims(token) {
-                        let token_uid = claims.uid.trim();
-                        if !token_uid.is_empty() {
-                            let refresh_id = user.id.as_deref().unwrap_or("");
-                            if !crate::services::user::user_ids_match(refresh_id, token_uid) {
-                                warn!(
-                                    "[JWT] Reject refresh fallback: csm-token uid={} refresh user id={}",
-                                    token_uid, refresh_id
-                                );
-                                return None;
-                            }
-                        }
-                    }
-                }
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
             state.user_service.clear_session_token(&user);

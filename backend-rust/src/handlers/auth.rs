@@ -223,7 +223,7 @@ impl AuthHandler {
     pub fn handle_user_info(
         &self,
         auth_user: Option<&crate::security::AuthUser>,
-        _params: &Map<String, Value>,
+        params: &Map<String, Value>,
     ) -> StandardResponse {
         let mut response = StandardResponse::new();
         let Some(auth) = auth_user else {
@@ -233,9 +233,19 @@ impl AuthHandler {
             return response;
         };
 
-        // Mirror Java AuthHandler.handleUserInfo: fresh DB by principal id, then app_token; fallback to principal.
-        let user = self
-            .resolve_fresh_user(auth)
+        // Prefer csm-token JWT when sent (matches login token); else Java principal fresh DB lookup.
+        let user = params
+            .get("csm-token")
+            .and_then(|v| v.as_str())
+            .filter(|t| !t.is_empty())
+            .and_then(|token| {
+                if self.jwt.validate_token(token) {
+                    self.user_service.resolve_from_jwt_with_util(&self.jwt, token)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| self.resolve_fresh_user(auth))
             .unwrap_or_else(|| self.user_from_auth(auth));
 
         let mut info = user.to_info_map();
