@@ -213,6 +213,19 @@ impl UserService {
         }
     }
 
+    /// Mirror Java UserService.clearSessionToken — invalidate refresh session metadata.
+    pub fn clear_session_token(&self, user: &User) {
+        let mut fields = Map::new();
+        fields.insert("refresh_token".into(), Value::String(String::new()));
+        fields.insert("refresh".into(), Value::String(String::new()));
+        fields.insert("refresh_token_ip".into(), Value::Null);
+        fields.insert("refresh_token_ua".into(), Value::Null);
+        fields.insert("refresh_token_expiry".into(), Value::Null);
+        if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
+            self.update_by_id(id, &fields);
+        }
+    }
+
     pub fn update_by_id(&self, user_id: &str, fields: &Map<String, Value>) {
         let filter = SearchFilter::eq("id", user_id);
         let mut record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);

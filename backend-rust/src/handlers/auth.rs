@@ -6,6 +6,9 @@ use uuid::Uuid;
 
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, StandardResponse, User};
+use crate::security::client_session::{
+    normalize_client_ip, normalize_user_agent, refresh_session_valid,
+};
 use crate::security::jwt::JwtUtil;
 use crate::services::user::UserService;
 use crate::util::{app_id_from_token, PermissionBitfieldUtil};
@@ -339,19 +342,40 @@ impl AuthHandler {
             return response;
         };
 
-        let version = user.login_version.unwrap_or(0);
-        let new_refresh = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
         let ip = params
             .get("_client_ip")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .map(normalize_client_ip)
+            .unwrap_or_default();
         let ua = params
             .get("_user_agent")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .map(normalize_user_agent)
+            .unwrap_or_default();
+
+        if !refresh_session_valid(&user, &ip, &ua) {
+            self.user_service.clear_session_token(&user);
+            response.set("code", 401);
+            response.set("success", false);
+            response.set(
+                "message",
+                if user.refresh_token_expiry.unwrap_or(0) > 0
+                    && user.refresh_token_expiry.unwrap_or(0)
+                        <= chrono::Utc::now().timestamp_millis()
+                {
+                    "Refresh token đã hết hạn"
+                } else {
+                    "Refresh token không hợp lệ (IP/UA)"
+                },
+            );
+            return response;
+        }
+
+        let version = user.login_version.unwrap_or(0);
+        let new_refresh = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
         let expiry = chrono::Utc::now().timestamp_millis() + 7 * 24 * 60 * 60 * 1000;
         self.user_service
-            .update_session_token(&user, &new_refresh, ip, ua, expiry, version);
+            .update_session_token(&user, &new_refresh, &ip, &ua, expiry, version);
 
         let token_subject = user
             .app_token

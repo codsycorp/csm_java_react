@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod client_session;
 pub mod csrf;
 pub mod jwt;
 pub mod middleware;

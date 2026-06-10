@@ -1,6 +1,12 @@
 // Cache for broadcast home auto_code per app_id
 const broadcastHomeAutoCodeCache: Record<string, string | null> = {};
 
+export function clearBroadcastHomeAutoCodeCache() {
+	for (const key of Object.keys(broadcastHomeAutoCodeCache)) {
+		delete broadcastHomeAutoCodeCache[key];
+	}
+}
+
 /**
  * Load auto_code for homepage (broadcast) for current app
  * p_name = 'broadcast_' + app_id, p_type = 0

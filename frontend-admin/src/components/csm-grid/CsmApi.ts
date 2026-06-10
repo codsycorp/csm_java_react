@@ -602,7 +602,7 @@ export interface CreateTableStruct {
 	[key: string]: any
 }
 
-function clearGetTableDataCache() {
+export function clearGetTableDataCache() {
 	const globalAny = globalThis as any;
 	const cache: Map<string, Promise<any>> | undefined = globalAny.__csm_getTableDataCache;
 	if (cache) {

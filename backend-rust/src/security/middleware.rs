@@ -16,6 +16,9 @@ use tower_http::{
 use tracing::warn;
 
 use crate::security::auth::AuthUser;
+use crate::security::client_session::{
+    client_ip_from_headers, refresh_session_valid, user_agent_from_headers,
+};
 use crate::util::{app_id_from_token, parse_app_token, is_sub_user_role};
 use crate::security::rate_limit::RateLimiter;
 use crate::state::AppState;
@@ -153,7 +156,12 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
 
     if let Some(rt) = refresh_token_from_request(headers) {
         if let Some(user) = state.user_service.find_by_refresh_token(&rt) {
-            return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
+            let client_ip = client_ip_from_headers(headers);
+            let client_ua = user_agent_from_headers(headers);
+            if refresh_session_valid(&user, &client_ip, &client_ua) {
+                return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
+            }
+            state.user_service.clear_session_token(&user);
         }
     }
 

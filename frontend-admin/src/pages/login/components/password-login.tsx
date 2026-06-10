@@ -3,6 +3,8 @@ import { isDynamicRoutingEnabled } from "#src/router/routes/config";
 import { useAuthStore, usePermissionStore, useUserStore, useAppStore } from "#src/store";
 import { resolveDevFlag, persistDevLocalFlag } from "#src/utils/dev-flag";
 import { fetchUserInfo } from "#src/api/user";
+import { clearBroadcastHomeAutoCodeCache } from "#src/api/system/menu";
+import { clearGetTableDataCache } from "#src/components/csm-grid/CsmApi";
 
 import {
 	Button,
@@ -54,6 +56,20 @@ function resetAuthArtifacts() {
 		localStorage.removeItem("access-token");
 		localStorage.removeItem("user-info");
 		localStorage.removeItem("refreshToken");
+		localStorage.removeItem("app_token");
+		localStorage.removeItem("current_app_id");
+		localStorage.removeItem("csm_client_id");
+	} catch {}
+	try {
+		clearBroadcastHomeAutoCodeCache();
+		clearGetTableDataCache();
+	} catch {}
+	try {
+		if (typeof window !== "undefined") {
+			(window as any).csmCurrentUser = null;
+			(window as any).csmUserData = null;
+			(window as any).seft = null;
+		}
 	} catch {}
 }
 
