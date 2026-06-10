@@ -391,12 +391,19 @@ async fn parse_request_params(req: Request<Body>) -> Map<String, Value> {
     if let Some(token) = parts.headers.get("csm-token").and_then(|h| h.to_str().ok()) {
         params.insert("csm-token".into(), Value::String(token.into()));
     }
-    if let Some(rt) = parts.headers.get("x-refresh-token").and_then(|h| h.to_str().ok()) {
-        params.insert("refreshToken".into(), Value::String(rt.into()));
+    let cookie_rt = cookie_value(&parts.headers, "refreshToken");
+    let header_rt = parts
+        .headers
+        .get("x-refresh-token")
+        .and_then(|h| h.to_str().ok())
+        .map(String::from);
+    // Prefer HttpOnly cookie over stale localStorage header (browser); header remains fallback for NWJS.
+    if let Some(rt) = cookie_rt.as_ref().or(header_rt.as_ref()) {
+        params.insert("refreshToken".into(), Value::String(rt.clone()));
     }
-    if !params.contains_key("refreshToken") {
-        if let Some(rt) = cookie_value(&parts.headers, "refreshToken") {
-            params.insert("refreshToken".into(), Value::String(rt));
+    if let Some(header) = header_rt {
+        if cookie_rt.as_ref() != Some(&header) {
+            params.insert("refreshTokenHeader".into(), Value::String(header));
         }
     }
     if let Some(ua) = parts

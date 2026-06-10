@@ -76,6 +76,15 @@ impl UserService {
     }
 
     pub fn find_by_refresh_token(&self, refresh_token: &str) -> Option<User> {
+        self.find_user_by_refresh_token(refresh_token, true)
+    }
+
+    /// Lookup refresh session; optionally skip canonical app_token re-check when refresh PK row is authoritative.
+    pub fn find_user_by_refresh_token(
+        &self,
+        refresh_token: &str,
+        canonicalize: bool,
+    ) -> Option<User> {
         if refresh_token.is_empty() {
             return None;
         }
@@ -83,7 +92,11 @@ impl UserService {
             let filter = SearchFilter::eq(field, refresh_token);
             let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
             if !record.is_empty() {
-                return self.canonicalize_refresh_user(&record, refresh_token);
+                return if canonicalize {
+                    self.canonicalize_refresh_user(&record, refresh_token)
+                } else {
+                    self.map_refresh_record_to_user(&record, refresh_token)
+                };
             }
             let sub = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
             if !sub.is_empty() {
@@ -103,6 +116,25 @@ impl UserService {
             }
         }
         None
+    }
+
+    fn map_refresh_record_to_user(
+        &self,
+        record: &Map<String, Value>,
+        refresh_token: &str,
+    ) -> Option<User> {
+        if record_refresh_expired(record) {
+            return None;
+        }
+        let stored = record
+            .get("refresh_token")
+            .or_else(|| record.get("refresh"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if stored != refresh_token {
+            return None;
+        }
+        Some(self.map_record_to_user(record, true))
     }
 
     pub fn find_by_login_and_password(
@@ -151,20 +183,8 @@ impl UserService {
         }
 
         // Mirror Java JwtAuthenticationFilter.setAuthenticationFromToken order.
+        // Prefer app_token subject first — JWT sub is the encrypted app_token after login.
         let mut user = None;
-        if !token_user_id.is_empty() {
-            user = self.find_by_id(token_user_id);
-        }
-        if user.is_none() {
-            user = self
-                .find_by_id(subject)
-                .or_else(|| self.find_account("email", subject).map(|(u, _)| u))
-                .or_else(|| self.find_account("username", subject).map(|(u, _)| u))
-                .or_else(|| self.find_account("phoneNumber", subject).map(|(u, _)| u))
-                .or_else(|| self.find_by_app_token(subject));
-        }
-
-        // JWT subject is usually encrypted app_token — always re-resolve when it looks like one.
         if looks_like_app_token(subject) {
             if let Some(by_subject) = self.find_by_app_token(subject) {
                 if !token_user_id.is_empty() {
@@ -179,6 +199,24 @@ impl UserService {
                 }
                 user = Some(by_subject);
             }
+        }
+
+        if user.is_none() {
+            if !token_user_id.is_empty() {
+                user = self.find_by_id(token_user_id);
+            }
+            if user.is_none() {
+                user = self
+                    .find_by_id(subject)
+                    .or_else(|| self.find_account("email", subject).map(|(u, _)| u))
+                    .or_else(|| self.find_account("username", subject).map(|(u, _)| u))
+                    .or_else(|| self.find_account("phoneNumber", subject).map(|(u, _)| u))
+                    .or_else(|| self.find_by_app_token(subject));
+            }
+        }
+
+        if user.is_none() && looks_like_app_token(subject) {
+            user = self.find_by_app_token(subject);
         }
 
         let mut user = user?;
@@ -230,18 +268,18 @@ impl UserService {
 
         let mut user = self.map_record_to_user(record, true);
 
-        // Re-fetch canonical record by app_token to avoid stale refresh alias rows (Java parity).
+        // Re-fetch canonical record by app_token when it still references this refresh token.
         if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
             if let Some(canonical) = self.find_by_app_token(&app_token) {
                 let canonical_refresh = canonical.refresh_token.as_deref().unwrap_or("");
-                if canonical_refresh != refresh_token {
+                if canonical_refresh == refresh_token {
+                    user = canonical;
+                } else {
                     warn!(
-                        "[find_by_refresh_token] Reject stale refresh token for user {:?}",
-                        canonical.email
+                        "[find_by_refresh_token] Keep refresh-indexed row for user {:?} (canonical refresh mismatch)",
+                        user.email
                     );
-                    return None;
                 }
-                user = canonical;
             }
         }
 

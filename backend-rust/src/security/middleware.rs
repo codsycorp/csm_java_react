@@ -17,7 +17,8 @@ use tracing::warn;
 
 use crate::security::auth::AuthUser;
 use crate::security::client_session::{
-    client_ip_from_headers, refresh_session_valid, user_agent_from_headers,
+    client_ip_from_headers, refresh_session_valid_for_middleware,
+    refresh_token_candidates, user_agent_from_headers,
 };
 use crate::util::{app_id_from_token, parse_app_token, is_sub_user_role};
 use crate::security::rate_limit::RateLimiter;
@@ -129,7 +130,7 @@ pub async fn auth_middleware(
         let has_csm_token = req.headers().get("csm-token").and_then(|h| h.to_str().ok()).map(|s| !s.is_empty()).unwrap_or(false);
         let has_authorization = req.headers().get(header::AUTHORIZATION).and_then(|h| h.to_str().ok()).map(|s| !s.is_empty()).unwrap_or(false);
         let has_refresh_header = req.headers().get("x-refresh-token").and_then(|h| h.to_str().ok()).map(|s| !s.is_empty()).unwrap_or(false);
-        let has_refresh_cookie = cookie_value(req.headers(), "refreshToken").is_some();
+        let has_refresh_cookie = crate::security::client_session::cookie_from_headers(req.headers(), "refreshToken").is_some();
         warn!("[GET_TABLE_DATA][AUTH] reject-missing-or-invalid-auth host={:?} csm-token={} authorization={} x-refresh-token={} refreshCookie={}",
             host, has_csm_token, has_authorization, has_refresh_header, has_refresh_cookie);
     }
@@ -181,14 +182,13 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
         }
     }
 
-    if let Some(rt) = refresh_token_from_request(headers) {
+    let client_ip = client_ip_from_headers(headers);
+    let client_ua = user_agent_from_headers(headers);
+    for rt in refresh_token_candidates(headers) {
         if let Some(user) = state.user_service.find_by_refresh_token(&rt) {
-            let client_ip = client_ip_from_headers(headers);
-            let client_ua = user_agent_from_headers(headers);
-            if refresh_session_valid(&user, &client_ip, &client_ua) {
+            if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua) {
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
-            state.user_service.clear_session_token(&user);
         }
     }
 
@@ -242,34 +242,6 @@ fn csm_token(headers: &HeaderMap) -> Option<String> {
         .and_then(|h| h.to_str().ok())
         .filter(|t| !t.is_empty())
         .map(String::from)
-}
-
-fn refresh_token_from_request(headers: &HeaderMap) -> Option<String> {
-    // Mirror Java JwtAuthenticationFilter: X-Refresh-Token header first, then cookie.
-    headers
-        .get("x-refresh-token")
-        .and_then(|h| h.to_str().ok())
-        .filter(|t| !t.is_empty())
-        .map(String::from)
-        .or_else(|| cookie_value(headers, "refreshToken"))
-}
-
-fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
-    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
-    for part in raw.split(';') {
-        let part = part.trim();
-        if let Some((key, value)) = part.split_once('=') {
-            if key.trim() == name {
-                let decoded = urlencoding::decode(value.trim())
-                    .map(|s| s.into_owned())
-                    .unwrap_or_else(|_| value.trim().to_string());
-                if !decoded.is_empty() {
-                    return Some(decoded);
-                }
-            }
-        }
-    }
-    None
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<String> {

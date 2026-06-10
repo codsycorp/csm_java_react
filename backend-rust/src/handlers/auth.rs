@@ -312,23 +312,13 @@ impl AuthHandler {
 
     pub fn handle_refresh_token(&self, params: &Map<String, Value>) -> StandardResponse {
         let mut response = StandardResponse::new();
-        let refresh = params
-            .get("refreshToken")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if refresh.is_empty() {
+        let refresh_candidates = refresh_tokens_from_params(params);
+        if refresh_candidates.is_empty() {
             response.set("code", 400);
             response.set("success", false);
             response.set("message", "Missing refresh token");
             return response;
         }
-
-        let Some(user) = self.user_service.find_by_refresh_token(refresh) else {
-            response.set("code", 401);
-            response.set("success", false);
-            response.set("message", "Invalid refresh token");
-            return response;
-        };
 
         let ip = params
             .get("_client_ip")
@@ -341,22 +331,23 @@ impl AuthHandler {
             .map(normalize_user_agent)
             .unwrap_or_default();
 
-        if !refresh_session_valid(&user, &ip, &ua) {
+        let mut matched_user = None;
+        for refresh in &refresh_candidates {
+            let Some(user) = self.user_service.find_by_refresh_token(refresh) else {
+                continue;
+            };
+            if refresh_session_valid(&user, &ip, &ua) {
+                matched_user = Some(user);
+                break;
+            }
+        }
+
+        let Some(user) = matched_user else {
             response.set("code", 401);
             response.set("success", false);
-            response.set(
-                "message",
-                if user.refresh_token_expiry.unwrap_or(0) > 0
-                    && user.refresh_token_expiry.unwrap_or(0)
-                        <= chrono::Utc::now().timestamp_millis()
-                {
-                    "Refresh token đã hết hạn"
-                } else {
-                    "Refresh token không hợp lệ (IP/UA)"
-                },
-            );
+            response.set("message", "Invalid refresh token");
             return response;
-        }
+        };
 
         let version = user.login_version.unwrap_or(0);
         let new_refresh = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
@@ -831,5 +822,19 @@ fn filter_routes_by_role(
             out.push(current);
         }
     }
+    out
+}
+
+fn refresh_tokens_from_params(params: &Map<String, Value>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push = |token: Option<&str>| {
+        if let Some(token) = token.filter(|t| !t.is_empty()) {
+            if !out.iter().any(|existing| existing == token) {
+                out.push(token.to_string());
+            }
+        }
+    };
+    push(params.get("refreshToken").and_then(|v| v.as_str()));
+    push(params.get("refreshTokenHeader").and_then(|v| v.as_str()));
     out
 }

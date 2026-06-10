@@ -18,7 +18,24 @@ pub fn normalize_user_agent(ua: &str) -> String {
 pub fn user_agent_matches(current_ua: &str, saved_ua: &str) -> bool {
     let current = normalize_user_agent(current_ua);
     let saved = normalize_user_agent(saved_ua);
-    !current.is_empty() && !saved.is_empty() && current == saved
+    if current.is_empty() || saved.is_empty() {
+        return false;
+    }
+    current == saved
+}
+
+/// Mirror Java AuthHandler.handleRefreshToken IP/UA check (empty equals empty).
+pub fn refresh_token_ip_matches(user: &User, client_ip: &str) -> bool {
+    let saved = user
+        .refresh_token_ip
+        .as_deref()
+        .map(normalize_client_ip)
+        .unwrap_or_default();
+    normalize_client_ip(client_ip) == saved
+}
+
+pub fn refresh_token_ua_matches(user: &User, client_ua: &str) -> bool {
+    user_agent_matches(client_ua, user.refresh_token_ua.as_deref().unwrap_or(""))
 }
 
 pub fn client_ip_from_headers(headers: &HeaderMap) -> String {
@@ -56,16 +73,60 @@ pub fn refresh_token_expired(user: &User) -> bool {
 
 /// Refresh token session is bound to the IP + User-Agent stored at login/refresh.
 pub fn refresh_session_matches(user: &User, client_ip: &str, client_ua: &str) -> bool {
-    let saved_ip = user.refresh_token_ip.as_deref().unwrap_or("");
-    let saved_ua = user.refresh_token_ua.as_deref().unwrap_or("");
-    !saved_ip.is_empty()
-        && !saved_ua.is_empty()
-        && normalize_client_ip(saved_ip) == normalize_client_ip(client_ip)
-        && user_agent_matches(client_ua, saved_ua)
+    refresh_token_ip_matches(user, client_ip) && refresh_token_ua_matches(user, client_ua)
 }
 
 pub fn refresh_session_valid(user: &User, client_ip: &str, client_ua: &str) -> bool {
     !refresh_token_expired(user) && refresh_session_matches(user, client_ip, client_ua)
+}
+
+/// Mirror Java JwtAuthenticationFilter refresh fallback (requires saved IP/UA present).
+pub fn refresh_session_valid_for_middleware(user: &User, client_ip: &str, client_ua: &str) -> bool {
+    let saved_ip = user.refresh_token_ip.as_deref().filter(|s| !s.is_empty());
+    let saved_ua = user.refresh_token_ua.as_deref().filter(|s| !s.is_empty());
+    saved_ip.is_some()
+        && saved_ua.is_some()
+        && user.refresh_token_expiry.unwrap_or(0) > chrono::Utc::now().timestamp_millis()
+        && normalize_client_ip(saved_ip.unwrap()) == normalize_client_ip(client_ip)
+        && user_agent_matches(client_ua, saved_ua.unwrap())
+}
+
+pub fn cookie_from_headers(headers: &HeaderMap, name: &str) -> Option<String> {
+    let raw = headers.get(header::COOKIE)?.to_str().ok()?;
+    for part in raw.split(';') {
+        let part = part.trim();
+        if let Some((key, value)) = part.split_once('=') {
+            if key.trim() == name {
+                let decoded = urlencoding::decode(value.trim())
+                    .map(|s| s.into_owned())
+                    .unwrap_or_else(|_| value.trim().to_string());
+                if !decoded.is_empty() {
+                    return Some(decoded);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Prefer HttpOnly cookie (fresh from login) over X-Refresh-Token header (may be stale in localStorage).
+pub fn refresh_token_candidates(headers: &HeaderMap) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push = |token: Option<String>| {
+        if let Some(token) = token.filter(|t| !t.is_empty()) {
+            if !out.iter().any(|existing| existing == &token) {
+                out.push(token);
+            }
+        }
+    };
+    push(cookie_from_headers(headers, "refreshToken"));
+    push(
+        headers
+            .get("x-refresh-token")
+            .and_then(|h| h.to_str().ok())
+            .map(String::from),
+    );
+    out
 }
 
 #[cfg(test)]
