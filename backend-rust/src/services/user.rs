@@ -25,8 +25,20 @@ impl UserService {
         if user_id.is_empty() {
             return None;
         }
-        // Mirror Java UserService.findUserById — direct id lookup, no app_token redirect.
+        // Mirror Java findUserById: prefer direct id PK slot before scan/pickBest fallbacks.
         for candidate in token_user_id_candidates(user_id) {
+            let mut probe = Map::new();
+            probe.insert("id".into(), Value::String(candidate.clone()));
+            let record = self.record_manager.find_by_custom_pk(
+                CSM_APP_ID,
+                ACCOUNTS_TABLE,
+                &probe,
+                &["id"],
+            );
+            if !record.is_empty() {
+                return Some(self.map_record_to_user(&record, true));
+            }
+
             let filter = SearchFilter::eq("id", candidate.as_str());
             let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
             if !record.is_empty() {

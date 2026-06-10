@@ -10,7 +10,7 @@ use crate::security::client_session::{
     normalize_client_ip, normalize_user_agent, refresh_session_valid,
 };
 use crate::security::jwt::JwtUtil;
-use crate::services::user::UserService;
+use crate::services::user::{user_ids_match, UserService};
 use crate::util::{app_id_from_token, PermissionBitfieldUtil};
 
 pub struct AuthHandler {
@@ -240,30 +240,24 @@ impl AuthHandler {
             return response;
         };
 
-        // Prefer csm-token JWT when sent; never fall back to a different middleware principal.
+        // Mirror Java handleUserInfo: load fresh profile from DB using authenticated principal.
+        // Do NOT re-resolve JWT into session/app_token rows (those can be stale duplicates).
         if let Some(token) = params
             .get("csm-token")
             .and_then(|v| v.as_str())
             .filter(|t| !t.is_empty())
         {
             if self.jwt.validate_token(token) {
-                if let Some(user) =
-                    self.user_service
-                        .resolve_from_jwt_with_util(&self.jwt, token)
+                let token_uid = self.jwt.user_id_from_token(token);
+                if !token_uid.is_empty()
+                    && !auth.user_id.is_empty()
+                    && !user_ids_match(&auth.user_id, &token_uid)
                 {
-                    let mut info = user.to_info_map();
-                    self.enrich_account_meta(&user, &mut info);
-                    self.enrich_user_info_with_bitfield(&user, &mut info);
-                    response.set("code", 200);
-                    response.set("success", true);
-                    response.set("message", "ok");
-                    response.set("result", Value::Object(info));
+                    response.set("code", 401);
+                    response.set("success", false);
+                    response.set("message", "Session token mismatch");
                     return response;
                 }
-                response.set("code", 401);
-                response.set("success", false);
-                response.set("message", "Invalid or expired session token");
-                return response;
             }
         }
 
