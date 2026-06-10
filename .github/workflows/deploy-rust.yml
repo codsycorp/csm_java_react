@@ -129,8 +129,8 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.DEPLOY_PASSWORD }}
           source: ".github/scripts/patch_nginx.py"
-          target: "/tmp/patch_nginx.py"
-          strip_components: 3
+          target: "/tmp/"
+          strip_components: 2
 
       - name: Validate, deploy & reload nginx
         uses: appleboy/ssh-action@v1.0.3
@@ -144,6 +144,9 @@ jobs:
 
             echo "=== AI location trong config HIỆN TẠI ==="
             grep -c "ai-generate-seo-content" /etc/nginx/nginx.conf 2>/dev/null || echo "0 — chưa có"
+
+            echo "=== Files đã upload ==="
+            ls -la /tmp/nginx.conf /tmp/patch_nginx.py 2>&1
 
             echo "=== Tạo include files còn thiếu ==="
             touch /etc/nginx/blocked_ips.conf
@@ -169,7 +172,11 @@ jobs:
                 echo "AI location đã có trong server config — chỉ reload"
                 nginx -t && nginx -s reload
               else
-                echo "Áp dụng surgical patch..."
+                echo "=== Áp dụng surgical patch ==="
+                if [ ! -f /tmp/patch_nginx.py ]; then
+                  echo "LỖII: /tmp/patch_nginx.py không tồn tại — SCP upload failed"
+                  exit 1
+                fi
                 python3 /tmp/patch_nginx.py
 
                 if nginx -t 2>&1; then
@@ -184,3 +191,6 @@ jobs:
                 fi
               fi
             fi
+
+            echo "=== Xác nhận cuối: AI location trong nginx ==="
+            grep -n "ai-generate-seo-content" /etc/nginx/nginx.conf | head -4 || echo "KHÔNG TÌM THẤY"
