@@ -183,8 +183,20 @@ impl UserService {
         }
 
         // Mirror Java JwtAuthenticationFilter.setAuthenticationFromToken order.
-        // Prefer app_token subject first — JWT sub is the encrypted app_token after login.
         let mut user = None;
+        if !token_user_id.is_empty() {
+            user = self.find_by_id(token_user_id);
+        }
+        if user.is_none() {
+            user = self
+                .find_by_id(subject)
+                .or_else(|| self.find_account("email", subject).map(|(u, _)| u))
+                .or_else(|| self.find_account("username", subject).map(|(u, _)| u))
+                .or_else(|| self.find_account("phoneNumber", subject).map(|(u, _)| u))
+                .or_else(|| self.find_by_app_token(subject));
+        }
+
+        // JWT subject is usually encrypted app_token — re-resolve when it looks like one.
         if looks_like_app_token(subject) {
             if let Some(by_subject) = self.find_by_app_token(subject) {
                 if !token_user_id.is_empty() {
@@ -199,24 +211,6 @@ impl UserService {
                 }
                 user = Some(by_subject);
             }
-        }
-
-        if user.is_none() {
-            if !token_user_id.is_empty() {
-                user = self.find_by_id(token_user_id);
-            }
-            if user.is_none() {
-                user = self
-                    .find_by_id(subject)
-                    .or_else(|| self.find_account("email", subject).map(|(u, _)| u))
-                    .or_else(|| self.find_account("username", subject).map(|(u, _)| u))
-                    .or_else(|| self.find_account("phoneNumber", subject).map(|(u, _)| u))
-                    .or_else(|| self.find_by_app_token(subject));
-            }
-        }
-
-        if user.is_none() && looks_like_app_token(subject) {
-            user = self.find_by_app_token(subject);
         }
 
         let mut user = user?;
@@ -238,14 +232,50 @@ impl UserService {
 
         let current_version = user.login_version.unwrap_or(0);
         if current_version > 0 && claims.ver != current_version {
-            warn!(
-                "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
-                subject, claims.ver, current_version
-            );
-            return None;
+            if let Some(app_token) = user.app_token.as_deref().filter(|t| !t.is_empty()) {
+                if let Some(exact) = self.find_by_app_token_and_version(app_token, claims.ver) {
+                    user = exact;
+                } else {
+                    warn!(
+                        "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
+                        subject, claims.ver, current_version
+                    );
+                    return None;
+                }
+            } else {
+                warn!(
+                    "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
+                    subject, claims.ver, current_version
+                );
+                return None;
+            }
         }
 
         Some(user)
+    }
+
+    fn find_by_app_token_and_version(&self, app_token: &str, login_version: i32) -> Option<User> {
+        let filter = SearchFilter::eq("app_token", app_token);
+        let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+        let rows = filtered
+            .get("rows")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        for row in rows {
+            let Some(record) = row.as_object() else {
+                continue;
+            };
+            let mut version = parse_int_safe(record.get("login_version"));
+            if version == 0 {
+                version = parse_int_safe(record.get("loginVersion"));
+            }
+            if version == login_version {
+                return Some(self.map_record_to_user(record, true));
+            }
+        }
+        None
     }
 
     fn canonicalize_refresh_user(
@@ -350,7 +380,26 @@ impl UserService {
                 let mut merged = record;
                 merged.extend(fields.clone());
                 sync_refresh_fields(&mut merged, fields);
-                self.apply_user_record_update(&merged);
+                // Mirror Java updateSessionToken: write app_token PK row first.
+                let _ = self.record_manager.create_record(
+                    CSM_APP_ID,
+                    ACCOUNTS_TABLE,
+                    merged.clone(),
+                    Some(vec!["app_token".into()]),
+                );
+                let refresh_val = merged
+                    .get("refresh")
+                    .or_else(|| merged.get("refresh_token"))
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty());
+                if refresh_val.is_some() {
+                    let _ = self.record_manager.create_record(
+                        CSM_APP_ID,
+                        ACCOUNTS_TABLE,
+                        merged,
+                        Some(vec!["refresh".into()]),
+                    );
+                }
                 return true;
             }
         }

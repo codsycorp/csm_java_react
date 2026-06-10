@@ -18,7 +18,7 @@ use tracing::warn;
 use crate::security::auth::AuthUser;
 use crate::security::client_session::{
     client_ip_from_headers, refresh_session_valid_for_middleware,
-    refresh_token_candidates, user_agent_from_headers,
+    refresh_token_candidates, user_agent_from_headers, user_agent_matches,
 };
 use crate::util::{app_id_from_token, parse_app_token, is_sub_user_role};
 use crate::security::rate_limit::RateLimiter;
@@ -185,11 +185,36 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
     let client_ip = client_ip_from_headers(headers);
     let client_ua = user_agent_from_headers(headers);
     for rt in refresh_token_candidates(headers) {
-        if let Some(user) = state.user_service.find_by_refresh_token(&rt) {
-            if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua) {
+        match state.user_service.find_by_refresh_token(&rt) {
+            Some(user) if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua) => {
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
+            Some(user) => {
+                warn!(
+                    "[AUTH] refresh-token rejected user={:?} ip={}/{} ua_match={} expiry={}",
+                    user.email,
+                    client_ip,
+                    user.refresh_token_ip.as_deref().unwrap_or(""),
+                    user_agent_matches(
+                        &client_ua,
+                        user.refresh_token_ua.as_deref().unwrap_or(""),
+                    ),
+                    user.refresh_token_expiry.unwrap_or(0),
+                );
+            }
+            None => {
+                warn!(
+                    "[AUTH] refresh-token not found (len={}) ip={} ua_len={}",
+                    rt.len(),
+                    client_ip,
+                    client_ua.len(),
+                );
+            }
         }
+    }
+
+    if csm.as_ref().is_some_and(|t| !t.is_empty()) {
+        warn!("[AUTH] all auth paths failed (csm-token present, refresh candidates tried)");
     }
 
     None
