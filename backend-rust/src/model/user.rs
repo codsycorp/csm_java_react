@@ -96,6 +96,26 @@ impl User {
                 .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                 .map(|v| v as i32);
         }
+        if user.refresh_token_ip.is_none() {
+            user.refresh_token_ip = record
+                .get("refresh_token_ip")
+                .or_else(|| record.get("refreshTokenIp"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+        }
+        if user.refresh_token_ua.is_none() {
+            user.refresh_token_ua = record
+                .get("refresh_token_ua")
+                .or_else(|| record.get("refreshTokenUa"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+        }
+        if user.refresh_token_expiry.is_none() {
+            user.refresh_token_expiry = record
+                .get("refresh_token_expiry")
+                .or_else(|| record.get("refreshTokenExpiry"))
+                .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
+        }
         if user.app_id.is_none() {
             user.app_id = record
                 .get("app_id")

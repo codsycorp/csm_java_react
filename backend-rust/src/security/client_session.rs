@@ -68,7 +68,7 @@ pub fn user_agent_from_headers(headers: &HeaderMap) -> String {
 
 pub fn refresh_token_expired(user: &User) -> bool {
     let expiry = user.refresh_token_expiry.unwrap_or(0);
-    expiry > 0 && expiry <= chrono::Utc::now().timestamp_millis()
+    expiry <= 0 || expiry <= chrono::Utc::now().timestamp_millis()
 }
 
 /// Refresh token session is bound to the IP + User-Agent stored at login/refresh.

@@ -90,6 +90,24 @@ impl UserService {
         }
         for field in ["refresh_token", "refresh"] {
             let filter = SearchFilter::eq(field, refresh_token);
+            let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+            let rows = filtered
+                .get("rows")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let account_rows: Vec<Map<String, Value>> = rows
+                .into_iter()
+                .filter_map(|v| v.as_object().cloned())
+                .collect();
+            if let Some(record) = pick_best_refresh_session_record(&account_rows, refresh_token) {
+                return if canonicalize {
+                    self.canonicalize_refresh_user(&record, refresh_token)
+                } else {
+                    self.map_refresh_record_to_user(&record, refresh_token)
+                };
+            }
+            // Fallback: direct find for single-row tables.
             let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
             if !record.is_empty() {
                 return if canonicalize {
@@ -246,6 +264,19 @@ impl UserService {
                     }
                 }
             }
+            // Valid JWT may lead pickBest by one version right after login (duplicate rows).
+            if claims.ver == current_version + 1
+                && (!token_user_id.is_empty()
+                    && user_ids_match(user.id.as_deref().unwrap_or(""), token_user_id)
+                    || subject_matches_user(subject, &user))
+            {
+                warn!(
+                    "[JWT] Accept fresh token ver={} ahead of stale DB ver={} for subject={}",
+                    claims.ver, current_version, subject
+                );
+                user.login_version = Some(claims.ver);
+                return Some(user);
+            }
             warn!(
                 "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
                 subject, claims.ver, current_version
@@ -382,14 +413,29 @@ impl UserService {
                 let mut merged = record;
                 merged.extend(fields.clone());
                 sync_refresh_fields(&mut merged, fields);
-                // Mirror Java updateSessionToken: persist session on app_token PK only.
-                let _ = self.record_manager.create_record(
+                match self.record_manager.create_record(
                     CSM_APP_ID,
                     ACCOUNTS_TABLE,
-                    merged,
+                    merged.clone(),
                     Some(vec!["app_token".into()]),
-                );
-                return true;
+                ) {
+                    Ok(cmd) => {
+                        info!(
+                            "[SESSION] persisted app_token PK cmd={} user_id={:?} login_version={:?}",
+                            cmd,
+                            user.id,
+                            fields.get("login_version")
+                        );
+                        self.apply_user_record_update(&merged);
+                        return true;
+                    }
+                    Err(err) => {
+                        warn!(
+                            "[SESSION] app_token PK write failed user_id={:?}: {}",
+                            user.id, err
+                        );
+                    }
+                }
             }
         }
 
@@ -1084,11 +1130,46 @@ fn sync_refresh_fields(merged: &mut Map<String, Value>, fields: &Map<String, Val
 }
 
 fn record_refresh_expired(record: &Map<String, Value>) -> bool {
-    let expiry = record
-        .get("refresh_token_expiry")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-        .unwrap_or(0);
-    expiry > 0 && expiry <= chrono::Utc::now().timestamp_millis()
+    let expiry = parse_long_safe(record.get("refresh_token_expiry"));
+    expiry <= 0 || expiry <= chrono::Utc::now().timestamp_millis()
+}
+
+fn pick_best_refresh_session_record(
+    rows: &[Map<String, Value>],
+    refresh_token: &str,
+) -> Option<Map<String, Value>> {
+    let mut best: Option<Map<String, Value>> = None;
+    let mut best_version = i32::MIN;
+    let mut best_expiry = i64::MIN;
+
+    for row in rows {
+        let stored = row
+            .get("refresh_token")
+            .or_else(|| row.get("refresh"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if stored != refresh_token || record_refresh_expired(row) {
+            continue;
+        }
+
+        let mut version = parse_int_safe(row.get("login_version"));
+        if version == 0 {
+            version = parse_int_safe(row.get("loginVersion"));
+        }
+        let expiry = parse_long_safe(row.get("refresh_token_expiry"));
+
+        let better = match &best {
+            None => true,
+            Some(_) => version > best_version || (version == best_version && expiry > best_expiry),
+        };
+        if better {
+            best = Some(row.clone());
+            best_version = version;
+            best_expiry = expiry;
+        }
+    }
+
+    best
 }
 
 fn pick_best_account_record(rows: &[Map<String, Value>]) -> Option<Map<String, Value>> {
