@@ -173,11 +173,13 @@ jobs:
                 nginx -t && nginx -s reload
               else
                 echo "=== Áp dụng surgical patch ==="
-                if [ ! -f /tmp/patch_nginx.py ]; then
-                  echo "LỖII: /tmp/patch_nginx.py không tồn tại — SCP upload failed"
-                  exit 1
+                if [ -f /tmp/patch_nginx.py ]; then
+                  echo "Dùng patch_nginx.py từ SCP..."
+                  python3 /tmp/patch_nginx.py
+                else
+                  echo "patch_nginx.py không tìm thấy — dùng inline fallback..."
+                  python3 -c 'import shutil,sys;f="/etc/nginx/nginx.conf";t=open(f).read();(print("already patched"),sys.exit(0)) if "ai-generate-seo-content" in t else None;shutil.copy(f,f+".bak");ai="\n        location = /ai-generate-seo-content {\n            proxy_pass http://127.0.0.1:9999;\n            proxy_http_version 1.1;\n            proxy_set_header Connection \"\";\n            proxy_set_header Host $host;\n            proxy_set_header X-Real-IP $remote_addr;\n            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n            proxy_set_header X-Forwarded-Proto $scheme;\n            proxy_request_buffering off;\n            proxy_buffering off;\n            proxy_cache off;\n            proxy_connect_timeout 10s;\n            proxy_send_timeout 86400s;\n            proxy_read_timeout 86400s;\n            send_timeout 86400s;\n            gzip off;\n        }\n        location = /api/ai-generate-seo-content {\n            proxy_pass http://127.0.0.1:9999;\n            proxy_http_version 1.1;\n            proxy_set_header Connection \"\";\n            proxy_set_header Host $host;\n            proxy_set_header X-Real-IP $remote_addr;\n            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n            proxy_set_header X-Forwarded-Proto $scheme;\n            proxy_request_buffering off;\n            proxy_buffering off;\n            proxy_cache off;\n            proxy_connect_timeout 10s;\n            proxy_send_timeout 86400s;\n            proxy_read_timeout 86400s;\n            send_timeout 86400s;\n            gzip off;\n        }\n";m="        location / {";i=t.find(m);[shutil.copy(f,f+".bak"),open(f,"w").write(t[:i]+ai+t[i:]),print("patched")] if i!=-1 else [print("ERROR: location / not found"),sys.exit(1)]'
                 fi
-                python3 /tmp/patch_nginx.py
 
                 if nginx -t 2>&1; then
                   nginx -s reload
