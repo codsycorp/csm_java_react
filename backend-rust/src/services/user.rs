@@ -378,9 +378,10 @@ impl UserService {
                 &permissions,
                 &["dev".into(), "admin".into(), "scope:all".into()],
             );
-            // Java does NOT override menusPermissions for dev users — preserve DB value.
-            // Only set a default if the DB had no menus_permissions at all.
-            if menus_permissions.is_empty() && !app_id.is_empty() {
+            // Mirror Java mapMainAccountToUser: unconditionally set menus = [appId] for dev.
+            // Java line 1251-1254: if (!currentAppId.isBlank()) user.setMenusPermissions(List.of(currentAppId))
+            // This ensures frontend hasLegacyAppOnly=true → shouldBypassMenuFilter=true → all routes shown.
+            if !app_id.is_empty() {
                 menus_permissions = vec![app_id.clone()];
             }
             user.data_app_ids = Some(resolve_effective_data_app_ids(record, &app_id, true));
