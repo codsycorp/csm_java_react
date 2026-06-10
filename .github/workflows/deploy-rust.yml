@@ -112,7 +112,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Upload nginx config to temp path
+      - name: Upload nginx config to /tmp
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -122,6 +122,16 @@ jobs:
           target: "/tmp/"
           strip_components: 0
 
+      - name: Upload surgical patch script to /tmp
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          source: ".github/scripts/patch_nginx.py"
+          target: "/tmp/patch_nginx.py"
+          strip_components: 3
+
       - name: Validate, deploy & reload nginx
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -129,32 +139,48 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.DEPLOY_PASSWORD }}
           script: |
-            set -e
             echo "=== nginx version ==="
             nginx -v 2>&1
 
-            echo "=== Đảm bảo blocked_ips.conf tồn tại ==="
+            echo "=== AI location trong config HIỆN TẠI ==="
+            grep -c "ai-generate-seo-content" /etc/nginx/nginx.conf 2>/dev/null || echo "0 — chưa có"
+
+            echo "=== Tạo include files còn thiếu ==="
             touch /etc/nginx/blocked_ips.conf
+            mkdir -p /etc/nginx/snippets
+            touch /etc/nginx/snippets/fastcgi-php.conf
 
-            echo "=== Kiểm tra location block trong config mới ==="
-            grep -c "ai-generate-seo-content" /tmp/nginx.conf || echo "WARNING: location block not found in new config"
+            echo "=== Test config MỚI trước khi thay thế ==="
+            FULL_OK=0
+            nginx -t -c /tmp/nginx.conf 2>&1 && FULL_OK=1 || true
 
-            echo "=== Backup config cũ ==="
-            cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak 2>/dev/null || true
-
-            echo "=== Deploy config mới ==="
-            cp /tmp/nginx.conf /etc/nginx/nginx.conf
-
-            echo "=== Test config ==="
-            if nginx -t 2>&1; then
-                echo "=== Reload nginx ==="
-                nginx -s reload
-                echo "nginx reloaded OK"
-                echo "=== Verify endpoint exists ==="
-                grep "ai-generate-seo-content" /etc/nginx/nginx.conf | head -5
+            if [ "$FULL_OK" = "1" ]; then
+              echo "Full config PASSED — deploying"
+              cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak || true
+              cp /tmp/nginx.conf /etc/nginx/nginx.conf
+              nginx -s reload
+              echo "nginx reloaded OK với full config"
+              grep -c "ai-generate-seo-content" /etc/nginx/nginx.conf
             else
-                echo "=== nginx -t FAILED — restoring backup ==="
-                cp /etc/nginx/nginx.conf.bak /etc/nginx/nginx.conf
-                nginx -t 2>&1
-                exit 1
+              echo "Full config FAILED — chi tiết lỗi:"
+              nginx -t -c /tmp/nginx.conf 2>&1 | head -30 || true
+
+              if grep -q "location = /ai-generate-seo-content" /etc/nginx/nginx.conf; then
+                echo "AI location đã có trong server config — chỉ reload"
+                nginx -t && nginx -s reload
+              else
+                echo "Áp dụng surgical patch..."
+                python3 /tmp/patch_nginx.py
+
+                if nginx -t 2>&1; then
+                  nginx -s reload
+                  echo "Surgical patch + reload OK"
+                  grep -n "ai-generate-seo-content" /etc/nginx/nginx.conf | head -5
+                else
+                  cp /etc/nginx/nginx.conf.bak /etc/nginx/nginx.conf || true
+                  echo "Surgical patch cũng FAILED — restored backup"
+                  nginx -t 2>&1 | head -20 || true
+                  exit 1
+                fi
+              fi
             fi
