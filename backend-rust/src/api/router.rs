@@ -213,21 +213,27 @@ async fn dispatch_api(
         "/seo" => state.seo_handler.handle_seo(&params),
         "/scrape-web" => api_ext::handle_scrape_web(state, &params).await,
         "/execute-js-on-page" => api_ext::handle_execute_js(&params),
-        "/indexgoogle" => api_ext::handle_index_google(&params),
+        "/indexgoogle" => api_ext::handle_index_google(state, &params).await,
         // ── Facebook / Ads ──
         "/facebook/post" => social::handle_facebook_post(state, &params).await,
-        "/facebook/post-with-images" => social::handle_facebook_stub("post-with-images"),
-        "/facebook/exchange-token" => social::handle_facebook_stub("exchange-token"),
-        "/facebook/pages" => social::handle_facebook_stub("pages"),
-        "/facebook/me" => social::handle_facebook_stub("me"),
+        "/facebook/post-with-images" => social::handle_facebook_post_with_images(state, &params).await,
+        "/facebook/exchange-token" => social::handle_facebook_exchange_token(state, &params).await,
+        "/facebook/pages" => social::handle_facebook_pages(state, &params).await,
+        "/facebook/me" => social::handle_facebook_me(state, &params).await,
         "/facebook/ads/campaign" => {
             let mut p = params.clone();
             p.insert("platform".into(), Value::String("facebook_ads".into()));
+            if !p.contains_key("adData") {
+                p.insert("adData".into(), Value::Object(p.clone()));
+            }
             state.crm_handler.handle_create_ad(&p)
         }
         "/google/ads/campaign" => {
             let mut p = params.clone();
             p.insert("platform".into(), Value::String("google_ads".into()));
+            if !p.contains_key("adData") {
+                p.insert("adData".into(), Value::Object(p.clone()));
+            }
             state.crm_handler.handle_create_ad(&p)
         }
         // ── AI (switch paths) ──

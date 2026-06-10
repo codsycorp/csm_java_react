@@ -11,7 +11,8 @@ use crate::handlers::{
 use crate::security::jwt::JwtUtil;
 use crate::services::{
     cache::CacheService, chat::ChatPersistenceService, crm::CrmService,
-    crm_analytics::CrmAnalyticsService, llama_cpp::LlamaCppService, permission::PermissionService,
+    crm_analytics::CrmAnalyticsService, google_index::GoogleIndexService,
+    llama_cpp::LlamaCppService, permission::PermissionService,
     user::UserService,
 };
 use crate::socket::SocketIo;
@@ -36,6 +37,7 @@ pub struct AppState {
     pub home_handler: Arc<HomeHandler>,
     pub init_handler: Arc<InitHandler>,
     pub seo_handler: Arc<SeoHandler>,
+    pub google_index: Arc<GoogleIndexService>,
     /// Socket.IO handle for server-side broadcasting (mirrors Java SocketIOServer inject)
     pub socket_io: Arc<SocketIo>,
 }
@@ -77,6 +79,11 @@ impl AppState {
         let seo_handler = Arc::new(SeoHandler::new(record_manager.clone()));
 
         let llama = LlamaCppService::new(&config);
+        let http_client = Client::builder()
+            .timeout(std::time::Duration::from_secs(900))
+            .build()?;
+        let work_dir = std::env::current_dir().unwrap_or_else(|_| config.data_dir.clone());
+        let google_index = Arc::new(GoogleIndexService::new(http_client.clone(), work_dir));
 
         Ok(Self {
             config,
@@ -87,9 +94,7 @@ impl AppState {
             permission_service,
             crm_service,
             chat_service,
-            http_client: Client::builder()
-                .timeout(std::time::Duration::from_secs(900))
-                .build()?,
+            http_client,
             llama,
             auth_handler,
             table_handler,
@@ -99,6 +104,7 @@ impl AppState {
             home_handler,
             init_handler,
             seo_handler,
+            google_index,
             socket_io,
         })
     }

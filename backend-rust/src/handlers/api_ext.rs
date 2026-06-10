@@ -93,10 +93,12 @@ pub async fn handle_scrape_web(state: &AppState, params: &Map<String, Value>) ->
     }
 }
 
-pub fn handle_index_google(_params: &Map<String, Value>) -> StandardResponse {
+pub async fn handle_index_google(state: &AppState, params: &Map<String, Value>) -> StandardResponse {
+    let props = state.google_index.handle_operation(params).await;
     let mut r = StandardResponse::new();
-    r.set("success", true);
-    r.set("message", "Google Index API — wire GOOGLE_INDEX_CREDENTIALS in config.env");
+    for (k, v) in props {
+        r.set(k, v);
+    }
     r
 }
 
