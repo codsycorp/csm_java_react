@@ -187,7 +187,7 @@ function ensureSharedSocket(apiUrl: string) {
 		notifyConnected(false);
 	});
 
-	socket.on("connect_error", (error) => {
+	socket.on("connect_error", (error: unknown) => {
 		sharedHadConnectionIssue = true;
 		console.error('[Socket] Connection error:', error);
 	});
@@ -202,8 +202,8 @@ function ensureSharedSocket(apiUrl: string) {
 		});
 	}
 
-	socket.on("csm_msg_update", (data: SocketUpdateEvent) => {
-		processSocketUpdate(data);
+	socket.on("csm_msg_update", (...args: unknown[]) => {
+		processSocketUpdate(args[0] as SocketUpdateEvent);
 	});
 
 	return socket;
