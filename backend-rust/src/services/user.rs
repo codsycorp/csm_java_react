@@ -223,18 +223,42 @@ impl UserService {
             return None;
         }
 
-        // Re-fetch canonical row by app_token (Java: avoid stale id/refresh alias rows).
+        // Re-fetch canonical row — prefer the row whose login_version matches the JWT claim.
         if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
-            if let Some(fresh) = self.find_by_app_token(&app_token) {
+            if claims.ver > 0 {
+                if let Some(exact) = self.find_by_app_token_and_version(&app_token, claims.ver) {
+                    user = exact;
+                } else if let Some(fresh) = self.find_by_app_token(&app_token) {
+                    user = fresh;
+                }
+            } else if let Some(fresh) = self.find_by_app_token(&app_token) {
                 user = fresh;
             }
         }
 
         let current_version = user.login_version.unwrap_or(0);
-        if current_version > 0 && claims.ver != current_version {
+        if claims.ver > 0 && current_version > 0 && claims.ver != current_version {
             if let Some(app_token) = user.app_token.as_deref().filter(|t| !t.is_empty()) {
                 if let Some(exact) = self.find_by_app_token_and_version(app_token, claims.ver) {
                     user = exact;
+                } else if !token_user_id.is_empty() {
+                    if let Some(by_id) = self.find_by_id(token_user_id) {
+                        if by_id.login_version.unwrap_or(0) == claims.ver {
+                            user = by_id;
+                        } else {
+                            warn!(
+                                "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
+                                subject, claims.ver, current_version
+                            );
+                            return None;
+                        }
+                    } else {
+                        warn!(
+                            "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
+                            subject, claims.ver, current_version
+                        );
+                        return None;
+                    }
                 } else {
                     warn!(
                         "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
@@ -1034,7 +1058,7 @@ fn token_user_id_candidates(raw: &str) -> Vec<String> {
     out
 }
 
-pub(crate) fn user_ids_match(db_id: &str, token_uid: &str) -> bool {
+pub fn user_ids_match(db_id: &str, token_uid: &str) -> bool {
     let db_id = db_id.trim();
     let token_uid = token_uid.trim();
     if db_id.is_empty() || token_uid.is_empty() {

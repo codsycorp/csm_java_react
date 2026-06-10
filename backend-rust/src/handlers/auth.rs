@@ -233,19 +233,36 @@ impl AuthHandler {
             return response;
         };
 
-        // Prefer csm-token JWT when sent (matches login token); else Java principal fresh DB lookup.
-        let user = params
+        // Prefer csm-token JWT when sent (matches login token); never fall back to stale refresh principal.
+        if let Some(token) = params
             .get("csm-token")
             .and_then(|v| v.as_str())
             .filter(|t| !t.is_empty())
-            .and_then(|token| {
-                if self.jwt.validate_token(token) {
-                    self.user_service.resolve_from_jwt_with_util(&self.jwt, token)
-                } else {
-                    None
+        {
+            if self.jwt.validate_token(token) {
+                if let Some(user) =
+                    self.user_service
+                        .resolve_from_jwt_with_util(&self.jwt, token)
+                {
+                    let mut info = user.to_info_map();
+                    self.enrich_account_meta(&user, &mut info);
+                    self.enrich_user_info_with_bitfield(&user, &mut info);
+                    response.set("code", 200);
+                    response.set("success", true);
+                    response.set("message", "ok");
+                    response.set("result", Value::Object(info));
+                    return response;
                 }
-            })
-            .or_else(|| self.resolve_fresh_user(auth))
+                response.set("code", 401);
+                response.set("success", false);
+                response.set("message", "Invalid session token");
+                return response;
+            }
+        }
+
+        // No valid csm-token header — use authenticated principal from middleware.
+        let user = self
+            .resolve_fresh_user(auth)
             .unwrap_or_else(|| self.user_from_auth(auth));
 
         let mut info = user.to_info_map();
