@@ -169,9 +169,9 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
             {
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
-            // Valid JWT for this request must not fall back to another user's refresh token.
-            return None;
         }
+        // Client sent csm-token explicitly — never authenticate as another user via refresh.
+        return None;
     }
 
     if let Some(rt) = refresh_token_from_request(headers) {

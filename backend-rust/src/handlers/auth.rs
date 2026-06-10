@@ -559,7 +559,10 @@ impl AuthHandler {
         }?;
 
         let resolved_id = user.id.as_deref().unwrap_or("");
-        if !auth.user_id.is_empty() && !resolved_id.is_empty() && resolved_id != auth.user_id {
+        if !auth.user_id.is_empty()
+            && !resolved_id.is_empty()
+            && !crate::services::user::user_ids_match(resolved_id, &auth.user_id)
+        {
             warn!(
                 "[resolve_fresh_user] Reject stale user record auth_id={} resolved_id={} app_token={}",
                 auth.user_id, resolved_id, auth.app_token

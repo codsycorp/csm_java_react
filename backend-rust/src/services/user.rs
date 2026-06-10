@@ -25,18 +25,20 @@ impl UserService {
         if user_id.is_empty() {
             return None;
         }
-        let filter = SearchFilter::eq("id", user_id);
-        let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
-        if !record.is_empty() {
-            let user = self.map_record_to_user(&record, true);
-            if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
-                return self.find_by_app_token(&app_token).or(Some(user));
+        for candidate in token_user_id_candidates(user_id) {
+            let filter = SearchFilter::eq("id", candidate.as_str());
+            let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+            if !record.is_empty() {
+                let user = self.map_record_to_user(&record, true);
+                if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
+                    return self.find_by_app_token(&app_token).or(Some(user));
+                }
+                return Some(user);
             }
-            return Some(user);
-        }
-        let sub = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
-        if !sub.is_empty() {
-            return self.map_sub_user(&sub);
+            let sub = self.record_manager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, &filter);
+            if !sub.is_empty() {
+                return self.map_sub_user(&sub);
+            }
         }
         None
     }
@@ -152,18 +154,17 @@ impl UserService {
             return None;
         }
 
-        let mut user = if !token_user_id.is_empty() {
-            self.find_by_id(token_user_id)
-        } else {
-            None
-        };
+        let mut user = None;
+        if !token_user_id.is_empty() {
+            user = self.find_by_id(token_user_id);
+        }
 
         // JWT subject is usually encrypted app_token — mirror Java JwtAuthenticationFilter.
         if looks_like_app_token(subject) {
             if let Some(by_token) = self.find_by_app_token(subject) {
                 if !token_user_id.is_empty() {
                     let resolved_id = by_token.id.as_deref().unwrap_or("");
-                    if resolved_id != token_user_id {
+                    if !user_ids_match(resolved_id, token_user_id) {
                         return None;
                     }
                 }
@@ -184,6 +185,13 @@ impl UserService {
 
         if !subject_matches_user(subject, &user) {
             return None;
+        }
+
+        if !token_user_id.is_empty() {
+            let resolved_id = user.id.as_deref().unwrap_or("");
+            if !user_ids_match(resolved_id, token_user_id) {
+                return None;
+            }
         }
 
         if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
@@ -870,6 +878,68 @@ fn find_group_right<'a>(
 
 fn looks_like_app_token(subject: &str) -> bool {
     subject.contains("_____") || (subject.len() > 40 && !subject.contains('.'))
+}
+
+fn normalize_token_user_id(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if let Ok(decoded) = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        trimmed,
+    ) {
+        if let Ok(text) = String::from_utf8(decoded) {
+            let text = text.trim();
+            if !text.is_empty() {
+                return text.to_string();
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
+fn token_user_id_candidates(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut push = |value: &str| {
+        let value = value.trim();
+        if value.is_empty() {
+            return;
+        }
+        if !out.iter().any(|existing| existing == value) {
+            out.push(value.to_string());
+        }
+    };
+    push(raw);
+    push(&normalize_token_user_id(raw));
+    out
+}
+
+pub(crate) fn user_ids_match(db_id: &str, token_uid: &str) -> bool {
+    let db_id = db_id.trim();
+    let token_uid = token_uid.trim();
+    if db_id.is_empty() || token_uid.is_empty() {
+        return false;
+    }
+    if db_id == token_uid {
+        return true;
+    }
+    let normalized = normalize_token_user_id(token_uid);
+    db_id == normalized
+        || normalize_token_user_id(db_id) == normalized
+        || db_id == normalize_token_user_id(db_id)
+}
+
+#[cfg(test)]
+mod id_match_tests {
+    use super::user_ids_match;
+
+    #[test]
+    fn matches_base64_encoded_uid_claim() {
+        let db_id = "2425df0a63c4696da2362315e07bf44a";
+        let claim = "MjQyNWRmMGE2M2M0Njk2ZGEyMzYyMzE1ZTA3YmY0NGE=";
+        assert!(user_ids_match(db_id, claim));
+    }
 }
 
 fn subject_matches_user(subject: &str, user: &User) -> bool {
