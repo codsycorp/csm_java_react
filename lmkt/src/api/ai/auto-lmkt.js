@@ -9215,7 +9215,7 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
   }
 
   const candidateUrls = resolveSeoApiEndpointCandidates(ctx);
-  const timeoutMs = 20 * 60 * 1000;
+  const timeoutMs = 24 * 60 * 60 * 1000; // 24h — matches nginx proxy_read_timeout; llama.cpp can be slow
   let lastError = null;
 
   for (let u = 0; u < candidateUrls.length; u += 1) {
