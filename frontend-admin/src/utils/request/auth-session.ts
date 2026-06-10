@@ -47,11 +47,13 @@ export function hasAuthSession(): boolean {
 }
 
 export function applyAuthHeadersToRequest(request: Request) {
+	const isLoginRequest = request.url.includes("/login");
+	const isRefreshRequest = request.url.includes("/refresh-token");
 	const creds = getAuthCredentials();
-	if (creds.token) {
+	if (creds.token && !isLoginRequest && !isRefreshRequest) {
 		request.headers.set(AUTH_HEADER, creds.token);
 	}
-	if (creds.refreshToken) {
+	if (creds.refreshToken && !isLoginRequest) {
 		request.headers.set("X-Refresh-Token", creds.refreshToken);
 	}
 	if (["POST", "PUT", "DELETE"].includes(request.method.toUpperCase())) {

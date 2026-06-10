@@ -135,52 +135,54 @@ const defaultConfig: Options = {
 					request.headers.set(CLIENT_ID_HEADER, clientId);
 				}
 				const isRefreshTokenRequest = [`/${refreshTokenPath}`].some(url => request.url.endsWith(url));
-				
-				// NWJS Support: Send refreshToken in header since cookies don't persist
-				const isNwjs = typeof (window as any).nw !== 'undefined' || 
-				              navigator.userAgent.toLowerCase().includes('nwjs') ||
-				              navigator.userAgent.toLowerCase().includes('node-webkit');
-				
-				if (isNwjs) {
-					// For nwjs, send refreshToken from localStorage in header
+				const isWhiteRequest = requestWhiteList.some(url => request.url.endsWith(url));
+
+				// Login/register: never send stale session headers (backend + cookies only).
+				if (isWhiteRequest) {
+					request.headers.delete("X-Refresh-Token");
+					request.headers.delete(AUTH_HEADER);
+					request.headers.delete("csm-token");
+				} else if (!isRefreshTokenRequest) {
+					// NWJS Support: Send refreshToken in header since cookies don't persist
+					const isNwjs = typeof (window as any).nw !== 'undefined' ||
+					              navigator.userAgent.toLowerCase().includes('nwjs') ||
+					              navigator.userAgent.toLowerCase().includes('node-webkit');
+
+					if (isNwjs) {
+						try {
+							const refreshToken = localStorage.getItem('refreshToken');
+							if (refreshToken) {
+								request.headers.set('X-Refresh-Token', refreshToken);
+							}
+						} catch (e) {
+							console.error('[NWJS] Error reading refreshToken from localStorage:', e);
+						}
+					}
+
 					try {
-						const refreshToken = localStorage.getItem('refreshToken');
+						const refreshToken = getAuthCredentials().refreshToken;
 						if (refreshToken) {
 							request.headers.set('X-Refresh-Token', refreshToken);
-							console.log('[NWJS] Sending refreshToken in header');
 						}
 					} catch (e) {
-						console.error('[NWJS] Error reading refreshToken from localStorage:', e);
+						// ignore
 					}
 				}
 
-				try {
-					const refreshToken = getAuthCredentials().refreshToken;
-					if (refreshToken) {
-						request.headers.set('X-Refresh-Token', refreshToken);
+				// Do not attach access token for refresh-token or login endpoints.
+				if (!isWhiteRequest && !isRefreshTokenRequest) {
+					try {
+						const token = getAuthCredentials().token;
+						if (token) {
+							request.headers.set(AUTH_HEADER, `${token}`);
+							try {
+								console.debug("[REQ DEBUG] url:", request.url, AUTH_HEADER + ":", request.headers.get(AUTH_HEADER));
+							} catch (e) {}
+						}
+					} catch (e) {
+						// ignore
 					}
-				} catch (e) {
-					// ignore
 				}
-
-								const isWhiteRequest = requestWhiteList.some(url => request.url.endsWith(url));
-								// Do not attach access token for refresh-token endpoint.
-								// Backend filter prioritizes csm-token over refresh token, so sending both breaks refresh flow.
-								if (!isWhiteRequest && !isRefreshTokenRequest) {
-									try {
-										const token = getAuthCredentials().token;
-										if (token) {
-											// Attach custom csm-token header (used by some backend handlers)
-											request.headers.set(AUTH_HEADER, `${token}`);
-											// Debug: print csm-token header for troubleshooting (remove in prod)
-											try {
-												console.debug("[REQ DEBUG] url:", request.url, AUTH_HEADER + ":", request.headers.get(AUTH_HEADER));
-											} catch (e) {}
-										}
-									} catch (e) {
-										// ignore
-									}
-								}
 				
 				
 
