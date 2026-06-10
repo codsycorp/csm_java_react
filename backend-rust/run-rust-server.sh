@@ -32,7 +32,7 @@ export APP_DATA_DIR="${APP_DATA_DIR:-$ROOT/csm_datas}"
 export ROCKSDB_ROOT_DIR="${ROCKSDB_ROOT_DIR:-$APP_DATA_DIR/database}"
 export ROCKSDB_BACKUP_DIR="${ROCKSDB_BACKUP_DIR:-$APP_DATA_DIR/backups}"
 export LUCENE_INDEX_ROOT_DIR="${LUCENE_INDEX_ROOT_DIR:-$APP_DATA_DIR/lucene_index}"
-export SERVER_PORT="${SERVER_PORT:-15300}"
+export SERVER_PORT="${SERVER_PORT:-9999}"
 export SOCKET_SERVER_PORT="${SOCKET_SERVER_PORT:-15301}"
 export JWT_SECRET="${JWT_SECRET:-}"
 
@@ -52,5 +52,6 @@ if ! command -v cargo >/dev/null 2>&1; then
     exit 1
 fi
 
+config_log "HTTP port ${SERVER_PORT} (nginx backend_pool expects 9999 in production)"
 config_log "Using cargo: $(command -v cargo) ($(cargo --version 2>/dev/null || echo unknown))"
 exec cargo run --release

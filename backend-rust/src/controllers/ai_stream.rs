@@ -5,7 +5,7 @@ use axum::{
     body::Body,
     extract::{Request, State},
     http::StatusCode,
-    response::sse::{Event, Sse},
+    response::{IntoResponse, sse::{Event, Sse}},
 };
 use futures_util::stream::{self, Stream, StreamExt};
 use serde_json::{json, Map, Value};
@@ -22,12 +22,37 @@ type SseStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
 pub fn routes() -> axum::Router<AppState> {
     use axum::routing::post;
     axum::Router::new()
+        .route("/ai-generate-seo-content", post(seo_generate_content))
+        .route("/api/ai-generate-seo-content", post(seo_generate_content))
         .route("/ai-code-stream", post(stream_code_assistant))
         .route("/api/ai-code-stream", post(stream_code_assistant))
         .route("/aiAssistant-chat-stream", post(stream_assistant_chat))
         .route("/api/aiAssistant-chat-stream", post(stream_assistant_chat))
         .route("/ai-local/execute-local-plan", post(stream_local_plan))
         .route("/api/ai-local/execute-local-plan", post(stream_local_plan))
+}
+
+async fn seo_generate_content(
+    State(state): State<AppState>,
+    req: Request<Body>,
+) -> impl IntoResponse {
+    let params = parse_json_body(req).await;
+    crate::handlers::api_ext::handle_ai_seo_content(&state, &params)
+        .await
+        .into_response()
+}
+
+async fn parse_json_body(req: Request<Body>) -> Map<String, Value> {
+    let bytes = axum::body::to_bytes(req.into_body(), 64 * 1024 * 1024)
+        .await
+        .unwrap_or_default();
+    if bytes.is_empty() {
+        return Map::new();
+    }
+    match serde_json::from_slice::<Value>(&bytes) {
+        Ok(Value::Object(map)) => map,
+        _ => Map::new(),
+    }
 }
 
 async fn stream_code_assistant(
