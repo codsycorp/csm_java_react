@@ -846,8 +846,10 @@ fn refresh_tokens_from_params(params: &Map<String, Value>) -> Vec<String> {
             }
         }
     };
+    // Mirror Java order: header, cookie; also accept explicit body refreshToken.
+    push(params.get("refreshTokenHeader").and_then(|v| v.as_str()));
     push(params.get("refreshToken").and_then(|v| v.as_str()));
     push(params.get("refreshTokenCookie").and_then(|v| v.as_str()));
-    push(params.get("refreshTokenHeader").and_then(|v| v.as_str()));
+    push(params.get("refreshTokenBody").and_then(|v| v.as_str()));
     out
 }

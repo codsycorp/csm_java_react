@@ -228,6 +228,10 @@ const defaultConfig: Options = {
 					   }
 
 						   if (isOnLoginPage) {
+							   const hasExplicitToken = Boolean(request.headers.get(AUTH_HEADER));
+							   if (hasExplicitToken && request.url.includes("/user-info")) {
+								   return response;
+							   }
 							   if (hasAuthState()) {
 								   try {
 									   return await refreshTokenAndRetry(request, options);

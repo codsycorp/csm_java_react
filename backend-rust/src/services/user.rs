@@ -201,8 +201,7 @@ impl UserService {
             if let Some(by_subject) = self.find_by_app_token(subject) {
                 if !token_user_id.is_empty() {
                     let resolved_id = by_subject.id.as_deref().unwrap_or("");
-                    // Mirror Java: strict uid equality on app_token subject resolve.
-                    if resolved_id.is_empty() || resolved_id != token_user_id {
+                    if resolved_id.is_empty() || !user_ids_match(resolved_id, token_user_id) {
                         warn!(
                             "[JWT] Subject app_token resolved to different user subject={} tokenUid={} resolvedUid={}",
                             subject, token_user_id, resolved_id
@@ -233,6 +232,20 @@ impl UserService {
 
         let current_version = user.login_version.unwrap_or(0);
         if current_version > 0 && claims.ver != current_version {
+            // Mirror Java post-login behavior: pickBest may return a stale duplicate row.
+            // Prefer the row whose login_version matches the JWT claim before rejecting.
+            if let Some(app_token) = user.app_token.as_deref().filter(|s| !s.is_empty()) {
+                if let Some(exact) = self.find_by_app_token_and_version(app_token, claims.ver) {
+                    return Some(exact);
+                }
+            }
+            if !token_user_id.is_empty() {
+                if let Some(by_id) = self.find_by_id(token_user_id) {
+                    if by_id.login_version.unwrap_or(0) == claims.ver {
+                        return Some(by_id);
+                    }
+                }
+            }
             warn!(
                 "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
                 subject, claims.ver, current_version
@@ -369,7 +382,13 @@ impl UserService {
                 let mut merged = record;
                 merged.extend(fields.clone());
                 sync_refresh_fields(&mut merged, fields);
-                self.apply_user_record_update(&merged);
+                // Mirror Java updateSessionToken: persist session on app_token PK only.
+                let _ = self.record_manager.create_record(
+                    CSM_APP_ID,
+                    ACCOUNTS_TABLE,
+                    merged,
+                    Some(vec!["app_token".into()]),
+                );
                 return true;
             }
         }

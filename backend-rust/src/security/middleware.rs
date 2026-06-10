@@ -20,7 +20,6 @@ use crate::security::client_session::{
     client_ip_from_headers, refresh_session_valid_for_middleware,
     refresh_token_candidates, user_agent_from_headers, user_agent_matches,
 };
-use crate::services::user::user_ids_match;
 use crate::util::{app_id_from_token, parse_app_token, is_sub_user_role};
 use crate::security::rate_limit::RateLimiter;
 use crate::state::AppState;
@@ -187,27 +186,18 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
         }
     }
 
-    let token_uid = csm_valid
-        .then(|| {
-            csm.as_ref()
-                .map(|t| state.jwt.user_id_from_token(t))
-                .filter(|uid| !uid.is_empty())
-        })
-        .flatten();
-
     let client_ip = client_ip_from_headers(headers);
     let client_ua = user_agent_from_headers(headers);
     for rt in refresh_token_candidates(headers) {
         match state.user_service.find_by_refresh_token(&rt) {
             Some(user)
-                if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua)
-                    && refresh_user_matches_token_uid(&user, token_uid.as_deref()) =>
+                if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua) =>
             {
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
             Some(user) => {
                 warn!(
-                    "[AUTH] refresh-token rejected user={:?} ip={}/{} ua_match={} expiry={} uid_match={}",
+                    "[AUTH] refresh-token rejected user={:?} ip={}/{} ua_match={} expiry={}",
                     user.email,
                     client_ip,
                     user.refresh_token_ip.as_deref().unwrap_or(""),
@@ -216,7 +206,6 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
                         user.refresh_token_ua.as_deref().unwrap_or(""),
                     ),
                     user.refresh_token_expiry.unwrap_or(0),
-                    refresh_user_matches_token_uid(&user, token_uid.as_deref()),
                 );
             }
             None => {
@@ -235,13 +224,6 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
     }
 
     None
-}
-
-fn refresh_user_matches_token_uid(user: &crate::model::User, token_uid: Option<&str>) -> bool {
-    let Some(token_uid) = token_uid.filter(|uid| !uid.is_empty()) else {
-        return true;
-    };
-    user_ids_match(user.id.as_deref().unwrap_or(""), token_uid)
 }
 
 fn auth_user_from_model(state: &AppState, user: crate::model::User) -> AuthUser {

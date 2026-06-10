@@ -372,6 +372,9 @@ async fn parse_request_params(req: Request<Body>) -> Map<String, Value> {
 
         if ct.contains("application/json") {
             if let Ok(Value::Object(map)) = serde_json::from_slice(&bytes) {
+                if let Some(body_rt) = map.get("refreshToken").and_then(|v| v.as_str()) {
+                    params.insert("refreshTokenBody".into(), Value::String(body_rt.into()));
+                }
                 params.extend(map);
             }
         } else if ct.contains("application/x-www-form-urlencoded") {
@@ -397,6 +400,9 @@ async fn parse_request_params(req: Request<Body>) -> Map<String, Value> {
         .get("x-refresh-token")
         .and_then(|h| h.to_str().ok())
         .map(String::from);
+    if let Some(rt) = header_rt.as_ref() {
+        params.insert("refreshTokenHeader".into(), Value::String(rt.clone()));
+    }
     // Mirror Java ApiSpringController: X-Refresh-Token header first, then cookie.
     if let Some(rt) = header_rt.as_ref().or(cookie_rt.as_ref()) {
         params.insert("refreshToken".into(), Value::String(rt.clone()));

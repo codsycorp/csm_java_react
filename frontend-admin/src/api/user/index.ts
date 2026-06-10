@@ -1,6 +1,7 @@
 import type { PasswordLoginFormType } from "#src/pages/login/components/password-login";
 import type { AppRouteRecordRaw } from "#src/router/types";
 import type { UserInfoType } from "./types";
+import { getAuthCredentials } from "#src/utils/request/auth-session";
 import { request } from "#src/utils";
 
 
@@ -30,7 +31,15 @@ export interface RefreshTokenResult {
 }
 
 export const refreshTokenPath = "refresh-token";
-// Không gửi refreshToken trong body, backend sẽ lấy từ httpOnly cookie
+
 export function fetchRefreshToken() {
-	 return request.post(refreshTokenPath, { json: { _origin: window.location.origin } }).json<ApiResponse<RefreshTokenResult>>();
+	const { refreshToken } = getAuthCredentials();
+	return request
+		.post(refreshTokenPath, {
+			json: {
+				_origin: window.location.origin,
+				...(refreshToken ? { refreshToken } : {}),
+			},
+		})
+		.json<ApiResponse<RefreshTokenResult>>();
 }
