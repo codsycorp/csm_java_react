@@ -62,6 +62,12 @@ impl AuthHandler {
             return response;
         };
 
+        if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
+            if let Some(canonical) = self.user_service.find_by_app_token(&app_token) {
+                user = canonical;
+            }
+        }
+
         let is_sub_user = user.is_sub_user.unwrap_or(false)
             || self
                 .parse_app_token_meta(user.app_token.as_deref())
@@ -360,7 +366,6 @@ impl AuthHandler {
             .unwrap_or_default();
 
         if !refresh_session_valid(&user, &ip, &ua) {
-            self.user_service.clear_session_token(&user);
             response.set("code", 401);
             response.set("success", false);
             response.set(

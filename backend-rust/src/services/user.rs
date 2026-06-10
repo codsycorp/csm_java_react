@@ -42,6 +42,14 @@ impl UserService {
             return None;
         }
         let filter = SearchFilter::eq("app_token", app_token);
+
+        // Primary: direct app_token PK lookup — same row updateSessionToken writes to.
+        let direct = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+        if !direct.is_empty() {
+            return Some(self.map_record_to_user(&direct, true));
+        }
+
+        // Fallback for legacy/migrated data with duplicate alias rows.
         let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
         let rows = filtered
             .get("rows")
@@ -49,20 +57,12 @@ impl UserService {
             .cloned()
             .unwrap_or_default();
 
-        let mut account_rows: Vec<Map<String, Value>> = rows
+        let account_rows: Vec<Map<String, Value>> = rows
             .into_iter()
             .filter_map(|v| v.as_object().cloned())
             .collect();
 
-        let record = if account_rows.is_empty() {
-            self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter)
-        } else if account_rows.len() == 1 {
-            account_rows.pop().unwrap()
-        } else {
-            pick_best_account_record(&account_rows)?
-        };
-
-        if !record.is_empty() {
+        if let Some(record) = pick_best_account_record(&account_rows) {
             return Some(self.map_record_to_user(&record, true));
         }
 
@@ -286,35 +286,22 @@ impl UserService {
                 self.write_sub_user_record(id, fields);
                 return true;
             }
+
+            // Main account: mirror update_by_id alias writes (app_token + refresh + id keys).
+            self.update_by_id(id, fields);
+            return true;
         }
 
         if let Some(app_token) = user.app_token.as_deref().filter(|s| !s.is_empty()) {
             if self.is_sub_user_by_app_token(app_token) {
-                if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
-                    self.write_sub_user_record(id, fields);
-                }
-                return true;
+                return false;
             }
-
             let filter = SearchFilter::eq("app_token", app_token);
             let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
-            if !record.is_empty() {
-                let mut merged = record;
-                merged.extend(fields.clone());
-                sync_refresh_fields(&mut merged, fields);
-                let _ = self.record_manager.create_record(
-                    CSM_APP_ID,
-                    ACCOUNTS_TABLE,
-                    merged,
-                    Some(vec!["app_token".into()]),
-                );
+            if let Some(id) = record.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                self.update_by_id(id, fields);
                 return true;
             }
-        }
-
-        if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
-            self.update_by_id(id, fields);
-            return true;
         }
 
         false
@@ -334,9 +321,22 @@ impl UserService {
         let _ = self.record_manager.create_record(
             CSM_APP_ID,
             SUB_ACCOUNTS_TABLE,
-            merged,
+            merged.clone(),
             Some(vec!["id".into(), "login_identifier".into()]),
         );
+        let refresh_val = merged
+            .get("refresh")
+            .or_else(|| merged.get("refresh_token"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        if refresh_val.is_some() {
+            let _ = self.record_manager.create_record(
+                CSM_APP_ID,
+                SUB_ACCOUNTS_TABLE,
+                merged,
+                Some(vec!["refresh".into()]),
+            );
+        }
     }
 
     fn is_sub_user_by_app_token(&self, app_token: &str) -> bool {
