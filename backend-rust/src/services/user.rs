@@ -201,7 +201,8 @@ impl UserService {
             if let Some(by_subject) = self.find_by_app_token(subject) {
                 if !token_user_id.is_empty() {
                     let resolved_id = by_subject.id.as_deref().unwrap_or("");
-                    if !user_ids_match(resolved_id, token_user_id) {
+                    // Mirror Java: strict uid equality on app_token subject resolve.
+                    if resolved_id.is_empty() || resolved_id != token_user_id {
                         warn!(
                             "[JWT] Subject app_token resolved to different user subject={} tokenUid={} resolvedUid={}",
                             subject, token_user_id, resolved_id
@@ -223,56 +224,20 @@ impl UserService {
             return None;
         }
 
-        // Re-fetch canonical row — prefer the row whose login_version matches the JWT claim.
+        // Re-fetch canonical row by app_token (Java: pickBest via findUserByAppToken).
         if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
-            if claims.ver > 0 {
-                if let Some(exact) = self.find_by_app_token_and_version(&app_token, claims.ver) {
-                    user = exact;
-                } else if let Some(fresh) = self.find_by_app_token(&app_token) {
-                    user = fresh;
-                }
-            } else if let Some(fresh) = self.find_by_app_token(&app_token) {
+            if let Some(fresh) = self.find_by_app_token(&app_token) {
                 user = fresh;
             }
         }
 
         let current_version = user.login_version.unwrap_or(0);
-        if claims.ver > 0 && current_version > 0 && claims.ver != current_version {
-            if let Some(app_token) = user.app_token.as_deref().filter(|t| !t.is_empty()) {
-                if let Some(exact) = self.find_by_app_token_and_version(app_token, claims.ver) {
-                    user = exact;
-                } else if !token_user_id.is_empty() {
-                    if let Some(by_id) = self.find_by_id(token_user_id) {
-                        if by_id.login_version.unwrap_or(0) == claims.ver {
-                            user = by_id;
-                        } else {
-                            warn!(
-                                "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
-                                subject, claims.ver, current_version
-                            );
-                            return None;
-                        }
-                    } else {
-                        warn!(
-                            "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
-                            subject, claims.ver, current_version
-                        );
-                        return None;
-                    }
-                } else {
-                    warn!(
-                        "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
-                        subject, claims.ver, current_version
-                    );
-                    return None;
-                }
-            } else {
-                warn!(
-                    "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
-                    subject, claims.ver, current_version
-                );
-                return None;
-            }
+        if current_version > 0 && claims.ver != current_version {
+            warn!(
+                "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
+                subject, claims.ver, current_version
+            );
+            return None;
         }
 
         Some(user)
@@ -404,26 +369,7 @@ impl UserService {
                 let mut merged = record;
                 merged.extend(fields.clone());
                 sync_refresh_fields(&mut merged, fields);
-                // Mirror Java updateSessionToken: write app_token PK row first.
-                let _ = self.record_manager.create_record(
-                    CSM_APP_ID,
-                    ACCOUNTS_TABLE,
-                    merged.clone(),
-                    Some(vec!["app_token".into()]),
-                );
-                let refresh_val = merged
-                    .get("refresh")
-                    .or_else(|| merged.get("refresh_token"))
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty());
-                if refresh_val.is_some() {
-                    let _ = self.record_manager.create_record(
-                        CSM_APP_ID,
-                        ACCOUNTS_TABLE,
-                        merged,
-                        Some(vec!["refresh".into()]),
-                    );
-                }
+                self.apply_user_record_update(&merged);
                 return true;
             }
         }

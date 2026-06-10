@@ -233,7 +233,7 @@ impl AuthHandler {
             return response;
         };
 
-        // Prefer csm-token JWT when sent (matches login token); never fall back to stale refresh principal.
+        // Prefer csm-token JWT when sent; fall back to middleware principal (Java SecurityContext).
         if let Some(token) = params
             .get("csm-token")
             .and_then(|v| v.as_str())
@@ -253,14 +253,9 @@ impl AuthHandler {
                     response.set("result", Value::Object(info));
                     return response;
                 }
-                response.set("code", 401);
-                response.set("success", false);
-                response.set("message", "Invalid session token");
-                return response;
             }
         }
 
-        // No valid csm-token header — use authenticated principal from middleware.
         let user = self
             .resolve_fresh_user(auth)
             .unwrap_or_else(|| self.user_from_auth(auth));
@@ -852,6 +847,7 @@ fn refresh_tokens_from_params(params: &Map<String, Value>) -> Vec<String> {
         }
     };
     push(params.get("refreshToken").and_then(|v| v.as_str()));
+    push(params.get("refreshTokenCookie").and_then(|v| v.as_str()));
     push(params.get("refreshTokenHeader").and_then(|v| v.as_str()));
     out
 }

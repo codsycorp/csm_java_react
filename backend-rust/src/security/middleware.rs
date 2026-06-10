@@ -166,10 +166,9 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
     }
 
     let csm = csm_token(headers);
-    let csm_claims = csm
+    let csm_valid = csm
         .as_ref()
-        .and_then(|token| state.jwt.parse_claims(token).ok());
-    let csm_valid = csm_claims.is_some();
+        .is_some_and(|token| !token.is_empty() && state.jwt.validate_token(token));
 
     if let Some(token) = csm.as_ref() {
         if !token.is_empty() {
@@ -181,19 +180,20 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
                 {
                     return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
                 }
-                // Valid csm-token must not fall back to a stale X-Refresh-Token from another user.
-                warn!("[JWT] valid csm-token but user resolution failed — blocking refresh fallback");
-                return None;
+                // Mirror Java: valid csm-token but resolution failed → refresh fallback.
+                warn!("[JWT] csm-token auth resolution failed, fallback to refresh-token path");
             }
             // Invalid JWT format/signature: continue to refresh-token fallback (Java parity).
         }
     }
 
-    let token_uid = csm_claims
-        .as_ref()
-        .map(|c| c.uid.trim())
-        .filter(|uid| !uid.is_empty())
-        .map(String::from);
+    let token_uid = csm_valid
+        .then(|| {
+            csm.as_ref()
+                .map(|t| state.jwt.user_id_from_token(t))
+                .filter(|uid| !uid.is_empty())
+        })
+        .flatten();
 
     let client_ip = client_ip_from_headers(headers);
     let client_ua = user_agent_from_headers(headers);

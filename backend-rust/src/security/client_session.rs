@@ -110,7 +110,7 @@ pub fn cookie_from_headers(headers: &HeaderMap, name: &str) -> Option<String> {
     None
 }
 
-/// Prefer HttpOnly cookie (fresh from login) over X-Refresh-Token header (may be stale in localStorage).
+/// Mirror Java JwtAuthenticationFilter: X-Refresh-Token header first, then cookie.
 pub fn refresh_token_candidates(headers: &HeaderMap) -> Vec<String> {
     let mut out = Vec::new();
     let mut push = |token: Option<String>| {
@@ -120,13 +120,13 @@ pub fn refresh_token_candidates(headers: &HeaderMap) -> Vec<String> {
             }
         }
     };
-    push(cookie_from_headers(headers, "refreshToken"));
     push(
         headers
             .get("x-refresh-token")
             .and_then(|h| h.to_str().ok())
             .map(String::from),
     );
+    push(cookie_from_headers(headers, "refreshToken"));
     out
 }
 

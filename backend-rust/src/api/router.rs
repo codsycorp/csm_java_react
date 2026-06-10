@@ -397,13 +397,13 @@ async fn parse_request_params(req: Request<Body>) -> Map<String, Value> {
         .get("x-refresh-token")
         .and_then(|h| h.to_str().ok())
         .map(String::from);
-    // Prefer HttpOnly cookie over stale localStorage header (browser); header remains fallback for NWJS.
-    if let Some(rt) = cookie_rt.as_ref().or(header_rt.as_ref()) {
+    // Mirror Java ApiSpringController: X-Refresh-Token header first, then cookie.
+    if let Some(rt) = header_rt.as_ref().or(cookie_rt.as_ref()) {
         params.insert("refreshToken".into(), Value::String(rt.clone()));
     }
-    if let Some(header) = header_rt {
-        if cookie_rt.as_ref() != Some(&header) {
-            params.insert("refreshTokenHeader".into(), Value::String(header));
+    if let Some(cookie) = cookie_rt {
+        if header_rt.as_ref() != Some(&cookie) {
+            params.insert("refreshTokenCookie".into(), Value::String(cookie));
         }
     }
     if let Some(ua) = parts
