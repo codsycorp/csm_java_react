@@ -112,17 +112,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Upload nginx config
+      - name: Upload nginx config to temp path
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.DEPLOY_PASSWORD }}
           source: "nginx.conf"
-          target: "/etc/nginx/"
+          target: "/tmp/"
           strip_components: 0
 
-      - name: Test & reload nginx
+      - name: Validate, deploy & reload nginx
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -130,8 +130,31 @@ jobs:
           password: ${{ secrets.DEPLOY_PASSWORD }}
           script: |
             set -e
-            echo "=== Kiểm tra nginx config ==="
-            nginx -t
-            echo "=== Reload nginx ==="
-            nginx -s reload
-            echo "nginx reloaded OK"
+            echo "=== nginx version ==="
+            nginx -v 2>&1
+
+            echo "=== Đảm bảo blocked_ips.conf tồn tại ==="
+            touch /etc/nginx/blocked_ips.conf
+
+            echo "=== Kiểm tra location block trong config mới ==="
+            grep -c "ai-generate-seo-content" /tmp/nginx.conf || echo "WARNING: location block not found in new config"
+
+            echo "=== Backup config cũ ==="
+            cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak 2>/dev/null || true
+
+            echo "=== Deploy config mới ==="
+            cp /tmp/nginx.conf /etc/nginx/nginx.conf
+
+            echo "=== Test config ==="
+            if nginx -t 2>&1; then
+                echo "=== Reload nginx ==="
+                nginx -s reload
+                echo "nginx reloaded OK"
+                echo "=== Verify endpoint exists ==="
+                grep "ai-generate-seo-content" /etc/nginx/nginx.conf | head -5
+            else
+                echo "=== nginx -t FAILED — restoring backup ==="
+                cp /etc/nginx/nginx.conf.bak /etc/nginx/nginx.conf
+                nginx -t 2>&1
+                exit 1
+            fi
