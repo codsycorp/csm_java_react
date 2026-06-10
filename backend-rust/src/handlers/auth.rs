@@ -90,6 +90,13 @@ impl AuthHandler {
             next_version,
         );
 
+        info!(
+            "[LOGIN] Saved session user_id={:?} login_version={} refresh_prefix={}",
+            user.id,
+            next_version,
+            &refresh_token[..refresh_token.len().min(10)]
+        );
+
         let token_subject = user
             .app_token
             .clone()

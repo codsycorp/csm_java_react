@@ -44,9 +44,14 @@ impl UserService {
         if app_token.is_empty() {
             return None;
         }
-        let filter = SearchFilter::eq("app_token", app_token);
 
-        // Mirror Java UserService.findUserByAppToken: filter + pickBest first, then direct find.
+        // Java updateSessionToken always writes the app_token PK slot — read it first.
+        // filter()+pickBest can miss the PK row when duplicate records share the same id.
+        if let Some(record) = self.find_app_token_pk_record(app_token) {
+            return Some(self.map_record_to_user(&record, true));
+        }
+
+        let filter = SearchFilter::eq("app_token", app_token);
         let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
         let rows = filtered
             .get("rows")
@@ -73,6 +78,20 @@ impl UserService {
             return self.map_sub_user(&sub);
         }
         None
+    }
+
+    /// Direct RocksDB read of the app_token primary-key row (Java updateSessionToken target).
+    fn find_app_token_pk_record(&self, app_token: &str) -> Option<Map<String, Value>> {
+        let mut probe = Map::new();
+        probe.insert("app_token".into(), Value::String(app_token.into()));
+        let record = self
+            .record_manager
+            .find_existing_by_pk_values(CSM_APP_ID, ACCOUNTS_TABLE, &probe);
+        if record.is_empty() {
+            None
+        } else {
+            Some(record)
+        }
     }
 
     pub fn find_by_refresh_token(&self, refresh_token: &str) -> Option<User> {
@@ -241,18 +260,29 @@ impl UserService {
             return None;
         }
 
-        // Re-fetch canonical row by app_token (Java: pickBest via findUserByAppToken).
+        // Re-fetch authoritative session row from app_token PK (Java updateSessionToken target).
         if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
-            if let Some(fresh) = self.find_by_app_token(&app_token) {
+            if let Some(record) = self.find_app_token_pk_record(&app_token) {
+                user = self.map_record_to_user(&record, true);
+            } else if let Some(fresh) = self.find_by_app_token(&app_token) {
                 user = fresh;
             }
         }
 
         let current_version = user.login_version.unwrap_or(0);
         if current_version > 0 && claims.ver != current_version {
-            // Mirror Java post-login behavior: pickBest may return a stale duplicate row.
-            // Prefer the row whose login_version matches the JWT claim before rejecting.
             if let Some(app_token) = user.app_token.as_deref().filter(|s| !s.is_empty()) {
+                if let Some(record) = self.find_app_token_pk_record(app_token) {
+                    let pk_ver = parse_int_safe(record.get("login_version"));
+                    let pk_ver = if pk_ver == 0 {
+                        parse_int_safe(record.get("loginVersion"))
+                    } else {
+                        pk_ver
+                    };
+                    if pk_ver == claims.ver {
+                        return Some(self.map_record_to_user(&record, true));
+                    }
+                }
                 if let Some(exact) = self.find_by_app_token_and_version(app_token, claims.ver) {
                     return Some(exact);
                 }
@@ -275,6 +305,16 @@ impl UserService {
     }
 
     fn find_by_app_token_and_version(&self, app_token: &str, login_version: i32) -> Option<User> {
+        if let Some(record) = self.find_app_token_pk_record(app_token) {
+            let mut version = parse_int_safe(record.get("login_version"));
+            if version == 0 {
+                version = parse_int_safe(record.get("loginVersion"));
+            }
+            if version == login_version {
+                return Some(self.map_record_to_user(&record, true));
+            }
+        }
+
         let filter = SearchFilter::eq("app_token", app_token);
         let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
         let rows = filtered
@@ -395,78 +435,37 @@ impl UserService {
             }
 
             let filter = SearchFilter::eq("app_token", app_token);
-            let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
-            let account_rows: Vec<Map<String, Value>> = filtered
-                .get("rows")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|v| v.as_object().cloned())
-                .collect();
-
-            if !account_rows.is_empty() {
-                let mut persisted = false;
-                for row in &account_rows {
-                    let mut merged = row.clone();
-                    merged.extend(fields.clone());
-                    sync_refresh_fields(&mut merged, fields);
-                    match self.record_manager.create_record(
-                        CSM_APP_ID,
-                        ACCOUNTS_TABLE,
-                        merged.clone(),
-                        Some(vec!["app_token".into()]),
-                    ) {
-                        Ok(cmd) => {
-                            persisted = true;
-                            info!(
-                                "[SESSION] synced duplicate row cmd={} user_id={:?} login_version={:?}",
-                                cmd,
-                                user.id,
-                                fields.get("login_version")
-                            );
-                            self.apply_user_record_update(&merged);
-                        }
-                        Err(err) => {
-                            warn!(
-                                "[SESSION] duplicate row write failed user_id={:?}: {}",
-                                user.id, err
-                            );
-                        }
-                    }
-                }
-                if persisted {
-                    return true;
+            let mut record = self
+                .find_app_token_pk_record(app_token)
+                .unwrap_or_else(|| self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter));
+            if record.is_empty() {
+                record.insert("app_token".into(), Value::String(app_token.into()));
+                if let Some(id) = user.id.as_ref().filter(|s| !s.is_empty()) {
+                    record.insert("id".into(), Value::String(id.clone()));
                 }
             }
-
-            let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
-            if !record.is_empty() {
-                let mut merged = record;
-                merged.extend(fields.clone());
-                sync_refresh_fields(&mut merged, fields);
-                match self.record_manager.create_record(
-                    CSM_APP_ID,
-                    ACCOUNTS_TABLE,
-                    merged.clone(),
-                    Some(vec!["app_token".into()]),
-                ) {
-                    Ok(cmd) => {
-                        info!(
-                            "[SESSION] persisted app_token PK cmd={} user_id={:?} login_version={:?}",
-                            cmd,
-                            user.id,
-                            fields.get("login_version")
-                        );
-                        self.apply_user_record_update(&merged);
-                        return true;
-                    }
-                    Err(err) => {
-                        warn!(
-                            "[SESSION] app_token PK write failed user_id={:?}: {}",
-                            user.id, err
-                        );
-                    }
+            record.extend(fields.clone());
+            sync_refresh_fields(&mut record, fields);
+            match self.record_manager.create_record(
+                CSM_APP_ID,
+                ACCOUNTS_TABLE,
+                record,
+                Some(vec!["app_token".into()]),
+            ) {
+                Ok(cmd) => {
+                    info!(
+                        "[SESSION] persisted app_token PK cmd={} user_id={:?} login_version={:?}",
+                        cmd,
+                        user.id,
+                        fields.get("login_version")
+                    );
+                    return true;
+                }
+                Err(err) => {
+                    warn!(
+                        "[SESSION] app_token PK write failed user_id={:?}: {}",
+                        user.id, err
+                    );
                 }
             }
         }
