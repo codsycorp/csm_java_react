@@ -6,6 +6,8 @@ use socketioxide::extract::{Data, SocketRef};
 use tracing::info;
 use crate::state::AppState;
 
+use super::guest_ai;
+
 static ROOM_SESSIONS: LazyLock<DashMap<String, Vec<String>>> = LazyLock::new(DashMap::new);
 
 pub fn register_events(socket: &SocketRef, state: &AppState) {
@@ -79,8 +81,12 @@ pub fn register_events(socket: &SocketRef, state: &AppState) {
         let _ = s.broadcast().emit("notification", &data);
     });
 
-    socket.on("register_guest_phone", move |s: SocketRef, Data::<Value>(data)| async move {
-        let _ = s.emit("register_guest_phone", &json!({"ok": true, "data": data}));
+    socket.on("register_guest_phone", {
+        let st = state.clone();
+        move |s: SocketRef, Data::<Value>(data)| {
+            let st = st.clone();
+            async move { guest_ai::process_register_guest_phone(&st, &s, data).await }
+        }
     });
 
     socket.on("chat_list_users", {
@@ -93,9 +99,14 @@ pub fn register_events(socket: &SocketRef, state: &AppState) {
         }
     });
 
-    socket.on("chat_guests_list", move |s: SocketRef, Data::<String>(app_id)| async move {
-        let _ = app_id;
-        let _ = s.emit("chat_guests_list", &json!([]));
+    socket.on("chat_guests_list", {
+        let st = state.clone();
+        move |s: SocketRef, Data::<String>(app_id)| {
+            let st = st.clone();
+            async move {
+                let _ = s.emit("chat_guests_list", &guest_ai::list_guest_sessions(&st, &app_id));
+            }
+        }
     });
 
     socket.on("chat_list_rooms", move |s: SocketRef, Data::<String>(app_id)| async move {
@@ -164,18 +175,13 @@ pub fn register_events(socket: &SocketRef, state: &AppState) {
     });
 
     socket.on_disconnect(|s: SocketRef| async move {
+        guest_ai::on_disconnect(&s.id.to_string());
         info!("Socket disconnected: {}", s.id);
     });
 }
 
-async fn handle_join(_state: &AppState, socket: &SocketRef, data: Value) {
-    let room = data
-        .get("room")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default")
-        .to_string();
-    let _ = socket.join(room.clone());
-    let _ = socket.emit("user_joined", &json!({"room": room.clone(), "sid": socket.id.to_string()}));
+async fn handle_join(state: &AppState, socket: &SocketRef, data: Value) {
+    guest_ai::process_join(state, socket, data).await;
 }
 
 async fn handle_join_room(_state: &AppState, socket: &SocketRef, room: &str) {
@@ -189,11 +195,7 @@ async fn handle_join_room(_state: &AppState, socket: &SocketRef, room: &str) {
 }
 
 async fn handle_chat(state: &AppState, socket: &SocketRef, data: Value) {
-    let app_id = data.get("app_id").and_then(|v| v.as_str()).unwrap_or("default");
-    if let Some(obj) = data.as_object() {
-        let _ = state.chat_service.save_message(app_id, obj.clone());
-    }
-    let _ = socket.broadcast().emit("message", &data);
+    guest_ai::process_chat(state, socket, data).await;
 }
 
 async fn handle_chat_history(state: &AppState, socket: &SocketRef, room: &str) {
@@ -202,8 +204,32 @@ async fn handle_chat_history(state: &AppState, socket: &SocketRef, room: &str) {
 }
 
 async fn handle_chat_history_guest(state: &AppState, socket: &SocketRef, data: Value) {
-    let room = data.get("room").and_then(|v| v.as_str()).unwrap_or("guest");
-    handle_chat_history(state, socket, room).await;
+    let app_id = data
+        .get("appId")
+        .or_else(|| data.get("app_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
+    let guest_session_id = data
+        .get("guestSessionId")
+        .or_else(|| data.get("guest_session_id"))
+        .and_then(|v| v.as_str());
+    let guest_phone = data
+        .get("guestPhone")
+        .or_else(|| data.get("guest_phone"))
+        .and_then(|v| v.as_str());
+
+    if guest_session_id.is_none() && guest_phone.is_none() {
+        let _ = socket.emit("chat_history_guest", &json!([]));
+        return;
+    }
+
+    let history = state.chat_service.get_history_by_guest_identity(
+        app_id,
+        guest_session_id,
+        guest_phone,
+        50,
+    );
+    let _ = socket.emit("chat_history_guest", &json!(history));
 }
 
 async fn handle_chat_history_app(state: &AppState, socket: &SocketRef, app_id: &str) {

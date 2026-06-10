@@ -10,6 +10,7 @@ use crate::handlers::{
 };
 use crate::security::jwt::JwtUtil;
 use crate::services::{
+    ai::guest_chat::AiGuestWebChatService,
     cache::CacheService, chat::ChatPersistenceService, crm::CrmService,
     crm_analytics::CrmAnalyticsService, google_index::GoogleIndexService,
     llama_cpp::LlamaCppService, permission::PermissionService,
@@ -38,6 +39,7 @@ pub struct AppState {
     pub init_handler: Arc<InitHandler>,
     pub seo_handler: Arc<SeoHandler>,
     pub google_index: Arc<GoogleIndexService>,
+    pub guest_chat: Arc<AiGuestWebChatService>,
     /// Socket.IO handle for server-side broadcasting (mirrors Java SocketIOServer inject)
     pub socket_io: Arc<SocketIo>,
 }
@@ -84,6 +86,10 @@ impl AppState {
             .build()?;
         let work_dir = std::env::current_dir().unwrap_or_else(|_| config.data_dir.clone());
         let google_index = Arc::new(GoogleIndexService::new(http_client.clone(), work_dir));
+        let guest_chat = Arc::new(AiGuestWebChatService::new(
+            llama.clone(),
+            chat_service.clone(),
+        ));
 
         Ok(Self {
             config,
@@ -105,6 +111,7 @@ impl AppState {
             init_handler,
             seo_handler,
             google_index,
+            guest_chat,
             socket_io,
         })
     }

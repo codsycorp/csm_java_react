@@ -18,12 +18,13 @@ pub async fn handle_chat_history(state: &AppState, params: &Map<String, serde_js
     r
 }
 
-pub async fn handle_chat_guests_list(_state: &AppState, params: &Map<String, serde_json::Value>) -> StandardResponse {
+pub async fn handle_chat_guests_list(state: &AppState, params: &Map<String, serde_json::Value>) -> StandardResponse {
+    let app_id = params.get("app_id").and_then(|v| v.as_str()).unwrap_or("default");
+    let guests = state.chat_service.get_guest_sessions_by_app_id(app_id);
     let mut r = StandardResponse::new();
     r.set("code", 200);
     r.set("success", true);
-    r.set("guests", serde_json::json!([]));
-    let _ = params;
+    r.set("guests", serde_json::json!(guests));
     r
 }
 

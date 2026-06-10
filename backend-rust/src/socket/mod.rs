@@ -1,4 +1,5 @@
 mod events;
+mod guest_ai;
 
 pub use socketioxide::SocketIo;
 pub use socketioxide::layer::SocketIoLayer;
