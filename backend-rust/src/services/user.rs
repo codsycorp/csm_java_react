@@ -378,7 +378,9 @@ impl UserService {
                 &permissions,
                 &["dev".into(), "admin".into(), "scope:all".into()],
             );
-            if !app_id.is_empty() {
+            // Java does NOT override menusPermissions for dev users — preserve DB value.
+            // Only set a default if the DB had no menus_permissions at all.
+            if menus_permissions.is_empty() && !app_id.is_empty() {
                 menus_permissions = vec![app_id.clone()];
             }
             user.data_app_ids = Some(resolve_effective_data_app_ids(record, &app_id, true));
