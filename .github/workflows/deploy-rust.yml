@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "backend-rust/**"
+      - "nginx.conf"
       - ".github/workflows/deploy-rust.yml"
   workflow_dispatch:
 
@@ -102,3 +103,35 @@ jobs:
             systemctl status csm-rust --no-pager || true
             echo "=== LOG ==="
             journalctl -u csm-rust -n 30 --no-pager || true
+
+  deploy-nginx:
+    name: Deploy nginx.conf → Reload
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Upload nginx config
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          source: "nginx.conf"
+          target: "/etc/nginx/"
+          strip_components: 0
+
+      - name: Test & reload nginx
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          script: |
+            set -e
+            echo "=== Kiểm tra nginx config ==="
+            nginx -t
+            echo "=== Reload nginx ==="
+            nginx -s reload
+            echo "nginx reloaded OK"
