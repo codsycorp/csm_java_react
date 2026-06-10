@@ -259,10 +259,14 @@ pub fn is_allowed_autosetup_template_read(
     let eq_values = collect_eq_values(filter);
     let p_type = eq_values.get("p_type").map(String::as_str).unwrap_or("");
     let p_name = eq_values.get("p_name").map(String::as_str).unwrap_or("");
-    if !is_p_type_zero_str(p_type) || p_name.is_empty() || ctx.app_id.is_empty() {
+    if !is_p_type_zero_str(p_type) || p_name.is_empty() {
         return false;
     }
-    is_same_or_broadcast_variant(&ctx.app_id, p_name)
+    let effective_app_id = resolve_autosetup_effective_app_id(ctx, p_name);
+    if effective_app_id.is_empty() {
+        return false;
+    }
+    is_same_or_broadcast_variant(&effective_app_id, p_name)
 }
 
 pub fn filter_sys_autos_rows(
@@ -294,7 +298,9 @@ pub fn filter_sys_autos_rows(
             if requested_p_name != p_name {
                 return false;
             }
-            is_same_or_broadcast_variant(&ctx.app_id, requested_p_name)
+            let effective_app_id = resolve_autosetup_effective_app_id(ctx, requested_p_name);
+            !effective_app_id.is_empty()
+                && is_same_or_broadcast_variant(&effective_app_id, requested_p_name)
         })
         .cloned()
         .collect();
@@ -860,6 +866,48 @@ fn matches_eq_candidate(
     false
 }
 
+/// Resolve app identity for sys_autos homepage/broadcast reads.
+/// Client sends `p_name = broadcast_{effectiveAppId}`; when token `app_id` is empty or mismatched,
+/// fall back to legacy menu scope (`menusPermissions = [app]`) or explicit `data_app_ids`.
+fn resolve_autosetup_effective_app_id(ctx: &UserAccessContext, requested_p_name: &str) -> String {
+    let requested = requested_p_name.trim();
+    if !ctx.app_id.is_empty()
+        && (requested.is_empty() || is_same_or_broadcast_variant(&ctx.app_id, requested))
+    {
+        return ctx.app_id.clone();
+    }
+
+    if let Some(target) = autosetup_target_app_from_p_name(requested) {
+        if has_legacy_full_app_scope(&ctx.menus_permissions, &target) {
+            return target;
+        }
+        if ctx
+            .data_app_ids
+            .iter()
+            .any(|app| app.eq_ignore_ascii_case(&target))
+        {
+            return target;
+        }
+    }
+
+    ctx.app_id.clone()
+}
+
+fn autosetup_target_app_from_p_name(requested_p_name: &str) -> Option<String> {
+    let requested = requested_p_name.trim();
+    if requested.is_empty() {
+        return None;
+    }
+    if let Some(app) = requested.strip_prefix("broadcast_") {
+        let app = app.trim();
+        if app.is_empty() {
+            return None;
+        }
+        return Some(app.to_string());
+    }
+    Some(requested.to_string())
+}
+
 fn is_same_or_broadcast_variant(user_app_id: &str, requested: &str) -> bool {
     let user = user_app_id.trim();
     let requested = requested.trim();
@@ -951,6 +999,7 @@ mod tests {
     use crate::data::RecordManager;
     use crate::model::SearchFilter;
     use crate::security::AuthUser;
+    use serde_json::json;
     use std::sync::Arc;
 
     fn lmkt_broadcast_filter() -> SearchFilter {
@@ -1023,6 +1072,30 @@ mod tests {
         assert!(is_same_or_broadcast_variant("lmkt", "broadcast_lmkt"));
         assert!(is_same_or_broadcast_variant("lmkt", "lmkt"));
         assert!(!is_same_or_broadcast_variant("csm", "broadcast_lmkt"));
+    }
+
+    #[test]
+    fn autosetup_resolves_app_from_menus_when_token_app_id_empty() {
+        let filter = lmkt_broadcast_filter();
+        let ctx = UserAccessContext {
+            app_id: String::new(),
+            menus_permissions: vec!["lmkt".into()],
+            ..lmkt_ctx(false)
+        };
+        assert!(is_allowed_autosetup_template_read(
+            "csm",
+            "sys_autos",
+            false,
+            &filter,
+            Some(&ctx),
+        ));
+        let rows = Value::Array(vec![json!({
+            "p_name": "broadcast_lmkt",
+            "p_type": 0,
+            "p_code": "encrypted-placeholder"
+        })]);
+        let filtered = filter_sys_autos_rows(rows, &filter, Some(&ctx));
+        assert_eq!(filtered.as_array().map(|a| a.len()), Some(1));
     }
 
     #[test]
