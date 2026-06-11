@@ -13,7 +13,7 @@
  * Thêm trường mới = thêm phần tử vào line_items_columns.
  * Thay đổi công thức = sửa formula trong config, không cần sửa source code.
  */
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Button, Card, Col, Divider, Input, InputNumber,
   Row, Select, Space, Table, Typography, message,
@@ -29,11 +29,17 @@ import type {
   LineItem, ProductGroup, OrderHeader, EditorCalcResult,
 } from "./types";
 import { resolveTriLangLabel } from "./line-items-label";
+import LineItemsHeaderForm from "./LineItemsHeaderForm";
+import { collectComboTableFetchRequests } from "#src/components/csm-grid/combo-utils";
+import { blockNonNumericKey } from "./line-items-field-utils";
+import { useLineItemsTheme } from "./line-items-theme";
+import "./line-items-editor.css";
 import {
   computeRowValues, calcGroupResult, calcEditorTotals,
   evalPrintTemplate, evalCondition,
   soThanhChu, fmtVND, fmtNum, groupLabel,
-  buildPrintUtils, formatSoBaoGia, parseNgayDate,
+  buildPrintUtils, buildAutoHeaderNumbers, validateLineItemsHeader,
+  formatNgay, normalizeNgayString,
   newItem, newGroup,
 } from "./utils";
 
@@ -48,6 +54,7 @@ const DEFAULT_GROUP_CFG: Required<LiGroupConfig> = {
   vat_default: 10,
   vat_options: [{ value: 8, label: "VAT 8%" }, { value: 10, label: "VAT 10%" }],
   label_prefix: "",
+  subtotal_label: "Cộng nhóm {{group}} – chưa VAT {{vat}}%",
 };
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -57,6 +64,9 @@ export interface CsmLineItemsEditorProps {
   appId?: string;
   decrypt?: (s: string) => string;
   initialValue?: { header?: OrderHeader; groups?: ProductGroup[] };
+  existingRows?: Record<string, any>[];
+  recordPk?: string;
+  pkField?: string;
   onSave?: (data: { header: OrderHeader; groups: ProductGroup[] }) => void;
 }
 
@@ -105,8 +115,15 @@ function CellInput({
       <InputNumber
         size="small"
         style={{ width: col.width ? col.width - 4 : 80 }}
+        controls={false}
         value={value}
-        min={0} step={col.type === "formula_or_manual" ? 0.01 : 1}
+        min={0}
+        step={col.type === "formula_or_manual" ? 0.01 : 1}
+        parser={(v) => {
+          const cleaned = String(v ?? "").replace(/[^\d.,-]/g, "").replace(",", ".");
+          return cleaned === "" ? null : Number(cleaned);
+        }}
+        onKeyDown={(e) => blockNonNumericKey(e, true)}
         onChange={v => onChange(v ?? null)}
       />
     );
@@ -117,10 +134,13 @@ function CellInput({
       <InputNumber
         size="small"
         style={{ width: col.width ? col.width - 4 : 110 }}
+        controls={false}
         value={value}
-        min={0} step={1000}
+        min={0}
+        step={1000}
         formatter={(v) => v != null ? fmtVND(Number(v)) : ""}
         parser={(v: string | undefined) => (v ? parseInt(v.replace(/\D/g, ""), 10) || 0 : 0) as any}
+        onKeyDown={(e) => blockNonNumericKey(e, false)}
         onChange={v => onChange(v ?? null)}
       />
     );
@@ -145,6 +165,7 @@ interface GroupSectionProps {
   groupCfg: Required<LiGroupConfig>;
   calc: EditorCalcResult;
   lang: string;
+  subtotalTemplate?: string;
   onUpdateGroup: (id: string, partial: Partial<ProductGroup>) => void;
   onUpdateItem: (gId: string, iKey: string, field: string, val: any) => void;
   onAddItem: (gId: string) => void;
@@ -153,11 +174,16 @@ interface GroupSectionProps {
 }
 
 const GroupSection = React.memo(function GroupSection({
-  group, gIdx, columns, groupCfg, calc, lang,
+  group, gIdx, columns, groupCfg, calc, lang, subtotalTemplate,
   onUpdateGroup, onUpdateItem, onAddItem, onRemoveItem, onRemoveGroup,
 }: GroupSectionProps) {
+  const liTheme = useLineItemsTheme();
+  const { inheritText, groupCard, groupTitle } = liTheme;
   const label = groupLabel(gIdx);
   const gc = calc.groups[group.id];
+  const subtotalText = (subtotalTemplate || groupCfg.subtotal_label || "Cộng nhóm {{group}} – chưa VAT {{vat}}%")
+    .replace(/\{\{group\}\}/g, label)
+    .replace(/\{\{vat\}\}/g, String(group.vat_rate ?? ""));
 
   // Find "subtotal" columns (formula cols)
   const formulaCols = columns.filter(c =>
@@ -215,17 +241,17 @@ const GroupSection = React.memo(function GroupSection({
 
   // Summary row
   const summary = useCallback(() => (
-    <Table.Summary.Row style={{ background: "#f0f5ff" }}>
+    <Table.Summary.Row className="csm-li-accent-summary">
       <Table.Summary.Cell index={0} colSpan={2} align="left">
-        <Text strong>Cộng nhóm {label} – chưa VAT {group.vat_rate}%</Text>
+        <Text strong style={inheritText}>{subtotalText}</Text>
       </Table.Summary.Cell>
       {columns.filter(c => !c.hidden).map((col, ci) => {
         let content: React.ReactNode = null;
-        if (col.name === soTamCol?.name) content = <Text strong>{gc?.so_tam ?? 0}</Text>;
-        else if (col.name === klCol?.name) content = <Text strong>{fmtNum(gc?.kl)}</Text>;
-        else if (col.name === ttCol?.name) content = <Text strong>{fmtVND(gc?.sum)}</Text>;
+        if (col.name === soTamCol?.name) content = <Text strong style={inheritText}>{gc?.so_tam ?? 0}</Text>;
+        else if (col.name === klCol?.name) content = <Text strong style={inheritText}>{fmtNum(gc?.kl)}</Text>;
+        else if (col.name === ttCol?.name) content = <Text strong style={inheritText}>{fmtVND(gc?.sum)}</Text>;
         else if (col.type === "price" && gc?.uniform_price != null)
-          content = <Text>{fmtVND(gc.uniform_price)}</Text>;
+          content = <Text style={inheritText}>{fmtVND(gc.uniform_price)}</Text>;
         return (
           <Table.Summary.Cell key={ci} index={ci + 2} align={(col.align ?? "left") as any}>
             {content}
@@ -234,16 +260,16 @@ const GroupSection = React.memo(function GroupSection({
       })}
       <Table.Summary.Cell index={columns.length + 2} />
     </Table.Summary.Row>
-  ), [gc, group.vat_rate, label, columns, klCol, ttCol, soTamCol]);
+  ), [gc, columns, klCol, ttCol, soTamCol, subtotalText, inheritText]);
 
   return (
     <Card
       size="small"
-      style={{ marginBottom: 16, borderLeft: "4px solid #1677ff" }}
+      style={groupCard}
       styles={{ body: { paddingTop: 8 } }}
       title={
         <Space>
-          <Text strong style={{ color: "#1677ff", fontSize: 14 }}>{label}.</Text>
+          <Text strong style={groupTitle}>{label}.</Text>
           <Select
             size="small"
             value={group.vat_rate}
@@ -298,31 +324,38 @@ function TotalsDisplay({
   totalConfigs: NonNullable<LineItemsEditorConfig["line_items_totals"]>;
   lang: string;
 }) {
+  const { accentRow, accentCell, totalsTable, totalsWords, token } = useLineItemsTheme();
   return (
     <Row justify="end" style={{ marginTop: 8 }}>
       <Col>
-        <table style={{ borderCollapse: "collapse", minWidth: 360 }}>
+        <table style={totalsTable}>
           <tbody>
             {totalConfigs.map(tc => {
               const v = calc.totals[tc.key] ?? 0;
               const isGrand = tc.highlight;
+              const rowStyle = isGrand ? accentRow : { color: token.colorText };
+              const cellStyle = {
+                ...(isGrand ? accentCell : { color: token.colorText, fontWeight: 600 }),
+                padding: isGrand ? "4px 8px" : "3px 8px",
+              } as const;
               return (
                 <React.Fragment key={tc.key}>
-                  <tr style={isGrand ? { background: "#e6f4ff" } : {}}>
-                    <td style={{ padding: "3px 8px", fontWeight: isGrand ? 700 : 600 }}>
+                  <tr style={rowStyle}>
+                    <td style={cellStyle}>
                       {tc.key} – {resolveTriLangLabel(tc, lang, ["label"])}:
                     </td>
                     <td style={{
-                      padding: "3px 8px", textAlign: "right",
-                      fontWeight: isGrand ? 700 : 600,
+                      ...cellStyle,
+                      textAlign: "right" as const,
                       fontSize: isGrand ? 15 : 13,
+                      fontWeight: isGrand ? 700 : 600,
                     }}>
                       {fmtVND(v)} VNĐ
                     </td>
                   </tr>
                   {tc.show_words && (
                     <tr>
-                      <td colSpan={2} style={{ padding: "2px 8px", fontStyle: "italic", color: "#555" }}>
+                      <td colSpan={2} style={totalsWords}>
                         Bằng chữ: {soThanhChu(v)}
                       </td>
                     </tr>
@@ -337,144 +370,11 @@ function TotalsDisplay({
   );
 }
 
-// ─── Header form (reads m_configs.table) ─────────────────────────────────────
-
-function parseCoOptions(f: any): { value: string; label: string }[] {
-  const raw = String(f.f_cbo_query ?? "").trim();
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed?.options) && parsed.options.length > 0) {
-      return parsed.options.map((o: any) => ({
-        value: String(o.ma ?? o.value ?? ""),
-        label: String(o.ten ?? o.label ?? o.ma ?? ""),
-      })).filter((o: { value: string }) => o.value);
-    }
-  } catch { /* ignore */ }
-  return [];
-}
-
-function parseGridFieldMap(f: any): Record<string, string> {
-  const map: Record<string, string> = {};
-  const raw = f.f_grid_fields;
-  if (typeof raw === "string" && raw.trim()) {
-    raw.split(",").forEach((pair: string) => {
-      const [src, dst] = pair.split("->").map((s) => s.trim());
-      if (src && dst) map[src] = dst;
-    });
-  }
-  return map;
-}
-
-function HeaderForm({
-  fields, header, onChange, lang,
-  customerRows = [],
-  onCustomerSelect,
-}: {
-  fields: any[];
-  header: OrderHeader;
-  onChange: (key: string, val: any) => void;
-  lang: string;
-  customerRows?: Record<string, any>[];
-  onCustomerSelect?: (customerId: string | number) => void;
-}) {
-  if (!fields || fields.length === 0) return null;
-  return (
-    <Card title="Thông tin đơn hàng" size="small" style={{ marginBottom: 12 }}>
-      <Row gutter={[12, 8]}>
-        {fields
-          .filter((f: any) => Number(f.f_show ?? 1) !== 0)
-          .sort((a: any, b: any) => Number(a.f_stt ?? 0) - Number(b.f_stt ?? 0))
-          .map((f: any) => {
-            const name = String(f.f_name ?? "").toLowerCase();
-            const label = resolveTriLangLabel(f, lang, ["f_header", "f_name"]);
-            const types = String(f.f_types ?? "text").toLowerCase();
-            const span = Number(f.f_width_col ?? 12);
-            const val = header[name];
-            let input: React.ReactNode;
-
-            if (types.includes("co")) {
-              const staticOpts = parseCoOptions(f);
-              const customerOpts = name === "khach_hang_id" && customerRows.length > 0
-                ? customerRows.map((r) => ({
-                  value: String(r.id ?? r.ma_kh ?? ""),
-                  label: String(r.ten_kh ?? r.ma_kh ?? r.id ?? ""),
-                })).filter((o) => o.value)
-                : staticOpts;
-              input = (
-                <Select
-                  style={{ width: "100%" }}
-                  showSearch
-                  optionFilterProp="label"
-                  value={val != null && val !== "" ? String(val) : undefined}
-                  options={customerOpts}
-                  onChange={(v) => {
-                    onChange(name, v);
-                    if (name === "khach_hang_id" && onCustomerSelect) onCustomerSelect(v);
-                  }}
-                  allowClear
-                  placeholder={f.f_placeholder ?? "Chọn..."}
-                />
-              );
-            } else if (types.includes("select") || types.includes("cbo")) {
-              const opts = parseCoOptions(f).length > 0
-                ? parseCoOptions(f)
-                : String(f.f_options ?? "").split("|").map((o: string) => {
-                  const [value, label2] = o.split(":").map(s => s.trim());
-                  return { value, label: label2 ?? value };
-                }).filter((o: any) => o.value);
-              input = (
-                <Select
-                  style={{ width: "100%" }}
-                  value={val}
-                  options={opts}
-                  onChange={v => onChange(name, v)}
-                  allowClear
-                />
-              );
-            } else if (types.includes("textarea") || types.includes("memo")) {
-              input = (
-                <TextArea
-                  rows={2}
-                  value={val ?? ""}
-                  onChange={e => onChange(name, e.target.value)}
-                />
-              );
-            } else if (types.includes("num") || types.includes("price")) {
-              input = (
-                <InputNumber
-                  style={{ width: "100%" }}
-                  value={val}
-                  formatter={types.includes("price") ? (v) => fmtVND(Number(v)) : undefined}
-                  onChange={v => onChange(name, v)}
-                />
-              );
-            } else {
-              input = (
-                <Input
-                  value={val ?? ""}
-                  placeholder={f.f_placeholder ?? ""}
-                  onChange={e => onChange(name, e.target.value)}
-                />
-              );
-            }
-
-            return (
-              <Col key={name} xs={24} sm={span}>
-                <div style={{ marginBottom: 2, fontSize: 12, color: "#555" }}>{label}</div>
-                {input}
-              </Col>
-            );
-          })}
-      </Row>
-    </Card>
-  );
-}
-
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function CsmLineItemsEditor({
   m_configs, appId, decrypt, initialValue, onSave,
+  existingRows = [], recordPk, pkField = "id",
 }: CsmLineItemsEditorProps) {
   const { i18n } = useTranslation();
   const uiLang = i18n.language || "vi";
@@ -486,34 +386,74 @@ export default function CsmLineItemsEditor({
   const totalConfigs = m_configs.line_items_totals ?? [];
   const printConfigs = m_configs.line_items_print ?? [];
   const headerFields: any[] = m_configs.table ?? [];
+  const uiConfig = m_configs.line_items_ui ?? {};
 
   const [header, setHeader] = useState<OrderHeader>(initialValue?.header ?? {});
   const [groups, setGroups] = useState<ProductGroup[]>(
     initialValue?.groups ?? [newGroup({ vat_default: groupCfg.vat_default })],
   );
-  const [customerRows, setCustomerRows] = useState<Record<string, any>[]>([]);
+  const [comboData, setComboData] = useState<Record<string, Record<string, any>[]>>({});
   const [printSettings, setPrintSettings] = useState<Record<string, any>>({});
+  const manualNumbersRef = useRef({
+    so_bao_gia: Boolean(initialValue?.header?.so_bao_gia),
+    so_lenh: Boolean(initialValue?.header?.so_lenh),
+    hieu_luc_den: Boolean(initialValue?.header?.hieu_luc_den),
+  });
+
+  const applyAutoNumbers = useCallback((ngay: string, prev: OrderHeader): OrderHeader => {
+    const norm = normalizeNgayString(ngay);
+    if (!norm) return prev;
+    const auto = buildAutoHeaderNumbers(norm, existingRows, { excludePk: recordPk, pkField });
+    const next: OrderHeader = { ...prev, ngay: norm };
+    if (!manualNumbersRef.current.so_bao_gia) next.so_bao_gia = auto.so_bao_gia;
+    if (!manualNumbersRef.current.so_lenh) next.so_lenh = auto.so_lenh;
+    if (!manualNumbersRef.current.hieu_luc_den) next.hieu_luc_den = auto.hieu_luc_den;
+    if (!next.phien_ban) next.phien_ban = "E1";
+    return next;
+  }, [existingRows, recordPk, pkField]);
+
+  useEffect(() => {
+    if (recordPk) return;
+    setHeader((prev) => {
+      const ngay = normalizeNgayString(String(prev.ngay ?? "")) ?? formatNgay(new Date());
+      return applyAutoNumbers(ngay, prev);
+    });
+  }, [recordPk, existingRows, applyAutoNumbers]);
+
+  const comboFetchRequests = useMemo(
+    () => collectComboTableFetchRequests(headerFields, { fallbackAppId: appId }),
+    [headerFields, appId],
+  );
 
   useEffect(() => {
     if (!appId) return;
-    getTableData<any>({ app_id: appId, obj_name: "tvp_khachhang" })
-      .then((res) => {
-        const rows = Array.isArray(res?.rows) ? res.rows : (Array.isArray(res) ? res : []);
-        setCustomerRows(rows);
-      })
-      .catch(() => { /* optional */ });
-    getTableData<any>({ app_id: appId, obj_name: "pm_cai_dat" })
-      .then((res) => {
-        const rows = Array.isArray(res?.rows) ? res.rows : (Array.isArray(res) ? res : []);
-        if (rows[0]) setPrintSettings(rows[0]);
-      })
-      .catch(() => { /* optional */ });
-  }, [appId]);
-
-  const customerFieldMap = useMemo(() => {
-    const f = headerFields.find((x) => String(x.f_name).toLowerCase() === "khach_hang_id");
-    return f ? parseGridFieldMap(f) : { ten_kh: "khach_hang", dia_chi: "dia_chi_kh" };
-  }, [headerFields]);
+    const seen = new Set<string>();
+    const tables = [
+      ...comboFetchRequests.map((r) => ({ tableName: r.tableName, where: r.whereClause })),
+      { tableName: "pm_cai_dat", where: undefined },
+    ].filter(({ tableName }) => {
+      if (!tableName || seen.has(tableName)) return false;
+      seen.add(tableName);
+      return true;
+    });
+    Promise.all(
+      tables.map(({ tableName, where }) =>
+        getTableData<any>({ app_id: appId, obj_name: tableName, where })
+          .then((res) => {
+            const rows = Array.isArray(res?.rows) ? res.rows : (Array.isArray(res) ? res : []);
+            return { tableName, rows };
+          })
+          .catch(() => ({ tableName, rows: [] as Record<string, any>[] })),
+      ),
+    ).then((results) => {
+      const next: Record<string, Record<string, any>[]> = {};
+      for (const { tableName, rows } of results) {
+        next[tableName] = rows;
+        if (tableName === "pm_cai_dat" && rows[0]) setPrintSettings(rows[0]);
+      }
+      setComboData(next);
+    });
+  }, [appId, comboFetchRequests]);
 
   const calc: EditorCalcResult = useMemo(
     () => calcEditorTotals(groups, columns, totalConfigs),
@@ -523,27 +463,20 @@ export default function CsmLineItemsEditor({
   // ── Header mutations ────────────────────────────────────────────────────────
 
   const updateHeader = useCallback((key: string, val: any) => {
+    if (key === "so_bao_gia" || key === "so_lenh" || key === "hieu_luc_den") {
+      manualNumbersRef.current[key] = true;
+    }
     setHeader(prev => {
-      const next = { ...prev, [key]: val };
-      if (key === "ngay" && !prev.so_bao_gia) {
-        const d = parseNgayDate(String(val ?? ""));
-        if (d) next.so_bao_gia = formatSoBaoGia(d);
+      if (key === "ngay") {
+        return applyAutoNumbers(String(val ?? ""), { ...prev, ngay: val });
       }
-      return next;
+      return { ...prev, [key]: val };
     });
-  }, []);
+  }, [applyAutoNumbers]);
 
-  const handleCustomerSelect = useCallback((customerId: string | number) => {
-    const row = customerRows.find((r) => String(r.id ?? r.ma_kh) === String(customerId));
-    if (!row) return;
-    setHeader(prev => {
-      const patch: OrderHeader = { ...prev, khach_hang_id: customerId };
-      Object.entries(customerFieldMap).forEach(([src, dst]) => {
-        if (row[src] != null) (patch as any)[dst] = row[src];
-      });
-      return patch;
-    });
-  }, [customerRows, customerFieldMap]);
+  const patchHeader = useCallback((patch: OrderHeader) => {
+    setHeader(prev => ({ ...prev, ...patch }));
+  }, []);
 
   // ── Group mutations ─────────────────────────────────────────────────────────
 
@@ -586,7 +519,7 @@ export default function CsmLineItemsEditor({
   const handlePrint = useCallback(async (pc: (typeof printConfigs)[number]) => {
     const rawFn = m_configs.trigger?.[pc.trigger_key];
     if (!rawFn) {
-      message.warning(`Chưa cấu hình trigger "${pc.trigger_key}" trong m_configs.trigger`);
+      message.warning(`Chưa cấu hình mẫu in "${resolveTriLangLabel(pc, uiLang, ["label"]) || pc.trigger_key}"`);
       return;
     }
     let fnBody = rawFn;
@@ -611,7 +544,13 @@ export default function CsmLineItemsEditor({
       })),
     })) as ProductGroup[];
 
-    const html = evalPrintTemplate(fnBody, header, enrichedGroups, calc, buildPrintUtils(settings));
+    const html = evalPrintTemplate(
+      fnBody,
+      header,
+      enrichedGroups,
+      calc,
+      buildPrintUtils(settings, { totalConfigs, lang: uiLang }),
+    );
 
     // Resolve filename
     let fileName = `document.pdf`;
@@ -643,7 +582,7 @@ export default function CsmLineItemsEditor({
     } finally {
       document.body.removeChild(container);
     }
-  }, [m_configs.trigger, decrypt, groups, columns, header, calc, printConfigs, appId, printSettings]);
+  }, [m_configs.trigger, decrypt, groups, columns, header, calc, printConfigs, appId, printSettings, totalConfigs, uiLang]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -656,7 +595,17 @@ export default function CsmLineItemsEditor({
           {onSave && (
             <Button
               type="primary" icon={<SaveOutlined />}
-              onClick={() => onSave({ header, groups })}
+              onClick={() => {
+                const check = validateLineItemsHeader(header, existingRows, headerFields, {
+                  excludePk: recordPk,
+                  pkField,
+                });
+                if (!check.ok) {
+                  message.error(check.message ?? "Dữ liệu không hợp lệ");
+                  return;
+                }
+                onSave({ header, groups });
+              }}
             >
               Lưu
             </Button>
@@ -675,13 +624,14 @@ export default function CsmLineItemsEditor({
 
       {/* Header fields — driven entirely by m_configs.table */}
       {headerFields.length > 0 && (
-        <HeaderForm
+        <LineItemsHeaderForm
           fields={headerFields}
           header={header}
           onChange={updateHeader}
+          onPatch={patchHeader}
           lang={uiLang}
-          customerRows={customerRows}
-          onCustomerSelect={handleCustomerSelect}
+          ui={uiConfig}
+          comboData={comboData}
         />
       )}
 
@@ -692,13 +642,9 @@ export default function CsmLineItemsEditor({
         extra={
           columns.length === 0 ? (
             <Text type="danger" style={{ fontSize: 12 }}>
-              Chưa cấu hình line_items_columns
+              Chưa có cột sản phẩm
             </Text>
-          ) : (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Công thức cột auto-calc đọc từ config — không cần sửa code khi thay đổi
-            </Text>
-          )
+          ) : undefined
         }
       >
         {groups.map((group, gIdx) => (
@@ -710,6 +656,7 @@ export default function CsmLineItemsEditor({
             groupCfg={groupCfg}
             calc={calc}
             lang={uiLang}
+            subtotalTemplate={groupCfg.subtotal_label}
             onUpdateGroup={updateGroup}
             onUpdateItem={updateItem}
             onAddItem={addItem}

@@ -23,7 +23,7 @@ import {
 	resolveLineItemsListColumns,
 } from "./line-items-storage";
 import { resolveTriLangLabel } from "./line-items-label";
-import { newGroup } from "./utils";
+import { newGroup, formatNgay } from "./utils";
 
 const { Text } = Typography;
 
@@ -51,10 +51,14 @@ function resolvePkFields(config: LineItemsEditorConfig): string[] {
 }
 
 function emptyDraft(config: LineItemsEditorConfig): { header: OrderHeader; groups: ProductGroup[] } {
-	const header: OrderHeader = {};
+	const header: OrderHeader = { ngay: formatNgay(new Date()) };
+	for (const [key, val] of Object.entries(config.line_items_create_defaults ?? {})) {
+		if (val != null && val !== "") header[key] = val;
+	}
 	for (const field of config.table ?? []) {
 		const name = String(field?.f_name ?? "").trim();
-		if (!name) continue;
+		if (!name || name === "ngay") continue;
+		if (header[name] != null && header[name] !== "") continue;
 		if (field?.f_default != null && field.f_default !== "") {
 			header[name] = field.f_default;
 		}
@@ -65,6 +69,16 @@ function emptyDraft(config: LineItemsEditorConfig): { header: OrderHeader; group
 	};
 }
 
+function applyListFilter(
+	rows: Record<string, any>[],
+	filter?: { field?: string; values?: string[] },
+): Record<string, any>[] {
+	const field = String(filter?.field ?? "").trim();
+	const values = (filter?.values ?? []).map(v => String(v)).filter(Boolean);
+	if (!field || values.length === 0) return rows;
+	return rows.filter(row => values.includes(String(row?.[field] ?? "")));
+}
+
 export default function CsmLineItemsPage({
 	appId,
 	menuId,
@@ -73,6 +87,12 @@ export default function CsmLineItemsPage({
 	onDataChange,
 }: CsmLineItemsPageProps) {
 	const { i18n } = useTranslation();
+	const ui = m_configs.line_items_ui ?? {};
+	const menuLabel = resolveTriLangLabel(m_configs, i18n.language, ["label"]) || "Quản lý đơn hàng";
+	const backLabel = resolveTriLangLabel(ui, i18n.language, ["back_label"]) || "← Danh sách";
+	const createLabel = resolveTriLangLabel(ui, i18n.language, ["create_label"]) || "Tạo mới";
+	const editLabel = resolveTriLangLabel(ui, i18n.language, ["edit_label"]) || "Chỉnh sửa";
+	const listTitle = resolveTriLangLabel(ui, i18n.language, ["list_title"]) || menuLabel;
 	const tableName = String(m_configs.table_name || "").trim();
 	const pkFields = useMemo(() => resolvePkFields(m_configs), [m_configs]);
 	const listColumns = useMemo(() => resolveLineItemsListColumns(m_configs), [m_configs]);
@@ -98,13 +118,13 @@ export default function CsmLineItemsPage({
 				if (Array.isArray((response as any)?.result?.list)) return (response as any).result.list;
 				return [];
 			})();
-			setRows(nextRows);
+			setRows(applyListFilter(nextRows, m_configs.line_items_list_filter));
 		} catch (error: any) {
 			message.error(error?.message || "Không tải được danh sách");
 		} finally {
 			setLoading(false);
 		}
-	}, [appId, tableName]);
+	}, [appId, tableName, m_configs.line_items_list_filter]);
 
 	useEffect(() => {
 		loadRows();
@@ -253,7 +273,7 @@ export default function CsmLineItemsPage({
 	if (!tableName) {
 		return (
 			<Card>
-				<Empty description="Menu type_form=7 cần cấu hình table_name và line_items_columns" />
+				<Empty description="Chưa cấu hình bảng dữ liệu cho menu này" />
 			</Card>
 		);
 	}
@@ -261,7 +281,7 @@ export default function CsmLineItemsPage({
 	if (!Array.isArray(m_configs.line_items_columns) || m_configs.line_items_columns.length === 0) {
 		return (
 			<Card>
-				<Empty description="Chưa cấu hình line_items_columns trong menu config" />
+				<Empty description="Chưa cấu hình cột sản phẩm" />
 			</Card>
 		);
 	}
@@ -270,10 +290,10 @@ export default function CsmLineItemsPage({
 		return (
 			<div style={{ padding: 12 }}>
 				<Space style={{ marginBottom: 12 }}>
-					<Button onClick={closeEditor}>← Danh sách</Button>
+					<Button onClick={closeEditor}>{backLabel}</Button>
 					<Text type="secondary">
-						{activeRow ? "Chỉnh sửa" : "Tạo mới"}
-						{menuId ? ` · menu ${menuId}` : ""}
+						{activeRow ? editLabel : createLabel}
+						{menuLabel ? ` · ${menuLabel}` : ""}
 					</Text>
 				</Space>
 				<Spin spinning={saving}>
@@ -285,6 +305,9 @@ export default function CsmLineItemsPage({
 						appId={appId}
 						decrypt={decrypt}
 						initialValue={draft}
+						existingRows={rows}
+						recordPk={activeRow ? String(activeRow[pkFields[0]] ?? activeRow.id ?? "") : undefined}
+						pkField={pkFields[0] || "id"}
 						onSave={handleSave}
 					/>
 				</Spin>
@@ -296,7 +319,7 @@ export default function CsmLineItemsPage({
 		<div style={{ padding: 12 }}>
 			<Card
 				size="small"
-				title={String(m_configs.label || "Quản lý đơn hàng")}
+				title={listTitle}
 				extra={(
 					<Space>
 						<Button icon={<ReloadOutlined />} onClick={loadRows} loading={loading}>

@@ -9,6 +9,7 @@
  *
  * Thay đổi công thức = sửa "formula" trong line_items_columns → không sửa code.
  * Thêm tài liệu in = thêm phần tử vào line_items_print + thêm trigger key.
+ * Menu bán hàng PM.docx: pm_bao_gia | pm_lsx_nb | pm_lsx_pxk (lọc giai_doan).
  * Thêm loại VAT = sửa vat_options trong line_items_group.
  */
 
@@ -118,6 +119,9 @@ function buildItemsTable(groups: any[], utils: any, opts: boolean | ItemsTableOp
 }
 
 function buildTotals(calc: any, utils: any): string {
+  if (typeof utils.buildTotalsHtml === "function") {
+    return utils.buildTotalsHtml(calc, utils);
+  }
   const { fmtVND, soThanhChu } = utils;
   const { totals } = calc;
   const bangChu = soThanhChu(totals.D ?? 0);
@@ -262,56 +266,69 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
   table_name: "pm_orders",
   line_items_data_field: "payload_json",
   line_items_list: [
-    { field: "so_bao_gia", label: "Số báo giá", width: 130 },
-    { field: "so_lenh", label: "Số lệnh SX", width: 130 },
     { field: "ngay", label: "Ngày lập", width: 110 },
+    { field: "so_bao_gia", label: "Số báo giá", width: 130 },
     { field: "khach_hang", label: "Khách hàng", width: 220 },
+    { field: "giai_doan", label: "Giai đoạn", width: 120 },
+    { field: "trang_thai_bg", label: "Trạng thái BG", width: 130 },
+    { field: "so_lenh", label: "Số lệnh SX", width: 110 },
     { field: "nvkd", label: "NVKD", width: 160 },
   ],
   struct: { fieldsPK: ["id"] },
   // ── Header fields (m_configs.table format) ──
   table: [
-    { f_name: "giai_doan",     f_header: "Giai đoạn",         f_header_en: "Stage",              f_header_zh: "阶段",
-      f_types: "select", f_show: 1, f_stt: 0, f_width_col: 8,
-      f_options: "nhap:Nháp|bao_gia:Báo giá|lenh_sx_nb:Lệnh SX nội bộ|lenh_sx_pxk:Lệnh SX + PXK|xuong:Đã gửi xưởng" },
-    { f_name: "trang_thai_bg", f_header: "Trạng thái BG",     f_header_en: "Quote status",       f_header_zh: "报价状态",
-      f_types: "select", f_show: 1, f_stt: 1, f_width_col: 8,
-      f_options: "nhap:Nháp|da_gui:Đã gửi|thuong_luong:Đang thương lượng|da_chot:Đã chốt|khong_chot:Không chốt" },
-    { f_name: "phien_ban",     f_header: "Phiên bản",         f_header_en: "Revision",           f_header_zh: "版本",
-      f_types: "text",   f_show: 1, f_stt: 2, f_width_col: 4, f_placeholder: "E1" },
-    { f_name: "so_lenh",       f_header: "Số lệnh SX",       f_header_en: "Production order no.", f_header_zh: "生产令号",
-      f_types: "text",   f_show: 1, f_stt: 3,  f_width_col: 8, f_placeholder: "6508" },
-    { f_name: "so_bao_gia",    f_header: "Số báo giá",        f_header_en: "Quote no.",          f_header_zh: "报价单号",
-      f_types: "text",   f_show: 1, f_stt: 4,  f_width_col: 8, f_placeholder: "060626.01" },
     { f_name: "ngay",          f_header: "Ngày lập",          f_header_en: "Date",               f_header_zh: "日期",
-      f_types: "text",   f_show: 1, f_stt: 5,  f_width_col: 4, f_placeholder: "09/06/2026" },
+      f_types: "date",   f_show: 1, f_stt: 1,  f_width_col: 4, f_placeholder: "09/06/2026" },
+    { f_name: "so_bao_gia",    f_header: "Số báo giá",        f_header_en: "Quote no.",          f_header_zh: "报价单号",
+      f_types: "text",   f_show: 1, f_stt: 2,  f_width_col: 8, f_placeholder: "060626.01" },
     { f_name: "hieu_luc_den",  f_header: "Hiệu lực đến",      f_header_en: "Valid until",        f_header_zh: "有效期至",
-      f_types: "text",   f_show: 1, f_stt: 6,  f_width_col: 4, f_placeholder: "14/06/2026" },
+      f_types: "date",   f_show: 1, f_stt: 3,  f_width_col: 4, f_placeholder: "14/06/2026" },
     { f_name: "khach_hang_id", f_header: "Chọn khách hàng",   f_header_en: "Select customer",    f_header_zh: "选择客户",
-      f_types: "co",     f_show: 1, f_stt: 7,  f_width_col: 12,
+      f_types: "co",     f_show: 1, f_stt: 4,  f_width_col: 12,
       f_cbo_query: JSON.stringify({ query: [{ fields: ["id", "ten_kh"], obj_name: "tvp_khachhang", obj_where: "" }], options: [] }),
       f_grid: "pm_khachhang", f_grid_fields: "ten_kh->khach_hang,dia_chi->dia_chi_kh" },
     { f_name: "khach_hang",    f_header: "Tên khách hàng",    f_header_en: "Customer",           f_header_zh: "客户名称",
-      f_types: "text",   f_show: 1, f_stt: 8,  f_width_col: 12 },
+      f_types: "text",   f_show: 1, f_stt: 5,  f_width_col: 12 },
     { f_name: "dia_chi_kh",    f_header: "Địa chỉ KH",        f_header_en: "Customer address",   f_header_zh: "客户地址",
-      f_types: "text",   f_show: 1, f_stt: 9,  f_width_col: 12 },
+      f_types: "text",   f_show: 1, f_stt: 6,  f_width_col: 12 },
     { f_name: "nguoi_lien_he", f_header: "Người mua hàng – SĐT", f_header_en: "Buyer – phone", f_header_zh: "采购人–电话",
-      f_types: "text",   f_show: 1, f_stt: 10, f_width_col: 12, f_placeholder: "Mr Thành - 0982476556" },
+      f_types: "text",   f_show: 1, f_stt: 7, f_width_col: 12, f_placeholder: "Mr Thành - 0982476556" },
     { f_name: "nvkd",          f_header: "NV bán hàng – SĐT", f_header_en: "Sales rep. – phone", f_header_zh: "销售–电话",
-      f_types: "text",   f_show: 1, f_stt: 11, f_width_col: 12, f_placeholder: "Mr Long - 0978349917" },
+      f_types: "text",   f_show: 1, f_stt: 8, f_width_col: 12, f_placeholder: "Mr Long - 0978349917" },
     { f_name: "phi_vc",        f_header: "Vận chuyển",        f_header_en: "Shipping",           f_header_zh: "运输",
-      f_types: "select", f_show: 1, f_stt: 12, f_width_col: 10,
-      f_options: "chua:Giá chưa bao gồm vận chuyển|da:Giá đã bao gồm vận chuyển" },
-    // Delivery fields (dùng cho Lệnh SX)
-    { f_name: "ngay_nghiem_thu", f_header: "Ngày nghiệm thu",   f_types: "text",   f_show: 1, f_stt: 20, f_width_col: 8 },
-    { f_name: "thoi_gian_giao",  f_header: "Thời gian giao",    f_types: "text",   f_show: 1, f_stt: 21, f_width_col: 8 },
-    { f_name: "nguoi_nhan",      f_header: "Người nhận hàng",   f_types: "text",   f_show: 1, f_stt: 22, f_width_col: 8 },
-    { f_name: "dia_diem_giao",   f_header: "Địa điểm giao",     f_types: "text",   f_show: 1, f_stt: 23, f_width_col: 16 },
-    { f_name: "van_chuyen_nd",   f_header: "Vận chuyển (chi tiết)", f_types: "text", f_show: 1, f_stt: 24, f_width_col: 12 },
-    { f_name: "thong_tin_sp",    f_header: "Thông tin sản phẩm", f_types: "text",  f_show: 1, f_stt: 25, f_width_col: 12 },
-    { f_name: "phieu_giao",      f_header: "Phiếu giao",         f_types: "text",  f_show: 1, f_stt: 26, f_width_col: 12 },
-    { f_name: "thanh_toan_nd",   f_header: "Thanh toán",         f_types: "text",  f_show: 1, f_stt: 27, f_width_col: 12 },
-    { f_name: "ghi_chu_giao",    f_header: "Ghi chú giao hàng",  f_types: "textarea", f_show: 1, f_stt: 28, f_width_col: 24 },
+      f_types: "co", f_show: 1, f_stt: 9, f_width_col: 10,
+      f_cbo_query: JSON.stringify({ query: [], options: [
+        { ma: "chua", ten: "Giá chưa bao gồm vận chuyển" },
+        { ma: "da", ten: "Giá đã bao gồm vận chuyển" },
+      ] }) },
+    { f_name: "giai_doan",     f_header: "Giai đoạn",         f_header_en: "Stage",              f_header_zh: "阶段",
+      f_types: "co", f_show: 1, f_stt: 10, f_width_col: 8,
+      f_cbo_query: JSON.stringify({ query: [], options: [
+        { ma: "nhap", ten: "Nháp" }, { ma: "bao_gia", ten: "Báo giá" },
+        { ma: "lenh_sx_nb", ten: "Lệnh SX nội bộ" }, { ma: "lenh_sx_pxk", ten: "Lệnh SX + PXK" },
+        { ma: "xuong", ten: "Đã gửi xưởng" },
+      ] }) },
+    { f_name: "trang_thai_bg", f_header: "Trạng thái BG",     f_header_en: "Quote status",       f_header_zh: "报价状态",
+      f_types: "co", f_show: 1, f_stt: 11, f_width_col: 8,
+      f_cbo_query: JSON.stringify({ query: [], options: [
+        { ma: "nhap", ten: "Nháp" }, { ma: "da_gui", ten: "Đã gửi" },
+        { ma: "thuong_luong", ten: "Đang thương lượng" }, { ma: "da_chot", ten: "Đã chốt" },
+        { ma: "khong_chot", ten: "Không chốt" },
+      ] }) },
+    { f_name: "phien_ban",     f_header: "Phiên bản",         f_header_en: "Revision",           f_header_zh: "版本",
+      f_types: "text",   f_show: 1, f_stt: 12, f_width_col: 4, f_placeholder: "E1" },
+    { f_name: "so_lenh",       f_header: "Số lệnh SX",       f_header_en: "Production order no.", f_header_zh: "生产令号",
+      f_types: "text",   f_show: 1, f_stt: 13,  f_width_col: 8, f_placeholder: "6508" },
+    // Điều kiện giao hàng LSXNB (chi tiết)
+    { f_name: "ngay_nghiem_thu", f_header: "Ngày nghiệm thu",   f_types: "date",   f_show: 1, f_stt: 30, f_width_col: 8 },
+    { f_name: "van_chuyen_nd",   f_header: "Vận chuyển (chi tiết)", f_types: "text", f_show: 1, f_stt: 31, f_width_col: 12 },
+    { f_name: "thong_tin_sp",    f_header: "Thông tin sản phẩm", f_types: "text",  f_show: 1, f_stt: 32, f_width_col: 12 },
+    { f_name: "phieu_giao",      f_header: "Phiếu giao",         f_types: "text",  f_show: 1, f_stt: 33, f_width_col: 12 },
+    { f_name: "thoi_gian_giao",  f_header: "Thời gian giao",    f_types: "text",   f_show: 1, f_stt: 34, f_width_col: 8 },
+    { f_name: "nguoi_nhan",      f_header: "Người nhận hàng",   f_types: "text",   f_show: 1, f_stt: 35, f_width_col: 8 },
+    { f_name: "dia_diem_giao",   f_header: "Địa điểm giao",     f_types: "text",   f_show: 1, f_stt: 36, f_width_col: 16 },
+    { f_name: "thanh_toan_nd",   f_header: "Thanh toán",         f_types: "text",  f_show: 1, f_stt: 37, f_width_col: 12 },
+    { f_name: "ghi_chu_giao",    f_header: "Ghi chú giao hàng",  f_types: "textarea", f_show: 1, f_stt: 38, f_width_col: 24 },
   ],
 
   // ── Line item columns ──
@@ -345,6 +362,39 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
     vat_field:   "vat_rate",
     vat_default: 10,
     vat_options: [{ value: 8, label: "VAT 8%" }, { value: 10, label: "VAT 10%" }],
+    subtotal_label: "Cộng nhóm {{group}} - chưa VAT {{vat}}%",
+  },
+
+  line_items_ui: {
+    header_title: "Thông tin đơn hàng",
+    list_title: "Báo giá | LSXNB | LSX-PXK",
+    create_label: "Tạo mới",
+    edit_label: "Chỉnh sửa",
+    back_label: "← Danh sách",
+    field_sections: [
+      {
+        key: "bg",
+        label: "Báo giá — thông tin chung",
+        fields: [
+          "ngay", "so_bao_gia", "hieu_luc_den",
+          "khach_hang_id", "khach_hang", "dia_chi_kh",
+          "nguoi_lien_he", "nvkd", "phi_vc",
+        ],
+      },
+      {
+        key: "flow",
+        label: "Quy trình BG → LSXNB → LSX-PXK",
+        fields: ["giai_doan", "trang_thai_bg", "phien_ban", "so_lenh"],
+      },
+      {
+        key: "lsx",
+        label: "LSX nội bộ — điều kiện giao hàng",
+        fields: [
+          "ngay_nghiem_thu", "van_chuyen_nd", "thong_tin_sp", "phieu_giao",
+          "thoi_gian_giao", "nguoi_nhan", "dia_diem_giao", "thanh_toan_nd", "ghi_chu_giao",
+        ],
+      },
+    ],
   },
 
   // ── Totals ──
@@ -352,7 +402,7 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
     { key: "A", label: "Tổng giá trị hàng hóa chưa VAT",         formula: "groupSum" },
     { key: "B", label: "Tiền VAT 8%",                             formula: "vatSum(8) * 0.08" },
     { key: "C", label: "Tiền VAT 10%",                            formula: "vatSum(10) * 0.10" },
-    { key: "D", label: "Tổng giá trị thanh toán (A+B+C)",         formula: "A + B + C", highlight: true, show_words: true },
+    { key: "D", label: "Tổng giá trị thanh toán, đã bao gồm VAT (A+B+C)", formula: "A + B + C", highlight: true, show_words: true },
   ],
 
   // ── Print buttons ──

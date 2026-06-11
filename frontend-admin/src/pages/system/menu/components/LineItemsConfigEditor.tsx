@@ -8,7 +8,7 @@ import { useTranslation } from "react-i18next";
 
 import type {
 	LiColumnDef, LiGroupConfig, LiPrintConfig, LiTotalConfig,
-	LineItemsEditorConfig, LineItemsListColumn,
+	LineItemsEditorConfig, LineItemsListColumn, LineItemsUiConfig,
 } from "#src/components/production-order/types";
 import { PHUSON_PANEL_CONFIG } from "#src/components/production-order/defaultConfig";
 import { ensureTriLangLabels } from "#src/components/production-order/line-items-label";
@@ -70,6 +70,9 @@ export default function LineItemsConfigEditor({
 	const [colModalOpen, setColModalOpen] = useState(false);
 	const [colEditing, setColEditing] = useState<LiColumnDef | null>(null);
 	const [colForm] = Form.useForm();
+	const [totalModalOpen, setTotalModalOpen] = useState(false);
+	const [totalEditingIdx, setTotalEditingIdx] = useState<number | null>(null);
+	const [totalForm] = Form.useForm();
 
 	const patch = useCallback((partial: Partial<LineItemsEditorConfig>) => {
 		onChange?.({ ...value, ...partial });
@@ -130,6 +133,27 @@ export default function LineItemsConfigEditor({
 		setColEditing(null);
 	};
 
+	const openTotalEditor = (idx?: number) => {
+		const rows = value.line_items_totals ?? [];
+		const record = idx != null ? rows[idx] : newTotalCfg();
+		setTotalEditingIdx(idx ?? null);
+		totalForm.setFieldsValue(record);
+		setTotalModalOpen(true);
+	};
+
+	const saveTotal = async () => {
+		const raw = await totalForm.validateFields();
+		const saved = ensureTriLangLabels(raw, "label") as LiTotalConfig;
+		const rows = [...(value.line_items_totals ?? [])];
+		if (totalEditingIdx != null && totalEditingIdx >= 0) rows[totalEditingIdx] = saved;
+		else rows.push(saved);
+		patch({ line_items_totals: rows });
+		setTotalModalOpen(false);
+		setTotalEditingIdx(null);
+	};
+
+	const uiCfg: LineItemsUiConfig = value.line_items_ui ?? {};
+
 	const groupCfg: LiGroupConfig = value.line_items_group ?? {};
 
 	return (
@@ -140,7 +164,7 @@ export default function LineItemsConfigEditor({
 				message={t("system.menu.lineItemsConfigHintTitle", "Form dòng hàng + in PDF (type_form=7)")}
 				description={t(
 					"system.menu.lineItemsConfigHintDesc",
-					"Cấu hình header ở tab Trường bảng (f_header / f_header_en / f_header_zh). HTML in PDF khai báo trigger_key ở tab Trigger.",
+					"Tab Trường bảng: f_types (ed/co/memo/nummeric/price/date…) + f_width_col. Combo co: f_cbo_query JSON + f_grid_fields dạng ten_kh->khach_hang. Tab Dòng tổng: công thức A–D dùng chung form + in PDF (utils.buildTotalsHtml). Tab Trigger: HTML in.",
 				)}
 			/>
 
@@ -197,6 +221,15 @@ export default function LineItemsConfigEditor({
 									</Form.Item>
 								</Col>
 							</Row>
+							<Form.Item label={t("system.menu.lineItemsSubtotalLabel", "Mẫu dòng cộng nhóm")}>
+								<Input
+									value={groupCfg.subtotal_label ?? "Cộng nhóm {{group}} – chưa VAT {{vat}}%"}
+									onChange={e => patch({
+										line_items_group: { ...groupCfg, subtotal_label: e.target.value },
+									})}
+									placeholder="Cộng nhóm {{group}} – chưa VAT {{vat}}%"
+								/>
+							</Form.Item>
 						</Form>
 					</Card>
 				</Col>
@@ -356,12 +389,17 @@ export default function LineItemsConfigEditor({
 						label: t("system.menu.lineItemsTabTotals", "Dòng tổng"),
 						children: (
 							<>
+								<Alert
+									type="info"
+									showIcon
+									style={{ marginBottom: 12 }}
+									message={t("system.menu.lineItemsTotalsFormulaHint", "Công thức dòng tổng")}
+									description="Biến: groupSum, vatSum(8), vatSum(10), A, B, C… (tham chiếu dòng trên). VD: vatSum(8)*0.08, A+B+C. Form nhập và phiếu in dùng chung line_items_totals."
+								/>
 								<Button
 									type="dashed"
 									icon={<PlusOutlined />}
-									onClick={() => patch({
-										line_items_totals: [...(value.line_items_totals ?? []), newTotalCfg()],
-									})}
+									onClick={() => openTotalEditor()}
 									style={{ marginBottom: 12 }}
 								>
 									{t("system.menu.lineItemsAddTotal", "Thêm dòng tổng")}
@@ -380,34 +418,90 @@ export default function LineItemsConfigEditor({
 										{
 											title: "highlight",
 											dataIndex: "highlight",
-											render: (v, _, idx) => (
-												<Switch
-													checked={Boolean(v)}
-													onChange={checked => {
-														const rows = [...(value.line_items_totals ?? [])];
-														rows[idx] = { ...rows[idx], highlight: checked };
-														patch({ line_items_totals: rows });
-													}}
-												/>
-											),
+											render: (v) => (v ? "✓" : ""),
 										},
 										{
-											title: "",
-											width: 48,
+											title: "words",
+											dataIndex: "show_words",
+											render: (v) => (v ? "✓" : ""),
+										},
+										{
+											title: t("common.action", "Thao tác"),
+											width: 100,
 											render: (_, __, idx) => (
-												<Button
-													type="text"
-													danger
-													icon={<DeleteOutlined />}
-													onClick={() => patch({
-														line_items_totals: (value.line_items_totals ?? []).filter((_, i) => i !== idx),
-													})}
-												/>
+												<Space>
+													<Button type="link" size="small" icon={<EditOutlined />} onClick={() => openTotalEditor(idx)} />
+													<Button
+														type="link"
+														size="small"
+														danger
+														icon={<DeleteOutlined />}
+														onClick={() => patch({
+															line_items_totals: (value.line_items_totals ?? []).filter((_, i) => i !== idx),
+														})}
+													/>
+												</Space>
 											),
 										},
 									]}
 								/>
 							</>
+						),
+					},
+					{
+						key: "ui",
+						label: t("system.menu.lineItemsTabUi", "Nhãn form"),
+						children: (
+							<Card size="small" title={t("system.menu.lineItemsUiTitle", "Nhãn giao diện runtime")}>
+								<Alert
+									type="info"
+									showIcon
+									style={{ marginBottom: 12 }}
+									message={t("system.menu.lineItemsUiHint", "Tuỳ chọn — để trống dùng mặc định theo ngôn ngữ UI")}
+								/>
+								<Form layout="vertical">
+									{([
+										["header_title", "Tiêu đề block header"],
+										["list_title", "Tiêu đề danh sách"],
+										["create_label", "Nhãn tạo mới"],
+										["edit_label", "Nhãn chỉnh sửa"],
+										["back_label", "Nút quay danh sách"],
+									] as const).map(([key, hint]) => (
+										<Row gutter={12} key={key}>
+											<Col span={8}>
+												<Form.Item label={`${hint} (VI)`}>
+													<Input
+														value={(uiCfg as any)[key] ?? ""}
+														onChange={e => patch({
+															line_items_ui: { ...uiCfg, [key]: e.target.value },
+														})}
+													/>
+												</Form.Item>
+											</Col>
+											<Col span={8}>
+												<Form.Item label={`${hint} (EN)`}>
+													<Input
+														value={(uiCfg as any)[`${key}_en`] ?? ""}
+														onChange={e => patch({
+															line_items_ui: { ...uiCfg, [`${key}_en`]: e.target.value },
+														})}
+													/>
+												</Form.Item>
+											</Col>
+											<Col span={8}>
+												<Form.Item label={`${hint} (ZH)`}>
+													<Input
+														value={(uiCfg as any)[`${key}_zh`] ?? ""}
+														onChange={e => patch({
+															line_items_ui: { ...uiCfg, [`${key}_zh`]: e.target.value },
+														})}
+													/>
+												</Form.Item>
+											</Col>
+										</Row>
+									))}
+								</Form>
+							</Card>
 						),
 					},
 					{
@@ -528,6 +622,61 @@ export default function LineItemsConfigEditor({
 							{ value: "right", label: "right" },
 						]} />
 					</Form.Item>
+				</Form>
+			</Modal>
+
+			<Modal
+				open={totalModalOpen}
+				title={totalEditingIdx != null
+					? t("system.menu.lineItemsEditTotal", "Sửa dòng tổng")
+					: t("system.menu.lineItemsAddTotal", "Thêm dòng tổng")}
+				onCancel={() => setTotalModalOpen(false)}
+				onOk={saveTotal}
+				width={640}
+				destroyOnClose
+			>
+				<Form form={totalForm} layout="vertical">
+					<Row gutter={12}>
+						<Col span={8}>
+							<Form.Item name="key" label="key" rules={[{ required: true }]}>
+								<Input placeholder="A" />
+							</Form.Item>
+						</Col>
+						<Col span={16}>
+							<Form.Item name="formula" label="formula" rules={[{ required: true }]}>
+								<Input placeholder="groupSum | vatSum(8)*0.08 | A+B+C" />
+							</Form.Item>
+						</Col>
+					</Row>
+					<Row gutter={12}>
+						<Col span={8}>
+							<Form.Item name="label" label="VI" rules={[{ required: true }]}>
+								<Input />
+							</Form.Item>
+						</Col>
+						<Col span={8}>
+							<Form.Item name="label_en" label="EN">
+								<Input />
+							</Form.Item>
+						</Col>
+						<Col span={8}>
+							<Form.Item name="label_zh" label="ZH">
+								<Input />
+							</Form.Item>
+						</Col>
+					</Row>
+					<Row gutter={12}>
+						<Col span={12}>
+							<Form.Item name="highlight" label="highlight" valuePropName="checked">
+								<Switch />
+							</Form.Item>
+						</Col>
+						<Col span={12}>
+							<Form.Item name="show_words" label="show_words (Bằng chữ)" valuePropName="checked">
+								<Switch />
+							</Form.Item>
+						</Col>
+					</Row>
 				</Form>
 			</Modal>
 		</div>

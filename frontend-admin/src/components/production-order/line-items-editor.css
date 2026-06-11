@@ -1,0 +1,10 @@
+/** Accent rows (Cộng nhóm, tổng D) — dùng token Ant Design, hỗ trợ dark mode. */
+.ant-table-wrapper .ant-table-summary > tr.csm-li-accent-summary > .ant-table-cell {
+  background: var(--ant-color-primary-bg) !important;
+  color: var(--ant-color-text) !important;
+  font-weight: 600;
+}
+
+.ant-table-wrapper .ant-table-summary > tr.csm-li-accent-summary > .ant-table-cell .ant-typography {
+  color: inherit !important;
+}

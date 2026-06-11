@@ -15,6 +15,8 @@ import {
   newItem, newGroup, defaultOrder,
 } from "./utils";
 import { buildBaoGiaHtml, buildLenhSXHtml, buildPXKHtml } from "./printTemplates";
+import { useLineItemsTheme } from "./line-items-theme";
+import "./line-items-editor.css";
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -159,6 +161,7 @@ const GroupSection = React.memo(function GroupSection({
   group, gIdx, calc,
   onUpdateGroup, onAddItem, onRemoveItem, onUpdateItem, onRemoveGroup,
 }: GroupSectionProps) {
+  const { inheritText, groupCard, groupTitle } = useLineItemsTheme();
   const label = groupLabel(gIdx);
   const gc = calc.groups[group.id];
 
@@ -168,37 +171,37 @@ const GroupSection = React.memo(function GroupSection({
   );
 
   const summary = useCallback(() => (
-    <Table.Summary.Row style={{ background: "#f0f5ff" }}>
+    <Table.Summary.Row className="csm-li-accent-summary">
       <Table.Summary.Cell index={0} colSpan={2} align="left">
-        <Text strong>Cộng nhóm {label} – chưa VAT {group.vat_rate}%</Text>
+        <Text strong style={inheritText}>Cộng nhóm {label} – chưa VAT {group.vat_rate}%</Text>
       </Table.Summary.Cell>
       <Table.Summary.Cell index={2} />
       <Table.Summary.Cell index={3} />
       <Table.Summary.Cell index={4} />
       <Table.Summary.Cell index={5} align="right">
-        <Text strong>{gc ? gc.so_tam : 0}</Text>
+        <Text strong style={inheritText}>{gc ? gc.so_tam : 0}</Text>
       </Table.Summary.Cell>
       <Table.Summary.Cell index={6} align="right">
-        <Text strong>{gc ? fmtNum(gc.khoi_luong) : 0}</Text>
+        <Text strong style={inheritText}>{gc ? fmtNum(gc.khoi_luong) : 0}</Text>
       </Table.Summary.Cell>
       <Table.Summary.Cell index={7} align="right">
-        <Text>{gc?.uniform_don_gia != null ? fmtVND(gc.uniform_don_gia) : ""}</Text>
+        <Text style={inheritText}>{gc?.uniform_don_gia != null ? fmtVND(gc.uniform_don_gia) : ""}</Text>
       </Table.Summary.Cell>
       <Table.Summary.Cell index={8} align="right">
-        <Text strong>{gc ? fmtVND(gc.thanh_tien) : 0}</Text>
+        <Text strong style={inheritText}>{gc ? fmtVND(gc.thanh_tien) : 0}</Text>
       </Table.Summary.Cell>
       <Table.Summary.Cell index={9} />
     </Table.Summary.Row>
-  ), [gc, group.vat_rate, label]);
+  ), [gc, group.vat_rate, label, inheritText]);
 
   return (
     <Card
       size="small"
-      style={{ marginBottom: 16, borderLeft: "4px solid #1677ff" }}
+      style={groupCard}
       styles={{ body: { paddingTop: 8 } }}
       title={
         <Space>
-          <Text strong style={{ fontSize: 14, color: "#1677ff" }}>{label}.</Text>
+          <Text strong style={groupTitle}>{label}.</Text>
           <Select
             size="small"
             value={group.vat_rate}
@@ -252,11 +255,13 @@ const GroupSection = React.memo(function GroupSection({
 // ─── Sub: Order totals display ────────────────────────────────────────────────
 
 function OrderTotalsDisplay({ calc }: { calc: OrderCalc }) {
+  const { accentRow, accentCell, totalsTable, totalsWords, token } = useLineItemsTheme();
   const bangChu = useMemo(() => soThanhChu(calc.D), [calc.D]);
+  const normalCell = { padding: "3px 8px", fontWeight: 600, color: token.colorText } as const;
   return (
     <Row justify="end" style={{ marginTop: 8 }}>
       <Col>
-        <table style={{ borderCollapse: "collapse", minWidth: 340 }}>
+        <table style={{ ...totalsTable, minWidth: 340 }}>
           <tbody>
             {([
               ["A", "Tổng giá trị hàng hoá chưa VAT", calc.A],
@@ -264,21 +269,29 @@ function OrderTotalsDisplay({ calc }: { calc: OrderCalc }) {
               ["C", "Tiền VAT 10%", calc.C],
             ] as [string, string, number][]).map(([k, lbl, v]) => (
               <tr key={k}>
-                <td style={{ padding: "3px 8px", fontWeight: 600 }}>{k} – {lbl}:</td>
-                <td style={{ padding: "3px 8px", textAlign: "right", fontWeight: 600 }}>
+                <td style={normalCell}>{k} – {lbl}:</td>
+                <td style={{ ...normalCell, textAlign: "right" }}>
                   {fmtVND(v)} VNĐ
                 </td>
               </tr>
             ))}
-            <tr style={{ background: "#e6f4ff" }}>
-              <td style={{ padding: "4px 8px", fontWeight: 700 }}>D – Tổng thanh toán (A+B+C):</td>
-              <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700, fontSize: 15 }}>
+            <tr style={accentRow}>
+              <td style={{ ...accentCell, padding: "4px 8px", fontWeight: 700 }}>
+                D – Tổng thanh toán (A+B+C):
+              </td>
+              <td style={{
+                ...accentCell,
+                padding: "4px 8px",
+                textAlign: "right",
+                fontWeight: 700,
+                fontSize: 15,
+              }}>
                 {fmtVND(calc.D)} VNĐ
               </td>
             </tr>
           </tbody>
         </table>
-        <div style={{ marginTop: 6, fontStyle: "italic", color: "#555", maxWidth: 480 }}>
+        <div style={{ ...totalsWords, marginTop: 6, maxWidth: 480 }}>
           Bằng chữ: {bangChu}
         </div>
       </Col>

@@ -23,6 +23,44 @@ export interface LiGroupConfig {
   vat_default?: number;      // default VAT for new groups (default 10)
   vat_options?: Array<{ value: number; label: string }>;
   label_prefix?: string;     // "nhóm " → label = "nhóm I", etc.
+  /** Template dòng cộng nhóm: {{group}}, {{vat}} */
+  subtotal_label?: string;
+}
+
+/** Nhãn UI runtime — cấu hình trong menu designer tab Dòng hàng */
+/** Lọc danh sách theo giá trị field header (vd. giai_doan) */
+export interface LineItemsListFilter {
+  field: string;
+  /** Giá trị được hiển thị; bỏ trống = không lọc */
+  values?: string[];
+}
+
+export interface LineItemsUiConfig {
+  header_title?: string;
+  header_title_en?: string;
+  header_title_zh?: string;
+  create_label?: string;
+  create_label_en?: string;
+  create_label_zh?: string;
+  edit_label?: string;
+  edit_label_en?: string;
+  edit_label_zh?: string;
+  back_label?: string;
+  back_label_en?: string;
+  back_label_zh?: string;
+  list_title?: string;
+  list_title_en?: string;
+  list_title_zh?: string;
+  /** Nhóm field header theo thứ tự tổng hợp → chi tiết */
+  field_sections?: LiFieldSection[];
+}
+
+export interface LiFieldSection {
+  key: string;
+  label?: string;
+  label_en?: string;
+  label_zh?: string;
+  fields: string[];
 }
 
 // ─── Totals config (stored in m_configs.line_items_totals) ────────────────────
@@ -96,6 +134,12 @@ export interface LineItemsEditorConfig {
   line_items_totals?: LiTotalConfig[];
   /** Print buttons */
   line_items_print?: LiPrintConfig[];
+  /** Nhãn form / danh sách (tuỳ chọn — mặc định theo i18n) */
+  line_items_ui?: LineItemsUiConfig;
+  /** Lọc danh sách + gán mặc định khi tạo mới */
+  line_items_list_filter?: LineItemsListFilter;
+  /** Giá trị mặc định field header khi tạo mới (vd. giai_doan) */
+  line_items_create_defaults?: Record<string, string>;
   /**
    * JS function bodies, possibly encrypted.
    * Keys match line_items_print[i].trigger_key.

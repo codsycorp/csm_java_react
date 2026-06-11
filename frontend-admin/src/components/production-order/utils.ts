@@ -1,7 +1,9 @@
 import type {
   LiColumnDef, LiTotalConfig, LineItem,
   ProductGroup, GroupCalcResult, EditorCalcResult,
+  OrderHeader,
 } from "./types";
+import { resolveTriLangLabel } from "./line-items-label";
 
 // ─── Formula evaluation ───────────────────────────────────────────────────────
 
@@ -272,6 +274,38 @@ export function formatSoLenh(soLenh?: string, phienBan?: string): string {
   return s;
 }
 
+/** Định dạng ngày chuẩn DD/MM/YYYY. */
+export function formatNgay(date?: Date): string {
+  const d = date ?? new Date();
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}/${d.getFullYear()}`;
+}
+
+/** Kiểm tra và chuẩn hoá chuỗi ngày DD/MM/YYYY (từ chối ngày không hợp lệ). */
+export function normalizeNgayString(ngay?: string): string | null {
+  const m = String(ngay ?? "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+  const d = new Date(yyyy, mm - 1, dd);
+  if (d.getFullYear() !== yyyy || d.getMonth() !== mm - 1 || d.getDate() !== dd) return null;
+  return formatNgay(d);
+}
+
+export function isValidNgay(ngay?: string): boolean {
+  return normalizeNgayString(ngay) != null;
+}
+
+export function addDaysToNgay(ngay: string, days: number): string | null {
+  const norm = normalizeNgayString(ngay);
+  if (!norm) return null;
+  const d = parseNgayDate(norm)!;
+  d.setDate(d.getDate() + days);
+  return formatNgay(d);
+}
+
 /** Gợi ý số báo giá ddmmyy.01 theo ngày lập. */
 export function formatSoBaoGia(date?: Date, seq = 1): string {
   const d = date ?? new Date();
@@ -281,8 +315,146 @@ export function formatSoBaoGia(date?: Date, seq = 1): string {
   return `${dd}${mm}${yy}.${String(seq).padStart(2, "0")}`;
 }
 
+export function soBaoGiaPrefix(date: Date): string {
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const yy = String(date.getFullYear()).slice(-2);
+  return `${dd}${mm}${yy}`;
+}
+
+export function parseSoBaoGia(value?: string): { prefix: string; seq: number } | null {
+  const m = String(value ?? "").trim().match(/^(\d{6})\.(\d{1,2})$/);
+  if (!m) return null;
+  return { prefix: m[1], seq: Number(m[2]) };
+}
+
+/** Số báo giá kế tiếp trong cùng ngày (prefix ddmmyy), không trùng với rows hiện có. */
+export function nextSoBaoGia(
+  ngay: string,
+  rows: Record<string, any>[],
+  excludePk?: string,
+  pkField = "id",
+): string {
+  const norm = normalizeNgayString(ngay);
+  const d = norm ? parseNgayDate(norm) : undefined;
+  if (!d) return formatSoBaoGia(new Date(), 1);
+  const prefix = soBaoGiaPrefix(d);
+  let maxSeq = 0;
+  for (const row of rows) {
+    if (excludePk && String(row[pkField] ?? row.id ?? "") === excludePk) continue;
+    const parsed = parseSoBaoGia(String(row.so_bao_gia ?? ""));
+    if (parsed?.prefix === prefix) maxSeq = Math.max(maxSeq, parsed.seq);
+  }
+  return formatSoBaoGia(d, maxSeq + 1);
+}
+
+export function parseSoLenhBase(value?: string): number | null {
+  const s = String(value ?? "").trim();
+  if (!s) return null;
+  const m = s.match(/^(\d+)/);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Số lệnh SX kế tiếp: ưu tiên tăng trong cùng ngày; ngày mới thì max toàn hệ thống + 1.
+ */
+export function nextSoLenh(
+  ngay: string,
+  rows: Record<string, any>[],
+  excludePk?: string,
+  pkField = "id",
+): string {
+  const norm = normalizeNgayString(ngay);
+  let maxGlobal = 0;
+  let maxSameDay = 0;
+  for (const row of rows) {
+    if (excludePk && String(row[pkField] ?? row.id ?? "") === excludePk) continue;
+    const base = parseSoLenhBase(String(row.so_lenh ?? ""));
+    if (base == null) continue;
+    maxGlobal = Math.max(maxGlobal, base);
+    if (norm && normalizeNgayString(String(row.ngay ?? "")) === norm) {
+      maxSameDay = Math.max(maxSameDay, base);
+    }
+  }
+  const next = maxSameDay > 0 ? maxSameDay + 1 : (maxGlobal > 0 ? maxGlobal + 1 : 1);
+  return String(next);
+}
+
+export function buildAutoHeaderNumbers(
+  ngay: string,
+  rows: Record<string, any>[],
+  opts?: { excludePk?: string; pkField?: string },
+): { so_bao_gia: string; so_lenh: string; hieu_luc_den: string } {
+  const norm = normalizeNgayString(ngay) ?? formatNgay(new Date());
+  const pkField = opts?.pkField ?? "id";
+  return {
+    so_bao_gia: nextSoBaoGia(norm, rows, opts?.excludePk, pkField),
+    so_lenh: nextSoLenh(norm, rows, opts?.excludePk, pkField),
+    hieu_luc_den: addDaysToNgay(norm, 5) ?? "",
+  };
+}
+
+export function validateLineItemsHeader(
+  header: OrderHeader,
+  rows: Record<string, any>[],
+  headerFields: Record<string, any>[],
+  opts?: { excludePk?: string; pkField?: string },
+): { ok: boolean; message?: string } {
+  const pkField = opts?.pkField ?? "id";
+  const excludePk = opts?.excludePk;
+
+  for (const f of headerFields) {
+    const name = String(f.f_name ?? "").toLowerCase();
+    if (!name) continue;
+    const types = String(f.f_types ?? "ed").toLowerCase();
+    const val = header[name];
+    if (val == null || val === "") continue;
+    const isDate = types === "date" || types === "datetime"
+      || /ngay|date|hieu_luc|thoi_han/.test(name);
+    if (isDate && types !== "datetime") {
+      if (!isValidNgay(String(val))) {
+        const label = String(f.f_header ?? name);
+        return { ok: false, message: `"${label}" không hợp lệ (định dạng DD/MM/YYYY)` };
+      }
+    }
+  }
+
+  const ngay = String(header.ngay ?? "").trim();
+  if (ngay && !isValidNgay(ngay)) {
+    return { ok: false, message: "Ngày lập không hợp lệ (định dạng DD/MM/YYYY)" };
+  }
+
+  const soBg = String(header.so_bao_gia ?? "").trim();
+  if (soBg && !parseSoBaoGia(soBg)) {
+    return { ok: false, message: "Số báo giá không đúng định dạng (vd: 060626.01)" };
+  }
+  if (soBg) {
+    const dup = rows.find((row) => {
+      if (excludePk && String(row[pkField] ?? row.id ?? "") === excludePk) return false;
+      return String(row.so_bao_gia ?? "").trim() === soBg;
+    });
+    if (dup) return { ok: false, message: `Số báo giá "${soBg}" đã tồn tại` };
+  }
+
+  const soLenh = String(header.so_lenh ?? "").trim();
+  if (soLenh && parseSoLenhBase(soLenh) == null) {
+    return { ok: false, message: "Số lệnh SX phải là số (vd: 6508)" };
+  }
+  if (soLenh) {
+    const dup = rows.find((row) => {
+      if (excludePk && String(row[pkField] ?? row.id ?? "") === excludePk) return false;
+      return String(row.so_lenh ?? "").trim() === soLenh;
+    });
+    if (dup) return { ok: false, message: `Số lệnh SX "${soLenh}" đã tồn tại` };
+  }
+
+  return { ok: true };
+}
+
 export function parseNgayDate(ngay?: string): Date | undefined {
-  const m = String(ngay ?? "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  const norm = normalizeNgayString(ngay);
+  if (!norm) return undefined;
+  const m = norm.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!m) return undefined;
   return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
 }
@@ -301,16 +473,46 @@ export function parseNoteLines(text: string | undefined, fallback: string[]): st
   return lines.length ? lines : fallback;
 }
 
-export function buildPrintUtils(settings: Record<string, any> = {}) {
+/** HTML bảng tổng in PDF — đọc từ line_items_totals + calc.totals */
+export function buildTotalsHtml(
+  calc: EditorCalcResult,
+  totalConfigs: LiTotalConfig[],
+  utils: { fmtVND: typeof fmtVND; soThanhChu: typeof soThanhChu },
+  lang = "vi",
+): string {
+  if (!Array.isArray(totalConfigs) || totalConfigs.length === 0) return "";
+  const { fmtVND, soThanhChu } = utils;
+  let rows = "";
+  let wordsHtml = "";
+  for (const tc of totalConfigs) {
+    const v = calc.totals[tc.key] ?? 0;
+    const lbl = resolveTriLangLabel(tc, lang, ["label"]);
+    const rowClass = tc.highlight ? ' class="grand"' : "";
+    rows += `<tr${rowClass}><td class="lbl">${tc.key} &nbsp; ${lbl}:</td><td class="amt">${fmtVND(v)}</td></tr>`;
+    if (tc.show_words) {
+      wordsHtml = `<div class="bang-chu"><b>Bằng chữ:</b> ${soThanhChu(v)}</div>`;
+    }
+  }
+  return `<div class="tot-wrap"><table class="tot">${rows}</table></div>${wordsHtml}`;
+}
+
+export function buildPrintUtils(
+  settings: Record<string, any> = {},
+  opts?: { totalConfigs?: LiTotalConfig[]; lang?: string },
+) {
+  const totalConfigs = opts?.totalConfigs ?? [];
+  const lang = opts?.lang ?? "vi";
+  const base = { fmtVND, fmtNum, soThanhChu, groupLabel };
   return {
-    fmtVND,
-    fmtNum,
-    soThanhChu,
-    groupLabel,
+    ...base,
     settings,
+    totalConfigs,
+    lang,
     formatSoLenh,
     buildCompanyHdr,
     parseNoteLines,
+    buildTotalsHtml: (calc: EditorCalcResult, u: Record<string, any>) =>
+      buildTotalsHtml(calc, u.totalConfigs ?? totalConfigs, base, u.lang ?? lang),
   };
 }
 

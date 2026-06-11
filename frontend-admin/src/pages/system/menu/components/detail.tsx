@@ -143,6 +143,7 @@ function extractLineItemsConfig(data: Record<string, any>): Partial<LineItemsEdi
 		line_items_group: data.line_items_group,
 		line_items_totals: Array.isArray(data.line_items_totals) ? data.line_items_totals : undefined,
 		line_items_print: Array.isArray(data.line_items_print) ? data.line_items_print : undefined,
+		line_items_ui: data.line_items_ui,
 	};
 }
 
@@ -157,6 +158,7 @@ function mergeLineItemsConfigIntoPayload(
 	if (config.line_items_group !== undefined) payload.line_items_group = config.line_items_group;
 	if (config.line_items_totals !== undefined) payload.line_items_totals = config.line_items_totals;
 	if (config.line_items_print !== undefined) payload.line_items_print = config.line_items_print;
+	if (config.line_items_ui !== undefined) payload.line_items_ui = config.line_items_ui;
 }
 
 const UPLOAD_ENDPOINT = "/upload.shtml";
