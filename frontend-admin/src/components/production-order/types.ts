@@ -27,14 +27,13 @@ export interface LiGroupConfig {
   subtotal_label?: string;
 }
 
-/** Nhãn UI runtime — cấu hình trong menu designer tab Dòng hàng */
-/** Lọc danh sách theo giá trị field header (vd. giai_doan) */
+/** Lọc danh sách theo giai đoạn / trạng thái (menu Bán hàng tách BG | LSXNB | PXK) */
 export interface LineItemsListFilter {
   field: string;
-  /** Giá trị được hiển thị; bỏ trống = không lọc */
-  values?: string[];
+  values: string[];
 }
 
+/** Nhãn UI runtime — cấu hình trong menu designer tab Dòng hàng */
 export interface LineItemsUiConfig {
   header_title?: string;
   header_title_en?: string;
@@ -53,6 +52,12 @@ export interface LineItemsUiConfig {
   list_title_zh?: string;
   /** Nhóm field header theo thứ tự tổng hợp → chi tiết */
   field_sections?: LiFieldSection[];
+  /** Lọc hàng danh sách (AND giữa các filter) */
+  list_filter?: LineItemsListFilter[];
+  /** Giá trị header mặc định khi tạo mới (vd. giai_doan) */
+  default_header?: Record<string, any>;
+  /** Chỉ hiện nút in có trigger_key trong danh sách */
+  print_keys?: string[];
 }
 
 export interface LiFieldSection {
@@ -136,10 +141,6 @@ export interface LineItemsEditorConfig {
   line_items_print?: LiPrintConfig[];
   /** Nhãn form / danh sách (tuỳ chọn — mặc định theo i18n) */
   line_items_ui?: LineItemsUiConfig;
-  /** Lọc danh sách + gán mặc định khi tạo mới */
-  line_items_list_filter?: LineItemsListFilter;
-  /** Giá trị mặc định field header khi tạo mới (vd. giai_doan) */
-  line_items_create_defaults?: Record<string, string>;
   /**
    * JS function bodies, possibly encrypted.
    * Keys match line_items_print[i].trigger_key.

@@ -52,16 +52,16 @@ function resolvePkFields(config: LineItemsEditorConfig): string[] {
 
 function emptyDraft(config: LineItemsEditorConfig): { header: OrderHeader; groups: ProductGroup[] } {
 	const header: OrderHeader = { ngay: formatNgay(new Date()) };
-	for (const [key, val] of Object.entries(config.line_items_create_defaults ?? {})) {
-		if (val != null && val !== "") header[key] = val;
-	}
 	for (const field of config.table ?? []) {
 		const name = String(field?.f_name ?? "").trim();
 		if (!name || name === "ngay") continue;
-		if (header[name] != null && header[name] !== "") continue;
 		if (field?.f_default != null && field.f_default !== "") {
 			header[name] = field.f_default;
 		}
+	}
+	const uiDefaults = config.line_items_ui?.default_header;
+	if (uiDefaults && typeof uiDefaults === "object") {
+		Object.assign(header, uiDefaults);
 	}
 	return {
 		header,
@@ -69,14 +69,14 @@ function emptyDraft(config: LineItemsEditorConfig): { header: OrderHeader; group
 	};
 }
 
-function applyListFilter(
-	rows: Record<string, any>[],
-	filter?: { field?: string; values?: string[] },
-): Record<string, any>[] {
-	const field = String(filter?.field ?? "").trim();
-	const values = (filter?.values ?? []).map(v => String(v)).filter(Boolean);
-	if (!field || values.length === 0) return rows;
-	return rows.filter(row => values.includes(String(row?.[field] ?? "")));
+function rowMatchesListFilter(row: Record<string, any>, filters?: Array<{ field: string; values: string[] }>): boolean {
+	if (!filters?.length) return true;
+	return filters.every(f => {
+		const field = String(f.field ?? "").trim();
+		if (!field) return true;
+		const val = String(row[field] ?? "");
+		return (f.values ?? []).map(v => String(v)).includes(val);
+	});
 }
 
 export default function CsmLineItemsPage({
@@ -118,13 +118,13 @@ export default function CsmLineItemsPage({
 				if (Array.isArray((response as any)?.result?.list)) return (response as any).result.list;
 				return [];
 			})();
-			setRows(applyListFilter(nextRows, m_configs.line_items_list_filter));
+			setRows(nextRows);
 		} catch (error: any) {
 			message.error(error?.message || "Không tải được danh sách");
 		} finally {
 			setLoading(false);
 		}
-	}, [appId, tableName, m_configs.line_items_list_filter]);
+	}, [appId, tableName]);
 
 	useEffect(() => {
 		loadRows();
@@ -270,6 +270,11 @@ export default function CsmLineItemsPage({
 		];
 	}, [handleDelete, i18n.language, listColumns, openEdit]);
 
+	const filteredRows = useMemo(
+		() => rows.filter(row => rowMatchesListFilter(row, ui.list_filter)),
+		[rows, ui.list_filter],
+	);
+
 	if (!tableName) {
 		return (
 			<Card>
@@ -335,7 +340,7 @@ export default function CsmLineItemsPage({
 					rowKey={(row) => String(row.id ?? row[pkFields[0]] ?? JSON.stringify(row))}
 					loading={loading}
 					columns={tableColumns}
-					dataSource={rows}
+					dataSource={filteredRows}
 					scroll={{ x: "max-content" }}
 					pagination={{ pageSize: 20, showSizeChanger: true }}
 					locale={{ emptyText: "Chưa có bản ghi" }}

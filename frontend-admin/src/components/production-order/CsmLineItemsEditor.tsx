@@ -384,9 +384,12 @@ export default function CsmLineItemsEditor({
     ...(m_configs.line_items_group ?? {}),
   };
   const totalConfigs = m_configs.line_items_totals ?? [];
-  const printConfigs = m_configs.line_items_print ?? [];
-  const headerFields: any[] = m_configs.table ?? [];
   const uiConfig = m_configs.line_items_ui ?? {};
+  const printKeys = uiConfig.print_keys;
+  const printConfigs = (m_configs.line_items_print ?? []).filter(
+    p => !printKeys?.length || printKeys.includes(String(p.trigger_key ?? "")),
+  );
+  const headerFields: any[] = m_configs.table ?? [];
 
   const [header, setHeader] = useState<OrderHeader>(initialValue?.header ?? {});
   const [groups, setGroups] = useState<ProductGroup[]>(

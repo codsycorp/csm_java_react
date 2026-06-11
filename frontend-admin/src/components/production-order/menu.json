@@ -56,13 +56,13 @@
             {
               "id": "pm_kh_ten",
               "f_name": "ten_kh",
-              "f_header": "Tên công ty / KH",
+              "f_header": "Tên công ty",
               "f_types": "ed",
               "f_width": 220,
               "f_show": 1,
               "f_stt": 2,
               "f_pkid": 0,
-              "f_header_en": "Company / customer",
+              "f_header_en": "Company name",
               "f_header_zh": "公司/客户",
               "f_search": 1
             },
@@ -99,7 +99,7 @@
             {
               "id": "pm_kh_site",
               "f_name": "site",
-              "f_header": "Website / MXH",
+              "f_header": "Website / Email",
               "f_types": "ed",
               "f_width": 160,
               "f_show": 1,
@@ -113,7 +113,7 @@
               "f_types": "ed",
               "f_width": 100,
               "f_show": 1,
-              "f_stt": 7,
+              "f_stt": 10,
               "f_pkid": 0
             },
             {
@@ -123,7 +123,7 @@
               "f_types": "ed",
               "f_width": 100,
               "f_show": 0,
-              "f_stt": 91,
+              "f_stt": 90,
               "f_pkid": 0
             },
             {
@@ -133,7 +133,7 @@
               "f_types": "ed",
               "f_width": 100,
               "f_show": 0,
-              "f_stt": 92,
+              "f_stt": 91,
               "f_pkid": 0
             },
             {
@@ -143,7 +143,7 @@
               "f_types": "ed",
               "f_width": 100,
               "f_show": 0,
-              "f_stt": 93,
+              "f_stt": 92,
               "f_pkid": 0
             },
             {
@@ -153,7 +153,7 @@
               "f_types": "date",
               "f_width": 100,
               "f_show": 0,
-              "f_stt": 94,
+              "f_stt": 93,
               "f_pkid": 0
             },
             {
@@ -163,7 +163,7 @@
               "f_types": "date",
               "f_width": 100,
               "f_show": 1,
-              "f_stt": 10,
+              "f_stt": 9,
               "f_pkid": 0
             },
             {
@@ -173,7 +173,7 @@
               "f_types": "co",
               "f_width": 100,
               "f_show": 1,
-              "f_stt": 9,
+              "f_stt": 8,
               "f_pkid": 0,
               "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_pl\"],\"obj_name\":\"tvp_phanloai\",\"obj_where\":\"\"}],\"options\":[]}",
               "f_search": 1,
@@ -191,7 +191,7 @@
               "f_types": "co",
               "f_width": 100,
               "f_show": 1,
-              "f_stt": 8,
+              "f_stt": 7,
               "f_pkid": 0,
               "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_nguon\"],\"obj_name\":\"tvp_nguonkh\",\"obj_where\":\"\"}],\"options\":[]}",
               "f_search": 1,
@@ -208,9 +208,9 @@
           "children": [],
           "id": "pm_khachhang",
           "parentId": "pm_khach_hang",
-          "label": "Hồ sơ khách hàng",
-          "label_en": "Customer profiles",
-          "label_zh": "客户档案",
+          "label": "Danh sách khách hàng",
+          "label_en": "Customer list",
+          "label_zh": "客户列表",
           "m_icons": "fa fa-address-card",
           "type_form": "2",
           "table_name": "tvp_khachhang"
@@ -325,9 +325,9 @@
           "children": [],
           "id": "pm_nguoi_mua",
           "parentId": "pm_khach_hang",
-          "label": "Người mua hàng",
-          "label_en": "Buyers",
-          "label_zh": "采购联系人",
+          "label": "Người mua hàng chính & phụ",
+          "label_en": "Primary & secondary buyers",
+          "label_zh": "主副采购联系人",
           "m_icons": "fa fa-user",
           "type_form": "1",
           "table_name": "nguoi_mua_hang"
@@ -339,7 +339,8 @@
       "label_zh": "客户",
       "m_icons": "fa fa-address-book",
       "type_form": "0",
-      "table_name": ""
+      "table_name": "",
+      "m_order": 10
     },
     {
       "field_root": "",
@@ -435,7 +436,8 @@
           "f_show": 1,
           "f_stt": 7,
           "f_pkid": 0,
-          "f_placeholder": "Roboto"
+          "f_placeholder": "Roboto",
+          "f_default": "Roboto"
         },
         {
           "id": "pm_cd_kho",
@@ -476,7 +478,7 @@
         {
           "id": "pm_cd_ghichu_bg",
           "f_name": "ghi_chu_bao_gia",
-          "f_header": "Ghi chú mặc định — Báo giá",
+          "f_header": "Ghi chú (Báo giá)",
           "f_types": "memo",
           "f_width": 400,
           "f_show": 1,
@@ -486,7 +488,7 @@
         {
           "id": "pm_cd_ghichu_lsx",
           "f_name": "ghi_chu_lenh_sx",
-          "f_header": "Ghi chú mặc định — LSX nội bộ",
+          "f_header": "Ghi chú (LSX nội bộ)",
           "f_types": "memo",
           "f_width": 400,
           "f_show": 1,
@@ -496,7 +498,7 @@
         {
           "id": "pm_cd_ghichu_pxk",
           "f_name": "ghi_chu_lsx_pxk",
-          "f_header": "Ghi chú mặc định — LSX kiêm PXK",
+          "f_header": "Ghi chú (LSX-PXK)",
           "f_types": "memo",
           "f_width": 400,
           "f_show": 1,
@@ -769,7 +771,8 @@
       "label_zh": "设置",
       "m_icons": "fa fa-cog",
       "type_form": "1",
-      "table_name": "pm_cai_dat"
+      "table_name": "pm_cai_dat",
+      "m_order": 20
     },
     {
       "field_root": "",
@@ -813,7 +816,7 @@
               "f_pkid": 1
             },
             {
-              "id": "pm_cskh_truoc_kh",
+              "id": "pm_cskh_kh",
               "f_name": "khach_hang_id",
               "f_header": "Khách hàng",
               "f_header_en": "Customer",
@@ -850,23 +853,13 @@
               ]
             },
             {
-              "id": "pm_cskh_truoc_ngay_lh",
-              "f_name": "ngay_lien_he",
-              "f_header": "Ngày giờ liên hệ",
-              "f_types": "datetime",
-              "f_width": 160,
-              "f_show": 1,
-              "f_stt": 4,
-              "f_pkid": 0
-            },
-            {
               "id": "pm_cskh_truoc_ht",
               "f_name": "hinh_thuc",
               "f_header": "Hình thức",
               "f_types": "co",
               "f_width": 140,
               "f_show": 1,
-              "f_stt": 5,
+              "f_stt": 4,
               "f_pkid": 0,
               "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"goi_dien\",\"ten\":\"Gọi điện\"},{\"ma\":\"nhan_tin\",\"ten\":\"Nhắn tin\"},{\"ma\":\"gap_truc_tiep\",\"ten\":\"Gặp trực tiếp\"},{\"ma\":\"nguoi_thu_3\",\"ten\":\"Qua người thứ 3\"}]}",
               "f_search": 1,
@@ -880,7 +873,7 @@
               "f_types": "co",
               "f_width": 160,
               "f_show": 1,
-              "f_stt": 6,
+              "f_stt": 5,
               "f_pkid": 0,
               "f_cbo_query": "{\"query\": [], \"options\": [{\"ma\": \"nhap\", \"ten\": \"Nháp\"}, {\"ma\": \"da_gui\", \"ten\": \"Đã gửi\"}, {\"ma\": \"thuong_luong\", \"ten\": \"Đang thương lượng\"}, {\"ma\": \"da_chot\", \"ten\": \"Đã chốt\"}, {\"ma\": \"khong_chot\", \"ten\": \"Không chốt\"}]}",
               "f_search": 1,
@@ -894,7 +887,7 @@
               "f_types": "date",
               "f_width": 120,
               "f_show": 1,
-              "f_stt": 7,
+              "f_stt": 6,
               "f_pkid": 0
             },
             {
@@ -904,17 +897,7 @@
               "f_types": "memo",
               "f_width": 280,
               "f_show": 1,
-              "f_stt": 8,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_cskh_truoc_de_xuat",
-              "f_name": "de_xuat_kh",
-              "f_header": "Đề xuất của khách hàng",
-              "f_types": "memo",
-              "f_width": 280,
-              "f_show": 1,
-              "f_stt": 9,
+              "f_stt": 7,
               "f_pkid": 0
             },
             {
@@ -924,7 +907,7 @@
               "f_types": "ch",
               "f_width": 80,
               "f_show": 1,
-              "f_stt": 10,
+              "f_stt": 8,
               "f_pkid": 0
             },
             {
@@ -934,7 +917,7 @@
               "f_types": "ch",
               "f_width": 80,
               "f_show": 1,
-              "f_stt": 11,
+              "f_stt": 9,
               "f_pkid": 0
             },
             {
@@ -944,7 +927,7 @@
               "f_types": "file",
               "f_width": 160,
               "f_show": 1,
-              "f_stt": 12,
+              "f_stt": 10,
               "f_pkid": 0
             }
           ],
@@ -952,8 +935,8 @@
           "children": [],
           "id": "pm_cskh_truoc_mua",
           "parentId": "pm_cskh",
-          "label": "Chưa mua hàng",
-          "label_en": "Pre-sale care",
+          "label": "A — Chưa mua hàng",
+          "label_en": "A — Pre-purchase",
           "label_zh": "售前关怀",
           "m_icons": "fa fa-phone",
           "type_form": "1",
@@ -984,7 +967,7 @@
               "f_pkid": 1
             },
             {
-              "id": "pm_cskh_sau_kh",
+              "id": "pm_cskh_kh",
               "f_name": "khach_hang_id",
               "f_header": "Khách hàng",
               "f_header_en": "Customer",
@@ -1021,23 +1004,13 @@
               ]
             },
             {
-              "id": "pm_cskh_sau_ngay_lh",
-              "f_name": "ngay_lien_he",
-              "f_header": "Ngày giờ liên hệ",
-              "f_types": "datetime",
-              "f_width": 160,
-              "f_show": 1,
-              "f_stt": 4,
-              "f_pkid": 0
-            },
-            {
               "id": "pm_cskh_sau_ht",
               "f_name": "hinh_thuc",
               "f_header": "Hình thức",
               "f_types": "co",
               "f_width": 140,
               "f_show": 1,
-              "f_stt": 5,
+              "f_stt": 4,
               "f_pkid": 0,
               "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"goi_dien\",\"ten\":\"Gọi điện\"},{\"ma\":\"nhan_tin\",\"ten\":\"Nhắn tin\"},{\"ma\":\"gap_truc_tiep\",\"ten\":\"Gặp trực tiếp\"},{\"ma\":\"nguoi_thu_3\",\"ten\":\"Qua người thứ 3\"}]}",
               "f_search": 1,
@@ -1047,11 +1020,11 @@
             {
               "id": "pm_cskh_sau_tt",
               "f_name": "trang_thai",
-              "f_header": "Tình trạng",
+              "f_header": "Trạng thái",
               "f_types": "co",
               "f_width": 160,
               "f_show": 1,
-              "f_stt": 6,
+              "f_stt": 5,
               "f_pkid": 0,
               "f_cbo_query": "{\"query\": [], \"options\": [{\"ma\": \"hai_long\", \"ten\": \"Hài lòng\"}, {\"ma\": \"hai_long_tb\", \"ten\": \"Hài lòng trung bình\"}, {\"ma\": \"kho_mua_lai\", \"ten\": \"Khó mua lại hàng\"}, {\"ma\": \"khac\", \"ten\": \"Khác\"}]}",
               "f_search": 1,
@@ -1065,7 +1038,7 @@
               "f_types": "date",
               "f_width": 120,
               "f_show": 1,
-              "f_stt": 7,
+              "f_stt": 6,
               "f_pkid": 0
             },
             {
@@ -1075,17 +1048,7 @@
               "f_types": "memo",
               "f_width": 280,
               "f_show": 1,
-              "f_stt": 8,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_cskh_sau_de_xuat",
-              "f_name": "de_xuat_kh",
-              "f_header": "Đề xuất của khách hàng",
-              "f_types": "memo",
-              "f_width": 280,
-              "f_show": 1,
-              "f_stt": 9,
+              "f_stt": 7,
               "f_pkid": 0
             },
             {
@@ -1095,7 +1058,7 @@
               "f_types": "ch",
               "f_width": 80,
               "f_show": 1,
-              "f_stt": 10,
+              "f_stt": 8,
               "f_pkid": 0
             },
             {
@@ -1105,7 +1068,7 @@
               "f_types": "ch",
               "f_width": 80,
               "f_show": 1,
-              "f_stt": 11,
+              "f_stt": 9,
               "f_pkid": 0
             },
             {
@@ -1115,7 +1078,7 @@
               "f_types": "file",
               "f_width": 160,
               "f_show": 1,
-              "f_stt": 12,
+              "f_stt": 10,
               "f_pkid": 0
             }
           ],
@@ -1123,8 +1086,8 @@
           "children": [],
           "id": "pm_cskh_sau_mua",
           "parentId": "pm_cskh",
-          "label": "Đã mua hàng",
-          "label_en": "Post-sale care",
+          "label": "B — Đã mua hàng",
+          "label_en": "B — Post-purchase",
           "label_zh": "售后关怀",
           "m_icons": "fa fa-handshake-o",
           "type_form": "1",
@@ -1266,15 +1229,18 @@
           "p_width": "0",
           "p_height": "0",
           "m_show": true,
-          "g_readonly": false,
+          "g_readonly": true,
           "type_menu": "",
           "row_type_edit": "0",
           "dev": "",
           "prefix_pk": "",
           "table_pagesize": "50",
+          "trigger": {
+            "load_db": "return (function(){\n  var rows = [];\n  (db['tvp_khachhang']?.rows||[]).forEach(function(r){\n    if(r.sinh_nhat) rows.push({id:'kh_'+r.id, ten_kh:r.ten_kh||'', sinh_nhat:r.sinh_nhat, dien_thoai:r.dien_thoai||'', email:r.email||''});\n  });\n  (db['nguoi_mua_hang']?.rows||[]).forEach(function(r){\n    if(r.sinh_nhat) rows.push({id:'nm_'+r.id, ten_kh:r.ho_ten||'', sinh_nhat:r.sinh_nhat, dien_thoai:r.dien_thoai||'', email:''});\n  });\n  return rows;\n})();"
+          },
           "table": [
             {
-              "id": "pm_sn_id",
+              "id": "pm_sinh_nhat_id",
               "f_name": "id",
               "f_header": "ID",
               "f_types": "ed",
@@ -1284,87 +1250,43 @@
               "f_pkid": 1
             },
             {
-              "id": "pm_sn_kh_id",
-              "f_name": "khach_hang_id",
-              "f_header": "Khách hàng",
-              "f_types": "co",
-              "f_width": 220,
+              "id": "pm_sn_ten",
+              "f_name": "ten_kh",
+              "f_header": "Tên KH",
+              "f_types": "ed",
+              "f_width": 200,
               "f_show": 1,
               "f_stt": 2,
-              "f_pkid": 0,
-              "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_kh\"],\"obj_name\":\"tvp_khachhang\",\"obj_where\":\"\"}],\"options\":[]}",
-              "f_search": 1,
-              "f_filter": 1,
-              "f_grid": "pm_khachhang",
-              "f_grid_fields": [
-                "ten_kh",
-                "ma_kh",
-                "dien_thoai"
-              ]
+              "f_pkid": 0
             },
             {
-              "id": "pm_sn_nguoi",
-              "f_name": "nguoi_lien_he",
-              "f_header": "Người liên hệ",
-              "f_types": "ed",
-              "f_width": 180,
+              "id": "pm_sn_ngay",
+              "f_name": "sinh_nhat",
+              "f_header": "Sinh nhật",
+              "f_types": "date",
+              "f_width": 100,
               "f_show": 1,
               "f_stt": 3,
               "f_pkid": 0
             },
             {
-              "id": "pm_sn_ngay_sinh",
-              "f_name": "ngay_sinh",
-              "f_header": "Sinh nhật",
-              "f_types": "date",
-              "f_width": 120,
+              "id": "pm_sn_dt",
+              "f_name": "dien_thoai",
+              "f_header": "Điện thoại",
+              "f_types": "ed",
+              "f_width": 100,
               "f_show": 1,
               "f_stt": 4,
               "f_pkid": 0
             },
             {
-              "id": "pm_sn_nv",
-              "f_name": "nhan_vien",
-              "f_header": "NV phụ trách",
-              "f_types": "co",
-              "f_width": 180,
+              "id": "pm_sn_email",
+              "f_name": "email",
+              "f_header": "Email",
+              "f_types": "ed",
+              "f_width": 100,
               "f_show": 1,
               "f_stt": 5,
-              "f_pkid": 0,
-              "f_grid": "pm_dm_nhanvien",
-              "f_grid_fields": [
-                "ten_nhan_vien",
-                "chuc_vu"
-              ]
-            },
-            {
-              "id": "pm_sn_cuoc_hen",
-              "f_name": "cuoc_hen",
-              "f_header": "Cuộc hẹn / giao lưu",
-              "f_types": "datetime",
-              "f_width": 160,
-              "f_show": 1,
-              "f_stt": 6,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_sn_hoan_thanh",
-              "f_name": "hoan_thanh",
-              "f_header": "Đã chăm sóc",
-              "f_types": "ch",
-              "f_width": 90,
-              "f_show": 1,
-              "f_stt": 7,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_sn_ghi_chu",
-              "f_name": "ghi_chu",
-              "f_header": "Ghi chú / nhắc việc",
-              "f_types": "memo",
-              "f_width": 280,
-              "f_show": 1,
-              "f_stt": 8,
               "f_pkid": 0
             }
           ],
@@ -1373,7 +1295,7 @@
           "id": "pm_sinh_nhat",
           "parentId": "pm_cskh",
           "label": "Chăm sóc sinh nhật",
-          "label_en": "Customer birthdays",
+          "label_en": "Birthday care",
           "label_zh": "客户生日",
           "m_icons": "fa fa-birthday-cake",
           "type_form": "1",
@@ -1386,7 +1308,8 @@
       "label_zh": "客户关怀",
       "m_icons": "fa fa-heart",
       "type_form": "0",
-      "table_name": ""
+      "table_name": "",
+      "m_order": 30
     },
     {
       "field_root": "",
@@ -1727,7 +1650,7 @@
           "m_icons": "fa fa-file-text-o",
           "type_form": "7",
           "table_name": "pm_orders",
-          "menu_id": "pm_orders",
+          "menu_id": "pm_bao_gia",
           "struct": {
             "fieldsPK": [
               "id"
@@ -1878,7 +1801,7 @@
           ],
           "line_items_ui": {
             "header_title": "Thông tin đơn hàng",
-            "list_title": "Danh sách báo giá",
+            "list_title": "Báo giá",
             "create_label": "Tạo mới",
             "edit_label": "Chỉnh sửa",
             "back_label": "← Danh sách",
@@ -1910,17 +1833,24 @@
                   "so_lenh"
                 ]
               }
+            ],
+            "list_title_en": "Quotation",
+            "list_filter": [
+              {
+                "field": "giai_doan",
+                "values": [
+                  "nhap",
+                  "bao_gia"
+                ]
+              }
+            ],
+            "default_header": {
+              "giai_doan": "bao_gia",
+              "trang_thai_bg": "nhap"
+            },
+            "print_keys": [
+              "print_bao_gia"
             ]
-          },
-          "line_items_list_filter": {
-            "field": "giai_doan",
-            "values": [
-              "nhap",
-              "bao_gia"
-            ]
-          },
-          "line_items_create_defaults": {
-            "giai_doan": "bao_gia"
           }
         },
         {
@@ -1937,8 +1867,7 @@
           "prefix_pk": "PM",
           "table_pagesize": "50",
           "trigger": {
-            "print_lenh_sx": "\nconst cfg = utils.settings || {};\nconst companyHdr = utils.buildCompanyHdr ? utils.buildCompanyHdr(cfg) : '';\nconst soLenh = utils.formatSoLenh ? utils.formatSoLenh(order.so_lenh, order.phien_ban) : (order.so_lenh??'');\nconst now = new Date();\nconst timeStr = now.toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'}) + ' ' + now.toLocaleDateString('vi-VN');\nconst d = order;\nconst hdr = `<table class=\"hdr\">\n  <tr><td>Số lệnh sản xuất: <b>${soLenh}</b></td><td>Thời gian gửi: <b>${timeStr}</b></td></tr>\n  <tr><td>Khách hàng: <b>${d.khach_hang??''}</b></td><td>NV bán hàng – SĐT: <b>${d.nvkd??''}</b></td></tr>\n  <tr><td>Người mua hàng – SĐT: ${d.nguoi_lien_he??''}</td><td></td></tr>\n</table><div style=\"font-weight:bold;margin:6px 0 2px\">* NỘI DUNG YÊU CẦU SẢN XUẤT:</div>`;\n\nconst items = function buildItemsTable(groups,utils,opts=true){const o=typeof opts===\"boolean\"?{showPrice:opts,showGroupSubtotal:opts}:opts;const showPrice=o.showPrice??true;const showGroupSubtotal=o.showGroupSubtotal??showPrice;const{fmtVND,fmtNum,groupLabel}=utils;const priceHdr=showPrice?`<th style=\"width:9%\">\\u0110\\u01A1n gi\\xE1<br/>(VN\\u0110)</th><th style=\"width:10%\">Th\\xE0nh ti\\u1EC1n<br/>(VN\\u0110)</th>`:\"\";let rows=\"\";groups.forEach((g,gi)=>{const label=groupLabel(gi);const specHtml=(g.spec??\"\").replace(/&/g,\"&amp;\").replace(/</g,\"&lt;\");rows+=`<tr><td class=\"c it-grp\" style=\"font-weight:bold\">${label}.</td>       <td colspan=\"${showPrice?7:5}\" class=\"it-grp\">${specHtml}</td></tr>`;if(showGroupSubtotal){const total_tt=g.items.reduce((s,i)=>s+(i.thanh_tien??0),0);const total_kl=g.items.reduce((s,i)=>s+(i.khoi_luong??0),0);const total_st=g.items.reduce((s,i)=>s+(i.so_tam??0),0);const prices=[...new Set(g.items.map(i=>i.don_gia).filter(Boolean))];const uniformPrice=prices.length===1?fmtVND(prices[0]):\"\";const priceSubCells=showPrice?`<td class=\"r it-sub\">${uniformPrice}</td><td class=\"r it-sub\">${fmtVND(total_tt)}</td>`:\"\";rows+=`<tr><td class=\"it-sub\"></td><td class=\"it-sub\" colspan=\"3\">C\\u1ED9ng nh\\xF3m ${label} \\u2013 ch\\u01B0a VAT ${g.vat_rate}%</td>         <td class=\"r it-sub\">${total_st}</td><td class=\"r it-sub\">${fmtNum(total_kl)}</td>${priceSubCells}</tr>`}g.items.forEach((item,idx)=>{const priceCells=showPrice?`<td class=\"r\">${item.don_gia!=null?fmtVND(item.don_gia):\"\"}</td>            <td class=\"r\">${item.thanh_tien?fmtVND(item.thanh_tien):\"\"}</td>`:\"\";rows+=`<tr><td class=\"c\">${idx+1}</td><td>${item.ten_sp??\"\"}</td>         <td class=\"c\">${item.don_vi??\"\"}</td>         <td class=\"r\">${item.chieu_rong!=null?fmtNum(item.chieu_rong):\"\"}</td>         <td class=\"r\">${item.chieu_dai!=null?fmtNum(item.chieu_dai,3):\"\"}</td>         <td class=\"r\">${item.so_tam!=null?item.so_tam:\"\"}</td>         <td class=\"r\">${item.khoi_luong!=null?fmtNum(item.khoi_luong):\"\"}</td>         ${priceCells}</tr>`})});return`<table class=\"it\"><thead><tr>     <th style=\"width:4%\">TT</th>     <th style=\"width:${showPrice?\"26%\":\"38%\"}\">T\\xEAn s\\u1EA3n ph\\u1EA9m/Quy c\\xE1ch</th>     <th style=\"width:5%\">\\u0110\\u01A1n v\\u1ECB</th>     <th style=\"width:7%\">Chi\\u1EC1u<br/>r\\u1ED9ng</th>     <th style=\"width:8%\">Chi\\u1EC1u<br/>d\\xE0i</th>     <th style=\"width:6%\">S\\u1ED1<br/>t\\u1EA5m</th>     <th style=\"width:8%\">Kh\\u1ED1i<br/>l\\u01B0\\u1EE3ng</th>     ${priceHdr}</tr></thead><tbody>${rows}</tbody></table>`}(groups, utils, { showPrice: true, showGroupSubtotal: true });\nconst totals = function buildTotals(calc,utils){const{fmtVND,soThanhChu}=utils;const{totals}=calc;const bangChu=soThanhChu(totals.D??0);return`<div class=\"tot-wrap\"><table class=\"tot\">     <tr><td class=\"lbl\">A &nbsp; T\\u1ED5ng gi\\xE1 tr\\u1ECB h\\xE0ng h\\xF3a ch\\u01B0a VAT:</td><td class=\"amt\">${fmtVND(totals.A??0)}</td></tr>     <tr><td class=\"lbl\">B &nbsp; Ti\\u1EC1n VAT 8%</td><td class=\"amt\">${fmtVND(totals.B??0)}</td></tr>     <tr><td class=\"lbl\">C &nbsp; Ti\\u1EC1n VAT 10%</td><td class=\"amt\">${fmtVND(totals.C??0)}</td></tr>     <tr class=\"grand\"><td class=\"lbl\">D &nbsp; T\\u1ED5ng gi\\xE1 tr\\u1ECB thanh to\\xE1n (A+B+C):</td><td class=\"amt\">${fmtVND(totals.D??0)}</td></tr>     </table></div>     <div class=\"bang-chu\"><b>B\\u1EB1ng ch\\u1EEF:</b> ${bangChu}</div>`}(calc, utils);\nconst delivery = `<div style=\"font-weight:bold;margin:10px 0 4px;font-size:10.5pt\">** ĐIỀU KIỆN GIAO HÀNG VÀ THANH TOÁN</div>\n<div class=\"dlg\">\n  <div class=\"di\"><span class=\"k\">1. Nghiệm thu:</span><span>tại Nhà máy Phú Sơn</span></div>\n  <div class=\"di\"><span class=\"k\">2. Ngày nghiệm thu:</span><span>${d.ngay_nghiem_thu??''}</span></div>\n  <div class=\"di\"><span class=\"k\">3. Vận chuyển:</span><span>${d.van_chuyen_nd??''}</span></div>\n  <div class=\"di\"><span class=\"k\">4. Thông tin SP:</span><span>${d.thong_tin_sp??''}</span></div>\n  <div class=\"di\"><span class=\"k\">5. Phiếu giao:</span><span>${d.phieu_giao??''}</span></div>\n  <div class=\"di\"><span class=\"k\">6. Thời gian giao:</span><span><b>${d.thoi_gian_giao??''}</b></span></div>\n</div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">7. Người nhận:</span><span>${d.nguoi_nhan??''}</span></div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">8. Địa điểm:</span><span>${d.dia_diem_giao??''}</span></div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">9. Thanh toán:</span><span>${d.thanh_toan_nd??''}</span></div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">10. Ghi chú:</span><span>${d.ghi_chu_giao??''}</span></div>`;\nconst lsxNotes = utils.parseNoteLines ? utils.parseNoteLines(cfg.ghi_chu_lenh_sx, []) : [];\nconst lsxNoteBlock = lsxNotes.length ? ('<div class=\"notes\"><b>Ghi chú:</b>' + lsxNotes.map((n,i)=>'<div>'+(i+1)+'. '+n+'</div>').join('') + '</div>') : '';\n\nconst sigs = `<div class=\"sig-row\">\n  <div class=\"sig-box\"><div class=\"lbl\">GIÁM ĐỐC PHÊ DUYỆT</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\"></div></div>\n  <div class=\"sig-box\"><div class=\"lbl\">NGƯỜI YÊU CẦU SẢN XUẤT</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\">${d.nvkd??''}</div></div>\n</div>`;\nreturn `<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: 'Times New Roman', Times, serif; font-size: 10.5pt; color: #000; line-height: 1.4; }\n.page { width: 780px; padding: 15px 20px; }\n.co-name { text-align:center; font-size:13pt; font-weight:bold; text-transform:uppercase; }\n.co-addr { text-align:center; font-size:9.5pt; }\n.doc-title { text-align:center; font-size:14pt; font-weight:bold; text-transform:uppercase; margin:14px 0 8px; }\ntable.hdr { width:100%; border-collapse:collapse; margin-bottom:6px; }\ntable.hdr td { padding:2px 4px; vertical-align:top; font-size:10.5pt; }\n.intro { font-size:10pt; margin-bottom:8px; font-style:italic; }\ntable.it { width:100%; border-collapse:collapse; font-size:9.5pt; margin:6px 0; }\ntable.it th { background:#d9d9d9; border:1px solid #555; padding:4px 3px; text-align:center; }\ntable.it td { border:1px solid #555; padding:3px 4px; vertical-align:top; }\n.it-grp { background:#f2f2f2; font-weight:600; white-space:pre-wrap; font-size:9pt; }\n.it-sub { background:#e8e8e8; font-weight:bold; font-size:9pt; }\n.r { text-align:right; } .c { text-align:center; }\n.tot-wrap { display:flex; justify-content:flex-end; margin:6px 0; }\n.tot { border-collapse:collapse; width:340px; }\n.tot td { padding:2px 6px; border:1px solid #aaa; font-size:10pt; }\n.tot .lbl { font-weight:600; } .tot .amt { text-align:right; font-weight:600; }\n.tot .grand td { background:#cfe2ff; font-weight:bold; font-size:10.5pt; }\n.bang-chu { font-style:italic; margin:6px 0 10px; font-size:10pt; }\n.notes { font-size:9.5pt; margin:6px 0; }\n.note-grid { display:grid; grid-template-columns:1fr 1fr; column-gap:20px; }\n.sig-row { display:flex; justify-content:space-between; margin-top:18px; }\n.sig-box { text-align:center; min-width:130px; font-size:9.5pt; }\n.sig-box .lbl { font-weight:bold; }\n.sig-box .sub { font-size:8.5pt; color:#444; }\n.sig-box .name { margin-top:38px; font-weight:bold; }\n.dlg { display:grid; grid-template-columns:1fr 1fr; gap:3px 20px; font-size:10pt; margin:6px 0; }\n.di { display:flex; gap:4px; }\n.di .k { font-weight:bold; min-width:100px; }\n.receive-line { margin:16px 0 8px; font-size:10pt; border-top:1px solid #aaa; padding-top:10px; }\n</style></head>\n<body><div class=\"page\">\n${companyHdr}\n<div class=\"doc-title\">LỆNH SẢN XUẤT NỘI BỘ</div>\n<div style=\"text-align:center;font-size:10pt;font-style:italic;margin-bottom:8px\">Số lệnh: ${soLenh}</div>\n${hdr}${items}${totals}${delivery}${lsxNoteBlock}${sigs}\n</div></body></html>`;\n",
-            "print_bao_gia": "\nconst cfg = utils.settings || {};\nconst companyHdr = utils.buildCompanyHdr ? utils.buildCompanyHdr(cfg) : '';\nconst introDefault = 'Cảm ơn Quý khách hàng đã quan tâm tới sản phẩm do Công ty TNHH Công nghệ Công nghiệp Phú Sơn sản xuất. Chúng tôi xin gửi Báo giá theo yêu cầu Quý khách với nội dung như sau:';\nconst intro = cfg.intro_bao_gia || introDefault;\nconst phi_vc = order.phi_vc === 'da' ? 'Giá trên đã bao gồm vận chuyển.' : 'Giá trên chưa bao gồm vận chuyển.';\nconst hdr = `<table class=\"hdr\">\n  <tr><td style=\"width:55%\">Kính gửi: <b>${order.khach_hang??''}</b></td>\n    <td>Số: <b>${order.so_bao_gia??''}</b> &nbsp;&nbsp; Ngày: <b>${order.ngay??''}</b></td></tr>\n  <tr><td>Địa chỉ: ${order.dia_chi_kh??''}</td>\n    <td>Hiệu lực đến: <b>${order.hieu_luc_den??''}</b></td></tr>\n  <tr><td>Người mua hàng – SĐT: ${order.nguoi_lien_he??''}</td>\n    <td>NV bán hàng – SĐT: <b>${order.nvkd??''}</b></td></tr></table>\n  <div class=\"intro\">${intro}</div>`;\n\nconst items = function buildItemsTable(groups,utils,opts=true){const o=typeof opts===\"boolean\"?{showPrice:opts,showGroupSubtotal:opts}:opts;const showPrice=o.showPrice??true;const showGroupSubtotal=o.showGroupSubtotal??showPrice;const{fmtVND,fmtNum,groupLabel}=utils;const priceHdr=showPrice?`<th style=\"width:9%\">\\u0110\\u01A1n gi\\xE1<br/>(VN\\u0110)</th><th style=\"width:10%\">Th\\xE0nh ti\\u1EC1n<br/>(VN\\u0110)</th>`:\"\";let rows=\"\";groups.forEach((g,gi)=>{const label=groupLabel(gi);const specHtml=(g.spec??\"\").replace(/&/g,\"&amp;\").replace(/</g,\"&lt;\");rows+=`<tr><td class=\"c it-grp\" style=\"font-weight:bold\">${label}.</td>       <td colspan=\"${showPrice?7:5}\" class=\"it-grp\">${specHtml}</td></tr>`;if(showGroupSubtotal){const total_tt=g.items.reduce((s,i)=>s+(i.thanh_tien??0),0);const total_kl=g.items.reduce((s,i)=>s+(i.khoi_luong??0),0);const total_st=g.items.reduce((s,i)=>s+(i.so_tam??0),0);const prices=[...new Set(g.items.map(i=>i.don_gia).filter(Boolean))];const uniformPrice=prices.length===1?fmtVND(prices[0]):\"\";const priceSubCells=showPrice?`<td class=\"r it-sub\">${uniformPrice}</td><td class=\"r it-sub\">${fmtVND(total_tt)}</td>`:\"\";rows+=`<tr><td class=\"it-sub\"></td><td class=\"it-sub\" colspan=\"3\">C\\u1ED9ng nh\\xF3m ${label} \\u2013 ch\\u01B0a VAT ${g.vat_rate}%</td>         <td class=\"r it-sub\">${total_st}</td><td class=\"r it-sub\">${fmtNum(total_kl)}</td>${priceSubCells}</tr>`}g.items.forEach((item,idx)=>{const priceCells=showPrice?`<td class=\"r\">${item.don_gia!=null?fmtVND(item.don_gia):\"\"}</td>            <td class=\"r\">${item.thanh_tien?fmtVND(item.thanh_tien):\"\"}</td>`:\"\";rows+=`<tr><td class=\"c\">${idx+1}</td><td>${item.ten_sp??\"\"}</td>         <td class=\"c\">${item.don_vi??\"\"}</td>         <td class=\"r\">${item.chieu_rong!=null?fmtNum(item.chieu_rong):\"\"}</td>         <td class=\"r\">${item.chieu_dai!=null?fmtNum(item.chieu_dai,3):\"\"}</td>         <td class=\"r\">${item.so_tam!=null?item.so_tam:\"\"}</td>         <td class=\"r\">${item.khoi_luong!=null?fmtNum(item.khoi_luong):\"\"}</td>         ${priceCells}</tr>`})});return`<table class=\"it\"><thead><tr>     <th style=\"width:4%\">TT</th>     <th style=\"width:${showPrice?\"26%\":\"38%\"}\">T\\xEAn s\\u1EA3n ph\\u1EA9m/Quy c\\xE1ch</th>     <th style=\"width:5%\">\\u0110\\u01A1n v\\u1ECB</th>     <th style=\"width:7%\">Chi\\u1EC1u<br/>r\\u1ED9ng</th>     <th style=\"width:8%\">Chi\\u1EC1u<br/>d\\xE0i</th>     <th style=\"width:6%\">S\\u1ED1<br/>t\\u1EA5m</th>     <th style=\"width:8%\">Kh\\u1ED1i<br/>l\\u01B0\\u1EE3ng</th>     ${priceHdr}</tr></thead><tbody>${rows}</tbody></table>`}(groups, utils, { showPrice: true, showGroupSubtotal: true });\nconst totals = function buildTotals(calc,utils){const{fmtVND,soThanhChu}=utils;const{totals}=calc;const bangChu=soThanhChu(totals.D??0);return`<div class=\"tot-wrap\"><table class=\"tot\">     <tr><td class=\"lbl\">A &nbsp; T\\u1ED5ng gi\\xE1 tr\\u1ECB h\\xE0ng h\\xF3a ch\\u01B0a VAT:</td><td class=\"amt\">${fmtVND(totals.A??0)}</td></tr>     <tr><td class=\"lbl\">B &nbsp; Ti\\u1EC1n VAT 8%</td><td class=\"amt\">${fmtVND(totals.B??0)}</td></tr>     <tr><td class=\"lbl\">C &nbsp; Ti\\u1EC1n VAT 10%</td><td class=\"amt\">${fmtVND(totals.C??0)}</td></tr>     <tr class=\"grand\"><td class=\"lbl\">D &nbsp; T\\u1ED5ng gi\\xE1 tr\\u1ECB thanh to\\xE1n (A+B+C):</td><td class=\"amt\">${fmtVND(totals.D??0)}</td></tr>     </table></div>     <div class=\"bang-chu\"><b>B\\u1EB1ng ch\\u1EEF:</b> ${bangChu}</div>`}(calc, utils);\nconst defaultNotes = [\"Đơn giá đã bao gồm VAT: Tấm lợp PU, EPS, RW, GW, Vận chuyển thuế 8%; Phụ kiện tôn, inox, 1 lớp thuế 10%\",\"Dung sai kích thước chiều dài ±5mm, chiều rộng ±4mm\",\"Dung sai độ dày PU/EPS ±2mm, tấm lấy sáng ±0,2mm.\",\"Tỷ trọng PU ±3kg/m³, tỷ trọng EPS ±1kg/m³\",\"Dung sai độ dày tôn ±0,03÷0,04mm\"];\nconst noteLines = utils.parseNoteLines ? utils.parseNoteLines(cfg.ghi_chu_bao_gia, defaultNotes) : defaultNotes;\nconst notes = '<div class=\"notes\"><b>Ghi chú:</b><div class=\"note-grid\">' +\n  noteLines.concat(['']).map((n,i)=>i<noteLines.length?'<div>'+(i+1)+'. '+n+'</div>':'<div>'+(noteLines.length+1)+'. '+phi_vc+'</div>').join('') + '</div></div>';\nconst tt1 = cfg.thanh_toan_1 || 'Lần 1: Đặt cọc 50% sau khi xác nhận đơn.';\nconst tt2 = cfg.thanh_toan_2 || 'Lần 2: Thanh toán 50% còn lại trước khi xuất xưởng.';\nconst stkLine = (cfg.so_tk && cfg.ngan_hang) ? ('Số TK: ' + cfg.so_tk + ' ' + cfg.ngan_hang + (cfg.ten_tk ? ' - ' + cfg.ten_tk : '')) : 'Số TK: 7999989399 MB Bank - CN Hai Bà Trưng';\nconst payment = `<div class=\"notes\"><b>Phương thức thanh toán:</b>\n  <div>- ${tt1}</div>\n  <div>- ${tt2}</div>\n  <div style=\"margin-top:4px\">${stkLine}</div></div>`;\nconst sigs = `<div class=\"sig-row\">\n  <div class=\"sig-box\"><div class=\"lbl\">ĐẠI DIỆN BÊN MUA</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\"></div></div>\n  <div class=\"sig-box\"><div class=\"lbl\">ĐẠI DIỆN BÊN BÁN</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\">${order.nvkd??''}</div></div>\n</div>`;\nreturn `<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: 'Times New Roman', Times, serif; font-size: 10.5pt; color: #000; line-height: 1.4; }\n.page { width: 780px; padding: 15px 20px; }\n.co-name { text-align:center; font-size:13pt; font-weight:bold; text-transform:uppercase; }\n.co-addr { text-align:center; font-size:9.5pt; }\n.doc-title { text-align:center; font-size:14pt; font-weight:bold; text-transform:uppercase; margin:14px 0 8px; }\ntable.hdr { width:100%; border-collapse:collapse; margin-bottom:6px; }\ntable.hdr td { padding:2px 4px; vertical-align:top; font-size:10.5pt; }\n.intro { font-size:10pt; margin-bottom:8px; font-style:italic; }\ntable.it { width:100%; border-collapse:collapse; font-size:9.5pt; margin:6px 0; }\ntable.it th { background:#d9d9d9; border:1px solid #555; padding:4px 3px; text-align:center; }\ntable.it td { border:1px solid #555; padding:3px 4px; vertical-align:top; }\n.it-grp { background:#f2f2f2; font-weight:600; white-space:pre-wrap; font-size:9pt; }\n.it-sub { background:#e8e8e8; font-weight:bold; font-size:9pt; }\n.r { text-align:right; } .c { text-align:center; }\n.tot-wrap { display:flex; justify-content:flex-end; margin:6px 0; }\n.tot { border-collapse:collapse; width:340px; }\n.tot td { padding:2px 6px; border:1px solid #aaa; font-size:10pt; }\n.tot .lbl { font-weight:600; } .tot .amt { text-align:right; font-weight:600; }\n.tot .grand td { background:#cfe2ff; font-weight:bold; font-size:10.5pt; }\n.bang-chu { font-style:italic; margin:6px 0 10px; font-size:10pt; }\n.notes { font-size:9.5pt; margin:6px 0; }\n.note-grid { display:grid; grid-template-columns:1fr 1fr; column-gap:20px; }\n.sig-row { display:flex; justify-content:space-between; margin-top:18px; }\n.sig-box { text-align:center; min-width:130px; font-size:9.5pt; }\n.sig-box .lbl { font-weight:bold; }\n.sig-box .sub { font-size:8.5pt; color:#444; }\n.sig-box .name { margin-top:38px; font-weight:bold; }\n.dlg { display:grid; grid-template-columns:1fr 1fr; gap:3px 20px; font-size:10pt; margin:6px 0; }\n.di { display:flex; gap:4px; }\n.di .k { font-weight:bold; min-width:100px; }\n.receive-line { margin:16px 0 8px; font-size:10pt; border-top:1px solid #aaa; padding-top:10px; }\n</style></head>\n<body><div class=\"page\">\n${companyHdr}\n<div class=\"doc-title\">BẢNG BÁO GIÁ SẢN PHẨM - KIÊM XÁC NHẬN ĐƠN HÀNG</div>\n${hdr}${items}${totals}${notes}${payment}${sigs}\n</div></body></html>`;\n"
+            "print_lenh_sx": "\nconst cfg = utils.settings || {};\nconst companyHdr = utils.buildCompanyHdr ? utils.buildCompanyHdr(cfg) : '';\nconst soLenh = utils.formatSoLenh ? utils.formatSoLenh(order.so_lenh, order.phien_ban) : (order.so_lenh??'');\nconst now = new Date();\nconst timeStr = now.toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'}) + ' ' + now.toLocaleDateString('vi-VN');\nconst d = order;\nconst hdr = `<table class=\"hdr\">\n  <tr><td>Số lệnh sản xuất: <b>${soLenh}</b></td><td>Thời gian gửi: <b>${timeStr}</b></td></tr>\n  <tr><td>Khách hàng: <b>${d.khach_hang??''}</b></td><td>NV bán hàng – SĐT: <b>${d.nvkd??''}</b></td></tr>\n  <tr><td>Người mua hàng – SĐT: ${d.nguoi_lien_he??''}</td><td></td></tr>\n</table><div style=\"font-weight:bold;margin:6px 0 2px\">* NỘI DUNG YÊU CẦU SẢN XUẤT:</div>`;\n\nconst items = function buildItemsTable(groups,utils,opts=true){const o=typeof opts===\"boolean\"?{showPrice:opts,showGroupSubtotal:opts}:opts;const showPrice=o.showPrice??true;const showGroupSubtotal=o.showGroupSubtotal??showPrice;const{fmtVND,fmtNum,groupLabel}=utils;const priceHdr=showPrice?`<th style=\"width:9%\">\\u0110\\u01A1n gi\\xE1<br/>(VN\\u0110)</th><th style=\"width:10%\">Th\\xE0nh ti\\u1EC1n<br/>(VN\\u0110)</th>`:\"\";let rows=\"\";groups.forEach((g,gi)=>{const label=groupLabel(gi);const specHtml=(g.spec??\"\").replace(/&/g,\"&amp;\").replace(/</g,\"&lt;\");rows+=`<tr><td class=\"c it-grp\" style=\"font-weight:bold\">${label}.</td>       <td colspan=\"${showPrice?7:5}\" class=\"it-grp\">${specHtml}</td></tr>`;if(showGroupSubtotal){const total_tt=g.items.reduce((s,i)=>s+(i.thanh_tien??0),0);const total_kl=g.items.reduce((s,i)=>s+(i.khoi_luong??0),0);const total_st=g.items.reduce((s,i)=>s+(i.so_tam??0),0);const prices=[...new Set(g.items.map(i=>i.don_gia).filter(Boolean))];const uniformPrice=prices.length===1?fmtVND(prices[0]):\"\";const priceSubCells=showPrice?`<td class=\"r it-sub\">${uniformPrice}</td><td class=\"r it-sub\">${fmtVND(total_tt)}</td>`:\"\";rows+=`<tr><td class=\"it-sub\"></td><td class=\"it-sub\" colspan=\"3\">C\\u1ED9ng nh\\xF3m ${label} \\u2013 ch\\u01B0a VAT ${g.vat_rate}%</td>         <td class=\"r it-sub\">${total_st}</td><td class=\"r it-sub\">${fmtNum(total_kl)}</td>${priceSubCells}</tr>`}g.items.forEach((item,idx)=>{const priceCells=showPrice?`<td class=\"r\">${item.don_gia!=null?fmtVND(item.don_gia):\"\"}</td>            <td class=\"r\">${item.thanh_tien?fmtVND(item.thanh_tien):\"\"}</td>`:\"\";rows+=`<tr><td class=\"c\">${idx+1}</td><td>${item.ten_sp??\"\"}</td>         <td class=\"c\">${item.don_vi??\"\"}</td>         <td class=\"r\">${item.chieu_rong!=null?fmtNum(item.chieu_rong):\"\"}</td>         <td class=\"r\">${item.chieu_dai!=null?fmtNum(item.chieu_dai,3):\"\"}</td>         <td class=\"r\">${item.so_tam!=null?item.so_tam:\"\"}</td>         <td class=\"r\">${item.khoi_luong!=null?fmtNum(item.khoi_luong):\"\"}</td>         ${priceCells}</tr>`})});return`<table class=\"it\"><thead><tr>     <th style=\"width:4%\">TT</th>     <th style=\"width:${showPrice?\"26%\":\"38%\"}\">T\\xEAn s\\u1EA3n ph\\u1EA9m/Quy c\\xE1ch</th>     <th style=\"width:5%\">\\u0110\\u01A1n v\\u1ECB</th>     <th style=\"width:7%\">Chi\\u1EC1u<br/>r\\u1ED9ng</th>     <th style=\"width:8%\">Chi\\u1EC1u<br/>d\\xE0i</th>     <th style=\"width:6%\">S\\u1ED1<br/>t\\u1EA5m</th>     <th style=\"width:8%\">Kh\\u1ED1i<br/>l\\u01B0\\u1EE3ng</th>     ${priceHdr}</tr></thead><tbody>${rows}</tbody></table>`}(groups, utils, { showPrice: true, showGroupSubtotal: true });\nconst totals = function buildTotals(calc,utils){const{fmtVND,soThanhChu}=utils;const{totals}=calc;const bangChu=soThanhChu(totals.D??0);return`<div class=\"tot-wrap\"><table class=\"tot\">     <tr><td class=\"lbl\">A &nbsp; T\\u1ED5ng gi\\xE1 tr\\u1ECB h\\xE0ng h\\xF3a ch\\u01B0a VAT:</td><td class=\"amt\">${fmtVND(totals.A??0)}</td></tr>     <tr><td class=\"lbl\">B &nbsp; Ti\\u1EC1n VAT 8%</td><td class=\"amt\">${fmtVND(totals.B??0)}</td></tr>     <tr><td class=\"lbl\">C &nbsp; Ti\\u1EC1n VAT 10%</td><td class=\"amt\">${fmtVND(totals.C??0)}</td></tr>     <tr class=\"grand\"><td class=\"lbl\">D &nbsp; T\\u1ED5ng gi\\xE1 tr\\u1ECB thanh to\\xE1n (A+B+C):</td><td class=\"amt\">${fmtVND(totals.D??0)}</td></tr>     </table></div>     <div class=\"bang-chu\"><b>B\\u1EB1ng ch\\u1EEF:</b> ${bangChu}</div>`}(calc, utils);\nconst delivery = `<div style=\"font-weight:bold;margin:10px 0 4px;font-size:10.5pt\">** ĐIỀU KIỆN GIAO HÀNG VÀ THANH TOÁN</div>\n<div class=\"dlg\">\n  <div class=\"di\"><span class=\"k\">1. Nghiệm thu:</span><span>tại Nhà máy Phú Sơn</span></div>\n  <div class=\"di\"><span class=\"k\">2. Ngày nghiệm thu:</span><span>${d.ngay_nghiem_thu??''}</span></div>\n  <div class=\"di\"><span class=\"k\">3. Vận chuyển:</span><span>${d.van_chuyen_nd??''}</span></div>\n  <div class=\"di\"><span class=\"k\">4. Thông tin SP:</span><span>${d.thong_tin_sp??''}</span></div>\n  <div class=\"di\"><span class=\"k\">5. Phiếu giao:</span><span>${d.phieu_giao??''}</span></div>\n  <div class=\"di\"><span class=\"k\">6. Thời gian giao:</span><span><b>${d.thoi_gian_giao??''}</b></span></div>\n</div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">7. Người nhận:</span><span>${d.nguoi_nhan??''}</span></div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">8. Địa điểm:</span><span>${d.dia_diem_giao??''}</span></div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">9. Thanh toán:</span><span>${d.thanh_toan_nd??''}</span></div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">10. Ghi chú:</span><span>${d.ghi_chu_giao??''}</span></div>`;\nconst lsxNotes = utils.parseNoteLines ? utils.parseNoteLines(cfg.ghi_chu_lenh_sx, []) : [];\nconst lsxNoteBlock = lsxNotes.length ? ('<div class=\"notes\"><b>Ghi chú:</b>' + lsxNotes.map((n,i)=>'<div>'+(i+1)+'. '+n+'</div>').join('') + '</div>') : '';\n\nconst sigs = `<div class=\"sig-row\">\n  <div class=\"sig-box\"><div class=\"lbl\">GIÁM ĐỐC PHÊ DUYỆT</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\"></div></div>\n  <div class=\"sig-box\"><div class=\"lbl\">NGƯỜI YÊU CẦU SẢN XUẤT</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\">${d.nvkd??''}</div></div>\n</div>`;\nreturn `<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: 'Times New Roman', Times, serif; font-size: 10.5pt; color: #000; line-height: 1.4; }\n.page { width: 780px; padding: 15px 20px; }\n.co-name { text-align:center; font-size:13pt; font-weight:bold; text-transform:uppercase; }\n.co-addr { text-align:center; font-size:9.5pt; }\n.doc-title { text-align:center; font-size:14pt; font-weight:bold; text-transform:uppercase; margin:14px 0 8px; }\ntable.hdr { width:100%; border-collapse:collapse; margin-bottom:6px; }\ntable.hdr td { padding:2px 4px; vertical-align:top; font-size:10.5pt; }\n.intro { font-size:10pt; margin-bottom:8px; font-style:italic; }\ntable.it { width:100%; border-collapse:collapse; font-size:9.5pt; margin:6px 0; }\ntable.it th { background:#d9d9d9; border:1px solid #555; padding:4px 3px; text-align:center; }\ntable.it td { border:1px solid #555; padding:3px 4px; vertical-align:top; }\n.it-grp { background:#f2f2f2; font-weight:600; white-space:pre-wrap; font-size:9pt; }\n.it-sub { background:#e8e8e8; font-weight:bold; font-size:9pt; }\n.r { text-align:right; } .c { text-align:center; }\n.tot-wrap { display:flex; justify-content:flex-end; margin:6px 0; }\n.tot { border-collapse:collapse; width:340px; }\n.tot td { padding:2px 6px; border:1px solid #aaa; font-size:10pt; }\n.tot .lbl { font-weight:600; } .tot .amt { text-align:right; font-weight:600; }\n.tot .grand td { background:#cfe2ff; font-weight:bold; font-size:10.5pt; }\n.bang-chu { font-style:italic; margin:6px 0 10px; font-size:10pt; }\n.notes { font-size:9.5pt; margin:6px 0; }\n.note-grid { display:grid; grid-template-columns:1fr 1fr; column-gap:20px; }\n.sig-row { display:flex; justify-content:space-between; margin-top:18px; }\n.sig-box { text-align:center; min-width:130px; font-size:9.5pt; }\n.sig-box .lbl { font-weight:bold; }\n.sig-box .sub { font-size:8.5pt; color:#444; }\n.sig-box .name { margin-top:38px; font-weight:bold; }\n.dlg { display:grid; grid-template-columns:1fr 1fr; gap:3px 20px; font-size:10pt; margin:6px 0; }\n.di { display:flex; gap:4px; }\n.di .k { font-weight:bold; min-width:100px; }\n.receive-line { margin:16px 0 8px; font-size:10pt; border-top:1px solid #aaa; padding-top:10px; }\n</style></head>\n<body><div class=\"page\">\n${companyHdr}\n<div class=\"doc-title\">LỆNH SẢN XUẤT NỘI BỘ</div>\n<div style=\"text-align:center;font-size:10pt;font-style:italic;margin-bottom:8px\">Số lệnh: ${soLenh}</div>\n${hdr}${items}${totals}${delivery}${lsxNoteBlock}${sigs}\n</div></body></html>`;\n"
           },
           "table": [
             {
@@ -2246,7 +2175,7 @@
           "m_icons": "fa fa-industry",
           "type_form": "7",
           "table_name": "pm_orders",
-          "menu_id": "pm_orders",
+          "menu_id": "pm_lsx_nb",
           "struct": {
             "fieldsPK": [
               "id"
@@ -2390,11 +2319,6 @@
           ],
           "line_items_print": [
             {
-              "label": "Xuất Báo giá",
-              "trigger_key": "print_bao_gia",
-              "filename_expr": "`BaoGia_${order.so_bao_gia || 'draft'}.pdf`"
-            },
-            {
               "label": "Xuất Lệnh SX nội bộ",
               "trigger_key": "print_lenh_sx",
               "filename_expr": "`LenhSX_${order.so_lenh || 'draft'}.pdf`"
@@ -2450,18 +2374,22 @@
                   "ghi_chu_giao"
                 ]
               }
+            ],
+            "list_title_en": "Internal production order",
+            "list_filter": [
+              {
+                "field": "giai_doan",
+                "values": [
+                  "lenh_sx_nb"
+                ]
+              }
+            ],
+            "default_header": {
+              "giai_doan": "lenh_sx_nb"
+            },
+            "print_keys": [
+              "print_lenh_sx"
             ]
-          },
-          "line_items_list_filter": {
-            "field": "giai_doan",
-            "values": [
-              "lenh_sx_nb",
-              "lenh_sx_pxk",
-              "xuong"
-            ]
-          },
-          "line_items_create_defaults": {
-            "giai_doan": "lenh_sx_nb"
           }
         },
         {
@@ -2478,8 +2406,7 @@
           "prefix_pk": "PM",
           "table_pagesize": "50",
           "trigger": {
-            "print_pxk": "\nconst cfg = utils.settings || {};\nconst companyHdr = utils.buildCompanyHdr ? utils.buildCompanyHdr(cfg) : '';\nconst soLenh = utils.formatSoLenh ? utils.formatSoLenh(order.so_lenh, order.phien_ban) : (order.so_lenh??'');\nconst d = order;\nconst parts = (d.ngay??'').split('/');\nconst hdr = `<div style=\"text-align:center;font-style:italic;margin-bottom:6px\">Ngày ${parts[0]??''} tháng ${parts[1]??''} năm ${parts[2]??''}</div>\n<table class=\"hdr\">\n  <tr><td style=\"width:60%\">Khách hàng: <b>${d.khach_hang??''}</b></td><td>Số: <b>${soLenh}</b></td></tr>\n  <tr><td>Địa chỉ: ${d.dia_chi_kh??''}</td><td></td></tr>\n  <tr><td>Thời gian giao: <b>${d.thoi_gian_giao??''}</b></td><td>Người nhận hàng: <b>${d.nguoi_nhan??''}</b></td></tr>\n  <tr><td colspan=\"2\">Giao hàng tại: <b>${d.dia_diem_giao??''}</b></td></tr>\n  <tr><td colspan=\"2\">NV bán hàng – SĐT: <b>${d.nvkd??''}</b></td></tr>\n</table>`;\n\nconst items = function buildItemsTable(groups,utils,opts=true){const o=typeof opts===\"boolean\"?{showPrice:opts,showGroupSubtotal:opts}:opts;const showPrice=o.showPrice??true;const showGroupSubtotal=o.showGroupSubtotal??showPrice;const{fmtVND,fmtNum,groupLabel}=utils;const priceHdr=showPrice?`<th style=\"width:9%\">\\u0110\\u01A1n gi\\xE1<br/>(VN\\u0110)</th><th style=\"width:10%\">Th\\xE0nh ti\\u1EC1n<br/>(VN\\u0110)</th>`:\"\";let rows=\"\";groups.forEach((g,gi)=>{const label=groupLabel(gi);const specHtml=(g.spec??\"\").replace(/&/g,\"&amp;\").replace(/</g,\"&lt;\");rows+=`<tr><td class=\"c it-grp\" style=\"font-weight:bold\">${label}.</td>       <td colspan=\"${showPrice?7:5}\" class=\"it-grp\">${specHtml}</td></tr>`;if(showGroupSubtotal){const total_tt=g.items.reduce((s,i)=>s+(i.thanh_tien??0),0);const total_kl=g.items.reduce((s,i)=>s+(i.khoi_luong??0),0);const total_st=g.items.reduce((s,i)=>s+(i.so_tam??0),0);const prices=[...new Set(g.items.map(i=>i.don_gia).filter(Boolean))];const uniformPrice=prices.length===1?fmtVND(prices[0]):\"\";const priceSubCells=showPrice?`<td class=\"r it-sub\">${uniformPrice}</td><td class=\"r it-sub\">${fmtVND(total_tt)}</td>`:\"\";rows+=`<tr><td class=\"it-sub\"></td><td class=\"it-sub\" colspan=\"3\">C\\u1ED9ng nh\\xF3m ${label} \\u2013 ch\\u01B0a VAT ${g.vat_rate}%</td>         <td class=\"r it-sub\">${total_st}</td><td class=\"r it-sub\">${fmtNum(total_kl)}</td>${priceSubCells}</tr>`}g.items.forEach((item,idx)=>{const priceCells=showPrice?`<td class=\"r\">${item.don_gia!=null?fmtVND(item.don_gia):\"\"}</td>            <td class=\"r\">${item.thanh_tien?fmtVND(item.thanh_tien):\"\"}</td>`:\"\";rows+=`<tr><td class=\"c\">${idx+1}</td><td>${item.ten_sp??\"\"}</td>         <td class=\"c\">${item.don_vi??\"\"}</td>         <td class=\"r\">${item.chieu_rong!=null?fmtNum(item.chieu_rong):\"\"}</td>         <td class=\"r\">${item.chieu_dai!=null?fmtNum(item.chieu_dai,3):\"\"}</td>         <td class=\"r\">${item.so_tam!=null?item.so_tam:\"\"}</td>         <td class=\"r\">${item.khoi_luong!=null?fmtNum(item.khoi_luong):\"\"}</td>         ${priceCells}</tr>`})});return`<table class=\"it\"><thead><tr>     <th style=\"width:4%\">TT</th>     <th style=\"width:${showPrice?\"26%\":\"38%\"}\">T\\xEAn s\\u1EA3n ph\\u1EA9m/Quy c\\xE1ch</th>     <th style=\"width:5%\">\\u0110\\u01A1n v\\u1ECB</th>     <th style=\"width:7%\">Chi\\u1EC1u<br/>r\\u1ED9ng</th>     <th style=\"width:8%\">Chi\\u1EC1u<br/>d\\xE0i</th>     <th style=\"width:6%\">S\\u1ED1<br/>t\\u1EA5m</th>     <th style=\"width:8%\">Kh\\u1ED1i<br/>l\\u01B0\\u1EE3ng</th>     ${priceHdr}</tr></thead><tbody>${rows}</tbody></table>`}(groups, utils, { showPrice: false, showGroupSubtotal: false });\nconst pxkNotes = utils.parseNoteLines ? utils.parseNoteLines(cfg.ghi_chu_lsx_pxk, []) : [];\nconst pxkNoteBlock = pxkNotes.length ? ('<div class=\"notes\"><b>Ghi chú:</b>' + pxkNotes.map((n,i)=>'<div>'+(i+1)+'. '+n+'</div>').join('') + '</div>') : '';\nconst receive = '<div class=\"receive-line\">Khách hàng nhận hàng lúc: …….... giờ …….. phút, ngày ….. tháng ….. năm ' + (parts[2]??new Date().getFullYear()) + '</div>';\nconst sigs5 = '<div class=\"sig-row\" style=\"justify-content:space-around\">' +\n  ['Người lập phiếu','Người nhận hàng','Lái xe','Thủ kho','BGĐ Nhà máy'].map(l=>\n    `<div class=\"sig-box\"><div class=\"lbl\">${l}</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\"></div></div>`\n  ).join('') + '</div>';\nreturn `<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: 'Times New Roman', Times, serif; font-size: 10.5pt; color: #000; line-height: 1.4; }\n.page { width: 780px; padding: 15px 20px; }\n.co-name { text-align:center; font-size:13pt; font-weight:bold; text-transform:uppercase; }\n.co-addr { text-align:center; font-size:9.5pt; }\n.doc-title { text-align:center; font-size:14pt; font-weight:bold; text-transform:uppercase; margin:14px 0 8px; }\ntable.hdr { width:100%; border-collapse:collapse; margin-bottom:6px; }\ntable.hdr td { padding:2px 4px; vertical-align:top; font-size:10.5pt; }\n.intro { font-size:10pt; margin-bottom:8px; font-style:italic; }\ntable.it { width:100%; border-collapse:collapse; font-size:9.5pt; margin:6px 0; }\ntable.it th { background:#d9d9d9; border:1px solid #555; padding:4px 3px; text-align:center; }\ntable.it td { border:1px solid #555; padding:3px 4px; vertical-align:top; }\n.it-grp { background:#f2f2f2; font-weight:600; white-space:pre-wrap; font-size:9pt; }\n.it-sub { background:#e8e8e8; font-weight:bold; font-size:9pt; }\n.r { text-align:right; } .c { text-align:center; }\n.tot-wrap { display:flex; justify-content:flex-end; margin:6px 0; }\n.tot { border-collapse:collapse; width:340px; }\n.tot td { padding:2px 6px; border:1px solid #aaa; font-size:10pt; }\n.tot .lbl { font-weight:600; } .tot .amt { text-align:right; font-weight:600; }\n.tot .grand td { background:#cfe2ff; font-weight:bold; font-size:10.5pt; }\n.bang-chu { font-style:italic; margin:6px 0 10px; font-size:10pt; }\n.notes { font-size:9.5pt; margin:6px 0; }\n.note-grid { display:grid; grid-template-columns:1fr 1fr; column-gap:20px; }\n.sig-row { display:flex; justify-content:space-between; margin-top:18px; }\n.sig-box { text-align:center; min-width:130px; font-size:9.5pt; }\n.sig-box .lbl { font-weight:bold; }\n.sig-box .sub { font-size:8.5pt; color:#444; }\n.sig-box .name { margin-top:38px; font-weight:bold; }\n.dlg { display:grid; grid-template-columns:1fr 1fr; gap:3px 20px; font-size:10pt; margin:6px 0; }\n.di { display:flex; gap:4px; }\n.di .k { font-weight:bold; min-width:100px; }\n.receive-line { margin:16px 0 8px; font-size:10pt; border-top:1px solid #aaa; padding-top:10px; }\n</style></head>\n<body><div class=\"page\">\n${companyHdr}\n<div class=\"doc-title\">LỆNH SẢN XUẤT KIÊM PHIẾU XUẤT KHO</div>\n${hdr}${items}${pxkNoteBlock}${receive}${sigs5}\n</div></body></html>`;\n",
-            "print_lenh_sx": "\nconst cfg = utils.settings || {};\nconst companyHdr = utils.buildCompanyHdr ? utils.buildCompanyHdr(cfg) : '';\nconst soLenh = utils.formatSoLenh ? utils.formatSoLenh(order.so_lenh, order.phien_ban) : (order.so_lenh??'');\nconst now = new Date();\nconst timeStr = now.toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'}) + ' ' + now.toLocaleDateString('vi-VN');\nconst d = order;\nconst hdr = `<table class=\"hdr\">\n  <tr><td>Số lệnh sản xuất: <b>${soLenh}</b></td><td>Thời gian gửi: <b>${timeStr}</b></td></tr>\n  <tr><td>Khách hàng: <b>${d.khach_hang??''}</b></td><td>NV bán hàng – SĐT: <b>${d.nvkd??''}</b></td></tr>\n  <tr><td>Người mua hàng – SĐT: ${d.nguoi_lien_he??''}</td><td></td></tr>\n</table><div style=\"font-weight:bold;margin:6px 0 2px\">* NỘI DUNG YÊU CẦU SẢN XUẤT:</div>`;\n\nconst items = function buildItemsTable(groups,utils,opts=true){const o=typeof opts===\"boolean\"?{showPrice:opts,showGroupSubtotal:opts}:opts;const showPrice=o.showPrice??true;const showGroupSubtotal=o.showGroupSubtotal??showPrice;const{fmtVND,fmtNum,groupLabel}=utils;const priceHdr=showPrice?`<th style=\"width:9%\">\\u0110\\u01A1n gi\\xE1<br/>(VN\\u0110)</th><th style=\"width:10%\">Th\\xE0nh ti\\u1EC1n<br/>(VN\\u0110)</th>`:\"\";let rows=\"\";groups.forEach((g,gi)=>{const label=groupLabel(gi);const specHtml=(g.spec??\"\").replace(/&/g,\"&amp;\").replace(/</g,\"&lt;\");rows+=`<tr><td class=\"c it-grp\" style=\"font-weight:bold\">${label}.</td>       <td colspan=\"${showPrice?7:5}\" class=\"it-grp\">${specHtml}</td></tr>`;if(showGroupSubtotal){const total_tt=g.items.reduce((s,i)=>s+(i.thanh_tien??0),0);const total_kl=g.items.reduce((s,i)=>s+(i.khoi_luong??0),0);const total_st=g.items.reduce((s,i)=>s+(i.so_tam??0),0);const prices=[...new Set(g.items.map(i=>i.don_gia).filter(Boolean))];const uniformPrice=prices.length===1?fmtVND(prices[0]):\"\";const priceSubCells=showPrice?`<td class=\"r it-sub\">${uniformPrice}</td><td class=\"r it-sub\">${fmtVND(total_tt)}</td>`:\"\";rows+=`<tr><td class=\"it-sub\"></td><td class=\"it-sub\" colspan=\"3\">C\\u1ED9ng nh\\xF3m ${label} \\u2013 ch\\u01B0a VAT ${g.vat_rate}%</td>         <td class=\"r it-sub\">${total_st}</td><td class=\"r it-sub\">${fmtNum(total_kl)}</td>${priceSubCells}</tr>`}g.items.forEach((item,idx)=>{const priceCells=showPrice?`<td class=\"r\">${item.don_gia!=null?fmtVND(item.don_gia):\"\"}</td>            <td class=\"r\">${item.thanh_tien?fmtVND(item.thanh_tien):\"\"}</td>`:\"\";rows+=`<tr><td class=\"c\">${idx+1}</td><td>${item.ten_sp??\"\"}</td>         <td class=\"c\">${item.don_vi??\"\"}</td>         <td class=\"r\">${item.chieu_rong!=null?fmtNum(item.chieu_rong):\"\"}</td>         <td class=\"r\">${item.chieu_dai!=null?fmtNum(item.chieu_dai,3):\"\"}</td>         <td class=\"r\">${item.so_tam!=null?item.so_tam:\"\"}</td>         <td class=\"r\">${item.khoi_luong!=null?fmtNum(item.khoi_luong):\"\"}</td>         ${priceCells}</tr>`})});return`<table class=\"it\"><thead><tr>     <th style=\"width:4%\">TT</th>     <th style=\"width:${showPrice?\"26%\":\"38%\"}\">T\\xEAn s\\u1EA3n ph\\u1EA9m/Quy c\\xE1ch</th>     <th style=\"width:5%\">\\u0110\\u01A1n v\\u1ECB</th>     <th style=\"width:7%\">Chi\\u1EC1u<br/>r\\u1ED9ng</th>     <th style=\"width:8%\">Chi\\u1EC1u<br/>d\\xE0i</th>     <th style=\"width:6%\">S\\u1ED1<br/>t\\u1EA5m</th>     <th style=\"width:8%\">Kh\\u1ED1i<br/>l\\u01B0\\u1EE3ng</th>     ${priceHdr}</tr></thead><tbody>${rows}</tbody></table>`}(groups, utils, { showPrice: true, showGroupSubtotal: true });\nconst totals = function buildTotals(calc,utils){const{fmtVND,soThanhChu}=utils;const{totals}=calc;const bangChu=soThanhChu(totals.D??0);return`<div class=\"tot-wrap\"><table class=\"tot\">     <tr><td class=\"lbl\">A &nbsp; T\\u1ED5ng gi\\xE1 tr\\u1ECB h\\xE0ng h\\xF3a ch\\u01B0a VAT:</td><td class=\"amt\">${fmtVND(totals.A??0)}</td></tr>     <tr><td class=\"lbl\">B &nbsp; Ti\\u1EC1n VAT 8%</td><td class=\"amt\">${fmtVND(totals.B??0)}</td></tr>     <tr><td class=\"lbl\">C &nbsp; Ti\\u1EC1n VAT 10%</td><td class=\"amt\">${fmtVND(totals.C??0)}</td></tr>     <tr class=\"grand\"><td class=\"lbl\">D &nbsp; T\\u1ED5ng gi\\xE1 tr\\u1ECB thanh to\\xE1n (A+B+C):</td><td class=\"amt\">${fmtVND(totals.D??0)}</td></tr>     </table></div>     <div class=\"bang-chu\"><b>B\\u1EB1ng ch\\u1EEF:</b> ${bangChu}</div>`}(calc, utils);\nconst delivery = `<div style=\"font-weight:bold;margin:10px 0 4px;font-size:10.5pt\">** ĐIỀU KIỆN GIAO HÀNG VÀ THANH TOÁN</div>\n<div class=\"dlg\">\n  <div class=\"di\"><span class=\"k\">1. Nghiệm thu:</span><span>tại Nhà máy Phú Sơn</span></div>\n  <div class=\"di\"><span class=\"k\">2. Ngày nghiệm thu:</span><span>${d.ngay_nghiem_thu??''}</span></div>\n  <div class=\"di\"><span class=\"k\">3. Vận chuyển:</span><span>${d.van_chuyen_nd??''}</span></div>\n  <div class=\"di\"><span class=\"k\">4. Thông tin SP:</span><span>${d.thong_tin_sp??''}</span></div>\n  <div class=\"di\"><span class=\"k\">5. Phiếu giao:</span><span>${d.phieu_giao??''}</span></div>\n  <div class=\"di\"><span class=\"k\">6. Thời gian giao:</span><span><b>${d.thoi_gian_giao??''}</b></span></div>\n</div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">7. Người nhận:</span><span>${d.nguoi_nhan??''}</span></div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">8. Địa điểm:</span><span>${d.dia_diem_giao??''}</span></div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">9. Thanh toán:</span><span>${d.thanh_toan_nd??''}</span></div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">10. Ghi chú:</span><span>${d.ghi_chu_giao??''}</span></div>`;\nconst lsxNotes = utils.parseNoteLines ? utils.parseNoteLines(cfg.ghi_chu_lenh_sx, []) : [];\nconst lsxNoteBlock = lsxNotes.length ? ('<div class=\"notes\"><b>Ghi chú:</b>' + lsxNotes.map((n,i)=>'<div>'+(i+1)+'. '+n+'</div>').join('') + '</div>') : '';\n\nconst sigs = `<div class=\"sig-row\">\n  <div class=\"sig-box\"><div class=\"lbl\">GIÁM ĐỐC PHÊ DUYỆT</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\"></div></div>\n  <div class=\"sig-box\"><div class=\"lbl\">NGƯỜI YÊU CẦU SẢN XUẤT</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\">${d.nvkd??''}</div></div>\n</div>`;\nreturn `<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: 'Times New Roman', Times, serif; font-size: 10.5pt; color: #000; line-height: 1.4; }\n.page { width: 780px; padding: 15px 20px; }\n.co-name { text-align:center; font-size:13pt; font-weight:bold; text-transform:uppercase; }\n.co-addr { text-align:center; font-size:9.5pt; }\n.doc-title { text-align:center; font-size:14pt; font-weight:bold; text-transform:uppercase; margin:14px 0 8px; }\ntable.hdr { width:100%; border-collapse:collapse; margin-bottom:6px; }\ntable.hdr td { padding:2px 4px; vertical-align:top; font-size:10.5pt; }\n.intro { font-size:10pt; margin-bottom:8px; font-style:italic; }\ntable.it { width:100%; border-collapse:collapse; font-size:9.5pt; margin:6px 0; }\ntable.it th { background:#d9d9d9; border:1px solid #555; padding:4px 3px; text-align:center; }\ntable.it td { border:1px solid #555; padding:3px 4px; vertical-align:top; }\n.it-grp { background:#f2f2f2; font-weight:600; white-space:pre-wrap; font-size:9pt; }\n.it-sub { background:#e8e8e8; font-weight:bold; font-size:9pt; }\n.r { text-align:right; } .c { text-align:center; }\n.tot-wrap { display:flex; justify-content:flex-end; margin:6px 0; }\n.tot { border-collapse:collapse; width:340px; }\n.tot td { padding:2px 6px; border:1px solid #aaa; font-size:10pt; }\n.tot .lbl { font-weight:600; } .tot .amt { text-align:right; font-weight:600; }\n.tot .grand td { background:#cfe2ff; font-weight:bold; font-size:10.5pt; }\n.bang-chu { font-style:italic; margin:6px 0 10px; font-size:10pt; }\n.notes { font-size:9.5pt; margin:6px 0; }\n.note-grid { display:grid; grid-template-columns:1fr 1fr; column-gap:20px; }\n.sig-row { display:flex; justify-content:space-between; margin-top:18px; }\n.sig-box { text-align:center; min-width:130px; font-size:9.5pt; }\n.sig-box .lbl { font-weight:bold; }\n.sig-box .sub { font-size:8.5pt; color:#444; }\n.sig-box .name { margin-top:38px; font-weight:bold; }\n.dlg { display:grid; grid-template-columns:1fr 1fr; gap:3px 20px; font-size:10pt; margin:6px 0; }\n.di { display:flex; gap:4px; }\n.di .k { font-weight:bold; min-width:100px; }\n.receive-line { margin:16px 0 8px; font-size:10pt; border-top:1px solid #aaa; padding-top:10px; }\n</style></head>\n<body><div class=\"page\">\n${companyHdr}\n<div class=\"doc-title\">LỆNH SẢN XUẤT NỘI BỘ</div>\n<div style=\"text-align:center;font-size:10pt;font-style:italic;margin-bottom:8px\">Số lệnh: ${soLenh}</div>\n${hdr}${items}${totals}${delivery}${lsxNoteBlock}${sigs}\n</div></body></html>`;\n"
+            "print_pxk": "\nconst cfg = utils.settings || {};\nconst companyHdr = utils.buildCompanyHdr ? utils.buildCompanyHdr(cfg) : '';\nconst soLenh = utils.formatSoLenh ? utils.formatSoLenh(order.so_lenh, order.phien_ban) : (order.so_lenh??'');\nconst d = order;\nconst parts = (d.ngay??'').split('/');\nconst hdr = `<div style=\"text-align:center;font-style:italic;margin-bottom:6px\">Ngày ${parts[0]??''} tháng ${parts[1]??''} năm ${parts[2]??''}</div>\n<table class=\"hdr\">\n  <tr><td style=\"width:60%\">Khách hàng: <b>${d.khach_hang??''}</b></td><td>Số: <b>${soLenh}</b></td></tr>\n  <tr><td>Địa chỉ: ${d.dia_chi_kh??''}</td><td></td></tr>\n  <tr><td>Thời gian giao: <b>${d.thoi_gian_giao??''}</b></td><td>Người nhận hàng: <b>${d.nguoi_nhan??''}</b></td></tr>\n  <tr><td colspan=\"2\">Giao hàng tại: <b>${d.dia_diem_giao??''}</b></td></tr>\n  <tr><td colspan=\"2\">NV bán hàng – SĐT: <b>${d.nvkd??''}</b></td></tr>\n</table>`;\n\nconst items = function buildItemsTable(groups,utils,opts=true){const o=typeof opts===\"boolean\"?{showPrice:opts,showGroupSubtotal:opts}:opts;const showPrice=o.showPrice??true;const showGroupSubtotal=o.showGroupSubtotal??showPrice;const{fmtVND,fmtNum,groupLabel}=utils;const priceHdr=showPrice?`<th style=\"width:9%\">\\u0110\\u01A1n gi\\xE1<br/>(VN\\u0110)</th><th style=\"width:10%\">Th\\xE0nh ti\\u1EC1n<br/>(VN\\u0110)</th>`:\"\";let rows=\"\";groups.forEach((g,gi)=>{const label=groupLabel(gi);const specHtml=(g.spec??\"\").replace(/&/g,\"&amp;\").replace(/</g,\"&lt;\");rows+=`<tr><td class=\"c it-grp\" style=\"font-weight:bold\">${label}.</td>       <td colspan=\"${showPrice?7:5}\" class=\"it-grp\">${specHtml}</td></tr>`;if(showGroupSubtotal){const total_tt=g.items.reduce((s,i)=>s+(i.thanh_tien??0),0);const total_kl=g.items.reduce((s,i)=>s+(i.khoi_luong??0),0);const total_st=g.items.reduce((s,i)=>s+(i.so_tam??0),0);const prices=[...new Set(g.items.map(i=>i.don_gia).filter(Boolean))];const uniformPrice=prices.length===1?fmtVND(prices[0]):\"\";const priceSubCells=showPrice?`<td class=\"r it-sub\">${uniformPrice}</td><td class=\"r it-sub\">${fmtVND(total_tt)}</td>`:\"\";rows+=`<tr><td class=\"it-sub\"></td><td class=\"it-sub\" colspan=\"3\">C\\u1ED9ng nh\\xF3m ${label} \\u2013 ch\\u01B0a VAT ${g.vat_rate}%</td>         <td class=\"r it-sub\">${total_st}</td><td class=\"r it-sub\">${fmtNum(total_kl)}</td>${priceSubCells}</tr>`}g.items.forEach((item,idx)=>{const priceCells=showPrice?`<td class=\"r\">${item.don_gia!=null?fmtVND(item.don_gia):\"\"}</td>            <td class=\"r\">${item.thanh_tien?fmtVND(item.thanh_tien):\"\"}</td>`:\"\";rows+=`<tr><td class=\"c\">${idx+1}</td><td>${item.ten_sp??\"\"}</td>         <td class=\"c\">${item.don_vi??\"\"}</td>         <td class=\"r\">${item.chieu_rong!=null?fmtNum(item.chieu_rong):\"\"}</td>         <td class=\"r\">${item.chieu_dai!=null?fmtNum(item.chieu_dai,3):\"\"}</td>         <td class=\"r\">${item.so_tam!=null?item.so_tam:\"\"}</td>         <td class=\"r\">${item.khoi_luong!=null?fmtNum(item.khoi_luong):\"\"}</td>         ${priceCells}</tr>`})});return`<table class=\"it\"><thead><tr>     <th style=\"width:4%\">TT</th>     <th style=\"width:${showPrice?\"26%\":\"38%\"}\">T\\xEAn s\\u1EA3n ph\\u1EA9m/Quy c\\xE1ch</th>     <th style=\"width:5%\">\\u0110\\u01A1n v\\u1ECB</th>     <th style=\"width:7%\">Chi\\u1EC1u<br/>r\\u1ED9ng</th>     <th style=\"width:8%\">Chi\\u1EC1u<br/>d\\xE0i</th>     <th style=\"width:6%\">S\\u1ED1<br/>t\\u1EA5m</th>     <th style=\"width:8%\">Kh\\u1ED1i<br/>l\\u01B0\\u1EE3ng</th>     ${priceHdr}</tr></thead><tbody>${rows}</tbody></table>`}(groups, utils, { showPrice: false, showGroupSubtotal: false });\nconst pxkNotes = utils.parseNoteLines ? utils.parseNoteLines(cfg.ghi_chu_lsx_pxk, []) : [];\nconst pxkNoteBlock = pxkNotes.length ? ('<div class=\"notes\"><b>Ghi chú:</b>' + pxkNotes.map((n,i)=>'<div>'+(i+1)+'. '+n+'</div>').join('') + '</div>') : '';\nconst receive = '<div class=\"receive-line\">Khách hàng nhận hàng lúc: …….... giờ …….. phút, ngày ….. tháng ….. năm ' + (parts[2]??new Date().getFullYear()) + '</div>';\nconst sigs5 = '<div class=\"sig-row\" style=\"justify-content:space-around\">' +\n  ['Người lập phiếu','Người nhận hàng','Lái xe','Thủ kho','BGĐ Nhà máy'].map(l=>\n    `<div class=\"sig-box\"><div class=\"lbl\">${l}</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\"></div></div>`\n  ).join('') + '</div>';\nreturn `<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: 'Times New Roman', Times, serif; font-size: 10.5pt; color: #000; line-height: 1.4; }\n.page { width: 780px; padding: 15px 20px; }\n.co-name { text-align:center; font-size:13pt; font-weight:bold; text-transform:uppercase; }\n.co-addr { text-align:center; font-size:9.5pt; }\n.doc-title { text-align:center; font-size:14pt; font-weight:bold; text-transform:uppercase; margin:14px 0 8px; }\ntable.hdr { width:100%; border-collapse:collapse; margin-bottom:6px; }\ntable.hdr td { padding:2px 4px; vertical-align:top; font-size:10.5pt; }\n.intro { font-size:10pt; margin-bottom:8px; font-style:italic; }\ntable.it { width:100%; border-collapse:collapse; font-size:9.5pt; margin:6px 0; }\ntable.it th { background:#d9d9d9; border:1px solid #555; padding:4px 3px; text-align:center; }\ntable.it td { border:1px solid #555; padding:3px 4px; vertical-align:top; }\n.it-grp { background:#f2f2f2; font-weight:600; white-space:pre-wrap; font-size:9pt; }\n.it-sub { background:#e8e8e8; font-weight:bold; font-size:9pt; }\n.r { text-align:right; } .c { text-align:center; }\n.tot-wrap { display:flex; justify-content:flex-end; margin:6px 0; }\n.tot { border-collapse:collapse; width:340px; }\n.tot td { padding:2px 6px; border:1px solid #aaa; font-size:10pt; }\n.tot .lbl { font-weight:600; } .tot .amt { text-align:right; font-weight:600; }\n.tot .grand td { background:#cfe2ff; font-weight:bold; font-size:10.5pt; }\n.bang-chu { font-style:italic; margin:6px 0 10px; font-size:10pt; }\n.notes { font-size:9.5pt; margin:6px 0; }\n.note-grid { display:grid; grid-template-columns:1fr 1fr; column-gap:20px; }\n.sig-row { display:flex; justify-content:space-between; margin-top:18px; }\n.sig-box { text-align:center; min-width:130px; font-size:9.5pt; }\n.sig-box .lbl { font-weight:bold; }\n.sig-box .sub { font-size:8.5pt; color:#444; }\n.sig-box .name { margin-top:38px; font-weight:bold; }\n.dlg { display:grid; grid-template-columns:1fr 1fr; gap:3px 20px; font-size:10pt; margin:6px 0; }\n.di { display:flex; gap:4px; }\n.di .k { font-weight:bold; min-width:100px; }\n.receive-line { margin:16px 0 8px; font-size:10pt; border-top:1px solid #aaa; padding-top:10px; }\n</style></head>\n<body><div class=\"page\">\n${companyHdr}\n<div class=\"doc-title\">LỆNH SẢN XUẤT KIÊM PHIẾU XUẤT KHO</div>\n${hdr}${items}${pxkNoteBlock}${receive}${sigs5}\n</div></body></html>`;\n"
           },
           "table": [
             {
@@ -2782,12 +2709,12 @@
           "id": "pm_lsx_pxk",
           "parentId": "pm_ban_hang",
           "label": "Lệnh SX kiêm phiếu xuất kho",
-          "label_en": "Production + warehouse release",
+          "label_en": "Production + delivery note",
           "label_zh": "报价 | 内部生产令 | 出库单",
           "m_icons": "fa fa-truck",
           "type_form": "7",
           "table_name": "pm_orders",
-          "menu_id": "pm_orders",
+          "menu_id": "pm_lsx_pxk",
           "struct": {
             "fieldsPK": [
               "id"
@@ -2931,11 +2858,6 @@
           ],
           "line_items_print": [
             {
-              "label": "Xuất Lệnh SX nội bộ",
-              "trigger_key": "print_lenh_sx",
-              "filename_expr": "`LenhSX_${order.so_lenh || 'draft'}.pdf`"
-            },
-            {
               "label": "Xuất Lệnh SX + PXK",
               "trigger_key": "print_pxk",
               "filename_expr": "`LenhSX_PXK_${order.so_lenh || 'draft'}.pdf`"
@@ -2943,7 +2865,7 @@
           ],
           "line_items_ui": {
             "header_title": "Thông tin đơn hàng",
-            "list_title": "Lệnh SX kiêm phiếu xuất kho",
+            "list_title": "Lệnh sản xuất kiêm phiếu xuất kho",
             "create_label": "Tạo mới",
             "edit_label": "Chỉnh sửa",
             "back_label": "← Danh sách",
@@ -2991,17 +2913,23 @@
                   "ghi_chu_giao"
                 ]
               }
+            ],
+            "list_title_en": "Production + delivery note",
+            "list_filter": [
+              {
+                "field": "giai_doan",
+                "values": [
+                  "lenh_sx_pxk",
+                  "xuong"
+                ]
+              }
+            ],
+            "default_header": {
+              "giai_doan": "lenh_sx_pxk"
+            },
+            "print_keys": [
+              "print_pxk"
             ]
-          },
-          "line_items_list_filter": {
-            "field": "giai_doan",
-            "values": [
-              "lenh_sx_pxk",
-              "xuong"
-            ]
-          },
-          "line_items_create_defaults": {
-            "giai_doan": "lenh_sx_pxk"
           }
         }
       ],
@@ -3011,14 +2939,16 @@
       "label_zh": "销售",
       "m_icons": "fa fa-shopping-cart",
       "type_form": "0",
-      "table_name": ""
+      "table_name": "",
+      "m_order": 40
     }
   ],
   "notes": [
-    "Thứ tự menu PM.docx: Trang chủ (broadcast) → Khách hàng → Cài đặt → CSKH → Bán hàng.",
-    "Bán hàng: 3 menu con — Báo giá | LSXNB | LSX-PXK — cùng bảng pm_orders, lọc theo giai_doan.",
+    "Thứ tự menu PM.docx: Trang chủ (platform) → Khách hàng → Cài đặt → CSKH → Bán hàng.",
+    "Trang chủ KPI: sys_autos broadcast_{app_id} — menu inject order=-1, không khai báo menu.json.",
     "Danh mục nguồn/phân loại/NV: ẩn dưới Cài đặt (combo/lưới).",
-    "pm_orders field_sections: BG (1-9) → Quy trình (10-13) → Giao hàng LSX (30+)."
+    "Bán hàng: pm_bao_gia | pm_lsx_nb | pm_lsx_pxk — chung bảng pm_orders, lọc giai_doan.",
+    "field_sections: BG (1-9) → Quy trình (10-13) → Giao hàng LSX (30+)."
   ],
   "warnings": [
     "Trigger in PDF lưu plain text trong template; production nên encrypt qua menu designer.",
@@ -3026,7 +2956,14 @@
   ],
   "coverage_modules": [
     {
-      "module": "Hồ sơ khách hàng",
+      "module": "Trang chủ KPI",
+      "menus": [
+        "homepage"
+      ],
+      "status": "partial"
+    },
+    {
+      "module": "Danh sách khách hàng",
       "menus": [
         "pm_khachhang"
       ],
@@ -3040,23 +2977,7 @@
       "status": "covered"
     },
     {
-      "module": "CSKH trước/sau mua",
-      "menus": [
-        "pm_cskh_truoc_mua",
-        "pm_cskh_sau_mua"
-      ],
-      "status": "covered"
-    },
-    {
-      "module": "Lịch CS + sinh nhật",
-      "menus": [
-        "pm_lich_cham_soc",
-        "pm_sinh_nhat"
-      ],
-      "status": "covered"
-    },
-    {
-      "module": "Cài đặt in ấn + danh mục ẩn",
+      "module": "Cài đặt",
       "menus": [
         "pm_settings",
         "pm_nguon_kh",
@@ -3066,26 +2987,38 @@
       "status": "covered"
     },
     {
-      "module": "Bán hàng BG/LSX/PXK",
+      "module": "CSKH",
       "menus": [
-        "pm_bao_gia",
-        "pm_lsx_nb",
+        "pm_cskh_truoc_mua",
+        "pm_cskh_sau_mua",
+        "pm_lich_cham_soc",
+        "pm_sinh_nhat"
+      ],
+      "status": "covered"
+    },
+    {
+      "module": "Báo giá",
+      "menus": [
+        "pm_bao_gia"
+      ],
+      "status": "covered"
+    },
+    {
+      "module": "LSX nội bộ",
+      "menus": [
+        "pm_lsx_nb"
+      ],
+      "status": "covered"
+    },
+    {
+      "module": "LSX-PXK",
+      "menus": [
         "pm_lsx_pxk"
       ],
       "status": "covered"
     },
     {
-      "module": "Trang chủ KPI",
-      "menus": [],
-      "status": "partial"
-    },
-    {
       "module": "Người dùng / phòng ban",
-      "menus": [],
-      "status": "partial"
-    },
-    {
-      "module": "Xuất Excel",
       "menus": [],
       "status": "partial"
     }
@@ -3101,7 +3034,9 @@
     {
       "table": "pm_orders",
       "menus": [
-        "pm_orders"
+        "pm_bao_gia",
+        "pm_lsx_nb",
+        "pm_lsx_pxk"
       ],
       "status": "covered"
     },
@@ -3121,8 +3056,21 @@
     }
   ],
   "unresolved_assumptions": [
-    "Trang chủ KPI: sys_autos broadcast_{app_id} — hệ thống inject menu Trang chủ.",
-    "Người dùng / phòng ban / phân quyền: module Hệ thống (Admin/Giamdoc/Giamsat).",
-    "Xuất Excel: chưa triển khai trigger; hiện có PDF qua line_items_print."
-  ]
+    "Trang chủ KPI và module phòng ban/NV phần mềm dùng Hệ thống + broadcast home."
+  ],
+  "_doc": {
+    "source": "TranPhong_PmSX/Mô tả PM.docx",
+    "menu_order": [
+      "Trang chủ (platform: homepage + broadcast_{app_id})",
+      "Khách hàng → Danh sách KH + Người mua hàng",
+      "Cài đặt → in ấn, VAT, ghi chú BG/LSX/PXK",
+      "Chăm sóc khách hàng → A/B + Lịch + Sinh nhật",
+      "Bán hàng → Báo giá | LSXNB | LSX-PXK"
+    ],
+    "notes": [
+      "Trang chủ KPI: cấu hình sys_autos broadcast_{app_id}, menu inject order=-1.",
+      "Người dùng / phòng ban: module Hệ thống (Admin).",
+      "Ba menu bán hàng dùng chung bảng pm_orders, lọc theo giai_doan."
+    ]
+  }
 }

@@ -7,9 +7,12 @@
  *   2. Thay "trigger" bằng các function body đã encrypt
  *   3. Mỗi dự án tạo config riêng với columns / formulas / templates khác
  *
+ * Menu Bán hàng (PM.docx): 3 menu lá dùng chung bảng pm_orders —
+ *   pm_bao_gia (giai_doan nhap|bao_gia), pm_lsx_nb, pm_lsx_pxk.
+ *   Xem menu.json mẫu đầy đủ.
+ *
  * Thay đổi công thức = sửa "formula" trong line_items_columns → không sửa code.
  * Thêm tài liệu in = thêm phần tử vào line_items_print + thêm trigger key.
- * Menu bán hàng PM.docx: pm_bao_gia | pm_lsx_nb | pm_lsx_pxk (lọc giai_doan).
  * Thêm loại VAT = sửa vat_options trong line_items_group.
  */
 
