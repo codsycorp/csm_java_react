@@ -168,8 +168,8 @@ pub async fn handle_ai_seo_content(state: &AppState, params: &Map<String, Value>
             seo_pipeline == "seo_writer_2026",
         );
 
-        // Java uses ai.seo.article.max-tokens = 4096
-        match llama.complete_with_tokens(&article_prompt, 4096).await {
+        // 0 = stop at natural <|im_end|> EOG token; context window is the hard cap
+        match llama.complete_with_tokens(&article_prompt, 0).await {
             Ok(raw) => {
                 return populate_seo_response(&mut r, &raw);
             }
