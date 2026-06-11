@@ -1,0 +1,1942 @@
+{
+  "menu": [
+    {
+      "field_root": "",
+      "report_name": "",
+      "orientation": "",
+      "p_width": "0",
+      "p_height": "0",
+      "m_show": true,
+      "g_readonly": false,
+      "type_menu": "",
+      "row_type_edit": "0",
+      "dev": "",
+      "prefix_pk": "",
+      "table_pagesize": "50",
+      "trigger": {},
+      "table": [],
+      "v_link": "",
+      "children": [],
+      "id": "pm_home",
+      "label": "Trang chủ",
+      "label_en": "Dashboard",
+      "label_zh": "首页",
+      "m_icons": "fa fa-home",
+      "type_form": "4",
+      "auto_code_name": "pm_dashboard",
+      "table_name": ""
+    },
+    {
+      "field_root": "",
+      "report_name": "",
+      "orientation": "",
+      "p_width": "0",
+      "p_height": "0",
+      "m_show": true,
+      "g_readonly": false,
+      "type_menu": "",
+      "row_type_edit": "0",
+      "dev": "",
+      "prefix_pk": "",
+      "table_pagesize": "50",
+      "trigger": {},
+      "table": [],
+      "v_link": "",
+      "children": [
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "PM",
+          "table_pagesize": "50",
+          "trigger": {
+            "print_bao_gia": "\nconst { fmtVND, fmtNum, soThanhChu, groupLabel } = utils;\nconst phi_vc = order.phi_vc === 'da' ? 'Giá trên đã bao gồm vận chuyển.' : 'Giá trên chưa bao gồm vận chuyển.';\nconst hdr = `<table class=\"hdr\">\n  <tr><td style=\"width:55%\">Kính gửi: <b>${order.khach_hang??''}</b></td>\n    <td>Số: <b>${order.so_bao_gia??''}</b> &nbsp;&nbsp; Ngày: <b>${order.ngay??''}</b></td></tr>\n  <tr><td>Địa chỉ: ${order.dia_chi_kh??''}</td>\n    <td>Hiệu lực đến: <b>${order.hieu_luc_den??''}</b></td></tr>\n  <tr><td>Người liên hệ: ${order.nguoi_lien_he??''}</td>\n    <td>NVKD: <b>${order.nvkd??''}</b></td></tr></table>\n  <div class=\"intro\">Cảm ơn Quý khách hàng đã quan tâm tới sản phẩm do Công ty TNHH Công nghệ Công nghiệp Phú Sơn sản xuất. Chúng tôi xin gửi Báo giá theo yêu cầu Quý khách với nội dung như sau:</div>`;\n\nconst items = function buildItemsTable(groups,utils,showPrice){const{fmtVND,fmtNum,groupLabel}=utils;const priceHdr=showPrice?`<th style=\"width:9%\">\\u0110\\u01A1n gi\\xE1<br/>(VN\\u0110)</th><th style=\"width:10%\">Th\\xE0nh ti\\u1EC1n<br/>(VN\\u0110)</th>`:\"\";let rows=\"\";groups.forEach((g,gi)=>{const label=groupLabel(gi);const specHtml=(g.spec??\"\").replace(/&/g,\"&amp;\").replace(/</g,\"&lt;\");rows+=`<tr><td class=\"c it-grp\" style=\"font-weight:bold\">${label}.</td>       <td colspan=\"${showPrice?7:5}\" class=\"it-grp\">${specHtml}</td></tr>`;const total_tt=g.items.reduce((s,i)=>s+(i.thanh_tien??0),0);const total_kl=g.items.reduce((s,i)=>s+(i.khoi_luong??0),0);const total_st=g.items.reduce((s,i)=>s+(i.so_tam??0),0);const prices=[...new Set(g.items.map(i=>i.don_gia).filter(Boolean))];const uniformPrice=prices.length===1?fmtVND(prices[0]):\"\";const priceSubCells=showPrice?`<td class=\"r it-sub\">${uniformPrice}</td><td class=\"r it-sub\">${fmtVND(total_tt)}</td>`:\"\";rows+=`<tr><td class=\"it-sub\"></td><td class=\"it-sub\" colspan=\"3\">C\\u1ED9ng nh\\xF3m ${label} \\u2013 ch\\u01B0a VAT ${g.vat_rate}%</td>       <td class=\"r it-sub\">${total_st}</td><td class=\"r it-sub\">${fmtNum(total_kl)}</td>${priceSubCells}</tr>`;g.items.forEach((item,idx)=>{const priceCells=showPrice?`<td class=\"r\">${item.don_gia!=null?fmtVND(item.don_gia):\"\"}</td>            <td class=\"r\">${item.thanh_tien?fmtVND(item.thanh_tien):\"\"}</td>`:\"\";rows+=`<tr><td class=\"c\">${idx+1}</td><td>${item.ten_sp??\"\"}</td>         <td class=\"c\">${item.don_vi??\"\"}</td>         <td class=\"r\">${item.chieu_rong!=null?fmtNum(item.chieu_rong):\"\"}</td>         <td class=\"r\">${item.chieu_dai!=null?fmtNum(item.chieu_dai,3):\"\"}</td>         <td class=\"r\">${item.so_tam!=null?item.so_tam:\"\"}</td>         <td class=\"r\">${item.khoi_luong!=null?fmtNum(item.khoi_luong):\"\"}</td>         ${priceCells}</tr>`})});return`<table class=\"it\"><thead><tr>     <th style=\"width:4%\">TT</th>     <th style=\"width:${showPrice?\"26%\":\"38%\"}\">T\\xEAn s\\u1EA3n ph\\u1EA9m/Quy c\\xE1ch</th>     <th style=\"width:5%\">\\u0110V</th>     <th style=\"width:7%\">Chi\\u1EC1u<br/>r\\u1ED9ng</th>     <th style=\"width:8%\">Chi\\u1EC1u<br/>d\\xE0i</th>     <th style=\"width:6%\">S\\u1ED1<br/>t\\u1EA5m</th>     <th style=\"width:8%\">Kh\\u1ED1i<br/>l\\u01B0\\u1EE3ng</th>     ${priceHdr}</tr></thead><tbody>${rows}</tbody></table>`}(groups, utils, true);\nconst totals = function buildTotals(calc,utils){const{fmtVND,soThanhChu}=utils;const{totals}=calc;const bangChu=soThanhChu(totals.D??0);return`<div class=\"tot-wrap\"><table class=\"tot\">     <tr><td class=\"lbl\">A &nbsp; T\\u1ED5ng gi\\xE1 tr\\u1ECB h\\xE0ng h\\xF3a ch\\u01B0a VAT:</td><td class=\"amt\">${fmtVND(totals.A??0)}</td></tr>     <tr><td class=\"lbl\">B &nbsp; Ti\\u1EC1n VAT 8%</td><td class=\"amt\">${fmtVND(totals.B??0)}</td></tr>     <tr><td class=\"lbl\">C &nbsp; Ti\\u1EC1n VAT 10%</td><td class=\"amt\">${fmtVND(totals.C??0)}</td></tr>     <tr class=\"grand\"><td class=\"lbl\">D &nbsp; T\\u1ED5ng gi\\xE1 tr\\u1ECB thanh to\\xE1n (A+B+C):</td><td class=\"amt\">${fmtVND(totals.D??0)}</td></tr>     </table></div>     <div class=\"bang-chu\"><b>B\\u1EB1ng ch\\u1EEF:</b> ${bangChu}</div>`}(calc, utils);\nconst notes = '<div class=\"notes\"><b>Ghi chú:</b><div class=\"note-grid\">' +\n  [\"Đơn giá đã bao gồm VAT: Tấm lợp PU, EPS, RW, GW, Vận chuyển thuế 8%; Phụ kiện tôn, inox, 1 lớp thuế 10%\",\"Dung sai kích thước chiều dài ±5mm, chiều rộng ±4mm\",\"Dung sai độ dày PU/EPS ±2mm, tấm lấy sáng ±0,2mm.\",\"Tỷ trọng PU ±3kg/m³, tỷ trọng EPS ±1kg/m³\",\"Dung sai độ dày tôn ±0,03÷0,04mm\",\"\"].map((n,i)=>i<5?`<div>${i+1}. ${n}</div>`:`<div>6. ${phi_vc}</div>`).join('') + '</div></div>';\nconst payment = `<div class=\"notes\"><b>Phương thức thanh toán:</b>\n  <div>- Lần 1: Đặt cọc 50% sau khi xác nhận đơn.</div>\n  <div>- Lần 2: Thanh toán 50% còn lại trước khi xuất xưởng.</div>\n  <div style=\"margin-top:4px\">Số TK: 7999989399 MB Bank - CN Hai Bà Trưng</div></div>`;\nconst sigs = `<div class=\"sig-row\">\n  <div class=\"sig-box\"><div class=\"lbl\">ĐẠI DIỆN BÊN MUA</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\"></div></div>\n  <div class=\"sig-box\"><div class=\"lbl\">ĐẠI DIỆN BÊN BÁN</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\">${order.nvkd??''}</div></div>\n</div>`;\nreturn `<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: 'Times New Roman', Times, serif; font-size: 10.5pt; color: #000; line-height: 1.4; }\n.page { width: 780px; padding: 15px 20px; }\n.co-name { text-align:center; font-size:13pt; font-weight:bold; text-transform:uppercase; }\n.co-addr { text-align:center; font-size:9.5pt; }\n.doc-title { text-align:center; font-size:14pt; font-weight:bold; text-transform:uppercase; margin:14px 0 8px; }\ntable.hdr { width:100%; border-collapse:collapse; margin-bottom:6px; }\ntable.hdr td { padding:2px 4px; vertical-align:top; font-size:10.5pt; }\n.intro { font-size:10pt; margin-bottom:8px; font-style:italic; }\ntable.it { width:100%; border-collapse:collapse; font-size:9.5pt; margin:6px 0; }\ntable.it th { background:#d9d9d9; border:1px solid #555; padding:4px 3px; text-align:center; }\ntable.it td { border:1px solid #555; padding:3px 4px; vertical-align:top; }\n.it-grp { background:#f2f2f2; font-weight:600; white-space:pre-wrap; font-size:9pt; }\n.it-sub { background:#e8e8e8; font-weight:bold; font-size:9pt; }\n.r { text-align:right; } .c { text-align:center; }\n.tot-wrap { display:flex; justify-content:flex-end; margin:6px 0; }\n.tot { border-collapse:collapse; width:340px; }\n.tot td { padding:2px 6px; border:1px solid #aaa; font-size:10pt; }\n.tot .lbl { font-weight:600; } .tot .amt { text-align:right; font-weight:600; }\n.tot .grand td { background:#cfe2ff; font-weight:bold; font-size:10.5pt; }\n.bang-chu { font-style:italic; margin:6px 0 10px; font-size:10pt; }\n.notes { font-size:9.5pt; margin:6px 0; }\n.note-grid { display:grid; grid-template-columns:1fr 1fr; column-gap:20px; }\n.sig-row { display:flex; justify-content:space-between; margin-top:18px; }\n.sig-box { text-align:center; min-width:130px; font-size:9.5pt; }\n.sig-box .lbl { font-weight:bold; }\n.sig-box .sub { font-size:8.5pt; color:#444; }\n.sig-box .name { margin-top:38px; font-weight:bold; }\n.dlg { display:grid; grid-template-columns:1fr 1fr; gap:3px 20px; font-size:10pt; margin:6px 0; }\n.di { display:flex; gap:4px; }\n.di .k { font-weight:bold; min-width:100px; }\n.receive-line { margin:16px 0 8px; font-size:10pt; border-top:1px solid #aaa; padding-top:10px; }\n</style></head>\n<body><div class=\"page\">\n\n  <div class=\"co-name\">CÔNG TY TNHH CÔNG NGHỆ CÔNG NGHIỆP PHÚ SƠN</div>\n  <div class=\"co-addr\">Địa chỉ: Lô 7 CN5, Cụm công nghiệp Ngọc Hồi, xã Ngọc Hồi, Thành phố Hà Nội</div>\n  <div class=\"co-addr\">MST: 0104113174 &nbsp;&nbsp; https://panelphuson.vn &nbsp;&nbsp; https://javta.vn</div>\n<div class=\"doc-title\">BẢNG BÁO GIÁ SẢN PHẨM - KIÊM XÁC NHẬN ĐƠN HÀNG</div>\n${hdr}${items}${totals}${notes}${payment}${sigs}\n</div></body></html>`;\n",
+            "print_lenh_sx": "\nconst { fmtVND, fmtNum, soThanhChu, groupLabel } = utils;\nconst now = new Date();\nconst timeStr = now.toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'}) + ' ' + now.toLocaleDateString('vi-VN');\nconst d = order; // delivery fields flattened into order object\nconst hdr = `<table class=\"hdr\">\n  <tr><td>Số lệnh sản xuất: <b>${d.so_lenh??''}</b></td><td>Thời gian gửi: <b>${timeStr}</b></td></tr>\n  <tr><td>Khách hàng: <b>${d.khach_hang??''}</b></td><td>NVKD: <b>${d.nvkd??''}</b></td></tr>\n  <tr><td>Liên hệ: ${d.nguoi_lien_he??''}</td><td></td></tr>\n</table><div style=\"font-weight:bold;margin:6px 0 2px\">* NỘI DUNG YÊU CẦU SẢN XUẤT:</div>`;\n\nconst items = function buildItemsTable(groups,utils,showPrice){const{fmtVND,fmtNum,groupLabel}=utils;const priceHdr=showPrice?`<th style=\"width:9%\">\\u0110\\u01A1n gi\\xE1<br/>(VN\\u0110)</th><th style=\"width:10%\">Th\\xE0nh ti\\u1EC1n<br/>(VN\\u0110)</th>`:\"\";let rows=\"\";groups.forEach((g,gi)=>{const label=groupLabel(gi);const specHtml=(g.spec??\"\").replace(/&/g,\"&amp;\").replace(/</g,\"&lt;\");rows+=`<tr><td class=\"c it-grp\" style=\"font-weight:bold\">${label}.</td>       <td colspan=\"${showPrice?7:5}\" class=\"it-grp\">${specHtml}</td></tr>`;const total_tt=g.items.reduce((s,i)=>s+(i.thanh_tien??0),0);const total_kl=g.items.reduce((s,i)=>s+(i.khoi_luong??0),0);const total_st=g.items.reduce((s,i)=>s+(i.so_tam??0),0);const prices=[...new Set(g.items.map(i=>i.don_gia).filter(Boolean))];const uniformPrice=prices.length===1?fmtVND(prices[0]):\"\";const priceSubCells=showPrice?`<td class=\"r it-sub\">${uniformPrice}</td><td class=\"r it-sub\">${fmtVND(total_tt)}</td>`:\"\";rows+=`<tr><td class=\"it-sub\"></td><td class=\"it-sub\" colspan=\"3\">C\\u1ED9ng nh\\xF3m ${label} \\u2013 ch\\u01B0a VAT ${g.vat_rate}%</td>       <td class=\"r it-sub\">${total_st}</td><td class=\"r it-sub\">${fmtNum(total_kl)}</td>${priceSubCells}</tr>`;g.items.forEach((item,idx)=>{const priceCells=showPrice?`<td class=\"r\">${item.don_gia!=null?fmtVND(item.don_gia):\"\"}</td>            <td class=\"r\">${item.thanh_tien?fmtVND(item.thanh_tien):\"\"}</td>`:\"\";rows+=`<tr><td class=\"c\">${idx+1}</td><td>${item.ten_sp??\"\"}</td>         <td class=\"c\">${item.don_vi??\"\"}</td>         <td class=\"r\">${item.chieu_rong!=null?fmtNum(item.chieu_rong):\"\"}</td>         <td class=\"r\">${item.chieu_dai!=null?fmtNum(item.chieu_dai,3):\"\"}</td>         <td class=\"r\">${item.so_tam!=null?item.so_tam:\"\"}</td>         <td class=\"r\">${item.khoi_luong!=null?fmtNum(item.khoi_luong):\"\"}</td>         ${priceCells}</tr>`})});return`<table class=\"it\"><thead><tr>     <th style=\"width:4%\">TT</th>     <th style=\"width:${showPrice?\"26%\":\"38%\"}\">T\\xEAn s\\u1EA3n ph\\u1EA9m/Quy c\\xE1ch</th>     <th style=\"width:5%\">\\u0110V</th>     <th style=\"width:7%\">Chi\\u1EC1u<br/>r\\u1ED9ng</th>     <th style=\"width:8%\">Chi\\u1EC1u<br/>d\\xE0i</th>     <th style=\"width:6%\">S\\u1ED1<br/>t\\u1EA5m</th>     <th style=\"width:8%\">Kh\\u1ED1i<br/>l\\u01B0\\u1EE3ng</th>     ${priceHdr}</tr></thead><tbody>${rows}</tbody></table>`}(groups, utils, true);\nconst totals = function buildTotals(calc,utils){const{fmtVND,soThanhChu}=utils;const{totals}=calc;const bangChu=soThanhChu(totals.D??0);return`<div class=\"tot-wrap\"><table class=\"tot\">     <tr><td class=\"lbl\">A &nbsp; T\\u1ED5ng gi\\xE1 tr\\u1ECB h\\xE0ng h\\xF3a ch\\u01B0a VAT:</td><td class=\"amt\">${fmtVND(totals.A??0)}</td></tr>     <tr><td class=\"lbl\">B &nbsp; Ti\\u1EC1n VAT 8%</td><td class=\"amt\">${fmtVND(totals.B??0)}</td></tr>     <tr><td class=\"lbl\">C &nbsp; Ti\\u1EC1n VAT 10%</td><td class=\"amt\">${fmtVND(totals.C??0)}</td></tr>     <tr class=\"grand\"><td class=\"lbl\">D &nbsp; T\\u1ED5ng gi\\xE1 tr\\u1ECB thanh to\\xE1n (A+B+C):</td><td class=\"amt\">${fmtVND(totals.D??0)}</td></tr>     </table></div>     <div class=\"bang-chu\"><b>B\\u1EB1ng ch\\u1EEF:</b> ${bangChu}</div>`}(calc, utils);\nconst delivery = `<div style=\"font-weight:bold;margin:10px 0 4px;font-size:10.5pt\">** ĐIỀU KIỆN GIAO HÀNG VÀ THANH TOÁN</div>\n<div class=\"dlg\">\n  <div class=\"di\"><span class=\"k\">1. Nghiệm thu:</span><span>tại Nhà máy Phú Sơn</span></div>\n  <div class=\"di\"><span class=\"k\">2. Ngày nghiệm thu:</span><span>${d.ngay_nghiem_thu??''}</span></div>\n  <div class=\"di\"><span class=\"k\">3. Vận chuyển:</span><span>${d.van_chuyen_nd??''}</span></div>\n  <div class=\"di\"><span class=\"k\">4. Thông tin SP:</span><span>${d.thong_tin_sp??''}</span></div>\n  <div class=\"di\"><span class=\"k\">5. Phiếu giao:</span><span>${d.phieu_giao??''}</span></div>\n  <div class=\"di\"><span class=\"k\">6. Thời gian giao:</span><span><b>${d.thoi_gian_giao??''}</b></span></div>\n</div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">7. Người nhận:</span><span>${d.nguoi_nhan??''}</span></div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">8. Địa điểm:</span><span>${d.dia_diem_giao??''}</span></div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">9. Thanh toán:</span><span>${d.thanh_toan_nd??''}</span></div>\n<div class=\"di\" style=\"margin:3px 0;font-size:10pt\"><span class=\"k\">10. Ghi chú:</span><span>${d.ghi_chu_giao??''}</span></div>`;\n\nconst sigs = `<div class=\"sig-row\">\n  <div class=\"sig-box\"><div class=\"lbl\">GIÁM ĐỐC PHÊ DUYỆT</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\"></div></div>\n  <div class=\"sig-box\"><div class=\"lbl\">NGƯỜI YÊU CẦU SẢN XUẤT</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\">${d.nvkd??''}</div></div>\n</div>`;\nreturn `<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: 'Times New Roman', Times, serif; font-size: 10.5pt; color: #000; line-height: 1.4; }\n.page { width: 780px; padding: 15px 20px; }\n.co-name { text-align:center; font-size:13pt; font-weight:bold; text-transform:uppercase; }\n.co-addr { text-align:center; font-size:9.5pt; }\n.doc-title { text-align:center; font-size:14pt; font-weight:bold; text-transform:uppercase; margin:14px 0 8px; }\ntable.hdr { width:100%; border-collapse:collapse; margin-bottom:6px; }\ntable.hdr td { padding:2px 4px; vertical-align:top; font-size:10.5pt; }\n.intro { font-size:10pt; margin-bottom:8px; font-style:italic; }\ntable.it { width:100%; border-collapse:collapse; font-size:9.5pt; margin:6px 0; }\ntable.it th { background:#d9d9d9; border:1px solid #555; padding:4px 3px; text-align:center; }\ntable.it td { border:1px solid #555; padding:3px 4px; vertical-align:top; }\n.it-grp { background:#f2f2f2; font-weight:600; white-space:pre-wrap; font-size:9pt; }\n.it-sub { background:#e8e8e8; font-weight:bold; font-size:9pt; }\n.r { text-align:right; } .c { text-align:center; }\n.tot-wrap { display:flex; justify-content:flex-end; margin:6px 0; }\n.tot { border-collapse:collapse; width:340px; }\n.tot td { padding:2px 6px; border:1px solid #aaa; font-size:10pt; }\n.tot .lbl { font-weight:600; } .tot .amt { text-align:right; font-weight:600; }\n.tot .grand td { background:#cfe2ff; font-weight:bold; font-size:10.5pt; }\n.bang-chu { font-style:italic; margin:6px 0 10px; font-size:10pt; }\n.notes { font-size:9.5pt; margin:6px 0; }\n.note-grid { display:grid; grid-template-columns:1fr 1fr; column-gap:20px; }\n.sig-row { display:flex; justify-content:space-between; margin-top:18px; }\n.sig-box { text-align:center; min-width:130px; font-size:9.5pt; }\n.sig-box .lbl { font-weight:bold; }\n.sig-box .sub { font-size:8.5pt; color:#444; }\n.sig-box .name { margin-top:38px; font-weight:bold; }\n.dlg { display:grid; grid-template-columns:1fr 1fr; gap:3px 20px; font-size:10pt; margin:6px 0; }\n.di { display:flex; gap:4px; }\n.di .k { font-weight:bold; min-width:100px; }\n.receive-line { margin:16px 0 8px; font-size:10pt; border-top:1px solid #aaa; padding-top:10px; }\n</style></head>\n<body><div class=\"page\">\n\n  <div class=\"co-name\">CÔNG TY TNHH CÔNG NGHỆ CÔNG NGHIỆP PHÚ SƠN</div>\n  <div class=\"co-addr\">Địa chỉ: Lô 7 CN5, Cụm công nghiệp Ngọc Hồi, xã Ngọc Hồi, Thành phố Hà Nội</div>\n  <div class=\"co-addr\">MST: 0104113174 &nbsp;&nbsp; https://panelphuson.vn &nbsp;&nbsp; https://javta.vn</div>\n<div class=\"doc-title\">LỆNH SẢN XUẤT</div>\n<div style=\"text-align:center;font-size:10pt;font-style:italic;margin-bottom:8px\">Số lệnh: ${d.so_lenh??''}/PS</div>\n${hdr}${items}${totals}${delivery}${sigs}\n</div></body></html>`;\n",
+            "print_pxk": "\nconst { fmtVND, fmtNum, soThanhChu, groupLabel } = utils;\nconst d = order;\nconst parts = (d.ngay??'').split('/');\nconst hdr = `<div style=\"text-align:center;font-style:italic;margin-bottom:6px\">Ngày ${parts[0]??''} tháng ${parts[1]??''} năm ${parts[2]??''}</div>\n<table class=\"hdr\">\n  <tr><td style=\"width:60%\">Khách hàng: <b>${d.khach_hang??''}</b></td><td>Số: <b>${d.so_lenh??''}/PS</b></td></tr>\n  <tr><td>Địa chỉ: ${d.dia_chi_kh??''}</td><td></td></tr>\n  <tr><td>Thời gian giao: <b>${d.thoi_gian_giao??''}</b></td><td>Người nhận hàng: <b>${d.nguoi_nhan??''}</b></td></tr>\n  <tr><td colspan=\"2\">Giao hàng tại: <b>${d.dia_diem_giao??''}</b></td></tr>\n  <tr><td colspan=\"2\">Nhân viên KD: <b>${d.nvkd??''}</b></td></tr>\n</table>`;\n\nconst items = function buildItemsTable(groups,utils,showPrice){const{fmtVND,fmtNum,groupLabel}=utils;const priceHdr=showPrice?`<th style=\"width:9%\">\\u0110\\u01A1n gi\\xE1<br/>(VN\\u0110)</th><th style=\"width:10%\">Th\\xE0nh ti\\u1EC1n<br/>(VN\\u0110)</th>`:\"\";let rows=\"\";groups.forEach((g,gi)=>{const label=groupLabel(gi);const specHtml=(g.spec??\"\").replace(/&/g,\"&amp;\").replace(/</g,\"&lt;\");rows+=`<tr><td class=\"c it-grp\" style=\"font-weight:bold\">${label}.</td>       <td colspan=\"${showPrice?7:5}\" class=\"it-grp\">${specHtml}</td></tr>`;const total_tt=g.items.reduce((s,i)=>s+(i.thanh_tien??0),0);const total_kl=g.items.reduce((s,i)=>s+(i.khoi_luong??0),0);const total_st=g.items.reduce((s,i)=>s+(i.so_tam??0),0);const prices=[...new Set(g.items.map(i=>i.don_gia).filter(Boolean))];const uniformPrice=prices.length===1?fmtVND(prices[0]):\"\";const priceSubCells=showPrice?`<td class=\"r it-sub\">${uniformPrice}</td><td class=\"r it-sub\">${fmtVND(total_tt)}</td>`:\"\";rows+=`<tr><td class=\"it-sub\"></td><td class=\"it-sub\" colspan=\"3\">C\\u1ED9ng nh\\xF3m ${label} \\u2013 ch\\u01B0a VAT ${g.vat_rate}%</td>       <td class=\"r it-sub\">${total_st}</td><td class=\"r it-sub\">${fmtNum(total_kl)}</td>${priceSubCells}</tr>`;g.items.forEach((item,idx)=>{const priceCells=showPrice?`<td class=\"r\">${item.don_gia!=null?fmtVND(item.don_gia):\"\"}</td>            <td class=\"r\">${item.thanh_tien?fmtVND(item.thanh_tien):\"\"}</td>`:\"\";rows+=`<tr><td class=\"c\">${idx+1}</td><td>${item.ten_sp??\"\"}</td>         <td class=\"c\">${item.don_vi??\"\"}</td>         <td class=\"r\">${item.chieu_rong!=null?fmtNum(item.chieu_rong):\"\"}</td>         <td class=\"r\">${item.chieu_dai!=null?fmtNum(item.chieu_dai,3):\"\"}</td>         <td class=\"r\">${item.so_tam!=null?item.so_tam:\"\"}</td>         <td class=\"r\">${item.khoi_luong!=null?fmtNum(item.khoi_luong):\"\"}</td>         ${priceCells}</tr>`})});return`<table class=\"it\"><thead><tr>     <th style=\"width:4%\">TT</th>     <th style=\"width:${showPrice?\"26%\":\"38%\"}\">T\\xEAn s\\u1EA3n ph\\u1EA9m/Quy c\\xE1ch</th>     <th style=\"width:5%\">\\u0110V</th>     <th style=\"width:7%\">Chi\\u1EC1u<br/>r\\u1ED9ng</th>     <th style=\"width:8%\">Chi\\u1EC1u<br/>d\\xE0i</th>     <th style=\"width:6%\">S\\u1ED1<br/>t\\u1EA5m</th>     <th style=\"width:8%\">Kh\\u1ED1i<br/>l\\u01B0\\u1EE3ng</th>     ${priceHdr}</tr></thead><tbody>${rows}</tbody></table>`}(groups, utils, false);\nconst receive = '<div class=\"receive-line\">Khách hàng nhận hàng lúc: …….... giờ …….. phút, ngày ….. tháng ….. năm ' + (parts[2]??new Date().getFullYear()) + '</div>';\nconst sigs5 = '<div class=\"sig-row\" style=\"justify-content:space-around\">' +\n  ['Người lập phiếu','Người nhận hàng','Lái xe','Thủ kho','BGĐ Nhà máy'].map(l=>\n    `<div class=\"sig-box\"><div class=\"lbl\">${l}</div><div class=\"sub\">(ký, ghi rõ họ tên)</div><div class=\"name\"></div></div>`\n  ).join('') + '</div>';\nreturn `<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><style>\n* { box-sizing: border-box; margin: 0; padding: 0; }\nbody { font-family: 'Times New Roman', Times, serif; font-size: 10.5pt; color: #000; line-height: 1.4; }\n.page { width: 780px; padding: 15px 20px; }\n.co-name { text-align:center; font-size:13pt; font-weight:bold; text-transform:uppercase; }\n.co-addr { text-align:center; font-size:9.5pt; }\n.doc-title { text-align:center; font-size:14pt; font-weight:bold; text-transform:uppercase; margin:14px 0 8px; }\ntable.hdr { width:100%; border-collapse:collapse; margin-bottom:6px; }\ntable.hdr td { padding:2px 4px; vertical-align:top; font-size:10.5pt; }\n.intro { font-size:10pt; margin-bottom:8px; font-style:italic; }\ntable.it { width:100%; border-collapse:collapse; font-size:9.5pt; margin:6px 0; }\ntable.it th { background:#d9d9d9; border:1px solid #555; padding:4px 3px; text-align:center; }\ntable.it td { border:1px solid #555; padding:3px 4px; vertical-align:top; }\n.it-grp { background:#f2f2f2; font-weight:600; white-space:pre-wrap; font-size:9pt; }\n.it-sub { background:#e8e8e8; font-weight:bold; font-size:9pt; }\n.r { text-align:right; } .c { text-align:center; }\n.tot-wrap { display:flex; justify-content:flex-end; margin:6px 0; }\n.tot { border-collapse:collapse; width:340px; }\n.tot td { padding:2px 6px; border:1px solid #aaa; font-size:10pt; }\n.tot .lbl { font-weight:600; } .tot .amt { text-align:right; font-weight:600; }\n.tot .grand td { background:#cfe2ff; font-weight:bold; font-size:10.5pt; }\n.bang-chu { font-style:italic; margin:6px 0 10px; font-size:10pt; }\n.notes { font-size:9.5pt; margin:6px 0; }\n.note-grid { display:grid; grid-template-columns:1fr 1fr; column-gap:20px; }\n.sig-row { display:flex; justify-content:space-between; margin-top:18px; }\n.sig-box { text-align:center; min-width:130px; font-size:9.5pt; }\n.sig-box .lbl { font-weight:bold; }\n.sig-box .sub { font-size:8.5pt; color:#444; }\n.sig-box .name { margin-top:38px; font-weight:bold; }\n.dlg { display:grid; grid-template-columns:1fr 1fr; gap:3px 20px; font-size:10pt; margin:6px 0; }\n.di { display:flex; gap:4px; }\n.di .k { font-weight:bold; min-width:100px; }\n.receive-line { margin:16px 0 8px; font-size:10pt; border-top:1px solid #aaa; padding-top:10px; }\n</style></head>\n<body><div class=\"page\">\n\n  <div class=\"co-name\">CÔNG TY TNHH CÔNG NGHỆ CÔNG NGHIỆP PHÚ SƠN</div>\n  <div class=\"co-addr\">Địa chỉ: Lô 7 CN5, Cụm công nghiệp Ngọc Hồi, xã Ngọc Hồi, Thành phố Hà Nội</div>\n  <div class=\"co-addr\">MST: 0104113174 &nbsp;&nbsp; https://panelphuson.vn &nbsp;&nbsp; https://javta.vn</div>\n<div class=\"doc-title\">LỆNH SẢN XUẤT KIÊM PHIẾU XUẤT KHO</div>\n${hdr}${items}${receive}${sigs5}\n</div></body></html>`;\n"
+          },
+          "table": [
+            {
+              "id": "pm_orders_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_f_giai_doan",
+              "f_name": "giai_doan",
+              "f_header": "Giai đoạn",
+              "f_types": "co",
+              "f_show": 1,
+              "f_stt": 0,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_header_en": "Stage",
+              "f_header_zh": "阶段",
+              "f_width_col": 8,
+              "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"nhap\",\"ten\":\"Nháp\"},{\"ma\":\"bao_gia\",\"ten\":\"Báo giá\"},{\"ma\":\"lenh_sx_nb\",\"ten\":\"Lệnh SX nội bộ\"},{\"ma\":\"lenh_sx_pxk\",\"ten\":\"Lệnh SX + PXK\"},{\"ma\":\"xuong\",\"ten\":\"Đã gửi xưởng\"}]}"
+            },
+            {
+              "id": "pm_f_trang_thai_bg",
+              "f_name": "trang_thai_bg",
+              "f_header": "Trạng thái BG",
+              "f_types": "co",
+              "f_show": 1,
+              "f_stt": 1,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_header_en": "Quote status",
+              "f_header_zh": "报价状态",
+              "f_width_col": 8,
+              "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"nhap\",\"ten\":\"Nháp\"},{\"ma\":\"da_gui\",\"ten\":\"Đã gửi\"},{\"ma\":\"thuong_luong\",\"ten\":\"Đang thương lượng\"},{\"ma\":\"da_chot\",\"ten\":\"Đã chốt\"},{\"ma\":\"khong_chot\",\"ten\":\"Không chốt\"}]}"
+            },
+            {
+              "id": "pm_f_phien_ban",
+              "f_name": "phien_ban",
+              "f_header": "Phiên bản",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 2,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_header_en": "Revision",
+              "f_header_zh": "版本",
+              "f_placeholder": "E1",
+              "f_width_col": 4
+            },
+            {
+              "id": "pm_f_so_lenh",
+              "f_name": "so_lenh",
+              "f_header": "Số lệnh SX",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 3,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_header_en": "Production order no.",
+              "f_header_zh": "生产令号",
+              "f_placeholder": "6508/PS.E1",
+              "f_width_col": 8
+            },
+            {
+              "id": "pm_f_so_bao_gia",
+              "f_name": "so_bao_gia",
+              "f_header": "Số báo giá",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 4,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_header_en": "Quote no.",
+              "f_header_zh": "报价单号",
+              "f_placeholder": "060626.01",
+              "f_width_col": 8
+            },
+            {
+              "id": "pm_f_ngay",
+              "f_name": "ngay",
+              "f_header": "Ngày lập",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 5,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_header_en": "Date",
+              "f_header_zh": "日期",
+              "f_placeholder": "09/06/2026",
+              "f_width_col": 4
+            },
+            {
+              "id": "pm_f_hieu_luc_den",
+              "f_name": "hieu_luc_den",
+              "f_header": "Hiệu lực đến",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 6,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_header_en": "Valid until",
+              "f_header_zh": "有效期至",
+              "f_placeholder": "14/06/2026",
+              "f_width_col": 4
+            },
+            {
+              "id": "pm_f_khach_hang",
+              "f_name": "khach_hang",
+              "f_header": "Tên khách hàng",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 7,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_header_en": "Customer",
+              "f_header_zh": "客户名称",
+              "f_width_col": 12
+            },
+            {
+              "id": "pm_f_dia_chi_kh",
+              "f_name": "dia_chi_kh",
+              "f_header": "Địa chỉ KH",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 8,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_header_en": "Customer address",
+              "f_header_zh": "客户地址",
+              "f_width_col": 12
+            },
+            {
+              "id": "pm_f_nguoi_lien_he",
+              "f_name": "nguoi_lien_he",
+              "f_header": "Người liên hệ",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 9,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_header_en": "Contact person",
+              "f_header_zh": "联系人",
+              "f_placeholder": "Mr Thành - 0982476556",
+              "f_width_col": 12
+            },
+            {
+              "id": "pm_f_nvkd",
+              "f_name": "nvkd",
+              "f_header": "NVKD",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 10,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_header_en": "Sales rep.",
+              "f_header_zh": "销售代表",
+              "f_placeholder": "Mr Long - 0978349917",
+              "f_width_col": 12
+            },
+            {
+              "id": "pm_f_phi_vc",
+              "f_name": "phi_vc",
+              "f_header": "Vận chuyển",
+              "f_types": "co",
+              "f_show": 1,
+              "f_stt": 11,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_header_en": "Shipping",
+              "f_header_zh": "运输",
+              "f_width_col": 10,
+              "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"chua\",\"ten\":\"Giá chưa bao gồm vận chuyển\"},{\"ma\":\"da\",\"ten\":\"Giá đã bao gồm vận chuyển\"}]}"
+            },
+            {
+              "id": "pm_f_ngay_nghiem_thu",
+              "f_name": "ngay_nghiem_thu",
+              "f_header": "Ngày nghiệm thu",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 20,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_width_col": 8
+            },
+            {
+              "id": "pm_f_thoi_gian_giao",
+              "f_name": "thoi_gian_giao",
+              "f_header": "Thời gian giao",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 21,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_width_col": 8
+            },
+            {
+              "id": "pm_f_nguoi_nhan",
+              "f_name": "nguoi_nhan",
+              "f_header": "Người nhận hàng",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 22,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_width_col": 8
+            },
+            {
+              "id": "pm_f_dia_diem_giao",
+              "f_name": "dia_diem_giao",
+              "f_header": "Địa điểm giao",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 23,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_width_col": 16
+            },
+            {
+              "id": "pm_f_van_chuyen_nd",
+              "f_name": "van_chuyen_nd",
+              "f_header": "Vận chuyển (chi tiết)",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 24,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_width_col": 12
+            },
+            {
+              "id": "pm_f_thong_tin_sp",
+              "f_name": "thong_tin_sp",
+              "f_header": "Thông tin sản phẩm",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 25,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_width_col": 12
+            },
+            {
+              "id": "pm_f_phieu_giao",
+              "f_name": "phieu_giao",
+              "f_header": "Phiếu giao",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 26,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_width_col": 12
+            },
+            {
+              "id": "pm_f_thanh_toan_nd",
+              "f_name": "thanh_toan_nd",
+              "f_header": "Thanh toán",
+              "f_types": "ed",
+              "f_show": 1,
+              "f_stt": 27,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_width_col": 12
+            },
+            {
+              "id": "pm_f_ghi_chu_giao",
+              "f_name": "ghi_chu_giao",
+              "f_header": "Ghi chú giao hàng",
+              "f_types": "memo",
+              "f_show": 1,
+              "f_stt": 28,
+              "f_width": 100,
+              "f_pkid": 0,
+              "f_width_col": 24
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_orders",
+          "parentId": "pm_sales",
+          "label": "Đơn hàng (BG / LSXNB / PXK)",
+          "label_en": "Orders (Quote / Internal PO / Delivery)",
+          "label_zh": "订单（报价/内部生产令/出库）",
+          "m_icons": "fa fa-file-text-o",
+          "type_form": "7",
+          "table_name": "pm_orders",
+          "menu_id": "pm_orders",
+          "struct": {
+            "fieldsPK": [
+              "id"
+            ]
+          },
+          "line_items_data_field": "payload_json",
+          "line_items_groups_key": "groups",
+          "line_items_list": [
+            {
+              "field": "so_bao_gia",
+              "label": "Số báo giá",
+              "width": 130
+            },
+            {
+              "field": "so_lenh",
+              "label": "Số lệnh SX",
+              "width": 130
+            },
+            {
+              "field": "ngay",
+              "label": "Ngày lập",
+              "width": 110
+            },
+            {
+              "field": "khach_hang",
+              "label": "Khách hàng",
+              "width": 220
+            },
+            {
+              "field": "nvkd",
+              "label": "NVKD",
+              "width": 160
+            }
+          ],
+          "line_items_columns": [
+            {
+              "name": "ten_sp",
+              "label": "Tên sản phẩm / Quy cách",
+              "type": "text",
+              "width": 200
+            },
+            {
+              "name": "don_vi",
+              "label": "ĐV",
+              "type": "select",
+              "options": "m2|m|cái",
+              "width": 66
+            },
+            {
+              "name": "chieu_rong",
+              "label": "Chiều rộng",
+              "type": "number",
+              "width": 88
+            },
+            {
+              "name": "chieu_dai",
+              "label": "Chiều dài",
+              "type": "number",
+              "width": 86
+            },
+            {
+              "name": "so_tam",
+              "label": "Số tấm",
+              "type": "number",
+              "width": 72
+            },
+            {
+              "name": "khoi_luong",
+              "label": "Khối lượng",
+              "type": "formula_or_manual",
+              "width": 92,
+              "align": "right",
+              "formula": "don_vi === 'm' ? (chieu_dai ?? 0) * (so_tam ?? 0) : (chieu_rong ?? 1) * (chieu_dai ?? 0) * (so_tam ?? 0)",
+              "manual_condition": "chieu_dai == null && so_tam == null"
+            },
+            {
+              "name": "don_gia",
+              "label": "Đơn giá (VNĐ)",
+              "type": "price",
+              "width": 118,
+              "align": "right"
+            },
+            {
+              "name": "thanh_tien",
+              "label": "Thành tiền (VNĐ)",
+              "type": "formula",
+              "width": 122,
+              "align": "right",
+              "formula": "(khoi_luong ?? 0) * (don_gia ?? 0)"
+            }
+          ],
+          "line_items_group": {
+            "spec_field": "spec",
+            "vat_field": "vat_rate",
+            "vat_default": 10,
+            "vat_options": [
+              {
+                "value": 8,
+                "label": "VAT 8%"
+              },
+              {
+                "value": 10,
+                "label": "VAT 10%"
+              }
+            ]
+          },
+          "line_items_totals": [
+            {
+              "key": "A",
+              "label": "Tổng giá trị hàng hóa chưa VAT",
+              "formula": "groupSum"
+            },
+            {
+              "key": "B",
+              "label": "Tiền VAT 8%",
+              "formula": "vatSum(8) * 0.08"
+            },
+            {
+              "key": "C",
+              "label": "Tiền VAT 10%",
+              "formula": "vatSum(10) * 0.10"
+            },
+            {
+              "key": "D",
+              "label": "Tổng giá trị thanh toán (A+B+C)",
+              "formula": "A + B + C",
+              "highlight": true,
+              "show_words": true
+            }
+          ],
+          "line_items_print": [
+            {
+              "label": "Xuất Báo giá",
+              "trigger_key": "print_bao_gia",
+              "filename_expr": "`BaoGia_${order.so_bao_gia || 'draft'}.pdf`"
+            },
+            {
+              "label": "Xuất Lệnh SX nội bộ",
+              "trigger_key": "print_lenh_sx",
+              "filename_expr": "`LenhSX_${order.so_lenh || 'draft'}.pdf`"
+            },
+            {
+              "label": "Xuất Lệnh SX + PXK",
+              "trigger_key": "print_pxk",
+              "filename_expr": "`LenhSX_PXK_${order.so_lenh || 'draft'}.pdf`"
+            }
+          ]
+        }
+      ],
+      "id": "pm_sales",
+      "label": "Bán hàng",
+      "label_en": "Sales",
+      "label_zh": "销售",
+      "m_icons": "fa fa-shopping-cart",
+      "type_form": "0",
+      "table_name": ""
+    },
+    {
+      "field_root": "",
+      "report_name": "",
+      "orientation": "",
+      "p_width": "0",
+      "p_height": "0",
+      "m_show": true,
+      "g_readonly": false,
+      "type_menu": "",
+      "row_type_edit": "0",
+      "dev": "",
+      "prefix_pk": "",
+      "table_pagesize": "50",
+      "trigger": {},
+      "table": [],
+      "v_link": "",
+      "children": [
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {},
+          "table": [
+            {
+              "id": "tvp_khachhang_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_kh_ma",
+              "f_name": "ma_kh",
+              "f_header": "Mã KH",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 1,
+              "f_search": 1
+            },
+            {
+              "id": "pm_kh_ten",
+              "f_name": "ten_kh",
+              "f_header": "Tên KH",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0,
+              "f_header_en": "Customer name",
+              "f_header_zh": "客户名称",
+              "f_search": 1
+            },
+            {
+              "id": "pm_kh_dc",
+              "f_name": "dia_chi",
+              "f_header": "Địa chỉ",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 4,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_dt",
+              "f_name": "dien_thoai",
+              "f_header": "Điện thoại",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 5,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_email",
+              "f_name": "email",
+              "f_header": "Email",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 6,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_mst",
+              "f_name": "mst",
+              "f_header": "MST",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 7,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_stk",
+              "f_name": "stk",
+              "f_header": "STK",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 8,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_ttk",
+              "f_name": "ttk",
+              "f_header": "Tên tài khoản",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 9,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_tnh",
+              "f_name": "tnh",
+              "f_header": "Tên ngân hàng",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 10,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_nt",
+              "f_name": "ngay_tao",
+              "f_header": "Ngày tạo",
+              "f_types": "date",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 11,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_sn",
+              "f_name": "sinh_nhat",
+              "f_header": "Sinh nhật",
+              "f_types": "date",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 12,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_site",
+              "f_name": "site",
+              "f_header": "Website/MXH",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 13,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_fax",
+              "f_name": "fax",
+              "f_header": "FAX",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 14,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_pl",
+              "f_name": "phan_loai",
+              "f_header": "Loại KH",
+              "f_types": "co",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 15,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_pl\"],\"obj_name\":\"tvp_phanloai\",\"obj_where\":\"\"}],\"options\":[]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_grid": "pm_cat_phanloai",
+              "f_grid_fields": [
+                "ten_pl",
+                "mo_ta"
+              ]
+            },
+            {
+              "id": "pm_kh_nguon",
+              "f_name": "nguon_khach",
+              "f_header": "Nguồn khách",
+              "f_types": "co",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 16,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_nguon\"],\"obj_name\":\"tvp_nguonkh\",\"obj_where\":\"\"}],\"options\":[]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_grid": "pm_cat_nguonkh",
+              "f_grid_fields": [
+                "ten_nguon",
+                "link_kh",
+                "mo_ta",
+                "chi_tiet"
+              ]
+            }
+          ],
+          "v_link": "",
+          "children": [
+            {
+              "field_root": "id",
+              "report_name": "",
+              "orientation": "",
+              "p_width": "0",
+              "p_height": "0",
+              "m_show": true,
+              "g_readonly": false,
+              "type_menu": "",
+              "row_type_edit": "0",
+              "dev": "",
+              "prefix_pk": "",
+              "table_pagesize": "50",
+              "trigger": {
+                "filter": "return obj.trang_thai !== 5;"
+              },
+              "table": [
+                {
+                  "id": "pm_cskh_open_id",
+                  "f_name": "id",
+                  "f_header": "ID",
+                  "f_types": "ed",
+                  "f_width": 100,
+                  "f_show": 1,
+                  "f_stt": 1,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_open_nv",
+                  "f_name": "nhan_vien",
+                  "f_header": "Nhân viên",
+                  "f_types": "co",
+                  "f_width": 250,
+                  "f_show": 1,
+                  "f_stt": 2,
+                  "f_pkid": 1,
+                  "f_grid": "pm_cat_nhanvien",
+                  "f_grid_fields": [
+                    "ma_nhan_vien",
+                    "ten_nhan_vien",
+                    "chuc_vu",
+                    "tinh_trang"
+                  ]
+                },
+                {
+                  "id": "pm_cskh_open_hen",
+                  "f_name": "Ngay_hen_kh",
+                  "f_header": "Ngày hẹn khách",
+                  "f_types": "date",
+                  "f_width": 130,
+                  "f_show": 1,
+                  "f_stt": 3,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_open_tao",
+                  "f_name": "ngay_tao",
+                  "f_header": "Ngày tạo",
+                  "f_types": "date",
+                  "f_width": 150,
+                  "f_show": 1,
+                  "f_stt": 4,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_open_dd",
+                  "f_name": "nguoi_dd_kh",
+                  "f_header": "Người đại diện KH",
+                  "f_types": "ed",
+                  "f_width": 300,
+                  "f_show": 1,
+                  "f_stt": 5,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_open_tl",
+                  "f_name": "tai_lieu",
+                  "f_header": "Tài liệu",
+                  "f_types": "file",
+                  "f_width": 200,
+                  "f_show": 1,
+                  "f_stt": 6,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_open_loai",
+                  "f_name": "loai_tl",
+                  "f_header": "Loại tài liệu",
+                  "f_types": "co",
+                  "f_width": 150,
+                  "f_show": 1,
+                  "f_stt": 7,
+                  "f_pkid": 1,
+                  "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Báo giá\"},{\"ma\":2,\"ten\":\"Hợp đồng kinh tế\"},{\"ma\":3,\"ten\":\"Nghiệm thu\"}]}",
+                  "f_search": 1,
+                  "f_filter": 1,
+                  "f_showgrid": 1
+                },
+                {
+                  "id": "pm_cskh_open_tt",
+                  "f_name": "trang_thai",
+                  "f_header": "Trạng thái",
+                  "f_types": "co",
+                  "f_width": 150,
+                  "f_show": 1,
+                  "f_stt": 8,
+                  "f_pkid": 0,
+                  "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Đã liên hệ\"},{\"ma\":2,\"ten\":\"Chưa liên hệ\"},{\"ma\":3,\"ten\":\"Đang chờ phản hồi\"},{\"ma\":4,\"ten\":\"Đang làm việc\"},{\"ma\":5,\"ten\":\"Hoàn thành\"}]}",
+                  "f_search": 1,
+                  "f_filter": 1,
+                  "f_showgrid": 1
+                }
+              ],
+              "v_link": "",
+              "children": [],
+              "id": "pm_cskh_open",
+              "parentId": "pm_khachhang",
+              "label": "Lịch sử CSKH — chưa hoàn thành",
+              "label_en": "Care history — open",
+              "label_zh": "客服记录 — 进行中",
+              "m_icons": "fa fa-history",
+              "type_form": "1",
+              "table_name": "lich_su_cskh"
+            },
+            {
+              "field_root": "id",
+              "report_name": "",
+              "orientation": "",
+              "p_width": "0",
+              "p_height": "0",
+              "m_show": true,
+              "g_readonly": false,
+              "type_menu": "",
+              "row_type_edit": "0",
+              "dev": "",
+              "prefix_pk": "",
+              "table_pagesize": "50",
+              "trigger": {
+                "filter": "return obj.trang_thai === 5;"
+              },
+              "table": [
+                {
+                  "id": "pm_cskh_done_id",
+                  "f_name": "id",
+                  "f_header": "ID",
+                  "f_types": "ed",
+                  "f_width": 100,
+                  "f_show": 1,
+                  "f_stt": 1,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_done_nv",
+                  "f_name": "nhan_vien",
+                  "f_header": "Nhân viên",
+                  "f_types": "co",
+                  "f_width": 250,
+                  "f_show": 1,
+                  "f_stt": 2,
+                  "f_pkid": 1,
+                  "f_grid": "pm_cat_nhanvien",
+                  "f_grid_fields": [
+                    "ma_nhan_vien",
+                    "ten_nhan_vien",
+                    "chuc_vu",
+                    "tinh_trang"
+                  ]
+                },
+                {
+                  "id": "pm_cskh_done_hen",
+                  "f_name": "Ngay_hen_kh",
+                  "f_header": "Ngày hẹn khách",
+                  "f_types": "date",
+                  "f_width": 130,
+                  "f_show": 1,
+                  "f_stt": 3,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_done_tao",
+                  "f_name": "ngay_tao",
+                  "f_header": "Ngày tạo",
+                  "f_types": "date",
+                  "f_width": 150,
+                  "f_show": 1,
+                  "f_stt": 4,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_done_dd",
+                  "f_name": "nguoi_dd_kh",
+                  "f_header": "Người đại diện KH",
+                  "f_types": "ed",
+                  "f_width": 300,
+                  "f_show": 1,
+                  "f_stt": 5,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_done_tl",
+                  "f_name": "tai_lieu",
+                  "f_header": "Tài liệu",
+                  "f_types": "file",
+                  "f_width": 200,
+                  "f_show": 1,
+                  "f_stt": 6,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_done_loai",
+                  "f_name": "loai_tl",
+                  "f_header": "Loại tài liệu",
+                  "f_types": "co",
+                  "f_width": 150,
+                  "f_show": 1,
+                  "f_stt": 7,
+                  "f_pkid": 1,
+                  "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Báo giá\"},{\"ma\":2,\"ten\":\"Hợp đồng kinh tế\"},{\"ma\":3,\"ten\":\"Nghiệm thu\"}]}",
+                  "f_search": 1,
+                  "f_filter": 1,
+                  "f_showgrid": 1
+                },
+                {
+                  "id": "pm_cskh_done_tt",
+                  "f_name": "trang_thai",
+                  "f_header": "Trạng thái",
+                  "f_types": "co",
+                  "f_width": 150,
+                  "f_show": 1,
+                  "f_stt": 8,
+                  "f_pkid": 0,
+                  "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Đã liên hệ\"},{\"ma\":2,\"ten\":\"Chưa liên hệ\"},{\"ma\":3,\"ten\":\"Đang chờ phản hồi\"},{\"ma\":4,\"ten\":\"Đang làm việc\"},{\"ma\":5,\"ten\":\"Hoàn thành\"}]}",
+                  "f_search": 1,
+                  "f_filter": 1,
+                  "f_showgrid": 1
+                }
+              ],
+              "v_link": "",
+              "children": [],
+              "id": "pm_cskh_done",
+              "parentId": "pm_khachhang",
+              "label": "Lịch sử CSKH — đã hoàn thành",
+              "label_en": "Care history — done",
+              "label_zh": "客服记录 — 已完成",
+              "m_icons": "fa fa-check-circle",
+              "type_form": "1",
+              "table_name": "lich_su_cskh"
+            }
+          ],
+          "id": "pm_khachhang",
+          "parentId": "pm_customer",
+          "label": "Hồ sơ khách hàng",
+          "label_en": "Customer profiles",
+          "label_zh": "客户档案",
+          "m_icons": "fa fa-address-card",
+          "type_form": "2",
+          "table_name": "tvp_khachhang"
+        }
+      ],
+      "id": "pm_customer",
+      "label": "Khách hàng",
+      "label_en": "Customers",
+      "label_zh": "客户",
+      "m_icons": "fa fa-address-book",
+      "type_form": "0",
+      "table_name": ""
+    },
+    {
+      "field_root": "",
+      "report_name": "",
+      "orientation": "",
+      "p_width": "0",
+      "p_height": "0",
+      "m_show": true,
+      "g_readonly": false,
+      "type_menu": "",
+      "row_type_edit": "0",
+      "dev": "",
+      "prefix_pk": "",
+      "table_pagesize": "50",
+      "trigger": {},
+      "table": [],
+      "v_link": "",
+      "children": [
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": true,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {
+            "load_db": "var kh=db['tvp_khachhang']?.rows||[];var out=[];kh.forEach(function(o){(o.lich_su_cskh||[]).forEach(function(ls){out.push(Object.assign({},ls,o));});});return out;"
+          },
+          "table": [
+            {
+              "id": "bc_cskh_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_bc_nv",
+              "f_name": "nhan_vien",
+              "f_header": "Nhân viên",
+              "f_types": "co",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 0,
+              "f_grid": "pm_cat_nhanvien",
+              "f_grid_fields": [
+                "ma_nhan_vien",
+                "ten_nhan_vien"
+              ]
+            },
+            {
+              "id": "pm_bc_kh",
+              "f_name": "ten_kh",
+              "f_header": "Khách hàng",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_bc_hen",
+              "f_name": "Ngay_hen_kh",
+              "f_header": "Ngày hẹn",
+              "f_types": "date",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 4,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_bc_tt",
+              "f_name": "trang_thai",
+              "f_header": "Trạng thái",
+              "f_types": "co",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 5,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Đã liên hệ\"},{\"ma\":2,\"ten\":\"Chưa liên hệ\"},{\"ma\":3,\"ten\":\"Đang chờ phản hồi\"},{\"ma\":4,\"ten\":\"Đang làm việc\"},{\"ma\":5,\"ten\":\"Hoàn thành\"}]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_showgrid": 1
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_bc_cskh",
+          "parentId": "pm_cskh",
+          "label": "Báo cáo lịch sử CSKH",
+          "label_en": "Care history report",
+          "label_zh": "客服历史报表",
+          "m_icons": "fa fa-bar-chart",
+          "type_form": "1",
+          "table_name": "bc_lich_su_cskh"
+        },
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {},
+          "table": [
+            {
+              "id": "pm_lich_cham_soc_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_lcs_kh",
+              "f_name": "khach_hang",
+              "f_header": "Khách hàng",
+              "f_types": "co",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_kh\"],\"obj_name\":\"tvp_khachhang\",\"obj_where\":\"\"}],\"options\":[]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_grid": "pm_khachhang",
+              "f_grid_fields": [
+                "ma_kh",
+                "ten_kh",
+                "dien_thoai"
+              ]
+            },
+            {
+              "id": "pm_lcs_nv",
+              "f_name": "nhan_vien",
+              "f_header": "Nhân viên phụ trách",
+              "f_types": "co",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0,
+              "f_grid": "pm_cat_nhanvien",
+              "f_grid_fields": [
+                "ten_nhan_vien",
+                "chuc_vu"
+              ]
+            },
+            {
+              "id": "pm_lcs_ngay",
+              "f_name": "ngay_hen",
+              "f_header": "Ngày hẹn",
+              "f_types": "date",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 4,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_lcs_nd",
+              "f_name": "noi_dung",
+              "f_header": "Nội dung",
+              "f_types": "memo",
+              "f_width": 300,
+              "f_show": 1,
+              "f_stt": 5,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_lcs_tt",
+              "f_name": "trang_thai",
+              "f_header": "Trạng thái",
+              "f_types": "co",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 6,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"pending\",\"ten\":\"Chưa thực hiện\"},{\"ma\":\"done\",\"ten\":\"Đã thực hiện\"}]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_showgrid": 1
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_lich_cham_soc",
+          "parentId": "pm_cskh",
+          "label": "Lịch chăm sóc",
+          "label_en": "Care schedule",
+          "label_zh": "关怀日程",
+          "m_icons": "fa fa-calendar",
+          "type_form": "1",
+          "table_name": "pm_lich_cham_soc"
+        },
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": true,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {
+            "load_db": "return (db['tvp_khachhang']?.rows||[]).filter(function(r){return r.sinh_nhat;});"
+          },
+          "table": [
+            {
+              "id": "pm_sinh_nhat_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_sn_ten",
+              "f_name": "ten_kh",
+              "f_header": "Tên KH",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_sn_ngay",
+              "f_name": "sinh_nhat",
+              "f_header": "Sinh nhật",
+              "f_types": "date",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_sn_dt",
+              "f_name": "dien_thoai",
+              "f_header": "Điện thoại",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 4,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_sn_email",
+              "f_name": "email",
+              "f_header": "Email",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 5,
+              "f_pkid": 0
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_sinh_nhat",
+          "parentId": "pm_cskh",
+          "label": "Sinh nhật khách hàng",
+          "label_en": "Customer birthdays",
+          "label_zh": "客户生日",
+          "m_icons": "fa fa-birthday-cake",
+          "type_form": "1",
+          "table_name": "pm_sinh_nhat_kh"
+        }
+      ],
+      "id": "pm_cskh",
+      "label": "Chăm sóc khách hàng",
+      "label_en": "Customer care",
+      "label_zh": "客户关怀",
+      "m_icons": "fa fa-heart",
+      "type_form": "0",
+      "table_name": ""
+    },
+    {
+      "field_root": "",
+      "report_name": "",
+      "orientation": "",
+      "p_width": "0",
+      "p_height": "0",
+      "m_show": true,
+      "g_readonly": false,
+      "type_menu": "",
+      "row_type_edit": "0",
+      "dev": "",
+      "prefix_pk": "",
+      "table_pagesize": "50",
+      "trigger": {},
+      "table": [],
+      "v_link": "",
+      "children": [
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {},
+          "table": [
+            {
+              "id": "tvp_hanghoa_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_hh_ma",
+              "f_name": "ma_hh",
+              "f_header": "Mã hàng",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 1,
+              "f_search": 1
+            },
+            {
+              "id": "pm_hh_ten",
+              "f_name": "ten_hh",
+              "f_header": "Tên hàng hóa",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0,
+              "f_header_en": "Product name",
+              "f_header_zh": "货品名称",
+              "f_search": 1
+            },
+            {
+              "id": "pm_hh_nhom",
+              "f_name": "nhom_hh",
+              "f_header": "Nhóm hàng hóa",
+              "f_types": "co",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 4,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_nhom\"],\"obj_name\":\"tvp_nhomhh\",\"obj_where\":\"\"}],\"options\":[]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_grid": "pm_cat_nhomhh",
+              "f_grid_fields": [
+                "ten_nhom",
+                "mo_ta"
+              ]
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_cat_hanghoa",
+          "parentId": "pm_catalog",
+          "label": "Hàng hóa",
+          "label_en": "Products",
+          "label_zh": "货品",
+          "m_icons": "fa fa-list-alt",
+          "type_form": "1",
+          "table_name": "tvp_hanghoa"
+        },
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {},
+          "table": [
+            {
+              "id": "tvp_nhomhh_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_nh_ten",
+              "f_name": "ten_nhom",
+              "f_header": "Tên nhóm",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_nh_mota",
+              "f_name": "mo_ta",
+              "f_header": "Mô tả",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_cat_nhomhh",
+          "parentId": "pm_catalog",
+          "label": "Nhóm hàng hóa",
+          "label_en": "Product groups",
+          "label_zh": "货品分组",
+          "m_icons": "fa fa-list-ol",
+          "type_form": "1",
+          "table_name": "tvp_nhomhh"
+        },
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {},
+          "table": [
+            {
+              "id": "tvp_nhanvien_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_nv_ma",
+              "f_name": "ma_nhan_vien",
+              "f_header": "Mã nhân viên",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 1,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_nv_ten",
+              "f_name": "ten_nhan_vien",
+              "f_header": "Tên nhân viên",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_nv_ns",
+              "f_name": "ngay_sinh",
+              "f_header": "Ngày sinh",
+              "f_types": "date",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_nv_dt",
+              "f_name": "dien_thoai",
+              "f_header": "Điện thoại",
+              "f_types": "nummeric",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 4,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_nv_email",
+              "f_name": "email",
+              "f_header": "Email",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 5,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_nv_vl",
+              "f_name": "ngay_vao_lam",
+              "f_header": "Ngày vào làm",
+              "f_types": "date",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 6,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_nv_cv",
+              "f_name": "chuc_vu",
+              "f_header": "Chức vụ",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 7,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_nv_tt",
+              "f_name": "tinh_trang",
+              "f_header": "Tình trạng",
+              "f_types": "co",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 8,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Đang làm\"},{\"ma\":2,\"ten\":\"Nghỉ việc\"}]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_showgrid": 1
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_cat_nhanvien",
+          "parentId": "pm_catalog",
+          "label": "Nhân viên",
+          "label_en": "Staff",
+          "label_zh": "员工",
+          "m_icons": "fa fa-users",
+          "type_form": "1",
+          "table_name": "tvp_nhanvien"
+        },
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {},
+          "table": [
+            {
+              "id": "tvp_nguonkh_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_nk_ten",
+              "f_name": "ten_nguon",
+              "f_header": "Tên nguồn",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_nk_link",
+              "f_name": "link_kh",
+              "f_header": "Link",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_nk_mota",
+              "f_name": "mo_ta",
+              "f_header": "Mô tả",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 4,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_nk_ct",
+              "f_name": "chi_tiet",
+              "f_header": "Chi tiết",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 5,
+              "f_pkid": 0
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_cat_nguonkh",
+          "parentId": "pm_catalog",
+          "label": "Nguồn khách",
+          "label_en": "Lead sources",
+          "label_zh": "客户来源",
+          "m_icons": "fa fa-share-alt",
+          "type_form": "1",
+          "table_name": "tvp_nguonkh"
+        },
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {},
+          "table": [
+            {
+              "id": "tvp_phanloai_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_pl_ten",
+              "f_name": "ten_pl",
+              "f_header": "Tên phân loại",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_pl_mota",
+              "f_name": "mo_ta",
+              "f_header": "Mô tả",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_cat_phanloai",
+          "parentId": "pm_catalog",
+          "label": "Phân loại khách",
+          "label_en": "Customer types",
+          "label_zh": "客户分类",
+          "m_icons": "fa fa-tags",
+          "type_form": "1",
+          "table_name": "tvp_phanloai"
+        }
+      ],
+      "id": "pm_catalog",
+      "label": "Danh mục",
+      "label_en": "Catalog",
+      "label_zh": "目录",
+      "m_icons": "fa fa-list",
+      "type_form": "0",
+      "table_name": ""
+    },
+    {
+      "field_root": "",
+      "report_name": "",
+      "orientation": "",
+      "p_width": "0",
+      "p_height": "0",
+      "m_show": true,
+      "g_readonly": false,
+      "type_menu": "",
+      "row_type_edit": "0",
+      "dev": "",
+      "prefix_pk": "",
+      "table_pagesize": "1",
+      "trigger": {},
+      "table": [
+        {
+          "id": "pm_cai_dat_id",
+          "f_name": "id",
+          "f_header": "ID",
+          "f_types": "ed",
+          "f_width": 100,
+          "f_show": 0,
+          "f_stt": 0,
+          "f_pkid": 1
+        },
+        {
+          "id": "pm_cd_ten",
+          "f_name": "ten_cong_ty",
+          "f_header": "Tên công ty (header in)",
+          "f_types": "ed",
+          "f_width": 300,
+          "f_show": 1,
+          "f_stt": 1,
+          "f_pkid": 1
+        },
+        {
+          "id": "pm_cd_dc",
+          "f_name": "dia_chi",
+          "f_header": "Địa chỉ",
+          "f_types": "ed",
+          "f_width": 300,
+          "f_show": 1,
+          "f_stt": 2,
+          "f_pkid": 0
+        },
+        {
+          "id": "pm_cd_mst",
+          "f_name": "mst",
+          "f_header": "MST",
+          "f_types": "ed",
+          "f_width": 100,
+          "f_show": 1,
+          "f_stt": 3,
+          "f_pkid": 0
+        },
+        {
+          "id": "pm_cd_web",
+          "f_name": "website",
+          "f_header": "Website",
+          "f_types": "ed",
+          "f_width": 100,
+          "f_show": 1,
+          "f_stt": 4,
+          "f_pkid": 0
+        },
+        {
+          "id": "pm_cd_font",
+          "f_name": "font_in",
+          "f_header": "Font in PDF",
+          "f_types": "ed",
+          "f_width": 100,
+          "f_show": 1,
+          "f_stt": 5,
+          "f_pkid": 0,
+          "f_placeholder": "Roboto"
+        },
+        {
+          "id": "pm_cd_vat",
+          "f_name": "vat_mac_dinh",
+          "f_header": "VAT mặc định",
+          "f_types": "co",
+          "f_width": 100,
+          "f_show": 1,
+          "f_stt": 6,
+          "f_pkid": 0,
+          "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":8,\"ten\":\"8%\"},{\"ma\":10,\"ten\":\"10%\"}]}",
+          "f_search": 1,
+          "f_filter": 1,
+          "f_showgrid": 1
+        },
+        {
+          "id": "pm_cd_ghichu_bg",
+          "f_name": "ghi_chu_bao_gia",
+          "f_header": "Ghi chú mặc định — Báo giá",
+          "f_types": "memo",
+          "f_width": 400,
+          "f_show": 1,
+          "f_stt": 10,
+          "f_pkid": 0
+        },
+        {
+          "id": "pm_cd_ghichu_lsx",
+          "f_name": "ghi_chu_lenh_sx",
+          "f_header": "Ghi chú mặc định — Lệnh SX nội bộ",
+          "f_types": "memo",
+          "f_width": 400,
+          "f_show": 1,
+          "f_stt": 11,
+          "f_pkid": 0
+        },
+        {
+          "id": "pm_cd_ghichu_pxk",
+          "f_name": "ghi_chu_lsx_pxk",
+          "f_header": "Ghi chú mặc định — LSX kiêm PXK",
+          "f_types": "memo",
+          "f_width": 400,
+          "f_show": 1,
+          "f_stt": 12,
+          "f_pkid": 0
+        }
+      ],
+      "v_link": "",
+      "children": [],
+      "id": "pm_settings",
+      "label": "Cài đặt",
+      "label_en": "Settings",
+      "label_zh": "设置",
+      "m_icons": "fa fa-cog",
+      "type_form": "1",
+      "table_name": "pm_cai_dat"
+    }
+  ],
+  "notes": [
+    "Template menu PM Phú Sơn — đồng bộ với defaultConfig.ts (PHUSON_PANEL_CONFIG).",
+    "Luồng bán hàng: một menu type_form=7 (pm_orders) — BG → LSXNB → LSX-PXK qua nút in PDF.",
+    "Không dùng report_name Word base64; trigger print_bao_gia / print_lenh_sx / print_pxk.",
+    "Người dùng phần mềm (Admin/GĐ/Giám sát/Trưởng phòng/NV) dùng module Hệ thống có sẵn."
+  ],
+  "warnings": [
+    "pm_dashboard (auto_code_name) cần đăng ký widget trong sys_autos trước khi dùng Trang chủ.",
+    "Trigger in PDF lưu dạng plain text trong template; production nên encrypt qua menu designer."
+  ],
+  "coverage_modules": [
+    {
+      "module": "Trang chủ KPI",
+      "menus": [
+        "pm_home"
+      ],
+      "status": "partial"
+    },
+    {
+      "module": "Bán hàng BG/LSX/PXK",
+      "menus": [
+        "pm_orders"
+      ],
+      "status": "covered"
+    },
+    {
+      "module": "Khách hàng",
+      "menus": [
+        "pm_khachhang"
+      ],
+      "status": "covered"
+    },
+    {
+      "module": "Chăm sóc KH",
+      "menus": [
+        "pm_cskh_open",
+        "pm_cskh_done",
+        "pm_bc_cskh",
+        "pm_lich_cham_soc",
+        "pm_sinh_nhat"
+      ],
+      "status": "covered"
+    },
+    {
+      "module": "Danh mục",
+      "menus": [
+        "pm_cat_hanghoa",
+        "pm_cat_nhomhh",
+        "pm_cat_nhanvien",
+        "pm_cat_nguonkh",
+        "pm_cat_phanloai"
+      ],
+      "status": "covered"
+    },
+    {
+      "module": "Cài đặt",
+      "menus": [
+        "pm_settings"
+      ],
+      "status": "covered"
+    }
+  ],
+  "coverage_tables": [
+    {
+      "table": "pm_orders",
+      "menus": [
+        "pm_orders"
+      ],
+      "status": "covered"
+    },
+    {
+      "table": "tvp_khachhang",
+      "menus": [
+        "pm_khachhang"
+      ],
+      "status": "covered"
+    },
+    {
+      "table": "tvp_hanghoa",
+      "menus": [
+        "pm_cat_hanghoa"
+      ],
+      "status": "covered"
+    },
+    {
+      "table": "tvp_nhanvien",
+      "menus": [
+        "pm_cat_nhanvien"
+      ],
+      "status": "covered"
+    },
+    {
+      "table": "pm_cai_dat",
+      "menus": [
+        "pm_settings"
+      ],
+      "status": "covered"
+    }
+  ],
+  "unresolved_assumptions": [
+    "Dashboard KPI chi tiết (doanh số, tỷ lệ chốt BG…) chưa có auto_code pm_dashboard — cần triển khai riêng."
+  ]
+}
