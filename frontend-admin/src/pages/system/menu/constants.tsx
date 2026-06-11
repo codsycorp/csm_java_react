@@ -6,6 +6,15 @@ import { getBooleanOptions, getYesNoOptions } from "#src/constants";
 
 import { Tag } from "antd";
 
+const TYPE_FORM_OPTION_KEYS: Array<{ value: number; key: string }> = [
+  { value: 1, key: "system.menu.typeForm.grid" },
+  { value: 2, key: "system.menu.typeForm.masterDetail" },
+  { value: 3, key: "system.menu.typeForm.dynamicLink" },
+  { value: 4, key: "system.menu.typeForm.dynamicCode" },
+  { value: 6, key: "system.menu.typeForm.kanbanBoard" },
+  { value: 7, key: "system.menu.typeForm.lineItemsPdf" },
+];
+
 /**
  * Lấy các tùy chọn loại menu
  */
@@ -36,24 +45,37 @@ export function getMenuTypeOptions(t: TFunction<"translation", undefined>) {
  * 2: Dạng Form Master-Detail
  */
 export function getTypeFormOptions(t?: TFunction<"translation", undefined>) {
-	return [
-		{
-			label: t ? t("system.menu.typeForm.grid") : "Dạng bảng",
-			value: 1,
-		},
-		{
-			label: t ? t("system.menu.typeForm.masterDetail") : "Dạng Form Master-Detail",
-			value: 2,
-		},
-		{
-			label: t ? t("system.menu.typeForm.kanbanBoard") : "Kanban Board",
-			value: 6,
-		},
-		{
-			label: t ? t("system.menu.typeForm.lineItemsPdf") : "Form dòng hàng + in PDF",
-			value: 7,
-		},
-	];
+	return TYPE_FORM_OPTION_KEYS.map(({ value, key }) => ({
+		value,
+		label: t ? t(key) : key,
+	}));
+}
+
+export function getI18nSelectOptions(
+	t: TFunction<"translation", undefined>,
+	items: Array<{ value: string | number | boolean; key: string }>,
+) {
+	return items.map(({ value, key }) => ({
+		value,
+		label: t(key),
+	}));
+}
+
+export function getDataScopeOptions(t: TFunction<"translation", undefined>) {
+	return getI18nSelectOptions(t, [
+		{ value: "NONE", key: "system.menu.dataScope.none" },
+		{ value: "ALL", key: "system.menu.dataScope.all" },
+		{ value: "OWNER", key: "system.menu.dataScope.owner" },
+		{ value: "DEPARTMENT", key: "system.menu.dataScope.department" },
+		{ value: "BRANCH", key: "system.menu.dataScope.branch" },
+	]);
+}
+
+export function getOrientationOptions(t: TFunction<"translation", undefined>) {
+	return getI18nSelectOptions(t, [
+		{ value: "p", key: "system.menu.orientationPortrait" },
+		{ value: "l", key: "system.menu.orientationLandscape" },
+	]);
 }
 
 /**
@@ -82,11 +104,11 @@ export function getRowTypeEditOptions(t?: TFunction<"translation", undefined>) {
 export function getTypeMenuOptions(t?: TFunction<"translation", undefined>) {
 	return [
 		{
-			label: t ? t("system.menu.typeMenu.vertical") : "Kiểu cột",
+			label: t ? t("system.menu.typeMenu.column") : "Kiểu cột",
 			value: 0,
 		},
 		{
-			label: t ? t("system.menu.typeMenu.horizontal") : "Kiểu dòng",
+			label: t ? t("system.menu.typeMenu.row") : "Kiểu dòng",
 			value: 1,
 		},
 	];

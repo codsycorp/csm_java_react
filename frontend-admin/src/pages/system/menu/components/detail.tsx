@@ -30,6 +30,8 @@ import { useUserStore } from "#src/store/user";
 import { getDefaultSystemUserModeConfig, parseSystemUserModes, type SystemUserMenuModeConfig } from "#src/pages/system/admin/system-user-menu-config";
 
 import { getMenuTypeOptions } from "../constants";
+import MenuFieldLabel from "./MenuFieldLabel";
+import { useMenuDesignerOptions } from "../utils/useMenuDesignerOptions";
 
 interface DetailProps {
   title: React.ReactNode;
@@ -637,6 +639,7 @@ export function Detail({
 }: DetailProps) {
   // Log treeData để kiểm tra giá trị truyền vào
   const { t, i18n } = useTranslation();
+  const menuOptions = useMenuDesignerOptions(t);
   const formRef = useRef<FormInstance>(null);
   const autoSyncingRef = useRef(false);
   const [applyingLinkedFieldFix, setApplyingLinkedFieldFix] = useState(false);
@@ -673,11 +676,11 @@ export function Detail({
 
     return [
       {
-        label: t("system.menu.iconQuickGroup") || "Gợi ý nhanh",
+        label: t("system.menu.iconQuickGroup"),
         options: quickOptions,
       },
       {
-        label: t("system.menu.iconAllGroup") || "Tất cả icon Ant Design",
+        label: t("system.menu.iconAllGroup"),
         options: allOptionsWithoutQuick,
       },
     ];
@@ -755,7 +758,7 @@ export function Detail({
       table_name: PHUSON_PANEL_CONFIG.table_name,
       type_form: 7,
     });
-    message.success(t("system.menu.lineItemsTemplateApplied", "Đã áp dụng mẫu Phú Sơn"));
+    message.success(t("system.menu.lineItemsTemplateApplied"));
   }, [t]);
 
   const buildKanbanFieldAdvice = (depValues: Record<string, any>): string[] => {
@@ -1331,11 +1334,11 @@ export function Detail({
 
     if (isLineItemsMenu) {
       if (!String(payload.table_name || "").trim()) {
-        window.$message?.error(t("system.menu.lineItemsTableRequired", "Menu type_form=7 cần table_name"));
+        window.$message?.error(t("system.menu.lineItemsTableRequired"));
         return false;
       }
       if (!Array.isArray(lineItemsConfig.line_items_columns) || lineItemsConfig.line_items_columns.length === 0) {
-        window.$message?.error(t("system.menu.lineItemsColumnsRequired", "Cần cấu hình ít nhất 1 cột trong tab Form dòng hàng"));
+        window.$message?.error(t("system.menu.lineItemsColumnsRequired"));
         return false;
       }
       mergeLineItemsConfigIntoPayload(payload as Record<string, any>, lineItemsConfig);
@@ -1795,7 +1798,7 @@ export function Detail({
     {/* Group các trường đa ngôn ngữ */}
     <div style={{ marginBottom: 32, width: '100%' }}>
       <Card
-        title={t("system.menu.multilingualGroup") || "Tên & Route đa ngôn ngữ"}
+        title={t("system.menu.multilingualGroup")}
         bordered
         style={{ borderRadius: 10, boxShadow: '0 2px 8px #f0f1f2', padding: 0, width: '100%' }}
         bodyStyle={{ padding: 20 }}
@@ -1913,7 +1916,7 @@ export function Detail({
     {/* Bố cục cài đặt hiển thị dữ liệu */}
     <div style={{ marginBottom: 32, width: '100%' }}>
       <Card
-        title={t('system.menu.dataDisplaySettings') || 'Cài đặt hiển thị dữ liệu'}
+        title={t("system.menu.dataDisplaySettings")}
         bordered
         style={{ borderRadius: 10, boxShadow: '0 2px 8px #f0f1f2', padding: 0, width: '100%' }}
         bodyStyle={{ padding: 20 }}
@@ -1921,10 +1924,7 @@ export function Detail({
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 24, width: '100%' }}>
           {/* Thêm field type_form để chọn hình thức hiển thị */}
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.typeForm') || 'Thể hiện theo'}
-              <span style={{ color: '#ff4d4f', marginLeft: 4 }}>*</span>
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.typeForm" required />
             <ProFormSelect
               name="type_form"
               noStyle
@@ -1934,14 +1934,7 @@ export function Detail({
                 size: 'large',
                 style: { width: '100%' },
               }}
-              options={[
-                { label: t('system.menu.typeForm.table') || 'Dạng bảng (Table)', value: 1 },
-                { label: t('system.menu.typeForm.masterDetail') || 'Dạng Form Master-Detail', value: 2 },
-                { label: t('system.menu.typeForm.dynamicLink') || 'Liên kết động (Dynamic Link)', value: 3 },
-                { label: t('system.menu.typeForm.dynamicCode') || 'Chạy code động (Dynamic Code)', value: 4 },
-                { label: t('system.menu.typeForm.kanbanBoard') || 'Kanban Board', value: 6 },
-                { label: t('system.menu.typeForm.lineItemsPdf') || 'Form dòng hàng + in PDF', value: 7 },
-              ]}
+              options={menuOptions.typeForm}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.typeFormHint")}
@@ -1950,10 +1943,7 @@ export function Detail({
 
           {/* Thêm field row_type_edit để chọn kiểu chỉnh sửa */}
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.rowTypeEdit') || 'Kiểu chỉnh sửa dòng'}
-              <span style={{ color: '#ff4d4f', marginLeft: 4 }}>*</span>
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.rowTypeEdit" required />
             <ProFormSelect
               name="row_type_edit"
               noStyle
@@ -1963,10 +1953,7 @@ export function Detail({
                 size: 'large',
                 style: { width: '100%' },
               }}
-              options={[
-                { label: t('system.menu.rowTypeEdit.form') || 'Dạng Form', value: 0 },
-                { label: t('system.menu.rowTypeEdit.inline') || 'Chỉnh sửa trên dòng', value: 1 },
-              ]}
+              options={menuOptions.rowTypeEdit}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.rowTypeEditHint")}
@@ -1975,10 +1962,7 @@ export function Detail({
 
           {/* Thêm field type_menu để chọn kiểu menu */}
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.typeMenu') || 'Kiểu menu'}
-              <span style={{ color: '#ff4d4f', marginLeft: 4 }}>*</span>
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.typeMenu" required />
             <ProFormSelect
               name="type_menu"
               noStyle
@@ -1988,10 +1972,7 @@ export function Detail({
                 size: 'large',
                 style: { width: '100%' },
               }}
-              options={[
-                { label: t('system.menu.typeMenu.column') || 'Kiểu cột', value: 0 },
-                { label: t('system.menu.typeMenu.row') || 'Kiểu dòng', value: 1 },
-              ]}
+              options={menuOptions.typeMenu}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.typeMenuHint")}
@@ -2051,11 +2032,8 @@ export function Detail({
     if (typeForm === 7) {
       return (
         <Alert
-          message={t("system.menu.lineItemsAlertTitle", "Form dòng hàng + xuất PDF")}
-          description={t(
-            "system.menu.lineItemsAlertDesc",
-            "Cấu hình header ở tab Trường bảng (3 ngôn ngữ). Cột dòng hàng / in PDF ở tab Form dòng hàng. HTML in khai báo trigger_key ở tab Trigger.",
-          )}
+          message={t("system.menu.lineItemsAlertTitle")}
+          description={t("system.menu.lineItemsAlertDesc")}
           type="success"
           showIcon
           style={{ marginBottom: 16, marginTop: 16 }}
@@ -2123,9 +2101,7 @@ export function Detail({
                   children: (
                     <div style={{ display: 'grid', gap: 16 }}>
                       <div>
-                        <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                          {t('system.menu.table') || 'Bảng dữ liệu'}
-                        </div>
+                        <MenuFieldLabel i18nKey="system.menu.table" />
                         <Input
                           value={String(subUserModeConfig.table_name || '')}
                           placeholder="csm_group_members"
@@ -2136,9 +2112,7 @@ export function Detail({
                         />
                       </div>
                       <div>
-                        <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                          {t("system.menu.fieldConfigLabel")}
-                        </div>
+                        <MenuFieldLabel i18nKey="system.menu.fieldConfigLabel" />
                         <FieldConfigEditor
                           value={Array.isArray(subUserModeConfig.table) ? subUserModeConfig.table : []}
                           onChange={(nextTable) => {
@@ -2147,9 +2121,7 @@ export function Detail({
                         />
                       </div>
                       <div>
-                        <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                          {t("system.menu.triggerConfigLabel")}
-                        </div>
+                        <MenuFieldLabel i18nKey="system.menu.triggerConfigLabel" />
                         <div style={{ width: '100%', minWidth: 0 }}>
                           <TriggerEditor
                             value={subUserModeConfig.trigger && typeof subUserModeConfig.trigger === 'object' ? subUserModeConfig.trigger : {}}
@@ -2187,16 +2159,14 @@ export function Detail({
     return (
       <div style={{ marginBottom: 32, width: '100%' }}>
         <Card
-          title={t('system.menu.kanbanConfigTitle') || 'Cấu hình Kanban Board'}
+          title={t("system.menu.kanbanConfigTitle")}
           bordered
           style={{ borderRadius: 10, boxShadow: '0 2px 8px #f0f1f2', padding: 0, width: '100%' }}
           bodyStyle={{ padding: 20 }}
         >
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, marginBottom: 16 }}>
             <div>
-              <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                {t('system.menu.kanbanLinkedDataMenuLabel') || 'Menu dữ liệu liên quan'}
-              </div>
+              <MenuFieldLabel i18nKey="system.menu.kanbanLinkedDataMenuLabel" />
               <ProFormSelect
                 name="linked_data_menu_id"
                 noStyle
@@ -2224,9 +2194,7 @@ export function Detail({
             </div>
 
             <div>
-              <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                {t('system.menu.kanbanProgressLinkedMenuLabel') || 'Menu bảng cập nhật tiến độ'}
-              </div>
+              <MenuFieldLabel i18nKey="system.menu.kanbanProgressLinkedMenuLabel" />
               <ProFormSelect
                 name="linked_progress_menu_id"
                 noStyle
@@ -2256,10 +2224,8 @@ export function Detail({
             </div>
 
             <div>
-              <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                {t('system.menu.kanbanProgressTrackingModeLabel') || 'Mô hình theo dõi tiến độ'}
-              </div>
-              <ProFormSelect
+              <MenuFieldLabel i18nKey="system.menu.kanbanProgressTrackingModeLabel" />
+            <ProFormSelect
                 name="kanban_progress_tracking_mode"
                 noStyle
                 fieldProps={{
@@ -2280,17 +2246,12 @@ export function Detail({
                     });
                   },
                 }}
-                options={[
-                  { label: t('system.menu.kanbanProgressTrackingModeSingle') || 'Một bảng (task tự mang tiến độ)', value: 'single_table' },
-                  { label: t('system.menu.kanbanProgressTrackingModeSeparate') || 'Hai bảng (task + log tiến độ)', value: 'separate_table' },
-                ]}
+                options={menuOptions.kanbanProgressTracking}
               />
             </div>
 
             <div>
-              <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                {t('system.menu.kanbanStrictModeLabel') || 'Chế độ kiểm soát luồng'}
-              </div>
+              <MenuFieldLabel i18nKey="system.menu.kanbanStrictModeLabel" />
               <ProFormSelect
                 name="kanban_strict_mode"
                 noStyle
@@ -2300,11 +2261,7 @@ export function Detail({
                   size: 'large',
                   style: { width: '100%' },
                 }}
-                options={[
-                  { label: t('system.menu.kanbanInheritJson') || 'Kế thừa từ JSON', value: 'inherit' },
-                  { label: t('system.menu.kanbanStrictModeOn') || 'Bật strict mode', value: true },
-                  { label: t('system.menu.kanbanStrictModeOff') || 'Tắt strict mode', value: false },
-                ]}
+                options={menuOptions.kanbanStrictMode}
               />
               <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
                 {t('system.menu.kanbanStrictModeHint') || 'Strict mode sẽ kiểm soát transition trạng thái và trường bắt buộc theo stage.'}
@@ -2312,9 +2269,7 @@ export function Detail({
             </div>
 
             <div>
-              <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                {t('system.menu.kanbanAutoProgressLabel') || 'Tự cập nhật tiến độ theo stage'}
-              </div>
+              <MenuFieldLabel i18nKey="system.menu.kanbanAutoProgressLabel" />
               <ProFormSelect
                 name="kanban_auto_update_progress"
                 noStyle
@@ -2324,11 +2279,7 @@ export function Detail({
                   size: 'large',
                   style: { width: '100%' },
                 }}
-                options={[
-                  { label: t('system.menu.kanbanInheritJson') || 'Kế thừa từ JSON', value: 'inherit' },
-                  { label: t('system.menu.kanbanAutoProgressOn') || 'Bật tự cập nhật', value: true },
-                  { label: t('system.menu.kanbanAutoProgressOff') || 'Tắt tự cập nhật', value: false },
-                ]}
+                options={menuOptions.kanbanAutoProgress}
               />
               <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
                 {t('system.menu.kanbanAutoProgressHint') || 'Khi bật: đổi stage sẽ tự cập nhật field tiến độ (%) và mốc thời gian KPI.'}
@@ -2336,9 +2287,7 @@ export function Detail({
             </div>
 
             <div>
-              <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                {t('system.menu.kanbanStageFieldLabel') || 'Field trạng thái (stage)'}
-              </div>
+              <MenuFieldLabel i18nKey="system.menu.kanbanStageFieldLabel" />
               <ProFormSelect
                 name="kanban_stage_field"
                 noStyle
@@ -2353,9 +2302,7 @@ export function Detail({
             </div>
 
             <div>
-              <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                {t('system.menu.kanbanTitleFieldLabel') || 'Field tiêu đề'}
-              </div>
+              <MenuFieldLabel i18nKey="system.menu.kanbanTitleFieldLabel" />
               <ProFormSelect
                 name="kanban_title_field"
                 noStyle
@@ -2370,9 +2317,7 @@ export function Detail({
             </div>
 
             <div>
-              <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                {t('system.menu.kanbanDueDateFieldLabel') || 'Field hạn xử lý'}
-              </div>
+              <MenuFieldLabel i18nKey="system.menu.kanbanDueDateFieldLabel" />
               <ProFormSelect
                 name="kanban_due_date_field"
                 noStyle
@@ -2387,9 +2332,7 @@ export function Detail({
             </div>
 
             <div>
-              <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                {t('system.menu.kanbanProgressFieldLabel') || 'Field cập nhật tiến độ (%)'}
-              </div>
+              <MenuFieldLabel i18nKey="system.menu.kanbanProgressFieldLabel" />
               <ProFormSelect
                 name="kanban_progress_field"
                 noStyle
@@ -2404,9 +2347,7 @@ export function Detail({
             </div>
 
             <div style={{ gridColumn: '1 / -1' }}>
-              <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                {t('system.menu.kanbanDoneStagesLabel') || 'Stage hoàn thành (doneStageIds)'}
-              </div>
+              <MenuFieldLabel i18nKey="system.menu.kanbanDoneStagesLabel" />
               <ProFormText
                 name="kanban_done_stage_ids"
                 noStyle
@@ -2501,9 +2442,7 @@ export function Detail({
                     {mode !== "separate_table" ? null : (
                       <>
                     <div>
-                      <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                        {t('system.menu.kanbanProgressTaskRefFieldLabel') || 'Field tham chiếu công việc'}
-                      </div>
+                      <MenuFieldLabel i18nKey="system.menu.kanbanProgressTaskRefFieldLabel" />
                       <ProFormSelect
                         name="kanban_progress_task_ref_field"
                         noStyle
@@ -2512,9 +2451,7 @@ export function Detail({
                       />
                     </div>
                     <div>
-                      <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                        {t('system.menu.kanbanProgressStageLogFieldLabel') || 'Field stage trong log'}
-                      </div>
+                      <MenuFieldLabel i18nKey="system.menu.kanbanProgressStageLogFieldLabel" />
                       <ProFormSelect
                         name="kanban_progress_stage_log_field"
                         noStyle
@@ -2523,9 +2460,7 @@ export function Detail({
                       />
                     </div>
                     <div>
-                      <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                        {t('system.menu.kanbanProgressPercentLogFieldLabel') || 'Field % tiến độ trong log'}
-                      </div>
+                      <MenuFieldLabel i18nKey="system.menu.kanbanProgressPercentLogFieldLabel" />
                       <ProFormSelect
                         name="kanban_progress_percent_log_field"
                         noStyle
@@ -2534,9 +2469,7 @@ export function Detail({
                       />
                     </div>
                     <div>
-                      <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                        {t('system.menu.kanbanProgressTimeFieldLabel') || 'Field thời điểm cập nhật'}
-                      </div>
+                      <MenuFieldLabel i18nKey="system.menu.kanbanProgressTimeFieldLabel" />
                       <ProFormSelect
                         name="kanban_progress_time_field"
                         noStyle
@@ -2545,9 +2478,7 @@ export function Detail({
                       />
                     </div>
                     <div>
-                      <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                        {t('system.menu.kanbanProgressNoteFieldLabel') || 'Field ghi chú tiến độ'}
-                      </div>
+                      <MenuFieldLabel i18nKey="system.menu.kanbanProgressNoteFieldLabel" />
                       <ProFormSelect
                         name="kanban_progress_note_field"
                         noStyle
@@ -2556,9 +2487,7 @@ export function Detail({
                       />
                     </div>
                     <div>
-                      <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                        {t('system.menu.kanbanProgressActorFieldLabel') || 'Field người cập nhật'}
-                      </div>
+                      <MenuFieldLabel i18nKey="system.menu.kanbanProgressActorFieldLabel" />
                       <ProFormSelect
                         name="kanban_progress_actor_field"
                         noStyle
@@ -2595,16 +2524,14 @@ export function Detail({
     {/* Cài đặt cơ bản */}
     <div style={{ marginBottom: 32, width: '100%' }}>
       <Card
-        title={t('system.menu.basicSettings') || 'Cài đặt cơ bản'}
+        title={t("system.menu.basicSettings")}
         bordered
         style={{ borderRadius: 10, boxShadow: '0 2px 8px #f0f1f2', padding: 0, width: '100%' }}
         bodyStyle={{ padding: 20 }}
       >
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 24, width: '100%' }}>
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.parentMenu') || 'Menu cha'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.parentMenu" />
             <ProFormSelect
               name="parentId"
               noStyle
@@ -2618,7 +2545,7 @@ export function Detail({
                   (option?.label ?? '').toLowerCase().includes(input.toLowerCase()),
               }}
               options={[
-                { label: t("system.menu.root") || "Menu gốc", value: "" },
+                ...menuOptions.rootMenu,
                 ...flatParentMenus
                   .filter(menu => menu.id !== detailData.id) // Loại trừ chính menu đang edit
                   .map(menu => ({
@@ -2639,9 +2566,7 @@ export function Detail({
           </div>
 
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.icon') || 'Icon'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.icon" />
             <ProFormSelect
               name="icon"
               noStyle
@@ -2665,9 +2590,7 @@ export function Detail({
           </div>
 
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.table') || 'Bảng dữ liệu'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.table" />
             <ProFormText
               name="table_name"
               noStyle
@@ -2683,9 +2606,7 @@ export function Detail({
           </div>
 
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t("system.menu.dataScopeTitle")}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.dataScopeTitle" />
             <ProFormSelect
               name="data_scope_override"
               noStyle
@@ -2695,13 +2616,7 @@ export function Detail({
                 size: 'large',
                 style: { width: '100%' },
               }}
-              options={[
-                { label: t("system.menu.dataScope.none"), value: 'NONE' },
-                { label: t("system.menu.dataScope.all"), value: 'ALL' },
-                { label: t("system.menu.dataScope.owner"), value: 'OWNER' },
-                { label: t("system.menu.dataScope.department"), value: 'DEPARTMENT' },
-                { label: t("system.menu.dataScope.branch"), value: 'BRANCH' },
-              ]}
+              options={menuOptions.dataScope}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.dataScopeHint")}
@@ -2709,9 +2624,7 @@ export function Detail({
           </div>
 
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.dev') || 'Chỉ hiện với quyền tối cao'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.dev" />
             <ProFormSelect
               name="dev"
               noStyle
@@ -2721,17 +2634,12 @@ export function Detail({
                 size: 'large',
                 style: { width: '100%' },
               }}
-              options={[
-                { label: t("system.menu.no"), value: false },
-                { label: t("system.menu.yes"), value: true },
-              ]}
+              options={menuOptions.yesNoBool}
             />
           </div>
 
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.prefixPk') || 'Tiếp đầu ngữ khi tạo ID'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.prefixPk" />
             <ProFormText
               name="prefix_pk"
               noStyle
@@ -2747,9 +2655,7 @@ export function Detail({
           </div>
 
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.tablePagesize') || 'Dòng trên trang'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.tablePagesize" />
             <ProFormDigit
               name="table_pagesize"
               noStyle
@@ -2773,16 +2679,14 @@ export function Detail({
     {/* Cài đặt báo cáo */}
     <div style={{ marginBottom: 32, width: '100%' }}>
       <Card
-        title={t('system.menu.reportSettings') || 'Cài đặt báo cáo'}
+        title={t("system.menu.reportSettings")}
         bordered
         style={{ borderRadius: 10, boxShadow: '0 2px 8px #f0f1f2', padding: 0, width: '100%' }}
         bodyStyle={{ padding: 20 }}
       >
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 24, width: '100%' }}>
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.reportName') || 'Mẫu báo cáo'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.reportName" />
             <ProFormText
               name="report_name"
               noStyle
@@ -2809,9 +2713,7 @@ export function Detail({
           </div>
 
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.orientation') || 'Kiểu in'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.orientation" />
             <ProFormSelect
               name="orientation"
               noStyle
@@ -2821,10 +2723,7 @@ export function Detail({
                 size: 'large',
                 style: { width: '100%' },
               }}
-              options={[
-                { label: t("system.menu.orientationPortrait"), value: 'p' },
-                { label: t("system.menu.orientationLandscape"), value: 'l' },
-              ]}
+              options={menuOptions.orientation}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.orientationHint")}
@@ -2832,9 +2731,7 @@ export function Detail({
           </div>
 
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.pWidth') || 'Trang In Dài (mm)'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.pWidth" />
             <ProFormDigit
               name="p_width"
               noStyle
@@ -2852,9 +2749,7 @@ export function Detail({
           </div>
 
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.pHeight') || 'Trang In Rộng (mm)'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.pHeight" />
             <ProFormDigit
               name="p_height"
               noStyle
@@ -2877,16 +2772,14 @@ export function Detail({
     {/* Cài đặt hiển thị nâng cao */}
     <div style={{ marginBottom: 32, width: '100%' }}>
       <Card
-        title={t('system.menu.advancedSettings') || 'Cài đặt hiển thị nâng cao'}
+        title={t("system.menu.advancedSettings")}
         bordered
         style={{ borderRadius: 10, boxShadow: '0 2px 8px #f0f1f2', padding: 0, width: '100%' }}
         bodyStyle={{ padding: 20 }}
       >
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 24, width: '100%' }}>
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.fieldRoot') || 'Trường liên kết Master'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.fieldRoot" />
             <ProFormText
               name="field_root"
               noStyle
@@ -2902,9 +2795,7 @@ export function Detail({
           </div>
 
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.mShow') || 'Hiện'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.mShow" />
             <ProFormSelect
               name="m_show"
               noStyle
@@ -2914,10 +2805,7 @@ export function Detail({
                 size: 'large',
                 style: { width: '100%' },
               }}
-              options={[
-                { label: t("system.menu.no"), value: 0 },
-                { label: t("system.menu.yes"), value: 1 },
-              ]}
+              options={menuOptions.yesNoNum}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.mShowHint")}
@@ -2925,9 +2813,7 @@ export function Detail({
           </div>
 
           <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.gReadonly') || 'Chỉ được xem'}
-            </div>
+            <MenuFieldLabel i18nKey="system.menu.gReadonly" />
             <ProFormSelect
               name="g_readonly"
               noStyle
@@ -2937,10 +2823,7 @@ export function Detail({
                 size: 'large',
                 style: { width: '100%' },
               }}
-              options={[
-                { label: t("system.menu.no"), value: false },
-                { label: t("system.menu.yes"), value: true },
-              ]}
+              options={menuOptions.yesNoBool}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.gReadonlyHint")}
@@ -2954,9 +2837,7 @@ export function Detail({
               if (typeForm === 3) {
                 return (
                   <div>
-                    <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                      {t("system.menu.vLink") || "Đường dẫn fallback"}
-                    </div>
+                    <MenuFieldLabel i18nKey="system.menu.vLink" />
                     <ProFormText
                       name="v_link"
                       noStyle
@@ -2975,9 +2856,7 @@ export function Detail({
 
               return (
                 <div>
-                  <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                    {t("system.menu.vLink") || "Component hiển thị"}
-                  </div>
+                  <MenuFieldLabel i18nKey="system.menu.vLink" />
                   <ProFormText
                     name="v_link"
                     noStyle
@@ -3004,10 +2883,7 @@ export function Detail({
                 return (
                   <div style={{ position: 'relative' }}>
                     <Spin spinning={loadingAutoCode} size="small">
-                      <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                        {t('system.menu.autoCodeTemplate') || 'Template Code Động'}
-                        <span style={{ color: '#ff4d4f', marginLeft: 4 }}>*</span>
-                      </div>
+                      <MenuFieldLabel i18nKey="system.menu.autoCodeTemplate" required />
                       <ProFormSelect
                         name="auto_code_name"
                         noStyle
@@ -3032,9 +2908,7 @@ export function Detail({
               if (typeForm === 3) {
                 return (
                   <div>
-                    <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-                      {t('system.menu.dynamicLinkUrl') || 'Đường dẫn Link Động'}
-                    </div>
+                    <MenuFieldLabel i18nKey="system.menu.dynamicLinkUrl" />
                     <ProFormText
                       name="dynamic_link_url"
                       noStyle
@@ -3082,7 +2956,7 @@ export function Detail({
             ...(typeForm === 7
               ? [{
                 key: "line_items",
-                label: t("system.menu.tab.lineItems", "Form dòng hàng + PDF"),
+                label: t("system.menu.tab.lineItems"),
                 children: (
                   <LineItemsConfigEditor
                     value={lineItemsConfig}

@@ -235,6 +235,12 @@
 		"typeForm.dynamicLink": "动态链接",
 		"typeForm.dynamicCode": "动态代码",
 		"typeForm.kanbanBoard": "看板",
+		"typeForm.lineItemsPdf": "明细行表单 + PDF 打印",
+		"lineItemsAlertTitle": "明细行表单 + PDF 导出",
+		"lineItemsAlertDesc": "在“数据字段”页签配置表头（三语）。明细列与 PDF 在“明细行 + PDF”页签配置。打印 HTML 在“公式设置”页签通过 trigger_key 声明。",
+		"lineItemsTemplateApplied": "已应用 Phú Sơn 模板",
+		"lineItemsTableRequired": "type_form=7 的菜单需要 table_name",
+		"lineItemsColumnsRequired": "请在“明细行 + PDF”页签至少配置一列",
 		"rowTypeEdit": "行编辑类型",
 		"rowTypeEdit.form": "表单",
 		"rowTypeEdit.inline": "行内编辑",
@@ -245,7 +251,8 @@
 		"typeMenu.horizontal": "横向",
 		"tab": {
 			"fields": "数据字段",
-			"trigger": "公式设置"
+			"trigger": "公式设置",
+			"lineItems": "明细行 + PDF"
 		},
 		"trigger": {
 			"datacolumntemplate": "列显示模板",
@@ -263,6 +270,10 @@
 		"reportSettings": "报表设置",
 		"advancedSettings": "高级显示设置",
 		"icon": "图标",
+		"iconQuickGroup": "快速选择",
+		"iconAllGroup": "全部 Ant Design 图标",
+		"autoCodeTemplate": "动态代码模板",
+		"dynamicLinkUrl": "动态链接地址",
 		"table": "数据表",
 		"dev": "仅显示管理员权限",
 		"prefixPk": "自动ID前缀",

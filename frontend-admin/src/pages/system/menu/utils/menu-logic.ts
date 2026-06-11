@@ -123,6 +123,7 @@ export function getMenuConfigDisplay(
     3: translate ? (translate("system.menu.typeForm.dynamicLink") || "Liên kết động") : "Liên kết động",
     4: translate ? (translate("system.menu.typeForm.dynamicCode") || "Dynamic Code") : "Dynamic Code",
     6: translate ? (translate("system.menu.typeForm.kanbanBoard") || "Kanban Board") : "Kanban Board",
+    7: translate ? (translate("system.menu.typeForm.lineItemsPdf") || "Form dòng hàng + in PDF") : "Form dòng hàng + in PDF",
   };
 
   const rowEditMap: Record<number, string> = {

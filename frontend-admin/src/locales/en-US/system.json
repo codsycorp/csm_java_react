@@ -235,6 +235,12 @@
 		"typeForm.dynamicLink": "Dynamic Link",
 		"typeForm.dynamicCode": "Dynamic Code",
 		"typeForm.kanbanBoard": "Kanban Board",
+		"typeForm.lineItemsPdf": "Line items form + PDF print",
+		"lineItemsAlertTitle": "Line items form + PDF export",
+		"lineItemsAlertDesc": "Configure headers in the Fields tab (3 languages). Line-item columns and PDF in the Line items tab. Print HTML uses trigger_key in the Trigger tab.",
+		"lineItemsTemplateApplied": "Phú Sơn template applied",
+		"lineItemsTableRequired": "type_form=7 menu requires table_name",
+		"lineItemsColumnsRequired": "Configure at least one column in the Line items tab",
 		"rowTypeEdit": "Row edit type",
 		"rowTypeEdit.form": "Form",
 		"rowTypeEdit.inline": "Inline edit",
@@ -245,7 +251,8 @@
 		"typeMenu.horizontal": "Horizontal",
 		"tab": {
 			"fields": "Fields",
-			"trigger": "Trigger setup"
+			"trigger": "Trigger setup",
+			"lineItems": "Line items + PDF"
 		},
 		"trigger": {
 			"datacolumntemplate": "Column Display Template",
@@ -263,6 +270,10 @@
 		"reportSettings": "Report Settings",
 		"advancedSettings": "Advanced Settings",
 		"icon": "Icon",
+		"iconQuickGroup": "Quick picks",
+		"iconAllGroup": "All Ant Design icons",
+		"autoCodeTemplate": "Dynamic code template",
+		"dynamicLinkUrl": "Dynamic link URL",
 		"table": "Data Table",
 		"dev": "Show only with admin rights",
 		"prefixPk": "Prefix for auto ID",
