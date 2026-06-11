@@ -1,0 +1,101 @@
+name: Deploy nginx config
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "nginx.conf"
+      - ".github/scripts/patch_nginx.py"
+      - ".github/workflows/deploy-nginx.yml"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy-nginx:
+    name: Deploy nginx.conf → Reload
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Upload nginx config to /tmp
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          source: "nginx.conf"
+          target: "/tmp/"
+          strip_components: 0
+
+      - name: Upload surgical patch script to /tmp
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          source: ".github/scripts/patch_nginx.py"
+          target: "/tmp/"
+          strip_components: 2
+
+      - name: Validate, deploy & reload nginx
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          script: |
+            set -e
+            echo "=== nginx version ==="
+            nginx -v 2>&1
+
+            echo "=== Tạo include files và thư mục còn thiếu ==="
+            touch /etc/nginx/blocked_ips.conf
+            mkdir -p /etc/nginx/snippets
+            touch /etc/nginx/snippets/fastcgi-php.conf
+            mkdir -p /var/cache/nginx/proxy
+
+            echo "=== Files đã upload ==="
+            ls -la /tmp/nginx.conf /tmp/patch_nginx.py 2>&1
+
+            echo "=== Test config MỚI trước khi thay thế ==="
+            FULL_OK=0
+            nginx -t -c /tmp/nginx.conf 2>&1 && FULL_OK=1 || true
+
+            if [ "$FULL_OK" = "1" ]; then
+              echo "Full config PASSED — deploying"
+              cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.bak || true
+              cp /tmp/nginx.conf /etc/nginx/nginx.conf
+              nginx -s reload
+              echo "nginx reloaded OK"
+              echo "=== AI locations trong config ==="
+              grep -n "ai-generate-seo-content" /etc/nginx/nginx.conf | head -8
+            else
+              echo "Full config FAILED — chi tiết lỗi:"
+              nginx -t -c /tmp/nginx.conf 2>&1 | head -30 || true
+
+              echo "=== Áp dụng surgical patch ==="
+              if [ -f /tmp/patch_nginx.py ]; then
+                python3 /tmp/patch_nginx.py
+              else
+                echo "patch_nginx.py không tìm thấy — bỏ qua"
+                exit 1
+              fi
+
+              if nginx -t 2>&1; then
+                nginx -s reload
+                echo "Surgical patch + reload OK"
+                grep -n "ai-generate-seo-content" /etc/nginx/nginx.conf | head -8
+              else
+                cp /etc/nginx/nginx.conf.bak /etc/nginx/nginx.conf || true
+                echo "Surgical patch cũng FAILED — restored backup"
+                nginx -t 2>&1 | head -20 || true
+                exit 1
+              fi
+            fi
+
+            echo "=== Xác nhận cuối: AI location trong nginx ==="
+            grep -n "ai-generate-seo-content" /etc/nginx/nginx.conf | head -6 || echo "KHÔNG TÌM THẤY"
