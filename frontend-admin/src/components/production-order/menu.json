@@ -16,14 +16,1182 @@
       "trigger": {},
       "table": [],
       "v_link": "",
+      "children": [
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {},
+          "table": [
+            {
+              "id": "tvp_khachhang_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_kh_ma",
+              "f_name": "ma_kh",
+              "f_header": "Mã KH",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 1,
+              "f_search": 1
+            },
+            {
+              "id": "pm_kh_ten",
+              "f_name": "ten_kh",
+              "f_header": "Tên công ty / KH",
+              "f_types": "ed",
+              "f_width": 220,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0,
+              "f_header_en": "Company / customer",
+              "f_header_zh": "公司/客户",
+              "f_search": 1
+            },
+            {
+              "id": "pm_kh_dc",
+              "f_name": "dia_chi",
+              "f_header": "Địa chỉ",
+              "f_types": "ed",
+              "f_width": 220,
+              "f_show": 1,
+              "f_stt": 4,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_mst",
+              "f_name": "mst",
+              "f_header": "MST",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 5,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_email",
+              "f_name": "email",
+              "f_header": "Email",
+              "f_types": "ed",
+              "f_width": 160,
+              "f_show": 1,
+              "f_stt": 6,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_site",
+              "f_name": "site",
+              "f_header": "Website / MXH",
+              "f_types": "ed",
+              "f_width": 160,
+              "f_show": 1,
+              "f_stt": 7,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_dt",
+              "f_name": "dien_thoai",
+              "f_header": "Điện thoại",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 8,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_stk",
+              "f_name": "stk",
+              "f_header": "STK",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 9,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_ttk",
+              "f_name": "ttk",
+              "f_header": "Tên tài khoản",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 10,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_tnh",
+              "f_name": "tnh",
+              "f_header": "Tên ngân hàng",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 11,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_nt",
+              "f_name": "ngay_tao",
+              "f_header": "Ngày tạo",
+              "f_types": "date",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 12,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_sn",
+              "f_name": "sinh_nhat",
+              "f_header": "Sinh nhật (công ty)",
+              "f_types": "date",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 13,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_kh_pl",
+              "f_name": "phan_loai",
+              "f_header": "Phân loại KH",
+              "f_types": "co",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 14,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_pl\"],\"obj_name\":\"tvp_phanloai\",\"obj_where\":\"\"}],\"options\":[]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_grid": "pm_phan_loai_kh",
+              "f_grid_fields": [
+                "ten_pl",
+                "mo_ta"
+              ]
+            },
+            {
+              "id": "pm_kh_nguon",
+              "f_name": "nguon_khach",
+              "f_header": "Nguồn khách",
+              "f_types": "co",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 15,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_nguon\"],\"obj_name\":\"tvp_nguonkh\",\"obj_where\":\"\"}],\"options\":[]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_grid": "pm_nguon_kh",
+              "f_grid_fields": [
+                "ten_nguon",
+                "link_kh",
+                "mo_ta"
+              ]
+            }
+          ],
+          "v_link": "",
+          "children": [
+            {
+              "field_root": "id",
+              "report_name": "",
+              "orientation": "",
+              "p_width": "0",
+              "p_height": "0",
+              "m_show": true,
+              "g_readonly": false,
+              "type_menu": "",
+              "row_type_edit": "0",
+              "dev": "",
+              "prefix_pk": "",
+              "table_pagesize": "50",
+              "trigger": {},
+              "table": [
+                {
+                  "id": "pm_nm_id",
+                  "f_name": "id",
+                  "f_header": "ID",
+                  "f_types": "ed",
+                  "f_width": 100,
+                  "f_show": 1,
+                  "f_stt": 1,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_nm_ten",
+                  "f_name": "ho_ten",
+                  "f_header": "Họ tên",
+                  "f_types": "ed",
+                  "f_width": 180,
+                  "f_show": 1,
+                  "f_stt": 2,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_nm_dt",
+                  "f_name": "dien_thoai",
+                  "f_header": "Số điện thoại",
+                  "f_types": "ed",
+                  "f_width": 130,
+                  "f_show": 1,
+                  "f_stt": 3,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_nm_sn",
+                  "f_name": "sinh_nhat",
+                  "f_header": "Sinh nhật",
+                  "f_types": "date",
+                  "f_width": 120,
+                  "f_show": 1,
+                  "f_stt": 4,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_nm_st",
+                  "f_name": "so_thich",
+                  "f_header": "Sở thích",
+                  "f_types": "ed",
+                  "f_width": 180,
+                  "f_show": 1,
+                  "f_stt": 5,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_nm_cv",
+                  "f_name": "chuc_vu",
+                  "f_header": "Chức vụ / vai trò",
+                  "f_types": "ed",
+                  "f_width": 160,
+                  "f_show": 1,
+                  "f_stt": 6,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_nm_chinh",
+                  "f_name": "la_chinh",
+                  "f_header": "Người mua chính",
+                  "f_types": "ch",
+                  "f_width": 90,
+                  "f_show": 1,
+                  "f_stt": 7,
+                  "f_pkid": 0
+                }
+              ],
+              "v_link": "",
+              "children": [],
+              "id": "pm_nguoi_mua",
+              "parentId": "pm_khachhang",
+              "label": "Người mua hàng",
+              "label_en": "Buyers",
+              "label_zh": "采购联系人",
+              "m_icons": "fa fa-user",
+              "type_form": "1",
+              "table_name": "nguoi_mua_hang"
+            },
+            {
+              "field_root": "id",
+              "report_name": "",
+              "orientation": "",
+              "p_width": "0",
+              "p_height": "0",
+              "m_show": true,
+              "g_readonly": false,
+              "type_menu": "",
+              "row_type_edit": "0",
+              "dev": "",
+              "prefix_pk": "",
+              "table_pagesize": "50",
+              "trigger": {},
+              "table": [
+                {
+                  "id": "pm_cskh_truoc_id",
+                  "f_name": "id",
+                  "f_header": "ID",
+                  "f_types": "ed",
+                  "f_width": 100,
+                  "f_show": 1,
+                  "f_stt": 1,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_truoc_nv",
+                  "f_name": "nhan_vien",
+                  "f_header": "Nhân viên",
+                  "f_types": "co",
+                  "f_width": 200,
+                  "f_show": 1,
+                  "f_stt": 2,
+                  "f_pkid": 0,
+                  "f_grid": "pm_dm_nhanvien",
+                  "f_grid_fields": [
+                    "ma_nhan_vien",
+                    "ten_nhan_vien",
+                    "chuc_vu"
+                  ]
+                },
+                {
+                  "id": "pm_cskh_truoc_ht",
+                  "f_name": "hinh_thuc",
+                  "f_header": "Hình thức",
+                  "f_types": "co",
+                  "f_width": 140,
+                  "f_show": 1,
+                  "f_stt": 3,
+                  "f_pkid": 0,
+                  "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"goi_dien\",\"ten\":\"Gọi điện\"},{\"ma\":\"nhan_tin\",\"ten\":\"Nhắn tin\"},{\"ma\":\"gap_truc_tiep\",\"ten\":\"Gặp trực tiếp\"},{\"ma\":\"nguoi_thu_3\",\"ten\":\"Qua người thứ 3\"}]}",
+                  "f_search": 1,
+                  "f_filter": 1,
+                  "f_showgrid": 1
+                },
+                {
+                  "id": "pm_cskh_truoc_tt",
+                  "f_name": "trang_thai",
+                  "f_header": "Trạng thái",
+                  "f_types": "co",
+                  "f_width": 160,
+                  "f_show": 1,
+                  "f_stt": 4,
+                  "f_pkid": 0,
+                  "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"nhap\",\"ten\":\"Nháp\"},{\"ma\":\"da_gui\",\"ten\":\"Đã gửi\"},{\"ma\":\"dang_thuong_luong\",\"ten\":\"Đang thương lượng\"},{\"ma\":\"da_chot\",\"ten\":\"Đã chốt\"},{\"ma\":\"khong_chot\",\"ten\":\"Không chốt\"}]}",
+                  "f_search": 1,
+                  "f_filter": 1,
+                  "f_showgrid": 1
+                },
+                {
+                  "id": "pm_cskh_truoc_hen",
+                  "f_name": "ngay_hen",
+                  "f_header": "Ngày hẹn",
+                  "f_types": "date",
+                  "f_width": 120,
+                  "f_show": 1,
+                  "f_stt": 5,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_truoc_nd",
+                  "f_name": "noi_dung",
+                  "f_header": "Ý kiến / đánh giá KH",
+                  "f_types": "memo",
+                  "f_width": 280,
+                  "f_show": 1,
+                  "f_stt": 6,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_truoc_dx_tp",
+                  "f_name": "de_xuat_tp",
+                  "f_header": "Đề xuất Trưởng phòng",
+                  "f_types": "ch",
+                  "f_width": 80,
+                  "f_show": 1,
+                  "f_stt": 7,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_truoc_dx_gd",
+                  "f_name": "de_xuat_gd",
+                  "f_header": "Đề xuất GĐKD",
+                  "f_types": "ch",
+                  "f_width": 80,
+                  "f_show": 1,
+                  "f_stt": 8,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_truoc_tl",
+                  "f_name": "tai_lieu",
+                  "f_header": "Tài liệu đính kèm",
+                  "f_types": "file",
+                  "f_width": 160,
+                  "f_show": 1,
+                  "f_stt": 9,
+                  "f_pkid": 0
+                }
+              ],
+              "v_link": "",
+              "children": [],
+              "id": "pm_cskh_truoc_mua",
+              "parentId": "pm_khachhang",
+              "label": "CSKH — chưa mua hàng",
+              "label_en": "Care — pre-sale",
+              "label_zh": "售前关怀",
+              "m_icons": "fa fa-phone",
+              "type_form": "1",
+              "table_name": "lich_su_truoc_mua"
+            },
+            {
+              "field_root": "id",
+              "report_name": "",
+              "orientation": "",
+              "p_width": "0",
+              "p_height": "0",
+              "m_show": true,
+              "g_readonly": false,
+              "type_menu": "",
+              "row_type_edit": "0",
+              "dev": "",
+              "prefix_pk": "",
+              "table_pagesize": "50",
+              "trigger": {},
+              "table": [
+                {
+                  "id": "pm_cskh_sau_id",
+                  "f_name": "id",
+                  "f_header": "ID",
+                  "f_types": "ed",
+                  "f_width": 100,
+                  "f_show": 1,
+                  "f_stt": 1,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_sau_nv",
+                  "f_name": "nhan_vien",
+                  "f_header": "Nhân viên",
+                  "f_types": "co",
+                  "f_width": 200,
+                  "f_show": 1,
+                  "f_stt": 2,
+                  "f_pkid": 0,
+                  "f_grid": "pm_dm_nhanvien",
+                  "f_grid_fields": [
+                    "ma_nhan_vien",
+                    "ten_nhan_vien",
+                    "chuc_vu"
+                  ]
+                },
+                {
+                  "id": "pm_cskh_sau_ht",
+                  "f_name": "hinh_thuc",
+                  "f_header": "Hình thức",
+                  "f_types": "co",
+                  "f_width": 140,
+                  "f_show": 1,
+                  "f_stt": 3,
+                  "f_pkid": 0,
+                  "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"goi_dien\",\"ten\":\"Gọi điện\"},{\"ma\":\"nhan_tin\",\"ten\":\"Nhắn tin\"},{\"ma\":\"gap_truc_tiep\",\"ten\":\"Gặp trực tiếp\"},{\"ma\":\"nguoi_thu_3\",\"ten\":\"Qua người thứ 3\"}]}",
+                  "f_search": 1,
+                  "f_filter": 1,
+                  "f_showgrid": 1
+                },
+                {
+                  "id": "pm_cskh_sau_tt",
+                  "f_name": "trang_thai",
+                  "f_header": "Trạng thái",
+                  "f_types": "co",
+                  "f_width": 160,
+                  "f_show": 1,
+                  "f_stt": 4,
+                  "f_pkid": 0,
+                  "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"hai_long\",\"ten\":\"Hài lòng\"},{\"ma\":\"hai_long_tb\",\"ten\":\"Hài lòng trung bình\"},{\"ma\":\"kho_mua_lai\",\"ten\":\"Khó mua lại hàng\"},{\"ma\":\"khac\",\"ten\":\"Khác\"}]}",
+                  "f_search": 1,
+                  "f_filter": 1,
+                  "f_showgrid": 1
+                },
+                {
+                  "id": "pm_cskh_sau_hen",
+                  "f_name": "ngay_hen",
+                  "f_header": "Ngày hẹn",
+                  "f_types": "date",
+                  "f_width": 120,
+                  "f_show": 1,
+                  "f_stt": 5,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_sau_nd",
+                  "f_name": "noi_dung",
+                  "f_header": "Ý kiến / đánh giá KH",
+                  "f_types": "memo",
+                  "f_width": 280,
+                  "f_show": 1,
+                  "f_stt": 6,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_sau_dx_tp",
+                  "f_name": "de_xuat_tp",
+                  "f_header": "Đề xuất Trưởng phòng",
+                  "f_types": "ch",
+                  "f_width": 80,
+                  "f_show": 1,
+                  "f_stt": 7,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_sau_dx_gd",
+                  "f_name": "de_xuat_gd",
+                  "f_header": "Đề xuất GĐKD",
+                  "f_types": "ch",
+                  "f_width": 80,
+                  "f_show": 1,
+                  "f_stt": 8,
+                  "f_pkid": 0
+                },
+                {
+                  "id": "pm_cskh_sau_tl",
+                  "f_name": "tai_lieu",
+                  "f_header": "Tài liệu đính kèm",
+                  "f_types": "file",
+                  "f_width": 160,
+                  "f_show": 1,
+                  "f_stt": 9,
+                  "f_pkid": 0
+                }
+              ],
+              "v_link": "",
+              "children": [],
+              "id": "pm_cskh_sau_mua",
+              "parentId": "pm_khachhang",
+              "label": "CSKH — đã mua hàng",
+              "label_en": "Care — post-sale",
+              "label_zh": "售后关怀",
+              "m_icons": "fa fa-handshake-o",
+              "type_form": "1",
+              "table_name": "lich_su_sau_mua"
+            }
+          ],
+          "id": "pm_khachhang",
+          "parentId": "pm_khach_hang",
+          "label": "Hồ sơ khách hàng",
+          "label_en": "Customer profiles",
+          "label_zh": "客户档案",
+          "m_icons": "fa fa-address-card",
+          "type_form": "2",
+          "table_name": "tvp_khachhang"
+        },
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {},
+          "table": [
+            {
+              "id": "tvp_nguonkh_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_nk_ten",
+              "f_name": "ten_nguon",
+              "f_header": "Tên nguồn",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_nk_link",
+              "f_name": "link_kh",
+              "f_header": "Link",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_nk_mota",
+              "f_name": "mo_ta",
+              "f_header": "Mô tả",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 4,
+              "f_pkid": 0
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_nguon_kh",
+          "parentId": "pm_khach_hang",
+          "label": "Nguồn khách",
+          "label_en": "Lead sources",
+          "label_zh": "客户来源",
+          "m_icons": "fa fa-share-alt",
+          "type_form": "1",
+          "table_name": "tvp_nguonkh"
+        },
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {},
+          "table": [
+            {
+              "id": "tvp_phanloai_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_pl_ten",
+              "f_name": "ten_pl",
+              "f_header": "Tên phân loại",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_pl_mota",
+              "f_name": "mo_ta",
+              "f_header": "Mô tả",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_phan_loai_kh",
+          "parentId": "pm_khach_hang",
+          "label": "Phân loại khách",
+          "label_en": "Customer types",
+          "label_zh": "客户分类",
+          "m_icons": "fa fa-tags",
+          "type_form": "1",
+          "table_name": "tvp_phanloai"
+        },
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": false,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {},
+          "table": [
+            {
+              "id": "tvp_nhanvien_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_nv_ma",
+              "f_name": "ma_nhan_vien",
+              "f_header": "Mã NV",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 1,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_nv_ten",
+              "f_name": "ten_nhan_vien",
+              "f_header": "Tên NV",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_nv_cv",
+              "f_name": "chuc_vu",
+              "f_header": "Chức vụ",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_nv_tt",
+              "f_name": "tinh_trang",
+              "f_header": "Tình trạng",
+              "f_types": "co",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 4,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Đang làm\"},{\"ma\":2,\"ten\":\"Nghỉ việc\"}]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_showgrid": 1
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_dm_nhanvien",
+          "parentId": "pm_khach_hang",
+          "label": "Danh mục NV (combo)",
+          "m_icons": "fa fa-users",
+          "type_form": "1",
+          "table_name": "tvp_nhanvien"
+        }
+      ],
+      "id": "pm_khach_hang",
+      "label": "Khách hàng",
+      "label_en": "Customers",
+      "label_zh": "客户",
+      "m_icons": "fa fa-address-book",
+      "type_form": "0",
+      "table_name": ""
+    },
+    {
+      "field_root": "",
+      "report_name": "",
+      "orientation": "",
+      "p_width": "0",
+      "p_height": "0",
+      "m_show": true,
+      "g_readonly": false,
+      "type_menu": "",
+      "row_type_edit": "0",
+      "dev": "",
+      "prefix_pk": "",
+      "table_pagesize": "1",
+      "trigger": {},
+      "table": [
+        {
+          "id": "pm_cai_dat_id",
+          "f_name": "id",
+          "f_header": "ID",
+          "f_types": "ed",
+          "f_width": 100,
+          "f_show": 0,
+          "f_stt": 0,
+          "f_pkid": 1
+        },
+        {
+          "id": "pm_cd_logo",
+          "f_name": "logo",
+          "f_header": "Logo công ty",
+          "f_types": "img",
+          "f_width": 200,
+          "f_show": 1,
+          "f_stt": 1,
+          "f_pkid": 0
+        },
+        {
+          "id": "pm_cd_ten",
+          "f_name": "ten_cong_ty",
+          "f_header": "Tên công ty (header in)",
+          "f_types": "ed",
+          "f_width": 300,
+          "f_show": 1,
+          "f_stt": 2,
+          "f_pkid": 1
+        },
+        {
+          "id": "pm_cd_dc",
+          "f_name": "dia_chi",
+          "f_header": "Địa chỉ",
+          "f_types": "ed",
+          "f_width": 300,
+          "f_show": 1,
+          "f_stt": 3,
+          "f_pkid": 0
+        },
+        {
+          "id": "pm_cd_mst",
+          "f_name": "mst",
+          "f_header": "MST",
+          "f_types": "ed",
+          "f_width": 100,
+          "f_show": 1,
+          "f_stt": 4,
+          "f_pkid": 0
+        },
+        {
+          "id": "pm_cd_web",
+          "f_name": "website",
+          "f_header": "Website",
+          "f_types": "ed",
+          "f_width": 100,
+          "f_show": 1,
+          "f_stt": 5,
+          "f_pkid": 0
+        },
+        {
+          "id": "pm_cd_email",
+          "f_name": "email",
+          "f_header": "Email",
+          "f_types": "ed",
+          "f_width": 100,
+          "f_show": 1,
+          "f_stt": 6,
+          "f_pkid": 0
+        },
+        {
+          "id": "pm_cd_font",
+          "f_name": "font_in",
+          "f_header": "Font hệ thống",
+          "f_types": "ed",
+          "f_width": 100,
+          "f_show": 1,
+          "f_stt": 7,
+          "f_pkid": 0,
+          "f_placeholder": "Roboto"
+        },
+        {
+          "id": "pm_cd_kho",
+          "f_name": "kho_rong",
+          "f_header": "Khổ rộng in (mm)",
+          "f_types": "nummeric",
+          "f_width": 100,
+          "f_show": 1,
+          "f_stt": 8,
+          "f_pkid": 0,
+          "f_placeholder": "210"
+        },
+        {
+          "id": "pm_cd_vat",
+          "f_name": "vat_mac_dinh",
+          "f_header": "VAT mặc định (%)",
+          "f_types": "co",
+          "f_width": 100,
+          "f_show": 1,
+          "f_stt": 9,
+          "f_pkid": 0,
+          "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":8,\"ten\":\"8%\"},{\"ma\":10,\"ten\":\"10%\"}]}",
+          "f_search": 1,
+          "f_filter": 1,
+          "f_showgrid": 1
+        },
+        {
+          "id": "pm_cd_intro_bg",
+          "f_name": "intro_bao_gia",
+          "f_header": "Lời mở đầu Báo giá",
+          "f_types": "memo",
+          "f_width": 400,
+          "f_show": 1,
+          "f_stt": 10,
+          "f_pkid": 0,
+          "f_placeholder": "Cảm ơn Quý khách hàng đã quan tâm..."
+        },
+        {
+          "id": "pm_cd_ghichu_bg",
+          "f_name": "ghi_chu_bao_gia",
+          "f_header": "Ghi chú mặc định — Báo giá",
+          "f_types": "memo",
+          "f_width": 400,
+          "f_show": 1,
+          "f_stt": 11,
+          "f_pkid": 0
+        },
+        {
+          "id": "pm_cd_ghichu_lsx",
+          "f_name": "ghi_chu_lenh_sx",
+          "f_header": "Ghi chú mặc định — LSX nội bộ",
+          "f_types": "memo",
+          "f_width": 400,
+          "f_show": 1,
+          "f_stt": 12,
+          "f_pkid": 0
+        },
+        {
+          "id": "pm_cd_ghichu_pxk",
+          "f_name": "ghi_chu_lsx_pxk",
+          "f_header": "Ghi chú mặc định — LSX kiêm PXK",
+          "f_types": "memo",
+          "f_width": 400,
+          "f_show": 1,
+          "f_stt": 13,
+          "f_pkid": 0
+        }
+      ],
+      "v_link": "",
       "children": [],
-      "id": "pm_home",
-      "label": "Trang chủ",
-      "label_en": "Dashboard",
-      "label_zh": "首页",
-      "m_icons": "fa fa-home",
-      "type_form": "4",
-      "auto_code_name": "pm_dashboard",
+      "id": "pm_settings",
+      "label": "Cài đặt",
+      "label_en": "Settings",
+      "label_zh": "设置",
+      "m_icons": "fa fa-cog",
+      "type_form": "1",
+      "table_name": "pm_cai_dat"
+    },
+    {
+      "field_root": "",
+      "report_name": "",
+      "orientation": "",
+      "p_width": "0",
+      "p_height": "0",
+      "m_show": true,
+      "g_readonly": false,
+      "type_menu": "",
+      "row_type_edit": "0",
+      "dev": "",
+      "prefix_pk": "",
+      "table_pagesize": "50",
+      "trigger": {},
+      "table": [],
+      "v_link": "",
+      "children": [
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": false,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {},
+          "table": [
+            {
+              "id": "pm_lich_cham_soc_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_lcs_kh",
+              "f_name": "khach_hang",
+              "f_header": "Khách hàng",
+              "f_types": "co",
+              "f_width": 200,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_kh\"],\"obj_name\":\"tvp_khachhang\",\"obj_where\":\"\"}],\"options\":[]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_grid": "pm_khachhang",
+              "f_grid_fields": [
+                "ma_kh",
+                "ten_kh",
+                "dien_thoai"
+              ]
+            },
+            {
+              "id": "pm_lcs_nv",
+              "f_name": "nhan_vien",
+              "f_header": "Nhân viên phụ trách",
+              "f_types": "co",
+              "f_width": 180,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0,
+              "f_grid": "pm_dm_nhanvien",
+              "f_grid_fields": [
+                "ten_nhan_vien",
+                "chuc_vu"
+              ]
+            },
+            {
+              "id": "pm_lcs_ht",
+              "f_name": "hinh_thuc",
+              "f_header": "Hình thức",
+              "f_types": "co",
+              "f_width": 120,
+              "f_show": 1,
+              "f_stt": 4,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"goi_dien\",\"ten\":\"Gọi điện\"},{\"ma\":\"zalo\",\"ten\":\"Zalo\"},{\"ma\":\"email\",\"ten\":\"Email\"},{\"ma\":\"gap_mat\",\"ten\":\"Gặp mặt\"}]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_showgrid": 1
+            },
+            {
+              "id": "pm_lcs_ngay",
+              "f_name": "ngay_hen",
+              "f_header": "Ngày giờ hẹn",
+              "f_types": "datetime",
+              "f_width": 160,
+              "f_show": 1,
+              "f_stt": 5,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_lcs_ut",
+              "f_name": "uu_tien",
+              "f_header": "Mức ưu tiên",
+              "f_types": "co",
+              "f_width": 120,
+              "f_show": 1,
+              "f_stt": 6,
+              "f_pkid": 0,
+              "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"cao\",\"ten\":\"Cao\"},{\"ma\":\"tb\",\"ten\":\"Trung bình\"},{\"ma\":\"thap\",\"ten\":\"Thấp\"}]}",
+              "f_search": 1,
+              "f_filter": 1,
+              "f_showgrid": 1
+            },
+            {
+              "id": "pm_lcs_ht_xong",
+              "f_name": "hoan_thanh",
+              "f_header": "Hoàn thành",
+              "f_types": "ch",
+              "f_width": 90,
+              "f_show": 1,
+              "f_stt": 7,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_lcs_nd",
+              "f_name": "noi_dung",
+              "f_header": "Ghi chú sau chăm sóc",
+              "f_types": "memo",
+              "f_width": 300,
+              "f_show": 1,
+              "f_stt": 8,
+              "f_pkid": 0
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_lich_cham_soc",
+          "parentId": "pm_cskh",
+          "label": "Lịch chăm sóc",
+          "label_en": "Care schedule",
+          "label_zh": "关怀日程",
+          "m_icons": "fa fa-calendar",
+          "type_form": "1",
+          "table_name": "pm_lich_cham_soc"
+        },
+        {
+          "field_root": "",
+          "report_name": "",
+          "orientation": "",
+          "p_width": "0",
+          "p_height": "0",
+          "m_show": true,
+          "g_readonly": true,
+          "type_menu": "",
+          "row_type_edit": "0",
+          "dev": "",
+          "prefix_pk": "",
+          "table_pagesize": "50",
+          "trigger": {
+            "load_db": "return (db['tvp_khachhang']?.rows||[]).filter(function(r){return r.sinh_nhat;});"
+          },
+          "table": [
+            {
+              "id": "pm_sinh_nhat_id",
+              "f_name": "id",
+              "f_header": "ID",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 0,
+              "f_stt": 0,
+              "f_pkid": 1
+            },
+            {
+              "id": "pm_sn_ten",
+              "f_name": "ten_kh",
+              "f_header": "Tên KH",
+              "f_types": "ed",
+              "f_width": 200,
+              "f_show": 1,
+              "f_stt": 2,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_sn_ngay",
+              "f_name": "sinh_nhat",
+              "f_header": "Sinh nhật",
+              "f_types": "date",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 3,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_sn_dt",
+              "f_name": "dien_thoai",
+              "f_header": "Điện thoại",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 4,
+              "f_pkid": 0
+            },
+            {
+              "id": "pm_sn_email",
+              "f_name": "email",
+              "f_header": "Email",
+              "f_types": "ed",
+              "f_width": 100,
+              "f_show": 1,
+              "f_stt": 5,
+              "f_pkid": 0
+            }
+          ],
+          "v_link": "",
+          "children": [],
+          "id": "pm_sinh_nhat",
+          "parentId": "pm_cskh",
+          "label": "Sinh nhật khách hàng",
+          "label_en": "Customer birthdays",
+          "label_zh": "客户生日",
+          "m_icons": "fa fa-birthday-cake",
+          "type_form": "1",
+          "table_name": "pm_sinh_nhat_kh"
+        }
+      ],
+      "id": "pm_cskh",
+      "label": "Chăm sóc khách hàng",
+      "label_en": "Customer care",
+      "label_zh": "客户关怀",
+      "m_icons": "fa fa-heart",
+      "type_form": "0",
       "table_name": ""
     },
     {
@@ -341,10 +1509,10 @@
           "v_link": "",
           "children": [],
           "id": "pm_orders",
-          "parentId": "pm_sales",
-          "label": "Đơn hàng (BG / LSXNB / PXK)",
-          "label_en": "Orders (Quote / Internal PO / Delivery)",
-          "label_zh": "订单（报价/内部生产令/出库）",
+          "parentId": "pm_ban_hang",
+          "label": "Báo giá | LSXNB | LSX-PXK",
+          "label_en": "Quote | Internal PO | Delivery note",
+          "label_zh": "报价 | 内部生产令 | 出库单",
           "m_icons": "fa fa-file-text-o",
           "type_form": "7",
           "table_name": "pm_orders",
@@ -498,1362 +1666,56 @@
           ]
         }
       ],
-      "id": "pm_sales",
+      "id": "pm_ban_hang",
       "label": "Bán hàng",
       "label_en": "Sales",
       "label_zh": "销售",
       "m_icons": "fa fa-shopping-cart",
       "type_form": "0",
       "table_name": ""
-    },
-    {
-      "field_root": "",
-      "report_name": "",
-      "orientation": "",
-      "p_width": "0",
-      "p_height": "0",
-      "m_show": true,
-      "g_readonly": false,
-      "type_menu": "",
-      "row_type_edit": "0",
-      "dev": "",
-      "prefix_pk": "",
-      "table_pagesize": "50",
-      "trigger": {},
-      "table": [],
-      "v_link": "",
-      "children": [
-        {
-          "field_root": "",
-          "report_name": "",
-          "orientation": "",
-          "p_width": "0",
-          "p_height": "0",
-          "m_show": true,
-          "g_readonly": false,
-          "type_menu": "",
-          "row_type_edit": "0",
-          "dev": "",
-          "prefix_pk": "",
-          "table_pagesize": "50",
-          "trigger": {},
-          "table": [
-            {
-              "id": "tvp_khachhang_id",
-              "f_name": "id",
-              "f_header": "ID",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 0,
-              "f_stt": 0,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_kh_ma",
-              "f_name": "ma_kh",
-              "f_header": "Mã KH",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 2,
-              "f_pkid": 1,
-              "f_search": 1
-            },
-            {
-              "id": "pm_kh_ten",
-              "f_name": "ten_kh",
-              "f_header": "Tên KH",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 3,
-              "f_pkid": 0,
-              "f_header_en": "Customer name",
-              "f_header_zh": "客户名称",
-              "f_search": 1
-            },
-            {
-              "id": "pm_kh_dc",
-              "f_name": "dia_chi",
-              "f_header": "Địa chỉ",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 4,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_kh_dt",
-              "f_name": "dien_thoai",
-              "f_header": "Điện thoại",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 5,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_kh_email",
-              "f_name": "email",
-              "f_header": "Email",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 6,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_kh_mst",
-              "f_name": "mst",
-              "f_header": "MST",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 7,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_kh_stk",
-              "f_name": "stk",
-              "f_header": "STK",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 8,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_kh_ttk",
-              "f_name": "ttk",
-              "f_header": "Tên tài khoản",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 9,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_kh_tnh",
-              "f_name": "tnh",
-              "f_header": "Tên ngân hàng",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 10,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_kh_nt",
-              "f_name": "ngay_tao",
-              "f_header": "Ngày tạo",
-              "f_types": "date",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 11,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_kh_sn",
-              "f_name": "sinh_nhat",
-              "f_header": "Sinh nhật",
-              "f_types": "date",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 12,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_kh_site",
-              "f_name": "site",
-              "f_header": "Website/MXH",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 13,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_kh_fax",
-              "f_name": "fax",
-              "f_header": "FAX",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 14,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_kh_pl",
-              "f_name": "phan_loai",
-              "f_header": "Loại KH",
-              "f_types": "co",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 15,
-              "f_pkid": 0,
-              "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_pl\"],\"obj_name\":\"tvp_phanloai\",\"obj_where\":\"\"}],\"options\":[]}",
-              "f_search": 1,
-              "f_filter": 1,
-              "f_grid": "pm_cat_phanloai",
-              "f_grid_fields": [
-                "ten_pl",
-                "mo_ta"
-              ]
-            },
-            {
-              "id": "pm_kh_nguon",
-              "f_name": "nguon_khach",
-              "f_header": "Nguồn khách",
-              "f_types": "co",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 16,
-              "f_pkid": 0,
-              "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_nguon\"],\"obj_name\":\"tvp_nguonkh\",\"obj_where\":\"\"}],\"options\":[]}",
-              "f_search": 1,
-              "f_filter": 1,
-              "f_grid": "pm_cat_nguonkh",
-              "f_grid_fields": [
-                "ten_nguon",
-                "link_kh",
-                "mo_ta",
-                "chi_tiet"
-              ]
-            }
-          ],
-          "v_link": "",
-          "children": [
-            {
-              "field_root": "id",
-              "report_name": "",
-              "orientation": "",
-              "p_width": "0",
-              "p_height": "0",
-              "m_show": true,
-              "g_readonly": false,
-              "type_menu": "",
-              "row_type_edit": "0",
-              "dev": "",
-              "prefix_pk": "",
-              "table_pagesize": "50",
-              "trigger": {
-                "filter": "return obj.trang_thai !== 5;"
-              },
-              "table": [
-                {
-                  "id": "pm_cskh_open_id",
-                  "f_name": "id",
-                  "f_header": "ID",
-                  "f_types": "ed",
-                  "f_width": 100,
-                  "f_show": 1,
-                  "f_stt": 1,
-                  "f_pkid": 0
-                },
-                {
-                  "id": "pm_cskh_open_nv",
-                  "f_name": "nhan_vien",
-                  "f_header": "Nhân viên",
-                  "f_types": "co",
-                  "f_width": 250,
-                  "f_show": 1,
-                  "f_stt": 2,
-                  "f_pkid": 1,
-                  "f_grid": "pm_cat_nhanvien",
-                  "f_grid_fields": [
-                    "ma_nhan_vien",
-                    "ten_nhan_vien",
-                    "chuc_vu",
-                    "tinh_trang"
-                  ]
-                },
-                {
-                  "id": "pm_cskh_open_hen",
-                  "f_name": "Ngay_hen_kh",
-                  "f_header": "Ngày hẹn khách",
-                  "f_types": "date",
-                  "f_width": 130,
-                  "f_show": 1,
-                  "f_stt": 3,
-                  "f_pkid": 0
-                },
-                {
-                  "id": "pm_cskh_open_tao",
-                  "f_name": "ngay_tao",
-                  "f_header": "Ngày tạo",
-                  "f_types": "date",
-                  "f_width": 150,
-                  "f_show": 1,
-                  "f_stt": 4,
-                  "f_pkid": 0
-                },
-                {
-                  "id": "pm_cskh_open_dd",
-                  "f_name": "nguoi_dd_kh",
-                  "f_header": "Người đại diện KH",
-                  "f_types": "ed",
-                  "f_width": 300,
-                  "f_show": 1,
-                  "f_stt": 5,
-                  "f_pkid": 0
-                },
-                {
-                  "id": "pm_cskh_open_tl",
-                  "f_name": "tai_lieu",
-                  "f_header": "Tài liệu",
-                  "f_types": "file",
-                  "f_width": 200,
-                  "f_show": 1,
-                  "f_stt": 6,
-                  "f_pkid": 0
-                },
-                {
-                  "id": "pm_cskh_open_loai",
-                  "f_name": "loai_tl",
-                  "f_header": "Loại tài liệu",
-                  "f_types": "co",
-                  "f_width": 150,
-                  "f_show": 1,
-                  "f_stt": 7,
-                  "f_pkid": 1,
-                  "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Báo giá\"},{\"ma\":2,\"ten\":\"Hợp đồng kinh tế\"},{\"ma\":3,\"ten\":\"Nghiệm thu\"}]}",
-                  "f_search": 1,
-                  "f_filter": 1,
-                  "f_showgrid": 1
-                },
-                {
-                  "id": "pm_cskh_open_tt",
-                  "f_name": "trang_thai",
-                  "f_header": "Trạng thái",
-                  "f_types": "co",
-                  "f_width": 150,
-                  "f_show": 1,
-                  "f_stt": 8,
-                  "f_pkid": 0,
-                  "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Đã liên hệ\"},{\"ma\":2,\"ten\":\"Chưa liên hệ\"},{\"ma\":3,\"ten\":\"Đang chờ phản hồi\"},{\"ma\":4,\"ten\":\"Đang làm việc\"},{\"ma\":5,\"ten\":\"Hoàn thành\"}]}",
-                  "f_search": 1,
-                  "f_filter": 1,
-                  "f_showgrid": 1
-                }
-              ],
-              "v_link": "",
-              "children": [],
-              "id": "pm_cskh_open",
-              "parentId": "pm_khachhang",
-              "label": "Lịch sử CSKH — chưa hoàn thành",
-              "label_en": "Care history — open",
-              "label_zh": "客服记录 — 进行中",
-              "m_icons": "fa fa-history",
-              "type_form": "1",
-              "table_name": "lich_su_cskh"
-            },
-            {
-              "field_root": "id",
-              "report_name": "",
-              "orientation": "",
-              "p_width": "0",
-              "p_height": "0",
-              "m_show": true,
-              "g_readonly": false,
-              "type_menu": "",
-              "row_type_edit": "0",
-              "dev": "",
-              "prefix_pk": "",
-              "table_pagesize": "50",
-              "trigger": {
-                "filter": "return obj.trang_thai === 5;"
-              },
-              "table": [
-                {
-                  "id": "pm_cskh_done_id",
-                  "f_name": "id",
-                  "f_header": "ID",
-                  "f_types": "ed",
-                  "f_width": 100,
-                  "f_show": 1,
-                  "f_stt": 1,
-                  "f_pkid": 0
-                },
-                {
-                  "id": "pm_cskh_done_nv",
-                  "f_name": "nhan_vien",
-                  "f_header": "Nhân viên",
-                  "f_types": "co",
-                  "f_width": 250,
-                  "f_show": 1,
-                  "f_stt": 2,
-                  "f_pkid": 1,
-                  "f_grid": "pm_cat_nhanvien",
-                  "f_grid_fields": [
-                    "ma_nhan_vien",
-                    "ten_nhan_vien",
-                    "chuc_vu",
-                    "tinh_trang"
-                  ]
-                },
-                {
-                  "id": "pm_cskh_done_hen",
-                  "f_name": "Ngay_hen_kh",
-                  "f_header": "Ngày hẹn khách",
-                  "f_types": "date",
-                  "f_width": 130,
-                  "f_show": 1,
-                  "f_stt": 3,
-                  "f_pkid": 0
-                },
-                {
-                  "id": "pm_cskh_done_tao",
-                  "f_name": "ngay_tao",
-                  "f_header": "Ngày tạo",
-                  "f_types": "date",
-                  "f_width": 150,
-                  "f_show": 1,
-                  "f_stt": 4,
-                  "f_pkid": 0
-                },
-                {
-                  "id": "pm_cskh_done_dd",
-                  "f_name": "nguoi_dd_kh",
-                  "f_header": "Người đại diện KH",
-                  "f_types": "ed",
-                  "f_width": 300,
-                  "f_show": 1,
-                  "f_stt": 5,
-                  "f_pkid": 0
-                },
-                {
-                  "id": "pm_cskh_done_tl",
-                  "f_name": "tai_lieu",
-                  "f_header": "Tài liệu",
-                  "f_types": "file",
-                  "f_width": 200,
-                  "f_show": 1,
-                  "f_stt": 6,
-                  "f_pkid": 0
-                },
-                {
-                  "id": "pm_cskh_done_loai",
-                  "f_name": "loai_tl",
-                  "f_header": "Loại tài liệu",
-                  "f_types": "co",
-                  "f_width": 150,
-                  "f_show": 1,
-                  "f_stt": 7,
-                  "f_pkid": 1,
-                  "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Báo giá\"},{\"ma\":2,\"ten\":\"Hợp đồng kinh tế\"},{\"ma\":3,\"ten\":\"Nghiệm thu\"}]}",
-                  "f_search": 1,
-                  "f_filter": 1,
-                  "f_showgrid": 1
-                },
-                {
-                  "id": "pm_cskh_done_tt",
-                  "f_name": "trang_thai",
-                  "f_header": "Trạng thái",
-                  "f_types": "co",
-                  "f_width": 150,
-                  "f_show": 1,
-                  "f_stt": 8,
-                  "f_pkid": 0,
-                  "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Đã liên hệ\"},{\"ma\":2,\"ten\":\"Chưa liên hệ\"},{\"ma\":3,\"ten\":\"Đang chờ phản hồi\"},{\"ma\":4,\"ten\":\"Đang làm việc\"},{\"ma\":5,\"ten\":\"Hoàn thành\"}]}",
-                  "f_search": 1,
-                  "f_filter": 1,
-                  "f_showgrid": 1
-                }
-              ],
-              "v_link": "",
-              "children": [],
-              "id": "pm_cskh_done",
-              "parentId": "pm_khachhang",
-              "label": "Lịch sử CSKH — đã hoàn thành",
-              "label_en": "Care history — done",
-              "label_zh": "客服记录 — 已完成",
-              "m_icons": "fa fa-check-circle",
-              "type_form": "1",
-              "table_name": "lich_su_cskh"
-            }
-          ],
-          "id": "pm_khachhang",
-          "parentId": "pm_customer",
-          "label": "Hồ sơ khách hàng",
-          "label_en": "Customer profiles",
-          "label_zh": "客户档案",
-          "m_icons": "fa fa-address-card",
-          "type_form": "2",
-          "table_name": "tvp_khachhang"
-        }
-      ],
-      "id": "pm_customer",
-      "label": "Khách hàng",
-      "label_en": "Customers",
-      "label_zh": "客户",
-      "m_icons": "fa fa-address-book",
-      "type_form": "0",
-      "table_name": ""
-    },
-    {
-      "field_root": "",
-      "report_name": "",
-      "orientation": "",
-      "p_width": "0",
-      "p_height": "0",
-      "m_show": true,
-      "g_readonly": false,
-      "type_menu": "",
-      "row_type_edit": "0",
-      "dev": "",
-      "prefix_pk": "",
-      "table_pagesize": "50",
-      "trigger": {},
-      "table": [],
-      "v_link": "",
-      "children": [
-        {
-          "field_root": "",
-          "report_name": "",
-          "orientation": "",
-          "p_width": "0",
-          "p_height": "0",
-          "m_show": true,
-          "g_readonly": true,
-          "type_menu": "",
-          "row_type_edit": "0",
-          "dev": "",
-          "prefix_pk": "",
-          "table_pagesize": "50",
-          "trigger": {
-            "load_db": "var kh=db['tvp_khachhang']?.rows||[];var out=[];kh.forEach(function(o){(o.lich_su_cskh||[]).forEach(function(ls){out.push(Object.assign({},ls,o));});});return out;"
-          },
-          "table": [
-            {
-              "id": "bc_cskh_id",
-              "f_name": "id",
-              "f_header": "ID",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 0,
-              "f_stt": 0,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_bc_nv",
-              "f_name": "nhan_vien",
-              "f_header": "Nhân viên",
-              "f_types": "co",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 2,
-              "f_pkid": 0,
-              "f_grid": "pm_cat_nhanvien",
-              "f_grid_fields": [
-                "ma_nhan_vien",
-                "ten_nhan_vien"
-              ]
-            },
-            {
-              "id": "pm_bc_kh",
-              "f_name": "ten_kh",
-              "f_header": "Khách hàng",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 3,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_bc_hen",
-              "f_name": "Ngay_hen_kh",
-              "f_header": "Ngày hẹn",
-              "f_types": "date",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 4,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_bc_tt",
-              "f_name": "trang_thai",
-              "f_header": "Trạng thái",
-              "f_types": "co",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 5,
-              "f_pkid": 0,
-              "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Đã liên hệ\"},{\"ma\":2,\"ten\":\"Chưa liên hệ\"},{\"ma\":3,\"ten\":\"Đang chờ phản hồi\"},{\"ma\":4,\"ten\":\"Đang làm việc\"},{\"ma\":5,\"ten\":\"Hoàn thành\"}]}",
-              "f_search": 1,
-              "f_filter": 1,
-              "f_showgrid": 1
-            }
-          ],
-          "v_link": "",
-          "children": [],
-          "id": "pm_bc_cskh",
-          "parentId": "pm_cskh",
-          "label": "Báo cáo lịch sử CSKH",
-          "label_en": "Care history report",
-          "label_zh": "客服历史报表",
-          "m_icons": "fa fa-bar-chart",
-          "type_form": "1",
-          "table_name": "bc_lich_su_cskh"
-        },
-        {
-          "field_root": "",
-          "report_name": "",
-          "orientation": "",
-          "p_width": "0",
-          "p_height": "0",
-          "m_show": true,
-          "g_readonly": false,
-          "type_menu": "",
-          "row_type_edit": "0",
-          "dev": "",
-          "prefix_pk": "",
-          "table_pagesize": "50",
-          "trigger": {},
-          "table": [
-            {
-              "id": "pm_lich_cham_soc_id",
-              "f_name": "id",
-              "f_header": "ID",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 0,
-              "f_stt": 0,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_lcs_kh",
-              "f_name": "khach_hang",
-              "f_header": "Khách hàng",
-              "f_types": "co",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 2,
-              "f_pkid": 0,
-              "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_kh\"],\"obj_name\":\"tvp_khachhang\",\"obj_where\":\"\"}],\"options\":[]}",
-              "f_search": 1,
-              "f_filter": 1,
-              "f_grid": "pm_khachhang",
-              "f_grid_fields": [
-                "ma_kh",
-                "ten_kh",
-                "dien_thoai"
-              ]
-            },
-            {
-              "id": "pm_lcs_nv",
-              "f_name": "nhan_vien",
-              "f_header": "Nhân viên phụ trách",
-              "f_types": "co",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 3,
-              "f_pkid": 0,
-              "f_grid": "pm_cat_nhanvien",
-              "f_grid_fields": [
-                "ten_nhan_vien",
-                "chuc_vu"
-              ]
-            },
-            {
-              "id": "pm_lcs_ngay",
-              "f_name": "ngay_hen",
-              "f_header": "Ngày hẹn",
-              "f_types": "date",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 4,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_lcs_nd",
-              "f_name": "noi_dung",
-              "f_header": "Nội dung",
-              "f_types": "memo",
-              "f_width": 300,
-              "f_show": 1,
-              "f_stt": 5,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_lcs_tt",
-              "f_name": "trang_thai",
-              "f_header": "Trạng thái",
-              "f_types": "co",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 6,
-              "f_pkid": 0,
-              "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":\"pending\",\"ten\":\"Chưa thực hiện\"},{\"ma\":\"done\",\"ten\":\"Đã thực hiện\"}]}",
-              "f_search": 1,
-              "f_filter": 1,
-              "f_showgrid": 1
-            }
-          ],
-          "v_link": "",
-          "children": [],
-          "id": "pm_lich_cham_soc",
-          "parentId": "pm_cskh",
-          "label": "Lịch chăm sóc",
-          "label_en": "Care schedule",
-          "label_zh": "关怀日程",
-          "m_icons": "fa fa-calendar",
-          "type_form": "1",
-          "table_name": "pm_lich_cham_soc"
-        },
-        {
-          "field_root": "",
-          "report_name": "",
-          "orientation": "",
-          "p_width": "0",
-          "p_height": "0",
-          "m_show": true,
-          "g_readonly": true,
-          "type_menu": "",
-          "row_type_edit": "0",
-          "dev": "",
-          "prefix_pk": "",
-          "table_pagesize": "50",
-          "trigger": {
-            "load_db": "return (db['tvp_khachhang']?.rows||[]).filter(function(r){return r.sinh_nhat;});"
-          },
-          "table": [
-            {
-              "id": "pm_sinh_nhat_id",
-              "f_name": "id",
-              "f_header": "ID",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 0,
-              "f_stt": 0,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_sn_ten",
-              "f_name": "ten_kh",
-              "f_header": "Tên KH",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 2,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_sn_ngay",
-              "f_name": "sinh_nhat",
-              "f_header": "Sinh nhật",
-              "f_types": "date",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 3,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_sn_dt",
-              "f_name": "dien_thoai",
-              "f_header": "Điện thoại",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 4,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_sn_email",
-              "f_name": "email",
-              "f_header": "Email",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 5,
-              "f_pkid": 0
-            }
-          ],
-          "v_link": "",
-          "children": [],
-          "id": "pm_sinh_nhat",
-          "parentId": "pm_cskh",
-          "label": "Sinh nhật khách hàng",
-          "label_en": "Customer birthdays",
-          "label_zh": "客户生日",
-          "m_icons": "fa fa-birthday-cake",
-          "type_form": "1",
-          "table_name": "pm_sinh_nhat_kh"
-        }
-      ],
-      "id": "pm_cskh",
-      "label": "Chăm sóc khách hàng",
-      "label_en": "Customer care",
-      "label_zh": "客户关怀",
-      "m_icons": "fa fa-heart",
-      "type_form": "0",
-      "table_name": ""
-    },
-    {
-      "field_root": "",
-      "report_name": "",
-      "orientation": "",
-      "p_width": "0",
-      "p_height": "0",
-      "m_show": true,
-      "g_readonly": false,
-      "type_menu": "",
-      "row_type_edit": "0",
-      "dev": "",
-      "prefix_pk": "",
-      "table_pagesize": "50",
-      "trigger": {},
-      "table": [],
-      "v_link": "",
-      "children": [
-        {
-          "field_root": "",
-          "report_name": "",
-          "orientation": "",
-          "p_width": "0",
-          "p_height": "0",
-          "m_show": true,
-          "g_readonly": false,
-          "type_menu": "",
-          "row_type_edit": "0",
-          "dev": "",
-          "prefix_pk": "",
-          "table_pagesize": "50",
-          "trigger": {},
-          "table": [
-            {
-              "id": "tvp_hanghoa_id",
-              "f_name": "id",
-              "f_header": "ID",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 0,
-              "f_stt": 0,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_hh_ma",
-              "f_name": "ma_hh",
-              "f_header": "Mã hàng",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 2,
-              "f_pkid": 1,
-              "f_search": 1
-            },
-            {
-              "id": "pm_hh_ten",
-              "f_name": "ten_hh",
-              "f_header": "Tên hàng hóa",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 3,
-              "f_pkid": 0,
-              "f_header_en": "Product name",
-              "f_header_zh": "货品名称",
-              "f_search": 1
-            },
-            {
-              "id": "pm_hh_nhom",
-              "f_name": "nhom_hh",
-              "f_header": "Nhóm hàng hóa",
-              "f_types": "co",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 4,
-              "f_pkid": 0,
-              "f_cbo_query": "{\"query\":[{\"fields\":[\"id\",\"ten_nhom\"],\"obj_name\":\"tvp_nhomhh\",\"obj_where\":\"\"}],\"options\":[]}",
-              "f_search": 1,
-              "f_filter": 1,
-              "f_grid": "pm_cat_nhomhh",
-              "f_grid_fields": [
-                "ten_nhom",
-                "mo_ta"
-              ]
-            }
-          ],
-          "v_link": "",
-          "children": [],
-          "id": "pm_cat_hanghoa",
-          "parentId": "pm_catalog",
-          "label": "Hàng hóa",
-          "label_en": "Products",
-          "label_zh": "货品",
-          "m_icons": "fa fa-list-alt",
-          "type_form": "1",
-          "table_name": "tvp_hanghoa"
-        },
-        {
-          "field_root": "",
-          "report_name": "",
-          "orientation": "",
-          "p_width": "0",
-          "p_height": "0",
-          "m_show": true,
-          "g_readonly": false,
-          "type_menu": "",
-          "row_type_edit": "0",
-          "dev": "",
-          "prefix_pk": "",
-          "table_pagesize": "50",
-          "trigger": {},
-          "table": [
-            {
-              "id": "tvp_nhomhh_id",
-              "f_name": "id",
-              "f_header": "ID",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 0,
-              "f_stt": 0,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_nh_ten",
-              "f_name": "ten_nhom",
-              "f_header": "Tên nhóm",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 2,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_nh_mota",
-              "f_name": "mo_ta",
-              "f_header": "Mô tả",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 3,
-              "f_pkid": 0
-            }
-          ],
-          "v_link": "",
-          "children": [],
-          "id": "pm_cat_nhomhh",
-          "parentId": "pm_catalog",
-          "label": "Nhóm hàng hóa",
-          "label_en": "Product groups",
-          "label_zh": "货品分组",
-          "m_icons": "fa fa-list-ol",
-          "type_form": "1",
-          "table_name": "tvp_nhomhh"
-        },
-        {
-          "field_root": "",
-          "report_name": "",
-          "orientation": "",
-          "p_width": "0",
-          "p_height": "0",
-          "m_show": true,
-          "g_readonly": false,
-          "type_menu": "",
-          "row_type_edit": "0",
-          "dev": "",
-          "prefix_pk": "",
-          "table_pagesize": "50",
-          "trigger": {},
-          "table": [
-            {
-              "id": "tvp_nhanvien_id",
-              "f_name": "id",
-              "f_header": "ID",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 0,
-              "f_stt": 0,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_nv_ma",
-              "f_name": "ma_nhan_vien",
-              "f_header": "Mã nhân viên",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 1,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_nv_ten",
-              "f_name": "ten_nhan_vien",
-              "f_header": "Tên nhân viên",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 2,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_nv_ns",
-              "f_name": "ngay_sinh",
-              "f_header": "Ngày sinh",
-              "f_types": "date",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 3,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_nv_dt",
-              "f_name": "dien_thoai",
-              "f_header": "Điện thoại",
-              "f_types": "nummeric",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 4,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_nv_email",
-              "f_name": "email",
-              "f_header": "Email",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 5,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_nv_vl",
-              "f_name": "ngay_vao_lam",
-              "f_header": "Ngày vào làm",
-              "f_types": "date",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 6,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_nv_cv",
-              "f_name": "chuc_vu",
-              "f_header": "Chức vụ",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 7,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_nv_tt",
-              "f_name": "tinh_trang",
-              "f_header": "Tình trạng",
-              "f_types": "co",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 8,
-              "f_pkid": 0,
-              "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":1,\"ten\":\"Đang làm\"},{\"ma\":2,\"ten\":\"Nghỉ việc\"}]}",
-              "f_search": 1,
-              "f_filter": 1,
-              "f_showgrid": 1
-            }
-          ],
-          "v_link": "",
-          "children": [],
-          "id": "pm_cat_nhanvien",
-          "parentId": "pm_catalog",
-          "label": "Nhân viên",
-          "label_en": "Staff",
-          "label_zh": "员工",
-          "m_icons": "fa fa-users",
-          "type_form": "1",
-          "table_name": "tvp_nhanvien"
-        },
-        {
-          "field_root": "",
-          "report_name": "",
-          "orientation": "",
-          "p_width": "0",
-          "p_height": "0",
-          "m_show": true,
-          "g_readonly": false,
-          "type_menu": "",
-          "row_type_edit": "0",
-          "dev": "",
-          "prefix_pk": "",
-          "table_pagesize": "50",
-          "trigger": {},
-          "table": [
-            {
-              "id": "tvp_nguonkh_id",
-              "f_name": "id",
-              "f_header": "ID",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 0,
-              "f_stt": 0,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_nk_ten",
-              "f_name": "ten_nguon",
-              "f_header": "Tên nguồn",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 2,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_nk_link",
-              "f_name": "link_kh",
-              "f_header": "Link",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 3,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_nk_mota",
-              "f_name": "mo_ta",
-              "f_header": "Mô tả",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 4,
-              "f_pkid": 0
-            },
-            {
-              "id": "pm_nk_ct",
-              "f_name": "chi_tiet",
-              "f_header": "Chi tiết",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 5,
-              "f_pkid": 0
-            }
-          ],
-          "v_link": "",
-          "children": [],
-          "id": "pm_cat_nguonkh",
-          "parentId": "pm_catalog",
-          "label": "Nguồn khách",
-          "label_en": "Lead sources",
-          "label_zh": "客户来源",
-          "m_icons": "fa fa-share-alt",
-          "type_form": "1",
-          "table_name": "tvp_nguonkh"
-        },
-        {
-          "field_root": "",
-          "report_name": "",
-          "orientation": "",
-          "p_width": "0",
-          "p_height": "0",
-          "m_show": true,
-          "g_readonly": false,
-          "type_menu": "",
-          "row_type_edit": "0",
-          "dev": "",
-          "prefix_pk": "",
-          "table_pagesize": "50",
-          "trigger": {},
-          "table": [
-            {
-              "id": "tvp_phanloai_id",
-              "f_name": "id",
-              "f_header": "ID",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 0,
-              "f_stt": 0,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_pl_ten",
-              "f_name": "ten_pl",
-              "f_header": "Tên phân loại",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 2,
-              "f_pkid": 1
-            },
-            {
-              "id": "pm_pl_mota",
-              "f_name": "mo_ta",
-              "f_header": "Mô tả",
-              "f_types": "ed",
-              "f_width": 100,
-              "f_show": 1,
-              "f_stt": 3,
-              "f_pkid": 0
-            }
-          ],
-          "v_link": "",
-          "children": [],
-          "id": "pm_cat_phanloai",
-          "parentId": "pm_catalog",
-          "label": "Phân loại khách",
-          "label_en": "Customer types",
-          "label_zh": "客户分类",
-          "m_icons": "fa fa-tags",
-          "type_form": "1",
-          "table_name": "tvp_phanloai"
-        }
-      ],
-      "id": "pm_catalog",
-      "label": "Danh mục",
-      "label_en": "Catalog",
-      "label_zh": "目录",
-      "m_icons": "fa fa-list",
-      "type_form": "0",
-      "table_name": ""
-    },
-    {
-      "field_root": "",
-      "report_name": "",
-      "orientation": "",
-      "p_width": "0",
-      "p_height": "0",
-      "m_show": true,
-      "g_readonly": false,
-      "type_menu": "",
-      "row_type_edit": "0",
-      "dev": "",
-      "prefix_pk": "",
-      "table_pagesize": "1",
-      "trigger": {},
-      "table": [
-        {
-          "id": "pm_cai_dat_id",
-          "f_name": "id",
-          "f_header": "ID",
-          "f_types": "ed",
-          "f_width": 100,
-          "f_show": 0,
-          "f_stt": 0,
-          "f_pkid": 1
-        },
-        {
-          "id": "pm_cd_ten",
-          "f_name": "ten_cong_ty",
-          "f_header": "Tên công ty (header in)",
-          "f_types": "ed",
-          "f_width": 300,
-          "f_show": 1,
-          "f_stt": 1,
-          "f_pkid": 1
-        },
-        {
-          "id": "pm_cd_dc",
-          "f_name": "dia_chi",
-          "f_header": "Địa chỉ",
-          "f_types": "ed",
-          "f_width": 300,
-          "f_show": 1,
-          "f_stt": 2,
-          "f_pkid": 0
-        },
-        {
-          "id": "pm_cd_mst",
-          "f_name": "mst",
-          "f_header": "MST",
-          "f_types": "ed",
-          "f_width": 100,
-          "f_show": 1,
-          "f_stt": 3,
-          "f_pkid": 0
-        },
-        {
-          "id": "pm_cd_web",
-          "f_name": "website",
-          "f_header": "Website",
-          "f_types": "ed",
-          "f_width": 100,
-          "f_show": 1,
-          "f_stt": 4,
-          "f_pkid": 0
-        },
-        {
-          "id": "pm_cd_font",
-          "f_name": "font_in",
-          "f_header": "Font in PDF",
-          "f_types": "ed",
-          "f_width": 100,
-          "f_show": 1,
-          "f_stt": 5,
-          "f_pkid": 0,
-          "f_placeholder": "Roboto"
-        },
-        {
-          "id": "pm_cd_vat",
-          "f_name": "vat_mac_dinh",
-          "f_header": "VAT mặc định",
-          "f_types": "co",
-          "f_width": 100,
-          "f_show": 1,
-          "f_stt": 6,
-          "f_pkid": 0,
-          "f_cbo_query": "{\"query\":[],\"options\":[{\"ma\":8,\"ten\":\"8%\"},{\"ma\":10,\"ten\":\"10%\"}]}",
-          "f_search": 1,
-          "f_filter": 1,
-          "f_showgrid": 1
-        },
-        {
-          "id": "pm_cd_ghichu_bg",
-          "f_name": "ghi_chu_bao_gia",
-          "f_header": "Ghi chú mặc định — Báo giá",
-          "f_types": "memo",
-          "f_width": 400,
-          "f_show": 1,
-          "f_stt": 10,
-          "f_pkid": 0
-        },
-        {
-          "id": "pm_cd_ghichu_lsx",
-          "f_name": "ghi_chu_lenh_sx",
-          "f_header": "Ghi chú mặc định — Lệnh SX nội bộ",
-          "f_types": "memo",
-          "f_width": 400,
-          "f_show": 1,
-          "f_stt": 11,
-          "f_pkid": 0
-        },
-        {
-          "id": "pm_cd_ghichu_pxk",
-          "f_name": "ghi_chu_lsx_pxk",
-          "f_header": "Ghi chú mặc định — LSX kiêm PXK",
-          "f_types": "memo",
-          "f_width": 400,
-          "f_show": 1,
-          "f_stt": 12,
-          "f_pkid": 0
-        }
-      ],
-      "v_link": "",
-      "children": [],
-      "id": "pm_settings",
-      "label": "Cài đặt",
-      "label_en": "Settings",
-      "label_zh": "设置",
-      "m_icons": "fa fa-cog",
-      "type_form": "1",
-      "table_name": "pm_cai_dat"
     }
   ],
   "notes": [
-    "Template menu PM Phú Sơn — đồng bộ với defaultConfig.ts (PHUSON_PANEL_CONFIG).",
-    "Luồng bán hàng: một menu type_form=7 (pm_orders) — BG → LSXNB → LSX-PXK qua nút in PDF.",
-    "Không dùng report_name Word base64; trigger print_bao_gia / print_lenh_sx / print_pxk.",
-    "Người dùng phần mềm (Admin/GĐ/Giám sát/Trưởng phòng/NV) dùng module Hệ thống có sẵn."
+    "Thứ tự menu theo PM.docx: Khách hàng → Cài đặt → Chăm sóc KH → Bán hàng.",
+    "Trang chủ KPI do sys_autos (broadcast_{app_id}) — không khai báo trong menu.json.",
+    "Người sử dụng phần mềm / phân quyền phòng ban: module Hệ thống có sẵn.",
+    "Luồng bán hàng: pm_orders type_form=7 — BG → LSXNB → LSX-PXK qua trigger in PDF."
   ],
   "warnings": [
-    "pm_dashboard (auto_code_name) cần đăng ký widget trong sys_autos trước khi dùng Trang chủ.",
-    "Trigger in PDF lưu dạng plain text trong template; production nên encrypt qua menu designer."
+    "Trigger in PDF lưu plain text trong template; production nên encrypt qua menu designer.",
+    "Dashboard KPI (tổng BG, BG chốt, top KH/NV…) cần triển khai trong broadcast home widget."
   ],
   "coverage_modules": [
     {
-      "module": "Trang chủ KPI",
+      "module": "Khách hàng + người mua",
       "menus": [
-        "pm_home"
+        "pm_khachhang",
+        "pm_nguoi_mua"
       ],
-      "status": "partial"
+      "status": "covered"
+    },
+    {
+      "module": "CSKH trước/sau mua",
+      "menus": [
+        "pm_cskh_truoc_mua",
+        "pm_cskh_sau_mua"
+      ],
+      "status": "covered"
+    },
+    {
+      "module": "Lịch CS + sinh nhật",
+      "menus": [
+        "pm_lich_cham_soc",
+        "pm_sinh_nhat"
+      ],
+      "status": "covered"
+    },
+    {
+      "module": "Cài đặt in ấn",
+      "menus": [
+        "pm_settings"
+      ],
+      "status": "covered"
     },
     {
       "module": "Bán hàng BG/LSX/PXK",
@@ -1863,50 +1725,17 @@
       "status": "covered"
     },
     {
-      "module": "Khách hàng",
-      "menus": [
-        "pm_khachhang"
-      ],
-      "status": "covered"
+      "module": "Trang chủ KPI",
+      "menus": [],
+      "status": "partial"
     },
     {
-      "module": "Chăm sóc KH",
-      "menus": [
-        "pm_cskh_open",
-        "pm_cskh_done",
-        "pm_bc_cskh",
-        "pm_lich_cham_soc",
-        "pm_sinh_nhat"
-      ],
-      "status": "covered"
-    },
-    {
-      "module": "Danh mục",
-      "menus": [
-        "pm_cat_hanghoa",
-        "pm_cat_nhomhh",
-        "pm_cat_nhanvien",
-        "pm_cat_nguonkh",
-        "pm_cat_phanloai"
-      ],
-      "status": "covered"
-    },
-    {
-      "module": "Cài đặt",
-      "menus": [
-        "pm_settings"
-      ],
-      "status": "covered"
+      "module": "Người dùng / phòng ban",
+      "menus": [],
+      "status": "partial"
     }
   ],
   "coverage_tables": [
-    {
-      "table": "pm_orders",
-      "menus": [
-        "pm_orders"
-      ],
-      "status": "covered"
-    },
     {
       "table": "tvp_khachhang",
       "menus": [
@@ -1915,16 +1744,9 @@
       "status": "covered"
     },
     {
-      "table": "tvp_hanghoa",
+      "table": "pm_orders",
       "menus": [
-        "pm_cat_hanghoa"
-      ],
-      "status": "covered"
-    },
-    {
-      "table": "tvp_nhanvien",
-      "menus": [
-        "pm_cat_nhanvien"
+        "pm_orders"
       ],
       "status": "covered"
     },
@@ -1934,9 +1756,16 @@
         "pm_settings"
       ],
       "status": "covered"
+    },
+    {
+      "table": "pm_lich_cham_soc",
+      "menus": [
+        "pm_lich_cham_soc"
+      ],
+      "status": "covered"
     }
   ],
   "unresolved_assumptions": [
-    "Dashboard KPI chi tiết (doanh số, tỷ lệ chốt BG…) chưa có auto_code pm_dashboard — cần triển khai riêng."
+    "Trang chủ KPI và module phòng ban/NV phần mềm dùng Hệ thống + broadcast home."
   ]
 }
