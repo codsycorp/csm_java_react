@@ -5,7 +5,7 @@ use axum::{
     body::Body,
     extract::{Request, State},
     http::StatusCode,
-    response::{IntoResponse, sse::{Event, Sse}},
+    response::sse::{Event, Sse},
 };
 use futures_util::stream::{self, Stream, StreamExt};
 use serde_json::{json, Map, Value};
@@ -35,11 +35,44 @@ pub fn routes() -> axum::Router<AppState> {
 async fn seo_generate_content(
     State(state): State<AppState>,
     req: Request<Body>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    use bytes::Bytes;
+    use std::convert::Infallible;
+
     let params = parse_json_body(req).await;
-    crate::handlers::api_ext::handle_ai_seo_content(&state, &params)
-        .await
-        .into_response()
+    let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(1);
+
+    // Run inference in a spawned task so we can stream keepalive bytes immediately.
+    // Without this, 0 bytes flow during the 10-20 min inference and the browser's
+    // AbortController fires at its timeout (20 min in the dynamic auto-code).
+    tokio::spawn(async move {
+        let result = crate::handlers::api_ext::handle_ai_seo_content(&state, &params).await;
+        let json = serde_json::to_vec(&result.into_json_value())
+            .unwrap_or_else(|_| b"{}".to_vec());
+        let _ = tx.send(Bytes::from(json)).await;
+    });
+
+    // Emit a space every 5 s while the model runs; send final JSON as the last chunk.
+    // response.json() in browsers (and ky) skips leading whitespace, so the client
+    // still parses the result correctly.
+    let body_stream = stream::unfold((rx, false), |(mut rx, done)| async move {
+        if done {
+            return None;
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await {
+            Ok(Some(json_bytes)) => Some((Ok::<Bytes, Infallible>(json_bytes), (rx, true))),
+            Ok(None) => Some((Ok(Bytes::from_static(b"{}")), (rx, true))),
+            Err(_timeout) => Some((Ok(Bytes::from_static(b" ")), (rx, false))),
+        }
+    });
+
+    axum::response::Response::builder()
+        .status(200)
+        .header(axum::http::header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header("X-Accel-Buffering", "no")
+        .header(axum::http::header::CACHE_CONTROL, "no-cache, no-store")
+        .body(Body::from_stream(body_stream))
+        .unwrap()
 }
 
 async fn parse_json_body(req: Request<Body>) -> Map<String, Value> {
