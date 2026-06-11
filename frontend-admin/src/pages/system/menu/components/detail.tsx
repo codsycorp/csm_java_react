@@ -14,12 +14,15 @@ import {
   ProFormTextArea,
 } from "@ant-design/pro-components";
 import * as AntdIcons from "@ant-design/icons";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { FormInstance, UploadProps } from "antd";
 import { Tabs, Alert, Card, Upload, Button, message, Spin, Input, Modal } from "antd";
 import FieldConfigEditor from "./FieldConfigEditor";
 import TriggerEditor from "./TriggerEditor";
+import LineItemsConfigEditor from "./LineItemsConfigEditor";
+import type { LineItemsEditorConfig } from "#src/components/production-order/types";
+import { PHUSON_PANEL_CONFIG } from "#src/components/production-order/defaultConfig";
 import type { TableField, TriggerConfig } from "#src/components/csm-grid/CsmDynamicGrid";
 import { KANBAN_CONFIG_TEMPLATE } from "#src/components/csm-kanban";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
@@ -127,6 +130,31 @@ function updateMenuInTree(menus: MenuItemType[], id: string, newData: Partial<Me
 		}
 	}
 	return false;
+}
+
+function extractLineItemsConfig(data: Record<string, any>): Partial<LineItemsEditorConfig> {
+	return {
+		line_items_data_field: data.line_items_data_field,
+		line_items_groups_key: data.line_items_groups_key,
+		line_items_list: Array.isArray(data.line_items_list) ? data.line_items_list : undefined,
+		line_items_columns: Array.isArray(data.line_items_columns) ? data.line_items_columns : undefined,
+		line_items_group: data.line_items_group,
+		line_items_totals: Array.isArray(data.line_items_totals) ? data.line_items_totals : undefined,
+		line_items_print: Array.isArray(data.line_items_print) ? data.line_items_print : undefined,
+	};
+}
+
+function mergeLineItemsConfigIntoPayload(
+	payload: Record<string, any>,
+	config: Partial<LineItemsEditorConfig>,
+) {
+	if (config.line_items_data_field !== undefined) payload.line_items_data_field = config.line_items_data_field;
+	if (config.line_items_groups_key !== undefined) payload.line_items_groups_key = config.line_items_groups_key;
+	if (config.line_items_list !== undefined) payload.line_items_list = config.line_items_list;
+	if (config.line_items_columns !== undefined) payload.line_items_columns = config.line_items_columns;
+	if (config.line_items_group !== undefined) payload.line_items_group = config.line_items_group;
+	if (config.line_items_totals !== undefined) payload.line_items_totals = config.line_items_totals;
+	if (config.line_items_print !== undefined) payload.line_items_print = config.line_items_print;
 }
 
 const UPLOAD_ENDPOINT = "/upload.shtml";
@@ -615,6 +643,7 @@ export function Detail({
   const [tableRows, setTableRows] = useState<TableField[]>([]);
   const [progressTableRows, setProgressTableRows] = useState<TableField[]>([]);
   const [triggerConfig, setTriggerConfig] = useState<TriggerConfig | Record<string, any>>({});
+  const [lineItemsConfig, setLineItemsConfig] = useState<Partial<LineItemsEditorConfig>>({});
   const [subUserModeConfig, setSubUserModeConfig] = useState<SystemUserMenuModeConfig>(() => getDefaultSystemUserModeConfig("sub", t));
   const user = useUserStore();
   const [autoCodeOptions, setAutoCodeOptions] = useState<Array<{ label: string; value: string }>>([]);
@@ -704,6 +733,30 @@ export function Detail({
       activeTriggerConfig: triggerConfig || {},
     } as Record<string, unknown>;
   }, [detailData, progressTableRows, tableRows, triggerConfig]);
+
+  const handleApplyLineItemsTemplate = useCallback(() => {
+    setLineItemsConfig({
+      line_items_data_field: PHUSON_PANEL_CONFIG.line_items_data_field,
+      line_items_groups_key: PHUSON_PANEL_CONFIG.line_items_groups_key,
+      line_items_list: PHUSON_PANEL_CONFIG.line_items_list,
+      line_items_columns: PHUSON_PANEL_CONFIG.line_items_columns,
+      line_items_group: PHUSON_PANEL_CONFIG.line_items_group,
+      line_items_totals: PHUSON_PANEL_CONFIG.line_items_totals,
+      line_items_print: PHUSON_PANEL_CONFIG.line_items_print,
+    });
+    setTableRows(Array.isArray(PHUSON_PANEL_CONFIG.table) ? [...PHUSON_PANEL_CONFIG.table] as TableField[] : []);
+    setTriggerConfig((prev) => ({
+      ...(prev || {}),
+      print_bao_gia: PHUSON_PANEL_CONFIG.trigger?.print_bao_gia ?? (prev as any)?.print_bao_gia,
+      print_lenh_sx: PHUSON_PANEL_CONFIG.trigger?.print_lenh_sx ?? (prev as any)?.print_lenh_sx,
+      print_pxk: PHUSON_PANEL_CONFIG.trigger?.print_pxk ?? (prev as any)?.print_pxk,
+    }));
+    formRef.current?.setFieldsValue({
+      table_name: PHUSON_PANEL_CONFIG.table_name,
+      type_form: 7,
+    });
+    message.success(t("system.menu.lineItemsTemplateApplied", "Đã áp dụng mẫu Phú Sơn"));
+  }, [t]);
 
   const buildKanbanFieldAdvice = (depValues: Record<string, any>): string[] => {
     const advices: string[] = [];
@@ -1274,6 +1327,20 @@ export function Detail({
     };
 
     const isKanbanMenu = Number(values.type_form ?? detailData.type_form ?? payload.type_form ?? 0) === 6;
+    const isLineItemsMenu = Number(values.type_form ?? detailData.type_form ?? payload.type_form ?? 0) === 7;
+
+    if (isLineItemsMenu) {
+      if (!String(payload.table_name || "").trim()) {
+        window.$message?.error(t("system.menu.lineItemsTableRequired", "Menu type_form=7 cần table_name"));
+        return false;
+      }
+      if (!Array.isArray(lineItemsConfig.line_items_columns) || lineItemsConfig.line_items_columns.length === 0) {
+        window.$message?.error(t("system.menu.lineItemsColumnsRequired", "Cần cấu hình ít nhất 1 cột trong tab Form dòng hàng"));
+        return false;
+      }
+      mergeLineItemsConfigIntoPayload(payload as Record<string, any>, lineItemsConfig);
+    }
+
     const linkedDataMenuIdRaw = String((values as any).linked_data_menu_id || "").trim();
     const progressTrackingMode = String((values as any).kanban_progress_tracking_mode || "single_table").trim() || "single_table";
     const linkedProgressMenuIdRaw = String((values as any).linked_progress_menu_id || "").trim();
@@ -1593,6 +1660,7 @@ export function Detail({
       });
       
       setTableRows(Array.isArray(detailData.table) ? detailData.table : []);
+      setLineItemsConfig(extractLineItemsConfig(nextData));
       setTriggerConfig(parseTriggerConfig(detailData.trigger));
       // Set fields except parentId since initialValues has it
       const { parentId, ...fieldsToSet } = nextData;
@@ -1872,6 +1940,7 @@ export function Detail({
                 { label: t('system.menu.typeForm.dynamicLink') || 'Liên kết động (Dynamic Link)', value: 3 },
                 { label: t('system.menu.typeForm.dynamicCode') || 'Chạy code động (Dynamic Code)', value: 4 },
                 { label: t('system.menu.typeForm.kanbanBoard') || 'Kanban Board', value: 6 },
+                { label: t('system.menu.typeForm.lineItemsPdf') || 'Form dòng hàng + in PDF', value: 7 },
               ]}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
@@ -1971,6 +2040,22 @@ export function Detail({
         <Alert
           message={t("system.menu.kanbanAlertTitle")}
           description={t("system.menu.kanbanAlertDesc")}
+          type="success"
+          showIcon
+          style={{ marginBottom: 16, marginTop: 16 }}
+          closable
+        />
+      );
+    }
+
+    if (typeForm === 7) {
+      return (
+        <Alert
+          message={t("system.menu.lineItemsAlertTitle", "Form dòng hàng + xuất PDF")}
+          description={t(
+            "system.menu.lineItemsAlertDesc",
+            "Cấu hình header ở tab Trường bảng (3 ngôn ngữ). Cột dòng hàng / in PDF ở tab Form dòng hàng. HTML in khai báo trigger_key ở tab Trigger.",
+          )}
           type="success"
           showIcon
           style={{ marginBottom: 16, marginTop: 16 }}
@@ -2976,21 +3061,58 @@ export function Detail({
       {/* ...các trường còn lại giữ nguyên... */}
       <div style={{ height: 16 }} />
 
-      <Tabs
-        style={{ marginTop: 24, width: "100%" }}
-        items={[
-          {
-            key: "fields",
-            label: t('system.menu.tab.fields'),
-            children: <FieldConfigEditor value={tableRows} onChange={setTableRows} appId={appId} aiAssistantPName={String((detailData as any)?.p_name || "").trim() || undefined} aiAssistantPType={typeof (detailData as any)?.p_type === "number" ? (detailData as any).p_type : undefined} aiAssistantEditorMetadata={{ ...menuScopeAiMetadata, activeScope: "field_config" }} />,
-          },
-          {
-            key: "trigger",
-            label: t('system.menu.tab.trigger'),
-            children: <div style={{ width: "100%", minWidth: 0 }}><TriggerEditor value={triggerConfig} onChange={setTriggerConfig} appId={appId} pName={String((detailData as any)?.p_name || "").trim() || undefined} pType={typeof (detailData as any)?.p_type === "number" ? (detailData as any).p_type : undefined} editorMetadata={{ ...menuScopeAiMetadata, activeScope: "menu_trigger" }} /></div>,
-          },
-        ]}
-      />
+      <ProFormDependency name={["type_form"]}>
+        {(depValues: Record<string, any>) => {
+          const typeForm = Number(depValues.type_form ?? detailData.type_form ?? 0);
+          const tabItems = [
+            {
+              key: "fields",
+              label: t("system.menu.tab.fields"),
+              children: (
+                <FieldConfigEditor
+                  value={tableRows}
+                  onChange={setTableRows}
+                  appId={appId}
+                  aiAssistantPName={String((detailData as any)?.p_name || "").trim() || undefined}
+                  aiAssistantPType={typeof (detailData as any)?.p_type === "number" ? (detailData as any).p_type : undefined}
+                  aiAssistantEditorMetadata={{ ...menuScopeAiMetadata, activeScope: "field_config" }}
+                />
+              ),
+            },
+            ...(typeForm === 7
+              ? [{
+                key: "line_items",
+                label: t("system.menu.tab.lineItems", "Form dòng hàng + PDF"),
+                children: (
+                  <LineItemsConfigEditor
+                    value={lineItemsConfig}
+                    onChange={setLineItemsConfig}
+                    tableFields={tableRows}
+                    onApplyTemplate={handleApplyLineItemsTemplate}
+                  />
+                ),
+              }]
+              : []),
+            {
+              key: "trigger",
+              label: t("system.menu.tab.trigger"),
+              children: (
+                <div style={{ width: "100%", minWidth: 0 }}>
+                  <TriggerEditor
+                    value={triggerConfig}
+                    onChange={setTriggerConfig}
+                    appId={appId}
+                    pName={String((detailData as any)?.p_name || "").trim() || undefined}
+                    pType={typeof (detailData as any)?.p_type === "number" ? (detailData as any).p_type : undefined}
+                    editorMetadata={{ ...menuScopeAiMetadata, activeScope: "menu_trigger" }}
+                  />
+                </div>
+              ),
+            },
+          ];
+          return <Tabs style={{ marginTop: 24, width: "100%" }} items={tabItems} />;
+        }}
+      </ProFormDependency>
     </ModalForm>
   );
 }

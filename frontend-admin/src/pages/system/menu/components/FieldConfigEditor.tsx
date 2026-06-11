@@ -245,9 +245,12 @@ export function FieldConfigEditor({ value, onChange, appId, aiAssistantPName, ai
 
   const handleSave = async () => {
     const vals = await form.validateFields();
+    const baseHeader = String(vals.f_header || vals.f_name || "").trim();
     const next: TableField = {
       ...editing,
       ...vals,
+      f_header_en: String(vals.f_header_en || baseHeader).trim() || baseHeader,
+      f_header_zh: String(vals.f_header_zh || baseHeader).trim() || baseHeader,
       f_show: toFlag(vals.f_show),
       f_required: toFlag((vals as any).f_required),
       f_search: toFlag(vals.f_search),
@@ -521,12 +524,25 @@ export function FieldConfigEditor({ value, onChange, appId, aiAssistantPName, ai
               </Form.Item>
             </Col>
             <Col span={9}>
-              <Form.Item name="f_header" label="Mô tả" rules={[{ required: true }]}> 
+              <Form.Item name="f_header" label={t("system.menu.labelVi", "Mô tả (VI)")} rules={[{ required: true }]}> 
                 <Input />
               </Form.Item>
             </Col>
             <Col span={9}>
               <Form.Item name="f_name" label="Tên trường" rules={[{ required: true }]}> 
+                <Input />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="f_header_en" label={t("system.menu.labelEn", "Mô tả (EN)")}>
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="f_header_zh" label={t("system.menu.labelZh", "Mô tả (ZH)")}>
                 <Input />
               </Form.Item>
             </Col>

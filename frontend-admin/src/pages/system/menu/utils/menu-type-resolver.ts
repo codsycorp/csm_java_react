@@ -7,6 +7,7 @@
  * - type_form = 3: Dynamic Link (external/internal redirect)
  * - type_form = 4: Dynamic Code (resolved inside AdminPage runtime)
  * - type_form = 6: Kanban Board (resolved inside AdminPage runtime)
+ * - type_form = 7: Line Items form + PDF export (CsmLineItemsPage)
  */
 
 import type { MenuItemType } from "#src/api/system/menu";
@@ -21,6 +22,7 @@ export enum MenuFormType {
   DYNAMIC_LINK = 3,          // Liên kết động
   DYNAMIC_CODE = 4,          // Chạy code động
   KANBAN_BOARD = 6,          // Bang Kanban doc lap
+  LINE_ITEMS_PDF = 7,        // Form dong hang + in PDF
 }
 
 /**
@@ -35,6 +37,7 @@ export function getMenuFormTypeLabel(typeForm: number | string | undefined): str
     [MenuFormType.DYNAMIC_LINK]: "Liên kết động",
     [MenuFormType.DYNAMIC_CODE]: "Code động",
     [MenuFormType.KANBAN_BOARD]: "Kanban Board",
+    [MenuFormType.LINE_ITEMS_PDF]: "Form dòng hàng + PDF",
   };
   return labels[type] || labels[MenuFormType.GROUP];
 }

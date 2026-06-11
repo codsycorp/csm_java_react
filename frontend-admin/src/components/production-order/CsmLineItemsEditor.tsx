@@ -21,11 +21,13 @@ import {
 import { DeleteOutlined, PlusOutlined, PrinterOutlined, SaveOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import html2pdf from "html2pdf.js";
+import { useTranslation } from "react-i18next";
 
 import type {
   LineItemsEditorConfig, LiColumnDef, LiGroupConfig,
   LineItem, ProductGroup, OrderHeader, EditorCalcResult,
 } from "./types";
+import { resolveTriLangLabel } from "./line-items-label";
 import {
   computeRowValues, calcGroupResult, calcEditorTotals,
   evalPrintTemplate, evalCondition,
@@ -139,6 +141,7 @@ interface GroupSectionProps {
   columns: LiColumnDef[];
   groupCfg: Required<LiGroupConfig>;
   calc: EditorCalcResult;
+  lang: string;
   onUpdateGroup: (id: string, partial: Partial<ProductGroup>) => void;
   onUpdateItem: (gId: string, iKey: string, field: string, val: any) => void;
   onAddItem: (gId: string) => void;
@@ -147,7 +150,7 @@ interface GroupSectionProps {
 }
 
 const GroupSection = React.memo(function GroupSection({
-  group, gIdx, columns, groupCfg, calc,
+  group, gIdx, columns, groupCfg, calc, lang,
   onUpdateGroup, onUpdateItem, onAddItem, onRemoveItem, onRemoveGroup,
 }: GroupSectionProps) {
   const label = groupLabel(gIdx);
@@ -175,7 +178,7 @@ const GroupSection = React.memo(function GroupSection({
     for (const col of columns) {
       if (col.hidden) continue;
       cols.push({
-        title: col.label,
+        title: resolveTriLangLabel(col, lang, ["label", "name"]),
         dataIndex: col.name,
         width: col.width,
         align: (col.align ?? "left") as any,
@@ -205,7 +208,7 @@ const GroupSection = React.memo(function GroupSection({
     });
 
     return cols;
-  }, [columns, group.id, onUpdateItem, onRemoveItem]);
+  }, [columns, group.id, lang, onUpdateItem, onRemoveItem]);
 
   // Summary row
   const summary = useCallback(() => (
@@ -286,10 +289,11 @@ const GroupSection = React.memo(function GroupSection({
 // ─── Totals display ───────────────────────────────────────────────────────────
 
 function TotalsDisplay({
-  calc, totalConfigs,
+  calc, totalConfigs, lang,
 }: {
   calc: EditorCalcResult;
   totalConfigs: NonNullable<LineItemsEditorConfig["line_items_totals"]>;
+  lang: string;
 }) {
   return (
     <Row justify="end" style={{ marginTop: 8 }}>
@@ -303,7 +307,7 @@ function TotalsDisplay({
                 <React.Fragment key={tc.key}>
                   <tr style={isGrand ? { background: "#e6f4ff" } : {}}>
                     <td style={{ padding: "3px 8px", fontWeight: isGrand ? 700 : 600 }}>
-                      {tc.key} – {tc.label}:
+                      {tc.key} – {resolveTriLangLabel(tc, lang, ["label"])}:
                     </td>
                     <td style={{
                       padding: "3px 8px", textAlign: "right",
@@ -333,11 +337,12 @@ function TotalsDisplay({
 // ─── Header form (reads m_configs.table) ─────────────────────────────────────
 
 function HeaderForm({
-  fields, header, onChange,
+  fields, header, onChange, lang,
 }: {
   fields: any[];
   header: OrderHeader;
   onChange: (key: string, val: any) => void;
+  lang: string;
 }) {
   if (!fields || fields.length === 0) return null;
   return (
@@ -348,7 +353,7 @@ function HeaderForm({
           .sort((a: any, b: any) => Number(a.f_stt ?? 0) - Number(b.f_stt ?? 0))
           .map((f: any) => {
             const name = String(f.f_name ?? "").toLowerCase();
-            const label = String(f.f_label ?? f.f_header ?? name);
+            const label = resolveTriLangLabel(f, lang, ["f_header", "f_name"]);
             const types = String(f.f_types ?? "text").toLowerCase();
             const span = Number(f.f_width_col ?? 12);
             const val = header[name];
@@ -412,6 +417,8 @@ function HeaderForm({
 export default function CsmLineItemsEditor({
   m_configs, decrypt, initialValue, onSave,
 }: CsmLineItemsEditorProps) {
+  const { i18n } = useTranslation();
+  const uiLang = i18n.language || "vi";
   const columns: LiColumnDef[] = m_configs.line_items_columns ?? [];
   const groupCfg: Required<LiGroupConfig> = {
     ...DEFAULT_GROUP_CFG,
@@ -552,7 +559,7 @@ export default function CsmLineItemsEditor({
               icon={<PrinterOutlined />}
               onClick={() => handlePrint(pc)}
             >
-              {pc.label}
+              {resolveTriLangLabel(pc, uiLang, ["label"])}
             </Button>
           ))}
         </Space>
@@ -560,7 +567,7 @@ export default function CsmLineItemsEditor({
 
       {/* Header fields — driven entirely by m_configs.table */}
       {headerFields.length > 0 && (
-        <HeaderForm fields={headerFields} header={header} onChange={updateHeader} />
+        <HeaderForm fields={headerFields} header={header} onChange={updateHeader} lang={uiLang} />
       )}
 
       {/* Line item groups */}
@@ -587,6 +594,7 @@ export default function CsmLineItemsEditor({
             columns={columns}
             groupCfg={groupCfg}
             calc={calc}
+            lang={uiLang}
             onUpdateGroup={updateGroup}
             onUpdateItem={updateItem}
             onAddItem={addItem}
@@ -602,7 +610,7 @@ export default function CsmLineItemsEditor({
         {totalConfigs.length > 0 && (
           <>
             <Divider style={{ margin: "8px 0" }} />
-            <TotalsDisplay calc={calc} totalConfigs={totalConfigs} />
+            <TotalsDisplay calc={calc} totalConfigs={totalConfigs} lang={uiLang} />
           </>
         )}
       </Card>

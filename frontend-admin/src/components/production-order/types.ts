@@ -3,6 +3,8 @@
 export interface LiColumnDef {
   name: string;
   label: string;
+  label_en?: string;
+  label_zh?: string;
   /** "text" | "number" | "price" | "select" | "formula" | "formula_or_manual" */
   type: string;
   options?: string;          // select options: "m2|m|cái"
@@ -28,6 +30,8 @@ export interface LiGroupConfig {
 export interface LiTotalConfig {
   key: string;              // "A" | "B" | "C" | "D" | any identifier
   label: string;
+  label_en?: string;
+  label_zh?: string;
   /**
    * Formula using these built-in vars:
    *   groupSum          → sum of all groups' total_thanh_tien
@@ -44,6 +48,8 @@ export interface LiTotalConfig {
 
 export interface LiPrintConfig {
   label: string;            // button label shown in UI
+  label_en?: string;
+  label_zh?: string;
   trigger_key: string;      // key inside m_configs.trigger
   /**
    * JS function body stored in m_configs.trigger[trigger_key].
@@ -60,6 +66,8 @@ export interface LiPrintConfig {
 export interface LineItemsListColumn {
   field: string;
   label?: string;
+  label_en?: string;
+  label_zh?: string;
   width?: number;
 }
 

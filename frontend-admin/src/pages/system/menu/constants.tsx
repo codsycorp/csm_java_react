@@ -49,6 +49,10 @@ export function getTypeFormOptions(t?: TFunction<"translation", undefined>) {
 			label: t ? t("system.menu.typeForm.kanbanBoard") : "Kanban Board",
 			value: 6,
 		},
+		{
+			label: t ? t("system.menu.typeForm.lineItemsPdf") : "Form dòng hàng + in PDF",
+			value: 7,
+		},
 	];
 }
 

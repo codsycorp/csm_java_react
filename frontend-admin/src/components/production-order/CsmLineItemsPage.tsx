@@ -5,6 +5,7 @@
  *   table_name, table[], line_items_*, trigger, struct.fieldsPK
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
 	Button, Card, Empty, Modal, Space, Spin, Table, Typography, message,
 } from "antd";
@@ -21,6 +22,7 @@ import {
 	parseLineItemsRecord,
 	resolveLineItemsListColumns,
 } from "./line-items-storage";
+import { resolveTriLangLabel } from "./line-items-label";
 import { newGroup } from "./utils";
 
 const { Text } = Typography;
@@ -70,6 +72,7 @@ export default function CsmLineItemsPage({
 	decrypt,
 	onDataChange,
 }: CsmLineItemsPageProps) {
+	const { i18n } = useTranslation();
 	const tableName = String(m_configs.table_name || "").trim();
 	const pkFields = useMemo(() => resolvePkFields(m_configs), [m_configs]);
 	const listColumns = useMemo(() => resolveLineItemsListColumns(m_configs), [m_configs]);
@@ -207,8 +210,9 @@ export default function CsmLineItemsPage({
 	}, [appId, loadRows, onDataChange, pkFields, tableName]);
 
 	const tableColumns = useMemo<ColumnsType<Record<string, any>>>(() => {
+		const lang = i18n.language || "vi";
 		const dataCols = listColumns.map(col => ({
-			title: col.label || col.field,
+			title: resolveTriLangLabel(col, lang, ["label", "field"]),
 			dataIndex: col.field,
 			key: col.field,
 			width: col.width,
@@ -244,7 +248,7 @@ export default function CsmLineItemsPage({
 				),
 			},
 		];
-	}, [handleDelete, listColumns, openEdit]);
+	}, [handleDelete, i18n.language, listColumns, openEdit]);
 
 	if (!tableName) {
 		return (
