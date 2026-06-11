@@ -1,18 +1,34 @@
 """
-Surgical patch: insert AI location blocks before the first 'location / {'
-in the server's existing nginx.conf.
+Surgical patch: insert AI location blocks into the server block
+that handles api.csmbridge.net / admin.csmbridge.net.
 Used as fallback when the full nginx.conf replacement fails nginx -t.
 """
 import shutil
 import sys
+import re
 
 CONF = '/etc/nginx/nginx.conf'
 
 with open(CONF) as fh:
     txt = fh.read()
 
-if 'location = /ai-generate-seo-content' in txt:
-    print('Already patched — skipping')
+# Find the server block that has api.csmbridge.net in server_name
+sn_match = re.search(r'server_name\s+[^\n;]*api\.csmbridge\.net[^\n;]*;', txt)
+if not sn_match:
+    print('ERROR: No server block with api.csmbridge.net found in ' + CONF)
+    sys.exit(1)
+
+sn_start = sn_match.start()
+
+# Find the end of this server block (next top-level 'server {' or end of file)
+next_server = re.search(r'\n\s{0,4}server\s*\{', txt[sn_start + 1:])
+server_block_end = sn_start + 1 + next_server.start() if next_server else len(txt)
+
+server_block_txt = txt[sn_start:server_block_end]
+
+# Check if AI blocks are already in THIS server block
+if 'location = /ai-generate-seo-content' in server_block_txt:
+    print('Already patched in api.csmbridge.net server block — skipping')
     sys.exit(0)
 
 shutil.copy(CONF, CONF + '.bak')
@@ -20,7 +36,7 @@ shutil.copy(CONF, CONF + '.bak')
 AI_BLOCK = r"""
         # AI local SEO (no timeout — llama.cpp may be slow)
         location = /ai-generate-seo-content {
-            proxy_pass http://127.0.0.1:9999;
+            proxy_pass http://backend_pool;
             proxy_http_version 1.1;
             proxy_set_header Connection "";
             proxy_set_header Host $host;
@@ -42,7 +58,7 @@ AI_BLOCK = r"""
             add_header Cache-Control "no-store, no-cache" always;
         }
         location = /api/ai-generate-seo-content {
-            proxy_pass http://127.0.0.1:9999;
+            proxy_pass http://backend_pool;
             proxy_http_version 1.1;
             proxy_set_header Connection "";
             proxy_set_header Host $host;
@@ -64,14 +80,16 @@ AI_BLOCK = r"""
             add_header Cache-Control "no-store, no-cache" always;
         }"""
 
+# Insert AI blocks before the first 'location / {' within this server block only
 for marker in ['        location / {', '    location / {', '\tlocation / {']:
-    idx = txt.find(marker)
+    idx = server_block_txt.find(marker)
     if idx != -1:
-        txt = txt[:idx] + AI_BLOCK + '\n' + txt[idx:]
+        abs_idx = sn_start + idx
+        txt = txt[:abs_idx] + AI_BLOCK + '\n' + txt[abs_idx:]
         with open(CONF, 'w') as fh:
             fh.write(txt)
-        print('Surgical patch applied before: ' + repr(marker))
+        print('Surgical patch applied in api.csmbridge.net block before: ' + repr(marker))
         sys.exit(0)
 
-print('ERROR: could not find "location / {" marker in ' + CONF)
+print('ERROR: could not find "location / {" in api.csmbridge.net server block')
 sys.exit(1)
