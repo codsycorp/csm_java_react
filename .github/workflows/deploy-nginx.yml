@@ -57,6 +57,9 @@ jobs:
             mkdir -p /etc/nginx/snippets
             touch /etc/nginx/snippets/fastcgi-php.conf
             mkdir -p /var/cache/nginx/proxy
+            # snippets/fastcgi-php.conf is relative — copy to /tmp so nginx -t -c /tmp/nginx.conf finds it
+            mkdir -p /tmp/snippets
+            cp /etc/nginx/snippets/fastcgi-php.conf /tmp/snippets/fastcgi-php.conf 2>/dev/null || touch /tmp/snippets/fastcgi-php.conf
 
             echo "=== Files đã upload ==="
             ls -la /tmp/nginx.conf /tmp/patch_nginx.py 2>&1
