@@ -250,9 +250,73 @@ export function groupLabel(idx: number): string {
   return ROMAN[idx] ?? String(idx + 1);
 }
 
+// ─── Print helpers (also passed via utils at runtime) ─────────────────────────
+
+const DEFAULT_COMPANY = {
+  ten_cong_ty: "CÔNG TY TNHH CÔNG NGHỆ CÔNG NGHIỆP PHÚ SƠN",
+  dia_chi: "Lô 7 CN5, Cụm công nghiệp Ngọc Hồi, xã Ngọc Hồi, Thành phố Hà Nội",
+  mst: "0104113174",
+  website: "https://panelphuson.vn",
+  email: "https://javta.vn",
+};
+
+/** Ghép số lệnh in: 6508 + E1 → 6508/PS.E1 (không lặp /PS). */
+export function formatSoLenh(soLenh?: string, phienBan?: string): string {
+  let s = String(soLenh ?? "").trim();
+  const pb = String(phienBan ?? "").trim();
+  if (!s) return pb ? `/PS.${pb}` : "";
+  if (!/\/PS/i.test(s)) s = `${s}/PS`;
+  if (pb && !new RegExp(`\\.${pb.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i").test(s)) {
+    s = s.replace(/\.\w+$/, "") + `.${pb}`;
+  }
+  return s;
+}
+
+/** Gợi ý số báo giá ddmmyy.01 theo ngày lập. */
+export function formatSoBaoGia(date?: Date, seq = 1): string {
+  const d = date ?? new Date();
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = String(d.getFullYear()).slice(-2);
+  return `${dd}${mm}${yy}.${String(seq).padStart(2, "0")}`;
+}
+
+export function parseNgayDate(ngay?: string): Date | undefined {
+  const m = String(ngay ?? "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return undefined;
+  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+}
+
+export function buildCompanyHdr(cfg: Record<string, any> = {}): string {
+  const c = { ...DEFAULT_COMPANY, ...cfg };
+  const links = [c.website, c.email].filter(Boolean).join(" &nbsp;&nbsp; ");
+  return `<div class="co-name">${c.ten_cong_ty}</div>
+  <div class="co-addr">Địa chỉ: ${c.dia_chi}</div>
+  <div class="co-addr">MST: ${c.mst}${links ? ` &nbsp;&nbsp; ${links}` : ""}</div>`;
+}
+
+export function parseNoteLines(text: string | undefined, fallback: string[]): string[] {
+  if (!text || !String(text).trim()) return fallback;
+  const lines = String(text).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  return lines.length ? lines : fallback;
+}
+
+export function buildPrintUtils(settings: Record<string, any> = {}) {
+  return {
+    fmtVND,
+    fmtNum,
+    soThanhChu,
+    groupLabel,
+    settings,
+    formatSoLenh,
+    buildCompanyHdr,
+    parseNoteLines,
+  };
+}
+
 // ─── Utils object passed to print functions ───────────────────────────────────
 
-export const printUtils = { fmtVND, fmtNum, soThanhChu, groupLabel };
+export const printUtils = buildPrintUtils();
 
 // ─── Factory helpers ──────────────────────────────────────────────────────────
 

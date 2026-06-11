@@ -13,7 +13,7 @@
  * Thêm trường mới = thêm phần tử vào line_items_columns.
  * Thay đổi công thức = sửa formula trong config, không cần sửa source code.
  */
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Button, Card, Col, Divider, Input, InputNumber,
   Row, Select, Space, Table, Typography, message,
@@ -23,6 +23,7 @@ import type { ColumnsType } from "antd/es/table";
 import html2pdf from "html2pdf.js";
 import { useTranslation } from "react-i18next";
 
+import { getTableData } from "#src/components/csm-grid/CsmApi";
 import type {
   LineItemsEditorConfig, LiColumnDef, LiGroupConfig,
   LineItem, ProductGroup, OrderHeader, EditorCalcResult,
@@ -31,7 +32,8 @@ import { resolveTriLangLabel } from "./line-items-label";
 import {
   computeRowValues, calcGroupResult, calcEditorTotals,
   evalPrintTemplate, evalCondition,
-  soThanhChu, fmtVND, fmtNum, groupLabel, printUtils,
+  soThanhChu, fmtVND, fmtNum, groupLabel,
+  buildPrintUtils, formatSoBaoGia, parseNgayDate,
   newItem, newGroup,
 } from "./utils";
 
@@ -52,6 +54,7 @@ const DEFAULT_GROUP_CFG: Required<LiGroupConfig> = {
 
 export interface CsmLineItemsEditorProps {
   m_configs: LineItemsEditorConfig;
+  appId?: string;
   decrypt?: (s: string) => string;
   initialValue?: { header?: OrderHeader; groups?: ProductGroup[] };
   onSave?: (data: { header: OrderHeader; groups: ProductGroup[] }) => void;
@@ -336,13 +339,44 @@ function TotalsDisplay({
 
 // ─── Header form (reads m_configs.table) ─────────────────────────────────────
 
+function parseCoOptions(f: any): { value: string; label: string }[] {
+  const raw = String(f.f_cbo_query ?? "").trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed?.options) && parsed.options.length > 0) {
+      return parsed.options.map((o: any) => ({
+        value: String(o.ma ?? o.value ?? ""),
+        label: String(o.ten ?? o.label ?? o.ma ?? ""),
+      })).filter((o: { value: string }) => o.value);
+    }
+  } catch { /* ignore */ }
+  return [];
+}
+
+function parseGridFieldMap(f: any): Record<string, string> {
+  const map: Record<string, string> = {};
+  const raw = f.f_grid_fields;
+  if (typeof raw === "string" && raw.trim()) {
+    raw.split(",").forEach((pair: string) => {
+      const [src, dst] = pair.split("->").map((s) => s.trim());
+      if (src && dst) map[src] = dst;
+    });
+  }
+  return map;
+}
+
 function HeaderForm({
   fields, header, onChange, lang,
+  customerRows = [],
+  onCustomerSelect,
 }: {
   fields: any[];
   header: OrderHeader;
   onChange: (key: string, val: any) => void;
   lang: string;
+  customerRows?: Record<string, any>[];
+  onCustomerSelect?: (customerId: string | number) => void;
 }) {
   if (!fields || fields.length === 0) return null;
   return (
@@ -359,11 +393,36 @@ function HeaderForm({
             const val = header[name];
             let input: React.ReactNode;
 
-            if (types.includes("select") || types.includes("cbo")) {
-              const opts = String(f.f_options ?? "").split("|").map((o: string) => {
-                const [value, label2] = o.split(":").map(s => s.trim());
-                return { value, label: label2 ?? value };
-              }).filter((o: any) => o.value);
+            if (types.includes("co")) {
+              const staticOpts = parseCoOptions(f);
+              const customerOpts = name === "khach_hang_id" && customerRows.length > 0
+                ? customerRows.map((r) => ({
+                  value: String(r.id ?? r.ma_kh ?? ""),
+                  label: String(r.ten_kh ?? r.ma_kh ?? r.id ?? ""),
+                })).filter((o) => o.value)
+                : staticOpts;
+              input = (
+                <Select
+                  style={{ width: "100%" }}
+                  showSearch
+                  optionFilterProp="label"
+                  value={val != null && val !== "" ? String(val) : undefined}
+                  options={customerOpts}
+                  onChange={(v) => {
+                    onChange(name, v);
+                    if (name === "khach_hang_id" && onCustomerSelect) onCustomerSelect(v);
+                  }}
+                  allowClear
+                  placeholder={f.f_placeholder ?? "Chọn..."}
+                />
+              );
+            } else if (types.includes("select") || types.includes("cbo")) {
+              const opts = parseCoOptions(f).length > 0
+                ? parseCoOptions(f)
+                : String(f.f_options ?? "").split("|").map((o: string) => {
+                  const [value, label2] = o.split(":").map(s => s.trim());
+                  return { value, label: label2 ?? value };
+                }).filter((o: any) => o.value);
               input = (
                 <Select
                   style={{ width: "100%" }}
@@ -415,7 +474,7 @@ function HeaderForm({
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function CsmLineItemsEditor({
-  m_configs, decrypt, initialValue, onSave,
+  m_configs, appId, decrypt, initialValue, onSave,
 }: CsmLineItemsEditorProps) {
   const { i18n } = useTranslation();
   const uiLang = i18n.language || "vi";
@@ -432,6 +491,29 @@ export default function CsmLineItemsEditor({
   const [groups, setGroups] = useState<ProductGroup[]>(
     initialValue?.groups ?? [newGroup({ vat_default: groupCfg.vat_default })],
   );
+  const [customerRows, setCustomerRows] = useState<Record<string, any>[]>([]);
+  const [printSettings, setPrintSettings] = useState<Record<string, any>>({});
+
+  useEffect(() => {
+    if (!appId) return;
+    getTableData<any>({ app_id: appId, obj_name: "tvp_khachhang" })
+      .then((res) => {
+        const rows = Array.isArray(res?.rows) ? res.rows : (Array.isArray(res) ? res : []);
+        setCustomerRows(rows);
+      })
+      .catch(() => { /* optional */ });
+    getTableData<any>({ app_id: appId, obj_name: "pm_cai_dat" })
+      .then((res) => {
+        const rows = Array.isArray(res?.rows) ? res.rows : (Array.isArray(res) ? res : []);
+        if (rows[0]) setPrintSettings(rows[0]);
+      })
+      .catch(() => { /* optional */ });
+  }, [appId]);
+
+  const customerFieldMap = useMemo(() => {
+    const f = headerFields.find((x) => String(x.f_name).toLowerCase() === "khach_hang_id");
+    return f ? parseGridFieldMap(f) : { ten_kh: "khach_hang", dia_chi: "dia_chi_kh" };
+  }, [headerFields]);
 
   const calc: EditorCalcResult = useMemo(
     () => calcEditorTotals(groups, columns, totalConfigs),
@@ -441,8 +523,27 @@ export default function CsmLineItemsEditor({
   // ── Header mutations ────────────────────────────────────────────────────────
 
   const updateHeader = useCallback((key: string, val: any) => {
-    setHeader(prev => ({ ...prev, [key]: val }));
+    setHeader(prev => {
+      const next = { ...prev, [key]: val };
+      if (key === "ngay" && !prev.so_bao_gia) {
+        const d = parseNgayDate(String(val ?? ""));
+        if (d) next.so_bao_gia = formatSoBaoGia(d);
+      }
+      return next;
+    });
   }, []);
+
+  const handleCustomerSelect = useCallback((customerId: string | number) => {
+    const row = customerRows.find((r) => String(r.id ?? r.ma_kh) === String(customerId));
+    if (!row) return;
+    setHeader(prev => {
+      const patch: OrderHeader = { ...prev, khach_hang_id: customerId };
+      Object.entries(customerFieldMap).forEach(([src, dst]) => {
+        if (row[src] != null) (patch as any)[dst] = row[src];
+      });
+      return patch;
+    });
+  }, [customerRows, customerFieldMap]);
 
   // ── Group mutations ─────────────────────────────────────────────────────────
 
@@ -488,13 +589,20 @@ export default function CsmLineItemsEditor({
       message.warning(`Chưa cấu hình trigger "${pc.trigger_key}" trong m_configs.trigger`);
       return;
     }
-    // Decrypt if needed (same pattern as report_db in CsmReport)
     let fnBody = rawFn;
     if (decrypt) {
       try { fnBody = decrypt(rawFn) || rawFn; } catch { /* keep raw */ }
     }
 
-    // Enrich groups with computed item values before passing to template
+    let settings = printSettings;
+    if (appId) {
+      try {
+        const res = await getTableData<any>({ app_id: appId, obj_name: "pm_cai_dat" });
+        const rows = Array.isArray(res?.rows) ? res.rows : (Array.isArray(res) ? res : []);
+        if (rows[0]) settings = rows[0];
+      } catch { /* use cached */ }
+    }
+
     const enrichedGroups = groups.map(g => ({
       ...g,
       items: g.items.map(item => ({
@@ -503,7 +611,7 @@ export default function CsmLineItemsEditor({
       })),
     })) as ProductGroup[];
 
-    const html = evalPrintTemplate(fnBody, header, enrichedGroups, calc, printUtils);
+    const html = evalPrintTemplate(fnBody, header, enrichedGroups, calc, buildPrintUtils(settings));
 
     // Resolve filename
     let fileName = `document.pdf`;
@@ -535,7 +643,7 @@ export default function CsmLineItemsEditor({
     } finally {
       document.body.removeChild(container);
     }
-  }, [m_configs.trigger, decrypt, groups, columns, header, calc, printConfigs]);
+  }, [m_configs.trigger, decrypt, groups, columns, header, calc, printConfigs, appId, printSettings]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -567,7 +675,14 @@ export default function CsmLineItemsEditor({
 
       {/* Header fields — driven entirely by m_configs.table */}
       {headerFields.length > 0 && (
-        <HeaderForm fields={headerFields} header={header} onChange={updateHeader} lang={uiLang} />
+        <HeaderForm
+          fields={headerFields}
+          header={header}
+          onChange={updateHeader}
+          lang={uiLang}
+          customerRows={customerRows}
+          onCustomerSelect={handleCustomerSelect}
+        />
       )}
 
       {/* Line item groups */}

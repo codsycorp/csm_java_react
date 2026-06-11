@@ -282,6 +282,7 @@ export default function CsmLineItemsPage({
 							? String(activeRow[pkFields[0]] ?? activeRow.id ?? "edit")
 							: "new"}
 						m_configs={m_configs}
+						appId={appId}
 						decrypt={decrypt}
 						initialValue={draft}
 						onSave={handleSave}
