@@ -93,6 +93,7 @@ pub fn ensure_loaded(config: &NativeConfig) -> Result<()> {
         .ok_or_else(|| anyhow!("invalid context window"))?;
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(Some(ctx_size))
+        .with_n_batch(ctx_size.get())
         .with_n_threads(config.threads)
         .with_n_threads_batch(config.threads);
 
@@ -142,14 +143,13 @@ where
         .ok_or_else(|| anyhow!("llama engine not initialized"))?;
 
     let prompt = truncate_prompt(prompt, engine.config.max_prompt_chars);
-    let max_new_tokens = max_tokens.unwrap_or(engine.config.max_tokens) as i32;
 
     let n_ctx = engine.ctx.n_ctx() as i32;
 
     // Clear KV cache so previous request's entries don't bleed into this one
     engine.ctx.clear_kv_cache();
 
-    let tokens = engine
+    let mut tokens = engine
         .model
         .str_to_token(&prompt, AddBos::Never)
         .with_context(|| "failed to tokenize prompt")?;
@@ -158,15 +158,24 @@ where
         return Err(anyhow!("prompt tokenized to empty sequence"));
     }
 
-    // Clamp max_new_tokens to available context space
-    let max_new_tokens = max_new_tokens.min(n_ctx - tokens.len() as i32);
-    if max_new_tokens <= 0 {
-        return Err(anyhow!(
-            "prompt too long for context window (tokens={}, n_ctx={})",
+    // Silently truncate prompt tokens to fit context (leave 1 slot for first output token)
+    let max_prompt_tokens = (n_ctx - 1) as usize;
+    if tokens.len() > max_prompt_tokens {
+        warn!(
+            "prompt truncated from {} to {} tokens to fit context window",
             tokens.len(),
-            n_ctx
-        ));
+            max_prompt_tokens
+        );
+        tokens.truncate(max_prompt_tokens);
     }
+
+    // 0 = fill context (no output cap); otherwise cap at requested value
+    let requested = max_tokens.unwrap_or(engine.config.max_tokens);
+    let max_new_tokens = if requested == 0 {
+        n_ctx - tokens.len() as i32
+    } else {
+        (requested as i32).min(n_ctx - tokens.len() as i32)
+    };
 
     // Batch capacity = context window so any fitting prompt can be processed in one pass
     let mut batch = LlamaBatch::new(engine.config.context_window as usize, 1);

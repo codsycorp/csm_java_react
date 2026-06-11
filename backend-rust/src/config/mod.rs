@@ -84,7 +84,7 @@ impl AppConfig {
                 .ok()
                 .map(PathBuf::from),
             ai_local_llama_context_window: env_u32("AI_LOCAL_LLAMA_CONTEXT_WINDOW", 8192),
-            ai_local_llama_max_tokens: env_u32("AI_LOCAL_LLAMA_MAX_TOKENS", 2048),
+            ai_local_llama_max_tokens: env_u32("AI_LOCAL_LLAMA_MAX_TOKENS", 0),
             ai_local_llama_max_prompt_chars: env_usize("AI_LOCAL_LLAMA_MAX_PROMPT_CHARS", 32_000),
             ai_local_llama_threads: env_i32("AI_LOCAL_LLAMA_THREADS", 4),
             ai_local_llama_temperature: env_f32("AI_LOCAL_LLAMA_TEMPERATURE", 0.2),
