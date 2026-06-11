@@ -1,12 +1,16 @@
 declare module "socket.io-client" {
 	interface Socket {
 		id?: string;
-		on(event: string, cb: (...args: unknown[]) => void): this;
-		off?(event: string, cb?: (...args: unknown[]) => void): this;
-		emit(event: string, ...args: unknown[]): this;
+		on(event: "connect", cb: () => void): this;
+		on(event: "disconnect", cb: () => void): this;
+		on(event: "connect_error", cb: (error: Error) => void): this;
+		on(event: "csm_msg_update", cb: (data: Record<string, unknown>) => void): this;
+		on(event: string, cb: (...args: any[]) => void): this;
+		off?(event: string, cb?: (...args: any[]) => void): this;
+		emit(event: string, ...args: any[]): this;
 		disconnect(): this;
 		io?: {
-			on?(event: string, cb: (...args: unknown[]) => void): void;
+			on?(event: string, cb: (...args: any[]) => void): void;
 		};
 	}
 

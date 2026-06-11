@@ -1,5 +1,5 @@
 import React, { lazy } from "react";
-import { isGridRuntimeMenu, isReportRuntimeMenu } from "#src/components/csm-crm/crm-config";
+import { isGridRuntimeMenu, isReportRuntimeMenu, isLineItemsRuntimeMenu } from "#src/components/csm-crm/crm-config";
 
 // Import dynamic components
 const User = lazy(() => import("#src/pages/system/user"));
@@ -11,6 +11,7 @@ const CsmDynamicGrid = lazy(() => import("#src/components/csm-grid/CsmDynamicGri
 const CsmMasterDetail = lazy(() => import("#src/components/csm-grid/CsmMasterDetail"));
 const CsmReport = lazy(() => import("#src/components/csm-report/CsmReport"));
 const CsmKanbanBoard = lazy(() => import("#src/components/csm-kanban/CsmKanbanBoard"));
+const CsmLineItemsPage = lazy(() => import("#src/components/production-order/CsmLineItemsPage"));
 const DynamicCodeMenu = lazy(() => import("#src/pages/system/dynamic-code"));
 
 // Map path + menu attributes to Component
@@ -84,7 +85,15 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
       let autoCodeName = route.auto_code_name || route.autoCodeName || '';
       let autoCode = route.auto_code || route.autoCode || '';
 
-      if (route.type_form === 1 && isGridRuntimeMenu(route)) {
+      if (isLineItemsRuntimeMenu(route)) {
+        Component = (props: any) => React.createElement(CsmLineItemsPage, {
+          ...props,
+          appId,
+          menuId,
+          m_configs: menuData,
+          decrypt: props.decrypt,
+        });
+      } else if (route.type_form === 1 && isGridRuntimeMenu(route)) {
         Component = (props: any) => React.createElement(CsmDynamicGrid, {
           ...props,
           appId,
@@ -93,8 +102,7 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
           m_configs: menuData,
           decrypt: props.decrypt,
         });
-      }
-      if (route.type_form === 2 && isGridRuntimeMenu(route)) {
+      } else if (route.type_form === 2 && isGridRuntimeMenu(route)) {
         Component = (props: any) => React.createElement(CsmMasterDetail, {
           ...props,
           appId,
@@ -103,8 +111,7 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
           m_configs: menuData,
           decrypt: props.decrypt,
         });
-      }
-        if (isReportRuntimeMenu(route)) {
+      } else if (isReportRuntimeMenu(route)) {
         Component = (props: any) => React.createElement(CsmReport, {
           ...props,
           appId,
@@ -113,9 +120,7 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
           m_configs: reportConfigs,
           decrypt: props.decrypt,
         });
-      }
-      // Kanban: type_form === 6 OR has kanban_config
-      if (route.type_form === 6 || (kanbanConfig && Object.keys(kanbanConfig).length > 0)) {
+      } else if (route.type_form === 6 || (kanbanConfig && Object.keys(kanbanConfig).length > 0)) {
         Component = (props: any) => React.createElement(CsmKanbanBoard, {
           ...props,
           appId,

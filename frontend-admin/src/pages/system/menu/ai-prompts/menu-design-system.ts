@@ -24,6 +24,7 @@ AdminPage then SWITCHES on type_form + payload to route to correct component:
 **type_form=3** (Dynamic Link) + dynamic_link_url → Router navigates (external or /path)
 **type_form=4** (Dynamic Code) + auto_code_name → DynamicCodeMenu (JS from sys_autos)
 **type_form=6** (Kanban) + kanban_config → CsmKanbanBoard component
+**type_form=7** (Line Items + PDF) + table_name + line_items_columns → CsmLineItemsPage (form nhóm dòng hàng, công thức, in PDF qua trigger)
 **report_name** (ANY type_form) → CsmReport component (PRIORITY - overrides type_form rendering)
 
 🔑 KEY INSIGHT: Menu JSON structure directly controls runtime behavior. Wrong schema = wrong component = broken feature.

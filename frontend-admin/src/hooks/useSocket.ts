@@ -187,12 +187,12 @@ function ensureSharedSocket(apiUrl: string) {
 		notifyConnected(false);
 	});
 
-	socket.on("connect_error", (error: unknown) => {
+	socket.on("connect_error", (error: Error) => {
 		sharedHadConnectionIssue = true;
 		console.error('[Socket] Connection error:', error);
 	});
 
-	const manager = (socket as any).io;
+	const manager = (socket as LegacySocket & { io?: { on?: (event: string, cb: () => void) => void } }).io;
 	if (manager?.on) {
 		manager.on('reconnect_attempt', () => {
 			sharedHadConnectionIssue = true;
@@ -202,8 +202,8 @@ function ensureSharedSocket(apiUrl: string) {
 		});
 	}
 
-	socket.on("csm_msg_update", (...args: unknown[]) => {
-		processSocketUpdate(args[0] as SocketUpdateEvent);
+	socket.on("csm_msg_update", (data: SocketUpdateEvent) => {
+		processSocketUpdate(data);
 	});
 
 	return socket;

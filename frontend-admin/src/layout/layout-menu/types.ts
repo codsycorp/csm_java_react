@@ -61,7 +61,7 @@ export interface MenuItemType {
 	 * Menu configuration
 	 */
 	type_menu?: number | string // 0=Column, 1=Row
-	type_form?: number | string // 1=Table, 2=Master-Detail, 3=Dynamic Link, 4=Dynamic Code, 6=Kanban Board
+	type_form?: number | string // 1=Table, 2=Master-Detail, 3=Dynamic Link, 4=Dynamic Code, 5=Report, 6=Kanban, 7=Line Items + PDF
 	row_type_edit?: number | string // 0=Popup, 1=Inline
 	/**
 	 * Display configuration

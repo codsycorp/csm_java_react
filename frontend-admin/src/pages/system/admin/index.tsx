@@ -1,4 +1,4 @@
-import { normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
+import { normalizeMenuRuntimeConfig, isLineItemsRuntimeMenu } from "#src/components/csm-crm/crm-config";
 import { createTableStruct, type CreateTableStruct, getTableData } from "#src/components/csm-grid/CsmApi";
 import { ensureAuthSessionReady } from "#src/utils/request/auth-session";
 // Patch lại label đa ngữ cho menuData theo i18n hiện tại
@@ -7,6 +7,7 @@ import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import CsmMasterDetail from "#src/components/csm-grid/CsmMasterDetail";
 import { CsmKanbanBoard } from "#src/components/csm-kanban";
 import CsmReport from "#src/components/csm-report/CsmReport";
+import CsmLineItemsPage from "#src/components/production-order/CsmLineItemsPage";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, usePermissionStore, useTabsStore, useUserStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
@@ -2308,6 +2309,22 @@ export default function AdminPage(props: any = {}) {
 			<div style={{ padding: 16, height: "100%" }}>
 				{mismatchAlertNode}
 				<DynamicCodeMenu menuId={menuId} menuData={runtimeMenuData} />
+			</div>
+		);
+	}
+
+	// Line-items form + PDF (type_form = 7 or line_items_columns in config)
+	if (isLineItemsRuntimeMenu(runtimeMenuData)) {
+		return (
+			<div style={{ height: "100%" }}>
+				{mismatchAlertNode}
+				<CsmLineItemsPage
+					appId={effectiveAppId}
+					menuId={runtimeMenuData.id || menuId}
+					m_configs={runtimeMenuData as any}
+					decrypt={csmDecrypt}
+					onDataChange={handleDataChange}
+				/>
 			</div>
 		);
 	}

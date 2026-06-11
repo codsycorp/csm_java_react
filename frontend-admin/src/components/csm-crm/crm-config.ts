@@ -403,6 +403,20 @@ export function isReportRuntimeMenu(menu: unknown): boolean {
 	);
 }
 
+/** type_form=7 or menu with line_items_columns → CsmLineItemsPage */
+export function isLineItemsRuntimeMenu(menu: unknown): boolean {
+	if (!menu || typeof menu !== "object") return false;
+	const normalized = normalizeMenuRuntimeConfig(menu as Record<string, any>);
+	if (Number(normalized.type_form || 0) === 7) {
+		return Boolean(String(normalized.table_name || "").trim());
+	}
+	return Boolean(
+		String(normalized.table_name || "").trim()
+		&& Array.isArray(normalized.line_items_columns)
+		&& normalized.line_items_columns.length > 0,
+	);
+}
+
 export function collectCrmTableNames(crmConfig: unknown): string[] {
 	const parsed = parseCrmConfig(crmConfig);
 	const tables = new Set<string>();
