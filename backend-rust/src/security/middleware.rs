@@ -189,10 +189,29 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
             {
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
-            // Never fall back to refreshToken cookie when a valid csm-token is present.
-            // A stale cookie from another account must not override the signed JWT principal.
             warn!(
-                "[JWT] Valid csm-token present but user resolution failed; rejecting refresh fallback"
+                "[JWT] csm-token auth resolution failed, trying same-account refresh fallback"
+            );
+            if let Some((uid, sub)) = jwt_hints.as_ref() {
+                if !uid.trim().is_empty() || !sub.trim().is_empty() {
+                    let client_ip = client_ip_from_headers(headers);
+                    let client_ua = user_agent_from_headers(headers);
+                    for rt in refresh_token_candidates(headers) {
+                        if let Some(user) = state.user_service.find_by_refresh_token(&rt) {
+                            if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua)
+                                && user_matches_jwt_hints(&user, uid, sub)
+                            {
+                                return Some(enrich_auth_user(
+                                    state,
+                                    auth_user_from_model(state, user),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            warn!(
+                "[JWT] Valid csm-token present but user resolution and bound refresh failed"
             );
             return None;
         }

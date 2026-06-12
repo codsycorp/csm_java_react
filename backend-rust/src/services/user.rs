@@ -420,14 +420,15 @@ impl UserService {
                 "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
                 subject, claims.ver, current_version
             );
-            return None;
-        }
-
-        if !jwt_claims_match_user(subject, token_user_id, &user) {
-            warn!(
-                "[JWT] Final resolved user does not match signed claims uid={} subject={} resolvedId={:?}",
-                token_user_id, subject, user.id
-            );
+            // Signed JWT identity already matched — trust token version over stale duplicate rows.
+            if jwt_claims_match_user(subject, token_user_id, &user) {
+                warn!(
+                    "[JWT] Trusting signed token ver={} over stale DB ver={} uid={}",
+                    claims.ver, current_version, token_user_id
+                );
+                user.login_version = Some(claims.ver);
+                return Some(user);
+            }
             return None;
         }
 
@@ -451,6 +452,12 @@ impl UserService {
             return user;
         };
         if jwt_claims_match_user(subject, token_user_id, &refreshed) {
+            refreshed
+        } else if !token_user_id.is_empty()
+            && user_ids_match(refreshed.id.as_deref().unwrap_or(""), token_user_id)
+            && subject_matches_user(subject, &user)
+        {
+            // PK row may lag app_token field; keep uid binding from signed JWT.
             refreshed
         } else {
             warn!(
@@ -1260,9 +1267,22 @@ pub fn user_ids_match(db_id: &str, token_uid: &str) -> bool {
         return true;
     }
     let normalized = normalize_token_user_id(token_uid);
-    db_id == normalized
+    if db_id == normalized
         || normalize_token_user_id(db_id) == normalized
         || db_id == normalize_token_user_id(db_id)
+    {
+        return true;
+    }
+    let db_compact = compact_id(db_id);
+    let claim_compact = compact_id(token_uid);
+    let norm_compact = compact_id(&normalized);
+    !db_compact.is_empty()
+        && (!claim_compact.is_empty() && db_compact == claim_compact
+            || !norm_compact.is_empty() && db_compact == norm_compact)
+}
+
+fn compact_id(raw: &str) -> String {
+    raw.trim().replace('-', "").to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -1274,6 +1294,14 @@ mod id_match_tests {
         let db_id = "2425df0a63c4696da2362315e07bf44a";
         let claim = "MjQyNWRmMGE2M2M0Njk2ZGEyMzYyMzE1ZTA3YmY0NGE=";
         assert!(user_ids_match(db_id, claim));
+    }
+
+    #[test]
+    fn matches_uuid_with_and_without_dashes() {
+        assert!(user_ids_match(
+            "aacc6b3752204853918292b790bc4",
+            "aacc6b37-5220-4853-9182-b8692b790bc4",
+        ));
     }
 }
 

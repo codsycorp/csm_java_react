@@ -20,7 +20,8 @@ function userIdsMatch(dbId?: string, claimUid?: string): boolean {
 	const left = normalizeUserId(dbId);
 	const right = normalizeUserId(claimUid);
 	if (!left || !right) return false;
-	return left === right;
+	if (left === right) return true;
+	return left.replace(/-/g, "") === right.replace(/-/g, "");
 }
 
 export function parseJwtSessionClaims(token?: string | null): JwtSessionClaims | null {
