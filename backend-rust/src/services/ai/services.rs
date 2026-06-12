@@ -63,21 +63,8 @@ impl AiServices {
 
 pub struct LocalOrchestrationService;
 impl LocalOrchestrationService {
-    pub fn pre_analyze(&self, req: &CodeStreamRequest) -> LocalPreAnalysis {
-        let msg = req.message.trim().to_lowercase();
-        // Only ultra-short pure greetings — real questions (e.g. "Bạn là ai?") must reach llama.cpp.
-        let is_pure_greeting = matches!(msg.as_str(), "hi" | "hello" | "xin chào" | "chào" | "hey")
-            || (msg.len() <= 6 && (msg.contains("hello") || msg.contains("chào")));
-        if is_pure_greeting {
-            return LocalPreAnalysis {
-                attempted: true,
-                handled_locally: true,
-                reason_code: "greeting_fast_path".into(),
-                local_context: String::new(),
-                early_response: "Xin chào! Tôi là trợ lý code CSM. Hãy mô tả thay đổi bạn cần.".into(),
-                saved_chars: req.current_code.len(),
-            };
-        }
+    /// Java ai-code-stream skips legacy pre-analysis — always route to llama.cpp.
+    pub fn pre_analyze(&self, _req: &CodeStreamRequest) -> LocalPreAnalysis {
         LocalPreAnalysis::skip()
     }
 }

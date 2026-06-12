@@ -3,6 +3,7 @@
 
 pub mod code_stream;
 pub mod guest_chat;
+pub mod local_prompt;
 pub mod local_ops;
 pub mod orchestration;
 pub mod policy;

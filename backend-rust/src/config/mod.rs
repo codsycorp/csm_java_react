@@ -52,6 +52,9 @@ pub struct AppConfig {
     pub ai_local_llama_context_window_hard_cap: u32,
     pub ai_local_llama_use_mmap: bool,
     pub ai_local_llama_use_mlock: bool,
+    pub ai_context_dir: PathBuf,
+    pub ai_context_master_prompt_path: PathBuf,
+    pub ai_context_code_master_prompt_path: PathBuf,
 }
 
 impl AppConfig {
@@ -107,6 +110,15 @@ impl AppConfig {
             ),
             ai_local_llama_use_mmap: env_flag_true("AI_LOCAL_LLAMA_USE_MMAP", !cfg!(target_os = "macos")),
             ai_local_llama_use_mlock: env_flag_true("AI_LOCAL_LLAMA_USE_MLOCK", false),
+            ai_context_dir: env_path("AI_CONTEXT_DIR", "./csm_datas/ai_local"),
+            ai_context_master_prompt_path: resolve_prompt_path(
+                "AI_CONTEXT_MASTER_PROMPT_PATH",
+                "./csm_datas/ai_local/ai_menu_master_prompt.md",
+            ),
+            ai_context_code_master_prompt_path: resolve_prompt_path(
+                "AI_CONTEXT_CODE_MASTER_PROMPT_PATH",
+                "./csm_datas/ai_local/ai_code_master_prompt.md",
+            ),
         })
     }
 
@@ -122,6 +134,11 @@ impl AppConfig {
         } else {
             default_max_tokens()
         }
+    }
+
+    pub fn effective_code_stream_prompt_cap(&self) -> usize {
+        let stream_cap = env_usize("AI_CODE_STREAM_MAX_PROMPT_CHARS", 52_000);
+        stream_cap.min(self.ai_local_llama_max_prompt_chars.max(8_000))
     }
 
     #[cfg(feature = "local-ai")]
@@ -234,6 +251,15 @@ fn env_u64(key: &str, default: u64) -> u64 {
 
 fn env_path(key: &str, default: &str) -> PathBuf {
     resolve_deploy_path(PathBuf::from(env_string(key, default)))
+}
+
+fn resolve_prompt_path(key: &str, default: &str) -> PathBuf {
+    let raw = env_string(key, default);
+    let stripped = raw
+        .strip_prefix("file:")
+        .or_else(|| raw.strip_prefix("classpath:"))
+        .unwrap_or(&raw);
+    resolve_deploy_path(PathBuf::from(stripped))
 }
 
 fn deploy_root() -> PathBuf {

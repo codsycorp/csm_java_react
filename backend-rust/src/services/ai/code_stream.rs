@@ -10,10 +10,10 @@ use tokio::task::JoinHandle;
 use tracing::info;
 
 use crate::security::auth::AuthUser;
+use crate::services::ai::local_prompt::{build_code_stream_local_prompt, resolve_response_mode};
 use crate::services::ai::policy::{
     local_pre_status, local_unavailable_hint, local_unavailable_message, streaming_model_label,
 };
-use crate::services::ai::services::AiServices;
 use crate::services::llama_cpp::LlamaCppService;
 use crate::state::AppState;
 
@@ -30,6 +30,7 @@ pub struct CodeStreamRequest {
     pub language: String,
     pub model: String,
     pub ui_lang: String,
+    pub response_mode: String,
 }
 
 impl CodeStreamRequest {
@@ -85,8 +86,15 @@ impl CodeStreamRequest {
             ui_lang: body
                 .get("uiLang")
                 .or_else(|| body.get("ui_lang"))
+                .or_else(|| body.get("uiLanguage"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("vi")
+                .to_string(),
+            response_mode: body
+                .get("responseMode")
+                .or_else(|| body.get("response_mode"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
                 .to_string(),
         })
     }
@@ -100,46 +108,8 @@ pub fn ui_text(lang: &str, vi: &str, en: &str, zh: &str) -> String {
     }
 }
 
-pub fn build_prompt(req: &CodeStreamRequest) -> String {
-    let services = AiServices::new();
-    let rag = services.graph_rag.retrieve(&req.app_id, &req.message);
-    let is_qa = req.task_type.contains("qa")
-        || (req.flow_type == "menu_manager" && req.message.contains('?'));
-    let response_rule = if is_qa {
-        "Answer in clear natural language (Vietnamese if the user wrote Vietnamese). You are CSM AI assistant for menu/code admin."
-    } else {
-        "Respond with code or structured edits only."
-    };
-    format!(
-        r#"You are CSM code assistant.
-Flow: {flow}
-Task: {task}
-Context: {ctx}
-Language: {lang}
-App: {app}
-
-[RETRIEVED_CONTEXT]
-{rag}
-
-[USER_MESSAGE]
-{msg}
-
-[CURRENT_CODE]
-```
-{code}
-```
-
-{response_rule}"#,
-        flow = req.flow_type,
-        task = req.task_type,
-        ctx = req.context_type,
-        lang = req.language,
-        app = req.app_id,
-        rag = rag,
-        msg = req.message,
-        code = req.current_code,
-        response_rule = response_rule,
-    )
+pub fn build_prompt(state: &AppState, req: &CodeStreamRequest) -> String {
+    build_code_stream_local_prompt(&state.config, req)
 }
 
 pub async fn token_stream(
@@ -184,16 +154,10 @@ pub async fn run_pipeline(
 ) -> Pin<Box<dyn Stream<Item = String> + Send>> {
     let rid = req.request_id.clone();
     let context_type = req.context_type.clone();
-    let task_type = req.task_type.clone();
-    let response_mode = if task_type.contains("qa") {
-        "analyze"
-    } else {
-        "edit"
-    };
-    let prompt = build_prompt(&req);
+    let response_mode = resolve_response_mode(&req);
+    let prompt = build_prompt(&state, &req);
     let prompt_chars = prompt.len();
-    let orch = AiServices::new();
-    let pre = orch.local_orchestration.pre_analyze(&req);
+    let pre = LocalPreAnalysis::skip();
 
     let started = stage_event(
         "started",
@@ -244,9 +208,11 @@ pub async fn run_pipeline(
     let handled_early = pre.handled_locally && !early.is_empty();
 
     info!(
-        "ai-code-stream pipeline requestId={} appId={} llama={}",
+        "ai-code-stream pipeline requestId={} appId={} responseMode={} promptChars={} llama={}",
         req.request_id,
         req.app_id,
+        response_mode,
+        prompt_chars,
         LlamaCppService::new(&state.config).is_available()
     );
 
