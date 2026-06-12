@@ -59,9 +59,15 @@ export const useUserStore = create<UserState & UserAction>()(
 				if (!sessionToken && !tabRefresh) {
 					throw new Error("No session credentials");
 				}
-				const requestHeaders = sessionToken
-					? { ...(headers as Record<string, string> | undefined), "csm-token": sessionToken }
-					: headers;
+				const requestHeaders: Record<string, string> = {
+					...(headers as Record<string, string> | undefined),
+				};
+				if (sessionToken) {
+					requestHeaders["csm-token"] = sessionToken;
+				}
+				if (tabRefresh) {
+					requestHeaders["X-Refresh-Token"] = tabRefresh;
+				}
 				const response = await fetchUserInfo(requestHeaders, USER_INFO_REQUEST_OPTIONS);
 				const raw = (response.result ?? {}) as UserInfoType;
 				const claims = parseJwtSessionClaims(sessionToken);

@@ -117,12 +117,20 @@ export function PasswordLogin() {
 			return new Promise(resolve => setTimeout(resolve, 100)).then(() => {
 				console.log("[LOGIN] Token stored in auth store, calling fetchUserInfo()");
 				const freshToken = String(loginRes?.result?.token || "").trim();
-				const userInfoHeaders = freshToken
-					? { "csm-token": freshToken }
-					: undefined;
+				const freshRefresh = String(loginRes?.result?.refreshToken || "").trim();
+				const userInfoHeaders: Record<string, string> = {};
+				if (freshToken) {
+					userInfoHeaders["csm-token"] = freshToken;
+				}
+				if (freshRefresh) {
+					userInfoHeaders["X-Refresh-Token"] = freshRefresh;
+				}
 				const loginPayload = loginRes?.result ?? {};
 
-				return fetchUserInfo(userInfoHeaders, USER_INFO_REQUEST_OPTIONS).then((response: any) => {
+				return fetchUserInfo(
+					Object.keys(userInfoHeaders).length ? userInfoHeaders : undefined,
+					USER_INFO_REQUEST_OPTIONS,
+				).then((response: any) => {
 					const userInfoRaw = response?.result ?? {};
 					const claims = parseJwtSessionClaims(freshToken);
 

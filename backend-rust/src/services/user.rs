@@ -520,17 +520,15 @@ impl UserService {
 
         let mut user = self.map_record_to_user(record, true);
 
-        // Re-fetch canonical record by app_token when it still references this refresh token.
+        // Re-fetch canonical record by app_token scoped to this row (avoid pick_best cross-account bleed).
         if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
-            if let Some(canonical) = self.find_by_app_token(&app_token) {
-                let canonical_refresh = canonical.refresh_token.as_deref().unwrap_or("");
-                if canonical_refresh == refresh_token {
+            let scoped_id = user.id.as_deref().unwrap_or("");
+            let scoped_ver = user.login_version.unwrap_or(0);
+            if let Some(canonical) =
+                self.find_by_app_token_scoped(&app_token, scoped_id, scoped_ver)
+            {
+                if canonical.refresh_token.as_deref() == Some(refresh_token) {
                     user = canonical;
-                } else {
-                    warn!(
-                        "[find_by_refresh_token] Keep refresh-indexed row for user {:?} (canonical refresh mismatch)",
-                        user.email
-                    );
                 }
             }
         }

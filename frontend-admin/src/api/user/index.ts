@@ -5,9 +5,10 @@ import { getAuthCredentials } from "#src/utils/request/auth-session";
 import { readRefreshTokenMirror } from "#src/utils/auth-storage";
 import { request } from "#src/utils";
 
-/** Tab-scoped user-info: JWT + X-Refresh-Token mirror only — never shared HttpOnly cookie (cross-tab bleed). */
+/** Tab-scoped user-info: explicit JWT + X-Refresh-Token headers; no shared HttpOnly cookie. */
 export const USER_INFO_REQUEST_OPTIONS = {
 	omitCredentials: true,
+	omitRefreshToken: true,
 } as const;
 
 

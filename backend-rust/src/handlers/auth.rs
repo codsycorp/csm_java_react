@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, StandardResponse, User};
 use crate::security::client_session::{
-    normalize_client_ip, normalize_user_agent, refresh_session_valid_for_endpoint,
+    normalize_client_ip, normalize_user_agent, refresh_session_valid, refresh_session_valid_for_endpoint,
 };
 use crate::security::jwt::JwtUtil;
 use crate::services::user::{user_matches_jwt_hints, UserService};
@@ -232,8 +232,39 @@ impl AuthHandler {
         params: &Map<String, Value>,
     ) -> StandardResponse {
         let mut response = StandardResponse::new();
+        let (client_ip, client_ua, client_id) = session_context_from_params(params);
 
-        // Prefer JWT when csm-token resolves; otherwise use auth principal (Java SecurityContext / refresh fallback).
+        // Tab/browser identity: explicit X-Refresh-Token is authoritative for /user-info.
+        if let Some(rt) = params
+            .get("refreshTokenHeader")
+            .and_then(|v| v.as_str())
+            .filter(|t| !t.is_empty())
+        {
+            if let Some(user) = self.user_service.find_user_by_refresh_token(rt, false) {
+                if refresh_session_valid(&user, &client_ip, &client_ua, &client_id) {
+                    if let Some(token) = params
+                        .get("csm-token")
+                        .and_then(|v| v.as_str())
+                        .filter(|t| !t.is_empty())
+                    {
+                        if !user_matches_csm_token(&self.jwt, token, &user) {
+                            response.set("code", 401);
+                            response.set("success", false);
+                            response.set("message", "Session token mismatch");
+                            return response;
+                        }
+                    }
+                    self.finish_user_info_response(&user, &mut response);
+                    return response;
+                }
+            }
+            response.set("code", 401);
+            response.set("success", false);
+            response.set("message", "Invalid or expired refresh token");
+            return response;
+        }
+
+        // JWT path when no explicit refresh header (legacy / cookie-only clients).
         if let Some(token) = params
             .get("csm-token")
             .and_then(|v| v.as_str())
@@ -256,14 +287,12 @@ impl AuthHandler {
                     self.finish_user_info_response(&user, &mut response);
                     return response;
                 }
-                // Valid JWT but DB row not resolved yet — fall through to auth_user (refresh may have authenticated).
             } else if auth_user.is_none() {
                 response.set("code", 401);
                 response.set("success", false);
                 response.set("message", "Invalid or expired session token");
                 return response;
             }
-            // Expired csm-token: middleware authenticated via refresh — continue below (Java parity).
         }
 
         let Some(auth) = auth_user else {
@@ -273,36 +302,21 @@ impl AuthHandler {
             return response;
         };
 
-        // Mirror Java AuthHandler.handleUserInfo: reload from DB via auth principal, verify principal binding.
         let user = self
             .user_service
             .canonicalize_session_user(auth)
             .unwrap_or_else(|| self.user_from_auth(auth));
 
-        // When csm-token is present, profile must match signed JWT (block cross-tab / cross-account cookie bleed).
         if let Some(token) = params
             .get("csm-token")
             .and_then(|v| v.as_str())
             .filter(|t| !t.is_empty())
         {
-            let claims = self
-                .jwt
-                .parse_claims(token)
-                .or_else(|_| self.jwt.parse_claims_allow_expired(token));
-            match claims {
-                Ok(claims) if user_matches_jwt_hints(&user, &claims.uid, &claims.sub) => {}
-                Ok(_) => {
-                    response.set("code", 401);
-                    response.set("success", false);
-                    response.set("message", "Session token mismatch");
-                    return response;
-                }
-                Err(_) => {
-                    response.set("code", 401);
-                    response.set("success", false);
-                    response.set("message", "Invalid session token");
-                    return response;
-                }
+            if !user_matches_csm_token(&self.jwt, token, &user) {
+                response.set("code", 401);
+                response.set("success", false);
+                response.set("message", "Session token mismatch");
+                return response;
             }
         }
 
@@ -877,6 +891,28 @@ fn append_clear_auth_cookies(
             del_csrf.parse().unwrap(),
         );
     }
+}
+
+fn session_context_from_params(params: &Map<String, Value>) -> (String, String, String) {
+    let ip = params
+        .get("_client_ip")
+        .and_then(|v| v.as_str())
+        .map(normalize_client_ip)
+        .unwrap_or_default();
+    let ua = params
+        .get("_user_agent")
+        .and_then(|v| v.as_str())
+        .map(normalize_user_agent)
+        .unwrap_or_default();
+    let client_id = session_client_id_from_params(params);
+    (ip, ua, client_id)
+}
+
+fn user_matches_csm_token(jwt: &JwtUtil, token: &str, user: &User) -> bool {
+    jwt.parse_claims(token)
+        .or_else(|_| jwt.parse_claims_allow_expired(token))
+        .ok()
+        .is_some_and(|claims| user_matches_jwt_hints(user, &claims.uid, &claims.sub))
 }
 
 fn session_client_id_from_params(params: &Map<String, Value>) -> String {
