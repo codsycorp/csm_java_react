@@ -1,4 +1,9 @@
 import { csmDecrypt } from "./CsmCrypto";
+import {
+	getUserAccessContext,
+	resolveTableRequestAppId,
+	type UserAppIdInput,
+} from "#src/utils/user-app-id";
 
 export type ComboOption = {
   value: any;
@@ -11,40 +16,44 @@ export type ComboQuerySpec = {
   where?: any;
 };
 
-const SYSTEM_CSM_TABLES = new Set([
-  "csm_accounts",
-  "csm_group_members",
-  "sys_la_routers",
-  "sys_apps",
-  "sys_reactnative",
-]);
-
-const TENANT_ORG_TABLES = new Set([
-  "csm_roles",
-  "csm_depts",
-  "csm_branches",
-]);
-
-function pickTenantAppId(preferredAppId: unknown, fallbackAppId: unknown): string {
-  const preferred = String(preferredAppId || "").trim();
-  if (preferred && preferred !== "csm") return preferred;
-
+function toUserContext(fallbackAppId: unknown, userContext?: UserAppIdInput): UserAppIdInput {
+  if (userContext) return userContext;
   const fallback = String(fallbackAppId || "").trim();
-  if (fallback && fallback !== "csm") return fallback;
-
-  return preferred || fallback || "csm";
+  const storeContext = getUserAccessContext();
+  if (fallback && !storeContext.app_id) {
+    return { ...storeContext, app_id: fallback };
+  }
+  return storeContext;
 }
 
-export function resolveComboQueryAppId(tableName: unknown, preferredAppId: unknown, fallbackAppId: unknown): string {
-  const normalizedTable = String(tableName || "").trim().toLowerCase();
-  if (SYSTEM_CSM_TABLES.has(normalizedTable)) return "csm";
-  if (TENANT_ORG_TABLES.has(normalizedTable)) return pickTenantAppId(preferredAppId, fallbackAppId);
+export function resolveComboQueryAppId(
+  tableName: unknown,
+  preferredAppId: unknown,
+  fallbackAppId: unknown,
+  userContext?: UserAppIdInput,
+  decrypt: (value: string) => string = csmDecrypt,
+): string {
+  return resolveTableRequestAppId(
+    String(tableName || ""),
+    String(preferredAppId || ""),
+    toUserContext(fallbackAppId, userContext),
+    decrypt,
+  );
+}
 
-  const preferred = String(preferredAppId || "").trim();
-  if (preferred) return preferred;
-
-  const fallback = String(fallbackAppId || "").trim();
-  return fallback || "csm";
+/** app_id runtime cho CRUD — khớp Java/Rust user access context. */
+export function resolveRuntimeAppId(
+  tableName: unknown,
+  preferredAppId?: unknown,
+  userContext?: UserAppIdInput,
+  decrypt: (value: string) => string = csmDecrypt,
+): string {
+  return resolveTableRequestAppId(
+    String(tableName || ""),
+    String(preferredAppId || ""),
+    userContext ?? getUserAccessContext(),
+    decrypt,
+  );
 }
 
 export function getComboTableRows(database: Record<string, any> | undefined, tableName: string): any[] {

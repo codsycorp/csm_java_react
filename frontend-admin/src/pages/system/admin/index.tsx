@@ -11,6 +11,7 @@ import CsmLineItemsPage from "#src/components/production-order/CsmLineItemsPage"
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, usePermissionStore, useTabsStore, useUserStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
+import { resolveEffectiveUserAppId, resolveTableRequestAppId } from "#src/utils/user-app-id";
 // Import hàm hỗ trợ đa ngôn ngữ
 import { isSuperPermissionProfile, resolvePermissionDataScope, toPermissionBigInt } from "#src/utils/permission-bitfield";
 import { Alert, Empty, Spin } from "antd";
@@ -1259,8 +1260,8 @@ export default function AdminPage(props: any = {}) {
 	);
 	const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
 	// Prefer reactive currentAppId from AppStore; fallback to user.app_id
-	const currentAppId = useAppStore(state => state.currentAppId);
 	const userAppId = useUserStore(state => state.app_id);
+	const userAppToken = useUserStore(state => state.app_token);
 	const userRolesRaw = useUserStore(state => state.roles as any);
 	const userRoles = normalizeStringList(userRolesRaw);
 	const devFlag = useUserStore(state => state.dev);
@@ -1274,8 +1275,16 @@ export default function AdminPage(props: any = {}) {
 	const isDevUser = resolveDevFlag(devFlag, userRoles);
 	const isAdminUser = !isDevUser && isSuperPermissionProfile(toPermissionBigInt(userPermissionBitfieldRaw));
 	const isSystemUserRoute = normalizedMenuKey === "user";
-	// Prefer logged-in user's app_id; fallback to selected app or localStorage default
-	const appId = (userAppId && userAppId.trim()) || (currentAppId && currentAppId.trim()) || useAppStore.getState().getCurrentAppId();
+	// app_id tenant — decrypt app_token trước (khớp Java mapMainAccountToUser / Rust middleware)
+	const appId = useMemo(
+		() => resolveEffectiveUserAppId({
+			app_id: userAppId,
+			app_token: userAppToken,
+			menusPermissions: userMenusPermissionsRaw,
+			dev: devFlag,
+		}),
+		[userAppId, userAppToken, userMenusPermissionsRaw, devFlag],
+	);
 	const { t, i18n } = useTranslation();
 	const tVi = useMemo(() => i18n.getFixedT("vi-VN"), [i18n]);
 	const tEn = useMemo(() => i18n.getFixedT("en-US"), [i18n]);
@@ -2189,14 +2198,19 @@ export default function AdminPage(props: any = {}) {
 		.map(item => item.trim().toLowerCase())
 		.filter(Boolean);
 	const isSystemUserTableRuntime = runtimeTableNames.some(name => name === "csm_accounts" || name === "csm_group_members");
-	// These organizational tables belong to each tenant — always use the logged-in user’s app_id.
-	const TENANT_ORG_TABLES = new Set(["csm_branches", "csm_depts", "csm_roles"]);
-	const isOrgTableRuntime = runtimeTableNames.some(name => TENANT_ORG_TABLES.has(name));
+	const userAccess = useMemo(() => ({
+		app_id: userAppId,
+		app_token: userAppToken,
+		menusPermissions: userMenusPermissionsRaw,
+		dev: devFlag,
+	}), [userAppId, userAppToken, userMenusPermissionsRaw, devFlag]);
 	const effectiveAppId = (isSystemUserRoute || isSystemUserTableRuntime)
 		? "csm"
-		: isOrgTableRuntime
-			? appId
-			: (runtimeMenuData?.app_id || appId);
+		: resolveTableRequestAppId(
+			runtimeTableNames[0] || String(runtimeMenuData?.table_name || "").split(",")[0] || "",
+			runtimeMenuData?.app_id || appId,
+			userAccess,
+		);
 	const typeForm = Number(runtimeMenuData?.type_form || 1);
 	const expectedTableNames = (SYSTEM_MENU_KEY_TO_EXPECTED_TABLES[normalizedMenuKey] || []).map(item => item.toLowerCase());
 	const currentTableName = String(runtimeMenuData?.table_name || "").trim();

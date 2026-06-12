@@ -25,6 +25,7 @@ import { usePermissionStore } from "#src/store";
 import { useUserStore } from "#src/store/user";
 import { getTableData } from "./CsmApi";
 import { normalizeComboOptions, resolveComboQueryAppId, buildRoleComboOptions, getComboTableRows, buildRoleComboValueEnum, buildRoleComboSelectEnum, resolveRoleComboLabel, parseFieldOptions, getLegacyFallbackComboQuery, resolveEffectiveComboQueryText } from "./combo-utils";
+import { getUserAccessContext } from "#src/utils/user-app-id";
 import { formatDateForStorage, parseDateValueToDayjs, resolveDateLocaleFormat } from "#src/utils/dateControl";
 import { compileMenuTrigger, resolveTriggerBody, safeEval } from "./csm-trigger-runner";
 
@@ -316,7 +317,7 @@ export function buildDetailGridSelectEnums(
             if (!querySpec?.obj_name || !database) return;
             const tableName = querySpec.obj_name;
             const fields = querySpec.fields || [];
-            const appId = resolveComboQueryAppId(tableName, querySpec.app_id, seftContext?.appId || 'csm');
+            const appId = resolveComboQueryAppId(tableName, querySpec.app_id, undefined, getUserAccessContext());
             // Default obj_where if not provided or invalid
             // Check for: undefined, null, empty string, empty object, or object without required fields
             let whereClause = querySpec.obj_where;

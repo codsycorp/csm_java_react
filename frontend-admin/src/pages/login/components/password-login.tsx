@@ -2,6 +2,7 @@ import { BasicButton } from "#src/components";
 import { isDynamicRoutingEnabled } from "#src/router/routes/config";
 import { useAuthStore, usePermissionStore, useUserStore, useAppStore } from "#src/store";
 import { resolveDevFlag, persistDevLocalFlag } from "#src/utils/dev-flag";
+import { normalizeUserSessionAppId } from "#src/utils/user-app-id";
 import { fetchUserInfo } from "#src/api/user";
 
 import {
@@ -154,16 +155,16 @@ export function PasswordLogin() {
 					useUserStore.setState({ dev: devNormalized });
 					persistDevLocalFlag(devNormalized);
 					
-					// CRITICAL: Always set currentAppId from user's app_id after successful login
+					// app_id từ app_token trước — khớp Java mapMainAccountToUser
 					const redirect = searchParams.get("redirect");
-					const loginAppId = String(loginRes?.result?.app_id || "").trim();
-					const profileAppId = String(userInfoResult.app_id || "").trim();
-					// Keep admin mode behavior, but always use the actual account app_id for menu/data scoping.
-					const resolvedAppId = profileAppId || loginAppId || "csm";
+					const resolvedAppId = normalizeUserSessionAppId({
+						...userInfoResult,
+						dev: devNormalized,
+					});
 
 					setCurrentAppId(resolvedAppId);
 					useUserStore.setState({ app_id: resolvedAppId });
-					console.log(`[LOGIN] Set appId to '${resolvedAppId}' (resolved), redirect='${redirect || ""}'`);
+					console.log(`[LOGIN] Set appId to '${resolvedAppId}' (from app_token), redirect='${redirect || ""}'`);
 
 					return { loginRes, userInfoResult, resolvedAppId };
 				}).catch((syncError: any) => {
@@ -179,13 +180,14 @@ export function PasswordLogin() {
 					persistDevLocalFlag(devNormalized);
 
 					const redirect = searchParams.get("redirect");
-					const loginAppId = String(loginRes?.result?.app_id || "").trim();
-					const profileAppId = String(fallbackUserInfo.app_id || "").trim();
-					const resolvedAppId = profileAppId || loginAppId || "csm";
+					const resolvedAppId = normalizeUserSessionAppId({
+						...fallbackUserInfo,
+						dev: devNormalized,
+					});
 
 					setCurrentAppId(resolvedAppId);
 					useUserStore.setState({ app_id: resolvedAppId });
-					console.log(`[LOGIN] Continue with fallback user payload, appId='${resolvedAppId}', redirect='${redirect || ""}'`);
+					console.log(`[LOGIN] Continue with fallback user payload, appId='${resolvedAppId}' (from app_token), redirect='${redirect || ""}'`);
 
 					return { loginRes, userInfoResult: fallbackUserInfo, resolvedAppId };
 				});

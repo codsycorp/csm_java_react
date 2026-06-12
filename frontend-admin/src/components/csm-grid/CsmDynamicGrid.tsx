@@ -1042,6 +1042,7 @@ export function CsmDynamicGrid({
 	const globalDatabase = useAppStore(state => state.database);
 	const setTableData = useAppStore(state => state.setTableData); // For updating fetched tables
 	const userAppId = useUserStore(state => state.app_id); // Get user appId for fallback
+	const userAppToken = useUserStore(state => state.app_token);
 	const userId = useUserStore(state => state.userId);
 	const username = useUserStore(state => state.username);
 	const userEmail = useUserStore(state => state.email);
@@ -1053,7 +1054,6 @@ export function CsmDynamicGrid({
 	const userPermissionBitfield = useUserStore(state => (state as any).permissionBitfield);
 	const userLegacyPermissions = useUserStore(state => (state as any).permissions);
 	const userMenusPermissions = useUserStore(state => (state as any).menusPermissions);
-	const runtimeAppId = String(appId || userAppId || "csm").trim();
 	const database = useMemo(
 		() => ({ ..._unusedDatabaseProp, ...globalDatabase }),
 		[globalDatabase, _unusedDatabaseProp]
@@ -1066,8 +1066,18 @@ export function CsmDynamicGrid({
 		return minScope(menuScope, userScope);
 	}, [isDev, dataScope, m_configs]);
 	const isRowActionLocked = rowActionBusy || submitInFlightRef.current;
+	const userAccess = useMemo(() => ({
+		app_id: userAppId,
+		app_token: userAppToken,
+		menusPermissions: userMenusPermissions,
+		dev: isDev,
+	}), [userAppId, userAppToken, userMenusPermissions, isDev]);
 	// Helpers
 	const tableName = (m_configs.table_name || "").split(",")[0];
+	const runtimeAppId = useMemo(
+		() => resolveComboQueryAppId(tableName, appId, undefined, userAccess, decrypt),
+		[tableName, appId, userAccess, decrypt],
+	);
 	const hasTableName = Boolean(tableName);
 	const [, setUpdateTrigger] = useState(0);
 	const pkFields = useMemo(() => getPrimaryKeyFields(m_configs), [m_configs.struct?.fieldsPK]);
@@ -1193,7 +1203,7 @@ export function CsmDynamicGrid({
 						if (!querySpec?.obj_name) return;
 						
 						const tableName = querySpec.obj_name;
-						const queryAppId = resolveComboQueryAppId(tableName, querySpec.app_id, userAppId || appId || "csm");
+						const queryAppId = resolveComboQueryAppId(tableName, querySpec.app_id, undefined, userAccess, decrypt);
 						let whereClause = querySpec.obj_where;
 						
 						// Default obj_where if not provided or invalid
@@ -1241,11 +1251,11 @@ export function CsmDynamicGrid({
 			console.log('[CsmDynamicGrid] All combo tables fetched, triggering re-compute...');
 			setDatabaseVersion(v => v + 1);
 		});
-	}, [comboFetchSignature, userAppId, appId, decrypt]);
+	}, [comboFetchSignature, userAccess, decrypt]);
 
 	const resolveQueryAppIdByTable = useCallback((tableName: string, queryAppId?: string): string => {
-		return resolveComboQueryAppId(tableName, queryAppId, userAppId || appId || "csm");
-	}, [userAppId, appId]);
+		return resolveComboQueryAppId(tableName, queryAppId, undefined, userAccess, decrypt);
+	}, [userAccess, decrypt]);
 
 	const getStoredTableAppId = useCallback((tableData: any): string => {
 		return String(tableData?.app_id || tableData?.appId || "").trim();

@@ -1,5 +1,7 @@
 import type { UserInfoType } from "#src/api/user/types";
 import { fetchUserInfo } from "#src/api/user";
+import { normalizeUserSessionAppId } from "#src/utils/user-app-id";
+import { useAppStore } from "#src/store/app";
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
@@ -47,10 +49,22 @@ export const useUserStore = create<UserState & UserAction>()(
 
 			getUserInfo: async (headers) => {
 				const response = await fetchUserInfo(headers);
-				set({
-					...response.result,
+				const raw = response.result ?? {} as UserInfoType;
+				const resolvedAppId = normalizeUserSessionAppId({
+					app_id: raw.app_id,
+					app_token: raw.app_token,
+					menusPermissions: raw.menusPermissions,
+					dev: raw.dev,
 				});
-				return response.result;
+				const normalized = {
+					...raw,
+					app_id: resolvedAppId,
+				};
+				set(normalized);
+				if (resolvedAppId) {
+					useAppStore.getState().setCurrentAppId(resolvedAppId);
+				}
+				return normalized;
 			},
 
 			reset: () => {

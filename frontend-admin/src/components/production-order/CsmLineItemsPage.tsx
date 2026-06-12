@@ -15,6 +15,8 @@ import {
 import type { ColumnsType } from "antd/es/table";
 
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
+import { resolveRuntimeAppId } from "#src/components/csm-grid/combo-utils";
+import { useUserStore } from "#src/store";
 import CsmLineItemsEditor from "./CsmLineItemsEditor";
 import type { LineItemsEditorConfig, OrderHeader, ProductGroup } from "./types";
 import {
@@ -86,6 +88,22 @@ export default function CsmLineItemsPage({
 	decrypt,
 	onDataChange,
 }: CsmLineItemsPageProps) {
+	const userAppId = useUserStore(state => state.app_id);
+	const userAppToken = useUserStore(state => state.app_token);
+	const userMenus = useUserStore(state => state.menusPermissions);
+	const userDev = useUserStore(state => state.dev);
+	const tableName = String(m_configs.table_name || "").trim();
+	const userAccess = useMemo(() => ({
+		app_id: userAppId,
+		app_token: userAppToken,
+		menusPermissions: userMenus,
+		dev: userDev,
+	}), [userAppId, userAppToken, userMenus, userDev]);
+	const runtimeAppId = useMemo(
+		() => resolveRuntimeAppId(tableName, appId, userAccess, decrypt),
+		[tableName, appId, userAccess, decrypt],
+	);
+
 	const { i18n } = useTranslation();
 	const ui = m_configs.line_items_ui ?? {};
 	const menuLabel = resolveTriLangLabel(m_configs, i18n.language, ["label"]) || "Quản lý đơn hàng";
@@ -93,7 +111,6 @@ export default function CsmLineItemsPage({
 	const createLabel = resolveTriLangLabel(ui, i18n.language, ["create_label"]) || "Tạo mới";
 	const editLabel = resolveTriLangLabel(ui, i18n.language, ["edit_label"]) || "Chỉnh sửa";
 	const listTitle = resolveTriLangLabel(ui, i18n.language, ["list_title"]) || menuLabel;
-	const tableName = String(m_configs.table_name || "").trim();
 	const pkFields = useMemo(() => resolvePkFields(m_configs), [m_configs]);
 	const listColumns = useMemo(() => resolveLineItemsListColumns(m_configs), [m_configs]);
 
@@ -109,7 +126,7 @@ export default function CsmLineItemsPage({
 		setLoading(true);
 		try {
 			const response = await getTableData<any>({
-				app_id: appId,
+				app_id: runtimeAppId,
 				obj_name: tableName,
 			});
 			const nextRows = (() => {
@@ -124,7 +141,7 @@ export default function CsmLineItemsPage({
 		} finally {
 			setLoading(false);
 		}
-	}, [appId, tableName]);
+	}, [runtimeAppId, tableName]);
 
 	useEffect(() => {
 		loadRows();
@@ -177,7 +194,7 @@ export default function CsmLineItemsPage({
 				: undefined;
 
 			await updateTableData({
-				app_id: appId,
+				app_id: runtimeAppId,
 				obj_name: tableName,
 				command: isUpdate ? "update" : "create",
 				obj_update: payload,
@@ -194,7 +211,7 @@ export default function CsmLineItemsPage({
 		} finally {
 			setSaving(false);
 		}
-	}, [activeRow, appId, closeEditor, loadRows, m_configs, onDataChange, pkFields, tableName]);
+	}, [activeRow, runtimeAppId, closeEditor, loadRows, m_configs, onDataChange, pkFields, tableName]);
 
 	const handleDelete = useCallback((row: Record<string, any>) => {
 		if (!tableName) return;
@@ -215,7 +232,7 @@ export default function CsmLineItemsPage({
 					return;
 				}
 				await updateTableData({
-					app_id: appId,
+					app_id: runtimeAppId,
 					obj_name: tableName,
 					command: "delete",
 					obj_update: where,
@@ -227,7 +244,7 @@ export default function CsmLineItemsPage({
 				onDataChange?.();
 			},
 		});
-	}, [appId, loadRows, onDataChange, pkFields, tableName]);
+	}, [runtimeAppId, loadRows, onDataChange, pkFields, tableName]);
 
 	const tableColumns = useMemo<ColumnsType<Record<string, any>>>(() => {
 		const lang = i18n.language || "vi";
@@ -307,7 +324,7 @@ export default function CsmLineItemsPage({
 							? String(activeRow[pkFields[0]] ?? activeRow.id ?? "edit")
 							: "new"}
 						m_configs={m_configs}
-						appId={appId}
+						appId={runtimeAppId}
 						decrypt={decrypt}
 						initialValue={draft}
 						existingRows={rows}
