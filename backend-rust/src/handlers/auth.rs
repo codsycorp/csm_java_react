@@ -65,6 +65,7 @@ impl AuthHandler {
         // Mirror Java AuthHandler.handleLogin: dev from app_token access_right only.
         let is_dev = self.resolve_dev_flag(&user);
         let mut user = user;
+        apply_app_id_from_token(&self.record_manager, &mut user);
         user.dev = Some(is_dev);
 
         let next_version = user.login_version.map(|v| v + 1).unwrap_or(1);
@@ -261,9 +262,10 @@ impl AuthHandler {
             }
         }
 
-        let user = self
+        let mut user = self
             .resolve_fresh_user(auth)
             .unwrap_or_else(|| self.user_from_auth(auth));
+        apply_app_id_from_token(&self.record_manager, &mut user);
 
         let mut info = user.to_info_map();
         self.enrich_account_meta(&user, &mut info);
