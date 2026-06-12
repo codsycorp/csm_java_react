@@ -6,7 +6,7 @@ use tracing::{info, warn};
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, User};
 use crate::util::{app_id_from_token, parse_app_token, is_dev_access_right, PermissionBitfieldUtil};
-use crate::security::user_access::has_any_action_permission;
+use crate::security::user_access::{apply_main_account_permission_elevation, has_any_action_permission};
 
 const CSM_APP_ID: &str = "csm";
 const ACCOUNTS_TABLE: &str = "csm_accounts";
@@ -320,6 +320,11 @@ impl UserService {
                     claims.ver, current_version, token_user_id
                 );
                 user.login_version = Some(claims.ver);
+                if let Some(app_token) = user.app_token.as_deref().filter(|s| !s.is_empty()) {
+                    if let Some(record) = self.find_app_token_pk_record(app_token) {
+                        return Some(self.map_record_to_user(&record, true));
+                    }
+                }
                 return Some(user);
             }
             warn!(
@@ -764,21 +769,7 @@ impl UserService {
             }
             user.data_app_ids = Some(resolve_effective_data_app_ids(record, &app_id, true));
         } else if is_main_account {
-            permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
-                &permissions,
-                &[
-                    "admin".into(),
-                    "scope:all".into(),
-                    "view".into(),
-                    "create".into(),
-                    "edit".into(),
-                    "delete".into(),
-                    "export".into(),
-                ],
-            );
-            if menus_permissions.is_empty() && !app_id.is_empty() {
-                menus_permissions = vec![app_id.clone()];
-            }
+            apply_main_account_permission_elevation(&mut permissions, &mut menus_permissions, &app_id);
             user.data_scope = Some("ALL".into());
         }
 

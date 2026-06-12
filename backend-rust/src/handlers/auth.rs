@@ -676,6 +676,18 @@ impl AuthHandler {
                     &["view".into(), "scope:owner".into()],
                 );
             }
+        } else if !dev {
+            // Mirror Java mapMainAccountToUser — frontend isSuperPermissionProfile() needs full bitfield.
+            let app_id = user
+                .app_id
+                .as_deref()
+                .or_else(|| info.get("app_id").and_then(|v| v.as_str()))
+                .unwrap_or("");
+            crate::security::user_access::apply_main_account_permission_elevation(
+                &mut permissions,
+                &mut menus_permissions,
+                app_id,
+            );
         }
 
         let bitfield =

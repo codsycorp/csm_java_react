@@ -32,6 +32,28 @@ pub struct UserAccessContext {
     pub preferred_branch: String,
 }
 
+pub fn apply_main_account_permission_elevation(
+    permissions: &mut Vec<String>,
+    menus_permissions: &mut Vec<String>,
+    app_id: &str,
+) {
+    *permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+        permissions,
+        &[
+            "admin".into(),
+            "scope:all".into(),
+            "view".into(),
+            "create".into(),
+            "edit".into(),
+            "delete".into(),
+            "export".into(),
+        ],
+    );
+    if menus_permissions.is_empty() && !app_id.trim().is_empty() {
+        *menus_permissions = vec![app_id.trim().to_string()];
+    }
+}
+
 impl UserAccessContext {
     /// Mirrors Java `TableHandler.resolveCurrentUserAccessContext`.
     pub fn from_auth(user: Option<&AuthUser>, record_manager: &crate::data::RecordManager) -> Option<Self> {
@@ -52,11 +74,10 @@ impl UserAccessContext {
 
         let mut permissions = user.permissions.clone();
         let parsed_token = PermissionBitfieldUtil::parse_security_token(user.permission_bitfield.as_deref());
+        // Mirror Java TableHandler: when bitfield exists, derive action tokens from it (not merge-only).
         if parsed_token.is_some() {
-            let from_token =
-                PermissionBitfieldUtil::permissions_from_bitfield(user.permission_bitfield.as_deref());
             permissions =
-                PermissionBitfieldUtil::merge_unique_case_insensitive(&permissions, &from_token);
+                PermissionBitfieldUtil::permissions_from_bitfield(user.permission_bitfield.as_deref());
         }
 
         if user.dev {
@@ -109,21 +130,7 @@ impl UserAccessContext {
 
         // Mirror Java mapMainAccountToUser: main accounts always operate with full app admin scope.
         if is_admin_by_default && !is_sub_user && !user.dev {
-            permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
-                &permissions,
-                &[
-                    "admin".into(),
-                    "scope:all".into(),
-                    "view".into(),
-                    "create".into(),
-                    "edit".into(),
-                    "delete".into(),
-                    "export".into(),
-                ],
-            );
-            if menus_permissions.is_empty() && !app_id.is_empty() {
-                menus_permissions = vec![app_id.clone()];
-            }
+            apply_main_account_permission_elevation(&mut permissions, &mut menus_permissions, &app_id);
             data_scope = "ALL".into();
             is_admin = true;
         }
@@ -227,6 +234,10 @@ pub fn validate_action_permission(ctx: Option<&UserAccessContext>, required_acti
         return None;
     };
     if ctx.is_dev {
+        return None;
+    }
+    // Main admin (non-dev, non-sub-user) — mirror Java isAdminByDefaultPolicy.
+    if ctx.is_admin && !ctx.is_sub_user {
         return None;
     }
     if required_action.is_empty() {
