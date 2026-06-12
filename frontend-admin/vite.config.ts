@@ -33,10 +33,6 @@ export default defineVitestConfig(({ mode }) => {
 	// Static media lives on web root (/app_images), NOT under /api/
 	const apiServerOrigin = apiBaseUrl.replace(/\/api\/?$/, "");
 
-	// App chạy tại https://admin.csmbridge.net/ (basename "/").
-	// "/admin/assets/" trong HTML chỉ là thư mục deploy (rp_index=admin), KHÔNG phải vite base.
-	const staticAssetDir = "admin/assets";
-
 	return {
 	base: "/",
 	plugins: [
@@ -62,7 +58,7 @@ export default defineVitestConfig(({ mode }) => {
 				return html.replace('</head>', preloadFix + '\n</head>');
 			}
 		},
-		autoResourceHints({ assetPrefix: `/${staticAssetDir}` }),
+		autoResourceHints(),
 		versionJsonPlugin({ version: buildVersion }),
 	],
 	resolve: {
@@ -118,9 +114,9 @@ export default defineVitestConfig(({ mode }) => {
 		chunkSizeWarningLimit: 1000,
 		rollupOptions: {
 		  output: {
-			assetFileNames: `${staticAssetDir}/[name].[hash].[ext]`,
-			chunkFileNames: `${staticAssetDir}/[name].[hash].js`,
-			entryFileNames: `${staticAssetDir}/[name].[hash].js`,
+			assetFileNames: "admin/assets/[name].[hash].[ext]",
+			chunkFileNames: "admin/assets/[name].[hash].js",
+			entryFileNames: "admin/assets/[name].[hash].js",
 			// 🚀 ADVANCED CODE SPLITTING: Tách vendor thành nhiều chunks nhỏ
 			manualChunks: (id) => {
 				// Only split HEAVY/STABLE libraries; keep polyfills/core bundled to fix init order

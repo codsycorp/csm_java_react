@@ -14,24 +14,13 @@ pnpm install
 pnpm dev
 ```
 
-App chay tai **goc domain** (vd. `https://admin.csmbridge.net/`, route `/login` — **khong** `/admin/login`).
-
-## Build & deploy thu cong
+## Build
 
 ```bash
 pnpm build
 ```
 
-Sau build, copy len server (`rp_index=admin`):
-
-```
-dist/index.html              →  csm_datas/public/admin/index.html
-dist/admin/assets/*          →  csm_datas/public/admin/assets/*
-dist/assets/html-module.min.js → csm_datas/public/admin/assets/  (neu co)
-```
-
-URL static `/admin/assets/index.{hash}.js` tro toi file `csm_datas/public/admin/assets/index.{hash}.js`.
-Day la **duong dan thu muc deploy**, khong phai route SPA.
+Build tạo `dist/version.json` (cùng timestamp với bundle). Khi deploy lên server, copy **toàn bộ** `dist/` vào `csm_datas/public/{rp_index}/` (ví dụ `admin/`) — `sys_la_routers.rp_index` phải khớp thư mục đó. Backend phục vụ `/version.json` theo domain → `{rp_index}/version.json`.
 
 ## Ghi chu
 
