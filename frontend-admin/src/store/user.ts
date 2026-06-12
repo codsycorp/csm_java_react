@@ -1,6 +1,8 @@
 import type { UserInfoType } from "#src/api/user/types";
 import { fetchUserInfo } from "#src/api/user";
 import { normalizeUserSessionAppId } from "#src/utils/user-app-id";
+import { parseJwtSessionClaims, sessionClaimsMatchUser } from "#src/utils/jwt-session";
+import { getAuthCredentials } from "#src/utils/request/auth-session";
 import { useAppStore } from "#src/store/app";
 
 import { create } from "zustand";
@@ -50,6 +52,12 @@ export const useUserStore = create<UserState & UserAction>()(
 			getUserInfo: async (headers) => {
 				const response = await fetchUserInfo(headers);
 				const raw = response.result ?? {} as UserInfoType;
+				const token = (headers as Record<string, string> | undefined)?.["csm-token"]
+					|| getAuthCredentials().token;
+				const claims = parseJwtSessionClaims(token);
+				if (!sessionClaimsMatchUser(claims, raw)) {
+					throw new Error("Session user mismatch");
+				}
 				const resolvedAppId = normalizeUserSessionAppId({
 					app_id: raw.app_id,
 					app_token: raw.app_token,

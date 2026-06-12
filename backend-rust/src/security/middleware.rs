@@ -20,7 +20,7 @@ use crate::security::client_session::{
     client_ip_from_headers, refresh_session_valid_for_middleware,
     refresh_token_candidates, user_agent_from_headers, user_agent_matches,
 };
-use crate::services::user::user_ids_match;
+use crate::services::user::{user_ids_match, user_matches_jwt_hints};
 use crate::util::{app_id_from_token, parse_app_token, is_sub_user_role, PermissionBitfieldUtil};
 use crate::security::rate_limit::RateLimiter;
 use crate::state::AppState;
@@ -170,6 +170,17 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
         .as_ref()
         .is_some_and(|token| !token.is_empty() && state.jwt.validate_token(token));
 
+    let jwt_hints = csm.as_ref().and_then(|token| {
+        state
+            .jwt
+            .parse_claims(token)
+            .ok()
+            .map(|claims| (claims.uid, claims.sub))
+    });
+    let jwt_has_binding = jwt_hints
+        .as_ref()
+        .is_some_and(|(uid, sub)| !uid.trim().is_empty() || !sub.trim().is_empty());
+
     if let Some(token) = csm.as_ref() {
         if !token.is_empty() {
             if csm_valid {
@@ -180,20 +191,34 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
                 {
                     return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
                 }
-                // Mirror Java: valid csm-token but resolution failed → refresh fallback.
-                warn!("[JWT] csm-token auth resolution failed, fallback to refresh-token path");
+                // Valid csm-token but row resolution lagged — only accept refresh for the same account.
+                warn!("[JWT] csm-token auth resolution failed, trying bound refresh-token fallback");
+                if jwt_has_binding {
+                    let (uid, sub) = jwt_hints.as_ref().unwrap();
+                    let client_ip = client_ip_from_headers(headers);
+                    let client_ua = user_agent_from_headers(headers);
+                    for rt in refresh_token_candidates(headers) {
+                        if let Some(user) = state.user_service.find_by_refresh_token(&rt) {
+                            if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua)
+                                && user_matches_jwt_hints(&user, uid, sub)
+                            {
+                                return Some(enrich_auth_user(
+                                    state,
+                                    auth_user_from_model(state, user),
+                                ));
+                            }
+                        }
+                    }
+                    return None;
+                }
             }
             // Invalid JWT format/signature: continue to refresh-token fallback (Java parity).
         }
     }
 
-    let token_uid = csm_valid
-        .then(|| {
-            csm.as_ref()
-                .map(|t| state.jwt.user_id_from_token(t))
-                .filter(|uid| !uid.is_empty())
-        })
-        .flatten();
+    let token_uid = jwt_hints
+        .as_ref()
+        .and_then(|(uid, _)| (!uid.trim().is_empty()).then_some(uid.as_str()));
 
     let client_ip = client_ip_from_headers(headers);
     let client_ua = user_agent_from_headers(headers);
@@ -201,7 +226,10 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
         match state.user_service.find_by_refresh_token(&rt) {
             Some(user)
                 if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua)
-                    && refresh_user_matches_token_uid(&user, token_uid.as_deref()) =>
+                    && (refresh_user_matches_token_uid(&user, token_uid)
+                        || jwt_hints
+                            .as_ref()
+                            .is_some_and(|(uid, sub)| user_matches_jwt_hints(&user, uid, sub))) =>
             {
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
@@ -216,7 +244,7 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
                         user.refresh_token_ua.as_deref().unwrap_or(""),
                     ),
                     user.refresh_token_expiry.unwrap_or(0),
-                    refresh_user_matches_token_uid(&user, token_uid.as_deref()),
+                    refresh_user_matches_token_uid(&user, token_uid),
                 );
             }
             None => {

@@ -5,6 +5,7 @@ use tracing::{info, warn};
 
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, User};
+use crate::security::auth::AuthUser;
 use crate::util::{app_id_from_token, parse_app_token, is_dev_access_right, PermissionBitfieldUtil};
 use crate::security::user_access::{
     apply_dev_permission_elevation, apply_main_account_permission_elevation, has_any_action_permission,
@@ -77,6 +78,33 @@ impl UserService {
         user.permission_bitfield = Some(PermissionBitfieldUtil::to_compact_token(bitfield));
         user.permission_schema_version = Some(PermissionBitfieldUtil::SCHEMA_V3.into());
         user.data_scope = Some(PermissionBitfieldUtil::resolve_data_scope(bitfield));
+    }
+
+    /// Mirror Java JwtAuthenticationFilter + handleUserInfo: app_token PK row is the session owner.
+    /// Never return a different account than the authenticated principal.
+    pub fn canonicalize_session_user(&self, auth: &AuthUser) -> Option<User> {
+        let mut user = if !auth.app_token.is_empty() {
+            self.find_by_app_token(&auth.app_token)
+        } else {
+            None
+        };
+
+        if user.is_none() && !auth.user_id.is_empty() {
+            user = self.find_by_id(&auth.user_id);
+        }
+
+        let user = user?;
+        if !user_matches_auth_principal(&user, auth) {
+            warn!(
+                "[canonicalize_session_user] principal mismatch auth_user_id={} auth_app_token_len={} resolved_user_id={:?} resolved_email={:?}",
+                auth.user_id,
+                auth.app_token.len(),
+                user.id,
+                user.email,
+            );
+            return None;
+        }
+        Some(user)
     }
 
     pub fn find_by_id(&self, user_id: &str) -> Option<User> {
@@ -1229,6 +1257,34 @@ fn subject_matches_user(subject: &str, user: &User) -> bool {
         return true;
     }
     user.phone_number.as_deref() == Some(subject)
+}
+
+/// Ensure DB row belongs to the authenticated request principal (Java SecurityContext parity).
+pub fn user_matches_auth_principal(user: &User, auth: &AuthUser) -> bool {
+    if !auth.app_token.is_empty() {
+        let resolved_token = user.app_token.as_deref().unwrap_or("");
+        if resolved_token != auth.app_token {
+            return false;
+        }
+    }
+    if !auth.user_id.is_empty() {
+        let resolved_id = user.id.as_deref().unwrap_or("");
+        if !resolved_id.is_empty() && !user_ids_match(resolved_id, &auth.user_id) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Bind refresh-token fallback to the same account identified by a valid csm-token JWT.
+pub fn user_matches_jwt_hints(user: &User, uid: &str, sub: &str) -> bool {
+    if !uid.trim().is_empty() && user_ids_match(user.id.as_deref().unwrap_or(""), uid) {
+        return true;
+    }
+    if !sub.trim().is_empty() && subject_matches_user(sub, user) {
+        return true;
+    }
+    false
 }
 
 fn sync_refresh_fields(merged: &mut Map<String, Value>, fields: &Map<String, Value>) {

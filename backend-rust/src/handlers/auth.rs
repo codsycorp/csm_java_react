@@ -10,7 +10,7 @@ use crate::security::client_session::{
     normalize_client_ip, normalize_user_agent, refresh_session_valid,
 };
 use crate::security::jwt::JwtUtil;
-use crate::services::user::{user_ids_match, UserService};
+use crate::services::user::{user_ids_match, user_matches_auth_principal, user_matches_jwt_hints, UserService};
 use crate::util::PermissionBitfieldUtil;
 
 pub struct AuthHandler {
@@ -262,8 +262,17 @@ impl AuthHandler {
         }
 
         let mut user = self
-            .resolve_fresh_user(auth)
+            .user_service
+            .canonicalize_session_user(auth)
             .unwrap_or_else(|| self.user_from_auth(auth));
+
+        if !user_matches_auth_principal(&user, auth) {
+            response.set("code", 401);
+            response.set("success", false);
+            response.set("message", "Session user mismatch");
+            return response;
+        }
+
         self.user_service.finalize_session_profile(&mut user, None);
 
         let mut info = user.to_info_map();
@@ -285,7 +294,7 @@ impl AuthHandler {
         let mut response = StandardResponse::new();
 
         if let Some(auth) = auth_user {
-            if let Some(user) = self.resolve_fresh_user(auth) {
+            if let Some(user) = self.user_service.canonicalize_session_user(auth) {
                 self.user_service.clear_session_token(&user);
                 info!(
                     "[LOGOUT] Invalidated refreshToken for user id={:?}",
@@ -501,7 +510,7 @@ impl AuthHandler {
         };
 
         let fresh_user = auth_user.and_then(|auth| {
-            self.resolve_fresh_user(auth).map(|mut user| {
+            self.user_service.canonicalize_session_user(auth).map(|mut user| {
                 self.user_service.finalize_session_profile(&mut user, None);
                 user
             })
@@ -539,15 +548,7 @@ impl AuthHandler {
     }
 
     fn resolve_fresh_user(&self, auth: &crate::security::AuthUser) -> Option<User> {
-        // Mirror Java handleUserInfo: findUserById(principal.id) then findUserByAppToken(principal.app_token).
-        let mut fresh = None;
-        if !auth.user_id.is_empty() {
-            fresh = self.user_service.find_by_id(&auth.user_id);
-        }
-        if fresh.is_none() && !auth.app_token.is_empty() {
-            fresh = self.user_service.find_by_app_token(&auth.app_token);
-        }
-        fresh
+        self.user_service.canonicalize_session_user(auth)
     }
 
     fn user_from_auth(&self, auth: &crate::security::AuthUser) -> User {

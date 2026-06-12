@@ -3,6 +3,7 @@ import { isDynamicRoutingEnabled } from "#src/router/routes/config";
 import { useAuthStore, usePermissionStore, useUserStore, useAppStore } from "#src/store";
 import { resolveDevFlag, persistDevLocalFlag } from "#src/utils/dev-flag";
 import { normalizeUserSessionAppId } from "#src/utils/user-app-id";
+import { parseJwtSessionClaims, sessionClaimsMatchUser } from "#src/utils/jwt-session";
 import { fetchUserInfo } from "#src/api/user";
 
 import {
@@ -142,6 +143,13 @@ export function PasswordLogin() {
 
 				return fetchUserInfo(userInfoHeaders, { omitRefreshToken: true }).then((response: any) => {
 					const userInfoResult = response?.result || loginFallbackUser;
+					const freshToken = String(loginRes?.result?.token || "").trim();
+					const claims = parseJwtSessionClaims(freshToken);
+					if (userInfoResult && !sessionClaimsMatchUser(claims, userInfoResult)) {
+						console.error("[LOGIN] user-info returned a different account than login token");
+						useAuthStore.getState().reset();
+						throw new Error("Phiên đăng nhập không khớp người dùng");
+					}
 					if (userInfoResult) {
 						useUserStore.setState({ ...userInfoResult });
 					}
