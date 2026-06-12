@@ -233,38 +233,31 @@ impl AuthHandler {
     ) -> StandardResponse {
         let mut response = StandardResponse::new();
 
-        // Rust stricter than Java: when csm-token is valid, profile MUST come from signed JWT claims.
-        // Java reads SecurityContext only (can be refresh-fallback user while header carries another JWT).
+        // Prefer JWT when csm-token resolves; otherwise use auth principal (Java SecurityContext / refresh fallback).
         if let Some(token) = params
             .get("csm-token")
             .and_then(|v| v.as_str())
             .filter(|t| !t.is_empty())
         {
             if self.jwt.validate_token(token) {
-                let Some(user) = self
+                if let Some(user) = self
                     .user_service
                     .resolve_from_jwt_with_util(&self.jwt, token)
-                else {
-                    response.set("code", 401);
-                    response.set("success", false);
-                    response.set("message", "Session token could not be resolved");
-                    return response;
-                };
-
-                if let Ok(claims) = self.jwt.parse_claims(token) {
-                    if !user_matches_jwt_hints(&user, &claims.uid, &claims.sub) {
-                        response.set("code", 401);
-                        response.set("success", false);
-                        response.set("message", "Session token mismatch");
-                        return response;
+                {
+                    if let Ok(claims) = self.jwt.parse_claims(token) {
+                        if !user_matches_jwt_hints(&user, &claims.uid, &claims.sub) {
+                            response.set("code", 401);
+                            response.set("success", false);
+                            response.set("message", "Session token mismatch");
+                            return response;
+                        }
                     }
+
+                    self.finish_user_info_response(&user, &mut response);
+                    return response;
                 }
-
-                self.finish_user_info_response(&user, &mut response);
-                return response;
-            }
-
-            if auth_user.is_none() {
+                // Valid JWT but DB row not resolved yet — fall through to auth_user (refresh may have authenticated).
+            } else if auth_user.is_none() {
                 response.set("code", 401);
                 response.set("success", false);
                 response.set("message", "Invalid or expired session token");

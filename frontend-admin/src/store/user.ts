@@ -56,11 +56,7 @@ export const useUserStore = create<UserState & UserAction>()(
 				const requestHeaders = sessionToken
 					? { ...(headers as Record<string, string> | undefined), "csm-token": sessionToken }
 					: headers;
-				const hasSessionToken = Boolean(sessionToken);
-				const response = await fetchUserInfo(
-					requestHeaders,
-					hasSessionToken ? { omitRefreshToken: true, omitCredentials: true } : undefined,
-				);
+				const response = await fetchUserInfo(requestHeaders);
 				const raw = (response.result ?? {}) as UserInfoType;
 				const claims = parseJwtSessionClaims(sessionToken);
 				if (sessionToken && claims && raw?.userId && !sessionClaimsMatchUser(claims, raw)) {

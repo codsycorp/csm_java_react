@@ -122,7 +122,7 @@ export function PasswordLogin() {
 					: undefined;
 				const loginPayload = loginRes?.result ?? {};
 
-				return fetchUserInfo(userInfoHeaders, { omitRefreshToken: true, omitCredentials: true }).then((response: any) => {
+				return fetchUserInfo(userInfoHeaders).then((response: any) => {
 					const userInfoRaw = response?.result ?? {};
 					const claims = parseJwtSessionClaims(freshToken);
 
