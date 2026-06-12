@@ -10,7 +10,7 @@ use crate::security::client_session::{
     normalize_client_ip, normalize_user_agent, refresh_session_valid,
 };
 use crate::security::jwt::JwtUtil;
-use crate::services::user::{user_ids_match, user_matches_jwt_hints, UserService};
+use crate::services::user::{user_matches_jwt_hints, UserService};
 use crate::util::PermissionBitfieldUtil;
 
 pub struct AuthHandler {
@@ -230,63 +230,34 @@ impl AuthHandler {
     ) -> StandardResponse {
         let mut response = StandardResponse::new();
 
-        // Authoritative: signed csm-token in request must own the returned profile.
+        // Rust stricter than Java: when csm-token is valid, profile MUST come from signed JWT claims.
+        // Java reads SecurityContext only (can be refresh-fallback user while header carries another JWT).
         if let Some(token) = params
             .get("csm-token")
             .and_then(|v| v.as_str())
             .filter(|t| !t.is_empty())
         {
             if self.jwt.validate_token(token) {
-                if let Some(user) = self
+                let Some(user) = self
                     .user_service
                     .resolve_from_jwt_with_util(&self.jwt, token)
-                {
-                    if let Ok(claims) = self.jwt.parse_claims(token) {
-                        if !user_matches_jwt_hints(&user, &claims.uid, &claims.sub) {
-                            response.set("code", 401);
-                            response.set("success", false);
-                            response.set("message", "Session token mismatch");
-                            return response;
-                        }
-                        if let Some(auth) = auth_user {
-                            if !auth.user_id.is_empty()
-                                && !user_ids_match(
-                                    user.id.as_deref().unwrap_or(""),
-                                    &auth.user_id,
-                                )
-                            {
-                                response.set("code", 401);
-                                response.set("success", false);
-                                response.set("message", "Session token mismatch");
-                                return response;
-                            }
-                        }
-                    }
-
-                    self.finish_user_info_response(&user, &mut response);
+                else {
+                    response.set("code", 401);
+                    response.set("success", false);
+                    response.set("message", "Session token could not be resolved");
                     return response;
-                }
+                };
 
-                // JWT valid but DB resolve lag — fall back to middleware auth principal if it matches claims.
-                if let (Some(auth), Ok(claims)) = (auth_user, self.jwt.parse_claims(token)) {
-                    let mut fresh = None;
-                    if !auth.user_id.is_empty() {
-                        fresh = self.user_service.find_by_id(&auth.user_id);
-                    }
-                    if fresh.is_none() && !auth.app_token.is_empty() {
-                        fresh = self.user_service.find_by_app_token(&auth.app_token);
-                    }
-                    if let Some(user) = fresh {
-                        if user_matches_jwt_hints(&user, &claims.uid, &claims.sub) {
-                            self.finish_user_info_response(&user, &mut response);
-                            return response;
-                        }
+                if let Ok(claims) = self.jwt.parse_claims(token) {
+                    if !user_matches_jwt_hints(&user, &claims.uid, &claims.sub) {
+                        response.set("code", 401);
+                        response.set("success", false);
+                        response.set("message", "Session token mismatch");
+                        return response;
                     }
                 }
 
-                response.set("code", 401);
-                response.set("success", false);
-                response.set("message", "Session token could not be resolved");
+                self.finish_user_info_response(&user, &mut response);
                 return response;
             }
 
@@ -296,7 +267,7 @@ impl AuthHandler {
                 response.set("message", "Invalid or expired session token");
                 return response;
             }
-            // Expired csm-token: middleware authenticated via refresh — continue below.
+            // Expired csm-token: middleware authenticated via refresh — continue below (Java parity).
         }
 
         let Some(auth) = auth_user else {
@@ -306,16 +277,11 @@ impl AuthHandler {
             return response;
         };
 
-        // Mirror Java AuthHandler.handleUserInfo for refresh-only sessions (no csm-token header).
-        let mut fresh = None;
-        if !auth.user_id.is_empty() {
-            fresh = self.user_service.find_by_id(&auth.user_id);
-        }
-        if fresh.is_none() && !auth.app_token.is_empty() {
-            fresh = self.user_service.find_by_app_token(&auth.app_token);
-        }
-
-        let user = fresh.unwrap_or_else(|| self.user_from_auth(auth));
+        // Mirror Java AuthHandler.handleUserInfo: reload from DB via auth principal, verify principal binding.
+        let user = self
+            .user_service
+            .canonicalize_session_user(auth)
+            .unwrap_or_else(|| self.user_from_auth(auth));
         self.finish_user_info_response(&user, &mut response);
         response
     }

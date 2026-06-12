@@ -87,7 +87,7 @@ impl UserService {
             user = self.find_by_id(&auth.user_id);
         }
         if user.is_none() && !auth.app_token.is_empty() {
-            user = self.find_by_app_token(&auth.app_token);
+            user = self.find_by_app_token_scoped(&auth.app_token, &auth.user_id, auth.login_version);
         }
 
         let user = user?;
@@ -312,14 +312,24 @@ impl UserService {
                 .or_else(|| self.find_account("email", subject).map(|(u, _)| u))
                 .or_else(|| self.find_account("username", subject).map(|(u, _)| u))
                 .or_else(|| self.find_account("phoneNumber", subject).map(|(u, _)| u))
-                .or_else(|| self.find_by_app_token(subject));
+                .or_else(|| {
+                    if looks_like_app_token(subject) && !token_user_id.is_empty() {
+                        self.find_by_app_token_scoped(subject, token_user_id, token_version)
+                    } else {
+                        self.find_by_app_token(subject)
+                    }
+                });
         }
         if user.is_none() {
             return None;
         }
 
         if looks_like_app_token(subject) {
-            if let Some(by_subject) = self.find_by_app_token(subject) {
+            if let Some(by_subject) = if !token_user_id.is_empty() {
+                self.find_by_app_token_scoped(subject, token_user_id, token_version)
+            } else {
+                self.find_by_app_token(subject)
+            } {
                 if !token_user_id.is_empty() {
                     let resolved_id = by_subject.id.as_deref().unwrap_or("");
                     if resolved_id.is_empty() || !user_ids_match(resolved_id, token_user_id) {
@@ -345,9 +355,17 @@ impl UserService {
         }
 
         if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
-            if let Some(fresh) = self.find_by_app_token(&app_token) {
-                // Mirror Java: PK/pickBest row carries authoritative login_version.
-                user = fresh;
+            if let Some(fresh) =
+                self.find_by_app_token_scoped(&app_token, token_user_id, token_version)
+            {
+                if subject_matches_user(subject, &fresh) {
+                    user = fresh;
+                } else {
+                    warn!(
+                        "[JWT] Scoped app_token row failed subject check subject={} resolvedId={:?}",
+                        subject, fresh.id
+                    );
+                }
             }
         }
 
@@ -379,6 +397,66 @@ impl UserService {
         }
 
         Some(user)
+    }
+
+    /// Resolve app_token row without cross-account bleed.
+    /// Java pickBest can return a different duplicate row (highest login_version).
+    /// When uid/auth_user_id is known, scope candidates to that account first; prefer PK row written at login.
+    pub fn find_by_app_token_scoped(
+        &self,
+        app_token: &str,
+        scoped_user_id: &str,
+        token_version: i32,
+    ) -> Option<User> {
+        if app_token.is_empty() {
+            return None;
+        }
+
+        if let Some(pk) = self.find_app_token_pk_record(app_token) {
+            let candidate = self.map_record_to_user(&pk, true);
+            if scoped_user_id.is_empty()
+                || user_ids_match(candidate.id.as_deref().unwrap_or(""), scoped_user_id)
+            {
+                let ver = candidate.login_version.unwrap_or(0);
+                if token_version <= 0 || ver <= 0 || ver == token_version {
+                    return Some(candidate);
+                }
+            }
+        }
+
+        let filter = SearchFilter::eq("app_token", app_token);
+        let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+        let account_rows: Vec<Map<String, Value>> = filtered
+            .get("rows")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|v| v.as_object().cloned())
+            .collect();
+
+        let scoped_rows: Vec<Map<String, Value>> = if scoped_user_id.is_empty() {
+            account_rows
+        } else {
+            account_rows
+                .into_iter()
+                .filter(|row| {
+                    row.get("id")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|id| user_ids_match(id, scoped_user_id))
+                })
+                .collect()
+        };
+
+        if let Some(record) = pick_best_account_record(&scoped_rows) {
+            return Some(self.map_record_to_user(&record, true));
+        }
+
+        if token_version > 0 {
+            return self.find_by_app_token_version(app_token, token_version, scoped_user_id);
+        }
+
+        None
     }
 
     fn find_by_app_token_version(
