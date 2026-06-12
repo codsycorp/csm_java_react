@@ -60,7 +60,7 @@ export default defineVitestConfig(({ mode }) => {
 				return html.replace('</head>', preloadFix + '\n</head>');
 			}
 		},
-		autoResourceHints(),
+		autoResourceHints({ base: isProdBuild ? "/admin/" : "/" }),
 		versionJsonPlugin({ version: buildVersion }),
 	],
 	resolve: {

@@ -3,7 +3,13 @@
  * Automatically adds resource hints to index.html based on build output
  */
 
-export default function autoResourceHints() {
+export default function autoResourceHints(options = {}) {
+  const normalizeBase = (base = "/") => {
+    const trimmed = String(base || "/").trim();
+    if (!trimmed || trimmed === "/") return "";
+    return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
+  };
+
   return {
     name: 'auto-resource-hints',
     enforce: 'post',
@@ -11,6 +17,8 @@ export default function autoResourceHints() {
     transformIndexHtml(html, ctx) {
       // Only run during build
       if (!ctx.bundle) return html;
+
+      const base = normalizeBase(options.base ?? ctx.server?.config?.base ?? "/");
       
       const criticalChunks = ['ui-core', 'react-router'];
       const prefetchChunks = [];
@@ -23,7 +31,7 @@ export default function autoResourceHints() {
         if (chunk.type !== 'chunk') continue;
         
         const chunkName = chunk.name || '';
-        const assetPath = `/${fileName}`;
+        const assetPath = `${base}/${fileName}`.replace(/\/{2,}/g, '/');
         
         // Preload critical chunks
         if (criticalChunks.some(name => chunkName.includes(name))) {
