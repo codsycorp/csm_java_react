@@ -2,7 +2,7 @@ import { TanstackQuery } from "#src/components";
 import { setupI18n } from "#src/locales";
 import { setupLoading } from "#src/plugins";
 import { setupRouter } from "#src/router";
-import suppressDevelopmentWarnings from "#src/utils/suppressWarnings";
+import { suppressDevelopmentWarnings } from "#src/utils/suppressWarnings";
 import { ensureBrowserClientId, ensureTabSessionId } from "#src/utils/browser-client-id";
 import "#src/utils/chatHelpers"; // Import để expose chat helpers lên window
 
@@ -13,11 +13,9 @@ import App from "./app";
 import "./styles/index.css";
 import "./styles/responsive-table.css";
 
-// Initialize development warning suppression
-suppressDevelopmentWarnings();
-
-// Suppress findDOMNode warnings from Ant Design components
-// [PROD] Removed custom console.warn/error overrides for findDOMNode
+if (import.meta.env.DEV) {
+	suppressDevelopmentWarnings();
+}
 
 async function setupApp() {
 	ensureBrowserClientId();
