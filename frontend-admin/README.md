@@ -14,13 +14,23 @@ pnpm install
 pnpm dev
 ```
 
-## Build
+## Build & deploy thủ công
 
 ```bash
 pnpm build
 ```
 
-Build tạo `dist/version.json` (cùng timestamp với bundle). Khi deploy lên server, copy **toàn bộ** `dist/` vào `csm_datas/public/{rp_index}/` (ví dụ `admin/`) — `sys_la_routers.rp_index` phải khớp thư mục đó. Backend phục vụ `/version.json` theo domain → `{rp_index}/version.json`.
+Copy **toàn bộ** nội dung `dist/` vào `csm_datas/public/{rp_index}/` (ví dụ `admin/`):
+
+```
+dist/index.html          →  csm_datas/public/admin/index.html
+dist/assets/*            →  csm_datas/public/admin/assets/*
+dist/version.json        →  csm_datas/public/admin/version.json
+```
+
+URL `/admin/assets/index.{hash}.js` phải trỏ tới file `csm_datas/public/admin/assets/index.{hash}.js`.
+
+`sys_la_routers.rp_index` phải khớp thư mục đích (thường là `admin`).
 
 ## Ghi chu
 

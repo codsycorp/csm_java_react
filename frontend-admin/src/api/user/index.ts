@@ -42,7 +42,11 @@ export function fetchRefreshToken() {
 	const effectiveRefresh = refreshToken || readRefreshTokenMirror();
 	return request
 		.post(refreshTokenPath, {
+			// Java: cookie refreshToken + optional X-Refresh-Token / body (cross-site admin→api).
 			credentials: "include",
+			headers: effectiveRefresh
+				? { "X-Refresh-Token": effectiveRefresh }
+				: undefined,
 			json: {
 				_origin: window.location.origin,
 				...(effectiveRefresh ? { refreshToken: effectiveRefresh } : {}),

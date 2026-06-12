@@ -2,7 +2,6 @@ import { TanstackQuery } from "#src/components";
 import { setupI18n } from "#src/locales";
 import { setupLoading } from "#src/plugins";
 import { setupRouter } from "#src/router";
-import { suppressDevelopmentWarnings } from "#src/utils/suppressWarnings";
 import { ensureBrowserClientId, ensureTabSessionId } from "#src/utils/browser-client-id";
 import "#src/utils/chatHelpers"; // Import để expose chat helpers lên window
 
@@ -12,10 +11,6 @@ import { createRoot } from "react-dom/client";
 import App from "./app";
 import "./styles/index.css";
 import "./styles/responsive-table.css";
-
-if (import.meta.env.DEV) {
-	suppressDevelopmentWarnings();
-}
 
 async function setupApp() {
 	ensureBrowserClientId();

@@ -53,38 +53,37 @@ export const useUserStore = create<UserState & UserAction>()(
 			getUserInfo: async (headers?: HeadersInit): Promise<UserInfoType> => {
 				const sessionToken = (headers as Record<string, string> | undefined)?.["csm-token"]?.trim()
 					|| getAuthCredentials().token?.trim();
+				const requestHeaders = sessionToken
+					? { ...(headers as Record<string, string> | undefined), "csm-token": sessionToken }
+					: headers;
 				const hasSessionToken = Boolean(sessionToken);
 				const response = await fetchUserInfo(
-					headers,
+					requestHeaders,
 					hasSessionToken ? { omitRefreshToken: true, omitCredentials: true } : undefined,
 				);
 				const raw = (response.result ?? {}) as UserInfoType;
-				const token = (headers as Record<string, string> | undefined)?.["csm-token"]
-					|| getAuthCredentials().token;
-				const claims = parseJwtSessionClaims(token);
+				const claims = parseJwtSessionClaims(sessionToken);
+				if (sessionToken && claims && raw?.userId && !sessionClaimsMatchUser(claims, raw)) {
+					throw new Error("Session user mismatch");
+				}
 				const persisted = get();
 				const loginHint = {
 					userId: persisted.userId,
 					app_token: persisted.app_token,
 				};
 				const safeRaw = sanitizeUserInfoAgainstLogin(loginHint, raw);
-				const profileSource = (
-					safeRaw?.userId && claims && !sessionClaimsMatchUser(claims, safeRaw)
-						? { ...persisted, userId: persisted.userId, app_token: persisted.app_token }
-						: safeRaw
-				) as UserInfoType;
-				const normalized: UserInfoType = {
-					...profileSource,
-					app_id: normalizeUserSessionAppId({
-						app_id: raw.app_id ?? profileSource.app_id,
-						app_token: raw.app_token ?? profileSource.app_token,
-						menusPermissions: raw.menusPermissions ?? profileSource.menusPermissions,
-						dev: raw.dev ?? profileSource.dev,
-					}),
-				};
-				if (!normalized.userId) {
+				if (!safeRaw?.userId) {
 					throw new Error("Session user mismatch");
 				}
+				const normalized: UserInfoType = {
+					...safeRaw,
+					app_id: normalizeUserSessionAppId({
+						app_id: raw.app_id ?? safeRaw.app_id,
+						app_token: raw.app_token ?? safeRaw.app_token,
+						menusPermissions: raw.menusPermissions ?? safeRaw.menusPermissions,
+						dev: raw.dev ?? safeRaw.dev,
+					}),
+				};
 				set(normalized);
 				if (normalized.app_id) {
 					useAppStore.getState().setCurrentAppId(normalized.app_id);

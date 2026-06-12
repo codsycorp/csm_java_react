@@ -6,7 +6,8 @@ import { readAuthPersistRaw, readRefreshTokenMirror, syncRefreshTokenMirror } fr
 
 export function readPersistedAuthState(): { token?: string; refreshToken?: string; csrfToken?: string } {
 	try {
-		const raw = readAuthPersistRaw() || localStorage.getItem("access-token");
+		// Tab-scoped sessionStorage only — never fall back to shared localStorage (cross-tab bleed).
+		const raw = readAuthPersistRaw();
 		if (!raw) {
 			return {};
 		}
@@ -58,12 +59,13 @@ export function getAuthCredentials() {
 
 export function hasAuthSession(): boolean {
 	const creds = getAuthCredentials();
-	if (creds.token || creds.refreshToken || creds.csrfToken) {
+	if (creds.token || creds.refreshToken || readRefreshTokenMirror()) {
 		return true;
 	}
 	if (typeof document === "undefined") {
 		return false;
 	}
+	// Java: HttpOnly refreshToken cookie counts as session (NWJS + browser).
 	return /(?:^|; )refreshToken=([^;]*)/.test(document.cookie);
 }
 

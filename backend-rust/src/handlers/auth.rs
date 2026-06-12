@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, StandardResponse, User};
 use crate::security::client_session::{
-    normalize_client_ip, normalize_user_agent, refresh_session_valid,
+    normalize_client_ip, normalize_user_agent, refresh_session_valid_for_endpoint,
 };
 use crate::security::jwt::JwtUtil;
 use crate::services::user::{user_matches_jwt_hints, UserService};
@@ -354,7 +354,8 @@ impl AuthHandler {
             let Some(user) = self.user_service.find_by_refresh_token(refresh) else {
                 continue;
             };
-            if refresh_session_valid(&user, &ip, &ua, &client_id) {
+            // Java /refresh-token: IP + UA + expiry only (no client_id gate).
+            if refresh_session_valid_for_endpoint(&user, &ip, &ua) {
                 matched_user = Some(user);
                 break;
             }

@@ -15,7 +15,6 @@ function retryOriginalRequest(request: Request, options: Options) {
 	applyAuthHeadersToRequest(request);
 	return ky(request.url, {
 		...options,
-		// request.url is absolute at this point; keep prefix disabled to avoid base URL duplication.
 		prefixUrl: undefined,
 		method: request.method,
 		headers: request.headers,

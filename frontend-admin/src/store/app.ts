@@ -1,7 +1,10 @@
 import { create } from "zustand";
+import { getAuthStorage } from "#src/utils/browser-client-id";
 
 type Row = Record<string, any>;
 export type Database = Record<string, { id: string; fields?: any; fieldsPK?: string[]; rows: Row[]; app_id?: string }>;
+
+const CURRENT_APP_ID_KEY = "current_app_id";
 
 /**
  * @zh 应用状态管理
@@ -16,19 +19,22 @@ declare global {
 		};
 	}
 }
-// Ưu tiên lấy app_id từ localStorage (sau khi login), SSR, hoặc mặc định
-let initialAppId = "csm";
-if (typeof window !== "undefined") {
-	// 1. Ưu tiên localStorage (đã lưu từ lần login trước)
-	const storedAppId = localStorage.getItem("current_app_id");
-	if (storedAppId) {
-		initialAppId = storedAppId;
+
+function readStoredAppId(): string {
+	if (typeof window === "undefined") {
+		return "csm";
 	}
-	// 2. Nếu không có localStorage, lấy từ SSR data
-	else if (window.__INITIAL_REACT_DATA__ && window.__INITIAL_REACT_DATA__.app_id) {
-		initialAppId = window.__INITIAL_REACT_DATA__.app_id;
+	const stored = getAuthStorage().getItem(CURRENT_APP_ID_KEY)?.trim();
+	if (stored) {
+		return stored;
 	}
+	if (window.__INITIAL_REACT_DATA__?.app_id) {
+		return window.__INITIAL_REACT_DATA__.app_id;
+	}
+	return "csm";
 }
+
+const initialAppId = readStoredAppId();
 const initialState = {
 	currentAppId: initialAppId,
 	database: {} as Database,
@@ -74,25 +80,18 @@ export const useAppStore = create<AppState & AppAction>((set, get) => ({
 
 	setCurrentAppId: (appId: string) => {
 		set({ currentAppId: appId });
-		// 保存到 localStorage 以便刷新后保留
 		if (typeof window !== "undefined") {
-			localStorage.setItem("current_app_id", appId);
+			getAuthStorage().setItem(CURRENT_APP_ID_KEY, appId);
+			try { localStorage.removeItem(CURRENT_APP_ID_KEY); } catch {}
 		}
 	},
 
 	getCurrentAppId: () => {
-		// Priority: localStorage > SSR data > fallback "csm"
-		if (typeof window !== "undefined") {
-			const stored = localStorage.getItem("current_app_id");
-			if (stored) {
-				return stored;
-			}
-			// Check SSR data before falling back
-			if (window.__INITIAL_REACT_DATA__?.app_id) {
-				return window.__INITIAL_REACT_DATA__.app_id;
-			}
+		const fromState = get().currentAppId?.trim();
+		if (fromState) {
+			return fromState;
 		}
-		return "csm";
+		return readStoredAppId();
 	},
 
 	setDatabase: (database: Database) => {
@@ -115,7 +114,8 @@ export const useAppStore = create<AppState & AppAction>((set, get) => ({
 	reset: () => {
 		set({ currentAppId: "csm", database: {} });
 		if (typeof window !== "undefined") {
-			localStorage.removeItem("current_app_id");
+			try { getAuthStorage().removeItem(CURRENT_APP_ID_KEY); } catch {}
+			try { localStorage.removeItem(CURRENT_APP_ID_KEY); } catch {}
 		}
 	},
 

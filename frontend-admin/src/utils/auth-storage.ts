@@ -45,8 +45,10 @@ export function clearAuthPersistKeys() {
 	try { storage.removeItem(AUTH_PERSIST_KEY); } catch {}
 	try { storage.removeItem(USER_PERSIST_KEY); } catch {}
 	try { storage.removeItem(REFRESH_MIRROR_KEY); } catch {}
+	try { storage.removeItem("current_app_id"); } catch {}
 	// Legacy localStorage keys from before tab isolation
 	try { localStorage.removeItem(AUTH_PERSIST_KEY); } catch {}
 	try { localStorage.removeItem(USER_PERSIST_KEY); } catch {}
 	try { localStorage.removeItem(REFRESH_MIRROR_KEY); } catch {}
+	try { localStorage.removeItem("current_app_id"); } catch {}
 }
