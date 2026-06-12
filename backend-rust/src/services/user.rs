@@ -80,17 +80,14 @@ impl UserService {
         user.data_scope = Some(PermissionBitfieldUtil::resolve_data_scope(bitfield));
     }
 
-    /// Mirror Java JwtAuthenticationFilter + handleUserInfo: app_token PK row is the session owner.
-    /// Never return a different account than the authenticated principal.
+    /// Mirror Java AuthHandler.handleUserInfo reload order.
     pub fn canonicalize_session_user(&self, auth: &AuthUser) -> Option<User> {
-        let mut user = if !auth.app_token.is_empty() {
-            self.find_by_app_token(&auth.app_token)
-        } else {
-            None
-        };
-
-        if user.is_none() && !auth.user_id.is_empty() {
+        let mut user = None;
+        if !auth.user_id.is_empty() {
             user = self.find_by_id(&auth.user_id);
+        }
+        if user.is_none() && !auth.app_token.is_empty() {
+            user = self.find_by_app_token(&auth.app_token);
         }
 
         let user = user?;
@@ -111,20 +108,8 @@ impl UserService {
         if user_id.is_empty() {
             return None;
         }
-        // Mirror Java findUserById: prefer direct id PK slot before scan/pickBest fallbacks.
+        // Mirror Java findUserById: eq filter on id, with uid claim normalization.
         for candidate in token_user_id_candidates(user_id) {
-            let mut probe = Map::new();
-            probe.insert("id".into(), Value::String(candidate.clone()));
-            let record = self.record_manager.find_by_custom_pk(
-                CSM_APP_ID,
-                ACCOUNTS_TABLE,
-                &probe,
-                &["id"],
-            );
-            if !record.is_empty() {
-                return Some(self.map_record_to_user(&record, true));
-            }
-
             let filter = SearchFilter::eq("id", candidate.as_str());
             let record = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
             if !record.is_empty() {
@@ -143,12 +128,7 @@ impl UserService {
             return None;
         }
 
-        // Java updateSessionToken always writes the app_token PK slot — read it first.
-        // filter()+pickBest can miss the PK row when duplicate records share the same id.
-        if let Some(record) = self.find_app_token_pk_record(app_token) {
-            return Some(self.map_record_to_user(&record, true));
-        }
-
+        // Mirror Java findUserByAppToken: filter rows + pickBest, then direct find fallback.
         let filter = SearchFilter::eq("app_token", app_token);
         let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
         let rows = filtered
@@ -316,11 +296,12 @@ impl UserService {
         let claims = jwt.parse_claims(token).ok()?;
         let subject = claims.sub.trim();
         let token_user_id = claims.uid.trim();
+        let token_version = claims.ver;
         if subject.is_empty() {
             return None;
         }
 
-        // Mirror Java JwtAuthenticationFilter.setAuthenticationFromToken order.
+        // Mirror Java JwtAuthenticationFilter.setAuthenticationFromToken exactly.
         let mut user = None;
         if !token_user_id.is_empty() {
             user = self.find_by_id(token_user_id);
@@ -333,8 +314,10 @@ impl UserService {
                 .or_else(|| self.find_account("phoneNumber", subject).map(|(u, _)| u))
                 .or_else(|| self.find_by_app_token(subject));
         }
+        if user.is_none() {
+            return None;
+        }
 
-        // JWT subject is usually encrypted app_token — re-resolve when it looks like one.
         if looks_like_app_token(subject) {
             if let Some(by_subject) = self.find_by_app_token(subject) {
                 if !token_user_id.is_empty() {
@@ -361,145 +344,22 @@ impl UserService {
             return None;
         }
 
-        user = self.refresh_user_from_app_token_row_if_same_claims(user, subject, token_user_id);
+        if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
+            if let Some(fresh) = self.find_by_app_token(&app_token) {
+                user = fresh;
+            }
+        }
 
         let current_version = user.login_version.unwrap_or(0);
-        if current_version > 0 && claims.ver != current_version {
-            if let Some(app_token) = user.app_token.as_deref().filter(|s| !s.is_empty()) {
-                if let Some(record) = self.find_app_token_pk_record(app_token) {
-                    let pk_ver = parse_int_safe(record.get("login_version"));
-                    let pk_ver = if pk_ver == 0 {
-                        parse_int_safe(record.get("loginVersion"))
-                    } else {
-                        pk_ver
-                    };
-                    if pk_ver == claims.ver {
-                        let refreshed = self.map_record_to_user(&record, true);
-                        if jwt_claims_match_user(subject, token_user_id, &refreshed) {
-                            return Some(refreshed);
-                        }
-                    }
-                }
-                if let Some(exact) = self.find_by_app_token_and_version(app_token, claims.ver) {
-                    if jwt_claims_match_user(subject, token_user_id, &exact) {
-                        return Some(exact);
-                    }
-                }
-            }
-            if !token_user_id.is_empty() {
-                if let Some(by_id) = self.find_by_id(token_user_id) {
-                    if by_id.login_version.unwrap_or(0) == claims.ver
-                        && jwt_claims_match_user(subject, token_user_id, &by_id)
-                    {
-                        return Some(by_id);
-                    }
-                }
-            }
-            // Signed JWT is authoritative when DB PK row lags by exactly one login increment.
-            if claims.ver == current_version + 1
-                && !token_user_id.is_empty()
-                && user_ids_match(user.id.as_deref().unwrap_or(""), token_user_id)
-                && subject_matches_user(subject, &user)
-            {
-                warn!(
-                    "[JWT] Trust signed token ver={} over stale PK/login row ver={} uid={}",
-                    claims.ver, current_version, token_user_id
-                );
-                user.login_version = Some(claims.ver);
-                if let Some(app_token) = user.app_token.as_deref().filter(|s| !s.is_empty()) {
-                    if let Some(record) = self.find_app_token_pk_record(app_token) {
-                        let refreshed = self.map_record_to_user(&record, true);
-                        if jwt_claims_match_user(subject, token_user_id, &refreshed) {
-                            return Some(refreshed);
-                        }
-                    }
-                }
-                return Some(user);
-            }
+        if current_version > 0 && token_version != current_version {
             warn!(
                 "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
-                subject, claims.ver, current_version
+                subject, token_version, current_version
             );
-            // Signed JWT identity already matched — trust token version over stale duplicate rows.
-            if jwt_claims_match_user(subject, token_user_id, &user) {
-                warn!(
-                    "[JWT] Trusting signed token ver={} over stale DB ver={} uid={}",
-                    claims.ver, current_version, token_user_id
-                );
-                user.login_version = Some(claims.ver);
-                return Some(user);
-            }
             return None;
         }
 
         Some(user)
-    }
-
-    fn refresh_user_from_app_token_row_if_same_claims(
-        &self,
-        user: User,
-        subject: &str,
-        token_user_id: &str,
-    ) -> User {
-        let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) else {
-            return user;
-        };
-        let candidate = self
-            .find_app_token_pk_record(&app_token)
-            .map(|record| self.map_record_to_user(&record, true))
-            .or_else(|| self.find_by_app_token(&app_token));
-        let Some(refreshed) = candidate else {
-            return user;
-        };
-        if jwt_claims_match_user(subject, token_user_id, &refreshed) {
-            refreshed
-        } else if !token_user_id.is_empty()
-            && user_ids_match(refreshed.id.as_deref().unwrap_or(""), token_user_id)
-            && subject_matches_user(subject, &user)
-        {
-            // PK row may lag app_token field; keep uid binding from signed JWT.
-            refreshed
-        } else {
-            warn!(
-                "[JWT] Ignoring app_token PK refresh that would switch user tokenUid={} fromId={:?} toId={:?}",
-                token_user_id, user.id, refreshed.id
-            );
-            user
-        }
-    }
-
-    fn find_by_app_token_and_version(&self, app_token: &str, login_version: i32) -> Option<User> {
-        if let Some(record) = self.find_app_token_pk_record(app_token) {
-            let mut version = parse_int_safe(record.get("login_version"));
-            if version == 0 {
-                version = parse_int_safe(record.get("loginVersion"));
-            }
-            if version == login_version {
-                return Some(self.map_record_to_user(&record, true));
-            }
-        }
-
-        let filter = SearchFilter::eq("app_token", app_token);
-        let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
-        let rows = filtered
-            .get("rows")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-
-        for row in rows {
-            let Some(record) = row.as_object() else {
-                continue;
-            };
-            let mut version = parse_int_safe(record.get("login_version"));
-            if version == 0 {
-                version = parse_int_safe(record.get("loginVersion"));
-            }
-            if version == login_version {
-                return Some(self.map_record_to_user(record, true));
-            }
-        }
-        None
     }
 
     fn canonicalize_refresh_user(

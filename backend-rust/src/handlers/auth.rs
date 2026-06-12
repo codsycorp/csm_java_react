@@ -10,7 +10,7 @@ use crate::security::client_session::{
     normalize_client_ip, normalize_user_agent, refresh_session_valid,
 };
 use crate::security::jwt::JwtUtil;
-use crate::services::user::{user_ids_match, user_matches_auth_principal, user_matches_jwt_hints, UserService};
+use crate::services::user::UserService;
 use crate::util::PermissionBitfieldUtil;
 
 pub struct AuthHandler {
@@ -226,26 +226,9 @@ impl AuthHandler {
     pub fn handle_user_info(
         &self,
         auth_user: Option<&crate::security::AuthUser>,
-        params: &Map<String, Value>,
+        _params: &Map<String, Value>,
     ) -> StandardResponse {
         let mut response = StandardResponse::new();
-
-        // When csm-token header is present, JWT claims are the sole source of truth.
-        // Never return another account because middleware fell back to a stale refresh cookie.
-        if let Some(token) = params
-            .get("csm-token")
-            .and_then(|v| v.as_str())
-            .filter(|t| !t.is_empty())
-        {
-            if self.jwt.validate_token(token) {
-                return self.build_user_info_from_jwt(token, auth_user);
-            }
-            response.set("code", 401);
-            response.set("success", false);
-            response.set("message", "Invalid or expired session token");
-            return response;
-        }
-
         let Some(auth) = auth_user else {
             response.set("code", 401);
             response.set("success", false);
@@ -253,61 +236,17 @@ impl AuthHandler {
             return response;
         };
 
-        let mut user = self
-            .user_service
-            .canonicalize_session_user(auth)
-            .unwrap_or_else(|| self.user_from_auth(auth));
-
-        if !user_matches_auth_principal(&user, auth) {
-            response.set("code", 401);
-            response.set("success", false);
-            response.set("message", "Session user mismatch");
-            return response;
+        // Mirror Java AuthHandler.handleUserInfo: reload fresh profile from DB via auth principal.
+        let mut fresh = None;
+        if !auth.user_id.is_empty() {
+            fresh = self.user_service.find_by_id(&auth.user_id);
+        }
+        if fresh.is_none() && !auth.app_token.is_empty() {
+            fresh = self.user_service.find_by_app_token(&auth.app_token);
         }
 
+        let user = fresh.unwrap_or_else(|| self.user_from_auth(auth));
         self.finish_user_info_response(&user, &mut response);
-        response
-    }
-
-    fn build_user_info_from_jwt(
-        &self,
-        token: &str,
-        auth_user: Option<&crate::security::AuthUser>,
-    ) -> StandardResponse {
-        let mut response = StandardResponse::new();
-        if let Some(user) = self
-            .user_service
-            .resolve_from_jwt_with_util(&self.jwt, token)
-        {
-            if let Ok(claims) = self.jwt.parse_claims(token) {
-                if !user_matches_jwt_hints(&user, &claims.uid, &claims.sub) {
-                    response.set("code", 401);
-                    response.set("success", false);
-                    response.set("message", "Session token mismatch");
-                    return response;
-                }
-            }
-            self.finish_user_info_response(&user, &mut response);
-            return response;
-        }
-
-        // Same-account refresh session from middleware (never cross-account).
-        if let (Ok(claims), Some(auth)) = (self.jwt.parse_claims(token), auth_user) {
-            if user_matches_jwt_hints_auth(auth, &claims.uid, &claims.sub) {
-                if let Some(user) = self
-                    .user_service
-                    .canonicalize_session_user(auth)
-                    .filter(|user| user_matches_auth_principal(user, auth))
-                {
-                    self.finish_user_info_response(&user, &mut response);
-                    return response;
-                }
-            }
-        }
-
-        response.set("code", 401);
-        response.set("success", false);
-        response.set("message", "Session token could not be resolved");
         response
     }
 
@@ -876,24 +815,6 @@ fn append_clear_auth_cookies(
             del_csrf.parse().unwrap(),
         );
     }
-}
-
-fn user_matches_jwt_hints_auth(auth: &crate::security::AuthUser, uid: &str, sub: &str) -> bool {
-    if !uid.trim().is_empty()
-        && !auth.user_id.is_empty()
-        && user_ids_match(&auth.user_id, uid)
-    {
-        return true;
-    }
-    if !sub.trim().is_empty() {
-        if !auth.app_token.is_empty() && auth.app_token == sub {
-            return true;
-        }
-        if !auth.user_id.is_empty() && user_ids_match(&auth.user_id, sub) {
-            return true;
-        }
-    }
-    false
 }
 
 fn refresh_tokens_from_params(params: &Map<String, Value>) -> Vec<String> {
