@@ -22,17 +22,48 @@ use crate::config::{AppConfig, skip_startup_db_init};
 use crate::state::AppState;
 
 fn load_config_env() {
-    // Service NSSM: CSM_HOME + AppDirectory — đảm bảo cwd và config.env đúng
-    if let Ok(home) = std::env::var("CSM_HOME") {
-        let home_path = std::path::PathBuf::from(&home);
+    // Service NSSM/systemd: CSM_HOME + AppDirectory — đảm bảo cwd và config.env đúng
+    let home = std::env::var("CSM_HOME").ok().map(std::path::PathBuf::from);
+
+    if let Some(ref home_path) = home {
         if home_path.is_dir() {
-            let _ = std::env::set_current_dir(&home_path);
+            let _ = std::env::set_current_dir(home_path);
         }
         let _ = dotenvy::from_filename(home_path.join("config.env"));
     }
     dotenvy::dotenv().ok();
     dotenvy::from_filename("config.env").ok();
     dotenvy::from_filename("../config.env").ok();
+
+    // Profile overlay (8gb / strong) — giống run-rust-server.sh / start.sh
+    let profile = std::env::var("CSM_LOCAL_PROFILE")
+        .or_else(|_| std::env::var("AI_LOCAL_MODE"))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    let overlay = match profile.as_str() {
+        "strong" | "local-strong" => Some("config.local-strong.env"),
+        "8gb" | "7b" | "local-8gb" => Some("config.local-8gb.env"),
+        _ => None,
+    };
+
+    if let Some(name) = overlay {
+        let candidates: Vec<std::path::PathBuf> = [
+            home.as_ref().map(|h| h.join(name)),
+            Some(std::path::PathBuf::from(name)),
+            Some(std::path::PathBuf::from("..").join(name)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        for path in candidates {
+            if path.is_file() {
+                let _ = dotenvy::from_filename(&path);
+                break;
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -66,6 +97,26 @@ async fn run() -> anyhow::Result<()> {
     info!("CSM_HOME={}", std::env::var("CSM_HOME").unwrap_or_else(|_| "(not set)".into()));
     info!("Data directory: {}", config.data_dir.display());
     info!("RocksDB root: {}", config.rocksdb_root.display());
+
+    #[cfg(feature = "local-ai")]
+    {
+        let model = config
+            .ai_local_llama_model_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(default)".into());
+        info!(
+            "Local AI: model={} ctx={} batch={}/{} threads={} max_tokens={} mmap={} profile={}",
+            model,
+            config.effective_llama_context_window(),
+            config.ai_local_llama_batch_size,
+            config.ai_local_llama_ubatch_size,
+            config.ai_local_llama_threads,
+            config.effective_llama_max_tokens(),
+            config.ai_local_llama_use_mmap,
+            std::env::var("CSM_LOCAL_PROFILE").unwrap_or_else(|_| "default".into())
+        );
+    }
 
     // Socket.IO layer created first so SocketIo handle can be stored in AppState
     let (socket_layer, socket_io) = socket::new_layer();

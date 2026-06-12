@@ -21,27 +21,10 @@ struct LlamaCppServiceInner {
 #[cfg(feature = "local-ai")]
 impl LlamaCppService {
     pub fn new(app: &AppConfig) -> Self {
-        use std::path::PathBuf;
-
-        let model_path = app
-            .ai_local_llama_model_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("./csm_datas/ai_local/model/model.gguf"));
-
         Self {
             inner: LlamaCppServiceInner {
-                config: super::llama_native::NativeConfig {
-                    model_path,
-                    context_window: app.ai_local_llama_context_window,
-                    max_tokens: app.ai_local_llama_max_tokens,
-                    max_prompt_chars: app.ai_local_llama_max_prompt_chars,
-                    threads: app.ai_local_llama_threads,
-                    temperature: app.ai_local_llama_temperature,
-                    top_p: app.ai_local_llama_top_p,
-                    top_k: app.ai_local_llama_top_k,
-                    gpu_layers: app.ai_local_llama_gpu_layers,
-                },
-                default_max_tokens: app.ai_local_llama_max_tokens,
+                config: app.llama_native_config(),
+                default_max_tokens: app.effective_llama_max_tokens(),
             },
         }
     }

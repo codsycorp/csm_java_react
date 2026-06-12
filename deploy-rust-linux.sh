@@ -91,8 +91,11 @@ BUILD
 echo ""
 echo "▶ [4/4] Config và khởi động..."
 
-# Upload config.env (secrets không commit git)
+# Upload config (secrets không commit git)
 scp "$SCRIPT_DIR/config.env" "$SERVER:$SERVER_PATH/config.env"
+if [ -f "$SCRIPT_DIR/config.local-8gb.env" ]; then
+    scp "$SCRIPT_DIR/config.local-8gb.env" "$SERVER:$SERVER_PATH/config.local-8gb.env"
+fi
 
 ssh "$SERVER" bash -s "$SERVER_PATH" <<'SERVICE'
 set -e
@@ -111,13 +114,18 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$P
-            EnvironmentFile=$P/config.env
-            Environment=SERVER_PORT=9999
-            Environment=SOCKET_SERVER_PORT=15301
-            ExecStart=$BINARY
+EnvironmentFile=$P/config.env
+EnvironmentFile=-$P/config.local-8gb.env
+Environment=CSM_HOME=$P
+Environment=CSM_LOCAL_PROFILE=8gb
+Environment=REDIS_ENABLED=0
+Environment=CSM_SKIP_STARTUP_DB_INIT=1
+Environment=SERVER_PORT=9999
+Environment=SOCKET_SERVER_PORT=15301
+ExecStart=$BINARY
 Restart=always
 RestartSec=5
-MemoryMax=6G
+MemoryMax=7G
 LimitNOFILE=65536
 StandardOutput=journal
 StandardError=journal

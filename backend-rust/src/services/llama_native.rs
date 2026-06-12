@@ -23,6 +23,10 @@ pub struct NativeConfig {
     pub top_p: f32,
     pub top_k: i32,
     pub gpu_layers: u32,
+    pub batch_size: u32,
+    pub ubatch_size: u32,
+    pub use_mmap: bool,
+    pub use_mlock: bool,
 }
 
 struct EngineInner {
@@ -79,7 +83,9 @@ pub fn ensure_loaded(config: &NativeConfig) -> Result<()> {
 
     let backend = LlamaBackend::init().context("LlamaBackend::init failed")?;
 
-    let mut model_params = LlamaModelParams::default();
+    let mut model_params = LlamaModelParams::default()
+        .with_use_mmap(config.use_mmap)
+        .with_use_mlock(config.use_mlock);
     if config.gpu_layers > 0 {
         model_params = model_params.with_n_gpu_layers(config.gpu_layers);
     }
@@ -91,9 +97,18 @@ pub fn ensure_loaded(config: &NativeConfig) -> Result<()> {
 
     let ctx_size = NonZeroU32::new(config.context_window.max(512))
         .ok_or_else(|| anyhow!("invalid context window"))?;
+    let n_batch = config.batch_size.max(32).min(config.context_window);
+    let n_ubatch = config.ubatch_size.max(16).min(n_batch);
+
+    info!(
+        "llama context: n_ctx={} n_batch={} n_ubatch={} threads={} mmap={} mlock={}",
+        ctx_size, n_batch, n_ubatch, config.threads, config.use_mmap, config.use_mlock
+    );
+
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(Some(ctx_size))
-        .with_n_batch(ctx_size.get())
+        .with_n_batch(n_batch)
+        .with_n_ubatch(n_ubatch)
         .with_n_threads(config.threads)
         .with_n_threads_batch(config.threads);
 
@@ -169,16 +184,17 @@ where
         tokens.truncate(max_prompt_tokens);
     }
 
-    // 0 = fill context (no output cap); otherwise cap at requested value
+    // 0 env = use configured default cap (never fill entire context on low-RAM)
     let requested = max_tokens.unwrap_or(engine.config.max_tokens);
     let max_new_tokens = if requested == 0 {
-        n_ctx - tokens.len() as i32
+        engine.config.max_tokens.max(1) as i32
     } else {
         (requested as i32).min(n_ctx - tokens.len() as i32)
     };
 
-    // Batch capacity = context window so any fitting prompt can be processed in one pass
-    let mut batch = LlamaBatch::new(engine.config.context_window as usize, 1);
+    // Batch capacity = n_batch (NOT full context — n_batch=8192 OOM on 8GB server)
+    let batch_cap = engine.config.batch_size.max(32) as usize;
+    let mut batch = LlamaBatch::new(batch_cap, 1);
     let last_prompt_idx = (tokens.len() - 1) as i32;
     for (pos, token) in (0_i32..).zip(tokens.into_iter()) {
         batch.add(token, pos, &[0], pos == last_prompt_idx)?;

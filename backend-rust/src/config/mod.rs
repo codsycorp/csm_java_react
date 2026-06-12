@@ -47,6 +47,11 @@ pub struct AppConfig {
     pub ai_local_llama_top_p: f32,
     pub ai_local_llama_top_k: i32,
     pub ai_local_llama_gpu_layers: u32,
+    pub ai_local_llama_batch_size: u32,
+    pub ai_local_llama_ubatch_size: u32,
+    pub ai_local_llama_context_window_hard_cap: u32,
+    pub ai_local_llama_use_mmap: bool,
+    pub ai_local_llama_use_mlock: bool,
 }
 
 impl AppConfig {
@@ -82,16 +87,41 @@ impl AppConfig {
             },
             ai_local_llama_model_path: std::env::var("AI_LOCAL_LLAMA_MODEL_PATH")
                 .ok()
-                .map(PathBuf::from),
-            ai_local_llama_context_window: env_u32("AI_LOCAL_LLAMA_CONTEXT_WINDOW", 8192),
-            ai_local_llama_max_tokens: env_u32("AI_LOCAL_LLAMA_MAX_TOKENS", 0),
+                .map(|p| resolve_deploy_path(PathBuf::from(p))),
+            ai_local_llama_context_window: env_u32(
+                "AI_LOCAL_LLAMA_CONTEXT_WINDOW",
+                default_context_window(),
+            ),
+            ai_local_llama_max_tokens: env_u32("AI_LOCAL_LLAMA_MAX_TOKENS", default_max_tokens()),
             ai_local_llama_max_prompt_chars: env_usize("AI_LOCAL_LLAMA_MAX_PROMPT_CHARS", 32_000),
-            ai_local_llama_threads: env_i32("AI_LOCAL_LLAMA_THREADS", 4),
+            ai_local_llama_threads: env_i32("AI_LOCAL_LLAMA_THREADS", default_llama_threads()),
             ai_local_llama_temperature: env_f32("AI_LOCAL_LLAMA_TEMPERATURE", 0.2),
             ai_local_llama_top_p: env_f32("AI_LOCAL_LLAMA_TOP_P", 0.9),
             ai_local_llama_top_k: env_i32("AI_LOCAL_LLAMA_TOP_K", 40),
             ai_local_llama_gpu_layers: env_u32("AI_LOCAL_LLAMA_GPU_LAYERS", default_gpu_layers()),
+            ai_local_llama_batch_size: env_u32("AI_LOCAL_LLAMA_BATCH_SIZE", default_batch_size()),
+            ai_local_llama_ubatch_size: env_u32("AI_LOCAL_LLAMA_UBATCH_SIZE", default_ubatch_size()),
+            ai_local_llama_context_window_hard_cap: env_u32(
+                "AI_LOCAL_LLAMA_CONTEXT_WINDOW_HARD_CAP",
+                default_context_window(),
+            ),
+            ai_local_llama_use_mmap: env_flag_true("AI_LOCAL_LLAMA_USE_MMAP", !cfg!(target_os = "macos")),
+            ai_local_llama_use_mlock: env_flag_true("AI_LOCAL_LLAMA_USE_MLOCK", false),
         })
+    }
+
+    pub fn effective_llama_context_window(&self) -> u32 {
+        self.ai_local_llama_context_window
+            .min(self.ai_local_llama_context_window_hard_cap)
+            .max(512)
+    }
+
+    pub fn effective_llama_max_tokens(&self) -> u32 {
+        if self.ai_local_llama_max_tokens > 0 {
+            self.ai_local_llama_max_tokens
+        } else {
+            default_max_tokens()
+        }
     }
 
     #[cfg(feature = "local-ai")]
@@ -100,26 +130,60 @@ impl AppConfig {
             model_path: self
                 .ai_local_llama_model_path
                 .clone()
-                .unwrap_or_else(|| PathBuf::from("./csm_datas/ai_local/model/model.gguf")),
-            context_window: self.ai_local_llama_context_window,
-            max_tokens: self.ai_local_llama_max_tokens,
+                .unwrap_or_else(|| resolve_deploy_path(PathBuf::from("./csm_datas/ai_local/model/model.gguf"))),
+            context_window: self.effective_llama_context_window(),
+            max_tokens: self.effective_llama_max_tokens(),
             max_prompt_chars: self.ai_local_llama_max_prompt_chars,
             threads: self.ai_local_llama_threads,
             temperature: self.ai_local_llama_temperature,
             top_p: self.ai_local_llama_top_p,
             top_k: self.ai_local_llama_top_k,
             gpu_layers: self.ai_local_llama_gpu_layers,
+            batch_size: self.ai_local_llama_batch_size,
+            ubatch_size: self.ai_local_llama_ubatch_size,
+            use_mmap: self.ai_local_llama_use_mmap,
+            use_mlock: self.ai_local_llama_use_mlock,
         }
     }
 }
 
 fn default_gpu_layers() -> u32 {
     if cfg!(target_os = "macos") {
-        // 999 = offload all layers; Metal backend ignores values > actual layer count
         999
     } else {
         0
     }
+}
+
+fn is_low_ram_profile() -> bool {
+    let profile = std::env::var("CSM_LOCAL_PROFILE")
+        .or_else(|_| std::env::var("AI_LOCAL_MODE"))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        profile.as_str(),
+        "8gb" | "7b" | "local-8gb" | "weak" | "balanced-8gb"
+    )
+}
+
+fn default_context_window() -> u32 {
+    if is_low_ram_profile() { 8192 } else { 8192 }
+}
+
+fn default_max_tokens() -> u32 {
+    if is_low_ram_profile() { 1024 } else { 2048 }
+}
+
+fn default_llama_threads() -> i32 {
+    if is_low_ram_profile() { 3 } else { 4 }
+}
+
+fn default_batch_size() -> u32 {
+    if is_low_ram_profile() { 64 } else { 512 }
+}
+
+fn default_ubatch_size() -> u32 {
+    if is_low_ram_profile() { 32 } else { 128 }
 }
 
 fn env_i32(key: &str, default: i32) -> i32 {
