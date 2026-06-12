@@ -79,6 +79,7 @@ impl AuthHandler {
             .and_then(|v| v.as_str())
             .map(normalize_user_agent)
             .unwrap_or_default();
+        let client_id = session_client_id_from_params(params);
         let expiry = chrono::Utc::now().timestamp_millis() + 7 * 24 * 60 * 60 * 1000;
 
         self.user_service.update_session_token(
@@ -88,12 +89,14 @@ impl AuthHandler {
             &ua,
             expiry,
             next_version,
+            &client_id,
         );
 
         info!(
-            "[LOGIN] Saved session user_id={:?} login_version={} refresh_prefix={}",
+            "[LOGIN] Saved session user_id={:?} login_version={} client_id={} refresh_prefix={}",
             user.id,
             next_version,
+            if client_id.is_empty() { "-" } else { &client_id[..client_id.len().min(24)] },
             &refresh_token[..refresh_token.len().min(10)]
         );
 
@@ -344,13 +347,14 @@ impl AuthHandler {
             .and_then(|v| v.as_str())
             .map(normalize_user_agent)
             .unwrap_or_default();
+        let client_id = session_client_id_from_params(params);
 
         let mut matched_user = None;
         for refresh in &refresh_candidates {
             let Some(user) = self.user_service.find_by_refresh_token(refresh) else {
                 continue;
             };
-            if refresh_session_valid(&user, &ip, &ua) {
+            if refresh_session_valid(&user, &ip, &ua, &client_id) {
                 matched_user = Some(user);
                 break;
             }
@@ -367,7 +371,7 @@ impl AuthHandler {
         let new_refresh = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
         let expiry = chrono::Utc::now().timestamp_millis() + 7 * 24 * 60 * 60 * 1000;
         self.user_service
-            .update_session_token(&user, &new_refresh, &ip, &ua, expiry, version);
+            .update_session_token(&user, &new_refresh, &ip, &ua, expiry, version, &client_id);
 
         let token_subject = user
             .app_token
@@ -422,7 +426,7 @@ impl AuthHandler {
         }
 
         let mut domain_attr: Option<String> = None;
-        if !is_localhost && host.contains('.') {
+        if is_node_webkit && !is_localhost && host.contains('.') {
             let parts: Vec<&str> = host.split('.').collect();
             if parts.len() >= 2 {
                 let root = parts[parts.len() - 2..].join(".");
@@ -851,6 +855,16 @@ fn append_clear_auth_cookies(
             del_csrf.parse().unwrap(),
         );
     }
+}
+
+fn session_client_id_from_params(params: &Map<String, Value>) -> String {
+    params
+        .get("_client_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("")
+        .to_string()
 }
 
 fn refresh_tokens_from_params(params: &Map<String, Value>) -> Vec<String> {

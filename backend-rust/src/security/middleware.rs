@@ -17,7 +17,7 @@ use tracing::warn;
 
 use crate::security::auth::AuthUser;
 use crate::security::client_session::{
-    client_ip_from_headers, refresh_session_valid_for_middleware,
+    client_ip_from_headers, client_id_from_headers, refresh_session_valid_for_middleware,
     refresh_token_candidates, user_agent_from_headers, user_agent_matches,
 };
 use crate::services::user::user_matches_jwt_hints;
@@ -199,10 +199,11 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
 
     let client_ip = client_ip_from_headers(headers);
     let client_ua = user_agent_from_headers(headers);
+    let client_id = client_id_from_headers(headers);
     for rt in refresh_token_candidates(headers) {
         match state.user_service.find_by_refresh_token(&rt) {
             Some(user)
-                if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua)
+                if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua, &client_id)
                     && refresh_allowed_for_csm_hints(csm_present, jwt_hints.as_ref(), &user) =>
             {
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));

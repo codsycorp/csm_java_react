@@ -9,6 +9,7 @@ pub struct User {
     pub refresh_token: Option<String>,
     pub refresh_token_ip: Option<String>,
     pub refresh_token_ua: Option<String>,
+    pub refresh_token_client_id: Option<String>,
     pub refresh_token_expiry: Option<i64>,
     pub email: Option<String>,
     #[serde(alias = "pass")]
@@ -107,6 +108,13 @@ impl User {
             user.refresh_token_ua = record
                 .get("refresh_token_ua")
                 .or_else(|| record.get("refreshTokenUa"))
+                .and_then(|v| v.as_str())
+                .map(String::from);
+        }
+        if user.refresh_token_client_id.is_none() {
+            user.refresh_token_client_id = record
+                .get("refresh_token_client_id")
+                .or_else(|| record.get("refreshTokenClientId"))
                 .and_then(|v| v.as_str())
                 .map(String::from);
         }

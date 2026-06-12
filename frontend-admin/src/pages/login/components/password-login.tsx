@@ -5,6 +5,7 @@ import { resolveDevFlag, persistDevLocalFlag } from "#src/utils/dev-flag";
 import { buildLoginUserProfile, resolveLoginAppId } from "#src/utils/login-profile";
 import { parseJwtSessionClaims, sanitizeUserInfoAgainstLogin, sessionClaimsMatchUser } from "#src/utils/jwt-session";
 import { clearAuthCookies } from "#src/utils/request/auth-session";
+import { clearAuthPersistKeys } from "#src/utils/auth-storage";
 import { fetchUserInfo } from "#src/api/user";
 
 import {
@@ -48,6 +49,7 @@ function normalizeAdminRedirect(rawRedirect: string | null | undefined): string 
 
 function resetAuthArtifacts() {
 	clearAuthCookies();
+	clearAuthPersistKeys();
 	try {
 		useAuthStore.getState().reset();
 	} catch {}
@@ -55,9 +57,6 @@ function resetAuthArtifacts() {
 		useUserStore.getState().reset();
 	} catch {}
 	try {
-		localStorage.removeItem("access-token");
-		localStorage.removeItem("user-info");
-		localStorage.removeItem("refreshToken");
 		localStorage.removeItem("current_app_id");
 	} catch {}
 }

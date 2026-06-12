@@ -546,12 +546,23 @@ impl UserService {
         ua: &str,
         expiry_ms: i64,
         login_version: i32,
+        client_id: &str,
     ) {
         let mut fields = Map::new();
         fields.insert("refresh_token".into(), Value::String(refresh_token.into()));
         fields.insert("refresh".into(), Value::String(refresh_token.into()));
         fields.insert("refresh_token_ip".into(), Value::String(ip.into()));
         fields.insert("refresh_token_ua".into(), Value::String(ua.into()));
+        if !client_id.trim().is_empty() {
+            fields.insert(
+                "refresh_token_client_id".into(),
+                Value::String(client_id.trim().into()),
+            );
+            fields.insert(
+                "refreshTokenClientId".into(),
+                Value::String(client_id.trim().into()),
+            );
+        }
         fields.insert("refresh_token_expiry".into(), json!(expiry_ms));
         fields.insert("login_version".into(), json!(login_version));
         fields.insert("loginVersion".into(), json!(login_version));
@@ -995,6 +1006,11 @@ impl UserService {
             .map(String::from);
         user.refresh_token_ua = record
             .get("refresh_token_ua")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        user.refresh_token_client_id = record
+            .get("refresh_token_client_id")
+            .or_else(|| record.get("refreshTokenClientId"))
             .and_then(|v| v.as_str())
             .map(String::from);
         user.refresh_token_expiry = record

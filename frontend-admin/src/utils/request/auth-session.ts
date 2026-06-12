@@ -2,10 +2,11 @@ import { fetchRefreshToken } from "#src/api/user";
 import { useAuthStore } from "#src/store";
 
 import { AUTH_HEADER } from "./constants";
+import { readAuthPersistRaw } from "#src/utils/auth-storage";
 
 export function readPersistedAuthState(): { token?: string; refreshToken?: string; csrfToken?: string } {
 	try {
-		const raw = localStorage.getItem("access-token");
+		const raw = readAuthPersistRaw() || localStorage.getItem("access-token");
 		if (!raw) {
 			return {};
 		}

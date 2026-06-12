@@ -71,17 +71,45 @@ pub fn refresh_token_expired(user: &User) -> bool {
     expiry <= 0 || expiry <= chrono::Utc::now().timestamp_millis()
 }
 
-/// Refresh token session is bound to the IP + User-Agent stored at login/refresh.
-pub fn refresh_session_matches(user: &User, client_ip: &str, client_ua: &str) -> bool {
-    refresh_token_ip_matches(user, client_ip) && refresh_token_ua_matches(user, client_ua)
+pub fn client_id_from_headers(headers: &HeaderMap) -> String {
+    headers
+        .get("x-client-id")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default()
 }
 
-pub fn refresh_session_valid(user: &User, client_ip: &str, client_ua: &str) -> bool {
-    !refresh_token_expired(user) && refresh_session_matches(user, client_ip, client_ua)
+pub fn refresh_token_client_matches(user: &User, client_id: &str) -> bool {
+    let saved = user
+        .refresh_token_client_id
+        .as_deref()
+        .unwrap_or("")
+        .trim();
+    if saved.is_empty() {
+        return true;
+    }
+    !client_id.trim().is_empty() && saved == client_id.trim()
+}
+
+/// Refresh token session is bound to IP + User-Agent + browser client id stored at login/refresh.
+pub fn refresh_session_matches(user: &User, client_ip: &str, client_ua: &str, client_id: &str) -> bool {
+    refresh_token_ip_matches(user, client_ip)
+        && refresh_token_ua_matches(user, client_ua)
+        && refresh_token_client_matches(user, client_id)
+}
+
+pub fn refresh_session_valid(user: &User, client_ip: &str, client_ua: &str, client_id: &str) -> bool {
+    !refresh_token_expired(user) && refresh_session_matches(user, client_ip, client_ua, client_id)
 }
 
 /// Mirror Java JwtAuthenticationFilter refresh fallback (requires saved IP/UA present).
-pub fn refresh_session_valid_for_middleware(user: &User, client_ip: &str, client_ua: &str) -> bool {
+pub fn refresh_session_valid_for_middleware(
+    user: &User,
+    client_ip: &str,
+    client_ua: &str,
+    client_id: &str,
+) -> bool {
     // Java: getRefreshTokenIp() != null (empty string is allowed).
     let saved_ip = user.refresh_token_ip.as_deref();
     let saved_ua = user.refresh_token_ua.as_deref();
@@ -90,6 +118,7 @@ pub fn refresh_session_valid_for_middleware(user: &User, client_ip: &str, client
         && user.refresh_token_expiry.unwrap_or(0) > chrono::Utc::now().timestamp_millis()
         && normalize_client_ip(saved_ip.unwrap_or("")) == normalize_client_ip(client_ip)
         && user_agent_matches(client_ua, saved_ua.unwrap_or(""))
+        && refresh_token_client_matches(user, client_id)
 }
 
 pub fn cookie_from_headers(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -140,9 +169,24 @@ mod tests {
     }
 
     #[test]
-    fn user_agent_must_match_exactly() {
-        assert!(user_agent_matches("Mozilla/5.0", "Mozilla/5.0"));
-        assert!(!user_agent_matches("Mozilla/5.0 A", "Mozilla/5.0 B"));
-        assert!(!user_agent_matches("", "Mozilla/5.0"));
+    fn refresh_client_id_must_match_when_bound() {
+        use crate::model::User;
+        let mut user = User::default();
+        user.refresh_token_client_id = Some("csm-a|tab-b".into());
+        user.refresh_token_ip = Some("127.0.0.1".into());
+        user.refresh_token_ua = Some("Mozilla/5.0".into());
+        user.refresh_token_expiry = Some(chrono::Utc::now().timestamp_millis() + 60_000);
+        assert!(refresh_session_valid_for_middleware(
+            &user,
+            "127.0.0.1",
+            "Mozilla/5.0",
+            "csm-a|tab-b",
+        ));
+        assert!(!refresh_session_valid_for_middleware(
+            &user,
+            "127.0.0.1",
+            "Mozilla/5.0",
+            "csm-a|tab-c",
+        ));
     }
 }

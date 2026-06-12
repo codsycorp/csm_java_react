@@ -11,6 +11,7 @@ import { clearAllClientState } from "#src/utils/app-reset";
 
 // Local utilities
 import { AUTH_HEADER, CLIENT_ID_HEADER, LANG_HEADER } from "./constants";
+import { getClientSessionId } from "#src/utils/browser-client-id";
 import { getAuthCredentials, hasAuthSession, readPersistedAuthState } from "./auth-session";
 import { handleErrorResponse } from "./error-response";
 import { globalProgress } from "./global-progress";
@@ -40,20 +41,6 @@ function getCsrfToken() {
 	const persisted = readPersistedAuthState().csrfToken;
 	if (persisted) return persisted;
 	return null;
-}
-
-function getClientId() {
-	const cookieMatch = typeof document !== "undefined"
-		? document.cookie.match(/(?:^|; )csm_client_id=([^;]*)/)
-		: null;
-	if (cookieMatch?.[1]) {
-		return decodeURIComponent(cookieMatch[1]);
-	}
-	try {
-		return localStorage.getItem("csm_client_id") || null;
-	} catch {
-		return null;
-	}
 }
 
 // Không cần set cookie CSRF-TOKEN từ frontend nữa
@@ -130,7 +117,7 @@ const defaultConfig: Options = {
 				}
 				// Set language header for all requests
 				request.headers.set(LANG_HEADER, usePreferencesStore.getState().language);
-				const clientId = getClientId();
+				const clientId = getClientSessionId();
 				if (clientId) {
 					request.headers.set(CLIENT_ID_HEADER, clientId);
 				}

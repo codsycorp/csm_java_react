@@ -394,6 +394,9 @@ async fn parse_request_params(req: Request<Body>) -> Map<String, Value> {
     if let Some(token) = parts.headers.get("csm-token").and_then(|h| h.to_str().ok()) {
         params.insert("csm-token".into(), Value::String(token.into()));
     }
+    if let Some(client_id) = parts.headers.get("x-client-id").and_then(|h| h.to_str().ok()) {
+        params.insert("_client_id".into(), Value::String(client_id.into()));
+    }
     let cookie_rt = cookie_value(&parts.headers, "refreshToken");
     let header_rt = parts
         .headers

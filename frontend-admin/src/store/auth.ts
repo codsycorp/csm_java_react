@@ -3,7 +3,8 @@ import { fetchLogin, fetchLogout } from "#src/api/user";
 import { usePermissionStore, useTabsStore, useUserStore, useAppStore } from "#src/store";
 
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { getAuthStorage } from "#src/utils/browser-client-id";
 
 
 // No token/refreshToken needed for cookie-based auth
@@ -103,6 +104,9 @@ export const useAuthStore = create<AuthState & AuthAction>()(
 			 */
 		},
 
-	}), { name: "access-token" }),
+	}), {
+		name: "access-token",
+		storage: createJSONStorage(getAuthStorage),
+	}),
 
 );

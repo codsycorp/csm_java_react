@@ -6,7 +6,8 @@ import { getAuthCredentials } from "#src/utils/request/auth-session";
 import { useAppStore } from "#src/store/app";
 
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { getAuthStorage } from "#src/utils/browser-client-id";
 
 const initialState = {
 	userId: "",
@@ -100,6 +101,9 @@ export const useUserStore = create<UserState & UserAction>()(
 			},
 
 		}),
-		{ name: "user-info" }
+		{
+			name: "user-info",
+			storage: createJSONStorage(getAuthStorage),
+		}
 	),
 );
