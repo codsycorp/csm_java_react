@@ -66,10 +66,10 @@ export function sessionClaimsMatchUser(
 }
 
 /** Drop stale /user-info payload when it disagrees with fresh /login result. */
-export function sanitizeUserInfoAgainstLogin<T extends { userId?: string; app_token?: string }>(
-	loginPayload: T,
-	userInfoPayload: T,
-): T {
+export function sanitizeUserInfoAgainstLogin<
+	L extends { userId?: string; app_token?: string },
+	U extends { userId?: string; app_token?: string },
+>(loginPayload: L, userInfoPayload: U): U {
 	if (!userInfoPayload?.userId) return userInfoPayload;
 	if (!loginPayload?.userId) return userInfoPayload;
 	if (profileIdsMatch(loginPayload.userId, userInfoPayload.userId)) {
@@ -79,5 +79,5 @@ export function sanitizeUserInfoAgainstLogin<T extends { userId?: string; app_to
 			return userInfoPayload;
 		}
 	}
-	return {} as T;
+	return {} as U;
 }
