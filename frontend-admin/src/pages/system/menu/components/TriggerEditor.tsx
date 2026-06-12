@@ -78,20 +78,25 @@ interface TriggerEditorProps {
   pName?: string;
   pType?: number;
   editorMetadata?: Record<string, unknown>;
+  /** Thêm key vào dropdown (vd: print_*, auto_parse_*) */
+  extraOptions?: Array<{ label: string; value: string }>;
 }
 
-export function TriggerEditor({ value, onChange, appId, pName, pType, editorMetadata }: TriggerEditorProps) {
+export function TriggerEditor({ value, onChange, appId, pName, pType, editorMetadata, extraOptions = [] }: TriggerEditorProps) {
   const { t } = useTranslation();
   const TRIGGER_OPTIONS = [
-    { label: t('system.menu.trigger.datacolumntemplate'), value: "datacolumntemplate" },
-    { label: t('system.menu.trigger.datarowtemplate'), value: "datarowtemplate" },
-    { label: t('system.menu.trigger.filter'), value: "filter" },
-    { label: t('system.menu.trigger.update'), value: "update" },
-    { label: t('system.menu.trigger.barcode'), value: "barcode" },
-    { label: t('system.menu.trigger.load_db'), value: "load_db" },
-    { label: t('system.menu.trigger.report_db'), value: "report_db" },
-    { label: t('system.menu.trigger.update_db'), value: "update_db" },
-    { label: t('system.menu.trigger.delete_db'), value: "delete_db" },
+    ...[
+      { label: t('system.menu.trigger.datacolumntemplate'), value: "datacolumntemplate" },
+      { label: t('system.menu.trigger.datarowtemplate'), value: "datarowtemplate" },
+      { label: t('system.menu.trigger.filter'), value: "filter" },
+      { label: t('system.menu.trigger.update'), value: "update" },
+      { label: t('system.menu.trigger.barcode'), value: "barcode" },
+      { label: t('system.menu.trigger.load_db'), value: "load_db" },
+      { label: t('system.menu.trigger.report_db'), value: "report_db" },
+      { label: t('system.menu.trigger.update_db'), value: "update_db" },
+      { label: t('system.menu.trigger.delete_db'), value: "delete_db" },
+    ],
+    ...extraOptions.filter((opt) => opt?.value && !["datacolumntemplate", "datarowtemplate", "filter", "update", "barcode", "load_db", "report_db", "update_db", "delete_db"].includes(opt.value)),
   ];
   const [selectTrigger, setSelectTrigger] = useState<string>("load_db");
   const [codeMode, setCodeMode] = useState<string>("javascript");

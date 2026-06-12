@@ -50,6 +50,8 @@ export interface LineItemsUiConfig {
   list_title?: string;
   list_title_en?: string;
   list_title_zh?: string;
+  /** Trường ngày tham chiếu khi sinh số tự động (mặc định: field date đầu tiên) */
+  date_ref_field?: string;
   /** Nhóm field header theo thứ tự tổng hợp → chi tiết */
   field_sections?: LiFieldSection[];
   /** Lọc hàng danh sách (AND giữa các filter) */

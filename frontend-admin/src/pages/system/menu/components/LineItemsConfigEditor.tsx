@@ -8,7 +8,7 @@ import { useTranslation } from "react-i18next";
 
 import type {
 	LiColumnDef, LiGroupConfig, LiPrintConfig, LiTotalConfig,
-	LineItemsEditorConfig, LineItemsListColumn, LineItemsUiConfig,
+	LineItemsEditorConfig, LineItemsListColumn, LineItemsUiConfig, LiFieldSection,
 } from "#src/components/production-order/types";
 import { PHUSON_PANEL_CONFIG } from "#src/components/production-order/defaultConfig";
 import { ensureTriLangLabels } from "#src/components/production-order/line-items-label";
@@ -58,6 +58,10 @@ function newTotalCfg(): LiTotalConfig {
 		label: "",
 		formula: "groupSum",
 	}, "label") as LiTotalConfig;
+}
+
+function newFieldSection(): LiFieldSection {
+	return ensureTriLangLabels({ key: "", label: "", fields: [] }, "label") as LiFieldSection;
 }
 
 export default function LineItemsConfigEditor({
@@ -164,7 +168,7 @@ export default function LineItemsConfigEditor({
 				message={t("system.menu.lineItemsConfigHintTitle", "Form dòng hàng + in PDF (type_form=7)")}
 				description={t(
 					"system.menu.lineItemsConfigHintDesc",
-					"Tab Trường bảng: f_types (ed/co/memo/nummeric/price/date…) + f_width_col. Combo co: f_cbo_query JSON + f_grid_fields dạng ten_kh->khach_hang. Tab Dòng tổng: công thức A–D dùng chung form + in PDF (utils.buildTotalsHtml). Tab Trigger: HTML in.",
+					"Tab Trường bảng: f_li_auto + f_li_auto_format/f_li_auto_parse (hoặc JS fn). Tab Dòng hàng: cột, tổng, field_sections.",
 				)}
 			/>
 
@@ -500,6 +504,105 @@ export default function LineItemsConfigEditor({
 											</Col>
 										</Row>
 									))}
+									<Form.Item label={t("system.menu.lineItemsDateRef", "Trường ngày tham chiếu (auto số)")}>
+										<Select
+											allowClear
+											showSearch
+											style={{ width: "100%" }}
+											value={uiCfg.date_ref_field ?? undefined}
+											options={fieldOptions}
+											onChange={v => patch({
+												line_items_ui: { ...uiCfg, date_ref_field: v || undefined },
+											})}
+											placeholder="ngay"
+										/>
+									</Form.Item>
+									<Card size="small" title={t("system.menu.lineItemsFieldSections", "Nhóm field header (field_sections)")} style={{ marginTop: 12 }}>
+										<Button
+											type="dashed"
+											icon={<PlusOutlined />}
+											style={{ marginBottom: 12 }}
+											onClick={() => patch({
+												line_items_ui: {
+													...uiCfg,
+													field_sections: [...(uiCfg.field_sections ?? []), newFieldSection()],
+												},
+											})}
+										>
+											{t("system.menu.lineItemsAddSection", "Thêm nhóm")}
+										</Button>
+										<Table
+											size="small"
+											rowKey={(_, i) => `sec-${i}`}
+											dataSource={uiCfg.field_sections ?? []}
+											pagination={false}
+											columns={[
+												{
+													title: "key",
+													dataIndex: "key",
+													width: 100,
+													render: (v, _, idx) => (
+														<Input
+															value={v}
+															onChange={e => {
+																const secs = [...(uiCfg.field_sections ?? [])];
+																secs[idx] = { ...secs[idx], key: e.target.value };
+																patch({ line_items_ui: { ...uiCfg, field_sections: secs } });
+															}}
+														/>
+													),
+												},
+												{
+													title: "VI",
+													dataIndex: "label",
+													render: (v, _, idx) => (
+														<Input
+															value={v}
+															onChange={e => {
+																const secs = [...(uiCfg.field_sections ?? [])];
+																secs[idx] = { ...secs[idx], label: e.target.value };
+																patch({ line_items_ui: { ...uiCfg, field_sections: secs } });
+															}}
+														/>
+													),
+												},
+												{
+													title: "fields",
+													dataIndex: "fields",
+													render: (v: string[], _, idx) => (
+														<Select
+															mode="multiple"
+															style={{ width: "100%" }}
+															value={v ?? []}
+															options={fieldOptions}
+															onChange={vals => {
+																const secs = [...(uiCfg.field_sections ?? [])];
+																secs[idx] = { ...secs[idx], fields: vals };
+																patch({ line_items_ui: { ...uiCfg, field_sections: secs } });
+															}}
+														/>
+													),
+												},
+												{
+													title: "",
+													width: 48,
+													render: (_, __, idx) => (
+														<Button
+															type="text"
+															danger
+															icon={<DeleteOutlined />}
+															onClick={() => patch({
+																line_items_ui: {
+																	...uiCfg,
+																	field_sections: (uiCfg.field_sections ?? []).filter((_, i) => i !== idx),
+																},
+															})}
+														/>
+													),
+												},
+											]}
+										/>
+									</Card>
 								</Form>
 							</Card>
 						),

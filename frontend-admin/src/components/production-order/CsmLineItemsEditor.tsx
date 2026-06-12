@@ -24,6 +24,7 @@ import html2pdf from "html2pdf.js";
 import { useTranslation } from "react-i18next";
 
 import { getTableData } from "#src/components/csm-grid/CsmApi";
+import { resolveTriggerBody } from "#src/components/csm-grid/csm-trigger-runner";
 import type {
   LineItemsEditorConfig, LiColumnDef, LiGroupConfig,
   LineItem, ProductGroup, OrderHeader, EditorCalcResult,
@@ -31,14 +32,15 @@ import type {
 import { resolveTriLangLabel } from "./line-items-label";
 import LineItemsHeaderForm from "./LineItemsHeaderForm";
 import { collectComboTableFetchRequests } from "#src/components/csm-grid/combo-utils";
-import { blockNonNumericKey } from "./line-items-field-utils";
+import { blockNonNumericKey, collectAutoFieldNames } from "./line-items-field-utils";
 import { useLineItemsTheme } from "./line-items-theme";
 import "./line-items-editor.css";
 import {
   computeRowValues, calcGroupResult, calcEditorTotals,
   evalPrintTemplate, evalCondition,
   soThanhChu, fmtVND, fmtNum, groupLabel,
-  buildPrintUtils, buildAutoHeaderNumbers, validateLineItemsHeader,
+  buildPrintUtils, buildAutoHeaderValues, validateLineItemsHeader,
+  resolveDateRefField,
   formatNgay, normalizeNgayString,
   newItem, newGroup,
 } from "./utils";
@@ -390,6 +392,15 @@ export default function CsmLineItemsEditor({
     p => !printKeys?.length || printKeys.includes(String(p.trigger_key ?? "")),
   );
   const headerFields: any[] = m_configs.table ?? [];
+  const autoFieldNames = useMemo(() => collectAutoFieldNames(headerFields), [headerFields]);
+  const dateRefField = useMemo(
+    () => resolveDateRefField(headerFields, uiConfig),
+    [headerFields, uiConfig],
+  );
+  const engineCtx = useMemo(
+    () => ({ triggers: m_configs.trigger, decrypt }),
+    [m_configs.trigger, decrypt],
+  );
 
   const [header, setHeader] = useState<OrderHeader>(initialValue?.header ?? {});
   const [groups, setGroups] = useState<ProductGroup[]>(
@@ -397,31 +408,34 @@ export default function CsmLineItemsEditor({
   );
   const [comboData, setComboData] = useState<Record<string, Record<string, any>[]>>({});
   const [printSettings, setPrintSettings] = useState<Record<string, any>>({});
-  const manualNumbersRef = useRef({
-    so_bao_gia: Boolean(initialValue?.header?.so_bao_gia),
-    so_lenh: Boolean(initialValue?.header?.so_lenh),
-    hieu_luc_den: Boolean(initialValue?.header?.hieu_luc_den),
-  });
+  const manualNumbersRef = useRef<Record<string, boolean>>(
+    Object.fromEntries(autoFieldNames.map((n) => [n, Boolean(initialValue?.header?.[n])])),
+  );
 
   const applyAutoNumbers = useCallback((ngay: string, prev: OrderHeader): OrderHeader => {
     const norm = normalizeNgayString(ngay);
     if (!norm) return prev;
-    const auto = buildAutoHeaderNumbers(norm, existingRows, { excludePk: recordPk, pkField });
-    const next: OrderHeader = { ...prev, ngay: norm };
-    if (!manualNumbersRef.current.so_bao_gia) next.so_bao_gia = auto.so_bao_gia;
-    if (!manualNumbersRef.current.so_lenh) next.so_lenh = auto.so_lenh;
-    if (!manualNumbersRef.current.hieu_luc_den) next.hieu_luc_den = auto.hieu_luc_den;
-    if (!next.phien_ban) next.phien_ban = "E1";
+    const baseHeader = { ...prev, [dateRefField]: norm };
+    const auto = buildAutoHeaderValues(headerFields, baseHeader, existingRows, {
+      excludePk: recordPk,
+      pkField,
+      ui: uiConfig,
+      engineCtx,
+    });
+    const next: OrderHeader = { ...baseHeader };
+    for (const [key, val] of Object.entries(auto)) {
+      if (!manualNumbersRef.current[key]) next[key] = val;
+    }
     return next;
-  }, [existingRows, recordPk, pkField]);
+  }, [dateRefField, existingRows, headerFields, pkField, recordPk, uiConfig, engineCtx]);
 
   useEffect(() => {
     if (recordPk) return;
     setHeader((prev) => {
-      const ngay = normalizeNgayString(String(prev.ngay ?? "")) ?? formatNgay(new Date());
+      const ngay = normalizeNgayString(String(prev[dateRefField] ?? prev.ngay ?? "")) ?? formatNgay(new Date());
       return applyAutoNumbers(ngay, prev);
     });
-  }, [recordPk, existingRows, applyAutoNumbers]);
+  }, [recordPk, existingRows, applyAutoNumbers, dateRefField]);
 
   const comboFetchRequests = useMemo(
     () => collectComboTableFetchRequests(headerFields, { fallbackAppId: appId }),
@@ -466,16 +480,17 @@ export default function CsmLineItemsEditor({
   // ── Header mutations ────────────────────────────────────────────────────────
 
   const updateHeader = useCallback((key: string, val: any) => {
-    if (key === "so_bao_gia" || key === "so_lenh" || key === "hieu_luc_den") {
-      manualNumbersRef.current[key] = true;
+    const k = key.toLowerCase();
+    if (autoFieldNames.includes(k)) {
+      manualNumbersRef.current[k] = true;
     }
     setHeader(prev => {
-      if (key === "ngay") {
-        return applyAutoNumbers(String(val ?? ""), { ...prev, ngay: val });
+      if (k === dateRefField) {
+        return applyAutoNumbers(String(val ?? ""), { ...prev, [k]: val });
       }
       return { ...prev, [key]: val };
     });
-  }, [applyAutoNumbers]);
+  }, [applyAutoNumbers, autoFieldNames, dateRefField]);
 
   const patchHeader = useCallback((patch: OrderHeader) => {
     setHeader(prev => ({ ...prev, ...patch }));
@@ -525,10 +540,7 @@ export default function CsmLineItemsEditor({
       message.warning(`Chưa cấu hình mẫu in "${resolveTriLangLabel(pc, uiLang, ["label"]) || pc.trigger_key}"`);
       return;
     }
-    let fnBody = rawFn;
-    if (decrypt) {
-      try { fnBody = decrypt(rawFn) || rawFn; } catch { /* keep raw */ }
-    }
+    const fnBody = resolveTriggerBody(rawFn, decrypt);
 
     let settings = printSettings;
     if (appId) {
@@ -602,6 +614,7 @@ export default function CsmLineItemsEditor({
                 const check = validateLineItemsHeader(header, existingRows, headerFields, {
                   excludePk: recordPk,
                   pkField,
+                  engineCtx,
                 });
                 if (!check.ok) {
                   message.error(check.message ?? "Dữ liệu không hợp lệ");
@@ -635,6 +648,7 @@ export default function CsmLineItemsEditor({
           lang={uiLang}
           ui={uiConfig}
           comboData={comboData}
+          engineCtx={engineCtx}
         />
       )}
 

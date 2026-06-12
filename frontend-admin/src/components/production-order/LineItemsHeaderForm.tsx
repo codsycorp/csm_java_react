@@ -9,16 +9,19 @@ import customParseFormat from "dayjs/plugin/customParseFormat";
 
 import type { LineItemsUiConfig, OrderHeader } from "./types";
 import { resolveTriLangLabel } from "./line-items-label";
-import { fmtVND, parseSoBaoGia, parseSoLenhBase } from "./utils";
+import { fmtVND } from "./utils";
 import {
   applyGridFieldMap,
   blockNonNumericKey,
   buildComboOptionsFromRows,
+  getInputCharFilter,
   isAutoNumberField,
   isDateFieldConfig,
   parseGridFieldMap,
   resolveComboQueryMeta,
+  resolveGridDisplayColumns,
 } from "./line-items-field-utils";
+import { validateAutoFieldValue, type LiAutoEngineContext } from "./line-items-auto-engine";
 import { useLineItemsTheme } from "./line-items-theme";
 
 dayjs.extend(customParseFormat);
@@ -61,6 +64,7 @@ export interface LineItemsHeaderFormProps {
   lang: string;
   ui?: LineItemsUiConfig;
   comboData?: Record<string, Record<string, any>[]>;
+  engineCtx?: LiAutoEngineContext;
 }
 
 export default function LineItemsHeaderForm({
@@ -71,6 +75,7 @@ export default function LineItemsHeaderForm({
   lang,
   ui,
   comboData = {},
+  engineCtx,
 }: LineItemsHeaderFormProps) {
   const [gridField, setGridField] = useState<Record<string, any> | null>(null);
   const { fieldLabel } = useLineItemsTheme();
@@ -168,24 +173,23 @@ export default function LineItemsHeaderForm({
         />
       );
     }
-    if (isAutoNumberField(name)) {
+    if (isAutoNumberField(f)) {
+      const inputFilter = getInputCharFilter(f);
       return (
         <Input
           disabled={readOnly}
           value={val ?? ""}
-          placeholder={name === "so_bao_gia" ? "060626.01" : "6508"}
+          placeholder={f.f_placeholder ?? ""}
           onChange={(e) => {
-            const raw = e.target.value.replace(/[^\d./]/g, "");
+            let raw = e.target.value;
+            if (inputFilter === "doc_no") raw = raw.replace(/[^\d./]/g, "");
+            else if (inputFilter === "integer") raw = raw.replace(/\D/g, "");
             onChange(name, raw);
           }}
           onBlur={(e) => {
             const text = e.target.value.trim();
             if (!text) return;
-            if (name === "so_bao_gia" && !parseSoBaoGia(text)) {
-              onChange(name, "");
-            } else if (name === "so_lenh" && parseSoLenhBase(text) == null) {
-              onChange(name, "");
-            }
+            if (!validateAutoFieldValue(f, text, engineCtx)) onChange(name, "");
           }}
         />
       );
@@ -262,10 +266,8 @@ export default function LineItemsHeaderForm({
 
   const gridColumns = useMemo(() => {
     if (!gridField) return [];
-    const map = parseGridFieldMap(gridField);
-    const cols = Object.keys(map);
-    const display = cols.length > 0 ? cols : ["ma_kh", "ten_kh", "dia_chi", "dien_thoai"];
-    return display.filter((c) => gridRows.some((r) => r[c] != null)).map((c) => ({
+    const display = resolveGridDisplayColumns(gridField, gridRows);
+    return display.map((c) => ({
       title: c,
       dataIndex: c,
       ellipsis: true,

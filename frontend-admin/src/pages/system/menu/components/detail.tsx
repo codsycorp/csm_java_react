@@ -23,6 +23,12 @@ import TriggerEditor from "./TriggerEditor";
 import LineItemsConfigEditor from "./LineItemsConfigEditor";
 import type { LineItemsEditorConfig } from "#src/components/production-order/types";
 import { PHUSON_PANEL_CONFIG } from "#src/components/production-order/defaultConfig";
+import { getFieldLiAuto } from "#src/components/production-order/line-items-field-utils";
+import {
+  autoFormatTriggerKey,
+  autoParseTriggerKey,
+  resolveFieldAutoTriggerPrefix,
+} from "#src/components/csm-grid/csm-trigger-runner";
 import type { TableField, TriggerConfig } from "#src/components/csm-grid/CsmDynamicGrid";
 import { KANBAN_CONFIG_TEMPLATE } from "#src/components/csm-kanban";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
@@ -32,6 +38,39 @@ import { getDefaultSystemUserModeConfig, parseSystemUserModes, type SystemUserMe
 import { getMenuTypeOptions } from "../constants";
 import MenuFieldLabel from "./MenuFieldLabel";
 import { useMenuDesignerOptions } from "../utils/useMenuDesignerOptions";
+
+function buildLineItemsTriggerOptions(
+  tableRows: TableField[],
+  lineItemsConfig: Partial<LineItemsEditorConfig>,
+): Array<{ label: string; value: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ label: string; value: string }> = [];
+
+  const push = (value: string, label: string) => {
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    out.push({ value, label });
+  };
+
+  for (const pc of lineItemsConfig.line_items_print ?? []) {
+    const key = String(pc.trigger_key ?? "").trim();
+    if (key) push(key, `In PDF — ${key}`);
+  }
+  for (const key of lineItemsConfig.line_items_ui?.print_keys ?? []) {
+    const k = String(key ?? "").trim();
+    if (k) push(k, `In PDF — ${k}`);
+  }
+
+  for (const f of tableRows ?? []) {
+    if (!getFieldLiAuto(f as Record<string, any>)) continue;
+    const prefix = resolveFieldAutoTriggerPrefix(f as Record<string, any>);
+    if (!prefix) continue;
+    push(autoParseTriggerKey(prefix), `Auto parse — ${prefix}`);
+    push(autoFormatTriggerKey(prefix), `Auto format — ${prefix}`);
+  }
+
+  return out;
+}
 
 interface DetailProps {
   title: React.ReactNode;
@@ -2949,6 +2988,7 @@ export function Detail({
                   value={tableRows}
                   onChange={setTableRows}
                   appId={appId}
+                  lineItemsMode={typeForm === 7}
                   aiAssistantPName={String((detailData as any)?.p_name || "").trim() || undefined}
                   aiAssistantPType={typeof (detailData as any)?.p_type === "number" ? (detailData as any).p_type : undefined}
                   aiAssistantEditorMetadata={{ ...menuScopeAiMetadata, activeScope: "field_config" }}
@@ -2981,6 +3021,7 @@ export function Detail({
                     pName={String((detailData as any)?.p_name || "").trim() || undefined}
                     pType={typeof (detailData as any)?.p_type === "number" ? (detailData as any).p_type : undefined}
                     editorMetadata={{ ...menuScopeAiMetadata, activeScope: "menu_trigger" }}
+                    extraOptions={typeForm === 7 ? buildLineItemsTriggerOptions(tableRows, lineItemsConfig) : []}
                   />
                 </div>
               ),

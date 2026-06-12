@@ -1,4 +1,12 @@
-/** Helpers dùng chung cho header form type_form=7 */
+/** Helpers dùng chung cho header form type_form=7 — đọc metadata từ m_configs.table */
+
+export type LiAutoMode = "daily_seq" | "daily_int" | "date_offset";
+
+export interface LiAutoRule {
+  mode: LiAutoMode;
+  ref?: string;
+  days?: number;
+}
 
 export function parsePipeOptions(raw: unknown): { value: string; label: string }[] {
   const text = String(raw ?? "").trim();
@@ -102,18 +110,54 @@ export function blockNonNumericKey(e: { key: string; ctrlKey: boolean; metaKey: 
   if (e.key.length === 1 && !allowed.test(e.key)) e.preventDefault();
 }
 
-export function isDateFieldName(name: string): boolean {
-  const n = String(name ?? "").toLowerCase();
-  return /ngay|date|hieu_luc|thoi_han/.test(n);
+/** Quy tắc tự sinh / validate — cấu hình qua f_li_auto trên từng field (menu designer) */
+export function getFieldLiAuto(f: Record<string, any>): LiAutoRule | null {
+  const mode = String(f.f_li_auto ?? "").trim().toLowerCase() as LiAutoMode;
+  if (!mode || !["daily_seq", "daily_int", "date_offset"].includes(mode)) return null;
+  return {
+    mode,
+    ref: String(f.f_li_auto_ref ?? "").trim().toLowerCase() || undefined,
+    days: f.f_li_auto_days != null && f.f_li_auto_days !== "" ? Number(f.f_li_auto_days) : undefined,
+  };
+}
+
+export function isAutoNumberField(f: Record<string, any>): boolean {
+  const rule = getFieldLiAuto(f);
+  return rule?.mode === "daily_seq" || rule?.mode === "daily_int";
+}
+
+export function isDateOffsetField(f: Record<string, any>): boolean {
+  return getFieldLiAuto(f)?.mode === "date_offset";
 }
 
 export function isDateFieldConfig(f: Record<string, any>): boolean {
   const t = String(f.f_types ?? "ed").toLowerCase().trim();
-  if (["date", "datetime", "time"].includes(t)) return true;
-  return isDateFieldName(String(f.f_name ?? ""));
+  return ["date", "datetime", "time"].includes(t);
 }
 
-export function isAutoNumberField(name: string): boolean {
-  const n = String(name ?? "").toLowerCase();
-  return n === "so_bao_gia" || n === "so_lenh";
+/** Ký tự cho phép nhập — f_input_chars: doc_no | integer */
+export function getInputCharFilter(f: Record<string, any>): "doc_no" | "integer" | null {
+  const rule = getFieldLiAuto(f);
+  if (rule?.mode === "daily_seq") return "doc_no";
+  if (rule?.mode === "daily_int") return "integer";
+  const cfg = String(f.f_input_chars ?? "").trim().toLowerCase();
+  if (cfg === "doc_no" || cfg === "integer") return cfg;
+  return null;
+}
+
+export function resolveGridDisplayColumns(
+  field: Record<string, any>,
+  rows: Record<string, any>[],
+): string[] {
+  const map = parseGridFieldMap(field);
+  const fromMap = Object.keys(map);
+  if (fromMap.length > 0) return fromMap.filter((c) => rows.some((r) => r[c] != null));
+  return Object.keys(rows[0] ?? {}).filter((k) => k !== "id" && rows.some((r) => r[k] != null)).slice(0, 6);
+}
+
+export function collectAutoFieldNames(fields: Record<string, any>[]): string[] {
+  return (fields ?? [])
+    .filter((f) => getFieldLiAuto(f))
+    .map((f) => String(f.f_name ?? "").toLowerCase())
+    .filter(Boolean);
 }

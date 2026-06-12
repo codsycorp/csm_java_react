@@ -1,9 +1,15 @@
 import type {
   LiColumnDef, LiTotalConfig, LineItem,
   ProductGroup, GroupCalcResult, EditorCalcResult,
-  OrderHeader,
+  OrderHeader, LineItemsUiConfig,
 } from "./types";
 import { resolveTriLangLabel } from "./line-items-label";
+import { getFieldLiAuto, isDateFieldConfig } from "./line-items-field-utils";
+import {
+  nextAutoFieldValue,
+  validateAutoFieldValue,
+  type LiAutoEngineContext,
+} from "./line-items-auto-engine";
 
 // ─── Formula evaluation ───────────────────────────────────────────────────────
 
@@ -322,75 +328,79 @@ export function soBaoGiaPrefix(date: Date): string {
   return `${dd}${mm}${yy}`;
 }
 
+/** @deprecated Dùng parseAutoFieldValue(fieldConfig, value) — giữ cho trigger cũ */
 export function parseSoBaoGia(value?: string): { prefix: string; seq: number } | null {
   const m = String(value ?? "").trim().match(/^(\d{6})\.(\d{1,2})$/);
   if (!m) return null;
   return { prefix: m[1], seq: Number(m[2]) };
 }
 
-/** Số báo giá kế tiếp trong cùng ngày (prefix ddmmyy), không trùng với rows hiện có. */
-export function nextSoBaoGia(
-  ngay: string,
-  rows: Record<string, any>[],
-  excludePk?: string,
-  pkField = "id",
-): string {
-  const norm = normalizeNgayString(ngay);
-  const d = norm ? parseNgayDate(norm) : undefined;
-  if (!d) return formatSoBaoGia(new Date(), 1);
-  const prefix = soBaoGiaPrefix(d);
-  let maxSeq = 0;
-  for (const row of rows) {
-    if (excludePk && String(row[pkField] ?? row.id ?? "") === excludePk) continue;
-    const parsed = parseSoBaoGia(String(row.so_bao_gia ?? ""));
-    if (parsed?.prefix === prefix) maxSeq = Math.max(maxSeq, parsed.seq);
-  }
-  return formatSoBaoGia(d, maxSeq + 1);
-}
-
+/** @deprecated Dùng parseAutoFieldValue(fieldConfig, value) */
 export function parseSoLenhBase(value?: string): number | null {
-  const s = String(value ?? "").trim();
-  if (!s) return null;
-  const m = s.match(/^(\d+)/);
+  const m = String(value ?? "").trim().match(/^(\d+)/);
   return m ? Number(m[1]) : null;
 }
 
-/**
- * Số lệnh SX kế tiếp: ưu tiên tăng trong cùng ngày; ngày mới thì max toàn hệ thống + 1.
- */
-export function nextSoLenh(
-  ngay: string,
-  rows: Record<string, any>[],
-  excludePk?: string,
-  pkField = "id",
+export function resolveDateRefField(
+  headerFields: Record<string, any>[],
+  ui?: LineItemsUiConfig,
 ): string {
-  const norm = normalizeNgayString(ngay);
-  let maxGlobal = 0;
-  let maxSameDay = 0;
-  for (const row of rows) {
-    if (excludePk && String(row[pkField] ?? row.id ?? "") === excludePk) continue;
-    const base = parseSoLenhBase(String(row.so_lenh ?? ""));
-    if (base == null) continue;
-    maxGlobal = Math.max(maxGlobal, base);
-    if (norm && normalizeNgayString(String(row.ngay ?? "")) === norm) {
-      maxSameDay = Math.max(maxSameDay, base);
-    }
-  }
-  const next = maxSameDay > 0 ? maxSameDay + 1 : (maxGlobal > 0 ? maxGlobal + 1 : 1);
-  return String(next);
+  const configured = String(ui?.date_ref_field ?? "").trim().toLowerCase();
+  if (configured) return configured;
+  const first = (headerFields ?? []).find(
+    (f) => isDateFieldConfig(f) && String(f.f_types ?? "").toLowerCase() === "date",
+  );
+  return String(first?.f_name ?? "ngay").toLowerCase();
 }
 
+/** Sinh giá trị auto cho các field có f_li_auto trong menu config. */
+export function buildAutoHeaderValues(
+  headerFields: Record<string, any>[],
+  header: OrderHeader,
+  rows: Record<string, any>[],
+  opts?: {
+    excludePk?: string;
+    pkField?: string;
+    ui?: LineItemsUiConfig;
+    engineCtx?: LiAutoEngineContext;
+  },
+): Record<string, any> {
+  const pkField = opts?.pkField ?? "id";
+  const dateRef = resolveDateRefField(headerFields, opts?.ui);
+  const ngayRaw = String(header[dateRef] ?? "").trim();
+  const norm = normalizeNgayString(ngayRaw) ?? formatNgay(new Date());
+  const out: Record<string, any> = {};
+
+  for (const f of headerFields ?? []) {
+    const name = String(f.f_name ?? "").toLowerCase();
+    if (!name) continue;
+    if (!getFieldLiAuto(f)) continue;
+    out[name] = nextAutoFieldValue(f, norm, name, rows, {
+      excludePk: opts?.excludePk,
+      pkField,
+      dateRefField: dateRef,
+      header,
+      engineCtx: opts?.engineCtx,
+    });
+  }
+  return out;
+}
+
+/** @deprecated — dùng buildAutoHeaderValues */
 export function buildAutoHeaderNumbers(
   ngay: string,
   rows: Record<string, any>[],
   opts?: { excludePk?: string; pkField?: string },
 ): { so_bao_gia: string; so_lenh: string; hieu_luc_den: string } {
+  const stubBg = { f_li_auto: "daily_seq", f_li_auto_format: "{dd}{mm}{yy}.{seq:02}", f_li_auto_parse: String.raw`^(\d{6})\.(\d{1,2})$`, f_li_auto_prefix_group: 1, f_li_auto_seq_group: 2 };
+  const stubLenh = { f_li_auto: "daily_int", f_li_auto_parse: String.raw`^(\d+)`, f_li_auto_num_group: 1 };
+  const stubHl = { f_li_auto: "date_offset", f_li_auto_days: 5, f_li_auto_ref: "ngay" };
   const norm = normalizeNgayString(ngay) ?? formatNgay(new Date());
-  const pkField = opts?.pkField ?? "id";
+  const pk = opts?.pkField ?? "id";
   return {
-    so_bao_gia: nextSoBaoGia(norm, rows, opts?.excludePk, pkField),
-    so_lenh: nextSoLenh(norm, rows, opts?.excludePk, pkField),
-    hieu_luc_den: addDaysToNgay(norm, 5) ?? "",
+    so_bao_gia: nextAutoFieldValue(stubBg, norm, "so_bao_gia", rows, { ...opts, pkField: pk, dateRefField: "ngay" }),
+    so_lenh: nextAutoFieldValue(stubLenh, norm, "so_lenh", rows, { ...opts, pkField: pk, dateRefField: "ngay" }),
+    hieu_luc_den: nextAutoFieldValue(stubHl, norm, "hieu_luc_den", rows, { dateRefField: "ngay" }),
   };
 }
 
@@ -398,7 +408,7 @@ export function validateLineItemsHeader(
   header: OrderHeader,
   rows: Record<string, any>[],
   headerFields: Record<string, any>[],
-  opts?: { excludePk?: string; pkField?: string },
+  opts?: { excludePk?: string; pkField?: string; engineCtx?: LiAutoEngineContext },
 ): { ok: boolean; message?: string } {
   const pkField = opts?.pkField ?? "id";
   const excludePk = opts?.excludePk;
@@ -406,46 +416,45 @@ export function validateLineItemsHeader(
   for (const f of headerFields) {
     const name = String(f.f_name ?? "").toLowerCase();
     if (!name) continue;
-    const types = String(f.f_types ?? "ed").toLowerCase();
+    const label = String(f.f_header ?? name);
     const val = header[name];
     if (val == null || val === "") continue;
-    const isDate = types === "date" || types === "datetime"
-      || /ngay|date|hieu_luc|thoi_han/.test(name);
-    if (isDate && types !== "datetime") {
+
+    const types = String(f.f_types ?? "ed").toLowerCase();
+    if (isDateFieldConfig(f) && types !== "datetime") {
       if (!isValidNgay(String(val))) {
-        const label = String(f.f_header ?? name);
         return { ok: false, message: `"${label}" không hợp lệ (định dạng DD/MM/YYYY)` };
       }
     }
-  }
 
-  const ngay = String(header.ngay ?? "").trim();
-  if (ngay && !isValidNgay(ngay)) {
-    return { ok: false, message: "Ngày lập không hợp lệ (định dạng DD/MM/YYYY)" };
-  }
+    const rule = getFieldLiAuto(f);
+    if (rule && !validateAutoFieldValue(f, String(val), opts?.engineCtx)) {
+      const hint = String(f.f_placeholder ?? f.f_li_auto_format ?? "").trim();
+      return {
+        ok: false,
+        message: hint
+          ? `"${label}" không đúng định dạng (vd: ${hint})`
+          : `"${label}" không đúng định dạng`,
+      };
+    }
 
-  const soBg = String(header.so_bao_gia ?? "").trim();
-  if (soBg && !parseSoBaoGia(soBg)) {
-    return { ok: false, message: "Số báo giá không đúng định dạng (vd: 060626.01)" };
-  }
-  if (soBg) {
-    const dup = rows.find((row) => {
-      if (excludePk && String(row[pkField] ?? row.id ?? "") === excludePk) return false;
-      return String(row.so_bao_gia ?? "").trim() === soBg;
-    });
-    if (dup) return { ok: false, message: `Số báo giá "${soBg}" đã tồn tại` };
-  }
+    const pattern = String(f.f_validate ?? "").trim();
+    if (pattern) {
+      try {
+        if (!new RegExp(pattern).test(String(val))) {
+          return { ok: false, message: `"${label}" không đúng định dạng yêu cầu` };
+        }
+      } catch { /* invalid regex in config — skip */ }
+    }
 
-  const soLenh = String(header.so_lenh ?? "").trim();
-  if (soLenh && parseSoLenhBase(soLenh) == null) {
-    return { ok: false, message: "Số lệnh SX phải là số (vd: 6508)" };
-  }
-  if (soLenh) {
-    const dup = rows.find((row) => {
-      if (excludePk && String(row[pkField] ?? row.id ?? "") === excludePk) return false;
-      return String(row.so_lenh ?? "").trim() === soLenh;
-    });
-    if (dup) return { ok: false, message: `Số lệnh SX "${soLenh}" đã tồn tại` };
+    if (rule?.mode === "daily_seq" || rule?.mode === "daily_int" || Number(f.f_unique ?? 0) === 1) {
+      const text = String(val).trim();
+      const dup = rows.find((row) => {
+        if (excludePk && String(row[pkField] ?? row.id ?? "") === excludePk) return false;
+        return String(row[name] ?? "").trim() === text;
+      });
+      if (dup) return { ok: false, message: `"${label}" "${text}" đã tồn tại` };
+    }
   }
 
   return { ok: true };

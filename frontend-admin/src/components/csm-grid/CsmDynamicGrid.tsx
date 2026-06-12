@@ -4,6 +4,7 @@ import { BasicTable } from "#src/components/basic-table";
 import { updateTableData, getTableData, bulkUpdateTableData } from "./CsmApi";
 import CsmEditModal, { DetailGridTab } from "./CsmEditModal";
 import { csmDecrypt, csmEncrypt } from "./CsmCrypto";
+import { compileMenuTrigger, resolveTriggerBody, safeEval } from "./csm-trigger-runner";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
 import { dateFormat, chuyenNgay, TruNgayRaSoNgay, CongNgay, CongGio, validateEmail, validatePhone, DateUtils } from "#src/utils/dateUtils";
 import { useSocket } from "#src/hooks/useSocket";
@@ -127,36 +128,6 @@ function buildRowKey(row: Row | null | undefined, pkFields: string[]): string {
 		return `id:${String(row.id)}`;
 	}
 	return JSON.stringify(row);
-}
-
-function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): ((...a: TArgs) => TReturn) | null {
-	try {
-		// Ensure a return if missing - but don't wrap if it's already a function call or has return
-		const trimmed = body.trim();
-		const isIIFE = trimmed.startsWith('(function') || trimmed.startsWith('(() =>') || trimmed.startsWith('(async') || trimmed.startsWith('(async () =>');
-		const isFuncDecl = trimmed.startsWith('function ');
-		const hasReturn = trimmed.includes('return ');
-		const hasSideEffects = /\b(alert|console\.|debugger|throw|window\.)/.test(trimmed);
-		
-		const code = (isIIFE || isFuncDecl || hasReturn || hasSideEffects) ? body : `return (${body})`;
-		return new Function(...args, code) as any;
-	} catch (err) {
-		// If it's a SyntaxError, check if it looks like encrypted code that wasn't decrypted
-		if (err instanceof SyntaxError) {
-			const hasJSSyntax = /[{}()\[\];:,.\s]|return|function|const|let|var|if|for|while|=>|alert|console/.test(body);
-			const hasBase64Pattern = /[A-Za-z0-9_\-\/]{50,}/.test(body);
-			
-			if (!hasJSSyntax && hasBase64Pattern) {
-				console.warn("[safeEval] Code looks encrypted but not decrypted - skipping execution:", body.substring(0, 100));
-				return null;
-			}
-		}
-		
-		console.error("[safeEval] Error creating function:", err);
-		console.error("[safeEval] Args:", args);
-		console.error("[safeEval] Body (first 500 chars):", body.substring(0, 500));
-		return null;
-	}
 }
 
 function resolveNumberLocale(langInput?: string): string {
@@ -1502,17 +1473,13 @@ export function CsmDynamicGrid({
 	// Signature: Function("seft", "data", "bang", code)
 	// Returns: updated row data
 	const runRowTrigger = (triggerName: string, rowData: Row, merge: boolean = true): Row => {
-		let code = (m_configs.trigger as any)?.[triggerName];
-		if (!code) return rowData;
-		
-		// Use provided decrypt OR fall back to csmDecrypt
 		const effectiveDecrypt = decrypt || csmDecrypt;
-		try {
-			code = effectiveDecrypt(code);
-		} catch (err) {
-			console.warn(`Decrypt failed for ${triggerName} trigger, using raw code:`, err);
-		}
-		const fn = safeEval(["seft", "data", "bang"], code) as ((seft: any, data: Row, bang: Database) => any) | null;
+		const fn = compileMenuTrigger<[any, Row, Database], any>(
+			m_configs.trigger as Record<string, unknown>,
+			triggerName,
+			["seft", "data", "bang"],
+			effectiveDecrypt,
+		);
 		if (!fn) return rowData;
 		try {
 			const seftContext = createSeftContext();
@@ -1529,17 +1496,13 @@ export function CsmDynamicGrid({
 	};
 
 	const runSideEffectTrigger = (triggerName: string, rowData: Row) => {
-		let code = (m_configs.trigger as any)?.[triggerName];
-		if (!code) return;
-		
-		// Use provided decrypt OR fall back to csmDecrypt
 		const effectiveDecrypt = decrypt || csmDecrypt;
-		try {
-			code = effectiveDecrypt(code);
-		} catch (err) {
-			console.warn(`Decrypt failed for ${triggerName} trigger, using raw code:`, err);
-		}
-		const fn = safeEval(["seft", "data", "bang"], code) as ((seft: any, data: Row, bang: Database) => any) | null;
+		const fn = compileMenuTrigger<[any, Row, Database], any>(
+			m_configs.trigger as Record<string, unknown>,
+			triggerName,
+			["seft", "data", "bang"],
+			effectiveDecrypt,
+		);
 		if (!fn) return;
 		try {
 			fn({ m_configs, context, database }, JSON.parse(JSON.stringify(rowData)), database);

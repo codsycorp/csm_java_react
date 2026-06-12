@@ -263,6 +263,21 @@ return \`<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${PRINT_CSS.rep
 </div></body></html>\`;
 `;
 
+// ─── AUTO FIELD TRIGGERS (tab Trigger — mẫu tham khảo) ───────────────────────
+// Signature parse: (value, ctx) => { prefix?, seq?, num? } | null
+// Signature format: (date, seq, ctx) => string
+
+const AUTO_PARSE_SO_BAO_GIA = `const m = value.match(/^(\\d{6})\\.(\\d{1,2})$/); return m ? { prefix: m[1], seq: +m[2] } : null;`;
+
+const AUTO_FORMAT_SO_BAO_GIA = `const dd = String(date.getDate()).padStart(2, '0');
+const mm = String(date.getMonth() + 1).padStart(2, '0');
+const yy = String(date.getFullYear()).slice(-2);
+return dd + mm + yy + '.' + String(seq).padStart(2, '0');`;
+
+const AUTO_PARSE_SO_LENH = `const m = value.match(/^(\\d+)/); return m ? { num: +m[1] } : null;`;
+
+const AUTO_FORMAT_SO_LENH = `return String(seq);`;
+
 // ─── Config object (lưu vào database / menu config) ──────────────────────────
 
 export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
@@ -283,9 +298,15 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
     { f_name: "ngay",          f_header: "Ngày lập",          f_header_en: "Date",               f_header_zh: "日期",
       f_types: "date",   f_show: 1, f_stt: 1,  f_width_col: 4, f_placeholder: "09/06/2026" },
     { f_name: "so_bao_gia",    f_header: "Số báo giá",        f_header_en: "Quote no.",          f_header_zh: "报价单号",
-      f_types: "text",   f_show: 1, f_stt: 2,  f_width_col: 8, f_placeholder: "060626.01" },
+      f_types: "text",   f_show: 1, f_stt: 2,  f_width_col: 8, f_placeholder: "060626.01",
+      f_li_auto: "daily_seq",
+      f_li_auto_format: "{dd}{mm}{yy}.{seq:02}",
+      f_li_auto_parse: String.raw`^(\d{6})\.(\d{1,2})$`,
+      f_li_auto_prefix_group: 1, f_li_auto_seq_group: 2,
+      f_validate: String.raw`^\d{6}\.\d{1,2}$`, f_unique: 1, f_input_chars: "doc_no" },
     { f_name: "hieu_luc_den",  f_header: "Hiệu lực đến",      f_header_en: "Valid until",        f_header_zh: "有效期至",
-      f_types: "date",   f_show: 1, f_stt: 3,  f_width_col: 4, f_placeholder: "14/06/2026" },
+      f_types: "date",   f_show: 1, f_stt: 3,  f_width_col: 4, f_placeholder: "14/06/2026",
+      f_li_auto: "date_offset", f_li_auto_ref: "ngay", f_li_auto_days: 5 },
     { f_name: "khach_hang_id", f_header: "Chọn khách hàng",   f_header_en: "Select customer",    f_header_zh: "选择客户",
       f_types: "co",     f_show: 1, f_stt: 4,  f_width_col: 12,
       f_cbo_query: JSON.stringify({ query: [{ fields: ["id", "ten_kh"], obj_name: "tvp_khachhang", obj_where: "" }], options: [] }),
@@ -321,7 +342,10 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
     { f_name: "phien_ban",     f_header: "Phiên bản",         f_header_en: "Revision",           f_header_zh: "版本",
       f_types: "text",   f_show: 1, f_stt: 12, f_width_col: 4, f_placeholder: "E1" },
     { f_name: "so_lenh",       f_header: "Số lệnh SX",       f_header_en: "Production order no.", f_header_zh: "生产令号",
-      f_types: "text",   f_show: 1, f_stt: 13,  f_width_col: 8, f_placeholder: "6508" },
+      f_types: "text",   f_show: 1, f_stt: 13,  f_width_col: 8, f_placeholder: "6508",
+      f_li_auto: "daily_int",
+      f_li_auto_parse: String.raw`^(\d+)`, f_li_auto_num_group: 1, f_li_auto_scope: "day",
+      f_unique: 1, f_input_chars: "integer" },
     // Điều kiện giao hàng LSXNB (chi tiết)
     { f_name: "ngay_nghiem_thu", f_header: "Ngày nghiệm thu",   f_types: "date",   f_show: 1, f_stt: 30, f_width_col: 8 },
     { f_name: "van_chuyen_nd",   f_header: "Vận chuyển (chi tiết)", f_types: "text", f_show: 1, f_stt: 31, f_width_col: 12 },
@@ -371,6 +395,7 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
   line_items_ui: {
     header_title: "Thông tin đơn hàng",
     list_title: "Báo giá | LSXNB | LSX-PXK",
+    date_ref_field: "ngay",
     create_label: "Tạo mới",
     edit_label: "Chỉnh sửa",
     back_label: "← Danh sách",
@@ -432,5 +457,9 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
     print_bao_gia: FN_BAO_GIA,
     print_lenh_sx: FN_LENH_SX,
     print_pxk:     FN_PXK,
+    auto_parse_so_bao_gia: AUTO_PARSE_SO_BAO_GIA,
+    auto_format_so_bao_gia: AUTO_FORMAT_SO_BAO_GIA,
+    auto_parse_so_lenh: AUTO_PARSE_SO_LENH,
+    auto_format_so_lenh: AUTO_FORMAT_SO_LENH,
   },
 };

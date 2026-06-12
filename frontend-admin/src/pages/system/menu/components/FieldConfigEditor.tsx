@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Space, Table, Tag, Modal, Form, Input, InputNumber, Select, Switch, Row, Col, message, Card, Tooltip } from "antd";
+import { Button, Space, Table, Tag, Modal, Form, Input, InputNumber, Select, Switch, Row, Col, message, Card, Tooltip, Alert } from "antd";
 import { PlusOutlined, EditOutlined, CopyOutlined, DeleteOutlined, ImportOutlined, ArrowUpOutlined, ArrowDownOutlined } from "@ant-design/icons";
 import type { TableField } from "#src/components/csm-grid/CsmDynamicGrid";
 import CodeMirror from "#src/components/editor/CodeMirrorWithAiAssistant";
@@ -20,6 +20,8 @@ interface FieldConfigEditorProps {
   aiAssistantPName?: string;
   aiAssistantPType?: number;
   aiAssistantEditorMetadata?: Record<string, unknown>;
+  /** type_form=7 — hiện thêm cấu hình header line items */
+  lineItemsMode?: boolean;
 }
 
 const TYPE_OPTIONS = [
@@ -147,7 +149,7 @@ function CodeArea({
   );
 }
 
-export function FieldConfigEditor({ value, onChange, appId, aiAssistantPName, aiAssistantPType, aiAssistantEditorMetadata }: FieldConfigEditorProps) {
+export function FieldConfigEditor({ value, onChange, appId, aiAssistantPName, aiAssistantPType, aiAssistantEditorMetadata, lineItemsMode }: FieldConfigEditorProps) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState<TableField | null>(null);
   const [open, setOpen] = useState(false);
@@ -688,6 +690,148 @@ export function FieldConfigEditor({ value, onChange, appId, aiAssistantPName, ai
               }}
             />
           </Form.Item>
+
+          {lineItemsMode ? (
+            <>
+              <Card size="small" title="Line Items (type_form=7)" style={{ marginTop: 8 }}>
+                <Row gutter={12}>
+                  <Col span={8}>
+                    <Form.Item name="f_width_col" label="Col span (1–24)" tooltip="Độ rộng cột trên form header">
+                      <InputNumber style={{ width: "100%" }} min={1} max={24} placeholder="12" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={16}>
+                    <Form.Item name="f_placeholder" label="Placeholder">
+                      <Input placeholder="060626.01" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Row gutter={12}>
+                  <Col span={8}>
+                    <Form.Item name="f_li_auto" label="Tự sinh giá trị" tooltip="daily_seq: ddmmyy.NN | daily_int: số tăng | date_offset: ngày + N">
+                      <Select allowClear placeholder="Không tự sinh" options={[
+                        { value: "daily_seq", label: "daily_seq — Số thứ tự theo ngày (ddmmyy.01)" },
+                        { value: "daily_int", label: "daily_int — Số nguyên tăng dần" },
+                        { value: "date_offset", label: "date_offset — Ngày tham chiếu + N ngày" },
+                      ]} />
+                    </Form.Item>
+                  </Col>
+                  <Col span={8}>
+                    <Form.Item name="f_li_auto_ref" label="Tham chiếu field" tooltip="Field ngày cho date_offset (vd: ngay)">
+                      <Input placeholder="ngay" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={8}>
+                    <Form.Item name="f_li_auto_days" label="Số ngày cộng" tooltip="Chỉ dùng với date_offset">
+                      <InputNumber style={{ width: "100%" }} min={0} placeholder="5" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Row gutter={12}>
+                  <Col span={12}>
+                    <Form.Item name="f_li_auto_format" label="Format template" tooltip="{dd}{mm}{yy}.{seq:02} — daily_seq">
+                      <Input placeholder="{dd}{mm}{yy}.{seq:02}" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item name="f_li_auto_parse" label="Parse regex" tooltip="Nhóm capture: prefix_group, seq_group, num_group">
+                      <Input placeholder="^(\d{6})\.(\d{1,2})$" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Row gutter={12}>
+                  <Col span={6}>
+                    <Form.Item name="f_li_auto_prefix_group" label="Prefix group #">
+                      <InputNumber style={{ width: "100%" }} min={1} placeholder="1" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={6}>
+                    <Form.Item name="f_li_auto_seq_group" label="Seq group #">
+                      <InputNumber style={{ width: "100%" }} min={1} placeholder="2" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={6}>
+                    <Form.Item name="f_li_auto_num_group" label="Num group #">
+                      <InputNumber style={{ width: "100%" }} min={1} placeholder="1" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={6}>
+                    <Form.Item name="f_li_auto_scope" label="Scope (daily_int)" tooltip="day: ưu tiên cùng ngày | global: max toàn bảng">
+                      <Select allowClear placeholder="day" options={[
+                        { value: "day", label: "day" },
+                        { value: "global", label: "global" },
+                      ]} />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Row gutter={12}>
+                  <Col span={12}>
+                    <Form.Item name="f_validate" label="Validate (regex bổ sung)" tooltip="Nếu trống, dùng f_li_auto_parse">
+                      <Input placeholder="^\\d{6}\\.\\d{1,2}$" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={6}>
+                    <Form.Item name="f_unique" label="Không trùng" valuePropName="checked">
+                      <Switch />
+                    </Form.Item>
+                  </Col>
+                  <Col span={6}>
+                    <Form.Item name="f_input_chars" label="Lọc ký tự nhập">
+                      <Select allowClear options={[
+                        { value: "doc_no", label: "doc_no (số, . /)" },
+                        { value: "integer", label: "integer (chỉ số)" },
+                      ]} />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Row gutter={12}>
+                  <Col span={8}>
+                    <Form.Item
+                      name="f_li_auto_trigger"
+                      label="Trigger prefix"
+                      tooltip="Key trong tab Trigger: auto_parse_{prefix}, auto_format_{prefix}. Mặc định = tên field."
+                    >
+                      <Input placeholder="so_bao_gia" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={16}>
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="JS tuỳ chọn: cấu hình ở tab Trigger (auto_parse_*, auto_format_*) thay vì nhập inline bên dưới."
+                      style={{ marginTop: 30 }}
+                    />
+                  </Col>
+                </Row>
+                <Form.Item name="f_li_auto_format_fn" label="Format fn inline (legacy)" tooltip="Ưu tiên thấp hơn trigger auto_format_{prefix}">
+                  <CodeArea
+                    placeholder="return `${dd}${mm}${yy}.${String(seq).padStart(2,'0')}`;"
+                    defaultMode="javascript"
+                    aiAssistantAppId={appId}
+                    aiAssistantPName={aiAssistantPName}
+                    aiAssistantPType={aiAssistantPType}
+                    aiAssistantEditorMetadata={{
+                      ...(aiAssistantEditorMetadata || {}),
+                      activeSection: "li_auto_format_fn",
+                    }}
+                  />
+                </Form.Item>
+                <Form.Item name="f_li_auto_parse_fn" label="Parse fn inline (legacy)" tooltip="Ưu tiên thấp hơn trigger auto_parse_{prefix}">
+                  <CodeArea
+                    placeholder="const m = value.match(/^(\\d{6})\\.(\\d+)/); return m ? { prefix: m[1], seq: +m[2] } : null;"
+                    defaultMode="javascript"
+                    aiAssistantAppId={appId}
+                    aiAssistantPName={aiAssistantPName}
+                    aiAssistantPType={aiAssistantPType}
+                    aiAssistantEditorMetadata={{
+                      ...(aiAssistantEditorMetadata || {}),
+                      activeSection: "li_auto_parse_fn",
+                    }}
+                  />
+                </Form.Item>
+              </Card>
+            </>
+          ) : null}
         </Form>
       </Modal>
 

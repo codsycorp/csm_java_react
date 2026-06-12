@@ -26,49 +26,7 @@ import { useUserStore } from "#src/store/user";
 import { getTableData } from "./CsmApi";
 import { normalizeComboOptions, resolveComboQueryAppId, buildRoleComboOptions, getComboTableRows, buildRoleComboValueEnum, buildRoleComboSelectEnum, resolveRoleComboLabel, parseFieldOptions, getLegacyFallbackComboQuery, resolveEffectiveComboQueryText } from "./combo-utils";
 import { formatDateForStorage, parseDateValueToDayjs, resolveDateLocaleFormat } from "#src/utils/dateControl";
-
-// Helper: safeEval for trigger execution (same as CsmDynamicGrid)
-// CRITICAL: Handle both side-effect triggers (alert, console.log) and return-value triggers
-function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): ((...a: TArgs) => TReturn) | null {
-	try {
-		// Check if body looks encrypted (Base64-like pattern)
-		// Encrypted trigger code usually looks like: YWxl2nQ8... (mix of letters, numbers, special chars)
-		const looksEncrypted = /^[A-Za-z0-9_\-\/]+$/.test(body) && body.length > 50 && !body.includes('\n') && !body.includes('return');
-		if (looksEncrypted) {
-			console.error("[safeEval] Code looks encrypted but was not decrypted properly:", body.substring(0, 100));
-			return null;
-		}
-
-		const trimmed = body.trim();
-		// Check if it's a function declaration or IIFE
-		const isIIFE = trimmed.startsWith('(function') || trimmed.startsWith('(() =>') || trimmed.startsWith('(async') || trimmed.startsWith('(async () =>');
-		const isFuncDecl = trimmed.startsWith('function ');
-		// Check for explicit return or side effects like alert, console
-		const hasReturn = trimmed.includes('return ');
-		const hasSideEffects = /\b(alert|console\.|debugger|throw|window\.)/.test(trimmed);
-		
-		// If it's IIFE, function declaration, has explicit return, or has side effects - use as-is
-		// Otherwise wrap in return statement for expression evaluation
-		const code = (isIIFE || isFuncDecl || hasReturn || hasSideEffects) ? body : `return (${body})`;
-		
-		console.log("[safeEval] Code preparation:", { 
-			isIIFE, 
-			isFuncDecl, 
-			hasReturn, 
-			hasSideEffects,
-			originalLength: body.length,
-			willWrap: !(isIIFE || isFuncDecl || hasReturn || hasSideEffects),
-			looksEncrypted
-		});
-		
-		return new Function(...args, code) as any;
-	} catch (err) {
-		console.error("[safeEval] Error creating function:", err);
-		console.error("[safeEval] Args:", args);
-		console.error("[safeEval] Body (first 500 chars):", body.substring(0, 500));
-		return null;
-	}
-}
+import { compileMenuTrigger, resolveTriggerBody, safeEval } from "./csm-trigger-runner";
 
 // ============================================================================
 // GLOBAL CACHE: Tự động fetch missing tables cho combo queries
@@ -1941,24 +1899,18 @@ export function CsmEditModal({
     DateUtils,
   }), [m_configs, database]);
   const applyRowTrigger = useCallback((triggerName: string, data: any) => {
-    let triggerCode = (m_configs.trigger as any)?.[triggerName];
-    if (!triggerCode) {
+    if (!(m_configs.trigger as any)?.[triggerName]) {
       console.log(`[CsmEditModal.applyRowTrigger] No trigger code for: ${triggerName}`);
       return null;
     }
 
-    if (decrypt) {
-      try {
-        triggerCode = decrypt(triggerCode);
-      } catch (err) {
-      console.warn(`[CsmEditModal.applyRowTrigger] Decrypt failed for ${triggerName}, using raw trigger code`, err);
-      }
-    }
-
-    console.log(`[CsmEditModal.applyRowTrigger] Executing ${triggerName} trigger`);
-    console.log(`[CsmEditModal.applyRowTrigger] Trigger code (first 200 chars):`, triggerCode.substring(0, 200));
-
-    const fn = safeEval(["seft", "data", "bang"], triggerCode) as ((seft: any, data: any, bang: any) => any) | null;
+    const effectiveDecrypt = decrypt || csmDecrypt;
+    const fn = compileMenuTrigger<[any, any, any], any>(
+      m_configs?.trigger as Record<string, unknown>,
+      triggerName,
+      ["seft", "data", "bang"],
+      effectiveDecrypt,
+    );
     if (!fn) {
       console.error(`[CsmEditModal.applyRowTrigger] Failed to create function for: ${triggerName}`);
       return null;
