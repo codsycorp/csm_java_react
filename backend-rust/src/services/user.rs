@@ -6,7 +6,9 @@ use tracing::{info, warn};
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, User};
 use crate::util::{app_id_from_token, parse_app_token, is_dev_access_right, PermissionBitfieldUtil};
-use crate::security::user_access::{apply_main_account_permission_elevation, has_any_action_permission};
+use crate::security::user_access::{
+    apply_dev_permission_elevation, apply_main_account_permission_elevation, has_any_action_permission,
+};
 
 const CSM_APP_ID: &str = "csm";
 const ACCOUNTS_TABLE: &str = "csm_accounts";
@@ -19,6 +21,62 @@ pub struct UserService {
 impl UserService {
     pub fn new(record_manager: Arc<RecordManager>) -> Self {
         Self { record_manager }
+    }
+
+    /// Re-apply app_id from app_token + dev/main elevation (Java mapMainAccountToUser parity).
+    /// Call after loading user from DB or auth principal before login/user-info/async-routes.
+    pub fn finalize_session_profile(&self, user: &mut User, record: Option<&Map<String, Value>>) {
+        if let Some(app_id) = extract_app_id_from_token(&self.record_manager, user.app_token.as_deref()) {
+            if !app_id.is_empty() {
+                user.app_id = Some(app_id);
+            }
+        }
+
+        let is_sub_user = user.is_sub_user.unwrap_or(false)
+            || user
+                .app_token
+                .as_deref()
+                .map(|t| crate::util::is_sub_user_role(&parse_app_token(&self.record_manager, t).role))
+                .unwrap_or(false);
+        user.is_sub_user = Some(is_sub_user);
+        if is_sub_user {
+            user.dev = Some(false);
+            return;
+        }
+
+        let mut is_dev = user.dev.unwrap_or(false);
+        if let Some(token) = user.app_token.as_deref() {
+            if let Some(access_right) = extract_access_right_from_token(&self.record_manager, token) {
+                is_dev = is_dev_access_right(access_right);
+            }
+        }
+        user.dev = Some(is_dev);
+
+        let app_id = user.app_id.clone().unwrap_or_default();
+        let mut permissions = user.permissions.clone().unwrap_or_default();
+        let mut menus_permissions = user.menus_permissions.clone().unwrap_or_default();
+        let empty_record = Map::new();
+        let record_ref = record.unwrap_or(&empty_record);
+
+        if is_dev {
+            apply_dev_permission_elevation(&mut permissions, &mut menus_permissions, &app_id);
+            user.data_app_ids = Some(resolve_effective_data_app_ids(record_ref, &app_id, true));
+        } else {
+            apply_main_account_permission_elevation(&mut permissions, &mut menus_permissions, &app_id);
+        }
+
+        user.permissions = Some(permissions.clone());
+        user.menus_permissions = if menus_permissions.is_empty() {
+            None
+        } else {
+            Some(menus_permissions.clone())
+        };
+
+        let bitfield =
+            PermissionBitfieldUtil::build_bitfield(&permissions, &menus_permissions, is_dev);
+        user.permission_bitfield = Some(PermissionBitfieldUtil::to_compact_token(bitfield));
+        user.permission_schema_version = Some(PermissionBitfieldUtil::SCHEMA_V3.into());
+        user.data_scope = Some(PermissionBitfieldUtil::resolve_data_scope(bitfield));
     }
 
     pub fn find_by_id(&self, user_id: &str) -> Option<User> {
@@ -757,16 +815,7 @@ impl UserService {
         user.dev = Some(is_dev);
 
         if is_dev {
-            permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
-                &permissions,
-                &["dev".into(), "admin".into(), "scope:all".into()],
-            );
-            // Mirror Java mapMainAccountToUser: unconditionally set menus = [appId] for dev.
-            // Java line 1251-1254: if (!currentAppId.isBlank()) user.setMenusPermissions(List.of(currentAppId))
-            // This ensures frontend hasLegacyAppOnly=true → shouldBypassMenuFilter=true → all routes shown.
-            if !app_id.is_empty() {
-                menus_permissions = vec![app_id.clone()];
-            }
+            apply_dev_permission_elevation(&mut permissions, &mut menus_permissions, &app_id);
             user.data_app_ids = Some(resolve_effective_data_app_ids(record, &app_id, true));
         } else if is_main_account {
             apply_main_account_permission_elevation(&mut permissions, &mut menus_permissions, &app_id);

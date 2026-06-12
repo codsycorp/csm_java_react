@@ -21,7 +21,7 @@ use crate::security::client_session::{
     refresh_token_candidates, user_agent_from_headers, user_agent_matches,
 };
 use crate::services::user::user_ids_match;
-use crate::util::{app_id_from_token, parse_app_token, is_sub_user_role};
+use crate::util::{app_id_from_token, parse_app_token, is_sub_user_role, PermissionBitfieldUtil};
 use crate::security::rate_limit::RateLimiter;
 use crate::state::AppState;
 
@@ -280,6 +280,13 @@ fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
         user.dev = user.dev || meta.access_right > 0;
         if user.dev {
             user.data_scope = "ALL".into();
+            user.permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                &user.permissions,
+                &["dev".into(), "admin".into(), "scope:all".into()],
+            );
+            if !user.app_id.is_empty() {
+                user.menus_permissions = Some(vec![user.app_id.clone()]);
+            }
         }
     }
     user

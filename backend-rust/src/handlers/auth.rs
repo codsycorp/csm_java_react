@@ -11,7 +11,7 @@ use crate::security::client_session::{
 };
 use crate::security::jwt::JwtUtil;
 use crate::services::user::{user_ids_match, UserService};
-use crate::util::{app_id_from_token, PermissionBitfieldUtil};
+use crate::util::PermissionBitfieldUtil;
 
 pub struct AuthHandler {
     record_manager: Arc<RecordManager>,
@@ -62,11 +62,10 @@ impl AuthHandler {
             return response;
         };
 
-        // Mirror Java AuthHandler.handleLogin: dev from app_token access_right only.
-        let is_dev = self.resolve_dev_flag(&user);
+        // Mirror Java AuthHandler.handleLogin: dev + app_id from app_token via mapMainAccountToUser rules.
         let mut user = user;
-        apply_app_id_from_token(&self.record_manager, &mut user);
-        user.dev = Some(is_dev);
+        self.user_service.finalize_session_profile(&mut user, None);
+        let is_dev = user.dev.unwrap_or(false);
 
         let next_version = user.login_version.map(|v| v + 1).unwrap_or(1);
         let refresh_token = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
@@ -265,7 +264,7 @@ impl AuthHandler {
         let mut user = self
             .resolve_fresh_user(auth)
             .unwrap_or_else(|| self.user_from_auth(auth));
-        apply_app_id_from_token(&self.record_manager, &mut user);
+        self.user_service.finalize_session_profile(&mut user, None);
 
         let mut info = user.to_info_map();
         self.enrich_account_meta(&user, &mut info);
@@ -501,22 +500,26 @@ impl AuthHandler {
             }
         };
 
-        let fresh_user = auth_user.and_then(|auth| self.resolve_fresh_user(auth));
+        let fresh_user = auth_user.and_then(|auth| {
+            self.resolve_fresh_user(auth).map(|mut user| {
+                self.user_service.finalize_session_profile(&mut user, None);
+                user
+            })
+        });
 
-        // Mirror Java handleGetAsyncRoutes: authenticated principal first, DB only to fill gaps.
-        let mut permissions = auth.permissions.clone();
-        let mut menus = auth.menus_permissions.clone().unwrap_or_default();
-        let mut is_dev = auth.dev;
-
-        if let Some(user) = fresh_user {
-            if permissions.is_empty() {
-                permissions = user.permissions.clone().unwrap_or_default();
-            }
-            if menus.is_empty() {
-                menus = user.menus_permissions.clone().unwrap_or_default();
-            }
-            is_dev = self.resolve_dev_flag(&user) || user.dev.unwrap_or(false) || auth.dev;
-        }
+        let (permissions, menus, is_dev) = if let Some(user) = &fresh_user {
+            (
+                user.permissions.clone().unwrap_or_default(),
+                user.menus_permissions.clone().unwrap_or_default(),
+                user.dev.unwrap_or(false),
+            )
+        } else {
+            (
+                auth.permissions.clone(),
+                auth.menus_permissions.clone().unwrap_or_default(),
+                auth.dev,
+            )
+        };
 
         let user_role = permissions.first().cloned();
 
@@ -678,6 +681,17 @@ impl AuthHandler {
                     &["view".into(), "scope:owner".into()],
                 );
             }
+        } else if dev {
+            let app_id = user
+                .app_id
+                .as_deref()
+                .or_else(|| info.get("app_id").and_then(|v| v.as_str()))
+                .unwrap_or("");
+            crate::security::user_access::apply_dev_permission_elevation(
+                &mut permissions,
+                &mut menus_permissions,
+                app_id,
+            );
         } else if !dev {
             // Mirror Java mapMainAccountToUser — frontend isSuperPermissionProfile() needs full bitfield.
             let app_id = user
@@ -772,13 +786,6 @@ fn string_list_from_value(value: Option<&Value>) -> Vec<String> {
             .collect(),
         Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
         _ => vec![],
-    }
-}
-
-/// Always derive menu home app_id from decrypted app_token (Java mapMainAccountToUser parity).
-fn apply_app_id_from_token(record_manager: &RecordManager, user: &mut User) {
-    if let Some(app_id) = app_id_from_token(record_manager, user.app_token.as_deref()) {
-        user.app_id = Some(app_id);
     }
 }
 

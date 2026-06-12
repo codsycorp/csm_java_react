@@ -32,6 +32,21 @@ pub struct UserAccessContext {
     pub preferred_branch: String,
 }
 
+/// Mirror Java mapMainAccountToUser dev branch — menusPermissions = [app_id].
+pub fn apply_dev_permission_elevation(
+    permissions: &mut Vec<String>,
+    menus_permissions: &mut Vec<String>,
+    app_id: &str,
+) {
+    *permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+        permissions,
+        &["dev".into(), "admin".into(), "scope:all".into()],
+    );
+    if !app_id.trim().is_empty() {
+        *menus_permissions = vec![app_id.trim().to_string()];
+    }
+}
+
 pub fn apply_main_account_permission_elevation(
     permissions: &mut Vec<String>,
     menus_permissions: &mut Vec<String>,
@@ -81,10 +96,7 @@ impl UserAccessContext {
         }
 
         if user.dev {
-            permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
-                &permissions,
-                &["dev".into(), "admin".into(), "scope:all".into()],
-            );
+            apply_dev_permission_elevation(&mut permissions, &mut menus_permissions, &app_id);
         }
 
         if is_sub_user {
@@ -1130,6 +1142,40 @@ mod tests {
         assert!(!ctx.is_admin, "sub-user must not be treated as admin");
         assert!(ctx.is_sub_user);
         assert!(!ctx.permissions.iter().any(|p| p.eq_ignore_ascii_case("admin")));
+    }
+
+    #[test]
+    fn dev_user_access_context_sets_home_app_menu_scope() {
+        std::env::set_var("APP_DATA_DIR", "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas");
+        std::env::set_var(
+            "ROCKSDB_ROOT_DIR",
+            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/database",
+        );
+        let config = AppConfig::from_env().expect("config");
+        let rm = RecordManager::new(config).expect("record manager");
+        let user = AuthUser {
+            user_id: "dev-1".into(),
+            username: "dev".into(),
+            email: "dev@test.com".into(),
+            phone_number: String::new(),
+            app_token: String::new(),
+            login_version: 0,
+            permissions: vec!["admin".into()],
+            menus_permissions: Some(vec!["/system/menu".into()]),
+            permission_bitfield: None,
+            data_scope: "ALL".into(),
+            dev: true,
+            is_sub_user: false,
+            app_id: "csm".into(),
+            data_app_ids: vec![],
+            dept_id: String::new(),
+            branch_id: String::new(),
+            extra: serde_json::Map::new(),
+        };
+        let ctx = UserAccessContext::from_auth(Some(&user), &rm).expect("context");
+        assert!(ctx.is_dev);
+        assert_eq!(ctx.menus_permissions, vec!["csm".to_string()]);
+        assert!(ctx.permissions.iter().any(|p| p.eq_ignore_ascii_case("dev")));
     }
 
     #[test]
