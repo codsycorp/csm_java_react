@@ -70,7 +70,11 @@ function wrapDoc(title: string, body: string): string {
 
 type ItemsTableOpts = { showPrice?: boolean; showGroupSubtotal?: boolean };
 
-function buildItemsTable(groups: any[], utils: any, opts: boolean | ItemsTableOpts = true): string {
+function buildItemsTable(groups: any[], calc: any, utils: any, opts: boolean | ItemsTableOpts = true): string {
+  if (typeof utils?.buildItemsTableHtml === "function") {
+    const o: ItemsTableOpts = typeof opts === "boolean" ? { showPrice: opts, showGroupSubtotal: opts } : opts;
+    return utils.buildItemsTableHtml(groups, calc, utils, o);
+  }
   const o: ItemsTableOpts = typeof opts === "boolean" ? { showPrice: opts, showGroupSubtotal: opts } : opts;
   const showPrice = o.showPrice ?? true;
   const showGroupSubtotal = o.showGroupSubtotal ?? showPrice;
@@ -85,11 +89,11 @@ function buildItemsTable(groups: any[], utils: any, opts: boolean | ItemsTableOp
     rows += `<tr><td class="c it-grp" style="font-weight:bold">${label}.</td>
       <td colspan="${showPrice ? 7 : 5}" class="it-grp">${specHtml}</td></tr>`;
     if (showGroupSubtotal) {
-      const total_tt = g.items.reduce((s: number, i: any) => s + (i.thanh_tien ?? 0), 0);
-      const total_kl = g.items.reduce((s: number, i: any) => s + (i.khoi_luong ?? 0), 0);
-      const total_st = g.items.reduce((s: number, i: any) => s + (i.so_tam ?? 0), 0);
-      const prices = [...new Set(g.items.map((i: any) => i.don_gia).filter(Boolean))];
-      const uniformPrice = prices.length === 1 ? fmtVND(prices[0]) : "";
+      const gc = calc?.groups?.[g.id];
+      const total_tt = gc?.sum ?? g.items.reduce((s: number, i: any) => s + (i.thanh_tien ?? 0), 0);
+      const total_kl = gc?.kl ?? g.items.reduce((s: number, i: any) => s + (i.khoi_luong ?? 0), 0);
+      const total_st = gc?.so_tam ?? g.items.reduce((s: number, i: any) => s + (i.so_tam ?? 0), 0);
+      const uniformPrice = gc?.uniform_price != null ? fmtVND(gc.uniform_price) : "";
       const priceSubCells = showPrice
         ? `<td class="r it-sub">${uniformPrice}</td><td class="r it-sub">${fmtVND(total_tt)}</td>`
         : "";
@@ -163,7 +167,7 @@ const hdr = \`<table class="hdr">
     <td>NV bán hàng – SĐT: <b>\${order.nvkd??''}</b></td></tr></table>
   <div class="intro">\${intro}</div>\`;
 
-const items = ${buildItemsTable.toString().replace(/\n/g, " ")}(groups, utils, { showPrice: true, showGroupSubtotal: true });
+const items = ${buildItemsTable.toString().replace(/\n/g, " ")}(groups, calc, utils, { showPrice: true, showGroupSubtotal: true });
 const totals = ${buildTotals.toString().replace(/\n/g, " ")}(calc, utils);
 const defaultNotes = ${JSON.stringify(NOTES)};
 const noteLines = utils.parseNoteLines ? utils.parseNoteLines(cfg.ghi_chu_bao_gia, defaultNotes) : defaultNotes;
@@ -201,7 +205,7 @@ const hdr = \`<table class="hdr">
   <tr><td>Người mua hàng – SĐT: \${d.nguoi_lien_he??''}</td><td></td></tr>
 </table><div style="font-weight:bold;margin:6px 0 2px">* NỘI DUNG YÊU CẦU SẢN XUẤT:</div>\`;
 
-const items = ${buildItemsTable.toString().replace(/\n/g, " ")}(groups, utils, { showPrice: true, showGroupSubtotal: true });
+const items = ${buildItemsTable.toString().replace(/\n/g, " ")}(groups, calc, utils, { showPrice: true, showGroupSubtotal: true });
 const totals = ${buildTotals.toString().replace(/\n/g, " ")}(calc, utils);
 const delivery = \`<div style="font-weight:bold;margin:10px 0 4px;font-size:10.5pt">** ĐIỀU KIỆN GIAO HÀNG VÀ THANH TOÁN</div>
 <div class="dlg">
@@ -247,7 +251,7 @@ const hdr = \`<div style="text-align:center;font-style:italic;margin-bottom:6px"
   <tr><td colspan="2">NV bán hàng – SĐT: <b>\${d.nvkd??''}</b></td></tr>
 </table>\`;
 
-const items = ${buildItemsTable.toString().replace(/\n/g, " ")}(groups, utils, { showPrice: false, showGroupSubtotal: false });
+const items = ${buildItemsTable.toString().replace(/\n/g, " ")}(groups, calc, utils, { showPrice: false, showGroupSubtotal: false });
 const pxkNotes = utils.parseNoteLines ? utils.parseNoteLines(cfg.ghi_chu_lsx_pxk, []) : [];
 const pxkNoteBlock = pxkNotes.length ? ('<div class="notes"><b>Ghi chú:</b>' + pxkNotes.map((n,i)=>'<div>'+(i+1)+'. '+n+'</div>').join('') + '</div>') : '';
 const receive = '<div class="receive-line">Khách hàng nhận hàng lúc: …….... giờ …….. phút, ngày ….. tháng ….. năm ' + (parts[2]??new Date().getFullYear()) + '</div>';
@@ -363,8 +367,8 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
     { name: "ten_sp",     label: "Tên sản phẩm / Quy cách",  type: "text",    width: 200 },
     { name: "don_vi",     label: "Đơn vị", type: "select",  options: "m2|m|cái",  width: 66 },
     {
-      name: "chieu_rong", label: "Chiều rộng",  type: "number", width: 88,
-      // Với m²: đây là hệ số (1.13, 1.08…). Với m: chỉ hiển thị, không tính
+      name: "chieu_rong", label: "Chiều rộng / Hệ số",  type: "number", width: 88,
+      // m²: hệ số khổ (1.13, 1.08…). m: khổ hiển thị, không nhân vào KL.
     },
     { name: "chieu_dai",  label: "Chiều dài",   type: "number", width: 86 },
     { name: "so_tam",     label: "Số tấm",       type: "number", width: 72 },
@@ -372,7 +376,7 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
       name: "khoi_luong", label: "Khối lượng",
       // formula_or_manual: nếu manual_condition=true → cho nhập tay (Hao phí)
       type: "formula_or_manual", width: 92, align: "right",
-      formula: "don_vi === 'm' ? (chieu_dai ?? 0) * (so_tam ?? 0) : (chieu_rong ?? 1) * (chieu_dai ?? 0) * (so_tam ?? 0)",
+      formula: "don_vi === 'cái' ? (so_tam ?? 0) : don_vi === 'm' ? (chieu_dai ?? 0) * (so_tam ?? 0) : (chieu_rong ?? 1) * (chieu_dai ?? 0) * (so_tam ?? 0)",
       manual_condition: "chieu_dai == null && so_tam == null",
     },
     { name: "don_gia",    label: "Đơn giá (VNĐ)",   type: "price",   width: 118, align: "right" },

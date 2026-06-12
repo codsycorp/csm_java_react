@@ -55,6 +55,10 @@ export function computeRowValues(
   columns: LiColumnDef[],
 ): Record<string, any> {
   const result: Record<string, any> = { ...row };
+  // Cột chưa nhập → null để công thức / manual_condition tham chiếu an toàn
+  for (const col of columns) {
+    if (!(col.name in result)) result[col.name] = null;
+  }
   for (const col of columns) {
     if (col.type !== "formula" && col.type !== "formula_or_manual") continue;
     // For formula_or_manual: only compute if NOT in manual mode
@@ -133,9 +137,15 @@ export function calcGroupResult(
     }
   }
 
+  const klRounded = parseFloat(sumKL.toFixed(3));
+  // Excel: nhóm đơn giá đồng nhất → J_sub = I_nhóm × H_sub; nhóm nhiều giá → SUM(J_dòng)
+  const sum = uniformPrice && firstPrice != null
+    ? Math.round(firstPrice * klRounded)
+    : Math.round(sumTT);
+
   return {
-    sum: Math.round(sumTT),
-    kl: parseFloat(sumKL.toFixed(3)),
+    sum,
+    kl: klRounded,
     so_tam: sumSoTam,
     uniform_price: uniformPrice ? firstPrice : null,
   };
@@ -505,6 +515,64 @@ export function buildTotalsHtml(
   return `<div class="tot-wrap"><table class="tot">${rows}</table></div>${wordsHtml}`;
 }
 
+/** Bảng dòng hàng in PDF — dùng calc.groups cho dòng cộng nhóm (khớp Excel I×H / SUM). */
+export function buildItemsTableHtml(
+  groups: ProductGroup[],
+  calc: EditorCalcResult,
+  utils: { fmtVND: typeof fmtVND; fmtNum: typeof fmtNum; groupLabel: typeof groupLabel },
+  opts: { showPrice?: boolean; showGroupSubtotal?: boolean } = {},
+): string {
+  const showPrice = opts.showPrice ?? true;
+  const showGroupSubtotal = opts.showGroupSubtotal ?? showPrice;
+  const { fmtVND, fmtNum, groupLabel } = utils;
+  const priceHdr = showPrice
+    ? `<th style="width:9%">Đơn giá<br/>(VNĐ)</th><th style="width:10%">Thành tiền<br/>(VNĐ)</th>`
+    : "";
+  let rows = "";
+  for (const [gi, g] of groups.entries()) {
+    const label = groupLabel(gi);
+    const specHtml = String(g.spec ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;");
+    rows += `<tr><td class="c it-grp" style="font-weight:bold">${label}.</td>
+      <td colspan="${showPrice ? 7 : 5}" class="it-grp">${specHtml}</td></tr>`;
+    if (showGroupSubtotal) {
+      const gc = calc.groups[g.id];
+      const totalTt = gc?.sum ?? g.items.reduce((s, i) => s + Number(i.thanh_tien ?? 0), 0);
+      const totalKl = gc?.kl ?? g.items.reduce((s, i) => s + Number(i.khoi_luong ?? 0), 0);
+      const totalSt = gc?.so_tam ?? g.items.reduce((s, i) => s + Number(i.so_tam ?? 0), 0);
+      const uniformPrice = gc?.uniform_price != null ? fmtVND(gc.uniform_price) : "";
+      const priceSubCells = showPrice
+        ? `<td class="r it-sub">${uniformPrice}</td><td class="r it-sub">${fmtVND(totalTt)}</td>`
+        : "";
+      rows += `<tr><td class="it-sub"></td><td class="it-sub" colspan="3">Cộng nhóm ${label} – chưa VAT ${g.vat_rate}%</td>
+        <td class="r it-sub">${totalSt}</td><td class="r it-sub">${fmtNum(totalKl)}</td>${priceSubCells}</tr>`;
+    }
+    g.items.forEach((item, idx) => {
+      const priceCells = showPrice
+        ? `<td class="r">${item.don_gia != null ? fmtVND(item.don_gia) : ""}</td>
+           <td class="r">${item.thanh_tien ? fmtVND(item.thanh_tien) : ""}</td>`
+        : "";
+      rows += `<tr><td class="c">${idx + 1}</td><td>${item.ten_sp ?? ""}</td>
+        <td class="c">${item.don_vi ?? ""}</td>
+        <td class="r">${item.chieu_rong != null ? fmtNum(item.chieu_rong) : ""}</td>
+        <td class="r">${item.chieu_dai != null ? fmtNum(item.chieu_dai, 3) : ""}</td>
+        <td class="r">${item.so_tam != null ? item.so_tam : ""}</td>
+        <td class="r">${item.khoi_luong != null ? fmtNum(item.khoi_luong) : ""}</td>
+        ${priceCells}</tr>`;
+    });
+  }
+  return `<table class="it"><thead><tr>
+    <th style="width:4%">TT</th>
+    <th style="width:${showPrice ? "26%" : "38%"}">Tên sản phẩm/Quy cách</th>
+    <th style="width:5%">Đơn vị</th>
+    <th style="width:7%">Chiều<br/>rộng</th>
+    <th style="width:8%">Chiều<br/>dài</th>
+    <th style="width:6%">Số<br/>tấm</th>
+    <th style="width:8%">Khối<br/>lượng</th>
+    ${priceHdr}</tr></thead><tbody>${rows}</tbody></table>`;
+}
+
 export function buildPrintUtils(
   settings: Record<string, any> = {},
   opts?: { totalConfigs?: LiTotalConfig[]; lang?: string },
@@ -520,6 +588,7 @@ export function buildPrintUtils(
     formatSoLenh,
     buildCompanyHdr,
     parseNoteLines,
+    buildItemsTableHtml,
     buildTotalsHtml: (calc: EditorCalcResult, u: Record<string, any>) =>
       buildTotalsHtml(calc, u.totalConfigs ?? totalConfigs, base, u.lang ?? lang),
   };

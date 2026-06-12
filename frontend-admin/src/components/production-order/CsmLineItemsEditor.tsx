@@ -524,12 +524,32 @@ export default function CsmLineItemsEditor({
     ));
   }, []);
 
+  /** Excel: trong nhóm chia sẻ ĐVT / hệ số (m²) / đơn giá ($I$12). */
   const updateItem = useCallback((gId: string, iKey: string, field: string, val: any) => {
-    setGroups(prev => prev.map(g =>
-      g.id === gId
-        ? { ...g, items: g.items.map(i => (i.key === iKey ? { ...i, [field]: val } : i)) }
-        : g,
-    ));
+    setGroups(prev => prev.map(g => {
+      if (g.id !== gId) return g;
+      if (field === "don_vi") {
+        return { ...g, items: g.items.map(i => ({ ...i, don_vi: val })) };
+      }
+      if (field === "chieu_rong") {
+        return {
+          ...g,
+          items: g.items.map(i =>
+            (i.don_vi === "m" ? i : { ...i, chieu_rong: val }),
+          ),
+        };
+      }
+      if (field === "don_gia") {
+        const allSame = g.items.every(i => i.don_gia == null || i.don_gia === val);
+        if (allSame) {
+          return { ...g, items: g.items.map(i => ({ ...i, don_gia: val })) };
+        }
+      }
+      return {
+        ...g,
+        items: g.items.map(i => (i.key === iKey ? { ...i, [field]: val } : i)),
+      };
+    }));
   }, []);
 
   // ── Print ───────────────────────────────────────────────────────────────────

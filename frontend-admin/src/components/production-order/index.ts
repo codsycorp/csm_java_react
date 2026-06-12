@@ -10,6 +10,7 @@ export {
   evalFormula, evalCondition, computeRowValues,
   calcGroupResult, calcEditorTotals, evalPrintTemplate,
   soThanhChu, fmtVND, fmtNum, groupLabel, printUtils,
+  buildItemsTableHtml, buildPrintUtils,
   newItem, newGroup,
 } from "./utils";
 export {
