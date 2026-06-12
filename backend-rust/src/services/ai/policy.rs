@@ -27,5 +27,12 @@ pub fn local_unavailable_message() -> &'static str {
 }
 
 pub fn local_unavailable_hint() -> &'static str {
-    "Cấu hình AI_LOCAL_LLAMA_MODEL_PATH (GGUF) — inference chạy native trong Rust qua llama.cpp"
+    #[cfg(not(feature = "local-ai"))]
+    {
+        return "Binary build không có local-ai; build lại với --features local-ai";
+    }
+    #[cfg(feature = "local-ai")]
+    {
+        "Cấu hình AI_LOCAL_LLAMA_MODEL_PATH (GGUF) — inference chạy native trong Rust qua llama.cpp"
+    }
 }

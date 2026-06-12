@@ -1,0 +1,23 @@
+# Cross-compile Windows GNU từ macOS/Linux (cần mingw-w64)
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+# Nhúng libstdc++/libgcc khi link Rust (RocksDB C++ có thể vẫn cần DLL — build script copy kèm)
+rustflags = [
+  "-C", "link-arg=-static-libgcc",
+  "-C", "link-arg=-static-libstdc++",
+  "-C", "link-arg=-Wl,-Bstatic",
+  "-C", "link-arg=-lwinpthread",
+  "-C", "link-arg=-Wl,-Bdynamic",
+]
+
+# cc/cmake build native deps (rocksdb, zstd...) với cùng flag static
+[env]
+CC_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-gcc"
+CXX_x86_64_pc_windows_gnu = "x86_64-w64-mingw32-g++"
+CFLAGS_x86_64_pc_windows_gnu = "-static-libgcc -static-libstdc++"
+CXXFLAGS_x86_64_pc_windows_gnu = "-static-libgcc -static-libstdc++"
+
+# Tránh quên --no-default-features khi build Windows (local-ai = llama.cpp, không cross được)
+[alias]
+win-release = "build --target x86_64-pc-windows-gnu --release --no-default-features"
+win-check = "check --target x86_64-pc-windows-gnu --no-default-features"

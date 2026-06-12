@@ -18,6 +18,8 @@ build/
 *.jar
 *.war
 *.class
+/csm_server.exe
+/lib*.dll
 
 # Frontend build
 frontend/dist/

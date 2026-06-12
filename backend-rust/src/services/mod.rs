@@ -4,6 +4,7 @@ pub mod chat;
 pub mod crm;
 pub mod crm_analytics;
 pub mod llama_cpp;
+#[cfg(feature = "local-ai")]
 pub mod llama_native;
 pub mod media;
 pub mod google_index;

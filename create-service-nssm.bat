@@ -1,7 +1,9 @@
 @echo off
 :: Chạy với quyền Administrator
+:: PROJECT_DIR = thư mục chứa file .bat này (tự động, không cần sửa đường dẫn)
+set "PROJECT_DIR=%~dp0"
+if "%PROJECT_DIR:~-1%"=="\" set "PROJECT_DIR=%PROJECT_DIR:~0,-1%"
 set "SERVICE_NAME=CSM_Backend_Service"
-set "PROJECT_DIR=D:\hldragon250725"
 set "JAR_PREFIX=csm_server-"
 set "NSSM_EXE=%PROJECT_DIR%\nssm.exe"
 

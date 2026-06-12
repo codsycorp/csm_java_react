@@ -81,9 +81,36 @@ All 64 switch-case paths from `ApiSpringController` are routed in `src/api/route
 ## Build
 
 ```bash
+# Native (macOS/Linux) — có local AI llama.cpp
 cargo build --release
 cargo run --release
+
+# Windows cross-compile từ macOS/Linux — không link llama.cpp
+rustup target add x86_64-pc-windows-gnu   # một lần
+brew install mingw-w64                    # macOS: linker x86_64-w64-mingw32-gcc
+cargo build --target x86_64-pc-windows-gnu --release --no-default-features
+
+# Windows native hoặc Linux server có AI
+cargo build --release --features local-ai
 ```
+
+Feature `local-ai` (bật mặc định trên build native): llama.cpp in-process. Tắt bằng `--no-default-features` khi cross-compile sang Windows.
+
+Binary Windows: `target/x86_64-pc-windows-gnu/release/csm_server.exe`
+
+### Windows Service (NSSM) — exe cùng cấp csm_datas
+
+Sau `./build-windows-release.sh`, copy folder lên Windows:
+
+```
+csm_server.exe
+config.env
+csm_datas/
+nssm.exe
+install-csm-rust-service.bat   ← Admin CMD
+```
+
+Chi tiết: [`deploy/windows/README.md`](deploy/windows/README.md)
 
 ## Data compatibility
 

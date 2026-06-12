@@ -52,7 +52,7 @@ impl AppState {
         let cache_service = Arc::new(CacheService::new(&config).await?);
         let permission_service = Arc::new(PermissionService::new(record_manager.clone()));
         let crm_service = Arc::new(CrmService::new(record_manager.clone()));
-        crm_service.initialize_tables();
+        // CRM/RocksDB init deferred to main — avoid blocking or crashing before HTTP bind
         let crm_analytics = Arc::new(CrmAnalyticsService::new(crm_service.clone()));
         let chat_service = Arc::new(ChatPersistenceService::new(record_manager.clone()));
 

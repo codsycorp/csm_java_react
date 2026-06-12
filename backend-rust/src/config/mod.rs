@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -94,6 +94,7 @@ impl AppConfig {
         })
     }
 
+    #[cfg(feature = "local-ai")]
     pub fn llama_native_config(&self) -> crate::services::llama_native::NativeConfig {
         crate::services::llama_native::NativeConfig {
             model_path: self
@@ -168,7 +169,54 @@ fn env_u64(key: &str, default: u64) -> u64 {
 }
 
 fn env_path(key: &str, default: &str) -> PathBuf {
-    PathBuf::from(env_string(key, default))
+    resolve_deploy_path(PathBuf::from(env_string(key, default)))
+}
+
+fn deploy_root() -> PathBuf {
+    std::env::var("CSM_HOME")
+        .map(PathBuf::from)
+        .ok()
+        .filter(|p| p.is_dir())
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn resolve_deploy_path(path: PathBuf) -> PathBuf {
+    let base = deploy_root();
+    let joined = if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    };
+    normalize_path(&joined)
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+pub fn skip_startup_db_init() -> bool {
+    env_flag_true("CSM_SKIP_STARTUP_DB_INIT", false)
+}
+
+fn env_flag_true(key: &str, default: bool) -> bool {
+    match std::env::var(key) {
+        Ok(v) => {
+            let v = v.trim().to_ascii_lowercase();
+            v == "1" || v == "true" || v == "yes"
+        }
+        Err(_) => default,
+    }
 }
 
 pub fn ensure_dir(path: &Path) -> Result<()> {

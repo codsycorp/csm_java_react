@@ -11,24 +11,36 @@ pub struct CacheService {
 
 impl CacheService {
     pub async fn new(config: &AppConfig) -> Result<Self> {
-        let client = redis::Client::open(format!(
-            "redis://{}:{}/",
-            config.redis.host, config.redis.port
-        ))?;
-        let redis = match tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            ConnectionManager::new(client),
-        )
-        .await
-        {
-            Ok(Ok(conn)) => Some(conn),
-            Ok(Err(e)) => {
-                tracing::warn!("Redis unavailable, using in-memory only: {e}");
-                None
-            }
-            Err(_) => {
-                tracing::warn!("Redis connection timed out after 2s, continuing without cache");
-                None
+        let redis_enabled = std::env::var("REDIS_ENABLED")
+            .map(|v| {
+                let v = v.trim().to_ascii_lowercase();
+                v != "0" && v != "false" && v != "no"
+            })
+            .unwrap_or(true);
+
+        let redis = if !redis_enabled {
+            tracing::info!("Redis disabled (REDIS_ENABLED=0), using in-memory only");
+            None
+        } else {
+            let client = redis::Client::open(format!(
+                "redis://{}:{}/",
+                config.redis.host, config.redis.port
+            ))?;
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                ConnectionManager::new(client),
+            )
+            .await
+            {
+                Ok(Ok(conn)) => Some(conn),
+                Ok(Err(e)) => {
+                    tracing::warn!("Redis unavailable, using in-memory only: {e}");
+                    None
+                }
+                Err(_) => {
+                    tracing::warn!("Redis connection timed out after 2s, continuing without cache");
+                    None
+                }
             }
         };
         Ok(Self {
