@@ -1,7 +1,7 @@
 import type { UserInfoType } from "#src/api/user/types";
 import { fetchUserInfo } from "#src/api/user";
 import { normalizeUserSessionAppId } from "#src/utils/user-app-id";
-import { parseJwtSessionClaims, sessionClaimsMatchUser } from "#src/utils/jwt-session";
+import { parseJwtSessionClaims, sanitizeUserInfoAgainstLogin, sessionClaimsMatchUser } from "#src/utils/jwt-session";
 import { getAuthCredentials } from "#src/utils/request/auth-session";
 import { useAppStore } from "#src/store/app";
 
@@ -59,11 +59,16 @@ export const useUserStore = create<UserState & UserAction>()(
 				const token = (headers as Record<string, string> | undefined)?.["csm-token"]
 					|| getAuthCredentials().token;
 				const claims = parseJwtSessionClaims(token);
-				if (raw?.userId && !sessionClaimsMatchUser(claims, raw)) {
+				const persisted = useUserStore.getState();
+				const safeRaw = sanitizeUserInfoAgainstLogin(
+					{ userId: persisted.userId, app_token: persisted.app_token },
+					raw,
+				);
+				if (safeRaw?.userId && !sessionClaimsMatchUser(claims, safeRaw)) {
 					throw new Error("Session user mismatch");
 				}
 				const normalized = {
-					...raw,
+					...safeRaw,
 					app_id: normalizeUserSessionAppId({
 						app_id: raw.app_id,
 						app_token: raw.app_token,

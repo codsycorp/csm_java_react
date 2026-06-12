@@ -3,7 +3,7 @@ import { isDynamicRoutingEnabled } from "#src/router/routes/config";
 import { useAuthStore, usePermissionStore, useUserStore, useAppStore } from "#src/store";
 import { resolveDevFlag, persistDevLocalFlag } from "#src/utils/dev-flag";
 import { buildLoginUserProfile, resolveLoginAppId } from "#src/utils/login-profile";
-import { parseJwtSessionClaims, sessionClaimsMatchUser } from "#src/utils/jwt-session";
+import { parseJwtSessionClaims, sanitizeUserInfoAgainstLogin, sessionClaimsMatchUser } from "#src/utils/jwt-session";
 import { clearAuthCookies } from "#src/utils/request/auth-session";
 import { fetchUserInfo } from "#src/api/user";
 
@@ -126,13 +126,14 @@ export function PasswordLogin() {
 				return fetchUserInfo(userInfoHeaders, { omitRefreshToken: true, omitCredentials: true }).then((response: any) => {
 					const userInfoRaw = response?.result ?? {};
 					const claims = parseJwtSessionClaims(freshToken);
-					if (userInfoRaw?.userId && !sessionClaimsMatchUser(claims, userInfoRaw)) {
-						console.error("[LOGIN] user-info returned a different account than login token");
-						useAuthStore.getState().reset();
-						throw new Error("Phiên đăng nhập không khớp người dùng");
+
+					let safeUserInfo = sanitizeUserInfoAgainstLogin(loginPayload, userInfoRaw);
+					if (safeUserInfo?.userId && claims && !sessionClaimsMatchUser(claims, safeUserInfo)) {
+						console.warn("[LOGIN] user-info mismatch with token; using login payload only");
+						safeUserInfo = {};
 					}
 
-					const mergedProfile = buildLoginUserProfile(loginPayload, userInfoRaw);
+					const mergedProfile = buildLoginUserProfile(loginPayload, safeUserInfo);
 					if (!mergedProfile?.userId) {
 						console.error("[LOGIN] Failed to sync user-info and no fallback user data");
 						useAuthStore.getState().reset();
@@ -155,9 +156,6 @@ export function PasswordLogin() {
 
 					return { loginRes, userInfoResult: finalProfile, resolvedAppId };
 				}).catch((syncError: any) => {
-					if (String(syncError?.message || "").includes("Phiên đăng nhập không khớp")) {
-						throw syncError;
-					}
 					if (!loginPayload?.userId) {
 						throw syncError;
 					}
