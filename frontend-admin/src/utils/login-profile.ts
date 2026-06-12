@@ -3,6 +3,8 @@ import { normalizeUserSessionAppId } from "#src/utils/user-app-id";
 
 type LoginResultPayload = Partial<UserInfoType> & Record<string, unknown>;
 
+export type { LoginResultPayload };
+
 /**
  * Merge /user-info with /login payload — Java returns elevated profile on login;
  * user-info only refreshes profile fields without re-deriving permissions differently.

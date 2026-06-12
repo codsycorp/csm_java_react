@@ -25,32 +25,32 @@ const initialState = {
 	permissionBitfield: "",
 	permissionSchemaVersion: "",
 	dataScope: "NONE" as "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL",
+	dept_id: "",
+	branch_id: "",
 	app_id: "",
 	app_token: "",
 	account_type: "main" as "main" | "sub-user",
 	is_sub_user: false,
 	login_identifier: "",
-	dev: false, // Thêm dev flag để track quyền dev/admin
-	wholeMenus: [],
-	selectedMenuIdForTab: "", // Track selected menu for grid/report tab
+	dev: false,
+	wholeMenus: [] as unknown[],
+	selectedMenuIdForTab: "",
 };
 
-type UserState = UserInfoType & {
-	selectedMenuIdForTab: string;
-};
+type UserState = typeof initialState;
 
 interface UserAction {
 	getUserInfo: (headers?: HeadersInit) => Promise<UserInfoType>
 	reset: () => void
 	setSelectedMenuIdForTab: (menuId: string) => void
-};
+}
 
 export const useUserStore = create<UserState & UserAction>()(
 	persist(
-		set => ({
+		(set, get) => ({
 			...initialState,
 
-			getUserInfo: async (headers) => {
+			getUserInfo: async (headers?: HeadersInit): Promise<UserInfoType> => {
 				const sessionToken = (headers as Record<string, string> | undefined)?.["csm-token"]?.trim()
 					|| getAuthCredentials().token?.trim();
 				const hasSessionToken = Boolean(sessionToken);
@@ -58,20 +58,22 @@ export const useUserStore = create<UserState & UserAction>()(
 					headers,
 					hasSessionToken ? { omitRefreshToken: true, omitCredentials: true } : undefined,
 				);
-				const raw = response.result ?? {} as UserInfoType;
+				const raw = (response.result ?? {}) as UserInfoType;
 				const token = (headers as Record<string, string> | undefined)?.["csm-token"]
 					|| getAuthCredentials().token;
 				const claims = parseJwtSessionClaims(token);
-				const persisted = useUserStore.getState();
-				const safeRaw = sanitizeUserInfoAgainstLogin(
-					{ userId: persisted.userId, app_token: persisted.app_token },
-					raw,
-				);
-				const profileSource =
+				const persisted = get();
+				const loginHint = {
+					userId: persisted.userId,
+					app_token: persisted.app_token,
+				};
+				const safeRaw = sanitizeUserInfoAgainstLogin(loginHint, raw);
+				const profileSource = (
 					safeRaw?.userId && claims && !sessionClaimsMatchUser(claims, safeRaw)
-						? { userId: persisted.userId, app_token: persisted.app_token, ...persisted }
-						: safeRaw;
-				const normalized = {
+						? { ...persisted, userId: persisted.userId, app_token: persisted.app_token }
+						: safeRaw
+				) as UserInfoType;
+				const normalized: UserInfoType = {
 					...profileSource,
 					app_id: normalizeUserSessionAppId({
 						app_id: raw.app_id ?? profileSource.app_id,
@@ -80,7 +82,7 @@ export const useUserStore = create<UserState & UserAction>()(
 						dev: raw.dev ?? profileSource.dev,
 					}),
 				};
-				if (!normalized?.userId) {
+				if (!normalized.userId) {
 					throw new Error("Session user mismatch");
 				}
 				set(normalized);

@@ -502,9 +502,9 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			const normalizedMenuTokens = userMenusPermissions.map(normalizeAccessKey).filter(Boolean);
 			const hasNoExplicitMenuTokens = normalizedMenuTokens.length === 0;
 			const hasLegacyAppOnly = normalizedMenuTokens.length > 0
-				&& normalizedMenuTokens.every(token => isLegacyAppScopeToken(token, effectiveAppId));
-			const explicitAllowedKeys = new Set(
-				normalizedMenuTokens.filter(token => !isLegacyAppScopeToken(token, effectiveAppId))
+				&& normalizedMenuTokens.every((token: string) => isLegacyAppScopeToken(token, effectiveAppId));
+			const explicitAllowedKeys = new Set<string>(
+				normalizedMenuTokens.filter((token: string) => !isLegacyAppScopeToken(token, effectiveAppId))
 			);
 			const shouldBypassMenuFilter = isDev || isAdmin || hasLegacyAppOnly || hasNoExplicitMenuTokens;
 			const allowedRoutePaths = buildAllowedPathSet(routesForMenu);
@@ -632,9 +632,9 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			const normalizedMenuTokens = userMenusPermissions.map(normalizeAccessKey).filter(Boolean);
 			const hasNoExplicitMenuTokens = normalizedMenuTokens.length === 0;
 			const hasLegacyAppOnly = normalizedMenuTokens.length > 0
-				&& normalizedMenuTokens.every(token => isLegacyAppScopeToken(token, effectiveAppId));
-			const explicitAllowedKeys = new Set(
-				normalizedMenuTokens.filter(token => !isLegacyAppScopeToken(token, effectiveAppId))
+				&& normalizedMenuTokens.every((token: string) => isLegacyAppScopeToken(token, effectiveAppId));
+			const explicitAllowedKeys = new Set<string>(
+				normalizedMenuTokens.filter((token: string) => !isLegacyAppScopeToken(token, effectiveAppId))
 			);
 			const { isDev, isAdmin } = resolvePrivilegeFlags(userState, devFlag ?? userState.dev);
 			const shouldBypassMenuFilter = isDev || isAdmin || hasLegacyAppOnly || hasNoExplicitMenuTokens;

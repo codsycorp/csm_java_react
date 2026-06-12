@@ -2,7 +2,7 @@ import { BasicButton } from "#src/components";
 import { isDynamicRoutingEnabled } from "#src/router/routes/config";
 import { useAuthStore, usePermissionStore, useUserStore, useAppStore } from "#src/store";
 import { resolveDevFlag, persistDevLocalFlag } from "#src/utils/dev-flag";
-import { buildLoginUserProfile, resolveLoginAppId } from "#src/utils/login-profile";
+import { buildLoginUserProfile, resolveLoginAppId, type LoginResultPayload } from "#src/utils/login-profile";
 import { parseJwtSessionClaims, sanitizeUserInfoAgainstLogin, sessionClaimsMatchUser } from "#src/utils/jwt-session";
 import { clearAuthCookies } from "#src/utils/request/auth-session";
 import { clearAuthPersistKeys } from "#src/utils/auth-storage";
@@ -141,7 +141,7 @@ export function PasswordLogin() {
 					}
 
 					const devNormalized = resolveDevFlag(loginPayload.dev ?? mergedProfile.dev, mergedProfile.roles);
-					const resolvedAppId = resolveLoginAppId(loginPayload, mergedProfile);
+					const resolvedAppId = resolveLoginAppId(loginPayload, mergedProfile as LoginResultPayload);
 					const finalProfile = {
 						...mergedProfile,
 						dev: devNormalized,
@@ -161,7 +161,7 @@ export function PasswordLogin() {
 					console.warn("[LOGIN] user-info sync failed, continue with login payload:", syncError);
 					const mergedProfile = buildLoginUserProfile(loginPayload, {});
 					const devNormalized = resolveDevFlag(loginPayload.dev ?? mergedProfile.dev, mergedProfile.roles);
-					const resolvedAppId = resolveLoginAppId(loginPayload, mergedProfile);
+					const resolvedAppId = resolveLoginAppId(loginPayload, mergedProfile as LoginResultPayload);
 					const finalProfile = {
 						...mergedProfile,
 						dev: devNormalized,
