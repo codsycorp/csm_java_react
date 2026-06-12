@@ -21,6 +21,22 @@ export function readPersistedAuthState(): { token?: string; refreshToken?: strin
 	}
 }
 
+export function clearAuthCookies() {
+	if (typeof document === "undefined") return;
+	const host = typeof window !== "undefined" ? window.location.hostname : "";
+	const domains = [""];
+	if (host.includes(".") && host !== "localhost" && host !== "127.0.0.1") {
+		const parts = host.split(".");
+		if (parts.length >= 2) {
+			domains.push(`; domain=.${parts.slice(-2).join(".")}`);
+		}
+	}
+	for (const domain of domains) {
+		document.cookie = `refreshToken=; Path=/; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT${domain}`;
+		document.cookie = `CSRF-TOKEN=; Path=/; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT${domain}`;
+	}
+}
+
 export function getAuthCredentials() {
 	const persisted = readPersistedAuthState();
 	try {
@@ -50,8 +66,9 @@ export function applyAuthHeadersToRequest(request: Request) {
 	const isLoginRequest = request.url.includes("/login");
 	const isRefreshRequest = request.url.includes("/refresh-token");
 	const creds = getAuthCredentials();
-	if (creds.token && !isLoginRequest && !isRefreshRequest) {
-		request.headers.set(AUTH_HEADER, creds.token);
+	const existingToken = request.headers.get(AUTH_HEADER)?.trim();
+	if ((existingToken || creds.token) && !isLoginRequest && !isRefreshRequest) {
+		request.headers.set(AUTH_HEADER, existingToken || creds.token || "");
 	}
 	if (creds.refreshToken && !isLoginRequest) {
 		request.headers.set("X-Refresh-Token", creds.refreshToken);

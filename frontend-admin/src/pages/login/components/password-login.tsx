@@ -4,6 +4,7 @@ import { useAuthStore, usePermissionStore, useUserStore, useAppStore } from "#sr
 import { resolveDevFlag, persistDevLocalFlag } from "#src/utils/dev-flag";
 import { buildLoginUserProfile, resolveLoginAppId } from "#src/utils/login-profile";
 import { parseJwtSessionClaims, sessionClaimsMatchUser } from "#src/utils/jwt-session";
+import { clearAuthCookies } from "#src/utils/request/auth-session";
 import { fetchUserInfo } from "#src/api/user";
 
 import {
@@ -46,6 +47,7 @@ function normalizeAdminRedirect(rawRedirect: string | null | undefined): string 
 }
 
 function resetAuthArtifacts() {
+	clearAuthCookies();
 	try {
 		useAuthStore.getState().reset();
 	} catch {}
@@ -153,6 +155,9 @@ export function PasswordLogin() {
 
 					return { loginRes, userInfoResult: finalProfile, resolvedAppId };
 				}).catch((syncError: any) => {
+					if (String(syncError?.message || "").includes("Phiên đăng nhập không khớp")) {
+						throw syncError;
+					}
 					if (!loginPayload?.userId) {
 						throw syncError;
 					}

@@ -3,6 +3,26 @@ export type JwtSessionClaims = {
 	sub?: string;
 };
 
+function normalizeUserId(raw?: string | null): string {
+	const trimmed = String(raw ?? "").trim();
+	if (!trimmed) return "";
+	try {
+		const decoded = atob(trimmed.replace(/-/g, "+").replace(/_/g, "/"));
+		const text = decoded.trim();
+		if (text) return text;
+	} catch {
+		// not base64 — keep raw value
+	}
+	return trimmed;
+}
+
+function userIdsMatch(dbId?: string, claimUid?: string): boolean {
+	const left = normalizeUserId(dbId);
+	const right = normalizeUserId(claimUid);
+	if (!left || !right) return false;
+	return left === right;
+}
+
 export function parseJwtSessionClaims(token?: string | null): JwtSessionClaims | null {
 	const raw = String(token ?? "").trim();
 	if (!raw) return null;
@@ -28,10 +48,10 @@ export function sessionClaimsMatchUser(
 	if (!claims) return true;
 	const uid = String(claims.uid ?? "").trim();
 	const sub = String(claims.sub ?? "").trim();
-	if (uid && String(user.userId ?? "").trim() === uid) return true;
+	if (uid && userIdsMatch(user.userId, uid)) return true;
 	if (sub) {
 		if (sub === String(user.app_token ?? "").trim()) return true;
-		if (sub === String(user.userId ?? "").trim()) return true;
+		if (userIdsMatch(user.userId, sub)) return true;
 		if (sub === String(user.email ?? "").trim()) return true;
 		if (sub === String(user.username ?? "").trim()) return true;
 	}

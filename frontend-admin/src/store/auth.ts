@@ -69,8 +69,9 @@ export const useAuthStore = create<AuthState & AuthAction>()(
 
 		reset: () => {
 			set({
-				...initialState,
 				csrfToken: undefined,
+				token: undefined,
+				refreshToken: undefined,
 			});
 			
 			/**

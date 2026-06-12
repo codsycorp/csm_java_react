@@ -50,7 +50,11 @@ export const useUserStore = create<UserState & UserAction>()(
 			...initialState,
 
 			getUserInfo: async (headers) => {
-				const response = await fetchUserInfo(headers);
+				const hasExplicitToken = Boolean((headers as Record<string, string> | undefined)?.["csm-token"]?.trim());
+				const response = await fetchUserInfo(
+					headers,
+					hasExplicitToken ? { omitRefreshToken: true, omitCredentials: true } : undefined,
+				);
 				const raw = response.result ?? {} as UserInfoType;
 				const token = (headers as Record<string, string> | undefined)?.["csm-token"]
 					|| getAuthCredentials().token;

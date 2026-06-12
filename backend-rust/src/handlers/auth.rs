@@ -10,7 +10,7 @@ use crate::security::client_session::{
     normalize_client_ip, normalize_user_agent, refresh_session_valid,
 };
 use crate::security::jwt::JwtUtil;
-use crate::services::user::{user_ids_match, user_matches_auth_principal, UserService};
+use crate::services::user::{user_matches_auth_principal, user_matches_jwt_hints, UserService};
 use crate::util::PermissionBitfieldUtil;
 
 pub struct AuthHandler {
@@ -229,44 +229,29 @@ impl AuthHandler {
         params: &Map<String, Value>,
     ) -> StandardResponse {
         let mut response = StandardResponse::new();
-        let Some(auth) = auth_user else {
-            response.set("code", 401);
-            response.set("success", false);
-            response.set("message", "Not authenticated");
-            return response;
-        };
 
-        // Mirror Java handleUserInfo: load fresh profile from DB using authenticated principal.
-        // Do NOT re-resolve JWT into session/app_token rows (those can be stale duplicates).
+        // When csm-token header is present, JWT claims are the sole source of truth.
+        // Never return another account because middleware fell back to a stale refresh cookie.
         if let Some(token) = params
             .get("csm-token")
             .and_then(|v| v.as_str())
             .filter(|t| !t.is_empty())
         {
             if self.jwt.validate_token(token) {
-                let token_uid = self.jwt.user_id_from_token(token);
-                if !token_uid.is_empty()
-                    && !auth.user_id.is_empty()
-                    && !user_ids_match(&auth.user_id, &token_uid)
-                {
-                    response.set("code", 401);
-                    response.set("success", false);
-                    response.set("message", "Session token mismatch");
-                    return response;
-                }
-                if let Some(token_sub) = self.jwt.username_from_token(token) {
-                    if !auth.app_token.is_empty()
-                        && !token_sub.is_empty()
-                        && auth.app_token != token_sub
-                    {
-                        response.set("code", 401);
-                        response.set("success", false);
-                        response.set("message", "Session token mismatch");
-                        return response;
-                    }
-                }
+                return self.build_user_info_from_jwt(token);
             }
+            response.set("code", 401);
+            response.set("success", false);
+            response.set("message", "Invalid or expired session token");
+            return response;
         }
+
+        let Some(auth) = auth_user else {
+            response.set("code", 401);
+            response.set("success", false);
+            response.set("message", "Not authenticated");
+            return response;
+        };
 
         let mut user = self
             .user_service
@@ -280,15 +265,43 @@ impl AuthHandler {
             return response;
         }
 
-        let mut info = user.to_info_map();
-        self.enrich_account_meta(&user, &mut info);
-        self.enrich_user_info_with_bitfield(&user, &mut info);
+        self.finish_user_info_response(&user, &mut response);
+        response
+    }
 
+    fn build_user_info_from_jwt(&self, token: &str) -> StandardResponse {
+        let mut response = StandardResponse::new();
+        let Some(user) = self
+            .user_service
+            .resolve_from_jwt_with_util(&self.jwt, token)
+        else {
+            response.set("code", 401);
+            response.set("success", false);
+            response.set("message", "Session token could not be resolved");
+            return response;
+        };
+
+        if let Ok(claims) = self.jwt.parse_claims(token) {
+            if !user_matches_jwt_hints(&user, &claims.uid, &claims.sub) {
+                response.set("code", 401);
+                response.set("success", false);
+                response.set("message", "Session token mismatch");
+                return response;
+            }
+        }
+
+        self.finish_user_info_response(&user, &mut response);
+        response
+    }
+
+    fn finish_user_info_response(&self, user: &User, response: &mut StandardResponse) {
+        let mut info = user.to_info_map();
+        self.enrich_account_meta(user, &mut info);
+        self.enrich_user_info_with_bitfield(user, &mut info);
         response.set("code", 200);
         response.set("success", true);
         response.set("message", "ok");
         response.set("result", Value::Object(info));
-        response
     }
 
     pub fn handle_logout(

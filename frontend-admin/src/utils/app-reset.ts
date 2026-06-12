@@ -1,5 +1,6 @@
 import { useAuthStore, usePermissionStore, usePreferencesStore, useTabsStore, useUserStore } from "#src/store";
 import { clearGuestToken } from "#src/utils/guest-auth";
+import { clearAuthCookies } from "#src/utils/request/auth-session";
 import { globalProgress } from "#src/utils/request/global-progress";
 import { message } from "#src/utils/static-antd";
 import i18n from "i18next";
@@ -50,6 +51,7 @@ export function clearAllClientState() {
   try { useTabsStore.getState().resetTabs(); } catch {}
 
   // Clear persisted storage keys used by stores (except preferences which we'll restore)
+  clearAuthCookies();
   try { localStorage.removeItem("access-token"); } catch {}
   try { localStorage.removeItem("user-info"); } catch {}
   try { localStorage.removeItem("user_info"); } catch {}

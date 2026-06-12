@@ -173,7 +173,8 @@ const defaultConfig: Options = {
 				// Do not attach access token for refresh-token or login endpoints.
 				if (!isWhiteRequest && !isRefreshTokenRequest) {
 					try {
-						const token = getAuthCredentials().token;
+						const existingToken = request.headers.get(AUTH_HEADER)?.trim();
+						const token = existingToken || getAuthCredentials().token;
 						if (token) {
 							request.headers.set(AUTH_HEADER, `${token}`);
 							try {

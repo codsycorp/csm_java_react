@@ -361,14 +361,7 @@ impl UserService {
             return None;
         }
 
-        // Re-fetch authoritative session row from app_token PK (Java updateSessionToken target).
-        if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
-            if let Some(record) = self.find_app_token_pk_record(&app_token) {
-                user = self.map_record_to_user(&record, true);
-            } else if let Some(fresh) = self.find_by_app_token(&app_token) {
-                user = fresh;
-            }
-        }
+        user = self.refresh_user_from_app_token_row_if_same_claims(user, subject, token_user_id);
 
         let current_version = user.login_version.unwrap_or(0);
         if current_version > 0 && claims.ver != current_version {
@@ -381,16 +374,23 @@ impl UserService {
                         pk_ver
                     };
                     if pk_ver == claims.ver {
-                        return Some(self.map_record_to_user(&record, true));
+                        let refreshed = self.map_record_to_user(&record, true);
+                        if jwt_claims_match_user(subject, token_user_id, &refreshed) {
+                            return Some(refreshed);
+                        }
                     }
                 }
                 if let Some(exact) = self.find_by_app_token_and_version(app_token, claims.ver) {
-                    return Some(exact);
+                    if jwt_claims_match_user(subject, token_user_id, &exact) {
+                        return Some(exact);
+                    }
                 }
             }
             if !token_user_id.is_empty() {
                 if let Some(by_id) = self.find_by_id(token_user_id) {
-                    if by_id.login_version.unwrap_or(0) == claims.ver {
+                    if by_id.login_version.unwrap_or(0) == claims.ver
+                        && jwt_claims_match_user(subject, token_user_id, &by_id)
+                    {
                         return Some(by_id);
                     }
                 }
@@ -408,7 +408,10 @@ impl UserService {
                 user.login_version = Some(claims.ver);
                 if let Some(app_token) = user.app_token.as_deref().filter(|s| !s.is_empty()) {
                     if let Some(record) = self.find_app_token_pk_record(app_token) {
-                        return Some(self.map_record_to_user(&record, true));
+                        let refreshed = self.map_record_to_user(&record, true);
+                        if jwt_claims_match_user(subject, token_user_id, &refreshed) {
+                            return Some(refreshed);
+                        }
                     }
                 }
                 return Some(user);
@@ -420,7 +423,42 @@ impl UserService {
             return None;
         }
 
+        if !jwt_claims_match_user(subject, token_user_id, &user) {
+            warn!(
+                "[JWT] Final resolved user does not match signed claims uid={} subject={} resolvedId={:?}",
+                token_user_id, subject, user.id
+            );
+            return None;
+        }
+
         Some(user)
+    }
+
+    fn refresh_user_from_app_token_row_if_same_claims(
+        &self,
+        user: User,
+        subject: &str,
+        token_user_id: &str,
+    ) -> User {
+        let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) else {
+            return user;
+        };
+        let candidate = self
+            .find_app_token_pk_record(&app_token)
+            .map(|record| self.map_record_to_user(&record, true))
+            .or_else(|| self.find_by_app_token(&app_token));
+        let Some(refreshed) = candidate else {
+            return user;
+        };
+        if jwt_claims_match_user(subject, token_user_id, &refreshed) {
+            refreshed
+        } else {
+            warn!(
+                "[JWT] Ignoring app_token PK refresh that would switch user tokenUid={} fromId={:?} toId={:?}",
+                token_user_id, user.id, refreshed.id
+            );
+            user
+        }
     }
 
     fn find_by_app_token_and_version(&self, app_token: &str, login_version: i32) -> Option<User> {
@@ -1237,6 +1275,13 @@ mod id_match_tests {
         let claim = "MjQyNWRmMGE2M2M0Njk2ZGEyMzYyMzE1ZTA3YmY0NGE=";
         assert!(user_ids_match(db_id, claim));
     }
+}
+
+fn jwt_claims_match_user(subject: &str, token_user_id: &str, user: &User) -> bool {
+    if !token_user_id.is_empty() && !user_ids_match(user.id.as_deref().unwrap_or(""), token_user_id) {
+        return false;
+    }
+    subject_matches_user(subject, user)
 }
 
 fn subject_matches_user(subject: &str, user: &User) -> bool {
