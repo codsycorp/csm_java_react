@@ -64,8 +64,11 @@ impl AiServices {
 pub struct LocalOrchestrationService;
 impl LocalOrchestrationService {
     pub fn pre_analyze(&self, req: &CodeStreamRequest) -> LocalPreAnalysis {
-        let msg = req.message.to_lowercase();
-        if msg.contains("hello") || msg.contains("xin chào") || msg.len() < 8 {
+        let msg = req.message.trim().to_lowercase();
+        // Only ultra-short pure greetings — real questions (e.g. "Bạn là ai?") must reach llama.cpp.
+        let is_pure_greeting = matches!(msg.as_str(), "hi" | "hello" | "xin chào" | "chào" | "hey")
+            || (msg.len() <= 6 && (msg.contains("hello") || msg.contains("chào")));
+        if is_pure_greeting {
             return LocalPreAnalysis {
                 attempted: true,
                 handled_locally: true,

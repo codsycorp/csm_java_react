@@ -10,7 +10,9 @@ use tokio::task::JoinHandle;
 use tracing::info;
 
 use crate::security::auth::AuthUser;
-use crate::services::ai::policy::{local_pre_status, local_unavailable_hint, streaming_model_label};
+use crate::services::ai::policy::{
+    local_pre_status, local_unavailable_hint, local_unavailable_message, streaming_model_label,
+};
 use crate::services::ai::services::AiServices;
 use crate::services::llama_cpp::LlamaCppService;
 use crate::state::AppState;
@@ -101,6 +103,13 @@ pub fn ui_text(lang: &str, vi: &str, en: &str, zh: &str) -> String {
 pub fn build_prompt(req: &CodeStreamRequest) -> String {
     let services = AiServices::new();
     let rag = services.graph_rag.retrieve(&req.app_id, &req.message);
+    let is_qa = req.task_type.contains("qa")
+        || (req.flow_type == "menu_manager" && req.message.contains('?'));
+    let response_rule = if is_qa {
+        "Answer in clear natural language (Vietnamese if the user wrote Vietnamese). You are CSM AI assistant for menu/code admin."
+    } else {
+        "Respond with code or structured edits only."
+    };
     format!(
         r#"You are CSM code assistant.
 Flow: {flow}
@@ -120,7 +129,7 @@ App: {app}
 {code}
 ```
 
-Respond with code or structured edits only."#,
+{response_rule}"#,
         flow = req.flow_type,
         task = req.task_type,
         ctx = req.context_type,
@@ -129,6 +138,7 @@ Respond with code or structured edits only."#,
         rag = rag,
         msg = req.message,
         code = req.current_code,
+        response_rule = response_rule,
     )
 }
 
@@ -142,12 +152,22 @@ pub async fn token_stream(
         if let Ok(s) = llama.stream_completion(prompt).await {
             return Box::pin(s);
         }
+        tracing::warn!(
+            "ai-code-stream: llama model present but stream failed requestId={}",
+            req.request_id
+        );
+    } else {
+        tracing::warn!(
+            "ai-code-stream: local AI unavailable ({}) requestId={}",
+            local_unavailable_hint(),
+            req.request_id
+        );
     }
 
     let hint = local_unavailable_hint();
-    let msg = req.message.clone();
+    let unavailable = local_unavailable_message();
     Box::pin(stream::once(async move {
-        format!("// {hint}\n// Message: {msg}\n")
+        format!("{unavailable}\n\n({hint})")
     }))
 }
 
@@ -163,6 +183,13 @@ pub async fn run_pipeline(
     auth: AuthUser,
 ) -> Pin<Box<dyn Stream<Item = String> + Send>> {
     let rid = req.request_id.clone();
+    let context_type = req.context_type.clone();
+    let task_type = req.task_type.clone();
+    let response_mode = if task_type.contains("qa") {
+        "analyze"
+    } else {
+        "edit"
+    };
     let prompt = build_prompt(&req);
     let prompt_chars = prompt.len();
     let orch = AiServices::new();
@@ -194,24 +221,6 @@ pub async fn run_pipeline(
         }),
     );
 
-    if pre.handled_locally && !pre.early_response.is_empty() {
-        let early = pre.early_response.clone();
-        let rid2 = rid.clone();
-        return Box::pin(stream::iter(vec![
-            started,
-            local_pre,
-            stage_event("early_finish", json!({"requestId": rid2, "status": "running"})),
-            stage_event(
-                "complete",
-                json!({
-                    "requestId": rid2,
-                    "content": early,
-                    "model": "local_orchestration",
-                }),
-            ),
-        ]));
-    }
-
     let compression = stage_event(
         "context_compression",
         json!({
@@ -231,37 +240,117 @@ pub async fn run_pipeline(
         }),
     );
 
-    let tokens = token_stream(&state, &req, &prompt).await;
-    let rid3 = rid.clone();
-    let token_events = tokens.map(move |token| {
-        stage_event(
-            "token",
-            json!({
-                "requestId": rid3,
-                "token": token,
-            }),
-        )
-    });
+    let early = pre.early_response.clone();
+    let handled_early = pre.handled_locally && !early.is_empty();
 
-    let rid4 = rid.clone();
-    let complete = stream::once(async move {
-        stage_event(
-            "complete",
-            json!({
-                "requestId": rid4,
-                "status": "ok",
-            }),
-        )
-    });
+    info!(
+        "ai-code-stream pipeline requestId={} appId={} llama={}",
+        req.request_id,
+        req.app_id,
+        LlamaCppService::new(&state.config).is_available()
+    );
 
     let _ = auth;
-    info!("ai-code-stream pipeline requestId={} appId={}", req.request_id, req.app_id);
 
-    Box::pin(
-        stream::iter(vec![started, local_pre, compression, stream_start])
-            .chain(token_events)
-            .chain(complete),
-    )
+    // Java ApiSpringController emits stage=streaming/chunk + complete/fullResponse — not stage=token.
+    Box::pin(async_stream::stream! {
+        let t0 = std::time::Instant::now();
+
+        yield started;
+        yield local_pre;
+
+        if handled_early {
+            yield stage_event("early_finish", json!({"requestId": rid, "status": "running"}));
+            yield stage_event(
+                "streaming_started",
+                json!({"requestId": rid, "model": "local_orchestration", "percent": 12}),
+            );
+            yield stage_event(
+                "streaming",
+                json!({
+                    "requestId": rid,
+                    "chunk": early,
+                    "localProviderPrimary": true,
+                }),
+            );
+            let elapsed = t0.elapsed().as_millis();
+            yield stage_event(
+                "complete",
+                json!({
+                    "requestId": rid,
+                    "status": "ok",
+                    "fullResponse": early,
+                    "content": early,
+                    "model": "local_orchestration",
+                    "contextType": context_type,
+                    "responseMode": "analyze",
+                    "elapsedMs": elapsed,
+                    "streamedChars": early.len(),
+                }),
+            );
+            yield stage_event(
+                "request_complete",
+                json!({"requestId": rid, "elapsedMs": elapsed, "flow": "early_local"}),
+            );
+            return;
+        }
+
+        yield compression;
+        yield stream_start;
+
+        let mut full = String::new();
+        let mut tokens = token_stream(&state, &req, &prompt).await;
+        while let Some(piece) = tokens.next().await {
+            if piece.is_empty() {
+                continue;
+            }
+            full.push_str(&piece);
+            yield stage_event(
+                "streaming",
+                json!({
+                    "requestId": rid,
+                    "chunk": piece,
+                    "localProviderPrimary": true,
+                    "attempt": 1,
+                }),
+            );
+            let pct = (12 + full.len() / 120).min(95);
+            yield stage_event(
+                "streaming_progress",
+                json!({
+                    "requestId": rid,
+                    "charsReceived": full.len(),
+                    "percent": pct,
+                }),
+            );
+        }
+
+        let elapsed = t0.elapsed().as_millis();
+        yield stage_event(
+            "complete",
+            json!({
+                "requestId": rid,
+                "status": "ok",
+                "fullResponse": full,
+                "contextType": context_type,
+                "responseMode": response_mode,
+                "elapsedMs": elapsed,
+                "streamedChars": full.len(),
+                "model": streaming_model_label(&state.config),
+            }),
+        );
+        yield stage_event(
+            "request_complete",
+            json!({"requestId": rid, "elapsedMs": elapsed}),
+        );
+
+        info!(
+            "ai-code-stream done requestId={} chars={} ms={}",
+            rid,
+            full.len(),
+            elapsed
+        );
+    })
 }
 
 pub fn cancel_stream(request_id: &str) -> bool {
