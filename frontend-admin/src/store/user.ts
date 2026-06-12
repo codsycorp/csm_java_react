@@ -55,22 +55,21 @@ export const useUserStore = create<UserState & UserAction>()(
 				const token = (headers as Record<string, string> | undefined)?.["csm-token"]
 					|| getAuthCredentials().token;
 				const claims = parseJwtSessionClaims(token);
-				if (!sessionClaimsMatchUser(claims, raw)) {
+				if (raw?.userId && !sessionClaimsMatchUser(claims, raw)) {
 					throw new Error("Session user mismatch");
 				}
-				const resolvedAppId = normalizeUserSessionAppId({
-					app_id: raw.app_id,
-					app_token: raw.app_token,
-					menusPermissions: raw.menusPermissions,
-					dev: raw.dev,
-				});
 				const normalized = {
 					...raw,
-					app_id: resolvedAppId,
+					app_id: normalizeUserSessionAppId({
+						app_id: raw.app_id,
+						app_token: raw.app_token,
+						menusPermissions: raw.menusPermissions,
+						dev: raw.dev,
+					}),
 				};
 				set(normalized);
-				if (resolvedAppId) {
-					useAppStore.getState().setCurrentAppId(resolvedAppId);
+				if (normalized.app_id) {
+					useAppStore.getState().setCurrentAppId(normalized.app_id);
 				}
 				return normalized;
 			},

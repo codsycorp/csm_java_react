@@ -21,7 +21,7 @@ use crate::security::client_session::{
     refresh_token_candidates, user_agent_from_headers, user_agent_matches,
 };
 use crate::services::user::{user_ids_match, user_matches_jwt_hints};
-use crate::util::{app_id_from_token, parse_app_token, is_sub_user_role, PermissionBitfieldUtil};
+use crate::util::{app_id_from_token, parse_app_token, is_sub_user_role};
 use crate::security::rate_limit::RateLimiter;
 use crate::state::AppState;
 
@@ -290,13 +290,6 @@ fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
     let meta = parse_app_token(&state.record_manager, &user.app_token);
     if let Some(app_id) = app_id_from_token(&state.record_manager, Some(&user.app_token)) {
         user.app_id = app_id;
-    } else if user.app_id.is_empty() {
-        if let Some(menus) = &user.menus_permissions {
-            let resolved = crate::security::user_access::resolve_primary_app_id_from_menus(menus);
-            if !resolved.is_empty() {
-                user.app_id = resolved;
-            }
-        }
     }
     user.is_sub_user = user.is_sub_user || is_sub_user_role(&meta.role);
     if user.is_sub_user {
@@ -304,17 +297,10 @@ fn enrich_auth_user(state: &AppState, mut user: AuthUser) -> AuthUser {
         user.dev = false;
         user.data_app_ids.clear();
     } else {
-        // Mirror Java User.getDev(): keep DB/session dev flag; token access_right is additive.
+        // Mirror Java User.getDev(): token access_right is additive to mapped user.dev only.
         user.dev = user.dev || meta.access_right > 0;
         if user.dev {
             user.data_scope = "ALL".into();
-            user.permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
-                &user.permissions,
-                &["dev".into(), "admin".into(), "scope:all".into()],
-            );
-            if !user.app_id.is_empty() {
-                user.menus_permissions = Some(vec![user.app_id.clone()]);
-            }
         }
     }
     user

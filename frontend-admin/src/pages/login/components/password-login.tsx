@@ -2,7 +2,7 @@ import { BasicButton } from "#src/components";
 import { isDynamicRoutingEnabled } from "#src/router/routes/config";
 import { useAuthStore, usePermissionStore, useUserStore, useAppStore } from "#src/store";
 import { resolveDevFlag, persistDevLocalFlag } from "#src/utils/dev-flag";
-import { normalizeUserSessionAppId } from "#src/utils/user-app-id";
+import { buildLoginUserProfile, resolveLoginAppId } from "#src/utils/login-profile";
 import { parseJwtSessionClaims, sessionClaimsMatchUser } from "#src/utils/jwt-session";
 import { fetchUserInfo } from "#src/api/user";
 
@@ -56,6 +56,7 @@ function resetAuthArtifacts() {
 		localStorage.removeItem("access-token");
 		localStorage.removeItem("user-info");
 		localStorage.removeItem("refreshToken");
+		localStorage.removeItem("current_app_id");
 	} catch {}
 }
 
@@ -118,86 +119,56 @@ export function PasswordLogin() {
 				const userInfoHeaders = freshToken
 					? { "csm-token": freshToken }
 					: undefined;
-				const loginFallbackUser = {
-					userId: loginRes?.result?.userId,
-					username: loginRes?.result?.username,
-					email: loginRes?.result?.email,
-					phoneNumber: loginRes?.result?.phoneNumber,
-					user_address: loginRes?.result?.user_address,
-					user_adress: loginRes?.result?.user_adress,
-					full_name: loginRes?.result?.full_name,
-					avatar: loginRes?.result?.avatar,
-					roles: Array.isArray(loginRes?.result?.permissions) ? loginRes.result.permissions : [],
-					permissions: Array.isArray(loginRes?.result?.permissions) ? loginRes.result.permissions : [],
-					menusPermissions: Array.isArray(loginRes?.result?.menusPermissions) ? loginRes.result.menusPermissions : [],
-					permissionBitfield: loginRes?.result?.permissionBitfield,
-					permissionSchemaVersion: loginRes?.result?.permissionSchemaVersion,
-					dataScope: loginRes?.result?.dataScope,
-					app_id: loginRes?.result?.app_id,
-					app_token: loginRes?.result?.app_token,
-					account_type: loginRes?.result?.account_type,
-					is_sub_user: loginRes?.result?.is_sub_user,
-					login_identifier: loginRes?.result?.login_identifier,
-					dev: loginRes?.result?.dev,
-				};
+				const loginPayload = loginRes?.result ?? {};
 
 				return fetchUserInfo(userInfoHeaders, { omitRefreshToken: true }).then((response: any) => {
-					const userInfoResult = response?.result || loginFallbackUser;
-					const freshToken = String(loginRes?.result?.token || "").trim();
+					const userInfoRaw = response?.result ?? {};
 					const claims = parseJwtSessionClaims(freshToken);
-					if (userInfoResult && !sessionClaimsMatchUser(claims, userInfoResult)) {
+					if (userInfoRaw?.userId && !sessionClaimsMatchUser(claims, userInfoRaw)) {
 						console.error("[LOGIN] user-info returned a different account than login token");
 						useAuthStore.getState().reset();
 						throw new Error("Phiên đăng nhập không khớp người dùng");
 					}
-					if (userInfoResult) {
-						useUserStore.setState({ ...userInfoResult });
-					}
-					if (!userInfoResult || !userInfoResult.userId) {
+
+					const mergedProfile = buildLoginUserProfile(loginPayload, userInfoRaw);
+					if (!mergedProfile?.userId) {
 						console.error("[LOGIN] Failed to sync user-info and no fallback user data");
 						useAuthStore.getState().reset();
 						navigate("/error/500");
 						throw new Error("Failed to get user info");
 					}
-					const devNormalized = resolveDevFlag(loginRes?.result?.dev ?? userInfoResult.dev, userInfoResult.roles);
-					useUserStore.setState({ dev: devNormalized });
-					persistDevLocalFlag(devNormalized);
-					
-					// app_id từ app_token trước — khớp Java mapMainAccountToUser
-					const redirect = searchParams.get("redirect");
-					const resolvedAppId = normalizeUserSessionAppId({
-						...userInfoResult,
+
+					const devNormalized = resolveDevFlag(loginPayload.dev ?? mergedProfile.dev, mergedProfile.roles);
+					const resolvedAppId = resolveLoginAppId(loginPayload, mergedProfile);
+					const finalProfile = {
+						...mergedProfile,
 						dev: devNormalized,
-					});
+						app_id: resolvedAppId,
+					};
 
+					useUserStore.setState(finalProfile);
+					persistDevLocalFlag(devNormalized);
 					setCurrentAppId(resolvedAppId);
-					useUserStore.setState({ app_id: resolvedAppId });
-					console.log(`[LOGIN] Set appId to '${resolvedAppId}' (from app_token), redirect='${redirect || ""}'`);
+					console.log(`[LOGIN] Session ready userId='${finalProfile.userId}' appId='${resolvedAppId}'`);
 
-					return { loginRes, userInfoResult, resolvedAppId };
+					return { loginRes, userInfoResult: finalProfile, resolvedAppId };
 				}).catch((syncError: any) => {
-					const fallbackUserInfo = loginFallbackUser;
-					if (!fallbackUserInfo?.userId) {
+					if (!loginPayload?.userId) {
 						throw syncError;
 					}
-					console.warn("[LOGIN] user-info sync failed, continue with login payload fallback:", syncError);
-					useUserStore.setState({ ...fallbackUserInfo });
-
-					const devNormalized = resolveDevFlag(loginRes?.result?.dev ?? fallbackUserInfo.dev, fallbackUserInfo.roles);
-					useUserStore.setState({ dev: devNormalized });
-					persistDevLocalFlag(devNormalized);
-
-					const redirect = searchParams.get("redirect");
-					const resolvedAppId = normalizeUserSessionAppId({
-						...fallbackUserInfo,
+					console.warn("[LOGIN] user-info sync failed, continue with login payload:", syncError);
+					const mergedProfile = buildLoginUserProfile(loginPayload, {});
+					const devNormalized = resolveDevFlag(loginPayload.dev ?? mergedProfile.dev, mergedProfile.roles);
+					const resolvedAppId = resolveLoginAppId(loginPayload, mergedProfile);
+					const finalProfile = {
+						...mergedProfile,
 						dev: devNormalized,
-					});
-
+						app_id: resolvedAppId,
+					};
+					useUserStore.setState(finalProfile);
+					persistDevLocalFlag(devNormalized);
 					setCurrentAppId(resolvedAppId);
-					useUserStore.setState({ app_id: resolvedAppId });
-					console.log(`[LOGIN] Continue with fallback user payload, appId='${resolvedAppId}' (from app_token), redirect='${redirect || ""}'`);
-
-					return { loginRes, userInfoResult: fallbackUserInfo, resolvedAppId };
+					return { loginRes, userInfoResult: finalProfile, resolvedAppId };
 				});
 			});
 		})

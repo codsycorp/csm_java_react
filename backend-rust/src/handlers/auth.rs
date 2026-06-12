@@ -180,15 +180,8 @@ impl AuthHandler {
             }
         }
 
-        // compute domain attribute (root two labels) when host is a normal domain
-        let mut domain_attr: Option<String> = None;
-        if !is_localhost && host.contains('.') {
-            let parts: Vec<&str> = host.split('.').collect();
-            if parts.len() >= 2 {
-                let root = parts[parts.len() - 2..].join(".");
-                domain_attr = Some(format!(".{}", root));
-            }
-        }
+        // compute domain attribute — Java does NOT set Domain on auth cookies
+        let domain_attr: Option<String> = None;
 
         let max_age = 7 * 24 * 60 * 60;
         let expires = (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc2822();
@@ -272,8 +265,6 @@ impl AuthHandler {
             response.set("message", "Session user mismatch");
             return response;
         }
-
-        self.user_service.finalize_session_profile(&mut user, None);
 
         let mut info = user.to_info_map();
         self.enrich_account_meta(&user, &mut info);
@@ -509,12 +500,7 @@ impl AuthHandler {
             }
         };
 
-        let fresh_user = auth_user.and_then(|auth| {
-            self.user_service.canonicalize_session_user(auth).map(|mut user| {
-                self.user_service.finalize_session_profile(&mut user, None);
-                user
-            })
-        });
+        let fresh_user = auth_user.and_then(|auth| self.user_service.canonicalize_session_user(auth));
 
         let (permissions, menus, is_dev) = if let Some(user) = &fresh_user {
             (
@@ -640,12 +626,9 @@ impl AuthHandler {
         self.enrich_bitfield(user, result);
     }
 
-    /// Mirrors Java `enrichUserInfoWithBitfield` — merge list fields with stored bitfield tokens.
-    fn enrich_user_info_with_bitfield(&self, user: &User, info: &mut Map<String, Value>) {
-        let stored_bitfield = user
-            .permission_bitfield
-            .as_deref()
-            .or_else(|| info.get("permissionBitfield").and_then(|v| v.as_str()));
+    /// Mirrors Java `enrichUserInfoWithBitfield` — merge list fields with stored bitfield only.
+    fn enrich_user_info_with_bitfield(&self, _user: &User, info: &mut Map<String, Value>) {
+        let stored_bitfield = info.get("permissionBitfield").and_then(|v| v.as_str());
 
         let base_permissions = string_list_from_value(
             info.get("permissions").or_else(|| info.get("roles")),
@@ -655,57 +638,16 @@ impl AuthHandler {
         let dev = info
             .get("dev")
             .and_then(|v| v.as_bool())
-            .unwrap_or_else(|| user.dev.unwrap_or(false));
+            .unwrap_or(false);
 
-        let mut permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+        let permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
             &base_permissions,
             &PermissionBitfieldUtil::permissions_from_bitfield(stored_bitfield),
         );
-        let mut menus_permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+        let menus_permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
             &base_menus,
             &PermissionBitfieldUtil::menus_from_bitfield(stored_bitfield),
         );
-
-        if user.is_sub_user.unwrap_or(false)
-            || self.parse_app_token_meta(user.app_token.as_deref()).2
-        {
-            permissions = PermissionBitfieldUtil::subtract_case_insensitive(
-                &permissions,
-                &["admin".into(), "dev".into(), "scope:all".into()],
-            );
-            if !permissions.iter().any(|p| {
-                let n = p.to_ascii_lowercase();
-                n == "view" || n == "create" || n == "edit" || n == "delete" || n == "export"
-            }) {
-                permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
-                    &permissions,
-                    &["view".into(), "scope:owner".into()],
-                );
-            }
-        } else if dev {
-            let app_id = user
-                .app_id
-                .as_deref()
-                .or_else(|| info.get("app_id").and_then(|v| v.as_str()))
-                .unwrap_or("");
-            crate::security::user_access::apply_dev_permission_elevation(
-                &mut permissions,
-                &mut menus_permissions,
-                app_id,
-            );
-        } else if !dev {
-            // Mirror Java mapMainAccountToUser — frontend isSuperPermissionProfile() needs full bitfield.
-            let app_id = user
-                .app_id
-                .as_deref()
-                .or_else(|| info.get("app_id").and_then(|v| v.as_str()))
-                .unwrap_or("");
-            crate::security::user_access::apply_main_account_permission_elevation(
-                &mut permissions,
-                &mut menus_permissions,
-                app_id,
-            );
-        }
 
         let bitfield =
             PermissionBitfieldUtil::build_bitfield(&permissions, &menus_permissions, dev);
