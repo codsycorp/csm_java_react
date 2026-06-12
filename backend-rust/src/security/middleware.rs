@@ -190,9 +190,9 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
             warn!(
-                "[JWT] csm-token auth resolution failed, fallback to refresh-token path"
+                "[JWT] Valid csm-token present but user resolution failed; rejecting refresh fallback"
             );
-            // Mirror Java: fall through to refresh-token path below.
+            return None;
         }
         // Invalid/expired csm-token: refresh fallback below must match JWT uid/sub when parseable.
     }

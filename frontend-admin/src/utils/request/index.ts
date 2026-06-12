@@ -168,6 +168,8 @@ const defaultConfig: Options = {
 					} catch (e) {
 						// ignore
 					}
+				} else {
+					request.headers.delete("X-Refresh-Token");
 				}
 
 				// Do not attach access token for refresh-token or login endpoints.

@@ -346,12 +346,41 @@ impl UserService {
 
         if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
             if let Some(fresh) = self.find_by_app_token(&app_token) {
-                user = fresh;
+                if (token_user_id.is_empty()
+                    || user_ids_match(fresh.id.as_deref().unwrap_or(""), token_user_id))
+                    && subject_matches_user(subject, &fresh)
+                {
+                    user = fresh;
+                } else {
+                    warn!(
+                        "[JWT] Ignoring app_token refresh row that does not match signed claims uid={} subject={} resolvedId={:?}",
+                        token_user_id, subject, fresh.id
+                    );
+                }
             }
         }
 
         let current_version = user.login_version.unwrap_or(0);
         if current_version > 0 && token_version != current_version {
+            if let Some(app_token) = user.app_token.as_deref().filter(|s| !s.is_empty()) {
+                if let Some(exact) = self.find_by_app_token_version(app_token, token_version) {
+                    if subject_matches_user(subject, &exact)
+                        && (token_user_id.is_empty()
+                            || user_ids_match(exact.id.as_deref().unwrap_or(""), token_user_id))
+                    {
+                        return Some(exact);
+                    }
+                }
+            }
+            if !token_user_id.is_empty() {
+                if let Some(by_id) = self.find_by_id(token_user_id) {
+                    if by_id.login_version.unwrap_or(0) == token_version
+                        && subject_matches_user(subject, &by_id)
+                    {
+                        return Some(by_id);
+                    }
+                }
+            }
             warn!(
                 "[JWT] Version mismatch subject={} token ver={}, DB ver={}",
                 subject, token_version, current_version
@@ -360,6 +389,29 @@ impl UserService {
         }
 
         Some(user)
+    }
+
+    fn find_by_app_token_version(&self, app_token: &str, login_version: i32) -> Option<User> {
+        let filter = SearchFilter::eq("app_token", app_token);
+        let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
+        let rows = filtered
+            .get("rows")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for row in rows {
+            let Some(record) = row.as_object() else {
+                continue;
+            };
+            let mut version = parse_int_safe(record.get("login_version"));
+            if version == 0 {
+                version = parse_int_safe(record.get("loginVersion"));
+            }
+            if version == login_version {
+                return Some(self.map_record_to_user(record, true));
+            }
+        }
+        None
     }
 
     fn canonicalize_refresh_user(
