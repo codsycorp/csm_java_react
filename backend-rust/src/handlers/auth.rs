@@ -278,6 +278,34 @@ impl AuthHandler {
             .user_service
             .canonicalize_session_user(auth)
             .unwrap_or_else(|| self.user_from_auth(auth));
+
+        // When csm-token is present, profile must match signed JWT (block cross-tab / cross-account cookie bleed).
+        if let Some(token) = params
+            .get("csm-token")
+            .and_then(|v| v.as_str())
+            .filter(|t| !t.is_empty())
+        {
+            let claims = self
+                .jwt
+                .parse_claims(token)
+                .or_else(|_| self.jwt.parse_claims_allow_expired(token));
+            match claims {
+                Ok(claims) if user_matches_jwt_hints(&user, &claims.uid, &claims.sub) => {}
+                Ok(_) => {
+                    response.set("code", 401);
+                    response.set("success", false);
+                    response.set("message", "Session token mismatch");
+                    return response;
+                }
+                Err(_) => {
+                    response.set("code", 401);
+                    response.set("success", false);
+                    response.set("message", "Invalid session token");
+                    return response;
+                }
+            }
+        }
+
         self.finish_user_info_response(&user, &mut response);
         response
     }

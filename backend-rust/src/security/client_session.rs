@@ -111,12 +111,12 @@ pub fn refresh_session_valid_for_endpoint(user: &User, client_ip: &str, client_u
         && refresh_token_ua_matches(user, client_ua)
 }
 
-/// Mirror Java JwtAuthenticationFilter refresh fallback (IP + UA + expiry; saved IP/UA must exist).
+/// Mirror Java JwtAuthenticationFilter refresh fallback (IP + UA + expiry + client id when bound).
 pub fn refresh_session_valid_for_middleware(
     user: &User,
     client_ip: &str,
     client_ua: &str,
-    _client_id: &str,
+    client_id: &str,
 ) -> bool {
     let saved_ip = user.refresh_token_ip.as_deref();
     let saved_ua = user.refresh_token_ua.as_deref();
@@ -125,6 +125,7 @@ pub fn refresh_session_valid_for_middleware(
         && user.refresh_token_expiry.unwrap_or(0) > chrono::Utc::now().timestamp_millis()
         && normalize_client_ip(saved_ip.unwrap_or("")) == normalize_client_ip(client_ip)
         && user_agent_matches(client_ua, saved_ua.unwrap_or(""))
+        && refresh_token_client_matches(user, client_id)
 }
 
 pub fn cookie_from_headers(headers: &HeaderMap, name: &str) -> Option<String> {

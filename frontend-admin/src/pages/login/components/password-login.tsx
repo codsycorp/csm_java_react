@@ -6,7 +6,7 @@ import { buildLoginUserProfile, resolveLoginAppId, type LoginResultPayload } fro
 import { parseJwtSessionClaims, sanitizeUserInfoAgainstLogin, sessionClaimsMatchUser } from "#src/utils/jwt-session";
 import { clearAuthCookies } from "#src/utils/request/auth-session";
 import { clearAuthPersistKeys } from "#src/utils/auth-storage";
-import { fetchUserInfo } from "#src/api/user";
+import { fetchUserInfo, USER_INFO_REQUEST_OPTIONS } from "#src/api/user";
 
 import {
 	Button,
@@ -122,7 +122,7 @@ export function PasswordLogin() {
 					: undefined;
 				const loginPayload = loginRes?.result ?? {};
 
-				return fetchUserInfo(userInfoHeaders).then((response: any) => {
+				return fetchUserInfo(userInfoHeaders, USER_INFO_REQUEST_OPTIONS).then((response: any) => {
 					const userInfoRaw = response?.result ?? {};
 					const claims = parseJwtSessionClaims(freshToken);
 

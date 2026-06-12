@@ -1,8 +1,9 @@
 import type { UserInfoType } from "#src/api/user/types";
-import { fetchUserInfo } from "#src/api/user";
+import { fetchUserInfo, USER_INFO_REQUEST_OPTIONS } from "#src/api/user";
 import { normalizeUserSessionAppId } from "#src/utils/user-app-id";
 import { parseJwtSessionClaims, sanitizeUserInfoAgainstLogin, sessionClaimsMatchUser } from "#src/utils/jwt-session";
 import { getAuthCredentials } from "#src/utils/request/auth-session";
+import { readRefreshTokenMirror } from "#src/utils/auth-storage";
 import { useAppStore } from "#src/store/app";
 
 import { create } from "zustand";
@@ -51,12 +52,17 @@ export const useUserStore = create<UserState & UserAction>()(
 			...initialState,
 
 			getUserInfo: async (headers?: HeadersInit): Promise<UserInfoType> => {
+				const creds = getAuthCredentials();
 				const sessionToken = (headers as Record<string, string> | undefined)?.["csm-token"]?.trim()
-					|| getAuthCredentials().token?.trim();
+					|| creds.token?.trim();
+				const tabRefresh = creds.refreshToken?.trim() || readRefreshTokenMirror()?.trim();
+				if (!sessionToken && !tabRefresh) {
+					throw new Error("No session credentials");
+				}
 				const requestHeaders = sessionToken
 					? { ...(headers as Record<string, string> | undefined), "csm-token": sessionToken }
 					: headers;
-				const response = await fetchUserInfo(requestHeaders);
+				const response = await fetchUserInfo(requestHeaders, USER_INFO_REQUEST_OPTIONS);
 				const raw = (response.result ?? {}) as UserInfoType;
 				const claims = parseJwtSessionClaims(sessionToken);
 				if (sessionToken && claims && raw?.userId && !sessionClaimsMatchUser(claims, raw)) {

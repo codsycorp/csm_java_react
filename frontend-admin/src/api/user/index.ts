@@ -5,6 +5,11 @@ import { getAuthCredentials } from "#src/utils/request/auth-session";
 import { readRefreshTokenMirror } from "#src/utils/auth-storage";
 import { request } from "#src/utils";
 
+/** Tab-scoped user-info: JWT + X-Refresh-Token mirror only — never shared HttpOnly cookie (cross-tab bleed). */
+export const USER_INFO_REQUEST_OPTIONS = {
+	omitCredentials: true,
+} as const;
+
 
 // For cookie-based auth, do not expect any token in response
 export function fetchLogin(data: PasswordLoginFormType) {
