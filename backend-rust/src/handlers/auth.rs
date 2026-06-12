@@ -237,39 +237,56 @@ impl AuthHandler {
             .filter(|t| !t.is_empty())
         {
             if self.jwt.validate_token(token) {
-                let Some(user) = self
+                if let Some(user) = self
                     .user_service
                     .resolve_from_jwt_with_util(&self.jwt, token)
-                else {
-                    response.set("code", 401);
-                    response.set("success", false);
-                    response.set("message", "Session token could not be resolved");
-                    return response;
-                };
-
-                if let Ok(claims) = self.jwt.parse_claims(token) {
-                    if !user_matches_jwt_hints(&user, &claims.uid, &claims.sub) {
-                        response.set("code", 401);
-                        response.set("success", false);
-                        response.set("message", "Session token mismatch");
-                        return response;
-                    }
-                    if let Some(auth) = auth_user {
-                        if !auth.user_id.is_empty()
-                            && !user_ids_match(
-                                user.id.as_deref().unwrap_or(""),
-                                &auth.user_id,
-                            )
-                        {
+                {
+                    if let Ok(claims) = self.jwt.parse_claims(token) {
+                        if !user_matches_jwt_hints(&user, &claims.uid, &claims.sub) {
                             response.set("code", 401);
                             response.set("success", false);
                             response.set("message", "Session token mismatch");
                             return response;
                         }
+                        if let Some(auth) = auth_user {
+                            if !auth.user_id.is_empty()
+                                && !user_ids_match(
+                                    user.id.as_deref().unwrap_or(""),
+                                    &auth.user_id,
+                                )
+                            {
+                                response.set("code", 401);
+                                response.set("success", false);
+                                response.set("message", "Session token mismatch");
+                                return response;
+                            }
+                        }
+                    }
+
+                    self.finish_user_info_response(&user, &mut response);
+                    return response;
+                }
+
+                // JWT valid but DB resolve lag — fall back to middleware auth principal if it matches claims.
+                if let (Some(auth), Ok(claims)) = (auth_user, self.jwt.parse_claims(token)) {
+                    let mut fresh = None;
+                    if !auth.user_id.is_empty() {
+                        fresh = self.user_service.find_by_id(&auth.user_id);
+                    }
+                    if fresh.is_none() && !auth.app_token.is_empty() {
+                        fresh = self.user_service.find_by_app_token(&auth.app_token);
+                    }
+                    if let Some(user) = fresh {
+                        if user_matches_jwt_hints(&user, &claims.uid, &claims.sub) {
+                            self.finish_user_info_response(&user, &mut response);
+                            return response;
+                        }
                     }
                 }
 
-                self.finish_user_info_response(&user, &mut response);
+                response.set("code", 401);
+                response.set("success", false);
+                response.set("message", "Session token could not be resolved");
                 return response;
             }
 

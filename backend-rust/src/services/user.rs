@@ -346,28 +346,18 @@ impl UserService {
 
         if let Some(app_token) = user.app_token.clone().filter(|t| !t.is_empty()) {
             if let Some(fresh) = self.find_by_app_token(&app_token) {
-                if (token_user_id.is_empty()
-                    || user_ids_match(fresh.id.as_deref().unwrap_or(""), token_user_id))
-                    && subject_matches_user(subject, &fresh)
-                {
-                    user = fresh;
-                } else {
-                    warn!(
-                        "[JWT] Ignoring app_token refresh row that does not match signed claims uid={} subject={} resolvedId={:?}",
-                        token_user_id, subject, fresh.id
-                    );
-                }
+                // Mirror Java: PK/pickBest row carries authoritative login_version.
+                user = fresh;
             }
         }
 
         let current_version = user.login_version.unwrap_or(0);
         if current_version > 0 && token_version != current_version {
             if let Some(app_token) = user.app_token.as_deref().filter(|s| !s.is_empty()) {
-                if let Some(exact) = self.find_by_app_token_version(app_token, token_version) {
-                    if subject_matches_user(subject, &exact)
-                        && (token_user_id.is_empty()
-                            || user_ids_match(exact.id.as_deref().unwrap_or(""), token_user_id))
-                    {
+                if let Some(exact) =
+                    self.find_by_app_token_version(app_token, token_version, token_user_id)
+                {
+                    if subject_matches_user(subject, &exact) {
                         return Some(exact);
                     }
                 }
@@ -391,7 +381,12 @@ impl UserService {
         Some(user)
     }
 
-    fn find_by_app_token_version(&self, app_token: &str, login_version: i32) -> Option<User> {
+    fn find_by_app_token_version(
+        &self,
+        app_token: &str,
+        login_version: i32,
+        token_user_id: &str,
+    ) -> Option<User> {
         let filter = SearchFilter::eq("app_token", app_token);
         let filtered = self.record_manager.filter(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
         let rows = filtered
@@ -399,6 +394,7 @@ impl UserService {
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
+        let mut fallback = None;
         for row in rows {
             let Some(record) = row.as_object() else {
                 continue;
@@ -407,11 +403,23 @@ impl UserService {
             if version == 0 {
                 version = parse_int_safe(record.get("loginVersion"));
             }
-            if version == login_version {
-                return Some(self.map_record_to_user(record, true));
+            if version != login_version {
+                continue;
+            }
+            let candidate = self.map_record_to_user(record, true);
+            if !token_user_id.is_empty() {
+                let resolved_id = candidate.id.as_deref().unwrap_or("");
+                if !resolved_id.is_empty() && user_ids_match(resolved_id, token_user_id) {
+                    return Some(candidate);
+                }
+                if fallback.is_none() {
+                    fallback = Some(candidate);
+                }
+            } else {
+                return Some(candidate);
             }
         }
-        None
+        fallback
     }
 
     fn canonicalize_refresh_user(
@@ -551,6 +559,9 @@ impl UserService {
                         user.id,
                         fields.get("login_version")
                     );
+                    if let Some(id) = user.id.as_deref().filter(|s| !s.is_empty()) {
+                        self.update_user_field_by_id(id, fields);
+                    }
                     return true;
                 }
                 Err(err) => {

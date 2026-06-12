@@ -66,18 +66,22 @@ export const useUserStore = create<UserState & UserAction>()(
 					{ userId: persisted.userId, app_token: persisted.app_token },
 					raw,
 				);
-				if (safeRaw?.userId && !sessionClaimsMatchUser(claims, safeRaw)) {
-					throw new Error("Session user mismatch");
-				}
+				const profileSource =
+					safeRaw?.userId && claims && !sessionClaimsMatchUser(claims, safeRaw)
+						? { userId: persisted.userId, app_token: persisted.app_token, ...persisted }
+						: safeRaw;
 				const normalized = {
-					...safeRaw,
+					...profileSource,
 					app_id: normalizeUserSessionAppId({
-						app_id: raw.app_id,
-						app_token: raw.app_token,
-						menusPermissions: raw.menusPermissions,
-						dev: raw.dev,
+						app_id: raw.app_id ?? profileSource.app_id,
+						app_token: raw.app_token ?? profileSource.app_token,
+						menusPermissions: raw.menusPermissions ?? profileSource.menusPermissions,
+						dev: raw.dev ?? profileSource.dev,
 					}),
 				};
+				if (!normalized?.userId) {
+					throw new Error("Session user mismatch");
+				}
 				set(normalized);
 				if (normalized.app_id) {
 					useAppStore.getState().setCurrentAppId(normalized.app_id);
