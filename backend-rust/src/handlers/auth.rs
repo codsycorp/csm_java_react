@@ -10,7 +10,7 @@ use crate::security::client_session::{
     normalize_client_ip, normalize_user_agent, refresh_session_valid,
 };
 use crate::security::jwt::JwtUtil;
-use crate::services::user::{user_ids_match, user_matches_auth_principal, user_matches_jwt_hints, UserService};
+use crate::services::user::{user_ids_match, user_matches_auth_principal, UserService};
 use crate::util::PermissionBitfieldUtil;
 
 pub struct AuthHandler {
@@ -183,6 +183,9 @@ impl AuthHandler {
         // compute domain attribute — Java does NOT set Domain on auth cookies
         let domain_attr: Option<String> = None;
 
+        // Drop stale refresh/CSRF cookies (host-only + legacy Domain=) before issuing a new session.
+        append_clear_auth_cookies(&mut response, host, is_cross_site, is_localhost);
+
         let max_age = 7 * 24 * 60 * 60;
         let expires = (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc2822();
 
@@ -251,6 +254,17 @@ impl AuthHandler {
                     response.set("message", "Session token mismatch");
                     return response;
                 }
+                if let Some(token_sub) = self.jwt.username_from_token(token) {
+                    if !auth.app_token.is_empty()
+                        && !token_sub.is_empty()
+                        && auth.app_token != token_sub
+                    {
+                        response.set("code", 401);
+                        response.set("success", false);
+                        response.set("message", "Session token mismatch");
+                        return response;
+                    }
+                }
             }
         }
 
@@ -300,31 +314,8 @@ impl AuthHandler {
         response.set("code", 200);
         response.set("success", true);
         response.set("message", "Logged out");
-        // Clear cookies; include domain when available
         let host = params.get("_host").and_then(|v| v.as_str()).unwrap_or("");
-        let mut domain_attr: Option<String> = None;
-        if host.contains('.') && !(host == "localhost" || host == "127.0.0.1") {
-            let parts: Vec<&str> = host.split('.').collect();
-            if parts.len() >= 2 {
-                let root = parts[parts.len() - 2..].join(".");
-                domain_attr = Some(format!(".{}", root));
-            }
-        }
-
-        let mut del_refresh = String::from("refreshToken=; Path=/; Max-Age=0; HttpOnly; Expires=Thu, 01 Jan 1970 00:00:00 GMT;");
-        let mut del_csrf = String::from("CSRF-TOKEN=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT;");
-        if let Some(d) = domain_attr {
-            del_refresh.push_str(&format!(" Domain={};", d));
-            del_csrf.push_str(&format!(" Domain={};", d));
-        }
-        response.extra_headers.append(
-            axum::http::header::SET_COOKIE,
-            del_refresh.parse().unwrap(),
-        );
-        response.extra_headers.append(
-            axum::http::header::SET_COOKIE,
-            del_csrf.parse().unwrap(),
-        );
+        append_clear_auth_cookies(&mut response, host, false, host == "localhost" || host == "127.0.0.1");
         response
     }
 
@@ -804,6 +795,57 @@ fn filter_routes_by_role(
         }
     }
     out
+}
+
+fn root_domain_from_host(host: &str) -> Option<String> {
+    if host.is_empty() || host == "localhost" || host == "127.0.0.1" || !host.contains('.') {
+        return None;
+    }
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() >= 2 {
+        Some(format!(".{}", parts[parts.len() - 2..].join(".")))
+    } else {
+        None
+    }
+}
+
+fn append_clear_auth_cookies(
+    response: &mut StandardResponse,
+    host: &str,
+    is_cross_site: bool,
+    is_localhost: bool,
+) {
+    let mut domains: Vec<Option<String>> = vec![None];
+    if let Some(root) = root_domain_from_host(host) {
+        domains.push(Some(root));
+    }
+    for domain in domains {
+        let mut del_refresh = String::from(
+            "refreshToken=; Path=/; Max-Age=0; HttpOnly; Expires=Thu, 01 Jan 1970 00:00:00 GMT;",
+        );
+        let mut del_csrf = String::from(
+            "CSRF-TOKEN=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT;",
+        );
+        if let Some(d) = domain {
+            del_refresh.push_str(&format!(" Domain={};", d));
+            del_csrf.push_str(&format!(" Domain={};", d));
+        }
+        if is_cross_site && !is_localhost {
+            del_refresh.push_str(" Secure; SameSite=None");
+            del_csrf.push_str(" SameSite=None; Secure");
+        } else {
+            del_refresh.push_str(" SameSite=Lax");
+            del_csrf.push_str(" SameSite=Lax");
+        }
+        response.extra_headers.append(
+            axum::http::header::SET_COOKIE,
+            del_refresh.parse().unwrap(),
+        );
+        response.extra_headers.append(
+            axum::http::header::SET_COOKIE,
+            del_csrf.parse().unwrap(),
+        );
+    }
 }
 
 fn refresh_tokens_from_params(params: &Map<String, Value>) -> Vec<String> {

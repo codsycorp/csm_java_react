@@ -56,6 +56,13 @@ impl JwtUtil {
         decode::<Claims>(token, &self.decoding, &validation).map(|d| d.claims)
     }
 
+    /// Parse signed JWT claims even when exp has passed — used to bind refresh fallback.
+    pub fn parse_claims_allow_expired(&self, token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = false;
+        decode::<Claims>(token, &self.decoding, &validation).map(|d| d.claims)
+    }
+
     pub fn username_from_token(&self, token: &str) -> Option<String> {
         self.parse_claims(token).ok().map(|c| c.sub)
     }

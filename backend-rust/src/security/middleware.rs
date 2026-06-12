@@ -20,7 +20,7 @@ use crate::security::client_session::{
     client_ip_from_headers, refresh_session_valid_for_middleware,
     refresh_token_candidates, user_agent_from_headers, user_agent_matches,
 };
-use crate::services::user::{user_ids_match, user_matches_jwt_hints};
+use crate::services::user::user_matches_jwt_hints;
 use crate::util::{app_id_from_token, parse_app_token, is_sub_user_role};
 use crate::security::rate_limit::RateLimiter;
 use crate::state::AppState;
@@ -166,6 +166,7 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
     }
 
     let csm = csm_token(headers);
+    let csm_present = csm.as_ref().is_some_and(|token| !token.is_empty());
     let csm_valid = csm
         .as_ref()
         .is_some_and(|token| !token.is_empty() && state.jwt.validate_token(token));
@@ -174,51 +175,29 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
         state
             .jwt
             .parse_claims(token)
+            .or_else(|_| state.jwt.parse_claims_allow_expired(token))
             .ok()
             .map(|claims| (claims.uid, claims.sub))
     });
-    let jwt_has_binding = jwt_hints
-        .as_ref()
-        .is_some_and(|(uid, sub)| !uid.trim().is_empty() || !sub.trim().is_empty());
 
-    if let Some(token) = csm.as_ref() {
-        if !token.is_empty() {
-            if csm_valid {
-                if let Some(user) =
-                    state
-                        .user_service
-                        .resolve_from_jwt_with_util(&state.jwt, token)
-                {
-                    return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
-                }
-                // Valid csm-token but row resolution lagged — only accept refresh for the same account.
-                warn!("[JWT] csm-token auth resolution failed, trying bound refresh-token fallback");
-                if jwt_has_binding {
-                    let (uid, sub) = jwt_hints.as_ref().unwrap();
-                    let client_ip = client_ip_from_headers(headers);
-                    let client_ua = user_agent_from_headers(headers);
-                    for rt in refresh_token_candidates(headers) {
-                        if let Some(user) = state.user_service.find_by_refresh_token(&rt) {
-                            if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua)
-                                && user_matches_jwt_hints(&user, uid, sub)
-                            {
-                                return Some(enrich_auth_user(
-                                    state,
-                                    auth_user_from_model(state, user),
-                                ));
-                            }
-                        }
-                    }
-                    return None;
-                }
+    if let Some(token) = csm.as_ref().filter(|t| !t.is_empty()) {
+        if csm_valid {
+            if let Some(user) =
+                state
+                    .user_service
+                    .resolve_from_jwt_with_util(&state.jwt, token)
+            {
+                return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
-            // Invalid JWT format/signature: continue to refresh-token fallback (Java parity).
+            // Never fall back to refreshToken cookie when a valid csm-token is present.
+            // A stale cookie from another account must not override the signed JWT principal.
+            warn!(
+                "[JWT] Valid csm-token present but user resolution failed; rejecting refresh fallback"
+            );
+            return None;
         }
+        // Invalid/expired csm-token: refresh fallback below must match JWT uid/sub when parseable.
     }
-
-    let token_uid = jwt_hints
-        .as_ref()
-        .and_then(|(uid, _)| (!uid.trim().is_empty()).then_some(uid.as_str()));
 
     let client_ip = client_ip_from_headers(headers);
     let client_ua = user_agent_from_headers(headers);
@@ -226,10 +205,7 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
         match state.user_service.find_by_refresh_token(&rt) {
             Some(user)
                 if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua)
-                    && (refresh_user_matches_token_uid(&user, token_uid)
-                        || jwt_hints
-                            .as_ref()
-                            .is_some_and(|(uid, sub)| user_matches_jwt_hints(&user, uid, sub))) =>
+                    && refresh_allowed_for_csm_hints(csm_present, jwt_hints.as_ref(), &user) =>
             {
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
@@ -244,7 +220,7 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
                         user.refresh_token_ua.as_deref().unwrap_or(""),
                     ),
                     user.refresh_token_expiry.unwrap_or(0),
-                    refresh_user_matches_token_uid(&user, token_uid),
+                    user_matches_jwt_hints(&user, jwt_hints.as_ref().map(|(u, _)| u.as_str()).unwrap_or(""), jwt_hints.as_ref().map(|(_, s)| s.as_str()).unwrap_or("")),
                 );
             }
             None => {
@@ -265,11 +241,22 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
     None
 }
 
-fn refresh_user_matches_token_uid(user: &crate::model::User, token_uid: Option<&str>) -> bool {
-    let Some(token_uid) = token_uid.filter(|uid| !uid.is_empty()) else {
+/// When csm-token header is present, refresh auth must belong to the same account as JWT hints.
+fn refresh_allowed_for_csm_hints(
+    csm_present: bool,
+    jwt_hints: Option<&(String, String)>,
+    user: &crate::model::User,
+) -> bool {
+    if !csm_present {
         return true;
+    }
+    let Some((uid, sub)) = jwt_hints else {
+        return false;
     };
-    user_ids_match(user.id.as_deref().unwrap_or(""), token_uid)
+    if uid.trim().is_empty() && sub.trim().is_empty() {
+        return false;
+    }
+    user_matches_jwt_hints(user, uid, sub)
 }
 
 fn auth_user_from_model(state: &AppState, user: crate::model::User) -> AuthUser {

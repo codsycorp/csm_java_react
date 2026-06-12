@@ -20,10 +20,11 @@ export function fetchAsyncRoutes(headers?: HeadersInit) {
 	return request.get("get-async-routes", headers ? { headers } : undefined).json<ApiResponse<AppRouteRecordRaw[]>>();
 }
 
-export function fetchUserInfo(headers?: HeadersInit, options?: { omitRefreshToken?: boolean }) {
+export function fetchUserInfo(headers?: HeadersInit, options?: { omitRefreshToken?: boolean; omitCredentials?: boolean }) {
 	return request.get("user-info", {
 		...(headers ? { headers } : {}),
 		...(options?.omitRefreshToken ? { omitRefreshToken: true } : {}),
+		...(options?.omitCredentials ? { credentials: "omit" } : {}),
 	} as any).json<ApiResponse<UserInfoType>>();
 }
 
