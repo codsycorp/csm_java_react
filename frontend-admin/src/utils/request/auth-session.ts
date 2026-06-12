@@ -2,7 +2,7 @@ import { fetchRefreshToken } from "#src/api/user";
 import { useAuthStore } from "#src/store";
 
 import { AUTH_HEADER } from "./constants";
-import { readAuthPersistRaw } from "#src/utils/auth-storage";
+import { readAuthPersistRaw, readRefreshTokenMirror, syncRefreshTokenMirror } from "#src/utils/auth-storage";
 
 export function readPersistedAuthState(): { token?: string; refreshToken?: string; csrfToken?: string } {
 	try {
@@ -42,13 +42,17 @@ export function getAuthCredentials() {
 	const persisted = readPersistedAuthState();
 	try {
 		const state = useAuthStore.getState();
+		const refreshToken = state.refreshToken || persisted.refreshToken || readRefreshTokenMirror();
 		return {
 			token: state.token || persisted.token,
-			refreshToken: state.refreshToken || persisted.refreshToken,
+			refreshToken,
 			csrfToken: state.csrfToken || persisted.csrfToken,
 		};
 	} catch {
-		return persisted;
+		return {
+			...persisted,
+			refreshToken: persisted.refreshToken || readRefreshTokenMirror(),
+		};
 	}
 }
 
@@ -117,9 +121,7 @@ export async function ensureAuthSessionReady(): Promise<boolean> {
 		}
 		if (nextRefreshToken) {
 			useAuthStore.setState({ refreshToken: nextRefreshToken });
-			try {
-				localStorage.setItem("refreshToken", nextRefreshToken);
-			} catch {}
+			syncRefreshTokenMirror(nextRefreshToken);
 		}
 		if (nextCsrfToken) {
 			useAuthStore.setState({ csrfToken: nextCsrfToken });

@@ -11,7 +11,8 @@ import { clearAllClientState } from "#src/utils/app-reset";
 
 // Local utilities
 import { AUTH_HEADER, CLIENT_ID_HEADER, LANG_HEADER } from "./constants";
-import { getClientSessionId } from "#src/utils/browser-client-id";
+import { getClientSessionId, isNwjsRuntime } from "#src/utils/browser-client-id";
+import { readRefreshTokenMirror } from "#src/utils/auth-storage";
 import { getAuthCredentials, hasAuthSession, readPersistedAuthState } from "./auth-session";
 import { handleErrorResponse } from "./error-response";
 import { globalProgress } from "./global-progress";
@@ -131,29 +132,18 @@ const defaultConfig: Options = {
 					request.headers.delete(AUTH_HEADER);
 					request.headers.delete("csm-token");
 				} else if (!omitRefreshToken) {
-					// NWJS + browser: send refreshToken header (required for /refresh-token when cookie unavailable).
-					const isNwjs = typeof (window as any).nw !== 'undefined' ||
-					              navigator.userAgent.toLowerCase().includes('nwjs') ||
-					              navigator.userAgent.toLowerCase().includes('node-webkit');
-
-					if (isNwjs) {
+					const refreshToken = getAuthCredentials().refreshToken || readRefreshTokenMirror();
+					if (refreshToken) {
+						request.headers.set("X-Refresh-Token", refreshToken);
+					} else if (isNwjsRuntime()) {
 						try {
-							const refreshToken = localStorage.getItem('refreshToken');
-							if (refreshToken) {
-								request.headers.set('X-Refresh-Token', refreshToken);
+							const legacy = localStorage.getItem("refreshToken");
+							if (legacy) {
+								request.headers.set("X-Refresh-Token", legacy);
 							}
 						} catch (e) {
-							console.error('[NWJS] Error reading refreshToken from localStorage:', e);
+							console.error("[NWJS] Error reading refreshToken from localStorage:", e);
 						}
-					}
-
-					try {
-						const refreshToken = getAuthCredentials().refreshToken;
-						if (refreshToken) {
-							request.headers.set('X-Refresh-Token', refreshToken);
-						}
-					} catch (e) {
-						// ignore
 					}
 				} else {
 					request.headers.delete("X-Refresh-Token");

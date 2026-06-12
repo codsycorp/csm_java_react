@@ -5,6 +5,7 @@ import { usePermissionStore, useTabsStore, useUserStore, useAppStore } from "#sr
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { getAuthStorage } from "#src/utils/browser-client-id";
+import { syncRefreshTokenMirror } from "#src/utils/auth-storage";
 
 
 // No token/refreshToken needed for cookie-based auth
@@ -44,6 +45,7 @@ export const useAuthStore = create<AuthState & AuthAction>()(
 						const refresh = res?.result?.refreshToken;
 
 						set({ csrfToken: csrf, token: token, refreshToken: refresh });
+						syncRefreshTokenMirror(refresh);
 
 						return res;
 				},

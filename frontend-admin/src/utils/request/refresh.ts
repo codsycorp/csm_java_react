@@ -5,6 +5,7 @@ import { fetchRefreshToken } from "#src/api/user";
 import { useAuthStore, useUserStore } from "#src/store";
 import ky from "ky";
 import { applyAuthHeadersToRequest } from "./auth-session";
+import { syncRefreshTokenMirror } from "#src/utils/auth-storage";
 import { AUTH_HEADER } from "./constants";
 import { goLogin } from "./go-login";
 
@@ -48,9 +49,7 @@ export async function refreshTokenAndRetry(request: Request, options: Options) {
 			}
 			if (nextRefreshToken) {
 				useAuthStore.setState({ refreshToken: nextRefreshToken });
-				try {
-					localStorage.setItem("refreshToken", nextRefreshToken);
-				} catch (e) {}
+				syncRefreshTokenMirror(nextRefreshToken);
 			}
 			if (nextCsrfToken) {
 				useAuthStore.setState({ csrfToken: nextCsrfToken });

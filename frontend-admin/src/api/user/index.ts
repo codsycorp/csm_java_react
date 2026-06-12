@@ -2,6 +2,7 @@ import type { PasswordLoginFormType } from "#src/pages/login/components/password
 import type { AppRouteRecordRaw } from "#src/router/types";
 import type { UserInfoType } from "./types";
 import { getAuthCredentials } from "#src/utils/request/auth-session";
+import { readRefreshTokenMirror } from "#src/utils/auth-storage";
 import { request } from "#src/utils";
 
 
@@ -38,11 +39,13 @@ export const refreshTokenPath = "refresh-token";
 
 export function fetchRefreshToken() {
 	const { refreshToken } = getAuthCredentials();
+	const effectiveRefresh = refreshToken || readRefreshTokenMirror();
 	return request
 		.post(refreshTokenPath, {
+			credentials: "include",
 			json: {
 				_origin: window.location.origin,
-				...(refreshToken ? { refreshToken } : {}),
+				...(effectiveRefresh ? { refreshToken: effectiveRefresh } : {}),
 			},
 		})
 		.json<ApiResponse<RefreshTokenResult>>();
