@@ -501,19 +501,50 @@ func finalizeSSRRoute(route resolvedRoute, rm *data.RecordManager, host string) 
 			route.RPIndex = "admin"
 		}
 	}
-	if strings.TrimSpace(route.AppID) == "" && strings.TrimSpace(route.RPIndex) != "" {
-		if catch, ok := queryReactCatchAllRoute(rm, route.Domain); ok && catch.AppID != "" {
+	if catch, ok := queryReactCatchAllRoute(rm, route.Domain); ok {
+		if strings.TrimSpace(route.AppID) == "" {
 			route.AppID = catch.AppID
-			if route.TblServices == "" {
-				route.TblServices = catch.TblServices
-			}
-			if route.TblServiceDetail == "" {
-				route.TblServiceDetail = catch.TblServiceDetail
-			}
+		}
+		if strings.TrimSpace(route.TblServices) == "" {
+			route.TblServices = catch.TblServices
+		}
+		if strings.TrimSpace(route.TblServiceDetail) == "" {
+			route.TblServiceDetail = catch.TblServiceDetail
+		}
+		if strings.TrimSpace(route.FTitle) == "" {
+			route.FTitle = catch.FTitle
+		}
+		if strings.TrimSpace(route.FLogo) == "" {
+			route.FLogo = catch.FLogo
 		}
 	}
+	route.AppID = normalizeTableAppID(route.AppID)
+	route.TblServices = normalizeTableName(route.AppID, route.TblServices)
+	route.TblServiceDetail = normalizeTableName(route.AppID, route.TblServiceDetail)
 	route = enrichRouteFromRPIndex(route)
 	return route
+}
+
+// normalizeTableName strips accidental "{app_id}." prefix from tbl_services values.
+func normalizeTableName(appID, table string) string {
+	table = strings.TrimSpace(table)
+	if table == "" {
+		return ""
+	}
+	if appID != "" {
+		prefix := strings.ToLower(appID) + "."
+		if strings.HasPrefix(strings.ToLower(table), prefix) {
+			return table[len(prefix):]
+		}
+	}
+	if i := strings.Index(table, "."); i >= 0 {
+		return table[i+1:]
+	}
+	return table
+}
+
+func normalizeTableAppID(appID string) string {
+	return strings.TrimSpace(appID)
 }
 
 func enrichRouteFromRPIndex(route resolvedRoute) resolvedRoute {
@@ -541,11 +572,12 @@ func queryRoute(rm *data.RecordManager, conditions []model.SearchFilter) (resolv
 func resolvedRouteFromRow(row map[string]any) resolvedRoute {
 	s := func(k string) string { return strings.TrimSpace(recordStr(row, k)) }
 	sTrim := func(k string) string { return strings.Trim(strings.Trim(s(k), "/"), " ") }
+	appID := normalizeTableAppID(sTrim("app_id"))
 	return resolvedRoute{
 		RPIndex:          sTrim("rp_index"),
-		AppID:            sTrim("app_id"),
-		TblServices:      sTrim("tbl_services"),
-		TblServiceDetail: sTrim("tbl_service_detail"),
+		AppID:            appID,
+		TblServices:      normalizeTableName(appID, sTrim("tbl_services")),
+		TblServiceDetail: normalizeTableName(appID, sTrim("tbl_service_detail")),
 		FTitle:           s("f_title"),
 		FKeyword:         s("f_keyword"),
 		FLogo:            s("f_logo"),

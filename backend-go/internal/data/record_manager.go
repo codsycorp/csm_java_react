@@ -182,9 +182,10 @@ func (rm *RecordManager) collectFilteredRecords(appID, tableName string, filter 
 	}
 
 	if rm.searchEnabled() && filter.HasLike() {
-		if records := rm.collectViaFTS(app, table, filter); records != nil {
+		if records := rm.collectViaFTS(app, table, filter); len(records) > 0 {
 			return records
 		}
+		// FTS miss (domain/status SSR filters) → full Pebble scan like Rust collect_filtered_records.
 	}
 
 	seen := make(map[string]struct{})

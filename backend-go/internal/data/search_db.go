@@ -130,7 +130,7 @@ func (rm *RecordManager) collectViaFTS(appID, tableName string, filter model.Sea
 		return nil
 	}
 	if len(keys) == 0 {
-		return []map[string]any{}
+		return nil
 	}
 
 	seen := make(map[string]struct{})
