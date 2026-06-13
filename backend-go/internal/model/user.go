@@ -107,6 +107,21 @@ func stringListFromValue(v any) []string {
 	}
 }
 
+func IntFromAny(v any) (int, bool) {
+	return intFromAny(v)
+}
+
+func StringListFromRecord(record map[string]any, keys ...string) []string {
+	for _, key := range keys {
+		if v, ok := record[key]; ok {
+			if list := stringListFromValue(v); len(list) > 0 {
+				return list
+			}
+		}
+	}
+	return nil
+}
+
 func intFromAny(v any) (int, bool) {
 	switch n := v.(type) {
 	case int:

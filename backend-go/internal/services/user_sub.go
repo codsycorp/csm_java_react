@@ -1,0 +1,273 @@
+package services
+
+import (
+	"strings"
+
+	"csm_server/backend-go/internal/model"
+	"csm_server/backend-go/internal/util"
+)
+
+// mapSubUser mirrors Java UserService.mapSubUserRecordToUser / Rust map_sub_user.
+func (s *UserService) mapSubUser(record map[string]any) *model.User {
+	parentKey, _ := record["parent_account_id"].(string)
+	parentKey = strings.TrimSpace(parentKey)
+	if parentKey == "" {
+		return nil
+	}
+	parentRecord := s.findParentAccount(parentKey)
+	if len(parentRecord) == 0 {
+		return nil
+	}
+
+	user := s.mapRecordToUser(parentRecord, false)
+	t := true
+	user.IsSubUser = &t
+	devFalse := false
+	user.Dev = &devFalse
+	user.DataAppIDs = []string{}
+
+	if id, ok := record["id"].(string); ok && strings.TrimSpace(id) != "" {
+		user.ID = &id
+	}
+	if login, ok := record["login_identifier"].(string); ok && strings.TrimSpace(login) != "" {
+		user.Username = &login
+		if user.Email == nil || strings.TrimSpace(*user.Email) == "" {
+			user.Email = &login
+		}
+	}
+	if email, ok := record["email"].(string); ok && strings.TrimSpace(email) != "" {
+		user.Email = &email
+	}
+	if username, ok := record["username"].(string); ok && strings.TrimSpace(username) != "" {
+		user.Username = &username
+	}
+	if phone, ok := record["phoneNumber"].(string); ok {
+		user.PhoneNumber = &phone
+	}
+	if fullName, ok := record["full_name"].(string); ok && strings.TrimSpace(fullName) != "" {
+		user.FullName = &fullName
+	}
+	if avatar, ok := record["avatar"].(string); ok {
+		user.Avatar = &avatar
+	}
+	if pass, ok := record["pass"].(string); ok && pass != "" {
+		user.Password = &pass
+	}
+	if actived, ok := record["actived"].(bool); ok {
+		user.Actived = &actived
+	}
+
+	if refresh, ok := firstNonEmptyRecord(record, "refresh", "refresh_token"); ok {
+		user.RefreshToken = &refresh
+	}
+	if ip, ok := record["refresh_token_ip"].(string); ok {
+		user.RefreshTokenIP = &ip
+	}
+	if ua, ok := record["refresh_token_ua"].(string); ok {
+		user.RefreshTokenUA = &ua
+	}
+	if lv, ok := modelIntFromRecord(record, "login_version", "loginVersion"); ok {
+		user.LoginVersion = &lv
+	} else {
+		zero := 0
+		user.LoginVersion = &zero
+	}
+
+	if scope, ok := firstNonEmptyRecord(record, "dataScope", "data_scope"); ok {
+		user.DataScope = &scope
+	}
+	if dept, ok := record["dept_id"].(string); ok && dept != "" {
+		user.DeptID = &dept
+	}
+	if branch, ok := record["branch_id"].(string); ok && branch != "" {
+		user.BranchID = &branch
+	}
+
+	directPermissions := model.StringListFromRecord(record, "permissions")
+	directMenus := model.StringListFromRecord(record, "menusPermissions", "menus_permissions")
+	permissionsAdd := model.StringListFromRecord(record, "permissionsAdd")
+	permissionsDeny := model.StringListFromRecord(record, "permissionsDeny")
+	menusAdd := model.StringListFromRecord(record, "menusPermissionsAdd", "menus_permissions_add")
+	menusDeny := model.StringListFromRecord(record, "menusPermissionsDeny", "menus_permissions_deny")
+
+	if subToken, ok := record["app_token"].(string); ok && strings.TrimSpace(subToken) != "" {
+		user.AppToken = &subToken
+		meta := util.ParseAppToken(s.rm, subToken)
+		if meta.AppID != "" {
+			user.AppID = &meta.AppID
+		}
+	}
+
+	groupID, _ := record["group_id"].(string)
+	groupID = strings.TrimSpace(groupID)
+	roleLookupAppID := deref(user.AppID)
+	if roleLookupAppID == "" {
+		if appID, ok := record["app_id"].(string); ok {
+			roleLookupAppID = strings.TrimSpace(appID)
+		}
+	}
+	if roleLookupAppID == "" {
+		if appID, ok := parentRecord["app_id"].(string); ok {
+			roleLookupAppID = strings.TrimSpace(appID)
+		}
+	}
+
+	hasAuthoritativeRole := false
+	var roleBitfield string
+	if groupID != "" {
+		if roleRecord := s.findRoleByCode(roleLookupAppID, groupID); len(roleRecord) > 0 {
+			hasAuthoritativeRole = true
+			if raw, ok := firstNonEmptyRecord(roleRecord, "permissionBitfield", "permission_bitfield"); ok {
+				roleBitfield = raw
+			}
+			rolePerms := model.StringListFromRecord(roleRecord, "permissions")
+			if len(rolePerms) > 0 {
+				directPermissions = rolePerms
+			} else if roleBitfield != "" {
+				directPermissions = util.PermissionsFromBitfield(roleBitfield)
+			}
+			roleMenus := model.StringListFromRecord(roleRecord, "menusPermissions", "menus_permissions")
+			if len(roleMenus) > 0 {
+				directMenus = roleMenus
+			} else if roleBitfield != "" {
+				directMenus = util.MenusFromBitfield(roleBitfield)
+			}
+		}
+		if (len(directMenus) == 0 || len(directPermissions) == 0) && !hasAuthoritativeRole {
+			if group := findGroupRight(parentRecord, groupID); group != nil {
+				if perms := model.StringListFromRecord(group, "permissions"); len(perms) > 0 {
+					directPermissions = perms
+				}
+				if menus := model.StringListFromRecord(group, "menusPermissions", "menus_permissions"); len(menus) > 0 {
+					directMenus = menus
+				}
+			}
+		}
+	}
+
+	bitfieldFromRecord, _ := firstNonEmptyRecord(record, "permissionBitfield", "permission_bitfield")
+	if hasAuthoritativeRole && roleBitfield != "" && len(directPermissions) == 0 && len(directMenus) == 0 {
+		bitfieldFromRecord = roleBitfield
+	}
+
+	var effectivePermissions, effectiveMenus []string
+	if bitfieldFromRecord != "" {
+		effectivePermissions = util.PermissionsFromBitfield(bitfieldFromRecord)
+		effectiveMenus = util.MenusFromBitfield(bitfieldFromRecord)
+	} else {
+		effectivePermissions = append([]string{}, directPermissions...)
+		effectiveMenus = append([]string{}, directMenus...)
+	}
+
+	effectivePermissions = util.MergeUniqueCaseInsensitive(effectivePermissions, permissionsAdd)
+	effectivePermissions = util.SubtractCaseInsensitive(effectivePermissions, permissionsDeny)
+	effectiveMenus = util.MergeUniqueCaseInsensitive(effectiveMenus, menusAdd)
+	effectiveMenus = util.SubtractCaseInsensitive(effectiveMenus, menusDeny)
+
+	if len(effectivePermissions) == 0 && len(directPermissions) > 0 {
+		effectivePermissions = append([]string{}, directPermissions...)
+	}
+	if len(effectiveMenus) == 0 && len(directMenus) > 0 {
+		effectiveMenus = append([]string{}, directMenus...)
+	}
+
+	effectivePermissions = util.SubtractCaseInsensitive(effectivePermissions, []string{"admin", "dev"})
+	if !util.HasAnyActionPermission(effectivePermissions) {
+		effectivePermissions = util.MergeUniqueCaseInsensitive(effectivePermissions, []string{"view"})
+	}
+	if len(effectivePermissions) == 0 {
+		effectivePermissions = []string{"view", "scope:owner"}
+	}
+
+	user.Permissions = effectivePermissions
+	user.MenusPermissions = effectiveMenus
+
+	bitfield := util.BuildBitfield(effectivePermissions, effectiveMenus, false)
+	token := util.ToCompactToken(bitfield)
+	user.PermissionBitfield = &token
+	schema := util.SchemaV3
+	user.PermissionSchemaVer = &schema
+	dataScope := util.ResolveDataScope(bitfield)
+	user.DataScope = &dataScope
+
+	return &user
+}
+
+func (s *UserService) findParentAccount(parentKey string) map[string]any {
+	parentKey = strings.TrimSpace(parentKey)
+	if parentKey == "" {
+		return nil
+	}
+	for _, field := range []string{"id", "app_id", "email", "username", "phoneNumber"} {
+		if rec := s.rm.Find(CSMAppID, AccountsTable, model.EqFilter(field, parentKey)); len(rec) > 0 {
+			return rec
+		}
+	}
+	return nil
+}
+
+func (s *UserService) findRoleByCode(appID, roleCode string) map[string]any {
+	roleCode = strings.TrimSpace(roleCode)
+	if roleCode == "" {
+		return nil
+	}
+	effectiveAppID := strings.TrimSpace(appID)
+	if effectiveAppID == "" {
+		effectiveAppID = CSMAppID
+	}
+	for _, field := range []string{"role_code", "id"} {
+		if rec := s.rm.Find(effectiveAppID, "csm_roles", model.EqFilter(field, roleCode)); len(rec) > 0 {
+			return rec
+		}
+	}
+	return nil
+}
+
+func findGroupRight(parentRecord map[string]any, groupID string) map[string]any {
+	raw, ok := parentRecord["group_rights"]
+	if !ok || groupID == "" {
+		return nil
+	}
+	switch groups := raw.(type) {
+	case []any:
+		for _, item := range groups {
+			group, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			gid, _ := group["group_id"].(string)
+			if gid == groupID {
+				return group
+			}
+		}
+	}
+	return nil
+}
+
+func (s *UserService) findSubUserByAppToken(appToken string) map[string]any {
+	if appToken == "" {
+		return nil
+	}
+	if rec := s.rm.FindByCustomPK(CSMAppID, SubAccountsTable, map[string]any{"app_token": appToken}, []string{"app_token"}); len(rec) > 0 {
+		return rec
+	}
+	return s.rm.Find(CSMAppID, SubAccountsTable, model.EqFilter("app_token", appToken))
+}
+
+func firstNonEmptyRecord(record map[string]any, keys ...string) (string, bool) {
+	for _, key := range keys {
+		if v, ok := record[key].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v), true
+		}
+	}
+	return "", false
+}
+
+func modelIntFromRecord(record map[string]any, keys ...string) (int, bool) {
+	for _, key := range keys {
+		if v, ok := model.IntFromAny(record[key]); ok {
+			return v, true
+		}
+	}
+	return 0, false
+}

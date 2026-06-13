@@ -270,6 +270,9 @@ func (s *UserService) FindByAppToken(appToken string) *model.User {
 		record = s.rm.Find(CSMAppID, AccountsTable, model.EqFilter("app_token", appToken))
 	}
 	if len(record) == 0 {
+		if sub := s.findSubUserByAppToken(appToken); len(sub) > 0 {
+			return s.mapSubUser(sub)
+		}
 		return nil
 	}
 	u := s.mapRecordToUser(record, true)
@@ -282,6 +285,19 @@ func (s *UserService) FindByAppTokenScoped(appToken, userID string, loginVersion
 		record = s.rm.Find(CSMAppID, AccountsTable, model.EqFilter("app_token", appToken))
 	}
 	if len(record) == 0 {
+		if sub := s.findSubUserByAppToken(appToken); len(sub) > 0 {
+			user := s.mapSubUser(sub)
+			if user == nil {
+				return nil
+			}
+			if userID != "" && user.ID != nil && !userIDsMatch(*user.ID, userID) {
+				return nil
+			}
+			if loginVersion > 0 && user.LoginVersion != nil && *user.LoginVersion != loginVersion {
+				return nil
+			}
+			return user
+		}
 		return nil
 	}
 	u := s.mapRecordToUser(record, true)
@@ -416,13 +432,6 @@ func (s *UserService) normalizeMainAccountUser(user *model.User, record map[stri
 			user.BranchID = &branch
 		}
 	}
-}
-
-func (s *UserService) mapSubUser(record map[string]any) *model.User {
-	user := model.UserFromRecord(record)
-	t := true
-	user.IsSubUser = &t
-	return &user
 }
 
 func (s *UserService) mapRefreshRecordToUser(record map[string]any, refreshToken string) *model.User {

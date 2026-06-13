@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -258,39 +259,13 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 				return out
 			}
 			objUpdate["parent_account_id"] = preferredParent
-		}
-	}
-
-	if command == "delete" {
-		target := objUpdate
-		if len(target) == 0 {
-			target = h.rm.Find(appID, table, filter)
-		}
-		if len(target) == 0 {
-			out["success"] = false
-			out["message"] = "Record not found for delete"
-			return out
-		}
-		if access != nil {
-			scoped := security.FilterRowsForUpdate(table, []map[string]any{target}, access, appID, h.rm)
-			if len(scoped) == 0 {
+		} else if parent, ok := objUpdate["parent_account_id"].(string); ok && strings.TrimSpace(parent) != "" {
+			if !containsIdentifierCandidate(access.ParentAccountCandidates, parent) {
 				out["success"] = false
-				out["message"] = "Không tìm thấy bản ghi để xóa"
+				out["message"] = "Không được chuyển sub-user sang parent_account_id khác"
 				return out
 			}
-			target = scoped[0]
 		}
-		if err := h.rm.DeleteRecord(appID, table, target); err != nil {
-			out["success"] = false
-			out["message"] = err.Error()
-			return out
-		}
-		out["success"] = true
-		out["command"] = "delete"
-		out["message"] = "Record deleted"
-		out["updated_row"] = target
-		h.emitSocketUpdate(appID, table, "delete", target)
-		return out
 	}
 
 	objUpdate, pwErr := h.handlePasswordChange(appID, table, objUpdate, filter)
@@ -302,18 +277,58 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 
 	hasFilter := len(filter.Conditions) > 0 || filter.Field != ""
 	var finalObj map[string]any
-	if hasFilter {
-		existing := h.rm.Find(appID, table, filter)
+	if hasFilter || command == "update" || command == "delete" {
+		existing := h.lookupRecordsForUpdate(appID, table, filter, objUpdate)
+		if access != nil && len(existing) > 0 {
+			existing = security.FilterRowsForUpdate(table, existing, access, appID, h.rm)
+		}
+		if table == "csm_group_members" && access != nil && access.IsSubUser && command == "update" {
+			if msg := validateSubUserSelfEdit(objUpdate, existing, access); msg != "" {
+				out["success"] = false
+				out["message"] = msg
+				return out
+			}
+		}
+		if command == "delete" {
+			if len(existing) == 0 {
+				out["success"] = false
+				out["message"] = "Không tìm thấy bản ghi để xóa"
+				return out
+			}
+			target := existing[0]
+			if err := h.rm.DeleteRecord(appID, table, target); err != nil {
+				out["success"] = false
+				out["message"] = err.Error()
+				return out
+			}
+			out["success"] = true
+			out["command"] = "delete"
+			out["message"] = "Record deleted"
+			out["updated_row"] = target
+			h.emitSocketUpdate(appID, table, "delete", target)
+			return out
+		}
 		if len(existing) > 0 {
-			finalObj = existing
+			finalObj = existing[0]
 			for k, v := range objUpdate {
 				finalObj[k] = v
+			}
+		}
+	}
+	if finalObj == nil {
+		if hasFilter {
+			existing := h.rm.Find(appID, table, filter)
+			if len(existing) > 0 {
+				finalObj = existing
+				for k, v := range objUpdate {
+					finalObj[k] = v
+				}
+			} else {
+				finalObj = h.mergeWithExisting(appID, table, objUpdate)
 			}
 		} else {
 			finalObj = h.mergeWithExisting(appID, table, objUpdate)
 		}
-	} else {
-		finalObj = h.mergeWithExisting(appID, table, objUpdate)
 	}
 
 	cmd, err := h.rm.CreateRecord(appID, table, finalObj, nil)
@@ -539,4 +554,78 @@ func (h *TableHandler) HandleDropTable(params map[string]any, auth *security.Aut
 
 func tableItoa(n int) string {
 	return strconv.Itoa(n)
+}
+
+func containsIdentifierCandidate(candidates []string, value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, candidate := range candidates {
+		if strings.EqualFold(strings.TrimSpace(candidate), value) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateSubUserSelfEdit(objUpdate map[string]any, records []map[string]any, access *security.UserAccessContext) string {
+	if len(records) == 0 {
+		return "Không tìm thấy bản ghi để cập nhật"
+	}
+	currentUserID := ""
+	if len(access.OwnerCandidates) > 0 {
+		currentUserID = access.OwnerCandidates[0]
+	}
+	if strings.TrimSpace(currentUserID) == "" {
+		return "Không xác định được ID của sub-user hiện tại"
+	}
+	for _, row := range records {
+		rowID := strings.TrimSpace(fmt.Sprint(row["id"]))
+		if !strings.EqualFold(rowID, currentUserID) {
+			return "Sub-user chỉ được cập nhật thông tin của chính mình, không được sửa record của người khác"
+		}
+	}
+	restricted := []string{
+		"parent_account_id", "permissions", "menusPermissions", "permissionBitfield",
+		"permissionSchemaVersion", "dataScope", "group_id", "app_id", "app_token",
+	}
+	for _, field := range restricted {
+		if _, ok := objUpdate[field]; !ok {
+			continue
+		}
+		requested := strings.TrimSpace(fmt.Sprint(objUpdate[field]))
+		if requested == "" {
+			continue
+		}
+		for _, row := range records {
+			stored := strings.TrimSpace(fmt.Sprint(row[field]))
+			if stored != requested {
+				return "Sub-user không được thay đổi trường hệ thống: " + field + ". Bạn chỉ được sửa: password/pass và các thông tin cá nhân khác"
+			}
+		}
+	}
+	return ""
+}
+
+func (h *TableHandler) lookupRecordsForUpdate(appID, table string, filter model.SearchFilter, objUpdate map[string]any) []map[string]any {
+	if id, ok := objUpdate["id"]; ok && strings.TrimSpace(fmt.Sprint(id)) != "" {
+		if row := h.rm.Find(appID, table, model.EqFilter("id", id)); len(row) > 0 {
+			return []map[string]any{row}
+		}
+	}
+	result := h.rm.Filter(appID, table, filter)
+	rows, _ := result["rows"].([]any)
+	var out []map[string]any
+	for _, item := range rows {
+		if row, ok := item.(map[string]any); ok {
+			out = append(out, row)
+		}
+	}
+	if len(out) == 0 {
+		if row := h.rm.Find(appID, table, filter); len(row) > 0 {
+			return []map[string]any{row}
+		}
+	}
+	return out
 }

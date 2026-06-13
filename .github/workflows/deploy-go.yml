@@ -41,6 +41,7 @@ jobs:
           script: |
             set -e
             P="${{ env.DEPLOY_PATH }}"
+            SRC="$P/src"
             BIN="$P/${{ env.BINARY_NAME }}"
             REPO="${{ env.GIT_REPO }}"
 
@@ -50,26 +51,30 @@ jobs:
                      "$P/csm_datas/backups" \
                      "$P/csm_datas/ai_local/model"
 
-            if [ -d "$P/.git" ]; then
-              cd "$P" && git fetch origin && git reset --hard origin/main
+            # Source lives in $P/src — $P itself keeps binary, config.env, csm_datas (legacy layout).
+            if [ -d "$SRC/.git" ]; then
+              cd "$SRC" && git fetch origin && git reset --hard origin/main
             else
-              git clone "$REPO" "$P"
+              rm -rf "$SRC"
+              git clone --depth 1 -b main "$REPO" "$SRC"
             fi
-            echo "Code: $(git -C "$P" log --oneline -1)"
+            echo "Code: $(git -C "$SRC" log --oneline -1)"
 
             if ! command -v go >/dev/null 2>&1; then
-              echo "Installing Go..."
-              GO_VER=1.22.10
+              GO_VER="$(sed -n 's/^go //p' "$SRC/backend-go/go.mod" | head -1)"
+              if [ -z "$GO_VER" ]; then GO_VER=1.22.10; fi
+              echo "Installing Go $GO_VER..."
               curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" | tar -C /usr/local -xz
             fi
             export PATH="/usr/local/go/bin:$PATH"
+            go version
 
             BUILD_NATIVE="${{ github.event.inputs.build_native }}"
             if [ "$BUILD_NATIVE" = "" ]; then
               BUILD_NATIVE="true"
             fi
 
-            cd "$P/backend-go"
+            cd "$SRC/backend-go"
             if [ "$BUILD_NATIVE" = "true" ]; then
               echo "Building with CGO + llamacpp on server..."
               if ! command -v gcc >/dev/null 2>&1; then
@@ -89,7 +94,7 @@ jobs:
             ls -lh "$BIN"
             file "$BIN"
 
-            cat > /etc/systemd/system/csm-go.service << SVCEOF
+            cat > /etc/systemd/system/csm-go.service <<SVCEOF
             [Unit]
             Description=CSM Go Backend
             After=network.target

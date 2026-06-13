@@ -306,6 +306,15 @@ func HasActionPermission(permissions []string, action string) bool {
 	return false
 }
 
+func HasAnyActionPermission(permissions []string) bool {
+	for _, action := range []string{"view", "create", "edit", "delete", "export", "admin"} {
+		if HasActionPermission(permissions, action) {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeToken(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }

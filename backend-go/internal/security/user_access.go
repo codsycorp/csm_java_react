@@ -94,6 +94,15 @@ func UserAccessFromAuth(auth *AuthUser, rm *data.RecordManager) *UserAccessConte
 		dataAppIDs = nil
 	}
 
+	parentCandidates := collectParentAccountCandidates(auth)
+	if rm != nil && isSubUser && strings.TrimSpace(auth.UserID) != "" {
+		if sub := rm.Find("csm", "csm_group_members", model.EqFilter("id", auth.UserID)); len(sub) > 0 {
+			if parent, ok := sub["parent_account_id"].(string); ok && strings.TrimSpace(parent) != "" {
+				parentCandidates = mergeUniqueStrings(parentCandidates, parent)
+			}
+		}
+	}
+
 	return &UserAccessContext{
 		IsAdmin:                 isAdmin,
 		IsDev:                   auth.Dev,
@@ -104,7 +113,7 @@ func UserAccessFromAuth(auth *AuthUser, rm *data.RecordManager) *UserAccessConte
 		DataScope:               dataScope,
 		DataAppIDs:              dataAppIDs,
 		OwnerCandidates:         collectOwnerCandidates(auth),
-		ParentAccountCandidates: collectParentAccountCandidates(auth),
+		ParentAccountCandidates: parentCandidates,
 		DepartmentCandidates:    collectDepartmentCandidates(auth),
 		BranchCandidates:        collectBranchCandidates(auth),
 	}
@@ -383,6 +392,24 @@ func collectOwnerCandidates(auth *AuthUser) []string {
 		if normalized := normalizedIdentity(value); normalized != "" {
 			out = append(out, normalized)
 		}
+	}
+	return out
+}
+
+func mergeUniqueStrings(base []string, extra ...string) []string {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, value := range append(base, extra...) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, value)
 	}
 	return out
 }
