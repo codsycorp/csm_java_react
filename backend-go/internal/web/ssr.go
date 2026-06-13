@@ -235,8 +235,11 @@ func sitemapURLEntry(url, lastmod, changefreq, priority string) string {
 }
 
 func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
-	route := resolveRoute(ctx.RM, host, uri)
-	domain := DomainFromHost(host)
+	route := finalizeSSRRoute(resolveRoute(ctx.RM, host, uri), ctx.RM, host)
+	domain := route.Domain
+	if domain == "" {
+		domain = DomainFromHost(host)
+	}
 
 	rpIndex := route.RPIndex
 	indexPath := "index.html"
@@ -339,7 +342,10 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		enrichInitialData(initialData, listing, protocol, hostStr)
 	}
 
-	appConfig := map[string]any{"f_logo": routeLogo, "f_title": pageTitle}
+	appConfig := map[string]any{"f_logo": route.FLogo, "f_title": pageTitle}
+	if routeLogo := absoluteAssetURL(route.FLogo, protocol, hostStr); routeLogo != "" {
+		appConfig["f_logo"] = routeLogo
+	}
 	scripts := buildScripts(appConfig, initialData, categories, ssrRoutes, dynamicTemplates, meta, defaultServiceCode)
 
 	preload := ""
@@ -352,8 +358,16 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		for _, candidate := range []string{"admin/index.html", "index.html"} {
 			if p := ctx.RM.GetStaticFile(candidate); p != "" {
 				filePath = p
+				if rpIndex == "" {
+					rpIndex = "admin"
+				}
 				break
 			}
+		}
+	}
+	if filePath == "" && rpIndex != "" {
+		if p := ctx.RM.GetStaticFile(rpIndex + "/index.html"); p != "" {
+			filePath = p
 		}
 	}
 
@@ -380,7 +394,15 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	}
 
 	log.Printf("SSR fallback (index.html not found for rp_index=%s)", rpIndex)
-	return fallbackHTML(pageTitle, uri, route.AppID, scripts)
+	return fallbackHTML(pageTitle, uri, route.AppID, rpIndex, scripts)
+}
+
+func normalizeFCase(path string) string {
+	fCase := strings.TrimSpace(strings.ReplaceAll(path, ".shtml", ""))
+	if fCase == "/" {
+		return ""
+	}
+	return fCase
 }
 
 func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
@@ -389,27 +411,27 @@ func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 		return resolvedRoute{}
 	}
 
-	fCase := strings.TrimSpace(strings.ReplaceAll(path, ".shtml", ""))
-	if fCase == "/" {
-		fCase = ""
-	}
-
-	if route, ok := queryRoute(rm, []model.SearchFilter{
+	fCase := normalizeFCase(path)
+	catchAll, hasCatchAll := queryReactCatchAllRoute(rm, domain)
+	exact, hasExact := queryRoute(rm, []model.SearchFilter{
 		model.EqFilter("domain_name", domain),
 		model.EqFilter("f_case", fCase),
 		model.EqFilter("run", 1),
-	}); ok {
-		return route
-	}
+	})
 
-	if route, ok := queryRoute(rm, []model.SearchFilter{
-		model.EqFilter("domain_name", domain),
-		model.EqFilter("f_case", ""),
-		{Field: "rp_index", FilterType: "isnotnull"},
-		{Field: "rp_index", FilterType: "noteq", Value: ""},
-		model.EqFilter("run", 1),
-	}); ok {
-		return route
+	// Java: React SSR only when rp_index is set. SPA deep links (/login, /dashboard)
+	// must use the catch-all row (f_case="") even if an exact f_case row exists without rp_index.
+	if hasExact && strings.TrimSpace(exact.RPIndex) != "" {
+		return exact
+	}
+	if hasCatchAll {
+		if hasExact {
+			return mergeRouteForSPA(catchAll, exact)
+		}
+		return catchAll
+	}
+	if hasExact {
+		return exact
 	}
 
 	if route, ok := queryRoute(rm, []model.SearchFilter{
@@ -429,6 +451,82 @@ func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 	}
 
 	return resolvedRoute{Domain: domain}
+}
+
+func queryReactCatchAllRoute(rm *data.RecordManager, domain string) (resolvedRoute, bool) {
+	return queryRoute(rm, []model.SearchFilter{
+		model.EqFilter("domain_name", domain),
+		model.EqFilter("f_case", ""),
+		{Field: "rp_index", FilterType: "isnotnull"},
+		{Field: "rp_index", FilterType: "noteq", Value: ""},
+		model.EqFilter("run", 1),
+	})
+}
+
+func mergeRouteForSPA(base, overlay resolvedRoute) resolvedRoute {
+	out := base
+	if overlay.FTitle != "" {
+		out.FTitle = overlay.FTitle
+	}
+	if overlay.FKeyword != "" {
+		out.FKeyword = overlay.FKeyword
+	}
+	if overlay.FLogo != "" {
+		out.FLogo = overlay.FLogo
+	}
+	if overlay.GSV != "" {
+		out.GSV = overlay.GSV
+	}
+	if overlay.GTag != "" {
+		out.GTag = overlay.GTag
+	}
+	if strings.TrimSpace(overlay.AppID) != "" {
+		out.AppID = overlay.AppID
+	}
+	if strings.TrimSpace(overlay.TblServices) != "" {
+		out.TblServices = overlay.TblServices
+	}
+	if strings.TrimSpace(overlay.TblServiceDetail) != "" {
+		out.TblServiceDetail = overlay.TblServiceDetail
+	}
+	return out
+}
+
+func finalizeSSRRoute(route resolvedRoute, rm *data.RecordManager, host string) resolvedRoute {
+	route = enrichRouteFromRPIndex(route)
+	if strings.TrimSpace(route.RPIndex) == "" {
+		if pub := ResolveRPIndexPub(rm, host); pub != "" {
+			route.RPIndex = pub
+		} else if strings.HasPrefix(DomainFromHost(host), "admin.") {
+			route.RPIndex = "admin"
+		}
+	}
+	if strings.TrimSpace(route.AppID) == "" && strings.TrimSpace(route.RPIndex) != "" {
+		if catch, ok := queryReactCatchAllRoute(rm, route.Domain); ok && catch.AppID != "" {
+			route.AppID = catch.AppID
+			if route.TblServices == "" {
+				route.TblServices = catch.TblServices
+			}
+			if route.TblServiceDetail == "" {
+				route.TblServiceDetail = catch.TblServiceDetail
+			}
+		}
+	}
+	route = enrichRouteFromRPIndex(route)
+	return route
+}
+
+func enrichRouteFromRPIndex(route resolvedRoute) resolvedRoute {
+	if strings.TrimSpace(route.AppID) != "" || strings.TrimSpace(route.RPIndex) == "" {
+		return route
+	}
+	switch strings.ToLower(strings.Trim(route.RPIndex, "/")) {
+	case "admin":
+		route.AppID = "csm"
+	case "lmkt":
+		route.AppID = "lmkt"
+	}
+	return route
 }
 
 func queryRoute(rm *data.RecordManager, conditions []model.SearchFilter) (resolvedRoute, bool) {
@@ -1342,9 +1440,12 @@ func injectIntoHTML(html *string, scripts string) {
 	*html += scripts
 }
 
-func fallbackHTML(title, uri, appID, scripts string) string {
+func fallbackHTML(title, uri, appID, rpIndex, scripts string) string {
 	_ = uri
-	_ = appID
+	moduleSrc := "/assets/main.js"
+	if rpIndex = strings.Trim(strings.TrimSpace(rpIndex), "/"); rpIndex != "" {
+		moduleSrc = "/" + rpIndex + "/assets/main.js"
+	}
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -1353,6 +1454,6 @@ func fallbackHTML(title, uri, appID, scripts string) string {
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   %s
 </head>
-<body><div id="root"></div><script type="module" src="/assets/main.js"></script></body>
-</html>`, htmlEsc(title), scripts)
+<body id="home" data-app-id="%s"><div id="root"></div><script type="module" src="%s"></script></body>
+</html>`, htmlEsc(title), scripts, htmlEsc(appID), htmlEsc(moduleSrc))
 }
