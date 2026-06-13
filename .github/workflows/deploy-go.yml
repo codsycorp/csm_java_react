@@ -7,17 +7,18 @@ on:
       - "backend-go/**"
       - "config.env"
       - "config.local-8gb.env"
+      - "scripts/setup-llama-server-sidecar.sh"
       - ".github/workflows/deploy-go.yml"
   workflow_dispatch:
     inputs:
       build_native:
-        description: "Build with -tags llamacpp on server (recommended: true)"
+        description: "Try -tags llamacpp (needs glibc 2.32+ / GCC 11+; falls back to sidecar)"
         required: false
-        default: "true"
+        default: "false"
         type: choice
         options:
-          - "true"
           - "false"
+          - "true"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -51,7 +52,6 @@ jobs:
                      "$P/csm_datas/backups" \
                      "$P/csm_datas/ai_local/model"
 
-            # Source lives in $P/src — $P itself keeps binary, config.env, csm_datas (legacy layout).
             if [ -d "$SRC/.git" ]; then
               cd "$SRC" && git fetch origin && git reset --hard origin/main
             else
@@ -71,28 +71,48 @@ jobs:
 
             BUILD_NATIVE="${{ github.event.inputs.build_native }}"
             if [ "$BUILD_NATIVE" = "" ]; then
-              BUILD_NATIVE="true"
+              BUILD_NATIVE="false"
             fi
 
             cd "$SRC/backend-go"
+            AI_NATIVE=false
+
             if [ "$BUILD_NATIVE" = "true" ]; then
-              echo "Building with CGO + llamacpp on server..."
-              if ! command -v gcc >/dev/null 2>&1; then
-                apt-get update -qq
-                apt-get install -y --no-install-recommends build-essential
+              echo "Trying native build (CGO + llamacpp)..."
+              apt-get update -qq
+              apt-get install -y --no-install-recommends build-essential curl ca-certificates || true
+              if apt-get install -y --no-install-recommends gcc-12 g++-12 2>/dev/null; then
+                export CC=gcc-12
+                export CXX=g++-12
               fi
               export CGO_ENABLED=1
-              go build -tags llamacpp -ldflags="-s -w" -trimpath -o "$BIN" ./cmd/server
-              AI_NATIVE=true
-            else
-              echo "Building static binary (no native llama — sidecar required)..."
+              export CGO_LDFLAGS="${CGO_LDFLAGS:-} -static-libstdc++ -static-libgcc"
+              if go build -tags llamacpp -ldflags="-s -w" -trimpath -o "$BIN" ./cmd/server; then
+                AI_NATIVE=true
+                echo "Native llamacpp build succeeded"
+              else
+                echo "WARN: Native build failed (__libc_single_threaded / libstdc++ mismatch on this host)."
+                echo "      Falling back to static binary + llama-server sidecar."
+                rm -f "$BIN"
+              fi
+            fi
+
+            if [ "$AI_NATIVE" != "true" ]; then
+              echo "Building static binary..."
               export CGO_ENABLED=0
               go build -ldflags="-s -w" -trimpath -o "$BIN" ./cmd/server
-              AI_NATIVE=false
             fi
+
             chmod +x "$BIN"
             ls -lh "$BIN"
             file "$BIN"
+
+            if [ "$AI_NATIVE" != "true" ]; then
+              bash "$SRC/scripts/setup-llama-server-sidecar.sh" "$P" || echo "WARN: llama-server sidecar setup skipped/failed"
+            else
+              systemctl stop csm-llama 2>/dev/null || true
+              systemctl disable csm-llama 2>/dev/null || true
+            fi
 
             cat > /etc/systemd/system/csm-go.service <<SVCEOF
             [Unit]
@@ -118,6 +138,7 @@ jobs:
             Environment=REDIS_ENABLED=0
             Environment=CSM_SKIP_STARTUP_DB_INIT=1
             Environment=AI_LOCAL_LLAMA_NATIVE_ENABLED=$AI_NATIVE
+            Environment=AI_LOCAL_LLAMA_SERVER_URL=http://127.0.0.1:8888
             Environment=AI_LOCAL_LLAMA_GPU_LAYERS=0
             Environment=AI_LOCAL_LLAMA_PRELOAD_ON_STARTUP=false
             ExecStart=$BIN
@@ -140,10 +161,11 @@ jobs:
             sleep 8
 
             echo "=== PORTS ==="
-            ss -tlnp | grep -E ':9999|:15301' || true
+            ss -tlnp | grep -E ':9999|:15301|:8888' || true
 
             echo "=== STATUS ==="
             systemctl status csm-go --no-pager || true
+            systemctl status csm-llama --no-pager 2>/dev/null || true
 
             echo "=== HEALTH ==="
             curl -sf "http://127.0.0.1:9999/api/monitoring/health" || true
