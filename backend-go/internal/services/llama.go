@@ -277,7 +277,7 @@ func (l *LlamaService) statusHint() string {
 		return "Thiếu file GGUF. Chạy scripts/download-ai-local-models.sh 8gb trên server."
 	}
 	if l.cfg.AI.LlamaManagedSidecar {
-		return "Model có trên disk — csm-go đang khởi động llama-server (xem journalctl -u csm-go, đợi ~1–2 phút lần đầu)."
+		return "Model có trên disk — csm-go đang tải/build llama-server tương thích Ubuntu 20.04 (journalctl -u csm-go | grep LlamaManaged, ~2–6 phút)."
 	}
 	return "Bật AI_LOCAL_LLAMA_MANAGED_SIDECAR=true hoặc chạy llama-server tại " + l.completionBaseURL()
 }

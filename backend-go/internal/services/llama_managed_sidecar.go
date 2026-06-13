@@ -16,8 +16,6 @@ import (
 
 	"csm_server/backend-go/internal/config"
 )
-
-// managedSidecar runs llama-server as a child process of csm-go (no separate systemd unit).
 // This is the recommended mode on Ubuntu 20.04 where in-process CGO llamacpp is unavailable.
 type managedSidecar struct {
 	cfg           config.AppConfig
@@ -95,31 +93,42 @@ func (m *managedSidecar) ensureStarted() error {
 	if threads <= 0 {
 		threads = 3
 	}
-	ctxSize := m.cfg.EffectiveLlamaContextWindow()
+	ctxSize := int(m.cfg.EffectiveLlamaContextWindow())
+	workDir := filepath.Dir(model)
 
-	args := []string{
-		"-m", model,
-		"--host", host,
-		"--port", strconv.Itoa(port),
-		"-c", strconv.FormatUint(uint64(ctxSize), 10),
-		"-t", strconv.FormatInt(int64(threads), 10),
-		"--parallel", "1",
+	var cmd *exec.Cmd
+	var usedArgs []string
+	var startErr error
+	for _, args := range sidecarStartArgSets(model, host, port, ctxSize, threads) {
+		tryCmd := exec.Command(bin, args...)
+		tryCmd.Dir = workDir
+		tryCmd.Stdout = io.Writer(logWriter("llama-server"))
+		tryCmd.Stderr = io.Writer(logWriter("llama-server"))
+		tryCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		log.Printf("LlamaManaged: starting %s %s", bin, strings.Join(args, " "))
+		if err := tryCmd.Start(); err != nil {
+			startErr = err
+			continue
+		}
+		time.Sleep(2 * time.Second)
+		if !sidecarProcessAlive(tryCmd) {
+			_, _ = tryCmd.Process.Wait()
+			startErr = fmt.Errorf("llama-server exited immediately (try next args)")
+			continue
+		}
+		cmd = tryCmd
+		usedArgs = args
+		break
 	}
-
-	cmd := exec.Command(bin, args...)
-	cmd.Dir = filepath.Dir(model)
-	cmd.Stdout = io.Writer(logWriter("llama-server"))
-	cmd.Stderr = io.Writer(logWriter("llama-server"))
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	log.Printf("LlamaManaged: starting %s %s", bin, strings.Join(args, " "))
-	if err := cmd.Start(); err != nil {
+	if cmd == nil {
+		err := fmt.Errorf("could not start llama-server: %v", startErr)
 		m.mu.Lock()
 		m.started = true
 		m.startErr = err
 		m.mu.Unlock()
 		return err
 	}
+	_ = usedArgs
 
 	m.mu.Lock()
 	m.cmd = cmd
@@ -128,7 +137,7 @@ func (m *managedSidecar) ensureStarted() error {
 
 	go m.waitProcess()
 
-	if err := waitSidecarHTTP(m.cfg, m.reachable, 180*time.Second); err != nil {
+	if err := waitSidecarHTTP(m.cfg, m.reachable, 360*time.Second); err != nil {
 		m.stop()
 		m.mu.Lock()
 		m.started = true
@@ -236,6 +245,13 @@ func sidecarHostPort(cfg config.AppConfig) (string, int) {
 		}
 	}
 	return host, port
+}
+
+func sidecarProcessAlive(cmd *exec.Cmd) bool {
+	if cmd == nil || cmd.Process == nil {
+		return false
+	}
+	return cmd.Process.Signal(syscall.Signal(0)) == nil
 }
 
 func waitSidecarHTTP(cfg config.AppConfig, reachable func() bool, timeout time.Duration) error {

@@ -17,10 +17,14 @@ import (
 
 const sidecarDownloadTimeout = 5 * time.Minute
 
-var sidecarReleaseTags = []string{"b9562", "b7274", "b7224"}
+// Older tags first — prebuilt binaries after ~b6000 often require glibc 2.32+ (Ubuntu 22.04).
+var sidecarReleaseTags = []string{
+	"b4895", "b5273", "b5892", "b6187", "b7274", "b9562",
+}
 var sidecarArchiveNames = []string{
 	"llama-%s-bin-ubuntu-x64.tar.gz",
 	"llama-%s-bin-linux-x64.tar.gz",
+	"llama-%s-bin-ubuntu-x64.zip",
 }
 
 func sidecarInstallPath(cfg config.AppConfig) string {
@@ -49,6 +53,11 @@ func findExistingSidecarBinary(cfg config.AppConfig) (string, error) {
 			continue
 		}
 		_ = os.Chmod(candidate, 0o755)
+		if err := verifySidecarBinary(candidate); err != nil {
+			log.Printf("LlamaManaged: removing incompatible binary %s: %v", candidate, err)
+			_ = os.Remove(candidate)
+			continue
+		}
 		return candidate, nil
 	}
 	return "", fmt.Errorf("not found")
@@ -56,7 +65,12 @@ func findExistingSidecarBinary(cfg config.AppConfig) (string, error) {
 
 func bootstrapSidecarBinary(target string) error {
 	if info, err := os.Stat(target); err == nil && !info.IsDir() {
-		return os.Chmod(target, 0o755)
+		_ = os.Chmod(target, 0o755)
+		if err := verifySidecarBinary(target); err == nil {
+			return nil
+		}
+		log.Printf("LlamaManaged: replacing incompatible binary at %s", target)
+		_ = os.Remove(target)
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
@@ -78,19 +92,30 @@ func bootstrapSidecarBinary(target string) error {
 			archive := fmt.Sprintf(pattern, tag)
 			url := fmt.Sprintf("https://github.com/ggml-org/llama.cpp/releases/download/%s/%s", tag, archive)
 			log.Printf("LlamaManaged: downloading %s", url)
-			if err := downloadSidecarArchive(client, url, target); err == nil {
-				log.Printf("LlamaManaged: installed llama-server → %s", target)
-				return nil
-			} else {
+			if err := downloadSidecarArchive(client, url, target); err != nil {
 				lastErr = err
 				log.Printf("LlamaManaged: download failed (%s): %v", archive, err)
+				continue
 			}
+			if err := verifySidecarBinary(target); err != nil {
+				lastErr = err
+				log.Printf("LlamaManaged: binary from %s incompatible: %v", archive, err)
+				_ = os.Remove(target)
+				continue
+			}
+			log.Printf("LlamaManaged: installed llama-server → %s (%s)", target, archive)
+			return nil
 		}
 	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("no release matched")
+
+	log.Printf("LlamaManaged: prebuilt downloads failed (%v) — trying source build", lastErr)
+	if err := buildSidecarFromSource(target); err != nil {
+		if lastErr == nil {
+			lastErr = err
+		}
+		return fmt.Errorf("bootstrap llama-server: %w", lastErr)
 	}
-	return fmt.Errorf("bootstrap llama-server: %w", lastErr)
+	return nil
 }
 
 func downloadSidecarArchive(client *http.Client, url, target string) error {
@@ -107,7 +132,7 @@ func downloadSidecarArchive(client *http.Client, url, target string) error {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(target), "llama-server-*.tar.gz")
+	tmp, err := os.CreateTemp(filepath.Dir(target), "llama-server-*.download")
 	if err != nil {
 		return err
 	}
@@ -120,6 +145,10 @@ func downloadSidecarArchive(client *http.Client, url, target string) error {
 	}
 	if err := tmp.Close(); err != nil {
 		return err
+	}
+
+	if strings.HasSuffix(strings.ToLower(url), ".zip") {
+		return fmt.Errorf("zip archives require unzip on server")
 	}
 
 	f, err := os.Open(tmpPath)
@@ -146,8 +175,7 @@ func downloadSidecarArchive(client *http.Client, url, target string) error {
 		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
-		base := filepath.Base(hdr.Name)
-		if base != "llama-server" {
+		if filepath.Base(hdr.Name) != "llama-server" {
 			continue
 		}
 		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
