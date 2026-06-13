@@ -12,7 +12,7 @@ import (
 
 func TestSessionWriteAndJWTResolve(t *testing.T) {
 	dataDir := filepath.Join("..", "..", "..", "backend", "csm_datas")
-	if _, err := os.Stat(filepath.Join(dataDir, "native", "pebble", "csm.kv")); err != nil {
+	if _, err := os.Stat(filepath.Join(dataDir, "native", "pebble")); err != nil {
 		t.Skip("pebble store not present")
 	}
 	os.Setenv("APP_DATA_DIR", dataDir)

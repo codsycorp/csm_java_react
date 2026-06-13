@@ -30,7 +30,7 @@ esac
 
 export APP_DATA_DIR="${APP_DATA_DIR:-$ROOT/backend/csm_datas}"
 export CSM_NATIVE_DATA_DIR="${CSM_NATIVE_DATA_DIR:-$APP_DATA_DIR/native}"
-export CSM_PEBBLE_PATH="${CSM_PEBBLE_PATH:-$CSM_NATIVE_DATA_DIR/pebble/csm.kv}"
+export CSM_PEBBLE_ROOT="${CSM_PEBBLE_ROOT:-$CSM_NATIVE_DATA_DIR/pebble}"
 export CSM_SEARCH_DB_PATH="${CSM_SEARCH_DB_PATH:-$CSM_NATIVE_DATA_DIR/search/vectors.db}"
 export ROCKSDB_ROOT_DIR="${ROCKSDB_ROOT_DIR:-$APP_DATA_DIR/database}"
 export SERVER_PORT="${SERVER_PORT:-9999}"
@@ -45,7 +45,7 @@ if ! command -v go >/dev/null 2>&1; then
 fi
 
 config_log "HTTP port ${SERVER_PORT}"
-config_log "Pebble store ${CSM_PEBBLE_PATH} (pure Go — no RocksDB/CGO)"
+config_log "Pebble root ${CSM_PEBBLE_ROOT}/{app_id}/{table_name}/ (pure Go — no RocksDB/CGO)"
 config_log "Data dir ${APP_DATA_DIR}"
 config_log "Using go: $(command -v go) ($(go version 2>/dev/null || echo unknown))"
 

@@ -54,7 +54,8 @@ type AppConfig struct {
 	Socket          SocketConfig
 	DataDir         string
 	NativeDataDir   string
-	PebblePath      string
+	PebbleRoot      string
+	PebbleLegacy    string // optional monolithic csm.kv for read fallback during migration
 	SearchDBPath    string
 	SearchDBDir     string
 	RocksDBRoot     string // legacy source for one-time migrate only
@@ -70,7 +71,8 @@ type AppConfig struct {
 func LoadFromEnv() AppConfig {
 	dataDir := resolveDataDir()
 	nativeDir := envPath("CSM_NATIVE_DATA_DIR", filepath.Join(dataDir, "native"))
-	pebblePath := envPath("CSM_PEBBLE_PATH", filepath.Join(nativeDir, "pebble", "csm.kv"))
+	pebbleRoot := envPath("CSM_PEBBLE_ROOT", filepath.Join(nativeDir, "pebble"))
+	pebbleLegacy := resolvePebbleLegacy(nativeDir, pebbleRoot)
 	searchDBPath := envPath("CSM_SEARCH_DB_PATH", filepath.Join(nativeDir, "search", "vectors.db"))
 	rocksdbRoot := envPath("ROCKSDB_ROOT_DIR", filepath.Join(dataDir, "database"))
 	return AppConfig{
@@ -84,7 +86,8 @@ func LoadFromEnv() AppConfig {
 		},
 		DataDir:         dataDir,
 		NativeDataDir:   nativeDir,
-		PebblePath:      pebblePath,
+		PebbleRoot:      pebbleRoot,
+		PebbleLegacy:    pebbleLegacy,
 		SearchDBPath:    searchDBPath,
 		SearchDBDir:     filepath.Dir(searchDBPath),
 		RocksDBRoot:     rocksdbRoot,
@@ -281,6 +284,27 @@ func envFlagTrue(key string, def bool) bool {
 	}
 	v = strings.TrimSpace(strings.ToLower(v))
 	return v == "1" || v == "true" || v == "yes"
+}
+
+// resolvePebbleLegacy returns the path to a monolithic csm.kv if present (read fallback).
+func resolvePebbleLegacy(nativeDir, pebbleRoot string) string {
+	if v := os.Getenv("CSM_PEBBLE_LEGACY"); v != "" {
+		return envPath("CSM_PEBBLE_LEGACY", v)
+	}
+	// Backward compat: CSM_PEBBLE_PATH used to point at the single store file.
+	if v := os.Getenv("CSM_PEBBLE_PATH"); v != "" {
+		return envPath("CSM_PEBBLE_PATH", v)
+	}
+	candidate := filepath.Join(pebbleRoot, "csm.kv")
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+	// Also check legacy location under native/pebble/csm.kv
+	alt := filepath.Join(nativeDir, "pebble", "csm.kv")
+	if _, err := os.Stat(alt); err == nil {
+		return alt
+	}
+	return ""
 }
 
 // godotenvLoad wraps joho/godotenv without forcing import in tests.

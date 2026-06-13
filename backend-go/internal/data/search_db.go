@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/cockroachdb/pebble"
 	"csm_server/backend-go/internal/model"
 
 	_ "modernc.org/sqlite"
@@ -104,15 +103,14 @@ func (rm *RecordManager) ftsSearchKeys(appID, tableName, match string, limit int
 }
 
 func (rm *RecordManager) loadRecordByPebbleKey(pebbleKey string) (map[string]any, error) {
-	db, err := rm.dbOrErr()
+	appID, tableName, storageKey, err := ParsePebbleKey(pebbleKey)
 	if err != nil {
 		return nil, err
 	}
-	val, closer, err := db.Get([]byte(pebbleKey))
+	val, err := rm.getRecordBytes(appID, tableName, storageKey)
 	if err != nil {
 		return nil, err
 	}
-	defer closer.Close()
 	var record map[string]any
 	if err := json.Unmarshal(val, &record); err != nil {
 		return nil, err
@@ -204,30 +202,19 @@ func (rm *RecordManager) IndexExistingRecords(appID, tableName string) (int, err
 	}
 	rm.deleteSearchIndexForTable(app, table)
 
-	db, err := rm.dbOrErr()
-	if err != nil {
-		return 0, err
-	}
-	prefix := []byte(TablePrefix(app, table))
-	iter, err := db.NewIter(&pebble.IterOptions{LowerBound: prefix})
-	if err != nil {
-		return 0, err
-	}
-	defer iter.Close()
-
 	indexed := 0
-	for iter.First(); iter.Valid(); iter.Next() {
-		if !strings.HasPrefix(string(iter.Key()), string(prefix)) {
-			break
-		}
+	err = rm.scanTable(app, table, func(storageKey string, raw []byte) error {
 		var record map[string]any
-		if json.Unmarshal(iter.Value(), &record) != nil {
-			continue
+		if json.Unmarshal(raw, &record) != nil {
+			return nil
 		}
-		pebbleKey := string(iter.Key())
-		storageKey := RocksKeyFromPebbleKey(pebbleKey)
+		pebbleKey := PebbleKey(app, table, storageKey)
 		rm.upsertSearchIndex(app, table, pebbleKey, storageKey, record)
 		indexed++
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
 	log.Printf("FTS reindex %s/%s: %d records", app, table, indexed)
 	return indexed, nil

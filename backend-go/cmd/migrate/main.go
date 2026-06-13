@@ -36,7 +36,6 @@ import (
 )
 
 const (
-	metaCountPrefix = "__meta_count|"
 	defaultEmbedDim = 384
 	ldbScanSep      = " ==> "
 )
@@ -96,7 +95,7 @@ func defaultDest() string {
 func run() error {
 	src := filepath.Clean(*sourceDir)
 	dst := filepath.Clean(*destDir)
-	pebblePath := filepath.Join(dst, "pebble", "csm.kv")
+	pebbleRoot := filepath.Join(dst, "pebble")
 	searchPath := filepath.Join(dst, "search", "vectors.db")
 
 	ldb, err := resolveLDB(*ldbBin)
@@ -105,7 +104,7 @@ func run() error {
 	}
 	log.Printf("rocksdb_ldb: %s", ldb)
 	log.Printf("source RocksDB: %s", src)
-	log.Printf("dest Pebble:    %s", pebblePath)
+	log.Printf("dest Pebble:    %s/{app_id}/{table_name}/", pebbleRoot)
 	log.Printf("dest search:    %s", searchPath)
 	skipped := parseSkipApps(*skipApps)
 	if len(skipped) > 0 {
@@ -119,21 +118,15 @@ func run() error {
 		return fmt.Errorf("source not found: %w", err)
 	}
 
-	var pb *pebble.DB
 	var searchDB *sql.DB
 
 	if !*dryRun {
-		if err := os.MkdirAll(filepath.Dir(pebblePath), 0o755); err != nil {
+		if err := os.MkdirAll(pebbleRoot, 0o755); err != nil {
 			return err
 		}
 		if err := os.MkdirAll(filepath.Dir(searchPath), 0o755); err != nil {
 			return err
 		}
-		pb, err = pebble.Open(pebblePath, &pebble.Options{})
-		if err != nil {
-			return fmt.Errorf("open pebble: %w", err)
-		}
-		defer pb.Close()
 
 		searchDB, err = openSearchDB(searchPath)
 		if err != nil {
@@ -170,7 +163,7 @@ func run() error {
 			}
 			tableName := tableEntry.Name()
 			dbPath := filepath.Join(src, appID, tableName)
-			n, idx, err := migrateTable(ldb, appID, tableName, dbPath, pb, searchDB)
+			n, idx, err := migrateTable(ldb, appID, tableName, dbPath, pebbleRoot, searchDB)
 			if err != nil {
 				log.Printf("ERROR %s/%s: %v", appID, tableName, err)
 				continue
@@ -184,7 +177,7 @@ func run() error {
 
 	log.Printf("done: %d tables, %d records, %d search-indexed in %s", tables, totalKeys, indexed, time.Since(start))
 
-	if !*dryRun && pb != nil {
+	if !*dryRun {
 		meta := map[string]any{
 			"migratedAt":   time.Now().UTC().Format(time.RFC3339),
 			"source":       src,
@@ -192,9 +185,11 @@ func run() error {
 			"indexedCount": indexed,
 			"embedDim":     *embedDim,
 			"tool":         "rocksdb_ldb",
+			"layout":       "pebble/{app_id}/{table_name}",
 		}
-		raw, _ := json.Marshal(meta)
-		if err := pb.Set([]byte("__migration_meta__"), raw, pebble.Sync); err != nil {
+		raw, _ := json.MarshalIndent(meta, "", "  ")
+		metaPath := filepath.Join(pebbleRoot, "_migration.json")
+		if err := os.WriteFile(metaPath, raw, 0o644); err != nil {
 			return err
 		}
 	}
@@ -219,9 +214,19 @@ func resolveLDB(explicit string) (string, error) {
 	return "", fmt.Errorf("rocksdb_ldb not found — run: brew install rocksdb")
 }
 
-func migrateTable(ldb, appID, tableName, dbPath string, pb *pebble.DB, searchDB *sql.DB) (records int64, indexed int64, err error) {
+func migrateTable(ldb, appID, tableName, dbPath, pebbleRoot string, searchDB *sql.DB) (records int64, indexed int64, err error) {
+	var pb *pebble.DB
 	var batch *pebble.Batch
-	if pb != nil {
+	if !*dryRun {
+		destPath := filepath.Join(pebbleRoot, strings.ToLower(strings.TrimSpace(appID)), strings.ToLower(strings.TrimSpace(tableName)))
+		if err := os.MkdirAll(destPath, 0o755); err != nil {
+			return 0, 0, err
+		}
+		pb, err = pebble.Open(destPath, &pebble.Options{})
+		if err != nil {
+			return 0, 0, fmt.Errorf("open pebble %s: %w", destPath, err)
+		}
+		defer pb.Close()
 		batch = pb.NewBatch()
 		defer batch.Close()
 	}
@@ -258,7 +263,7 @@ func migrateTable(ldb, appID, tableName, dbPath string, pb *pebble.DB, searchDB 
 		pk := data.PebbleKey(appID, tableName, key)
 
 		if batch != nil {
-			if err := batch.Set([]byte(pk), value, nil); err != nil {
+			if err := batch.Set([]byte(key), value, nil); err != nil {
 				return err
 			}
 			pending++
@@ -300,10 +305,9 @@ func migrateTable(ldb, appID, tableName, dbPath string, pb *pebble.DB, searchDB 
 		}
 	}
 	if pb != nil {
-		metaKey := metaCountPrefix + appID + "|" + tableName
 		buf := make([]byte, 8)
 		binary.LittleEndian.PutUint64(buf, uint64(tableCount))
-		_ = pb.Set([]byte(metaKey), buf, pebble.Sync)
+		_ = pb.Set([]byte("__meta_count"), buf, pebble.Sync)
 	}
 	return records, indexed, nil
 }

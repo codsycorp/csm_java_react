@@ -3,11 +3,11 @@ package data
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -16,42 +16,53 @@ import (
 	"csm_server/backend-go/internal/model"
 )
 
+var errScanStop = errors.New("scan stop")
+
 type RecordManager struct {
-	cfg      config.AppConfig
-	dataDir  string
-	db       *pebble.DB
-	searchDB *sql.DB
-	mu       sync.RWMutex
-	closed   bool
+	cfg        config.AppConfig
+	dataDir    string
+	pebbleRoot string
+	tableDBs   map[string]*pebble.DB
+	legacyDB   *pebble.DB
+	searchDB   *sql.DB
+	dbMu       sync.RWMutex
+	legacyMu   sync.RWMutex
+	closed     bool
 }
 
 func NewRecordManager(cfg config.AppConfig) (*RecordManager, error) {
-	for _, dir := range []string{cfg.DataDir, cfg.NativeDataDir, cfg.SearchDBDir} {
+	for _, dir := range []string{cfg.DataDir, cfg.NativeDataDir, cfg.SearchDBDir, cfg.PebbleRoot} {
 		if err := config.EnsureDir(dir); err != nil {
 			return nil, fmt.Errorf("ensure dir %s: %w", dir, err)
 		}
 	}
-	if err := config.EnsureDir(filepath.Dir(cfg.PebblePath)); err != nil {
-		return nil, err
-	}
-
-	db, err := pebble.Open(cfg.PebblePath, &pebble.Options{})
-	if err != nil {
-		return nil, fmt.Errorf("open pebble %s: %w", cfg.PebblePath, err)
-	}
 
 	rm := &RecordManager{
-		cfg:     cfg,
-		dataDir: cfg.DataDir,
-		db:      db,
+		cfg:        cfg,
+		dataDir:    cfg.DataDir,
+		pebbleRoot: cfg.PebbleRoot,
+		tableDBs:   make(map[string]*pebble.DB),
 	}
+
+	if cfg.PebbleLegacy != "" {
+		if _, err := os.Stat(cfg.PebbleLegacy); err == nil {
+			legacy, err := pebble.Open(cfg.PebbleLegacy, &pebble.Options{ReadOnly: true})
+			if err != nil {
+				log.Printf("RecordManager: legacy Pebble read-only open failed (%v) — ignoring", err)
+			} else {
+				rm.legacyDB = legacy
+				log.Printf("RecordManager: legacy monolithic Pebble (read fallback) %s", cfg.PebbleLegacy)
+			}
+		}
+	}
+
 	if searchDB, err := openSearchDB(cfg.SearchDBPath); err == nil {
 		rm.searchDB = searchDB
 		log.Printf("RecordManager: FTS search %s", cfg.SearchDBPath)
 	} else if !os.IsNotExist(err) {
 		log.Printf("RecordManager: FTS search unavailable (%v)", err)
 	}
-	log.Printf("RecordManager: Pebble store %s (pure Go, no RocksDB/CGO)", cfg.PebblePath)
+	log.Printf("RecordManager: Pebble root %s/{app_id}/{table_name}/ (pure Go, no RocksDB/CGO)", cfg.PebbleRoot)
 	return rm, nil
 }
 
@@ -60,21 +71,27 @@ func (rm *RecordManager) Init() {
 }
 
 func (rm *RecordManager) ShutdownAll() {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
+	rm.dbMu.Lock()
+	defer rm.dbMu.Unlock()
 	if rm.closed {
 		return
 	}
 	rm.closed = true
-	if rm.db != nil {
-		_ = rm.db.Close()
-		rm.db = nil
+	for key, db := range rm.tableDBs {
+		_ = db.Close()
+		delete(rm.tableDBs, key)
 	}
+	rm.legacyMu.Lock()
+	if rm.legacyDB != nil {
+		_ = rm.legacyDB.Close()
+		rm.legacyDB = nil
+	}
+	rm.legacyMu.Unlock()
 	if rm.searchDB != nil {
 		_ = rm.searchDB.Close()
 		rm.searchDB = nil
 	}
-	log.Println("Pebble store closed")
+	log.Println("Pebble stores closed")
 }
 
 func (rm *RecordManager) sanitizeSegment(segment, label string) (string, error) {
@@ -86,15 +103,6 @@ func (rm *RecordManager) sanitizeSegment(segment, label string) (string, error) 
 		return "", fmt.Errorf("%s contains invalid path characters: %s", label, segment)
 	}
 	return s, nil
-}
-
-func (rm *RecordManager) dbOrErr() (*pebble.DB, error) {
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-	if rm.closed || rm.db == nil {
-		return nil, fmt.Errorf("record manager shut down")
-	}
-	return rm.db, nil
 }
 
 func (rm *RecordManager) Find(appID, tableName string, filter model.SearchFilter) map[string]any {
@@ -179,41 +187,26 @@ func (rm *RecordManager) collectFilteredRecords(appID, tableName string, filter 
 		}
 	}
 
-	db, err := rm.dbOrErr()
-	if err != nil {
-		return nil
-	}
-
-	prefix := []byte(TablePrefix(app, table))
 	seen := make(map[string]struct{})
 	var records []map[string]any
-
-	iter, err := db.NewIter(&pebble.IterOptions{LowerBound: prefix})
-	if err != nil {
-		return nil
-	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
-		if !strings.HasPrefix(string(iter.Key()), string(prefix)) {
-			break
-		}
+	err = rm.scanTable(app, table, func(storageKey string, raw []byte) error {
 		var record map[string]any
-		if err := json.Unmarshal(iter.Value(), &record); err != nil {
-			continue
-		}
-		if !filter.Matches(record) {
-			continue
+		if json.Unmarshal(raw, &record) != nil || !filter.Matches(record) {
+			return nil
 		}
 		dedup := recordKey(record)
 		if dedup == "" {
-			dedup = RocksKeyFromPebbleKey(string(iter.Key()))
+			dedup = storageKey
 		}
 		if _, ok := seen[dedup]; ok {
-			continue
+			return nil
 		}
 		seen[dedup] = struct{}{}
 		records = append(records, record)
+		return nil
+	})
+	if err != nil {
+		log.Printf("scan table %s/%s: %v", app, table, err)
 	}
 	return records
 }
@@ -223,27 +216,19 @@ func (rm *RecordManager) tryFindByScan(appID, tableName string, filter model.Sea
 	if err != nil {
 		return nil
 	}
-	db, err := rm.dbOrErr()
-	if err != nil {
-		return nil
-	}
-	prefix := []byte(TablePrefix(app, table))
-	iter, err := db.NewIter(&pebble.IterOptions{LowerBound: prefix})
-	if err != nil {
-		return nil
-	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
-		if !strings.HasPrefix(string(iter.Key()), string(prefix)) {
-			break
-		}
+	var found map[string]any
+	err = rm.scanTable(app, table, func(_ string, raw []byte) error {
 		var record map[string]any
-		if err := json.Unmarshal(iter.Value(), &record); err == nil && filter.Matches(record) {
-			return record
+		if json.Unmarshal(raw, &record) == nil && filter.Matches(record) {
+			found = record
+			return errScanStop
 		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errScanStop) {
+		log.Printf("scan table %s/%s: %v", app, table, err)
 	}
-	return nil
+	return found
 }
 
 func (rm *RecordManager) CreateRecord(appID, tableName string, record map[string]any, customPK []string) (string, error) {
@@ -251,7 +236,7 @@ func (rm *RecordManager) CreateRecord(appID, tableName string, record map[string
 	if err != nil {
 		return "", err
 	}
-	db, err := rm.dbOrErr()
+	db, err := rm.tableDB(app, table)
 	if err != nil {
 		return "", err
 	}
@@ -265,9 +250,7 @@ func (rm *RecordManager) CreateRecord(appID, tableName string, record map[string
 
 	var existingKey string
 	for _, c := range candidates {
-		pk := PebbleKey(app, table, c)
-		if _, closer, err := db.Get([]byte(pk)); err == nil {
-			_ = closer.Close()
+		if _, err := rm.getRecordBytes(app, table, c); err == nil {
 			existingKey = c
 			break
 		}
@@ -283,7 +266,7 @@ func (rm *RecordManager) CreateRecord(appID, tableName string, record map[string
 	if err != nil {
 		return "", err
 	}
-	if err := db.Set([]byte(PebbleKey(app, table, storageKey)), raw, pebble.Sync); err != nil {
+	if err := db.Set([]byte(storageKey), raw, pebble.Sync); err != nil {
 		return "", err
 	}
 	rm.upsertSearchIndex(app, table, PebbleKey(app, table, storageKey), storageKey, record)
@@ -323,26 +306,19 @@ func (rm *RecordManager) FindByCustomPK(appID, tableName string, record map[stri
 	if err != nil {
 		return nil
 	}
-	db, err := rm.dbOrErr()
-	if err != nil {
-		return nil
-	}
 	keyBase := rm.buildPrimaryKey(app, table, record, pkFields)
 	if keyBase == "" {
 		return nil
 	}
 	for _, candidate := range StorageKeyCandidates(app, table, keyBase) {
-		pk := PebbleKey(app, table, candidate)
-		val, closer, err := db.Get([]byte(pk))
+		val, err := rm.getRecordBytes(app, table, candidate)
 		if err != nil {
 			continue
 		}
 		var out map[string]any
 		if json.Unmarshal(val, &out) == nil && len(out) > 0 {
-			_ = closer.Close()
 			return out
 		}
-		_ = closer.Close()
 	}
 	return nil
 }
@@ -507,19 +483,17 @@ func (rm *RecordManager) GetTableStructField(appID, tableName, field string) []s
 func (rm *RecordManager) FindExistingByPK(appID, tableName string, record map[string]any) map[string]any {
 	pkFields := rm.GetTablePKFields(appID, tableName)
 	keyBase := rm.buildPrimaryKey(appID, tableName, record, pkFields)
-	db, err := rm.dbOrErr()
+	app, table, err := rm.sanitizeTable(appID, tableName)
 	if err != nil {
 		return nil
 	}
-	for _, candidate := range StorageKeyCandidates(appID, tableName, keyBase) {
-		pk := PebbleKey(appID, tableName, candidate)
-		val, closer, err := db.Get([]byte(pk))
+	for _, candidate := range StorageKeyCandidates(app, table, keyBase) {
+		val, err := rm.getRecordBytes(app, table, candidate)
 		if err != nil {
 			continue
 		}
 		var out map[string]any
 		_ = json.Unmarshal(val, &out)
-		_ = closer.Close()
 		if len(out) > 0 {
 			return out
 		}
@@ -532,7 +506,7 @@ func (rm *RecordManager) DeleteRecord(appID, tableName string, record map[string
 	if err != nil {
 		return err
 	}
-	db, err := rm.dbOrErr()
+	db, err := rm.tableDB(app, table)
 	if err != nil {
 		return err
 	}
@@ -542,16 +516,15 @@ func (rm *RecordManager) DeleteRecord(appID, tableName string, record map[string
 	var deleted bool
 	var deletedKey string
 	for _, candidate := range candidates {
-		pk := PebbleKey(app, table, candidate)
-		if _, closer, err := db.Get([]byte(pk)); err == nil {
-			_ = closer.Close()
-			if err := db.Delete([]byte(pk), pebble.Sync); err != nil {
-				return err
-			}
-			deletedKey = pk
-			deleted = true
-			break
+		if _, err := rm.getRecordBytes(app, table, candidate); err != nil {
+			continue
 		}
+		if err := db.Delete([]byte(candidate), pebble.Sync); err != nil {
+			return err
+		}
+		deletedKey = PebbleKey(app, table, candidate)
+		deleted = true
+		break
 	}
 	if !deleted {
 		return fmt.Errorf("record not found for delete")
@@ -570,44 +543,19 @@ func (rm *RecordManager) DropTable(params map[string]any) map[string]any {
 	if err != nil {
 		return map[string]any{"success": false, "message": err.Error()}
 	}
-	db, err := rm.dbOrErr()
+
+	path, err := rm.tableDBPath(app, table)
 	if err != nil {
 		return map[string]any{"success": false, "message": err.Error()}
 	}
-	prefix := []byte(TablePrefix(app, table))
-	iter, err := db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: upperBound(prefix)})
-	if err != nil {
-		return map[string]any{"success": false, "message": err.Error()}
-	}
-	defer iter.Close()
-	batch := db.NewBatch()
-	defer batch.Close()
-	count := 0
-	for iter.First(); iter.Valid(); iter.Next() {
-		if err := batch.Delete(iter.Key(), nil); err != nil {
-			return map[string]any{"success": false, "message": err.Error()}
-		}
-		count++
-	}
-	if count > 0 {
-		if err := batch.Commit(pebble.Sync); err != nil {
-			return map[string]any{"success": false, "message": err.Error()}
-		}
-	}
+	rm.closeTableDB(app, table)
 	rm.deleteSearchIndexForTable(app, table)
+
+	if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
+		return map[string]any{"success": false, "message": err.Error()}
+	}
 	return map[string]any{
 		"success": true,
-		"message": fmt.Sprintf("Dropped %s (%d keys)", tableName, count),
+		"message": fmt.Sprintf("Dropped %s/%s", app, table),
 	}
-}
-
-func upperBound(prefix []byte) []byte {
-	end := append([]byte(nil), prefix...)
-	for i := len(end) - 1; i >= 0; i-- {
-		end[i]++
-		if end[i] != 0 {
-			return end
-		}
-	}
-	return nil
 }
