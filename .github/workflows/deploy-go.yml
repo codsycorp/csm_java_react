@@ -108,16 +108,28 @@ jobs:
             file "$BIN"
 
             if [ "$AI_NATIVE" != "true" ]; then
-              bash "$SRC/scripts/setup-llama-server-sidecar.sh" "$P" || echo "WARN: llama-server sidecar setup skipped/failed"
+              bash "$SRC/scripts/setup-llama-server-sidecar.sh" "$P" --require-healthy || {
+                echo "ERROR: llama-server sidecar failed — AI local will be unavailable"
+                journalctl -u csm-llama -n 50 --no-pager || true
+                exit 1
+              }
             else
               systemctl stop csm-llama 2>/dev/null || true
               systemctl disable csm-llama 2>/dev/null || true
             fi
 
+            LLAMA_AFTER="After=network.target"
+            LLAMA_WANTS=""
+            if [ "$AI_NATIVE" != "true" ]; then
+              LLAMA_AFTER="After=network.target csm-llama.service"
+              LLAMA_WANTS="Wants=csm-llama.service"
+            fi
+
             cat > /etc/systemd/system/csm-go.service <<SVCEOF
             [Unit]
             Description=CSM Go Backend
-            After=network.target
+            $LLAMA_AFTER
+            $LLAMA_WANTS
 
             [Service]
             Type=simple
@@ -172,7 +184,15 @@ jobs:
             echo
 
             echo "=== AI LOCAL ==="
-            curl -sf "http://127.0.0.1:9999/api/ai-local/health" || true
+            AI_HEALTH="$(curl -sf "http://127.0.0.1:9999/api/ai-local/health" || true)"
+            echo "$AI_HEALTH"
+            if [ "$AI_NATIVE" != "true" ]; then
+              if ! echo "$AI_HEALTH" | grep -q '"available":true'; then
+                echo "ERROR: AI local not available after deploy (sidecar expected)"
+                journalctl -u csm-llama -n 40 --no-pager || true
+                exit 1
+              fi
+            fi
             echo
 
             echo "=== SOCKET.IO ==="

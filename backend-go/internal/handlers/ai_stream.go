@@ -179,7 +179,13 @@ func handleAssistantChatStream(deps StreamDeps, w http.ResponseWriter, params ma
 		writeSSEData(w, "[DONE]")
 		return
 	}
-	writeSSE(w, map[string]any{"error": "llama unavailable"})
+	errMsg := services.LocalUnavailableMessage()
+	if deps.Llama.ModelOnDisk() {
+		errMsg = "Model GGUF có trên disk nhưng inference chưa sẵn sàng. " + services.LocalUnavailableHint()
+	} else {
+		errMsg = errMsg + ". " + services.LocalUnavailableHint()
+	}
+	writeSSE(w, map[string]any{"error": errMsg})
 }
 
 func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[string]any) {

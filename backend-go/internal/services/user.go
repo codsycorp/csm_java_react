@@ -174,6 +174,10 @@ func (s *UserService) resolveFromClaims(claims *security.Claims) *model.User {
 		if rec := s.findAppTokenPKRecord(*user.AppToken); len(rec) > 0 {
 			fresh := s.mapRecordToUser(rec, true)
 			user = &fresh
+		} else if sub := s.findSubUserByAppToken(*user.AppToken); len(sub) > 0 {
+			if mapped := s.mapSubUser(sub); mapped != nil {
+				user = mapped
+			}
 		} else if fresh := s.FindByAppToken(*user.AppToken); fresh != nil {
 			user = fresh
 		}

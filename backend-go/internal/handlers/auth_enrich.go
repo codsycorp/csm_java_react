@@ -98,14 +98,30 @@ func enrichUserInfoWithBitfield(info map[string]any) {
 		util.MenusFromBitfield(storedBitfield),
 	)
 
+	appID, _ := info["app_id"].(string)
+	isSubUser, _ := info["is_sub_user"].(bool)
+	if dev {
+		util.ApplyDevPermissionElevation(&permissions, &menusPermissions, appID)
+	} else if !isSubUser {
+		util.ApplyMainAccountPermissionElevation(&permissions, &menusPermissions, appID)
+	} else if !util.HasAnyActionPermission(permissions) {
+		permissions = util.MergeUniqueCaseInsensitive(permissions, []string{"view"})
+	}
+
 	bitfield := util.BuildBitfield(permissions, menusPermissions, dev)
+	dataScope := util.ResolveDataScope(bitfield)
+	if dev {
+		dataScope = "ALL"
+	} else if !isSubUser {
+		dataScope = "ALL"
+	}
 
 	info["roles"] = permissions
 	info["permissions"] = permissions
 	info["menusPermissions"] = menusPermissions
 	info["permissionBitfield"] = util.ToCompactToken(bitfield)
 	info["permissionSchemaVersion"] = util.SchemaV3
-	info["dataScope"] = util.ResolveDataScope(bitfield)
+	info["dataScope"] = dataScope
 }
 
 func enrichBitfield(user *model.User, info map[string]any) {

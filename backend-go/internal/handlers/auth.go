@@ -299,45 +299,104 @@ func (h *AuthHandler) finishUserInfoResponse(user *model.User, resp *model.Stand
 }
 
 func filterRoutesByRole(allRoutes []any, auth *security.AuthUser) []any {
+	if auth == nil {
+		return nil
+	}
 	if auth.Dev {
 		return allRoutes
 	}
-	var out []any
-	role := ""
+	userRole := ""
 	if len(auth.Permissions) > 0 {
-		role = auth.Permissions[0]
+		userRole = auth.Permissions[0]
 	}
-	menuSet := make(map[string]struct{})
-	for _, m := range auth.MenusPermissions {
-		menuSet[m] = struct{}{}
+	if userRole == "" {
+		return nil
 	}
-	for _, item := range allRoutes {
+	menuPaths := auth.MenusPermissions
+	if menuPaths == nil {
+		menuPaths = []string{}
+	}
+	seen := make(map[string]struct{})
+	return filterRoutesByRoleAndMenus(allRoutes, userRole, menuPaths, auth.Dev, seen)
+}
+
+// filterRoutesByRoleAndMenus mirrors Java AuthHandler.filterRoutesByRoleAndMenus.
+func filterRoutesByRoleAndMenus(routes []any, userRole string, allowedMenuPaths []string, isDev bool, seenPaths map[string]struct{}) []any {
+	if routes == nil {
+		return nil
+	}
+	menuSet := make(map[string]struct{}, len(allowedMenuPaths))
+	for _, path := range allowedMenuPaths {
+		menuSet[path] = struct{}{}
+	}
+	var out []any
+	for _, item := range routes {
 		route, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		if role != "" {
-			if roles, ok := route["roles"].([]any); ok {
-				match := false
-				for _, r := range roles {
-					if s, ok := r.(string); ok && s == role {
-						match = true
-						break
-					}
-				}
-				if !match {
-					continue
-				}
+		path, _ := route["path"].(string)
+		if path == "" {
+			continue
+		}
+		if _, seen := seenPaths[path]; seen {
+			continue
+		}
+		seenPaths[path] = struct{}{}
+
+		current := copyMap(route)
+		if children, ok := route["children"].([]any); ok {
+			current["children"] = filterRoutesByRoleAndMenus(children, userRole, allowedMenuPaths, isDev, seenPaths)
+		}
+
+		handle, _ := route["handle"].(map[string]any)
+		roles := stringListFromAny(handle["roles"])
+		if len(roles) == 0 {
+			roles = stringListFromAny(route["roles"])
+		}
+
+		hasRoleAccess := false
+		for _, role := range roles {
+			if role == userRole {
+				hasRoleAccess = true
+				break
 			}
 		}
-		if name, ok := route["name"].(string); ok {
-			if _, ok := menuSet[name]; len(menuSet) > 0 && !ok {
-				continue
-			}
+
+		hasMenuAccess := false
+		if _, ok := menuSet[path]; ok {
+			hasMenuAccess = true
 		}
-		out = append(out, route)
+
+		isSystemRoute := path == "/system" || strings.HasPrefix(path, "/system/")
+		isDevOnlySystemPath := isDevOnlySystemRoute(path)
+		isAdminSystemAccess := userRole == "admin" && isSystemRoute && !isDevOnlySystemPath
+
+		hasChildren := false
+		if children, ok := current["children"].([]any); ok && len(children) > 0 {
+			hasChildren = true
+		}
+
+		include := false
+		if isSystemRoute {
+			include = isDev || hasRoleAccess || isAdminSystemAccess || hasChildren
+		} else {
+			include = hasRoleAccess || hasMenuAccess || hasChildren
+		}
+		if include {
+			out = append(out, current)
+		}
 	}
 	return out
+}
+
+func isDevOnlySystemRoute(path string) bool {
+	for _, prefix := range []string{"/system/menu", "/system/developer", "/system/broadcast"} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func appendAuthCookies(resp *model.StandardResponse, params map[string]any, refreshToken, csrf string) {

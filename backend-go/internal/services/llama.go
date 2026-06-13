@@ -226,7 +226,39 @@ func LocalUnavailableMessage() string {
 }
 
 func LocalUnavailableHint() string {
-	return "Cần binary build -tags llamacpp (AI_LOCAL_LLAMA_NATIVE_ENABLED=true) hoặc chạy llama-server tại AI_LOCAL_LLAMA_SERVER_URL (mặc định :8888)"
+	return "Chạy: systemctl status csm-llama && journalctl -u csm-llama -n 30. Hoặc build native: go build -tags llamacpp (Ubuntu 22.04+, glibc 2.32+)."
+}
+
+func (l *LlamaService) StatusSummary() map[string]any {
+	return map[string]any{
+		"modelOnDisk":      l.ModelOnDisk(),
+		"modelPath":        l.cfg.AI.LlamaModelPath,
+		"nativeEnabled":    l.cfg.AI.LlamaNativeEnabled,
+		"nativeReady":      l.UsesNative(),
+		"sidecarURL":       l.completionBaseURL(),
+		"sidecarReachable": l.SidecarReachable(),
+		"available":        l.IsAvailable(),
+		"hint":             l.statusHint(),
+	}
+}
+
+func (l *LlamaService) statusHint() string {
+	if l.IsAvailable() {
+		if l.UsesNative() {
+			return "Inference: llama.cpp native (in-process Go)"
+		}
+		return "Inference: llama-server sidecar at " + l.completionBaseURL()
+	}
+	if !l.ModelOnDisk() {
+		return "Thiếu file GGUF. Chạy scripts/download-ai-local-models.sh 8gb trên server."
+	}
+	if l.UsesNative() {
+		return "Native build có llamacpp nhưng model chưa load — xem log csm-go."
+	}
+	if l.cfg.AI.LlamaNativeEnabled && !l.UsesNative() {
+		return "Binary Go không build -tags llamacpp. Cần csm-llama sidecar: systemctl restart csm-llama"
+	}
+	return "Sidecar chưa sẵn sàng. Chạy: bash scripts/setup-llama-server-sidecar.sh /root/la_server --require-healthy"
 }
 
 func StreamingModelLabel(cfg config.AppConfig, llama *LlamaService) string {

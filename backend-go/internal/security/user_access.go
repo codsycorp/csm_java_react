@@ -59,7 +59,11 @@ func UserAccessFromAuth(auth *AuthUser, rm *data.RecordManager) *UserAccessConte
 		util.ApplyDevPermissionElevation(&permissions, &menusPermissions, appID)
 	}
 	if isSubUser {
-		permissions = util.SubtractCaseInsensitive(permissions, []string{"admin", "dev", "scope:all"})
+		// Mirror Java mapSubUserRecordToUser: strip admin/dev at login only, not scope:all.
+		permissions = util.SubtractCaseInsensitive(permissions, []string{"admin", "dev"})
+		if !util.HasAnyActionPermission(permissions) {
+			permissions = util.MergeUniqueCaseInsensitive(permissions, []string{"view"})
+		}
 	}
 
 	isAdminByDefault := !auth.Dev && !isSubUser
@@ -209,11 +213,15 @@ func ValidatePermissionGroupAppBoundary(appID, tableName string, ctx *UserAccess
 	if ctx == nil || ctx.IsDev || tableName != "csm_roles" {
 		return ""
 	}
+	contextApp := strings.TrimSpace(ctx.AppID)
 	targetApp := strings.TrimSpace(appID)
-	if targetApp == "" || ctx.CanAccessAppData(targetApp) {
+	if contextApp == "" || targetApp == "" {
 		return ""
 	}
-	return "Bạn chỉ được quản lý Nhóm quyền trong app_id của chính mình."
+	if !strings.EqualFold(contextApp, targetApp) {
+		return "Bạn chỉ được quản lý Nhóm quyền trong app_id của chính mình."
+	}
+	return ""
 }
 
 func MergeOnlyMySubusersFilter(tableName string, isUpdate, onlyMySubusers bool, existing model.SearchFilter, ctx *UserAccessContext) model.SearchFilter {

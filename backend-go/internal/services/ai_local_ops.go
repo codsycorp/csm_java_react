@@ -91,6 +91,10 @@ func (s *AiLocalOpsService) Health(llama *LlamaService) map[string]any {
 	nativeReady := llama != nil && llama.UsesNative()
 	sidecarOK := llama != nil && llama.SidecarReachable()
 	inferenceReady := llama != nil && llama.IsAvailable()
+	status := map[string]any{}
+	if llama != nil {
+		status = llama.StatusSummary()
+	}
 	return map[string]any{
 		"success": true,
 		"policy": map[string]any{
@@ -108,6 +112,7 @@ func (s *AiLocalOpsService) Health(llama *LlamaService) map[string]any {
 			"sidecarURL":           s.cfg.AI.LlamaServerURL,
 			"available":            inferenceReady,
 			"healthy":              inferenceReady,
+			"hint":                 status["hint"],
 			"circuitOpen":          false,
 			"modelPath":            modelPath,
 			"runtimeProfile":         envOr("AI_LOCAL_LLAMA_RUNTIME_PROFILE", "balanced"),
@@ -130,7 +135,8 @@ func (s *AiLocalOpsService) Health(llama *LlamaService) map[string]any {
 		"tts":              map[string]any{"enabled": false, "ready": false},
 		"talkingHead":      map[string]any{"enabled": false, "ready": false},
 		"martialCinematic": map[string]any{"enabled": false, "engine": "martial_cinematic", "ready": false},
-		"ready":            llama.IsAvailable(),
+		"ready":            inferenceReady,
+		"status":           status,
 	}
 }
 
