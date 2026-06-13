@@ -274,7 +274,7 @@ func migrateTable(ldb, appID, tableName, dbPath string, pb *pebble.DB, searchDB 
 		if searchDB != nil && (!*skipFTS || !*skipVec) {
 			var record map[string]any
 			if json.Unmarshal(value, &record) == nil {
-				title, content := extractSearchText(record)
+				title, content := data.ExtractSearchText(record)
 				if len(content) >= *minTextLen {
 					recordID := recordIDFrom(record, key)
 					if ftsStmt != nil {

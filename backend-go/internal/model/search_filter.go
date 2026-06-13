@@ -25,6 +25,43 @@ func EqFilter(field string, value any) SearchFilter {
 
 func (f SearchFilter) Type() string { return f.FilterType }
 
+func (f SearchFilter) HasLike() bool {
+	if strings.EqualFold(f.FilterType, "like") {
+		if s, ok := asString(f.Value); ok && strings.TrimSpace(s) != "" {
+			return true
+		}
+	}
+	for _, c := range f.Conditions {
+		if c.HasLike() {
+			return true
+		}
+	}
+	return false
+}
+
+func (f SearchFilter) CollectLikeTerms() []string {
+	var out []string
+	f.collectLikeTermsInto(&out)
+	return out
+}
+
+func (f SearchFilter) collectLikeTermsInto(out *[]string) {
+	if len(f.Conditions) > 0 {
+		for _, c := range f.Conditions {
+			c.collectLikeTermsInto(out)
+		}
+		return
+	}
+	if strings.EqualFold(f.FilterType, "like") {
+		if s, ok := asString(f.Value); ok {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				*out = append(*out, s)
+			}
+		}
+	}
+}
+
 func (f SearchFilter) ValueString() string {
 	switch v := f.Value.(type) {
 	case string:

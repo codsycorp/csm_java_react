@@ -135,7 +135,7 @@ func BuildCodeStreamLocalPrompt(cfg config.AppConfig, req *CodeStreamRequest) st
 	sb.WriteString("[USER_REQUEST]\n")
 	sb.WriteString(userReq)
 	sb.WriteString("\n[/USER_REQUEST]\n")
-	return truncateStr(sb.String(), cfg.EffectiveCodeStreamPromptCap())
+	return PrepareLocalProviderPrompt(truncateStr(sb.String(), cfg.EffectiveCodeStreamPromptCap()), cfg.EffectiveCodeStreamPromptCap())
 }
 
 func classifyLocalIntent(contextType, responseMode string) string {
@@ -192,6 +192,37 @@ func truncateStr(s string, max int) string {
 	return s[:max]
 }
 
+// PrepareLocalProviderPrompt mirrors Rust/Java: Qwen chat models need the assistant turn marker.
+func PrepareLocalProviderPrompt(prompt string, maxChars int) string {
+	prepared := strings.TrimSpace(prompt)
+	if prepared == "" {
+		return prepared
+	}
+	if len(prepared) > maxChars {
+		prepared = truncateStr(prepared, maxChars)
+	}
+	if !strings.Contains(prepared, "<|im_start|>assistant") {
+		prepared += "\n\n<|im_start|>assistant\n"
+	}
+	return prepared
+}
+
+// CleanLocalModelOutput strips chat-template tokens leaked into model output.
+func CleanLocalModelOutput(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return s
+	}
+	if idx := strings.LastIndex(s, "<|im_start|>assistant"); idx >= 0 {
+		s = strings.TrimSpace(s[idx+len("<|im_start|>assistant"):])
+	}
+	s = strings.ReplaceAll(s, "<|im_start|>", "")
+	if idx := strings.Index(s, "<|im_start|>"); idx >= 0 {
+		s = strings.TrimSpace(s[:idx])
+	}
+	return strings.TrimSpace(s)
+}
+
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if strings.TrimSpace(v) != "" {
@@ -217,12 +248,18 @@ End immediately after the response.
 	baseSystemAnalyzeMin = `You are CSM AI Assistant.
 Follow the requested output contract exactly.
 Answer in plain text prose unless the contract explicitly requires JSON.
+Never repeat internal blocks such as BUSINESS_CONTEXT, BUSINESS_COMPREHENSION, Steps, or Output contract.
 End immediately after the response.
 `
 	quickQuestionContract = `You are CSM AI Assistant.
-Answer the user's question directly in the same language as the user request.
-Use concise bullet points when helpful.
-No markdown code fences unless explicitly requested.
+Answer the user's question directly in the same language as the user request (Vietnamese, English, or Chinese).
+For code/debug questions: cite concrete symbols (functions, variables, timers, webview/process lifecycle).
+Use at least 4 short bullet points covering: observed behavior, likely root cause, relevant code paths, suggested fix/check.
+Do not output a single "reason:" line or JSON patch envelope.
+No JSON unless the user explicitly asked for a patch.
+No markdown code fences.
+No random text.
+End immediately after the answer.
 `
 	frontendCodeContract = `You are CSM Frontend Code Editor.
 Return ONLY valid JSON textEdits in edit mode:

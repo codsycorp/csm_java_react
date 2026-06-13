@@ -463,7 +463,23 @@ func (h *TableHandler) HandleBulkUpdate(params map[string]any, auth *security.Au
 }
 
 func (h *TableHandler) HandleIndexExisting(params map[string]any) *model.StandardResponse {
-	return model.OKResponse(map[string]any{"success": true, "message": "Index sync acknowledged (Pebble scan mode)"})
+	appID, _ := params["app_id"].(string)
+	if appID == "" {
+		appID = "csm"
+	}
+	table, _ := params["obj_name"].(string)
+	if table == "" {
+		return model.ErrorResponse(400, "obj_name required")
+	}
+	count, err := h.rm.IndexExistingRecords(appID, table)
+	if err != nil {
+		return model.ErrorResponse(500, "Lỗi khi lập chỉ mục bảng: "+err.Error())
+	}
+	return model.OKResponse(map[string]any{
+		"success": true,
+		"message": "Đã lập chỉ mục thành công cho bảng: " + table,
+		"indexed": count,
+	})
 }
 
 func (h *TableHandler) RestoreDB(params map[string]any) *model.StandardResponse {

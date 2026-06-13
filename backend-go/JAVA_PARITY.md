@@ -23,7 +23,7 @@ Legend: **Done** = implemented | **Partial** = basic/minimal | **Defer** = not s
 | `/create-table` | Done |
 | `/drop-table` | Done (Pebble prefix delete) |
 | `/bulk-update-table-data` | Done |
-| `/update-table-data-index` | Partial (no-op ack; Pebble scan mode) |
+| `/update-table-data-index` | Done (FTS5 reindex via Pebble scan) |
 | `/backupdb` | Partial (defer — backup Pebble dir manually) |
 | `/restoredb` | Partial (defer) |
 | `/migrateKeys` | Done (no-op for Pebble) |
@@ -78,11 +78,11 @@ Legend: **Done** = implemented | **Partial** = basic/minimal | **Defer** = not s
 
 - **Runtime:** Pebble KV (`backend/csm_datas/native/pebble/csm.kv`)
 - **Migrate:** `rocksdb_ldb scan` → Pebble (+ sqlite-vec offline)
-- **Search at runtime:** Pebble full scan + in-memory filter (no Lucene yet)
+- **Search at runtime:** FTS5 (`vectors.db` / `records_fts`) for `like` filters; Pebble full scan otherwise
 
 ## Remaining gaps vs Java
 
-1. Lucene/sqlite-vec wired into live table queries (large tables + complex `like`)
+1. ~~Lucene/sqlite-vec wired into live table queries~~ → FTS5 wired for `like`; vector search (ai_chunks) still offline
 2. Socket.IO real-time + chat HTTP endpoints
 3. Full AI orchestration (RAG, multimodal vision, agent harness — Java-scale services)
 4. Web SSR (categories/tags/reviews)

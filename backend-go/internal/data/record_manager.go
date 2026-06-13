@@ -1,10 +1,12 @@
 package data
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,11 +17,12 @@ import (
 )
 
 type RecordManager struct {
-	cfg     config.AppConfig
-	dataDir string
-	db      *pebble.DB
-	mu      sync.RWMutex
-	closed  bool
+	cfg      config.AppConfig
+	dataDir  string
+	db       *pebble.DB
+	searchDB *sql.DB
+	mu       sync.RWMutex
+	closed   bool
 }
 
 func NewRecordManager(cfg config.AppConfig) (*RecordManager, error) {
@@ -42,6 +45,12 @@ func NewRecordManager(cfg config.AppConfig) (*RecordManager, error) {
 		dataDir: cfg.DataDir,
 		db:      db,
 	}
+	if searchDB, err := openSearchDB(cfg.SearchDBPath); err == nil {
+		rm.searchDB = searchDB
+		log.Printf("RecordManager: FTS search %s", cfg.SearchDBPath)
+	} else if !os.IsNotExist(err) {
+		log.Printf("RecordManager: FTS search unavailable (%v)", err)
+	}
 	log.Printf("RecordManager: Pebble store %s (pure Go, no RocksDB/CGO)", cfg.PebblePath)
 	return rm, nil
 }
@@ -60,6 +69,10 @@ func (rm *RecordManager) ShutdownAll() {
 	if rm.db != nil {
 		_ = rm.db.Close()
 		rm.db = nil
+	}
+	if rm.searchDB != nil {
+		_ = rm.searchDB.Close()
+		rm.searchDB = nil
 	}
 	log.Println("Pebble store closed")
 }
@@ -159,6 +172,13 @@ func (rm *RecordManager) collectFilteredRecords(appID, tableName string, filter 
 		log.Printf("invalid table %s/%s: %v", appID, tableName, err)
 		return nil
 	}
+
+	if rm.searchEnabled() && filter.HasLike() {
+		if records := rm.collectViaFTS(app, table, filter); records != nil {
+			return records
+		}
+	}
+
 	db, err := rm.dbOrErr()
 	if err != nil {
 		return nil
@@ -266,6 +286,7 @@ func (rm *RecordManager) CreateRecord(appID, tableName string, record map[string
 	if err := db.Set([]byte(PebbleKey(app, table, storageKey)), raw, pebble.Sync); err != nil {
 		return "", err
 	}
+	rm.upsertSearchIndex(app, table, PebbleKey(app, table, storageKey), storageKey, record)
 	return cmd, nil
 }
 
@@ -519,6 +540,7 @@ func (rm *RecordManager) DeleteRecord(appID, tableName string, record map[string
 	keyBase := rm.buildPrimaryKey(app, table, record, pkFields)
 	candidates := StorageKeyCandidates(app, table, keyBase)
 	var deleted bool
+	var deletedKey string
 	for _, candidate := range candidates {
 		pk := PebbleKey(app, table, candidate)
 		if _, closer, err := db.Get([]byte(pk)); err == nil {
@@ -526,6 +548,7 @@ func (rm *RecordManager) DeleteRecord(appID, tableName string, record map[string
 			if err := db.Delete([]byte(pk), pebble.Sync); err != nil {
 				return err
 			}
+			deletedKey = pk
 			deleted = true
 			break
 		}
@@ -533,6 +556,7 @@ func (rm *RecordManager) DeleteRecord(appID, tableName string, record map[string
 	if !deleted {
 		return fmt.Errorf("record not found for delete")
 	}
+	rm.deleteSearchIndex(deletedKey)
 	return nil
 }
 
@@ -570,6 +594,7 @@ func (rm *RecordManager) DropTable(params map[string]any) map[string]any {
 			return map[string]any{"success": false, "message": err.Error()}
 		}
 	}
+	rm.deleteSearchIndexForTable(app, table)
 	return map[string]any{
 		"success": true,
 		"message": fmt.Sprintf("Dropped %s (%d keys)", tableName, count),

@@ -79,26 +79,42 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
+	startedAt := time.Now()
 
 	var full strings.Builder
-	if deps.Llama.IsAvailable() {
-		_ = deps.Llama.StreamCompletion(ctx, prompt, func(piece string) error {
-			full.WriteString(piece)
-			writeSSE(w, stageEvent("streaming", map[string]any{
-				"requestId": req.RequestID, "chunk": piece, "localProviderPrimary": true, "attempt": 1,
-			}))
-			pct := 12 + full.Len()/120
-			if pct > 95 {
-				pct = 95
-			}
-			writeSSE(w, stageEvent("streaming_progress", map[string]any{
-				"requestId": req.RequestID, "charsReceived": full.Len(), "percent": pct,
-			}))
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
+	streamPiece := func(piece string) error {
+		if piece == "" {
 			return nil
-		})
+		}
+		full.WriteString(piece)
+		writeSSE(w, stageEvent("streaming", map[string]any{
+			"requestId": req.RequestID, "chunk": piece, "localProviderPrimary": true, "attempt": 1,
+		}))
+		pct := 12 + full.Len()/120
+		if pct > 95 {
+			pct = 95
+		}
+		writeSSE(w, stageEvent("streaming_progress", map[string]any{
+			"requestId": req.RequestID, "charsReceived": full.Len(), "percent": pct,
+		}))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		return nil
+	}
+
+	if deps.Llama.IsAvailable() {
+		if err := deps.Llama.StreamCompletion(ctx, prompt, streamPiece); err != nil || full.Len() == 0 {
+			if text, completeErr := deps.Llama.Complete(ctx, prompt); completeErr == nil {
+				cleaned := services.CleanLocalModelOutput(text)
+				if cleaned != "" && full.Len() == 0 {
+					_ = streamPiece(cleaned)
+				} else if cleaned != "" && full.String() != cleaned {
+					full.Reset()
+					full.WriteString(cleaned)
+				}
+			}
+		}
 	} else {
 		unavailable := services.LocalUnavailableMessage() + "\n\n(" + services.LocalUnavailableHint() + ")"
 		full.WriteString(unavailable)
@@ -107,11 +123,20 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		}))
 	}
 
-	elapsed := time.Now().UnixMilli()
+	result := services.CleanLocalModelOutput(full.String())
+	if result == "" && deps.Llama.IsAvailable() {
+		result = uiText(req.UILang,
+			"AI local không trả về nội dung. Hãy thử lại hoặc kiểm tra llama-server.",
+			"Local AI returned no content. Retry or check llama-server.",
+			"本地 AI 未返回内容。请重试或检查 llama-server。",
+		)
+	}
+
+	elapsed := time.Since(startedAt).Milliseconds()
 	writeSSE(w, stageEvent("complete", map[string]any{
-		"requestId": req.RequestID, "status": "ok", "fullResponse": full.String(),
+		"requestId": req.RequestID, "status": "ok", "fullResponse": result,
 		"contextType": req.ContextType, "responseMode": responseMode, "elapsedMs": elapsed,
-		"streamedChars": full.Len(), "model": modelLabel,
+		"streamedChars": len(result), "model": modelLabel,
 	}))
 	writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": elapsed}))
 }
@@ -124,7 +149,7 @@ func handleAssistantChatStream(deps StreamDeps, w http.ResponseWriter, params ma
 		return
 	}
 	message := paramStr(params, "message")
-	prompt := "Assistant chat:\n" + message + "\n\nReply:"
+	prompt := services.PrepareLocalProviderPrompt("Assistant chat:\n"+message+"\n\nReply:", 32_000)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	if deps.Llama.IsAvailable() {
@@ -186,6 +211,7 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 	}
 
 	if patch != "" {
+		patch = services.CleanLocalModelOutput(patch)
 		writeSSE(w, map[string]any{
 			"stage": "streaming", "status": "running", "message": "Đang stream patch local",
 			"chunk": patch, "responseMode": responseMode, "contextType": contextType, "model": "local_provider",
@@ -214,7 +240,7 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 }
 
 func buildPatchPrompt(message, currentCode string) string {
-	return fmt.Sprintf(`You are a local code patch generator.
+	raw := fmt.Sprintf(`You are a local code patch generator.
 Return ONLY valid JSON object with this exact schema:
 {"summary":"...","changes":["..."],"textEdits":[{"startLine":1,"endLine":1,"replacement":"...","action":"add|edit|delete"}]}
 Rules:
@@ -228,6 +254,7 @@ User request:
 
 Current code:
 %s`, message, currentCode)
+	return services.PrepareLocalProviderPrompt(raw, 32_000)
 }
 
 func stageEvent(stage string, data map[string]any) map[string]any {
