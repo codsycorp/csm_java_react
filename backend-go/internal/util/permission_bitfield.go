@@ -298,12 +298,69 @@ func HasActionPermission(permissions []string, action string) bool {
 		return false
 	}
 	for _, permission := range permissions {
-		normalized := strings.ToLower(strings.TrimSpace(permission))
-		if normalized == expected || normalized == "admin" {
+		if permissionMatchesAction(permission, expected) {
 			return true
 		}
 	}
 	return false
+}
+
+func HasBitfieldActionPermission(token uint64, action string) bool {
+	if token == 0 {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "view", "read":
+		return hasBitV3(token, actionView)
+	case "create", "add", "insert":
+		return hasBitV3(token, actionCreate)
+	case "edit", "update", "write":
+		return hasBitV3(token, actionEdit)
+	case "delete", "remove":
+		return hasBitV3(token, actionDelete)
+	case "export":
+		return hasBitV3(token, actionExport)
+	case "admin":
+		return HasAdminPrivilege(token)
+	default:
+		return false
+	}
+}
+
+func permissionMatchesAction(permission, action string) bool {
+	permission = strings.ToLower(strings.TrimSpace(permission))
+	action = strings.ToLower(strings.TrimSpace(action))
+	if permission == "" || action == "" {
+		return false
+	}
+	if permission == "admin" {
+		return true
+	}
+	for _, alias := range actionPermissionAliases(action) {
+		if permission == alias {
+			return true
+		}
+	}
+	return permission == action
+}
+
+func actionPermissionAliases(action string) []string {
+	switch action {
+	case "view":
+		return []string{"view", "read"}
+	case "create":
+		return []string{"create", "add", "insert"}
+	case "edit":
+		return []string{"edit", "update", "write"}
+	case "delete":
+		return []string{"delete", "remove"}
+	case "export":
+		return []string{"export"}
+	case "admin":
+		return []string{"admin"}
+	default:
+		return []string{action}
+	}
 }
 
 func HasAnyActionPermission(permissions []string) bool {

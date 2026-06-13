@@ -7,7 +7,7 @@ use crate::model::{SearchFilter, StandardResponse};
 use crate::security::auth::AuthUser;
 use crate::security::user_access::{
     apply_table_read_row_filters, filter_sys_autos_rows, is_allowed_autosetup_template_read,
-    merge_only_my_subusers_filter, resolve_required_action, validate_action_permission,
+    merge_only_my_subusers_filter, resolve_required_action, validate_action_permission_for_table,
     validate_permission_group_app_boundary, validate_system_user_table_access,
     filter_rows_for_update, UserAccessContext,
 };
@@ -331,9 +331,13 @@ impl TableHandler {
         );
 
         if !allow_scoped_autosetup {
-            if let Some(message) =
-                validate_action_permission(access.as_ref(), &resolve_required_action(params, is_update))
-            {
+            if let Some(message) = validate_action_permission_for_table(
+                access.as_ref(),
+                &resolve_required_action(params, is_update),
+                app_id,
+                table,
+                &self.record_manager,
+            ) {
                 out.insert("success".into(), Value::Bool(false));
                 out.insert("message".into(), Value::String(message));
                 return out;

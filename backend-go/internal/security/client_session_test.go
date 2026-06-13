@@ -6,6 +6,14 @@ import (
 	"csm_server/backend-go/internal/model"
 )
 
+func TestRefreshTokenExpiredZeroMeansUnset(t *testing.T) {
+	zero := int64(0)
+	user := model.User{RefreshTokenExpiry: &zero}
+	if RefreshTokenExpired(user) {
+		t.Fatal("expiry 0 must not be treated as expired (Java parity for sub-users)")
+	}
+}
+
 func TestRefreshSessionValidForMiddlewareWithoutClientID(t *testing.T) {
 	ip := "127.0.0.1"
 	ua := "Mozilla/5.0 Test"

@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -11,7 +10,7 @@ import (
 
 func TestLiveLlamaAnalyzePrompt(t *testing.T) {
 	cfg := config.LoadFromEnv()
-	llama := NewLlamaService(cfg, http.DefaultClient)
+	llama := NewLlamaService(cfg)
 	if !llama.IsAvailable() {
 		t.Skip("llama unavailable")
 	}

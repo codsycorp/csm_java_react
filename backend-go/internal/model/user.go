@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"strings"
 )
 
 type User struct {
@@ -88,23 +89,51 @@ func UserFromRecord(record map[string]any) User {
 func stringListFromValue(v any) []string {
 	switch t := v.(type) {
 	case []string:
-		return t
+		return trimNonEmptyStrings(t)
 	case []any:
 		out := make([]string, 0, len(t))
 		for _, item := range t {
-			if s, ok := item.(string); ok && s != "" {
-				out = append(out, s)
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
 			}
 		}
 		return out
 	case string:
-		if t == "" {
+		text := strings.TrimSpace(t)
+		if text == "" {
 			return nil
 		}
-		return []string{t}
+		if strings.HasPrefix(text, "[") {
+			var parsed []string
+			if err := json.Unmarshal([]byte(text), &parsed); err == nil {
+				return trimNonEmptyStrings(parsed)
+			}
+			var parsedAny []any
+			if err := json.Unmarshal([]byte(text), &parsedAny); err == nil {
+				return stringListFromValue(parsedAny)
+			}
+		}
+		if strings.Contains(text, ",") || strings.Contains(text, ";") || strings.Contains(text, "\n") {
+			parts := strings.FieldsFunc(text, func(r rune) bool {
+				return r == ',' || r == ';' || r == '\n'
+			})
+			return trimNonEmptyStrings(parts)
+		}
+		return []string{text}
 	default:
 		return nil
 	}
+}
+
+func trimNonEmptyStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func IntFromAny(v any) (int, bool) {

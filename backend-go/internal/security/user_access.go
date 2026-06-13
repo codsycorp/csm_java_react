@@ -17,6 +17,7 @@ type UserAccessContext struct {
 	AppID                   string
 	Permissions             []string
 	MenusPermissions        []string
+	ParsedPermissionToken   uint64
 	DataScope               string
 	DataAppIDs              []string
 	OwnerCandidates         []string
@@ -44,26 +45,23 @@ func UserAccessFromAuth(auth *AuthUser, rm *data.RecordManager) *UserAccessConte
 		appID = resolvePrimaryAppIDFromMenus(menusPermissions)
 	}
 
-	permissions := append([]string{}, auth.Permissions...)
+	// Java resolveCurrentUserAccessContext: bitfield projection replaces list permissions when token parses.
+	permissions := util.ExpandPermissionPresets(append([]string{}, auth.Permissions...))
 	var parsedToken uint64
 	hasToken := false
 	if auth.PermissionBitfield != "" {
 		if token, ok := util.ParseSecurityToken(auth.PermissionBitfield); ok {
 			parsedToken = token
 			hasToken = true
-			permissions = util.PermissionsFromBitfield(auth.PermissionBitfield)
+			fromBitfield := util.ExpandPermissionPresets(util.PermissionsFromBitfield(auth.PermissionBitfield))
+			if len(fromBitfield) > 0 {
+				permissions = util.MergeUniqueCaseInsensitive(fromBitfield, permissions)
+			}
 		}
 	}
 
 	if auth.Dev {
 		util.ApplyDevPermissionElevation(&permissions, &menusPermissions, appID)
-	}
-	if isSubUser {
-		// Mirror Java mapSubUserRecordToUser: strip admin/dev at login only, not scope:all.
-		permissions = util.SubtractCaseInsensitive(permissions, []string{"admin", "dev"})
-		if !util.HasAnyActionPermission(permissions) {
-			permissions = util.MergeUniqueCaseInsensitive(permissions, []string{"view"})
-		}
 	}
 
 	isAdminByDefault := !auth.Dev && !isSubUser
@@ -114,6 +112,7 @@ func UserAccessFromAuth(auth *AuthUser, rm *data.RecordManager) *UserAccessConte
 		AppID:                   appID,
 		Permissions:             permissions,
 		MenusPermissions:        menusPermissions,
+		ParsedPermissionToken:   parsedToken,
 		DataScope:               dataScope,
 		DataAppIDs:              dataAppIDs,
 		OwnerCandidates:         collectOwnerCandidates(auth),
@@ -146,6 +145,16 @@ func (ctx UserAccessContext) CanAccessAppData(targetAppID string) bool {
 }
 
 func ValidateActionPermission(ctx *UserAccessContext, requiredAction string) string {
+	return validateActionPermission(ctx, requiredAction, "", "", nil)
+}
+
+// ValidateActionPermissionForTable applies action checks with legacy-table parity:
+// tables without permission/scope columns only require view to create/update.
+func ValidateActionPermissionForTable(ctx *UserAccessContext, requiredAction, appID, tableName string, rm *data.RecordManager) string {
+	return validateActionPermission(ctx, requiredAction, appID, tableName, rm)
+}
+
+func validateActionPermission(ctx *UserAccessContext, requiredAction, appID, tableName string, rm *data.RecordManager) string {
 	if ctx == nil || requiredAction == "" {
 		return ""
 	}
@@ -153,7 +162,16 @@ func ValidateActionPermission(ctx *UserAccessContext, requiredAction string) str
 	if ctx.IsDev {
 		return ""
 	}
-	if util.HasActionPermission(ctx.Permissions, requiredAction) {
+	permissions := util.ExpandPermissionPresets(ctx.Permissions)
+	if util.HasActionPermission(permissions, requiredAction) {
+		return ""
+	}
+	if util.HasBitfieldActionPermission(ctx.ParsedPermissionToken, requiredAction) {
+		return ""
+	}
+	if (requiredAction == "create" || requiredAction == "edit") &&
+		tableName != "" &&
+		allowsLegacyViewWriteParity(ctx, requiredAction, appID, tableName, rm) {
 		return ""
 	}
 	switch requiredAction {
@@ -168,6 +186,45 @@ func ValidateActionPermission(ctx *UserAccessContext, requiredAction string) str
 	default:
 		return "Bạn không có quyền thực hiện thao tác này"
 	}
+}
+
+func hasViewPermission(ctx *UserAccessContext) bool {
+	if ctx == nil {
+		return false
+	}
+	permissions := util.ExpandPermissionPresets(ctx.Permissions)
+	if util.HasActionPermission(permissions, "view") {
+		return true
+	}
+	return util.HasBitfieldActionPermission(ctx.ParsedPermissionToken, "view")
+}
+
+// allowsLegacyViewWriteParity is intentionally narrow (same style as IsAllowedAutosetupTemplateRead).
+// Only whitelisted legacy business tables, or tables whose schema lacks permission/scope columns,
+// may treat view as create/edit. Delete is never implied.
+func allowsLegacyViewWriteParity(ctx *UserAccessContext, requiredAction, appID, tableName string, rm *data.RecordManager) bool {
+	if ctx == nil || tableName == "" || strings.TrimSpace(appID) == "" {
+		return false
+	}
+	if requiredAction != "create" && requiredAction != "edit" {
+		return false
+	}
+	if strings.HasPrefix(tableName, "csm_") || strings.HasPrefix(tableName, "sys_") {
+		return false
+	}
+	if !hasViewPermission(ctx) {
+		return false
+	}
+	if !ctx.CanAccessAppData(appID) {
+		return false
+	}
+	if isLegacyScopelessBusinessTable(appID, tableName) {
+		return true
+	}
+	if rm == nil {
+		return false
+	}
+	return !tableSchemaHasPermissionScopeFields(rm, appID, tableName)
 }
 
 func ResolveRequiredAction(params map[string]any, isUpdate bool) string {
@@ -243,7 +300,7 @@ func ApplyTableReadRowFilters(appID, tableName string, rows []map[string]any, ct
 		return rows
 	}
 	data := filterManagedAccountDescendants(tableName, rows, ctx, appID, rm)
-	data = applyDataScopeRowFilter(tableName, data, ctx)
+	data = applyDataScopeRowFilter(appID, tableName, data, ctx, rm)
 	data = filterMainAccountRows(tableName, data, rm)
 	if tableName == "csm_accounts" {
 		data = maskSelfAccountRowsForNonDev(data, ctx)
@@ -253,6 +310,18 @@ func ApplyTableReadRowFilters(appID, tableName string, rows []map[string]any, ct
 }
 
 func FilterRowsForUpdate(tableName string, records []map[string]any, ctx *UserAccessContext, appID string, rm *data.RecordManager) []map[string]any {
+	return filterRowsForUpdate(tableName, records, ctx, appID, rm, false)
+}
+
+// FilterRowsForUpdateWithoutDataScope applies ownership filters only (Java id-fallback update path).
+func FilterRowsForUpdateWithoutDataScope(tableName string, records []map[string]any, ctx *UserAccessContext, appID string, rm *data.RecordManager) []map[string]any {
+	return filterRowsForUpdate(tableName, records, ctx, appID, rm, true)
+}
+
+func filterRowsForUpdate(tableName string, records []map[string]any, ctx *UserAccessContext, appID string, rm *data.RecordManager, skipDataScope bool) []map[string]any {
+	if ctx == nil {
+		return records
+	}
 	isAdminNonDev := ctx.IsAdmin && !ctx.IsDev
 	if tableName == "csm_accounts" && !ctx.IsDev {
 		visible := resolveManagedAccountVisibleIDSet(appID, ctx, rm)
@@ -273,7 +342,10 @@ func FilterRowsForUpdate(tableName string, records []map[string]any, ctx *UserAc
 		}
 		records = filtered
 	}
-	return applyDataScopeRowFilter(tableName, records, ctx)
+	if skipDataScope {
+		return records
+	}
+	return applyDataScopeRowFilter(appID, tableName, records, ctx, rm)
 }
 
 func FilterSysAutosRows(rows []any, filter model.SearchFilter, ctx *UserAccessContext) []any {
@@ -763,8 +835,68 @@ func isDataScopeExemptTable(tableName string) bool {
 	}
 }
 
-func applyDataScopeRowFilter(tableName string, rows []map[string]any, access *UserAccessContext) []map[string]any {
-	if len(rows) == 0 || access.IsDev || isDataScopeExemptTable(tableName) {
+// isLegacyScopelessBusinessTable is an explicit allowlist for domain tables that never
+// persisted row-level permission columns (lottery result tables, etc.).
+func isLegacyScopelessBusinessTable(appID, tableName string) bool {
+	app := strings.TrimSpace(appID)
+	table := strings.ToLower(strings.TrimSpace(tableName))
+	if table == "" {
+		return false
+	}
+	if strings.EqualFold(app, "kqxs") && strings.HasPrefix(table, "kqxs_") {
+		return true
+	}
+	if strings.EqualFold(app, "tonghop") && strings.HasPrefix(table, "kqxs_") {
+		return true
+	}
+	return false
+}
+
+// Mirrors Java TableHandler.GENERIC_BUSINESS_PERMISSION_FIELDS — keep this list tight.
+var genericBusinessPermissionFields = []string{
+	"permissionBitfield", "permission_bitfield",
+	"permissionSchemaVersion", "permission_schema_version",
+	"dataScope", "data_scope",
+	"created_by", "create_by",
+	"dept_id", "department_id", "branch_id", "branchId",
+}
+
+func tableSchemaHasPermissionScopeFields(rm *data.RecordManager, appID, tableName string) bool {
+	if isDataScopeExemptTable(tableName) {
+		return false
+	}
+	if rm == nil {
+		return false
+	}
+	fields := rm.GetTableStructField(appID, tableName, "fields")
+	if len(fields) == 0 {
+		return false
+	}
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		for _, scopeField := range genericBusinessPermissionFields {
+			if strings.EqualFold(field, scopeField) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TableHasPermissionScopeFields reports whether row-level permission/scope rules apply.
+// Legacy allowlisted tables are excluded even when index metadata mentions scope columns.
+func TableHasPermissionScopeFields(rm *data.RecordManager, appID, tableName string) bool {
+	if isLegacyScopelessBusinessTable(appID, tableName) {
+		return false
+	}
+	return tableSchemaHasPermissionScopeFields(rm, appID, tableName)
+}
+
+func applyDataScopeRowFilter(appID, tableName string, rows []map[string]any, access *UserAccessContext, rm *data.RecordManager) []map[string]any {
+	if len(rows) == 0 || access.IsDev || isDataScopeExemptTable(tableName) || !TableHasPermissionScopeFields(rm, appID, tableName) {
 		return rows
 	}
 	scope := strings.ToUpper(access.DataScope)
@@ -784,6 +916,201 @@ var ownerScopeFields = []string{"created_by", "create_by", "owner_id", "owner", 
 var departmentScopeFields = []string{"dept_id", "department_id", "team_id"}
 var branchScopeFields = []string{"branch_id", "branchId"}
 
+func preferredOwner(access *UserAccessContext) string {
+	if access == nil || len(access.OwnerCandidates) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(access.OwnerCandidates[0])
+}
+
+func preferredDepartment(access *UserAccessContext) string {
+	if access == nil || len(access.DepartmentCandidates) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(access.DepartmentCandidates[0])
+}
+
+func preferredBranch(access *UserAccessContext) string {
+	if access == nil || len(access.BranchCandidates) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(access.BranchCandidates[0])
+}
+
+func assignFieldIfMissing(row map[string]any, fields []string, preferredValue string) {
+	if row == nil || len(fields) == 0 {
+		return
+	}
+	preferredValue = strings.TrimSpace(preferredValue)
+	if preferredValue == "" {
+		return
+	}
+	for _, field := range fields {
+		if _, ok := row[field]; !ok {
+			continue
+		}
+		current := row[field]
+		if current == nil || strings.TrimSpace(fmt.Sprint(current)) == "" {
+			row[field] = preferredValue
+		}
+		return
+	}
+	row[fields[0]] = preferredValue
+}
+
+func validateOrAssignScopeField(row map[string]any, fields, allowed []string, fallback, errorMessage string) string {
+	if len(fields) == 0 {
+		return errorMessage
+	}
+	normalizedFallback := strings.ToLower(strings.TrimSpace(fallback))
+	preferredValue := fallback
+	if normalizedFallback == "" && len(allowed) > 0 {
+		preferredValue = allowed[0]
+	}
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, v := range allowed {
+		allowedSet[normalizedIdentity(v)] = struct{}{}
+	}
+
+	for _, field := range fields {
+		if _, ok := row[field]; !ok {
+			continue
+		}
+		current := row[field]
+		if current == nil || strings.TrimSpace(fmt.Sprint(current)) == "" {
+			if strings.TrimSpace(preferredValue) != "" {
+				row[field] = preferredValue
+				return ""
+			}
+			return errorMessage
+		}
+		normalized := normalizedIdentity(fmt.Sprint(current))
+		if len(allowedSet) == 0 {
+			return ""
+		}
+		if _, ok := allowedSet[normalized]; !ok {
+			return errorMessage
+		}
+		return ""
+	}
+
+	if strings.TrimSpace(preferredValue) != "" {
+		row[fields[0]] = preferredValue
+		return ""
+	}
+	return ""
+}
+
+func stampHierarchyScopeFields(row map[string]any, access *UserAccessContext) {
+	if row == nil || access == nil {
+		return
+	}
+	assignFieldIfMissing(row, ownerScopeFields, preferredOwner(access))
+	assignFieldIfMissing(row, departmentScopeFields, preferredDepartment(access))
+	assignFieldIfMissing(row, branchScopeFields, preferredBranch(access))
+}
+
+// ApplyDataScopeCreateGuard stamps hierarchy scope fields and validates scoped create/update payloads (Java parity).
+func ApplyDataScopeCreateGuard(appID, tableName string, row map[string]any, access *UserAccessContext, rm *data.RecordManager) string {
+	if row == nil || access == nil || access.IsDev || isDataScopeExemptTable(tableName) || !TableHasPermissionScopeFields(rm, appID, tableName) {
+		return ""
+	}
+	scope := strings.ToUpper(strings.TrimSpace(access.DataScope))
+	if scope == "OWNER" || scope == "DEPARTMENT" || scope == "BRANCH" {
+		stampHierarchyScopeFields(row, access)
+	}
+	if scope == "ALL" || scope == "NONE" || scope == "" {
+		return ""
+	}
+	switch scope {
+	case "OWNER":
+		return validateOrAssignScopeField(row, ownerScopeFields, access.OwnerCandidates, preferredOwner(access),
+			"Bạn chỉ được tạo dữ liệu thuộc phạm vi OWNER")
+	case "DEPARTMENT":
+		return validateOrAssignScopeField(row, departmentScopeFields, access.DepartmentCandidates, preferredDepartment(access),
+			"Bạn chỉ được tạo dữ liệu thuộc DEPARTMENT của mình")
+	case "BRANCH":
+		return validateOrAssignScopeField(row, branchScopeFields, access.BranchCandidates, preferredBranch(access),
+			"Bạn chỉ được tạo dữ liệu thuộc BRANCH của mình")
+	default:
+		return ""
+	}
+}
+
+func resolveBusinessRowDataScope(row map[string]any, access *UserAccessContext) string {
+	if row != nil {
+		if hasNonBlankField(row["dataScope"]) {
+			existing := strings.ToUpper(strings.TrimSpace(fmt.Sprint(row["dataScope"])))
+			if existing != "NONE" {
+				return existing
+			}
+		}
+		if hasNonBlankField(row["branch_id"]) || hasNonBlankField(row["branchId"]) {
+			return "BRANCH"
+		}
+		if hasNonBlankField(row["dept_id"]) || hasNonBlankField(row["department_id"]) {
+			return "DEPARTMENT"
+		}
+		if hasNonBlankField(row["created_by"]) || hasNonBlankField(row["create_by"]) {
+			return "OWNER"
+		}
+	}
+	if access != nil {
+		if scope := strings.ToUpper(strings.TrimSpace(access.DataScope)); scope != "" {
+			return scope
+		}
+	}
+	return ""
+}
+
+func hasNonBlankField(v any) bool {
+	if v == nil {
+		return false
+	}
+	return strings.TrimSpace(fmt.Sprint(v)) != ""
+}
+
+func buildBusinessRowPermissionSeed(dataScope string) []string {
+	perms := []string{"view", "edit"}
+	return applyScopeToken(perms, dataScope)
+}
+
+func applyScopeToken(permissions []string, scope string) []string {
+	out := util.SubtractCaseInsensitive(permissions, []string{"scope:owner", "scope:department", "scope:branch", "scope:all"})
+	switch strings.ToUpper(strings.TrimSpace(scope)) {
+	case "OWNER":
+		return util.MergeUniqueCaseInsensitive(out, []string{"scope:owner"})
+	case "DEPARTMENT":
+		return util.MergeUniqueCaseInsensitive(out, []string{"scope:department"})
+	case "BRANCH":
+		return util.MergeUniqueCaseInsensitive(out, []string{"scope:branch"})
+	case "ALL":
+		return util.MergeUniqueCaseInsensitive(out, []string{"scope:all"})
+	default:
+		return out
+	}
+}
+
+// EnsureBusinessPermissionSchemaValues fills permission schema defaults on business table rows (Java parity).
+func EnsureBusinessPermissionSchemaValues(appID, tableName string, row map[string]any, access *UserAccessContext, rm *data.RecordManager) {
+	if row == nil || isDataScopeExemptTable(tableName) || !TableHasPermissionScopeFields(rm, appID, tableName) {
+		return
+	}
+	stampHierarchyScopeFields(row, access)
+	resolvedScope := resolveBusinessRowDataScope(row, access)
+	if !hasNonBlankField(row["permissionSchemaVersion"]) {
+		row["permissionSchemaVersion"] = "v3"
+	}
+	if !hasNonBlankField(row["dataScope"]) && resolvedScope != "" {
+		row["dataScope"] = resolvedScope
+	}
+	if !hasNonBlankField(row["permissionBitfield"]) {
+		dev := access != nil && access.IsDev
+		bitfield := util.BuildBitfield(buildBusinessRowPermissionSeed(resolvedScope), nil, dev)
+		row["permissionBitfield"] = util.ToCompactToken(bitfield)
+	}
+}
+
 func rowMatchesDataScope(row map[string]any, access *UserAccessContext) bool {
 	switch strings.ToUpper(access.DataScope) {
 	case "OWNER":
@@ -798,21 +1125,31 @@ func rowMatchesDataScope(row map[string]any, access *UserAccessContext) bool {
 }
 
 func matchesByFields(row map[string]any, fields, allowed []string) bool {
+	if row == nil || len(fields) == 0 {
+		return true
+	}
 	if len(allowed) == 0 {
 		return false
 	}
 	allowedSet := make(map[string]struct{}, len(allowed))
 	for _, v := range allowed {
-		allowedSet[v] = struct{}{}
-	}
-	for _, field := range fields {
-		if normalized := fieldValueAsIdentity(row[field]); normalized != "" {
-			if _, ok := allowedSet[normalized]; ok {
-				return true
-			}
+		if normalized := normalizedIdentity(v); normalized != "" {
+			allowedSet[normalized] = struct{}{}
 		}
 	}
-	return false
+	var foundValue string
+	for _, field := range fields {
+		if normalized := fieldValueAsIdentity(row[field]); normalized != "" {
+			foundValue = normalized
+			break
+		}
+	}
+	if foundValue == "" {
+		// Java parity: legacy rows without scope markers remain visible until first scoped write.
+		return true
+	}
+	_, ok := allowedSet[foundValue]
+	return ok
 }
 
 func filterMainAccountRows(tableName string, rows []map[string]any, rm *data.RecordManager) []map[string]any {

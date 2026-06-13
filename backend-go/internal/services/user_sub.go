@@ -1,6 +1,7 @@
 package services
 
 import (
+	"log"
 	"strings"
 
 	"csm_server/backend-go/internal/model"
@@ -25,6 +26,8 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 	devFalse := false
 	user.Dev = &devFalse
 	user.DataAppIDs = []string{}
+	// Never inherit parent session principal — causes JWT uid/sub mismatch (401 on user-info).
+	user.AppToken = nil
 
 	if id, ok := record["id"].(string); ok && strings.TrimSpace(id) != "" {
 		user.ID = &id
@@ -84,7 +87,9 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 	}
 
 	directPermissions := model.StringListFromRecord(record, "permissions")
+	recordPermissions := append([]string{}, directPermissions...)
 	directMenus := model.StringListFromRecord(record, "menusPermissions", "menus_permissions")
+	recordMenus := append([]string{}, directMenus...)
 	permissionsAdd := model.StringListFromRecord(record, "permissionsAdd")
 	permissionsDeny := model.StringListFromRecord(record, "permissionsDeny")
 	menusAdd := model.StringListFromRecord(record, "menusPermissionsAdd", "menus_permissions_add")
@@ -96,9 +101,15 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 		if meta.AppID != "" {
 			user.AppID = &meta.AppID
 		}
+	} else if token := s.ensureSubUserAppToken(record, parentRecord); token != "" {
+		user.AppToken = &token
+		meta := util.ParseAppToken(s.rm, token)
+		if meta.AppID != "" {
+			user.AppID = &meta.AppID
+		}
 	}
 
-	groupID, _ := record["group_id"].(string)
+	groupID, _ := firstNonEmptyRecord(record, "group_id", "groupId", "role_id", "role_code")
 	groupID = strings.TrimSpace(groupID)
 	roleLookupAppID := deref(user.AppID)
 	if roleLookupAppID == "" {
@@ -115,22 +126,77 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 	hasAuthoritativeRole := false
 	var roleBitfield string
 	if groupID != "" {
-		if roleRecord := s.findRoleByCode(roleLookupAppID, groupID); len(roleRecord) > 0 {
+		roleLookupCandidates := make([]string, 0, 4)
+		appendRoleLookupApp := func(appID string) {
+			appID = strings.TrimSpace(appID)
+			if appID == "" {
+				return
+			}
+			for _, existing := range roleLookupCandidates {
+				if strings.EqualFold(existing, appID) {
+					return
+				}
+			}
+			roleLookupCandidates = append(roleLookupCandidates, appID)
+		}
+		appendRoleLookupApp(roleLookupAppID)
+		if appID, ok := record["app_id"].(string); ok {
+			appendRoleLookupApp(appID)
+		}
+		if appID, ok := parentRecord["app_id"].(string); ok {
+			appendRoleLookupApp(appID)
+		}
+		appendRoleLookupApp(CSMAppID)
+		parentMenus := model.StringListFromRecord(parentRecord, "menusPermissions", "menus_permissions")
+		menuCandidates := util.MergeUniqueCaseInsensitive(
+			util.MergeUniqueCaseInsensitive(directMenus, recordMenus),
+			parentMenus,
+		)
+		for _, menu := range menuCandidates {
+			menu = strings.TrimSpace(menu)
+			if menu == "" {
+				continue
+			}
+			if strings.HasPrefix(strings.ToLower(menu), "broadcast_") {
+				appendRoleLookupApp(strings.TrimPrefix(menu, "broadcast_"))
+				appendRoleLookupApp(strings.TrimPrefix(strings.ToLower(menu), "broadcast_"))
+			}
+			if strings.HasPrefix(strings.ToLower(menu), "app:") {
+				appendRoleLookupApp(strings.TrimPrefix(menu, "app:"))
+				appendRoleLookupApp(strings.TrimPrefix(strings.ToLower(menu), "app:"))
+			}
+			appendRoleLookupApp(menu)
+		}
+		for _, dataApp := range model.StringListFromRecord(parentRecord, "data_app_ids", "dataAppIds") {
+			appendRoleLookupApp(dataApp)
+		}
+
+		var roleRecord map[string]any
+		for _, lookupAppID := range roleLookupCandidates {
+			if rec := s.findRoleByCode(lookupAppID, groupID); len(rec) > 0 {
+				roleRecord = rec
+				break
+			}
+		}
+		if len(roleRecord) > 0 {
 			hasAuthoritativeRole = true
 			if raw, ok := firstNonEmptyRecord(roleRecord, "permissionBitfield", "permission_bitfield"); ok {
 				roleBitfield = raw
 			}
 			rolePerms := model.StringListFromRecord(roleRecord, "permissions")
 			if len(rolePerms) > 0 {
-				directPermissions = rolePerms
+				directPermissions = util.MergeUniqueCaseInsensitive(recordPermissions, rolePerms)
 			} else if roleBitfield != "" {
-				directPermissions = util.PermissionsFromBitfield(roleBitfield)
+				directPermissions = util.MergeUniqueCaseInsensitive(
+					recordPermissions,
+					util.PermissionsFromBitfield(roleBitfield),
+				)
 			}
 			roleMenus := model.StringListFromRecord(roleRecord, "menusPermissions", "menus_permissions")
 			if len(roleMenus) > 0 {
-				directMenus = roleMenus
+				directMenus = util.MergeUniqueCaseInsensitive(recordMenus, roleMenus)
 			} else if roleBitfield != "" {
-				directMenus = util.MenusFromBitfield(roleBitfield)
+				directMenus = util.MergeUniqueCaseInsensitive(recordMenus, util.MenusFromBitfield(roleBitfield))
 			}
 		}
 		if (len(directMenus) == 0 || len(directPermissions) == 0) && !hasAuthoritativeRole {
@@ -151,9 +217,28 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 	}
 
 	var effectivePermissions, effectiveMenus []string
-	if bitfieldFromRecord != "" {
+	if hasAuthoritativeRole && len(directPermissions) > 0 {
+		// Role permissions beat stale sub-user permissionBitfield snapshots.
+		effectivePermissions = append([]string{}, directPermissions...)
+		if len(directMenus) > 0 {
+			effectiveMenus = append([]string{}, directMenus...)
+		} else if roleBitfield != "" {
+			effectiveMenus = util.MenusFromBitfield(roleBitfield)
+		} else if bitfieldFromRecord != "" {
+			effectiveMenus = util.MenusFromBitfield(bitfieldFromRecord)
+		}
+	} else if bitfieldFromRecord != "" {
 		effectivePermissions = util.PermissionsFromBitfield(bitfieldFromRecord)
 		effectiveMenus = util.MenusFromBitfield(bitfieldFromRecord)
+		if len(directPermissions) > 0 {
+			effectivePermissions = util.MergeUniqueCaseInsensitive(
+				effectivePermissions,
+				util.ExpandPermissionPresets(directPermissions),
+			)
+		}
+		if len(directMenus) > 0 {
+			effectiveMenus = util.MergeUniqueCaseInsensitive(effectiveMenus, directMenus)
+		}
 	} else {
 		effectivePermissions = append([]string{}, directPermissions...)
 		effectiveMenus = append([]string{}, directMenus...)
@@ -163,6 +248,7 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 	effectivePermissions = util.SubtractCaseInsensitive(effectivePermissions, permissionsDeny)
 	effectiveMenus = util.MergeUniqueCaseInsensitive(effectiveMenus, menusAdd)
 	effectiveMenus = util.SubtractCaseInsensitive(effectiveMenus, menusDeny)
+	effectivePermissions = util.ExpandPermissionPresets(effectivePermissions)
 
 	if len(effectivePermissions) == 0 && len(directPermissions) > 0 {
 		effectivePermissions = append([]string{}, directPermissions...)
@@ -191,6 +277,46 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 	user.DataScope = &dataScope
 
 	return &user
+}
+
+func (s *UserService) ensureSubUserAppToken(record, parentRecord map[string]any) string {
+	if token, ok := firstNonEmptyRecord(record, "app_token"); ok {
+		return token
+	}
+	loginID, _ := firstNonEmptyRecord(record, "login_identifier", "username", "email")
+	if loginID == "" {
+		return ""
+	}
+	appID := strings.TrimSpace(derefStr(record["app_id"]))
+	if appID == "" {
+		appID = strings.TrimSpace(derefStr(parentRecord["app_id"]))
+	}
+	if appID == "" && parentRecord != nil {
+		if parentToken, ok := firstNonEmptyRecord(parentRecord, "app_token"); ok {
+			appID = util.ParseAppToken(s.rm, parentToken).AppID
+		}
+	}
+	if appID == "" {
+		appID = CSMAppID
+	}
+	raw := util.BuildRawToken(appID, loginID, "user", util.ResolveAccessRight("user"))
+	token := s.rm.CsmEncrypt(raw)
+	record["app_token"] = token
+	if parentToken, ok := firstNonEmptyRecord(parentRecord, "app_token"); ok {
+		record["source_app_token"] = parentToken
+	}
+	record["app_id"] = appID
+	if _, err := s.rm.CreateRecord(CSMAppID, SubAccountsTable, record, []string{"id", "login_identifier"}); err != nil {
+		log.Printf("ensureSubUserAppToken: persist failed for %s: %v", loginID, err)
+	}
+	return token
+}
+
+func derefStr(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 func (s *UserService) findParentAccount(parentKey string) map[string]any {

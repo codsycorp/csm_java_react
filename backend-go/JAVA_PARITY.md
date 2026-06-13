@@ -56,7 +56,7 @@ Legend: **Done** = implemented | **Partial** = basic/minimal | **Defer** = not s
 | `/scrape-web` | Done (HTTP GET + proxy) |
 | `/execute-js-on-page` | Done (stub — cần headless sidecar) |
 | `/indexgoogle` | Done (submit/check/quota/queue/history — Google Indexing API) |
-| `/ai-generate-seo-content` | Done (local llama sidecar + SEO one-shot pipelines) |
+| `/ai-generate-seo-content` | Done (local llama native + SEO one-shot pipelines) |
 | `/ai-local/health`, `/models`, `/services` | Done |
 | `/ai-local/execute-local-plan` | Done (SSE stages) |
 | `/ai-code-stream` | Done (SSE pipeline — started→streaming→complete) |
@@ -88,4 +88,4 @@ Legend: **Done** = implemented | **Partial** = basic/minimal | **Defer** = not s
 4. Web SSR (categories/tags/reviews)
 5. SEO scrape via Jsoup in `/seo` handler ( `/scrape-web` works)
 6. Pebble backup/restore API (use filesystem backup today)
-7. ~~Native in-process llama~~ **Done** (`-tags llamacpp` + `go-nativeml`; fallback HTTP sidecar khi không build native)
+7. ~~Native in-process llama~~ **Done** (`-tags llamacpp` + `go-nativeml`; giống Java JNI)

@@ -6,7 +6,7 @@ use tracing::{info, warn};
 use crate::data::RecordManager;
 use crate::model::{SearchFilter, User};
 use crate::security::auth::AuthUser;
-use crate::util::{app_id_from_token, parse_app_token, is_dev_access_right, PermissionBitfieldUtil};
+use crate::util::{app_id_from_token, expand_permission_presets, parse_app_token, is_dev_access_right, PermissionBitfieldUtil};
 use crate::security::user_access::{
     apply_dev_permission_elevation, apply_main_account_permission_elevation, has_any_action_permission,
 };
@@ -1032,6 +1032,7 @@ impl UserService {
         }
 
         let mut direct_permissions = string_list_from_value(record.get("permissions"));
+        let record_permissions = direct_permissions.clone();
         let mut direct_menus = string_list_from_value(
             record
                 .get("menusPermissions")
@@ -1092,10 +1093,15 @@ impl UserService {
 
                 let role_perms = string_list_from_value(role_record.get("permissions"));
                 if !role_perms.is_empty() {
-                    direct_permissions = role_perms;
+                    direct_permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                        &record_permissions,
+                        &role_perms,
+                    );
                 } else if let Some(raw) = role_bitfield.as_deref() {
-                    direct_permissions =
-                        PermissionBitfieldUtil::permissions_from_bitfield(Some(raw));
+                    direct_permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                        &record_permissions,
+                        &PermissionBitfieldUtil::permissions_from_bitfield(Some(raw)),
+                    );
                 }
 
                 let role_menus = string_list_from_value(
@@ -1143,11 +1149,22 @@ impl UserService {
             && direct_permissions.is_empty()
             && direct_menus.is_empty()
         {
-            bitfield_from_record = role_bitfield;
+            bitfield_from_record = role_bitfield.clone();
         }
 
         let (mut effective_permissions, mut effective_menus) =
-            if let Some(raw) = bitfield_from_record.as_deref() {
+            if has_authoritative_role && !direct_permissions.is_empty() {
+                let menus = if !direct_menus.is_empty() {
+                    direct_menus.clone()
+                } else if let Some(raw) = role_bitfield.as_deref() {
+                    PermissionBitfieldUtil::menus_from_bitfield(Some(raw))
+                } else if let Some(raw) = bitfield_from_record.as_deref() {
+                    PermissionBitfieldUtil::menus_from_bitfield(Some(raw))
+                } else {
+                    direct_menus.clone()
+                };
+                (direct_permissions.clone(), menus)
+            } else if let Some(raw) = bitfield_from_record.as_deref() {
                 (
                     PermissionBitfieldUtil::permissions_from_bitfield(Some(raw)),
                     PermissionBitfieldUtil::menus_from_bitfield(Some(raw)),
@@ -1155,6 +1172,19 @@ impl UserService {
             } else {
                 (direct_permissions.clone(), direct_menus.clone())
             };
+
+        if !has_authoritative_role {
+            if let Some(raw) = bitfield_from_record.as_deref() {
+                effective_permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                    &PermissionBitfieldUtil::permissions_from_bitfield(Some(raw)),
+                    &effective_permissions,
+                );
+                effective_menus = PermissionBitfieldUtil::merge_unique_case_insensitive(
+                    &PermissionBitfieldUtil::menus_from_bitfield(Some(raw)),
+                    &effective_menus,
+                );
+            }
+        }
 
         effective_permissions = PermissionBitfieldUtil::merge_unique_case_insensitive(
             &effective_permissions,
@@ -1164,6 +1194,7 @@ impl UserService {
             &effective_permissions,
             &permissions_deny,
         );
+        effective_permissions = expand_permission_presets(&effective_permissions);
         effective_menus =
             PermissionBitfieldUtil::merge_unique_case_insensitive(&effective_menus, &menus_add);
         effective_menus =

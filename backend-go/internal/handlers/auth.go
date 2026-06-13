@@ -58,6 +58,14 @@ func (h *AuthHandler) HandleLogin(params map[string]any) *model.StandardResponse
 	expiry := time.Now().UnixMilli() + 7*24*60*60*1000
 
 	h.us.UpdateSessionToken(user, refreshToken, security.NormalizeClientIP(ip), security.NormalizeUserAgent(ua), expiry, nextVersion, clientID)
+	user.LoginVersion = &nextVersion
+	user.RefreshToken = &refreshToken
+	user.RefreshTokenIP = strPtr(security.NormalizeClientIP(ip))
+	user.RefreshTokenUA = strPtr(security.NormalizeUserAgent(ua))
+	user.RefreshTokenExpiry = &expiry
+	if cid := strings.TrimSpace(clientID); cid != "" {
+		user.RefreshTokenClientID = &cid
+	}
 
 	tokenSubject := deref(user.AppToken)
 	if tokenSubject == "" {
@@ -471,6 +479,13 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func strPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func derefInt(i *int) int {

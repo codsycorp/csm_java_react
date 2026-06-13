@@ -171,21 +171,49 @@ func (s *UserService) resolveFromClaims(claims *security.Claims) *model.User {
 	}
 	// Mirror Java: re-fetch by app_token PK BEFORE login_version check (email-keyed rows can be stale).
 	if user.AppToken != nil && *user.AppToken != "" {
-		if rec := s.findAppTokenPKRecord(*user.AppToken); len(rec) > 0 {
-			fresh := s.mapRecordToUser(rec, true)
-			user = &fresh
-		} else if sub := s.findSubUserByAppToken(*user.AppToken); len(sub) > 0 {
+		if sub := s.findSubUserByAppToken(*user.AppToken); len(sub) > 0 {
 			if mapped := s.mapSubUser(sub); mapped != nil {
 				user = mapped
 			}
+		} else if rec := s.findAppTokenPKRecord(*user.AppToken); len(rec) > 0 {
+			fresh := s.mapRecordToUser(rec, true)
+			user = &fresh
 		} else if fresh := s.FindByAppToken(*user.AppToken); fresh != nil {
 			user = fresh
 		}
 	}
 	if user.LoginVersion != nil && *user.LoginVersion != tokenVersion && tokenVersion > 0 {
-		return nil
+		dbVersion := *user.LoginVersion
+		if dbVersion > tokenVersion {
+			return nil
+		}
+		// DB row lagging behind freshly issued JWT (duplicate/stale records).
+		lv := tokenVersion
+		user.LoginVersion = &lv
 	}
 	return user
+}
+
+// ResolveSessionAuth re-loads the session user from DB (Java JwtAuthenticationFilter parity).
+func (s *UserService) ResolveSessionAuth(auth security.AuthUser) *security.AuthUser {
+	var user *model.User
+	if strings.TrimSpace(auth.AppToken) != "" {
+		user = s.FindByAppTokenScoped(auth.AppToken, auth.UserID, auth.LoginVersion)
+		if user == nil {
+			user = s.FindByAppToken(auth.AppToken)
+		}
+	}
+	if user == nil && strings.TrimSpace(auth.UserID) != "" {
+		user = s.FindByID(auth.UserID)
+	}
+	if user == nil {
+		user = s.CanonicalizeSessionUser(auth)
+	}
+	if user == nil {
+		return nil
+	}
+	au := security.AuthUserFromUser(*user, false)
+	return &au
 }
 
 func (s *UserService) CanonicalizeSessionUser(auth security.AuthUser) *model.User {
@@ -471,6 +499,10 @@ func (s *UserService) canonicalizeRefreshUser(record map[string]any, refreshToke
 func (s *UserService) writeSessionFields(user *model.User, fields map[string]any) bool {
 	syncSessionFieldAliases(fields)
 
+	if user.IsSubUser != nil && *user.IsSubUser && user.ID != nil && *user.ID != "" {
+		return s.updateSubUserFieldByID(*user.ID, fields)
+	}
+
 	if user.ID != nil && *user.ID != "" {
 		if s.updateSubUserFieldByID(*user.ID, fields) {
 			return true
@@ -579,8 +611,13 @@ func recordRefreshExpired(record map[string]any) bool {
 		expiry = int64(v)
 	} else if v, ok := record["refresh_token_expiry"].(int64); ok {
 		expiry = v
+	} else if v, ok := record["refresh_token_expiry"].(int); ok {
+		expiry = int64(v)
 	}
-	return expiry <= 0 || expiry <= time.Now().UnixMilli()
+	if expiry <= 0 {
+		return false
+	}
+	return expiry <= time.Now().UnixMilli()
 }
 
 func pickBestRefreshSessionRecord(rows []map[string]any, refreshToken string) map[string]any {
@@ -758,10 +795,36 @@ func (s *UserService) CreateSubUser(req map[string]any, auth *security.AuthUser)
 		parentID = auth.AppID
 	}
 	pass := s.rm.CsmEncrypt(loginID + "_____" + rawPassword)
+	parentRecord := s.findParentAccount(parentID)
+	appID := auth.AppID
+	if appID == "" && len(parentRecord) > 0 {
+		if v, ok := parentRecord["app_id"].(string); ok {
+			appID = strings.TrimSpace(v)
+		}
+		if appID == "" {
+			if pt, ok := parentRecord["app_token"].(string); ok && pt != "" {
+				appID = util.ParseAppToken(s.rm, pt).AppID
+			}
+		}
+	}
+	if appID == "" {
+		appID = CSMAppID
+	}
+	subTokenRaw := util.BuildRawToken(appID, loginID, "user", util.ResolveAccessRight("user"))
+	subToken := s.rm.CsmEncrypt(subTokenRaw)
+	parentToken := ""
+	if len(parentRecord) > 0 {
+		if pt, ok := parentRecord["app_token"].(string); ok {
+			parentToken = pt
+		}
+	}
 	subUser := map[string]any{
 		"id": uuidNew(), "parent_account_id": parentID, "login_identifier": loginID,
 		"pass": pass, "actived": true, "permissions": req["permissions"], "menusPermissions": req["menusPermissions"],
-		"app_id": auth.AppID,
+		"app_id": appID, "app_token": subToken, "source_app_token": parentToken,
+		"email": loginID, "username": loginID,
+		"refresh": subToken, "refresh_token": subToken,
+		"login_version": 0, "loginVersion": 0,
 	}
 	if _, err := s.rm.CreateRecord(CSMAppID, SubAccountsTable, subUser, []string{"id"}); err != nil {
 		return RegistrationResult{ErrorCode: 1, ErrorMessage: err.Error()}

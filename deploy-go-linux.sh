@@ -45,21 +45,13 @@ echo "Code: $(git -C "$P" log --oneline -1)"
 SYNC
 
 echo ""
-echo "▶ [3/4] Build on server (CGO + llamacpp)..."
+echo "▶ [3/4] Build on server (CGO + llamacpp, rebuild libs for glibc 2.31)..."
 ssh "$SERVER" bash -s "$SERVER_PATH" <<'BUILD'
 set -e
 P="$1"
-if ! command -v go >/dev/null 2>&1; then
-    echo "Installing Go..."
-    GO_VER=1.22.10
-    curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" | tar -C /usr/local -xz
-    export PATH="/usr/local/go/bin:$PATH"
-fi
-export PATH="/usr/local/go/bin:$PATH"
-cd "$P/backend-go"
-export CGO_ENABLED=1
-go build -tags llamacpp -ldflags="-s -w" -trimpath -o "$P/csm_go_server" ./cmd/server
-ls -lh "$P/csm_go_server"
+cd "$P"
+chmod +x scripts/build-go-native-inner.sh
+./scripts/build-go-native-inner.sh "$P/backend-go" "$P/csm_go_server"
 BUILD
 
 echo ""

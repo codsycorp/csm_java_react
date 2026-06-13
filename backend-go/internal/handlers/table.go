@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -121,7 +122,7 @@ func (h *TableHandler) handleTableOperation(params map[string]any, isUpdate bool
 	if table == "index" && !isUpdate {
 		appID = security.ResolveMenuIndexAppID(params, auth, filter)
 	}
-	access := security.UserAccessFromAuth(auth, h.rm)
+	access := h.resolveAccess(auth)
 
 	table, filter = security.ResolveSystemUserTableForRead(table, isUpdate, params, filter, access)
 
@@ -130,7 +131,7 @@ func (h *TableHandler) handleTableOperation(params map[string]any, isUpdate bool
 
 	allowScopedAutosetup := security.IsAllowedAutosetupTemplateRead(appID, table, isUpdate, filter, access)
 	if !allowScopedAutosetup {
-		if msg := security.ValidateActionPermission(access, security.ResolveRequiredAction(params, isUpdate)); msg != "" {
+		if msg := security.ValidateActionPermissionForTable(access, security.ResolveRequiredAction(params, isUpdate), appID, table, h.rm); msg != "" {
 			out["success"] = false
 			out["message"] = msg
 			return out
@@ -233,6 +234,7 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 	if command == "" {
 		command = "create"
 	}
+	pkFields := parsePkFields(params)
 
 	objUpdate, _ := params["obj_update"].(map[string]any)
 	if objUpdate == nil {
@@ -276,11 +278,23 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 	}
 
 	hasFilter := len(filter.Conditions) > 0 || filter.Field != ""
+	var existing []map[string]any
 	var finalObj map[string]any
 	if hasFilter || command == "update" || command == "delete" {
-		existing := h.lookupRecordsForUpdate(appID, table, filter, objUpdate)
+		existing = h.lookupRecordsForUpdate(appID, table, filter, objUpdate)
 		if access != nil && len(existing) > 0 {
 			existing = security.FilterRowsForUpdate(table, existing, access, appID, h.rm)
+		}
+		if (command == "update" || command == "delete") && len(existing) == 0 {
+			if id, ok := objUpdate["id"]; ok && strings.TrimSpace(fmt.Sprint(id)) != "" {
+				if row := h.rm.Find(appID, table, model.EqFilter("id", id)); len(row) > 0 {
+					fallback := []map[string]any{row}
+					if access != nil {
+						fallback = security.FilterRowsForUpdateWithoutDataScope(table, fallback, access, appID, h.rm)
+					}
+					existing = fallback
+				}
+			}
 		}
 		if table == "csm_group_members" && access != nil && access.IsSubUser && command == "update" {
 			if msg := validateSubUserSelfEdit(objUpdate, existing, access); msg != "" {
@@ -308,6 +322,11 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 			h.emitSocketUpdate(appID, table, "delete", target)
 			return out
 		}
+		if command == "update" && len(existing) == 0 {
+			out["success"] = false
+			out["message"] = "Không tìm thấy bản ghi để cập nhật"
+			return out
+		}
 		if len(existing) > 0 {
 			finalObj = existing[0]
 			for k, v := range objUpdate {
@@ -317,9 +336,9 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 	}
 	if finalObj == nil {
 		if hasFilter {
-			existing := h.rm.Find(appID, table, filter)
-			if len(existing) > 0 {
-				finalObj = existing
+			row := h.rm.Find(appID, table, filter)
+			if len(row) > 0 {
+				finalObj = row
 				for k, v := range objUpdate {
 					finalObj[k] = v
 				}
@@ -330,8 +349,35 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 			finalObj = h.mergeWithExisting(appID, table, objUpdate)
 		}
 	}
+	if len(existing) == 0 && finalObj != nil {
+		if id := strings.TrimSpace(fmt.Sprint(finalObj["id"])); id != "" {
+			existing = []map[string]any{finalObj}
+		}
+	}
 
-	cmd, err := h.rm.CreateRecord(appID, table, finalObj, nil)
+	if access != nil && finalObj != nil {
+		if msg := security.ApplyDataScopeCreateGuard(appID, table, finalObj, access, h.rm); msg != "" {
+			out["success"] = false
+			out["message"] = msg
+			return out
+		}
+		security.EnsureBusinessPermissionSchemaValues(appID, table, finalObj, access, h.rm)
+	}
+	if command == "create" && len(pkFields) > 0 && !hasAnyPrimaryKeyValue(finalObj, pkFields) {
+		out["success"] = false
+		out["message"] = "Thiếu khóa chính: cần ít nhất 1 trong các trường " + strings.Join(pkFields, ", ")
+		return out
+	}
+	if command == "create" && len(pkFields) > 0 && h.rm.FindByCustomPK(appID, table, finalObj, pkFields) != nil {
+		out["success"] = false
+		out["message"] = "Trùng khóa chính khi tạo dữ liệu"
+		return out
+	}
+	if table == "csm_accounts" || table == "csm_group_members" {
+		h.ensurePassEncrypted(table, finalObj, existing)
+	}
+
+	cmd, err := h.rm.CreateRecord(appID, table, finalObj, pkFields)
 	if err != nil {
 		out["success"] = false
 		out["message"] = err.Error()
@@ -349,6 +395,16 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 	}
 	h.emitSocketUpdate(appID, table, action, finalObj)
 	return out
+}
+
+func (h *TableHandler) resolveAccess(auth *security.AuthUser) *security.UserAccessContext {
+	resolved := auth
+	if auth != nil && h.us != nil {
+		if fresh := h.us.ResolveSessionAuth(*auth); fresh != nil {
+			resolved = fresh
+		}
+	}
+	return security.UserAccessFromAuth(resolved, h.rm)
 }
 
 func (h *TableHandler) emitSocketUpdate(appID, table, action string, row map[string]any) {
@@ -411,6 +467,36 @@ func (h *TableHandler) handlePasswordChange(appID, table string, objUpdate map[s
 	}
 	objUpdate["pass"] = h.rm.CsmEncrypt(loginID + "_____" + newPW)
 	return objUpdate, ""
+}
+
+func (h *TableHandler) ensurePassEncrypted(table string, objUpdate map[string]any, existingRecords []map[string]any) {
+	if objUpdate == nil {
+		return
+	}
+	passVal, _ := objUpdate["pass"].(string)
+	passVal = strings.TrimSpace(passVal)
+	if passVal == "" {
+		return
+	}
+	if decrypted, err := h.rm.CsmDecrypt(passVal); err == nil && strings.Contains(decrypted, "_____") {
+		return
+	}
+	loginID := ""
+	if table == "csm_accounts" {
+		loginID = firstNonEmpty(objUpdate, "username", "email", "phoneNumber")
+		if loginID == "" && len(existingRecords) > 0 {
+			loginID = firstNonEmpty(existingRecords[0], "username", "email", "phoneNumber")
+		}
+	} else if table == "csm_group_members" {
+		loginID = firstNonEmpty(objUpdate, "login_identifier", "username", "email", "phoneNumber")
+		if loginID == "" && len(existingRecords) > 0 {
+			loginID = firstNonEmpty(existingRecords[0], "login_identifier", "username", "email", "phoneNumber")
+		}
+	}
+	if loginID == "" {
+		return
+	}
+	objUpdate["pass"] = h.rm.CsmEncrypt(loginID + "_____" + passVal)
 }
 
 func trimLargeCodeFields(table string, row map[string]any) map[string]any {
@@ -530,7 +616,7 @@ func (h *TableHandler) MigrateKeys(params map[string]any) *model.StandardRespons
 
 func (h *TableHandler) HandleCreateTable(params map[string]any, auth *security.AuthUser) *model.StandardResponse {
 	if auth != nil {
-		access := security.UserAccessFromAuth(auth, h.rm)
+		access := h.resolveAccess(auth)
 		appID, _ := params["app_id"].(string)
 		if access != nil && !access.IsDev && !access.CanAccessAppData(appID) {
 			return model.ErrorResponse(403, "Forbidden app data access")
@@ -542,7 +628,7 @@ func (h *TableHandler) HandleCreateTable(params map[string]any, auth *security.A
 
 func (h *TableHandler) HandleDropTable(params map[string]any, auth *security.AuthUser) *model.StandardResponse {
 	if auth != nil {
-		access := security.UserAccessFromAuth(auth, h.rm)
+		access := h.resolveAccess(auth)
 		appID, _ := params["app_id"].(string)
 		if access != nil && !access.IsDev && !access.CanAccessAppData(appID) {
 			return model.ErrorResponse(403, "Forbidden app data access")
@@ -594,18 +680,58 @@ func validateSubUserSelfEdit(objUpdate map[string]any, records []map[string]any,
 		if _, ok := objUpdate[field]; !ok {
 			continue
 		}
-		requested := strings.TrimSpace(fmt.Sprint(objUpdate[field]))
-		if requested == "" {
+		requested := objUpdate[field]
+		if requested == nil || strings.TrimSpace(fmt.Sprint(requested)) == "" {
 			continue
 		}
-		for _, row := range records {
-			stored := strings.TrimSpace(fmt.Sprint(row[field]))
-			if stored != requested {
-				return "Sub-user không được thay đổi trường hệ thống: " + field + ". Bạn chỉ được sửa: password/pass và các thông tin cá nhân khác"
-			}
+		if !isRestrictedFieldActuallyChanged(field, requested, records) {
+			continue
 		}
+		return "Sub-user không được thay đổi trường hệ thống: " + field + ". Bạn chỉ được sửa: password/pass và các thông tin cá nhân khác"
 	}
 	return ""
+}
+
+func isRestrictedFieldActuallyChanged(field string, requested any, records []map[string]any) bool {
+	requestedNorm := normalizeComparableFieldValue(requested)
+	for _, row := range records {
+		storedNorm := normalizeComparableFieldValue(row[field])
+		if storedNorm != requestedNorm {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeComparableFieldValue(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case []any:
+		parts := make([]string, 0, len(t))
+		for _, item := range t {
+			parts = append(parts, strings.TrimSpace(fmt.Sprint(item)))
+		}
+		sort.Strings(parts)
+		return strings.Join(parts, ",")
+	case []string:
+		parts := append([]string(nil), t...)
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		sort.Strings(parts)
+		return strings.Join(parts, ",")
+	default:
+		s := strings.TrimSpace(fmt.Sprint(v))
+		if strings.HasPrefix(s, "[") {
+			var arr []any
+			if json.Unmarshal([]byte(s), &arr) == nil {
+				return normalizeComparableFieldValue(arr)
+			}
+		}
+		return s
+	}
 }
 
 func (h *TableHandler) lookupRecordsForUpdate(appID, table string, filter model.SearchFilter, objUpdate map[string]any) []map[string]any {
@@ -628,4 +754,57 @@ func (h *TableHandler) lookupRecordsForUpdate(appID, table string, filter model.
 		}
 	}
 	return out
+}
+
+func parsePkFields(params map[string]any) []string {
+	raw, ok := params["pk_fields"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		var out []string
+		for _, item := range v {
+			if s := strings.TrimSpace(item); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []any:
+		var out []string
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				if s = strings.TrimSpace(s); s != "" {
+					out = append(out, s)
+				}
+			}
+		}
+		return out
+	case string:
+		s := strings.TrimSpace(v)
+		if s == "" {
+			return nil
+		}
+		if strings.HasPrefix(s, "[") {
+			var arr []any
+			if json.Unmarshal([]byte(s), &arr) == nil {
+				return parsePkFields(map[string]any{"pk_fields": arr})
+			}
+		}
+		return []string{s}
+	default:
+		return nil
+	}
+}
+
+func hasAnyPrimaryKeyValue(row map[string]any, pkFields []string) bool {
+	if row == nil {
+		return false
+	}
+	for _, field := range pkFields {
+		if v, ok := row[field]; ok && strings.TrimSpace(fmt.Sprint(v)) != "" {
+			return true
+		}
+	}
+	return false
 }

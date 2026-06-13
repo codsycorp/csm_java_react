@@ -120,8 +120,8 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 				}
 			}
 			if full.Len() == 0 {
-				log.Printf("AiCodeStream: empty local output requestId=%s streamErr=%v completeErr=%v native=%v sidecar=%v",
-					req.RequestID, streamErr, completeErr, deps.Llama.UsesNative(), deps.Llama.SidecarReachable())
+				log.Printf("AiCodeStream: empty local output requestId=%s streamErr=%v completeErr=%v native=%v",
+					req.RequestID, streamErr, completeErr, deps.Llama.UsesNative())
 			}
 		}
 	} else {
@@ -142,9 +142,9 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	result := services.CleanLocalModelOutput(full.String())
 	if result == "" && deps.Llama.IsAvailable() {
 		result = uiText(req.UILang,
-			"AI local không trả về nội dung. Hãy thử lại hoặc kiểm tra llama-server / build native.",
-			"Local AI returned no content. Retry or check llama-server / native build.",
-			"本地 AI 未返回内容。请重试或检查 llama-server / native 构建。",
+			"AI local không trả về nội dung. Hãy thử lại hoặc kiểm tra build native (-tags llamacpp).",
+			"Local AI returned no content. Retry or check native build (-tags llamacpp).",
+			"本地 AI 未返回内容。请重试或检查 native 构建（-tags llamacpp）。",
 		)
 	}
 

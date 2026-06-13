@@ -52,6 +52,7 @@ func AuthMiddleware(st *state.AppState) func(http.Handler) http.Handler {
 func resolveAuthUser(st *state.AppState, r *http.Request, clientIP, clientUA, clientID string) *security.AuthUser {
 	token := sessionTokenFromRequest(r)
 	jwtHints := jwtHintsFromToken(st, token)
+	csmValid := token != "" && st.JWT.ValidateToken(token)
 
 	// Bearer: invalid token hard-fails (mirror Java).
 	if bearer := bearerToken(r); bearer != "" {
@@ -67,7 +68,6 @@ func resolveAuthUser(st *state.AppState, r *http.Request, clientIP, clientUA, cl
 		return nil
 	}
 
-	csmValid := token != "" && st.JWT.ValidateToken(token)
 	if token != "" {
 		user := st.UserService.ResolveFromJWT(st.JWT, token)
 		if user == nil {

@@ -5,7 +5,7 @@
  */
 
 import { BasicContent } from "#src/components";
-import { getTableData, andWhere } from "#src/components/csm-grid/CsmApi";
+import { getTableData, andWhere, scrapeWeb } from "#src/components/csm-grid/CsmApi";
 import * as CsmApi from "#src/components/csm-grid/CsmApi";
 import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
@@ -133,6 +133,105 @@ async function ensureSpreadsheetLibraries() {
   normalizeJsZipGlobal();
 }
 
+function normalizeLegacyApiPath(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl, typeof window !== "undefined" ? window.location.href : "https://admin.csmbridge.net/");
+    return parsed.pathname.replace(/\/+$/, "") || "/";
+  } catch {
+    return String(rawUrl || "").split("?")[0].replace(/\/+$/, "");
+  }
+}
+
+function createLegacyApiFetchBridge(rawFetch: typeof fetch): typeof fetch {
+  const bridge = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const rawUrl = typeof input === "string"
+      ? input
+      : input instanceof URL
+        ? input.href
+        : input.url;
+    const method = String(
+      init?.method || (input instanceof Request ? input.method : "GET"),
+    ).toUpperCase();
+    const path = normalizeLegacyApiPath(rawUrl);
+
+    if (method === "POST") {
+      let payload: Record<string, any> | null = null;
+      if (typeof init?.body === "string") {
+        try {
+          payload = JSON.parse(init.body);
+        } catch {
+          payload = null;
+        }
+      }
+
+      if (payload && typeof payload === "object") {
+        if (path === "/api/get-table-data" || path === "/get-table-data") {
+          try {
+            const res = await getTableData<any>({
+              app_id: String(payload.app_id || "csm"),
+              obj_name: String(payload.obj_name || ""),
+              where: payload.e_where || payload.where,
+              take: payload.take,
+              lastkey: payload.lastkey,
+              only_my_subusers: payload.only_my_subusers,
+            });
+            return new Response(JSON.stringify(res), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          } catch (error: any) {
+            return new Response(JSON.stringify({
+              success: false,
+              message: error?.message || String(error),
+            }), { status: 401, headers: { "Content-Type": "application/json" } });
+          }
+        }
+
+        if (path === "/api/update-table-data" || path === "/update-table-data") {
+          try {
+            const res = await (CsmApi as any).updateTableData({
+              app_id: String(payload.app_id || "csm"),
+              obj_name: String(payload.obj_name || ""),
+              command: payload.command || "update",
+              obj_update: payload.obj_update || payload.obj || {},
+              pk_fields: payload.pk_fields,
+              where: payload.e_where || payload.where,
+            });
+            return new Response(JSON.stringify(res), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          } catch (error: any) {
+            return new Response(JSON.stringify({
+              success: false,
+              message: error?.message || String(error),
+            }), { status: 400, headers: { "Content-Type": "application/json" } });
+          }
+        }
+
+        if (path === "/api/scrape-web" || path === "/scrape-web") {
+          try {
+            const res = await scrapeWeb(payload as any);
+            return new Response(JSON.stringify(res), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          } catch (error: any) {
+            return new Response(JSON.stringify({
+              success: false,
+              message: error?.message || String(error),
+            }), { status: 400, headers: { "Content-Type": "application/json" } });
+          }
+        }
+      }
+    }
+
+    return rawFetch(input, init);
+  };
+
+  return bridge as typeof fetch;
+}
+
 function sanitizeIdPart(value?: string): string {
   if (!value) return "default";
   return String(value)
@@ -234,6 +333,12 @@ function createScopedRuntime(containerId: string): ScopedRuntime {
       }
       if (prop === "document") {
         return documentProxy;
+      }
+      if (prop === "fetch") {
+        if (!runtimeStore.__legacyApiFetchBridge) {
+          runtimeStore.__legacyApiFetchBridge = createLegacyApiFetchBridge(target.fetch.bind(target));
+        }
+        return runtimeStore.__legacyApiFetchBridge;
       }
       if (prop === "setInterval") {
         return (...args: any[]) => {
@@ -1771,6 +1876,15 @@ ${resolvedContainerSelector} select {
           where: params?.e_where || params?.where,
         } as any)
           .then((res: any) => fn?.(res))
+          .catch((error: any) => {
+            const message = String(error?.message || error || "Update failed");
+            fn?.({ success: false, message, error: message });
+          });
+      },
+
+      csm_scrape_web: (params: any, fn?: (res: any) => void) => {
+        scrapeWeb(params)
+          .then((res: any) => fn?.({ success: true, data: res?.data ?? res }))
           .catch((error: any) => fn?.({ success: false, error: (error as any)?.message || error }));
       },
       
@@ -1822,7 +1936,10 @@ ${resolvedContainerSelector} select {
               where: params?.e_where || params?.where,
             } as any)
               .then((res: any) => callback(res))
-              .catch((error: any) => callback({ success: false, error: (error as any)?.message || error }));
+              .catch((error: any) => {
+                const message = String(error?.message || error || "Update failed");
+                callback({ success: false, message, error: message });
+              });
           },
           csm_savedb: (key: string, data: any, callback: (res: any) => void) => {
             try {

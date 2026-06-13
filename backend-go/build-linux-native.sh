@@ -1,13 +1,10 @@
 #!/bin/bash
 # Build CSM Go backend with in-process llama.cpp (CGO + -tags llamacpp).
 #
-# Requires Ubuntu 22.04+ (glibc 2.32+) or compatible toolchain.
-# On Ubuntu 20.04 use the default static build + AI_LOCAL_LLAMA_MANAGED_SIDECAR=true
-# (csm-go spawns llama-server as child — no separate systemd unit).
+# Production (Ubuntu 20.04): use ../scripts/build-go-linux-native.sh (Docker + glibc 2.31).
+# Dev on Linux 22.04+: run this script directly.
 #   ./build-linux-native.sh                    → ../dist/csm_go_server
 #   ./build-linux-native.sh /path/to/binary
-#
-# Requires: C compiler, C++ stdlib (g++ on Linux, clang on macOS).
 set -euo pipefail
 GO_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT="${1:-$GO_DIR/../dist/csm_go_server}"

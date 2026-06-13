@@ -1,6 +1,7 @@
 package util
 
 import (
+	"strconv"
 	"strings"
 
 	"csm_server/backend-go/internal/data"
@@ -47,6 +48,31 @@ func ParseDecryptedToken(decrypted string) AppTokenMeta {
 
 func IsSubUserRole(role string) bool {
 	return strings.EqualFold(strings.TrimSpace(role), "user")
+}
+
+const subUserRole = "user"
+
+func BuildRawToken(appID, principal, role string, accessRight int) string {
+	safe := func(value, fallback string) string {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return fallback
+		}
+		return value
+	}
+	return strings.Join([]string{
+		safe(appID, "ohno"),
+		safe(principal, "anonymous"),
+		safe(role, subUserRole),
+		strconv.Itoa(accessRight),
+	}, "_____")
+}
+
+func ResolveAccessRight(role string) int {
+	if strings.EqualFold(strings.TrimSpace(role), "dev") {
+		return 1
+	}
+	return 0
 }
 
 func AppIDFromToken(rm *data.RecordManager, token string) string {

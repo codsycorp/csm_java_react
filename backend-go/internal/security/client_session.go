@@ -87,7 +87,11 @@ func RefreshTokenExpired(user model.User) bool {
 	if user.RefreshTokenExpiry != nil {
 		expiry = *user.RefreshTokenExpiry
 	}
-	return expiry <= 0 || expiry <= time.Now().UnixMilli()
+	// Java parity: 0 means unset — not expired until a positive expiry is in the past.
+	if expiry <= 0 {
+		return false
+	}
+	return expiry <= time.Now().UnixMilli()
 }
 
 func RefreshTokenClientMatches(user model.User, clientID string) bool {

@@ -1,4 +1,5 @@
 import { request } from "#src/utils";
+import { HTTPError } from "ky";
 import { ensureAuthSessionReady } from "#src/utils/request/auth-session";
 import { AI_TIMEOUT_MS } from "#src/api/ai/index";
 import { useTabsStore, useUserStore } from "#src/store";
@@ -798,13 +799,29 @@ export async function updateTableData<T extends Record<string, any>>(params: {
 		// Ignore serialization errors in debug logging
 	}
 	
-	const res = await ensureAuthSessionReady().then((ready) => {
+	const res = await ensureAuthSessionReady().then(async (ready) => {
 		if (!ready) {
 			throw new Error("Phiên đăng nhập không hợp lệ hoặc đã hết hạn");
 		}
-		return request
-			.post<ApiResponse<string>>("update-table-data", { json: payload, ignoreLoading: true })
-			.json<ApiResponse<string>>();
+		try {
+			return await request
+				.post<ApiResponse<string>>("update-table-data", { json: payload, ignoreLoading: true })
+				.json<ApiResponse<string>>();
+		} catch (err) {
+			if (err instanceof HTTPError) {
+				try {
+					const body = await err.response.clone().json() as ApiResponse<string>;
+					if (body && (body as any).message) {
+						throw new Error(String((body as any).message));
+					}
+				} catch (parseErr) {
+					if (parseErr instanceof Error && parseErr.message && parseErr.message !== err.message) {
+						throw parseErr;
+					}
+				}
+			}
+			throw err;
+		}
 	});
 	try {
 		console.log("📥 updateTableData response JSON:", JSON.stringify(res));
@@ -814,6 +831,34 @@ export async function updateTableData<T extends Record<string, any>>(params: {
 	clearGetTableDataCache();
 	if (res && (res as any).success === false) {
 		throw new Error(String((res as any).message || "Lưu dữ liệu thất bại"));
+	}
+	return res;
+}
+
+export async function scrapeWeb(params: {
+	link: string
+	proxyServer?: string
+	proxyUsername?: string
+	proxyPassword?: string
+	useIncognito?: boolean
+	listenToConsole?: boolean
+	onPageLoadedScript?: string
+	scriptToExecute?: string
+}) {
+	const SCRAPE_WEB_TIMEOUT_MS = 120000;
+	const ready = await ensureAuthSessionReady();
+	if (!ready) {
+		throw new Error("Phiên đăng nhập không hợp lệ hoặc đã hết hạn");
+	}
+	const res = await request
+		.post<any>("scrape-web", {
+			json: params,
+			ignoreLoading: true,
+			timeout: SCRAPE_WEB_TIMEOUT_MS,
+		})
+		.json<any>();
+	if (res && res.success === false) {
+		throw new Error(String(res.message || "scrape-web thất bại"));
 	}
 	return res;
 }

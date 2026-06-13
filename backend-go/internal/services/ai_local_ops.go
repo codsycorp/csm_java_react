@@ -79,12 +79,6 @@ func llamaProviderLabel(llama *LlamaService) string {
 	if llama != nil && llama.UsesNative() {
 		return "llama.cpp-native"
 	}
-	if llama != nil && llama.UsesManagedSidecar() {
-		return "llama.cpp-managed"
-	}
-	if llama != nil && llama.IsAvailable() {
-		return "llama.cpp-sidecar"
-	}
 	return "llama.cpp"
 }
 
@@ -92,7 +86,6 @@ func (s *AiLocalOpsService) Health(llama *LlamaService) map[string]any {
 	modelPath := s.cfg.AI.LlamaModelPath
 	modelOnDisk := llama != nil && llama.ModelOnDisk()
 	nativeReady := llama != nil && llama.UsesNative()
-	sidecarOK := llama != nil && llama.SidecarReachable()
 	inferenceReady := llama != nil && llama.IsAvailable()
 	status := map[string]any{}
 	if llama != nil {
@@ -111,8 +104,6 @@ func (s *AiLocalOpsService) Health(llama *LlamaService) map[string]any {
 			"modelOnDisk":          modelOnDisk,
 			"nativeEnabled":        s.cfg.AI.LlamaNativeEnabled,
 			"nativeReady":          nativeReady,
-			"sidecarReachable":     sidecarOK,
-			"sidecarURL":           s.cfg.AI.LlamaServerURL,
 			"available":            inferenceReady,
 			"healthy":              inferenceReady,
 			"hint":                 status["hint"],

@@ -3,7 +3,9 @@ use serde_json::{Map, Value};
 use crate::data::RecordManager;
 use crate::model::SearchFilter;
 use crate::security::auth::AuthUser;
-use crate::util::{parse_app_token, PermissionBitfieldUtil, is_sub_user_role};
+use crate::util::{
+    expand_permission_presets, parse_app_token, PermissionBitfieldUtil, is_sub_user_role,
+};
 
 const OWNER_SCOPE_FIELDS: &[&str] = &[
     "created_by", "create_by", "owner_id", "owner", "user_id", "userid", "account_id",
@@ -30,6 +32,7 @@ pub struct UserAccessContext {
     pub preferred_owner: String,
     pub preferred_department: String,
     pub preferred_branch: String,
+    pub parsed_permission_token: Option<u64>,
 }
 
 /// Mirror Java mapMainAccountToUser dev branch — menusPermissions = [app_id].
@@ -89,11 +92,13 @@ impl UserAccessContext {
 
         let mut permissions = user.permissions.clone();
         let parsed_token = PermissionBitfieldUtil::parse_security_token(user.permission_bitfield.as_deref());
-        // Mirror Java TableHandler: when bitfield exists, derive action tokens from it (not merge-only).
         if parsed_token.is_some() {
-            permissions =
+            let from_bitfield =
                 PermissionBitfieldUtil::permissions_from_bitfield(user.permission_bitfield.as_deref());
+            permissions =
+                PermissionBitfieldUtil::merge_unique_case_insensitive(&from_bitfield, &permissions);
         }
+        permissions = expand_permission_presets(&permissions);
 
         if user.dev {
             apply_dev_permission_elevation(&mut permissions, &mut menus_permissions, &app_id);
@@ -183,6 +188,7 @@ impl UserAccessContext {
             preferred_owner,
             preferred_department,
             preferred_branch,
+            parsed_permission_token: parsed_token,
         })
     }
 
@@ -225,9 +231,159 @@ pub fn has_action_permission(permissions: &[String], action: &str) -> bool {
     if expected.is_empty() {
         return false;
     }
-    permissions.iter().any(|permission| {
+    let expanded = expand_permission_presets(permissions);
+    expanded.iter().any(|permission| {
         let normalized = permission.trim().to_ascii_lowercase();
-        normalized == expected || normalized == "admin"
+        normalized == expected
+            || normalized == "admin"
+            || (expected == "edit" && normalized == "update")
+            || (expected == "view" && normalized == "read")
+    })
+}
+
+fn has_bitfield_action_permission(token: Option<u64>, action: &str) -> bool {
+    let Some(token) = token else {
+        return false;
+    };
+    let compact = PermissionBitfieldUtil::to_compact_token(token);
+    let perms = PermissionBitfieldUtil::permissions_from_bitfield(Some(&compact));
+    has_action_permission(&perms, action)
+}
+
+fn has_view_permission(ctx: &UserAccessContext) -> bool {
+    has_action_permission(&ctx.permissions, "view")
+        || has_bitfield_action_permission(ctx.parsed_permission_token, "view")
+}
+
+fn is_legacy_scopeless_business_table(app_id: &str, table_name: &str) -> bool {
+    let app = app_id.trim();
+    let table = table_name.trim().to_ascii_lowercase();
+    if table.is_empty() {
+        return false;
+    }
+    if app.eq_ignore_ascii_case("kqxs") && table.starts_with("kqxs_") {
+        return true;
+    }
+    if app.eq_ignore_ascii_case("tonghop") && table.starts_with("kqxs_") {
+        return true;
+    }
+    false
+}
+
+fn can_read_legacy_business_app(ctx: &UserAccessContext, app_id: &str) -> bool {
+    if !ctx.can_access_app_data(app_id) {
+        return false;
+    }
+    if ctx.app_id.eq_ignore_ascii_case(app_id) {
+        return true;
+    }
+    let target = app_id.trim().to_ascii_lowercase();
+    ctx.menus_permissions.iter().any(|menu| {
+        let normalized = menu.trim().to_ascii_lowercase();
+        normalized == target
+            || normalized == format!("app:{target}")
+            || normalized == format!("broadcast_{target}")
+    })
+}
+
+fn table_has_permission_scope_fields(
+    record_manager: &RecordManager,
+    app_id: &str,
+    table_name: &str,
+) -> bool {
+    if is_legacy_scopeless_business_table(app_id, table_name) {
+        return false;
+    }
+    if is_data_scope_exempt_table(table_name) {
+        return false;
+    }
+    let fields = record_manager
+        .get_table_search_keys(app_id, table_name, "fields")
+        .unwrap_or_default();
+    if fields.is_empty() {
+        return false;
+    }
+    const GENERIC_BUSINESS_PERMISSION_FIELDS: &[&str] = &[
+        "permissionBitfield",
+        "permission_bitfield",
+        "permissionSchemaVersion",
+        "permission_schema_version",
+        "dataScope",
+        "data_scope",
+        "created_by",
+        "create_by",
+        "owner_id",
+        "owner",
+        "user_id",
+        "userid",
+        "account_id",
+        "dept_id",
+        "department_id",
+        "team_id",
+        "branch_id",
+        "branchId",
+        "parent_account_id",
+    ];
+    fields.iter().any(|field| {
+        let field = field.trim();
+        if field.is_empty() {
+            return false;
+        }
+        GENERIC_BUSINESS_PERMISSION_FIELDS
+            .iter()
+            .any(|scope_field| scope_field.eq_ignore_ascii_case(field))
+    })
+}
+
+fn allows_write_with_view_only(
+    ctx: &UserAccessContext,
+    app_id: &str,
+    table_name: &str,
+    record_manager: &RecordManager,
+) -> bool {
+    if table_name.trim().is_empty() {
+        return false;
+    }
+    if !has_view_permission(ctx) && !can_read_legacy_business_app(ctx, app_id) {
+        return false;
+    }
+    is_legacy_scopeless_business_table(app_id, table_name)
+        || !table_has_permission_scope_fields(record_manager, app_id, table_name)
+}
+
+/// Mirrors Go `ValidateActionPermissionForTable`.
+pub fn validate_action_permission_for_table(
+    ctx: Option<&UserAccessContext>,
+    required_action: &str,
+    app_id: &str,
+    table_name: &str,
+    record_manager: &RecordManager,
+) -> Option<String> {
+    let Some(ctx) = ctx else {
+        return None;
+    };
+    if ctx.is_dev {
+        return None;
+    }
+    if required_action.is_empty() {
+        return None;
+    }
+    if has_action_permission(&ctx.permissions, required_action)
+        || has_bitfield_action_permission(ctx.parsed_permission_token, required_action)
+    {
+        return None;
+    }
+    if matches!(required_action, "create" | "edit")
+        && allows_write_with_view_only(ctx, app_id, table_name, record_manager)
+    {
+        return None;
+    }
+    Some(match required_action {
+        "view" => "Bạn không có quyền xem dữ liệu (view)".into(),
+        "create" => "Bạn không có quyền tạo dữ liệu (create)".into(),
+        "edit" => "Bạn không có quyền cập nhật dữ liệu (edit)".into(),
+        "delete" => "Bạn không có quyền xóa dữ liệu (delete)".into(),
+        _ => "Bạn không có quyền thực hiện thao tác này".into(),
     })
 }
 
@@ -1107,7 +1263,48 @@ mod tests {
             preferred_owner: String::new(),
             preferred_department: String::new(),
             preferred_branch: String::new(),
+            parsed_permission_token: None,
         }
+    }
+
+    #[test]
+    fn view_allows_edit_on_kqxs_legacy_table() {
+        std::env::set_var("APP_DATA_DIR", "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas");
+        std::env::set_var(
+            "ROCKSDB_ROOT_DIR",
+            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/database",
+        );
+        let config = AppConfig::from_env().expect("config");
+        let rm = RecordManager::new(config).expect("record manager");
+        let ctx = UserAccessContext {
+            is_admin: false,
+            is_dev: false,
+            is_sub_user: true,
+            app_id: "kqxs".into(),
+            permissions: vec!["view".into(), "scope:owner".into()],
+            menus_permissions: vec!["kqxs".into()],
+            data_scope: "OWNER".into(),
+            data_app_ids: vec![],
+            owner_candidates: vec!["sub-user-1".into()],
+            parent_account_candidates: vec![],
+            department_candidates: vec![],
+            branch_candidates: vec![],
+            preferred_owner: "sub-user-1".into(),
+            preferred_department: String::new(),
+            preferred_branch: String::new(),
+            parsed_permission_token: None,
+        };
+        assert!(
+            validate_action_permission_for_table(
+                Some(&ctx),
+                "edit",
+                "kqxs",
+                "kqxs_angiang",
+                &rm
+            )
+            .is_none(),
+            "view should allow edit on kqxs legacy tables"
+        );
     }
 
     #[test]
