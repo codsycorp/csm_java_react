@@ -46,13 +46,18 @@ func (l *LlamaService) UsesNative() bool {
 	return l.native != nil && l.native.ready()
 }
 
+// IsAvailable reports whether inference can run now (native engine or llama-server sidecar).
+// A GGUF file on disk alone is not enough — the CI/static binary has no in-process llama
+// unless built with -tags llamacpp, and HTTP mode requires a reachable sidecar.
 func (l *LlamaService) IsAvailable() bool {
-	if l.UsesNative() {
-		return true
-	}
-	if l.modelExists() {
-		return true
-	}
+	return l.UsesNative() || l.serverReachable()
+}
+
+func (l *LlamaService) ModelOnDisk() bool {
+	return l.modelExists()
+}
+
+func (l *LlamaService) SidecarReachable() bool {
 	return l.serverReachable()
 }
 
@@ -116,8 +121,8 @@ func (l *LlamaService) StreamCompletion(ctx context.Context, prompt string, onTo
 }
 
 func (l *LlamaService) completeViaHTTP(ctx context.Context, prompt string, maxTokens uint32) (string, error) {
-	if !l.modelExists() && !l.serverReachable() {
-		return "", fmt.Errorf("local llama unavailable")
+	if !l.serverReachable() {
+		return "", fmt.Errorf("llama-server sidecar unreachable at %s", l.completionBaseURL())
 	}
 	nPredict := int(maxTokens)
 	if nPredict <= 0 {
@@ -155,8 +160,8 @@ func (l *LlamaService) completeViaHTTP(ctx context.Context, prompt string, maxTo
 }
 
 func (l *LlamaService) streamViaHTTP(ctx context.Context, prompt string, onToken func(string) error) error {
-	if !l.modelExists() && !l.serverReachable() {
-		return fmt.Errorf("local llama unavailable")
+	if !l.serverReachable() {
+		return fmt.Errorf("llama-server sidecar unreachable at %s", l.completionBaseURL())
 	}
 	body := map[string]any{
 		"prompt":      prompt,
@@ -221,7 +226,7 @@ func LocalUnavailableMessage() string {
 }
 
 func LocalUnavailableHint() string {
-	return "Cấu hình AI_LOCAL_LLAMA_MODEL_PATH (GGUF). Build -tags llamacpp cho in-process, hoặc chạy llama-server (:8888)"
+	return "Cần binary build -tags llamacpp (AI_LOCAL_LLAMA_NATIVE_ENABLED=true) hoặc chạy llama-server tại AI_LOCAL_LLAMA_SERVER_URL (mặc định :8888)"
 }
 
 func StreamingModelLabel(cfg config.AppConfig, llama *LlamaService) string {

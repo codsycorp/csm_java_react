@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -104,8 +105,12 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	}
 
 	if deps.Llama.IsAvailable() {
-		if err := deps.Llama.StreamCompletion(ctx, prompt, streamPiece); err != nil || full.Len() == 0 {
-			if text, completeErr := deps.Llama.Complete(ctx, prompt); completeErr == nil {
+		streamErr := deps.Llama.StreamCompletion(ctx, prompt, streamPiece)
+		var completeErr error
+		if streamErr != nil || full.Len() == 0 {
+			var text string
+			text, completeErr = deps.Llama.Complete(ctx, prompt)
+			if completeErr == nil {
 				cleaned := services.CleanLocalModelOutput(text)
 				if cleaned != "" && full.Len() == 0 {
 					_ = streamPiece(cleaned)
@@ -114,9 +119,20 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 					full.WriteString(cleaned)
 				}
 			}
+			if full.Len() == 0 {
+				log.Printf("AiCodeStream: empty local output requestId=%s streamErr=%v completeErr=%v native=%v sidecar=%v",
+					req.RequestID, streamErr, completeErr, deps.Llama.UsesNative(), deps.Llama.SidecarReachable())
+			}
 		}
 	} else {
 		unavailable := services.LocalUnavailableMessage() + "\n\n(" + services.LocalUnavailableHint() + ")"
+		if deps.Llama.ModelOnDisk() {
+			unavailable = uiText(req.UILang,
+				"Model GGUF có trên disk nhưng inference chưa sẵn sàng.\n\n("+services.LocalUnavailableHint()+")",
+				"GGUF model is on disk but inference is not ready.\n\n("+services.LocalUnavailableHint()+")",
+				"磁盘上有 GGUF 模型但推理未就绪。\n\n("+services.LocalUnavailableHint()+")",
+			)
+		}
 		full.WriteString(unavailable)
 		writeSSE(w, stageEvent("streaming", map[string]any{
 			"requestId": req.RequestID, "chunk": unavailable, "localProviderPrimary": false,
@@ -126,9 +142,9 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	result := services.CleanLocalModelOutput(full.String())
 	if result == "" && deps.Llama.IsAvailable() {
 		result = uiText(req.UILang,
-			"AI local không trả về nội dung. Hãy thử lại hoặc kiểm tra llama-server.",
-			"Local AI returned no content. Retry or check llama-server.",
-			"本地 AI 未返回内容。请重试或检查 llama-server。",
+			"AI local không trả về nội dung. Hãy thử lại hoặc kiểm tra llama-server / build native.",
+			"Local AI returned no content. Retry or check llama-server / native build.",
+			"本地 AI 未返回内容。请重试或检查 llama-server / native 构建。",
 		)
 	}
 

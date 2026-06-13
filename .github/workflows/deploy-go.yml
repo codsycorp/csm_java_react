@@ -11,84 +11,38 @@ on:
   workflow_dispatch:
     inputs:
       build_native:
-        description: "Build with -tags llamacpp (CGO, slower; needs gcc on runner)"
+        description: "Build with -tags llamacpp on server (recommended: true)"
         required: false
-        default: "false"
+        default: "true"
         type: choice
         options:
-          - "false"
           - "true"
+          - "false"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   DEPLOY_PATH: /root/la_server
   BINARY_NAME: csm_go_server
+  GIT_REPO: https://github.com/codsycorp/csm_java_react.git
 
 jobs:
   build-and-deploy:
-    name: Build Go → Deploy → Restart csm-go
+    name: Build Go (server) → Deploy → Restart csm-go
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: backend-go/go.mod
-          cache-dependency-path: backend-go/go.sum
-
-      - name: Install native build deps (llamacpp only)
-        if: github.event.inputs.build_native == 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends build-essential
-
-      - name: Build release binary
-        working-directory: backend-go
-        env:
-          CGO_ENABLED: ${{ github.event.inputs.build_native == 'true' && '1' || '0' }}
-          GOOS: linux
-          GOARCH: amd64
-          BUILD_TAGS: ${{ github.event.inputs.build_native == 'true' && 'llamacpp' || '' }}
-        run: |
-          OUT="../${{ env.BINARY_NAME }}"
-          TAGS=""
-          if [ -n "$BUILD_TAGS" ]; then
-            TAGS="-tags $BUILD_TAGS"
-          fi
-          echo "CGO_ENABLED=$CGO_ENABLED tags=$BUILD_TAGS"
-          go build $TAGS -ldflags="-s -w" -trimpath -o "$OUT" ./cmd/server
-          ls -lh "$OUT"
-          file "$OUT"
-          if [ "$CGO_ENABLED" = "0" ]; then
-            ldd "$OUT" && exit 1 || echo "Static binary OK"
-          else
-            ldd "$OUT" || true
-          fi
-
-      - name: Upload binary to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          password: ${{ secrets.DEPLOY_PASSWORD }}
-          source: "${{ env.BINARY_NAME }}"
-          target: "${{ env.DEPLOY_PATH }}/"
-          strip_components: 0
-
-      - name: Deploy & restart service
+      - name: Deploy — pull, build on server, restart
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.DEPLOY_PASSWORD }}
+          command_timeout: 30m
           script: |
             set -e
             P="${{ env.DEPLOY_PATH }}"
             BIN="$P/${{ env.BINARY_NAME }}"
-            chmod +x "$BIN"
+            REPO="${{ env.GIT_REPO }}"
 
             mkdir -p "$P/csm_datas/native/pebble" \
                      "$P/csm_datas/native/search" \
@@ -96,14 +50,44 @@ jobs:
                      "$P/csm_datas/backups" \
                      "$P/csm_datas/ai_local/model"
 
-            NATIVE="${{ github.event.inputs.build_native }}"
-            if [ "$NATIVE" = "true" ]; then
-              AI_NATIVE=true
-              AI_PRELOAD=false
+            if [ -d "$P/.git" ]; then
+              cd "$P" && git fetch origin && git reset --hard origin/main
             else
-              AI_NATIVE=false
-              AI_PRELOAD=false
+              git clone "$REPO" "$P"
             fi
+            echo "Code: $(git -C "$P" log --oneline -1)"
+
+            if ! command -v go >/dev/null 2>&1; then
+              echo "Installing Go..."
+              GO_VER=1.22.10
+              curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" | tar -C /usr/local -xz
+            fi
+            export PATH="/usr/local/go/bin:$PATH"
+
+            BUILD_NATIVE="${{ github.event.inputs.build_native }}"
+            if [ "$BUILD_NATIVE" = "" ]; then
+              BUILD_NATIVE="true"
+            fi
+
+            cd "$P/backend-go"
+            if [ "$BUILD_NATIVE" = "true" ]; then
+              echo "Building with CGO + llamacpp on server..."
+              if ! command -v gcc >/dev/null 2>&1; then
+                apt-get update -qq
+                apt-get install -y --no-install-recommends build-essential
+              fi
+              export CGO_ENABLED=1
+              go build -tags llamacpp -ldflags="-s -w" -trimpath -o "$BIN" ./cmd/server
+              AI_NATIVE=true
+            else
+              echo "Building static binary (no native llama — sidecar required)..."
+              export CGO_ENABLED=0
+              go build -ldflags="-s -w" -trimpath -o "$BIN" ./cmd/server
+              AI_NATIVE=false
+            fi
+            chmod +x "$BIN"
+            ls -lh "$BIN"
+            file "$BIN"
 
             cat > /etc/systemd/system/csm-go.service << SVCEOF
             [Unit]
@@ -130,7 +114,7 @@ jobs:
             Environment=CSM_SKIP_STARTUP_DB_INIT=1
             Environment=AI_LOCAL_LLAMA_NATIVE_ENABLED=$AI_NATIVE
             Environment=AI_LOCAL_LLAMA_GPU_LAYERS=0
-            Environment=AI_LOCAL_LLAMA_PRELOAD_ON_STARTUP=$AI_PRELOAD
+            Environment=AI_LOCAL_LLAMA_PRELOAD_ON_STARTUP=false
             ExecStart=$BIN
             Restart=always
             RestartSec=5
@@ -148,7 +132,7 @@ jobs:
             systemctl disable csm-rust 2>/dev/null || true
             systemctl enable csm-go
             systemctl restart csm-go
-            sleep 5
+            sleep 8
 
             echo "=== PORTS ==="
             ss -tlnp | grep -E ':9999|:15301' || true
@@ -160,9 +144,13 @@ jobs:
             curl -sf "http://127.0.0.1:9999/api/monitoring/health" || true
             echo
 
+            echo "=== AI LOCAL ==="
+            curl -sf "http://127.0.0.1:9999/api/ai-local/health" || true
+            echo
+
             echo "=== SOCKET.IO ==="
             curl -sf "http://127.0.0.1:15301/socket.io/?EIO=4&transport=polling" | head -c 120 || true
             echo
 
             echo "=== LOG ==="
-            journalctl -u csm-go -n 30 --no-pager || true
+            journalctl -u csm-go -n 40 --no-pager || true

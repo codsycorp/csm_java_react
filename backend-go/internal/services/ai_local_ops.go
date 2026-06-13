@@ -87,7 +87,10 @@ func llamaProviderLabel(llama *LlamaService) string {
 
 func (s *AiLocalOpsService) Health(llama *LlamaService) map[string]any {
 	modelPath := s.cfg.AI.LlamaModelPath
-	modelExists := llama.modelExists()
+	modelOnDisk := llama != nil && llama.ModelOnDisk()
+	nativeReady := llama != nil && llama.UsesNative()
+	sidecarOK := llama != nil && llama.SidecarReachable()
+	inferenceReady := llama != nil && llama.IsAvailable()
 	return map[string]any{
 		"success": true,
 		"policy": map[string]any{
@@ -97,9 +100,14 @@ func (s *AiLocalOpsService) Health(llama *LlamaService) map[string]any {
 		},
 		"reasoning": map[string]any{
 			"provider":             llamaProviderLabel(llama),
-			"beanPresent":          modelExists,
-			"available":            llama.IsAvailable(),
-			"healthy":              llama.IsAvailable(),
+			"beanPresent":          modelOnDisk,
+			"modelOnDisk":          modelOnDisk,
+			"nativeEnabled":        s.cfg.AI.LlamaNativeEnabled,
+			"nativeReady":          nativeReady,
+			"sidecarReachable":     sidecarOK,
+			"sidecarURL":           s.cfg.AI.LlamaServerURL,
+			"available":            inferenceReady,
+			"healthy":              inferenceReady,
 			"circuitOpen":          false,
 			"modelPath":            modelPath,
 			"runtimeProfile":         envOr("AI_LOCAL_LLAMA_RUNTIME_PROFILE", "balanced"),
