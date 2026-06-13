@@ -212,8 +212,12 @@ func resolveSidecarBinary(cfg config.AppConfig) (string, error) {
 	if path, err := findExistingSidecarBinary(cfg); err == nil {
 		return path, nil
 	}
+	if cfg.AI.LlamaSkipBootstrap {
+		target := sidecarInstallPath(cfg)
+		return "", fmt.Errorf("llama-server missing at %s (AI_LOCAL_LLAMA_SKIP_BOOTSTRAP=true)", target)
+	}
 	target := sidecarInstallPath(cfg)
-	if err := bootstrapSidecarBinary(target); err != nil {
+	if err := bootstrapSidecarBinary(cfg, target); err != nil {
 		return "", err
 	}
 	return target, nil

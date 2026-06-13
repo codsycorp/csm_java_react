@@ -7,112 +7,98 @@ on:
       - "backend-go/**"
       - "config.env"
       - "config.local-8gb.env"
-      - "scripts/setup-llama-server-sidecar.sh"
+      - "scripts/build-go-linux.sh"
+      - "scripts/fetch-llama-server-linux.sh"
       - ".github/workflows/deploy-go.yml"
   workflow_dispatch:
-    inputs:
-      build_native:
-        description: "Try -tags llamacpp (needs glibc 2.32+ / GCC 11+; falls back to sidecar)"
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   DEPLOY_PATH: /root/la_server
   BINARY_NAME: csm_go_server
-  GIT_REPO: https://github.com/codsycorp/csm_java_react.git
 
 jobs:
-  build-and-deploy:
-    name: Build Go (server) → Deploy → Restart csm-go
+  build:
+    name: Build linux artifacts (CI)
     runs-on: ubuntu-latest
-
     steps:
-      - name: Deploy — pull, build on server, restart
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend-go/go.mod
+
+      - name: Build csm_go_server (linux/amd64 static)
+        run: |
+          chmod +x scripts/build-go-linux.sh scripts/fetch-llama-server-linux.sh
+          mkdir -p dist
+          ./scripts/build-go-linux.sh dist/csm_go_server
+
+      - name: Fetch llama-server (linux/amd64, Ubuntu 20.04 compatible)
+        run: |
+          ./scripts/fetch-llama-server-linux.sh dist/llama-server
+
+      - name: Verify llama-server in Ubuntu 20.04 container
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" ubuntu:20.04 /dist/llama-server --version \
+            || docker run --rm -v "$PWD/dist:/dist:ro" ubuntu:20.04 /dist/llama-server --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: csm-go-release
+          path: |
+            dist/csm_go_server
+            dist/llama-server
+          retention-days: 7
+
+  deploy:
+    name: Upload artifacts → restart csm-go (no build on server)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: csm-go-release
+          path: dist
+
+      - name: Upload binaries to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          source: "dist/csm_go_server,dist/llama-server"
+          target: /tmp/csm-go-release
+          strip_components: 1
+
+      - name: Install & restart (SSH only)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.DEPLOY_PASSWORD }}
-          command_timeout: 30m
+          command_timeout: 15m
           script: |
             set -e
             P="${{ env.DEPLOY_PATH }}"
-            SRC="$P/src"
             BIN="$P/${{ env.BINARY_NAME }}"
-            REPO="${{ env.GIT_REPO }}"
+            LLAMA_BIN="$P/csm_datas/bin/llama-server"
 
-            mkdir -p "$P/csm_datas/native/pebble" \
+            mkdir -p "$P/csm_datas/bin" \
+                     "$P/csm_datas/native/pebble" \
                      "$P/csm_datas/native/search" \
                      "$P/csm_datas/database" \
                      "$P/csm_datas/backups" \
                      "$P/csm_datas/ai_local/model"
 
-            if [ -d "$SRC/.git" ]; then
-              cd "$SRC" && git fetch origin && git reset --hard origin/main
-            else
-              rm -rf "$SRC"
-              git clone --depth 1 -b main "$REPO" "$SRC"
-            fi
-            echo "Code: $(git -C "$SRC" log --oneline -1)"
+            install -m755 /tmp/csm-go-release/csm_go_server "$BIN"
+            install -m755 /tmp/csm-go-release/llama-server "$LLAMA_BIN"
+            rm -rf /tmp/csm-go-release
+            ls -lh "$BIN" "$LLAMA_BIN"
+            file "$BIN" "$LLAMA_BIN"
 
-            if ! command -v go >/dev/null 2>&1; then
-              GO_VER="$(sed -n 's/^go //p' "$SRC/backend-go/go.mod" | head -1)"
-              if [ -z "$GO_VER" ]; then GO_VER=1.22.10; fi
-              echo "Installing Go $GO_VER..."
-              curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" | tar -C /usr/local -xz
-            fi
-            export PATH="/usr/local/go/bin:$PATH"
-            go version
-
-            BUILD_NATIVE="${{ github.event.inputs.build_native }}"
-            if [ "$BUILD_NATIVE" = "" ]; then
-              BUILD_NATIVE="false"
-            fi
-
-            cd "$SRC/backend-go"
-            AI_NATIVE=false
-
-            if [ "$BUILD_NATIVE" = "true" ]; then
-              echo "Trying native build (CGO + llamacpp)..."
-              if command -v gcc >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1; then
-                export CGO_ENABLED=1
-                export CGO_LDFLAGS="${CGO_LDFLAGS:-} -static-libstdc++ -static-libgcc"
-                if go build -tags llamacpp -ldflags="-s -w" -trimpath -o "$BIN" ./cmd/server; then
-                  AI_NATIVE=true
-                  echo "Native llamacpp build succeeded"
-                else
-                  echo "WARN: Native build failed (prebuilt libs need glibc 2.32+ / Ubuntu 22.04)."
-                  rm -f "$BIN"
-                fi
-              else
-                echo "WARN: gcc/g++ not found — skip native build"
-              fi
-            fi
-
-            if [ "$AI_NATIVE" != "true" ]; then
-              echo "Building static binary..."
-              export CGO_ENABLED=0
-              go build -ldflags="-s -w" -trimpath -o "$BIN" ./cmd/server
-            fi
-
-            chmod +x "$BIN"
-            ls -lh "$BIN"
-            file "$BIN"
-
-            if [ "$AI_NATIVE" != "true" ]; then
-              # Best-effort pre-download; csm-go bootstraps llama-server itself if this fails (no apt).
-              bash "$SRC/scripts/setup-llama-server-sidecar.sh" "$P" --binary-only || true
-              systemctl stop csm-llama 2>/dev/null || true
-              systemctl disable csm-llama 2>/dev/null || true
-            else
-              systemctl stop csm-llama 2>/dev/null || true
-              systemctl disable csm-llama 2>/dev/null || true
-            fi
+            systemctl stop csm-llama 2>/dev/null || true
+            systemctl disable csm-llama 2>/dev/null || true
 
             cat > /etc/systemd/system/csm-go.service <<SVCEOF
             [Unit]
@@ -137,9 +123,11 @@ jobs:
             Environment=SOCKET_SERVER_PORT=15301
             Environment=REDIS_ENABLED=0
             Environment=CSM_SKIP_STARTUP_DB_INIT=1
-            Environment=AI_LOCAL_LLAMA_NATIVE_ENABLED=$AI_NATIVE
+            Environment=AI_LOCAL_LLAMA_NATIVE_ENABLED=false
             Environment=AI_LOCAL_LLAMA_MANAGED_SIDECAR=true
-            Environment=AI_LOCAL_LLAMA_SERVER_BIN=$P/csm_datas/bin/llama-server
+            Environment=AI_LOCAL_LLAMA_SKIP_BOOTSTRAP=true
+            Environment=AI_LOCAL_LLAMA_ALLOW_SOURCE_BUILD=false
+            Environment=AI_LOCAL_LLAMA_SERVER_BIN=$LLAMA_BIN
             Environment=AI_LOCAL_LLAMA_SERVER_URL=http://127.0.0.1:8888
             Environment=AI_LOCAL_LLAMA_GPU_LAYERS=0
             Environment=AI_LOCAL_LLAMA_PRELOAD_ON_STARTUP=false
@@ -161,9 +149,9 @@ jobs:
             systemctl enable csm-go
             systemctl restart csm-go
 
-            echo "Waiting for AI local (download/build llama-server + load 7B model may take ~6 min on 8GB)..."
+            echo "Waiting for AI local (load 7B model ~2-6 min)..."
             AI_OK=false
-            for i in $(seq 1 210); do
+            for i in $(seq 1 180); do
               AI_HEALTH="$(curl -sf "http://127.0.0.1:9999/api/ai-local/health" 2>/dev/null || true)"
               if echo "$AI_HEALTH" | grep -q '"available":true'; then
                 AI_OK=true
@@ -174,27 +162,11 @@ jobs:
 
             echo "=== PORTS ==="
             ss -tlnp | grep -E ':9999|:15301|:8888' || true
-
-            echo "=== STATUS ==="
             systemctl status csm-go --no-pager || true
-
-            echo "=== HEALTH ==="
             curl -sf "http://127.0.0.1:9999/api/monitoring/health" || true
             echo
-
-            echo "=== AI LOCAL ==="
-            AI_HEALTH="$(curl -sf "http://127.0.0.1:9999/api/ai-local/health" || true)"
-            echo "$AI_HEALTH"
-            if [ "$AI_NATIVE" != "true" ] && [ "$AI_OK" != "true" ]; then
-              echo "WARN: AI local not ready yet after deploy wait (may still be building/downloading)"
-              journalctl -u csm-go -n 80 --no-pager | grep -E 'LlamaManaged|llama-server' || journalctl -u csm-go -n 80 --no-pager || true
-              # Do not fail deploy — csm-go is up; AI finishes loading asynchronously.
+            curl -sf "http://127.0.0.1:9999/api/ai-local/health" || true
+            echo
+            if [ "$AI_OK" != "true" ]; then
+              journalctl -u csm-go -n 60 --no-pager | grep -E 'LlamaManaged|llama-server' || true
             fi
-            echo
-
-            echo "=== SOCKET.IO ==="
-            curl -sf "http://127.0.0.1:15301/socket.io/?EIO=4&transport=polling" | head -c 120 || true
-            echo
-
-            echo "=== LOG ==="
-            journalctl -u csm-go -n 40 --no-pager || true

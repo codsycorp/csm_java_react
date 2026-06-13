@@ -63,7 +63,7 @@ func findExistingSidecarBinary(cfg config.AppConfig) (string, error) {
 	return "", fmt.Errorf("not found")
 }
 
-func bootstrapSidecarBinary(target string) error {
+func bootstrapSidecarBinary(cfg config.AppConfig, target string) error {
 	if info, err := os.Stat(target); err == nil && !info.IsDir() {
 		_ = os.Chmod(target, 0o755)
 		if err := verifySidecarBinary(target); err == nil {
@@ -108,7 +108,14 @@ func bootstrapSidecarBinary(target string) error {
 		}
 	}
 
-	log.Printf("LlamaManaged: prebuilt downloads failed (%v) — trying source build", lastErr)
+	log.Printf("LlamaManaged: prebuilt downloads failed (%v)", lastErr)
+	if !cfg.AI.LlamaAllowSourceBuild {
+		if lastErr == nil {
+			lastErr = fmt.Errorf("no compatible prebuilt binary")
+		}
+		return fmt.Errorf("bootstrap llama-server: %w (set AI_LOCAL_LLAMA_ALLOW_SOURCE_BUILD=true to compile on host)", lastErr)
+	}
+	log.Printf("LlamaManaged: trying source build on host (AI_LOCAL_LLAMA_ALLOW_SOURCE_BUILD=true)")
 	if err := buildSidecarFromSource(target); err != nil {
 		if lastErr == nil {
 			lastErr = err

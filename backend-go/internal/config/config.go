@@ -34,6 +34,8 @@ type AIConfig struct {
 	LlamaServerBin          string
 	LlamaServerPort         int
 	LlamaManagedSidecar     bool
+	LlamaAllowSourceBuild   bool
+	LlamaSkipBootstrap      bool
 	LlamaNativeEnabled      bool
 	LlamaPreloadOnStartup   bool
 	LlamaGPULayers          int32
@@ -118,7 +120,9 @@ func LoadFromEnv() AppConfig {
 			LlamaServerURL:      envString("AI_LOCAL_LLAMA_SERVER_URL", "http://127.0.0.1:8888"),
 			LlamaServerBin:      envString("AI_LOCAL_LLAMA_SERVER_BIN", filepath.Join(dataDir, "bin", "llama-server")),
 			LlamaServerPort:     envInt("AI_LOCAL_LLAMA_SERVER_PORT", 8888),
-			LlamaManagedSidecar: envFlagTrue("AI_LOCAL_LLAMA_MANAGED_SIDECAR", true),
+			LlamaManagedSidecar:   envFlagTrue("AI_LOCAL_LLAMA_MANAGED_SIDECAR", true),
+			LlamaAllowSourceBuild: envFlagTrue("AI_LOCAL_LLAMA_ALLOW_SOURCE_BUILD", false),
+			LlamaSkipBootstrap:    envFlagTrue("AI_LOCAL_LLAMA_SKIP_BOOTSTRAP", false),
 			LlamaNativeEnabled:  envFlagTrue("AI_LOCAL_LLAMA_NATIVE_ENABLED", true),
 			LlamaPreloadOnStartup: envFlagTrue("AI_LOCAL_LLAMA_PRELOAD_ON_STARTUP", false),
 			LlamaGPULayers:      int32(envInt("AI_LOCAL_LLAMA_GPU_LAYERS", 0)),
