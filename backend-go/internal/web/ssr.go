@@ -335,20 +335,29 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	}
 
 	if route.AppID != "" && route.TblServiceDetail != "" {
-		for k, v := range resolveServiceListing(ctx.RM, route, domain, uri, params) {
-			initialData[k] = v
-		}
+		listing := resolveServiceListing(ctx.RM, route, domain, uri, params)
+		enrichInitialData(initialData, listing, protocol, hostStr)
 	}
 
 	appConfig := map[string]any{"f_logo": routeLogo, "f_title": pageTitle}
-	scripts := buildScripts(appConfig, initialData, categories, ssrRoutes, dynamicTemplates, meta)
+	scripts := buildScripts(appConfig, initialData, categories, ssrRoutes, dynamicTemplates, meta, defaultServiceCode)
 
 	preload := ""
 	if strings.HasPrefix(ogImage, "http://") || strings.HasPrefix(ogImage, "https://") {
 		preload = fmt.Sprintf(`<link rel="preload" as="image" href="%s" fetchpriority="high">`, htmlEsc(ogImage))
 	}
 
-	if filePath := ctx.RM.GetStaticFile(indexPath); filePath != "" {
+	filePath := ctx.RM.GetStaticFile(indexPath)
+	if filePath == "" && strings.HasPrefix(DomainFromHost(host), "admin.") {
+		for _, candidate := range []string{"admin/index.html", "index.html"} {
+			if p := ctx.RM.GetStaticFile(candidate); p != "" {
+				filePath = p
+				break
+			}
+		}
+	}
+
+	if filePath != "" {
 		raw, err := os.ReadFile(filePath)
 		if err == nil {
 			html := string(raw)
@@ -364,6 +373,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 				GTag:        route.GTag,
 				AppID:       route.AppID,
 			})
+			finalizeThymeleafHTML(&html, &preprocessCtx{GTag: route.GTag})
 			injectIntoHTML(&html, preload+scripts)
 			return html
 		}
@@ -1297,64 +1307,8 @@ func preprocessHTML(html *string, ctx *preprocessCtx) {
 	}
 }
 
-func replaceMetaContent(html *string, nameAttr, val string) {
-	target := `name="` + nameAttr + `"`
-	if pos := strings.Index(*html, target); pos >= 0 {
-		if endRel := strings.Index((*html)[pos:], ">"); endRel >= 0 {
-			end := pos + endRel
-			tag := (*html)[pos:end]
-			newTag := removeAttrSetContent(tag, val)
-			*html = (*html)[:pos] + newTag + (*html)[end:]
-		}
-	}
-}
-
-func replaceLinkHref(html *string, rel, href string) {
-	target := `rel="` + rel + `"`
-	if pos := strings.Index(*html, target); pos >= 0 {
-		if endRel := strings.Index((*html)[pos:], ">"); endRel >= 0 {
-			end := pos + endRel
-			tag := (*html)[pos:end]
-			newTag := removeAttrSetHref(tag, href)
-			*html = (*html)[:pos] + newTag + (*html)[end:]
-		}
-	}
-}
-
-func replaceOGContent(html *string, property, val string) {
-	target := `property="` + property + `"`
-	if pos := strings.Index(*html, target); pos >= 0 {
-		if endRel := strings.Index((*html)[pos:], ">"); endRel >= 0 {
-			end := pos + endRel
-			tag := (*html)[pos:end]
-			newTag := removeAttrSetContent(tag, val)
-			*html = (*html)[:pos] + newTag + (*html)[end:]
-		}
-	}
-}
-
-func stripThAttrs(html *string, attr string) {
-	for {
-		pos := strings.Index(*html, attr)
-		if pos < 0 {
-			return
-		}
-		q1 := strings.Index((*html)[pos:], `"`)
-		if q1 < 0 {
-			return
-		}
-		q1 += pos + 1
-		q2Rel := strings.Index((*html)[q1:], `"`)
-		if q2Rel < 0 {
-			return
-		}
-		end := q1 + q2Rel + 1
-		*html = (*html)[:pos] + (*html)[end:]
-	}
-}
-
-func buildScripts(appConfig, initialData map[string]any, categories any, ssrRoutes, dynamicTemplates, meta map[string]any) string {
-	return fmt.Sprintf(
+func buildScripts(appConfig, initialData map[string]any, categories any, ssrRoutes, dynamicTemplates, meta map[string]any, defaultServiceCode string) string {
+	scripts := fmt.Sprintf(
 		`<script>window.meta=%s;window.__INITIAL_DATA__=%s;window.menus=[];</script>`+
 			`<script>window.__APP_CONFIG__=%s;</script>`+
 			`<script>window.__INITIAL_REACT_DATA__=%s;</script>`+
@@ -1369,6 +1323,10 @@ func buildScripts(appConfig, initialData map[string]any, categories any, ssrRout
 		safeJSON(ssrRoutes),
 		safeJSON(dynamicTemplates),
 	)
+	if defaultServiceCode != "" {
+		scripts += fmt.Sprintf(`<script>window.__SSR_DEFAULT_CATEGORY__=%q;</script>`, defaultServiceCode)
+	}
+	return scripts
 }
 
 func injectIntoHTML(html *string, scripts string) {
