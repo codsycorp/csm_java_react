@@ -1,14 +1,22 @@
 #!/bin/bash
-# Install/start llama-server sidecar for Go backend when native llamacpp build is unavailable.
-# Usage: setup-llama-server-sidecar.sh /root/la_server [--require-healthy]
+# Install/start llama-server for Go AI local.
+#
+# Usage:
+#   setup-llama-server-sidecar.sh /root/la_server --binary-only
+#     → install llama-server to $P/csm_datas/bin/ (csm-go spawns it; no systemd)
+#   setup-llama-server-sidecar.sh /root/la_server --systemd-service [--require-healthy]
+#     → legacy separate csm-llama.service
 set -euo pipefail
 
 P="${1:-/root/la_server}"
-REQUIRE_HEALTHY="${2:-}"
+MODE="${2:---binary-only}"
+REQUIRE_HEALTHY="${3:-}"
 
 PORT="${AI_LOCAL_LLAMA_SERVER_PORT:-8888}"
 THREADS="${AI_LOCAL_LLAMA_THREADS:-3}"
 CTX="${AI_LOCAL_LLAMA_CONTEXT_WINDOW:-8192}"
+BIN_DIR="$P/csm_datas/bin"
+TARGET_BIN="$BIN_DIR/llama-server"
 
 resolve_model_path() {
 	local raw=""
@@ -43,12 +51,18 @@ wait_sidecar_healthy() {
 }
 
 install_llama_server_binary() {
+	mkdir -p "$BIN_DIR"
+	if [ -x "$TARGET_BIN" ]; then
+		echo "[llama-sidecar] Using bundled $TARGET_BIN"
+		return 0
+	fi
 	if command -v llama-server >/dev/null 2>&1; then
-		echo "[llama-sidecar] Using existing $(command -v llama-server)"
+		install -m 755 "$(command -v llama-server)" "$TARGET_BIN"
+		echo "[llama-sidecar] Copied $(command -v llama-server) → $TARGET_BIN"
 		return 0
 	fi
 
-	echo "[llama-sidecar] Installing llama-server binary..."
+	echo "[llama-sidecar] Downloading llama-server..."
 	apt-get update -qq
 	apt-get install -y --no-install-recommends curl ca-certificates tar
 
@@ -57,12 +71,11 @@ install_llama_server_binary() {
 	trap 'rm -rf "$TMP"' RETURN
 
 	local TAG ARCHIVE URL FOUND=""
-	for TAG in ${LLAMA_CPP_RELEASE_TAG:-b9562} b7274 b7224 b4895; do
+	for TAG in ${LLAMA_CPP_RELEASE_TAG:-b9562} b7274 b7224; do
 		for ARCHIVE in \
 			"llama-${TAG}-bin-ubuntu-x64.tar.gz" \
 			"llama-${TAG}-bin-linux-x64.tar.gz" \
-			"llama-${TAG}-bin-ubuntu-x64.zip" \
-			"llama-b${TAG#b}-bin-ubuntu-x64.tar.gz"; do
+			"llama-${TAG}-bin-ubuntu-x64.zip"; do
 			URL="https://github.com/ggml-org/llama.cpp/releases/download/${TAG}/${ARCHIVE}"
 			echo "[llama-sidecar] Trying $URL"
 			if curl -fsSL "$URL" -o "$TMP/archive"; then
@@ -75,34 +88,39 @@ install_llama_server_binary() {
 				esac
 				FOUND="$(find "$TMP" -name llama-server -type f | head -1)"
 				if [ -n "$FOUND" ]; then
-					install -m 755 "$FOUND" /usr/local/bin/llama-server
-					echo "[llama-sidecar] Installed from $ARCHIVE"
+					install -m 755 "$FOUND" "$TARGET_BIN"
+					echo "[llama-sidecar] Installed → $TARGET_BIN ($ARCHIVE)"
 					return 0
 				fi
 			fi
 		done
 	done
 
-	echo "[llama-sidecar] ERROR — could not download llama-server from GitHub releases"
+	echo "[llama-sidecar] ERROR — could not download llama-server"
 	return 1
 }
+
+install_llama_server_binary
+
+if [ "$MODE" = "--binary-only" ]; then
+	echo "[llama-sidecar] Binary-only mode — csm-go will spawn $TARGET_BIN on startup"
+	systemctl stop csm-llama 2>/dev/null || true
+	systemctl disable csm-llama 2>/dev/null || true
+	exit 0
+fi
 
 MODEL="$(resolve_model_path)"
 if [ ! -f "$MODEL" ]; then
 	echo "[llama-sidecar] ERROR — model not found: $MODEL"
-	echo "[llama-sidecar] Run: bash $P/src/scripts/download-ai-local-models.sh 8gb (or copy GGUF manually)"
 	if [ "$REQUIRE_HEALTHY" = "--require-healthy" ]; then
 		exit 1
 	fi
 	exit 0
 fi
 
-install_llama_server_binary
-LLAMA_BIN="$(command -v llama-server)"
-
+LLAMA_BIN="$TARGET_BIN"
 echo "[llama-sidecar] Using $LLAMA_BIN"
 echo "[llama-sidecar] Model: $MODEL"
-echo "[llama-sidecar] Port: $PORT threads=$THREADS ctx=$CTX"
 
 cat > /etc/systemd/system/csm-llama.service <<EOF
 [Unit]
@@ -128,13 +146,12 @@ systemctl daemon-reload
 systemctl enable csm-llama
 systemctl restart csm-llama
 
-echo "[llama-sidecar] Waiting for HTTP on :$PORT (model load may take up to 2 min)..."
+echo "[llama-sidecar] Waiting for HTTP on :$PORT..."
 if wait_sidecar_healthy 120; then
-	echo "[llama-sidecar] OK — sidecar healthy on :$PORT"
+	echo "[llama-sidecar] OK — systemd sidecar on :$PORT"
 	exit 0
 fi
 
-echo "[llama-sidecar] WARN — service started but health check timed out"
 journalctl -u csm-llama -n 30 --no-pager || true
 if [ "$REQUIRE_HEALTHY" = "--require-healthy" ]; then
 	exit 1

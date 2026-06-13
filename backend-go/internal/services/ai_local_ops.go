@@ -79,6 +79,9 @@ func llamaProviderLabel(llama *LlamaService) string {
 	if llama != nil && llama.UsesNative() {
 		return "llama.cpp-native"
 	}
+	if llama != nil && llama.UsesManagedSidecar() {
+		return "llama.cpp-managed"
+	}
 	if llama != nil && llama.IsAvailable() {
 		return "llama.cpp-sidecar"
 	}

@@ -108,28 +108,18 @@ jobs:
             file "$BIN"
 
             if [ "$AI_NATIVE" != "true" ]; then
-              bash "$SRC/scripts/setup-llama-server-sidecar.sh" "$P" --require-healthy || {
-                echo "ERROR: llama-server sidecar failed — AI local will be unavailable"
-                journalctl -u csm-llama -n 50 --no-pager || true
-                exit 1
-              }
+              bash "$SRC/scripts/setup-llama-server-sidecar.sh" "$P" --binary-only
+              systemctl stop csm-llama 2>/dev/null || true
+              systemctl disable csm-llama 2>/dev/null || true
             else
               systemctl stop csm-llama 2>/dev/null || true
               systemctl disable csm-llama 2>/dev/null || true
             fi
 
-            LLAMA_AFTER="After=network.target"
-            LLAMA_WANTS=""
-            if [ "$AI_NATIVE" != "true" ]; then
-              LLAMA_AFTER="After=network.target csm-llama.service"
-              LLAMA_WANTS="Wants=csm-llama.service"
-            fi
-
             cat > /etc/systemd/system/csm-go.service <<SVCEOF
             [Unit]
             Description=CSM Go Backend
-            $LLAMA_AFTER
-            $LLAMA_WANTS
+            After=network.target
 
             [Service]
             Type=simple
@@ -150,13 +140,15 @@ jobs:
             Environment=REDIS_ENABLED=0
             Environment=CSM_SKIP_STARTUP_DB_INIT=1
             Environment=AI_LOCAL_LLAMA_NATIVE_ENABLED=$AI_NATIVE
+            Environment=AI_LOCAL_LLAMA_MANAGED_SIDECAR=true
+            Environment=AI_LOCAL_LLAMA_SERVER_BIN=$P/csm_datas/bin/llama-server
             Environment=AI_LOCAL_LLAMA_SERVER_URL=http://127.0.0.1:8888
             Environment=AI_LOCAL_LLAMA_GPU_LAYERS=0
             Environment=AI_LOCAL_LLAMA_PRELOAD_ON_STARTUP=false
             ExecStart=$BIN
             Restart=always
             RestartSec=5
-            MemoryMax=7G
+            MemoryMax=7800M
             LimitNOFILE=65536
             StandardOutput=journal
             StandardError=journal
@@ -170,14 +162,23 @@ jobs:
             systemctl disable csm-rust 2>/dev/null || true
             systemctl enable csm-go
             systemctl restart csm-go
-            sleep 8
+
+            echo "Waiting for AI local (managed llama-server may load model ~2 min on Ubuntu 20.04)..."
+            AI_OK=false
+            for i in $(seq 1 90); do
+              AI_HEALTH="$(curl -sf "http://127.0.0.1:9999/api/ai-local/health" 2>/dev/null || true)"
+              if echo "$AI_HEALTH" | grep -q '"available":true'; then
+                AI_OK=true
+                break
+              fi
+              sleep 2
+            done
 
             echo "=== PORTS ==="
             ss -tlnp | grep -E ':9999|:15301|:8888' || true
 
             echo "=== STATUS ==="
             systemctl status csm-go --no-pager || true
-            systemctl status csm-llama --no-pager 2>/dev/null || true
 
             echo "=== HEALTH ==="
             curl -sf "http://127.0.0.1:9999/api/monitoring/health" || true
@@ -186,12 +187,10 @@ jobs:
             echo "=== AI LOCAL ==="
             AI_HEALTH="$(curl -sf "http://127.0.0.1:9999/api/ai-local/health" || true)"
             echo "$AI_HEALTH"
-            if [ "$AI_NATIVE" != "true" ]; then
-              if ! echo "$AI_HEALTH" | grep -q '"available":true'; then
-                echo "ERROR: AI local not available after deploy (sidecar expected)"
-                journalctl -u csm-llama -n 40 --no-pager || true
-                exit 1
-              fi
+            if [ "$AI_NATIVE" != "true" ] && [ "$AI_OK" != "true" ]; then
+              echo "ERROR: AI local not available after deploy (managed sidecar)"
+              journalctl -u csm-go -n 60 --no-pager | grep -E 'LlamaManaged|llama-server' || journalctl -u csm-go -n 60 --no-pager || true
+              exit 1
             fi
             echo
 

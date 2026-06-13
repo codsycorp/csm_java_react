@@ -21,25 +21,44 @@ const (
 )
 
 type LlamaService struct {
-	cfg    config.AppConfig
-	client *http.Client
-	native *llamaNativeBackend
+	cfg     config.AppConfig
+	client  *http.Client
+	native  *llamaNativeBackend
+	managed *managedSidecar
 }
 
 func NewLlamaService(cfg config.AppConfig, client *http.Client) *LlamaService {
 	native := newLlamaNativeBackend(cfg)
+	svc := &LlamaService{cfg: cfg, client: client, native: native}
 	if native.ready() {
 		log.Printf("LlamaService: native in-process llama.cpp enabled (%s)", cfg.AI.LlamaModelPath)
-	} else if cfg.AI.LlamaNativeEnabled {
-		log.Printf("LlamaService: native unavailable — HTTP sidecar fallback (%s)", cfg.AI.LlamaServerURL)
+		return svc
 	}
-	return &LlamaService{cfg: cfg, client: client, native: native}
+	if cfg.AI.LlamaManagedSidecar {
+		svc.managed = newManagedSidecar(cfg, svc.serverReachable)
+		if svc.modelExists() {
+			log.Printf("LlamaService: managed llama-server (child process, no separate systemd unit)")
+			svc.managed.startAsync()
+		} else if cfg.AI.LlamaNativeEnabled {
+			log.Printf("LlamaService: managed sidecar waiting for model at %s", cfg.AI.LlamaModelPath)
+		}
+	} else if cfg.AI.LlamaNativeEnabled {
+		log.Printf("LlamaService: external sidecar expected at %s", cfg.AI.LlamaServerURL)
+	}
+	return svc
 }
 
 func (l *LlamaService) Shutdown() {
+	if l.managed != nil {
+		l.managed.stop()
+	}
 	if l.native != nil {
 		l.native.shutdown()
 	}
+}
+
+func (l *LlamaService) UsesManagedSidecar() bool {
+	return l.managed != nil && l.managed.running()
 }
 
 func (l *LlamaService) UsesNative() bool {
@@ -226,44 +245,49 @@ func LocalUnavailableMessage() string {
 }
 
 func LocalUnavailableHint() string {
-	return "Chạy: systemctl status csm-llama && journalctl -u csm-llama -n 30. Hoặc build native: go build -tags llamacpp (Ubuntu 22.04+, glibc 2.32+)."
+	return "csm-go tự khởi động llama-server khi AI_LOCAL_LLAMA_MANAGED_SIDECAR=true (mặc định). Kiểm tra: journalctl -u csm-go | grep LlamaManaged"
 }
 
 func (l *LlamaService) StatusSummary() map[string]any {
 	return map[string]any{
-		"modelOnDisk":      l.ModelOnDisk(),
-		"modelPath":        l.cfg.AI.LlamaModelPath,
-		"nativeEnabled":    l.cfg.AI.LlamaNativeEnabled,
-		"nativeReady":      l.UsesNative(),
-		"sidecarURL":       l.completionBaseURL(),
-		"sidecarReachable": l.SidecarReachable(),
-		"available":        l.IsAvailable(),
-		"hint":             l.statusHint(),
+		"modelOnDisk":       l.ModelOnDisk(),
+		"modelPath":         l.cfg.AI.LlamaModelPath,
+		"nativeEnabled":     l.cfg.AI.LlamaNativeEnabled,
+		"nativeReady":       l.UsesNative(),
+		"managedSidecar":    l.cfg.AI.LlamaManagedSidecar,
+		"managedRunning":    l.UsesManagedSidecar(),
+		"sidecarURL":        l.completionBaseURL(),
+		"sidecarReachable":  l.SidecarReachable(),
+		"available":         l.IsAvailable(),
+		"hint":              l.statusHint(),
 	}
 }
 
 func (l *LlamaService) statusHint() string {
 	if l.IsAvailable() {
 		if l.UsesNative() {
-			return "Inference: llama.cpp native (in-process Go)"
+			return "Inference: llama.cpp native (trong process Go)"
 		}
-		return "Inference: llama-server sidecar at " + l.completionBaseURL()
+		if l.UsesManagedSidecar() {
+			return "Inference: llama-server do csm-go quản lý tại " + l.completionBaseURL()
+		}
+		return "Inference: llama-server external tại " + l.completionBaseURL()
 	}
 	if !l.ModelOnDisk() {
 		return "Thiếu file GGUF. Chạy scripts/download-ai-local-models.sh 8gb trên server."
 	}
-	if l.UsesNative() {
-		return "Native build có llamacpp nhưng model chưa load — xem log csm-go."
+	if l.cfg.AI.LlamaManagedSidecar {
+		return "Model có trên disk — csm-go đang khởi động llama-server (xem journalctl -u csm-go, đợi ~1–2 phút lần đầu)."
 	}
-	if l.cfg.AI.LlamaNativeEnabled && !l.UsesNative() {
-		return "Binary Go không build -tags llamacpp. Cần csm-llama sidecar: systemctl restart csm-llama"
-	}
-	return "Sidecar chưa sẵn sàng. Chạy: bash scripts/setup-llama-server-sidecar.sh /root/la_server --require-healthy"
+	return "Bật AI_LOCAL_LLAMA_MANAGED_SIDECAR=true hoặc chạy llama-server tại " + l.completionBaseURL()
 }
 
 func StreamingModelLabel(cfg config.AppConfig, llama *LlamaService) string {
 	if llama != nil && llama.UsesNative() {
 		return "llama.cpp-native"
+	}
+	if llama != nil && llama.UsesManagedSidecar() {
+		return "llama.cpp-managed"
 	}
 	if llama != nil && llama.IsAvailable() {
 		return "llama.cpp-sidecar"
