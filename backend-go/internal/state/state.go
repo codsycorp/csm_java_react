@@ -77,5 +77,8 @@ func NewAppState(cfg config.AppConfig) (*AppState, error) {
 }
 
 func (st *AppState) Shutdown() {
+	if st.Llama != nil {
+		st.Llama.Shutdown()
+	}
 	st.RecordManager.ShutdownAll()
 }

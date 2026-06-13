@@ -1,0 +1,1400 @@
+package web
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"csm_server/backend-go/internal/data"
+	"csm_server/backend-go/internal/model"
+)
+
+const ssrCacheTTL = 30 * time.Minute
+
+type ssrCacheEntry struct {
+	data    string
+	expires time.Time
+}
+
+var ssrCache sync.Map
+
+type SSRContext struct {
+	RM *data.RecordManager
+}
+
+type resolvedRoute struct {
+	RPIndex          string
+	AppID            string
+	TblServices      string
+	TblServiceDetail string
+	FTitle           string
+	FKeyword         string
+	FLogo            string
+	AppType          string
+	Domain           string
+	GSV              string
+	GTag             string
+}
+
+type seoMeta struct {
+	Title       string
+	Description string
+	Keywords    string
+	Image       string
+	Lang        string
+	Slug        string
+}
+
+func (s seoMeta) toRouteValue() map[string]any {
+	return map[string]any{
+		"title":       s.Title,
+		"description": s.Description,
+		"keywords":    s.Keywords,
+		"image":       s.Image,
+		"lang":        s.Lang,
+		"slug":        s.Slug,
+	}
+}
+
+type preprocessCtx struct {
+	Title       string
+	Description string
+	Keywords    string
+	Canonical   string
+	Image       string
+	SiteName    string
+	Logo        string
+	GSV         string
+	GTag        string
+	AppID       string
+}
+
+func RenderPage(ctx SSRContext, uri, host, queryStr string) string {
+	hostKey := host
+	if hostKey == "" {
+		hostKey = "default"
+	}
+	cacheKey := hostKey + ":" + uri
+	if queryStr != "" {
+		cacheKey += "?" + queryStr
+	}
+
+	if entry, ok := ssrCache.Load(cacheKey); ok {
+		if ce, ok := entry.(*ssrCacheEntry); ok && time.Now().Before(ce.expires) {
+			return ce.data
+		}
+	}
+
+	html := buildSSRHTML(ctx, uri, host, queryStr)
+	if queryStr == "" {
+		ssrCache.Store(cacheKey, &ssrCacheEntry{
+			data:    html,
+			expires: time.Now().Add(ssrCacheTTL),
+		})
+	}
+	return html
+}
+
+func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
+	domain := DomainFromHost(host)
+	if domain == "" {
+		return ""
+	}
+	filter := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("domain_name", domain),
+			model.EqFilter("f_case", ""),
+			{Field: "rp_index", FilterType: "isnotnull"},
+			{Field: "rp_index", FilterType: "noteq", Value: ""},
+			model.EqFilter("run", 1),
+		},
+	}
+	result := rm.Filter("csm", "sys_la_routers", filter)
+	for _, row := range rowsFrom(result) {
+		if rp := strings.Trim(strings.Trim(recordStr(row, "rp_index"), "/"), " "); rp != "" {
+			return rp
+		}
+	}
+	return ""
+}
+
+func BuildSitemap(rm *data.RecordManager, host string) string {
+	domain := DomainFromHost(host)
+	baseHost := host
+	if baseHost == "" {
+		baseHost = domain
+	}
+	baseURL := "https://" + baseHost
+
+	var xml strings.Builder
+	xml.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	xml.WriteString(`<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`)
+	xml.WriteString(sitemapURLEntry(baseURL+"/", "", "daily", "1.0"))
+
+	seen := map[string]struct{}{"/": {}}
+
+	routeFilter := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("domain_name", domain),
+			model.EqFilter("run", 1),
+		},
+	}
+	routeRows := rowsFrom(rm.Filter("csm", "sys_la_routers", routeFilter))
+
+	for _, row := range routeRows {
+		appID := strings.TrimSpace(recordStr(row, "app_id"))
+		tblServices := strings.TrimSpace(recordStr(row, "tbl_services"))
+		tblDetail := strings.TrimSpace(recordStr(row, "tbl_service_detail"))
+		if appID == "" {
+			continue
+		}
+
+		likeDomain := model.SearchFilter{
+			Field:      "domain",
+			FilterType: "like",
+			Value:      domain,
+		}
+
+		if tblServices != "" {
+			catFilter := model.SearchFilter{
+				Operator: "AND",
+				Conditions: []model.SearchFilter{
+					model.EqFilter("status", "active"),
+					likeDomain,
+				},
+			}
+			for _, r := range rowsFrom(rm.Filter(appID, tblServices, catFilter)) {
+				slug := strings.Trim(strings.TrimSuffix(recordStr(r, "slug"), ".shtml"), " ")
+				if slug == "" {
+					continue
+				}
+				path := "/" + slug
+				if _, ok := seen[path]; !ok {
+					seen[path] = struct{}{}
+					lm := extractDateOnly(resolveLastmodFromRow(r))
+					xml.WriteString(sitemapURLEntry(baseURL+path, lm, "weekly", "0.8"))
+				}
+			}
+		}
+
+		if tblDetail != "" {
+			detFilter := model.SearchFilter{
+				Operator: "AND",
+				Conditions: []model.SearchFilter{
+					model.EqFilter("status", "active"),
+					likeDomain,
+				},
+			}
+			for _, r := range rowsFrom(rm.Filter(appID, tblDetail, detFilter)) {
+				svcType := strings.TrimSpace(recordStr(r, "service_type"))
+				slug := strings.Trim(strings.TrimSuffix(recordStr(r, "slug"), ".shtml"), " ")
+				if slug == "" {
+					continue
+				}
+				path := "/" + slug
+				if svcType != "" {
+					path = "/" + svcType + "/" + slug
+				}
+				if _, ok := seen[path]; !ok {
+					seen[path] = struct{}{}
+					lm := extractDateOnly(resolveLastmodFromRow(r))
+					xml.WriteString(sitemapURLEntry(baseURL+path, lm, "weekly", "0.8"))
+				}
+			}
+		}
+	}
+
+	xml.WriteString("\n</urlset>")
+	return xml.String()
+}
+
+func sitemapURLEntry(url, lastmod, changefreq, priority string) string {
+	var s strings.Builder
+	s.WriteString("\n  <url>\n    <loc>")
+	s.WriteString(xmlEscape(url))
+	s.WriteString("</loc>\n")
+	if lastmod = strings.TrimSpace(lastmod); lastmod != "" {
+		s.WriteString("    <lastmod>")
+		s.WriteString(xmlEscape(lastmod))
+		s.WriteString("</lastmod>\n")
+	}
+	s.WriteString("    <changefreq>")
+	s.WriteString(changefreq)
+	s.WriteString("</changefreq>\n    <priority>")
+	s.WriteString(priority)
+	s.WriteString("</priority>\n  </url>")
+	return s.String()
+}
+
+func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
+	route := resolveRoute(ctx.RM, host, uri)
+	domain := DomainFromHost(host)
+
+	rpIndex := route.RPIndex
+	indexPath := "index.html"
+	if rpIndex != "" {
+		indexPath = rpIndex + "/index.html"
+	}
+
+	protocol := "https"
+	hostStr := host
+	if hostStr == "" {
+		hostStr = domain
+	}
+	canonical := protocol + "://" + hostStr + uri
+	baseURL := protocol + "://" + hostStr
+
+	params := parseQS(queryStr)
+	lang := resolveLang(params)
+
+	categories, dynamicTemplates, mainServiceCode, defaultServiceCode :=
+		loadCategoriesFull(ctx.RM, route, domain, lang)
+
+	pageTitle := route.FTitle
+	if pageTitle == "" {
+		pageTitle = "Trang web của tôi"
+	}
+	pageDescription := route.FKeyword
+	if pageDescription == "" {
+		pageDescription = "Mô tả mặc định"
+	}
+	pageKeywords := route.FKeyword
+	ogImage := absoluteAssetURL(route.FLogo, protocol, hostStr)
+
+	var seo *seoMeta
+	if route.AppID != "" && route.TblServices != "" && route.TblServiceDetail != "" {
+		if s := resolveSEOForServiceRoute(ctx.RM, route, domain, uri, mainServiceCode, defaultServiceCode, lang); s != nil {
+			seo = s
+			if seo.Title != "" {
+				pageTitle = seo.Title
+			}
+			if seo.Description != "" {
+				pageDescription = seo.Description
+			}
+			if seo.Keywords != "" {
+				pageKeywords = seo.Keywords
+			}
+			if seo.Image != "" {
+				ogImage = absoluteAssetURL(seo.Image, protocol, hostStr)
+			}
+		}
+	}
+
+	if ogImage == "" {
+		ogImage = absoluteAssetURL("default_og_image.png", protocol, hostStr)
+	}
+
+	routeLogo := absoluteAssetURL(route.FLogo, protocol, hostStr)
+
+	meta := map[string]any{
+		"site_name":     baseURL,
+		"url":           canonical,
+		"gsv":           route.GSV,
+		"gtag":          route.GTag,
+		"title":         pageTitle,
+		"title2":        pageTitle,
+		"f_title":       pageTitle,
+		"description":   pageDescription,
+		"f_description": pageDescription,
+		"keywords":      pageKeywords,
+		"f_keyword":     pageKeywords,
+		"image":         ogImage,
+		"f_logo":        routeLogo,
+		"og_image":      ogImage,
+		"id":            route.AppID,
+		"app_id":        route.AppID,
+	}
+
+	ssrRoutes := map[string]any{uri: map[string]any{
+		"title":       pageTitle,
+		"description": pageDescription,
+		"keywords":    pageKeywords,
+		"image":       ogImage,
+		"lang":        lang,
+	}}
+	if seo != nil {
+		ssrRoutes[uri] = seo.toRouteValue()
+	}
+
+	initialData := map[string]any{
+		"pageTitle":       pageTitle,
+		"pageDescription": pageDescription,
+		"pageKeywords":    pageKeywords,
+		"canonicalUrl":    canonical,
+		"ogImage":         ogImage,
+		"currentPagePath": uri,
+		"app_id":          route.AppID,
+	}
+
+	if route.AppID != "" && route.TblServiceDetail != "" {
+		for k, v := range resolveServiceListing(ctx.RM, route, domain, uri, params) {
+			initialData[k] = v
+		}
+	}
+
+	appConfig := map[string]any{"f_logo": routeLogo, "f_title": pageTitle}
+	scripts := buildScripts(appConfig, initialData, categories, ssrRoutes, dynamicTemplates, meta)
+
+	preload := ""
+	if strings.HasPrefix(ogImage, "http://") || strings.HasPrefix(ogImage, "https://") {
+		preload = fmt.Sprintf(`<link rel="preload" as="image" href="%s" fetchpriority="high">`, htmlEsc(ogImage))
+	}
+
+	if filePath := ctx.RM.GetStaticFile(indexPath); filePath != "" {
+		raw, err := os.ReadFile(filePath)
+		if err == nil {
+			html := string(raw)
+			preprocessHTML(&html, &preprocessCtx{
+				Title:       pageTitle,
+				Description: pageDescription,
+				Keywords:    pageKeywords,
+				Canonical:   canonical,
+				Image:       ogImage,
+				SiteName:    baseURL,
+				Logo:        routeLogo,
+				GSV:         route.GSV,
+				GTag:        route.GTag,
+				AppID:       route.AppID,
+			})
+			injectIntoHTML(&html, preload+scripts)
+			return html
+		}
+	}
+
+	log.Printf("SSR fallback (index.html not found for rp_index=%s)", rpIndex)
+	return fallbackHTML(pageTitle, uri, route.AppID, scripts)
+}
+
+func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
+	domain := DomainFromHost(host)
+	if domain == "" {
+		return resolvedRoute{}
+	}
+
+	fCase := strings.TrimSpace(strings.ReplaceAll(path, ".shtml", ""))
+	if fCase == "/" {
+		fCase = ""
+	}
+
+	if route, ok := queryRoute(rm, []model.SearchFilter{
+		model.EqFilter("domain_name", domain),
+		model.EqFilter("f_case", fCase),
+		model.EqFilter("run", 1),
+	}); ok {
+		return route
+	}
+
+	if route, ok := queryRoute(rm, []model.SearchFilter{
+		model.EqFilter("domain_name", domain),
+		model.EqFilter("f_case", ""),
+		{Field: "rp_index", FilterType: "isnotnull"},
+		{Field: "rp_index", FilterType: "noteq", Value: ""},
+		model.EqFilter("run", 1),
+	}); ok {
+		return route
+	}
+
+	if route, ok := queryRoute(rm, []model.SearchFilter{
+		model.EqFilter("domain_name", domain),
+		model.EqFilter("app_type", "web"),
+		model.EqFilter("run", 1),
+	}); ok {
+		return route
+	}
+
+	if route, ok := queryRoute(rm, []model.SearchFilter{
+		model.EqFilter("domain_name", ""),
+		model.EqFilter("f_case", "default"),
+		model.EqFilter("run", 1),
+	}); ok {
+		return route
+	}
+
+	return resolvedRoute{Domain: domain}
+}
+
+func queryRoute(rm *data.RecordManager, conditions []model.SearchFilter) (resolvedRoute, bool) {
+	filter := model.SearchFilter{Operator: "AND", Conditions: conditions}
+	rows := rowsFrom(rm.Filter("csm", "sys_la_routers", filter))
+	if len(rows) == 0 {
+		return resolvedRoute{}, false
+	}
+	return resolvedRouteFromRow(rows[0]), true
+}
+
+func resolvedRouteFromRow(row map[string]any) resolvedRoute {
+	s := func(k string) string { return strings.TrimSpace(recordStr(row, k)) }
+	sTrim := func(k string) string { return strings.Trim(strings.Trim(s(k), "/"), " ") }
+	return resolvedRoute{
+		RPIndex:          sTrim("rp_index"),
+		AppID:            sTrim("app_id"),
+		TblServices:      sTrim("tbl_services"),
+		TblServiceDetail: sTrim("tbl_service_detail"),
+		FTitle:           s("f_title"),
+		FKeyword:         s("f_keyword"),
+		FLogo:            s("f_logo"),
+		AppType:          s("app_type"),
+		Domain:           s("domain_name"),
+		GSV:              s("gsv"),
+		GTag:             s("gtag"),
+	}
+}
+
+func loadCategoriesFull(rm *data.RecordManager, route resolvedRoute, domain, lang string) ([]any, map[string]any, string, string) {
+	if route.AppID == "" || route.TblServices == "" {
+		return []any{}, map[string]any{}, "", ""
+	}
+
+	filter := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("status", "active"),
+			{Field: "domain", FilterType: "like", Value: domain},
+		},
+	}
+	rows := rowsFrom(rm.Filter(route.AppID, route.TblServices, filter))
+
+	cats := make([]any, 0, len(rows))
+	seen := map[string]struct{}{}
+	dynamicCodeNames := make([]string, 0)
+	mainServiceCode := ""
+	defaultServiceCode := ""
+
+	for _, obj := range rows {
+		slug := recordStr(obj, "slug")
+		serviceCode := recordStr(obj, "service_code")
+		isService := recordBool(obj, "is_service")
+		isGroupSlug := recordBool(obj, "is_group_slug")
+		isGroupSlugDefault := recordBool(obj, "is_group_slug_default")
+		groupSlug := recordStr(obj, "group_slug")
+
+		if isGroupSlug && mainServiceCode == "" {
+			mainServiceCode = serviceCode
+		}
+		if isGroupSlugDefault && !isGroupSlug {
+			defaultServiceCode = serviceCode
+		}
+
+		keyPart := slug
+		if serviceCode != "" {
+			keyPart = serviceCode
+		}
+		isSvc := "0"
+		if isService {
+			isSvc = "1"
+		}
+		dedupKey := keyPart + "|" + groupSlug + "|" + isSvc
+		if _, ok := seen[dedupKey]; ok {
+			continue
+		}
+		seen[dedupKey] = struct{}{}
+
+		dynamicCodeName := recordStr(obj, "dynamic_code_name")
+		if dynamicCodeName != "" && !slices.Contains(dynamicCodeNames, dynamicCodeName) {
+			dynamicCodeNames = append(dynamicCodeNames, dynamicCodeName)
+		}
+
+		category := recordStr(obj, "category")
+		if lang != "vi" {
+			if v := recordStr(obj, "category_"+lang); v != "" {
+				category = v
+			}
+		}
+		attributesDescription := recordStr(obj, "attributes_description")
+		if lang != "vi" {
+			if v := recordStr(obj, "attributes_description_"+lang); v != "" {
+				attributesDescription = v
+			}
+		}
+
+		cats = append(cats, map[string]any{
+			"slug":                     slug,
+			"service_code":             serviceCode,
+			"category":                 category,
+			"category_en":              recordStr(obj, "category_en"),
+			"category_zh":              recordStr(obj, "category_zh"),
+			"is_service":               isService,
+			"is_group_slug":            isGroupSlug,
+			"is_group_slug_default":    isGroupSlugDefault,
+			"group_slug":               groupSlug,
+			"color":                    recordStr(obj, "attributes_color"),
+			"icon":                     recordStr(obj, "attributes_icon"),
+			"description":              attributesDescription,
+			"description_en":           recordStr(obj, "attributes_description_en"),
+			"description_zh":           recordStr(obj, "attributes_description_zh"),
+			"dynamicCodeName":          dynamicCodeName,
+			"attributes_icon":          recordStr(obj, "attributes_icon"),
+			"attributes_color":         recordStr(obj, "attributes_color"),
+			"attributes_description":   attributesDescription,
+		})
+	}
+
+	return cats, loadDynamicCodeTemplates(rm, dynamicCodeNames), mainServiceCode, defaultServiceCode
+}
+
+func loadDynamicCodeTemplates(rm *data.RecordManager, codeNames []string) map[string]any {
+	templates := make(map[string]any)
+	for _, name := range codeNames {
+		if name == "" {
+			continue
+		}
+		filter := model.SearchFilter{
+			Operator: "AND",
+			Conditions: []model.SearchFilter{
+				model.EqFilter("p_name", name),
+				model.EqFilter("p_type", 0),
+			},
+		}
+		rows := rowsFrom(rm.Filter("csm", "sys_autos", filter))
+		if len(rows) == 0 {
+			continue
+		}
+		pCode := strings.TrimSpace(recordStr(rows[0], "p_code"))
+		if pCode == "" {
+			continue
+		}
+		decrypted, err := rm.CsmDecrypt(pCode)
+		if err != nil || decrypted == "" {
+			continue
+		}
+		templates[name] = decrypted
+	}
+	return templates
+}
+
+func resolveLang(params map[string]string) string {
+	lang := strings.ToLower(strings.TrimSpace(params["hl"]))
+	if lang == "" {
+		return "vi"
+	}
+	if i := strings.Index(lang, "-"); i >= 0 {
+		lang = lang[:i]
+	}
+	switch lang {
+	case "vi", "en", "zh":
+		return lang
+	default:
+		return "vi"
+	}
+}
+
+func absoluteAssetURL(path, protocol, host string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") {
+		return path
+	}
+	return protocol + "://" + host + "/" + strings.TrimPrefix(path, "/")
+}
+
+func resolveDescriptionFromFields(row map[string]any, lang string) string {
+	description := ""
+	if lang != "vi" {
+		description = recordStr(row, "description_"+lang)
+	}
+	if description == "" {
+		description = recordStr(row, "description")
+	}
+	if description == "" && lang != "vi" {
+		description = recordStr(row, "excerpt_"+lang)
+	}
+	if description == "" {
+		description = recordStr(row, "excerpt")
+	}
+	if description == "" {
+		content := ""
+		if lang != "vi" {
+			content = recordStr(row, "content_"+lang)
+		}
+		if content == "" {
+			content = recordStr(row, "content")
+		}
+		if content != "" {
+			description = stripHTMLToText(content, 160)
+		}
+	}
+	return description
+}
+
+func resolveServiceDescription(row map[string]any, lang string) string {
+	description := ""
+	if lang != "vi" {
+		description = recordStr(row, "attributes_description_"+lang)
+	}
+	if description == "" {
+		description = recordStr(row, "attributes_description")
+	}
+	if description == "" && lang != "vi" {
+		description = recordStr(row, "summary_"+lang)
+	}
+	if description == "" {
+		description = recordStr(row, "summary")
+	}
+	if description == "" {
+		if attrs := recordStr(row, "attributes"); attrs != "" {
+			description = stripHTMLToText(attrs, 160)
+		}
+	}
+	if description == "" {
+		content := ""
+		if lang != "vi" {
+			content = recordStr(row, "content_"+lang)
+		}
+		if content == "" {
+			content = recordStr(row, "content")
+		}
+		if content != "" {
+			description = stripHTMLToText(content, 160)
+		}
+	}
+	return description
+}
+
+func resolveSEOForServiceRoute(
+	rm *data.RecordManager,
+	route resolvedRoute,
+	domain, normalizedPath, mainServiceCode, defaultServiceCode, lang string,
+) *seoMeta {
+	if route.AppID == "" || route.TblServices == "" || route.TblServiceDetail == "" {
+		return nil
+	}
+
+	workingPath := strings.TrimSpace(normalizedPath)
+	if strings.HasPrefix(workingPath, "/") {
+		segs := make([]string, 0)
+		for _, s := range strings.Split(workingPath[1:], "/") {
+			if s != "" {
+				segs = append(segs, s)
+			}
+		}
+		if len(segs) > 0 {
+			first := strings.ToLower(segs[0])
+			if first == "en" || first == "zh" {
+				if len(segs) > 1 {
+					workingPath = "/" + strings.Join(segs[1:], "/")
+				} else {
+					workingPath = "/"
+				}
+			}
+		}
+	}
+
+	pathNoExt := strings.ReplaceAll(workingPath, ".shtml", "")
+	parts := make([]string, 0)
+	for _, s := range strings.Split(pathNoExt, "/") {
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	slug := ""
+	if len(parts) > 0 {
+		slug = strings.TrimSpace(parts[len(parts)-1])
+	}
+	if slug == "" || slug == "com.chrome.devtools.json" {
+		slug = "home"
+	}
+	if mainServiceCode != "" && slug == mainServiceCode && defaultServiceCode != "" {
+		slug = defaultServiceCode
+	}
+
+	domainLike := model.SearchFilter{Field: "domain", FilterType: "like", Value: domain}
+
+	detailFilter := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("slug", slug),
+			model.EqFilter("status", "active"),
+			domainLike,
+		},
+	}
+	if detail := rm.Find(route.AppID, route.TblServiceDetail, detailFilter); len(detail) > 0 {
+		return &seoMeta{
+			Title:       recordLangStr(detail, "title", lang),
+			Keywords:    recordLangStr(detail, "keywords", lang),
+			Description: resolveDescriptionFromFields(detail, lang),
+			Image:       recordStr(detail, "image"),
+			Lang:        lang,
+			Slug:        slug,
+		}
+	}
+
+	serviceFilter := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("is_service", true),
+			model.EqFilter("slug", slug),
+			model.EqFilter("status", "active"),
+			domainLike,
+		},
+	}
+	if service := rm.Find(route.AppID, route.TblServices, serviceFilter); len(service) > 0 {
+		title := recordLangStr(service, "attributes_title", lang)
+		if title == "" {
+			title = recordLangStr(service, "category", lang)
+		}
+		return &seoMeta{
+			Title:       title,
+			Keywords:    recordLangStr(service, "attributes_keywords", lang),
+			Description: resolveServiceDescription(service, lang),
+			Image:       recordStr(service, "image"),
+			Lang:        lang,
+			Slug:        slug,
+		}
+	}
+
+	menuFilter := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("is_service", false),
+			model.EqFilter("slug", slug),
+			model.EqFilter("status", "active"),
+			domainLike,
+		},
+	}
+	if menu := rm.Find(route.AppID, route.TblServices, menuFilter); len(menu) > 0 {
+		title := recordLangStr(menu, "attributes_title", lang)
+		if title == "" {
+			title = recordLangStr(menu, "category", lang)
+		}
+		return &seoMeta{
+			Title:       title,
+			Keywords:    recordLangStr(menu, "attributes_keywords", lang),
+			Description: resolveServiceDescription(menu, lang),
+			Image:       recordStr(menu, "image"),
+			Lang:        lang,
+			Slug:        slug,
+		}
+	}
+
+	return nil
+}
+
+func resolveServiceListing(
+	rm *data.RecordManager,
+	route resolvedRoute,
+	domain, path string,
+	params map[string]string,
+) map[string]any {
+	out := make(map[string]any)
+
+	page := 1
+	if v, err := strconv.Atoi(params["page"]); err == nil && v >= 1 {
+		page = v
+	}
+	pageSize := 12
+	pageSizeStr := params["pageSize"]
+	if pageSizeStr == "" {
+		pageSizeStr = params["take"]
+	}
+	if n, err := strconv.Atoi(pageSizeStr); err == nil {
+		if n < 1 {
+			n = 1
+		}
+		if n > 100 {
+			n = 100
+		}
+		pageSize = n
+	}
+	lang := params["hl"]
+	if lang == "" {
+		lang = "vi"
+	}
+	lastKey := params["lastkey"]
+
+	pathNoExt := strings.ReplaceAll(path, ".shtml", "")
+	trimmed := strings.TrimPrefix(pathNoExt, "/")
+	segs := make([]string, 0)
+	for _, s := range strings.Split(trimmed, "/") {
+		if s != "" {
+			segs = append(segs, s)
+		}
+	}
+	isHome := len(segs) == 0
+
+	if isHome {
+		filter := model.SearchFilter{
+			Operator: "AND",
+			Conditions: []model.SearchFilter{
+				model.EqFilter("status", "active"),
+				{Field: "domain", FilterType: "like", Value: domain},
+				{
+					Operator: "OR",
+					Conditions: []model.SearchFilter{
+						{Field: "active_home", FilterType: "in", Value: []any{1, "1", true}},
+						{Field: "featured", FilterType: "in", Value: []any{1, "1", true}},
+					},
+				},
+			},
+		}
+		rows := rowsFrom(rm.Filter(route.AppID, route.TblServiceDetail, filter))
+		details := make([]any, 0, len(rows))
+		for _, r := range rows {
+			details = append(details, mapDetailLite(r, lang))
+		}
+		out["homeDetailList"] = details
+		return out
+	}
+
+	if len(segs) >= 2 {
+		serviceCode := segs[0]
+		detailSlug := segs[len(segs)-1]
+		filter := model.SearchFilter{
+			Operator: "AND",
+			Conditions: []model.SearchFilter{
+				model.EqFilter("service_type", serviceCode),
+				model.EqFilter("slug", detailSlug),
+				model.EqFilter("status", "active"),
+				{Field: "domain", FilterType: "like", Value: domain},
+			},
+		}
+		row := rm.Find(route.AppID, route.TblServiceDetail, filter)
+		if len(row) > 0 {
+			curID := recordStr(row, "id")
+			out["serviceDetail"] = mapDetailFullObj(row, lang)
+			out["serviceCode"] = serviceCode
+			insertRelated(rm, route, domain, serviceCode, curID, lang, pageSize, out)
+			return out
+		}
+	}
+
+	if len(segs) == 1 {
+		slugOnly := segs[0]
+		filter := model.SearchFilter{
+			Operator: "AND",
+			Conditions: []model.SearchFilter{
+				model.EqFilter("slug", slugOnly),
+				model.EqFilter("status", "active"),
+				{Field: "domain", FilterType: "like", Value: domain},
+			},
+		}
+		row := rm.Find(route.AppID, route.TblServiceDetail, filter)
+		if len(row) > 0 {
+			serviceType := recordStr(row, "service_type")
+			curID := recordStr(row, "id")
+			out["serviceDetail"] = mapDetailFullObj(row, lang)
+			out["serviceCode"] = serviceType
+			if serviceType != "" {
+				insertRelated(rm, route, domain, serviceType, curID, lang, pageSize, out)
+			}
+			return out
+		}
+	}
+
+	slug := ""
+	if len(segs) > 0 {
+		slug = segs[len(segs)-1]
+	}
+	if slug == "" || route.TblServices == "" {
+		return out
+	}
+
+	svcFilter := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("service_code", slug),
+			model.EqFilter("status", "active"),
+			{Field: "domain", FilterType: "like", Value: domain},
+		},
+	}
+	service := rm.Find(route.AppID, route.TblServices, svcFilter)
+
+	serviceCode := slug
+	if len(service) > 0 {
+		found := recordStr(service, "service_code")
+		if found == "" {
+			found = recordStr(service, "id")
+			if found == "" {
+				found = slug
+			}
+		}
+		serviceCode = found
+	}
+
+	if len(service) > 0 {
+		cat := mapServiceCategory(service, lang)
+		if pageContent, _ := cat["content"].(string); pageContent != "" {
+			out["pageContent"] = pageContent
+		}
+		out["serviceCategory"] = cat
+	}
+
+	detConds := []model.SearchFilter{
+		model.EqFilter("service_type", serviceCode),
+		model.EqFilter("status", "active"),
+		{Field: "domain", FilterType: "like", Value: domain},
+	}
+
+	if q := strings.TrimSpace(params["q"]); q != "" {
+		detConds = append(detConds, model.SearchFilter{
+			Operator: "OR",
+			Conditions: []model.SearchFilter{
+				{Field: "title", FilterType: "like", Value: q},
+				{Field: "excerpt", FilterType: "like", Value: q},
+				{Field: "keywords", FilterType: "like", Value: q},
+			},
+		})
+	}
+
+	for _, pair := range [][2]string{
+		{"propertyType", "attributes_propertyType"},
+		{"transactionType", "attributes_transactionType"},
+		{"category", "attributes_category"},
+		{"platform", "attributes_platform"},
+		{"brand", "attributes_brand"},
+		{"location", "attributes_location"},
+		{"legalStatus", "attributes_legalStatus"},
+		{"furnished", "attributes_furnished"},
+	} {
+		if v := strings.TrimSpace(params[pair[0]]); v != "" && v != "all" {
+			detConds = append(detConds, model.SearchFilter{Field: pair[1], FilterType: "like", Value: v})
+		}
+	}
+
+	for _, triple := range [][3]string{
+		{"price_min", "attributes_price", "gte"},
+		{"price_max", "attributes_price", "lte"},
+		{"area_min", "attributes_area", "gte"},
+		{"area_max", "attributes_area", "lte"},
+	} {
+		if v, err := strconv.ParseFloat(params[triple[0]], 64); err == nil {
+			detConds = append(detConds, model.SearchFilter{Field: triple[1], FilterType: triple[2], Value: v})
+		}
+	}
+
+	detFilter := model.SearchFilter{Operator: "AND", Conditions: detConds}
+	allRows := rowsFrom(rm.Filter(route.AppID, route.TblServiceDetail, detFilter))
+
+	slices.SortFunc(allRows, func(a, b map[string]any) int {
+		return compareRelatedPostRowsDesc(a, b)
+	})
+
+	totalCount := len(allRows)
+	startIndex := 0
+	if lastKey != "" {
+		found := false
+		for i, r := range allRows {
+			if recordStr(r, "id") == lastKey {
+				startIndex = i + 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			startIndex = 0
+		}
+	} else {
+		startIndex = (page - 1) * pageSize
+	}
+	endIndex := startIndex + pageSize
+	if endIndex > totalCount {
+		endIndex = totalCount
+	}
+
+	pageRows := make([]any, 0, endIndex-startIndex)
+	for _, r := range allRows[startIndex:endIndex] {
+		pageRows = append(pageRows, mapDetailLite(r, lang))
+	}
+
+	var nextCursor string
+	if endIndex < totalCount && endIndex > 0 {
+		nextCursor = recordStr(allRows[endIndex-1], "id")
+	}
+
+	pageComputed := 1
+	if pageSize > 0 {
+		pageComputed = startIndex/pageSize + 1
+	}
+
+	out["serviceDetailList"] = pageRows
+	out["totalCount"] = totalCount
+	out["page"] = pageComputed
+	out["pageSize"] = pageSize
+	out["take"] = pageSize
+	out["paginationMode"] = "cursor"
+	if nextCursor != "" {
+		out["nextCursor"] = nextCursor
+		out["lastkey"] = nextCursor
+	}
+
+	return out
+}
+
+func insertRelated(
+	rm *data.RecordManager,
+	route resolvedRoute,
+	domain, serviceType, curID, lang string,
+	take int,
+	out map[string]any,
+) {
+	filter := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("service_type", serviceType),
+			model.EqFilter("status", "active"),
+			{Field: "domain", FilterType: "like", Value: domain},
+		},
+	}
+	rows := rowsFrom(rm.Filter(route.AppID, route.TblServiceDetail, filter))
+	related := make([]any, 0, take)
+	for _, r := range rows {
+		if recordStr(r, "id") == curID {
+			continue
+		}
+		related = append(related, mapDetailLite(r, lang))
+		if len(related) >= take {
+			break
+		}
+	}
+	out["relatedDetailList"] = related
+}
+
+func mapDetailLite(row map[string]any, lang string) map[string]any {
+	s := func(k string) string { return recordStr(row, k) }
+	langS := func(base string) string {
+		if lang != "vi" {
+			if v := s(base + "_" + lang); v != "" {
+				return v
+			}
+		}
+		return s(base)
+	}
+
+	m := map[string]any{
+		"id":               s("id"),
+		"domain":           s("domain"),
+		"service_type":     s("service_type"),
+		"title":            langS("title"),
+		"slug":             s("slug"),
+		"excerpt":          langS("excerpt"),
+		"thumbnail":        s("thumbnail"),
+		"cover":            s("cover"),
+		"images":           s("images"),
+		"videos":           s("videos"),
+		"album":            s("album"),
+		"video":            s("video"),
+		"video_url":        s("video_url"),
+		"tags":             s("tags"),
+		"keywords":         langS("keywords"),
+		"meta_description": s("meta_description"),
+		"featured":         recordBool(row, "featured"),
+		"activeHome":       recordBool(row, "active_home"),
+		"status":           s("status"),
+		"author":           s("author"),
+	}
+	for k, v := range row {
+		if strings.HasPrefix(k, "attributes_") || strings.HasPrefix(k, "specifications_") {
+			m[k] = v
+		}
+	}
+	if v, ok := row["publish_date"]; ok {
+		m["publish_date"] = v
+	}
+	if v, ok := row["expiry_date"]; ok {
+		m["expiry_date"] = v
+	}
+	return m
+}
+
+func mapDetailFullObj(row map[string]any, lang string) map[string]any {
+	m := mapDetailLite(row, lang)
+	s := func(k string) string { return recordStr(row, k) }
+	langS := func(base string) string {
+		if lang != "vi" {
+			if v := s(base + "_" + lang); v != "" {
+				return v
+			}
+		}
+		return s(base)
+	}
+	m["content"] = langS("content")
+	m["seo_meta"] = s("seo_meta")
+	m["dien_thoai"] = s("dien_thoai")
+	delete(m, "attributes")
+	delete(m, "specifications")
+	return m
+}
+
+func mapServiceCategory(row map[string]any, lang string) map[string]any {
+	s := func(k string) string { return recordStr(row, k) }
+	langS := func(base string) string {
+		if lang != "vi" {
+			if v := s(base + "_" + lang); v != "" {
+				return v
+			}
+		}
+		return s(base)
+	}
+	m := map[string]any{
+		"id":           s("id"),
+		"domain":       s("domain"),
+		"name":         s("name"),
+		"service_code": s("service_code"),
+		"slug":         s("service_code"),
+		"status":       s("status"),
+		"icon":         s("icon"),
+		"sort_order":   s("sort_order"),
+		"seo_meta":     s("seo_meta"),
+		"parent_id":    s("parent_id"),
+		"content":      langS("content"),
+		"description":  langS("description"),
+		"category":     langS("category"),
+		"title":        langS("title"),
+	}
+	if v, ok := row["attributes"]; ok {
+		m["attributes"] = v
+	}
+	if v, ok := row["config"]; ok {
+		m["config"] = v
+	}
+	if v, ok := row["updated_at"]; ok {
+		m["updated_at"] = v
+	}
+	return m
+}
+
+func buildJSONLD(ctx *preprocessCtx) string {
+	jsonLD := map[string]any{
+		"@context":    "https://schema.org",
+		"@type":       "WebPage",
+		"headline":    ctx.Title,
+		"url":         ctx.Canonical,
+		"description": ctx.Description,
+		"inLanguage":  "vi",
+		"image": map[string]any{
+			"@type":  "ImageObject",
+			"url":    ctx.Image,
+			"height": "1000",
+			"width":  "1920",
+		},
+		"publisher": map[string]any{
+			"@type": "Organization",
+			"name":  ctx.SiteName,
+			"url":   ctx.SiteName,
+			"logo": map[string]any{
+				"@type":  "ImageObject",
+				"url":    ctx.Logo,
+				"width":  "506",
+				"height": "132",
+			},
+		},
+	}
+	raw, err := json.MarshalIndent(jsonLD, "", "  ")
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func replaceScriptBlock(html *string, marker, newContent string) {
+	lower := strings.ToLower(*html)
+	pos := strings.Index(lower, marker)
+	if pos < 0 {
+		return
+	}
+	scriptStart := strings.LastIndex(lower[:pos], "<script")
+	if scriptStart < 0 {
+		scriptStart = pos
+	}
+	relEnd := strings.Index((*html)[scriptStart:], "</script>")
+	if relEnd < 0 {
+		return
+	}
+	end := scriptStart + relEnd + len("</script>")
+	*html = (*html)[:scriptStart] + newContent + (*html)[end:]
+}
+
+func PreprocessHTML(html *string, ctx *preprocessCtx) {
+	preprocessHTML(html, ctx)
+}
+
+func preprocessHTML(html *string, ctx *preprocessCtx) {
+	title := ctx.Title
+	description := ctx.Description
+	keywords := ctx.Keywords
+	canonical := ctx.Canonical
+	image := ctx.Image
+	siteName := ctx.SiteName
+	logo := ctx.Logo
+
+	twitterCard := "summary_large_image"
+	if image == "" {
+		twitterCard = "summary"
+	}
+
+	if start := strings.Index(*html, "<title"); start >= 0 {
+		if endRel := strings.Index((*html)[start:], "</title>"); endRel >= 0 {
+			end := start + endRel + len("</title>")
+			*html = (*html)[:start] + "<title>" + htmlEsc(title) + "</title>" + (*html)[end:]
+		}
+	}
+
+	replaceLinkHref(html, "canonical", canonical)
+	replaceMetaContent(html, "description", description)
+	replaceMetaContent(html, "keywords", keywords)
+	replaceMetaContent(html, "google-site-verification", ctx.GSV)
+	replaceMetaContent(html, "twitter:card", twitterCard)
+
+	replaceOGContent(html, "og:url", canonical)
+	replaceOGContent(html, "og:site_name", siteName)
+	replaceOGContent(html, "og:title", title)
+	replaceOGContent(html, "og:description", description)
+	replaceOGContent(html, "og:image", image)
+	replaceOGContent(html, "og:image:alt", title)
+	replaceOGContent(html, "twitter:title", title)
+	replaceOGContent(html, "twitter:description", description)
+	replaceOGContent(html, "twitter:image", image)
+
+	replaceLinkHref(html, "icon", logo)
+	replaceLinkHref(html, "apple-touch-icon", logo)
+
+	if pos := strings.Index(*html, "<base "); pos >= 0 {
+		if endRel := strings.Index((*html)[pos:], ">"); endRel >= 0 {
+			end := pos + endRel + 1
+			newBase := `<base href="` + htmlEsc(siteName) + `" />`
+			*html = (*html)[:pos] + newBase + (*html)[end:]
+		}
+	}
+
+	ldJSON := buildJSONLD(ctx)
+	replaceScriptBlock(html, "application/ld+json",
+		"<script type=\"application/ld+json\">\n"+ldJSON+"\n</script>")
+
+	if ctx.GTag != "" {
+		gtagSrc := "https://www.googletagmanager.com/gtag/js?id=" + htmlEsc(ctx.GTag)
+		if pos := strings.Index(*html, "googletagmanager.com/gtag/js"); pos >= 0 {
+			if scriptStart := strings.LastIndex((*html)[:pos], "<script"); scriptStart >= 0 {
+				if relEnd := strings.Index((*html)[scriptStart:], "</script>"); relEnd >= 0 {
+					end := scriptStart + relEnd + len("</script>")
+					*html = (*html)[:scriptStart] + `<script async src="` + gtagSrc + `"></script>` + (*html)[end:]
+				}
+			}
+		}
+		gtagEsc := htmlEsc(ctx.GTag)
+		*html = strings.ReplaceAll(*html, "/*[[${meta.gtag}]]*/ ''", "'"+gtagEsc+"'")
+		*html = strings.ReplaceAll(*html, `/*[[${meta.gtag}]]*/ ""`, `"`+gtagEsc+`"`)
+	}
+
+	if pos := strings.Index(*html, "<body"); pos >= 0 {
+		if endRel := strings.Index((*html)[pos:], ">"); endRel >= 0 {
+			tagEnd := pos + endRel + 1
+			newBody := `<body id="home" data-app-id="` + htmlEsc(ctx.AppID) + `">`
+			*html = (*html)[:pos] + newBody + (*html)[tagEnd:]
+		}
+	}
+
+	for _, attr := range []string{"th:name", "th:attr", "th:inline", "th:src", "th:content", "th:href", "th:text"} {
+		stripThAttrs(html, attr)
+	}
+}
+
+func replaceMetaContent(html *string, nameAttr, val string) {
+	target := `name="` + nameAttr + `"`
+	if pos := strings.Index(*html, target); pos >= 0 {
+		if endRel := strings.Index((*html)[pos:], ">"); endRel >= 0 {
+			end := pos + endRel
+			tag := (*html)[pos:end]
+			newTag := removeAttrSetContent(tag, val)
+			*html = (*html)[:pos] + newTag + (*html)[end:]
+		}
+	}
+}
+
+func replaceLinkHref(html *string, rel, href string) {
+	target := `rel="` + rel + `"`
+	if pos := strings.Index(*html, target); pos >= 0 {
+		if endRel := strings.Index((*html)[pos:], ">"); endRel >= 0 {
+			end := pos + endRel
+			tag := (*html)[pos:end]
+			newTag := removeAttrSetHref(tag, href)
+			*html = (*html)[:pos] + newTag + (*html)[end:]
+		}
+	}
+}
+
+func replaceOGContent(html *string, property, val string) {
+	target := `property="` + property + `"`
+	if pos := strings.Index(*html, target); pos >= 0 {
+		if endRel := strings.Index((*html)[pos:], ">"); endRel >= 0 {
+			end := pos + endRel
+			tag := (*html)[pos:end]
+			newTag := removeAttrSetContent(tag, val)
+			*html = (*html)[:pos] + newTag + (*html)[end:]
+		}
+	}
+}
+
+func stripThAttrs(html *string, attr string) {
+	for {
+		pos := strings.Index(*html, attr)
+		if pos < 0 {
+			return
+		}
+		q1 := strings.Index((*html)[pos:], `"`)
+		if q1 < 0 {
+			return
+		}
+		q1 += pos + 1
+		q2Rel := strings.Index((*html)[q1:], `"`)
+		if q2Rel < 0 {
+			return
+		}
+		end := q1 + q2Rel + 1
+		*html = (*html)[:pos] + (*html)[end:]
+	}
+}
+
+func buildScripts(appConfig, initialData map[string]any, categories any, ssrRoutes, dynamicTemplates, meta map[string]any) string {
+	return fmt.Sprintf(
+		`<script>window.meta=%s;window.__INITIAL_DATA__=%s;window.menus=[];</script>`+
+			`<script>window.__APP_CONFIG__=%s;</script>`+
+			`<script>window.__INITIAL_REACT_DATA__=%s;</script>`+
+			`<script>window.__SSR_WEBSITE_CATEGORIES__=%s;</script>`+
+			`<script>window.__SSR_WEBSITE_ROUTES__=%s;</script>`+
+			`<script>window.__SSR_DYNAMIC_CODE_TEMPLATES__=%s;</script>`,
+		safeJSON(meta),
+		safeJSON(initialData),
+		safeJSON(appConfig),
+		safeJSON(initialData),
+		safeJSON(categories),
+		safeJSON(ssrRoutes),
+		safeJSON(dynamicTemplates),
+	)
+}
+
+func injectIntoHTML(html *string, scripts string) {
+	lower := strings.ToLower(*html)
+	if pos := strings.Index(lower, "</head>"); pos >= 0 {
+		*html = (*html)[:pos] + scripts + (*html)[pos:]
+		return
+	}
+	if pos := strings.Index(lower, "</body>"); pos >= 0 {
+		*html = (*html)[:pos] + scripts + (*html)[pos:]
+		return
+	}
+	*html += scripts
+}
+
+func fallbackHTML(title, uri, appID, scripts string) string {
+	_ = uri
+	_ = appID
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8"/>
+  <title>%s</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  %s
+</head>
+<body><div id="root"></div><script type="module" src="/assets/main.js"></script></body>
+</html>`, htmlEsc(title), scripts)
+}

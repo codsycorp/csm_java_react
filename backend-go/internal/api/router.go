@@ -20,8 +20,17 @@ func CatchAll(st *state.AppState) http.HandlerFunc {
 		host := extractHost(r.Header)
 		query := r.URL.RawQuery
 
-		if strings.HasPrefix(uri, "/api/app_images/") {
-			web.ServeStatic(st, w, r, uri)
+		if r.Method == http.MethodPost && (uri == "/upload" || uri == "/upload.shtml" || uri == "/api/upload") {
+			if uri == "/upload.shtml" {
+				web.HandleUploadSHTML(st, w, r)
+			} else {
+				web.HandleUpload(st, w, r)
+			}
+			return
+		}
+
+		if strings.HasPrefix(uri, "/app_images/") || strings.HasPrefix(uri, "/api/app_images/") {
+			web.ServeAppImages(st, w, r, uri)
 			return
 		}
 
@@ -29,14 +38,6 @@ func CatchAll(st *state.AppState) http.HandlerFunc {
 		isAPI := security.IsAPIRequest(uri, host) ||
 			paths.IsDirectAIPath(uri) ||
 			(!isAdminHost && paths.IsBareAPIPath(uri))
-
-		if !isAPI {
-			switch uri {
-			case "/ssr/categories", "/ssr/tags", "/ssr/reviews":
-				web.ServeSSR(st, w, r, uri, host, query)
-				return
-			}
-		}
 
 		if isAPI {
 			clean := strings.TrimPrefix(uri, "/api")

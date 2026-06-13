@@ -88,4 +88,4 @@ Legend: **Done** = implemented | **Partial** = basic/minimal | **Defer** = not s
 4. Web SSR (categories/tags/reviews)
 5. SEO scrape via Jsoup in `/seo` handler ( `/scrape-web` works)
 6. Pebble backup/restore API (use filesystem backup today)
-7. Native in-process llama (Go dùng `llama-server` sidecar qua `AI_LOCAL_LLAMA_SERVER_URL`)
+7. ~~Native in-process llama~~ **Done** (`-tags llamacpp` + `go-nativeml`; fallback HTTP sidecar khi không build native)

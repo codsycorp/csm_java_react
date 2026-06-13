@@ -75,6 +75,16 @@ func NewAiLocalOpsService(cfg config.AppConfig) *AiLocalOpsService {
 	return &AiLocalOpsService{cfg: cfg}
 }
 
+func llamaProviderLabel(llama *LlamaService) string {
+	if llama != nil && llama.UsesNative() {
+		return "llama.cpp-native"
+	}
+	if llama != nil && llama.IsAvailable() {
+		return "llama.cpp-sidecar"
+	}
+	return "llama.cpp"
+}
+
 func (s *AiLocalOpsService) Health(llama *LlamaService) map[string]any {
 	modelPath := s.cfg.AI.LlamaModelPath
 	modelExists := llama.modelExists()
@@ -86,7 +96,7 @@ func (s *AiLocalOpsService) Health(llama *LlamaService) map[string]any {
 			"multimodalRequireVision": false,
 		},
 		"reasoning": map[string]any{
-			"provider":             "llama.cpp-sidecar",
+			"provider":             llamaProviderLabel(llama),
 			"beanPresent":          modelExists,
 			"available":            llama.IsAvailable(),
 			"healthy":              llama.IsAvailable(),

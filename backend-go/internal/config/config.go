@@ -31,6 +31,10 @@ type AuthRateLimitConfig struct {
 type AIConfig struct {
 	LlamaModelPath          string
 	LlamaServerURL          string
+	LlamaNativeEnabled      bool
+	LlamaPreloadOnStartup   bool
+	LlamaGPULayers          int32
+	LlamaUseMlock           bool
 	LlamaContextWindow      uint32
 	LlamaMaxTokens          uint32
 	LlamaMaxPromptChars     int
@@ -109,6 +113,10 @@ func LoadFromEnv() AppConfig {
 				filepath.Join(dataDir, "ai_local", "model", "model.gguf"),
 			),
 			LlamaServerURL:      envString("AI_LOCAL_LLAMA_SERVER_URL", "http://127.0.0.1:8888"),
+			LlamaNativeEnabled:  envFlagTrue("AI_LOCAL_LLAMA_NATIVE_ENABLED", true),
+			LlamaPreloadOnStartup: envFlagTrue("AI_LOCAL_LLAMA_PRELOAD_ON_STARTUP", false),
+			LlamaGPULayers:      int32(envInt("AI_LOCAL_LLAMA_GPU_LAYERS", 0)),
+			LlamaUseMlock:       envFlagTrue("AI_LOCAL_LLAMA_USE_MLOCK", false),
 			LlamaContextWindow:  envUint32("AI_LOCAL_LLAMA_CONTEXT_WINDOW", 8192),
 			LlamaMaxTokens:      envUint32("AI_LOCAL_LLAMA_MAX_TOKENS", 768),
 			LlamaMaxPromptChars: envInt("AI_LOCAL_LLAMA_MAX_PROMPT_CHARS", 32_000),

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -22,13 +23,33 @@ const (
 type LlamaService struct {
 	cfg    config.AppConfig
 	client *http.Client
+	native *llamaNativeBackend
 }
 
 func NewLlamaService(cfg config.AppConfig, client *http.Client) *LlamaService {
-	return &LlamaService{cfg: cfg, client: client}
+	native := newLlamaNativeBackend(cfg)
+	if native.ready() {
+		log.Printf("LlamaService: native in-process llama.cpp enabled (%s)", cfg.AI.LlamaModelPath)
+	} else if cfg.AI.LlamaNativeEnabled {
+		log.Printf("LlamaService: native unavailable — HTTP sidecar fallback (%s)", cfg.AI.LlamaServerURL)
+	}
+	return &LlamaService{cfg: cfg, client: client, native: native}
+}
+
+func (l *LlamaService) Shutdown() {
+	if l.native != nil {
+		l.native.shutdown()
+	}
+}
+
+func (l *LlamaService) UsesNative() bool {
+	return l.native != nil && l.native.ready()
 }
 
 func (l *LlamaService) IsAvailable() bool {
+	if l.UsesNative() {
+		return true
+	}
 	if l.modelExists() {
 		return true
 	}
@@ -73,7 +94,29 @@ func (l *LlamaService) Complete(ctx context.Context, prompt string) (string, err
 }
 
 func (l *LlamaService) CompleteWithTokens(ctx context.Context, prompt string, maxTokens uint32) (string, error) {
-	if !l.IsAvailable() {
+	if l.UsesNative() {
+		text, err := l.native.complete(prompt, maxTokens)
+		if err == nil {
+			return CleanLocalModelOutput(text), nil
+		}
+		log.Printf("LlamaService: native complete failed (%v) — trying sidecar", err)
+	}
+	return l.completeViaHTTP(ctx, prompt, maxTokens)
+}
+
+func (l *LlamaService) StreamCompletion(ctx context.Context, prompt string, onToken func(string) error) error {
+	if l.UsesNative() {
+		err := l.native.stream(prompt, l.cfg.EffectiveLlamaMaxTokens(), onToken)
+		if err == nil {
+			return nil
+		}
+		log.Printf("LlamaService: native stream failed (%v) — trying sidecar", err)
+	}
+	return l.streamViaHTTP(ctx, prompt, onToken)
+}
+
+func (l *LlamaService) completeViaHTTP(ctx context.Context, prompt string, maxTokens uint32) (string, error) {
+	if !l.modelExists() && !l.serverReachable() {
 		return "", fmt.Errorf("local llama unavailable")
 	}
 	nPredict := int(maxTokens)
@@ -81,9 +124,9 @@ func (l *LlamaService) CompleteWithTokens(ctx context.Context, prompt string, ma
 		nPredict = -1
 	}
 	body := map[string]any{
-		"prompt":    prompt,
-		"n_predict": nPredict,
-		"stream":    false,
+		"prompt":      prompt,
+		"n_predict":   nPredict,
+		"stream":      false,
 		"temperature": 0.2,
 	}
 	payload, _ := json.Marshal(body)
@@ -111,14 +154,14 @@ func (l *LlamaService) CompleteWithTokens(ctx context.Context, prompt string, ma
 	return strings.TrimSpace(string(text)), nil
 }
 
-func (l *LlamaService) StreamCompletion(ctx context.Context, prompt string, onToken func(string) error) error {
-	if !l.IsAvailable() {
+func (l *LlamaService) streamViaHTTP(ctx context.Context, prompt string, onToken func(string) error) error {
+	if !l.modelExists() && !l.serverReachable() {
 		return fmt.Errorf("local llama unavailable")
 	}
 	body := map[string]any{
-		"prompt":    prompt,
-		"n_predict": int(l.cfg.EffectiveLlamaMaxTokens()),
-		"stream":    true,
+		"prompt":      prompt,
+		"n_predict":   int(l.cfg.EffectiveLlamaMaxTokens()),
+		"stream":      true,
 		"temperature": 0.2,
 	}
 	payload, _ := json.Marshal(body)
@@ -178,12 +221,15 @@ func LocalUnavailableMessage() string {
 }
 
 func LocalUnavailableHint() string {
-	return "Cấu hình AI_LOCAL_LLAMA_MODEL_PATH (GGUF) và chạy llama-server (AI_LOCAL_LLAMA_SERVER_URL, mặc định :8888)"
+	return "Cấu hình AI_LOCAL_LLAMA_MODEL_PATH (GGUF). Build -tags llamacpp cho in-process, hoặc chạy llama-server (:8888)"
 }
 
 func StreamingModelLabel(cfg config.AppConfig, llama *LlamaService) string {
-	if llama.IsAvailable() {
-		return "llama.cpp"
+	if llama != nil && llama.UsesNative() {
+		return "llama.cpp-native"
+	}
+	if llama != nil && llama.IsAvailable() {
+		return "llama.cpp-sidecar"
 	}
 	return "local_provider"
 }
