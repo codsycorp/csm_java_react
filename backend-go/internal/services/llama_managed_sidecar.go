@@ -200,27 +200,14 @@ func (m *managedSidecar) running() bool {
 }
 
 func resolveSidecarBinary(cfg config.AppConfig) (string, error) {
-	candidates := []string{
-		strings.TrimSpace(cfg.AI.LlamaServerBin),
-		filepath.Join(cfg.DataDir, "bin", "llama-server"),
-		"/usr/local/bin/llama-server",
+	if path, err := findExistingSidecarBinary(cfg); err == nil {
+		return path, nil
 	}
-	if home := strings.TrimSpace(os.Getenv("CSM_HOME")); home != "" {
-		candidates = append(candidates, filepath.Join(home, "csm_datas", "bin", "llama-server"))
+	target := sidecarInstallPath(cfg)
+	if err := bootstrapSidecarBinary(target); err != nil {
+		return "", err
 	}
-	if path, err := exec.LookPath("llama-server"); err == nil {
-		candidates = append(candidates, path)
-	}
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("llama-server binary not found (set AI_LOCAL_LLAMA_SERVER_BIN or run setup-llama-server-sidecar.sh --binary-only)")
+	return target, nil
 }
 
 func sidecarHostPort(cfg config.AppConfig) (string, int) {
