@@ -2413,16 +2413,52 @@
           if (proxyCfg.onPageLoadedScript) payload.onPageLoadedScript = proxyCfg.onPageLoadedScript;
           if (proxyCfg.scriptToExecute) payload.scriptToExecute = proxyCfg.scriptToExecute;
         }
+        function readAuthPersistRaw() {
+          var storages = [];
+          try { if (window.sessionStorage) storages.push(window.sessionStorage); } catch (e) {}
+          try { if (window.localStorage) storages.push(window.localStorage); } catch (e) {}
+          for (var i = 0; i < storages.length; i++) {
+            try {
+              var raw = storages[i].getItem("access-token");
+              if (raw) return raw;
+            } catch (e) {}
+          }
+          return "";
+        }
+        function readRefreshMirror() {
+          var storages = [];
+          try { if (window.sessionStorage) storages.push(window.sessionStorage); } catch (e) {}
+          try { if (window.localStorage) storages.push(window.localStorage); } catch (e) {}
+          for (var i = 0; i < storages.length; i++) {
+            try {
+              var v = storages[i].getItem("refreshToken");
+              if (v) return String(v);
+            } catch (e) {}
+          }
+          return "";
+        }
         var csmToken = (function () {
           try {
-            var raw = localStorage.getItem("access-token");
+            var raw = readAuthPersistRaw();
             if (!raw) return "";
             var parsed = JSON.parse(raw);
             return String((parsed && parsed.state && parsed.state.token) || "");
           } catch (e) { return ""; }
         })();
+        var refreshToken = (function () {
+          try {
+            var raw = readAuthPersistRaw();
+            if (raw) {
+              var parsed = JSON.parse(raw);
+              var fromStore = String((parsed && parsed.state && parsed.state.refreshToken) || "");
+              if (fromStore) return fromStore;
+            }
+            return readRefreshMirror();
+          } catch (e) { return ""; }
+        })();
         var reqHeaders = { "Content-Type": "application/json", "Accept": "application/json" };
         if (csmToken) reqHeaders["csm-token"] = csmToken;
+        if (refreshToken) reqHeaders["X-Refresh-Token"] = refreshToken;
         var resp = await fetchWithBackoff(link, {
           method: "POST",
           credentials: "include",

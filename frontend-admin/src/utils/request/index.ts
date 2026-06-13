@@ -237,12 +237,6 @@ const defaultConfig: Options = {
 					   
 					   is401HandlingInProgress = true;
 					   try {
-						   // Clear user data immediately when session expires
-						   try {
-							   useUserStore.getState().reset();
-						   } catch (e) {
-							   console.warn("Failed to reset user store:", e);
-						   }
 						   return await refreshTokenAndRetry(request, options);
 					   } finally {
 						   is401HandlingInProgress = false;
