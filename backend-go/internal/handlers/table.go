@@ -16,12 +16,18 @@ var reservedIndexIDs = map[string]struct{}{
 }
 
 type TableHandler struct {
-	rm *data.RecordManager
-	us *services.UserService
+	rm     *data.RecordManager
+	us     *services.UserService
+	socket SocketBroadcaster
 }
 
-func NewTableHandler(rm *data.RecordManager, us *services.UserService) *TableHandler {
-	return &TableHandler{rm: rm, us: us}
+// SocketBroadcaster pushes realtime table updates to connected clients.
+type SocketBroadcaster interface {
+	EmitUpdateNotification(rm *data.RecordManager, appID, table, action string, row map[string]any)
+}
+
+func NewTableHandler(rm *data.RecordManager, us *services.UserService, socket SocketBroadcaster) *TableHandler {
+	return &TableHandler{rm: rm, us: us, socket: socket}
 }
 
 func (h *TableHandler) HandleGetTableData(params map[string]any, auth *security.AuthUser) *model.StandardResponse {
@@ -283,6 +289,7 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 		out["command"] = "delete"
 		out["message"] = "Record deleted"
 		out["updated_row"] = target
+		h.emitSocketUpdate(appID, table, "delete", target)
 		return out
 	}
 
@@ -321,7 +328,19 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 	out["updated_row"] = trimLargeCodeFields(table, finalObj)
 	out["obj_name"] = table
 	out["app_id"] = appID
+	action := cmd
+	if action == "" {
+		action = "update"
+	}
+	h.emitSocketUpdate(appID, table, action, finalObj)
 	return out
+}
+
+func (h *TableHandler) emitSocketUpdate(appID, table, action string, row map[string]any) {
+	if h.socket == nil || row == nil {
+		return
+	}
+	h.socket.EmitUpdateNotification(h.rm, appID, table, action, row)
 }
 
 func (h *TableHandler) mergeWithExisting(appID, table string, objUpdate map[string]any) map[string]any {

@@ -9,6 +9,7 @@ import (
 	"csm_server/backend-go/internal/handlers"
 	"csm_server/backend-go/internal/security"
 	"csm_server/backend-go/internal/services"
+	"csm_server/backend-go/internal/socket"
 )
 
 type AppState struct {
@@ -17,6 +18,8 @@ type AppState struct {
 	JWT           *security.JWTUtil
 	UserService   *services.UserService
 	CrmService    *services.CrmService
+	ChatService   *services.ChatService
+	SocketHub     *socket.Hub
 	HTTPClient    *http.Client
 	GoogleIndex   *services.GoogleIndexService
 	Llama         *services.LlamaService
@@ -49,6 +52,8 @@ func NewAppState(cfg config.AppConfig) (*AppState, error) {
 	googleIndex := services.NewGoogleIndexService(cfg, httpClient)
 	llama := services.NewLlamaService(cfg, httpClient)
 	aiSeo := services.NewAiSeoService(cfg, llama)
+	chat := services.NewChatService(rm)
+	socketHub := socket.NewHub()
 
 	st := &AppState{
 		Config:        cfg,
@@ -56,12 +61,14 @@ func NewAppState(cfg config.AppConfig) (*AppState, error) {
 		JWT:           jwt,
 		UserService:   us,
 		CrmService:    crm,
+		ChatService:   chat,
+		SocketHub:     socketHub,
 		HTTPClient:    httpClient,
 		GoogleIndex:   googleIndex,
 		Llama:         llama,
 		AiSeo:         aiSeo,
 		AuthHandler:   handlers.NewAuthHandler(rm, us, jwt),
-		TableHandler:  handlers.NewTableHandler(rm, us),
+		TableHandler:  handlers.NewTableHandler(rm, us, socketHub),
 		MenuHandler:   handlers.NewMenuHandler(rm),
 		RoleHandler:   handlers.NewRoleHandler(rm),
 		HomeHandler:   handlers.NewHomeHandler(rm),
@@ -73,10 +80,21 @@ func NewAppState(cfg config.AppConfig) (*AppState, error) {
 	st.SocialHandler = handlers.NewSocialHandler(cfg, httpClient, st.CrmHandler)
 	st.AiHandler = handlers.NewAiHandler(cfg, llama)
 	st.InitHandler.AutoInitDefaultData()
+
+	socketHub.Register(socket.Dependencies{
+		RM: rm, Chat: chat, Llama: llama,
+	})
+	if err := socketHub.Start(cfg.Socket.Host, cfg.Socket.Port); err != nil {
+		return nil, err
+	}
+
 	return st, nil
 }
 
 func (st *AppState) Shutdown() {
+	if st.SocketHub != nil {
+		st.SocketHub.Close()
+	}
 	if st.Llama != nil {
 		st.Llama.Shutdown()
 	}
