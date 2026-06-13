@@ -34,6 +34,8 @@ func CatchAll(st *state.AppState) http.HandlerFunc {
 			return
 		}
 
+		// admin.* browser navigates to SPA routes (e.g. GET /login); skip bare-API matching
+		// so those requests reach HandleWebPath and receive index.html (Rust/Java parity).
 		isAdminHost := strings.HasPrefix(host, "admin.")
 		isAPI := security.IsAPIRequest(uri, host) ||
 			paths.IsDirectAIPath(uri) ||

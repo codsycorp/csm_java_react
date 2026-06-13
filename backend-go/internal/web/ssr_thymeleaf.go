@@ -110,33 +110,50 @@ func fixGtagAsyncScript(html *string, gtag string) {
 	*html = (*html)[:scriptStart] + `<script async src="` + src + `"></script>` + (*html)[end:]
 }
 
+func normalizeVoidOpenTag(tag string) string {
+	tag = strings.TrimSpace(tag)
+	tag = strings.TrimSuffix(tag, ">")
+	tag = strings.TrimSpace(tag)
+	tag = strings.TrimSuffix(tag, "/")
+	return strings.TrimSpace(tag)
+}
+
 func replaceMetaContent(html *string, nameAttr, val string) {
 	replaceTagByAttr(html, "meta", `name="`+nameAttr+`"`, func(tag string) string {
-		return strings.TrimSpace(removeAttrSetContent(tag, val)) + ">"
+		return strings.TrimSpace(removeAttrSetContent(normalizeVoidOpenTag(tag), val)) + " />"
 	})
 }
 
 func replaceOGContent(html *string, property, val string) {
 	replaceTagByAttr(html, "meta", `property="`+property+`"`, func(tag string) string {
-		return strings.TrimSpace(removeAttrSetContent(tag, val)) + ">"
+		return strings.TrimSpace(removeAttrSetContent(normalizeVoidOpenTag(tag), val)) + " />"
 	})
 }
 
 func replaceLinkHref(html *string, rel, href string) {
 	replaceTagByAttr(html, "link", `rel="`+rel+`"`, func(tag string) string {
-		return strings.TrimSpace(removeAttrSetHref(tag, href)) + ">"
+		return strings.TrimSpace(removeAttrSetHref(normalizeVoidOpenTag(tag), href)) + " />"
 	})
 }
 
 func replaceTagByAttr(html *string, tagName, attrNeedle string, build func(tag string) string) {
 	lowerTag := strings.ToLower(tagName)
+	needleLower := strings.ToLower(attrNeedle)
 	searchFrom := 0
 	for {
-		pos := strings.Index(strings.ToLower((*html)[searchFrom:]), strings.ToLower(attrNeedle))
+		pos := strings.Index(strings.ToLower((*html)[searchFrom:]), needleLower)
 		if pos < 0 {
 			return
 		}
 		pos += searchFrom
+		// og:image must not match og:image:alt
+		if strings.HasPrefix(needleLower, `property="og:image"`) {
+			after := pos + len(attrNeedle)
+			if after < len(*html) && (*html)[after] == ':' {
+				searchFrom = pos + 1
+				continue
+			}
+		}
 		tagStart := strings.LastIndex(strings.ToLower((*html)[:pos]), "<"+lowerTag)
 		if tagStart < 0 {
 			searchFrom = pos + 1
@@ -146,7 +163,7 @@ func replaceTagByAttr(html *string, tagName, attrNeedle string, build func(tag s
 		if endRel < 0 {
 			return
 		}
-		end := pos + endRel
+		end := pos + endRel + 1 // consume closing >
 		tag := (*html)[tagStart:end]
 		newTag := build(tag)
 		*html = (*html)[:tagStart] + newTag + (*html)[end:]
