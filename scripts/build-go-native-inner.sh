@@ -13,7 +13,7 @@ GO_VERSION="${3:-$(awk '/^go / { print $2; exit }' "$GO_DIR/go.mod")}"
 export DEBIAN_FRONTEND=noninteractive
 
 need_apt=false
-for cmd in gcc g++ cmake make curl; do
+for cmd in gcc g++ cmake make curl wget; do
 	command -v "$cmd" >/dev/null 2>&1 || need_apt=true
 done
 if $need_apt; then
@@ -40,12 +40,23 @@ cd "$GO_DIR"
 echo "[build-native-inner] downloading modules..."
 go mod download
 
-NATIVEML="$(go list -m -f '{{.Dir}}' github.com/footprintai/go-nativeml)"
-echo "[build-native-inner] rebuilding llama.cpp in $NATIVEML ($(ldd --version 2>/dev/null | head -1 || echo linux))"
-cd "$NATIVEML"
-make build-libs-llama
+# Go module cache ($GOMODCACHE/.../go-nativeml@version) is read-only — make must
+# download llama.cpp sources and write .a libs beside the module (CI: Permission denied).
+NATIVEML_CACHE="$(go list -m -f '{{.Dir}}' github.com/footprintai/go-nativeml)"
+NATIVEML_BUILD="${NATIVEML_BUILD:-$GO_DIR/.cache/go-nativeml}"
+rm -rf "$NATIVEML_BUILD"
+mkdir -p "$(dirname "$NATIVEML_BUILD")"
+cp -a "$NATIVEML_CACHE/." "$NATIVEML_BUILD/"
+echo "[build-native-inner] rebuilding llama.cpp in $NATIVEML_BUILD ($(ldd --version 2>/dev/null | head -1 || echo linux))"
+(cd "$NATIVEML_BUILD" && make build-libs-llama)
 
 cd "$GO_DIR"
+REPLACE_ADDED=false
+if ! grep -q '^replace github.com/footprintai/go-nativeml ' go.mod 2>/dev/null; then
+	go mod edit -replace="github.com/footprintai/go-nativeml=$NATIVEML_BUILD"
+	REPLACE_ADDED=true
+fi
+
 export CGO_ENABLED=1
 export GOOS=linux
 export GOARCH=amd64
@@ -53,6 +64,10 @@ export GOARCH=amd64
 mkdir -p "$(dirname "$OUT")"
 echo "[build-native-inner] linking → $OUT"
 go build -ldflags="-s -w" -trimpath -tags llamacpp -o "$OUT" ./cmd/server
+
+if $REPLACE_ADDED; then
+	go mod edit -dropreplace=github.com/footprintai/go-nativeml
+fi
 chmod +x "$OUT"
 
 ls -lh "$OUT"

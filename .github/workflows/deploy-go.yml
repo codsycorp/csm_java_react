@@ -26,6 +26,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend-go/go.mod
+          cache-dependency-path: backend-go/go.sum
+
+      - name: Install native build deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential cmake wget
 
       - name: Build csm_go_server (in-process llama.cpp, Ubuntu 22.04 glibc)
         run: |

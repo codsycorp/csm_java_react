@@ -15,6 +15,7 @@ node_modules/
 target/
 dist/
 build/
+backend-go/.cache/
 *.jar
 *.war
 *.class
