@@ -49,10 +49,6 @@ AI_BLOCK = r"""
             proxy_set_header X-Forwarded-Port $server_port;
             proxy_set_header Authorization $http_authorization;
             proxy_set_header Cookie $http_cookie;
-            proxy_set_header csm-token $http_csm_token;
-            proxy_set_header X-CSRF-Token $http_x_csrf_token;
-            proxy_set_header X-Refresh-Token $http_x_refresh_token;
-            proxy_set_header X-Client-Id $http_x_client_id;
 
             proxy_request_buffering off;
             proxy_buffering off;
@@ -87,10 +83,6 @@ AI_BLOCK = r"""
             proxy_set_header X-Forwarded-Port $server_port;
             proxy_set_header Authorization $http_authorization;
             proxy_set_header Cookie $http_cookie;
-            proxy_set_header csm-token $http_csm_token;
-            proxy_set_header X-CSRF-Token $http_x_csrf_token;
-            proxy_set_header X-Refresh-Token $http_x_refresh_token;
-            proxy_set_header X-Client-Id $http_x_client_id;
 
             proxy_request_buffering off;
             proxy_buffering off;

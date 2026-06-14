@@ -11,7 +11,7 @@ import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
 import CsmCrmWorkspace from "#src/components/csm-crm/CsmCrmWorkspace";
 import { CsmKanbanBoard } from "#src/components/csm-kanban";
-import { generateSeoContent, csm_ai_generate_seo_content, generateSeoContentWithPrompt, generateSeoAntiAiOneShot, formatSeoPrompt, PROMPT_GENERATE_POST } from "#src/api/ai";
+import { generateSeoContent, csm_ai_generate_seo_content, generateSeoContentWithPrompt, generateSeoAntiAiOneShot, formatSeoPrompt, PROMPT_GENERATE_POST, resolveSeoPostUrl } from "#src/api/ai";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { usePreferences } from "#src/hooks";
@@ -146,7 +146,7 @@ const DYNAMIC_CODE_SEO_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 /** Gọi SEO qua request.post — cùng ky client get-table-data, không fallback URL. */
 async function runtimePostSeoGenerateContent(body: Record<string, unknown>) {
-  return request.post("ai-generate-seo-content", {
+  return request.post(resolveSeoPostUrl(), {
     json: body,
     timeout: DYNAMIC_CODE_SEO_TIMEOUT_MS,
     retry: { limit: 0 },

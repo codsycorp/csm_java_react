@@ -91,8 +91,21 @@ type GenerateSeoContentOptions = {
 	taskType?: string;
 };
 
+function resolveSeoPostUrl(): string {
+	if (import.meta.env.DEV) {
+		return "ai-generate-seo-content";
+	}
+	if (typeof window !== "undefined" && /^admin\./i.test(window.location.hostname || "")) {
+		return `${window.location.origin}/api/ai-generate-seo-content`;
+	}
+	const base = String(import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/+$/, "");
+	return /\/ai-generate-seo-content$/i.test(base)
+		? base
+		: `${base}/ai-generate-seo-content`;
+}
+
 async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiResponse<any>> {
-	return await request.post("ai-generate-seo-content", {
+	return await request.post(resolveSeoPostUrl(), {
 		json,
 		timeout: AI_REQUEST_TIMEOUT,
 		retry: { limit: 0 },
@@ -138,7 +151,7 @@ async function submitSeoContentJobAsync(
 	const startedAt = Date.now();
 	while (Date.now() - startedAt < AI_ASYNC_MAX_WAIT_MS) {
 		const statusResponse = await request
-			.post("ai-generate-seo-content", {
+			.post(resolveSeoPostUrl(), {
 				json: {
 					mode: "status",
 					jobId,

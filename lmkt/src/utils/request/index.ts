@@ -109,7 +109,9 @@ const defaultConfig: Options = {
 				}
 
 				try {
-					if (!(options as any)?.omitRefreshToken) {
+					const omitRefresh = Boolean((options as any)?.omitRefreshToken)
+						|| request.url.includes("ai-generate-seo-content");
+					if (!omitRefresh) {
 						const refreshToken = localStorage.getItem('refreshToken');
 						if (refreshToken) {
 							request.headers.set('X-Refresh-Token', refreshToken);

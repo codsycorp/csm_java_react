@@ -124,7 +124,8 @@ const defaultConfig: Options = {
 				}
 				const isRefreshTokenRequest = [`/${refreshTokenPath}`].some(url => request.url.endsWith(url));
 				const isWhiteRequest = requestWhiteList.some(url => request.url.endsWith(url));
-				const omitRefreshToken = Boolean((options as any)?.omitRefreshToken);
+				const isSeoSyncRequest = request.url.includes("ai-generate-seo-content");
+				const omitRefreshToken = Boolean((options as any)?.omitRefreshToken) || isSeoSyncRequest;
 
 				// Login: never send stale session headers.
 				if (isWhiteRequest) {
