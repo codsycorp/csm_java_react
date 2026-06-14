@@ -29,6 +29,11 @@ import i18nInstance from "i18next";
 
 import { customAntdDarkTheme, customAntdLightTheme } from "#src/styles/theme/antd/antd-theme";
 
+/** fetch gốc trước mọi proxy — dùng cho __csmRawFetch / legacy bridge pass-through. */
+const CSM_NATIVE_FETCH: typeof fetch = typeof fetch === "function"
+  ? fetch.bind(globalThis)
+  : fetch as typeof fetch;
+
 const dynamicReactRoots = new Map<string, ReactDOM.Root>();
 const LEGACY_CONTAINER_IDS = new Set(["context-auto", "dynamic-code-root"]);
 const SYSTEM_USER_TABLES = new Set(["csm_accounts", "csm_group_members"]);
@@ -163,16 +168,17 @@ function isDirectCrossOriginApiCall(rawUrl: string): boolean {
   }
 }
 
-const DYNAMIC_CODE_SEO_TIMEOUT_MS = 24 * 60 * 60 * 1000;
-
 /** Gọi SEO qua request.post — cùng ky client get-table-data, không fallback URL. */
 async function runtimePostSeoGenerateContent(body: Record<string, unknown>) {
   const apiPrefix = import.meta.env.DEV
     ? "/api"
     : String(import.meta.env.VITE_API_BASE_URL || "https://api.csmbridge.net").replace(/\/+$/, "");
+  const mode = String(body?.mode || "").toLowerCase();
+  const isLongSync = body?.async === false || mode === "sync"
+    || (mode !== "status" && mode !== "submit" && Boolean(body?.prompt));
   return request.post("ai-generate-seo-content", {
     json: body,
-    timeout: DYNAMIC_CODE_SEO_TIMEOUT_MS,
+    timeout: isLongSync ? false : undefined,
     retry: { limit: 0 },
     omitRefreshToken: true,
     ignoreLoading: true,
@@ -315,24 +321,7 @@ function createLegacyApiFetchBridge(rawFetch: typeof fetch): typeof fetch {
           }
         }
 
-        if (
-          path === "/api/ai-generate-seo-content"
-          || path === "/ai-generate-seo-content"
-        ) {
-          try {
-            const res = await runtimePostSeoGenerateContent(payload);
-            return new Response(JSON.stringify(res), {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            });
-          } catch (error: any) {
-            const status = Number(error?.response?.status || error?.status || 400);
-            return new Response(JSON.stringify({
-              success: false,
-              message: error?.message || String(error),
-            }), { status: status >= 400 ? status : 400, headers: { "Content-Type": "application/json" } });
-          }
-        }
+        // SEO sync: callCsmApiPost / XHR trực tiếp — không intercept (tránh ky 404).
       }
     }
 
@@ -379,10 +368,14 @@ function createScopedRuntime(containerId: string): ScopedRuntime {
   const rawDocument = document;
   const runtimeStore: Record<string, any> = Object.create(null);
   runtimeStore.csmDynamicCodeContainerId = containerId;
-  runtimeStore.__csmRawFetch = rawWindow.fetch.bind(rawWindow);
-  const rawWin = rawWindow as Window & { __csmRawFetch?: typeof fetch };
+  runtimeStore.__csmNativeFetch = CSM_NATIVE_FETCH;
+  runtimeStore.__csmRawFetch = CSM_NATIVE_FETCH;
+  const rawWin = rawWindow as Window & { __csmNativeFetch?: typeof fetch; __csmRawFetch?: typeof fetch };
+  if (typeof rawWin.__csmNativeFetch !== "function") {
+    rawWin.__csmNativeFetch = CSM_NATIVE_FETCH;
+  }
   if (typeof rawWin.__csmRawFetch !== "function") {
-    rawWin.__csmRawFetch = runtimeStore.__csmRawFetch;
+    rawWin.__csmRawFetch = CSM_NATIVE_FETCH;
   }
   const timerRefs = {
     intervals: new Set<number>(),
@@ -451,7 +444,7 @@ function createScopedRuntime(containerId: string): ScopedRuntime {
       }
       if (prop === "fetch") {
         if (!runtimeStore.__legacyApiFetchBridge) {
-          runtimeStore.__legacyApiFetchBridge = createLegacyApiFetchBridge(target.fetch.bind(target));
+          runtimeStore.__legacyApiFetchBridge = createLegacyApiFetchBridge(CSM_NATIVE_FETCH);
         }
         return runtimeStore.__legacyApiFetchBridge;
       }

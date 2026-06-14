@@ -4610,23 +4610,25 @@ function buildApiHeaders(ctx = {}, opts = {}) {
   return headers;
 }
 
-/** Cross-origin api.* chỉ gửi header được CORS allow — tránh preflight fail. */
+/** Cross-origin api.* — header tối thiểu (không X-Refresh-Token / X-CSRF — tránh nginx 404). */
 function buildSeoFetchHeaders(ctx = {}, url = "") {
-  const headers = buildApiHeaders(ctx);
+  const full = buildApiHeaders(ctx, { omitRefreshToken: true });
   try {
     if (typeof window !== "undefined" && url) {
       const target = new URL(url, window.location.href);
       if (target.origin !== window.location.origin) {
         const minimal = {
-          Accept: headers.Accept,
-          "Content-Type": headers["Content-Type"],
+          Accept: full.Accept,
+          "Content-Type": full["Content-Type"],
         };
-        if (headers["csm-token"]) minimal["csm-token"] = headers["csm-token"];
+        if (full["csm-token"]) minimal["csm-token"] = full["csm-token"];
+        if (full["csm-lang"]) minimal["csm-lang"] = full["csm-lang"];
+        if (full["X-Client-Id"]) minimal["X-Client-Id"] = full["X-Client-Id"];
         return minimal;
       }
     }
   } catch (_e) { /* keep full headers */ }
-  return headers;
+  return full;
 }
 
 const backendGuardState = {
@@ -9215,9 +9217,12 @@ function resolveAiLocalApiBase(ctx) {
 /** fetch gốc — bỏ qua legacy bridge (tránh SEO loop qua window.csmAI / ky 404). */
 function resolveCsmRawFetch() {
   const w = typeof window !== "undefined" ? window : null;
-  const pickRaw = (win) => (
-    win && typeof win.__csmRawFetch === "function" ? win.__csmRawFetch.bind(win) : null
-  );
+  const pickRaw = (win) => {
+    if (!win) return null;
+    if (typeof win.__csmNativeFetch === "function") return win.__csmNativeFetch.bind(win);
+    if (typeof win.__csmRawFetch === "function") return win.__csmRawFetch.bind(win);
+    return null;
+  };
   const fromScoped = pickRaw(w);
   if (fromScoped) return fromScoped;
   try {
@@ -9225,10 +9230,41 @@ function resolveCsmRawFetch() {
     if (fromTop) return fromTop;
   } catch (_e) { /* cross-origin frame */ }
   if (typeof fetch === "function") {
-    console.warn("[callCsmApiPost] __csmRawFetch missing — dùng window.fetch (có thể qua legacy bridge)");
+    console.warn("[callCsmApiPost] __csmNativeFetch missing — dùng window.fetch (có thể qua legacy bridge)");
     return fetch.bind(w || (typeof globalThis !== "undefined" ? globalThis : {}));
   }
   return fetch;
+}
+
+/** POST qua XHR — không bị fetch bridge intercept (SEO sync). */
+function postCsmApiViaXhr(url, headers, payload, signal) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url, true);
+    xhr.withCredentials = true;
+    Object.keys(headers || {}).forEach((key) => {
+      try {
+        xhr.setRequestHeader(key, String(headers[key]));
+      } catch (_e) { /* skip forbidden header */ }
+    });
+    if (signal) {
+      if (signal.aborted) {
+        reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
+        return;
+      }
+      signal.addEventListener("abort", () => xhr.abort());
+    }
+    xhr.onload = () => {
+      resolve({
+        ok: xhr.status >= 200 && xhr.status < 300,
+        status: xhr.status,
+        text: async () => xhr.responseText || "",
+      });
+    };
+    xhr.onerror = () => reject(new Error(`Network error — ${url}`));
+    xhr.onabort = () => reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
+    xhr.send(JSON.stringify(payload));
+  });
 }
 
 /**
@@ -9242,25 +9278,35 @@ async function callCsmApiPost(ctx, path, body = {}, options = {}) {
   }
   const cleanPath = String(path || "").startsWith("/") ? String(path) : `/${path || ""}`;
   const url = `${apiBase.replace(/\/+$/, "")}${cleanPath}`;
+  const isSeoPost = /\/ai-generate-seo-content$/i.test(cleanPath);
   const payload = { ...(body || {}) };
   if (payload.where != null && payload.e_where == null) {
     payload.e_where = payload.where;
     delete payload.where;
   }
-  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000;
-  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const noTimeout = options.noTimeout === true || Number(options.timeoutMs) === 0;
+  const timeoutMs = noTimeout
+    ? 0
+    : (Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000);
+  const controller = !noTimeout && typeof AbortController !== "undefined" ? new AbortController() : null;
   let timeoutId = null;
-  if (controller) {
+  if (controller && timeoutMs > 0) {
     timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   }
+  const headers = isSeoPost
+    ? buildSeoFetchHeaders(safeCtx, url)
+    : buildApiHeaders(safeCtx, { omitRefreshToken: Boolean(options.omitRefreshToken) });
   try {
-    const response = await resolveCsmRawFetch()(url, {
-      method: "POST",
-      headers: buildApiHeaders(safeCtx, { omitRefreshToken: Boolean(options.omitRefreshToken) }),
-      credentials: "include",
-      body: JSON.stringify(payload),
-      signal: controller ? controller.signal : undefined,
-    });
+    const transport = isSeoPost && typeof XMLHttpRequest !== "undefined"
+      ? postCsmApiViaXhr(url, headers, payload, controller ? controller.signal : undefined)
+      : resolveCsmRawFetch()(url, {
+        method: "POST",
+        headers,
+        credentials: "include",
+        body: JSON.stringify(payload),
+        signal: controller ? controller.signal : undefined,
+      });
+    const response = await transport;
     const text = await response.text();
     let data = {};
     try {
@@ -9272,7 +9318,10 @@ async function callCsmApiPost(ctx, path, body = {}, options = {}) {
       const authHint = response.status === 401
         ? " — đăng nhập lại admin (csm-token / refreshToken cookie)"
         : "";
-      throw new Error((data?.message || text || `HTTP ${response.status}`) + authHint);
+      const nginxHint = isSeoPost && isNginxNotFoundHtml(text)
+        ? " — nginx 404 (deploy nginx location /ai-generate-seo-content)"
+        : "";
+      throw new Error((data?.message || text || `HTTP ${response.status}`) + authHint + nginxHint);
     }
     return data;
   } catch (err) {
@@ -9414,11 +9463,10 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
   } else {
     body.prompt = prompt;
   }
-  const SEO_SYNC_TIMEOUT_MS = 24 * 60 * 60 * 1000;
   const url = resolveSeoApiEndpoint(safeCtx);
-  console.log("[SEO] via callCsmApiPost (same as get-table-data) →", url);
+  console.log("[SEO] via XHR callCsmApiPost (no client timeout) →", url);
   const data = await callCsmApiPost(safeCtx, "/ai-generate-seo-content", body, {
-    timeoutMs: SEO_SYNC_TIMEOUT_MS,
+    noTimeout: true,
     omitRefreshToken: true,
   });
   if (data && (data.success === false || data.code === -1)) {
@@ -9433,7 +9481,7 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
 /**
  * Luồng SEO thống nhất — POST /ai-generate-seo-content → backend Go AI local (llama.cpp in-process).
  * Server: AI_LOCAL_LLAMA_BATCH_SIZE>=512, PRELOAD_ON_STARTUP=true (config.local-8gb.env).
- * Không dùng /ai-code-stream — sync JSON, timeout 24h, không SSE.
+ * Không dùng /ai-code-stream — sync JSON, không timeout client, không SSE.
  *
  * opts.prompt          — prompt đầy đủ (ưu tiên)
  * opts.seoContext      — { industry, topic, domainKey, ... } khi one-shot backend

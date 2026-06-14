@@ -147,6 +147,20 @@ const defaultConfig: Options = {
 				const isSeoSyncRequest = request.url.includes("ai-generate-seo-content");
 				const omitRefreshToken = Boolean((options as any)?.omitRefreshToken) || isSeoSyncRequest;
 
+				// SEO sync: 1 HTTP giữ đến khi backend trả JSON — không dùng VITE_API_TIMEOUT 10s mặc định.
+				if (isSeoSyncRequest && request.method === "POST") {
+					const optionsAny = options as any;
+					const payload = optionsAny.json;
+					if (payload && typeof payload === "object") {
+						const mode = String(payload.mode || "").toLowerCase();
+						const isLongSync = payload.async === false || mode === "sync"
+							|| (mode !== "status" && mode !== "submit" && Boolean(payload.prompt));
+						if (isLongSync && optionsAny.timeout === undefined) {
+							optionsAny.timeout = false;
+						}
+					}
+				}
+
 				// Login: never send stale session headers.
 				if (isWhiteRequest) {
 					request.headers.delete("X-Refresh-Token");
