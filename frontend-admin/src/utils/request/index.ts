@@ -199,6 +199,10 @@ const defaultConfig: Options = {
 				}
 				// request error
 				   if (!response.ok) {
+					   // Long sync SEO: không refresh+retry (tránh storm / nginx 404 khi gửi kèm X-Refresh-Token).
+					   if (request.url.includes("ai-generate-seo-content")) {
+						   return response;
+					   }
 					   if (response.status === 401) {
 						   const isOnLoginPage = typeof window !== "undefined" && window.location.pathname.includes("/login");
 						   if ([`/${refreshTokenPath}`].some(url => request.url.endsWith(url))) {

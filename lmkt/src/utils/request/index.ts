@@ -99,7 +99,7 @@ const defaultConfig: Options = {
 					// For nwjs, send refreshToken from localStorage in header
 					try {
 						const refreshToken = localStorage.getItem('refreshToken');
-						if (refreshToken) {
+						if (refreshToken && !(options as any)?.omitRefreshToken) {
 							request.headers.set('X-Refresh-Token', refreshToken);
 							console.log('[NWJS] Sending refreshToken in header');
 						}
@@ -109,9 +109,13 @@ const defaultConfig: Options = {
 				}
 
 				try {
-					const refreshToken = localStorage.getItem('refreshToken');
-					if (refreshToken) {
-						request.headers.set('X-Refresh-Token', refreshToken);
+					if (!(options as any)?.omitRefreshToken) {
+						const refreshToken = localStorage.getItem('refreshToken');
+						if (refreshToken) {
+							request.headers.set('X-Refresh-Token', refreshToken);
+						}
+					} else {
+						request.headers.delete('X-Refresh-Token');
 					}
 				} catch (e) {
 					// ignore

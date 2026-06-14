@@ -96,7 +96,9 @@ async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiRes
 		json,
 		timeout: AI_REQUEST_TIMEOUT,
 		retry: { limit: 0 },
-	}).json<ApiResponse<any>>();
+		omitRefreshToken: true,
+		ignoreLoading: true,
+	} as any).json<ApiResponse<any>>();
 }
 
 async function generateSeoContentWithPromptAsync(prompt: string, options?: GenerateSeoContentOptions): Promise<ApiResponse<any>> {
@@ -143,7 +145,9 @@ async function submitSeoContentJobAsync(
 				},
 				timeout: AI_REQUEST_TIMEOUT,
 				retry: { limit: 0 },
-			})
+				omitRefreshToken: true,
+				ignoreLoading: true,
+			} as any)
 			.json<ApiResponse<any>>();
 
 		const statusPayload = (statusResponse?.result || (statusResponse as any)?.data || {}) as Record<string, any>;

@@ -110,12 +110,14 @@ function resolveAiOptions(options?: GenerateSeoContentOptions): GenerateSeoConte
 }
 
 async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiResponse<any>> {
-	// Cùng pattern get-table-data: request.post + prefixUrl, không fallback URL lạ.
+	// Sync SEO giữ 1 HTTP rất lâu — chỉ cần csm-token; không gửi X-Refresh-Token (tránh nginx 404 lặp lại).
 	return await request.post("ai-generate-seo-content", {
 		json,
 		timeout: AI_REQUEST_TIMEOUT,
 		retry: { limit: 0 },
-	}).json<ApiResponse<any>>();
+		omitRefreshToken: true,
+		ignoreLoading: true,
+	} as any).json<ApiResponse<any>>();
 }
 
 async function generateSeoContentWithPromptAsync(prompt: string, options?: GenerateSeoContentOptions): Promise<ApiResponse<any>> {
@@ -163,7 +165,10 @@ async function submitSeoContentJobAsync(
 					jobId,
 				},
 				timeout: AI_REQUEST_TIMEOUT,
-			})
+				retry: { limit: 0 },
+				omitRefreshToken: true,
+				ignoreLoading: true,
+			} as any)
 			.json<ApiResponse<any>>();
 
 		const statusPayload = (statusResponse?.result || (statusResponse as any)?.data || {}) as Record<string, any>;

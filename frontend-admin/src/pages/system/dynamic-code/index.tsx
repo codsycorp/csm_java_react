@@ -150,7 +150,9 @@ async function runtimePostSeoGenerateContent(body: Record<string, unknown>) {
     json: body,
     timeout: DYNAMIC_CODE_SEO_TIMEOUT_MS,
     retry: { limit: 0 },
-  }).json<any>();
+    omitRefreshToken: true,
+    ignoreLoading: true,
+  } as any).json<any>();
 }
 
 async function runtimeGenerateSeoContentWithPrompt(
