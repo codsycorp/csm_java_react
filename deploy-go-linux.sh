@@ -6,52 +6,66 @@
 # Usage:
 #   ./deploy-go-linux.sh root@your-server
 #   ./deploy-go-linux.sh root@your-server /root/la_server
+#
+#   REMOTE_BUILD=/root/csm_server ./deploy-go-linux.sh root@host /root/la_server
+#     REMOTE_BUILD = git clone + build (mặc định /root/csm_server)
+#     SERVER_PATH  = data + binary runtime (mặc định /root/la_server)
 set -euo pipefail
 
 SERVER="${1:-${DEPLOY_SERVER:-}}"
 SERVER_PATH="${2:-${DEPLOY_PATH:-/root/la_server}}"
+REMOTE_BUILD="${REMOTE_BUILD:-/root/csm_server}"
 
 if [ -z "$SERVER" ]; then
-    echo "Usage: $0 user@server-ip [/path/on/server]"
-    exit 1
+	echo "Usage: $0 user@server-ip [/path/on/server]"
+	exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$SCRIPT_DIR"
 
-echo "=== CSM Go Deploy (native llama) → $SERVER:$SERVER_PATH ==="
+echo "=== CSM Go Deploy (native llama) → $SERVER ==="
+echo "    runtime : $SERVER_PATH"
+echo "    build   : $REMOTE_BUILD"
 
 echo ""
-echo "▶ [1/4] Sync config..."
-ssh "$SERVER" "mkdir -p '$SERVER_PATH'"
-scp "$REPO_ROOT/config.env" "$SERVER:$SERVER_PATH/config.env"
+echo "▶ [1/4] Sync config (nếu có local config.env)..."
+ssh "$SERVER" "mkdir -p '$SERVER_PATH' '$REMOTE_BUILD'"
+if [ -f "$REPO_ROOT/config.env" ]; then
+	scp "$REPO_ROOT/config.env" "$SERVER:$SERVER_PATH/config.env"
+	echo "    uploaded config.env → $SERVER_PATH"
+else
+	echo "    skip config.env (không có local file — giữ config trên server)"
+fi
 if [ -f "$REPO_ROOT/config.local-8gb.env" ]; then
-    scp "$REPO_ROOT/config.local-8gb.env" "$SERVER:$SERVER_PATH/config.local-8gb.env"
+	scp "$REPO_ROOT/config.local-8gb.env" "$SERVER:$SERVER_PATH/config.local-8gb.env"
 fi
 
 echo ""
-echo "▶ [2/4] Pull / sync source on server..."
-ssh "$SERVER" bash -s "$SERVER_PATH" "$REPO_ROOT" <<'SYNC'
+echo "▶ [2/4] Pull source on server ($REMOTE_BUILD)..."
+ssh "$SERVER" bash -s "$REMOTE_BUILD" <<'SYNC'
 set -e
 P="$1"
-SRC="$2"
 if [ -d "$P/.git" ]; then
-    cd "$P" && git fetch origin && git reset --hard origin/main
+	cd "$P" && git fetch origin && git reset --hard origin/main
 else
-    mkdir -p "$(dirname "$P")"
-    git clone https://github.com/codsycorp/csm_java_react.git "$P"
+	mkdir -p "$(dirname "$P")"
+	git clone https://github.com/codsycorp/csm_java_react.git "$P"
 fi
 echo "Code: $(git -C "$P" log --oneline -1)"
 SYNC
 
 echo ""
-echo "▶ [3/4] Build on server (CGO + llamacpp, rebuild libs for glibc 2.35 / Ubuntu 22.04)..."
-ssh "$SERVER" bash -s "$SERVER_PATH" <<'BUILD'
+echo "▶ [3/4] Build on server (CGO + llamacpp, Ubuntu 22.04 glibc)..."
+ssh "$SERVER" bash -s "$REMOTE_BUILD" "$SERVER_PATH" <<'BUILD'
 set -e
-P="$1"
-cd "$P"
-chmod +x scripts/build-go-native-inner.sh
-./scripts/build-go-native-inner.sh "$P/backend-go" "$P/csm_go_server"
+BUILD="$1"
+RUNTIME="$2"
+apt-get update -qq
+apt-get install -y -qq build-essential cmake wget curl ca-certificates git >/dev/null
+cd "$BUILD"
+chmod +x scripts/build-go-native-inner.sh scripts/build-go-linux-native.sh
+./scripts/build-go-native-inner.sh "$BUILD/backend-go" "$RUNTIME/csm_go_server"
 BUILD
 
 echo ""
@@ -62,15 +76,15 @@ P="$1"
 chmod +x "$P/csm_go_server"
 
 mkdir -p "$P/csm_datas/native/pebble" \
-         "$P/csm_datas/native/search" \
-         "$P/csm_datas/database" \
-         "$P/csm_datas/backups" \
-         "$P/csm_datas/ai_local/model"
+	"$P/csm_datas/native/search" \
+	"$P/csm_datas/database" \
+	"$P/csm_datas/backups" \
+	"$P/csm_datas/ai_local/model"
 
 cat > /etc/systemd/system/csm-go.service <<EOF
 [Unit]
 Description=CSM Go Backend (native llama.cpp)
-After=network.target
+After=network.target mysql.service
 
 [Service]
 Type=simple
@@ -96,7 +110,7 @@ Environment=AI_LOCAL_LLAMA_PRELOAD_ON_STARTUP=false
 ExecStart=$P/csm_go_server
 Restart=always
 RestartSec=5
-MemoryMax=7G
+MemoryMax=7800M
 LimitNOFILE=65536
 StandardOutput=journal
 StandardError=journal
@@ -106,6 +120,8 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
+systemctl stop csm-rust csm-java csm-llama 2>/dev/null || true
+systemctl disable csm-llama 2>/dev/null || true
 systemctl enable csm-go
 systemctl restart csm-go
 sleep 3
@@ -115,9 +131,6 @@ SERVICE
 echo ""
 echo "✅ Deploy xong (native llama in-process — không cần llama-server sidecar)."
 echo ""
-echo "Health: curl -s http://SERVER:9999/api/monitoring/health"
-echo "AI ops: curl -s http://SERVER:9999/api/ai-local/health  (provider=llama.cpp-native)"
+echo "Health: curl -s http://$SERVER:9999/api/monitoring/health"
+echo "AI ops: curl -s http://$SERVER:9999/api/ai-local/health"
 echo "Log   : ssh $SERVER 'journalctl -u csm-go -f'"
-echo ""
-echo "Dừng backend cũ nếu cùng port 9999:"
-echo "  ssh $SERVER 'systemctl stop csm-rust || true'"

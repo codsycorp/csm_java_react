@@ -94,6 +94,8 @@ func UserAccessFromAuth(auth *AuthUser, rm *data.RecordManager) *UserAccessConte
 	dataAppIDs := auth.DataAppIDs
 	if isSubUser {
 		dataAppIDs = nil
+	} else {
+		dataAppIDs = util.ExcludeMenuAppFromDataAppIDs(dataAppIDs, appID)
 	}
 
 	parentCandidates := collectParentAccountCandidates(auth)

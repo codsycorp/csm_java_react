@@ -769,6 +769,8 @@ export async function getTableData<T>(params: {
 	return promise;
 }
 
+const UPDATE_TABLE_TIMEOUT_MS = 120000;
+
 export async function updateTableData<T extends Record<string, any>>(params: {
 	app_id: string
 	obj_name: string
@@ -805,7 +807,13 @@ export async function updateTableData<T extends Record<string, any>>(params: {
 		}
 		try {
 			return await request
-				.post<ApiResponse<string>>("update-table-data", { json: payload, ignoreLoading: true })
+				.post<ApiResponse<string>>("update-table-data", {
+					json: payload,
+					ignoreLoading: true,
+					timeout: UPDATE_TABLE_TIMEOUT_MS,
+					// Avoid duplicate writes when dev proxy returns 502/504 while server already persisted.
+					retry: { limit: 0 },
+				})
 				.json<ApiResponse<string>>();
 		} catch (err) {
 			if (err instanceof HTTPError) {
@@ -967,7 +975,11 @@ export async function bulkUpdateTableData<T extends Record<string, any>>(params:
 	};
 
 	const res = await request
-		.post<ApiResponse<any>>("bulk-update-table-data", { json: payload, ignoreLoading: true })
+		.post<ApiResponse<any>>("bulk-update-table-data", {
+			json: payload,
+			ignoreLoading: true,
+			timeout: UPDATE_TABLE_TIMEOUT_MS,
+		})
 		.json<ApiResponse<any>>();
 
 	clearGetTableDataCache();

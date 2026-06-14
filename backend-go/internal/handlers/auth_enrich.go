@@ -44,6 +44,8 @@ func userInfoMapFromUser(user *model.User) map[string]any {
 	}
 	if len(user.DataAppIDs) > 0 {
 		info["data_app_ids"] = append([]string{}, user.DataAppIDs...)
+	} else {
+		info["data_app_ids"] = []string{}
 	}
 	if user.Dev != nil {
 		info["dev"] = *user.Dev

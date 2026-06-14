@@ -360,7 +360,8 @@ func (rm *RecordManager) tryFindByPKVariants(appID, tableName string, filter mod
 				probe[pk] = ""
 			}
 		}
-		if rec := rm.FindByCustomPK(appID, tableName, probe, fields); len(rec) > 0 && filter.Matches(rec) {
+		rec := rm.FindByCustomPK(appID, tableName, probe, fields)
+		if len(rec) > 0 && pkProbeMatchesFilter(rec, filter, eq, fields) {
 			return rec
 		}
 		return nil
@@ -386,10 +387,35 @@ func (rm *RecordManager) tryFindByPKVariants(appID, tableName string, filter mod
 	return nil
 }
 
+// ExtractEqConditions collects eq field→value pairs from a filter tree.
+func ExtractEqConditions(filter model.SearchFilter) map[string]any {
+	return extractEqConditions(filter)
+}
+
 func extractEqConditions(filter model.SearchFilter) map[string]any {
 	out := make(map[string]any)
 	extractEqConditionsInto(filter, out)
 	return out
+}
+
+// pkProbeMatchesFilter accepts a PK hit even when extra AND conditions (e.g. stale id) do not match.
+func pkProbeMatchesFilter(record map[string]any, filter model.SearchFilter, eq map[string]any, pkFields []string) bool {
+	if filter.Matches(record) {
+		return true
+	}
+	if len(pkFields) == 0 {
+		return false
+	}
+	for _, pk := range pkFields {
+		ev, ok := eq[pk]
+		if !ok {
+			continue
+		}
+		if !model.ValuesEqual(record[pk], ev) {
+			return false
+		}
+	}
+	return true
 }
 
 func extractEqConditionsInto(filter model.SearchFilter, out map[string]any) {

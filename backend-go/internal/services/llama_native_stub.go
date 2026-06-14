@@ -30,6 +30,8 @@ func (n *llamaNativeBackend) stream(_ string, _ uint32, _ func(string) error) er
 
 func (n *llamaNativeBackend) shutdown() {}
 
+func (n *llamaNativeBackend) isLoaded() bool { return false }
+
 func (n *llamaNativeBackend) providerLabel() string {
 	return ""
 }

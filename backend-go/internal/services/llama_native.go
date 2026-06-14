@@ -100,6 +100,12 @@ func (n *llamaNativeBackend) ensureLoadedLocked() error {
 	return nil
 }
 
+func (n *llamaNativeBackend) isLoaded() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.loaded
+}
+
 func (n *llamaNativeBackend) complete(prompt string, maxTokens uint32) (string, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()

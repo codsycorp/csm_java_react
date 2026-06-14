@@ -139,6 +139,9 @@ async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiRes
 		timeout: AI_REQUEST_TIMEOUT,
 		retry: { limit: 0 },
 	};
+	const postUrl = (url: string) =>
+		ky.post(url, { ...requestOptions, credentials: "include" }).json<ApiResponse<any>>();
+
 	try {
 		return await request.post("ai-generate-seo-content", requestOptions).json<ApiResponse<any>>();
 	} catch (err: unknown) {
@@ -147,7 +150,7 @@ async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiRes
 		let lastErr: unknown = err;
 		for (const url of resolveSeoDirectPostUrls()) {
 			try {
-				return await ky.post(url, { ...requestOptions, credentials: "include" }).json<ApiResponse<any>>();
+				return await postUrl(url);
 			} catch (fallbackErr) {
 				lastErr = fallbackErr;
 				if (!(fallbackErr instanceof HTTPError) || fallbackErr.response.status !== 404) {
@@ -390,6 +393,8 @@ export async function generateSeoContentWithPrompt(prompt: string, options?: Gen
 
 		return await postSeoGenerateContent({
 			...requestBody,
+			mode: "sync",
+			async: false,
 			taskType: resolvedOptions.taskType || "seo_content",
 			menuDesignByDev: resolvedOptions.menuDesignByDev,
 		});

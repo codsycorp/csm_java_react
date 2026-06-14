@@ -990,9 +990,15 @@ async function fetchTableRowsForDomainKey({
   domainKey,
   scopeServiceType = "",
   api,
+  ctx,
+  domainVariants = "canonical",
   onBatch
 }) {
-  const domainValues = domainQueryValuesForKey(domainKey);
+  const allDomainValues = domainQueryValuesForKey(domainKey);
+  const canonical = canonicalDomainForKey(domainKey);
+  const domainValues = domainVariants === "all"
+    ? allDomainValues
+    : [canonical];
   const seen = new Set();
   const merged = [];
 
@@ -1012,6 +1018,7 @@ async function fetchTableRowsForDomainKey({
       objName,
       where,
       api,
+      ctx,
       onBatch: (p) => onBatch && onBatch({ domainValue, objName, ...p })
     });
 
@@ -1151,8 +1158,8 @@ function extractTableCursor(res) {
  * Tải toàn bộ bản ghi khớp where (mặc định một request, không giới hạn 200).
  * Chỉ phân trang khi response truncated hoặc khi truyền pageSize (tối đa 1000/trang).
  */
-async function fetchAllTableRowsPaginated({ appId, objName, where, pageSize, onBatch, api }) {
-  const tableApi = api || window.csmApi;
+async function fetchAllTableRowsPaginated({ appId, objName, where, pageSize, onBatch, api, ctx }) {
+  const tableApi = api || resolveTableApi(ctx || resolveContext());
   if (!tableApi?.getTableData) {
     throw new Error("getTableData không khả dụng");
   }
@@ -1233,6 +1240,8 @@ async function scanDomainMigrationInventory(domainKey, options = {}) {
     domainKey,
     scopeServiceType,
     api: ctx.helperApi || window.csmApi,
+    ctx,
+    domainVariants: "all",
     onBatch
   };
 
@@ -1704,6 +1713,8 @@ async function fetchActiveArticlesForDomainKey(domainKey, ctx = {}, options = {}
     domainKey,
     scopeServiceType: options.scopeServiceType || "",
     api,
+    ctx,
+    domainVariants: options.domainVariants || "canonical",
     onBatch: options.onBatch
   });
   return rows.filter((row) => articleBelongsToDomainKey(row, domainKey));
@@ -4472,6 +4483,23 @@ function normalizeCsmApiBase(raw) {
   }
 }
 
+function resolveDefaultApiBaseUrl(win, domain) {
+  const hostname = String(win?.location?.hostname || "").toLowerCase();
+  if (!hostname) return "";
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return `${win.location.origin}/api`;
+  }
+  if (hostname.startsWith("api.")) {
+    return `${win.location.protocol}//${win.location.host}`;
+  }
+  // Admin SPA — API trên api.* (cùng VITE_API_BASE_URL / ky prefixUrl frontend-admin).
+  if (hostname.startsWith("admin.")) {
+    const bare = String(domain || "csmbridge.net").replace(/^www\./i, "").split(",")[0].trim();
+    return bare ? `https://api.${bare}` : "";
+  }
+  return win.location?.origin ? `${win.location.origin}/api` : "";
+}
+
 function resolveContext(seftObj) {
   const win = typeof window !== 'undefined' ? window : {};
   const seft = seftObj || win.seft || {};
@@ -4482,7 +4510,7 @@ function resolveContext(seftObj) {
 
   const rawApiBase = seft.domain_api_url
     || win.domain_api_url
-    || (win.location?.origin ? `${win.location.origin}/api` : "");
+    || resolveDefaultApiBaseUrl(win, domain);
   const apiBase = normalizeCsmApiBase(rawApiBase);
 
   const token = resolveAuthToken(seft);
@@ -4577,6 +4605,25 @@ function buildApiHeaders(ctx = {}) {
   if (clientId) {
     headers["X-Client-Id"] = clientId;
   }
+  return headers;
+}
+
+/** Cross-origin api.* chỉ gửi header được CORS allow — tránh preflight fail. */
+function buildSeoFetchHeaders(ctx = {}, url = "") {
+  const headers = buildApiHeaders(ctx);
+  try {
+    if (typeof window !== "undefined" && url) {
+      const target = new URL(url, window.location.href);
+      if (target.origin !== window.location.origin) {
+        const minimal = {
+          Accept: headers.Accept,
+          "Content-Type": headers["Content-Type"],
+        };
+        if (headers["csm-token"]) minimal["csm-token"] = headers["csm-token"];
+        return minimal;
+      }
+    }
+  } catch (_e) { /* keep full headers */ }
   return headers;
 }
 
@@ -5408,6 +5455,8 @@ async function syncServiceDefinitionsFromServer(force = false) {
     
     console.log('🔄 [syncServiceDefs] Đang sync từ server (với LIMIT)...');
     let totalSynced = 0;
+    const ctx = resolveContext();
+    const syncApps = resolveSyncAppIds(ctx);
 
     // Helper: so sánh boolean kể cả khi DB trả về string "true"/"false"
     const isTruthy = (val) => val === true || val === 'true' || val === 1 || val === '1';
@@ -5415,16 +5464,20 @@ async function syncServiceDefinitionsFromServer(force = false) {
     const queryWhere = tableWhereActive();
 
     // ===== 1️⃣ Sync LMKT Projects =====
-    const lmktRowsRaw = await fetchAllTableRowsPaginated({
-      appId: "lmkt",
-      objName: "web_services",
-      where: queryWhere
-    }).catch((err) => {
-      console.error('❌ [syncServiceDefs] LMKT fetch error:', err);
-      return [];
-    });
+    let lmktRows = [];
+    if (syncApps.includes("lmkt")) {
+      const lmktRowsRaw = await fetchAllTableRowsPaginated({
+        appId: "lmkt",
+        objName: "web_services",
+        where: queryWhere,
+        ctx
+      }).catch((err) => {
+        console.warn('⚠️ [syncServiceDefs] LMKT fetch skipped:', err?.message || err);
+        return [];
+      });
+      lmktRows = lmktRowsRaw.filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
+    }
 
-    const lmktRows = lmktRowsRaw.filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
     if (Array.isArray(lmktRows) && lmktRows.length > 0) {
       // Merge vào LMKT_PROJECT_DEFS (giữ lại items cũ, thêm mới)
       const existingSlugs = new Set(LMKT_PROJECT_DEFS.map(p => p.service_code));
@@ -5480,16 +5533,19 @@ async function syncServiceDefinitionsFromServer(force = false) {
     }
     
     // ===== 2️⃣ Sync Phanmemmottrieu Service Types =====
-    const pmtRowsRaw = await fetchAllTableRowsPaginated({
-      appId: "wuweb",
-      objName: "web_services",
-      where: queryWhere
-    }).catch((err) => {
-      console.error('❌ [syncServiceDefs] PMT fetch error:', err);
-      return [];
-    });
-
-    const pmtRows = pmtRowsRaw.filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
+    let pmtRows = [];
+    if (syncApps.includes("wuweb")) {
+      const pmtRowsRaw = await fetchAllTableRowsPaginated({
+        appId: "wuweb",
+        objName: "web_services",
+        where: queryWhere,
+        ctx
+      }).catch((err) => {
+        console.warn('⚠️ [syncServiceDefs] PMT fetch skipped:', err?.message || err);
+        return [];
+      });
+      pmtRows = pmtRowsRaw.filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
+    }
     let pmtSynced = 0;
     
     if (Array.isArray(pmtRows) && pmtRows.length > 0) {
@@ -9146,10 +9202,115 @@ function aiLaneTesterNotify(message, type = "info") {
 function resolveAiLocalApiBase(ctx) {
   const fromCtx = normalizeCsmApiBase(ctx?.apiBase || "");
   if (fromCtx) return fromCtx;
-  if (typeof window !== "undefined" && window.location?.origin) {
-    return normalizeCsmApiBase(`${window.location.origin}/api`);
+  const win = typeof window !== "undefined" ? window : null;
+  if (win) {
+    const fromDefault = normalizeCsmApiBase(resolveDefaultApiBaseUrl(win, ctx?.domain));
+    if (fromDefault) return fromDefault;
   }
   return "";
+}
+
+/** fetch gốc — bỏ qua legacy bridge (tránh SEO loop qua window.csmAI). */
+function resolveCsmRawFetch() {
+  const w = typeof window !== "undefined" ? window : null;
+  if (w && typeof w.__csmRawFetch === "function") {
+    return w.__csmRawFetch.bind(w);
+  }
+  if (typeof fetch === "function") {
+    return fetch.bind(w || (typeof globalThis !== "undefined" ? globalThis : {}));
+  }
+  return fetch;
+}
+
+/**
+ * POST CSM API — cùng contract ky/CsmApi: apiBase + /get-table-data, body dùng e_where.
+ */
+async function callCsmApiPost(ctx, path, body = {}, options = {}) {
+  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
+  const apiBase = resolveAiLocalApiBase(safeCtx);
+  if (!apiBase) {
+    throw new Error("Thiếu apiBase — không gọi được CSM API");
+  }
+  const cleanPath = String(path || "").startsWith("/") ? String(path) : `/${path || ""}`;
+  const url = `${apiBase.replace(/\/+$/, "")}${cleanPath}`;
+  const payload = { ...(body || {}) };
+  if (payload.where != null && payload.e_where == null) {
+    payload.e_where = payload.where;
+    delete payload.where;
+  }
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000;
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  let timeoutId = null;
+  if (controller) {
+    timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  }
+  try {
+    const response = await resolveCsmRawFetch()(url, {
+      method: "POST",
+      headers: buildApiHeaders(safeCtx),
+      credentials: "include",
+      body: JSON.stringify(payload),
+      signal: controller ? controller.signal : undefined,
+    });
+    const text = await response.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (_e) {
+      data = { raw: text };
+    }
+    if (!response.ok) {
+      const authHint = response.status === 401
+        ? " — đăng nhập lại admin (csm-token / refreshToken cookie)"
+        : "";
+      throw new Error((data?.message || text || `HTTP ${response.status}`) + authHint);
+    }
+    return data;
+  } catch (err) {
+    if (err && err.name === "AbortError") {
+      throw new Error(`API timeout sau ${Math.round(timeoutMs / 60000)} phút — ${cleanPath}`);
+    }
+    throw err;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+/** window.csmApi nếu có; fallback callCsmApiPost (dev/LMKT khi chưa inject bridge). */
+function resolveTableApi(ctx) {
+  const safeCtx = ctx || resolveContext();
+  const injected = safeCtx.helperApi?.getTableData
+    ? safeCtx.helperApi
+    : (typeof window !== "undefined" && window.csmApi?.getTableData ? window.csmApi : null);
+  if (injected?.getTableData) {
+    return injected;
+  }
+  return {
+    getTableData: (params) => callCsmApiPost(safeCtx, "/get-table-data", {
+      app_id: params.app_id,
+      obj_name: params.obj_name,
+      e_where: normalizeTableWhere(params.where || params.e_where),
+      ...(params.take ? { take: params.take } : {}),
+      ...(params.lastkey ? { lastkey: params.lastkey } : {}),
+      ...(params.only_my_subusers ? { only_my_subusers: true } : {}),
+    }),
+  };
+}
+
+function resolveSyncAppIds(ctx) {
+  const gs = typeof getGlobalSettings === "function" ? getGlobalSettings() : {};
+  const domainKey = gs.domainKey || resolveDomainKeyFromValue((ctx || resolveContext()).domain) || "lmkt";
+  const seft = (ctx || resolveContext()).seftObj || (typeof window !== "undefined" ? window.seft : {}) || {};
+  const isDev = Boolean(seft.Uinfos?.dev || seft.user?.dev);
+  const apps = new Set();
+  if (domainKey === "lmkt") apps.add("lmkt");
+  if (domainKey === "phanmemmottrieu") apps.add("wuweb");
+  if (isDev) {
+    apps.add("lmkt");
+    apps.add("wuweb");
+  }
+  if (!apps.size) apps.add(domainKey === "lmkt" ? "lmkt" : "wuweb");
+  return [...apps];
 }
 
 function resolvePrimaryDomain(ctx) {
@@ -9157,13 +9318,14 @@ function resolvePrimaryDomain(ctx) {
   return domain.replace(/^www\./i, "");
 }
 
-/** URL SEO sync — luôn api.* host (giống fetch DevTools: api.csmbridge.net/ai-generate-seo-content). */
+/** URL SEO sync — luôn api.* host (giống ky: VITE_API_BASE_URL + ai-generate-seo-content). */
 function resolveSeoApiEndpoint(ctx) {
-  const seft = ctx?.seftObj || (typeof window !== "undefined" ? window.seft : {}) || {};
+  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
+  const seft = safeCtx?.seftObj || (typeof window !== "undefined" ? window.seft : {}) || {};
   const candidates = [
     seft.domain_api_url,
     typeof window !== "undefined" ? window.domain_api_url : "",
-    ctx?.apiBase,
+    safeCtx?.apiBase,
   ];
   for (let i = 0; i < candidates.length; i += 1) {
     const base = normalizeCsmApiBase(String(candidates[i] || "").trim());
@@ -9171,12 +9333,13 @@ function resolveSeoApiEndpoint(ctx) {
       return `${base.replace(/\/+$/, "")}/ai-generate-seo-content`;
     }
   }
-  return `https://api.${resolvePrimaryDomain(ctx)}/ai-generate-seo-content`;
+  return `https://api.${resolvePrimaryDomain(safeCtx)}/ai-generate-seo-content`;
 }
 
 function resolveSeoApiEndpointCandidates(ctx) {
-  const primary = resolveSeoApiEndpoint(ctx);
-  const domain = resolvePrimaryDomain(ctx);
+  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
+  const primary = resolveSeoApiEndpoint(safeCtx);
+  const domain = resolvePrimaryDomain(safeCtx);
   const urls = new Set([
     primary,
     primary.includes("/api/ai-generate-seo-content")
@@ -9184,9 +9347,8 @@ function resolveSeoApiEndpointCandidates(ctx) {
       : primary.replace("/ai-generate-seo-content", "/api/ai-generate-seo-content"),
     `https://api.${domain}/ai-generate-seo-content`,
     `https://api.${domain}/api/ai-generate-seo-content`,
-    `https://admin.${domain}/api/ai-generate-seo-content`,
   ]);
-  return [...urls].filter(Boolean);
+  return [...urls].filter((u) => u && !/\/\/admin\./i.test(u));
 }
 
 function isNginxNotFoundHtml(text) {
@@ -9201,11 +9363,36 @@ async function callSeoPromptDirect(ctx, prompt) {
   return api;
 }
 
+/** window.csmAI — cùng ky client frontend-admin (generateSeoAntiAiOneShot / generateSeoContentWithPrompt). */
+async function tryCallSeoViaHelperAi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
+  const helperAi = ctx?.helperAi || (typeof window !== "undefined" ? window.csmAI : null);
+  if (!helperAi) return null;
+  try {
+    if (useSeoOneShot && typeof helperAi.generateSeoAntiAiOneShot === "function") {
+      const seoContext = { ...(oneShotPayload || {}) };
+      if (prompt && !seoContext.prompt) seoContext.prompt = prompt;
+      return await helperAi.generateSeoAntiAiOneShot(seoContext, { taskType: "seo_content" });
+    }
+    if (prompt && typeof helperAi.generateSeoContentWithPrompt === "function") {
+      return await helperAi.generateSeoContentWithPrompt(prompt, { taskType: "seo_content" });
+    }
+  } catch (helperErr) {
+    console.warn("[SEO] window.csmAI failed:", helperErr?.message || helperErr);
+    return {
+      success: false,
+      code: -1,
+      message: helperErr?.message || String(helperErr),
+      result: {},
+    };
+  }
+  return null;
+}
+
 /**
- * POST /ai-generate-seo-content — fetch trực tiếp (contract giống admin ky client).
- * Body: { mode:"sync", async:false, taskType:"seo_content", prompt } hoặc seoPipeline one-shot.
+ * POST /ai-generate-seo-content — chuẩn frontend-admin: window.csmAI trước, fallback fetch api.*.
  */
 async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
+  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
   const body = { mode: "sync", async: false, taskType: "seo_content" };
   if (useSeoOneShot) {
     body.seoPipeline = "anti_ai_one_shot";
@@ -9214,8 +9401,17 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
     body.prompt = prompt;
   }
 
-  const candidateUrls = resolveSeoApiEndpointCandidates(ctx);
-  const timeoutMs = 24 * 60 * 60 * 1000; // 24h — matches nginx proxy_read_timeout; llama.cpp can be slow
+  const helperResult = await tryCallSeoViaHelperAi(safeCtx, { useSeoOneShot, oneShotPayload, prompt });
+  if (helperResult != null && helperResult.success !== false && helperResult.code !== -1) {
+    console.log("[SEO] via window.csmAI (frontend-admin ky client)");
+    return helperResult;
+  }
+  if (helperResult?.message) {
+    console.warn("[SEO] window.csmAI không dùng được — fallback fetch api.*:", helperResult.message);
+  }
+
+  const candidateUrls = resolveSeoApiEndpointCandidates(safeCtx);
+  const timeoutMs = 24 * 60 * 60 * 1000;
   let lastError = null;
 
   for (let u = 0; u < candidateUrls.length; u += 1) {
@@ -9226,12 +9422,12 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
       timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     }
 
-    console.log(`[SEO] POST ${url} promptChars=${body.prompt ? body.prompt.length : 0} oneShot=${!!useSeoOneShot}`);
+    console.log(`[SEO] POST ${url} promptChars=${body.prompt ? body.prompt.length : 0} oneShot=${!!useSeoOneShot} (fetch api.*)`);
 
     try {
-      const response = await fetch(url, {
+      const response = await resolveCsmRawFetch()(url, {
         method: "POST",
-        headers: buildApiHeaders(ctx),
+        headers: buildSeoFetchHeaders(safeCtx, url),
         credentials: "include",
         body: JSON.stringify(body),
         signal: controller ? controller.signal : undefined,
@@ -9244,24 +9440,19 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
         data = { raw: text };
       }
       if (response.status === 404 || isNginxNotFoundHtml(text)) {
-        const nginx404 = isNginxNotFoundHtml(text);
-        lastError = new Error(
-          nginx404
-            ? `HTTP 404 nginx — ${url}. Thử redeploy nginx location /ai-generate-seo-content hoặc dùng admin/api fallback.`
-            : (data?.message || text || `HTTP 404 — ${url}`)
-        );
+        lastError = new Error(`HTTP 404 — ${url}`);
         continue;
       }
       if (!response.ok) {
         const authHint = response.status === 401
-          ? " — đăng nhập lại admin LMKT (csm-token / refreshToken cookie)"
+          ? " — đăng nhập lại admin (csm-token / refreshToken cookie)"
           : "";
         throw new Error((data?.message || text || `HTTP ${response.status}`) + authHint);
       }
       return data;
     } catch (fetchErr) {
       if (fetchErr && fetchErr.name === "AbortError") {
-        throw new Error(`SEO timeout sau ${Math.round(timeoutMs / 60000)} phút — thử lại hoặc rút gọn prompt`);
+        throw new Error(`SEO timeout sau ${Math.round(timeoutMs / 60000)} phút`);
       }
       if (extractHttpStatusFromError(fetchErr) === 404) {
         lastError = fetchErr;
@@ -9274,12 +9465,14 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
   }
 
   throw lastError || new Error(
-    "POST /ai-generate-seo-content không tìm thấy — kiểm tra domain_api_url trỏ api.* và redeploy backend"
+    "POST /ai-generate-seo-content không tìm thấy — kiểm tra domain_api_url trỏ api.* và redeploy backend/nginx"
   );
 }
 
 /**
- * Luồng SEO thống nhất — mọi viết bài qua POST /ai-generate-seo-content → backend AI local SEO lane.
+ * Luồng SEO thống nhất — POST /ai-generate-seo-content → backend Go AI local (llama.cpp in-process).
+ * Server: AI_LOCAL_LLAMA_BATCH_SIZE>=512, PRELOAD_ON_STARTUP=true (config.local-8gb.env).
+ * Không dùng /ai-code-stream — sync JSON, timeout 24h, không SSE.
  *
  * opts.prompt          — prompt đầy đủ (ưu tiên)
  * opts.seoContext      — { industry, topic, domainKey, ... } khi one-shot backend

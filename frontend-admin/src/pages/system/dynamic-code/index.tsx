@@ -180,10 +180,11 @@ function createLegacyApiFetchBridge(rawFetch: typeof fetch): typeof fetch {
               headers: { "Content-Type": "application/json" },
             });
           } catch (error: any) {
+            const status = Number(error?.response?.status || error?.status || 400);
             return new Response(JSON.stringify({
               success: false,
               message: error?.message || String(error),
-            }), { status: 401, headers: { "Content-Type": "application/json" } });
+            }), { status: status >= 400 ? status : 400, headers: { "Content-Type": "application/json" } });
           }
         }
 
@@ -223,6 +224,8 @@ function createLegacyApiFetchBridge(rawFetch: typeof fetch): typeof fetch {
             }), { status: 400, headers: { "Content-Type": "application/json" } });
           }
         }
+
+        // SEO: pass through to rawFetch — payload đã có mode:"sync"; tránh gọi lại window.csmAI → api.* 404 loop.
       }
     }
 
@@ -269,6 +272,7 @@ function createScopedRuntime(containerId: string): ScopedRuntime {
   const rawDocument = document;
   const runtimeStore: Record<string, any> = Object.create(null);
   runtimeStore.csmDynamicCodeContainerId = containerId;
+  runtimeStore.__csmRawFetch = rawWindow.fetch.bind(rawWindow);
   const timerRefs = {
     intervals: new Set<number>(),
     timeouts: new Set<number>(),
@@ -1802,6 +1806,8 @@ ${resolvedContainerSelector} select {
       appId: currentUserAny.app_id || user.app_id || appId || "csm",
       menuId,
       containerId: resolvedContainerId,
+      domain_api_url: String(import.meta.env.VITE_API_BASE_URL || "").trim()
+        || (import.meta.env.DEV ? "/api" : "https://api.csmbridge.net"),
       getContainer: () => document.getElementById(resolvedContainerId),
       user: currentUserAny,
       t,
@@ -2037,6 +2043,9 @@ ${resolvedContainerSelector} select {
   useEffect(() => {
     if (typeof window === "undefined") return;
     (window as any).seft = seft;
+    if (seft?.domain_api_url) {
+      (window as any).domain_api_url = seft.domain_api_url;
+    }
 
     try {
       const currentUserAny = (window as any).csmCurrentUser || user || {};

@@ -193,6 +193,11 @@ func evaluateCondition(actual any, op string, expected any) bool {
 	}
 }
 
+// ValuesEqual compares filter values with loose numeric/string equality (Java parity).
+func ValuesEqual(a, b any) bool {
+	return valuesEqual(a, b)
+}
+
 func valuesEqual(a, b any) bool {
 	if a == nil && b == nil {
 		return true

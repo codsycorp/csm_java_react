@@ -281,14 +281,15 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 	var existing []map[string]any
 	var finalObj map[string]any
 	if hasFilter || command == "update" || command == "delete" {
-		existing = h.lookupRecordsForUpdate(appID, table, filter, objUpdate)
+		existing = h.lookupRecordsForUpdate(appID, table, filter, objUpdate, pkFields, command)
 		if access != nil && len(existing) > 0 {
 			existing = security.FilterRowsForUpdate(table, existing, access, appID, h.rm)
 		}
 		if (command == "update" || command == "delete") && len(existing) == 0 {
 			if id, ok := objUpdate["id"]; ok && strings.TrimSpace(fmt.Sprint(id)) != "" {
-				if row := h.rm.Find(appID, table, model.EqFilter("id", id)); len(row) > 0 {
-					fallback := []map[string]any{row}
+				fallbackRows := h.filterRowsForUpdate(appID, table, model.EqFilter("id", id))
+				if len(fallbackRows) > 0 {
+					fallback := fallbackRows
 					if access != nil {
 						fallback = security.FilterRowsForUpdateWithoutDataScope(table, fallback, access, appID, h.rm)
 					}
@@ -362,6 +363,15 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 			return out
 		}
 		security.EnsureBusinessPermissionSchemaValues(appID, table, finalObj, access, h.rm)
+	}
+	if table == "csm_accounts" && access != nil {
+		if command == "create" || hasDataAppIDsMutation(finalObj) {
+			security.NormalizeDataAppIdsField(finalObj, access)
+		}
+	}
+	if table == "csm_group_members" && finalObj != nil {
+		delete(finalObj, "data_app_ids")
+		delete(finalObj, "dataAppIds")
 	}
 	if command == "create" && len(pkFields) > 0 && !hasAnyPrimaryKeyValue(finalObj, pkFields) {
 		out["success"] = false
@@ -734,26 +744,103 @@ func normalizeComparableFieldValue(v any) string {
 	}
 }
 
-func (h *TableHandler) lookupRecordsForUpdate(appID, table string, filter model.SearchFilter, objUpdate map[string]any) []map[string]any {
-	if id, ok := objUpdate["id"]; ok && strings.TrimSpace(fmt.Sprint(id)) != "" {
-		if row := h.rm.Find(appID, table, model.EqFilter("id", id)); len(row) > 0 {
-			return []map[string]any{row}
+func (h *TableHandler) lookupRecordsForUpdate(appID, table string, filter model.SearchFilter, objUpdate map[string]any, pkFields []string, command string) []map[string]any {
+	cmd := strings.ToLower(strings.TrimSpace(command))
+	isMutating := cmd == "update" || cmd == "delete"
+
+	// sys_autos and other custom-PK tables: direct key lookup avoids O(N) Pebble scans.
+	if len(pkFields) > 0 && hasAnyPrimaryKeyValue(objUpdate, pkFields) {
+		if rec := h.rm.FindByCustomPK(appID, table, objUpdate, pkFields); len(rec) > 0 {
+			return []map[string]any{rec}
 		}
 	}
+
+	var rows []map[string]any
+	if isMutating {
+		if id, ok := objUpdate["id"]; ok && strings.TrimSpace(fmt.Sprint(id)) != "" {
+			rows = h.filterRowsForUpdate(appID, table, model.EqFilter("id", id))
+		}
+	}
+	if len(rows) == 0 && (len(filter.Conditions) > 0 || filter.Field != "") {
+		rows = h.filterRowsForUpdate(appID, table, filter)
+	}
+	if len(rows) == 0 && isMutating {
+		if fallback := buildIdentityFallbackFilter(filter); fallback != nil {
+			rows = h.filterRowsForUpdate(appID, table, *fallback)
+		}
+	}
+	if len(rows) == 0 && len(pkFields) > 0 {
+		eq := data.ExtractEqConditions(filter)
+		probe := make(map[string]any, len(pkFields))
+		complete := true
+		for _, pk := range pkFields {
+			v, ok := eq[pk]
+			if !ok {
+				if v2, ok2 := objUpdate[pk]; ok2 && strings.TrimSpace(fmt.Sprint(v2)) != "" {
+					v = v2
+				} else {
+					complete = false
+					break
+				}
+			}
+			probe[pk] = v
+		}
+		if complete {
+			if rec := h.rm.FindByCustomPK(appID, table, probe, pkFields); len(rec) > 0 {
+				rows = []map[string]any{rec}
+			}
+		}
+	}
+	if len(rows) == 0 && isMutating {
+		if id, ok := objUpdate["id"]; ok && strings.TrimSpace(fmt.Sprint(id)) != "" {
+			rows = h.filterRowsForUpdate(appID, table, model.EqFilter("id", id))
+		}
+	}
+	return rows
+}
+
+func (h *TableHandler) filterRowsForUpdate(appID, table string, filter model.SearchFilter) []map[string]any {
 	result := h.rm.Filter(appID, table, filter)
-	rows, _ := result["rows"].([]any)
-	var out []map[string]any
-	for _, item := range rows {
+	rawRows, _ := result["rows"].([]any)
+	out := make([]map[string]any, 0, len(rawRows))
+	for _, item := range rawRows {
 		if row, ok := item.(map[string]any); ok {
 			out = append(out, row)
 		}
 	}
-	if len(out) == 0 {
-		if row := h.rm.Find(appID, table, filter); len(row) > 0 {
-			return []map[string]any{row}
+	return out
+}
+
+// buildIdentityFallbackFilter mirrors Java TableHandler when e_where is too strict (e.g. stale id).
+func buildIdentityFallbackFilter(source model.SearchFilter) *model.SearchFilter {
+	eq := data.ExtractEqConditions(source)
+	if len(eq) == 0 {
+		return nil
+	}
+	preferred := []string{"id", "email", "phoneNumber", "username", "login_identifier"}
+	var conditions []model.SearchFilter
+	for _, field := range preferred {
+		value, ok := eq[field]
+		if !ok || strings.TrimSpace(fmt.Sprint(value)) == "" {
+			continue
+		}
+		conditions = append(conditions, model.EqFilter(field, value))
+		if field == "id" || field == "email" {
+			break
 		}
 	}
-	return out
+	if appIDVal, ok := eq["app_id"]; ok && strings.TrimSpace(fmt.Sprint(appIDVal)) != "" {
+		conditions = append(conditions, model.EqFilter("app_id", appIDVal))
+	}
+	if len(conditions) == 0 {
+		return nil
+	}
+	if len(conditions) == 1 {
+		f := conditions[0]
+		return &f
+	}
+	fallback := model.SearchFilter{Operator: "AND", Conditions: conditions}
+	return &fallback
 }
 
 func parsePkFields(params map[string]any) []string {
@@ -807,4 +894,16 @@ func hasAnyPrimaryKeyValue(row map[string]any, pkFields []string) bool {
 		}
 	}
 	return false
+}
+
+func hasDataAppIDsMutation(row map[string]any) bool {
+	if row == nil {
+		return false
+	}
+	_, ok := row["data_app_ids"]
+	if ok {
+		return true
+	}
+	_, ok = row["dataAppIds"]
+	return ok
 }

@@ -117,8 +117,23 @@ func loadRouteConfigs(st *state.AppState, domain string) []routeConfig {
 	return out
 }
 
+func resolveVersionRPIndex(rm *data.RecordManager, host string) string {
+	rpIndex := ResolveRPIndexPub(rm, host)
+	if rpIndex != "" {
+		return rpIndex
+	}
+	if strings.HasPrefix(DomainFromHost(host), "admin.") {
+		for _, candidate := range []string{"admin/version.json", "version.json"} {
+			if rm.GetStaticFile(candidate) != "" {
+				return "admin"
+			}
+		}
+	}
+	return ""
+}
+
 func ServeVersionJSON(st *state.AppState, w http.ResponseWriter, host string) {
-	rpIndex := ResolveRPIndexPub(st.RecordManager, host)
+	rpIndex := resolveVersionRPIndex(st.RecordManager, host)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 

@@ -70,6 +70,10 @@ func (l *LlamaService) CompleteWithTokens(ctx context.Context, prompt string, ma
 	return CleanLocalModelOutput(text), nil
 }
 
+func (l *LlamaService) IsModelLoaded() bool {
+	return l.native != nil && l.native.isLoaded()
+}
+
 func (l *LlamaService) StreamCompletion(ctx context.Context, prompt string, onToken func(string) error) error {
 	if !l.UsesNative() {
 		return fmt.Errorf("%s: %s", LocalProviderUnavailableCode, l.statusHint())

@@ -1,4 +1,9 @@
 import { AI_TIMEOUT_MS } from "#src/api/ai";
+import {
+	mapGoLocalAiStageToStep,
+	summarizeLocalPipelineSteps,
+	type LocalAiPipelineStep,
+} from "#src/api/ai/local-ai-pipeline";
 import { extractCodeBlocks, extractLatestOpenCodeBlock } from "#src/pages/system/developer/codeUtils";
 import { validateCode, collectWorkspaceDiagnostics, CodeDiagnostic } from "#src/pages/system/developer/useCodeEditor";
 import { request } from "#src/utils";
@@ -2194,7 +2199,7 @@ function buildCodeOperationPreviewLines(baseText: string, textEdits: any[], maxI
 /** Cursor/Copilot Composer — activity line in chat (grep/read/plan/index/edit). */
 interface ComposerActivityItem {
 	id: string
-	kind: "search" | "read" | "plan" | "index" | "edit" | "apply" | "route" | "tool"
+	kind: "search" | "read" | "plan" | "index" | "edit" | "apply" | "route" | "tool" | "local_pipeline"
 	icon: string
 	label: string
 	detail?: string
@@ -2867,6 +2872,7 @@ export default function AiAssistantChat({
 	const [editTaskPlan, setEditTaskPlan] = useState<EditTaskPlanState | null>(null);
 	const [editTaskPlanCollapsed, setEditTaskPlanCollapsed] = useState(false);
 	const [composerActivity, setComposerActivity] = useState<ComposerActivityItem[]>([]);
+	const [localPipelineSteps, setLocalPipelineSteps] = useState<LocalAiPipelineStep[]>([]);
 	const [composerActivityCollapsed, setComposerActivityCollapsed] = useState(false);
 	const [requestStatusCollapsed, setRequestStatusCollapsed] = useState(true);
 	const [composerDiffBlock, setComposerDiffBlock] = useState<ComposerDiffBlock | null>(null);
@@ -5048,6 +5054,7 @@ export default function AiAssistantChat({
 		return "";
 	}, [buildDynamicIngestionParts, formatScopeReasoningLabel, stageEvents, uiText]);
 
+	const useLocalAiCompactPanel = activeStreamResponseMode === "analyze" && localPipelineSteps.length > 0;
 	const showRequestStatusPanel = isLoading || completionState !== "idle" || isUsageDockVisible;
 	const requestStatusSummaryParams = useMemo(() => ({
 		isLoading,
@@ -5166,6 +5173,9 @@ export default function AiAssistantChat({
 	);
 
 	const showLegacyProgressDock = useMemo(() => {
+		if (useLocalAiCompactPanel) {
+			return pendingApprovalAgenticSteps.length > 0 || lowConfidenceAgenticSteps.length > 0;
+		}
 		if (useUnifiedComposerTimeline) {
 			return pendingApprovalAgenticSteps.length > 0 || lowConfidenceAgenticSteps.length > 0;
 		}
@@ -5174,6 +5184,7 @@ export default function AiAssistantChat({
 		lowConfidenceAgenticSteps.length,
 		pendingApprovalAgenticSteps.length,
 		stageEvents.length,
+		useLocalAiCompactPanel,
 		useUnifiedComposerTimeline,
 		visibleAgenticSteps.length,
 	]);
@@ -5950,6 +5961,20 @@ export default function AiAssistantChat({
 		});
 	}, []);
 
+	const mergeLocalPipelineStep = useCallback((step: LocalAiPipelineStep) => {
+		setLocalPipelineSteps((prev) => {
+			const idx = prev.findIndex(item => item.stageKey === step.stageKey);
+			if (idx >= 0) {
+				const updated = [...prev];
+				const prevStep = updated[idx];
+				const status = prevStep.status === "done" && step.status === "running" ? "done" : step.status;
+				updated[idx] = { ...prevStep, ...step, status };
+				return updated;
+			}
+			return [...prev, step];
+		});
+	}, []);
+
 	const refreshComposerDiffPreview = useCallback((edits: any[], baseOverride?: string) => {
 		if (!Array.isArray(edits) || edits.length === 0) {
 			return;
@@ -6218,11 +6243,13 @@ export default function AiAssistantChat({
 			setEditTaskPlan(null);
 			setEditTaskPlanCollapsed(false);
 			setComposerActivity([]);
+			setLocalPipelineSteps([]);
 			setComposerActivityCollapsed(false);
 			setComposerDiffBlock(null);
 			setComposerDiffCollapsed(false);
 			composerAppliedEditsRef.current = [];
 			setAgenticStepsCollapsed(requestedResponseMode === "analyze");
+			setRequestStatusCollapsed(false);
 			lastAppliedCodeRef.current = "";
 			menuAuditStepsRef.current = [];
 			lastUserRequestRef.current = cleanedMessage || text;
@@ -6626,6 +6653,10 @@ export default function AiAssistantChat({
 								lastReasonCode = evtReasonCode;
 							}
 							const effectiveReasonCode = evtReasonCode || lastReasonCode;
+							const localPipelineStep = mapGoLocalAiStageToStep(evt as Record<string, unknown>, uiText);
+							if (localPipelineStep) {
+								mergeLocalPipelineStep(localPipelineStep);
+							}
 							if (evt.responseMode) {
 								const mode = String(evt.responseMode).trim().toLowerCase();
 								if (mode === "edit") {
@@ -6641,12 +6672,14 @@ export default function AiAssistantChat({
 								else if (mode === "analyze") {
 									turnAllowAutoApplyRef.current = false;
 									setActiveStreamResponseMode("analyze");
-									appendComposerActivity({
-										kind: "route",
-										icon: "💬",
-										label: uiText("Chế độ analyze → trả lời prose", "Analyze mode → prose response", "分析模式 → 文本回复"),
-										status: "done",
-									});
+									if (!localPipelineStep) {
+										appendComposerActivity({
+											kind: "route",
+											icon: "💬",
+											label: uiText("Chế độ analyze → trả lời prose", "Analyze mode → prose response", "分析模式 → 文本回复"),
+											status: "done",
+										});
+									}
 								}
 								setMessages((prev) => {
 									const updated = [...prev];
@@ -8145,7 +8178,10 @@ export default function AiAssistantChat({
 								if (streamModel === "local_heuristic_analyze") {
 									analyzeHeuristicPrimaryStreamRef.current = true;
 								}
-								const startedText = String(evt.model || "").trim().toLowerCase() === "local_provider"
+								const isLocalModel = streamModel === "local_provider"
+									|| streamModel === "llama.cpp-native"
+									|| streamModel.includes("llama");
+								const startedText = isLocalModel
 									? uiText("AI local bắt đầu stream kết quả...", "Local AI started streaming the result...", "本地AI开始流式返回结果...")
 									: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果...");
 								setGeminiProgress(prev => ({
@@ -9025,6 +9061,13 @@ export default function AiAssistantChat({
 									continue;
 								}
 								setCompletionState(reviewRequired ? "review_required" : "done");
+								if (String(evt.responseMode || "").trim().toLowerCase() === "analyze") {
+									setRequestStatusCollapsed(true);
+									setLocalPipelineSteps(prev => prev.map(step => ({
+										...step,
+										status: step.status === "running" ? "done" : step.status,
+									})));
+								}
 								setIsLoading(false);
 								if (sseAbortRef.current === controller) {
 									sseAbortRef.current = null;
@@ -9888,7 +9931,7 @@ export default function AiAssistantChat({
 
 				</div>
 
-				{(showRequestStatusPanel || composerActivity.length > 0 || composerDiffBlock) && (
+				{(showRequestStatusPanel || composerActivity.length > 0 || localPipelineSteps.length > 0 || composerDiffBlock) && (
 					<div className={[
 						styles.composerPanel,
 						useUnifiedComposerTimeline ? styles.composerPanel_unified : "",
@@ -9910,17 +9953,29 @@ export default function AiAssistantChat({
 										onClick={() => setRequestStatusCollapsed(c => !c)}
 									>
 										<span className={styles.composerActivityTitle}>
-											{isLoading
-												? uiText(
-													`Đang xử lý · ${summarizeRequestStatusVi(requestStatusSummaryParams, uiText)}`,
-													`Processing · ${summarizeRequestStatus(requestStatusSummaryParams)}`,
-													`处理中 · ${summarizeRequestStatusVi(requestStatusSummaryParams, uiText)}`,
-												)
-												: uiText(
-													`Trạng thái request · ${summarizeRequestStatusVi(requestStatusSummaryParams, uiText)}`,
-													`Request status · ${summarizeRequestStatus(requestStatusSummaryParams)}`,
-													`请求状态 · ${summarizeRequestStatusVi(requestStatusSummaryParams, uiText)}`,
-												)}
+											{useLocalAiCompactPanel
+												? (isLoading
+													? uiText(
+														`AI local · ${summarizeLocalPipelineSteps(localPipelineSteps, uiText)}`,
+														`Local AI · ${summarizeLocalPipelineSteps(localPipelineSteps, uiText)}`,
+														`本地 AI · ${summarizeLocalPipelineSteps(localPipelineSteps, uiText)}`,
+													)
+													: uiText(
+														`AI local · ${completionSummaryLabel || summarizeLocalPipelineSteps(localPipelineSteps, uiText)}`,
+														`Local AI · ${completionSummaryLabel || summarizeLocalPipelineSteps(localPipelineSteps, uiText)}`,
+														`本地 AI · ${completionSummaryLabel || summarizeLocalPipelineSteps(localPipelineSteps, uiText)}`,
+													))
+												: (isLoading
+													? uiText(
+														`Đang xử lý · ${summarizeRequestStatusVi(requestStatusSummaryParams, uiText)}`,
+														`Processing · ${summarizeRequestStatus(requestStatusSummaryParams)}`,
+														`处理中 · ${summarizeRequestStatusVi(requestStatusSummaryParams, uiText)}`,
+													)
+													: uiText(
+														`Trạng thái request · ${summarizeRequestStatusVi(requestStatusSummaryParams, uiText)}`,
+														`Request status · ${summarizeRequestStatus(requestStatusSummaryParams)}`,
+														`请求状态 · ${summarizeRequestStatusVi(requestStatusSummaryParams, uiText)}`,
+													))}
 										</span>
 										<span className={styles.composerCollapseHint}>
 											{requestStatusCollapsed ? "▼" : "▲"}
@@ -9949,6 +10004,30 @@ export default function AiAssistantChat({
 								)}
 								{!requestStatusCollapsed && (
 									<div className={styles.composerStatusDetail}>
+										{useLocalAiCompactPanel && localPipelineSteps.length > 0 && (
+											<div className={styles.localPipelineList}>
+												{localPipelineSteps.map(step => (
+													<div
+														key={step.stageKey}
+														className={[
+															styles.localPipelineItem,
+															styles[`localPipelineItem_${step.status}`] || "",
+														].filter(Boolean).join(" ")}
+													>
+														<span className={styles.localPipelineIcon}>{step.icon}</span>
+														<div className={styles.localPipelineBody}>
+															<span className={styles.localPipelineLabel}>{step.label}</span>
+															{step.detail && (
+																<span className={styles.localPipelineDetail}>{step.detail}</span>
+															)}
+														</div>
+														{step.status === "running" && (
+															<span className={styles.composerActivitySpinner}>…</span>
+														)}
+													</div>
+												))}
+											</div>
+										)}
 										{streamRequestId && (
 											<div className={styles.composerStatusRow}>
 												<span>requestId</span>
@@ -9958,19 +10037,19 @@ export default function AiAssistantChat({
 												</button>
 											</div>
 										)}
-										{isLoading && liveBackendStepLabel && (
+										{!useLocalAiCompactPanel && isLoading && liveBackendStepLabel && (
 											<div className={styles.composerStatusRow}>
 												<span>{uiText("Bước hiện tại", "Current step", "当前步骤")}</span>
 												<span>{liveBackendStepLabel}</span>
 											</div>
 										)}
-										{isLoading && geminiProgress.charsReceived > 0 && (
+										{!useLocalAiCompactPanel && isLoading && geminiProgress.charsReceived > 0 && (
 											<div className={styles.composerStatusRow}>
 												<span>{uiText("Đã nhận", "Received", "已接收")}</span>
 												<span>{`${geminiProgress.charsReceived.toLocaleString()} ${uiText("ký tự", "chars", "字符")}`}</span>
 											</div>
 										)}
-										{isLoading && typeof geminiProgress.ttftMs === "number" && geminiProgress.ttftMs > 0 && (
+										{!useLocalAiCompactPanel && isLoading && typeof geminiProgress.ttftMs === "number" && geminiProgress.ttftMs > 0 && (
 											<div className={styles.composerStatusRow}>
 												<span>{uiText("TTFT", "TTFT", "首 token")}</span>
 												<span className={styles.geminiProgressTtft}>
@@ -9978,7 +10057,7 @@ export default function AiAssistantChat({
 												</span>
 											</div>
 										)}
-										{!isLoading && completionSummaryLabel && (
+										{!useLocalAiCompactPanel && !isLoading && completionSummaryLabel && (
 											<div className={styles.composerStatusRow}>
 												<span>{uiText("Kết quả", "Result", "结果")}</span>
 												<Tooltip title={completionDetailTooltip || completionSummaryLabel}>
@@ -10013,7 +10092,7 @@ export default function AiAssistantChat({
 							</div>
 						)}
 
-						{composerActivity.length > 0 && (
+						{composerActivity.length > 0 && !useLocalAiCompactPanel && (
 							<div className={[
 								styles.composerActivityBlock,
 								useUnifiedComposerTimeline ? styles.composerUnifiedSection : "",

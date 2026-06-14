@@ -68,5 +68,6 @@ func IsDirectAIPath(uri string) bool {
 	return strings.HasPrefix(clean, "/ai-local") ||
 		strings.HasPrefix(clean, "/ai-code-stream") ||
 		clean == "/aiAssistant-chat-stream" ||
+		clean == "/ai-generate-seo-content" ||
 		clean == "/ai/menu-merge"
 }

@@ -456,6 +456,12 @@ func (s *UserService) normalizeMainAccountUser(user *model.User, record map[stri
 	}
 	user.IsSubUser = &isSubUser
 
+	if isSubUser {
+		user.DataAppIDs = []string{}
+	} else {
+		user.DataAppIDs = ResolveEffectiveDataAppIds(record, appID)
+	}
+
 	if record != nil {
 		if dept, ok := record["dept_id"].(string); ok && dept != "" {
 			user.DeptID = &dept

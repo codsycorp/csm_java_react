@@ -75,7 +75,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		"requestId": req.RequestID, "status": "orchestration_context_attached", "savedChars": 0,
 	}))
 	writeSSE(w, stageEvent("streaming_started", map[string]any{
-		"requestId": req.RequestID, "model": modelLabel, "estimatedTotalChars": len(prompt) / 4, "percent": 15,
+		"requestId": req.RequestID, "model": "local_provider", "estimatedTotalChars": len(prompt) / 4, "percent": 15,
 	}))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -105,6 +105,18 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	}
 
 	if deps.Llama.IsAvailable() {
+		localPhase := "infer"
+		if !deps.Llama.IsModelLoaded() {
+			localPhase = "loading"
+		}
+		writeSSE(w, stageEvent("waiting_gemini", map[string]any{
+			"requestId": req.RequestID, "model": "local_provider", "localPhase": localPhase,
+			"percent": 12, "estimatedWaitSecs": 35,
+		}))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+
 		streamErr := deps.Llama.StreamCompletion(ctx, prompt, streamPiece)
 		var completeErr error
 		if streamErr != nil || full.Len() == 0 {

@@ -119,7 +119,7 @@ func LoadFromEnv() AppConfig {
 			LlamaMaxTokens:      envUint32("AI_LOCAL_LLAMA_MAX_TOKENS", 768),
 			LlamaMaxPromptChars: envInt("AI_LOCAL_LLAMA_MAX_PROMPT_CHARS", 32_000),
 			LlamaThreads:        int32(envInt("AI_LOCAL_LLAMA_THREADS", 4)),
-			LlamaBatchSize:      envUint32("AI_LOCAL_LLAMA_BATCH_SIZE", 128),
+			LlamaBatchSize:      envUint32("AI_LOCAL_LLAMA_BATCH_SIZE", 512),
 			LlamaUbatchSize:     envUint32("AI_LOCAL_LLAMA_UBATCH_SIZE", 64),
 			LlamaUseMmap:        envFlagTrue("AI_LOCAL_LLAMA_USE_MMAP", true),
 			ContextDir:          envPath("AI_CONTEXT_DIR", filepath.Join(dataDir, "ai_local")),

@@ -934,6 +934,8 @@ export default function CodeEditor() {
 	const [selectedCode, setSelectedCode] = useState<string | null>(null);
 	const [codeContent, setCodeContent] = useState<string>("");
 	const [loading, setLoading] = useState(false);
+	const [savingCode, setSavingCode] = useState(false);
+	const saveInFlightRef = useRef(false);
 	const [openingCode, setOpeningCode] = useState(false);
 	const [createModalOpen, setCreateModalOpen] = useState(false);
 	const [newCodeName, setNewCodeName] = useState("");
@@ -1414,6 +1416,9 @@ export default function CodeEditor() {
 
 	// Save code
 	const handleSaveCode = async () => {
+		if (saveInFlightRef.current) {
+			return;
+		}
 		if (isWorkspaceSourceActive) {
 			message.warning(devUiText(
 				"Đây là file workspace chỉ đọc từ citation, không thể lưu tại màn hình sys_autos.",
@@ -1427,6 +1432,8 @@ export default function CodeEditor() {
 			return;
 		}
 
+		saveInFlightRef.current = true;
+		setSavingCode(true);
 		try {
 			const code = codeList.find(c => c.p_name === selectedCode);
 			const result = await saveCode(appId, selectedCode, codeContent, codeType, code?.id);
@@ -1441,6 +1448,9 @@ export default function CodeEditor() {
 		} catch (error) {
 			message.error(t("system.developer.saveFailed"));
 			console.error(error);
+		} finally {
+			saveInFlightRef.current = false;
+			setSavingCode(false);
 		}
 	};
 
@@ -2518,7 +2528,7 @@ export default function CodeEditor() {
 								<Button icon={<SettingOutlined />} onClick={() => setHotkeyModalOpen(true)}>
 									{t("system.developer.hotkeys")}
 								</Button>
-								<Button icon={<SaveOutlined />} onClick={handleSaveCode} type="primary" disabled={isWorkspaceSourceActive}>
+								<Button icon={<SaveOutlined />} onClick={handleSaveCode} type="primary" loading={savingCode} disabled={isWorkspaceSourceActive || savingCode}>
 									{t("system.developer.command.save")}
 								</Button>
 								<Button icon={<DeleteOutlined />} danger onClick={handleDeleteCode} disabled={isWorkspaceSourceActive}>

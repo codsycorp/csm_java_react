@@ -1555,3 +1555,55 @@
 .composerDiffText {
 	color: var(--ant-color-text);
 }
+
+.localPipelineList {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-bottom: 6px;
+	padding: 4px 0 2px;
+	border-bottom: 1px solid color-mix(in srgb, var(--ant-color-border) 55%, transparent);
+}
+
+.localPipelineItem {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+	font-size: 11px;
+	line-height: 1.35;
+}
+
+.localPipelineItem_running .localPipelineLabel {
+	color: var(--ant-color-primary);
+}
+
+.localPipelineItem_done .localPipelineLabel {
+	color: var(--ant-color-text-secondary);
+}
+
+.localPipelineItem_error .localPipelineLabel {
+	color: var(--ant-color-error);
+}
+
+.localPipelineIcon {
+	flex: 0 0 auto;
+	width: 16px;
+	text-align: center;
+}
+
+.localPipelineBody {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	flex: 1 1 auto;
+}
+
+.localPipelineLabel {
+	font-weight: 600;
+}
+
+.localPipelineDetail {
+	font-size: 10px;
+	color: var(--ant-color-text-tertiary);
+	word-break: break-word;
+}

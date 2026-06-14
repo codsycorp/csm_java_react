@@ -19,7 +19,7 @@ type User struct {
 	Actived               *bool            `json:"actived,omitempty"`
 	AppToken              *string          `json:"app_token,omitempty"`
 	AppID                 *string          `json:"app_id,omitempty"`
-	DataAppIDs            []string         `json:"dataAppIds,omitempty"`
+	DataAppIDs            []string         `json:"data_app_ids,omitempty"`
 	FullName              *string          `json:"full_name,omitempty"`
 	UserAddress           json.RawMessage  `json:"user_address,omitempty"`
 	Avatar                *string          `json:"avatar,omitempty"`
@@ -82,6 +82,9 @@ func UserFromRecord(record map[string]any) User {
 		} else if v, ok := intFromAny(record["loginVersion"]); ok {
 			user.LoginVersion = &v
 		}
+	}
+	if len(user.DataAppIDs) == 0 {
+		user.DataAppIDs = StringListFromRecord(record, "data_app_ids", "dataAppIds")
 	}
 	return user
 }

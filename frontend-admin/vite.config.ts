@@ -78,6 +78,9 @@ export default defineVitestConfig(({ mode }) => {
 			"/api": {
 				target: apiBaseUrl,
 				changeOrigin: true,
+				// Large sys_autos saves (encrypted auto-lmkt.js) can exceed default proxy idle limits.
+				timeout: 300000,
+				proxyTimeout: 300000,
 				rewrite: path => path.replace(/^\/api/, ""),
 			},
 			"/app_images": {
