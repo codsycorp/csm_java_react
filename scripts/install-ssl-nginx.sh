@@ -333,6 +333,10 @@ deploy_nginx_conf() {
 	systemctl enable nginx 2>/dev/null || true
 	systemctl reload nginx || systemctl start nginx
 	log "nginx reload OK"
+	if [[ -x "${SCRIPT_DIR}/verify-ai-endpoints.sh" ]]; then
+		log "Verify AI endpoints..."
+		"${SCRIPT_DIR}/verify-ai-endpoints.sh" || log "WARNING: verify-ai-endpoints failed — kiểm tra location blocks trên server"
+	fi
 }
 
 setup_auto_renew() {

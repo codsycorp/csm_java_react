@@ -34,50 +34,81 @@ if 'location = /ai-generate-seo-content' in server_block_txt:
 shutil.copy(CONF, CONF + '.bak')
 
 AI_BLOCK = r"""
-        # AI local SEO (no timeout — llama.cpp may be slow)
+        # SEO sync lane: one HTTP holds until final JSON (no client job poll).
         location = /ai-generate-seo-content {
             proxy_pass http://backend_pool;
             proxy_http_version 1.1;
+            proxy_pass_request_headers on;
+            proxy_pass_request_body on;
             proxy_set_header Connection "";
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header X-Forwarded-Host $host;
+            proxy_set_header X-Forwarded-Port $server_port;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header Cookie $http_cookie;
+            proxy_set_header csm-token $http_csm_token;
+            proxy_set_header X-CSRF-Token $http_x_csrf_token;
+            proxy_set_header X-Refresh-Token $http_x_refresh_token;
+            proxy_set_header X-Client-Id $http_x_client_id;
+
             proxy_request_buffering off;
             proxy_buffering off;
             proxy_cache off;
             proxy_no_cache 1;
             proxy_cache_bypass 1;
+
             gzip off;
+            chunked_transfer_encoding on;
+
             proxy_connect_timeout 10s;
             proxy_send_timeout 86400s;
             proxy_read_timeout 86400s;
             send_timeout 86400s;
+
             add_header X-Accel-Buffering no always;
-            add_header Cache-Control "no-store, no-cache" always;
+            add_header Cache-Control "no-store, no-cache, max-age=0, must-revalidate, no-transform" always;
+            add_header X-Cache-Status BYPASS always;
         }
+
         location = /api/ai-generate-seo-content {
             proxy_pass http://backend_pool;
             proxy_http_version 1.1;
+            proxy_pass_request_headers on;
+            proxy_pass_request_body on;
             proxy_set_header Connection "";
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header X-Forwarded-Host $host;
+            proxy_set_header X-Forwarded-Port $server_port;
+            proxy_set_header Authorization $http_authorization;
+            proxy_set_header Cookie $http_cookie;
+            proxy_set_header csm-token $http_csm_token;
+            proxy_set_header X-CSRF-Token $http_x_csrf_token;
+            proxy_set_header X-Refresh-Token $http_x_refresh_token;
+            proxy_set_header X-Client-Id $http_x_client_id;
+
             proxy_request_buffering off;
             proxy_buffering off;
             proxy_cache off;
             proxy_no_cache 1;
             proxy_cache_bypass 1;
+
             gzip off;
+            chunked_transfer_encoding on;
+
             proxy_connect_timeout 10s;
             proxy_send_timeout 86400s;
             proxy_read_timeout 86400s;
             send_timeout 86400s;
+
             add_header X-Accel-Buffering no always;
-            add_header Cache-Control "no-store, no-cache" always;
+            add_header Cache-Control "no-store, no-cache, max-age=0, must-revalidate, no-transform" always;
+            add_header X-Cache-Status BYPASS always;
         }"""
 
 # Insert AI blocks before the first 'location / {' within this server block only
