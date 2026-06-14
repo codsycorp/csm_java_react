@@ -73,7 +73,7 @@ if ! command -v docker >/dev/null 2>&1; then
 	echo "[build-go-linux-native] ERROR: docker not installed." >&2
 	echo "  Dùng build trên server (không cần Docker Mac):" >&2
 	echo "    ./scripts/build-go-linux-native.sh --remote root@YOUR_SERVER dist/csm_go_server" >&2
-	echo "  Hoặc push main → GitHub Actions build." >&2
+	echo "  Hoặc ./deploy-go-linux.sh root@YOUR_SERVER /root/la_server" >&2
 	exit 1
 fi
 if ! docker info >/dev/null 2>&1; then
@@ -81,7 +81,7 @@ if ! docker info >/dev/null 2>&1; then
 	echo "  Cách A — bật Docker Desktop, đợi Running, rồi chạy lại script." >&2
 	echo "  Cách B — build trên server Linux (không cần Docker Mac):" >&2
 	echo "    ./scripts/build-go-linux-native.sh --remote root@YOUR_SERVER dist/csm_go_server" >&2
-	echo "  Cách C — push main → GitHub Actions tự build." >&2
+	echo "  Cách C — ./deploy-go-linux.sh root@YOUR_SERVER /root/la_server" >&2
 	exit 1
 fi
 
