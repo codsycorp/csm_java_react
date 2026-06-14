@@ -4160,11 +4160,59 @@
       return groupKeys;
     }
 
+    function extractRowsFromTableDataPayload(payload, tableName) {
+      if (Array.isArray(payload)) return payload;
+      if (!payload || typeof payload !== "object") return [];
+      if (Array.isArray(payload.rows)) return payload.rows;
+      if (payload.data) {
+        if (Array.isArray(payload.data)) return payload.data;
+        if (payload.data && Array.isArray(payload.data.rows)) return payload.data.rows;
+        if (payload.data && tableName && Array.isArray(payload.data[tableName])) return payload.data[tableName];
+      }
+      if (tableName && Array.isArray(payload[tableName])) return payload[tableName];
+      return [];
+    }
+
     async function fetchRowsFromGetTableData(tableName, heThong) {
+      var token = "";
+      try {
+        var raw = localStorage.getItem("access-token");
+        if (raw) {
+          var parsed = JSON.parse(raw);
+          token = String((parsed && parsed.state && parsed.state.token) || "");
+        }
+      } catch (_e) {}
+
+      var headers = { "Content-Type": "application/json", "Accept": "application/json" };
+      if (token) headers["csm-token"] = token;
+
+      var endpointCandidates = ["/api/get-table-data", "api/get-table-data"];
+      var bodyCandidates = [
+        { app_id: "kqxs", obj_name: tableName, e_where: { field: "ma_duoi", type: "eq", value: Number(heThong || 2) } }
+      ];
+
+      for (var ei = 0; ei < endpointCandidates.length; ei += 1) {
+        for (var bi = 0; bi < bodyCandidates.length; bi += 1) {
+          try {
+            var resp = await fetch(endpointCandidates[ei], {
+              method: "POST",
+              credentials: "include",
+              headers: headers,
+              body: JSON.stringify(bodyCandidates[bi])
+            });
+            if (!resp || !resp.ok) continue;
+            var payload = await resp.json();
+            var rows = extractRowsFromTableDataPayload(payload, tableName);
+            if (rows.length) return rows;
+          } catch (_err) {}
+        }
+      }
+
+      // Fallback to SDK wrapper if direct endpoint is not available.
       return await fetchRows({
         app_id: "kqxs",
         obj_name: tableName,
-        e_where: { field: "ma_duoi", type: "eq", value: Number(heThong || 2) }
+        e_where: { field: "id", type: "like", value: "" }
       });
     }
 
@@ -7138,12 +7186,13 @@
 
     async function cap_nhat(ngay_lay) {
       var ngay_cap_nhat = dateFormat(ngay_lay, "dd-mm-yyyy");
-      var useScrapeBridge = !window.hasOwnProperty("process");
-      var requestGapMs = useScrapeBridge ? 1500 : 900;
+      var link = "/api/scrape-web";
+      if (window.hasOwnProperty("process")) link = "";
+      var requestGapMs = link ? 1500 : 900;
       var proxyCfg = getKqxsProxyConfig();
 
       // Nếu dùng TMProxy: lấy proxy IP động 1 lần trước khi fetch
-      if (useScrapeBridge && proxyCfg.tmproxyApiKey && !proxyCfg.server) {
+      if (link && proxyCfg.tmproxyApiKey && !proxyCfg.server) {
         try {
           var tmInfo = await fetchTmproxyInfo(proxyCfg.tmproxyApiKey, proxyCfg.tmproxyLocationId);
           proxyCfg = Object.assign({}, proxyCfg, {
@@ -7179,7 +7228,7 @@
 
       async function fetchHtml(url) {
         await sleepMs(requestGapMs);
-        if (!useScrapeBridge) {
+        if (!link) {
           var raw = await fetchWithBackoff(url, { cache: "no-store" }, 2, requestGapMs);
           return await raw.text();
         }
@@ -7193,13 +7242,29 @@
           if (proxyCfg.onPageLoadedScript) payload.onPageLoadedScript = proxyCfg.onPageLoadedScript;
           if (proxyCfg.scriptToExecute) payload.scriptToExecute = proxyCfg.scriptToExecute;
         }
-        var scrapeRs = await new Promise(function (resolve) {
-          seft.csm_scrape_web(payload, function (res) { resolve(res || {}); });
-        });
-        if (scrapeRs.success === false) {
-          throw new Error(String(scrapeRs.error || "scrape-web thất bại"));
+        var csmToken = (function () {
+          try {
+            var raw = localStorage.getItem("access-token");
+            if (!raw) return "";
+            var parsed = JSON.parse(raw);
+            return String((parsed && parsed.state && parsed.state.token) || "");
+          } catch (e) { return ""; }
+        })();
+        var reqHeaders = { "Content-Type": "application/json", "Accept": "application/json" };
+        if (csmToken) reqHeaders["csm-token"] = csmToken;
+        var resp = await fetchWithBackoff(link, {
+          method: "POST",
+          credentials: "include",
+          headers: reqHeaders,
+          cache: "no-store",
+          body: JSON.stringify(payload)
+        }, 2, requestGapMs);
+        try {
+          var payload = await resp.json();
+          return String((payload && payload.data) || "");
+        } catch (_e) {
+          return await resp.text();
         }
-        return String(scrapeRs.data || "");
       }
 
       async function saveRecord(tableName, objKQ) {
@@ -7216,9 +7281,12 @@
           pk_fields: ["field_ngay"],
           e_where: whereByNgay
         });
-        var failText = String((updateRs && (updateRs.message || updateRs.error)) || "");
-        var updateFailed = !updateRs || updateRs.success === false || updateRs.error === true || Number(updateRs.code || 0) === 400;
-        if (updateFailed && /khong tim thay|không tìm thấy|not found/i.test(failText)) {
+        var notFound = !updateRs
+          || updateRs.success === false
+          || updateRs.error === true
+          || Number(updateRs.code || 0) === 400;
+        var notFoundMessage = String((updateRs && (updateRs.message || updateRs.error)) || "");
+        if (notFound && /khong tim thay ban ghi de cap nhat|không tìm thấy bản ghi để cập nhật/i.test(notFoundMessage)) {
           await updateRows({
             app_id: "kqxs",
             obj_name: tableName,
@@ -13296,85 +13364,4 @@
     try { root.unmount(); } catch (e) { console.warn("[auto-kqxs] dispose failed", e); }
     if (mountNode && mountNode.parentNode) mountNode.parentNode.removeChild(mountNode);
   };
-})();
-
-// ============================================================
-// GLOBAL SAFETY: Catch unhandled errors to prevent silent crashes
-// ============================================================
-(function setupGlobalErrorHandlers() {
-  try {
-    window.addEventListener('error', function(event) {
-      if (event && event.error && event.error.stack) {
-        console.error('[GLOBAL-ERROR] Uncaught exception:', event.error.message, event.error.stack.slice(0, 500));
-      }
-    });
-    
-    window.addEventListener('unhandledrejection', function(event) {
-      if (event && event.reason) {
-        console.error('[GLOBAL-ERROR] Unhandled rejection:', String(event.reason).slice(0, 500));
-      }
-    });
-  } catch (e) {
-    console.warn('[GLOBAL-ERROR-SETUP] Failed:', e.message);
-  }
-})();
-
-// ============================================================
-// WATCHDOG: Detect if app hangs/loops infinitely (safety net for 0xe0000008)
-// ============================================================
-(function setupAppWatchdog() {
-  var lastHeartbeat = Date.now();
-  var heartbeatInterval = null;
-  var warningCount = 0;
-  
-  try {
-    // Heartbeat every 5 seconds - if it doesn't update, app is hanging
-    heartbeatInterval = setInterval(function() {
-      var now = Date.now();
-      var since = now - lastHeartbeat;
-      
-      // If heartbeat hasn't been reset in 30s+, likely hung
-      if (since > 30000) {
-        warningCount++;
-        console.warn('[WATCHDOG] App may be hung for ' + Math.round(since / 1000) + 's (warning #' + warningCount + ')');
-        
-        // After 3 hung warnings, try emergency cleanup
-        if (warningCount >= 3) {
-          console.error('[WATCHDOG] Emergency recovery: attempting cleanup');
-          try {
-            // Clear periodic timers
-            if (window.__periodicCleanupInterval) clearInterval(window.__periodicCleanupInterval);
-            if (window.__healthMonitorInterval) clearInterval(window.__healthMonitorInterval);
-            if (window.tmRun) clearInterval(window.tmRun);
-            console.log('[WATCHDOG] Cleared stuck intervals');
-          } catch (cleanupErr) {
-            console.warn('[WATCHDOG] Cleanup failed:', cleanupErr.message);
-          }
-          warningCount = 0; // Reset counter
-        }
-      }
-      
-      // Reset heartbeat if we got here
-      lastHeartbeat = now;
-    }, 5000);
-    
-    // Utility to reset heartbeat on user interaction
-    function tickHeartbeat() {
-      lastHeartbeat = Date.now();
-      warningCount = 0;
-    }
-    
-    // Reset heartbeat on events that show app is responsive
-    try {
-      document.addEventListener('click', tickHeartbeat, true);
-      document.addEventListener('keydown', tickHeartbeat, true);
-      window.addEventListener('beforeunload', function() {
-        if (heartbeatInterval) clearInterval(heartbeatInterval);
-      });
-    } catch (eventErr) {
-      console.warn('[WATCHDOG] Event registration failed:', eventErr.message);
-    }
-  } catch (e) {
-    console.warn('[WATCHDOG-SETUP] Failed:', e.message);
-  }
 })();

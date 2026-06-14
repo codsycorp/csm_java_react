@@ -29,7 +29,7 @@ const uiTranslations = {
     load_categories: '⬇️ Tải danh mục từ web_services',
     loading: '⏳ Đang tải...',
     multi_domain_manager: '🌐 Trình quản lý nội dung đa tên miền (chống nhận diện AI)',
-    tip_label: '💡 <strong>Mẹo:</strong> LMKT dùng <strong>Dự án</strong> làm danh mục; Phanmemmottrieu dùng <strong>Lĩnh vực</strong>. Chọn tại <strong>Cài Đặt Chung</strong> phía trên.',
+    tip_label: '💡 <strong>Mẹo:</strong> LMKT dùng <strong>Dự án</strong> làm danh mục; csmbridge dùng <strong>Lĩnh vực</strong>. Chọn tại <strong>Cài Đặt Chung</strong> phía trên.',
     upload_zalo: '📱 Tải lên JSON Zalo',
     upload_facebook: '👍 Tải lên JSON Facebook',
     create_post: '✍️ Tạo Bài',
@@ -126,7 +126,7 @@ const uiTranslations = {
     load_categories: '⬇️ Load categories from web_services',
     loading: '⏳ Loading...',
     multi_domain_manager: '🌐 Multi-Domain Content Manager (Anti-AI Detection)',
-    tip_label: '💡 <strong>Tip:</strong> LMKT uses <strong>Projects</strong> as categories; Phanmemmottrieu uses <strong>Industries</strong>. Select in <strong>General Settings</strong> above.',
+    tip_label: '💡 <strong>Tip:</strong> LMKT uses <strong>Projects</strong> as categories; csmbridge uses <strong>Industries</strong>. Select in <strong>General Settings</strong> above.',
     upload_zalo: '📱 Upload Zalo JSON',
     upload_facebook: '👍 Upload Facebook JSON',
     create_post: '✍️ Create Post',
@@ -223,7 +223,7 @@ const uiTranslations = {
     load_categories: '⬇️ 从 web_services 加载类别',
     loading: '⏳ 加载中...',
     multi_domain_manager: '🌐 多域名内容管理器 (防AI检测)',
-    tip_label: '💡 <strong>提示：</strong>LMKT 使用<strong>项目</strong>作为类别；Phanmemmottrieu 使用<strong>行业</strong>。在上面的<strong>常规设置</strong>中选择。',
+    tip_label: '💡 <strong>提示：</strong>LMKT 使用<strong>项目</strong>作为类别；csmbridge 使用<strong>行业</strong>。在上面的<strong>常规设置</strong>中选择。',
     upload_zalo: '📱 上传 Zalo JSON',
     upload_facebook: '👍 上传 Facebook JSON',
     create_post: '✍️ 创建帖子',
@@ -650,7 +650,7 @@ const decryptHtmlContent = (data) => {
  *    - h-holding.vn → app_id: "lmkt" (Bất động sản - 6 dự án)
  *    - domain: TOÀN BỘ danh sách (VD: "h-holding.vn,h-holding.com.vn,localhost:3333")
  * 
- * 2. INDUSTRY_TYPES: Config cho từng lĩnh vực phanmemmottrieu
+ * 2. INDUSTRY_TYPES: Config cho từng lĩnh vực csmbridge
  *    - bat-dong-san: Bất Động Sản
  *    - lam-dep-my-pham: Mỹ Phẩm - Làm Đẹp
  *    - booking-online: Đặt Lịch Online
@@ -670,7 +670,7 @@ const decryptHtmlContent = (data) => {
  * ========== QUY TRÌNH HOẠT ĐỘNG ==========
  * 
  * BƯỚC 1: User vào admin → Chọn Domain
- *         ↓ Script kiểm tra: LMKT hay Phanmemmottrieu?
+ *         ↓ Script kiểm tra: LMKT hay csmbridge?
  *
  * BƯỚC 2: Chọn Lĩnh Vực/Dự Án
  *         ↓ Hiển thị config (vai trò, phong cách, nhấn mạnh)
@@ -698,7 +698,7 @@ const decryptHtmlContent = (data) => {
  * getCategoriesForDomain(domainKey)
  *   → Trả về danh sách lĩnh vực/dự án cho domain
  *   → LMKT: 6 dự án BĐS
- *   → Phanmemmottrieu: 5 lĩnh vực khác nhau
+ *   → csmbridge: 5 lĩnh vực khác nhau
  *
  * buildCategoryPrompt(categoryData, userPrompt, domainKey)
  *   → Xây dựng prompt hoàn chỉnh cho AI
@@ -717,7 +717,7 @@ const decryptHtmlContent = (data) => {
  * ========== CÁCH DÙNG ==========
  * 
  * 1. Copy file này vào p_code của sys_autos (Admin)
- * 2. Chọn Domain (LMKT hoặc Phanmemmottrieu)
+ * 2. Chọn Domain (LMKT hoặc csmbridge)
  * 3. Chọn Lĩnh Vực/Dự Án
  * 4. Nhập hướng dẫn nội dung (tùy chỉnh)
  * 5. Nhấn "Tạo Content"
@@ -767,7 +767,7 @@ const decryptHtmlContent = (data) => {
  * 
  * ⚠️ Domain phải là TOÀN BỘ danh sách:
  *    - LMKT: "h-holding.vn,h-holding.com.vn,localhost:3333"
- *    - Phanmemmottrieu: "csmbridge.net,localhost:3333"
+ *    - csmbridge: "csmbridge.net,localhost:3333"
  * 
  * ⚠️ Mỗi domain phải có app_id đúng:
  *    - csmbridge.net → app_id: "wuweb"
@@ -793,7 +793,7 @@ const decryptHtmlContent = (data) => {
  * 
  * Ví dụ:
  *   LMKT → h-holding.vn → app_id: "lmkt" → Lấy data từ app LMKT
- *   Phanmemmottrieu → csmbridge.net → app_id: "wuweb" → Lấy data từ app Phanmemmottrieu
+ *   csmbridge → csmbridge.net → app_id: "wuweb" → Lấy data từ app csmbridge
  */
 const DEFAULT_UPLOAD_ENDPOINT = "/upload.shtml";
 const UPLOAD_ENDPOINT_COOLDOWN_MS = 2 * 60 * 1000;
@@ -863,7 +863,7 @@ function getCandidateUploadEndpoints(ctx = {}) {
 
 // Domain Options
 const DOMAIN_OPTIONS = {
-  phanmemmottrieu: {
+  csmbridge: {
     value: "csmbridge.net,localhost:3333",
     label: "Phần Mềm Một Triệu (Multi-Industry)",
     app_id: "wuweb"
@@ -897,7 +897,7 @@ function hostBelongsToDomainList(host, domainListValue) {
   });
 }
 
-/** Map domain cũ (phanmemmottrieu.net, chỉ csmbridge.net, …) → domainKey. */
+/** Map domain cũ (csmbridge.net, chỉ csmbridge.net, …) → domainKey. */
 function resolveDomainKeyFromValue(domainValue) {
   if (!domainValue) return "";
   const raw = String(domainValue).trim();
@@ -907,18 +907,18 @@ function resolveDomainKeyFromValue(domainValue) {
     if (hostBelongsToDomainList(lower, option.value)) return key;
   }
   if (lower.includes("h-holding") || lower.includes("lmkt")) return "lmkt";
-  if (lower.includes("phanmemmottrieu") || lower.includes("csmbridge") || lower === "localhost:3333") {
-    return "phanmemmottrieu";
+  if (lower.includes("csmbridge") || lower.includes("csmbridge") || lower === "localhost:3333") {
+    return "csmbridge";
   }
   return "";
 }
 
-/** Chuẩn hóa domain lưu DB — Phanmemmottrieu luôn "csmbridge.net,localhost:3333". */
+/** Chuẩn hóa domain lưu DB — csmbridge luôn "csmbridge.net,localhost:3333". */
 function migrateLegacyPhanmemDomain(domainValue) {
   const key = resolveDomainKeyFromValue(domainValue);
-  if (key === "phanmemmottrieu") return canonicalDomainForKey("phanmemmottrieu");
+  if (key === "csmbridge") return canonicalDomainForKey("csmbridge");
   if (key === "lmkt") return canonicalDomainForKey("lmkt");
-  return domainValue || canonicalDomainForKey("phanmemmottrieu");
+  return domainValue || canonicalDomainForKey("csmbridge");
 }
 
 /**
@@ -950,16 +950,16 @@ function normalizeTableWhere(where) {
 function domainQueryValuesForKey(domainKey) {
   const canonical = canonicalDomainForKey(domainKey);
   const set = new Set([canonical]);
-  if (domainKey === "phanmemmottrieu") {
+  if (domainKey === "csmbridge") {
     [
-      "phanmemmottrieu.net",
-      "www.phanmemmottrieu.net",
       "csmbridge.net",
       "www.csmbridge.net",
-      "phanmemmottrieu.net,localhost:3333",
+      "csmbridge.net",
+      "www.csmbridge.net",
+      "csmbridge.net,localhost:3333",
       "csmbridge.net,localhost:3333",
       "localhost:3333",
-      "phanmemmottrieu"
+      "csmbridge"
     ].forEach((d) => set.add(d));
   }
   if (domainKey === "lmkt") {
@@ -1521,9 +1521,9 @@ function ensureDomainMigrationPanel(theme) {
   const hint = document.createElement("div");
   hint.style.cssText = `font-size:12px;color:${theme.muted || theme.textSecondary};line-height:1.5;margin-bottom:10px;`;
   hint.innerHTML = ti(
-    "Quét và cập nhật <strong>web_service_detail</strong>, <strong>web_services</strong>, <strong>cấu hình Zalo</strong> từ domain cũ (VD: <code>phanmemmottrieu.net</code>) sang giá trị chuẩn theo <strong>Cài Đặt Chung → Tên miền</strong>. Phanmemmottrieu: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & lưu DB: ghi theo lô <code>bulk-update</code>, ~35 API/phút, tự chờ khi 429 (giới hạn server 500/phút/IP).</span>",
-    "Scan and update <strong>web_service_detail</strong>, <strong>web_services</strong>, and <strong>Zalo configs</strong> from legacy domains (e.g. <code>phanmemmottrieu.net</code>) to the canonical value from <strong>General Settings → Domain</strong>. Phanmemmottrieu: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & save: batched <code>bulk-update</code>, ~35 API calls/min, auto-waits on 429 (server cap 500/min/IP).</span>",
-    "扫描并更新 <strong>web_service_detail</strong>、<strong>web_services</strong>、<strong>Zalo 配置</strong>，将旧域名迁移为标准域名。Phanmemmottrieu：<code>csmbridge.net,localhost:3333</code>。<br><span style=\"opacity:.85\">✅ 迁移保存：分批 bulk-update，约 35 次 API/分钟，遇 429 自动等待（服务端 500 次/分钟/IP）。</span>"
+    "Quét và cập nhật <strong>web_service_detail</strong>, <strong>web_services</strong>, <strong>cấu hình Zalo</strong> từ domain cũ (VD: <code>csmbridge.net</code>) sang giá trị chuẩn theo <strong>Cài Đặt Chung → Tên miền</strong>. csmbridge: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & lưu DB: ghi theo lô <code>bulk-update</code>, ~35 API/phút, tự chờ khi 429 (giới hạn server 500/phút/IP).</span>",
+    "Scan and update <strong>web_service_detail</strong>, <strong>web_services</strong>, and <strong>Zalo configs</strong> from legacy domains (e.g. <code>csmbridge.net</code>) to the canonical value from <strong>General Settings → Domain</strong>. csmbridge: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & save: batched <code>bulk-update</code>, ~35 API calls/min, auto-waits on 429 (server cap 500/min/IP).</span>",
+    "扫描并更新 <strong>web_service_detail</strong>、<strong>web_services</strong>、<strong>Zalo 配置</strong>，将旧域名迁移为标准域名。csmbridge：<code>csmbridge.net,localhost:3333</code>。<br><span style=\"opacity:.85\">✅ 迁移保存：分批 bulk-update，约 35 次 API/分钟，遇 429 自动等待（服务端 500 次/分钟/IP）。</span>"
   );
 
   const targetPreview = document.createElement("div");
@@ -1884,7 +1884,7 @@ function ensureDomainDuplicateCleanupPanel(theme) {
   const hint = document.createElement("div");
   hint.style.cssText = `font-size:12px;color:${theme.muted || theme.textSecondary};line-height:1.5;margin-bottom:10px;`;
   hint.innerHTML = ti(
-    "Quét <strong>mọi bài active</strong> thuộc domain đang chọn (gồm <code>phanmemmottrieu.net</code>, <code>csmbridge.net,localhost:3333</code>, …), phát hiện trùng theo tiêu đề/nội dung/ảnh, xóa bài cũ giữ bài mới. Khác nút «Dọn tin trùng» ở khu Zalo (chỉ 1 lĩnh vực/dự án).",
+    "Quét <strong>mọi bài active</strong> thuộc domain đang chọn (gồm <code>csmbridge.net</code>, <code>csmbridge.net,localhost:3333</code>, …), phát hiện trùng theo tiêu đề/nội dung/ảnh, xóa bài cũ giữ bài mới. Khác nút «Dọn tin trùng» ở khu Zalo (chỉ 1 lĩnh vực/dự án).",
     "Scan <strong>all active posts</strong> for the selected domain (including legacy domain strings), detect duplicates by title/content/images, delete older posts. Unlike the Zalo «Cleanup duplicates» button (single industry/project only).",
     "扫描所选域名下<strong>全部 active 文章</strong>（含旧域名字符串），按标题/内容/图片查重并删除旧文。与 Zalo 区「清理重复」按钮不同（后者仅单个行业/项目）。"
   );
@@ -2721,9 +2721,9 @@ const HASHTAGS_BY_SELLING_INTENT = {
   }
 };
 
-// ===== TITLE TEMPLATES FOR PHANMEMMOTTRIEU (Luôn có Bán/Cho thuê + Địa chỉ + Hook) =====
+// ===== TITLE TEMPLATES FOR csmbridge (Luôn có Bán/Cho thuê + Địa chỉ + Hook) =====
 const TITLE_TEMPLATES_FOR_PHANMEM = {
-  label: "Tiêu đề Phanmemmottrieu - [Giao dịch] + [Địa chỉ] + [Hook Hấp Dẫn]",
+  label: "Tiêu đề csmbridge - [Giao dịch] + [Địa chỉ] + [Hook Hấp Dẫn]",
   templates: [
     // Pattern 1: [Bán/Cho thuê] + {location} - {hook}
     "Bán {property} {location} - {hook}",
@@ -2769,7 +2769,7 @@ const TITLE_TEMPLATES_FOR_SOFTWARE = {
 function isSoftwareTechSeoContext(industry, domainKey, topic = "") {
   if (domainKey === "lmkt") return false;
   if (industry === "bat-dong-san") return false;
-  if (domainKey === "phanmemmottrieu") return true;
+  if (domainKey === "csmbridge") return true;
   const ind = String(industry || "").toLowerCase();
   if (["phan-mem", "software", "cong-nghe", "technology", "it-services"].some(k => ind.includes(k))) {
     return true;
@@ -2816,9 +2816,9 @@ function generateTitleForSoftware(industry, opts = {}) {
   return title;
 }
 
-// ===== HELPER: GENERATE TITLE FOR PHANMEMMOTTRIEU =====
+// ===== HELPER: GENERATE TITLE FOR csmbridge =====
 function generateTitleForPhanmem(industry, opts = {}) {
-  if (isSoftwareTechSeoContext(industry, "phanmemmottrieu", opts.topic || opts.hook || "")) {
+  if (isSoftwareTechSeoContext(industry, "csmbridge", opts.topic || opts.hook || "")) {
     return generateTitleForSoftware(industry, opts);
   }
   const templates = TITLE_TEMPLATES_FOR_PHANMEM.templates;
@@ -3899,7 +3899,7 @@ async function cleanupDuplicateArticles(duplicateGroups = [], ctx = {}) {
  * @returns {Object} - Kết quả cleanup
  */
 async function cleanupDuplicatesByServiceType(domainValue, serviceType, projectCode = "", ctx = {}) {
-  const domainKey = resolveDomainKeyFromValue(domainValue) || "phanmemmottrieu";
+  const domainKey = resolveDomainKeyFromValue(domainValue) || "csmbridge";
   const scopeServiceType = serviceType || projectCode || "";
   console.log(`\n[cleanupDuplicatesByServiceType] === START ===`);
   console.log(`   Domain key: ${domainKey} (input: ${domainValue})`);
@@ -4087,7 +4087,7 @@ async function cleanupBrokenFeaturedImagesByServiceType(domainValue, serviceType
   const appId = getAppIdFromDomainOptions(domainValue) || "wuweb";
 
   try {
-    const domainKey = resolveDomainKeyFromValue(domainValue) || "phanmemmottrieu";
+    const domainKey = resolveDomainKeyFromValue(domainValue) || "csmbridge";
     ctx.app_id = ctx.app_id || appId;
     console.log(`\n   📥 Đang tải toàn bộ bài (where + mọi biến thể domain)...`);
     const articles = await fetchActiveArticlesForDomainKey(domainKey, ctx, {
@@ -4729,7 +4729,7 @@ function generateSlug(text, projectName = "") {
 function getAntiAIPrompt(industry, topic, articleHistory = [], opts = {}) {
   const industryConfig = INDUSTRY_TYPES[industry] || INDUSTRY_TYPES["bat-dong-san"];
   const isLmkt = opts.domainKey === "lmkt";
-  const isSoftwareTech = !isLmkt && isSoftwareTechSeoContext(industry, opts.domainKey || "phanmemmottrieu", topic);
+  const isSoftwareTech = !isLmkt && isSoftwareTechSeoContext(industry, opts.domainKey || "csmbridge", topic);
   
   // ===== CHỌN BUYER PERSONA NGẪU NHIÊN =====
   const personaKeys = Object.keys(BUYER_PERSONAS_V2);
@@ -4759,7 +4759,7 @@ function getAntiAIPrompt(industry, topic, articleHistory = [], opts = {}) {
       topic
     });
   } else {
-    // Phanmemmottrieu (BĐS / legacy): Tiêu đề có [Bán/Cho thuê] + [Địa chỉ] + [Hook]
+    // csmbridge (BĐS / legacy): Tiêu đề có [Bán/Cho thuê] + [Địa chỉ] + [Hook]
     generatedTitle = generateTitleForPhanmem(industry, {
       property: opts.property || "dịch vụ",
       location: opts.location || "Quận 7",
@@ -5428,7 +5428,7 @@ function findCategoryTemplate(domainKey, slug) {
 
 // ===== AUTO-SYNC SERVICE DEFINITIONS FROM SERVER =====
 /**
- * Tự động đồng bộ service types (phanmemmottrieu) và projects (LMKT) từ server
+ * Tự động đồng bộ service types (csmbridge) và projects (LMKT) từ server
  * - Đảm bảo khi có service_type hoặc project mới, code sẽ tự cập nhật
  * - Cache trong localStorage (5 phút)
  * - Merge trực tiếp vào INDUSTRY_TYPES và LMKT_PROJECT_DEFS
@@ -5532,7 +5532,7 @@ async function syncServiceDefinitionsFromServer(force = false) {
       console.log(`✅ [syncServiceDefs] Synced ${lmktRows.length} LMKT projects (${totalSynced} new)`);
     }
     
-    // ===== 2️⃣ Sync Phanmemmottrieu Service Types =====
+    // ===== 2️⃣ Sync csmbridge Service Types =====
     let pmtRows = [];
     if (syncApps.includes("wuweb")) {
       const pmtRowsRaw = await fetchAllTableRowsPaginated({
@@ -7814,10 +7814,10 @@ async function runMessages(messages, configIdOverride = null) {
   let ok = 0, fail = 0;
   
   // ⚠️ CRITICAL SECURITY: Kiểm tra xem có config_id hay không
-  // Nếu không có, chỉ xử lý phanmemmottrieu (legacy behavior)
+  // Nếu không có, chỉ xử lý csmbridge (legacy behavior)
   // Nếu có, dùng config đó
   let configToUse = null;
-  let domainConfigToUse = DOMAIN_OPTIONS["phanmemmottrieu"];
+  let domainConfigToUse = DOMAIN_OPTIONS["csmbridge"];
   
   if (configIdOverride) {
     try {
@@ -7825,7 +7825,7 @@ async function runMessages(messages, configIdOverride = null) {
       configToUse = findZaloConfigById(allConfigs, configIdOverride);
       if (configToUse) {
         console.log(`✅ [runMessages] Using config by override: config_id=${configIdOverride}`);
-        domainConfigToUse = DOMAIN_OPTIONS[configToUse.service_type === "lmkt" ? "lmkt" : "phanmemmottrieu"];
+        domainConfigToUse = DOMAIN_OPTIONS[configToUse.service_type === "lmkt" ? "lmkt" : "csmbridge"];
       } else {
         console.warn(`⚠️ [runMessages] Config override không tìm thấy: config_id=${configIdOverride}`);
       }
@@ -7833,7 +7833,7 @@ async function runMessages(messages, configIdOverride = null) {
       console.error(`❌ [runMessages] Error loading config:`, e.message);
     }
   } else {
-    console.warn(`⚠️ [runMessages] Không có config_id - chỉ xử lý phanmemmottrieu (legacy mode)`);
+    console.warn(`⚠️ [runMessages] Không có config_id - chỉ xử lý csmbridge (legacy mode)`);
   }
 
   if (configIdOverride && !configToUse) {
@@ -7858,7 +7858,7 @@ async function runMessages(messages, configIdOverride = null) {
       await processContent(msg, {
         app_id: derivedAppId,  // ✅ Use derived app_id from domain
         domain: domainConfigToUse.value,
-        domainKey: domainConfigToUse === DOMAIN_OPTIONS["lmkt"] ? "lmkt" : "phanmemmottrieu",
+        domainKey: domainConfigToUse === DOMAIN_OPTIONS["lmkt"] ? "lmkt" : "csmbridge",
         industry: configToUse?.service_type || "bat-dong-san",
         author: "Zalo Bot",
         config_id: configIdOverride || null  // ✅ Pass config_id to ensure proper config isolation
@@ -8234,7 +8234,7 @@ function refreshGlobalSettingsOptionsFromDefinitions() {
       return false;
     }
 
-    const currentDomain = domainSelect.value || 'phanmemmottrieu';
+    const currentDomain = domainSelect.value || 'csmbridge';
 
     const projectOptions = LMKT_PROJECT_DEFS
       .map(item => ({
@@ -8338,7 +8338,7 @@ function ensureGlobalSettingsPanel() {
   loadBtn.style.cssText = `padding:6px 10px;border:1px solid ${theme.border};border-radius:4px;background:${theme.bg};color:${theme.text};font-size:12px;cursor:pointer`;
 
   loadBtn.onclick = async () => {
-    const domainKey = domainSelect.value || 'phanmemmottrieu';
+    const domainKey = domainSelect.value || 'csmbridge';
     loadBtn.disabled = true;
     loadBtn.textContent = t('loading');
     try {
@@ -8465,7 +8465,7 @@ function getGlobalSettings() {
   const industrySelect = document.getElementById("global-industry-select");
   const projectSelect = document.getElementById("global-project-select");
 
-  const domainKey = domainSelect?.value || "phanmemmottrieu";
+  const domainKey = domainSelect?.value || "csmbridge";
   const isLmkt = domainKey === "lmkt";
 
   return {
@@ -9304,7 +9304,7 @@ function resolveSyncAppIds(ctx) {
   const isDev = Boolean(seft.Uinfos?.dev || seft.user?.dev);
   const apps = new Set();
   if (domainKey === "lmkt") apps.add("lmkt");
-  if (domainKey === "phanmemmottrieu") apps.add("wuweb");
+  if (domainKey === "csmbridge") apps.add("wuweb");
   if (isDev) {
     apps.add("lmkt");
     apps.add("wuweb");
@@ -11224,7 +11224,7 @@ async function ensureUI() {
     
     console.log(`[cleanupDupBtn] Global settings:`, globalSettings);
     
-    // ✅ Determine which field to use: LMKT uses Project, Phanmemmottrieu uses Industry
+    // ✅ Determine which field to use: LMKT uses Project, csmbridge uses Industry
     const isLmkt = globalSettings.domainKey === "lmkt";
     const serviceFieldName = isLmkt ? "project" : "industry";
     const serviceFieldValue = isLmkt ? globalSettings.project : globalSettings.industry;
@@ -11300,10 +11300,10 @@ async function ensureUI() {
       
       // Call cleanup function
       // For LMKT: use project as serviceType parameter
-      // For Phanmemmottrieu: use industry as serviceType parameter
+      // For csmbridge: use industry as serviceType parameter
       const cleanupResult = await cleanupDuplicatesByServiceType(
         selectedDomain,
-        selectedService,  // This is either project (LMKT) or industry (Phanmemmottrieu)
+        selectedService,  // This is either project (LMKT) or industry (csmbridge)
         selectedProject,
         ctx
       );
@@ -16359,7 +16359,7 @@ function ensureZaloMultiGroupUI(container) {
       .map(cb => cb.value);
 
     return {
-      domainKey: domainSelect?.value || "phanmemmottrieu",
+      domainKey: domainSelect?.value || "csmbridge",
       industry: industrySelect?.value || "bat-dong-san",
       project: projectSelect?.value || "",
       checkedFanpages,
@@ -16377,7 +16377,7 @@ function ensureZaloMultiGroupUI(container) {
     const keepOriginalCheckbox = document.getElementById("zalo-keep-original-content-checkbox");
 
     if (domainSelect) {
-      domainSelect.value = state.domainKey || "phanmemmottrieu";
+      domainSelect.value = state.domainKey || "csmbridge";
       domainSelect.dispatchEvent(new Event('change'));
     }
     if (industrySelect) industrySelect.value = state.industry || "bat-dong-san";
@@ -16445,7 +16445,7 @@ function ensureZaloMultiGroupUI(container) {
     // Ưu tiên dùng domain_key nếu có, fallback sang reverse mapping
     let domainKey = row.domain_key;
     if (!domainKey) {
-      domainKey = resolveDomainKeyFromValue(row.domain) || "phanmemmottrieu";
+      domainKey = resolveDomainKeyFromValue(row.domain) || "csmbridge";
     }
     
     const domainSelect = document.getElementById("global-domain-select");
@@ -17929,7 +17929,7 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
  * 
  * Cách hoạt động:
  *   - Kiểm tra window.location.hostname
- *   - Nếu là phanmemmottrieu → Trả về config phanmemmottrieu
+ *   - Nếu là csmbridge → Trả về config csmbridge
  *   - Nếu là h-holding hoặc lmkt → Trả về config lmkt
  *   - Nếu localhost → User sẽ chọn manual từ dropdown
  * 
@@ -17942,11 +17942,11 @@ function getDomainInfo() {
   if (hostname.includes("h-holding") || hostname.includes("lmkt")) {
     return DOMAIN_OPTIONS.lmkt;
   }
-  if (hostname.includes("phanmemmottrieu")
+  if (hostname.includes("csmbridge")
       || hostname.includes("csmbridge")
       || hostname === "localhost"
       || hostname === "127.0.0.1") {
-    return DOMAIN_OPTIONS.phanmemmottrieu;
+    return DOMAIN_OPTIONS.csmbridge;
   }
 
   return null;
@@ -17959,7 +17959,7 @@ function getDomainInfo() {
  * 
  * Input: 
  *   - "lmkt" → Trả về 6 dự án BĐS
- *   - "phanmemmottrieu" → Trả về 5 lĩnh vực
+ *   - "csmbridge" → Trả về 5 lĩnh vực
  * 
  * Output: Array of { slug, name, description, type, config }
  * 
@@ -17970,7 +17970,7 @@ function getDomainInfo() {
  *     ...
  *   ]
  * 
- *   Phanmemmottrieu: [
+ *   csmbridge: [
  *     { slug: "bat-dong-san", name: "Bất Động Sản", type: "industry", config: {...} },
  *     { slug: "phan-mem", name: "Phần Mềm", type: "industry", config: {...} },
  *     ...
@@ -18242,7 +18242,7 @@ USER REQUEST: ${userCustomPrompt || '(Không có yêu cầu bổ sung)'}
 }
 `;
   } else {
-    // Phanmemmottrieu: Lĩnh vực có config riêng
+    // csmbridge: Lĩnh vực có config riêng
     const config = categoryData.config || INDUSTRY_TYPES[categoryData.slug] || {};
     const role = config.prompt_role || "chuyên gia tư vấn dịch vụ";
     const style = config.prompt_style || "Rõ ràng, dễ hiểu, nhấn mạnh lợi ích";
@@ -18399,7 +18399,7 @@ USER REQUEST: ${userCustomPrompt || '(Không có yêu cầu bổ sung)'}
  * @param {string} categoryName - Tên lĩnh vực/dự án (VD: "Phần Mềm", "Destino Centro")
  * @param {string} description - Mô tả lĩnh vực/dự án
  * @param {string} prompt - Hướng dẫn của người dùng
- * @param {string} domainKey - Domain key (lmkt hoặc phanmemmottrieu)
+ * @param {string} domainKey - Domain key (lmkt hoặc csmbridge)
  * @param {object} categoryData - Category data object chứa slug, service_code, etc.
  */
 function getCategoryContentPrompt(categoryName, description, prompt, domainKey = '', categoryData = {}, creative = {}) {
@@ -18713,7 +18713,7 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
   const domainKey = resolveDomainKeyFromValue(ctx.domain) || "";
 
   const selectedCategoryData = contentData.selectedCategoryData || {};
-  const baseCategory = findCategoryTemplate(domainKey || 'phanmemmottrieu', categorySlug) || selectedCategoryData || {};
+  const baseCategory = findCategoryTemplate(domainKey || 'csmbridge', categorySlug) || selectedCategoryData || {};
   const baseConfig = baseCategory.config || {};
 
   const rowsBySlug = await ctx.helperApi.getTableData({
@@ -18958,7 +18958,7 @@ async function createServiceCategoryContent(opts = {}) {
 //   1. Kiểm tra UI đã tồn tại chưa
 //   2. Nếu có rồi → Trả về element hiện có
 //   3. Nếu chưa → Tạo UI mới gồm:
-//      - Domain dropdown (Chọn LMKT hoặc Phanmemmottrieu)
+//      - Domain dropdown (Chọn LMKT hoặc csmbridge)
 //      - Category dropdown (Tự động load theo domain)
 //      - Description preview (Hiển thị mô tả lĩnh vực)
 //      - Textarea (Nhập hướng dẫn custom)
@@ -19242,7 +19242,7 @@ async function ensureServiceContentUI() {
       note.innerHTML = ti("💡 <strong>LMKT:</strong> Danh mục chính là <strong>Dự án</strong>. Lĩnh vực bị khóa ở <strong>Bất động sản</strong>.", "💡 <strong>LMKT:</strong> Main category is <strong>Project</strong>. Industry is locked to <strong>Real Estate</strong>.", "💡 <strong>LMKT：</strong>主分类为<strong>项目</strong>，行业锁定为<strong>房地产</strong>。");
       infoContent.innerHTML = `<strong>🏢 ${ti('Tên miền', 'Domain', '域名')}:</strong> ${domainLabel} | <strong>🏗️ ${ti('Danh mục (Dự án)', 'Category (Project)', '分类（项目）')}:</strong> ${projectLabel} | <strong>🏢 ${ti('Lĩnh vực', 'Industry', '行业')}:</strong> ${industryLabel} (${ti('cố định', 'fixed', '固定')})`;
     } else {
-      note.innerHTML = ti("💡 <strong>Phanmemmottrieu:</strong> Danh mục chính là <strong>Lĩnh vực</strong>. Chọn ở <strong>Cài Đặt Chung</strong>.", "💡 <strong>Phanmemmottrieu:</strong> Main category is <strong>Industry</strong>. Choose it in <strong>General Settings</strong>.", "💡 <strong>Phanmemmottrieu：</strong>主分类为<strong>行业</strong>，请在<strong>常规设置</strong>中选择。");
+      note.innerHTML = ti("💡 <strong>csmbridge:</strong> Danh mục chính là <strong>Lĩnh vực</strong>. Chọn ở <strong>Cài Đặt Chung</strong>.", "💡 <strong>csmbridge:</strong> Main category is <strong>Industry</strong>. Choose it in <strong>General Settings</strong>.", "💡 <strong>csmbridge：</strong>主分类为<strong>行业</strong>，请在<strong>常规设置</strong>中选择。");
       infoContent.innerHTML = `<strong>🏢 ${ti('Tên miền', 'Domain', '域名')}:</strong> ${domainLabel} | <strong>🏢 ${ti('Danh mục (Lĩnh vực)', 'Category (Industry)', '分类（行业）')}:</strong> ${industryLabel}`;
     }
     
@@ -19935,7 +19935,7 @@ async function ensureServiceContentUI() {
  *   - industry: Lĩnh vực (slug)
  *   - project: Dự án (slug) - nếu LMKT
  *   - userPrompt: Hướng dẫn custom từ user
- *   - domainKey: lmkt | phanmemmottrieu
+ *   - domainKey: lmkt | csmbridge
  * 
  * Output: String prompt hoàn chỉnh cho AI
  * ========================================================
@@ -19955,7 +19955,7 @@ function createServiceDetailPostPrompt(opts = {}) {
     : (INDUSTRY_TYPES[industry]?.name || industry);
 
   const basePrompt = `
-Bạn là chuyên gia viết nội dung SEO cho website ${isLmkt ? 'BĐS LMKT' : 'Phanmemmottrieu'}.
+Bạn là chuyên gia viết nội dung SEO cho website ${isLmkt ? 'BĐS LMKT' : 'csmbridge'}.
 
 **NHIỆM VỤ: Tạo bài viết chi tiết**
 
