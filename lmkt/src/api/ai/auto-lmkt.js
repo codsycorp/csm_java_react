@@ -9318,8 +9318,23 @@ function resolvePrimaryDomain(ctx) {
   return domain.replace(/^www\./i, "");
 }
 
-/** URL SEO sync — luôn api.* host (giống ky: VITE_API_BASE_URL + ai-generate-seo-content). */
+/** Same-origin SEO — admin SPA / Vite proxy (tránh nginx 404 trên api.* khi chưa có location). */
+function resolveSeoSameOriginUrls() {
+  if (typeof window === "undefined") return [];
+  const host = String(window.location.hostname || "").toLowerCase();
+  if (!host.startsWith("admin.") && host !== "localhost" && host !== "127.0.0.1") return [];
+  const origin = String(window.location.origin || "").replace(/\/+$/, "");
+  if (!origin) return [];
+  return [
+    `${origin}/api/ai-generate-seo-content`,
+    `${origin}/ai-generate-seo-content`,
+  ];
+}
+
+/** URL SEO sync — ưu tiên same-origin admin, fallback api.* host. */
 function resolveSeoApiEndpoint(ctx) {
+  const sameOrigin = resolveSeoSameOriginUrls();
+  if (sameOrigin.length) return sameOrigin[0];
   const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
   const seft = safeCtx?.seftObj || (typeof window !== "undefined" ? window.seft : {}) || {};
   const candidates = [
@@ -9341,6 +9356,7 @@ function resolveSeoApiEndpointCandidates(ctx) {
   const primary = resolveSeoApiEndpoint(safeCtx);
   const domain = resolvePrimaryDomain(safeCtx);
   const urls = new Set([
+    ...resolveSeoSameOriginUrls(),
     primary,
     primary.includes("/api/ai-generate-seo-content")
       ? primary.replace("/api/ai-generate-seo-content", "/ai-generate-seo-content")
@@ -9348,7 +9364,7 @@ function resolveSeoApiEndpointCandidates(ctx) {
     `https://api.${domain}/ai-generate-seo-content`,
     `https://api.${domain}/api/ai-generate-seo-content`,
   ]);
-  return [...urls].filter((u) => u && !/\/\/admin\./i.test(u));
+  return [...urls].filter(Boolean);
 }
 
 function isNginxNotFoundHtml(text) {
@@ -9363,9 +9379,10 @@ async function callSeoPromptDirect(ctx, prompt) {
   return api;
 }
 
-/** window.csmAI — cùng ky client frontend-admin (generateSeoAntiAiOneShot / generateSeoContentWithPrompt). */
+/** window.csmAI / seft — dynamic-code wrapper ưu tiên same-origin admin. */
 async function tryCallSeoViaHelperAi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
-  const helperAi = ctx?.helperAi || (typeof window !== "undefined" ? window.csmAI : null);
+  const seft = ctx?.seftObj || (typeof window !== "undefined" ? window.seft : null);
+  const helperAi = ctx?.helperAi || seft || (typeof window !== "undefined" ? window.csmAI : null);
   if (!helperAi) return null;
   try {
     if (useSeoOneShot && typeof helperAi.generateSeoAntiAiOneShot === "function") {
@@ -9377,7 +9394,7 @@ async function tryCallSeoViaHelperAi(ctx, { useSeoOneShot, oneShotPayload, promp
       return await helperAi.generateSeoContentWithPrompt(prompt, { taskType: "seo_content" });
     }
   } catch (helperErr) {
-    console.warn("[SEO] window.csmAI failed:", helperErr?.message || helperErr);
+    console.warn("[SEO] helper AI failed:", helperErr?.message || helperErr);
     return {
       success: false,
       code: -1,
@@ -9388,41 +9405,19 @@ async function tryCallSeoViaHelperAi(ctx, { useSeoOneShot, oneShotPayload, promp
   return null;
 }
 
-/**
- * POST /ai-generate-seo-content — chuẩn frontend-admin: window.csmAI trước, fallback fetch api.*.
- */
-async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
+async function postSeoGenerateContentToUrls(ctx, urls, body, timeoutMs) {
   const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
-  const body = { mode: "sync", async: false, taskType: "seo_content" };
-  if (useSeoOneShot) {
-    body.seoPipeline = "anti_ai_one_shot";
-    body.seoContext = oneShotPayload;
-  } else {
-    body.prompt = prompt;
-  }
-
-  const helperResult = await tryCallSeoViaHelperAi(safeCtx, { useSeoOneShot, oneShotPayload, prompt });
-  if (helperResult != null && helperResult.success !== false && helperResult.code !== -1) {
-    console.log("[SEO] via window.csmAI (frontend-admin ky client)");
-    return helperResult;
-  }
-  if (helperResult?.message) {
-    console.warn("[SEO] window.csmAI không dùng được — fallback fetch api.*:", helperResult.message);
-  }
-
-  const candidateUrls = resolveSeoApiEndpointCandidates(safeCtx);
-  const timeoutMs = 24 * 60 * 60 * 1000;
   let lastError = null;
 
-  for (let u = 0; u < candidateUrls.length; u += 1) {
-    const url = candidateUrls[u];
+  for (let u = 0; u < urls.length; u += 1) {
+    const url = urls[u];
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     let timeoutId = null;
     if (controller) {
       timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     }
 
-    console.log(`[SEO] POST ${url} promptChars=${body.prompt ? body.prompt.length : 0} oneShot=${!!useSeoOneShot} (fetch api.*)`);
+    console.log(`[SEO] POST ${url} promptChars=${body.prompt ? body.prompt.length : 0} oneShot=${!!body.seoPipeline}`);
 
     try {
       const response = await resolveCsmRawFetch()(url, {
@@ -9440,7 +9435,7 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
         data = { raw: text };
       }
       if (response.status === 404 || isNginxNotFoundHtml(text)) {
-        lastError = new Error(`HTTP 404 — ${url}`);
+        lastError = new Error(`HTTP 404 nginx — ${url}`);
         continue;
       }
       if (!response.ok) {
@@ -9464,9 +9459,48 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
     }
   }
 
-  throw lastError || new Error(
-    "POST /ai-generate-seo-content không tìm thấy — kiểm tra domain_api_url trỏ api.* và redeploy backend/nginx"
+  throw lastError || new Error("POST /ai-generate-seo-content không tìm thấy trên mọi URL đã thử");
+}
+
+/**
+ * POST /ai-generate-seo-content — same-origin admin trước (giống dev/Vite), rồi csmAI, rồi api.*.
+ */
+async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
+  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
+  const body = { mode: "sync", async: false, taskType: "seo_content" };
+  if (useSeoOneShot) {
+    body.seoPipeline = "anti_ai_one_shot";
+    body.seoContext = oneShotPayload;
+  } else {
+    body.prompt = prompt;
+  }
+
+  const timeoutMs = 24 * 60 * 60 * 1000;
+  const sameOriginUrls = resolveSeoSameOriginUrls();
+  const remoteUrls = resolveSeoApiEndpointCandidates(safeCtx).filter(
+    (url) => !sameOriginUrls.includes(url)
   );
+
+  if (sameOriginUrls.length) {
+    try {
+      const data = await postSeoGenerateContentToUrls(safeCtx, sameOriginUrls, body, timeoutMs);
+      console.log("[SEO] via same-origin admin (/api/ai-generate-seo-content)");
+      return data;
+    } catch (sameOriginErr) {
+      console.warn("[SEO] same-origin admin thất bại — thử helper/fallback api.*:", sameOriginErr?.message || sameOriginErr);
+    }
+  }
+
+  const helperResult = await tryCallSeoViaHelperAi(safeCtx, { useSeoOneShot, oneShotPayload, prompt });
+  if (helperResult != null && helperResult.success !== false && helperResult.code !== -1) {
+    console.log("[SEO] via window.csmAI / seft helper");
+    return helperResult;
+  }
+  if (helperResult?.message) {
+    console.warn("[SEO] helper AI không dùng được — fallback fetch api.*:", helperResult.message);
+  }
+
+  return postSeoGenerateContentToUrls(safeCtx, remoteUrls, body, timeoutMs);
 }
 
 /**
