@@ -209,7 +209,7 @@ const defaultConfig: Options = {
 						all_headers: Array.from(request.headers.entries()).map(([k, v]) => ({ key: k, value: v }))
 					});
 				}
-				return requestOverride;
+				return requestOverride ?? request;
 			},
 		],
 		afterResponse: [

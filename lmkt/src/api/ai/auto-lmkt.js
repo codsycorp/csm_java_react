@@ -4583,7 +4583,7 @@ function resolveUiLangHeader() {
   return "vi-VN";
 }
 
-function buildApiHeaders(ctx = {}) {
+function buildApiHeaders(ctx = {}, opts = {}) {
   const headers = {
     Accept: "application/json",
     "Content-Type": "application/json",
@@ -4597,9 +4597,11 @@ function buildApiHeaders(ctx = {}) {
   if (csrfToken) {
     headers["X-CSRF-Token"] = csrfToken;
   }
-  const refreshToken = getRefreshTokenForApi();
-  if (refreshToken) {
-    headers["X-Refresh-Token"] = refreshToken;
+  if (!opts.omitRefreshToken) {
+    const refreshToken = getRefreshTokenForApi();
+    if (refreshToken) {
+      headers["X-Refresh-Token"] = refreshToken;
+    }
   }
   const clientId = getClientIdForApi();
   if (clientId) {
@@ -9247,7 +9249,7 @@ async function callCsmApiPost(ctx, path, body = {}, options = {}) {
   try {
     const response = await resolveCsmRawFetch()(url, {
       method: "POST",
-      headers: buildApiHeaders(safeCtx),
+      headers: buildApiHeaders(safeCtx, { omitRefreshToken: Boolean(options.omitRefreshToken) }),
       credentials: "include",
       body: JSON.stringify(payload),
       signal: controller ? controller.signal : undefined,
@@ -9384,22 +9386,41 @@ async function tryCallSeoViaHelperAi(ctx, { useSeoOneShot, oneShotPayload, promp
 }
 
 /**
- * POST /ai-generate-seo-content — chỉ qua window.csmAI / seft (request.post ky, giống get-table-data).
- * Không raw fetch api.* — tránh thiếu header auth/CORS so với frontend-admin.
+ * POST /ai-generate-seo-content — cùng callCsmApiPost như get-table-data (apiBase + path).
+ * Không qua window.csmAI/ky admin bundle (tránh URL ghép kép khi deploy frontend cũ).
  */
 async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
   const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
-  const helperResult = await tryCallSeoViaHelperAi(safeCtx, { useSeoOneShot, oneShotPayload, prompt });
-  if (helperResult != null) {
-    if (helperResult.success === false || helperResult.code === -1) {
-      throw new Error(helperResult.message || "SEO API thất bại (window.csmAI / seft)");
+  const body = {
+    mode: "sync",
+    async: false,
+    taskType: "seo_content",
+  };
+  if (useSeoOneShot && oneShotPayload) {
+    const p = String(oneShotPayload.prompt || prompt || "").trim();
+    if (p) {
+      body.prompt = p;
+    } else {
+      body.seoPipeline = "anti_ai_one_shot";
+      body.seoContext = oneShotPayload;
     }
-    console.log("[SEO] via window.csmAI / seft (frontend-admin ky client)");
-    return helperResult;
+  } else {
+    body.prompt = prompt;
   }
-  throw new Error(
-    "window.csmAI không khả dụng — chạy auto-lmkt trong admin dynamic-code (generateSeoContentWithPrompt)"
-  );
+  const SEO_SYNC_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+  const url = resolveSeoApiEndpoint(safeCtx);
+  console.log("[SEO] via callCsmApiPost (same as get-table-data) →", url);
+  const data = await callCsmApiPost(safeCtx, "/ai-generate-seo-content", body, {
+    timeoutMs: SEO_SYNC_TIMEOUT_MS,
+    omitRefreshToken: true,
+  });
+  if (data && (data.success === false || data.code === -1)) {
+    throw new Error(data.message || "SEO API thất bại");
+  }
+  if (isNginxNotFoundHtml(data?.raw || data?.message)) {
+    throw new Error("SEO API trả nginx 404 — kiểm tra nginx location /ai-generate-seo-content");
+  }
+  return data;
 }
 
 /**
