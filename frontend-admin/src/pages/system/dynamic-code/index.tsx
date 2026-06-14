@@ -146,12 +146,16 @@ const DYNAMIC_CODE_SEO_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 /** Gọi SEO qua request.post — cùng ky client get-table-data, không fallback URL. */
 async function runtimePostSeoGenerateContent(body: Record<string, unknown>) {
+  const apiPrefix = import.meta.env.DEV
+    ? "/api"
+    : String(import.meta.env.VITE_API_BASE_URL || "https://api.csmbridge.net").replace(/\/+$/, "");
   return request.post("ai-generate-seo-content", {
     json: body,
     timeout: DYNAMIC_CODE_SEO_TIMEOUT_MS,
     retry: { limit: 0 },
     omitRefreshToken: true,
     ignoreLoading: true,
+    prefixUrl: apiPrefix,
   } as any).json<any>();
 }
 

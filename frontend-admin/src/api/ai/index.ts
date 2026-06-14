@@ -110,13 +110,17 @@ function resolveAiOptions(options?: GenerateSeoContentOptions): GenerateSeoConte
 }
 
 async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiResponse<any>> {
-	// Cùng pattern get-table-data: prefixUrl (VITE_API_BASE_URL) + path, không URL tuyệt đối.
-	return await request.post("ai-generate-seo-content", {
+	const seoPath = "ai-generate-seo-content";
+	const apiPrefix = import.meta.env.DEV
+		? "/api"
+		: String(import.meta.env.VITE_API_BASE_URL || "https://api.csmbridge.net").replace(/\/+$/, "");
+	return await request.post(seoPath, {
 		json,
 		timeout: AI_REQUEST_TIMEOUT,
 		retry: { limit: 0 },
 		omitRefreshToken: true,
 		ignoreLoading: true,
+		prefixUrl: apiPrefix,
 	} as any).json<ApiResponse<any>>();
 }
 
@@ -157,6 +161,9 @@ async function submitSeoContentJobAsync(
 	}
 
 	const startedAt = Date.now();
+	const apiPrefix = import.meta.env.DEV
+		? "/api"
+		: String(import.meta.env.VITE_API_BASE_URL || "https://api.csmbridge.net").replace(/\/+$/, "");
 	while (Date.now() - startedAt < AI_ASYNC_MAX_WAIT_MS) {
 		const statusResponse = await request
 			.post("ai-generate-seo-content", {
@@ -168,6 +175,7 @@ async function submitSeoContentJobAsync(
 				retry: { limit: 0 },
 				omitRefreshToken: true,
 				ignoreLoading: true,
+				prefixUrl: apiPrefix,
 			} as any)
 			.json<ApiResponse<any>>();
 

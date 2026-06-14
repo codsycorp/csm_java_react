@@ -79,6 +79,20 @@ function withForcedSubuserScope(payload: any): any {
 // 请求超时时间
 const API_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 10000;
 
+function sanitizeDoublePrefixedUrl(rawUrl: string): string | null {
+	// Ky + prefixUrl bug: https://api.* /https://admin.*/api/ai-generate-seo-content
+	const doublePrefixed = rawUrl.match(/^https?:\/\/[^/]+\/(https?:\/\/.+)$/i);
+	if (!doublePrefixed) {
+		return null;
+	}
+	const inner = doublePrefixed[1];
+	if (/ai-generate-seo-content/i.test(inner)) {
+		const apiBase = String(import.meta.env.VITE_API_BASE_URL || "https://api.csmbridge.net").replace(/\/+$/, "");
+		return `${apiBase}/ai-generate-seo-content`;
+	}
+	return inner;
+}
+
 const defaultConfig: Options = {
 	// In dev, always use Vite proxy to keep auth/cookie flow same-origin and stable.
 	// In production, keep env-based API base URL behavior.
@@ -95,6 +109,12 @@ const defaultConfig: Options = {
 	   beforeRequest: [
 		   async (request, options) => {
 				let requestOverride: Request | undefined;
+				const fixedUrl = sanitizeDoublePrefixedUrl(request.url);
+				if (fixedUrl) {
+					console.warn("[REQ] Fixed double-prefixed URL:", request.url, "→", fixedUrl);
+					requestOverride = new Request(fixedUrl, request);
+					request = requestOverride;
+				}
 			   const ignoreLoading = options.ignoreLoading;
 			   if (!ignoreLoading) {
 				   globalProgress.start();
