@@ -45,8 +45,10 @@ go mod download
 NATIVEML_CACHE="$(go list -m -f '{{.Dir}}' github.com/footprintai/go-nativeml)"
 NATIVEML_BUILD="${NATIVEML_BUILD:-$GO_DIR/.cache/go-nativeml}"
 rm -rf "$NATIVEML_BUILD"
-mkdir -p "$(dirname "$NATIVEML_BUILD")"
-cp -a "$NATIVEML_CACHE/." "$NATIVEML_BUILD/"
+mkdir -p "$NATIVEML_BUILD"
+# cp -a giữ quyền read-only từ $GOMODCACHE → make/wget không ghi được
+cp -r "$NATIVEML_CACHE/." "$NATIVEML_BUILD/"
+chmod -R u+w "$NATIVEML_BUILD"
 echo "[build-native-inner] rebuilding llama.cpp in $NATIVEML_BUILD ($(ldd --version 2>/dev/null | head -1 || echo linux))"
 (cd "$NATIVEML_BUILD" && make build-libs-llama)
 
