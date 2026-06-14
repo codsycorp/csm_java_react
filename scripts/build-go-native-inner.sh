@@ -40,24 +40,46 @@ cd "$GO_DIR"
 echo "[build-native-inner] downloading modules..."
 go mod download
 
-# Go module cache ($GOMODCACHE/.../go-nativeml@version) is read-only — make must
-# download llama.cpp sources and write .a libs beside the module (CI: Permission denied).
-NATIVEML_CACHE="$(go list -m -f '{{.Dir}}' github.com/footprintai/go-nativeml)"
-NATIVEML_BUILD="${NATIVEML_BUILD:-$GO_DIR/.cache/go-nativeml}"
-rm -rf "$NATIVEML_BUILD"
-mkdir -p "$NATIVEML_BUILD"
-# cp -a giữ quyền read-only từ $GOMODCACHE → make/wget không ghi được
-cp -r "$NATIVEML_CACHE/." "$NATIVEML_BUILD/"
-chmod -R u+w "$NATIVEML_BUILD"
-echo "[build-native-inner] rebuilding llama.cpp in $NATIVEML_BUILD ($(ldd --version 2>/dev/null | head -1 || echo linux))"
-(cd "$NATIVEML_BUILD" && make build-libs-llama)
+NATIVEML_DIR="$(go list -m -f '{{.Dir}}' github.com/footprintai/go-nativeml)"
+PLATFORM="$(go env GOOS)-$(go env GOARCH)"
+PREBUILT="$NATIVEML_DIR/ggml/llamacpp/third_party/prebuilt/$PLATFORM"
+
+nativeml_has_prebuilt() {
+	[[ -f "$PREBUILT/libllama.a" && -f "$PREBUILT/libggml.a" ]]
+}
+
+nativeml_rebuild_from_source() {
+	local cache_dir build_dir
+	cache_dir="$(go list -m -f '{{.Dir}}' github.com/footprintai/go-nativeml)"
+	build_dir="${NATIVEML_BUILD:-$GO_DIR/.cache/go-nativeml}"
+	rm -rf "$build_dir"
+	mkdir -p "$build_dir"
+	cp -r "$cache_dir/." "$build_dir/"
+	chmod -R u+w "$build_dir"
+	# llama.cpp mới có LLAMA_BUILD_UI — tắt server/UI (Go chỉ cần lib inference in-process)
+	sed -i 's/cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF/cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_UI=OFF -DLLAMA_CURL=OFF -DBUILD_TESTING=OFF/' "$build_dir/Makefile"
+	echo "[build-native-inner] rebuilding llama.cpp in $build_dir ($(ldd --version 2>/dev/null | head -1 || echo linux))"
+	(cd "$build_dir" && make build-libs-llama)
+	NATIVEML_DIR="$build_dir"
+	REPLACE_ADDED=false
+	if ! grep -q '^replace github.com/footprintai/go-nativeml ' go.mod 2>/dev/null; then
+		go mod edit -replace="github.com/footprintai/go-nativeml=$build_dir"
+		REPLACE_ADDED=true
+	fi
+}
+
+REPLACE_ADDED=false
+if nativeml_has_prebuilt && [[ "${CSM_FORCE_NATIVEML_REBUILD:-0}" != 1 ]]; then
+	echo "[build-native-inner] using prebuilt llama.cpp ($PREBUILT) — skip compile"
+elif [[ "${CSM_FORCE_NATIVEML_REBUILD:-0}" == 1 ]]; then
+	echo "[build-native-inner] CSM_FORCE_NATIVEML_REBUILD=1 — compile from source"
+	nativeml_rebuild_from_source
+else
+	echo "[build-native-inner] no prebuilt for $PLATFORM — compile from source"
+	nativeml_rebuild_from_source
+fi
 
 cd "$GO_DIR"
-REPLACE_ADDED=false
-if ! grep -q '^replace github.com/footprintai/go-nativeml ' go.mod 2>/dev/null; then
-	go mod edit -replace="github.com/footprintai/go-nativeml=$NATIVEML_BUILD"
-	REPLACE_ADDED=true
-fi
 
 export CGO_ENABLED=1
 export GOOS=linux
