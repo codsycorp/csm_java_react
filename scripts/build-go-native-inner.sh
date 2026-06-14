@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build csm_go_server with -tags llamacpp ON a Linux host (Ubuntu 20.04+).
+# Build csm_go_server with -tags llamacpp ON a Linux host (Ubuntu 22.04+).
 # Called by build-go-linux-native.sh (docker / --remote / --on-host).
 #
 # Usage:

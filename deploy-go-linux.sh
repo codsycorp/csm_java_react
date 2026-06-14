@@ -45,7 +45,7 @@ echo "Code: $(git -C "$P" log --oneline -1)"
 SYNC
 
 echo ""
-echo "▶ [3/4] Build on server (CGO + llamacpp, rebuild libs for glibc 2.31)..."
+echo "▶ [3/4] Build on server (CGO + llamacpp, rebuild libs for glibc 2.35 / Ubuntu 22.04)..."
 ssh "$SERVER" bash -s "$SERVER_PATH" <<'BUILD'
 set -e
 P="$1"

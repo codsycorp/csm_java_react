@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build csm_go_server with in-process llama.cpp (Java LlamaCppNativeService parity).
-# Rebuilds go-nativeml static libs for glibc on target Linux (Ubuntu 20.04 = 2.31).
+# Rebuilds go-nativeml static libs for glibc on target Linux (Ubuntu 22.04 = 2.35).
 #
 # Usage (from repo root):
 #   ./scripts/build-go-linux-native.sh                          → dist/csm_go_server
@@ -11,7 +11,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GO_DIR="$ROOT/backend-go"
-IMAGE="${CSM_NATIVE_BUILD_IMAGE:-ubuntu:20.04}"
+IMAGE="${CSM_NATIVE_BUILD_IMAGE:-ubuntu:22.04}"
 MODE="docker"
 REMOTE=""
 OUT="$ROOT/dist/csm_go_server"

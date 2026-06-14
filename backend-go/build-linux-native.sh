@@ -1,8 +1,7 @@
 #!/bin/bash
 # Build CSM Go backend with in-process llama.cpp (CGO + -tags llamacpp).
 #
-# Production (Ubuntu 20.04): use ../scripts/build-go-linux-native.sh (Docker + glibc 2.31).
-# Dev on Linux 22.04+: run this script directly.
+# Production (Ubuntu 22.04): use ../scripts/build-go-linux-native.sh (Docker + glibc 2.35).
 #   ./build-linux-native.sh                    → ../dist/csm_go_server
 #   ./build-linux-native.sh /path/to/binary
 set -euo pipefail

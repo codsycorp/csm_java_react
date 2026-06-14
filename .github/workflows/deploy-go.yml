@@ -27,15 +27,15 @@ jobs:
         with:
           go-version-file: backend-go/go.mod
 
-      - name: Build csm_go_server (in-process llama.cpp, Ubuntu 20.04 glibc)
+      - name: Build csm_go_server (in-process llama.cpp, Ubuntu 22.04 glibc)
         run: |
-          chmod +x scripts/build-go-linux-native.sh
+          chmod +x scripts/build-go-linux-native.sh scripts/build-go-native-inner.sh
           mkdir -p dist
-          ./scripts/build-go-linux-native.sh dist/csm_go_server
+          ./scripts/build-go-linux-native.sh --on-host dist/csm_go_server
 
-      - name: Verify binary in Ubuntu 20.04 container
+      - name: Verify binary in Ubuntu 22.04 container
         run: |
-          docker run --rm -v "$PWD/dist:/dist:ro" ubuntu:20.04 bash -c \
+          docker run --rm -v "$PWD/dist:/dist:ro" ubuntu:22.04 bash -c \
             'file /dist/csm_go_server && ldd /dist/csm_go_server | head -5'
 
       - uses: actions/upload-artifact@v4
