@@ -1,4 +1,3 @@
-import ky, { HTTPError } from "ky";
 import { request } from "#src/utils";
 import type { SeoContentParams, SeoContentResult, GenerateSeoContentRequest } from "./types";
 
@@ -92,54 +91,12 @@ type GenerateSeoContentOptions = {
 	taskType?: string;
 };
 
-/** Fallback URLs khi ky prefixUrl trả 404 — cùng pattern get-table-data trên api.* host. */
-function resolveSeoDirectPostUrls(): string[] {
-	const urls = new Set<string>();
-	if (import.meta.env.DEV && typeof window !== "undefined") {
-		urls.add(`${window.location.origin.replace(/\/+$/, "")}/api/ai-generate-seo-content`);
-	}
-	const raw = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
-	if (raw.startsWith("http")) {
-		try {
-			const u = new URL(raw);
-			const host = u.hostname.toLowerCase();
-			if (host.startsWith("api.")) {
-				urls.add(`${u.origin}/ai-generate-seo-content`);
-			}
-			const path = (u.pathname || "").replace(/\/+$/, "");
-			urls.add(`${u.origin}${path}/ai-generate-seo-content`.replace(/([^:]\/)\/+/g, "$1"));
-			urls.add(`${u.origin}/api/ai-generate-seo-content`);
-		} catch {
-			// ignore invalid VITE_API_BASE_URL
-		}
-	}
-	return [...urls];
-}
-
 async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiResponse<any>> {
-	const requestOptions = {
+	return await request.post("ai-generate-seo-content", {
 		json,
 		timeout: AI_REQUEST_TIMEOUT,
 		retry: { limit: 0 },
-	};
-	try {
-		return await request.post("ai-generate-seo-content", requestOptions).json<ApiResponse<any>>();
-	} catch (err: unknown) {
-		const status = err instanceof HTTPError ? err.response.status : 0;
-		if (status !== 404) throw err;
-		let lastErr: unknown = err;
-		for (const url of resolveSeoDirectPostUrls()) {
-			try {
-				return await ky.post(url, { ...requestOptions, credentials: "include" }).json<ApiResponse<any>>();
-			} catch (fallbackErr) {
-				lastErr = fallbackErr;
-				if (!(fallbackErr instanceof HTTPError) || fallbackErr.response.status !== 404) {
-					throw fallbackErr;
-				}
-			}
-		}
-		throw lastErr;
-	}
+	}).json<ApiResponse<any>>();
 }
 
 async function generateSeoContentWithPromptAsync(prompt: string, options?: GenerateSeoContentOptions): Promise<ApiResponse<any>> {

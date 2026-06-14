@@ -9342,11 +9342,7 @@ function resolveSeoApiEndpointCandidates(ctx) {
   const domain = resolvePrimaryDomain(safeCtx);
   const urls = new Set([
     primary,
-    primary.includes("/api/ai-generate-seo-content")
-      ? primary.replace("/api/ai-generate-seo-content", "/ai-generate-seo-content")
-      : primary.replace("/ai-generate-seo-content", "/api/ai-generate-seo-content"),
     `https://api.${domain}/ai-generate-seo-content`,
-    `https://api.${domain}/api/ai-generate-seo-content`,
   ]);
   return [...urls].filter(Boolean);
 }
@@ -9363,7 +9359,7 @@ async function callSeoPromptDirect(ctx, prompt) {
   return api;
 }
 
-/** window.csmAI / seft — cùng ky client frontend-admin (#src/api/ai). */
+/** window.csmAI / seft — runtime dynamic-code wrapper hoặc #src/api/ai ky client. */
 async function tryCallSeoViaHelperAi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
   const seft = ctx?.seftObj || (typeof window !== "undefined" ? window.seft : null);
   const helperAi = ctx?.helperAi || seft || (typeof window !== "undefined" ? window.csmAI : null);
@@ -9371,10 +9367,18 @@ async function tryCallSeoViaHelperAi(ctx, { useSeoOneShot, oneShotPayload, promp
   if (useSeoOneShot && typeof helperAi.generateSeoAntiAiOneShot === "function") {
     const seoContext = { ...(oneShotPayload || {}) };
     if (prompt && !seoContext.prompt) seoContext.prompt = prompt;
-    return await helperAi.generateSeoAntiAiOneShot(seoContext, { taskType: "seo_content" });
+    const result = await helperAi.generateSeoAntiAiOneShot(seoContext, { taskType: "seo_content" });
+    if (result && (result.success === false || result.code === -1)) {
+      throw new Error(result.message || "SEO one-shot thất bại");
+    }
+    return result;
   }
   if (prompt && typeof helperAi.generateSeoContentWithPrompt === "function") {
-    return await helperAi.generateSeoContentWithPrompt(prompt, { taskType: "seo_content" });
+    const result = await helperAi.generateSeoContentWithPrompt(prompt, { taskType: "seo_content" });
+    if (result && (result.success === false || result.code === -1)) {
+      throw new Error(result.message || "SEO prompt thất bại");
+    }
+    return result;
   }
   return null;
 }
@@ -9387,6 +9391,9 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
   const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
   const helperResult = await tryCallSeoViaHelperAi(safeCtx, { useSeoOneShot, oneShotPayload, prompt });
   if (helperResult != null) {
+    if (helperResult.success === false || helperResult.code === -1) {
+      throw new Error(helperResult.message || "SEO API thất bại (window.csmAI / seft)");
+    }
     console.log("[SEO] via window.csmAI / seft (frontend-admin ky client)");
     return helperResult;
   }

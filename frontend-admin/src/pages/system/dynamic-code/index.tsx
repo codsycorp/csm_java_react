@@ -144,6 +144,62 @@ function normalizeLegacyApiPath(rawUrl: string): string {
 
 const DYNAMIC_CODE_SEO_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
+/** Gọi SEO qua request.post — cùng ky client get-table-data, không fallback URL. */
+async function runtimePostSeoGenerateContent(body: Record<string, unknown>) {
+  return request.post("ai-generate-seo-content", {
+    json: body,
+    timeout: DYNAMIC_CODE_SEO_TIMEOUT_MS,
+    retry: { limit: 0 },
+  }).json<any>();
+}
+
+async function runtimeGenerateSeoContentWithPrompt(
+  prompt: string,
+  options?: { taskType?: string; preferAsync?: boolean; menuDesignByDev?: boolean },
+) {
+  if (options?.preferAsync) {
+    return generateSeoContentWithPrompt(prompt, options);
+  }
+  return runtimePostSeoGenerateContent({
+    prompt,
+    mode: "sync",
+    async: false,
+    taskType: options?.taskType || "seo_content",
+    ...(options?.menuDesignByDev != null ? { menuDesignByDev: options.menuDesignByDev } : {}),
+  });
+}
+
+async function runtimeGenerateSeoAntiAiOneShot(
+  seoContext: Parameters<typeof generateSeoAntiAiOneShot>[0],
+  options?: Parameters<typeof generateSeoAntiAiOneShot>[1],
+) {
+  if (options?.preferAsync) {
+    return generateSeoAntiAiOneShot(seoContext, options);
+  }
+  const prompt = String(seoContext?.prompt || "").trim();
+  const body: Record<string, unknown> = {
+    mode: "sync",
+    async: false,
+    taskType: options?.taskType || "seo_content",
+  };
+  if (prompt) {
+    body.prompt = prompt;
+  } else {
+    body.seoPipeline = "anti_ai_one_shot";
+    body.seoContext = seoContext;
+  }
+  return runtimePostSeoGenerateContent(body);
+}
+
+const runtimeCsmAI = {
+  generateSeoContent,
+  csm_ai_generate_seo_content,
+  generateSeoContentWithPrompt: runtimeGenerateSeoContentWithPrompt,
+  generateSeoAntiAiOneShot: runtimeGenerateSeoAntiAiOneShot,
+  formatSeoPrompt,
+  PROMPT_GENERATE_POST,
+};
+
 function createLegacyApiFetchBridge(rawFetch: typeof fetch): typeof fetch {
   const bridge = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const rawUrl = typeof input === "string"
@@ -232,11 +288,7 @@ function createLegacyApiFetchBridge(rawFetch: typeof fetch): typeof fetch {
           || path === "/ai-generate-seo-content"
         ) {
           try {
-            const res = await request.post("ai-generate-seo-content", {
-              json: payload,
-              timeout: DYNAMIC_CODE_SEO_TIMEOUT_MS,
-              retry: { limit: 0 },
-            }).json<any>();
+            const res = await runtimePostSeoGenerateContent(payload);
             return new Response(JSON.stringify(res), {
               status: 200,
               headers: { "Content-Type": "application/json" },
@@ -1180,11 +1232,7 @@ ${resolvedContainerSelector} select {
     if (!Object.getOwnPropertyDescriptor(window, 'csmAI')) {
       Object.defineProperty(window, 'csmAI', {
         get() {
-          return {
-            generateSeoContent, csm_ai_generate_seo_content,
-            generateSeoContentWithPrompt, generateSeoAntiAiOneShot, formatSeoPrompt,
-            PROMPT_GENERATE_POST
-          };
+          return runtimeCsmAI;
         },
         configurable: true,
         enumerable: false
@@ -1684,11 +1732,7 @@ ${resolvedContainerSelector} select {
     if (!Object.getOwnPropertyDescriptor(window, 'csmAI')) {
       Object.defineProperty(window, 'csmAI', {
         get() {
-          return {
-            generateSeoContent, csm_ai_generate_seo_content,
-            generateSeoContentWithPrompt, generateSeoAntiAiOneShot, formatSeoPrompt,
-            PROMPT_GENERATE_POST
-          };
+          return runtimeCsmAI;
         },
         configurable: true,
         enumerable: false
@@ -1862,8 +1906,8 @@ ${resolvedContainerSelector} select {
       // AI SEO Content Generation
       csm_ai_generate_seo_content: csm_ai_generate_seo_content,
       generateSeoContent: generateSeoContent,
-      generateSeoContentWithPrompt: generateSeoContentWithPrompt,
-      generateSeoAntiAiOneShot: generateSeoAntiAiOneShot,
+      generateSeoContentWithPrompt: runtimeGenerateSeoContentWithPrompt,
+      generateSeoAntiAiOneShot: runtimeGenerateSeoAntiAiOneShot,
       formatSeoPrompt: formatSeoPrompt,
       PROMPT_GENERATE_POST: PROMPT_GENERATE_POST,
       
