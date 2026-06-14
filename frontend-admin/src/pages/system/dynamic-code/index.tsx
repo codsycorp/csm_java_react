@@ -142,125 +142,7 @@ function normalizeLegacyApiPath(rawUrl: string): string {
   }
 }
 
-/** Same-origin SEO — tránh nginx 404 trên api.* khi location chưa deploy (admin SPA proxy qua location /). */
-function resolveAdminSeoPostUrls(): string[] {
-  if (typeof window === "undefined") return [];
-  const host = window.location.hostname.toLowerCase();
-  if (!host.startsWith("admin.") && host !== "localhost" && host !== "127.0.0.1") return [];
-  const origin = window.location.origin.replace(/\/+$/, "");
-  return [`${origin}/api/ai-generate-seo-content`, `${origin}/ai-generate-seo-content`];
-}
-
-function resolveDynamicCodeApiBaseUrl(): string {
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname.toLowerCase();
-    if (host.startsWith("admin.") || host === "localhost" || host === "127.0.0.1") {
-      return `${window.location.origin.replace(/\/+$/, "")}/api`;
-    }
-  }
-  const fromEnv = String(import.meta.env.VITE_API_BASE_URL || "").trim();
-  if (fromEnv) return fromEnv;
-  return import.meta.env.DEV ? "/api" : "https://api.csmbridge.net";
-}
-
-function isNginxSeoNotFound(text: string): boolean {
-  const s = String(text || "").toLowerCase();
-  return s.includes("<title>404 not found</title>")
-    || (s.includes("404 not found") && s.includes("<center>nginx</center>"));
-}
-
-async function postSeoGenerateContentViaAdminOrigin(body: Record<string, unknown>): Promise<any | null> {
-  const urls = resolveAdminSeoPostUrls();
-  if (!urls.length) return null;
-
-  let lastError: unknown = null;
-  for (const url of urls) {
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-      const text = await response.text();
-      let data: any = {};
-      try {
-        data = text ? JSON.parse(text) : {};
-      } catch {
-        data = { raw: text };
-      }
-      if (response.status === 404 || isNginxSeoNotFound(text)) {
-        lastError = new Error(`HTTP 404 — ${url}`);
-        continue;
-      }
-      if (!response.ok) {
-        throw new Error(data?.message || text || `HTTP ${response.status}`);
-      }
-      return data;
-    } catch (error) {
-      lastError = error;
-      if (String((error as Error)?.message || "").includes("404")) continue;
-      throw error;
-    }
-  }
-  throw lastError || new Error("POST /ai-generate-seo-content không tìm thấy trên admin origin");
-}
-
-async function generateSeoContentWithPromptForDynamicCode(
-  prompt: string,
-  options?: Parameters<typeof generateSeoContentWithPrompt>[1],
-) {
-  const body: Record<string, unknown> = {
-    prompt,
-    mode: "sync",
-    async: false,
-    taskType: options?.taskType || "seo_content",
-  };
-  try {
-    const sameOrigin = await postSeoGenerateContentViaAdminOrigin(body);
-    if (sameOrigin != null) return sameOrigin;
-  } catch (sameOriginErr) {
-    console.warn("[DynamicCode][SEO] same-origin failed, fallback ky:", (sameOriginErr as Error)?.message || sameOriginErr);
-  }
-  return generateSeoContentWithPrompt(prompt, options);
-}
-
-async function generateSeoAntiAiOneShotForDynamicCode(
-  seoContext: Parameters<typeof generateSeoAntiAiOneShot>[0],
-  options?: Parameters<typeof generateSeoAntiAiOneShot>[1],
-) {
-  const prompt = String(seoContext?.prompt || "").trim();
-  const body: Record<string, unknown> = {
-    mode: "sync",
-    async: false,
-    taskType: options?.taskType || "seo_content",
-  };
-  if (prompt) {
-    body.prompt = prompt;
-  } else {
-    body.seoPipeline = "anti_ai_one_shot";
-    body.seoContext = seoContext;
-  }
-  try {
-    const sameOrigin = await postSeoGenerateContentViaAdminOrigin(body);
-    if (sameOrigin != null) return sameOrigin;
-  } catch (sameOriginErr) {
-    console.warn("[DynamicCode][SEO] same-origin one-shot failed, fallback ky:", (sameOriginErr as Error)?.message || sameOriginErr);
-  }
-  return generateSeoAntiAiOneShot(seoContext, options);
-}
-
-const dynamicCodeCsmAI = {
-  generateSeoContent,
-  csm_ai_generate_seo_content,
-  generateSeoContentWithPrompt: generateSeoContentWithPromptForDynamicCode,
-  generateSeoAntiAiOneShot: generateSeoAntiAiOneShotForDynamicCode,
-  formatSeoPrompt,
-  PROMPT_GENERATE_POST,
-};
+const DYNAMIC_CODE_SEO_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 function createLegacyApiFetchBridge(rawFetch: typeof fetch): typeof fetch {
   const bridge = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -350,18 +232,21 @@ function createLegacyApiFetchBridge(rawFetch: typeof fetch): typeof fetch {
           || path === "/ai-generate-seo-content"
         ) {
           try {
-            const data = await postSeoGenerateContentViaAdminOrigin(payload);
-            if (data != null) {
-              return new Response(JSON.stringify(data), {
-                status: 200,
-                headers: { "Content-Type": "application/json" },
-              });
-            }
+            const res = await request.post("ai-generate-seo-content", {
+              json: payload,
+              timeout: DYNAMIC_CODE_SEO_TIMEOUT_MS,
+              retry: { limit: 0 },
+            }).json<any>();
+            return new Response(JSON.stringify(res), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
           } catch (error: any) {
+            const status = Number(error?.response?.status || error?.status || 400);
             return new Response(JSON.stringify({
               success: false,
               message: error?.message || String(error),
-            }), { status: 400, headers: { "Content-Type": "application/json" } });
+            }), { status: status >= 400 ? status : 400, headers: { "Content-Type": "application/json" } });
           }
         }
       }
@@ -1295,7 +1180,11 @@ ${resolvedContainerSelector} select {
     if (!Object.getOwnPropertyDescriptor(window, 'csmAI')) {
       Object.defineProperty(window, 'csmAI', {
         get() {
-          return dynamicCodeCsmAI;
+          return {
+            generateSeoContent, csm_ai_generate_seo_content,
+            generateSeoContentWithPrompt, generateSeoAntiAiOneShot, formatSeoPrompt,
+            PROMPT_GENERATE_POST
+          };
         },
         configurable: true,
         enumerable: false
@@ -1795,7 +1684,11 @@ ${resolvedContainerSelector} select {
     if (!Object.getOwnPropertyDescriptor(window, 'csmAI')) {
       Object.defineProperty(window, 'csmAI', {
         get() {
-          return dynamicCodeCsmAI;
+          return {
+            generateSeoContent, csm_ai_generate_seo_content,
+            generateSeoContentWithPrompt, generateSeoAntiAiOneShot, formatSeoPrompt,
+            PROMPT_GENERATE_POST
+          };
         },
         configurable: true,
         enumerable: false
@@ -1936,7 +1829,8 @@ ${resolvedContainerSelector} select {
       appId: currentUserAny.app_id || user.app_id || appId || "csm",
       menuId,
       containerId: resolvedContainerId,
-      domain_api_url: resolveDynamicCodeApiBaseUrl(),
+      domain_api_url: String(import.meta.env.VITE_API_BASE_URL || "").trim()
+        || (import.meta.env.DEV ? "/api" : "https://api.csmbridge.net"),
       getContainer: () => document.getElementById(resolvedContainerId),
       user: currentUserAny,
       t,
@@ -1965,12 +1859,11 @@ ${resolvedContainerSelector} select {
       facebookExchangeToken: facebookExchangeToken,
       facebookGetPages: facebookGetPages,
       
-      // AI SEO Content Generation (same-origin admin trước — tránh nginx 404 trên api.*)
+      // AI SEO Content Generation
       csm_ai_generate_seo_content: csm_ai_generate_seo_content,
       generateSeoContent: generateSeoContent,
-      generateSeoContentWithPrompt: generateSeoContentWithPromptForDynamicCode,
-      generateSeoAntiAiOneShot: generateSeoAntiAiOneShotForDynamicCode,
-      postSeoGenerateContentSameOrigin: postSeoGenerateContentViaAdminOrigin,
+      generateSeoContentWithPrompt: generateSeoContentWithPrompt,
+      generateSeoAntiAiOneShot: generateSeoAntiAiOneShot,
       formatSeoPrompt: formatSeoPrompt,
       PROMPT_GENERATE_POST: PROMPT_GENERATE_POST,
       
