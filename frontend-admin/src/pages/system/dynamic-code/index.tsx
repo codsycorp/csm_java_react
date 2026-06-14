@@ -142,6 +142,27 @@ function normalizeLegacyApiPath(rawUrl: string): string {
   }
 }
 
+function resolveApiOrigin(): string {
+  const apiBase = String(import.meta.env.VITE_API_BASE_URL || "https://api.csmbridge.net").replace(/\/+$/, "");
+  try {
+    return new URL(apiBase.startsWith("http") ? apiBase : `https://${apiBase}`).origin;
+  } catch {
+    return "https://api.csmbridge.net";
+  }
+}
+
+/** callCsmApiPost gọi thẳng api.* — không intercept qua ky (tránh bundle cũ 404). */
+function isDirectCrossOriginApiCall(rawUrl: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const parsed = new URL(rawUrl, window.location.href);
+    const apiOrigin = resolveApiOrigin();
+    return parsed.origin === apiOrigin && parsed.origin !== window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
 const DYNAMIC_CODE_SEO_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 /** Gọi SEO qua request.post — cùng ky client get-table-data, không fallback URL. */
@@ -213,6 +234,11 @@ function createLegacyApiFetchBridge(rawFetch: typeof fetch): typeof fetch {
       : input instanceof URL
         ? input.href
         : input.url;
+
+    if (isDirectCrossOriginApiCall(rawUrl)) {
+      return rawFetch(input, init);
+    }
+
     const method = String(
       init?.method || (input instanceof Request ? input.method : "GET"),
     ).toUpperCase();
@@ -354,6 +380,10 @@ function createScopedRuntime(containerId: string): ScopedRuntime {
   const runtimeStore: Record<string, any> = Object.create(null);
   runtimeStore.csmDynamicCodeContainerId = containerId;
   runtimeStore.__csmRawFetch = rawWindow.fetch.bind(rawWindow);
+  const rawWin = rawWindow as Window & { __csmRawFetch?: typeof fetch };
+  if (typeof rawWin.__csmRawFetch !== "function") {
+    rawWin.__csmRawFetch = runtimeStore.__csmRawFetch;
+  }
   const timerRefs = {
     intervals: new Set<number>(),
     timeouts: new Set<number>(),

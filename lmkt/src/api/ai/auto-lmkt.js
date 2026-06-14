@@ -9212,13 +9212,20 @@ function resolveAiLocalApiBase(ctx) {
   return "";
 }
 
-/** fetch gốc — bỏ qua legacy bridge (tránh SEO loop qua window.csmAI). */
+/** fetch gốc — bỏ qua legacy bridge (tránh SEO loop qua window.csmAI / ky 404). */
 function resolveCsmRawFetch() {
   const w = typeof window !== "undefined" ? window : null;
-  if (w && typeof w.__csmRawFetch === "function") {
-    return w.__csmRawFetch.bind(w);
-  }
+  const pickRaw = (win) => (
+    win && typeof win.__csmRawFetch === "function" ? win.__csmRawFetch.bind(win) : null
+  );
+  const fromScoped = pickRaw(w);
+  if (fromScoped) return fromScoped;
+  try {
+    const fromTop = pickRaw(w && w.top);
+    if (fromTop) return fromTop;
+  } catch (_e) { /* cross-origin frame */ }
   if (typeof fetch === "function") {
+    console.warn("[callCsmApiPost] __csmRawFetch missing — dùng window.fetch (có thể qua legacy bridge)");
     return fetch.bind(w || (typeof globalThis !== "undefined" ? globalThis : {}));
   }
   return fetch;
