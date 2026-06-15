@@ -149,7 +149,22 @@ func RefreshSessionValidForEndpoint(user model.User, clientIP, clientUA string) 
 	if RefreshTokenExpired(user) {
 		return false
 	}
-	return RefreshTokenIPMatches(user, clientIP) && RefreshTokenUAMatches(user, clientUA)
+	savedIP := ""
+	if user.RefreshTokenIP != nil {
+		savedIP = NormalizeClientIP(*user.RefreshTokenIP)
+	}
+	savedUA := ""
+	if user.RefreshTokenUA != nil {
+		savedUA = NormalizeUserAgent(*user.RefreshTokenUA)
+	}
+	// Mirror middleware: only enforce IP/UA when stored on the session row.
+	if savedIP != "" && NormalizeClientIP(clientIP) != savedIP {
+		return false
+	}
+	if savedUA != "" && !UserAgentMatches(clientUA, savedUA) {
+		return false
+	}
+	return true
 }
 
 func RefreshTokenCandidates(h http.Header, params map[string]any) []string {

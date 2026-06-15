@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	"csm_server/backend-go/internal/api/paths"
 	"csm_server/backend-go/internal/handlers"
 	"csm_server/backend-go/internal/model"
 	"csm_server/backend-go/internal/security"
@@ -36,10 +35,7 @@ func CatchAll(st *state.AppState) http.HandlerFunc {
 
 		// admin.* browser navigates to SPA routes (e.g. GET /login); skip bare-API matching
 		// so those requests reach HandleWebPath and receive index.html (Rust/Java parity).
-		isAdminHost := strings.HasPrefix(host, "admin.")
-		isAPI := security.IsAPIRequest(uri, host) ||
-			paths.IsDirectAIPath(uri) ||
-			(!isAdminHost && paths.IsBareAPIPath(uri))
+		isAPI := isDispatchAPIRequest(uri, host)
 
 		if isAPI {
 			clean := strings.TrimPrefix(uri, "/api")

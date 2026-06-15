@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"csm_server/backend-go/internal/api/paths"
 	"csm_server/backend-go/internal/model"
 	"csm_server/backend-go/internal/security"
 	"csm_server/backend-go/internal/state"
@@ -14,10 +15,13 @@ func AuthMiddleware(st *state.AppState) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			uri := r.URL.Path
-			host := resolveHost(r.Header)
+			host := extractHost(r.Header)
 			clean := strings.TrimPrefix(uri, "/api")
 
-			if !security.IsAPIRequest(uri, host) || isPublicAPIPath(r.Method, clean) {
+			// Mirror CatchAll: bare API paths on non-admin hosts (localhost:9999, vite proxy rewrite)
+			// must still pass through JWT/refresh auth — user-info self-validates in handler but
+			// get-async-routes and most endpoints rely on AuthUser in context.
+			if !isDispatchAPIRequest(uri, host) || isPublicAPIPath(r.Method, clean) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -179,16 +183,6 @@ func isOptionalAuthAPIPath(path string) bool {
 	return false
 }
 
-func resolveHost(h http.Header) string {
-	if xf := h.Get("X-Forwarded-Host"); xf != "" {
-		return strings.ToLower(xf)
-	}
-	if host := h.Get("Host"); host != "" {
-		return strings.ToLower(host)
-	}
-	return ""
-}
-
 func refreshTokenCandidates(r *http.Request) []string {
 	var out []string
 	seen := make(map[string]struct{})
@@ -210,4 +204,13 @@ func refreshTokenCandidates(r *http.Request) []string {
 	}
 	add(r.Header.Get("X-Refresh-Token"))
 	return out
+}
+
+// isDispatchAPIRequest mirrors CatchAll routing: api.* host, /api/* prefix, direct AI paths,
+// and bare auth/table paths on non-admin hosts (localhost dev + vite proxy after /api rewrite).
+func isDispatchAPIRequest(uri, host string) bool {
+	isAdminHost := strings.HasPrefix(host, "admin.")
+	return security.IsAPIRequest(uri, host) ||
+		paths.IsDirectAIPath(uri) ||
+		(!isAdminHost && paths.IsBareAPIPath(uri))
 }
