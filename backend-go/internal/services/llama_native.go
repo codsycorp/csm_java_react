@@ -112,7 +112,7 @@ func (n *llamaNativeBackend) complete(prompt string, maxTokens uint32) (string, 
 	if err := n.ensureLoadedLocked(); err != nil {
 		return "", err
 	}
-	prompt = truncateNativePrompt(prompt, n.cfg.EffectiveCodeStreamPromptCap())
+	prompt = truncateNativePrompt(prompt, MaxSafePromptChars(n.cfg))
 	max := int(maxTokens)
 	if max <= 0 {
 		max = int(n.cfg.EffectiveLlamaMaxTokens())
@@ -131,7 +131,7 @@ func (n *llamaNativeBackend) stream(prompt string, maxTokens uint32, onToken fun
 	if err := n.ensureLoadedLocked(); err != nil {
 		return err
 	}
-	prompt = truncateNativePrompt(prompt, n.cfg.EffectiveCodeStreamPromptCap())
+	prompt = truncateNativePrompt(prompt, MaxSafePromptChars(n.cfg))
 	max := int(maxTokens)
 	if max <= 0 {
 		max = int(n.cfg.EffectiveLlamaMaxTokens())
@@ -167,9 +167,5 @@ func truncateNativePrompt(prompt string, maxChars int) string {
 	if maxChars <= 0 || len(prompt) <= maxChars {
 		return prompt
 	}
-	runes := []rune(prompt)
-	if len(runes) <= maxChars {
-		return prompt
-	}
-	return string(runes[:maxChars])
+	return TruncateMiddle(prompt, maxChars)
 }

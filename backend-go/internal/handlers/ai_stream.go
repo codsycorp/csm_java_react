@@ -121,6 +121,8 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		"handledLocally": true, "reason_code": "phase1_orchestration_ready",
 		"localOnlyEnabled": true, "hasLocalContext": len(phase1.LearningBlock) > 0,
 		"responseMode": responseMode, "routingTier": phase1.Orchestration.RoutingTier,
+		"promptChars": len(prompt), "constrainedTier": services.IsConstrained8GbTier(deps.Config),
+		"promptCap": services.EffectiveLocalPromptCap(deps.Config, req.ContextType, responseMode),
 	}))
 	writeSSE(w, stageEvent("streaming_started", map[string]any{
 		"requestId": req.RequestID, "model": "local_provider", "estimatedTotalChars": len(prompt) / 4, "percent": 15,
@@ -205,6 +207,19 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		result = services.MaybeApplyGreenfieldMenuScaffold(result, req.Message, phase1.BusinessSpec)
 	}
 	if result == "" && deps.Llama.IsAvailable() {
+		reason := "empty_local_output"
+		if services.IsConstrained8GbTier(deps.Config) && len(prompt) > services.EffectiveLocalPromptCap(deps.Config, req.ContextType, responseMode) {
+			reason = "prompt_context_overflow_8gb"
+		}
+		writeSSE(w, stageEvent("blocked", map[string]any{
+			"requestId": req.RequestID, "reason_code": reason,
+			"message": uiText(req.UILang,
+				"AI local không trả về patch (server 8GB — prompt đã được cắt để vừa context 8192). Thử yêu cầu ngắn hơn hoặc chọn ít code hơn.",
+				"Local AI returned no patch (8GB server — prompt was clamped to fit 8192 context). Try a shorter request or less code.",
+				"本地 AI 未返回补丁（8GB 服务器 — 提示已裁剪以适配 8192 上下文）。请缩短请求或减少代码。",
+			),
+			"promptChars": len(prompt),
+		}))
 		result = uiText(req.UILang,
 			"AI local không trả về nội dung. Hãy thử lại hoặc kiểm tra build native (-tags llamacpp).",
 			"Local AI returned no content. Retry or check native build (-tags llamacpp).",

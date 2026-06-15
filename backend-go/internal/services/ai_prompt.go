@@ -86,8 +86,13 @@ func BuildCodeStreamLocalPromptWithExtras(cfg config.AppConfig, req *CodeStreamR
 func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest, learningBlock, comprehendBlock, tenantRAGBlock, multimodalBlock, workspaceBlock string) string {
 	mode := ResolveResponseMode(req)
 	intent := classifyLocalIntent(req.ContextType, mode)
-	editor := truncateStr(req.CurrentCode, 22_000)
+	editorMax, ragMax, learningMax, workspaceMax := ConstrainedPromptSlotCaps(cfg)
+	editor := truncateStr(req.CurrentCode, editorMax)
 	userReq := truncateStr(req.Message, 32_000)
+	learningBlock = truncateStr(learningBlock, learningMax)
+	tenantRAGBlock = truncateStr(tenantRAGBlock, ragMax)
+	workspaceBlock = truncateStr(workspaceBlock, workspaceMax)
+	multimodalBlock = truncateStr(multimodalBlock, 3000)
 
 	baseSystem := baseSystemMin
 	if intent == "quick_question" {
@@ -178,7 +183,8 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 	sb.WriteString("[USER_REQUEST]\n")
 	sb.WriteString(userReq)
 	sb.WriteString("\n[/USER_REQUEST]\n")
-	return PrepareLocalProviderPrompt(truncateStr(sb.String(), cfg.EffectiveCodeStreamPromptCap()), cfg.EffectiveCodeStreamPromptCap())
+	raw := truncateStr(sb.String(), cfg.EffectiveCodeStreamPromptCap())
+	return ClampPromptForLocalProvider(cfg, PrepareLocalProviderPrompt(raw, EffectiveLocalPromptCap(cfg, req.ContextType, mode)), req.ContextType, mode)
 }
 
 func classifyLocalIntent(contextType, responseMode string) string {
