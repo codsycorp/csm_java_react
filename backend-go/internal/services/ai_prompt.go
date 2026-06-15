@@ -85,16 +85,20 @@ func BuildCodeStreamLocalPrompt(cfg config.AppConfig, req *CodeStreamRequest) st
 	if intent == "quick_question" {
 		baseSystem = baseSystemAnalyzeMin
 	}
-	contract := frontendCodeContract
+	var contract string
 	switch intent {
 	case "menu_json":
-		if isEffectivelyEmptyMenuEditor(editor) {
-			contract = menuGreenfieldContract
+		if IsEffectivelyEmptyMenuEditor(editor) {
+			contract = ResolveMenuJsonContractForGreenfield(cfg)
 		} else {
-			contract = menuJsonContract
+			contract = ResolveMenuJsonContractForLocal(cfg)
 		}
+	case "frontend_code":
+		contract = ResolveCodeJsonContractForLocal(cfg)
 	case "quick_question":
 		contract = quickQuestionContract
+	default:
+		contract = frontendCodeContract
 	}
 
 	var sb strings.Builder
@@ -106,7 +110,11 @@ func BuildCodeStreamLocalPrompt(cfg config.AppConfig, req *CodeStreamRequest) st
 
 	switch intent {
 	case "menu_json":
-		if isEffectivelyEmptyMenuEditor(editor) {
+		if kb := BuildMenuKnowledgeBlock(cfg, 12_000); kb != "" {
+			sb.WriteString(kb)
+			sb.WriteByte('\n')
+		}
+		if IsEffectivelyEmptyMenuEditor(editor) {
 			sb.WriteString("[GREENFIELD_EMPTY_MENU]\n")
 		} else if editor != "" {
 			sb.WriteString("[ACTIVE_EDITOR_MENU_JSON]\n")
@@ -114,6 +122,10 @@ func BuildCodeStreamLocalPrompt(cfg config.AppConfig, req *CodeStreamRequest) st
 			sb.WriteString("\n[/ACTIVE_EDITOR_MENU_JSON]\n\n")
 		}
 	case "frontend_code":
+		if kb := BuildCodeKnowledgeBlock(cfg, 10_000); kb != "" {
+			sb.WriteString(kb)
+			sb.WriteByte('\n')
+		}
 		if editor != "" {
 			sb.WriteString("[ACTIVE_EDITOR_CODE]\n")
 			sb.WriteString(editor)
@@ -159,18 +171,18 @@ func classifyLocalIntent(contextType, responseMode string) string {
 	return "quick_question"
 }
 
-func isEffectivelyEmptyMenuEditor(editor string) bool {
-	s := strings.TrimSpace(editor)
-	return s == "" || s == `{"menu":[]}` || s == `{"menu": []}`
-}
-
 func loadAppContextBlock(cfg config.AppConfig, appID string, maxChars int) string {
-	path := cfg.AI.ContextDir + "/" + appID + "_context.txt"
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
+	for _, name := range []string{
+		appID + "_context.txt",
+		"ai_context_" + appID + ".md",
+	} {
+		path := cfg.AI.ContextDir + "/" + name
+		data, err := os.ReadFile(path)
+		if err == nil && len(data) > 0 {
+			return truncateStr(string(data), maxChars)
+		}
 	}
-	return truncateStr(string(data), maxChars)
+	return ""
 }
 
 func buildPromptLanguageBlock(uiLang, userRequest string) string {
@@ -268,15 +280,6 @@ Rules:
 - startLine/endLine are 1-based line numbers in the FULL active editor file.
 - action is add/edit/delete.
 - For DynamicCode runtime: no import/export/require/module.exports.
-`
-	menuJsonContract = `[MENU_JSON_CONTRACT]
-Return ONLY one JSON object with keys menu, notes, warnings.
-No markdown fences, no prose before/after JSON.
-[/MENU_JSON_CONTRACT]
-`
-	menuGreenfieldContract = `[GREENFIELD_EMPTY_MENU]
-Current menu is EMPTY. Return ONLY one JSON object: { "menu": [ ...complete tree... ], "notes": [], "warnings": [] }
-[/GREENFIELD_EMPTY_MENU]
 `
 )
 

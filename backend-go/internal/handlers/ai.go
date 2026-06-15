@@ -49,8 +49,26 @@ func (h *AiHandler) HandleAiDispatch(path string, params map[string]any) *model.
 		result = map[string]any{"recorded": true, "type": "edit_candidate"}
 	case "/ai-code-stream/agentic-approval-feedback":
 		result = map[string]any{"recorded": true, "type": "agentic"}
-	case "/ai-code-stream/menu-editor-apply", "/ai/menu-merge":
-		result = map[string]any{"merged": true, "path": path}
+	case "/ai-code-stream/menu-editor-apply":
+		apply := h.handleMenuEditorApply(params)
+		for k, v := range apply {
+			r.Set(k, v)
+		}
+		if ok, _ := apply["success"].(bool); ok {
+			r.Set("code", 200)
+		} else {
+			r.Set("code", 404)
+		}
+		return r
+	case "/ai/menu-merge":
+		merged, err := services.HandleMenuMergeAPI(params)
+		if err != nil {
+			r.Set("success", false)
+			r.Set("message", err.Error())
+			return r
+		}
+		r.Set("result", merged)
+		return r
 	case "/ai-code-stream/agentic-review-state":
 		result = map[string]any{"state": "idle", "pending": false}
 	case "/ai/propose-edits":
@@ -101,4 +119,21 @@ func (h *AiHandler) HandleAiDispatch(path string, params map[string]any) *model.
 	}
 	r.Set("result", result)
 	return r
+}
+
+func (h *AiHandler) handleMenuEditorApply(params map[string]any) map[string]any {
+	requestID := paramStr(params, "requestId")
+	menuJSON, mergeStats, ok := services.TakeMenuEditorApplyPayload(requestID)
+	out := map[string]any{"success": ok}
+	if !ok {
+		out["message"] = "menu_apply_not_found"
+		return out
+	}
+	out["requestId"] = requestID
+	out["menuJson"] = menuJSON
+	out["menuEditorApplyChars"] = len(menuJSON)
+	if len(mergeStats) > 0 {
+		out["mergeStats"] = mergeStats
+	}
+	return out
 }

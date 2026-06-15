@@ -61,6 +61,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	prompt := services.BuildCodeStreamLocalPrompt(deps.Config, req)
 	responseMode := services.ResolveResponseMode(req)
 	modelLabel := services.StreamingModelLabel(deps.Config, deps.Llama)
+	_ = responseMode
 
 	writeSSE(w, stageEvent("started", map[string]any{
 		"requestId": req.RequestID, "flowType": req.FlowType, "taskType": req.TaskType,
@@ -161,11 +162,8 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	}
 
 	elapsed := time.Since(startedAt).Milliseconds()
-	writeSSE(w, stageEvent("complete", map[string]any{
-		"requestId": req.RequestID, "status": "ok", "fullResponse": result,
-		"contextType": req.ContextType, "responseMode": responseMode, "elapsedMs": elapsed,
-		"streamedChars": len(result), "model": modelLabel,
-	}))
+	completion := services.CodeStreamCompletion(req, result, req.CurrentCode, modelLabel, elapsed)
+	writeSSE(w, completion)
 	writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": elapsed}))
 }
 
@@ -220,6 +218,9 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 	currentCode := paramStr(params, "currentCode")
 	requestID := paramStr(params, "requestId")
 	if requestID == "" {
+		requestID = paramStr(params, "jobId")
+	}
+	if requestID == "" {
 		requestID = fmt.Sprintf("local-%d", time.Now().UnixMilli())
 	}
 	executePatch := paramBool(params, "executePatch", responseMode == "edit")
@@ -235,33 +236,58 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 		writeSSE(w, evt)
 	}
 
-	startedAt := time.Now().UnixMilli()
-	var patch string
-	if executePatch && contextType == "code" && currentCode != "" && deps.Llama.IsAvailable() {
-		prompt := buildPatchPrompt(message, currentCode)
+	startedAt := time.Now()
+	modelLabel := services.StreamingModelLabel(deps.Config, deps.Llama)
+	var rawResult string
+
+	if executePatch && deps.Llama.IsAvailable() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-		patch, _ = deps.Llama.Complete(ctx, prompt)
-		cancel()
+		defer cancel()
+
+		if contextType == "menu_json" {
+			req := &services.CodeStreamRequest{
+				RequestID: requestID, AppID: appID, FlowType: "menu_manager",
+				TaskType: "menu_design", ContextType: "menu_json",
+				Message: message, CurrentCode: currentCode, ResponseMode: responseMode,
+			}
+			prompt := services.BuildCodeStreamLocalPrompt(deps.Config, req)
+			rawResult, _ = deps.Llama.Complete(ctx, prompt)
+		} else if contextType == "code" && currentCode != "" {
+			prompt := buildPatchPrompt(message, currentCode)
+			rawResult, _ = deps.Llama.Complete(ctx, prompt)
+		}
 	}
 
-	if patch != "" {
-		patch = services.CleanLocalModelOutput(patch)
+	rawResult = services.CleanLocalModelOutput(rawResult)
+	if rawResult != "" {
 		writeSSE(w, map[string]any{
 			"stage": "streaming", "status": "running", "message": "Đang stream patch local",
-			"chunk": patch, "responseMode": responseMode, "contextType": contextType, "model": "local_provider",
+			"chunk": rawResult, "responseMode": responseMode, "contextType": contextType, "model": "local_provider",
 		})
-		elapsed := time.Now().UnixMilli() - startedAt
-		writeSSE(w, map[string]any{
-			"stage": "complete", "status": "done", "message": "Local execute plan hoàn tất với patch local",
-			"responseMode": responseMode, "contextType": contextType, "model": "local_provider",
-			"localProviderPrimaryUsed": true, "flowConfirmedByLocal": true, "elapsedMs": elapsed,
-			"fullResponse": patch, "outputChars": len(patch), "streamChunkCount": 1, "streamedChars": len(patch),
-			"result": map[string]any{"appId": appID, "applyDynamicIngestion": false, "ingestCount": 0, "aggregateScopeMask": 0},
-		})
+	}
+
+	elapsed := time.Since(startedAt).Milliseconds()
+	if rawResult != "" {
+		req := &services.CodeStreamRequest{
+			RequestID: requestID, AppID: appID,
+			FlowType: map[string]string{"menu_json": "menu_manager", "code": "code_editor"}[contextType],
+			TaskType: "menu_design", ContextType: contextType,
+			Message: message, CurrentCode: currentCode, ResponseMode: responseMode,
+		}
+		if req.FlowType == "" {
+			req.FlowType = "code_editor"
+		}
+		completion := services.CodeStreamCompletion(req, rawResult, currentCode, modelLabel, elapsed)
+		completion["status"] = "done"
+		completion["message"] = "Local execute plan hoàn tất với patch local"
+		completion["localProviderPrimaryUsed"] = true
+		completion["result"] = map[string]any{
+			"appId": appID, "applyDynamicIngestion": false, "ingestCount": 0, "aggregateScopeMask": 0,
+		}
+		writeSSE(w, completion)
 		return
 	}
 
-	elapsed := time.Now().UnixMilli() - startedAt
 	writeSSE(w, map[string]any{
 		"stage": "streaming_started", "status": "running", "message": "Chuẩn bị stream kết quả",
 		"requestId": requestID, "model": "local_provider", "percent": 12,

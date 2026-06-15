@@ -58,9 +58,9 @@ Legend: **Done** = implemented | **Partial** = basic/minimal | **Defer** = not s
 | `/indexgoogle` | Done (submit/check/quota/queue/history — Google Indexing API) |
 | `/ai-generate-seo-content` | Done (local llama native + SEO one-shot pipelines) |
 | `/ai-local/health`, `/models`, `/services` | Done |
-| `/ai-local/execute-local-plan` | Done (SSE stages) |
-| `/ai-code-stream` | Done (SSE pipeline — started→streaming→complete) |
-| `/ai-code-stream/*`, `/ai/*` aux | Done (feedback stubs + dispatch) |
+| `/ai-local/execute-local-plan` | Done (menu_json + code SSE completion) |
+| `/ai-code-stream` | Done (menu merge + apply flags + knowledge prompts) |
+| `/ai-code-stream/menu-editor-apply`, `/ai/menu-merge` | Done |
 | `/facebook/*` | Done (post, post-with-images, me, exchange-token, pages) |
 | `/facebook/ads/campaign`, `/google/ads/campaign` | Done (→ CRM create ad) |
 | `/apps-list` | Done |
@@ -84,7 +84,7 @@ Legend: **Done** = implemented | **Partial** = basic/minimal | **Defer** = not s
 
 1. ~~Lucene/sqlite-vec wired into live table queries~~ → FTS5 wired for `like`; vector search (ai_chunks) still offline
 2. Socket.IO real-time + chat HTTP endpoints
-3. Full AI orchestration (RAG, multimodal vision, agent harness — Java-scale services)
+3. Full AI orchestration (RAG multimodal vision, agent harness quality-gate early audit — partial menu merge/apply parity added)
 4. Web SSR (categories/tags/reviews)
 5. SEO scrape via Jsoup in `/seo` handler ( `/scrape-web` works)
 6. Pebble backup/restore API (use filesystem backup today)
