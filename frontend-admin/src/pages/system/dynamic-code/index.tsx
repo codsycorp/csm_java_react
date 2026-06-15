@@ -12,6 +12,12 @@ import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
 import CsmCrmWorkspace from "#src/components/csm-crm/CsmCrmWorkspace";
 import { CsmKanbanBoard } from "#src/components/csm-kanban";
 import { generateSeoContent, csm_ai_generate_seo_content, generateSeoContentWithPrompt, generateSeoAntiAiOneShot, formatSeoPrompt, PROMPT_GENERATE_POST } from "#src/api/ai";
+import {
+	getMatchingReloadVersion,
+	pickBestSysAutosRow,
+	resolveWatchedPNames,
+	subscribeDynamicCodeReload,
+} from "#src/pages/system/dynamic-code/reload";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { usePreferences } from "#src/hooks";
@@ -1076,10 +1082,43 @@ export default function DynamicCodeMenu({
       executedRef.current = false;
     }, [i18n.language]);
   const runtimeRef = useRef<ScopedRuntime | null>(null);
+
+  const resolvedAutoCodeName = useMemo(() => {
+    return String(
+      propAutoCodeName
+      || propMenuData?.auto_code_name
+      || (location.state as any)?.menuData?.auto_code_name
+      || ""
+    ).trim();
+  }, [propAutoCodeName, propMenuData?.auto_code_name, location.key]);
   
   const [autoCode, setAutoCode] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadVersion, setReloadVersion] = useState(0);
+  const seenReloadVersionRef = useRef(0);
+  const forceFreshSysAutosRef = useRef(false);
+
+  const watchedPNames = useMemo(
+    () => resolveWatchedPNames(resolvedAutoCodeName, effectiveAppId),
+    [resolvedAutoCodeName, effectiveAppId],
+  );
+
+  useEffect(() => {
+    const syncFromReload = () => {
+      const latest = getMatchingReloadVersion(watchedPNames);
+      if (latest <= seenReloadVersionRef.current) {
+        return;
+      }
+      seenReloadVersionRef.current = latest;
+      forceFreshSysAutosRef.current = true;
+      executedRef.current = false;
+      setReloadVersion(latest);
+    };
+
+    seenReloadVersionRef.current = getMatchingReloadVersion(watchedPNames);
+    return subscribeDynamicCodeReload(syncFromReload);
+  }, [watchedPNames]);
 
   // Scope default container ID by menu/template/tab instance to avoid cross-tab collisions.
   const resolvedContainerId = useMemo(() => {
@@ -1787,16 +1826,6 @@ ${resolvedContainerSelector} select {
     };
   }, [menuId, resolvedContainerId, location.key]);
 
-  const resolvedAutoCodeName = useMemo(() => {
-    return String(
-      propAutoCodeName
-      || propMenuData?.auto_code_name
-      || (location.state as any)?.menuData?.auto_code_name
-      || ""
-    ).trim();
-  }, [propAutoCodeName, propMenuData?.auto_code_name, location.key]);
-
-
   // Load inline code or fetch template code from sys_autos
   useEffect(() => {
     let cancelled = false;
@@ -1857,13 +1886,17 @@ ${resolvedContainerSelector} select {
               app_id: "csm",
               obj_name: "sys_autos",
               where,
-              take: 1,
+              // Always bypass client cache for template loads; homepage must match code editor full-scan.
+              fresh: forceFreshSysAutosRef.current || isHomepageBroadcast,
             });
             const rows = (res as any)?.rows || (res as any)?.data || [];
-            codeRecord = Array.isArray(rows) ? rows.find((r: any) => r?.p_name === candidateName) : undefined;
+            codeRecord = pickBestSysAutosRow(rows, candidateName, 0);
             if (isHomepageBroadcast) {
               console.log("[Homepage/DynamicCodeMenu] API trả về cho p_name=", candidateName, {
                 rowCount: Array.isArray(rows) ? rows.length : 0,
+                matched_rows: Array.isArray(rows)
+                  ? rows.filter((r: any) => r?.p_name === candidateName).length
+                  : 0,
                 p_name: codeRecord?.p_name,
                 id: codeRecord?.id,
                 p_type: codeRecord?.p_type,
@@ -1924,6 +1957,7 @@ ${resolvedContainerSelector} select {
           setAutoCode("");
         }
       } finally {
+        forceFreshSysAutosRef.current = false;
         if (!cancelled) {
           setLoading(false);
         }
@@ -1935,7 +1969,7 @@ ${resolvedContainerSelector} select {
       cancelled = true;
       executedRef.current = false;
     };
-  }, [menuId, location.key, resolvedAutoCodeName, inlineCode, user.app_id, user.userId, effectiveAppId]);
+  }, [menuId, location.key, resolvedAutoCodeName, inlineCode, user.app_id, user.userId, effectiveAppId, reloadVersion]);
 
   const seft = useMemo(() => {
     const currentUserAny = (window as any).csmCurrentUser || user || {};

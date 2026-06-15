@@ -10,6 +10,52 @@ import (
 	"csm_server/backend-go/internal/config"
 )
 
+func TestFindByCustomPK_PrefersIdKeyOrphanOverStaleCanonical(t *testing.T) {
+	rm := testRecordManager(t)
+	app, table := "csm", "sys_autos"
+
+	crmTemplate := map[string]any{
+		"id":     "crm-canonical-id",
+		"p_name": "broadcast_wuweb",
+		"p_type": float64(0),
+		"p_code": strings.Repeat("CRM-Workspace-Template-", 12000),
+	}
+	autoLmkt := map[string]any{
+		"id":     "auto_1772818879537_editor",
+		"p_name": "broadcast_wuweb",
+		"p_type": float64(0),
+		"p_code": strings.Repeat("AUTO-LMKT-NEW-CODE-", 50000),
+	}
+
+	keyBase := "broadcast_wuweb:0"
+	idKey := "auto_1772818879537_editor"
+
+	db, err := rm.tableDB(app, table)
+	if err != nil {
+		t.Fatalf("tableDB: %v", err)
+	}
+	rawCRM, _ := json.Marshal(crmTemplate)
+	rawLmkt, _ := json.Marshal(autoLmkt)
+	if err := db.Set([]byte(keyBase), rawCRM, nil); err != nil {
+		t.Fatalf("seed canonical CRM: %v", err)
+	}
+	if err := db.Set([]byte(idKey), rawLmkt, nil); err != nil {
+		t.Fatalf("seed id-key auto-lmkt: %v", err)
+	}
+
+	read := rm.FindByCustomPK(app, table, map[string]any{
+		"p_name": "broadcast_wuweb",
+		"p_type": float64(0),
+	}, []string{"p_name", "p_type"})
+
+	if got := read["id"]; got != "auto_1772818879537_editor" {
+		t.Fatalf("FindByCustomPK id = %v, want auto_1772818879537_editor (homepage PK read)", got)
+	}
+	if got := codeLen(read); got <= codeLen(crmTemplate) {
+		t.Fatalf("FindByCustomPK p_code len = %d, want larger than CRM template %d", got, codeLen(crmTemplate))
+	}
+}
+
 func TestFindByCustomPK_PrefersNewerDuplicateOverStaleCanonical(t *testing.T) {
 	rm := testRecordManager(t)
 	app, table := "csm", "sys_autos"

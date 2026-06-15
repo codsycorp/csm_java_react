@@ -21,6 +21,30 @@ export function resolveWatchedPNames(autoCodeName: string, appId: string): strin
 	return [normalizedAppId, `broadcast_${normalizedAppId}`];
 }
 
+/** Mirror Java/Go pickBestPKHit for duplicate sys_autos rows with the same PK. */
+export function pickBestSysAutosRow<T extends { p_name?: string; p_type?: number | string; p_code?: string }>(
+	rows: T[],
+	pName: string,
+	pType: number = 0,
+): T | undefined {
+	const normalizedName = String(pName || "").trim();
+	const matches = (Array.isArray(rows) ? rows : []).filter((row) => {
+		if (!row || String(row.p_name || "").trim() !== normalizedName) {
+			return false;
+		}
+		return Number(row.p_type) === pType;
+	});
+	if (matches.length === 0) {
+		return undefined;
+	}
+	if (matches.length === 1) {
+		return matches[0];
+	}
+	return matches.reduce((best, row) => (
+		String(row.p_code || "").length > String(best.p_code || "").length ? row : best
+	));
+}
+
 export function getDynamicCodeReloadVersion(pName: string): number {
 	return reloadVersionByPName.get(String(pName || "").trim()) || 0;
 }

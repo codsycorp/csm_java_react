@@ -32,7 +32,8 @@ export async function loadBroadcastHomeAutoCode(appIdParam: string): Promise<str
 					{ field: "p_name", type: "eq", value: `broadcast_${appIdParam}` },
 					{ field: "p_type", type: "eq", value: 0 },
 				]
-			}
+			},
+			fresh: true,
 		});
 		if (response && (response as any).success === false) {
 			console.warn(
@@ -43,11 +44,12 @@ export async function loadBroadcastHomeAutoCode(appIdParam: string): Promise<str
 			return null;
 		}
 		const rows = (response as any)?.rows || (response as any)?.data || [];
-		if (!rows.length) {
+		const codeRecord = pickBestSysAutosRow(rows, `broadcast_${appIdParam}`, 0);
+		if (!codeRecord) {
 			broadcastHomeAutoCodeCache[appIdParam] = null;
 			return null;
 		}
-		const decryptedCode = rows[0].p_code ? csmDecrypt(rows[0].p_code) : "";
+		const decryptedCode = codeRecord.p_code ? csmDecrypt(codeRecord.p_code) : "";
 		if (!decryptedCode) {
 			broadcastHomeAutoCodeCache[appIdParam] = null;
 			return null;
@@ -65,6 +67,7 @@ import { request } from "#src/utils";
 import { handleTree } from "#src/utils";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import { createTableStruct, getTableData } from "#src/components/csm-grid/CsmApi";
+import { pickBestSysAutosRow } from "#src/pages/system/dynamic-code/reload";
 import { useUserStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
 import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";

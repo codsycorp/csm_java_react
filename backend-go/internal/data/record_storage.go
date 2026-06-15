@@ -335,5 +335,8 @@ func (rm *RecordManager) collectStorageKeysToDelete(appID, tableName string, rec
 	for _, c := range StorageKeyCandidates(app, table, canonicalKey) {
 		add(c)
 	}
+	for _, hit := range rm.findAllByCustomPK(app, table, record, pkFields) {
+		add(hit.storageKey)
+	}
 	return out
 }

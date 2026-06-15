@@ -253,7 +253,11 @@ func (rm *RecordManager) CreateRecord(appID, tableName string, record map[string
 	keyByID := rm.resolveStorageKeyByID(app, table, record)
 
 	cmd := "create"
-	if rm.hasAnyPKStorage(app, table, canonicalKey, keyByID) {
+	if len(pkFields) > 0 && canonicalKey != "" {
+		if len(rm.findAllByCustomPK(app, table, record, pkFields)) > 0 {
+			cmd = "update"
+		}
+	} else if rm.hasAnyPKStorage(app, table, canonicalKey, keyByID) {
 		cmd = "update"
 	}
 
@@ -383,7 +387,34 @@ func (rm *RecordManager) findAllByCustomPK(appID, tableName string, probe map[st
 		}
 		hits = append(hits, pkCandidateHit{storageKey: candidate, record: out, inPerTable: inPerTable})
 	}
+	rm.appendPKMatchesFromTableScan(app, table, probe, pkFields, seenStorage, &hits)
 	return hits
+}
+
+// appendPKMatchesFromTableScan finds PK duplicates stored under non-canonical keys (e.g. Java id keys)
+// that StorageKeyCandidates does not cover. Code editor list uses full scan; PK-only reads must match.
+func (rm *RecordManager) appendPKMatchesFromTableScan(
+	app, table string,
+	probe map[string]any,
+	pkFields []string,
+	seenStorage map[string]struct{},
+	hits *[]pkCandidateHit,
+) {
+	_ = rm.scanTable(app, table, func(storageKey string, raw []byte) error {
+		if _, ok := seenStorage[storageKey]; ok {
+			return nil
+		}
+		var out map[string]any
+		if json.Unmarshal(raw, &out) != nil || len(out) == 0 {
+			return nil
+		}
+		if !recordMatchesPK(out, probe, pkFields) {
+			return nil
+		}
+		seenStorage[storageKey] = struct{}{}
+		*hits = append(*hits, pkCandidateHit{storageKey: storageKey, record: out, inPerTable: true})
+		return nil
+	})
 }
 
 func recordMatchesPK(record, probe map[string]any, pkFields []string) bool {
