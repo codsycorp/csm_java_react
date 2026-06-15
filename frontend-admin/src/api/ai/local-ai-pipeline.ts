@@ -256,8 +256,8 @@ export function mapGoLocalAiStageToStep(
 			}
 			if (String((evt as Record<string, unknown>).waitState || "") === "local_map_reduce") {
 				const phase = String(evt.localPhase || "chunk_analysis").trim().toLowerCase();
-				const chunkIndex = Number((evt as Record<string, unknown>).chunkIndex) || 0);
-				const chunkTotal = Number((evt as Record<string, unknown>).chunkTotal) || 0);
+				const chunkIndex = Number((evt as Record<string, unknown>).chunkIndex) || 0;
+				const chunkTotal = Number((evt as Record<string, unknown>).chunkTotal) || 0;
 				const chunkDetail = chunkIndex > 0 && chunkTotal > 0
 					? uiText(`Chunk ${chunkIndex}/${chunkTotal}`, `Chunk ${chunkIndex}/${chunkTotal}`, `分块 ${chunkIndex}/${chunkTotal}`)
 					: undefined;
