@@ -2496,18 +2496,30 @@ function inferResponseModeByIntent(input: string, _contextType?: AiAssistantChat
 	return directive.overrideMode;
 }
 
+/** Cap editor payload for 8GB server — analyze sends less code to avoid HTTP_0 / OOM. */
+function capOutgoingEditorCode(code: string, responseMode?: ResponseMode): string {
+	const raw = String(code || "");
+	if (!raw) return raw;
+	const max = responseMode === "analyze" ? 12_000 : 48_000;
+	if (raw.length <= max) return raw;
+	const head = Math.floor(max * 0.45);
+	const tail = max - head - 64;
+	return `${raw.slice(0, head)}\n/* ... editor truncated for server payload budget ... */\n${raw.slice(-tail)}`;
+}
+
 /** Outgoing code string + optional selection narrow-scope for AI local. No highlight → full string scope. */
 function resolveOutgoingEditorSnapshot(
 	currentCode: string,
 	liveCode: string,
 	metadata: Record<string, unknown>,
+	responseMode?: ResponseMode,
 ): {
 	code: string
 	cursorLine?: number
 	selectionFromLine?: number
 	selectionToLine?: number
 } {
-	const code = String(liveCode || currentCode || "");
+	const code = capOutgoingEditorCode(String(liveCode || currentCode || ""), responseMode);
 	const cursorLine = Math.floor(Number(metadata.cursorLine ?? 0));
 	const selectionFromLine = Math.floor(Number(metadata.selectionFromLine ?? metadata.cursorLine ?? 0));
 	const selectionToLine = Math.floor(Number(metadata.selectionToLine ?? selectionFromLine ?? 0));
@@ -6070,6 +6082,7 @@ export default function AiAssistantChat({
 				currentCode,
 				liveCodeRef.current,
 				requestEditorMetadata,
+				inferredPreviewMode,
 			);
 			const res = await request.post("ai-orchestration-preview", {
 				json: {
@@ -6309,6 +6322,7 @@ export default function AiAssistantChat({
 				currentCode,
 				liveCodeRef.current,
 				requestEditorMetadata,
+				requestedResponseMode,
 			);
 			liveCodeRef.current = outgoingSnapshot.code;
 			editStreamStartCodeRef.current = outgoingSnapshot.code;
@@ -9254,17 +9268,43 @@ export default function AiAssistantChat({
 				if ((error as Error)?.name === "AbortError")
 					return;
 				console.error("Failed to send message:", error);
+				const errMsg = String((error as Error)?.message || "").trim();
+				const status = Number((error as any)?.response?.status ?? 0);
+				const errorSummary = status === 401
+					? uiText("Phiên đăng nhập đã hết hạn hoặc chưa hợp lệ.", "Your session has expired or is no longer valid.", "当前登录会话已过期或已失效。")
+					: errMsg && /failed to fetch|network|load failed|http2/i.test(errMsg)
+						? uiText(
+							"Kết nối SSE bị đứt (HTTP_0). Server 8GB có thể quá tải hoặc Go backend restart — thử lại với ít code hơn (/analyze) hoặc kiểm tra journalctl -u csm-go.",
+							"SSE connection dropped (HTTP_0). The 8GB server may be overloaded or the Go backend restarted — retry with less code (/analyze) or check journalctl -u csm-go.",
+							"SSE 连接中断（HTTP_0）。8GB 服务器可能过载或 Go 后端重启 — 请减少代码后重试（/analyze）或检查 journalctl -u csm-go。",
+						)
+						: uiText("Không gửi được yêu cầu lên backend.", "The request could not be sent to the backend.", "请求无法发送到后端。");
 				setCompletionState("error");
-				setCompletionErrorMessage((error as Error)?.message ? String((error as Error).message) : "SSE request failed");
+				setCompletionErrorMessage(errorSummary);
 				setCompletionMetrics({
 					elapsedMs: requestStartedAtRef.current > 0 ? Math.max(0, Date.now() - requestStartedAtRef.current) : undefined,
 					outputChars: streamingMessageRef.current.length + pendingStreamChunkRef.current.length,
 				});
-				const status = Number((error as any)?.response?.status ?? 0);
+				setMessages((prev) => {
+					const updated = [...prev];
+					for (let i = updated.length - 1; i >= 0; i -= 1) {
+						const lastMsg = updated[i];
+						if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
+							lastMsg.content = formatSystemNotice({
+								summary: errorSummary,
+								nextStep: resolveSystemNextStep(status === 401 ? "http_401" : "http_request_failed"),
+								internalCode: status === 401 ? "HTTP_401" : `HTTP_${status || 0}`,
+							});
+							lastMsg.codeBlocks = [];
+							lastMsg.responseMode = "analyze";
+							lastMsg.timestamp = Date.now();
+							break;
+						}
+					}
+					return updated;
+				});
 				showSystemToast("error", {
-					summary: status === 401
-						? uiText("Phiên đăng nhập đã hết hạn hoặc chưa hợp lệ.", "Your session has expired or is no longer valid.", "当前登录会话已过期或已失效。")
-						: uiText("Không gửi được yêu cầu lên backend.", "The request could not be sent to the backend.", "请求无法发送到后端。"),
+					summary: errorSummary,
 					nextStep: resolveSystemNextStep(status === 401 ? "http_401" : "http_request_failed"),
 					internalCode: status === 401 ? "HTTP_401" : `HTTP_${status || 0}`,
 				});

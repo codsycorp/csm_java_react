@@ -27,6 +27,10 @@ func EnsureWorkspaceIndexFresh(cfg config.AppConfig, rm *data.RecordManager) int
 	if rm == nil {
 		return 0
 	}
+	// On 8GB production, skip synchronous full scan during ai-code-stream hot path (OOM risk).
+	if IsConstrained8GbTier(cfg) {
+		return 0
+	}
 	key := cfg.SearchDBPath
 	now := time.Now().UnixMilli()
 	if last, ok := workspaceIndexLastRebuild.Load(key); ok {

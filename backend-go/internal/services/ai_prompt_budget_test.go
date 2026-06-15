@@ -41,6 +41,14 @@ func TestTruncateMiddlePreservesEnds(t *testing.T) {
 	}
 }
 
+func TestMaxOutgoingEditorCharsAnalyze8Gb(t *testing.T) {
+	t.Setenv("AI_LOCAL_RUNTIME_TIER", "balanced-8gb")
+	got := MaxOutgoingEditorChars(config.AppConfig{}, "code", "analyze")
+	if got != 12_000 {
+		t.Fatalf("got %d want 12000", got)
+	}
+}
+
 func TestClampPromptForLocalProvider(t *testing.T) {
 	t.Setenv("AI_LOCAL_RUNTIME_TIER", "balanced-8gb")
 	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 1024, LlamaMaxPromptChars: 32000}}

@@ -147,6 +147,16 @@ const defaultConfig: Options = {
 				const isSeoSyncRequest = request.url.includes("ai-generate-seo-content");
 				const omitRefreshToken = Boolean((options as any)?.omitRefreshToken) || isSeoSyncRequest;
 
+				const isAiSseStream = request.url.includes("ai-code-stream")
+					|| request.url.includes("ai-local/execute-local-plan");
+				if (isAiSseStream) {
+					const optionsAny = options as any;
+					optionsAny.retry = { limit: 0 };
+					if (optionsAny.timeout === undefined) {
+						optionsAny.timeout = false;
+					}
+				}
+
 				// SEO sync: 1 HTTP giữ đến khi backend trả JSON — không dùng VITE_API_TIMEOUT 10s mặc định.
 				if (isSeoSyncRequest && request.method === "POST") {
 					const optionsAny = options as any;

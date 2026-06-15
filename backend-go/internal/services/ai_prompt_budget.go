@@ -90,6 +90,21 @@ func ClampPromptForLocalProvider(cfg config.AppConfig, prompt, contextType, resp
 	return TruncateMiddle(prompt, cap)
 }
 
+// MaxOutgoingEditorChars caps editor code in request/ingest for tier.
+func MaxOutgoingEditorChars(cfg config.AppConfig, contextType, responseMode string) int {
+	if !IsConstrained8GbTier(cfg) {
+		return 500_000
+	}
+	mode := strings.ToLower(strings.TrimSpace(responseMode))
+	if mode == "analyze" {
+		return 12_000
+	}
+	if strings.ToLower(strings.TrimSpace(contextType)) == "menu_json" {
+		return 80_000
+	}
+	return 48_000
+}
+
 // ConstrainedPromptSlotCaps returns smaller injection budgets on 8GB tier.
 func ConstrainedPromptSlotCaps(cfg config.AppConfig) (editorMax, ragMax, learningMax, workspaceMax int) {
 	editorMax = 22_000

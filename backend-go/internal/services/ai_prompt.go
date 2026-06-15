@@ -57,12 +57,18 @@ func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool)
 		TaskType:     paramString(params, "taskType", "edit"),
 		ContextType:  contextType,
 		Message:      truncateStr(paramString(params, "message", ""), 32_000),
-		CurrentCode:  truncateStr(paramString(params, "currentCode", ""), 500_000),
+		CurrentCode:  truncateStr(paramString(params, "currentCode", ""), maxOutgoingEditorFromParams(params)),
 		Language:     paramString(params, "language", "javascript"),
 		Model:        paramString(params, "model", "auto"),
 		UILang:       firstNonEmpty(paramString(params, "uiLang", ""), paramString(params, "ui_lang", ""), paramString(params, "uiLanguage", "vi")),
 		ResponseMode: firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", "")),
 	}, ""
+}
+
+func maxOutgoingEditorFromParams(params map[string]any) int {
+	ctxType := paramString(params, "contextType", "code")
+	mode := firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", ""))
+	return MaxOutgoingEditorChars(config.AppConfig{}, ctxType, mode)
 }
 
 func ResolveResponseMode(req *CodeStreamRequest) string {
