@@ -28,12 +28,15 @@ func NewUserService(rm *data.RecordManager) *UserService {
 }
 
 func (s *UserService) FindByLoginAndPassword(loginID, rawPassword string) *model.User {
-	for _, finder := range []func(string) (*model.User, map[string]any){
-		s.findByEmail,
-		s.findByUsername,
-		s.findByPhone,
+	for _, spec := range []struct {
+		name   string
+		finder func(string) (*model.User, map[string]any)
+	}{
+		{"email", s.findByEmail},
+		{"username", s.findByUsername},
+		{"phone", s.findByPhone},
 	} {
-		user, record := finder(loginID)
+		user, record := spec.finder(loginID)
 		if user == nil {
 			continue
 		}
@@ -42,6 +45,8 @@ func (s *UserService) FindByLoginAndPassword(loginID, rawPassword string) *model
 			log.Printf("Login success for %s", loginID)
 			return user
 		}
+		log.Printf("Login password mismatch for %s via %s (user=%v actived=%v pass_len=%d)",
+			loginID, spec.name, deref(user.Username), boolDeref(user.Actived), passLen(record))
 	}
 
 	sub := s.rm.Find(CSMAppID, SubAccountsTable, model.EqFilter("login_identifier", loginID))
@@ -55,11 +60,28 @@ func (s *UserService) FindByLoginAndPassword(loginID, rawPassword string) *model
 		}
 		if actived && pass == encoded {
 			if u := s.mapSubUser(sub); u != nil {
+				log.Printf("Login success for sub-user %s", loginID)
 				return u
 			}
 		}
+		log.Printf("Login sub-user mismatch for %s actived=%v pass_len=%d", loginID, actived, len(pass))
+	} else if loginID != "" {
+		log.Printf("Login not found: %s (main+sub)", loginID)
 	}
 	return nil
+}
+
+func passLen(record map[string]any) int {
+	if record == nil {
+		return 0
+	}
+	if p, _ := record["pass"].(string); p != "" {
+		return len(p)
+	}
+	if p, _ := record["password"].(string); p != "" {
+		return len(p)
+	}
+	return 0
 }
 
 func subHasKey(m map[string]any, key string) bool {
@@ -524,27 +546,16 @@ func (s *UserService) writeSessionFields(user *model.User, fields map[string]any
 		}
 	}
 
-	// Mirror Rust/Java: persist session on app_token PK first (authoritative row after login).
+	// Mirror Java: only persist on app_token row when the full account record is found — never create a partial stub.
 	if user.AppToken != nil && *user.AppToken != "" {
-		appToken := *user.AppToken
-		record := s.findAppTokenPKRecord(appToken)
-		if len(record) == 0 {
-			record = s.rm.Find(CSMAppID, AccountsTable, model.EqFilter("app_token", appToken))
-		}
-		if len(record) == 0 {
-			record = map[string]any{"app_token": appToken}
-			if user.ID != nil {
-				record["id"] = *user.ID
+		record := s.rm.Find(CSMAppID, AccountsTable, model.EqFilter("app_token", *user.AppToken))
+		if len(record) > 0 {
+			for k, v := range fields {
+				record[k] = v
 			}
-		}
-		for k, v := range fields {
-			record[k] = v
-		}
-		if _, err := s.rm.CreateRecord(CSMAppID, AccountsTable, record, []string{"app_token"}); err == nil {
-			if user.ID != nil && *user.ID != "" {
-				s.updateByID(*user.ID, fields)
+			if _, err := s.rm.CreateRecord(CSMAppID, AccountsTable, record, []string{"app_token"}); err == nil {
+				return true
 			}
-			return true
 		}
 	}
 
@@ -703,6 +714,13 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func boolDeref(b *bool) bool {
+	if b == nil {
+		return false
+	}
+	return *b
 }
 
 func derefInt(i *int) int {

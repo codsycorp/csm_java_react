@@ -8,7 +8,8 @@ import (
 var searchTextFields = []string{
 	"name", "title", "summary", "content", "description", "body", "text",
 	"email", "username", "full_name", "fullName", "phoneNumber", "note", "notes",
-	"login_identifier", "tag", "tags", "path", "scope", "message", "comment",
+	"login_identifier", "app_token", "refresh_token", "refresh",
+	"tag", "tags", "path", "scope", "message", "comment",
 }
 
 // ExtractSearchText builds FTS title/content from a record (mirrors cmd/migrate).

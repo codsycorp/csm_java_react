@@ -281,8 +281,10 @@ func (rm *RecordManager) consolidatePKStorageKeys(app, table, canonicalKey strin
 	for _, c := range StorageKeyCandidates(app, table, canonicalKey) {
 		queueDelete(c)
 	}
-	for _, hit := range rm.findAllByCustomPK(app, table, record, pkFields) {
-		queueDelete(hit.storageKey)
+	if tableAllowsPKOrphanScan(table) {
+		for _, hit := range rm.findAllByCustomPK(app, table, record, pkFields) {
+			queueDelete(hit.storageKey)
+		}
 	}
 }
 
@@ -335,8 +337,10 @@ func (rm *RecordManager) collectStorageKeysToDelete(appID, tableName string, rec
 	for _, c := range StorageKeyCandidates(app, table, canonicalKey) {
 		add(c)
 	}
-	for _, hit := range rm.findAllByCustomPK(app, table, record, pkFields) {
-		add(hit.storageKey)
+	if tableAllowsPKOrphanScan(table) {
+		for _, hit := range rm.findAllByCustomPK(app, table, record, pkFields) {
+			add(hit.storageKey)
+		}
 	}
 	return out
 }

@@ -109,6 +109,21 @@ func (rm *RecordManager) Find(appID, tableName string, filter model.SearchFilter
 	if rec := rm.tryFindByPKVariants(appID, tableName, filter); rec != nil {
 		return rec
 	}
+	if rec := rm.tryFindByDirectEqKey(appID, tableName, filter); rec != nil {
+		return rec
+	}
+	if rec := rm.tryFindByAuthFieldEq(appID, tableName, filter); rec != nil {
+		return rec
+	}
+	if rec := rm.tryFindByFTSEq(appID, tableName, filter); rec != nil {
+		return rec
+	}
+	if rec := rm.tryFindByTokenFieldEq(appID, tableName, filter); rec != nil {
+		return rec
+	}
+	if isStrictNoScanFindFilter(filter) {
+		return map[string]any{}
+	}
 	if rec := rm.tryFindByScan(appID, tableName, filter); rec != nil {
 		return rec
 	}
@@ -171,8 +186,22 @@ func (rm *RecordManager) FilterWithPagination(
 }
 
 func (rm *RecordManager) collectFilteredRecords(appID, tableName string, filter model.SearchFilter) []map[string]any {
-	if rec := rm.tryFindByPKVariants(appID, tableName, filter); rec != nil {
-		return []map[string]any{rec}
+	if rm.isSingletonLookupFilter(appID, tableName, filter) {
+		if rec := rm.tryFindByPKVariants(appID, tableName, filter); rec != nil {
+			return []map[string]any{rec}
+		}
+		if rec := rm.tryFindByDirectEqKey(appID, tableName, filter); rec != nil {
+			return []map[string]any{rec}
+		}
+		if rec := rm.tryFindByAuthFieldEq(appID, tableName, filter); rec != nil {
+			return []map[string]any{rec}
+		}
+		if records := rm.collectViaFTSEq(appID, tableName, filter); len(records) > 0 {
+			return records
+		}
+		if rec := rm.tryFindByTokenFieldEq(appID, tableName, filter); rec != nil {
+			return []map[string]any{rec}
+		}
 	}
 
 	app, table, err := rm.sanitizeTable(appID, tableName)
@@ -186,6 +215,10 @@ func (rm *RecordManager) collectFilteredRecords(appID, tableName string, filter 
 			return records
 		}
 		// FTS miss (domain/status SSR filters) → full Pebble scan like Rust collect_filtered_records.
+	}
+
+	if isStrictNoScanFindFilter(filter) {
+		return nil
 	}
 
 	seen := make(map[string]struct{})
@@ -254,7 +287,11 @@ func (rm *RecordManager) CreateRecord(appID, tableName string, record map[string
 
 	cmd := "create"
 	if len(pkFields) > 0 && canonicalKey != "" {
-		if len(rm.findAllByCustomPK(app, table, record, pkFields)) > 0 {
+		if tableAllowsPKOrphanScan(table) {
+			if len(rm.findAllByCustomPK(app, table, record, pkFields)) > 0 {
+				cmd = "update"
+			}
+		} else if rm.hasAnyPKStorage(app, table, canonicalKey, keyByID) {
 			cmd = "update"
 		}
 	} else if rm.hasAnyPKStorage(app, table, canonicalKey, keyByID) {
@@ -387,12 +424,14 @@ func (rm *RecordManager) findAllByCustomPK(appID, tableName string, probe map[st
 		}
 		hits = append(hits, pkCandidateHit{storageKey: candidate, record: out, inPerTable: inPerTable})
 	}
-	rm.appendPKMatchesFromTableScan(app, table, probe, pkFields, seenStorage, &hits)
+	if tableAllowsPKOrphanScan(table) {
+		rm.appendPKMatchesFromTableScan(app, table, probe, pkFields, seenStorage, &hits)
+	}
 	return hits
 }
 
 // appendPKMatchesFromTableScan finds PK duplicates stored under non-canonical keys (e.g. Java id keys)
-// that StorageKeyCandidates does not cover. Code editor list uses full scan; PK-only reads must match.
+// that StorageKeyCandidates does not cover. Limited to sys_autos — other tables use direct key / FTS paths.
 func (rm *RecordManager) appendPKMatchesFromTableScan(
 	app, table string,
 	probe map[string]any,
@@ -514,6 +553,15 @@ func (rm *RecordManager) tryFindByPKVariants(appID, tableName string, filter mod
 
 	if len(eq) == 1 {
 		for field, value := range eq {
+			if isAuthLookupField(field) {
+				if rec := rm.tryFindByAuthFieldEq(appID, tableName, filter); rec != nil {
+					return rec
+				}
+				continue
+			}
+			if !tableAllowsPKOrphanScan(tableName) && !fieldInPKFields(field, pkFields) && !strings.EqualFold(field, "id") {
+				continue
+			}
 			probe := map[string]any{field: value}
 			if rec := rm.FindByCustomPK(appID, tableName, probe, []string{field}); len(rec) != 0 && filter.Matches(rec) {
 				return rec

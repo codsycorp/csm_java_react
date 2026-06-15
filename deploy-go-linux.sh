@@ -46,17 +46,34 @@ echo "▶ [2/4] Pull source on server ($REMOTE_BUILD)..."
 ssh "$SERVER" bash -s "$REMOTE_BUILD" <<'SYNC'
 set -e
 P="$1"
-if [ -d "$P/.git" ]; then
+REPO_URL="${CSM_DEPLOY_REPO_URL:-https://github.com/codsycorp/csm_java_react.git}"
+BRANCH="${CSM_DEPLOY_BRANCH:-main}"
+
+sync_git_repo() {
 	cd "$P"
-	git fetch origin main
-	git reset --hard origin/main
+	git fetch origin "$BRANCH"
+	git reset --hard "origin/$BRANCH"
+}
+
+if git -C "$P" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+	echo "    git repo exists — fetch origin/$BRANCH"
+	sync_git_repo
+elif [ -e "$P" ]; then
+	BAK="${P}.bak.$(date +%s)"
+	echo "    $P exists but is not a git repo — backup → $BAK, then clone"
+	mv "$P" "$BAK"
+	mkdir -p "$(dirname "$P")"
+	git clone "$REPO_URL" "$P"
+	cd "$P"
+	git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH" "origin/$BRANCH"
 else
 	mkdir -p "$(dirname "$P")"
-	git clone https://github.com/codsycorp/csm_java_react.git "$P"
+	git clone "$REPO_URL" "$P"
 	cd "$P"
+	git checkout "$BRANCH" 2>/dev/null || true
 fi
 echo "Code: $(git -C "$P" log --oneline -1)"
-echo "Tip: cần commit mới nhất trên origin/main (vd. fix extras.go import data)"
+echo "Tip: cần commit mới nhất trên origin/$BRANCH (vd. fix extras.go import data)"
 SYNC
 
 echo ""

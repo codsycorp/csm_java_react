@@ -51,6 +51,7 @@ var (
 	minTextLen = flag.Int("min-text", 8, "Minimum extracted text length to index")
 	ldbBin     = flag.String("ldb", "", "rocksdb_ldb binary (default: PATH or brew)")
 	skipApps   = flag.String("skip-apps", "fidovnemail", "Comma-separated app_id dirs to skip (case-insensitive)")
+	onlyTables = flag.String("only-tables", "", "Comma-separated app/table to migrate only (e.g. csm/csm_accounts,csm/csm_group_members)")
 )
 
 // defaultSkipApps are always excluded unless -skip-apps is explicitly cleared.
@@ -107,6 +108,10 @@ func run() error {
 	log.Printf("dest Pebble:    %s/{app_id}/{table_name}/", pebbleRoot)
 	log.Printf("dest search:    %s", searchPath)
 	skipped := parseSkipApps(*skipApps)
+	only := parseOnlyTables(*onlyTables)
+	if len(only) > 0 {
+		log.Printf("only tables: %s", strings.Join(only, ", "))
+	}
 	if len(skipped) > 0 {
 		log.Printf("skip apps:      %s", strings.Join(skipped, ", "))
 	}
@@ -162,6 +167,9 @@ func run() error {
 				continue
 			}
 			tableName := tableEntry.Name()
+			if len(only) > 0 && !onlyTableAllowed(only, appID, tableName) {
+				continue
+			}
 			dbPath := filepath.Join(src, appID, tableName)
 			n, idx, err := migrateTable(ldb, appID, tableName, dbPath, pebbleRoot, searchDB)
 			if err != nil {
@@ -523,6 +531,27 @@ func shouldSkipApp(appID string, skipped []string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(appID))
 	for _, s := range skipped {
 		if normalized == s {
+			return true
+		}
+	}
+	return false
+}
+
+func parseOnlyTables(flagValue string) []string {
+	var out []string
+	for _, part := range strings.Split(flagValue, ",") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func onlyTableAllowed(only []string, appID, tableName string) bool {
+	key := strings.ToLower(strings.TrimSpace(appID)) + "/" + strings.ToLower(strings.TrimSpace(tableName))
+	for _, item := range only {
+		if item == key {
 			return true
 		}
 	}
