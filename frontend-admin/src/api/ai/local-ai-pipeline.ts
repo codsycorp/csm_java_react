@@ -2,6 +2,23 @@
 
 export const GO_LOCAL_AI_SSE_STAGES = new Set([
 	"started",
+	"attachment_intake",
+	"intent_reasoning",
+	"routing",
+	"agent_handoff",
+	"tool_search",
+	"rag_citations",
+	"menu_scaffold_assemble",
+	"menu_module_step",
+	"menu_module_enrich",
+	"final_output_gate",
+	"retrieval_quality_gate",
+	"business_comprehend",
+	"business_plan",
+	"agentic_plan",
+	"agentic_plan_schema",
+	"agentic_step",
+	"scope_reasoning",
 	"local_pre_analysis",
 	"context_compression",
 	"streaming_started",
@@ -55,6 +72,143 @@ export function mapGoLocalAiStageToStep(
 				].filter(Boolean).join(" · ") || undefined,
 				status: "done",
 			};
+		case "attachment_intake": {
+			const total = Number(evt.total || 0);
+			const images = Number(evt.images || 0);
+			return {
+				stageKey: "attachment_intake",
+				icon: "📎",
+				label: uiText("Đính kèm", "Attachments", "附件"),
+				detail: total > 0
+					? [
+						`${total} file`,
+						images > 0 ? `${images} ảnh` : "",
+						String(evt.scopeSummary || "").trim(),
+					].filter(Boolean).join(" · ")
+					: undefined,
+				status: "done",
+			};
+		}
+		case "intent_reasoning": {
+			const reasoning = String(evt.reasoning || evt.message || "").trim();
+			return {
+				stageKey: "intent_reasoning",
+				icon: "🧠",
+				label: uiText("Suy luận intent", "Intent reasoning", "意图推理"),
+				detail: reasoning || undefined,
+				status: "done",
+			};
+		}
+		case "routing": {
+			const mode = String(evt.responseMode || "").trim().toLowerCase();
+			return {
+				stageKey: "routing",
+				icon: "🔀",
+				label: uiText("Định tuyến", "Routing", "路由"),
+				detail: mode || undefined,
+				status: "done",
+			};
+		}
+		case "business_comprehend":
+			return {
+				stageKey: "business_comprehend",
+				icon: "📋",
+				label: uiText("Comprehend nghiệp vụ", "Business comprehend", "业务理解"),
+				detail: String(evt.status || "").trim() || undefined,
+				status: String(evt.status || "").trim().toLowerCase() === "running" ? "running" : "done",
+			};
+		case "agentic_plan":
+			return {
+				stageKey: "agentic_plan",
+				icon: "🗺️",
+				label: uiText("Kế hoạch Agentic", "Agentic plan", "Agent 计划"),
+				detail: [
+					String(evt.routingTier || "").trim(),
+					Number.isFinite(Number(evt.planStepCount)) ? `${Number(evt.planStepCount)} steps` : "",
+				].filter(Boolean).join(" · ") || undefined,
+				status: "done",
+			};
+		case "agent_handoff":
+			return {
+				stageKey: "agent_handoff",
+				icon: "🤝",
+				label: uiText("Agent handoff", "Agent handoff", "Agent 交接"),
+				detail: [String(evt.fromAgent || ""), String(evt.toAgent || "")].filter(Boolean).join(" → ") || undefined,
+				status: "done",
+			};
+		case "tool_search": {
+			const hits = Number(evt.retrievalHitCount || 0);
+			return {
+				stageKey: "tool_search",
+				icon: "🔍",
+				label: uiText("Tìm kiếm tenant RAG", "Tenant RAG search", "租户 RAG 检索"),
+				detail: hits > 0 ? `${hits} hits` : uiText("không có hit", "no hits", "无命中"),
+				status: "done",
+			};
+		}
+		case "rag_citations": {
+			const count = Number(evt.count || 0);
+			return {
+				stageKey: "rag_citations",
+				icon: "📚",
+				label: uiText("Trích dẫn RAG", "RAG citations", "RAG 引用"),
+				detail: count > 0 ? `${count} nguồn` : undefined,
+				status: "done",
+			};
+		}
+		case "menu_scaffold_assemble": {
+			const nodes = Number(evt.menuNodes || 0);
+			return {
+				stageKey: "menu_scaffold_assemble",
+				icon: "🧩",
+				label: uiText("Ráp menu Lego", "Lego menu scaffold", "Lego 菜单组装"),
+				detail: nodes > 0 ? `${nodes} nodes` : undefined,
+				status: "done",
+			};
+		}
+		case "menu_module_step": {
+			const label = String(evt.module || "").trim();
+			const idx = Number(evt.moduleIndex || 0);
+			const total = Number(evt.moduleTotal || 0);
+			return {
+				stageKey: "menu_module_step",
+				icon: "📦",
+				label: total > 0 ? `Module ${idx}/${total}: ${label}` : label,
+				status: "done",
+			};
+		}
+		case "menu_module_enrich": {
+			const label = String(evt.module || "").trim();
+			const status = String(evt.status || "").trim().toLowerCase();
+			const running = status === "running" || status === "replanning";
+			return {
+				stageKey: "menu_module_enrich",
+				icon: status === "replanning" ? "🔁" : Boolean(evt.usedLlm) ? "✨" : "🏷️",
+				label: status === "replanning"
+					? uiText(`Replan: ${label}`, `Replan: ${label}`, `重规划: ${label}`)
+					: running ? `Enrich: ${label}` : label,
+				status: running ? "running" : "done",
+			};
+		}
+		case "final_output_gate": {
+			const passed = Boolean(evt.passed);
+			return {
+				stageKey: "final_output_gate",
+				icon: passed ? "✅" : "⛔",
+				label: uiText("Quality gate", "Quality gate", "质量门"),
+				detail: passed ? "passed" : String(evt.reasonCode || "rejected"),
+				status: passed ? "done" : "error",
+			};
+		}
+		case "retrieval_quality_gate": {
+			const passed = String(evt.status || "") === "passed";
+			return {
+				stageKey: "retrieval_quality_gate",
+				icon: passed ? "✅" : "⚠️",
+				label: uiText("RAG quality gate", "RAG quality gate", "RAG 质量门"),
+				status: "done",
+			};
+		}
 		case "local_pre_analysis":
 			return {
 				stageKey: "local_pre_analysis",

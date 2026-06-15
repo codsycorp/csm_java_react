@@ -10,6 +10,7 @@ import (
 	socketio "github.com/zishang520/socket.io/v2/socket"
 
 	"csm_server/backend-go/internal/model"
+	"csm_server/backend-go/internal/services"
 )
 
 type sessionState struct {
@@ -252,6 +253,19 @@ func handleChat(s *socketio.Socket, deps Dependencies, data map[string]any) {
 		log.Printf("Socket chat save failed: %v", err)
 	}
 	s.Broadcast().Emit("message", data)
+
+	if guestContext && !isAdmin {
+		message := firstStr(data, "message", "text", "content")
+		locale := "vi"
+		sessionMu.RLock()
+		if st != nil && st.locale != "" {
+			locale = st.locale
+		}
+		sessionMu.RUnlock()
+		if strings.TrimSpace(message) != "" {
+			go emitGuestAiReply(s, deps, appID, data, message, locale)
+		}
+	}
 }
 
 func handleRegisterGuestPhone(s *socketio.Socket, deps Dependencies, data map[string]any) {
@@ -311,4 +325,25 @@ func firstStr(m map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func emitGuestAiReply(s *socketio.Socket, deps Dependencies, appID string, guestMsg map[string]any, message, locale string) {
+	reply := services.GuestChatReply(deps.Config, deps.Llama, message, locale, appID)
+	if strings.TrimSpace(reply) == "" {
+		return
+	}
+	room := firstStr(guestMsg, "room")
+	if room == "" {
+		room = "guest:" + appID
+	}
+	replyData := map[string]any{
+		"room": room, "appId": appID, "message": reply,
+		"username": "CSM AI", "isBot": true, "isAdmin": false,
+		"timestamp": time.Now().UnixMilli(),
+		"guestSessionId": firstStr(guestMsg, "guestSessionId", "guest_session_id"),
+	}
+	if err := deps.Chat.SaveMessage(appID, replyData); err != nil {
+		log.Printf("Guest AI reply save failed: %v", err)
+	}
+	s.Broadcast().Emit("message", replyData)
 }

@@ -8,6 +8,7 @@ import (
 
 	socketio "github.com/zishang520/socket.io/v2/socket"
 
+	"csm_server/backend-go/internal/config"
 	"csm_server/backend-go/internal/data"
 	"csm_server/backend-go/internal/services"
 )
@@ -37,9 +38,10 @@ func (h *Hub) Register(deps Dependencies) {
 }
 
 type Dependencies struct {
-	RM    *data.RecordManager
-	Chat  *services.ChatService
-	Llama *services.LlamaService
+	Config config.AppConfig
+	RM     *data.RecordManager
+	Chat   *services.ChatService
+	Llama  *services.LlamaService
 }
 
 func (h *Hub) Start(host string, port int) error {

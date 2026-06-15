@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"csm_server/backend-go/internal/config"
+	"csm_server/backend-go/internal/data"
 	"csm_server/backend-go/internal/model"
 	"csm_server/backend-go/internal/services"
 )
@@ -12,18 +13,26 @@ import (
 type AiHandler struct {
 	cfg   config.AppConfig
 	llama *services.LlamaService
+	rm    *data.RecordManager
 }
 
-func NewAiHandler(cfg config.AppConfig, llama *services.LlamaService) *AiHandler {
-	return &AiHandler{cfg: cfg, llama: llama}
+func NewAiHandler(cfg config.AppConfig, llama *services.LlamaService, rm *data.RecordManager) *AiHandler {
+	return &AiHandler{cfg: cfg, llama: llama, rm: rm}
 }
 
-func (h *AiHandler) HandleAiLocal(path string) *model.StandardResponse {
+func (h *AiHandler) HandleAiLocal(path string, params map[string]any) *model.StandardResponse {
 	r := model.NewResponse()
 	r.Set("code", 200)
 	r.Set("success", true)
 	ops := services.NewAiLocalOpsService(h.cfg)
 	switch {
+	case strings.HasSuffix(path, "/knowledge/rebuild-workspace"):
+		fullCode := paramBool(params, "fullCode", true)
+		result := services.RebuildWorkspaceIndexAPI(h.cfg, h.rm, fullCode)
+		r.Set("result", map[string]any{
+			"success": true, "fullCodeScan": fullCode, "workspaceIndex": result,
+		})
+		return r
 	case strings.HasSuffix(path, "/health"):
 		r.Set("result", ops.Health(h.llama))
 	case strings.HasSuffix(path, "/models"):
@@ -44,11 +53,11 @@ func (h *AiHandler) HandleAiDispatch(path string, params map[string]any) *model.
 	var result any
 	switch path {
 	case "/ai-code-stream/quick-fix-feedback":
-		result = map[string]any{"recorded": true, "type": "quick_fix"}
+		result = h.recordAiFeedback(params, "quick_fix")
 	case "/ai-code-stream/edit-candidate-feedback":
-		result = map[string]any{"recorded": true, "type": "edit_candidate"}
+		result = h.recordAiFeedback(params, "edit_candidate")
 	case "/ai-code-stream/agentic-approval-feedback":
-		result = map[string]any{"recorded": true, "type": "agentic"}
+		result = h.recordAiFeedback(params, "agentic")
 	case "/ai-code-stream/menu-editor-apply":
 		apply := h.handleMenuEditorApply(params)
 		for k, v := range apply {
@@ -93,7 +102,22 @@ func (h *AiHandler) HandleAiDispatch(path string, params map[string]any) *model.
 		}
 	case "/ai-prompt-debug":
 		result = map[string]any{"requests": []any{}}
-	case "/ai-orchestration-preview", "/ai-quality-check", "/ai-token-optimize":
+	case "/ai-assistant/workspace-source":
+		result := h.handleWorkspaceSource(params)
+		for k, v := range result {
+			r.Set(k, v)
+		}
+		if ok, _ := result["success"].(bool); !ok {
+			r.Set("code", 404)
+		}
+		return r
+	case "/ai-orchestration-preview":
+		preview := h.handleOrchestrationPreview(params)
+		for k, v := range preview {
+			r.Set(k, v)
+		}
+		return r
+	case "/ai-quality-check", "/ai-token-optimize":
 		result = map[string]any{"path": path, "ready": true, "provider": "local"}
 	case "/ai-conversation-history", "/ai-assistant-session-history":
 		result = map[string]any{"messages": []any{}, "sessionId": paramStr(params, "sessionId")}
@@ -119,6 +143,67 @@ func (h *AiHandler) HandleAiDispatch(path string, params map[string]any) *model.
 	}
 	r.Set("result", result)
 	return r
+}
+
+func (h *AiHandler) handleOrchestrationPreview(params map[string]any) map[string]any {
+	appID := paramStr(params, "appId")
+	if appID == "" {
+		appID = "csm"
+	}
+	contextType := paramStr(params, "contextType")
+	if contextType == "" {
+		contextType = "code"
+	}
+	flowType := "code_editor"
+	if contextType == "menu_json" {
+		flowType = "menu_manager"
+	}
+	req := &services.CodeStreamRequest{
+		AppID:        appID,
+		FlowType:     flowType,
+		TaskType:     paramStr(params, "taskType"),
+		ContextType:  contextType,
+		Message:      paramStr(params, "message"),
+		CurrentCode:  paramStr(params, "currentCode"),
+		ResponseMode: paramStr(params, "responseMode"),
+	}
+	if req.TaskType == "" {
+		req.TaskType = "edit"
+	}
+	ctx := services.PreparePhase1Pipeline(h.cfg, h.rm, req, services.PipelineInput{})
+	return services.BuildOrchestrationPreviewResult(appID, req, ctx.Orchestration)
+}
+
+func (h *AiHandler) handleWorkspaceSource(params map[string]any) map[string]any {
+	path := paramStr(params, "path")
+	if path == "" {
+		return map[string]any{"success": false, "message": "missing path"}
+	}
+	view := services.LoadWorkspaceSourceFile(h.cfg, h.rm, path, paramStr(params, "contextType"))
+	if view == nil {
+		return map[string]any{"success": false, "message": "workspace source not found"}
+	}
+	return map[string]any{"success": true, "message": "ok", "result": view}
+}
+
+func (h *AiHandler) recordAiFeedback(params map[string]any, feedbackType string) map[string]any {
+	accepted := paramBool(params, "accepted", true)
+	appID := paramStr(params, "appId")
+	if appID == "" {
+		appID = "csm"
+	}
+	if accepted {
+		_ = services.RecordSuccessfulCodeEdit(
+			h.cfg,
+			appID,
+			paramStr(params, "requestText"),
+			paramStr(params, "summary"),
+			paramStr(params, "contextType"),
+			paramStr(params, "targetFile"),
+			int(paramInt(params, "patchOpCount", 1)),
+		)
+	}
+	return map[string]any{"recorded": true, "type": feedbackType, "accepted": accepted}
 }
 
 func (h *AiHandler) handleMenuEditorApply(params map[string]any) map[string]any {

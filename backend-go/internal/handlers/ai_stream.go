@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"csm_server/backend-go/internal/config"
+	"csm_server/backend-go/internal/data"
 	"csm_server/backend-go/internal/security"
 	"csm_server/backend-go/internal/services"
 )
@@ -17,6 +18,7 @@ import (
 type StreamDeps struct {
 	Config config.AppConfig
 	Llama  *services.LlamaService
+	RM     *data.RecordManager
 }
 
 func HandleStreamingAPI(deps StreamDeps, w http.ResponseWriter, r *http.Request, path string, params map[string]any, auth *security.AuthUser) bool {
@@ -58,25 +60,71 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		return
 	}
 
-	prompt := services.BuildCodeStreamLocalPrompt(deps.Config, req)
-	responseMode := services.ResolveResponseMode(req)
-	modelLabel := services.StreamingModelLabel(deps.Config, deps.Llama)
-	_ = responseMode
-
 	writeSSE(w, stageEvent("started", map[string]any{
 		"requestId": req.RequestID, "flowType": req.FlowType, "taskType": req.TaskType,
-		"contextType": req.ContextType, "appId": req.AppID, "model": req.Model, "promptChars": len(prompt),
+		"contextType": req.ContextType, "appId": req.AppID, "model": req.Model,
 	}))
+
+	attachments := services.ParseAttachmentsFromParams(params)
+	scan := services.ScanAttachments(attachments, req.ContextType)
+	if blocked, reason := services.MultimodalRouteGuard(scan, false); blocked {
+		writeSSE(w, services.BlockedMultimodalSSE(req, reason))
+		writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": 0}))
+		return
+	}
+	if scan.TotalCount > 0 {
+		writeSSE(w, services.AttachmentIntakeSSE(req, scan))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+
+	retrievalAuth := services.RetrievalAuthAnonymous
+	if auth != nil {
+		retrievalAuth = services.BuildRetrievalAuthContext(auth.AppID, auth.Dev, auth.IsSubUser, auth.BranchID, auth.DeptID, auth.DataScope)
+	}
+	pipelineInput := services.PipelineInput{Auth: retrievalAuth, Attachments: attachments}
+
+	phase1 := services.PreparePhase1Pipeline(deps.Config, deps.RM, req, pipelineInput)
+	for _, evt := range services.Phase1SSEEvents(req, phase1) {
+		if evt["stage"] == "attachment_intake" {
+			continue
+		}
+		writeSSE(w, evt)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+
+	gf := services.TryGreenfieldScaffoldFirst(deps.Config, deps.Llama, req, phase1)
+	for _, evt := range gf.SSEEvents {
+		writeSSE(w, evt)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+	if gf.Applied && gf.MenuJSON != "" {
+		elapsed := int64(0)
+		completion := services.CodeStreamCompletion(req, gf.MenuJSON, req.CurrentCode, gf.ModelLabel, elapsed)
+		writeSSE(w, completion)
+		services.RecordCodeEditFromCompletion(deps.Config, req, completion, gf.MenuJSON)
+		writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": elapsed}))
+		return
+	}
+
+	prompt := services.BuildCodeStreamLocalPromptFull(deps.Config, req, phase1.LearningBlock, phase1.ComprehendBlock, phase1.TenantRAG.Block, phase1.Multimodal.CompactContext, phase1.Workspace.Block)
+	responseMode := phase1.ResponseMode
+	modelLabel := services.StreamingModelLabel(deps.Config, deps.Llama)
+
 	writeSSE(w, stageEvent("local_pre_analysis", map[string]any{
-		"requestId": req.RequestID, "status": "local_context_ready", "attempted": false,
-		"handledLocally": false, "reason_code": "local_v2_skip_legacy_pre_analysis",
-		"localOnlyEnabled": true, "hasLocalContext": false,
-	}))
-	writeSSE(w, stageEvent("context_compression", map[string]any{
-		"requestId": req.RequestID, "status": "orchestration_context_attached", "savedChars": 0,
+		"requestId": req.RequestID, "status": "local_context_ready", "attempted": true,
+		"handledLocally": true, "reason_code": "phase1_orchestration_ready",
+		"localOnlyEnabled": true, "hasLocalContext": len(phase1.LearningBlock) > 0,
+		"responseMode": responseMode, "routingTier": phase1.Orchestration.RoutingTier,
 	}))
 	writeSSE(w, stageEvent("streaming_started", map[string]any{
 		"requestId": req.RequestID, "model": "local_provider", "estimatedTotalChars": len(prompt) / 4, "percent": 15,
+		"responseMode": responseMode,
 	}))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -153,6 +201,9 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	}
 
 	result := services.CleanLocalModelOutput(full.String())
+	if req.ContextType == "menu_json" && responseMode == "edit" && result != "" {
+		result = services.MaybeApplyGreenfieldMenuScaffold(result, req.Message, phase1.BusinessSpec)
+	}
 	if result == "" && deps.Llama.IsAvailable() {
 		result = uiText(req.UILang,
 			"AI local không trả về nội dung. Hãy thử lại hoặc kiểm tra build native (-tags llamacpp).",
@@ -164,6 +215,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	elapsed := time.Since(startedAt).Milliseconds()
 	completion := services.CodeStreamCompletion(req, result, req.CurrentCode, modelLabel, elapsed)
 	writeSSE(w, completion)
+	services.RecordCodeEditFromCompletion(deps.Config, req, completion, result)
 	writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": elapsed}))
 }
 
@@ -225,14 +277,23 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 	}
 	executePatch := paramBool(params, "executePatch", responseMode == "edit")
 
-	events := []map[string]any{
-		{"stage": "preparing", "status": "running", "message": "Bắt đầu local execute plan", "current": 0, "total": 5, "percent": 5, "responseMode": responseMode},
-		{"stage": "agentic_plan", "status": "running", "message": "Đã lập kế hoạch Agentic local từ scanner signals", "current": 1, "total": 5, "percent": 20, "compacted": true},
-		{"stage": "scope_reasoning", "status": "running", "message": "Khóa phạm vi reasoning bằng bitmask", "current": 2, "total": 5, "percent": 40, "responseMode": responseMode},
-		{"stage": "local_tool_invocation", "status": "running", "message": "Local tools tạo execution sketch theo từng bước", "current": 4, "total": 5, "percent": 80, "responseMode": responseMode},
-		{"stage": "context_compression", "status": "running", "message": "Đã nén context và chuẩn bị stream patch", "current": 5, "total": 5, "percent": 100, "responseMode": responseMode, "contextType": contextType},
+	req := &services.CodeStreamRequest{
+		RequestID: requestID, AppID: appID, FlowType: map[string]string{"menu_json": "menu_manager", "code": "code_editor"}[contextType],
+		TaskType: "menu_design", ContextType: contextType,
+		Message: message, CurrentCode: currentCode, ResponseMode: responseMode,
 	}
-	for _, evt := range events {
+	if req.FlowType == "" {
+		req.FlowType = "code_editor"
+	}
+
+	writeSSE(w, stageEvent("preparing", map[string]any{
+		"status": "running", "message": "Bắt đầu local execute plan", "current": 0, "total": 5, "percent": 5, "responseMode": responseMode,
+	}))
+	phase1 := services.PreparePhase1Pipeline(deps.Config, deps.RM, req, services.PipelineInput{
+		Attachments: services.ParseAttachmentsFromParams(params),
+	})
+	responseMode = phase1.ResponseMode
+	for _, evt := range services.Phase1SSEEvents(req, phase1) {
 		writeSSE(w, evt)
 	}
 
@@ -245,12 +306,7 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 		defer cancel()
 
 		if contextType == "menu_json" {
-			req := &services.CodeStreamRequest{
-				RequestID: requestID, AppID: appID, FlowType: "menu_manager",
-				TaskType: "menu_design", ContextType: "menu_json",
-				Message: message, CurrentCode: currentCode, ResponseMode: responseMode,
-			}
-			prompt := services.BuildCodeStreamLocalPrompt(deps.Config, req)
+			prompt := services.BuildCodeStreamLocalPromptFull(deps.Config, req, phase1.LearningBlock, phase1.ComprehendBlock, phase1.TenantRAG.Block, phase1.Multimodal.CompactContext, phase1.Workspace.Block)
 			rawResult, _ = deps.Llama.Complete(ctx, prompt)
 		} else if contextType == "code" && currentCode != "" {
 			prompt := buildPatchPrompt(message, currentCode)
@@ -268,23 +324,15 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 
 	elapsed := time.Since(startedAt).Milliseconds()
 	if rawResult != "" {
-		req := &services.CodeStreamRequest{
-			RequestID: requestID, AppID: appID,
-			FlowType: map[string]string{"menu_json": "menu_manager", "code": "code_editor"}[contextType],
-			TaskType: "menu_design", ContextType: contextType,
-			Message: message, CurrentCode: currentCode, ResponseMode: responseMode,
-		}
-		if req.FlowType == "" {
-			req.FlowType = "code_editor"
-		}
 		completion := services.CodeStreamCompletion(req, rawResult, currentCode, modelLabel, elapsed)
 		completion["status"] = "done"
 		completion["message"] = "Local execute plan hoàn tất với patch local"
 		completion["localProviderPrimaryUsed"] = true
 		completion["result"] = map[string]any{
-			"appId": appID, "applyDynamicIngestion": false, "ingestCount": 0, "aggregateScopeMask": 0,
+			"appId": appID, "applyDynamicIngestion": false, "ingestCount": 0, "aggregateScopeMask": phase1.Orchestration.ScopeMask,
 		}
 		writeSSE(w, completion)
+		services.RecordCodeEditFromCompletion(deps.Config, req, completion, rawResult)
 		return
 	}
 

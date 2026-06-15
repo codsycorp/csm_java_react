@@ -59,7 +59,9 @@ Legend: **Done** = implemented | **Partial** = basic/minimal | **Defer** = not s
 | `/ai-generate-seo-content` | Done (local llama native + SEO one-shot pipelines) |
 | `/ai-local/health`, `/models`, `/services` | Done |
 | `/ai-local/execute-local-plan` | Done (menu_json + code SSE completion) |
-| `/ai-code-stream` | Done (menu merge + apply flags + knowledge prompts) |
+| `/ai-local/knowledge/rebuild-workspace` | Done (workspace_fts rebuild) |
+| `/ai-assistant/workspace-source` | Done (dev workspace file load) |
+| `/ai-code-stream` | Done (Phase 1–4 pipeline + attachments ACL) |
 | `/ai-code-stream/menu-editor-apply`, `/ai/menu-merge` | Done |
 | `/facebook/*` | Done (post, post-with-images, me, exchange-token, pages) |
 | `/facebook/ads/campaign`, `/google/ads/campaign` | Done (→ CRM create ad) |
@@ -84,7 +86,7 @@ Legend: **Done** = implemented | **Partial** = basic/minimal | **Defer** = not s
 
 1. ~~Lucene/sqlite-vec wired into live table queries~~ → FTS5 wired for `like`; vector search (ai_chunks) still offline
 2. Socket.IO real-time + chat HTTP endpoints
-3. Full AI orchestration (RAG multimodal vision, agent harness quality-gate early audit — partial menu merge/apply parity added)
+3. Full AI orchestration Phase 1–4 done (intent, RAG ACL, workspace FTS, multimodal intake, greenfield scaffold+enrich+replan, guest chat)
 4. Web SSR (categories/tags/reviews)
 5. SEO scrape via Jsoup in `/seo` handler ( `/scrape-web` works)
 6. Pebble backup/restore API (use filesystem backup today)

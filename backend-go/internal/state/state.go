@@ -78,11 +78,11 @@ func NewAppState(cfg config.AppConfig) (*AppState, error) {
 	}
 	st.ApiExtHandler = handlers.NewApiExtHandler(cfg, httpClient, googleIndex, aiSeo)
 	st.SocialHandler = handlers.NewSocialHandler(cfg, httpClient, st.CrmHandler)
-	st.AiHandler = handlers.NewAiHandler(cfg, llama)
+	st.AiHandler = handlers.NewAiHandler(cfg, llama, rm)
 	st.InitHandler.AutoInitDefaultData()
 
 	socketHub.Register(socket.Dependencies{
-		RM: rm, Chat: chat, Llama: llama,
+		Config: cfg, RM: rm, Chat: chat, Llama: llama,
 	})
 	if err := socketHub.Start(cfg.Socket.Host, cfg.Socket.Port); err != nil {
 		return nil, err

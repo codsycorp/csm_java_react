@@ -76,6 +76,14 @@ func ResolveResponseMode(req *CodeStreamRequest) string {
 }
 
 func BuildCodeStreamLocalPrompt(cfg config.AppConfig, req *CodeStreamRequest) string {
+	return BuildCodeStreamLocalPromptWithExtras(cfg, req, "", "", "")
+}
+
+func BuildCodeStreamLocalPromptWithExtras(cfg config.AppConfig, req *CodeStreamRequest, learningBlock, comprehendBlock, tenantRAGBlock string) string {
+	return BuildCodeStreamLocalPromptFull(cfg, req, learningBlock, comprehendBlock, tenantRAGBlock, "", "")
+}
+
+func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest, learningBlock, comprehendBlock, tenantRAGBlock, multimodalBlock, workspaceBlock string) string {
 	mode := ResolveResponseMode(req)
 	intent := classifyLocalIntent(req.ContextType, mode)
 	editor := truncateStr(req.CurrentCode, 22_000)
@@ -143,6 +151,29 @@ func BuildCodeStreamLocalPrompt(cfg config.AppConfig, req *CodeStreamRequest) st
 		sb.WriteString("[SESSION_MEMORY]\n")
 		sb.WriteString(ctxBlock)
 		sb.WriteString("\n[/SESSION_MEMORY]\n\n")
+	}
+	if comprehendBlock != "" {
+		sb.WriteString(comprehendBlock)
+	}
+	if tenantRAGBlock != "" {
+		sb.WriteString(tenantRAGBlock)
+	}
+	if workspaceBlock != "" {
+		sb.WriteString(workspaceBlock)
+	}
+	if multimodalBlock != "" {
+		sb.WriteString("[ATTACHMENT_CONTEXT]\n")
+		sb.WriteString(multimodalBlock)
+		sb.WriteString("\n[/ATTACHMENT_CONTEXT]\n\n")
+	}
+	if learningBlock != "" {
+		sb.WriteString("[AUTO_LEARNED_MEMORY]\n")
+		sb.WriteString(learningBlock)
+		sb.WriteString("\n[/AUTO_LEARNED_MEMORY]\n\n")
+	} else if lb := BuildLearningContextBlock(cfg, req.AppID, req.Message, req.ContextType, 6_000); lb != "" {
+		sb.WriteString("[AUTO_LEARNED_MEMORY]\n")
+		sb.WriteString(lb)
+		sb.WriteString("\n[/AUTO_LEARNED_MEMORY]\n\n")
 	}
 	sb.WriteString("[USER_REQUEST]\n")
 	sb.WriteString(userReq)
