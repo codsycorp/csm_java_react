@@ -9,17 +9,18 @@ import (
 )
 
 type CodeStreamRequest struct {
-	RequestID    string
-	AppID        string
-	FlowType     string
-	TaskType     string
-	ContextType  string
-	Message      string
-	CurrentCode  string
-	Language     string
-	Model        string
-	UILang       string
-	ResponseMode string
+	RequestID       string
+	AppID           string
+	FlowType        string
+	TaskType        string
+	ContextType     string
+	Message         string
+	CurrentCode     string
+	FullCurrentCode string // raw editor payload before tier cap (map-reduce source)
+	Language        string
+	Model           string
+	UILang          string
+	ResponseMode    string
 }
 
 func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool) (*CodeStreamRequest, string) {
@@ -50,14 +51,16 @@ func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool)
 	if requestID == "" {
 		requestID = newRequestID()
 	}
+	rawCode := paramString(params, "currentCode", "")
 	return &CodeStreamRequest{
-		RequestID:    requestID,
-		AppID:        appID,
-		FlowType:     flowType,
-		TaskType:     paramString(params, "taskType", "edit"),
-		ContextType:  contextType,
-		Message:      truncateStr(paramString(params, "message", ""), 32_000),
-		CurrentCode:  truncateStr(paramString(params, "currentCode", ""), maxOutgoingEditorFromParams(params)),
+		RequestID:       requestID,
+		AppID:           appID,
+		FlowType:        flowType,
+		TaskType:        paramString(params, "taskType", "edit"),
+		ContextType:     contextType,
+		Message:         truncateStr(paramString(params, "message", ""), 32_000),
+		CurrentCode:     truncateStr(rawCode, maxOutgoingEditorFromParams(params)),
+		FullCurrentCode: truncateStr(rawCode, 500_000),
 		Language:     paramString(params, "language", "javascript"),
 		Model:        paramString(params, "model", "auto"),
 		UILang:       firstNonEmpty(paramString(params, "uiLang", ""), paramString(params, "ui_lang", ""), paramString(params, "uiLanguage", "vi")),
@@ -67,13 +70,32 @@ func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool)
 
 func maxOutgoingEditorFromParams(params map[string]any) int {
 	ctxType := paramString(params, "contextType", "code")
-	mode := firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", ""))
+	mode := inferResponseModeFromParams(params)
 	return MaxOutgoingEditorChars(config.AppConfig{}, ctxType, mode)
+}
+
+func inferResponseModeFromParams(params map[string]any) string {
+	mode := firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", ""))
+	if mode != "" {
+		return mode
+	}
+	msg := strings.ToLower(paramString(params, "message", ""))
+	if hasAnalyzeIntent(msg) && !hasEditIntent(msg) {
+		return "analyze"
+	}
+	if strings.Contains(msg, "?") || strings.Contains(strings.ToLower(paramString(params, "taskType", "")), "qa") {
+		return "analyze"
+	}
+	return ""
 }
 
 func ResolveResponseMode(req *CodeStreamRequest) string {
 	if req.ResponseMode != "" {
 		return req.ResponseMode
+	}
+	lower := strings.ToLower(strings.TrimSpace(req.Message))
+	if hasAnalyzeIntent(lower) && !hasEditIntent(lower) {
+		return "analyze"
 	}
 	if strings.Contains(req.TaskType, "qa") || strings.Contains(req.Message, "?") {
 		return "analyze"

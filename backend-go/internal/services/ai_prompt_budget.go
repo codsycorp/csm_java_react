@@ -56,8 +56,26 @@ func EffectiveLocalPromptCap(cfg config.AppConfig, contextType, responseMode str
 	}
 	if mode == "analyze" && ctx != "menu_json" {
 		hardCap = min(hardCap, max(8000, hardCap/2))
+		if IsConstrained8GbTier(cfg) {
+			hardCap = min(hardCap, 9000)
+		}
 	}
 	return max(4000, hardCap)
+}
+
+// EffectiveInferenceMaxTokens picks output budget (analyze uses less on 8GB to avoid OOM).
+func EffectiveInferenceMaxTokens(cfg config.AppConfig, responseMode string) uint32 {
+	base := cfg.EffectiveLlamaMaxTokens()
+	mode := strings.ToLower(strings.TrimSpace(responseMode))
+	if mode == "analyze" && IsConstrained8GbTier(cfg) {
+		if base > 512 {
+			return 512
+		}
+	}
+	if IsConstrained8GbTier(cfg) && base > 768 {
+		return 768
+	}
+	return base
 }
 
 // TruncateMiddle keeps system head + user tail when prompt exceeds cap (Java truncateMiddle parity).

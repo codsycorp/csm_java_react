@@ -219,13 +219,26 @@ export function mapGoLocalAiStageToStep(
 					: undefined,
 				status: "done",
 			};
-		case "context_compression":
+		case "context_compression": {
+			if (String(evt.status || "") === "local_map_reduce_plan") {
+				const chunks = Number((evt as Record<string, unknown>).chunks) || 0;
+				return {
+					stageKey: "map_reduce_plan",
+					icon: "🧩",
+					label: uiText("Map-reduce phân tích code lớn", "Map-reduce large code analysis", "大代码 Map-Reduce 分析"),
+					detail: chunks > 0
+						? uiText(`${chunks} chunk`, `${chunks} chunks`, `${chunks} 个分块`)
+						: undefined,
+					status: "running",
+				};
+			}
 			return {
 				stageKey: "context_compression",
 				icon: "📎",
 				label: uiText("Gắn ngữ cảnh orchestration", "Attach orchestration context", "附加编排上下文"),
 				status: "done",
 			};
+		}
 		case "streaming_started":
 			if (!isLocalProviderModel(evt.model)) {
 				return null;
@@ -238,8 +251,31 @@ export function mapGoLocalAiStageToStep(
 				status: "running",
 			};
 		case "waiting_gemini": {
-			if (!isLocalProviderModel(evt.model)) {
+			if (!isLocalProviderModel(evt.model) && String((evt as Record<string, unknown>).waitState || "") !== "local_map_reduce") {
 				return null;
+			}
+			if (String((evt as Record<string, unknown>).waitState || "") === "local_map_reduce") {
+				const phase = String(evt.localPhase || "chunk_analysis").trim().toLowerCase();
+				const chunkIndex = Number((evt as Record<string, unknown>).chunkIndex) || 0);
+				const chunkTotal = Number((evt as Record<string, unknown>).chunkTotal) || 0);
+				const chunkDetail = chunkIndex > 0 && chunkTotal > 0
+					? uiText(`Chunk ${chunkIndex}/${chunkTotal}`, `Chunk ${chunkIndex}/${chunkTotal}`, `分块 ${chunkIndex}/${chunkTotal}`)
+					: undefined;
+				if (phase === "synthesis") {
+					return {
+						stageKey: "map_reduce_synthesis",
+						icon: "🔗",
+						label: uiText("Tổng hợp map-reduce", "Map-reduce synthesis", "Map-Reduce 汇总"),
+						status: "running",
+					};
+				}
+				return {
+					stageKey: "map_reduce_chunk",
+					icon: "🧩",
+					label: uiText("Phân tích từng chunk", "Analyze each chunk", "分析各分块"),
+					detail: chunkDetail,
+					status: "running",
+				};
 			}
 			const phase = String(evt.localPhase || "infer").trim().toLowerCase();
 			if (phase === "loading") {

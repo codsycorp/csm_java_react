@@ -2496,11 +2496,22 @@ function inferResponseModeByIntent(input: string, _contextType?: AiAssistantChat
 	return directive.overrideMode;
 }
 
+/** Infer analyze vs edit for outgoing code cap when user did not use /analyze. */
+function inferOutgoingCapMode(message: string, responseMode?: ResponseMode): ResponseMode | undefined {
+	if (responseMode) return responseMode;
+	const m = String(message || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036F]/g, "");
+	if (/phan tich|giai thich|explain|analyze|what does|logic gi|dang xu ly/.test(m)) {
+		return "analyze";
+	}
+	return undefined;
+}
+
 /** Cap editor payload for 8GB server — analyze sends less code to avoid HTTP_0 / OOM. */
-function capOutgoingEditorCode(code: string, responseMode?: ResponseMode): string {
+function capOutgoingEditorCode(code: string, message?: string, responseMode?: ResponseMode): string {
+	const capMode = inferOutgoingCapMode(String(message || ""), responseMode);
 	const raw = String(code || "");
 	if (!raw) return raw;
-	const max = responseMode === "analyze" ? 12_000 : 48_000;
+	const max = capMode === "analyze" ? 12_000 : 48_000;
 	if (raw.length <= max) return raw;
 	const head = Math.floor(max * 0.45);
 	const tail = max - head - 64;
@@ -2513,13 +2524,14 @@ function resolveOutgoingEditorSnapshot(
 	liveCode: string,
 	metadata: Record<string, unknown>,
 	responseMode?: ResponseMode,
+	message?: string,
 ): {
 	code: string
 	cursorLine?: number
 	selectionFromLine?: number
 	selectionToLine?: number
 } {
-	const code = capOutgoingEditorCode(String(liveCode || currentCode || ""), responseMode);
+	const code = capOutgoingEditorCode(String(liveCode || currentCode || ""), message, responseMode);
 	const cursorLine = Math.floor(Number(metadata.cursorLine ?? 0));
 	const selectionFromLine = Math.floor(Number(metadata.selectionFromLine ?? metadata.cursorLine ?? 0));
 	const selectionToLine = Math.floor(Number(metadata.selectionToLine ?? selectionFromLine ?? 0));
@@ -6083,6 +6095,7 @@ export default function AiAssistantChat({
 				liveCodeRef.current,
 				requestEditorMetadata,
 				inferredPreviewMode,
+				msg,
 			);
 			const res = await request.post("ai-orchestration-preview", {
 				json: {
@@ -6323,6 +6336,7 @@ export default function AiAssistantChat({
 				liveCodeRef.current,
 				requestEditorMetadata,
 				requestedResponseMode,
+				cleanedMessage || normalizedText,
 			);
 			liveCodeRef.current = outgoingSnapshot.code;
 			editStreamStartCodeRef.current = outgoingSnapshot.code;

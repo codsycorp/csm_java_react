@@ -75,10 +75,14 @@ func (l *LlamaService) IsModelLoaded() bool {
 }
 
 func (l *LlamaService) StreamCompletion(ctx context.Context, prompt string, onToken func(string) error) error {
+	return l.StreamCompletionWithTokens(ctx, prompt, l.cfg.EffectiveLlamaMaxTokens(), onToken)
+}
+
+func (l *LlamaService) StreamCompletionWithTokens(ctx context.Context, prompt string, maxTokens uint32, onToken func(string) error) error {
 	if !l.UsesNative() {
 		return fmt.Errorf("%s: %s", LocalProviderUnavailableCode, l.statusHint())
 	}
-	return l.native.stream(prompt, l.cfg.EffectiveLlamaMaxTokens(), onToken)
+	return l.native.stream(prompt, maxTokens, onToken)
 }
 
 func LocalUnavailableMessage() string {

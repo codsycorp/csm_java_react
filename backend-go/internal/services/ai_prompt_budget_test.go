@@ -49,6 +49,19 @@ func TestMaxOutgoingEditorCharsAnalyze8Gb(t *testing.T) {
 	}
 }
 
+func TestInferResponseModeFromParamsAnalyze(t *testing.T) {
+	params := map[string]any{
+		"message": "Phân tích code hiện tại đang xử lý những logic gì",
+		"contextType": "code",
+	}
+	if got := inferResponseModeFromParams(params); got != "analyze" {
+		t.Fatalf("got %q want analyze", got)
+	}
+	if cap := maxOutgoingEditorFromParams(params); cap != 12_000 {
+		t.Fatalf("cap=%d want 12000", cap)
+	}
+}
+
 func TestClampPromptForLocalProvider(t *testing.T) {
 	t.Setenv("AI_LOCAL_RUNTIME_TIER", "balanced-8gb")
 	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 1024, LlamaMaxPromptChars: 32000}}

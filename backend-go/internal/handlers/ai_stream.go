@@ -86,6 +86,20 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	pipelineInput := services.PipelineInput{Auth: retrievalAuth, Attachments: attachments}
 
 	phase1 := services.PreparePhase1Pipeline(deps.Config, deps.RM, req, pipelineInput)
+	responseMode := phase1.ResponseMode
+	req.ResponseMode = responseMode
+
+	fullCode := req.FullCurrentCode
+	if fullCode == "" {
+		fullCode = req.CurrentCode
+	}
+	useMapReduce := services.ShouldUseMapReduceAnalyze(deps.Config, req, phase1, len(fullCode))
+	if !useMapReduce && responseMode == "analyze" {
+		req.CurrentCode = services.TruncateMiddle(
+			req.CurrentCode,
+			services.MaxOutgoingEditorChars(deps.Config, req.ContextType, "analyze"),
+		)
+	}
 	for _, evt := range services.Phase1SSEEvents(req, phase1) {
 		if evt["stage"] == "attachment_intake" {
 			continue
@@ -112,9 +126,65 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		return
 	}
 
-	prompt := services.BuildCodeStreamLocalPromptFull(deps.Config, req, phase1.LearningBlock, phase1.ComprehendBlock, phase1.TenantRAG.Block, phase1.Multimodal.CompactContext, phase1.Workspace.Block)
-	responseMode := phase1.ResponseMode
+	flushSSE := func() {
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+	emitSSE := func(evt map[string]any) {
+		writeSSE(w, evt)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	startedAt := time.Now()
 	modelLabel := services.StreamingModelLabel(deps.Config, deps.Llama)
+
+	if useMapReduce {
+		writeSSE(w, stageEvent("local_pre_analysis", map[string]any{
+			"requestId": req.RequestID, "status": "local_map_reduce_ready", "attempted": true,
+			"handledLocally": true, "reason_code": "map_reduce_broad_analysis",
+			"responseMode": responseMode, "sourceChars": len(fullCode),
+			"constrainedTier": services.IsConstrained8GbTier(deps.Config),
+			"mapReduceMinChars": services.MapReduceMinCodeChars(deps.Config),
+		}))
+		writeSSE(w, stageEvent("streaming_started", map[string]any{
+			"requestId": req.RequestID, "model": "local_provider", "percent": 15,
+			"responseMode": responseMode, "mapReduce": true,
+		}))
+		flushSSE()
+
+		result, mrErr := services.RunMapReduceAnalyze(ctx, deps.Config, deps.Llama, req, fullCode, emitSSE, flushSSE)
+		if mrErr != nil {
+			log.Printf("AiCodeStream: map-reduce failed requestId=%s err=%v sourceChars=%d", req.RequestID, mrErr, len(fullCode))
+			writeSSE(w, stageEvent("error", map[string]any{
+				"requestId": req.RequestID, "reason_code": "local_map_reduce_failed",
+				"message": uiText(req.UILang,
+					"Map-reduce phân tích thất bại. Thử bôi đen vùng code nhỏ hơn hoặc dùng /analyze.",
+					"Map-reduce analysis failed. Try selecting a smaller code region or use /analyze.",
+					"Map-reduce 分析失败。请选中更小的代码区域或使用 /analyze。",
+				),
+				"sourceChars": len(fullCode), "error": mrErr.Error(),
+			}))
+			flushSSE()
+		}
+		if result == "" {
+			result = uiText(req.UILang,
+				"AI local không trả về nội dung sau map-reduce. Hãy thử lại với vùng code nhỏ hơn.",
+				"Local AI returned no content after map-reduce. Retry with a smaller code region.",
+				"本地 AI 在 map-reduce 后未返回内容。请用更小的代码区域重试。",
+			)
+		}
+		elapsed := time.Since(startedAt).Milliseconds()
+		completion := services.CodeStreamCompletion(req, result, req.CurrentCode, modelLabel, elapsed)
+		writeSSE(w, completion)
+		writeSSE(w, stageEvent("request_complete", map[string]any{
+			"requestId": req.RequestID, "elapsedMs": elapsed, "mapReduce": true,
+		}))
+		return
+	}
+
+	prompt := services.BuildCodeStreamLocalPromptFull(deps.Config, req, phase1.LearningBlock, phase1.ComprehendBlock, phase1.TenantRAG.Block, phase1.Multimodal.CompactContext, phase1.Workspace.Block)
 
 	writeSSE(w, stageEvent("local_pre_analysis", map[string]any{
 		"requestId": req.RequestID, "status": "local_context_ready", "attempted": true,
@@ -128,10 +198,6 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		"requestId": req.RequestID, "model": "local_provider", "estimatedTotalChars": len(prompt) / 4, "percent": 15,
 		"responseMode": responseMode,
 	}))
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-	startedAt := time.Now()
 
 	var full strings.Builder
 	streamPiece := func(piece string) error {
@@ -168,11 +234,26 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 			f.Flush()
 		}
 
-		streamErr := deps.Llama.StreamCompletion(ctx, prompt, streamPiece)
+		streamErr := deps.Llama.StreamCompletionWithTokens(ctx, prompt, services.EffectiveInferenceMaxTokens(deps.Config, responseMode), streamPiece)
 		var completeErr error
+		if streamErr != nil {
+			log.Printf("AiCodeStream: stream error requestId=%s err=%v promptChars=%d", req.RequestID, streamErr, len(prompt))
+			writeSSE(w, stageEvent("error", map[string]any{
+				"requestId": req.RequestID, "reason_code": "local_inference_stream_error",
+				"message": uiText(req.UILang,
+					"Inference local lỗi (server 8GB có thể hết RAM). Thử /analyze với ít code hơn hoặc bôi đen vùng cần phân tích.",
+					"Local inference failed (8GB server may be out of RAM). Try /analyze with less code or select a smaller region.",
+					"本地推理失败（8GB 服务器可能内存不足）。请用 /analyze 并减少代码或选中更小区域。",
+				),
+				"promptChars": len(prompt), "streamError": streamErr.Error(),
+			}))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
 		if streamErr != nil || full.Len() == 0 {
 			var text string
-			text, completeErr = deps.Llama.Complete(ctx, prompt)
+			text, completeErr = deps.Llama.CompleteWithTokens(ctx, prompt, services.EffectiveInferenceMaxTokens(deps.Config, responseMode))
 			if completeErr == nil {
 				cleaned := services.CleanLocalModelOutput(text)
 				if cleaned != "" && full.Len() == 0 {
