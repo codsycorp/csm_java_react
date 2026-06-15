@@ -8,6 +8,7 @@ import { useUserStore } from "#src/store/user";
 import { theme } from "antd";
 import KeepAlive, { useKeepaliveRef } from "keepalive-for-react";
 import { useLocation } from "react-router";
+import { DYNAMIC_CODE_RELOAD_EVENT, type DynamicCodeReloadDetail } from "#src/pages/system/dynamic-code/reload";
 
 
 export interface LayoutContentProps { }
@@ -205,6 +206,63 @@ export default function LayoutContent() {
 			aliveRef.current?.refresh();
 		}
 	}, [isRefresh]);
+
+	// Force KeepAlive remount for homepage/auto-setup when matching sys_autos JS is saved.
+	useEffect(() => {
+		const normalizeTabKey = (rawKey: string) => {
+			if (rawKey === "/" || rawKey === "/home" || rawKey === "homepage") return "homepage";
+			return rawKey || "homepage";
+		};
+
+		const resolveTabAppId = (tabLike: any) => {
+			const candidates = [
+				tabLike?.appId,
+				tabLike?.app_id,
+				tabLike?.menuData?.app_id,
+				tabLike?.m_configs?.app_id,
+				userAppId,
+				"csm",
+			];
+			return String(candidates.find((item) => typeof item === "string" && item.trim()) || "csm").trim();
+		};
+
+		const buildScopedCacheKey = (rawKey: string, tabLike: any) => {
+			return `${resolveTabAppId(tabLike)}::${normalizeTabKey(rawKey)}`;
+		};
+
+		const handler = (event: Event) => {
+			const detail = (event as CustomEvent<DynamicCodeReloadDetail>).detail;
+			const pName = String(detail?.p_name || "").trim();
+			const pType = detail?.p_type ?? 0;
+			if (!pName || pType !== 0) return;
+
+			const homepageTab = openTabs.get("homepage") || openTabs.get("/home") || openTabs.get("/");
+			const autoSetupTab = openTabs.get("/auto-setup") || openTabs.get("auto-setup");
+			const targets = new Set<string>();
+
+			if (homepageTab && pName.startsWith("broadcast_")) {
+				targets.add(buildScopedCacheKey("homepage", homepageTab));
+			}
+			if (autoSetupTab && !pName.startsWith("broadcast_")) {
+				const autoAppId = resolveTabAppId(autoSetupTab);
+				if (pName === autoAppId) {
+					targets.add(buildScopedCacheKey("/auto-setup", autoSetupTab));
+					targets.add(buildScopedCacheKey("auto-setup", autoSetupTab));
+				}
+			}
+
+			targets.forEach((cacheKey) => {
+				try {
+					aliveRef.current?.destroy?.(cacheKey);
+				} catch {
+					// Best-effort KeepAlive invalidation.
+				}
+			});
+		};
+
+		window.addEventListener(DYNAMIC_CODE_RELOAD_EVENT, handler);
+		return () => window.removeEventListener(DYNAMIC_CODE_RELOAD_EVENT, handler);
+	}, [openTabs, userAppId]);
 
 	const keepAliveExclude = useMemo(() => {
 		if (!tabbarEnable) {

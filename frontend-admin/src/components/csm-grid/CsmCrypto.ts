@@ -44,6 +44,11 @@ export function csmDecrypt(e_code: string): string {
 	try {
 		if (!e_code) return "";
 
+		const trimmed = String(e_code).trim();
+		if (/^\[saved:\d+ chars\]$/i.test(trimmed)) {
+			throw new Error("sys_autos p_code placeholder — refetch required");
+		}
+
 		// Fast path for already-plain HTML/text to avoid unnecessary decode cost.
 		if (/<[a-z][\s\S]*>/i.test(e_code)) return e_code;
 		if (/[%]/.test(e_code)) {

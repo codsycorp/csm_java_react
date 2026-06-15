@@ -3,6 +3,7 @@ package security
 import (
 	"testing"
 
+	"csm_server/backend-go/internal/model"
 	"csm_server/backend-go/internal/util"
 )
 
@@ -49,6 +50,42 @@ func TestUserAccessFromAuthSubUserKeepsScopeAll(t *testing.T) {
 		if util.HasActionPermission(ctx.Permissions, forbidden) {
 			t.Fatalf("sub-user should not have %q, got %v", forbidden, ctx.Permissions)
 		}
+	}
+}
+
+func TestFilterSysAutosRowsUsesResolvedEffectiveAppID(t *testing.T) {
+	ctx := &UserAccessContext{
+		AppID:            "csm",
+		IsAdmin:          true,
+		MenusPermissions: []string{"wuweb"},
+		DataAppIDs:       []string{"wuweb"},
+	}
+	rows := []any{
+		map[string]any{"p_name": "broadcast_wuweb", "p_type": 0, "p_code": "ok"},
+	}
+	filter := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("p_name", "broadcast_wuweb"),
+			model.EqFilter("p_type", 0),
+		},
+	}
+	out := FilterSysAutosRows(rows, filter, ctx)
+	if len(out) != 1 {
+		t.Fatalf("admin with wuweb scope should read broadcast_wuweb, got %d rows", len(out))
+	}
+}
+
+func TestFilterSysAutosRowsRejectsCrossAppForNonDev(t *testing.T) {
+	ctx := &UserAccessContext{
+		AppID: "lmkt",
+	}
+	rows := []any{
+		map[string]any{"p_name": "broadcast_wuweb", "p_type": 0, "p_code": "ok"},
+	}
+	filter := model.EqFilter("p_name", "broadcast_wuweb")
+	if len(FilterSysAutosRows(rows, filter, ctx)) != 0 {
+		t.Fatal("lmkt user must not read broadcast_wuweb")
 	}
 }
 

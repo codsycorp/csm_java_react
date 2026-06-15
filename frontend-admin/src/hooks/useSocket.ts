@@ -16,6 +16,7 @@ type LegacySocket = {
 	disconnect: () => void;
 };
 import { useAppStore, useUserStore } from "#src/store";
+import { notifyDynamicCodeReload } from "#src/pages/system/dynamic-code/reload";
 
 interface SocketUpdateEvent {
 	appId: string; // App ID của table này thuộc về
@@ -133,6 +134,20 @@ function processSocketUpdate(data: SocketUpdateEvent) {
 			useAppStore.getState().setTableData(data.table, {
 				...tableSnapshot,
 				rows: updatedRows,
+			});
+		}
+	}
+
+	if (data.table === "sys_autos") {
+		const row = data.dataRow || data.primaryKeys || {};
+		const pName = row.p_name ?? data.primaryKeys?.p_name;
+		if (pName != null && String(pName).trim()) {
+			const rawType = row.p_type ?? data.primaryKeys?.p_type ?? 0;
+			const pType = typeof rawType === "number" ? rawType : Number(rawType);
+			notifyDynamicCodeReload({
+				p_name: String(pName),
+				p_type: Number.isFinite(pType) ? pType : 0,
+				action: data.action,
 			});
 		}
 	}

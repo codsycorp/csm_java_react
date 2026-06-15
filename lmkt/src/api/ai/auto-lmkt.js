@@ -29,7 +29,7 @@ const uiTranslations = {
     load_categories: '⬇️ Tải danh mục từ web_services',
     loading: '⏳ Đang tải...',
     multi_domain_manager: '🌐 Trình quản lý nội dung đa tên miền (chống nhận diện AI)',
-    tip_label: '💡 <strong>Mẹo:</strong> LMKT dùng <strong>Dự án</strong> làm danh mục; csmbridge dùng <strong>Lĩnh vực</strong>. Chọn tại <strong>Cài Đặt Chung</strong> phía trên.',
+    tip_label: '💡 <strong>Mẹo:</strong> LMKT dùng <strong>Dự án</strong> làm danh mục; Phanmemmottrieu dùng <strong>Lĩnh vực</strong>. Chọn tại <strong>Cài Đặt Chung</strong> phía trên.',
     upload_zalo: '📱 Tải lên JSON Zalo',
     upload_facebook: '👍 Tải lên JSON Facebook',
     create_post: '✍️ Tạo Bài',
@@ -126,7 +126,7 @@ const uiTranslations = {
     load_categories: '⬇️ Load categories from web_services',
     loading: '⏳ Loading...',
     multi_domain_manager: '🌐 Multi-Domain Content Manager (Anti-AI Detection)',
-    tip_label: '💡 <strong>Tip:</strong> LMKT uses <strong>Projects</strong> as categories; csmbridge uses <strong>Industries</strong>. Select in <strong>General Settings</strong> above.',
+    tip_label: '💡 <strong>Tip:</strong> LMKT uses <strong>Projects</strong> as categories; Phanmemmottrieu uses <strong>Industries</strong>. Select in <strong>General Settings</strong> above.',
     upload_zalo: '📱 Upload Zalo JSON',
     upload_facebook: '👍 Upload Facebook JSON',
     create_post: '✍️ Create Post',
@@ -223,7 +223,7 @@ const uiTranslations = {
     load_categories: '⬇️ 从 web_services 加载类别',
     loading: '⏳ 加载中...',
     multi_domain_manager: '🌐 多域名内容管理器 (防AI检测)',
-    tip_label: '💡 <strong>提示：</strong>LMKT 使用<strong>项目</strong>作为类别；csmbridge 使用<strong>行业</strong>。在上面的<strong>常规设置</strong>中选择。',
+    tip_label: '💡 <strong>提示：</strong>LMKT 使用<strong>项目</strong>作为类别；Phanmemmottrieu 使用<strong>行业</strong>。在上面的<strong>常规设置</strong>中选择。',
     upload_zalo: '📱 上传 Zalo JSON',
     upload_facebook: '👍 上传 Facebook JSON',
     create_post: '✍️ 创建帖子',
@@ -650,7 +650,7 @@ const decryptHtmlContent = (data) => {
  *    - h-holding.vn → app_id: "lmkt" (Bất động sản - 6 dự án)
  *    - domain: TOÀN BỘ danh sách (VD: "h-holding.vn,h-holding.com.vn,localhost:3333")
  * 
- * 2. INDUSTRY_TYPES: Config cho từng lĩnh vực csmbridge
+ * 2. INDUSTRY_TYPES: Config cho từng lĩnh vực phanmemmottrieu
  *    - bat-dong-san: Bất Động Sản
  *    - lam-dep-my-pham: Mỹ Phẩm - Làm Đẹp
  *    - booking-online: Đặt Lịch Online
@@ -670,7 +670,7 @@ const decryptHtmlContent = (data) => {
  * ========== QUY TRÌNH HOẠT ĐỘNG ==========
  * 
  * BƯỚC 1: User vào admin → Chọn Domain
- *         ↓ Script kiểm tra: LMKT hay csmbridge?
+ *         ↓ Script kiểm tra: LMKT hay Phanmemmottrieu?
  *
  * BƯỚC 2: Chọn Lĩnh Vực/Dự Án
  *         ↓ Hiển thị config (vai trò, phong cách, nhấn mạnh)
@@ -698,7 +698,7 @@ const decryptHtmlContent = (data) => {
  * getCategoriesForDomain(domainKey)
  *   → Trả về danh sách lĩnh vực/dự án cho domain
  *   → LMKT: 6 dự án BĐS
- *   → csmbridge: 5 lĩnh vực khác nhau
+ *   → Phanmemmottrieu: 5 lĩnh vực khác nhau
  *
  * buildCategoryPrompt(categoryData, userPrompt, domainKey)
  *   → Xây dựng prompt hoàn chỉnh cho AI
@@ -717,7 +717,7 @@ const decryptHtmlContent = (data) => {
  * ========== CÁCH DÙNG ==========
  * 
  * 1. Copy file này vào p_code của sys_autos (Admin)
- * 2. Chọn Domain (LMKT hoặc csmbridge)
+ * 2. Chọn Domain (LMKT hoặc Phanmemmottrieu)
  * 3. Chọn Lĩnh Vực/Dự Án
  * 4. Nhập hướng dẫn nội dung (tùy chỉnh)
  * 5. Nhấn "Tạo Content"
@@ -767,7 +767,7 @@ const decryptHtmlContent = (data) => {
  * 
  * ⚠️ Domain phải là TOÀN BỘ danh sách:
  *    - LMKT: "h-holding.vn,h-holding.com.vn,localhost:3333"
- *    - csmbridge: "csmbridge.net,localhost:3333"
+ *    - Phanmemmottrieu: "csmbridge.net,localhost:3333"
  * 
  * ⚠️ Mỗi domain phải có app_id đúng:
  *    - csmbridge.net → app_id: "wuweb"
@@ -793,7 +793,7 @@ const decryptHtmlContent = (data) => {
  * 
  * Ví dụ:
  *   LMKT → h-holding.vn → app_id: "lmkt" → Lấy data từ app LMKT
- *   csmbridge → csmbridge.net → app_id: "wuweb" → Lấy data từ app csmbridge
+ *   Phanmemmottrieu → csmbridge.net → app_id: "wuweb" → Lấy data từ app Phanmemmottrieu
  */
 const DEFAULT_UPLOAD_ENDPOINT = "/upload.shtml";
 const UPLOAD_ENDPOINT_COOLDOWN_MS = 2 * 60 * 1000;
@@ -863,7 +863,7 @@ function getCandidateUploadEndpoints(ctx = {}) {
 
 // Domain Options
 const DOMAIN_OPTIONS = {
-  csmbridge: {
+  phanmemmottrieu: {
     value: "csmbridge.net,localhost:3333",
     label: "Phần Mềm Một Triệu (Multi-Industry)",
     app_id: "wuweb"
@@ -897,7 +897,7 @@ function hostBelongsToDomainList(host, domainListValue) {
   });
 }
 
-/** Map domain cũ (csmbridge.net, chỉ csmbridge.net, …) → domainKey. */
+/** Map domain cũ (phanmemmottrieu.net, chỉ csmbridge.net, …) → domainKey. */
 function resolveDomainKeyFromValue(domainValue) {
   if (!domainValue) return "";
   const raw = String(domainValue).trim();
@@ -907,18 +907,18 @@ function resolveDomainKeyFromValue(domainValue) {
     if (hostBelongsToDomainList(lower, option.value)) return key;
   }
   if (lower.includes("h-holding") || lower.includes("lmkt")) return "lmkt";
-  if (lower.includes("csmbridge") || lower.includes("csmbridge") || lower === "localhost:3333") {
-    return "csmbridge";
+  if (lower.includes("phanmemmottrieu") || lower.includes("csmbridge") || lower === "localhost:3333") {
+    return "phanmemmottrieu";
   }
   return "";
 }
 
-/** Chuẩn hóa domain lưu DB — csmbridge luôn "csmbridge.net,localhost:3333". */
+/** Chuẩn hóa domain lưu DB — Phanmemmottrieu luôn "csmbridge.net,localhost:3333". */
 function migrateLegacyPhanmemDomain(domainValue) {
   const key = resolveDomainKeyFromValue(domainValue);
-  if (key === "csmbridge") return canonicalDomainForKey("csmbridge");
+  if (key === "phanmemmottrieu") return canonicalDomainForKey("phanmemmottrieu");
   if (key === "lmkt") return canonicalDomainForKey("lmkt");
-  return domainValue || canonicalDomainForKey("csmbridge");
+  return domainValue || canonicalDomainForKey("phanmemmottrieu");
 }
 
 /**
@@ -950,16 +950,16 @@ function normalizeTableWhere(where) {
 function domainQueryValuesForKey(domainKey) {
   const canonical = canonicalDomainForKey(domainKey);
   const set = new Set([canonical]);
-  if (domainKey === "csmbridge") {
+  if (domainKey === "phanmemmottrieu") {
     [
+      "phanmemmottrieu.net",
+      "www.phanmemmottrieu.net",
       "csmbridge.net",
       "www.csmbridge.net",
-      "csmbridge.net",
-      "www.csmbridge.net",
-      "csmbridge.net,localhost:3333",
+      "phanmemmottrieu.net,localhost:3333",
       "csmbridge.net,localhost:3333",
       "localhost:3333",
-      "csmbridge"
+      "phanmemmottrieu"
     ].forEach((d) => set.add(d));
   }
   if (domainKey === "lmkt") {
@@ -990,15 +990,9 @@ async function fetchTableRowsForDomainKey({
   domainKey,
   scopeServiceType = "",
   api,
-  ctx,
-  domainVariants = "canonical",
   onBatch
 }) {
-  const allDomainValues = domainQueryValuesForKey(domainKey);
-  const canonical = canonicalDomainForKey(domainKey);
-  const domainValues = domainVariants === "all"
-    ? allDomainValues
-    : [canonical];
+  const domainValues = domainQueryValuesForKey(domainKey);
   const seen = new Set();
   const merged = [];
 
@@ -1018,7 +1012,6 @@ async function fetchTableRowsForDomainKey({
       objName,
       where,
       api,
-      ctx,
       onBatch: (p) => onBatch && onBatch({ domainValue, objName, ...p })
     });
 
@@ -1158,8 +1151,8 @@ function extractTableCursor(res) {
  * Tải toàn bộ bản ghi khớp where (mặc định một request, không giới hạn 200).
  * Chỉ phân trang khi response truncated hoặc khi truyền pageSize (tối đa 1000/trang).
  */
-async function fetchAllTableRowsPaginated({ appId, objName, where, pageSize, onBatch, api, ctx }) {
-  const tableApi = api || resolveTableApi(ctx || resolveContext());
+async function fetchAllTableRowsPaginated({ appId, objName, where, pageSize, onBatch, api }) {
+  const tableApi = api || window.csmApi;
   if (!tableApi?.getTableData) {
     throw new Error("getTableData không khả dụng");
   }
@@ -1240,8 +1233,6 @@ async function scanDomainMigrationInventory(domainKey, options = {}) {
     domainKey,
     scopeServiceType,
     api: ctx.helperApi || window.csmApi,
-    ctx,
-    domainVariants: "all",
     onBatch
   };
 
@@ -1521,9 +1512,9 @@ function ensureDomainMigrationPanel(theme) {
   const hint = document.createElement("div");
   hint.style.cssText = `font-size:12px;color:${theme.muted || theme.textSecondary};line-height:1.5;margin-bottom:10px;`;
   hint.innerHTML = ti(
-    "Quét và cập nhật <strong>web_service_detail</strong>, <strong>web_services</strong>, <strong>cấu hình Zalo</strong> từ domain cũ (VD: <code>csmbridge.net</code>) sang giá trị chuẩn theo <strong>Cài Đặt Chung → Tên miền</strong>. csmbridge: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & lưu DB: ghi theo lô <code>bulk-update</code>, ~35 API/phút, tự chờ khi 429 (giới hạn server 500/phút/IP).</span>",
-    "Scan and update <strong>web_service_detail</strong>, <strong>web_services</strong>, and <strong>Zalo configs</strong> from legacy domains (e.g. <code>csmbridge.net</code>) to the canonical value from <strong>General Settings → Domain</strong>. csmbridge: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & save: batched <code>bulk-update</code>, ~35 API calls/min, auto-waits on 429 (server cap 500/min/IP).</span>",
-    "扫描并更新 <strong>web_service_detail</strong>、<strong>web_services</strong>、<strong>Zalo 配置</strong>，将旧域名迁移为标准域名。csmbridge：<code>csmbridge.net,localhost:3333</code>。<br><span style=\"opacity:.85\">✅ 迁移保存：分批 bulk-update，约 35 次 API/分钟，遇 429 自动等待（服务端 500 次/分钟/IP）。</span>"
+    "Quét và cập nhật <strong>web_service_detail</strong>, <strong>web_services</strong>, <strong>cấu hình Zalo</strong> từ domain cũ (VD: <code>phanmemmottrieu.net</code>) sang giá trị chuẩn theo <strong>Cài Đặt Chung → Tên miền</strong>. Phanmemmottrieu: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & lưu DB: ghi theo lô <code>bulk-update</code>, ~35 API/phút, tự chờ khi 429 (giới hạn server 500/phút/IP).</span>",
+    "Scan and update <strong>web_service_detail</strong>, <strong>web_services</strong>, and <strong>Zalo configs</strong> from legacy domains (e.g. <code>phanmemmottrieu.net</code>) to the canonical value from <strong>General Settings → Domain</strong>. Phanmemmottrieu: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & save: batched <code>bulk-update</code>, ~35 API calls/min, auto-waits on 429 (server cap 500/min/IP).</span>",
+    "扫描并更新 <strong>web_service_detail</strong>、<strong>web_services</strong>、<strong>Zalo 配置</strong>，将旧域名迁移为标准域名。Phanmemmottrieu：<code>csmbridge.net,localhost:3333</code>。<br><span style=\"opacity:.85\">✅ 迁移保存：分批 bulk-update，约 35 次 API/分钟，遇 429 自动等待（服务端 500 次/分钟/IP）。</span>"
   );
 
   const targetPreview = document.createElement("div");
@@ -1713,8 +1704,6 @@ async function fetchActiveArticlesForDomainKey(domainKey, ctx = {}, options = {}
     domainKey,
     scopeServiceType: options.scopeServiceType || "",
     api,
-    ctx,
-    domainVariants: options.domainVariants || "canonical",
     onBatch: options.onBatch
   });
   return rows.filter((row) => articleBelongsToDomainKey(row, domainKey));
@@ -1884,7 +1873,7 @@ function ensureDomainDuplicateCleanupPanel(theme) {
   const hint = document.createElement("div");
   hint.style.cssText = `font-size:12px;color:${theme.muted || theme.textSecondary};line-height:1.5;margin-bottom:10px;`;
   hint.innerHTML = ti(
-    "Quét <strong>mọi bài active</strong> thuộc domain đang chọn (gồm <code>csmbridge.net</code>, <code>csmbridge.net,localhost:3333</code>, …), phát hiện trùng theo tiêu đề/nội dung/ảnh, xóa bài cũ giữ bài mới. Khác nút «Dọn tin trùng» ở khu Zalo (chỉ 1 lĩnh vực/dự án).",
+    "Quét <strong>mọi bài active</strong> thuộc domain đang chọn (gồm <code>phanmemmottrieu.net</code>, <code>csmbridge.net,localhost:3333</code>, …), phát hiện trùng theo tiêu đề/nội dung/ảnh, xóa bài cũ giữ bài mới. Khác nút «Dọn tin trùng» ở khu Zalo (chỉ 1 lĩnh vực/dự án).",
     "Scan <strong>all active posts</strong> for the selected domain (including legacy domain strings), detect duplicates by title/content/images, delete older posts. Unlike the Zalo «Cleanup duplicates» button (single industry/project only).",
     "扫描所选域名下<strong>全部 active 文章</strong>（含旧域名字符串），按标题/内容/图片查重并删除旧文。与 Zalo 区「清理重复」按钮不同（后者仅单个行业/项目）。"
   );
@@ -2721,9 +2710,9 @@ const HASHTAGS_BY_SELLING_INTENT = {
   }
 };
 
-// ===== TITLE TEMPLATES FOR csmbridge (Luôn có Bán/Cho thuê + Địa chỉ + Hook) =====
+// ===== TITLE TEMPLATES FOR PHANMEMMOTTRIEU (Luôn có Bán/Cho thuê + Địa chỉ + Hook) =====
 const TITLE_TEMPLATES_FOR_PHANMEM = {
-  label: "Tiêu đề csmbridge - [Giao dịch] + [Địa chỉ] + [Hook Hấp Dẫn]",
+  label: "Tiêu đề Phanmemmottrieu - [Giao dịch] + [Địa chỉ] + [Hook Hấp Dẫn]",
   templates: [
     // Pattern 1: [Bán/Cho thuê] + {location} - {hook}
     "Bán {property} {location} - {hook}",
@@ -2769,7 +2758,7 @@ const TITLE_TEMPLATES_FOR_SOFTWARE = {
 function isSoftwareTechSeoContext(industry, domainKey, topic = "") {
   if (domainKey === "lmkt") return false;
   if (industry === "bat-dong-san") return false;
-  if (domainKey === "csmbridge") return true;
+  if (domainKey === "phanmemmottrieu") return true;
   const ind = String(industry || "").toLowerCase();
   if (["phan-mem", "software", "cong-nghe", "technology", "it-services"].some(k => ind.includes(k))) {
     return true;
@@ -2816,9 +2805,9 @@ function generateTitleForSoftware(industry, opts = {}) {
   return title;
 }
 
-// ===== HELPER: GENERATE TITLE FOR csmbridge =====
+// ===== HELPER: GENERATE TITLE FOR PHANMEMMOTTRIEU =====
 function generateTitleForPhanmem(industry, opts = {}) {
-  if (isSoftwareTechSeoContext(industry, "csmbridge", opts.topic || opts.hook || "")) {
+  if (isSoftwareTechSeoContext(industry, "phanmemmottrieu", opts.topic || opts.hook || "")) {
     return generateTitleForSoftware(industry, opts);
   }
   const templates = TITLE_TEMPLATES_FOR_PHANMEM.templates;
@@ -3899,7 +3888,7 @@ async function cleanupDuplicateArticles(duplicateGroups = [], ctx = {}) {
  * @returns {Object} - Kết quả cleanup
  */
 async function cleanupDuplicatesByServiceType(domainValue, serviceType, projectCode = "", ctx = {}) {
-  const domainKey = resolveDomainKeyFromValue(domainValue) || "csmbridge";
+  const domainKey = resolveDomainKeyFromValue(domainValue) || "phanmemmottrieu";
   const scopeServiceType = serviceType || projectCode || "";
   console.log(`\n[cleanupDuplicatesByServiceType] === START ===`);
   console.log(`   Domain key: ${domainKey} (input: ${domainValue})`);
@@ -4087,7 +4076,7 @@ async function cleanupBrokenFeaturedImagesByServiceType(domainValue, serviceType
   const appId = getAppIdFromDomainOptions(domainValue) || "wuweb";
 
   try {
-    const domainKey = resolveDomainKeyFromValue(domainValue) || "csmbridge";
+    const domainKey = resolveDomainKeyFromValue(domainValue) || "phanmemmottrieu";
     ctx.app_id = ctx.app_id || appId;
     console.log(`\n   📥 Đang tải toàn bộ bài (where + mọi biến thể domain)...`);
     const articles = await fetchActiveArticlesForDomainKey(domainKey, ctx, {
@@ -4483,23 +4472,6 @@ function normalizeCsmApiBase(raw) {
   }
 }
 
-function resolveDefaultApiBaseUrl(win, domain) {
-  const hostname = String(win?.location?.hostname || "").toLowerCase();
-  if (!hostname) return "";
-  if (hostname === "localhost" || hostname === "127.0.0.1") {
-    return `${win.location.origin}/api`;
-  }
-  if (hostname.startsWith("api.")) {
-    return `${win.location.protocol}//${win.location.host}`;
-  }
-  // Admin SPA — API trên api.* (cùng VITE_API_BASE_URL / ky prefixUrl frontend-admin).
-  if (hostname.startsWith("admin.")) {
-    const bare = String(domain || "csmbridge.net").replace(/^www\./i, "").split(",")[0].trim();
-    return bare ? `https://api.${bare}` : "";
-  }
-  return win.location?.origin ? `${win.location.origin}/api` : "";
-}
-
 function resolveContext(seftObj) {
   const win = typeof window !== 'undefined' ? window : {};
   const seft = seftObj || win.seft || {};
@@ -4510,7 +4482,7 @@ function resolveContext(seftObj) {
 
   const rawApiBase = seft.domain_api_url
     || win.domain_api_url
-    || resolveDefaultApiBaseUrl(win, domain);
+    || (win.location?.origin ? `${win.location.origin}/api` : "");
   const apiBase = normalizeCsmApiBase(rawApiBase);
 
   const token = resolveAuthToken(seft);
@@ -4522,7 +4494,7 @@ function resolveContext(seftObj) {
     apiBase,
     token,
     helperApi: win.csmApi || {},
-    helperAi: win.csmAI || seft || {}
+    helperAi: win.csmAI || {}
   };
 }
 
@@ -4583,7 +4555,7 @@ function resolveUiLangHeader() {
   return "vi-VN";
 }
 
-function buildApiHeaders(ctx = {}, opts = {}) {
+function buildApiHeaders(ctx = {}) {
   const headers = {
     Accept: "application/json",
     "Content-Type": "application/json",
@@ -4597,38 +4569,15 @@ function buildApiHeaders(ctx = {}, opts = {}) {
   if (csrfToken) {
     headers["X-CSRF-Token"] = csrfToken;
   }
-  if (!opts.omitRefreshToken) {
-    const refreshToken = getRefreshTokenForApi();
-    if (refreshToken) {
-      headers["X-Refresh-Token"] = refreshToken;
-    }
+  const refreshToken = getRefreshTokenForApi();
+  if (refreshToken) {
+    headers["X-Refresh-Token"] = refreshToken;
   }
   const clientId = getClientIdForApi();
   if (clientId) {
     headers["X-Client-Id"] = clientId;
   }
   return headers;
-}
-
-/** Cross-origin api.* — header tối thiểu (không X-Refresh-Token / X-CSRF — tránh nginx 404). */
-function buildSeoFetchHeaders(ctx = {}, url = "") {
-  const full = buildApiHeaders(ctx, { omitRefreshToken: true });
-  try {
-    if (typeof window !== "undefined" && url) {
-      const target = new URL(url, window.location.href);
-      if (target.origin !== window.location.origin) {
-        const minimal = {
-          Accept: full.Accept,
-          "Content-Type": full["Content-Type"],
-        };
-        if (full["csm-token"]) minimal["csm-token"] = full["csm-token"];
-        if (full["csm-lang"]) minimal["csm-lang"] = full["csm-lang"];
-        if (full["X-Client-Id"]) minimal["X-Client-Id"] = full["X-Client-Id"];
-        return minimal;
-      }
-    }
-  } catch (_e) { /* keep full headers */ }
-  return full;
 }
 
 const backendGuardState = {
@@ -4733,7 +4682,7 @@ function generateSlug(text, projectName = "") {
 function getAntiAIPrompt(industry, topic, articleHistory = [], opts = {}) {
   const industryConfig = INDUSTRY_TYPES[industry] || INDUSTRY_TYPES["bat-dong-san"];
   const isLmkt = opts.domainKey === "lmkt";
-  const isSoftwareTech = !isLmkt && isSoftwareTechSeoContext(industry, opts.domainKey || "csmbridge", topic);
+  const isSoftwareTech = !isLmkt && isSoftwareTechSeoContext(industry, opts.domainKey || "phanmemmottrieu", topic);
   
   // ===== CHỌN BUYER PERSONA NGẪU NHIÊN =====
   const personaKeys = Object.keys(BUYER_PERSONAS_V2);
@@ -4763,7 +4712,7 @@ function getAntiAIPrompt(industry, topic, articleHistory = [], opts = {}) {
       topic
     });
   } else {
-    // csmbridge (BĐS / legacy): Tiêu đề có [Bán/Cho thuê] + [Địa chỉ] + [Hook]
+    // Phanmemmottrieu (BĐS / legacy): Tiêu đề có [Bán/Cho thuê] + [Địa chỉ] + [Hook]
     generatedTitle = generateTitleForPhanmem(industry, {
       property: opts.property || "dịch vụ",
       location: opts.location || "Quận 7",
@@ -5432,7 +5381,7 @@ function findCategoryTemplate(domainKey, slug) {
 
 // ===== AUTO-SYNC SERVICE DEFINITIONS FROM SERVER =====
 /**
- * Tự động đồng bộ service types (csmbridge) và projects (LMKT) từ server
+ * Tự động đồng bộ service types (phanmemmottrieu) và projects (LMKT) từ server
  * - Đảm bảo khi có service_type hoặc project mới, code sẽ tự cập nhật
  * - Cache trong localStorage (5 phút)
  * - Merge trực tiếp vào INDUSTRY_TYPES và LMKT_PROJECT_DEFS
@@ -5459,8 +5408,6 @@ async function syncServiceDefinitionsFromServer(force = false) {
     
     console.log('🔄 [syncServiceDefs] Đang sync từ server (với LIMIT)...');
     let totalSynced = 0;
-    const ctx = resolveContext();
-    const syncApps = resolveSyncAppIds(ctx);
 
     // Helper: so sánh boolean kể cả khi DB trả về string "true"/"false"
     const isTruthy = (val) => val === true || val === 'true' || val === 1 || val === '1';
@@ -5468,20 +5415,16 @@ async function syncServiceDefinitionsFromServer(force = false) {
     const queryWhere = tableWhereActive();
 
     // ===== 1️⃣ Sync LMKT Projects =====
-    let lmktRows = [];
-    if (syncApps.includes("lmkt")) {
-      const lmktRowsRaw = await fetchAllTableRowsPaginated({
-        appId: "lmkt",
-        objName: "web_services",
-        where: queryWhere,
-        ctx
-      }).catch((err) => {
-        console.warn('⚠️ [syncServiceDefs] LMKT fetch skipped:', err?.message || err);
-        return [];
-      });
-      lmktRows = lmktRowsRaw.filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
-    }
+    const lmktRowsRaw = await fetchAllTableRowsPaginated({
+      appId: "lmkt",
+      objName: "web_services",
+      where: queryWhere
+    }).catch((err) => {
+      console.error('❌ [syncServiceDefs] LMKT fetch error:', err);
+      return [];
+    });
 
+    const lmktRows = lmktRowsRaw.filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
     if (Array.isArray(lmktRows) && lmktRows.length > 0) {
       // Merge vào LMKT_PROJECT_DEFS (giữ lại items cũ, thêm mới)
       const existingSlugs = new Set(LMKT_PROJECT_DEFS.map(p => p.service_code));
@@ -5536,20 +5479,17 @@ async function syncServiceDefinitionsFromServer(force = false) {
       console.log(`✅ [syncServiceDefs] Synced ${lmktRows.length} LMKT projects (${totalSynced} new)`);
     }
     
-    // ===== 2️⃣ Sync csmbridge Service Types =====
-    let pmtRows = [];
-    if (syncApps.includes("wuweb")) {
-      const pmtRowsRaw = await fetchAllTableRowsPaginated({
-        appId: "wuweb",
-        objName: "web_services",
-        where: queryWhere,
-        ctx
-      }).catch((err) => {
-        console.warn('⚠️ [syncServiceDefs] PMT fetch skipped:', err?.message || err);
-        return [];
-      });
-      pmtRows = pmtRowsRaw.filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
-    }
+    // ===== 2️⃣ Sync Phanmemmottrieu Service Types =====
+    const pmtRowsRaw = await fetchAllTableRowsPaginated({
+      appId: "wuweb",
+      objName: "web_services",
+      where: queryWhere
+    }).catch((err) => {
+      console.error('❌ [syncServiceDefs] PMT fetch error:', err);
+      return [];
+    });
+
+    const pmtRows = pmtRowsRaw.filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
     let pmtSynced = 0;
     
     if (Array.isArray(pmtRows) && pmtRows.length > 0) {
@@ -7818,10 +7758,10 @@ async function runMessages(messages, configIdOverride = null) {
   let ok = 0, fail = 0;
   
   // ⚠️ CRITICAL SECURITY: Kiểm tra xem có config_id hay không
-  // Nếu không có, chỉ xử lý csmbridge (legacy behavior)
+  // Nếu không có, chỉ xử lý phanmemmottrieu (legacy behavior)
   // Nếu có, dùng config đó
   let configToUse = null;
-  let domainConfigToUse = DOMAIN_OPTIONS["csmbridge"];
+  let domainConfigToUse = DOMAIN_OPTIONS["phanmemmottrieu"];
   
   if (configIdOverride) {
     try {
@@ -7829,7 +7769,7 @@ async function runMessages(messages, configIdOverride = null) {
       configToUse = findZaloConfigById(allConfigs, configIdOverride);
       if (configToUse) {
         console.log(`✅ [runMessages] Using config by override: config_id=${configIdOverride}`);
-        domainConfigToUse = DOMAIN_OPTIONS[configToUse.service_type === "lmkt" ? "lmkt" : "csmbridge"];
+        domainConfigToUse = DOMAIN_OPTIONS[configToUse.service_type === "lmkt" ? "lmkt" : "phanmemmottrieu"];
       } else {
         console.warn(`⚠️ [runMessages] Config override không tìm thấy: config_id=${configIdOverride}`);
       }
@@ -7837,7 +7777,7 @@ async function runMessages(messages, configIdOverride = null) {
       console.error(`❌ [runMessages] Error loading config:`, e.message);
     }
   } else {
-    console.warn(`⚠️ [runMessages] Không có config_id - chỉ xử lý csmbridge (legacy mode)`);
+    console.warn(`⚠️ [runMessages] Không có config_id - chỉ xử lý phanmemmottrieu (legacy mode)`);
   }
 
   if (configIdOverride && !configToUse) {
@@ -7862,7 +7802,7 @@ async function runMessages(messages, configIdOverride = null) {
       await processContent(msg, {
         app_id: derivedAppId,  // ✅ Use derived app_id from domain
         domain: domainConfigToUse.value,
-        domainKey: domainConfigToUse === DOMAIN_OPTIONS["lmkt"] ? "lmkt" : "csmbridge",
+        domainKey: domainConfigToUse === DOMAIN_OPTIONS["lmkt"] ? "lmkt" : "phanmemmottrieu",
         industry: configToUse?.service_type || "bat-dong-san",
         author: "Zalo Bot",
         config_id: configIdOverride || null  // ✅ Pass config_id to ensure proper config isolation
@@ -8238,7 +8178,7 @@ function refreshGlobalSettingsOptionsFromDefinitions() {
       return false;
     }
 
-    const currentDomain = domainSelect.value || 'csmbridge';
+    const currentDomain = domainSelect.value || 'phanmemmottrieu';
 
     const projectOptions = LMKT_PROJECT_DEFS
       .map(item => ({
@@ -8342,7 +8282,7 @@ function ensureGlobalSettingsPanel() {
   loadBtn.style.cssText = `padding:6px 10px;border:1px solid ${theme.border};border-radius:4px;background:${theme.bg};color:${theme.text};font-size:12px;cursor:pointer`;
 
   loadBtn.onclick = async () => {
-    const domainKey = domainSelect.value || 'csmbridge';
+    const domainKey = domainSelect.value || 'phanmemmottrieu';
     loadBtn.disabled = true;
     loadBtn.textContent = t('loading');
     try {
@@ -8469,7 +8409,7 @@ function getGlobalSettings() {
   const industrySelect = document.getElementById("global-industry-select");
   const projectSelect = document.getElementById("global-project-select");
 
-  const domainKey = domainSelect?.value || "csmbridge";
+  const domainKey = domainSelect?.value || "phanmemmottrieu";
   const isLmkt = domainKey === "lmkt";
 
   return {
@@ -9206,169 +9146,10 @@ function aiLaneTesterNotify(message, type = "info") {
 function resolveAiLocalApiBase(ctx) {
   const fromCtx = normalizeCsmApiBase(ctx?.apiBase || "");
   if (fromCtx) return fromCtx;
-  const win = typeof window !== "undefined" ? window : null;
-  if (win) {
-    const fromDefault = normalizeCsmApiBase(resolveDefaultApiBaseUrl(win, ctx?.domain));
-    if (fromDefault) return fromDefault;
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return normalizeCsmApiBase(`${window.location.origin}/api`);
   }
   return "";
-}
-
-/** fetch gốc — bỏ qua legacy bridge (tránh SEO loop qua window.csmAI / ky 404). */
-function resolveCsmRawFetch() {
-  const w = typeof window !== "undefined" ? window : null;
-  const pickRaw = (win) => {
-    if (!win) return null;
-    if (typeof win.__csmNativeFetch === "function") return win.__csmNativeFetch.bind(win);
-    if (typeof win.__csmRawFetch === "function") return win.__csmRawFetch.bind(win);
-    return null;
-  };
-  const fromScoped = pickRaw(w);
-  if (fromScoped) return fromScoped;
-  try {
-    const fromTop = pickRaw(w && w.top);
-    if (fromTop) return fromTop;
-  } catch (_e) { /* cross-origin frame */ }
-  if (typeof fetch === "function") {
-    console.warn("[callCsmApiPost] __csmNativeFetch missing — dùng window.fetch (có thể qua legacy bridge)");
-    return fetch.bind(w || (typeof globalThis !== "undefined" ? globalThis : {}));
-  }
-  return fetch;
-}
-
-/** POST qua XHR — không bị fetch bridge intercept (SEO sync). */
-function postCsmApiViaXhr(url, headers, payload, signal) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", url, true);
-    xhr.withCredentials = true;
-    Object.keys(headers || {}).forEach((key) => {
-      try {
-        xhr.setRequestHeader(key, String(headers[key]));
-      } catch (_e) { /* skip forbidden header */ }
-    });
-    if (signal) {
-      if (signal.aborted) {
-        reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
-        return;
-      }
-      signal.addEventListener("abort", () => xhr.abort());
-    }
-    xhr.onload = () => {
-      resolve({
-        ok: xhr.status >= 200 && xhr.status < 300,
-        status: xhr.status,
-        text: async () => xhr.responseText || "",
-      });
-    };
-    xhr.onerror = () => reject(new Error(`Network error — ${url}`));
-    xhr.onabort = () => reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
-    xhr.send(JSON.stringify(payload));
-  });
-}
-
-/**
- * POST CSM API — cùng contract ky/CsmApi: apiBase + /get-table-data, body dùng e_where.
- */
-async function callCsmApiPost(ctx, path, body = {}, options = {}) {
-  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
-  const apiBase = resolveAiLocalApiBase(safeCtx);
-  if (!apiBase) {
-    throw new Error("Thiếu apiBase — không gọi được CSM API");
-  }
-  const cleanPath = String(path || "").startsWith("/") ? String(path) : `/${path || ""}`;
-  const url = `${apiBase.replace(/\/+$/, "")}${cleanPath}`;
-  const isSeoPost = /\/ai-generate-seo-content$/i.test(cleanPath);
-  const payload = { ...(body || {}) };
-  if (payload.where != null && payload.e_where == null) {
-    payload.e_where = payload.where;
-    delete payload.where;
-  }
-  const noTimeout = options.noTimeout === true || Number(options.timeoutMs) === 0;
-  const timeoutMs = noTimeout
-    ? 0
-    : (Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 120000);
-  const controller = !noTimeout && typeof AbortController !== "undefined" ? new AbortController() : null;
-  let timeoutId = null;
-  if (controller && timeoutMs > 0) {
-    timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  }
-  const headers = isSeoPost
-    ? buildSeoFetchHeaders(safeCtx, url)
-    : buildApiHeaders(safeCtx, { omitRefreshToken: Boolean(options.omitRefreshToken) });
-  try {
-    const transport = isSeoPost && typeof XMLHttpRequest !== "undefined"
-      ? postCsmApiViaXhr(url, headers, payload, controller ? controller.signal : undefined)
-      : resolveCsmRawFetch()(url, {
-        method: "POST",
-        headers,
-        credentials: "include",
-        body: JSON.stringify(payload),
-        signal: controller ? controller.signal : undefined,
-      });
-    const response = await transport;
-    const text = await response.text();
-    let data = {};
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch (_e) {
-      data = { raw: text };
-    }
-    if (!response.ok) {
-      const authHint = response.status === 401
-        ? " — đăng nhập lại admin (csm-token / refreshToken cookie)"
-        : "";
-      const nginxHint = isSeoPost && isNginxNotFoundHtml(text)
-        ? " — nginx 404 (deploy nginx location /ai-generate-seo-content)"
-        : "";
-      throw new Error((data?.message || text || `HTTP ${response.status}`) + authHint + nginxHint);
-    }
-    return data;
-  } catch (err) {
-    if (err && err.name === "AbortError") {
-      throw new Error(`API timeout sau ${Math.round(timeoutMs / 60000)} phút — ${cleanPath}`);
-    }
-    throw err;
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
-}
-
-/** window.csmApi nếu có; fallback callCsmApiPost (dev/LMKT khi chưa inject bridge). */
-function resolveTableApi(ctx) {
-  const safeCtx = ctx || resolveContext();
-  const injected = safeCtx.helperApi?.getTableData
-    ? safeCtx.helperApi
-    : (typeof window !== "undefined" && window.csmApi?.getTableData ? window.csmApi : null);
-  if (injected?.getTableData) {
-    return injected;
-  }
-  return {
-    getTableData: (params) => callCsmApiPost(safeCtx, "/get-table-data", {
-      app_id: params.app_id,
-      obj_name: params.obj_name,
-      e_where: normalizeTableWhere(params.where || params.e_where),
-      ...(params.take ? { take: params.take } : {}),
-      ...(params.lastkey ? { lastkey: params.lastkey } : {}),
-      ...(params.only_my_subusers ? { only_my_subusers: true } : {}),
-    }),
-  };
-}
-
-function resolveSyncAppIds(ctx) {
-  const gs = typeof getGlobalSettings === "function" ? getGlobalSettings() : {};
-  const domainKey = gs.domainKey || resolveDomainKeyFromValue((ctx || resolveContext()).domain) || "lmkt";
-  const seft = (ctx || resolveContext()).seftObj || (typeof window !== "undefined" ? window.seft : {}) || {};
-  const isDev = Boolean(seft.Uinfos?.dev || seft.user?.dev);
-  const apps = new Set();
-  if (domainKey === "lmkt") apps.add("lmkt");
-  if (domainKey === "csmbridge") apps.add("wuweb");
-  if (isDev) {
-    apps.add("lmkt");
-    apps.add("wuweb");
-  }
-  if (!apps.size) apps.add(domainKey === "lmkt" ? "lmkt" : "wuweb");
-  return [...apps];
 }
 
 function resolvePrimaryDomain(ctx) {
@@ -9376,14 +9157,13 @@ function resolvePrimaryDomain(ctx) {
   return domain.replace(/^www\./i, "");
 }
 
-/** URL SEO sync — cùng ky/request frontend-admin (VITE_API_BASE_URL + ai-generate-seo-content). */
+/** URL SEO sync — luôn api.* host (giống fetch DevTools: api.csmbridge.net/ai-generate-seo-content). */
 function resolveSeoApiEndpoint(ctx) {
-  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
-  const seft = safeCtx?.seftObj || (typeof window !== "undefined" ? window.seft : {}) || {};
+  const seft = ctx?.seftObj || (typeof window !== "undefined" ? window.seft : {}) || {};
   const candidates = [
     seft.domain_api_url,
     typeof window !== "undefined" ? window.domain_api_url : "",
-    safeCtx?.apiBase,
+    ctx?.apiBase,
   ];
   for (let i = 0; i < candidates.length; i += 1) {
     const base = normalizeCsmApiBase(String(candidates[i] || "").trim());
@@ -9391,16 +9171,20 @@ function resolveSeoApiEndpoint(ctx) {
       return `${base.replace(/\/+$/, "")}/ai-generate-seo-content`;
     }
   }
-  return `https://api.${resolvePrimaryDomain(safeCtx)}/ai-generate-seo-content`;
+  return `https://api.${resolvePrimaryDomain(ctx)}/ai-generate-seo-content`;
 }
 
 function resolveSeoApiEndpointCandidates(ctx) {
-  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
-  const primary = resolveSeoApiEndpoint(safeCtx);
-  const domain = resolvePrimaryDomain(safeCtx);
+  const primary = resolveSeoApiEndpoint(ctx);
+  const domain = resolvePrimaryDomain(ctx);
   const urls = new Set([
     primary,
+    primary.includes("/api/ai-generate-seo-content")
+      ? primary.replace("/api/ai-generate-seo-content", "/ai-generate-seo-content")
+      : primary.replace("/ai-generate-seo-content", "/api/ai-generate-seo-content"),
     `https://api.${domain}/ai-generate-seo-content`,
+    `https://api.${domain}/api/ai-generate-seo-content`,
+    `https://admin.${domain}/api/ai-generate-seo-content`,
   ]);
   return [...urls].filter(Boolean);
 }
@@ -9417,71 +9201,82 @@ async function callSeoPromptDirect(ctx, prompt) {
   return api;
 }
 
-/** window.csmAI / seft — runtime dynamic-code wrapper hoặc #src/api/ai ky client. */
-async function tryCallSeoViaHelperAi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
-  const seft = ctx?.seftObj || (typeof window !== "undefined" ? window.seft : null);
-  const helperAi = ctx?.helperAi || seft || (typeof window !== "undefined" ? window.csmAI : null);
-  if (!helperAi) return null;
-  if (useSeoOneShot && typeof helperAi.generateSeoAntiAiOneShot === "function") {
-    const seoContext = { ...(oneShotPayload || {}) };
-    if (prompt && !seoContext.prompt) seoContext.prompt = prompt;
-    const result = await helperAi.generateSeoAntiAiOneShot(seoContext, { taskType: "seo_content" });
-    if (result && (result.success === false || result.code === -1)) {
-      throw new Error(result.message || "SEO one-shot thất bại");
-    }
-    return result;
-  }
-  if (prompt && typeof helperAi.generateSeoContentWithPrompt === "function") {
-    const result = await helperAi.generateSeoContentWithPrompt(prompt, { taskType: "seo_content" });
-    if (result && (result.success === false || result.code === -1)) {
-      throw new Error(result.message || "SEO prompt thất bại");
-    }
-    return result;
-  }
-  return null;
-}
-
 /**
- * POST /ai-generate-seo-content — cùng callCsmApiPost như get-table-data (apiBase + path).
- * Không qua window.csmAI/ky admin bundle (tránh URL ghép kép khi deploy frontend cũ).
+ * POST /ai-generate-seo-content — fetch trực tiếp (contract giống admin ky client).
+ * Body: { mode:"sync", async:false, taskType:"seo_content", prompt } hoặc seoPipeline one-shot.
  */
 async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
-  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
-  const body = {
-    mode: "sync",
-    async: false,
-    taskType: "seo_content",
-  };
-  if (useSeoOneShot && oneShotPayload) {
-    const p = String(oneShotPayload.prompt || prompt || "").trim();
-    if (p) {
-      body.prompt = p;
-    } else {
-      body.seoPipeline = "anti_ai_one_shot";
-      body.seoContext = oneShotPayload;
-    }
+  const body = { mode: "sync", async: false, taskType: "seo_content" };
+  if (useSeoOneShot) {
+    body.seoPipeline = "anti_ai_one_shot";
+    body.seoContext = oneShotPayload;
   } else {
     body.prompt = prompt;
   }
-  const url = resolveSeoApiEndpoint(safeCtx);
-  console.log("[SEO] via XHR callCsmApiPost (no client timeout) →", url);
-  const data = await callCsmApiPost(safeCtx, "/ai-generate-seo-content", body, {
-    noTimeout: true,
-    omitRefreshToken: true,
-  });
-  if (data && (data.success === false || data.code === -1)) {
-    throw new Error(data.message || "SEO API thất bại");
+
+  const candidateUrls = resolveSeoApiEndpointCandidates(ctx);
+  const timeoutMs = 20 * 60 * 1000;
+  let lastError = null;
+
+  for (let u = 0; u < candidateUrls.length; u += 1) {
+    const url = candidateUrls[u];
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    let timeoutId = null;
+    if (controller) {
+      timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    }
+
+    console.log(`[SEO] POST ${url} promptChars=${body.prompt ? body.prompt.length : 0} oneShot=${!!useSeoOneShot}`);
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: buildApiHeaders(ctx),
+        credentials: "include",
+        body: JSON.stringify(body),
+        signal: controller ? controller.signal : undefined,
+      });
+      const text = await response.text();
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (_e) {
+        data = { raw: text };
+      }
+      if (response.status === 404 || isNginxNotFoundHtml(text)) {
+        lastError = new Error(
+          `HTTP 404 nginx — ${url}. Thử redeploy nginx location /ai-generate-seo-content hoặc dùng admin/api fallback.`
+        );
+        continue;
+      }
+      if (!response.ok) {
+        const authHint = response.status === 401
+          ? " — đăng nhập lại admin LMKT (csm-token / refreshToken cookie)"
+          : "";
+        throw new Error((data?.message || text || `HTTP ${response.status}`) + authHint);
+      }
+      return data;
+    } catch (fetchErr) {
+      if (fetchErr && fetchErr.name === "AbortError") {
+        throw new Error(`SEO timeout sau ${Math.round(timeoutMs / 60000)} phút — thử lại hoặc rút gọn prompt`);
+      }
+      if (extractHttpStatusFromError(fetchErr) === 404) {
+        lastError = fetchErr;
+        continue;
+      }
+      throw fetchErr;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
   }
-  if (isNginxNotFoundHtml(data?.raw || data?.message)) {
-    throw new Error("SEO API trả nginx 404 — kiểm tra nginx location /ai-generate-seo-content");
-  }
-  return data;
+
+  throw lastError || new Error(
+    "POST /ai-generate-seo-content không tìm thấy — kiểm tra domain_api_url trỏ api.* và redeploy backend"
+  );
 }
 
 /**
- * Luồng SEO thống nhất — POST /ai-generate-seo-content → backend Go AI local (llama.cpp in-process).
- * Server: AI_LOCAL_LLAMA_BATCH_SIZE>=512, PRELOAD_ON_STARTUP=true (config.local-8gb.env).
- * Không dùng /ai-code-stream — sync JSON, không timeout client, không SSE.
+ * Luồng SEO thống nhất — mọi viết bài qua POST /ai-generate-seo-content → backend AI local SEO lane.
  *
  * opts.prompt          — prompt đầy đủ (ưu tiên)
  * opts.seoContext      — { industry, topic, domainKey, ... } khi one-shot backend
@@ -11233,7 +11028,7 @@ async function ensureUI() {
     
     console.log(`[cleanupDupBtn] Global settings:`, globalSettings);
     
-    // ✅ Determine which field to use: LMKT uses Project, csmbridge uses Industry
+    // ✅ Determine which field to use: LMKT uses Project, Phanmemmottrieu uses Industry
     const isLmkt = globalSettings.domainKey === "lmkt";
     const serviceFieldName = isLmkt ? "project" : "industry";
     const serviceFieldValue = isLmkt ? globalSettings.project : globalSettings.industry;
@@ -11309,10 +11104,10 @@ async function ensureUI() {
       
       // Call cleanup function
       // For LMKT: use project as serviceType parameter
-      // For csmbridge: use industry as serviceType parameter
+      // For Phanmemmottrieu: use industry as serviceType parameter
       const cleanupResult = await cleanupDuplicatesByServiceType(
         selectedDomain,
-        selectedService,  // This is either project (LMKT) or industry (csmbridge)
+        selectedService,  // This is either project (LMKT) or industry (Phanmemmottrieu)
         selectedProject,
         ctx
       );
@@ -16368,7 +16163,7 @@ function ensureZaloMultiGroupUI(container) {
       .map(cb => cb.value);
 
     return {
-      domainKey: domainSelect?.value || "csmbridge",
+      domainKey: domainSelect?.value || "phanmemmottrieu",
       industry: industrySelect?.value || "bat-dong-san",
       project: projectSelect?.value || "",
       checkedFanpages,
@@ -16386,7 +16181,7 @@ function ensureZaloMultiGroupUI(container) {
     const keepOriginalCheckbox = document.getElementById("zalo-keep-original-content-checkbox");
 
     if (domainSelect) {
-      domainSelect.value = state.domainKey || "csmbridge";
+      domainSelect.value = state.domainKey || "phanmemmottrieu";
       domainSelect.dispatchEvent(new Event('change'));
     }
     if (industrySelect) industrySelect.value = state.industry || "bat-dong-san";
@@ -16454,7 +16249,7 @@ function ensureZaloMultiGroupUI(container) {
     // Ưu tiên dùng domain_key nếu có, fallback sang reverse mapping
     let domainKey = row.domain_key;
     if (!domainKey) {
-      domainKey = resolveDomainKeyFromValue(row.domain) || "csmbridge";
+      domainKey = resolveDomainKeyFromValue(row.domain) || "phanmemmottrieu";
     }
     
     const domainSelect = document.getElementById("global-domain-select");
@@ -17938,7 +17733,7 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
  * 
  * Cách hoạt động:
  *   - Kiểm tra window.location.hostname
- *   - Nếu là csmbridge → Trả về config csmbridge
+ *   - Nếu là phanmemmottrieu → Trả về config phanmemmottrieu
  *   - Nếu là h-holding hoặc lmkt → Trả về config lmkt
  *   - Nếu localhost → User sẽ chọn manual từ dropdown
  * 
@@ -17951,11 +17746,11 @@ function getDomainInfo() {
   if (hostname.includes("h-holding") || hostname.includes("lmkt")) {
     return DOMAIN_OPTIONS.lmkt;
   }
-  if (hostname.includes("csmbridge")
+  if (hostname.includes("phanmemmottrieu")
       || hostname.includes("csmbridge")
       || hostname === "localhost"
       || hostname === "127.0.0.1") {
-    return DOMAIN_OPTIONS.csmbridge;
+    return DOMAIN_OPTIONS.phanmemmottrieu;
   }
 
   return null;
@@ -17968,7 +17763,7 @@ function getDomainInfo() {
  * 
  * Input: 
  *   - "lmkt" → Trả về 6 dự án BĐS
- *   - "csmbridge" → Trả về 5 lĩnh vực
+ *   - "phanmemmottrieu" → Trả về 5 lĩnh vực
  * 
  * Output: Array of { slug, name, description, type, config }
  * 
@@ -17979,7 +17774,7 @@ function getDomainInfo() {
  *     ...
  *   ]
  * 
- *   csmbridge: [
+ *   Phanmemmottrieu: [
  *     { slug: "bat-dong-san", name: "Bất Động Sản", type: "industry", config: {...} },
  *     { slug: "phan-mem", name: "Phần Mềm", type: "industry", config: {...} },
  *     ...
@@ -18251,7 +18046,7 @@ USER REQUEST: ${userCustomPrompt || '(Không có yêu cầu bổ sung)'}
 }
 `;
   } else {
-    // csmbridge: Lĩnh vực có config riêng
+    // Phanmemmottrieu: Lĩnh vực có config riêng
     const config = categoryData.config || INDUSTRY_TYPES[categoryData.slug] || {};
     const role = config.prompt_role || "chuyên gia tư vấn dịch vụ";
     const style = config.prompt_style || "Rõ ràng, dễ hiểu, nhấn mạnh lợi ích";
@@ -18408,7 +18203,7 @@ USER REQUEST: ${userCustomPrompt || '(Không có yêu cầu bổ sung)'}
  * @param {string} categoryName - Tên lĩnh vực/dự án (VD: "Phần Mềm", "Destino Centro")
  * @param {string} description - Mô tả lĩnh vực/dự án
  * @param {string} prompt - Hướng dẫn của người dùng
- * @param {string} domainKey - Domain key (lmkt hoặc csmbridge)
+ * @param {string} domainKey - Domain key (lmkt hoặc phanmemmottrieu)
  * @param {object} categoryData - Category data object chứa slug, service_code, etc.
  */
 function getCategoryContentPrompt(categoryName, description, prompt, domainKey = '', categoryData = {}, creative = {}) {
@@ -18722,7 +18517,7 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
   const domainKey = resolveDomainKeyFromValue(ctx.domain) || "";
 
   const selectedCategoryData = contentData.selectedCategoryData || {};
-  const baseCategory = findCategoryTemplate(domainKey || 'csmbridge', categorySlug) || selectedCategoryData || {};
+  const baseCategory = findCategoryTemplate(domainKey || 'phanmemmottrieu', categorySlug) || selectedCategoryData || {};
   const baseConfig = baseCategory.config || {};
 
   const rowsBySlug = await ctx.helperApi.getTableData({
@@ -18967,7 +18762,7 @@ async function createServiceCategoryContent(opts = {}) {
 //   1. Kiểm tra UI đã tồn tại chưa
 //   2. Nếu có rồi → Trả về element hiện có
 //   3. Nếu chưa → Tạo UI mới gồm:
-//      - Domain dropdown (Chọn LMKT hoặc csmbridge)
+//      - Domain dropdown (Chọn LMKT hoặc Phanmemmottrieu)
 //      - Category dropdown (Tự động load theo domain)
 //      - Description preview (Hiển thị mô tả lĩnh vực)
 //      - Textarea (Nhập hướng dẫn custom)
@@ -19251,7 +19046,7 @@ async function ensureServiceContentUI() {
       note.innerHTML = ti("💡 <strong>LMKT:</strong> Danh mục chính là <strong>Dự án</strong>. Lĩnh vực bị khóa ở <strong>Bất động sản</strong>.", "💡 <strong>LMKT:</strong> Main category is <strong>Project</strong>. Industry is locked to <strong>Real Estate</strong>.", "💡 <strong>LMKT：</strong>主分类为<strong>项目</strong>，行业锁定为<strong>房地产</strong>。");
       infoContent.innerHTML = `<strong>🏢 ${ti('Tên miền', 'Domain', '域名')}:</strong> ${domainLabel} | <strong>🏗️ ${ti('Danh mục (Dự án)', 'Category (Project)', '分类（项目）')}:</strong> ${projectLabel} | <strong>🏢 ${ti('Lĩnh vực', 'Industry', '行业')}:</strong> ${industryLabel} (${ti('cố định', 'fixed', '固定')})`;
     } else {
-      note.innerHTML = ti("💡 <strong>csmbridge:</strong> Danh mục chính là <strong>Lĩnh vực</strong>. Chọn ở <strong>Cài Đặt Chung</strong>.", "💡 <strong>csmbridge:</strong> Main category is <strong>Industry</strong>. Choose it in <strong>General Settings</strong>.", "💡 <strong>csmbridge：</strong>主分类为<strong>行业</strong>，请在<strong>常规设置</strong>中选择。");
+      note.innerHTML = ti("💡 <strong>Phanmemmottrieu:</strong> Danh mục chính là <strong>Lĩnh vực</strong>. Chọn ở <strong>Cài Đặt Chung</strong>.", "💡 <strong>Phanmemmottrieu:</strong> Main category is <strong>Industry</strong>. Choose it in <strong>General Settings</strong>.", "💡 <strong>Phanmemmottrieu：</strong>主分类为<strong>行业</strong>，请在<strong>常规设置</strong>中选择。");
       infoContent.innerHTML = `<strong>🏢 ${ti('Tên miền', 'Domain', '域名')}:</strong> ${domainLabel} | <strong>🏢 ${ti('Danh mục (Lĩnh vực)', 'Category (Industry)', '分类（行业）')}:</strong> ${industryLabel}`;
     }
     
@@ -19944,7 +19739,7 @@ async function ensureServiceContentUI() {
  *   - industry: Lĩnh vực (slug)
  *   - project: Dự án (slug) - nếu LMKT
  *   - userPrompt: Hướng dẫn custom từ user
- *   - domainKey: lmkt | csmbridge
+ *   - domainKey: lmkt | phanmemmottrieu
  * 
  * Output: String prompt hoàn chỉnh cho AI
  * ========================================================
@@ -19964,7 +19759,7 @@ function createServiceDetailPostPrompt(opts = {}) {
     : (INDUSTRY_TYPES[industry]?.name || industry);
 
   const basePrompt = `
-Bạn là chuyên gia viết nội dung SEO cho website ${isLmkt ? 'BĐS LMKT' : 'csmbridge'}.
+Bạn là chuyên gia viết nội dung SEO cho website ${isLmkt ? 'BĐS LMKT' : 'Phanmemmottrieu'}.
 
 **NHIỆM VỤ: Tạo bài viết chi tiết**
 

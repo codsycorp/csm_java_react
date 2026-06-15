@@ -359,7 +359,7 @@ func FilterSysAutosRows(rows []any, filter model.SearchFilter, ctx *UserAccessCo
 	if requestedPName == "" {
 		return []any{}
 	}
-	userAppID := strings.TrimSpace(ctx.AppID)
+	effectiveAppID := resolveAutosetupEffectiveAppID(ctx, requestedPName)
 	out := make([]any, 0)
 	for _, item := range rows {
 		row, ok := item.(map[string]any)
@@ -370,8 +370,7 @@ func FilterSysAutosRows(rows []any, filter model.SearchFilter, ctx *UserAccessCo
 		if requestedPName != pName || !isPTypeZero(row["p_type"]) {
 			continue
 		}
-		// Mirror Java TableHandler: match user's app_id to requested p_name (not resolved alias).
-		if userAppID != "" && isSameOrBroadcastVariant(userAppID, requestedPName) {
+		if effectiveAppID != "" && isSameOrBroadcastVariant(effectiveAppID, requestedPName) {
 			out = append(out, row)
 		}
 	}

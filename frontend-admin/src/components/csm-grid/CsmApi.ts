@@ -611,6 +611,11 @@ function clearGetTableDataCache() {
 	}
 }
 
+/** Drop in-flight getTableData dedupe cache (e.g. after sys_autos hot-reload). */
+export function invalidateTableDataCache() {
+	clearGetTableDataCache();
+}
+
 export async function createTableStruct(params: {
 	app_id: string
 	obj_table: {
@@ -666,6 +671,8 @@ export async function getTableData<T>(params: {
 	lastkey?: any
 	offset?: number
 	limit?: number
+	/** Skip in-flight dedupe cache — always hit network (sys_autos hot-reload). */
+	fresh?: boolean
 }) {
 	const TABLE_DATA_TIMEOUT_MS = 120000;
 	const isSystemUserRuntimeContext = (() => {
@@ -730,7 +737,7 @@ export async function getTableData<T>(params: {
 	}
 	const cache: Map<string, Promise<ApiListResponse<T>>> = globalAny.__csm_getTableDataCache;
 
-	if (cache.has(cacheKey)) {
+	if (!params.fresh && cache.has(cacheKey)) {
 		return cache.get(cacheKey) as Promise<ApiListResponse<T>>;
 	}
 
@@ -763,9 +770,13 @@ export async function getTableData<T>(params: {
 		})
 		.finally(() => {
 			// Keep cache for in-flight dedupe only; avoid stale data after mutations.
-			try { cache.delete(cacheKey); } catch {}
+			if (!params.fresh) {
+				try { cache.delete(cacheKey); } catch {}
+			}
 		});
-	cache.set(cacheKey, promise);
+	if (!params.fresh) {
+		cache.set(cacheKey, promise);
+	}
 	return promise;
 }
 
