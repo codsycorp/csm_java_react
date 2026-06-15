@@ -251,13 +251,9 @@ func (rm *RecordManager) CreateRecord(appID, tableName string, record map[string
 
 	canonicalKey := rm.buildPrimaryKey(app, table, record, pkFields)
 	keyByID := rm.resolveStorageKeyByID(app, table, record)
-	keyToPersist := keyByID
-	if keyToPersist == "" {
-		keyToPersist = rm.resolveExistingStorageKey(app, table, canonicalKey)
-	}
 
 	cmd := "create"
-	if rm.recordExistsAtStorageKey(app, table, keyToPersist) {
+	if rm.hasAnyPKStorage(app, table, canonicalKey, keyByID) {
 		cmd = "update"
 	}
 
@@ -269,15 +265,15 @@ func (rm *RecordManager) CreateRecord(appID, tableName string, record map[string
 	batch := db.NewBatch()
 	defer batch.Close()
 
-	migratedFrom := ""
+	// Java: migrate non-canonical key resolved by id before consolidating aliases.
 	if cmd == "update" && keyByID != "" && keyByID != canonicalKey {
 		batch.Delete([]byte(keyByID), nil)
 		rm.deleteSearchIndex(PebbleKey(app, table, keyByID))
-		keyToPersist = canonicalKey
-		migratedFrom = keyByID
 	}
 
-	if err := batch.Set([]byte(keyToPersist), raw, nil); err != nil {
+	rm.consolidatePKStorageKeys(app, table, canonicalKey, record, pkFields, batch)
+
+	if err := batch.Set([]byte(canonicalKey), raw, nil); err != nil {
 		return "", err
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
@@ -287,10 +283,8 @@ func (rm *RecordManager) CreateRecord(appID, tableName string, record map[string
 		rm.incrementMetaCount(db)
 	}
 
-	if migratedFrom != "" && migratedFrom != keyToPersist {
-		rm.deleteSearchIndex(PebbleKey(app, table, migratedFrom))
-	}
-	rm.upsertSearchIndex(app, table, PebbleKey(app, table, keyToPersist), keyToPersist, record)
+	rm.deleteLegacyPKAliases(app, table, canonicalKey)
+	rm.upsertSearchIndex(app, table, PebbleKey(app, table, canonicalKey), canonicalKey, record)
 	return cmd, nil
 }
 
@@ -322,26 +316,117 @@ func (rm *RecordManager) buildPrimaryKey(_appID, _tableName string, record map[s
 }
 
 // FindByCustomPK reads a row by explicit PK fields (Java createRecord custom PK / Rust find_by_custom_pk).
+// When legacy migration left duplicate storage keys for the same PK, all candidates are collected and
+// the best row is returned (per-table store wins; then longest p_code — matches editor full-scan behavior).
 func (rm *RecordManager) FindByCustomPK(appID, tableName string, record map[string]any, pkFields []string) map[string]any {
+	hits := rm.findAllByCustomPK(appID, tableName, record, pkFields)
+	return rm.pickBestPKHit(hits)
+}
+
+type pkCandidateHit struct {
+	storageKey string
+	record     map[string]any
+	inPerTable bool
+}
+
+func (rm *RecordManager) findAllByCustomPK(appID, tableName string, probe map[string]any, pkFields []string) []pkCandidateHit {
 	app, table, err := rm.sanitizeTable(appID, tableName)
 	if err != nil {
 		return nil
 	}
-	keyBase := rm.buildPrimaryKey(app, table, record, pkFields)
+	keyBase := rm.buildPrimaryKey(app, table, probe, pkFields)
 	if keyBase == "" {
 		return nil
 	}
+
+	var hits []pkCandidateHit
+	seenStorage := make(map[string]struct{})
 	for _, candidate := range StorageKeyCandidates(app, table, keyBase) {
-		val, err := rm.getRecordBytes(app, table, candidate)
-		if err != nil {
+		if _, ok := seenStorage[candidate]; ok {
+			continue
+		}
+		seenStorage[candidate] = struct{}{}
+
+		var raw []byte
+		inPerTable := false
+		if db, err := rm.tableDB(app, table); err == nil {
+			if val, closer, err := db.Get([]byte(candidate)); err == nil {
+				raw = append([]byte(nil), val...)
+				inPerTable = true
+				closer.Close()
+			}
+		}
+		if raw == nil {
+			rm.legacyMu.RLock()
+			legacy := rm.legacyDB
+			rm.legacyMu.RUnlock()
+			if legacy != nil {
+				for _, legacyKey := range StorageKeyCandidates(app, table, candidate) {
+					canonical := PebbleKey(app, table, legacyKey)
+					if val, closer, err := legacy.Get([]byte(canonical)); err == nil {
+						raw = append([]byte(nil), val...)
+						closer.Close()
+						break
+					}
+				}
+			}
+		}
+		if raw == nil {
 			continue
 		}
 		var out map[string]any
-		if json.Unmarshal(val, &out) == nil && len(out) > 0 {
-			return out
+		if json.Unmarshal(raw, &out) != nil || len(out) == 0 {
+			continue
+		}
+		if !recordMatchesPK(out, probe, pkFields) {
+			continue
+		}
+		hits = append(hits, pkCandidateHit{storageKey: candidate, record: out, inPerTable: inPerTable})
+	}
+	return hits
+}
+
+func recordMatchesPK(record, probe map[string]any, pkFields []string) bool {
+	for _, pk := range pkFields {
+		pv, ok := probe[pk]
+		if !ok {
+			continue
+		}
+		if !model.ValuesEqual(record[pk], pv) {
+			return false
 		}
 	}
-	return nil
+	return true
+}
+
+func (rm *RecordManager) pickBestPKHit(hits []pkCandidateHit) map[string]any {
+	if len(hits) == 0 {
+		return nil
+	}
+	if len(hits) == 1 {
+		return hits[0].record
+	}
+	best := hits[0]
+	for _, h := range hits[1:] {
+		if h.inPerTable && !best.inPerTable {
+			best = h
+			continue
+		}
+		if h.inPerTable != best.inPerTable {
+			continue
+		}
+		if codeLen(h.record) > codeLen(best.record) {
+			best = h
+		}
+	}
+	return best.record
+}
+
+func codeLen(record map[string]any) int {
+	if record == nil {
+		return 0
+	}
+	return len(fmt.Sprint(record["p_code"]))
 }
 
 func (rm *RecordManager) tryFindByPKVariants(appID, tableName string, filter model.SearchFilter) map[string]any {

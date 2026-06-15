@@ -10,6 +10,101 @@ import (
 	"csm_server/backend-go/internal/config"
 )
 
+func TestFindByCustomPK_PrefersNewerDuplicateOverStaleCanonical(t *testing.T) {
+	rm := testRecordManager(t)
+	app, table := "csm", "sys_autos"
+
+	crmTemplate := map[string]any{
+		"id":     "crm-canonical-id",
+		"p_name": "broadcast_wuweb",
+		"p_type": float64(0),
+		"p_code": strings.Repeat("CRM-Workspace-Template-", 12000), // ~400KB class
+	}
+	autoLmkt := map[string]any{
+		"id":     "auto-lmkt-editor-id",
+		"p_name": "broadcast_wuweb",
+		"p_type": float64(0),
+		"p_code": strings.Repeat("AUTO-LMKT-NEW-CODE-", 50000), // ~1MB class
+	}
+
+	keyBase := "broadcast_wuweb:0"
+	legacyKey := StorageKeyCandidates(app, table, keyBase)[1]
+
+	db, err := rm.tableDB(app, table)
+	if err != nil {
+		t.Fatalf("tableDB: %v", err)
+	}
+	rawCRM, _ := json.Marshal(crmTemplate)
+	rawLmkt, _ := json.Marshal(autoLmkt)
+	if err := db.Set([]byte(keyBase), rawCRM, nil); err != nil {
+		t.Fatalf("seed canonical CRM: %v", err)
+	}
+	if err := db.Set([]byte(legacyKey), rawLmkt, nil); err != nil {
+		t.Fatalf("seed legacy auto-lmkt: %v", err)
+	}
+
+	read := rm.FindByCustomPK(app, table, map[string]any{
+		"p_name": "broadcast_wuweb",
+		"p_type": float64(0),
+	}, []string{"p_name", "p_type"})
+
+	if got := read["id"]; got != "auto-lmkt-editor-id" {
+		t.Fatalf("FindByCustomPK id = %v, want auto-lmkt-editor-id (homepage path)", got)
+	}
+	if got := codeLen(read); got <= codeLen(crmTemplate) {
+		t.Fatalf("FindByCustomPK p_code len = %d, want larger than CRM template %d", got, codeLen(crmTemplate))
+	}
+}
+
+func TestCreateRecord_ConsolidatesDuplicateStorageKeysOnSave(t *testing.T) {
+	rm := testRecordManager(t)
+	app, table := "csm", "sys_autos"
+
+	staleCRM := map[string]any{
+		"id":     "crm-canonical-id",
+		"p_name": "broadcast_wuweb",
+		"p_type": float64(0),
+		"p_code": "CRM-OLD",
+	}
+	saved := map[string]any{
+		"id":     "auto-lmkt-id",
+		"p_name": "broadcast_wuweb",
+		"p_type": float64(0),
+		"p_code": strings.Repeat("AUTO-LMKT-", 1000),
+	}
+
+	keyBase := "broadcast_wuweb:0"
+	legacyKey := StorageKeyCandidates(app, table, keyBase)[1]
+
+	db, err := rm.tableDB(app, table)
+	if err != nil {
+		t.Fatalf("tableDB: %v", err)
+	}
+	rawCRM, _ := json.Marshal(staleCRM)
+	rawSaved, _ := json.Marshal(saved)
+	if err := db.Set([]byte(keyBase), rawCRM, nil); err != nil {
+		t.Fatalf("seed canonical CRM: %v", err)
+	}
+	if err := db.Set([]byte(legacyKey), rawSaved, nil); err != nil {
+		t.Fatalf("seed legacy auto-lmkt: %v", err)
+	}
+
+	if _, err := rm.CreateRecord(app, table, saved, []string{"p_name", "p_type"}); err != nil {
+		t.Fatalf("CreateRecord: %v", err)
+	}
+
+	read := rm.FindByCustomPK(app, table, map[string]any{
+		"p_name": "broadcast_wuweb",
+		"p_type": float64(0),
+	}, []string{"p_name", "p_type"})
+	if got := read["p_code"]; got != saved["p_code"] {
+		t.Fatalf("FindByCustomPK p_code mismatch after consolidate")
+	}
+	if _, err := rm.getRecordBytes(app, table, legacyKey); err == nil {
+		t.Fatalf("legacy alias key still present after save: %s", legacyKey)
+	}
+}
+
 func TestCreateRecord_ConsolidatesDuplicateStorageKeys(t *testing.T) {
 	rm := testRecordManager(t)
 
@@ -52,6 +147,15 @@ func TestCreateRecord_ConsolidatesDuplicateStorageKeys(t *testing.T) {
 	}
 	if got := read["id"]; got != "editor-id-new" {
 		t.Fatalf("FindByCustomPK id = %v, want editor-id-new", got)
+	}
+
+	for _, candidate := range StorageKeyCandidates(app, table, keyBase) {
+		if candidate == keyBase {
+			continue
+		}
+		if _, err := rm.getRecordBytes(app, table, candidate); err == nil {
+			t.Fatalf("duplicate storage key still present after consolidate save: %s", candidate)
+		}
 	}
 }
 

@@ -237,6 +237,67 @@ func (rm *RecordManager) recordExistsAtStorageKey(app, table, storageKey string)
 	return err == nil
 }
 
+func (rm *RecordManager) deleteLegacyPKAliases(app, table, canonicalKey string) {
+	rm.legacyMu.RLock()
+	legacy := rm.legacyDB
+	rm.legacyMu.RUnlock()
+	if legacy == nil || strings.TrimSpace(canonicalKey) == "" {
+		return
+	}
+	for _, candidate := range StorageKeyCandidates(app, table, canonicalKey) {
+		pk := PebbleKey(app, table, candidate)
+		if _, closer, err := legacy.Get([]byte(pk)); err != nil {
+			continue
+		} else {
+			closer.Close()
+		}
+		_ = legacy.Delete([]byte(pk), pebble.Sync)
+	}
+}
+
+// consolidatePKStorageKeys removes duplicate physical keys for the same logical PK,
+// keeping only canonicalKey (one p_name+p_type → one Pebble row).
+func (rm *RecordManager) consolidatePKStorageKeys(app, table, canonicalKey string, record map[string]any, pkFields []string, batch *pebble.Batch) {
+	if batch == nil || strings.TrimSpace(canonicalKey) == "" {
+		return
+	}
+	seen := map[string]struct{}{canonicalKey: {}}
+	queueDelete := func(storageKey string) {
+		storageKey = strings.TrimSpace(storageKey)
+		if storageKey == "" || storageKey == canonicalKey {
+			return
+		}
+		if _, ok := seen[storageKey]; ok {
+			return
+		}
+		seen[storageKey] = struct{}{}
+		if _, err := rm.getRecordBytes(app, table, storageKey); err != nil {
+			return
+		}
+		_ = batch.Delete([]byte(storageKey), nil)
+		rm.deleteSearchIndex(PebbleKey(app, table, storageKey))
+	}
+
+	for _, c := range StorageKeyCandidates(app, table, canonicalKey) {
+		queueDelete(c)
+	}
+	for _, hit := range rm.findAllByCustomPK(app, table, record, pkFields) {
+		queueDelete(hit.storageKey)
+	}
+}
+
+func (rm *RecordManager) hasAnyPKStorage(app, table, canonicalKey, keyByID string) bool {
+	if keyByID != "" && rm.recordExistsAtStorageKey(app, table, keyByID) {
+		return true
+	}
+	for _, c := range StorageKeyCandidates(app, table, canonicalKey) {
+		if rm.recordExistsAtStorageKey(app, table, c) {
+			return true
+		}
+	}
+	return false
+}
+
 func (rm *RecordManager) collectStorageKeysToDelete(appID, tableName string, record map[string]any, pkFields []string) []string {
 	app, table, err := rm.sanitizeTable(appID, tableName)
 	if err != nil {
