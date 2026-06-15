@@ -246,20 +246,18 @@ func (rm *RecordManager) CreateRecord(appID, tableName string, record map[string
 	if len(pkFields) == 0 {
 		pkFields = []string{"id"}
 	}
-	keyBase := rm.buildPrimaryKey(app, table, record, pkFields)
-	candidates := StorageKeyCandidates(app, table, keyBase)
 
-	var existingKey string
-	for _, c := range candidates {
-		if _, err := rm.getRecordBytes(app, table, c); err == nil {
-			existingKey = c
-			break
-		}
+	rm.ensureRecordID(table, record)
+
+	canonicalKey := rm.buildPrimaryKey(app, table, record, pkFields)
+	keyByID := rm.resolveStorageKeyByID(app, table, record)
+	keyToPersist := keyByID
+	if keyToPersist == "" {
+		keyToPersist = rm.resolveExistingStorageKey(app, table, canonicalKey)
 	}
-	storageKey := keyBase
+
 	cmd := "create"
-	if existingKey != "" {
-		storageKey = existingKey
+	if rm.recordExistsAtStorageKey(app, table, keyToPersist) {
 		cmd = "update"
 	}
 
@@ -267,10 +265,32 @@ func (rm *RecordManager) CreateRecord(appID, tableName string, record map[string
 	if err != nil {
 		return "", err
 	}
-	if err := db.Set([]byte(storageKey), raw, pebble.Sync); err != nil {
+
+	batch := db.NewBatch()
+	defer batch.Close()
+
+	migratedFrom := ""
+	if cmd == "update" && keyByID != "" && keyByID != canonicalKey {
+		batch.Delete([]byte(keyByID), nil)
+		rm.deleteSearchIndex(PebbleKey(app, table, keyByID))
+		keyToPersist = canonicalKey
+		migratedFrom = keyByID
+	}
+
+	if err := batch.Set([]byte(keyToPersist), raw, nil); err != nil {
 		return "", err
 	}
-	rm.upsertSearchIndex(app, table, PebbleKey(app, table, storageKey), storageKey, record)
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return "", err
+	}
+	if cmd == "create" {
+		rm.incrementMetaCount(db)
+	}
+
+	if migratedFrom != "" && migratedFrom != keyToPersist {
+		rm.deleteSearchIndex(PebbleKey(app, table, migratedFrom))
+	}
+	rm.upsertSearchIndex(app, table, PebbleKey(app, table, keyToPersist), keyToPersist, record)
 	return cmd, nil
 }
 
@@ -533,30 +553,18 @@ func (rm *RecordManager) DeleteRecord(appID, tableName string, record map[string
 	if err != nil {
 		return err
 	}
-	db, err := rm.tableDB(app, table)
-	if err != nil {
-		return err
-	}
 	pkFields := rm.GetTablePKFields(app, table)
-	keyBase := rm.buildPrimaryKey(app, table, record, pkFields)
-	candidates := StorageKeyCandidates(app, table, keyBase)
-	var deleted bool
-	var deletedKey string
-	for _, candidate := range candidates {
-		if _, err := rm.getRecordBytes(app, table, candidate); err != nil {
-			continue
+	keysToDelete := rm.collectStorageKeysToDelete(appID, tableName, record, pkFields)
+
+	deletedAny := false
+	for _, storageKey := range keysToDelete {
+		if rm.deleteAtStorageKey(app, table, storageKey) {
+			deletedAny = true
 		}
-		if err := db.Delete([]byte(candidate), pebble.Sync); err != nil {
-			return err
-		}
-		deletedKey = PebbleKey(app, table, candidate)
-		deleted = true
-		break
 	}
-	if !deleted {
+	if !deletedAny {
 		return fmt.Errorf("record not found for delete")
 	}
-	rm.deleteSearchIndex(deletedKey)
 	return nil
 }
 

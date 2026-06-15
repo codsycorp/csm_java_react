@@ -1833,7 +1833,20 @@ ${resolvedContainerSelector} select {
           ? [requestedAutoCodeName]
           : [appId, broadcastAppId];
 
+        const isHomepageBroadcast = resolvedContainerId === "broadcast-auto-root-homepage"
+          || requestedAutoCodeName.startsWith("broadcast_");
+
+        if (isHomepageBroadcast) {
+          console.log("[Homepage/DynamicCodeMenu] Bắt đầu fetch sys_autos:", {
+            requestedAutoCodeName,
+            candidateNames,
+            session_app_id: appId,
+            effectiveAppId,
+          });
+        }
+
         let codeRecord: any = undefined;
+        let matchedCandidate = "";
         for (const candidateName of candidateNames) {
           try {
             const where = andWhere([
@@ -1848,13 +1861,33 @@ ${resolvedContainerSelector} select {
             });
             const rows = (res as any)?.rows || (res as any)?.data || [];
             codeRecord = Array.isArray(rows) ? rows.find((r: any) => r?.p_name === candidateName) : undefined;
+            if (isHomepageBroadcast) {
+              console.log("[Homepage/DynamicCodeMenu] API trả về cho p_name=", candidateName, {
+                rowCount: Array.isArray(rows) ? rows.length : 0,
+                p_name: codeRecord?.p_name,
+                id: codeRecord?.id,
+                p_type: codeRecord?.p_type,
+                p_code_encrypted_len: codeRecord?.p_code ? String(codeRecord.p_code).length : 0,
+                p_code_preview: codeRecord?.p_code
+                  ? String(codeRecord.p_code).slice(0, 48) + "..."
+                  : null,
+              });
+            }
             if (codeRecord) {
+              matchedCandidate = candidateName;
               break;
             }
-          } catch {}
+          } catch (fetchErr) {
+            if (isHomepageBroadcast) {
+              console.warn("[Homepage/DynamicCodeMenu] Lỗi fetch p_name=", candidateName, fetchErr);
+            }
+          }
         }
 
         if (!codeRecord?.p_code) {
+          if (isHomepageBroadcast) {
+            console.warn("[Homepage/DynamicCodeMenu] Không có record p_code — candidates:", candidateNames);
+          }
           setError(`Không tìm thấy code template cho app_id "${appId}" hoặc broadcast variant trong sys_autos`);
           setAutoCode("");
           return;
@@ -1862,6 +1895,18 @@ ${resolvedContainerSelector} select {
 
         // Decrypt the code
         const decrypted = codeRecord.p_code ? csmDecrypt(codeRecord.p_code) : "";
+
+        if (isHomepageBroadcast) {
+          const previewHead = decrypted.slice(0, 200);
+          const previewTail = decrypted.length > 200 ? decrypted.slice(-120) : "";
+          console.log("[Homepage/DynamicCodeMenu] Code sau decrypt — sẽ chạy trên Trang chủ:", {
+            matched_p_name: matchedCandidate,
+            record_id: codeRecord?.id,
+            decrypted_len: decrypted.length,
+            preview_head: previewHead,
+            preview_tail: previewTail || undefined,
+          });
+        }
 
         if (!cancelled) {
           if (decrypted && decrypted.trim()) {
@@ -2237,6 +2282,15 @@ ${resolvedContainerSelector} select {
       return;
     }
     executedRef.current = true;
+
+    if (resolvedContainerId === "broadcast-auto-root-homepage" || String(resolvedAutoCodeName || "").startsWith("broadcast_")) {
+      console.log("[Homepage/DynamicCodeMenu] executeCode — chạy JS trên DOM:", {
+        containerId: resolvedContainerId,
+        template: resolvedAutoCodeName,
+        code_len: autoCode.length,
+        code_start: autoCode.slice(0, 160),
+      });
+    }
 
     executeCode(autoCode);
   }, [autoCode, seft]);

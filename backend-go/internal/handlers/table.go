@@ -748,54 +748,34 @@ func (h *TableHandler) lookupRecordsForUpdate(appID, table string, filter model.
 	cmd := strings.ToLower(strings.TrimSpace(command))
 	isMutating := cmd == "update" || cmd == "delete"
 
-	// sys_autos and other custom-PK tables: direct key lookup avoids O(N) Pebble scans.
-	if len(pkFields) > 0 && hasAnyPrimaryKeyValue(objUpdate, pkFields) {
-		if rec := h.rm.FindByCustomPK(appID, table, objUpdate, pkFields); len(rec) > 0 {
-			return []map[string]any{rec}
-		}
-	}
-
 	var rows []map[string]any
+
+	// Mirror Java handleUpdateTableOperation: id-first lookup for update/delete.
 	if isMutating {
 		if id, ok := objUpdate["id"]; ok && strings.TrimSpace(fmt.Sprint(id)) != "" {
 			rows = h.filterRowsForUpdate(appID, table, model.EqFilter("id", id))
 		}
 	}
+
+	// Fallback to client filter when id lookup misses.
 	if len(rows) == 0 && (len(filter.Conditions) > 0 || filter.Field != "") {
 		rows = h.filterRowsForUpdate(appID, table, filter)
 	}
+
+	// Identity fallback when e_where is too strict (e.g. stale id in AND filter).
 	if len(rows) == 0 && isMutating {
 		if fallback := buildIdentityFallbackFilter(filter); fallback != nil {
 			rows = h.filterRowsForUpdate(appID, table, *fallback)
 		}
 	}
-	if len(rows) == 0 && len(pkFields) > 0 {
-		eq := data.ExtractEqConditions(filter)
-		probe := make(map[string]any, len(pkFields))
-		complete := true
-		for _, pk := range pkFields {
-			v, ok := eq[pk]
-			if !ok {
-				if v2, ok2 := objUpdate[pk]; ok2 && strings.TrimSpace(fmt.Sprint(v2)) != "" {
-					v = v2
-				} else {
-					complete = false
-					break
-				}
-			}
-			probe[pk] = v
-		}
-		if complete {
-			if rec := h.rm.FindByCustomPK(appID, table, probe, pkFields); len(rec) > 0 {
-				rows = []map[string]any{rec}
-			}
-		}
-	}
-	if len(rows) == 0 && isMutating {
+
+	// Java repeats id lookup after identity fallback for update.
+	if len(rows) == 0 && cmd == "update" {
 		if id, ok := objUpdate["id"]; ok && strings.TrimSpace(fmt.Sprint(id)) != "" {
 			rows = h.filterRowsForUpdate(appID, table, model.EqFilter("id", id))
 		}
 	}
+
 	return rows
 }
 

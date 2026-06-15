@@ -40,11 +40,10 @@ func TestLookupRecordsForUpdate_SysAutosUsesCustomPK(t *testing.T) {
 		Conditions: []model.SearchFilter{
 			model.EqFilter("p_name", "save_me"),
 			model.EqFilter("p_type", float64(1)),
-			model.EqFilter("id", "client-stale-id"),
 		},
 	}
 	objUpdate := map[string]any{
-		"id":     "client-stale-id",
+		"id":     "stored-id-1",
 		"p_name": "save_me",
 		"p_type": float64(1),
 		"p_code": "updated",
@@ -56,5 +55,8 @@ func TestLookupRecordsForUpdate_SysAutosUsesCustomPK(t *testing.T) {
 	}
 	if rows[0]["p_name"] != "save_me" {
 		t.Fatalf("p_name = %v", rows[0]["p_name"])
+	}
+	if rows[0]["id"] != "stored-id-1" {
+		t.Fatalf("id = %v, want stored-id-1", rows[0]["id"])
 	}
 }

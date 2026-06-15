@@ -15,6 +15,8 @@ func TablePrefix(appID, tableName string) string {
 	return PebbleKeyPrefix + appID + "|" + tableName + "|"
 }
 
+// StorageKeyCandidates mirrors Java buildLegacyKeyCandidates:
+// canonical, tableName_canonical, appId_tableName_canonical.
 func StorageKeyCandidates(appID, tableName, base string) []string {
 	return []string{
 		base,
