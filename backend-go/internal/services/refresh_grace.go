@@ -81,15 +81,24 @@ func (s *UserService) lookupRefreshGraceUser(refreshToken string) *model.User {
 	}
 	if s.rm != nil {
 		if entry.appToken != "" {
-			if u := s.FindByAppTokenScoped(entry.appToken, entry.userID, entry.loginVersion); u != nil {
-				return u
-			}
 			if u := s.FindByAppToken(entry.appToken); u != nil {
+				if entry.loginVersion > 0 && u.LoginVersion != nil && *u.LoginVersion != entry.loginVersion {
+					return nil
+				}
+				if stored := deref(u.RefreshToken); stored != "" && stored != refreshToken {
+					return nil
+				}
 				return u
 			}
 		}
 		if entry.userID != "" {
 			if u := s.FindByID(entry.userID); u != nil {
+				if entry.loginVersion > 0 && u.LoginVersion != nil && *u.LoginVersion != entry.loginVersion {
+					return nil
+				}
+				if stored := deref(u.RefreshToken); stored != "" && stored != refreshToken {
+					return nil
+				}
 				return u
 			}
 		}

@@ -35,6 +35,16 @@ import i18nInstance from "i18next";
 
 import { customAntdDarkTheme, customAntdLightTheme } from "#src/styles/theme/antd/antd-theme";
 
+/** API base cho seft / auto-lmkt — cùng nguồn với ky client (request/index.ts).
+ *  Dev: /api (Vite proxy → VITE_API_BASE_URL trong .env.development).
+ *  Prod build: VITE_API_BASE_URL từ .env (vd. https://api.csmbridge.net). */
+function resolveSeftDomainApiUrl(): string {
+  if (import.meta.env.DEV) {
+    return "/api";
+  }
+  return String(import.meta.env.VITE_API_BASE_URL || "/api").trim();
+}
+
 /** fetch gốc trước mọi proxy — dùng cho __csmRawFetch / legacy bridge pass-through. */
 const CSM_NATIVE_FETCH: typeof fetch = typeof fetch === "function"
   ? fetch.bind(globalThis)
@@ -154,11 +164,11 @@ function normalizeLegacyApiPath(rawUrl: string): string {
 }
 
 function resolveApiOrigin(): string {
-  const apiBase = String(import.meta.env.VITE_API_BASE_URL || "https://api.csmbridge.net").replace(/\/+$/, "");
+  const apiBase = String(import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/+$/, "");
   try {
     return new URL(apiBase.startsWith("http") ? apiBase : `https://${apiBase}`).origin;
   } catch {
-    return "https://api.csmbridge.net";
+    return "";
   }
 }
 
@@ -178,7 +188,7 @@ function isDirectCrossOriginApiCall(rawUrl: string): boolean {
 async function runtimePostSeoGenerateContent(body: Record<string, unknown>) {
   const apiPrefix = import.meta.env.DEV
     ? "/api"
-    : String(import.meta.env.VITE_API_BASE_URL || "https://api.csmbridge.net").replace(/\/+$/, "");
+    : String(import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/+$/, "");
   const mode = String(body?.mode || "").toLowerCase();
   const isLongSync = body?.async === false || mode === "sync"
     || (mode !== "status" && mode !== "submit" && Boolean(body?.prompt));
@@ -324,6 +334,22 @@ function createLegacyApiFetchBridge(rawFetch: typeof fetch): typeof fetch {
               success: false,
               message: error?.message || String(error),
             }), { status: 400, headers: { "Content-Type": "application/json" } });
+          }
+        }
+
+        if (path === "/api/ai-generate-seo-content" || path === "/ai-generate-seo-content") {
+          try {
+            const res = await runtimePostSeoGenerateContent(payload);
+            return new Response(JSON.stringify(res), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            });
+          } catch (error: any) {
+            const status = Number(error?.response?.status || error?.status || 400);
+            return new Response(JSON.stringify({
+              success: false,
+              message: error?.message || String(error),
+            }), { status: status >= 400 ? status : 400, headers: { "Content-Type": "application/json" } });
           }
         }
 
@@ -1981,8 +2007,7 @@ ${resolvedContainerSelector} select {
       appId: currentUserAny.app_id || user.app_id || appId || "csm",
       menuId,
       containerId: resolvedContainerId,
-      domain_api_url: String(import.meta.env.VITE_API_BASE_URL || "").trim()
-        || (import.meta.env.DEV ? "/api" : "https://api.csmbridge.net"),
+      domain_api_url: resolveSeftDomainApiUrl(),
       getContainer: () => document.getElementById(resolvedContainerId),
       user: currentUserAny,
       t,
@@ -2220,6 +2245,10 @@ ${resolvedContainerSelector} select {
     (window as any).seft = seft;
     if (seft?.domain_api_url) {
       (window as any).domain_api_url = seft.domain_api_url;
+    }
+    const seoOneShot = String(import.meta.env.VITE_AI_SEO_ONE_SHOT || "").trim().toLowerCase();
+    if (seoOneShot && seoOneShot !== "false" && seoOneShot !== "0") {
+      (window as any).VITE_AI_SEO_ONE_SHOT = "true";
     }
 
     try {

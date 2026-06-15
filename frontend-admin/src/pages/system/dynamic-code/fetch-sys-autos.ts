@@ -1,5 +1,6 @@
 import { andWhere, getTableData, invalidateTableDataCache } from "#src/components/csm-grid/CsmApi";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
+import { pickBestSysAutosRow } from "#src/pages/system/dynamic-code/reload";
 
 const SAVED_PLACEHOLDER = /^\[saved:\d+ chars\]$/i;
 
@@ -31,13 +32,10 @@ export async function fetchSysAutosTemplateCode(
 		app_id: "csm",
 		obj_name: "sys_autos",
 		where,
-		take: 1,
 		fresh: true,
 	});
 	const rows = (res as any)?.rows || (res as any)?.data || [];
-	const codeRecord = Array.isArray(rows)
-		? rows.find((row: any) => row?.p_name === normalizedName)
-		: undefined;
+	const codeRecord = pickBestSysAutosRow(rows, normalizedName, pType);
 	if (!codeRecord?.p_code) {
 		return "";
 	}

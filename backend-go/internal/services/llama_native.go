@@ -85,7 +85,7 @@ func (n *llamaNativeBackend) ensureLoadedLocked() error {
 	}
 	ctx, err := model.NewContext(
 		llamacpp.WithContextSize(int(n.cfg.EffectiveLlamaContextWindow())),
-		llamacpp.WithBatchSize(int(n.cfg.AI.LlamaBatchSize)),
+		llamacpp.WithBatchSize(int(n.cfg.EffectiveLlamaBatchSize())),
 		llamacpp.WithThreads(int(n.cfg.AI.LlamaThreads)),
 	)
 	if err != nil {

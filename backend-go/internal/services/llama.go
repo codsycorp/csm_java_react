@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 
 	"csm_server/backend-go/internal/config"
 )
@@ -90,6 +91,9 @@ func LocalUnavailableMessage() string {
 }
 
 func LocalUnavailableHint() string {
+	if runtime.GOOS == "darwin" {
+		return "Dev Mac: ./backend-go/run-go-server.sh hoặc ./scripts/build-go-darwin-native.sh rồi restart. Cần go build -tags llamacpp (CGO_ENABLED=1)."
+	}
 	return "Build với scripts/build-go-linux-native.sh (-tags llamacpp). Kiểm tra: journalctl -u csm-go | grep LlamaNative"
 }
 

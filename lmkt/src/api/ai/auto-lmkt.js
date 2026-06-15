@@ -4421,13 +4421,41 @@ function getThemeTokens() {
 
 function readPersistedAccessToken() {
   try {
-    const raw = typeof localStorage !== "undefined" ? localStorage.getItem("access-token") : null;
-    if (!raw) return "";
-    const parsed = JSON.parse(raw);
-    return String(parsed?.state?.token || "").trim();
+    const storages = [];
+    if (typeof sessionStorage !== "undefined") storages.push(sessionStorage);
+    if (typeof localStorage !== "undefined") storages.push(localStorage);
+    for (let s = 0; s < storages.length; s += 1) {
+      const raw = storages[s].getItem("access-token");
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      const token = String(parsed?.state?.token || "").trim();
+      if (token) return token;
+    }
+    return "";
   } catch {
     return "";
   }
+}
+
+/** window.csmAI — cùng ky client + JWT refresh như get-table-data (frontend-admin). */
+function resolveSeoKyClient(ctx) {
+  const win = typeof window !== "undefined" ? window : {};
+  const candidates = [
+    win.csmAI,
+    ctx?.helperAi,
+    ctx?.seftObj?.generateSeoAntiAiOneShot ? ctx.seftObj : null,
+    win.seft,
+  ].filter(Boolean);
+  for (let i = 0; i < candidates.length; i += 1) {
+    const helperAi = candidates[i];
+    const canOneShot = typeof helperAi.generateSeoAntiAiOneShot === "function";
+    const canPrompt = typeof helperAi.generateSeoContentWithPrompt === "function"
+      || typeof helperAi.csm_ai_generate_seo_content === "function";
+    if (canOneShot || canPrompt) {
+      return helperAi;
+    }
+  }
+  return null;
 }
 
 function resolveAuthToken(seftObj) {
@@ -4446,6 +4474,41 @@ function resolveAuthToken(seftObj) {
   for (let i = 0; i < candidates.length; i += 1) {
     const token = String(candidates[i] || "").trim();
     if (token) return token;
+  }
+  return "";
+}
+
+function resolveDefaultApiBaseUrl(win, domain) {
+  const hostname = String(win?.location?.hostname || "").toLowerCase();
+  if (!hostname) return "";
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return `${win.location.origin}/api`;
+  }
+  if (hostname.startsWith("api.")) {
+    return `${win.location.protocol}//${win.location.host}`;
+  }
+  // Admin SPA — API trên api.* (cùng VITE_API_BASE_URL / ky prefixUrl frontend-admin).
+  if (hostname.startsWith("admin.")) {
+    const bare = String(domain || "csmbridge.net").replace(/^www\./i, "").split(",")[0].trim();
+    return bare ? `https://api.${bare}` : "";
+  }
+  return win.location?.origin ? `${win.location.origin}/api` : "";
+}
+
+function coerceToApiOrigin(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  try {
+    const url = new URL(trimmed);
+    const host = (url.hostname || "").toLowerCase();
+    if (host.startsWith("api.")) {
+      return `${url.protocol}//${url.host}`;
+    }
+    if (host.startsWith("admin.")) {
+      return `${url.protocol}//api.${host.slice(6)}`;
+    }
+  } catch (_e) {
+    return "";
   }
   return "";
 }
@@ -4482,7 +4545,7 @@ function resolveContext(seftObj) {
 
   const rawApiBase = seft.domain_api_url
     || win.domain_api_url
-    || (win.location?.origin ? `${win.location.origin}/api` : "");
+    || resolveDefaultApiBaseUrl(win, domain);
   const apiBase = normalizeCsmApiBase(rawApiBase);
 
   const token = resolveAuthToken(seft);
@@ -4555,7 +4618,7 @@ function resolveUiLangHeader() {
   return "vi-VN";
 }
 
-function buildApiHeaders(ctx = {}) {
+function buildApiHeaders(ctx = {}, options = {}) {
   const headers = {
     Accept: "application/json",
     "Content-Type": "application/json",
@@ -4569,9 +4632,11 @@ function buildApiHeaders(ctx = {}) {
   if (csrfToken) {
     headers["X-CSRF-Token"] = csrfToken;
   }
-  const refreshToken = getRefreshTokenForApi();
-  if (refreshToken) {
-    headers["X-Refresh-Token"] = refreshToken;
+  if (!options.omitRefreshToken) {
+    const refreshToken = getRefreshTokenForApi();
+    if (refreshToken) {
+      headers["X-Refresh-Token"] = refreshToken;
+    }
   }
   const clientId = getClientIdForApi();
   if (clientId) {
@@ -7218,7 +7283,7 @@ async function processContent(item, opts = {}) {
   // DynamicCode chạy classic script — KHÔNG dùng import.meta (SyntaxError ngoài module)
   // SEO lane: mặc định classic (getAntiAIPrompt + 1 HTTP sync) — khác hoàn toàn luồng menu/code.
   // Chỉ bật one-shot backend khi VITE_AI_SEO_ONE_SHOT=true (seoContext, không full prompt).
-  const seoOneShotEnabled = typeof window !== 'undefined' && window.VITE_AI_SEO_ONE_SHOT === 'true';
+  const seoOneShotEnabled = isSeoOneShotEnvEnabled();
   const useSeoOneShot = seoOneShotEnabled;
 
   let prompt = null;
@@ -7241,6 +7306,9 @@ async function processContent(item, opts = {}) {
   
   if (!useSeoOneShot && (!prompt || prompt.trim().length === 0)) {
     throw new Error("Prompt rỗng - không thể gọi AI!");
+  }
+  if (useSeoOneShot && !String(content || "").trim()) {
+    throw new Error("Thiếu chủ đề bài viết (content/topic) — không thể gọi SEO one-shot");
   }
   
   console.log(`[processContent] ⏳ Gọi AI - BẮT ĐẦU CHỜ (SEO one-shot có thể mất 3-10 phút trên server yếu) - ${new Date().toLocaleTimeString()}`);
@@ -9146,8 +9214,10 @@ function aiLaneTesterNotify(message, type = "info") {
 function resolveAiLocalApiBase(ctx) {
   const fromCtx = normalizeCsmApiBase(ctx?.apiBase || "");
   if (fromCtx) return fromCtx;
-  if (typeof window !== "undefined" && window.location?.origin) {
-    return normalizeCsmApiBase(`${window.location.origin}/api`);
+  const win = typeof window !== "undefined" ? window : null;
+  if (win) {
+    const fromDefault = normalizeCsmApiBase(resolveDefaultApiBaseUrl(win, ctx?.domain));
+    if (fromDefault) return fromDefault;
   }
   return "";
 }
@@ -9157,34 +9227,40 @@ function resolvePrimaryDomain(ctx) {
   return domain.replace(/^www\./i, "");
 }
 
-/** URL SEO sync — luôn api.* host (giống fetch DevTools: api.csmbridge.net/ai-generate-seo-content). */
+/** URL SEO sync — luôn api.* host (cùng pattern get-table-data trên api.csmbridge.net). */
 function resolveSeoApiEndpoint(ctx) {
-  const seft = ctx?.seftObj || (typeof window !== "undefined" ? window.seft : {}) || {};
+  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
+  const seft = safeCtx?.seftObj || (typeof window !== "undefined" ? window.seft : {}) || {};
   const candidates = [
     seft.domain_api_url,
     typeof window !== "undefined" ? window.domain_api_url : "",
-    ctx?.apiBase,
+    safeCtx?.apiBase,
+    resolveDefaultApiBaseUrl(typeof window !== "undefined" ? window : null, safeCtx?.domain),
   ];
   for (let i = 0; i < candidates.length; i += 1) {
-    const base = normalizeCsmApiBase(String(candidates[i] || "").trim());
-    if (base && /^https?:\/\/api\./i.test(base)) {
-      return `${base.replace(/\/+$/, "")}/ai-generate-seo-content`;
+    const raw = String(candidates[i] || "").trim();
+    const apiOrigin = coerceToApiOrigin(raw);
+    if (apiOrigin) {
+      return `${apiOrigin.replace(/\/+$/, "")}/ai-generate-seo-content`;
+    }
+    const normalized = normalizeCsmApiBase(raw);
+    if (normalized && /\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(normalized)) {
+      return `${normalized.replace(/\/+$/, "")}/ai-generate-seo-content`;
+    }
+    if (normalized && /^https?:\/\/api\./i.test(normalized)) {
+      return `${normalized.replace(/\/api\/?$/, "").replace(/\/+$/, "")}/ai-generate-seo-content`;
     }
   }
-  return `https://api.${resolvePrimaryDomain(ctx)}/ai-generate-seo-content`;
+  return `https://api.${resolvePrimaryDomain(safeCtx)}/ai-generate-seo-content`;
 }
 
 function resolveSeoApiEndpointCandidates(ctx) {
-  const primary = resolveSeoApiEndpoint(ctx);
-  const domain = resolvePrimaryDomain(ctx);
+  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
+  const primary = resolveSeoApiEndpoint(safeCtx);
+  const domain = resolvePrimaryDomain(safeCtx);
   const urls = new Set([
     primary,
-    primary.includes("/api/ai-generate-seo-content")
-      ? primary.replace("/api/ai-generate-seo-content", "/ai-generate-seo-content")
-      : primary.replace("/ai-generate-seo-content", "/api/ai-generate-seo-content"),
     `https://api.${domain}/ai-generate-seo-content`,
-    `https://api.${domain}/api/ai-generate-seo-content`,
-    `https://admin.${domain}/api/ai-generate-seo-content`,
   ]);
   return [...urls].filter(Boolean);
 }
@@ -9202,10 +9278,34 @@ async function callSeoPromptDirect(ctx, prompt) {
 }
 
 /**
- * POST /ai-generate-seo-content — fetch trực tiếp (contract giống admin ky client).
- * Body: { mode:"sync", async:false, taskType:"seo_content", prompt } hoặc seoPipeline one-shot.
+ * POST /ai-generate-seo-content — ưu tiên window.csmAI (ky, cùng auth get-table-data).
+ * Fallback raw fetch chỉ khi chạy ngoài admin SPA (không có csmAI bridge).
  */
 async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, prompt }) {
+  const safeCtx = ctx && (ctx.apiBase !== undefined || ctx.seftObj) ? ctx : resolveContext();
+  const helperAi = resolveSeoKyClient(safeCtx);
+
+  if (helperAi) {
+    console.log(
+      `[SEO] via window.csmAI (ky client, same auth as get-table-data) oneShot=${!!useSeoOneShot}`
+      + ` promptChars=${prompt ? String(prompt).length : 0}`,
+    );
+    let result;
+    if (useSeoOneShot && oneShotPayload && typeof helperAi.generateSeoAntiAiOneShot === "function") {
+      result = await helperAi.generateSeoAntiAiOneShot(oneShotPayload, { taskType: "seo_content" });
+    } else if (typeof helperAi.generateSeoContentWithPrompt === "function") {
+      result = await helperAi.generateSeoContentWithPrompt(String(prompt || ""), { taskType: "seo_content" });
+    } else if (typeof helperAi.csm_ai_generate_seo_content === "function") {
+      result = await helperAi.csm_ai_generate_seo_content(String(prompt || ""));
+    } else {
+      throw new Error("csmAI không có hàm SEO — kiểm tra DynamicCodeMenu đã inject window.csmAI");
+    }
+    if (result && (result.success === false || result.code === -1)) {
+      throw new Error(result.message || "SEO API thất bại");
+    }
+    return result;
+  }
+
   const body = { mode: "sync", async: false, taskType: "seo_content" };
   if (useSeoOneShot) {
     body.seoPipeline = "anti_ai_one_shot";
@@ -9214,7 +9314,7 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
     body.prompt = prompt;
   }
 
-  const candidateUrls = resolveSeoApiEndpointCandidates(ctx);
+  const candidateUrls = resolveSeoApiEndpointCandidates(safeCtx);
   const timeoutMs = 20 * 60 * 1000;
   let lastError = null;
 
@@ -9226,12 +9326,12 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
       timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     }
 
-    console.log(`[SEO] POST ${url} promptChars=${body.prompt ? body.prompt.length : 0} oneShot=${!!useSeoOneShot}`);
+    console.log(`[SEO] POST ${url} promptChars=${body.prompt ? body.prompt.length : 0} oneShot=${!!useSeoOneShot} (raw fetch fallback)`);
 
     try {
       const response = await fetch(url, {
         method: "POST",
-        headers: buildApiHeaders(ctx),
+        headers: buildApiHeaders(safeCtx, { omitRefreshToken: true }),
         credentials: "include",
         body: JSON.stringify(body),
         signal: controller ? controller.signal : undefined,
@@ -9275,6 +9375,35 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
   );
 }
 
+function isSeoOneShotEnvEnabled() {
+  if (typeof window === "undefined") return false;
+  const v = window.VITE_AI_SEO_ONE_SHOT;
+  return v === true || v === "true" || String(v || "").toLowerCase() === "true";
+}
+
+/** Gom seoContext từ opts.seoContext hoặc industry/topic (luồng processContent, AI lane tester). */
+function buildSeoOneShotPayloadFromOpts(opts = {}) {
+  const direct = opts.seoContext || opts.oneShotPayload;
+  if (direct && typeof direct === "object") {
+    return direct;
+  }
+  const topic = String(opts.topic || opts.content || "").trim();
+  if (!topic) return null;
+  const po = opts.promptOpts || {};
+  const seedRaw = opts.uniqueSeed || opts.seed || "";
+  const payload = {
+    industry: opts.industry || "bat-dong-san",
+    topic,
+    domainKey: po.domainKey || opts.domainKey || "lmkt",
+    property: po.property || opts.property || "",
+    location: po.location || opts.location || "",
+    business: po.business || opts.business || "",
+  };
+  const seed = String(seedRaw).replace(/[\[\]]/g, "").trim();
+  if (seed) payload.seed = seed;
+  return payload;
+}
+
 /**
  * Luồng SEO thống nhất — mọi viết bài qua POST /ai-generate-seo-content → backend AI local SEO lane.
  *
@@ -9289,35 +9418,49 @@ async function invokeSeoAiLocal(ctx, opts = {}) {
   const expect = opts.expect || "api";
   let prompt = opts.prompt != null ? String(opts.prompt) : "";
   let useSeoOneShot = opts.useSeoOneShot;
-  let oneShotPayload = opts.seoContext || opts.oneShotPayload || null;
+  let oneShotPayload = buildSeoOneShotPayloadFromOpts(opts);
+
+  // Classic: build full prompt trước khi quyết định one-shot (tránh bật one-shot khi chưa có seoContext).
+  if (useSeoOneShot !== true && !oneShotPayload && !prompt.trim() && opts.industry && opts.topic) {
+    if (!isSeoOneShotEnvEnabled()) {
+      const uniqueSeed = opts.uniqueSeed || `[UNIQUE_${Date.now()}_${Math.random().toString(36).slice(2, 9)}]`;
+      prompt = getAntiAIPrompt(
+        opts.industry,
+        opts.topic,
+        opts.articleHistory || [],
+        opts.promptOpts || {},
+        opts.images || [],
+        uniqueSeed
+      );
+    } else {
+      oneShotPayload = buildSeoOneShotPayloadFromOpts(opts);
+    }
+  }
 
   if (useSeoOneShot == null) {
-    if (oneShotPayload && !prompt.trim()) {
+    if (oneShotPayload && (isSeoOneShotEnvEnabled() || opts.preferOneShot)) {
       useSeoOneShot = true;
-    } else if (typeof window !== "undefined" && window.VITE_AI_SEO_ONE_SHOT === "true" && !prompt.trim()) {
+    } else if (oneShotPayload && !prompt.trim()) {
       useSeoOneShot = true;
+    } else if (isSeoOneShotEnvEnabled() && !prompt.trim()) {
+      useSeoOneShot = !!oneShotPayload;
     } else {
       useSeoOneShot = false;
     }
   }
 
-  if (!useSeoOneShot && !prompt.trim() && opts.industry && opts.topic) {
-    const uniqueSeed = opts.uniqueSeed || `[UNIQUE_${Date.now()}_${Math.random().toString(36).slice(2, 9)}]`;
-    prompt = getAntiAIPrompt(
-      opts.industry,
-      opts.topic,
-      opts.articleHistory || [],
-      opts.promptOpts || {},
-      opts.images || [],
-      uniqueSeed
-    );
+  if (useSeoOneShot && !oneShotPayload) {
+    oneShotPayload = buildSeoOneShotPayloadFromOpts(opts);
   }
 
   if (!useSeoOneShot && !prompt.trim()) {
     throw new Error("Thiếu prompt SEO — không thể gọi AI local");
   }
   if (useSeoOneShot && !oneShotPayload) {
-    throw new Error("Thiếu seoContext — không thể gọi SEO one-shot");
+    throw new Error("Thiếu seoContext — không thể gọi SEO one-shot (cần topic hoặc seoContext)");
+  }
+  if (useSeoOneShot && !String(oneShotPayload.topic || "").trim()) {
+    throw new Error("Thiếu topic trong seoContext — không thể gọi SEO one-shot");
   }
 
   const api = await callSeoGenerateContentApi(safeCtx, {
@@ -9428,16 +9571,26 @@ async function testAiLaneSeoOneShot(ctx, seoContext = {}) {
     throw new Error("Thiếu topic — nhập chủ đề bài SEO");
   }
 
-  // Luồng SEO: build full prompt như production (getAntiAIPrompt) — 1 HTTP sync, không dùng schema placeholder backend.
+  // Luồng SEO: one-shot khi env bật — gửi seoContext, không full prompt.
   const uniqueSeed = `[UNIQUE_${Date.now()}_${Math.random().toString(36).slice(2, 9)}]`;
   return invokeSeoAiLocal(ctx, {
     industry: payload.industry,
     topic: payload.topic,
+    useSeoOneShot: isSeoOneShotEnvEnabled(),
+    seoContext: {
+      industry: payload.industry,
+      topic: payload.topic,
+      domainKey: payload.domainKey,
+      property: payload.property,
+      location: payload.location,
+      business: payload.business,
+      seed: uniqueSeed.replace(/[\[\]]/g, ""),
+    },
     promptOpts: {
       domainKey: payload.domainKey,
       property: payload.property,
       location: payload.location,
-      business: payload.business
+      business: payload.business,
     },
     uniqueSeed,
     expect: "api",

@@ -204,14 +204,13 @@ func (s *UserService) resolveFromClaims(claims *security.Claims) *model.User {
 			user = fresh
 		}
 	}
-	if user.LoginVersion != nil && *user.LoginVersion != tokenVersion && tokenVersion > 0 {
-		dbVersion := *user.LoginVersion
-		if dbVersion > tokenVersion {
-			return nil
-		}
-		// DB row lagging behind freshly issued JWT (duplicate/stale records).
-		lv := tokenVersion
-		user.LoginVersion = &lv
+	// Strict single-session (Java JwtAuthenticationFilter): reject any login_version mismatch.
+	currentVersion := 0
+	if user.LoginVersion != nil {
+		currentVersion = *user.LoginVersion
+	}
+	if currentVersion > 0 && tokenVersion != currentVersion {
+		return nil
 	}
 	return user
 }
@@ -254,7 +253,10 @@ func (s *UserService) CanonicalizeSessionUser(auth security.AuthUser) *model.Use
 
 func (s *UserService) UpdateSessionToken(user *model.User, refreshToken, ip, ua string, expiryMs int64, loginVersion int, clientID string) {
 	if user != nil {
-		if old := deref(user.RefreshToken); old != "" && old != refreshToken {
+		old := deref(user.RefreshToken)
+		oldVersion := derefInt(user.LoginVersion)
+		// Grace only for refresh rotation within the same session — not login from another device.
+		if old != "" && old != refreshToken && oldVersion == loginVersion {
 			rememberRotatedRefreshToken(old, user)
 		}
 	}
@@ -524,10 +526,13 @@ func (s *UserService) canonicalizeRefreshUser(record map[string]any, refreshToke
 		return nil
 	}
 	if user.AppToken != nil && *user.AppToken != "" {
-		if canonical := s.FindByAppTokenScoped(*user.AppToken, deref(user.ID), derefInt(user.LoginVersion)); canonical != nil {
-			if canonical.RefreshToken != nil && *canonical.RefreshToken == refreshToken {
-				return canonical
+		canonical := s.FindByAppToken(*user.AppToken)
+		if canonical != nil {
+			canonicalRefresh := deref(canonical.RefreshToken)
+			if canonicalRefresh == "" || canonicalRefresh != refreshToken {
+				return nil
 			}
+			return canonical
 		}
 	}
 	return user
