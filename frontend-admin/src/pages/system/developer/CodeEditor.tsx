@@ -1435,8 +1435,7 @@ export default function CodeEditor() {
 		saveInFlightRef.current = true;
 		setSavingCode(true);
 		try {
-			const code = codeList.find(c => c.p_name === selectedCode);
-			const result = await saveCode(appId, selectedCode, codeContent, codeType, code?.id);
+			const result = await saveCode(appId, selectedCode, codeContent, codeType, codeList);
 
 			if (result.success) {
 				message.success(result.message);
@@ -1476,10 +1475,7 @@ export default function CodeEditor() {
 			cancelText: t("system.developer.no"),
 			onOk: async () => {
 				try {
-					const code = codeList.find(c => c.p_name === selectedCode);
-					if (!code) return;
-
-					const result = await deleteCode(appId, code.id || "", selectedCode, codeType, code.p_code);
+					const result = await deleteCode(appId, selectedCode, codeType);
 
 					if (result.success) {
 						message.success(result.message);

@@ -20,6 +20,25 @@ export interface CodeEditorState {
 
 
 
+function dedupeCodeListByPrimaryKey(rows: CodeItem[]): CodeItem[] {
+	const byPk = new Map<string, CodeItem>();
+	for (const row of rows) {
+		const key = `${row.p_name}::${row.p_type}`;
+		const existing = byPk.get(key);
+		if (!existing) {
+			byPk.set(key, row);
+			continue;
+		}
+		// Mirror Java/Go pickBestPKHit: prefer the row with more code content.
+		const existingLen = String(existing.p_code || "").length;
+		const candidateLen = String(row.p_code || "").length;
+		if (candidateLen > existingLen) {
+			byPk.set(key, row);
+		}
+	}
+	return Array.from(byPk.values());
+}
+
 /**
  * Fetch code list from sys_autos table
  * Uses API: GET /api/get-table-data
@@ -39,7 +58,8 @@ export async function fetchCodeList(appId: string, codeType: number) {
 
 		// Backend may return rows[] or data[] depending on record structure
 		const rows = (response as any)?.rows || (response as any)?.data || [];
-		const sortedRows = rows.sort((a: CodeItem, b: CodeItem) =>
+		const dedupedRows = dedupeCodeListByPrimaryKey(rows);
+		const sortedRows = dedupedRows.sort((a: CodeItem, b: CodeItem) =>
 			a.p_name.localeCompare(b.p_name)
 		);
 
@@ -90,33 +110,48 @@ export function decryptCode(code: string): string {
 	}
 }
 
+const SYS_AUTOS_PK_FIELDS = ["p_name", "p_type"] as const;
+
+function findCodeByIdentity(codeList: CodeItem[], codeName: string, codeType: number): CodeItem | undefined {
+	return codeList.find((item) => item.p_name === codeName && item.p_type === codeType);
+}
+
 /**
  * Save code (create or update)
  * Uses API: POST /api/update-table-data
- * Table: sys_autos, Condition: e_where with p_name and p_type
+ * Identity: p_name + p_type (Java fieldsPK). Backend resolves create/update and id.
  */
 export async function saveCode(
 	appId: string,
 	codeName: string,
 	codeContent: string,
 	codeType: number,
-	codeId?: string
+	codeList: CodeItem[] = []
 ) {
 	try {
 		const encrypted = encryptCode(codeContent);
-		const command = codeId ? "update" : "create";
-		
+		const existing = findCodeByIdentity(codeList, codeName, codeType);
+		const command: "create" | "update" = existing ? "update" : "create";
+		const where = {
+			p_name: existing?.p_name ?? codeName,
+			p_type: existing?.p_type ?? codeType,
+		};
+		const obj_update: CodeItem = {
+			p_name: codeName,
+			p_type: codeType,
+			p_code: encrypted,
+		};
+		if (existing?.id) {
+			obj_update.id = existing.id;
+		}
+
 		const response = await updateTableData<CodeItem>({
 			app_id: "csm", // sys_autos is stored under app_id=csm
 			obj_name: "sys_autos",
-			command: command,
-			obj_update: {
-				id: codeId || `auto_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-				p_name: codeName,
-				p_type: codeType,
-				p_code: encrypted,
-			},
-			pk_fields: ["p_name", "p_type"],
+			command,
+			obj_update,
+			pk_fields: [...SYS_AUTOS_PK_FIELDS],
+			where,
 		});
 
 		return {
@@ -136,27 +171,22 @@ export async function saveCode(
 /**
  * Delete code
  * Uses API: POST /api/update-table-data
- * Table: sys_autos, Condition: e_where with p_name and p_type
+ * Identity: p_name + p_type only (no id required)
  */
 export async function deleteCode(
 	appId: string,
-	codeId: string,
 	codeName: string,
-	codeType: number,
-	codeContent: string
+	codeType: number
 ) {
 	try {
-		const response = await updateTableData<CodeItem>({
+		const where = { p_name: codeName, p_type: codeType };
+		const response = await updateTableData<Pick<CodeItem, "p_name" | "p_type">>({
 			app_id: "csm", // sys_autos is stored under app_id=csm
 			obj_name: "sys_autos",
 			command: "delete",
-			obj_update: {
-				id: codeId,
-				p_name: codeName,
-				p_type: codeType,
-				p_code: codeContent,
-			},
-			pk_fields: ["p_name", "p_type"],
+			obj_update: where,
+			pk_fields: [...SYS_AUTOS_PK_FIELDS],
+			where,
 		});
 
 		return {

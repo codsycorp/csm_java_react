@@ -917,9 +917,6 @@ function buildUpdateTablePayload<T extends Record<string, any>>(params: {
 	const pkSource: Record<string, any> = params.where
 		? { ...updateSource, ...whereSource }
 		: updateSource;
-	const stableId = params.command === "create"
-		? payload.obj_update?.id
-		: (whereSource.id !== undefined ? whereSource.id : updateSource.id);
 
 	if (params.pk_fields && params.pk_fields.length > 0) {
 		const conditions: any[] = [];
@@ -932,7 +929,12 @@ function buildUpdateTablePayload<T extends Record<string, any>>(params: {
 				});
 			}
 		}
-		if (stableId !== undefined && !conditions.some(c => c.field === "id")) {
+		const hasAllPkFields = params.pk_fields.every((pkField) =>
+			conditions.some((condition) => condition.field === pkField)
+		);
+		// Java/Vue parity: when custom PK is complete, locate by PK only — not stale id.
+		const stableId = whereSource.id !== undefined ? whereSource.id : undefined;
+		if (!hasAllPkFields && stableId !== undefined && !conditions.some(c => c.field === "id")) {
 			conditions.push({
 				field: "id",
 				type: "eq",
