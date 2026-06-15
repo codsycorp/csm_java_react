@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"log"
 	"strings"
 
@@ -19,6 +20,8 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 	if len(parentRecord) == 0 {
 		return nil
 	}
+
+	record = s.ensureSubUserCanonicalFields(record, parentRecord)
 
 	user := s.mapRecordToUser(parentRecord, false)
 	t := true
@@ -56,8 +59,16 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 	if pass, ok := record["pass"].(string); ok && pass != "" {
 		user.Password = &pass
 	}
-	if actived, ok := record["actived"].(bool); ok {
-		user.Actived = &actived
+	actived := recordActivedOrDefault(record, true)
+	user.Actived = &actived
+
+	if addr := userAddressFromRecord(record["user_address"]); len(addr) > 0 {
+		user.UserAddress = addr
+	}
+
+	user.GroupRights = model.MapListFromRecord(record, "group_rights", "groupRights")
+	if user.GroupRights == nil {
+		user.GroupRights = []map[string]any{}
 	}
 
 	if refresh, ok := firstNonEmptyRecord(record, "refresh", "refresh_token"); ok {
@@ -200,7 +211,7 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 			}
 		}
 		if (len(directMenus) == 0 || len(directPermissions) == 0) && !hasAuthoritativeRole {
-			if group := findGroupRight(parentRecord, groupID); group != nil {
+			if group := findGroupRight(record, parentRecord, groupID); group != nil {
 				if perms := model.StringListFromRecord(group, "permissions"); len(perms) > 0 {
 					directPermissions = perms
 				}
@@ -279,6 +290,131 @@ func (s *UserService) mapSubUser(record map[string]any) *model.User {
 	return &user
 }
 
+// ensureSubUserCanonicalFields mirrors Java UserService.ensureSubUserCanonicalFields.
+func (s *UserService) ensureSubUserCanonicalFields(record, parentRecord map[string]any) map[string]any {
+	if len(record) == 0 {
+		return record
+	}
+	changed := false
+	loginID := strings.TrimSpace(derefStr(record["login_identifier"]))
+	appToken := strings.TrimSpace(derefStr(record["app_token"]))
+
+	setBlankString := func(key, value string) {
+		if !recordHasNonBlankString(record, key) {
+			record[key] = value
+			changed = true
+		}
+	}
+	setMissing := func(key string, value any) {
+		if _, ok := record[key]; !ok {
+			record[key] = value
+			changed = true
+		}
+	}
+
+	setBlankString("username", loginID)
+	setBlankString("email", loginID)
+	setMissing("phoneNumber", "")
+	setBlankString("full_name", loginID)
+	setMissing("user_address", "")
+	setMissing("avatar", "")
+	setMissing("group_rights", []any{})
+
+	refreshToken := strings.TrimSpace(derefStr(record["refresh_token"]))
+	refresh := strings.TrimSpace(derefStr(record["refresh"]))
+	if refreshToken == "" {
+		if refresh != "" {
+			record["refresh_token"] = refresh
+			changed = true
+		} else if appToken != "" {
+			record["refresh_token"] = appToken
+			changed = true
+		}
+	}
+	if refresh == "" {
+		normalizedRefresh := strings.TrimSpace(derefStr(record["refresh_token"]))
+		if normalizedRefresh != "" {
+			record["refresh"] = normalizedRefresh
+			changed = true
+		} else if appToken != "" {
+			record["refresh"] = appToken
+			changed = true
+		}
+	}
+	setMissing("refresh_token_ip", "")
+	setMissing("refresh_token_ua", "")
+	setMissing("refresh_token_expiry", int64(0))
+
+	if _, ok := record["login_version"]; !ok {
+		if legacy, ok := modelIntFromRecord(record, "loginVersion"); ok {
+			record["login_version"] = legacy
+		} else {
+			record["login_version"] = 0
+		}
+		changed = true
+	}
+	if _, ok := record["loginVersion"]; !ok {
+		if lv, ok := modelIntFromRecord(record, "login_version"); ok {
+			record["loginVersion"] = lv
+		} else {
+			record["loginVersion"] = 0
+		}
+		changed = true
+	}
+
+	if _, ok := record["source_app_token"]; !ok {
+		if parentToken, ok := firstNonEmptyRecord(parentRecord, "app_token"); ok {
+			record["source_app_token"] = parentToken
+			changed = true
+		}
+	}
+	if !recordHasNonBlankString(record, "app_id") {
+		if parentAppID := strings.TrimSpace(derefStr(parentRecord["app_id"])); parentAppID != "" {
+			record["app_id"] = parentAppID
+			changed = true
+		}
+	}
+
+	if changed {
+		if _, err := s.rm.CreateRecord(CSMAppID, SubAccountsTable, record, []string{"id", "login_identifier"}); err != nil {
+			log.Printf("ensureSubUserCanonicalFields: persist failed for %s: %v", loginID, err)
+		}
+	}
+	return record
+}
+
+func recordHasNonBlankString(record map[string]any, key string) bool {
+	if record == nil {
+		return false
+	}
+	v, ok := record[key].(string)
+	return ok && strings.TrimSpace(v) != ""
+}
+
+func userAddressFromRecord(value any) json.RawMessage {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case json.RawMessage:
+		if len(v) == 0 {
+			return nil
+		}
+		return v
+	case string:
+		text := strings.TrimSpace(v)
+		if text == "" {
+			return nil
+		}
+		return json.RawMessage(text)
+	default:
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return nil
+		}
+		return json.RawMessage(raw)
+	}
+}
+
 func (s *UserService) ensureSubUserAppToken(record, parentRecord map[string]any) string {
 	if token, ok := firstNonEmptyRecord(record, "app_token"); ok {
 		return token
@@ -349,8 +485,15 @@ func (s *UserService) findRoleByCode(appID, roleCode string) map[string]any {
 	return nil
 }
 
-func findGroupRight(parentRecord map[string]any, groupID string) map[string]any {
-	raw, ok := parentRecord["group_rights"]
+func findGroupRight(subRecord, parentRecord map[string]any, groupID string) map[string]any {
+	if group := findGroupRightInRecord(subRecord, groupID); group != nil {
+		return group
+	}
+	return findGroupRightInRecord(parentRecord, groupID)
+}
+
+func findGroupRightInRecord(record map[string]any, groupID string) map[string]any {
+	raw, ok := record["group_rights"]
 	if !ok || groupID == "" {
 		return nil
 	}
@@ -361,6 +504,13 @@ func findGroupRight(parentRecord map[string]any, groupID string) map[string]any 
 			if !ok {
 				continue
 			}
+			gid, _ := group["group_id"].(string)
+			if gid == groupID {
+				return group
+			}
+		}
+	case []map[string]any:
+		for _, group := range groups {
 			gid, _ := group["group_id"].(string)
 			if gid == groupID {
 				return group

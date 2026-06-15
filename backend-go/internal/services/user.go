@@ -378,17 +378,26 @@ func (s *UserService) passwordMatches(record map[string]any, user model.User, lo
 	if stored == "" && user.Password != nil {
 		stored = *user.Password
 	}
-	actived, ok := record["actived"].(bool)
-	if !ok && user.Actived != nil {
-		actived = *user.Actived
-	} else if !ok {
-		actived = true
-	}
+	actived := recordActivedOrDefault(record, false)
 	return actived && stored == encoded
+}
+
+func recordActivedOrDefault(record map[string]any, defaultVal bool) bool {
+	if v, ok := record["actived"].(bool); ok {
+		return v
+	}
+	return defaultVal
 }
 
 func (s *UserService) mapRecordToUser(record map[string]any, isMainAccount bool) model.User {
 	user := model.UserFromRecord(record)
+	if user.Actived == nil {
+		v := recordActivedOrDefault(record, false)
+		user.Actived = &v
+	}
+	if len(user.GroupRights) == 0 {
+		user.GroupRights = model.MapListFromRecord(record, "group_rights", "groupRights")
+	}
 	if user.AppID == nil || *user.AppID == "" {
 		if user.AppToken != nil {
 			if appID := extractAppIDFromToken(s.rm, *user.AppToken); appID != "" {

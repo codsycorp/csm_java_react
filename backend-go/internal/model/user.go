@@ -33,6 +33,7 @@ type User struct {
 	Dev                   *bool            `json:"dev,omitempty"`
 	IsSubUser             *bool            `json:"isSubUser,omitempty"`
 	LoginVersion          *int             `json:"loginVersion,omitempty"`
+	GroupRights           []map[string]any `json:"group_rights,omitempty"`
 }
 
 func UserFromRecord(record map[string]any) User {
@@ -71,10 +72,10 @@ func UserFromRecord(record map[string]any) User {
 	if user.Actived == nil {
 		if v, ok := record["actived"].(bool); ok {
 			user.Actived = &v
-		} else {
-			t := true
-			user.Actived = &t
 		}
+	}
+	if len(user.GroupRights) == 0 {
+		user.GroupRights = MapListFromRecord(record, "group_rights", "groupRights")
 	}
 	if user.LoginVersion == nil {
 		if v, ok := intFromAny(record["login_version"]); ok {
@@ -180,6 +181,45 @@ func StrPtr(s string) *string {
 func BoolPtr(b bool) *bool { return &b }
 
 func IntPtr(i int) *int { return &i }
+
+// MapListFromRecord parses group_rights-style []map values from a DB record.
+func MapListFromRecord(record map[string]any, keys ...string) []map[string]any {
+	if record == nil {
+		return nil
+	}
+	for _, key := range keys {
+		v, ok := record[key]
+		if !ok || v == nil {
+			continue
+		}
+		switch items := v.(type) {
+		case []map[string]any:
+			if len(items) > 0 {
+				return items
+			}
+		case []any:
+			out := make([]map[string]any, 0, len(items))
+			for _, item := range items {
+				if m, ok := item.(map[string]any); ok && len(m) > 0 {
+					out = append(out, m)
+				}
+			}
+			if len(out) > 0 {
+				return out
+			}
+		case string:
+			text := strings.TrimSpace(items)
+			if text == "" || text[0] != '[' {
+				continue
+			}
+			var parsed []map[string]any
+			if err := json.Unmarshal([]byte(text), &parsed); err == nil && len(parsed) > 0 {
+				return parsed
+			}
+		}
+	}
+	return nil
+}
 
 func Int64Ptr(i int64) *int64 { return &i }
 
