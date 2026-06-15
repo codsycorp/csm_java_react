@@ -28,7 +28,8 @@ case "$PROFILE" in
     8gb|7b|local-8gb) load_env_file "$ROOT/config.local-8gb.env" || true ;;
 esac
 
-export APP_DATA_DIR="${APP_DATA_DIR:-$ROOT/backend/csm_datas}"
+export CSM_HOME="${CSM_HOME:-$ROOT/backend}"
+export APP_DATA_DIR="${APP_DATA_DIR:-$CSM_HOME/csm_datas}"
 export CSM_NATIVE_DATA_DIR="${CSM_NATIVE_DATA_DIR:-$APP_DATA_DIR/native}"
 export CSM_PEBBLE_ROOT="${CSM_PEBBLE_ROOT:-$CSM_NATIVE_DATA_DIR/pebble}"
 export CSM_SEARCH_DB_PATH="${CSM_SEARCH_DB_PATH:-$CSM_NATIVE_DATA_DIR/search/vectors.db}"
@@ -44,6 +45,7 @@ if ! command -v go >/dev/null 2>&1; then
     exit 1
 fi
 
+config_log "CSM_HOME ${CSM_HOME}"
 config_log "HTTP port ${SERVER_PORT}"
 config_log "Pebble root ${CSM_PEBBLE_ROOT}/{app_id}/{table_name}/ (pure Go — no RocksDB/CGO)"
 config_log "Data dir ${APP_DATA_DIR}"

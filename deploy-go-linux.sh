@@ -47,13 +47,35 @@ ssh "$SERVER" bash -s "$REMOTE_BUILD" <<'SYNC'
 set -e
 P="$1"
 if [ -d "$P/.git" ]; then
-	cd "$P" && git fetch origin && git reset --hard origin/main
+	cd "$P"
+	git fetch origin main
+	git reset --hard origin/main
 else
 	mkdir -p "$(dirname "$P")"
 	git clone https://github.com/codsycorp/csm_java_react.git "$P"
+	cd "$P"
 fi
 echo "Code: $(git -C "$P" log --oneline -1)"
+echo "Tip: cần commit mới nhất trên origin/main (vd. fix extras.go import data)"
 SYNC
+
+echo ""
+echo "▶ [2b/4] Compile check (phát hiện lỗi Go trước khi link llama)..."
+ssh "$SERVER" bash -s "$REMOTE_BUILD" <<'COMPILE'
+set -e
+BUILD="$1"
+cd "$BUILD/backend-go"
+export PATH="/usr/local/go/bin:$PATH"
+if ! command -v go >/dev/null 2>&1; then
+  echo "    skip compile check (go chưa cài — bước build sẽ cài)"
+  exit 0
+fi
+go mod download
+echo "    go build -tags llamacpp ./cmd/server ..."
+CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -tags llamacpp -o /tmp/csm_go_compile_check ./cmd/server
+rm -f /tmp/csm_go_compile_check
+echo "    compile OK"
+COMPILE
 
 echo ""
 echo "▶ [3/4] Build on server (CGO + llamacpp, Ubuntu 22.04 glibc)..."
@@ -130,6 +152,13 @@ SERVICE
 
 echo ""
 echo "✅ Deploy xong (native llama in-process — không cần llama-server sidecar)."
+echo ""
+echo "Data paths (server):"
+echo "  CSM_HOME=$SERVER_PATH"
+echo "  APP_DATA_DIR=$SERVER_PATH/csm_datas"
+echo "  CSM_PEBBLE_ROOT=$SERVER_PATH/csm_datas/native/pebble"
+echo ""
+echo "Dev local (Mac): backend-go/run-go-server.sh → CSM_HOME=<repo>/backend, APP_DATA_DIR=<repo>/backend/csm_datas"
 echo ""
 echo "Health: curl -s http://$SERVER:9999/api/monitoring/health"
 echo "AI ops: curl -s http://$SERVER:9999/api/ai-local/health"
