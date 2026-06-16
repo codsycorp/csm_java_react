@@ -23248,13 +23248,10 @@ function logDataOptionUserSource(source, records, total) {
 
 function parseUserAddressArray(raw) {
   if (Array.isArray(raw)) return raw;
-  if (raw && typeof raw === 'object') return [raw];
   if (typeof raw === 'string' && raw.trim() !== '') {
     try {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-      if (parsed && typeof parsed === 'object') return [parsed];
-      return [];
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -23359,163 +23356,6 @@ function getRawDataOptionUserSnapshot() {
   return getRawDataOptionUserFromCurrentUserAddress();
 }
 
-/**
- * Parity seo.js: đợi DynamicCodeMenu expose window.csmUserData trước khi đọc user_address.
- */
-window.waitForCsmUserDataReady = window.waitForCsmUserDataReady || function (timeoutMs = 4000) {
-  return new Promise(function (resolve) {
-    const isReady = function () {
-      return !!(window.csmUserData && typeof window.csmUserData.get === 'function');
-    };
-
-    if (window.csmUserDataReady || isReady()) {
-      resolve(true);
-      return;
-    }
-
-    let finished = false;
-    let pollTimer = null;
-    let timeoutTimer = null;
-
-    const cleanup = function () {
-      if (pollTimer) clearInterval(pollTimer);
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-      window.removeEventListener('csm:user-data-ready', onReady);
-    };
-
-    const done = function (ready) {
-      if (finished) return;
-      finished = true;
-      cleanup();
-      resolve(ready);
-    };
-
-    const onReady = function () {
-      done(true);
-    };
-
-    window.addEventListener('csm:user-data-ready', onReady);
-    pollTimer = setInterval(function () {
-      if (isReady()) {
-        done(true);
-      }
-    }, 50);
-    timeoutTimer = setTimeout(function () {
-      done(isReady());
-    }, timeoutMs);
-  });
-};
-
-/**
- * Bootstrap user_address giống seo.js initializeSeoDataUserOption().
- */
-window.initializeLmktDataUserOption = window.initializeLmktDataUserOption || async function () {
-  const state = window.__lmktDataUserState || {};
-  if (state.initializing) {
-    return state.promise || Promise.resolve(window.dataUserOption || []);
-  }
-
-  state.initializing = true;
-  state.initialized = false;
-  state.promise = (async function () {
-    window.dataUserOption = Array.isArray(window.dataUserOption) ? window.dataUserOption : [];
-    console.log('[LMKT INIT] Đang khởi tạo dataUserOption từ csmUserData...');
-
-    const ready = await window.waitForCsmUserDataReady(4000);
-    if (!ready) {
-      console.warn('[LMKT INIT] csmUserData chưa sẵn sàng sau timeout, dùng runtime state hiện có');
-    }
-
-    const applyRuntimeFallback = function () {
-      const fromGet = getRawDataOptionUserFromCsmUserData();
-      if (Array.isArray(fromGet) && fromGet.length > 0) {
-        window.dataUserOption = fromGet;
-        return true;
-      }
-      const fromUser = getRawDataOptionUserFromCurrentUserAddress();
-      if (Array.isArray(fromUser) && fromUser.length > 0) {
-        window.dataUserOption = fromUser;
-        return true;
-      }
-      return false;
-    };
-
-    if (window.csmUserData && typeof window.csmUserData.fetchFromDatabase === 'function') {
-      await new Promise(function (resolve) {
-        window.csmUserData.fetchFromDatabase(function (success, data, error) {
-          if (success && Array.isArray(data)) {
-            window.dataUserOption = data;
-            console.log('[LMKT INIT] fetchFromDatabase OK, count:', data.length);
-          } else if (!applyRuntimeFallback()) {
-            console.warn('[LMKT INIT] fetchFromDatabase không có dữ liệu:', error || 'empty');
-          }
-          resolve(window.dataUserOption || []);
-        });
-      });
-    } else {
-      applyRuntimeFallback();
-    }
-
-    state.initialized = true;
-    state.initializing = false;
-    window.__dataOptionUserServerSyncDone = true;
-    console.log('[LMKT INIT] Hoàn tất. dataUserOption.length =', (window.dataUserOption || []).length);
-    window.dispatchEvent(new CustomEvent('csm:dataOptionUserSynced', {
-      detail: {
-        source: 'initializeLmktDataUserOption',
-        total: (window.dataUserOption || []).length,
-        usable: normalizeDataOptionUserRecords(window.dataUserOption || []).length,
-      },
-    }));
-    return window.dataUserOption || [];
-  })();
-
-  window.__lmktDataUserState = state;
-  return state.promise;
-};
-
-/**
- * API tương thích seo.js — trả raw user_address (không lọc Zalo runtime).
- */
-window.getDataUserOption = window.getDataUserOption || function (forceRefresh = false) {
-  if (forceRefresh && window.csmUserData && typeof window.csmUserData.fetchFromDatabase === 'function') {
-    window.csmUserData.fetchFromDatabase(function (success, data) {
-      if (success && Array.isArray(data)) {
-        window.dataUserOption = data;
-      }
-    });
-    return window.dataUserOption || [];
-  }
-
-  if (window.csmUserData && typeof window.csmUserData.get === 'function') {
-    try {
-      let arr = window.csmUserData.get();
-      if (typeof arr === 'string') {
-        arr = JSON.parse(arr);
-      }
-      if (Array.isArray(arr) && arr.length > 0) {
-        window.dataUserOption = arr;
-        return arr;
-      }
-    } catch (e) {
-      console.warn('[getDataUserOption] csmUserData.get failed:', e?.message || e);
-    }
-  }
-
-  if (Array.isArray(window.dataUserOption) && window.dataUserOption.length > 0) {
-    return window.dataUserOption;
-  }
-
-  const fromUser = getRawDataOptionUserFromCurrentUserAddress();
-  if (fromUser.length > 0) {
-    window.dataUserOption = fromUser;
-    return fromUser;
-  }
-
-  window.dataUserOption = [];
-  return [];
-};
-
 // ===== STORAGE HELPERS - LƯU TRỮ DATAOPTIONUSER GIỐNG SEO.JS (VỚI CSMuserdata) =====
 /**
  * Load dataOptionUser từ csmUserData (giống seo.js)
@@ -23529,29 +23369,6 @@ function loadDataOptionUser() {
   console.log('📂 [LoadDataOptionUser] BẮT ĐẦU LOAD CONFIGS');
   console.log('   Checking window.csmUserData:', typeof window.csmUserData);
   console.log('   Checking window.csmUserData.get:', typeof window.csmUserData?.get);
-
-  // Fast path: đã bootstrap qua initializeLmktDataUserOption (parity seo.js)
-  if (Array.isArray(window.dataUserOption) && window.dataUserOption.length > 0) {
-    const cachedRecords = normalizeDataOptionUserRecords(window.dataUserOption);
-    if (cachedRecords.length > 0) {
-      logDataOptionUserSource('window.dataUserOption(init-cache)', cachedRecords, window.dataUserOption.length);
-      return cachedRecords;
-    }
-  }
-  if (typeof window.getDataUserOption === 'function') {
-    try {
-      const raw = window.getDataUserOption(false);
-      if (Array.isArray(raw) && raw.length > 0) {
-        const records = normalizeDataOptionUserRecords(raw);
-        if (records.length > 0) {
-          logDataOptionUserSource('getDataUserOption', records, raw.length);
-          return records;
-        }
-      }
-    } catch (e) {
-      console.warn('⚠️ [LoadDataOptionUser] getDataUserOption failed:', e?.message || e);
-    }
-  }
   
   // Ưu tiên lấy từ csmUserData nếu có (từ AutoSetup.tsx)
   if (window.csmUserData && typeof window.csmUserData.get === 'function') {
@@ -23904,19 +23721,6 @@ console.log('   window.ZaloDebug.testScanMessage()');
  */
 function initAllUI() {
   console.log('🚀 Initializing all UI modules (eager first paint)...');
-
-  if (!window.__lmktCsmUserDataReadyListener) {
-    window.__lmktCsmUserDataReadyListener = true;
-    window.addEventListener('csm:user-data-ready', function () {
-      const state = window.__lmktDataUserState || {};
-      if (state.initialized || state.initializing) {
-        return;
-      }
-      if (typeof window.initializeLmktDataUserOption === 'function') {
-        void window.initializeLmktDataUserOption();
-      }
-    });
-  }
   
   let uiInitAttempts = 0;
   const maxAttempts = 10;
@@ -23932,14 +23736,6 @@ function initAllUI() {
   };
 
   const mountAllUIModulesNow = async () => {
-    if (typeof window.initializeLmktDataUserOption === 'function') {
-      try {
-        await window.initializeLmktDataUserOption();
-      } catch (initErr) {
-        console.warn('[LMKT INIT] initializeLmktDataUserOption failed:', initErr?.message || initErr);
-      }
-    }
-
     await ensureGlobalSettingsPanel();
     await ensureUI();
 

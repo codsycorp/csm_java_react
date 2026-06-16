@@ -557,7 +557,7 @@
       lgSlrAutoNoHitWeeks: "Số tuần không xổ LT (Nam/Bắc theo loại tìm)",
       lgSlrAutoSttWindow: "Số cặp STT quét liên tiếp (vd: 5 = STT 1–5, 2–6, …)",
       lgSlrAutoRunFilter: "Chạy lọc tự động",
-      lgSlrAutoThMinNgayCx3Nb: "Ngày CX (DD3 Nam-Bắc): lấy khi >",
+      lgSlrAutoThMinNgayCx3Nb: "Ngày CX (DD3 Nam-Bắc): lấy khi >=",
       lgSlrAutoThMaxKtnLast: "Tổng cuối KTN: tuần cuối ≤",
       lgNbColSo: "Bộ số",
       lgNbColDauCp: "Đầu chính phụ (D+P)",
@@ -816,7 +816,7 @@
       lgSlrAutoNoHitWeeks: "Weeks without long-gap hits (North/South by query type)",
       lgSlrAutoSttWindow: "Consecutive STT pairs per scan (default 5)",
       lgSlrAutoRunFilter: "Run auto filter",
-      lgSlrAutoThMinNgayCx3Nb: "Days no-show DD3 N/S: keep if >",
+      lgSlrAutoThMinNgayCx3Nb: "Days no-show DD3 N/S: keep if >=",
       lgSlrAutoThMaxKtnLast: "KTN last week in series ≤",
       lgNbColSo: "Number Set",
       lgNbColDauCp: "Main+Sub Head (D+P)",
@@ -1075,7 +1075,7 @@
       lgSlrAutoNoHitWeeks: "长未出周数（按查询类型的南/北）",
       lgSlrAutoSttWindow: "连续 STT 对子扫描数（默认 5）",
       lgSlrAutoRunFilter: "运行自动筛选",
-      lgSlrAutoThMinNgayCx3Nb: "DD3 南北未出现天数：保留 >",
+      lgSlrAutoThMinNgayCx3Nb: "DD3 南北未出现天数：保留 >=",
       lgSlrAutoThMaxKtnLast: "KTN 序列最后一周 ≤",
       lgNbColSo: "号码组",
       lgNbColDauCp: "主副头位 (D+P)",
@@ -2758,8 +2758,8 @@
 
     var _slr_autoNamWeeks = useState(5), legacySlrAutoNamWeeks = _slr_autoNamWeeks[0], setLegacySlrAutoNamWeeks = _slr_autoNamWeeks[1];
     var _slr_autoSttWindow = useState(5), legacySlrAutoSttWindowSize = _slr_autoSttWindow[0], setLegacySlrAutoSttWindowSize = _slr_autoSttWindow[1];
-    var _slr_autoThMinNgayCx3Nb = useState(0), legacySlrAutoThMinNgayCx3Nb = _slr_autoThMinNgayCx3Nb[0], setLegacySlrAutoThMinNgayCx3Nb = _slr_autoThMinNgayCx3Nb[1];
-    var _slr_autoThMaxKtnLast = useState(5), legacySlrAutoThMaxKtnLast = _slr_autoThMaxKtnLast[0], setLegacySlrAutoThMaxKtnLast = _slr_autoThMaxKtnLast[1];
+    var _slr_autoThMinNgayCx3Nb = useState(null), legacySlrAutoThMinNgayCx3Nb = _slr_autoThMinNgayCx3Nb[0], setLegacySlrAutoThMinNgayCx3Nb = _slr_autoThMinNgayCx3Nb[1];
+    var _slr_autoThMaxKtnLast = useState(null), legacySlrAutoThMaxKtnLast = _slr_autoThMaxKtnLast[0], setLegacySlrAutoThMaxKtnLast = _slr_autoThMaxKtnLast[1];
 
     // --- SLR Auto-filtered rows (kept for display binding) ---
     var legacySlrAutoFilteredRows = useMemo(function () {
@@ -3873,8 +3873,9 @@
           var htmlText = htmlToPlainText(node.props.dangerouslySetInnerHTML.__html);
           if (htmlText) return htmlText;
         }
-        var childrenText = extractExportTextFromNode(node.props.children);
-        if (childrenText) return childrenText;
+        if ("children" in node.props) {
+          return extractExportTextFromNode(node.props.children);
+        }
       }
 
       if (Array.isArray(node.children)) {
@@ -3884,6 +3885,11 @@
 
       if (node.label != null || node.text != null || node.value != null) {
         return String(node.label != null ? node.label : (node.text != null ? node.text : node.value));
+      }
+
+      // h()/createElement output — never JSON.stringify React internals into Excel cells.
+      if (node.type != null) {
+        return "";
       }
 
       try {
@@ -3926,8 +3932,7 @@
       if (col && typeof col.render === "function") {
         try {
           var rendered = col.render(raw, row, rowIndex);
-          var renderedText = extractExportTextFromNode(rendered);
-          if (renderedText) return renderedText;
+          return extractExportTextFromNode(rendered);
         } catch (_renderErr) {
           // Fallback to raw cell value when render depends on runtime-only contexts.
         }
@@ -9881,13 +9886,16 @@
     function parseLegacySerKqtLastWeekValue(serKqt) {
       var parts = String(serKqt || "").trim().split(/\s+/).filter(Boolean);
       if (!parts.length) return null;
-      var n = parseInt(parts[parts.length - 1], 10);
+      // serKQT newest-first (unshift) — token đầu = tuần gần nhất (= lanTuan1C / Tuần GN)
+      var n = parseInt(parts[0], 10);
       return isNaN(n) ? null : n;
     }
 
     function parseLegacySlrAutoKtnLastWeekValue(metric) {
       var fromSer = parseLegacySerKqtLastWeekValue(metric && metric.serKQT);
       if (fromSer !== null) return fromSer;
+      var lan1 = Number((metric && metric.lanTuan1C));
+      if (!isNaN(lan1)) return lan1;
       return 0;
     }
 
@@ -9896,7 +9904,7 @@
       var filterCfg = cfg || getLegacySlrAutoTongHopFilterConfig();
       if (!hasLegacySlrAutoTongHopFilter(filterCfg)) return true;
       if (filterCfg.minNgayCx3Nb !== null) {
-        if (!(Number(metric.ngayCXHT3NB || 0) > filterCfg.minNgayCx3Nb)) return false;
+        if (!(Number(metric.ngayCXHT3NB || 0) >= filterCfg.minNgayCx3Nb)) return false;
       }
       if (filterCfg.maxKtnLast !== null) {
         var ktnWeek = parseLegacySlrAutoKtnLastWeekValue(metric);
@@ -9905,15 +9913,104 @@
       return true;
     }
 
+    var SLR_AUTO_TH_CACH_SEEN_KEY = "kqxs_slr_auto_th_cach_seen_v1";
+    var SLR_AUTO_TH_CACH_STALE_DAYS = 30;
+
+    function readLegacySlrAutoThCachSeenMap() {
+      try {
+        var raw = window.localStorage.getItem(SLR_AUTO_TH_CACH_SEEN_KEY);
+        return raw ? JSON.parse(raw) : {};
+      } catch (_e) {
+        return {};
+      }
+    }
+
+    function writeLegacySlrAutoThCachSeenMap(map) {
+      try {
+        window.localStorage.setItem(SLR_AUTO_TH_CACH_SEEN_KEY, JSON.stringify(map || {}));
+      } catch (_e) {}
+    }
+
+    function isLegacySlrAutoThCachActiveInLastMonth(cachName, refDateText) {
+      var name = String(cachName || "").trim();
+      if (!name) return true;
+      var map = readLegacySlrAutoThCachSeenMap();
+      var lastSeen = String(map[name] || "").trim();
+      if (!lastSeen) return true;
+      var refDate = String(refDateText || den_ngay || "").trim();
+      if (!refDate) return true;
+      var days = TruNgayRaSoNgay(refDate, lastSeen, "dd/mm/yyyy");
+      return !(days > SLR_AUTO_TH_CACH_STALE_DAYS);
+    }
+
+    function touchLegacySlrAutoThCachSeen(cachNames, refDateText) {
+      var seenDate = String(refDateText || den_ngay || "").trim();
+      if (!seenDate) return;
+      var map = readLegacySlrAutoThCachSeenMap();
+      (Array.isArray(cachNames) ? cachNames : []).forEach(function (name) {
+        var key = String(name || "").trim();
+        if (key) map[key] = seenDate;
+      });
+      writeLegacySlrAutoThCachSeenMap(map);
+    }
+
+    function isLegacySlrAutoTongHopCachStillActive(cachName) {
+      var name = String(cachName || "").trim();
+      if (!name) return true;
+      var pool = getLegacySlrAutoTongHopGroupPool();
+      if (!pool.length) return true;
+      var needle = name.toLowerCase();
+      return pool.some(function (g) {
+        var labels = [
+          g && g.cachName,
+          g && g.noiDungDisplay,
+          g && g.boSo,
+          g && g.text,
+          g && g.searchText
+        ].map(function (x) { return String(x || "").trim().toLowerCase(); }).filter(Boolean);
+        return labels.indexOf(needle) >= 0;
+      });
+    }
+
+    function buildLegacySlrAutoTongHopKetQuaText(rec) {
+      if (!rec) return "";
+      var lines = [];
+      var items = legacyThResultItems || [];
+      items.forEach(function (item) {
+        var ser = String((rec && rec[item.field]) || "").trim();
+        if (item.key !== "KQT" && !legacyThResultMask[item.key]) return;
+        if (!ser) return;
+        lines.push(item.code + ": " + ser);
+      });
+      // Một số loại tìm (vd. DD3 Nam-Bắc) không có serKQT nhưng có KQN/KTD/...
+      if (!lines.length) {
+        for (var fi = 0; fi < items.length; fi += 1) {
+          var fb = items[fi];
+          var serFb = String((rec && rec[fb.field]) || "").trim();
+          if (serFb) lines.push(fb.code + ": " + serFb);
+        }
+      }
+      return lines.join("\n");
+    }
+
+    function applyLegacySlrAutoTongHopSerFields(target, metric) {
+      var out = target || {};
+      (legacyThResultItems || []).forEach(function (item) {
+        out[item.field] = String((metric && metric[item.field]) || "");
+      });
+      return out;
+    }
+
     function buildLegacySlrAutoTongHopRowFromMetric(row, metric, querySpec, tongHopInput, rowDateRange, q) {
       var ktnLastWeek = parseLegacySlrAutoKtnLastWeekValue(metric);
-      return {
+      var built = applyLegacySlrAutoTongHopSerFields({
         key: "slr_auto_th_" + String(row.key || row._autoPickOrder || 0) + "_" + q,
         autoPickOrder: Number(row._autoPickOrder || 0),
         autoQueryOrder: Number(q || 0),
         autoQueryType: isLegacySlrDd3NamBacQueryValue(querySpec.value, legacyHeThong)
           ? (q === 0 ? "dd3nb" : "dd3nb_extra")
           : "main",
+        sourceQueryValue: String(querySpec.value || row.queryValue || ""),
         queryLabel: String(querySpec.text || querySpec.value || row.queryLabel || row.queryValue || ""),
         sttFrom: Number(row.sttFrom || 0),
         sttTo: Number(row.sttTo || 0),
@@ -9927,17 +10024,16 @@
         tongHopToDate: rowDateRange.toDate,
         boSo: String(metric.boSo || tongHopInput.searchText || ""),
         cach: String(metric.cach || ""),
-        ketQua: buildLegacyThResultText(metric),
         ngayCXHT: Number(metric.ngayCXHT || 0),
         kyCXHT: Number(metric.kyCXHT || 0),
         lauNgay: Number(metric.lauNgay || 0),
         lauKy: Number(metric.lauKy || 0),
         ngayCXHT3NB: Number(metric.ngayCXHT3NB || 0),
-        lanTuan1C: Number(metric.lanTuan1C || 0),
-        serKQT: String(metric.serKQT || ""),
         ktnLastWeek: ktnLastWeek === null ? "" : ktnLastWeek,
         sourceSlrKey: String(row.key || q)
-      };
+      }, metric);
+      built.ketQua = buildLegacySlrAutoTongHopKetQuaText(built);
+      return built;
     }
 
     async function fetchLegacySlrAutoDd3NamBacFilterMetric(tongHopInput, rowDateRange, rowKey) {
@@ -9979,8 +10075,10 @@
         var combinedRows = [];
         var skippedCount = 0;
         var filteredOutCount = 0;
+        var staleCachCount = 0;
         var thFilterCfg = getLegacySlrAutoTongHopFilterConfig();
         var extraDd3NbOption = getLegacyDd3NbQueryTypeOption(legacyHeThong);
+        var thRefDate = String(den_ngay || tu_ngay || "").trim();
 
         function resolveRowTongHopDateRange() {
           var globalTo = String(den_ngay || "").trim();
@@ -10089,8 +10187,30 @@
               pickBatch.length
             ));
           }
-          pickBatch.forEach(function (pickRow) { combinedRows.push(pickRow); });
+          pickBatch.forEach(function (pickRow) {
+            var cachName = String((pickRow && pickRow.cach) || "").trim();
+            var queryType = String((pickRow && pickRow.autoQueryType) || "");
+            var isDd3Row = queryType === "dd3nb" || queryType === "dd3nb_extra";
+            if (cachName && isDd3Row) {
+              if (!isLegacySlrAutoTongHopCachStillActive(cachName)) {
+                staleCachCount += 1;
+                return;
+              }
+              if (!isLegacySlrAutoThCachActiveInLastMonth(cachName, thRefDate)) {
+                staleCachCount += 1;
+                return;
+              }
+            }
+            combinedRows.push(pickRow);
+          });
         }
+
+        var exportedCachNames = [];
+        combinedRows.forEach(function (pickRow) {
+          var cachName = String((pickRow && pickRow.cach) || "").trim();
+          if (cachName) exportedCachNames.push(cachName);
+        });
+        touchLegacySlrAutoThCachSeen(exportedCachNames, thRefDate);
 
         combinedRows.sort(function (a, b) {
           // Keep auto export table grouped by selected SLR rows:
@@ -10117,13 +10237,15 @@
         var filterNote = "";
         if (hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
           filterNote = " | Lọc DD3 Nam-Bắc";
-          if (thFilterCfg.minNgayCx3Nb !== null) filterNote += " Ngày CX>" + thFilterCfg.minNgayCx3Nb;
+          if (thFilterCfg.minNgayCx3Nb !== null) filterNote += " Ngày CX>=" + thFilterCfg.minNgayCx3Nb;
           if (thFilterCfg.maxKtnLast !== null) filterNote += " KTN≤" + thFilterCfg.maxKtnLast;
           if (filteredOutCount) filterNote += " (bỏ " + filteredOutCount + ")";
         }
+        var staleNote = staleCachCount ? (" | Bỏ cách >" + SLR_AUTO_TH_CACH_STALE_DAYS + " ngày: " + staleCachCount) : "";
         setLegacySlrAutoTongHopSummary(
           "Xuất Kết Hợp tự động: " + combinedRows.length + " dòng từ " + pickedRows.length + " dòng SLR đã chọn"
           + filterNote
+          + staleNote
           + (skippedCount ? (" | Bỏ qua: " + skippedCount) : "")
         );
       } catch (e) {
@@ -10322,14 +10444,14 @@
       { title: "Số chính", dataIndex: "cNumbers", key: "cNumbers", width: 180 },
       { title: "Số đảo", dataIndex: "dNumbers", key: "dNumbers", width: 180 },
       { title: "Số đưa vào TH", dataIndex: "tongHopInput", key: "tongHopInput", width: 220 },
-      { title: "Cách", dataIndex: "cach", key: "cach", width: 180 },
       {
         title: "Kết quả",
         dataIndex: "ketQua",
         key: "ketQua",
         width: 320,
-        render: function (v) {
-          return h("div", { style: { fontSize: 11, whiteSpace: "pre-wrap", lineHeight: 1.4 } }, String(v || ""));
+        render: function (v, rec) {
+          var text = buildLegacySlrAutoTongHopKetQuaText(rec) || String(v || "");
+          return h("div", { style: { fontSize: 11, whiteSpace: "pre-wrap", lineHeight: 1.4 } }, text);
         }
       },
       { title: "Ngày CX", dataIndex: "ngayCXHT", key: "ngayCXHT", width: 70, sorter: function (a, b) { return Number((a && a.ngayCXHT) || 0) - Number((b && b.ngayCXHT) || 0); } },
@@ -10338,8 +10460,6 @@
       { title: "Lâu kỳ", dataIndex: "lauKy", key: "lauKy", width: 80, sorter: function (a, b) { return Number((a && a.lauKy) || 0) - Number((b && b.lauKy) || 0); } },
       { title: "Ngày CX 3 NB", dataIndex: "ngayCXHT3NB", key: "ngayCXHT3NB", width: 90, sorter: function (a, b) { return Number((a && a.ngayCXHT3NB) || 0) - Number((b && b.ngayCXHT3NB) || 0); } },
       { title: "KTN tuần cuối", dataIndex: "ktnLastWeek", key: "ktnLastWeek", width: 90, sorter: function (a, b) { return Number((a && a.ktnLastWeek) || 0) - Number((b && b.ktnLastWeek) || 0); } },
-      { title: "Tuần GN", dataIndex: "lanTuan1C", key: "lanTuan1C", width: 70, sorter: function (a, b) { return Number((a && a.lanTuan1C) || 0) - Number((b && b.lanTuan1C) || 0); } },
-      { title: "Chuỗi LT", dataIndex: "noHitDaysCurrent", key: "noHitDaysCurrent", width: 80, sorter: function (a, b) { return Number((a && a.noHitDaysCurrent) || 0) - Number((b && b.noHitDaysCurrent) || 0); } },
       { title: "Tuần 0 (Nam/Bắc)", dataIndex: "tongNamZeroWeekStreak", key: "tongNamZeroWeekStreak", width: 90, sorter: function (a, b) { return Number((a && a.tongNamZeroWeekStreak) || 0) - Number((b && b.tongNamZeroWeekStreak) || 0); } }
     ];
 
@@ -11953,15 +12073,18 @@
       + ".kqxs-react-auto .kqxs-slr-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }"
       + ".kqxs-react-auto .kqxs-loc-sau-zone { border: 1px solid var(--kqxs-border, #d9d9d9); border-radius: 6px; padding: 8px; margin-top: 2px; background: var(--kqxs-card-bg, #fff); box-shadow: none; }"
       + ".kqxs-react-auto .kqxs-loc-sau-zone .kqxs-slr-label { color: var(--kqxs-text, #1f1f1f); }"
-      + ".kqxs-react-auto .kqxs-slr-col .ant-input, .kqxs-react-auto .kqxs-slr-col .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-input-number, .kqxs-react-auto .kqxs-slr-col .ant-picker { border-radius: 6px !important; box-shadow: none !important; }"
-      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number, .kqxs-react-auto .kqxs-slr-col .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-picker { border-color: var(--kqxs-border, #d9d9d9) !important; }"
-      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined { width: 100% !important; display: block !important; overflow: hidden !important; padding-inline: 0 !important; border: 1px solid var(--kqxs-border, #d9d9d9) !important; border-radius: 6px !important; background: var(--kqxs-input-bg, #fff) !important; min-height: 32px !important; height: 32px !important; box-sizing: border-box !important; }"
-      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined .ant-input-number-input-wrap { height: 100% !important; padding-left: 11px !important; padding-right: 11px !important; box-sizing: border-box !important; }"
-      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined .ant-input-number-input { height: 100% !important; line-height: 30px !important; padding: 0 !important; }"
-      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined:hover { border-color: var(--kqxs-primary, #1677ff) !important; }"
-      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined.ant-input-number-focused { border-color: var(--kqxs-primary, #1677ff) !important; box-shadow: none !important; }"
-      + ".kqxs-react-auto .kqxs-slr-col .ant-input:hover, .kqxs-react-auto .kqxs-slr-col .ant-input-number:hover, .kqxs-react-auto .kqxs-slr-col .ant-select:not(.ant-select-disabled):hover .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-picker:hover { box-shadow: none !important; }"
-      + ".kqxs-react-auto .kqxs-slr-col .ant-input:focus, .kqxs-react-auto .kqxs-slr-col .ant-input-focused, .kqxs-react-auto .kqxs-slr-col .ant-input-number-focused, .kqxs-react-auto .kqxs-slr-col .ant-select-focused .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-picker-focused { box-shadow: none !important; border-color: var(--kqxs-primary, #1677ff) !important; }"
+      + ".kqxs-react-auto .kqxs-slr-auto-th-filter { border: 1px solid var(--kqxs-border, #d9d9d9); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; background: color-mix(in srgb, var(--kqxs-card-bg, #fff) 90%, var(--kqxs-page-bg, #f5f7fb) 10%); box-shadow: none; }"
+      + ".kqxs-react-auto .kqxs-slr-auto-th-filter .kqxs-slr-label { color: var(--kqxs-muted, #666); font-size: 11px; font-weight: 600; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input, .kqxs-react-auto .kqxs-slr-col .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-input-number, .kqxs-react-auto .kqxs-slr-col .ant-picker, .kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number { border-radius: 6px !important; box-shadow: none !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number, .kqxs-react-auto .kqxs-slr-col .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-picker, .kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number { border-color: var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined, .kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number.ant-input-number-outlined { width: 100% !important; display: block !important; overflow: hidden !important; padding-inline: 0 !important; border: 1px solid var(--kqxs-border, #d9d9d9) !important; border-radius: 6px !important; background: var(--kqxs-input-bg, #fff) !important; min-height: 32px !important; height: 32px !important; box-sizing: border-box !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined .ant-input-number-input-wrap, .kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number.ant-input-number-outlined .ant-input-number-input-wrap { height: 100% !important; padding-left: 11px !important; padding-right: 11px !important; box-sizing: border-box !important; background: var(--kqxs-input-bg, #fff) !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined .ant-input-number-input, .kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number.ant-input-number-outlined .ant-input-number-input { height: 100% !important; line-height: 30px !important; padding: 0 !important; color: var(--kqxs-input-text, #1f1f1f) !important; background: transparent !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined:hover, .kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number.ant-input-number-outlined:hover { border-color: var(--kqxs-primary, #1677ff) !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined.ant-input-number-focused, .kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number.ant-input-number-outlined.ant-input-number-focused { border-color: var(--kqxs-primary, #1677ff) !important; box-shadow: none !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input:hover, .kqxs-react-auto .kqxs-slr-col .ant-input-number:hover, .kqxs-react-auto .kqxs-slr-col .ant-select:not(.ant-select-disabled):hover .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-picker:hover, .kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number:hover { box-shadow: none !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input:focus, .kqxs-react-auto .kqxs-slr-col .ant-input-focused, .kqxs-react-auto .kqxs-slr-col .ant-input-number-focused, .kqxs-react-auto .kqxs-slr-col .ant-select-focused .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-picker-focused, .kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number-focused { box-shadow: none !important; border-color: var(--kqxs-primary, #1677ff) !important; }"
+      + ".kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number-input::placeholder { color: var(--kqxs-muted, #666) !important; opacity: 1 !important; }"
       + "@media (max-width: 768px) { .kqxs-react-auto .kqxs-sticky-filters { top: 0; border-radius: 0 !important; } }";
 
     return h("div", {
@@ -12871,32 +12994,34 @@
                 ]);
               })() : null,
               legacySlrAutoRows.length ? h("div", { style: { marginBottom: 10 } }, [
-                h("div", { style: { display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap", marginBottom: 8 } }, [
-                  h("div", null, [
-                    h("div", { style: { fontSize: 11, color: theme.muted, marginBottom: 4 } }, tt.lgSlrAutoThMinNgayCx3Nb || "Ngày CX (DD3 Nam-Bắc): lấy khi >"),
-                    h(InputNumber, themedNumberProps({
-                      min: 0,
-                      max: 999,
-                      value: legacySlrAutoThMinNgayCx3Nb,
-                      style: { width: 120 },
-                      placeholder: "0",
-                      onChange: function (v) {
-                        setLegacySlrAutoThMinNgayCx3Nb(v === null || v === undefined || v === "" ? 0 : Number(v));
-                      }
-                    }))
-                  ]),
-                  h("div", null, [
-                    h("div", { style: { fontSize: 11, color: theme.muted, marginBottom: 4 } }, tt.lgSlrAutoThMaxKtnLast || "Tổng cuối KTN: tuần cuối ≤"),
-                    h(InputNumber, themedNumberProps({
-                      min: 0,
-                      max: 99,
-                      value: legacySlrAutoThMaxKtnLast,
-                      style: { width: 120 },
-                      placeholder: "5",
-                      onChange: function (v) {
-                        setLegacySlrAutoThMaxKtnLast(v === null || v === undefined || v === "" ? 5 : Number(v));
-                      }
-                    }))
+                h("div", { className: "kqxs-slr-auto-th-filter" }, [
+                  h("div", { style: { display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap" } }, [
+                    h("div", { className: "kqxs-slr-field", style: { marginBottom: 0, minWidth: 140, flex: "0 0 140px" } }, [
+                      h("div", { className: "kqxs-slr-label" }, tt.lgSlrAutoThMinNgayCx3Nb || "Ngày CX (DD3 Nam-Bắc): lấy khi >="),
+                      h(InputNumber, themedNumberProps({
+                        min: 0,
+                        max: 999,
+                        value: legacySlrAutoThMinNgayCx3Nb,
+                        style: { width: "100%" },
+                        placeholder: "để trống",
+                        onChange: function (v) {
+                          setLegacySlrAutoThMinNgayCx3Nb(v === null || v === undefined || v === "" ? null : Number(v));
+                        }
+                      }))
+                    ]),
+                    h("div", { className: "kqxs-slr-field", style: { marginBottom: 0, minWidth: 140, flex: "0 0 140px" } }, [
+                      h("div", { className: "kqxs-slr-label" }, tt.lgSlrAutoThMaxKtnLast || "Tổng cuối KTN: tuần cuối ≤"),
+                      h(InputNumber, themedNumberProps({
+                        min: 0,
+                        max: 99,
+                        value: legacySlrAutoThMaxKtnLast,
+                        style: { width: "100%" },
+                        placeholder: "để trống",
+                        onChange: function (v) {
+                          setLegacySlrAutoThMaxKtnLast(v === null || v === undefined || v === "" ? null : Number(v));
+                        }
+                      }))
+                    ])
                   ])
                 ]),
                 h("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 6 } }, [

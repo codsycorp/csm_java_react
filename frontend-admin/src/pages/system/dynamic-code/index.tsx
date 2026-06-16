@@ -188,18 +188,34 @@ function isDirectCrossOriginApiCall(rawUrl: string): boolean {
 async function runtimePostSeoGenerateContent(body: Record<string, unknown>) {
   const apiPrefix = import.meta.env.DEV
     ? "/api"
-    : String(import.meta.env.VITE_API_BASE_URL || "/api").replace(/\/+$/, "");
+    : String(import.meta.env.VITE_API_BASE_URL || "https://api.csmbridge.net").replace(/\/+$/, "");
   const mode = String(body?.mode || "").toLowerCase();
   const isLongSync = body?.async === false || mode === "sync"
     || (mode !== "status" && mode !== "submit" && Boolean(body?.prompt));
-  return request.post("ai-generate-seo-content", {
-    json: body,
-    timeout: isLongSync ? false : undefined,
-    retry: { limit: 0 },
-    omitRefreshToken: true,
-    ignoreLoading: true,
-    prefixUrl: apiPrefix,
-  } as any).json<any>();
+  const seoPaths = import.meta.env.DEV
+    ? ["ai-generate-seo-content"]
+    : ["ai-generate-seo-content", "api/ai-generate-seo-content"];
+  let lastError: unknown;
+  for (const seoPath of seoPaths) {
+    try {
+      return await request.post(seoPath, {
+        json: body,
+        timeout: isLongSync ? false : undefined,
+        retry: { limit: 0 },
+        omitRefreshToken: true,
+        ignoreLoading: true,
+        prefixUrl: apiPrefix,
+      } as any).json<any>();
+    } catch (error: any) {
+      lastError = error;
+      const status = Number(error?.response?.status || error?.status || 0);
+      if (status !== 404) {
+        throw error;
+      }
+      console.warn(`[csmAI] SEO path 404 (${seoPath}) — thử path kế tiếp`);
+    }
+  }
+  throw lastError;
 }
 
 async function runtimeGenerateSeoContentWithPrompt(

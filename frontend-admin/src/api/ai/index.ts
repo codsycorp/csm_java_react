@@ -117,7 +117,6 @@ function resolveAiOptions(options?: GenerateSeoContentOptions): GenerateSeoConte
 }
 
 async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiResponse<any>> {
-	const seoPath = "ai-generate-seo-content";
 	const apiPrefix = import.meta.env.DEV
 		? "/api"
 		: String(import.meta.env.VITE_API_BASE_URL || "https://api.csmbridge.net").replace(/\/+$/, "");
@@ -126,14 +125,30 @@ async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiRes
 	const isLongSync = payload?.async === false || mode === "sync"
 		|| (mode !== "status" && mode !== "submit" && Boolean(payload?.prompt));
 	const timeout = isLongSync ? resolveSeoSyncRequestTimeout() : AI_REQUEST_TIMEOUT;
-	return await request.post(seoPath, {
-		json,
-		timeout,
-		retry: { limit: 0 },
-		omitRefreshToken: true,
-		ignoreLoading: true,
-		prefixUrl: apiPrefix,
-	} as any).json<ApiResponse<any>>();
+	const seoPaths = import.meta.env.DEV
+		? ["ai-generate-seo-content"]
+		: ["ai-generate-seo-content", "api/ai-generate-seo-content"];
+	let lastError: unknown;
+	for (const seoPath of seoPaths) {
+		try {
+			return await request.post(seoPath, {
+				json,
+				timeout,
+				retry: { limit: 0 },
+				omitRefreshToken: true,
+				ignoreLoading: true,
+				prefixUrl: apiPrefix,
+			} as any).json<ApiResponse<any>>();
+		} catch (error: any) {
+			lastError = error;
+			const status = Number(error?.response?.status || error?.status || 0);
+			if (status !== 404) {
+				throw error;
+			}
+			console.warn(`[SEO] path 404 (${seoPath}) — thử path kế tiếp`);
+		}
+	}
+	throw lastError;
 }
 
 async function generateSeoContentWithPromptAsync(prompt: string, options?: GenerateSeoContentOptions): Promise<ApiResponse<any>> {

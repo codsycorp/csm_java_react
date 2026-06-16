@@ -98,7 +98,7 @@ const defaultConfig: Options = {
 	// In production, keep env-based API base URL behavior.
 	prefixUrl: import.meta.env.DEV
 		? '/api'
-		: (import.meta.env.VITE_API_BASE_URL || '/api'),
+		: (import.meta.env.VITE_API_BASE_URL || 'https://api.csmbridge.net'),
    timeout: API_TIMEOUT,
    credentials: 'include', // LUÔN gửi cookie lên backend
    retry: {
