@@ -311,6 +311,11 @@ func envFlagTrue(key string, def bool) bool {
 	return v == "1" || v == "true" || v == "yes"
 }
 
+// HTTPEnableLogger controls chi request logging (disable in production with CSM_HTTP_LOGGER=0).
+func HTTPEnableLogger() bool {
+	return envFlagTrue("CSM_HTTP_LOGGER", true)
+}
+
 // resolvePebbleLegacy returns the path to a monolithic csm.kv if present (read fallback).
 func resolvePebbleLegacy(nativeDir, pebbleRoot string) string {
 	if v := os.Getenv("CSM_PEBBLE_LEGACY"); v != "" {

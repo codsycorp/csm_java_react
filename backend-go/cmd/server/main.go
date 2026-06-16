@@ -30,7 +30,10 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
+	if config.HTTPEnableLogger() {
+		r.Use(middleware.Logger)
+	}
+	r.Use(middleware.Compress(5))
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
 		AllowOriginFunc: func(r *http.Request, origin string) bool { return true },

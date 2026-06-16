@@ -67,7 +67,7 @@ func (h *TableHandler) HandleGetTableData(params map[string]any, auth *security.
 	if cursor, ok := result["nextCursor"]; ok {
 		resp.Set("nextCursor", cursor)
 	}
-	structRec := h.rm.Find(appID, "index", model.EqFilter("id", table))
+	structRec := h.rm.FindIndexTableCached(appID, table)
 	if structMap, ok := structRec["struct"].(map[string]any); ok {
 		if pk, ok := structMap["fieldsPK"]; ok {
 			resp.Set("fieldsPK", pk)
@@ -409,7 +409,7 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 
 func (h *TableHandler) resolveAccess(auth *security.AuthUser) *security.UserAccessContext {
 	resolved := auth
-	if auth != nil && h.us != nil {
+	if auth != nil && h.us != nil && !auth.SessionFresh {
 		if fresh := h.us.ResolveSessionAuth(*auth); fresh != nil {
 			resolved = fresh
 		}

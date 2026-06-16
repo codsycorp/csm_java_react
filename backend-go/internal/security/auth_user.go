@@ -23,6 +23,7 @@ type AuthUser struct {
 	DataAppIDs          []string
 	DeptID              string
 	BranchID            string
+	SessionFresh        bool // set by auth middleware when user was resolved from JWT this request
 }
 
 func AuthUserFromUser(user model.User, isSubUserHint bool) AuthUser {

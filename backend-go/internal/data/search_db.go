@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"csm_server/backend-go/internal/model"
@@ -19,10 +20,14 @@ const (
 )
 
 func openSearchDB(path string) (*sql.DB, error) {
+	return ensureSearchDB(path)
+}
+
+func ensureSearchDB(path string) (*sql.DB, error) {
 	if path == "" {
 		return nil, fmt.Errorf("search db path empty")
 	}
-	if _, err := os.Stat(path); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
 	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
@@ -30,7 +35,7 @@ func openSearchDB(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	schema := []string{
+	schema := append([]string{
 		`CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
 			pebble_key UNINDEXED,
 			app_id UNINDEXED,
@@ -40,7 +45,7 @@ func openSearchDB(path string) (*sql.DB, error) {
 			content,
 			tokenize='unicode61'
 		)`,
-	}
+	}, eqIndexSchemaStatements()...)
 	for _, q := range schema {
 		if _, err := db.Exec(q); err != nil {
 			_ = db.Close()
@@ -157,9 +162,11 @@ func (rm *RecordManager) collectViaFTS(appID, tableName string, filter model.Sea
 }
 
 func (rm *RecordManager) upsertSearchIndex(appID, tableName, pebbleKey, storageKey string, record map[string]any) {
+	rm.upsertEqIndex(appID, tableName, pebbleKey, record)
+
 	title, content := ExtractSearchText(record)
 	if len(content) < minSearchTextLen {
-		rm.deleteSearchIndex(pebbleKey)
+		rm.deleteFTSAndVectorIndex(pebbleKey)
 		return
 	}
 	recordID := recordIDFromMap(record, storageKey)
@@ -186,7 +193,7 @@ func (rm *RecordManager) upsertSearchIndex(appID, tableName, pebbleKey, storageK
 	}
 }
 
-func (rm *RecordManager) deleteSearchIndex(pebbleKey string) {
+func (rm *RecordManager) deleteFTSAndVectorIndex(pebbleKey string) {
 	if pebbleKey == "" {
 		return
 	}
@@ -199,7 +206,22 @@ func (rm *RecordManager) deleteSearchIndex(pebbleKey string) {
 	_, _ = rm.searchDB.Exec(`DELETE FROM records_fts WHERE pebble_key = ?`, pebbleKey)
 }
 
+func (rm *RecordManager) deleteSearchIndex(pebbleKey string) {
+	if pebbleKey == "" {
+		return
+	}
+	if rm.vectorStore != nil {
+		_ = rm.vectorStore.deleteDoc(vectorCollRecords, pebbleKey)
+	}
+	rm.deleteEqIndex(pebbleKey)
+	if rm.searchDB == nil {
+		return
+	}
+	_, _ = rm.searchDB.Exec(`DELETE FROM records_fts WHERE pebble_key = ?`, pebbleKey)
+}
+
 func (rm *RecordManager) deleteSearchIndexForTable(appID, tableName string) {
+	rm.deleteEqIndexForTable(appID, tableName)
 	if rm.searchDB == nil {
 		return
 	}

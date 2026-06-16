@@ -66,6 +66,7 @@ func resolveAuthUser(st *state.AppState, r *http.Request, clientIP, clientUA, cl
 		if user := st.UserService.ResolveFromJWT(st.JWT, bearer); user != nil {
 			if claims, err := st.JWT.ParseClaims(bearer); err == nil && security.UserMatchesJWTHints(*user, claims.UID, claims.Sub) {
 				au := security.AuthUserFromUser(*user, false)
+				au.SessionFresh = true
 				return &au
 			}
 		}
@@ -85,6 +86,7 @@ func resolveAuthUser(st *state.AppState, r *http.Request, clientIP, clientUA, cl
 			}
 			if err == nil && security.UserMatchesJWTHints(*user, claims.UID, claims.Sub) {
 				au := security.AuthUserFromUser(*user, false)
+				au.SessionFresh = true
 				return &au
 			}
 		}

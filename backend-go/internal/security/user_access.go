@@ -733,12 +733,7 @@ func filterManagedAccountDescendants(tableName string, rows []map[string]any, ac
 }
 
 func resolveManagedAccountVisibleIDSet(appID string, access *UserAccessContext, rm *data.RecordManager) map[string]bool {
-	if access.IsDev || len(access.OwnerCandidates) == 0 {
-		return nil
-	}
-	allRowsResult := rm.Filter(appID, "csm_accounts", model.SearchFilter{})
-	rows := rowsAsMaps(allRowsResult["rows"])
-	return buildManagedAccountVisibleIDSet(rows, access)
+	return resolveManagedAccountVisibleIDSetCached(appID, access, rm)
 }
 
 func buildManagedAccountVisibleIDSet(rows []map[string]any, access *UserAccessContext) map[string]bool {

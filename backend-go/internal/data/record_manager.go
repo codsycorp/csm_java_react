@@ -66,12 +66,12 @@ func NewRecordManager(cfg config.AppConfig) (*RecordManager, error) {
 		rm.vectorStore = vs
 	}
 
-	// Legacy optional sqlite FTS (vectors.db) for admin `like` keyword filters only.
-	if searchDB, err := openSearchDB(cfg.SearchDBPath); err == nil {
+	// Search index (FTS + eq field index) — always ensure DB exists for fast filtered reads.
+	if searchDB, err := ensureSearchDB(cfg.SearchDBPath); err == nil {
 		rm.searchDB = searchDB
-		log.Printf("RecordManager: legacy FTS keyword index %s", cfg.SearchDBPath)
-	} else if !os.IsNotExist(err) {
-		log.Printf("RecordManager: legacy FTS unavailable (%v)", err)
+		log.Printf("RecordManager: search index %s (FTS + eq)", cfg.SearchDBPath)
+	} else {
+		log.Printf("RecordManager: search index unavailable (%v)", err)
 	}
 	log.Printf("RecordManager: Pebble root %s/{app_id}/{table_name}/ (pure Go, no RocksDB/CGO)", cfg.PebbleRoot)
 	return rm, nil
@@ -170,34 +170,58 @@ func (rm *RecordManager) FilterWithPagination(
 	if take > maxFilterTake {
 		take = maxFilterTake
 	}
-	records := rm.collectFilteredRecords(appID, tableName, filter)
-	total := len(records)
-	start := offset
-	if cursor != "" {
-		for i, r := range records {
-			if recordKey(r) == cursor {
-				start = i
-				break
+
+	if rm.isSingletonLookupFilter(appID, tableName, filter) {
+		records := rm.collectFilteredRecords(appID, tableName, filter)
+		total := len(records)
+		start := offset
+		if cursor != "" {
+			for i, r := range records {
+				if recordKey(r) == cursor {
+					start = i + 1
+					break
+				}
+			}
+		}
+		end := start + take
+		if end > total {
+			end = total
+		}
+		slice := make([]any, 0, end-start)
+		for _, r := range records[start:end] {
+			slice = append(slice, r)
+		}
+		result := map[string]any{
+			"rows":       slice,
+			"data":       slice,
+			"totalCount": total,
+		}
+		if end < total && end > start {
+			result["nextCursor"] = recordKey(records[end-1])
+		}
+		return result
+	}
+
+	if rm.searchEnabled() && !filter.HasLike() {
+		if keys := rm.searchKeysConsistent(appID, tableName, filter); len(keys) > 0 {
+			return rm.paginatePebbleKeys(keys, filter, cursor, offset, take)
+		}
+	}
+
+	if rm.searchEnabled() && filter.HasLike() {
+		terms := filter.CollectLikeTerms()
+		match := buildFTSMatchQuery(terms)
+		if match != "" {
+			app, table, err := rm.sanitizeTable(appID, tableName)
+			if err == nil {
+				if keys, err := rm.ftsSearchKeys(app, table, match, maxFTSCandidateKeys); err == nil && len(keys) > 0 {
+					return rm.paginatePebbleKeys(keys, filter, cursor, offset, take)
+				}
 			}
 		}
 	}
-	end := start + take
-	if end > total {
-		end = total
-	}
-	slice := make([]any, 0, end-start)
-	for _, r := range records[start:end] {
-		slice = append(slice, r)
-	}
-	result := map[string]any{
-		"rows":       slice,
-		"data":       slice,
-		"totalCount": total,
-	}
-	if end < total {
-		result["nextCursor"] = recordKey(records[end])
-	}
-	return result
+
+	return rm.filterWithPaginationScan(appID, tableName, filter, cursor, offset, take)
 }
 
 func (rm *RecordManager) collectFilteredRecords(appID, tableName string, filter model.SearchFilter) []map[string]any {
@@ -230,6 +254,12 @@ func (rm *RecordManager) collectFilteredRecords(appID, tableName string, filter 
 			return records
 		}
 		// FTS miss (domain/status SSR filters) → full Pebble scan like Rust collect_filtered_records.
+	}
+
+	if rm.searchEnabled() && !filter.HasLike() {
+		if records := rm.collectViaEqIndex(appID, tableName, filter); len(records) > 0 {
+			return records
+		}
 	}
 
 	if isStrictNoScanFindFilter(filter) {
@@ -680,8 +710,12 @@ func (rm *RecordManager) GetTablePKFields(appID, tableName string) []string {
 	return pk
 }
 
+func (rm *RecordManager) FindIndexTableCached(appID, tableName string) map[string]any {
+	return rm.findIndexTableCached(appID, tableName)
+}
+
 func (rm *RecordManager) GetTableStructField(appID, tableName, field string) []string {
-	rec := rm.Find(appID, "index", model.EqFilter("id", tableName))
+	rec := rm.findIndexTableCached(appID, tableName)
 	structMap, ok := rec["struct"].(map[string]any)
 	if !ok {
 		return nil
