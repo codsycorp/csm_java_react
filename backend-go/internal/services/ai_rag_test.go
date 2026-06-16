@@ -12,14 +12,12 @@ import (
 func TestTenantRAGIndexAndSearch(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.AppConfig{
-		DataDir:      dir,
-		NativeDataDir: filepath.Join(dir, "native"),
-		SearchDBDir:  filepath.Join(dir, "native", "search"),
-		SearchDBPath: filepath.Join(dir, "native", "search", "vectors.db"),
-		PebbleRoot:   filepath.Join(dir, "native", "pebble"),
+		DataDir:        dir,
+		NativeDataDir:  filepath.Join(dir, "native"),
+		VectorStoreDir: filepath.Join(dir, "native", "vector", "chromem"),
+		PebbleRoot:     filepath.Join(dir, "native", "pebble"),
 	}
-	_ = os.MkdirAll(cfg.SearchDBDir, 0o755)
-	_ = os.MkdirAll(cfg.PebbleRoot, 0o755)
+	_ = os.MkdirAll(cfg.NativeDataDir, 0o755)
 
 	rm, err := data.NewRecordManager(cfg)
 	if err != nil {
@@ -31,8 +29,7 @@ func TestTenantRAGIndexAndSearch(t *testing.T) {
 	markdown := "# Org\n\n- role admin\n- dept sales\n- module ban_hang orders table"
 	indexChunks(rm, appID, "tenant_knowledge_org_snapshot", markdown, scopeBusiness, []string{"acl:tenant"})
 
-	match := buildFTSMatchFromQuery("ban_hang orders module")
-	hits, err := rm.SearchTenantRAG(appID, match, scopeBusiness, 4)
+	hits, err := rm.SearchTenantRAG(appID, "ban_hang orders module org role", scopeBusiness, 4)
 	if err != nil {
 		t.Fatal(err)
 	}

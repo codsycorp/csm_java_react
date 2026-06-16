@@ -1,6 +1,6 @@
 # CSM Server — Go Backend
 
-Go rewrite of the Java Spring Boot backend (`backend/`) and Rust port (`backend-rust/`). Runtime uses **Pebble + sqlite-vec** (pure Go, no RocksDB/CGO).
+Go rewrite of the Java Spring Boot backend (`backend/`) and Rust port (`backend-rust/`). Runtime uses **Pebble + chromem-go** for records and AI RAG vectors (pure Go, no RocksDB/CGO for normal operation).
 
 ## Stack
 
@@ -8,7 +8,7 @@ Go rewrite of the Java Spring Boot backend (`backend/`) and Rust port (`backend-
 |-------|------|-----|
 | HTTP | Spring Boot + Tomcat | chi + net/http |
 | DB | RocksDB JNI | **Pebble** (pure Go) |
-| Search/vector | Lucene | **sqlite-vec** + FTS5 |
+| Search/vector | Lucene | **chromem-go** (semantic) + optional legacy **sqlite-vec** FTS5 |
 | Auth | jjwt + Spring Security | golang-jwt + middleware |
 | Real-time | Netty Socket.IO | deferred |
 | AI | llama.cpp JNI | deferred |
@@ -36,7 +36,8 @@ Loads `../config.env` and profile overlays (`config.local-8gb.env`, etc.) — sa
 |----------|---------|
 | `APP_DATA_DIR` | `./csm_datas` |
 | `CSM_PEBBLE_PATH` | `./csm_datas/native/pebble/csm.kv` |
-| `CSM_SEARCH_DB_PATH` | `./csm_datas/native/search/vectors.db` |
+| `CSM_VECTOR_DIR` | `./csm_datas/native/vector/chromem` |
+| `CSM_SEARCH_DB_PATH` | `./csm_datas/native/search/vectors.db` (legacy optional FTS) |
 | `SERVER_PORT` | `9999` |
 | `JWT_SECRET` | from `config.env` |
 
@@ -69,7 +70,7 @@ backend/src/main/java/net/phanmemmottrieu/
 
 See [JAVA_PARITY.md](./JAVA_PARITY.md) for endpoint matrix.
 
-## Migration: RocksDB → Pebble + sqlite-vec (pure Go runtime)
+## Migration: RocksDB → Pebble + chromem (pure Go runtime)
 
 One-time migration (needs **librocksdb** only for reading legacy data):
 
@@ -87,17 +88,20 @@ Output:
 | Path | Role |
 |------|------|
 | `csm_datas/native/pebble/csm.kv` | All KV records (replaces RocksDB) |
-| `csm_datas/native/search/vectors.db` | FTS5 + sqlite-vec for AI/search |
+| `csm_datas/native/vector/chromem/` | Embedded chromem-go vector index (tenant RAG, records, workspace) |
+| `csm_datas/native/search/vectors.db` | Legacy optional FTS5 keyword search (admin `like` filters only) |
 
-After migration, run backend with Pebble+sqlite (no RocksDB service). Hash embeddings are placeholders — re-embed with your model for production AI quality.
+After migration, run backend with Pebble + chromem (no RocksDB service). Hash embeddings are placeholders — re-embed with your model for production AI quality.
 
-### Scale (Pebble + sqlite-vec)
+**Re-index after switching to chromem:** existing `vectors.db` data is not auto-migrated. Trigger re-index via `IndexExistingRecords` or re-ingest tenant knowledge on first AI request.
+
+### Scale (Pebble + chromem)
 
 | Workload | Fit |
 |----------|-----|
 | CSM admin CRM tables (GB) | Pebble ✅ |
-| AI code context (100k–1M chunks) | sqlite-vec ✅ |
-| 10M+ vectors | Shard `search/*.db` |
+| AI code context (100k–1M chunks) | chromem-go ✅ |
+| 10M+ vectors | Shard `vector/chromem-*` dirs or external vector DB |
 | Hadoop/PB-scale analytics | ❌ use warehouse |
 
 See `cmd/migrate/main.go` for `VectorSearch`, `HybridSearch`, `ScanTable` helpers.

@@ -61,6 +61,7 @@ type AppConfig struct {
 	PebbleLegacy    string // optional monolithic csm.kv for read fallback during migration
 	SearchDBPath    string
 	SearchDBDir     string
+	VectorStoreDir  string
 	RocksDBRoot     string // legacy source for one-time migrate only
 	RocksDBBackup   string
 	LuceneIndexRoot string
@@ -77,6 +78,7 @@ func LoadFromEnv() AppConfig {
 	pebbleRoot := envPath("CSM_PEBBLE_ROOT", filepath.Join(nativeDir, "pebble"))
 	pebbleLegacy := resolvePebbleLegacy(nativeDir, pebbleRoot)
 	searchDBPath := envPath("CSM_SEARCH_DB_PATH", filepath.Join(nativeDir, "search", "vectors.db"))
+	vectorStoreDir := envPath("CSM_VECTOR_DIR", filepath.Join(nativeDir, "vector", "chromem"))
 	rocksdbRoot := envPath("ROCKSDB_ROOT_DIR", filepath.Join(dataDir, "database"))
 	return AppConfig{
 		Server: ServerConfig{
@@ -93,6 +95,7 @@ func LoadFromEnv() AppConfig {
 		PebbleLegacy:    pebbleLegacy,
 		SearchDBPath:    searchDBPath,
 		SearchDBDir:     filepath.Dir(searchDBPath),
+		VectorStoreDir:  vectorStoreDir,
 		RocksDBRoot:     rocksdbRoot,
 		RocksDBBackup:   envPath("ROCKSDB_BACKUP_DIR", filepath.Join(dataDir, "backups")),
 		LuceneIndexRoot: envPath("LUCENE_INDEX_ROOT_DIR", filepath.Join(dataDir, "lucene_index")),

@@ -19,19 +19,23 @@ import (
 var errScanStop = errors.New("scan stop")
 
 type RecordManager struct {
-	cfg        config.AppConfig
-	dataDir    string
-	pebbleRoot string
-	tableDBs   map[string]*pebble.DB
-	legacyDB   *pebble.DB
-	searchDB   *sql.DB
-	dbMu       sync.RWMutex
-	legacyMu   sync.RWMutex
-	closed     bool
+	cfg          config.AppConfig
+	dataDir      string
+	pebbleRoot   string
+	tableDBs     map[string]*pebble.DB
+	legacyDB     *pebble.DB
+	searchDB     *sql.DB
+	vectorStore  *VectorStore
+	dbMu         sync.RWMutex
+	legacyMu     sync.RWMutex
+	closed       bool
 }
 
 func NewRecordManager(cfg config.AppConfig) (*RecordManager, error) {
-	for _, dir := range []string{cfg.DataDir, cfg.NativeDataDir, cfg.SearchDBDir, cfg.PebbleRoot} {
+	for _, dir := range []string{cfg.DataDir, cfg.NativeDataDir, cfg.SearchDBDir, cfg.PebbleRoot, cfg.VectorStoreDir} {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
 		if err := config.EnsureDir(dir); err != nil {
 			return nil, fmt.Errorf("ensure dir %s: %w", dir, err)
 		}
@@ -56,11 +60,18 @@ func NewRecordManager(cfg config.AppConfig) (*RecordManager, error) {
 		}
 	}
 
+	if vs, err := openVectorStore(cfg); err != nil {
+		log.Printf("RecordManager: vector store unavailable (%v)", err)
+	} else {
+		rm.vectorStore = vs
+	}
+
+	// Legacy optional sqlite FTS (vectors.db) for admin `like` keyword filters only.
 	if searchDB, err := openSearchDB(cfg.SearchDBPath); err == nil {
 		rm.searchDB = searchDB
-		log.Printf("RecordManager: FTS search %s", cfg.SearchDBPath)
+		log.Printf("RecordManager: legacy FTS keyword index %s", cfg.SearchDBPath)
 	} else if !os.IsNotExist(err) {
-		log.Printf("RecordManager: FTS search unavailable (%v)", err)
+		log.Printf("RecordManager: legacy FTS unavailable (%v)", err)
 	}
 	log.Printf("RecordManager: Pebble root %s/{app_id}/{table_name}/ (pure Go, no RocksDB/CGO)", cfg.PebbleRoot)
 	return rm, nil
@@ -90,6 +101,10 @@ func (rm *RecordManager) ShutdownAll() {
 	if rm.searchDB != nil {
 		_ = rm.searchDB.Close()
 		rm.searchDB = nil
+	}
+	if rm.vectorStore != nil {
+		rm.vectorStore.Close()
+		rm.vectorStore = nil
 	}
 	log.Println("Pebble stores closed")
 }

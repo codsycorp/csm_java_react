@@ -157,15 +157,24 @@ func (rm *RecordManager) collectViaFTS(appID, tableName string, filter model.Sea
 }
 
 func (rm *RecordManager) upsertSearchIndex(appID, tableName, pebbleKey, storageKey string, record map[string]any) {
-	if rm.searchDB == nil {
-		return
-	}
 	title, content := ExtractSearchText(record)
 	if len(content) < minSearchTextLen {
 		rm.deleteSearchIndex(pebbleKey)
 		return
 	}
 	recordID := recordIDFromMap(record, storageKey)
+
+	if rm.vectorStore != nil {
+		meta := map[string]string{
+			"app_id": appID, "table_name": tableName, "record_id": recordID,
+			"pebble_key": pebbleKey, "title": title,
+		}
+		_ = rm.vectorStore.upsertDoc(vectorCollRecords, pebbleKey, meta, title+"\n"+content)
+	}
+
+	if rm.searchDB == nil {
+		return
+	}
 	_, _ = rm.searchDB.Exec(`DELETE FROM records_fts WHERE pebble_key = ?`, pebbleKey)
 	_, err := rm.searchDB.Exec(
 		`INSERT INTO records_fts(pebble_key, app_id, table_name, record_id, title, content)
@@ -178,7 +187,13 @@ func (rm *RecordManager) upsertSearchIndex(appID, tableName, pebbleKey, storageK
 }
 
 func (rm *RecordManager) deleteSearchIndex(pebbleKey string) {
-	if rm.searchDB == nil || pebbleKey == "" {
+	if pebbleKey == "" {
+		return
+	}
+	if rm.vectorStore != nil {
+		_ = rm.vectorStore.deleteDoc(vectorCollRecords, pebbleKey)
+	}
+	if rm.searchDB == nil {
 		return
 	}
 	_, _ = rm.searchDB.Exec(`DELETE FROM records_fts WHERE pebble_key = ?`, pebbleKey)
@@ -197,10 +212,16 @@ func (rm *RecordManager) IndexExistingRecords(appID, tableName string) (int, err
 	if err != nil {
 		return 0, err
 	}
-	if rm.searchDB == nil {
-		return 0, fmt.Errorf("search index unavailable (missing %s)", rm.cfg.SearchDBPath)
+	if rm.vectorStore == nil && rm.searchDB == nil {
+		return 0, fmt.Errorf("search index unavailable (set CSM_VECTOR_DIR or legacy %s)", rm.cfg.SearchDBPath)
 	}
-	rm.deleteSearchIndexForTable(app, table)
+	if rm.searchDB != nil {
+		rm.deleteSearchIndexForTable(app, table)
+	} else if rm.vectorStore != nil {
+		_ = rm.vectorStore.deleteWhere(vectorCollRecords, map[string]string{
+			"app_id": app, "table_name": table,
+		})
+	}
 
 	indexed := 0
 	err = rm.scanTable(app, table, func(storageKey string, raw []byte) error {

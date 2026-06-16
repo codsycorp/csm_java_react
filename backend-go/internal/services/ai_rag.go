@@ -73,22 +73,19 @@ func RunTenantRAGWithAuth(cfg config.AppConfig, rm *data.RecordManager, req *Cod
 	liveMenu := ingestLiveTenantMenu(rm, appID)
 
 	query := buildSelfDirectedRetrievalQuery(req)
-	match := buildFTSMatchFromQuery(query)
 	topK := tenantRAGDefaultTopK
 	maxChars := tenantRAGDefaultMaxChars
 
 	var allHits []data.TenantRAGHit
 
-	chunkHits, _ := rm.SearchTenantRAG(appID, match, scopeMask, topK*2)
+	chunkHits, _ := rm.SearchTenantRAG(appID, query, scopeMask, topK*2)
 	allHits = append(allHits, chunkHits...)
 
-	// Phase 3: boost hits with hash-embedding cosine re-rank on retrieved set.
 	if len(allHits) > 0 {
 		allHits = rerankHitsWithEmbedding(allHits, query)
 	}
 
-	// Hybrid: also search org/index tables in records_fts.
-	tableHits, _ := rm.SearchRecordsFTSForApp(appID, match, nil, topK)
+	tableHits, _ := rm.SearchRecordsVectorForApp(appID, query, nil, topK)
 	allHits = mergeTenantRAGHits(allHits, tableHits)
 
 	ranked := rankAndTrimHits(filterHitsByACL(allHits, auth), query, topK, maxChars)

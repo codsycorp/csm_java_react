@@ -18,38 +18,16 @@ type WorkspaceChunk struct {
 	CreatedAt int64
 }
 
-func workspaceSchemaStatements() []string {
-	return []string{
-		`CREATE VIRTUAL TABLE IF NOT EXISTS workspace_fts USING fts5(
-			chunk_id UNINDEXED,
-			path UNINDEXED,
-			scope UNINDEXED,
-			summary,
-			content,
-			tokenize='unicode61'
-		)`,
-	}
-}
-
-// EnsureWorkspaceSchema creates workspace_fts in vectors.db.
+// EnsureWorkspaceSchema ensures chromem workspace collection exists.
 func (rm *RecordManager) EnsureWorkspaceSchema() error {
-	if rm.searchDB == nil {
-		if err := rm.EnsureTenantRAGSchema(); err != nil {
-			return err
-		}
+	if rm.vectorStore == nil {
+		return fmt.Errorf("vector store unavailable")
 	}
-	if rm.searchDB == nil {
-		return fmt.Errorf("search db unavailable")
-	}
-	for _, q := range workspaceSchemaStatements() {
-		if _, err := rm.searchDB.Exec(q); err != nil {
-			return fmt.Errorf("workspace schema: %w", err)
-		}
-	}
-	return nil
+	_, err := rm.vectorStore.collection(vectorCollWorkspace)
+	return err
 }
 
-// UpsertWorkspaceChunk indexes one workspace file chunk.
+// UpsertWorkspaceChunk indexes one workspace file chunk in chromem.
 func (rm *RecordManager) UpsertWorkspaceChunk(chunk WorkspaceChunk) error {
 	if err := rm.EnsureWorkspaceSchema(); err != nil {
 		return err
@@ -57,29 +35,26 @@ func (rm *RecordManager) UpsertWorkspaceChunk(chunk WorkspaceChunk) error {
 	if chunk.ChunkID == "" || strings.TrimSpace(chunk.Content) == "" {
 		return nil
 	}
-	_, _ = rm.searchDB.Exec(`DELETE FROM workspace_fts WHERE chunk_id = ?`, chunk.ChunkID)
-	_, err := rm.searchDB.Exec(
-		`INSERT INTO workspace_fts(chunk_id, path, scope, summary, content) VALUES (?, ?, ?, ?, ?)`,
-		chunk.ChunkID, chunk.Path, chunk.Scope, chunk.Summary, chunk.Content,
-	)
-	return err
+	meta := map[string]string{
+		"path":   chunk.Path,
+		"scope":  chunk.Scope,
+		"summary": chunk.Summary,
+	}
+	text := chunk.Summary + "\n" + chunk.Content
+	return rm.vectorStore.upsertDoc(vectorCollWorkspace, chunk.ChunkID, meta, text)
 }
 
-// ClearWorkspaceIndex removes all workspace chunks (rebuild).
+// ClearWorkspaceIndex removes all workspace chunks.
 func (rm *RecordManager) ClearWorkspaceIndex() error {
-	if rm.searchDB == nil {
+	if rm.vectorStore == nil {
 		return nil
 	}
-	if err := rm.EnsureWorkspaceSchema(); err != nil {
-		return err
-	}
-	_, err := rm.searchDB.Exec(`DELETE FROM workspace_fts`)
-	return err
+	return rm.vectorStore.clearCollection(vectorCollWorkspace)
 }
 
-// SearchWorkspaceFTS searches dev workspace index.
+// SearchWorkspaceFTS semantic search over dev workspace index (chromem).
 func (rm *RecordManager) SearchWorkspaceFTS(match string, limit int) ([]WorkspaceChunk, error) {
-	if rm.searchDB == nil || strings.TrimSpace(match) == "" {
+	if rm.vectorStore == nil || strings.TrimSpace(match) == "" {
 		return nil, nil
 	}
 	if err := rm.EnsureWorkspaceSchema(); err != nil {
@@ -88,27 +63,21 @@ func (rm *RecordManager) SearchWorkspaceFTS(match string, limit int) ([]Workspac
 	if limit <= 0 {
 		limit = 4
 	}
-	rows, err := rm.searchDB.Query(
-		`SELECT chunk_id, path, scope, summary, content
-		 FROM workspace_fts WHERE workspace_fts MATCH ? ORDER BY bm25(workspace_fts) LIMIT ?`,
-		match, limit,
-	)
+	results, err := rm.vectorStore.query(vectorCollWorkspace, match, nil, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []WorkspaceChunk
-	for rows.Next() {
-		var c WorkspaceChunk
-		if err := rows.Scan(&c.ChunkID, &c.Path, &c.Scope, &c.Summary, &c.Content); err != nil {
-			return out, err
-		}
-		out = append(out, c)
+	out := make([]WorkspaceChunk, 0, len(results))
+	for _, r := range results {
+		out = append(out, WorkspaceChunk{
+			ChunkID: r.ID, Path: r.Metadata["path"], Scope: r.Metadata["scope"],
+			Summary: r.Metadata["summary"], Content: r.Content,
+		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// RebuildWorkspaceIndex scans markdown/code roots into workspace_fts.
+// RebuildWorkspaceIndex scans markdown/code roots into chromem workspace collection.
 func (rm *RecordManager) RebuildWorkspaceIndex(roots []string, maxFiles int) (int, error) {
 	if err := rm.ClearWorkspaceIndex(); err != nil {
 		return 0, err

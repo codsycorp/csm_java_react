@@ -1,15 +1,17 @@
 package data
 
 import (
-	"database/sql"
+	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
-	"time"
 )
 
-const defaultTenantRAGTopK = 6
+const (
+	defaultTenantRAGTopK = 6
+	vectorMetaApp        = "_csm"
+	vectorMetaTable      = "vector_chunks"
+)
 
 // TenantRAGChunk is one indexed tenant context document for AI retrieval.
 type TenantRAGChunk struct {
@@ -38,81 +40,16 @@ type TenantRAGHit struct {
 	CreatedAtMs int64
 }
 
-func tenantRAGSchemaStatements() []string {
-	return []string{
-		`CREATE VIRTUAL TABLE IF NOT EXISTS tenant_rag_fts USING fts5(
-			chunk_id UNINDEXED,
-			app_id UNINDEXED,
-			source_name UNINDEXED,
-			scope_mask UNINDEXED,
-			scope_tags UNINDEXED,
-			tags UNINDEXED,
-			created_at_ms UNINDEXED,
-			summary,
-			structure,
-			content,
-			tokenize='unicode61'
-		)`,
-	}
-}
-
-// EnsureTenantRAGSchema creates vectors.db (if missing) and tenant_rag_fts table.
+// EnsureTenantRAGSchema ensures chromem collections are ready (no SQLite).
 func (rm *RecordManager) EnsureTenantRAGSchema() error {
-	if rm.searchDB != nil {
-		return rm.applyTenantRAGSchema(rm.searchDB)
+	if rm.vectorStore == nil {
+		return fmt.Errorf("vector store unavailable")
 	}
-	if rm.cfg.SearchDBPath == "" {
-		return fmt.Errorf("search db path empty")
-	}
-	if err := os.MkdirAll(filepath.Dir(rm.cfg.SearchDBPath), 0o755); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(rm.cfg.SearchDBPath, os.O_RDWR|os.O_CREATE, 0o644)
-	if err != nil {
-		return err
-	}
-	_ = f.Close()
-
-	db, err := sql.Open("sqlite", rm.cfg.SearchDBPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
-	if err != nil {
-		return err
-	}
-	db.SetMaxOpenConns(1)
-	if err := rm.applyTenantRAGSchema(db); err != nil {
-		_ = db.Close()
-		return err
-	}
-	// Also ensure records_fts exists for hybrid table search.
-	for _, q := range []string{
-		`CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
-			pebble_key UNINDEXED,
-			app_id UNINDEXED,
-			table_name UNINDEXED,
-			record_id UNINDEXED,
-			title,
-			content,
-			tokenize='unicode61'
-		)`,
-	} {
-		if _, err := db.Exec(q); err != nil {
-			_ = db.Close()
-			return fmt.Errorf("records_fts schema: %w", err)
-		}
-	}
-	rm.searchDB = db
-	return nil
+	_, err := rm.vectorStore.collection(vectorCollTenantRAG)
+	return err
 }
 
-func (rm *RecordManager) applyTenantRAGSchema(db *sql.DB) error {
-	for _, q := range tenantRAGSchemaStatements() {
-		if _, err := db.Exec(q); err != nil {
-			return fmt.Errorf("tenant_rag schema: %w", err)
-		}
-	}
-	return nil
-}
-
-// UpsertTenantRAGChunk indexes or replaces one tenant RAG chunk.
+// UpsertTenantRAGChunk indexes one tenant RAG chunk in chromem (+ optional Pebble mirror).
 func (rm *RecordManager) UpsertTenantRAGChunk(chunk TenantRAGChunk) error {
 	if err := rm.EnsureTenantRAGSchema(); err != nil {
 		return err
@@ -120,80 +57,61 @@ func (rm *RecordManager) UpsertTenantRAGChunk(chunk TenantRAGChunk) error {
 	if chunk.ChunkID == "" || chunk.AppID == "" || strings.TrimSpace(chunk.Content) == "" {
 		return nil
 	}
-	if chunk.CreatedAtMs <= 0 {
-		chunk.CreatedAtMs = time.Now().UnixMilli()
+	meta := tenantChunkMeta(chunk)
+	text := tenantChunkEmbedText(chunk)
+	if err := rm.vectorStore.upsertDoc(vectorCollTenantRAG, chunk.ChunkID, meta, text); err != nil {
+		return err
 	}
-	_, _ = rm.searchDB.Exec(`DELETE FROM tenant_rag_fts WHERE chunk_id = ?`, chunk.ChunkID)
-	_, err := rm.searchDB.Exec(
-		`INSERT INTO tenant_rag_fts(
-			chunk_id, app_id, source_name, scope_mask, scope_tags, tags, created_at_ms,
-			summary, structure, content
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		chunk.ChunkID, chunk.AppID, chunk.SourceName, chunk.ScopeMask,
-		chunk.ScopeTags, chunk.Tags, chunk.CreatedAtMs,
-		chunk.Summary, chunk.Structure, chunk.Content,
-	)
-	return err
+	rm.mirrorVectorChunkPebble(chunk)
+	return nil
 }
 
-// DeleteTenantRAGSource removes all chunks for a source name within an app.
+// DeleteTenantRAGSource removes all chunks for a source within an app.
 func (rm *RecordManager) DeleteTenantRAGSource(appID, sourceName string) error {
-	if rm.searchDB == nil || appID == "" || sourceName == "" {
+	if rm.vectorStore == nil || appID == "" || sourceName == "" {
 		return nil
 	}
-	_, err := rm.searchDB.Exec(
-		`DELETE FROM tenant_rag_fts WHERE app_id = ? AND source_name = ?`,
-		appID, sourceName,
-	)
-	return err
+	_ = rm.vectorStore.deleteWhere(vectorCollTenantRAG, map[string]string{
+		"app_id":      appID,
+		"source_name": sourceName,
+	})
+	rm.deleteVectorChunksPebbleBySource(appID, sourceName)
+	return nil
 }
 
-// SearchTenantRAG runs FTS5 BM25 search with optional scope mask filter.
-func (rm *RecordManager) SearchTenantRAG(appID, match string, scopeMask, limit int) ([]TenantRAGHit, error) {
-	if err := rm.EnsureTenantRAGSchema(); err != nil {
-		return nil, err
+// SearchTenantRAG runs semantic vector search (chromem) with scope mask filter.
+// queryText is natural language (not FTS match syntax).
+func (rm *RecordManager) SearchTenantRAG(appID, queryText string, scopeMask, limit int) ([]TenantRAGHit, error) {
+	if rm.vectorStore == nil {
+		return nil, fmt.Errorf("vector store unavailable")
 	}
-	if appID == "" || strings.TrimSpace(match) == "" {
+	if appID == "" || strings.TrimSpace(queryText) == "" {
 		return nil, nil
 	}
 	if limit <= 0 {
 		limit = defaultTenantRAGTopK
 	}
-	rows, err := rm.searchDB.Query(
-		`SELECT chunk_id, app_id, source_name, scope_mask, tags, summary, content, created_at_ms,
-		        bm25(tenant_rag_fts) AS rank_score
-		 FROM tenant_rag_fts
-		 WHERE app_id = ? AND tenant_rag_fts MATCH ?
-		   AND (? = 0 OR (scope_mask & ?) != 0)
-		 ORDER BY rank_score
-		 LIMIT ?`,
-		appID, match, scopeMask, scopeMask, limit,
-	)
+	results, err := rm.vectorStore.query(vectorCollTenantRAG, queryText, map[string]string{"app_id": appID}, limit*3)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	var hits []TenantRAGHit
-	for rows.Next() {
-		var h TenantRAGHit
-		var rank float64
-		if err := rows.Scan(&h.ChunkID, &h.AppID, &h.SourceName, &h.ScopeMask, &h.Tags,
-			&h.Summary, &h.Content, &h.CreatedAtMs, &rank); err != nil {
-			return hits, err
-		}
-		h.Score = -rank // bm25 returns negative values; lower is better
-		if h.Score < 0 {
-			h.Score = -h.Score
+	for _, r := range results {
+		h := chromemHitToTenantRAG(r)
+		if !scopeMaskMatches(strconv.Itoa(h.ScopeMask), scopeMask) {
+			continue
 		}
 		hits = append(hits, h)
+		if len(hits) >= limit {
+			break
+		}
 	}
-	return hits, rows.Err()
+	return hits, nil
 }
 
-// SearchRecordsFTSForApp searches records_fts across tables for one app (org tables, index, etc.).
-func (rm *RecordManager) SearchRecordsFTSForApp(appID, match string, tableNames []string, limit int) ([]TenantRAGHit, error) {
-	if rm.searchDB == nil || appID == "" || strings.TrimSpace(match) == "" {
+// SearchRecordsVectorForApp semantic search over indexed org/menu tables (replaces records_fts RAG leg).
+func (rm *RecordManager) SearchRecordsVectorForApp(appID, queryText string, tableNames []string, limit int) ([]TenantRAGHit, error) {
+	if rm.vectorStore == nil || appID == "" || strings.TrimSpace(queryText) == "" {
 		return nil, nil
 	}
 	if limit <= 0 {
@@ -202,48 +120,75 @@ func (rm *RecordManager) SearchRecordsFTSForApp(appID, match string, tableNames 
 	if len(tableNames) == 0 {
 		tableNames = []string{"csm_roles", "csm_depts", "csm_branches", "index", "sys_autos"}
 	}
-
+	tableSet := make(map[string]struct{}, len(tableNames))
+	for _, t := range tableNames {
+		tableSet[t] = struct{}{}
+	}
+	results, err := rm.vectorStore.query(vectorCollRecords, queryText, map[string]string{"app_id": appID}, limit*4)
+	if err != nil {
+		return nil, err
+	}
 	var hits []TenantRAGHit
-	for _, tableName := range tableNames {
-		keys, err := rm.ftsSearchKeys(appID, tableName, match, limit)
-		if err != nil || len(keys) == 0 {
+	for _, r := range results {
+		tableName := r.Metadata["table_name"]
+		if _, ok := tableSet[tableName]; !ok {
 			continue
 		}
-		for _, pebbleKey := range keys {
-			record, err := rm.loadRecordByPebbleKey(pebbleKey)
-			if err != nil || record == nil {
-				continue
-			}
-			title, content := ExtractSearchText(record)
-			if content == "" {
-				continue
-			}
-			hits = append(hits, TenantRAGHit{
-				ChunkID:     pebbleKey,
-				AppID:       appID,
-				SourceName:  tableName,
-				ScopeMask:   scopeMaskForTable(tableName),
-				Summary:     title,
-				Content:     content,
-				Score:       0.5,
-				CreatedAtMs: time.Now().UnixMilli(),
-			})
-			if len(hits) >= limit {
-				return hits, nil
-			}
+		scope := scopeMaskForTable(tableName)
+		hits = append(hits, TenantRAGHit{
+			ChunkID:     r.ID,
+			AppID:       appID,
+			SourceName:  tableName,
+			ScopeMask:   scope,
+			Summary:     r.Metadata["title"],
+			Content:     r.Content,
+			Score:       float64(r.Similarity),
+			CreatedAtMs: 0,
+		})
+		if len(hits) >= limit {
+			break
 		}
 	}
 	return hits, nil
 }
 
+// SearchRecordsFTSForApp kept for callers — delegates to vector search.
+func (rm *RecordManager) SearchRecordsFTSForApp(appID, queryText string, tableNames []string, limit int) ([]TenantRAGHit, error) {
+	return rm.SearchRecordsVectorForApp(appID, queryText, tableNames, limit)
+}
+
+func (rm *RecordManager) mirrorVectorChunkPebble(chunk TenantRAGChunk) {
+	rec := map[string]any{
+		"chunk_id": chunk.ChunkID, "app_id": chunk.AppID, "source_name": chunk.SourceName,
+		"scope_mask": chunk.ScopeMask, "scope_tags": chunk.ScopeTags, "tags": chunk.Tags,
+		"created_at_ms": chunk.CreatedAtMs, "summary": chunk.Summary,
+		"structure": chunk.Structure, "content": chunk.Content,
+	}
+	_, _ = rm.CreateRecord(vectorMetaApp, vectorMetaTable, rec, []string{"chunk_id"})
+}
+
+func (rm *RecordManager) deleteVectorChunksPebbleBySource(appID, sourceName string) {
+	_ = rm.scanTable(vectorMetaApp, vectorMetaTable, func(storageKey string, raw []byte) error {
+		var rec map[string]any
+		if json.Unmarshal(raw, &rec) != nil {
+			return nil
+		}
+		if fmt.Sprint(rec["app_id"]) != appID || fmt.Sprint(rec["source_name"]) != sourceName {
+			return nil
+		}
+		rm.deleteAtStorageKey(vectorMetaApp, vectorMetaTable, storageKey)
+		return nil
+	})
+}
+
 func scopeMaskForTable(tableName string) int {
 	switch tableName {
 	case "index":
-		return 1 // menu
+		return 1
 	case "sys_autos":
-		return 2 // code
+		return 2
 	default:
-		return 16 // business
+		return 16
 	}
 }
 
