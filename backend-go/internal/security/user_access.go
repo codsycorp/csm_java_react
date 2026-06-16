@@ -329,20 +329,37 @@ func filterRowsForUpdate(tableName string, records []map[string]any, ctx *UserAc
 		visible := resolveManagedAccountVisibleIDSet(appID, ctx, rm)
 		var filtered []map[string]any
 		for _, row := range records {
+			// Self profile update (user_address, etc.) must never be blocked by managed-account visibility cache.
+			if isSelfManagedAccountRow(row, ctx) {
+				filtered = append(filtered, row)
+				continue
+			}
 			if visible[fieldValueAsIdentity(row["id"])] {
 				filtered = append(filtered, row)
 			}
 		}
 		records = filtered
 	}
-	if tableName == "csm_group_members" && (isAdminNonDev || ctx.IsDev) {
-		var filtered []map[string]any
-		for _, row := range records {
-			if isOwnedSubUserRow(row, ctx) {
-				filtered = append(filtered, row)
+	if tableName == "csm_group_members" {
+		if ctx.IsSubUser && !ctx.IsDev {
+			var filtered []map[string]any
+			for _, row := range records {
+				rowID := fieldValueAsIdentity(row["id"])
+				loginID := fieldValueAsIdentity(row["login_identifier"])
+				if containsIdentity(ctx.OwnerCandidates, rowID) || containsIdentity(ctx.OwnerCandidates, loginID) {
+					filtered = append(filtered, row)
+				}
 			}
+			records = filtered
+		} else if isAdminNonDev || ctx.IsDev {
+			var filtered []map[string]any
+			for _, row := range records {
+				if isOwnedSubUserRow(row, ctx) {
+					filtered = append(filtered, row)
+				}
+			}
+			records = filtered
 		}
-		records = filtered
 	}
 	if skipDataScope {
 		return records

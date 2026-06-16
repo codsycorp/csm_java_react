@@ -653,9 +653,11 @@ function resolveUserAddressArray(source: any): any[] {
     return [];
   }
 
-  // Chỉ dùng user_address (canonical field) - không dùng fallback sai
   const canonical = parseUserAddressValue(source.user_address);
-  return canonical;
+  if (canonical.length > 0) {
+    return canonical;
+  }
+  return parseUserAddressValue(source.user_adress);
 }
 
 function serializeUserAddressValue(raw: any): string {
@@ -1446,20 +1448,21 @@ ${resolvedContainerSelector} select {
       const identity = resolvePrimaryIdentity(currentUser);
       const loginIdentifier = String(currentUser?.login_identifier || "").trim() || identity.value;
       
-      // Xây dựng WHERE clause giống profile (đơn giản, chính xác)
-      const where: Record<string, any> = {};
+      // Xây dựng WHERE clause giống profile (SearchFilter shape cho Go/Java parity)
+      const whereConditions: Array<{ field: string; type: string; value: any } | undefined> = [];
       if (userId) {
-        where.id = userId;
+        whereConditions.push({ field: "id", type: "eq", value: userId });
       }
       if (tableName === "csm_group_members" && loginIdentifier) {
-        where.login_identifier = loginIdentifier;
+        whereConditions.push({ field: "login_identifier", type: "eq", value: loginIdentifier });
       }
       if (!userId && tableName === "csm_accounts" && identity.field && identity.value) {
-        where[identity.field] = identity.value;
+        whereConditions.push({ field: identity.field, type: "eq", value: identity.value });
       }
+      const normalizedWhere = andWhere(whereConditions);
       
       // Nếu không có WHERE clause nào = không thể identify user
-      if (Object.keys(where).length === 0) {
+      if (!normalizedWhere) {
         return null;
       }
       
@@ -1467,7 +1470,7 @@ ${resolvedContainerSelector} select {
         const response = await (window as any).csmApi.getTableData({
           app_id: requestAppId,
           obj_name: tableName,
-          where,
+          where: normalizedWhere,
           take: 1,
         });
 
@@ -1525,8 +1528,9 @@ ${resolvedContainerSelector} select {
             return;
           }
 
-          // Chỉ dùng user_address (canonical field) - không dùng fallback sai
-          const serverValue = parseUserAddressValue(lookup.row.user_address);
+          const serverValue = parseUserAddressValue(
+            lookup.row.user_address ?? lookup.row.user_adress,
+          );
 
           if (serverValue.length === 0 && runtimeSnapshot.length > 0) {
             // Keep runtime snapshot to avoid wiping just-updated data when backend is eventually consistent.
@@ -1561,11 +1565,14 @@ ${resolvedContainerSelector} select {
           const lookup = await fetchAccountRow();
           const tableName = lookup?.tableName || target.preferredTable;
           const requestAppId = resolveTableAppId(tableName, effectiveAppId);
-          const matchedLoginIdentifier = String(lookup?.row?.login_identifier || target.loginIdentifier || "").trim();
+          const matchedLoginIdentifier = String(
+            lookup?.row?.login_identifier || target.loginIdentifier || currentUser.login_identifier || "",
+          ).trim();
           const resolvedWhere: Record<string, any> = {};
 
-          if (lookup?.row?.id || target.userId) {
-            resolvedWhere.id = lookup?.row?.id || target.userId;
+          const resolvedRowId = lookup?.row?.id ?? lookup?.pkValue ?? target.userId;
+          if (resolvedRowId !== undefined && resolvedRowId !== null && String(resolvedRowId).trim() !== "") {
+            resolvedWhere.id = resolvedRowId;
           }
 
           if (tableName === "csm_group_members") {
@@ -1575,7 +1582,6 @@ ${resolvedContainerSelector} select {
               resolvedWhere.login_identifier = lookup.pkValue;
             }
           } else if (!resolvedWhere.id) {
-            // Fallback: use lookup's identified pk
             const fallbackField = lookup?.pkField || target.identityField;
             const fallbackValue = lookup?.pkValue ?? target.identityValue;
             if (fallbackField && fallbackValue !== undefined && fallbackValue !== null && String(fallbackValue).trim() !== "") {
@@ -1598,42 +1604,46 @@ ${resolvedContainerSelector} select {
           const updateData: Record<string, any> = {
             user_address: serialized,
           };
-          if (resolvedWhere.id) updateData.id = resolvedWhere.id;
-          if (tableName === "csm_group_members" && matchedLoginIdentifier) {
-            updateData.login_identifier = matchedLoginIdentifier;
+          if (resolvedWhere.id !== undefined && resolvedWhere.id !== null && String(resolvedWhere.id).trim() !== "") {
+            updateData.id = resolvedWhere.id;
           }
-          if (currentUser.email) updateData.email = currentUser.email;
-          if (currentUser.username) updateData.username = currentUser.username;
-          if (currentUser.phoneNumber || currentUser.phone_number) {
-            updateData.phoneNumber = currentUser.phoneNumber || currentUser.phone_number;
+          if (tableName === "csm_group_members" && resolvedWhere.login_identifier) {
+            updateData.login_identifier = resolvedWhere.login_identifier;
           }
 
           let lastError = "Update failed";
           let saved = false;
           let savedUserAddress = arr;
 
-          try {
-            const res = await api({
-              app_id: requestAppId,
-              obj_name: tableName,
-              command: "update",
-              obj_update: updateData,
-              pk_fields: pkFields,
-              where: resolvedWhere,
-            });
+          const attemptTables = lookup?.tableName
+            ? [tableName]
+            : Array.from(new Set([tableName, target.preferredTable].filter(Boolean)));
 
-            if (isUpdateSuccessResponse(res)) {
-              saved = true;
-              const updatedRow = (res as any)?.updated_row;
-              const persisted = resolveUserAddressArray(updatedRow);
-              if (persisted.length > 0) {
-                savedUserAddress = persisted;
+          for (const attemptTable of attemptTables) {
+            const attemptAppId = resolveTableAppId(attemptTable, effectiveAppId);
+            try {
+              const res = await api({
+                app_id: attemptAppId,
+                obj_name: attemptTable,
+                command: "update",
+                obj_update: updateData,
+                pk_fields: pkFields,
+                where: resolvedWhere,
+              });
+
+              if (isUpdateSuccessResponse(res)) {
+                saved = true;
+                const updatedRow = (res as any)?.updated_row;
+                const persisted = resolveUserAddressArray(updatedRow);
+                if (persisted.length > 0) {
+                  savedUserAddress = persisted;
+                }
+                break;
               }
-            } else {
               lastError = (res as any)?.message || (res as any)?.error || "Update failed";
+            } catch (updateError: any) {
+              lastError = updateError?.message || String(updateError);
             }
-          } catch (updateError: any) {
-            lastError = updateError?.message || String(updateError);
           }
 
           // Đồng bộ runtime nếu thành công
@@ -2187,8 +2197,7 @@ ${resolvedContainerSelector} select {
           if (userInfoUp.phoneNumber !== undefined) updateObj.phoneNumber = userInfoUp.phoneNumber;
           if (userInfoUp.email !== undefined) updateObj.email = userInfoUp.email;
           if (userInfoUp.avatar !== undefined) updateObj.avatar = userInfoUp.avatar;
-          // Chỉ dùng user_address (canonical field) - không dùng fallback sai
-          const userAddressValue = userInfoUp?.user_address;
+          const userAddressValue = userInfoUp?.user_address ?? userInfoUp?.user_adress;
           if (userAddressValue !== undefined) {
             const serializedAddress = serializeUserAddressValue(userAddressValue);
             updateObj.user_address = serializedAddress;

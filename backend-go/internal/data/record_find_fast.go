@@ -10,6 +10,10 @@ import (
 
 const maxFTSEqKeysToCheck = 20
 
+// Java RecordManager parity: cap find() fallback scans to protect latency under load.
+const maxFindScanRecords = 2000
+const maxFindScanBytes = 16 * 1024 * 1024
+
 var strictNoScanFindFields = map[string]struct{}{
 	"refresh_token": {},
 	"refresh":       {},
@@ -131,8 +135,15 @@ func (rm *RecordManager) tryFindByAuthFieldEq(appID, tableName string, filter mo
 		}
 	}
 
+	if rec := rm.tryFindViaEqIndexSingle(appID, tableName, filter); rec != nil {
+		return rec
+	}
+	if rec := rm.tryFindByFTSEq(appID, tableName, filter); rec != nil {
+		return rec
+	}
+
 	var found map[string]any
-	_ = rm.scanTable(app, table, func(_ string, raw []byte) error {
+	_ = rm.scanTableLimited(app, table, maxFindScanRecords, maxFindScanBytes, func(_ string, raw []byte) error {
 		var record map[string]any
 		if json.Unmarshal(raw, &record) == nil && filter.Matches(record) {
 			found = record
@@ -203,7 +214,7 @@ func (rm *RecordManager) collectViaFTSEq(appID, tableName string, filter model.S
 	return records
 }
 
-// tryFindByTokenFieldEq scans auth tables for token fields when FTS is stale (app_token/refresh not yet indexed).
+// tryFindByTokenFieldEq resolves token fields via eq/FTS index only — never full-table scan (Java strict no-scan).
 func (rm *RecordManager) tryFindByTokenFieldEq(appID, tableName string, filter model.SearchFilter) map[string]any {
 	if !isAuthTokenTable(tableName) {
 		return nil
@@ -223,20 +234,18 @@ func (rm *RecordManager) tryFindByTokenFieldEq(appID, tableName string, filter m
 		return nil
 	}
 
-	app, table, err := rm.sanitizeTable(appID, tableName)
-	if err != nil {
+	if rec := rm.tryFindViaEqIndexSingle(appID, tableName, filter); rec != nil {
+		return rec
+	}
+	return rm.tryFindByFTSEq(appID, tableName, filter)
+}
+
+func (rm *RecordManager) tryFindViaEqIndexSingle(appID, tableName string, filter model.SearchFilter) map[string]any {
+	records := rm.collectViaEqIndex(appID, tableName, filter)
+	if len(records) == 0 {
 		return nil
 	}
-	var found map[string]any
-	_ = rm.scanTable(app, table, func(_ string, raw []byte) error {
-		var record map[string]any
-		if json.Unmarshal(raw, &record) == nil && filter.Matches(record) {
-			found = record
-			return errScanStop
-		}
-		return nil
-	})
-	return found
+	return records[0]
 }
 
 func isAuthTokenTable(tableName string) bool {

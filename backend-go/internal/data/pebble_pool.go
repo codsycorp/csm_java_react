@@ -2,6 +2,7 @@ package data
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 
@@ -90,6 +91,10 @@ func (rm *RecordManager) getRecordBytes(appID, tableName, storageKey string) ([]
 }
 
 func (rm *RecordManager) scanTable(appID, tableName string, fn func(storageKey string, value []byte) error) error {
+	return rm.scanTableLimited(appID, tableName, 0, 0, fn)
+}
+
+func (rm *RecordManager) scanTableLimited(appID, tableName string, maxRecords int, maxBytes int64, fn func(storageKey string, value []byte) error) error {
 	app, table, err := rm.sanitizeTable(appID, tableName)
 	if err != nil {
 		return err
@@ -100,6 +105,7 @@ func (rm *RecordManager) scanTable(appID, tableName string, fn func(storageKey s
 	}
 
 	count := 0
+	var scannedBytes int64
 	iter, err := db.NewIter(&pebble.IterOptions{})
 	if err != nil {
 		return err
@@ -111,7 +117,19 @@ func (rm *RecordManager) scanTable(appID, tableName string, fn func(storageKey s
 			continue
 		}
 		count++
-		if err := fn(key, append([]byte(nil), iter.Value()...)); err != nil {
+		if maxRecords > 0 && count > maxRecords {
+			log.Printf("scan limit reached for %s/%s (%d records)", app, table, maxRecords)
+			break
+		}
+		val := append([]byte(nil), iter.Value()...)
+		if maxBytes > 0 {
+			scannedBytes += int64(len(val))
+			if scannedBytes > maxBytes {
+				log.Printf("scan byte budget reached for %s/%s (%d bytes)", app, table, scannedBytes)
+				break
+			}
+		}
+		if err := fn(key, val); err != nil {
 			return err
 		}
 	}
@@ -135,8 +153,21 @@ func (rm *RecordManager) scanTable(appID, tableName string, fn func(storageKey s
 		if !hasPrefix(liter.Key(), prefix) {
 			break
 		}
+		count++
+		if maxRecords > 0 && count > maxRecords {
+			log.Printf("legacy scan limit reached for %s/%s (%d records)", app, table, maxRecords)
+			break
+		}
+		val := append([]byte(nil), liter.Value()...)
+		if maxBytes > 0 {
+			scannedBytes += int64(len(val))
+			if scannedBytes > maxBytes {
+				log.Printf("legacy scan byte budget reached for %s/%s (%d bytes)", app, table, scannedBytes)
+				break
+			}
+		}
 		storageKey := RocksKeyFromPebbleKey(string(liter.Key()))
-		if err := fn(storageKey, append([]byte(nil), liter.Value()...)); err != nil {
+		if err := fn(storageKey, val); err != nil {
 			return err
 		}
 	}

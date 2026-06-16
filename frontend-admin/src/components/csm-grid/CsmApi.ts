@@ -662,6 +662,41 @@ export function andWhere(conditions: Array<Condition | undefined>): Where | unde
 	return { operator: "AND", conditions: conds };
 }
 
+/** Convert legacy plain-map where ({ id: "..." }) to SearchFilter shape for Go/Java parity. */
+export function normalizeWhereForApi(where: Where | Record<string, any> | undefined): Where | undefined {
+	if (!where || typeof where !== "object") {
+		return where as Where | undefined;
+	}
+	const candidate = where as Record<string, any>;
+	if (typeof candidate.field === "string" && candidate.field.trim() !== "" && candidate.type) {
+		return where as Condition;
+	}
+	if (
+		(candidate.operator === "AND" || candidate.operator === "OR")
+		&& Array.isArray(candidate.conditions)
+		&& candidate.conditions.length > 0
+	) {
+		return where as Where;
+	}
+	const conditions: Condition[] = [];
+	for (const [field, value] of Object.entries(candidate)) {
+		if (field === "operator" || field === "conditions") {
+			continue;
+		}
+		if (value === undefined) {
+			continue;
+		}
+		conditions.push({ field, type: "eq", value });
+	}
+	if (conditions.length === 0) {
+		return undefined;
+	}
+	if (conditions.length === 1) {
+		return conditions[0];
+	}
+	return { operator: "AND", conditions };
+}
+
 export async function getTableData<T>(params: {
 	app_id: string
 	obj_name: string
@@ -741,10 +776,11 @@ export async function getTableData<T>(params: {
 		return cache.get(cacheKey) as Promise<ApiListResponse<T>>;
 	}
 
+	const normalizedWhere = normalizeWhereForApi(params.where);
 	const payload: any = {
 		app_id: params.app_id,
 		obj_name: params.obj_name,
-		...(params.where ? { e_where: params.where } : {}),
+		...(normalizedWhere ? { e_where: normalizedWhere } : {}),
 		...(shouldForceOnlyMySubusers ? { only_my_subusers: true } : {}),
 		...(params.take ? { take: params.take } : {}),
 		...(params.lastkey ? { lastkey: params.lastkey } : {}),

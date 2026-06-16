@@ -96,20 +96,6 @@ func (s *UserService) FindUserByRefreshToken(refreshToken string, canonicalize b
 	if s.rm != nil {
 		for _, field := range []string{"refresh_token", "refresh"} {
 			filter := model.EqFilter(field, refreshToken)
-			filtered := s.rm.Filter(CSMAppID, AccountsTable, filter)
-			rows, _ := filtered["rows"].([]any)
-			var accountRows []map[string]any
-			for _, row := range rows {
-				if m, ok := row.(map[string]any); ok {
-					accountRows = append(accountRows, m)
-				}
-			}
-			if rec := pickBestRefreshSessionRecord(accountRows, refreshToken); rec != nil {
-				if canonicalize {
-					return s.canonicalizeRefreshUser(rec, refreshToken)
-				}
-				return s.mapRefreshRecordToUser(rec, refreshToken)
-			}
 			record := s.rm.Find(CSMAppID, AccountsTable, filter)
 			if len(record) > 0 {
 				if canonicalize {

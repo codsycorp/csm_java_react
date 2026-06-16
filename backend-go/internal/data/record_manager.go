@@ -127,10 +127,13 @@ func (rm *RecordManager) Find(appID, tableName string, filter model.SearchFilter
 	if rec := rm.tryFindByDirectEqKey(appID, tableName, filter); rec != nil {
 		return rec
 	}
-	if rec := rm.tryFindByAuthFieldEq(appID, tableName, filter); rec != nil {
+	if rec := rm.tryFindByFTSEq(appID, tableName, filter); rec != nil {
 		return rec
 	}
-	if rec := rm.tryFindByFTSEq(appID, tableName, filter); rec != nil {
+	if rec := rm.tryFindViaEqIndexSingle(appID, tableName, filter); rec != nil {
+		return rec
+	}
+	if rec := rm.tryFindByAuthFieldEq(appID, tableName, filter); rec != nil {
 		return rec
 	}
 	if rec := rm.tryFindByTokenFieldEq(appID, tableName, filter); rec != nil {
@@ -232,11 +235,14 @@ func (rm *RecordManager) collectFilteredRecords(appID, tableName string, filter 
 		if rec := rm.tryFindByDirectEqKey(appID, tableName, filter); rec != nil {
 			return []map[string]any{rec}
 		}
-		if rec := rm.tryFindByAuthFieldEq(appID, tableName, filter); rec != nil {
-			return []map[string]any{rec}
-		}
 		if records := rm.collectViaFTSEq(appID, tableName, filter); len(records) > 0 {
 			return records
+		}
+		if records := rm.collectViaEqIndex(appID, tableName, filter); len(records) > 0 {
+			return records
+		}
+		if rec := rm.tryFindByAuthFieldEq(appID, tableName, filter); rec != nil {
+			return []map[string]any{rec}
 		}
 		if rec := rm.tryFindByTokenFieldEq(appID, tableName, filter); rec != nil {
 			return []map[string]any{rec}
@@ -296,7 +302,7 @@ func (rm *RecordManager) tryFindByScan(appID, tableName string, filter model.Sea
 		return nil
 	}
 	var found map[string]any
-	err = rm.scanTable(app, table, func(_ string, raw []byte) error {
+	err = rm.scanTableLimited(app, table, maxFindScanRecords, maxFindScanBytes, func(_ string, raw []byte) error {
 		var record map[string]any
 		if json.Unmarshal(raw, &record) == nil && filter.Matches(record) {
 			found = record

@@ -244,6 +244,12 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 		objUpdate = map[string]any{}
 	}
 
+	if _, ok := objUpdate["user_address"]; !ok {
+		if legacy, ok := objUpdate["user_adress"]; ok {
+			objUpdate["user_address"] = legacy
+		}
+	}
+
 	if table == "csm_group_members" && access != nil && !access.IsDev {
 		if command == "delete" && access.IsSubUser {
 			out["success"] = false
@@ -520,16 +526,72 @@ func trimLargeCodeFields(table string, row map[string]any) map[string]any {
 }
 
 func parseSearchFilter(params map[string]any) model.SearchFilter {
-	for _, key := range []string{"e_where", "filter", "searchFilter"} {
-		if raw, ok := params[key]; ok {
-			b, _ := json.Marshal(raw)
-			var filter model.SearchFilter
-			if json.Unmarshal(b, &filter) == nil {
-				return filter
+	for _, key := range []string{"e_where", "filter", "searchFilter", "where"} {
+		raw, ok := params[key]
+		if !ok || raw == nil {
+			continue
+		}
+		if filter := decodeSearchFilter(raw); !isEmptySearchFilter(filter) {
+			return filter
+		}
+		if plain, ok := raw.(map[string]any); ok {
+			if converted := plainMapToSearchFilter(plain); !isEmptySearchFilter(converted) {
+				return converted
 			}
 		}
 	}
 	return model.SearchFilter{}
+}
+
+func decodeSearchFilter(raw any) model.SearchFilter {
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return model.SearchFilter{}
+	}
+	var filter model.SearchFilter
+	if json.Unmarshal(b, &filter) != nil {
+		return model.SearchFilter{}
+	}
+	return filter
+}
+
+func isEmptySearchFilter(filter model.SearchFilter) bool {
+	return filter.Field == "" && len(filter.Conditions) == 0
+}
+
+func plainMapToSearchFilter(raw map[string]any) model.SearchFilter {
+	if field, ok := raw["field"].(string); ok && strings.TrimSpace(field) != "" {
+		if decoded := decodeSearchFilter(raw); !isEmptySearchFilter(decoded) {
+			return decoded
+		}
+	}
+	if operator, ok := raw["operator"].(string); ok {
+		if condsRaw, ok := raw["conditions"].([]any); ok && len(condsRaw) > 0 {
+			if decoded := decodeSearchFilter(raw); !isEmptySearchFilter(decoded) {
+				return decoded
+			}
+		}
+		_ = operator
+	}
+
+	var conditions []model.SearchFilter
+	for key, value := range raw {
+		if key == "operator" || key == "conditions" {
+			continue
+		}
+		if value == nil {
+			continue
+		}
+		conditions = append(conditions, model.EqFilter(key, value))
+	}
+	switch len(conditions) {
+	case 0:
+		return model.SearchFilter{}
+	case 1:
+		return conditions[0]
+	default:
+		return model.SearchFilter{Operator: "AND", Conditions: conditions}
+	}
 }
 
 func firstNonEmpty(record map[string]any, keys ...string) string {
