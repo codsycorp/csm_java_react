@@ -509,10 +509,10 @@
       sxCu: "Ngày cũ đứng trước",
       lgHeThong: "Hệ Số Bắc (2 hoặc 3)",
       lgCdMode: "Kiểu Xét Kết Quả",
-      lgCdAll: "Tất Cả (Đầu + Đuôi)",
-      lgCdC: "Chính (Đầu)",
-      lgCdD: "Đảo (Đuôi)",
-      lgCdPair: "Số Cặp (Đầu-Đuôi)",
+      lgCdAll: "Tất Cả (Chính + Đảo)",
+      lgCdC: "Chính",
+      lgCdD: "Đảo",
+      lgCdPair: "Số Cặp",
       lgGhTu: "Lấy Từ Vị Trí (1–93)",
       lgGhDen: "Lấy Đến Vị Trí (1–93)",
       lgNgayChay: "Số Ngày Xét (0 = Tất Cả)",
@@ -552,6 +552,13 @@
       lgNbGroupSize: "Nhóm số",
       lgSlrWeek: "Tuần",
       lgSlrHit: "Trúng",
+      lgSlrAutoPanel: "Khu vực chạy tự động (Auto)",
+      lgSlrAutoConditions: "Điều kiện chạy tự động",
+      lgSlrAutoNoHitWeeks: "Số tuần không xổ LT (Nam/Bắc theo loại tìm)",
+      lgSlrAutoSttWindow: "Số cặp STT quét liên tiếp (vd: 5 = STT 1–5, 2–6, …)",
+      lgSlrAutoRunFilter: "Chạy lọc tự động",
+      lgSlrAutoThMinNgayCx3Nb: "Ngày CX (DD3 Nam-Bắc): lấy khi >",
+      lgSlrAutoThMaxKtnLast: "Tổng cuối KTN: tuần cuối ≤",
       lgNbColSo: "Bộ số",
       lgNbColDauCp: "Đầu chính phụ (D+P)",
       lgNbColDauC: "Đầu chính (D)",
@@ -761,10 +768,10 @@
       sxCu: "Oldest First",
       lgHeThong: "North System (2 or 3 digits)",
       lgCdMode: "Result Check Mode",
-      lgCdAll: "All (Head + Tail)",
-      lgCdC: "Main (Head)",
-      lgCdD: "Reverse (Tail)",
-      lgCdPair: "Pairs (Head-Tail)",
+      lgCdAll: "All (Main + Reverse)",
+      lgCdC: "Main",
+      lgCdD: "Reverse",
+      lgCdPair: "Number Pairs",
       lgGhTu: "Rank From (1–93)",
       lgGhDen: "Rank To (1–93)",
       lgNgayChay: "History Days (0 = All)",
@@ -804,6 +811,13 @@
       lgNbGroupSize: "Group size",
       lgSlrWeek: "Week",
       lgSlrHit: "Hits",
+      lgSlrAutoPanel: "Auto Run Area",
+      lgSlrAutoConditions: "Auto-run conditions",
+      lgSlrAutoNoHitWeeks: "Weeks without long-gap hits (North/South by query type)",
+      lgSlrAutoSttWindow: "Consecutive STT pairs per scan (default 5)",
+      lgSlrAutoRunFilter: "Run auto filter",
+      lgSlrAutoThMinNgayCx3Nb: "Days no-show DD3 N/S: keep if >",
+      lgSlrAutoThMaxKtnLast: "KTN last week in series ≤",
       lgNbColSo: "Number Set",
       lgNbColDauCp: "Main+Sub Head (D+P)",
       lgNbColDauC: "Main Head (D)",
@@ -1013,10 +1027,10 @@
       sxCu: "最旧在前",
       lgHeThong: "北部号系（2或3位）",
       lgCdMode: "开奖结果检查方式",
-      lgCdAll: "全部（头 + 尾）",
-      lgCdC: "正号（头）",
-      lgCdD: "倒号（尾）",
-      lgCdPair: "对子（头-尾）",
+      lgCdAll: "全部（正 + 倒）",
+      lgCdC: "正号",
+      lgCdD: "倒号",
+      lgCdPair: "对子",
       lgGhTu: "排名起始（1–93）",
       lgGhDen: "排名截止（1–93）",
       lgNgayChay: "历史天数（0 = 全部）",
@@ -1056,6 +1070,13 @@
       lgNbGroupSize: "号码组",
       lgSlrWeek: "周",
       lgSlrHit: "命中",
+      lgSlrAutoPanel: "自动运行区",
+      lgSlrAutoConditions: "自动运行条件",
+      lgSlrAutoNoHitWeeks: "长未出周数（按查询类型的南/北）",
+      lgSlrAutoSttWindow: "连续 STT 对子扫描数（默认 5）",
+      lgSlrAutoRunFilter: "运行自动筛选",
+      lgSlrAutoThMinNgayCx3Nb: "DD3 南北未出现天数：保留 >",
+      lgSlrAutoThMaxKtnLast: "KTN 序列最后一周 ≤",
       lgNbColSo: "号码组",
       lgNbColDauCp: "主副头位 (D+P)",
       lgNbColDauC: "主台头位 (D)",
@@ -1517,9 +1538,13 @@
     return maQuery + ",D_-P_-T_-B_";
   }
 
-  function isLegacyDd3NbQueryValue(value, heThong) {
+  function isLegacySlrDd3NamBacQueryValue(value, heThong) {
     var raw = parseLegacyLoaiTimMeta(value, heThong).rawValue;
     return /,D_-P_-T_-B_$/.test(String(raw || ""));
+  }
+
+  function isLegacyDd3NbQueryValue(value, heThong) {
+    return isLegacySlrDd3NamBacQueryValue(value, heThong);
   }
 
   function getLegacySlrPreferredQueryValue(heThong, optionList) {
@@ -2732,6 +2757,9 @@
     // --- SLR Auto-run custom conditions ---
 
     var _slr_autoNamWeeks = useState(5), legacySlrAutoNamWeeks = _slr_autoNamWeeks[0], setLegacySlrAutoNamWeeks = _slr_autoNamWeeks[1];
+    var _slr_autoSttWindow = useState(5), legacySlrAutoSttWindowSize = _slr_autoSttWindow[0], setLegacySlrAutoSttWindowSize = _slr_autoSttWindow[1];
+    var _slr_autoThMinNgayCx3Nb = useState(0), legacySlrAutoThMinNgayCx3Nb = _slr_autoThMinNgayCx3Nb[0], setLegacySlrAutoThMinNgayCx3Nb = _slr_autoThMinNgayCx3Nb[1];
+    var _slr_autoThMaxKtnLast = useState(5), legacySlrAutoThMaxKtnLast = _slr_autoThMaxKtnLast[0], setLegacySlrAutoThMaxKtnLast = _slr_autoThMaxKtnLast[1];
 
     // --- SLR Auto-filtered rows (kept for display binding) ---
     var legacySlrAutoFilteredRows = useMemo(function () {
@@ -2971,7 +2999,7 @@
             var resultRows = [];
             var dataByQuery = {};
 
-            var sttWindowSize = 5;
+            var sttWindowSize = Math.max(1, Math.min(93, Number(legacySlrAutoSttWindowSize || 5)));
             var tongNamWeeks = Math.max(1, Number(legacySlrAutoNamWeeks || 5));
             var modeNow = String(legacyCdMode || "C_D").toUpperCase();
             pushAutoLog("Tham số: LoạiTìm=" + selectedQueryValues.length + ", STTWindow=" + sttWindowSize + ", NamNoHitWeeks=" + tongNamWeeks + ", Mode=" + modeNow);
@@ -3018,7 +3046,7 @@
               var rankTo = Math.max(sttTo, Number(args && args.rankTo || sttTo));
               var rowKeyPrefix = String(args && args.rowKeyPrefix || "slr_auto");
 
-              // Keep this metric for display only; no longer used as a filter condition.
+              // Chuỗi ngày không trúng gần nhất — chỉ hiển thị, không dùng làm điều kiện lọc.
               var noHitDaysCurrent = 0;
               for (var cni = 0; cni < cells.length; cni += 1) {
                 if (isLegacySlrNoHitRangeCached(cellCaches[cni], sttFrom, sttTo)) {
@@ -3239,7 +3267,6 @@
 
               for (var sttFrom = rankFrom; sttFrom <= maxStart; sttFrom += 1) {
                 if ((sttFrom - rankFrom) > 0 && (sttFrom - rankFrom) % 8 === 0) {
-                  // Luồng tính toán STT có thể rất nặng, cần yield để tránh đứng trang.
                   await sleepMs(0);
                 }
                 rangeChecked += 1;
@@ -4160,55 +4187,16 @@
       return groupKeys;
     }
 
-    function extractRowsFromTableDataPayload(payload, tableName) {
-      if (Array.isArray(payload)) return payload;
-      if (!payload || typeof payload !== "object") return [];
-      if (Array.isArray(payload.rows)) return payload.rows;
-      if (payload.data) {
-        if (Array.isArray(payload.data)) return payload.data;
-        if (payload.data && Array.isArray(payload.data.rows)) return payload.data.rows;
-        if (payload.data && tableName && Array.isArray(payload.data[tableName])) return payload.data[tableName];
-      }
-      if (tableName && Array.isArray(payload[tableName])) return payload[tableName];
-      return [];
-    }
-
     async function fetchRowsFromGetTableData(tableName, heThong) {
-      var token = "";
-      try {
-        var raw = localStorage.getItem("access-token");
-        if (raw) {
-          var parsed = JSON.parse(raw);
-          token = String((parsed && parsed.state && parsed.state.token) || "");
-        }
-      } catch (_e) {}
-
-      var headers = { "Content-Type": "application/json", "Accept": "application/json" };
-      if (token) headers["csm-token"] = token;
-
-      var endpointCandidates = ["/api/get-table-data", "api/get-table-data"];
-      var bodyCandidates = [
-        { app_id: "kqxs", obj_name: tableName, e_where: { field: "ma_duoi", type: "eq", value: Number(heThong || 2) } }
-      ];
-
-      for (var ei = 0; ei < endpointCandidates.length; ei += 1) {
-        for (var bi = 0; bi < bodyCandidates.length; bi += 1) {
-          try {
-            var resp = await fetch(endpointCandidates[ei], {
-              method: "POST",
-              credentials: "include",
-              headers: headers,
-              body: JSON.stringify(bodyCandidates[bi])
-            });
-            if (!resp || !resp.ok) continue;
-            var payload = await resp.json();
-            var rows = extractRowsFromTableDataPayload(payload, tableName);
-            if (rows.length) return rows;
-          } catch (_err) {}
-        }
-      }
-
-      // Fallback to SDK wrapper if direct endpoint is not available.
+      // Cùng chuẩn auto-lmkt / frontend-admin: seft.csm_obj_tables → ky getTableData (JWT refresh, CSRF, api host).
+      // Không gọi fetch("/api/get-table-data") — thiếu auth headers và sai URL trên admin.* (401).
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      var rows = await fetchRows({
+        app_id: "kqxs",
+        obj_name: tableName,
+        e_where: { field: "ma_duoi", type: "eq", value: he }
+      });
+      if (rows && rows.length) return rows;
       return await fetchRows({
         app_id: "kqxs",
         obj_name: tableName,
@@ -9773,11 +9761,55 @@
     }
 
     function getLegacySlrTongHopQueryDisplayText(queryValue, fallbackText) {
-      if (isLegacyDd3NbQueryValue(queryValue, legacyHeThong)) {
+      if (isLegacySlrDd3NamBacQueryValue(queryValue, legacyHeThong)) {
         return "Đầu đuôi 3 Đài Nam - Bắc";
       }
       var text = String(fallbackText || "").trim();
       return text || String(queryValue || "").trim();
+    }
+
+    function getLegacySlrAutoTongHopGroupPool() {
+      var selected = getLegacyTongHopCachListFromSelectedGroups(false);
+      if (selected.length) return selected;
+      return (legacyThGroupOptions || []).map(function (g) {
+        var noiDung = String((g && g.tCach) || (g && g.cachIds) || "")
+          .replace(/\|/g, " ")
+          .replace(/,/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (!noiDung) return null;
+        var label = String((g && g.text) || noiDung).trim() || noiDung;
+        return {
+          key: String((g && g.id) || label),
+          boSo: label,
+          cachName: label,
+          searchText: noiDung,
+          noiDungDisplay: label
+        };
+      }).filter(Boolean);
+    }
+
+    function findLegacySlrAutoTongHopGroupMatch(inputTokens, groupPool) {
+      var pool = Array.isArray(groupPool) ? groupPool : [];
+      var normalizedInput = (Array.isArray(inputTokens) ? inputTokens : []).map(function (t) {
+        return String(t || "").trim();
+      }).filter(Boolean);
+      if (!pool.length || !normalizedInput.length) return null;
+
+      var matched = [];
+      pool.forEach(function (g) {
+        var groupTokens = parseSoChuByHeThong(String((g && g.searchText) || ""), legacyHeThong);
+        if (!groupTokens.length) return;
+        var groupSet = {};
+        groupTokens.forEach(function (tk) { groupSet[String(tk || "").trim()] = true; });
+        for (var i = 0; i < normalizedInput.length; i += 1) {
+          if (!groupSet[normalizedInput[i]]) return;
+        }
+        matched.push({ group: g, size: groupTokens.length });
+      });
+      if (!matched.length) return null;
+      matched.sort(function (a, b) { return a.size - b.size; });
+      return matched[0].group;
     }
 
     function buildLegacySlrAutoCachItemsForQuery(searchText, queryValue, rowKey, queryIndex) {
@@ -9792,35 +9824,29 @@
         groupText: String(queryValue || "")
       }];
 
-      if (!isLegacyDd3NbQueryValue(queryValue, legacyHeThong)) return fallback;
+      if (!isLegacySlrDd3NamBacQueryValue(queryValue, legacyHeThong)) return fallback;
 
-      var defaultGroups = getLegacyTongHopCachListFromSelectedGroups(false);
-      if (!Array.isArray(defaultGroups) || !defaultGroups.length) return fallback;
+      var groupPool = getLegacySlrAutoTongHopGroupPool();
+      if (!groupPool.length) return fallback;
 
       var inputTokens = parseSoChuByHeThong(rawSearch, legacyHeThong);
-      var tokenSet = {};
-      inputTokens.forEach(function (tk) { tokenSet[String(tk || "").trim()] = true; });
-
-      var matched = defaultGroups.filter(function (g) {
-        var groupTokens = parseSoChuByHeThong(String((g && g.searchText) || ""), legacyHeThong);
-        if (!groupTokens.length) return false;
-        for (var i = 0; i < groupTokens.length; i += 1) {
-          if (!tokenSet[String(groupTokens[i] || "").trim()]) return false;
-        }
-        return true;
-      });
-
-      var picked = matched.length ? matched[0] : defaultGroups[0];
-      if (!picked) return fallback;
+      var picked = findLegacySlrAutoTongHopGroupMatch(inputTokens, groupPool);
+      var pickedCach = rawSearch;
+      if (picked) {
+        pickedCach = String((picked && picked.cachName) || (picked && picked.noiDungDisplay) || rawSearch || "").trim() || rawSearch;
+      }
 
       return [{
-        key: String(rowKey || "slr_auto") + "_" + queryIndex + "_group",
-        boSo: String((picked && picked.boSo) || rawSearch || "").trim() || rawSearch,
-        cachName: String((picked && picked.cachName) || (picked && picked.noiDungDisplay) || rawSearch || "").trim() || rawSearch,
-        searchText: String((picked && picked.searchText) || rawSearch || "").trim() || rawSearch,
-        noiDungDisplay: String((picked && picked.noiDungDisplay) || (picked && picked.searchText) || rawSearch || "").trim() || rawSearch,
+        key: String(rowKey || "slr_auto") + "_" + queryIndex + (picked ? "_group" : ""),
+        boSo: picked
+          ? (String((picked && picked.boSo) || pickedCach || rawSearch || "").trim() || rawSearch)
+          : rawSearch,
+        cachName: pickedCach,
+        // Luôn xét tổng hợp/lọc theo số SLR đã chọn, không theo cả nhóm 10-20 số.
+        searchText: rawSearch,
+        noiDungDisplay: pickedCach,
         groupId: String((picked && picked.key) || (rowKey || "slr_auto")),
-        groupText: String((picked && picked.cachName) || (picked && picked.noiDungDisplay) || (picked && picked.boSo) || "Nhóm mặc định")
+        groupText: pickedCach
       }];
     }
 
@@ -9834,6 +9860,104 @@
         var key = String((row && row.key) || (String((row && row.queryValue) || "") + "_" + String((row && row.sttFrom) || "") + "_" + String((row && row.sttTo) || "") + "_" + idx));
         return !!selectedMap[key];
       });
+    }
+
+    function getLegacySlrAutoTongHopFilterConfig() {
+      var minRaw = legacySlrAutoThMinNgayCx3Nb;
+      var maxRaw = legacySlrAutoThMaxKtnLast;
+      var minNgayCx3Nb = (minRaw === null || minRaw === undefined || String(minRaw).trim() === "") ? null : Number(minRaw);
+      var maxKtnLast = (maxRaw === null || maxRaw === undefined || String(maxRaw).trim() === "") ? null : Number(maxRaw);
+      return {
+        minNgayCx3Nb: isNaN(minNgayCx3Nb) ? null : minNgayCx3Nb,
+        maxKtnLast: isNaN(maxKtnLast) ? null : maxKtnLast
+      };
+    }
+
+    function hasLegacySlrAutoTongHopFilter(cfg) {
+      var filterCfg = cfg || getLegacySlrAutoTongHopFilterConfig();
+      return filterCfg.minNgayCx3Nb !== null || filterCfg.maxKtnLast !== null;
+    }
+
+    function parseLegacySerKqtLastWeekValue(serKqt) {
+      var parts = String(serKqt || "").trim().split(/\s+/).filter(Boolean);
+      if (!parts.length) return null;
+      var n = parseInt(parts[parts.length - 1], 10);
+      return isNaN(n) ? null : n;
+    }
+
+    function parseLegacySlrAutoKtnLastWeekValue(metric) {
+      var fromSer = parseLegacySerKqtLastWeekValue(metric && metric.serKQT);
+      if (fromSer !== null) return fromSer;
+      return 0;
+    }
+
+    function passLegacySlrAutoTongHopDd3NbFilter(metric, cfg) {
+      if (!metric) return false;
+      var filterCfg = cfg || getLegacySlrAutoTongHopFilterConfig();
+      if (!hasLegacySlrAutoTongHopFilter(filterCfg)) return true;
+      if (filterCfg.minNgayCx3Nb !== null) {
+        if (!(Number(metric.ngayCXHT3NB || 0) > filterCfg.minNgayCx3Nb)) return false;
+      }
+      if (filterCfg.maxKtnLast !== null) {
+        var ktnWeek = parseLegacySlrAutoKtnLastWeekValue(metric);
+        if (ktnWeek > filterCfg.maxKtnLast) return false;
+      }
+      return true;
+    }
+
+    function buildLegacySlrAutoTongHopRowFromMetric(row, metric, querySpec, tongHopInput, rowDateRange, q) {
+      var ktnLastWeek = parseLegacySlrAutoKtnLastWeekValue(metric);
+      return {
+        key: "slr_auto_th_" + String(row.key || row._autoPickOrder || 0) + "_" + q,
+        autoPickOrder: Number(row._autoPickOrder || 0),
+        autoQueryOrder: Number(q || 0),
+        autoQueryType: isLegacySlrDd3NamBacQueryValue(querySpec.value, legacyHeThong)
+          ? (q === 0 ? "dd3nb" : "dd3nb_extra")
+          : "main",
+        queryLabel: String(querySpec.text || querySpec.value || row.queryLabel || row.queryValue || ""),
+        sttFrom: Number(row.sttFrom || 0),
+        sttTo: Number(row.sttTo || 0),
+        noHitDaysCurrent: Number((row && row.noHitDaysCurrent) || (row && row.noHitDays) || 0),
+        tongNamZeroWeekStreak: Number((row && row.tongNamZeroWeekStreak) || 0),
+        zeroWeekTarget: String((row && row.zeroWeekTarget) || "nam"),
+        cNumbers: tongHopInput.cText,
+        dNumbers: tongHopInput.dText,
+        tongHopInput: String(tongHopInput.searchText || ""),
+        tongHopFromDate: rowDateRange.fromDate,
+        tongHopToDate: rowDateRange.toDate,
+        boSo: String(metric.boSo || tongHopInput.searchText || ""),
+        cach: String(metric.cach || ""),
+        ketQua: buildLegacyThResultText(metric),
+        ngayCXHT: Number(metric.ngayCXHT || 0),
+        kyCXHT: Number(metric.kyCXHT || 0),
+        lauNgay: Number(metric.lauNgay || 0),
+        lauKy: Number(metric.lauKy || 0),
+        ngayCXHT3NB: Number(metric.ngayCXHT3NB || 0),
+        lanTuan1C: Number(metric.lanTuan1C || 0),
+        serKQT: String(metric.serKQT || ""),
+        ktnLastWeek: ktnLastWeek === null ? "" : ktnLastWeek,
+        sourceSlrKey: String(row.key || q)
+      };
+    }
+
+    async function fetchLegacySlrAutoDd3NamBacFilterMetric(tongHopInput, rowDateRange, rowKey) {
+      var dd3Option = getLegacyDd3NbQueryTypeOption(legacyHeThong);
+      var cachItems = buildLegacySlrAutoCachItemsForQuery(
+        tongHopInput.searchText,
+        dd3Option.value,
+        rowKey,
+        99
+      );
+      var metrics = await fetchLegacyTongHopRowsFromApi({
+        triet: false,
+        queryValue: dd3Option.value,
+        queryText: dd3Option.text,
+        cachItems: cachItems,
+        fromDate: rowDateRange.fromDate,
+        toDate: rowDateRange.toDate,
+        heThong: legacyHeThong
+      });
+      return Array.isArray(metrics) && metrics.length ? metrics[0] : null;
     }
 
     async function runLegacySlrAutoTongHopSelectedRows() {
@@ -9854,6 +9978,8 @@
       try {
         var combinedRows = [];
         var skippedCount = 0;
+        var filteredOutCount = 0;
+        var thFilterCfg = getLegacySlrAutoTongHopFilterConfig();
         var extraDd3NbOption = getLegacyDd3NbQueryTypeOption(legacyHeThong);
 
         function resolveRowTongHopDateRange() {
@@ -9875,6 +10001,7 @@
         for (var i = 0; i < pickedRows.length; i += 1) {
           if (i > 0 && i % 2 === 0) await sleepMs(0);
           var row = pickedRows[i] || {};
+          row._autoPickOrder = i;
           var pct = 12 + Math.round(((i + 1) / pickedRows.length) * 84);
           setProgress(Math.max(12, Math.min(96, pct)));
 
@@ -9895,7 +10022,7 @@
             value: normalizedMainQueryValue,
             text: getLegacySlrTongHopQueryDisplayText(normalizedMainQueryValue, row.queryLabel)
           }];
-          if (!isLegacyDd3NbQueryValue(normalizedMainQueryValue, legacyHeThong)) {
+          if (!isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)) {
             querySpecs.push({
               value: extraDd3NbOption.value,
               text: getLegacySlrTongHopQueryDisplayText(extraDd3NbOption.value, extraDd3NbOption.text)
@@ -9903,6 +10030,8 @@
           }
 
           var rowHadMetric = false;
+          var pickBatch = [];
+          var dd3nbMetricForFilter = null;
           for (var q = 0; q < querySpecs.length; q += 1) {
             var querySpec = querySpecs[q] || {};
             var cachItems = buildLegacySlrAutoCachItemsForQuery(
@@ -9924,35 +10053,43 @@
             var metric = Array.isArray(metrics) && metrics.length ? metrics[0] : null;
             if (!metric) continue;
             rowHadMetric = true;
-
-            combinedRows.push({
-              key: "slr_auto_th_" + String(row.key || i) + "_" + q,
-              autoPickOrder: Number(i || 0),
-              autoQueryOrder: Number(q || 0),
-              autoQueryType: q === 0 ? "main" : "dd3nb_extra",
-              queryLabel: String(querySpec.text || querySpec.value || row.queryLabel || row.queryValue || ""),
-              sttFrom: Number(row.sttFrom || 0),
-              sttTo: Number(row.sttTo || 0),
-              noHitDaysCurrent: Number((row && row.noHitDaysCurrent) || (row && row.noHitDays) || 0),
-              tongNamZeroWeekStreak: Number((row && row.tongNamZeroWeekStreak) || 0),
-              zeroWeekTarget: String((row && row.zeroWeekTarget) || "nam"),
-              cNumbers: tongHopInput.cText,
-              dNumbers: tongHopInput.dText,
-              tongHopInput: tongHopInput.searchText,
-              tongHopFromDate: rowDateRange.fromDate,
-              tongHopToDate: rowDateRange.toDate,
-              boSo: String(metric.boSo || tongHopInput.searchText || ""),
-              ketQua: buildLegacyThResultText(metric),
-              ngayCXHT: Number(metric.ngayCXHT || 0),
-              kyCXHT: Number(metric.kyCXHT || 0),
-              lauNgay: Number(metric.lauNgay || 0),
-              lauKy: Number(metric.lauKy || 0),
-              sourceSlrKey: String(row.key || i)
-            });
+            if (isLegacySlrDd3NamBacQueryValue(querySpec.value, legacyHeThong)) {
+              dd3nbMetricForFilter = metric;
+            }
+            pickBatch.push(buildLegacySlrAutoTongHopRowFromMetric(row, metric, querySpec, tongHopInput, rowDateRange, q));
           }
           if (!rowHadMetric) {
             skippedCount += 1;
+            continue;
           }
+          if (!dd3nbMetricForFilter && hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
+            dd3nbMetricForFilter = await fetchLegacySlrAutoDd3NamBacFilterMetric(tongHopInput, rowDateRange, row.key);
+          }
+          if (dd3nbMetricForFilter && hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
+            if (!passLegacySlrAutoTongHopDd3NbFilter(dd3nbMetricForFilter, thFilterCfg)) {
+              filteredOutCount += 1;
+              continue;
+            }
+          }
+          var hasDd3RowInBatch = pickBatch.some(function (pickRow) {
+            var t = String((pickRow && pickRow.autoQueryType) || "");
+            return t === "dd3nb" || t === "dd3nb_extra";
+          });
+          if (!hasDd3RowInBatch && dd3nbMetricForFilter
+            && !isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)) {
+            pickBatch.push(buildLegacySlrAutoTongHopRowFromMetric(
+              row,
+              dd3nbMetricForFilter,
+              {
+                value: extraDd3NbOption.value,
+                text: getLegacySlrTongHopQueryDisplayText(extraDd3NbOption.value, extraDd3NbOption.text)
+              },
+              tongHopInput,
+              rowDateRange,
+              pickBatch.length
+            ));
+          }
+          pickBatch.forEach(function (pickRow) { combinedRows.push(pickRow); });
         }
 
         combinedRows.sort(function (a, b) {
@@ -9977,8 +10114,16 @@
 
         setLegacySlrAutoTongHopRows(combinedRows);
         legacySortedRowsRef.current["slr_auto_th"] = null;
+        var filterNote = "";
+        if (hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
+          filterNote = " | Lọc DD3 Nam-Bắc";
+          if (thFilterCfg.minNgayCx3Nb !== null) filterNote += " Ngày CX>" + thFilterCfg.minNgayCx3Nb;
+          if (thFilterCfg.maxKtnLast !== null) filterNote += " KTN≤" + thFilterCfg.maxKtnLast;
+          if (filteredOutCount) filterNote += " (bỏ " + filteredOutCount + ")";
+        }
         setLegacySlrAutoTongHopSummary(
           "Xuất Kết Hợp tự động: " + combinedRows.length + " dòng từ " + pickedRows.length + " dòng SLR đã chọn"
+          + filterNote
           + (skippedCount ? (" | Bỏ qua: " + skippedCount) : "")
         );
       } catch (e) {
@@ -10177,6 +10322,7 @@
       { title: "Số chính", dataIndex: "cNumbers", key: "cNumbers", width: 180 },
       { title: "Số đảo", dataIndex: "dNumbers", key: "dNumbers", width: 180 },
       { title: "Số đưa vào TH", dataIndex: "tongHopInput", key: "tongHopInput", width: 220 },
+      { title: "Cách", dataIndex: "cach", key: "cach", width: 180 },
       {
         title: "Kết quả",
         dataIndex: "ketQua",
@@ -10190,6 +10336,9 @@
       { title: "Kỳ CX", dataIndex: "kyCXHT", key: "kyCXHT", width: 70, sorter: function (a, b) { return Number((a && a.kyCXHT) || 0) - Number((b && b.kyCXHT) || 0); } },
       { title: "Lâu ngày", dataIndex: "lauNgay", key: "lauNgay", width: 80, sorter: function (a, b) { return Number((a && a.lauNgay) || 0) - Number((b && b.lauNgay) || 0); } },
       { title: "Lâu kỳ", dataIndex: "lauKy", key: "lauKy", width: 80, sorter: function (a, b) { return Number((a && a.lauKy) || 0) - Number((b && b.lauKy) || 0); } },
+      { title: "Ngày CX 3 NB", dataIndex: "ngayCXHT3NB", key: "ngayCXHT3NB", width: 90, sorter: function (a, b) { return Number((a && a.ngayCXHT3NB) || 0) - Number((b && b.ngayCXHT3NB) || 0); } },
+      { title: "KTN tuần cuối", dataIndex: "ktnLastWeek", key: "ktnLastWeek", width: 90, sorter: function (a, b) { return Number((a && a.ktnLastWeek) || 0) - Number((b && b.ktnLastWeek) || 0); } },
+      { title: "Tuần GN", dataIndex: "lanTuan1C", key: "lanTuan1C", width: 70, sorter: function (a, b) { return Number((a && a.lanTuan1C) || 0) - Number((b && b.lanTuan1C) || 0); } },
       { title: "Chuỗi LT", dataIndex: "noHitDaysCurrent", key: "noHitDaysCurrent", width: 80, sorter: function (a, b) { return Number((a && a.noHitDaysCurrent) || 0) - Number((b && b.noHitDaysCurrent) || 0); } },
       { title: "Tuần 0 (Nam/Bắc)", dataIndex: "tongNamZeroWeekStreak", key: "tongNamZeroWeekStreak", width: 90, sorter: function (a, b) { return Number((a && a.tongNamZeroWeekStreak) || 0) - Number((b && b.tongNamZeroWeekStreak) || 0); } }
     ];
@@ -11972,13 +12121,23 @@
                         h(Col, { xs: 24, lg: 9, key: "slrnb_auto_panel" }, [
                           h(Card, {
                             size: "small",
-                            title: "Khu vực chạy tự động (Auto)",
+                            title: tt.lgSlrAutoPanel || "Khu vực chạy tự động (Auto)",
                             style: { height: "100%", background: theme.cardBg, color: theme.text, borderColor: theme.border }
                           }, [
-                            h("div", { style: { marginBottom: 6, fontWeight: 600 } }, "Điều kiện chạy tự động"),
+                            h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.lgSlrAutoConditions || "Điều kiện chạy tự động"),
                             h(Row, { gutter: [8, 8], style: { marginBottom: 10 } }, [
-                              h(Col, { xs: 24, sm: 24 }, [
-                                h("div", { style: { fontSize: 12, color: theme.muted, marginBottom: 4 } }, "Số tuần không xổ LT (Nam/Bắc theo loại tìm)"),
+                              h(Col, { xs: 12, sm: 12 }, [
+                                h("div", { style: { fontSize: 12, color: theme.muted, marginBottom: 4 } }, tt.lgSlrAutoSttWindow || "Số cặp STT quét liên tiếp"),
+                                h(InputNumber, themedNumberProps({
+                                  min: 1,
+                                  max: 93,
+                                  value: legacySlrAutoSttWindowSize,
+                                  style: { width: "100%" },
+                                  onChange: function (v) { setLegacySlrAutoSttWindowSize(Math.max(1, Math.min(93, Number(v) || 5))); }
+                                }))
+                              ]),
+                              h(Col, { xs: 12, sm: 12 }, [
+                                h("div", { style: { fontSize: 12, color: theme.muted, marginBottom: 4 } }, tt.lgSlrAutoNoHitWeeks || "Số tuần không xổ LT (Nam/Bắc theo loại tìm)"),
                                 h(InputNumber, themedNumberProps({
                                   min: 1,
                                   max: 20,
@@ -11995,7 +12154,7 @@
                                 loading: !!legacySlrAutoRunning,
                                 disabled: !!legacySlrAutoRunning,
                                 onClick: function () { runLegacySlrAutoFilter(); }
-                              }, "Chạy lọc tự động")
+                              }, tt.lgSlrAutoRunFilter || "Chạy lọc tự động")
                             ]),
                             h("div", { style: { marginBottom: 6, fontWeight: 600 } }, (tt.lgThAutoQueryTypes || "Loại Tìm") + " (" + ((legacySlrSelectedQueryTypes && legacySlrSelectedQueryTypes.length) || 0) + "/" + ((legacySlrQueryTypeOptions && legacySlrQueryTypeOptions.length) || 0) + ")"),
                             h("div", { style: { maxHeight: 180, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.cardBg, padding: "4px 0", marginBottom: 10 } },
@@ -12712,6 +12871,34 @@
                 ]);
               })() : null,
               legacySlrAutoRows.length ? h("div", { style: { marginBottom: 10 } }, [
+                h("div", { style: { display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap", marginBottom: 8 } }, [
+                  h("div", null, [
+                    h("div", { style: { fontSize: 11, color: theme.muted, marginBottom: 4 } }, tt.lgSlrAutoThMinNgayCx3Nb || "Ngày CX (DD3 Nam-Bắc): lấy khi >"),
+                    h(InputNumber, themedNumberProps({
+                      min: 0,
+                      max: 999,
+                      value: legacySlrAutoThMinNgayCx3Nb,
+                      style: { width: 120 },
+                      placeholder: "0",
+                      onChange: function (v) {
+                        setLegacySlrAutoThMinNgayCx3Nb(v === null || v === undefined || v === "" ? 0 : Number(v));
+                      }
+                    }))
+                  ]),
+                  h("div", null, [
+                    h("div", { style: { fontSize: 11, color: theme.muted, marginBottom: 4 } }, tt.lgSlrAutoThMaxKtnLast || "Tổng cuối KTN: tuần cuối ≤"),
+                    h(InputNumber, themedNumberProps({
+                      min: 0,
+                      max: 99,
+                      value: legacySlrAutoThMaxKtnLast,
+                      style: { width: 120 },
+                      placeholder: "5",
+                      onChange: function (v) {
+                        setLegacySlrAutoThMaxKtnLast(v === null || v === undefined || v === "" ? 5 : Number(v));
+                      }
+                    }))
+                  ])
+                ]),
                 h("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 6 } }, [
                   h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text } }, "Bảng tự động (tách biệt vùng thủ công)"),
                   h(Button, {
@@ -12778,6 +12965,7 @@
                     onChange: function (p, f, s, extra) { if (extra && Array.isArray(extra.currentDataSource)) legacySortedRowsRef.current["slr_auto"] = extra.currentDataSource; }
                   })
                 ]),
+                legacySlrAutoTongHopSummary ? h("div", { style: { marginBottom: 8, fontSize: 12, color: theme.muted } }, legacySlrAutoTongHopSummary) : null,
                 legacySlrAutoTongHopRows.length ? h(Card, {
                   size: "small",
                   title: "Xuất Kết Hợp tự động - " + legacySlrAutoTongHopRows.length + " dòng",
@@ -12808,7 +12996,6 @@
                     }, "💾 Xuất đã chọn"),
                     h("span", { style: { fontSize: 11, color: theme.muted } }, "Đã chọn: " + (legacySlrAutoTongHopSelectedRowKeys || []).length)
                   ]),
-                  legacySlrAutoTongHopSummary ? h("div", { style: { marginBottom: 8, fontSize: 12, color: theme.muted } }, legacySlrAutoTongHopSummary) : null,
                   h(Table, {
                     rowKey: "key",
                     rowSelection: {
