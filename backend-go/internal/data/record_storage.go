@@ -3,7 +3,6 @@ package data
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 
@@ -107,16 +106,10 @@ func (rm *RecordManager) findStorageKeysByID(appID, tableName, idValue string) [
 }
 
 func (rm *RecordManager) searchPebbleKeysByID(appID, tableName, idValue string) []string {
-	match := buildFTSMatchQuery([]string{idValue})
-	if match == "" {
-		return nil
+	if keys := rm.eqIndexKeys(appID, tableName, "id", idValue); len(keys) > 0 {
+		return keys
 	}
-	keys, err := rm.ftsSearchKeys(appID, tableName, match, maxFTSCandidateKeys)
-	if err != nil {
-		log.Printf("FTS id lookup failed %s/%s id=%s: %v", appID, tableName, idValue, err)
-		return nil
-	}
-	return keys
+	return nil
 }
 
 // scanAllRecordSources walks the per-table Pebble store and legacy monolithic fallback keys.

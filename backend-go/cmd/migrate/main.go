@@ -1,4 +1,4 @@
-// Migrate RocksDB (Java/Rust CSM) → Pebble KV + sqlite-vec.
+// Migrate RocksDB (Java/Rust CSM) → Pebble KV.
 //
 // Uses Homebrew rocksdb_ldb CLI — no CGO, no grocksdb compile issues.
 //
@@ -11,15 +11,12 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"database/sql"
 	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,33 +25,20 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
-
-	"csm_server/backend-go/internal/data"
-
-	_ "modernc.org/sqlite"
-	_ "modernc.org/sqlite/vec"
 )
 
-const (
-	defaultEmbedDim = 384
-	ldbScanSep      = " ==> "
-)
+const ldbScanSep = " ==> "
 
 var (
 	sourceDir  = flag.String("source", defaultSource(), "RocksDB root (app_id/table_name/...)")
-	destDir    = flag.String("dest", defaultDest(), "Output: pebble/ + search/")
+	destDir    = flag.String("dest", defaultDest(), "Output: pebble/{app_id}/{table_name}/")
 	dryRun     = flag.Bool("dry-run", false, "Scan only, do not write")
 	batchSize  = flag.Int("batch", 500, "Pebble batch size")
-	embedDim   = flag.Int("embed-dim", defaultEmbedDim, "Hash embedding dimension for sqlite-vec")
-	skipFTS    = flag.Bool("skip-fts", false, "Skip FTS5 index")
-	skipVec    = flag.Bool("skip-vec", false, "Skip vector index")
-	minTextLen = flag.Int("min-text", 8, "Minimum extracted text length to index")
 	ldbBin     = flag.String("ldb", "", "rocksdb_ldb binary (default: PATH or brew)")
 	skipApps   = flag.String("skip-apps", "fidovnemail", "Comma-separated app_id dirs to skip (case-insensitive)")
 	onlyTables = flag.String("only-tables", "", "Comma-separated app/table to migrate only (e.g. csm/csm_accounts,csm/csm_group_members)")
 )
 
-// defaultSkipApps are always excluded unless -skip-apps is explicitly cleared.
 var defaultSkipApps = []string{"fidovnemail"}
 
 func main() {
@@ -97,7 +81,6 @@ func run() error {
 	src := filepath.Clean(*sourceDir)
 	dst := filepath.Clean(*destDir)
 	pebbleRoot := filepath.Join(dst, "pebble")
-	searchPath := filepath.Join(dst, "search", "vectors.db")
 
 	ldb, err := resolveLDB(*ldbBin)
 	if err != nil {
@@ -106,7 +89,6 @@ func run() error {
 	log.Printf("rocksdb_ldb: %s", ldb)
 	log.Printf("source RocksDB: %s", src)
 	log.Printf("dest Pebble:    %s/{app_id}/{table_name}/", pebbleRoot)
-	log.Printf("dest search:    %s", searchPath)
 	skipped := parseSkipApps(*skipApps)
 	only := parseOnlyTables(*onlyTables)
 	if len(only) > 0 {
@@ -123,21 +105,10 @@ func run() error {
 		return fmt.Errorf("source not found: %w", err)
 	}
 
-	var searchDB *sql.DB
-
 	if !*dryRun {
 		if err := os.MkdirAll(pebbleRoot, 0o755); err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(searchPath), 0o755); err != nil {
-			return err
-		}
-
-		searchDB, err = openSearchDB(searchPath)
-		if err != nil {
-			return fmt.Errorf("open search db: %w", err)
-		}
-		defer searchDB.Close()
 	}
 
 	apps, err := os.ReadDir(src)
@@ -145,7 +116,7 @@ func run() error {
 		return err
 	}
 
-	var totalKeys, indexed, tables int64
+	var totalKeys, tables int64
 	start := time.Now()
 
 	for _, appEntry := range apps {
@@ -171,29 +142,27 @@ func run() error {
 				continue
 			}
 			dbPath := filepath.Join(src, appID, tableName)
-			n, idx, err := migrateTable(ldb, appID, tableName, dbPath, pebbleRoot, searchDB)
+			n, err := migrateTable(ldb, appID, tableName, dbPath, pebbleRoot)
 			if err != nil {
 				log.Printf("ERROR %s/%s: %v", appID, tableName, err)
 				continue
 			}
 			atomic.AddInt64(&totalKeys, n)
-			atomic.AddInt64(&indexed, idx)
 			atomic.AddInt64(&tables, 1)
-			log.Printf("  %s/%s: %d records, %d indexed", appID, tableName, n, idx)
+			log.Printf("  %s/%s: %d records", appID, tableName, n)
 		}
 	}
 
-	log.Printf("done: %d tables, %d records, %d search-indexed in %s", tables, totalKeys, indexed, time.Since(start))
+	log.Printf("done: %d tables, %d records in %s", tables, totalKeys, time.Since(start))
+	log.Printf("note: restart Go server to rebuild in-memory eq-index (or POST /update-table-data-index)")
 
 	if !*dryRun {
 		meta := map[string]any{
-			"migratedAt":   time.Now().UTC().Format(time.RFC3339),
-			"source":       src,
-			"recordCount":  totalKeys,
-			"indexedCount": indexed,
-			"embedDim":     *embedDim,
-			"tool":         "rocksdb_ldb",
-			"layout":       "pebble/{app_id}/{table_name}",
+			"migratedAt":  time.Now().UTC().Format(time.RFC3339),
+			"source":      src,
+			"recordCount": totalKeys,
+			"tool":        "rocksdb_ldb",
+			"layout":      "pebble/{app_id}/{table_name}",
 		}
 		raw, _ := json.MarshalIndent(meta, "", "  ")
 		metaPath := filepath.Join(pebbleRoot, "_migration.json")
@@ -222,41 +191,21 @@ func resolveLDB(explicit string) (string, error) {
 	return "", fmt.Errorf("rocksdb_ldb not found — run: brew install rocksdb")
 }
 
-func migrateTable(ldb, appID, tableName, dbPath, pebbleRoot string, searchDB *sql.DB) (records int64, indexed int64, err error) {
+func migrateTable(ldb, appID, tableName, dbPath, pebbleRoot string) (records int64, err error) {
 	var pb *pebble.DB
 	var batch *pebble.Batch
 	if !*dryRun {
 		destPath := filepath.Join(pebbleRoot, strings.ToLower(strings.TrimSpace(appID)), strings.ToLower(strings.TrimSpace(tableName)))
 		if err := os.MkdirAll(destPath, 0o755); err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 		pb, err = pebble.Open(destPath, &pebble.Options{})
 		if err != nil {
-			return 0, 0, fmt.Errorf("open pebble %s: %w", destPath, err)
+			return 0, fmt.Errorf("open pebble %s: %w", destPath, err)
 		}
 		defer pb.Close()
 		batch = pb.NewBatch()
 		defer batch.Close()
-	}
-
-	var ftsStmt *sql.Stmt
-	var vecStmt *sql.Stmt
-	if searchDB != nil && !*skipFTS {
-		ftsStmt, err = searchDB.Prepare(`INSERT INTO records_fts(pebble_key, app_id, table_name, record_id, title, content)
-			VALUES (?, ?, ?, ?, ?, ?)`)
-		if err != nil {
-			return 0, 0, err
-		}
-		defer ftsStmt.Close()
-	}
-	if searchDB != nil && !*skipVec {
-		vecStmt, err = searchDB.Prepare(
-			`INSERT INTO ai_chunks(chunk_id, embedding, path, scope, summary, content, app_id, table_name)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-		if err != nil {
-			return 0, 0, err
-		}
-		defer vecStmt.Close()
 	}
 
 	pending := 0
@@ -268,7 +217,6 @@ func migrateTable(ldb, appID, tableName, dbPath, pebbleRoot string, searchDB *sq
 		}
 		records++
 		tableCount++
-		pk := data.PebbleKey(appID, tableName, key)
 
 		if batch != nil {
 			if err := batch.Set([]byte(key), value, nil); err != nil {
@@ -283,33 +231,15 @@ func migrateTable(ldb, appID, tableName, dbPath, pebbleRoot string, searchDB *sq
 				pending = 0
 			}
 		}
-
-		if searchDB != nil && (!*skipFTS || !*skipVec) {
-			var record map[string]any
-			if json.Unmarshal(value, &record) == nil {
-				title, content := data.ExtractSearchText(record)
-				if len(content) >= *minTextLen {
-					recordID := recordIDFrom(record, key)
-					if ftsStmt != nil {
-						_, _ = ftsStmt.Exec(pk, appID, tableName, recordID, title, content)
-					}
-					if vecStmt != nil {
-						vecJSON := hashEmbedJSON(content, *embedDim)
-						_, _ = vecStmt.Exec(pk, vecJSON, pk, appID+"/"+tableName, trimRunes(title, 200), trimRunes(content, 4000), appID, tableName)
-					}
-					indexed++
-				}
-			}
-		}
 		return nil
 	})
 	if scanErr != nil {
-		return records, indexed, scanErr
+		return records, scanErr
 	}
 
 	if batch != nil && pending > 0 {
 		if err := batch.Commit(pebble.Sync); err != nil {
-			return records, indexed, err
+			return records, err
 		}
 	}
 	if pb != nil {
@@ -317,7 +247,7 @@ func migrateTable(ldb, appID, tableName, dbPath, pebbleRoot string, searchDB *sq
 		binary.LittleEndian.PutUint64(buf, uint64(tableCount))
 		_ = pb.Set([]byte("__meta_count"), buf, pebble.Sync)
 	}
-	return records, indexed, nil
+	return records, nil
 }
 
 func scanRocksDB(ldb, dbPath string, fn func(key string, value []byte) error) error {
@@ -389,119 +319,6 @@ func parseLDBScanLine(line string) (key, value string, ok bool) {
 		return "", "", false
 	}
 	return line[:i], line[i+len(ldbScanSep):], true
-}
-
-func openSearchDB(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	schema := []string{
-		`CREATE TABLE IF NOT EXISTS migration_log (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			created_at TEXT NOT NULL,
-			message TEXT NOT NULL
-		)`,
-		`CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
-			pebble_key UNINDEXED,
-			app_id UNINDEXED,
-			table_name UNINDEXED,
-			record_id UNINDEXED,
-			title,
-			content,
-			tokenize='unicode61'
-		)`,
-		fmt.Sprintf(`CREATE VIRTUAL TABLE IF NOT EXISTS ai_chunks USING vec0(
-			chunk_id TEXT PRIMARY KEY,
-			embedding float[%d],
-			+path TEXT,
-			+scope TEXT,
-			+summary TEXT,
-			+content TEXT,
-			+app_id TEXT,
-			+table_name TEXT
-		)`, *embedDim),
-	}
-	for _, q := range schema {
-		if _, err := db.Exec(q); err != nil {
-			return nil, fmt.Errorf("schema: %w\nSQL: %s", err, q)
-		}
-	}
-	_, _ = db.Exec(`INSERT INTO migration_log(created_at, message) VALUES (?, ?)`,
-		time.Now().UTC().Format(time.RFC3339), "schema ready")
-	return db, nil
-}
-
-func recordIDFrom(record map[string]any, fallbackKey string) string {
-	for _, k := range []string{"id", "chunkId", "chunk_id"} {
-		if v, ok := record[k]; ok {
-			return fmt.Sprint(v)
-		}
-	}
-	return fallbackKey
-}
-
-var textFields = []string{
-	"name", "title", "summary", "content", "description", "body", "text",
-	"email", "username", "full_name", "fullName", "phoneNumber", "note", "notes",
-	"login_identifier", "tag", "tags", "path", "scope", "message", "comment",
-}
-
-func extractSearchText(record map[string]any) (title, content string) {
-	var parts []string
-	for _, f := range textFields {
-		if v, ok := record[f]; ok {
-			s := strings.TrimSpace(fmt.Sprint(v))
-			if s != "" && s != "<nil>" {
-				if title == "" && (f == "name" || f == "title" || f == "username" || f == "email") {
-					title = s
-				}
-				parts = append(parts, s)
-			}
-		}
-	}
-	content = strings.Join(parts, " ")
-	if title == "" && len(parts) > 0 {
-		title = trimRunes(parts[0], 120)
-	}
-	return title, content
-}
-
-func hashEmbedJSON(text string, dim int) string {
-	vec := hashEmbed(text, dim)
-	vals := make([]string, dim)
-	for i, v := range vec {
-		vals[i] = fmt.Sprintf("%g", v)
-	}
-	return "[" + strings.Join(vals, ",") + "]"
-}
-
-func hashEmbed(text string, dim int) []float32 {
-	out := make([]float32, dim)
-	for i := 0; i < dim; i++ {
-		h := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", text, i)))
-		out[i] = (float32(int(h[0])<<8|int(h[1]))/65535)*2 - 1
-	}
-	var norm float64
-	for _, v := range out {
-		norm += float64(v) * float64(v)
-	}
-	norm = math.Sqrt(norm)
-	if norm > 0 {
-		for i := range out {
-			out[i] = float32(float64(out[i]) / norm)
-		}
-	}
-	return out
-}
-
-func trimRunes(s string, max int) string {
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max])
 }
 
 func parseSkipApps(flagValue string) []string {

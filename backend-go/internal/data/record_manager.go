@@ -1,7 +1,6 @@
 package data
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,7 +23,8 @@ type RecordManager struct {
 	pebbleRoot   string
 	tableDBs     map[string]*pebble.DB
 	legacyDB     *pebble.DB
-	searchDB     *sql.DB
+	eqIndex      *eqIndexStore
+	searchMeta   *searchMetaStore
 	vectorStore  *VectorStore
 	dbMu         sync.RWMutex
 	legacyMu     sync.RWMutex
@@ -32,7 +32,7 @@ type RecordManager struct {
 }
 
 func NewRecordManager(cfg config.AppConfig) (*RecordManager, error) {
-	for _, dir := range []string{cfg.DataDir, cfg.NativeDataDir, cfg.SearchDBDir, cfg.PebbleRoot, cfg.VectorStoreDir} {
+	for _, dir := range []string{cfg.DataDir, cfg.NativeDataDir, cfg.PebbleRoot, cfg.VectorStoreDir} {
 		if strings.TrimSpace(dir) == "" {
 			continue
 		}
@@ -46,6 +46,8 @@ func NewRecordManager(cfg config.AppConfig) (*RecordManager, error) {
 		dataDir:    cfg.DataDir,
 		pebbleRoot: cfg.PebbleRoot,
 		tableDBs:   make(map[string]*pebble.DB),
+		eqIndex:    newEqIndexStore(),
+		searchMeta: newSearchMetaStore(),
 	}
 
 	if cfg.PebbleLegacy != "" {
@@ -66,19 +68,18 @@ func NewRecordManager(cfg config.AppConfig) (*RecordManager, error) {
 		rm.vectorStore = vs
 	}
 
-	// Search index (FTS + eq field index) — always ensure DB exists for fast filtered reads.
-	if searchDB, err := ensureSearchDB(cfg.SearchDBPath); err == nil {
-		rm.searchDB = searchDB
-		log.Printf("RecordManager: search index %s (FTS + eq)", cfg.SearchDBPath)
-	} else {
-		log.Printf("RecordManager: search index unavailable (%v)", err)
-	}
+	log.Printf("RecordManager: in-memory eq-index enabled (no SQLite)")
 	log.Printf("RecordManager: Pebble root %s/{app_id}/{table_name}/ (pure Go, no RocksDB/CGO)", cfg.PebbleRoot)
 	return rm, nil
 }
 
 func (rm *RecordManager) Init() {
 	log.Printf("RecordManager initialized: data_dir=%s", rm.dataDir)
+	rm.warmAuthEqIndex()
+	if rm.cfg.StartupReindex && len(rm.cfg.StartupReindexTables) > 0 {
+		tables := append([]string(nil), rm.cfg.StartupReindexTables...)
+		go rm.runStartupReindex(tables)
+	}
 }
 
 func (rm *RecordManager) ShutdownAll() {
@@ -98,10 +99,6 @@ func (rm *RecordManager) ShutdownAll() {
 		rm.legacyDB = nil
 	}
 	rm.legacyMu.Unlock()
-	if rm.searchDB != nil {
-		_ = rm.searchDB.Close()
-		rm.searchDB = nil
-	}
 	if rm.vectorStore != nil {
 		rm.vectorStore.Close()
 		rm.vectorStore = nil
@@ -127,13 +124,13 @@ func (rm *RecordManager) Find(appID, tableName string, filter model.SearchFilter
 	if rec := rm.tryFindByDirectEqKey(appID, tableName, filter); rec != nil {
 		return rec
 	}
+	if rec := rm.tryFindByAuthFieldEq(appID, tableName, filter); rec != nil {
+		return rec
+	}
 	if rec := rm.tryFindByFTSEq(appID, tableName, filter); rec != nil {
 		return rec
 	}
 	if rec := rm.tryFindViaEqIndexSingle(appID, tableName, filter); rec != nil {
-		return rec
-	}
-	if rec := rm.tryFindByAuthFieldEq(appID, tableName, filter); rec != nil {
 		return rec
 	}
 	if rec := rm.tryFindByTokenFieldEq(appID, tableName, filter); rec != nil {
@@ -150,15 +147,12 @@ func (rm *RecordManager) Find(appID, tableName string, filter model.SearchFilter
 
 func (rm *RecordManager) Filter(appID, tableName string, filter model.SearchFilter) map[string]any {
 	records := rm.collectFilteredRecords(appID, tableName, filter)
-	rows := make([]any, 0, len(records))
-	for _, r := range records {
-		rows = append(rows, r)
-	}
-	return map[string]any{
+	rows, truncated := rowsFromRecordsWithBudget(records)
+	return attachTruncatedFlag(map[string]any{
 		"rows":       rows,
 		"data":       rows,
-		"totalCount": len(rows),
-	}
+		"totalCount": len(records),
+	}, truncated)
 }
 
 func (rm *RecordManager) FilterWithPagination(
@@ -205,23 +199,11 @@ func (rm *RecordManager) FilterWithPagination(
 		return result
 	}
 
-	if rm.searchEnabled() && !filter.HasLike() {
+	if rm.shouldUseEqIndexListFastPath(appID, tableName, filter) {
 		if keys := rm.searchKeysConsistent(appID, tableName, filter); len(keys) > 0 {
 			return rm.paginatePebbleKeys(keys, filter, cursor, offset, take)
 		}
-	}
-
-	if rm.searchEnabled() && filter.HasLike() {
-		terms := filter.CollectLikeTerms()
-		match := buildFTSMatchQuery(terms)
-		if match != "" {
-			app, table, err := rm.sanitizeTable(appID, tableName)
-			if err == nil {
-				if keys, err := rm.ftsSearchKeys(app, table, match, maxFTSCandidateKeys); err == nil && len(keys) > 0 {
-					return rm.paginatePebbleKeys(keys, filter, cursor, offset, take)
-				}
-			}
-		}
+		return map[string]any{"rows": []any{}, "data": []any{}, "totalCount": 0}
 	}
 
 	return rm.filterWithPaginationScan(appID, tableName, filter, cursor, offset, take)
@@ -255,16 +237,19 @@ func (rm *RecordManager) collectFilteredRecords(appID, tableName string, filter 
 		return nil
 	}
 
-	if rm.searchEnabled() && filter.HasLike() {
-		if records := rm.collectViaFTS(app, table, filter); len(records) > 0 {
+	if filter.HasLike() {
+		if records := rm.collectViaLikeScan(app, table, filter); len(records) > 0 {
 			return records
 		}
-		// FTS miss (domain/status SSR filters) → full Pebble scan like Rust collect_filtered_records.
 	}
 
-	if rm.searchEnabled() && !filter.HasLike() {
+	// Eq-index fast path for list filters when index is complete and filter covers full PK.
+	if rm.shouldUseEqIndexListFastPath(appID, tableName, filter) {
 		if records := rm.collectViaEqIndex(appID, tableName, filter); len(records) > 0 {
 			return records
+		}
+		if keys := rm.searchKeysConsistent(appID, tableName, filter); len(keys) == 0 {
+			return nil
 		}
 	}
 
@@ -274,7 +259,7 @@ func (rm *RecordManager) collectFilteredRecords(appID, tableName string, filter 
 
 	seen := make(map[string]struct{})
 	var records []map[string]any
-	err = rm.scanTable(app, table, func(storageKey string, raw []byte) error {
+	err = rm.scanAllRecordSources(app, table, func(storageKey string, raw []byte) error {
 		var record map[string]any
 		if json.Unmarshal(raw, &record) != nil || !filter.Matches(record) {
 			return nil
@@ -490,7 +475,7 @@ func (rm *RecordManager) appendPKMatchesFromTableScan(
 	seenStorage map[string]struct{},
 	hits *[]pkCandidateHit,
 ) {
-	_ = rm.scanTable(app, table, func(storageKey string, raw []byte) error {
+	_ = rm.scanAllRecordSources(app, table, func(storageKey string, raw []byte) error {
 		if _, ok := seenStorage[storageKey]; ok {
 			return nil
 		}

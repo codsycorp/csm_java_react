@@ -69,7 +69,9 @@ type AppConfig struct {
 	Redis           RedisConfig
 	AuthRateLimit   AuthRateLimitConfig
 	AI              AIConfig
-	GoogleIndex     GoogleIndexConfig
+	GoogleIndex          GoogleIndexConfig
+	StartupReindex       bool
+	StartupReindexTables []string
 }
 
 func LoadFromEnv() AppConfig {
@@ -143,6 +145,8 @@ func LoadFromEnv() AppConfig {
 			DailyLimit: int32(envInt("GOOGLE_INDEX_DAILY_LIMIT", 200)),
 			WorkDir:    envPath("GOOGLE_INDEX_WORK_DIR", filepath.Join(dataDir, "google_index")),
 		},
+		StartupReindex:       envFlagTrue("CSM_STARTUP_REINDEX", true),
+		StartupReindexTables: envStringList("CSM_STARTUP_REINDEX_TABLES", []string{"csm/csm_accounts", "csm/csm_group_members", "csm/sys_autos"}),
 	}
 }
 
@@ -309,6 +313,25 @@ func envFlagTrue(key string, def bool) bool {
 	}
 	v = strings.TrimSpace(strings.ToLower(v))
 	return v == "1" || v == "true" || v == "yes"
+}
+
+func envStringList(key string, def []string) []string {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return def
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	if len(out) == 0 {
+		return def
+	}
+	return out
 }
 
 // HTTPEnableLogger controls chi request logging (disable in production with CSM_HTTP_LOGGER=0).

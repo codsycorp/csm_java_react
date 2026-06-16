@@ -8,7 +8,7 @@ Go rewrite of the Java Spring Boot backend (`backend/`) and Rust port (`backend-
 |-------|------|-----|
 | HTTP | Spring Boot + Tomcat | chi + net/http |
 | DB | RocksDB JNI | **Pebble** (pure Go) |
-| Search/vector | Lucene | **chromem-go** (semantic) + optional legacy **sqlite-vec** FTS5 |
+| Search/vector | Lucene | **chromem-go** (semantic) + **in-memory eq-index** (filter `=` / PK) |
 | Auth | jjwt + Spring Security | golang-jwt + middleware |
 | Real-time | Netty Socket.IO | deferred |
 | AI | llama.cpp JNI | deferred |
@@ -26,6 +26,68 @@ cp ../config.env.example ../config.env   # if needed
 
 Legacy RocksDB import (one-time only): `brew install rocksdb && ./run-migrate.sh`
 
+### Migrate on production server (Linux)
+
+1. **Stop Go backend** (nginx `backend_pool` can stay on Java/Rust until migrate finishes):
+   ```bash
+   sudo systemctl stop csm-go   # or your unit name
+   ```
+
+2. **Install Go + rocksdb_ldb** (migrate tool only; server runtime does not need RocksDB):
+   ```bash
+   # Ubuntu/Debian
+   sudo apt-get update
+   sudo apt-get install -y golang-go rocksdb-tools
+   # If rocksdb-tools unavailable: brew on mac dev, or build rocksdb from source for rocksdb_ldb
+   ```
+
+3. **Set data paths** (match `config.env` on server):
+   ```bash
+   export CSM_HOME=/path/to/backend          # folder containing csm_datas
+   export APP_DATA_DIR="$CSM_HOME/csm_datas"
+   export ROCKSDB_ROOT_DIR="$APP_DATA_DIR/database"   # Java/Rust source
+   export CSM_NATIVE_DATA_DIR="$APP_DATA_DIR/native"  # Go Pebble output
+   ```
+
+4. **Backup before migrate**:
+   ```bash
+   tar czf csm_datas-backup-$(date +%Y%m%d).tgz -C "$CSM_HOME" csm_datas
+   ```
+
+5. **Run migrate** (full or one table):
+   ```bash
+   cd /path/to/repo/backend-go
+   chmod +x run-migrate.sh
+
+   # Full migrate (skip fidovnemail by default)
+   ./run-migrate.sh
+
+   # Only sys_autos first (faster smoke test)
+   ./run-migrate.sh -only-tables csm/sys_autos
+
+   # Dry run — count keys only
+   ./run-migrate.sh -dry-run
+   ```
+
+6. **Verify** Pebble has data:
+   ```bash
+   ls "$CSM_NATIVE_DATA_DIR/pebble/csm/sys_autos/"
+   # should see many .sst / MANIFEST files, not empty
+   ```
+
+7. **Start Go backend** — auto-reindex `sys_autos` on startup if in-memory eq-index is incomplete:
+   ```bash
+   ./run-go-server.sh
+   # log: [startup-reindex] csm/sys_autos done: N records indexed
+   ```
+
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `CSM_STARTUP_REINDEX` | `true` | Rebuild eq-index when Pebble rows > indexed keys |
+| `CSM_STARTUP_REINDEX_TABLES` | `csm/sys_autos` | Comma list: `csm/sys_autos,csm/csm_accounts` |
+
+**Query speed (after migrate):** Go uses in-memory eq-index for list filters when index is marked complete (startup reindex / `POST /update-table-data-index`). Filter `like` falls back to Pebble scan. Pebble uses tuned options (32MB memtable, 16MB block cache). Responses cap at 64MB like Java (`truncated: true` when clipped).
+
 Server listens on `SERVER_PORT` (default **9999**, same as Rust/nginx `backend_pool`).
 
 ## Environment
@@ -37,7 +99,6 @@ Loads `../config.env` and profile overlays (`config.local-8gb.env`, etc.) — sa
 | `APP_DATA_DIR` | `./csm_datas` |
 | `CSM_PEBBLE_PATH` | `./csm_datas/native/pebble/csm.kv` |
 | `CSM_VECTOR_DIR` | `./csm_datas/native/vector/chromem` |
-| `CSM_SEARCH_DB_PATH` | `./csm_datas/native/search/vectors.db` (legacy optional FTS) |
 | `SERVER_PORT` | `9999` |
 | `JWT_SECRET` | from `config.env` |
 
@@ -87,9 +148,10 @@ Output:
 
 | Path | Role |
 |------|------|
-| `csm_datas/native/pebble/csm.kv` | All KV records (replaces RocksDB) |
+| `csm_datas/native/pebble/{app}/{table}/` | Per-table KV records (replaces RocksDB) |
 | `csm_datas/native/vector/chromem/` | Embedded chromem-go vector index (tenant RAG, records, workspace) |
-| `csm_datas/native/search/vectors.db` | Legacy optional FTS5 keyword search (admin `like` filters only) |
+
+Eq-index for `=` filters is built in memory on startup / `POST /update-table-data-index` (not persisted to disk).
 
 After migration, run backend with Pebble + chromem (no RocksDB service). Hash embeddings are placeholders — re-embed with your model for production AI quality.
 

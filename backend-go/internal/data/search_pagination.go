@@ -32,14 +32,24 @@ func (rm *RecordManager) paginatePebbleKeys(
 	}
 	pageKeys := keys[start:end]
 	records := rm.loadRecordsByPebbleKeys(pageKeys, filter)
+	var payloadBytes int64
 	slice := make([]any, 0, len(records))
+	truncated := false
 	for _, r := range records {
-		slice = append(slice, r)
+		var stop bool
+		slice, stop = appendRowWithinBudget(slice, r, &payloadBytes)
+		if stop {
+			truncated = true
+			break
+		}
 	}
 	result := map[string]any{
 		"rows":       slice,
 		"data":       slice,
 		"totalCount": total,
+	}
+	if truncated {
+		result["truncated"] = true
 	}
 	if end < total && len(records) > 0 {
 		result["nextCursor"] = recordKey(records[len(records)-1])
@@ -67,8 +77,10 @@ func (rm *RecordManager) filterWithPaginationScan(
 	matched := 0
 	var page []map[string]any
 	var lastKey string
+	var payloadBytes int64
+	truncated := false
 
-	_ = rm.scanTable(app, table, func(storageKey string, raw []byte) error {
+	_ = rm.scanAllRecordSources(app, table, func(storageKey string, raw []byte) error {
 		var record map[string]any
 		if json.Unmarshal(raw, &record) != nil || !filter.Matches(record) {
 			return nil
@@ -89,8 +101,17 @@ func (rm *RecordManager) filterWithPaginationScan(
 			return nil
 		}
 		if len(page) < take {
-			page = append(page, record)
-			lastKey = rk
+			var stop bool
+			var rows []any
+			rows, stop = appendRowWithinBudget(nil, record, &payloadBytes)
+			if stop {
+				truncated = true
+				return errScanStop
+			}
+			if len(rows) > 0 {
+				page = append(page, record)
+				lastKey = rk
+			}
 		}
 		return nil
 	})
@@ -103,6 +124,9 @@ func (rm *RecordManager) filterWithPaginationScan(
 		"rows":       slice,
 		"data":       slice,
 		"totalCount": total,
+	}
+	if truncated {
+		result["truncated"] = true
 	}
 	if len(page) == take && lastKey != "" {
 		result["nextCursor"] = lastKey

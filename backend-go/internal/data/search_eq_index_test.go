@@ -88,3 +88,60 @@ func TestFilterWithPaginationScan(t *testing.T) {
 func fmtID(i int) string {
 	return string(rune('a' + i - 1))
 }
+
+func TestFilterListFallsThroughWhenEqIndexPartial(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.AppConfig{
+		DataDir:       dir,
+		NativeDataDir: filepath.Join(dir, "native"),
+		SearchDBPath:  filepath.Join(dir, "native", "search", "vectors.db"),
+		SearchDBDir:   filepath.Join(dir, "native", "search"),
+		PebbleRoot:    filepath.Join(dir, "native", "pebble"),
+	}
+	_ = os.MkdirAll(cfg.NativeDataDir, 0o755)
+
+	rm, err := NewRecordManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rm.ShutdownAll()
+
+	appID := "csm"
+	table := "sys_autos"
+	for i, name := range []string{"auto-lmkt", "auto-seo", "auto-kqxs"} {
+		_, _ = rm.CreateRecord(appID, table, map[string]any{
+			"p_name": name,
+			"p_type": 0,
+			"p_code": "code-" + name,
+			"id":     name + "-id",
+		}, []string{"p_name", "p_type"})
+		if i == 0 {
+			continue
+		}
+	}
+
+	// Simulate partial eq-index: only one row indexed (legacy rows missing from memory index).
+	rm.deleteEqIndexForTable(appID, table)
+	keys := rm.searchKeysConsistent(appID, table, model.EqFilter("p_type", 0))
+	if len(keys) != 0 {
+		t.Fatalf("expected empty eq-index after delete, got %d keys", len(keys))
+	}
+	rm.upsertEqIndex(appID, table, PebbleKey(appID, table, "auto-lmkt:0"), map[string]any{
+		"p_name": "auto-lmkt",
+		"p_type": 0,
+		"p_code": "code-auto-lmkt",
+		"id":     "auto-lmkt-id",
+	})
+	rm.markSearchIndexComplete(appID, table, 3, 1)
+
+	filter := model.EqFilter("p_type", 0)
+	if rm.shouldUseEqIndexListFastPath(appID, table, filter) {
+		t.Fatal("p_type-only sys_autos filter must not use eq-index fast path")
+	}
+
+	result := rm.Filter(appID, table, filter)
+	rows, _ := result["rows"].([]any)
+	if len(rows) != 3 {
+		t.Fatalf("Filter(p_type=0) must scan Pebble and return all rows, got %d", len(rows))
+	}
+}

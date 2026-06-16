@@ -24,6 +24,7 @@ var (
 	legacyPath    = flag.String("legacy", defaultLegacy(), "Monolithic Pebble store (csm.kv)")
 	destRoot      = flag.String("dest", defaultDest(), "Output Pebble root (app/table subdirs)")
 	dryRun        = flag.Bool("dry-run", false, "Scan only")
+	preferDest    = flag.Bool("prefer-dest", true, "Keep existing per-table keys; only copy legacy rows missing in dest")
 	batchSize     = flag.Int("batch", 2000, "Batch commit size per table")
 	progressEvery = flag.Int("progress-every", 10_000, "Log progress every N records (0=off)")
 )
@@ -119,7 +120,7 @@ func run() error {
 	}
 	defer iter.Close()
 
-	var total, tables int64
+	var total, tables, skipped int64
 	var current *tableWriter
 	var currentKey tableKey
 	lastProgress := time.Now()
@@ -185,6 +186,13 @@ func run() error {
 			return err
 		}
 		if !*dryRun {
+			if *preferDest {
+				if _, closer, err := current.db.Get([]byte(storageKey)); err == nil {
+					closer.Close()
+					skipped++
+					continue
+				}
+			}
 			if err := current.batch.Set([]byte(storageKey), append([]byte(nil), iter.Value()...), nil); err != nil {
 				return err
 			}
@@ -215,7 +223,7 @@ func run() error {
 		return err
 	}
 
-	log.Printf("done: %d tables, %d records in %s", tables, total, time.Since(start).Round(time.Second))
+	log.Printf("done: %d tables, %d records copied, %d skipped (dest kept) in %s", tables, total, skipped, time.Since(start).Round(time.Second))
 	if !*dryRun {
 		meta := map[string]any{
 			"repartitionedAt": time.Now().UTC().Format(time.RFC3339),

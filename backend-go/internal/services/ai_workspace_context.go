@@ -31,7 +31,7 @@ func EnsureWorkspaceIndexFresh(cfg config.AppConfig, rm *data.RecordManager) int
 	if IsConstrained8GbTier(cfg) {
 		return 0
 	}
-	key := cfg.SearchDBPath
+	key := cfg.VectorStoreDir
 	now := time.Now().UnixMilli()
 	if last, ok := workspaceIndexLastRebuild.Load(key); ok {
 		if lastMs, ok := last.(int64); ok && now-lastMs < workspaceRebuildDebounceMs {
@@ -156,7 +156,7 @@ func RebuildWorkspaceIndexAPI(cfg config.AppConfig, rm *data.RecordManager, full
 	if err != nil {
 		status = "error"
 	}
-	workspaceIndexLastRebuild.Store(cfg.SearchDBPath, time.Now().UnixMilli())
+	workspaceIndexLastRebuild.Store(cfg.VectorStoreDir, time.Now().UnixMilli())
 	return map[string]any{
 		"success": err == nil, "status": status, "indexedFiles": count,
 		"roots": roots, "engine": "workspace_fts",

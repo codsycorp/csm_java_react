@@ -9,22 +9,6 @@ import (
 
 const maxEqIndexKeys = 50_000
 
-func eqIndexSchemaStatements() []string {
-	return []string{
-		`CREATE TABLE IF NOT EXISTS records_eq_idx (
-			app_id TEXT NOT NULL,
-			table_name TEXT NOT NULL,
-			field_name TEXT NOT NULL,
-			field_value TEXT NOT NULL,
-			pebble_key TEXT NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS records_eq_idx_lookup
-		 ON records_eq_idx(app_id, table_name, field_name, field_value)`,
-		`CREATE INDEX IF NOT EXISTS records_eq_idx_pebble
-		 ON records_eq_idx(pebble_key)`,
-	}
-}
-
 func normalizeEqIndexValue(value any) string {
 	if value == nil {
 		return ""
@@ -70,42 +54,28 @@ func isIndexableEqField(field string, value any) bool {
 }
 
 func (rm *RecordManager) upsertEqIndex(appID, tableName, pebbleKey string, record map[string]any) {
-	if rm.searchDB == nil || pebbleKey == "" || record == nil {
+	if rm.eqIndex == nil || pebbleKey == "" || record == nil {
 		return
 	}
-	_, _ = rm.searchDB.Exec(`DELETE FROM records_eq_idx WHERE pebble_key = ?`, pebbleKey)
-	for field, value := range record {
-		if !isIndexableEqField(field, value) {
-			continue
-		}
-		norm := normalizeEqIndexValue(value)
-		if norm == "" {
-			continue
-		}
-		_, _ = rm.searchDB.Exec(
-			`INSERT INTO records_eq_idx(app_id, table_name, field_name, field_value, pebble_key)
-			 VALUES (?, ?, ?, ?, ?)`,
-			appID, tableName, field, norm, pebbleKey,
-		)
-	}
+	rm.eqIndex.upsert(appID, tableName, pebbleKey, record)
 }
 
 func (rm *RecordManager) deleteEqIndex(pebbleKey string) {
-	if rm.searchDB == nil || pebbleKey == "" {
+	if rm.eqIndex == nil || pebbleKey == "" {
 		return
 	}
-	_, _ = rm.searchDB.Exec(`DELETE FROM records_eq_idx WHERE pebble_key = ?`, pebbleKey)
+	rm.eqIndex.deletePebbleKey(pebbleKey)
 }
 
 func (rm *RecordManager) deleteEqIndexForTable(appID, tableName string) {
-	if rm.searchDB == nil {
+	if rm.eqIndex == nil {
 		return
 	}
-	_, _ = rm.searchDB.Exec(`DELETE FROM records_eq_idx WHERE app_id = ? AND table_name = ?`, appID, tableName)
+	rm.eqIndex.deleteTable(appID, tableName)
 }
 
 func (rm *RecordManager) searchKeysConsistent(appID, tableName string, filter model.SearchFilter) []string {
-	if rm.searchDB == nil || filter.HasLike() {
+	if rm.eqIndex == nil || filter.HasLike() {
 		return nil
 	}
 	eq := extractEqConditions(filter)
@@ -125,8 +95,8 @@ func (rm *RecordManager) searchKeysConsistent(appID, tableName string, filter mo
 		if norm == "" {
 			return nil
 		}
-		batch, err := rm.eqIndexKeys(app, table, field, norm)
-		if err != nil || len(batch) == 0 {
+		batch := rm.eqIndexKeys(app, table, field, norm)
+		if len(batch) == 0 {
 			return nil
 		}
 		if first {
@@ -142,26 +112,11 @@ func (rm *RecordManager) searchKeysConsistent(appID, tableName string, filter mo
 	return keys
 }
 
-func (rm *RecordManager) eqIndexKeys(appID, tableName, fieldName, fieldValue string) ([]string, error) {
-	rows, err := rm.searchDB.Query(
-		`SELECT pebble_key FROM records_eq_idx
-		 WHERE app_id = ? AND table_name = ? AND field_name = ? AND field_value = ?
-		 LIMIT ?`,
-		appID, tableName, fieldName, fieldValue, maxEqIndexKeys,
-	)
-	if err != nil {
-		return nil, err
+func (rm *RecordManager) eqIndexKeys(appID, tableName, fieldName, fieldValue string) []string {
+	if rm.eqIndex == nil {
+		return nil
 	}
-	defer rows.Close()
-	var keys []string
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			return keys, err
-		}
-		keys = append(keys, key)
-	}
-	return keys, rows.Err()
+	return rm.eqIndex.keys(appID, tableName, fieldName, fieldValue, maxEqIndexKeys)
 }
 
 func intersectStringSlices(a, b []string) []string {

@@ -528,11 +528,11 @@ func (s *UserService) writeSessionFields(user *model.User, fields map[string]any
 	syncSessionFieldAliases(fields)
 
 	if user.IsSubUser != nil && *user.IsSubUser && user.ID != nil && *user.ID != "" {
-		return s.updateSubUserFieldByID(*user.ID, fields)
+		return s.patchSubUserFieldByID(*user.ID, fields)
 	}
 
 	if user.ID != nil && *user.ID != "" {
-		if s.updateSubUserFieldByID(*user.ID, fields) {
+		if s.patchSubUserFieldByID(*user.ID, fields) {
 			return true
 		}
 	}
@@ -544,14 +544,14 @@ func (s *UserService) writeSessionFields(user *model.User, fields map[string]any
 			for k, v := range fields {
 				record[k] = v
 			}
-			if _, err := s.rm.CreateRecord(CSMAppID, AccountsTable, record, []string{"app_token"}); err == nil {
+			if err := s.rm.PatchRecord(CSMAppID, AccountsTable, record, []string{"app_token"}); err == nil {
 				return true
 			}
 		}
 	}
 
 	if user.ID != nil && *user.ID != "" {
-		return s.updateByID(*user.ID, fields)
+		return s.patchByID(*user.ID, fields)
 	}
 	return false
 }
@@ -598,7 +598,7 @@ func (s *UserService) findAccountRecordForSession(user *model.User) map[string]a
 	return nil
 }
 
-func (s *UserService) updateSubUserFieldByID(id string, fields map[string]any) bool {
+func (s *UserService) patchSubUserFieldByID(id string, fields map[string]any) bool {
 	record := s.rm.Find(CSMAppID, SubAccountsTable, model.EqFilter("id", id))
 	if len(record) == 0 {
 		return false
@@ -606,11 +606,10 @@ func (s *UserService) updateSubUserFieldByID(id string, fields map[string]any) b
 	for k, v := range fields {
 		record[k] = v
 	}
-	_, err := s.rm.CreateRecord(CSMAppID, SubAccountsTable, record, []string{"id"})
-	return err == nil
+	return s.rm.PatchRecord(CSMAppID, SubAccountsTable, record, []string{"id"}) == nil
 }
 
-func (s *UserService) updateByID(id string, fields map[string]any) bool {
+func (s *UserService) patchByID(id string, fields map[string]any) bool {
 	record := s.rm.Find(CSMAppID, AccountsTable, model.EqFilter("id", id))
 	if len(record) == 0 {
 		return false
@@ -618,8 +617,15 @@ func (s *UserService) updateByID(id string, fields map[string]any) bool {
 	for k, v := range fields {
 		record[k] = v
 	}
-	_, err := s.rm.CreateRecord(CSMAppID, AccountsTable, record, []string{"id"})
-	return err == nil
+	return s.rm.PatchRecord(CSMAppID, AccountsTable, record, []string{"id"}) == nil
+}
+
+func (s *UserService) updateSubUserFieldByID(id string, fields map[string]any) bool {
+	return s.patchSubUserFieldByID(id, fields)
+}
+
+func (s *UserService) updateByID(id string, fields map[string]any) bool {
+	return s.patchByID(id, fields)
 }
 
 func recordRefreshExpired(record map[string]any) bool {

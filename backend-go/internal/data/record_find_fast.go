@@ -171,9 +171,11 @@ func (rm *RecordManager) collectViaFTSEq(appID, tableName string, filter model.S
 	if len(eq) != 1 {
 		return nil
 	}
+	var field string
 	var term string
-	for _, v := range eq {
-		term = strings.TrimSpace(fmt.Sprint(v))
+	for f, v := range eq {
+		field = f
+		term = normalizeEqIndexValue(v)
 		break
 	}
 	if term == "" {
@@ -184,14 +186,12 @@ func (rm *RecordManager) collectViaFTSEq(appID, tableName string, filter model.S
 	if err != nil {
 		return nil
 	}
-
-	match := buildFTSMatchQuery([]string{term})
-	if match == "" {
+	keys := rm.eqIndexKeys(app, table, field, term)
+	if len(keys) == 0 {
 		return nil
 	}
-	keys, err := rm.ftsSearchKeys(app, table, match, maxFTSEqKeysToCheck)
-	if err != nil || len(keys) == 0 {
-		return nil
+	if len(keys) > maxFTSEqKeysToCheck {
+		keys = keys[:maxFTSEqKeysToCheck]
 	}
 
 	seen := make(map[string]struct{})
@@ -295,6 +295,39 @@ func (rm *RecordManager) isSingletonLookupFilter(appID, tableName string, filter
 	for _, pk := range pkFields {
 		v, ok := eq[pk]
 		if !ok || v == nil || strings.TrimSpace(fmt.Sprint(v)) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// shouldUseEqIndexListFastPath returns false when a list filter must scan Pebble for correctness.
+// sys_autos with partial PK (e.g. only p_type=0) is a list query — eq-index can return a subset
+// after partial migrate or stale in-memory index on production.
+func (rm *RecordManager) shouldUseEqIndexListFastPath(appID, tableName string, filter model.SearchFilter) bool {
+	if !rm.isSearchIndexComplete(appID, tableName) {
+		return false
+	}
+	if filter.HasLike() {
+		return false
+	}
+	app, table, err := rm.sanitizeTable(appID, tableName)
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(table, "sys_autos") {
+		return true
+	}
+	eq := extractEqConditions(filter)
+	if len(eq) == 0 {
+		return false
+	}
+	pkFields := rm.GetTablePKFields(app, table)
+	if len(pkFields) == 0 {
+		return true
+	}
+	for _, pk := range pkFields {
+		if _, ok := eq[pk]; !ok {
 			return false
 		}
 	}

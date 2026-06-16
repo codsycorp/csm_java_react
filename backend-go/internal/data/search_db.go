@@ -1,62 +1,145 @@
 package data
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"csm_server/backend-go/internal/model"
-
-	_ "modernc.org/sqlite"
 )
 
 const (
-	maxFTSCandidateKeys = 50_000
-	minSearchTextLen    = 8
+	minSearchTextLen = 8
 )
 
-func openSearchDB(path string) (*sql.DB, error) {
-	return ensureSearchDB(path)
+func (rm *RecordManager) searchEnabled() bool {
+	return rm.eqIndex != nil
 }
 
-func ensureSearchDB(path string) (*sql.DB, error) {
-	if path == "" {
-		return nil, fmt.Errorf("search db path empty")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+func (rm *RecordManager) loadRecordByPebbleKey(pebbleKey string) (map[string]any, error) {
+	appID, tableName, storageKey, err := ParsePebbleKey(pebbleKey)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	schema := append([]string{
-		`CREATE VIRTUAL TABLE IF NOT EXISTS records_fts USING fts5(
-			pebble_key UNINDEXED,
-			app_id UNINDEXED,
-			table_name UNINDEXED,
-			record_id UNINDEXED,
-			title,
-			content,
-			tokenize='unicode61'
-		)`,
-	}, eqIndexSchemaStatements()...)
-	for _, q := range schema {
-		if _, err := db.Exec(q); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("search schema: %w", err)
-		}
+	val, err := rm.getRecordBytes(appID, tableName, storageKey)
+	if err != nil {
+		return nil, err
 	}
-	return db, nil
+	var record map[string]any
+	if err := json.Unmarshal(val, &record); err != nil {
+		return nil, err
+	}
+	return record, nil
 }
 
-func (rm *RecordManager) searchEnabled() bool {
-	return rm.searchDB != nil
+func (rm *RecordManager) collectViaLikeScan(appID, tableName string, filter model.SearchFilter) []map[string]any {
+	app, table, err := rm.sanitizeTable(appID, tableName)
+	if err != nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	var records []map[string]any
+	err = rm.scanAllRecordSources(app, table, func(storageKey string, raw []byte) error {
+		var record map[string]any
+		if json.Unmarshal(raw, &record) != nil || !filter.Matches(record) {
+			return nil
+		}
+		dedup := recordKey(record)
+		if dedup == "" {
+			dedup = storageKey
+		}
+		if _, ok := seen[dedup]; ok {
+			return nil
+		}
+		seen[dedup] = struct{}{}
+		records = append(records, record)
+		return nil
+	})
+	if err != nil {
+		log.Printf("like scan failed %s/%s: %v", app, table, err)
+	}
+	return records
+}
+
+func (rm *RecordManager) upsertSearchIndex(appID, tableName, pebbleKey, storageKey string, record map[string]any) {
+	rm.upsertEqIndex(appID, tableName, pebbleKey, record)
+
+	title, content := ExtractSearchText(record)
+	if isAuthTable(tableName) {
+		return
+	}
+	if len(content) < minSearchTextLen {
+		rm.deleteVectorIndex(pebbleKey)
+		return
+	}
+	recordID := recordIDFromMap(record, storageKey)
+
+	if rm.vectorStore != nil {
+		meta := map[string]string{
+			"app_id": appID, "table_name": tableName, "record_id": recordID,
+			"pebble_key": pebbleKey, "title": title,
+		}
+		_ = rm.vectorStore.upsertDoc(vectorCollRecords, pebbleKey, meta, title+"\n"+content)
+	}
+}
+
+func (rm *RecordManager) deleteVectorIndex(pebbleKey string) {
+	if pebbleKey == "" || rm.vectorStore == nil {
+		return
+	}
+	_ = rm.vectorStore.deleteDoc(vectorCollRecords, pebbleKey)
+}
+
+func (rm *RecordManager) deleteSearchIndex(pebbleKey string) {
+	if pebbleKey == "" {
+		return
+	}
+	rm.deleteEqIndex(pebbleKey)
+	rm.deleteVectorIndex(pebbleKey)
+}
+
+func (rm *RecordManager) deleteSearchIndexForTable(appID, tableName string) {
+	rm.deleteEqIndexForTable(appID, tableName)
+	if rm.vectorStore != nil {
+		_ = rm.vectorStore.deleteWhere(vectorCollRecords, map[string]string{
+			"app_id": appID, "table_name": tableName,
+		})
+	}
+}
+
+// IndexExistingRecords rebuilds in-memory eq-index and optional vector index for all Pebble rows.
+func (rm *RecordManager) IndexExistingRecords(appID, tableName string) (int, error) {
+	app, table, err := rm.sanitizeTable(appID, tableName)
+	if err != nil {
+		return 0, err
+	}
+	if rm.eqIndex == nil && rm.vectorStore == nil {
+		return 0, fmt.Errorf("search index unavailable (set CSM_VECTOR_DIR or restart server)")
+	}
+	rm.deleteSearchIndexForTable(app, table)
+	rm.markSearchIndexIncomplete(app, table)
+
+	indexed := 0
+	err = rm.scanAllRecordSources(app, table, func(storageKey string, raw []byte) error {
+		var record map[string]any
+		if json.Unmarshal(raw, &record) != nil {
+			return nil
+		}
+		pebbleKey := PebbleKey(app, table, storageKey)
+		rm.upsertSearchIndex(app, table, pebbleKey, storageKey, record)
+		indexed++
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	pebbleRows := rm.countPebbleRows(app, table)
+	indexedKeys := rm.countEqIndexPebbleKeys(app, table)
+	rm.markSearchIndexComplete(app, table, pebbleRows, indexedKeys)
+	log.Printf("search reindex %s/%s: %d records (pebble=%d eq_keys=%d)", app, table, indexed, pebbleRows, indexedKeys)
+	return indexed, nil
 }
 
 func buildFTSMatchQuery(terms []string) string {
@@ -77,188 +160,4 @@ func ftsTermQuery(term string) string {
 	}
 	term = strings.ReplaceAll(term, `"`, `""`)
 	return `"` + term + `"*`
-}
-
-func (rm *RecordManager) ftsSearchKeys(appID, tableName, match string, limit int) ([]string, error) {
-	if rm.searchDB == nil || match == "" {
-		return nil, nil
-	}
-	if limit <= 0 {
-		limit = maxFTSCandidateKeys
-	}
-	rows, err := rm.searchDB.Query(
-		`SELECT pebble_key FROM records_fts
-		 WHERE app_id = ? AND table_name = ? AND records_fts MATCH ?
-		 LIMIT ?`,
-		appID, tableName, match, limit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var keys []string
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			return keys, err
-		}
-		keys = append(keys, key)
-	}
-	return keys, rows.Err()
-}
-
-func (rm *RecordManager) loadRecordByPebbleKey(pebbleKey string) (map[string]any, error) {
-	appID, tableName, storageKey, err := ParsePebbleKey(pebbleKey)
-	if err != nil {
-		return nil, err
-	}
-	val, err := rm.getRecordBytes(appID, tableName, storageKey)
-	if err != nil {
-		return nil, err
-	}
-	var record map[string]any
-	if err := json.Unmarshal(val, &record); err != nil {
-		return nil, err
-	}
-	return record, nil
-}
-
-func (rm *RecordManager) collectViaFTS(appID, tableName string, filter model.SearchFilter) []map[string]any {
-	terms := filter.CollectLikeTerms()
-	match := buildFTSMatchQuery(terms)
-	if match == "" {
-		return nil
-	}
-	keys, err := rm.ftsSearchKeys(appID, tableName, match, maxFTSCandidateKeys)
-	if err != nil {
-		log.Printf("FTS search failed %s/%s: %v — falling back to Pebble scan", appID, tableName, err)
-		return nil
-	}
-	if len(keys) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]struct{})
-	var records []map[string]any
-	for _, pebbleKey := range keys {
-		record, err := rm.loadRecordByPebbleKey(pebbleKey)
-		if err != nil || record == nil {
-			continue
-		}
-		if !filter.Matches(record) {
-			continue
-		}
-		dedup := recordKey(record)
-		if dedup == "" {
-			dedup = RocksKeyFromPebbleKey(pebbleKey)
-		}
-		if _, ok := seen[dedup]; ok {
-			continue
-		}
-		seen[dedup] = struct{}{}
-		records = append(records, record)
-	}
-	return records
-}
-
-func (rm *RecordManager) upsertSearchIndex(appID, tableName, pebbleKey, storageKey string, record map[string]any) {
-	rm.upsertEqIndex(appID, tableName, pebbleKey, record)
-
-	title, content := ExtractSearchText(record)
-	if len(content) < minSearchTextLen {
-		rm.deleteFTSAndVectorIndex(pebbleKey)
-		return
-	}
-	recordID := recordIDFromMap(record, storageKey)
-
-	if rm.vectorStore != nil {
-		meta := map[string]string{
-			"app_id": appID, "table_name": tableName, "record_id": recordID,
-			"pebble_key": pebbleKey, "title": title,
-		}
-		_ = rm.vectorStore.upsertDoc(vectorCollRecords, pebbleKey, meta, title+"\n"+content)
-	}
-
-	if rm.searchDB == nil {
-		return
-	}
-	_, _ = rm.searchDB.Exec(`DELETE FROM records_fts WHERE pebble_key = ?`, pebbleKey)
-	_, err := rm.searchDB.Exec(
-		`INSERT INTO records_fts(pebble_key, app_id, table_name, record_id, title, content)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		pebbleKey, appID, tableName, recordID, title, content,
-	)
-	if err != nil {
-		log.Printf("FTS upsert failed %s: %v", pebbleKey, err)
-	}
-}
-
-func (rm *RecordManager) deleteFTSAndVectorIndex(pebbleKey string) {
-	if pebbleKey == "" {
-		return
-	}
-	if rm.vectorStore != nil {
-		_ = rm.vectorStore.deleteDoc(vectorCollRecords, pebbleKey)
-	}
-	if rm.searchDB == nil {
-		return
-	}
-	_, _ = rm.searchDB.Exec(`DELETE FROM records_fts WHERE pebble_key = ?`, pebbleKey)
-}
-
-func (rm *RecordManager) deleteSearchIndex(pebbleKey string) {
-	if pebbleKey == "" {
-		return
-	}
-	if rm.vectorStore != nil {
-		_ = rm.vectorStore.deleteDoc(vectorCollRecords, pebbleKey)
-	}
-	rm.deleteEqIndex(pebbleKey)
-	if rm.searchDB == nil {
-		return
-	}
-	_, _ = rm.searchDB.Exec(`DELETE FROM records_fts WHERE pebble_key = ?`, pebbleKey)
-}
-
-func (rm *RecordManager) deleteSearchIndexForTable(appID, tableName string) {
-	rm.deleteEqIndexForTable(appID, tableName)
-	if rm.searchDB == nil {
-		return
-	}
-	_, _ = rm.searchDB.Exec(`DELETE FROM records_fts WHERE app_id = ? AND table_name = ?`, appID, tableName)
-}
-
-// IndexExistingRecords rebuilds FTS for all Pebble rows in a table (Java indexExistingRecords).
-func (rm *RecordManager) IndexExistingRecords(appID, tableName string) (int, error) {
-	app, table, err := rm.sanitizeTable(appID, tableName)
-	if err != nil {
-		return 0, err
-	}
-	if rm.vectorStore == nil && rm.searchDB == nil {
-		return 0, fmt.Errorf("search index unavailable (set CSM_VECTOR_DIR or legacy %s)", rm.cfg.SearchDBPath)
-	}
-	if rm.searchDB != nil {
-		rm.deleteSearchIndexForTable(app, table)
-	} else if rm.vectorStore != nil {
-		_ = rm.vectorStore.deleteWhere(vectorCollRecords, map[string]string{
-			"app_id": app, "table_name": table,
-		})
-	}
-
-	indexed := 0
-	err = rm.scanTable(app, table, func(storageKey string, raw []byte) error {
-		var record map[string]any
-		if json.Unmarshal(raw, &record) != nil {
-			return nil
-		}
-		pebbleKey := PebbleKey(app, table, storageKey)
-		rm.upsertSearchIndex(app, table, pebbleKey, storageKey, record)
-		indexed++
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	log.Printf("FTS reindex %s/%s: %d records", app, table, indexed)
-	return indexed, nil
 }

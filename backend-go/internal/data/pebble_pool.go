@@ -42,7 +42,7 @@ func (rm *RecordManager) tableDB(appID, tableName string) (*pebble.DB, error) {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", path, err)
 	}
-	db, err := pebble.Open(path, &pebble.Options{})
+	db, err := pebble.Open(path, newTablePebbleOptions())
 	if err != nil {
 		return nil, fmt.Errorf("open pebble %s: %w", path, err)
 	}
