@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Select, Space, Button, message, Tooltip } from "antd";
-import { CopyOutlined } from "@ant-design/icons";
+import { CopyOutlined, LoadingOutlined, FileAddOutlined } from "@ant-design/icons";
 import { AI_TIMEOUT_MS } from "#src/api/ai";
 import type { TriggerConfig } from "#src/components/csm-grid/CsmDynamicGrid";
 import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
@@ -71,6 +71,131 @@ const encodeTriggerCode = (plain: string): string => {
   }
 };
 
+/** Static code templates for each trigger type. Used as seed for AI or as standalone snippet. */
+function buildTriggerTemplate(triggerType: string, pName?: string): string {
+  const p = pName || "ten_menu";
+  switch (triggerType) {
+    case "load_db":
+      return `(function() {
+  // Tải dữ liệu cho menu: ${p}
+  var params = seft.getParams ? seft.getParams() : {};
+  csmApi.loadData({ pName: "${p}", ...params }, function(data) {
+    if (data && data.list) {
+      seft.setData(data.list);
+      seft.setTotal(data.total || data.list.length);
+    }
+  });
+})();`;
+
+    case "update_db":
+      return `(function() {
+  // Lưu dữ liệu cho menu: ${p}
+  var data = seft.getEditRow ? seft.getEditRow() : seft.getRow();
+  if (!data) { csmApi.message.warning("Không có dữ liệu để lưu!"); return; }
+  csmApi.saveData({ pName: "${p}", data: data }, function(result) {
+    if (result && result.success) {
+      csmApi.message.success("Lưu thành công!");
+      seft.reload && seft.reload();
+    } else {
+      csmApi.message.error("Lỗi: " + (result && result.message || "Không xác định"));
+    }
+  });
+})();`;
+
+    case "delete_db":
+      return `(function() {
+  // Xóa dữ liệu cho menu: ${p}
+  var id = seft.getSelectedId ? seft.getSelectedId() : (seft.getRow() && seft.getRow().id);
+  if (!id) { csmApi.message.warning("Chọn dòng cần xóa!"); return; }
+  csmApi.confirm("Xác nhận xóa dòng này?", function() {
+    csmApi.deleteData({ pName: "${p}", id: id }, function(result) {
+      if (result && result.success) {
+        csmApi.message.success("Đã xóa!");
+        seft.reload && seft.reload();
+      } else {
+        csmApi.message.error("Lỗi xóa: " + (result && result.message || "Không xác định"));
+      }
+    });
+  });
+})();`;
+
+    case "filter":
+      return `(function() {
+  // Lọc dữ liệu cho menu: ${p}
+  var value = seft.getFilterValue ? seft.getFilterValue() : "";
+  var field = seft.getActiveCol ? seft.getActiveCol() : "ten_cot";
+  if (!value) { seft.clearFilter && seft.clearFilter(); return; }
+  csmApi.filter({ pName: "${p}", field: field, value: value });
+})();`;
+
+    case "update":
+      return `(function(row, col, value) {
+  // Cập nhật giá trị ô trong menu: ${p}
+  if (!row || !col) return;
+  row[col] = value;
+  seft.setRow && seft.setRow(row);
+})();`;
+
+    case "datacolumntemplate":
+      return `(function(value, row, col) {
+  // Template hiển thị cột cho menu: ${p}
+  if (value == null || value === "") return "";
+  return '<span class="csm-cell" title="' + value + '">' + value + '</span>';
+})();`;
+
+    case "datarowtemplate":
+      return `(function(row) {
+  // Template hiển thị dòng cho menu: ${p}
+  if (!row) return "";
+  return '<div class="csm-row" data-id="' + (row.id || "") + '"></div>';
+})();`;
+
+    case "barcode":
+      return `(function(value) {
+  // Xử lý quét barcode cho menu: ${p}
+  var code = (value || "").trim();
+  if (!code) return;
+  csmApi.loadData({ pName: "${p}", barcode: code }, function(data) {
+    var list = data && (data.list || data);
+    if (list && list.length > 0) {
+      seft.setRow && seft.setRow(list[0]);
+      csmApi.message.success("Tìm thấy: " + code);
+    } else {
+      csmApi.message.warning("Không tìm thấy mã: " + code);
+    }
+  });
+})();`;
+
+    case "report_db":
+      return `(function() {
+  // Lấy dữ liệu báo cáo cho menu: ${p}
+  var params = seft.getParams ? seft.getParams() : {};
+  csmApi.loadData({ pName: "${p}", ...params, reportMode: true }, function(data) {
+    if (data && data.list) {
+      seft.setReportData ? seft.setReportData(data) : seft.setData(data.list);
+    }
+  });
+})();`;
+
+    default:
+      return `(function() {\n  // Trigger: ${triggerType} cho menu: ${p}\n  // TODO: implement\n})();`;
+  }
+}
+
+const AI_UNAVAILABLE_MARKERS = [
+  "Local AI provider chưa sẵn sàng",
+  "LOCAL_PROVIDER_UNAVAILABLE",
+  "Local AI unavailable",
+  "Local AI disabled",
+  "native llama unavailable",
+  "build with -tags llamacpp",
+  "Model GGUF",
+];
+
+function isAiUnavailableResponse(text: string): boolean {
+  return AI_UNAVAILABLE_MARKERS.some((m) => text.includes(m));
+}
+
 interface TriggerEditorProps {
   value?: TriggerConfig | Record<string, any>;
   onChange?: (next: TriggerConfig | Record<string, any>) => void;
@@ -101,6 +226,7 @@ export function TriggerEditor({ value, onChange, appId, pName, pType, editorMeta
   const [selectTrigger, setSelectTrigger] = useState<string>("load_db");
   const [codeMode, setCodeMode] = useState<string>("javascript");
   const [trigger, setTrigger] = useState<Record<string, any>>({});
+  const [aiLoading, setAiLoading] = useState(false);
 
   // Khởi tạo trigger từ value
   useEffect(() => {
@@ -123,11 +249,23 @@ export function TriggerEditor({ value, onChange, appId, pName, pType, editorMeta
     message.success(`Đã lưu: ${selectTrigger}`);
   };
 
+  /** Chèn mẫu code tĩnh cho trigger đang chọn — không cần AI, hoạt động offline. */
+  const handleInsertTemplate = () => {
+    const template = buildTriggerTemplate(selectTrigger, pName);
+    handleCodeChange(template);
+    message.success(`Đã tạo mẫu cho "${selectTrigger}"`);
+  };
+
+  /**
+   * AI Gợi ý: nếu editor trống thì tự chèn mẫu trước rồi gọi AI cải thiện.
+   * Dùng responseMode: "raw_code" để backend trả về code thuần (không phải JSON textEdits).
+   * Nếu AI chưa sẵn sàng → giữ nguyên mẫu, không báo lỗi crash.
+   */
   const handleAISuggestion = async () => {
-    const code = currentCode.trim();
+    let code = currentCode.trim();
     if (!code) {
-      message.warning("Hãy nhập code trước!");
-      return;
+      code = buildTriggerTemplate(selectTrigger, pName);
+      handleCodeChange(code);
     }
 
     const langMap: Record<string, string> = {
@@ -140,17 +278,18 @@ export function TriggerEditor({ value, onChange, appId, pName, pType, editorMeta
     };
     const language = langMap[codeMode] || "Plain Text";
 
+    setAiLoading(true);
     try {
       const response = await request.post("ai-code-stream", {
         json: {
           appId: String(appId || "trigger_editor").trim() || "trigger_editor",
-          message: `Hoàn thành và cải thiện đoạn mã sau bằng ${language} và chỉ trả về code, không giải thích:\n\`\`\`${language.toLowerCase()}\n${code}\n\`\`\``,
+          message: `Cải thiện và hoàn chỉnh trigger "${selectTrigger}" cho menu "${pName || "csm"}" bằng ${language}. Chỉ trả về code thuần, không giải thích:\n\n${code}`,
           flowType: "code_editor",
           taskType: "code_assistant",
           currentCode: code,
           language: codeMode,
           contextType: "code",
-          responseMode: "edit",
+          responseMode: "raw_code",
           pName,
           pType,
           editorMetadata: {
@@ -161,12 +300,12 @@ export function TriggerEditor({ value, onChange, appId, pName, pType, editorMeta
             triggerLanguage: codeMode,
           },
         },
-		timeout: AI_TIMEOUT_MS,
+        timeout: AI_TIMEOUT_MS,
         throwHttpErrors: false,
       });
 
       if (!response.ok || !response.body) {
-        message.error("Không gọi được AI nội bộ");
+        message.warning("Không gọi được AI nội bộ — giữ nguyên mẫu.");
         return;
       }
 
@@ -178,15 +317,11 @@ export function TriggerEditor({ value, onChange, appId, pName, pType, editorMeta
           const payload = (evt.payload && typeof evt.payload === "object")
             ? (evt.payload as Record<string, unknown>)
             : null;
-          if (!payload) {
-            return;
-          }
+          if (!payload) return;
           const result = dispatchAiCodeStreamEvent(payload, fullResponse, {
             onChunk: (_chunk, accumulated) => { fullResponse = accumulated; },
             onComplete: (p) => {
-              if (typeof p.fullResponse === "string") {
-                fullResponse = p.fullResponse;
-              }
+              if (typeof p.fullResponse === "string") fullResponse = p.fullResponse;
               completed = true;
             },
             onError: (msg) => { message.error(msg || "AI trả về lỗi"); },
@@ -197,20 +332,27 @@ export function TriggerEditor({ value, onChange, appId, pName, pType, editorMeta
       });
 
       if (!completed && !fullResponse.trim()) {
-        message.error("Luồng AI kết thúc trước khi hoàn tất");
+        message.warning("Luồng AI kết thúc sớm — giữ nguyên mẫu.");
         return;
       }
 
-      let aiSuggestion = fullResponse.trim() || "Không có gợi ý.";
-      const codeMatch = aiSuggestion.match(/```(?:\w+)?\n([\s\S]+?)\n```/);
-      if (codeMatch) {
-        aiSuggestion = codeMatch[1];
+      const aiText = fullResponse.trim();
+      if (!aiText || isAiUnavailableResponse(aiText)) {
+        message.warning("AI nội bộ chưa sẵn sàng — giữ nguyên mẫu. Cần build -tags llamacpp.");
+        return;
       }
 
-      handleCodeChange(aiSuggestion);
+      // Strip markdown fences if model added them despite instructions
+      let aiCode = aiText;
+      const fenceMatch = aiCode.match(/^```(?:\w+)?\n([\s\S]+?)\n```$/m);
+      if (fenceMatch) aiCode = fenceMatch[1];
+
+      handleCodeChange(aiCode);
       message.success("Đã nhận gợi ý từ AI");
     } catch (err) {
-      message.error("Lỗi gọi AI nội bộ: " + String(err));
+      message.warning("Lỗi gọi AI nội bộ — giữ nguyên mẫu: " + String(err));
+    } finally {
+      setAiLoading(false);
     }
   };
 
@@ -245,10 +387,16 @@ export function TriggerEditor({ value, onChange, appId, pName, pType, editorMeta
             Lưu
           </Button>
         </Tooltip>
-        <Tooltip title="Gợi ý AI dựa trên code hiện tại">
-          <Button 
-            icon={<CopyOutlined />}
+        <Tooltip title="Chèn mẫu code sẵn cho trigger đang chọn (không cần AI)">
+          <Button icon={<FileAddOutlined />} onClick={handleInsertTemplate}>
+            Sinh từ mẫu
+          </Button>
+        </Tooltip>
+        <Tooltip title={aiLoading ? "Đang chờ AI..." : "AI cải thiện code (tự sinh mẫu nếu editor trống)"}>
+          <Button
+            icon={aiLoading ? <LoadingOutlined /> : <CopyOutlined />}
             onClick={handleAISuggestion}
+            disabled={aiLoading}
           >
             AI Gợi ý
           </Button>

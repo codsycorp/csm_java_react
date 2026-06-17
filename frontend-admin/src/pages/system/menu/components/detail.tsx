@@ -23,6 +23,10 @@ import TriggerEditor from "./TriggerEditor";
 import LineItemsConfigEditor from "./LineItemsConfigEditor";
 import type { LineItemsEditorConfig } from "#src/components/production-order/types";
 import { PHUSON_PANEL_CONFIG } from "#src/components/production-order/defaultConfig";
+import {
+  buildPhusonMenuConfig,
+  type PhusonMenuPresetId,
+} from "#src/components/production-order/line-items-menu-presets";
 import { getFieldLiAuto } from "#src/components/production-order/line-items-field-utils";
 import {
   autoFormatTriggerKey,
@@ -183,6 +187,7 @@ function extractLineItemsConfig(data: Record<string, any>): Partial<LineItemsEdi
 		line_items_totals: Array.isArray(data.line_items_totals) ? data.line_items_totals : undefined,
 		line_items_print: Array.isArray(data.line_items_print) ? data.line_items_print : undefined,
 		line_items_ui: data.line_items_ui,
+		line_items_workflow: data.line_items_workflow,
 	};
 }
 
@@ -198,6 +203,7 @@ function mergeLineItemsConfigIntoPayload(
 	if (config.line_items_totals !== undefined) payload.line_items_totals = config.line_items_totals;
 	if (config.line_items_print !== undefined) payload.line_items_print = config.line_items_print;
 	if (config.line_items_ui !== undefined) payload.line_items_ui = config.line_items_ui;
+	if (config.line_items_workflow !== undefined) payload.line_items_workflow = config.line_items_workflow;
 }
 
 const UPLOAD_ENDPOINT = "/upload.shtml";
@@ -801,6 +807,28 @@ export function Detail({
       type_form: 7,
     });
     message.success(t("system.menu.lineItemsTemplateApplied"));
+  }, [t]);
+
+  const handleApplyPhusonMenuPreset = useCallback((presetId: PhusonMenuPresetId) => {
+    const cfg = buildPhusonMenuConfig(presetId);
+    setLineItemsConfig({
+      line_items_data_field: cfg.line_items_data_field,
+      line_items_groups_key: cfg.line_items_groups_key,
+      line_items_list: cfg.line_items_list,
+      line_items_columns: cfg.line_items_columns,
+      line_items_group: cfg.line_items_group,
+      line_items_totals: cfg.line_items_totals,
+      line_items_print: cfg.line_items_print,
+      line_items_workflow: cfg.line_items_workflow,
+      line_items_ui: cfg.line_items_ui,
+    });
+    setTableRows(Array.isArray(cfg.table) ? [...cfg.table] as TableField[] : []);
+    setTriggerConfig((prev) => ({ ...(prev || {}), ...cfg.trigger }));
+    formRef.current?.setFieldsValue({
+      table_name: cfg.table_name,
+      type_form: 7,
+    });
+    message.success(t("system.menu.lineItemsPresetApplied", `Đã áp preset ${presetId} — nhớ Lưu menu để ghi DB`));
   }, [t]);
 
   const buildKanbanFieldAdvice = (depValues: Record<string, any>): string[] => {
@@ -1834,7 +1862,15 @@ export function Detail({
       }}
       onFinish={onFinish}
       key={detailData.id || 'new'}
-      initialValues={{ data_scope_override: "NONE", ...detailData }}
+      initialValues={{
+        data_scope_override: "NONE",
+        ...detailData,
+        // Convert string→number for Select fields so ProFormSelect matches options on first render
+        ...(detailData.type_form != null && detailData.type_form !== '' ? { type_form: Number(detailData.type_form) } : {}),
+        ...(detailData.row_type_edit != null && detailData.row_type_edit !== '' ? { row_type_edit: Number(detailData.row_type_edit) } : {}),
+        ...(detailData.type_menu != null && detailData.type_menu !== '' ? { type_menu: Number(detailData.type_menu) } : {}),
+        ...(detailData.m_show != null ? { m_show: Number(detailData.m_show) } : {}),
+      }}
     >
 
     {/* Group các trường đa ngôn ngữ */}
@@ -3006,6 +3042,13 @@ export function Detail({
                     onChange={setLineItemsConfig}
                     tableFields={tableRows}
                     onApplyTemplate={handleApplyLineItemsTemplate}
+                    onApplyMenuPreset={handleApplyPhusonMenuPreset}
+                    appId={appId}
+                    editorMetadata={menuScopeAiMetadata}
+                    onApplyTrigger={(key, body) => {
+                      setTriggerConfig((prev) => ({ ...(prev || {}), [key]: body }));
+                      message.success(t("system.menu.lineItemsTriggerApplied", `Đã cập nhật trigger "${key}" — nhớ Lưu menu`));
+                    }}
                   />
                 ),
               }]

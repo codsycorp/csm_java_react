@@ -14,7 +14,6 @@ use crate::services::ai::local_prompt::{build_code_stream_local_prompt, resolve_
 use crate::services::ai::policy::{
     local_pre_status, local_unavailable_hint, local_unavailable_message, streaming_model_label,
 };
-use crate::services::llama_cpp::LlamaCppService;
 use crate::state::AppState;
 
 static ACTIVE_STREAMS: LazyLock<DashMap<String, JoinHandle<()>>> = LazyLock::new(DashMap::new);
@@ -117,7 +116,7 @@ pub async fn token_stream(
     req: &CodeStreamRequest,
     prompt: &str,
 ) -> Pin<Box<dyn Stream<Item = String> + Send>> {
-    let llama = LlamaCppService::new(&state.config);
+    let llama = state.llama.clone();
     if llama.is_available() {
         if let Ok(s) = llama.stream_completion(prompt).await {
             return Box::pin(s);
@@ -213,7 +212,7 @@ pub async fn run_pipeline(
         req.app_id,
         response_mode,
         prompt_chars,
-        LlamaCppService::new(&state.config).is_available()
+        state.llama.is_available()
     );
 
     let _ = auth;

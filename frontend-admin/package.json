@@ -78,6 +78,7 @@
 		"framer-motion": "^11.18.0",
 		"he": "^1.2.0",
 		"html2pdf.js": "^0.10.2",
+		"pdfjs-dist": "^4.10.38",
 		"i18next": "^24.2.1",
 		"jszip": "^3.10.1",
 		"jszip-utils": "^0.1.0",

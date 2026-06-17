@@ -7,12 +7,17 @@ import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 
 import type {
-  LiColumnDef, LiGroupConfig, LiPrintConfig, LiTotalConfig,
+  LiColumnDef, LiGroupConfig, LiPrintConfig, LiPrintTableOpts, LiTotalConfig,
   LineItemsEditorConfig, LineItemsListColumn, LineItemsUiConfig, LiFieldSection,
-  LineItemsWorkflowConfig,
+  LineItemsWorkflowConfig, LineItemsListFilter,
 } from "#src/components/production-order/types";
 import { PHUSON_PANEL_CONFIG, PHUSON_WORKFLOW } from "#src/components/production-order/defaultConfig";
+import {
+  PHUSON_PRESET_OPTIONS,
+  type PhusonMenuPresetId,
+} from "#src/components/production-order/line-items-menu-presets";
 import { ensureTriLangLabels } from "#src/components/production-order/line-items-label";
+import LineItemsPdfImportPanel from "#src/components/production-order/LineItemsPdfImportPanel";
 
 const COLUMN_TYPES = [
 	{ value: "text", label: "text" },
@@ -29,6 +34,11 @@ export interface LineItemsConfigEditorProps {
 	tableFields?: Array<{ f_name?: string; f_header?: string }>;
 	/** Full template: table fields + trigger + table_name (from parent detail form) */
 	onApplyTemplate?: () => void;
+	/** Áp preset menu lá (pm_bao_gia / pm_lsx_nb / pm_lsx_pxk) — gồm trigger in sống */
+	onApplyMenuPreset?: (presetId: PhusonMenuPresetId) => void;
+	appId?: string;
+	onApplyTrigger?: (key: string, body: string) => void;
+	editorMetadata?: Record<string, unknown>;
 }
 
 function newColumn(): LiColumnDef {
@@ -70,6 +80,10 @@ export default function LineItemsConfigEditor({
 	onChange,
 	tableFields = [],
 	onApplyTemplate,
+	onApplyMenuPreset,
+	appId,
+	onApplyTrigger,
+	editorMetadata,
 }: LineItemsConfigEditorProps) {
 	const { t } = useTranslation();
 	const [colModalOpen, setColModalOpen] = useState(false);
@@ -78,6 +92,9 @@ export default function LineItemsConfigEditor({
 	const [totalModalOpen, setTotalModalOpen] = useState(false);
 	const [totalEditingIdx, setTotalEditingIdx] = useState<number | null>(null);
 	const [totalForm] = Form.useForm();
+	const [printModalOpen, setPrintModalOpen] = useState(false);
+	const [printEditingIdx, setPrintEditingIdx] = useState<number | null>(null);
+	const [printForm] = Form.useForm();
 
 	const patch = useCallback((partial: Partial<LineItemsEditorConfig>) => {
 		onChange?.({ ...value, ...partial });
@@ -160,6 +177,73 @@ export default function LineItemsConfigEditor({
 
 	const uiCfg: LineItemsUiConfig = value.line_items_ui ?? {};
 
+	const printKeyOptions = useMemo(() => {
+		const keys = new Set<string>();
+		for (const pc of value.line_items_print ?? []) {
+			const k = String(pc.trigger_key ?? "").trim();
+			if (k) keys.add(k);
+		}
+		return Array.from(keys).map(k => ({ label: k, value: k }));
+	}, [value.line_items_print]);
+
+	const columnNameOptions = useMemo(
+		() => (value.line_items_columns ?? [])
+			.map(c => String(c.name ?? "").trim())
+			.filter(Boolean)
+			.map(n => ({ label: n, value: n })),
+		[value.line_items_columns],
+	);
+
+	const openPrintEditor = (idx?: number) => {
+		const rows = value.line_items_print ?? [];
+		const record = idx != null ? rows[idx] : newPrintCfg();
+		setPrintEditingIdx(idx ?? null);
+		const pt = record.print_table ?? {};
+		printForm.setFieldsValue({
+			...record,
+			pt_showPrice: pt.showPrice ?? true,
+			pt_showGroupSubtotal: pt.showGroupSubtotal ?? true,
+			pt_hideColumns: pt.hideColumns ?? [],
+			pt_showTotals: pt.showTotals ?? true,
+		});
+		setPrintModalOpen(true);
+	};
+
+	const savePrint = async () => {
+		const raw = await printForm.validateFields();
+		const print_table: LiPrintTableOpts = {
+			showPrice: raw.pt_showPrice,
+			showGroupSubtotal: raw.pt_showGroupSubtotal,
+			showTotals: raw.pt_showTotals,
+			hideColumns: raw.pt_hideColumns?.length ? raw.pt_hideColumns : undefined,
+		};
+		const saved = ensureTriLangLabels({
+			label: raw.label,
+			label_en: raw.label_en,
+			label_zh: raw.label_zh,
+			trigger_key: raw.trigger_key,
+			filename_expr: raw.filename_expr,
+			print_table,
+		}, "label") as LiPrintConfig;
+		const rows = [...(value.line_items_print ?? [])];
+		if (printEditingIdx != null && printEditingIdx >= 0) rows[printEditingIdx] = saved;
+		else rows.push(saved);
+		const nextPrintKeys = [...(uiCfg.print_keys ?? [])];
+		if (saved.trigger_key && !nextPrintKeys.includes(saved.trigger_key)) {
+			nextPrintKeys.push(saved.trigger_key);
+		}
+		patch({
+			line_items_print: rows,
+			line_items_ui: { ...uiCfg, print_keys: nextPrintKeys },
+		});
+		setPrintModalOpen(false);
+		setPrintEditingIdx(null);
+	};
+
+	const patchUi = (partial: Partial<LineItemsUiConfig>) => {
+		patch({ line_items_ui: { ...uiCfg, ...partial } });
+	};
+
 	const groupCfg: LiGroupConfig = value.line_items_group ?? {};
 
 	return (
@@ -176,14 +260,33 @@ export default function LineItemsConfigEditor({
 
 			<Space wrap>
 				<Button onClick={applyTemplate}>
-					{t("system.menu.lineItemsLoadTemplate", "Nạp mẫu Phú Sơn (Báo giá / Lệnh SX / PXK)")}
+					{t("system.menu.lineItemsLoadTemplate", "Nạp mẫu Phú Sơn (cột + tổng chung)")}
 				</Button>
+				{PHUSON_PRESET_OPTIONS.map(opt => (
+					<Button
+						key={opt.value}
+						onClick={() => {
+							if (onApplyMenuPreset) {
+								onApplyMenuPreset(opt.value);
+								return;
+							}
+							Modal.confirm({
+								title: `Áp preset「${opt.label}」?`,
+								content: "Cần handler onApplyMenuPreset từ form menu cha.",
+								okText: t("common.confirm", "Xác nhận"),
+								cancelText: t("common.cancel", "Huỷ"),
+							});
+						}}
+					>
+						Preset: {opt.label}
+					</Button>
+				))}
 			</Space>
 
 			<Row gutter={16}>
 				<Col xs={24} md={12}>
 					<Card size="small" title={t("system.menu.lineItemsStorageTitle", "Lưu trữ JSON")}>
-						<Form layout="vertical">
+						<Form layout="vertical" component={false}>
 							<Form.Item label={t("system.menu.lineItemsDataField", "Cột JSON payload")}>
 								<Input
 									value={value.line_items_data_field ?? "payload_json"}
@@ -203,7 +306,7 @@ export default function LineItemsConfigEditor({
 				</Col>
 				<Col xs={24} md={12}>
 					<Card size="small" title={t("system.menu.lineItemsGroupTitle", "Nhóm sản phẩm")}>
-						<Form layout="vertical">
+						<Form layout="vertical" component={false}>
 							<Row gutter={12}>
 								<Col span={12}>
 									<Form.Item label="spec_field">
@@ -258,7 +361,7 @@ export default function LineItemsConfigEditor({
 								</Button>
 								<Table
 									size="small"
-									rowKey={(r, i) => r.name || `col-${i}`}
+									rowKey={(r) => r.name || "col-new"}
 									dataSource={value.line_items_columns ?? []}
 									pagination={false}
 									scroll={{ x: true }}
@@ -308,7 +411,7 @@ export default function LineItemsConfigEditor({
 								</Button>
 								<Table
 									size="small"
-									rowKey={(_, i) => `list-${i}`}
+									rowKey={(r) => r.field || "list-new"}
 									dataSource={value.line_items_list ?? []}
 									pagination={false}
 									columns={[
@@ -412,7 +515,7 @@ export default function LineItemsConfigEditor({
 								</Button>
 								<Table
 									size="small"
-									rowKey={(_, i) => `tot-${i}`}
+									rowKey={(r) => r.key || "tot-new"}
 									dataSource={value.line_items_totals ?? []}
 									pagination={false}
 									columns={[
@@ -465,7 +568,7 @@ export default function LineItemsConfigEditor({
 									style={{ marginBottom: 12 }}
 									message={t("system.menu.lineItemsUiHint", "Tuỳ chọn — để trống dùng mặc định theo ngôn ngữ UI")}
 								/>
-								<Form layout="vertical">
+								<Form layout="vertical" component={false}>
 									{([
 										["header_title", "Tiêu đề block header"],
 										["list_title", "Tiêu đề danh sách"],
@@ -535,7 +638,7 @@ export default function LineItemsConfigEditor({
 										</Button>
 										<Table
 											size="small"
-											rowKey={(_, i) => `sec-${i}`}
+											rowKey={(r) => r.key || "sec-new"}
 											dataSource={uiCfg.field_sections ?? []}
 											pagination={false}
 											columns={[
@@ -605,6 +708,146 @@ export default function LineItemsConfigEditor({
 											]}
 										/>
 									</Card>
+									<Card size="small" title="Lọc danh sách (list_filter)" style={{ marginTop: 12 }}>
+										<Button
+											type="dashed"
+											icon={<PlusOutlined />}
+											style={{ marginBottom: 12 }}
+											onClick={() => patchUi({
+												list_filter: [...(uiCfg.list_filter ?? []), { field: "giai_doan", values: [] }],
+											})}
+										>
+											Thêm bộ lọc
+										</Button>
+										<Table
+											size="small"
+											rowKey={(r) => r.field || "lf-new"}
+											dataSource={uiCfg.list_filter ?? []}
+											pagination={false}
+											columns={[
+												{
+													title: "field",
+													dataIndex: "field",
+													width: 160,
+													render: (v, _, idx) => (
+														<Select
+															style={{ width: "100%" }}
+															showSearch
+															value={v}
+															options={fieldOptions}
+															onChange={val => {
+																const list = [...(uiCfg.list_filter ?? [])] as LineItemsListFilter[];
+																list[idx] = { ...list[idx], field: val };
+																patchUi({ list_filter: list });
+															}}
+														/>
+													),
+												},
+												{
+													title: "values",
+													dataIndex: "values",
+													render: (v: string[], _, idx) => (
+														<Select
+															mode="tags"
+															style={{ width: "100%" }}
+															value={v ?? []}
+															placeholder="bao_gia, lenh_sx_nb…"
+															onChange={vals => {
+																const list = [...(uiCfg.list_filter ?? [])] as LineItemsListFilter[];
+																list[idx] = { ...list[idx], values: vals };
+																patchUi({ list_filter: list });
+															}}
+														/>
+													),
+												},
+												{
+													title: "",
+													width: 48,
+													render: (_, __, idx) => (
+														<Button
+															type="text"
+															danger
+															icon={<DeleteOutlined />}
+															onClick={() => patchUi({
+																list_filter: (uiCfg.list_filter ?? []).filter((_, i) => i !== idx),
+															})}
+														/>
+													),
+												},
+											]}
+										/>
+									</Card>
+									<Card size="small" title="Mặc định khi tạo mới (default_header)" style={{ marginTop: 12 }}>
+										<Button
+											type="dashed"
+											icon={<PlusOutlined />}
+											style={{ marginBottom: 12 }}
+											onClick={() => {
+												const first = fieldOptions[0]?.value;
+												if (!first) return;
+												patchUi({
+													default_header: { ...(uiCfg.default_header ?? {}), [first]: "" },
+												});
+											}}
+										>
+											Thêm field mặc định
+										</Button>
+										<Table
+											size="small"
+											rowKey={(r) => `dh-${r.field}`}
+											dataSource={Object.entries(uiCfg.default_header ?? {}).map(([field, val]) => ({ field, val }))}
+											pagination={false}
+											columns={[
+												{
+													title: "field",
+													dataIndex: "field",
+													width: 160,
+													render: (v) => <span>{v}</span>,
+												},
+												{
+													title: "value",
+													dataIndex: "val",
+													render: (v, record) => (
+														<Input
+															value={String(v ?? "")}
+															onChange={e => patchUi({
+																default_header: {
+																	...(uiCfg.default_header ?? {}),
+																	[record.field]: e.target.value,
+																},
+															})}
+														/>
+													),
+												},
+												{
+													title: "",
+													width: 48,
+													render: (_, record) => (
+														<Button
+															type="text"
+															danger
+															icon={<DeleteOutlined />}
+															onClick={() => {
+																const next = { ...(uiCfg.default_header ?? {}) };
+																delete next[record.field];
+																patchUi({ default_header: next });
+															}}
+														/>
+													),
+												},
+											]}
+										/>
+									</Card>
+									<Form.Item label="print_keys — nút in hiện trên form" style={{ marginTop: 12 }}>
+										<Select
+											mode="multiple"
+											style={{ width: "100%" }}
+											value={uiCfg.print_keys ?? []}
+											options={printKeyOptions}
+											placeholder="Chọn trigger_key hiển thị (vd. print_bao_gia)"
+											onChange={vals => patchUi({ print_keys: vals })}
+										/>
+									</Form.Item>
 								</Form>
 							</Card>
 						),
@@ -644,10 +887,28 @@ export default function LineItemsConfigEditor({
 						label: t("system.menu.lineItemsTabPrint", "Nút in PDF"),
 						children: (
 							<>
+								<LineItemsPdfImportPanel
+									appId={appId}
+									tableFields={tableFields}
+									lineColumns={value.line_items_columns}
+									onApplyTrigger={onApplyTrigger}
+									editorMetadata={editorMetadata}
+									onApplyPrintConfig={(cfg) => {
+										const rows = [...(value.line_items_print ?? [])];
+										const idx = rows.findIndex(r => r.trigger_key === cfg.trigger_key);
+										if (idx >= 0) rows[idx] = { ...rows[idx], ...cfg };
+										else rows.push(cfg);
+										const keys = new Set([...(uiCfg.print_keys ?? []), cfg.trigger_key]);
+										patch({
+											line_items_print: rows,
+											line_items_ui: { ...uiCfg, print_keys: Array.from(keys) },
+										});
+									}}
+								/>
 								<Alert
 									type="warning"
 									showIcon
-									style={{ marginBottom: 12 }}
+									style={{ marginBottom: 12, marginTop: 16 }}
 									message={t(
 										"system.menu.lineItemsPrintTriggerHint",
 										"Mỗi trigger_key cần có function body tương ứng trong tab Trigger (VD: print_bao_gia).",
@@ -656,36 +917,45 @@ export default function LineItemsConfigEditor({
 								<Button
 									type="dashed"
 									icon={<PlusOutlined />}
-									onClick={() => patch({
-										line_items_print: [...(value.line_items_print ?? []), newPrintCfg()],
-									})}
+									onClick={() => openPrintEditor()}
 									style={{ marginBottom: 12 }}
 								>
 									{t("system.menu.lineItemsAddPrint", "Thêm nút in")}
 								</Button>
 								<Table
 									size="small"
-									rowKey={(_, i) => `print-${i}`}
+									rowKey={(r) => r.trigger_key || "print-new"}
 									dataSource={value.line_items_print ?? []}
 									pagination={false}
 									columns={[
 										{ title: "trigger_key", dataIndex: "trigger_key", width: 140 },
 										{ title: "VI", dataIndex: "label" },
-										{ title: "EN", dataIndex: "label_en" },
-										{ title: "ZH", dataIndex: "label_zh" },
 										{ title: "filename_expr", dataIndex: "filename_expr", ellipsis: true },
 										{
-											title: "",
-											width: 48,
+											title: "print_table",
+											width: 120,
+											render: (_, r) => {
+												const pt = r.print_table;
+												if (!pt) return "—";
+												return pt.showPrice === false ? "ẩn giá" : "đủ cột";
+											},
+										},
+										{
+											title: t("common.action", "Thao tác"),
+											width: 100,
 											render: (_, __, idx) => (
-												<Button
-													type="text"
-													danger
-													icon={<DeleteOutlined />}
-													onClick={() => patch({
-														line_items_print: (value.line_items_print ?? []).filter((_, i) => i !== idx),
-													})}
-												/>
+												<Space>
+													<Button type="link" size="small" icon={<EditOutlined />} onClick={() => openPrintEditor(idx)} />
+													<Button
+														type="link"
+														size="small"
+														danger
+														icon={<DeleteOutlined />}
+														onClick={() => patch({
+															line_items_print: (value.line_items_print ?? []).filter((_, i) => i !== idx),
+														})}
+													/>
+												</Space>
 											),
 										},
 									]}
@@ -812,6 +1082,74 @@ export default function LineItemsConfigEditor({
 							</Form.Item>
 						</Col>
 					</Row>
+				</Form>
+			</Modal>
+
+			<Modal
+				open={printModalOpen}
+				title={printEditingIdx != null ? "Sửa nút in PDF" : "Thêm nút in PDF"}
+				onCancel={() => setPrintModalOpen(false)}
+				onOk={savePrint}
+				width={720}
+				destroyOnClose
+			>
+				<Form form={printForm} layout="vertical">
+					<Row gutter={12}>
+						<Col span={12}>
+							<Form.Item name="trigger_key" label="trigger_key" rules={[{ required: true }]}>
+								<Input placeholder="print_bao_gia" />
+							</Form.Item>
+						</Col>
+						<Col span={12}>
+							<Form.Item name="filename_expr" label="filename_expr">
+								<Input placeholder="`BaoGia_${order.so_bao_gia}.pdf`" />
+							</Form.Item>
+						</Col>
+					</Row>
+					<Row gutter={12}>
+						<Col span={8}>
+							<Form.Item name="label" label="VI" rules={[{ required: true }]}>
+								<Input />
+							</Form.Item>
+						</Col>
+						<Col span={8}>
+							<Form.Item name="label_en" label="EN">
+								<Input />
+							</Form.Item>
+						</Col>
+						<Col span={8}>
+							<Form.Item name="label_zh" label="ZH">
+								<Input />
+							</Form.Item>
+						</Col>
+					</Row>
+					<Card size="small" title="print_table — tuỳ chọn cột bảng in">
+						<Row gutter={12}>
+							<Col span={8}>
+								<Form.Item name="pt_showPrice" label="showPrice" valuePropName="checked">
+									<Switch />
+								</Form.Item>
+							</Col>
+							<Col span={8}>
+								<Form.Item name="pt_showGroupSubtotal" label="showGroupSubtotal" valuePropName="checked">
+									<Switch />
+								</Form.Item>
+							</Col>
+							<Col span={8}>
+								<Form.Item name="pt_showTotals" label="showTotals" valuePropName="checked">
+									<Switch />
+								</Form.Item>
+							</Col>
+						</Row>
+						<Form.Item name="pt_hideColumns" label="hideColumns">
+							<Select
+								mode="multiple"
+								allowClear
+								options={columnNameOptions}
+								placeholder="chieu_rong, don_gia, thanh_tien…"
+							/>
+						</Form.Item>
+					</Card>
 				</Form>
 			</Modal>
 		</div>

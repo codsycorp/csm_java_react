@@ -71,6 +71,9 @@ export default defineVitestConfig(({ mode }) => {
 		environment: "happy-dom",
 		setupFiles: ["./src/setupTests.ts"],
 	},
+	optimizeDeps: {
+		include: ["pdfjs-dist"],
+	},
 	server: {
 		port: 3333,
 		// https://vitejs.dev/config/server-options#server-proxy

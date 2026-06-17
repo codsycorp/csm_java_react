@@ -14,6 +14,8 @@ pub enum AiFlowIntent {
     MenuJson,
     FrontendCode,
     QuickQuestion,
+    /// Return raw source code only — no JSON wrapper, no markdown fences, no explanations.
+    RawCode,
 }
 
 const BASE_SYSTEM_MIN: &str = r#"You are CSM AI Assistant.
@@ -27,6 +29,17 @@ Follow the requested output contract exactly.
 Answer in plain text prose unless the contract explicitly requires JSON.
 Never repeat internal blocks such as BUSINESS_CONTEXT, BUSINESS_COMPREHENSION, Steps, or Output contract.
 End immediately after the response.
+"#;
+
+const BASE_SYSTEM_RAW_CODE_MIN: &str = r#"You are CSM Code Generator.
+Follow the requested output contract exactly.
+Return ONLY raw source code — nothing else.
+End immediately after the last line of code.
+"#;
+
+const RAW_CODE_CONTRACT: &str = r#"Return ONLY the raw source code.
+No markdown fences (no ```). No JSON wrapper. No comments unless essential.
+No explanations. Start with the very first line of code.
 "#;
 
 const QUICK_QUESTION_CONTRACT_MIN: &str = r#"You are CSM AI Assistant.
@@ -68,6 +81,9 @@ static MASTER_CODE_PROMPT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 pub fn classify_local_intent(context_type: &str, response_mode: &str) -> AiFlowIntent {
     let ctx = context_type.trim().to_lowercase();
     let mode = response_mode.trim().to_lowercase();
+    if mode == "raw_code" {
+        return AiFlowIntent::RawCode;
+    }
     if ctx == "menu_json" {
         if mode == "analyze" {
             return AiFlowIntent::QuickQuestion;
@@ -152,15 +168,16 @@ fn build_local_minimal_prompt(
         }
         AiFlowIntent::FrontendCode => FRONTEND_CODE_CONTRACT_MIN.to_string(),
         AiFlowIntent::QuickQuestion => QUICK_QUESTION_CONTRACT_MIN.to_string(),
+        AiFlowIntent::RawCode => RAW_CODE_CONTRACT.to_string(),
     };
 
     let safe_rag = trim_to_max(rag_context, rag_cap);
     let safe_mem = trim_to_max(memory, mem_cap);
 
-    let base_system = if intent == AiFlowIntent::QuickQuestion {
-        BASE_SYSTEM_ANALYZE_MIN
-    } else {
-        BASE_SYSTEM_MIN
+    let base_system = match intent {
+        AiFlowIntent::QuickQuestion => BASE_SYSTEM_ANALYZE_MIN,
+        AiFlowIntent::RawCode => BASE_SYSTEM_RAW_CODE_MIN,
+        _ => BASE_SYSTEM_MIN,
     };
 
     let mut sb = String::new();
@@ -201,6 +218,13 @@ Start with { and end with } — no markdown fences, no prose before/after JSON.
                 sb.push_str("[CONTEXT_SNIPPET]\n");
                 sb.push_str(active_editor);
                 sb.push_str("\n[/CONTEXT_SNIPPET]\n\n");
+            }
+        }
+        AiFlowIntent::RawCode => {
+            if !active_editor.is_empty() {
+                sb.push_str("[CURRENT_CODE]\n");
+                sb.push_str(active_editor);
+                sb.push_str("\n[/CURRENT_CODE]\n\n");
             }
         }
     }

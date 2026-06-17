@@ -40,6 +40,13 @@ export {
   resolveTenantAppIdForPrint,
 } from "./line-items-company";
 export { PHUSON_PANEL_CONFIG, PHUSON_WORKFLOW } from "./defaultConfig";
+export {
+  PHUSON_MENU_PRESETS,
+  PHUSON_PRESET_OPTIONS,
+  buildPhusonMenuConfig,
+  resolvePhusonPresetTriggers,
+  type PhusonMenuPresetId,
+} from "./line-items-menu-presets";
 
 // Legacy hardcoded version (kept for reference)
 export { default as ProductionOrderForm } from "./ProductionOrderForm";

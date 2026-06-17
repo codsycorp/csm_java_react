@@ -123,8 +123,11 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 	multimodalBlock = truncateStr(multimodalBlock, 3000)
 
 	baseSystem := baseSystemMin
-	if intent == "quick_question" {
+	switch intent {
+	case "quick_question":
 		baseSystem = baseSystemAnalyzeMin
+	case "raw_code":
+		baseSystem = baseSystemRawCodeMin
 	}
 	var contract string
 	switch intent {
@@ -138,6 +141,8 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 		contract = ResolveCodeJsonContractForLocal(cfg)
 	case "quick_question":
 		contract = quickQuestionContract
+	case "raw_code":
+		contract = rawCodeContract
 	default:
 		contract = frontendCodeContract
 	}
@@ -177,6 +182,12 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 			sb.WriteString("[CONTEXT_SNIPPET]\n")
 			sb.WriteString(editor)
 			sb.WriteString("\n[/CONTEXT_SNIPPET]\n\n")
+		}
+	case "raw_code":
+		if editor != "" {
+			sb.WriteString("[CURRENT_CODE]\n")
+			sb.WriteString(editor)
+			sb.WriteString("\n[/CURRENT_CODE]\n\n")
 		}
 	}
 
@@ -218,6 +229,9 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 func classifyLocalIntent(contextType, responseMode string) string {
 	ctx := strings.ToLower(strings.TrimSpace(contextType))
 	mode := strings.ToLower(strings.TrimSpace(responseMode))
+	if mode == "raw_code" {
+		return "raw_code"
+	}
 	if ctx == "menu_json" {
 		if mode == "analyze" {
 			return "quick_question"
@@ -327,6 +341,15 @@ Follow the requested output contract exactly.
 Answer in plain text prose unless the contract explicitly requires JSON.
 Never repeat internal blocks such as BUSINESS_CONTEXT, BUSINESS_COMPREHENSION, Steps, or Output contract.
 End immediately after the response.
+`
+	baseSystemRawCodeMin = `You are CSM Code Generator.
+Follow the requested output contract exactly.
+Return ONLY raw source code — nothing else.
+End immediately after the last line of code.
+`
+	rawCodeContract = `Return ONLY raw source code.
+No markdown fences (no ` + "```" + `). No JSON wrapper. No explanations.
+Start with the very first line of code and end with the last line.
 `
 	quickQuestionContract = `You are CSM AI Assistant.
 Answer the user's question directly in the same language as the user request (Vietnamese, English, or Chinese).

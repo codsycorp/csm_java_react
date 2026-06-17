@@ -1,4 +1,6 @@
-// @ts-nocheck — legacy hardcoded reference; print templates live in m_configs.trigger.
+// @ts-nocheck — LEGACY tham chiếu; runtime CsmLineItemsEditor KHÔNG dùng file này.
+// Mẫu in sống nằm trong m_configs.trigger (Menu Designer → Lưu DB).
+// Seed dev: defaultConfig.ts + menu.json + tab「Áp mẫu Phú Sơn」trên Menu Designer.
 import type { ProductionOrder, OrderCalc } from "./types";
 import { calcItemKL, calcItemTT, groupLabel, soThanhChu, fmtVND, fmtNum } from "./utils";
 

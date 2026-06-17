@@ -13,7 +13,6 @@ use tracing::info;
 
 use crate::security::auth::AuthUser;
 use crate::services::ai::code_stream::{self, CodeStreamRequest};
-use crate::services::llama_cpp::LlamaCppService;
 use crate::state::AppState;
 use chrono;
 
@@ -161,7 +160,7 @@ async fn stream_assistant_chat(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let llama = LlamaCppService::new(&state.config);
+    let llama = state.llama.clone();
     let prompt = format!("Assistant chat:\n{message}\n\nReply:");
 
     let sse_stream: SseStream = if llama.is_available() {
@@ -204,7 +203,7 @@ async fn stream_local_plan(
         request_id = format!("local-{}", chrono::Utc::now().timestamp_millis());
     }
 
-    let llama = LlamaCppService::new(&state.config);
+    let llama = state.llama.clone();
     let llama_available = llama.is_available();
 
     let events: Vec<Value> = build_local_plan_events(
