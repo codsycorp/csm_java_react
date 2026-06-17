@@ -9886,16 +9886,14 @@
     function parseLegacySerKqtLastWeekValue(serKqt) {
       var parts = String(serKqt || "").trim().split(/\s+/).filter(Boolean);
       if (!parts.length) return null;
-      // serKQT newest-first (unshift) — token đầu = tuần gần nhất (= lanTuan1C / Tuần GN)
-      var n = parseInt(parts[0], 10);
+      // serKQT build bằng unshift — token cuối = tuần cuối chuỗi KTN để xét lọc
+      var n = parseInt(parts[parts.length - 1], 10);
       return isNaN(n) ? null : n;
     }
 
     function parseLegacySlrAutoKtnLastWeekValue(metric) {
       var fromSer = parseLegacySerKqtLastWeekValue(metric && metric.serKQT);
       if (fromSer !== null) return fromSer;
-      var lan1 = Number((metric && metric.lanTuan1C));
-      if (!isNaN(lan1)) return lan1;
       return 0;
     }
 
@@ -10036,24 +10034,53 @@
       return built;
     }
 
-    async function fetchLegacySlrAutoDd3NamBacFilterMetric(tongHopInput, rowDateRange, rowKey) {
+    function isLegacySlrAutoTongHopDd3Row(pickRow) {
+      var t = String((pickRow && pickRow.autoQueryType) || "");
+      return t === "dd3nb" || t === "dd3nb_extra";
+    }
+
+    async function fetchLegacySlrAutoDd3NamBacMetric(tongHopInput, rowDateRange, rowKey, queryIndex) {
       var dd3Option = getLegacyDd3NbQueryTypeOption(legacyHeThong);
-      var cachItems = buildLegacySlrAutoCachItemsForQuery(
-        tongHopInput.searchText,
-        dd3Option.value,
-        rowKey,
-        99
-      );
-      var metrics = await fetchLegacyTongHopRowsFromApi({
+      var rawSearch = String(tongHopInput.searchText || "").trim();
+      var fetchOpts = {
         triet: false,
         queryValue: dd3Option.value,
         queryText: dd3Option.text,
-        cachItems: cachItems,
         fromDate: rowDateRange.fromDate,
         toDate: rowDateRange.toDate,
         heThong: legacyHeThong
-      });
-      return Array.isArray(metrics) && metrics.length ? metrics[0] : null;
+      };
+
+      async function runWithCachItems(cachItems) {
+        var metrics = await fetchLegacyTongHopRowsFromApi(Object.assign({}, fetchOpts, {
+          cachItems: cachItems
+        }));
+        return Array.isArray(metrics) && metrics.length ? metrics[0] : null;
+      }
+
+      var groupedItems = buildLegacySlrAutoCachItemsForQuery(
+        rawSearch,
+        dd3Option.value,
+        rowKey,
+        queryIndex
+      );
+      var metric = await runWithCachItems(groupedItems);
+      if (metric) return metric;
+
+      if (!rawSearch) return null;
+      return runWithCachItems([{
+        key: String(rowKey || "slr_auto") + "_dd3raw_" + String(queryIndex == null ? 0 : queryIndex),
+        boSo: rawSearch,
+        cachName: rawSearch,
+        searchText: rawSearch,
+        noiDungDisplay: rawSearch,
+        groupId: String(rowKey || "slr_auto"),
+        groupText: rawSearch
+      }]);
+    }
+
+    async function fetchLegacySlrAutoDd3NamBacFilterMetric(tongHopInput, rowDateRange, rowKey) {
+      return fetchLegacySlrAutoDd3NamBacMetric(tongHopInput, rowDateRange, rowKey, 99);
     }
 
     async function runLegacySlrAutoTongHopSelectedRows() {
@@ -10075,7 +10102,7 @@
         var combinedRows = [];
         var skippedCount = 0;
         var filteredOutCount = 0;
-        var staleCachCount = 0;
+        var missingDd3Count = 0;
         var thFilterCfg = getLegacySlrAutoTongHopFilterConfig();
         var extraDd3NbOption = getLegacyDd3NbQueryTypeOption(legacyHeThong);
         var thRefDate = String(den_ngay || tu_ngay || "").trim();
@@ -10132,26 +10159,36 @@
           var dd3nbMetricForFilter = null;
           for (var q = 0; q < querySpecs.length; q += 1) {
             var querySpec = querySpecs[q] || {};
-            var cachItems = buildLegacySlrAutoCachItemsForQuery(
-              tongHopInput.searchText,
-              querySpec.value,
-              row.key,
-              q
-            );
-            var metrics = await fetchLegacyTongHopRowsFromApi({
-              triet: false,
-              queryValue: querySpec.value,
-              queryText: querySpec.text,
-              cachItems: cachItems,
-              fromDate: rowDateRange.fromDate,
-              toDate: rowDateRange.toDate,
-              heThong: legacyHeThong
-            });
-
-            var metric = Array.isArray(metrics) && metrics.length ? metrics[0] : null;
+            var isDd3Query = isLegacySlrDd3NamBacQueryValue(querySpec.value, legacyHeThong);
+            var metric = null;
+            if (isDd3Query) {
+              metric = await fetchLegacySlrAutoDd3NamBacMetric(
+                tongHopInput,
+                rowDateRange,
+                row.key,
+                q
+              );
+            } else {
+              var cachItems = buildLegacySlrAutoCachItemsForQuery(
+                tongHopInput.searchText,
+                querySpec.value,
+                row.key,
+                q
+              );
+              var metrics = await fetchLegacyTongHopRowsFromApi({
+                triet: false,
+                queryValue: querySpec.value,
+                queryText: querySpec.text,
+                cachItems: cachItems,
+                fromDate: rowDateRange.fromDate,
+                toDate: rowDateRange.toDate,
+                heThong: legacyHeThong
+              });
+              metric = Array.isArray(metrics) && metrics.length ? metrics[0] : null;
+            }
             if (!metric) continue;
             rowHadMetric = true;
-            if (isLegacySlrDd3NamBacQueryValue(querySpec.value, legacyHeThong)) {
+            if (isDd3Query) {
               dd3nbMetricForFilter = metric;
             }
             pickBatch.push(buildLegacySlrAutoTongHopRowFromMetric(row, metric, querySpec, tongHopInput, rowDateRange, q));
@@ -10160,7 +10197,7 @@
             skippedCount += 1;
             continue;
           }
-          if (!dd3nbMetricForFilter && hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
+          if (!dd3nbMetricForFilter && !isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)) {
             dd3nbMetricForFilter = await fetchLegacySlrAutoDd3NamBacFilterMetric(tongHopInput, rowDateRange, row.key);
           }
           if (dd3nbMetricForFilter && hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
@@ -10169,11 +10206,8 @@
               continue;
             }
           }
-          var hasDd3RowInBatch = pickBatch.some(function (pickRow) {
-            var t = String((pickRow && pickRow.autoQueryType) || "");
-            return t === "dd3nb" || t === "dd3nb_extra";
-          });
-          if (!hasDd3RowInBatch && dd3nbMetricForFilter
+          if (!pickBatch.some(isLegacySlrAutoTongHopDd3Row)
+            && dd3nbMetricForFilter
             && !isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)) {
             pickBatch.push(buildLegacySlrAutoTongHopRowFromMetric(
               row,
@@ -10187,20 +10221,11 @@
               pickBatch.length
             ));
           }
+          if (!isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)
+            && !pickBatch.some(isLegacySlrAutoTongHopDd3Row)) {
+            missingDd3Count += 1;
+          }
           pickBatch.forEach(function (pickRow) {
-            var cachName = String((pickRow && pickRow.cach) || "").trim();
-            var queryType = String((pickRow && pickRow.autoQueryType) || "");
-            var isDd3Row = queryType === "dd3nb" || queryType === "dd3nb_extra";
-            if (cachName && isDd3Row) {
-              if (!isLegacySlrAutoTongHopCachStillActive(cachName)) {
-                staleCachCount += 1;
-                return;
-              }
-              if (!isLegacySlrAutoThCachActiveInLastMonth(cachName, thRefDate)) {
-                staleCachCount += 1;
-                return;
-              }
-            }
             combinedRows.push(pickRow);
           });
         }
@@ -10241,7 +10266,7 @@
           if (thFilterCfg.maxKtnLast !== null) filterNote += " KTN≤" + thFilterCfg.maxKtnLast;
           if (filteredOutCount) filterNote += " (bỏ " + filteredOutCount + ")";
         }
-        var staleNote = staleCachCount ? (" | Bỏ cách >" + SLR_AUTO_TH_CACH_STALE_DAYS + " ngày: " + staleCachCount) : "";
+        var staleNote = missingDd3Count ? (" | Thiếu DD3 Nam-Bắc: " + missingDd3Count) : "";
         setLegacySlrAutoTongHopSummary(
           "Xuất Kết Hợp tự động: " + combinedRows.length + " dòng từ " + pickedRows.length + " dòng SLR đã chọn"
           + filterNote
