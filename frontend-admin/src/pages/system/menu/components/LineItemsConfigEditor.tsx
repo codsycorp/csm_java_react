@@ -7,10 +7,11 @@ import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 
 import type {
-	LiColumnDef, LiGroupConfig, LiPrintConfig, LiTotalConfig,
-	LineItemsEditorConfig, LineItemsListColumn, LineItemsUiConfig, LiFieldSection,
+  LiColumnDef, LiGroupConfig, LiPrintConfig, LiTotalConfig,
+  LineItemsEditorConfig, LineItemsListColumn, LineItemsUiConfig, LiFieldSection,
+  LineItemsWorkflowConfig,
 } from "#src/components/production-order/types";
-import { PHUSON_PANEL_CONFIG } from "#src/components/production-order/defaultConfig";
+import { PHUSON_PANEL_CONFIG, PHUSON_WORKFLOW } from "#src/components/production-order/defaultConfig";
 import { ensureTriLangLabels } from "#src/components/production-order/line-items-label";
 
 const COLUMN_TYPES = [
@@ -112,6 +113,7 @@ export default function LineItemsConfigEditor({
 					line_items_group: PHUSON_PANEL_CONFIG.line_items_group,
 					line_items_totals: PHUSON_PANEL_CONFIG.line_items_totals,
 					line_items_print: PHUSON_PANEL_CONFIG.line_items_print,
+					line_items_workflow: PHUSON_PANEL_CONFIG.line_items_workflow,
 				});
 				message.success(t("system.menu.lineItemsTemplateApplied", "Đã áp dụng mẫu"));
 			},
@@ -604,6 +606,36 @@ export default function LineItemsConfigEditor({
 										/>
 									</Card>
 								</Form>
+							</Card>
+						),
+					},
+					{
+						key: "workflow",
+						label: t("system.menu.lineItemsTabWorkflow", "Quy trình"),
+						children: (
+							<Card size="small" title={t("system.menu.lineItemsWorkflowTitle", "line_items_workflow")}>
+								<Alert
+									type="info"
+									showIcon
+									style={{ marginBottom: 12 }}
+									message="Cấu hình bước chuyển giai đoạn (BG → LSXNB → PXK). JSON edit — hoặc nạp mẫu Phú Sơn."
+								/>
+								<Space style={{ marginBottom: 12 }}>
+									<Button onClick={() => patch({ line_items_workflow: PHUSON_WORKFLOW })}>
+										Nạp quy trình Phú Sơn
+									</Button>
+								</Space>
+								<Input.TextArea
+									rows={16}
+									value={JSON.stringify(value.line_items_workflow ?? {}, null, 2)}
+									onChange={(e) => {
+										try {
+											const parsed = JSON.parse(e.target.value || "{}") as LineItemsWorkflowConfig;
+											patch({ line_items_workflow: parsed });
+										} catch { /* ignore while typing */ }
+									}}
+									style={{ fontFamily: "monospace", fontSize: 12 }}
+								/>
 							</Card>
 						),
 					},

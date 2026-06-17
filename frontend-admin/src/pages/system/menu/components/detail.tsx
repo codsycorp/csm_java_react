@@ -787,6 +787,7 @@ export function Detail({
       line_items_group: PHUSON_PANEL_CONFIG.line_items_group,
       line_items_totals: PHUSON_PANEL_CONFIG.line_items_totals,
       line_items_print: PHUSON_PANEL_CONFIG.line_items_print,
+      line_items_workflow: PHUSON_PANEL_CONFIG.line_items_workflow,
     });
     setTableRows(Array.isArray(PHUSON_PANEL_CONFIG.table) ? [...PHUSON_PANEL_CONFIG.table] as TableField[] : []);
     setTriggerConfig((prev) => ({

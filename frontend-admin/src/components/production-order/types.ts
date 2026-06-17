@@ -89,6 +89,46 @@ export interface LiTotalConfig {
   show_words?: boolean;     // show amount-in-words below this row
 }
 
+// ─── Print table options (stored in line_items_print[].print_table) ───────────
+
+export interface LiPrintTableOpts {
+  /** Hiện cột đơn giá / thành tiền */
+  showPrice?: boolean;
+  /** Hiện dòng cộng nhóm trước các dòng chi tiết */
+  showGroupSubtotal?: boolean;
+  /** Ẩn các cột theo name (vd. PXK: chieu_rong) */
+  hideColumns?: string[];
+  /** Chỉ in các cột liệt kê (ưu tiên hơn hideColumns) */
+  visibleColumns?: string[];
+  /** Hiện khối tổng A/B/C/D — trigger tự quyết có gọi buildTotalsHtml hay không */
+  showTotals?: boolean;
+}
+
+// ─── Workflow config (stored in m_configs.line_items_workflow) ───────────────
+
+export interface LineItemsWorkflowStep {
+  /** Giá trị stage_field tương ứng bước này */
+  stage: string;
+  label?: string;
+  label_en?: string;
+  label_zh?: string;
+  /** Stage tiếp theo khi bấm "Chuyển bước" */
+  next?: string;
+  next_label?: string;
+  next_label_en?: string;
+  next_label_zh?: string;
+  /** Ghi đè header khi promote (vd. trang_thai_bg: da_chot) */
+  set_fields?: Record<string, any>;
+  /** Field bắt buộc trước khi promote */
+  require_fields?: string[];
+}
+
+export interface LineItemsWorkflowConfig {
+  /** Field workflow — mặc định giai_doan */
+  stage_field?: string;
+  steps: LineItemsWorkflowStep[];
+}
+
 // ─── Print template config (stored in m_configs.line_items_print) ────────────
 
 export interface LiPrintConfig {
@@ -102,10 +142,12 @@ export interface LiPrintConfig {
    *   order  → header field values from the form
    *   groups → array of {spec, vat_rate, items:[{...colValues, _kl, _tt}]}
    *   calc   → {totals: Record<key, number>, groups: Record<groupId, {sum, kl}>}
-   *   utils  → {fmtVND, fmtNum, soThanhChu, groupLabel}
+   *   utils  → {fmtVND, fmtNum, soThanhChu, groupLabel, printTableOpts, buildItemsTableHtml…}
    * Must return: HTML string (full document)
    */
   filename_expr?: string;   // JS expression for file name, vars: order, calc
+  /** Tuỳ chọn bảng in — runtime merge vào utils.printTableOpts khi bấm in */
+  print_table?: LiPrintTableOpts;
 }
 
 export interface LineItemsListColumn {
@@ -141,6 +183,8 @@ export interface LineItemsEditorConfig {
   line_items_totals?: LiTotalConfig[];
   /** Print buttons */
   line_items_print?: LiPrintConfig[];
+  /** Quy trình chuyển giai đoạn BG → LSXNB → PXK */
+  line_items_workflow?: LineItemsWorkflowConfig;
   /** Nhãn form / danh sách (tuỳ chọn — mặc định theo i18n) */
   line_items_ui?: LineItemsUiConfig;
   /**

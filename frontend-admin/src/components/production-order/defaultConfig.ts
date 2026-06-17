@@ -167,8 +167,8 @@ const hdr = \`<table class="hdr">
     <td>NV bán hàng – SĐT: <b>\${order.nvkd??''}</b></td></tr></table>
   <div class="intro">\${intro}</div>\`;
 
-const items = ${buildItemsTable.toString().replace(/\n/g, " ")}(groups, calc, utils, { showPrice: true, showGroupSubtotal: true });
-const totals = ${buildTotals.toString().replace(/\n/g, " ")}(calc, utils);
+const items = utils.buildItemsTableHtml(groups, calc, utils, utils.printTableOpts || { showPrice: true, showGroupSubtotal: true });
+const totals = utils.buildTotalsHtml(calc, utils);
 const defaultNotes = ${JSON.stringify(NOTES)};
 const noteLines = utils.parseNoteLines ? utils.parseNoteLines(cfg.ghi_chu_bao_gia, defaultNotes) : defaultNotes;
 const notes = '<div class="notes"><b>Ghi chú:</b><div class="note-grid">' +
@@ -205,8 +205,8 @@ const hdr = \`<table class="hdr">
   <tr><td>Người mua hàng – SĐT: \${d.nguoi_lien_he??''}</td><td></td></tr>
 </table><div style="font-weight:bold;margin:6px 0 2px">* NỘI DUNG YÊU CẦU SẢN XUẤT:</div>\`;
 
-const items = ${buildItemsTable.toString().replace(/\n/g, " ")}(groups, calc, utils, { showPrice: true, showGroupSubtotal: true });
-const totals = ${buildTotals.toString().replace(/\n/g, " ")}(calc, utils);
+const items = utils.buildItemsTableHtml(groups, calc, utils, utils.printTableOpts || { showPrice: true, showGroupSubtotal: true });
+const totals = utils.buildTotalsHtml(calc, utils);
 const delivery = \`<div style="font-weight:bold;margin:10px 0 4px;font-size:10.5pt">** ĐIỀU KIỆN GIAO HÀNG VÀ THANH TOÁN</div>
 <div class="dlg">
   <div class="di"><span class="k">1. Nghiệm thu:</span><span>tại Nhà máy Phú Sơn</span></div>
@@ -251,7 +251,7 @@ const hdr = \`<div style="text-align:center;font-style:italic;margin-bottom:6px"
   <tr><td colspan="2">NV bán hàng – SĐT: <b>\${d.nvkd??''}</b></td></tr>
 </table>\`;
 
-const items = ${buildItemsTable.toString().replace(/\n/g, " ")}(groups, calc, utils, { showPrice: false, showGroupSubtotal: false });
+const items = utils.buildItemsTableHtml(groups, calc, utils, utils.printTableOpts || { showPrice: false, showGroupSubtotal: false, hideColumns: ['chieu_rong'] });
 const pxkNotes = utils.parseNoteLines ? utils.parseNoteLines(cfg.ghi_chu_lsx_pxk, []) : [];
 const pxkNoteBlock = pxkNotes.length ? ('<div class="notes"><b>Ghi chú:</b>' + pxkNotes.map((n,i)=>'<div>'+(i+1)+'. '+n+'</div>').join('') + '</div>') : '';
 const receive = '<div class="receive-line">Khách hàng nhận hàng lúc: …….... giờ …….. phút, ngày ….. tháng ….. năm ' + (parts[2]??new Date().getFullYear()) + '</div>';
@@ -281,6 +281,43 @@ return dd + mm + yy + '.' + String(seq).padStart(2, '0');`;
 const AUTO_PARSE_SO_LENH = `const m = value.match(/^(\\d+)/); return m ? { num: +m[1] } : null;`;
 
 const AUTO_FORMAT_SO_LENH = `return String(seq);`;
+
+/** Quy trình BG → LSXNB → PXK — dùng chung cho 3 menu bán hàng */
+export const PHUSON_WORKFLOW = {
+  stage_field: "giai_doan",
+  steps: [
+    {
+      stage: "nhap",
+      label: "Nháp",
+      next: "bao_gia",
+      next_label: "Chuyển sang Báo giá",
+      set_fields: { giai_doan: "bao_gia" },
+    },
+    {
+      stage: "bao_gia",
+      label: "Báo giá",
+      next: "lenh_sx_nb",
+      next_label: "Chuyển LSX nội bộ",
+      require_fields: ["khach_hang", "so_bao_gia"],
+      set_fields: { giai_doan: "lenh_sx_nb", trang_thai_bg: "da_chot" },
+    },
+    {
+      stage: "lenh_sx_nb",
+      label: "LSX nội bộ",
+      next: "lenh_sx_pxk",
+      next_label: "Chuyển LSX + PXK",
+      require_fields: ["so_lenh"],
+      set_fields: { giai_doan: "lenh_sx_pxk" },
+    },
+    {
+      stage: "lenh_sx_pxk",
+      label: "LSX + PXK",
+      next: "xuong",
+      next_label: "Gửi xưởng",
+      set_fields: { giai_doan: "xuong" },
+    },
+  ],
+};
 
 // ─── Config object (lưu vào database / menu config) ──────────────────────────
 
@@ -443,18 +480,27 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
       label: "Xuất Báo giá",
       trigger_key: "print_bao_gia",
       filename_expr: "`BaoGia_${order.so_bao_gia || 'draft'}.pdf`",
+      print_table: { showPrice: true, showGroupSubtotal: true },
     },
     {
       label: "Xuất Lệnh SX nội bộ",
       trigger_key: "print_lenh_sx",
       filename_expr: "`LenhSX_${order.so_lenh || 'draft'}.pdf`",
+      print_table: { showPrice: true, showGroupSubtotal: true },
     },
     {
       label: "Xuất Lệnh SX + PXK",
       trigger_key: "print_pxk",
       filename_expr: "`LenhSX_PXK_${order.so_lenh || 'draft'}.pdf`",
+      print_table: {
+        showPrice: false,
+        showGroupSubtotal: false,
+        hideColumns: ["chieu_rong", "don_gia", "thanh_tien"],
+      },
     },
   ],
+
+  line_items_workflow: PHUSON_WORKFLOW,
 
   // ── Trigger scripts (lưu encrypted trong production) ──
   trigger: {

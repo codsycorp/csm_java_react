@@ -1,5 +1,5 @@
 import type {
-  LiColumnDef, LiTotalConfig, LineItem,
+  LiColumnDef, LiTotalConfig, LiPrintTableOpts, LineItem,
   ProductGroup, GroupCalcResult, EditorCalcResult,
   OrderHeader, LineItemsUiConfig,
 } from "./types";
@@ -270,12 +270,13 @@ export function groupLabel(idx: number): string {
 
 // ─── Print helpers (also passed via utils at runtime) ─────────────────────────
 
-const DEFAULT_COMPANY = {
+const DEFAULT_COMPANY: Record<string, string> = {
   ten_cong_ty: "CÔNG TY TNHH CÔNG NGHỆ CÔNG NGHIỆP PHÚ SƠN",
   dia_chi: "Lô 7 CN5, Cụm công nghiệp Ngọc Hồi, xã Ngọc Hồi, Thành phố Hà Nội",
   mst: "0104113174",
   website: "https://panelphuson.vn",
   email: "https://javta.vn",
+  logo_url: "",
 };
 
 /** Ghép số lệnh in: 6508 + E1 → 6508/PS.E1 (không lặp /PS). */
@@ -481,9 +482,166 @@ export function parseNgayDate(ngay?: string): Date | undefined {
 export function buildCompanyHdr(cfg: Record<string, any> = {}): string {
   const c = { ...DEFAULT_COMPANY, ...cfg };
   const links = [c.website, c.email].filter(Boolean).join(" &nbsp;&nbsp; ");
-  return `<div class="co-name">${c.ten_cong_ty}</div>
+  const logoUrl = String(c.logo_url ?? c.logo ?? c.f_logo ?? "").trim();
+  const companyName = String(c.ten_cong_ty ?? c.app_name ?? c.name ?? DEFAULT_COMPANY.ten_cong_ty).trim();
+  const logoHtml = logoUrl
+    ? `<div style="text-align:center;margin-bottom:6px"><img src="${logoUrl.replace(/"/g, "&quot;")}" alt="" style="max-height:64px;max-width:220px;object-fit:contain"/></div>`
+    : "";
+  return `${logoHtml}<div class="co-name">${companyName}</div>
   <div class="co-addr">Địa chỉ: ${c.dia_chi}</div>
   <div class="co-addr">MST: ${c.mst}${links ? ` &nbsp;&nbsp; ${links}` : ""}</div>`;
+}
+
+const DEFAULT_PRINT_COLUMN_ORDER = [
+  "ten_sp", "don_vi", "chieu_rong", "chieu_dai", "so_tam", "khoi_luong", "don_gia", "thanh_tien",
+];
+
+const PRINT_COL_META: Record<string, { header: string; width: string; align: "left" | "right" | "center"; decimals?: number }> = {
+  ten_sp: { header: "Tên sản phẩm/Quy cách", width: "26%", align: "left" },
+  don_vi: { header: "Đơn vị", width: "5%", align: "center" },
+  chieu_rong: { header: "Chiều<br/>rộng", width: "7%", align: "right" },
+  chieu_dai: { header: "Chiều<br/>dài", width: "8%", align: "right", decimals: 3 },
+  so_tam: { header: "Số<br/>tấm", width: "6%", align: "right" },
+  khoi_luong: { header: "Khối<br/>lượng", width: "8%", align: "right" },
+  don_gia: { header: "Đơn giá<br/>(VNĐ)", width: "9%", align: "right" },
+  thanh_tien: { header: "Thành tiền<br/>(VNĐ)", width: "10%", align: "right" },
+};
+
+function isPriceColumn(name: string, col?: LiColumnDef): boolean {
+  if (col?.type === "price") return true;
+  return name === "don_gia" || name === "thanh_tien" || name.includes("gia") || name.includes("tien");
+}
+
+function resolvePrintTableColumns(
+  columns: LiColumnDef[] | undefined,
+  opts: LiPrintTableOpts,
+): string[] {
+  const priceHidden = opts.showPrice === false;
+  const hideSet = new Set((opts.hideColumns ?? []).map(n => String(n).trim()).filter(Boolean));
+  let names: string[];
+  if (opts.visibleColumns?.length) {
+    names = opts.visibleColumns.map(n => String(n).trim()).filter(Boolean);
+  } else if (columns?.length) {
+    names = columns.filter(c => !c.hidden).map(c => c.name);
+  } else {
+    names = [...DEFAULT_PRINT_COLUMN_ORDER];
+  }
+  return names.filter(name => {
+    if (hideSet.has(name)) return false;
+    if (priceHidden && isPriceColumn(name)) return false;
+    return true;
+  });
+}
+
+function printColHeader(name: string, columns?: LiColumnDef[]): string {
+  const col = columns?.find(c => c.name === name);
+  const meta = PRINT_COL_META[name];
+  const label = col?.label ?? meta?.header ?? name;
+  const width = meta?.width ?? "8%";
+  return `<th style="width:${width}">${label.replace(/\n/g, "<br/>")}</th>`;
+}
+
+function formatPrintCell(name: string, item: Record<string, any>, columns?: LiColumnDef[]): string {
+  const col = columns?.find(c => c.name === name);
+  const val = item[name];
+  if (val == null || val === "") return "";
+  if (isPriceColumn(name, col)) return fmtVND(Number(val));
+  const decimals = PRINT_COL_META[name]?.decimals ?? (col?.type === "number" ? 2 : 2);
+  if (typeof val === "number") return fmtNum(val, decimals);
+  return String(val);
+}
+
+function findPrintAggColumns(visibleNames: string[], columns?: LiColumnDef[]): {
+  soTam?: string;
+  kl?: string;
+  tt?: string;
+  price?: string;
+} {
+  const formulaCols = (columns ?? []).filter(c =>
+    c.type === "formula" || c.type === "formula_or_manual",
+  );
+  const klFromFormula = formulaCols.length >= 2
+    ? formulaCols[formulaCols.length - 2].name
+    : "khoi_luong";
+  const ttFromFormula = formulaCols.length >= 1
+    ? formulaCols[formulaCols.length - 1].name
+    : "thanh_tien";
+  const soTamCandidates = ["so_tam", "so_luong", "qty", "quantity"];
+  const soTam = visibleNames.find(n => soTamCandidates.includes(n))
+    ?? visibleNames.find(n => (columns?.find(c => c.name === n)?.type === "number"));
+  return {
+    soTam: soTam && visibleNames.includes(soTam) ? soTam : undefined,
+    kl: visibleNames.includes(klFromFormula) ? klFromFormula : undefined,
+    tt: visibleNames.includes(ttFromFormula) ? ttFromFormula : undefined,
+    price: visibleNames.find(n => n === "don_gia" || (columns?.find(c => c.name === n)?.type === "price")),
+  };
+}
+
+/** Bảng dòng hàng in PDF — cột ẩn/hiện qua print_table (hideColumns, showPrice…). */
+export function buildItemsTableHtml(
+  groups: ProductGroup[],
+  calc: EditorCalcResult,
+  utils: { fmtVND: typeof fmtVND; fmtNum: typeof fmtNum; groupLabel: typeof groupLabel; lineItemsColumns?: LiColumnDef[] },
+  opts: LiPrintTableOpts = {},
+): string {
+  const showPrice = opts.showPrice ?? true;
+  const showGroupSubtotal = opts.showGroupSubtotal ?? showPrice;
+  const columns = utils.lineItemsColumns;
+  const visibleNames = resolvePrintTableColumns(columns, opts);
+  const { fmtVND, fmtNum, groupLabel } = utils;
+  const agg = findPrintAggColumns(visibleNames, columns);
+  const dataColCount = visibleNames.length;
+
+  const headerCells = visibleNames.map(name => printColHeader(name, columns)).join("");
+  let rows = "";
+
+  for (const [gi, g] of groups.entries()) {
+    const label = groupLabel(gi);
+    const specHtml = String(g.spec ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;");
+    rows += `<tr><td class="c it-grp" style="font-weight:bold">${label}.</td>
+      <td colspan="${dataColCount}" class="it-grp">${specHtml}</td></tr>`;
+
+    if (showGroupSubtotal) {
+      const gc = calc.groups[g.id];
+      const totalTt = gc?.sum ?? g.items.reduce((s, i) => s + Number(i.thanh_tien ?? 0), 0);
+      const totalKl = gc?.kl ?? g.items.reduce((s, i) => s + Number(i.khoi_luong ?? 0), 0);
+      const totalSt = gc?.so_tam ?? g.items.reduce((s, i) => s + Number(i.so_tam ?? 0), 0);
+      const uniformPrice = gc?.uniform_price != null ? fmtVND(gc.uniform_price) : "";
+
+      const firstAggIdx = visibleNames.findIndex(n =>
+        n === agg.soTam || n === agg.kl || n === agg.price || n === agg.tt,
+      );
+      const labelSpan = firstAggIdx >= 0 ? firstAggIdx : visibleNames.length;
+      let subRow = `<tr><td class="it-sub"></td><td class="it-sub" colspan="${Math.max(labelSpan, 1)}">Cộng nhóm ${label} – chưa VAT ${g.vat_rate}%</td>`;
+      for (let i = labelSpan; i < visibleNames.length; i++) {
+        const name = visibleNames[i];
+        if (name === agg.soTam) subRow += `<td class="r it-sub">${totalSt}</td>`;
+        else if (name === agg.kl) subRow += `<td class="r it-sub">${fmtNum(totalKl)}</td>`;
+        else if (name === agg.price && showPrice) subRow += `<td class="r it-sub">${uniformPrice}</td>`;
+        else if (name === agg.tt && showPrice) subRow += `<td class="r it-sub">${fmtVND(totalTt)}</td>`;
+        else subRow += `<td class="it-sub"></td>`;
+      }
+      rows += `${subRow}</tr>`;
+    }
+
+    g.items.forEach((item, idx) => {
+      const cells = visibleNames.map(name => {
+        const align = PRINT_COL_META[name]?.align ?? "left";
+        const cls = align === "right" ? "r" : align === "center" ? "c" : "";
+        const content = formatPrintCell(name, item, columns);
+        return `<td class="${cls}">${content}</td>`;
+      });
+      rows += `<tr><td class="c">${idx + 1}</td>${cells.join("")}</tr>`;
+    });
+  }
+
+  const nameColWidth = visibleNames.includes("ten_sp") ? "26%" : "38%";
+  return `<table class="it"><thead><tr>
+    <th style="width:4%">TT</th>
+    ${headerCells.replace('width:26%', `width:${nameColWidth}`)}
+    </tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 export function parseNoteLines(text: string | undefined, fallback: string[]): string[] {
@@ -515,80 +673,30 @@ export function buildTotalsHtml(
   return `<div class="tot-wrap"><table class="tot">${rows}</table></div>${wordsHtml}`;
 }
 
-/** Bảng dòng hàng in PDF — dùng calc.groups cho dòng cộng nhóm (khớp Excel I×H / SUM). */
-export function buildItemsTableHtml(
-  groups: ProductGroup[],
-  calc: EditorCalcResult,
-  utils: { fmtVND: typeof fmtVND; fmtNum: typeof fmtNum; groupLabel: typeof groupLabel },
-  opts: { showPrice?: boolean; showGroupSubtotal?: boolean } = {},
-): string {
-  const showPrice = opts.showPrice ?? true;
-  const showGroupSubtotal = opts.showGroupSubtotal ?? showPrice;
-  const { fmtVND, fmtNum, groupLabel } = utils;
-  const priceHdr = showPrice
-    ? `<th style="width:9%">Đơn giá<br/>(VNĐ)</th><th style="width:10%">Thành tiền<br/>(VNĐ)</th>`
-    : "";
-  let rows = "";
-  for (const [gi, g] of groups.entries()) {
-    const label = groupLabel(gi);
-    const specHtml = String(g.spec ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;");
-    rows += `<tr><td class="c it-grp" style="font-weight:bold">${label}.</td>
-      <td colspan="${showPrice ? 7 : 5}" class="it-grp">${specHtml}</td></tr>`;
-    if (showGroupSubtotal) {
-      const gc = calc.groups[g.id];
-      const totalTt = gc?.sum ?? g.items.reduce((s, i) => s + Number(i.thanh_tien ?? 0), 0);
-      const totalKl = gc?.kl ?? g.items.reduce((s, i) => s + Number(i.khoi_luong ?? 0), 0);
-      const totalSt = gc?.so_tam ?? g.items.reduce((s, i) => s + Number(i.so_tam ?? 0), 0);
-      const uniformPrice = gc?.uniform_price != null ? fmtVND(gc.uniform_price) : "";
-      const priceSubCells = showPrice
-        ? `<td class="r it-sub">${uniformPrice}</td><td class="r it-sub">${fmtVND(totalTt)}</td>`
-        : "";
-      rows += `<tr><td class="it-sub"></td><td class="it-sub" colspan="3">Cộng nhóm ${label} – chưa VAT ${g.vat_rate}%</td>
-        <td class="r it-sub">${totalSt}</td><td class="r it-sub">${fmtNum(totalKl)}</td>${priceSubCells}</tr>`;
-    }
-    g.items.forEach((item, idx) => {
-      const priceCells = showPrice
-        ? `<td class="r">${item.don_gia != null ? fmtVND(item.don_gia) : ""}</td>
-           <td class="r">${item.thanh_tien ? fmtVND(item.thanh_tien) : ""}</td>`
-        : "";
-      rows += `<tr><td class="c">${idx + 1}</td><td>${item.ten_sp ?? ""}</td>
-        <td class="c">${item.don_vi ?? ""}</td>
-        <td class="r">${item.chieu_rong != null ? fmtNum(item.chieu_rong) : ""}</td>
-        <td class="r">${item.chieu_dai != null ? fmtNum(item.chieu_dai, 3) : ""}</td>
-        <td class="r">${item.so_tam != null ? item.so_tam : ""}</td>
-        <td class="r">${item.khoi_luong != null ? fmtNum(item.khoi_luong) : ""}</td>
-        ${priceCells}</tr>`;
-    });
-  }
-  return `<table class="it"><thead><tr>
-    <th style="width:4%">TT</th>
-    <th style="width:${showPrice ? "26%" : "38%"}">Tên sản phẩm/Quy cách</th>
-    <th style="width:5%">Đơn vị</th>
-    <th style="width:7%">Chiều<br/>rộng</th>
-    <th style="width:8%">Chiều<br/>dài</th>
-    <th style="width:6%">Số<br/>tấm</th>
-    <th style="width:8%">Khối<br/>lượng</th>
-    ${priceHdr}</tr></thead><tbody>${rows}</tbody></table>`;
-}
-
 export function buildPrintUtils(
   settings: Record<string, any> = {},
-  opts?: { totalConfigs?: LiTotalConfig[]; lang?: string },
+  opts?: { totalConfigs?: LiTotalConfig[]; lang?: string; lineItemsColumns?: LiColumnDef[]; printTableOpts?: LiPrintTableOpts },
 ) {
   const totalConfigs = opts?.totalConfigs ?? [];
   const lang = opts?.lang ?? "vi";
-  const base = { fmtVND, fmtNum, soThanhChu, groupLabel };
+  const lineItemsColumns = opts?.lineItemsColumns;
+  const printTableOpts = opts?.printTableOpts ?? {};
+  const base = { fmtVND, fmtNum, soThanhChu, groupLabel, lineItemsColumns };
   return {
     ...base,
     settings,
     totalConfigs,
     lang,
+    printTableOpts,
     formatSoLenh,
     buildCompanyHdr,
     parseNoteLines,
-    buildItemsTableHtml,
+    buildItemsTableHtml: (
+      groups: ProductGroup[],
+      calc: EditorCalcResult,
+      u: Record<string, any>,
+      tableOpts?: LiPrintTableOpts,
+    ) => buildItemsTableHtml(groups, calc, { ...base, ...u }, { ...printTableOpts, ...tableOpts }),
     buildTotalsHtml: (calc: EditorCalcResult, u: Record<string, any>) =>
       buildTotalsHtml(calc, u.totalConfigs ?? totalConfigs, base, u.lang ?? lang),
   };

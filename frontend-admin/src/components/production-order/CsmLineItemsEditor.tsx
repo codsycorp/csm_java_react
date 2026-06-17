@@ -16,11 +16,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Button, Card, Col, Divider, Input, InputNumber,
-  Row, Select, Space, Table, Typography, message,
+  Modal, Row, Select, Space, Table, Typography, message,
 } from "antd";
-import { DeleteOutlined, PlusOutlined, PrinterOutlined, SaveOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EyeOutlined, PlusOutlined, PrinterOutlined, SaveOutlined, StepForwardOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
-import html2pdf from "html2pdf.js";
 import { useTranslation } from "react-i18next";
 
 import { getTableData } from "#src/components/csm-grid/CsmApi";
@@ -44,6 +43,24 @@ import {
   formatNgay, normalizeNgayString,
   newItem, newGroup,
 } from "./utils";
+import { useUserStore } from "#src/store";
+import {
+  fetchSysAppRow,
+  mergePrintCompanySettings,
+  resolveTenantAppIdForPrint,
+} from "./line-items-company";
+import {
+  exportHtmlToPdf,
+  printHtmlInBrowser,
+  validatePrintHtml,
+} from "./line-items-print";
+import {
+  applyWorkflowPromotion,
+  resolveWorkflowPromoteLabel,
+  resolveWorkflowStageField,
+  resolveWorkflowStep,
+  validateWorkflowPromotion,
+} from "./line-items-workflow";
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -380,6 +397,19 @@ export default function CsmLineItemsEditor({
 }: CsmLineItemsEditorProps) {
   const { i18n } = useTranslation();
   const uiLang = i18n.language || "vi";
+  const userAppId = useUserStore(state => state.app_id);
+  const userAppToken = useUserStore(state => state.app_token);
+  const userMenus = useUserStore(state => state.menusPermissions);
+  const userDev = useUserStore(state => state.dev);
+  const tenantAppId = useMemo(
+    () => resolveTenantAppIdForPrint(appId, {
+      app_id: userAppId,
+      app_token: userAppToken,
+      menusPermissions: userMenus,
+      dev: userDev,
+    }, decrypt),
+    [appId, userAppId, userAppToken, userMenus, userDev, decrypt],
+  );
   const columns: LiColumnDef[] = m_configs.line_items_columns ?? [];
   const groupCfg: Required<LiGroupConfig> = {
     ...DEFAULT_GROUP_CFG,
@@ -408,9 +438,42 @@ export default function CsmLineItemsEditor({
   );
   const [comboData, setComboData] = useState<Record<string, Record<string, any>[]>>({});
   const [printSettings, setPrintSettings] = useState<Record<string, any>>({});
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState("");
+  const [previewFileName, setPreviewFileName] = useState("document.pdf");
+  const [previewLabel, setPreviewLabel] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
   const manualNumbersRef = useRef<Record<string, boolean>>(
     Object.fromEntries(autoFieldNames.map((n) => [n, Boolean(initialValue?.header?.[n])])),
   );
+
+  const workflow = m_configs.line_items_workflow;
+  const stageField = resolveWorkflowStageField(workflow);
+  const currentStage = String(header[stageField] ?? "");
+  const currentWorkflowStep = useMemo(
+    () => resolveWorkflowStep(workflow, currentStage),
+    [workflow, currentStage],
+  );
+  const promoteLabel = useMemo(
+    () => resolveWorkflowPromoteLabel(currentWorkflowStep, uiLang),
+    [currentWorkflowStep, uiLang],
+  );
+
+  const handleWorkflowPromote = useCallback(() => {
+    const check = validateWorkflowPromotion(header, currentWorkflowStep, headerFields);
+    if (!check.ok) {
+      message.warning(check.message ?? "Không thể chuyển bước");
+      return;
+    }
+    const nextHeader = applyWorkflowPromotion(header, workflow, currentStage);
+    if (!nextHeader) {
+      message.info("Đã ở bước cuối quy trình");
+      return;
+    }
+    setHeader(nextHeader);
+    message.success(`Đã chuyển sang "${nextHeader[stageField]}" — nhớ Lưu để ghi DB`);
+  }, [currentStage, currentWorkflowStep, header, headerFields, stageField, workflow]);
 
   const applyAutoNumbers = useCallback((ngay: string, prev: OrderHeader): OrderHeader => {
     const norm = normalizeNgayString(ngay);
@@ -453,24 +516,33 @@ export default function CsmLineItemsEditor({
       seen.add(tableName);
       return true;
     });
-    Promise.all(
-      tables.map(({ tableName, where }) =>
+    Promise.all([
+      ...tables.map(({ tableName, where }) =>
         getTableData<any>({ app_id: appId, obj_name: tableName, where })
           .then((res) => {
             const rows = Array.isArray(res?.rows) ? res.rows : (Array.isArray(res) ? res : []);
-            return { tableName, rows };
+            return { tableName, rows: Array.isArray(rows) ? rows : [] };
           })
           .catch(() => ({ tableName, rows: [] as Record<string, any>[] })),
       ),
-    ).then((results) => {
+      fetchSysAppRow(tenantAppId),
+    ]).then((results) => {
       const next: Record<string, Record<string, any>[]> = {};
-      for (const { tableName, rows } of results) {
-        next[tableName] = rows;
-        if (tableName === "pm_cai_dat" && rows[0]) setPrintSettings(rows[0]);
+      let pmRow: Record<string, any> = {};
+      let sysAppRow: Record<string, any> | null = null;
+      for (const item of results) {
+        if (item && typeof item === "object" && "tableName" in item) {
+          const { tableName, rows } = item as { tableName: string; rows: Record<string, any>[] };
+          next[tableName] = rows;
+          if (tableName === "pm_cai_dat" && rows[0]) pmRow = rows[0];
+        } else if (item && typeof item === "object" && !Array.isArray(item)) {
+          sysAppRow = item as Record<string, any>;
+        }
       }
       setComboData(next);
+      setPrintSettings(mergePrintCompanySettings(pmRow, sysAppRow));
     });
-  }, [appId, comboFetchRequests]);
+  }, [appId, comboFetchRequests, tenantAppId]);
 
   const calc: EditorCalcResult = useMemo(
     () => calcEditorTotals(groups, columns, totalConfigs),
@@ -554,20 +626,24 @@ export default function CsmLineItemsEditor({
 
   // ── Print ───────────────────────────────────────────────────────────────────
 
-  const handlePrint = useCallback(async (pc: (typeof printConfigs)[number]) => {
+  const buildPrintHtml = useCallback(async (pc: (typeof printConfigs)[number]) => {
     const rawFn = m_configs.trigger?.[pc.trigger_key];
     if (!rawFn) {
-      message.warning(`Chưa cấu hình mẫu in "${resolveTriLangLabel(pc, uiLang, ["label"]) || pc.trigger_key}"`);
-      return;
+      return { ok: false as const, message: `Chưa cấu hình mẫu in "${resolveTriLangLabel(pc, uiLang, ["label"]) || pc.trigger_key}"` };
     }
     const fnBody = resolveTriggerBody(rawFn, decrypt);
 
     let settings = printSettings;
     if (appId) {
       try {
-        const res = await getTableData<any>({ app_id: appId, obj_name: "pm_cai_dat" });
-        const rows = Array.isArray(res?.rows) ? res.rows : (Array.isArray(res) ? res : []);
-        if (rows[0]) settings = rows[0];
+        const [pmRes, sysAppRow] = await Promise.all([
+          getTableData<any>({ app_id: appId, obj_name: "pm_cai_dat" }).catch(() => null),
+          fetchSysAppRow(tenantAppId),
+        ]);
+        const pmRows = pmRes
+          ? (Array.isArray(pmRes?.rows) ? pmRes.rows : (Array.isArray(pmRes) ? pmRes : []))
+          : [];
+        settings = mergePrintCompanySettings(pmRows[0] ?? {}, sysAppRow);
       } catch { /* use cached */ }
     }
 
@@ -584,11 +660,18 @@ export default function CsmLineItemsEditor({
       header,
       enrichedGroups,
       calc,
-      buildPrintUtils(settings, { totalConfigs, lang: uiLang }),
+      buildPrintUtils(settings, {
+        totalConfigs,
+        lang: uiLang,
+        lineItemsColumns: columns,
+        printTableOpts: pc.print_table ?? {},
+      }),
     );
 
-    // Resolve filename
-    let fileName = `document.pdf`;
+    const check = validatePrintHtml(html);
+    if (!check.ok) return { ok: false as const, message: check.message };
+
+    let fileName = "document.pdf";
     if (pc.filename_expr) {
       try {
         // eslint-disable-next-line no-new-func
@@ -596,28 +679,47 @@ export default function CsmLineItemsEditor({
       } catch { /* keep default */ }
     }
 
-    const container = document.createElement("div");
-    container.style.cssText = "position:fixed;left:-9999px;top:0;z-index:-1";
-    container.innerHTML = html;
-    document.body.appendChild(container);
+    return { ok: true as const, html, fileName };
+  }, [m_configs.trigger, decrypt, groups, columns, header, calc, printSettings, appId, tenantAppId, totalConfigs, uiLang]);
 
+  const handleOpenPrintPreview = useCallback(async (pc: (typeof printConfigs)[number]) => {
+    setPreviewLoading(true);
     try {
-      await (html2pdf as any)()
-        .set({
-          margin: [8, 8, 8, 8],
-          filename: fileName,
-          html2canvas: { scale: 2, useCORS: true, logging: false },
-          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-          pagebreak: { mode: ["css", "legacy"] },
-        })
-        .from(container.firstElementChild as HTMLElement)
-        .save();
+      const result = await buildPrintHtml(pc);
+      if (!result.ok) {
+        message.warning(result.message ?? "Không tạo được bản xem trước");
+        return;
+      }
+      setPreviewHtml(result.html);
+      setPreviewFileName(result.fileName);
+      setPreviewLabel(resolveTriLangLabel(pc, uiLang, ["label"]) || pc.trigger_key);
+      setPreviewOpen(true);
+    } catch (e: any) {
+      message.error("Lỗi tạo bản xem trước: " + (e?.message ?? String(e)));
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [buildPrintHtml, uiLang]);
+
+  const handleExportPreviewPdf = useCallback(async () => {
+    setExportLoading(true);
+    try {
+      await exportHtmlToPdf(previewHtml, previewFileName);
+      message.success("Đã xuất PDF");
     } catch (e: any) {
       message.error("Lỗi xuất PDF: " + (e?.message ?? String(e)));
     } finally {
-      document.body.removeChild(container);
+      setExportLoading(false);
     }
-  }, [m_configs.trigger, decrypt, groups, columns, header, calc, printConfigs, appId, printSettings, totalConfigs, uiLang]);
+  }, [previewHtml, previewFileName]);
+
+  const handlePreviewBrowserPrint = useCallback(() => {
+    try {
+      printHtmlInBrowser(previewHtml);
+    } catch (e: any) {
+      message.error("Lỗi in: " + (e?.message ?? String(e)));
+    }
+  }, [previewHtml]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -646,17 +748,59 @@ export default function CsmLineItemsEditor({
               Lưu
             </Button>
           )}
+          {currentWorkflowStep?.next && promoteLabel && (
+            <Button icon={<StepForwardOutlined />} onClick={handleWorkflowPromote}>
+              {promoteLabel}
+            </Button>
+          )}
           {printConfigs.map(pc => (
             <Button
               key={pc.trigger_key}
-              icon={<PrinterOutlined />}
-              onClick={() => handlePrint(pc)}
+              icon={<EyeOutlined />}
+              loading={previewLoading}
+              onClick={() => handleOpenPrintPreview(pc)}
             >
               {resolveTriLangLabel(pc, uiLang, ["label"])}
             </Button>
           ))}
         </Space>
       </Card>
+
+      <Modal
+        title={`Xem trước — ${previewLabel}`}
+        open={previewOpen}
+        onCancel={() => setPreviewOpen(false)}
+        width={900}
+        destroyOnClose
+        footer={[
+          <Button key="close" onClick={() => setPreviewOpen(false)}>
+            Đóng
+          </Button>,
+          <Button key="print" icon={<PrinterOutlined />} onClick={handlePreviewBrowserPrint}>
+            In
+          </Button>,
+          <Button
+            key="pdf"
+            type="primary"
+            icon={<PrinterOutlined />}
+            loading={exportLoading}
+            onClick={handleExportPreviewPdf}
+          >
+            Xuất PDF
+          </Button>,
+        ]}
+      >
+        <iframe
+          title="print-preview"
+          srcDoc={previewHtml}
+          style={{
+            width: "100%",
+            height: "72vh",
+            border: "1px solid #d9d9d9",
+            background: "#fff",
+          }}
+        />
+      </Modal>
 
       {/* Header fields — driven entirely by m_configs.table */}
       {headerFields.length > 0 && (
