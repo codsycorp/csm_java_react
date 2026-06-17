@@ -25,14 +25,19 @@ func TestMergeRouteForSPAPrefersCatchAllTables(t *testing.T) {
 	}
 }
 
-func TestEnrichRouteFromRPIndex(t *testing.T) {
-	r := enrichRouteFromRPIndex(resolvedRoute{RPIndex: "admin"})
-	if r.AppID != "csm" {
-		t.Fatalf("admin rp_index should infer csm app_id, got %q", r.AppID)
+func TestFinalizeSSRRouteMergesCatchAllFromDB(t *testing.T) {
+	rm, cleanup := pebbleDataAvailable(t)
+	defer cleanup()
+
+	route := finalizeSSRRoute(resolvedRoute{Domain: "phanmemmottrieu.net"}, rm, "phanmemmottrieu.net")
+	if route.RPIndex != "web" {
+		t.Fatalf("expected rp_index from catch-all, got %q", route.RPIndex)
 	}
-	r = enrichRouteFromRPIndex(resolvedRoute{RPIndex: "lmkt"})
-	if r.AppID != "lmkt" {
-		t.Fatalf("lmkt rp_index should infer lmkt app_id, got %q", r.AppID)
+	if route.AppID != "wuweb" {
+		t.Fatalf("expected app_id from catch-all sys_la_routers, got %q", route.AppID)
+	}
+	if route.TblServiceDetail != "web_service_detail" {
+		t.Fatalf("expected tbl_service_detail from catch-all, got %q", route.TblServiceDetail)
 	}
 }
 

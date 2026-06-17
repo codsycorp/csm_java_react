@@ -8,7 +8,7 @@ import (
 )
 
 func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, uri, host, query string) {
-	uri = NormalizeURI(uri)
+	uri = NormalizeIncomingWebPath(uri)
 
 	switch uri {
 	case "/robots.txt":

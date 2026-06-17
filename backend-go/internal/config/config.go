@@ -72,6 +72,14 @@ type AppConfig struct {
 	GoogleIndex          GoogleIndexConfig
 	StartupReindex       bool
 	StartupReindexTables []string
+	// EqIndexMode: "pebble" (SSD, low RAM) or "memory" (fast, high RAM).
+	EqIndexMode string
+	EqIndexRoot string
+	// Pebble tuning — shared cache keeps RAM bounded when many tables are open.
+	PebbleCacheMB        int
+	PebbleMemTableMB     int
+	PebbleIndexMemTableMB int
+	VectorRecordsEnabled bool
 }
 
 func LoadFromEnv() AppConfig {
@@ -147,7 +155,51 @@ func LoadFromEnv() AppConfig {
 		},
 		StartupReindex:       envFlagTrue("CSM_STARTUP_REINDEX", true),
 		StartupReindexTables: envStringList("CSM_STARTUP_REINDEX_TABLES", []string{"csm/csm_accounts", "csm/csm_group_members", "csm/sys_autos"}),
+		EqIndexMode:          envString("CSM_EQ_INDEX_MODE", defaultEqIndexMode()),
+		EqIndexRoot:          envPath("CSM_EQ_INDEX_ROOT", filepath.Join(nativeDir, "eq_index")),
+		PebbleCacheMB:        envInt("CSM_PEBBLE_CACHE_MB", defaultPebbleCacheMB()),
+		PebbleMemTableMB:     envInt("CSM_PEBBLE_MEMTABLE_MB", defaultPebbleMemTableMB()),
+		PebbleIndexMemTableMB: envInt("CSM_PEBBLE_INDEX_MEMTABLE_MB", defaultPebbleIndexMemTableMB()),
+		VectorRecordsEnabled: envFlagTrue("CSM_VECTOR_RECORDS_ENABLED", defaultVectorRecordsEnabled()),
 	}
+}
+
+func defaultEqIndexMode() string {
+	profile := strings.ToLower(os.Getenv("CSM_LOCAL_PROFILE"))
+	if profile == "" {
+		profile = strings.ToLower(os.Getenv("AI_LOCAL_MODE"))
+	}
+	switch profile {
+	case "8gb", "7b", "local-8gb":
+		return "pebble"
+	default:
+		return "memory"
+	}
+}
+
+func defaultPebbleCacheMB() int {
+	if defaultEqIndexMode() == "pebble" {
+		return 32
+	}
+	return 64
+}
+
+func defaultPebbleMemTableMB() int {
+	if defaultEqIndexMode() == "pebble" {
+		return 8
+	}
+	return 32
+}
+
+func defaultPebbleIndexMemTableMB() int {
+	if defaultEqIndexMode() == "pebble" {
+		return 4
+	}
+	return 8
+}
+
+func defaultVectorRecordsEnabled() bool {
+	return defaultEqIndexMode() != "pebble"
 }
 
 func (c AppConfig) EffectiveLlamaMaxTokens() uint32 {

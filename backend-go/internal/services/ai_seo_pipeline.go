@@ -71,6 +71,32 @@ func seoLocaleTranslateMaxSourceChars() int {
 	return max(400, seoEnvInt("AI_SEO_LOCALE_TRANSLATE_MAX_SOURCE_CHARS", 900))
 }
 
+// EffectiveSeoPromptMaxChars caps SEO input by context window (not output×3 — that truncated long LMKT prompts).
+func EffectiveSeoPromptMaxChars(cfg config.AppConfig) int {
+	if v := seoEnvInt("AI_SEO_MAX_PROMPT_CHARS", 0); v > 0 {
+		return v
+	}
+	safe := MaxSafePromptChars(cfg)
+	llamaCap := cfg.AI.LlamaMaxPromptChars
+	if llamaCap <= 0 {
+		llamaCap = 32_000
+	}
+	cap := min(safe, llamaCap)
+	if cap < 8000 {
+		return 8000
+	}
+	return cap
+}
+
+// SeoRequestContext returns a context for SEO HTTP handlers. AI_SEO_REQUEST_TIMEOUT_MS=0 → no deadline.
+func SeoRequestContext() (context.Context, context.CancelFunc) {
+	ms := seoEnvInt("AI_SEO_REQUEST_TIMEOUT_MS", 0)
+	if ms <= 0 {
+		return context.WithCancel(context.Background())
+	}
+	return context.WithTimeout(context.Background(), time.Duration(ms)*time.Millisecond)
+}
+
 func seoArticleRetryEnabled() bool {
 	return seoEnvBool("AI_SEO_PIPELINE_ARTICLE_RETRY_ENABLED", true)
 }
@@ -94,7 +120,7 @@ func (s *AiSeoService) runAntiAiOneShot(ctx context.Context, seoContext map[stri
 	if seoPipeline == "seo_writer_2026" {
 		prompt += seoWriter2026Extension()
 	}
-	prompt = PrepareLocalProviderPrompt(prompt, int(EffectiveSeoArticleMaxTokens(s.cfg))*3)
+	prompt = PrepareLocalProviderPrompt(prompt, EffectiveSeoPromptMaxChars(s.cfg))
 
 	raw, err := s.llama.CompleteWithTokens(ctx, prompt, EffectiveSeoArticleMaxTokens(s.cfg))
 	if err != nil {
@@ -109,7 +135,7 @@ func (s *AiSeoService) runAntiAiOneShot(ctx context.Context, seoContext map[stri
 
 [RETRY] JSON lần trước thiếu hoặc có dấu ... — viết LẠI đủ field tiếng Việt.
 Cấm dùng ... hoặc bỏ trống field. content HTML ~350-500 từ.`
-		retryPrompt = PrepareLocalProviderPrompt(retryPrompt, int(EffectiveSeoArticleMaxTokens(s.cfg))*3)
+		retryPrompt = PrepareLocalProviderPrompt(retryPrompt, EffectiveSeoPromptMaxChars(s.cfg))
 		retryRaw, retryErr := s.llama.CompleteWithTokens(ctx, retryPrompt, EffectiveSeoArticleMaxTokens(s.cfg))
 		if retryErr == nil {
 			retryParsed := parseSeoArticleMap(retryRaw)
@@ -184,7 +210,7 @@ func (s *AiSeoService) ensureTrilingualLocalesForViFirst(ctx context.Context, pa
 	}
 	clearStaleLocaleCopies(payload)
 	raw, err := s.llama.CompleteWithTokens(ctx,
-		PrepareLocalProviderPrompt(buildMinimalLocaleTranslatePrompt(payload), 8000),
+		PrepareLocalProviderPrompt(buildMinimalLocaleTranslatePrompt(payload), EffectiveSeoPromptMaxChars(s.cfg)),
 		EffectiveSeoLocaleTranslateMaxTokens(s.cfg),
 	)
 	if err == nil {
@@ -201,7 +227,7 @@ func (s *AiSeoService) ensureTrilingualLocalesWithRetry(ctx context.Context, pay
 		return
 	}
 	raw, err := s.llama.CompleteWithTokens(ctx,
-		PrepareLocalProviderPrompt(buildMinimalLocaleTranslatePrompt(payload), 8000),
+		PrepareLocalProviderPrompt(buildMinimalLocaleTranslatePrompt(payload), EffectiveSeoPromptMaxChars(s.cfg)),
 		EffectiveSeoLocaleTranslateMaxTokens(s.cfg),
 	)
 	if err == nil {
@@ -220,7 +246,7 @@ func (s *AiSeoService) translateSingleLocale(ctx context.Context, payload map[st
 		prompt = buildSingleLocaleTranslatePrompt(payload, lang)
 	}
 	raw, err := s.llama.CompleteWithTokens(ctx,
-		PrepareLocalProviderPrompt(prompt, 8000),
+		PrepareLocalProviderPrompt(prompt, EffectiveSeoPromptMaxChars(s.cfg)),
 		EffectiveSeoLocaleTranslateMaxTokens(s.cfg),
 	)
 	if err == nil {

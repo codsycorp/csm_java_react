@@ -92,13 +92,59 @@ func RenderPage(ctx SSRContext, uri, host, queryStr string) string {
 	}
 
 	html := buildSSRHTML(ctx, uri, host, queryStr)
-	if queryStr == "" {
+	if queryStr == "" && shouldCacheSSRPage(uri, html) {
 		ssrCache.Store(cacheKey, &ssrCacheEntry{
 			data:    html,
 			expires: time.Now().Add(ssrCacheTTL),
 		})
 	}
 	return html
+}
+
+// shouldCacheSSRPage skips caching detail URLs that failed to resolve serviceDetail,
+// so a transient lookup miss is not frozen for 30 minutes (Java has no full-page SSR cache).
+func shouldCacheSSRPage(uri, html string) bool {
+	if !looksLikeDetailURI(uri) {
+		return true
+	}
+	// Two-segment URLs are always detail pages; one-segment may be category — only skip cache when
+	// we attempted detail resolution and got nothing (category pages never include serviceDetail).
+	if strings.Contains(html, `"serviceDetail"`) {
+		return true
+	}
+	segs := pathSegmentCount(NormalizeURI(uri))
+	if segs >= 2 {
+		return false
+	}
+	return true
+}
+
+func pathSegmentCount(path string) int {
+	trimmed := strings.TrimPrefix(path, "/")
+	n := 0
+	for _, s := range strings.Split(trimmed, "/") {
+		if strings.TrimSpace(s) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+func looksLikeDetailURI(uri string) bool {
+	p := NormalizeURI(uri)
+	trimmed := strings.TrimPrefix(p, "/")
+	n := 0
+	for _, s := range strings.Split(trimmed, "/") {
+		if strings.TrimSpace(s) != "" {
+			n++
+		}
+	}
+	// /{service_code}/{slug} — primary detail URL shape
+	if n >= 2 {
+		return true
+	}
+	// /{slug} — slug-only detail (Java TRƯỜNG HỢP 2.5)
+	return n == 1 && trimmed != "" && trimmed != "home"
 }
 
 func ResolveRPIndexPub(rm *data.RecordManager, host string) string {
@@ -235,7 +281,8 @@ func sitemapURLEntry(url, lastmod, changefreq, priority string) string {
 }
 
 func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
-	route := finalizeSSRRoute(resolveRoute(ctx.RM, host, uri), ctx.RM, host)
+	normalizedPath := NormalizeIncomingWebPath(uri)
+	route := finalizeSSRRoute(resolveRoute(ctx.RM, host, normalizedPath), ctx.RM, host)
 	domain := route.Domain
 	if domain == "" {
 		domain = DomainFromHost(host)
@@ -252,7 +299,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 	if hostStr == "" {
 		hostStr = domain
 	}
-	canonical := protocol + "://" + hostStr + uri
+	canonical := protocol + "://" + hostStr + normalizedPath
 	baseURL := protocol + "://" + hostStr
 
 	params := parseQS(queryStr)
@@ -274,7 +321,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 
 	var seo *seoMeta
 	if route.AppID != "" && route.TblServices != "" && route.TblServiceDetail != "" {
-		if s := resolveSEOForServiceRoute(ctx.RM, route, domain, uri, mainServiceCode, defaultServiceCode, lang); s != nil {
+		if s := resolveSEOForServiceRoute(ctx.RM, route, domain, normalizedPath, mainServiceCode, defaultServiceCode, lang); s != nil {
 			seo = s
 			if seo.Title != "" {
 				pageTitle = seo.Title
@@ -316,7 +363,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		"app_id":        route.AppID,
 	}
 
-	ssrRoutes := map[string]any{uri: map[string]any{
+	ssrRoutes := map[string]any{normalizedPath: map[string]any{
 		"title":       pageTitle,
 		"description": pageDescription,
 		"keywords":    pageKeywords,
@@ -324,7 +371,7 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		"lang":        lang,
 	}}
 	if seo != nil {
-		ssrRoutes[uri] = seo.toRouteValue()
+		ssrRoutes[normalizedPath] = seo.toRouteValue()
 	}
 
 	initialData := map[string]any{
@@ -333,13 +380,18 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		"pageKeywords":    pageKeywords,
 		"canonicalUrl":    canonical,
 		"ogImage":         ogImage,
-		"currentPagePath": uri,
+		"currentPagePath": normalizedPath,
 		"app_id":          route.AppID,
 	}
 
-	if route.AppID != "" && route.TblServiceDetail != "" {
-		listing := resolveServiceListing(ctx.RM, route, domain, uri, params)
+	// Java: shouldAttemptSSR = !rp_index.isEmpty(); resolveServiceListingForRoute when tables configured
+	if strings.TrimSpace(route.RPIndex) != "" && route.AppID != "" && route.TblServiceDetail != "" {
+		listing := resolveServiceListing(ctx.RM, route, domain, normalizedPath, params, mainServiceCode, defaultServiceCode)
 		enrichInitialData(initialData, listing, protocol, hostStr)
+		if _, ok := listing["serviceDetail"]; !ok && looksLikeDetailURI(normalizedPath) {
+			log.Printf("SSR warn: detail URL %s (domain=%s app=%s table=%s) — no serviceDetail in listing",
+				normalizedPath, domain, route.AppID, route.TblServiceDetail)
+		}
 	}
 
 	appConfig := map[string]any{"f_logo": route.FLogo, "f_title": pageTitle}
@@ -412,36 +464,33 @@ func resolveRoute(rm *data.RecordManager, host, path string) resolvedRoute {
 	}
 
 	fCase := normalizeFCase(path)
-	catchAll, hasCatchAll := queryReactCatchAllRoute(rm, domain)
-	exact, hasExact := queryRoute(rm, []model.SearchFilter{
+
+	// Priority 1: exact domain + f_case (Java WebSpringController / Rust resolve_route)
+	if route, ok := queryRoute(rm, []model.SearchFilter{
 		model.EqFilter("domain_name", domain),
 		model.EqFilter("f_case", fCase),
 		model.EqFilter("run", 1),
-	})
-
-	// Java: React SSR only when rp_index is set. SPA deep links (/login, /dashboard)
-	// must use the catch-all row (f_case="") even if an exact f_case row exists without rp_index.
-	if hasExact && strings.TrimSpace(exact.RPIndex) != "" {
-		return exact
-	}
-	if hasCatchAll {
-		if hasExact {
-			return mergeRouteForSPA(catchAll, exact)
-		}
-		return catchAll
-	}
-	if hasExact {
-		return exact
+	}); ok {
+		route.Domain = domain
+		return route
 	}
 
+	// Priority 2: SSR React catch-all (f_case="" + rp_index)
+	if route, ok := queryReactCatchAllRoute(rm, domain); ok {
+		return route
+	}
+
+	// Priority 3a: domain + app_type=web
 	if route, ok := queryRoute(rm, []model.SearchFilter{
 		model.EqFilter("domain_name", domain),
 		model.EqFilter("app_type", "web"),
 		model.EqFilter("run", 1),
 	}); ok {
+		route.Domain = domain
 		return route
 	}
 
+	// Priority 3b: global default
 	if route, ok := queryRoute(rm, []model.SearchFilter{
 		model.EqFilter("domain_name", ""),
 		model.EqFilter("f_case", "default"),
@@ -493,15 +542,21 @@ func mergeRouteForSPA(base, overlay resolvedRoute) resolvedRoute {
 }
 
 func finalizeSSRRoute(route resolvedRoute, rm *data.RecordManager, host string) resolvedRoute {
-	route = enrichRouteFromRPIndex(route)
+	domain := strings.TrimSpace(route.Domain)
+	if domain == "" {
+		domain = DomainFromHost(host)
+	}
+	route.Domain = domain
+
 	if strings.TrimSpace(route.RPIndex) == "" {
 		if pub := ResolveRPIndexPub(rm, host); pub != "" {
 			route.RPIndex = pub
-		} else if strings.HasPrefix(DomainFromHost(host), "admin.") {
-			route.RPIndex = "admin"
 		}
 	}
-	if catch, ok := queryReactCatchAllRoute(rm, route.Domain); ok {
+
+	// Dynamic tables/metadata from sys_la_routers catch-all when the selected route row is incomplete.
+	// Do NOT copy rp_index from catch-all — Java shouldAttemptSSR uses only the selected route's rp_index.
+	if catch, ok := queryReactCatchAllRoute(rm, domain); ok {
 		if strings.TrimSpace(route.AppID) == "" {
 			route.AppID = catch.AppID
 		}
@@ -521,7 +576,6 @@ func finalizeSSRRoute(route resolvedRoute, rm *data.RecordManager, host string) 
 	route.AppID = normalizeTableAppID(route.AppID)
 	route.TblServices = normalizeTableName(route.AppID, route.TblServices)
 	route.TblServiceDetail = normalizeTableName(route.AppID, route.TblServiceDetail)
-	route = enrichRouteFromRPIndex(route)
 	return route
 }
 
@@ -545,19 +599,6 @@ func normalizeTableName(appID, table string) string {
 
 func normalizeTableAppID(appID string) string {
 	return strings.TrimSpace(appID)
-}
-
-func enrichRouteFromRPIndex(route resolvedRoute) resolvedRoute {
-	if strings.TrimSpace(route.AppID) != "" || strings.TrimSpace(route.RPIndex) == "" {
-		return route
-	}
-	switch strings.ToLower(strings.Trim(route.RPIndex, "/")) {
-	case "admin":
-		route.AppID = "csm"
-	case "lmkt":
-		route.AppID = "lmkt"
-	}
-	return route
 }
 
 func queryRoute(rm *data.RecordManager, conditions []model.SearchFilter) (resolvedRoute, bool) {
@@ -919,11 +960,82 @@ func resolveSEOForServiceRoute(
 	return nil
 }
 
+func resolveLegacyServiceCode(serviceCode, mainServiceCode, defaultServiceCode string) string {
+	if mainServiceCode != "" && serviceCode == mainServiceCode && defaultServiceCode != "" {
+		return defaultServiceCode
+	}
+	return serviceCode
+}
+
+func findActiveServiceDetail(rm *data.RecordManager, route resolvedRoute, domain, serviceCode, slug string) map[string]any {
+	slug = strings.TrimSpace(slug)
+	if slug == "" || route.AppID == "" || route.TblServiceDetail == "" {
+		return nil
+	}
+	domainLike := model.SearchFilter{Field: "domain", FilterType: "like", Value: domain}
+
+	// Java resolveServiceListingForRoute: filter(service_type + slug + status + domain like).rows[0]
+	buildFilter := func(withDomain bool) model.SearchFilter {
+		conds := make([]model.SearchFilter, 0, 4)
+		if serviceCode != "" {
+			conds = append(conds, model.EqFilter("service_type", serviceCode))
+		}
+		conds = append(conds, model.EqFilter("slug", slug), model.EqFilter("status", "active"))
+		if withDomain && domain != "" {
+			conds = append(conds, domainLike)
+		}
+		return model.SearchFilter{Operator: "AND", Conditions: conds}
+	}
+
+	if row := filterFirstRow(rm, route.AppID, route.TblServiceDetail, buildFilter(true)); len(row) > 0 {
+		return row
+	}
+	if row := filterFirstRow(rm, route.AppID, route.TblServiceDetail, buildFilter(false)); len(row) > 0 {
+		return row
+	}
+	// Numeric id in URL segment
+	if _, err := strconv.Atoi(slug); err == nil {
+		idConds := []model.SearchFilter{model.EqFilter("id", slug), model.EqFilter("status", "active")}
+		if serviceCode != "" {
+			idConds = append(idConds, model.EqFilter("service_type", serviceCode))
+		}
+		return filterFirstRow(rm, route.AppID, route.TblServiceDetail, model.SearchFilter{Operator: "AND", Conditions: idConds})
+	}
+	// Prefix fallback: slug-{suffix} (same as Java WebSpringController)
+	if serviceCode != "" {
+		return findActiveServiceDetailBySlugPrefix(rm, route, domain, serviceCode, slug)
+	}
+	return nil
+}
+
+func findActiveServiceDetailBySlugPrefix(rm *data.RecordManager, route resolvedRoute, domain, serviceCode, detailSlug string) map[string]any {
+	conds := []model.SearchFilter{
+		model.EqFilter("service_type", serviceCode),
+		model.EqFilter("status", "active"),
+	}
+	if domain != "" {
+		conds = append(conds, model.SearchFilter{Field: "domain", FilterType: "like", Value: domain})
+	}
+	rows := rowsFrom(rm.Filter(route.AppID, route.TblServiceDetail, model.SearchFilter{Operator: "AND", Conditions: conds}))
+	wantedPrefix := detailSlug + "-"
+	for _, r := range rows {
+		slugVal := strings.TrimSpace(recordStr(r, "slug"))
+		if slugVal == "" {
+			continue
+		}
+		if strings.EqualFold(slugVal, detailSlug) || strings.HasPrefix(strings.ToLower(slugVal), strings.ToLower(wantedPrefix)) {
+			return r
+		}
+	}
+	return nil
+}
+
 func resolveServiceListing(
 	rm *data.RecordManager,
 	route resolvedRoute,
 	domain, path string,
 	params map[string]string,
+	mainServiceCode, defaultServiceCode string,
 ) map[string]any {
 	out := make(map[string]any)
 
@@ -955,8 +1067,9 @@ func resolveServiceListing(
 	trimmed := strings.TrimPrefix(pathNoExt, "/")
 	segs := make([]string, 0)
 	for _, s := range strings.Split(trimmed, "/") {
+		s = strings.TrimSpace(s)
 		if s != "" {
-			segs = append(segs, s)
+			segs = append(segs, strings.ToLower(s))
 		}
 	}
 	isHome := len(segs) == 0
@@ -986,18 +1099,9 @@ func resolveServiceListing(
 	}
 
 	if len(segs) >= 2 {
-		serviceCode := segs[0]
+		serviceCode := resolveLegacyServiceCode(segs[0], mainServiceCode, defaultServiceCode)
 		detailSlug := segs[len(segs)-1]
-		filter := model.SearchFilter{
-			Operator: "AND",
-			Conditions: []model.SearchFilter{
-				model.EqFilter("service_type", serviceCode),
-				model.EqFilter("slug", detailSlug),
-				model.EqFilter("status", "active"),
-				{Field: "domain", FilterType: "like", Value: domain},
-			},
-		}
-		row := rm.Find(route.AppID, route.TblServiceDetail, filter)
+		row := findActiveServiceDetail(rm, route, domain, serviceCode, detailSlug)
 		if len(row) > 0 {
 			curID := recordStr(row, "id")
 			out["serviceDetail"] = mapDetailFullObj(row, lang)
@@ -1009,15 +1113,7 @@ func resolveServiceListing(
 
 	if len(segs) == 1 {
 		slugOnly := segs[0]
-		filter := model.SearchFilter{
-			Operator: "AND",
-			Conditions: []model.SearchFilter{
-				model.EqFilter("slug", slugOnly),
-				model.EqFilter("status", "active"),
-				{Field: "domain", FilterType: "like", Value: domain},
-			},
-		}
-		row := rm.Find(route.AppID, route.TblServiceDetail, filter)
+		row := findActiveServiceDetail(rm, route, domain, "", slugOnly)
 		if len(row) > 0 {
 			serviceType := recordStr(row, "service_type")
 			curID := recordStr(row, "id")
@@ -1032,7 +1128,7 @@ func resolveServiceListing(
 
 	slug := ""
 	if len(segs) > 0 {
-		slug = segs[len(segs)-1]
+		slug = resolveLegacyServiceCode(segs[len(segs)-1], mainServiceCode, defaultServiceCode)
 	}
 	if slug == "" || route.TblServices == "" {
 		return out

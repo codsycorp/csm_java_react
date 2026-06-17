@@ -127,6 +127,8 @@ func (s *eqIndexStore) countTableKeys(appID, tableName string) int {
 	return len(s.tableKeys[tableLookupKey(appID, tableName)])
 }
 
+func (s *eqIndexStore) close() {}
+
 type searchMetaEntry struct {
 	pebbleRows  int
 	indexedKeys int

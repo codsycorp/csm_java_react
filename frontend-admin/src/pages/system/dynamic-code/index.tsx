@@ -185,13 +185,20 @@ function isDirectCrossOriginApiCall(rawUrl: string): boolean {
 }
 
 /** Gọi SEO qua request.post — cùng ky client get-table-data, không fallback URL. */
+function isSeoLongSyncBody(body: Record<string, unknown>): boolean {
+  const mode = String(body?.mode || "").toLowerCase();
+  if (mode === "status" || mode === "cancel") return false;
+  if (body?.async === false || mode === "sync") return true;
+  if (body?.seoPipeline || body?.seoContext) return true;
+  if (Boolean(body?.prompt)) return true;
+  return true;
+}
+
 async function runtimePostSeoGenerateContent(body: Record<string, unknown>) {
   const apiPrefix = import.meta.env.DEV
     ? "/api"
     : String(import.meta.env.VITE_API_BASE_URL || "https://api.csmbridge.net").replace(/\/+$/, "");
-  const mode = String(body?.mode || "").toLowerCase();
-  const isLongSync = body?.async === false || mode === "sync"
-    || (mode !== "status" && mode !== "submit" && Boolean(body?.prompt));
+  const isLongSync = isSeoLongSyncBody(body);
   const seoPaths = import.meta.env.DEV
     ? ["ai-generate-seo-content"]
     : ["ai-generate-seo-content", "api/ai-generate-seo-content"];

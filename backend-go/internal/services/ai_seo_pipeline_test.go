@@ -7,6 +7,16 @@ import (
 	"csm_server/backend-go/internal/config"
 )
 
+func TestEffectiveSeoPromptMaxChars(t *testing.T) {
+	cfg := config.AppConfig{
+		AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 1024, LlamaMaxPromptChars: 48000},
+	}
+	got := EffectiveSeoPromptMaxChars(cfg)
+	if got < 12000 {
+		t.Fatalf("expected SEO prompt cap >= 12k on 8GB tier, got %d", got)
+	}
+}
+
 func TestEffectiveSeoArticleMaxTokens(t *testing.T) {
 	t.Setenv("AI_SEO_ARTICLE_MAX_TOKENS", "2048")
 	cfg := config.AppConfig{}

@@ -67,7 +67,7 @@ func (rm *RecordManager) upsertSearchIndex(appID, tableName, pebbleKey, storageK
 	rm.upsertEqIndex(appID, tableName, pebbleKey, record)
 
 	title, content := ExtractSearchText(record)
-	if isAuthTable(tableName) {
+	if isAuthTable(tableName) || !rm.cfg.VectorRecordsEnabled {
 		return
 	}
 	if len(content) < minSearchTextLen {
@@ -117,6 +117,9 @@ func (rm *RecordManager) IndexExistingRecords(appID, tableName string) (int, err
 	}
 	if rm.eqIndex == nil && rm.vectorStore == nil {
 		return 0, fmt.Errorf("search index unavailable (set CSM_VECTOR_DIR or restart server)")
+	}
+	if rm.eqIndex == nil {
+		return 0, fmt.Errorf("eq-index unavailable")
 	}
 	rm.deleteSearchIndexForTable(app, table)
 	rm.markSearchIndexIncomplete(app, table)

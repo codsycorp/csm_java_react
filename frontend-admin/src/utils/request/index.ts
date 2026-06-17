@@ -76,6 +76,27 @@ function withForcedSubuserScope(payload: any): any {
 	if (!shouldForceSubuserScope(payload)) return payload;
 	return { ...payload, only_my_subusers: true };
 }
+
+function isSeoLongSyncPayload(payload: Record<string, unknown> | null | undefined): boolean {
+	if (!payload || typeof payload !== "object") {
+		return true;
+	}
+	const mode = String(payload.mode || "").toLowerCase();
+	if (mode === "status" || mode === "cancel") {
+		return false;
+	}
+	if (payload.async === false || mode === "sync") {
+		return true;
+	}
+	if (payload.seoPipeline || payload.seoContext) {
+		return true;
+	}
+	if (Boolean(payload.prompt)) {
+		return true;
+	}
+	return true;
+}
+
 // 请求超时时间
 const API_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 10000;
 
@@ -161,11 +182,8 @@ const defaultConfig: Options = {
 				if (isSeoSyncRequest && request.method === "POST") {
 					const optionsAny = options as any;
 					const payload = optionsAny.json;
-					if (payload && typeof payload === "object") {
-						const mode = String(payload.mode || "").toLowerCase();
-						const isLongSync = payload.async === false || mode === "sync"
-							|| (mode !== "status" && mode !== "submit" && Boolean(payload.prompt));
-						if (isLongSync && optionsAny.timeout === undefined) {
+					if (isSeoLongSyncPayload(payload)) {
+						if (optionsAny.timeout === undefined) {
 							optionsAny.timeout = false;
 						}
 					}

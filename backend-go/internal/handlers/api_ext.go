@@ -87,7 +87,7 @@ func (h *ApiExtHandler) HandleExecuteJS(_ map[string]any) *model.StandardRespons
 }
 
 func (h *ApiExtHandler) HandleAiGenerateSeoContent(params map[string]any) *model.StandardResponse {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := services.SeoRequestContext()
 	defer cancel()
 	return h.aiSeo.Generate(ctx, params)
 }

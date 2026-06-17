@@ -86,7 +86,7 @@ Legacy RocksDB import (one-time only): `brew install rocksdb && ./run-migrate.sh
 | `CSM_STARTUP_REINDEX` | `true` | Rebuild eq-index when Pebble rows > indexed keys |
 | `CSM_STARTUP_REINDEX_TABLES` | `csm/sys_autos` | Comma list: `csm/sys_autos,csm/csm_accounts` |
 
-**Query speed (after migrate):** Go uses in-memory eq-index for list filters when index is marked complete (startup reindex / `POST /update-table-data-index`). Filter `like` falls back to Pebble scan. Pebble uses tuned options (32MB memtable, 16MB block cache). Responses cap at 64MB like Java (`truncated: true` when clipped).
+**Query speed (after migrate):** Go uses eq-index for list filters when index is marked complete. Default `CSM_EQ_INDEX_MODE=pebble` on 8GB profile (SSD index, ~32MB shared Pebble cache — leaves RAM for AI model). Set `CSM_EQ_INDEX_MODE=memory` on larger servers. Filter `like` falls back to Pebble scan.
 
 Server listens on `SERVER_PORT` (default **9999**, same as Rust/nginx `backend_pool`).
 

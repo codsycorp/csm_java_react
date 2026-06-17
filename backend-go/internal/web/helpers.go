@@ -54,9 +54,34 @@ func DomainFromHost(host string) string {
 	return h
 }
 
-func NormalizeURI(uri string) string {
+func NormalizeIncomingWebPath(uri string) string {
+	if uri == "" {
+		return "/"
+	}
+	if i := strings.Index(uri, "?"); i >= 0 {
+		uri = uri[:i]
+	}
+	if i := strings.Index(uri, "#"); i >= 0 {
+		uri = uri[:i]
+	}
+	if strings.HasPrefix(uri, "/api/app_images/") {
+		uri = uri[4:]
+	}
 	if len(uri) > 1 && strings.HasSuffix(uri, "/") {
-		return strings.TrimSuffix(uri, "/")
+		uri = strings.TrimSuffix(uri, "/")
+	}
+	if uri == "" {
+		return "/"
+	}
+	return uri
+}
+
+// NormalizeURI strips .shtml for internal path parsing (f_case, segment split).
+func NormalizeURI(uri string) string {
+	uri = NormalizeIncomingWebPath(uri)
+	uri = strings.ReplaceAll(uri, ".shtml", "")
+	if uri == "" {
+		return "/"
 	}
 	return uri
 }

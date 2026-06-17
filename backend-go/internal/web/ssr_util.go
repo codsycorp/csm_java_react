@@ -8,6 +8,9 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"csm_server/backend-go/internal/data"
+	"csm_server/backend-go/internal/model"
 )
 
 func recordStr(row map[string]any, key string) string {
@@ -85,6 +88,15 @@ func rowsFrom(result map[string]any) []map[string]any {
 		}
 	}
 	return out
+}
+
+// filterFirstRow mirrors Java recordManager.filter(...).rows.get(0).
+func filterFirstRow(rm *data.RecordManager, appID, tableName string, filter model.SearchFilter) map[string]any {
+	rows := rowsFrom(rm.Filter(appID, tableName, filter))
+	if len(rows) == 0 {
+		return map[string]any{}
+	}
+	return rows[0]
 }
 
 func compareRelatedPostRowsDesc(a, b map[string]any) int {

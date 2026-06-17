@@ -64,6 +64,26 @@ function getClientId() {
 // 请求超时时间
 const API_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 10000;
 
+function isSeoLongSyncPayload(payload: Record<string, unknown> | null | undefined): boolean {
+	if (!payload || typeof payload !== "object") {
+		return true;
+	}
+	const mode = String(payload.mode || "").toLowerCase();
+	if (mode === "status" || mode === "cancel") {
+		return false;
+	}
+	if (payload.async === false || mode === "sync") {
+		return true;
+	}
+	if (payload.seoPipeline || payload.seoContext) {
+		return true;
+	}
+	if (Boolean(payload.prompt)) {
+		return true;
+	}
+	return true;
+}
+
 const defaultConfig: Options = {
 	// Giống frontend-admin: dev qua Vite proxy /api → backend; prod gọi thẳng api host.
 	// Endpoint không có slash đầu: get-table-data, update-table-data, ai-generate-seo-content.
@@ -121,6 +141,16 @@ const defaultConfig: Options = {
 					}
 				} catch (e) {
 					// ignore
+				}
+
+				const isSeoSyncRequest = request.url.includes("ai-generate-seo-content");
+				if (isSeoSyncRequest && request.method === "POST") {
+					const optionsAny = options as any;
+					const payload = optionsAny.json;
+					if (isSeoLongSyncPayload(payload) && optionsAny.timeout === undefined) {
+						optionsAny.timeout = false;
+					}
+					optionsAny.retry = { limit: 0 };
 				}
 
 								// Check if this is a website request (no auth required)

@@ -72,12 +72,18 @@ Dựa vào các dữ liệu đầu vào, hãy viết một bài viết hoàn ch�
 // (dev: /api/ai-generate-seo-content → Vite proxy; prod: https://api.csmbridge.net/ai-generate-seo-content)
 const AI_TIMEOUT_ENV = Number(import.meta.env.VITE_AI_TIMEOUT_MS);
 const AI_TIMEOUT_FALLBACK_MS = 30 * 60 * 1000;
-const AI_TIMEOUT_MS = Number.isFinite(AI_TIMEOUT_ENV) && AI_TIMEOUT_ENV > 0
+export const AI_TIMEOUT_MS = Number.isFinite(AI_TIMEOUT_ENV) && AI_TIMEOUT_ENV > 0
 	? AI_TIMEOUT_ENV
 	: AI_TIMEOUT_FALLBACK_MS;
 const AI_REQUEST_TIMEOUT: number | false = Number.isFinite(AI_TIMEOUT_ENV) && AI_TIMEOUT_ENV === 0
 	? false
 	: AI_TIMEOUT_MS;
+
+function resolveSeoSyncRequestTimeout(): number | false {
+	if (Number.isFinite(AI_TIMEOUT_ENV) && AI_TIMEOUT_ENV === 0) return false;
+	if (Number.isFinite(AI_TIMEOUT_ENV) && AI_TIMEOUT_ENV > 0) return AI_TIMEOUT_ENV;
+	return false;
+}
 const AI_ASYNC_THRESHOLD_CHARS = Number(import.meta.env.VITE_AI_ASYNC_THRESHOLD_CHARS) || 8000;
 const AI_ASYNC_POLL_INTERVAL_MS = Number(import.meta.env.VITE_AI_ASYNC_POLL_INTERVAL_MS) || 4000;
 const AI_ASYNC_MAX_WAIT_MS = Number(import.meta.env.VITE_AI_ASYNC_MAX_WAIT_MS) || 45 * 60 * 1000;
@@ -92,9 +98,15 @@ type GenerateSeoContentOptions = {
 };
 
 async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiResponse<any>> {
+	const payload = json as Record<string, unknown>;
+	const mode = String(payload?.mode || "").toLowerCase();
+	const isLongSync = payload?.async === false || mode === "sync"
+		|| Boolean(payload?.seoPipeline) || Boolean(payload?.seoContext)
+		|| (mode !== "status" && mode !== "submit" && mode !== "cancel" && Boolean(payload?.prompt));
+	const timeout = isLongSync ? resolveSeoSyncRequestTimeout() : AI_REQUEST_TIMEOUT;
 	return await request.post("ai-generate-seo-content", {
 		json,
-		timeout: AI_REQUEST_TIMEOUT,
+		timeout,
 		retry: { limit: 0 },
 		omitRefreshToken: true,
 		ignoreLoading: true,

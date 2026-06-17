@@ -51,7 +51,7 @@ func (s *AiSeoService) Generate(ctx context.Context, params map[string]any) *mod
 	if !s.llama.IsAvailable() {
 		return localUnavailableResponse()
 	}
-	prompt = PrepareLocalProviderPrompt(prompt, int(EffectiveSeoArticleMaxTokens(s.cfg))*3)
+	prompt = PrepareLocalProviderPrompt(prompt, EffectiveSeoPromptMaxChars(s.cfg))
 	raw, err := s.llama.CompleteWithTokens(ctx, prompt, EffectiveSeoArticleMaxTokens(s.cfg))
 	if err != nil {
 		r.Set("code", 200)

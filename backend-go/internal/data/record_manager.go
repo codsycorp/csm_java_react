@@ -23,7 +23,7 @@ type RecordManager struct {
 	pebbleRoot   string
 	tableDBs     map[string]*pebble.DB
 	legacyDB     *pebble.DB
-	eqIndex      *eqIndexStore
+	eqIndex      eqIndexBackend
 	searchMeta   *searchMetaStore
 	vectorStore  *VectorStore
 	dbMu         sync.RWMutex
@@ -32,7 +32,9 @@ type RecordManager struct {
 }
 
 func NewRecordManager(cfg config.AppConfig) (*RecordManager, error) {
-	for _, dir := range []string{cfg.DataDir, cfg.NativeDataDir, cfg.PebbleRoot, cfg.VectorStoreDir} {
+	InitPebbleTuning(cfg)
+
+	for _, dir := range []string{cfg.DataDir, cfg.NativeDataDir, cfg.PebbleRoot, cfg.VectorStoreDir, cfg.EqIndexRoot} {
 		if strings.TrimSpace(dir) == "" {
 			continue
 		}
@@ -46,9 +48,14 @@ func NewRecordManager(cfg config.AppConfig) (*RecordManager, error) {
 		dataDir:    cfg.DataDir,
 		pebbleRoot: cfg.PebbleRoot,
 		tableDBs:   make(map[string]*pebble.DB),
-		eqIndex:    newEqIndexStore(),
 		searchMeta: newSearchMetaStore(),
 	}
+
+	eqIdx, err := newEqIndexBackend(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("eq-index: %w", err)
+	}
+	rm.eqIndex = eqIdx
 
 	if cfg.PebbleLegacy != "" {
 		if _, err := os.Stat(cfg.PebbleLegacy); err == nil {
@@ -68,7 +75,16 @@ func NewRecordManager(cfg config.AppConfig) (*RecordManager, error) {
 		rm.vectorStore = vs
 	}
 
-	log.Printf("RecordManager: in-memory eq-index enabled (no SQLite)")
+	switch cfg.EqIndexMode {
+	case "pebble":
+		log.Printf("RecordManager: eq-index mode pebble (SSD, shared cache %dMB, memtable %dMB)",
+			cfg.PebbleCacheMB, cfg.PebbleMemTableMB)
+	default:
+		log.Printf("RecordManager: eq-index mode memory (in-RAM)")
+	}
+	if !cfg.VectorRecordsEnabled {
+		log.Printf("RecordManager: record vector indexing disabled (CSM_VECTOR_RECORDS_ENABLED=false)")
+	}
 	log.Printf("RecordManager: Pebble root %s/{app_id}/{table_name}/ (pure Go, no RocksDB/CGO)", cfg.PebbleRoot)
 	return rm, nil
 }
@@ -103,6 +119,11 @@ func (rm *RecordManager) ShutdownAll() {
 		rm.vectorStore.Close()
 		rm.vectorStore = nil
 	}
+	if rm.eqIndex != nil {
+		rm.eqIndex.close()
+		rm.eqIndex = nil
+	}
+	closePebbleTuning()
 	log.Println("Pebble stores closed")
 }
 
@@ -143,6 +164,17 @@ func (rm *RecordManager) Find(appID, tableName string, filter model.SearchFilter
 		return rec
 	}
 	return map[string]any{}
+}
+
+// FindFirstByFilter returns the first row matching filter (Java filter().rows[0] parity).
+// Unlike Find(), this uses collectFilteredRecords without the 2000-row find() scan cap —
+// required for SSR detail lookup on large web_service_detail tables.
+func (rm *RecordManager) FindFirstByFilter(appID, tableName string, filter model.SearchFilter) map[string]any {
+	records := rm.collectFilteredRecords(appID, tableName, filter)
+	if len(records) == 0 {
+		return map[string]any{}
+	}
+	return records[0]
 }
 
 func (rm *RecordManager) Filter(appID, tableName string, filter model.SearchFilter) map[string]any {
@@ -287,7 +319,19 @@ func (rm *RecordManager) tryFindByScan(appID, tableName string, filter model.Sea
 		return nil
 	}
 	var found map[string]any
-	err = rm.scanTableLimited(app, table, maxFindScanRecords, maxFindScanBytes, func(_ string, raw []byte) error {
+	count := 0
+	var scannedBytes int64
+	err = rm.scanAllRecordSources(app, table, func(_ string, raw []byte) error {
+		count++
+		if maxFindScanRecords > 0 && count > maxFindScanRecords {
+			return errScanStop
+		}
+		if maxFindScanBytes > 0 {
+			scannedBytes += int64(len(raw))
+			if scannedBytes > maxFindScanBytes {
+				return errScanStop
+			}
+		}
 		var record map[string]any
 		if json.Unmarshal(raw, &record) == nil && filter.Matches(record) {
 			found = record

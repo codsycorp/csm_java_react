@@ -9277,6 +9277,17 @@ async function callSeoPromptDirect(ctx, prompt) {
   return api;
 }
 
+/** Client SEO timeout: 0 = chờ đến khi server trả (nginx 86400s). Set window.__CSM_AI_SEO_TIMEOUT_MS nếu cần giới hạn. */
+function resolveSeoClientTimeoutMs() {
+  if (typeof window !== "undefined") {
+    const v = window.__CSM_AI_SEO_TIMEOUT_MS;
+    if (v === 0 || v === "0") return 0;
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
 /**
  * POST /ai-generate-seo-content — ưu tiên window.csmAI (ky, cùng auth get-table-data).
  * Fallback raw fetch chỉ khi chạy ngoài admin SPA (không có csmAI bridge).
@@ -9315,14 +9326,14 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
   }
 
   const candidateUrls = resolveSeoApiEndpointCandidates(safeCtx);
-  const timeoutMs = 20 * 60 * 1000;
+  const timeoutMs = resolveSeoClientTimeoutMs();
   let lastError = null;
 
   for (let u = 0; u < candidateUrls.length; u += 1) {
     const url = candidateUrls[u];
     const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
     let timeoutId = null;
-    if (controller) {
+    if (controller && timeoutMs > 0) {
       timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     }
 
@@ -9357,8 +9368,8 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
       }
       return data;
     } catch (fetchErr) {
-      if (fetchErr && fetchErr.name === "AbortError") {
-        throw new Error(`SEO timeout sau ${Math.round(timeoutMs / 60000)} phút — thử lại hoặc rút gọn prompt`);
+      if (fetchErr && fetchErr.name === "AbortError" && timeoutMs > 0) {
+        throw new Error(`SEO timeout sau ${Math.round(timeoutMs / 60000)} phút — đặt window.__CSM_AI_SEO_TIMEOUT_MS=0 để chờ không giới hạn`);
       }
       if (extractHttpStatusFromError(fetchErr) === 404) {
         lastError = fetchErr;

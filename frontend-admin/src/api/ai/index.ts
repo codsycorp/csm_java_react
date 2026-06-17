@@ -85,7 +85,12 @@ function resolveSeoSyncRequestTimeout(): number | false {
 }
 const AI_ASYNC_THRESHOLD_CHARS = Number(import.meta.env.VITE_AI_ASYNC_THRESHOLD_CHARS) || 8000;
 const AI_ASYNC_POLL_INTERVAL_MS = Number(import.meta.env.VITE_AI_ASYNC_POLL_INTERVAL_MS) || 4000;
-const AI_ASYNC_MAX_WAIT_MS = Number(import.meta.env.VITE_AI_ASYNC_MAX_WAIT_MS) || 45 * 60 * 1000;
+const AI_ASYNC_MAX_WAIT_ENV = Number(import.meta.env.VITE_AI_ASYNC_MAX_WAIT_MS);
+const AI_ASYNC_MAX_WAIT_MS = Number.isFinite(AI_ASYNC_MAX_WAIT_ENV) && AI_ASYNC_MAX_WAIT_ENV === 0
+	? 24 * 60 * 60 * 1000
+	: (Number.isFinite(AI_ASYNC_MAX_WAIT_ENV) && AI_ASYNC_MAX_WAIT_ENV > 0
+		? AI_ASYNC_MAX_WAIT_ENV
+		: 24 * 60 * 60 * 1000);
 
 export type AiProgressPayload = Record<string, any>;
 
@@ -123,7 +128,8 @@ async function postSeoGenerateContent<T extends object>(json: T): Promise<ApiRes
 	const payload = json as Record<string, unknown>;
 	const mode = String(payload?.mode || "").toLowerCase();
 	const isLongSync = payload?.async === false || mode === "sync"
-		|| (mode !== "status" && mode !== "submit" && Boolean(payload?.prompt));
+		|| Boolean(payload?.seoPipeline) || Boolean(payload?.seoContext)
+		|| (mode !== "status" && mode !== "submit" && mode !== "cancel" && Boolean(payload?.prompt));
 	const timeout = isLongSync ? resolveSeoSyncRequestTimeout() : AI_REQUEST_TIMEOUT;
 	const seoPaths = import.meta.env.DEV
 		? ["ai-generate-seo-content"]
