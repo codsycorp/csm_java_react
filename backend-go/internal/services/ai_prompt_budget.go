@@ -43,6 +43,7 @@ func IsConstrained8GbTier(cfg config.AppConfig) bool {
 }
 
 // MaxSafePromptChars estimates char budget from context window minus output reserve.
+// Also capped by n_batch: go-nativeml/llama.cpp aborts (SIGABRT) if a single prefill step exceeds batch.
 func MaxSafePromptChars(cfg config.AppConfig) int {
 	ctx := int(cfg.EffectiveLlamaContextWindow())
 	out := int(cfg.EffectiveLlamaMaxTokens())
@@ -57,7 +58,17 @@ func MaxSafePromptChars(cfg config.AppConfig) int {
 	// ~3 chars/token for code/json (conservative vs 4) to avoid KV overflow on 8GB.
 	chars := tokenBudget * 3
 	if chars < 4000 {
-		return 4000
+		chars = 4000
+	}
+	batch := int(cfg.EffectiveLlamaBatchSize())
+	if batch > 0 {
+		batchChars := batch * 3
+		if chars > batchChars {
+			chars = batchChars
+		}
+	}
+	if chars < 1024 {
+		return 1024
 	}
 	return chars
 }

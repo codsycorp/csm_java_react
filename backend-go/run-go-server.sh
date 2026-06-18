@@ -102,7 +102,18 @@ if [ "$(uname -s)" = "Darwin" ]; then
     fi
     export AI_LOCAL_LLAMA_UBATCH_SIZE="${AI_LOCAL_LLAMA_UBATCH_SIZE:-64}"
     export AI_LOCAL_LLAMA_MAX_PROMPT_CHARS="${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS:-32000}"
+    if [ "${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS}" -gt 32000 ] 2>/dev/null; then
+        config_log "WARN: clamp AI_LOCAL_LLAMA_MAX_PROMPT_CHARS ${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS} → 32000 (config.env quá lớn gây SIGABRT llama.cpp)"
+        AI_LOCAL_LLAMA_MAX_PROMPT_CHARS=32000
+        export AI_LOCAL_LLAMA_MAX_PROMPT_CHARS
+    fi
     export AI_SEO_ARTICLE_MAX_TOKENS="${AI_SEO_ARTICLE_MAX_TOKENS:-1536}"
+fi
+
+# Linux/server: batch < 512 + prompt dài → GGML_ASSERT (process exit)
+if [ "${AI_LOCAL_LLAMA_BATCH_SIZE:-0}" -lt 512 ] 2>/dev/null; then
+    config_log "WARN: clamp AI_LOCAL_LLAMA_BATCH_SIZE ${AI_LOCAL_LLAMA_BATCH_SIZE} → 512 (batch nhỏ gây SIGABRT khi prompt dài)"
+    export AI_LOCAL_LLAMA_BATCH_SIZE=512
 fi
 
 # Chỉ 1 instance — Pebble lock "resource temporarily unavailable" nếu chạy song song go run + csm-server
