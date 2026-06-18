@@ -216,11 +216,16 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		flushSSE()
 		var incrResult services.IncrementalPlanResult
 		var incrErr error
-		if req.ContextType == "menu_json" && responseMode == "edit" && services.PlanEditTask(req, responseMode).Enabled {
+		editPlan := services.PlanEditTask(req, responseMode)
+		useMenuDeterministic := req.ContextType == "menu_json" && responseMode == "edit" &&
+			(services.ShouldRunMenuDeterministicEdit(req, responseMode) || editPlan.Enabled)
+		if useMenuDeterministic {
+			log.Printf("AiCodeStream: menu deterministic edit requestId=%s sourceChars=%d", req.RequestID, editPlan.SourceChars)
 			incrResult, incrErr = services.RunMenuSliceEditExecute(ctx, deps.Config, deps.Llama, req, phase1, func(evt map[string]any) {
 				writeSSE(w, evt)
 			}, flushSSE)
 		} else {
+			log.Printf("AiCodeStream: incremental LLM plan requestId=%s contextType=%s", req.RequestID, req.ContextType)
 			incrResult, incrErr = services.RunIncrementalPlanExecute(ctx, deps.Config, deps.Llama, req, phase1, func(evt map[string]any) {
 				writeSSE(w, evt)
 			}, flushSSE)

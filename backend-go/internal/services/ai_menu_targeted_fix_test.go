@@ -35,6 +35,23 @@ func TestApplyDeterministicMenuTableFieldFixesHeaderVi(t *testing.T) {
 	_ = remaining
 }
 
+func TestPlanEditTaskBroadAuditLargeMenuEnabledWithoutScan(t *testing.T) {
+	padding := strings.Repeat(" ", menuLargeFastPathChars)
+	menu := `{"menu":[{"id":"m1","table":[{"f_name":"dvt","f_header_en":"Unit","f_types":"co"}]}],"_pad":"` + padding + `"}`
+	req := &CodeStreamRequest{
+		ContextType:    "menu_json",
+		Message:        "Tất cả các cột của bảng khi chọn chế độ tiếng việt nó lại hiện tiếng anh. Xem kỹ kiểu co tại sao không có giá trị",
+		FullCurrentCode: menu,
+	}
+	plan := PlanEditTask(req, "edit")
+	if !plan.Enabled {
+		t.Fatal("expected enabled for broad audit large menu")
+	}
+	if len(plan.Slices) != 0 {
+		t.Fatalf("expected no LLM slices for deterministic audit, got %d", len(plan.Slices))
+	}
+}
+
 func TestPlanEditTaskUsesFieldSlicesForI18nRequest(t *testing.T) {
 	req := &CodeStreamRequest{
 		ContextType: "menu_json",

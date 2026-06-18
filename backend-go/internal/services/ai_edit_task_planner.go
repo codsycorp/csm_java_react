@@ -81,14 +81,32 @@ func editTaskPlannerSliceMaxChars() int {
 	return 8000
 }
 
+// ShouldRunMenuDeterministicEdit routes large-menu audit/i18n requests to quality-gate (no per-step LLM).
+func ShouldRunMenuDeterministicEdit(req *CodeStreamRequest, responseMode string) bool {
+	if req == nil || !isMenuJSONContext(req.ContextType) || strings.TrimSpace(responseMode) != "edit" {
+		return false
+	}
+	if menuEditSourceChars(req) <= menuLargeFastPathChars {
+		return false
+	}
+	msg := strings.TrimSpace(req.Message)
+	return IsBroadMenuAuditRequest(msg) || IsMenuTableFieldI18nComboRequest(msg)
+}
+
+func menuEditSourceChars(req *CodeStreamRequest) int {
+	if code := resolveMenuEditEditorBaseFast(req); code != "" {
+		return len(code)
+	}
+	if s := SanitizeMenuEditorPayload(req.FullCurrentCode); s != "" {
+		return len(s)
+	}
+	return len(SanitizeMenuEditorPayload(req.CurrentCode))
+}
+
 // PlanEditTask builds slice decomposition for menu/code incremental edit.
 func PlanEditTask(req *CodeStreamRequest, responseMode string) EditTaskPlan {
 	if !editTaskPlannerEnabled() || req == nil {
 		return EditTaskPlan{Enabled: false}
-	}
-	code := CoerceMenuEditorPayload(req.FullCurrentCode)
-	if code == "" {
-		code = CoerceMenuEditorPayload(req.CurrentCode)
 	}
 	msg := strings.TrimSpace(req.Message)
 	mode := strings.ToLower(strings.TrimSpace(responseMode))
@@ -101,11 +119,30 @@ func PlanEditTask(req *CodeStreamRequest, responseMode string) EditTaskPlan {
 		flowType = "MENU_JSON"
 	}
 
+	// Java parity: broad/large-menu audit → RunMenuSliceEditExecute (deterministic), not field-slice LLM planner.
+	if menuFlow && mode == "edit" && ShouldRunMenuDeterministicEdit(req, mode) {
+		return EditTaskPlan{
+			Enabled:        true,
+			RequestSummary: summarizeEditRequest(msg),
+			FlowType:       flowType,
+			ResponseMode:   mode,
+			SourceChars:    menuEditSourceChars(req),
+		}
+	}
+
+	code := coerceMenuEditorPayloadFast(req.FullCurrentCode)
+	if code == "" {
+		code = CoerceMenuEditorPayload(req.FullCurrentCode)
+	}
+	if code == "" {
+		code = CoerceMenuEditorPayload(req.CurrentCode)
+	}
+
 	symbols := extractEditTargetSymbols(msg, code, menuFlow)
 	var slices []EditTaskSlice
 	if menuFlow {
-		if IsMenuTableFieldI18nComboRequest(msg) {
-			base := CoerceMenuEditorPayload(code)
+		if IsMenuTableFieldI18nComboRequest(msg) && len(code) <= menuLargeFastPathChars {
+			base := code
 			if merged, _, _ := ApplyDeterministicMenuTableFieldFixes(base); merged != "" {
 				base = merged
 			}
