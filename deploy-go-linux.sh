@@ -108,6 +108,34 @@ chmod +x scripts/build-go-native-inner.sh scripts/build-go-linux-native.sh
 BUILD
 
 echo ""
+echo "▶ [3b/4] Ensure AI model GGUF on runtime data dir..."
+ssh "$SERVER" bash -s "$REMOTE_BUILD" "$SERVER_PATH" <<'MODEL'
+set -e
+BUILD="$1"
+RUNTIME="$2"
+MODEL_DIR="$RUNTIME/csm_datas/ai_local/model"
+MODEL_3B="$MODEL_DIR/qwen2.5-coder-3b-instruct-q4_k_m.gguf"
+MODEL_15B="$MODEL_DIR/qwen2.5-coder-1.5b-instruct-q8_0.gguf"
+mkdir -p "$MODEL_DIR"
+if [ -f "$MODEL_3B" ]; then
+  echo "    model OK (3B): $MODEL_3B ($(du -h "$MODEL_3B" | cut -f1))"
+elif [ -f "$MODEL_15B" ]; then
+  echo "    model OK (1.5B): $MODEL_15B ($(du -h "$MODEL_15B" | cut -f1))"
+  echo "    tip: config.local-8gb.env mặc định 3B — đổi AI_LOCAL_LLAMA_MODEL_PATH nếu dùng 1.5B"
+else
+  echo "    missing GGUF — download 3B Q4_K_M → $MODEL_DIR"
+  cd "$BUILD"
+  chmod +x scripts/download-ai-local-models.sh
+  APP_DATA_DIR="$RUNTIME/csm_datas" ./scripts/download-ai-local-models.sh 8gb-3b
+  if [ ! -f "$MODEL_3B" ] && [ ! -f "$MODEL_15B" ]; then
+    echo "    ERROR: no GGUF in $MODEL_DIR after download" >&2
+    ls -la "$MODEL_DIR" >&2 || true
+    exit 1
+  fi
+fi
+MODEL
+
+echo ""
 echo "▶ [4/4] systemd + restart..."
 ssh "$SERVER" bash -s "$SERVER_PATH" <<'SERVICE'
 set -e
@@ -165,6 +193,10 @@ systemctl enable csm-go
 systemctl restart csm-go
 sleep 3
 systemctl status csm-go --no-pager | head -15
+echo ""
+echo "    AI local health (expect ready=true):"
+curl -sf "http://127.0.0.1:9999/api/ai-local/health" 2>/dev/null | head -c 800 || echo "    (health endpoint not ready yet — check journalctl -u csm-go)"
+echo ""
 SERVICE
 
 echo ""

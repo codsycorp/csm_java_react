@@ -22,10 +22,17 @@ type LlamaService struct {
 func NewLlamaService(cfg config.AppConfig) *LlamaService {
 	native := newLlamaNativeBackend(cfg)
 	svc := &LlamaService{cfg: cfg, native: native}
-	if native.ready() {
+	switch {
+	case native.ready():
 		log.Printf("LlamaService: native in-process llama.cpp enabled (%s)", cfg.AI.LlamaModelPath)
-	} else if cfg.AI.LlamaNativeEnabled && svc.modelExists() {
-		log.Printf("LlamaService: rebuild required — go build -tags llamacpp (scripts/build-go-linux-native.sh)")
+	case cfg.AI.LlamaNativeEnabled && svc.modelExists():
+		log.Printf("LlamaService: model on disk but native unavailable — rebuild with go build -tags llamacpp (%s)", cfg.AI.LlamaModelPath)
+	case cfg.AI.LlamaNativeEnabled && cfg.AI.LlamaModelPath != "":
+		log.Printf("LlamaService: GGUF missing at %s — run: APP_DATA_DIR=<data> ./scripts/download-ai-local-models.sh 8gb", cfg.AI.LlamaModelPath)
+	case !cfg.AI.LlamaNativeEnabled:
+		log.Printf("LlamaService: AI_LOCAL_LLAMA_NATIVE_ENABLED=false")
+	default:
+		log.Printf("LlamaService: local AI not configured (set AI_LOCAL_LLAMA_MODEL_PATH)")
 	}
 	return svc
 }

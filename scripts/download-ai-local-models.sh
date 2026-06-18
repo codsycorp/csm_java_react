@@ -31,6 +31,14 @@ CSM_WORKER_GGUF_3B="qwen2.5-coder-3b-instruct-q4_k_m.gguf"
 CSM_WORKER_GGUF_1_5B="qwen2.5-coder-1.5b-instruct-q8_0.gguf"
 
 resolve_model_dir() {
+  if [ -n "${CSM_AI_MODEL_DIR:-}" ]; then
+    echo "$CSM_AI_MODEL_DIR"
+    return
+  fi
+  if [ -n "${APP_DATA_DIR:-}" ]; then
+    echo "$APP_DATA_DIR/ai_local/model"
+    return
+  fi
   case "${1:-server}" in
     8gb|8gb-3b|8gb-7b|7b|server|server-3b|server-7b|prod|prod-3b|prod-7b)
       echo "$REPO_ROOT/csm_datas/ai_local/model"

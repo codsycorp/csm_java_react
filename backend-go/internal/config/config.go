@@ -266,11 +266,13 @@ func LoadEnvFiles() {
 		overlay = "config.local-strong.env"
 	case "8gb", "7b", "local-8gb":
 		overlay = "config.local-8gb.env"
+	case "m1", "m1-16gb", "local-m1":
+		overlay = "config.local-m1.env"
 	}
 	if overlay != "" {
 		for _, p := range []string{overlay, filepath.Join("..", overlay)} {
 			if _, err := os.Stat(p); err == nil {
-				_ = godotenvLoad(p)
+				_ = godotenvOverload(p)
 				break
 			}
 		}
@@ -418,4 +420,8 @@ func resolvePebbleLegacy(nativeDir, pebbleRoot string) string {
 // godotenvLoad wraps joho/godotenv without forcing import in tests.
 func godotenvLoad(path string) error {
 	return godotenvLoadImpl(path)
+}
+
+func godotenvOverload(path string) error {
+	return godotenvOverloadImpl(path)
 }
