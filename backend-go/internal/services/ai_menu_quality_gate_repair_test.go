@@ -52,3 +52,20 @@ func TestIsBroadMenuAuditRequestUserMessage(t *testing.T) {
 		t.Fatal("expected broad audit request")
 	}
 }
+
+func TestApplyMenuQualityGateInPlaceLargeMenuFastPath(t *testing.T) {
+	// Simulate large menu payload without O(n²) extraction.
+	var cols []string
+	for i := 0; i < 200; i++ {
+		cols = append(cols, `{"f_name":"f`+itoa(i)+`","f_header_en":"Col `+itoa(i)+`","f_types":"ed"}`)
+	}
+	padding := strings.Repeat(" ", menuLargeFastPathChars)
+	menu := `{"menu":[{"id":"m1","label":"Menu","table":[` + strings.Join(cols, ",") + `]}],"_pad":"` + padding + `"}`
+	merged, fixed, changed := ApplyMenuQualityGateInPlace(menu)
+	if !changed || fixed == 0 || merged == "" {
+		t.Fatalf("expected in-place repairs fixed=%d changed=%v len=%d", fixed, changed, len(merged))
+	}
+	if !strings.Contains(merged, `"f_header_vi"`) {
+		t.Fatal("expected f_header_vi in merged large menu")
+	}
+}

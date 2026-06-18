@@ -84,7 +84,11 @@ func isLikelyMenuNodeMap(m map[string]any) bool {
 // ExtractMenuDraftForCompletion strips fences/echo and normalizes menu JSON.
 func ExtractMenuDraftForCompletion(rawResponse string) string {
 	original := rawResponse
-	raw := stripMenuPromptEcho(stripMenuDraftTrailingNoise(sanitizePromptEchoLeakage(strings.TrimSpace(rawResponse))))
+	sanitized := SanitizeMenuEditorPayload(strings.TrimSpace(rawResponse))
+	if len(sanitized) > menuLargeFastPathChars && menuJSONLooksLikeValidMenuRoot(sanitized) {
+		return sanitized
+	}
+	raw := stripMenuPromptEcho(stripMenuDraftTrailingNoise(sanitizePromptEchoLeakage(sanitized)))
 
 	candidates := []string{}
 	if c := extractLikelyMenuJSONCandidate(original); c != "" {
@@ -232,6 +236,11 @@ func findMatchingBrace(s string, open int) int {
 
 // CountMenuNodesFromDraft counts id-bearing nodes in a menu draft.
 func CountMenuNodesFromDraft(draftText string) int {
+	if len(strings.TrimSpace(draftText)) > menuLargeFastPathChars {
+		if n, ok := countMenuNodesFromJSONFast(draftText); ok {
+			return n
+		}
+	}
 	normalized := ExtractMenuDraftForCompletion(draftText)
 	if normalized == "" {
 		normalized = NormalizeMenuDraftJson(draftText)

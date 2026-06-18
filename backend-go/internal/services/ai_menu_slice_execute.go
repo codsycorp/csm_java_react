@@ -24,7 +24,20 @@ func RunMenuSliceEditExecute(
 	_ = llama
 	_ = phase1
 
-	working := CoerceMenuEditorPayload(ResolveMenuEditEditorBase(req))
+	writeSSE(map[string]any{
+		"stage": "agentic_step_result", "requestId": req.RequestID,
+		"contextType": "menu_json", "responseMode": "edit",
+		"stepDescription": "Đang chuẩn bị menu editor…",
+		"stepAction": "prepare", "stepScope": "menu_quality_gate",
+	})
+	flush()
+
+	working := ResolveMenuEditEditorBase(req)
+	if fast := coerceMenuEditorPayloadFast(working); fast != "" {
+		working = fast
+	} else {
+		working = CoerceMenuEditorPayload(working)
+	}
 	originalBase := working
 	baseHealth := MenuEditorBaseHealth(working)
 	if baseHealth == "truncated_or_invalid" {
@@ -89,7 +102,7 @@ func RunMenuSliceEditExecute(
 		}
 	}
 
-	if roots := parseMenuRoots(working); len(roots) > 0 {
+	if roots := parseMenuRoots(working); len(roots) > 0 && len(working) <= menuLargeFastPathChars {
 		if repaired := RepairMenuTreeInPlace(roots); repaired > 0 {
 			if normalized := wrapMenuFromRoots(roots); normalized != "" {
 				working = normalized

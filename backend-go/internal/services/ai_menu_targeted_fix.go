@@ -139,7 +139,12 @@ func AnalyzeMenuTableFieldIssues(menuJSON string) []MenuTableFieldIssue {
 
 // ApplyDeterministicMenuTableFieldFixes patches only safe i18n fields (f_header_vi from Vietnamese f_header).
 func ApplyDeterministicMenuTableFieldFixes(menuJSON string) (merged string, remaining []MenuTableFieldIssue, fixed int) {
-	menuJSON = CoerceMenuEditorPayload(menuJSON)
+	menuJSON = strings.TrimSpace(SanitizeMenuEditorPayload(menuJSON))
+	if fast := coerceMenuEditorPayloadFast(menuJSON); fast != "" {
+		menuJSON = fast
+	} else {
+		menuJSON = CoerceMenuEditorPayload(menuJSON)
+	}
 	if menuJSON == "" {
 		return "", nil, 0
 	}
@@ -192,8 +197,13 @@ func ApplyDeterministicMenuTableFieldFixes(menuJSON string) (merged string, rema
 		}
 	}
 	walk(menuList)
-	merged = marshalMenuRoot(root, menuList, wrapped)
-	remaining = AnalyzeMenuTableFieldIssues(merged)
+	merged = marshalParsedMenuJSON(root)
+	if merged == "" {
+		merged = marshalMenuRoot(root, menuList, wrapped)
+	}
+	if len(merged) <= menuLargeFastPathChars {
+		remaining = AnalyzeMenuTableFieldIssues(merged)
+	}
 	return merged, remaining, fixed
 }
 

@@ -112,6 +112,21 @@ func TrySalvageMenuEditViaQualityGate(menuJSON string, maxPatches int) string {
 
 // RunMenuQualityGateEarlyAudit merges deterministic patches into editor base (Java prepareBroadMenuQualityGateAudit).
 func RunMenuQualityGateEarlyAudit(editorBase string, maxPatches int) (merged string, patchEnvelope string, preview MenuCompletionPreview, ok bool) {
+	editorBase = strings.TrimSpace(SanitizeMenuEditorPayload(editorBase))
+	if editorBase == "" {
+		return "", "", MenuCompletionPreview{}, false
+	}
+	// Large menus: in-place walk avoids patch envelope + DiffMergeTrees on full tree.
+	if len(editorBase) > menuLargeFastPathChars {
+		if merged, fixed, changed := ApplyMenuQualityGateInPlace(editorBase); changed && merged != "" {
+			preview = MenuCompletionPreview{
+				MergedResponse: merged,
+				Edited:         maxInt(fixed, 1),
+			}
+			return merged, "", preview, true
+		}
+		return "", "", MenuCompletionPreview{}, false
+	}
 	editorBase = CoerceMenuEditorPayload(editorBase)
 	if editorBase == "" {
 		return "", "", MenuCompletionPreview{}, false
@@ -125,6 +140,123 @@ func RunMenuQualityGateEarlyAudit(editorBase string, maxPatches int) (merged str
 		return "", envelope, preview, false
 	}
 	return preview.MergedResponse, envelope, preview, true
+}
+
+// ApplyMenuQualityGateInPlace applies deterministic label/table i18n repairs without patch envelope roundtrip.
+func ApplyMenuQualityGateInPlace(menuJSON string) (merged string, fixed int, changed bool) {
+	menuJSON = strings.TrimSpace(SanitizeMenuEditorPayload(menuJSON))
+	if menuJSON == "" {
+		return "", 0, false
+	}
+	var root any
+	if err := json.Unmarshal([]byte(menuJSON), &root); err != nil {
+		return "", 0, false
+	}
+	menuList, _ := menuListFromRoot(root)
+	if len(menuList) == 0 {
+		return "", 0, false
+	}
+	var walk func([]any)
+	walk = func(nodes []any) {
+		for _, item := range nodes {
+			node, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			fixed += applyLabelI18nRepairsInPlace(node)
+			fixed += applyTableInputParamRepairsInPlace(node)
+			if children, ok := node["children"].([]any); ok {
+				walk(children)
+			}
+		}
+	}
+	walk(menuList)
+	if fixed == 0 {
+		return menuJSON, 0, false
+	}
+	return marshalParsedMenuJSON(root), fixed, true
+}
+
+func applyLabelI18nRepairsInPlace(node map[string]any) int {
+	fixed := 0
+	label := strings.TrimSpace(stringFromAny(node["label"]))
+	if label == "" {
+		return 0
+	}
+	if strings.TrimSpace(stringFromAny(node["label_en"])) == "" {
+		node["label_en"] = label
+		fixed++
+	}
+	if strings.TrimSpace(stringFromAny(node["label_zh"])) == "" {
+		node["label_zh"] = label
+		fixed++
+	}
+	return fixed
+}
+
+func applyTableInputParamRepairsInPlace(node map[string]any) int {
+	table, ok := node["table"].([]any)
+	if !ok || len(table) == 0 {
+		return 0
+	}
+	fixed := 0
+	for i, col := range table {
+		row, ok := col.(map[string]any)
+		if !ok {
+			continue
+		}
+		fName := strings.TrimSpace(stringFromAny(row["f_name"]))
+		if fName == "" {
+			continue
+		}
+		rowFixed := false
+
+		fHeader := strings.TrimSpace(stringFromAny(row["f_header"]))
+		fHeaderEn := strings.TrimSpace(stringFromAny(row["f_header_en"]))
+		fHeaderVi := strings.TrimSpace(stringFromAny(row["f_header_vi"]))
+
+		if fHeader == "" {
+			fHeader = humanizeFieldName(fName)
+			if fHeader != "" {
+				row["f_header"] = fHeader
+				rowFixed = true
+			}
+		}
+		if fHeaderVi == "" {
+			if containsVietnamese(fHeader) {
+				row["f_header_vi"] = fHeader
+				rowFixed = true
+			} else if fHeaderEn != "" && (fHeader == "" || fHeader == fHeaderEn || !containsVietnamese(fHeader)) {
+				vi := humanizeFieldName(fName)
+				if vi != "" {
+					if fHeader == "" || fHeader == fHeaderEn {
+						row["f_header"] = vi
+					}
+					row["f_header_vi"] = vi
+					rowFixed = true
+				}
+			} else if fHeader != "" {
+				row["f_header_vi"] = fHeader
+				rowFixed = true
+			}
+		}
+		if fHeaderEn == "" && fHeader != "" {
+			row["f_header_en"] = fHeaderEnOrFallback(fHeader, fName)
+			rowFixed = true
+		}
+		if strings.TrimSpace(stringFromAny(row["f_header_zh"])) == "" && fHeader != "" {
+			row["f_header_zh"] = fHeader
+			rowFixed = true
+		}
+		if rowFixed {
+			table[i] = row
+			fixed++
+		}
+	}
+	if fixed > 0 {
+		node["table"] = table
+	}
+	return fixed
 }
 
 func accumulateLabelI18nRepairs(node map[string]any, after map[string]any) {

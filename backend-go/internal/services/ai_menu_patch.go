@@ -171,7 +171,7 @@ func buildMenuPatchListMergePreview(baseCode string, patchList []any) MenuComple
 		Edited:         stats.Edited,
 		Deleted:        stats.Deleted,
 	}
-	if mergeOut, err := DiffMergeTrees(source, mergedPayload); err == nil && mergeOut != nil {
+	if mergeOut, err := DiffMergeTrees(source, mergedPayload); err == nil && mergeOut != nil && len(source) <= menuLargeFastPathChars {
 		out.PatchOps = mergeOut.PatchOps
 	}
 	return out

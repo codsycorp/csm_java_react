@@ -28,13 +28,17 @@ var (
 func ComprehendBusinessHeuristic(req *CodeStreamRequest) BusinessSpec {
 	msg := strings.TrimSpace(req.Message)
 	lower := strings.ToLower(msg)
+	editorMenu := strings.TrimSpace(req.FullCurrentCode)
+	if editorMenu == "" {
+		editorMenu = strings.TrimSpace(req.CurrentCode)
+	}
 	spec := BusinessSpec{
 		UserDelta:  truncateStr(msg, 600),
-		Greenfield: req.ContextType == "menu_json" && IsEffectivelyEmptyMenuEditor(req.CurrentCode),
+		Greenfield: req.ContextType == "menu_json" && IsEffectivelyEmptyMenuEditor(editorMenu),
 	}
 
 	if req.ContextType == "menu_json" {
-		modules := extractMenuModuleLabels(req.CurrentCode)
+		modules := extractMenuModuleLabels(editorMenu)
 		if len(modules) == 0 {
 			modules = extractModulesFromMessage(lower)
 		}

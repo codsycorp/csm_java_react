@@ -15,6 +15,9 @@ func CoerceMenuEditorPayload(raw string) string {
 	if s == "" {
 		return ""
 	}
+	if fast := coerceMenuEditorPayloadFast(s); fast != "" {
+		return fast
+	}
 	candidates := []string{
 		s,
 		repairLooseMenuJSON(s),
@@ -190,8 +193,8 @@ func menuNodeIdentifier(m map[string]any) string {
 }
 
 func MenuEditorBaseHealth(editor string) string {
-	coerced := CoerceMenuEditorPayload(editor)
 	raw := SanitizeMenuEditorPayload(editor)
+	coerced := CoerceMenuEditorPayload(editor)
 	if coerced == "" || coerced == `{"menu":[]}` || coerced == `{"menu": []}` {
 		if raw == "" || raw == `{"menu":[]}` || raw == `{"menu": []}` {
 			return "empty"

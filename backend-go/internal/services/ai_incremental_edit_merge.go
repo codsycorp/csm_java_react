@@ -134,13 +134,10 @@ func menuListFromRoot(parsed any) ([]any, bool) {
 func marshalMenuRoot(parsed any, menuList []any, wrapped bool) string {
 	if wrapped {
 		if m, ok := parsed.(map[string]any); ok {
-			wrappedCopy := deepCopyMap(m)
-			wrappedCopy["menu"] = menuList
-			b, err := json.MarshalIndent(wrappedCopy, "", "  ")
-			if err != nil {
-				return ""
+			m["menu"] = menuList
+			if out := marshalParsedMenuJSON(m); out != "" {
+				return out
 			}
-			return string(b)
 		}
 	}
 	wrappedObj := map[string]any{"menu": menuList}
