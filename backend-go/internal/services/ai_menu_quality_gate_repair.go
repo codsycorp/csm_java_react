@@ -174,7 +174,7 @@ func ApplyMenuQualityGateInPlace(menuJSON string) (merged string, fixed int, cha
 	if fixed == 0 {
 		return menuJSON, 0, false
 	}
-	return marshalParsedMenuJSON(root), fixed, true
+	return marshalParsedMenuJSONForSize(root, len(menuJSON)), fixed, true
 }
 
 func applyLabelI18nRepairsInPlace(node map[string]any) int {

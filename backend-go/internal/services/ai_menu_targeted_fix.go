@@ -197,7 +197,7 @@ func ApplyDeterministicMenuTableFieldFixes(menuJSON string) (merged string, rema
 		}
 	}
 	walk(menuList)
-	merged = marshalParsedMenuJSON(root)
+	merged = marshalParsedMenuJSONForSize(root, len(menuJSON))
 	if merged == "" {
 		merged = marshalMenuRoot(root, menuList, wrapped)
 	}

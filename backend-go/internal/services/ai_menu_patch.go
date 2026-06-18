@@ -30,6 +30,21 @@ func BuildMenuCompletionMergePreview(baseDraftRaw, aiDraftRaw string) MenuComple
 	}
 	out.MergedResponse = normalizedAI
 
+	if isLargeFullMenuDraft(normalizedAI) {
+		baseNodes := 0
+		if normalizedBase := ExtractMenuDraftForCompletion(baseDraftRaw); normalizedBase != "" {
+			baseNodes = CountMenuNodesFromDraft(normalizedBase)
+		}
+		aiNodes := CountMenuNodesFromDraft(normalizedAI)
+		if baseNodes <= 0 || aiNodes >= int(math.Ceil(float64(baseNodes)*0.80)) {
+			out.Edited = 1
+			if aiNodes > baseNodes && baseNodes > 0 {
+				out.Added = aiNodes - baseNodes
+			}
+		}
+		return out
+	}
+
 	normalizedBase := ExtractMenuDraftForCompletion(baseDraftRaw)
 	baseNodes := CountMenuNodesFromDraft(normalizedBase)
 	if normalizedBase == "" {

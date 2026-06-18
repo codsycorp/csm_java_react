@@ -239,8 +239,11 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		}
 		if incrErr == nil && result != "" {
 			elapsed := time.Since(startedAt).Milliseconds()
+			log.Printf("AiCodeStream: incremental done requestId=%s resultLen=%d elapsedMs=%d", req.RequestID, len(result), elapsed)
 			editorBase := services.ResolveMenuEditEditorBase(req)
+			tComplete := time.Now()
 			completion := services.CodeStreamCompletion(req, result, editorBase, modelLabel, elapsed)
+			log.Printf("AiCodeStream: completion assembled requestId=%s ms=%d", req.RequestID, time.Since(tComplete).Milliseconds())
 			writeSSE(w, completion)
 			if responseMode == "edit" && req.ContextType == "menu_json" {
 				services.RecordCodeEditFromCompletion(deps.Config, deps.RM, req, completion, result)

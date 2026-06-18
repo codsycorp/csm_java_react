@@ -48,7 +48,12 @@ func CodeStreamCompletion(req *CodeStreamRequest, rawResult, editorBase, modelLa
 }
 
 func assembleMenuEditCompletion(complete map[string]any, req *CodeStreamRequest, editorBase, rawResult string) {
-	base := CoerceMenuEditorPayload(strings.TrimSpace(editorBase))
+	base := strings.TrimSpace(editorBase)
+	if fast := coerceMenuEditorPayloadFast(base); fast != "" {
+		base = fast
+	} else {
+		base = CoerceMenuEditorPayload(base)
+	}
 	rawResult = strings.TrimSpace(rawResult)
 	origEditorLen := menuEditOrigEditorLen(req)
 	if req != nil && req.FullCurrentCodeTruncated {
@@ -102,7 +107,12 @@ func assembleMenuEditCompletion(complete map[string]any, req *CodeStreamRequest,
 		}
 	}
 
-	preview := BuildMenuCompletionMergePreview(base, rawResult)
+	var preview MenuCompletionPreview
+	if isLargeFullMenuDraft(rawResult) {
+		preview = MenuCompletionPreview{MergedResponse: rawResult, Edited: 1}
+	} else {
+		preview = BuildMenuCompletionMergePreview(base, rawResult)
+	}
 	payload := strings.TrimSpace(preview.MergedResponse)
 	if payload == "" && CountMenuNodesFromDraft(base) <= 0 {
 		payload = ExtractMenuDraftForCompletion(rawResult)
@@ -163,11 +173,13 @@ func assembleMenuEditCompletion(complete map[string]any, req *CodeStreamRequest,
 		return
 	}
 
-	// Sanitize with 80% node retention guard.
-	if sanitized := NormalizeMenuDraftJson(payload); sanitized != "" {
-		sanitizedNodes := CountMenuNodesFromDraft(sanitized)
-		if baseNodes <= 0 || sanitizedNodes >= (baseNodes*80+99)/100 {
-			payload = sanitized
+	// Sanitize with 80% node retention guard (skip re-indent on large menus).
+	if len(payload) <= menuLargeFastPathChars {
+		if sanitized := NormalizeMenuDraftJson(payload); sanitized != "" {
+			sanitizedNodes := CountMenuNodesFromDraft(sanitized)
+			if baseNodes <= 0 || sanitizedNodes >= (baseNodes*80+99)/100 {
+				payload = sanitized
+			}
 		}
 	}
 

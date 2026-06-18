@@ -75,19 +75,32 @@ func summarizeExistingModules(modules []string) string {
 }
 
 func extractMenuModuleLabels(editor string) []string {
-	normalized := ExtractMenuDraftForCompletion(editor)
-	if normalized == "" {
-		normalized = NormalizeMenuDraftJson(editor)
-	}
-	if normalized == "" {
+	editor = SanitizeMenuEditorPayload(strings.TrimSpace(editor))
+	if editor == "" {
 		return nil
 	}
-	var parsed map[string]any
-	if json.Unmarshal([]byte(normalized), &parsed) != nil {
+	var parsed any
+	if len(editor) > menuLargeFastPathChars {
+		if err := json.Unmarshal([]byte(editor), &parsed); err != nil {
+			return nil
+		}
+	} else {
+		normalized := ExtractMenuDraftForCompletion(editor)
+		if normalized == "" {
+			normalized = NormalizeMenuDraftJson(editor)
+		}
+		if normalized == "" {
+			return nil
+		}
+		if json.Unmarshal([]byte(normalized), &parsed) != nil {
+			return nil
+		}
+	}
+	menuList, _ := menuListFromRoot(parsed)
+	if menuList == nil {
 		return nil
 	}
-	menu, _ := parsed["menu"].([]any)
-	return collectMenuLabels(menu, 32)
+	return collectMenuLabels(menuList, 32)
 }
 
 func collectMenuLabels(nodes []any, max int) []string {

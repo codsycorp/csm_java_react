@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	"csm_server/backend-go/internal/config"
 )
@@ -32,13 +34,18 @@ func RunMenuSliceEditExecute(
 	})
 	flush()
 
-	working := ResolveMenuEditEditorBase(req)
-	if fast := coerceMenuEditorPayloadFast(working); fast != "" {
-		working = fast
-	} else {
-		working = CoerceMenuEditorPayload(working)
+	t0 := time.Now()
+	working := resolveMenuEditEditorBaseFast(req)
+	if working == "" {
+		working = ResolveMenuEditEditorBase(req)
+		if fast := coerceMenuEditorPayloadFast(working); fast != "" {
+			working = fast
+		} else {
+			working = CoerceMenuEditorPayload(working)
+		}
 	}
 	originalBase := working
+	log.Printf("RunMenuSliceEditExecute requestId=%s resolve base len=%d ms=%d", req.RequestID, len(working), time.Since(t0).Milliseconds())
 	baseHealth := MenuEditorBaseHealth(working)
 	if baseHealth == "truncated_or_invalid" {
 		return IncrementalPlanResult{}, fmt.Errorf("menu editor JSON invalid or truncated — restore full menu JSON in editor")
@@ -67,17 +74,29 @@ func RunMenuSliceEditExecute(
 	})
 	flush()
 
-	if merged, _, fixed := ApplyDeterministicMenuTableFieldFixes(working); fixed > 0 && merged != "" {
-		working = merged
-	}
-
 	var qualityGateEnvelope string
 	var qualityPreview MenuCompletionPreview
 	if useQualityGate && working != "" {
-		if merged, envelope, preview, ok := RunMenuQualityGateEarlyAudit(working, 512); ok && merged != "" {
+		writeSSE(map[string]any{
+			"stage": "streaming_progress", "requestId": req.RequestID,
+			"percent": 28, "message": "Đang quét f_header / f_header_vi…",
+		})
+		flush()
+		t1 := time.Now()
+		if len(working) > menuLargeFastPathChars {
+			if merged, fixed, changed := ApplyMenuQualityGateInPlace(working); changed && merged != "" {
+				working = merged
+				qualityPreview = MenuCompletionPreview{MergedResponse: merged, Edited: maxInt(fixed, 1)}
+				log.Printf("RunMenuSliceEditExecute requestId=%s quality-gate in-place fixed=%d len=%d ms=%d",
+					req.RequestID, fixed, len(merged), time.Since(t1).Milliseconds())
+			}
+		} else if merged, envelope, preview, ok := RunMenuQualityGateEarlyAudit(working, 512); ok && merged != "" {
 			working = merged
 			qualityGateEnvelope = envelope
 			qualityPreview = preview
+			log.Printf("RunMenuSliceEditExecute requestId=%s quality-gate envelope ms=%d", req.RequestID, time.Since(t1).Milliseconds())
+		}
+		if qualityPreview.MergedResponse != "" {
 			writeSSE(map[string]any{
 				"stage":           "agentic_step_result",
 				"requestId":       req.RequestID,
@@ -100,6 +119,8 @@ func RunMenuSliceEditExecute(
 			})
 			flush()
 		}
+	} else if merged, _, fixed := ApplyDeterministicMenuTableFieldFixes(working); fixed > 0 && merged != "" {
+		working = merged
 	}
 
 	if roots := parseMenuRoots(working); len(roots) > 0 && len(working) <= menuLargeFastPathChars {
@@ -123,10 +144,14 @@ func RunMenuSliceEditExecute(
 	}
 
 	if CountMenuNodesFromDraft(originalBase) > 0 {
-		if !MenuEditPassesNodeRetentionGuard(originalBase, final) || IsLikelyHallucinatedGreenfieldMenu(final) {
+		if !MenuEditPassesNodeRetentionGuard(originalBase, final) {
+			return IncrementalPlanResult{}, fmt.Errorf("deterministic merge failed node retention guard")
+		}
+		if len(final) <= menuLargeFastPathChars && IsLikelyHallucinatedGreenfieldMenu(final) {
 			return IncrementalPlanResult{}, fmt.Errorf("deterministic merge failed node retention guard")
 		}
 	}
+	log.Printf("RunMenuSliceEditExecute requestId=%s done finalLen=%d ms=%d", req.RequestID, len(final), time.Since(t0).Milliseconds())
 
 	writeSSE(map[string]any{
 		"stage": "tool_apply", "status": "done", "requestId": req.RequestID,

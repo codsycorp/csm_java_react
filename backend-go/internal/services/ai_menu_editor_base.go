@@ -220,6 +220,9 @@ func ResolveMenuEditEditorBase(req *CodeStreamRequest) string {
 	if req == nil {
 		return ""
 	}
+	if fast := resolveMenuEditEditorBaseFast(req); fast != "" {
+		return fast
+	}
 	rawFull := SanitizeMenuEditorPayload(req.FullCurrentCode)
 	rawCur := SanitizeMenuEditorPayload(req.CurrentCode)
 	full := CoerceMenuEditorPayload(req.FullCurrentCode)
