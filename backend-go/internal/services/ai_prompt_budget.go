@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"csm_server/backend-go/internal/config"
@@ -131,11 +132,37 @@ func EffectiveInferenceMaxTokens(cfg config.AppConfig, responseMode string) uint
 		if base > 512 {
 			return 512
 		}
+		return base
+	}
+	// Print triggers / code patches need much more than 768 tok (full HTML return).
+	if mode == "edit" && IsConstrained8GbTier(cfg) {
+		editMax := codeStreamEditMaxTokens()
+		cap := editMax
+		ctxHalf := cfg.EffectiveLlamaContextWindow() / 2
+		if cap > ctxHalf {
+			cap = ctxHalf
+		}
+		if cap < base {
+			return base
+		}
+		return cap
 	}
 	if IsConstrained8GbTier(cfg) && base > 768 {
 		return 768
 	}
 	return base
+}
+
+func codeStreamEditMaxTokens() uint32 {
+	v := strings.TrimSpace(os.Getenv("AI_CODE_STREAM_EDIT_MAX_TOKENS"))
+	if v == "" {
+		return 2048
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 2048
+	}
+	return uint32(n)
 }
 
 // TruncateMiddle keeps system head + user tail when prompt exceeds cap (Java truncateMiddle parity).

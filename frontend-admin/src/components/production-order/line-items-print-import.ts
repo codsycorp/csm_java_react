@@ -60,6 +60,7 @@ export function buildPrintImportPrompt(opts: {
     "7. Cột dòng hàng: " + (colList || "ten_sp, don_vi, chieu_rong, chieu_dai, so_tam, khoi_luong, don_gia, thanh_tien"),
     "8. Ghi chú cố định: utils.parseNoteLines(cfg.ghi_chu_*, defaultArray) hoặc cfg từ pm_cai_dat.",
     "9. PXK: utils.printTableOpts showPrice:false, hideColumns nếu cần.",
+    "10. Code NGẮN GỌN: dùng utils.buildCompanyHdr / buildItemsTableHtml / buildTotalsHtml — KHÔNG nhét CSS dài; return phải có <!DOCTYPE html> hoặc template literal kết thúc </html>.",
     "",
     "## Tham chiếu code",
     REFERENCE_TRIGGER_SNIPPET,
@@ -77,6 +78,13 @@ export function extractCodeFromAiResponse(raw: string): string {
     if (bodyMatch?.[1]) text = bodyMatch[1].trim();
   }
   return text;
+}
+
+/** Kiểm tra body trigger in có vẻ hoàn chỉnh (tránh false negative khi model viết HTML hoa/thường khác). */
+export function isValidPrintTriggerCode(code: string): boolean {
+  const c = String(code ?? "").trim();
+  if (!/\breturn\b/i.test(c)) return false;
+  return /html|<!doctype|buildItemsTableHtml|buildCompanyHdr|<\/html>/i.test(c);
 }
 
 export async function fileToPreviewDataUrls(file: File, maxPages = 2): Promise<string[]> {
@@ -242,8 +250,11 @@ export async function generatePrintTriggerFromSample(opts: {
   }
 
   const code = extractCodeFromAiResponse(fullResponse);
-  if (!code.includes("return") || !code.includes("html")) {
-    throw new Error("AI trả về code không hợp lệ (thiếu return HTML). Dùng「Áp mẫu Phú Sơn」hoặc sửa tay.");
+  if (!isValidPrintTriggerCode(code)) {
+    throw new Error(
+      "AI trả về code không hợp lệ (thiếu return HTML — thường do server 8GB cắt output). "
+      + "Dùng「Áp mẫu Phú Sơn」hoặc sửa tay.",
+    );
   }
   return code;
 }

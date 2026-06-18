@@ -106,3 +106,18 @@ func TestClampPromptForLocalProvider(t *testing.T) {
 		t.Fatalf("clamped len=%d want <=15000", len(got))
 	}
 }
+
+func TestEffectiveInferenceMaxTokensEdit8Gb(t *testing.T) {
+	t.Setenv("AI_LOCAL_RUNTIME_TIER", "balanced-8gb")
+	t.Setenv("AI_LOCAL_PROMPT_BUDGET_DISABLED", "")
+	t.Setenv("AI_CODE_STREAM_EDIT_MAX_TOKENS", "2048")
+	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 4096, LlamaMaxTokens: 768}}
+	got := EffectiveInferenceMaxTokens(cfg, "edit")
+	if got != 2048 {
+		t.Fatalf("edit on 8gb want 2048 output tok, got %d", got)
+	}
+	analyze := EffectiveInferenceMaxTokens(cfg, "analyze")
+	if analyze != 512 {
+		t.Fatalf("analyze on 8gb want 512, got %d", analyze)
+	}
+}

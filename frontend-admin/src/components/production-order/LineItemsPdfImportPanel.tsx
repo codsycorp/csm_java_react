@@ -111,7 +111,25 @@ export default function LineItemsPdfImportPanel({
       setGeneratedCode(code);
       setPreviewOpen(true);
     } catch (e: any) {
-      message.error(e?.message ?? String(e));
+      const msg = e?.message ?? String(e);
+      const builtin = getBuiltinPrintTriggerBody(docKind);
+      const looksTruncated = /thiếu return HTML|không trả về trigger/i.test(msg);
+      if (builtin && looksTruncated) {
+        Modal.confirm({
+          title: "AI chưa sinh đủ trigger in",
+          content: `${msg}\n\nÁp mẫu Phú Sơn có sẵn (Báo giá / LSX / PXK) thay thế?`,
+          okText: "Áp mẫu Phú Sơn",
+          cancelText: "Đóng",
+          onOk: () => {
+            const key = triggerKey.trim() || defaultKeyForKind;
+            onApplyTrigger?.(key, builtin);
+            onApplyPrintConfig?.(suggestPrintConfig(docKind, key) as LiPrintConfig);
+            message.success(`Đã áp trigger "${key}" từ mẫu Phú Sơn`);
+          },
+        });
+      } else {
+        message.error(msg);
+      }
     } finally {
       setLoading(false);
     }
