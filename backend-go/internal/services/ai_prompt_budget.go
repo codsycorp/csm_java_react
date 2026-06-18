@@ -2,9 +2,15 @@ package services
 
 import (
 	"os"
+	"regexp"
 	"strings"
 
 	"csm_server/backend-go/internal/config"
+)
+
+var (
+	localDataURLPattern = regexp.MustCompile(`data:[^;\s]+;base64,[A-Za-z0-9+/=\s]{200,}`)
+	localBase64Line     = regexp.MustCompile(`(?m)^[A-Za-z0-9+/=]{500,}\s*$`)
 )
 
 // IsPromptBudgetDisabled turns off tier-based prompt/output clamps (8GB caps, slot shrink).
@@ -57,14 +63,16 @@ func MaxSafePromptChars(cfg config.AppConfig) int {
 	}
 	// ~3 chars/token for code/json (conservative vs 4) to avoid KV overflow on 8GB.
 	chars := tokenBudget * 3
-	if chars < 4000 {
-		chars = 4000
-	}
-	batch := int(cfg.EffectiveLlamaBatchSize())
-	if batch > 0 {
-		batchChars := batch * 3
-		if chars > batchChars {
-			chars = batchChars
+	if !IsPromptBudgetDisabled() {
+		if chars < 4000 {
+			chars = 4000
+		}
+		batch := int(cfg.EffectiveLlamaBatchSize())
+		if batch > 0 {
+			batchChars := batch * 3
+			if chars > batchChars {
+				chars = batchChars
+			}
 		}
 	}
 	if chars < 1024 {
@@ -94,7 +102,25 @@ func EffectiveLocalPromptCap(cfg config.AppConfig, contextType, responseMode str
 			hardCap = min(hardCap, 9000)
 		}
 	}
-	return max(4000, hardCap)
+	if hardCap < 1024 {
+		return 1024
+	}
+	return hardCap
+}
+
+// SanitizeLocalInferencePrompt strips binary/base64 payloads that blow token counts (PDF import).
+func SanitizeLocalInferencePrompt(prompt string) string {
+	s := strings.TrimSpace(prompt)
+	if s == "" {
+		return s
+	}
+	s = localDataURLPattern.ReplaceAllString(s, "[attachment removed: local text model cannot read images]")
+	s = localBase64Line.ReplaceAllString(s, "[base64 page removed]")
+	if idx := strings.Index(s, "## Ảnh mẫu (base64)"); idx >= 0 {
+		head := strings.TrimSpace(s[:idx])
+		s = head + "\n\n[PDF sample images omitted — use layout presets or describe layout in text.]\n"
+	}
+	return s
 }
 
 // EffectiveInferenceMaxTokens picks output budget (analyze uses less on 8GB to avoid OOM).

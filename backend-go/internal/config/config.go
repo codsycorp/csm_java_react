@@ -216,7 +216,7 @@ func (c AppConfig) EffectiveLlamaContextWindow() uint32 {
 	return 8192
 }
 
-// EffectiveLlamaBatchSize — llama.cpp requires prompt tokens <= n_batch per decode step.
+// EffectiveLlamaBatchSize — prefill chunk size (wrapper patches chunked decode when prompt > batch).
 func (c AppConfig) EffectiveLlamaBatchSize() uint32 {
 	batch := c.AI.LlamaBatchSize
 	if batch == 0 {
@@ -224,7 +224,7 @@ func (c AppConfig) EffectiveLlamaBatchSize() uint32 {
 	}
 	ctx := c.EffectiveLlamaContextWindow()
 	if batch > ctx {
-		batch = ctx
+		return ctx
 	}
 	if batch < 512 && ctx >= 512 {
 		batch = 512
@@ -236,6 +236,9 @@ func (c AppConfig) EffectiveCodeStreamPromptCap() int {
 	cap := c.AI.LlamaMaxPromptChars
 	if cap <= 0 {
 		cap = 32_000
+	}
+	if envFlagTrue("AI_LOCAL_PROMPT_BUDGET_DISABLED", false) {
+		return cap
 	}
 	if cap < 8_000 {
 		return 8_000

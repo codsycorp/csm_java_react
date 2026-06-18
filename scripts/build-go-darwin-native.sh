@@ -18,7 +18,9 @@ export GOOS=darwin
 export GOARCH="$(go env GOARCH)"
 
 echo "[build-darwin-native] GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=1 -tags llamacpp"
+"$ROOT/scripts/patch-go-nativeml-chunked-prefill.sh" "$GO_DIR"
 go build -tags llamacpp -trimpath -ldflags="-s -w" -o "$OUT" ./cmd/server
+go mod edit -dropreplace=github.com/footprintai/go-nativeml 2>/dev/null || true
 
 echo "[build-darwin-native] OK → $OUT"
 ls -lh "$OUT"

@@ -15,6 +15,27 @@ func TestMaxSafePromptChars8Gb(t *testing.T) {
 	}
 }
 
+func TestMaxSafePromptCharsBudgetDisabled(t *testing.T) {
+	t.Setenv("AI_LOCAL_PROMPT_BUDGET_DISABLED", "true")
+	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 1024, LlamaBatchSize: 512}}
+	got := MaxSafePromptChars(cfg)
+	want := (8192 - 1024 - 768) * 3
+	if got != want {
+		t.Fatalf("expected context-limited safe chars %d, got %d", want, got)
+	}
+}
+
+func TestSanitizeLocalInferencePromptStripsBase64(t *testing.T) {
+	raw := "hello\n## Ảnh mẫu (base64)\ndata:image/png;base64," + strings.Repeat("A", 5000)
+	got := SanitizeLocalInferencePrompt(raw)
+	if strings.Contains(got, strings.Repeat("A", 500)) {
+		t.Fatal("expected base64 stripped")
+	}
+	if !strings.Contains(got, "PDF sample images omitted") {
+		t.Fatal("expected omission notice")
+	}
+}
+
 func TestEffectiveLocalPromptCapEditCodeConstrained(t *testing.T) {
 	t.Setenv("AI_LOCAL_RUNTIME_TIER", "balanced-8gb")
 	t.Setenv("AI_LOCAL_PROMPT_BUDGET_DISABLED", "")

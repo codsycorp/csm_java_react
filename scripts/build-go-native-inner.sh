@@ -40,6 +40,11 @@ cd "$GO_DIR"
 echo "[build-native-inner] downloading modules..."
 go mod download
 
+ROOT="$(cd "$(dirname "$GO_DIR")" && pwd)"
+if [ -f "$ROOT/scripts/patch-go-nativeml-chunked-prefill.sh" ]; then
+	"$ROOT/scripts/patch-go-nativeml-chunked-prefill.sh" "$GO_DIR"
+fi
+
 NATIVEML_DIR="$(go list -m -f '{{.Dir}}' github.com/footprintai/go-nativeml)"
 PLATFORM="$(go env GOOS)-$(go env GOARCH)"
 PREBUILT="$NATIVEML_DIR/ggml/llamacpp/third_party/prebuilt/$PLATFORM"

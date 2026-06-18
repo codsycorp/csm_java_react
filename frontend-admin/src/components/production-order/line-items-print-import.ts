@@ -188,7 +188,7 @@ export async function generatePrintTriggerFromSample(opts: {
   const response = await request.post("ai-code-stream", {
     json: {
       appId: String(opts.appId || "line_items_print").trim() || "line_items_print",
-      message: `${prompt}\n\n## Ảnh mẫu (base64)\n${opts.sampleImages.slice(0, 2).join("\n---PAGE---\n")}`,
+      message: `${prompt}\n\n(Lưu ý: model local chỉ đọc text — mô tả layout PDF trong「Ghi chú」hoặc dùng「Áp mẫu Phú Sơn」. Ảnh mẫu ${opts.sampleImages.length} trang không gửi vào prompt.)`,
       flowType: "code_editor",
       taskType: "code_assistant",
       language: "javascript",

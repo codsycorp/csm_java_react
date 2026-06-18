@@ -90,22 +90,24 @@ resolve_model_path "${AI_LOCAL_LLAMA_MODEL_PATH:-}"
 
 # Mac dev: profile env phải thắng config.env (tránh ctx 8192 + prompt 120k gây SIGABRT llama.cpp)
 if [ "$(uname -s)" = "Darwin" ]; then
-    export AI_LOCAL_LLAMA_CONTEXT_WINDOW="${AI_LOCAL_LLAMA_CONTEXT_WINDOW:-4096}"
-    if [ "${AI_LOCAL_LLAMA_CONTEXT_WINDOW}" -gt 4096 ] 2>/dev/null; then
-        AI_LOCAL_LLAMA_CONTEXT_WINDOW=4096
-        export AI_LOCAL_LLAMA_CONTEXT_WINDOW
-    fi
+    export AI_LOCAL_LLAMA_GPU_LAYERS="${AI_LOCAL_LLAMA_GPU_LAYERS:-0}"
+    export GGML_METAL="${GGML_METAL:-0}"
     export AI_LOCAL_LLAMA_BATCH_SIZE="${AI_LOCAL_LLAMA_BATCH_SIZE:-512}"
-    if [ "${AI_LOCAL_LLAMA_BATCH_SIZE}" -lt 512 ] 2>/dev/null; then
-        AI_LOCAL_LLAMA_BATCH_SIZE=512
-        export AI_LOCAL_LLAMA_BATCH_SIZE
-    fi
     export AI_LOCAL_LLAMA_UBATCH_SIZE="${AI_LOCAL_LLAMA_UBATCH_SIZE:-64}"
-    export AI_LOCAL_LLAMA_MAX_PROMPT_CHARS="${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS:-32000}"
-    if [ "${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS}" -gt 32000 ] 2>/dev/null; then
-        config_log "WARN: clamp AI_LOCAL_LLAMA_MAX_PROMPT_CHARS ${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS} → 32000 (config.env quá lớn gây SIGABRT llama.cpp)"
-        AI_LOCAL_LLAMA_MAX_PROMPT_CHARS=32000
-        export AI_LOCAL_LLAMA_MAX_PROMPT_CHARS
+    if [ "${AI_LOCAL_PROMPT_BUDGET_DISABLED:-}" = "true" ] || [ "${AI_LOCAL_PROMPT_BUDGET_DISABLED:-}" = "1" ]; then
+        config_log "AI max mode: prompt/output clamp tier tắt (AI_LOCAL_PROMPT_BUDGET_DISABLED)"
+    else
+        export AI_LOCAL_LLAMA_CONTEXT_WINDOW="${AI_LOCAL_LLAMA_CONTEXT_WINDOW:-4096}"
+        if [ "${AI_LOCAL_LLAMA_CONTEXT_WINDOW}" -gt 4096 ] 2>/dev/null; then
+            AI_LOCAL_LLAMA_CONTEXT_WINDOW=4096
+            export AI_LOCAL_LLAMA_CONTEXT_WINDOW
+        fi
+        export AI_LOCAL_LLAMA_MAX_PROMPT_CHARS="${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS:-32000}"
+        if [ "${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS}" -gt 32000 ] 2>/dev/null; then
+            config_log "WARN: clamp AI_LOCAL_LLAMA_MAX_PROMPT_CHARS ${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS} → 32000"
+            AI_LOCAL_LLAMA_MAX_PROMPT_CHARS=32000
+            export AI_LOCAL_LLAMA_MAX_PROMPT_CHARS
+        fi
     fi
     export AI_SEO_ARTICLE_MAX_TOKENS="${AI_SEO_ARTICLE_MAX_TOKENS:-1536}"
 fi

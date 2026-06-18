@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"sync"
 
 	"github.com/footprintai/go-nativeml/ggml/llamacpp"
@@ -71,6 +72,7 @@ func (n *llamaNativeBackend) ensureLoadedLocked() error {
 		return nil
 	}
 	llamaBackendOnce.Do(func() {
+		applyNativeRuntimeEnv(n.cfg)
 		llamacpp.Init()
 	})
 	log.Printf("LlamaNative: loading GGUF in-process: %s", n.cfg.AI.LlamaModelPath)
@@ -112,7 +114,7 @@ func (n *llamaNativeBackend) complete(prompt string, maxTokens uint32) (string, 
 	if err := n.ensureLoadedLocked(); err != nil {
 		return "", err
 	}
-	prompt = truncateNativePrompt(prompt, MaxSafePromptChars(n.cfg))
+	prompt = prepareNativePrompt(n, prompt)
 	max := int(maxTokens)
 	if max <= 0 {
 		max = int(n.cfg.EffectiveLlamaMaxTokens())
@@ -131,7 +133,7 @@ func (n *llamaNativeBackend) stream(prompt string, maxTokens uint32, onToken fun
 	if err := n.ensureLoadedLocked(); err != nil {
 		return err
 	}
-	prompt = truncateNativePrompt(prompt, MaxSafePromptChars(n.cfg))
+	prompt = prepareNativePrompt(n, prompt)
 	max := int(maxTokens)
 	if max <= 0 {
 		max = int(n.cfg.EffectiveLlamaMaxTokens())
@@ -163,9 +165,72 @@ func (n *llamaNativeBackend) shutdown() {
 	n.loaded = false
 }
 
+func applyNativeRuntimeEnv(cfg config.AppConfig) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	if cfg.AI.LlamaGPULayers > 0 {
+		return
+	}
+	// Metal init fails on some Mac builds (device null / command queue) even with gpu_layers=0.
+	if os.Getenv("GGML_METAL") == "" {
+		_ = os.Setenv("GGML_METAL", "0")
+	}
+}
+
+func prepareNativePrompt(n *llamaNativeBackend, prompt string) string {
+	prompt = SanitizeLocalInferencePrompt(prompt)
+	prompt = truncateNativePrompt(prompt, MaxSafePromptChars(n.cfg))
+	return truncateNativePromptByTokens(n, prompt)
+}
+
 func truncateNativePrompt(prompt string, maxChars int) string {
 	if maxChars <= 0 || len(prompt) <= maxChars {
 		return prompt
 	}
 	return TruncateMiddle(prompt, maxChars)
+}
+
+// truncateNativePromptByTokens caps prompt to context window (chunked prefill handles batch size).
+func truncateNativePromptByTokens(n *llamaNativeBackend, prompt string) string {
+	if n == nil || n.ctx == nil || prompt == "" {
+		return prompt
+	}
+	ctx := int(n.cfg.EffectiveLlamaContextWindow())
+	out := int(n.cfg.EffectiveLlamaMaxTokens())
+	margin := 256
+	if ctx <= 8192 {
+		margin = 512
+	}
+	maxTokens := ctx - out - margin
+	if maxTokens < 512 {
+		maxTokens = 512
+	}
+	if !IsPromptBudgetDisabled() {
+		batch := int(n.cfg.EffectiveLlamaBatchSize())
+		if batch > 0 && maxTokens > batch {
+			maxTokens = batch
+		}
+	}
+	tokens, err := n.ctx.Tokenize(prompt)
+	if err != nil || len(tokens) <= maxTokens {
+		return prompt
+	}
+	log.Printf("LlamaNative: prompt tokens %d > batch budget %d — truncating", len(tokens), maxTokens)
+	shrunk := prompt
+	for attempts := 0; attempts < 8 && len(tokens) > maxTokens && len(shrunk) > 400; attempts++ {
+		target := len(shrunk) * maxTokens / len(tokens) * 9 / 10
+		if target < 400 {
+			target = 400
+		}
+		shrunk = TruncateMiddle(shrunk, target)
+		tokens, err = n.ctx.Tokenize(shrunk)
+		if err != nil {
+			return truncateNativePrompt(shrunk, maxTokens*3)
+		}
+	}
+	if len(tokens) > maxTokens {
+		return truncateNativePrompt(shrunk, maxTokens*3)
+	}
+	return shrunk
 }
