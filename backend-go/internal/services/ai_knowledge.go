@@ -218,7 +218,7 @@ func CacheMenuEditorApplyPayload(requestID, mergedMenu string, mergeStats map[st
 	}
 }
 
-func TakeMenuEditorApplyPayload(requestID string) (menuJSON string, mergeStats map[string]any, ok bool) {
+func GetMenuEditorApplyPayload(requestID string) (menuJSON string, mergeStats map[string]any, ok bool) {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
 		return "", nil, false
@@ -230,12 +230,16 @@ func TakeMenuEditorApplyPayload(requestID string) (menuJSON string, mergeStats m
 	if !exists || strings.TrimSpace(entry.menuJSON) == "" {
 		return "", nil, false
 	}
-	delete(menuApplyCache, requestID)
 	statsCopy := map[string]any{}
 	for k, v := range entry.mergeStats {
 		statsCopy[k] = v
 	}
 	return entry.menuJSON, statsCopy, true
+}
+
+func TakeMenuEditorApplyPayload(requestID string) (menuJSON string, mergeStats map[string]any, ok bool) {
+	menuJSON, mergeStats, ok = GetMenuEditorApplyPayload(requestID)
+	return menuJSON, mergeStats, ok
 }
 
 func pruneMenuApplyCacheLocked() {

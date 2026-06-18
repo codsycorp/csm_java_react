@@ -85,9 +85,16 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	}
 	pipelineInput := services.PipelineInput{Auth: retrievalAuth, Attachments: attachments}
 
-	phase1 := services.PreparePhase1Pipeline(deps.Config, deps.RM, req, pipelineInput)
+	phase1 := services.PreparePhase1Pipeline(deps.Config, deps.RM, deps.Llama, req, pipelineInput)
 	responseMode := phase1.ResponseMode
 	req.ResponseMode = responseMode
+
+	if req.ContextType == "menu_json" && responseMode == "edit" {
+		resolved := services.ResolveMenuEditEditorBase(req)
+		log.Printf("AiCodeStream menu edit requestId=%s curLen=%d fullLen=%d resolvedLen=%d health=%s nodes=%d",
+			req.RequestID, len(req.CurrentCode), len(req.FullCurrentCode), len(resolved),
+			services.MenuEditorBaseHealth(resolved), services.CountMenuNodesFromDraft(resolved))
+	}
 
 	fullCode := req.FullCurrentCode
 	if fullCode == "" {
@@ -121,7 +128,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		elapsed := int64(0)
 		completion := services.CodeStreamCompletion(req, gf.MenuJSON, req.CurrentCode, gf.ModelLabel, elapsed)
 		writeSSE(w, completion)
-		services.RecordCodeEditFromCompletion(deps.Config, req, completion, gf.MenuJSON)
+		services.RecordCodeEditFromCompletion(deps.Config, deps.RM, req, completion, gf.MenuJSON)
 		writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": elapsed}))
 		return
 	}
@@ -185,6 +192,57 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	}
 
 	prompt := services.BuildCodeStreamLocalPromptFull(deps.Config, req, phase1.LearningBlock, phase1.ComprehendBlock, phase1.TenantRAG.Block, phase1.Multimodal.CompactContext, phase1.Workspace.Block)
+
+	if services.ShouldUseIncrementalPlanExecute(deps.Config, req, phase1) && deps.Llama.IsAvailable() {
+			writeSSE(w, stageEvent("local_pre_analysis", map[string]any{
+			"requestId": req.RequestID, "status": "incremental_plan_ready", "attempted": true,
+			"handledLocally": true, "reason_code": "incremental_plan_execute",
+			"responseMode": responseMode, "incrementalPlan": true,
+			"slicePlanner": req.ContextType == "menu_json" && responseMode == "edit",
+		}))
+		writeSSE(w, stageEvent("streaming_started", map[string]any{
+			"requestId": req.RequestID, "model": "local_provider", "percent": 15,
+			"responseMode": responseMode, "incrementalPlan": true,
+		}))
+		flushSSE()
+		var incrResult services.IncrementalPlanResult
+		var incrErr error
+		if req.ContextType == "menu_json" && responseMode == "edit" && services.PlanEditTask(req, responseMode).Enabled {
+			incrResult, incrErr = services.RunMenuSliceEditExecute(ctx, deps.Config, deps.Llama, req, phase1, func(evt map[string]any) {
+				writeSSE(w, evt)
+			}, flushSSE)
+		} else {
+			incrResult, incrErr = services.RunIncrementalPlanExecute(ctx, deps.Config, deps.Llama, req, phase1, func(evt map[string]any) {
+				writeSSE(w, evt)
+			}, flushSSE)
+		}
+		result := incrResult.FinalText
+		if incrErr != nil {
+			log.Printf("AiCodeStream: incremental plan failed requestId=%s err=%v — fallback single-shot", req.RequestID, incrErr)
+			if req.ContextType == "menu_json" && responseMode == "edit" && services.IsMenuTableFieldI18nComboRequest(req.Message) {
+				base := services.CoerceMenuEditorPayload(services.ResolveMenuEditEditorBase(req))
+				if merged, _, fixed := services.ApplyDeterministicMenuTableFieldFixes(base); fixed > 0 && merged != "" {
+					log.Printf("AiCodeStream: deterministic field fixes after slice fail requestId=%s fixed=%d", req.RequestID, fixed)
+					result = merged
+					incrErr = nil
+				}
+			}
+		}
+		if incrErr == nil && result != "" {
+			elapsed := time.Since(startedAt).Milliseconds()
+			editorBase := services.ResolveMenuEditEditorBase(req)
+			completion := services.CodeStreamCompletion(req, result, editorBase, modelLabel, elapsed)
+			writeSSE(w, completion)
+			if responseMode == "edit" && req.ContextType == "menu_json" {
+				services.RecordCodeEditFromCompletion(deps.Config, deps.RM, req, completion, result)
+			}
+			writeSSE(w, stageEvent("request_complete", map[string]any{
+				"requestId": req.RequestID, "elapsedMs": elapsed, "incrementalPlan": true,
+				"planSteps": len(incrResult.Plan.Steps),
+			}))
+			return
+		}
+	}
 
 	writeSSE(w, stageEvent("local_pre_analysis", map[string]any{
 		"requestId": req.RequestID, "status": "local_context_ready", "attempted": true,
@@ -311,9 +369,13 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	}
 
 	elapsed := time.Since(startedAt).Milliseconds()
-	completion := services.CodeStreamCompletion(req, result, req.CurrentCode, modelLabel, elapsed)
+	editorBase := req.CurrentCode
+	if req.ContextType == "menu_json" && responseMode == "edit" {
+		editorBase = services.ResolveMenuEditEditorBase(req)
+	}
+	completion := services.CodeStreamCompletion(req, result, editorBase, modelLabel, elapsed)
 	writeSSE(w, completion)
-	services.RecordCodeEditFromCompletion(deps.Config, req, completion, result)
+	services.RecordCodeEditFromCompletion(deps.Config, deps.RM, req, completion, result)
 	writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": elapsed}))
 }
 
@@ -387,7 +449,7 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 	writeSSE(w, stageEvent("preparing", map[string]any{
 		"status": "running", "message": "Bắt đầu local execute plan", "current": 0, "total": 5, "percent": 5, "responseMode": responseMode,
 	}))
-	phase1 := services.PreparePhase1Pipeline(deps.Config, deps.RM, req, services.PipelineInput{
+	phase1 := services.PreparePhase1Pipeline(deps.Config, deps.RM, deps.Llama, req, services.PipelineInput{
 		Attachments: services.ParseAttachmentsFromParams(params),
 	})
 	responseMode = phase1.ResponseMode
@@ -430,7 +492,7 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 			"appId": appID, "applyDynamicIngestion": false, "ingestCount": 0, "aggregateScopeMask": phase1.Orchestration.ScopeMask,
 		}
 		writeSSE(w, completion)
-		services.RecordCodeEditFromCompletion(deps.Config, req, completion, rawResult)
+		services.RecordCodeEditFromCompletion(deps.Config, deps.RM, req, completion, rawResult)
 		return
 	}
 

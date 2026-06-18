@@ -89,7 +89,77 @@ func TestMenuApplyCache(t *testing.T) {
 		t.Fatalf("stats=%v", stats)
 	}
 	_, _, ok2 := TakeMenuEditorApplyPayload("req-1")
-	if ok2 {
-		t.Fatal("cache entry should be one-shot")
+	if !ok2 {
+		t.Fatal("cache entry should remain until TTL (retry-safe fetch)")
+	}
+}
+
+func TestSanitizeMenuEditorPayloadRemovesTruncationMarker(t *testing.T) {
+	broken := `{"menu":[{"id":"a","label":"A"}] /* ... editor truncated for server payload budget ... */ ,"children":[]}`
+	got := SanitizeMenuEditorPayload(broken)
+	if MenuEditorBaseHealth(got) == "truncated_or_invalid" {
+		t.Fatalf("expected sanitized payload to be usable, got health truncated: %s", got)
+	}
+}
+
+func TestResolveMenuEditEditorBasePrefersFull(t *testing.T) {
+	trunc := `{"menu":[{"id":"a","label":"A"}] /* ... editor truncated for server payload budget ... */ broken`
+	full := `{"menu":[{"id":"a","label":"A","children":[{"id":"b","label":"B"}]}]}`
+	req := &CodeStreamRequest{CurrentCode: trunc, FullCurrentCode: full}
+	got := ResolveMenuEditEditorBase(req)
+	if CountMenuNodesFromDraft(got) != 2 {
+		t.Fatalf("nodes=%d want 2 from full base: %s", CountMenuNodesFromDraft(got), got)
+	}
+}
+
+func TestSafeMergeRejectsHallucinatedDemoMenu(t *testing.T) {
+	base := `{"menu":[{"id":"sales","label":"Sales","children":[{"id":"sales@@@@@dvt","f_name":"dvt","f_types":"co"}]}]}`
+	demo := `{"menu":[{"id":"root","label":"Danh mục","children":[{"id":"category1","label":"Danh mục 1","children":[{"id":"product1","label":"Sản phẩm 1"}]}]}]}`
+	got := SafeMergeIncrementalMenuEdit(base, base, demo)
+	if got != base {
+		t.Fatalf("expected base preserved, got %s", got)
+	}
+}
+
+func TestMenuEditorBaseHealthAllowsLooseJSONWithMenuSignals(t *testing.T) {
+	broken := `{"menu":[{"id":"a","table":[{"f_name":"x","f_header":"Tên","f_types":"ed",}]}]}`
+	if MenuEditorBaseHealth(broken) == "truncated_or_invalid" {
+		t.Fatal("loose JSON with menu signals should not be truncated_or_invalid")
+	}
+	coerced := CoerceMenuEditorPayload(broken)
+	if CountMenuNodesFromDraft(coerced) < 1 {
+		t.Fatalf("expected coerced menu nodes, got: %s", coerced)
+	}
+}
+
+func TestCodeStreamCompletionAcceptsIncrementalFullMenuWhenBaseTruncated(t *testing.T) {
+	trunc := `{"menu":[{"id":"a","label":"A"}] /* ... editor truncated for server payload budget ... */ broken`
+	base := `{"menu":[{"id":"m1","table":[{"f_name":"name","f_header":"Tên SP","f_header_en":"Product Name","f_types":"ed"}]}]}`
+	fixed := `{"menu":[{"id":"m1","table":[{"f_name":"name","f_header":"Tên SP","f_header_en":"Product Name","f_header_vi":"Tên SP","f_types":"ed"}]}]}`
+	req := &CodeStreamRequest{
+		RequestID: "job_incr", ContextType: "menu_json", ResponseMode: "edit",
+		CurrentCode: trunc, FullCurrentCode: base,
+	}
+	complete := CodeStreamCompletion(req, fixed, trunc, "local_provider", 100)
+	gate, _ := complete["finalOutputGate"].(map[string]any)
+	if gate == nil || gate["reasonCode"] == "menu_editor_json_truncated" {
+		t.Fatalf("expected completion without truncation gate: %+v", complete)
+	}
+	if complete["menuEditorApplyReady"] != true {
+		t.Fatalf("expected apply ready when result fixes menu: %+v", complete)
+	}
+}
+
+func TestCodeStreamCompletionRejectsDemoMenuOnLargeBase(t *testing.T) {
+	base := `{"menu":[{"id":"sales","label":"Sales","children":[{"id":"child1","label":"C1"},{"id":"child2","label":"C2"}]}]}`
+	req := &CodeStreamRequest{
+		RequestID: "job_demo", ContextType: "menu_json", ResponseMode: "edit",
+		CurrentCode: base, FullCurrentCode: base,
+	}
+	demo := `{"menu":[{"id":"root","label":"Danh mục","children":[{"id":"category1","label":"Danh mục 1","children":[{"id":"product1","label":"Sản phẩm 1"}]}]}]}`
+	complete := CodeStreamCompletion(req, demo, req.FullCurrentCode, "local_provider", 100)
+	gate, _ := complete["finalOutputGate"].(map[string]any)
+	if gate == nil || gate["passed"] != false {
+		t.Fatalf("expected gate rejection: %+v", complete)
 	}
 }

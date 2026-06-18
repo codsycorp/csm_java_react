@@ -1,8 +1,8 @@
 {
   "mysql": {
-    "host": "phanmemmottrieu.net",
+    "host": "csmbridge.net",
     "port": 3306,
-    "user": "phanmemleanh",
+    "user": "root",
     "password": "BbAa@7975",
     "database": "anhld_congtai2",
     "charset": "utf8mb4",
@@ -10,20 +10,20 @@
     "force_ipv4": true
   },
   "api": {
-    "base_url": "https://api.phanmemmottrieu.net",
+    "base_url": "https://api.csmbridge.net",
     "bulk_update_path": "/bulk-update-table-data",
     "login_path": "/login",
     "token": "",
     "csm_token": "",
     "login": {
-      "username": "",
-      "password": ""
+      "username": "hongha",
+      "password": "0907455288"
     }
   },
   "global": {
     "app_id": "banhang",
-    "transport": "rocksdb",
-    "data_dir": "./csm_datas",
+    "transport": "pebble",
+    "data_dir": "",
     "default_command": "create",
     "batch_size": 300,
     "continue_on_error": false,

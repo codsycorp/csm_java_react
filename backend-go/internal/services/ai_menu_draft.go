@@ -254,7 +254,11 @@ func countMenuNodesRecursive(nodes []any) int {
 		if !ok {
 			continue
 		}
-		if id, _ := m["id"].(string); strings.TrimSpace(id) != "" {
+		if menuNodeIdentifier(m) != "" {
+			n++
+		} else if _, hasType := m["type_form"]; hasType {
+			n++
+		} else if tn := strings.TrimSpace(stringFromAny(m["table_name"])); tn != "" {
 			n++
 		}
 		if children, ok := m["children"].([]any); ok {
@@ -270,7 +274,35 @@ func IsEffectivelyEmptyMenuEditor(editor string) bool {
 	if s == "" || s == `{"menu":[]}` || s == `{"menu": []}` {
 		return true
 	}
+	if IsMenuPatchEnvelopePayload(s) {
+		return true
+	}
 	return CountMenuNodesFromDraft(s) <= 0
+}
+
+// IsMenuPatchEnvelopePayload detects AI patch contract JSON (not a full menu draft).
+func IsMenuPatchEnvelopePayload(raw string) bool {
+	raw = strings.TrimSpace(cleanMarkdownFromJSON(raw))
+	if raw == "" || !strings.Contains(raw, `"patches"`) {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return false
+	}
+	if _, ok := payload["patches"]; ok && CountMenuNodesFromDraft(raw) <= 0 {
+		return true
+	}
+	return false
+}
+
+// IsPublishableMenuDraft reports whether payload is safe to apply as editor full menu JSON.
+func IsPublishableMenuDraft(payload string) bool {
+	payload = strings.TrimSpace(payload)
+	if payload == "" || IsMenuPatchEnvelopePayload(payload) {
+		return false
+	}
+	return CountMenuNodesFromDraft(payload) > 0
 }
 
 // NormalizeMenuToArray extracts bare menu array JSON from various shapes.

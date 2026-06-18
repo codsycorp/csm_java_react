@@ -2507,11 +2507,19 @@ function inferOutgoingCapMode(message: string, responseMode?: ResponseMode): Res
 }
 
 /** Cap editor payload for 8GB server — analyze sends less code to avoid HTTP_0 / OOM. */
-function capOutgoingEditorCode(code: string, message?: string, responseMode?: ResponseMode): string {
+function capOutgoingEditorCode(
+	code: string,
+	message?: string,
+	responseMode?: ResponseMode,
+	contextType?: string,
+): string {
 	const capMode = inferOutgoingCapMode(String(message || ""), responseMode);
 	const raw = String(code || "");
 	if (!raw) return raw;
-	const max = capMode === "analyze" ? 12_000 : 48_000;
+	const ctx = String(contextType || "").trim().toLowerCase();
+	const max = capMode === "analyze"
+		? 12_000
+		: (ctx === "menu_json" ? 200_000 : 48_000);
 	if (raw.length <= max) return raw;
 	const head = Math.floor(max * 0.45);
 	const tail = max - head - 64;
@@ -2525,19 +2533,23 @@ function resolveOutgoingEditorSnapshot(
 	metadata: Record<string, unknown>,
 	responseMode?: ResponseMode,
 	message?: string,
+	contextType?: string,
 ): {
 	code: string
+	fullCode: string
 	cursorLine?: number
 	selectionFromLine?: number
 	selectionToLine?: number
 } {
-	const code = capOutgoingEditorCode(String(liveCode || currentCode || ""), message, responseMode);
+	const fullCode = String(liveCode || currentCode || "");
+	const code = capOutgoingEditorCode(fullCode, message, responseMode, contextType);
 	const cursorLine = Math.floor(Number(metadata.cursorLine ?? 0));
 	const selectionFromLine = Math.floor(Number(metadata.selectionFromLine ?? metadata.cursorLine ?? 0));
 	const selectionToLine = Math.floor(Number(metadata.selectionToLine ?? selectionFromLine ?? 0));
 	const hasSelection = Boolean(metadata.hasSelection) && selectionToLine > selectionFromLine;
 	return {
 		code,
+		fullCode,
 		...(cursorLine > 0 ? { cursorLine } : {}),
 		...(hasSelection && selectionFromLine > 0 ? { selectionFromLine, selectionToLine } : {}),
 	};
@@ -3798,6 +3810,18 @@ export default function AiAssistantChat({
 					"Local provider không tạo được patch hợp lệ trên file lớn. Hãy thu hẹp vùng sửa hoặc mô tả dòng/hàm cụ thể (vd. webview close, process kill, fnResetIP).",
 					"The local provider could not produce a valid patch on this large file. Narrow the edit scope or specify exact lines/functions (e.g. webview close, process kill, fnResetIP).",
 					"本地 provider 无法在此大文件上生成有效补丁。请缩小修改范围或指定具体行/函数（例如 webview close、process kill、fnResetIP）。",
+				);
+			case "menu_editor_json_truncated":
+				return uiText(
+					"Menu JSON trong editor bị cắt hoặc không hợp lệ. Hãy Undo về bản menu đầy đủ (không có dòng /* ... truncated ... */) rồi gửi lại.",
+					"Menu JSON in the editor is truncated or invalid. Undo to a full menu (without /* ... truncated ... */ markers) and resend.",
+					"编辑器中的菜单 JSON 被截断或无效。请撤销到完整菜单（不含 /* ... truncated ... */）后重试。",
+				);
+			case "menu_edit_hallucinated_draft_rejected":
+				return uiText(
+					"Model trả menu mẫu thay vì patch — đã chặn apply. Hãy mô tả cụ thể cột f_header / f_types=co cần sửa.",
+					"Model returned a sample menu instead of patches — apply blocked. Describe the f_header / f_types=co columns to fix.",
+					"模型返回了示例菜单而非补丁 — 已阻止应用。请具体说明要修复的 f_header / f_types=co 列。",
 				);
 			case "edit_apply_failed":
 				return uiText(
@@ -6096,12 +6120,14 @@ export default function AiAssistantChat({
 				requestEditorMetadata,
 				inferredPreviewMode,
 				msg,
+				contextType,
 			);
 			const res = await request.post("ai-orchestration-preview", {
 				json: {
 					appId,
 					message: msg,
 					currentCode: outgoingSnapshot.code,
+					fullCurrentCode: outgoingSnapshot.fullCode || outgoingSnapshot.code,
 					language,
 					contextType,
 					pName: targetPName,
@@ -6337,9 +6363,9 @@ export default function AiAssistantChat({
 				requestEditorMetadata,
 				requestedResponseMode,
 				cleanedMessage || normalizedText,
+				contextType,
 			);
-			liveCodeRef.current = outgoingSnapshot.code;
-			editStreamStartCodeRef.current = outgoingSnapshot.code;
+			editStreamStartCodeRef.current = outgoingSnapshot.fullCode || outgoingSnapshot.code;
 			analyzeHeuristicPrimaryStreamRef.current = false;
 			requestStartedAtRef.current = Date.now();
 			lastProgressEventAtRef.current = requestStartedAtRef.current;
@@ -6374,6 +6400,7 @@ export default function AiAssistantChat({
 						taskType,
 						...(requestedResponseMode ? { responseMode: requestedResponseMode } : {}),
 						currentCode: outgoingSnapshot.code,
+						fullCurrentCode: outgoingSnapshot.fullCode || outgoingSnapshot.code,
 						language,
 						contextType,
 						pName: targetPName,

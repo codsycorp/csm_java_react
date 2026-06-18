@@ -9,6 +9,7 @@ import (
 )
 
 func TestIsAvailableRequiresNativeBackend(t *testing.T) {
+	t.Setenv("AI_LOCAL_LLAMA_ISOLATED", "false")
 	modelFile := filepath.Join(t.TempDir(), "model.gguf")
 	if err := os.WriteFile(modelFile, []byte("fake"), 0o644); err != nil {
 		t.Fatal(err)

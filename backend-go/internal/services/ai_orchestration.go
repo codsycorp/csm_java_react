@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"strings"
 
 	"csm_server/backend-go/internal/config"
@@ -40,6 +41,12 @@ func BuildOrchestrationSnapshot(cfg config.AppConfig, req *CodeStreamRequest, in
 
 	tier := resolveRoutingTier(req, intent)
 	steps := buildPlannerSteps(req, intent)
+	if incrementalPlanEnabled() {
+		execPlan := GenerateExecutionPlan(req, intent.ResponseMode, learningBlock+comprehendBlock+rag.Block)
+		if len(execPlan.Steps) > 0 {
+			steps = planStepLabels(execPlan.Steps)
+		}
+	}
 
 	var compressed strings.Builder
 	if comprehendBlock != "" {
@@ -307,9 +314,9 @@ type RunPhase1PipelineContext struct {
 }
 
 // PreparePhase1Pipeline runs intent + comprehend + tenant RAG + workspace + orchestration before LLM call.
-func PreparePhase1Pipeline(cfg config.AppConfig, rm *data.RecordManager, req *CodeStreamRequest, input PipelineInput) RunPhase1PipelineContext {
-	intent := ClassifyIntentHeuristic(req)
-	responseMode := ReconcileResponseModeWithIntent(intent, ResolveResponseMode(req))
+func PreparePhase1Pipeline(cfg config.AppConfig, rm *data.RecordManager, llama *LlamaService, req *CodeStreamRequest, input PipelineInput) RunPhase1PipelineContext {
+	intent := ClassifyIntent(context.Background(), llama, req)
+	responseMode := ResolvePipelineResponseMode(req, intent)
 	req.ResponseMode = responseMode
 
 	if IsLineItemsPdfImport(req) {
@@ -320,7 +327,7 @@ func PreparePhase1Pipeline(cfg config.AppConfig, rm *data.RecordManager, req *Co
 	}
 
 	spec := ComprehendBusinessHeuristic(req)
-	learningBlock := BuildLearningContextBlock(cfg, req.AppID, req.Message, req.ContextType, 8_000)
+	learningBlock := BuildLearningContextBlock(cfg, rm, req.AppID, req.Message, req.ContextType, 8_000)
 	comprehendBlock := BuildComprehendPromptBlock(spec)
 	multimodal := ScanAttachments(input.Attachments, req.ContextType)
 	ingestAttachmentContext(rm, req.AppID, multimodal)
@@ -398,7 +405,7 @@ func Phase1SSEEvents(req *CodeStreamRequest, ctx RunPhase1PipelineContext) []map
 	events = append(events, AgenticPlanSSE(req, ctx.Orchestration))
 	events = append(events, AgenticPlanSchemaSSE(req, ctx.Orchestration))
 	events = append(events, ScopeReasoningSSE(req, ctx.Orchestration, ctx.ResponseMode, ctx.Multimodal.ScopeMask))
-	events = append(events, EmitAgenticStepLifecycle(req, ctx.Orchestration.PlanSteps, 4)...)
+	// Real agentic_step lifecycle is emitted during incremental plan-execute (not fake instant done).
 	events = append(events, ContextCompressionSSE(req, ctx.Orchestration))
 	return events
 }

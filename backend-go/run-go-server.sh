@@ -102,21 +102,27 @@ resolve_model_path "${AI_LOCAL_LLAMA_MODEL_PATH:-}"
 if [ "$(uname -s)" = "Darwin" ]; then
     export AI_LOCAL_LLAMA_GPU_LAYERS="${AI_LOCAL_LLAMA_GPU_LAYERS:-0}"
     export GGML_METAL="${GGML_METAL:-0}"
-    export AI_LOCAL_LLAMA_BATCH_SIZE="${AI_LOCAL_LLAMA_BATCH_SIZE:-512}"
-    export AI_LOCAL_LLAMA_UBATCH_SIZE="${AI_LOCAL_LLAMA_UBATCH_SIZE:-64}"
-    if [ "${AI_LOCAL_PROMPT_BUDGET_DISABLED:-}" = "true" ] || [ "${AI_LOCAL_PROMPT_BUDGET_DISABLED:-}" = "1" ]; then
-        config_log "AI max mode: prompt/output clamp tier tắt (AI_LOCAL_PROMPT_BUDGET_DISABLED)"
+    export AI_LOCAL_LLAMA_ISOLATED="${AI_LOCAL_LLAMA_ISOLATED:-true}"
+    export AI_LOCAL_RUNTIME_AUTO_TUNE="${AI_LOCAL_RUNTIME_AUTO_TUNE:-true}"
+    if [ "${AI_LOCAL_RUNTIME_AUTO_TUNE}" = "true" ] || [ "${AI_LOCAL_RUNTIME_AUTO_TUNE}" = "1" ]; then
+        config_log "AI runtime auto-tune: Go server tự chỉnh ctx/batch theo RAM (isolated worker mặc định bật)"
     else
-        export AI_LOCAL_LLAMA_CONTEXT_WINDOW="${AI_LOCAL_LLAMA_CONTEXT_WINDOW:-4096}"
-        if [ "${AI_LOCAL_LLAMA_CONTEXT_WINDOW}" -gt 4096 ] 2>/dev/null; then
-            AI_LOCAL_LLAMA_CONTEXT_WINDOW=4096
-            export AI_LOCAL_LLAMA_CONTEXT_WINDOW
-        fi
-        export AI_LOCAL_LLAMA_MAX_PROMPT_CHARS="${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS:-32000}"
-        if [ "${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS}" -gt 32000 ] 2>/dev/null; then
-            config_log "WARN: clamp AI_LOCAL_LLAMA_MAX_PROMPT_CHARS ${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS} → 32000"
-            AI_LOCAL_LLAMA_MAX_PROMPT_CHARS=32000
-            export AI_LOCAL_LLAMA_MAX_PROMPT_CHARS
+        export AI_LOCAL_LLAMA_BATCH_SIZE="${AI_LOCAL_LLAMA_BATCH_SIZE:-512}"
+        export AI_LOCAL_LLAMA_UBATCH_SIZE="${AI_LOCAL_LLAMA_UBATCH_SIZE:-64}"
+        if [ "${AI_LOCAL_PROMPT_BUDGET_DISABLED:-}" = "true" ] || [ "${AI_LOCAL_PROMPT_BUDGET_DISABLED:-}" = "1" ]; then
+            config_log "AI max mode: prompt/output clamp tier tắt (AI_LOCAL_PROMPT_BUDGET_DISABLED)"
+        else
+            export AI_LOCAL_LLAMA_CONTEXT_WINDOW="${AI_LOCAL_LLAMA_CONTEXT_WINDOW:-4096}"
+            if [ "${AI_LOCAL_LLAMA_CONTEXT_WINDOW}" -gt 4096 ] 2>/dev/null; then
+                AI_LOCAL_LLAMA_CONTEXT_WINDOW=4096
+                export AI_LOCAL_LLAMA_CONTEXT_WINDOW
+            fi
+            export AI_LOCAL_LLAMA_MAX_PROMPT_CHARS="${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS:-32000}"
+            if [ "${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS}" -gt 32000 ] 2>/dev/null; then
+                config_log "WARN: clamp AI_LOCAL_LLAMA_MAX_PROMPT_CHARS ${AI_LOCAL_LLAMA_MAX_PROMPT_CHARS} → 32000"
+                AI_LOCAL_LLAMA_MAX_PROMPT_CHARS=32000
+                export AI_LOCAL_LLAMA_MAX_PROMPT_CHARS
+            fi
         fi
     fi
     export AI_SEO_ARTICLE_MAX_TOKENS="${AI_SEO_ARTICLE_MAX_TOKENS:-1536}"
@@ -150,7 +156,7 @@ config_log "Profile ${PROFILE}"
 config_log "Pebble root ${CSM_PEBBLE_ROOT}/{app_id}/{table_name}/ (pure Go — no RocksDB/CGO)"
 config_log "Data dir ${APP_DATA_DIR}"
 config_log "AI model ${AI_LOCAL_LLAMA_MODEL_PATH:-<unset>}"
-config_log "AI ctx=${AI_LOCAL_LLAMA_CONTEXT_WINDOW:-?} batch=${AI_LOCAL_LLAMA_BATCH_SIZE:-?} seoMaxTok=${AI_SEO_ARTICLE_MAX_TOKENS:-?}"
+config_log "AI ctx=${AI_LOCAL_LLAMA_CONTEXT_WINDOW:-auto} batch=${AI_LOCAL_LLAMA_BATCH_SIZE:-auto} isolated=${AI_LOCAL_LLAMA_ISOLATED:-true} autoTune=${AI_LOCAL_RUNTIME_AUTO_TUNE:-true}"
 config_log "Using go: $(command -v go) ($(go version 2>/dev/null || echo unknown))"
 
 # Local AI requires CGO + -tags llamacpp (in-process llama.cpp). Plain `go run` → LOCAL_PROVIDER_UNAVAILABLE.

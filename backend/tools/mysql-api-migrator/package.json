@@ -4,7 +4,10 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "migrate": "node migrate.js --config ./config.json"
+    "migrate": "node migrate.js --config ./config.json",
+    "check-mysql": "node migrate.js --config ./config.json --check-mysql",
+    "dry-run": "node migrate.js --config ./config.json --dry-run",
+    "sync-pk": "node migrate.js --config ./config.json --sync-pk-fields"
   },
   "dependencies": {
     "mysql2": "^3.11.3",

@@ -37,20 +37,98 @@ func localRuntimeTier() string {
 	return tier
 }
 
-// IsConstrained8GbTier mirrors Java balanced-8gb / ctx<=8192 production profile.
+// IsConstrained8GbTier mirrors Java balanced-8gb production VPS profile.
+// Dev machines (M1 16GB, local-strong) keep full menu editor slots even with ctx=8192.
 func IsConstrained8GbTier(cfg config.AppConfig) bool {
 	if IsPromptBudgetDisabled() {
 		return false
 	}
 	tier := localRuntimeTier()
-	if strings.Contains(tier, "8gb") || tier == "balanced" || tier == "local-8gb" {
+	profile := strings.ToLower(strings.TrimSpace(os.Getenv("CSM_LOCAL_PROFILE")))
+	switch tier {
+	case "max", "unlimited", "strong", "local-strong":
+		return false
+	}
+	if isDevStrongLocalProfile(tier, profile) {
+		return false
+	}
+	if strings.Contains(tier, "8gb") || tier == "local-8gb" {
 		return true
 	}
-	return cfg.EffectiveLlamaContextWindow() <= 8192
+	if tier == "balanced" {
+		return true
+	}
+	if tier == "" && cfg.EffectiveLlamaContextWindow() <= 8192 {
+		return true
+	}
+	return false
+}
+
+func isDevStrongLocalProfile(tier, profile string) bool {
+	if profile == "" && tier == "" {
+		return false
+	}
+	if strings.Contains(profile, "strong") || strings.Contains(profile, "m1") || strings.Contains(profile, "16gb") {
+		if tier == "local-8gb" || strings.Contains(tier, "8gb") {
+			return false
+		}
+		return true
+	}
+	if tier == "m1-16gb" || strings.Contains(tier, "m1") {
+		return true
+	}
+	return false
+}
+
+// prefillCappedByBatch is true when go-nativeml must fit the whole prompt in one llama_decode batch.
+func prefillCappedByBatch(cfg config.AppConfig) bool {
+	batch := int(cfg.EffectiveLlamaBatchSize())
+	ctx := int(cfg.EffectiveLlamaContextWindow())
+	if batch <= 0 {
+		return true
+	}
+	return batch < ctx
+}
+
+// batchPromptCharCap is the hard char ceiling for one llama prefill when batch < context window.
+func batchPromptCharCap(cfg config.AppConfig) int {
+	if !prefillCappedByBatch(cfg) {
+		return 0
+	}
+	batch := int(cfg.EffectiveLlamaBatchSize())
+	if batch <= 0 {
+		batch = 512
+	}
+	chars := batch * 3
+	if chars < 1024 {
+		return 1024
+	}
+	return chars
+}
+
+// maxPrefillTokenBudget caps tokens per prefill when batch limits a single decode step.
+func maxPrefillTokenBudget(cfg config.AppConfig) int {
+	ctx := int(cfg.EffectiveLlamaContextWindow())
+	out := int(cfg.EffectiveLlamaMaxTokens())
+	margin := 512
+	if ctx <= 8192 {
+		margin = 768
+	}
+	maxTokens := ctx - out - margin
+	if maxTokens < 512 {
+		maxTokens = 512
+	}
+	if prefillCappedByBatch(cfg) {
+		batch := int(cfg.EffectiveLlamaBatchSize())
+		if batch > 0 && maxTokens > batch {
+			maxTokens = batch
+		}
+	}
+	return maxTokens
 }
 
 // MaxSafePromptChars estimates char budget from context window minus output reserve.
-// Also capped by n_batch: go-nativeml/llama.cpp aborts (SIGABRT) if a single prefill step exceeds batch.
+// When batch == context (auto-tune on 16GB+), full context window is usable in one prefill.
 func MaxSafePromptChars(cfg config.AppConfig) int {
 	ctx := int(cfg.EffectiveLlamaContextWindow())
 	out := int(cfg.EffectiveLlamaMaxTokens())
@@ -62,19 +140,12 @@ func MaxSafePromptChars(cfg config.AppConfig) int {
 	if tokenBudget < 1024 {
 		tokenBudget = 1024
 	}
-	// ~3 chars/token for code/json (conservative vs 4) to avoid KV overflow on 8GB.
 	chars := tokenBudget * 3
-	if !IsPromptBudgetDisabled() {
-		if chars < 4000 {
-			chars = 4000
-		}
-		batch := int(cfg.EffectiveLlamaBatchSize())
-		if batch > 0 {
-			batchChars := batch * 3
-			if chars > batchChars {
-				chars = batchChars
-			}
-		}
+	if !IsPromptBudgetDisabled() && chars < 4000 {
+		chars = 4000
+	}
+	if batchCap := batchPromptCharCap(cfg); batchCap > 0 && chars > batchCap {
+		chars = batchCap
 	}
 	if chars < 1024 {
 		return 1024
@@ -212,8 +283,8 @@ func effectiveInferenceMaxTokensBase(cfg config.AppConfig, responseMode string) 
 		}
 		return base
 	}
-	// Print triggers / code patches need much more than 768 tok (full HTML return).
-	if mode == "edit" && IsConstrained8GbTier(cfg) {
+	// Code/menu patches need more than default LlamaMaxTokens (often 1024).
+	if mode == "edit" {
 		editMax := codeStreamEditMaxTokens()
 		cap := editMax
 		ctxHalf := cfg.EffectiveLlamaContextWindow() / 2
@@ -279,26 +350,103 @@ func TruncateMiddle(text string, maxChars int) string {
 	return text[:head] + marker + text[len(text)-tail:]
 }
 
+var protectedEditorBlockTags = []struct{ open, close string }{
+	{"[ACTIVE_EDITOR_MENU_JSON]\n", "\n[/ACTIVE_EDITOR_MENU_JSON]"},
+	{"[ACTIVE_EDITOR_CODE]\n", "\n[/ACTIVE_EDITOR_CODE]"},
+	{"[ACTIVE_EDITOR]\n", "\n[/ACTIVE_EDITOR]"},
+}
+
+// TruncateMiddlePreservingEditorBlocks shrinks RAG/context around the editor block first.
+func TruncateMiddlePreservingEditorBlocks(text string, maxChars int) string {
+	if maxChars <= 0 || len(text) <= maxChars {
+		return text
+	}
+	for _, tag := range protectedEditorBlockTags {
+		start := strings.Index(text, tag.open)
+		if start < 0 {
+			continue
+		}
+		endRel := strings.Index(text[start:], tag.close)
+		if endRel < 0 {
+			continue
+		}
+		end := start + endRel + len(tag.close)
+		prefix := text[:start]
+		block := text[start:end]
+		suffix := text[end:]
+		if len(block) > maxChars {
+			innerMax := maxChars - len(tag.open) - len(tag.close)
+			if innerMax > 200 {
+				inner := block[len(tag.open) : len(block)-len(tag.close)]
+				return tag.open + truncateKeepingHead(inner, innerMax) + tag.close
+			}
+			return truncateStr(block, maxChars)
+		}
+		auxMax := maxChars - len(block)
+		prefixMax := auxMax * 55 / 100
+		suffixMax := auxMax - prefixMax
+		if prefixMax < 80 {
+			prefixMax = 80
+			suffixMax = auxMax - prefixMax
+		}
+		if suffixMax < 80 {
+			suffixMax = 80
+			prefixMax = auxMax - suffixMax
+		}
+		return truncateKeepingHead(prefix, prefixMax) + block + truncateKeepingTail(suffix, suffixMax)
+	}
+	return TruncateMiddle(text, maxChars)
+}
+
+func truncateKeepingHead(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max < 60 {
+		return s[:max]
+	}
+	marker := "\n[... truncated ...]\n"
+	return s[:max-len(marker)] + marker
+}
+
+func truncateKeepingTail(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max < 60 {
+		return s[len(s)-max:]
+	}
+	marker := "\n[... truncated ...]\n"
+	return marker + s[len(s)-(max-len(marker)):]
+}
+
 // ClampPromptForLocalProvider applies tier-aware middle truncation before inference.
 func ClampPromptForLocalProvider(cfg config.AppConfig, prompt, contextType, responseMode string) string {
 	cap := EffectiveLocalPromptCap(cfg, contextType, responseMode)
 	if len(prompt) <= cap {
 		return prompt
 	}
-	return TruncateMiddle(prompt, cap)
+	return TruncateMiddlePreservingEditorBlocks(prompt, cap)
 }
 
 // MaxOutgoingEditorChars caps editor code in request/ingest for tier.
 func MaxOutgoingEditorChars(cfg config.AppConfig, contextType, responseMode string) int {
-	if !IsConstrained8GbTier(cfg) {
-		return 500_000
-	}
 	mode := strings.ToLower(strings.TrimSpace(responseMode))
+	ctx := strings.ToLower(strings.TrimSpace(contextType))
+	if !IsConstrained8GbTier(cfg) {
+		if mode == "analyze" {
+			return 48_000
+		}
+		if ctx == "menu_json" {
+			return 200_000
+		}
+		return 120_000
+	}
 	if mode == "analyze" {
 		return 12_000
 	}
-	if strings.ToLower(strings.TrimSpace(contextType)) == "menu_json" {
-		return 80_000
+	if ctx == "menu_json" {
+		return 200_000
 	}
 	return 48_000
 }

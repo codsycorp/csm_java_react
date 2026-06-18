@@ -15,132 +15,102 @@ type LocalIntentClassification struct {
 	Reasoning    string
 }
 
-// ClassifyIntentHeuristic classifies user intent without LLM (Phase 1 fast path).
+// ClassifyIntentHeuristic is a minimal fallback when the local LLM router is unavailable.
+// It does not keyword-match the user message — only editor context + explicit client mode.
 func ClassifyIntentHeuristic(req *CodeStreamRequest) LocalIntentClassification {
-	msg := strings.TrimSpace(req.Message)
-	lower := strings.ToLower(msg)
-	ctx := strings.ToLower(strings.TrimSpace(req.ContextType))
+	return classifyIntentContextFallback(req)
+}
 
-	if msg == "" {
+func classifyIntentContextFallback(req *CodeStreamRequest) LocalIntentClassification {
+	if req == nil || strings.TrimSpace(req.Message) == "" {
 		return unknownIntent("Empty user request")
 	}
-
-	isMenu := ctx == "menu_json"
-	isCode := ctx == "code" || ctx == "frontend_code"
-
-	analyze := hasAnalyzeIntent(lower)
-	edit := hasEditIntent(lower)
-
-	if isMenu {
-		greenfield := IsEffectivelyEmptyMenuEditor(req.CurrentCode)
-		if greenfield && (edit || hasGreenfieldMenuIntent(lower)) {
-			return LocalIntentClassification{
-				Type: "EDIT_MENU", Action: "add", Confidence: 90,
-				NextStep: "load_menu_context", ContextKind: "menu", ResponseMode: "edit",
-				Reasoning: "Menu editor trống và người dùng yêu cầu tạo/thiết kế menu mới.",
-			}
-		}
-		if analyze && !edit {
-			return LocalIntentClassification{
-				Type: "QUESTION", Action: "ask", Confidence: 85,
-				NextStep: "load_menu_context", ContextKind: "menu", ResponseMode: "analyze",
-				Reasoning: "Người dùng muốn phân tích/giải thích menu, không chỉnh sửa cấu trúc.",
-			}
-		}
-		if edit || strings.Contains(strings.ToLower(req.TaskType), "patch") || strings.Contains(strings.ToLower(req.TaskType), "design") {
-			action := "modify"
-			if strings.Contains(lower, "thêm") || strings.Contains(lower, "add") || strings.Contains(lower, "tạo") || strings.Contains(lower, "create") {
-				action = "add"
-			} else if strings.Contains(lower, "xóa") || strings.Contains(lower, "delete") || strings.Contains(lower, "remove") {
-				action = "delete"
-			}
-			return LocalIntentClassification{
-				Type: "EDIT_MENU", Action: action, Confidence: 82,
-				NextStep: "load_menu_context", ContextKind: "menu", ResponseMode: "edit",
-				Reasoning: "Editor menu đang mở và yêu cầu thay đổi cấu trúc menu.",
-			}
-		}
-		if strings.Contains(lower, "?") {
-			return LocalIntentClassification{
-				Type: "QUESTION", Action: "ask", Confidence: 75,
-				NextStep: "load_menu_context", ContextKind: "menu", ResponseMode: "analyze",
-				Reasoning: "Câu hỏi về menu — trả lời phân tích, không auto-apply.",
-			}
-		}
+	if mode := normalizeResponseMode(req.ResponseMode); mode != "" {
+		return intentFromExplicitMode(req, mode)
+	}
+	ctx := strings.ToLower(strings.TrimSpace(req.ContextType))
+	switch ctx {
+	case "menu_json":
 		return LocalIntentClassification{
-			Type: "EDIT_MENU", Action: "modify", Confidence: 70,
+			Type: "EDIT_MENU", Action: "modify", Confidence: 45,
 			NextStep: "load_menu_context", ContextKind: "menu", ResponseMode: "edit",
-			Reasoning: "Ngữ cảnh menu_json mặc định luồng chỉnh sửa menu.",
+			Reasoning: "Fallback (LLM router offline): editor menu_json — mặc định edit.",
 		}
-	}
-
-	if isCode {
-		if analyze && !edit {
-			return LocalIntentClassification{
-				Type: "QUESTION", Action: "ask", Confidence: 85,
-				NextStep: "load_code_context", ContextKind: "code", ResponseMode: "analyze",
-				Reasoning: "Người dùng muốn hiểu/giải thích code, không áp dụng patch.",
-			}
-		}
-		if edit || strings.Contains(strings.ToLower(req.TaskType), "patch") {
-			action := "modify"
-			if strings.Contains(lower, "thêm") || strings.Contains(lower, "add") {
-				action = "add"
-			} else if strings.Contains(lower, "xóa") || strings.Contains(lower, "delete") {
-				action = "delete"
-			}
-			return LocalIntentClassification{
-				Type: "EDIT_CODE", Action: action, Confidence: 82,
-				NextStep: "load_code_context", ContextKind: "code", ResponseMode: "edit",
-				Reasoning: "Editor code đang mở và yêu cầu sửa mã nguồn.",
-			}
-		}
-		if strings.Contains(lower, "?") {
-			return LocalIntentClassification{
-				Type: "QUESTION", Action: "ask", Confidence: 75,
-				NextStep: "load_code_context", ContextKind: "code", ResponseMode: "analyze",
-				Reasoning: "Câu hỏi về code — trả lời phân tích.",
-			}
-		}
+	case "code", "frontend_code":
 		return LocalIntentClassification{
-			Type: "EDIT_CODE", Action: "modify", Confidence: 70,
+			Type: "EDIT_CODE", Action: "modify", Confidence: 45,
 			NextStep: "load_code_context", ContextKind: "code", ResponseMode: "edit",
-			Reasoning: "Ngữ cảnh code editor mặc định luồng chỉnh sửa.",
+			Reasoning: "Fallback (LLM router offline): editor code — mặc định edit.",
 		}
-	}
-
-	if analyze || strings.Contains(lower, "?") {
+	default:
 		return LocalIntentClassification{
-			Type: "QUESTION", Action: "ask", Confidence: 72,
+			Type: "GENERAL", Action: "other", Confidence: 40,
 			NextStep: "answer_direct", ContextKind: "none", ResponseMode: "analyze",
-			Reasoning: "Câu hỏi chung không gắn editor cụ thể.",
+			Reasoning: "Fallback (LLM router offline): không có editor — mặc định analyze.",
 		}
-	}
-	return LocalIntentClassification{
-		Type: "GENERAL", Action: "other", Confidence: 55,
-		NextStep: "unknown", ContextKind: "none", ResponseMode: "analyze",
-		Reasoning: "Yêu cầu chung — trả lời phân tích an toàn.",
 	}
 }
 
-// ReconcileResponseModeWithIntent forces EDIT_* intents to edit mode (Java parity).
+func intentFromExplicitMode(req *CodeStreamRequest, mode string) LocalIntentClassification {
+	ctx := strings.ToLower(strings.TrimSpace(req.ContextType))
+	switch ctx {
+	case "menu_json":
+		return LocalIntentClassification{
+			Type: "EDIT_MENU", Action: "modify", Confidence: 95,
+			NextStep: "load_menu_context", ContextKind: "menu", ResponseMode: mode,
+			Reasoning: "Client chỉ định responseMode=" + mode + " trong editor menu.",
+		}
+	case "code", "frontend_code":
+		return LocalIntentClassification{
+			Type: "EDIT_CODE", Action: "modify", Confidence: 95,
+			NextStep: "load_code_context", ContextKind: "code", ResponseMode: mode,
+			Reasoning: "Client chỉ định responseMode=" + mode + " trong editor code.",
+		}
+	default:
+		typ := "QUESTION"
+		if mode == "edit" {
+			typ = "GENERAL"
+		}
+		return LocalIntentClassification{
+			Type: typ, Action: "other", Confidence: 90,
+			NextStep: "answer_direct", ContextKind: "none", ResponseMode: mode,
+			Reasoning: "Client chỉ định responseMode=" + mode + ".",
+		}
+	}
+}
+
+// ResolvePipelineResponseMode picks the stream mode: client explicit > LLM intent > context default.
+func ResolvePipelineResponseMode(req *CodeStreamRequest, intent LocalIntentClassification) string {
+	if mode := normalizeResponseMode(req.ResponseMode); mode != "" {
+		return mode
+	}
+	if mode := normalizeResponseMode(intent.ResponseMode); mode != "" {
+		return mode
+	}
+	return defaultResponseModeForContext(req.ContextType)
+}
+
+// ReconcileResponseModeWithIntent is kept for callers; delegates to ResolvePipelineResponseMode.
 func ReconcileResponseModeWithIntent(intent LocalIntentClassification, explicitMode string) string {
-	if explicitMode != "" {
-		mode := strings.ToLower(strings.TrimSpace(explicitMode))
-		if mode == "edit" || mode == "analyze" {
-			if intent.Type == "EDIT_MENU" || intent.Type == "EDIT_CODE" {
-				return "edit"
-			}
-			return mode
-		}
+	req := &CodeStreamRequest{ResponseMode: explicitMode}
+	return ResolvePipelineResponseMode(req, intent)
+}
+
+func normalizeResponseMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "edit" || mode == "analyze" {
+		return mode
 	}
-	if intent.ResponseMode == "edit" || intent.ResponseMode == "analyze" {
-		if intent.Type == "EDIT_MENU" || intent.Type == "EDIT_CODE" {
-			return "edit"
-		}
-		return intent.ResponseMode
+	return ""
+}
+
+func defaultResponseModeForContext(contextType string) string {
+	switch strings.ToLower(strings.TrimSpace(contextType)) {
+	case "menu_json", "code", "frontend_code":
+		return "edit"
+	default:
+		return "analyze"
 	}
-	return "edit"
 }
 
 func unknownIntent(reason string) LocalIntentClassification {
@@ -149,47 +119,6 @@ func unknownIntent(reason string) LocalIntentClassification {
 		NextStep: "unknown", ContextKind: "none", ResponseMode: "analyze",
 		Reasoning: reason,
 	}
-}
-
-func hasAnalyzeIntent(lower string) bool {
-	keys := []string{
-		"giải thích", "phan tich", "phân tích", "tại sao", "tai sao", "là gì", "la gi",
-		"explain", "analyze", "analyse", "review", "describe", "what does", "why ",
-		"hiểu", "hieu", "đọc", "doc code", "đánh giá", "danh gia",
-	}
-	for _, k := range keys {
-		if strings.Contains(lower, k) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasEditIntent(lower string) bool {
-	keys := []string{
-		"thêm", "sửa", "sua", "xóa", "xoa", "cập nhật", "cap nhat", "tạo", "tao", "viết", "viet",
-		"chỉnh", "chinh", "fix", "patch", "add ", "modify", "delete", "update", "create", "build", "design",
-		"implement", "refactor", "rename", "insert", "remove", "apply",
-	}
-	for _, k := range keys {
-		if strings.Contains(lower, k) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasGreenfieldMenuIntent(lower string) bool {
-	keys := []string{
-		"tạo menu", "tao menu", "thiết kế menu", "thiet ke menu", "viết menu", "viet menu",
-		"create menu", "build menu", "design menu", "greenfield", "menu mới", "menu moi",
-	}
-	for _, k := range keys {
-		if strings.Contains(lower, k) {
-			return true
-		}
-	}
-	return false
 }
 
 // IntentReasoningSSE builds the intent_reasoning SSE payload.
@@ -216,6 +145,7 @@ func IntentReasoningSSE(req *CodeStreamRequest, intent LocalIntentClassification
 		"intentType":       intent.Type,
 		"intentConfidence": intent.Confidence,
 		"message":          msg,
+		"router":           intentRouterLabel(intent),
 	}
 }
 
@@ -233,5 +163,16 @@ func IntentRoutingSSE(req *CodeStreamRequest, intent LocalIntentClassification, 
 		"intentType":       intent.Type,
 		"intentConfidence": intent.Confidence,
 		"message":          routeMsg,
+		"router":           intentRouterLabel(intent),
 	}
+}
+
+func intentRouterLabel(intent LocalIntentClassification) string {
+	if intent.Confidence >= 60 {
+		return "local_llm"
+	}
+	if intent.Confidence > 0 {
+		return "context_fallback"
+	}
+	return "unknown"
 }

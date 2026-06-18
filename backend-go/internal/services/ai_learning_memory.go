@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"csm_server/backend-go/internal/config"
+	"csm_server/backend-go/internal/data"
 )
 
 const (
@@ -67,12 +68,12 @@ func codeLearningPath(cfg config.AppConfig, appID string) string {
 	return filepath.Join(cfg.AI.ContextDir, "ai_code_learning_"+safeAppIDForLearning(appID)+".jsonl")
 }
 
-// BuildLearningContextBlock retrieves top-K past successful edits (keyword + recency).
-func BuildLearningContextBlock(cfg config.AppConfig, appID, requestText, contextType string, maxChars int) string {
+// buildCodeLearningContextBlock retrieves top-K past successful code edits (keyword + recency).
+func buildCodeLearningContextBlock(cfg config.AppConfig, rm *data.RecordManager, appID, requestText, contextType string, maxChars int) string {
 	if maxChars <= 0 {
 		maxChars = 10_000
 	}
-	entries, err := loadCodeLearningEntries(cfg, appID)
+	entries, err := loadCodeLearningEntries(cfg, rm, appID)
 	if err != nil || len(entries) == 0 {
 		return ""
 	}
@@ -207,7 +208,7 @@ func tokenizeForLearning(s string) []string {
 	return tokens
 }
 
-func loadCodeLearningEntries(cfg config.AppConfig, appID string) ([]CodeLearningEntry, error) {
+func loadCodeLearningEntriesJSONL(cfg config.AppConfig, appID string) ([]CodeLearningEntry, error) {
 	path := codeLearningPath(cfg, appID)
 	f, err := os.Open(path)
 	if err != nil {
@@ -234,8 +235,11 @@ func loadCodeLearningEntries(cfg config.AppConfig, appID string) ([]CodeLearning
 	return entries, sc.Err()
 }
 
-// RecordSuccessfulCodeEdit persists a successful edit to JSONL (dedupe by digest).
-func RecordSuccessfulCodeEdit(cfg config.AppConfig, appID, requestText, summary, contextType, targetFile string, patchOpCount int) error {
+// RecordSuccessfulCodeEdit persists a successful edit (Pebble DB by default, JSONL fallback).
+func RecordSuccessfulCodeEdit(cfg config.AppConfig, rm *data.RecordManager, appID, requestText, summary, contextType, targetFile string, patchOpCount int) error {
+	if !codeLearningEnabled() {
+		return nil
+	}
 	if strings.TrimSpace(appID) == "" || patchOpCount <= 0 {
 		if patchOpCount <= 0 && strings.TrimSpace(summary) == "" {
 			return nil
@@ -250,7 +254,7 @@ func RecordSuccessfulCodeEdit(cfg config.AppConfig, appID, requestText, summary,
 	mu.Lock()
 	defer mu.Unlock()
 
-	entries, err := loadCodeLearningEntries(cfg, appID)
+	entries, err := loadCodeLearningEntries(cfg, rm, appID)
 	if err != nil {
 		return err
 	}
@@ -259,11 +263,7 @@ func RecordSuccessfulCodeEdit(cfg config.AppConfig, appID, requestText, summary,
 			return nil
 		}
 	}
-	entries = append(entries, entry)
-	if len(entries) > codeLearningMaxEntries {
-		entries = entries[len(entries)-codeLearningMaxEntries:]
-	}
-	return rewriteCodeLearningFile(cfg, appID, entries)
+	return persistCodeLearningEntry(cfg, rm, appID, entry)
 }
 
 func buildLearningEntry(requestText, summary, contextType, targetFile string, patchOpCount int) CodeLearningEntry {
@@ -320,18 +320,30 @@ func rewriteCodeLearningFile(cfg config.AppConfig, appID string, entries []CodeL
 }
 
 // RecordCodeEditFromCompletion records learning memory after a successful stream completion.
-func RecordCodeEditFromCompletion(cfg config.AppConfig, req *CodeStreamRequest, completion map[string]any, rawResult string) {
+func RecordCodeEditFromCompletion(cfg config.AppConfig, rm *data.RecordManager, req *CodeStreamRequest, completion map[string]any, rawResult string) {
 	if req == nil {
 		return
 	}
+	menuReady, _ := completion["menuEditorApplyReady"].(bool)
 	confirmed, _ := completion["flowConfirmedByLocal"].(bool)
-	if !confirmed {
+	if !confirmed && !menuReady {
 		return
 	}
+
 	patchCount := intFromAny(completion["patchOpCount"])
 	textCount := intFromAny(completion["textEditsCount"])
 	if patchCount <= 0 {
 		textCount = intFromAny(completion["codeStreamTextEditsEmittedCount"])
+	}
+	if stats, ok := completion["mergeStats"].(map[string]any); ok {
+		edited := intFromAny(stats["edited"])
+		added := intFromAny(stats["added"])
+		if edited+added > patchCount {
+			patchCount = edited + added
+		}
+	}
+	if patchCount <= 0 && textCount <= 0 && menuReady {
+		patchCount = 1
 	}
 	if patchCount <= 0 && textCount <= 0 {
 		return
@@ -339,12 +351,47 @@ func RecordCodeEditFromCompletion(cfg config.AppConfig, req *CodeStreamRequest, 
 	if patchCount <= 0 {
 		patchCount = textCount
 	}
+
+	if isMenuJSONContext(req.ContextType) {
+		menuJSON := strings.TrimSpace(rawResult)
+		if draft := ExtractMenuDraftForCompletion(menuJSON); draft != "" {
+			menuJSON = draft
+		}
+		if menuJSON != "" && IsPublishableMenuDraft(menuJSON) {
+			_ = RecordSuccessfulMenuEdit(cfg, rm, req.AppID, req.Message, menuJSON)
+		}
+		return
+	}
+
+	summary := buildCodeLearningSummary(rawResult, req.ContextType, patchCount)
+	_ = RecordSuccessfulCodeEdit(cfg, rm, req.AppID, req.Message, summary, req.ContextType, req.FlowType, patchCount)
+}
+
+func buildCodeLearningSummary(rawResult, contextType string, patchCount int) string {
 	summary := strings.TrimSpace(rawResult)
 	if len(summary) > 400 {
 		summary = summary[:400] + "…"
 	}
 	if summary == "" {
-		summary = fmt.Sprintf("Successful %s edit with %d ops", req.ContextType, patchCount)
+		summary = fmt.Sprintf("Successful %s edit with %d ops", contextType, patchCount)
 	}
-	_ = RecordSuccessfulCodeEdit(cfg, req.AppID, req.Message, summary, req.ContextType, req.FlowType, patchCount)
+	return summary
+}
+
+// RecordLearningFromFeedback persists user-accepted edit feedback into local memory.
+func RecordLearningFromFeedback(cfg config.AppConfig, rm *data.RecordManager, appID, requestText, summary, contextType, targetFile string, patchOpCount int, menuJSON string) {
+	if isMenuJSONContext(contextType) {
+		if strings.TrimSpace(menuJSON) != "" {
+			_ = RecordSuccessfulMenuEdit(cfg, rm, appID, requestText, menuJSON)
+			return
+		}
+		if strings.TrimSpace(summary) != "" {
+			_ = RecordSuccessfulMenuEdit(cfg, rm, appID, requestText, summary)
+		}
+		return
+	}
+	if patchOpCount <= 0 {
+		patchOpCount = 1
+	}
+	_ = RecordSuccessfulCodeEdit(cfg, rm, appID, requestText, summary, contextType, targetFile, patchOpCount)
 }

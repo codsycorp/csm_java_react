@@ -15,16 +15,16 @@ const (
 )
 
 type LlamaService struct {
-	cfg    config.AppConfig
-	native *llamaNativeBackend
+	cfg     config.AppConfig
+	backend llamaInferenceBackend
 }
 
 func NewLlamaService(cfg config.AppConfig) *LlamaService {
-	native := newLlamaNativeBackend(cfg)
-	svc := &LlamaService{cfg: cfg, native: native}
+	backend := newLlamaInferenceBackend(cfg)
+	svc := &LlamaService{cfg: cfg, backend: backend}
 	switch {
-	case native.ready():
-		log.Printf("LlamaService: native in-process llama.cpp enabled (%s)", cfg.AI.LlamaModelPath)
+	case backend.ready():
+		log.Printf("LlamaService: %s enabled (%s)", backend.providerLabel(), cfg.AI.LlamaModelPath)
 	case cfg.AI.LlamaNativeEnabled && svc.modelExists():
 		log.Printf("LlamaService: model on disk but native unavailable — rebuild with go build -tags llamacpp (%s)", cfg.AI.LlamaModelPath)
 	case cfg.AI.LlamaNativeEnabled && cfg.AI.LlamaModelPath != "":
@@ -38,13 +38,13 @@ func NewLlamaService(cfg config.AppConfig) *LlamaService {
 }
 
 func (l *LlamaService) Shutdown() {
-	if l.native != nil {
-		l.native.shutdown()
+	if l.backend != nil {
+		l.backend.shutdown()
 	}
 }
 
 func (l *LlamaService) UsesNative() bool {
-	return l.native != nil && l.native.ready()
+	return l.backend != nil && l.backend.ready()
 }
 
 func (l *LlamaService) IsAvailable() bool {
@@ -71,7 +71,7 @@ func (l *LlamaService) CompleteWithTokens(ctx context.Context, prompt string, ma
 	if !l.UsesNative() {
 		return "", fmt.Errorf("%s: %s", LocalProviderUnavailableCode, l.statusHint())
 	}
-	text, err := l.native.complete(prompt, maxTokens)
+	text, err := l.backend.complete(prompt, maxTokens)
 	if err != nil {
 		return "", err
 	}
@@ -79,7 +79,7 @@ func (l *LlamaService) CompleteWithTokens(ctx context.Context, prompt string, ma
 }
 
 func (l *LlamaService) IsModelLoaded() bool {
-	return l.native != nil && l.native.isLoaded()
+	return l.backend != nil && l.backend.isLoaded()
 }
 
 func (l *LlamaService) StreamCompletion(ctx context.Context, prompt string, onToken func(string) error) error {
@@ -90,7 +90,7 @@ func (l *LlamaService) StreamCompletionWithTokens(ctx context.Context, prompt st
 	if !l.UsesNative() {
 		return fmt.Errorf("%s: %s", LocalProviderUnavailableCode, l.statusHint())
 	}
-	return l.native.stream(prompt, maxTokens, onToken)
+	return l.backend.stream(prompt, maxTokens, onToken)
 }
 
 func LocalUnavailableMessage() string {
@@ -110,6 +110,7 @@ func (l *LlamaService) StatusSummary() map[string]any {
 		"modelPath":     l.cfg.AI.LlamaModelPath,
 		"nativeEnabled": l.cfg.AI.LlamaNativeEnabled,
 		"nativeReady":   l.UsesNative(),
+		"provider":      providerLabelOrEmpty(l.backend),
 		"available":     l.IsAvailable(),
 		"hint":          l.statusHint(),
 	}
@@ -117,6 +118,9 @@ func (l *LlamaService) StatusSummary() map[string]any {
 
 func (l *LlamaService) statusHint() string {
 	if l.IsAvailable() {
+		if l.backend != nil && l.backend.providerLabel() == "llama.cpp-isolated" {
+			return "Inference: llama.cpp isolated worker (SIGABRT không làm thoát HTTP server)"
+		}
 		return "Inference: llama.cpp native (trong process Go)"
 	}
 	if !l.ModelOnDisk() {
@@ -133,6 +137,13 @@ func StreamingModelLabel(cfg config.AppConfig, llama *LlamaService) string {
 		return "llama.cpp-native"
 	}
 	return "local_provider"
+}
+
+func providerLabelOrEmpty(b llamaInferenceBackend) string {
+	if b == nil {
+		return ""
+	}
+	return b.providerLabel()
 }
 
 func truncate(s string, max int) string {

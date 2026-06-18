@@ -10,6 +10,12 @@ import (
 func CodeStreamCompletion(req *CodeStreamRequest, rawResult, editorBase, modelLabel string, elapsedMs int64) map[string]any {
 	result := CleanLocalModelOutput(rawResult)
 	responseMode := ResolveResponseMode(req)
+	editorBase = strings.TrimSpace(editorBase)
+	if req != nil && req.ContextType == "menu_json" && responseMode == "edit" {
+		if resolved := ResolveMenuEditEditorBase(req); resolved != "" {
+			editorBase = resolved
+		}
+	}
 
 	complete := map[string]any{
 		"stage":         "complete",
@@ -42,30 +48,125 @@ func CodeStreamCompletion(req *CodeStreamRequest, rawResult, editorBase, modelLa
 }
 
 func assembleMenuEditCompletion(complete map[string]any, editorBase, rawResult string) {
-	base := strings.TrimSpace(editorBase)
+	base := CoerceMenuEditorPayload(strings.TrimSpace(editorBase))
+	rawResult = strings.TrimSpace(rawResult)
+	if MenuEditorBaseHealth(base) == "truncated_or_invalid" {
+		if draft := CoerceMenuEditorPayload(rawResult); IsPublishableMenuDraft(draft) && CountMenuNodesFromDraft(draft) > 0 && !IsLikelyHallucinatedGreenfieldMenu(draft) {
+			base = draft
+		} else {
+			complete["fullResponse"] = ""
+			complete["outputShape"] = "menu_json"
+			complete["finalOutputGate"] = map[string]any{
+				"passed": false, "reasonCode": "menu_editor_json_truncated",
+			}
+			return
+		}
+	}
+	// Reject prose synthesis accidentally passed as menu edit output.
+	if strings.HasPrefix(rawResult, "## ") || strings.Contains(rawResult, "## Chi tiết từng bước") {
+		if payload := extractJSONObjectCandidate(rawResult); payload != "" {
+			rawResult = payload
+		} else if merged := pickIncrementalEditPayload([]string{rawResult}); merged != "" {
+			rawResult = merged
+		} else {
+			complete["fullResponse"] = ""
+			complete["outputShape"] = "menu_json"
+			complete["finalOutputGate"] = map[string]any{
+				"passed": false, "reasonCode": "menu_edit_prose_rejected",
+			}
+			return
+		}
+	}
+	if base != "" {
+		aiDraft := ExtractMenuDraftForCompletion(rawResult)
+		isPatch := strings.Contains(rawResult, `"patches"`) || strings.Contains(rawResult, `"textEdits"`)
+		if aiDraft != "" && !isPatch && CountMenuNodesFromDraft(base) > 0 {
+			if IsLikelyHallucinatedGreenfieldMenu(aiDraft) || !menuFullDraftOverlapsBase(base, aiDraft) {
+				complete["fullResponse"] = ""
+				complete["outputShape"] = "menu_json"
+				complete["finalOutputGate"] = map[string]any{
+					"passed": false, "reasonCode": "menu_edit_hallucinated_draft_rejected",
+				}
+				return
+			}
+		}
+		if merged := MergeIncrementalMenuEdit(base, rawResult); merged != "" {
+			rawResult = merged
+		}
+	}
+
 	preview := BuildMenuCompletionMergePreview(base, rawResult)
 	payload := strings.TrimSpace(preview.MergedResponse)
-	if payload == "" {
+	if payload == "" && CountMenuNodesFromDraft(base) <= 0 {
 		payload = ExtractMenuDraftForCompletion(rawResult)
 	}
-	if payload == "" {
+	if payload == "" || IsMenuPatchEnvelopePayload(payload) {
+		if base != "" && IsPublishableMenuDraft(base) {
+			complete["fullResponse"] = ""
+			complete["outputShape"] = "menu_json"
+			complete["finalOutputGate"] = map[string]any{
+				"passed": false, "reasonCode": "menu_patch_merge_failed_keep_base",
+			}
+			return
+		}
 		payload = strings.TrimSpace(rawResult)
+	}
+
+	if !IsPublishableMenuDraft(payload) {
+		complete["fullResponse"] = ""
+		complete["outputShape"] = "menu_json"
+		complete["finalOutputGate"] = map[string]any{
+			"passed": false, "reasonCode": "menu_edit_not_publishable_draft",
+		}
+		return
+	}
+
+	baseNodes := CountMenuNodesFromDraft(base)
+	if baseNodes > 0 {
+		if !MenuEditPassesNodeRetentionGuard(base, payload) {
+			complete["fullResponse"] = ""
+			complete["outputShape"] = "menu_json"
+			complete["finalOutputGate"] = map[string]any{
+				"passed": false, "reasonCode": "menu_edit_node_retention_failed",
+			}
+			return
+		}
+		if IsLikelyHallucinatedGreenfieldMenu(payload) && !menuFullDraftOverlapsBase(base, payload) {
+			complete["fullResponse"] = ""
+			complete["outputShape"] = "menu_json"
+			complete["finalOutputGate"] = map[string]any{
+				"passed": false, "reasonCode": "menu_edit_hallucinated_draft_rejected",
+			}
+			return
+		}
+		if preview.Added > 0 && preview.Edited == 0 && preview.Deleted == 0 {
+			complete["fullResponse"] = ""
+			complete["outputShape"] = "menu_json"
+			complete["finalOutputGate"] = map[string]any{
+				"passed": false, "reasonCode": "menu_edit_unrelated_nodes_rejected",
+			}
+			return
+		}
+	} else if IsLikelyHallucinatedGreenfieldMenu(payload) {
+		complete["fullResponse"] = ""
+		complete["outputShape"] = "menu_json"
+		complete["finalOutputGate"] = map[string]any{
+			"passed": false, "reasonCode": "menu_edit_hallucinated_draft_rejected",
+		}
+		return
 	}
 
 	// Sanitize with 80% node retention guard.
 	if sanitized := NormalizeMenuDraftJson(payload); sanitized != "" {
-		baseNodes := CountMenuNodesFromDraft(base)
 		sanitizedNodes := CountMenuNodesFromDraft(sanitized)
 		if baseNodes <= 0 || sanitizedNodes >= (baseNodes*80+99)/100 {
 			payload = sanitized
 		}
 	}
 
-	baseNodes := CountMenuNodesFromDraft(base)
 	mergedNodes := CountMenuNodesFromDraft(payload)
-	menuEditorApplyReady := mergedNodes > baseNodes || baseNodes <= 0 ||
-		preview.Edited > 0 || preview.Added > 0 || len(preview.PatchOps) > 0 ||
-		(payload != "" && base != "" && payload != base)
+	menuEditorApplyReady := (preview.Edited > 0 || preview.Added > 0 || len(preview.PatchOps) > 0 ||
+		(mergedNodes > baseNodes && baseNodes > 0)) && IsPublishableMenuDraft(payload)
 
 	mergeStats := map[string]any{
 		"added": preview.Added, "edited": preview.Edited, "deleted": preview.Deleted,

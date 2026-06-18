@@ -90,7 +90,7 @@ func LoadFromEnv() AppConfig {
 	searchDBPath := envPath("CSM_SEARCH_DB_PATH", filepath.Join(nativeDir, "search", "vectors.db"))
 	vectorStoreDir := envPath("CSM_VECTOR_DIR", filepath.Join(nativeDir, "vector", "chromem"))
 	rocksdbRoot := envPath("ROCKSDB_ROOT_DIR", filepath.Join(dataDir, "database"))
-	return AppConfig{
+	cfg := AppConfig{
 		Server: ServerConfig{
 			Host: envString("SERVER_HOST", "0.0.0.0"),
 			Port: envInt("SERVER_PORT", 9999),
@@ -162,6 +162,8 @@ func LoadFromEnv() AppConfig {
 		PebbleIndexMemTableMB: envInt("CSM_PEBBLE_INDEX_MEMTABLE_MB", defaultPebbleIndexMemTableMB()),
 		VectorRecordsEnabled: envFlagTrue("CSM_VECTOR_RECORDS_ENABLED", defaultVectorRecordsEnabled()),
 	}
+	ApplyAIRuntimeAutoTune(&cfg)
+	return cfg
 }
 
 func defaultEqIndexMode() string {
@@ -216,7 +218,7 @@ func (c AppConfig) EffectiveLlamaContextWindow() uint32 {
 	return 8192
 }
 
-// EffectiveLlamaBatchSize — prefill chunk size (wrapper patches chunked decode when prompt > batch).
+// EffectiveLlamaBatchSize — max tokens per llama prefill step (go-nativeml sends full prompt in one batch).
 func (c AppConfig) EffectiveLlamaBatchSize() uint32 {
 	batch := c.AI.LlamaBatchSize
 	if batch == 0 {

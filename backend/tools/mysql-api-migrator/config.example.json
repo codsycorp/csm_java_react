@@ -4,7 +4,7 @@
     "port": 3306,
     "user": "root",
     "password": "your_password",
-    "database": "old_system_db",
+    "database": "old_php_app_db",
     "charset": "utf8mb4",
     "connect_timeout_ms": 15000,
     "timezone": "local",
@@ -12,6 +12,8 @@
     "date_strings": false,
     "support_big_numbers": true,
     "big_number_strings": true,
+    "connect_without_database_first": false,
+    "force_ipv4": true,
     "ssl": {
       "rejectUnauthorized": false,
       "ca_file": "",
@@ -20,46 +22,54 @@
     }
   },
   "api": {
-    "base_url": "http://127.0.0.1:8080/api",
+    "base_url": "http://127.0.0.1:9999/api",
     "bulk_update_path": "/bulk-update-table-data",
+    "get_table_data_path": "/get-table-data",
+    "reindex_path": "/update-table-data-index",
     "login_path": "/login",
     "token": "",
     "csm_token": "",
     "login": {
-      "username": "",
-      "password": ""
+      "username": "admin@example.com",
+      "password": "your_password"
     }
   },
   "global": {
-    "app_id": "vemaybay",
-    "transport": "api",
-    "data_dir": "/path/to/csm_datas",
+    "app_id": "your_app_id",
+    "transport": "pebble",
+    "data_dir": "../../csm_datas",
+    "native_data_dir": "",
+    "pebble_root": "",
+    "rocksdb_root": "",
+    "go_migrate_dir": "../../../backend-go",
+    "menu_config_path": "",
     "default_command": "create",
     "batch_size": 300,
+    "detail_batch_size": 1000,
     "continue_on_error": false,
     "stop_on_failed_batch": true,
     "lowercase_keys": false,
     "strict_pk_validation": true,
     "resolve_storage_key_by_id": false,
-    "id_scan_max_records": 500000
+    "id_scan_max_records": 500000,
+    "embed_master_detail_from_menu": true,
+    "reindex_after_migrate": true,
+    "migrate_rocksdb_to_pebble_after": false,
+    "reset_rocksdb_before_migrate": false,
+    "reset_index_rocksdb_before_migrate": false
   },
   "tables": [
     {
-      "source_table": "dsm_hangve",
-      "target_obj_name": "dsm_hangve",
+      "source_table": "example_table",
+      "target_obj_name": "example_table",
       "pk_fields": ["id"],
       "where": "1=1",
       "order_by": "id",
       "command": "create",
-      "column_map": {
-        "ID": "id",
-        "TEN_HANG": "ten_hang",
-        "KY_HIEU": "ky_hieu",
-        "GHI_CHU": "ghi_chu"
-      },
-      "static_fields": {
-        "app_id": "vemaybay"
-      }
+      "column_map": {},
+      "static_fields": {},
+      "include_fields": [],
+      "exclude_fields": []
     }
   ]
 }

@@ -14,12 +14,18 @@ import (
 
 	"csm_server/backend-go/internal/api"
 	"csm_server/backend-go/internal/config"
+	"csm_server/backend-go/internal/services"
 	"csm_server/backend-go/internal/state"
 )
 
 func main() {
 	config.LoadEnvFiles()
 	cfg := config.LoadFromEnv()
+
+	if services.IsLlamaWorkerMode() {
+		services.RunLlamaWorker(cfg)
+		return
+	}
 
 	st, err := state.NewAppState(cfg)
 	if err != nil {

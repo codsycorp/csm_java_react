@@ -170,7 +170,7 @@ func (h *AiHandler) handleOrchestrationPreview(params map[string]any) map[string
 	if req.TaskType == "" {
 		req.TaskType = "edit"
 	}
-	ctx := services.PreparePhase1Pipeline(h.cfg, h.rm, req, services.PipelineInput{})
+	ctx := services.PreparePhase1Pipeline(h.cfg, h.rm, h.llama, req, services.PipelineInput{})
 	return services.BuildOrchestrationPreviewResult(appID, req, ctx.Orchestration)
 }
 
@@ -193,14 +193,16 @@ func (h *AiHandler) recordAiFeedback(params map[string]any, feedbackType string)
 		appID = "csm"
 	}
 	if accepted {
-		_ = services.RecordSuccessfulCodeEdit(
+		services.RecordLearningFromFeedback(
 			h.cfg,
+			h.rm,
 			appID,
 			paramStr(params, "requestText"),
 			paramStr(params, "summary"),
 			paramStr(params, "contextType"),
 			paramStr(params, "targetFile"),
 			int(paramInt(params, "patchOpCount", 1)),
+			paramStr(params, "menuJson"),
 		)
 	}
 	return map[string]any{"recorded": true, "type": feedbackType, "accepted": accepted}
@@ -208,7 +210,7 @@ func (h *AiHandler) recordAiFeedback(params map[string]any, feedbackType string)
 
 func (h *AiHandler) handleMenuEditorApply(params map[string]any) map[string]any {
 	requestID := paramStr(params, "requestId")
-	menuJSON, mergeStats, ok := services.TakeMenuEditorApplyPayload(requestID)
+	menuJSON, mergeStats, ok := services.GetMenuEditorApplyPayload(requestID)
 	out := map[string]any{"success": ok}
 	if !ok {
 		out["message"] = "menu_apply_not_found"

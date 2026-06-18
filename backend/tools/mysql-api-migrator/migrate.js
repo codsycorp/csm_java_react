@@ -1,9 +1,21 @@
 #!/usr/bin/env node
+/**
+ * MySQL (PHP legacy) → CSM storage migrator.
+ *
+ * Transports (global.transport):
+ *   api | go | pebble     — POST /bulk-update-table-data to Go/Java API (Pebble on Go backend)
+ *   rocksdb | rocks       — write legacy RocksDB at {data_dir}/database/{app}/{table} (Java/Rust)
+ *   rocksdb+pebble        — RocksDB write then `go run ./cmd/migrate` → native/pebble (offline Go)
+ *
+ * Go backend default API: http://127.0.0.1:9999/api  (SERVER_PORT=9999)
+ * Go Pebble root:         {data_dir}/native/pebble/{app_id}/{table}/
+ */
 
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const dns = require("dns");
+const { spawn } = require("child_process");
 const mysql = require("mysql2/promise");
 
 function getArg(name) {
@@ -39,6 +51,158 @@ function joinUrl(base, endpointPath) {
   const cleanPath = endpointPath.startsWith("/") ? endpointPath : `/${endpointPath}`;
   return `${base}${cleanPath}`;
 }
+
+/** Unwrap Go { result: {...} } and Java { data: {...} } API envelopes. */
+function unwrapApiPayload(json) {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return json;
+  if (json.success === false) return json;
+  if (json.result && typeof json.result === "object" && !Array.isArray(json.result)) {
+    return json.result;
+  }
+  if (json.data && typeof json.data === "object" && !Array.isArray(json.data)) {
+    return json.data;
+  }
+  return json;
+}
+
+function resolveStoragePaths(globalCfg) {
+  const explicit = String(globalCfg.data_dir || globalCfg.rocksdb_data_dir || "").trim();
+  let dataDir = "";
+  if (explicit) {
+    dataDir = path.resolve(process.cwd(), explicit);
+  } else {
+    dataDir = findDefaultDataDir();
+  }
+  if (!dataDir) {
+    dataDir = path.resolve(
+      process.cwd(),
+      String(process.env.APP_DATA_DIR || process.env.CSM_DATA_DIR || "./csm_datas").trim()
+    );
+  }
+
+  const nativeDataDir = path.resolve(
+    process.cwd(),
+    String(globalCfg.native_data_dir || process.env.CSM_NATIVE_DATA_DIR || path.join(dataDir, "native")).trim()
+  );
+  const pebbleRoot = path.resolve(
+    process.cwd(),
+    String(globalCfg.pebble_root || process.env.CSM_PEBBLE_ROOT || path.join(nativeDataDir, "pebble")).trim()
+  );
+  const rocksdbRoot = path.resolve(
+    process.cwd(),
+    String(globalCfg.rocksdb_root || process.env.ROCKSDB_ROOT_DIR || path.join(dataDir, "database")).trim()
+  );
+  return { dataDir, nativeDataDir, pebbleRoot, rocksdbRoot };
+}
+
+/** Match run-go-server.sh: CSM_HOME/csm_datas → backend/csm_datas in this repo. */
+function findDefaultDataDir() {
+  const candidates = [
+    process.env.APP_DATA_DIR,
+    process.env.CSM_DATA_DIR,
+    path.join(__dirname, "..", "..", "csm_datas"),
+    path.join(__dirname, "..", "..", "..", "backend", "csm_datas"),
+    path.join(process.cwd(), "csm_datas"),
+    path.join(process.cwd(), "backend", "csm_datas"),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const resolved = path.resolve(String(candidate));
+    const pebbleProbe = path.join(resolved, "native", "pebble");
+    const dbProbe = path.join(resolved, "database");
+    if (fs.existsSync(pebbleProbe) || fs.existsSync(dbProbe)) {
+      return resolved;
+    }
+  }
+  for (const candidate of candidates) {
+    const resolved = path.resolve(String(candidate));
+    if (fs.existsSync(resolved)) return resolved;
+  }
+  return path.resolve(String(candidates[0] || path.join(__dirname, "..", "..", "csm_datas")));
+}
+
+function resolveTransportMode(globalCfg) {
+  const raw = String(globalCfg.transport || "api").toLowerCase();
+  if (["api", "http", "go", "go-api", "pebble", "go-pebble"].includes(raw)) {
+    return { mode: "api", label: raw === "pebble" || raw.startsWith("go") ? "go-api" : "api" };
+  }
+  if (["rocksdb+pebble", "rocks-to-pebble", "rocksdb-pebble", "legacy+pebble"].includes(raw)) {
+    return { mode: "rocksdb+pebble", label: "rocksdb+pebble" };
+  }
+  if (["rocksdb", "direct-rocksdb", "rocks", "legacy"].includes(raw)) {
+    return { mode: "rocksdb", label: "rocksdb" };
+  }
+  return { mode: "api", label: raw };
+}
+
+function runProcess(cmd, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, {
+      cwd: options.cwd || process.cwd(),
+      stdio: options.inherit ? "inherit" : ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ...(options.env || {}) }
+    });
+    let stdout = "";
+    let stderr = "";
+    if (!options.inherit) {
+      child.stdout.on("data", (chunk) => { stdout += String(chunk); });
+      child.stderr.on("data", (chunk) => { stderr += String(chunk); });
+    }
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve({ code, stdout, stderr });
+      } else {
+        reject(new Error(`${cmd} ${args.join(" ")} exited ${code}${stderr ? `: ${stderr.trim()}` : ""}`));
+      }
+    });
+  });
+}
+
+async function runGoPebbleMigrate(globalCfg, storagePaths, tableList, dryRun) {
+  const goDir = path.resolve(
+    process.cwd(),
+    String(globalCfg.go_migrate_dir || path.join(__dirname, "..", "..", "..", "backend-go")).trim()
+  );
+  const migrateMain = path.join(goDir, "cmd", "migrate", "main.go");
+  if (!fs.existsSync(migrateMain)) {
+    throw new Error(`Go migrate tool not found: ${migrateMain}`);
+  }
+
+  const onlyTables = [];
+  const appId = String(globalCfg.app_id || "").trim();
+  for (const tableCfg of tableList) {
+    const obj = pickTargetObjectName(tableCfg);
+    const app = String(tableCfg.app_id || appId || "").trim();
+    if (app && obj) onlyTables.push(`${app}/${obj}`);
+  }
+
+  const args = [
+    "run", "./cmd/migrate",
+    "-source", storagePaths.rocksdbRoot,
+    "-dest", storagePaths.nativeDataDir
+  ];
+  if (dryRun) args.push("-dry-run");
+  if (onlyTables.length > 0) {
+    args.push("-only-tables", onlyTables.join(","));
+  }
+
+  console.log(`[pebble-migrate] go ${args.join(" ")} (cwd=${goDir})`);
+  const result = await runProcess("go", args, { cwd: goDir, inherit: true });
+  return {
+    go_dir: goDir,
+    source: storagePaths.rocksdbRoot,
+    dest: storagePaths.nativeDataDir,
+    only_tables: onlyTables,
+    stdout: result.stdout
+  };
+}
+
+async function reindexTableViaApi(baseUrl, auth, apiCfg, appId, objName) {
+  const indexPath = apiCfg.reindex_path || "/update-table-data-index";
+  return apiRequest(baseUrl, indexPath, { app_id: appId, obj_name: objName }, auth);
+}
+
 
 function normalizeRowValue(value) {
   if (Buffer.isBuffer(value)) return value.toString("utf8");
@@ -429,20 +593,12 @@ function loadRocksDbFactory() {
 }
 
 function createDirectRocksContext(globalCfg, runtimeOptions = {}) {
-  const dataDirRaw =
-    globalCfg.data_dir ||
-    globalCfg.rocksdb_data_dir ||
-    process.env.APP_DATA_DIR ||
-    process.env.CSM_DATA_DIR ||
-    "";
-
-  const dataDir = String(dataDirRaw).trim();
-  if (!dataDir) {
-    throw new Error("Missing global.data_dir for direct RocksDB mode");
-  }
+  const storagePaths = resolveStoragePaths(globalCfg);
+  const dataDir = storagePaths.dataDir;
 
   return {
     dataDir,
+    storagePaths,
     rocksdbFactory: loadRocksDbFactory(),
     dbMap: new Map(),
     resetBeforeOpen: Boolean(runtimeOptions.resetBeforeOpen),
@@ -458,6 +614,17 @@ function dbPathFor(dataDir, appId, tableName) {
   return path.join(
     dataDir,
     "database",
+    sanitizePathSegment(appId, "app_id"),
+    sanitizePathSegment(tableName, "table_name")
+  );
+}
+
+function dbPathForContext(context, appId, tableName) {
+  const rocksRoot = context.storagePaths
+    ? context.storagePaths.rocksdbRoot
+    : path.join(context.dataDir, "database");
+  return path.join(
+    rocksRoot,
     sanitizePathSegment(appId, "app_id"),
     sanitizePathSegment(tableName, "table_name")
   );
@@ -523,7 +690,7 @@ async function getOrOpenDirectDb(context, appId, tableName) {
   const existing = context.dbMap.get(key);
   if (existing) return existing;
 
-  const dbPath = dbPathFor(context.dataDir, safeAppId, safeTableName);
+  const dbPath = dbPathForContext(context, safeAppId, safeTableName);
   // Keep index DB intact by default, because it stores struct/menu metadata.
   // Reset it only when explicitly requested.
   if (context.resetBeforeOpen && (safeTableName !== "index" || context.resetIndexDb)) {
@@ -1016,7 +1183,12 @@ async function apiRequest(baseUrl, endpointPath, payload, auth) {
     throw new Error(`API ${endpointPath} returned non-JSON response`);
   }
 
-  return json;
+  if (json.success === false) {
+    const errMsg = json.message ? json.message : text;
+    throw new Error(`API ${endpointPath} failed: ${errMsg}`);
+  }
+
+  return unwrapApiPayload(json);
 }
 
 async function resolveAuth(apiCfg, baseUrl) {
@@ -1039,7 +1211,10 @@ async function resolveAuth(apiCfg, baseUrl) {
     password: login.password
   }, null);
 
-  const token = loginRes.token || (loginRes.data && loginRes.data.token) || "";
+  const token = loginRes.token
+    || (loginRes.data && loginRes.data.token)
+    || (loginRes.result && loginRes.result.token)
+    || "";
   if (!token) {
     throw new Error("Login successful but token was not found in response");
   }
@@ -1078,7 +1253,7 @@ async function fetchRemoteTableStruct(baseUrl, auth, apiCfg, appId, objName) {
 
   try {
     const res = await apiRequest(baseUrl, getTablePath, payload, auth);
-    const rows = Array.isArray(res.rows) ? res.rows : [];
+    const rows = Array.isArray(res.rows) ? res.rows : (Array.isArray(res.result && res.result.rows) ? res.result.rows : []);
     if (rows.length === 0) {
       return {
         exists: false,
@@ -1275,6 +1450,7 @@ async function main() {
   const syncPkFields = hasFlag("--sync-pk-fields");
   const resetRocksdb = hasFlag("--reset-rocksdb");
   const resetIndexRocksdb = hasFlag("--reset-index-rocksdb");
+  const migratePebbleFlag = hasFlag("--migrate-pebble");
 
   if (!fs.existsSync(cfgPath)) {
     throw new Error(`Config file not found: ${cfgPath}`);
@@ -1321,9 +1497,15 @@ async function main() {
       }
     }
 
-    const transport = String(globalCfg.transport || "api").toLowerCase();
-    const isDirectRocks = transport === "rocksdb" || transport === "direct-rocksdb";
+    const transportPlan = resolveTransportMode(globalCfg);
+    const storagePaths = resolveStoragePaths(globalCfg);
+    const isDirectRocks = transportPlan.mode === "rocksdb" || transportPlan.mode === "rocksdb+pebble";
+    const useApiTransport = transportPlan.mode === "api";
+    const runPebbleMigrateAfterRocks = transportPlan.mode === "rocksdb+pebble"
+      || Boolean(globalCfg.migrate_rocksdb_to_pebble_after)
+      || migratePebbleFlag;
     const embedMasterDetail = Boolean(globalCfg.embed_master_detail_from_menu ?? true);
+    const reindexAfterMigrate = Boolean(globalCfg.reindex_after_migrate ?? false);
     const masterDetailResolver = createMasterDetailEmbedResolver(
       connection,
       globalCfg,
@@ -1338,9 +1520,14 @@ async function main() {
         resetBeforeOpen: Boolean(globalCfg.reset_rocksdb_before_migrate || resetRocksdb),
         resetIndexDb: Boolean(globalCfg.reset_index_rocksdb_before_migrate || resetIndexRocksdb)
       });
+      console.log(`[storage] RocksDB root: ${directContext.storagePaths.rocksdbRoot}`);
+      console.log(`[storage] Pebble target: ${directContext.storagePaths.pebbleRoot} (via go migrate after rocks write)`);
     } else {
       baseUrl = normalizeBaseUrl(apiCfg.base_url);
       auth = dryRun ? { bearerToken: "", csmToken: "" } : await resolveAuth(apiCfg, baseUrl);
+      console.log(`[storage] Go/Java API: ${baseUrl} → Pebble via bulk-update`);
+      console.log(`[storage] Expected Pebble on Go host: ${storagePaths.pebbleRoot}/{app_id}/{table}/`);
+      console.log(`[storage] (API mode — Go server APP_DATA_DIR must match; data_dir in config is for rocksdb offline only)`);
     }
 
     const inspectedByTable = new Map(
@@ -1408,7 +1595,7 @@ async function main() {
       const item = await migrateTable(connection, globalCfg, apiCfg, planItem.tableCfg, {
         dryRun,
         transport: isDirectRocks ? "rocksdb" : "api",
-        embedMasterDetail: isDirectRocks && embedMasterDetail,
+        embedMasterDetail,
         masterDetailResolver,
         baseUrl,
         auth,
@@ -1420,7 +1607,26 @@ async function main() {
       });
       item.pk_source = planItem.metadata.pk_source;
       item.remote_struct_exists = planItem.metadata.remote_struct_exists;
+
+      if (!dryRun && reindexAfterMigrate && useApiTransport && item.total_success > 0) {
+        const appId = planItem.metadata.app_id;
+        const objName = planItem.metadata.target_obj_name;
+        try {
+          const idx = await reindexTableViaApi(baseUrl, auth, apiCfg, appId, objName);
+          item.reindexed = Number(idx.indexed || idx.count || 0);
+          console.log(`[${objName}] reindex ok: ${item.reindexed} records`);
+        } catch (err) {
+          item.reindex_error = err.message;
+          console.warn(`[${objName}] reindex failed: ${err.message}`);
+        }
+      }
+
       summary.push(item);
+    }
+
+    let pebbleMigrateResult = null;
+    if (!dryRun && isDirectRocks && runPebbleMigrateAfterRocks) {
+      pebbleMigrateResult = await runGoPebbleMigrate(globalCfg, storagePaths, tableList, false);
     }
 
     const totals = summary.reduce((acc, item) => {
@@ -1434,13 +1640,15 @@ async function main() {
     console.log(JSON.stringify({
       ok: true,
       dry_run: dryRun,
-      transport: isDirectRocks ? "rocksdb" : "api",
+      transport: transportPlan.label,
+      storage_paths: storagePaths,
       inferred_include_fields: inferredFieldConfig,
       mysql_inspection: {
         missing_tables: inspection.missing_tables,
         pk_mismatch_tables: inspection.pk_mismatch_tables
       },
       migration_plan: migrationPlan.map((x) => x.metadata),
+      pebble_migrate: pebbleMigrateResult,
       totals,
       tables: summary
     }, null, 2));

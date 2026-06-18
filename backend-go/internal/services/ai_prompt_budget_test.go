@@ -19,9 +19,8 @@ func TestMaxSafePromptCharsBudgetDisabled(t *testing.T) {
 	t.Setenv("AI_LOCAL_PROMPT_BUDGET_DISABLED", "true")
 	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 1024, LlamaBatchSize: 512}}
 	got := MaxSafePromptChars(cfg)
-	want := (8192 - 1024 - 768) * 3
-	if got != want {
-		t.Fatalf("expected context-limited safe chars %d, got %d", want, got)
+	if got != 512*3 {
+		t.Fatalf("expected batch-limited safe chars %d even when budget disabled, got %d", 512*3, got)
 	}
 }
 
@@ -49,13 +48,32 @@ func TestEffectiveLocalPromptCapEditCodeConstrained(t *testing.T) {
 func TestEffectiveLocalPromptCapBudgetDisabled(t *testing.T) {
 	t.Setenv("AI_LOCAL_RUNTIME_TIER", "balanced-8gb")
 	t.Setenv("AI_LOCAL_PROMPT_BUDGET_DISABLED", "true")
-	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 16384, LlamaMaxTokens: 4096, LlamaMaxPromptChars: 500_000, LlamaBatchSize: 4096}}
+	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 16384, LlamaMaxTokens: 4096, LlamaMaxPromptChars: 500_000, LlamaBatchSize: 16384}}
 	got := EffectiveLocalPromptCap(cfg, "code", "edit")
-	if got < 10_000 {
-		t.Fatalf("expected cap near MaxSafePromptChars when budget disabled, got %d", got)
+	want := MaxSafePromptChars(cfg)
+	if got != want {
+		t.Fatalf("expected context cap %d when batch=ctx, got %d", want, got)
 	}
 	if IsConstrained8GbTier(cfg) {
 		t.Fatal("budget disabled should not be constrained tier")
+	}
+}
+
+func TestMaxSafePromptCharsLargeBatch(t *testing.T) {
+	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 16384, LlamaMaxTokens: 4096, LlamaBatchSize: 16384}}
+	got := MaxSafePromptChars(cfg)
+	if got <= 512*3 {
+		t.Fatalf("expected context-based cap > batch-only cap, got %d", got)
+	}
+}
+
+func TestEffectiveLocalPromptCapMenuJsonEdit(t *testing.T) {
+	t.Setenv("AI_LOCAL_PROMPT_BUDGET_DISABLED", "true")
+	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 16384, LlamaMaxTokens: 4096, LlamaMaxPromptChars: 500_000, LlamaBatchSize: 16384}}
+	got := EffectiveLocalPromptCap(cfg, "menu_json", "edit")
+	want := MaxSafePromptChars(cfg)
+	if got != want {
+		t.Fatalf("menu_json edit should use full safe cap %d, got %d", want, got)
 	}
 }
 
@@ -94,6 +112,34 @@ func TestInferResponseModeFromParamsAnalyze(t *testing.T) {
 	}
 	if cap := maxOutgoingEditorFromParams(params); cap != 12_000 {
 		t.Fatalf("cap=%d want 12000", cap)
+	}
+}
+
+func TestIsConstrained8GbTierM1Dev(t *testing.T) {
+	t.Setenv("AI_LOCAL_PROMPT_BUDGET_DISABLED", "")
+	t.Setenv("CSM_LOCAL_PROFILE", "m1-16gb")
+	t.Setenv("AI_LOCAL_RUNTIME_TIER", "m1-16gb")
+	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 1024, LlamaBatchSize: 8192}}
+	if IsConstrained8GbTier(cfg) {
+		t.Fatal("M1 dev profile should not use 8GB constrained tier")
+	}
+	editorMax, _, _, _ := ConstrainedPromptSlotCaps(cfg)
+	if editorMax < 20_000 {
+		t.Fatalf("editor slot too small on M1: %d", editorMax)
+	}
+}
+
+func TestTruncateMiddlePreservingEditorBlocks(t *testing.T) {
+	open := "[ACTIVE_EDITOR_MENU_JSON]\n"
+	close := "\n[/ACTIVE_EDITOR_MENU_JSON]"
+	menu := strings.Repeat(`{"id":"n","label":"x"},`, 2000)
+	prompt := strings.Repeat("SYS", 5000) + open + menu + close + strings.Repeat("USER", 5000)
+	got := TruncateMiddlePreservingEditorBlocks(prompt, 12_000)
+	if !strings.Contains(got, open) || !strings.Contains(got, close) {
+		t.Fatal("editor block tags missing")
+	}
+	if strings.Contains(got, strings.Repeat("SYS", 4000)) {
+		t.Fatal("expected system prefix truncated before editor")
 	}
 }
 

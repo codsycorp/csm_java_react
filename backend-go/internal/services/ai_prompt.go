@@ -53,6 +53,10 @@ func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool)
 		requestID = newRequestID()
 	}
 	rawCode := paramString(params, "currentCode", "")
+	fullCode := paramString(params, "fullCurrentCode", "")
+	if fullCode == "" {
+		fullCode = rawCode
+	}
 	editorMeta := parseEditorMetadata(params)
 	return &CodeStreamRequest{
 		RequestID:       requestID,
@@ -62,7 +66,7 @@ func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool)
 		ContextType:     contextType,
 		Message:         truncateStr(paramString(params, "message", ""), 32_000),
 		CurrentCode:     truncateStr(rawCode, maxOutgoingEditorFromParams(params)),
-		FullCurrentCode: truncateStr(rawCode, 500_000),
+		FullCurrentCode: truncateStr(fullCode, 500_000),
 		Language:        paramString(params, "language", "javascript"),
 		Model:           paramString(params, "model", "auto"),
 		UILang:          firstNonEmpty(paramString(params, "uiLang", ""), paramString(params, "ui_lang", ""), paramString(params, "uiLanguage", "vi")),
@@ -107,32 +111,17 @@ func maxOutgoingEditorFromParams(params map[string]any) int {
 }
 
 func inferResponseModeFromParams(params map[string]any) string {
-	mode := firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", ""))
-	if mode != "" {
-		return mode
-	}
-	msg := strings.ToLower(paramString(params, "message", ""))
-	if hasAnalyzeIntent(msg) && !hasEditIntent(msg) {
-		return "analyze"
-	}
-	if strings.Contains(msg, "?") || strings.Contains(strings.ToLower(paramString(params, "taskType", "")), "qa") {
-		return "analyze"
-	}
-	return ""
+	return normalizeResponseMode(firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", "")))
 }
 
 func ResolveResponseMode(req *CodeStreamRequest) string {
-	if req.ResponseMode != "" {
-		return req.ResponseMode
-	}
-	lower := strings.ToLower(strings.TrimSpace(req.Message))
-	if hasAnalyzeIntent(lower) && !hasEditIntent(lower) {
+	if req == nil {
 		return "analyze"
 	}
-	if strings.Contains(req.TaskType, "qa") || strings.Contains(req.Message, "?") {
-		return "analyze"
+	if mode := normalizeResponseMode(req.ResponseMode); mode != "" {
+		return mode
 	}
-	return "edit"
+	return defaultResponseModeForContext(req.ContextType)
 }
 
 func BuildCodeStreamLocalPrompt(cfg config.AppConfig, req *CodeStreamRequest) string {
@@ -148,6 +137,9 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 	printImport := IsLineItemsPdfImport(req)
 	intent := classifyLocalIntent(req.ContextType, mode)
 	editorMax, ragMax, learningMax, workspaceMax := ConstrainedPromptSlotCaps(cfg)
+	if isMenuJSONContext(req.ContextType) && mode == "edit" {
+		editorMax = MaxOutgoingEditorChars(cfg, req.ContextType, mode)
+	}
 	if printImport {
 		editorMax = 32_000
 		if !IsConstrained8GbTier(cfg) {
@@ -192,7 +184,11 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 		case "frontend_code":
 			contract = ResolveCodeJsonContractForLocal(cfg)
 		case "quick_question":
-			contract = quickQuestionContract
+			if isMenuJSONContext(req.ContextType) {
+				contract = menuJsonAnalyzeContract
+			} else {
+				contract = quickQuestionContract
+			}
 		case "raw_code":
 			contract = rawCodeContract
 		default:
@@ -236,7 +232,17 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 			sb.WriteString("\n[/ACTIVE_EDITOR_CODE]\n\n")
 		}
 	case "quick_question":
-		if editor != "" && len(editor) <= 8_000 {
+		if isMenuJSONContext(req.ContextType) {
+			if kb := BuildMenuKnowledgeBlock(cfg, 8000); kb != "" {
+				sb.WriteString(kb)
+				sb.WriteByte('\n')
+			}
+			if editor != "" {
+				sb.WriteString("[ACTIVE_EDITOR_MENU_JSON]\n")
+				sb.WriteString(editor)
+				sb.WriteString("\n[/ACTIVE_EDITOR_MENU_JSON]\n\n")
+			}
+		} else if editor != "" && len(editor) <= 8_000 {
 			sb.WriteString("[CONTEXT_SNIPPET]\n")
 			sb.WriteString(editor)
 			sb.WriteString("\n[/CONTEXT_SNIPPET]\n\n")
@@ -277,7 +283,7 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 		sb.WriteString(learningBlock)
 		sb.WriteString("\n[/AUTO_LEARNED_MEMORY]\n\n")
 	} else if !printImport {
-		if lb := BuildLearningContextBlock(cfg, req.AppID, req.Message, req.ContextType, 6_000); lb != "" {
+		if lb := BuildLearningContextBlock(cfg, nil, req.AppID, req.Message, req.ContextType, 6_000); lb != "" {
 			sb.WriteString("[AUTO_LEARNED_MEMORY]\n")
 			sb.WriteString(lb)
 			sb.WriteString("\n[/AUTO_LEARNED_MEMORY]\n\n")
@@ -292,6 +298,10 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 		promptCap = EffectiveLocalPromptCapForPrintImport(cfg)
 	}
 	return ClampPromptForLocalProvider(cfg, PrepareLocalProviderPrompt(raw, promptCap), req.ContextType, mode)
+}
+
+func isMenuJSONContext(contextType string) bool {
+	return strings.ToLower(strings.TrimSpace(contextType)) == "menu_json"
 }
 
 func classifyLocalIntent(contextType, responseMode string) string {
@@ -427,6 +437,18 @@ Do not output a single "reason:" line or JSON patch envelope.
 No JSON unless the user explicitly asked for a patch.
 No markdown code fences.
 No random text.
+End immediately after the answer.
+`
+	menuJsonAnalyzeContract = `You are CSM Menu JSON Analyst.
+Answer about ACTIVE_EDITOR_MENU_JSON in the user's language (Vietnamese unless they wrote English/Chinese).
+Never refuse — always analyze the provided menu JSON and explain what you find.
+Column headers / i18n: check f_header (Vietnamese), f_header_en, f_header_zh on each field in trigger.fields.
+If Vietnamese UI shows English: fields often lack f_header or only have f_header_en populated.
+f_types="co" (combo/select): values come from f_cbo_query and/or f_cbo_list — if both missing/empty, combo shows no options.
+f_types="coro" is read-only combo; still needs f_cbo_query or f_cbo_list for display values.
+Use at least 4 bullet points: affected fields (f_name), observed JSON keys, root cause, concrete fix (which keys to add/change).
+Do NOT output JSON patches unless the user explicitly asked to fix/edit the menu.
+No markdown code fences.
 End immediately after the answer.
 `
 	frontendCodeContract = `You are CSM Frontend Code Editor.

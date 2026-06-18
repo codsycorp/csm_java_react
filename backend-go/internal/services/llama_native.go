@@ -188,30 +188,15 @@ func truncateNativePrompt(prompt string, maxChars int) string {
 	if maxChars <= 0 || len(prompt) <= maxChars {
 		return prompt
 	}
-	return TruncateMiddle(prompt, maxChars)
+	return TruncateMiddlePreservingEditorBlocks(prompt, maxChars)
 }
 
-// truncateNativePromptByTokens caps prompt to context window (chunked prefill handles batch size).
+// truncateNativePromptByTokens caps prompt to context window and n_batch (SIGABRT if exceeded).
 func truncateNativePromptByTokens(n *llamaNativeBackend, prompt string) string {
 	if n == nil || n.ctx == nil || prompt == "" {
 		return prompt
 	}
-	ctx := int(n.cfg.EffectiveLlamaContextWindow())
-	out := int(n.cfg.EffectiveLlamaMaxTokens())
-	margin := 256
-	if ctx <= 8192 {
-		margin = 512
-	}
-	maxTokens := ctx - out - margin
-	if maxTokens < 512 {
-		maxTokens = 512
-	}
-	if !IsPromptBudgetDisabled() {
-		batch := int(n.cfg.EffectiveLlamaBatchSize())
-		if batch > 0 && maxTokens > batch {
-			maxTokens = batch
-		}
-	}
+	maxTokens := maxPrefillTokenBudget(n.cfg)
 	tokens, err := n.ctx.Tokenize(prompt)
 	if err != nil || len(tokens) <= maxTokens {
 		return prompt
@@ -223,7 +208,7 @@ func truncateNativePromptByTokens(n *llamaNativeBackend, prompt string) string {
 		if target < 400 {
 			target = 400
 		}
-		shrunk = TruncateMiddle(shrunk, target)
+		shrunk = TruncateMiddlePreservingEditorBlocks(shrunk, target)
 		tokens, err = n.ctx.Tokenize(shrunk)
 		if err != nil {
 			return truncateNativePrompt(shrunk, maxTokens*3)

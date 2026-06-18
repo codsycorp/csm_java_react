@@ -36,11 +36,22 @@ func BuildMenuCompletionMergePreview(baseDraftRaw, aiDraftRaw string) MenuComple
 		baseNodes = CountMenuNodesFromDraft(baseDraftRaw)
 	}
 	if normalizedBase == "" || baseNodes <= 0 {
+		if MenuEditorBaseHealth(baseDraftRaw) == "truncated_or_invalid" {
+			out.MergedResponse = ""
+			return out
+		}
+		if MenuEditorBaseHealth(baseDraftRaw) == "patch_envelope" {
+			out.MergedResponse = ""
+			return out
+		}
 		added := CountMenuNodesFromDraft(normalizedAI)
-		if added > 0 {
+		if added > 0 && baseNodes <= 0 {
 			out.Added = added
 		}
-		return out
+		if baseNodes <= 0 {
+			return out
+		}
+		out.MergedResponse = ""
 	}
 
 	mergeOut, err := DiffMergeTrees(normalizedBase, normalizedAI)
@@ -60,9 +71,17 @@ func BuildMenuCompletionMergePreview(baseDraftRaw, aiDraftRaw string) MenuComple
 	out.Deleted = mergeOut.Deleted
 
 	sanitizedNodes := CountMenuNodesFromDraft(sanitized)
-	if sanitized != "" && (baseNodes <= 0 || sanitizedNodes >= int(math.Ceil(float64(baseNodes)*0.80))) {
+	minKeep := int(math.Ceil(float64(baseNodes) * 0.80))
+	if baseNodes > 0 && sanitizedNodes < minKeep {
+		out.MergedResponse = ""
+		out.Added = 0
+		out.Edited = 0
+		out.Deleted = 0
+		return out
+	}
+	if sanitized != "" && (baseNodes <= 0 || sanitizedNodes >= minKeep) {
 		out.MergedResponse = sanitized
-	} else {
+	} else if merged != "" {
 		out.MergedResponse = merged
 	}
 	return out
@@ -211,6 +230,10 @@ func applyMenuPatchEntry(menuList *[]any, patch map[string]any) bool {
 	}
 
 	fieldUpdates := extractPatchFieldUpdates(patch)
+	if strings.Contains(nodeID, "@@@@@") {
+		return applyMenuTableFieldPatchEntry(menuList, nodeID, fieldUpdates)
+	}
+
 	if action == "delete" {
 		return removeMenuNodeByID(menuList, nodeID)
 	}
@@ -238,6 +261,48 @@ func applyMenuPatchEntry(menuList *[]any, patch map[string]any) bool {
 		}
 	}
 	return true
+}
+
+func applyMenuTableFieldPatchEntry(menuList *[]any, compositeID string, updates map[string]any) bool {
+	if menuList == nil || len(updates) == 0 {
+		return false
+	}
+	parts := strings.SplitN(compositeID, "@@@@@", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	menuNodeID := strings.TrimSpace(parts[0])
+	fieldRef := strings.TrimSpace(parts[1])
+	if menuNodeID == "" || fieldRef == "" {
+		return false
+	}
+	return walkMenuNodes(*menuList, func(node map[string]any) bool {
+		nodeID := strings.TrimSpace(stringFromAny(node["id"]))
+		if nodeID != menuNodeID {
+			return false
+		}
+		table, ok := node["table"].([]any)
+		if !ok {
+			return false
+		}
+		for i, item := range table {
+			row, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			rowID := strings.TrimSpace(stringFromAny(row["id"]))
+			rowName := strings.TrimSpace(stringFromAny(row["f_name"]))
+			if rowID == compositeID || rowName == fieldRef || strings.HasSuffix(rowID, "@@@@@"+fieldRef) {
+				for k, v := range updates {
+					row[k] = v
+				}
+				table[i] = row
+				node["table"] = table
+				return true
+			}
+		}
+		return false
+	})
 }
 
 func extractPatchFieldUpdates(patch map[string]any) map[string]any {

@@ -23,18 +23,10 @@ func ShouldUseMapReduceAnalyze(cfg config.AppConfig, req *CodeStreamRequest, pha
 	if req == nil || phase1.ResponseMode != "analyze" {
 		return false
 	}
-	ctxType := strings.ToLower(strings.TrimSpace(req.ContextType))
-	if ctxType == "menu_json" {
-		return false
-	}
 	if fullCodeLen < MapReduceMinCodeChars(cfg) {
 		return false
 	}
 	if IsBroadAnalysisRequest(req.Message, phase1.Intent) {
-		return true
-	}
-	lower := strings.ToLower(strings.TrimSpace(req.Message))
-	if hasAnalyzeIntent(lower) && !hasEditIntent(lower) {
 		return true
 	}
 	editorMax, _, _, _ := ConstrainedPromptSlotCaps(cfg)
@@ -65,7 +57,10 @@ func MapReduceChunkPlan(cfg config.AppConfig) (chunkChars, maxChunks, overlap in
 		return max(4000, chunkChars), max(2, maxChunks), overlap
 	}
 	if ctx >= 12_000 {
-		return 14_000, 5, 1200
+		return 20_000, 8, 1500
+	}
+	if !IsConstrained8GbTier(cfg) {
+		return 18_000, 8, 1200
 	}
 	return 10_000, 4, 800
 }
@@ -75,7 +70,11 @@ func MapReduceChunkMaxTokens(cfg config.AppConfig) uint32 {
 	if IsConstrained8GbTier(cfg) {
 		return 384
 	}
-	return 512
+	base := EffectiveInferenceMaxTokens(cfg, "analyze")
+	if base < 768 {
+		return 768
+	}
+	return base
 }
 
 // MapReduceSynthesisMaxTokens caps final synthesis output.
@@ -214,10 +213,19 @@ func buildMapReduceChunkPrompt(cfg config.AppConfig, req *CodeStreamRequest, cod
 
 	var sb strings.Builder
 	sb.WriteString("<|im_start|>system\n")
-	sb.WriteString("Ban la AI phan tich code theo cach map-reduce.\n")
+	if isMenuJSONContext(req.ContextType) {
+		sb.WriteString("Ban la AI phan tich menu JSON theo cach map-reduce.\n")
+		sb.WriteString("Phan tich CHI chunk menu hien tai. Tim f_header/f_header_en/f_header_zh, f_types (co/coro), f_cbo_query, f_cbo_list.\n")
+	} else {
+		sb.WriteString("Ban la AI phan tich code theo cach map-reduce.\n")
+	}
 	sb.WriteString(langRule)
 	sb.WriteString("Phan tich CHI chunk hien tai, khong suy dien vuot qua du lieu trong chunk.\n")
-	sb.WriteString("Tra loi ngan gon nhung day du bang chung code cho: muc tieu, luong xu ly, thanh phan/ham, dieu kien/re nhanh, IO-side effects, rui ro.\n")
+	if isMenuJSONContext(req.ContextType) {
+		sb.WriteString("Tra loi ngan gon: field lien quan, f_header/i18n, f_types co/coro, f_cbo_query/f_cbo_list thieu.\n")
+	} else {
+		sb.WriteString("Tra loi ngan gon nhung day du bang chung code cho: muc tieu, luong xu ly, thanh phan/ham, dieu kien/re nhanh, IO-side effects, rui ro.\n")
+	}
 	sb.WriteString("\n")
 	sb.WriteString("<|im_start|>user\n")
 	sb.WriteString("YEU_CAU_GOC: ")
@@ -254,10 +262,16 @@ func buildMapReduceSynthesisPrompt(cfg config.AppConfig, req *CodeStreamRequest,
 
 	var sb strings.Builder
 	sb.WriteString("<|im_start|>system\n")
-	sb.WriteString("Ban la AI tong hop ket qua map-reduce cho phan tich code.\n")
-	sb.WriteString(langRule)
-	sb.WriteString("Bat buoc tra loi du 6 muc: (1) muc tieu nghiep vu (2) luong xu ly chinh (3) thanh phan/ham quan trong (4) dieu kien/re nhanh/edge cases (5) du lieu vao-ra + side effects (6) rui ro + goi y cai thien.\n")
-	sb.WriteString("Moi muc phai co bang chung cu the tu code (ten ham, ten bien, buoc xu ly).\n")
+	if isMenuJSONContext(req.ContextType) {
+		sb.WriteString("Ban la AI tong hop ket qua map-reduce cho phan tich menu JSON.\n")
+		sb.WriteString(langRule)
+		sb.WriteString("Bat buoc tra loi du 6 muc: (1) van de nguoi dung hoi (2) field/bang lien quan (3) f_header/i18n thieu sai (4) f_types=co/coro va f_cbo_query/f_cbo_list (5) nguyen nhan cot hien tieng Anh hoac combo trong (6) goi y sua cu the.\n")
+	} else {
+		sb.WriteString("Ban la AI tong hop ket qua map-reduce cho phan tich code.\n")
+		sb.WriteString(langRule)
+		sb.WriteString("Bat buoc tra loi du 6 muc: (1) muc tieu nghiep vu (2) luong xu ly chinh (3) thanh phan/ham quan trong (4) dieu kien/re nhanh/edge cases (5) du lieu vao-ra + side effects (6) rui ro + goi y cai thien.\n")
+	}
+	sb.WriteString("Moi muc phai co bang chung cu the tu du lieu trong chunk (ten field, key JSON, buoc xu ly).\n")
 	sb.WriteString("\n")
 	sb.WriteString("<|im_start|>user\n")
 	sb.WriteString("YEU_CAU_GOC: ")

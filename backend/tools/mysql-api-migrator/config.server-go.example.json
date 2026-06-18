@@ -1,0 +1,34 @@
+{
+  "mysql": {
+    "host": "YOUR_SERVER_MYSQL_HOST",
+    "port": 3306,
+    "user": "root",
+    "password": "YOUR_MYSQL_PASSWORD",
+    "database": "anhld_congtai2",
+    "charset": "utf8mb4",
+    "connect_without_database_first": true,
+    "force_ipv4": true
+  },
+  "api": {
+    "base_url": "https://api.YOUR_DOMAIN/api",
+    "bulk_update_path": "/bulk-update-table-data",
+    "get_table_data_path": "/get-table-data",
+    "reindex_path": "/update-table-data-index",
+    "login_path": "/login",
+    "login": {
+      "username": "YOUR_ADMIN_EMAIL",
+      "password": "YOUR_ADMIN_PASSWORD"
+    }
+  },
+  "global": {
+    "app_id": "banhang",
+    "transport": "pebble",
+    "default_command": "create",
+    "batch_size": 300,
+    "continue_on_error": false,
+    "stop_on_failed_batch": true,
+    "embed_master_detail_from_menu": true,
+    "reindex_after_migrate": true
+  },
+  "tables": []
+}

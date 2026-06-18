@@ -9,11 +9,17 @@ import (
 
 func TestEffectiveSeoPromptMaxChars(t *testing.T) {
 	cfg := config.AppConfig{
-		AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 1024, LlamaMaxPromptChars: 48000},
+		AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 1024, LlamaMaxPromptChars: 48000, LlamaBatchSize: 8192},
 	}
 	got := EffectiveSeoPromptMaxChars(cfg)
 	if got < 12000 {
-		t.Fatalf("expected SEO prompt cap >= 12k on 8GB tier, got %d", got)
+		t.Fatalf("expected SEO prompt cap >= 12k when batch=ctx, got %d", got)
+	}
+	weak := config.AppConfig{
+		AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 1024, LlamaMaxPromptChars: 48000, LlamaBatchSize: 512},
+	}
+	if gotWeak := EffectiveSeoPromptMaxChars(weak); gotWeak < 8000 {
+		t.Fatalf("expected SEO floor 8k on batch-limited tier, got %d", gotWeak)
 	}
 }
 
