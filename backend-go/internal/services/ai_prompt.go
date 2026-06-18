@@ -179,21 +179,25 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 		baseSystem = baseSystemRawCodeMin
 	}
 	var contract string
-	switch intent {
-	case "menu_json":
-		if IsEffectivelyEmptyMenuEditor(editor) {
-			contract = ResolveMenuJsonContractForGreenfield(cfg)
-		} else {
-			contract = ResolveMenuJsonContractForLocal(cfg)
+	if printImport {
+		contract = printImportContract
+	} else {
+		switch intent {
+		case "menu_json":
+			if IsEffectivelyEmptyMenuEditor(editor) {
+				contract = ResolveMenuJsonContractForGreenfield(cfg)
+			} else {
+				contract = ResolveMenuJsonContractForLocal(cfg)
+			}
+		case "frontend_code":
+			contract = ResolveCodeJsonContractForLocal(cfg)
+		case "quick_question":
+			contract = quickQuestionContract
+		case "raw_code":
+			contract = rawCodeContract
+		default:
+			contract = frontendCodeContract
 		}
-	case "frontend_code":
-		contract = ResolveCodeJsonContractForLocal(cfg)
-	case "quick_question":
-		contract = quickQuestionContract
-	case "raw_code":
-		contract = rawCodeContract
-	default:
-		contract = frontendCodeContract
 	}
 
 	var sb strings.Builder
@@ -203,8 +207,13 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 	sb.WriteString(contract)
 	sb.WriteByte('\n')
 
-	switch intent {
-	case "menu_json":
+	if printImport && editor != "" {
+		sb.WriteString("[ACTIVE_EDITOR]\n")
+		sb.WriteString(editor)
+		sb.WriteString("\n[/ACTIVE_EDITOR]\n\n")
+	} else {
+		switch intent {
+		case "menu_json":
 		if kb := BuildMenuKnowledgeBlock(cfg, 12_000); kb != "" {
 			sb.WriteString(kb)
 			sb.WriteByte('\n')
@@ -238,6 +247,7 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 			sb.WriteString(editor)
 			sb.WriteString("\n[/CURRENT_CODE]\n\n")
 		}
+		}
 	}
 
 	if ctxBlock := loadAppContextBlock(cfg, req.AppID, 6_000); ctxBlock != "" && !printImport {
@@ -258,6 +268,9 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 		sb.WriteString("[ATTACHMENT_CONTEXT]\n")
 		sb.WriteString(multimodalBlock)
 		sb.WriteString("\n[/ATTACHMENT_CONTEXT]\n\n")
+	}
+	if layoutBlock := BuildPrintImportLayoutBlock(req.EditorMetadata); layoutBlock != "" {
+		sb.WriteString(layoutBlock)
 	}
 	if learningBlock != "" {
 		sb.WriteString("[AUTO_LEARNED_MEMORY]\n")

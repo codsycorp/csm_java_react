@@ -1,6 +1,9 @@
 package services
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestResolvePrintImportTriggerBodyUsesSeedWhenAiIncomplete(t *testing.T) {
 	seed := "const cfg = utils.settings || {};\nreturn `<!DOCTYPE html><html><head></head><body><div class=\"page\">${utils.buildCompanyHdr(cfg)}</div></body></html>`;"
@@ -8,6 +11,18 @@ func TestResolvePrintImportTriggerBodyUsesSeedWhenAiIncomplete(t *testing.T) {
 	got := ResolvePrintImportTriggerBody(seed, aiPartial)
 	if got != seed {
 		t.Fatalf("expected seed fallback, got len=%d", len(got))
+	}
+}
+
+func TestBuildPrintImportLayoutBlock(t *testing.T) {
+	meta := map[string]any{
+		"pdfLayout":  `{"docTitle":"BÁO GIÁ"}`,
+		"docKind":    "bao_gia",
+		"triggerKey": "print_bao_gia",
+	}
+	got := BuildPrintImportLayoutBlock(meta)
+	if got == "" || !strings.Contains(got, "[PDF_LAYOUT_SPEC]") || !strings.Contains(got, "BÁO GIÁ") {
+		t.Fatalf("layout block missing: %q", got)
 	}
 }
 

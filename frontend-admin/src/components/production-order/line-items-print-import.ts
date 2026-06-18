@@ -8,6 +8,14 @@ import type { LiColumnDef, ProductGroup } from "./types";
 import { PHUSON_PANEL_CONFIG } from "./defaultConfig";
 import { evalPrintTemplate, buildPrintUtils } from "./utils";
 import { validatePrintHtml } from "./line-items-print";
+import {
+  applyPdfLayoutToSeedTrigger,
+  buildPdfLayoutSpec,
+  formatLayoutSpecForPrompt,
+  groupPdfTextIntoLines,
+  inferDocKindFromLayout,
+  type PdfLayoutSpec,
+} from "./line-items-pdf-layout";
 
 export type PrintDocKind = "bao_gia" | "lenh_sx" | "pxk" | "custom";
 
@@ -31,6 +39,7 @@ export function buildPrintImportPrompt(opts: {
   lineColumns: LiColumnDef[];
   sampleNote?: string;
   pdfText?: string;
+  pdfLayout?: PdfLayoutSpec;
   hasSeedTemplate?: boolean;
 }): string {
   const kindHints: Record<PrintDocKind, string> = {
@@ -45,13 +54,28 @@ export function buildPrintImportPrompt(opts: {
   const pdfTextBlock = opts.pdfText?.trim()
     ? ["## Text trích từ PDF mẫu (layout / nhãn trường)", opts.pdfText.trim().slice(0, 6000), ""]
     : [];
+  const layoutBlock = opts.pdfLayout
+    ? [
+      "## PDF_LAYOUT_SPEC (bắt buộc khớp — thứ tự block, tiêu đề, nhãn chữ ký, cột bảng)",
+      formatLayoutSpecForPrompt(opts.pdfLayout),
+      "",
+      "Quy tắc khớp layout:",
+      "- doc-title = docTitle trong spec (UPPERCASE như PDF).",
+      "- Giữ utils.buildCompanyHdr / buildItemsTableHtml / buildTotalsHtml — KHÔNG viết lại bảng HTML tay.",
+      "- showPrice=false nếu spec.showPrice=false (ẩn cột đơn giá/thành tiền).",
+      "- signatureLabels → thay nhãn trong sig-box .lbl cho đúng PDF.",
+      "- headerLines → map nhãn hdr (Kính gửi, Số, Ngày…) giữ field order.* như seed.",
+      "- Chỉ sửa CSS nhỏ trong <style> nếu cần (font-size, margin) — không đổi cấu trúc utils.",
+      "",
+    ]
+    : [];
 
   const taskLines = opts.hasSeedTemplate
     ? [
       "## Nhiệm vụ",
-      `Chỉnh sửa mẫu Phú Sơn trong [ACTIVE_EDITOR] cho trigger_key "${opts.triggerKey}".`,
-      "Giữ utils.buildCompanyHdr / buildItemsTableHtml / buildTotalsHtml; chỉ đổi tiêu đề, bố cục, ghi chú theo PDF/ghi chú.",
-      "Return TOÀN BỘ function body sau khi sửa — bắt buộc có return `<!DOCTYPE html>...` kết thúc `</html>`.",
+      `Chỉnh sửa mẫu trong [ACTIVE_EDITOR] cho trigger_key "${opts.triggerKey}".`,
+      "Mẫu đã được patch sơ bộ theo PDF_LAYOUT_SPEC — chỉ tinh chỉnh phần còn lệch (tiêu đề, nhãn hdr, chữ ký, intro).",
+      "Return TOÀN BỘ function body — bắt buộc `return` HTML kết thúc `</html>`.",
       `Loại chứng từ: ${kindHints[opts.docKind]}`,
       opts.sampleNote ? `Ghi chú người dùng: ${opts.sampleNote}` : "",
     ]
@@ -82,6 +106,7 @@ export function buildPrintImportPrompt(opts: {
     "9. PXK: utils.printTableOpts showPrice:false, hideColumns nếu cần.",
     "10. Code NGẮN GỌN: dùng utils.buildCompanyHdr / buildItemsTableHtml / buildTotalsHtml — KHÔNG nhét CSS dài; return phải có <!DOCTYPE html> hoặc template literal kết thúc </html>.",
     "",
+    ...layoutBlock,
     ...pdfTextBlock,
     "## Tham chiếu code",
     REFERENCE_TRIGGER_SNIPPET,
@@ -231,13 +256,15 @@ export async function fileToPreviewDataUrls(file: File, maxPages = 2): Promise<s
 export type PrintSampleRead = {
   previewUrls: string[];
   pdfText: string;
+  pdfLayout: PdfLayoutSpec;
 };
 
 /** Đọc PDF/ảnh mẫu: preview + text layer (PDF digital) cho AI local. */
 export async function readPrintSampleFile(file: File, maxPages = 2): Promise<PrintSampleRead> {
   const type = String(file.type || "").toLowerCase();
   if (type.startsWith("image/")) {
-    return { previewUrls: [await readFileAsDataUrl(file)], pdfText: "" };
+    const emptyLayout = buildPdfLayoutSpec([[]], 1);
+    return { previewUrls: [await readFileAsDataUrl(file)], pdfText: "", pdfLayout: emptyLayout };
   }
   if (type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
     return pdfToSampleRead(file, maxPages);
@@ -265,6 +292,7 @@ async function pdfToSampleRead(file: File, maxPages: number): Promise<PrintSampl
   const pageCount = Math.min(doc.numPages, maxPages);
   const urls: string[] = [];
   const textParts: string[] = [];
+  const pageLines: string[][] = [];
 
   for (let i = 1; i <= pageCount; i++) {
     const page = await doc.getPage(i);
@@ -279,21 +307,21 @@ async function pdfToSampleRead(file: File, maxPages: number): Promise<PrintSampl
 
     try {
       const textContent = await page.getTextContent();
-      const pageText = textContent.items
-        .map((item: { str?: string }) => String(item?.str ?? "").trim())
-        .filter(Boolean)
-        .join(" ");
+      const lines = groupPdfTextIntoLines(textContent.items as any[], i);
+      pageLines.push(lines);
+      const pageText = lines.join("\n");
       if (pageText) {
         textParts.push(`--- Trang ${i} ---\n${pageText}`);
       }
     } catch {
-      // PDF scan — không có text layer
+      pageLines.push([]);
     }
   }
-  return { previewUrls: urls, pdfText: textParts.join("\n\n").trim() };
+  const pdfLayout = buildPdfLayoutSpec(pageLines, pageCount);
+  return { previewUrls: urls, pdfText: textParts.join("\n\n").trim(), pdfLayout };
 }
 
-export function suggestPrintConfig(docKind: PrintDocKind, triggerKey: string) {
+export function suggestPrintConfig(docKind: PrintDocKind, triggerKey: string, layout?: PdfLayoutSpec) {
   const base = {
     trigger_key: triggerKey,
     filename_expr: "`document.pdf`",
@@ -304,14 +332,20 @@ export function suggestPrintConfig(docKind: PrintDocKind, triggerKey: string) {
         ...base,
         label: "Xuất Báo giá",
         filename_expr: "`BaoGia_${order.so_bao_gia || 'draft'}.pdf`",
-        print_table: { showPrice: true, showGroupSubtotal: true },
+        print_table: {
+          showPrice: layout?.showPrice !== false,
+          showGroupSubtotal: layout?.showGroupSubtotal !== false,
+        },
       };
     case "lenh_sx":
       return {
         ...base,
         label: "Xuất Lệnh SX nội bộ",
         filename_expr: "`LenhSX_${order.so_lenh || 'draft'}.pdf`",
-        print_table: { showPrice: true, showGroupSubtotal: true },
+        print_table: {
+          showPrice: layout?.showPrice !== false,
+          showGroupSubtotal: layout?.showGroupSubtotal !== false,
+        },
       };
     case "pxk":
       return {
@@ -319,9 +353,9 @@ export function suggestPrintConfig(docKind: PrintDocKind, triggerKey: string) {
         label: "Xuất Lệnh SX + PXK",
         filename_expr: "`LenhSX_PXK_${order.so_lenh || 'draft'}.pdf`",
         print_table: {
-          showPrice: false,
-          showGroupSubtotal: false,
-          hideColumns: ["chieu_rong", "don_gia", "thanh_tien"],
+          showPrice: layout?.showPrice === true,
+          showGroupSubtotal: layout?.showGroupSubtotal === true,
+          hideColumns: layout?.showPrice ? [] : ["chieu_rong", "don_gia", "thanh_tien"],
         },
       };
     default:
@@ -347,27 +381,37 @@ export async function generatePrintTriggerFromSample(opts: {
   sampleImages: string[];
   sampleNote?: string;
   pdfText?: string;
+  pdfLayout?: PdfLayoutSpec;
   editorMetadata?: Record<string, unknown>;
-}): Promise<{ code: string; usedSeedFallback?: boolean }> {
+}): Promise<{ code: string; usedSeedFallback?: boolean; usedLayoutPatch?: boolean }> {
   if (!opts.sampleImages.length) {
     throw new Error("Chưa có ảnh mẫu từ PDF.");
   }
 
   const seedBody = getBuiltinPrintTriggerBody(opts.docKind);
+  const layout = opts.pdfLayout;
+  const patchedSeed = seedBody && layout
+    ? applyPdfLayoutToSeedTrigger(seedBody, layout, opts.docKind)
+    : seedBody;
+  const editorBase = patchedSeed ?? seedBody ?? "";
+
   const prompt = buildPrintImportPrompt({
     ...opts,
-    hasSeedTemplate: Boolean(seedBody),
+    hasSeedTemplate: Boolean(editorBase),
+    pdfLayout: layout,
   });
 
-  const pdfHint = opts.pdfText?.trim()
-    ? `Đã trích text từ PDF (${opts.pdfText.length} ký tự) — dùng làm layout reference.`
-    : "PDF không có text layer (scan) — dựa vào mẫu Phú Sơn + ghi chú người dùng.";
+  const pdfHint = layout?.docTitle
+    ? `Layout PDF: tiêu đề "${layout.docTitle}", ${layout.orderedLines.length} dòng text, showPrice=${layout.showPrice}.`
+    : opts.pdfText?.trim()
+      ? `Đã trích text từ PDF (${opts.pdfText.length} ký tự).`
+      : "PDF scan — dựa PDF_LAYOUT_SPEC + ghi chú.";
 
   const response = await request.post("ai-code-stream", {
     json: {
       appId: String(opts.appId || "line_items_print").trim() || "line_items_print",
-      message: `${prompt}\n\n(${pdfHint} Ảnh preview ${opts.sampleImages.length} trang — model text không nhìn ảnh.)`,
-      currentCode: seedBody ?? "",
+      message: `${prompt}\n\n(${pdfHint})`,
+      currentCode: editorBase,
       flowType: "code_editor",
       taskType: "code_assistant",
       language: "javascript",
@@ -379,6 +423,7 @@ export async function generatePrintTriggerFromSample(opts: {
         docKind: opts.docKind,
         triggerKey: opts.triggerKey,
         samplePages: opts.sampleImages.length,
+        pdfLayout: layout ? formatLayoutSpecForPrompt(layout) : undefined,
       },
     },
     timeout: AI_TIMEOUT_MS,
@@ -425,13 +470,22 @@ export async function generatePrintTriggerFromSample(opts: {
   }
 
   const code = resolvePrintTriggerFromAiResponse({
-    seedBody,
+    seedBody: editorBase || seedBody,
     fullResponse,
     completePayload,
   });
 
   const dryRun = dryRunPrintTriggerBody(code, opts.lineColumns);
-  if (dryRun.ok) return { code };
+  if (dryRun.ok) {
+    return { code, usedLayoutPatch: Boolean(patchedSeed && patchedSeed !== seedBody) };
+  }
+
+  if (patchedSeed && patchedSeed !== code) {
+    const patchedDry = dryRunPrintTriggerBody(patchedSeed, opts.lineColumns);
+    if (patchedDry.ok) {
+      return { code: patchedSeed, usedLayoutPatch: true, usedSeedFallback: true };
+    }
+  }
 
   if (seedBody) {
     const seedDry = dryRunPrintTriggerBody(seedBody, opts.lineColumns);

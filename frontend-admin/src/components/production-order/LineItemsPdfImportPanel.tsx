@@ -13,6 +13,7 @@ import {
   getBuiltinPrintTriggerBody,
   suggestPrintConfig,
 } from "./line-items-print-import";
+import { inferDocKindFromLayout, applyPdfLayoutToSeedTrigger, type PdfLayoutSpec } from "./line-items-pdf-layout";
 
 export interface LineItemsPdfImportPanelProps {
   appId?: string;
@@ -45,6 +46,7 @@ export default function LineItemsPdfImportPanel({
   const [sampleNote, setSampleNote] = useState("");
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
   const [pdfText, setPdfText] = useState("");
+  const [pdfLayout, setPdfLayout] = useState<PdfLayoutSpec | null>(null);
   const [generatedCode, setGeneratedCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -73,10 +75,22 @@ export default function LineItemsPdfImportPanel({
       const sample = await readPrintSampleFile(file, 2);
       setPreviewUrls(sample.previewUrls);
       setPdfText(sample.pdfText);
+      setPdfLayout(sample.pdfLayout);
+      const inferred = inferDocKindFromLayout(sample.pdfLayout);
+      if (inferred) {
+        setDocKind(inferred);
+        setTriggerKey(
+          inferred === "lenh_sx" ? "print_lenh_sx"
+            : inferred === "pxk" ? "print_pxk"
+            : inferred === "bao_gia" ? "print_bao_gia"
+            : "print_custom",
+        );
+      }
+      const titleHint = sample.pdfLayout.docTitle ? ` — "${sample.pdfLayout.docTitle}"` : "";
       if (sample.pdfText) {
-        message.success(`Đã đọc ${sample.previewUrls.length} trang + text PDF (${sample.pdfText.length} ký tự)`);
+        message.success(`Đã đọc ${sample.previewUrls.length} trang${titleHint} (${sample.pdfText.length} ký tự)`);
       } else {
-        message.success(`Đã đọc ${sample.previewUrls.length} trang mẫu (PDF scan — thêm ghi chú layout nếu cần)`);
+        message.success(`Đã đọc ${sample.previewUrls.length} trang mẫu${titleHint} (PDF scan — thêm ghi chú layout nếu cần)`);
       }
     } catch (e: any) {
       message.error(e?.message ?? String(e));
@@ -85,15 +99,20 @@ export default function LineItemsPdfImportPanel({
   }, []);
 
   const handleApplyBuiltin = () => {
-    const body = getBuiltinPrintTriggerBody(docKind);
+    let body = getBuiltinPrintTriggerBody(docKind);
     if (!body) {
       message.warning("Không có mẫu built-in cho loại này");
       return;
     }
+    if (pdfLayout) {
+      body = applyPdfLayoutToSeedTrigger(body, pdfLayout, docKind);
+    }
     const key = triggerKey.trim() || defaultKeyForKind;
     onApplyTrigger?.(key, body);
-    onApplyPrintConfig?.(suggestPrintConfig(docKind, key) as LiPrintConfig);
-    message.success(`Đã áp trigger "${key}" từ mẫu Phú Sơn`);
+    onApplyPrintConfig?.(suggestPrintConfig(docKind, key, pdfLayout ?? undefined) as LiPrintConfig);
+    message.success(pdfLayout?.docTitle
+      ? `Đã áp trigger "${key}" — patch theo PDF "${pdfLayout.docTitle}"`
+      : `Đã áp trigger "${key}" từ mẫu Phú Sơn`);
   };
 
   const handleGenerateAi = async () => {
@@ -104,7 +123,7 @@ export default function LineItemsPdfImportPanel({
     const key = triggerKey.trim() || defaultKeyForKind;
     setLoading(true);
     try {
-      const { code, usedSeedFallback } = await generatePrintTriggerFromSample({
+      const { code, usedSeedFallback, usedLayoutPatch } = await generatePrintTriggerFromSample({
         appId,
         docKind,
         triggerKey: key,
@@ -113,12 +132,15 @@ export default function LineItemsPdfImportPanel({
         sampleImages: previewUrls,
         sampleNote,
         pdfText,
+        pdfLayout: pdfLayout ?? undefined,
         editorMetadata,
       });
       setGeneratedCode(code);
       setPreviewOpen(true);
       if (usedSeedFallback) {
-        message.warning("AI chưa đủ — đã dùng mẫu Phú Sơn (in PDF ổn định). Chỉnh layout tay trên tab Trigger nếu cần.");
+        message.warning("AI chưa đủ — đã dùng mẫu đã patch theo PDF (in ổn định). Chỉnh layout tay trên tab Trigger nếu cần.");
+      } else if (usedLayoutPatch) {
+        message.info("Đã patch tiêu đề/nhãn/chữ ký theo PDF trước khi gọi AI.");
       }
     } catch (e: any) {
       const msg = e?.message ?? String(e);
@@ -133,7 +155,7 @@ export default function LineItemsPdfImportPanel({
           onOk: () => {
             const key = triggerKey.trim() || defaultKeyForKind;
             onApplyTrigger?.(key, builtin);
-            onApplyPrintConfig?.(suggestPrintConfig(docKind, key) as LiPrintConfig);
+            onApplyPrintConfig?.(suggestPrintConfig(docKind, key, pdfLayout ?? undefined) as LiPrintConfig);
             message.success(`Đã áp trigger "${key}" từ mẫu Phú Sơn`);
           },
         });
@@ -146,7 +168,7 @@ export default function LineItemsPdfImportPanel({
           onOk: () => {
             const key = triggerKey.trim() || defaultKeyForKind;
             onApplyTrigger?.(key, builtin);
-            onApplyPrintConfig?.(suggestPrintConfig(docKind, key) as LiPrintConfig);
+            onApplyPrintConfig?.(suggestPrintConfig(docKind, key, pdfLayout ?? undefined) as LiPrintConfig);
             message.success(`Đã áp trigger "${key}" từ mẫu Phú Sơn`);
           },
         });
@@ -162,7 +184,7 @@ export default function LineItemsPdfImportPanel({
     const key = triggerKey.trim() || defaultKeyForKind;
     if (!generatedCode.trim()) return;
     onApplyTrigger?.(key, generatedCode);
-    onApplyPrintConfig?.(suggestPrintConfig(docKind, key) as LiPrintConfig);
+    onApplyPrintConfig?.(suggestPrintConfig(docKind, key, pdfLayout ?? undefined) as LiPrintConfig);
     setPreviewOpen(false);
     message.success(`Đã áp trigger "${key}" — mở tab Trigger để kiểm tra và Lưu menu`);
   };
@@ -218,16 +240,31 @@ export default function LineItemsPdfImportPanel({
         </Upload>
 
         {previewUrls.length > 0 && (
-          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-            {previewUrls.map((url, i) => (
-              <img
-                key={i}
-                src={url}
-                alt={`Trang ${i + 1}`}
-                style={{ maxWidth: 200, maxHeight: 280, border: "1px solid #d9d9d9" }}
+          <>
+            {pdfLayout?.docTitle && (
+              <Alert
+                type="success"
+                showIcon
+                style={{ marginTop: 12 }}
+                message={`Layout PDF: ${pdfLayout.docTitle}`}
+                description={[
+                  pdfLayout.showPrice ? "Có cột giá" : "Ẩn cột giá",
+                  pdfLayout.signatureLabels.length ? `${pdfLayout.signatureLabels.length} chữ ký` : null,
+                  pdfLayout.tableColumnHeaders.length ? `Cột: ${pdfLayout.tableColumnHeaders.slice(0, 6).join(", ")}` : null,
+                ].filter(Boolean).join(" · ")}
               />
-            ))}
-          </div>
+            )}
+            <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+              {previewUrls.map((url, i) => (
+                <img
+                  key={i}
+                  src={url}
+                  alt={`Trang ${i + 1}`}
+                  style={{ maxWidth: 200, maxHeight: 280, border: "1px solid #d9d9d9" }}
+                />
+              ))}
+            </div>
+          </>
         )}
 
         <Space wrap style={{ marginTop: 16 }}>
