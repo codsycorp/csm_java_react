@@ -234,7 +234,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 			f.Flush()
 		}
 
-		streamErr := deps.Llama.StreamCompletionWithTokens(ctx, prompt, services.EffectiveInferenceMaxTokens(deps.Config, responseMode), streamPiece)
+		streamErr := deps.Llama.StreamCompletionWithTokens(ctx, prompt, services.EffectiveInferenceMaxTokensFromParams(deps.Config, responseMode, params), streamPiece)
 		var completeErr error
 		if streamErr != nil {
 			log.Printf("AiCodeStream: stream error requestId=%s err=%v promptChars=%d", req.RequestID, streamErr, len(prompt))
@@ -253,7 +253,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		}
 		if streamErr != nil || full.Len() == 0 {
 			var text string
-			text, completeErr = deps.Llama.CompleteWithTokens(ctx, prompt, services.EffectiveInferenceMaxTokens(deps.Config, responseMode))
+			text, completeErr = deps.Llama.CompleteWithTokens(ctx, prompt, services.EffectiveInferenceMaxTokensFromParams(deps.Config, responseMode, params))
 			if completeErr == nil {
 				cleaned := services.CleanLocalModelOutput(text)
 				if cleaned != "" && full.Len() == 0 {

@@ -110,14 +110,27 @@ func TestClampPromptForLocalProvider(t *testing.T) {
 func TestEffectiveInferenceMaxTokensEdit8Gb(t *testing.T) {
 	t.Setenv("AI_LOCAL_RUNTIME_TIER", "balanced-8gb")
 	t.Setenv("AI_LOCAL_PROMPT_BUDGET_DISABLED", "")
-	t.Setenv("AI_CODE_STREAM_EDIT_MAX_TOKENS", "2048")
-	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 4096, LlamaMaxTokens: 768}}
+	t.Setenv("AI_CODE_STREAM_EDIT_MAX_TOKENS", "4096")
+	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 768}}
 	got := EffectiveInferenceMaxTokens(cfg, "edit")
-	if got != 2048 {
-		t.Fatalf("edit on 8gb want 2048 output tok, got %d", got)
+	if got != 4096 {
+		t.Fatalf("edit on 8gb want 4096 output tok, got %d", got)
 	}
 	analyze := EffectiveInferenceMaxTokens(cfg, "analyze")
 	if analyze != 512 {
 		t.Fatalf("analyze on 8gb want 512, got %d", analyze)
+	}
+}
+
+func TestEffectiveInferenceMaxTokensPrintImport(t *testing.T) {
+	t.Setenv("AI_LOCAL_RUNTIME_TIER", "balanced-8gb")
+	t.Setenv("AI_CODE_STREAM_PRINT_IMPORT_MAX_TOKENS", "4096")
+	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 768}}
+	params := map[string]any{
+		"editorMetadata": map[string]any{"source": "LineItemsPdfImport"},
+	}
+	got := EffectiveInferenceMaxTokensFromParams(cfg, "edit", params)
+	if got != 4096 {
+		t.Fatalf("print import want 4096 tok, got %d", got)
 	}
 }

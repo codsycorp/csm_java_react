@@ -28,6 +28,8 @@ export function buildPrintImportPrompt(opts: {
   tableFields: string[];
   lineColumns: LiColumnDef[];
   sampleNote?: string;
+  pdfText?: string;
+  hasSeedTemplate?: boolean;
 }): string {
   const kindHints: Record<PrintDocKind, string> = {
     bao_gia: "Báo giá — có bảng giá, tổng A/B/C/D, ghi chú, thanh toán, chữ ký 2 bên.",
@@ -38,14 +40,30 @@ export function buildPrintImportPrompt(opts: {
 
   const fieldList = opts.tableFields.filter(Boolean).join(", ") || "ngay, khach_hang, so_bao_gia, nvkd…";
   const colList = (opts.lineColumns ?? []).map(c => c.name).filter(Boolean).join(", ");
+  const pdfTextBlock = opts.pdfText?.trim()
+    ? ["## Text trích từ PDF mẫu (layout / nhãn trường)", opts.pdfText.trim().slice(0, 6000), ""]
+    : [];
+
+  const taskLines = opts.hasSeedTemplate
+    ? [
+      "## Nhiệm vụ",
+      `Chỉnh sửa mẫu Phú Sơn trong [ACTIVE_EDITOR] cho trigger_key "${opts.triggerKey}".`,
+      "Giữ utils.buildCompanyHdr / buildItemsTableHtml / buildTotalsHtml; chỉ đổi tiêu đề, bố cục, ghi chú theo PDF/ghi chú.",
+      "Return TOÀN BỘ function body sau khi sửa — bắt buộc có return `<!DOCTYPE html>...` kết thúc `</html>`.",
+      `Loại chứng từ: ${kindHints[opts.docKind]}`,
+      opts.sampleNote ? `Ghi chú người dùng: ${opts.sampleNote}` : "",
+    ]
+    : [
+      "## Nhiệm vụ",
+      `Sinh function body JavaScript cho trigger_key "${opts.triggerKey}" khớp layout file PDF/ảnh mẫu.`,
+      `Loại chứng từ: ${kindHints[opts.docKind]}`,
+      opts.sampleNote ? `Ghi chú người dùng: ${opts.sampleNote}` : "",
+    ];
 
   return [
     "Bạn là chuyên gia sinh trigger in PDF cho hệ thống CSM Line Items (type_form=7).",
     "",
-    "## Nhiệm vụ",
-    `Sinh function body JavaScript cho trigger_key "${opts.triggerKey}" khớp layout file PDF/ảnh mẫu đính kèm.`,
-    `Loại chứng từ: ${kindHints[opts.docKind]}`,
-    opts.sampleNote ? `Ghi chú người dùng: ${opts.sampleNote}` : "",
+    ...taskLines,
     "",
     "## Chữ ký bắt buộc",
     "(order, groups, calc, utils) => string — CHỈ trả về body function (không bọc function(...){}), không markdown.",
@@ -62,6 +80,7 @@ export function buildPrintImportPrompt(opts: {
     "9. PXK: utils.printTableOpts showPrice:false, hideColumns nếu cần.",
     "10. Code NGẮN GỌN: dùng utils.buildCompanyHdr / buildItemsTableHtml / buildTotalsHtml — KHÔNG nhét CSS dài; return phải có <!DOCTYPE html> hoặc template literal kết thúc </html>.",
     "",
+    ...pdfTextBlock,
     "## Tham chiếu code",
     REFERENCE_TRIGGER_SNIPPET,
     "",
@@ -88,12 +107,23 @@ export function isValidPrintTriggerCode(code: string): boolean {
 }
 
 export async function fileToPreviewDataUrls(file: File, maxPages = 2): Promise<string[]> {
+  const sample = await readPrintSampleFile(file, maxPages);
+  return sample.previewUrls;
+}
+
+export type PrintSampleRead = {
+  previewUrls: string[];
+  pdfText: string;
+};
+
+/** Đọc PDF/ảnh mẫu: preview + text layer (PDF digital) cho AI local. */
+export async function readPrintSampleFile(file: File, maxPages = 2): Promise<PrintSampleRead> {
   const type = String(file.type || "").toLowerCase();
   if (type.startsWith("image/")) {
-    return [await readFileAsDataUrl(file)];
+    return { previewUrls: [await readFileAsDataUrl(file)], pdfText: "" };
   }
   if (type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
-    return pdfToDataUrls(file, maxPages);
+    return pdfToSampleRead(file, maxPages);
   }
   throw new Error("Chỉ hỗ trợ file PDF hoặc ảnh (PNG/JPG/WebP).");
 }
@@ -107,7 +137,7 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-async function pdfToDataUrls(file: File, maxPages: number): Promise<string[]> {
+async function pdfToSampleRead(file: File, maxPages: number): Promise<PrintSampleRead> {
   const pdfjs = await import("pdfjs-dist");
   const version = (pdfjs as any).version || "4.10.38";
   (pdfjs as any).GlobalWorkerOptions.workerSrc =
@@ -117,6 +147,7 @@ async function pdfToDataUrls(file: File, maxPages: number): Promise<string[]> {
   const doc = await pdfjs.getDocument({ data: buffer }).promise;
   const pageCount = Math.min(doc.numPages, maxPages);
   const urls: string[] = [];
+  const textParts: string[] = [];
 
   for (let i = 1; i <= pageCount; i++) {
     const page = await doc.getPage(i);
@@ -128,8 +159,21 @@ async function pdfToDataUrls(file: File, maxPages: number): Promise<string[]> {
     if (!ctx) throw new Error("Canvas không khả dụng");
     await page.render({ canvasContext: ctx, viewport }).promise;
     urls.push(canvas.toDataURL("image/png"));
+
+    try {
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item: { str?: string }) => String(item?.str ?? "").trim())
+        .filter(Boolean)
+        .join(" ");
+      if (pageText) {
+        textParts.push(`--- Trang ${i} ---\n${pageText}`);
+      }
+    } catch {
+      // PDF scan — không có text layer
+    }
   }
-  return urls;
+  return { previewUrls: urls, pdfText: textParts.join("\n\n").trim() };
 }
 
 export function suggestPrintConfig(docKind: PrintDocKind, triggerKey: string) {
@@ -185,18 +229,28 @@ export async function generatePrintTriggerFromSample(opts: {
   lineColumns: LiColumnDef[];
   sampleImages: string[];
   sampleNote?: string;
+  pdfText?: string;
   editorMetadata?: Record<string, unknown>;
 }): Promise<string> {
   if (!opts.sampleImages.length) {
     throw new Error("Chưa có ảnh mẫu từ PDF.");
   }
 
-  const prompt = buildPrintImportPrompt(opts);
+  const seedBody = getBuiltinPrintTriggerBody(opts.docKind);
+  const prompt = buildPrintImportPrompt({
+    ...opts,
+    hasSeedTemplate: Boolean(seedBody),
+  });
+
+  const pdfHint = opts.pdfText?.trim()
+    ? `Đã trích text từ PDF (${opts.pdfText.length} ký tự) — dùng làm layout reference.`
+    : "PDF không có text layer (scan) — dựa vào mẫu Phú Sơn + ghi chú người dùng.";
 
   const response = await request.post("ai-code-stream", {
     json: {
       appId: String(opts.appId || "line_items_print").trim() || "line_items_print",
-      message: `${prompt}\n\n(Lưu ý: model local chỉ đọc text — mô tả layout PDF trong「Ghi chú」hoặc dùng「Áp mẫu Phú Sơn」. Ảnh mẫu ${opts.sampleImages.length} trang không gửi vào prompt.)`,
+      message: `${prompt}\n\n(${pdfHint} Ảnh preview ${opts.sampleImages.length} trang — model text không nhìn ảnh.)`,
+      currentCode: seedBody ?? "",
       flowType: "code_editor",
       taskType: "code_assistant",
       language: "javascript",

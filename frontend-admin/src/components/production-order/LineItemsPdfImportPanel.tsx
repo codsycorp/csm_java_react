@@ -8,7 +8,7 @@ import type { UploadFile } from "antd/es/upload";
 import type { LiColumnDef, LiPrintConfig } from "./types";
 import {
   type PrintDocKind,
-  fileToPreviewDataUrls,
+  readPrintSampleFile,
   generatePrintTriggerFromSample,
   getBuiltinPrintTriggerBody,
   suggestPrintConfig,
@@ -44,6 +44,7 @@ export default function LineItemsPdfImportPanel({
   const [triggerKey, setTriggerKey] = useState(triggerKeyProp || "print_bao_gia");
   const [sampleNote, setSampleNote] = useState("");
   const [previewUrls, setPreviewUrls] = useState<string[]>([]);
+  const [pdfText, setPdfText] = useState("");
   const [generatedCode, setGeneratedCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -69,9 +70,14 @@ export default function LineItemsPdfImportPanel({
 
   const handleUpload = useCallback(async (file: File) => {
     try {
-      const urls = await fileToPreviewDataUrls(file, 2);
-      setPreviewUrls(urls);
-      message.success(`Đã đọc ${urls.length} trang mẫu`);
+      const sample = await readPrintSampleFile(file, 2);
+      setPreviewUrls(sample.previewUrls);
+      setPdfText(sample.pdfText);
+      if (sample.pdfText) {
+        message.success(`Đã đọc ${sample.previewUrls.length} trang + text PDF (${sample.pdfText.length} ký tự)`);
+      } else {
+        message.success(`Đã đọc ${sample.previewUrls.length} trang mẫu (PDF scan — thêm ghi chú layout nếu cần)`);
+      }
     } catch (e: any) {
       message.error(e?.message ?? String(e));
     }
@@ -106,6 +112,7 @@ export default function LineItemsPdfImportPanel({
         lineColumns,
         sampleImages: previewUrls,
         sampleNote,
+        pdfText,
         editorMetadata,
       });
       setGeneratedCode(code);

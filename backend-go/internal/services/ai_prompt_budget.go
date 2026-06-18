@@ -126,6 +126,44 @@ func SanitizeLocalInferencePrompt(prompt string) string {
 
 // EffectiveInferenceMaxTokens picks output budget (analyze uses less on 8GB to avoid OOM).
 func EffectiveInferenceMaxTokens(cfg config.AppConfig, responseMode string) uint32 {
+	return EffectiveInferenceMaxTokensFromParams(cfg, responseMode, nil)
+}
+
+// EffectiveInferenceMaxTokensFromParams applies print-import boost when editorMetadata.source=LineItemsPdfImport.
+func EffectiveInferenceMaxTokensFromParams(cfg config.AppConfig, responseMode string, params map[string]any) uint32 {
+	base := effectiveInferenceMaxTokensBase(cfg, responseMode)
+	if strings.ToLower(strings.TrimSpace(responseMode)) != "edit" {
+		return base
+	}
+	if editorMetadataSource(params) == "LineItemsPdfImport" {
+		cap := codeStreamPrintImportMaxTokens()
+		ctxHalf := cfg.EffectiveLlamaContextWindow() / 2
+		if cap > ctxHalf {
+			cap = ctxHalf
+		}
+		if cap > base {
+			return cap
+		}
+	}
+	return base
+}
+
+func editorMetadataSource(params map[string]any) string {
+	if params == nil {
+		return ""
+	}
+	raw, ok := params["editorMetadata"]
+	if !ok {
+		return ""
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(paramString(m, "source", ""))
+}
+
+func effectiveInferenceMaxTokensBase(cfg config.AppConfig, responseMode string) uint32 {
 	base := cfg.EffectiveLlamaMaxTokens()
 	mode := strings.ToLower(strings.TrimSpace(responseMode))
 	if mode == "analyze" && IsConstrained8GbTier(cfg) {
@@ -161,6 +199,21 @@ func codeStreamEditMaxTokens() uint32 {
 	n, err := strconv.Atoi(v)
 	if err != nil || n <= 0 {
 		return 2048
+	}
+	return uint32(n)
+}
+
+func codeStreamPrintImportMaxTokens() uint32 {
+	v := strings.TrimSpace(os.Getenv("AI_CODE_STREAM_PRINT_IMPORT_MAX_TOKENS"))
+	if v == "" {
+		if edit := codeStreamEditMaxTokens(); edit > 2048 {
+			return edit
+		}
+		return 4096
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 4096
 	}
 	return uint32(n)
 }
