@@ -30,7 +30,7 @@ func CodeStreamCompletion(req *CodeStreamRequest, rawResult, editorBase, modelLa
 	}
 
 	if req.ContextType == "code" && responseMode == "edit" {
-		assembleCodeEditCompletion(complete, editorBase, result)
+		assembleCodeEditCompletion(complete, req, editorBase, result)
 		return complete
 	}
 
@@ -113,9 +113,24 @@ func assembleMenuEditCompletion(complete map[string]any, editorBase, rawResult s
 	}
 }
 
-func assembleCodeEditCompletion(complete map[string]any, editorBase, rawResult string) {
+func assembleCodeEditCompletion(complete map[string]any, req *CodeStreamRequest, editorBase, rawResult string) {
 	result := strings.TrimSpace(rawResult)
 	base := strings.TrimSpace(editorBase)
+
+	if IsLineItemsPdfImport(req) {
+		merged := ResolvePrintImportTriggerBody(base, result)
+		complete["fullResponse"] = merged
+		complete["flowConfirmedByLocal"] = IsPrintTriggerBodyComplete(merged)
+		complete["outputShape"] = "code"
+		if merged != result {
+			complete["printImportMergedFromSeed"] = true
+		}
+		complete["finalOutputGate"] = map[string]any{
+			"passed":     IsPrintTriggerBodyComplete(merged),
+			"reasonCode": "print_import_merge",
+		}
+		return
+	}
 
 	// Try textEdits JSON envelope from model.
 	edits := parseTextEditsFromModelOutput(result)

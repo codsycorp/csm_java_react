@@ -4,8 +4,10 @@
 import { AI_TIMEOUT_MS } from "#src/api/ai";
 import { consumeSseStream, dispatchAiCodeStreamEvent } from "#src/api/ai/sse-stream";
 import { request } from "#src/utils";
-import type { LiColumnDef } from "./types";
+import type { LiColumnDef, ProductGroup } from "./types";
 import { PHUSON_PANEL_CONFIG } from "./defaultConfig";
+import { evalPrintTemplate, buildPrintUtils } from "./utils";
+import { validatePrintHtml } from "./line-items-print";
 
 export type PrintDocKind = "bao_gia" | "lenh_sx" | "pxk" | "custom";
 
@@ -99,11 +101,126 @@ export function extractCodeFromAiResponse(raw: string): string {
   return text;
 }
 
+type StructuredTextEdit = {
+  startLine: number;
+  endLine: number;
+  replacement: string;
+};
+
+function normalizeTextEdits(raw: unknown): StructuredTextEdit[] {
+  if (!Array.isArray(raw)) return [];
+  const out: StructuredTextEdit[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const startLine = Number((item as any).startLine ?? (item as any).start_line ?? 0);
+    const endLine = Number((item as any).endLine ?? (item as any).end_line ?? startLine);
+    const replacement = String((item as any).replacement ?? "");
+    if (startLine > 0) out.push({ startLine, endLine: endLine || startLine, replacement });
+  }
+  return out;
+}
+
+function applyTextEditsToDraft(baseText: string, textEdits: StructuredTextEdit[]): string {
+  if (!textEdits.length) return baseText;
+  const lines = baseText.split("\n");
+  const sorted = [...textEdits].sort((a, b) => b.startLine - a.startLine);
+  for (const edit of sorted) {
+    const startIdx = Math.max(0, edit.startLine - 1);
+    const endIdx = Math.max(startIdx, edit.endLine);
+    const replLines = edit.replacement ? edit.replacement.split("\n") : [];
+    lines.splice(startIdx, endIdx - startIdx, ...replLines);
+  }
+  return lines.join("\n");
+}
+
+function looksLikeCompletePrintTrigger(code: string): boolean {
+  const c = String(code ?? "").trim().toLowerCase();
+  if (!/\breturn\b/.test(c)) return false;
+  if (c.includes("</html>")) return true;
+  return c.includes("builditemstablehtml") && (c.includes("buildcompanyhdr") || c.includes("<!doctype"));
+}
+
+/** Ghép AI output + mẫu Phú Sơn seed — tránh patch cắt cụt từ server/local. */
+export function resolvePrintTriggerFromAiResponse(opts: {
+  seedBody?: string;
+  fullResponse: string;
+  completePayload?: Record<string, unknown> | null;
+}): string {
+  const seed = String(opts.seedBody ?? "").trim();
+  let text = extractCodeFromAiResponse(opts.fullResponse);
+
+  const payload = opts.completePayload;
+  const payloadCode = typeof payload?.code === "string" ? String(payload.code).trim() : "";
+  if (payloadCode && looksLikeCompletePrintTrigger(payloadCode)) {
+    text = extractCodeFromAiResponse(payloadCode);
+  }
+
+  const edits = normalizeTextEdits(payload?.textEdits ?? payload?.text_edits);
+  if (edits.length > 0 && seed) {
+    const merged = applyTextEditsToDraft(seed, edits);
+    if (looksLikeCompletePrintTrigger(merged)) return extractCodeFromAiResponse(merged);
+  }
+
+  if (looksLikeCompletePrintTrigger(text)) return text;
+  if (seed && looksLikeCompletePrintTrigger(seed)) return seed;
+  return text || seed;
+}
+
+const DRY_RUN_ORDER = {
+  khach_hang: "Khách hàng mẫu",
+  so_bao_gia: "010126.01",
+  ngay: "01/01/2026",
+  nvkd: "NV mẫu",
+  dia_chi_kh: "Hà Nội",
+};
+
+const DRY_RUN_GROUPS: ProductGroup[] = [{
+  id: "g1",
+  spec: "",
+  vat_rate: 10,
+  items: [{
+    key: "i1",
+    ten_sp: "Sản phẩm mẫu",
+    don_vi: "cái",
+    so_luong: 1,
+    don_gia: 1000,
+    thanh_tien: 1000,
+  }],
+}];
+
+const DRY_RUN_CALC = {
+  totals: { A: 1000, B: 100, C: 1100, D: 1100 },
+  groups: { g1: { sum: 1000 } },
+};
+
+/** Chạy thử trigger trước khi áp — bắt lỗi runtime (local hay server). */
+export function dryRunPrintTriggerBody(
+  fnBody: string,
+  lineColumns: LiColumnDef[] = [],
+): { ok: boolean; message?: string } {
+  if (!looksLikeCompletePrintTrigger(fnBody)) {
+    return { ok: false, message: "Trigger thiếu return HTML đầy đủ." };
+  }
+  try {
+    const html = evalPrintTemplate(
+      fnBody,
+      DRY_RUN_ORDER,
+      DRY_RUN_GROUPS,
+      DRY_RUN_CALC as any,
+      buildPrintUtils({}, {
+        lineItemsColumns: lineColumns,
+        printTableOpts: { showPrice: true, showGroupSubtotal: true },
+      }),
+    );
+    return validatePrintHtml(html);
+  } catch (e: any) {
+    return { ok: false, message: String(e?.message ?? e) };
+  }
+}
+
 /** Kiểm tra body trigger in có vẻ hoàn chỉnh (tránh false negative khi model viết HTML hoa/thường khác). */
-export function isValidPrintTriggerCode(code: string): boolean {
-  const c = String(code ?? "").trim();
-  if (!/\breturn\b/i.test(c)) return false;
-  return /html|<!doctype|buildItemsTableHtml|buildCompanyHdr|<\/html>/i.test(c);
+export function isValidPrintTriggerCode(code: string, lineColumns: LiColumnDef[] = []): boolean {
+  return dryRunPrintTriggerBody(code, lineColumns).ok;
 }
 
 export async function fileToPreviewDataUrls(file: File, maxPages = 2): Promise<string[]> {
@@ -231,7 +348,7 @@ export async function generatePrintTriggerFromSample(opts: {
   sampleNote?: string;
   pdfText?: string;
   editorMetadata?: Record<string, unknown>;
-}): Promise<string> {
+}): Promise<{ code: string; usedSeedFallback?: boolean }> {
   if (!opts.sampleImages.length) {
     throw new Error("Chưa có ảnh mẫu từ PDF.");
   }
@@ -274,6 +391,7 @@ export async function generatePrintTriggerFromSample(opts: {
 
   let fullResponse = "";
   let completed = false;
+  let completePayload: Record<string, unknown> | null = null;
 
   await consumeSseStream(response, {
     onEvent: async (evt) => {
@@ -289,7 +407,10 @@ export async function generatePrintTriggerFromSample(opts: {
       const result = dispatchAiCodeStreamEvent(payload, fullResponse, {
         onChunk: (_c, acc) => { fullResponse = acc; },
         onComplete: (p) => {
-          if (typeof p.fullResponse === "string") fullResponse = p.fullResponse;
+          completePayload = p;
+          if (typeof p.fullResponse === "string" && p.fullResponse.trim()) {
+            fullResponse = p.fullResponse;
+          }
           completed = true;
         },
         onError: (msg) => { throw new Error(msg || "AI lỗi"); },
@@ -303,12 +424,26 @@ export async function generatePrintTriggerFromSample(opts: {
     throw new Error("AI không trả về trigger. Thử lại hoặc dùng mẫu Phú Sơn có sẵn.");
   }
 
-  const code = extractCodeFromAiResponse(fullResponse);
-  if (!isValidPrintTriggerCode(code)) {
-    throw new Error(
-      "AI trả về code không hợp lệ (thiếu return HTML — thường do server 8GB cắt output). "
-      + "Dùng「Áp mẫu Phú Sơn」hoặc sửa tay.",
-    );
+  const code = resolvePrintTriggerFromAiResponse({
+    seedBody,
+    fullResponse,
+    completePayload,
+  });
+
+  const dryRun = dryRunPrintTriggerBody(code, opts.lineColumns);
+  if (dryRun.ok) return { code };
+
+  if (seedBody) {
+    const seedDry = dryRunPrintTriggerBody(seedBody, opts.lineColumns);
+    if (seedDry.ok) {
+      return { code: seedBody, usedSeedFallback: true };
+    }
   }
-  return code;
+
+  throw new Error(
+    dryRun.message
+      ? `Trigger in không chạy được: ${dryRun.message}. Dùng「Áp mẫu Phú Sơn」hoặc sửa tay.`
+      : "AI trả về code không hợp lệ (thiếu return HTML — thường do server 8GB cắt output). "
+        + "Dùng「Áp mẫu Phú Sơn」hoặc sửa tay.",
+  );
 }

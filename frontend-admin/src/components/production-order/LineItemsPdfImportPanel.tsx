@@ -104,7 +104,7 @@ export default function LineItemsPdfImportPanel({
     const key = triggerKey.trim() || defaultKeyForKind;
     setLoading(true);
     try {
-      const code = await generatePrintTriggerFromSample({
+      const { code, usedSeedFallback } = await generatePrintTriggerFromSample({
         appId,
         docKind,
         triggerKey: key,
@@ -117,6 +117,9 @@ export default function LineItemsPdfImportPanel({
       });
       setGeneratedCode(code);
       setPreviewOpen(true);
+      if (usedSeedFallback) {
+        message.warning("AI chưa đủ — đã dùng mẫu Phú Sơn (in PDF ổn định). Chỉnh layout tay trên tab Trigger nếu cần.");
+      }
     } catch (e: any) {
       const msg = e?.message ?? String(e);
       const builtin = getBuiltinPrintTriggerBody(docKind);
@@ -125,6 +128,19 @@ export default function LineItemsPdfImportPanel({
         Modal.confirm({
           title: "AI chưa sinh đủ trigger in",
           content: `${msg}\n\nÁp mẫu Phú Sơn có sẵn (Báo giá / LSX / PXK) thay thế?`,
+          okText: "Áp mẫu Phú Sơn",
+          cancelText: "Đóng",
+          onOk: () => {
+            const key = triggerKey.trim() || defaultKeyForKind;
+            onApplyTrigger?.(key, builtin);
+            onApplyPrintConfig?.(suggestPrintConfig(docKind, key) as LiPrintConfig);
+            message.success(`Đã áp trigger "${key}" từ mẫu Phú Sơn`);
+          },
+        });
+      } else if (builtin && /Trigger in không chạy được/i.test(msg)) {
+        Modal.confirm({
+          title: "Trigger AI lỗi khi in thử",
+          content: `${msg}\n\nDùng mẫu Phú Sơn đã kiểm tra (in PDF ổn định)?`,
           okText: "Áp mẫu Phú Sơn",
           cancelText: "Đóng",
           onOk: () => {
