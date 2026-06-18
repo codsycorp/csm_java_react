@@ -31,7 +31,7 @@ func CodeStreamCompletion(req *CodeStreamRequest, rawResult, editorBase, modelLa
 	}
 
 	if req.ContextType == "menu_json" && responseMode == "edit" {
-		assembleMenuEditCompletion(complete, editorBase, result)
+		assembleMenuEditCompletion(complete, req, editorBase, result)
 		return complete
 	}
 
@@ -47,20 +47,27 @@ func CodeStreamCompletion(req *CodeStreamRequest, rawResult, editorBase, modelLa
 	return complete
 }
 
-func assembleMenuEditCompletion(complete map[string]any, editorBase, rawResult string) {
+func assembleMenuEditCompletion(complete map[string]any, req *CodeStreamRequest, editorBase, rawResult string) {
 	base := CoerceMenuEditorPayload(strings.TrimSpace(editorBase))
 	rawResult = strings.TrimSpace(rawResult)
-	if MenuEditorBaseHealth(base) == "truncated_or_invalid" {
-		if draft := CoerceMenuEditorPayload(rawResult); IsPublishableMenuDraft(draft) && CountMenuNodesFromDraft(draft) > 0 && !IsLikelyHallucinatedGreenfieldMenu(draft) {
-			base = draft
-		} else {
-			complete["fullResponse"] = ""
-			complete["outputShape"] = "menu_json"
-			complete["finalOutputGate"] = map[string]any{
-				"passed": false, "reasonCode": "menu_editor_json_truncated",
-			}
-			return
+	origEditorLen := menuEditOrigEditorLen(req)
+	if req != nil && req.FullCurrentCodeTruncated {
+		complete["fullResponse"] = ""
+		complete["outputShape"] = "menu_json"
+		complete["menuPayloadTruncatedAtIngest"] = true
+		complete["menuPayloadOrigChars"] = origEditorLen
+		complete["finalOutputGate"] = map[string]any{
+			"passed": false, "reasonCode": "menu_payload_truncated_at_ingest",
 		}
+		return
+	}
+	if MenuEditorBaseHealth(base) == "truncated_or_invalid" {
+		complete["fullResponse"] = ""
+		complete["outputShape"] = "menu_json"
+		complete["finalOutputGate"] = map[string]any{
+			"passed": false, "reasonCode": "menu_editor_json_truncated",
+		}
+		return
 	}
 	// Reject prose synthesis accidentally passed as menu edit output.
 	if strings.HasPrefix(rawResult, "## ") || strings.Contains(rawResult, "## Chi tiết từng bước") {
@@ -165,6 +172,22 @@ func assembleMenuEditCompletion(complete map[string]any, editorBase, rawResult s
 	}
 
 	mergedNodes := CountMenuNodesFromDraft(payload)
+	if origEditorLen > 5000 && len(payload) < origEditorLen/5 && baseNodes > 0 &&
+		mergedNodes < (baseNodes*80+99)/100 {
+		complete["menuShrinkGuard"] = true
+		if origEditorLen > 0 {
+			complete["menuShrinkRatio"] = float64(len(payload)) / float64(origEditorLen)
+		}
+		complete["fullResponse"] = ""
+		complete["outputShape"] = "menu_json"
+		complete["finalOutputGate"] = map[string]any{
+			"passed": false, "reasonCode": "menu_edit_suspicious_shrink_rejected",
+		}
+		return
+	}
+	if strings.Contains(rawResult, `"patches"`) && preview.Edited > 0 {
+		complete["qualityGateEarlyAudit"] = true
+	}
 	menuEditorApplyReady := (preview.Edited > 0 || preview.Added > 0 || len(preview.PatchOps) > 0 ||
 		(mergedNodes > baseNodes && baseNodes > 0)) && IsPublishableMenuDraft(payload)
 
@@ -212,6 +235,36 @@ func assembleMenuEditCompletion(complete map[string]any, editorBase, rawResult s
 	complete["finalOutputGate"] = map[string]any{
 		"passed": true, "reasonCode": "menu_local_merge_ok",
 	}
+}
+
+func menuEditOrigEditorLen(req *CodeStreamRequest) int {
+	if req == nil {
+		return 0
+	}
+	if req.FullCurrentCodeOrigLen > 0 {
+		return req.FullCurrentCodeOrigLen
+	}
+	if len(req.FullCurrentCode) > 0 {
+		return len(req.FullCurrentCode)
+	}
+	return len(req.CurrentCode)
+}
+
+// menuEditSuspiciousShrink rejects AI output that would replace a large menu with a tiny unrelated draft.
+func menuEditSuspiciousShrink(origEditorLen, baseLen, payloadLen, baseNodes, mergedNodes int) bool {
+	if payloadLen <= 0 {
+		return true
+	}
+	if baseNodes > 0 && mergedNodes > 0 && mergedNodes < (baseNodes*80+99)/100 {
+		return true
+	}
+	if origEditorLen > 100_000 && payloadLen < origEditorLen/2 {
+		return true
+	}
+	if baseLen > 100_000 && payloadLen < baseLen/2 {
+		return true
+	}
+	return false
 }
 
 func assembleCodeEditCompletion(complete map[string]any, req *CodeStreamRequest, editorBase, rawResult string) {

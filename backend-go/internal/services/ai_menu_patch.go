@@ -252,6 +252,12 @@ func applyMenuPatchEntry(menuList *[]any, patch map[string]any) bool {
 	}
 	if len(fieldUpdates) > 0 {
 		for k, v := range fieldUpdates {
+			if k == "table" {
+				if patchTable, ok := v.([]any); ok {
+					mergeMenuTableFieldsByName(found, patchTable)
+					continue
+				}
+			}
 			found[k] = v
 		}
 	}
@@ -380,6 +386,51 @@ func insertMenuNodeUnderParent(menuList *[]any, parentID string, newNode map[str
 	children = append(children, newNode)
 	parent["children"] = children
 	return true
+}
+
+// mergeMenuTableFieldsByName overlays patch table rows onto existing table by f_name (Java parity).
+func mergeMenuTableFieldsByName(node map[string]any, patchTable []any) {
+	if node == nil || len(patchTable) == 0 {
+		return
+	}
+	byName := map[string]map[string]any{}
+	if existing, ok := node["table"].([]any); ok {
+		for _, item := range existing {
+			row, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			fName := strings.TrimSpace(stringFromAny(row["f_name"]))
+			if fName == "" {
+				continue
+			}
+			byName[fName] = deepCopyMap(row)
+		}
+	}
+	for _, item := range patchTable {
+		patchRow, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		fName := strings.TrimSpace(stringFromAny(patchRow["f_name"]))
+		if fName == "" {
+			continue
+		}
+		target := byName[fName]
+		if target == nil {
+			target = map[string]any{}
+			byName[fName] = target
+		}
+		target["f_name"] = fName
+		for k, v := range patchRow {
+			target[k] = v
+		}
+	}
+	out := make([]any, 0, len(byName))
+	for _, row := range byName {
+		out = append(out, row)
+	}
+	node["table"] = out
 }
 
 func deepCopyMenuList(menu []any) []any {

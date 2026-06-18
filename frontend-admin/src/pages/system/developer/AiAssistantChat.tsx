@@ -3817,6 +3817,18 @@ export default function AiAssistantChat({
 					"Menu JSON in the editor is truncated or invalid. Undo to a full menu (without /* ... truncated ... */ markers) and resend.",
 					"编辑器中的菜单 JSON 被截断或无效。请撤销到完整菜单（不含 /* ... truncated ... */）后重试。",
 				);
+			case "menu_payload_truncated_at_ingest":
+				return uiText(
+					"Menu quá lớn (>2MB) nên backend không nhận đủ JSON. Hãy reload menu từ DB hoặc chia nhỏ phạm vi sửa (chỉ bôi đen vùng table cần sửa).",
+					"The menu exceeds the 2MB ingest limit so the backend did not receive the full JSON. Reload from DB or narrow the edit scope (select only the table section).",
+					"菜单超过 2MB 接收上限，后端未收到完整 JSON。请从数据库重新加载，或缩小编辑范围（仅选中要改的 table 区域）。",
+				);
+			case "menu_edit_suspicious_shrink_rejected":
+				return uiText(
+					"AI trả menu quá ngắn so với bản gốc — đã chặn thay thế toàn bộ. Hãy mô tả cụ thể cột f_header / f_types=co cần sửa.",
+					"AI returned a menu much shorter than the original — full replacement blocked. Describe the specific f_header / f_types=co columns to fix.",
+					"AI 返回的菜单远短于原文件 — 已阻止全量替换。请具体说明要修复的 f_header / f_types=co 列。",
+				);
 			case "menu_edit_hallucinated_draft_rejected":
 				return uiText(
 					"Model trả menu mẫu thay vì patch — đã chặn apply. Hãy mô tả cụ thể cột f_header / f_types=co cần sửa.",
@@ -5472,6 +5484,9 @@ export default function AiAssistantChat({
 		if (!force && nextCode === lastAppliedCodeRef.current)
 			return false;
 		const baseCode = liveCodeRef.current || currentCode || "";
+		if (baseCode.length > 100_000 && nextCode.length < baseCode.length / 2) {
+			return false;
+		}
 		if (baseCode && baseCode !== nextCode) {
 			undoSnapshotRef.current = baseCode;
 			setCanUndoLastEdit(true);
@@ -9042,7 +9057,12 @@ export default function AiAssistantChat({
 									));
 								}
 								flushStreamingToUI(true);
-								if (evt.fullResponse || completionTextEdits.length > 0 || menuEditorApplyReady) {
+								const finalOutputGateMeta = completionEventMeta["finalOutputGate"] as Record<string, unknown> | undefined;
+								const gateRejected = gateRejectedEarly
+									|| finalOutputGateMeta?.passed === false;
+								const gatePassedForApply = !gateRejected
+									&& (menuEditorApplyReady || finalOutputGateMeta?.passed === true);
+								if (gatePassedForApply && (evt.fullResponse || completionTextEdits.length > 0 || menuEditorApplyReady)) {
 									const blockAutoApplyByRisk = Boolean((evt as any).editRiskBlockAutoApply === true);
 									if (!blockAutoApplyByRisk && !reviewRequired) {
 										const completionFetchApply = Boolean(completionEventMeta["menuEditorApplyFetch"] === true);
@@ -9095,9 +9115,6 @@ export default function AiAssistantChat({
 										}
 									}
 								}
-								const finalOutputGateMeta = completionEventMeta["finalOutputGate"] as Record<string, unknown> | undefined;
-								const gateRejected = gateRejectedEarly
-									|| finalOutputGateMeta?.passed === false;
 								const completionReasonCode = gateRejected
 									? String(finalOutputGateMeta?.reasonCode || finalOutputGateMetaEarly?.reasonCode || completionEventMeta["reason_code"] || "final_output_gate_rejected").trim()
 									: completionReasonCodeEarly;

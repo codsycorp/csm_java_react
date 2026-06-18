@@ -91,9 +91,18 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 
 	if req.ContextType == "menu_json" && responseMode == "edit" {
 		resolved := services.ResolveMenuEditEditorBase(req)
-		log.Printf("AiCodeStream menu edit requestId=%s curLen=%d fullLen=%d resolvedLen=%d health=%s nodes=%d",
-			req.RequestID, len(req.CurrentCode), len(req.FullCurrentCode), len(resolved),
-			services.MenuEditorBaseHealth(resolved), services.CountMenuNodesFromDraft(resolved))
+		log.Printf("AiCodeStream menu edit requestId=%s curLen=%d fullLen=%d fullOrigLen=%d truncated=%v resolvedLen=%d health=%s nodes=%d",
+			req.RequestID, len(req.CurrentCode), len(req.FullCurrentCode), req.FullCurrentCodeOrigLen, req.FullCurrentCodeTruncated,
+			len(resolved), services.MenuEditorBaseHealth(resolved), services.CountMenuNodesFromDraft(resolved))
+		if req.FullCurrentCodeTruncated {
+			elapsed := int64(0)
+			completion := services.CodeStreamCompletion(req, "", resolved, services.StreamingModelLabel(deps.Config, deps.Llama), elapsed)
+			writeSSE(w, completion)
+			writeSSE(w, stageEvent("request_complete", map[string]any{
+				"requestId": req.RequestID, "elapsedMs": elapsed, "menuPayloadTruncated": true,
+			}))
+			return
+		}
 	}
 
 	fullCode := req.FullCurrentCode

@@ -9,19 +9,33 @@ import (
 )
 
 type CodeStreamRequest struct {
-	RequestID       string
-	AppID           string
-	FlowType        string
-	TaskType        string
-	ContextType     string
-	Message         string
-	CurrentCode     string
-	FullCurrentCode string // raw editor payload before tier cap (map-reduce source)
-	Language        string
-	Model           string
-	UILang          string
-	ResponseMode    string
-	EditorMetadata  map[string]any
+	RequestID                string
+	AppID                    string
+	FlowType                 string
+	TaskType                 string
+	ContextType              string
+	Message                  string
+	CurrentCode              string
+	FullCurrentCode          string // raw editor payload before tier cap (map-reduce source)
+	FullCurrentCodeOrigLen   int
+	FullCurrentCodeTruncated bool
+	Language                 string
+	Model                    string
+	UILang                   string
+	ResponseMode             string
+	EditorMetadata           map[string]any
+}
+
+const (
+	fullCurrentCodeMaxCharsMenuJSON = 2_000_000
+	fullCurrentCodeMaxCharsDefault  = 500_000
+)
+
+func maxFullCurrentCodeChars(contextType string) int {
+	if strings.ToLower(strings.TrimSpace(contextType)) == "menu_json" {
+		return fullCurrentCodeMaxCharsMenuJSON
+	}
+	return fullCurrentCodeMaxCharsDefault
 }
 
 func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool) (*CodeStreamRequest, string) {
@@ -57,16 +71,20 @@ func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool)
 	if fullCode == "" {
 		fullCode = rawCode
 	}
+	fullOrigLen := len(fullCode)
+	fullCap := maxFullCurrentCodeChars(contextType)
 	editorMeta := parseEditorMetadata(params)
 	return &CodeStreamRequest{
-		RequestID:       requestID,
-		AppID:           appID,
-		FlowType:        flowType,
-		TaskType:        paramString(params, "taskType", "edit"),
-		ContextType:     contextType,
-		Message:         truncateStr(paramString(params, "message", ""), 32_000),
-		CurrentCode:     truncateStr(rawCode, maxOutgoingEditorFromParams(params)),
-		FullCurrentCode: truncateStr(fullCode, 500_000),
+		RequestID:                requestID,
+		AppID:                    appID,
+		FlowType:                 flowType,
+		TaskType:                 paramString(params, "taskType", "edit"),
+		ContextType:              contextType,
+		Message:                  truncateStr(paramString(params, "message", ""), 32_000),
+		CurrentCode:              truncateStr(rawCode, maxOutgoingEditorFromParams(params)),
+		FullCurrentCode:          truncateStr(fullCode, fullCap),
+		FullCurrentCodeOrigLen:   fullOrigLen,
+		FullCurrentCodeTruncated: fullOrigLen > fullCap,
 		Language:        paramString(params, "language", "javascript"),
 		Model:           paramString(params, "model", "auto"),
 		UILang:          firstNonEmpty(paramString(params, "uiLang", ""), paramString(params, "ui_lang", ""), paramString(params, "uiLanguage", "vi")),

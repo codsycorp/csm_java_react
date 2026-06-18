@@ -102,6 +102,8 @@ func AnalyzeMenuTableFieldIssues(menuJSON string) []MenuTableFieldIssue {
 							codes = append(codes, "missing_f_header_vi_from_header")
 						} else if hdrEn != "" && (hdr == "" || hdr == hdrEn || !containsVietnamese(hdr)) {
 							codes = append(codes, "missing_f_header_vi_shows_en")
+						} else if hdr == "" {
+							codes = append(codes, "missing_f_header_from_fname")
 						}
 					}
 					if isComboFieldType(stringFromAny(row["f_types"])) {
@@ -164,10 +166,22 @@ func ApplyDeterministicMenuTableFieldFixes(menuJSON string) (merged string, rema
 					}
 					hdr := strings.TrimSpace(stringFromAny(row["f_header"]))
 					hdrVi := strings.TrimSpace(stringFromAny(row["f_header_vi"]))
+					hdrEn := strings.TrimSpace(stringFromAny(row["f_header_en"]))
+					fname := strings.TrimSpace(stringFromAny(row["f_name"]))
 					if hdrVi == "" && containsVietnamese(hdr) {
 						row["f_header_vi"] = hdr
 						table[i] = row
 						fixed++
+					} else if hdrVi == "" && hdrEn != "" && (hdr == "" || hdr == hdrEn || !containsVietnamese(hdr)) {
+						vi := humanizeFieldName(fname)
+						if vi != "" {
+							if hdr == "" || hdr == hdrEn {
+								row["f_header"] = vi
+							}
+							row["f_header_vi"] = vi
+							table[i] = row
+							fixed++
+						}
 					}
 				}
 				node["table"] = table

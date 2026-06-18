@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -129,6 +130,33 @@ func TestMenuEditorBaseHealthAllowsLooseJSONWithMenuSignals(t *testing.T) {
 	coerced := CoerceMenuEditorPayload(broken)
 	if CountMenuNodesFromDraft(coerced) < 1 {
 		t.Fatalf("expected coerced menu nodes, got: %s", coerced)
+	}
+}
+
+func TestCodeStreamCompletionRejectsIngestTruncatedMenu(t *testing.T) {
+	req := &CodeStreamRequest{
+		RequestID: "job_trunc", ContextType: "menu_json", ResponseMode: "edit",
+		FullCurrentCodeOrigLen:   2_100_000,
+		FullCurrentCodeTruncated: true,
+	}
+	complete := CodeStreamCompletion(req, `{"menu":[{"id":"x"}]}`, "", "local_provider", 1)
+	gate, _ := complete["finalOutputGate"].(map[string]any)
+	if gate == nil || gate["reasonCode"] != "menu_payload_truncated_at_ingest" {
+		t.Fatalf("expected ingest truncation gate: %+v", complete)
+	}
+}
+
+func TestCodeStreamCompletionRejectsSuspiciousShrink(t *testing.T) {
+	large := `{"menu":[{"id":"m1","children":[{"id":"c` + strings.Repeat("x", 120_000) + `","label":"C"}]}]}`
+	small := `{"menu":[{"id":"root","label":"Demo"}]}`
+	req := &CodeStreamRequest{
+		RequestID: "job_shrink", ContextType: "menu_json", ResponseMode: "edit",
+		CurrentCode: large, FullCurrentCode: large, FullCurrentCodeOrigLen: len(large),
+	}
+	complete := CodeStreamCompletion(req, small, large, "local_provider", 1)
+	gate, _ := complete["finalOutputGate"].(map[string]any)
+	if gate == nil || gate["passed"] != false {
+		t.Fatalf("expected shrink rejection: %+v", complete)
 	}
 }
 
