@@ -50,6 +50,59 @@ func TestEqIndexSearchKeysConsistent(t *testing.T) {
 	}
 }
 
+func TestFilterWithPaginationEmptyFilterWhenIndexComplete(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.AppConfig{
+		DataDir:       dir,
+		NativeDataDir: filepath.Join(dir, "native"),
+		SearchDBPath:  filepath.Join(dir, "native", "search", "vectors.db"),
+		SearchDBDir:   filepath.Join(dir, "native", "search"),
+		PebbleRoot:    filepath.Join(dir, "native", "pebble"),
+	}
+	_ = os.MkdirAll(cfg.NativeDataDir, 0o755)
+
+	rm, err := NewRecordManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rm.ShutdownAll()
+
+	appID := "csm"
+	table := "csm_accounts"
+	for i := 1; i <= 3; i++ {
+		_, _ = rm.CreateRecord(appID, table, map[string]any{
+			"id": fmtID(i), "username": "user" + fmtID(i), "email": fmtID(i) + "@test.com",
+		}, []string{"id"})
+	}
+	rm.markSearchIndexComplete(appID, table, 3, 3)
+
+	page := rm.FilterWithPagination(appID, table, model.SearchFilter{}, "", 0, 10)
+	rows, _ := page["rows"].([]any)
+	if len(rows) != 3 {
+		t.Fatalf("empty filter with complete index must scan Pebble, got %d rows", len(rows))
+	}
+
+	all := rm.Filter(appID, table, model.SearchFilter{})
+	allRows, _ := all["rows"].([]any)
+	if len(allRows) != 3 {
+		t.Fatalf("Filter() empty filter must return all rows, got %d", len(allRows))
+	}
+
+	// Frontend default: e_where AND id like "" (list all)
+	frontendList := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			{Field: "id", FilterType: "like", Value: ""},
+		},
+	}
+	rm.markSearchIndexComplete(appID, table, 3, 3)
+	list := rm.Filter(appID, table, frontendList)
+	listRows, _ := list["rows"].([]any)
+	if len(listRows) != 3 {
+		t.Fatalf("id like '' with complete index must list all rows, got %d", len(listRows))
+	}
+}
+
 func TestFilterWithPaginationScan(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.AppConfig{

@@ -303,7 +303,7 @@ func ApplyTableReadRowFilters(appID, tableName string, rows []map[string]any, ct
 	}
 	data := filterManagedAccountDescendants(tableName, rows, ctx, appID, rm)
 	data = applyDataScopeRowFilter(appID, tableName, data, ctx, rm)
-	data = filterMainAccountRows(tableName, data, rm)
+	data = filterMainAccountRows(tableName, data, ctx, rm)
 	if tableName == "csm_accounts" {
 		data = maskSelfAccountRowsForNonDev(data, ctx)
 	}
@@ -1165,8 +1165,12 @@ func matchesByFields(row map[string]any, fields, allowed []string) bool {
 	return ok
 }
 
-func filterMainAccountRows(tableName string, rows []map[string]any, rm *data.RecordManager) []map[string]any {
+func filterMainAccountRows(tableName string, rows []map[string]any, access *UserAccessContext, rm *data.RecordManager) []map[string]any {
 	if tableName != "csm_accounts" || len(rows) == 0 {
+		return rows
+	}
+	// Dev quản lý toàn bộ tài khoản trên csm_accounts — không ẩn role user.
+	if access != nil && access.IsDev {
 		return rows
 	}
 	var out []map[string]any

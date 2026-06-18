@@ -304,11 +304,15 @@ func (rm *RecordManager) isSingletonLookupFilter(appID, tableName string, filter
 // shouldUseEqIndexListFastPath returns false when a list filter must scan Pebble for correctness.
 // sys_autos with partial PK (e.g. only p_type=0) is a list query — eq-index can return a subset
 // after partial migrate or stale in-memory index on production.
+// Empty filter (list all) must scan Pebble — eq-index only supports equality lookups.
 func (rm *RecordManager) shouldUseEqIndexListFastPath(appID, tableName string, filter model.SearchFilter) bool {
 	if !rm.isSearchIndexComplete(appID, tableName) {
 		return false
 	}
 	if filter.HasLike() {
+		return false
+	}
+	if len(extractEqConditions(filter)) == 0 {
 		return false
 	}
 	app, table, err := rm.sanitizeTable(appID, tableName)
