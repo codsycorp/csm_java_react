@@ -21,6 +21,7 @@ type CodeStreamRequest struct {
 	Model           string
 	UILang          string
 	ResponseMode    string
+	EditorMetadata  map[string]any
 }
 
 func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool) (*CodeStreamRequest, string) {
@@ -52,6 +53,7 @@ func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool)
 		requestID = newRequestID()
 	}
 	rawCode := paramString(params, "currentCode", "")
+	editorMeta := parseEditorMetadata(params)
 	return &CodeStreamRequest{
 		RequestID:       requestID,
 		AppID:           appID,
@@ -61,11 +63,41 @@ func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool)
 		Message:         truncateStr(paramString(params, "message", ""), 32_000),
 		CurrentCode:     truncateStr(rawCode, maxOutgoingEditorFromParams(params)),
 		FullCurrentCode: truncateStr(rawCode, 500_000),
-		Language:     paramString(params, "language", "javascript"),
-		Model:        paramString(params, "model", "auto"),
-		UILang:       firstNonEmpty(paramString(params, "uiLang", ""), paramString(params, "ui_lang", ""), paramString(params, "uiLanguage", "vi")),
-		ResponseMode: firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", "")),
+		Language:        paramString(params, "language", "javascript"),
+		Model:           paramString(params, "model", "auto"),
+		UILang:          firstNonEmpty(paramString(params, "uiLang", ""), paramString(params, "ui_lang", ""), paramString(params, "uiLanguage", "vi")),
+		ResponseMode:    firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", "")),
+		EditorMetadata:  editorMeta,
 	}, ""
+}
+
+func parseEditorMetadata(params map[string]any) map[string]any {
+	raw, ok := params["editorMetadata"]
+	if !ok || raw == nil {
+		return nil
+	}
+	if m, ok := raw.(map[string]any); ok {
+		return m
+	}
+	return nil
+}
+
+func IsLineItemsPdfImport(req *CodeStreamRequest) bool {
+	if req == nil {
+		return false
+	}
+	return editorMetadataSourceFromMap(req.EditorMetadata) == "LineItemsPdfImport"
+}
+
+func IsLineItemsPdfImportParams(params map[string]any) bool {
+	return editorMetadataSource(params) == "LineItemsPdfImport"
+}
+
+func editorMetadataSourceFromMap(meta map[string]any) string {
+	if meta == nil {
+		return ""
+	}
+	return strings.TrimSpace(paramString(meta, "source", ""))
 }
 
 func maxOutgoingEditorFromParams(params map[string]any) int {
@@ -113,14 +145,31 @@ func BuildCodeStreamLocalPromptWithExtras(cfg config.AppConfig, req *CodeStreamR
 
 func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest, learningBlock, comprehendBlock, tenantRAGBlock, multimodalBlock, workspaceBlock string) string {
 	mode := ResolveResponseMode(req)
+	printImport := IsLineItemsPdfImport(req)
 	intent := classifyLocalIntent(req.ContextType, mode)
 	editorMax, ragMax, learningMax, workspaceMax := ConstrainedPromptSlotCaps(cfg)
+	if printImport {
+		editorMax = 32_000
+		if !IsConstrained8GbTier(cfg) {
+			editorMax = 48_000
+		}
+		ragMax = 0
+		learningMax = 0
+		workspaceMax = 0
+		comprehendBlock = ""
+		tenantRAGBlock = ""
+		workspaceBlock = ""
+		multimodalBlock = ""
+		learningBlock = ""
+	}
 	editor := truncateStr(req.CurrentCode, editorMax)
 	userReq := truncateStr(req.Message, 32_000)
-	learningBlock = truncateStr(learningBlock, learningMax)
-	tenantRAGBlock = truncateStr(tenantRAGBlock, ragMax)
-	workspaceBlock = truncateStr(workspaceBlock, workspaceMax)
-	multimodalBlock = truncateStr(multimodalBlock, 3000)
+	if !printImport {
+		learningBlock = truncateStr(learningBlock, learningMax)
+		tenantRAGBlock = truncateStr(tenantRAGBlock, ragMax)
+		workspaceBlock = truncateStr(workspaceBlock, workspaceMax)
+		multimodalBlock = truncateStr(multimodalBlock, 3000)
+	}
 
 	baseSystem := baseSystemMin
 	switch intent {
@@ -191,7 +240,7 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 		}
 	}
 
-	if ctxBlock := loadAppContextBlock(cfg, req.AppID, 6_000); ctxBlock != "" {
+	if ctxBlock := loadAppContextBlock(cfg, req.AppID, 6_000); ctxBlock != "" && !printImport {
 		sb.WriteString("[SESSION_MEMORY]\n")
 		sb.WriteString(ctxBlock)
 		sb.WriteString("\n[/SESSION_MEMORY]\n\n")
@@ -214,16 +263,22 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 		sb.WriteString("[AUTO_LEARNED_MEMORY]\n")
 		sb.WriteString(learningBlock)
 		sb.WriteString("\n[/AUTO_LEARNED_MEMORY]\n\n")
-	} else if lb := BuildLearningContextBlock(cfg, req.AppID, req.Message, req.ContextType, 6_000); lb != "" {
-		sb.WriteString("[AUTO_LEARNED_MEMORY]\n")
-		sb.WriteString(lb)
-		sb.WriteString("\n[/AUTO_LEARNED_MEMORY]\n\n")
+	} else if !printImport {
+		if lb := BuildLearningContextBlock(cfg, req.AppID, req.Message, req.ContextType, 6_000); lb != "" {
+			sb.WriteString("[AUTO_LEARNED_MEMORY]\n")
+			sb.WriteString(lb)
+			sb.WriteString("\n[/AUTO_LEARNED_MEMORY]\n\n")
+		}
 	}
 	sb.WriteString("[USER_REQUEST]\n")
 	sb.WriteString(userReq)
 	sb.WriteString("\n[/USER_REQUEST]\n")
 	raw := truncateStr(sb.String(), cfg.EffectiveCodeStreamPromptCap())
-	return ClampPromptForLocalProvider(cfg, PrepareLocalProviderPrompt(raw, EffectiveLocalPromptCap(cfg, req.ContextType, mode)), req.ContextType, mode)
+	promptCap := EffectiveLocalPromptCap(cfg, req.ContextType, mode)
+	if printImport {
+		promptCap = EffectiveLocalPromptCapForPrintImport(cfg)
+	}
+	return ClampPromptForLocalProvider(cfg, PrepareLocalProviderPrompt(raw, promptCap), req.ContextType, mode)
 }
 
 func classifyLocalIntent(contextType, responseMode string) string {

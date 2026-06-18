@@ -1594,12 +1594,12 @@ export default function Menu() {
 											t={t}
 											lang={currentLanguage}
 											onEdit={async (record) => {
-												setIsOpen(true);
 												setTitle(t("system.menu.editMenu"));
 												// Fetch full menu item details to ensure table and trigger data is loaded
 												const fullDetails = await fetchMenuItemDetail(record.id, selectedApp);
 												const parentId = findParentId(menuData, record.id);
 												setDetailData({ ...record, ...(fullDetails || {}), parentId });
+												setIsOpen(true);
 											}}
 											onDelete={(id) => handleDeleteRow(id)}
 												onMoveUp={(id) => handleMoveMenuOrder(id, "up")}
@@ -1684,12 +1684,12 @@ export default function Menu() {
 							t={t}
 							lang={currentLanguage}
 							onEdit={async (record) => {
-								setIsOpen(true);
 								setTitle(t("system.menu.editMenu"));
 								// Fetch full menu item details to ensure table and trigger data is loaded
 								const fullDetails = await fetchMenuItemDetail(record.id, selectedApp);
 								const parentId = findParentId(menuData, record.id);
 								setDetailData({ ...record, ...(fullDetails || {}), parentId });
+								setIsOpen(true);
 							}}
 							onDelete={(id) => handleDeleteRow(id)}
 							onMoveUp={(id) => handleMoveMenuOrder(id, "up")}

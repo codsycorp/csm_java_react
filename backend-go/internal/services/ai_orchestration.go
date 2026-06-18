@@ -312,6 +312,13 @@ func PreparePhase1Pipeline(cfg config.AppConfig, rm *data.RecordManager, req *Co
 	responseMode := ReconcileResponseModeWithIntent(intent, ResolveResponseMode(req))
 	req.ResponseMode = responseMode
 
+	if IsLineItemsPdfImport(req) {
+		return RunPhase1PipelineContext{
+			Intent:       intent,
+			ResponseMode: responseMode,
+		}
+	}
+
 	spec := ComprehendBusinessHeuristic(req)
 	learningBlock := BuildLearningContextBlock(cfg, req.AppID, req.Message, req.ContextType, 8_000)
 	comprehendBlock := BuildComprehendPromptBlock(spec)

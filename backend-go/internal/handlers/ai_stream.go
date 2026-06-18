@@ -193,6 +193,8 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		"responseMode": responseMode, "routingTier": phase1.Orchestration.RoutingTier,
 		"promptChars": len(prompt), "constrainedTier": services.IsConstrained8GbTier(deps.Config),
 		"promptCap": services.EffectiveLocalPromptCap(deps.Config, req.ContextType, responseMode),
+		"maxOutputTokens": services.EffectiveInferenceMaxTokensFromParams(deps.Config, responseMode, params),
+		"printImport": services.IsLineItemsPdfImport(req),
 	}))
 	writeSSE(w, stageEvent("streaming_started", map[string]any{
 		"requestId": req.RequestID, "model": "local_provider", "estimatedTotalChars": len(prompt) / 4, "percent": 15,

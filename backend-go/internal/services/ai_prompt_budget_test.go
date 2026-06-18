@@ -124,13 +124,23 @@ func TestEffectiveInferenceMaxTokensEdit8Gb(t *testing.T) {
 
 func TestEffectiveInferenceMaxTokensPrintImport(t *testing.T) {
 	t.Setenv("AI_LOCAL_RUNTIME_TIER", "balanced-8gb")
-	t.Setenv("AI_CODE_STREAM_PRINT_IMPORT_MAX_TOKENS", "4096")
+	t.Setenv("AI_CODE_STREAM_PRINT_IMPORT_MAX_TOKENS", "6144")
 	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 768}}
 	params := map[string]any{
 		"editorMetadata": map[string]any{"source": "LineItemsPdfImport"},
 	}
 	got := EffectiveInferenceMaxTokensFromParams(cfg, "edit", params)
-	if got != 4096 {
-		t.Fatalf("print import want 4096 tok, got %d", got)
+	if got != 6144 {
+		t.Fatalf("print import on 8192 ctx want 6144 output tok, got %d", got)
+	}
+}
+
+func TestEffectiveLocalPromptCapForPrintImport(t *testing.T) {
+	t.Setenv("AI_LOCAL_RUNTIME_TIER", "balanced-8gb")
+	t.Setenv("AI_CODE_STREAM_PRINT_IMPORT_MAX_TOKENS", "6144")
+	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxPromptChars: 28000}}
+	got := EffectiveLocalPromptCapForPrintImport(cfg)
+	if got < 4096 || got > 28_000 {
+		t.Fatalf("print import prompt cap out of range: %d", got)
 	}
 }

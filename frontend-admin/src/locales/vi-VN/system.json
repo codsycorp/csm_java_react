@@ -228,6 +228,7 @@
 		"typeForm": "Thể hiện theo",
 		"typeForm.table": "Dạng bảng",
 		"typeForm.grid": "Dạng bảng",
+		"typeForm.group": "Nhóm menu",
 		"typeForm.masterDetail": "Dạng Form Master-Detail",
 		"typeForm.dynamicLink": "Liên kết động",
 		"typeForm.dynamicCode": "Chạy code động",

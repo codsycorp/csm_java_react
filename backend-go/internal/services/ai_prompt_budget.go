@@ -109,6 +109,32 @@ func EffectiveLocalPromptCap(cfg config.AppConfig, contextType, responseMode str
 	return hardCap
 }
 
+// EffectiveLocalPromptCapForPrintImport reserves output headroom for long HTML trigger returns.
+func EffectiveLocalPromptCapForPrintImport(cfg config.AppConfig) int {
+	llamaCap := cfg.AI.LlamaMaxPromptChars
+	if llamaCap <= 0 {
+		llamaCap = 48_000
+	}
+	ctx := int(cfg.EffectiveLlamaContextWindow())
+	outReserve := int(codeStreamPrintImportMaxTokens())
+	if outReserve < 2048 {
+		outReserve = 2048
+	}
+	tokenBudget := ctx - outReserve - 512
+	if tokenBudget < 2048 {
+		tokenBudget = 2048
+	}
+	safeFromCtx := tokenBudget * 3
+	hardCap := min(llamaCap, min(safeFromCtx, MaxSafePromptChars(cfg)))
+	if IsConstrained8GbTier(cfg) {
+		hardCap = min(hardCap, 28_000)
+	}
+	if hardCap < 4096 {
+		return 4096
+	}
+	return hardCap
+}
+
 // SanitizeLocalInferencePrompt strips binary/base64 payloads that blow token counts (PDF import).
 func SanitizeLocalInferencePrompt(prompt string) string {
 	s := strings.TrimSpace(prompt)
@@ -136,16 +162,30 @@ func EffectiveInferenceMaxTokensFromParams(cfg config.AppConfig, responseMode st
 		return base
 	}
 	if editorMetadataSource(params) == "LineItemsPdfImport" {
-		cap := codeStreamPrintImportMaxTokens()
-		ctxHalf := cfg.EffectiveLlamaContextWindow() / 2
-		if cap > ctxHalf {
-			cap = ctxHalf
-		}
+		cap := effectivePrintImportOutputCap(cfg)
+		base := effectiveInferenceMaxTokensBase(cfg, responseMode)
 		if cap > base {
 			return cap
 		}
+		return base
 	}
 	return base
+}
+
+func effectivePrintImportOutputCap(cfg config.AppConfig) uint32 {
+	want := codeStreamPrintImportMaxTokens()
+	ctx := cfg.EffectiveLlamaContextWindow()
+	// Reserve ≥2048 prompt tokens; allow long HTML return on small ctx (8192 → ~6144 out).
+	maxByCtx := ctx
+	if maxByCtx > 2048 {
+		maxByCtx -= 2048
+	} else {
+		maxByCtx = 512
+	}
+	if want > maxByCtx {
+		want = maxByCtx
+	}
+	return want
 }
 
 func editorMetadataSource(params map[string]any) string {

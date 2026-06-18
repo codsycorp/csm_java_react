@@ -231,6 +231,7 @@
 		"typeForm": "Display as",
 		"typeForm.table": "Grid",
 		"typeForm.grid": "Grid",
+		"typeForm.group": "Menu group",
 		"typeForm.masterDetail": "Master-Detail Form",
 		"typeForm.dynamicLink": "Dynamic Link",
 		"typeForm.dynamicCode": "Dynamic Code",

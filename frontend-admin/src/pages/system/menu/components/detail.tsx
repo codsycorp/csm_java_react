@@ -2,6 +2,7 @@ import type { MenuItemType } from "#src/api/system/menu";
 import { fetchAddMenuItem, fetchUpdateMenuItem, saveMenuStruct } from "#src/api/system/menu";
 import { handleTree } from "#src/utils";
 import { isMasterDetailMenu, getMenuDisplayConfig } from "../utils/menu-logic";
+import { resolveMenuTypeForm } from "../utils/menu-type-resolver";
 import { getTableData, andWhere } from "#src/components/csm-grid/CsmApi";
 
 import {
@@ -659,6 +660,12 @@ function getMenuLabel(menu: MenuItemType, lang: string = 'vi', t?: (key: string)
 	return menu.id || '';
 }
 
+function normalizeMenuSelectNumber(value: unknown, fallback: number): number {
+  if (value == null || value === "") return fallback;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
 function buildConfigString(data: Partial<MenuItemType> = {}) {
   if (!data) return "";
   if (typeof data.config === "string" && data.config.trim()) return data.config;
@@ -689,6 +696,12 @@ export function Detail({
   const menuOptions = useMenuDesignerOptions(t);
   const formRef = useRef<FormInstance>(null);
   const autoSyncingRef = useRef(false);
+  const resolvedMenuFormFields = useMemo(() => ({
+    type_form: resolveMenuTypeForm(detailData),
+    row_type_edit: normalizeMenuSelectNumber(detailData.row_type_edit, 0),
+    type_menu: normalizeMenuSelectNumber(detailData.type_menu, 0),
+    ...(detailData.m_show != null ? { m_show: Number(detailData.m_show) } : {}),
+  }), [detailData]);
   const [applyingLinkedFieldFix, setApplyingLinkedFieldFix] = useState(false);
   const [tableRows, setTableRows] = useState<TableField[]>([]);
   const [progressTableRows, setProgressTableRows] = useState<TableField[]>([]);
@@ -1645,27 +1658,22 @@ export function Detail({
   };
 
   useEffect(() => {
-    if (formRef.current && detailData) {
-      const nextData = { ...detailData } as any;
-      const configText = buildConfigString(detailData);
-      if (configText) {
-        nextData.config = configText;
-      }
-      
-      // Đảm bảo các giá trị được convert về đúng type
-      // Select/Dropdown fields - convert to number
-      if (nextData.type_form !== undefined && nextData.type_form !== null) {
-        nextData.type_form = Number(nextData.type_form);
-      }
-      if (nextData.row_type_edit !== undefined && nextData.row_type_edit !== null) {
-        nextData.row_type_edit = Number(nextData.row_type_edit);
-      }
-      if (nextData.type_menu !== undefined && nextData.type_menu !== null) {
-        nextData.type_menu = Number(nextData.type_menu);
-      }
-      if (nextData.m_show !== undefined && nextData.m_show !== null) {
-        nextData.m_show = Number(nextData.m_show);
-      }
+    if (!open || !formRef.current || !detailData) return;
+
+    const nextData = { ...detailData } as any;
+    const configText = buildConfigString(detailData);
+    if (configText) {
+      nextData.config = configText;
+    }
+    
+    // Đảm bảo các giá trị được convert về đúng type
+    // Select/Dropdown fields - convert to number
+    nextData.type_form = resolveMenuTypeForm(nextData);
+    nextData.row_type_edit = normalizeMenuSelectNumber(nextData.row_type_edit, 0);
+    nextData.type_menu = normalizeMenuSelectNumber(nextData.type_menu, 0);
+    if (nextData.m_show !== undefined && nextData.m_show !== null) {
+      nextData.m_show = Number(nextData.m_show);
+    }
       
       // Boolean fields
       if (nextData.dev !== undefined && nextData.dev !== null && typeof nextData.dev === 'string') {
@@ -1739,7 +1747,7 @@ export function Detail({
       const { parentId, ...fieldsToSet } = nextData;
       formRef.current.setFieldsValue(fieldsToSet);
     }
-  }, [detailData, flatParentMenus]);
+  }, [detailData, flatParentMenus, open]);
 
   useEffect(() => {
     if (!open && formRef.current) {
@@ -1865,11 +1873,7 @@ export function Detail({
       initialValues={{
         data_scope_override: "NONE",
         ...detailData,
-        // Convert string→number for Select fields so ProFormSelect matches options on first render
-        ...(detailData.type_form != null && detailData.type_form !== '' ? { type_form: Number(detailData.type_form) } : {}),
-        ...(detailData.row_type_edit != null && detailData.row_type_edit !== '' ? { row_type_edit: Number(detailData.row_type_edit) } : {}),
-        ...(detailData.type_menu != null && detailData.type_menu !== '' ? { type_menu: Number(detailData.type_menu) } : {}),
-        ...(detailData.m_show != null ? { m_show: Number(detailData.m_show) } : {}),
+        ...resolvedMenuFormFields,
       }}
     >
 

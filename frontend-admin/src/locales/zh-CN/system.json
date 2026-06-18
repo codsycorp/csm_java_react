@@ -231,6 +231,7 @@
 		"typeForm": "展现方式",
 		"typeForm.table": "表格",
 		"typeForm.grid": "表格",
+		"typeForm.group": "菜单分组",
 		"typeForm.masterDetail": "主从表单",
 		"typeForm.dynamicLink": "动态链接",
 		"typeForm.dynamicCode": "动态代码",

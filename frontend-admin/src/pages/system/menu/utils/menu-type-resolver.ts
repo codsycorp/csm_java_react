@@ -25,6 +25,63 @@ export enum MenuFormType {
   LINE_ITEMS_PDF = 7,        // Form dong hang + in PDF
 }
 
+const SUPPORTED_TYPE_FORMS = new Set<number>([
+  MenuFormType.GROUP,
+  MenuFormType.TABLE,
+  MenuFormType.MASTER_DETAIL,
+  MenuFormType.DYNAMIC_LINK,
+  MenuFormType.DYNAMIC_CODE,
+  MenuFormType.KANBAN_BOARD,
+  MenuFormType.LINE_ITEMS_PDF,
+]);
+
+function toFiniteMenuNumber(value: unknown): number | undefined {
+  if (value == null || value === "") return undefined;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : undefined;
+}
+
+/**
+ * Resolve type_form for menu edit form — explicit field, legacy `type`, or payload inference.
+ */
+export function resolveMenuTypeForm(menu: Partial<MenuItemType> | Record<string, any> | null | undefined): number {
+  if (!menu) return MenuFormType.TABLE;
+
+  const explicit = toFiniteMenuNumber(menu.type_form);
+  if (explicit !== undefined && SUPPORTED_TYPE_FORMS.has(explicit)) {
+    return explicit;
+  }
+
+  const fromLegacyType = toFiniteMenuNumber((menu as any).type);
+  if (fromLegacyType !== undefined && SUPPORTED_TYPE_FORMS.has(fromLegacyType)) {
+    return fromLegacyType;
+  }
+
+  if ((menu as any).kanban_config != null) return MenuFormType.KANBAN_BOARD;
+  if (String((menu as any).auto_code_name || "").trim()) return MenuFormType.DYNAMIC_CODE;
+  if (String(menu.dynamic_link_url || (menu as any).v_link || (menu as any).externalLink || "").trim()) {
+    return MenuFormType.DYNAMIC_LINK;
+  }
+  if (Array.isArray((menu as any).line_items_columns) && (menu as any).line_items_columns.length > 0) {
+    return MenuFormType.LINE_ITEMS_PDF;
+  }
+
+  const children = Array.isArray(menu.children)
+    ? menu.children
+    : Array.isArray((menu as any).nodes)
+      ? (menu as any).nodes
+      : [];
+  const tableName = String(menu.table_name || "").trim();
+  const tableFields = Array.isArray(menu.table) ? menu.table : [];
+  const hasChildren = children.length > 0;
+
+  if (hasChildren && !tableName && tableFields.length === 0) return MenuFormType.GROUP;
+  if (hasChildren && tableName) return MenuFormType.MASTER_DETAIL;
+  if (tableName || tableFields.length > 0) return MenuFormType.TABLE;
+
+  return MenuFormType.TABLE;
+}
+
 /**
  * Get menu form type label for display
  */

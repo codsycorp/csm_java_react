@@ -7,6 +7,7 @@ import { getBooleanOptions, getYesNoOptions } from "#src/constants";
 import { Tag } from "antd";
 
 const TYPE_FORM_OPTION_KEYS: Array<{ value: number; key: string }> = [
+  { value: 0, key: "system.menu.typeForm.group" },
   { value: 1, key: "system.menu.typeForm.grid" },
   { value: 2, key: "system.menu.typeForm.masterDetail" },
   { value: 3, key: "system.menu.typeForm.dynamicLink" },
