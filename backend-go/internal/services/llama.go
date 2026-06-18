@@ -113,7 +113,7 @@ func (l *LlamaService) statusHint() string {
 		return "Inference: llama.cpp native (trong process Go)"
 	}
 	if !l.ModelOnDisk() {
-		return "Thiếu file GGUF. Chạy scripts/download-ai-local-models.sh 8gb trên server."
+		return "Thiếu file GGUF. Chạy scripts/download-ai-local-models.sh 8gb trên server (1.5B Q8_0)."
 	}
 	if l.cfg.AI.LlamaNativeEnabled && !l.UsesNative() {
 		return "Native chưa link — cần binary build với -tags llamacpp (scripts/build-go-linux-native.sh)."

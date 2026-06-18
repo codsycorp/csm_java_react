@@ -7,12 +7,35 @@ import (
 	"csm_server/backend-go/internal/config"
 )
 
-// IsConstrained8GbTier mirrors Java balanced-8gb / ctx<=8192 production profile.
-func IsConstrained8GbTier(cfg config.AppConfig) bool {
+// IsPromptBudgetDisabled turns off tier-based prompt/output clamps (8GB caps, slot shrink).
+// Limits then follow only AI_LOCAL_LLAMA_* caps and llama context window (MaxSafePromptChars).
+func IsPromptBudgetDisabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("AI_LOCAL_PROMPT_BUDGET_DISABLED")))
+	if v == "true" || v == "1" || v == "yes" {
+		return true
+	}
+	tier := localRuntimeTier()
+	switch tier {
+	case "max", "unlimited", "strong", "local-strong":
+		return true
+	}
+	return false
+}
+
+func localRuntimeTier() string {
 	tier := strings.ToLower(strings.TrimSpace(os.Getenv("AI_LOCAL_RUNTIME_TIER")))
 	if tier == "" {
 		tier = strings.ToLower(strings.TrimSpace(os.Getenv("CSM_LOCAL_PROFILE")))
 	}
+	return tier
+}
+
+// IsConstrained8GbTier mirrors Java balanced-8gb / ctx<=8192 production profile.
+func IsConstrained8GbTier(cfg config.AppConfig) bool {
+	if IsPromptBudgetDisabled() {
+		return false
+	}
+	tier := localRuntimeTier()
 	if strings.Contains(tier, "8gb") || tier == "balanced" || tier == "local-8gb" {
 		return true
 	}
@@ -95,7 +118,7 @@ func TruncateMiddle(text string, maxChars int) string {
 	if head < 80 {
 		return truncateStr(text, maxChars)
 	}
-	marker := "\n\n[... context truncated for 8GB local tier ...]\n\n"
+	marker := "\n\n[... context truncated to fit local model window ...]\n\n"
 	return text[:head] + marker + text[len(text)-tail:]
 }
 

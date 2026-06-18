@@ -142,23 +142,23 @@ func (s *AiLocalOpsService) ListModels(llama *LlamaService) map[string]any {
 		reasoning = append(reasoning, map[string]any{
 			"file":                   filepath.Base(modelPath),
 			"role":                   "reasoning",
-			"profile":                "balanced",
-			"estimatedRam":           "~4.2-5.0GB",
-			"weakMachineRecommended": true,
+			"profile":                "balanced-8gb",
+			"estimatedRam":           estimateModelRam(modelPath),
+			"weakMachineRecommended": isWeakMachineModel(modelPath),
 			"configured":             true,
 			"quantization":           detectQuantization(modelPath),
 			"path":                   modelPath,
 		})
 	} else {
 		reasoning = append(reasoning, map[string]any{
-			"file":                   "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+			"file":                   "qwen2.5-coder-1.5b-instruct-q8_0.gguf",
 			"role":                   "reasoning",
-			"profile":                "balanced",
-			"estimatedRam":           "~4.2-5.0GB",
+			"profile":                "balanced-8gb",
+			"estimatedRam":           "~1.5-1.8GB",
 			"weakMachineRecommended": true,
 			"configured":             false,
-			"quantization":           "q4_k_m",
-			"weakMachineScore":        75,
+			"quantization":           "q8_0",
+			"weakMachineScore":        92,
 		})
 	}
 	return map[string]any{
@@ -171,8 +171,8 @@ func (s *AiLocalOpsService) ListModels(llama *LlamaService) map[string]any {
 		"quantizationGuide": map[string]any{
 			"recommendedOrderWeakMachine": []string{"q8_0", "q5_k_m", "q4_k_m", "q4_0", "q2_k"},
 			"notes": []string{
-				"q4_k_m — worker mặc định server 8GB: qwen2.5-coder-7b (SEO/code chất lượng cao hơn 1.5B)",
-				"q8_0 — dev M1 / máy yếu: qwen2.5-coder-1.5b khi thiếu RAM",
+				"q8_0 + 1.5B — mặc định server 8GB/4CPU (Go profile config.local-8gb.env)",
+				"q4_k_m + 7B — chất lượng cao hơn, cần RAM dư: ./scripts/download-ai-local-models.sh 8gb-7b",
 			},
 		},
 		"reasoningCandidates": reasoning,
@@ -191,6 +191,27 @@ func detectQuantization(path string) string {
 		}
 	}
 	return "unknown"
+}
+
+func estimateModelRam(path string) string {
+	lower := strings.ToLower(filepath.Base(path))
+	switch {
+	case strings.Contains(lower, "1.5b") && strings.Contains(lower, "q8"):
+		return "~1.5-1.8GB"
+	case strings.Contains(lower, "1.5b"):
+		return "~1.0-1.6GB"
+	case strings.Contains(lower, "7b") && strings.Contains(lower, "q4"):
+		return "~4.2-5.0GB"
+	case strings.Contains(lower, "7b"):
+		return "~3.5-5.5GB"
+	default:
+		return "~2-5GB"
+	}
+}
+
+func isWeakMachineModel(path string) bool {
+	lower := strings.ToLower(filepath.Base(path))
+	return strings.Contains(lower, "1.5b") || strings.Contains(lower, "q8_0")
 }
 
 func boolCount(v bool) int {

@@ -35,6 +35,10 @@ case "$PROFILE" in
     strong|local-strong) load_env_file "$ROOT/config.local-strong.env" || true ;;
     8gb|7b|local-8gb|*) load_env_file "$ROOT/config.local-8gb.env" || true ;;
 esac
+# Sau profile: overlay max prompt/output (tắt clamp tier 8GB) khi bật trong config.env
+if [ "${AI_LOCAL_PROMPT_BUDGET_DISABLED:-}" = "true" ] || [ "${AI_LOCAL_PROMPT_BUDGET_DISABLED:-}" = "1" ]; then
+    load_env_file "$ROOT/config.ai-local-max.env" || config_log "config.ai-local-max.env not found (optional max overlay)"
+fi
 
 export CSM_HOME="${CSM_HOME:-$ROOT/backend}"
 export APP_DATA_DIR="${APP_DATA_DIR:-$CSM_HOME/csm_datas}"

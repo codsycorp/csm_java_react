@@ -17,10 +17,24 @@ func TestMaxSafePromptChars8Gb(t *testing.T) {
 
 func TestEffectiveLocalPromptCapEditCodeConstrained(t *testing.T) {
 	t.Setenv("AI_LOCAL_RUNTIME_TIER", "balanced-8gb")
+	t.Setenv("AI_LOCAL_PROMPT_BUDGET_DISABLED", "")
 	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 1024, LlamaMaxPromptChars: 32000}}
 	got := EffectiveLocalPromptCap(cfg, "code", "edit")
 	if got > 15_000 {
 		t.Fatalf("edit code cap too high for 8gb: %d", got)
+	}
+}
+
+func TestEffectiveLocalPromptCapBudgetDisabled(t *testing.T) {
+	t.Setenv("AI_LOCAL_RUNTIME_TIER", "balanced-8gb")
+	t.Setenv("AI_LOCAL_PROMPT_BUDGET_DISABLED", "true")
+	cfg := config.AppConfig{AI: config.AIConfig{LlamaContextWindow: 16384, LlamaMaxTokens: 4096, LlamaMaxPromptChars: 500_000}}
+	got := EffectiveLocalPromptCap(cfg, "code", "edit")
+	if got < 30_000 {
+		t.Fatalf("expected cap near MaxSafePromptChars when budget disabled, got %d", got)
+	}
+	if IsConstrained8GbTier(cfg) {
+		t.Fatal("budget disabled should not be constrained tier")
 	}
 }
 

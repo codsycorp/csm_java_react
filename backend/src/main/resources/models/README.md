@@ -2,29 +2,31 @@ Place GGUF model files in `backend/csm_datas/ai_local/model/` (dev) or `csm_data
 
 ## Text worker — server production (8GB RAM / 4 CPU)
 
-| File | Vai trò |
-|------|---------|
-| `qwen2.5-coder-7b-instruct-q4_k_m.gguf` | Code, menu JSON, SEO, guest chat |
+| File | Vai trò | RAM ước tính |
+|------|---------|--------------|
+| `qwen2.5-coder-1.5b-instruct-q8_0.gguf` | Code, menu JSON, SEO, guest chat (mặc định) | ~1.6GB |
+| `qwen2.5-coder-7b-instruct-q4_k_m.gguf` | Chất lượng cao hơn (cần RAM dư) | ~4.5GB |
 
-Tải: `./scripts/download-ai-local-models.sh 8gb`
+Tải mặc định: `./scripts/download-ai-local-models.sh 8gb`
 
-Config (`config.local-8gb.env` / `./run-server.sh`):
+Tải 7B (tùy chọn): `./scripts/download-ai-local-models.sh 8gb-7b`
+
+Config (`config.local-8gb.env` / Go `./backend-go/run-go-server.sh`):
 
 ```
-AI_LOCAL_LLAMA_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-7b-instruct-q4_k_m.gguf
-AI_LOCAL_LLAMA_SEO_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-7b-instruct-q4_k_m.gguf
-AI_LOCAL_LLAMA_SWAP_MODELS=false
+AI_LOCAL_LLAMA_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf
+AI_LOCAL_LLAMA_SEO_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf
+AI_LOCAL_LLAMA_CONTEXT_WINDOW=4096
+AI_LOCAL_LLAMA_THREADS=3
 ```
 
-## Text worker — dev M1 / strong (mặc định cùng 7B)
+## Text worker — dev M1 / strong
 
 | File | Vai trò |
 |------|---------|
 | `qwen2.5-coder-7b-instruct-q4_k_m.gguf` | Code, SEO, guest chat |
 
 Tải: `./scripts/download-ai-local-models.sh m1-16gb` hoặc `strong`
-
-Legacy RAM thấp: `qwen2.5-coder-1.5b-instruct-q8_0.gguf` — `./scripts/download-ai-local-models.sh worker-1.5b`
 
 Character cutout (Lane 5): `u2netp.onnx` — auto-downloaded on first use.
 

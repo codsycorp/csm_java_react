@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Download GGUF models for CSM AI Local
 #
-# TEXT WORKER (mặc định): qwen2.5-coder-7b-instruct-q4_k_m.gguf
-# Tùy chọn RAM thấp: qwen2.5-coder-1.5b-instruct-q8_0.gguf (profile worker-1.5b)
+# TEXT WORKER (mặc định server 8GB): qwen2.5-coder-1.5b-instruct-q8_0.gguf (~1.6GB RAM)
+# Tùy chọn chất lượng cao (cần RAM dư): qwen2.5-coder-7b-instruct-q4_k_m.gguf (profile 8gb-7b)
 #
 # Usage:
-#   ./scripts/download-ai-local-models.sh            # default — 7B Q4_K_M
-#   ./scripts/download-ai-local-models.sh 8gb       # prod/server → csm_datas/
+#   ./scripts/download-ai-local-models.sh            # default — 1.5B Q8_0 (server 8GB)
+#   ./scripts/download-ai-local-models.sh 8gb       # prod/server → csm_datas/ (1.5B)
+#   ./scripts/download-ai-local-models.sh 8gb-7b    # prod/server → 7B Q4_K_M (RAM dư)
 #   ./scripts/download-ai-local-models.sh server   # alias 8gb
 #   ./scripts/download-ai-local-models.sh m1-16gb  # dev M1 → backend/csm_datas/
 #   ./scripts/download-ai-local-models.sh worker-1.5b  # legacy 1.5B Q8_0 only
@@ -27,7 +28,7 @@ CSM_WORKER_GGUF_1_5B="qwen2.5-coder-1.5b-instruct-q8_0.gguf"
 
 resolve_model_dir() {
   case "${1:-server}" in
-    8gb|7b|server|prod)
+    8gb|8gb-7b|7b|server|server-7b|prod|prod-7b)
       echo "$REPO_ROOT/csm_datas/ai_local/model"
       ;;
     *)
@@ -108,11 +109,14 @@ list_models() {
 }
 
 warn_legacy() {
-  log "WARN: profile '$1' deprecated — dùng $CSM_WORKER_GGUF_7B (worker-1.5b chỉ khi thiếu RAM)"
+  log "WARN: profile '$1' deprecated — dùng $CSM_WORKER_GGUF_1_5B (8gb) hoặc $CSM_WORKER_GGUF_7B (8gb-7b)"
 }
 
 case "$PROFILE" in
-  8gb|7b|server|prod)
+  8gb|server|prod)
+    download_worker_1_5b_q8
+    ;;
+  8gb-7b|7b|server-7b|prod-7b)
     download_worker_7b_q4
     ;;
   worker-1.5b|m1-1.5b)
@@ -156,7 +160,7 @@ case "$PROFILE" in
     ;;
   *)
     echo "Unknown profile: $PROFILE"
-    echo "Profiles: 8gb | server | m1-16gb | m1 | strong | worker-1.5b | vision-weak | vision-strong | qwen2-vl-2b | embed | list"
+    echo "Profiles: 8gb | 8gb-7b | server | m1-16gb | m1 | strong | worker-1.5b | vision-weak | vision-strong | qwen2-vl-2b | embed | list"
     exit 1
     ;;
 esac
