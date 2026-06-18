@@ -1746,7 +1746,6 @@ export function Detail({
       // Set fields except parentId since initialValues has it
       const { parentId, ...fieldsToSet } = nextData;
       formRef.current.setFieldsValue(fieldsToSet);
-    }
   }, [detailData, flatParentMenus, open]);
 
   useEffect(() => {
