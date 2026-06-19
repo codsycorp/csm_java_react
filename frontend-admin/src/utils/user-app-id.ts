@@ -14,6 +14,55 @@ export type UserAppIdInput = {
 	dev?: boolean | null;
 };
 
+/** Plain tenant slug — not csm-encrypted blob or app_token payload. */
+function isPlainTenantAppId(value: string): boolean {
+	const text = String(value || "").trim();
+	if (!text || text.includes("=") || text.includes("_____")) return false;
+	return /^[a-z][a-z0-9_-]*$/i.test(text) && text.length <= 64;
+}
+
+/**
+ * Normalize menu/profile app_id or csm_encrypt blob → plain tenant id (e.g. banhang).
+ * Mirrors Java RecordManager.csm_decrypt + split("_____")[0].
+ */
+export function normalizePlainAppId(
+	raw: unknown,
+	decrypt: (value: string) => string = csmDecrypt,
+): string {
+	let text = String(raw ?? "").trim();
+	if (!text) return "";
+	if (isPlainTenantAppId(text)) {
+		return text.toLowerCase() === "csm" ? "csm" : text;
+	}
+
+	const candidates: string[] = [text];
+	const tryDecrypt = (fn: (value: string) => string) => {
+		try {
+			const dec = String(fn(text) ?? "").trim();
+			if (dec && dec !== text && !candidates.includes(dec)) {
+				candidates.unshift(dec);
+				text = dec;
+			}
+		} catch {
+			// ignore
+		}
+	};
+
+	tryDecrypt(decrypt);
+	if (decrypt !== csmDecrypt) {
+		tryDecrypt(csmDecrypt);
+	}
+
+	for (const candidate of candidates) {
+		const head = String(candidate.split("_____")[0] ?? "").trim();
+		if (isPlainTenantAppId(head)) {
+			return head.toLowerCase() === "csm" ? "csm" : head;
+		}
+	}
+
+	return isPlainTenantAppId(text) ? text : "";
+}
+
 /**
  * Mirror Java TableHandler.extractAppIdFromEncryptedAppToken /
  * UserService.mapMainAccountToUser — decrypt app_token, first segment before "_____".
@@ -33,11 +82,9 @@ export function parseAppIdFromAppToken(
 			decrypted = token;
 		}
 		if (!decrypted) return "";
-		const parts = decrypted.split("_____");
-		return String(parts[0] ?? "").trim();
+		return normalizePlainAppId(decrypted, decrypt);
 	} catch {
-		const rawParts = token.split("_____");
-		return String(rawParts[0] ?? "").trim();
+		return normalizePlainAppId(token, decrypt);
 	}
 }
 
@@ -61,9 +108,9 @@ export function resolveEffectiveUserAppId(
 	decrypt: (value: string) => string = csmDecrypt,
 ): string {
 	const fromToken = parseAppIdFromAppToken(user.app_token, decrypt);
-	const fromProfile = String(user.app_id ?? "").trim();
-	const fromMenus = resolvePrimaryAppIdFromMenus(user.menusPermissions);
-	const fromStore = String(useAppStore.getState().getCurrentAppId?.() ?? "").trim();
+	const fromProfile = normalizePlainAppId(user.app_id, decrypt);
+	const fromMenus = normalizePlainAppId(resolvePrimaryAppIdFromMenus(user.menusPermissions), decrypt);
+	const fromStore = normalizePlainAppId(useAppStore.getState().getCurrentAppId?.(), decrypt);
 
 	return fromToken || fromProfile || fromMenus || fromStore || "csm";
 }
@@ -102,7 +149,7 @@ export function resolveTableRequestAppId(
 	if (SYSTEM_CSM_TABLES.has(normalizedTable)) return "csm";
 
 	const homeAppId = resolveEffectiveUserAppId(user, decrypt);
-	const preferred = String(preferredAppId ?? "").trim();
+	const preferred = normalizePlainAppId(preferredAppId, decrypt);
 	const isDev = Boolean(user.dev);
 	const isCsmOperator = homeAppId.toLowerCase() === "csm";
 

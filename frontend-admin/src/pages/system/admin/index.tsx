@@ -11,7 +11,7 @@ import CsmLineItemsPage from "#src/components/production-order/CsmLineItemsPage"
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, usePermissionStore, useTabsStore, useUserStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
-import { resolveEffectiveUserAppId, resolveTableRequestAppId } from "#src/utils/user-app-id";
+import { resolveEffectiveUserAppId, resolveTableRequestAppId, normalizePlainAppId } from "#src/utils/user-app-id";
 // Import hàm hỗ trợ đa ngôn ngữ
 import { isSuperPermissionProfile, resolvePermissionDataScope, toPermissionBigInt } from "#src/utils/permission-bitfield";
 import { Alert, Empty, Spin } from "antd";
@@ -1891,7 +1891,7 @@ export default function AdminPage(props: any = {}) {
 			}
 			// Org tables always use the logged-in user’s app_id, never the menu’s stored app_id.
 			if (TENANT_ORG_TABLES_LOAD.has(tableName)) return resolvedUserAppId;
-			return runtimeMenu.app_id || resolvedUserAppId;
+			return normalizePlainAppId(runtimeMenu.app_id, csmDecrypt) || resolvedUserAppId;
 		};
 
 		const ensureSystemRouteTables = async () => {
@@ -2736,7 +2736,7 @@ export default function AdminPage(props: any = {}) {
 						menusPermissions={runtimeMenusPermissions}
 						dataScope={runtimeDataScope}
 						database={database}
-						decrypt={(s: string) => s}
+						decrypt={csmDecrypt}
 						m_configs={{ ...m_configs, nodes }}
 						onDataChange={handleDataChange}
 					/>
@@ -2758,7 +2758,7 @@ export default function AdminPage(props: any = {}) {
 					menusPermissions={runtimeMenusPermissions}
 					dataScope={runtimeDataScope}
 					menuId={runtimeMenuData.id}
-					decrypt={(s: string) => s}
+					decrypt={csmDecrypt}
 					onDataChange={handleDataChange}
 				/>
 			</div>
