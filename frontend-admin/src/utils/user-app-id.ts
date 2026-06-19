@@ -14,11 +14,21 @@ export type UserAppIdInput = {
 	dev?: boolean | null;
 };
 
-/** Plain tenant slug — not csm-encrypted blob or app_token payload. */
-function isPlainTenantAppId(value: string): boolean {
-	const text = String(value || "").trim();
+/** Plain tenant slug — not csm-encrypted blob, app_token payload, or corrupt decrypt garbage. */
+export function isPlainTenantAppId(value: string): boolean {
+	const text = String(value || "").trim().toLowerCase();
 	if (!text || text.includes("=") || text.includes("_____")) return false;
-	return /^[a-z][a-z0-9_-]*$/i.test(text) && text.length <= 64;
+	if (text.length < 2 || text.length > 32) return false;
+	if (!/^[a-z][a-z0-9_-]*$/.test(text)) return false;
+	// Corrupt CSM decrypt (strtr/base64 mis-read) often contains long digit runs e.g. ...55555...
+	if (/\d{4,}/.test(text)) return false;
+	return true;
+}
+
+function normalizeTenantSlug(value: string): string {
+	const text = String(value || "").trim().toLowerCase();
+	if (!isPlainTenantAppId(text)) return "";
+	return text === "csm" ? "csm" : text;
 }
 
 /**
@@ -29,19 +39,18 @@ export function normalizePlainAppId(
 	raw: unknown,
 	decrypt: (value: string) => string = csmDecrypt,
 ): string {
-	let text = String(raw ?? "").trim();
-	if (!text) return "";
-	if (isPlainTenantAppId(text)) {
-		return text.toLowerCase() === "csm" ? "csm" : text;
-	}
+	const rawText = String(raw ?? "").trim();
+	if (!rawText) return "";
 
-	const candidates: string[] = [text];
+	const direct = normalizeTenantSlug(rawText);
+	if (direct) return direct;
+
+	const candidates: string[] = [];
 	const tryDecrypt = (fn: (value: string) => string) => {
 		try {
-			const dec = String(fn(text) ?? "").trim();
-			if (dec && dec !== text && !candidates.includes(dec)) {
-				candidates.unshift(dec);
-				text = dec;
+			const dec = String(fn(rawText) ?? "").trim();
+			if (dec && dec !== rawText && !candidates.includes(dec)) {
+				candidates.push(dec);
 			}
 		} catch {
 			// ignore
@@ -54,13 +63,15 @@ export function normalizePlainAppId(
 	}
 
 	for (const candidate of candidates) {
-		const head = String(candidate.split("_____")[0] ?? "").trim();
-		if (isPlainTenantAppId(head)) {
-			return head.toLowerCase() === "csm" ? "csm" : head;
+		if (candidate.includes("_____")) {
+			const head = normalizeTenantSlug(String(candidate.split("_____")[0] ?? "").trim());
+			if (head) return head;
 		}
+		const whole = normalizeTenantSlug(candidate);
+		if (whole) return whole;
 	}
 
-	return isPlainTenantAppId(text) ? text : "";
+	return "";
 }
 
 /**
@@ -112,7 +123,8 @@ export function resolveEffectiveUserAppId(
 	const fromMenus = normalizePlainAppId(resolvePrimaryAppIdFromMenus(user.menusPermissions), decrypt);
 	const fromStore = normalizePlainAppId(useAppStore.getState().getCurrentAppId?.(), decrypt);
 
-	return fromToken || fromProfile || fromMenus || fromStore || "csm";
+	const resolved = fromToken || fromProfile || fromMenus || fromStore || "csm";
+	return normalizeTenantSlug(resolved) || "csm";
 }
 
 export function getUserAccessContext(): UserAppIdInput {
@@ -153,11 +165,14 @@ export function resolveTableRequestAppId(
 	const isDev = Boolean(user.dev);
 	const isCsmOperator = homeAppId.toLowerCase() === "csm";
 
+	const safeHome = normalizeTenantSlug(homeAppId) || "csm";
+	const safePreferred = normalizeTenantSlug(preferred);
+
 	if (isDev || isCsmOperator) {
-		if (preferred) return preferred;
-		return homeAppId || "csm";
+		if (safePreferred) return safePreferred;
+		return safeHome;
 	}
 
-	if (homeAppId) return homeAppId;
-	return preferred || "csm";
+	if (safeHome && safeHome !== "csm") return safeHome;
+	return safePreferred || safeHome;
 }

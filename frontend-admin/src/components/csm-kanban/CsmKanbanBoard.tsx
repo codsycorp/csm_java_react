@@ -49,6 +49,12 @@ import type { MConfig, TableField } from "#src/components/csm-grid/CsmDynamicGri
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import { extractComboQueriesFromField, normalizeComboOptions } from "#src/components/csm-grid/combo-utils";
+import {
+	filterIndexedRowsForBucket,
+	indexRowsWithTimeBounds,
+	KANBAN_MAX_CARDS_PER_COLUMN,
+	useDebouncedValue,
+} from "#src/components/csm-grid/grid-perf-utils";
 import { parseDateValueToDayjs } from "#src/utils/dateControl";
 import { useUserStore } from "#src/store";
 
@@ -665,6 +671,7 @@ export default function CsmKanbanBoard({
 
 	const [loading, setLoading] = useState(false);
 	const [search, setSearch] = useState("");
+	const debouncedSearch = useDebouncedValue(search, 280);
 	const [selectedCardId, setSelectedCardId] = useState<string>("");
 	const [editorOpen, setEditorOpen] = useState(false);
 	const [editingRecord, setEditingRecord] = useState<RowData | null>(null);
@@ -945,7 +952,7 @@ export default function CsmKanbanBoard({
 	}, [selectEnums]);
 
 	const filteredRows = useMemo(() => {
-		const q = search.trim().toLowerCase();
+		const q = debouncedSearch.trim().toLowerCase();
 		if (!q) return mergedRows;
 		return mergedRows.filter((row) => [
 			getLinkedLabel(config.titleField, getRowFieldValue(row, config.titleField)),
@@ -955,7 +962,7 @@ export default function CsmKanbanBoard({
 		]
 			.filter((item) => item !== undefined && item !== null)
 			.some((item) => String(item).toLowerCase().includes(q)));
-	}, [config.assigneeField, config.descriptionField, config.labelField, config.titleField, getLinkedLabel, getRowFieldValue, mergedRows, search]);
+	}, [config.assigneeField, config.descriptionField, config.labelField, config.titleField, debouncedSearch, getLinkedLabel, getRowFieldValue, mergedRows]);
 
 	const byStage = useMemo(() => {
 		const map = new Map<string, RowData[]>();
@@ -1399,6 +1406,17 @@ export default function CsmKanbanBoard({
 	const timelineField = config.timeline?.primaryDateField || config.dueDateField || "due_at";
 	const timelineSecondaryField = config.timeline?.secondaryDateField;
 
+	const indexedFilteredRows = useMemo(
+		() => indexRowsWithTimeBounds(filteredRows, (row) => {
+			const { start, end } = getRowTimeBounds(row, timelineField, timelineSecondaryField);
+			return {
+				start: start > 0 ? start : null,
+				end: end > 0 ? end : null,
+			};
+		}),
+		[filteredRows, timelineField, timelineSecondaryField],
+	);
+
 	const timelineBuckets = useMemo<TimeBucket[]>(() => {
 		const [rawStart, rawEnd] = range;
 		const start = startOfUnit(rawStart, granularity);
@@ -1407,13 +1425,11 @@ export default function CsmKanbanBoard({
 		for (let cursor = start; cursor.isBefore(end) || cursor.isSame(end); cursor = addUnit(cursor, granularity)) {
 			const bucketStart = startOfUnit(cursor, granularity);
 			const bucketEnd = endOfUnit(cursor, granularity);
-			const bucketRows = filteredRows.filter((row) => {
-				const { start: rowStart, end: rowEnd } = getRowTimeBounds(row, timelineField, timelineSecondaryField);
-				if (!rowStart && !rowEnd) return false;
-				const compareStart = rowStart || rowEnd;
-				const compareEnd = rowEnd || rowStart;
-				return compareStart <= bucketEnd.valueOf() && compareEnd >= bucketStart.valueOf();
-			});
+			const bucketRows = filterIndexedRowsForBucket(
+				indexedFilteredRows,
+				bucketStart.valueOf(),
+				bucketEnd.valueOf(),
+			);
 			buckets.push({
 				key: bucketStart.toISOString(),
 				label: formatBucketLabel(bucketStart, granularity, lang),
@@ -1427,7 +1443,7 @@ export default function CsmKanbanBoard({
 			if (granularity === "year" && bucketStart.isSame(end, "year")) break;
 		}
 		return buckets;
-	}, [filteredRows, granularity, isDoneStage, lang, range, stageField, timelineField, timelineSecondaryField]);
+	}, [granularity, indexedFilteredRows, isDoneStage, lang, range, stageField, timelineField]);
 
 	const timelineStats = useMemo(() => ({
 		totalBuckets: timelineBuckets.length,
@@ -1553,6 +1569,8 @@ export default function CsmKanbanBoard({
 							<Row gutter={[12, 12]} wrap={false} style={{ overflowX: "auto", paddingBottom: 8 }}>
 								{stages.map((stage) => {
 									const stageRows = byStage.get(stage.id) || [];
+									const visibleStageRows = stageRows.slice(0, KANBAN_MAX_CARDS_PER_COLUMN);
+									const hiddenStageCount = stageRows.length - visibleStageRows.length;
 									const limitExceeded = stage.limit ? stageRows.length > stage.limit : false;
 									return (
 										<Col key={stage.id} flex="300px">
@@ -1571,7 +1589,7 @@ export default function CsmKanbanBoard({
 												<DroppableColumn id={stage.id} baseBg={dropBg} hoverBg={dropHoverBg} borderColor={token.colorBorderSecondary}>
 													<Space direction="vertical" size={8} style={{ width: "100%" }}>
 														{stageRows.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("kanban.empty")} />}
-														{stageRows.map((row) => {
+														{visibleStageRows.map((row) => {
 															const cardId = String(row[pkField]);
 															const selected = selectedCardId === cardId;
 															const titleValue = getRowFieldValue(row, config.titleField || titleField);
@@ -1627,6 +1645,11 @@ export default function CsmKanbanBoard({
 																</DraggableCard>
 															);
 														})}
+														{hiddenStageCount > 0 && (
+															<Typography.Text type="secondary" style={{ fontSize: 12, display: "block", textAlign: "center", padding: "4px 0" }}>
+																+{hiddenStageCount} {t("kanban.moreCards", { defaultValue: "thẻ khác" })}
+															</Typography.Text>
+														)}
 													</Space>
 												</DroppableColumn>
 											</Card>

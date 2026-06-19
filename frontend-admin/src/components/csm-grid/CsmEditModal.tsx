@@ -24,45 +24,16 @@ import { useAppStore } from "#src/store/app";
 import { usePermissionStore } from "#src/store";
 import { useUserStore } from "#src/store/user";
 import { getTableData } from "./CsmApi";
-import { normalizeComboOptions, resolveComboQueryAppId, buildRoleComboOptions, getComboTableRows, buildRoleComboValueEnum, buildRoleComboSelectEnum, resolveRoleComboLabel, parseFieldOptions, getLegacyFallbackComboQuery, resolveEffectiveComboQueryText } from "./combo-utils";
+import { normalizeComboOptions, resolveComboQueryAppId, buildRoleComboOptions, getComboTableRows, buildRoleComboValueEnum, buildRoleComboSelectEnum, resolveRoleComboLabel, parseFieldOptions, getLegacyFallbackComboQuery, resolveEffectiveComboQueryText, buildGridFieldComboSelectEnum, buildFieldQueryComboSelectEnum, buildComboSelectEnumFromQueryObject, executeComboQueryObject, resolveEditFieldComboSelectOptions, resolveQueryRowComboLabel, collectComboTableFetchRequests, flattenAppMenusById, isDefaultComboWhereClause, storedTableAppIdMatches, resolveEffectiveFieldTypes, isComboLikeType } from "./combo-utils";
 import { getUserAccessContext } from "#src/utils/user-app-id";
 import { formatDateForStorage, parseDateValueToDayjs, resolveDateLocaleFormat } from "#src/utils/dateControl";
 import { compileMenuTrigger, resolveTriggerBody, safeEval } from "./csm-trigger-runner";
+import { gridDevLog } from "./grid-perf-utils";
 
 // ============================================================================
 // GLOBAL CACHE: Tự động fetch missing tables cho combo queries
 // ============================================================================
 export const globalTableFetchCache = new Map<string, Promise<any>>();
-
-function resolveEffectiveFieldTypes(field: Partial<TableField> | Record<string, any> | null | undefined): string {
-  const explicit = String(field?.f_types ?? (field as any)?.f_type ?? "").trim().toLowerCase();
-  if (explicit === "editor") return "codejs";
-  if (explicit && explicit !== "string" && explicit !== "ed") return explicit;
-
-  const fieldName = String(field?.f_name ?? "").trim().toLowerCase();
-  if (["menuspermissions", "menuspermissionsadd", "menuspermissionsdeny"].includes(fieldName)) return "menu_tree";
-  if (["permissions", "permissionsadd", "permissionsdeny", "data_app_ids"].includes(fieldName)) return "multi_tag";
-  if (["permissionpreset", "datascope", "role_level", "branch_id", "dept_id", "department_id", "group_id", "roles", "permissiongroups", "status", "app_id"].includes(fieldName)) return "co";
-  if (["is_global", "actived", "active", "dev", "enabled", "disabled"].includes(fieldName) || /^is_/.test(fieldName) || /^has_/.test(fieldName)) return "checkbox";
-
-  if ((field as any)?.f_cbo_query) return "co";
-  if (Array.isArray((field as any)?.f_options) && (field as any).f_options.length > 0) {
-    if (fieldName.includes("menu")) return "menu_tree";
-    if (fieldName.includes("permission")) return "multi_tag";
-  }
-
-  return explicit || "ed";
-}
-
-function isComboLikeType(rawTypes: unknown): boolean {
-  const types = String(rawTypes || "").toLowerCase();
-  const tokens = types.split(/[\s,;|_:-]+/).filter(Boolean);
-  return tokens.includes("co")
-    || tokens.includes("coro")
-    || tokens.includes("cbo")
-    || tokens.includes("cp")
-    || /cbo|select|multi_tag|multi_select|menu_tree|tag|etag/.test(types);
-}
 
 function resolveMediaUrl(pathValue: string): string {
   if (!pathValue) return "";
@@ -84,6 +55,7 @@ export async function ensureTableInDatabase(
 ): Promise<boolean> {
   const hasUsableWhere = Boolean(
     whereClause
+    && !isDefaultComboWhereClause(whereClause)
     && (
       (typeof whereClause === "string" && whereClause.trim())
       || (typeof whereClause === "object" && (
@@ -106,21 +78,21 @@ export async function ensureTableInDatabase(
     if (existing && (Array.isArray(existing) || (existing.rows && Array.isArray(existing.rows)))) {
       const rowCount = Array.isArray(existing) ? existing.length : existing.rows?.length || 0;
       const storedAppId = Array.isArray(existing) ? "" : String(existing?.app_id || existing?.appId || "").trim();
-      const isMatchingApp = !storedAppId || storedAppId === appId;
+      const isMatchingApp = storedTableAppIdMatches(storedAppId, appId, csmDecrypt);
       if (rowCount > 0 && isMatchingApp) {
-        console.log(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows, app: ${storedAppId || "unknown"})`);
+        gridDevLog(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows, app: ${storedAppId || "unknown"})`);
         return false;
       }
       if (rowCount > 0 && !isMatchingApp) {
-        console.log(`🔄 [AutoFetch] Table ${tableName} exists for app ${storedAppId}, refetching for app ${appId}`);
+        gridDevLog(`🔄 [AutoFetch] Table ${tableName} exists for app ${storedAppId}, refetching for app ${appId}`);
       }
     }
   } else {
-    console.log(`🔍 [AutoFetch] Query has where clause, will fetch ${tableName} with filter (ignore existing data)`);
+    gridDevLog(`🔍 [AutoFetch] Query has where clause, will fetch ${tableName} with filter (ignore existing data)`);
   }
 
   if (globalTableFetchCache.has(cacheKey)) {
-    console.log(`⏳ [AutoFetch] Already fetching ${tableName} with same where clause, waiting...`);
+    gridDevLog(`⏳ [AutoFetch] Already fetching ${tableName} with same where clause, waiting...`);
     try {
       await globalTableFetchCache.get(cacheKey);
       return true;
@@ -131,7 +103,7 @@ export async function ensureTableInDatabase(
     }
   }
 
-  console.log(`🔄 [AutoFetch] Fetching missing table: ${tableName} (app: ${appId})`, `with where:`, effectiveWhereClause);
+  gridDevLog(`🔄 [AutoFetch] Fetching missing table: ${tableName} (app: ${appId})`, `with where:`, effectiveWhereClause);
   
   const requestParams: any = {
     app_id: appId,
@@ -148,7 +120,7 @@ export async function ensureTableInDatabase(
         if (Array.isArray((response as any)?.result?.list)) return (response as any).result.list;
         return [];
       })();
-      console.log(`✅ [AutoFetch] Fetched ${tableName}: ${rows.length} rows`);
+      gridDevLog(`✅ [AutoFetch] Fetched ${tableName}: ${rows.length} rows`);
       const payload = {
         id: tableName,
         rows,
@@ -182,16 +154,6 @@ export async function ensureTableInDatabase(
 
 // Helper: Build selectEnums từ trigger f_cbo_query (Vue compatible)
 // Giống CsmDynamicGrid.selectEnums nhưng dành cho detail grid
-function resolveDynamicQueryLabel(row: any, valueField: string, labelField: string, fields: unknown): string {
-  const value = String(row?.[valueField] ?? "").trim();
-  const configuredFields = Array.isArray(fields)
-    ? fields.map((item) => String(item || "").trim()).filter(Boolean)
-    : [];
-  const effectiveLabelField = String(labelField || configuredFields[1] || valueField).trim() || valueField;
-  const directLabel = String(row?.[effectiveLabelField] ?? "").trim();
-  return directLabel || value;
-}
-
 // Detail grid không có database table riêng nên phải build từ trigger
 export function buildDetailGridSelectEnums(
   fields: any[],
@@ -238,6 +200,37 @@ export function buildDetailGridSelectEnums(
       }
     }
 
+    const menuById: Map<string, any> = seftContext?.menuById instanceof Map
+      ? seftContext.menuById
+      : flattenAppMenusById(seftContext?.menus || []);
+    if (menuById.size > 0) {
+      const gridEnum = buildGridFieldComboSelectEnum(
+        f,
+        database,
+        menuById,
+        getUserAccessContext(),
+        decrypt,
+        { seft: seftContext, database },
+      );
+      if (Object.keys(gridEnum).length > 0) {
+        result[f.f_name] = gridEnum;
+        return;
+      }
+    }
+
+    const userContext = getUserAccessContext();
+    const quickEnum = buildFieldQueryComboSelectEnum(f, database, {
+      fallbackAppId: seftContext?.appId,
+      userContext,
+      decrypt,
+      evalContext: { seft: seftContext, database },
+      menuById,
+    });
+    if (Object.keys(quickEnum).length > 0) {
+      result[f.f_name] = quickEnum;
+      return;
+    }
+
     const rawQuery = f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name);
     if (!rawQuery) return;
 
@@ -258,7 +251,8 @@ export function buildDetailGridSelectEnums(
           const enumObj = toEnumObj(options);
           if (Object.keys(enumObj).length > 0) result[f.f_name] = enumObj;
         } else if (tableName) {
-          const appId = seftContext?.appId || 'csm';
+          const userContext = getUserAccessContext();
+          const appId = resolveComboQueryAppId(tableName, undefined, seftContext?.appId, userContext, decrypt);
           const cacheKey = `${appId}::${tableName}`;
           if (!globalTableFetchCache.has(cacheKey)) {
             ensureTableInDatabase(tableName, appId, database, undefined, seftContext?.setTableData).catch((err) => {
@@ -310,124 +304,65 @@ export function buildDetailGridSelectEnums(
           }
         }
 
-        // Handle query array in JSON
-        if (parsed && typeof parsed === 'object' && Array.isArray(parsed.query) && parsed.query.length > 0) {
-          const allOptions: any[] = [];
-          parsed.query.forEach((querySpec: any) => {
-            if (!querySpec?.obj_name || !database) return;
-            const tableName = querySpec.obj_name;
-            const fields = querySpec.fields || [];
-            const appId = resolveComboQueryAppId(tableName, querySpec.app_id, undefined, getUserAccessContext());
-            // Default obj_where if not provided or invalid
-            // Check for: undefined, null, empty string, empty object, or object without required fields
-            let whereClause = querySpec.obj_where;
-            const isInvalidWhere = !whereClause 
-              || (typeof whereClause === 'string' && !whereClause.trim())
-              || (typeof whereClause === 'object' && (!whereClause.field || !whereClause.type));
-            
-            if (isInvalidWhere) {
-              whereClause = {field: 'id', type: 'like', value: ""};
-              console.log(`[buildDetailGridSelectEnums] Using default where clause for ${tableName}:`, whereClause);
-            }
-            
-            const tableData = database[tableName];
-            const tableAppId = Array.isArray(tableData) ? "" : String((tableData as any)?.app_id || (tableData as any)?.appId || "").trim();
-            const tableExists = tableData && (Array.isArray(tableData) || (tableData.rows && Array.isArray(tableData.rows)));
-            const rowCount = tableExists ? (Array.isArray(tableData) ? tableData.length : tableData.rows?.length || 0) : 0;
-            const hasMatchingAppData = !tableAppId || tableAppId === appId;
-            const hasData = tableExists && rowCount > 0 && hasMatchingAppData;
-            
-            // Build cache key to check if already fetching
-            const whereSuffix = whereClause ? `::${JSON.stringify(whereClause)}` : '';
-            const cacheKey = `${appId}::${tableName}${whereSuffix}`;
-            
-            // 🔄 AUTO-FETCH: If query has where clause and no data, ALWAYS fetch with it
-            // But check if already fetching to prevent infinite loop
-            if (whereClause && !hasData) {
-              // Check if already fetching this specific query
-              if (globalTableFetchCache.has(cacheKey)) {
-                console.log(`⏳ [ComboQuery] Already fetching ${tableName} with this where clause, waiting...`);
-                return; // Skip, will have data on next render after fetch completes
-              }
-              
-              console.log(`⚠️ [ComboQuery] Query has where clause but no data, fetching table "${tableName}" with filter...`);
-              // Kick off fetch with where clause (fire-and-forget) - will populate database when done
-              ensureTableInDatabase(tableName, appId, database, whereClause, seftContext?.setTableData).catch(err => {
-                console.error(`Failed to auto-fetch table ${tableName}:`, err);
-              });
-              // Return early for this query - will have data on next render after fetch completes
-              return;
-            }
-            
-            // No where clause or already have data: check if need to fetch
-            if (!whereClause && !hasData) {
-              // Check if already fetching
-              if (globalTableFetchCache.has(cacheKey)) {
-                console.log(`⏳ [ComboQuery] Already fetching ${tableName}, waiting...`);
-                return; // Skip, will have data on next render
-              }
-              
-              console.warn(`⚠️ [ComboQuery] Table "${tableName}" ${tableExists ? `exists for app ${tableAppId || "unknown"} but is empty/mismatched` : 'not found'}. Auto-fetching...`);
-              // Kick off fetch without where clause
-              ensureTableInDatabase(tableName, appId, database, undefined, seftContext?.setTableData).catch(err => {
-                console.error(`Failed to auto-fetch table ${tableName}:`, err);
-              });
-              // Return early for this query - will have data on next render after fetch completes
-              return;
-            }
-            
-            // Have data (from fetch with where clause or without), build options
-            const rows = Array.isArray(tableData) ? tableData : (tableData as any)?.rows || [];
-            if (!Array.isArray(rows)) return;
-
-            const valueField = String(querySpec?.value_field || fields?.[0] || "id").trim() || "id";
-            const labelField = String(querySpec?.label_field || fields?.[1] || valueField).trim() || valueField;
-
-            let filteredData = rows;
-            if (whereClause) {
-              try {
-                // Support both object and string format for obj_where
-                if (typeof whereClause === 'object' && whereClause.field && whereClause.type) {
-                  // Object format: { field: "p_type", type: "eq", value: 1 }
-                  const field = whereClause.field;
-                  const type = whereClause.type;
-                  const value = whereClause.value;
-                  filteredData = rows.filter((row: any) => {
-                    const rowValue = row[field];
-                    switch (type) {
-                      case 'eq': return rowValue == value;
-                      case 'ne': return rowValue != value;
-                      case 'gt': return rowValue > value;
-                      case 'gte': return rowValue >= value;
-                      case 'lt': return rowValue < value;
-                      case 'lte': return rowValue <= value;
-                      case 'like': return String(rowValue || '').toLowerCase().includes(String(value || '').toLowerCase());
-                      case 'in': return Array.isArray(value) && value.includes(rowValue);
-                      default: return true;
-                    }
-                  });
-                } else if (typeof whereClause === 'string') {
-                  // String format: "row.p_type === 1"
-                  const whereFn = safeEval(['row'], `return ${whereClause}`);
-                  if (whereFn) filteredData = rows.filter((row: any) => whereFn(row));
-                }
-              } catch (error) {
-                console.warn('Failed to apply obj_where filter:', error);
-              }
-            }
-
-            filteredData.forEach((row: any) => {
-              const optionLabel = resolveDynamicQueryLabel(row, valueField, labelField, fields);
-              allOptions.push({ ma: row[valueField], ten: optionLabel || String(row?.[valueField] || "").trim() });
-            });
+        // Handle query array / dynamic JS result (Vue getOptionsSelect parity)
+        if (parsed && typeof parsed === 'object' && (Array.isArray(parsed.query) || Array.isArray(parsed.options))) {
+          const userContext = getUserAccessContext();
+          const queryEnum = buildFieldQueryComboSelectEnum(f, database, {
+            fallbackAppId: seftContext?.appId,
+            userContext,
+            decrypt,
+            evalContext: { seft: seftContext, database },
+            menuById,
           });
-
-          allOptions.sort((a, b) => String(a.ten || '').localeCompare(String(b.ten || '')));
-          const enumObj = toEnumObj(allOptions);
-          if (Object.keys(enumObj).length > 0) {
-            result[f.f_name] = enumObj;
+          if (Object.keys(queryEnum).length > 0) {
+            result[f.f_name] = queryEnum;
             return;
           }
+
+          // Prefetch missing lookup tables from static query spec
+          if (Array.isArray(parsed.query)) {
+            parsed.query.forEach((querySpec: any) => {
+              const tableName = String(querySpec?.obj_name || "").trim();
+              if (!tableName || getComboTableRows(database, tableName).length > 0) return;
+              const appId = resolveComboQueryAppId(
+                tableName,
+                querySpec.app_id,
+                seftContext?.appId,
+                userContext,
+                decrypt,
+              );
+              let whereClause = querySpec.obj_where;
+              const forceFetchWhere = !isDefaultComboWhereClause(whereClause);
+              const whereSuffix = forceFetchWhere ? `::${JSON.stringify(whereClause)}` : '';
+              const cacheKey = `${appId}::${tableName}${whereSuffix}`;
+              if (globalTableFetchCache.has(cacheKey)) return;
+              ensureTableInDatabase(
+                tableName,
+                appId,
+                database,
+                forceFetchWhere ? whereClause : undefined,
+                seftContext?.setTableData,
+              ).catch((err) => {
+                console.error(`Failed to auto-fetch table ${tableName}:`, err);
+              });
+            });
+          }
+
+          if (parsed.f_grid && parsed.f_grid_fields && menuById.size > 0) {
+            const gridEnum = buildGridFieldComboSelectEnum(
+              { f_grid: parsed.f_grid, f_grid_fields: parsed.f_grid_fields },
+              database,
+              menuById,
+              userContext,
+              decrypt,
+              { seft: seftContext, database },
+            );
+            if (Object.keys(gridEnum).length > 0) {
+              result[f.f_name] = gridEnum;
+              return;
+            }
+          }
+          return;
         }
 
         // Handle options array in JSON
@@ -476,7 +411,20 @@ export function buildDetailGridSelectEnums(
       const fn = safeEval(["seft", "data"], body) as ((seft: any, data: any) => any) | null;
       if (!fn) return;
       const objQa = fn(seftContext, database);
-      if (!objQa || !objQa.options || !Array.isArray(objQa.options)) return;
+      if (!objQa) return;
+
+      const dynamicEnum = buildComboSelectEnumFromQueryObject(objQa, database, {
+        menuById,
+        evalContext: { seft: seftContext, database },
+        decrypt,
+        userContext: getUserAccessContext(),
+      });
+      if (Object.keys(dynamicEnum).length > 0) {
+        result[f.f_name] = dynamicEnum;
+        return;
+      }
+
+      if (!objQa.options || !Array.isArray(objQa.options)) return;
       const options = objQa.options;
       options.sort((a: any, b: any) => {
         const aLabel = a?.ten ?? a?.label ?? a?.text ?? String(a);
@@ -507,6 +455,8 @@ export function buildDetailGridSelectEnums(
 function DetailGridTab({ node, record, appId, permissions, menusPermissions, decrypt, form, detailFieldName, menuId }: any) {
   const setTableData = useAppStore(state => state.setTableData);
   const database = useAppStore(state => state.database);
+  const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
+  const menuById = useMemo(() => flattenAppMenusById(apiWholeMenus || []), [apiWholeMenus]);
   
   // 🔄 Track database version để force re-compute selectEnums khi missing tables được fetch
   const [databaseVersion, setDatabaseVersion] = useState(0);
@@ -518,7 +468,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
     const checkInterval = setInterval(() => {
       // If all fetches completed, increment version to trigger re-compute
       if (globalTableFetchCache.size === 0) {
-        console.log('✅ [DetailGridTab] All table fetches completed, triggering re-compute...');
+        gridDevLog('✅ [DetailGridTab] All table fetches completed, triggering re-compute...');
         setDatabaseVersion(v => v + 1);
         clearInterval(checkInterval);
       }
@@ -558,7 +508,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
     // Parse dữ liệu
     const parsedData = parseDetailData(detailData);
     
-    console.log(`[DetailGridTab] Syncing ${detailFieldName}:`, {
+    gridDevLog(`[DetailGridTab] Syncing ${detailFieldName}:`, {
       hasFormValue: !!form.getFieldValue(detailFieldName),
       hasRecord: !!record,
       dataLength: parsedData.length,
@@ -585,7 +535,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
                          JSON.stringify(currentFormValue) !== JSON.stringify(tableData.rows);
       
       if (needsUpdate) {
-        console.log(`[DetailGridTab] Syncing database → form for ${detailFieldName}:`, {
+        gridDevLog(`[DetailGridTab] Syncing database → form for ${detailFieldName}:`, {
           from: currentFormValue?.length || 0,
           to: tableData.rows.length
         });
@@ -601,7 +551,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
   
     // Debug: xem detail grid config có gì
   useEffect(() => {
-    console.log(`[DetailGridTab] Node config for ${detailFieldName}:`, {
+    gridDevLog(`[DetailGridTab] Node config for ${detailFieldName}:`, {
       node_id: node?.id,
       node_table_name: node?.table_name,
       node_label: node?.label,
@@ -618,8 +568,10 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
   // Build selectEnums từ trigger f_cbo_query (tránh phụ thuộc vào database table)
   const detailGridSelectEnums = useMemo(() => {
     const seftContext = {
-      appId, // 🔄 Pass appId for auto-fetch logic
+      appId,
       setTableData,
+      menus: apiWholeMenus,
+      menuById,
       m_configs: node,
       context: {},
       // Lunar calendar utilities
@@ -647,7 +599,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
       DateUtils,
     };
     return buildDetailGridSelectEnums(node?.table || [], database, decrypt, seftContext);
-  }, [node?.table, database, decrypt, node, databaseVersion, appId]); // 🔄 Re-compute when databaseVersion changes (after table fetches)
+  }, [node?.table, database, decrypt, node, databaseVersion, appId, apiWholeMenus, menuById, setTableData]);
   
   return (
     <div style={{ minHeight: 'auto', padding: '8px 0' }}>
@@ -671,7 +623,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
           // Khi grid thay đổi, force sync database → form ngay lập tức
           const tableData = database[detailFieldName];
           if (tableData && Array.isArray(tableData.rows)) {
-            console.log(`[DetailGridTab] onDataChange: Syncing ${detailFieldName} → form (${tableData.rows.length} rows)`);
+            gridDevLog(`[DetailGridTab] onDataChange: Syncing ${detailFieldName} → form (${tableData.rows.length} rows)`);
             form.setFieldsValue({ [detailFieldName]: tableData.rows });
           } else {
             console.warn(`[DetailGridTab] onDataChange: No data for ${detailFieldName}`, tableData);
@@ -1252,6 +1204,8 @@ function getFieldComponent(
   currentLang?: string,
   record?: Row | null,
   onFieldChange?: (fieldName: string, value: unknown) => void,
+  menuById?: Map<string, any>,
+  comboEvalSeft?: Record<string, any>,
 ) {
   const types = resolveEffectiveFieldTypes(f); // infer special types even when DB sends generic f_types
   const key = f.f_name;
@@ -1462,21 +1416,21 @@ function getFieldComponent(
   
   // Kiểu DateTime
   if (/datetime/.test(types)) {
-    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel}>
       <DatePicker showTime format={dateLocaleFormat.datetime} style={{ width: '100%' }} disabled={isReadonly} />
     </Form.Item>;
   }
   
   // Kiểu Date (chỉ ngày)
   if (/^date$/.test(types)) {
-    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel}>
       <DatePicker format={dateLocaleFormat.date} style={{ width: '100%' }} disabled={isReadonly} />
     </Form.Item>;
   }
   
   // Kiểu Time (chỉ giờ)
   if (/^time$/.test(types)) {
-    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel}>
       <TimePicker format={dateLocaleFormat.time} style={{ width: '100%' }} disabled={isReadonly} />
     </Form.Item>;
   }
@@ -1759,14 +1713,25 @@ function getFieldComponent(
     const roleRows = roleFieldNames.has(String(key || "").trim().toLowerCase())
       ? getComboTableRows(database, "csm_roles")
       : [];
-    let localizedOptions = cascadeConfig.options;
+    let localizedOptions: SelectOption[];
     if (roleRows.length > 0) {
       localizedOptions = buildRoleComboOptions(roleRows).map((opt) => ({
         value: opt.value,
         label: localizeLabel ? localizeLabel(opt.label) : opt.label,
       }));
     } else {
-      localizedOptions = cascadeConfig.options ?? buildSelectOptions(rawOptions, selectEnums?.[key], localizeLabel);
+      localizedOptions = resolveEditFieldComboSelectOptions(f, database, {
+        selectEnum: selectEnums?.[key],
+        rawSelectOptions: rawOptions,
+        menuById,
+        fallbackAppId: appId,
+        userContext: getUserAccessContext(),
+        decrypt,
+        evalContext: { seft: comboEvalSeft || { m_configs, database, appId }, database },
+        localizeLabel: (label) => localizeLabel(label),
+        cascadeFrom: cascadeConfig.cascadeFrom && cascadeConfig.hasParentValue ? cascadeConfig.cascadeFrom : undefined,
+        cascadeOptions: cascadeConfig.cascadeFrom && cascadeConfig.hasParentValue ? (cascadeConfig.options ?? []) : null,
+      });
     }
     const rawSelectValue = form.getFieldValue(key) ?? initialVal;
     const selectValue = normalizeSelectValue(rawSelectValue, localizedOptions);
@@ -1780,16 +1745,17 @@ function getFieldComponent(
       }
     }
 
-    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel}>
       <Select 
+        key={`${key}-opts-${localizedOptions.length}`}
         style={{ width: '100%' }} 
         options={localizedOptions}
         showSearch
+        virtual={localizedOptions.length > 50}
         optionFilterProp="label"
         allowClear
         disabled={isReadonly || (Boolean(cascadeConfig.cascadeFrom) && !cascadeConfig.hasParentValue)}
         placeholder={translate ? translate("common.select", `Select ${fieldLabel}`) : `Select ${fieldLabel}`}
-        value={selectValue}
         onChange={(val) => {
           form.setFieldsValue({ [key]: val });
           onFieldChange?.(key, val);
@@ -1858,12 +1824,20 @@ export function CsmEditModal({
 }) {
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
-  const [formUpdated, setFormUpdated] = useState(0);
   const [valuesReady, setValuesReady] = useState(false);
+  const [databaseVersion, setDatabaseVersion] = useState(0);
   const modalContentRef = useRef<HTMLDivElement>(null);
   const { t, i18n } = useTranslation();
   const { token } = theme.useToken();
   const user = useUserStore();
+  const globalDatabase = useAppStore(state => state.database);
+  const setTableData = useAppStore(state => state.setTableData);
+  const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
+  const menuById = useMemo(() => flattenAppMenusById(apiWholeMenus || []), [apiWholeMenus]);
+  const mergedDatabase = useMemo(
+    () => ({ ...(database || {}), ...globalDatabase }),
+    [database, globalDatabase],
+  );
   const currentAppId = appId || user.app_id || "csm";
   const isEmbedded = mode === "embedded";
   
@@ -1874,7 +1848,7 @@ export function CsmEditModal({
   // Helper: Create seft context with all utility functions
   const createSeftContext = useCallback(() => ({
     m_configs,
-    database,
+    database: mergedDatabase,
     // Lunar calendar utilities
     INT,
     jdFromDate,
@@ -1898,10 +1872,137 @@ export function CsmEditModal({
     validateEmail,
     validatePhone,
     DateUtils,
-  }), [m_configs, database]);
+  }), [m_configs, mergedDatabase]);
+  const effectiveDecrypt = decrypt || csmDecrypt;
+
+  const comboEvalSeft = useMemo(() => ({
+    m_configs,
+    database: mergedDatabase,
+    appId: currentAppId,
+    menus: apiWholeMenus,
+    menuById,
+    setTableData,
+    context: {},
+  }), [m_configs, mergedDatabase, currentAppId, apiWholeMenus, menuById, setTableData]);
+
+  const dynamicFields: TableField[] = useMemo(() => {
+    return Array.isArray(m_configs?.table)
+      ? m_configs.table
+          .filter(f => Number(f.f_show) === 1 && f.f_name !== 'id')
+          .sort((a, b) => Number(a.f_stt || 0) - Number(b.f_stt || 0))
+      : [];
+  }, [m_configs]);
+
+  useEffect(() => {
+    if (!open || globalTableFetchCache.size === 0) return;
+    const checkInterval = window.setInterval(() => {
+      if (globalTableFetchCache.size === 0) {
+        setDatabaseVersion((v) => v + 1);
+        window.clearInterval(checkInterval);
+      }
+    }, 500);
+    return () => window.clearInterval(checkInterval);
+  }, [open, globalTableFetchCache.size]);
+
+  useEffect(() => {
+    if (!open) return;
+    const comboFields = dynamicFields.filter((field) => isComboLikeType(resolveEffectiveFieldTypes(field)));
+    if (comboFields.length === 0) return;
+
+    const comboEvalContext = {
+      seft: comboEvalSeft,
+      database: mergedDatabase,
+    };
+    const userContext = getUserAccessContext();
+    const uniqueFetches = collectComboTableFetchRequests(comboFields, {
+      decrypt: effectiveDecrypt,
+      fallbackAppId: currentAppId,
+      menuById,
+      userContext,
+      evalContext: comboEvalContext,
+    });
+    if (uniqueFetches.length === 0) return;
+
+    Promise.all(
+      uniqueFetches.map(({ tableName, appId, whereClause }) =>
+        ensureTableInDatabase(
+          tableName,
+          appId,
+          mergedDatabase,
+          !isDefaultComboWhereClause(whereClause) ? whereClause : undefined,
+          setTableData,
+        ).catch((err) => {
+          console.error(`[CsmEditModal] Failed to prefetch combo table ${tableName}:`, err);
+          return null;
+        }),
+      ),
+    ).then(() => {
+      setDatabaseVersion((v) => v + 1);
+    });
+  }, [open, dynamicFields, mergedDatabase, currentAppId, menuById, effectiveDecrypt, comboEvalSeft, setTableData]);
+
+  const modalSelectEnums = useMemo(() => {
+    if (!open) return selectEnums || {};
+    const seftContext = {
+      appId: currentAppId,
+      setTableData,
+      menus: apiWholeMenus,
+      menuById,
+      m_configs,
+      context: {},
+      database: mergedDatabase,
+      INT,
+      jdFromDate,
+      jdToDate,
+      NewMoon,
+      KinhDoMatTroi,
+      SunLongitude,
+      getSunLongitude,
+      getNewMoonDay,
+      getLunarMonth11,
+      getLeapMonthOffset,
+      duong_qua_am,
+      am_qua_duong,
+      LunarCalendar,
+      dateFormat,
+      chuyenNgay,
+      TruNgayRaSoNgay,
+      CongNgay,
+      CongGio,
+      validateEmail,
+      validatePhone,
+      DateUtils,
+    };
+    const built = buildDetailGridSelectEnums(
+      dynamicFields,
+      mergedDatabase,
+      effectiveDecrypt,
+      seftContext,
+    );
+    const merged = { ...(selectEnums || {}) };
+    Object.entries(built).forEach(([fieldName, enumObj]) => {
+      if (enumObj && Object.keys(enumObj).length > 0) {
+        merged[fieldName] = enumObj;
+      }
+    });
+    return merged;
+  }, [
+    open,
+    selectEnums,
+    dynamicFields,
+    mergedDatabase,
+    effectiveDecrypt,
+    currentAppId,
+    menuById,
+    apiWholeMenus,
+    databaseVersion,
+    setTableData,
+    m_configs,
+  ]);
+
   const applyRowTrigger = useCallback((triggerName: string, data: any) => {
     if (!(m_configs.trigger as any)?.[triggerName]) {
-      console.log(`[CsmEditModal.applyRowTrigger] No trigger code for: ${triggerName}`);
+      gridDevLog(`[CsmEditModal.applyRowTrigger] No trigger code for: ${triggerName}`);
       return null;
     }
 
@@ -1919,22 +2020,22 @@ export function CsmEditModal({
 
     const seftContext = createSeftContext();
     try {
-      const result = fn(seftContext, JSON.parse(JSON.stringify(data)), database);
-      console.log(`[CsmEditModal.applyRowTrigger] ${triggerName} result:`, result);
+      const result = fn(seftContext, JSON.parse(JSON.stringify(data)), mergedDatabase);
+      gridDevLog(`[CsmEditModal.applyRowTrigger] ${triggerName} result:`, result);
       return result;
     } catch (err) {
       console.error(`[CsmEditModal.applyRowTrigger] Error executing ${triggerName}:`, err);
       return null;
     }
-  }, [m_configs, database, decrypt]);
+  }, [m_configs, mergedDatabase, decrypt, createSeftContext]);
   
   // Helper: Run UPDATE trigger realtime (near-instant)
   const runUpdateTriggerRealtime = useCallback((changedValues: any, allValues: any) => {
-    console.log('[CsmEditModal.runUpdateTriggerRealtime] Triggered with changed values:', changedValues);
+    gridDevLog('[CsmEditModal.runUpdateTriggerRealtime] Triggered with changed values:', changedValues);
     
     // Prevent recursion: don't run trigger if we're already updating from trigger
     if (isUpdatingFromTrigger.current) {
-      console.log('[CsmEditModal.runUpdateTriggerRealtime] Skipping - already updating from trigger');
+      gridDevLog('[CsmEditModal.runUpdateTriggerRealtime] Skipping - already updating from trigger');
       return;
     }
     
@@ -1946,7 +2047,7 @@ export function CsmEditModal({
     // Short debounce to keep trigger responsive while avoiding noisy recursion.
     updateTriggerTimer.current = setTimeout(() => {
       if (!m_configs.trigger?.update && !m_configs.trigger?.barcode) {
-        console.log('[CsmEditModal.runUpdateTriggerRealtime] No update or barcode triggers configured');
+        gridDevLog('[CsmEditModal.runUpdateTriggerRealtime] No update or barcode triggers configured');
         return;
       }
       
@@ -1954,25 +2055,25 @@ export function CsmEditModal({
         const currentValues = allValues && typeof allValues === "object"
           ? allValues
           : form.getFieldsValue();
-        console.log('[CsmEditModal.runUpdateTriggerRealtime] Current form values:', currentValues);
+        gridDevLog('[CsmEditModal.runUpdateTriggerRealtime] Current form values:', currentValues);
         
         let updatedData = currentValues;
         
         if (m_configs.trigger?.update) {
-          console.log('[CsmEditModal.runUpdateTriggerRealtime] Applying update trigger');
+          gridDevLog('[CsmEditModal.runUpdateTriggerRealtime] Applying update trigger');
           const updateResult = applyRowTrigger("update", updatedData);
           if (updateResult && typeof updateResult === "object") {
             updatedData = { ...updatedData, ...updateResult };
-            console.log('[CsmEditModal.runUpdateTriggerRealtime] Update trigger returned:', updateResult);
+            gridDevLog('[CsmEditModal.runUpdateTriggerRealtime] Update trigger returned:', updateResult);
           }
         }
         
         if (m_configs.trigger?.barcode) {
-          console.log('[CsmEditModal.runUpdateTriggerRealtime] Applying barcode trigger');
+          gridDevLog('[CsmEditModal.runUpdateTriggerRealtime] Applying barcode trigger');
           const barcodeResult = applyRowTrigger("barcode", updatedData);
           if (barcodeResult && typeof barcodeResult === "object") {
             updatedData = { ...updatedData, ...barcodeResult };
-            console.log('[CsmEditModal.runUpdateTriggerRealtime] Barcode trigger returned:', barcodeResult);
+            gridDevLog('[CsmEditModal.runUpdateTriggerRealtime] Barcode trigger returned:', barcodeResult);
           }
         }
         
@@ -2000,10 +2101,10 @@ export function CsmEditModal({
         });
         
         if (Object.keys(fieldsToUpdate).length > 0) {
-          console.log('[CsmEditModal.runUpdateTriggerRealtime] Updating form fields:', fieldsToUpdate);
+          gridDevLog('[CsmEditModal.runUpdateTriggerRealtime] Updating form fields:', fieldsToUpdate);
           form.setFieldsValue(fieldsToUpdate);
         } else {
-          console.log('[CsmEditModal.runUpdateTriggerRealtime] No fields to update');
+          gridDevLog('[CsmEditModal.runUpdateTriggerRealtime] No fields to update');
         }
         
         // Reset flag after a short delay
@@ -2026,38 +2127,8 @@ export function CsmEditModal({
     };
   }, []);
   
-  // Debug: log selectEnums when modal opens
-  useEffect(() => {
-    if (open) {
-      console.log('[CsmEditModal] Modal opened with selectEnums:', selectEnums);
-      console.log('[CsmEditModal] Database available:', !!database);
-      console.log('[CsmEditModal] Decrypt available:', !!decrypt);
-      console.log('[CsmEditModal] Fields with "co" type:', 
-        m_configs?.table?.filter(f => isComboLikeType(resolveEffectiveFieldTypes(f))).map(f => ({
-          name: f.f_name,
-          types: f.f_types,
-          effectiveTypes: resolveEffectiveFieldTypes(f),
-          has_cbo_query: !!f.f_cbo_query,
-          has_enum: !!selectEnums?.[f.f_name],
-          cbo_query_preview: f.f_cbo_query ? (
-            f.f_cbo_query.length > 100 ? f.f_cbo_query.substring(0, 100) + '...' : f.f_cbo_query
-          ) : 'N/A'
-        }))
-      );
-    }
-  }, [open, selectEnums, m_configs, database, decrypt]);
-  
   // Enable EnterToTab for form inputs
   useEnterToTab(modalContentRef);
-
-  // Lấy fields động từ m_configs.table
-  const dynamicFields: TableField[] = useMemo(() => {
-    return Array.isArray(m_configs?.table)
-      ? m_configs.table
-          .filter(f => Number(f.f_show) === 1 && f.f_name !== 'id') // Hide 'id' field
-          .sort((a, b) => Number(a.f_stt || 0) - Number(b.f_stt || 0))
-      : [];
-  }, [m_configs]);
 
   const decryptComboQuery = useCallback((val: string) => {
     let decoded = val;
@@ -2081,7 +2152,6 @@ export function CsmEditModal({
     if (childFields.length > 0) {
       form.setFieldsValue(Object.fromEntries(childFields.map((child) => [child, undefined])));
     }
-    setFormUpdated((prev) => prev + 1);
   }, [dynamicFields, decryptComboQuery, form]);
 
   useEffect(() => {
@@ -2169,12 +2239,9 @@ export function CsmEditModal({
           convertedValues[key] = encryptedLikeToken && decryptedLooksReadable ? decodedPassword : normalizedRaw;
           return;
         }
-        if (/date|datetime|time/.test(types) && convertedValues[key]) {
+        if (/date|datetime|time/.test(types)) {
           const kind = /datetime/.test(types) ? "datetime" : /^time$/.test(types) ? "time" : "date";
-          const parsedValue = parseDateValueToDayjs(convertedValues[key], kind);
-          if (parsedValue) {
-            convertedValues[key] = parsedValue;
-          }
+          convertedValues[key] = parseDateValueToDayjs(convertedValues[key], kind);
         }
         // Keep html/edt values as plain text (no decrypt transform)
         if (/html|richtext/.test(types) && typeof convertedValues[key] === 'string') {
@@ -2216,7 +2283,7 @@ export function CsmEditModal({
             f,
             key,
             selectOptions,
-            selectEnums,
+            modalSelectEnums,
             (label) => {
               const text = String(label == null ? "" : label);
               return text.includes(".") ? t(text) : text;
@@ -2226,7 +2293,7 @@ export function CsmEditModal({
         } else if (isComboLikeType(types)) {
           const normalizedOptions = buildSelectOptions(
             selectOptions?.[key],
-            selectEnums?.[key],
+            modalSelectEnums?.[key],
             (label) => {
               const text = String(label == null ? '' : label);
               return text.includes('.') ? t(text) : text;
@@ -2260,23 +2327,12 @@ export function CsmEditModal({
       }
       
       form.setFieldsValue(convertedValues);
-      // Force re-render to ensure Form items display the values
-      const timer = setTimeout(() => {
-        setTimeout(() => {
-          setFormUpdated(prev => prev + 1);
-          form.setFieldsValue(convertedValues);
-          setTimeout(() => {
-            setValuesReady(true);
-          }, 0);
-        }, 0);
-      }, 0);
-      return () => clearTimeout(timer);
+      setValuesReady(true);
     } else {
       form.resetFields();
       setValuesReady(true);
-      setFormUpdated((prev) => prev + 1);
     }
-  }, [form, open, record, dynamicFields, selectEnums, selectOptions, t]);
+  }, [form, open, record, dynamicFields, modalSelectEnums, selectOptions, t, m_configs]);
 
   // Phân loại field: đa ngôn ngữ & chung
   const langs = ['vi', 'en', 'zh'];
@@ -2452,6 +2508,12 @@ export function CsmEditModal({
         });
       })()}
 
+      {!valuesReady ? (
+        <div style={{ padding: 24, textAlign: "center", color: token.colorTextSecondary }}>
+          {t("common.loading", "Đang tải...")}
+        </div>
+      ) : (
+      <>
       {commonFields.length > 0 && (
         <>
           {(multilangFields.length > 0 || (m_configs as any).nodes?.length > 0) && (
@@ -2460,7 +2522,6 @@ export function CsmEditModal({
             </Divider>
           )}
           {(() => {
-            const formValues = form.getFieldsValue();
             const fullWidthFields = commonFields.filter(f => {
               const types = resolveEffectiveFieldTypes(f);
               return /html|richtext/.test(types) || /code/.test(types) || types === 'edt';
@@ -2480,14 +2541,14 @@ export function CsmEditModal({
                       width: '100%'
                     }}>
                       {gridFields.map((f) => (
-                        <div key={`${f.f_name}-${formUpdated}`} style={{ minWidth: 0 }}>
+                        <div key={f.f_name} style={{ minWidth: 0 }}>
                           {getFieldComponent(
                             f,
                             form,
-                            selectEnums,
-                            formValues,
+                            modalSelectEnums,
+                            record ?? undefined,
                             selectOptions,
-                            database,
+                            mergedDatabase,
                             m_configs,
                             appId,
                             permissions,
@@ -2497,6 +2558,8 @@ export function CsmEditModal({
                             i18n.language,
                             record,
                             handleFieldChange,
+                            menuById,
+                            comboEvalSeft,
                           )}
                         </div>
                       ))}
@@ -2504,14 +2567,14 @@ export function CsmEditModal({
                   </Form.Item>
                 )}
                 {fullWidthFields.length > 0 && fullWidthFields.map((f) => (
-                  <div key={`${f.f_name}-fullwidth-${formUpdated}`} style={{ marginBottom: 4 }}>
+                  <div key={`${f.f_name}-fullwidth`} style={{ marginBottom: 4 }}>
                     {getFieldComponent(
                       f,
                       form,
-                      selectEnums,
-                      formValues,
+                      modalSelectEnums,
+                      record ?? undefined,
                       selectOptions,
-                      database,
+                      mergedDatabase,
                       m_configs,
                       appId,
                       permissions,
@@ -2521,6 +2584,8 @@ export function CsmEditModal({
                       i18n.language,
                       record,
                       handleFieldChange,
+                      menuById,
+                      comboEvalSeft,
                     )}
                   </div>
                 ))}
@@ -2545,7 +2610,7 @@ export function CsmEditModal({
               defaultActiveKey="0"
               type="card"
               size="small"
-              destroyInactiveTabPane={false}
+              destroyInactiveTabPane
               tabBarStyle={{ marginBottom: 6 }}
             >
               {nodes.map((node: any, idx: number) => {
@@ -2580,7 +2645,7 @@ export function CsmEditModal({
           <Divider orientation="left" style={{ marginTop: 12, marginBottom: 6 }}>
             <Title level={5} style={{ margin: 0, fontSize: 13 }}>Nội dung đa ngôn ngữ</Title>
           </Divider>
-          <div key={`multilang-tabs-${formUpdated}`}>
+          <div>
           {(() => {
             const baseMap: Record<string, Record<string, TableField>> = {};
             const specialBlocks: TableField[] = dynamicFields.filter(f => ["seo_multi", "content_multi"].includes(f.f_types || ""));
@@ -2611,9 +2676,8 @@ export function CsmEditModal({
               <Tabs
                 defaultActiveKey="vi"
                 style={{ marginBottom: 8 }}
-                key={`tabs-inner-${formUpdated}`}
                 size="small"
-                destroyInactiveTabPane={false}
+                destroyInactiveTabPane
                 tabBarStyle={{ marginBottom: 6 }}
               >
                 {langs.map(lang => (
@@ -2641,11 +2705,9 @@ export function CsmEditModal({
 
                         const types = (field.f_types || '').toLowerCase();
                         const fieldLabel = resolveMultilingualText(field.f_header, actualFieldName, lang);
-                        const formValues = form.getFieldsValue();
-                        const fieldValue = formValues[actualFieldName];
 
                         if (/html|richtext/.test(types)) {
-                          const value = decodeHtmlValue(String(form.getFieldValue(actualFieldName) ?? fieldValue ?? ''));
+                          const value = decodeHtmlValue(String(form.getFieldValue(actualFieldName) ?? record?.[actualFieldName] ?? ''));
                           return (
                             <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                               <HtmlEditor value={value} onChange={(val: string) => form.setFieldsValue({ [actualFieldName]: val })} appId={currentAppId} />
@@ -2696,7 +2758,7 @@ export function CsmEditModal({
                             field as TableField,
                             actualFieldName,
                             selectOptions,
-                            selectEnums,
+                            modalSelectEnums,
                             (label) => {
                               const text = String(label == null ? "" : label);
                               return text.includes(".") ? t(text) : text;
@@ -2773,27 +2835,30 @@ export function CsmEditModal({
 
                         if (isComboLikeType(types)) {
                           const rawOptions = selectOptions?.[actualFieldName];
-                          const enumObj = selectEnums?.[actualFieldName];
-                          const options = buildSelectOptions(rawOptions, enumObj, (label) => {
-                            const text = String(label == null ? '' : label);
-                            return text.includes('.') ? t(text) : text;
+                          const options = resolveEditFieldComboSelectOptions(field as TableField, mergedDatabase, {
+                            selectEnum: modalSelectEnums?.[actualFieldName],
+                            rawSelectOptions: rawOptions,
+                            menuById,
+                            fallbackAppId: currentAppId,
+                            userContext: getUserAccessContext(),
+                            decrypt: effectiveDecrypt,
+                            evalContext: { seft: comboEvalSeft, database: mergedDatabase },
+                            localizeLabel: (label) => {
+                              const text = String(label == null ? '' : label);
+                              return text.includes('.') ? t(text) : text;
+                            },
                           });
-                          const selectValue = normalizeSelectValue(
-                            form.getFieldValue(actualFieldName) ?? fieldValue,
-                            options
-                          );
                           return (
                             <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                               <Select
+                                key={`${actualFieldName}-opts-${options.length}`}
                                 showSearch
                                 allowClear
+                                virtual={options.length > 50}
                                 placeholder={t("common.select", { defaultValue: `Select ${fieldLabel}` })}
                                 options={options}
-                                value={selectValue}
                                 onChange={val => form.setFieldsValue({ [actualFieldName]: val })}
-                                filterOption={(input, option) =>
-                                  String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                                }
+                                optionFilterProp="label"
                               />
                             </Form.Item>
                           );
@@ -2833,6 +2898,8 @@ export function CsmEditModal({
           })()}
           </div>
         </>
+      )}
+      </>
       )}
       </Form>
     </div>

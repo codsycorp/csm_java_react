@@ -11,7 +11,7 @@ import CsmLineItemsPage from "#src/components/production-order/CsmLineItemsPage"
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, usePermissionStore, useTabsStore, useUserStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
-import { resolveEffectiveUserAppId, resolveTableRequestAppId, normalizePlainAppId } from "#src/utils/user-app-id";
+import { resolveEffectiveUserAppId, resolveTableRequestAppId, normalizePlainAppId, isPlainTenantAppId } from "#src/utils/user-app-id";
 // Import hàm hỗ trợ đa ngôn ngữ
 import { isSuperPermissionProfile, resolvePermissionDataScope, toPermissionBigInt } from "#src/utils/permission-bitfield";
 import { Alert, Empty, Spin } from "antd";
@@ -1880,7 +1880,14 @@ export default function AdminPage(props: any = {}) {
 		if (!runtimeMenu)
 			return;
 
-		const resolvedUserAppId = (appId && String(appId).trim()) || "csm";
+		const resolvedUserAppId = normalizePlainAppId(appId, csmDecrypt)
+			|| resolveEffectiveUserAppId({
+				app_id: userAppId,
+				app_token: userAppToken,
+				menusPermissions: userMenusPermissionsRaw,
+				dev: devFlag,
+			}, csmDecrypt)
+			|| "csm";
 		const TENANT_ORG_TABLES_LOAD = new Set(["csm_branches", "csm_depts", "csm_roles"]);
 		const resolveTableAppId = (tableName: string): string => {
 			if (isSystemUserRoute) {
@@ -1891,7 +1898,13 @@ export default function AdminPage(props: any = {}) {
 			}
 			// Org tables always use the logged-in user’s app_id, never the menu’s stored app_id.
 			if (TENANT_ORG_TABLES_LOAD.has(tableName)) return resolvedUserAppId;
-			return normalizePlainAppId(runtimeMenu.app_id, csmDecrypt) || resolvedUserAppId;
+			// Tenant users: session app_id only — menu JSON app_id is often encrypted/stale.
+			if (!isDevUser && resolvedUserAppId && resolvedUserAppId !== "csm") {
+				return resolvedUserAppId;
+			}
+			const fromMenu = normalizePlainAppId(runtimeMenu.app_id, csmDecrypt);
+			if (fromMenu && isPlainTenantAppId(fromMenu)) return fromMenu;
+			return resolvedUserAppId;
 		};
 
 		const ensureSystemRouteTables = async () => {

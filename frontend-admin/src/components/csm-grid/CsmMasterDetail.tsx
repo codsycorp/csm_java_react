@@ -1,8 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Tabs, theme } from "antd";
 import CsmDynamicGrid from "./CsmDynamicGrid";
 import { buildDetailGridSelectEnums } from "./CsmEditModal";
 import { usePreferences } from "#src/hooks/use-preferences";
+import { useAppStore } from "#src/store";
+import {
+	buildMasterRowKey,
+	getPrimaryKeyFieldsFromConfig,
+	resolveMasterRowFromGridSelection,
+} from "./master-detail-utils";
 
 function resolveMultilingualText(raw: any, fallback = "", langInput?: string): string {
 	if (raw == null || raw === "") return String(fallback || "");
@@ -25,9 +31,11 @@ export default function CsmMasterDetail(props: any) {
 	const { appId, permissions, menusPermissions, dataScope, database, decrypt, m_configs, onDataChange } = props;
 	const { isDark } = usePreferences();
 	const { token } = theme.useToken();
+	const setTableData = useAppStore((state) => state.setTableData);
 	const [selectRow, setSelectRow] = useState<any>(null);
 	const [isFullscreen, setIsFullscreen] = useState(false);
 	const containerRef = useRef<HTMLDivElement | null>(null);
+	const masterPkFields = useMemo(() => getPrimaryKeyFieldsFromConfig(m_configs), [m_configs]);
 	const [viewportHeight, setViewportHeight] = useState(() => {
 		if (typeof window === "undefined") return 760;
 		return Math.max(window.innerHeight - 220, 520);
@@ -35,6 +43,38 @@ export default function CsmMasterDetail(props: any) {
 
 	const nodes = (m_configs && m_configs.nodes) || [];
 	const hasNodes = nodes.length > 0;
+	const masterTableName = String(m_configs?.table_name || "").trim();
+
+	const patchMasterRowInStore = useCallback((nextMasterRow: Record<string, any>) => {
+		if (!masterTableName || !nextMasterRow) return;
+		const entry = useAppStore.getState().database?.[masterTableName];
+		if (!entry?.rows) return;
+		const masterKey = buildMasterRowKey(nextMasterRow, masterPkFields);
+		const nextRows = entry.rows.map((row) => (
+			buildMasterRowKey(row, masterPkFields) === masterKey ? nextMasterRow : row
+		));
+		setTableData(masterTableName, { ...entry, rows: nextRows });
+	}, [masterPkFields, masterTableName, setTableData]);
+
+	const handleMasterSelectRow = useCallback((row: any) => {
+		if (!row) {
+			setSelectRow(null);
+			return;
+		}
+		const masterRows = database?.[masterTableName]?.rows;
+		const resolved = resolveMasterRowFromGridSelection(row, masterRows, masterPkFields);
+		setSelectRow(resolved);
+	}, [database, masterPkFields, masterTableName]);
+
+	const handleDetailRowsChange = useCallback((detailTableName: string, rows: Record<string, any>[]) => {
+		setSelectRow((prev: Record<string, any> | null) => {
+			if (!prev) return prev;
+			const nextMasterRow = { ...prev, [detailTableName]: rows };
+			patchMasterRowInStore(nextMasterRow);
+			return nextMasterRow;
+		});
+		onDataChange?.();
+	}, [onDataChange, patchMasterRowInStore]);
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;
@@ -61,25 +101,28 @@ export default function CsmMasterDetail(props: any) {
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [isFullscreen]);
 
-	const masterTitle = resolveMultilingualText(m_configs?.label, "Dữ liệu chính");
-	const masterRows = Array.isArray(database?.[m_configs?.table_name]?.rows)
-		? database[m_configs.table_name].rows.length
-		: undefined;
-	const selectedRowSummary = useMemo(() => {
-		if (!selectRow || typeof selectRow !== "object") return "Chọn một dòng để xem chi tiết";
-		const preferredFields = ["ma_ct", "code", "name", "ten", "title", "so_ct", "id"];
-		for (const field of preferredFields) {
-			const value = String(selectRow?.[field] ?? "").trim();
-			if (value) return value;
-		}
-		const firstScalar = Object.values(selectRow).find((value) => typeof value === "string" || typeof value === "number");
-		return firstScalar != null ? String(firstScalar) : "Đã chọn bản ghi";
-	}, [selectRow]);
+	const detailSelectEnumsByNode = useMemo(() => {
+		const map = new Map<string, Record<string, unknown>>();
+		const contextRow = selectRow || undefined;
+		nodes.forEach((node: any) => {
+			const nodeId = String(node?.id || "");
+			if (!nodeId) return;
+			map.set(
+				nodeId,
+				buildDetailGridSelectEnums(node?.table || [], database, decrypt, {
+					m_configs: node,
+					context: { select_row: contextRow },
+				}),
+			);
+		});
+		return map;
+	}, [nodes, database, decrypt, selectRow]);
 
-	const tabItems = nodes.map((node: any) => {
+	const tabItems = useMemo(() => nodes.map((node: any) => {
 		const nodeLabel = resolveMultilingualText(node.label, node.id || "");
 		const label = nodeLabel.includes(".") ? nodeLabel.split(".").slice(-1)[0] : nodeLabel;
-		const detailGridSelectEnums = buildDetailGridSelectEnums(node?.table || [], database, decrypt, { m_configs: node, context: { select_row: selectRow || undefined } });
+		const detailGridSelectEnums = detailSelectEnumsByNode.get(String(node.id)) || {};
+		const detailTableName = String(node.table_name || "").trim();
 		const children = React.createElement("div", {
 			style: {
 				height: "100%",
@@ -87,7 +130,7 @@ export default function CsmMasterDetail(props: any) {
 				overflow: "auto",
 			}
 		}, React.createElement(CsmDynamicGrid as any, {
-			key: `grid-${node.id}`,
+			key: `grid-${node.id}-${selectRow ? buildMasterRowKey(selectRow, masterPkFields) : "none"}`,
 			appId,
 			permissions,
 			menusPermissions,
@@ -106,10 +149,12 @@ export default function CsmMasterDetail(props: any) {
 			},
 			context: { select_row: selectRow || undefined },
 			isDetailGrid: true,
+			disablePagination: true,
+			onDetailRowsChange: (rows: Record<string, any>[]) => handleDetailRowsChange(detailTableName, rows),
 			onDataChange,
 		}));
 		return { key: String(node.id), label, children } as any;
-	});
+	}), [nodes, appId, permissions, menusPermissions, dataScope, database, decrypt, m_configs, selectRow, onDataChange, detailSelectEnumsByNode, handleDetailRowsChange, masterPkFields]);
 
 	const panelStyle: React.CSSProperties = {
 		minWidth: 0,
@@ -163,10 +208,10 @@ export default function CsmMasterDetail(props: any) {
 				width: 36,
 				height: 36,
 				padding: 0,
-			border: `1px solid ${token.colorBorder}`,
-			borderRadius: token.borderRadiusSM,
-			background: token.colorBgContainer,
-			color: token.colorTextHeading,
+				border: `1px solid ${token.colorBorder}`,
+				borderRadius: token.borderRadiusSM,
+				background: token.colorBgContainer,
+				color: token.colorTextHeading,
 				cursor: "pointer",
 				display: "flex",
 				alignItems: "center",
@@ -203,16 +248,16 @@ export default function CsmMasterDetail(props: any) {
 				width: 40,
 				height: 40,
 				padding: 0,
-			border: `1px solid ${token.colorBorder}`,
-			borderRadius: token.borderRadiusSM,
-			background: token.colorBgContainer,
-			color: token.colorTextHeading,
-			cursor: "pointer",
-			display: "flex",
-			alignItems: "center",
-			justifyContent: "center",
-			fontSize: 18,
-			boxShadow: token.boxShadow,
+				border: `1px solid ${token.colorBorder}`,
+				borderRadius: token.borderRadiusSM,
+				background: token.colorBgContainer,
+				color: token.colorTextHeading,
+				cursor: "pointer",
+				display: "flex",
+				alignItems: "center",
+				justifyContent: "center",
+				fontSize: 18,
+				boxShadow: token.boxShadow,
 				transition: "all 0.2s",
 				fontFamily: "system-ui, -apple-system, sans-serif",
 			}
@@ -237,8 +282,10 @@ export default function CsmMasterDetail(props: any) {
 			database,
 			decrypt,
 			m_configs,
-			onSelectRow: (r: any) => setSelectRow(r),
-			onDataChange,			embeddedPanelContainer: containerRef,		}))),
+			onSelectRow: handleMasterSelectRow,
+			onDataChange,
+			embeddedPanelContainer: containerRef,
+		}))),
 		hasNodes
 			? React.createElement("div", {
 				key: "detail-panel",
@@ -258,9 +305,10 @@ export default function CsmMasterDetail(props: any) {
 				items: tabItems,
 				type: "card",
 				size: "small",
-				style: { 
-					height: "100%", 
-					display: "flex", 
+				destroyInactiveTabPane: true,
+				style: {
+					height: "100%",
+					display: "flex",
 					flexDirection: "column",
 					background: token.colorBgContainer,
 					color: token.colorTextHeading,
@@ -279,4 +327,3 @@ export default function CsmMasterDetail(props: any) {
 			: null,
 	]);
 }
-

@@ -419,6 +419,82 @@ func ResolveRequestAppID(params map[string]any, auth *AuthUser) string {
 	return "default"
 }
 
+// IsPlainTenantAppID matches frontend isPlainTenantAppId — rejects corrupt decrypt blobs.
+func IsPlainTenantAppID(value string) bool {
+	s := strings.ToLower(strings.TrimSpace(value))
+	if len(s) < 2 || len(s) > 32 {
+		return false
+	}
+	if strings.Contains(s, "_____") || strings.Contains(s, "=") {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+			return false
+		}
+	}
+	if strings.Contains(s, "55555") {
+		return false
+	}
+	for i := 0; i <= len(s)-4; i++ {
+		allDigit := true
+		for j := 0; j < 4; j++ {
+			if s[i+j] < '0' || s[i+j] > '9' {
+				allDigit = false
+				break
+			}
+		}
+		if allDigit {
+			return false
+		}
+	}
+	return true
+}
+
+// NormalizePlainAppID decrypts CSM blobs and returns the tenant slug (e.g. kqxs, banhang).
+func NormalizePlainAppID(raw string, rm *data.RecordManager) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if IsPlainTenantAppID(raw) {
+		if strings.EqualFold(raw, "csm") {
+			return "csm"
+		}
+		return strings.ToLower(raw)
+	}
+	if rm == nil {
+		return ""
+	}
+	decrypted, err := rm.CsmDecrypt(raw)
+	if err != nil {
+		return ""
+	}
+	if strings.Contains(decrypted, "_____") {
+		head := strings.TrimSpace(strings.Split(decrypted, "_____")[0])
+		if IsPlainTenantAppID(head) {
+			return head
+		}
+	}
+	if IsPlainTenantAppID(decrypted) {
+		return strings.ToLower(decrypted)
+	}
+	return ""
+}
+
+// ResolveRequestAppIDNormalized sanitizes request app_id and falls back to auth context.
+func ResolveRequestAppIDNormalized(params map[string]any, auth *AuthUser, rm *data.RecordManager) string {
+	if normalized := NormalizePlainAppID(ResolveRequestAppID(params, auth), rm); normalized != "" {
+		return normalized
+	}
+	if auth != nil {
+		if fromAuth := NormalizePlainAppID(auth.AppID, rm); fromAuth != "" {
+			return fromAuth
+		}
+	}
+	return "default"
+}
+
 func ResolveMenuIndexAppID(params map[string]any, auth *AuthUser, filter model.SearchFilter) string {
 	requested := ResolveRequestAppID(params, auth)
 	if !isMenuIndexFilter(filter) || auth == nil || auth.Dev {

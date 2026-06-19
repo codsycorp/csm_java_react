@@ -24,6 +24,10 @@ export interface BasicTableProps<D, U, V> extends ProTableProps<D, U, V> {
 	 * @default 0
 	 */
 	offsetBottom?: number
+	/**
+	 * @description Enable Ant Design virtual scroll for large datasets (requires scroll.y).
+	 */
+	virtual?: boolean
 }
 
 /**
@@ -52,6 +56,10 @@ export function BasicTable<
 	 */
 	useEffect(() => {
 		const isPaginationDisabled = props.pagination === false;
+		if (props.virtual) {
+			// Virtual table manages its own body scroll region.
+			return;
+		}
 		if (autoHeight && tableWrapperRef.current && size?.height) {
 			const tableWrapperHeight = size.height;
 			const basicTable = tableWrapperRef.current.getElementsByClassName(BASIC_TABLE_ROOT_CLASS_NAME)[0];
@@ -96,7 +104,7 @@ export function BasicTable<
 			}
 			tableBody.setAttribute("style", `overflow-y: auto;min-height: ${bodyHeight}px;max-height: ${bodyHeight}px;`);
 		}
-	}, [size, autoHeight, offsetBottom, props.pagination]);
+	}, [size, autoHeight, offsetBottom, props.pagination, props.virtual]);
 
 	const getLoadingProps = () => {
 		if (props.loading === false) {

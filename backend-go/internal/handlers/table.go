@@ -54,9 +54,12 @@ func (h *TableHandler) HandleGetTableData(params map[string]any, auth *security.
 	}
 	table, _ := params["obj_name"].(string)
 	filter := parseSearchFilter(params)
-	appID := security.ResolveRequestAppID(params, auth)
+	appID := security.ResolveRequestAppIDNormalized(params, auth, h.rm)
 	if table == "index" {
 		appID = security.ResolveMenuIndexAppID(params, auth, filter)
+		if normalized := security.NormalizePlainAppID(appID, h.rm); normalized != "" {
+			appID = normalized
+		}
 	}
 	if table != "" {
 		resp.Set("id", table)
@@ -118,7 +121,7 @@ func (h *TableHandler) handleTableOperation(params map[string]any, isUpdate bool
 	out := map[string]any{}
 	table, _ := params["obj_name"].(string)
 	filter := parseSearchFilter(params)
-	appID := security.ResolveRequestAppID(params, auth)
+	appID := security.ResolveRequestAppIDNormalized(params, auth, h.rm)
 	if table == "index" && !isUpdate {
 		appID = security.ResolveMenuIndexAppID(params, auth, filter)
 	}

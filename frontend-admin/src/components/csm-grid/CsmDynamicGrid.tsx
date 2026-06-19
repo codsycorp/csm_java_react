@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, startTransition } from "react";
 import { useTranslation } from "react-i18next";
 import { BasicTable } from "#src/components/basic-table";
 import { updateTableData, getTableData, bulkUpdateTableData } from "./CsmApi";
@@ -6,6 +6,8 @@ import CsmEditModal, { DetailGridTab } from "./CsmEditModal";
 import { csmDecrypt, csmEncrypt } from "./CsmCrypto";
 import { compileMenuTrigger, resolveTriggerBody, safeEval } from "./csm-trigger-runner";
 import { isGridVisibleTableField } from "./grid-field-visibility";
+import { buildComboDatabaseSignature, gridDevLog, useDebouncedValue, GRID_VIRTUAL_ROW_THRESHOLD, paginateRows, GRID_PAGE_SIZE_OPTIONS } from "./grid-perf-utils";
+import { resolveDetailGridRowsFromMaster } from "./master-detail-utils";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
 import { dateFormat, chuyenNgay, TruNgayRaSoNgay, CongNgay, CongGio, validateEmail, validatePhone, DateUtils } from "#src/utils/dateUtils";
 import { useSocket } from "#src/hooks/useSocket";
@@ -26,8 +28,13 @@ import {
 	buildRoleComboOptions,
 	flattenAppMenusById,
 	buildGridFieldComboSelectEnum,
+	buildFieldQueryComboSelectEnum,
+	resolveQueryRowComboLabel,
 	resolveComboCellDisplayLabel,
+	resolveGridComboCellLabel,
 	collectComboTableFetchRequests,
+	isDefaultComboWhereClause,
+	storedTableAppIdMatches,
 } from "./combo-utils";
 import { usePermissionStore } from "#src/store/permission";
 import dayjs from "dayjs";
@@ -463,16 +470,6 @@ function parseFieldOptions(raw: unknown): Array<{ value: string; label: string }
 			return { value, label: label || value };
 		})
 		.filter((item): item is { value: string; label: string } => Boolean(item));
-}
-
-function resolveDynamicQueryLabel(row: any, valueField: string, labelField: string, fields: unknown): string {
-	const value = String(row?.[valueField] ?? "").trim();
-	const configuredFields = Array.isArray(fields)
-		? fields.map((item) => String(item || "").trim()).filter(Boolean)
-		: [];
-	const effectiveLabelField = String(labelField || configuredFields[1] || valueField).trim() || valueField;
-	const directLabel = String(row?.[effectiveLabelField] ?? "").trim();
-	return directLabel || value;
 }
 
 function getLegacyFallbackComboQuery(fieldNameRaw: unknown): string {
@@ -989,6 +986,7 @@ export function CsmDynamicGrid({
   disablePagination = false,
   allowReadonlyExport = false,
   embeddedPanelContainer,
+  onDetailRowsChange,
 }: {
 	m_configs: MConfig
 	database?: Database // DEPRECATED: Kept for backward compatibility, not used
@@ -1012,6 +1010,7 @@ export function CsmDynamicGrid({
 	disablePagination?: boolean
 	allowReadonlyExport?: boolean
   embeddedPanelContainer?: React.RefObject<HTMLElement>
+	onDetailRowsChange?: (rows: Row[]) => void
 }) {
 	const { t, i18n } = useTranslation();
 	const numberLocale = useMemo(() => resolveNumberLocale(i18n.language), [i18n.language]);
@@ -1059,6 +1058,7 @@ export function CsmDynamicGrid({
 	const actionClickGuardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const [rowActionBusy, setRowActionBusy] = useState(false);
 	const [searchTerm, setSearchTerm] = useState("");
+	const debouncedSearchTerm = useDebouncedValue(searchTerm, 280);
 	const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 	
 	// State để prevent trigger update recursion khi inline edit
@@ -1110,9 +1110,21 @@ export function CsmDynamicGrid({
 		[tableName, appId, userAccess, decrypt],
 	);
 	const hasTableName = Boolean(tableName);
-	const [, setUpdateTrigger] = useState(0);
 	const pkFields = useMemo(() => getPrimaryKeyFields(m_configs), [m_configs.struct?.fieldsPK]);
 	const getRowKey = useCallback((row: Row | null | undefined) => buildRowKey(row, pkFields), [pkFields]);
+
+	const resolveDetailRows = useCallback(() => {
+		return resolveDetailGridRowsFromMaster(context?.select_row, tableName, {
+			filterCode: m_configs.trigger?.filter,
+			decrypt,
+		});
+	}, [context?.select_row, tableName, m_configs.trigger?.filter, decrypt]);
+
+	const notifyDetailRowsChange = useCallback((rows: Row[]) => {
+		if (!isDetailGrid) return;
+		onDetailRowsChange?.(rows);
+		onDataChange?.();
+	}, [isDetailGrid, onDetailRowsChange, onDataChange]);
 	const effectiveGridInstanceKey = useMemo(
 		() => String(gridInstanceKey || `${runtimeAppId || ""}::${menuId || ""}::${m_configs?.id || ""}::${m_configs?.table_name || ""}`),
 		[gridInstanceKey, runtimeAppId, menuId, m_configs?.id, m_configs?.table_name],
@@ -1190,6 +1202,13 @@ export function CsmDynamicGrid({
 			.join("|");
 	}, [m_configs?.table]);
 	
+	const comboMenuSignature = useMemo(() => {
+		const menuIds = (m_configs?.table || [])
+			.map((f) => String((f as any)?.f_grid || "").trim())
+			.filter(Boolean);
+		return `${menuById.size}:${menuIds.sort().join(",")}`;
+	}, [m_configs?.table, menuById]);
+	
 	const resolveQueryAppIdByTable = useCallback((tableName: string, queryAppId?: string): string => {
 		return resolveComboQueryAppId(tableName, queryAppId, undefined, userAccess, decrypt);
 	}, [userAccess, decrypt]);
@@ -1208,6 +1227,7 @@ export function CsmDynamicGrid({
 		const effectiveAppId = resolveQueryAppIdByTable(tableName, queryAppId);
 		const hasUsableWhere = Boolean(
 			whereClause
+			&& !isDefaultComboWhereClause(whereClause)
 			&& (
 				(typeof whereClause === "string" && whereClause.trim())
 				|| (typeof whereClause === "object" && (
@@ -1220,7 +1240,7 @@ export function CsmDynamicGrid({
 			? whereClause
 			: { field: "id", type: "like", value: "" };
 		if (!hasUsableWhere) {
-			console.log(`🔎 [AutoFetch] Using default where for ${tableName}:`, effectiveWhereClause);
+			gridDevLog(`🔎 [AutoFetch] Using default where for ${tableName}:`, effectiveWhereClause);
 		}
 		
 		// Include where clause in cache key to handle different filters on same table
@@ -1235,23 +1255,23 @@ export function CsmDynamicGrid({
 			if (existing && (Array.isArray(existing) || (existing.rows && Array.isArray(existing.rows)))) {
 				const rowCount = Array.isArray(existing) ? existing.length : existing.rows?.length || 0;
 				const storedAppId = Array.isArray(existing) ? "" : getStoredTableAppId(existing);
-				const isMatchingApp = !storedAppId || storedAppId === effectiveAppId;
+				const isMatchingApp = storedTableAppIdMatches(storedAppId, effectiveAppId, decrypt);
 				if (rowCount > 0 && isMatchingApp) {
-					console.log(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows, app: ${storedAppId || "unknown"})`);
+					gridDevLog(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows, app: ${storedAppId || "unknown"})`);
 					return false; // Already have data
 				}
 				if (rowCount > 0 && !isMatchingApp) {
-					console.log(`🔄 [AutoFetch] Table ${tableName} exists for app ${storedAppId}, refetching for app ${effectiveAppId}`);
+					gridDevLog(`🔄 [AutoFetch] Table ${tableName} exists for app ${storedAppId}, refetching for app ${effectiveAppId}`);
 				}
 			}
 		} else {
-			console.log(`🔍 [AutoFetch] Query has where clause, will fetch ${tableName} with filter (ignore existing data)`);
+			gridDevLog(`🔍 [AutoFetch] Query has where clause, will fetch ${tableName} with filter (ignore existing data)`);
 		}
 
 		// Check if currently fetching this specific query (same table + same where)
 		if (globalTableFetchCache.has(cacheKey)) {
 			// Already fetching, wait for it
-			console.log(`⏳ [AutoFetch] Already fetching ${tableName} with same where clause, waiting...`);
+			gridDevLog(`⏳ [AutoFetch] Already fetching ${tableName} with same where clause, waiting...`);
 			try {
 				await globalTableFetchCache.get(cacheKey);
 				return true; // Was fetching
@@ -1263,7 +1283,7 @@ export function CsmDynamicGrid({
 		}
 
 		// Start fetching
-		console.log(`🔄 [AutoFetch] Fetching missing table: ${tableName} (app: ${effectiveAppId})`, `with where:`, effectiveWhereClause);
+		gridDevLog(`🔄 [AutoFetch] Fetching missing table: ${tableName} (app: ${effectiveAppId})`, `with where:`, effectiveWhereClause);
 		
 		// Build request params - include where if provided
 		const requestParams: any = {
@@ -1281,7 +1301,7 @@ export function CsmDynamicGrid({
 					if (Array.isArray((response as any)?.result?.list)) return (response as any).result.list;
 					return [];
 				})();
-				console.log(`✅ [AutoFetch] Fetched ${tableName}: ${normalizedRows.length} rows`, normalizedRows.slice(0, 3));
+				gridDevLog(`✅ [AutoFetch] Fetched ${tableName}: ${normalizedRows.length} rows`, normalizedRows.slice(0, 3));
 				
 				// ✅ CRITICAL: Update global store instead of mutating local database object
 				// This triggers re-render and database useMemo will have new data
@@ -1292,7 +1312,7 @@ export function CsmDynamicGrid({
 				});
 				
 				globalTableFetchCache.delete(cacheKey);
-				console.log(`🎉 [AutoFetch] Successfully populated ${tableName} in global store`);
+				gridDevLog(`🎉 [AutoFetch] Successfully populated ${tableName} in global store`);
 				return normalizedRows;
 			})
 			.catch((err) => {
@@ -1313,35 +1333,42 @@ export function CsmDynamicGrid({
 		fetchPromise.catch(() => {}); // Ignore error (already logged)
 		
 		return true; // Started fetching
-	}, [database, resolveQueryAppIdByTable, globalTableFetchCache, setTableData, getStoredTableAppId]);
+	}, [database, resolveQueryAppIdByTable, globalTableFetchCache, setTableData, getStoredTableAppId, decrypt]);
 
 	// 🔄 Auto-fetch missing combo tables (f_cbo_query + f_grid) when field config becomes available
 	useEffect(() => {
-		if (!comboFetchSignature || comboFetchSignature === lastComboFetchSignatureRef.current) {
+		const fetchSignature = `${comboFetchSignature}::menus:${comboMenuSignature}`;
+		if (!comboFetchSignature || fetchSignature === lastComboFetchSignatureRef.current) {
 			return;
 		}
-		lastComboFetchSignatureRef.current = comboFetchSignature;
+		lastComboFetchSignatureRef.current = fetchSignature;
 
-		console.log('[CsmDynamicGrid] Scanning combo queries for missing tables...');
+		gridDevLog('[CsmDynamicGrid] Scanning combo queries for missing tables...');
 
 		const comboFields = (m_configs?.table || []).filter((f: TableField) => {
 			const types = resolveEffectiveFieldTypes(f);
 			return isComboLikeType(types);
 		});
 
+		const comboEvalContext = {
+			seft: { m_configs, context, database, appId: runtimeAppId },
+			database,
+		};
+
 		const uniqueFetches = collectComboTableFetchRequests(comboFields, {
 			decrypt,
 			fallbackAppId: runtimeAppId,
 			menuById,
 			userContext: userAccess,
+			evalContext: comboEvalContext,
 		});
 
 		if (uniqueFetches.length === 0) {
-			console.log('[CsmDynamicGrid] No combo tables to fetch');
+			gridDevLog('[CsmDynamicGrid] No combo tables to fetch');
 			return;
 		}
 
-		console.log(`[CsmDynamicGrid] Found ${uniqueFetches.length} combo tables to fetch:`, uniqueFetches);
+		gridDevLog(`[CsmDynamicGrid] Found ${uniqueFetches.length} combo tables to fetch:`, uniqueFetches);
 
 		Promise.all(
 			uniqueFetches.map(({ tableName, appId, whereClause }) =>
@@ -1352,10 +1379,24 @@ export function CsmDynamicGrid({
 					}),
 			),
 		).then(() => {
-			console.log('[CsmDynamicGrid] All combo tables fetched, triggering re-compute...');
+			gridDevLog('[CsmDynamicGrid] All combo tables fetched, triggering re-compute...');
 			setDatabaseVersion(v => v + 1);
 		});
-	}, [comboFetchSignature, userAccess, decrypt, menuById, runtimeAppId, m_configs?.table, ensureTableInDatabase]);
+	}, [comboFetchSignature, comboMenuSignature, userAccess, decrypt, menuById, runtimeAppId, m_configs?.table, context, database, ensureTableInDatabase]);
+
+	const comboDatabaseSignature = useMemo(
+		() => buildComboDatabaseSignature(m_configs?.table || [], database, {
+			decrypt,
+			fallbackAppId: runtimeAppId,
+			menuById,
+			userContext: userAccess,
+			evalContext: {
+				seft: { m_configs, context, database, appId: runtimeAppId },
+				database,
+			},
+		}),
+		[m_configs?.table, database, databaseVersion, decrypt, runtimeAppId, menuById, userAccess, context, m_configs],
+	);
 
 	// Helper: Create seft context with all utility functions
 	const createSeftContext = useCallback(() => ({
@@ -1431,7 +1472,7 @@ export function CsmDynamicGrid({
 	const enableInlineCellEdit = Number(rowTypeEdit) === 1;
 	
 	// Debug log
-	// console.log('[CsmDynamicGrid] Edit mode config:', {
+	// gridDevLog('[CsmDynamicGrid] Edit mode config:', {
 	// 	typeForm,
 	// 	rowTypeEdit,
 	// 	enableInlineCellEdit,
@@ -1439,23 +1480,6 @@ export function CsmDynamicGrid({
 	// });
 
 	// Kiểm tra có table_name hay không
-
-	// Subscribe to database changes to force re-render when socket updates nested data
-	useEffect(() => {
-		console.log(`[CsmDynamicGrid] 🎬 Component rendered (tableName: ${tableName})`);
-		console.log(`[CsmDynamicGrid] 🔔 Subscription useEffect triggered for table: ${tableName}`);
-		const unsubscribe = useAppStore.subscribe(
-			() => {
-				console.log(`[CsmDynamicGrid] 📢 Store subscription fired, incrementing trigger for ${tableName}`);
-				setUpdateTrigger(prev => prev + 1);
-			}
-		);
-		console.log(`[CsmDynamicGrid] ✅ Subscription registered`);
-		return () => {
-			console.log(`[CsmDynamicGrid] 🗑️ Subscription cleanup for ${tableName}`);
-			unsubscribe();
-		};
-	}, [tableName, setUpdateTrigger]);
 
 	// Helper: Run UPDATE trigger (Vue compatibility)
 	// Chạy TRƯỚC KHI save để tính toán các field tự động
@@ -1599,10 +1623,10 @@ export function CsmDynamicGrid({
 
 	// Build valueEnum for select fields via f_cbo_query (Vue parity: getOptionsSelect)
 	const selectEnums = useMemo(() => {
-		console.log('[selectEnums] useMemo triggered');
-		console.log('[selectEnums] m_configs.table:', m_configs.table);
-		console.log('[selectEnums] database keys:', Object.keys(database || {}));
-		console.log('[selectEnums] decrypt available:', !!decrypt);
+		gridDevLog('[selectEnums] useMemo triggered');
+		gridDevLog('[selectEnums] m_configs.table:', m_configs.table);
+		gridDevLog('[selectEnums] database keys:', Object.keys(database || {}));
+		gridDevLog('[selectEnums] decrypt available:', !!decrypt);
 
 		const localizeOptionLabel = (raw: unknown) => {
 			const text = String(raw == null ? "" : raw);
@@ -1614,7 +1638,7 @@ export function CsmDynamicGrid({
 		
 		// Start with override if provided (for detail grid)
 		if (m_configs.selectEnumsOverride) {
-			console.log('[selectEnums] Using selectEnumsOverride:', Object.keys(m_configs.selectEnumsOverride));
+			gridDevLog('[selectEnums] Using selectEnumsOverride:', Object.keys(m_configs.selectEnumsOverride));
 			Object.assign(map, m_configs.selectEnumsOverride);
 		}
 		
@@ -1624,11 +1648,16 @@ export function CsmDynamicGrid({
 				return Number(f.f_show) === 1 && isComboLikeType(types);
 			});
 		
-		console.log(`[selectEnums] Found ${coFields.length} combo-like fields:`, 
+		gridDevLog(`[selectEnums] Found ${coFields.length} combo-like fields:`, 
 			coFields.map(f => ({ name: f.f_name, rawTypes: f.f_types, effectiveTypes: resolveEffectiveFieldTypes(f), has_query: !!f.f_cbo_query }))
 		);
 		
 		coFields.forEach((f) => {
+			const comboEvalContext = {
+				seft: createSeftContext(),
+				database,
+			};
+
 			const optionsFromField = parseFieldOptions((f as any).f_options);
 			if (optionsFromField.length > 0) {
 				const enumFromOptions: Record<string, { text: string }> = {};
@@ -1641,14 +1670,32 @@ export function CsmDynamicGrid({
 				}
 			}
 
-			// Vue parity: f_grid + f_grid_fields overrides f_cbo_query for grid combo display
-			const gridMenuId = String((f as any)?.f_grid || "").trim();
-			if (gridMenuId && menuById.size > 0) {
-				const gridEnum = buildGridFieldComboSelectEnum(f, database, menuById, userAccess, decrypt);
+			// Vue parity: f_grid + f_grid_fields (field props or f_cbo_query returning f_grid config)
+			if (menuById.size > 0) {
+				const gridEnum = buildGridFieldComboSelectEnum(
+					f,
+					database,
+					menuById,
+					userAccess,
+					decrypt,
+					comboEvalContext,
+				);
 				if (Object.keys(gridEnum).length > 0) {
 					map[f.f_name] = gridEnum;
 					return;
 				}
+			}
+
+			const queryEnum = buildFieldQueryComboSelectEnum(f, database, {
+				fallbackAppId: runtimeAppId,
+				userContext: userAccess,
+				decrypt,
+				evalContext: comboEvalContext,
+				menuById,
+			});
+			if (Object.keys(queryEnum).length > 0) {
+				map[f.f_name] = queryEnum;
+				return;
 			}
 
 			let q = String(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name) || "").trim();
@@ -1660,17 +1707,17 @@ export function CsmDynamicGrid({
 				return;
 			}
 			
-			console.log(`[selectEnums] Processing field ${f.f_name}, query (first 100 chars):`, q.substring(0, 100));
+			gridDevLog(`[selectEnums] Processing field ${f.f_name}, query (first 100 chars):`, q.substring(0, 100));
 			
 			// Try decrypt first if available - f_cbo_query might be encrypted!
 			if (decrypt) {
 				try {
 					const decrypted = decrypt(q);
-					console.log(`[selectEnums] Successfully decrypted f_cbo_query for ${f.f_name}`);
+					gridDevLog(`[selectEnums] Successfully decrypted f_cbo_query for ${f.f_name}`);
 					q = decrypted;
 				} catch (err) {
 					// Not encrypted or decrypt failed, use original
-					console.log(`[selectEnums] f_cbo_query for ${f.f_name} not encrypted or decrypt failed`);
+					gridDevLog(`[selectEnums] f_cbo_query for ${f.f_name} not encrypted or decrypt failed`);
 				}
 			}
 				
@@ -1689,7 +1736,7 @@ export function CsmDynamicGrid({
 					try {
 						const evalFn = new Function(`return (${trimmedQ})`);
 						parsed = evalFn();
-						console.log(`[selectEnums] Successfully parsed JS object literal for ${f.f_name}`);
+						gridDevLog(`[selectEnums] Successfully parsed JS object literal for ${f.f_name}`);
 					} catch (evalErr) {
 						console.error(`[selectEnums] Both JSON.parse and JS eval failed for ${f.f_name}:`, evalErr);
 						console.error(`[selectEnums] Query was:`, trimmedQ);
@@ -1699,12 +1746,12 @@ export function CsmDynamicGrid({
 				}
 				
 				try {
-					console.log(`[selectEnums] Parsed static JSON for ${f.f_name}:`, parsed);
-					console.log(`[selectEnums] 🔍 DEBUG parsed.query[0]:`, parsed?.query?.[0]);
+					gridDevLog(`[selectEnums] Parsed static JSON for ${f.f_name}:`, parsed);
+					gridDevLog(`[selectEnums] 🔍 DEBUG parsed.query[0]:`, parsed?.query?.[0]);
 					
 					// Check if this has a query array (hybrid format: {query: [...], options: [...]})
 					// If query exists and is non-empty, we need to process it dynamically
-					console.log(`[selectEnums] Checking query for ${f.f_name}:`, {
+					gridDevLog(`[selectEnums] Checking query for ${f.f_name}:`, {
 						hasQuery: parsed && typeof parsed === 'object' && Array.isArray(parsed.query),
 						queryLength: Array.isArray(parsed.query) ? parsed.query.length : 0,
 						hasDatabase: !!database
@@ -1712,7 +1759,7 @@ export function CsmDynamicGrid({
 					
 					if (parsed && typeof parsed === 'object' && 
 					    Array.isArray(parsed.query) && parsed.query.length > 0) {
-						console.log(`[selectEnums] Detected query array for ${f.f_name}, processing dynamically...`);
+						gridDevLog(`[selectEnums] Detected query array for ${f.f_name}, processing dynamically...`);
 							
 							// Process each query specification
 							const allOptions: any[] = [];
@@ -1734,20 +1781,20 @@ export function CsmDynamicGrid({
 								
 								if (isInvalidWhere) {
 									whereClause = {field: 'id', type: 'like', value: ""};
-									console.log(`[selectEnums] Using default where clause for ${tableName}:`, whereClause);
+									gridDevLog(`[selectEnums] Using default where clause for ${tableName}:`, whereClause);
 								}
 								const queryAppId = resolveQueryAppIdByTable(tableName, querySpec.app_id);
 								
-								console.log(`[selectEnums] 🔍 Raw querySpec.obj_where:`, querySpec.obj_where);
-								console.log(`[selectEnums] 🔍 whereClause after assignment:`, whereClause);
-								console.log(`[selectEnums] Querying table: ${tableName}, app: ${queryAppId}, fields:`, fields, 'where:', whereClause);
+								gridDevLog(`[selectEnums] 🔍 Raw querySpec.obj_where:`, querySpec.obj_where);
+								gridDevLog(`[selectEnums] 🔍 whereClause after assignment:`, whereClause);
+								gridDevLog(`[selectEnums] Querying table: ${tableName}, app: ${queryAppId}, fields:`, fields, 'where:', whereClause);
 								
 								const tableData = database[tableName];
 								const tableExists = tableData && (Array.isArray(tableData) || (tableData.rows && Array.isArray(tableData.rows)));
 								const rows = tableExists ? (Array.isArray(tableData) ? tableData : (tableData as any).rows || []) : [];
 								const hasData = tableExists && rows.length > 0;
 								
-								console.log(`[selectEnums] Checking table ${tableName} in database:`, {
+								gridDevLog(`[selectEnums] Checking table ${tableName} in database:`, {
 									exists: tableExists,
 									rowCount: rows.length,
 									queryAppId,
@@ -1763,7 +1810,7 @@ export function CsmDynamicGrid({
 									return;
 								}
 								
-								console.log(`[selectEnums] Building options from ${tableName}: ${rows.length} rows`);
+								gridDevLog(`[selectEnums] Building options from ${tableName}: ${rows.length} rows`);
 
 
 								// Database tables have structure: { rows: Row[] }
@@ -1772,10 +1819,10 @@ export function CsmDynamicGrid({
 									return;
 								}
 								
-								console.log(`[selectEnums] Table ${tableName} has ${rows.length} total rows`);
+								gridDevLog(`[selectEnums] Table ${tableName} has ${rows.length} total rows`);
 								if (rows.length > 0) {
-									console.log(`[selectEnums] Sample rows from ${tableName}:`, rows.slice(0, 3));
-									console.log(`[selectEnums] 🔍 p_type values in first 10 rows:`, rows.slice(0, 10).map((r: any) => r.p_type));
+									gridDevLog(`[selectEnums] Sample rows from ${tableName}:`, rows.slice(0, 3));
+									gridDevLog(`[selectEnums] 🔍 p_type values in first 10 rows:`, rows.slice(0, 10).map((r: any) => r.p_type));
 								}
 								
 								// Filter data if where clause exists
@@ -1789,7 +1836,7 @@ export function CsmDynamicGrid({
 											const type = whereClause.type;
 											const value = whereClause.value;
 											
-											console.log(`[selectEnums] 🔍 Filtering with object where: field="${field}", type="${type}", value=`, value, `(typeof: ${typeof value})`);
+											gridDevLog(`[selectEnums] 🔍 Filtering with object where: field="${field}", type="${type}", value=`, value, `(typeof: ${typeof value})`);
 											
 											filteredData = rows.filter((row: any) => {
 												const rowValue = row[field];
@@ -1808,9 +1855,9 @@ export function CsmDynamicGrid({
 												return matches;
 											});
 											
-											console.log(`[selectEnums] 🔍 After filtering: ${filteredData.length} rows (from ${rows.length})`);
+											gridDevLog(`[selectEnums] 🔍 After filtering: ${filteredData.length} rows (from ${rows.length})`);
 											if (filteredData.length > 0) {
-												console.log(`[selectEnums] 🔍 Sample filtered rows:`, filteredData.slice(0, 3));
+												gridDevLog(`[selectEnums] 🔍 Sample filtered rows:`, filteredData.slice(0, 3));
 											}
 										} else if (typeof whereClause === 'string') {
 											// String format: "row.p_type === 1"
@@ -1828,8 +1875,8 @@ export function CsmDynamicGrid({
 								filteredData.forEach((row: any, idx: number) => {
 									if (idx === 0) {
 										// Log first row to debug field mapping
-										console.log(`[selectEnums] Sample row from ${tableName}:`, row);
-										console.log(`[selectEnums] Fields mapping:`, {
+										gridDevLog(`[selectEnums] Sample row from ${tableName}:`, row);
+										gridDevLog(`[selectEnums] Fields mapping:`, {
 											fields,
 											valueField,
 											labelField,
@@ -1838,7 +1885,7 @@ export function CsmDynamicGrid({
 											allKeys: Object.keys(row)
 										});
 									}
-									const optionLabel = resolveDynamicQueryLabel(row, valueField, labelField, fields);
+									const optionLabel = resolveQueryRowComboLabel(row, valueField, labelField, fields);
 
 									allOptions.push({
 										ma: row[valueField],
@@ -1850,7 +1897,7 @@ export function CsmDynamicGrid({
 							// Vue parity: Sort by 'ten' field alphabetically
 							allOptions.sort((a, b) => String(a.ten || '').localeCompare(String(b.ten || '')));
 							
-							console.log(`[selectEnums] Query result for ${f.f_name}: ${allOptions.length} options`, allOptions);
+							gridDevLog(`[selectEnums] Query result for ${f.f_name}: ${allOptions.length} options`, allOptions);
 							
 							// Now process allOptions as normal
 							const enumObj: Record<string, { text: string }> = {};
@@ -1858,7 +1905,7 @@ export function CsmDynamicGrid({
 								if (opt && typeof opt === 'object' && 'ma' in opt && 'ten' in opt) {
 									const value = opt.ma;
 									const label = localizeOptionLabel(opt.ten);
-									console.log(`[selectEnums] Processing option:`, { opt, value, label });
+									gridDevLog(`[selectEnums] Processing option:`, { opt, value, label });
 									if (value !== undefined && value !== null) {
 										enumObj[String(value)] = { text: String(label) };
 									}
@@ -1866,7 +1913,7 @@ export function CsmDynamicGrid({
 							});
 
 							if (Object.keys(enumObj).length > 0) {
-								console.log(`[selectEnums] ✅ Query result for ${f.f_name}:`, enumObj);
+								gridDevLog(`[selectEnums] ✅ Query result for ${f.f_name}:`, enumObj);
 								map[f.f_name] = enumObj;
 							} else {
 								console.warn(`[selectEnums] No options from query for ${f.f_name}`);
@@ -1938,7 +1985,7 @@ export function CsmDynamicGrid({
 						});
 						
 						if (Object.keys(enumObj).length > 0) {
-							console.log(`[selectEnums] ✅ Static JSON for ${f.f_name}:`, enumObj);
+							gridDevLog(`[selectEnums] ✅ Static JSON for ${f.f_name}:`, enumObj);
 							map[f.f_name] = enumObj;
 						} else {
 							console.warn(`[selectEnums] No valid options extracted from static JSON for ${f.f_name}`);
@@ -1968,9 +2015,9 @@ export function CsmDynamicGrid({
 							const after = decrypted.substring(0, 20);
 							if (before !== after) {
 								rawCode = decrypted;
-								console.log(`[selectEnums] decrypt prop worked for ${f.f_name}`);
+								gridDevLog(`[selectEnums] decrypt prop worked for ${f.f_name}`);
 							} else {
-								console.log(`[selectEnums] decrypt prop didn't change code for ${f.f_name}, using csmDecrypt`);
+								gridDevLog(`[selectEnums] decrypt prop didn't change code for ${f.f_name}, using csmDecrypt`);
 								rawCode = csmDecrypt(rawCode);
 							}
 						} catch (err) {
@@ -2009,13 +2056,22 @@ export function CsmDynamicGrid({
 						return;
 					}
 					
-					console.log(`[selectEnums] Dynamic code result for ${f.f_name}:`, objQa);
+					gridDevLog(`[selectEnums] Dynamic code result for ${f.f_name}:`, objQa);
 					
-					// Vue logic: check if has f_grid (special grid combo)
-					// f_grid format still has options array - process it!
-					if (objQa.hasOwnProperty('f_grid') && objQa.hasOwnProperty('f_grid_fields')) {
-						console.log(`[selectEnums] Field ${f.f_name} has f_grid format`);
-						// Fall through to process options array below
+					// Vue: f_cbo_query returning { f_grid, f_grid_fields } uses lookup table, not options[]
+					if (objQa.hasOwnProperty("f_grid") && objQa.hasOwnProperty("f_grid_fields") && menuById.size > 0) {
+						const gridEnum = buildGridFieldComboSelectEnum(
+							{ ...f, f_grid: objQa.f_grid, f_grid_fields: objQa.f_grid_fields },
+							database,
+							menuById,
+							userAccess,
+							decrypt,
+							comboEvalContext,
+						);
+						if (Object.keys(gridEnum).length > 0) {
+							map[f.f_name] = gridEnum;
+							return;
+						}
 					}
 					
 					// Vue logic: must have options property
@@ -2061,7 +2117,7 @@ export function CsmDynamicGrid({
 					});
 					
 					if (Object.keys(enumObj).length > 0) {
-						console.log(`[selectEnums] ✅ Dynamic code for ${f.f_name}:`, enumObj);
+						gridDevLog(`[selectEnums] ✅ Dynamic code for ${f.f_name}:`, enumObj);
 						map[f.f_name] = enumObj;
 					} else {
 						console.warn(`[selectEnums] No valid options extracted from dynamic code for ${f.f_name}`);
@@ -2076,9 +2132,9 @@ export function CsmDynamicGrid({
 			if (map[fieldName] && Object.keys(map[fieldName]).length > 0) return;
 			map[fieldName] = buildRoleComboSelectEnum(roleRows);
 		});
-		console.log('[selectEnums] Final map:', map);
+		gridDevLog('[selectEnums] Final map:', map);
 		return map;
-	}, [m_configs.table, database, decrypt, context, m_configs, m_configs.selectEnumsOverride, databaseVersion, ensureTableInDatabase, i18n.language, t, menuById, userAccess]); // 🔄 Re-compute when database/language changes
+	}, [m_configs.table, decrypt, context, m_configs, m_configs.selectEnumsOverride, databaseVersion, ensureTableInDatabase, i18n.language, t, menuById, userAccess, comboDatabaseSignature, database, createSeftContext]);
 
 	// Map backend fields to ProColumns with f_types rules
 	const baseColumns: ProColumns<Row>[] = useMemo(() => {
@@ -2324,7 +2380,14 @@ export function CsmDynamicGrid({
 						if (raw == null || raw === "") return null;
 						const valueKey = String(raw).trim();
 						if (!valueKey) return null;
-						const rawLabel = resolveComboCellDisplayLabel(valueKey, f.f_name, ve, database);
+						const comboEvalContext = {
+							seft: { m_configs, context, database, appId: runtimeAppId },
+							database,
+						};
+						const rawLabel = resolveGridComboCellLabel(valueKey, f, database, menuById, ve, {
+							decrypt,
+							evalContext: comboEvalContext,
+						});
 						const disp = rawLabel
 							? (rawLabel.includes(".") ? t(rawLabel) : rawLabel)
 							: valueKey;
@@ -2706,7 +2769,7 @@ export function CsmDynamicGrid({
 			return col;
 		});
 		return cols;
-	}, [m_configs.table, selectEnums, i18n.language, numberLocale, t]);
+	}, [m_configs.table, selectEnums, i18n.language, numberLocale, t, menuById, database, decrypt, runtimeAppId, context, m_configs]);
 
   // Apply datacolumntemplate trigger (mutates columns)
 	const columns = useMemo<ProColumns<Row>[]>(() => {
@@ -2858,12 +2921,13 @@ export function CsmDynamicGrid({
 											const deletedRowKey = getRowKey(record);
 											const next = prev.filter(row => getRowKey(row) !== deletedRowKey);
 											runAfterTrigger('afterDelete', next);
+											notifyDetailRowsChange(next);
 											return next;
 										});
 										message.success(t("common.deleteSuccess"));
 										onDelete?.(record);
 										if (isDetailGrid) {
-											onDataChange?.();
+											return;
 										}
 										return;
 									}
@@ -2948,10 +3012,9 @@ export function CsmDynamicGrid({
 	// Nếu không có table_name: áp dụng load_db trigger từ field tables để đưa dữ liệu lên trang
 	// Nếu có table_name: lấy từ API hoặc fullDatabase[tableName]
 	useEffect(() => {
-		// For detail grids, skip trigger and use database directly
+		// Detail grid: Vue parity — rows come from master select_row[table_name], not database[table_name].rows
 		if (isDetailGrid) {
-			const fallback = database[tableName]?.rows || [];
-			setData(fallback);
+			setData(resolveDetailRows());
 			return;
 		}
 		
@@ -2989,23 +3052,28 @@ export function CsmDynamicGrid({
 			// Không có table_name: khởi tạo dữ liệu trống, chỉ cập nhật khi có trigger hoặc user nhập liệu
 			setData([]);
 		}
-	}, [m_configs, database, context, isDetailGrid, tableName, hasTableName]);
+	}, [m_configs, database, context, isDetailGrid, tableName, hasTableName, resolveDetailRows]);
 
 	// Auto-reload data when global database changes (e.g., from socket updates)
 	// This makes the component reactive to real-time updates without manual socket handling
 	useEffect(() => {
-		console.log(`[CsmDynamicGrid] 🔄 Data loading useEffect triggered (tableName: ${tableName}, hasTableName: ${hasTableName})`);
-		console.log(`[CsmDynamicGrid] decrypt function available: ${!!decrypt}`);
-		console.log(`[CsmDynamicGrid] decrypt function name: ${decrypt?.name || 'anonymous'}`);
+		if (isDetailGrid) {
+			setData(resolveDetailRows());
+			return;
+		}
+
+		gridDevLog(`[CsmDynamicGrid] 🔄 Data loading useEffect triggered (tableName: ${tableName}, hasTableName: ${hasTableName})`);
+		gridDevLog(`[CsmDynamicGrid] decrypt function available: ${!!decrypt}`);
+		gridDevLog(`[CsmDynamicGrid] decrypt function name: ${decrypt?.name || 'anonymous'}`);
 		
 		if (!hasTableName) return;
 		
 		const globalTableData = database[tableName];
 		if (!globalTableData) {
-			console.log(`[CsmDynamicGrid] ⚠️ No table data found for '${tableName}'`);
+			gridDevLog(`[CsmDynamicGrid] ⚠️ No table data found for '${tableName}'`);
 			void ensureTableInDatabase(tableName, runtimeAppId)
 				.then((started) => {
-					console.log(`[CsmDynamicGrid] 🔎 Auto-fetch primary table '${tableName}'`, {
+					gridDevLog(`[CsmDynamicGrid] 🔎 Auto-fetch primary table '${tableName}'`, {
 						runtimeAppId,
 						started,
 					});
@@ -3018,13 +3086,13 @@ export function CsmDynamicGrid({
 		
 		// Check if global data has changed
 		const globalRows = globalTableData.rows || [];
-		console.log(`[CsmDynamicGrid] 📊 Global rows for '${tableName}': ${globalRows.length} rows`);
+		gridDevLog(`[CsmDynamicGrid] 📊 Global rows for '${tableName}': ${globalRows.length} rows`);
 		
 		// Nếu có load_db trigger, luôn ưu tiên trigger
 		let loadCode = m_configs.trigger?.load_db;
 		if (loadCode) {
-			console.log(`[CsmDynamicGrid] load_db trigger found, length: ${loadCode.length}`);
-			console.log(`[CsmDynamicGrid] load_db trigger (first 100 chars): ${loadCode.substring(0, 100)}`);
+			gridDevLog(`[CsmDynamicGrid] load_db trigger found, length: ${loadCode.length}`);
+			gridDevLog(`[CsmDynamicGrid] load_db trigger (first 100 chars): ${loadCode.substring(0, 100)}`);
 			try {
 				let resolvedCode = loadCode;
 				
@@ -3034,7 +3102,7 @@ export function CsmDynamicGrid({
 						const beforeDecrypt = resolvedCode.substring(0, 50);
 						const decrypted = decrypt(loadCode);
 						const afterDecrypt = decrypted.substring(0, 50);
-						console.log("[CsmDynamicGrid] Decrypt attempt:", { before: beforeDecrypt, after: afterDecrypt });
+						gridDevLog("[CsmDynamicGrid] Decrypt attempt:", { before: beforeDecrypt, after: afterDecrypt });
 						
 						// Check if decrypt actually changed the code
 						if (beforeDecrypt === afterDecrypt) {
@@ -3042,24 +3110,24 @@ export function CsmDynamicGrid({
 							resolvedCode = csmDecrypt(loadCode);
 						} else {
 							resolvedCode = decrypted;
-							console.log("[CsmDynamicGrid] ✅ decrypt prop worked");
+							gridDevLog("[CsmDynamicGrid] ✅ decrypt prop worked");
 						}
 					} catch (decryptErr) {
 						console.warn("[CsmDynamicGrid] decrypt prop failed, trying csmDecrypt fallback:", decryptErr);
 						resolvedCode = csmDecrypt(loadCode);
 					}
 				} else {
-					console.log("[CsmDynamicGrid] No decrypt prop, using csmDecrypt");
+					gridDevLog("[CsmDynamicGrid] No decrypt prop, using csmDecrypt");
 					resolvedCode = csmDecrypt(loadCode);
 				}
 				
-				console.log(`[CsmDynamicGrid] Final code (first 100 chars): ${resolvedCode.substring(0, 100)}`);
+				gridDevLog(`[CsmDynamicGrid] Final code (first 100 chars): ${resolvedCode.substring(0, 100)}`);
 				const fn = safeEval(["seft", "db"], resolvedCode) as ((seft: any, db: Database) => Row[]) | null;
 				if (fn) {
 					const seftContext = createSeftContext();
 					const rows = fn(seftContext, database) || [];
 					setData(Array.isArray(rows) ? rows : []);
-					console.log(`[CsmDynamicGrid] ✅ Data reloaded via trigger from global database (${rows.length} rows)`);
+					gridDevLog(`[CsmDynamicGrid] ✅ Data reloaded via trigger from global database (${rows.length} rows)`);
 					return;
 				}
 			} catch (err) {
@@ -3069,8 +3137,8 @@ export function CsmDynamicGrid({
 		
 		// Fallback: load directly from global database
 		setData(globalRows);
-		console.log(`[CsmDynamicGrid] ✅ Data synced from global database (${globalRows.length} rows)`);
-	}, [database, tableName, hasTableName, m_configs, context, decrypt, ensureTableInDatabase, runtimeAppId]);
+		gridDevLog(`[CsmDynamicGrid] ✅ Data synced from global database (${globalRows.length} rows)`);
+	}, [database, tableName, hasTableName, m_configs, context, decrypt, ensureTableInDatabase, runtimeAppId, isDetailGrid, resolveDetailRows]);
 
   // filter trigger (runs on data)
 	const filtered = useMemo(() => {
@@ -3084,7 +3152,7 @@ export function CsmDynamicGrid({
 					const decrypted = decrypt(code);
 					const after = decrypted.substring(0, 20);
 					if (before === after) {
-						console.log("[selectEnums.filter] decrypt prop didn't change code, using csmDecrypt");
+						gridDevLog("[selectEnums.filter] decrypt prop didn't change code, using csmDecrypt");
 						code = csmDecrypt(code);
 					} else {
 						code = decrypted;
@@ -3134,14 +3202,8 @@ export function CsmDynamicGrid({
 			.filter(Boolean);
 	}, [searchFields, m_configs.table]);
 
-	const searchedData = useMemo(() => {
-		let sourceRows = filtered;
-		const fieldMap = new Map<string, TableField>();
-		(m_configs.table || []).forEach((f) => {
-			fieldMap.set(String(f.f_name || "").toLowerCase(), f);
-		});
-
-		const fieldValueEnumMap = new Map<string, Record<string, string>>();
+	const fieldValueEnumMap = useMemo(() => {
+		const map = new Map<string, Record<string, string>>();
 		(m_configs.table || []).forEach((f) => {
 			const enumFromSelect = selectEnums?.[f.f_name] || {};
 			const enumFromOptions = parseFieldOptions((f as any).f_options).reduce<Record<string, string>>((acc, opt) => {
@@ -3156,7 +3218,20 @@ export function CsmDynamicGrid({
 				const text = typeof v === "object" && v && "text" in v ? (v as any).text : v;
 				combined[String(k)] = String(text ?? "");
 			});
-			fieldValueEnumMap.set(f.f_name, combined);
+			map.set(f.f_name, combined);
+		});
+		return map;
+	}, [m_configs.table, selectEnums]);
+
+	const searchedData = useMemo(() => {
+		const scopeNeedsFilter = effectiveScope === "OWNER" || effectiveScope === "DEPARTMENT" || effectiveScope === "BRANCH";
+		const searchActive = enableSearch && debouncedSearchTerm.trim().length > 0;
+		if (!scopeNeedsFilter && !searchActive) return filtered;
+
+		let sourceRows = filtered;
+		const fieldMap = new Map<string, TableField>();
+		(m_configs.table || []).forEach((f) => {
+			fieldMap.set(String(f.f_name || "").toLowerCase(), f);
 		});
 
 		const truthyTokens = new Set(["true", "1", "yes", "y", "on", "checked", "check", "co", "có", "dung", "đúng"]);
@@ -3326,9 +3401,9 @@ export function CsmDynamicGrid({
 			});
 		}
 
-		if (!enableSearch || !searchTerm.trim()) return sourceRows;
-		return sourceRows.filter((row) => matchesFreeSearch(row, searchTerm));
-	}, [filtered, enableSearch, searchTerm, derivedSearchFields, effectiveScope, m_configs.table, numberLocale, selectEnums, userId, username, userEmail, phoneNumber, userAppId, userDeptId, userBranchId]);
+		if (!enableSearch || !debouncedSearchTerm.trim()) return sourceRows;
+		return sourceRows.filter((row) => matchesFreeSearch(row, debouncedSearchTerm));
+	}, [filtered, enableSearch, debouncedSearchTerm, derivedSearchFields, effectiveScope, fieldValueEnumMap, m_configs.table, numberLocale, userId, username, userEmail, phoneNumber, userAppId, userDeptId, userBranchId]);
 
 	// Auto-enable edit mode for newly added rows
 	useEffect(() => {
@@ -3390,18 +3465,47 @@ export function CsmDynamicGrid({
 
 	// Multi-column sort state
 	const [sorters, setSorters] = useState<{ field: string; order: 'ascend' | 'descend' }[]>([]);
+	const defaultPageSize = Number(m_configs.table_pagesize) || 10;
+	const useClientPagination = !disablePagination;
+	const [paginationState, setPaginationState] = useState({ current: 1, pageSize: defaultPageSize });
+
+	useEffect(() => {
+		setPaginationState((prev) => ({ ...prev, current: 1 }));
+	}, [debouncedSearchTerm]);
 
 	// Multi-column sort handler
-	const handleTableChange = (pagination: any, filters: any, sorter: any, extra: any) => {
-		// sorter: {field, order} | array
+	const handleTableChange = useCallback((pagination: any, _filters: any, sorter: any) => {
 		let nextSorters: { field: string; order: 'ascend' | 'descend' }[] = [];
 		if (Array.isArray(sorter)) {
 			nextSorters = sorter.filter(s => s.order).map(s => ({ field: s.field, order: s.order }));
 		} else if (sorter && sorter.field && sorter.order) {
 			nextSorters = [{ field: sorter.field, order: sorter.order }];
 		}
-		setSorters(nextSorters);
-	};
+
+		const sortersChanged = nextSorters.length !== sorters.length
+			|| nextSorters.some((item, index) => item.field !== sorters[index]?.field || item.order !== sorters[index]?.order);
+
+		if (sortersChanged) {
+			const applySorters = () => {
+				setSorters(nextSorters);
+				if (useClientPagination) {
+					setPaginationState((prev) => ({ ...prev, current: 1 }));
+				}
+			};
+			if (searchedData.length >= GRID_VIRTUAL_ROW_THRESHOLD) {
+				startTransition(applySorters);
+			} else {
+				applySorters();
+			}
+		}
+
+		if (useClientPagination && pagination) {
+			setPaginationState({
+				current: pagination.current || 1,
+				pageSize: pagination.pageSize || defaultPageSize,
+			});
+		}
+	}, [defaultPageSize, searchedData.length, sorters, useClientPagination]);
 
 	// Multi-column sort logic
 	const sortedData = useMemo(() => {
@@ -3445,6 +3549,21 @@ export function CsmDynamicGrid({
 			return 0;
 		});
 	}, [searchedData, sorters, m_configs.table, selectEnums, numberLocale]);
+
+	useEffect(() => {
+		if (!useClientPagination) return;
+		setPaginationState((prev) => {
+			const maxPage = Math.max(1, Math.ceil(sortedData.length / prev.pageSize) || 1);
+			return prev.current > maxPage ? { ...prev, current: maxPage } : prev;
+		});
+	}, [sortedData.length, useClientPagination]);
+
+	const tableDataSource = useMemo(() => {
+		if (!useClientPagination) return sortedData;
+		return paginateRows(sortedData, paginationState.current, paginationState.pageSize);
+	}, [sortedData, useClientPagination, paginationState.current, paginationState.pageSize]);
+
+	const enableVirtualScroll = !useClientPagination && sortedData.length >= GRID_VIRTUAL_ROW_THRESHOLD;
 
 	const sortableFieldNames = useMemo(() => {
 		return (m_configs.table || [])
@@ -4003,6 +4122,7 @@ export function CsmDynamicGrid({
 					const next = [newRow, ...prev];
 					// Run afterAdd trigger với toàn bộ mảng mới
 					runAfterTrigger('afterAdd', next);
+					if (isDetailGrid) notifyDetailRowsChange(next);
 					return next;
 				});
 				// Select the new row
@@ -4033,7 +4153,7 @@ export function CsmDynamicGrid({
 		if (enableInlineCellEdit) {
 			const rowKey = getRowKey(record);
 			
-			console.log('[CsmDynamicGrid] Activating inline edit:', {
+			gridDevLog('[CsmDynamicGrid] Activating inline edit:', {
 				record,
 				pkFields,
 				rowKey,
@@ -4047,7 +4167,7 @@ export function CsmDynamicGrid({
 			onEdit?.(record);
 		} else {
 			// Modal-based editing for standard form or master-detail
-			console.log('[CsmDynamicGrid] Opening modal editor');
+			gridDevLog('[CsmDynamicGrid] Opening modal editor');
 			setEditingRecord(record);
 			setCloneData(null);
 			setEditorOpen(true);
@@ -4094,15 +4214,12 @@ export function CsmDynamicGrid({
 					const next = prev.filter(row => getRowKey(row) !== deletedRowKey);
 					// Run afterDelete trigger với toàn bộ mảng còn lại
 					runAfterTrigger('afterDelete', next);
+					notifyDetailRowsChange(next);
 					return next;
 				});
 				message.success(t("common.deleteSuccess"));
 				onDelete?.(record);
 				runSideEffectTrigger("delete_db", record);
-				// Notify parent để sync vào form (nếu là detail grid)
-				if (isDetailGrid) {
-					onDataChange?.();
-				}
 				return;
 			}
 			
@@ -4172,9 +4289,17 @@ export function CsmDynamicGrid({
 			persistenceType: "localStorage",
 			persistenceKey: `csm-grid-columns::${effectiveGridInstanceKey}`,
 		},
-		dataSource: sortedData,
+		dataSource: tableDataSource,
 			onChange: handleTableChange,
-		pagination: disablePagination ? false : { pageSize: Number(m_configs.table_pagesize) || 10 },
+		pagination: disablePagination ? false : {
+			current: paginationState.current,
+			pageSize: paginationState.pageSize,
+			total: sortedData.length,
+			showSizeChanger: true,
+			showQuickJumper: sortedData.length > paginationState.pageSize * 5,
+			pageSizeOptions: [...GRID_PAGE_SIZE_OPTIONS],
+		},
+		virtual: enableVirtualScroll,
 		// Let BasicTable auto-height handle vertical fit inside parent; keep horizontal scroll responsive.
 		scroll: isMobile ? { x: 'auto' } : { x: 'max-content' },
 		sticky: true,
@@ -4236,8 +4361,7 @@ export function CsmDynamicGrid({
 						}
 						const normalizedProcessed = normalizeInlineRowValues(processedData, m_configs.table || []);
 						
-						// Update local state AND database object
-						let updatedData: Row[] = [];
+						// Update local state only — Vue writes back to select_row[table_name]
 						setData((prev) => {
 							const next = prev.map(row => {
 								const isUpdatedRow = getRowKey(row) === String(rowKey);
@@ -4249,26 +4373,12 @@ export function CsmDynamicGrid({
 							});
 							// Run afterEdit trigger
 							runAfterTrigger('afterEdit', next);
-							updatedData = next;
+							notifyDetailRowsChange(next);
 							return next;
 						});
 						
-						// CRITICAL: Update database object BEFORE calling onDataChange
-						if (tableName && database[tableName]) {
-							database[tableName].rows = updatedData;
-							console.log(`[CsmDynamicGrid] Detail grid updated database[${tableName}]:`, {
-								rowCount: updatedData.length,
-								data: updatedData
-							});
-						} else {
-							console.warn(`[CsmDynamicGrid] Cannot update database[${tableName}] - not found`, { tableName, hasDatabase: !!database });
-						}
-						
 						message.success('Đã lưu thay đổi');
 						runSideEffectTrigger("update_db", normalizedProcessed);
-						// Notify parent để sync vào form (sẽ đọc database[tableName])
-						console.log(`[CsmDynamicGrid] Calling onDataChange for ${tableName}`);
-						onDataChange?.();
 						return;
 					}
 					
@@ -4604,7 +4714,11 @@ export function CsmDynamicGrid({
 	}
 
 	children.push(
-		React.createElement(BasicTable as any, { key: "table", autoHeight: true, ...tableProps })
+		React.createElement(BasicTable as any, {
+			key: "table",
+			autoHeight: useClientPagination ? sortedData.length <= GRID_VIRTUAL_ROW_THRESHOLD : true,
+			...tableProps,
+		})
 	);
 	
 	// Add detail panel when a master row is selected and it has detail nodes (Master-Detail structure)
@@ -4700,7 +4814,7 @@ export function CsmDynamicGrid({
 							comboBefore[name] = beforeSaveInputSnapshot?.[name];
 							comboAfter[name] = values?.[name];
 						});
-						console.log("[CsmDynamicGrid] beforeSave combo diff", {
+						gridDevLog("[CsmDynamicGrid] beforeSave combo diff", {
 							tableName,
 							comboBefore,
 							comboAfter,

@@ -31,6 +31,7 @@ import { dateFormat, chuyenNgay, TruNgayRaSoNgay, CongNgay, CongGio, validateEma
 import { useEnterToTab } from "#src/hooks/useEnterToTab";
 import { formatDateForStorage, resolveDateLocaleFormat } from "#src/utils/dateControl";
 import { useTranslation } from "react-i18next";
+import { gridDevLog } from "../csm-grid/grid-perf-utils";
 
 type Row = Record<string, any>;
 
@@ -141,8 +142,8 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
     if (!comboFetchSignature || comboFetchSignature === lastComboFetchSignatureRef.current) return;
     lastComboFetchSignatureRef.current = comboFetchSignature;
 
-    console.log(`${CO} Scanning combo queries for missing tables...`);
-    console.log(`${CO} comboFetchSignature:`, previewText(comboFetchSignature, 200));
+    gridDevLog(`${CO} Scanning combo queries for missing tables...`);
+    gridDevLog(`${CO} comboFetchSignature:`, previewText(comboFetchSignature, 200));
 
     const requests = collectComboTableFetchRequests(m_configs.table || [], {
       decrypt: reportDecrypt,
@@ -154,14 +155,14 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
       return;
     }
 
-    console.log(`${CO} Found ${requests.length} combo tables to prefetch:`, requests);
+    gridDevLog(`${CO} Found ${requests.length} combo tables to prefetch:`, requests);
 
     Promise.all(
       requests.map(({ tableName, appId: queryAppId, whereClause }) => {
-        console.log(`${CO} Prefetch start: table=${tableName}, app=${queryAppId}, where=`, whereClause);
+        gridDevLog(`${CO} Prefetch start: table=${tableName}, app=${queryAppId}, where=`, whereClause);
         return ensureTableInDatabase(tableName, queryAppId, useAppStore.getState().database, whereClause, setTableData)
           .then((started) => {
-            console.log(`${CO} Prefetch ${tableName}:`, started ? "started/waiting" : "already cached");
+            gridDevLog(`${CO} Prefetch ${tableName}:`, started ? "started/waiting" : "already cached");
             return started;
           })
           .catch((err) => {
@@ -170,7 +171,7 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
           });
       }),
     ).then(() => {
-      console.log(`${CO} All combo prefetches settled, bump databaseVersion`);
+      gridDevLog(`${CO} All combo prefetches settled, bump databaseVersion`);
       setDatabaseVersion((v) => v + 1);
     });
   }, [comboFetchSignature, effectiveAppId, reportDecrypt, setTableData, m_configs.table]);
@@ -178,11 +179,11 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
   useEffect(() => {
     if (globalTableFetchCache.size === 0) return;
 
-    console.log(`${CO} Waiting for ${globalTableFetchCache.size} in-flight table fetch(es)...`);
+    gridDevLog(`${CO} Waiting for ${globalTableFetchCache.size} in-flight table fetch(es)...`);
 
     const checkInterval = setInterval(() => {
       if (globalTableFetchCache.size === 0) {
-        console.log(`${CO} All in-flight table fetches completed, bump databaseVersion`);
+        gridDevLog(`${CO} All in-flight table fetches completed, bump databaseVersion`);
         setDatabaseVersion((v) => v + 1);
         clearInterval(checkInterval);
       }
@@ -222,12 +223,12 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
   Form.useWatch(cascadeParentFields.length > 0 ? cascadeParentFields : ["__cascade_watch__"], form);
 
   const selectEnums = useMemo(() => {
-    console.log(`${CO} selectEnums useMemo triggered`);
-    console.log(`${CO} m_configs.table count:`, (m_configs.table || []).length);
-    console.log(`${CO} database keys:`, Object.keys(database || {}));
-    console.log(`${CO} decrypt available:`, Boolean(decrypt));
-    console.log(`${CO} effectiveAppId:`, effectiveAppId);
-    console.log(`${CO} databaseVersion:`, databaseVersion);
+    gridDevLog(`${CO} selectEnums useMemo triggered`);
+    gridDevLog(`${CO} m_configs.table count:`, (m_configs.table || []).length);
+    gridDevLog(`${CO} database keys:`, Object.keys(database || {}));
+    gridDevLog(`${CO} decrypt available:`, Boolean(decrypt));
+    gridDevLog(`${CO} effectiveAppId:`, effectiveAppId);
+    gridDevLog(`${CO} databaseVersion:`, databaseVersion);
 
     const seftContext = {
       appId: effectiveAppId,
@@ -257,17 +258,19 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
       DateUtils,
     };
     const built = buildDetailGridSelectEnums(m_configs.table || [], database, reportDecrypt, seftContext);
-    console.log(`${CO} buildDetailGridSelectEnums keys:`, Object.keys(built));
+    gridDevLog(`${CO} buildDetailGridSelectEnums keys:`, Object.keys(built));
     return built;
   }, [m_configs.table, database, reportDecrypt, m_configs, databaseVersion, effectiveAppId, setTableData, formUpdated, decrypt]);
 
   const comboFieldDiagnostics = useMemo(() => {
+    if (!import.meta.env.DEV) return [];
+
     const allCoFields = (m_configs.table || []).filter((f: any) => {
       const types = resolveEffectiveFieldTypes(f);
       return isComboLikeType(types);
     });
 
-    console.log(`${CO} Found ${allCoFields.length} combo-like fields:`,
+    gridDevLog(`${CO} Found ${allCoFields.length} combo-like fields:`,
       allCoFields.map((f: any) => ({
         name: f.f_name,
         rawTypes: f.f_types,
@@ -350,11 +353,13 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
   }, [m_configs.table, selectEnums, database, reportDecrypt, fields, form, formUpdated]);
 
   useEffect(() => {
-    console.log(`${CO} ===== COMBO DIAGNOSTIC =====`);
-    console.log(`${CO} menu:`, m_configs?.label || m_configs?.name || m_configs?.table_name || m_configs?.id);
-    console.log(`${CO} filter form fields:`, fields.map((f: any) => f.f_name));
-    console.log(`${CO} cascadeParentFields:`, cascadeParentFields);
-    console.log(`${CO} globalTableFetchCache.size:`, globalTableFetchCache.size);
+    if (!import.meta.env.DEV) return;
+
+    gridDevLog(`${CO} ===== COMBO DIAGNOSTIC =====`);
+    gridDevLog(`${CO} menu:`, m_configs?.label || m_configs?.name || m_configs?.table_name || m_configs?.id);
+    gridDevLog(`${CO} filter form fields:`, fields.map((f: any) => f.f_name));
+    gridDevLog(`${CO} cascadeParentFields:`, cascadeParentFields);
+    gridDevLog(`${CO} globalTableFetchCache.size:`, globalTableFetchCache.size);
     comboFieldDiagnostics.forEach((item: {
       name: string;
       renderOptionCount: number;
@@ -364,10 +369,10 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
       if (item.renderOptionCount === 0) {
         console.warn(`${CO} EMPTY options for "${item.name}":`, item);
       } else {
-        console.log(`${CO} OK "${item.name}": ${item.renderOptionCount} options via ${item.renderSource}`, item);
+        gridDevLog(`${CO} OK "${item.name}": ${item.renderOptionCount} options via ${item.renderSource}`, item);
       }
     });
-    console.log(`${CO} ===== END COMBO DIAGNOSTIC =====`);
+    gridDevLog(`${CO} ===== END COMBO DIAGNOSTIC =====`);
   }, [comboFieldDiagnostics, fields, cascadeParentFields, m_configs]);
 
   const localizeLabel = useCallback((label: unknown) => {
@@ -397,7 +402,7 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
       options = cascadeConfig.options ?? buildSelectOptions(undefined, selectEnums[fieldKey], localizeLabel);
     }
 
-    if (!options?.length) {
+    if (!options?.length && import.meta.env.DEV) {
       console.warn(`${CO} RENDER empty Select for "${fieldKey}"`, {
         f_types: field.f_types,
         effectiveTypes: resolveEffectiveFieldTypes(field),
@@ -408,7 +413,7 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
         roleRowCount: roleRows.length,
       });
     } else {
-      console.log(`${CO} RENDER "${fieldKey}": ${options.length} options`, options.slice(0, 3));
+      gridDevLog(`${CO} RENDER "${fieldKey}": ${options.length} options`, options.slice(0, 3));
     }
 
     return (
