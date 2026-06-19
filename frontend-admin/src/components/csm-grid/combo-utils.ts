@@ -428,17 +428,123 @@ function normalizeComboWhereClause(whereClause: any): any {
   return isInvalidWhere ? { field: "id", type: "like", value: "" } : whereClause;
 }
 
+/** Flatten app menu tree into id → menu map (Vue seft.menus / getAllMenu parity). */
+export function flattenAppMenusById(menus: any[]): Map<string, any> {
+  const map = new Map<string, any>();
+  const walk = (items: any[]) => {
+    for (const item of items || []) {
+      if (!item) continue;
+      const id = String(item.id || "").trim();
+      if (id) map.set(id, item);
+      if (Array.isArray(item.children)) walk(item.children);
+    }
+  };
+  walk(menus);
+  return map;
+}
+
+export function parseFieldGridComboFields(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.split(",").map((part) => {
+      const [src] = part.split("->").map((s) => s.trim());
+      return src;
+    }).filter(Boolean);
+  }
+  return [];
+}
+
+export function resolveFieldGridComboTableName(
+  field: { f_grid?: unknown },
+  menuById?: Map<string, any>,
+): string {
+  const menuId = String(field?.f_grid || "").trim();
+  if (!menuId || !menuById) return "";
+  const menu = menuById.get(menuId);
+  return String(menu?.table_name || "").split(",")[0].trim();
+}
+
+/** Vue csm_grid lookup displayExpr: `${f_grid_fields[0]} <${f_grid_fields[1]}>` */
+export function formatGridComboDisplayLabel(row: any, gridFields: string[]): string {
+  if (!row || gridFields.length === 0) return "";
+  if (gridFields.length >= 2) {
+    const ma = String(row[gridFields[0]] ?? "").trim();
+    const ten = String(row[gridFields[1]] ?? "").trim();
+    if (ma && ten) return `${ma} <${ten}>`;
+    return ten || ma;
+  }
+  return String(row[gridFields[0]] ?? "").trim();
+}
+
+/** Build valueEnum from field.f_grid menu table (Vue f_grid + f_grid_fields parity). */
+export function buildGridFieldComboSelectEnum(
+  field: { f_name?: string; f_grid?: unknown; f_grid_fields?: unknown; f_cbo_query?: string },
+  database: Record<string, any> | undefined,
+  menuById: Map<string, any>,
+  userContext?: UserAppIdInput,
+  decrypt?: (s: string) => string,
+): Record<string, { text: string }> {
+  const gridFields = parseFieldGridComboFields(field?.f_grid_fields);
+  const tableName = resolveFieldGridComboTableName(field, menuById);
+  if (!tableName || gridFields.length === 0) return {};
+
+  const rows = getComboTableRows(database, tableName);
+  const enumObj: Record<string, { text: string }> = {};
+  rows.forEach((row) => {
+    const text = formatGridComboDisplayLabel(row, gridFields);
+    if (!text) return;
+    // Vue lookup valueExpr is always "id"
+    const idKey = String(row?.id ?? "").trim();
+    if (idKey) enumObj[idKey] = { text };
+    const altKey = String(row?.[gridFields[0]] ?? "").trim();
+    if (altKey && altKey !== idKey) enumObj[altKey] = { text };
+  });
+  return enumObj;
+}
+
+export function resolveComboCellDisplayLabel(
+  rawValue: unknown,
+  fieldName: string,
+  valueEnum?: Record<string, { text: string }>,
+  database?: Record<string, any>,
+): string {
+  const valueKey = String(rawValue ?? "").trim();
+  if (!valueKey) return "";
+  const fromEnum = valueEnum?.[valueKey]?.text;
+  if (fromEnum) return fromEnum;
+  if (["group_id", "permissionGroups"].includes(fieldName)) {
+    return resolveRoleComboLabel(valueKey, database) || valueKey;
+  }
+  return valueKey;
+}
+
 /** Collect combo lookup tables to prefetch — same scan as CsmDynamicGrid mount effect. */
 export function collectComboTableFetchRequests(
   fields: any[],
-  options: { decrypt?: (s: string) => string; fallbackAppId?: string } = {},
+  options: {
+    decrypt?: (s: string) => string;
+    fallbackAppId?: string;
+    menuById?: Map<string, any>;
+    userContext?: UserAppIdInput;
+  } = {},
 ): ComboTableFetchRequest[] {
-  const { decrypt, fallbackAppId = "csm" } = options;
+  const { decrypt, fallbackAppId = "csm", menuById, userContext } = options;
   const tablesToFetch: ComboTableFetchRequest[] = [];
 
   (fields || []).forEach((f) => {
     const types = resolveEffectiveFieldTypes(f);
     if (!isComboLikeType(types)) return;
+
+    const gridTableName = resolveFieldGridComboTableName(f, menuById);
+    if (gridTableName) {
+      tablesToFetch.push({
+        tableName: gridTableName,
+        appId: resolveComboQueryAppId(gridTableName, undefined, fallbackAppId, userContext, decrypt),
+        whereClause: normalizeComboWhereClause(undefined),
+      });
+    }
 
     const rawQuery = String(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name) || "").trim();
     if (!rawQuery) return;
@@ -450,7 +556,7 @@ export function collectComboTableFetchRequests(
       if (tableName) {
         tablesToFetch.push({
           tableName,
-          appId: resolveComboQueryAppId(tableName, undefined, fallbackAppId),
+          appId: resolveComboQueryAppId(tableName, undefined, fallbackAppId, userContext, decrypt),
           whereClause: normalizeComboWhereClause(undefined),
         });
       }
@@ -467,7 +573,7 @@ export function collectComboTableFetchRequests(
       if (!querySpec?.obj_name) return;
       tablesToFetch.push({
         tableName: querySpec.obj_name,
-        appId: resolveComboQueryAppId(querySpec.obj_name, querySpec.app_id, fallbackAppId),
+        appId: resolveComboQueryAppId(querySpec.obj_name, querySpec.app_id, fallbackAppId, userContext, decrypt),
         whereClause: normalizeComboWhereClause(querySpec.obj_where),
       });
     });

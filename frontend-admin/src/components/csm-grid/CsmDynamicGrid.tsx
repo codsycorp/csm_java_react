@@ -5,6 +5,7 @@ import { updateTableData, getTableData, bulkUpdateTableData } from "./CsmApi";
 import CsmEditModal, { DetailGridTab } from "./CsmEditModal";
 import { csmDecrypt, csmEncrypt } from "./CsmCrypto";
 import { compileMenuTrigger, resolveTriggerBody, safeEval } from "./csm-trigger-runner";
+import { isGridVisibleTableField } from "./grid-field-visibility";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
 import { dateFormat, chuyenNgay, TruNgayRaSoNgay, CongNgay, CongGio, validateEmail, validatePhone, DateUtils } from "#src/utils/dateUtils";
 import { useSocket } from "#src/hooks/useSocket";
@@ -16,7 +17,19 @@ import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { PERMISSION_BITS, hasAnyPermissionBit, hasPermissionBit, parseMenuBitIndex, toPermissionBigInt } from "#src/utils/permission-bitfield";
 import { formatDateForDisplay, formatDateForStorage, parseDateValueToDayjs, resolveDateLocaleFormat } from "#src/utils/dateControl";
-import { resolveComboQueryAppId, buildRoleComboValueEnum, buildRoleComboSelectEnum, resolveRoleComboLabel, getComboTableRows, buildRoleComboOptions } from "./combo-utils";
+import {
+	resolveComboQueryAppId,
+	buildRoleComboValueEnum,
+	buildRoleComboSelectEnum,
+	resolveRoleComboLabel,
+	getComboTableRows,
+	buildRoleComboOptions,
+	flattenAppMenusById,
+	buildGridFieldComboSelectEnum,
+	resolveComboCellDisplayLabel,
+	collectComboTableFetchRequests,
+} from "./combo-utils";
+import { usePermissionStore } from "#src/store/permission";
 import dayjs from "dayjs";
 
 // Minimal types (kept local to avoid wider type churn)
@@ -34,6 +47,8 @@ export interface TableField {
 	f_types?: string;
 	f_report?: number | string;
 	f_cbo_query?: string;
+	f_grid?: string;
+	f_grid_fields?: string[] | string;
 	f_options?: Array<{ value: string; label: string }> | string;
 	f_format?: string;
 	f_search?: number | string;
@@ -135,6 +150,20 @@ function resolveNumberLocale(langInput?: string): string {
 	if (lang.startsWith("zh")) return "zh-CN";
 	if (lang.startsWith("vi")) return "vi-VN";
 	return "en-US";
+}
+
+/** f_header is the canonical Vietnamese label; f_header_vi is an optional alias (Java/menu designer parity). */
+function resolveGridFieldHeader(field: TableField, langInput?: string): string {
+	const lang = String(langInput || "vi").toLowerCase();
+	const pick = (...values: (string | undefined)[]) =>
+		values.find((h) => typeof h === "string" && h.trim() !== "")?.trim() || "";
+	if (lang.startsWith("en")) {
+		return pick(field.f_header_en, field.f_header_vi, field.f_header, field.f_header_zh) || field.f_name;
+	}
+	if (lang.startsWith("zh")) {
+		return pick(field.f_header_zh, field.f_header_vi, field.f_header, field.f_header_en) || field.f_name;
+	}
+	return pick(field.f_header_vi, field.f_header, field.f_header_en, field.f_header_zh) || field.f_name;
 }
 
 function getLocaleNumberSeparators(locale: string): { group: string; decimal: string } {
@@ -1041,6 +1070,8 @@ export function CsmDynamicGrid({
 	// This ensures non-menu tables like csm_accounts are available
 	const globalDatabase = useAppStore(state => state.database);
 	const setTableData = useAppStore(state => state.setTableData); // For updating fetched tables
+	const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
+	const menuById = useMemo(() => flattenAppMenusById(apiWholeMenus || []), [apiWholeMenus]);
 	const userAppId = useUserStore(state => state.app_id); // Get user appId for fallback
 	const userAppToken = useUserStore(state => state.app_token);
 	const userId = useUserStore(state => state.userId);
@@ -1148,111 +1179,17 @@ export function CsmDynamicGrid({
 			return isComboLikeType(types);
 		});
 		return comboFields
-			.map((f) => `${String(f.f_name || "")}:${String(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name) || "")}`)
+			.map((f) => {
+				const gridMenu = String((f as any)?.f_grid || "").trim();
+				const gridFields = Array.isArray((f as any)?.f_grid_fields)
+					? (f as any).f_grid_fields.join(",")
+					: String((f as any)?.f_grid_fields || "");
+				return `${String(f.f_name || "")}:${gridMenu}:${gridFields}:${String(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name) || "")}`;
+			})
 			.sort()
 			.join("|");
 	}, [m_configs?.table]);
 	
-	// 🔄 Auto-fetch missing combo tables when field config becomes available
-	useEffect(() => {
-		if (!comboFetchSignature || comboFetchSignature === lastComboFetchSignatureRef.current) {
-			return;
-		}
-		lastComboFetchSignatureRef.current = comboFetchSignature;
-		
-		console.log('[CsmDynamicGrid] Scanning combo queries for missing tables...');
-		
-		// Collect all combo queries that need table data
-		const comboFields = (m_configs?.table || []).filter((f: TableField) => {
-			const types = resolveEffectiveFieldTypes(f);
-			return isComboLikeType(types);
-		});
-		
-		const tablesToFetch: Array<{tableName: string; appId: string; whereClause: any}> = [];
-		
-		comboFields.forEach((f: TableField) => {
-			const rawQuery = String(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name) || "").trim();
-			if (!rawQuery) return;
-			
-			let q = rawQuery;
-			// Try decrypt
-			if (decrypt) {
-				try {
-					const decrypted = decrypt(q);
-					q = decrypted;
-				} catch {}
-			}
-			
-			const trimmedQ = q.trim();
-			if (trimmedQ.startsWith('{') || trimmedQ.startsWith('[')) {
-				let parsed: any;
-				try {
-					parsed = JSON.parse(trimmedQ);
-				} catch {
-					try {
-						const evalFn = new Function(`return (${trimmedQ})`);
-						parsed = evalFn();
-					} catch {
-						return;
-					}
-				}
-				
-				// Extract table info from parsed query
-				if (parsed && Array.isArray(parsed.query)) {
-					parsed.query.forEach((querySpec: any) => {
-						if (!querySpec?.obj_name) return;
-						
-						const tableName = querySpec.obj_name;
-						const queryAppId = resolveComboQueryAppId(tableName, querySpec.app_id, undefined, userAccess, decrypt);
-						let whereClause = querySpec.obj_where;
-						
-						// Default obj_where if not provided or invalid
-						// Check for: undefined, null, empty string, empty object, or object without required fields
-						const isInvalidWhere = !whereClause 
-							|| (typeof whereClause === 'string' && !whereClause.trim())
-							|| (typeof whereClause === 'object' && (!whereClause.field || !whereClause.type));
-						
-						if (isInvalidWhere) {
-							whereClause = {field: 'id', type: 'like', value: ""};
-							console.log(`[CsmDynamicGrid] Using default where clause for ${tableName}:`, whereClause);
-						}
-						
-						tablesToFetch.push({ tableName, appId: queryAppId, whereClause });
-					});
-				}
-			}
-		});
-		
-		// Remove duplicates (same table + same where clause)
-		const uniqueFetches = tablesToFetch.filter((item, index, self) => {
-			const key = `${item.appId}::${item.tableName}::${JSON.stringify(item.whereClause)}`;
-			return index === self.findIndex(t => 
-				`${t.appId}::${t.tableName}::${JSON.stringify(t.whereClause)}` === key
-			);
-		});
-		
-		if (uniqueFetches.length === 0) {
-			console.log('[CsmDynamicGrid] No combo tables to fetch');
-			return;
-		}
-		
-		console.log(`[CsmDynamicGrid] Found ${uniqueFetches.length} combo tables to fetch:`, uniqueFetches);
-		
-		// Fetch all tables in parallel
-		Promise.all(
-			uniqueFetches.map(({tableName, appId, whereClause}) => 
-				ensureTableInDatabase(tableName, appId, whereClause)
-					.catch(err => {
-						console.error(`Failed to fetch ${tableName}:`, err);
-						return null; // Don't fail entire Promise.all
-					})
-			)
-		).then(() => {
-			console.log('[CsmDynamicGrid] All combo tables fetched, triggering re-compute...');
-			setDatabaseVersion(v => v + 1);
-		});
-	}, [comboFetchSignature, userAccess, decrypt]);
-
 	const resolveQueryAppIdByTable = useCallback((tableName: string, queryAppId?: string): string => {
 		return resolveComboQueryAppId(tableName, queryAppId, undefined, userAccess, decrypt);
 	}, [userAccess, decrypt]);
@@ -1377,6 +1314,48 @@ export function CsmDynamicGrid({
 		
 		return true; // Started fetching
 	}, [database, resolveQueryAppIdByTable, globalTableFetchCache, setTableData, getStoredTableAppId]);
+
+	// 🔄 Auto-fetch missing combo tables (f_cbo_query + f_grid) when field config becomes available
+	useEffect(() => {
+		if (!comboFetchSignature || comboFetchSignature === lastComboFetchSignatureRef.current) {
+			return;
+		}
+		lastComboFetchSignatureRef.current = comboFetchSignature;
+
+		console.log('[CsmDynamicGrid] Scanning combo queries for missing tables...');
+
+		const comboFields = (m_configs?.table || []).filter((f: TableField) => {
+			const types = resolveEffectiveFieldTypes(f);
+			return isComboLikeType(types);
+		});
+
+		const uniqueFetches = collectComboTableFetchRequests(comboFields, {
+			decrypt,
+			fallbackAppId: runtimeAppId,
+			menuById,
+			userContext: userAccess,
+		});
+
+		if (uniqueFetches.length === 0) {
+			console.log('[CsmDynamicGrid] No combo tables to fetch');
+			return;
+		}
+
+		console.log(`[CsmDynamicGrid] Found ${uniqueFetches.length} combo tables to fetch:`, uniqueFetches);
+
+		Promise.all(
+			uniqueFetches.map(({ tableName, appId, whereClause }) =>
+				ensureTableInDatabase(tableName, appId, whereClause)
+					.catch(err => {
+						console.error(`Failed to fetch ${tableName}:`, err);
+						return null;
+					}),
+			),
+		).then(() => {
+			console.log('[CsmDynamicGrid] All combo tables fetched, triggering re-compute...');
+			setDatabaseVersion(v => v + 1);
+		});
+	}, [comboFetchSignature, userAccess, decrypt, menuById, runtimeAppId, m_configs?.table, ensureTableInDatabase]);
 
 	// Helper: Create seft context with all utility functions
 	const createSeftContext = useCallback(() => ({
@@ -1662,6 +1641,16 @@ export function CsmDynamicGrid({
 				}
 			}
 
+			// Vue parity: f_grid + f_grid_fields overrides f_cbo_query for grid combo display
+			const gridMenuId = String((f as any)?.f_grid || "").trim();
+			if (gridMenuId && menuById.size > 0) {
+				const gridEnum = buildGridFieldComboSelectEnum(f, database, menuById, userAccess, decrypt);
+				if (Object.keys(gridEnum).length > 0) {
+					map[f.f_name] = gridEnum;
+					return;
+				}
+			}
+
 			let q = String(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name) || "").trim();
 			if (!q) {
 				const types = resolveEffectiveFieldTypes(f);
@@ -1754,18 +1743,14 @@ export function CsmDynamicGrid({
 								console.log(`[selectEnums] Querying table: ${tableName}, app: ${queryAppId}, fields:`, fields, 'where:', whereClause);
 								
 								const tableData = database[tableName];
-								const tableAppId = Array.isArray(tableData) ? "" : String((tableData as any)?.app_id || (tableData as any)?.appId || "").trim();
 								const tableExists = tableData && (Array.isArray(tableData) || (tableData.rows && Array.isArray(tableData.rows)));
 								const rows = tableExists ? (Array.isArray(tableData) ? tableData : (tableData as any).rows || []) : [];
-								const hasMatchingAppData = !tableAppId || tableAppId === queryAppId;
-								const hasData = tableExists && rows.length > 0 && hasMatchingAppData;
+								const hasData = tableExists && rows.length > 0;
 								
 								console.log(`[selectEnums] Checking table ${tableName} in database:`, {
 									exists: tableExists,
 									rowCount: rows.length,
-									tableAppId,
 									queryAppId,
-									hasMatchingAppData,
 									hasData,
 								});
 								
@@ -2093,15 +2078,14 @@ export function CsmDynamicGrid({
 		});
 		console.log('[selectEnums] Final map:', map);
 		return map;
-	}, [m_configs.table, database, decrypt, context, m_configs, m_configs.selectEnumsOverride, databaseVersion, ensureTableInDatabase, i18n.language, t]); // 🔄 Re-compute when database/language changes
+	}, [m_configs.table, database, decrypt, context, m_configs, m_configs.selectEnumsOverride, databaseVersion, ensureTableInDatabase, i18n.language, t, menuById, userAccess]); // 🔄 Re-compute when database/language changes
 
 	// Map backend fields to ProColumns with f_types rules
 	const baseColumns: ProColumns<Row>[] = useMemo(() => {
 		const shown = (m_configs.table || [])
 			.filter((f) => {
 				const types = resolveEffectiveFieldTypes(f);
-				return Number(f.f_show) === 1
-					&& f.f_name !== 'id'
+				return isGridVisibleTableField(f)
 					&& !/richtext|html/.test(types)
 					&& !isCodeLikeType(types)
 					&& !/password/.test(types)
@@ -2110,19 +2094,7 @@ export function CsmDynamicGrid({
 			.sort((a, b) => Number(a.f_stt || 0) - Number(b.f_stt || 0));
 
 		const cols: ProColumns<Row>[] = shown.map((f) => {
-			// Resolve header following current language
-			const lang = (i18n.language || "").toLowerCase();
-			const candidates: (string | undefined)[] = [];
-			if (lang.startsWith("vi")) {
-				candidates.push(f.f_header_vi, f.f_header_en, f.f_header_zh, f.f_header);
-			} else if (lang.startsWith("en")) {
-				candidates.push(f.f_header_en, f.f_header_vi, f.f_header_zh, f.f_header);
-			} else if (lang.startsWith("zh")) {
-				candidates.push(f.f_header_zh, f.f_header_vi, f.f_header_en, f.f_header);
-			} else {
-				candidates.push(f.f_header, f.f_header_vi, f.f_header_en, f.f_header_zh);
-			}
-			const headerText = candidates.find((h) => typeof h === "string" && h.trim() !== "") || f.f_name;
+			const headerText = resolveGridFieldHeader(f, i18n.language);
 
 			const types = resolveEffectiveFieldTypes(f);
 			const typeTokens = types.split(/[,\s;|]+/).filter(Boolean);
@@ -2345,33 +2317,19 @@ export function CsmDynamicGrid({
 						const fallbackEntry = itemToEntry(String(raw));
 						return fallbackEntry ? renderTags([fallbackEntry]) : React.createElement(Tag, { color: getAutoTagColor(String(raw)) }, String(raw));
 					};
-				} else if (ve) {
-					// Single-select: render as a colored Tag
+				} else if (isSelect && !isMultiSelect) {
+					// Always render combo label on grid — ProTable valueType=select shows blank when valueEnum missing/mismatch
 					col.render = (_dom, entity) => {
 						const raw = entity[f.f_name];
 						if (raw == null || raw === "") return null;
 						const valueKey = String(raw).trim();
 						if (!valueKey) return null;
-						const rawLabel = ve[valueKey]?.text;
+						const rawLabel = resolveComboCellDisplayLabel(valueKey, f.f_name, ve, database);
 						const disp = rawLabel
 							? (rawLabel.includes(".") ? t(rawLabel) : rawLabel)
-							: (["group_id", "permissionGroups"].includes(f.f_name)
-								? resolveRoleComboLabel(valueKey, database)
-								: valueKey);
+							: valueKey;
 						return React.createElement(Tag, {
 							color: optionColorMap[valueKey] || getAutoTagColor(valueKey),
-							style: { fontSize: 12 },
-						}, disp);
-					};
-				} else if (isSelect && ["group_id", "permissionGroups"].includes(f.f_name)) {
-					col.render = (_dom, entity) => {
-						const raw = entity[f.f_name];
-						if (raw == null || raw === "") return null;
-						const valueKey = String(raw).trim();
-						if (!valueKey) return null;
-						const disp = resolveRoleComboLabel(valueKey, database);
-						return React.createElement(Tag, {
-							color: getAutoTagColor(valueKey),
 							style: { fontSize: 12 },
 						}, disp);
 					};
@@ -3157,11 +3115,11 @@ export function CsmDynamicGrid({
 	const derivedSearchFields = useMemo(() => {
 		if (Array.isArray(searchFields) && searchFields.length) return searchFields;
 		const configured = (m_configs.table || [])
-			.filter(f => Number(f.f_show) === 1 && isEnabledFlag((f as any).f_search))
+			.filter(f => isGridVisibleTableField(f) && isEnabledFlag((f as any).f_search))
 			.map(f => f.f_name);
 		if (configured.length > 0) return configured;
 		const heuristic = (m_configs.table || [])
-			.filter(f => Number(f.f_show) === 1)
+			.filter(f => isGridVisibleTableField(f))
 			.map(f => f.f_name)
 			.filter(name => {
 				const tf = (m_configs.table.find(f => f.f_name === name)?.f_types || "").toLowerCase();
@@ -3171,7 +3129,7 @@ export function CsmDynamicGrid({
 
 		// Final fallback: search across all visible columns to avoid "search has no effect" on schema-heavy tables.
 		return (m_configs.table || [])
-			.filter(f => Number(f.f_show) === 1)
+			.filter(f => isGridVisibleTableField(f))
 			.map(f => f.f_name)
 			.filter(Boolean);
 	}, [searchFields, m_configs.table]);
@@ -3588,8 +3546,7 @@ export function CsmDynamicGrid({
 				// This matches the columns written by handleExport so col 0 → first visible field
 				const importFields = (m_configs.table || [])
 					.filter((f) => {
-						if (Number(f.f_show) !== 1) return false;
-						if (String(f.f_name).toLowerCase() === 'id') return false;
+						if (!isGridVisibleTableField(f)) return false;
 						const types = resolveEffectiveFieldTypes(f);
 						if (/richtext|html/.test(types)) return false;
 						if (isCodeLikeType(types)) return false;
@@ -4017,7 +3974,7 @@ export function CsmDynamicGrid({
 			const randomSuffix = Math.random().toString(36).substring(2, 9);
 			const newRowId = `${runtimeAppId}_${Date.now()}_${randomSuffix}`;
 			const newRow: Row = { id: newRowId };
-			const fields = (m_configs.table || []).filter(f => Number(f.f_show) === 1);
+			const fields = (m_configs.table || []).filter(f => isGridVisibleTableField(f));
 			
 			// Initialize fields with default values based on field type
 			fields.forEach(f => {
