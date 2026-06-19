@@ -178,25 +178,42 @@ func (h *TableHandler) handleTableOperation(params map[string]any, isUpdate bool
 	return h.handleSelectOperation(out, params, appID, table, filter, access)
 }
 
-func (h *TableHandler) handleSelectOperation(out map[string]any, params map[string]any, appID, table string, filter model.SearchFilter, access *security.UserAccessContext) map[string]any {
-	take := data.DefaultFilterTake
-	if v, ok := params["take"].(float64); ok && int(v) > 0 {
-		take = int(v)
-	} else if v, ok := params["limit"].(float64); ok && int(v) > 0 {
-		take = int(v)
+// wantsLegacyFullTableFetch keeps backward compatibility for scripts (auto-kqxs, wu_kqxs.vue)
+// that call get-table-data / csm_obj_tables without limit|offset|take|sort.
+// Admin grids always send limit+offset and stay on server-paged path.
+func wantsLegacyFullTableFetch(params map[string]any) bool {
+	if params == nil {
+		return true
 	}
-	cursor, _ := params["lastkey"].(string)
-	if cursor == "" {
-		cursor, _ = params["cursor"].(string)
+	for _, key := range []string{"take", "limit", "offset", "lastkey", "cursor", "sort"} {
+		if _, ok := params[key]; ok {
+			return false
+		}
 	}
-	offset := 0
-	if ov, ok := params["offset"].(float64); ok && int(ov) >= 0 {
-		offset = int(ov)
-	}
+	return true
+}
 
+func (h *TableHandler) handleSelectOperation(out map[string]any, params map[string]any, appID, table string, filter model.SearchFilter, access *security.UserAccessContext) map[string]any {
 	var dataResult map[string]any
-	// Always paginate — never load full table into API response (big-data safety).
-	dataResult = h.rm.FilterWithPagination(appID, table, filter, cursor, offset, take, parseSortSpecs(params))
+	if wantsLegacyFullTableFetch(params) {
+		dataResult = h.rm.Filter(appID, table, filter)
+	} else {
+		take := data.DefaultFilterTake
+		if v, ok := params["take"].(float64); ok && int(v) > 0 {
+			take = int(v)
+		} else if v, ok := params["limit"].(float64); ok && int(v) > 0 {
+			take = int(v)
+		}
+		cursor, _ := params["lastkey"].(string)
+		if cursor == "" {
+			cursor, _ = params["cursor"].(string)
+		}
+		offset := 0
+		if ov, ok := params["offset"].(float64); ok && int(ov) >= 0 {
+			offset = int(ov)
+		}
+		dataResult = h.rm.FilterWithPagination(appID, table, filter, cursor, offset, take, parseSortSpecs(params))
+	}
 
 	rows := dataResult["rows"]
 	if rows == nil {
@@ -228,6 +245,12 @@ func (h *TableHandler) handleSelectOperation(out map[string]any, params map[stri
 	}
 	if v, ok := dataResult["totalCount"]; ok {
 		out["totalCount"] = v
+	}
+	if v, ok := dataResult["truncated"]; ok {
+		out["truncated"] = v
+	}
+	if v, ok := dataResult["sortTruncated"]; ok {
+		out["sortTruncated"] = v
 	}
 	return out
 }

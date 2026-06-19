@@ -824,7 +824,7 @@ func absoluteAssetURL(path, protocol, host string) string {
 	return protocol + "://" + host + "/" + strings.TrimPrefix(path, "/")
 }
 
-func resolveDescriptionFromFields(row map[string]any, lang string) string {
+func resolveDescriptionFromFields(rm *data.RecordManager, row map[string]any, lang string) string {
 	description := ""
 	if lang != "vi" {
 		description = recordStr(row, "description_"+lang)
@@ -847,13 +847,13 @@ func resolveDescriptionFromFields(row map[string]any, lang string) string {
 			content = recordStr(row, "content")
 		}
 		if content != "" {
-			description = stripHTMLToText(content, 160)
+			description = stripHTMLToText(decryptWebContent(rm, content), 160)
 		}
 	}
 	return description
 }
 
-func resolveServiceDescription(row map[string]any, lang string) string {
+func resolveServiceDescription(rm *data.RecordManager, row map[string]any, lang string) string {
 	description := ""
 	if lang != "vi" {
 		description = recordStr(row, "attributes_description_"+lang)
@@ -881,7 +881,7 @@ func resolveServiceDescription(row map[string]any, lang string) string {
 			content = recordStr(row, "content")
 		}
 		if content != "" {
-			description = stripHTMLToText(content, 160)
+			description = stripHTMLToText(decryptWebContent(rm, content), 160)
 		}
 	}
 	return description
@@ -948,7 +948,7 @@ func resolveSEOForServiceRoute(
 		return &seoMeta{
 			Title:       recordLangStr(detail, "title", lang),
 			Keywords:    recordLangStr(detail, "keywords", lang),
-			Description: resolveDescriptionFromFields(detail, lang),
+			Description: resolveDescriptionFromFields(rm, detail, lang),
 			Image:       recordStr(detail, "image"),
 			Lang:        lang,
 			Slug:        slug,
@@ -972,7 +972,7 @@ func resolveSEOForServiceRoute(
 		return &seoMeta{
 			Title:       title,
 			Keywords:    recordLangStr(service, "attributes_keywords", lang),
-			Description: resolveServiceDescription(service, lang),
+			Description: resolveServiceDescription(rm, service, lang),
 			Image:       recordStr(service, "image"),
 			Lang:        lang,
 			Slug:        slug,
@@ -996,7 +996,7 @@ func resolveSEOForServiceRoute(
 		return &seoMeta{
 			Title:       title,
 			Keywords:    recordLangStr(menu, "attributes_keywords", lang),
-			Description: resolveServiceDescription(menu, lang),
+			Description: resolveServiceDescription(rm, menu, lang),
 			Image:       recordStr(menu, "image"),
 			Lang:        lang,
 			Slug:        slug,
@@ -1138,7 +1138,7 @@ func resolveServiceListing(
 		rows := rowsFrom(rm.Filter(route.AppID, route.TblServiceDetail, filter))
 		details := make([]any, 0, len(rows))
 		for _, r := range rows {
-			details = append(details, mapDetailLite(r, lang))
+			details = append(details, mapDetailLite(rm, r, lang))
 		}
 		out["homeDetailList"] = details
 		return out
@@ -1150,7 +1150,7 @@ func resolveServiceListing(
 		row := findActiveServiceDetail(rm, route, domain, serviceCode, detailSlug)
 		if len(row) > 0 {
 			curID := recordStr(row, "id")
-			out["serviceDetail"] = mapDetailFullObj(row, lang)
+			out["serviceDetail"] = mapDetailFullObj(rm, row, lang)
 			out["serviceCode"] = serviceCode
 			insertRelated(rm, route, domain, serviceCode, curID, lang, pageSize, out)
 			return out
@@ -1163,7 +1163,7 @@ func resolveServiceListing(
 		if len(row) > 0 {
 			serviceType := recordStr(row, "service_type")
 			curID := recordStr(row, "id")
-			out["serviceDetail"] = mapDetailFullObj(row, lang)
+			out["serviceDetail"] = mapDetailFullObj(rm, row, lang)
 			out["serviceCode"] = serviceType
 			if serviceType != "" {
 				insertRelated(rm, route, domain, serviceType, curID, lang, pageSize, out)
@@ -1203,7 +1203,7 @@ func resolveServiceListing(
 	}
 
 	if len(service) > 0 {
-		cat := mapServiceCategory(service, lang)
+		cat := mapServiceCategory(rm, service, lang)
 		if pageContent, _ := cat["content"].(string); pageContent != "" {
 			out["pageContent"] = pageContent
 		}
@@ -1284,7 +1284,7 @@ func resolveServiceListing(
 
 	pageRows := make([]any, 0, endIndex-startIndex)
 	for _, r := range allRows[startIndex:endIndex] {
-		pageRows = append(pageRows, mapDetailLite(r, lang))
+		pageRows = append(pageRows, mapDetailLite(rm, r, lang))
 	}
 
 	var nextCursor string
@@ -1332,7 +1332,7 @@ func insertRelated(
 		if recordStr(r, "id") == curID {
 			continue
 		}
-		related = append(related, mapDetailLite(r, lang))
+		related = append(related, mapDetailLite(rm, r, lang))
 		if len(related) >= take {
 			break
 		}
@@ -1340,7 +1340,7 @@ func insertRelated(
 	out["relatedDetailList"] = related
 }
 
-func mapDetailLite(row map[string]any, lang string) map[string]any {
+func mapDetailLite(rm *data.RecordManager, row map[string]any, lang string) map[string]any {
 	s := func(k string) string { return recordStr(row, k) }
 	langS := func(base string) string {
 		if lang != "vi" {
@@ -1355,9 +1355,9 @@ func mapDetailLite(row map[string]any, lang string) map[string]any {
 		"id":               s("id"),
 		"domain":           s("domain"),
 		"service_type":     s("service_type"),
-		"title":            langS("title"),
+		"title":            decryptWebContent(rm, langS("title")),
 		"slug":             s("slug"),
-		"excerpt":          langS("excerpt"),
+		"excerpt":          decryptWebContent(rm, langS("excerpt")),
 		"thumbnail":        s("thumbnail"),
 		"cover":            s("cover"),
 		"images":           s("images"),
@@ -1387,8 +1387,8 @@ func mapDetailLite(row map[string]any, lang string) map[string]any {
 	return m
 }
 
-func mapDetailFullObj(row map[string]any, lang string) map[string]any {
-	m := mapDetailLite(row, lang)
+func mapDetailFullObj(rm *data.RecordManager, row map[string]any, lang string) map[string]any {
+	m := mapDetailLite(rm, row, lang)
 	s := func(k string) string { return recordStr(row, k) }
 	langS := func(base string) string {
 		if lang != "vi" {
@@ -1398,7 +1398,7 @@ func mapDetailFullObj(row map[string]any, lang string) map[string]any {
 		}
 		return s(base)
 	}
-	m["content"] = langS("content")
+	m["content"] = decryptWebContent(rm, langS("content"))
 	m["seo_meta"] = s("seo_meta")
 	m["dien_thoai"] = s("dien_thoai")
 	delete(m, "attributes")
@@ -1406,7 +1406,7 @@ func mapDetailFullObj(row map[string]any, lang string) map[string]any {
 	return m
 }
 
-func mapServiceCategory(row map[string]any, lang string) map[string]any {
+func mapServiceCategory(rm *data.RecordManager, row map[string]any, lang string) map[string]any {
 	s := func(k string) string { return recordStr(row, k) }
 	langS := func(base string) string {
 		if lang != "vi" {
@@ -1427,8 +1427,8 @@ func mapServiceCategory(row map[string]any, lang string) map[string]any {
 		"sort_order":   s("sort_order"),
 		"seo_meta":     s("seo_meta"),
 		"parent_id":    s("parent_id"),
-		"content":      langS("content"),
-		"description":  langS("description"),
+		"content":      decryptWebContent(rm, langS("content")),
+		"description":  decryptWebContent(rm, langS("description")),
 		"category":     langS("category"),
 		"title":        langS("title"),
 	}
