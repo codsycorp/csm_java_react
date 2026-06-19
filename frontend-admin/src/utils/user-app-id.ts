@@ -176,3 +176,15 @@ export function resolveTableRequestAppId(
 	if (safeHome && safeHome !== "csm") return safeHome;
 	return safePreferred || safeHome;
 }
+
+/**
+ * app_id for navigation / index.menu reads (fetchNavigationMenus, loadMenuStruct).
+ * Tenant users always use session home app_id (e.g. kqxs) — never menu JSON decrypt garbage.
+ */
+export function resolveNavigationAppId(
+	preferredAppId?: string | null,
+	user: UserAppIdInput = getUserAccessContext(),
+	decrypt: (value: string) => string = csmDecrypt,
+): string {
+	return resolveTableRequestAppId("index", preferredAppId, user, decrypt);
+}

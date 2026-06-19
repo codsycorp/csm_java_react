@@ -5,6 +5,7 @@ import { useDeviceType } from "#src/hooks";
 import { LayoutContext } from "#src/layout/container-layout/layout-context";
 import { removeTrailingSlash } from "#src/router/utils";
 import { useAppStore, usePreferencesStore, useUserStore } from "#src/store";
+import { resolveNavigationAppId } from "#src/utils/user-app-id";
 import { resolveMenuIcon } from "./utils";
 
 import { Menu } from "antd";
@@ -39,12 +40,10 @@ export default function LayoutMenu({
 	const userAppId = useUserStore(state => state.app_id);
 	const language = usePreferencesStore(state => state.language);
 
-	const effectiveAppId = useMemo(() => {
-		const fromUser = String(userAppId || "").trim();
-		if (fromUser) return fromUser;
-		const fromStore = String(currentAppId || "").trim();
-		return fromStore || "csm";
-	}, [userAppId, currentAppId]);
+	const effectiveAppId = useMemo(
+		() => resolveNavigationAppId(userAppId || currentAppId),
+		[userAppId, currentAppId],
+	);
 
 	const openKeysStorageKey = useMemo(() => {
 		return `layout_menu_open_keys:${effectiveAppId}:${mode}`;

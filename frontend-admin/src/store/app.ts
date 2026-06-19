@@ -4,6 +4,16 @@ import { getAuthStorage } from "#src/utils/browser-client-id";
 type Row = Record<string, any>;
 export type Database = Record<string, { id: string; fields?: any; fieldsPK?: string[]; rows: Row[]; app_id?: string }>;
 
+import { isPlainTenantAppId } from "#src/utils/user-app-id";
+
+function sanitizeStoredAppId(value: string | undefined | null): string {
+	const text = String(value || "").trim();
+	if (text && isPlainTenantAppId(text)) {
+		return text.toLowerCase() === "csm" ? "csm" : text;
+	}
+	return "csm";
+}
+
 const CURRENT_APP_ID_KEY = "current_app_id";
 
 /**
@@ -26,10 +36,10 @@ function readStoredAppId(): string {
 	}
 	const stored = getAuthStorage().getItem(CURRENT_APP_ID_KEY)?.trim();
 	if (stored) {
-		return stored;
+		return sanitizeStoredAppId(stored);
 	}
 	if (window.__INITIAL_REACT_DATA__?.app_id) {
-		return window.__INITIAL_REACT_DATA__.app_id;
+		return sanitizeStoredAppId(window.__INITIAL_REACT_DATA__.app_id);
 	}
 	return "csm";
 }
@@ -79,9 +89,10 @@ export const useAppStore = create<AppState & AppAction>((set, get) => ({
 	...initialState,
 
 	setCurrentAppId: (appId: string) => {
-		set({ currentAppId: appId });
+		const safeAppId = sanitizeStoredAppId(appId);
+		set({ currentAppId: safeAppId });
 		if (typeof window !== "undefined") {
-			getAuthStorage().setItem(CURRENT_APP_ID_KEY, appId);
+			getAuthStorage().setItem(CURRENT_APP_ID_KEY, safeAppId);
 			try { localStorage.removeItem(CURRENT_APP_ID_KEY); } catch {}
 		}
 	},

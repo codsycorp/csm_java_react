@@ -17,10 +17,11 @@ export function invalidateBroadcastHomeAutoCodeCache(appIdParam?: string) {
  * Returns decrypted auto_code string or null
  */
 export async function loadBroadcastHomeAutoCode(appIdParam: string): Promise<string | null> {
-	if (!appIdParam) return null;
-	if (broadcastHomeAutoCodeCache[appIdParam] !== undefined) {
+	const resolvedAppId = menuApiAppId(appIdParam);
+	if (!resolvedAppId) return null;
+	if (broadcastHomeAutoCodeCache[resolvedAppId] !== undefined) {
 		// Always return null if cached value is falsy
-		return broadcastHomeAutoCodeCache[appIdParam] || null;
+		return broadcastHomeAutoCodeCache[resolvedAppId] || null;
 	}
 	try {
 		const response = await getTableData<any>({
@@ -29,7 +30,7 @@ export async function loadBroadcastHomeAutoCode(appIdParam: string): Promise<str
 			where: {
 				operator: "AND",
 				conditions: [
-					{ field: "p_name", type: "eq", value: `broadcast_${appIdParam}` },
+					{ field: "p_name", type: "eq", value: `broadcast_${resolvedAppId}` },
 					{ field: "p_type", type: "eq", value: 0 },
 				]
 			},
@@ -40,25 +41,25 @@ export async function loadBroadcastHomeAutoCode(appIdParam: string): Promise<str
 				"Failed to load broadcast home auto_code:",
 				(response as any).message || "permission denied",
 			);
-			broadcastHomeAutoCodeCache[appIdParam] = null;
+			broadcastHomeAutoCodeCache[resolvedAppId] = null;
 			return null;
 		}
 		const rows = (response as any)?.rows || (response as any)?.data || [];
-		const codeRecord = pickBestSysAutosRow(rows, `broadcast_${appIdParam}`, 0);
+		const codeRecord = pickBestSysAutosRow(rows, `broadcast_${resolvedAppId}`, 0);
 		if (!codeRecord) {
-			broadcastHomeAutoCodeCache[appIdParam] = null;
+			broadcastHomeAutoCodeCache[resolvedAppId] = null;
 			return null;
 		}
 		const decryptedCode = codeRecord.p_code ? csmDecrypt(codeRecord.p_code) : "";
 		if (!decryptedCode) {
-			broadcastHomeAutoCodeCache[appIdParam] = null;
+			broadcastHomeAutoCodeCache[resolvedAppId] = null;
 			return null;
 		}
-		broadcastHomeAutoCodeCache[appIdParam] = decryptedCode;
+		broadcastHomeAutoCodeCache[resolvedAppId] = decryptedCode;
 		return decryptedCode;
 	} catch (error) {
 		console.warn("Failed to load broadcast home auto_code:", error);
-		broadcastHomeAutoCodeCache[appIdParam] = null;
+		broadcastHomeAutoCodeCache[resolvedAppId] = null;
 		return null;
 	}
 }
@@ -70,7 +71,14 @@ import { createTableStruct, getTableData } from "#src/components/csm-grid/CsmApi
 import { pickBestSysAutosRow } from "#src/pages/system/dynamic-code/reload";
 import { useUserStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
+import { resolveNavigationAppId } from "#src/utils/user-app-id";
 import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
+
+/** Session-safe app_id for index/menu table API — tenant users never send menu decrypt garbage. */
+function menuApiAppId(appIdParam?: string | null): string {
+	return resolveNavigationAppId(appIdParam);
+}
+
 
 export * from "./types";
 
@@ -318,9 +326,10 @@ const INDEX_TABLE_STRUCT = {
 };
 
 async function ensureIndexTableStruct(appIdParam: string) {
-	if (!appIdParam) return;
+	const appId = menuApiAppId(appIdParam);
+	if (!appId) return;
 	await createTableStruct({
-		app_id: appIdParam,
+		app_id: appId,
 		obj_table: {
 			id: "index",
 			struct: INDEX_TABLE_STRUCT,
@@ -329,7 +338,8 @@ async function ensureIndexTableStruct(appIdParam: string) {
 }
 
 async function ensureMenuTableStructs(appIdParam: string, menus: MenuItemType[]) {
-	if (!appIdParam || !Array.isArray(menus) || menus.length === 0) return;
+	const appId = menuApiAppId(appIdParam);
+	if (!appId || !Array.isArray(menus) || menus.length === 0) return;
 
 	const tableStructMap = collectMenuStructs(menus);
 	if (tableStructMap.size === 0) return;
@@ -344,7 +354,7 @@ async function ensureMenuTableStructs(appIdParam: string, menus: MenuItemType[])
 		for (let attempt = 0; attempt <= MAX_RETRY; attempt += 1) {
 			try {
 				await createTableStruct({
-					app_id: appIdParam,
+					app_id: appId,
 					obj_table: {
 						id: tableName,
 						struct,
@@ -359,7 +369,7 @@ async function ensureMenuTableStructs(appIdParam: string, menus: MenuItemType[])
 			}
 		}
 
-		console.warn(`Failed to ensure table struct for ${appIdParam}.${tableName} after retries:`, lastError);
+		console.warn(`Failed to ensure table struct for ${appId}.${tableName} after retries:`, lastError);
 		failedTables.push(tableName);
 	};
 
@@ -370,10 +380,10 @@ async function ensureMenuTableStructs(appIdParam: string, menus: MenuItemType[])
 
 	if (failedTables.length > 0) {
 		console.warn(
-			`[MenuStructSync] app=${appIdParam} synced=${pending.length - failedTables.length}/${pending.length}, failed=${failedTables.join(",")}`,
+			`[MenuStructSync] app=${appId} synced=${pending.length - failedTables.length}/${pending.length}, failed=${failedTables.join(",")}`,
 		);
 	} else {
-		console.info(`[MenuStructSync] app=${appIdParam} synced=${pending.length}/${pending.length}`);
+		console.info(`[MenuStructSync] app=${appId} synced=${pending.length}/${pending.length}`);
 	}
 }
 
@@ -381,6 +391,7 @@ async function ensureMenuTableStructs(appIdParam: string, menus: MenuItemType[])
  * Load auto setup menu (p_type = 0) from sys_autos for current app
  */
 export async function loadAutoMenuItem(appIdParam: string): Promise<any | null> {
+	const resolvedAppId = menuApiAppId(appIdParam);
 	try {
 		const response = await getTableData<any>({
 			app_id: "csm", // sys_autos is stored under app_id=csm
@@ -388,7 +399,7 @@ export async function loadAutoMenuItem(appIdParam: string): Promise<any | null> 
 			where: {
 				operator: "AND",
 				conditions: [
-					{ field: "p_name", type: "eq", value: appIdParam },
+					{ field: "p_name", type: "eq", value: resolvedAppId },
 					{ field: "p_type", type: "eq", value: 0 },
 				]
 			}
@@ -499,8 +510,9 @@ function filterOutAutoMenu(items: MenuItemType[]): MenuItemType[] {
 
 // Load menu struct from backend for a specific app
 async function loadMenuStruct(appIdParam: string): Promise<MenuItemType[]> {
+	const appId = menuApiAppId(appIdParam);
 	const payload = {
-		app_id: appIdParam,
+		app_id: appId,
 		obj_name: "index",
 		e_where: {
 			field: "id",
@@ -518,9 +530,10 @@ async function loadMenuStruct(appIdParam: string): Promise<MenuItemType[]> {
 
 // Persist menu struct back to backend (create or update)
 async function persistMenuStruct(appIdParam: string, menus: MenuItemType[], mode: "update" | "create" = "update") {
+	const appId = menuApiAppId(appIdParam);
 	const { csmEncrypt } = await import("#src/components/csm-grid/CsmCrypto");
 	const payload = {
-		app_id: appIdParam,
+		app_id: appId,
 		obj_name: "index",
 		command: mode,
 		obj_update: {
@@ -566,7 +579,7 @@ export async function saveMenuStruct(appIdParam: string, menus: MenuItemType[]) 
 /* 获取导航菜单列表 (用于侧边栏) - 从 index 表中获取 id="menu" 的菜单配置 */
 export async function fetchNavigationMenus(appIdParam?: string) {
 	try {
-		const targetAppId = appIdParam || "csm";
+		const targetAppId = menuApiAppId(appIdParam);
 		const payload = {
 			app_id: targetAppId,
 			obj_name: "index",

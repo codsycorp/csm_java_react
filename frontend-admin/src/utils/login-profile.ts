@@ -53,13 +53,10 @@ export function buildLoginUserProfile(
 }
 
 export function resolveLoginAppId(loginPayload: LoginResultPayload = {}, userInfoPayload: LoginResultPayload = {}): string {
-	const loginAppId = String(loginPayload.app_id ?? "").trim();
-	const profileAppId = String(userInfoPayload.app_id ?? "").trim();
-	const fromToken = normalizeUserSessionAppId({
-		app_id: loginAppId || profileAppId,
+	return normalizeUserSessionAppId({
+		app_id: String(loginPayload.app_id ?? userInfoPayload.app_id ?? ""),
 		app_token: String(loginPayload.app_token ?? userInfoPayload.app_token ?? ""),
 		menusPermissions: (loginPayload.menusPermissions ?? userInfoPayload.menusPermissions) as string[],
 		dev: Boolean(loginPayload.dev ?? userInfoPayload.dev),
 	});
-	return fromToken || profileAppId || loginAppId || "csm";
 }

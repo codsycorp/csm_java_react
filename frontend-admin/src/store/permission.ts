@@ -14,6 +14,7 @@ import { useAuthStore } from "./auth";
 import { useUserStore } from "./user";
 import { create } from "zustand";
 import { resolveDevFlag } from "#src/utils/dev-flag";
+import { resolveNavigationAppId } from "#src/utils/user-app-id";
 import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 import { normalizeMenuLabel } from "#src/utils";
 import { getTableData, type Where } from "#src/components/csm-grid/CsmApi";
@@ -449,9 +450,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		router.patchRoutes(ROOT_ROUTE_ID, dynamicRoutes);
 		const flatRouteList = flattenRoutes(newRoutes);
 
-		const effectiveAppId = (appIdParam || "").trim()
-			|| (useUserStore.getState().app_id || "").trim()
-			|| useAppStore.getState().getCurrentAppId();
+		const effectiveAppId = resolveNavigationAppId(appIdParam);
 		const userState = useUserStore.getState();
 		const { isDev, isAdmin } = resolvePrivilegeFlags(userState);
 		const routesForMenu = (isDev
@@ -608,9 +607,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		const baseRouteMenus = wholeMenus;
 		let apiWholeMenus: ApiMenuItemType[] = [];
 		let firstAutoCode = "";
-		const effectiveAppId = (appIdParam || "").trim()
-			|| (useUserStore.getState().app_id || "").trim()
-			|| useAppStore.getState().getCurrentAppId();
+		const effectiveAppId = resolveNavigationAppId(appIdParam);
 		// Always fetch auto_code from sys_autos (not from menu API)
 		let autoMenuItem: MenuItemType | null = null;
 		try {

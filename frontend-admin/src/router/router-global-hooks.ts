@@ -10,6 +10,7 @@ import { LOGIN, ROUTE_WHITE_LIST } from "./constants";
 import { goLogin } from "#src/utils/request/go-login";
 import { isDynamicRoutingEnabled } from "./routes/config";
 import { replaceBaseWithRoot } from "./utils";
+import { resolveNavigationAppId } from "#src/utils/user-app-id";
 
 // 不需要登录路由的路由白名单
 const baseNoLoginWhiteList = Array.from(ROUTE_WHITE_LIST).filter(item => item !== LOGIN);
@@ -230,7 +231,7 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 		return;
 	}
 
-	const effectiveAppId = (userInfo?.app_id || "").trim() || useAppStore.getState().getCurrentAppId();
+	const effectiveAppId = resolveNavigationAppId(userInfo?.app_id);
 	if (effectiveAppId) {
 		useAppStore.getState().setCurrentAppId(effectiveAppId);
 	}
