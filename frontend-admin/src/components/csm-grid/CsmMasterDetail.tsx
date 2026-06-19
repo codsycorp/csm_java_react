@@ -131,6 +131,7 @@ export default function CsmMasterDetail(props: any) {
 			}
 		}, React.createElement(CsmDynamicGrid as any, {
 			key: `grid-${node.id}-${selectRow ? buildMasterRowKey(selectRow, masterPkFields) : "none"}`,
+			gridInstanceKey: `detail-${String(node.id)}-${selectRow ? buildMasterRowKey(selectRow, masterPkFields) : "none"}`,
 			appId,
 			permissions,
 			menusPermissions,
@@ -149,7 +150,6 @@ export default function CsmMasterDetail(props: any) {
 			},
 			context: { select_row: selectRow || undefined },
 			isDetailGrid: true,
-			disablePagination: true,
 			onDetailRowsChange: (rows: Record<string, any>[]) => handleDetailRowsChange(detailTableName, rows),
 			onDataChange,
 		}));
@@ -274,6 +274,7 @@ export default function CsmMasterDetail(props: any) {
 		}, React.createElement("div", {
 			style: { flex: 1, minHeight: 0, overflow: "auto", width: "100%" }
 		}, React.createElement(CsmDynamicGrid as any, {
+			gridInstanceKey: `master-${String(m_configs?.id || masterTableName || "main")}`,
 			appId,
 			permissions,
 			menusPermissions,

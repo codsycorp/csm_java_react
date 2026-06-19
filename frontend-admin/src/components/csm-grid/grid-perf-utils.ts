@@ -40,6 +40,16 @@ export const GRID_VIRTUAL_ROW_THRESHOLD = 120;
 export const KANBAN_MAX_CARDS_PER_COLUMN = 100;
 export const GRID_PAGE_SIZE_OPTIONS = ["10", "20", "50", "100", "200"] as const;
 
+/** Cheap signature to skip redundant setData when unrelated combo tables update the store. */
+export function buildRowsSyncSignature(rows: readonly unknown[] | undefined | null): string {
+	if (!rows?.length) return "0";
+	const first = rows[0] as Record<string, unknown> | undefined;
+	const last = rows[rows.length - 1] as Record<string, unknown> | undefined;
+	const firstKey = first?.id ?? first?.ID ?? "";
+	const lastKey = last?.id ?? last?.ID ?? "";
+	return `${rows.length}:${String(firstKey)}:${String(lastKey)}`;
+}
+
 /** Client-side page slice — render only the current page, not the full dataset. */
 export function paginateRows<T>(rows: readonly T[], current: number, pageSize: number): T[] {
 	if (!rows.length || pageSize <= 0) return rows as T[];

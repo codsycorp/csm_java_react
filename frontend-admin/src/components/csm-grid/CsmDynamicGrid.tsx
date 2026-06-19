@@ -6,7 +6,7 @@ import CsmEditModal, { DetailGridTab } from "./CsmEditModal";
 import { csmDecrypt, csmEncrypt } from "./CsmCrypto";
 import { compileMenuTrigger, resolveTriggerBody, safeEval } from "./csm-trigger-runner";
 import { isGridVisibleTableField } from "./grid-field-visibility";
-import { buildComboDatabaseSignature, gridDevLog, useDebouncedValue, GRID_VIRTUAL_ROW_THRESHOLD, paginateRows, GRID_PAGE_SIZE_OPTIONS } from "./grid-perf-utils";
+import { buildComboDatabaseSignature, buildRowsSyncSignature, gridDevLog, useDebouncedValue, GRID_VIRTUAL_ROW_THRESHOLD, paginateRows, GRID_PAGE_SIZE_OPTIONS } from "./grid-perf-utils";
 import { resolveDetailGridRowsFromMaster } from "./master-detail-utils";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
 import { dateFormat, chuyenNgay, TruNgayRaSoNgay, CongNgay, CongGio, validateEmail, validatePhone, DateUtils } from "#src/utils/dateUtils";
@@ -3008,137 +3008,105 @@ export function CsmDynamicGrid({
 
 	const useRowTemplate = !!rowTemplateFn;
 
-	// load_db trigger or default database lookup
-	// Nếu không có table_name: áp dụng load_db trigger từ field tables để đưa dữ liệu lên trang
-	// Nếu có table_name: lấy từ API hoặc fullDatabase[tableName]
-	useEffect(() => {
-		// Detail grid: Vue parity — rows come from master select_row[table_name], not database[table_name].rows
-		if (isDetailGrid) {
-			setData(resolveDetailRows());
-			return;
-		}
-		
+	const storeMasterRows = useMemo(() => {
+		if (isDetailGrid || !hasTableName) return null;
+		const entry = database[tableName];
+		return Array.isArray(entry?.rows) ? entry.rows : null;
+	}, [database, tableName, hasTableName, isDetailGrid]);
+
+	const storeMasterRowsSignature = useMemo(
+		() => buildRowsSyncSignature(storeMasterRows),
+		[storeMasterRows],
+	);
+
+	const lastSyncedDataSignatureRef = useRef("");
+
+	const resolveLoadDbRows = useCallback((): Row[] | null => {
 		let loadCode = m_configs.trigger?.load_db;
-		if (loadCode && decrypt) {
+		if (!loadCode) return null;
+		if (decrypt) {
 			try {
 				loadCode = decrypt(loadCode);
 			} catch {
 				// ignore
 			}
 		}
-		
-		// Nếu có load_db trigger, luôn chạy trigger trước
-		if (loadCode) {
-			const fn = safeEval(["seft", "db"], loadCode) as ((seft: any, db: Database) => Row[]) | null;
-			if (fn) {
+		if (!loadCode) return null;
+		try {
+			let resolvedCode = loadCode;
+			if (decrypt) {
 				try {
-					const rows = fn({ m_configs, context }, database) || [];
-					setData(Array.isArray(rows) ? rows : []);
-					return;
-				} catch (err) {
-					console.warn("load_db trigger error:", err);
-					// Fall back to default behavior
-				}
-			}
-		}
-		
-		// Nếu không có load_db trigger hoặc trigger lỗi:
-		// - Nếu có table_name: lấy từ database[tableName]
-		// - Nếu không có table_name: dữ liệu sẽ được xử lý thông qua trigger và field tables
-		if (hasTableName) {
-			const fallback = database[tableName]?.rows || [];
-			setData(fallback);
-		} else {
-			// Không có table_name: khởi tạo dữ liệu trống, chỉ cập nhật khi có trigger hoặc user nhập liệu
-			setData([]);
-		}
-	}, [m_configs, database, context, isDetailGrid, tableName, hasTableName, resolveDetailRows]);
-
-	// Auto-reload data when global database changes (e.g., from socket updates)
-	// This makes the component reactive to real-time updates without manual socket handling
-	useEffect(() => {
-		if (isDetailGrid) {
-			setData(resolveDetailRows());
-			return;
-		}
-
-		gridDevLog(`[CsmDynamicGrid] 🔄 Data loading useEffect triggered (tableName: ${tableName}, hasTableName: ${hasTableName})`);
-		gridDevLog(`[CsmDynamicGrid] decrypt function available: ${!!decrypt}`);
-		gridDevLog(`[CsmDynamicGrid] decrypt function name: ${decrypt?.name || 'anonymous'}`);
-		
-		if (!hasTableName) return;
-		
-		const globalTableData = database[tableName];
-		if (!globalTableData) {
-			gridDevLog(`[CsmDynamicGrid] ⚠️ No table data found for '${tableName}'`);
-			void ensureTableInDatabase(tableName, runtimeAppId)
-				.then((started) => {
-					gridDevLog(`[CsmDynamicGrid] 🔎 Auto-fetch primary table '${tableName}'`, {
-						runtimeAppId,
-						started,
-					});
-				})
-				.catch((err) => {
-					console.warn(`[CsmDynamicGrid] Failed to auto-fetch primary table '${tableName}':`, err);
-				});
-			return;
-		}
-		
-		// Check if global data has changed
-		const globalRows = globalTableData.rows || [];
-		gridDevLog(`[CsmDynamicGrid] 📊 Global rows for '${tableName}': ${globalRows.length} rows`);
-		
-		// Nếu có load_db trigger, luôn ưu tiên trigger
-		let loadCode = m_configs.trigger?.load_db;
-		if (loadCode) {
-			gridDevLog(`[CsmDynamicGrid] load_db trigger found, length: ${loadCode.length}`);
-			gridDevLog(`[CsmDynamicGrid] load_db trigger (first 100 chars): ${loadCode.substring(0, 100)}`);
-			try {
-				let resolvedCode = loadCode;
-				
-				// Try provided decrypt first
-				if (decrypt) {
-					try {
-						const beforeDecrypt = resolvedCode.substring(0, 50);
-						const decrypted = decrypt(loadCode);
-						const afterDecrypt = decrypted.substring(0, 50);
-						gridDevLog("[CsmDynamicGrid] Decrypt attempt:", { before: beforeDecrypt, after: afterDecrypt });
-						
-						// Check if decrypt actually changed the code
-						if (beforeDecrypt === afterDecrypt) {
-							console.warn("[CsmDynamicGrid] ⚠️ decrypt prop did not change code - trying csmDecrypt fallback");
-							resolvedCode = csmDecrypt(loadCode);
-						} else {
-							resolvedCode = decrypted;
-							gridDevLog("[CsmDynamicGrid] ✅ decrypt prop worked");
-						}
-					} catch (decryptErr) {
-						console.warn("[CsmDynamicGrid] decrypt prop failed, trying csmDecrypt fallback:", decryptErr);
-						resolvedCode = csmDecrypt(loadCode);
-					}
-				} else {
-					gridDevLog("[CsmDynamicGrid] No decrypt prop, using csmDecrypt");
+					const before = resolvedCode.substring(0, 50);
+					const decrypted = decrypt(loadCode);
+					resolvedCode = before === decrypted.substring(0, 50) ? csmDecrypt(loadCode) : decrypted;
+				} catch {
 					resolvedCode = csmDecrypt(loadCode);
 				}
-				
-				gridDevLog(`[CsmDynamicGrid] Final code (first 100 chars): ${resolvedCode.substring(0, 100)}`);
-				const fn = safeEval(["seft", "db"], resolvedCode) as ((seft: any, db: Database) => Row[]) | null;
-				if (fn) {
-					const seftContext = createSeftContext();
-					const rows = fn(seftContext, database) || [];
-					setData(Array.isArray(rows) ? rows : []);
-					gridDevLog(`[CsmDynamicGrid] ✅ Data reloaded via trigger from global database (${rows.length} rows)`);
-					return;
-				}
-			} catch (err) {
-				console.warn("[CsmDynamicGrid] load_db trigger error:", err);
+			} else {
+				resolvedCode = csmDecrypt(loadCode);
 			}
+			const fn = safeEval(["seft", "db"], resolvedCode) as ((seft: any, db: Database) => Row[]) | null;
+			if (!fn) return null;
+			const rows = fn(createSeftContext(), database) || [];
+			return Array.isArray(rows) ? rows : [];
+		} catch (err) {
+			console.warn("[CsmDynamicGrid] load_db trigger error:", err);
+			return null;
 		}
-		
-		// Fallback: load directly from global database
-		setData(globalRows);
-		gridDevLog(`[CsmDynamicGrid] ✅ Data synced from global database (${globalRows.length} rows)`);
-	}, [database, tableName, hasTableName, m_configs, context, decrypt, ensureTableInDatabase, runtimeAppId, isDetailGrid, resolveDetailRows]);
+	}, [createSeftContext, database, decrypt, m_configs.trigger?.load_db]);
+
+	const syncGridRows = useCallback((nextRows: Row[]) => {
+		const signature = buildRowsSyncSignature(nextRows);
+		if (signature === lastSyncedDataSignatureRef.current) return;
+		lastSyncedDataSignatureRef.current = signature;
+		setData(nextRows);
+	}, []);
+
+	// Single data-sync path — avoids race between two useEffects on large datasets / combo prefetch.
+	useEffect(() => {
+		if (isDetailGrid) {
+			syncGridRows(resolveDetailRows());
+			return;
+		}
+
+		if (!hasTableName) {
+			const triggerRows = resolveLoadDbRows();
+			if (triggerRows) {
+				syncGridRows(triggerRows);
+				return;
+			}
+			syncGridRows([]);
+			return;
+		}
+
+		if (!storeMasterRows) {
+			lastSyncedDataSignatureRef.current = "";
+			void ensureTableInDatabase(tableName, runtimeAppId).catch((err) => {
+				console.warn(`[CsmDynamicGrid] Failed to auto-fetch primary table '${tableName}':`, err);
+			});
+			return;
+		}
+
+		const triggerRows = resolveLoadDbRows();
+		syncGridRows(triggerRows ?? storeMasterRows);
+	}, [
+		isDetailGrid,
+		hasTableName,
+		resolveDetailRows,
+		resolveLoadDbRows,
+		storeMasterRows,
+		storeMasterRowsSignature,
+		syncGridRows,
+		tableName,
+		runtimeAppId,
+		ensureTableInDatabase,
+		comboDatabaseSignature,
+		database,
+	]);
+
+	useEffect(() => {
+		lastSyncedDataSignatureRef.current = "";
+	}, [effectiveGridInstanceKey]);
 
   // filter trigger (runs on data)
 	const filtered = useMemo(() => {
@@ -3466,8 +3434,13 @@ export function CsmDynamicGrid({
 	// Multi-column sort state
 	const [sorters, setSorters] = useState<{ field: string; order: 'ascend' | 'descend' }[]>([]);
 	const defaultPageSize = Number(m_configs.table_pagesize) || 10;
-	const useClientPagination = !disablePagination;
+	const preferClientPagination = !disablePagination;
 	const [paginationState, setPaginationState] = useState({ current: 1, pageSize: defaultPageSize });
+
+	const shouldPaginateClient = useCallback(
+		() => preferClientPagination || searchedData.length >= GRID_VIRTUAL_ROW_THRESHOLD,
+		[preferClientPagination, searchedData.length],
+	);
 
 	useEffect(() => {
 		setPaginationState((prev) => ({ ...prev, current: 1 }));
@@ -3488,7 +3461,7 @@ export function CsmDynamicGrid({
 		if (sortersChanged) {
 			const applySorters = () => {
 				setSorters(nextSorters);
-				if (useClientPagination) {
+				if (shouldPaginateClient()) {
 					setPaginationState((prev) => ({ ...prev, current: 1 }));
 				}
 			};
@@ -3499,13 +3472,13 @@ export function CsmDynamicGrid({
 			}
 		}
 
-		if (useClientPagination && pagination) {
+		if (shouldPaginateClient() && pagination) {
 			setPaginationState({
 				current: pagination.current || 1,
 				pageSize: pagination.pageSize || defaultPageSize,
 			});
 		}
-	}, [defaultPageSize, searchedData.length, sorters, useClientPagination]);
+	}, [defaultPageSize, searchedData.length, sorters, shouldPaginateClient]);
 
 	// Multi-column sort logic
 	const sortedData = useMemo(() => {
@@ -3551,19 +3524,22 @@ export function CsmDynamicGrid({
 	}, [searchedData, sorters, m_configs.table, selectEnums, numberLocale]);
 
 	useEffect(() => {
-		if (!useClientPagination) return;
+		if (!shouldPaginateClient()) return;
 		setPaginationState((prev) => {
 			const maxPage = Math.max(1, Math.ceil(sortedData.length / prev.pageSize) || 1);
 			return prev.current > maxPage ? { ...prev, current: maxPage } : prev;
 		});
-	}, [sortedData.length, useClientPagination]);
+	}, [sortedData.length, shouldPaginateClient]);
+
+	const useClientPagination = shouldPaginateClient();
 
 	const tableDataSource = useMemo(() => {
 		if (!useClientPagination) return sortedData;
 		return paginateRows(sortedData, paginationState.current, paginationState.pageSize);
 	}, [sortedData, useClientPagination, paginationState.current, paginationState.pageSize]);
 
-	const enableVirtualScroll = !useClientPagination && sortedData.length >= GRID_VIRTUAL_ROW_THRESHOLD;
+	// Virtual scroll drops cells on large combo grids — paginate instead.
+	const enableVirtualScroll = false;
 
 	const sortableFieldNames = useMemo(() => {
 		return (m_configs.table || [])
@@ -4715,7 +4691,7 @@ export function CsmDynamicGrid({
 
 	children.push(
 		React.createElement(BasicTable as any, {
-			key: "table",
+			key: `table-${effectiveGridInstanceKey}-${comboDatabaseSignature}`,
 			autoHeight: useClientPagination ? sortedData.length <= GRID_VIRTUAL_ROW_THRESHOLD : true,
 			...tableProps,
 		})
