@@ -192,12 +192,23 @@ func (rm *RecordManager) FilterWithPagination(
 	filter model.SearchFilter,
 	cursor string,
 	offset, take int,
+	sortSpecs []model.SortSpec,
 ) map[string]any {
 	if take <= 0 {
 		take = DefaultFilterTake
 	}
 	if take > maxFilterTake {
 		take = maxFilterTake
+	}
+
+	if len(sortSpecs) > 0 {
+		return rm.filterWithSortPagination(appID, tableName, filter, offset, take, sortSpecs)
+	}
+
+	if isUnfilteredListQuery(filter) && rm.isSearchIndexComplete(appID, tableName) && rm.eqIndex != nil {
+		if result := rm.filterWithEqIndexTableList(appID, tableName, filter, offset, take); result != nil {
+			return result
+		}
 	}
 
 	if rm.isSingletonLookupFilter(appID, tableName, filter) {

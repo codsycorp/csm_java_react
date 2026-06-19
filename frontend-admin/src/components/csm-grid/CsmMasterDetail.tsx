@@ -306,7 +306,7 @@ export default function CsmMasterDetail(props: any) {
 				items: tabItems,
 				type: "card",
 				size: "small",
-				destroyInactiveTabPane: true,
+				destroyInactiveTabPane: false,
 				style: {
 					height: "100%",
 					display: "flex",

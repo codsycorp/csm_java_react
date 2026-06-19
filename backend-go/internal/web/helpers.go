@@ -125,6 +125,15 @@ func writeText(w http.ResponseWriter, status int, contentType, body string) {
 	_, _ = w.Write([]byte(body))
 }
 
+func writeTextCached(w http.ResponseWriter, status int, contentType, body, cacheControl string) {
+	w.Header().Set("Content-Type", contentType)
+	if cacheControl != "" {
+		w.Header().Set("Cache-Control", cacheControl)
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	raw, _ := json.Marshal(v)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

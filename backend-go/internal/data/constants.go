@@ -8,4 +8,6 @@ const (
 const (
 	DefaultFilterTake = 500
 	maxFilterTake     = 1000
+	// Max rows materialized for server-side sort — beyond this, client should sort page-only.
+	maxSortMaterialize = 10000
 )

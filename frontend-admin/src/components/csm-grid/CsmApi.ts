@@ -706,6 +706,7 @@ export async function getTableData<T>(params: {
 	lastkey?: any
 	offset?: number
 	limit?: number
+	sort?: Array<{ field: string; order: "asc" | "desc" }>
 	/** Skip in-flight dedupe cache — always hit network (sys_autos hot-reload). */
 	fresh?: boolean
 }) {
@@ -764,7 +765,7 @@ export async function getTableData<T>(params: {
 	const cacheKey = (() => {
 		let whereKey = "";
 		try { whereKey = params.where ? JSON.stringify(params.where) : ""; } catch { whereKey = String(params.where); }
-		return `${params.app_id}::${params.obj_name}::${whereKey}::${shouldForceOnlyMySubusers ? 1 : 0}::${params.take ?? ''}::${params.lastkey ?? ''}::${params.offset ?? ''}::${params.limit ?? ''}`;
+		return `${params.app_id}::${params.obj_name}::${whereKey}::${shouldForceOnlyMySubusers ? 1 : 0}::${params.take ?? ''}::${params.lastkey ?? ''}::${params.offset ?? ''}::${params.limit ?? ''}::${params.sort ? JSON.stringify(params.sort) : ''}`;
 	})();
 	const globalAny = window as any;
 	if (!globalAny.__csm_getTableDataCache) {
@@ -786,6 +787,7 @@ export async function getTableData<T>(params: {
 		...(params.lastkey ? { lastkey: params.lastkey } : {}),
 		...(Number.isInteger(params.offset) ? { offset: params.offset } : {}),
 		...(Number.isInteger(params.limit) ? { limit: params.limit } : {}),
+		...(params.sort?.length ? { sort: params.sort } : {}),
 	};
 	const promise = ensureAuthSessionReady().then((ready) => {
 		if (!ready) {

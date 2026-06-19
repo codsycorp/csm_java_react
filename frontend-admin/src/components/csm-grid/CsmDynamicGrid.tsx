@@ -6,7 +6,12 @@ import CsmEditModal, { DetailGridTab } from "./CsmEditModal";
 import { csmDecrypt, csmEncrypt } from "./CsmCrypto";
 import { compileMenuTrigger, resolveTriggerBody, safeEval } from "./csm-trigger-runner";
 import { isGridVisibleTableField } from "./grid-field-visibility";
-import { buildComboDatabaseSignature, buildRowsSyncSignature, gridDevLog, useDebouncedValue, GRID_VIRTUAL_ROW_THRESHOLD, paginateRows, GRID_PAGE_SIZE_OPTIONS } from "./grid-perf-utils";
+import { buildComboDatabaseSignature, buildRowsSyncSignature, gridDevLog, useDebouncedValue, GRID_VIRTUAL_ROW_THRESHOLD, GRID_PAGE_SIZE_OPTIONS } from "./grid-perf-utils";
+import { GRID_SERVER_DEFAULT_PAGE_SIZE } from "./grid-bigdata-policy";
+import { fetchAllTableRows } from "./grid-bigdata-policy";
+import { buildGridServerQuery } from "./grid-server-query";
+import { useGridServerPagination } from "./use-grid-server-pagination";
+import { formatGridNumberCell, resolveFieldDecimalPlaces } from "./grid-field-format";
 import { resolveDetailGridRowsFromMaster } from "./master-detail-utils";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
 import { dateFormat, chuyenNgay, TruNgayRaSoNgay, CongNgay, CongGio, validateEmail, validatePhone, DateUtils } from "#src/utils/dateUtils";
@@ -33,6 +38,11 @@ import {
 	resolveComboCellDisplayLabel,
 	resolveGridComboCellLabel,
 	collectComboTableFetchRequests,
+	fetchComboRowsByValues,
+	resolveComboValueField,
+	resolveFieldGridComboTableName,
+	resolveFieldGridComboConfig,
+	lookupValueEnumLabel,
 	isDefaultComboWhereClause,
 	storedTableAppIdMatches,
 } from "./combo-utils";
@@ -41,7 +51,14 @@ import dayjs from "dayjs";
 
 // Minimal types (kept local to avoid wider type churn)
 type Row = Record<string, any>;
-type Database = Record<string, { rows: Row[] }>;
+type Database = Record<string, {
+	rows: Row[]
+	fieldsPK?: string[]
+	totalCount?: number
+	serverPaged?: boolean
+	pageSize?: number
+	app_id?: string
+}>;
 
 export interface TableField {
 	f_name: string;
@@ -68,6 +85,7 @@ export interface TableField {
 	f_align?: "left" | "right" | "center" | string;
 	f_width?: number | string;
 	width?: number | string;
+	f_dec?: number | string;
 	// Grouping / template
 	f_group_header_template?: string;
 	f_group_footer_template?: string;
@@ -1059,6 +1077,7 @@ export function CsmDynamicGrid({
 	const [rowActionBusy, setRowActionBusy] = useState(false);
 	const [searchTerm, setSearchTerm] = useState("");
 	const debouncedSearchTerm = useDebouncedValue(searchTerm, 280);
+	const [comboPrefetchBusy, setComboPrefetchBusy] = useState(false);
 	const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 	
 	// State để prevent trigger update recursion khi inline edit
@@ -1069,7 +1088,8 @@ export function CsmDynamicGrid({
 	// Then merge with global database from store for real-time updates
 	// This ensures non-menu tables like csm_accounts are available
 	const globalDatabase = useAppStore(state => state.database);
-	const setTableData = useAppStore(state => state.setTableData); // For updating fetched tables
+	const setTableData = useAppStore(state => state.setTableData);
+	const mergeTableRows = useAppStore(state => state.mergeTableRows);
 	const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
 	const menuById = useMemo(() => flattenAppMenusById(apiWholeMenus || []), [apiWholeMenus]);
 	const userAppId = useUserStore(state => state.app_id); // Get user appId for fallback
@@ -1180,6 +1200,7 @@ export function CsmDynamicGrid({
 		setDatabaseVersion(0);
 		lastComboFetchSignatureRef.current = "";
 		globalTableFetchCache.clear();
+		setComboPrefetchBusy(false);
 	}, [closeEditor, effectiveGridInstanceKey, globalTableFetchCache]);
 
 	// Enable socket for real-time database updates
@@ -1370,6 +1391,8 @@ export function CsmDynamicGrid({
 
 		gridDevLog(`[CsmDynamicGrid] Found ${uniqueFetches.length} combo tables to fetch:`, uniqueFetches);
 
+		let cancelled = false;
+		setComboPrefetchBusy(true);
 		Promise.all(
 			uniqueFetches.map(({ tableName, appId, whereClause }) =>
 				ensureTableInDatabase(tableName, appId, whereClause)
@@ -1379,9 +1402,15 @@ export function CsmDynamicGrid({
 					}),
 			),
 		).then(() => {
+			if (cancelled) return;
 			gridDevLog('[CsmDynamicGrid] All combo tables fetched, triggering re-compute...');
 			setDatabaseVersion(v => v + 1);
+		}).finally(() => {
+			if (!cancelled) setComboPrefetchBusy(false);
 		});
+		return () => {
+			cancelled = true;
+		};
 	}, [comboFetchSignature, comboMenuSignature, userAccess, decrypt, menuById, runtimeAppId, m_configs?.table, context, database, ensureTableInDatabase]);
 
 	const comboDatabaseSignature = useMemo(
@@ -2136,6 +2165,111 @@ export function CsmDynamicGrid({
 		return map;
 	}, [m_configs.table, decrypt, context, m_configs, m_configs.selectEnumsOverride, databaseVersion, ensureTableInDatabase, i18n.language, t, menuById, userAccess, comboDatabaseSignature, database, createSeftContext]);
 
+	const lastComboHydrationSigRef = useRef("");
+
+	// Big-data: resolve combo labels on-demand for values missing from capped preload.
+	useEffect(() => {
+		if (!hasTableName || isDetailGrid || comboPrefetchBusy || data.length === 0) return;
+
+		const comboFields = (m_configs.table || []).filter((field) => {
+			const types = resolveEffectiveFieldTypes(field);
+			return Number(field.f_show) === 1 && isComboLikeType(types);
+		});
+		if (comboFields.length === 0) return;
+
+		const comboEvalContext = {
+			seft: createSeftContext(),
+			database,
+		};
+
+		const hydrationPlan: Array<{
+			key: string
+			appId: string
+			tableName: string
+			valueField: string
+			values: string[]
+		}> = [];
+
+		comboFields.forEach((field) => {
+			const gridConfig = resolveFieldGridComboConfig(field, { decrypt, evalContext: comboEvalContext });
+			const tableName = gridConfig
+				? resolveFieldGridComboTableName({ f_grid: gridConfig.f_grid }, menuById)
+				: resolveFieldGridComboTableName(field, menuById);
+			if (!tableName) return;
+
+			const valueField = resolveComboValueField(field, menuById, { decrypt, evalContext: comboEvalContext });
+			const valueEnum = selectEnums[field.f_name];
+			const missing = new Set<string>();
+
+			data.forEach((row) => {
+				const raw = row[field.f_name];
+				if (raw == null || raw === "") return;
+				const valueKey = String(raw).trim();
+				if (!valueKey) return;
+				if (lookupValueEnumLabel(valueEnum, raw)) return;
+				const label = resolveGridComboCellLabel(valueKey, field, database, menuById, valueEnum, {
+					decrypt,
+					evalContext: comboEvalContext,
+				});
+				if (label === valueKey) missing.add(valueKey);
+			});
+
+			if (missing.size === 0) return;
+			const appId = resolveComboQueryAppId(tableName, runtimeAppId, runtimeAppId, userAccess, decrypt);
+			hydrationPlan.push({
+				key: `${appId}::${tableName}::${valueField}`,
+				appId,
+				tableName,
+				valueField,
+				values: Array.from(missing),
+			});
+		});
+
+		if (hydrationPlan.length === 0) return;
+
+		const signature = hydrationPlan
+			.map((item) => `${item.key}::${item.values.slice().sort().join(",")}`)
+			.sort()
+			.join("|");
+		if (signature === lastComboHydrationSigRef.current) return;
+		lastComboHydrationSigRef.current = signature;
+
+		let cancelled = false;
+		void (async () => {
+			for (const item of hydrationPlan) {
+				if (cancelled) return;
+				try {
+					const rows = await fetchComboRowsByValues(item.appId, item.tableName, item.valueField, item.values);
+					if (rows.length > 0) {
+						mergeTableRows(item.tableName, rows as Row[], { app_id: item.appId });
+					}
+				} catch {
+					// best-effort combo hydration
+				}
+			}
+			if (!cancelled) setDatabaseVersion((v) => v + 1);
+		})();
+
+		return () => {
+			cancelled = true;
+		};
+	}, [
+		data,
+		selectEnums,
+		comboDatabaseSignature,
+		comboPrefetchBusy,
+		hasTableName,
+		isDetailGrid,
+		m_configs.table,
+		database,
+		menuById,
+		decrypt,
+		runtimeAppId,
+		userAccess,
+		createSeftContext,
+		mergeTableRows,
+	]);
+
 	// Map backend fields to ProColumns with f_types rules
 	const baseColumns: ProColumns<Row>[] = useMemo(() => {
 		const shown = (m_configs.table || [])
@@ -2189,7 +2323,7 @@ export function CsmDynamicGrid({
 			const col: ProColumns<Row> = {
 				title: headerText,
 				dataIndex: f.f_name,
-				key: f.f_name,
+				key: isSelect || isMultiSelect ? `${f.f_name}::${comboDatabaseSignature}` : f.f_name,
 				width: resolveConfiguredColumnWidth(f),
 				align: resolvedAlign ?? (isNumber ? "right" : "left"),
 				// Add responsive property to hide less important columns on mobile
@@ -2400,12 +2534,7 @@ export function CsmDynamicGrid({
 			}
 
 			if (isNumber) {
-				const decimals = Number((f as any).f_dec ?? 0);
-				col.render = (_dom, entity) => {
-					const raw = entity[f.f_name];
-					if (raw == null || raw === "") return "";
-					return formatLocalizedNumber(raw, numberLocale, Number.isFinite(decimals) && decimals > 0 ? decimals : 0);
-				};
+				col.render = (_dom, entity) => formatGridNumberCell(entity[f.f_name], numberLocale, f);
 			}
 
 			if (isDate) {
@@ -2752,7 +2881,7 @@ export function CsmDynamicGrid({
 				};
 			}
 
-			if (f.f_format && !isImage && !isPassword && !isRichText) {
+			if (f.f_format && !isImage && !isPassword && !isRichText && !isNumber && !isSelect && !isMultiSelect && !isDate && !isDateTime && !isTime) {
 				const fmt = f.f_format;
 				col.render = (dom, entity) => {
 					const val = entity[f.f_name];
@@ -2769,7 +2898,7 @@ export function CsmDynamicGrid({
 			return col;
 		});
 		return cols;
-	}, [m_configs.table, selectEnums, i18n.language, numberLocale, t, menuById, database, decrypt, runtimeAppId, context, m_configs]);
+	}, [m_configs.table, selectEnums, i18n.language, numberLocale, t, menuById, database, decrypt, runtimeAppId, context, m_configs, comboDatabaseSignature]);
 
   // Apply datacolumntemplate trigger (mutates columns)
 	const columns = useMemo<ProColumns<Row>[]>(() => {
@@ -2815,7 +2944,7 @@ export function CsmDynamicGrid({
 
 				const minRaw = Number((field as any).f_min ?? (field as any).min);
 				const maxRaw = Number((field as any).f_max ?? (field as any).max);
-				const decimals = Number((field as any).f_dec ?? 0);
+				const decimals = resolveFieldDecimalPlaces(field);
 				const typeTokens = types.split(/[\s,;|]+/).filter(Boolean);
 				const isNumberField = /price|number|int|float|double|money|currency/.test(types);
 						const isSelectField = isComboLikeType(types);
@@ -2827,8 +2956,8 @@ export function CsmDynamicGrid({
 				if (isNumberField) {
 					col.fieldProps = {
 						...(col.fieldProps as Record<string, any> || {}),
-						precision: Number.isFinite(decimals) && decimals > 0 ? decimals : 0,
-						formatter: (value: any) => formatLocalizedNumber(value, numberLocale, Number.isFinite(decimals) && decimals > 0 ? decimals : 0),
+						precision: decimals,
+						formatter: (value: any) => formatGridNumberCell(value, numberLocale, field),
 						parser: (value: any) => {
 							const parsed = parseFlexibleNumberInput(value, numberLocale);
 							return Number.isFinite(parsed) ? String(parsed) : "";
@@ -3019,7 +3148,24 @@ export function CsmDynamicGrid({
 		[storeMasterRows],
 	);
 
+	const tableStoreMeta = useMemo(() => {
+		if (isDetailGrid || !hasTableName) return null;
+		return database[tableName];
+	}, [database, tableName, hasTableName, isDetailGrid]);
+
+	const configuredPageSize = Number(m_configs.table_pagesize) || GRID_SERVER_DEFAULT_PAGE_SIZE;
+	const canServerPage = !isDetailGrid
+		&& hasTableName
+		&& !m_configs.trigger?.load_db
+		&& Boolean(tableStoreMeta?.serverPaged);
+
+	const serverBaseWhere = useMemo(() => ({
+		operator: "AND" as const,
+		conditions: [{ field: "id", type: "like", value: "" }],
+	}), []);
+
 	const lastSyncedDataSignatureRef = useRef("");
+	const lastSyncedRowsRef = useRef<Row[] | null>(null);
 
 	const resolveLoadDbRows = useCallback((): Row[] | null => {
 		let loadCode = m_configs.trigger?.load_db;
@@ -3056,9 +3202,9 @@ export function CsmDynamicGrid({
 	}, [createSeftContext, database, decrypt, m_configs.trigger?.load_db]);
 
 	const syncGridRows = useCallback((nextRows: Row[]) => {
-		const signature = buildRowsSyncSignature(nextRows);
-		if (signature === lastSyncedDataSignatureRef.current) return;
-		lastSyncedDataSignatureRef.current = signature;
+		if (nextRows === lastSyncedRowsRef.current) return;
+		lastSyncedRowsRef.current = nextRows;
+		lastSyncedDataSignatureRef.current = buildRowsSyncSignature(nextRows);
 		setData(nextRows);
 	}, []);
 
@@ -3079,8 +3225,13 @@ export function CsmDynamicGrid({
 			return;
 		}
 
+		if (canServerPage) {
+			return;
+		}
+
 		if (!storeMasterRows) {
 			lastSyncedDataSignatureRef.current = "";
+			lastSyncedRowsRef.current = null;
 			void ensureTableInDatabase(tableName, runtimeAppId).catch((err) => {
 				console.warn(`[CsmDynamicGrid] Failed to auto-fetch primary table '${tableName}':`, err);
 			});
@@ -3092,6 +3243,7 @@ export function CsmDynamicGrid({
 	}, [
 		isDetailGrid,
 		hasTableName,
+		canServerPage,
 		resolveDetailRows,
 		resolveLoadDbRows,
 		storeMasterRows,
@@ -3101,11 +3253,11 @@ export function CsmDynamicGrid({
 		runtimeAppId,
 		ensureTableInDatabase,
 		comboDatabaseSignature,
-		database,
 	]);
 
 	useEffect(() => {
 		lastSyncedDataSignatureRef.current = "";
+		lastSyncedRowsRef.current = null;
 	}, [effectiveGridInstanceKey]);
 
   // filter trigger (runs on data)
@@ -3370,8 +3522,9 @@ export function CsmDynamicGrid({
 		}
 
 		if (!enableSearch || !debouncedSearchTerm.trim()) return sourceRows;
+		if (canServerPage) return sourceRows;
 		return sourceRows.filter((row) => matchesFreeSearch(row, debouncedSearchTerm));
-	}, [filtered, enableSearch, debouncedSearchTerm, derivedSearchFields, effectiveScope, fieldValueEnumMap, m_configs.table, numberLocale, userId, username, userEmail, phoneNumber, userAppId, userDeptId, userBranchId]);
+	}, [filtered, enableSearch, debouncedSearchTerm, derivedSearchFields, effectiveScope, fieldValueEnumMap, m_configs.table, numberLocale, userId, username, userEmail, phoneNumber, userAppId, userDeptId, userBranchId, canServerPage]);
 
 	// Auto-enable edit mode for newly added rows
 	useEffect(() => {
@@ -3433,13 +3586,37 @@ export function CsmDynamicGrid({
 
 	// Multi-column sort state
 	const [sorters, setSorters] = useState<{ field: string; order: 'ascend' | 'descend' }[]>([]);
-	const defaultPageSize = Number(m_configs.table_pagesize) || 10;
+	const defaultPageSize = configuredPageSize;
 	const preferClientPagination = !disablePagination;
 	const [paginationState, setPaginationState] = useState({ current: 1, pageSize: defaultPageSize });
 
+	const serverQuery = useMemo(() => buildGridServerQuery({
+		searchTerm: canServerPage ? debouncedSearchTerm : "",
+		searchFields: derivedSearchFields,
+		baseWhere: serverBaseWhere,
+		sorters: canServerPage ? sorters : [],
+	}), [canServerPage, debouncedSearchTerm, derivedSearchFields, serverBaseWhere, sorters]);
+
+	const serverPagination = useGridServerPagination({
+		enabled: canServerPage,
+		appId: runtimeAppId,
+		tableName,
+		serverQuery,
+		initialPageSize: tableStoreMeta?.pageSize ?? configuredPageSize,
+		initialRows: canServerPage ? (tableStoreMeta?.rows ?? []) : undefined,
+		initialTotal: tableStoreMeta?.totalCount,
+	});
+
+	useEffect(() => {
+		if (!canServerPage) return;
+		syncGridRows(serverPagination.rows);
+	}, [canServerPage, serverPagination.rows, syncGridRows]);
+
+	const isServerPaged = canServerPage && serverPagination.enabled;
+
 	const shouldPaginateClient = useCallback(
-		() => preferClientPagination || searchedData.length >= GRID_VIRTUAL_ROW_THRESHOLD,
-		[preferClientPagination, searchedData.length],
+		() => !isServerPaged && (preferClientPagination || searchedData.length >= GRID_VIRTUAL_ROW_THRESHOLD),
+		[preferClientPagination, searchedData.length, isServerPaged],
 	);
 
 	useEffect(() => {
@@ -3461,7 +3638,7 @@ export function CsmDynamicGrid({
 		if (sortersChanged) {
 			const applySorters = () => {
 				setSorters(nextSorters);
-				if (shouldPaginateClient()) {
+				if (shouldPaginateClient() || isServerPaged) {
 					setPaginationState((prev) => ({ ...prev, current: 1 }));
 				}
 			};
@@ -3478,10 +3655,18 @@ export function CsmDynamicGrid({
 				pageSize: pagination.pageSize || defaultPageSize,
 			});
 		}
-	}, [defaultPageSize, searchedData.length, sorters, shouldPaginateClient]);
+
+		if (isServerPaged && pagination) {
+			void serverPagination.fetchPage(
+				pagination.current || 1,
+				pagination.pageSize || defaultPageSize,
+			);
+		}
+	}, [defaultPageSize, searchedData.length, sorters, shouldPaginateClient, isServerPaged, serverPagination.fetchPage]);
 
 	// Multi-column sort logic
 	const sortedData = useMemo(() => {
+		if (canServerPage) return searchedData;
 		if (!sorters.length) return searchedData;
 		const fieldsMap = new Map<string, TableField>();
 		(m_configs.table || []).forEach(f => fieldsMap.set(f.f_name, f));
@@ -3521,7 +3706,7 @@ export function CsmDynamicGrid({
 			}
 			return 0;
 		});
-	}, [searchedData, sorters, m_configs.table, selectEnums, numberLocale]);
+	}, [searchedData, sorters, m_configs.table, selectEnums, numberLocale, canServerPage]);
 
 	useEffect(() => {
 		if (!shouldPaginateClient()) return;
@@ -3532,11 +3717,10 @@ export function CsmDynamicGrid({
 	}, [sortedData.length, shouldPaginateClient]);
 
 	const useClientPagination = shouldPaginateClient();
+	const showPagination = useClientPagination || isServerPaged || !disablePagination;
 
-	const tableDataSource = useMemo(() => {
-		if (!useClientPagination) return sortedData;
-		return paginateRows(sortedData, paginationState.current, paginationState.pageSize);
-	}, [sortedData, useClientPagination, paginationState.current, paginationState.pageSize]);
+	// Let Ant Design slice pages — manual paginateRows + ProTable caused empty/flaky cells on big data.
+	const tableDataSource = sortedData;
 
 	// Virtual scroll drops cells on large combo grids — paginate instead.
 	const enableVirtualScroll = false;
@@ -3590,7 +3774,7 @@ export function CsmDynamicGrid({
 	}, [i18n.language, sorters, sortableFieldNames]);
 
 	// Export Excel (.xlsx by default, .xls when configured) - xuất đúng thứ tự sort
-	const handleExport = () => {
+	const handleExport = async () => {
 		const exportColumns = baseColumns.filter((c) => {
 			const field = String(c.dataIndex ?? c.key ?? "").trim();
 			return field.length > 0;
@@ -3602,7 +3786,32 @@ export function CsmDynamicGrid({
 
 		const headers = exportColumns.map((c) => (typeof c.title === "string" ? c.title : String(c.key || c.dataIndex || "")));
 		const fields = exportColumns.map((c) => String(c.dataIndex ?? c.key ?? ""));
-		const bodyRows = sortedData.map((row) =>
+
+		let rowsForExport = sortedData;
+		if (isServerPaged) {
+			if (!runtimeAppId || !tableName) {
+				message.error(t("common.missingAppId"));
+				return;
+			}
+			const hide = message.loading("Đang tải toàn bộ dữ liệu để xuất...", 0);
+			try {
+				rowsForExport = await fetchAllTableRows(
+					(limit, offset) => getTableData({
+						app_id: runtimeAppId,
+						obj_name: tableName,
+						where: serverQuery.where,
+						limit,
+						offset,
+						...(serverQuery.sort.length > 0 ? { sort: serverQuery.sort } : {}),
+						fresh: true,
+					}),
+				) as Row[];
+			} finally {
+				hide();
+			}
+		}
+
+		const bodyRows = rowsForExport.map((row) =>
 			fields.map((field) => {
 				const value = row[field];
 				if (value == null) return "";
@@ -4267,14 +4476,15 @@ export function CsmDynamicGrid({
 		},
 		dataSource: tableDataSource,
 			onChange: handleTableChange,
-		pagination: disablePagination ? false : {
-			current: paginationState.current,
-			pageSize: paginationState.pageSize,
-			total: sortedData.length,
+		loading: comboPrefetchBusy || (isServerPaged && serverPagination.loading),
+		pagination: showPagination ? {
+			current: isServerPaged ? serverPagination.page : paginationState.current,
+			pageSize: isServerPaged ? serverPagination.pageSize : paginationState.pageSize,
+			total: isServerPaged ? serverPagination.total : sortedData.length,
 			showSizeChanger: true,
-			showQuickJumper: sortedData.length > paginationState.pageSize * 5,
+			showQuickJumper: (isServerPaged ? serverPagination.total : sortedData.length) > (isServerPaged ? serverPagination.pageSize : paginationState.pageSize) * 5,
 			pageSizeOptions: [...GRID_PAGE_SIZE_OPTIONS],
-		},
+		} : false,
 		virtual: enableVirtualScroll,
 		// Let BasicTable auto-height handle vertical fit inside parent; keep horizontal scroll responsive.
 		scroll: isMobile ? { x: 'auto' } : { x: 'max-content' },
@@ -4691,8 +4901,8 @@ export function CsmDynamicGrid({
 
 	children.push(
 		React.createElement(BasicTable as any, {
-			key: `table-${effectiveGridInstanceKey}-${comboDatabaseSignature}`,
-			autoHeight: useClientPagination ? sortedData.length <= GRID_VIRTUAL_ROW_THRESHOLD : true,
+			key: `table-${effectiveGridInstanceKey}`,
+			autoHeight: !useClientPagination && sortedData.length <= GRID_VIRTUAL_ROW_THRESHOLD,
 			...tableProps,
 		})
 	);

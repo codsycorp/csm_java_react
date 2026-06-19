@@ -1,4 +1,6 @@
 import { csmDecrypt } from "./CsmCrypto";
+import { getTableData } from "./CsmApi";
+import { normalizeTableRows } from "./grid-bigdata-policy";
 import {
 	getUserAccessContext,
 	normalizePlainAppId,
@@ -627,6 +629,91 @@ export function resolveComboRowFieldValue(
   return direct;
 }
 
+/** Match cell value to combo enum key — handles number/string and trim. */
+export function lookupValueEnumLabel(
+  valueEnum: Record<string, { text: string }> | undefined,
+  rawValue: unknown,
+): string {
+  if (!valueEnum) return "";
+  const text = String(rawValue ?? "").trim();
+  if (!text) return "";
+
+  const direct = valueEnum[text]?.text;
+  if (direct) return direct;
+
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) {
+    const fromNum = valueEnum[String(numeric)]?.text ?? valueEnum[numeric as any]?.text;
+    if (fromNum) return fromNum;
+  }
+
+  const lower = text.toLowerCase();
+  for (const [key, item] of Object.entries(valueEnum)) {
+    if (String(key).trim().toLowerCase() === lower) return item.text;
+  }
+  return "";
+}
+
+function comboRowMatchesValue(
+  row: Record<string, any>,
+  valueKey: string,
+  valueFields: string[],
+): boolean {
+  const normalizedKey = String(valueKey).trim();
+  if (!normalizedKey) return false;
+
+  const idVal = String(resolveComboRowFieldValue(row, "id") ?? "").trim();
+  if (idVal && idVal === normalizedKey) return true;
+
+  for (const field of valueFields) {
+    const cell = String(resolveComboRowFieldValue(row, field) ?? "").trim();
+    if (cell && cell === normalizedKey) return true;
+  }
+  return false;
+}
+
+/** Fetch combo lookup rows for visible cell values (big-data safe — eq OR batch). */
+export async function fetchComboRowsByValues(
+  appId: string,
+  tableName: string,
+  valueField: string,
+  values: string[],
+): Promise<Record<string, unknown>[]> {
+  const unique = Array.from(new Set(values.map((v) => String(v).trim()).filter(Boolean))).slice(0, 80);
+  if (!appId || !tableName || !valueField || unique.length === 0) return [];
+
+  const response = await getTableData<Record<string, unknown>>({
+    app_id: appId,
+    obj_name: tableName,
+    where: unique.length === 1
+      ? { field: valueField, type: "eq", value: unique[0] }
+      : {
+        operator: "OR",
+        conditions: unique.map((value) => ({ field: valueField, type: "eq", value })),
+      },
+    limit: unique.length,
+    fresh: true,
+  });
+
+  return normalizeTableRows(response as Record<string, unknown>) as Record<string, unknown>[];
+}
+
+export function resolveComboValueField(
+  field: { f_grid_fields?: unknown; f_cbo_query?: string; f_name?: string },
+  menuById?: Map<string, any>,
+  options: {
+    decrypt?: (s: string) => string;
+    evalContext?: ComboGridEvalContext;
+  } = {},
+): string {
+  const gridConfig = resolveFieldGridComboConfig(field, options);
+  if (gridConfig) {
+    const gridFields = parseFieldGridComboFields(gridConfig.f_grid_fields);
+    if (gridFields.length > 0) return gridFields[0];
+  }
+  return "id";
+}
+
 export function resolveQueryRowComboLabel(
   row: any,
   valueField: string,
@@ -887,7 +974,7 @@ export function resolveComboCellDisplayLabel(
 ): string {
   const valueKey = String(rawValue ?? "").trim();
   if (!valueKey) return "";
-  const fromEnum = valueEnum?.[valueKey]?.text;
+  const fromEnum = lookupValueEnumLabel(valueEnum, rawValue);
   if (fromEnum) return fromEnum;
   if (["group_id", "permissionGroups"].includes(fieldName)) {
     return resolveRoleComboLabel(valueKey, database) || valueKey;
@@ -910,7 +997,7 @@ export function resolveGridComboCellLabel(
   const valueKey = String(rawValue ?? "").trim();
   if (!valueKey) return "";
 
-  const fromEnum = valueEnum?.[valueKey]?.text;
+  const fromEnum = lookupValueEnumLabel(valueEnum, rawValue);
   if (fromEnum) return fromEnum;
 
   const gridConfig = resolveFieldGridComboConfig(field, options);
@@ -920,10 +1007,8 @@ export function resolveGridComboCellLabel(
     const tableName = resolveFieldGridComboTableName(mergedField, menuById);
     if (tableName && gridFields.length > 0) {
       const rows = getComboTableRows(database, tableName);
-      const matched = rows.find((row) => {
-        if (String(row?.id ?? "").trim() === valueKey) return true;
-        return gridFields.some((gridField) => String(row?.[gridField] ?? "").trim() === valueKey);
-      });
+      const valueFields = ["id", ...gridFields];
+      const matched = rows.find((row) => comboRowMatchesValue(row, valueKey, valueFields));
       if (matched) return formatGridComboDisplayLabel(matched, gridFields);
     }
   }

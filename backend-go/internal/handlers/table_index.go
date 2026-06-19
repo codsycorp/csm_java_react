@@ -35,11 +35,11 @@ func (h *TableHandler) handleIndexTableOperation(
 			if ov, ok := params["offset"].(float64); ok {
 				offset = int(ov)
 			}
-			filterResult = h.rm.FilterWithPagination(appID, "index", filter, "", offset, int(v))
+			filterResult = h.rm.FilterWithPagination(appID, "index", filter, "", offset, int(v), parseSortSpecs(params))
 		}
 	}
 	if filterResult == nil && (params["take"] != nil || cursor != "") {
-		filterResult = h.rm.FilterWithPagination(appID, "index", filter, cursor, 0, take)
+		filterResult = h.rm.FilterWithPagination(appID, "index", filter, cursor, 0, take, parseSortSpecs(params))
 	}
 	if filterResult == nil {
 		filterResult = h.rm.Filter(appID, "index", filter)

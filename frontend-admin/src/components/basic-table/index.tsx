@@ -134,14 +134,16 @@ export function BasicTable<
 		} satisfies TablePaginationConfig;
 	};
 
+	const { rowKey: rowKeyProp, ...restProps } = props;
+
 	return (
 		<div className="h-full" ref={tableWrapperRef}>
 			<ProTable
 				key={`basic-table-${language}`}
 				cardBordered
-				rowKey={(record, index) => (record as any)?.id || `row-${index}`}
+				rowKey={rowKeyProp ?? ((record, index) => (record as any)?.id || `row-${index}`)}
 				dateFormatter="string"
-				{...props}
+				{...restProps}
 				search={
 					props.search === false
 						? false

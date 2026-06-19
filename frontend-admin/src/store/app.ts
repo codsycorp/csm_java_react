@@ -2,7 +2,16 @@ import { create } from "zustand";
 import { getAuthStorage } from "#src/utils/browser-client-id";
 
 type Row = Record<string, any>;
-export type Database = Record<string, { id: string; fields?: any; fieldsPK?: string[]; rows: Row[]; app_id?: string }>;
+export type Database = Record<string, {
+	id?: string
+	fields?: any
+	fieldsPK?: string[]
+	rows: Row[]
+	app_id?: string
+	totalCount?: number
+	serverPaged?: boolean
+	pageSize?: number
+}>;
 
 import { isPlainTenantAppId } from "#src/utils/user-app-id";
 
@@ -73,6 +82,7 @@ interface AppAction {
 	 * @en Set single table data
 	 */
 	setTableData: (tableName: string, data: Database[string]) => void
+	mergeTableRows: (tableName: string, rows: Row[], meta?: Partial<Database[string]>) => void
 	/**
 	 * @zh 获取数据库
 	 * @en Get database
@@ -116,6 +126,33 @@ export const useAppStore = create<AppState & AppAction>((set, get) => ({
 				[tableName]: data,
 			},
 		}));
+	},
+
+	mergeTableRows: (tableName: string, rows: Row[], meta?: Partial<Database[string]>) => {
+		if (!tableName || !Array.isArray(rows) || rows.length === 0) return;
+		set((state) => {
+			const existing = state.database[tableName];
+			const existingRows = Array.isArray(existing?.rows) ? existing.rows : [];
+			const merged = new Map<string, Row>();
+			const rowKey = (row: Row) => {
+				const id = row?.id;
+				if (id != null && String(id).trim() !== "") return String(id);
+				return JSON.stringify(row);
+			};
+			existingRows.forEach((row) => merged.set(rowKey(row), row));
+			rows.forEach((row) => merged.set(rowKey(row), row));
+			return {
+				database: {
+					...state.database,
+					[tableName]: {
+						...(existing || {}),
+						...(meta || {}),
+						id: tableName,
+						rows: Array.from(merged.values()),
+					},
+				},
+			};
+		});
 	},
 
 	getDatabase: (): Database => {

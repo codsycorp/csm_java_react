@@ -1,6 +1,7 @@
 package data
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
@@ -119,6 +120,32 @@ func (s *eqIndexStore) keys(appID, tableName, fieldName, fieldValue string, limi
 		}
 	}
 	return out
+}
+
+func (s *eqIndexStore) listTablePebbleKeys(appID, tableName string, offset, limit int) ([]string, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit <= 0 {
+		limit = maxFilterTake
+	}
+	set := s.tableKeys[tableLookupKey(appID, tableName)]
+	total := len(set)
+	if total == 0 {
+		return nil, 0
+	}
+	keys := make([]string, 0, len(set))
+	for pebbleKey := range set {
+		keys = append(keys, pebbleKey)
+	}
+	sort.Strings(keys)
+	if offset >= len(keys) {
+		return nil, total
+	}
+	end := offset + limit
+	if end > len(keys) {
+		end = len(keys)
+	}
+	return keys[offset:end], total
 }
 
 func (s *eqIndexStore) countTableKeys(appID, tableName string) int {

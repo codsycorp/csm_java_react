@@ -57,6 +57,41 @@ func (rm *RecordManager) paginatePebbleKeys(
 	return result
 }
 
+func (rm *RecordManager) filterWithEqIndexTableList(
+	appID, tableName string,
+	filter model.SearchFilter,
+	offset, take int,
+) map[string]any {
+	if rm.eqIndex == nil {
+		return nil
+	}
+	keys, total := rm.eqIndex.listTablePebbleKeys(appID, tableName, offset, take)
+	if total == 0 {
+		return map[string]any{"rows": []any{}, "data": []any{}, "totalCount": 0}
+	}
+	records := rm.loadRecordsByPebbleKeys(keys, filter)
+	var payloadBytes int64
+	slice := make([]any, 0, len(records))
+	truncated := false
+	for _, r := range records {
+		var stop bool
+		slice, stop = appendRowWithinBudget(slice, r, &payloadBytes)
+		if stop {
+			truncated = true
+			break
+		}
+	}
+	result := map[string]any{
+		"rows":       slice,
+		"data":       slice,
+		"totalCount": total,
+	}
+	if truncated {
+		result["truncated"] = true
+	}
+	return result
+}
+
 func (rm *RecordManager) filterWithPaginationScan(
 	appID, tableName string,
 	filter model.SearchFilter,
@@ -112,6 +147,11 @@ func (rm *RecordManager) filterWithPaginationScan(
 				page = append(page, record)
 				lastKey = rk
 			}
+		} else if isUnfilteredListQuery(filter) {
+			if meta := rm.readTableRowMetaCount(appID, tableName); meta > 0 {
+				total = meta
+			}
+			return errScanStop
 		}
 		return nil
 	})
@@ -130,6 +170,36 @@ func (rm *RecordManager) filterWithPaginationScan(
 	}
 	if len(page) == take && lastKey != "" {
 		result["nextCursor"] = lastKey
+	}
+	return result
+}
+
+func (rm *RecordManager) filterWithSortPagination(
+	appID, tableName string,
+	filter model.SearchFilter,
+	offset, take int,
+	sortSpecs []model.SortSpec,
+) map[string]any {
+	records := rm.collectFilteredRecords(appID, tableName, filter)
+	total := len(records)
+	sortTruncated := false
+	if total > maxSortMaterialize {
+		records = records[:maxSortMaterialize]
+		sortTruncated = true
+	}
+	SortRecords(records, sortSpecs)
+	page := paginateRecordMaps(records, offset, take)
+	slice := make([]any, 0, len(page))
+	for _, r := range page {
+		slice = append(slice, r)
+	}
+	result := map[string]any{
+		"rows":       slice,
+		"data":       slice,
+		"totalCount": total,
+	}
+	if sortTruncated {
+		result["sortTruncated"] = true
 	}
 	return result
 }

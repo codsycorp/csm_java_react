@@ -75,7 +75,7 @@ func (s *CrmService) GetCustomers(appID, status, search string, offset, limit in
 	if status != "" {
 		filter = model.EqFilter("status", status)
 	}
-	page := s.rm.FilterWithPagination(appID, crmCustomers, filter, "", offset, limit)
+	page := s.rm.FilterWithPagination(appID, crmCustomers, filter, "", offset, limit, nil)
 	rows := rowsAsMaps(page["rows"])
 	if search == "" {
 		return rows

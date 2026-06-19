@@ -24,6 +24,34 @@ type ssrCacheEntry struct {
 
 var ssrCache sync.Map
 
+type sitemapCacheEntry struct {
+	body    string
+	expires time.Time
+}
+
+var sitemapCache sync.Map
+
+const sitemapCacheTTL = 5 * time.Minute
+
+// CachedBuildSitemap avoids rebuilding sitemap XML on every crawler hit.
+func CachedBuildSitemap(rm *data.RecordManager, host string) string {
+	hostKey := strings.TrimSpace(host)
+	if hostKey == "" {
+		hostKey = "default"
+	}
+	if entry, ok := sitemapCache.Load(hostKey); ok {
+		if ce, ok := entry.(*sitemapCacheEntry); ok && time.Now().Before(ce.expires) {
+			return ce.body
+		}
+	}
+	body := BuildSitemap(rm, host)
+	sitemapCache.Store(hostKey, &sitemapCacheEntry{
+		body:    body,
+		expires: time.Now().Add(sitemapCacheTTL),
+	})
+	return body
+}
+
 type SSRContext struct {
 	RM *data.RecordManager
 }
@@ -63,16 +91,26 @@ func (s seoMeta) toRouteValue() map[string]any {
 }
 
 type preprocessCtx struct {
-	Title       string
-	Description string
-	Keywords    string
-	Canonical   string
-	Image       string
-	SiteName    string
-	Logo        string
-	GSV         string
-	GTag        string
-	AppID       string
+	Title           string
+	Description     string
+	Keywords        string
+	Canonical       string
+	Image           string
+	SiteName        string
+	Logo            string
+	GSV             string
+	GTag            string
+	AppID           string
+	PageType        string // website | article
+	Author          string
+	PublishedAt     string
+	BodyHTML        string
+	Lang            string
+	PagePath        string
+	BaseURL         string
+	DefaultCategory string
+	InitialData     map[string]any
+	Categories      []any
 }
 
 func RenderPage(ctx SSRContext, uri, host, queryStr string) string {
@@ -427,18 +465,30 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		raw, err := os.ReadFile(filePath)
 		if err == nil {
 			html := string(raw)
+			ssrBody := buildSSRVisibleBody(initialData)
 			preprocessHTML(&html, &preprocessCtx{
-				Title:       pageTitle,
-				Description: pageDescription,
-				Keywords:    pageKeywords,
-				Canonical:   canonical,
-				Image:       ogImage,
-				SiteName:    baseURL,
-				Logo:        routeLogo,
-				GSV:         route.GSV,
-				GTag:        route.GTag,
-				AppID:       route.AppID,
+				Title:           pageTitle,
+				Description:     pageDescription,
+				Keywords:        pageKeywords,
+				Canonical:       canonical,
+				Image:           ogImage,
+				SiteName:        baseURL,
+				Logo:            routeLogo,
+				GSV:             route.GSV,
+				GTag:            route.GTag,
+				AppID:           route.AppID,
+				PageType:        resolveSSRPageType(initialData),
+				Author:          resolveSSRAuthor(initialData),
+				PublishedAt:     resolveSSRPublishedAt(initialData),
+				BodyHTML:        ssrBody,
+				Lang:            lang,
+				PagePath:        normalizedPath,
+				BaseURL:         baseURL,
+				DefaultCategory: defaultServiceCode,
+				InitialData:     initialData,
+				Categories:      categories,
 			})
+			injectSSRBodyContent(&html, ssrBody)
 			finalizeThymeleafHTML(&html, &preprocessCtx{GTag: route.GTag})
 			injectIntoHTML(&html, preload+scripts)
 			return html
@@ -1399,6 +1449,44 @@ func mapServiceCategory(row map[string]any, lang string) map[string]any {
 }
 
 func buildJSONLD(ctx *preprocessCtx) string {
+	pageType := strings.TrimSpace(ctx.PageType)
+	if pageType == "" {
+		pageType = "WebPage"
+	}
+	if strings.EqualFold(pageType, "article") {
+		jsonLD := map[string]any{
+			"@context":         "https://schema.org",
+			"@type":            "Article",
+			"headline":         ctx.Title,
+			"url":              ctx.Canonical,
+			"description":      ctx.Description,
+			"inLanguage":       "vi",
+			"mainEntityOfPage": ctx.Canonical,
+			"image":            ctx.Image,
+			"publisher": map[string]any{
+				"@type": "Organization",
+				"name":  ctx.SiteName,
+				"url":   ctx.SiteName,
+				"logo": map[string]any{
+					"@type": "ImageObject",
+					"url":   ctx.Logo,
+				},
+			},
+		}
+		if ctx.Author != "" {
+			jsonLD["author"] = map[string]any{"@type": "Person", "name": ctx.Author}
+		}
+		if ctx.PublishedAt != "" {
+			jsonLD["datePublished"] = ctx.PublishedAt
+			jsonLD["dateModified"] = ctx.PublishedAt
+		}
+		raw, err := json.MarshalIndent(jsonLD, "", "  ")
+		if err != nil {
+			return "{}"
+		}
+		return string(raw)
+	}
+
 	jsonLD := map[string]any{
 		"@context":    "https://schema.org",
 		"@type":       "WebPage",
@@ -1490,8 +1578,23 @@ func preprocessHTML(html *string, ctx *preprocessCtx) {
 	replaceOGContent(html, "twitter:description", description)
 	replaceOGContent(html, "twitter:image", image)
 
+	if strings.EqualFold(ctx.PageType, "article") {
+		replaceOGContent(html, "og:type", "article")
+	} else {
+		replaceOGContent(html, "og:type", "website")
+	}
+
 	replaceLinkHref(html, "icon", logo)
 	replaceLinkHref(html, "apple-touch-icon", logo)
+
+	lang := resolveLang(map[string]string{"hl": ctx.Lang})
+	if lang == "" {
+		lang = "vi"
+	}
+	replaceHTMLLang(html, lang)
+	replaceOGContent(html, "og:locale", localeTag(lang))
+	injectOGLocaleAlternates(html, lang)
+	injectHreflangLinks(html, buildHreflangLinks(ctx.BaseURL, ctx.PagePath))
 
 	if pos := strings.Index(*html, "<base "); pos >= 0 {
 		if endRel := strings.Index((*html)[pos:], ">"); endRel >= 0 {
@@ -1501,7 +1604,7 @@ func preprocessHTML(html *string, ctx *preprocessCtx) {
 		}
 	}
 
-	ldJSON := buildJSONLD(ctx)
+	ldJSON := buildStructuredDataGraph(ctx)
 	replaceScriptBlock(html, "application/ld+json",
 		"<script type=\"application/ld+json\">\n"+ldJSON+"\n</script>")
 
@@ -1553,6 +1656,84 @@ func buildScripts(appConfig, initialData map[string]any, categories any, ssrRout
 		scripts += fmt.Sprintf(`<script>window.__SSR_DEFAULT_CATEGORY__=%q;</script>`, defaultServiceCode)
 	}
 	return scripts
+}
+
+func resolveSSRPageType(initialData map[string]any) string {
+	if detail, ok := initialData["serviceDetail"].(map[string]any); ok && detail != nil {
+		return "article"
+	}
+	return "website"
+}
+
+func resolveSSRAuthor(initialData map[string]any) string {
+	detail, ok := initialData["serviceDetail"].(map[string]any)
+	if !ok || detail == nil {
+		return ""
+	}
+	return recordStr(detail, "author")
+}
+
+func resolveSSRPublishedAt(initialData map[string]any) string {
+	detail, ok := initialData["serviceDetail"].(map[string]any)
+	if !ok || detail == nil {
+		return ""
+	}
+	return extractDateOnly(resolveLastmodFromRow(detail))
+}
+
+func stripHTMLTags(input string) string {
+	var b strings.Builder
+	inTag := false
+	for _, r := range input {
+		switch r {
+		case '<':
+			inTag = true
+		case '>':
+			inTag = false
+		default:
+			if !inTag {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func buildSSRVisibleBody(initialData map[string]any) string {
+	detail, ok := initialData["serviceDetail"].(map[string]any)
+	if !ok || detail == nil {
+		return ""
+	}
+	title := htmlEsc(recordStr(detail, "title"))
+	if title == "" {
+		title = htmlEsc(recordStr(detail, "name"))
+	}
+	excerpt := htmlEsc(recordStr(detail, "excerpt"))
+	if excerpt == "" {
+		excerpt = htmlEsc(recordStr(detail, "meta_description"))
+	}
+	if excerpt == "" {
+		content := stripHTMLTags(recordStr(detail, "content"))
+		if len(content) > 320 {
+			content = content[:320] + "…"
+		}
+		excerpt = htmlEsc(content)
+	}
+	if title == "" && excerpt == "" {
+		return ""
+	}
+	return `<main id="ssr-fallback" role="main"><article><h1>` + title + `</h1><p>` + excerpt + `</p></article></main>`
+}
+
+func injectSSRBodyContent(html *string, bodyHTML string) {
+	if strings.TrimSpace(bodyHTML) == "" {
+		return
+	}
+	lower := strings.ToLower(*html)
+	marker := `<div id="root"`
+	if pos := strings.Index(lower, marker); pos >= 0 {
+		*html = (*html)[:pos] + bodyHTML + (*html)[pos:]
+	}
 }
 
 func injectIntoHTML(html *string, scripts string) {

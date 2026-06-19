@@ -1999,24 +1999,6 @@ export default function WuServiceDetail() {
             </>
           )}
         </main>
-        {/* SEO Breadcrumb structured data */}
-        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify({
-          "@context": "https://schema.org",
-          "@type": "BreadcrumbList",
-          "itemListElement": (() => {
-            const items = [
-              { "@type": "ListItem", "position": 1, "name": t('website.menu.home', 'Trang chủ'), "item": `${window.location.origin}/` },
-              { "@type": "ListItem", "position": 2, "name": t('website.menu.real_estate', 'Bất động sản'), "item": `${window.location.origin}/bat-dong-san` }
-            ];
-            if (currentCategory && currentCategory.title) {
-              items.push({ "@type": "ListItem", "position": items.length + 1, "name": currentCategory.title, "item": `${window.location.origin}/${currentCategory.key}` });
-            }
-            if (postTitle) {
-              items.push({ "@type": "ListItem", "position": items.length + 1, "name": postTitle, "item": window.location.href });
-            }
-            return items;
-          })()
-        }) }} />
       </div>
     </WebsiteLayout>
   );

@@ -2649,21 +2649,6 @@ const WuServicesPage: React.FC = () => {
           renderTabBar={CustomTabBar}
         />
       </main>
-      {/* SEO Breadcrumb structured data */}
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify({
-        "@context": "https://schema.org",
-        "@type": "BreadcrumbList",
-        "itemListElement": (() => {
-          const items = [
-            { "@type": "ListItem", "position": 1, "name": t('website.menu.home', 'Trang chủ'), "item": `${window.location.origin}/` },
-            { "@type": "ListItem", "position": 2, "name": t('website.menu.services', 'Dịch vụ'), "item": `${window.location.origin}/${DEFAULT_CATEGORY}` }
-          ];
-          if (activeCategory && activeCategory.title && activeCategory.key !== DEFAULT_CATEGORY) {
-            items.push({ "@type": "ListItem", "position": items.length + 1, "name": activeCategory.title, "item": `${window.location.origin}/${activeCategory.key}` });
-          }
-          return items;
-        })()
-      }) }} />
     </WebsiteLayout>
   );
 };

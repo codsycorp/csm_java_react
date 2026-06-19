@@ -12,10 +12,10 @@ func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, u
 
 	switch uri {
 	case "/robots.txt":
-		writeText(w, http.StatusOK, "text/plain; charset=utf-8", GenerateRobotsTxt(host))
+		writeTextCached(w, http.StatusOK, "text/plain; charset=utf-8", GenerateRobotsTxt(host), "public, max-age=3600")
 		return
 	case "/sitemap.xml":
-		writeText(w, http.StatusOK, "application/xml; charset=utf-8", BuildSitemap(st.RecordManager, host))
+		writeTextCached(w, http.StatusOK, "application/xml; charset=utf-8", CachedBuildSitemap(st.RecordManager, host), "public, max-age=300")
 		return
 	case "/feed.xml":
 		ServeFeedXML(st, w, host)
@@ -84,7 +84,7 @@ func HandleWebPath(st *state.AppState, w http.ResponseWriter, r *http.Request, u
 
 	ctx := SSRContext{RM: st.RecordManager}
 	html := RenderPage(ctx, uri, host, query)
-	writeText(w, http.StatusOK, "text/html; charset=utf-8", html)
+	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300")
 }
 
 func ServeStatic(st *state.AppState, w http.ResponseWriter, r *http.Request, uri string) {
@@ -94,5 +94,5 @@ func ServeStatic(st *state.AppState, w http.ResponseWriter, r *http.Request, uri
 func ServeSSR(st *state.AppState, w http.ResponseWriter, r *http.Request, uri, host, query string) {
 	ctx := SSRContext{RM: st.RecordManager}
 	html := RenderPage(ctx, uri, host, query)
-	writeText(w, http.StatusOK, "text/html; charset=utf-8", html)
+	writeTextCached(w, http.StatusOK, "text/html; charset=utf-8", html, "public, max-age=60, stale-while-revalidate=300")
 }

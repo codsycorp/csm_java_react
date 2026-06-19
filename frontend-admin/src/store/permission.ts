@@ -18,6 +18,8 @@ import { resolveNavigationAppId } from "#src/utils/user-app-id";
 import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 import { normalizeMenuLabel } from "#src/utils";
 import { getTableData, type Where } from "#src/components/csm-grid/CsmApi";
+import { collectComboTableFetchRequests } from "#src/components/csm-grid/combo-utils";
+import { GRID_SERVER_MAX_PAGE_SIZE, loadPrimaryTablePage } from "#src/components/csm-grid/grid-bigdata-policy";
 
 function stripMenuPrefixFromLabel(label: string): string {
 	return normalizeMenuLabel(label);
@@ -285,47 +287,74 @@ function moveSystemMenuLast(items: MenuItemType[]): MenuItemType[] {
 	return [...otherMenus, ...systemMenus];
 }
 
-async function loadDatabaseFromMenus(menuTree: ApiMenuItemType[], appId: string): Promise<void> {
-	const tableNames = new Set<string>();
-
-	function collectTableNames(menus: ApiMenuItemType[]) {
-		menus.forEach(menu => {
-			if (menu.table_name) {
-				const tables = menu.table_name.split(/,/g).filter(t => t.trim() !== "");
-				tables.forEach(t => tableNames.add(t.trim()));
-			}
-			if (menu.children && menu.children.length > 0) {
-				collectTableNames(menu.children);
-			}
+function buildMenuByIdMap(menuTree: ApiMenuItemType[]): Map<string, ApiMenuItemType> {
+	const map = new Map<string, ApiMenuItemType>();
+	const walk = (menus: ApiMenuItemType[]) => {
+		menus.forEach((menu) => {
+			if (menu.id) map.set(String(menu.id), menu);
+			if (menu.children?.length) walk(menu.children);
 		});
-	}
+	};
+	walk(menuTree);
+	return map;
+}
 
-	collectTableNames(menuTree);
+/** Preload combo lookup tables only — never bulk-load every menu primary table at login. */
+async function loadComboLookupsFromMenus(menuTree: ApiMenuItemType[], appId: string): Promise<void> {
+	const menuById = buildMenuByIdMap(menuTree);
+	const seen = new Set<string>();
+	const requests: Array<{ tableName: string; appId: string; whereClause?: Where }> = [];
+
+	const walk = (menus: ApiMenuItemType[]) => {
+		menus.forEach((menu) => {
+			if (Array.isArray(menu.table) && menu.table.length > 0) {
+				collectComboTableFetchRequests(menu.table, {
+					fallbackAppId: appId,
+					menuById,
+				}).forEach((req) => {
+					const key = `${req.appId}::${req.tableName}`;
+					if (seen.has(key)) return;
+					seen.add(key);
+					requests.push(req);
+				});
+			}
+			if (menu.children?.length) walk(menu.children);
+		});
+	};
+	walk(menuTree);
 
 	const defaultWhere: Where = {
 		operator: "AND",
-		conditions: [{ field: "id", type: "like", value: "" }]
+		conditions: [{ field: "id", type: "like", value: "" }],
 	};
 
-	const loadPromises = Array.from(tableNames).map(async (tableName) => {
+	await Promise.all(requests.map(async (req) => {
 		try {
-			const res = await getTableData<any>({
-				app_id: appId,
-				obj_name: tableName,
-				where: defaultWhere,
-			});
+			const load = await loadPrimaryTablePage(
+				(limit, offset) => getTableData<any>({
+					app_id: req.appId,
+					obj_name: req.tableName,
+					where: req.whereClause || defaultWhere,
+					limit,
+					offset,
+					fresh: true,
+				}),
+				{ pageSize: GRID_SERVER_MAX_PAGE_SIZE, threshold: GRID_SERVER_MAX_PAGE_SIZE },
+			);
 
-			const rows = res?.rows || [];
-			useAppStore.getState().setTableData(tableName, {
-				id: tableName,
-				rows,
-				app_id: appId,
+			useAppStore.getState().setTableData(req.tableName, {
+				id: req.tableName,
+				rows: load.rows,
+				fieldsPK: load.fieldsPK,
+				totalCount: load.totalCount,
+				serverPaged: load.serverPaged,
+				pageSize: load.pageSize,
+				app_id: req.appId,
 			});
-		} catch (error) {
+		} catch {
+			// Combo preload is best-effort; grid will fetch on demand.
 		}
-	});
-
-	await Promise.all(loadPromises);
+	}));
 }
 
 export function transformApiMenusToLayoutMenus(apiMenus: (ApiMenuItemType & { children?: MenuItemType[] })[]): MenuItemType[] {
@@ -522,7 +551,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					firstAutoCode = firstAutoCodeFromApiMenus;
 				}
 
-				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(() => {
+				loadComboLookupsFromMenus(apiMenuList, effectiveAppId).catch(() => {
 				});
 
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
@@ -675,7 +704,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				if (!firstAutoCode && firstAutoCodeFromApiMenus) {
 					firstAutoCode = firstAutoCodeFromApiMenus;
 				}
-				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(() => {
+				loadComboLookupsFromMenus(apiMenuList, effectiveAppId).catch(() => {
 				});
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
 				const sanitizedApiMenus = isAdmin

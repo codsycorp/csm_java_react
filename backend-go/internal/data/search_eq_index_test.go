@@ -76,7 +76,7 @@ func TestFilterWithPaginationEmptyFilterWhenIndexComplete(t *testing.T) {
 	}
 	rm.markSearchIndexComplete(appID, table, 3, 3)
 
-	page := rm.FilterWithPagination(appID, table, model.SearchFilter{}, "", 0, 10)
+	page := rm.FilterWithPagination(appID, table, model.SearchFilter{}, "", 0, 10, nil)
 	rows, _ := page["rows"].([]any)
 	if len(rows) != 3 {
 		t.Fatalf("empty filter with complete index must scan Pebble, got %d rows", len(rows))
@@ -128,7 +128,7 @@ func TestFilterWithPaginationScan(t *testing.T) {
 		}, []string{"id"})
 	}
 
-	page := rm.FilterWithPagination(appID, table, model.SearchFilter{}, "", 0, 2)
+	page := rm.FilterWithPagination(appID, table, model.SearchFilter{}, "", 0, 2, nil)
 	rows, _ := page["rows"].([]any)
 	if len(rows) != 2 {
 		t.Fatalf("expected 2 rows, got %d", len(rows))

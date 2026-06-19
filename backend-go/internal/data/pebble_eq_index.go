@@ -270,6 +270,61 @@ func (s *pebbleEqIndexStore) keys(appID, tableName, fieldName, fieldValue string
 	return out
 }
 
+func parsePebbleKeyFromReverseKey(key []byte) string {
+	s := string(key)
+	if !strings.HasPrefix(s, eqIndexReversePrefix) {
+		return ""
+	}
+	rest := strings.TrimPrefix(s, eqIndexReversePrefix)
+	if i := strings.Index(rest, eqIndexKeySep); i >= 0 {
+		return rest[:i]
+	}
+	return rest
+}
+
+func (s *pebbleEqIndexStore) listTablePebbleKeys(appID, tableName string, offset, limit int) ([]string, int) {
+	if limit <= 0 {
+		limit = maxFilterTake
+	}
+	db, err := s.indexDB(appID, tableName)
+	if err != nil {
+		return nil, 0
+	}
+	total := s.readMetaCount(db)
+	if total == 0 {
+		return nil, 0
+	}
+
+	iter, err := db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte(eqIndexReversePrefix),
+		UpperBound: append([]byte(eqIndexReversePrefix), 0xff),
+	})
+	if err != nil {
+		return nil, total
+	}
+	defer iter.Close()
+
+	out := make([]string, 0, limit)
+	skipped := 0
+	var lastPebbleKey string
+	for valid := iter.First(); valid; valid = iter.Next() {
+		pk := parsePebbleKeyFromReverseKey(iter.Key())
+		if pk == "" || pk == lastPebbleKey {
+			continue
+		}
+		lastPebbleKey = pk
+		if skipped < offset {
+			skipped++
+			continue
+		}
+		out = append(out, pk)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, total
+}
+
 func (s *pebbleEqIndexStore) countTableKeys(appID, tableName string) int {
 	db, err := s.indexDB(appID, tableName)
 	if err != nil {

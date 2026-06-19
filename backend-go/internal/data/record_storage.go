@@ -189,6 +189,27 @@ func (rm *RecordManager) adjustMetaCount(db *pebble.DB, delta int64) {
 	_ = db.Set([]byte("__meta_count"), []byte(strconv.FormatInt(next, 10)), pebble.Sync)
 }
 
+func (rm *RecordManager) readTableRowMetaCount(appID, tableName string) int {
+	app, table, err := rm.sanitizeTable(appID, tableName)
+	if err != nil {
+		return 0
+	}
+	db, err := rm.tableDB(app, table)
+	if err != nil {
+		return 0
+	}
+	val, closer, err := db.Get([]byte("__meta_count"))
+	if err != nil {
+		return 0
+	}
+	defer closer.Close()
+	n, err := strconv.ParseInt(string(val), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return int(n)
+}
+
 func (rm *RecordManager) deleteAtStorageKey(app, table, storageKey string) bool {
 	if strings.TrimSpace(storageKey) == "" {
 		return false

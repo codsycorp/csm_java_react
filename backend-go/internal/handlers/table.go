@@ -189,13 +189,14 @@ func (h *TableHandler) handleSelectOperation(out map[string]any, params map[stri
 	if cursor == "" {
 		cursor, _ = params["cursor"].(string)
 	}
+	offset := 0
+	if ov, ok := params["offset"].(float64); ok && int(ov) >= 0 {
+		offset = int(ov)
+	}
 
 	var dataResult map[string]any
-	if params["take"] != nil || params["lastkey"] != nil || params["cursor"] != nil || params["limit"] != nil {
-		dataResult = h.rm.FilterWithPagination(appID, table, filter, cursor, 0, take)
-	} else {
-		dataResult = h.rm.Filter(appID, table, filter)
-	}
+	// Always paginate — never load full table into API response (big-data safety).
+	dataResult = h.rm.FilterWithPagination(appID, table, filter, cursor, offset, take, parseSortSpecs(params))
 
 	rows := dataResult["rows"]
 	if rows == nil {
@@ -886,6 +887,32 @@ func buildIdentityFallbackFilter(source model.SearchFilter) *model.SearchFilter 
 	}
 	fallback := model.SearchFilter{Operator: "AND", Conditions: conditions}
 	return &fallback
+}
+
+func parseSortSpecs(params map[string]any) []model.SortSpec {
+	raw, ok := params["sort"]
+	if !ok || raw == nil {
+		return nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]model.SortSpec, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		field, _ := m["field"].(string)
+		order, _ := m["order"].(string)
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		out = append(out, model.SortSpec{Field: field, Order: order})
+	}
+	return out
 }
 
 func parsePkFields(params map[string]any) []string {

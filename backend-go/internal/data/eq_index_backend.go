@@ -9,6 +9,7 @@ type eqIndexBackend interface {
 	deletePebbleKey(pebbleKey string)
 	deleteTable(appID, tableName string)
 	keys(appID, tableName, fieldName, fieldValue string, limit int) []string
+	listTablePebbleKeys(appID, tableName string, offset, limit int) ([]string, int)
 	countTableKeys(appID, tableName string) int
 	close()
 }

@@ -1,5 +1,6 @@
 import { normalizeMenuRuntimeConfig, isLineItemsRuntimeMenu } from "#src/components/csm-crm/crm-config";
 import { createTableStruct, type CreateTableStruct, getTableData } from "#src/components/csm-grid/CsmApi";
+import { loadPrimaryTablePage, GRID_SERVER_DEFAULT_PAGE_SIZE } from "#src/components/csm-grid/grid-bigdata-policy";
 import { ensureAuthSessionReady } from "#src/utils/request/auth-session";
 // Patch lại label đa ngữ cho menuData theo i18n hiện tại
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
@@ -2018,19 +2019,25 @@ export default function AdminPage(props: any = {}) {
 
 			await ensureSystemRouteTables();
 
-			const response = await getTableData<any>({
-				app_id: (primaryTable === "csm_accounts" || primaryTable === "csm_group_members") ? "csm" : primaryTableAppId,
-				obj_name: primaryTable,
-				where: defaultFilter,
-				...(shouldRequestOnlyMySubusers(primaryTable) ? { only_my_subusers: true } : {}),
-			});
+			const menuPageSize = Number(runtimeMenu.table_pagesize) || GRID_SERVER_DEFAULT_PAGE_SIZE;
+			const primaryLoad = await loadPrimaryTablePage(
+				(limit, offset) => getTableData<any>({
+					app_id: (primaryTable === "csm_accounts" || primaryTable === "csm_group_members") ? "csm" : primaryTableAppId,
+					obj_name: primaryTable,
+					where: defaultFilter,
+					limit,
+					offset,
+					fresh: true,
+					...(shouldRequestOnlyMySubusers(primaryTable) ? { only_my_subusers: true } : {}),
+				}),
+				{ pageSize: menuPageSize },
+			);
 
-			const rawRows = response.rows || response.data || [];
-			const rows = applySubuserOwnershipFilter(primaryTable, rawRows);
-			const fieldsPK = response.fieldsPK || ["id"];
+			const fieldsPK = primaryLoad.fieldsPK;
+			const rawRows = applySubuserOwnershipFilter(primaryTable, primaryLoad.rows);
 			const deduped = Array.from(
 				new Map(
-					rows.map((row: any, index: number) => {
+					rawRows.map((row: any, index: number) => {
 						const compositeKey = (Array.isArray(fieldsPK) ? fieldsPK : ["id"])
 							.map((field: string) => `${field}:${row?.[field] == null ? "" : String(row[field])}`)
 							.join("|");
@@ -2041,7 +2048,14 @@ export default function AdminPage(props: any = {}) {
 			);
 
 			const newDatabase: Record<string, any> = {
-				[primaryTable]: { rows: deduped, fieldsPK },
+				[primaryTable]: {
+					rows: deduped,
+					fieldsPK,
+					totalCount: primaryLoad.totalCount,
+					serverPaged: primaryLoad.serverPaged,
+					pageSize: primaryLoad.pageSize,
+					app_id: primaryTableAppId,
+				},
 			};
 
 			// If multiple tables are defined, load companion tables into database (for triggers/cbo_query)
