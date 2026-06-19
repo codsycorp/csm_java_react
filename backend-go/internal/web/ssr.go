@@ -104,7 +104,6 @@ type preprocessCtx struct {
 	PageType        string // website | article
 	Author          string
 	PublishedAt     string
-	BodyHTML        string
 	Lang            string
 	PagePath        string
 	BaseURL         string
@@ -465,7 +464,6 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 		raw, err := os.ReadFile(filePath)
 		if err == nil {
 			html := string(raw)
-			ssrBody := buildSSRVisibleBody(initialData)
 			preprocessHTML(&html, &preprocessCtx{
 				Title:           pageTitle,
 				Description:     pageDescription,
@@ -480,7 +478,6 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 				PageType:        resolveSSRPageType(initialData),
 				Author:          resolveSSRAuthor(initialData),
 				PublishedAt:     resolveSSRPublishedAt(initialData),
-				BodyHTML:        ssrBody,
 				Lang:            lang,
 				PagePath:        normalizedPath,
 				BaseURL:         baseURL,
@@ -488,7 +485,6 @@ func buildSSRHTML(ctx SSRContext, uri, host, queryStr string) string {
 				InitialData:     initialData,
 				Categories:      categories,
 			})
-			injectSSRBodyContent(&html, ssrBody)
 			finalizeThymeleafHTML(&html, &preprocessCtx{GTag: route.GTag})
 			injectIntoHTML(&html, preload+scripts)
 			return html
@@ -1679,61 +1675,6 @@ func resolveSSRPublishedAt(initialData map[string]any) string {
 		return ""
 	}
 	return extractDateOnly(resolveLastmodFromRow(detail))
-}
-
-func stripHTMLTags(input string) string {
-	var b strings.Builder
-	inTag := false
-	for _, r := range input {
-		switch r {
-		case '<':
-			inTag = true
-		case '>':
-			inTag = false
-		default:
-			if !inTag {
-				b.WriteRune(r)
-			}
-		}
-	}
-	return strings.Join(strings.Fields(b.String()), " ")
-}
-
-func buildSSRVisibleBody(initialData map[string]any) string {
-	detail, ok := initialData["serviceDetail"].(map[string]any)
-	if !ok || detail == nil {
-		return ""
-	}
-	title := htmlEsc(recordStr(detail, "title"))
-	if title == "" {
-		title = htmlEsc(recordStr(detail, "name"))
-	}
-	excerpt := htmlEsc(recordStr(detail, "excerpt"))
-	if excerpt == "" {
-		excerpt = htmlEsc(recordStr(detail, "meta_description"))
-	}
-	if excerpt == "" {
-		content := stripHTMLTags(recordStr(detail, "content"))
-		if len(content) > 320 {
-			content = content[:320] + "…"
-		}
-		excerpt = htmlEsc(content)
-	}
-	if title == "" && excerpt == "" {
-		return ""
-	}
-	return `<main id="ssr-fallback" role="main"><article><h1>` + title + `</h1><p>` + excerpt + `</p></article></main>`
-}
-
-func injectSSRBodyContent(html *string, bodyHTML string) {
-	if strings.TrimSpace(bodyHTML) == "" {
-		return
-	}
-	lower := strings.ToLower(*html)
-	marker := `<div id="root"`
-	if pos := strings.Index(lower, marker); pos >= 0 {
-		*html = (*html)[:pos] + bodyHTML + (*html)[pos:]
-	}
 }
 
 func injectIntoHTML(html *string, scripts string) {

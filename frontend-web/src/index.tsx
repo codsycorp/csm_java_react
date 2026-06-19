@@ -19,6 +19,9 @@ suppressDevelopmentWarnings();
 // [PROD] Removed custom console.warn/error overrides for findDOMNode
 
 async function setupApp() {
+	// Legacy SSR injected raw HTML before #root; React owns visible UI via __INITIAL_REACT_DATA__.
+	document.getElementById("ssr-fallback")?.remove();
+
 	// App Loading
 	setupLoading();
 
