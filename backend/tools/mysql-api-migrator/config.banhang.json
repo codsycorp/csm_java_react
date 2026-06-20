@@ -24,6 +24,7 @@
     "app_id": "banhang",
     "transport": "pebble",
     "data_dir": "",
+    "menu_config_path": "../../csm_datas/public/banhang/new_system_20260424/banhang_menu_full_newsystem_20260424.json",
     "default_command": "create",
     "batch_size": 300,
     "continue_on_error": false,
@@ -31,7 +32,8 @@
     "lowercase_keys": false,
     "strict_pk_validation": true,
     "resolve_storage_key_by_id": false,
-    "id_scan_max_records": 500000
+    "id_scan_max_records": 500000,
+    "embed_master_detail_from_menu": true
   },
   "tables": [
     {
@@ -303,6 +305,27 @@
       "static_fields": {},
       "exclude_fields": [],
       "include_fields": []
+    },
+    {
+      "source_table": "knk_thekho",
+      "target_obj_name": "knk_thekho",
+      "pk_fields": ["id"],
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "knk_tonkho",
+      "target_obj_name": "knk_tonkho",
+      "pk_fields": ["id"],
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "knk_maytb",
+      "target_obj_name": "knk_maytb",
+      "pk_fields": ["id"],
+      "order_by": "id",
+      "command": "create"
     }
   ]
 }

@@ -605,13 +605,13 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
       }
       
       // Parse trigger to find required tables
+      // Supports: bang["t"], bang?.["t"], bang?.['t'], rowsOf("t"), rowsOf('t')
       const requiredTables = new Set<string>();
-      const bangMatches = reportCode.match(/bang\["([^"]+)"\]/g) || [];
-      bangMatches.forEach(match => {
-        const tableName = match.match(/bang\["([^"]+)"\]/)?.[1];
-        if (tableName) requiredTables.add(tableName);
-      });
-      
+      const bangMatches = [...reportCode.matchAll(/bang\??\.?\[["']([^"']+)["']\]/g)];
+      bangMatches.forEach(m => { if (m[1]) requiredTables.add(m[1]); });
+      const rowsOfMatches = [...reportCode.matchAll(/rowsOf\(["']([^"']+)["']\)/g)];
+      rowsOfMatches.forEach(m => { if (m[1]) requiredTables.add(m[1]); });
+
       // Check if database has required tables
       const missingTables = Array.from(requiredTables).filter(t => !database[t]);
       if (missingTables.length > 0) {

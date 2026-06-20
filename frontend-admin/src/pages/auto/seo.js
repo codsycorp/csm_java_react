@@ -1372,10 +1372,6 @@ window.__proxyAuthenticating = false; // Flag để kiểm soát quá trình xá
 window.__activeProxyContext = null; // Context proxy hiện tại dùng để gán cho từng webview
 window.__webviewProxyState = {}; // Registry trạng thái proxy theo từng webview
 window.__webviewHealthCursor = 0;
-window.__fnResetIPInProgress = false;
-window.__parallelProcessingInProgress = false;
-window.__proxyEmergencyResetScheduled = false;
-window.WEBVIEW_MAX_RELOAD_RETRIES = 3;
 
 // Cấu hình kết nối proxy
 window.PROXY_CONFIG = {
@@ -1613,49 +1609,6 @@ window.isProxyExpiredForWebview = function(webviewId) {
   return false;
 };
 
-window.isProxyUnavailable = function() {
-  if (window.__proxyNeedsReset || window.__proxyEmergencyResetScheduled || window.__fnResetIPInProgress) {
-    return true;
-  }
-  if (window.__proxyActivatedTime > 0 && Date.now() - window.__proxyActivatedTime >= window.PROXY_MAX_LIFETIME) {
-    return true;
-  }
-  return false;
-};
-
-window.shouldBlockWebviewReload = function(webviewId) {
-  if (window.isProxyUnavailable()) return true;
-  if (webviewId && window.isProxyExpiredForWebview(webviewId)) return true;
-  return false;
-};
-
-window.requestEmergencyProxyReset = function(reason) {
-  if (!window.isRunning) return;
-  if (window.__proxyEmergencyResetScheduled) {
-    console.log('[Proxy Reset] Reset khẩn cấp đã được lên lịch, bỏ qua:', reason);
-    return;
-  }
-  window.__proxyEmergencyResetScheduled = true;
-  window.__proxyNeedsReset = true;
-  window.__isProxyActive = false;
-  console.warn(`[Proxy Reset] 🚨 Yêu cầu reset khẩn cấp: ${reason}`);
-
-  const runReset = function() {
-    window.__proxyEmergencyResetScheduled = false;
-    if (!window.isRunning) return;
-    if (window.__fnResetIPInProgress) {
-      window.__proxyEmergencyResetScheduled = true;
-      setTimeout(runReset, 1000);
-      return;
-    }
-    if (typeof window.fnResetIP === 'function') {
-      window.fnResetIP(true);
-    }
-  };
-
-  setTimeout(runReset, 500);
-};
-
 // ============================================
 // WEBVIEW NETWORK HEALTH CHECK - Kiểm tra sức khỏe mạng của webview
 // ============================================
@@ -1721,7 +1674,6 @@ window.startWebviewHealthMonitor = function() {
     console.log(`🏥 [Health Monitor] Kiểm tra ${batchSize}/${activeWebviews.length} webview...`);
     
     let unhealthyCount = 0;
-    let emergencyResetTriggered = false;
     const unhealthyEvents = [];
     const finalizeBatch = () => {
       if (unhealthyCount > activeWebviews.length / 2) {
@@ -1750,10 +1702,8 @@ window.startWebviewHealthMonitor = function() {
           window.markWebviewProxyFailure(webviewId, reason);
 
           if (reason === 'proxy_expired') {
-            if (!emergencyResetTriggered) {
-              emergencyResetTriggered = true;
-              window.requestEmergencyProxyReset('proxy hết hạn (health monitor)');
-            }
+            window.__proxyNeedsReset = true;
+            window.closeWebviewDueToProxyIssue(webviewId, 'proxy hết hạn');
           } else {
             const state = window.__webviewProxyState[webviewId];
             if (state && state.failureCount >= Number(guardCfg.failureThreshold || 2)) {
@@ -2644,36 +2594,56 @@ window.shouldChangeProxyNow = function() {
 };
 
 window.forceResetProxyAfter60Minutes = function() {
-  if (window.__proxyActivatedTime <= 0) return;
-  const remainingTime = window.PROXY_MAX_LIFETIME - (Date.now() - window.__proxyActivatedTime);
+  const proxyAge = Date.now() - window.__proxyActivatedTime;
+  const remainingTime = window.PROXY_MAX_LIFETIME - proxyAge;
+  
   if (remainingTime <= 0) {
     console.log('⏰ Proxy đã chạy 60 phút, bắt đầu force reset...');
-    window.requestEmergencyProxyReset('proxy 60 phút hết hạn');
+    
+    // KHÔNG đóng tabs ở đây, để fnResetIP xử lý
+    // fnResetIP sẽ tự động đóng tất cả tabs ở đầu hàm
+    
+    // 1. Tắt proxy
+    proxy_deactivate().then(function(success) {
+      if (success) {
+        console.log('✅ Đã tắt proxy');
+        window.__isProxyActive = false;
+      }
+      
+      // 2. Reset các biến tracking và credentials
+      window.__proxyActivatedTime = 0;
+      window.__getTMProxyRequestPool = null; // Clear cache để force lấy mới
+      window.__proxyUsername = '';
+      window.__proxyPassword = '';
+      console.log('🔐 Đã clear proxy credentials');
+      
+      // 3. Chờ 2 giây rồi lấy proxy mới và tiếp tục chạy
+      setTimeout(function() {
+        console.log('🔄 Bắt đầu lấy proxy mới sau khi reset 60 phút...');
+        const queueStats = window.LinkQueueManager.getStats();
+        console.log(`📊 Queue stats: ${queueStats.processed}/${queueStats.total} đã xử lý, ${queueStats.pending} đang chờ`);
+        fnResetIP(); // fnResetIP sẽ tự động đóng tabs ở đầu hàm
+      }, 2000);
+    }).catch(function(err) {
+      console.error('❌ Lỗi khi tắt proxy:', err);
+      // Vẫn cố gắng lấy proxy mới
+      window.__isProxyActive = false;
+      window.__proxyActivatedTime = 0;
+      window.__getTMProxyRequestPool = null;
+      window.__proxyUsername = '';
+      window.__proxyPassword = '';
+      setTimeout(fnResetIP, 2000); // fnResetIP sẽ tự động đóng tabs
+    });
   } else {
     console.log('⏰ Proxy còn ' + Math.ceil(remainingTime/60000) + ' phút trước khi hết hạn');
   }
 };
 
 window.fnResetIP = function (force = false) {
-  if (window.__proxyNeedsReset) {
-    force = true;
-  }
-
-  if (window.__fnResetIPInProgress) {
-    console.log('[fnResetIP] ⏭️ Bỏ qua — đang có phiên reset IP');
-    return;
-  }
-  window.__fnResetIPInProgress = true;
-
-  const releaseFnResetIPLock = function() {
-    window.__fnResetIPInProgress = false;
-  };
-
   console.log('🔄 [fnResetIP] Bắt đầu reset IP...' + (force ? ' (FORCE mode - bỏ qua throttle)' : ''));
   
   if (!isRunning) {
     console.log('[fnResetIP] App đã dừng, không tiếp tục reset IP');
-    releaseFnResetIPLock();
     return;
   }
   
@@ -2687,11 +2657,9 @@ window.fnResetIP = function (force = false) {
     shouldCloseTabs = true;
     closeReason = 'Proxy lỗi/authentication error';
     console.log('🚨 Proxy cần reset do authentication error hoặc hết hạn');
-    force = true;
-    window.__isProxyActive = false;
     
     // Tắt proxy hiện tại
-    if (window.__proxyActivatedTime > 0 || window.__activeProxyContext) {
+    if (window.__isProxyActive) {
       proxy_deactivate().then(() => {
         console.log('✅ Đã tắt proxy lỗi');
         window.__isProxyActive = false;
@@ -2705,7 +2673,8 @@ window.fnResetIP = function (force = false) {
       });
     }
     
-    // Reset tracking (giữ __proxyNeedsReset cho đến khi lấy proxy mới thành công)
+    // Reset tracking
+    window.__proxyNeedsReset = false;
     window.__proxyActivatedTime = 0;
     window.__batchStartTime = 0;
     window.__getTMProxyRequestPool = null;
@@ -2924,7 +2893,6 @@ if (!window.__appCleanupRegistered) {
     if (window.__getTMProxyLastTime && Date.now() < window.__getTMProxyLastTime) {
       const remainingTime = Math.ceil((window.__getTMProxyLastTime - Date.now()) / 1000);
       console.log('⏳ API yêu cầu chờ trước khi lấy proxy mới... (còn ' + remainingTime + ' giây)');
-      releaseFnResetIPLock();
       return;
     }
     
@@ -2933,7 +2901,6 @@ if (!window.__appCleanupRegistered) {
     const minWaitTime = stay * 60000 + 120000; // thêm 2 phút buffer
     if (Date.now() - window.__lastResetIP < minWaitTime) {
       console.log('⏳ Đang chờ đủ thời gian sophut_lamtuoi trước khi đổi proxy... (còn ' + Math.ceil((minWaitTime - (Date.now() - window.__lastResetIP)) / 1000) + ' giây)');
-      releaseFnResetIPLock();
       return;
     }
   } else if (force) {
@@ -3080,7 +3047,6 @@ if (!window.__appCleanupRegistered) {
       }
     `;
     fnCreateTab("reset3G", "http://" + ip, strScript, false, getStayMinutes() * 120000);
-    releaseFnResetIPLock();
   }
   else if (api_token !== "" || api_token_wwproxy !== "") {
     if (document.querySelector('#sophut_lamtuoi')) {
@@ -3132,7 +3098,6 @@ if (!window.__appCleanupRegistered) {
               window.__waitingForAPIRetry = false; // Mở BLOCK
               fnResetIP();
             }, waitTime);
-            releaseFnResetIPLock();
             return;
           }
           if ((msg.data && (msg.data['proxy'] || msg.data['https'])) && (msg.success || msg.code === 0 || msg.errorCode === 0)) {
@@ -3273,12 +3238,10 @@ if (!window.__appCleanupRegistered) {
                     }
                   }
                   verifyIPChange();
-                  releaseFnResetIPLock();
                 } else {
                   console.warn("❌ Proxy chưa được kích hoạt. Đang đợi...");
                   // Đảm bảo resetIP sau thời gian ở lại trang (phút) + buffer
                   const stay = getStayMinutes();
-                  releaseFnResetIPLock();
                   setTimeout(fnResetIP, (stay + 2) * 60000); // Tăng buffer từ 1 phút lên 2 phút
                 }
               }).catch(function(err) {
@@ -3286,7 +3249,6 @@ if (!window.__appCleanupRegistered) {
                 window.__proxyAuthenticating = false;
                 // Retry sau thời gian buffer
                 const stay = getStayMinutes();
-                releaseFnResetIPLock();
                 setTimeout(fnResetIP, (stay + 2) * 60000);
               });
             }).catch(function(err) {
@@ -3343,38 +3305,29 @@ if (!window.__appCleanupRegistered) {
                   } else {
                     console.log('⚠️ [fnResetIP fallback] Proxy chưa active hoặc đã có tabs chạy');
                   }
-                  releaseFnResetIPLock();
                 } else {
                   console.warn("❌ Proxy chưa được kích hoạt (fallback)");
                   const stay = getStayMinutes();
-                  releaseFnResetIPLock();
                   setTimeout(fnResetIP, (stay + 2) * 60000);
                 }
               }).catch(function(err2) {
                 console.error("❌ Lỗi khi bật proxy (fallback):", err2);
                 window.__proxyAuthenticating = false;
                 const stay = getStayMinutes();
-                releaseFnResetIPLock();
                 setTimeout(fnResetIP, (stay + 2) * 60000);
               });
             });
           } else {
             window.__proxyAuthenticating = false;
-            releaseFnResetIPLock();
             setTimeout(fnResetIP, 60000); // Tăng thời gian chờ từ 30s lên 60s
           }
         } catch (err) {
           console.log(err);
           window.__proxyAuthenticating = false; // Xóa cờ khi có lỗi
-          releaseFnResetIPLock();
           setTimeout(fnResetIP, 60000); // Tăng thời gian chờ từ 30s lên 60s
         }
       });
-    } else {
-      releaseFnResetIPLock();
     }
-  } else {
-    releaseFnResetIPLock();
   }
 }
 // ============================================
@@ -3953,13 +3906,6 @@ window.UnifiedLinkManager = {
 
 // Hàm xử lý chính - Logic song song với quản lý proxy theo trang
 const runParallelProcessing = async () => {
-  if (window.__parallelProcessingInProgress) {
-    console.log('[Parallel] ⏭️ Bỏ qua — đang có phiên xử lý song song');
-    return;
-  }
-  window.__parallelProcessingInProgress = true;
-
-  try {
   console.log('[Parallel] 🎬 START runParallelProcessing()');
   
   // 1. Kiểm tra điều kiện cơ bản
@@ -3974,7 +3920,7 @@ const runParallelProcessing = async () => {
     setTimeout(fnResetIP, 1000);
     return;
   }
-
+  
   console.log("✅ [Parallel] Bắt đầu xử lý song song");
   
   // 2. Khởi tạo link queue lần đầu từ dataUserOption
@@ -4225,9 +4171,6 @@ const runParallelProcessing = async () => {
   fnResetIP(true);
   
   console.log(`[Parallel] ✅ END runParallelProcessing() - fnResetIP() đã được gọi`);
-  } finally {
-    window.__parallelProcessingInProgress = false;
-  }
 };
 
 // Backward compatibility: Giữ tên cũ nhưng chuyển sang logic mới
@@ -4908,59 +4851,29 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
     setTimeout(() => {
         webview.setAttribute('src', url_open);
     }, 2000); // Trì hoãn 2 giây
-
-    const webviewGuardId = 'U_' + id_tab;
-    const maxReloadRetries = window.WEBVIEW_MAX_RELOAD_RETRIES || 3;
-    webview.dataset.reloadRetryCount = '0';
-
-    const shouldSkipWebviewReload = function() {
-      return typeof window.shouldBlockWebviewReload === 'function'
-        && window.shouldBlockWebviewReload(webviewGuardId);
-    };
-
-    const scheduleWebviewReload = function(reloadAction, delayMs, label) {
-      if (shouldSkipWebviewReload()) {
-        console.warn(`[${webviewGuardId}] Bỏ qua reload (${label}) — proxy không khả dụng`);
-        return;
-      }
-      const retryCount = parseInt(webview.dataset.reloadRetryCount || '0', 10);
-      if (retryCount >= maxReloadRetries) {
-        console.warn(`[${webviewGuardId}] Hết ${maxReloadRetries} lần reload (${label}), đóng tab`);
-        if (typeof window.closeWebviewDueToProxyIssue === 'function') {
-          window.closeWebviewDueToProxyIssue(webviewGuardId, `max reload retries (${label})`);
-        }
-        return;
-      }
-      webview.dataset.reloadRetryCount = String(retryCount + 1);
-      setTimeout(function() {
-        try {
-          if (!document.querySelector('#' + webviewGuardId)) return;
-          if (shouldSkipWebviewReload()) return;
-          reloadAction();
-        } catch (reloadErr) {}
-      }, delayMs);
-    };
-
     // webview.showDevTools();
     // alert(webview.executeScript)
     webview.addEventListener("did-fail-load", (event) => {
       // -3 = ERR_ABORTED (redirect/navigation race), có thể retry nhẹ
       if (event.errorCode === -3) {
-        scheduleWebviewReload(function() {
+        console.log("Tải lại trang...");
+        setTimeout(() => {
           webview.src = url_open;
-        }, 3000, 'did-fail-load:-3');
+        }, 3000);
         return;
       }
 
       // Các mã lỗi thường gặp khi proxy chết/hết hạn/auth fail
       const proxyErrorCodes = new Set([-111, -115, -118, -130, -324, -407]);
       if (proxyErrorCodes.has(Number(event.errorCode))) {
-        window.markWebviewProxyFailure(webviewGuardId, `did-fail-load:${event.errorCode}`);
-        const state = window.__webviewProxyState?.[webviewGuardId];
-        console.warn(`[Proxy Guard] ${webviewGuardId} lỗi tải (${event.errorCode}) lần ${state?.failureCount || 1}: ${event.errorDescription || ''}`);
+        const webviewId = 'U_' + id_tab;
+        window.markWebviewProxyFailure(webviewId, `did-fail-load:${event.errorCode}`);
+        const state = window.__webviewProxyState?.[webviewId];
+        console.warn(`[Proxy Guard] ${webviewId} lỗi tải (${event.errorCode}) lần ${state?.failureCount || 1}: ${event.errorDescription || ''}`);
         const failureThreshold = Number(window.PROXY_GUARD_CONFIG?.failureThreshold || 2);
         if ((state?.failureCount || 0) >= failureThreshold) {
-          window.requestEmergencyProxyReset(`proxy/network error ${event.errorCode}`);
+        window.__proxyNeedsReset = true;
+        window.closeWebviewDueToProxyIssue(webviewId, `proxy/network error ${event.errorCode}`);
         }
       }
     });
@@ -4986,7 +4899,14 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
 
         if (reason === 'crash' || reason === 'abnormal-exit') {
           window.markWebviewProxyFailure(webviewId, 'webview_crash');
-          window.requestEmergencyProxyReset(`webview ${reason}`);
+          window.__proxyNeedsReset = true;
+          window.closeWebviewDueToProxyIssue(webviewId, `webview ${reason}`);
+
+          if (window.isRunning && typeof fnResetIP === 'function') {
+            setTimeout(function () {
+              fnResetIP(true);
+            }, 1500);
+          }
           return;
         }
 
@@ -5031,9 +4951,14 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
         // Kiểm tra nếu có lỗi ERR_BLOCKED_BY_CLIENT hoặc ERR_ABORTED
         // console.log(event.message);
         if (event.message.includes("ERR_BLOCKED_BY_CLIENT") || event.message.includes("ERR_ABORTED")) {
-            scheduleWebviewReload(function () {
-              document.querySelector('#U_' + id_tab).reload();
-            }, 5000, 'consolemessage');
+            console.log('The load has been aborted or blocked.');
+            // Thực hiện hành động khắc phục (ví dụ, reload trang, hiển thị thông báo lỗi, v.v.)
+            setTimeout(function () {
+                try {
+                    if (document.querySelector('#U_' + id_tab))
+                        document.querySelector('#U_' + id_tab).reload();
+                } catch { }
+            }, 5000);
         }
       try {
         var message = JSON.parse(event.message);
@@ -5204,15 +5129,22 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
           }
           else if (message.type === "resetip") {
             console.warn('🔄 [message.resetip] Nhận lệnh reset IP từ webview');
-            window.requestEmergencyProxyReset('webview resetip message');
+            window.__proxyNeedsReset = true;
+            if (isRunning && typeof fnResetIP === 'function') {
+              fnResetIP();
+            }
           }
         }
       } catch { }
     });
     webview.addEventListener('loadabort',function(e) {
-      scheduleWebviewReload(function(){
-        document.querySelector('#U_'+id_tab).reload();
-      }, 15000, 'loadabort');
+      var self=this;
+      setTimeout(function(){
+        try{
+          if(document.querySelector('#U_'+id_tab))
+              document.querySelector('#U_'+id_tab).reload();
+        }catch{}
+      },15000);
     });
     if (script_code) {
       const bililiteFactory = (typeof window.fnBililiteRange === 'function')
@@ -6446,7 +6378,7 @@ function mainAppCode() {
           fnRemoveTab("reset3G");
         }
       }
-    }, 10000);
+    }, getStayMinutes() * 1000);
     return false;
   }
   function loadAntdAssets() {
@@ -6542,26 +6474,67 @@ function mainAppCode() {
         }
       ],
       trigger: {
-        // Trigger load_db: Tải dữ liệu từ csmUserData (window.csmCurrentUser.user_address)
+        // Trigger load_db: Tải dữ liệu từ csmUserData (giống auto-lmkt.js — có fallback)
         load_db: encrypt(`
-          console.log('[load_db] START - Loading data from window.csmUserData');
-          // Ưu tiên lấy từ window.csmUserData.get() - đây là source of truth
+          console.log('[load_db] START - Loading keyword data');
+          let data = [];
+
           if (window.csmUserData && typeof window.csmUserData.get === 'function') {
             try {
               const raw = window.csmUserData.get();
-              let data = Array.isArray(raw) ? raw : (typeof raw === 'string' ? JSON.parse(raw) : []);
-              window.dataUserOption = data;
-              console.log('[load_db] ✅ Loaded from csmUserData, count:', data.length);
-              return data;
+              data = Array.isArray(raw) ? raw : (typeof raw === 'string' ? JSON.parse(raw) : []);
+              console.log('[load_db] csmUserData.get count:', Array.isArray(data) ? data.length : 0);
             } catch (e) {
-              console.error('[load_db] ⚠️ Error loading from csmUserData:', e);
-              window.dataUserOption = [];
-              return [];
+              console.error('[load_db] Error loading from csmUserData:', e);
             }
           }
-          window.dataUserOption = [];
-          console.log('[load_db] No data found, returning empty array');
-          return [];
+
+          if (!Array.isArray(data) || data.length === 0) {
+            if (Array.isArray(window.dataUserOption) && window.dataUserOption.length > 0) {
+              data = window.dataUserOption;
+              console.log('[load_db] fallback window.dataUserOption, count:', data.length);
+            }
+          }
+
+          if ((!Array.isArray(data) || data.length === 0) && window.csmCurrentUser) {
+            try {
+              const rawAddress = window.csmCurrentUser.user_address || window.csmCurrentUser.user_adress;
+              if (typeof rawAddress === 'string' && rawAddress.trim()) {
+                const parsed = JSON.parse(rawAddress);
+                if (Array.isArray(parsed)) data = parsed;
+              } else if (Array.isArray(rawAddress)) {
+                data = rawAddress;
+              }
+              if (Array.isArray(data) && data.length > 0) {
+                console.log('[load_db] fallback csmCurrentUser.user_address, count:', data.length);
+              }
+            } catch (e) {
+              console.warn('[load_db] user_address fallback failed:', e);
+            }
+          }
+
+          if ((!Array.isArray(data) || data.length === 0) && db) {
+            const buckets = Object.values(db || {});
+            for (let i = 0; i < buckets.length; i++) {
+              const rows = buckets[i] && buckets[i].rows;
+              if (Array.isArray(rows) && rows.length > 0) {
+                data = rows;
+                console.log('[load_db] fallback database prop, count:', data.length);
+                break;
+              }
+            }
+          }
+
+          if (typeof window.getDataUserOption === 'function') {
+            const resolved = window.getDataUserOption();
+            if (Array.isArray(resolved) && resolved.length > 0) {
+              data = resolved;
+            }
+          }
+
+          window.dataUserOption = Array.isArray(data) ? data : [];
+          console.log('[load_db] final count:', window.dataUserOption.length);
+          return window.dataUserOption;
         `),
 
         // Trigger beforeImport: Chuẩn hóa dữ liệu Excel/CSV trước khi nạp
@@ -6776,191 +6749,11 @@ if (window.csmUserData && typeof window.csmUserData.set === 'function') {
       disablePagination: true,
       allowReadonlyExport: true,
       onDataChange: () => {
-        // Dữ liệu đã được sync qua trigger, không cần làm gì thêm
         console.log('[onDataChange] Grid data changed, triggers đã xử lý sync');
       }
     };
 
-    const SeoKeywordGridWrapper = function () {
-      const hostRef = React.useRef(null);
-      const [selectedRowKeys, setSelectedRowKeys] = React.useState([]);
-      const [gridVersion, setGridVersion] = React.useState(0);
-      const [deleteBusy, setDeleteBusy] = React.useState(false);
-
-      const getSelectedRowKeysFromDom = React.useCallback(function () {
-        const host = hostRef.current;
-        if (!host) return [];
-
-        const keySet = new Set();
-
-        host.querySelectorAll('tr.ant-table-row-selected[data-row-key], tr[data-row-key].ant-table-row-selected').forEach(function (row) {
-          const key = (row.getAttribute('data-row-key') || '').trim();
-          if (key) keySet.add(key);
-        });
-
-        host.querySelectorAll('tr[data-row-key]').forEach(function (row) {
-          const checkbox = row.querySelector('input[type="checkbox"]');
-          const key = (row.getAttribute('data-row-key') || '').trim();
-          if (checkbox && checkbox.checked && key) {
-            keySet.add(key);
-          }
-        });
-
-        return Array.from(keySet);
-      }, []);
-
-      const syncSelectedKeysFromDom = React.useCallback(function () {
-        const nextKeys = getSelectedRowKeysFromDom();
-
-        setSelectedRowKeys(function (prevKeys) {
-          if (prevKeys.length === nextKeys.length && prevKeys.every(function (key, idx) { return key === nextKeys[idx]; })) {
-            return prevKeys;
-          }
-          return nextKeys;
-        });
-      }, [getSelectedRowKeysFromDom]);
-
-      const hideWrongBatchDeleteButton = React.useCallback(function () {
-        const host = hostRef.current;
-        if (!host) return;
-
-        const buttons = host.querySelectorAll('button');
-        buttons.forEach(function (btn) {
-          const text = (btn.textContent || '').trim();
-          const isBatchDelete = /^Xóa\s+\d+\s+dòng$/i.test(text)
-            || /^Delete\s+\d+\s+rows?$/i.test(text);
-
-          if (!isBatchDelete) return;
-
-          if (btn.style.display !== 'none') {
-            console.warn('[renderKeywordGrid] Hidden built-in batch delete button because SEO grid must delete via csmUserData only:', text);
-          }
-
-          btn.style.display = 'none';
-          btn.disabled = true;
-        });
-      }, []);
-
-      const deleteSelectedRows = React.useCallback(function () {
-        if (deleteBusy) return;
-
-        const effectiveSelectedKeys = getSelectedRowKeysFromDom();
-        if (effectiveSelectedKeys.length === 0) {
-          if (window.canhbao) {
-            window.canhbao('Hãy chọn ít nhất 1 dòng để xóa');
-          }
-          return;
-        }
-
-        const ok = window.confirm('Bạn có chắc muốn xóa ' + effectiveSelectedKeys.length + ' dòng đã chọn?');
-        if (!ok) return;
-
-        const latestRows = typeof window.getDataUserOption === 'function'
-          ? window.getDataUserOption()
-          : (Array.isArray(window.dataUserOption) ? window.dataUserOption : []);
-        const deleteKeySet = new Set(effectiveSelectedKeys.map(function (key) { return String(key || '').trim(); }).filter(Boolean));
-        const nextRows = (Array.isArray(latestRows) ? latestRows : []).filter(function (row) {
-          const rowKey = String((row && row.id) || '').trim();
-          return !deleteKeySet.has(rowKey);
-        });
-
-        if (nextRows.length === latestRows.length) {
-          if (window.canhbao) {
-            window.canhbao('Không xác định được dòng cần xóa');
-          }
-          return;
-        }
-
-        setDeleteBusy(true);
-        window.dataUserOption = nextRows;
-
-        const finishLocalDelete = function () {
-          setSelectedRowKeys([]);
-          setGridVersion(function (v) { return v + 1; });
-          setDeleteBusy(false);
-        };
-
-        if (window.csmUserData && typeof window.csmUserData.set === 'function') {
-          console.log('[seo-batch-delete] Saving selected-row deletion to csmUserData, removed:', latestRows.length - nextRows.length);
-          window.csmUserData.set(nextRows, function (success, error) {
-            if (success) {
-              if (window.thongbao) {
-                window.thongbao('Đã xóa ' + (latestRows.length - nextRows.length) + ' dòng');
-              }
-              finishLocalDelete();
-            } else {
-              console.error('[seo-batch-delete] csmUserData.set failed:', error);
-              if (window.canhbao) {
-                window.canhbao('Xóa nhiều thất bại: ' + (error || 'Unknown error'));
-              }
-              setDeleteBusy(false);
-            }
-          });
-          return;
-        }
-
-        console.warn('[seo-batch-delete] csmUserData not available, applying local delete only');
-        finishLocalDelete();
-      }, [deleteBusy, getSelectedRowKeysFromDom]);
-
-      React.useEffect(function () {
-        const host = hostRef.current;
-        if (!host) return;
-
-        const refreshUiState = function () {
-          hideWrongBatchDeleteButton();
-          syncSelectedKeysFromDom();
-        };
-
-        refreshUiState();
-
-        const observer = new MutationObserver(function () {
-          refreshUiState();
-        });
-
-        observer.observe(host, {
-          childList: true,
-          subtree: true,
-          characterData: true,
-          attributes: true,
-          attributeFilter: ['class', 'data-row-key', 'aria-checked']
-        });
-
-        return function () {
-          observer.disconnect();
-        };
-      }, [hideWrongBatchDeleteButton, syncSelectedKeysFromDom, gridVersion]);
-
-      return React.createElement('div', { ref: hostRef, className: 'seo-keyword-grid-wrapper' },
-        React.createElement('div', {
-          style: {
-            display: 'flex',
-            justifyContent: 'flex-end',
-            marginBottom: 8,
-            gap: 8
-          }
-        },
-          React.createElement('button', {
-            type: 'button',
-            onClick: deleteSelectedRows,
-            disabled: deleteBusy,
-            style: {
-              border: '1px solid #ff4d4f',
-              background: deleteBusy ? '#fff1f0' : '#fff',
-              color: '#cf1322',
-              borderRadius: 6,
-              padding: '4px 12px',
-              cursor: deleteBusy ? 'not-allowed' : 'pointer',
-              fontSize: 14,
-              lineHeight: '22px'
-            }
-          }, deleteBusy ? 'Đang xóa...' : (selectedRowKeys.length > 0 ? ('Xóa ' + selectedRowKeys.length + ' dòng') : 'Xóa dòng đã chọn'))
-        ),
-        React.createElement(CsmDynamicGrid, Object.assign({}, gridProps, { key: 'seo-keyword-grid-' + gridVersion }))
-      );
-    };
-
-    return React.createElement(SeoKeywordGridWrapper);
+    return React.createElement(CsmDynamicGrid, gridProps);
   };
 
   // Expose seft globally for trigger access

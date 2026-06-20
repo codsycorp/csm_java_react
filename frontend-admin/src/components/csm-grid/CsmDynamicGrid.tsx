@@ -3217,11 +3217,23 @@ export function CsmDynamicGrid({
 
 		if (!hasTableName) {
 			const triggerRows = resolveLoadDbRows();
-			if (triggerRows) {
+			const localRowsFromDatabase = (() => {
+				for (const entry of Object.values(database || {})) {
+					if (Array.isArray(entry?.rows) && entry.rows.length > 0) {
+						return entry.rows;
+					}
+				}
+				return null;
+			})();
+			if (Array.isArray(triggerRows) && triggerRows.length > 0) {
 				syncGridRows(triggerRows);
 				return;
 			}
-			syncGridRows([]);
+			if (localRowsFromDatabase) {
+				syncGridRows(localRowsFromDatabase);
+				return;
+			}
+			syncGridRows(Array.isArray(triggerRows) ? triggerRows : []);
 			return;
 		}
 
@@ -4739,6 +4751,19 @@ export function CsmDynamicGrid({
 								okType: "danger",
 								cancelText: t("common.cancel"),
 								onOk: async () => {
+									if (isDetailGrid || !hasTableName) {
+										setData((prev) => {
+											const deletedKeys = new Set(selectedRows.map((row) => getRowKey(row)));
+											const next = prev.filter((row) => !deletedKeys.has(getRowKey(row)));
+											runAfterTrigger("afterDelete", next);
+											notifyDetailRowsChange(next);
+											return next;
+										});
+										message.success(t("common.deleteSuccess"));
+										setSelectedKeys([]);
+										return;
+									}
+
 									if (!runtimeAppId) {
 										message.error(t("common.missingAppId"));
 										return;

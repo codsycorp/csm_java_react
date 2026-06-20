@@ -1052,6 +1052,9 @@ function buildTableFields(menuId) {
     f_pkid: r.f_pkid,
     f_stt: r.f_stt,
     f_header: r.f_header,
+    f_header_vi: r.f_header,
+    f_header_en: '',
+    f_header_zh: '',
     f_show: r.f_show,
     f_showgrid: r.f_showgrid,
     f_showonreport: r.f_showonreport,
@@ -1066,6 +1069,26 @@ function buildTableFields(menuId) {
     f_alert_query: r.f_alert_query,
     f_cbo_query: convertCboQuery(r.f_cbo_query, r.f_name),
   }));
+}
+
+function resolvePageDimensions(rptPageSize, rptOrientation) {
+  const landscape = String(rptOrientation || '').toLowerCase().startsWith('l');
+  const sizes = { A4: [8.27, 11.69], A5: [5.83, 8.27], Letter: [8.5, 11], A3: [11.69, 16.54] };
+  const [w, h] = sizes[String(rptPageSize || 'A4')] || sizes.A4;
+  return landscape ? { orientation: 'l', p_width: h, p_height: w } : { orientation: 'p', p_width: w, p_height: h };
+}
+
+function stripMenuLabel(gridName) {
+  if (!gridName) return { label: '', prefixOrder: 0 };
+  // Match patterns: A.01.a.1., A.01.a., A.01., a.01., a., 04.
+  const m = gridName.match(/^((?:[A-Za-z]|\d{1,3})\.(?:\d{1,3}\.)?(?:[a-z]\.)?(?:\d{1,3}\.)?)\s*/);
+  if (!m || !m[1]) return { label: gridName.trim(), prefixOrder: 0 };
+  const label = gridName.slice(m[0].length).trim();
+  if (!label) return { label: gridName.trim(), prefixOrder: 0 };
+  const segs = m[1].replace(/\.$/, '').split('.');
+  const last = segs[segs.length - 1];
+  const prefixOrder = /^\d+$/.test(last) ? parseInt(last, 10) : (last.toLowerCase().charCodeAt(0) - 96);
+  return { label, prefixOrder };
 }
 
 function extractSqlTableNames(sql) {
@@ -1525,14 +1548,19 @@ const flatMenus = srcMenus.map(src => {
   }
 
   const normalizedParentId = String(src.parent_id || '').trim() === APP_ID ? '' : (src.parent_id || '');
+  const pageDims = report ? resolvePageDimensions(report.rpt_page_size, report.rpt_orientation)
+    : { orientation: 'p', p_width: 8.27, p_height: 11.69 };
   const menu = {
     // ── Runtime schema (preserve legacy-compatible keys used by frontend) ──
     id: src.id,
     parentId: normalizedParentId,
     hideInMenu: shouldHideInMainMenu(src) ? 1 : 0,
-    label: src.grid_name,
-    name: src.grid_name,
+    label: stripMenuLabel(src.grid_name).label,
+    label_en: '',
+    label_zh: '',
+    name: stripMenuLabel(src.grid_name).label,
     m_icon: src.m_icon || '',
+    m_icons: '',
     table_name: src.table_name || '',
     e_where: src.e_where || '',
     table_sort: src.table_sort || '',
@@ -1546,15 +1574,23 @@ const flatMenus = srcMenus.map(src => {
     can_see: src.can_see !== undefined ? Number(src.can_see) : 1,
     custom_footer: src.custom_footer || '',
     custom_group: src.custom_group || '',
+    type_menu: 0,
+    row_type_edit: 0,
+    dev: false,
+    menu_id: src.id,
+    order: Number(src.qt_stt || 0) || stripMenuLabel(src.grid_name).prefixOrder,
+    orientation: pageDims.orientation,
+    p_width: pageDims.p_width,
+    p_height: pageDims.p_height,
     table: tableFields,
     trigger: nextTrigger,
     report_name: src.report_name,
     type_form: tf,              // ← integer per §3.1
-    
+
     // ── Migration audit trail ──
     migration_notes: nextMigrationNotes,
     trigger_legacy_rows,        // ← raw source triggers for audit
-    
+
     // ── Compatibility info ──
     compatibility: {
       validation_profile: 'migration',
@@ -1574,8 +1610,18 @@ function buildMenuTree(flat, parentId = '') {
   return flat
     .filter((menu) => String(menu.parentId || '') === String(parentId || ''))
     .map((menu) => {
-      const children = buildMenuTree(flat, menu.id || '');
-      return children.length > 0 ? { ...menu, children } : { ...menu };
+      const allChildren = buildMenuTree(flat, menu.id || '');
+      if (Number(menu.type_form) === 2 && allChildren.length > 0) {
+        // type_form=2 (Master-Detail): children with table_name are detail-tab grids → nodes
+        // children without table_name are navigation items → children
+        const nodes = allChildren.filter(c => c.table_name);
+        const navChildren = allChildren.filter(c => !c.table_name);
+        const result = { ...menu };
+        if (nodes.length > 0) result.nodes = nodes;
+        if (navChildren.length > 0) result.children = navChildren;
+        return result;
+      }
+      return allChildren.length > 0 ? { ...menu, children: allChildren } : { ...menu };
     });
 }
 
