@@ -48,7 +48,8 @@ import type { EditSubmitAction } from "#src/components/csm-grid/CsmEditModal";
 import type { MConfig, TableField } from "#src/components/csm-grid/CsmDynamicGrid";
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
-import { extractComboQueriesFromField, normalizeComboOptions } from "#src/components/csm-grid/combo-utils";
+import { useComboPrefetchGate, hydrateComboLabelsForRows } from "#src/components/csm-grid/combo-prefetch";
+import { flattenAppMenusById, normalizeComboOptions } from "#src/components/csm-grid/combo-utils";
 import {
 	filterIndexedRowsForBucket,
 	indexRowsWithTimeBounds,
@@ -56,7 +57,7 @@ import {
 	useDebouncedValue,
 } from "#src/components/csm-grid/grid-perf-utils";
 import { parseDateValueToDayjs } from "#src/utils/dateControl";
-import { useUserStore } from "#src/store";
+import { useAppStore, usePermissionStore, useUserStore } from "#src/store";
 
 const { RangePicker } = DatePicker;
 
@@ -526,6 +527,15 @@ export default function CsmKanbanBoard({
 }: CsmKanbanBoardProps) {
 	const { token } = theme.useToken();
 	const user = useUserStore();
+	const storeDatabase = useAppStore((state) => state.database);
+	const setTableData = useAppStore((state) => state.setTableData);
+	const mergeTableRows = useAppStore((state) => state.mergeTableRows);
+	const apiWholeMenus = usePermissionStore((state) => state.apiWholeMenus);
+	const menuById = useMemo(() => flattenAppMenusById(apiWholeMenus || []), [apiWholeMenus]);
+	const mergedDatabase = useMemo(
+		() => ({ ...(database || {}), ...(storeDatabase || {}) }),
+		[database, storeDatabase],
+	);
 	const { t, i18n } = useTranslation();
 	const lang = i18n.language || "vi-VN";
 	const effectiveDecrypt = decrypt || csmDecrypt;
@@ -643,6 +653,16 @@ export default function CsmKanbanBoard({
 		stageField,
 		titleField,
 	]);
+	const comboGate = useComboPrefetchGate({
+		fields,
+		signatureSuffix: `kanban:${String(config.tableName || "")}`,
+		fallbackAppId: effectiveAppId,
+		menuById,
+		database: mergedDatabase,
+		setTableData,
+		mergeTableRows,
+		decrypt: effectiveDecrypt,
+	});
 	const pkFields = useMemo(() => {
 		const fromDatabase = config.tableName ? database?.[config.tableName]?.fieldsPK : undefined;
 		if (Array.isArray(fromDatabase) && fromDatabase.length > 0) return fromDatabase;
@@ -678,7 +698,6 @@ export default function CsmKanbanBoard({
 	const [viewMode, setViewMode] = useState<BoardView>(config.defaultView || "kanban");
 	const [granularity, setGranularity] = useState<Granularity>(config.timeline?.defaultGranularity || "day");
 	const [range, setRange] = useState<[Dayjs, Dayjs]>(getPresetRange(config.timeline?.defaultRangePreset));
-	const [comboTables, setComboTables] = useState<BoardDatabase>({});
 	const boardContainerRef = useRef<HTMLDivElement | null>(null);
 
 	const sensors = useSensors(
@@ -777,52 +796,7 @@ export default function CsmKanbanBoard({
 		setViewMode((current) => (config.views?.[current] === false ? (config.views?.kanban ? "kanban" : config.views?.timeline ? "timeline" : "report") : current));
 	}, [config.views]);
 
-	useEffect(() => {
-		let cancelled = false;
-		const comboFields = fields.filter((field) => String(field.f_types || "").toLowerCase().includes("co") && field.f_cbo_query);
-		if (comboFields.length === 0) return;
-
-		const querySpecs = comboFields.flatMap((field) => extractComboQueriesFromField(field, effectiveDecrypt, effectiveAppId));
-		if (querySpecs.length === 0) return;
-
-		const uniqueSpecs = querySpecs.filter((spec, index, all) => {
-			const key = `${spec.appId}::${spec.tableName}::${JSON.stringify(spec.where || {})}`;
-			return index === all.findIndex((candidate) => `${candidate.appId}::${candidate.tableName}::${JSON.stringify(candidate.where || {})}` === key);
-		});
-
-		Promise.all(
-			uniqueSpecs.map(async (spec) => {
-				try {
-					const response = await getTableData<any>({
-						app_id: spec.appId,
-						obj_name: spec.tableName,
-						...(spec.where ? { where: spec.where } : {}),
-					});
-					return {
-						tableName: spec.tableName,
-						rows: Array.isArray((response as any)?.rows) ? (response as any).rows : [],
-					};
-				} catch {
-					return { tableName: spec.tableName, rows: [] as any[] };
-				}
-			})
-		).then((items) => {
-			if (cancelled) return;
-			setComboTables((prev) => {
-				const next = { ...prev };
-				items.forEach((item) => {
-					next[item.tableName] = { rows: item.rows };
-				});
-				return next;
-			});
-		});
-
-		return () => {
-			cancelled = true;
-		};
-	}, [effectiveAppId, effectiveDecrypt, fields]);
-
-	const databaseForSelect = useMemo(() => ({ ...(database || {}), ...comboTables }), [comboTables, database]);
+	const databaseForSelect = useMemo(() => mergedDatabase, [mergedDatabase, comboGate.version]);
 	const createSeftContext = useCallback(() => ({
 		m_configs: mConfigs,
 		context: { select_row: editingRecord || undefined },
@@ -920,6 +894,23 @@ export default function CsmKanbanBoard({
 		m_configs: mConfigs,
 		context: {},
 	}), [databaseForSelect, effectiveAppId, effectiveDecrypt, fields, mConfigs]);
+
+	useEffect(() => {
+		if (mergedRows.length === 0) return;
+		let cancelled = false;
+		void hydrateComboLabelsForRows(mergedRows, fields, {
+			database: mergedDatabase,
+			setTableData,
+			mergeTableRows,
+			decrypt: effectiveDecrypt,
+			fallbackAppId: effectiveAppId,
+			menuById,
+			selectEnums: selectEnums as Record<string, Record<string, { text: string }>>,
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [mergedRows, fields, mergedDatabase, setTableData, mergeTableRows, effectiveDecrypt, effectiveAppId, menuById, selectEnums]);
 
 	const selectOptions = useMemo(() => {
 		const result: Record<string, Array<{ label: string; value: any }>> = {};
@@ -1477,7 +1468,7 @@ export default function CsmKanbanBoard({
 
 	return (
 		<div ref={boardContainerRef} style={{ padding: 16, height: "100%", overflow: "auto", position: "relative", minHeight: 320 }}>
-			<Spin spinning={loading}>
+			<Spin spinning={loading || comboGate.blockingBusy} tip={comboGate.blockingBusy ? "Đang tải dữ liệu combo (co)..." : undefined}>
 				<Space direction="vertical" size={12} style={{ width: "100%" }}>
 					<Card size="small" style={{ borderRadius: 14 }}>
 						<Row gutter={[12, 12]} align="middle">

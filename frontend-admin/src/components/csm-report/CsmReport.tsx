@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Form, Input, InputNumber, Select, Space, DatePicker, TimePicker, message, Card } from "antd";
+import { Button, Form, Input, InputNumber, Select, Space, DatePicker, TimePicker, message, Card, Spin } from "antd";
 import dayjs from "dayjs";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
@@ -10,13 +10,11 @@ import { csmDecrypt } from "../csm-grid/CsmCrypto";
 import {
   buildDetailGridSelectEnums,
   buildSelectOptions,
-  ensureTableInDatabase,
-  globalTableFetchCache,
   resolveCascadeSelectOptions,
 } from "../csm-grid/CsmEditModal";
+import { useComboPrefetchGate } from "../csm-grid/combo-prefetch";
 import {
   buildRoleComboOptions,
-  collectComboTableFetchRequests,
   getComboTableRows,
   getLegacyFallbackComboQuery,
   isComboLikeType,
@@ -97,10 +95,8 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
   const dateLocaleFormat = useMemo(() => resolveDateLocaleFormat(i18n.language), [i18n.language]);
   const [form] = Form.useForm();
   const [reportSrc, setReportSrc] = useState<string>("");
-  const [databaseVersion, setDatabaseVersion] = useState(0);
   const [formUpdated, setFormUpdated] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
-  const lastComboFetchSignatureRef = useRef("");
 
   useEnterToTab(containerRef);
 
@@ -127,70 +123,15 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
     return tableFields.filter((f: any) => f.f_name?.toLowerCase() !== "parent_id");
   }, [m_configs]);
 
-  const comboFetchSignature = useMemo(() => {
-    const comboFields = (m_configs.table || []).filter((f: any) => {
-      const types = resolveEffectiveFieldTypes(f);
-      return isComboLikeType(types);
-    });
-    return comboFields
-      .map((f: any) => `${String(f.f_name || "")}:${String(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name) || "")}`)
-      .sort()
-      .join("|");
-  }, [m_configs.table]);
-
-  useEffect(() => {
-    if (!comboFetchSignature || comboFetchSignature === lastComboFetchSignatureRef.current) return;
-    lastComboFetchSignatureRef.current = comboFetchSignature;
-
-    gridDevLog(`${CO} Scanning combo queries for missing tables...`);
-    gridDevLog(`${CO} comboFetchSignature:`, previewText(comboFetchSignature, 200));
-
-    const requests = collectComboTableFetchRequests(m_configs.table || [], {
-      decrypt: reportDecrypt,
-      fallbackAppId: effectiveAppId,
-    });
-
-    if (requests.length === 0) {
-      console.warn(`${CO} No combo tables to prefetch`);
-      return;
-    }
-
-    gridDevLog(`${CO} Found ${requests.length} combo tables to prefetch:`, requests);
-
-    Promise.all(
-      requests.map(({ tableName, appId: queryAppId, whereClause }) => {
-        gridDevLog(`${CO} Prefetch start: table=${tableName}, app=${queryAppId}, where=`, whereClause);
-        return ensureTableInDatabase(tableName, queryAppId, useAppStore.getState().database, whereClause, setTableData)
-          .then((started) => {
-            gridDevLog(`${CO} Prefetch ${tableName}:`, started ? "started/waiting" : "already cached");
-            return started;
-          })
-          .catch((err) => {
-            console.error(`${CO} Prefetch FAILED ${tableName}:`, err);
-            return null;
-          });
-      }),
-    ).then(() => {
-      gridDevLog(`${CO} All combo prefetches settled, bump databaseVersion`);
-      setDatabaseVersion((v) => v + 1);
-    });
-  }, [comboFetchSignature, effectiveAppId, reportDecrypt, setTableData, m_configs.table]);
-
-  useEffect(() => {
-    if (globalTableFetchCache.size === 0) return;
-
-    gridDevLog(`${CO} Waiting for ${globalTableFetchCache.size} in-flight table fetch(es)...`);
-
-    const checkInterval = setInterval(() => {
-      if (globalTableFetchCache.size === 0) {
-        gridDevLog(`${CO} All in-flight table fetches completed, bump databaseVersion`);
-        setDatabaseVersion((v) => v + 1);
-        clearInterval(checkInterval);
-      }
-    }, 500);
-
-    return () => clearInterval(checkInterval);
-  }, [globalTableFetchCache.size, databaseVersion]);
+  const comboGate = useComboPrefetchGate({
+    fields: m_configs.table || [],
+    signatureSuffix: `report:${String(m_configs?.id || m_configs?.name || "")}`,
+    fallbackAppId: effectiveAppId,
+    purpose: "edit",
+    database,
+    setTableData,
+    decrypt: reportDecrypt,
+  });
 
   const cascadeParentFields = useMemo(() => {
     const parents = new Set<string>();
@@ -228,7 +169,7 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
     gridDevLog(`${CO} database keys:`, Object.keys(database || {}));
     gridDevLog(`${CO} decrypt available:`, Boolean(decrypt));
     gridDevLog(`${CO} effectiveAppId:`, effectiveAppId);
-    gridDevLog(`${CO} databaseVersion:`, databaseVersion);
+    gridDevLog(`${CO} comboGate.version:`, comboGate.version);
 
     const seftContext = {
       appId: effectiveAppId,
@@ -260,7 +201,7 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
     const built = buildDetailGridSelectEnums(m_configs.table || [], database, reportDecrypt, seftContext);
     gridDevLog(`${CO} buildDetailGridSelectEnums keys:`, Object.keys(built));
     return built;
-  }, [m_configs.table, database, reportDecrypt, m_configs, databaseVersion, effectiveAppId, setTableData, formUpdated, decrypt]);
+  }, [m_configs.table, database, reportDecrypt, m_configs, comboGate.version, effectiveAppId, setTableData, formUpdated, decrypt]);
 
   const comboFieldDiagnostics = useMemo(() => {
     if (!import.meta.env.DEV) return [];
@@ -359,7 +300,7 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
     gridDevLog(`${CO} menu:`, m_configs?.label || m_configs?.name || m_configs?.table_name || m_configs?.id);
     gridDevLog(`${CO} filter form fields:`, fields.map((f: any) => f.f_name));
     gridDevLog(`${CO} cascadeParentFields:`, cascadeParentFields);
-    gridDevLog(`${CO} globalTableFetchCache.size:`, globalTableFetchCache.size);
+    gridDevLog(`${CO} comboGate.ready:`, comboGate.ready, "version:", comboGate.version);
     comboFieldDiagnostics.forEach((item: {
       name: string;
       renderOptionCount: number;
@@ -702,6 +643,7 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
   }
 
   return (
+    <Spin spinning={comboGate.blockingBusy} tip={comboGate.blockingBusy ? "Đang tải dữ liệu combo (co)..." : undefined}>
     <Card title={m_configs.label || m_configs.name || "Báo cáo"} bordered style={{ height: "100%" }} bodyStyle={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       <div ref={containerRef} style={{ flexShrink: 0 }}>
         <Form form={form} layout="vertical">
@@ -719,5 +661,6 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
         <iframe src={reportSrc} title="report" aria-hidden="true" style={{ right: 0, top: 0, bottom: 0, height: "100%", width: "100%", minHeight: 0, border: 0 }} />
       </div>
     </Card>
+    </Spin>
   );
 }

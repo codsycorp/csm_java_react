@@ -7,9 +7,9 @@ import { csmDecrypt, csmEncrypt } from "./CsmCrypto";
 import { compileMenuTrigger, resolveTriggerBody, safeEval } from "./csm-trigger-runner";
 import { isGridVisibleTableField } from "./grid-field-visibility";
 import { buildComboDatabaseSignature, buildRowsSyncSignature, gridDevLog, useDebouncedValue, GRID_VIRTUAL_ROW_THRESHOLD, GRID_PAGE_SIZE_OPTIONS } from "./grid-perf-utils";
-import { GRID_SERVER_DEFAULT_PAGE_SIZE } from "./grid-bigdata-policy";
-import { fetchAllTableRows } from "./grid-bigdata-policy";
+import { GRID_SERVER_DEFAULT_PAGE_SIZE, GRID_SERVER_PAGE_THRESHOLD, fetchAllTableRows, loadPrimaryTablePage } from "./grid-bigdata-policy";
 import { buildGridServerQuery } from "./grid-server-query";
+import { useComboPrefetchGate, hydrateComboLabelsForRows, buildComboHydrationPlan } from "./combo-prefetch";
 import { useGridServerPagination } from "./use-grid-server-pagination";
 import { formatGridNumberCell, resolveFieldDecimalPlaces } from "./grid-field-format";
 import { resolveDetailGridRowsFromMaster } from "./master-detail-utils";
@@ -32,15 +32,9 @@ import {
 	getComboTableRows,
 	buildRoleComboOptions,
 	flattenAppMenusById,
-	buildGridFieldComboSelectEnum,
-	buildFieldQueryComboSelectEnum,
-	resolveQueryRowComboLabel,
+	buildSelectEnumsForFields,
 	resolveComboCellDisplayLabel,
 	resolveGridComboCellLabel,
-	collectComboTableFetchRequests,
-	fetchComboRowsByValues,
-	resolveComboValueField,
-	resolveFieldGridComboTableName,
 	resolveFieldGridComboConfig,
 	lookupValueEnumLabel,
 	isDefaultComboWhereClause,
@@ -637,6 +631,21 @@ function resolveConfiguredColumnWidth(field: TableField): number | undefined {
 	return parsed;
 }
 
+/** Stable default widths so large grids render cells instead of collapsed columns. */
+function resolveGridColumnWidth(field: TableField): number {
+	const configured = resolveConfiguredColumnWidth(field);
+	if (configured) return configured;
+	const types = String(field.f_types || "").toLowerCase();
+	if (/image_inline|album_inline|video_inline|avatar|img|image|photo|picture/.test(types)) return 96;
+	if (/album|gallery|images/.test(types)) return 120;
+	if (/datetime/.test(types)) return 168;
+	if (/\bdate\b/.test(types) || /\btime\b/.test(types)) return 132;
+	if (/bool|switch|check/.test(types)) return 88;
+	if (/number|money|price|int|float|double|currency/.test(types)) return 108;
+	if (/textarea|memo|html|richtext/.test(types)) return 220;
+	return 148;
+}
+
 function buildInlineValidationRules(field: TableField): any[] {
 	const types = String(field.f_types || "").toLowerCase();
 	const tokens = types.split(/[\s,;|]+/).filter(Boolean);
@@ -1005,6 +1014,7 @@ export function CsmDynamicGrid({
   allowReadonlyExport = false,
   embeddedPanelContainer,
   onDetailRowsChange,
+  comboGateExternalReady,
 }: {
 	m_configs: MConfig
 	database?: Database // DEPRECATED: Kept for backward compatibility, not used
@@ -1028,7 +1038,9 @@ export function CsmDynamicGrid({
 	disablePagination?: boolean
 	allowReadonlyExport?: boolean
   embeddedPanelContainer?: React.RefObject<HTMLElement>
-	onDetailRowsChange?: (rows: Row[]) => void
+  onDetailRowsChange?: (rows: Row[]) => void
+  /** When true, parent already prefetched combo tables — skip local gate. */
+  comboGateExternalReady?: boolean
 }) {
 	const { t, i18n } = useTranslation();
 	const numberLocale = useMemo(() => resolveNumberLocale(i18n.language), [i18n.language]);
@@ -1064,8 +1076,8 @@ export function CsmDynamicGrid({
 	
 	// 🔄 Track database version để force re-compute selectEnums khi missing tables được fetch
 	const [databaseVersion, setDatabaseVersion] = useState(0);
+	const [comboLabelEpoch, setComboLabelEpoch] = useState(0);
 	const globalTableFetchCache = useRef(new Map<string, Promise<any>>()).current;
-	const lastComboFetchSignatureRef = useRef("");
 	const [_selectedRow, setSelectedRow] = useState<Row | null>(null);
 	const [selectedDetailRow, setSelectedDetailRow] = useState<Row | null>(null); // For detail tabs panel
 	const [editorOpen, setEditorOpen] = useState(false);
@@ -1077,7 +1089,6 @@ export function CsmDynamicGrid({
 	const [rowActionBusy, setRowActionBusy] = useState(false);
 	const [searchTerm, setSearchTerm] = useState("");
 	const debouncedSearchTerm = useDebouncedValue(searchTerm, 280);
-	const [comboPrefetchBusy, setComboPrefetchBusy] = useState(false);
 	const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 	
 	// State để prevent trigger update recursion khi inline edit
@@ -1185,6 +1196,9 @@ export function CsmDynamicGrid({
 			fieldsPK: sourceTable?.fieldsPK || pkFields,
 			rows: nextRows,
 			app_id: sourceTable?.app_id || runtimeAppId,
+			totalCount: sourceTable?.totalCount,
+			serverPaged: sourceTable?.serverPaged,
+			pageSize: sourceTable?.pageSize,
 		});
 	}, [runtimeAppId, database, isDetailGrid, pkFields, setTableData, tableName, shareTableState]);
 
@@ -1198,9 +1212,7 @@ export function CsmDynamicGrid({
 		closeEditor();
 		setSearchTerm("");
 		setDatabaseVersion(0);
-		lastComboFetchSignatureRef.current = "";
 		globalTableFetchCache.clear();
-		setComboPrefetchBusy(false);
 	}, [closeEditor, effectiveGridInstanceKey, globalTableFetchCache]);
 
 	// Enable socket for real-time database updates
@@ -1229,6 +1241,30 @@ export function CsmDynamicGrid({
 			.filter(Boolean);
 		return `${menuById.size}:${menuIds.sort().join(",")}`;
 	}, [m_configs?.table, menuById]);
+
+	const comboGateInternal = useComboPrefetchGate({
+		enabled: comboGateExternalReady !== true,
+		fields: m_configs?.table || [],
+		signatureSuffix: `${comboMenuSignature}::${comboFetchSignature}`,
+		fallbackAppId: runtimeAppId,
+		menuById,
+		userContext: userAccess,
+		evalContext: {
+			seft: { m_configs, context, database, appId: runtimeAppId },
+			database,
+		},
+		database,
+		setTableData,
+		mergeTableRows,
+		decrypt,
+	});
+	const comboReady = comboGateExternalReady === true ? true : comboGateInternal.ready;
+
+	useEffect(() => {
+		if (comboGateInternal.version > 0) {
+			setDatabaseVersion((value) => value + 1);
+		}
+	}, [comboGateInternal.version]);
 	
 	const resolveQueryAppIdByTable = useCallback((tableName: string, queryAppId?: string): string => {
 		return resolveComboQueryAppId(tableName, queryAppId, undefined, userAccess, decrypt);
@@ -1278,8 +1314,15 @@ export function CsmDynamicGrid({
 				const storedAppId = Array.isArray(existing) ? "" : getStoredTableAppId(existing);
 				const isMatchingApp = storedTableAppIdMatches(storedAppId, effectiveAppId, decrypt);
 				if (rowCount > 0 && isMatchingApp) {
-					gridDevLog(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows, app: ${storedAppId || "unknown"})`);
-					return false; // Already have data
+					const meta = Array.isArray(existing) ? null : existing;
+					const totalCount = Number(meta?.totalCount ?? rowCount);
+					const needsPagedMeta = !meta?.serverPaged
+						&& (totalCount > GRID_SERVER_PAGE_THRESHOLD || rowCount >= GRID_SERVER_DEFAULT_PAGE_SIZE);
+					if (!needsPagedMeta) {
+						gridDevLog(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows, app: ${storedAppId || "unknown"})`);
+						return false;
+					}
+					gridDevLog(`🔄 [AutoFetch] Table ${tableName} needs server-paged metadata — refetching`);
 				}
 				if (rowCount > 0 && !isMatchingApp) {
 					gridDevLog(`🔄 [AutoFetch] Table ${tableName} exists for app ${storedAppId}, refetching for app ${effectiveAppId}`);
@@ -1313,28 +1356,31 @@ export function CsmDynamicGrid({
 			where: effectiveWhereClause,
 		};
 		
-		const fetchPromise = getTableData<any>(requestParams)
-			.then((response) => {
-				const normalizedRows = (() => {
-					if (Array.isArray(response?.rows)) return response.rows;
-					if (Array.isArray(response?.data)) return response.data;
-					if (Array.isArray((response as any)?.data?.rows)) return (response as any).data.rows;
-					if (Array.isArray((response as any)?.result?.list)) return (response as any).result.list;
-					return [];
-				})();
-				gridDevLog(`✅ [AutoFetch] Fetched ${tableName}: ${normalizedRows.length} rows`, normalizedRows.slice(0, 3));
-				
-				// ✅ CRITICAL: Update global store instead of mutating local database object
-				// This triggers re-render and database useMemo will have new data
+		const fetchPromise = loadPrimaryTablePage<Record<string, unknown>>(
+			(limit, offset) => getTableData<any>({
+				...requestParams,
+				limit,
+				offset,
+				fresh: true,
+			}),
+			{ pageSize: GRID_SERVER_DEFAULT_PAGE_SIZE },
+		)
+			.then((load) => {
+				gridDevLog(`✅ [AutoFetch] Fetched ${tableName}: ${load.rows.length}/${load.totalCount} rows (serverPaged=${load.serverPaged})`, load.rows.slice(0, 3));
+
 				setTableData(tableName, {
 					id: tableName,
-					rows: normalizedRows,
+					rows: load.rows as Row[],
+					fieldsPK: load.fieldsPK,
+					totalCount: load.totalCount,
+					serverPaged: load.serverPaged,
+					pageSize: load.pageSize,
 					app_id: effectiveAppId,
 				});
-				
+
 				globalTableFetchCache.delete(cacheKey);
 				gridDevLog(`🎉 [AutoFetch] Successfully populated ${tableName} in global store`);
-				return normalizedRows;
+				return load.rows;
 			})
 			.catch((err) => {
 				console.error(`❌ [AutoFetch] Failed to fetch ${tableName}:`, err);
@@ -1355,63 +1401,6 @@ export function CsmDynamicGrid({
 		
 		return true; // Started fetching
 	}, [database, resolveQueryAppIdByTable, globalTableFetchCache, setTableData, getStoredTableAppId, decrypt]);
-
-	// 🔄 Auto-fetch missing combo tables (f_cbo_query + f_grid) when field config becomes available
-	useEffect(() => {
-		const fetchSignature = `${comboFetchSignature}::menus:${comboMenuSignature}`;
-		if (!comboFetchSignature || fetchSignature === lastComboFetchSignatureRef.current) {
-			return;
-		}
-		lastComboFetchSignatureRef.current = fetchSignature;
-
-		gridDevLog('[CsmDynamicGrid] Scanning combo queries for missing tables...');
-
-		const comboFields = (m_configs?.table || []).filter((f: TableField) => {
-			const types = resolveEffectiveFieldTypes(f);
-			return isComboLikeType(types);
-		});
-
-		const comboEvalContext = {
-			seft: { m_configs, context, database, appId: runtimeAppId },
-			database,
-		};
-
-		const uniqueFetches = collectComboTableFetchRequests(comboFields, {
-			decrypt,
-			fallbackAppId: runtimeAppId,
-			menuById,
-			userContext: userAccess,
-			evalContext: comboEvalContext,
-		});
-
-		if (uniqueFetches.length === 0) {
-			gridDevLog('[CsmDynamicGrid] No combo tables to fetch');
-			return;
-		}
-
-		gridDevLog(`[CsmDynamicGrid] Found ${uniqueFetches.length} combo tables to fetch:`, uniqueFetches);
-
-		let cancelled = false;
-		setComboPrefetchBusy(true);
-		Promise.all(
-			uniqueFetches.map(({ tableName, appId, whereClause }) =>
-				ensureTableInDatabase(tableName, appId, whereClause)
-					.catch(err => {
-						console.error(`Failed to fetch ${tableName}:`, err);
-						return null;
-					}),
-			),
-		).then(() => {
-			if (cancelled) return;
-			gridDevLog('[CsmDynamicGrid] All combo tables fetched, triggering re-compute...');
-			setDatabaseVersion(v => v + 1);
-		}).finally(() => {
-			if (!cancelled) setComboPrefetchBusy(false);
-		});
-		return () => {
-			cancelled = true;
-		};
-	}, [comboFetchSignature, comboMenuSignature, userAccess, decrypt, menuById, runtimeAppId, m_configs?.table, context, database, ensureTableInDatabase]);
 
 	const comboDatabaseSignature = useMemo(
 		() => buildComboDatabaseSignature(m_configs?.table || [], database, {
@@ -1650,625 +1639,38 @@ export function CsmDynamicGrid({
 		}
 	};
 
-	// Build valueEnum for select fields via f_cbo_query (Vue parity: getOptionsSelect)
+	// Build valueEnum for select fields (Vue parity: loadData → getOptionsSelect per co field)
 	const selectEnums = useMemo(() => {
-		gridDevLog('[selectEnums] useMemo triggered');
-		gridDevLog('[selectEnums] m_configs.table:', m_configs.table);
-		gridDevLog('[selectEnums] database keys:', Object.keys(database || {}));
-		gridDevLog('[selectEnums] decrypt available:', !!decrypt);
-
-		const localizeOptionLabel = (raw: unknown) => {
-			const text = String(raw == null ? "" : raw);
-			if (!text) return "";
-			return text.includes(".") ? t(text) : text;
+		const localizeOptionLabel = (raw: string) => {
+			if (!raw) return "";
+			return raw.includes(".") ? t(raw) : raw;
 		};
-		
-		const map: Record<string, Record<string, { text: string }>> = {};
-		
-		// Start with override if provided (for detail grid)
+
+		const map = buildSelectEnumsForFields(m_configs.table || [], database, {
+			menuById,
+			decrypt,
+			evalContext: { seft: createSeftContext(), database },
+			fallbackAppId: runtimeAppId,
+			userContext: userAccess,
+			localizeLabel: localizeOptionLabel,
+		});
+
 		if (m_configs.selectEnumsOverride) {
-			gridDevLog('[selectEnums] Using selectEnumsOverride:', Object.keys(m_configs.selectEnumsOverride));
 			Object.assign(map, m_configs.selectEnumsOverride);
 		}
-		
-		const coFields = (m_configs.table || [])
-			.filter((f) => {
-				const types = resolveEffectiveFieldTypes(f);
-				return Number(f.f_show) === 1 && isComboLikeType(types);
-			});
-		
-		gridDevLog(`[selectEnums] Found ${coFields.length} combo-like fields:`, 
-			coFields.map(f => ({ name: f.f_name, rawTypes: f.f_types, effectiveTypes: resolveEffectiveFieldTypes(f), has_query: !!f.f_cbo_query }))
-		);
-		
-		coFields.forEach((f) => {
-			const comboEvalContext = {
-				seft: createSeftContext(),
-				database,
-			};
 
-			const optionsFromField = parseFieldOptions((f as any).f_options);
-			if (optionsFromField.length > 0) {
-				const enumFromOptions: Record<string, { text: string }> = {};
-				optionsFromField.forEach((opt) => {
-					enumFromOptions[String(opt.value)] = { text: localizeOptionLabel(opt.label) };
-				});
-				if (Object.keys(enumFromOptions).length > 0) {
-					map[f.f_name] = enumFromOptions;
-					return;
-				}
-			}
-
-			// Vue parity: f_grid + f_grid_fields (field props or f_cbo_query returning f_grid config)
-			if (menuById.size > 0) {
-				const gridEnum = buildGridFieldComboSelectEnum(
-					f,
-					database,
-					menuById,
-					userAccess,
-					decrypt,
-					comboEvalContext,
-				);
-				if (Object.keys(gridEnum).length > 0) {
-					map[f.f_name] = gridEnum;
-					return;
-				}
-			}
-
-			const queryEnum = buildFieldQueryComboSelectEnum(f, database, {
-				fallbackAppId: runtimeAppId,
-				userContext: userAccess,
-				decrypt,
-				evalContext: comboEvalContext,
-				menuById,
-			});
-			if (Object.keys(queryEnum).length > 0) {
-				map[f.f_name] = queryEnum;
-				return;
-			}
-
-			let q = String(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name) || "").trim();
-			if (!q) {
-				const types = resolveEffectiveFieldTypes(f);
-				if (!isMultiSelectLikeType(types)) {
-					console.warn(`[selectEnums] Field ${f.f_name} has combo type but no f_cbo_query/f_options`);
-				}
-				return;
-			}
-			
-			gridDevLog(`[selectEnums] Processing field ${f.f_name}, query (first 100 chars):`, q.substring(0, 100));
-			
-			// Try decrypt first if available - f_cbo_query might be encrypted!
-			if (decrypt) {
-				try {
-					const decrypted = decrypt(q);
-					gridDevLog(`[selectEnums] Successfully decrypted f_cbo_query for ${f.f_name}`);
-					q = decrypted;
-				} catch (err) {
-					// Not encrypted or decrypt failed, use original
-					gridDevLog(`[selectEnums] f_cbo_query for ${f.f_name} not encrypted or decrypt failed`);
-				}
-			}
-				
-			// Check if it's static JSON (starts with { or [)
-			const trimmedQ = q.trim();
-			if (trimmedQ.startsWith('{') || trimmedQ.startsWith('[')) {
-				// Static JSON - parse directly without decrypt
-				let parsed: any;
-				try {
-					// Try strict JSON parse first
-					parsed = JSON.parse(trimmedQ);
-				} catch (jsonErr) {
-					console.warn(`[selectEnums] JSON.parse failed for ${f.f_name}, trying JS object literal fallback...`);
-					// Fallback: Try parsing as JavaScript object literal using Function()
-					// This handles cases like: {field: "value"} instead of {"field": "value"}
-					try {
-						const evalFn = new Function(`return (${trimmedQ})`);
-						parsed = evalFn();
-						gridDevLog(`[selectEnums] Successfully parsed JS object literal for ${f.f_name}`);
-					} catch (evalErr) {
-						console.error(`[selectEnums] Both JSON.parse and JS eval failed for ${f.f_name}:`, evalErr);
-						console.error(`[selectEnums] Query was:`, trimmedQ);
-						// Skip this field if parsing fails
-						return;
-					}
-				}
-				
-				try {
-					gridDevLog(`[selectEnums] Parsed static JSON for ${f.f_name}:`, parsed);
-					gridDevLog(`[selectEnums] 🔍 DEBUG parsed.query[0]:`, parsed?.query?.[0]);
-					
-					// Check if this has a query array (hybrid format: {query: [...], options: [...]})
-					// If query exists and is non-empty, we need to process it dynamically
-					gridDevLog(`[selectEnums] Checking query for ${f.f_name}:`, {
-						hasQuery: parsed && typeof parsed === 'object' && Array.isArray(parsed.query),
-						queryLength: Array.isArray(parsed.query) ? parsed.query.length : 0,
-						hasDatabase: !!database
-					});
-					
-					if (parsed && typeof parsed === 'object' && 
-					    Array.isArray(parsed.query) && parsed.query.length > 0) {
-						gridDevLog(`[selectEnums] Detected query array for ${f.f_name}, processing dynamically...`);
-							
-							// Process each query specification
-							const allOptions: any[] = [];
-							parsed.query.forEach((querySpec: any) => {
-								if (!querySpec.obj_name || !database) {
-									return;
-								}
-								
-								const tableName = querySpec.obj_name;
-								const fields = querySpec.fields || [];
-								const valueField = String(querySpec?.value_field || fields?.[0] || "id").trim() || "id";
-								const labelField = String(querySpec?.label_field || fields?.[1] || valueField).trim() || valueField;
-								// Default obj_where if not provided or invalid
-								// Check for: undefined, null, empty string, empty object, or object without required fields
-								let whereClause = querySpec.obj_where;
-								const isInvalidWhere = !whereClause 
-									|| (typeof whereClause === 'string' && !whereClause.trim())
-									|| (typeof whereClause === 'object' && (!whereClause.field || !whereClause.type));
-								
-								if (isInvalidWhere) {
-									whereClause = {field: 'id', type: 'like', value: ""};
-									gridDevLog(`[selectEnums] Using default where clause for ${tableName}:`, whereClause);
-								}
-								const queryAppId = resolveQueryAppIdByTable(tableName, querySpec.app_id);
-								
-								gridDevLog(`[selectEnums] 🔍 Raw querySpec.obj_where:`, querySpec.obj_where);
-								gridDevLog(`[selectEnums] 🔍 whereClause after assignment:`, whereClause);
-								gridDevLog(`[selectEnums] Querying table: ${tableName}, app: ${queryAppId}, fields:`, fields, 'where:', whereClause);
-								
-								const tableData = database[tableName];
-								const tableExists = tableData && (Array.isArray(tableData) || (tableData.rows && Array.isArray(tableData.rows)));
-								const rows = tableExists ? (Array.isArray(tableData) ? tableData : (tableData as any).rows || []) : [];
-								const hasData = tableExists && rows.length > 0;
-								
-								gridDevLog(`[selectEnums] Checking table ${tableName} in database:`, {
-									exists: tableExists,
-									rowCount: rows.length,
-									queryAppId,
-									hasData,
-								});
-								
-								// Already fetched all combo tables in useEffect mount
-								// ONLY build options from database, NO fetch in useMemo
-								if (!hasData) {
-									console.warn(`[selectEnums] Table ${tableName} not available for app ${queryAppId} yet (will be fetched on mount)`);
-								
-
-									return;
-								}
-								
-								gridDevLog(`[selectEnums] Building options from ${tableName}: ${rows.length} rows`);
-
-
-								// Database tables have structure: { rows: Row[] }
-								if (!Array.isArray(rows)) {
-									console.warn(`[selectEnums] Table ${tableName} has no valid rows array`);
-									return;
-								}
-								
-								gridDevLog(`[selectEnums] Table ${tableName} has ${rows.length} total rows`);
-								if (rows.length > 0) {
-									gridDevLog(`[selectEnums] Sample rows from ${tableName}:`, rows.slice(0, 3));
-									gridDevLog(`[selectEnums] 🔍 p_type values in first 10 rows:`, rows.slice(0, 10).map((r: any) => r.p_type));
-								}
-								
-								// Filter data if where clause exists
-								let filteredData = rows;
-								if (whereClause) {
-									try {
-										// Support both object and string format for obj_where
-										if (typeof whereClause === 'object' && whereClause.field && whereClause.type) {
-											// Object format: { field: "p_type", type: "eq", value: 1 }
-											const field = whereClause.field;
-											const type = whereClause.type;
-											const value = whereClause.value;
-											
-											gridDevLog(`[selectEnums] 🔍 Filtering with object where: field="${field}", type="${type}", value=`, value, `(typeof: ${typeof value})`);
-											
-											filteredData = rows.filter((row: any) => {
-												const rowValue = row[field];
-												let matches = false;
-												switch (type) {
-													case 'eq': matches = rowValue == value; break;
-													case 'ne': matches = rowValue != value; break;
-													case 'gt': matches = rowValue > value; break;
-													case 'gte': matches = rowValue >= value; break;
-													case 'lt': matches = rowValue < value; break;
-													case 'lte': matches = rowValue <= value; break;
-													case 'like': matches = String(rowValue || '').toLowerCase().includes(String(value || '').toLowerCase()); break;
-													case 'in': matches = Array.isArray(value) && value.includes(rowValue); break;
-													default: matches = true; break;
-												}
-												return matches;
-											});
-											
-											gridDevLog(`[selectEnums] 🔍 After filtering: ${filteredData.length} rows (from ${rows.length})`);
-											if (filteredData.length > 0) {
-												gridDevLog(`[selectEnums] 🔍 Sample filtered rows:`, filteredData.slice(0, 3));
-											}
-										} else if (typeof whereClause === 'string') {
-											// String format: "row.p_type === 1"
-											const whereFn = safeEval(['row'], `return ${whereClause}`);
-											if (whereFn) {
-												filteredData = rows.filter((row: any) => whereFn(row));
-											}
-										}
-									} catch (err) {
-										console.warn(`[selectEnums] Where clause evaluation failed for ${f.f_name}:`, err);
-									}
-								}
-								
-								// Map to options format
-								filteredData.forEach((row: any, idx: number) => {
-									if (idx === 0) {
-										// Log first row to debug field mapping
-										gridDevLog(`[selectEnums] Sample row from ${tableName}:`, row);
-										gridDevLog(`[selectEnums] Fields mapping:`, {
-											fields,
-											valueField,
-											labelField,
-											value: row[valueField],
-											label: row[labelField],
-											allKeys: Object.keys(row)
-										});
-									}
-									const optionLabel = resolveQueryRowComboLabel(row, valueField, labelField, fields);
-
-									allOptions.push({
-										ma: row[valueField],
-										ten: optionLabel || String(row?.[valueField] || "").trim(),
-									});
-								});
-							});
-							
-							// Vue parity: Sort by 'ten' field alphabetically
-							allOptions.sort((a, b) => String(a.ten || '').localeCompare(String(b.ten || '')));
-							
-							gridDevLog(`[selectEnums] Query result for ${f.f_name}: ${allOptions.length} options`, allOptions);
-							
-							// Now process allOptions as normal
-							const enumObj: Record<string, { text: string }> = {};
-							allOptions.forEach((opt: any) => {
-								if (opt && typeof opt === 'object' && 'ma' in opt && 'ten' in opt) {
-									const value = opt.ma;
-									const label = localizeOptionLabel(opt.ten);
-									gridDevLog(`[selectEnums] Processing option:`, { opt, value, label });
-									if (value !== undefined && value !== null) {
-										enumObj[String(value)] = { text: String(label) };
-									}
-								}
-							});
-
-							if (Object.keys(enumObj).length > 0) {
-								gridDevLog(`[selectEnums] ✅ Query result for ${f.f_name}:`, enumObj);
-								map[f.f_name] = enumObj;
-							} else {
-								console.warn(`[selectEnums] No options from query for ${f.f_name}`);
-							}
-							return; // Done with query processing
-						}
-						
-						// Handle multiple formats:
-						// 1. Direct array: ["opt1", "opt2"] or [[val1, label1], [val2, label2]]
-						// 2. Object with options key: { options: [...] }
-						let options: any[] = [];
-						if (Array.isArray(parsed)) {
-							options = parsed;
-						} else if (parsed && typeof parsed === 'object' && Array.isArray(parsed.options)) {
-							options = parsed.options;
-						} else {
-							console.warn(`[selectEnums] Invalid static JSON format for ${f.f_name}:`, parsed);
-							return;
-						}
-						
-						// Vue parity: Sort by label alphabetically
-						options.sort((a, b) => {
-							let aLabel: string;
-							let bLabel: string;
-							if (Array.isArray(a)) {
-									aLabel = localizeOptionLabel(a[1] ?? a[0] ?? '');
-							} else if (a && typeof a === 'object') {
-									aLabel = localizeOptionLabel(a.ten ?? a.label ?? a.text ?? a.ma ?? a.value ?? a.id ?? '');
-							} else {
-									aLabel = localizeOptionLabel(a);
-							}
-							if (Array.isArray(b)) {
-									bLabel = localizeOptionLabel(b[1] ?? b[0] ?? '');
-							} else if (b && typeof b === 'object') {
-									bLabel = localizeOptionLabel(b.ten ?? b.label ?? b.text ?? b.ma ?? b.value ?? b.id ?? '');
-							} else {
-									bLabel = localizeOptionLabel(b);
-							}
-							return aLabel.localeCompare(bLabel);
-						});
-						
-						const enumObj: Record<string, { text: string }> = {};
-						options.forEach((opt: any) => {
-							let value: any;
-							let label: any;
-							if (Array.isArray(opt)) {
-								// Format: [value, label]
-								value = opt[0];
-								label = localizeOptionLabel(opt[1] ?? opt[0]);
-							} else if (opt && typeof opt === "object") {
-								// Format: { ma, ten } (Vue format) or { value, label }
-								if ('ma' in opt && 'ten' in opt) {
-									value = opt.ma;
-									label = localizeOptionLabel(opt.ten);
-								} else {
-									value = opt.value ?? opt[0];
-									label = localizeOptionLabel(opt.label ?? opt.text ?? opt[1] ?? value);
-								}
-							} else {
-								// Primitive value: use as both value and label
-								value = opt;
-								label = localizeOptionLabel(opt);
-							}
-							
-							// Add to enumObj
-							if (value !== undefined && value !== null) {
-								enumObj[String(value)] = { text: String(label) };
-							}
-						});
-						
-						if (Object.keys(enumObj).length > 0) {
-							gridDevLog(`[selectEnums] ✅ Static JSON for ${f.f_name}:`, enumObj);
-							map[f.f_name] = enumObj;
-						} else {
-							console.warn(`[selectEnums] No valid options extracted from static JSON for ${f.f_name}`);
-						}
-					} catch (e) {
-						console.error(`[selectEnums] Failed to parse static JSON for ${f.f_name}:`, e, 'Query:', trimmedQ);
-					}
-					return;
-				}
-				
-				// Dynamic code - needs evaluation and possibly decryption
-				// IMPORTANT: Check if raw q is encrypted BEFORE wrapping with "return "
-				// Because if we wrap encrypted string as "return (encrypted...)", it looks like JS!
-				let rawCode = q;
-				
-				// Try to detect if it's encrypted (Base64-like pattern, long, no JS keywords)
-				const hasJSSyntax = /[{}()\[\];:,.\s]|return|function|const|let|var|if|for|while|=>|alert|console/.test(rawCode);
-				const hasBase64Pattern = /[A-Za-z0-9_\-\/]{50,}/.test(rawCode);
-				const looksEncrypted = !hasJSSyntax && hasBase64Pattern;
-				
-				if (looksEncrypted) {
-					// Try decrypt prop first, fall back to csmDecrypt
-					if (decrypt) {
-						try {
-							const decrypted = decrypt(rawCode);
-							const before = rawCode.substring(0, 20);
-							const after = decrypted.substring(0, 20);
-							if (before !== after) {
-								rawCode = decrypted;
-								gridDevLog(`[selectEnums] decrypt prop worked for ${f.f_name}`);
-							} else {
-								gridDevLog(`[selectEnums] decrypt prop didn't change code for ${f.f_name}, using csmDecrypt`);
-								rawCode = csmDecrypt(rawCode);
-							}
-						} catch (err) {
-							console.warn(`[selectEnums] decrypt prop failed for ${f.f_name}, using csmDecrypt:`, err);
-							try {
-								rawCode = csmDecrypt(rawCode);
-							} catch (decryptErr) {
-								console.error(`[selectEnums] csmDecrypt also failed for ${f.f_name}:`, decryptErr);
-								return;
-							}
-						}
-					} else {
-						try {
-							rawCode = csmDecrypt(rawCode);
-						} catch (err) {
-							console.error(`[selectEnums] csmDecrypt failed for ${f.f_name}:`, err);
-							return;
-						}
-					}
-				}
-				
-				// Now add return prefix if needed
-				const body = (rawCode.includes("return ") ? "" : "return ") + rawCode;
-				
-				const fn = safeEval(["seft", "data"], body) as ((seft: any, data: Database) => any) | null;
-				if (!fn) {
-					console.error(`[selectEnums] Failed to create function for ${f.f_name}. Code (first 200 chars):`, body.substring(0, 200));
-					return;
-				}
-				
-				try {
-					const seftContext = createSeftContext();
-					const objQa = fn(seftContext, database);
-					if (!objQa) {
-						console.warn(`[selectEnums] Dynamic code returned null/undefined for ${f.f_name}`);
-						return;
-					}
-					
-					gridDevLog(`[selectEnums] Dynamic code result for ${f.f_name}:`, objQa);
-					
-					// Vue: f_cbo_query returning { f_grid, f_grid_fields } uses lookup table, not options[]
-					if (objQa.hasOwnProperty("f_grid") && objQa.hasOwnProperty("f_grid_fields") && menuById.size > 0) {
-						const gridEnum = buildGridFieldComboSelectEnum(
-							{ ...f, f_grid: objQa.f_grid, f_grid_fields: objQa.f_grid_fields },
-							database,
-							menuById,
-							userAccess,
-							decrypt,
-							comboEvalContext,
-						);
-						if (Object.keys(gridEnum).length > 0) {
-							map[f.f_name] = gridEnum;
-							return;
-						}
-					}
-					
-					// Vue logic: must have options property
-					if (!objQa.hasOwnProperty('options')) {
-						console.warn(`[selectEnums] Result missing 'options' property for ${f.f_name}:`, objQa);
-						return;
-					}
-					
-					const options: any[] = Array.isArray(objQa.options) ? objQa.options : [];
-					if (options.length === 0) {
-						console.warn(`[selectEnums] Empty options array for ${f.f_name}`);
-						return;
-					}
-					
-					// Vue parity: Sort by 'ten' field alphabetically (before building enumObj)
-					options.sort((a, b) => {
-						const aLabel = localizeOptionLabel(a?.ten ?? a?.label ?? a?.text ?? String(a));
-						const bLabel = localizeOptionLabel(b?.ten ?? b?.label ?? b?.text ?? String(b));
-						return String(aLabel).localeCompare(String(bLabel));
-					});
-					
-					const enumObj: Record<string, { text: string }> = {};
-					options.forEach((opt: any) => {
-						// Vue format: {ma, ten} or array [value, label]
-						let value: any;
-						let label: any;
-						if (Array.isArray(opt)) {
-							// Format: [value, label]
-							value = opt[0];
-							label = localizeOptionLabel(opt[1] ?? opt[0]);
-						} else if (opt && typeof opt === "object") {
-							// Format: { ma, ten } (Vue format) - prioritize ma/ten first!
-							value = opt.ma ?? opt.value ?? opt.id ?? opt.key;
-							label = localizeOptionLabel(opt.ten ?? opt.label ?? opt.text ?? String(value));
-						} else {
-							// Simple value: "option"
-							value = String(opt);
-							label = localizeOptionLabel(String(opt));
-						}
-						if (value != null && value !== "") {
-							enumObj[String(value)] = { text: String(label) };
-						}
-					});
-					
-					if (Object.keys(enumObj).length > 0) {
-						gridDevLog(`[selectEnums] ✅ Dynamic code for ${f.f_name}:`, enumObj);
-						map[f.f_name] = enumObj;
-					} else {
-						console.warn(`[selectEnums] No valid options extracted from dynamic code for ${f.f_name}`);
-					}
-				} catch (err) {
-					console.error(`[selectEnums] Dynamic code execution error for ${f.f_name}:`, err);
-				}
-			});
 		(["group_id", "permissionGroups"] as const).forEach((fieldName) => {
 			const roleRows = getComboTableRows(database, "csm_roles");
 			if (roleRows.length === 0) return;
 			if (map[fieldName] && Object.keys(map[fieldName]).length > 0) return;
 			map[fieldName] = buildRoleComboSelectEnum(roleRows);
 		});
-		gridDevLog('[selectEnums] Final map:', map);
+
+		gridDevLog("[selectEnums] built keys:", Object.keys(map));
 		return map;
-	}, [m_configs.table, decrypt, context, m_configs, m_configs.selectEnumsOverride, databaseVersion, ensureTableInDatabase, i18n.language, t, menuById, userAccess, comboDatabaseSignature, database, createSeftContext]);
+	}, [m_configs.table, decrypt, m_configs, m_configs.selectEnumsOverride, databaseVersion, i18n.language, t, menuById, userAccess, comboDatabaseSignature, database, createSeftContext, runtimeAppId]);
 
 	const lastComboHydrationSigRef = useRef("");
-
-	// Big-data: resolve combo labels on-demand for values missing from capped preload.
-	useEffect(() => {
-		if (!hasTableName || isDetailGrid || comboPrefetchBusy || data.length === 0) return;
-
-		const comboFields = (m_configs.table || []).filter((field) => {
-			const types = resolveEffectiveFieldTypes(field);
-			return Number(field.f_show) === 1 && isComboLikeType(types);
-		});
-		if (comboFields.length === 0) return;
-
-		const comboEvalContext = {
-			seft: createSeftContext(),
-			database,
-		};
-
-		const hydrationPlan: Array<{
-			key: string
-			appId: string
-			tableName: string
-			valueField: string
-			values: string[]
-		}> = [];
-
-		comboFields.forEach((field) => {
-			const gridConfig = resolveFieldGridComboConfig(field, { decrypt, evalContext: comboEvalContext });
-			const tableName = gridConfig
-				? resolveFieldGridComboTableName({ f_grid: gridConfig.f_grid }, menuById)
-				: resolveFieldGridComboTableName(field, menuById);
-			if (!tableName) return;
-
-			const valueField = resolveComboValueField(field, menuById, { decrypt, evalContext: comboEvalContext });
-			const valueEnum = selectEnums[field.f_name];
-			const missing = new Set<string>();
-
-			data.forEach((row) => {
-				const raw = row[field.f_name];
-				if (raw == null || raw === "") return;
-				const valueKey = String(raw).trim();
-				if (!valueKey) return;
-				if (lookupValueEnumLabel(valueEnum, raw)) return;
-				const label = resolveGridComboCellLabel(valueKey, field, database, menuById, valueEnum, {
-					decrypt,
-					evalContext: comboEvalContext,
-				});
-				if (label === valueKey) missing.add(valueKey);
-			});
-
-			if (missing.size === 0) return;
-			const appId = resolveComboQueryAppId(tableName, runtimeAppId, runtimeAppId, userAccess, decrypt);
-			hydrationPlan.push({
-				key: `${appId}::${tableName}::${valueField}`,
-				appId,
-				tableName,
-				valueField,
-				values: Array.from(missing),
-			});
-		});
-
-		if (hydrationPlan.length === 0) return;
-
-		const signature = hydrationPlan
-			.map((item) => `${item.key}::${item.values.slice().sort().join(",")}`)
-			.sort()
-			.join("|");
-		if (signature === lastComboHydrationSigRef.current) return;
-		lastComboHydrationSigRef.current = signature;
-
-		let cancelled = false;
-		void (async () => {
-			for (const item of hydrationPlan) {
-				if (cancelled) return;
-				try {
-					const rows = await fetchComboRowsByValues(item.appId, item.tableName, item.valueField, item.values);
-					if (rows.length > 0) {
-						mergeTableRows(item.tableName, rows as Row[], { app_id: item.appId });
-					}
-				} catch {
-					// best-effort combo hydration
-				}
-			}
-			if (!cancelled) setDatabaseVersion((v) => v + 1);
-		})();
-
-		return () => {
-			cancelled = true;
-		};
-	}, [
-		data,
-		selectEnums,
-		comboDatabaseSignature,
-		comboPrefetchBusy,
-		hasTableName,
-		isDetailGrid,
-		m_configs.table,
-		database,
-		menuById,
-		decrypt,
-		runtimeAppId,
-		userAccess,
-		createSeftContext,
-		mergeTableRows,
-	]);
 
 	// Map backend fields to ProColumns with f_types rules
 	const baseColumns: ProColumns<Row>[] = useMemo(() => {
@@ -2324,7 +1726,8 @@ export function CsmDynamicGrid({
 				title: headerText,
 				dataIndex: f.f_name,
 				key: isSelect || isMultiSelect ? `${f.f_name}::${comboDatabaseSignature}` : f.f_name,
-				width: resolveConfiguredColumnWidth(f),
+				width: resolveGridColumnWidth(f),
+				ellipsis: true,
 				align: resolvedAlign ?? (isNumber ? "right" : "left"),
 				// Add responsive property to hide less important columns on mobile
 				responsive: (isImage || isVideo || isAlbumMedia) ? ['lg'] : isRichText ? ['md'] : isTextArea ? ['md'] : undefined,
@@ -2424,19 +1827,18 @@ export function CsmDynamicGrid({
 			else if (isRichText) col.valueType = "text"; // plain text for grid, editor in modal
 			else if (isSwitch) col.valueType = "switch";
 			else if (isSelect || isMultiSelect) {
-				col.valueType = "select";
 				const rawOptionsForRender = parseFieldOptionsRaw((f as any).f_options);
 				const optionsValueEnum = rawOptionsForRender.reduce<Record<string, { text: string }>>((acc, opt) => {
 					acc[opt.value] = { text: opt.label.includes(".") ? t(opt.label) : opt.label };
 					return acc;
 				}, {});
 				const ve = Object.keys(optionsValueEnum).length > 0 ? optionsValueEnum : selectEnums[f.f_name];
-				if (ve) col.valueEnum = ve as any;
-				// Build value → color map from f_options for tag coloring
 				const optionColorMap: Record<string, string> = {};
 				rawOptionsForRender.forEach(({ value, color }) => { if (color) optionColorMap[value] = color; });
 
 				if (isMultiSelect) {
+					col.valueType = "select";
+					if (ve) col.valueEnum = ve as any;
 					col.render = (_dom, entity) => {
 						const raw = entity[f.f_name];
 						if (raw == null || raw === "") return null;
@@ -2507,8 +1909,8 @@ export function CsmDynamicGrid({
 						const fallbackEntry = itemToEntry(String(raw));
 						return fallbackEntry ? renderTags([fallbackEntry]) : React.createElement(Tag, { color: getAutoTagColor(String(raw)) }, String(raw));
 					};
-				} else if (isSelect && !isMultiSelect) {
-					// Always render combo label on grid — ProTable valueType=select shows blank when valueEnum missing/mismatch
+				} else if (isSelect) {
+					// Single co: custom render only (no valueType=select — ProTable blanks cells without valueEnum match)
 					col.render = (_dom, entity) => {
 						const raw = entity[f.f_name];
 						if (raw == null || raw === "") return null;
@@ -2898,7 +2300,7 @@ export function CsmDynamicGrid({
 			return col;
 		});
 		return cols;
-	}, [m_configs.table, selectEnums, i18n.language, numberLocale, t, menuById, database, decrypt, runtimeAppId, context, m_configs, comboDatabaseSignature]);
+	}, [m_configs.table, selectEnums, i18n.language, numberLocale, t, menuById, database, decrypt, runtimeAppId, context, m_configs, comboDatabaseSignature, comboLabelEpoch, databaseVersion]);
 
   // Apply datacolumntemplate trigger (mutates columns)
 	const columns = useMemo<ProColumns<Row>[]>(() => {
@@ -3157,7 +2559,10 @@ export function CsmDynamicGrid({
 	const canServerPage = !isDetailGrid
 		&& hasTableName
 		&& !m_configs.trigger?.load_db
-		&& Boolean(tableStoreMeta?.serverPaged);
+		&& (
+			Boolean(tableStoreMeta?.serverPaged)
+			|| Number(tableStoreMeta?.totalCount ?? 0) > GRID_SERVER_PAGE_THRESHOLD
+		);
 
 	const serverBaseWhere = useMemo(() => ({
 		operator: "AND" as const,
@@ -3208,8 +2613,9 @@ export function CsmDynamicGrid({
 		setData(nextRows);
 	}, []);
 
-	// Single data-sync path — avoids race between two useEffects on large datasets / combo prefetch.
+	// Primary rows — combo prefetch runs in background; server-paged grids never wait.
 	useEffect(() => {
+
 		if (isDetailGrid) {
 			syncGridRows(resolveDetailRows());
 			return;
@@ -3238,6 +2644,13 @@ export function CsmDynamicGrid({
 		}
 
 		if (canServerPage) {
+			const previewRows = tableStoreMeta?.rows;
+			if (Array.isArray(previewRows) && previewRows.length > 0) {
+				const sig = buildRowsSyncSignature(previewRows);
+				if (sig !== lastSyncedDataSignatureRef.current) {
+					syncGridRows(previewRows as Row[]);
+				}
+			}
 			return;
 		}
 
@@ -3260,6 +2673,7 @@ export function CsmDynamicGrid({
 		resolveLoadDbRows,
 		storeMasterRows,
 		storeMasterRowsSignature,
+		tableStoreMeta,
 		syncGridRows,
 		tableName,
 		runtimeAppId,
@@ -3622,7 +3036,8 @@ export function CsmDynamicGrid({
 	useEffect(() => {
 		if (!canServerPage) return;
 		syncGridRows(serverPagination.rows);
-	}, [canServerPage, serverPagination.rows, syncGridRows]);
+		lastComboHydrationSigRef.current = "";
+	}, [canServerPage, serverPagination.rows, serverPagination.page, syncGridRows]);
 
 	const isServerPaged = canServerPage && serverPagination.enabled;
 
@@ -3733,6 +3148,106 @@ export function CsmDynamicGrid({
 
 	// Let Ant Design slice pages — manual paginateRows + ProTable caused empty/flaky cells on big data.
 	const tableDataSource = sortedData;
+
+	/** Rows on the current page — combo labels hydrate only for visible values (big-data safe). */
+	const rowsForComboHydration = useMemo(() => {
+		if (isDetailGrid || !hasTableName) return [];
+		if (isServerPaged) return data;
+		if (useClientPagination) {
+			const { current, pageSize } = paginationState;
+			const start = Math.max(0, (current - 1) * pageSize);
+			return sortedData.slice(start, start + pageSize);
+		}
+		return sortedData.length > 500 ? data.slice(0, 500) : sortedData;
+	}, [
+		isDetailGrid,
+		hasTableName,
+		isServerPaged,
+		data,
+		useClientPagination,
+		paginationState.current,
+		paginationState.pageSize,
+		sortedData,
+	]);
+
+	useEffect(() => {
+		lastComboHydrationSigRef.current = "";
+	}, [paginationState.current, paginationState.pageSize]);
+
+	// Grid display: hydrate combo labels for values on the current page only.
+	useEffect(() => {
+		if (!hasTableName || isDetailGrid || rowsForComboHydration.length === 0) return;
+
+		const comboEvalContext = {
+			seft: createSeftContext(),
+			database,
+		};
+
+		const plan = buildComboHydrationPlan(rowsForComboHydration, m_configs?.table || [], {
+			database,
+			menuById,
+			decrypt,
+			fallbackAppId: runtimeAppId,
+			userContext: userAccess,
+			evalContext: comboEvalContext,
+			selectEnums,
+		});
+		if (plan.length === 0) return;
+
+		const pageKey = isServerPaged
+			? `sp:${serverPagination.page}:${serverPagination.pageSize}`
+			: `cp:${paginationState.current}:${paginationState.pageSize}`;
+		const signature = `${pageKey}|${plan
+			.map((item) => `${item.key}::${item.values.slice().sort().join(",")}`)
+			.sort()
+			.join("|")}`;
+		if (!signature || signature === lastComboHydrationSigRef.current) return;
+		lastComboHydrationSigRef.current = signature;
+
+		let cancelled = false;
+		void hydrateComboLabelsForRows(rowsForComboHydration, m_configs?.table || [], {
+			database,
+			setTableData,
+			mergeTableRows,
+			decrypt,
+			fallbackAppId: runtimeAppId,
+			menuById,
+			userContext: userAccess,
+			evalContext: comboEvalContext,
+			selectEnums,
+		}).then((count) => {
+			if (!cancelled && count > 0) {
+				setDatabaseVersion((v) => v + 1);
+				setComboLabelEpoch((v) => v + 1);
+			}
+		});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [
+		rowsForComboHydration,
+		selectEnums,
+		comboDatabaseSignature,
+		hasTableName,
+		isDetailGrid,
+		isServerPaged,
+		serverPagination.page,
+		serverPagination.pageSize,
+		paginationState.current,
+		paginationState.pageSize,
+		m_configs.table,
+		database,
+		menuById,
+		decrypt,
+		runtimeAppId,
+		userAccess,
+		createSeftContext,
+		mergeTableRows,
+		setTableData,
+		comboLabelEpoch,
+		databaseVersion,
+	]);
 
 	// Virtual scroll drops cells on large combo grids — paginate instead.
 	const enableVirtualScroll = false;
@@ -4475,6 +3990,11 @@ export function CsmDynamicGrid({
 		}
 	}
 
+	const tableScrollX = useMemo(() => {
+		const sum = columns.reduce((acc, col) => acc + (typeof col.width === "number" ? col.width : 148), 0);
+		return Math.max(960, sum + 96);
+	}, [columns]);
+
 	const tableProps: any = {
 		className: "csm-dynamic-grid-table",
 		rowKey: (record: Row) => {
@@ -4488,7 +4008,8 @@ export function CsmDynamicGrid({
 		},
 		dataSource: tableDataSource,
 			onChange: handleTableChange,
-		loading: comboPrefetchBusy || (isServerPaged && serverPagination.loading),
+		loading: comboGateInternal.blockingBusy || (isServerPaged && serverPagination.loading),
+		tableLayout: "fixed",
 		pagination: showPagination ? {
 			current: isServerPaged ? serverPagination.page : paginationState.current,
 			pageSize: isServerPaged ? serverPagination.pageSize : paginationState.pageSize,
@@ -4498,8 +4019,7 @@ export function CsmDynamicGrid({
 			pageSizeOptions: [...GRID_PAGE_SIZE_OPTIONS],
 		} : false,
 		virtual: enableVirtualScroll,
-		// Let BasicTable auto-height handle vertical fit inside parent; keep horizontal scroll responsive.
-		scroll: isMobile ? { x: 'auto' } : { x: 'max-content' },
+		scroll: isMobile ? { x: "auto" } : { x: tableScrollX },
 		sticky: true,
 		...(enableInlineCellEdit && canEdit ? {
 			editable: {

@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Tabs, theme } from "antd";
+import { Spin, Tabs, theme } from "antd";
 import CsmDynamicGrid from "./CsmDynamicGrid";
 import { buildDetailGridSelectEnums } from "./CsmEditModal";
+import { useComboPrefetchGate } from "./combo-prefetch";
+import { flattenAppMenusById } from "./combo-utils";
 import { usePreferences } from "#src/hooks/use-preferences";
-import { useAppStore } from "#src/store";
+import { useAppStore, usePermissionStore } from "#src/store";
 import {
 	buildMasterRowKey,
 	getPrimaryKeyFieldsFromConfig,
@@ -32,6 +34,9 @@ export default function CsmMasterDetail(props: any) {
 	const { isDark } = usePreferences();
 	const { token } = theme.useToken();
 	const setTableData = useAppStore((state) => state.setTableData);
+	const mergeTableRows = useAppStore((state) => state.mergeTableRows);
+	const apiWholeMenus = usePermissionStore((state) => state.apiWholeMenus);
+	const menuById = useMemo(() => flattenAppMenusById(apiWholeMenus || []), [apiWholeMenus]);
 	const [selectRow, setSelectRow] = useState<any>(null);
 	const [isFullscreen, setIsFullscreen] = useState(false);
 	const containerRef = useRef<HTMLDivElement | null>(null);
@@ -44,6 +49,27 @@ export default function CsmMasterDetail(props: any) {
 	const nodes = (m_configs && m_configs.nodes) || [];
 	const hasNodes = nodes.length > 0;
 	const masterTableName = String(m_configs?.table_name || "").trim();
+
+	const allComboFields = useMemo(() => {
+		const masterFields = Array.isArray(m_configs?.table) ? m_configs.table : [];
+		const detailFields = nodes.flatMap((node: any) => (Array.isArray(node?.table) ? node.table : []));
+		return [...masterFields, ...detailFields];
+	}, [m_configs?.table, nodes]);
+
+	const comboGate = useComboPrefetchGate({
+		fields: allComboFields,
+		signatureSuffix: `master-detail:${masterTableName}:${nodes.map((n: any) => n?.id).join(",")}`,
+		fallbackAppId: appId,
+		menuById,
+		database,
+		setTableData,
+		mergeTableRows,
+		decrypt,
+		evalContext: {
+			seft: { m_configs, context: { select_row: selectRow }, database, appId },
+			database,
+		},
+	});
 
 	const patchMasterRowInStore = useCallback((nextMasterRow: Record<string, any>) => {
 		if (!masterTableName || !nextMasterRow) return;
@@ -150,6 +176,7 @@ export default function CsmMasterDetail(props: any) {
 			},
 			context: { select_row: selectRow || undefined },
 			isDetailGrid: true,
+			comboGateExternalReady: true,
 			onDetailRowsChange: (rows: Record<string, any>[]) => handleDetailRowsChange(detailTableName, rows),
 			onDataChange,
 		}));
@@ -177,7 +204,11 @@ export default function CsmMasterDetail(props: any) {
 		? Math.max(effectiveHeight - masterHeight - 4, 200)
 		: undefined;
 
-	return React.createElement("div", {
+	return React.createElement(Spin, {
+		spinning: comboGate.blockingBusy,
+		tip: comboGate.blockingBusy ? "Đang tải dữ liệu combo (co)..." : undefined,
+		style: { maxHeight: "none" },
+	}, React.createElement("div", {
 		ref: containerRef,
 		style: {
 			display: "flex",
@@ -286,6 +317,7 @@ export default function CsmMasterDetail(props: any) {
 			onSelectRow: handleMasterSelectRow,
 			onDataChange,
 			embeddedPanelContainer: containerRef,
+			comboGateExternalReady: true,
 		}))),
 		hasNodes
 			? React.createElement("div", {
@@ -326,5 +358,5 @@ export default function CsmMasterDetail(props: any) {
 				}
 			}))
 			: null,
-	]);
+	]));
 }

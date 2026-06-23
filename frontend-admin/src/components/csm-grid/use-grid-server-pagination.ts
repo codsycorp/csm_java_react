@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getTableData, type Where } from "./CsmApi";
 import { GRID_SERVER_DEFAULT_PAGE_SIZE, normalizeTableRows, parseTableTotalCount } from "./grid-bigdata-policy";
+import { buildRowsSyncSignature } from "./grid-perf-utils";
 import type { GridSortSpec } from "./grid-server-query";
 import { serializeGridServerQuery, type GridServerQuery } from "./grid-server-query";
 
@@ -47,6 +48,15 @@ export function useGridServerPagination(options: {
 	const requestIdRef = useRef(0);
 	const seededRef = useRef(Boolean(initialRows?.length));
 	const serverQueryKey = serializeGridServerQuery(serverQuery ?? { sort: [] });
+	const initialRowsSignature = buildRowsSyncSignature(initialRows);
+
+	useEffect(() => {
+		if (!enabled || !initialRows?.length) return;
+		setRows(initialRows);
+		if (typeof initialTotal === "number" && initialTotal >= 0) {
+			setTotal(initialTotal);
+		}
+	}, [enabled, initialRowsSignature, initialTotal, initialRows]);
 
 	const resolveWhere = useCallback((): Where | undefined => {
 		return serverQuery?.where ?? baseWhere;
@@ -97,10 +107,11 @@ export function useGridServerPagination(options: {
 			seededRef.current = false;
 			return;
 		}
-		if (seededRef.current) {
+		if (seededRef.current && initialRows?.length) {
 			seededRef.current = false;
 			return;
 		}
+		seededRef.current = false;
 		void fetchPageRef.current(1, pageSize);
 	}, [enabled, tableName, appId, pageSize, serverQueryKey]);
 

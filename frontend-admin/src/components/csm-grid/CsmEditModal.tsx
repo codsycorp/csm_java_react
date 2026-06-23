@@ -8,7 +8,7 @@ import { xml } from '@codemirror/lang-xml';
 import { vscodeDark } from '@uiw/codemirror-theme-vscode';
 import React, { useEffect, useMemo, useState, Suspense, lazy, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Form, Input, Button, Select, Divider, Typography, InputNumber, DatePicker, TimePicker, Switch, Modal, Tabs, Space, TreeSelect, theme } from "antd";
+import { Form, Input, Button, Select, Divider, Typography, InputNumber, DatePicker, TimePicker, Switch, Modal, Tabs, Space, TreeSelect, theme, Spin } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
 import { csmEncrypt, csmDecrypt } from "./CsmCrypto";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
@@ -24,11 +24,12 @@ import { useAppStore } from "#src/store/app";
 import { usePermissionStore } from "#src/store";
 import { useUserStore } from "#src/store/user";
 import { getTableData } from "./CsmApi";
-import { normalizeComboOptions, resolveComboQueryAppId, buildRoleComboOptions, getComboTableRows, buildRoleComboValueEnum, buildRoleComboSelectEnum, resolveRoleComboLabel, parseFieldOptions, getLegacyFallbackComboQuery, resolveEffectiveComboQueryText, buildGridFieldComboSelectEnum, buildFieldQueryComboSelectEnum, buildComboSelectEnumFromQueryObject, executeComboQueryObject, resolveEditFieldComboSelectOptions, resolveQueryRowComboLabel, collectComboTableFetchRequests, flattenAppMenusById, isDefaultComboWhereClause, storedTableAppIdMatches, resolveEffectiveFieldTypes, isComboLikeType } from "./combo-utils";
+import { normalizeComboOptions, resolveComboQueryAppId, buildRoleComboOptions, getComboTableRows, buildRoleComboValueEnum, buildRoleComboSelectEnum, resolveRoleComboLabel, parseFieldOptions, getLegacyFallbackComboQuery, resolveEffectiveComboQueryText, buildGridFieldComboSelectEnum, buildFieldQueryComboSelectEnum, buildComboSelectEnumFromQueryObject, buildSelectEnumsForFields, executeComboQueryObject, resolveEditFieldComboSelectOptions, resolveQueryRowComboLabel, collectComboTableFetchRequests, flattenAppMenusById, isDefaultComboWhereClause, storedTableAppIdMatches, resolveEffectiveFieldTypes, isComboLikeType } from "./combo-utils";
 import { getUserAccessContext } from "#src/utils/user-app-id";
 import { formatDateForStorage, parseDateValueToDayjs, resolveDateLocaleFormat } from "#src/utils/dateControl";
 import { compileMenuTrigger, resolveTriggerBody, safeEval } from "./csm-trigger-runner";
 import { gridDevLog } from "./grid-perf-utils";
+import { prefetchComboTablesForEdit } from "./combo-prefetch";
 
 // ============================================================================
 // GLOBAL CACHE: Tự động fetch missing tables cho combo queries
@@ -152,290 +153,24 @@ export async function ensureTableInDatabase(
   return true;
 }
 
-// Helper: Build selectEnums từ trigger f_cbo_query (Vue compatible)
-// Giống CsmDynamicGrid.selectEnums nhưng dành cho detail grid
-// Detail grid không có database table riêng nên phải build từ trigger
+// Vue loadData → getOptionsSelect per co field; React dùng buildSelectEnumsForFields.
 export function buildDetailGridSelectEnums(
   fields: any[],
   database: any,
   decrypt?: (s: string) => string,
   seft?: any
 ): Record<string, any> {
-  const result: Record<string, any> = {};
   const seftContext = seft || { m_configs: { table: fields }, context: {} };
+  const menuById: Map<string, any> = seftContext?.menuById instanceof Map
+    ? seftContext.menuById
+    : flattenAppMenusById(seftContext?.menus || []);
 
-  const toEnumObj = (options: any[]): Record<string, { text: string }> => {
-    const enumObj: Record<string, { text: string }> = {};
-    options.forEach((opt: any) => {
-      let value: any;
-      let label: any;
-      if (Array.isArray(opt)) {
-        value = opt[0];
-        label = opt[1] ?? opt[0];
-      } else if (opt && typeof opt === "object") {
-        value = opt.ma ?? opt.value ?? opt.id ?? opt.key;
-        label = opt.ten ?? opt.label ?? opt.text ?? String(value ?? '');
-      } else {
-        value = opt;
-        label = String(opt);
-      }
-      if (value !== undefined && value !== null && value !== "") {
-        enumObj[String(value)] = { text: String(label) };
-      }
-    });
-    return enumObj;
-  };
-
-  fields.forEach((f: any) => {
-    const types = resolveEffectiveFieldTypes(f);
-    const isCombo = isComboLikeType(types);
-    if (!isCombo) return;
-
-    const optionsFromField = parseFieldOptions(f.f_options);
-    if (optionsFromField.length > 0) {
-      const enumObj = toEnumObj(optionsFromField.map((opt) => ({ ma: opt.value, ten: opt.label })));
-      if (Object.keys(enumObj).length > 0) {
-        result[f.f_name] = enumObj;
-        return;
-      }
-    }
-
-    const menuById: Map<string, any> = seftContext?.menuById instanceof Map
-      ? seftContext.menuById
-      : flattenAppMenusById(seftContext?.menus || []);
-    if (menuById.size > 0) {
-      const gridEnum = buildGridFieldComboSelectEnum(
-        f,
-        database,
-        menuById,
-        getUserAccessContext(),
-        decrypt,
-        { seft: seftContext, database },
-      );
-      if (Object.keys(gridEnum).length > 0) {
-        result[f.f_name] = gridEnum;
-        return;
-      }
-    }
-
-    const userContext = getUserAccessContext();
-    const quickEnum = buildFieldQueryComboSelectEnum(f, database, {
-      fallbackAppId: seftContext?.appId,
-      userContext,
-      decrypt,
-      evalContext: { seft: seftContext, database },
-      menuById,
-    });
-    if (Object.keys(quickEnum).length > 0) {
-      result[f.f_name] = quickEnum;
-      return;
-    }
-
-    const rawQuery = f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name);
-    if (!rawQuery) return;
-
-    let q = resolveEffectiveComboQueryText(rawQuery, decrypt);
-
-    try {
-      // f_grid:table:display:value
-      if (q.startsWith('f_grid:')) {
-        const parts = q.split(':');
-        const [_, tableName, displayField = 'ten', valueField = 'id'] = parts;
-        const tableData = database?.[tableName];
-        const rows = Array.isArray(tableData) ? tableData : tableData?.rows;
-        if (Array.isArray(rows) && rows.length > 0) {
-          const options = rows.map((row: any) => ({
-            ma: row[valueField] ?? row.id,
-            ten: row[displayField] ?? ''
-          }));
-          const enumObj = toEnumObj(options);
-          if (Object.keys(enumObj).length > 0) result[f.f_name] = enumObj;
-        } else if (tableName) {
-          const userContext = getUserAccessContext();
-          const appId = resolveComboQueryAppId(tableName, undefined, seftContext?.appId, userContext, decrypt);
-          const cacheKey = `${appId}::${tableName}`;
-          if (!globalTableFetchCache.has(cacheKey)) {
-            ensureTableInDatabase(tableName, appId, database, undefined, seftContext?.setTableData).catch((err) => {
-              console.error(`Failed to auto-fetch table ${tableName}:`, err);
-            });
-          }
-        }
-        return;
-      }
-
-      // query:code
-      if (q.startsWith('query:')) {
-        let code = q.substring(6);
-        if (decrypt) {
-          try { code = decrypt(code); } catch {}
-        }
-        const fn = new Function('seft', 'db', `return (${code})`);
-        const queryResult = fn(seftContext, database);
-        if (Array.isArray(queryResult)) {
-          const options = queryResult.map((item: any) => ({
-            ma: item.ma ?? item.id ?? item.value ?? item,
-            ten: item.ten ?? item.name ?? item.label ?? item.text ?? String(item)
-          }));
-          const enumObj = toEnumObj(options);
-          if (Object.keys(enumObj).length > 0) result[f.f_name] = enumObj;
-        }
-        return;
-      }
-
-      const trimmedQ = q.trim();
-      if (trimmedQ.startsWith('{') || trimmedQ.startsWith('[')) {
-        let parsed: any;
-        try {
-          // Try strict JSON parse first
-          parsed = JSON.parse(trimmedQ);
-        } catch (jsonErr) {
-          console.warn(`[buildDetailGridSelectEnums] JSON.parse failed for ${f.f_name}, trying JS object literal fallback...`);
-          // Fallback: Try parsing as JavaScript object literal using Function()
-          // This handles cases like: {field: "value"} instead of {"field": "value"}
-          try {
-            const evalFn = new Function(`return (${trimmedQ})`);
-            parsed = evalFn();
-            console.log(`[buildDetailGridSelectEnums] Successfully parsed JS object literal for ${f.f_name}`);
-          } catch (evalErr) {
-            console.error(`[buildDetailGridSelectEnums] Both JSON.parse and JS eval failed for ${f.f_name}:`, evalErr);
-            console.error(`[buildDetailGridSelectEnums] Query was:`, trimmedQ);
-            // Skip this field if parsing fails
-            return;
-          }
-        }
-
-        // Handle query array / dynamic JS result (Vue getOptionsSelect parity)
-        if (parsed && typeof parsed === 'object' && (Array.isArray(parsed.query) || Array.isArray(parsed.options))) {
-          const userContext = getUserAccessContext();
-          const queryEnum = buildFieldQueryComboSelectEnum(f, database, {
-            fallbackAppId: seftContext?.appId,
-            userContext,
-            decrypt,
-            evalContext: { seft: seftContext, database },
-            menuById,
-          });
-          if (Object.keys(queryEnum).length > 0) {
-            result[f.f_name] = queryEnum;
-            return;
-          }
-
-          // Prefetch missing lookup tables from static query spec
-          if (Array.isArray(parsed.query)) {
-            parsed.query.forEach((querySpec: any) => {
-              const tableName = String(querySpec?.obj_name || "").trim();
-              if (!tableName || getComboTableRows(database, tableName).length > 0) return;
-              const appId = resolveComboQueryAppId(
-                tableName,
-                querySpec.app_id,
-                seftContext?.appId,
-                userContext,
-                decrypt,
-              );
-              let whereClause = querySpec.obj_where;
-              const forceFetchWhere = !isDefaultComboWhereClause(whereClause);
-              const whereSuffix = forceFetchWhere ? `::${JSON.stringify(whereClause)}` : '';
-              const cacheKey = `${appId}::${tableName}${whereSuffix}`;
-              if (globalTableFetchCache.has(cacheKey)) return;
-              ensureTableInDatabase(
-                tableName,
-                appId,
-                database,
-                forceFetchWhere ? whereClause : undefined,
-                seftContext?.setTableData,
-              ).catch((err) => {
-                console.error(`Failed to auto-fetch table ${tableName}:`, err);
-              });
-            });
-          }
-
-          if (parsed.f_grid && parsed.f_grid_fields && menuById.size > 0) {
-            const gridEnum = buildGridFieldComboSelectEnum(
-              { f_grid: parsed.f_grid, f_grid_fields: parsed.f_grid_fields },
-              database,
-              menuById,
-              userContext,
-              decrypt,
-              { seft: seftContext, database },
-            );
-            if (Object.keys(gridEnum).length > 0) {
-              result[f.f_name] = gridEnum;
-              return;
-            }
-          }
-          return;
-        }
-
-        // Handle options array in JSON
-        let options: any[] = [];
-        if (Array.isArray(parsed)) options = parsed;
-        else if (parsed && typeof parsed === 'object' && Array.isArray(parsed.options)) options = parsed.options;
-
-        if (options.length > 0) {
-          options.sort((a, b) => {
-            const aLabel = Array.isArray(a)
-              ? String(a[1] ?? a[0] ?? '')
-              : String(a?.ten ?? a?.label ?? a?.text ?? a?.ma ?? a?.value ?? a?.id ?? a ?? '');
-            const bLabel = Array.isArray(b)
-              ? String(b[1] ?? b[0] ?? '')
-              : String(b?.ten ?? b?.label ?? b?.text ?? b?.ma ?? b?.value ?? b?.id ?? b ?? '');
-            return aLabel.localeCompare(bLabel);
-          });
-          const enumObj = toEnumObj(options);
-          if (Object.keys(enumObj).length > 0) result[f.f_name] = enumObj;
-        }
-        return;
-      }
-
-      // Dynamic code
-      // IMPORTANT: Check if raw q is encrypted BEFORE wrapping with "return "
-      // Because if we wrap encrypted string as "return (encrypted...)", it looks like JS!
-      let rawCode = q;
-      
-      // Try to detect if it's encrypted (Base64-like pattern, long, no JS keywords)
-      const hasJSSyntax = /[{}()\[\];:,.\s]|return|function|const|let|var|if|for|while|=>|alert|console/.test(rawCode);
-      const hasBase64Pattern = /[A-Za-z0-9_\-\/]{50,}/.test(rawCode);
-      const looksEncrypted = !hasJSSyntax && hasBase64Pattern;
-      
-      if (looksEncrypted && decrypt) {
-        try {
-          const decrypted = decrypt(rawCode);
-          rawCode = decrypted;
-        } catch (err) {
-          console.error(`[buildDetailGridSelectEnums] Decrypt failed for encrypted code in ${f.f_name}:`, err);
-          return;
-        }
-      }
-      
-      // Now add return prefix if needed
-      const body = (rawCode.includes("return ") ? "" : "return ") + rawCode;
-      const fn = safeEval(["seft", "data"], body) as ((seft: any, data: any) => any) | null;
-      if (!fn) return;
-      const objQa = fn(seftContext, database);
-      if (!objQa) return;
-
-      const dynamicEnum = buildComboSelectEnumFromQueryObject(objQa, database, {
-        menuById,
-        evalContext: { seft: seftContext, database },
-        decrypt,
-        userContext: getUserAccessContext(),
-      });
-      if (Object.keys(dynamicEnum).length > 0) {
-        result[f.f_name] = dynamicEnum;
-        return;
-      }
-
-      if (!objQa.options || !Array.isArray(objQa.options)) return;
-      const options = objQa.options;
-      options.sort((a: any, b: any) => {
-        const aLabel = a?.ten ?? a?.label ?? a?.text ?? String(a);
-        const bLabel = b?.ten ?? b?.label ?? b?.text ?? String(b);
-        return String(aLabel).localeCompare(String(bLabel));
-      });
-      const enumObj = toEnumObj(options);
-      if (Object.keys(enumObj).length > 0) result[f.f_name] = enumObj;
-    } catch (err) {
-      console.error(`[buildDetailGridSelectEnums] Error parsing ${f.f_name}:`, err);
-    }
+  const result = buildSelectEnumsForFields(fields, database, {
+    menuById,
+    decrypt,
+    evalContext: { seft: seftContext, database },
+    fallbackAppId: seftContext?.appId,
+    userContext: getUserAccessContext(),
   });
 
   (["group_id", "permissionGroups"] as const).forEach((fieldName) => {
@@ -1826,6 +1561,7 @@ export function CsmEditModal({
   const [submitting, setSubmitting] = useState(false);
   const [valuesReady, setValuesReady] = useState(false);
   const [databaseVersion, setDatabaseVersion] = useState(0);
+  const [comboEditBusy, setComboEditBusy] = useState(false);
   const modalContentRef = useRef<HTMLDivElement>(null);
   const { t, i18n } = useTranslation();
   const { token } = theme.useToken();
@@ -1905,40 +1641,44 @@ export function CsmEditModal({
   }, [open, globalTableFetchCache.size]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setComboEditBusy(false);
+      return;
+    }
     const comboFields = dynamicFields.filter((field) => isComboLikeType(resolveEffectiveFieldTypes(field)));
-    if (comboFields.length === 0) return;
+    if (comboFields.length === 0) {
+      setComboEditBusy(false);
+      return;
+    }
 
-    const comboEvalContext = {
-      seft: comboEvalSeft,
-      database: mergedDatabase,
-    };
-    const userContext = getUserAccessContext();
-    const uniqueFetches = collectComboTableFetchRequests(comboFields, {
-      decrypt: effectiveDecrypt,
+    let cancelled = false;
+    setComboEditBusy(true);
+
+    void prefetchComboTablesForEdit({
+      fields: comboFields,
       fallbackAppId: currentAppId,
       menuById,
-      userContext,
-      evalContext: comboEvalContext,
+      userContext: getUserAccessContext(),
+      evalContext: {
+        seft: comboEvalSeft,
+        database: mergedDatabase,
+      },
+      database: mergedDatabase,
+      setTableData,
+      decrypt: effectiveDecrypt,
+    }, {
+      onFullLoadStart: () => { if (!cancelled) setComboEditBusy(true); },
+      onFullLoadEnd: () => { if (!cancelled) setComboEditBusy(false); },
+    }).then(() => {
+      if (!cancelled) setDatabaseVersion((v) => v + 1);
+    }).finally(() => {
+      if (!cancelled) setComboEditBusy(false);
     });
-    if (uniqueFetches.length === 0) return;
 
-    Promise.all(
-      uniqueFetches.map(({ tableName, appId, whereClause }) =>
-        ensureTableInDatabase(
-          tableName,
-          appId,
-          mergedDatabase,
-          !isDefaultComboWhereClause(whereClause) ? whereClause : undefined,
-          setTableData,
-        ).catch((err) => {
-          console.error(`[CsmEditModal] Failed to prefetch combo table ${tableName}:`, err);
-          return null;
-        }),
-      ),
-    ).then(() => {
-      setDatabaseVersion((v) => v + 1);
-    });
+    return () => {
+      cancelled = true;
+      setComboEditBusy(false);
+    };
   }, [open, dynamicFields, mergedDatabase, currentAppId, menuById, effectiveDecrypt, comboEvalSeft, setTableData]);
 
   const modalSelectEnums = useMemo(() => {
@@ -2486,6 +2226,7 @@ export function CsmEditModal({
 
   const editorContent = (
     <div ref={modalContentRef}>
+      <Spin spinning={comboEditBusy} tip="Đang tải dữ liệu combo (co)...">
       <Form
         key={`form-${record?.id || 'new'}`}
         form={form}
@@ -2902,6 +2643,7 @@ export function CsmEditModal({
       </>
       )}
       </Form>
+      </Spin>
     </div>
   );
   

@@ -573,6 +573,292 @@ export function formatGridComboDisplayLabel(row: any, gridFields: string[]): str
   return String(row[gridFields[0]] ?? "").trim();
 }
 
+/** Vue optionsSelect[tree_id+"_^_"+f_name] — kết quả getOptionsSelect. */
+export type OptionsSelectResult = {
+  options: Array<{ ma: string; ten: string }>;
+  fields?: string[];
+  data?: Record<string, unknown>[];
+  table_name?: string;
+  where?: string;
+  f_grid?: string;
+  f_grid_fields?: unknown;
+};
+
+function normalizeMaTenOptions(options: unknown[]): Array<{ ma: string; ten: string }> {
+  return (options || [])
+    .map((opt) => {
+      if (Array.isArray(opt)) {
+        return {
+          ma: String(opt[0] ?? "").trim(),
+          ten: String(opt[1] ?? opt[0] ?? "").trim(),
+        };
+      }
+      if (opt && typeof opt === "object") {
+        const row = opt as Record<string, unknown>;
+        return {
+          ma: String(row.ma ?? row.value ?? row.id ?? row.key ?? "").trim(),
+          ten: String(row.ten ?? row.label ?? row.text ?? row.name ?? row.ma ?? "").trim(),
+        };
+      }
+      const text = String(opt ?? "").trim();
+      return { ma: text, ten: text };
+    })
+    .filter((item) => item.ma !== "")
+    .sort((a, b) => a.ten.localeCompare(b.ten, undefined, { numeric: true, sensitivity: "base" }));
+}
+
+function maTenOptionsToSelectEnum(options: Array<{ ma: string; ten: string }>): Record<string, { text: string }> {
+  const enumObj: Record<string, { text: string }> = {};
+  options.forEach(({ ma, ten }) => {
+    enumObj[ma] = { text: ten || ma };
+  });
+  return enumObj;
+}
+
+/**
+ * Vue csm_grid.getOptionsSelect(f_cbo_query, tree_id, f_name) — eval query và map database rows → {ma, ten}.
+ * React dùng stateless: không lưu optionsSelect global, trả về struct tương đương.
+ */
+export function getOptionsSelect(
+  f_cbo_query: unknown,
+  database: Record<string, any> | undefined,
+  options: {
+    fieldName?: string;
+    decrypt?: (s: string) => string;
+    evalContext?: ComboGridEvalContext;
+  } = {},
+): OptionsSelectResult {
+  const empty: OptionsSelectResult = { options: [] };
+  const rawQuery = String(
+    f_cbo_query || (options.fieldName ? getLegacyFallbackComboQuery(options.fieldName) : "") || "",
+  ).trim();
+  if (!rawQuery) return empty;
+
+  const seft = options.evalContext?.seft || { database };
+  const db = database || options.evalContext?.database;
+  const objQa = executeComboQueryObject(rawQuery, seft, db, options.decrypt);
+  if (!objQa || typeof objQa !== "object") return empty;
+
+  if (objQa.f_grid && objQa.f_grid_fields) {
+    return {
+      options: [],
+      f_grid: String(objQa.f_grid),
+      f_grid_fields: objQa.f_grid_fields,
+      fields: parseFieldGridComboFields(objQa.f_grid_fields),
+      data: Array.isArray(objQa.data) ? objQa.data : [],
+      where: objQa.where,
+    };
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(objQa, "options")
+    && !Object.prototype.hasOwnProperty.call(objQa, "query")) {
+    return empty;
+  }
+
+  const result: OptionsSelectResult = {
+    options: [],
+    fields: ["ma", "ten"],
+    data: [],
+  };
+
+  if (Array.isArray(objQa.query) && objQa.query.length === 1) {
+    const querySpec = objQa.query[0] || {};
+    const objName = String(querySpec.obj_name || "").trim();
+    const fields = Array.isArray(querySpec.fields)
+      ? querySpec.fields.map((item: unknown) => String(item || "").trim()).filter(Boolean)
+      : [];
+    const objWhere = querySpec.obj_where;
+
+    result.fields = fields.length >= 2 ? fields : ["ma", "ten"];
+
+    if (!objName && fields.length === 0 && objWhere) {
+      if (String(objWhere).trim()) result.where = String(objWhere);
+      return result;
+    }
+
+    if (objName && fields.length >= 2 && db) {
+      const rows = getComboTableRows(db, objName);
+      result.table_name = objName;
+      result.fields = fields;
+      result.data = rows;
+      result.options = rows.map((row) => ({
+        ma: String(resolveComboRowFieldValue(row, fields[0]) ?? "").trim(),
+        ten: String(resolveComboRowFieldValue(row, fields[1]) ?? "").trim(),
+      })).sort((a, b) => a.ten.localeCompare(b.ten, undefined, { numeric: true, sensitivity: "base" }));
+      if (objWhere && String(objWhere).trim()) result.where = String(objWhere);
+    }
+    return result;
+  }
+
+  if (Array.isArray(objQa.options) && objQa.options.length > 0) {
+    result.fields = ["ma", "ten"];
+    result.data = objQa.options;
+    result.options = normalizeMaTenOptions(objQa.options);
+    return result;
+  }
+
+  return result;
+}
+
+/** Lookup table + value/label fields cho co thường (query obj_name + 2 fields — Vue valueExpr ma / displayExpr ten). */
+export function resolveFieldQueryComboConfig(
+  field: { f_cbo_query?: string; f_name?: string; f_grid?: unknown; f_grid_fields?: unknown },
+  database: Record<string, any> | undefined,
+  options: {
+    decrypt?: (s: string) => string;
+    evalContext?: ComboGridEvalContext;
+  } = {},
+): { tableName: string; valueField: string; labelField: string; fields: string[] } | null {
+  if (resolveFieldGridComboConfig(field, options)) return null;
+
+  const os = getOptionsSelect(field?.f_cbo_query, database, {
+    fieldName: field?.f_name,
+    decrypt: options.decrypt,
+    evalContext: options.evalContext,
+  });
+  if (!os.table_name || !os.fields || os.fields.length < 2) return null;
+
+  return {
+    tableName: os.table_name,
+    valueField: os.fields[0],
+    labelField: os.fields[1],
+    fields: os.fields,
+  };
+}
+
+/** Resolve combo lookup table name — f_grid menu hoặc query obj_name. */
+export function resolveFieldComboLookupTableName(
+  field: { f_cbo_query?: string; f_name?: string; f_grid?: unknown; f_grid_fields?: unknown },
+  menuById: Map<string, any> | undefined,
+  database: Record<string, any> | undefined,
+  options: {
+    decrypt?: (s: string) => string;
+    evalContext?: ComboGridEvalContext;
+  } = {},
+): string {
+  const gridConfig = resolveFieldGridComboConfig(field, options);
+  if (gridConfig && menuById) {
+    return resolveFieldGridComboTableName({ f_grid: gridConfig.f_grid }, menuById);
+  }
+  const queryConfig = resolveFieldQueryComboConfig(field, database, options);
+  return queryConfig?.tableName || "";
+}
+
+/** Build selectEnums cho tất cả co fields — Vue loadData gọi getOptionsSelect trước khi render grid. */
+export function buildSelectEnumsForFields(
+  fields: unknown[],
+  database: Record<string, any> | undefined,
+  options: {
+    menuById?: Map<string, any>;
+    decrypt?: (s: string) => string;
+    evalContext?: ComboGridEvalContext;
+    fallbackAppId?: string;
+    userContext?: UserAppIdInput;
+    localizeLabel?: (label: string) => string;
+  } = {},
+): Record<string, Record<string, { text: string }>> {
+  const map: Record<string, Record<string, { text: string }>> = {};
+  const localize = options.localizeLabel ?? ((label: string) => label);
+  const menuById = options.menuById instanceof Map ? options.menuById : new Map<string, any>();
+
+  (fields || []).forEach((rawField) => {
+    const field = rawField as {
+      f_name?: string;
+      f_types?: string;
+      f_show?: number;
+      f_options?: unknown;
+      f_cbo_query?: string;
+      f_grid?: unknown;
+      f_grid_fields?: unknown;
+    };
+    const types = resolveEffectiveFieldTypes(field);
+    if (!isComboLikeType(types)) return;
+    if (Number(field.f_show ?? 1) !== 1) return;
+
+    const fieldName = String(field.f_name || "").trim();
+    if (!fieldName) return;
+
+    const optionsFromField = parseFieldOptions(field.f_options);
+    if (optionsFromField.length > 0) {
+      const enumFromOptions: Record<string, { text: string }> = {};
+      optionsFromField.forEach((opt) => {
+        enumFromOptions[String(opt.value)] = { text: localize(opt.label) };
+      });
+      if (Object.keys(enumFromOptions).length > 0) {
+        map[fieldName] = enumFromOptions;
+        return;
+      }
+    }
+
+    const evalContext = options.evalContext || { database };
+
+    if (menuById.size > 0) {
+      const gridEnum = buildGridFieldComboSelectEnum(
+        field,
+        database,
+        menuById,
+        options.userContext,
+        options.decrypt,
+        evalContext,
+      );
+      if (Object.keys(gridEnum).length > 0) {
+        map[fieldName] = Object.fromEntries(
+          Object.entries(gridEnum).map(([key, item]) => [key, { text: localize(item.text) }]),
+        );
+        return;
+      }
+    }
+
+    const os = getOptionsSelect(field.f_cbo_query, database, {
+      fieldName,
+      decrypt: options.decrypt,
+      evalContext,
+    });
+
+    if (os.f_grid && os.f_grid_fields && menuById.size > 0) {
+      const gridEnum = buildGridFieldComboSelectEnum(
+        { f_grid: os.f_grid, f_grid_fields: os.f_grid_fields },
+        database,
+        menuById,
+        options.userContext,
+        options.decrypt,
+        evalContext,
+      );
+      if (Object.keys(gridEnum).length > 0) {
+        map[fieldName] = Object.fromEntries(
+          Object.entries(gridEnum).map(([key, item]) => [key, { text: localize(item.text) }]),
+        );
+        return;
+      }
+    }
+
+    if (os.options.length > 0) {
+      const enumFromOptions = maTenOptionsToSelectEnum(os.options);
+      if (Object.keys(enumFromOptions).length > 0) {
+        map[fieldName] = Object.fromEntries(
+          Object.entries(enumFromOptions).map(([key, item]) => [key, { text: localize(item.text) }]),
+        );
+        return;
+      }
+    }
+
+    const queryEnum = buildFieldQueryComboSelectEnum(field, database, {
+      fallbackAppId: options.fallbackAppId,
+      userContext: options.userContext,
+      decrypt: options.decrypt,
+      evalContext,
+      menuById,
+    });
+    if (Object.keys(queryEnum).length > 0) {
+      map[fieldName] = Object.fromEntries(
+        Object.entries(queryEnum).map(([key, item]) => [key, { text: localize(item.text) }]),
+      );
+    }
+  });
+
+  return map;
+}
+
 /** Build valueEnum from field.f_grid menu table (Vue f_grid + f_grid_fields parity). */
 export function buildGridFieldComboSelectEnum(
   field: { f_name?: string; f_grid?: unknown; f_grid_fields?: unknown; f_cbo_query?: string },
@@ -672,46 +958,121 @@ function comboRowMatchesValue(
   return false;
 }
 
-/** Fetch combo lookup rows for visible cell values (big-data safe — eq OR batch). */
+/** Fetch combo lookup rows for visible cell values (big-data safe — batched eq OR). */
+export const COMBO_VALUE_FETCH_BATCH = 40;
+
 export async function fetchComboRowsByValues(
   appId: string,
   tableName: string,
-  valueField: string,
+  lookupFields: string | string[],
   values: string[],
 ): Promise<Record<string, unknown>[]> {
-  const unique = Array.from(new Set(values.map((v) => String(v).trim()).filter(Boolean))).slice(0, 80);
-  if (!appId || !tableName || !valueField || unique.length === 0) return [];
+  const fields = Array.from(new Set(
+    (Array.isArray(lookupFields) ? lookupFields : [lookupFields])
+      .map((field) => String(field || "").trim())
+      .filter(Boolean),
+  ));
+  if (fields.length === 0) fields.push("id");
 
-  const response = await getTableData<Record<string, unknown>>({
-    app_id: appId,
-    obj_name: tableName,
-    where: unique.length === 1
-      ? { field: valueField, type: "eq", value: unique[0] }
-      : {
-        operator: "OR",
-        conditions: unique.map((value) => ({ field: valueField, type: "eq", value })),
-      },
-    limit: unique.length,
-    fresh: true,
+  const unique = Array.from(new Set(values.map((v) => String(v).trim()).filter(Boolean)));
+  if (!appId || !tableName || unique.length === 0) return [];
+
+  const buildConditions = (batch: string[]) => {
+    const conditions: Array<{ field: string; type: "eq"; value: string | number }> = [];
+    batch.forEach((value) => {
+      fields.forEach((field) => {
+        conditions.push({ field, type: "eq", value });
+      });
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && String(numeric) === value) {
+        fields.forEach((field) => {
+          conditions.push({ field, type: "eq", value: numeric });
+        });
+      }
+    });
+    return conditions;
+  };
+
+  const batches: string[][] = [];
+  for (let index = 0; index < unique.length; index += COMBO_VALUE_FETCH_BATCH) {
+    batches.push(unique.slice(index, index + COMBO_VALUE_FETCH_BATCH));
+  }
+
+  const fetchBatch = async (batch: string[]) => {
+    const conditions = buildConditions(batch);
+    const response = await getTableData<Record<string, unknown>>({
+      app_id: appId,
+      obj_name: tableName,
+      where: conditions.length === 1
+        ? conditions[0]
+        : { operator: "OR", conditions },
+      limit: Math.max(batch.length * fields.length, batch.length),
+      fresh: true,
+    });
+    return normalizeTableRows(response as Record<string, unknown>) as Record<string, unknown>[];
+  };
+
+  const pages = await Promise.all(batches.map((batch) => fetchBatch(batch).catch(() => [])));
+  const merged = new Map<string, Record<string, unknown>>();
+  pages.flat().forEach((row) => {
+    const id = String(row?.id ?? "").trim();
+    const key = id || JSON.stringify(row);
+    merged.set(key, row);
   });
-
-  return normalizeTableRows(response as Record<string, unknown>) as Record<string, unknown>[];
+  return Array.from(merged.values());
 }
 
 export function resolveComboValueField(
-  field: { f_grid_fields?: unknown; f_cbo_query?: string; f_name?: string },
+  field: { f_grid_fields?: unknown; f_cbo_query?: string; f_name?: string; f_grid?: unknown },
   menuById?: Map<string, any>,
   options: {
     decrypt?: (s: string) => string;
     evalContext?: ComboGridEvalContext;
+    database?: Record<string, any>;
   } = {},
 ): string {
   const gridConfig = resolveFieldGridComboConfig(field, options);
   if (gridConfig) {
-    const gridFields = parseFieldGridComboFields(gridConfig.f_grid_fields);
-    if (gridFields.length > 0) return gridFields[0];
+    // Vue f_grid lookup: valueExpr = 'id'
+    return "id";
   }
+  const queryConfig = resolveFieldQueryComboConfig(
+    field,
+    options.database || options.evalContext?.database,
+    options,
+  );
+  if (queryConfig) return queryConfig.valueField;
   return "id";
+}
+
+/** Fields to match when fetching combo rows by cell value (id + configured grid/query columns). */
+export function resolveComboLookupQueryFields(
+  field: { f_grid_fields?: unknown; f_cbo_query?: string; f_name?: string; f_grid?: unknown },
+  menuById?: Map<string, any>,
+  options: {
+    decrypt?: (s: string) => string;
+    evalContext?: ComboGridEvalContext;
+    database?: Record<string, any>;
+  } = {},
+): string[] {
+  const db = options.database || options.evalContext?.database;
+  const gridConfig = resolveFieldGridComboConfig(field, options);
+  const fields = new Set<string>(["id"]);
+  if (gridConfig) {
+    parseFieldGridComboFields(gridConfig.f_grid_fields).forEach((name) => {
+      if (name) fields.add(name);
+    });
+  } else {
+    const queryConfig = resolveFieldQueryComboConfig(field, db, options);
+    if (queryConfig) {
+      queryConfig.fields.forEach((name) => {
+        if (name) fields.add(name);
+      });
+    }
+  }
+  const primary = resolveComboValueField(field, menuById, { ...options, database: db });
+  if (primary) fields.add(primary);
+  return Array.from(fields);
 }
 
 export function resolveQueryRowComboLabel(
@@ -1011,6 +1372,31 @@ export function resolveGridComboCellLabel(
       const matched = rows.find((row) => comboRowMatchesValue(row, valueKey, valueFields));
       if (matched) return formatGridComboDisplayLabel(matched, gridFields);
     }
+  }
+
+  const queryConfig = resolveFieldQueryComboConfig(field, database, options);
+  if (queryConfig) {
+    const rows = getComboTableRows(database, queryConfig.tableName);
+    const valueFields = [queryConfig.valueField, "id", queryConfig.labelField];
+    const matched = rows.find((row) => comboRowMatchesValue(row, valueKey, valueFields));
+    if (matched) {
+      return resolveQueryRowComboLabel(
+        matched,
+        queryConfig.valueField,
+        queryConfig.labelField,
+        queryConfig.fields,
+      );
+    }
+  }
+
+  const os = getOptionsSelect(field?.f_cbo_query, database, {
+    fieldName: field?.f_name,
+    decrypt: options.decrypt,
+    evalContext: options.evalContext,
+  });
+  if (os.options.length > 0) {
+    const fromOptions = os.options.find((opt) => opt.ma === valueKey);
+    if (fromOptions) return fromOptions.ten || valueKey;
   }
 
   return resolveComboCellDisplayLabel(rawValue, String(field?.f_name || ""), valueEnum, database);
