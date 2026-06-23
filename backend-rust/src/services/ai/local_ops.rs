@@ -44,7 +44,7 @@ impl AiLocalOpsService {
             "runtimeProfile": std::env::var("AI_LOCAL_LLAMA_RUNTIME_PROFILE").unwrap_or_else(|_| "balanced".into()),
             "contextWindow": self.config.effective_llama_context_window(),
             "maxTokens": self.config.effective_llama_max_tokens(),
-            "batchSize": self.config.ai_local_llama_batch_size,
+            "batchSize": self.config.effective_llama_batch_size(),
             "ubatchSize": self.config.ai_local_llama_ubatch_size,
             "threads": self.config.ai_local_llama_threads,
             "useMmap": self.config.ai_local_llama_use_mmap,

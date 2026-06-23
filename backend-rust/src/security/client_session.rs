@@ -146,7 +146,8 @@ pub fn cookie_from_headers(headers: &HeaderMap, name: &str) -> Option<String> {
     None
 }
 
-/// Mirror Java JwtAuthenticationFilter: X-Refresh-Token header first, then cookie.
+/// Prefer HttpOnly cookie over X-Refresh-Token — after rotation cookie updates first
+/// while parallel requests may still carry a stale header (Go parity).
 pub fn refresh_token_candidates(headers: &HeaderMap) -> Vec<String> {
     let mut out = Vec::new();
     let mut push = |token: Option<String>| {
@@ -156,13 +157,13 @@ pub fn refresh_token_candidates(headers: &HeaderMap) -> Vec<String> {
             }
         }
     };
+    push(cookie_from_headers(headers, "refreshToken"));
     push(
         headers
             .get("x-refresh-token")
             .and_then(|h| h.to_str().ok())
             .map(String::from),
     );
-    push(cookie_from_headers(headers, "refreshToken"));
     out
 }
 

@@ -1271,8 +1271,8 @@ mod tests {
     fn view_allows_edit_on_kqxs_legacy_table() {
         std::env::set_var("APP_DATA_DIR", "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas");
         std::env::set_var(
-            "ROCKSDB_ROOT_DIR",
-            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/database",
+            "CSM_PEBBLE_ROOT",
+            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/native/pebble",
         );
         let config = AppConfig::from_env().expect("config");
         let rm = RecordManager::new(config).expect("record manager");
@@ -1311,8 +1311,8 @@ mod tests {
     fn sub_user_never_admin_in_access_context() {
         std::env::set_var("APP_DATA_DIR", "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas");
         std::env::set_var(
-            "ROCKSDB_ROOT_DIR",
-            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/database",
+            "CSM_PEBBLE_ROOT",
+            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/native/pebble",
         );
         let config = AppConfig::from_env().expect("config");
         let rm = RecordManager::new(config).expect("record manager");
@@ -1345,8 +1345,8 @@ mod tests {
     fn dev_user_access_context_sets_home_app_menu_scope() {
         std::env::set_var("APP_DATA_DIR", "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas");
         std::env::set_var(
-            "ROCKSDB_ROOT_DIR",
-            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/database",
+            "CSM_PEBBLE_ROOT",
+            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/native/pebble",
         );
         let config = AppConfig::from_env().expect("config");
         let rm = RecordManager::new(config).expect("record manager");
@@ -1406,8 +1406,8 @@ mod tests {
         };
         std::env::set_var("APP_DATA_DIR", "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas");
         std::env::set_var(
-            "ROCKSDB_ROOT_DIR",
-            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/database",
+            "CSM_PEBBLE_ROOT",
+            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/native/pebble",
         );
         let config = AppConfig::from_env().expect("config");
         let rm = RecordManager::new(config).expect("record manager");
@@ -1466,8 +1466,8 @@ mod tests {
     fn sys_autos_broadcast_lmkt_row_survives_non_dev_filter() {
         std::env::set_var("APP_DATA_DIR", "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas");
         std::env::set_var(
-            "ROCKSDB_ROOT_DIR",
-            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/database",
+            "CSM_PEBBLE_ROOT",
+            "/Volumes/Datas/CSM/JavaProjects/csm_server/csm_datas/native/pebble",
         );
         let config = AppConfig::from_env().expect("config");
         let rm = Arc::new(RecordManager::new(config).expect("record manager"));

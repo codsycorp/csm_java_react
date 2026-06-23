@@ -1,0 +1,38 @@
+name: backend-go CI
+
+on:
+  push:
+    paths:
+      - 'backend-go/**'
+      - '.github/workflows/backend-go-ci.yml'
+  pull_request:
+    paths:
+      - 'backend-go/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: backend-go/go.sum
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./internal/... -count=1
+      - name: Build
+        run: go build -o /tmp/csm-go ./cmd/server
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image (no llamacpp)
+        run: docker build -f backend-go/Dockerfile -t csm-go:latest .

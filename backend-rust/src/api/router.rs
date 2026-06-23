@@ -329,8 +329,12 @@ async fn monitoring_health(State(state): State<AppState>) -> impl IntoResponse {
         axum::Json(json!({
             "status": "UP",
             "backend": "rust",
+            "kv_engine": state.config.kv_engine_name(),
+            "vector_engine": "qdrant-edge",
             "port": state.config.server.port,
             "data_dir": state.config.data_dir.display().to_string(),
+            "kv_root": state.config.table_kv_root().display().to_string(),
+            "vector_root": state.config.vector_store_dir.display().to_string(),
         })),
     )
 }
@@ -338,7 +342,8 @@ async fn monitoring_health(State(state): State<AppState>) -> impl IntoResponse {
 async fn system_check() -> impl IntoResponse {
     axum::Json(json!({
         "rust": true,
-        "rocksdb": true,
+        "kv_engine": "pebble",
+        "vector_engine": "qdrant-edge",
         "requirements_met": true,
     }))
 }

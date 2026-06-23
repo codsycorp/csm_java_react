@@ -2,9 +2,29 @@
 name = "csm_server"
 version = "1.0.0"
 edition = "2021"
-description = "CSM Server — Rust backend (migrated from Spring Boot)"
-authors = ["phanmemmottrieu.net"]
+description = "CSM Server — Rust backend (Go-parity rewrite)"
+authors = ["csmbridge.net"]
 default-run = "csm_server"
+
+[lib]
+name = "csm_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "csm_server"
+path = "src/main.rs"
+
+[[bin]]
+name = "csm_diag_login"
+path = "src/bin/csm_diag_login.rs"
+
+[[bin]]
+name = "csm_find_login"
+path = "src/bin/csm_find_login.rs"
+
+[[bin]]
+name = "csm_migrate_go"
+path = "src/bin/csm_migrate_go.rs"
 
 [dependencies]
 # HTTP server
@@ -29,7 +49,6 @@ serde_json = "1"
 serde_urlencoded = "0.7"
 
 # Data layer
-rocksdb = "0.23"
 tantivy = "0.22"
 
 # Auth & security
@@ -79,6 +98,8 @@ askama = { version = "0.12", features = ["with-axum"] }
 # Local AI — optional; bật bằng feature `local-ai`
 # macOS: Metal  |  Linux CPU-only: openmp  |  Linux NVIDIA: thêm "cuda" vào features llama-cpp-2
 llama-cpp-2 = { version = "0.1.146", optional = true, default-features = false, features = ["openmp"] }
+pebbledb = "0.0.1"
+qdrant-edge = "0.7.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 llama-cpp-2 = { version = "0.1.146", default-features = false, features = ["openmp", "metal"] }

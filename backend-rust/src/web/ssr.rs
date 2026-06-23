@@ -10,13 +10,18 @@ use crate::model::SearchFilter;
 use crate::state::AppState;
 use crate::util::{compare_related_post_rows_desc, extract_date_only, resolve_lastmod_from_row};
 
+use super::seo_phase3;
+use super::ssr_thymeleaf;
+
 struct CacheEntry<T> {
     data: T,
     expires: Instant,
 }
 
 static SSR_CACHE: LazyLock<DashMap<String, CacheEntry<String>>> = LazyLock::new(DashMap::new);
+static SITEMAP_CACHE: LazyLock<DashMap<String, CacheEntry<String>>> = LazyLock::new(DashMap::new);
 const CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+const SITEMAP_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
 // ─── Route struct (mirrors sys_la_routers fields used for SSR) ────────────────
 
@@ -45,11 +50,12 @@ impl ResolvedRoute {
                 .to_string()
         };
         let s_trim = |k: &str| s(k).trim_matches('/').trim().to_string();
+        let app_id = normalize_table_app_id(&s_trim("app_id"));
         ResolvedRoute {
             rp_index: s_trim("rp_index"),
-            app_id: s_trim("app_id"),
-            tbl_services: s_trim("tbl_services"),
-            tbl_service_detail: s_trim("tbl_service_detail"),
+            app_id: app_id.clone(),
+            tbl_services: normalize_table_name(&app_id, &s_trim("tbl_services")),
+            tbl_service_detail: normalize_table_name(&app_id, &s_trim("tbl_service_detail")),
             f_title: s("f_title"),
             f_keyword: s("f_keyword"),
             f_logo: s("f_logo"),
@@ -101,8 +107,7 @@ pub fn render_page(state: &AppState, uri: &str, host: Option<&str>, query_str: &
     }
 
     let html = build_ssr_html(state, uri, host, query_str);
-    // Only cache clean URLs to avoid cache explosion; paginated pages have short-lived data
-    if query_str.is_empty() {
+    if query_str.is_empty() && should_cache_ssr_page(uri, &html) {
         SSR_CACHE.insert(
             cache_key,
             CacheEntry {
@@ -154,10 +159,18 @@ pub fn resolve_rp_index_pub(state: &AppState, host: Option<&str>) -> String {
 // ─── Core SSR builder ─────────────────────────────────────────────────────────
 
 fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>, query_str: &str) -> String {
-    let route = resolve_route(state, host, uri);
-    let domain = extract_domain(host);
+    let normalized_path = normalize_incoming_web_path(uri);
+    let route = finalize_ssr_route(
+        state,
+        resolve_route(state, host, &normalized_path),
+        host,
+    );
+    let mut domain = route.domain.clone();
+    if domain.is_empty() {
+        domain = extract_domain(host);
+    }
 
-    let rp_index = &route.rp_index;
+    let mut rp_index = route.rp_index.clone();
     let index_path = if rp_index.is_empty() {
         "index.html".to_string()
     } else {
@@ -166,7 +179,7 @@ fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>, query_str: &s
 
     let protocol = "https";
     let host_str = host.unwrap_or(&domain);
-    let canonical = format!("{protocol}://{host_str}{uri}");
+    let canonical = format!("{protocol}://{host_str}{normalized_path}");
     let base_url = format!("{protocol}://{host_str}");
 
     let params = parse_qs(query_str);
@@ -197,7 +210,7 @@ fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>, query_str: &s
             state,
             &route,
             &domain,
-            uri,
+            &normalized_path,
             &main_service_code,
             &default_service_code,
             &lang,
@@ -244,7 +257,7 @@ fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>, query_str: &s
     });
 
     let ssr_routes = json!({
-        uri: seo_route
+        normalized_path.clone(): seo_route
             .as_ref()
             .map(SeoMeta::to_route_value)
             .unwrap_or_else(|| json!({
@@ -262,19 +275,47 @@ fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>, query_str: &s
     initial_data_map.insert("pageKeywords".into(), Value::String(page_keywords.clone()));
     initial_data_map.insert("canonicalUrl".into(), Value::String(canonical.clone()));
     initial_data_map.insert("ogImage".into(), Value::String(og_image.clone()));
-    initial_data_map.insert("currentPagePath".into(), Value::String(uri.to_string()));
+    initial_data_map.insert("currentPagePath".into(), Value::String(normalized_path.clone()));
     initial_data_map.insert("app_id".into(), Value::String(route.app_id.clone()));
 
-    if !route.app_id.is_empty() && !route.tbl_service_detail.is_empty() {
-        let svc_data = resolve_service_listing(state, &route, &domain, uri, &params);
-        for (k, v) in svc_data {
-            initial_data_map.insert(k, v);
+    if !rp_index.is_empty() && !route.app_id.is_empty() && !route.tbl_service_detail.is_empty() {
+        let listing = resolve_service_listing(
+            state,
+            &route,
+            &domain,
+            &normalized_path,
+            &params,
+            &main_service_code,
+            &default_service_code,
+        );
+        ssr_thymeleaf::enrich_initial_data(&mut initial_data_map, &listing, protocol, host_str);
+        if !listing.contains_key("serviceDetail") && looks_like_detail_uri(&normalized_path) {
+            tracing::warn!(
+                "SSR warn: detail URL {} (domain={} app={} table={}) — no serviceDetail in listing",
+                normalized_path,
+                domain,
+                route.app_id,
+                route.tbl_service_detail
+            );
         }
     }
 
-    let initial_data = Value::Object(initial_data_map);
-    let app_config = json!({ "f_logo": route_logo, "f_title": page_title });
-    let scripts = build_scripts(&app_config, &initial_data, &categories, &ssr_routes, &dynamic_templates, &meta);
+    let initial_data = Value::Object(initial_data_map.clone());
+    let mut app_config = json!({ "f_logo": route.f_logo, "f_title": page_title });
+    if !route_logo.is_empty() {
+        if let Some(obj) = app_config.as_object_mut() {
+            obj.insert("f_logo".into(), Value::String(route_logo.clone()));
+        }
+    }
+    let scripts = build_scripts(
+        &app_config,
+        &initial_data,
+        &categories,
+        &ssr_routes,
+        &dynamic_templates,
+        &meta,
+        &default_service_code,
+    );
 
     let preload = if og_image.starts_with("http://") || og_image.starts_with("https://") {
         format!(
@@ -285,30 +326,375 @@ fn build_ssr_html(state: &AppState, uri: &str, host: Option<&str>, query_str: &s
         String::new()
     };
 
-    if let Some(file_path) = state.record_manager.get_static_file(&index_path) {
+    let mut file_path = state.record_manager.get_static_file(&index_path);
+    if file_path.is_none() && domain.starts_with("admin.") {
+        for candidate in ["admin/index.html", "index.html"] {
+            if let Some(p) = state.record_manager.get_static_file(candidate) {
+                file_path = Some(p);
+                if rp_index.is_empty() {
+                    rp_index = "admin".into();
+                }
+                break;
+            }
+        }
+    }
+    if file_path.is_none() && !rp_index.is_empty() {
+        file_path = state.record_manager.get_static_file(&format!("{rp_index}/index.html"));
+    }
+
+    if let Some(file_path) = file_path {
         if let Ok(mut html) = std::fs::read_to_string(&file_path) {
-            preprocess_html(
-                &mut html,
-                &PreprocessCtx {
-                    title: page_title,
-                    description: page_description,
-                    keywords: page_keywords,
-                    canonical: canonical.clone(),
-                    image: og_image.clone(),
-                    site_name: base_url.clone(),
-                    logo: route_logo,
-                    gsv: route.gsv.clone(),
-                    gtag: route.gtag.clone(),
-                    app_id: route.app_id.clone(),
-                },
-            );
+            let preprocess_ctx = PreprocessCtx {
+                title: page_title,
+                description: page_description,
+                keywords: page_keywords,
+                canonical: canonical.clone(),
+                image: og_image.clone(),
+                site_name: base_url.clone(),
+                logo: route_logo,
+                gsv: route.gsv.clone(),
+                gtag: route.gtag.clone(),
+                app_id: route.app_id.clone(),
+                page_type: resolve_ssr_page_type(&initial_data_map),
+                author: resolve_ssr_author(&initial_data_map),
+                published_at: resolve_ssr_published_at(&initial_data_map),
+                lang: lang.clone(),
+                page_path: normalized_path.clone(),
+                base_url: base_url.clone(),
+                default_category: default_service_code.clone(),
+                initial_data: initial_data.clone(),
+                categories: categories.clone(),
+            };
+            preprocess_html(&mut html, &preprocess_ctx);
+            ssr_thymeleaf::finalize_thymeleaf_html(&mut html, &route.gtag);
             inject_into_html(&mut html, &format!("{preload}{scripts}"));
             return html;
         }
     }
 
     info!("SSR fallback (index.html not found for rp_index={})", rp_index);
-    fallback_html(&page_title, uri, &route.app_id, &scripts)
+    fallback_html(&page_title, uri, &route.app_id, &rp_index, &scripts)
+}
+
+// ─── Path normalization + cache policy (mirrors Go helpers.go / ssr.go) ───────
+
+fn normalize_incoming_web_path(uri: &str) -> String {
+    let mut uri = uri.to_string();
+    if uri.is_empty() {
+        return "/".into();
+    }
+    if let Some(i) = uri.find('?') {
+        uri.truncate(i);
+    }
+    if let Some(i) = uri.find('#') {
+        uri.truncate(i);
+    }
+    if uri.starts_with("/api/app_images/") {
+        uri = uri[4..].to_string();
+    }
+    if uri.len() > 1 && uri.ends_with('/') {
+        uri.pop();
+    }
+    if uri.is_empty() {
+        "/".into()
+    } else {
+        uri
+    }
+}
+
+fn normalize_uri(uri: &str) -> String {
+    let mut uri = normalize_incoming_web_path(uri);
+    uri = uri.replace(".shtml", "");
+    if uri.is_empty() {
+        "/".into()
+    } else {
+        uri
+    }
+}
+
+fn normalize_f_case(path: &str) -> String {
+    let f_case = path.replace(".shtml", "").trim().to_string();
+    if f_case == "/" {
+        String::new()
+    } else {
+        f_case
+    }
+}
+
+fn path_segment_count(path: &str) -> usize {
+    path.trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.trim().is_empty())
+        .count()
+}
+
+fn looks_like_detail_uri(uri: &str) -> bool {
+    let p = normalize_uri(uri);
+    let trimmed = p.trim_start_matches('/');
+    let n = path_segment_count(&p);
+    if n >= 2 {
+        return true;
+    }
+    n == 1 && !trimmed.is_empty() && trimmed != "home"
+}
+
+fn should_cache_ssr_page(uri: &str, html: &str) -> bool {
+    if !looks_like_detail_uri(uri) {
+        return true;
+    }
+    if html.contains("\"serviceDetail\"") {
+        return true;
+    }
+    if path_segment_count(&normalize_uri(uri)) >= 2 {
+        return false;
+    }
+    true
+}
+
+fn normalize_table_app_id(app_id: &str) -> String {
+    app_id.trim().to_string()
+}
+
+fn normalize_table_name(app_id: &str, table: &str) -> String {
+    let table = table.trim();
+    if table.is_empty() {
+        return String::new();
+    }
+    if !app_id.is_empty() {
+        let prefix = format!("{}.", app_id.to_lowercase());
+        if table.to_lowercase().starts_with(&prefix) {
+            return table[prefix.len()..].to_string();
+        }
+    }
+    if let Some((_, rest)) = table.split_once('.') {
+        rest.to_string()
+    } else {
+        table.to_string()
+    }
+}
+
+fn query_react_catch_all_route(state: &AppState, domain: &str) -> Option<ResolvedRoute> {
+    query_route(
+        state,
+        &[
+            SearchFilter::eq("domain_name", domain),
+            SearchFilter::eq("f_case", ""),
+            SearchFilter {
+                field: "rp_index".into(),
+                filter_type: "isnotnull".into(),
+                ..Default::default()
+            },
+            SearchFilter {
+                field: "rp_index".into(),
+                filter_type: "noteq".into(),
+                value: Value::String(String::new()),
+                ..Default::default()
+            },
+            SearchFilter::eq("run", 1i64),
+        ],
+    )
+}
+
+fn finalize_ssr_route(state: &AppState, mut route: ResolvedRoute, host: Option<&str>) -> ResolvedRoute {
+    let mut domain = route.domain.trim().to_string();
+    if domain.is_empty() {
+        domain = extract_domain(host);
+    }
+    route.domain = domain.clone();
+
+    if route.rp_index.trim().is_empty() {
+        let rp_pub = resolve_rp_index_pub(state, host);
+        if !rp_pub.is_empty() {
+            route.rp_index = rp_pub;
+        }
+    }
+
+    if let Some(catch) = query_react_catch_all_route(state, &domain) {
+        if route.app_id.trim().is_empty() {
+            route.app_id = catch.app_id;
+        }
+        if route.tbl_services.trim().is_empty() {
+            route.tbl_services = catch.tbl_services;
+        }
+        if route.tbl_service_detail.trim().is_empty() {
+            route.tbl_service_detail = catch.tbl_service_detail;
+        }
+        if route.f_title.trim().is_empty() {
+            route.f_title = catch.f_title;
+        }
+        if route.f_logo.trim().is_empty() {
+            route.f_logo = catch.f_logo;
+        }
+    }
+
+    let app_id = normalize_table_app_id(&route.app_id);
+    route.app_id = app_id.clone();
+    route.tbl_services = normalize_table_name(&app_id, &route.tbl_services);
+    route.tbl_service_detail = normalize_table_name(&app_id, &route.tbl_service_detail);
+    route
+}
+
+fn resolve_legacy_service_code(service_code: &str, main_service_code: &str, default_service_code: &str) -> String {
+    if !main_service_code.is_empty()
+        && service_code == main_service_code
+        && !default_service_code.is_empty()
+    {
+        default_service_code.to_string()
+    } else {
+        service_code.to_string()
+    }
+}
+
+fn find_active_service_detail(
+    state: &AppState,
+    route: &ResolvedRoute,
+    domain: &str,
+    service_code: &str,
+    slug: &str,
+) -> Map<String, Value> {
+    let slug = slug.trim();
+    if slug.is_empty() || route.app_id.is_empty() || route.tbl_service_detail.is_empty() {
+        return Map::new();
+    }
+
+    let build_filter = |with_domain: bool| {
+        let mut conds = Vec::new();
+        if !service_code.is_empty() {
+            conds.push(SearchFilter::eq("service_type", service_code));
+        }
+        conds.push(SearchFilter::eq("slug", slug));
+        conds.push(SearchFilter::eq("status", "active"));
+        if with_domain && !domain.is_empty() {
+            conds.push(SearchFilter {
+                field: "domain".into(),
+                filter_type: "like".into(),
+                value: Value::String(domain.to_string()),
+                ..Default::default()
+            });
+        }
+        SearchFilter {
+            operator: "AND".into(),
+            conditions: conds,
+            ..Default::default()
+        }
+    };
+
+    let row = state
+        .record_manager
+        .find(&route.app_id, &route.tbl_service_detail, &build_filter(true));
+    if !row.is_empty() {
+        return row;
+    }
+    let row = state
+        .record_manager
+        .find(&route.app_id, &route.tbl_service_detail, &build_filter(false));
+    if !row.is_empty() {
+        return row;
+    }
+
+    if slug.parse::<i64>().is_ok() {
+        let mut id_conds = vec![
+            SearchFilter::eq("id", slug),
+            SearchFilter::eq("status", "active"),
+        ];
+        if !service_code.is_empty() {
+            id_conds.push(SearchFilter::eq("service_type", service_code));
+        }
+        let row = state.record_manager.find(
+            &route.app_id,
+            &route.tbl_service_detail,
+            &SearchFilter {
+                operator: "AND".into(),
+                conditions: id_conds,
+                ..Default::default()
+            },
+        );
+        if !row.is_empty() {
+            return row;
+        }
+    }
+
+    if !service_code.is_empty() {
+        return find_active_service_detail_by_slug_prefix(state, route, domain, service_code, slug);
+    }
+    Map::new()
+}
+
+fn find_active_service_detail_by_slug_prefix(
+    state: &AppState,
+    route: &ResolvedRoute,
+    domain: &str,
+    service_code: &str,
+    detail_slug: &str,
+) -> Map<String, Value> {
+    let mut conds = vec![
+        SearchFilter::eq("service_type", service_code),
+        SearchFilter::eq("status", "active"),
+    ];
+    if !domain.is_empty() {
+        conds.push(SearchFilter {
+            field: "domain".into(),
+            filter_type: "like".into(),
+            value: Value::String(domain.to_string()),
+            ..Default::default()
+        });
+    }
+    let filter = SearchFilter {
+        operator: "AND".into(),
+        conditions: conds,
+        ..Default::default()
+    };
+    let result = state
+        .record_manager
+        .filter(&route.app_id, &route.tbl_service_detail, &filter);
+    let rows = rows_from(&result);
+    let wanted_prefix = format!("{detail_slug}-").to_lowercase();
+    for row in rows {
+        let Some(obj) = row.as_object() else {
+            continue;
+        };
+        let slug_val = record_str(obj, "slug");
+        if slug_val.is_empty() {
+            continue;
+        }
+        if slug_val.eq_ignore_ascii_case(detail_slug)
+            || slug_val.to_lowercase().starts_with(&wanted_prefix)
+        {
+            return obj.clone();
+        }
+    }
+    Map::new()
+}
+
+fn resolve_ssr_page_type(initial_data: &Map<String, Value>) -> String {
+    if initial_data
+        .get("serviceDetail")
+        .and_then(|v| v.as_object())
+        .is_some()
+    {
+        "article".into()
+    } else {
+        "website".into()
+    }
+}
+
+fn resolve_ssr_author(initial_data: &Map<String, Value>) -> String {
+    initial_data
+        .get("serviceDetail")
+        .and_then(|v| v.as_object())
+        .map(|detail| record_str(detail, "author"))
+        .unwrap_or_default()
+}
+
+fn resolve_ssr_published_at(initial_data: &Map<String, Value>) -> String {
+    initial_data
+        .get("serviceDetail")
+        .and_then(|v| v.as_object())
+        .and_then(|detail| {
+            resolve_lastmod_from_row(&Value::Object(detail.clone()))
+                .map(|lm| extract_date_only(&lm))
+        })
+        .unwrap_or_default()
 }
 
 // ─── Route resolution — 3 priorities (mirrors Java handleWebRequest) ──────────
@@ -319,38 +705,30 @@ fn resolve_route(state: &AppState, host: Option<&str>, path: &str) -> ResolvedRo
         return ResolvedRoute::default();
     }
 
-    // fCase: strip .shtml, normalize "/" to ""
-    let f_case = {
-        let p = path.replace(".shtml", "").trim().to_string();
-        if p == "/" { String::new() } else { p }
-    };
+    let f_case = normalize_f_case(path);
 
     // Priority 1: exact domain + f_case
-    if let Some(route) = query_route(state, &[
+    if let Some(mut route) = query_route(state, &[
         SearchFilter::eq("domain_name", domain.as_str()),
         SearchFilter::eq("f_case", f_case.as_str()),
         SearchFilter::eq("run", 1i64),
     ]) {
+        route.domain = domain.clone();
         return route;
     }
 
     // Priority 2: domain + f_case="" + rp_index set (React SSR catch-all)
-    if let Some(route) = query_route(state, &[
-        SearchFilter::eq("domain_name", domain.as_str()),
-        SearchFilter::eq("f_case", ""),
-        SearchFilter { field: "rp_index".into(), filter_type: "isnotnull".into(), ..Default::default() },
-        SearchFilter { field: "rp_index".into(), filter_type: "noteq".into(), value: Value::String("".into()), ..Default::default() },
-        SearchFilter::eq("run", 1i64),
-    ]) {
+    if let Some(route) = query_react_catch_all_route(state, &domain) {
         return route;
     }
 
     // Priority 3a: domain + app_type=web
-    if let Some(route) = query_route(state, &[
+    if let Some(mut route) = query_route(state, &[
         SearchFilter::eq("domain_name", domain.as_str()),
         SearchFilter::eq("app_type", "web"),
         SearchFilter::eq("run", 1i64),
     ]) {
+        route.domain = domain.clone();
         return route;
     }
 
@@ -546,7 +924,7 @@ fn load_dynamic_code_templates(state: &AppState, code_names: &[String]) -> Value
 
 // ─── Dynamic SEO meta — mirrors Java resolveSeoForServiceRoute ────────────────
 
-fn resolve_lang(params: &HashMap<String, String>) -> String {
+pub(super) fn resolve_lang(params: &HashMap<String, String>) -> String {
     let mut lang = params
         .get("hl")
         .map(|s| s.trim().to_lowercase())
@@ -575,7 +953,7 @@ fn absolute_asset_url(path: &str, protocol: &str, host: &str) -> String {
     format!("{protocol}://{host}/{}", path.trim_start_matches('/'))
 }
 
-fn record_str(row: &Map<String, Value>, key: &str) -> String {
+pub(super) fn record_str(row: &Map<String, Value>, key: &str) -> String {
     row.get(key)
         .and_then(|v| match v {
             Value::String(s) => Some(s.trim().to_string()),
@@ -967,6 +1345,8 @@ fn resolve_service_listing(
     domain: &str,
     path: &str,
     params: &HashMap<String, String>,
+    main_service_code: &str,
+    default_service_code: &str,
 ) -> Map<String, Value> {
     let mut out = Map::new();
 
@@ -981,7 +1361,13 @@ fn resolve_service_listing(
 
     let path_no_ext = path.replace(".shtml", "");
     let trimmed = path_no_ext.trim_start_matches('/');
-    let segs: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
+    let segs: Vec<String> = trimmed
+        .split('/')
+        .filter_map(|s| {
+            let s = s.trim().to_lowercase();
+            if s.is_empty() { None } else { Some(s) }
+        })
+        .collect();
     let is_home = segs.is_empty();
 
     // CASE 1: Homepage — active_home=1 OR featured=1
@@ -1011,41 +1397,22 @@ fn resolve_service_listing(
 
     // CASE 2: Detail page — /{service_code}/{slug} (2+ segments)
     if segs.len() >= 2 {
-        let service_code = segs[0];
-        let detail_slug = segs[segs.len() - 1];
-        let filter = SearchFilter {
-            operator: "AND".into(),
-            conditions: vec![
-                SearchFilter::eq("service_type", service_code),
-                SearchFilter::eq("slug", detail_slug),
-                SearchFilter::eq("status", "active"),
-                SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.into()), ..Default::default() },
-            ],
-            ..Default::default()
-        };
-        let row = state.record_manager.find(&route.app_id, &route.tbl_service_detail, &filter);
+        let service_code = resolve_legacy_service_code(&segs[0], main_service_code, default_service_code);
+        let detail_slug = &segs[segs.len() - 1];
+        let row = find_active_service_detail(state, route, domain, &service_code, detail_slug);
         if !row.is_empty() {
             let cur_id = row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             out.insert("serviceDetail".into(), Value::Object(map_detail_full_obj(&row, lang)));
-            out.insert("serviceCode".into(), Value::String(service_code.into()));
-            insert_related(state, route, domain, service_code, &cur_id, lang, page_size, &mut out);
+            out.insert("serviceCode".into(), Value::String(service_code.clone()));
+            insert_related(state, route, domain, &service_code, &cur_id, lang, page_size, &mut out);
             return out;
         }
     }
 
     // CASE 2.5: Try detail by slug only (1 segment) before falling to category
     if segs.len() == 1 {
-        let slug_only = segs[0];
-        let filter = SearchFilter {
-            operator: "AND".into(),
-            conditions: vec![
-                SearchFilter::eq("slug", slug_only),
-                SearchFilter::eq("status", "active"),
-                SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.into()), ..Default::default() },
-            ],
-            ..Default::default()
-        };
-        let row = state.record_manager.find(&route.app_id, &route.tbl_service_detail, &filter);
+        let slug_only = &segs[0];
+        let row = find_active_service_detail(state, route, domain, "", slug_only);
         if !row.is_empty() {
             let service_type = row.get("service_type").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let cur_id = row.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -1059,7 +1426,11 @@ fn resolve_service_listing(
     }
 
     // CASE 3: Category page — find service in tbl_services by slug/service_code
-    let slug = segs.last().copied().unwrap_or("");
+    let slug = if segs.is_empty() {
+        String::new()
+    } else {
+        resolve_legacy_service_code(&segs[segs.len() - 1], main_service_code, default_service_code)
+    };
     if slug.is_empty() || route.tbl_services.is_empty() {
         return out;
     }
@@ -1067,7 +1438,7 @@ fn resolve_service_listing(
     let svc_filter = SearchFilter {
         operator: "AND".into(),
         conditions: vec![
-            SearchFilter::eq("service_code", slug),
+            SearchFilter::eq("service_code", slug.as_str()),
             SearchFilter::eq("status", "active"),
             SearchFilter { field: "domain".into(), filter_type: "like".into(), value: Value::String(domain.into()), ..Default::default() },
         ],
@@ -1077,9 +1448,9 @@ fn resolve_service_listing(
 
     let service_code: String = if !service.is_empty() {
         let found = service.get("service_code").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        if found.is_empty() { service.get("id").and_then(|v| v.as_str()).unwrap_or(slug).to_string() } else { found }
+        if found.is_empty() { service.get("id").and_then(|v| v.as_str()).unwrap_or(&slug).to_string() } else { found }
     } else {
-        slug.to_string()
+        slug.clone()
     };
 
     if !service.is_empty() {
@@ -1310,45 +1681,29 @@ fn map_service_category(row: &serde_json::Map<String, Value>, lang: &str) -> ser
 // ─── HTML injection helpers ────────────────────────────────────────────────────
 
 pub(crate) struct PreprocessCtx {
-    title: String,
-    description: String,
-    keywords: String,
-    canonical: String,
-    image: String,
-    site_name: String,
-    logo: String,
-    gsv: String,
-    gtag: String,
-    app_id: String,
+    pub(crate) title: String,
+    pub(crate) description: String,
+    pub(crate) keywords: String,
+    pub(crate) canonical: String,
+    pub(crate) image: String,
+    pub(crate) site_name: String,
+    pub(crate) logo: String,
+    pub(crate) gsv: String,
+    pub(crate) gtag: String,
+    pub(crate) app_id: String,
+    pub(crate) page_type: String,
+    pub(crate) author: String,
+    pub(crate) published_at: String,
+    pub(crate) lang: String,
+    pub(crate) page_path: String,
+    pub(crate) base_url: String,
+    pub(crate) default_category: String,
+    pub(crate) initial_data: Value,
+    pub(crate) categories: Value,
 }
 
 fn build_json_ld(ctx: &PreprocessCtx) -> String {
-    let json_ld = json!({
-        "@context": "https://schema.org",
-        "@type": "WebPage",
-        "headline": ctx.title,
-        "url": ctx.canonical,
-        "description": ctx.description,
-        "inLanguage": "vi",
-        "image": {
-            "@type": "ImageObject",
-            "url": ctx.image,
-            "height": "1000",
-            "width": "1920"
-        },
-        "publisher": {
-            "@type": "Organization",
-            "name": ctx.site_name,
-            "url": ctx.site_name,
-            "logo": {
-                "@type": "ImageObject",
-                "url": ctx.logo,
-                "width": "506",
-                "height": "132"
-            }
-        }
-    });
-    serde_json::to_string_pretty(&json_ld).unwrap_or_else(|_| "{}".into())
+    seo_phase3::build_structured_data_graph(ctx)
 }
 
 fn replace_script_block(html: &mut String, marker: &str, new_content: &str) {
@@ -1405,8 +1760,23 @@ pub fn preprocess_html(html: &mut String, ctx: &PreprocessCtx) {
     replace_og_content(html, "twitter:description", description);
     replace_og_content(html, "twitter:image", image);
 
+    if ctx.page_type.eq_ignore_ascii_case("article") {
+        replace_og_content(html, "og:type", "article");
+    } else {
+        replace_og_content(html, "og:type", "website");
+    }
+
     replace_link_href_rel(html, "icon", logo);
     replace_link_href_rel(html, "apple-touch-icon", logo);
+
+    let lang = {
+        let l = resolve_lang(&HashMap::from([("hl".into(), ctx.lang.clone())]));
+        if l.is_empty() { "vi".to_string() } else { l }
+    };
+    seo_phase3::replace_html_lang(html, &lang);
+    replace_og_content(html, "og:locale", &seo_phase3::locale_tag(&lang));
+    seo_phase3::inject_og_locale_alternates(html, &lang);
+    seo_phase3::inject_hreflang_links(html, &seo_phase3::build_hreflang_links(&ctx.base_url, &ctx.page_path));
 
     if let Some(pos) = html.find("<base ") {
         if let Some(end) = html[pos..].find('>') {
@@ -1467,7 +1837,7 @@ pub fn preprocess_html(html: &mut String, ctx: &PreprocessCtx) {
     strip_th_attrs(html, "th:text");
 }
 
-fn html_esc(s: &str) -> String {
+pub(super) fn html_esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -1500,11 +1870,12 @@ fn build_scripts(
     ssr_routes: &Value,
     dynamic_templates: &Value,
     meta: &Value,
+    default_service_code: &str,
 ) -> String {
     let safe = |v: &Value| serde_json::to_string(v).unwrap_or_else(|_| "{}".into())
         .replace("</", "<\\/");
 
-    format!(
+    let mut scripts = format!(
         "<script>window.meta={m};window.__INITIAL_DATA__={id};window.menus=[];</script>\
          <script>window.__APP_CONFIG__={ac};</script>\
          <script>window.__INITIAL_REACT_DATA__={id};</script>\
@@ -1517,7 +1888,14 @@ fn build_scripts(
         cats = safe(categories),
         routes = safe(ssr_routes),
         tmpl = safe(dynamic_templates),
-    )
+    );
+    if !default_service_code.is_empty() {
+        scripts.push_str(&format!(
+            "<script>window.__SSR_DEFAULT_CATEGORY__={};</script>",
+            serde_json::to_string(default_service_code).unwrap_or_else(|_| "\"\"".into())
+        ));
+    }
+    scripts
 }
 
 fn replace_link_href(html: &mut String, rel: &str, href: &str) {
@@ -1555,7 +1933,7 @@ fn replace_og_content(html: &mut String, property: &str, val: &str) {
     }
 }
 
-fn strip_th_attrs(html: &mut String, attr: &str) {
+pub(super) fn strip_th_attrs(html: &mut String, attr: &str) {
     while let Some(pos) = html.find(attr) {
         if let Some(end) = html[pos..].find('"').and_then(|q1| {
             html[pos + q1 + 1..].find('"').map(|q2| pos + q1 + 1 + q2 + 1)
@@ -1579,7 +1957,13 @@ fn inject_into_html(html: &mut String, scripts: &str) {
     }
 }
 
-fn fallback_html(title: &str, _uri: &str, _app_id: &str, scripts: &str) -> String {
+fn fallback_html(title: &str, _uri: &str, app_id: &str, rp_index: &str, scripts: &str) -> String {
+    let rp_index = rp_index.trim().trim_matches('/');
+    let module_src = if rp_index.is_empty() {
+        "/assets/main.js".to_string()
+    } else {
+        format!("/{rp_index}/assets/main.js")
+    };
     format!(
         r#"<!DOCTYPE html>
 <html lang="vi">
@@ -1589,8 +1973,12 @@ fn fallback_html(title: &str, _uri: &str, _app_id: &str, scripts: &str) -> Strin
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   {scripts}
 </head>
-<body><div id="root"></div><script type="module" src="/assets/main.js"></script></body>
-</html>"#
+<body id="home" data-app-id="{app_id}"><div id="root"></div><script type="module" src="{module_src}"></script></body>
+</html>"#,
+        title = html_esc(title),
+        scripts = scripts,
+        app_id = html_esc(app_id),
+        module_src = html_esc(&module_src),
     )
 }
 
@@ -1781,6 +2169,27 @@ pub fn build_sitemap(state: &AppState, host: Option<&str>) -> String {
 
     xml.push_str("\n</urlset>");
     xml
+}
+
+pub fn cached_build_sitemap(state: &AppState, host: Option<&str>) -> String {
+    let mut host_key = host.unwrap_or("default").trim().to_string();
+    if host_key.is_empty() {
+        host_key = "default".into();
+    }
+    if let Some(entry) = SITEMAP_CACHE.get(&host_key) {
+        if entry.expires > Instant::now() {
+            return entry.data.clone();
+        }
+    }
+    let body = build_sitemap(state, host);
+    SITEMAP_CACHE.insert(
+        host_key,
+        CacheEntry {
+            data: body.clone(),
+            expires: Instant::now() + SITEMAP_CACHE_TTL,
+        },
+    );
+    body
 }
 
 fn sitemap_url_entry(url: &str, lastmod: Option<&str>, changefreq: &str, priority: &str) -> String {

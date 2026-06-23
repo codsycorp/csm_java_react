@@ -6,8 +6,11 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"time"
 
 	"csm_server/backend-go/internal/config"
+	"csm_server/backend-go/internal/platform/circuitbreaker"
+	"csm_server/backend-go/internal/platform/metrics"
 )
 
 const (
@@ -17,11 +20,19 @@ const (
 type LlamaService struct {
 	cfg     config.AppConfig
 	backend llamaInferenceBackend
+	breaker *circuitbreaker.Breaker
 }
 
 func NewLlamaService(cfg config.AppConfig) *LlamaService {
 	backend := newLlamaInferenceBackend(cfg)
-	svc := &LlamaService{cfg: cfg, backend: backend}
+	svc := &LlamaService{
+		cfg:     cfg,
+		backend: backend,
+		breaker: circuitbreaker.New(
+			cfg.Platform.LlamaBreakerFailures,
+			time.Duration(cfg.Platform.LlamaBreakerCooldownMs)*time.Millisecond,
+		),
+	}
 	switch {
 	case backend.ready():
 		log.Printf("LlamaService: %s enabled (%s)", backend.providerLabel(), cfg.AI.LlamaModelPath)
@@ -71,10 +82,18 @@ func (l *LlamaService) CompleteWithTokens(ctx context.Context, prompt string, ma
 	if !l.UsesNative() {
 		return "", fmt.Errorf("%s: %s", LocalProviderUnavailableCode, l.statusHint())
 	}
-	text, err := l.backend.complete(prompt, maxTokens)
+	start := time.Now()
+	var text string
+	err := l.breaker.Run(func() error {
+		var e error
+		text, e = l.backend.complete(prompt, maxTokens)
+		return e
+	})
 	if err != nil {
+		metrics.ObserveLlama("error", time.Since(start))
 		return "", err
 	}
+	metrics.ObserveLlama("ok", time.Since(start))
 	return CleanLocalModelOutput(text), nil
 }
 
@@ -90,7 +109,36 @@ func (l *LlamaService) StreamCompletionWithTokens(ctx context.Context, prompt st
 	if !l.UsesNative() {
 		return fmt.Errorf("%s: %s", LocalProviderUnavailableCode, l.statusHint())
 	}
-	return l.backend.stream(prompt, maxTokens, onToken)
+	start := time.Now()
+	err := l.breaker.Run(func() error {
+		return l.backend.stream(prompt, maxTokens, onToken)
+	})
+	if err != nil {
+		metrics.ObserveLlama("stream_error", time.Since(start))
+		return err
+	}
+	metrics.ObserveLlama("stream_ok", time.Since(start))
+	return nil
+}
+
+// Embed returns a vector for RAG when the model supports embeddings.
+func (l *LlamaService) Embed(ctx context.Context, text string) ([]float32, error) {
+	if !l.UsesNative() || l.backend == nil {
+		return nil, fmt.Errorf("%s: %s", LocalProviderUnavailableCode, l.statusHint())
+	}
+	start := time.Now()
+	var vec []float32
+	err := l.breaker.Run(func() error {
+		var e error
+		vec, e = l.backend.embed(text)
+		return e
+	})
+	if err != nil {
+		metrics.ObserveLlama("embed_error", time.Since(start))
+		return nil, err
+	}
+	metrics.ObserveLlama("embed_ok", time.Since(start))
+	return vec, nil
 }
 
 func LocalUnavailableMessage() string {

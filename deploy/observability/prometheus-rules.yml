@@ -1,0 +1,29 @@
+groups:
+  - name: csm-go-slo
+    rules:
+      - alert: CsmHighErrorRate
+        expr: |
+          sum(rate(csm_http_requests_total{status=~"5.."}[5m]))
+          / sum(rate(csm_http_requests_total[5m])) > 0.01
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "CSM Go error rate > 1% (SLO breach)"
+      - alert: CsmHighLatencyP99
+        expr: |
+          histogram_quantile(0.99, sum(rate(csm_http_request_duration_seconds_bucket[5m])) by (le)) > 0.5
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "CSM Go API p99 > 500ms"
+      - alert: CsmLlamaFailureSpike
+        expr: |
+          sum(rate(csm_llama_requests_total{result=~".*error.*"}[5m]))
+          / sum(rate(csm_llama_requests_total[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Llama inference error rate > 5%"

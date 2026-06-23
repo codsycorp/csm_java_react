@@ -28,6 +28,10 @@ func (n *llamaNativeBackend) stream(_ string, _ uint32, _ func(string) error) er
 	return errNativeUnavailable
 }
 
+func (n *llamaNativeBackend) embed(_ string) ([]float32, error) {
+	return nil, errNativeUnavailable
+}
+
 func (n *llamaNativeBackend) shutdown() {}
 
 func (n *llamaNativeBackend) isLoaded() bool { return false }

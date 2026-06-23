@@ -259,6 +259,10 @@ func (b *llamaIsolatedBackend) killWorkerLocked() {
 	b.stdout = nil
 }
 
+func (b *llamaIsolatedBackend) embed(_ string) ([]float32, error) {
+	return nil, errors.New("embeddings not supported in isolated worker mode")
+}
+
 func (b *llamaIsolatedBackend) shutdown() {
 	b.mu.Lock()
 	defer b.mu.Unlock()

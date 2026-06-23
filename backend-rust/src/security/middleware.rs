@@ -77,6 +77,14 @@ pub fn is_api_request(uri: &str, host: Option<&str>) -> bool {
         || crate::api::paths::is_direct_ai_path(uri)
 }
 
+/// Mirrors Go `isDispatchAPIRequest` — bare paths on localhost must pass auth middleware.
+pub fn is_dispatch_api_request(uri: &str, host: Option<&str>) -> bool {
+    let is_admin_host = host.map(|h| h.starts_with("admin.")).unwrap_or(false);
+    is_api_request(uri, host)
+        || crate::api::paths::is_direct_ai_path(uri)
+        || (!is_admin_host && crate::api::paths::is_bare_api_path(uri))
+}
+
 fn resolve_host(headers: &HeaderMap) -> Option<&str> {
     headers
         .get("x-forwarded-host")
@@ -110,6 +118,12 @@ pub fn is_public_api_path(method: &Method, path: &str) -> bool {
         || (clean == "/crm/customer" && (*method == Method::POST || *method == Method::PUT))
 }
 
+/// Optional-auth endpoints — dynamic-code fetch() may run without sessionStorage tokens (Go parity).
+pub fn is_optional_auth_api_path(path: &str) -> bool {
+    let clean = path.strip_prefix("/api").unwrap_or(path);
+    matches!(clean, "/scrape-web" | "/execute-js-on-page")
+}
+
 pub async fn auth_middleware(
     State(state): State<AppState>,
     mut req: Request<Body>,
@@ -118,7 +132,15 @@ pub async fn auth_middleware(
     let uri = req.uri().path().to_string();
     let host = resolve_host(req.headers());
 
-    if !is_api_request(&uri, host) || is_public_api_path(req.method(), &uri) {
+    if !is_dispatch_api_request(&uri, host) || is_public_api_path(req.method(), &uri) {
+        return next.run(req).await;
+    }
+
+    let clean_path = uri.strip_prefix("/api").unwrap_or(uri.as_str());
+    if is_optional_auth_api_path(clean_path) {
+        if let Some(user) = resolve_auth_user(&state, req.headers()) {
+            req.extensions_mut().insert(user);
+        }
         return next.run(req).await;
     }
 
@@ -166,7 +188,6 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
     }
 
     let csm = csm_token(headers);
-    let csm_present = csm.as_ref().is_some_and(|token| !token.is_empty());
     let csm_valid = csm
         .as_ref()
         .is_some_and(|token| !token.is_empty() && state.jwt.validate_token(token));
@@ -181,20 +202,32 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
     });
 
     if let Some(token) = csm.as_ref().filter(|t| !t.is_empty()) {
-        if csm_valid {
-            if let Some(user) =
-                state
-                    .user_service
-                    .resolve_from_jwt_with_util(&state.jwt, token)
+        let user = if csm_valid {
+            state
+                .user_service
+                .resolve_from_jwt_with_util(&state.jwt, token)
+        } else {
+            // Expired JWT with valid signature — avoid refresh-token storms on parallel requests.
+            state
+                .user_service
+                .resolve_from_jwt_allow_expired_with_util(&state.jwt, token)
+        };
+        if let Some(user) = user {
+            if let Ok(claims) = state
+                .jwt
+                .parse_claims(token)
+                .or_else(|_| state.jwt.parse_claims_allow_expired(token))
             {
-                return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
+                if user_matches_jwt_hints(&user, &claims.uid, &claims.sub) {
+                    return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
+                }
             }
+        } else if csm_valid {
             warn!(
                 "[JWT] Valid csm-token present but user resolution failed; trying refresh-token fallback"
             );
-            // Mirror Java JwtAuthenticationFilter: fall through to refresh when JWT resolve lags after login.
         }
-        // Invalid/expired csm-token: refresh fallback below must match JWT uid/sub when parseable.
+        // Invalid/expired csm-token: refresh fallback below must match JWT uid/sub when csm_valid.
     }
 
     let client_ip = client_ip_from_headers(headers);
@@ -204,7 +237,7 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
         match state.user_service.find_by_refresh_token(&rt) {
             Some(user)
                 if refresh_session_valid_for_middleware(&user, &client_ip, &client_ua, &client_id)
-                    && refresh_allowed_for_csm_hints(csm_present, jwt_hints.as_ref(), &user) =>
+                    && refresh_allowed_for_csm_hints(csm_valid, jwt_hints.as_ref(), &user) =>
             {
                 return Some(enrich_auth_user(state, auth_user_from_model(state, user)));
             }
@@ -242,11 +275,11 @@ fn resolve_auth_user(state: &AppState, headers: &HeaderMap) -> Option<AuthUser> 
 
 /// When csm-token header is present, refresh auth must belong to the same account as JWT hints.
 fn refresh_allowed_for_csm_hints(
-    csm_present: bool,
+    csm_valid: bool,
     jwt_hints: Option<&(String, String)>,
     user: &crate::model::User,
 ) -> bool {
-    if !csm_present {
+    if !csm_valid {
         return true;
     }
     let Some((uid, sub)) = jwt_hints else {

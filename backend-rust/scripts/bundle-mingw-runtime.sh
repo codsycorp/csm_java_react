@@ -53,7 +53,8 @@ is_windows_system_dll() {
     shell32.dll|ole32.dll|oleaut32.dll|comctl32.dll|comdlg32.dll|\
     msimg32.dll|msvcrt.dll|ucrtbase.dll|version.dll|winmm.dll|imm32.dll|\
     setupapi.dll|cfgmgr32.dll|dhcpcsvc.dll|iphlpapi.dll|dnsapi.dll|\
-    userenv.dll|profapi.dll|powrprof.dll|winspool.drv|wtsapi32.dll)
+    userenv.dll|profapi.dll|powrprof.dll|winspool.drv|wtsapi32.dll|\
+    pdh.dll|psapi.dll|dbghelp.dll)
       return 0
       ;;
   esac

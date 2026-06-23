@@ -1,0 +1,8 @@
+# Docker build context — backend-rust/
+target/
+**/target/
+.git/
+csm_datas/
+*.tgz
+*.zip
+dist/

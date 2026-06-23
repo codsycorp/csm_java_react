@@ -1,4 +1,2 @@
 @echo off
-pushd "%~dp0..\..\.."
-call "%CD%\load-csm-rust-env.bat"
-popd
+call "%~dp0load-csm-rust-env.bat"

@@ -1,0 +1,22 @@
+# Build CSM Rust for Linux amd64 (Ubuntu 22.04 glibc) — full local-ai + bundled runtime libs.
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq \
+ && apt-get install -y -qq \
+    build-essential pkg-config libssl-dev cmake clang git curl ca-certificates \
+    patchelf zip file \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /build
+COPY . /build/
+
+RUN chmod +x /build/docker/*.sh
+
+# Pre-fetch deps (layer cache)
+RUN cd /build && cargo fetch
+
+ENTRYPOINT ["/build/docker/package-linux.sh"]

@@ -16,6 +16,9 @@ target/
 dist/
 build/
 backend-go/.cache/
+backend-go/csm-server
+backend-go/server
+backend-go/#
 *.jar
 *.war
 *.class
@@ -103,6 +106,7 @@ backend/src/main/resources/secrets/
 *.swp
 *.swo
 *~
+*.mp4
 
 # Test coverage
 coverage/

@@ -169,6 +169,9 @@ func isPublicAPIPath(method, path string) bool {
 	if strings.HasPrefix(path, "/monitoring") || strings.HasPrefix(path, "/ai-local") {
 		return true
 	}
+	if path == "/live" || path == "/ready" || path == "/metrics" {
+		return true
+	}
 	if path == "/crm/customer" && (method == http.MethodPost || method == http.MethodPut) {
 		return true
 	}

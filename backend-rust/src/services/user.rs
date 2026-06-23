@@ -233,7 +233,36 @@ impl UserService {
                 return Some(user);
             }
         }
-        None
+        self.lookup_refresh_grace_user(refresh_token)
+    }
+
+    fn lookup_refresh_grace_user(&self, refresh_token: &str) -> Option<User> {
+        let grace = super::refresh_grace::lookup_refresh_grace_user(refresh_token)?;
+        if let Some(app_token) = grace.app_token.as_deref().filter(|s| !s.is_empty()) {
+            if let Some(user) = self.find_by_app_token(app_token) {
+                let ver = user.login_version.unwrap_or(0);
+                let grace_ver = grace.login_version.unwrap_or(0);
+                if grace_ver <= 0 || ver == grace_ver {
+                    let stored = user.refresh_token.as_deref().unwrap_or("");
+                    if stored.is_empty() || stored == refresh_token {
+                        return Some(user);
+                    }
+                }
+            }
+        }
+        if let Some(user_id) = grace.id.as_deref().filter(|s| !s.is_empty()) {
+            if let Some(user) = self.find_by_id(user_id) {
+                let ver = user.login_version.unwrap_or(0);
+                let grace_ver = grace.login_version.unwrap_or(0);
+                if grace_ver <= 0 || ver == grace_ver {
+                    let stored = user.refresh_token.as_deref().unwrap_or("");
+                    if stored.is_empty() || stored == refresh_token {
+                        return Some(user);
+                    }
+                }
+            }
+        }
+        Some(grace)
     }
 
     fn map_refresh_record_to_user(
@@ -260,17 +289,24 @@ impl UserService {
         login_identifier: &str,
         raw_password: &str,
     ) -> Option<User> {
-        for finder in [
-            Self::find_by_email,
-            Self::find_by_username,
-            Self::find_by_phone,
+        for (label, finder) in [
+            ("email", Self::find_by_email as fn(&Self, &str) -> Option<(User, Map<String, Value>)>),
+            ("username", Self::find_by_username),
+            ("phone", Self::find_by_phone),
         ] {
             if let Some((user, record)) = finder(self, login_identifier) {
                 let field = login_field(&user, login_identifier);
-                if self.password_matches(&record, &user, &field, raw_password) {
+                if self.password_matches(&record, &user, &field, raw_password, false) {
                     info!("Login success for {}", login_identifier);
                     return Some(user);
                 }
+                warn!(
+                    "Login password mismatch for {} via {} (actived={:?} pass_len={})",
+                    login_identifier,
+                    label,
+                    record_actived_or_default(&record, false),
+                    record_pass_len(&record)
+                );
             }
         }
 
@@ -280,10 +316,18 @@ impl UserService {
             let combined = format!("{login_identifier}_____{raw_password}");
             let encoded = self.record_manager.csm_encrypt(&combined);
             let pass = sub.get("pass").and_then(|v| v.as_str()).unwrap_or("");
-            let actived = sub.get("actived").and_then(|v| v.as_bool()).unwrap_or(true);
+            let actived = record_actived_or_default(&sub, true);
             if actived && pass == encoded {
                 return self.map_sub_user(&sub);
             }
+            warn!(
+                "Login sub-user mismatch for {} actived={} pass_len={}",
+                login_identifier,
+                actived,
+                pass.len()
+            );
+        } else if !login_identifier.is_empty() {
+            warn!("Login not found: {} (main+sub)", login_identifier);
         }
         None
     }
@@ -294,6 +338,19 @@ impl UserService {
         token: &str,
     ) -> Option<User> {
         let claims = jwt.parse_claims(token).ok()?;
+        self.resolve_from_claims(claims)
+    }
+
+    pub fn resolve_from_jwt_allow_expired_with_util(
+        &self,
+        jwt: &crate::security::jwt::JwtUtil,
+        token: &str,
+    ) -> Option<User> {
+        let claims = jwt.parse_claims_allow_expired(token).ok()?;
+        self.resolve_from_claims(claims)
+    }
+
+    fn resolve_from_claims(&self, claims: crate::security::jwt::Claims) -> Option<User> {
         let subject = claims.sub.trim();
         let token_user_id = claims.uid.trim();
         let token_version = claims.ver;
@@ -546,6 +603,9 @@ impl UserService {
         login_version: i32,
         client_id: &str,
     ) {
+        if let Some(old) = user.refresh_token.as_deref().filter(|s| !s.is_empty()) {
+            super::refresh_grace::remember_rotated_refresh_token(old, user);
+        }
         let mut fields = Map::new();
         fields.insert("refresh_token".into(), Value::String(refresh_token.into()));
         fields.insert("refresh".into(), Value::String(refresh_token.into()));
@@ -806,13 +866,7 @@ impl UserService {
     }
 
     fn find_account(&self, field: &str, value: &str) -> Option<(User, Map<String, Value>)> {
-        let filter = SearchFilter {
-            operator: "AND".into(),
-            field: field.into(),
-            filter_type: "eqIgnoreCase".into(),
-            value: Value::String(value.into()),
-            conditions: vec![],
-        };
+        let filter = SearchFilter::eq(field, value);
         let r = self.record_manager.find(CSM_APP_ID, ACCOUNTS_TABLE, &filter);
         if r.is_empty() {
             None
@@ -827,6 +881,7 @@ impl UserService {
         user: &User,
         login_field: &str,
         raw_password: &str,
+        sub_user_default_actived: bool,
     ) -> bool {
         let combined = format!("{login_field}_____{raw_password}");
         let encoded = self.record_manager.csm_encrypt(&combined);
@@ -835,17 +890,21 @@ impl UserService {
             .or_else(|| record.get("password"))
             .and_then(|v| v.as_str())
             .or(user.password.as_deref());
+        let default_actived = if sub_user_default_actived { true } else { false };
         let actived = record
             .get("actived")
             .and_then(|v| v.as_bool())
             .or(user.actived)
-            .unwrap_or(true);
+            .unwrap_or(default_actived);
         actived && stored == Some(encoded.as_str())
     }
 
     /// Mirrors Java `mapRecordToUser` / `mapMainAccountToUser`.
     fn map_record_to_user(&self, record: &Map<String, Value>, is_main_account: bool) -> User {
         let mut user = User::from_record(record);
+        if user.actived.is_none() {
+            user.actived = Some(record_actived_or_default(record, false));
+        }
 
         let app_id = extract_app_id_from_token(&self.record_manager, user.app_token.as_deref())
             .or_else(|| {
@@ -1528,16 +1587,40 @@ fn parse_long_safe(value: Option<&Value>) -> i64 {
 }
 
 fn login_field(user: &User, identifier: &str) -> String {
-    if user.email.as_deref() == Some(identifier) {
+    if user
+        .email
+        .as_deref()
+        .is_some_and(|e| e.eq_ignore_ascii_case(identifier))
+    {
         return user.email.clone().unwrap_or_default();
     }
-    if user.username.as_deref() == Some(identifier) {
+    if user
+        .username
+        .as_deref()
+        .is_some_and(|u| u.eq_ignore_ascii_case(identifier))
+    {
         return user.username.clone().unwrap_or_default();
     }
     if user.phone_number.as_deref() == Some(identifier) {
         return user.phone_number.clone().unwrap_or_default();
     }
     identifier.to_string()
+}
+
+fn record_actived_or_default(record: &Map<String, Value>, default_val: bool) -> bool {
+    record
+        .get("actived")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(default_val)
+}
+
+fn record_pass_len(record: &Map<String, Value>) -> usize {
+    record
+        .get("pass")
+        .or_else(|| record.get("password"))
+        .and_then(|v| v.as_str())
+        .map(str::len)
+        .unwrap_or(0)
 }
 
 fn string_list_from_value(value: Option<&Value>) -> Vec<String> {
@@ -1580,4 +1663,56 @@ fn exclude_menu_app_from_data_app_ids(apps: &[String], menu_app_id: &str) -> Vec
         .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case(menu))
         .map(String::from)
         .collect()
+}
+
+#[cfg(test)]
+mod login_parity_tests {
+    use super::*;
+    use crate::config::AppConfig;
+    use crate::data::RecordManager;
+
+    fn temp_rm() -> RecordManager {
+        let dir = std::env::temp_dir().join(format!("csm_login_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("APP_DATA_DIR", &dir);
+        std::env::set_var("CSM_KV_ENGINE", "pebble");
+        let cfg = AppConfig::from_env().unwrap();
+        RecordManager::new(cfg).unwrap()
+    }
+
+    #[test]
+    fn main_account_inactive_without_actived_field() {
+        let rm = temp_rm();
+        let us = UserService::new(Arc::new(rm));
+        let pass = us.record_manager.csm_encrypt("staff@test.com_____secret");
+        let mut record = Map::new();
+        record.insert("pass".into(), Value::String(pass.clone()));
+        record.insert("username".into(), Value::String("staff@test.com".into()));
+        let user = User {
+            username: Some("staff@test.com".into()),
+            password: Some(pass),
+            ..Default::default()
+        };
+        assert!(
+            !us.password_matches(&record, &user, "staff@test.com", "secret", false),
+            "main account missing actived must not login"
+        );
+        record.insert("actived".into(), Value::Bool(true));
+        assert!(us.password_matches(
+            &record,
+            &user,
+            "staff@test.com",
+            "secret",
+            false
+        ));
+    }
+
+    #[test]
+    fn login_field_uses_stored_email_case() {
+        let user = User {
+            email: Some("Owner@Test.com".into()),
+            ..Default::default()
+        };
+        assert_eq!(login_field(&user, "owner@test.com"), "Owner@Test.com");
+    }
 }

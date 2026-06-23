@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,6 +97,24 @@ func (rm *RecordManager) Init() {
 		tables := append([]string(nil), rm.cfg.StartupReindexTables...)
 		go rm.runStartupReindex(tables)
 	}
+}
+
+// SetVectorEmbedFunc configures semantic search embeddings (llama or hash fallback).
+func (rm *RecordManager) SetVectorEmbedFunc(fn func(context.Context, string) ([]float32, error)) {
+	if rm == nil || rm.vectorStore == nil || fn == nil {
+		return
+	}
+	rm.vectorStore.SetEmbeddingFunc(fn)
+}
+
+// Ping verifies the record manager is open (readiness probe).
+func (rm *RecordManager) Ping() error {
+	rm.dbMu.RLock()
+	defer rm.dbMu.RUnlock()
+	if rm.closed {
+		return fmt.Errorf("record manager closed")
+	}
+	return nil
 }
 
 func (rm *RecordManager) ShutdownAll() {

@@ -57,7 +57,7 @@ pub async fn handle_web_path(state: &AppState, uri: &str, host: Option<&str>, qu
 
     match uri {
         "/robots.txt" => return text_response(&generate_robots_txt(host)),
-        "/sitemap.xml" => return xml_response(&crate::web::ssr::build_sitemap(state, host)),
+        "/sitemap.xml" => return xml_response(&crate::web::ssr::cached_build_sitemap(state, host)),
         "/feed.xml" => return serve_feed_xml(state, host).await,
         "/version.json" => return serve_version_json(state, host).await,
         "/manifest.json" => return serve_manifest_json(state).await,

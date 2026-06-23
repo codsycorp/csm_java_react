@@ -11,4 +11,5 @@ pub mod google_index;
 pub mod google_index_queue;
 pub mod googlebot;
 pub mod permission;
+mod refresh_grace;
 pub mod user;
