@@ -12,6 +12,7 @@ import (
 	"csm_server/backend-go/internal/model"
 	"csm_server/backend-go/internal/platform/audit"
 	"csm_server/backend-go/internal/platform/events"
+	"csm_server/backend-go/internal/platform/outbox"
 	"csm_server/backend-go/internal/security"
 	"csm_server/backend-go/internal/services"
 )
@@ -26,6 +27,7 @@ type TableHandler struct {
 	socket    SocketBroadcaster
 	audit     *audit.Store
 	eventBus  events.Bus
+	outbox    *outbox.Store
 }
 
 // SocketBroadcaster pushes realtime table updates to connected clients.
@@ -41,13 +43,19 @@ func (h *TableHandler) SetAuditStore(s *audit.Store) { h.audit = s }
 
 func (h *TableHandler) SetEventBus(bus events.Bus) { h.eventBus = bus }
 
+func (h *TableHandler) SetOutbox(store *outbox.Store) { h.outbox = store }
+
 func (h *TableHandler) emitMutationEvent(appID, table, action string, row map[string]any, auth *security.AuthUser) {
-	if h.eventBus != nil {
+	payload := map[string]any{
+		"app_id": appID, "table": table, "action": action, "row_id": row["id"],
+	}
+	if h.outbox != nil && h.outbox.Enabled() {
+		if _, err := h.outbox.Enqueue("table.mutation", payload); err != nil && h.eventBus != nil {
+			h.eventBus.Publish(context.Background(), events.Event{Topic: "table.mutation", Payload: payload})
+		}
+	} else if h.eventBus != nil {
 		h.eventBus.Publish(context.Background(), events.Event{
-			Topic: "table.mutation",
-			Payload: map[string]any{
-				"app_id": appID, "table": table, "action": action, "row_id": row["id"],
-			},
+			Topic: "table.mutation", Payload: payload,
 		})
 	}
 	h.recordAudit(appID, table, action, row, auth)

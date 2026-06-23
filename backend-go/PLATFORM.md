@@ -178,4 +178,11 @@ readinessProbe:
 | OpenTelemetry traces | ✅ (`CSM_OTEL_ENABLED`) |
 | Redis event bus | ✅ (`CSM_EVENT_BUS=redis`) |
 | Prometheus production install | ✅ `install-prometheus-production.sh` |
-| GDPR DSR automation | 🔜 policy layer |
+| Transactional outbox | ✅ (`CSM_OUTBOX_ENABLED`) |
+| Analytics lake (NDJSON) | ✅ (`CSM_LAKE_EXPORT_ENABLED`) |
+| Data lineage + catalog | ✅ |
+| GDPR DSR export/erase | ✅ (`CSM_GDPR_DSR_ENABLED`) |
+| SLO error budget metric | ✅ |
+| Grafana + Loki stack | ✅ `deploy/observability/docker-compose.yml` |
+| Kafka / ClickHouse cluster | 🔜 upgrade triggers in `BIGDATA.md` |
+| GDPR DSR automation | ✅ API layer |

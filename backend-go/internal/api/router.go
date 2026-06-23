@@ -180,6 +180,9 @@ func DispatchAPI(st *state.AppState, method, path string, params map[string]any,
 	case "/crm/insights":
 		return st.CrmHandler.HandleInsights(params, auth)
 	default:
+		if strings.HasPrefix(path, "/governance/") {
+			return st.GovernanceHandler.Handle(path, params, auth)
+		}
 		if method == http.MethodPost && path == "/crm/ads" {
 			return st.CrmHandler.HandleCreateAd(params, auth)
 		}

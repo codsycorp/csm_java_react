@@ -10,11 +10,14 @@ import (
 	"csm_server/backend-go/internal/data"
 	"csm_server/backend-go/internal/handlers"
 	"csm_server/backend-go/internal/platform/audit"
+	"csm_server/backend-go/internal/platform/dataplatform"
 	"csm_server/backend-go/internal/platform/embeddings"
 	"csm_server/backend-go/internal/platform/events"
+	"csm_server/backend-go/internal/platform/governance"
 	"csm_server/backend-go/internal/platform/health"
 	"csm_server/backend-go/internal/platform/logging"
 	"csm_server/backend-go/internal/platform/metrics"
+	"csm_server/backend-go/internal/platform/slo"
 	"csm_server/backend-go/internal/security"
 	"csm_server/backend-go/internal/services"
 	"csm_server/backend-go/internal/socket"
@@ -35,6 +38,8 @@ type AppState struct {
 	Embeddings    *embeddings.Provider
 	EventBus      events.Bus
 	Audit         *audit.Store
+	DataPlatform  *dataplatform.Runtime
+	ErrorBudget   *slo.BudgetTracker
 	Health        *health.Registry
 
 	AuthHandler   *handlers.AuthHandler
@@ -47,7 +52,8 @@ type AppState struct {
 	CrmHandler    *handlers.CrmHandler
 	ApiExtHandler *handlers.ApiExtHandler
 	SocialHandler *handlers.SocialHandler
-	AiHandler     *handlers.AiHandler
+	AiHandler         *handlers.AiHandler
+	GovernanceHandler *handlers.GovernanceHandler
 }
 
 func NewAppState(cfg config.AppConfig) (*AppState, error) {
@@ -79,6 +85,10 @@ func NewAppState(cfg config.AppConfig) (*AppState, error) {
 	go auditStore.PurgeExpired()
 
 	eventBus := events.NewBus(cfg)
+	dp, err := dataplatform.Bootstrap(cfg, eventBus)
+	if err != nil {
+		return nil, err
+	}
 	healthReg := health.NewRegistry()
 	healthReg.Register(health.PebbleChecker{Probe: rm.Ping})
 	healthReg.Register(health.LlamaChecker{
@@ -92,6 +102,14 @@ func NewAppState(cfg config.AppConfig) (*AppState, error) {
 	}
 	metrics.SetComponentReady("pebble", true)
 	metrics.SetComponentReady("llama", llama.IsAvailable())
+	if dp.Outbox != nil && dp.Outbox.Enabled() {
+		metrics.SetComponentReady("outbox", true)
+	}
+	metrics.SetBudgetTracker(slo.NewBudgetTracker(0, 0))
+	var dsrSvc *governance.DSRService
+	if cfg.Platform.GDPRDSREnabled {
+		dsrSvc = governance.NewDSRService(rm)
+	}
 
 	st := &AppState{
 		Config:        cfg,
@@ -108,6 +126,8 @@ func NewAppState(cfg config.AppConfig) (*AppState, error) {
 		Embeddings:    embedProvider,
 		EventBus:      eventBus,
 		Audit:         auditStore,
+		DataPlatform:  dp,
+		ErrorBudget:   nil,
 		Health:        healthReg,
 		AuthHandler:   handlers.NewAuthHandler(rm, us, jwt),
 		TableHandler:  handlers.NewTableHandler(rm, us, socketHub),
@@ -120,10 +140,14 @@ func NewAppState(cfg config.AppConfig) (*AppState, error) {
 	}
 	st.TableHandler.SetAuditStore(auditStore)
 	st.TableHandler.SetEventBus(eventBus)
+	if dp.Outbox != nil {
+		st.TableHandler.SetOutbox(dp.Outbox)
+	}
 
 	st.ApiExtHandler = handlers.NewApiExtHandler(cfg, httpClient, googleIndex, aiSeo)
 	st.SocialHandler = handlers.NewSocialHandler(cfg, httpClient, st.CrmHandler)
 	st.AiHandler = handlers.NewAiHandler(cfg, llama, rm)
+	st.GovernanceHandler = handlers.NewGovernanceHandler(rm, dsrSvc, auditStore, dp.Catalog, dp.Lineage, dp.Lake)
 	st.InitHandler.AutoInitDefaultData()
 
 	socketHub.Register(socket.Dependencies{
@@ -150,6 +174,9 @@ func (st *AppState) Shutdown() {
 	}
 	if st.Audit != nil {
 		st.Audit.Close()
+	}
+	if st.DataPlatform != nil {
+		st.DataPlatform.Shutdown()
 	}
 	if st.EventBus != nil {
 		_ = st.EventBus.Close()

@@ -75,6 +75,19 @@ type PlatformConfig struct {
 	LlamaBreakerFailures   int
 	LlamaBreakerCooldownMs uint64
 	ShutdownTimeoutMs      uint64
+	// Data platform (CTO big-data foundation)
+	DataPlatformEnabled bool
+	OutboxEnabled       bool
+	OutboxDir           string
+	OutboxPollMs        int
+	OutboxBatchSize     int
+	LakeExportEnabled   bool
+	LakeExportDir       string
+	LineageEnabled      bool
+	LineageDir          string
+	CatalogEnabled      bool
+	CatalogDir          string
+	GDPRDSREnabled      bool
 }
 
 type AppConfig struct {
@@ -201,6 +214,18 @@ func LoadFromEnv() AppConfig {
 			LlamaBreakerFailures:   envInt("CSM_LLAMA_BREAKER_FAILURES", 5),
 			LlamaBreakerCooldownMs: envUint64("CSM_LLAMA_BREAKER_COOLDOWN_MS", 30_000),
 			ShutdownTimeoutMs:      envUint64("CSM_SHUTDOWN_TIMEOUT_MS", 15_000),
+			DataPlatformEnabled:    envFlagTrue("CSM_DATA_PLATFORM_ENABLED", true),
+			OutboxEnabled:          envFlagTrue("CSM_OUTBOX_ENABLED", envFlagTrue("CSM_DATA_PLATFORM_ENABLED", true)),
+			OutboxDir:              envPath("CSM_OUTBOX_DIR", filepath.Join(nativeDir, "outbox")),
+			OutboxPollMs:           envInt("CSM_OUTBOX_POLL_MS", 500),
+			OutboxBatchSize:        envInt("CSM_OUTBOX_BATCH_SIZE", 50),
+			LakeExportEnabled:      envFlagTrue("CSM_LAKE_EXPORT_ENABLED", envFlagTrue("CSM_DATA_PLATFORM_ENABLED", true)),
+			LakeExportDir:          envPath("CSM_LAKE_EXPORT_DIR", filepath.Join(dataDir, "lake", "events")),
+			LineageEnabled:         envFlagTrue("CSM_LINEAGE_ENABLED", envFlagTrue("CSM_DATA_PLATFORM_ENABLED", true)),
+			LineageDir:             envPath("CSM_LINEAGE_DIR", filepath.Join(nativeDir, "lineage")),
+			CatalogEnabled:         envFlagTrue("CSM_CATALOG_ENABLED", envFlagTrue("CSM_DATA_PLATFORM_ENABLED", true)),
+			CatalogDir:             envPath("CSM_CATALOG_DIR", filepath.Join(nativeDir, "catalog")),
+			GDPRDSREnabled:         envFlagTrue("CSM_GDPR_DSR_ENABLED", envFlagTrue("CSM_DATA_PLATFORM_ENABLED", true)),
 		},
 		StartupReindex:       envFlagTrue("CSM_STARTUP_REINDEX", true),
 		StartupReindexTables: envStringList("CSM_STARTUP_REINDEX_TABLES", []string{"csm/csm_accounts", "csm/csm_group_members", "csm/sys_autos"}),

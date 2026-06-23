@@ -27,3 +27,17 @@ groups:
           severity: page
         annotations:
           summary: "Llama inference error rate > 5%"
+      - alert: CsmOutboxBacklog
+        expr: csm_outbox_pending > 500
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Outbox pending messages > 500"
+      - alert: CsmErrorBudgetExhausted
+        expr: csm_error_budget_remaining_ratio < 0.1
+        for: 30m
+        labels:
+          severity: page
+        annotations:
+          summary: "Monthly error budget nearly exhausted"

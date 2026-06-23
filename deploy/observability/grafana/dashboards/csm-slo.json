@@ -1,0 +1,46 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "title": "API Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [{
+        "expr": "sum(rate(csm_http_requests_total{status=~\"5..\"}[5m])) / sum(rate(csm_http_requests_total[5m]))",
+        "legendFormat": "5xx ratio"
+      }]
+    },
+    {
+      "title": "API p99 Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [{
+        "expr": "histogram_quantile(0.99, sum(rate(csm_http_request_duration_seconds_bucket[5m])) by (le))",
+        "legendFormat": "p99"
+      }]
+    },
+    {
+      "title": "Error Budget Remaining",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "targets": [{ "expr": "csm_error_budget_remaining_ratio", "legendFormat": "budget" }]
+    },
+    {
+      "title": "Outbox Pending",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "targets": [{ "expr": "csm_outbox_pending", "legendFormat": "pending" }]
+    },
+    {
+      "title": "Lake Export Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "targets": [{ "expr": "sum(rate(csm_lake_export_total[5m]))", "legendFormat": "exports/s" }]
+    }
+  ],
+  "schemaVersion": 39,
+  "title": "CSM Go SLO & Data Platform",
+  "uid": "csm-go-slo",
+  "version": 1
+}

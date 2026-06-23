@@ -8,6 +8,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"csm_server/backend-go/internal/platform/slo"
 )
 
 var (
@@ -47,7 +49,45 @@ var (
 		Name: "csm_component_ready",
 		Help: "1 when component is ready, 0 otherwise",
 	}, []string{"component"})
+
+	outboxEnqueued = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "csm_outbox_enqueued_total",
+		Help: "Outbox messages enqueued",
+	}, []string{"topic"})
+
+	outboxPublished = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "csm_outbox_published_total",
+		Help: "Outbox messages published",
+	}, []string{"topic"})
+
+	outboxFailed = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "csm_outbox_failed_total",
+		Help: "Outbox delivery failures",
+	}, []string{"topic"})
+
+	outboxPending = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "csm_outbox_pending",
+		Help: "Pending outbox messages",
+	})
+
+	outboxDrainDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "csm_outbox_drain_duration_seconds",
+		Help:    "Outbox worker drain batch duration",
+		Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1},
+	})
+
+	lakeExported = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "csm_lake_export_total",
+		Help: "Events exported to analytics lake",
+	}, []string{"topic"})
+
+	errorBudgetRemaining = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "csm_error_budget_remaining_ratio",
+		Help: "Remaining monthly error budget (1.0 = full, 0 = exhausted)",
+	})
 )
+
+var budgetTracker *slo.BudgetTracker
 
 // Handler exposes Prometheus scrape endpoint.
 func Handler() http.Handler { return promhttp.Handler() }
@@ -62,6 +102,10 @@ func Middleware(next http.Handler) http.Handler {
 		status := strconv.Itoa(sw.status)
 		httpRequests.WithLabelValues(r.Method, path, status).Inc()
 		httpDuration.WithLabelValues(r.Method, path).Observe(time.Since(start).Seconds())
+		if budgetTracker != nil {
+			budgetTracker.RecordRequest(sw.status >= 500)
+			SetErrorBudgetRemaining(budgetTracker.Remaining())
+		}
 	})
 }
 
@@ -102,3 +146,21 @@ func SetComponentReady(component string, ready bool) {
 	}
 	readyGauge.WithLabelValues(component).Set(v)
 }
+
+func IncOutboxEnqueued(topic string) { outboxEnqueued.WithLabelValues(topic).Inc() }
+
+func IncOutboxPublished(topic string) { outboxPublished.WithLabelValues(topic).Inc() }
+
+func IncOutboxFailed(topic string) { outboxFailed.WithLabelValues(topic).Inc() }
+
+func SetOutboxPending(n int) { outboxPending.Set(float64(n)) }
+
+func ObserveOutboxDrain(d time.Duration, batch int) {
+	outboxDrainDuration.Observe(d.Seconds())
+}
+
+func IncLakeExport(topic string) { lakeExported.WithLabelValues(topic).Inc() }
+
+func SetErrorBudgetRemaining(ratio float64) { errorBudgetRemaining.Set(ratio) }
+
+func SetBudgetTracker(b *slo.BudgetTracker) { budgetTracker = b }
