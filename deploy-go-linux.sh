@@ -1,163 +1,92 @@
-#!/bin/bash
-# Deploy CSM Go backend with in-process llama.cpp → /root/la_server
-#
-# Native AI requires CGO — build runs ON the Linux server (not cross-compile from Mac).
+#!/usr/bin/env bash
+# Deploy prebuilt Go artifact to Linux server (NO source upload, NO server-side build).
 #
 # Usage:
-#   ./deploy-go-linux.sh root@your-server
-#   ./deploy-go-linux.sh root@your-server /root/la_server
+#   ./deploy-go-linux.sh user@server
+#   ./deploy-go-linux.sh user@server /root/la_server
+#   ./deploy-go-linux.sh user@server /root/la_server /abs/path/to/csm-go-linux-arm64
 #
-#   REMOTE_BUILD=/root/csm_server ./deploy-go-linux.sh root@host /root/la_server
-#     REMOTE_BUILD = git clone + build (mặc định /root/csm_server)
-#     SERVER_PATH  = data + binary runtime (mặc định /root/la_server)
+# Defaults:
+#   SERVER_PATH=/root/la_server
+#   ARTIFACT auto-detected by remote arch:
+#     - x86_64  -> dist/csm-go-linux-amd64
+#     - aarch64 -> dist/csm-go-linux-arm64
 set -euo pipefail
 
 SERVER="${1:-${DEPLOY_SERVER:-}}"
 SERVER_PATH="${2:-${DEPLOY_PATH:-/root/la_server}}"
-REMOTE_BUILD="${REMOTE_BUILD:-/root/csm_server}"
+ARTIFACT="${3:-${ARTIFACT:-}}"
 
-if [ -z "$SERVER" ]; then
-	echo "Usage: $0 user@server-ip [/path/on/server]"
-	exit 1
+if [[ -z "$SERVER" ]]; then
+  echo "Usage: $0 user@server-ip [/path/on/server] [/abs/path/to/artifact]"
+  exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
 
-echo "=== CSM Go Deploy (native llama) → $SERVER ==="
-echo "    runtime : $SERVER_PATH"
-echo "    build   : $REMOTE_BUILD"
+log() { echo "[$(date +'%F %T')] [deploy-go-artifact] $*"; }
 
-echo ""
-echo "▶ [1/4] Sync config (nếu có local config.env)..."
-ssh "$SERVER" "mkdir -p '$SERVER_PATH' '$REMOTE_BUILD'"
-if [ -f "$REPO_ROOT/config.env" ]; then
-	scp "$REPO_ROOT/config.env" "$SERVER:$SERVER_PATH/config.env"
-	echo "    uploaded config.env → $SERVER_PATH"
-else
-	echo "    skip config.env (không có local file — giữ config trên server)"
-fi
-if [ -f "$REPO_ROOT/config.local-8gb.env" ]; then
-	scp "$REPO_ROOT/config.local-8gb.env" "$SERVER:$SERVER_PATH/config.local-8gb.env"
-fi
+log "Target server: $SERVER"
+log "Runtime path : $SERVER_PATH"
 
-echo ""
-echo "▶ [2/4] Pull source on server ($REMOTE_BUILD)..."
-ssh "$SERVER" bash -s "$REMOTE_BUILD" <<'SYNC'
-set -e
-P="$1"
-REPO_URL="${CSM_DEPLOY_REPO_URL:-https://github.com/codsycorp/csm_java_react.git}"
-BRANCH="${CSM_DEPLOY_BRANCH:-main}"
-
-sync_git_repo() {
-	cd "$P"
-	git fetch origin "$BRANCH"
-	git reset --hard "origin/$BRANCH"
-}
-
-if git -C "$P" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-	echo "    git repo exists — fetch origin/$BRANCH"
-	sync_git_repo
-elif [ -e "$P" ]; then
-	BAK="${P}.bak.$(date +%s)"
-	echo "    $P exists but is not a git repo — backup → $BAK, then clone"
-	mv "$P" "$BAK"
-	mkdir -p "$(dirname "$P")"
-	git clone "$REPO_URL" "$P"
-	cd "$P"
-	git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH" "origin/$BRANCH"
-else
-	mkdir -p "$(dirname "$P")"
-	git clone "$REPO_URL" "$P"
-	cd "$P"
-	git checkout "$BRANCH" 2>/dev/null || true
-fi
-echo "Code: $(git -C "$P" log --oneline -1)"
-echo "Tip: cần commit mới nhất trên origin/$BRANCH (vd. fix extras.go import data)"
-SYNC
-
-echo ""
-echo "▶ [2b/4] Compile check (phát hiện lỗi Go trước khi link llama)..."
-ssh "$SERVER" bash -s "$REMOTE_BUILD" <<'COMPILE'
-set -e
-BUILD="$1"
-cd "$BUILD/backend-go"
-export PATH="/usr/local/go/bin:$PATH"
-if ! command -v go >/dev/null 2>&1; then
-  echo "    skip compile check (go chưa cài — bước build sẽ cài)"
-  exit 0
-fi
-go mod download
-echo "    go build -tags llamacpp ./cmd/server ..."
-CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -tags llamacpp -o /tmp/csm_go_compile_check ./cmd/server
-rm -f /tmp/csm_go_compile_check
-echo "    compile OK"
-COMPILE
-
-echo ""
-echo "▶ [3/4] Build on server (CGO + llamacpp, Ubuntu 22.04 glibc)..."
-ssh "$SERVER" bash -s "$REMOTE_BUILD" "$SERVER_PATH" <<'BUILD'
-set -e
-BUILD="$1"
-RUNTIME="$2"
-apt-get update -qq
-apt-get install -y -qq build-essential cmake wget curl ca-certificates git >/dev/null
-cd "$BUILD"
-chmod +x scripts/build-go-native-inner.sh scripts/build-go-linux-native.sh
-./scripts/build-go-native-inner.sh "$BUILD/backend-go" "$RUNTIME/csm_go_server"
-BUILD
-
-echo ""
-echo "▶ [3b/4] Ensure AI model GGUF on runtime data dir..."
-ssh "$SERVER" bash -s "$REMOTE_BUILD" "$SERVER_PATH" <<'MODEL'
-set -e
-BUILD="$1"
-RUNTIME="$2"
-MODEL_DIR="$RUNTIME/csm_datas/ai_local/model"
-MODEL_3B="$MODEL_DIR/qwen2.5-coder-3b-instruct-q4_k_m.gguf"
-MODEL_15B="$MODEL_DIR/qwen2.5-coder-1.5b-instruct-q8_0.gguf"
-mkdir -p "$MODEL_DIR"
-if [ -f "$MODEL_3B" ]; then
-  echo "    model OK (3B): $MODEL_3B ($(du -h "$MODEL_3B" | cut -f1))"
-elif [ -f "$MODEL_15B" ]; then
-  echo "    model OK (1.5B): $MODEL_15B ($(du -h "$MODEL_15B" | cut -f1))"
-  echo "    tip: config.local-8gb.env mặc định 3B — đổi AI_LOCAL_LLAMA_MODEL_PATH nếu dùng 1.5B"
-else
-  echo "    missing GGUF — download 3B Q4_K_M → $MODEL_DIR"
-  cd "$BUILD"
-  chmod +x scripts/download-ai-local-models.sh
-  APP_DATA_DIR="$RUNTIME/csm_datas" ./scripts/download-ai-local-models.sh 8gb-3b
-  if [ ! -f "$MODEL_3B" ] && [ ! -f "$MODEL_15B" ]; then
-    echo "    ERROR: no GGUF in $MODEL_DIR after download" >&2
-    ls -la "$MODEL_DIR" >&2 || true
+REMOTE_UNAME="$(ssh "$SERVER" "uname -m" | tr -d '\r' | tr -d '\n')"
+case "$REMOTE_UNAME" in
+  x86_64|amd64) REMOTE_ARCH="amd64" ;;
+  aarch64|arm64) REMOTE_ARCH="arm64" ;;
+  *)
+    log "ERROR: Unsupported remote architecture: $REMOTE_UNAME"
     exit 1
-  fi
+    ;;
+esac
+
+if [[ -z "$ARTIFACT" ]]; then
+  ARTIFACT="$REPO_ROOT/dist/csm-go-linux-$REMOTE_ARCH"
 fi
-MODEL
 
-echo ""
-echo "▶ [4/4] systemd + restart..."
+if [[ ! -f "$ARTIFACT" ]]; then
+  log "ERROR: Artifact not found: $ARTIFACT"
+  log "Build it first on your machine:"
+  log "  ./backend-go/docker-build.sh --linux --linux-arch $REMOTE_ARCH"
+  exit 1
+fi
+
+log "Detected remote arch: $REMOTE_UNAME -> $REMOTE_ARCH"
+log "Using artifact      : $ARTIFACT"
+
+log "[1/4] Prepare runtime directories"
+ssh "$SERVER" "mkdir -p '$SERVER_PATH' '$SERVER_PATH/csm_datas/native/pebble' '$SERVER_PATH/csm_datas/native/search' '$SERVER_PATH/csm_datas/database' '$SERVER_PATH/csm_datas/backups' '$SERVER_PATH/csm_datas/ai_local/model'"
+
+log "[2/4] Upload binary + optional config"
+scp "$ARTIFACT" "$SERVER:$SERVER_PATH/csm_go_server"
+ssh "$SERVER" "chmod +x '$SERVER_PATH/csm_go_server'"
+
+if [[ -f "$REPO_ROOT/config.env" ]]; then
+  scp "$REPO_ROOT/config.env" "$SERVER:$SERVER_PATH/config.env"
+  log "Uploaded config.env"
+else
+  log "Skip config.env (local file not found)"
+fi
+
+if [[ -f "$REPO_ROOT/config.local-8gb.env" ]]; then
+  scp "$REPO_ROOT/config.local-8gb.env" "$SERVER:$SERVER_PATH/config.local-8gb.env"
+  log "Uploaded config.local-8gb.env"
+fi
+
+log "[3/4] Install/refresh systemd service"
 ssh "$SERVER" bash -s "$SERVER_PATH" <<'SERVICE'
-set -e
+set -euo pipefail
 P="$1"
-chmod +x "$P/csm_go_server"
-
-mkdir -p "$P/csm_datas/native/pebble" \
-	"$P/csm_datas/native/search" \
-	"$P/csm_datas/database" \
-	"$P/csm_datas/backups" \
-	"$P/csm_datas/ai_local/model"
-
 cat > /etc/systemd/system/csm-go.service <<EOF
 [Unit]
-Description=CSM Go Backend (native llama.cpp)
+Description=CSM Go Backend (artifact deploy)
 After=network.target mysql.service
 
 [Service]
 Type=simple
 User=root
 WorkingDirectory=$P
-EnvironmentFile=$P/config.env
+EnvironmentFile=-$P/config.env
 EnvironmentFile=-$P/config.local-8gb.env
 Environment=CSM_HOME=$P
 Environment=CSM_LOCAL_PROFILE=8gb
@@ -171,13 +100,9 @@ Environment=SERVER_PORT=9999
 Environment=SOCKET_SERVER_PORT=15301
 Environment=REDIS_ENABLED=0
 Environment=CSM_SKIP_STARTUP_DB_INIT=1
-Environment=AI_LOCAL_LLAMA_NATIVE_ENABLED=true
-Environment=AI_LOCAL_LLAMA_GPU_LAYERS=0
-Environment=AI_LOCAL_LLAMA_PRELOAD_ON_STARTUP=false
 ExecStart=$P/csm_go_server
 Restart=always
 RestartSec=5
-MemoryMax=7800M
 LimitNOFILE=65536
 StandardOutput=journal
 StandardError=journal
@@ -187,28 +112,12 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl stop csm-rust csm-java csm-llama 2>/dev/null || true
-systemctl disable csm-llama 2>/dev/null || true
 systemctl enable csm-go
 systemctl restart csm-go
-sleep 3
-systemctl status csm-go --no-pager | head -15
-echo ""
-echo "    AI local health (expect ready=true):"
-curl -sf "http://127.0.0.1:9999/api/ai-local/health" 2>/dev/null | head -c 800 || echo "    (health endpoint not ready yet — check journalctl -u csm-go)"
-echo ""
 SERVICE
 
-echo ""
-echo "✅ Deploy xong (native llama in-process — không cần llama-server sidecar)."
-echo ""
-echo "Data paths (server):"
-echo "  CSM_HOME=$SERVER_PATH"
-echo "  APP_DATA_DIR=$SERVER_PATH/csm_datas"
-echo "  CSM_PEBBLE_ROOT=$SERVER_PATH/csm_datas/native/pebble"
-echo ""
-echo "Dev local (Mac): backend-go/run-go-server.sh → CSM_HOME=<repo>/backend, APP_DATA_DIR=<repo>/backend/csm_datas"
-echo ""
-echo "Health: curl -s http://$SERVER:9999/api/monitoring/health"
-echo "AI ops: curl -s http://$SERVER:9999/api/ai-local/health"
-echo "Log   : ssh $SERVER 'journalctl -u csm-go -f'"
+log "[4/4] Runtime quick check"
+ssh "$SERVER" "systemctl --no-pager --full status csm-go | head -20"
+ssh "$SERVER" "curl -sf 'http://127.0.0.1:9999/api/monitoring/health' | head -c 800 || true"
+
+log "Done. No source code was uploaded to server."
