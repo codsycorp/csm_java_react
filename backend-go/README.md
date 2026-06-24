@@ -26,6 +26,102 @@ cp ../config.env.example ../config.env   # if needed
 
 Legacy RocksDB import (one-time only): `brew install rocksdb && ./run-migrate.sh`
 
+## Manual artifact deploy (recommended)
+
+This project now supports artifact-only deployment:
+- Build on local machine via Docker
+- Copy binary artifact to server
+- Do not upload source code to Linux server
+- Do not compile on Linux server
+
+### Build artifacts (run inside `backend-go/`)
+
+Linux ARM64 (for non-amd Linux servers):
+
+```bash
+./docker-build.sh --linux --linux-arch arm64
+```
+
+Linux AMD64:
+
+```bash
+./docker-build.sh --linux --linux-arch amd64
+```
+
+Both Linux architectures:
+
+```bash
+./docker-build.sh --linux --linux-arch both
+```
+
+Windows AMD64:
+
+```bash
+./docker-build.sh --windows
+```
+
+Output files (repo `dist/`):
+
+- `../dist/csm-go-linux-arm64`
+- `../dist/csm-go-linux-amd64`
+- `../dist/csm-go-windows-amd64.exe`
+
+If script returns exit code 1, verify Docker daemon first:
+
+```bash
+docker info
+```
+
+### Deploy to Linux (artifact-only)
+
+From `backend-go/` directory:
+
+```bash
+./deploy-go-linux.sh root@your-server /root/la_server
+```
+
+Notes:
+- `backend-go/deploy-go-linux.sh` is a wrapper to root `deploy-go-linux.sh`
+- Script auto-detects remote arch (`uname -m`)
+- Script selects matching artifact (`amd64` or `arm64`) from `../dist`
+- Script uploads binary + optional config only
+- Script refreshes `csm-go` systemd service
+
+Explicit artifact path is also supported:
+
+```bash
+./deploy-go-linux.sh root@your-server /root/la_server /abs/path/to/csm-go-linux-arm64
+```
+
+### Run as Windows service
+
+Use NSSM to wrap the Go executable as a Windows service.
+
+Prepare files on Windows host:
+- `C:\\la_server\\csm_go_server.exe`
+- `C:\\la_server\\config.env` (optional)
+- `C:\\la_server\\csm_datas\\...`
+
+Install service (Admin CMD/PowerShell):
+
+```powershell
+nssm install csm-go C:\la_server\csm_go_server.exe
+nssm set csm-go AppDirectory C:\la_server
+nssm set csm-go AppStdout C:\la_server\logs\csm-go.out.log
+nssm set csm-go AppStderr C:\la_server\logs\csm-go.err.log
+nssm set csm-go AppEnvironmentExtra SERVER_PORT=9999 SOCKET_SERVER_PORT=15301 CSM_HOME=C:\la_server APP_DATA_DIR=C:\la_server\csm_datas
+nssm set csm-go Start SERVICE_AUTO_START
+nssm start csm-go
+```
+
+Service operations:
+
+```powershell
+nssm restart csm-go
+nssm stop csm-go
+nssm remove csm-go confirm
+```
+
 ### Migrate on production server (Linux)
 
 1. **Stop Go backend** (nginx `backend_pool` can stay on Java/Rust until migrate finishes):
