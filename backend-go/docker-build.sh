@@ -102,7 +102,7 @@ build_linux_one() {
     docker run --rm --platform "$platform" \
       -v "$GO_DIR:/src" -v "$DIST:/out" -w /src \
       golang:1.25-bookworm \
-      bash -lc "go mod download && CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -ldflags='-s -w' -trimpath -o /out/csm-go-linux-$arch ./cmd/server"
+      sh -c "export PATH=/usr/local/go/bin:/go/bin:\$PATH; go version; go mod download && CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -ldflags='-s -w' -trimpath -o /out/csm-go-linux-$arch ./cmd/server"
   fi
 }
 
@@ -118,7 +118,7 @@ build_windows() {
   docker run --rm --platform linux/amd64 \
     -v "$GO_DIR:/src" -v "$DIST:/out" -w /src \
     golang:1.25-bookworm \
-    bash -lc 'go mod download && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -trimpath -o /out/csm-go-windows-amd64.exe ./cmd/server'
+    sh -c 'export PATH=/usr/local/go/bin:/go/bin:$PATH; go version; go mod download && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -trimpath -o /out/csm-go-windows-amd64.exe ./cmd/server'
 }
 
 $BUILD_LINUX && build_linux
