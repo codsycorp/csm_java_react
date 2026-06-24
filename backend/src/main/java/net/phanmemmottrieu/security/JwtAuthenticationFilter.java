@@ -158,6 +158,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
 
         if (requiresAuth(request)) {
+            boolean hasRefreshCandidate = hasRefreshCookie(request)
+                || (request.getHeader("X-Refresh-Token") != null && !request.getHeader("X-Refresh-Token").isBlank());
+            if (hasRefreshCandidate) {
+                logGetTableDataSecurity(request, "reject-invalid-refresh-token");
+                sendJsonError(response, 401, "Invalid or expired refresh token");
+                return;
+            }
+
             logGetTableDataSecurity(request, "reject-missing-auth");
             sendJsonError(response, 401, "Missing Authorization header");
             return;

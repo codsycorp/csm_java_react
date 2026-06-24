@@ -51,6 +51,28 @@ function hasAuthState() {
 	return hasAuthSession();
 }
 
+function tokenFingerprint(token?: string | null): string {
+	const raw = String(token || "").trim();
+	if (!raw) return "none";
+	const head = raw.slice(0, 8);
+	const tail = raw.slice(-6);
+	return `${head}...${tail}(len=${raw.length})`;
+}
+
+function getAuthDebugSnapshot(request: Request) {
+	const creds = getAuthCredentials();
+	return {
+		url: request.url,
+		method: request.method,
+		clientId: request.headers.get(CLIENT_ID_HEADER) || getClientSessionId() || "none",
+		authHeader: tokenFingerprint(request.headers.get(AUTH_HEADER)),
+		refreshHeader: tokenFingerprint(request.headers.get("X-Refresh-Token")),
+		persistedAuth: tokenFingerprint(creds.token),
+		persistedRefresh: tokenFingerprint(creds.refreshToken || readRefreshTokenMirror()),
+		onLoginPage: typeof window !== "undefined" && window.location.pathname.includes("/login"),
+	};
+}
+
 function shouldForceSubuserScope(payload: any): boolean {
 	if (!payload || typeof payload !== "object") return false;
 	if (payload.only_my_subusers) return false;
@@ -241,15 +263,13 @@ const defaultConfig: Options = {
 						}
 					}
 				
-				// DIAGNOSTIC: Log user-info / refresh-token request headers
-				if (request.url.includes('/user-info') || isRefreshTokenRequest) {
-					console.log("[DIAGNOSTIC] user-info request - sending headers:", {
-						url: request.url,
-						'csm-token': request.headers.get('csm-token'),
-						'X-Refresh-Token': request.headers.get('X-Refresh-Token'),
-						'Authorization': request.headers.get('Authorization'),
-						all_headers: Array.from(request.headers.entries()).map(([k, v]) => ({ key: k, value: v }))
-					});
+				if (
+					request.url.includes("/user-info")
+					|| request.url.includes("/get-table-data")
+					|| isRefreshTokenRequest
+					|| request.url.includes("/login")
+				) {
+					console.log("[AUTH DIAG][beforeRequest]", getAuthDebugSnapshot(request));
 				}
 				return requestOverride ?? request;
 			},
@@ -261,7 +281,18 @@ const defaultConfig: Options = {
 					globalProgress.done();
 				}
 				// request error
-				   if (!response.ok) {
+				if (!response.ok) {
+					if (response.status === 401 && (request.url.includes("/user-info") || request.url.includes("/get-table-data") || request.url.includes("/refresh-token"))) {
+						let reasonHint = "";
+						try {
+							reasonHint = response.headers.get("x-auth-reason") || response.headers.get("www-authenticate") || "";
+						} catch {}
+						console.warn("[AUTH DIAG][401]", {
+							status: response.status,
+							reasonHint,
+							...getAuthDebugSnapshot(request),
+						});
+					}
 					   // Long sync SEO: không refresh+retry (tránh storm / nginx 404 khi gửi kèm X-Refresh-Token).
 					   if (request.url.includes("ai-generate-seo-content")) {
 						   return response;
@@ -281,14 +312,10 @@ const defaultConfig: Options = {
 								   return response;
 							   }
 							   if (hasAuthState()) {
-								   try {
-									   return await refreshTokenAndRetry(request, options);
-								   } catch (error) {
-									   console.warn("[Auth] Refresh failed during login bootstrap:", error);
-								   }
+								   console.warn("[Auth] Clearing stale auth state on login page after 401:", request.url);
+								   clearAllClientState();
 							   }
-							   // Đã ở trang login, không log lỗi, không throw, chỉ return response
-							   // console.warn("[Auth] Ignoring stale 401 on login page without clearing fresh login state:", request.url);
+							   // Đã ở trang login: không tự refresh session nền để tránh loop refresh-token 401.
 							   return response;
 						   }
 					   
@@ -363,6 +390,12 @@ const defaultConfig: Options = {
 						}
 					}
 					   return handleErrorResponse(response);
+				   }
+				   if (response.ok && (request.url.includes("/login") || request.url.includes("/user-info"))) {
+					   console.log("[AUTH DIAG][success]", {
+						   status: response.status,
+						   ...getAuthDebugSnapshot(request),
+					   });
 				   }
 				   // request success
 				   return response;

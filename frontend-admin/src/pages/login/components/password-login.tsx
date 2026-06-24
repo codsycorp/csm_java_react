@@ -4,8 +4,9 @@ import { useAuthStore, usePermissionStore, useUserStore, useAppStore } from "#sr
 import { resolveDevFlag, persistDevLocalFlag } from "#src/utils/dev-flag";
 import { buildLoginUserProfile, resolveLoginAppId, type LoginResultPayload } from "#src/utils/login-profile";
 import { parseJwtSessionClaims, sanitizeUserInfoAgainstLogin, sessionClaimsMatchUser } from "#src/utils/jwt-session";
-import { clearAuthCookies } from "#src/utils/request/auth-session";
+import { clearAuthCookies, getAuthCredentials } from "#src/utils/request/auth-session";
 import { clearAuthPersistKeys } from "#src/utils/auth-storage";
+import { getClientSessionId } from "#src/utils/browser-client-id";
 import { fetchUserInfo, USER_INFO_REQUEST_OPTIONS } from "#src/api/user";
 
 import {
@@ -75,6 +76,12 @@ function getReadableLoginError(error: any, fallback: string) {
 	return rawMessage || fallback;
 }
 
+function tokenFingerprint(token?: string | null): string {
+	const raw = String(token || "").trim();
+	if (!raw) return "none";
+	return `${raw.slice(0, 8)}...${raw.slice(-6)}(len=${raw.length})`;
+}
+
 export function PasswordLogin() {
 	const [loading, setLoading] = useState(false);
 	const [passwordLoginForm] = Form.useForm();
@@ -109,6 +116,11 @@ export function PasswordLogin() {
 					useAuthStore.getState().reset();
 					throw new Error(loginRes?.message || "Đăng nhập thất bại");
 				}
+				console.log("[AUTH DIAG][login response]", {
+					clientId: getClientSessionId(),
+					loginToken: tokenFingerprint(loginRes?.result?.token),
+					loginRefresh: tokenFingerprint(loginRes?.result?.refreshToken),
+				});
 				return new Promise(resolve => setTimeout(resolve, 600)).then(() => loginRes);
 			})
 			.then((loginRes: any) => {
@@ -126,6 +138,14 @@ export function PasswordLogin() {
 					userInfoHeaders["X-Refresh-Token"] = freshRefresh;
 				}
 				const loginPayload = loginRes?.result ?? {};
+				const creds = getAuthCredentials();
+				console.log("[AUTH DIAG][before fetchUserInfo]", {
+					clientId: getClientSessionId(),
+					sentToken: tokenFingerprint(userInfoHeaders["csm-token"]),
+					sentRefresh: tokenFingerprint(userInfoHeaders["X-Refresh-Token"]),
+					storeToken: tokenFingerprint(creds.token),
+					storeRefresh: tokenFingerprint(creds.refreshToken),
+				});
 
 				return fetchUserInfo(
 					Object.keys(userInfoHeaders).length ? userInfoHeaders : undefined,
@@ -163,6 +183,13 @@ export function PasswordLogin() {
 
 					return { loginRes, userInfoResult: finalProfile, resolvedAppId };
 				}).catch((syncError: any) => {
+					console.warn("[AUTH DIAG][user-info failed in login flow]", {
+						clientId: getClientSessionId(),
+						status: syncError?.response?.status,
+						message: syncError?.message,
+						tokenUsed: tokenFingerprint(freshToken),
+						refreshUsed: tokenFingerprint(freshRefresh),
+					});
 					if (!loginPayload?.userId) {
 						throw syncError;
 					}

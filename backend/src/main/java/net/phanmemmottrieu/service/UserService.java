@@ -17,6 +17,7 @@ import com.google.gson.reflect.TypeToken;
 
 import java.util.*;
 import java.lang.reflect.Type;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class UserService {
@@ -122,8 +123,31 @@ public class UserService {
     private static final Gson GSON = new Gson(); // Khởi tạo đối tượng Gson một lần
     private static final String MAIN_ACCOUNT_ROLE = "admin";
     private static final String SUB_USER_ROLE = "user";
+    private static final long REFRESH_TOKEN_GRACE_MS = 2 * 60 * 1000L;
+    private static final Map<String, RefreshGraceEntry> REFRESH_TOKEN_GRACE = new ConcurrentHashMap<>();
     private static final Map<Integer, String> ACTION_BIT_TO_TOKEN = createActionBitToToken();
     private static final Map<Integer, String> MENU_BIT_TO_TOKEN = createMenuBitToToken();
+
+    private static final class RefreshGraceEntry {
+        private final long until;
+        private final String appToken;
+        private final String userId;
+        private final Integer loginVersion;
+        private final String refreshIp;
+        private final String refreshUa;
+        private final Long refreshExpiry;
+
+        private RefreshGraceEntry(long until, String appToken, String userId, Integer loginVersion,
+                                  String refreshIp, String refreshUa, Long refreshExpiry) {
+            this.until = until;
+            this.appToken = appToken;
+            this.userId = userId;
+            this.loginVersion = loginVersion;
+            this.refreshIp = refreshIp;
+            this.refreshUa = refreshUa;
+            this.refreshExpiry = refreshExpiry;
+        }
+    }
 
     @Autowired
     public UserService(RecordManager recordManager) {
@@ -308,6 +332,11 @@ public class UserService {
                     User canonical = canonicalOpt.get();
                     String canonicalRefresh = canonical.getRefreshToken();
                     if (canonicalRefresh == null || !refreshToken.equals(canonicalRefresh)) {
+                        User graceUser = resolveRefreshGraceUser(refreshToken);
+                        if (graceUser != null) {
+                            logger.info("[findUserByRefreshToken] Accept rotated refresh token in grace window for user {}", canonical.getEmail());
+                            return graceUser;
+                        }
                         logger.warn("[findUserByRefreshToken] Reject stale refresh token for user {}", canonical.getEmail());
                         return null;
                     }
@@ -354,6 +383,11 @@ public class UserService {
             if (subUserOpt.isPresent()) {
                 User subUser = subUserOpt.get();
                 if (subUser.getRefreshToken() == null || !refreshToken.equals(subUser.getRefreshToken())) {
+                    User graceUser = resolveRefreshGraceUser(refreshToken);
+                    if (graceUser != null) {
+                        logger.info("[findUserByRefreshToken] Accept rotated sub-user refresh token in grace window for login_identifier={}", subUserRecord.get("login_identifier"));
+                        return graceUser;
+                    }
                     logger.warn("[findUserByRefreshToken] Reject stale sub-user refresh token for login_identifier={}", subUserRecord.get("login_identifier"));
                     return null;
                 }
@@ -362,8 +396,72 @@ public class UserService {
             }
         }
 
+        User graceUser = resolveRefreshGraceUser(refreshToken);
+        if (graceUser != null) {
+            logger.info("[findUserByRefreshToken] Accept refresh token via grace fallback");
+            return graceUser;
+        }
+
         logger.warn("[findUserByRefreshToken] No user found with refreshToken");
         return null;
+    }
+
+    private void rememberRotatedRefreshToken(String oldToken, User user, int loginVersion) {
+        if (oldToken == null || oldToken.isBlank() || user == null) {
+            return;
+        }
+        RefreshGraceEntry entry = new RefreshGraceEntry(
+            System.currentTimeMillis() + REFRESH_TOKEN_GRACE_MS,
+            user.getAppToken(),
+            user.getId(),
+            loginVersion,
+            user.getRefreshTokenIp(),
+            user.getRefreshTokenUa(),
+            user.getRefreshTokenExpiry()
+        );
+        REFRESH_TOKEN_GRACE.put(oldToken, entry);
+    }
+
+    private User resolveRefreshGraceUser(String refreshToken) {
+        RefreshGraceEntry entry = REFRESH_TOKEN_GRACE.get(refreshToken);
+        if (entry == null) {
+            return null;
+        }
+        if (entry.until < System.currentTimeMillis()) {
+            REFRESH_TOKEN_GRACE.remove(refreshToken);
+            return null;
+        }
+
+        User resolved = null;
+        if (entry.appToken != null && !entry.appToken.isBlank()) {
+            resolved = findUserByAppToken(entry.appToken).orElse(null);
+        }
+        if (resolved == null && entry.userId != null && !entry.userId.isBlank()) {
+            resolved = findUserById(entry.userId).orElse(null);
+        }
+
+        // If we can resolve authoritative row, ensure strict login-version still matches.
+        if (resolved != null) {
+            Integer currentVersion = resolved.getLoginVersion();
+            if (entry.loginVersion != null && currentVersion != null && currentVersion > 0 && !entry.loginVersion.equals(currentVersion)) {
+                return null;
+            }
+            String currentRefresh = resolved.getRefreshToken();
+            if (currentRefresh != null && !currentRefresh.isBlank() && currentRefresh.equals(refreshToken)) {
+                return resolved;
+            }
+        }
+
+        // Build minimal synthetic user for grace-only acceptance on in-flight rotated requests.
+        User synthetic = new User();
+        synthetic.setAppToken(entry.appToken);
+        synthetic.setId(entry.userId);
+        synthetic.setLoginVersion(entry.loginVersion != null ? entry.loginVersion : 0);
+        synthetic.setRefreshToken(refreshToken);
+        synthetic.setRefreshTokenIp(entry.refreshIp);
+        synthetic.setRefreshTokenUa(entry.refreshUa);
+        synthetic.setRefreshTokenExpiry(entry.refreshExpiry);
+        return synthetic;
     }
 
     /**
@@ -499,6 +597,15 @@ public class UserService {
             return;
         }
 
+        String oldRefreshToken = user.getRefreshToken();
+        if (oldRefreshToken != null && !oldRefreshToken.isBlank() && !oldRefreshToken.equals(refreshToken)) {
+            Integer currentVersion = user.getLoginVersion();
+            int safeCurrentVersion = currentVersion != null ? currentVersion : 0;
+            if (safeCurrentVersion == loginVersion) {
+                rememberRotatedRefreshToken(oldRefreshToken, user, loginVersion);
+            }
+        }
+
         Map<String, Object> updateFields = new HashMap<>();
         updateFields.put("refresh_token", refreshToken);
         updateFields.put("refresh", refreshToken);
@@ -537,6 +644,11 @@ public class UserService {
     public void clearSessionToken(User user) {
         if (user == null) {
             return;
+        }
+
+        String currentRefresh = user.getRefreshToken();
+        if (currentRefresh != null && !currentRefresh.isBlank()) {
+            REFRESH_TOKEN_GRACE.remove(currentRefresh);
         }
 
         Map<String, Object> updateFields = new HashMap<>();
