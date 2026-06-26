@@ -13,7 +13,6 @@ type llamaInferenceBackend interface {
 	ready() bool
 	complete(prompt string, maxTokens uint32) (string, error)
 	stream(prompt string, maxTokens uint32, onToken func(string) error) error
-	embed(text string) ([]float32, error)
 	shutdown()
 	isLoaded() bool
 	providerLabel() string

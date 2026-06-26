@@ -242,7 +242,7 @@ func EmitAgenticStepLifecycle(req *CodeStreamRequest, steps []string, maxSteps i
 	total := len(steps)
 	var out []map[string]any
 	for i := 0; i < maxSteps; i++ {
-		stepID := "step_" + itoa(i + 1)
+		stepID := "step_" + itoa(i+1)
 		msg := steps[i]
 		out = append(out, AgenticStepSSE(req, i+1, total, stepID, msg, "planned"))
 		out = append(out, AgenticStepSSE(req, i+1, total, stepID, msg, "running"))
@@ -274,22 +274,22 @@ func scopeSummary(contextType string, mask int) string {
 // BuildOrchestrationPreviewResult maps snapshot to API response (Java flat shape).
 func BuildOrchestrationPreviewResult(appID string, req *CodeStreamRequest, snap OrchestrationSnapshot) map[string]any {
 	return map[string]any{
-		"success":              true,
-		"enabled":              snap.Enabled,
-		"orchestrationEnabled": snap.Enabled,
-		"appId":                appID,
-		"contextType":          req.ContextType,
-		"taskType":             req.TaskType,
-		"responseMode":         req.ResponseMode,
-		"routingTier":          snap.RoutingTier,
-		"preferredModelHint":   snap.PreferredModelHint,
-		"speculativeExecuted":  snap.SpeculativeExecuted,
-		"speculativeOperation": snap.SpeculativeOperation,
-		"totalCharsBefore":     snap.TotalCharsBefore,
-		"totalCharsAfter":      snap.TotalCharsAfter,
-		"savedChars":           snap.SavedChars,
-		"planSteps":            snap.PlanSteps,
-		"toolStats":            snap.ToolStats,
+		"success":                true,
+		"enabled":                snap.Enabled,
+		"orchestrationEnabled":   snap.Enabled,
+		"appId":                  appID,
+		"contextType":            req.ContextType,
+		"taskType":               req.TaskType,
+		"responseMode":           req.ResponseMode,
+		"routingTier":            snap.RoutingTier,
+		"preferredModelHint":     snap.PreferredModelHint,
+		"speculativeExecuted":    snap.SpeculativeExecuted,
+		"speculativeOperation":   snap.SpeculativeOperation,
+		"totalCharsBefore":       snap.TotalCharsBefore,
+		"totalCharsAfter":        snap.TotalCharsAfter,
+		"savedChars":             snap.SavedChars,
+		"planSteps":              snap.PlanSteps,
+		"toolStats":              snap.ToolStats,
 		"compressedContextBlock": snap.CompressedContextBlock,
 	}
 }
@@ -323,6 +323,23 @@ func PreparePhase1Pipeline(cfg config.AppConfig, rm *data.RecordManager, llama *
 		return RunPhase1PipelineContext{
 			Intent:       intent,
 			ResponseMode: responseMode,
+		}
+	}
+
+	if ShouldQuickReply(intent, responseMode) {
+		snap := OrchestrationSnapshot{
+			Enabled:              true,
+			PlanSteps:            []string{"Detect general/off-topic ask", "Return direct fast answer"},
+			RoutingTier:          "planner_fast",
+			PreferredModelHint:   "local_provider",
+			SpeculativeExecuted:  true,
+			SpeculativeOperation: "answer_direct",
+			ToolStats:            map[string]int{"intent_router": 1, "quick_reply": 1},
+		}
+		return RunPhase1PipelineContext{
+			Intent:        intent,
+			ResponseMode:  responseMode,
+			Orchestration: snap,
 		}
 	}
 
@@ -390,6 +407,11 @@ func Phase1SSEEvents(req *CodeStreamRequest, ctx RunPhase1PipelineContext) []map
 	}
 	events = append(events, IntentReasoningSSE(req, ctx.Intent, ctx.ResponseMode))
 	events = append(events, IntentRoutingSSE(req, ctx.Intent, ctx.ResponseMode))
+	if ShouldQuickReply(ctx.Intent, ctx.ResponseMode) {
+		events = append(events, AgenticPlanSSE(req, ctx.Orchestration))
+		events = append(events, ContextCompressionSSE(req, ctx.Orchestration))
+		return events
+	}
 
 	events = append(events, AgentHandoffSSE(req, "Supervisor", "Retriever", "comprehend_context", "Phase 1 business context retrieval"))
 	events = append(events, BusinessComprehendRunningSSE(req))

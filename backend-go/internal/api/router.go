@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"csm_server/backend-go/internal/handlers"
@@ -151,9 +150,7 @@ func DispatchAPI(st *state.AppState, method, path string, params map[string]any,
 	case "/google/ads/campaign":
 		return st.SocialHandler.HandleCreateAdCampaign(params, "google_ads", auth)
 
-	case "/chat-history-guest":
-		return handleChatHistoryGuest(st, params)
-	case "/chat-history", "/chat-history-app",
+	case "/chat-history", "/chat-history-guest", "/chat-history-app",
 		"/chat-guests-list", "/chat-mark-read",
 		"/chat-mark-all-read", "/chat-delete-message":
 		return model.NotImplemented(path + " (chat deferred)")
@@ -183,9 +180,6 @@ func DispatchAPI(st *state.AppState, method, path string, params map[string]any,
 	case "/crm/insights":
 		return st.CrmHandler.HandleInsights(params, auth)
 	default:
-		if strings.HasPrefix(path, "/governance/") {
-			return st.GovernanceHandler.Handle(path, params, auth)
-		}
 		if method == http.MethodPost && path == "/crm/ads" {
 			return st.CrmHandler.HandleCreateAd(params, auth)
 		}
@@ -225,90 +219,6 @@ func isAiDispatchPath(path string) bool {
 		return true
 	}
 	return false
-}
-
-func handleChatHistoryGuest(st *state.AppState, params map[string]any) *model.StandardResponse {
-	resp := model.NewResponse()
-
-	appID := strings.TrimSpace(firstString(params, "appId", "app_id"))
-	guestPhone := strings.TrimSpace(firstString(params, "guestPhone", "guest_phone"))
-	guestSessionID := strings.TrimSpace(firstString(params, "guestSessionId", "guest_session_id"))
-	limit := parseLimit(params, 50)
-
-	if appID == "" || (guestPhone == "" && guestSessionID == "") {
-		resp.Set("code", 400)
-		resp.Set("success", false)
-		resp.Set("message", "Missing 'appId' and guest identity parameter")
-		return resp
-	}
-
-	history := st.ChatService.GetHistoryByGuestIdentity(appID, guestSessionID, guestPhone, limit)
-
-	for _, msg := range history {
-		if room, ok := msg["room"].(string); ok && room == "csm" {
-			msg["room"] = appID
-		}
-	}
-
-	data := map[string]any{
-		"appId":      appID,
-		"guestPhone": guestPhone,
-		"messages":   history,
-		"count":      len(history),
-	}
-
-	resp.Set("code", 200)
-	resp.Set("success", true)
-	resp.Set("data", data)
-	resp.Set("message", "Retrieved "+strconv.Itoa(len(history))+" messages")
-	return resp
-}
-
-func parseLimit(params map[string]any, fallback int) int {
-	raw, ok := params["limit"]
-	if !ok || raw == nil {
-		return fallback
-	}
-	switch v := raw.(type) {
-	case int:
-		if v > 0 {
-			return v
-		}
-	case int32:
-		if v > 0 {
-			return int(v)
-		}
-	case int64:
-		if v > 0 {
-			return int(v)
-		}
-	case float64:
-		if v > 0 {
-			return int(v)
-		}
-	case string:
-		n, err := strconv.Atoi(strings.TrimSpace(v))
-		if err == nil && n > 0 {
-			return n
-		}
-	}
-	return fallback
-}
-
-func firstString(params map[string]any, keys ...string) string {
-	for _, key := range keys {
-		value, ok := params[key]
-		if !ok || value == nil {
-			continue
-		}
-		if s, ok := value.(string); ok {
-			trimmed := strings.TrimSpace(s)
-			if trimmed != "" {
-				return trimmed
-			}
-		}
-	}
-	return ""
 }
 
 func ParseRequestParams(r *http.Request) map[string]any {

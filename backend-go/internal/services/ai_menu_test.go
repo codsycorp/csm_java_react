@@ -95,6 +95,50 @@ func TestMenuApplyCache(t *testing.T) {
 	}
 }
 
+func TestCodeStreamPartsCacheManifestAndMeta(t *testing.T) {
+	jobID := "job-stream-cache-1"
+	text := strings.Repeat("abc", 7000)
+	CacheCodeStreamParts(jobID, text, "done")
+
+	manifest, ok := GetCodeStreamManifest(jobID)
+	if !ok {
+		t.Fatal("expected manifest from cache")
+	}
+	if manifest["jobId"] != jobID {
+		t.Fatalf("unexpected jobId: %+v", manifest)
+	}
+	if totalParts, _ := manifest["totalParts"].(int); totalParts < 2 {
+		t.Fatalf("expected split into multiple parts, got %+v", manifest)
+	}
+
+	meta, ok := GetCodeStreamPartsMeta(jobID, 1, 2)
+	if !ok {
+		t.Fatal("expected meta from cache")
+	}
+	items, _ := meta["items"].([]map[string]any)
+	if len(items) == 0 {
+		t.Fatalf("expected meta items, got %+v", meta)
+	}
+}
+
+func TestCodeStreamPartsCachePartContent(t *testing.T) {
+	jobID := "job-stream-cache-2"
+	text := "hello world " + strings.Repeat("x", 18000)
+	CacheCodeStreamParts(jobID, text, "done")
+
+	part1, ok := GetCodeStreamPartContent(jobID, 1)
+	if !ok {
+		t.Fatal("expected part 1")
+	}
+	if strings.TrimSpace(part1["content"].(string)) == "" {
+		t.Fatalf("expected non-empty part content: %+v", part1)
+	}
+
+	if _, ok := GetCodeStreamPartContent(jobID, 9999); ok {
+		t.Fatal("expected out-of-range part lookup to fail")
+	}
+}
+
 func TestSanitizeMenuEditorPayloadRemovesTruncationMarker(t *testing.T) {
 	broken := `{"menu":[{"id":"a","label":"A"}] /* ... editor truncated for server payload budget ... */ ,"children":[]}`
 	got := SanitizeMenuEditorPayload(broken)

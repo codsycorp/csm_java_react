@@ -2,6 +2,7 @@ package services
 
 import (
 	"strings"
+	"unicode/utf8"
 )
 
 // LocalIntentClassification mirrors Java LocalIntentClassification (AI#1 router).
@@ -28,6 +29,13 @@ func classifyIntentContextFallback(req *CodeStreamRequest) LocalIntentClassifica
 	if mode := normalizeResponseMode(req.ResponseMode); mode != "" {
 		return intentFromExplicitMode(req, mode)
 	}
+	if shouldFallbackToAnalyzeQuestion(req.Message) {
+		return LocalIntentClassification{
+			Type: "QUESTION", Action: "ask", Confidence: 48,
+			NextStep: "answer_direct", ContextKind: "none", ResponseMode: "analyze",
+			Reasoning: "Fallback (LLM router offline): câu hỏi hội thoại trong editor — trả lời trực tiếp (analyze).",
+		}
+	}
 	ctx := strings.ToLower(strings.TrimSpace(req.ContextType))
 	switch ctx {
 	case "menu_json":
@@ -49,6 +57,36 @@ func classifyIntentContextFallback(req *CodeStreamRequest) LocalIntentClassifica
 			Reasoning: "Fallback (LLM router offline): không có editor — mặc định analyze.",
 		}
 	}
+}
+
+func shouldFallbackToAnalyzeQuestion(message string) bool {
+	msg := strings.ToLower(strings.TrimSpace(message))
+	if msg == "" {
+		return false
+	}
+	if !strings.Contains(msg, "?") && !strings.Contains(msg, "？") {
+		return false
+	}
+	if utf8.RuneCountInString(msg) > 280 {
+		return false
+	}
+	if containsAny(msg,
+		" sửa", "sửa ", " fix", "fix ", "chỉnh", "thêm", "xóa", "xoá", "remove", "delete",
+		"update", "cập nhật", "cap nhat", "refactor", "patch", "apply", "tạo menu", "tao menu",
+		"viết code", "viet code", "đổi code", "doi code", "thay đổi",
+	) {
+		return false
+	}
+	return true
+}
+
+func containsAny(s string, needles ...string) bool {
+	for _, needle := range needles {
+		if needle != "" && strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func intentFromExplicitMode(req *CodeStreamRequest, mode string) LocalIntentClassification {
@@ -175,4 +213,24 @@ func intentRouterLabel(intent LocalIntentClassification) string {
 		return "context_fallback"
 	}
 	return "unknown"
+}
+
+// ShouldQuickReply mirrors Java planner_fast quick-reply behavior for non code/menu intents.
+func ShouldQuickReply(intent LocalIntentClassification, responseMode string) bool {
+	if normalizeResponseMode(responseMode) != "analyze" {
+		return false
+	}
+	next := strings.ToLower(strings.TrimSpace(intent.NextStep))
+	if next == "answer_direct" {
+		return true
+	}
+	if next == "load_code_context" || next == "load_menu_context" {
+		return false
+	}
+	typ := strings.ToUpper(strings.TrimSpace(intent.Type))
+	kind := strings.ToLower(strings.TrimSpace(intent.ContextKind))
+	if (typ == "QUESTION" || typ == "GENERAL") && kind == "none" {
+		return true
+	}
+	return false
 }

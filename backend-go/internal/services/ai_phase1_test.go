@@ -32,6 +32,30 @@ func TestClassifyIntentHeuristicMenuNoKeywordRouting(t *testing.T) {
 	}
 }
 
+func TestClassifyIntentHeuristicQuestionInEditorFallsBackAnalyze(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType: "code",
+		Message:     "Xin chào bạn là ai? Bạn có thể làm gì cho tôi?",
+		CurrentCode: "function demo() { return 1; }",
+	}
+	got := ClassifyIntentHeuristic(req)
+	if got.ResponseMode != "analyze" || got.NextStep != "answer_direct" {
+		t.Fatalf("got %+v want analyze answer_direct", got)
+	}
+}
+
+func TestClassifyIntentHeuristicEditQuestionStaysEdit(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType: "code",
+		Message:     "Bạn sửa giúp tôi hàm này được không?",
+		CurrentCode: "function demo() { return 1; }",
+	}
+	got := ClassifyIntentHeuristic(req)
+	if got.ResponseMode != "edit" || got.Type != "EDIT_CODE" {
+		t.Fatalf("got %+v want EDIT_CODE edit", got)
+	}
+}
+
 func TestParseIntentClassifyJSONMenuBugEdit(t *testing.T) {
 	raw := `{"type":"EDIT_MENU","action":"modify","responseMode":"edit","nextStep":"load_menu_context","contextKind":"menu","confidence":91,"reasoning":"User reports wrong i18n labels in open menu editor — needs patch."}`
 	got := parseIntentClassifyJSON(raw)
@@ -170,5 +194,54 @@ func TestBuildOrchestrationSnapshot(t *testing.T) {
 	}
 	if snap.RoutingTier == "" {
 		t.Fatal("empty routing tier")
+	}
+}
+
+func TestShouldQuickReplyForAnswerDirectAnalyze(t *testing.T) {
+	intent := LocalIntentClassification{Type: "GENERAL", NextStep: "answer_direct", ContextKind: "none", ResponseMode: "analyze", Confidence: 88}
+	if !ShouldQuickReply(intent, "analyze") {
+		t.Fatal("expected quick reply for answer_direct analyze")
+	}
+}
+
+func TestPreparePhase1PipelineQuickReplySkipsHeavyContext(t *testing.T) {
+	cfg := config.AppConfig{AI: config.AIConfig{ContextDir: t.TempDir()}}
+	req := &CodeStreamRequest{
+		RequestID: "req-quick-1", AppID: "csm", FlowType: "code_editor",
+		ContextType: "none", TaskType: "chat",
+		Message: "Thời tiết hôm nay như nào?", CurrentCode: "",
+	}
+	ctx := PreparePhase1Pipeline(cfg, nil, nil, req, PipelineInput{})
+	if !ShouldQuickReply(ctx.Intent, ctx.ResponseMode) {
+		t.Fatalf("expected quick-reply phase1, got intent=%+v responseMode=%s", ctx.Intent, ctx.ResponseMode)
+	}
+	if ctx.LearningBlock != "" || ctx.ComprehendBlock != "" || ctx.TenantRAG.Block != "" {
+		t.Fatalf("quick-reply should skip heavy context blocks, got learning=%d comprehend=%d rag=%d", len(ctx.LearningBlock), len(ctx.ComprehendBlock), len(ctx.TenantRAG.Block))
+	}
+	if ctx.Orchestration.RoutingTier != "planner_fast" {
+		t.Fatalf("routing tier=%s want planner_fast", ctx.Orchestration.RoutingTier)
+	}
+}
+
+func TestPhase1SSEEventsQuickReplyLightweight(t *testing.T) {
+	cfg := config.AppConfig{AI: config.AIConfig{ContextDir: t.TempDir()}}
+	req := &CodeStreamRequest{
+		RequestID: "req-quick-2", AppID: "csm", FlowType: "code_editor",
+		ContextType: "none", TaskType: "chat",
+		Message: "Kể một câu chào ngắn", CurrentCode: "",
+	}
+	ctx := PreparePhase1Pipeline(cfg, nil, nil, req, PipelineInput{})
+	events := Phase1SSEEvents(req, ctx)
+	stages := map[string]bool{}
+	for _, e := range events {
+		if s, ok := e["stage"].(string); ok {
+			stages[s] = true
+		}
+	}
+	if !stages["intent_reasoning"] || !stages["routing"] || !stages["agentic_plan"] {
+		t.Fatalf("missing quick-reply core stages: %v", stages)
+	}
+	if stages["business_comprehend"] || stages["tool_search"] || stages["rag_citations"] {
+		t.Fatalf("quick-reply should not include heavy stages: %v", stages)
 	}
 }

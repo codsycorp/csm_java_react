@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"runtime"
-	"strings"
 	"sync"
 
 	"github.com/footprintai/go-nativeml/ggml/llamacpp"
@@ -150,19 +149,6 @@ func (n *llamaNativeBackend) stream(prompt string, maxTokens uint32, onToken fun
 		llamacpp.WithTopK(40),
 		llamacpp.WithTopP(0.95),
 	)
-}
-
-func (n *llamaNativeBackend) embed(text string) ([]float32, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if err := n.ensureLoadedLocked(); err != nil {
-		return nil, err
-	}
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil, fmt.Errorf("empty text for embeddings")
-	}
-	return n.ctx.GetEmbeddings(text)
 }
 
 func (n *llamaNativeBackend) shutdown() {

@@ -2,6 +2,7 @@ package services
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -87,6 +88,7 @@ func (s *AiLocalOpsService) Health(llama *LlamaService) map[string]any {
 	modelOnDisk := llama != nil && llama.ModelOnDisk()
 	nativeReady := llama != nil && llama.UsesNative()
 	inferenceReady := llama != nil && llama.IsAvailable()
+	ffmpegPath, ffmpegReady := detectFFmpegBinary()
 	status := map[string]any{}
 	if llama != nil {
 		status = llama.StatusSummary()
@@ -94,37 +96,37 @@ func (s *AiLocalOpsService) Health(llama *LlamaService) map[string]any {
 	return map[string]any{
 		"success": true,
 		"policy": map[string]any{
-			"localOnlyEnabled":      true,
-			"multimodalLocalOnly":   true,
+			"localOnlyEnabled":        true,
+			"multimodalLocalOnly":     true,
 			"multimodalRequireVision": false,
 		},
 		"reasoning": map[string]any{
-			"provider":             llamaProviderLabel(llama),
-			"beanPresent":          modelOnDisk,
-			"modelOnDisk":          modelOnDisk,
-			"nativeEnabled":        s.cfg.AI.LlamaNativeEnabled,
-			"nativeReady":          nativeReady,
-			"available":            inferenceReady,
-			"healthy":              inferenceReady,
-			"hint":                 status["hint"],
-			"circuitOpen":          false,
-			"modelPath":            modelPath,
-			"runtimeProfile":         envOr("AI_LOCAL_LLAMA_RUNTIME_PROFILE", "balanced"),
-			"contextWindow":        s.cfg.EffectiveLlamaContextWindow(),
-			"maxTokens":            s.cfg.EffectiveLlamaMaxTokens(),
-			"batchSize":            s.cfg.AI.LlamaBatchSize,
-			"ubatchSize":           s.cfg.AI.LlamaUbatchSize,
-			"threads":              s.cfg.AI.LlamaThreads,
-			"useMmap":              s.cfg.AI.LlamaUseMmap,
-			"inFlightRequests":     0,
-			"inferenceInProgress":  false,
+			"provider":            llamaProviderLabel(llama),
+			"beanPresent":         modelOnDisk,
+			"modelOnDisk":         modelOnDisk,
+			"nativeEnabled":       s.cfg.AI.LlamaNativeEnabled,
+			"nativeReady":         nativeReady,
+			"available":           inferenceReady,
+			"healthy":             inferenceReady,
+			"hint":                status["hint"],
+			"circuitOpen":         false,
+			"modelPath":           modelPath,
+			"runtimeProfile":      envOr("AI_LOCAL_LLAMA_RUNTIME_PROFILE", "balanced"),
+			"contextWindow":       s.cfg.EffectiveLlamaContextWindow(),
+			"maxTokens":           s.cfg.EffectiveLlamaMaxTokens(),
+			"batchSize":           s.cfg.AI.LlamaBatchSize,
+			"ubatchSize":          s.cfg.AI.LlamaUbatchSize,
+			"threads":             s.cfg.AI.LlamaThreads,
+			"useMmap":             s.cfg.AI.LlamaUseMmap,
+			"inFlightRequests":    0,
+			"inferenceInProgress": false,
 		},
 		"guestChat": map[string]any{"enabled": false, "beanPresent": false},
 		"vision": map[string]any{
 			"enabled": false, "endpoint": "", "localVisionReady": false,
 			"native": map[string]any{"provider": "llama.cpp-native-vision", "enabled": false, "ready": false},
 		},
-		"ffmpeg":           map[string]any{"provider": "jave-all-deps-bundled", "ready": false, "executablePath": ""},
+		"ffmpeg":           map[string]any{"provider": "ffmpeg", "ready": ffmpegReady, "executablePath": ffmpegPath},
 		"characterExtract": map[string]any{"provider": "onnxruntime-u2netp-bundled", "ready": false},
 		"tts":              map[string]any{"enabled": false, "ready": false},
 		"talkingHead":      map[string]any{"enabled": false, "ready": false},
@@ -132,6 +134,14 @@ func (s *AiLocalOpsService) Health(llama *LlamaService) map[string]any {
 		"ready":            inferenceReady,
 		"status":           status,
 	}
+}
+
+func detectFFmpegBinary() (string, bool) {
+	path, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return "", false
+	}
+	return path, true
 }
 
 func (s *AiLocalOpsService) ListModels(llama *LlamaService) map[string]any {
@@ -158,16 +168,16 @@ func (s *AiLocalOpsService) ListModels(llama *LlamaService) map[string]any {
 			"weakMachineRecommended": true,
 			"configured":             false,
 			"quantization":           "q8_0",
-			"weakMachineScore":        92,
+			"weakMachineScore":       92,
 		})
 	}
 	return map[string]any{
-		"success":                      true,
-		"localOnlyEnabled":             true,
-		"configuredReasoningModel":     modelPath,
-		"configuredModelQuantization":  detectQuantization(modelPath),
-		"configuredModelExists":        modelExists,
-		"discoveredCount":              boolCount(modelExists),
+		"success":                     true,
+		"localOnlyEnabled":            true,
+		"configuredReasoningModel":    modelPath,
+		"configuredModelQuantization": detectQuantization(modelPath),
+		"configuredModelExists":       modelExists,
+		"discoveredCount":             boolCount(modelExists),
 		"quantizationGuide": map[string]any{
 			"recommendedOrderWeakMachine": []string{"q8_0", "q5_k_m", "q4_k_m", "q4_0", "q2_k"},
 			"notes": []string{

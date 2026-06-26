@@ -22,10 +22,9 @@ const (
 // VectorStore is an embedded chromem-go DB (no separate service). Chunk metadata is
 // mirrored in Pebble (_csm/vector_chunks) for durability alongside KV records.
 type VectorStore struct {
-	dir     string
-	db      *chromem.DB
-	mu      sync.RWMutex
-	embedFn func(context.Context, string) ([]float32, error)
+	dir string
+	db  *chromem.DB
+	mu  sync.RWMutex
 }
 
 func openVectorStore(cfg config.AppConfig) (*VectorStore, error) {
@@ -40,7 +39,7 @@ func openVectorStore(cfg config.AppConfig) (*VectorStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	vs := &VectorStore{dir: dir, db: db, embedFn: hashEmbedFunc}
+	vs := &VectorStore{dir: dir, db: db}
 	for _, name := range []string{vectorCollTenantRAG, vectorCollRecords, vectorCollWorkspace} {
 		if _, err := vs.collection(name); err != nil {
 			return nil, err
@@ -61,29 +60,13 @@ func hashEmbedFunc(_ context.Context, text string) ([]float32, error) {
 	return HashEmbed(text, vectorEmbedDim), nil
 }
 
-// SetEmbeddingFunc swaps hash embeddings for llama/auto provider (platform layer).
-func (vs *VectorStore) SetEmbeddingFunc(fn func(context.Context, string) ([]float32, error)) {
-	if vs == nil || fn == nil {
-		return
-	}
-	vs.mu.Lock()
-	vs.embedFn = fn
-	vs.mu.Unlock()
-}
-
 func (vs *VectorStore) collection(name string) (*chromem.Collection, error) {
 	if vs == nil || vs.db == nil {
 		return nil, fmt.Errorf("vector store closed")
 	}
 	vs.mu.RLock()
-	fn := vs.embedFn
-	vs.mu.RUnlock()
-	if fn == nil {
-		fn = hashEmbedFunc
-	}
-	vs.mu.RLock()
 	defer vs.mu.RUnlock()
-	return vs.db.GetOrCreateCollection(name, nil, fn)
+	return vs.db.GetOrCreateCollection(name, nil, hashEmbedFunc)
 }
 
 func (vs *VectorStore) upsertDoc(collName, docID string, meta map[string]string, content string) error {

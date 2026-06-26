@@ -88,6 +88,19 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	phase1 := services.PreparePhase1Pipeline(deps.Config, deps.RM, deps.Llama, req, pipelineInput)
 	responseMode := phase1.ResponseMode
 	req.ResponseMode = responseMode
+	if services.ShouldQuickReply(phase1.Intent, responseMode) {
+		for _, evt := range services.Phase1SSEEvents(req, phase1) {
+			if evt["stage"] == "attachment_intake" {
+				continue
+			}
+			writeSSE(w, evt)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+		handleQuickDirectReply(deps, w, req)
+		return
+	}
 
 	if req.ContextType == "menu_json" && responseMode == "edit" {
 		resolved := services.ResolveMenuEditEditorBase(req)
@@ -137,6 +150,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		elapsed := int64(0)
 		completion := services.CodeStreamCompletion(req, gf.MenuJSON, req.CurrentCode, gf.ModelLabel, elapsed)
 		writeSSE(w, completion)
+		services.CacheCodeStreamParts(req.RequestID, gf.MenuJSON, "done")
 		services.RecordCodeEditFromCompletion(deps.Config, deps.RM, req, completion, gf.MenuJSON)
 		writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": elapsed}))
 		return
@@ -161,7 +175,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 			"requestId": req.RequestID, "status": "local_map_reduce_ready", "attempted": true,
 			"handledLocally": true, "reason_code": "map_reduce_broad_analysis",
 			"responseMode": responseMode, "sourceChars": len(fullCode),
-			"constrainedTier": services.IsConstrained8GbTier(deps.Config),
+			"constrainedTier":   services.IsConstrained8GbTier(deps.Config),
 			"mapReduceMinChars": services.MapReduceMinCodeChars(deps.Config),
 		}))
 		writeSSE(w, stageEvent("streaming_started", map[string]any{
@@ -194,6 +208,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		elapsed := time.Since(startedAt).Milliseconds()
 		completion := services.CodeStreamCompletion(req, result, req.CurrentCode, modelLabel, elapsed)
 		writeSSE(w, completion)
+		services.CacheCodeStreamParts(req.RequestID, result, "done")
 		writeSSE(w, stageEvent("request_complete", map[string]any{
 			"requestId": req.RequestID, "elapsedMs": elapsed, "mapReduce": true,
 		}))
@@ -203,7 +218,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	prompt := services.BuildCodeStreamLocalPromptFull(deps.Config, req, phase1.LearningBlock, phase1.ComprehendBlock, phase1.TenantRAG.Block, phase1.Multimodal.CompactContext, phase1.Workspace.Block)
 
 	if services.ShouldUseIncrementalPlanExecute(deps.Config, req, phase1) && deps.Llama.IsAvailable() {
-			writeSSE(w, stageEvent("local_pre_analysis", map[string]any{
+		writeSSE(w, stageEvent("local_pre_analysis", map[string]any{
 			"requestId": req.RequestID, "status": "incremental_plan_ready", "attempted": true,
 			"handledLocally": true, "reason_code": "incremental_plan_execute",
 			"responseMode": responseMode, "incrementalPlan": true,
@@ -250,6 +265,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 			completion := services.CodeStreamCompletion(req, result, editorBase, modelLabel, elapsed)
 			log.Printf("AiCodeStream: completion assembled requestId=%s ms=%d", req.RequestID, time.Since(tComplete).Milliseconds())
 			writeSSE(w, completion)
+			services.CacheCodeStreamParts(req.RequestID, result, "done")
 			if responseMode == "edit" && req.ContextType == "menu_json" {
 				services.RecordCodeEditFromCompletion(deps.Config, deps.RM, req, completion, result)
 			}
@@ -267,9 +283,9 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		"localOnlyEnabled": true, "hasLocalContext": len(phase1.LearningBlock) > 0,
 		"responseMode": responseMode, "routingTier": phase1.Orchestration.RoutingTier,
 		"promptChars": len(prompt), "constrainedTier": services.IsConstrained8GbTier(deps.Config),
-		"promptCap": services.EffectiveLocalPromptCap(deps.Config, req.ContextType, responseMode),
+		"promptCap":       services.EffectiveLocalPromptCap(deps.Config, req.ContextType, responseMode),
 		"maxOutputTokens": services.EffectiveInferenceMaxTokensFromParams(deps.Config, responseMode, params),
-		"printImport": services.IsLineItemsPdfImport(req),
+		"printImport":     services.IsLineItemsPdfImport(req),
 	}))
 	writeSSE(w, stageEvent("streaming_started", map[string]any{
 		"requestId": req.RequestID, "model": "local_provider", "estimatedTotalChars": len(prompt) / 4, "percent": 15,
@@ -392,6 +408,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	}
 	completion := services.CodeStreamCompletion(req, result, editorBase, modelLabel, elapsed)
 	writeSSE(w, completion)
+	services.CacheCodeStreamParts(req.RequestID, result, "done")
 	services.RecordCodeEditFromCompletion(deps.Config, deps.RM, req, completion, result)
 	writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": elapsed}))
 }
@@ -456,11 +473,14 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 
 	req := &services.CodeStreamRequest{
 		RequestID: requestID, AppID: appID, FlowType: map[string]string{"menu_json": "menu_manager", "code": "code_editor"}[contextType],
-		TaskType: "menu_design", ContextType: contextType,
+		TaskType: map[string]string{"menu_json": "menu_design", "code": "code_assistant"}[contextType], ContextType: contextType,
 		Message: message, CurrentCode: currentCode, ResponseMode: responseMode,
 	}
 	if req.FlowType == "" {
 		req.FlowType = "code_editor"
+	}
+	if req.TaskType == "" {
+		req.TaskType = "code_assistant"
 	}
 
 	writeSSE(w, stageEvent("preparing", map[string]any{
@@ -470,8 +490,13 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 		Attachments: services.ParseAttachmentsFromParams(params),
 	})
 	responseMode = phase1.ResponseMode
+	req.ResponseMode = responseMode
 	for _, evt := range services.Phase1SSEEvents(req, phase1) {
 		writeSSE(w, evt)
+	}
+	if services.ShouldQuickReply(phase1.Intent, responseMode) {
+		handleQuickDirectReply(deps, w, req)
+		return
 	}
 
 	startedAt := time.Now()
@@ -509,6 +534,7 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 			"appId": appID, "applyDynamicIngestion": false, "ingestCount": 0, "aggregateScopeMask": phase1.Orchestration.ScopeMask,
 		}
 		writeSSE(w, completion)
+		services.CacheCodeStreamParts(requestID, rawResult, "done")
 		services.RecordCodeEditFromCompletion(deps.Config, deps.RM, req, completion, rawResult)
 		return
 	}
@@ -540,6 +566,50 @@ User request:
 Current code:
 %s`, message, currentCode)
 	return services.PrepareLocalProviderPrompt(raw, 32_000)
+}
+
+func handleQuickDirectReply(deps StreamDeps, w http.ResponseWriter, req *services.CodeStreamRequest) {
+	writeSSE(w, stageEvent("local_pre_analysis", map[string]any{
+		"requestId":    req.RequestID,
+		"status":       "quick_reply_ready",
+		"reason_code":  "answer_direct_fast_path",
+		"responseMode": "analyze",
+		"routingTier":  "planner_fast",
+	}))
+	writeSSE(w, stageEvent("streaming_started", map[string]any{
+		"requestId":    req.RequestID,
+		"model":        "local_provider",
+		"percent":      20,
+		"responseMode": "analyze",
+	}))
+
+	start := time.Now()
+	modelLabel := services.StreamingModelLabel(deps.Config, deps.Llama)
+	answer := ""
+	if deps.Llama != nil && deps.Llama.IsAvailable() {
+		prompt := services.PrepareLocalProviderPrompt(
+			"Bạn là trợ lý AI cục bộ. Trả lời ngắn gọn, đúng trọng tâm, không tạo patch code/menu nếu người dùng không yêu cầu chỉnh sửa.\n\nNgười dùng: "+strings.TrimSpace(req.Message),
+			6000,
+		)
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		defer cancel()
+		if out, err := deps.Llama.CompleteWithTokens(ctx, prompt, 220); err == nil {
+			answer = strings.TrimSpace(services.CleanLocalModelOutput(out))
+		}
+	}
+	if answer == "" {
+		answer = uiText(req.UILang,
+			"Mình đã nhận yêu cầu. Nội dung này không thuộc luồng chỉnh sửa code/menu, nên mình trả lời nhanh tại đây. Nếu bạn muốn mình sửa code hoặc menu JSON, hãy nói rõ phần cần chỉnh.",
+			"I received your request. This is outside code/menu edit flows, so here is a quick direct answer. If you want code or menu JSON edits, specify exactly what to change.",
+			"我已收到你的请求。该内容不属于代码/菜单编辑流程，因此先给你快速答复。若需修改代码或菜单 JSON，请明确要改的部分。",
+		)
+	}
+
+	elapsed := time.Since(start).Milliseconds()
+	completion := services.CodeStreamCompletion(req, answer, req.CurrentCode, modelLabel, elapsed)
+	writeSSE(w, completion)
+	services.CacheCodeStreamParts(req.RequestID, answer, "done")
+	writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": elapsed}))
 }
 
 func stageEvent(stage string, data map[string]any) map[string]any {

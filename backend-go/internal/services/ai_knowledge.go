@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -199,6 +200,8 @@ var (
 
 const menuApplyCacheTTL = 15 * time.Minute
 const menuApplyDeferChars = 120_000
+const streamPartsCacheTTL = 30 * time.Minute
+const streamPartChars = 16000
 
 func CacheMenuEditorApplyPayload(requestID, mergedMenu string, mergeStats map[string]any) {
 	requestID = strings.TrimSpace(requestID)
@@ -249,4 +252,183 @@ func pruneMenuApplyCacheLocked() {
 			delete(menuApplyCache, id)
 		}
 	}
+}
+
+// --- code-stream parts cache (GET /ai-code-stream/{jobId}/manifest|parts/meta|parts/{index}) ---
+
+type codeStreamPart struct {
+	index   int
+	label   string
+	content string
+}
+
+type codeStreamPartsEntry struct {
+	jobID      string
+	parts      []codeStreamPart
+	totalChars int
+	status     string
+	createdAt  int64
+	updatedAt  int64
+}
+
+var (
+	codeStreamPartsMu    sync.Mutex
+	codeStreamPartsCache = map[string]codeStreamPartsEntry{}
+)
+
+func CacheCodeStreamParts(jobID, content, status string) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return
+	}
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return
+	}
+	if strings.TrimSpace(status) == "" {
+		status = "done"
+	}
+	now := time.Now().UnixMilli()
+	parts := splitTextToParts(trimmed, streamPartChars)
+	entry := codeStreamPartsEntry{
+		jobID:      jobID,
+		parts:      parts,
+		totalChars: len(trimmed),
+		status:     status,
+		createdAt:  now,
+		updatedAt:  now,
+	}
+
+	codeStreamPartsMu.Lock()
+	defer codeStreamPartsMu.Unlock()
+	pruneCodeStreamPartsCacheLocked()
+	if prev, ok := codeStreamPartsCache[jobID]; ok {
+		entry.createdAt = prev.createdAt
+	}
+	codeStreamPartsCache[jobID] = entry
+}
+
+func GetCodeStreamManifest(jobID string) (map[string]any, bool) {
+	entry, ok := getCodeStreamPartsEntry(jobID)
+	if !ok {
+		return nil, false
+	}
+	return map[string]any{
+		"jobId":      entry.jobID,
+		"totalParts": len(entry.parts),
+		"totalChars": entry.totalChars,
+		"status":     entry.status,
+		"createdAt":  entry.createdAt,
+		"updatedAt":  entry.updatedAt,
+	}, true
+}
+
+func GetCodeStreamPartsMeta(jobID string, page, size int) (map[string]any, bool) {
+	entry, ok := getCodeStreamPartsEntry(jobID)
+	if !ok {
+		return nil, false
+	}
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 {
+		size = 20
+	}
+	totalParts := len(entry.parts)
+	totalPages := 1
+	if totalParts > 0 {
+		totalPages = (totalParts + size - 1) / size
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	start := (page - 1) * size
+	if start < 0 {
+		start = 0
+	}
+	if start > totalParts {
+		start = totalParts
+	}
+	end := start + size
+	if end > totalParts {
+		end = totalParts
+	}
+	items := make([]map[string]any, 0, end-start)
+	for _, p := range entry.parts[start:end] {
+		items = append(items, map[string]any{
+			"partIndex": p.index,
+			"label":     p.label,
+			"chars":     len(p.content),
+		})
+	}
+	return map[string]any{
+		"jobId":      entry.jobID,
+		"page":       page,
+		"size":       size,
+		"totalParts": totalParts,
+		"totalPages": totalPages,
+		"items":      items,
+	}, true
+}
+
+func GetCodeStreamPartContent(jobID string, partIndex int) (map[string]any, bool) {
+	entry, ok := getCodeStreamPartsEntry(jobID)
+	if !ok || partIndex <= 0 || partIndex > len(entry.parts) {
+		return nil, false
+	}
+	p := entry.parts[partIndex-1]
+	return map[string]any{
+		"jobId":     entry.jobID,
+		"partIndex": p.index,
+		"label":     p.label,
+		"chars":     len(p.content),
+		"content":   p.content,
+	}, true
+}
+
+func getCodeStreamPartsEntry(jobID string) (codeStreamPartsEntry, bool) {
+	jobID = strings.TrimSpace(jobID)
+	if jobID == "" {
+		return codeStreamPartsEntry{}, false
+	}
+	codeStreamPartsMu.Lock()
+	defer codeStreamPartsMu.Unlock()
+	pruneCodeStreamPartsCacheLocked()
+	entry, ok := codeStreamPartsCache[jobID]
+	if !ok {
+		return codeStreamPartsEntry{}, false
+	}
+	return entry, true
+}
+
+func pruneCodeStreamPartsCacheLocked() {
+	now := time.Now().UnixMilli()
+	for id, entry := range codeStreamPartsCache {
+		if now-entry.updatedAt > streamPartsCacheTTL.Milliseconds() {
+			delete(codeStreamPartsCache, id)
+		}
+	}
+}
+
+func splitTextToParts(text string, maxChars int) []codeStreamPart {
+	if maxChars < 1 {
+		maxChars = streamPartChars
+	}
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return nil
+	}
+	parts := make([]codeStreamPart, 0, (len(runes)+maxChars-1)/maxChars)
+	for idx, start := 0, 0; start < len(runes); idx, start = idx+1, start+maxChars {
+		end := start + maxChars
+		if end > len(runes) {
+			end = len(runes)
+		}
+		parts = append(parts, codeStreamPart{
+			index:   idx + 1,
+			label:   "part-" + strconv.Itoa(idx+1),
+			content: string(runes[start:end]),
+		})
+	}
+	return parts
 }

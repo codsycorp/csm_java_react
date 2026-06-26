@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -10,9 +9,6 @@ import (
 
 	"csm_server/backend-go/internal/data"
 	"csm_server/backend-go/internal/model"
-	"csm_server/backend-go/internal/platform/audit"
-	"csm_server/backend-go/internal/platform/events"
-	"csm_server/backend-go/internal/platform/outbox"
 	"csm_server/backend-go/internal/security"
 	"csm_server/backend-go/internal/services"
 )
@@ -22,12 +18,9 @@ var reservedIndexIDs = map[string]struct{}{
 }
 
 type TableHandler struct {
-	rm        *data.RecordManager
-	us        *services.UserService
-	socket    SocketBroadcaster
-	audit     *audit.Store
-	eventBus  events.Bus
-	outbox    *outbox.Store
+	rm     *data.RecordManager
+	us     *services.UserService
+	socket SocketBroadcaster
 }
 
 // SocketBroadcaster pushes realtime table updates to connected clients.
@@ -37,45 +30,6 @@ type SocketBroadcaster interface {
 
 func NewTableHandler(rm *data.RecordManager, us *services.UserService, socket SocketBroadcaster) *TableHandler {
 	return &TableHandler{rm: rm, us: us, socket: socket}
-}
-
-func (h *TableHandler) SetAuditStore(s *audit.Store) { h.audit = s }
-
-func (h *TableHandler) SetEventBus(bus events.Bus) { h.eventBus = bus }
-
-func (h *TableHandler) SetOutbox(store *outbox.Store) { h.outbox = store }
-
-func (h *TableHandler) emitMutationEvent(appID, table, action string, row map[string]any, auth *security.AuthUser) {
-	payload := map[string]any{
-		"app_id": appID, "table": table, "action": action, "row_id": row["id"],
-	}
-	if h.outbox != nil && h.outbox.Enabled() {
-		if _, err := h.outbox.Enqueue("table.mutation", payload); err != nil && h.eventBus != nil {
-			h.eventBus.Publish(context.Background(), events.Event{Topic: "table.mutation", Payload: payload})
-		}
-	} else if h.eventBus != nil {
-		h.eventBus.Publish(context.Background(), events.Event{
-			Topic: "table.mutation", Payload: payload,
-		})
-	}
-	h.recordAudit(appID, table, action, row, auth)
-}
-
-func (h *TableHandler) recordAudit(appID, table, action string, row map[string]any, auth *security.AuthUser) {
-	if h.audit == nil || !h.audit.Enabled() {
-		return
-	}
-	ev := audit.Event{
-		AppID:  appID,
-		Table:  table,
-		Action: action,
-		Meta:   map[string]any{"row_id": row["id"]},
-	}
-	if auth != nil {
-		ev.ActorID = auth.UserID
-		ev.Actor = auth.Username
-	}
-	h.audit.Record(ev)
 }
 
 func (h *TableHandler) HandleGetTableData(params map[string]any, auth *security.AuthUser) *model.StandardResponse {
@@ -219,7 +173,7 @@ func (h *TableHandler) handleTableOperation(params map[string]any, isUpdate bool
 	}
 
 	if isUpdate {
-		return h.handleUpdateOperation(out, params, appID, table, filter, access, auth)
+		return h.handleUpdateOperation(out, params, appID, table, filter, access)
 	}
 	return h.handleSelectOperation(out, params, appID, table, filter, access)
 }
@@ -301,7 +255,7 @@ func (h *TableHandler) handleSelectOperation(out map[string]any, params map[stri
 	return out
 }
 
-func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[string]any, appID, table string, filter model.SearchFilter, access *security.UserAccessContext, auth *security.AuthUser) map[string]any {
+func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[string]any, appID, table string, filter model.SearchFilter, access *security.UserAccessContext) map[string]any {
 	command, _ := params["command"].(string)
 	command = strings.ToLower(strings.TrimSpace(command))
 	if command == "" {
@@ -400,7 +354,6 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 			out["message"] = "Record deleted"
 			out["updated_row"] = target
 			h.emitSocketUpdate(appID, table, "delete", target)
-			h.emitMutationEvent(appID, table, "delete", target, auth)
 			return out
 		}
 		if command == "update" && len(existing) == 0 {
@@ -484,7 +437,6 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 		action = "update"
 	}
 	h.emitSocketUpdate(appID, table, action, finalObj)
-	h.emitMutationEvent(appID, table, action, finalObj, auth)
 	return out
 }
 

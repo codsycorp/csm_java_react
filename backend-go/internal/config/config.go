@@ -18,11 +18,9 @@ type SocketConfig struct {
 }
 
 type RedisConfig struct {
-	Host     string
-	Port     int
-	Password string
-	DB       int
-	TTLMs    uint64
+	Host  string
+	Port  int
+	TTLMs uint64
 }
 
 type AuthRateLimitConfig struct {
@@ -54,42 +52,6 @@ type GoogleIndexConfig struct {
 	WorkDir            string
 }
 
-// PlatformConfig covers observability, security hardening, governance, and platform services.
-type PlatformConfig struct {
-	MetricsEnabled         bool
-	MetricsPath            string
-	StructuredLogs         bool
-	ServiceName            string
-	CORSAllowedOrigins     []string
-	AuthRateLimitEnabled   bool
-	AuditEnabled           bool
-	AuditDir               string
-	AuditRetentionDays     int
-	EmbeddingProvider      string // auto | hash | llama
-	EmbeddingDimensions    int
-	EventBusMode           string // memory | redis
-	RedisEventPrefix       string
-	OTelEnabled            bool
-	OTelEndpoint           string
-	OTelInsecure           bool
-	LlamaBreakerFailures   int
-	LlamaBreakerCooldownMs uint64
-	ShutdownTimeoutMs      uint64
-	// Data platform (CTO big-data foundation)
-	DataPlatformEnabled bool
-	OutboxEnabled       bool
-	OutboxDir           string
-	OutboxPollMs        int
-	OutboxBatchSize     int
-	LakeExportEnabled   bool
-	LakeExportDir       string
-	LineageEnabled      bool
-	LineageDir          string
-	CatalogEnabled      bool
-	CatalogDir          string
-	GDPRDSREnabled      bool
-}
-
 type AppConfig struct {
 	Server          ServerConfig
 	Socket          SocketConfig
@@ -108,7 +70,6 @@ type AppConfig struct {
 	AuthRateLimit   AuthRateLimitConfig
 	AI              AIConfig
 	GoogleIndex          GoogleIndexConfig
-	Platform             PlatformConfig
 	StartupReindex       bool
 	StartupReindexTables []string
 	// EqIndexMode: "pebble" (SSD, low RAM) or "memory" (fast, high RAM).
@@ -150,11 +111,9 @@ func LoadFromEnv() AppConfig {
 		LuceneIndexRoot: envPath("LUCENE_INDEX_ROOT_DIR", filepath.Join(dataDir, "lucene_index")),
 		JWTSecret:       envString("JWT_SECRET", "change-me-to-a-strong-secretge"),
 		Redis: RedisConfig{
-			Host:     envString("REDIS_HOST", "localhost"),
-			Port:     envInt("REDIS_PORT", 6379),
-			Password: envString("REDIS_PASSWORD", ""),
-			DB:       envInt("REDIS_DB", 0),
-			TTLMs:    envUint64("REDIS_TTL_MS", 600_000),
+			Host:  envString("REDIS_HOST", "localhost"),
+			Port:  envInt("REDIS_PORT", 6379),
+			TTLMs: envUint64("REDIS_TTL_MS", 600_000),
 		},
 		AuthRateLimit: AuthRateLimitConfig{
 			MaxRequestsPerMinute: envUint32("AUTH_RATE_LIMIT_MAX", 120),
@@ -193,39 +152,6 @@ func LoadFromEnv() AppConfig {
 			),
 			DailyLimit: int32(envInt("GOOGLE_INDEX_DAILY_LIMIT", 200)),
 			WorkDir:    envPath("GOOGLE_INDEX_WORK_DIR", filepath.Join(dataDir, "google_index")),
-		},
-		Platform: PlatformConfig{
-			MetricsEnabled:         envFlagTrue("CSM_METRICS_ENABLED", true),
-			MetricsPath:            envString("CSM_METRICS_PATH", "/metrics"),
-			StructuredLogs:         envFlagTrue("CSM_STRUCTURED_LOGS", true),
-			ServiceName:            envString("CSM_SERVICE_NAME", "csm-go"),
-			CORSAllowedOrigins:     envStringList("CSM_CORS_ALLOWED_ORIGINS", nil),
-			AuthRateLimitEnabled:   envFlagTrue("CSM_AUTH_RATE_LIMIT_ENABLED", true),
-			AuditEnabled:           envFlagTrue("CSM_AUDIT_ENABLED", true),
-			AuditDir:               envPath("CSM_AUDIT_DIR", filepath.Join(nativeDir, "audit")),
-			AuditRetentionDays:     envInt("CSM_AUDIT_RETENTION_DAYS", 90),
-			EmbeddingProvider:      envString("AI_EMBEDDING_PROVIDER", "auto"),
-			EmbeddingDimensions:    envInt("AI_EMBEDDING_HASH_DIMENSIONS", 384),
-			EventBusMode:           envString("CSM_EVENT_BUS", "memory"),
-			RedisEventPrefix:       envString("CSM_REDIS_EVENT_PREFIX", "csm:events"),
-			OTelEnabled:            envFlagTrue("CSM_OTEL_ENABLED", false),
-			OTelEndpoint:           envString("CSM_OTEL_ENDPOINT", "localhost:4318"),
-			OTelInsecure:           envFlagTrue("CSM_OTEL_INSECURE", true),
-			LlamaBreakerFailures:   envInt("CSM_LLAMA_BREAKER_FAILURES", 5),
-			LlamaBreakerCooldownMs: envUint64("CSM_LLAMA_BREAKER_COOLDOWN_MS", 30_000),
-			ShutdownTimeoutMs:      envUint64("CSM_SHUTDOWN_TIMEOUT_MS", 15_000),
-			DataPlatformEnabled:    envFlagTrue("CSM_DATA_PLATFORM_ENABLED", true),
-			OutboxEnabled:          envFlagTrue("CSM_OUTBOX_ENABLED", envFlagTrue("CSM_DATA_PLATFORM_ENABLED", true)),
-			OutboxDir:              envPath("CSM_OUTBOX_DIR", filepath.Join(nativeDir, "outbox")),
-			OutboxPollMs:           envInt("CSM_OUTBOX_POLL_MS", 500),
-			OutboxBatchSize:        envInt("CSM_OUTBOX_BATCH_SIZE", 50),
-			LakeExportEnabled:      envFlagTrue("CSM_LAKE_EXPORT_ENABLED", envFlagTrue("CSM_DATA_PLATFORM_ENABLED", true)),
-			LakeExportDir:          envPath("CSM_LAKE_EXPORT_DIR", filepath.Join(dataDir, "lake", "events")),
-			LineageEnabled:         envFlagTrue("CSM_LINEAGE_ENABLED", envFlagTrue("CSM_DATA_PLATFORM_ENABLED", true)),
-			LineageDir:             envPath("CSM_LINEAGE_DIR", filepath.Join(nativeDir, "lineage")),
-			CatalogEnabled:         envFlagTrue("CSM_CATALOG_ENABLED", envFlagTrue("CSM_DATA_PLATFORM_ENABLED", true)),
-			CatalogDir:             envPath("CSM_CATALOG_DIR", filepath.Join(nativeDir, "catalog")),
-			GDPRDSREnabled:         envFlagTrue("CSM_GDPR_DSR_ENABLED", envFlagTrue("CSM_DATA_PLATFORM_ENABLED", true)),
 		},
 		StartupReindex:       envFlagTrue("CSM_STARTUP_REINDEX", true),
 		StartupReindexTables: envStringList("CSM_STARTUP_REINDEX_TABLES", []string{"csm/csm_accounts", "csm/csm_group_members", "csm/sys_autos"}),

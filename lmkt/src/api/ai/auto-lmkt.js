@@ -9541,7 +9541,16 @@ async function callAiLocalJsonApi(path, body, ctx, options = {}) {
   if (!response.ok) {
     throw new Error(data?.message || data?.error || text || `HTTP ${response.status}`);
   }
-  return data;
+  const nested = data && typeof data.result === "object" && data.result !== null
+    ? data.result
+    : null;
+  if (!nested) return data;
+  return {
+    ...nested,
+    code: data.code ?? 200,
+    success: nested.success ?? data.success ?? true,
+    _wrapped: true,
+  };
 }
 
 async function readFileAsBase64(file) {
@@ -9563,7 +9572,16 @@ async function testAiLaneHealth(ctx) {
   const response = await fetch(`${apiBase}/ai-local/health`, { credentials: "include" });
   const text = await response.text();
   try {
-    return text ? JSON.parse(text) : {};
+    const data = text ? JSON.parse(text) : {};
+    if (data && typeof data.result === "object" && data.result !== null) {
+      return {
+        ...data.result,
+        code: data.code ?? 200,
+        success: data.success ?? data.result.success ?? true,
+        _wrapped: true,
+      };
+    }
+    return data;
   } catch (_e) {
     return { raw: text };
   }
@@ -9709,6 +9727,14 @@ async function testAiLaneExtractCharacter(ctx, { attachments, appId }) {
   return callAiLocalJsonApi("/ai-local/extract-character", {
     appId: appId || ctx?.app_id || "csm",
     attachments: attachments || []
+  }, ctx);
+}
+
+async function testAiLaneCleanupRenderArtifacts(ctx, { ttlHours, dryRun, appId } = {}) {
+  return callAiLocalJsonApi("/ai-local/cleanup-render-artifacts", {
+    ttlHours: Number(ttlHours) > 0 ? Number(ttlHours) : 24,
+    dryRun: !!dryRun,
+    appId: appId || ctx?.app_id || ""
   }, ctx);
 }
 
@@ -10249,7 +10275,17 @@ function ensureAiLaneTestPanel() {
   renderEngineSelect.addEventListener("change", () => { updateEngineNote(); saveDraft(); });
   const outputModeField = mkField("outputMode", "ai-lane-output-mode", "both", draft.outputMode || "both");
   const durationField = mkField("durationSec", "ai-lane-duration", "18", String(draft.durationSec || 18), "number");
-  renderGrid.append(renderEngineField.box, outputModeField.box, durationField.box);
+  const cleanupTtlField = mkField("cleanup.ttlHours", "ai-lane-cleanup-ttl", "24", String(draft.cleanupTtlHours || 24), "number");
+  const cleanupDryRunBox = document.createElement("div");
+  cleanupDryRunBox.style.cssText = "display:flex;align-items:flex-end";
+  const cleanupDryRunLabel = document.createElement("label");
+  cleanupDryRunLabel.style.cssText = `display:flex;align-items:center;gap:8px;font-size:12px;color:${theme.text};font-weight:600`;
+  const cleanupDryRunCb = document.createElement("input");
+  cleanupDryRunCb.type = "checkbox";
+  cleanupDryRunCb.checked = Boolean(draft.cleanupDryRun);
+  cleanupDryRunLabel.append(cleanupDryRunCb, document.createTextNode(ti("Cleanup dry-run", "Cleanup dry-run", "清理演练")));
+  cleanupDryRunBox.appendChild(cleanupDryRunLabel);
+  renderGrid.append(renderEngineField.box, outputModeField.box, durationField.box, cleanupTtlField.box, cleanupDryRunBox);
   renderGrid.appendChild(engineNote);
   let cachedStoryboardScenes = null;
   const fillMartialPresetBtn = mkBtn(ti("🥋 Preset võ thuật", "🥋 Martial preset", "🥋 武术预设"), "#531dab");
@@ -10277,9 +10313,10 @@ function ensureAiLaneTestPanel() {
   const renderRunBtn = mkBtn(ti("▶ Render Martial Cinematic", "▶ Render Martial Cinematic", "▶ 武术渲染"), "#fa8c16");
   updateEngineNote();
   const sseDebugBtn = mkBtn(ti("🔧 SSE debug (ComfyUI)", "🔧 SSE debug (ComfyUI)", "🔧 SSE调试"), "#595959");
+  const cleanupArtifactsBtn = mkBtn(ti("🧹 Cleanup render files", "🧹 Cleanup render files", "🧹 清理渲染文件"), "#8c8c8c");
   const renderActionRow = document.createElement("div");
   renderActionRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;margin-top:8px";
-  renderActionRow.append(fillMartialPresetBtn, planStoryboardBtn, extractCharBtn, renderRunBtn, sseDebugBtn);
+  renderActionRow.append(fillMartialPresetBtn, planStoryboardBtn, extractCharBtn, renderRunBtn, sseDebugBtn, cleanupArtifactsBtn);
   const mediaPreview = document.createElement("div");
   mediaPreview.id = "ai-lane-media-preview";
   mediaPreview.style.cssText = `margin-top:12px;padding:12px;border:1px solid ${theme.border};border-radius:8px;background:${theme.inputBg};display:none`;
@@ -10359,7 +10396,9 @@ function ensureAiLaneTestPanel() {
       videoScript: videoScriptField.input.value,
       outputMode: outputModeField.input.value,
       durationSec: durationField.input.value,
-      renderEngine: renderEngineField.input.value
+      renderEngine: renderEngineField.input.value,
+      cleanupTtlHours: cleanupTtlField.input.value,
+      cleanupDryRun: cleanupDryRunCb.checked
     };
     const existing = readAiLaneTesterDraft();
     if (existing.characterImageBase64) {
@@ -10382,7 +10421,7 @@ function ensureAiLaneTestPanel() {
   [
     topicField.input, industryField.input, domainKeyField.input,
     propertyField.input, locationField.input, businessField.input,
-    scriptField.input, videoScriptField.input, outputModeField.input, durationField.input, renderEngineField.input
+    scriptField.input, videoScriptField.input, outputModeField.input, durationField.input, renderEngineField.input, cleanupTtlField.input, cleanupDryRunCb
   ].forEach((input) => {
     input.addEventListener("change", saveDraft);
     input.addEventListener("blur", saveDraft);
@@ -10883,6 +10922,37 @@ function ensureAiLaneTestPanel() {
     }
   };
 
+  cleanupArtifactsBtn.onclick = async () => {
+    saveDraft();
+    setLoading(cleanupArtifactsBtn, true, "...");
+    try {
+      const ctx = resolveContext();
+      const body = {
+        appId: ctx.app_id || "",
+        ttlHours: Number(cleanupTtlField.input.value) || 24,
+        dryRun: !!cleanupDryRunCb.checked
+      };
+      appendAiLaneTesterLog(logArea, "POST /ai-local/cleanup-render-artifacts", body);
+      const result = await testAiLaneCleanupRenderArtifacts(ctx, body);
+      appendAiLaneTesterLog(logArea, "Cleanup render artifacts", result);
+      videoResult.body.innerHTML = `<pre style="white-space:pre-wrap;margin:0;font-size:11px">${JSON.stringify(result, null, 2)}</pre>`;
+      videoResult.show();
+      aiLaneTesterNotify(
+        ti(
+          `✅ Cleanup xong: deleted=${result?.deletedCount || 0}, checked=${result?.checkedCount || 0}`,
+          `✅ Cleanup done: deleted=${result?.deletedCount || 0}, checked=${result?.checkedCount || 0}`,
+          `✅ 清理完成: 删除=${result?.deletedCount || 0}, 检查=${result?.checkedCount || 0}`
+        ),
+        "success"
+      );
+    } catch (e) {
+      appendAiLaneTesterLog(logArea, "Cleanup error", e.message || String(e));
+      aiLaneTesterNotify(`Cleanup: ${e.message || e}`, "error");
+    } finally {
+      setLoading(cleanupArtifactsBtn, false, "...");
+    }
+  };
+
   const container = ensureUnifiedUIContainer();
   if (container) container.appendChild(wrapper);
 
@@ -10897,6 +10967,7 @@ function ensureAiLaneTestPanel() {
       renderMedia: (opts) => testAiLaneRenderMedia(resolveContext(), opts || {}),
       planStoryboard: (opts) => testAiLanePlanStoryboard(resolveContext(), opts || {}),
       extractCharacter: (opts) => testAiLaneExtractCharacter(resolveContext(), opts || {}),
+      cleanupRenderArtifacts: (opts) => testAiLaneCleanupRenderArtifacts(resolveContext(), opts || {}),
       resolveAppMediaUrl,
       executeLocalPlan: (opts) => testAiLaneExecuteLocalPlan(resolveContext(), opts || {}),
       buildSeoFieldChecklist,
