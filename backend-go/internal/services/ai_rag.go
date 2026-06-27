@@ -18,9 +18,9 @@ const (
 	scopeConfig   = 0x04
 	scopeBusiness = 0x10
 
-	tenantRAGDefaultTopK    = 6
+	tenantRAGDefaultTopK     = 6
 	tenantRAGDefaultMaxChars = 5000
-	tenantIngestDebounceMs  = 60_000
+	tenantIngestDebounceMs   = 60_000
 )
 
 var tenantIngestLastMs sync.Map // appID -> int64
@@ -459,6 +459,7 @@ func rankAndTrimHits(hits []data.TenantRAGHit, query string, topK, maxChars int)
 				s += 0.15
 			}
 		}
+		s += trustPriorityWeight(h)
 		ageMs := time.Now().UnixMilli() - h.CreatedAtMs
 		if ageMs < 3600_000 {
 			s += 0.2
@@ -487,6 +488,42 @@ func rankAndTrimHits(hits []data.TenantRAGHit, query string, topK, maxChars int)
 		used += clen
 	}
 	return out
+}
+
+func trustPriorityWeight(h data.TenantRAGHit) float64 {
+	source := strings.ToLower(strings.TrimSpace(h.SourceName))
+	tags := strings.ToLower(strings.TrimSpace(h.Tags))
+
+	// Trust policy: internal/domain data > learned history > internet.
+	if isInternetSource(source, tags) {
+		return -0.75
+	}
+	if isInternalReferenceSource(source) {
+		return 0.45
+	}
+	if strings.Contains(source, "learning") {
+		return 0.2
+	}
+	if strings.HasPrefix(source, "dyn_ctx_") || source == "tenant_live_menu" {
+		return 0.3
+	}
+	return 0
+}
+
+func isInternetSource(sourceName, tags string) bool {
+	if strings.HasPrefix(sourceName, "tenant_web_") {
+		return true
+	}
+	return strings.Contains(tags, "source:web")
+}
+
+func isInternalReferenceSource(sourceName string) bool {
+	switch sourceName {
+	case "tenant_knowledge_org_snapshot", "tenant_knowledge_domain_rules", "csm_roles", "csm_depts", "csm_branches", "sys_autos", "index":
+		return true
+	default:
+		return false
+	}
 }
 
 func summarizeRAGHits(hits []data.TenantRAGHit, query string) []TenantRAGCitation {
@@ -520,6 +557,12 @@ func classifyHitSourceCategory(sourceName string, scopeMask int) string {
 	case "tenant_knowledge_org_snapshot", "tenant_knowledge_domain_rules":
 		return "reference_docs"
 	default:
+		if strings.HasPrefix(sourceName, "tenant_web_") {
+			return "internet_knowledge"
+		}
+		if strings.Contains(sourceName, "learning") {
+			return "learned_memory"
+		}
 		if strings.Contains(sourceName, "menu") || scopeMask&scopeMenu != 0 {
 			return "menu_context"
 		}
@@ -543,6 +586,9 @@ func readableHitSourceLabel(sourceName string) string {
 	case "tenant_knowledge_domain_rules":
 		return "domain_rules"
 	default:
+		if strings.HasPrefix(sourceName, "tenant_web_") {
+			return "internet_knowledge"
+		}
 		return sourceName
 	}
 }

@@ -68,7 +68,7 @@ func NewAppState(cfg config.AppConfig) (*AppState, error) {
 		Llama:         llama,
 		AiSeo:         aiSeo,
 		AuthHandler:   handlers.NewAuthHandler(rm, us, jwt),
-		TableHandler:  handlers.NewTableHandler(rm, us, socketHub),
+		TableHandler:  handlers.NewTableHandler(cfg, rm, us, socketHub),
 		MenuHandler:   handlers.NewMenuHandler(rm),
 		RoleHandler:   handlers.NewRoleHandler(rm),
 		HomeHandler:   handlers.NewHomeHandler(rm),

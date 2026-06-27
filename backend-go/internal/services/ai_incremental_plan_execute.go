@@ -33,7 +33,7 @@ func RunIncrementalPlanExecute(
 	writeSSE func(map[string]any),
 	flush func(),
 ) (IncrementalPlanResult, error) {
-	retrieved := phase1.TenantRAG.Block + phase1.LearningBlock + phase1.ComprehendBlock
+	retrieved := phase1.ComprehendBlock + phase1.LearningBlock + phase1.TenantRAG.Block
 	plan := GenerateExecutionPlan(req, phase1.ResponseMode, retrieved)
 	if len(plan.Steps) == 0 {
 		return IncrementalPlanResult{}, fmt.Errorf("empty execution plan")
@@ -41,7 +41,7 @@ func RunIncrementalPlanExecute(
 
 	writeSSE(map[string]any{
 		"stage": "agentic_plan", "status": "done", "requestId": req.RequestID,
-		"message": "Đã lập kế hoạch từng bước — bắt đầu thực thi",
+		"message":       "Đã lập kế hoạch từng bước — bắt đầu thực thi",
 		"planStepCount": len(plan.Steps), "reasoning": plan.Reasoning,
 		"planSteps": planStepLabels(plan.Steps),
 	})
@@ -99,7 +99,7 @@ func RunIncrementalPlanExecute(
 			"qualityScore":    78,
 			"lowConfidence":   len(cleaned) < 40,
 			"partial":         i < total-1,
-			"finding":           truncateStr(cleaned, 2000),
+			"finding":         truncateStr(cleaned, 2000),
 		})
 		if phase1.ResponseMode == "analyze" {
 			writeSSE(map[string]any{
@@ -114,6 +114,10 @@ func RunIncrementalPlanExecute(
 	if phase1.ResponseMode == "edit" && isMenuJSONContext(req.ContextType) && workingMenu != "" && workingMenu != strings.TrimSpace(req.CurrentCode) {
 		final = workingMenu
 	}
+	postQA := EvaluateBusinessExecutionQuality(req, phase1.BusinessSpec, len(plan.Steps), stepOutputs, final)
+	writeSSE(BusinessQualityGateSSE(req, postQA))
+	writeSSE(BusinessAutopilotSummarySSE(req, phase1.BusinessSpec, postQA))
+	flush()
 	return IncrementalPlanResult{FinalText: final, Plan: plan, StepOutputs: stepOutputs}, nil
 }
 
@@ -167,6 +171,9 @@ func buildIncrementalStepPrompt(
 	}
 	if phase1.ComprehendBlock != "" {
 		sb.WriteString(phase1.ComprehendBlock)
+	}
+	if phase1.LearningBlock != "" {
+		sb.WriteString(phase1.LearningBlock)
 	}
 	if phase1.TenantRAG.Block != "" {
 		sb.WriteString(phase1.TenantRAG.Block)

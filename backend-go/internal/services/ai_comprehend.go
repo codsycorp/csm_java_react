@@ -14,6 +14,8 @@ type BusinessSpec struct {
 	Modules                 []string
 	Tables                  []string
 	Flows                   []string
+	Outcomes                []string
+	Rules                   []string
 	UserDelta               string
 	Greenfield              bool
 	PlannedStructure        []PlannedModuleRow
@@ -55,10 +57,18 @@ func ComprehendBusinessHeuristic(req *CodeStreamRequest) BusinessSpec {
 		spec.Modules = extractModulesFromMessage(lower)
 		spec.Tables = extractTablesFromMessage(lower)
 		spec.Flows = extractFlowsFromMessage(lower)
+		spec.Outcomes = extractOutcomesFromMessage(lower)
+		spec.Rules = extractRulesFromMessage(lower)
 		if strings.TrimSpace(req.CurrentCode) != "" {
 			spec.ExistingBusinessSummary = "Editor code có " + itoa(countCodeLines(req.CurrentCode)) + " dòng — scope anchor từ active editor."
 		}
 		spec.DomainSummary = "DynamicCode / frontend runtime context."
+	}
+	if len(spec.Outcomes) == 0 {
+		spec.Outcomes = extractOutcomesFromMessage(lower)
+	}
+	if len(spec.Rules) == 0 {
+		spec.Rules = extractRulesFromMessage(lower)
 	}
 	return spec
 }
@@ -171,6 +181,32 @@ func extractFlowsFromMessage(lower string) []string {
 	return uniqueStrings(out, 8)
 }
 
+func extractOutcomesFromMessage(lower string) []string {
+	targets := []string{}
+	for _, k := range []string{
+		"kết quả", "ket qua", "mong muốn", "mong muon", "đầu ra", "dau ra",
+		"hoàn tất", "hoan tat", "thành công", "thanh cong", "chính xác", "chinh xac",
+	} {
+		if strings.Contains(lower, k) {
+			targets = append(targets, k)
+		}
+	}
+	return uniqueStrings(targets, 8)
+}
+
+func extractRulesFromMessage(lower string) []string {
+	rules := []string{}
+	for _, k := range []string{
+		"điều kiện", "dieu kien", "nếu", "neu", "khi", "khong", "không",
+		"ràng buộc", "rang buoc", "validate", "kiểm tra", "kiem tra", "bắt buộc", "bat buoc",
+	} {
+		if strings.Contains(lower, k) {
+			rules = append(rules, k)
+		}
+	}
+	return uniqueStrings(rules, 10)
+}
+
 func countCodeLines(code string) int {
 	if code == "" {
 		return 0
@@ -228,6 +264,16 @@ func BuildComprehendPromptBlock(spec BusinessSpec) string {
 		sb.WriteString(strings.Join(spec.Flows, ", "))
 		sb.WriteByte('\n')
 	}
+	if len(spec.Outcomes) > 0 {
+		sb.WriteString("outcomes: ")
+		sb.WriteString(strings.Join(spec.Outcomes, ", "))
+		sb.WriteByte('\n')
+	}
+	if len(spec.Rules) > 0 {
+		sb.WriteString("rules: ")
+		sb.WriteString(strings.Join(spec.Rules, ", "))
+		sb.WriteByte('\n')
+	}
 	if spec.UserDelta != "" {
 		sb.WriteString("user_delta: ")
 		sb.WriteString(spec.UserDelta)
@@ -260,6 +306,8 @@ func BusinessComprehendCompletedSSE(req *CodeStreamRequest, spec BusinessSpec, l
 		"requestId":               req.RequestID,
 		"modules":                 len(spec.Modules),
 		"moduleList":              spec.Modules,
+		"rules":                   spec.Rules,
+		"outcomes":                spec.Outcomes,
 		"greenfield":              spec.Greenfield,
 		"existingBusinessSummary": spec.ExistingBusinessSummary,
 		"domainSummary":           spec.DomainSummary,

@@ -1776,13 +1776,13 @@
         return ["D_dau"].concat(buildLegacyRangeFieldNames("D_so", 2, 17), ["D_duoi", "P_dau"]).concat(buildLegacyRangeFieldNames("P_so", 2, 17), ["P_duoi", "T_dau"]).concat(buildLegacyRangeFieldNames("T_so", 2, 17), ["T_duoi", "B_dau"]).concat(buildLegacyRangeFieldNames("B_so", 2, 26), ["B_duoi"]);
       }
       if (maQuery === "SP_GET3_DD") {
-        return ["D_dau", "D_duoi", "P_dau", "P_duoi", "B_dau", "B_so2", "B_so3", "B_duoi"];
+        return ["D_so2", "D_duoi", "P_so2", "P_duoi", "B_dau", "B_so2", "B_so3", "B_duoi"];
       }
       if (maQuery === "SP_GET3_BL") {
         return buildLegacyRangeFieldNames("D_so", 2, 17).concat(["D_duoi"]).concat(buildLegacyRangeFieldNames("P_so", 2, 17), ["P_duoi"]).concat(buildLegacyRangeFieldNames("B_so", 5, 26), ["B_duoi"]);
       }
       if (maQuery === "SP_GET3_DD3") {
-        return ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi", "B_dau", "B_so2", "B_so3", "B_duoi"];
+        return ["D_so2", "D_duoi", "P_so2", "P_duoi", "T_so2", "T_duoi", "B_dau", "B_so2", "B_so3", "B_duoi"];
       }
       if (maQuery === "SP_GET3_BL3") {
         return buildLegacyRangeFieldNames("D_so", 2, 17).concat(["D_duoi"]).concat(buildLegacyRangeFieldNames("P_so", 2, 17), ["P_duoi"]).concat(buildLegacyRangeFieldNames("T_so", 2, 17), ["T_duoi"]).concat(buildLegacyRangeFieldNames("B_so", 5, 26), ["B_duoi"]);
@@ -3433,7 +3433,7 @@
     var _ath14b = useState(""), legacyThAutoC7Tuan21Min = _ath14b[0], setLegacyThAutoC7Tuan21Min = _ath14b[1];
     var _ath14c = useState(""), legacyThAutoC8Tong29Min = _ath14c[0], setLegacyThAutoC8Tong29Min = _ath14c[1];
     var _ath15 = useState(""), legacyThIntersect = _ath15[0], setLegacyThIntersect = _ath15[1];
-    var _ath16 = useState({ KQT: true, KQN: false, KTD: false, KQD: false, N2D: false, B2D: false, T2D: false, N3D: false, N2C: false, B2C: false, T2C: false, N3C: false, B3C: false, L2C: false, L3C: false }), legacyThResultMask = _ath16[0], setLegacyThResultMask = _ath16[1];
+    var _ath16 = useState({ KQT: true, KQN: true, KTD: true, KQD: true, N2D: false, B2D: false, T2D: false, N3D: false, N2C: false, B2C: false, T2C: false, N3C: false, B3C: false, L2C: false, L3C: false }), legacyThResultMask = _ath16[0], setLegacyThResultMask = _ath16[1];
     var _ath16b = useState(true), legacyThShowKetQua = _ath16b[0], setLegacyThShowKetQua = _ath16b[1];
     var _ath17 = useState(buildLegacyThDefaultQueryTypeDefs(2)), legacyThQueryTypeOptions = _ath17[0], setLegacyThQueryTypeOptions = _ath17[1];
     var _ath18 = useState([buildLegacyThDefaultQueryTypeDefs(2)[0].value]), legacyThSelectedQueryTypes = _ath18[0], setLegacyThSelectedQueryTypes = _ath18[1];
@@ -3463,6 +3463,10 @@
       var _ath_rs2 = useState([]), legacyThAutoSelectedRowKeys = _ath_rs2[0], setLegacyThAutoSelectedRowKeys = _ath_rs2[1];
       var _ath_im = useState(""), legacyThIntersectManual = _ath_im[0], setLegacyThIntersectManual = _ath_im[1];
       var _ath_ps = useState(""), legacyThParityStatus = _ath_ps[0], setLegacyThParityStatus = _ath_ps[1];
+      var _ath_dao_m = useState([]), legacyThDaoStatsManualRows = _ath_dao_m[0], setLegacyThDaoStatsManualRows = _ath_dao_m[1];
+      var _ath_dao_a = useState([]), legacyThDaoStatsAutoRows = _ath_dao_a[0], setLegacyThDaoStatsAutoRows = _ath_dao_a[1];
+      var _ath_dao_m_sel = useState([]), legacyThDaoStatsManualSelectedRowKeys = _ath_dao_m_sel[0], setLegacyThDaoStatsManualSelectedRowKeys = _ath_dao_m_sel[1];
+      var _ath_dao_a_sel = useState([]), legacyThDaoStatsAutoSelectedRowKeys = _ath_dao_a_sel[0], setLegacyThDaoStatsAutoSelectedRowKeys = _ath_dao_a_sel[1];
     var _sel_kq = useState([]), legacyKetQuaSelectedRowKeys = _sel_kq[0], setLegacyKetQuaSelectedRowKeys = _sel_kq[1];
     var _sel_slr_week = useState([]), legacySlrWeekSelectedRowKeys = _sel_slr_week[0], setLegacySlrWeekSelectedRowKeys = _sel_slr_week[1];
     var _sel_slr_auto = useState([]), legacySlrAutoSelectedRowKeys = _sel_slr_auto[0], setLegacySlrAutoSelectedRowKeys = _sel_slr_auto[1];
@@ -3726,6 +3730,185 @@
         if (arr.length) lines.push("Lần " + c + ": " + arr.join(" "));
       }
       return lines.join("\n");
+    }
+
+    function parseLegacyBoSoTokens(raw) {
+      return String(raw || "")
+        .trim()
+        .split(/[\s,;|]+/)
+        .map(function (x) { return String(x || "").trim(); })
+        .filter(function (x) { return /^\d+$/.test(x); });
+    }
+
+    function reverseLegacySoToken(token) {
+      var t = String(token || "").trim();
+      if (!t) return "";
+      return t.split("").reverse().join("");
+    }
+
+    function buildLegacyBoSoCanonical(raw) {
+      var arr = parseLegacyBoSoTokens(raw).slice().sort();
+      return arr.join("|");
+    }
+
+    function buildLegacyBoSoReverseCanonical(raw) {
+      var arr = parseLegacyBoSoTokens(raw).map(reverseLegacySoToken).filter(Boolean).sort();
+      return arr.join("|");
+    }
+
+    function buildLegacyDaoBoSo(raw) {
+      var arr = parseLegacyBoSoTokens(raw).map(reverseLegacySoToken).filter(Boolean);
+      return arr.join(" ").trim();
+    }
+
+    function expandLegacyThSelectedKeysWithDao(selectedKeys, sourceRows) {
+      var rows = Array.isArray(sourceRows) ? sourceRows : [];
+      var pickedMap = {};
+      (selectedKeys || []).forEach(function (k) { pickedMap[String(k)] = true; });
+      var pickedRows = rows.filter(function (r) { return !!pickedMap[String((r && r.key) || "")]; });
+      if (!pickedRows.length) return null;
+
+      var reverseCanonicalMap = {};
+      pickedRows.forEach(function (row) {
+        var queryLabel = resolveLegacyThQueryLabel(row);
+        var reverseKey = buildLegacyBoSoReverseCanonical(row && row.boSo);
+        if (reverseKey) reverseCanonicalMap[queryLabel + "||" + reverseKey] = true;
+      });
+
+      var nextKeyMap = {};
+      (selectedKeys || []).forEach(function (k) { nextKeyMap[String(k)] = true; });
+      rows.forEach(function (row) {
+        var rowKey = String((row && row.key) || "");
+        if (!rowKey) return;
+        var queryLabel = resolveLegacyThQueryLabel(row);
+        var canonical = buildLegacyBoSoCanonical(row && row.boSo);
+        if (canonical && reverseCanonicalMap[queryLabel + "||" + canonical]) nextKeyMap[rowKey] = true;
+      });
+
+      return Object.keys(nextKeyMap);
+    }
+
+    function resolveLegacyThQueryLabel(row) {
+      return String(
+        (row && (row.queryLabel || row.autoQueryTypeText || row.autoQueryTypeValue || row.autoQueryType || row.sourceQueryValue)) || ""
+      ).trim() || "(không rõ)";
+    }
+
+    function buildLegacyThSelectedRowsByKeys(selectedKeys, sourceRows) {
+      var rows = Array.isArray(sourceRows) ? sourceRows : [];
+      var pickedMap = {};
+      (selectedKeys || []).forEach(function (k) { pickedMap[String(k)] = true; });
+      return rows.filter(function (r) { return !!pickedMap[String((r && r.key) || "")]; });
+    }
+
+    async function buildLegacyThRowsWithDaoMetrics(selectedKeys, sourceRows) {
+      var rows = Array.isArray(sourceRows) ? sourceRows : [];
+      var pickedRows = buildLegacyThSelectedRowsByKeys(selectedKeys, rows);
+      if (!pickedRows.length) return [];
+
+      var existingByQueryCanonical = {};
+      rows.forEach(function (row) {
+        var qLabel = resolveLegacyThQueryLabel(row);
+        var canonical = buildLegacyBoSoCanonical(row && row.boSo);
+        if (!canonical) return;
+        var k = qLabel + "||" + canonical;
+        if (!existingByQueryCanonical[k]) existingByQueryCanonical[k] = row;
+      });
+
+      var fetchTasks = {};
+      pickedRows.forEach(function (row, idx) {
+        var qLabel = resolveLegacyThQueryLabel(row);
+        var mainCanonical = buildLegacyBoSoCanonical(row && row.boSo);
+        if (!mainCanonical) return;
+        var daoCanonical = buildLegacyBoSoReverseCanonical(row && row.boSo);
+        if (!daoCanonical) return;
+
+        var existing = existingByQueryCanonical[qLabel + "||" + daoCanonical];
+        if (existing && existing.key) return;
+
+        var daoBoSo = buildLegacyDaoBoSo(row && row.boSo);
+        if (!daoBoSo) return;
+
+        var queryValue = String((row && (row.autoQueryTypeValue || row.sourceQueryValue || row.queryValue)) || "").trim();
+        if (!queryValue) return;
+        var queryText = String((row && (row.autoQueryTypeText || row.queryLabel || row.autoQueryType || queryValue)) || queryValue).trim();
+        var taskKey = queryValue + "||" + qLabel + "||" + daoCanonical;
+        if (fetchTasks[taskKey]) return;
+
+        fetchTasks[taskKey] = {
+          idx: idx,
+          queryValue: queryValue,
+          queryText: queryText,
+          qLabel: qLabel,
+          daoBoSo: daoBoSo,
+          canonical: daoCanonical
+        };
+      });
+
+      var taskList = Object.keys(fetchTasks).map(function (k) { return fetchTasks[k]; });
+      for (var i = 0; i < taskList.length; i += 1) {
+        var task = taskList[i];
+        var metrics = await fetchLegacyTongHopRowsFromApi({
+          triet: false,
+          queryValue: task.queryValue,
+          queryText: task.queryText,
+          cachItems: [{
+            key: "th_dao_fetch_" + i,
+            boSo: task.daoBoSo,
+            cachName: task.daoBoSo,
+            searchText: task.daoBoSo,
+            noiDungDisplay: task.daoBoSo,
+            groupId: "th_dao_" + i,
+            groupText: task.daoBoSo
+          }],
+          fromDate: tu_ngay,
+          toDate: den_ngay,
+          heThong: legacyHeThong
+        });
+        var metric = Array.isArray(metrics) && metrics.length ? metrics[0] : null;
+        if (!metric) continue;
+        if (!metric.key) metric.key = "th_dao_metric_" + i + "_" + task.canonical;
+        metric.queryLabel = metric.queryLabel || task.qLabel;
+        metric.autoQueryTypeText = metric.autoQueryTypeText || task.queryText;
+        metric.autoQueryTypeValue = metric.autoQueryTypeValue || task.queryValue;
+        var metricCanonical = buildLegacyBoSoCanonical(metric && metric.boSo);
+        if (metricCanonical) {
+          existingByQueryCanonical[task.qLabel + "||" + metricCanonical] = metric;
+        }
+      }
+
+      var ordered = [];
+      var pushedKeyMap = {};
+      var seenPairMap = {};
+
+      function pushRowSafe(row) {
+        if (!row || !row.key) return;
+        var rk = String(row.key);
+        if (pushedKeyMap[rk]) return;
+        pushedKeyMap[rk] = true;
+        ordered.push(row);
+      }
+
+      pickedRows.forEach(function (picked) {
+        var qLabel = resolveLegacyThQueryLabel(picked);
+        var mainCanonical = buildLegacyBoSoCanonical(picked && picked.boSo);
+        var daoCanonical = buildLegacyBoSoReverseCanonical(picked && picked.boSo);
+        if (!mainCanonical || !daoCanonical) return;
+
+        var pairA = mainCanonical < daoCanonical ? mainCanonical : daoCanonical;
+        var pairB = mainCanonical < daoCanonical ? daoCanonical : mainCanonical;
+        var pairSig = qLabel + "||" + pairA + "<>" + pairB;
+        if (seenPairMap[pairSig]) return;
+        seenPairMap[pairSig] = true;
+
+        var mainRow = existingByQueryCanonical[qLabel + "||" + mainCanonical] || picked;
+        var daoRow = existingByQueryCanonical[qLabel + "||" + daoCanonical] || null;
+
+        pushRowSafe(mainRow);
+        if (daoRow && daoCanonical !== mainCanonical) pushRowSafe(daoRow);
+      });
+
+      return ordered;
     }
 
     function buildLegacyThExportAoa(rows) {
@@ -10726,7 +10909,7 @@
           return h("div", { style: { fontSize: 11, whiteSpace: "pre", lineHeight: "1.4" } }, buildLegacyThResultText(rec));
         }
       },
-      { title: "Tổng 21 tuần", dataIndex: "lanTuan21", key: "lanTuan21", width: 92, sorter: legacyTongHopNumberSorter("lanTuan21"), defaultSortOrder: "ascend" },
+      { title: "Tổng 21 tuần", dataIndex: "lanTuan21", key: "lanTuan21", width: 92, sorter: legacyTongHopNumberSorter("lanTuan21") },
       { title: "Tổng " + sinhTongNgay + " ngày", dataIndex: "lanTongNgaySinh", key: "lanTongNgaySinh", width: 70, sorter: legacyTongHopNumberSorter("lanTongNgaySinh") },
       { title: "Tuần Gần Nhất", dataIndex: "lanTuan1C", key: "lanTuan1C", width: 70, sorter: legacyTongHopNumberSorter("lanTuan1C") },
       { title: "Lần 2 Tuần cuối", dataIndex: "lanTuan2C", key: "lanTuan2C", width: 80, sorter: legacyTongHopNumberSorter("lanTuan2C") },
@@ -13654,7 +13837,29 @@
                   }, tt.lgThAutoSelectAll || "Chọn hết"),
                   h(Button, {
                     size: "small",
-                    onClick: function () { setLegacyThManualSelectedRowKeys([]); }
+                    type: "default",
+                    onClick: async function () {
+                      var nextKeys = expandLegacyThSelectedKeysWithDao(legacyThManualSelectedRowKeys, legacyThRows);
+                      if (!nextKeys) {
+                        canhbao("Vui lòng chọn ít nhất 1 dòng để xét chánh đảo");
+                        return;
+                      }
+                      setLoading(true);
+                      try {
+                        setLegacyThManualSelectedRowKeys(nextKeys);
+                        var rowsWithDao = await buildLegacyThRowsWithDaoMetrics(nextKeys, legacyThRows);
+                        setLegacyThDaoStatsManualRows(rowsWithDao);
+                        setLegacyThDaoStatsManualSelectedRowKeys([]);
+                      } catch (e) {
+                        canhbao("Không thể chạy thống kê chánh/đảo: " + String((e && e.message) || e || "unknown"));
+                      } finally {
+                        setLoading(false);
+                      }
+                    }
+                  }, "↔ Xét chánh đảo"),
+                  h(Button, {
+                    size: "small",
+                    onClick: function () { setLegacyThManualSelectedRowKeys([]); setLegacyThDaoStatsManualRows([]); setLegacyThDaoStatsManualSelectedRowKeys([]); }
                   }, tt.lgThAutoClearAll || "Bỏ chọn"),
                   h(Button, {
                     size: "small",
@@ -13666,6 +13871,59 @@
                 legacyThIntersectManual ? h("div", { key: "th-main-intersect", style: { marginTop: 8, padding: "8px 10px", background: "color-mix(in srgb, " + theme.cardBg + " 90%, " + theme.pageBg + " 10%)", border: "1px solid " + theme.border, borderRadius: 4 } }, [
                   h("div", { style: { fontSize: 12, fontWeight: "bold", marginBottom: 4, color: theme.text } }, tt.lgThIntersectTitle + " (Thủ công):"),
                   h("pre", { style: { fontSize: 12, color: theme.text, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" } }, legacyThIntersectManual)
+                ]) : null,
+                legacyThDaoStatsManualRows.length ? h(Card, {
+                  key: "th-main-dao-stats",
+                  size: "small",
+                  style: { marginTop: 8, background: theme.cardBg, color: theme.text, borderColor: theme.border },
+                  title: "Thống kê chánh/đảo (Thủ công) - " + legacyThDaoStatsManualRows.length + " dòng"
+                }, [
+                  h("div", { style: { marginBottom: 8, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } }, [
+                    h(Button, {
+                      size: "small",
+                      onClick: function () { setLegacyThDaoStatsManualSelectedRowKeys((legacyThDaoStatsManualRows || []).map(function (r) { return r.key; })); }
+                    }, tt.lgThAutoSelectAll || "Chọn hết"),
+                    h(Button, {
+                      size: "small",
+                      onClick: function () { setLegacyThDaoStatsManualSelectedRowKeys([]); }
+                    }, tt.lgThAutoClearAll || "Bỏ chọn"),
+                    h(Button, {
+                      size: "small",
+                      type: "default",
+                      onClick: function () {
+                        exportSelectedRowsByConfig({
+                          selectedKeys: legacyThDaoStatsManualSelectedRowKeys,
+                          sourceRows: legacySortedRowsRef.current["th_main_dao"] || legacyThDaoStatsManualRows,
+                          keyGetter: function (row) { return row && row.key; },
+                          columns: legacyThColumns,
+                          fileName: "legacy_th_main_dao_selected",
+                          sheetName: "TH_Main_Dao"
+                        });
+                      }
+                    }, "💾 Xuất đã chọn"),
+                    h("span", { style: { fontSize: 11, color: theme.muted } }, "Đã chọn: " + (legacyThDaoStatsManualSelectedRowKeys || []).length)
+                  ]),
+                  h(Table, {
+                    rowKey: "key",
+                    rowSelection: {
+                      type: "checkbox",
+                      columnTitle: tt.lgThSelect || "Chọn",
+                      columnWidth: 32,
+                      selectedRowKeys: legacyThDaoStatsManualSelectedRowKeys,
+                      onChange: function (keys) { setLegacyThDaoStatsManualSelectedRowKeys(keys); }
+                    },
+                    columns: withMultiSortColumns(legacyThColumns),
+                    dataSource: legacyThDaoStatsManualRows,
+                    pagination: false,
+                    size: "small",
+                    scroll: { x: 1800, y: 280 },
+                    onChange: function (p, f, s, extra) { if (extra && Array.isArray(extra.currentDataSource)) legacySortedRowsRef.current["th_main_dao"] = extra.currentDataSource; },
+                    rowClassName: function (rec) {
+                      if (rec.lauNgay > 0 && rec.ngayCXHT >= rec.lauNgay) return "th-row-overdue-ngay";
+                      if (rec.lauKy > 0 && rec.kyCXHT >= rec.lauKy) return "th-row-overdue-ky";
+                      return "";
+                    }
+                  })
                 ]) : null,
                 // Auto filter results
                 h(Card, { key: "th-auto-result", size: "small", style: { marginTop: 12, background: theme.cardBg, color: theme.text, borderColor: theme.border },
@@ -13713,7 +13971,29 @@
                     }, tt.lgThAutoSelectAll || "Chọn hết"),
                     h(Button, {
                       size: "small",
-                      onClick: function () { setLegacyThAutoSelectedRowKeys([]); }
+                      type: "default",
+                      onClick: async function () {
+                        var nextKeys = expandLegacyThSelectedKeysWithDao(legacyThAutoSelectedRowKeys, legacyThAutoRows);
+                        if (!nextKeys) {
+                          canhbao("Vui lòng chọn ít nhất 1 dòng để xét chánh đảo");
+                          return;
+                        }
+                        setLoading(true);
+                        try {
+                          setLegacyThAutoSelectedRowKeys(nextKeys);
+                          var rowsWithDao = await buildLegacyThRowsWithDaoMetrics(nextKeys, legacyThAutoRows);
+                          setLegacyThDaoStatsAutoRows(rowsWithDao);
+                          setLegacyThDaoStatsAutoSelectedRowKeys([]);
+                        } catch (e) {
+                          canhbao("Không thể chạy thống kê chánh/đảo: " + String((e && e.message) || e || "unknown"));
+                        } finally {
+                          setLoading(false);
+                        }
+                      }
+                    }, "↔ Xét chánh đảo"),
+                    h(Button, {
+                      size: "small",
+                      onClick: function () { setLegacyThAutoSelectedRowKeys([]); setLegacyThDaoStatsAutoRows([]); setLegacyThDaoStatsAutoSelectedRowKeys([]); }
                     }, tt.lgThAutoClearAll || "Bỏ chọn"),
                     h(Button, {
                       size: "small",
@@ -13725,6 +14005,59 @@
                   legacyThIntersect ? h("div", { key: "th-intersect", style: { marginTop: 8, padding: "8px 10px", background: "color-mix(in srgb, " + theme.cardBg + " 90%, " + theme.pageBg + " 10%)", border: "1px solid " + theme.border, borderRadius: 4 } }, [
                     h("div", { style: { fontSize: 12, fontWeight: "bold", marginBottom: 4, color: theme.text } }, tt.lgThIntersectTitle + " (Tự động):"),
                     h("pre", { style: { fontSize: 12, color: theme.text, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" } }, legacyThIntersect)
+                  ]) : null,
+                  legacyThDaoStatsAutoRows.length ? h(Card, {
+                    key: "th-auto-dao-stats",
+                    size: "small",
+                    style: { marginTop: 8, background: theme.cardBg, color: theme.text, borderColor: theme.border },
+                    title: "Thống kê chánh/đảo (Tự động) - " + legacyThDaoStatsAutoRows.length + " dòng"
+                  }, [
+                    h("div", { style: { marginBottom: 8, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } }, [
+                      h(Button, {
+                        size: "small",
+                        onClick: function () { setLegacyThDaoStatsAutoSelectedRowKeys((legacyThDaoStatsAutoRows || []).map(function (r) { return r.key; })); }
+                      }, tt.lgThAutoSelectAll || "Chọn hết"),
+                      h(Button, {
+                        size: "small",
+                        onClick: function () { setLegacyThDaoStatsAutoSelectedRowKeys([]); }
+                      }, tt.lgThAutoClearAll || "Bỏ chọn"),
+                      h(Button, {
+                        size: "small",
+                        type: "default",
+                        onClick: function () {
+                          exportSelectedRowsByConfig({
+                            selectedKeys: legacyThDaoStatsAutoSelectedRowKeys,
+                            sourceRows: legacySortedRowsRef.current["th_auto_dao"] || legacyThDaoStatsAutoRows,
+                            keyGetter: function (row) { return row && row.key; },
+                            columns: legacyThColumns,
+                            fileName: "legacy_th_auto_dao_selected",
+                            sheetName: "TH_Auto_Dao"
+                          });
+                        }
+                      }, "💾 Xuất đã chọn"),
+                      h("span", { style: { fontSize: 11, color: theme.muted } }, "Đã chọn: " + (legacyThDaoStatsAutoSelectedRowKeys || []).length)
+                    ]),
+                    h(Table, {
+                      rowKey: "key",
+                      rowSelection: {
+                        type: "checkbox",
+                        columnTitle: tt.lgThSelect || "Chọn",
+                        columnWidth: 32,
+                        selectedRowKeys: legacyThDaoStatsAutoSelectedRowKeys,
+                        onChange: function (keys) { setLegacyThDaoStatsAutoSelectedRowKeys(keys); }
+                      },
+                      columns: withMultiSortColumns(legacyThColumns),
+                      dataSource: legacyThDaoStatsAutoRows,
+                      pagination: false,
+                      size: "small",
+                      scroll: { x: 1800, y: 280 },
+                      onChange: function (p, f, s, extra) { if (extra && Array.isArray(extra.currentDataSource)) legacySortedRowsRef.current["th_auto_dao"] = extra.currentDataSource; },
+                      rowClassName: function (rec) {
+                        if (rec.lauNgay > 0 && rec.ngayCXHT >= rec.lauNgay) return "th-row-overdue-ngay";
+                        if (rec.lauKy > 0 && rec.kyCXHT >= rec.lauKy) return "th-row-overdue-ky";
+                        return "";
+                      }
+                    })
                   ]) : null
                 ])
               ])

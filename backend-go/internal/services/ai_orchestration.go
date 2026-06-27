@@ -304,7 +304,9 @@ type PipelineInput struct {
 type RunPhase1PipelineContext struct {
 	Intent          LocalIntentClassification
 	ResponseMode    string
+	ExpertRouting   ExpertRoutingScore
 	BusinessSpec    BusinessSpec
+	BusinessQA      BusinessQAResult
 	LearningBlock   string
 	ComprehendBlock string
 	TenantRAG       TenantRAGResult
@@ -318,11 +320,13 @@ func PreparePhase1Pipeline(cfg config.AppConfig, rm *data.RecordManager, llama *
 	intent := ClassifyIntent(context.Background(), llama, req)
 	responseMode := ResolvePipelineResponseMode(req, intent)
 	req.ResponseMode = responseMode
+	expert := BuildExpertRoutingScore(cfg, rm, req, intent, responseMode)
 
 	if IsLineItemsPdfImport(req) {
 		return RunPhase1PipelineContext{
-			Intent:       intent,
-			ResponseMode: responseMode,
+			Intent:        intent,
+			ResponseMode:  responseMode,
+			ExpertRouting: expert,
 		}
 	}
 
@@ -339,11 +343,13 @@ func PreparePhase1Pipeline(cfg config.AppConfig, rm *data.RecordManager, llama *
 		return RunPhase1PipelineContext{
 			Intent:        intent,
 			ResponseMode:  responseMode,
+			ExpertRouting: expert,
 			Orchestration: snap,
 		}
 	}
 
 	spec := ComprehendBusinessHeuristic(req)
+	qa := EvaluateBusinessSpecQuality(req, spec)
 	learningBlock := BuildLearningContextBlock(cfg, rm, req.AppID, req.Message, req.ContextType, 8_000)
 	comprehendBlock := BuildComprehendPromptBlock(spec)
 	multimodal := ScanAttachments(input.Attachments, req.ContextType)
@@ -356,7 +362,9 @@ func PreparePhase1Pipeline(cfg config.AppConfig, rm *data.RecordManager, llama *
 	return RunPhase1PipelineContext{
 		Intent:          intent,
 		ResponseMode:    responseMode,
+		ExpertRouting:   expert,
 		BusinessSpec:    spec,
+		BusinessQA:      qa,
 		LearningBlock:   learningBlock,
 		ComprehendBlock: comprehendBlock,
 		TenantRAG:       rag,
@@ -407,6 +415,7 @@ func Phase1SSEEvents(req *CodeStreamRequest, ctx RunPhase1PipelineContext) []map
 	}
 	events = append(events, IntentReasoningSSE(req, ctx.Intent, ctx.ResponseMode))
 	events = append(events, IntentRoutingSSE(req, ctx.Intent, ctx.ResponseMode))
+	events = append(events, ExpertRoutingSSE(req, ctx.ExpertRouting))
 	if ShouldQuickReply(ctx.Intent, ctx.ResponseMode) {
 		events = append(events, AgenticPlanSSE(req, ctx.Orchestration))
 		events = append(events, ContextCompressionSSE(req, ctx.Orchestration))
@@ -416,6 +425,11 @@ func Phase1SSEEvents(req *CodeStreamRequest, ctx RunPhase1PipelineContext) []map
 	events = append(events, AgentHandoffSSE(req, "Supervisor", "Retriever", "comprehend_context", "Phase 1 business context retrieval"))
 	events = append(events, BusinessComprehendRunningSSE(req))
 	events = append(events, BusinessComprehendCompletedSSE(req, ctx.BusinessSpec, len(ctx.LearningBlock)+ctx.TenantRAG.CharsUsed, len(req.CurrentCode)))
+	events = append(events, BusinessQualityGateSSE(req, ctx.BusinessQA))
+	if clar := BusinessClarificationSSE(req, ctx.BusinessQA); clar != nil {
+		events = append(events, clar)
+	}
+	events = append(events, BusinessAutopilotSummarySSE(req, ctx.BusinessSpec, ctx.BusinessQA))
 	events = append(events, BusinessPlanSSE(req, len(ctx.Orchestration.PlanSteps), ctx.BusinessSpec))
 	events = append(events, AgentHandoffSSE(req, "Retriever", "Planner", "tenant_rag", "Scoped FTS retrieval ready"))
 	events = append(events, ToolSearchSSE(req, ctx.TenantRAG))

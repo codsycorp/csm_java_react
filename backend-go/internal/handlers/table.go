@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"csm_server/backend-go/internal/config"
 	"csm_server/backend-go/internal/data"
 	"csm_server/backend-go/internal/model"
 	"csm_server/backend-go/internal/security"
@@ -18,6 +19,7 @@ var reservedIndexIDs = map[string]struct{}{
 }
 
 type TableHandler struct {
+	cfg    config.AppConfig
 	rm     *data.RecordManager
 	us     *services.UserService
 	socket SocketBroadcaster
@@ -28,8 +30,8 @@ type SocketBroadcaster interface {
 	EmitUpdateNotification(rm *data.RecordManager, appID, table, action string, row map[string]any)
 }
 
-func NewTableHandler(rm *data.RecordManager, us *services.UserService, socket SocketBroadcaster) *TableHandler {
-	return &TableHandler{rm: rm, us: us, socket: socket}
+func NewTableHandler(cfg config.AppConfig, rm *data.RecordManager, us *services.UserService, socket SocketBroadcaster) *TableHandler {
+	return &TableHandler{cfg: cfg, rm: rm, us: us, socket: socket}
 }
 
 func (h *TableHandler) HandleGetTableData(params map[string]any, auth *security.AuthUser) *model.StandardResponse {
@@ -437,7 +439,102 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 		action = "update"
 	}
 	h.emitSocketUpdate(appID, table, action, finalObj)
+	h.captureLearningFromSavedRow(appID, table, action, finalObj)
 	return out
+}
+
+func (h *TableHandler) captureLearningFromSavedRow(appID, table, action string, row map[string]any) {
+	if row == nil {
+		return
+	}
+	tbl := strings.ToLower(strings.TrimSpace(table))
+	if tbl == "sys_autos" {
+		pType := tableIntFromAny(row["p_type"])
+		if pType < 0 || pType > 5 {
+			return
+		}
+		code := strings.TrimSpace(tableStringFromAny(row["p_code"]))
+		if code == "" {
+			return
+		}
+		name := strings.TrimSpace(tableStringFromAny(row["p_name"]))
+		if name == "" {
+			name = "sys_autos"
+		}
+		summary := code
+		if len(summary) > 400 {
+			summary = summary[:400] + "..."
+		}
+		requestText := "Auto-learn from saved sys_autos " + name + " (" + action + ")"
+		_ = services.RecordSuccessfulCodeEdit(h.cfg, h.rm, appID, requestText, summary, "code", name, 1)
+		services.MaybeAutoLearnFromInternet(h.cfg, h.rm, appID, "code", requestText+"\n"+summary)
+		return
+	}
+
+	if tbl == "csm_menu" || tbl == "index" {
+		if menuJSON, ok := extractSavedMenuJSONFromRow(row); ok {
+			requestText := "Auto-learn from saved " + tbl + " (" + action + ")"
+			_ = services.RecordSuccessfulMenuEdit(h.cfg, h.rm, appID, requestText, menuJSON)
+			services.MaybeAutoLearnFromInternet(h.cfg, h.rm, appID, "menu_json", requestText+"\n"+truncateForLearning(menuJSON, 2000))
+		}
+	}
+}
+
+func extractSavedMenuJSONFromRow(row map[string]any) (string, bool) {
+	if row == nil {
+		return "", false
+	}
+	if dataVal, ok := row["data"]; ok && dataVal != nil {
+		if b, err := json.Marshal(dataVal); err == nil {
+			candidate := strings.TrimSpace(string(b))
+			if candidate != "" {
+				return candidate, true
+			}
+		}
+	}
+	for _, key := range []string{"menu_json", "menuJson", "menu", "json"} {
+		if v, ok := row[key]; ok && v != nil {
+			if b, err := json.Marshal(v); err == nil {
+				candidate := strings.TrimSpace(string(b))
+				if candidate != "" {
+					return candidate, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func tableStringFromAny(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprint(v)
+}
+
+func tableIntFromAny(v any) int {
+	s := strings.TrimSpace(tableStringFromAny(v))
+	if s == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return 0
+}
+
+func truncateForLearning(input string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	runes := []rune(input)
+	if len(runes) <= maxLen {
+		return input
+	}
+	return string(runes[:maxLen]) + "..."
 }
 
 func (h *TableHandler) resolveAccess(auth *security.AuthUser) *security.UserAccessContext {
