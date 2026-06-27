@@ -598,6 +598,26 @@ func handleQuickDirectReply(deps StreamDeps, w http.ResponseWriter, req *service
 	start := time.Now()
 	modelLabel := services.StreamingModelLabel(deps.Config, deps.Llama)
 	answer := ""
+	var full strings.Builder
+	streamPiece := func(piece string) {
+		if piece == "" {
+			return
+		}
+		full.WriteString(piece)
+		writeSSE(w, stageEvent("streaming", map[string]any{
+			"requestId": req.RequestID,
+			"chunk":     piece,
+		}))
+		pct := 20 + full.Len()/24
+		if pct > 95 {
+			pct = 95
+		}
+		writeSSE(w, stageEvent("streaming_progress", map[string]any{
+			"requestId":     req.RequestID,
+			"charsReceived": full.Len(),
+			"percent":       pct,
+		}))
+	}
 	if deps.Llama != nil && deps.Llama.IsAvailable() {
 		prompt := services.PrepareLocalProviderPrompt(
 			"Bạn là trợ lý AI cục bộ. Trả lời ngắn gọn, đúng trọng tâm, không tạo patch code/menu nếu người dùng không yêu cầu chỉnh sửa.\n\nNgười dùng: "+strings.TrimSpace(req.Message),
@@ -605,9 +625,35 @@ func handleQuickDirectReply(deps StreamDeps, w http.ResponseWriter, req *service
 		)
 		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 		defer cancel()
-		if out, err := deps.Llama.CompleteWithTokens(ctx, prompt, 220); err == nil {
-			answer = strings.TrimSpace(services.CleanLocalModelOutput(out))
+		localPhase := "infer"
+		if !deps.Llama.IsModelLoaded() {
+			localPhase = "loading"
 		}
+		writeSSE(w, stageEvent("waiting_gemini", map[string]any{
+			"requestId":         req.RequestID,
+			"model":             "local_provider",
+			"localPhase":        localPhase,
+			"percent":           20,
+			"estimatedWaitSecs": 8,
+		}))
+		streamErr := deps.Llama.StreamCompletionWithTokens(ctx, prompt, 220, func(token string) error {
+			streamPiece(token)
+			return nil
+		})
+		if streamErr != nil || full.Len() == 0 {
+			if out, err := deps.Llama.CompleteWithTokens(ctx, prompt, 220); err == nil {
+				cleaned := strings.TrimSpace(services.CleanLocalModelOutput(out))
+				if cleaned != "" {
+					if full.Len() == 0 {
+						streamPiece(cleaned)
+					} else {
+						full.Reset()
+						full.WriteString(cleaned)
+					}
+				}
+			}
+		}
+		answer = strings.TrimSpace(services.CleanLocalModelOutput(full.String()))
 	}
 	if answer == "" {
 		answer = uiText(req.UILang,
@@ -615,6 +661,9 @@ func handleQuickDirectReply(deps StreamDeps, w http.ResponseWriter, req *service
 			"I received your request. This is outside code/menu edit flows, so here is a quick direct answer. If you want code or menu JSON edits, specify exactly what to change.",
 			"我已收到你的请求。该内容不属于代码/菜单编辑流程，因此先给你快速答复。若需修改代码或菜单 JSON，请明确要改的部分。",
 		)
+		if full.Len() == 0 {
+			streamPiece(answer)
+		}
 	}
 
 	elapsed := time.Since(start).Milliseconds()

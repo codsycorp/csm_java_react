@@ -12,12 +12,12 @@ import (
 )
 
 type intentClassifyCacheEntry struct {
-	intent    LocalIntentClassification
-	cachedAt  time.Time
+	intent   LocalIntentClassification
+	cachedAt time.Time
 }
 
 var (
-	intentClassifyCache   sync.Map
+	intentClassifyCache    sync.Map
 	intentClassifyCacheTTL = 45 * time.Second
 )
 
@@ -50,6 +50,13 @@ func intentClassifyMaxTokens(message string) uint32 {
 func ClassifyIntent(ctx context.Context, llama *LlamaService, req *CodeStreamRequest) LocalIntentClassification {
 	if req == nil || strings.TrimSpace(req.Message) == "" {
 		return unknownIntent("Empty user request")
+	}
+	if shouldFallbackToAnalyzeQuestion(req.Message) {
+		return LocalIntentClassification{
+			Type: "QUESTION", Action: "ask", Confidence: 92,
+			NextStep: "answer_direct", ContextKind: "none", ResponseMode: "analyze",
+			Reasoning: "Conversational fast-path: skip heavy edit pipeline and answer directly.",
+		}
 	}
 	if llama != nil && llama.IsAvailable() && intentClassifyEnabled() {
 		if classified := ClassifyIntentWithLocalAI(ctx, llama, req); classified.Confidence > 0 {

@@ -91,6 +91,18 @@ func TestResolvePipelineResponseModeExplicitClientWins(t *testing.T) {
 	}
 }
 
+func TestResolvePipelineResponseModeConversationalQuestionOverridesEdit(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType:  "code",
+		ResponseMode: "edit",
+		Message:      "Xin chào bạn là ai? Bạn có thể làm gì cho tôi?",
+	}
+	intent := LocalIntentClassification{Type: "EDIT_CODE", ResponseMode: "edit", Confidence: 90}
+	if got := ResolvePipelineResponseMode(req, intent); got != "analyze" {
+		t.Fatalf("got %s want analyze for conversational question", got)
+	}
+}
+
 func TestClassifyIntentHeuristicGreenfield(t *testing.T) {
 	req := &CodeStreamRequest{
 		ContextType: "menu_json",

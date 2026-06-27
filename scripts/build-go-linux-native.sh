@@ -72,27 +72,28 @@ fi
 if ! command -v docker >/dev/null 2>&1; then
 	echo "[build-go-linux-native] ERROR: docker not installed." >&2
 	echo "  Dùng build trên server (không cần Docker Mac):" >&2
-	echo "    ./scripts/build-go-linux-native.sh --remote root@YOUR_SERVER dist/csm_go_server" >&2
-	echo "  Hoặc ./deploy-go-linux.sh root@YOUR_SERVER /root/la_server" >&2
+	echo "    ./scripts/build-go-linux-native.sh --remote root@csmbridge.net dist/csm_go_server" >&2
+	echo "  Hoặc ./deploy-go-linux.sh root@csmbridge.net /root/la_server" >&2
 	exit 1
 fi
 if ! docker info >/dev/null 2>&1; then
 	echo "[build-go-linux-native] ERROR: Docker daemon không chạy." >&2
 	echo "  Cách A — bật Docker Desktop, đợi Running, rồi chạy lại script." >&2
 	echo "  Cách B — build trên server Linux (không cần Docker Mac):" >&2
-	echo "    ./scripts/build-go-linux-native.sh --remote root@YOUR_SERVER dist/csm_go_server" >&2
-	echo "  Cách C — ./deploy-go-linux.sh root@YOUR_SERVER /root/la_server" >&2
+	echo "    ./scripts/build-go-linux-native.sh --remote root@csmbridge.net dist/csm_go_server" >&2
+	echo "  Cách C — ./deploy-go-linux.sh root@csmbridge.net /root/la_server" >&2
 	exit 1
 fi
 
 echo "[build-go-linux-native] docker image=$IMAGE go=$GO_VERSION → $OUT"
 
 docker run --rm \
-	-v "$ROOT:/src:ro" \
+	--platform linux/amd64 \
+	-v "$ROOT:/src" \
 	-v "$OUT_DIR:/out" \
 	-e GO_VERSION="$GO_VERSION" \
 	-e OUT_NAME="$OUT_NAME" \
 	"$IMAGE" \
-	bash -c "chmod +x /src/scripts/build-go-native-inner.sh && /src/scripts/build-go-native-inner.sh /src/backend-go /out/\${OUT_NAME} \${GO_VERSION}"
+	bash -c "/bin/bash /src/scripts/build-go-native-inner.sh /src/backend-go /out/\${OUT_NAME} \${GO_VERSION}"
 
 echo "[build-go-linux-native] done: $OUT"

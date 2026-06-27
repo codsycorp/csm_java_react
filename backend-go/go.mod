@@ -58,3 +58,5 @@ require (
 	golang.org/x/tools v0.42.0 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 )
+
+replace github.com/footprintai/go-nativeml => /src/backend-go/.cache/go-nativeml-patched

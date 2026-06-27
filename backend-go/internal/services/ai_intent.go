@@ -119,6 +119,10 @@ func intentFromExplicitMode(req *CodeStreamRequest, mode string) LocalIntentClas
 
 // ResolvePipelineResponseMode picks the stream mode: client explicit > LLM intent > context default.
 func ResolvePipelineResponseMode(req *CodeStreamRequest, intent LocalIntentClassification) string {
+	// Conversational questions should stay in lightweight analyze flow.
+	if req != nil && shouldFallbackToAnalyzeQuestion(req.Message) {
+		return "analyze"
+	}
 	if mode := normalizeResponseMode(req.ResponseMode); mode != "" {
 		return mode
 	}
