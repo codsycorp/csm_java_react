@@ -44,6 +44,20 @@ func TestShouldUseIncrementalPlanExecuteSkipsConversationalAnalyze(t *testing.T)
 	}
 }
 
+func TestShouldUseIncrementalPlanExecuteSkipsConversationalAnalyzeWithoutQuestionMark(t *testing.T) {
+	cfg := config.AppConfig{}
+	req := &CodeStreamRequest{Message: "Hãy cho tôi biết thông tin thời tiết hôm nay ở Sài Gòn", ContextType: "code"}
+	phase1 := RunPhase1PipelineContext{
+		ResponseMode: "analyze",
+		Intent: LocalIntentClassification{
+			Type: "EDIT_CODE", Action: "modify", NextStep: "load_code_context", Confidence: 90,
+		},
+	}
+	if ShouldUseIncrementalPlanExecute(cfg, req, phase1) {
+		t.Fatal("expected conversational analyze without question mark to bypass incremental plan")
+	}
+}
+
 func TestPlanStepLabels(t *testing.T) {
 	labels := planStepLabels([]ExecutionPlanStep{{Action: "analyze", Description: "test"}})
 	if len(labels) != 1 || labels[0] != "[analyze] test" {

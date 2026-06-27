@@ -1,17 +1,26 @@
 package services
 
 import (
+	"math"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
 type routingDecision struct {
 	mode                 string
 	overrideExplicitEdit bool
+	needsClarify         bool
 	editScore            float64
 	analyzeScore         float64
 	margin               float64
 	signalBalance        int
+}
+
+type SessionHistoryState struct {
+	LastResponseMode string
+	ConsecutiveEdits int
+	ContextSwitched  bool
 }
 
 // LocalIntentClassification mirrors Java LocalIntentClassification (AI#1 router).
@@ -85,13 +94,59 @@ func shouldFallbackToAnalyzeQuestion(message string) bool {
 	if utf8.RuneCountInString(msg) < 3 {
 		return false
 	}
-	if !strings.Contains(msg, "?") && !strings.Contains(msg, "？") {
-		return false
-	}
 	if utf8.RuneCountInString(msg) > 280 {
 		return false
 	}
-	return true
+	if messageHasCodeLikeSyntax(msg) {
+		return false
+	}
+	if hasExplicitEditDirective(msg) {
+		return false
+	}
+	if strings.Contains(msg, "?") || strings.Contains(msg, "？") {
+		return true
+	}
+	if containsAny(msg, conversationalHintPhrases...) {
+		return true
+	}
+	tokens := tokenizeNaturalLanguage(msg)
+	if len(tokens) < 5 {
+		return false
+	}
+	for _, t := range tokens {
+		switch t {
+		case "ai", "gì", "gi", "sao", "nào", "nao", "đâu", "dau", "bao", "who", "what", "when", "where", "why", "how":
+			return true
+		}
+	}
+	return false
+}
+
+func hasExplicitEditDirective(message string) bool {
+	msg := strings.ToLower(strings.TrimSpace(message))
+	if msg == "" {
+		return false
+	}
+	for _, re := range explicitEditQuestionPatterns {
+		if re.MatchString(msg) {
+			return false
+		}
+	}
+	for _, re := range explicitEditDirectivePatterns {
+		if re.MatchString(msg) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAny(s string, needles ...string) bool {
+	for _, needle := range needles {
+		if needle != "" && strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func intentFromExplicitMode(req *CodeStreamRequest, mode string) LocalIntentClassification {
@@ -153,7 +208,7 @@ func shouldOverrideExplicitEditWithIntent(req *CodeStreamRequest, intent LocalIn
 		return false
 	}
 	decision := evaluateRoutingDecision(req, intent, true)
-	return decision.overrideExplicitEdit
+	return decision.overrideExplicitEdit || decision.needsClarify
 }
 
 func shouldPreferAnalyzeByContent(req *CodeStreamRequest, intent LocalIntentClassification) bool {
@@ -256,36 +311,189 @@ func countMessageSymbolOverlap(message string, symbols []string) int {
 	if len(symbols) == 0 {
 		return 0
 	}
-	msgTokens := strings.Fields(strings.ToLower(strings.NewReplacer(
-		",", " ", ".", " ", ":", " ", ";", " ", "(", " ", ")", " ", "[", " ", "]", " ", "{", " ", "}", " ",
-		"\n", " ", "\t", " ", "\r", " ", "\"", " ", "'", " ", "`", " ", "?", " ", "!", " ",
-	).Replace(message)))
+	msgTokens := tokenizeNaturalLanguage(message)
 	if len(msgTokens) == 0 {
 		return 0
 	}
 	msgSet := map[string]struct{}{}
 	for _, t := range msgTokens {
-		if len(t) < 2 {
+		norm := normalizeSymbolToken(t)
+		if len(norm) < 2 {
 			continue
 		}
-		msgSet[t] = struct{}{}
+		msgSet[norm] = struct{}{}
 	}
 	hits := 0
 	seen := map[string]struct{}{}
 	for _, sym := range symbols {
-		s := strings.ToLower(strings.TrimSpace(sym))
+		s := normalizeSymbolToken(sym)
 		if len(s) < 3 {
 			continue
 		}
 		if _, ok := seen[s]; ok {
 			continue
 		}
-		if _, ok := msgSet[s]; ok {
+		matched := false
+		for msgToken := range msgSet {
+			if fuzzySymbolOverlap(msgToken, s) {
+				matched = true
+				break
+			}
+		}
+		if matched {
 			hits++
 			seen[s] = struct{}{}
+			continue
+		}
+		for _, part := range splitIdentifierParts(s) {
+			if len(part) < 3 {
+				continue
+			}
+			for msgToken := range msgSet {
+				if fuzzySymbolOverlap(msgToken, part) {
+					hits++
+					seen[s] = struct{}{}
+					matched = true
+					break
+				}
+			}
+			if matched {
+				break
+			}
 		}
 	}
 	return hits
+}
+
+func tokenizeNaturalLanguage(message string) []string {
+	parts := strings.Fields(strings.NewReplacer(
+		",", " ", ".", " ", ":", " ", ";", " ", "(", " ", ")", " ", "[", " ", "]", " ", "{", " ", "}", " ",
+		"\n", " ", "\t", " ", "\r", " ", "\"", " ", "'", " ", "`", " ", "?", " ", "!", " ",
+		"/", " ", "\\", " ", "-", " ",
+	).Replace(strings.ToLower(message)))
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		n := normalizeSymbolToken(p)
+		if n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func normalizeSymbolToken(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func splitIdentifierParts(symbol string) []string {
+	runes := []rune(symbol)
+	if len(runes) == 0 {
+		return nil
+	}
+	var parts []string
+	start := 0
+	for i := 1; i < len(runes); i++ {
+		if unicode.IsUpper(runes[i]) && unicode.IsLower(runes[i-1]) {
+			part := normalizeSymbolToken(string(runes[start:i]))
+			if part != "" {
+				parts = append(parts, part)
+			}
+			start = i
+		}
+	}
+	last := normalizeSymbolToken(string(runes[start:]))
+	if last != "" {
+		parts = append(parts, last)
+	}
+	if strings.Contains(symbol, "_") {
+		for _, p := range strings.Split(symbol, "_") {
+			n := normalizeSymbolToken(p)
+			if n != "" {
+				parts = append(parts, n)
+			}
+		}
+	}
+	return parts
+}
+
+func fuzzySymbolOverlap(msgToken string, codeSymbol string) bool {
+	a := normalizeSymbolToken(msgToken)
+	b := normalizeSymbolToken(codeSymbol)
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	if len(a) >= 4 && len(b) >= 4 && (strings.HasPrefix(a, b) || strings.HasPrefix(b, a) || strings.HasSuffix(a, b) || strings.HasSuffix(b, a)) {
+		return true
+	}
+	sim := levenshteinSimilarity(a, b)
+	return sim >= routerThresholds.FuzzyMin
+}
+
+func levenshteinSimilarity(a, b string) float64 {
+	if a == b {
+		return 1
+	}
+	da := levenshteinDistance(a, b)
+	maxLen := len(a)
+	if len(b) > maxLen {
+		maxLen = len(b)
+	}
+	if maxLen == 0 {
+		return 1
+	}
+	return 1 - float64(da)/float64(maxLen)
+}
+
+func levenshteinDistance(a, b string) int {
+	ar := []rune(a)
+	br := []rune(b)
+	if len(ar) == 0 {
+		return len(br)
+	}
+	if len(br) == 0 {
+		return len(ar)
+	}
+	prev := make([]int, len(br)+1)
+	for j := 0; j <= len(br); j++ {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ar); i++ {
+		curr := make([]int, len(br)+1)
+		curr[0] = i
+		for j := 1; j <= len(br); j++ {
+			cost := 0
+			if ar[i-1] != br[j-1] {
+				cost = 1
+			}
+			insertCost := curr[j-1] + 1
+			deleteCost := prev[j] + 1
+			replaceCost := prev[j-1] + cost
+			curr[j] = minDistanceInt(insertCost, minDistanceInt(deleteCost, replaceCost))
+		}
+		prev = curr
+	}
+	return prev[len(br)]
+}
+
+func minDistanceInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func messageHasCodeLikeSyntax(message string) bool {
@@ -309,7 +517,8 @@ func messageHasCodeLikeSyntax(message string) bool {
 }
 
 func evaluateRoutingDecision(req *CodeStreamRequest, intent LocalIntentClassification, explicitEdit bool) routingDecision {
-	editScore, analyzeScore, signalBalance := intentRoutingScores(req, intent)
+	history := sessionHistoryFromRequest(req)
+	editScore, analyzeScore, signalBalance := intentRoutingScoresWithHistory(req, intent, history)
 	decision := routingDecision{
 		mode:          defaultResponseModeForContext(req.ContextType),
 		editScore:     editScore,
@@ -319,6 +528,14 @@ func evaluateRoutingDecision(req *CodeStreamRequest, intent LocalIntentClassific
 	margin := adaptiveAnalyzeMargin(req, intent, explicitEdit, signalBalance)
 	decision.margin = margin
 	delta := analyzeScore - editScore
+	if math.Abs(delta) < routerThresholds.GreyDelta && clampIntentConfidence(intent.Confidence) < routerThresholds.GreyConfidence {
+		decision.needsClarify = true
+		decision.mode = "analyze"
+		if explicitEdit {
+			decision.overrideExplicitEdit = true
+		}
+		return decision
+	}
 	if explicitEdit {
 		decision.mode = "edit"
 		decision.overrideExplicitEdit = normalizeResponseMode(intent.ResponseMode) == "analyze" && delta >= margin
@@ -397,6 +614,63 @@ func intentRoutingScores(req *CodeStreamRequest, intent LocalIntentClassificatio
 		signalBalance++
 	}
 	return editScore, analyzeScore, signalBalance
+}
+
+func intentRoutingScoresWithHistory(req *CodeStreamRequest, intent LocalIntentClassification, history SessionHistoryState) (float64, float64, int) {
+	editScore, analyzeScore, signalBalance := intentRoutingScores(req, intent)
+	if history.LastResponseMode == "edit" && history.ConsecutiveEdits > 1 && !history.ContextSwitched {
+		editScore += 0.4
+		signalBalance--
+	}
+	if history.LastResponseMode == "analyze" && history.ConsecutiveEdits == 0 && !history.ContextSwitched {
+		analyzeScore += 0.15
+		signalBalance++
+	}
+	return editScore, analyzeScore, signalBalance
+}
+
+func sessionHistoryFromRequest(req *CodeStreamRequest) SessionHistoryState {
+	state := SessionHistoryState{}
+	if req == nil || req.EditorMetadata == nil {
+		return state
+	}
+	raw, ok := req.EditorMetadata["sessionHistory"]
+	if !ok || raw == nil {
+		return state
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return state
+	}
+	state.LastResponseMode = normalizeResponseMode(stringAny(m["lastResponseMode"]))
+	state.ConsecutiveEdits = intAny(m["consecutiveEdits"])
+	state.ContextSwitched = boolAny(m["contextSwitched"])
+	return state
+}
+
+func stringAny(v any) string {
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
+}
+
+func intAny(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func boolAny(v any) bool {
+	b, _ := v.(bool)
+	return b
 }
 
 func adaptiveAnalyzeMargin(req *CodeStreamRequest, intent LocalIntentClassification, explicitEdit bool, signalBalance int) float64 {
@@ -526,8 +800,9 @@ func IntentRoutingSSE(req *CodeStreamRequest, intent LocalIntentClassification, 
 			"signalBalance":  decision.signalBalance,
 			"explicitEdit":   explicitEdit,
 			"override":       decision.overrideExplicitEdit,
+			"clarify":        decision.needsClarify,
 		},
-		"message": routeMsg,
+		"message": map[bool]string{true: "Grey zone: cần làm rõ yêu cầu (ưu tiên analyze an toàn)", false: routeMsg}[decision.needsClarify],
 		"router":  intentRouterLabel(intent),
 	}
 }

@@ -145,6 +145,17 @@ fi
 
 cd "$GO_DIR"
 
+# Auto-heal stale go.mod replace generated in container builds
+# (e.g. /src/backend-go/.cache/go-nativeml-patched) when running locally.
+NATIVEML_REPLACE="$(awk '/^replace github.com\/footprintai\/go-nativeml / {print $4; exit}' go.mod 2>/dev/null || true)"
+if [ -n "$NATIVEML_REPLACE" ] && [ ! -d "$NATIVEML_REPLACE" ]; then
+    LOCAL_PATCHED_DIR="$GO_DIR/.cache/go-nativeml-patched"
+    if [ -d "$LOCAL_PATCHED_DIR" ]; then
+        config_log "Fixing go.mod replace: $NATIVEML_REPLACE -> $LOCAL_PATCHED_DIR"
+        go mod edit -replace="github.com/footprintai/go-nativeml=$LOCAL_PATCHED_DIR"
+    fi
+fi
+
 if ! command -v go >/dev/null 2>&1; then
     echo "Go not found in PATH. Install Go 1.22+ from https://go.dev/dl/"
     exit 1

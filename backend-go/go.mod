@@ -59,4 +59,4 @@ require (
 	google.golang.org/protobuf v1.33.0 // indirect
 )
 
-replace github.com/footprintai/go-nativeml => /src/backend-go/.cache/go-nativeml-patched
+replace github.com/footprintai/go-nativeml => ./.cache/go-nativeml-patched

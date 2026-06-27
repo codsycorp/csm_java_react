@@ -81,6 +81,16 @@ func shouldSkipIncrementalAnalyzeForConversationalIntent(req *CodeStreamRequest,
 	if req == nil {
 		return false
 	}
+	msg := strings.TrimSpace(req.Message)
+	if msg == "" {
+		return false
+	}
+	if len(msg) > 1200 {
+		return false
+	}
+	if shouldFallbackToAnalyzeQuestion(msg) {
+		return true
+	}
 	typ := strings.ToUpper(strings.TrimSpace(intent.Type))
 	action := strings.ToLower(strings.TrimSpace(intent.Action))
 	next := strings.ToLower(strings.TrimSpace(intent.NextStep))
@@ -91,13 +101,6 @@ func shouldSkipIncrementalAnalyzeForConversationalIntent(req *CodeStreamRequest,
 		return false
 	}
 	if intent.Confidence > 0 && intent.Confidence < 55 {
-		return false
-	}
-	msg := strings.TrimSpace(req.Message)
-	if msg == "" {
-		return false
-	}
-	if len(msg) > 1200 {
 		return false
 	}
 	return true

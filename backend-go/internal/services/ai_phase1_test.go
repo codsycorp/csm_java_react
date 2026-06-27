@@ -191,6 +191,47 @@ func TestResolvePipelineResponseModeQuestionWeaklyLinkedOverridesWithoutExplicit
 	}
 }
 
+func TestResolvePipelineResponseModeConversationalNoQuestionMarkOverridesEdit(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType:  "code",
+		ResponseMode: "edit",
+		Message:      "Hãy cho tôi biết thông tin thời tiết hôm nay ở Sài Gòn",
+		CurrentCode:  "function normalizeUILanguage(rawLang) { return rawLang; }",
+	}
+	intent := LocalIntentClassification{Type: "EDIT_CODE", Action: "modify", NextStep: "load_code_context", ContextKind: "code", ResponseMode: "edit", Confidence: 90}
+	if got := ResolvePipelineResponseMode(req, intent); got != "analyze" {
+		t.Fatalf("got %s want analyze for conversational ask without question mark", got)
+	}
+}
+
+func TestHasExplicitEditDirectiveContextAware(t *testing.T) {
+	if hasExplicitEditDirective("Sửa như thế nào để hết lỗi đăng nhập?") {
+		t.Fatal("expected how-to-fix question to not be treated as direct edit")
+	}
+	if !hasExplicitEditDirective("Sửa hàm validateEmail thành async và áp dụng trực tiếp") {
+		t.Fatal("expected direct edit request to be treated as edit directive")
+	}
+}
+
+func TestFuzzySymbolOverlapSnakeCaseCamelCase(t *testing.T) {
+	if !fuzzySymbolOverlap("user", "user_id") {
+		t.Fatal("expected fuzzy overlap for user and user_id")
+	}
+	if !fuzzySymbolOverlap("normalizeuilanguage", "normalizeUILanguage") {
+		t.Fatal("expected fuzzy overlap for normalized camelCase symbol")
+	}
+}
+
+func TestIntentRoutingScoresWithHistoryAddsEditInertia(t *testing.T) {
+	req := &CodeStreamRequest{ContextType: "code", Message: "Thêm biến debug nữa"}
+	intent := LocalIntentClassification{Type: "EDIT_CODE", Action: "modify", NextStep: "load_code_context", ContextKind: "code", ResponseMode: "edit", Confidence: 80}
+	baseEdit, _, _ := intentRoutingScores(req, intent)
+	withHistoryEdit, _, _ := intentRoutingScoresWithHistory(req, intent, SessionHistoryState{LastResponseMode: "edit", ConsecutiveEdits: 3, ContextSwitched: false})
+	if withHistoryEdit <= baseEdit {
+		t.Fatalf("expected history inertia to increase edit score: base=%.2f history=%.2f", baseEdit, withHistoryEdit)
+	}
+}
+
 func TestResolvePipelineResponseModeAdaptiveOverrideWithStrongConsensus(t *testing.T) {
 	req := &CodeStreamRequest{
 		ContextType:  "code",
