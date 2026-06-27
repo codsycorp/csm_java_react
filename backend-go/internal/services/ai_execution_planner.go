@@ -57,6 +57,9 @@ func ShouldUseIncrementalPlanExecute(cfg config.AppConfig, req *CodeStreamReques
 	if IsLineItemsPdfImport(req) {
 		return false
 	}
+	if phase1.ResponseMode == "analyze" && shouldSkipIncrementalAnalyzeForConversationalIntent(req, phase1.Intent) {
+		return false
+	}
 	if phase1.ResponseMode == "edit" && isMenuJSONContext(req.ContextType) {
 		base := SanitizeMenuEditorPayload(ResolveMenuEditEditorBase(req))
 		if IsEffectivelyEmptyMenuEditor(base) && !menuEditorHasTreeContent(base) {
@@ -69,6 +72,32 @@ func ShouldUseIncrementalPlanExecute(cfg config.AppConfig, req *CodeStreamReques
 	}
 	msg := strings.TrimSpace(req.Message)
 	if len(msg) < 12 {
+		return false
+	}
+	return true
+}
+
+func shouldSkipIncrementalAnalyzeForConversationalIntent(req *CodeStreamRequest, intent LocalIntentClassification) bool {
+	if req == nil {
+		return false
+	}
+	typ := strings.ToUpper(strings.TrimSpace(intent.Type))
+	action := strings.ToLower(strings.TrimSpace(intent.Action))
+	next := strings.ToLower(strings.TrimSpace(intent.NextStep))
+	if typ != "QUESTION" && typ != "GENERAL" {
+		return false
+	}
+	if action != "ask" && action != "search" && next != "answer_direct" {
+		return false
+	}
+	if intent.Confidence > 0 && intent.Confidence < 55 {
+		return false
+	}
+	msg := strings.TrimSpace(req.Message)
+	if msg == "" {
+		return false
+	}
+	if len(msg) > 1200 {
 		return false
 	}
 	return true
@@ -148,7 +177,7 @@ func synthesizeExecutionSteps(message, workspace string, analyzeOnly bool, prima
 		steps = append(steps, ExecutionPlanStep{
 			Action: action, Scope: "code",
 			Description: map[bool]string{true: "Phân tích luồng xử lý và side effects quanh ", false: "Áp dụng thay đổi code cho "}[analyzeOnly] + primary,
-			Focus: primary,
+			Focus:       primary,
 		})
 		steps = append(steps, ExecutionPlanStep{
 			Action: map[bool]string{true: "analyze", false: "refactor"}[analyzeOnly], Scope: "code",

@@ -85,11 +85,11 @@ func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool)
 		FullCurrentCode:          truncateStr(fullCode, fullCap),
 		FullCurrentCodeOrigLen:   fullOrigLen,
 		FullCurrentCodeTruncated: fullOrigLen > fullCap,
-		Language:        paramString(params, "language", "javascript"),
-		Model:           paramString(params, "model", "auto"),
-		UILang:          firstNonEmpty(paramString(params, "uiLang", ""), paramString(params, "ui_lang", ""), paramString(params, "uiLanguage", "vi")),
-		ResponseMode:    firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", "")),
-		EditorMetadata:  editorMeta,
+		Language:                 paramString(params, "language", "javascript"),
+		Model:                    paramString(params, "model", "auto"),
+		UILang:                   firstNonEmpty(paramString(params, "uiLang", ""), paramString(params, "ui_lang", ""), paramString(params, "uiLanguage", "vi")),
+		ResponseMode:             firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", "")),
+		EditorMetadata:           editorMeta,
 	}, ""
 }
 
@@ -129,7 +129,28 @@ func maxOutgoingEditorFromParams(params map[string]any) int {
 }
 
 func inferResponseModeFromParams(params map[string]any) string {
-	return normalizeResponseMode(firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", "")))
+	rawMode := strings.ToLower(strings.TrimSpace(firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", ""))))
+	if mode := normalizeResponseMode(rawMode); mode != "" {
+		return mode
+	}
+	// Frontend integrations may send legacy modes; normalize them into core lanes.
+	switch rawMode {
+	case "plan", "qa", "chat", "read", "review", "explain", "analysis":
+		return "analyze"
+	case "patch", "apply", "write", "modify", "update", "edit_code":
+		return "edit"
+	}
+
+	taskType := strings.ToLower(strings.TrimSpace(paramString(params, "taskType", "")))
+	switch taskType {
+	case "seo_content", "media_script", "qa", "chat", "analysis", "business_qa", "explain":
+		return "analyze"
+	case "edit", "menu_edit", "code_edit", "apply_patch", "refactor":
+		return "edit"
+	}
+
+	ctxType := strings.ToLower(strings.TrimSpace(paramString(params, "contextType", "code")))
+	return defaultResponseModeForContext(ctxType)
 }
 
 func ResolveResponseMode(req *CodeStreamRequest) string {
@@ -228,49 +249,49 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 	} else {
 		switch intent {
 		case "menu_json":
-		if kb := BuildMenuKnowledgeBlock(cfg, 12_000); kb != "" {
-			sb.WriteString(kb)
-			sb.WriteByte('\n')
-		}
-		if IsEffectivelyEmptyMenuEditor(editor) {
-			sb.WriteString("[GREENFIELD_EMPTY_MENU]\n")
-		} else if editor != "" {
-			sb.WriteString("[ACTIVE_EDITOR_MENU_JSON]\n")
-			sb.WriteString(editor)
-			sb.WriteString("\n[/ACTIVE_EDITOR_MENU_JSON]\n\n")
-		}
-	case "frontend_code":
-		if kb := BuildCodeKnowledgeBlock(cfg, 10_000); kb != "" {
-			sb.WriteString(kb)
-			sb.WriteByte('\n')
-		}
-		if editor != "" {
-			sb.WriteString("[ACTIVE_EDITOR_CODE]\n")
-			sb.WriteString(editor)
-			sb.WriteString("\n[/ACTIVE_EDITOR_CODE]\n\n")
-		}
-	case "quick_question":
-		if isMenuJSONContext(req.ContextType) {
-			if kb := BuildMenuKnowledgeBlock(cfg, 8000); kb != "" {
+			if kb := BuildMenuKnowledgeBlock(cfg, 12_000); kb != "" {
 				sb.WriteString(kb)
 				sb.WriteByte('\n')
 			}
-			if editor != "" {
+			if IsEffectivelyEmptyMenuEditor(editor) {
+				sb.WriteString("[GREENFIELD_EMPTY_MENU]\n")
+			} else if editor != "" {
 				sb.WriteString("[ACTIVE_EDITOR_MENU_JSON]\n")
 				sb.WriteString(editor)
 				sb.WriteString("\n[/ACTIVE_EDITOR_MENU_JSON]\n\n")
 			}
-		} else if editor != "" && len(editor) <= 8_000 {
-			sb.WriteString("[CONTEXT_SNIPPET]\n")
-			sb.WriteString(editor)
-			sb.WriteString("\n[/CONTEXT_SNIPPET]\n\n")
-		}
-	case "raw_code":
-		if editor != "" {
-			sb.WriteString("[CURRENT_CODE]\n")
-			sb.WriteString(editor)
-			sb.WriteString("\n[/CURRENT_CODE]\n\n")
-		}
+		case "frontend_code":
+			if kb := BuildCodeKnowledgeBlock(cfg, 10_000); kb != "" {
+				sb.WriteString(kb)
+				sb.WriteByte('\n')
+			}
+			if editor != "" {
+				sb.WriteString("[ACTIVE_EDITOR_CODE]\n")
+				sb.WriteString(editor)
+				sb.WriteString("\n[/ACTIVE_EDITOR_CODE]\n\n")
+			}
+		case "quick_question":
+			if isMenuJSONContext(req.ContextType) {
+				if kb := BuildMenuKnowledgeBlock(cfg, 8000); kb != "" {
+					sb.WriteString(kb)
+					sb.WriteByte('\n')
+				}
+				if editor != "" {
+					sb.WriteString("[ACTIVE_EDITOR_MENU_JSON]\n")
+					sb.WriteString(editor)
+					sb.WriteString("\n[/ACTIVE_EDITOR_MENU_JSON]\n\n")
+				}
+			} else if editor != "" && len(editor) <= 8_000 {
+				sb.WriteString("[CONTEXT_SNIPPET]\n")
+				sb.WriteString(editor)
+				sb.WriteString("\n[/CONTEXT_SNIPPET]\n\n")
+			}
+		case "raw_code":
+			if editor != "" {
+				sb.WriteString("[CURRENT_CODE]\n")
+				sb.WriteString(editor)
+				sb.WriteString("\n[/CURRENT_CODE]\n\n")
+			}
 		}
 	}
 
@@ -436,6 +457,8 @@ End immediately after the response.
 Follow the requested output contract exactly.
 Answer in plain text prose unless the contract explicitly requires JSON.
 Never repeat internal blocks such as BUSINESS_CONTEXT, BUSINESS_COMPREHENSION, Steps, or Output contract.
+Never fabricate sources, URLs, or "latest news" claims.
+If evidence in [TENANT_RAG]/workspace is insufficient for time-sensitive claims, say so explicitly and ask user to provide links/data.
 End immediately after the response.
 `
 	baseSystemRawCodeMin = `You are CSM Code Generator.
@@ -450,6 +473,7 @@ Start with the very first line of code and end with the last line.
 	quickQuestionContract = `You are CSM AI Assistant.
 Answer the user's question directly in the same language as the user request (Vietnamese, English, or Chinese).
 For code/debug questions: cite concrete symbols (functions, variables, timers, webview/process lifecycle).
+If the user asks for latest news/reliable sources: only cite sources that are explicitly present in provided context; otherwise state limitation and avoid invented source names.
 Use at least 4 short bullet points covering: observed behavior, likely root cause, relevant code paths, suggested fix/check.
 Do not output a single "reason:" line or JSON patch envelope.
 No JSON unless the user explicitly asked for a patch.

@@ -104,14 +104,37 @@ func TestMaxOutgoingEditorCharsAnalyze8Gb(t *testing.T) {
 
 func TestInferResponseModeFromParamsAnalyze(t *testing.T) {
 	params := map[string]any{
-		"message": "Phân tích code hiện tại đang xử lý những logic gì",
+		"message":     "Phân tích code hiện tại đang xử lý những logic gì",
 		"contextType": "code",
+		"taskType":    "qa",
 	}
 	if got := inferResponseModeFromParams(params); got != "analyze" {
 		t.Fatalf("got %q want analyze", got)
 	}
 	if cap := maxOutgoingEditorFromParams(params); cap != 12_000 {
 		t.Fatalf("cap=%d want 12000", cap)
+	}
+}
+
+func TestInferResponseModeFromParamsMessageOnlyDoesNotForceAnalyze(t *testing.T) {
+	params := map[string]any{
+		"message":     "Bạn hãy phân tích giúp tôi",
+		"contextType": "code",
+	}
+	if got := inferResponseModeFromParams(params); got != "edit" {
+		t.Fatalf("got %q want edit by context default when no explicit/task signal", got)
+	}
+}
+
+func TestInferResponseModeFromParamsLegacyPlanFromAutoLMKT(t *testing.T) {
+	params := map[string]any{
+		"message":      "Lập kế hoạch nội dung video cho chiến dịch mới",
+		"contextType":  "business",
+		"taskType":     "media_script",
+		"responseMode": "plan",
+	}
+	if got := inferResponseModeFromParams(params); got != "analyze" {
+		t.Fatalf("got %q want analyze for legacy plan mode", got)
 	}
 }
 

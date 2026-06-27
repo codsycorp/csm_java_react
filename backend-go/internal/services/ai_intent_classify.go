@@ -51,13 +51,6 @@ func ClassifyIntent(ctx context.Context, llama *LlamaService, req *CodeStreamReq
 	if req == nil || strings.TrimSpace(req.Message) == "" {
 		return unknownIntent("Empty user request")
 	}
-	if shouldFallbackToAnalyzeQuestion(req.Message) {
-		return LocalIntentClassification{
-			Type: "QUESTION", Action: "ask", Confidence: 92,
-			NextStep: "answer_direct", ContextKind: "none", ResponseMode: "analyze",
-			Reasoning: "Conversational fast-path: skip heavy edit pipeline and answer directly.",
-		}
-	}
 	if llama != nil && llama.IsAvailable() && intentClassifyEnabled() {
 		if classified := ClassifyIntentWithLocalAI(ctx, llama, req); classified.Confidence > 0 {
 			return classified
@@ -227,16 +220,35 @@ func postGuardIntentClassification(intent LocalIntentClassification, req *CodeSt
 		return intent
 	}
 	if mode := normalizeResponseMode(req.ResponseMode); mode != "" {
+		if mode == "analyze" {
+			intent.ResponseMode = "analyze"
+			if strings.TrimSpace(intent.NextStep) == "" {
+				intent.NextStep = "answer_direct"
+			}
+			if strings.TrimSpace(intent.ContextKind) == "" {
+				intent.ContextKind = "none"
+			}
+			return intent
+		}
+		if mode == "edit" && shouldOverrideExplicitEditWithIntent(req, intent) {
+			return intent
+		}
 		intent.ResponseMode = mode
-		switch strings.ToLower(strings.TrimSpace(req.ContextType)) {
-		case "menu_json":
-			intent.Type = "EDIT_MENU"
-			intent.ContextKind = "menu"
-			intent.NextStep = "load_menu_context"
-		case "code", "frontend_code":
-			intent.Type = "EDIT_CODE"
-			intent.ContextKind = "code"
-			intent.NextStep = "load_code_context"
+		if strings.TrimSpace(intent.NextStep) == "" || strings.EqualFold(intent.NextStep, "answer_direct") {
+			switch strings.ToLower(strings.TrimSpace(req.ContextType)) {
+			case "menu_json":
+				intent.NextStep = "load_menu_context"
+				intent.ContextKind = "menu"
+				if strings.TrimSpace(intent.Type) == "" || strings.EqualFold(intent.Type, "GENERAL") {
+					intent.Type = "EDIT_MENU"
+				}
+			case "code", "frontend_code":
+				intent.NextStep = "load_code_context"
+				intent.ContextKind = "code"
+				if strings.TrimSpace(intent.Type) == "" || strings.EqualFold(intent.Type, "GENERAL") {
+					intent.Type = "EDIT_CODE"
+				}
+			}
 		}
 	}
 	return intent

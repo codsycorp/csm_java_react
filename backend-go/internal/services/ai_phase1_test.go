@@ -32,11 +32,23 @@ func TestClassifyIntentHeuristicMenuNoKeywordRouting(t *testing.T) {
 	}
 }
 
-func TestClassifyIntentHeuristicQuestionInEditorFallsBackAnalyze(t *testing.T) {
+func TestClassifyIntentHeuristicQuestionInEditorKeepsEditFallback(t *testing.T) {
 	req := &CodeStreamRequest{
 		ContextType: "code",
 		Message:     "Xin chào bạn là ai? Bạn có thể làm gì cho tôi?",
 		CurrentCode: "function demo() { return 1; }",
+	}
+	got := ClassifyIntentHeuristic(req)
+	if got.ResponseMode != "edit" || got.Type != "EDIT_CODE" {
+		t.Fatalf("got %+v want EDIT_CODE edit fallback", got)
+	}
+}
+
+func TestClassifyIntentHeuristicQuestionWithoutEditorFallsBackAnalyze(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType: "none",
+		Message:     "Bạn là ai?",
+		CurrentCode: "",
 	}
 	got := ClassifyIntentHeuristic(req)
 	if got.ResponseMode != "analyze" || got.NextStep != "answer_direct" {
@@ -97,9 +109,119 @@ func TestResolvePipelineResponseModeConversationalQuestionOverridesEdit(t *testi
 		ResponseMode: "edit",
 		Message:      "Xin chào bạn là ai? Bạn có thể làm gì cho tôi?",
 	}
-	intent := LocalIntentClassification{Type: "EDIT_CODE", ResponseMode: "edit", Confidence: 90}
+	intent := LocalIntentClassification{Type: "QUESTION", Action: "ask", NextStep: "answer_direct", ResponseMode: "analyze", Confidence: 90}
 	if got := ResolvePipelineResponseMode(req, intent); got != "analyze" {
 		t.Fatalf("got %s want analyze for conversational question", got)
+	}
+}
+
+func TestResolvePipelineResponseModeConversationalWeakIntentStillOverridesByContent(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType:  "code",
+		ResponseMode: "edit",
+		Message:      "Xin chào bạn là ai? Bạn có thể làm gì cho tôi?",
+	}
+	intent := LocalIntentClassification{Type: "QUESTION", Action: "ask", NextStep: "answer_direct", ResponseMode: "analyze", Confidence: 55}
+	if got := ResolvePipelineResponseMode(req, intent); got != "analyze" {
+		t.Fatalf("got %s want analyze for conversational message weakly linked to editor", got)
+	}
+}
+
+func TestResolvePipelineResponseModeKeepsEditWhenMessageCodeLinkedAndWeakIntent(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType:  "code",
+		ResponseMode: "edit",
+		Message:      "Hãy kiểm tra function demo() đang lỗi ở đâu?",
+		CurrentCode:  "function demo() { return 1; }",
+	}
+	intent := LocalIntentClassification{Type: "QUESTION", Action: "ask", NextStep: "answer_direct", ResponseMode: "analyze", Confidence: 55}
+	if got := ResolvePipelineResponseMode(req, intent); got != "edit" {
+		t.Fatalf("got %s want edit for code-linked message when intent confidence is low", got)
+	}
+}
+
+func TestResolvePipelineResponseModeWeakLinkLowConfidenceEditIntentOverridesAnalyze(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType:  "code",
+		ResponseMode: "edit",
+		Message:      "Bạn hãy tìm hiểu cho tôi tin tức mới nhất về hệ thống ai local từ các nguồn tin đáng tin cậy hôm nay",
+		CurrentCode:  "function normalizeUILanguage(rawLang) { return rawLang; }",
+	}
+	intent := LocalIntentClassification{Type: "EDIT_CODE", Action: "modify", NextStep: "load_code_context", ResponseMode: "edit", Confidence: 72}
+	if got := ResolvePipelineResponseMode(req, intent); got != "analyze" {
+		t.Fatalf("got %s want analyze for weakly linked non-code ask", got)
+	}
+}
+
+func TestResolvePipelineResponseModeStrongEditIntentStillKeepsEdit(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType:  "code",
+		ResponseMode: "edit",
+		Message:      "Sửa bug validate email trong hàm processUser",
+		CurrentCode:  "function processUser(email) { return validateEmail(email); }",
+	}
+	intent := LocalIntentClassification{Type: "EDIT_CODE", Action: "modify", NextStep: "load_code_context", ResponseMode: "edit", Confidence: 90}
+	if got := ResolvePipelineResponseMode(req, intent); got != "edit" {
+		t.Fatalf("got %s want edit for strong edit intent", got)
+	}
+}
+
+func TestResolvePipelineResponseModeQuestionWeaklyLinkedOverridesClassifierEdit(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType:  "code",
+		ResponseMode: "edit",
+		Message:      "Bạn hãy tìm hiểu cho tôi tin tức mới nhất về hệ thống ai local từ các nguồn tin đáng tin cậy hôm nay?",
+		CurrentCode:  "function normalizeUILanguage(rawLang) { var v = String(rawLang || '').toLowerCase(); return v || 'vi'; }",
+	}
+	intent := LocalIntentClassification{Type: "EDIT_CODE", Action: "other", NextStep: "load_code_context", ContextKind: "code", ResponseMode: "edit", Confidence: 90}
+	if got := ResolvePipelineResponseMode(req, intent); got != "analyze" {
+		t.Fatalf("got %s want analyze for semantically distant question", got)
+	}
+}
+
+func TestResolvePipelineResponseModeQuestionWeaklyLinkedOverridesWithoutExplicitMode(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType: "code",
+		Message:     "Bạn hãy tìm hiểu cho tôi tin tức mới nhất về hệ thống ai local từ các nguồn tin đáng tin cậy hôm nay?",
+		CurrentCode: "function normalizeUILanguage(rawLang) { var v = String(rawLang || '').toLowerCase(); return v || 'vi'; }",
+	}
+	intent := LocalIntentClassification{Type: "EDIT_CODE", Action: "modify", NextStep: "load_code_context", ContextKind: "code", ResponseMode: "edit", Confidence: 90}
+	if got := ResolvePipelineResponseMode(req, intent); got != "analyze" {
+		t.Fatalf("got %s want analyze for semantically distant question without explicit mode", got)
+	}
+}
+
+func TestResolvePipelineResponseModeAdaptiveOverrideWithStrongConsensus(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType:  "code",
+		ResponseMode: "edit",
+		Message:      "Bạn là ai và có thể hỗ trợ gì?",
+	}
+	intent := LocalIntentClassification{Type: "QUESTION", Action: "ask", NextStep: "answer_direct", ContextKind: "none", ResponseMode: "analyze", Confidence: 92}
+	if got := ResolvePipelineResponseMode(req, intent); got != "analyze" {
+		t.Fatalf("got %s want analyze with strong intent consensus", got)
+	}
+}
+
+func TestIntentRoutingScoresSignalBalance(t *testing.T) {
+	editReq := &CodeStreamRequest{ContextType: "code", Message: "sửa hàm này"}
+	editIntent := LocalIntentClassification{Type: "EDIT_CODE", Action: "modify", NextStep: "load_code_context", ContextKind: "code", ResponseMode: "edit", Confidence: 88}
+	editScore, analyzeScore, signalBalance := intentRoutingScores(editReq, editIntent)
+	if editScore <= analyzeScore {
+		t.Fatalf("expected edit score > analyze score, got edit=%.2f analyze=%.2f", editScore, analyzeScore)
+	}
+	if signalBalance >= 0 {
+		t.Fatalf("expected negative signal balance for edit intent, got %d", signalBalance)
+	}
+
+	analyzeReq := &CodeStreamRequest{ContextType: "none", Message: "bạn là ai?"}
+	analyzeIntent := LocalIntentClassification{Type: "QUESTION", Action: "ask", NextStep: "answer_direct", ContextKind: "none", ResponseMode: "analyze", Confidence: 88}
+	editScore, analyzeScore, signalBalance = intentRoutingScores(analyzeReq, analyzeIntent)
+	if analyzeScore <= editScore {
+		t.Fatalf("expected analyze score > edit score, got edit=%.2f analyze=%.2f", editScore, analyzeScore)
+	}
+	if signalBalance <= 0 {
+		t.Fatalf("expected positive signal balance for analyze intent, got %d", signalBalance)
 	}
 }
 
