@@ -310,6 +310,7 @@ type RunPhase1PipelineContext struct {
 	LearningBlock   string
 	ComprehendBlock string
 	TenantRAG       TenantRAGResult
+	LiveWeb         LiveWebLookupResult
 	Multimodal      MultimodalScanResult
 	Workspace       WorkspaceContextResult
 	Orchestration   OrchestrationSnapshot
@@ -356,6 +357,19 @@ func PreparePhase1Pipeline(cfg config.AppConfig, rm *data.RecordManager, llama *
 	ingestAttachmentContext(rm, req.AppID, multimodal)
 	workspace := BuildWorkspaceRetrievalBlock(cfg, rm, req.Message, 4_000)
 	rag := RunTenantRAGWithAuth(cfg, rm, req, input.Auth)
+	liveWeb := LiveWebLookupResult{}
+	liveDecision := InferLiveWebDecisionAdaptive(context.Background(), llama, req, responseMode, intent)
+	if liveDecision.ShouldRun {
+		liveWeb = RunLiveWebLookup(req, liveDecision)
+		if strings.TrimSpace(liveWeb.Block) != "" {
+			rag.Block = truncateStr(rag.Block+liveWeb.Block, tenantRAGDefaultMaxChars+1200)
+			rag.CharsUsed = len(rag.Block)
+			if strings.TrimSpace(liveWeb.Summary) != "" {
+				rag.HitCount++
+				rag.SourceCount++
+			}
+		}
+	}
 	snap := BuildOrchestrationSnapshot(cfg, req, intent, learningBlock, comprehendBlock, req.CurrentCode, rag)
 	snap = mergePhase4OrchestrationScope(snap, multimodal, workspace)
 
@@ -368,6 +382,7 @@ func PreparePhase1Pipeline(cfg config.AppConfig, rm *data.RecordManager, llama *
 		LearningBlock:   learningBlock,
 		ComprehendBlock: comprehendBlock,
 		TenantRAG:       rag,
+		LiveWeb:         liveWeb,
 		Multimodal:      multimodal,
 		Workspace:       workspace,
 		Orchestration:   snap,
@@ -432,6 +447,9 @@ func Phase1SSEEvents(req *CodeStreamRequest, ctx RunPhase1PipelineContext) []map
 	events = append(events, BusinessAutopilotSummarySSE(req, ctx.BusinessSpec, ctx.BusinessQA))
 	events = append(events, BusinessPlanSSE(req, len(ctx.Orchestration.PlanSteps), ctx.BusinessSpec))
 	events = append(events, AgentHandoffSSE(req, "Retriever", "Planner", "tenant_rag", "Scoped FTS retrieval ready"))
+	if ctx.LiveWeb.Enabled {
+		events = append(events, LiveWebLookupSSE(req, ctx.LiveWeb))
+	}
 	events = append(events, ToolSearchSSE(req, ctx.TenantRAG))
 	events = append(events, RetrievalQualityGateSSE(req, ctx.TenantRAG))
 	events = append(events, RagCitationsSSE(req, ctx.TenantRAG))

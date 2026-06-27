@@ -232,6 +232,94 @@ func TestIntentRoutingScoresWithHistoryAddsEditInertia(t *testing.T) {
 	}
 }
 
+func TestShouldRunLiveWebLookupWeatherRequest(t *testing.T) {
+	req := &CodeStreamRequest{ContextType: "code", Message: "Hãy cho tôi biết thông tin thời tiết hôm nay ở sài gòn"}
+	intent := LocalIntentClassification{Type: "QUESTION", Action: "ask", NextStep: "answer_direct", ResponseMode: "analyze", Confidence: 88}
+	if !ShouldRunLiveWebLookup(req, "analyze", intent) {
+		t.Fatal("expected live web lookup for weather request")
+	}
+}
+
+func TestShouldRunLiveWebLookupInternetHintOnly(t *testing.T) {
+	req := &CodeStreamRequest{ContextType: "code", Message: "bạn lên internet xem giúp tôi tin này"}
+	intent := LocalIntentClassification{Type: "QUESTION", Action: "ask", NextStep: "answer_direct", ResponseMode: "analyze", Confidence: 82}
+	if !ShouldRunLiveWebLookup(req, "analyze", intent) {
+		t.Fatal("expected live web lookup when user explicitly asks internet lookup")
+	}
+}
+
+func TestShouldRunLiveWebLookupInternetHintOnlyButEditDirective(t *testing.T) {
+	req := &CodeStreamRequest{ContextType: "code", Message: "bạn lên internet xem rồi sửa hàm validateEmail giúp tôi"}
+	intent := LocalIntentClassification{Type: "EDIT_CODE", Action: "modify", NextStep: "load_code_context", ResponseMode: "edit", Confidence: 90}
+	if ShouldRunLiveWebLookup(req, "analyze", intent) {
+		t.Fatal("expected no live web lookup when request is not weather-specific")
+	}
+}
+
+func TestShouldRunLiveWebLookupWeatherFollowUpTomorrowRain(t *testing.T) {
+	req := &CodeStreamRequest{ContextType: "code", Message: "Ngày mai có mưa không?"}
+	intent := LocalIntentClassification{Type: "QUESTION", Action: "ask", NextStep: "answer_direct", ResponseMode: "analyze", Confidence: 80}
+	if !ShouldRunLiveWebLookup(req, "analyze", intent) {
+		t.Fatal("expected live web lookup for weather follow-up question")
+	}
+}
+
+func TestShouldRunLiveWebLookupNonWeatherTomorrowQuestion(t *testing.T) {
+	req := &CodeStreamRequest{ContextType: "code", Message: "Ngày mai có cuộc họp không?"}
+	intent := LocalIntentClassification{Type: "QUESTION", Action: "ask", NextStep: "answer_direct", ResponseMode: "analyze", Confidence: 80}
+	if ShouldRunLiveWebLookup(req, "analyze", intent) {
+		t.Fatal("expected no live web lookup for non-weather tomorrow question")
+	}
+}
+
+func TestShouldRunLiveWebLookupNotForEdit(t *testing.T) {
+	req := &CodeStreamRequest{ContextType: "code", Message: "thời tiết sài gòn"}
+	intent := LocalIntentClassification{Type: "QUESTION", Action: "ask", NextStep: "answer_direct", ResponseMode: "analyze", Confidence: 80}
+	if ShouldRunLiveWebLookup(req, "edit", intent) {
+		t.Fatal("expected no live web lookup in edit mode")
+	}
+}
+
+func TestInferLiveWebDecisionLatestNews(t *testing.T) {
+	req := &CodeStreamRequest{ContextType: "code", Message: "Bạn lên internet tìm tin tức AI mới nhất hôm nay"}
+	intent := LocalIntentClassification{Type: "QUESTION", Action: "search", NextStep: "answer_direct", ResponseMode: "analyze", Confidence: 86}
+	d := InferLiveWebDecision(req, "analyze", intent)
+	if !d.ShouldRun {
+		t.Fatalf("expected shouldRun=true, got %+v", d)
+	}
+}
+
+func TestParseLiveWebDecisionJSON(t *testing.T) {
+	raw := "```json\n{\"needInternet\":true,\"queryType\":\"weather\",\"confidence\":77,\"reason\":\"realtime_weather\",\"searchQuery\":\"weather saigon today\"}\n```"
+	d, ok := parseLiveWebDecisionJSON(raw)
+	if !ok {
+		t.Fatal("expected parse success")
+	}
+	if !d.ShouldRun || d.QueryType != "weather" || d.Confidence != 77 {
+		t.Fatalf("unexpected parsed decision: %+v", d)
+	}
+}
+
+func TestMergeLiveWebDecisionPrefersHighConfidenceLLM(t *testing.T) {
+	base := LiveWebDecision{ShouldRun: false, QueryType: "none", Confidence: 30, Reason: "low_confidence", SearchQuery: ""}
+	llm := LiveWebDecision{ShouldRun: true, QueryType: "general_facts", Confidence: 72, Reason: "latest_info", SearchQuery: "latest ai news"}
+	req := &CodeStreamRequest{Message: "Tin AI mới nhất hôm nay"}
+	out := mergeLiveWebDecision(base, llm, req)
+	if !out.ShouldRun || out.QueryType != "general_facts" || out.Confidence != 72 {
+		t.Fatalf("expected llm arbitration override, got %+v", out)
+	}
+}
+
+func TestInferLiveWebDecisionAdaptiveFallbackWithoutLlama(t *testing.T) {
+	req := &CodeStreamRequest{ContextType: "code", Message: "Ngày mai có mưa không?"}
+	intent := LocalIntentClassification{Type: "QUESTION", Action: "ask", NextStep: "answer_direct", Confidence: 80}
+	adaptive := InferLiveWebDecisionAdaptive(nil, nil, req, "analyze", intent)
+	base := InferLiveWebDecision(req, "analyze", intent)
+	if adaptive.ShouldRun != base.ShouldRun || adaptive.QueryType != base.QueryType {
+		t.Fatalf("expected adaptive fallback equals base, adaptive=%+v base=%+v", adaptive, base)
+	}
+}
+
 func TestResolvePipelineResponseModeAdaptiveOverrideWithStrongConsensus(t *testing.T) {
 	req := &CodeStreamRequest{
 		ContextType:  "code",
