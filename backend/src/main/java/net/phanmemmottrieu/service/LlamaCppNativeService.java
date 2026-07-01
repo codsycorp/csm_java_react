@@ -84,11 +84,11 @@ public class LlamaCppNativeService implements AIProvider {
     @Value("${ai.local.llama.enabled:false}")
     private boolean enabled;
 
-    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-7b-instruct-q4_k_m.gguf}")
+    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf}")
     private String modelPath;
 
-    /** SEO lane — cùng worker 7B Q4_K_M (single GGUF). */
-    @Value("${ai.local.llama.seo-model-path:./csm_datas/ai_local/model/qwen2.5-coder-7b-instruct-q4_k_m.gguf}")
+    /** SEO lane — cùng worker 1.5B Q8_0 (single GGUF). */
+    @Value("${ai.local.llama.seo-model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf}")
     private String seoModelPath;
 
     /** Legacy: swap khi CODE/SEO khác file GGUF (mặc định false — 1 worker duy nhất). */
@@ -297,7 +297,7 @@ public class LlamaCppNativeService implements AIProvider {
         if (Files.isRegularFile(seoPath)) {
             log.info("Local llama SEO model path verified: {}", seoPath);
         } else {
-            log.warn("Local llama SEO model not found at {} — SEO lane sẽ fail cho đến khi có qwen2.5-coder-7b-instruct-q4_k_m.gguf (hoặc path trong ai.local.llama.seo-model-path)",
+            log.warn("Local llama SEO model not found at {} — SEO lane sẽ fail cho đến khi có qwen2.5-coder-1.5b-instruct-q8_0.gguf (hoặc path trong ai.local.llama.seo-model-path)",
                 seoPath);
         }
         log.info("Local llama dual-lane: code={} | seo={} | swapOnLaneChange={}",

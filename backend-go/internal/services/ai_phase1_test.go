@@ -1,8 +1,10 @@
 package services
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"csm_server/backend-go/internal/config"
@@ -41,6 +43,18 @@ func TestClassifyIntentHeuristicQuestionInEditorKeepsEditFallback(t *testing.T) 
 	got := ClassifyIntentHeuristic(req)
 	if got.ResponseMode != "edit" || got.Type != "EDIT_CODE" {
 		t.Fatalf("got %+v want EDIT_CODE edit fallback", got)
+	}
+}
+
+func TestClassifyIntentHeuristicHiringQuestionInEditorFallsBackAnalyze(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType: "code",
+		Message:     "Cho tôi biết những nhu cầu tuyển dụng hiện tại mới nhất tại tphcm trong lĩnh vực công nghệ thông tin",
+		CurrentCode: "function demo() { return 1; }",
+	}
+	got := ClassifyIntentHeuristic(req)
+	if got.ResponseMode != "analyze" || got.NextStep != "answer_direct" {
+		t.Fatalf("got %+v want analyze answer_direct for hiring question", got)
 	}
 }
 
@@ -313,7 +327,7 @@ func TestMergeLiveWebDecisionPrefersHighConfidenceLLM(t *testing.T) {
 func TestInferLiveWebDecisionAdaptiveFallbackWithoutLlama(t *testing.T) {
 	req := &CodeStreamRequest{ContextType: "code", Message: "Ngày mai có mưa không?"}
 	intent := LocalIntentClassification{Type: "QUESTION", Action: "ask", NextStep: "answer_direct", Confidence: 80}
-	adaptive := InferLiveWebDecisionAdaptive(nil, nil, req, "analyze", intent)
+	adaptive := InferLiveWebDecisionAdaptive(context.TODO(), nil, req, "analyze", intent)
 	base := InferLiveWebDecision(req, "analyze", intent)
 	if adaptive.ShouldRun != base.ShouldRun || adaptive.QueryType != base.QueryType {
 		t.Fatalf("expected adaptive fallback equals base, adaptive=%+v base=%+v", adaptive, base)
@@ -417,6 +431,20 @@ func TestComprehendBusinessHeuristicMenu(t *testing.T) {
 	block := BuildComprehendPromptBlock(spec)
 	if !containsStr(block, "BUSINESS_COMPREHENSION") {
 		t.Fatalf("missing comprehend block")
+	}
+}
+
+func TestComprehendBusinessHeuristicGeneralQuestionUsesMessageSummary(t *testing.T) {
+	req := &CodeStreamRequest{
+		ContextType: "code",
+		Message:     "Cho tôi biết những nhu cầu tuyển dụng hiện tại mới nhất tại tphcm trong lĩnh vực công nghệ thông tin",
+	}
+	spec := ComprehendBusinessHeuristic(req)
+	if containsStr(strings.ToLower(spec.DomainSummary), "dynamiccode") {
+		t.Fatalf("unexpected generic runtime summary: %q", spec.DomainSummary)
+	}
+	if !containsStr(strings.ToLower(spec.DomainSummary), "tuyển dụng") || !containsStr(strings.ToLower(spec.DomainSummary), "tphcm") {
+		t.Fatalf("expected hiring-focused summary, got: %q", spec.DomainSummary)
 	}
 }
 

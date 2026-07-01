@@ -47,6 +47,13 @@ func classifyIntentContextFallback(req *CodeStreamRequest) LocalIntentClassifica
 	if mode := normalizeResponseMode(req.ResponseMode); mode != "" {
 		return intentFromExplicitMode(req, mode)
 	}
+	if shouldAnalyzeCurrentInfoQuestion(req.Message) {
+		return LocalIntentClassification{
+			Type: "QUESTION", Action: "ask", Confidence: 52,
+			NextStep: "answer_direct", ContextKind: "none", ResponseMode: "analyze",
+			Reasoning: "Fallback (LLM router offline): câu hỏi thông tin hiện tại cần analyze.",
+		}
+	}
 	ctx := strings.ToLower(strings.TrimSpace(req.ContextType))
 	if ctx == "" || ctx == "none" {
 		if shouldFallbackToAnalyzeQuestion(req.Message) {
@@ -103,6 +110,9 @@ func shouldFallbackToAnalyzeQuestion(message string) bool {
 	if hasExplicitEditDirective(msg) {
 		return false
 	}
+	if shouldAnalyzeCurrentInfoQuestion(msg) {
+		return true
+	}
 	if strings.Contains(msg, "?") || strings.Contains(msg, "？") {
 		return true
 	}
@@ -120,6 +130,18 @@ func shouldFallbackToAnalyzeQuestion(message string) bool {
 		}
 	}
 	return false
+}
+
+func shouldAnalyzeCurrentInfoQuestion(message string) bool {
+	msg := strings.ToLower(strings.TrimSpace(message))
+	if msg == "" {
+		return false
+	}
+	return containsAny(msg,
+		"tuyển dụng", "việc làm", "hiring", "recruiting", "nhu cầu tuyển dụng",
+		"tin tức", "news", "mới nhất", "latest", "current", "hiện tại", "hôm nay",
+		"thời tiết", "weather", "tphcm", "tp hcm", "tp.hcm", "sài gòn", "saigon",
+	)
 }
 
 func hasExplicitEditDirective(message string) bool {

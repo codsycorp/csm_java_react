@@ -62,7 +62,7 @@ func ComprehendBusinessHeuristic(req *CodeStreamRequest) BusinessSpec {
 		if strings.TrimSpace(req.CurrentCode) != "" {
 			spec.ExistingBusinessSummary = "Editor code có " + itoa(countCodeLines(req.CurrentCode)) + " dòng — scope anchor từ active editor."
 		}
-		spec.DomainSummary = "DynamicCode / frontend runtime context."
+		spec.DomainSummary = deriveGeneralDomainSummary(lower, req.ContextType)
 	}
 	if len(spec.Outcomes) == 0 {
 		spec.Outcomes = extractOutcomesFromMessage(lower)
@@ -71,6 +71,25 @@ func ComprehendBusinessHeuristic(req *CodeStreamRequest) BusinessSpec {
 		spec.Rules = extractRulesFromMessage(lower)
 	}
 	return spec
+}
+
+func deriveGeneralDomainSummary(lower, contextType string) string {
+	switch {
+	case containsAny(lower, "tuyển dụng", "job", "việc làm", "recruit", "hiring"):
+		if containsAny(lower, "tp.hcm", "tphcm", "tp hcm", "sài gòn", "saigon") {
+			return "Tra cứu nhu cầu tuyển dụng CNTT tại TPHCM."
+		}
+		return "Tra cứu nhu cầu tuyển dụng CNTT."
+	case containsAny(lower, "thời tiết", "weather"):
+		return "Tra cứu thông tin thời tiết hiện tại."
+	case containsAny(lower, "tin tức", "news", "mới nhất", "latest", "current", "current updates"):
+		return "Tra cứu thông tin mới nhất theo yêu cầu người dùng."
+	default:
+		if strings.TrimSpace(contextType) != "" {
+			return "Câu hỏi tổng quát trong ngữ cảnh " + strings.TrimSpace(contextType) + "."
+		}
+		return "Câu hỏi tổng quát cần trả lời bằng thông tin hiện có."
+	}
 }
 
 func summarizeExistingModules(modules []string) string {

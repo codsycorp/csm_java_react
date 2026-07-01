@@ -31,7 +31,7 @@ cd backend-rust
 ## Cấu hình AI (native in-process — không cần llama-cli / llama-server)
 
 ```env
-AI_LOCAL_LLAMA_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-7b-instruct-q4_k_m.gguf
+AI_LOCAL_LLAMA_MODEL_PATH=./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf
 AI_LOCAL_LLAMA_CONTEXT_WINDOW=8192
 AI_LOCAL_LLAMA_MAX_TOKENS=2048
 AI_LOCAL_LLAMA_THREADS=4

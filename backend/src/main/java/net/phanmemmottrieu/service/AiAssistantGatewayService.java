@@ -2372,7 +2372,7 @@ Rules:
     if (localOnlyEnabled && (llamaCppNativeService == null
         || !llamaCppNativeService.isSeoModelAvailable())) {
       return createErrorJson(
-          "Local SEO model (qwen2.5-coder-7b-instruct-q4_k_m.gguf) chưa sẵn sàng — kiểm tra ai.local.llama.seo-model-path",
+          "Local SEO model (qwen2.5-coder-1.5b-instruct-q8_0.gguf) chưa sẵn sàng — kiểm tra ai.local.llama.seo-model-path",
           "LOCAL_SEO_MODEL_UNAVAILABLE");
     }
 
@@ -3024,7 +3024,7 @@ Rules:
     }
     if (modelLane == LlamaCppNativeService.LocalModelLane.SEO && !llamaCppNativeService.isSeoModelAvailable()) {
       return createErrorJson(
-          "Local SEO model chưa sẵn sàng — đặt qwen2.5-coder-7b-instruct-q4_k_m.gguf vào ai.local.llama.seo-model-path",
+          "Local SEO model chưa sẵn sàng — đặt qwen2.5-coder-1.5b-instruct-q8_0.gguf vào ai.local.llama.seo-model-path",
           "LOCAL_SEO_MODEL_UNAVAILABLE");
     }
     if (modelLane == LlamaCppNativeService.LocalModelLane.CODE && !llamaCppNativeService.isAvailable()) {

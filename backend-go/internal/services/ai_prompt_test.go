@@ -30,11 +30,11 @@ func TestBuildMenuAnalyzePromptIncludesLargeEditor(t *testing.T) {
 		AI: config.AIConfig{LlamaContextWindow: 8192, LlamaMaxTokens: 1024, LlamaMaxPromptChars: 32000, LlamaBatchSize: 8192},
 	}
 	req := &CodeStreamRequest{
-		ContextType: "menu_json",
-		Message:     "Xem kỹ kiểu co tại sao không có giá trị khi chọn tiếng Việt",
-		CurrentCode: bigMenu,
+		ContextType:  "menu_json",
+		Message:      "Xem kỹ kiểu co tại sao không có giá trị khi chọn tiếng Việt",
+		CurrentCode:  bigMenu,
 		ResponseMode: "analyze",
-		UILang:      "vi",
+		UILang:       "vi",
 	}
 	prompt := BuildCodeStreamLocalPrompt(cfg, req)
 	if !strings.Contains(prompt, "[ACTIVE_EDITOR_MENU_JSON]") {
@@ -42,6 +42,19 @@ func TestBuildMenuAnalyzePromptIncludesLargeEditor(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "f_types=\"co\"") {
 		t.Fatal("expected menu analyze contract mentioning f_types=co")
+	}
+	if !strings.Contains(prompt, "qwen2.5-coder-1.5b") {
+		t.Fatal("expected qwen2.5-coder-1.5b persona in local prompt")
+	}
+}
+
+func TestBuildLiveWebArbitrationPromptIncludesQwenPersona(t *testing.T) {
+	req := &CodeStreamRequest{Message: "Có tin mới gì về Go?"}
+	intent := LocalIntentClassification{Type: "QUESTION", Action: "search", NextStep: "answer_direct"}
+	base := LiveWebDecision{ShouldRun: true, QueryType: "general_facts", Confidence: 70, Reason: "needs_lookup"}
+	prompt := buildLiveWebArbitrationPrompt(req, intent, base)
+	if !strings.Contains(prompt, "qwen2.5-coder-1.5b") || !strings.Contains(prompt, "8GB RAM / 4 CPU") {
+		t.Fatalf("expected shared qwen persona in live web prompt, got: %q", prompt)
 	}
 }
 

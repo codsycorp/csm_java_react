@@ -172,6 +172,42 @@
       var body = document.body;
       if (runtimeTheme && typeof runtimeTheme.isDark === "boolean") return runtimeTheme.isDark;
 
+      function parseColorToRgb(color) {
+        var c = String(color || "").trim();
+        if (!c) return null;
+        var m;
+        if ((m = c.match(/^#([0-9a-f]{3})$/i))) {
+          var h = m[1];
+          return {
+            r: parseInt(h.charAt(0) + h.charAt(0), 16),
+            g: parseInt(h.charAt(1) + h.charAt(1), 16),
+            b: parseInt(h.charAt(2) + h.charAt(2), 16)
+          };
+        }
+        if ((m = c.match(/^#([0-9a-f]{6})$/i))) {
+          var hh = m[1];
+          return {
+            r: parseInt(hh.slice(0, 2), 16),
+            g: parseInt(hh.slice(2, 4), 16),
+            b: parseInt(hh.slice(4, 6), 16)
+          };
+        }
+        if ((m = c.match(/^rgba?\(([^)]+)\)$/i))) {
+          var parts = m[1].split(",").map(function (s) { return Number(String(s || "").trim()); });
+          if (parts.length >= 3 && isFinite(parts[0]) && isFinite(parts[1]) && isFinite(parts[2])) {
+            return { r: parts[0], g: parts[1], b: parts[2], a: (parts.length >= 4 && isFinite(parts[3])) ? parts[3] : 1 };
+          }
+        }
+        return null;
+      }
+
+      function luminance01(color) {
+        var rgb = parseColorToRgb(color);
+        if (!rgb) return null;
+        if (rgb.a != null && rgb.a <= 0) return null;
+        return (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+      }
+
       var hints = [
         String(runtimeTheme && runtimeTheme.theme || "").toLowerCase(),
         String(runtimeTheme && runtimeTheme.mode || "").toLowerCase(),
@@ -196,6 +232,27 @@
       // Ưu tiên cờ light/dark hiện tại trên DOM/runtime, tránh kẹt theo giá trị lưu cũ.
       if (hasLightHint && !hasDarkHint) return false;
       if (hasDarkHint && !hasLightHint) return true;
+
+      // Nếu app không gắn class/hint rõ ràng, đọc token màu nền thật để quyết định.
+      try {
+        var themeRoot = document.querySelector(".ant-app") || document.querySelector("[class*='ant-app']") || body || html;
+        var htmlStyles = window.getComputedStyle(html);
+        var rootStyles = window.getComputedStyle(themeRoot);
+        var bgCandidates = [
+          String(htmlStyles.getPropertyValue("--ant-color-bg-layout") || "").trim(),
+          String(htmlStyles.getPropertyValue("--ant-color-bg-container") || "").trim(),
+          String(rootStyles.getPropertyValue("--ant-color-bg-layout") || "").trim(),
+          String(rootStyles.getPropertyValue("--ant-color-bg-container") || "").trim(),
+          String(rootStyles.backgroundColor || "").trim(),
+          String(window.getComputedStyle(body).backgroundColor || "").trim()
+        ].filter(Boolean);
+
+        for (var bi = 0; bi < bgCandidates.length; bi += 1) {
+          var lum = luminance01(bgCandidates[bi]);
+          if (lum == null) continue;
+          return lum < 0.5;
+        }
+      } catch (_bgErr) {}
 
       if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) return true;
     } catch (e) {}
@@ -4652,9 +4709,9 @@
     }, [chon_mau]);
 
     useEffect(function () {
-      var parsed = parseSoChuMasked(so_chu_input);
+      var parsed = parseSoChuByHeThong(so_chu_input, legacyHeThong);
       setSoChu(parsed);
-    }, [so_chu_input]);
+    }, [so_chu_input, legacyHeThong]);
 
     useEffect(function () {
       function themesEqual(a, b) {
@@ -4954,6 +5011,9 @@
     function getRowTwoDigits(row, opt) {
       var out = [];
       var cfg = opt || {};
+      var heThong = Number(cfg.heThong || 2) === 3 ? 3 : 2;
+      var tokenLen = heThong;
+      var tokenRe = new RegExp("^\\d{" + tokenLen + "}$");
 
       if (!cfg.useNorthRules) {
         Object.keys(row || {}).forEach(function (f) {
@@ -4962,20 +5022,19 @@
           if (!isThongKeLoResultFieldName(f)) return;
           var val = String((row && row[f]) || "").trim();
           if (!val) return;
-          var so = val.slice(-2);
-          if (/^\d{2}$/.test(so)) out.push(so);
+          var so = val.slice(-tokenLen);
+          if (tokenRe.test(so)) out.push(so);
         });
         return out;
       }
 
-      var heThong = Number(cfg.heThong || 2) === 3 ? 3 : 2;
       var isBac = isMienBacRow(row, cfg);
 
       function pushVal(v) {
         var val = String(v || "").trim();
         if (!val) return;
-        var so = val.slice(-2);
-        if (/^\d{2}$/.test(so)) out.push(so);
+        var so = val.slice(-tokenLen);
+        if (tokenRe.test(so)) out.push(so);
       }
 
       // Tất cả đài đều dùng đầu/đuôi.
@@ -5959,12 +6018,27 @@
 
     function buildLegacyNamBacSummary(opts) {
       var cfg = opts || {};
-      // NamBac.php is fixed to MaDuoi=2 and reads rows in [Tu..Den].
+      var heThong = Number(cfg.heThong || 2) === 3 ? 3 : 2;
+      var queryBL = (heThong === 3 ? "sp_Get3_BL3" : "sp_Get2_BL3") + ",D_-P_-T_-B_";
+      var queryDD = (heThong === 3 ? "sp_Get3_DD3" : "sp_Get2_DD3") + ",D_-P_-T_-B_";
+
+      function dedupFields(list) {
+        var seen = {};
+        var out = [];
+        (Array.isArray(list) ? list : []).forEach(function (name) {
+          var key = String(name || "").trim();
+          if (!key || seen[key]) return;
+          seen[key] = true;
+          out.push(key);
+        });
+        return out;
+      }
+
       var rows = buildLegacyTongHopViewModel({
         dataMien: cfg.dataMien,
         fromDate: cfg.fromDate,
         toDate: cfg.toDate,
-        heThong: 2,
+        heThong: heThong,
         stepDays: 1
       }).filter(function (row) {
         var ymd = normalizeLegacyDateYmd(row && row.ID);
@@ -5973,7 +6047,7 @@
         var toYmd = normalizeLegacyDateYmd(cfg.toDate);
         if (fromYmd && ymd < fromYmd) return false;
         if (toYmd && ymd > toYmd) return false;
-        if (!hasLegacyDrawData(row, 2)) return false;
+        if (!hasLegacyDrawData(row, heThong)) return false;
         return true;
       });
       
@@ -6013,20 +6087,22 @@
         return String(value || "").indexOf(String(prefix || "")) === 0;
       }
 
-      function tail2(value) {
-        return String(value || "").trim().slice(-2);
+      function tailToken(value) {
+        return String(value || "").trim().slice(-heThong);
       }
 
       function buildBoSoLookup(value) {
         var set = {};
-        String(value || "").trim().split(/\s+/).forEach(function (part) {
-          if (!part) return;
-          set[part] = true;
+        parseSoChuByHeThong(String(value || ""), heThong).forEach(function (part) {
+          set[String(part || "").trim()] = true;
         });
         return set;
       }
 
-      var expectedCols = getLegacyQueryFieldList(cfg.queryValue || "sp_Get2_BL3,D_-P_-T_-B_", 2);
+      var expectedCols = dedupFields(
+        getLegacyQueryFieldList(cfg.queryValue || queryBL, heThong)
+          .concat(getLegacyQueryFieldList(queryDD, heThong))
+      );
       var actualMap = {};
       for (var ar = 0; ar < rows.length; ar += 1) {
         var rowMap = rows[ar] || {};
@@ -6039,20 +6115,38 @@
       var colA = expectedCols.filter(function (name) { return !!actualMap[String(name || "")]; });
       if (!colA.length) colA = expectedCols.slice();
 
-      var DD3D_FIELDS = { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true, B_duoi: true };
-      var DDMB_FIELDS = { B_dau: true, B_so2: true, B_so3: true, B_so4: true, B_duoi: true };
-      var DAUB_FIELDS = { B_dau: true, B_so2: true, B_so3: true, B_so4: true };
-      var DD2D_FIELDS = { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true };
-      var DD3MN_FIELDS = { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true };
-      var DDNDB_FIELDS = { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true };
-      var DDNDB2_FIELDS = { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true };
-      var DDNDB3_FIELDS = { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true };
-      var DDC_FIELDS = { D_dau: true, D_duoi: true };
-      var DAUCP_FIELDS = { D_dau: true, P_dau: true };
-      var DDP_FIELDS = { P_dau: true, P_duoi: true };
-      var DAI3_FIELDS = { T_dau: true, T_duoi: true };
+      var DD3D_FIELDS = heThong === 3
+        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_duoi: true }
+        : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true, B_duoi: true };
+      var DDMB_FIELDS = heThong === 3
+        ? { B_dau: true, B_so2: true, B_so3: true, B_duoi: true }
+        : { B_dau: true, B_so2: true, B_so3: true, B_so4: true, B_duoi: true };
+      var DAUB_FIELDS = heThong === 3
+        ? { B_dau: true, B_so2: true, B_so3: true }
+        : { B_dau: true, B_so2: true, B_so3: true, B_so4: true };
+      var DD2D_FIELDS = heThong === 3
+        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true }
+        : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true };
+      var DD3MN_FIELDS = heThong === 3
+        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true }
+        : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true };
+      var DDNDB_FIELDS = heThong === 3
+        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true }
+        : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true };
+      var DDNDB2_FIELDS = heThong === 3
+        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true }
+        : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true };
+      var DDNDB3_FIELDS = heThong === 3
+        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true }
+        : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true };
+      var DDC_FIELDS = heThong === 3 ? { D_so2: true, D_duoi: true } : { D_dau: true, D_duoi: true };
+      var DAUCP_FIELDS = heThong === 3 ? { D_so2: true, P_so2: true } : { D_dau: true, P_dau: true };
+      var DDP_FIELDS = heThong === 3 ? { P_so2: true, P_duoi: true } : { P_dau: true, P_duoi: true };
+      var DAI3_FIELDS = heThong === 3 ? { T_so2: true, T_duoi: true } : { T_dau: true, T_duoi: true };
       var DUOICP_FIELDS = { D_duoi: true, P_duoi: true };
-      var DD3NB_FIELDS = { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true, B_duoi: true };
+      var DD3NB_FIELDS = heThong === 3
+        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_duoi: true }
+        : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true, B_duoi: true };
 
       var fieldProfiles = {};
       for (var ci = 0; ci < colA.length; ci += 1) {
@@ -6079,11 +6173,11 @@
           ddp: !!DDP_FIELDS[fieldName],
           ddd3: !!DAI3_FIELDS[fieldName],
           duoicp: !!DUOICP_FIELDS[fieldName],
-          dauc: fieldName === "D_dau",
-          daup: fieldName === "P_dau",
+          dauc: fieldName === (heThong === 3 ? "D_so2" : "D_dau"),
+          daup: fieldName === (heThong === 3 ? "P_so2" : "P_dau"),
           duoic: fieldName === "D_duoi",
           duoip: fieldName === "P_duoi",
-          daut3: fieldName === "T_dau",
+          daut3: fieldName === (heThong === 3 ? "T_so2" : "T_dau"),
           duoit3: fieldName === "T_duoi",
           duoib: fieldName === "B_duoi",
           dd3nb: !!DD3NB_FIELDS[fieldName],
@@ -6139,7 +6233,7 @@
 
           for (var c = 0; c < colA.length; c += 1) {
             var fieldName = colA[c];
-            var value = tail2(day[fieldName]);
+            var value = tailToken(day[fieldName]);
             if (!value || !st.lookup[value]) continue;
 
             var fp = fieldProfiles[fieldName] || {};
@@ -7156,6 +7250,8 @@
     async function buildThongKeData(isThongKeMoi, allowedDateSet, sourceSttList, dataMienOverride) {
       var sourceList = Array.isArray(sourceSttList) && sourceSttList.length ? sourceSttList : ds_dai_chon;
       if (!sourceList.length) return { rows: [], mang_dai: [] };
+      var heThong = Number(legacyHeThong || 2) === 3 ? 3 : 2;
+      var tokenCount = heThong === 3 ? 1000 : 100;
 
       var tu = tu_ngay;
       var den = den_ngay;
@@ -7206,8 +7302,8 @@
 
       function createEmptySoMap(prefix) {
         var out = {};
-        for (var s = 0; s < 100; s += 1) {
-          var soStr = String(s).padStart(2, "0");
+        for (var s = 0; s < tokenCount; s += 1) {
+          var soStr = String(s).padStart(heThong, "0");
           var kyInit = [];
           for (var q = 0; q < maxSoKy; q += 1) kyInit.push(0);
           out[soStr] = {
@@ -7232,7 +7328,7 @@
         var rows = mang_dl_dai[stt] || [];
         rows.forEach(function (r, idx) {
           if (idx >= maxSoKy) return;
-          var soArr = getRowTwoDigits(r);
+          var soArr = getRowTwoDigits(r, { heThong: heThong });
           soArr.forEach(function (so) {
             if (!soMap[so]) return;
             soMap[so].ky[idx] = Number(soMap[so].ky[idx] || 0) + 1;
@@ -8162,13 +8258,12 @@
       setProgress(15);
       setLegacyNbRows([]);
       try {
-        // NamBac.php is fixed to MaDuoi=2; keep JS runner identical for strict parity.
-        var he = 2;
+        var he = Number(legacyHeThong || 2) === 3 ? 3 : 2;
         setProgress(30);
         
-        // Fetch sp_Get2_BL3 data: D_, P_, T_, B_ columns
+        // Fetch sp_Get*_BL3 data: D_, P_, T_, B_ columns
         // Mirrors PHP query: SELECT sp_Get2_BL3_Fields WHERE ID <= Den AND ID >= Tu ORDER BY ID DESC
-        var nbQueryValue = "sp_Get2_BL3,D_-P_-T_-B_";
+        var nbQueryValue = (he === 3 ? "sp_Get3_BL3" : "sp_Get2_BL3") + ",D_-P_-T_-B_";
         var dataMien = await loadLegacySpecialDataByQuery(nbQueryValue);
         
         if (!dataMien || !dataMien.length) {
@@ -8177,7 +8272,7 @@
         }
         setProgress(40);
         
-        // Fetch timkiem groups — mirrors PHP: SELECT NoiDung FROM timkiem WHERE (LENGTH(concat(noidung,' '))/3)=NH AND MaDuoi=2
+        // Fetch timkiem groups theo hệ số hiện tại.
         var timkiemRows = [];
         try {
           timkiemRows = await fetchRowsFromGetTableData("kqxs_timkiem", he);
@@ -8190,14 +8285,15 @@
           for (var _nbi = 0; _nbi < timkiemRows.length; _nbi++) {
             var _nbRow = timkiemRows[_nbi] || {};
             var _nbMaDuoi = Number(_nbRow.ma_duoi || _nbRow.MaDuoi || 0);
-            if (_nbMaDuoi && _nbMaDuoi !== 2) continue;
+            if (_nbMaDuoi && _nbMaDuoi !== he) continue;
             var _nbNd = String(_nbRow.noi_dung || _nbRow.NoiDung || "").trim();
             if (!_nbNd) continue;
-            var _nbNh = ((_nbNd + " ").length) / 3;
-            if (_nbNh !== selectedSize) continue;
-            boSoSource.push(_nbNd);
+            var _nbTokens = parseSoChuByHeThong(_nbNd, he);
+            if (_nbTokens.length !== selectedSize) continue;
+            boSoSource.push(_nbTokens.join(" "));
           }
         }
+        boSoSource = boSoSource.filter(function (v, idx, arr) { return arr.indexOf(v) === idx; });
         if (!boSoSource.length) {
           canhbao("Không có bộ số cho nhóm " + selectedSize + " số theo dữ liệu timkiem.");
           return;
@@ -9232,7 +9328,7 @@
           height: 20,
           minWidth: tokenLen === 3 ? 34 : 28,
           padding: "0 2px",
-          border: "1px solid #bfbfbf",
+          border: "1px solid " + theme.border,
           borderRadius: 0,
           background: theme.inputBg,
           color: theme.error,
@@ -9247,7 +9343,9 @@
       }, last2) : (last2 || ""));
     }
     var kttCardBorder = "1px solid " + theme.border;
-    var kttDateHeaderBg = theme.isDark ? "rgba(255,255,255,0.08)" : "#f0f0f0";
+    var kttDateHeaderBg = theme.isDark
+      ? "color-mix(in srgb, " + theme.cardBg + " 84%, #ffffff 16%)"
+      : "color-mix(in srgb, " + theme.cardBg + " 82%, " + theme.pageBg + " 18%)";
     function buildLegacyKttWeekRows(rows) {
       var src = Array.isArray(rows) ? rows.slice() : [];
       if (!src.length) return [];
@@ -9397,7 +9495,7 @@
               height: 20,
               minWidth: tokenLen === 3 ? 34 : 28,
               padding: "0 2px",
-              border: "1px solid #bfbfbf",
+              border: "1px solid " + theme.border,
               borderRadius: 0,
               background: theme.inputBg,
               color: theme.error,
@@ -10648,8 +10746,8 @@
                 fontWeight: 700,
                 padding: "1px 6px",
                 borderRadius: 3,
-                background: isBac ? "#1677ff" : "#52c41a",
-                color: "#fff",
+                background: isBac ? theme.primary : theme.success,
+                color: theme.textInverse,
                 whiteSpace: "nowrap"
               }
             }, targetLabel),
@@ -12408,6 +12506,14 @@
       + ".kqxs-react-auto .kqxs-loc-sau-zone .kqxs-slr-label { color: var(--kqxs-text, #1f1f1f); }"
       + ".kqxs-react-auto .kqxs-slr-auto-th-filter { border: 1px solid var(--kqxs-border, #d9d9d9); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; background: color-mix(in srgb, var(--kqxs-card-bg, #fff) 90%, var(--kqxs-page-bg, #f5f7fb) 10%); box-shadow: none; }"
       + ".kqxs-react-auto .kqxs-slr-auto-th-filter .kqxs-slr-label { color: var(--kqxs-muted, #666); font-size: 11px; font-weight: 600; }"
+      + ".kqxs-react-auto .kqxs-other-controls { color: var(--kqxs-text, #1f1f1f) !important; }"
+      + ".kqxs-react-auto .kqxs-other-controls .ant-input, .kqxs-react-auto .kqxs-other-controls .ant-input-number-input, .kqxs-react-auto .kqxs-other-controls .ant-select-selection-item, .kqxs-react-auto .kqxs-other-controls .ant-select-selection-search-input, .kqxs-react-auto .kqxs-other-controls .ant-picker-input > input { color: var(--kqxs-input-text, var(--kqxs-text, #1f1f1f)) !important; }"
+      + ".kqxs-react-auto .kqxs-other-controls .ant-select-selection-placeholder, .kqxs-react-auto .kqxs-other-controls .ant-input::placeholder, .kqxs-react-auto .kqxs-other-controls .ant-picker-input > input::placeholder { color: color-mix(in srgb, var(--kqxs-text, #1f1f1f) 72%, transparent) !important; opacity: 1 !important; }"
+      + ".kqxs-react-auto .kqxs-other-controls label, .kqxs-react-auto .kqxs-other-controls .ant-checkbox-wrapper, .kqxs-react-auto .kqxs-other-controls .ant-checkbox + span, .kqxs-react-auto .kqxs-other-controls .ant-select-arrow, .kqxs-react-auto .kqxs-other-controls .ant-select-clear { color: var(--kqxs-text, #1f1f1f) !important; }"
+      + ".kqxs-react-auto .kqxs-other-controls-nb [style*='fontWeight: 600'], .kqxs-react-auto .kqxs-other-controls-bong [style*='fontWeight: 600'] { color: var(--kqxs-text, #1f1f1f) !important; }"
+      + ".kqxs-react-auto .kqxs-other-controls-nb .ant-select-selection-placeholder, .kqxs-react-auto .kqxs-other-controls-bong .ant-select-selection-placeholder { color: color-mix(in srgb, var(--kqxs-text, #1f1f1f) 82%, transparent) !important; }"
+      + ".kqxs-react-auto .kqxs-other-controls-nb .ant-picker-suffix, .kqxs-react-auto .kqxs-other-controls-bong .ant-picker-suffix, .kqxs-react-auto .kqxs-other-controls-nb .ant-picker-clear, .kqxs-react-auto .kqxs-other-controls-bong .ant-picker-clear { color: var(--kqxs-text, #1f1f1f) !important; opacity: .85 !important; }"
+      + ".kqxs-react-auto .kqxs-other-controls-ktt [style*='background: color-mix'], .kqxs-react-auto .kqxs-other-controls-nb [style*='background: color-mix'] { background: color-mix(in srgb, var(--kqxs-card-bg, #fff) 90%, var(--kqxs-page-bg, #f5f7fb) 10%) !important; }"
       + ".kqxs-react-auto .kqxs-slr-col .ant-input, .kqxs-react-auto .kqxs-slr-col .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-input-number, .kqxs-react-auto .kqxs-slr-col .ant-picker, .kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number { border-radius: 6px !important; box-shadow: none !important; }"
       + ".kqxs-react-auto .kqxs-slr-col .ant-input-number, .kqxs-react-auto .kqxs-slr-col .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-picker, .kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number { border-color: var(--kqxs-border, #d9d9d9) !important; }"
       + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined, .kqxs-react-auto .kqxs-slr-auto-th-filter .ant-input-number.ant-input-number-outlined { width: 100% !important; display: block !important; overflow: hidden !important; padding-inline: 0 !important; border: 1px solid var(--kqxs-border, #d9d9d9) !important; border-radius: 6px !important; background: var(--kqxs-input-bg, #fff) !important; min-height: 32px !important; height: 32px !important; box-sizing: border-box !important; }"
@@ -12482,7 +12588,7 @@
                   {
                     key: "slrnb",
                     label: tt.lgSubTabSlr || tt.lgToolSlr,
-                    children: h("div", { style: { paddingTop: 4 } }, [
+                    children: h("div", { className: "kqxs-other-controls kqxs-other-controls-ktt", style: { paddingTop: 4 } }, [
                       h(Row, { gutter: [12, 10], align: "stretch" }, [
                         h(Col, { xs: 24, lg: 15, key: "slrnb_manual_panel" }, [
                           h(Card, {
@@ -12678,8 +12784,8 @@
                                                     fontWeight: 700,
                                                     padding: "1px 5px",
                                                     borderRadius: 3,
-                                                    background: String((r && r.zeroWeekTarget) || "nam") === "bac" ? "#1677ff" : "#52c41a",
-                                                    color: "#fff",
+                                                    background: String((r && r.zeroWeekTarget) || "nam") === "bac" ? theme.primary : theme.success,
+                                                    color: theme.textInverse,
                                                     whiteSpace: "nowrap"
                                                   }
                                                 }, "LT: " + (String((r && r.zeroWeekTarget) || "nam") === "bac" ? "Bắc" : "Nam"))
@@ -12717,7 +12823,7 @@
                   {
                     key: "ktt",
                     label: tt.lgSubTabKtt || tt.lgToolKtt,
-                    children: h("div", { style: { paddingTop: 4 } }, [
+                    children: h("div", { className: "kqxs-other-controls kqxs-other-controls-nb", style: { paddingTop: 4 } }, [
                       h(Row, { gutter: [12, 10], align: "middle" }, [
                         h(Col, { xs: 24, md: 6, key: "ktt_so" }, [
                           h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.soChu || "Số Dự Đoán"),
@@ -12822,7 +12928,7 @@
                   {
                     key: "nb",
                     label: tt.lgSubTabNb || tt.lgToolNb,
-                    children: h("div", { style: { paddingTop: 4 } }, [
+                    children: h("div", { className: "kqxs-other-controls kqxs-other-controls-nb", style: { paddingTop: 4 } }, [
                       h(Row, { gutter: [12, 10] }, [
                         h(Col, { xs: 24, md: 6, key: "nb_from" }, [
                           h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.fromDate),
@@ -12862,7 +12968,7 @@
                   {
                     key: "bong",
                     label: "⑤ Bóng",
-                    children: h("div", { style: { paddingTop: 4 } }, [
+                    children: h("div", { className: "kqxs-other-controls kqxs-other-controls-bong", style: { paddingTop: 4 } }, [
                       h(Row, { gutter: [12, 10], align: "end" }, [
                         h(Col, { xs: 24, md: 6, key: "bong_from" }, [
                           h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.fromDate),
@@ -12991,9 +13097,9 @@
                         },
                         onChange: function (e) {
                           var raw = e && e.target ? e.target.value : "";
-                          setSoChuInput(formatSoChuInput(raw));
+                          setSoChuInput(formatSoChuInputByHe(raw, legacyHeThong));
                         },
-                        placeholder: "- - - - - - - - -"
+                        placeholder: legacyHeThong === 3 ? "123-456-789" : "12-34-56-78"
                       })
                     ]),
                     h(Row, { gutter: [8, 8] }, [
@@ -13581,11 +13687,13 @@
                     h(Input, {
                       size: "small",
                       value: legacyThSoInput,
-                      placeholder: tt.lgThManualPlaceholder,
+                      placeholder: legacyHeThong === 3
+                        ? "931-375-538 hoặc 931 375 538"
+                        : tt.lgThManualPlaceholder,
                       style: { flex: "1 1 260px", maxWidth: 380 },
                       onChange: function (e) {
                         var raw = e && e.target ? e.target.value : "";
-                        setLegacyThSoInput(formatSoChuInput(raw));
+                        setLegacyThSoInput(formatSoChuInputByHe(raw, legacyHeThong));
                       }
                     }),
                     h(Button, {

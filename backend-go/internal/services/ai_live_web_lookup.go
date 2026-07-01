@@ -107,7 +107,8 @@ func shouldSkipLiveWebArbitration(base LiveWebDecision) bool {
 
 func buildLiveWebArbitrationPrompt(req *CodeStreamRequest, intent LocalIntentClassification, base LiveWebDecision) string {
 	msg := truncateStr(strings.TrimSpace(req.Message), 600)
-	return "You are a strict intent arbiter for a local AI assistant.\n" +
+	return qwen15ExpertPersona +
+		"You are a strict intent arbiter for a local AI assistant.\n" +
 		"Task: decide whether user request needs internet lookup.\n" +
 		"Return JSON only: {\"needInternet\":true|false,\"queryType\":\"weather|general_facts|none\",\"confidence\":0..100,\"reason\":\"short_reason\",\"searchQuery\":\"normalized query\"}.\n" +
 		"Rules:\n" +

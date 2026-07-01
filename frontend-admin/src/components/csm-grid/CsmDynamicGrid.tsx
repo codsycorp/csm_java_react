@@ -151,17 +151,35 @@ function hasSamePrimaryKeyValues(left: Row | null | undefined, right: Row | null
 
 function buildRowKey(row: Row | null | undefined, pkFields: string[]): string {
 	if (!row) return "";
-	const fields = pkFields.length > 0 ? pkFields : ["id"];
-	const compositeKey = fields
-		.map((field) => `${field}:${row[field] == null ? "" : String(row[field])}`)
-		.join("|");
-	if (compositeKey.replace(/[|:]/g, "").trim()) {
-		return compositeKey;
-	}
-	if (row.id != null && row.id !== "") {
+	if (row.id != null && String(row.id).trim() !== "") {
 		return `id:${String(row.id)}`;
 	}
+	const fields = pkFields.length > 0 ? pkFields : ["id"];
+	if (hasCompletePrimaryKeyValues(row, fields)) {
+		const compositeKey = fields
+			.map((field) => `${field}:${row[field] == null ? "" : String(row[field])}`)
+			.join("|");
+		return compositeKey;
+	}
 	return JSON.stringify(row);
+}
+
+function generateUniqueClientID(rows: Row[], prefix?: string): string {
+	const existing = new Set(
+		(rows || [])
+			.map((row) => String(row?.id ?? "").trim())
+			.filter(Boolean),
+	);
+	for (let i = 0; i < 8; i++) {
+		const raw = (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
+			? crypto.randomUUID()
+			: `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+		const candidate = prefix ? `${prefix}_${raw}` : raw;
+		if (!existing.has(candidate)) {
+			return candidate;
+		}
+	}
+	return `${prefix || "clone"}_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
 }
 
 function resolveNumberLocale(langInput?: string): string {
@@ -1073,6 +1091,7 @@ export function CsmDynamicGrid({
 	const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([]);
 	const [editableKeys, setEditableKeys] = useState<React.Key[]>([]);
 	const [pendingEditableRowId, setPendingEditableRowId] = useState<string | null>(null);
+	const inlineNewRowIdsRef = useRef<Set<string>>(new Set());
 	
 	// 🔄 Track database version để force re-compute selectEnums khi missing tables được fetch
 	const [databaseVersion, setDatabaseVersion] = useState(0);
@@ -1207,6 +1226,7 @@ export function CsmDynamicGrid({
 		setSelectedKeys([]);
 		setEditableKeys([]);
 		setPendingEditableRowId(null);
+		inlineNewRowIdsRef.current.clear();
 		setSelectedRow(null);
 		setSelectedDetailRow(null);
 		closeEditor();
@@ -3805,6 +3825,7 @@ export function CsmDynamicGrid({
 			const randomSuffix = Math.random().toString(36).substring(2, 9);
 			const newRowId = `${runtimeAppId}_${Date.now()}_${randomSuffix}`;
 			const newRow: Row = { id: newRowId };
+			inlineNewRowIdsRef.current.add(String(newRowId));
 			const fields = (m_configs.table || []).filter(f => isGridVisibleTableField(f));
 			
 			// Initialize fields with default values based on field type
@@ -3891,10 +3912,13 @@ export function CsmDynamicGrid({
 			message.warning("Đang xử lý thao tác trước đó, vui lòng chờ...");
 			return;
 		}
+		const clonedID = generateUniqueClientID(data, runtimeAppId || "clone");
 		if (!enableInlineCellEdit && editorOpen) {
 			const currentPkFields = getPrimaryKeyFields(m_configs);
 			const clonedInline: Row = { ...record };
+			clonedInline.id = clonedID;
 			currentPkFields.forEach((pk) => {
+				if (pk === "id") return;
 				clonedInline[pk] = "";
 			});
 			setEditingRecord(null);
@@ -3902,11 +3926,26 @@ export function CsmDynamicGrid({
 			return;
 		}
 		const currentPkFields = getPrimaryKeyFields(m_configs);
-		// Clear all PK fields so cloned row must use a new key.
 		const cloned: Row = { ...record };
+		cloned.id = clonedID;
 		currentPkFields.forEach((pk) => {
+			if (pk === "id") return;
 			cloned[pk] = "";
 		});
+
+		const hasMasterDetail = m_configs.nodes && m_configs.nodes.length > 0;
+		if (enableInlineCellEdit && !hasMasterDetail) {
+			inlineNewRowIdsRef.current.add(String(clonedID));
+			setEditingRecord(null);
+			setCloneData(null);
+			setData((prev) => [cloned, ...prev]);
+			const newRowKey = getRowKey(cloned);
+			setSelectedKeys([newRowKey]);
+			setSelectedRow(cloned);
+			setPendingEditableRowId(newRowKey);
+			return;
+		}
+
 		setEditingRecord(null); // create mode
 		setCloneData(cloned);
 		setEditorOpen(true);
@@ -3921,6 +3960,9 @@ export function CsmDynamicGrid({
 			// Detail grid hoặc không có table_name: chỉ xóa từ state local, KHÔNG gọi API
 			// Giống Vue: detail grid chỉ update khi master save
 			if (isDetailGrid || !hasTableName) {
+				if (record?.id != null) {
+					inlineNewRowIdsRef.current.delete(String(record.id));
+				}
 				setData((prev) => {
 					const deletedRowKey = getRowKey(record);
 					const next = prev.filter(row => getRowKey(row) !== deletedRowKey);
@@ -3971,6 +4013,9 @@ export function CsmDynamicGrid({
 			});
 			
 			// Update local state và run afterDelete trigger
+			if (record?.id != null) {
+				inlineNewRowIdsRef.current.delete(String(record.id));
+			}
 			setData((prev) => {
 				const deletedRowKey = getRowKey(record);
 				const next = prev.filter(row => getRowKey(row) !== deletedRowKey);
@@ -4063,6 +4108,7 @@ export function CsmDynamicGrid({
 				onSave: async (rowKey: React.Key, newData: Row) => {
 					// Find old row data
 					let oldRow: Row | undefined = data.find((row: Row) => getRowKey(row) === String(rowKey));
+					const isInlineCreate = Boolean(oldRow?.id != null && inlineNewRowIdsRef.current.has(String(oldRow.id)));
 					
 					const safeNewData = oldRow?.id && newData.id == null ? { ...newData, id: oldRow.id } : newData;
 					const normalizedInput = normalizeInlineRowValues(safeNewData, m_configs.table || []);
@@ -4089,8 +4135,11 @@ export function CsmDynamicGrid({
 								}
 								return row;
 							});
-							// Run afterEdit trigger
-							runAfterTrigger('afterEdit', next);
+							if (oldRow?.id != null) {
+								inlineNewRowIdsRef.current.delete(String(oldRow.id));
+							}
+							// Row is saved into the parent detail payload now; later edits should behave like updates.
+							runAfterTrigger(isInlineCreate ? 'afterAdd' : 'afterEdit', next);
 							notifyDetailRowsChange(next);
 							return next;
 						});
@@ -4119,26 +4168,29 @@ export function CsmDynamicGrid({
 						await updateTableData<Row>({
 							app_id: runtimeAppId,
 							obj_name: tableName,
-							command: 'update',
+							command: isInlineCreate ? 'create' : 'update',
 							obj_update: normalizedProcessed,
 							pk_fields: pkFields,
-							where: oldRow && pkFields.every((field) => oldRow?.[field] != null)
+							where: !isInlineCreate && oldRow && pkFields.every((field) => oldRow?.[field] != null)
 								? Object.fromEntries(pkFields.map((field) => [field, oldRow[field]]))
 								: undefined,
 						});
 						
 						// Update local state immediately with merged data
 						setData((prev) => {
+							const currentRowKey = oldRow ? getRowKey(oldRow) : String(rowKey);
 							const next = prev.map(row => {
-								const isUpdatedRow = getRowKey(row) === String(rowKey);
+								const isUpdatedRow = getRowKey(row) === currentRowKey;
 								
 								if (isUpdatedRow) {
 									return { ...row, ...normalizedProcessed };
 								}
 								return row;
 							});
-							// Run afterEdit trigger
-							runAfterTrigger('afterEdit', next);
+							if (oldRow?.id != null) {
+								inlineNewRowIdsRef.current.delete(String(oldRow.id));
+							}
+							runAfterTrigger(isInlineCreate ? 'afterAdd' : 'afterEdit', next);
 							return next;
 						});
 						

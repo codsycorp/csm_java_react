@@ -43,7 +43,7 @@ Legacy RocksDB import (one-time only): `brew install rocksdb && ./run-migrate.sh
 
 3. **Set data paths** (match `config.env` on server):
    ```bash
-   export CSM_HOME=/path/to/backend          # folder containing csm_datas
+   export CSM_HOME=/Volumes/Datas/CSM/JavaProjects/csm_server          # folder containing csm_datas
    export APP_DATA_DIR="$CSM_HOME/csm_datas"
    export ROCKSDB_ROOT_DIR="$APP_DATA_DIR/database"   # Java/Rust source
    export CSM_NATIVE_DATA_DIR="$APP_DATA_DIR/native"  # Go Pebble output
@@ -56,7 +56,7 @@ Legacy RocksDB import (one-time only): `brew install rocksdb && ./run-migrate.sh
 
 5. **Run migrate** (full or one table):
    ```bash
-   cd /path/to/repo/backend-go
+   cd /Volumes/Datas/CSM/JavaProjects/csm_server/backend-go
    chmod +x run-migrate.sh
 
    # Full migrate (skip fidovnemail by default)
@@ -175,6 +175,95 @@ cd backend-go
 export CGO_ENABLED=1
 go build -o csm-go-server ./cmd/server
 ```
+
+## Build + Deploy Linux server (`/root/la_server`)
+
+Muc tieu: build binary Linux va chay dung file `/root/la_server/csm_go_server`.
+
+### 1) Build artifact Linux native
+
+Tu repo root:
+
+```bash
+cd /Volumes/Datas/CSM/JavaProjects/csm_server
+chmod +x scripts/build-go-linux-native.sh deploy-go-linux.sh
+
+# Cach khuyen nghi: build tren server Linux roi copy ve local
+./scripts/build-go-linux-native.sh --remote root@csmbridge.net dist/csm_go_server
+
+# Kiem tra artifact
+ls -lh dist/csm_go_server
+file dist/csm_go_server
+```
+
+Neu ban dang SSH truc tiep tren server Linux, co the build tai cho:
+
+```bash
+cd /Volumes/Datas/CSM/JavaProjects/csm_server
+./scripts/build-go-linux-native.sh --on-host /root/la_server/csm_go_server
+```
+
+### 2) Deploy artifact vao dung duong dan `/root/la_server`
+
+```bash
+cd /Volumes/Datas/CSM/JavaProjects/csm_server
+./deploy-go-linux.sh root@csmbridge.net /root/la_server /Volumes/Datas/CSM/JavaProjects/csm_server/dist/csm_go_server
+
+chmod +x scripts/build-go-linux-native.sh deploy-go-linux.sh && ./scripts/build-go-linux-native.sh --remote root@csmbridge.net dist/csm_go_server
+
+```
+
+Script se:
+- tao runtime folders trong `/root/la_server`
+- upload binary thanh `/root/la_server/csm_go_server`
+- upload `config.env` va `config.local-8gb.env` neu co
+- cai/refresh `systemd` service `csm-go`
+- restart service va health-check nhanh
+
+### 3) Neu gap loi upload `scp: dest open ... Failure` hoac `Text file busy`
+
+Nguyen nhan thuong la service dang chay va khoa binary. Chay fallback an toan:
+
+```bash
+# 1) Dung service
+ssh root@csmbridge.net "systemctl stop csm-go"
+
+# 2) Upload bang scp legacy mode (-O)
+cd /Volumes/Datas/CSM/JavaProjects/csm_server
+scp -O dist/csm_go_server root@csmbridge.net:/root/la_server/csm_go_server
+scp -O config.env root@csmbridge.net:/root/la_server/config.env
+scp -O config.local-8gb.env root@csmbridge.net:/root/la_server/config.local-8gb.env
+
+# 3) Chay lai service
+ssh root@csmbridge.net "chmod +x /root/la_server/csm_go_server && systemctl start csm-go"
+```
+
+### 4) Verify sau deploy
+
+```bash
+# Service status
+ssh root@csmbridge.net "systemctl --no-pager --full status csm-go | head -25"
+
+# Kiem tra binary local/remote trung checksum
+shasum -a 256 dist/csm_go_server
+ssh root@csmbridge.net "sha256sum /root/la_server/csm_go_server"
+
+# AI local health
+ssh root@csmbridge.net "curl -sf http://127.0.0.1:9999/ai-local/health | head -c 1400"
+```
+
+Can dam bao trong health response co:
+- `reasoning.nativeReady: true`
+- `status.available: true`
+- `modelPath: /root/la_server/csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf`
+
+### 5) Kiem tra model tren server
+
+```bash
+ssh root@csmbridge.net "ls -lh /root/la_server/csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf"
+```
+
+Neu thieu model, download vao dung thu muc tren truoc khi restart service.
 
 ## Notes
 

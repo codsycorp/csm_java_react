@@ -131,6 +131,7 @@ func buildIntentClassifyPrompt(req *CodeStreamRequest, message string) string {
 	}
 	var sb strings.Builder
 	sb.WriteString("<|im_start|>system\n")
+	sb.WriteString(qwen15ExpertPersona)
 	sb.WriteString("You route CSM AI assistant requests using Observation → Reasoning → Action.\n")
 	sb.WriteString("Output one JSON object only.\n")
 	sb.WriteString(`Schema: {"type":"EDIT_MENU|EDIT_CODE|QUESTION|GENERAL","action":"add|modify|delete|ask|search|other",`)

@@ -88,7 +88,15 @@ resolve_model_path() {
         ./*)
             local rel="${raw#./}"
             if [[ "$rel" == csm_datas/* ]]; then
-                export AI_LOCAL_LLAMA_MODEL_PATH="$ROOT/backend/$rel"
+                local backend_path="$ROOT/backend/$rel"
+                local root_path="$ROOT/$rel"
+                if [ -f "$backend_path" ]; then
+                    export AI_LOCAL_LLAMA_MODEL_PATH="$backend_path"
+                elif [ -f "$root_path" ]; then
+                    export AI_LOCAL_LLAMA_MODEL_PATH="$root_path"
+                else
+                    export AI_LOCAL_LLAMA_MODEL_PATH="$backend_path"
+                fi
             else
                 export AI_LOCAL_LLAMA_MODEL_PATH="$APP_DATA_DIR/${rel#csm_datas/}"
             fi
@@ -97,6 +105,19 @@ resolve_model_path() {
     esac
 }
 resolve_model_path "${AI_LOCAL_LLAMA_MODEL_PATH:-}"
+
+if [ -n "${AI_LOCAL_LLAMA_SEO_MODEL_PATH:-}" ] && [[ "${AI_LOCAL_LLAMA_SEO_MODEL_PATH}" == ./* ]]; then
+    rel_seo="${AI_LOCAL_LLAMA_SEO_MODEL_PATH#./}"
+    if [[ "$rel_seo" == csm_datas/* ]]; then
+        backend_seo="$ROOT/backend/$rel_seo"
+        root_seo="$ROOT/$rel_seo"
+        if [ -f "$backend_seo" ]; then
+            export AI_LOCAL_LLAMA_SEO_MODEL_PATH="$backend_seo"
+        elif [ -f "$root_seo" ]; then
+            export AI_LOCAL_LLAMA_SEO_MODEL_PATH="$root_seo"
+        fi
+    fi
+fi
 
 # Mac dev: profile env phải thắng config.env (tránh ctx 8192 + prompt 120k gây SIGABRT llama.cpp)
 if [ "$(uname -s)" = "Darwin" ]; then

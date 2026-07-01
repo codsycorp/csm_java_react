@@ -4,12 +4,11 @@ Place GGUF model files in `backend/csm_datas/ai_local/model/` (dev) or `csm_data
 
 | File | Vai trò | RAM ước tính |
 |------|---------|--------------|
-| `qwen2.5-coder-1.5b-instruct-q8_0.gguf` | Code, menu JSON, SEO, guest chat (mặc định) | ~1.6GB |
-| `qwen2.5-coder-7b-instruct-q4_k_m.gguf` | Chất lượng cao hơn (cần RAM dư) | ~4.5GB |
+| `qwen2.5-coder-1.5b-instruct-q8_0.gguf` | Code, menu JSON, SEO, guest chat, routing | ~1.6GB |
 
 Tải mặc định: `./scripts/download-ai-local-models.sh 8gb`
 
-Tải 7B (tùy chọn): `./scripts/download-ai-local-models.sh 8gb-7b`
+Không cần tải model khác nếu bạn muốn thống nhất toàn bộ cấu hình.
 
 Config (`config.local-8gb.env` / Go `./backend-go/run-go-server.sh`):
 
@@ -24,7 +23,7 @@ AI_LOCAL_LLAMA_THREADS=3
 
 | File | Vai trò |
 |------|---------|
-| `qwen2.5-coder-7b-instruct-q4_k_m.gguf` | Code, SEO, guest chat |
+| `qwen2.5-coder-1.5b-instruct-q8_0.gguf` | Code, SEO, guest chat, routing |
 
 Tải: `./scripts/download-ai-local-models.sh m1-16gb` hoặc `strong`
 

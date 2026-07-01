@@ -743,24 +743,24 @@ func loadCategoriesFull(rm *data.RecordManager, route resolvedRoute, domain, lan
 		}
 
 		cats = append(cats, map[string]any{
-			"slug":                     slug,
-			"service_code":             serviceCode,
-			"category":                 category,
-			"category_en":              recordStr(obj, "category_en"),
-			"category_zh":              recordStr(obj, "category_zh"),
-			"is_service":               isService,
-			"is_group_slug":            isGroupSlug,
-			"is_group_slug_default":    isGroupSlugDefault,
-			"group_slug":               groupSlug,
-			"color":                    recordStr(obj, "attributes_color"),
-			"icon":                     recordStr(obj, "attributes_icon"),
-			"description":              attributesDescription,
-			"description_en":           recordStr(obj, "attributes_description_en"),
-			"description_zh":           recordStr(obj, "attributes_description_zh"),
-			"dynamicCodeName":          dynamicCodeName,
-			"attributes_icon":          recordStr(obj, "attributes_icon"),
-			"attributes_color":         recordStr(obj, "attributes_color"),
-			"attributes_description":   attributesDescription,
+			"slug":                   slug,
+			"service_code":           serviceCode,
+			"category":               category,
+			"category_en":            recordStr(obj, "category_en"),
+			"category_zh":            recordStr(obj, "category_zh"),
+			"is_service":             isService,
+			"is_group_slug":          isGroupSlug,
+			"is_group_slug_default":  isGroupSlugDefault,
+			"group_slug":             groupSlug,
+			"color":                  recordStr(obj, "attributes_color"),
+			"icon":                   recordStr(obj, "attributes_icon"),
+			"description":            attributesDescription,
+			"description_en":         recordStr(obj, "attributes_description_en"),
+			"description_zh":         recordStr(obj, "attributes_description_zh"),
+			"dynamicCodeName":        dynamicCodeName,
+			"attributes_icon":        recordStr(obj, "attributes_icon"),
+			"attributes_color":       recordStr(obj, "attributes_color"),
+			"attributes_description": attributesDescription,
 		})
 	}
 
@@ -1180,6 +1180,109 @@ func resolveServiceListing(
 		return out
 	}
 
+	if serviceCodes, category, ok := resolveGroupCategory(rm, route, domain, slug, mainServiceCode, defaultServiceCode, lang); ok {
+		detConds := []model.SearchFilter{
+			{Field: "service_type", FilterType: "in", Value: serviceCodes},
+			model.EqFilter("status", "active"),
+			{Field: "domain", FilterType: "like", Value: domain},
+		}
+
+		if q := strings.TrimSpace(params["q"]); q != "" {
+			detConds = append(detConds, model.SearchFilter{
+				Operator: "OR",
+				Conditions: []model.SearchFilter{
+					{Field: "title", FilterType: "like", Value: q},
+					{Field: "excerpt", FilterType: "like", Value: q},
+					{Field: "keywords", FilterType: "like", Value: q},
+				},
+			})
+		}
+
+		for _, pair := range [][2]string{
+			{"propertyType", "attributes_propertyType"},
+			{"transactionType", "attributes_transactionType"},
+			{"category", "attributes_category"},
+			{"platform", "attributes_platform"},
+			{"brand", "attributes_brand"},
+			{"location", "attributes_location"},
+			{"legalStatus", "attributes_legalStatus"},
+			{"furnished", "attributes_furnished"},
+		} {
+			if v := strings.TrimSpace(params[pair[0]]); v != "" && v != "all" {
+				detConds = append(detConds, model.SearchFilter{Field: pair[1], FilterType: "like", Value: v})
+			}
+		}
+
+		for _, triple := range [][3]string{
+			{"price_min", "attributes_price", "gte"},
+			{"price_max", "attributes_price", "lte"},
+			{"area_min", "attributes_area", "gte"},
+			{"area_max", "attributes_area", "lte"},
+		} {
+			if v, err := strconv.ParseFloat(params[triple[0]], 64); err == nil {
+				detConds = append(detConds, model.SearchFilter{Field: triple[1], FilterType: triple[2], Value: v})
+			}
+		}
+
+		allRows := rowsFrom(rm.Filter(route.AppID, route.TblServiceDetail, model.SearchFilter{Operator: "AND", Conditions: detConds}))
+		slices.SortFunc(allRows, func(a, b map[string]any) int {
+			return compareRelatedPostRowsDesc(a, b)
+		})
+
+		totalCount := len(allRows)
+		startIndex := 0
+		if lastKey != "" {
+			found := false
+			for i, r := range allRows {
+				if recordStr(r, "id") == lastKey {
+					startIndex = i + 1
+					found = true
+					break
+				}
+			}
+			if !found {
+				startIndex = 0
+			}
+		} else {
+			startIndex = (page - 1) * pageSize
+		}
+		endIndex := startIndex + pageSize
+		if endIndex > totalCount {
+			endIndex = totalCount
+		}
+
+		pageRows := make([]any, 0, endIndex-startIndex)
+		for _, r := range allRows[startIndex:endIndex] {
+			pageRows = append(pageRows, mapDetailLite(rm, r, lang))
+		}
+
+		var nextCursor string
+		if endIndex < totalCount && endIndex > 0 {
+			nextCursor = recordStr(allRows[endIndex-1], "id")
+		}
+
+		pageComputed := 1
+		if pageSize > 0 {
+			pageComputed = startIndex/pageSize + 1
+		}
+
+		if pageContent, _ := category["content"].(string); pageContent != "" {
+			out["pageContent"] = pageContent
+		}
+		out["serviceCategory"] = category
+		out["serviceDetailList"] = pageRows
+		out["totalCount"] = totalCount
+		out["page"] = pageComputed
+		out["pageSize"] = pageSize
+		out["take"] = pageSize
+		out["paginationMode"] = "cursor"
+		if nextCursor != "" {
+			out["nextCursor"] = nextCursor
+			out["lastkey"] = nextCursor
+		}
+		return out
+	}
+
 	svcFilter := model.SearchFilter{
 		Operator: "AND",
 		Conditions: []model.SearchFilter{
@@ -1309,6 +1412,63 @@ func resolveServiceListing(
 	}
 
 	return out
+}
+
+func resolveGroupCategory(
+	rm *data.RecordManager,
+	route resolvedRoute,
+	domain, slug, mainServiceCode, defaultServiceCode, lang string,
+) ([]any, map[string]any, bool) {
+	if route.AppID == "" || route.TblServices == "" || slug == "" {
+		return nil, nil, false
+	}
+	if slug == mainServiceCode && defaultServiceCode != "" {
+		slug = defaultServiceCode
+	}
+	groupFilter := model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("slug", slug),
+			model.EqFilter("is_group_slug", true),
+			model.EqFilter("is_service", true),
+			model.EqFilter("status", "active"),
+			{Field: "domain", FilterType: "like", Value: domain},
+		},
+	}
+	groupService := rm.Find(route.AppID, route.TblServices, groupFilter)
+	if len(groupService) == 0 {
+		return nil, nil, false
+	}
+	groupSlug := recordStr(groupService, "group_slug")
+	if groupSlug == "" {
+		return nil, nil, false
+	}
+	svcRows := rowsFrom(rm.Filter(route.AppID, route.TblServices, model.SearchFilter{
+		Operator: "AND",
+		Conditions: []model.SearchFilter{
+			model.EqFilter("group_slug", groupSlug),
+			model.EqFilter("is_group_slug_default", true),
+			model.EqFilter("status", "active"),
+			{Field: "domain", FilterType: "like", Value: domain},
+		},
+	}))
+	serviceCodes := make([]any, 0, len(svcRows))
+	seen := make(map[string]struct{}, len(svcRows))
+	for _, row := range svcRows {
+		code := recordStr(row, "service_code")
+		if code == "" {
+			continue
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		serviceCodes = append(serviceCodes, code)
+	}
+	if len(serviceCodes) == 0 {
+		return nil, nil, false
+	}
+	return serviceCodes, mapServiceCategory(rm, groupService, lang), true
 }
 
 func insertRelated(

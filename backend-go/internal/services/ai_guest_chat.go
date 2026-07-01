@@ -21,7 +21,7 @@ func GuestChatReply(cfg config.AppConfig, llama *LlamaService, message, locale, 
 	case "zh", "zh-cn":
 		lang = "Chinese"
 	}
-	prompt := PrepareLocalProviderPrompt(strings.TrimSpace(`You are CSM guest web assistant for app `+appID+`.
+	prompt := PrepareLocalProviderPrompt(strings.TrimSpace(qwen15ExpertPersona+`You are CSM guest web assistant for app `+appID+`.
 Reply in `+lang+` in 2-4 short helpful sentences. No JSON. No code fences.
 Guest: `+truncateStr(msg, 800)), 4000)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)

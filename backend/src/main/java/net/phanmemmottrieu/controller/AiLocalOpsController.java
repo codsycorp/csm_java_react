@@ -137,7 +137,7 @@ public class AiLocalOpsController {
     @Value("${ai.orchestration.multimodal.local-only.require-vision:false}")
     private boolean multimodalRequireVision;
 
-    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-7b-instruct-q4_k_m.gguf}")
+    @Value("${ai.local.llama.model-path:./csm_datas/ai_local/model/qwen2.5-coder-1.5b-instruct-q8_0.gguf}")
     private String localModelPath;
 
     @Value("${ai.local.llama.runtime-profile:balanced}")
@@ -255,7 +255,9 @@ public class AiLocalOpsController {
     @GetMapping("/models")
     public ResponseEntity<Map<String, Object>> models() {
         Map<String, Object> out = new LinkedHashMap<>();
-        List<String> modelDirsChecked = resolveModelDirectories().stream().map(Path::toString).toList();
+        List<String> modelDirsChecked = resolveModelDirectories().stream()
+            .map(path -> path == null ? "" : path.toString())
+            .toList();
         List<Map<String, Object>> discovered = discoverLocalModelFiles();
         List<Map<String, Object>> reasoningCandidates = new ArrayList<>();
         List<Map<String, Object>> visionCandidates = new ArrayList<>();
@@ -271,13 +273,13 @@ public class AiLocalOpsController {
 
         if (reasoningCandidates.isEmpty()) {
             reasoningCandidates.add(modelCandidate(
-                "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+                "qwen2.5-coder-1.5b-instruct-q8_0.gguf",
                 "reasoning",
                 "balanced",
-                "~4.2-5.0GB",
+                "~1.5-1.8GB",
                 true,
                 true,
-                "q4_k_m"));
+                "q8_0"));
         }
 
         if (visionCandidates.isEmpty()) {
@@ -311,10 +313,9 @@ public class AiLocalOpsController {
         Map<String, Object> quantizationGuide = new LinkedHashMap<>();
         quantizationGuide.put("recommendedOrderWeakMachine", List.of("q8_0", "q5_k_m", "q4_k_m", "q4_0", "q2_k"));
         quantizationGuide.put("notes", List.of(
-            "q4_k_m — worker mặc định server 8GB: qwen2.5-coder-7b (SEO/code chất lượng cao hơn 1.5B)",
-            "q8_0 — dev M1 / máy yếu: qwen2.5-coder-1.5b khi thiếu RAM",
-            "q5_k_m — fallback nhẹ hơn Q8 một chút",
-            "q4_k_m — tiết kiệm RAM hơn trên máy cực yếu",
+            "q8_0 — chuẩn cho worker 1.5B: giữ RAM thấp và ổn định",
+            "q5_k_m — fallback khi cần cân bằng tốc độ/chất lượng cho model khác",
+            "q4_k_m — chỉ dùng nếu chuyển sang model khác, không phải mặc định",
             "q2_k — chỉ khi RAM cực thấp, có thể giảm độ chính xác"
         ));
 

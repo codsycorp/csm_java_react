@@ -140,14 +140,14 @@ impl AiLocalOpsService {
             })]
         } else {
             vec![json!({
-                "file": "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+                "file": "qwen2.5-coder-1.5b-instruct-q8_0.gguf",
                 "role": "reasoning",
                 "profile": "balanced",
-                "estimatedRam": "~4.2-5.0GB",
+                "estimatedRam": "~1.5-1.8GB",
                 "weakMachineRecommended": true,
                 "configured": false,
-                "quantization": "q4_k_m",
-                "weakMachineScore": 75
+                "quantization": "q8_0",
+                "weakMachineScore": 92
             })]
         };
 
