@@ -2762,6 +2762,7 @@ export default function AdminPage(props: any = {}) {
 						permissions={runtimePermissions}
 						menusPermissions={runtimeMenusPermissions}
 						dataScope={runtimeDataScope}
+						menuId={runtimeMenuData.id}
 						database={database}
 						decrypt={csmDecrypt}
 						m_configs={{ ...m_configs, nodes }}

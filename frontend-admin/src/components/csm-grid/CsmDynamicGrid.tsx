@@ -12,7 +12,7 @@ import { buildGridServerQuery } from "./grid-server-query";
 import { useComboPrefetchGate, hydrateComboLabelsForRows, buildComboHydrationPlan } from "./combo-prefetch";
 import { useGridServerPagination } from "./use-grid-server-pagination";
 import { formatGridNumberCell, resolveFieldDecimalPlaces } from "./grid-field-format";
-import { resolveDetailGridRowsFromMaster } from "./master-detail-utils";
+import { parseDetailRowsFromMasterField, resolveDetailGridRowsFromMaster } from "./master-detail-utils";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
 import { dateFormat, chuyenNgay, TruNgayRaSoNgay, CongNgay, CongGio, validateEmail, validatePhone, DateUtils } from "#src/utils/dateUtils";
 import { useSocket } from "#src/hooks/useSocket";
@@ -1175,6 +1175,15 @@ export function CsmDynamicGrid({
 		onDetailRowsChange?.(rows);
 		onDataChange?.();
 	}, [isDetailGrid, onDetailRowsChange, onDataChange]);
+	const commitDetailRows = useCallback((rows: Row[]) => {
+		if (!isDetailGrid) return rows;
+		const nextRows = Array.isArray(rows) ? rows.map((row) => ({ ...row })) : [];
+		if (context?.select_row && tableName) {
+			context.select_row[tableName] = nextRows;
+		}
+		notifyDetailRowsChange(nextRows);
+		return nextRows;
+	}, [context, isDetailGrid, notifyDetailRowsChange, tableName]);
 	const effectiveGridInstanceKey = useMemo(
 		() => String(gridInstanceKey || `${runtimeAppId || ""}::${menuId || ""}::${m_configs?.id || ""}::${m_configs?.table_name || ""}`),
 		[gridInstanceKey, runtimeAppId, menuId, m_configs?.id, m_configs?.table_name],
@@ -2472,8 +2481,7 @@ export function CsmDynamicGrid({
 											const deletedRowKey = getRowKey(record);
 											const next = prev.filter(row => getRowKey(row) !== deletedRowKey);
 											runAfterTrigger('afterDelete', next);
-											notifyDetailRowsChange(next);
-											return next;
+											return isDetailGrid ? commitDetailRows(next) : next;
 										});
 										message.success(t("common.deleteSuccess"));
 										onDelete?.(record);
@@ -2591,6 +2599,14 @@ export function CsmDynamicGrid({
 
 	const lastSyncedDataSignatureRef = useRef("");
 	const lastSyncedRowsRef = useRef<Row[] | null>(null);
+	const lastDetailMasterSyncKeyRef = useRef("");
+	const detailMasterSyncKey = useMemo(() => {
+		if (!isDetailGrid) return "";
+		const masterKey = buildRowKey(context?.select_row || null, pkFields);
+		const detailRows = parseDetailRowsFromMasterField(context?.select_row?.[tableName]);
+		const detailSignature = buildRowsSyncSignature(detailRows);
+		return `${masterKey}::${detailSignature}`;
+	}, [context?.select_row, isDetailGrid, pkFields, tableName]);
 
 	const resolveLoadDbRows = useCallback((): Row[] | null => {
 		let loadCode = m_configs.trigger?.load_db;
@@ -2637,7 +2653,10 @@ export function CsmDynamicGrid({
 	useEffect(() => {
 
 		if (isDetailGrid) {
-			syncGridRows(resolveDetailRows());
+			if (detailMasterSyncKey !== lastDetailMasterSyncKeyRef.current) {
+				lastDetailMasterSyncKeyRef.current = detailMasterSyncKey;
+				syncGridRows(resolveDetailRows());
+			}
 			return;
 		}
 
@@ -2704,6 +2723,7 @@ export function CsmDynamicGrid({
 	useEffect(() => {
 		lastSyncedDataSignatureRef.current = "";
 		lastSyncedRowsRef.current = null;
+		lastDetailMasterSyncKeyRef.current = "";
 	}, [effectiveGridInstanceKey]);
 
   // filter trigger (runs on data)
@@ -3855,8 +3875,7 @@ export function CsmDynamicGrid({
 					const next = [newRow, ...prev];
 					// Run afterAdd trigger với toàn bộ mảng mới
 					runAfterTrigger('afterAdd', next);
-					if (isDetailGrid) notifyDetailRowsChange(next);
-					return next;
+					return isDetailGrid ? commitDetailRows(next) : next;
 				});
 				// Select the new row
 				const newRowKey = getRowKey(newRow);
@@ -3968,8 +3987,7 @@ export function CsmDynamicGrid({
 					const next = prev.filter(row => getRowKey(row) !== deletedRowKey);
 					// Run afterDelete trigger với toàn bộ mảng còn lại
 					runAfterTrigger('afterDelete', next);
-					notifyDetailRowsChange(next);
-					return next;
+					return isDetailGrid ? commitDetailRows(next) : next;
 				});
 				message.success(t("common.deleteSuccess"));
 				onDelete?.(record);
@@ -4091,11 +4109,13 @@ export function CsmDynamicGrid({
 							
 							// Update lại data nếu trigger thay đổi giá trị
 							const currentRowKey = getRowKey(originRow);
-							
-							setData((prev) => prev.map(row => {
-								const isTarget = getRowKey(row) === currentRowKey;
-								return isTarget ? { ...row, ...processedData } : row;
-							}));
+							setData((prev) => {
+								const next = prev.map(row => {
+									const isTarget = getRowKey(row) === currentRowKey;
+									return isTarget ? { ...row, ...processedData } : row;
+								});
+								return isDetailGrid ? commitDetailRows(next) : next;
+							});
 							
 							// Reset flag sau khi update xong
 							setTimeout(() => setIsUpdatingFromTrigger(false), 100);
@@ -4124,24 +4144,30 @@ export function CsmDynamicGrid({
 							return;
 						}
 						const normalizedProcessed = normalizeInlineRowValues(processedData, m_configs.table || []);
+						const stableRowId = normalizedProcessed.id ?? oldRow?.id ?? String(rowKey);
 						
 						// Update local state only — Vue writes back to select_row[table_name]
 						setData((prev) => {
-							const next = prev.map(row => {
-								const isUpdatedRow = getRowKey(row) === String(rowKey);
-								
-								if (isUpdatedRow) {
-									return { ...row, ...normalizedProcessed };
-								}
-								return row;
-							});
+							const nextKey = String(rowKey);
+							const idx = prev.findIndex(row => getRowKey(row) === nextKey);
+							let next: Row[];
+							if (idx >= 0) {
+								next = [...prev];
+								next[idx] = { ...next[idx], ...normalizedProcessed, id: stableRowId };
+							} else {
+								const fallbackRow: Row = {
+									...(oldRow || {}),
+									...normalizedProcessed,
+									id: stableRowId,
+								};
+								next = [fallbackRow, ...prev];
+							}
 							if (oldRow?.id != null) {
 								inlineNewRowIdsRef.current.delete(String(oldRow.id));
 							}
 							// Row is saved into the parent detail payload now; later edits should behave like updates.
 							runAfterTrigger(isInlineCreate ? 'afterAdd' : 'afterEdit', next);
-							notifyDetailRowsChange(next);
-							return next;
+							return commitDetailRows(next);
 						});
 						
 						message.success('Đã lưu thay đổi');
@@ -4328,8 +4354,7 @@ export function CsmDynamicGrid({
 											const deletedKeys = new Set(selectedRows.map((row) => getRowKey(row)));
 											const next = prev.filter((row) => !deletedKeys.has(getRowKey(row)));
 											runAfterTrigger("afterDelete", next);
-											notifyDetailRowsChange(next);
-											return next;
+											return isDetailGrid ? commitDetailRows(next) : next;
 										});
 										message.success(t("common.deleteSuccess"));
 										setSelectedKeys([]);
@@ -4535,7 +4560,7 @@ export function CsmDynamicGrid({
 				app_id: runtimeAppId
 			});
 		});
-	}, [selectedDetailRow ? getRowKey(selectedDetailRow) : "", runtimeAppId, isMasterDetail, hasDetailNodes, detailNodes, getRowKey]);
+	}, [selectedDetailRow, runtimeAppId, isMasterDetail, hasDetailNodes, detailNodes]);
 	
 	// Detail panel rendering is now only in CsmEditModal, not here
 	// Keep children array with just the table
@@ -4580,12 +4605,16 @@ export function CsmDynamicGrid({
 					const shouldAddAnother = submitAction === "addAnother";
 					submitInFlightRef.current = true;
 					try {
+						const submittedValuesSnapshot = JSON.parse(JSON.stringify(values || {}));
 					const beforeSaveInputSnapshot = JSON.parse(JSON.stringify(values || {}));
 					const beforeSaveValues = await runBeforeSaveTrigger(values);
 					if (beforeSaveValues === false) {
 						return;
 					}
-					values = beforeSaveValues;
+					values = {
+						...(values || {}),
+						...((beforeSaveValues && typeof beforeSaveValues === "object") ? beforeSaveValues : {}),
+					};
 					try {
 						const comboFields = (m_configs.table || [])
 							.filter((field) => isComboLikeType(String(field?.f_types || "")))
@@ -4684,7 +4713,22 @@ export function CsmDynamicGrid({
 					const effectiveCommand = cmd;
 					const targetRowForUpdate = editingRecord;
 
-					const payloadValues = values;
+					const payloadValues: Row = { ...values };
+					const detailNodes = Number(m_configs.type_form) === 2 && Array.isArray(m_configs.nodes)
+						? m_configs.nodes
+						: [];
+					if (detailNodes.length > 0) {
+						detailNodes.forEach((node: any) => {
+							const detailFieldName = String(node?.table_name || "").trim();
+							if (!detailFieldName) return;
+							const currentValue = payloadValues[detailFieldName];
+							const snapshotValue = submittedValuesSnapshot?.[detailFieldName];
+							const sourceDetailValue = currentValue != null
+								? currentValue
+								: (snapshotValue != null ? snapshotValue : []);
+							payloadValues[detailFieldName] = JSON.stringify(parseDetailRowsFromMasterField(sourceDetailValue));
+						});
+					}
 
 					// Build where from the OLD PK values (for update) or NEW PK values (for create)
 					let whereValues: Record<string, any> | undefined;
@@ -4736,32 +4780,54 @@ export function CsmDynamicGrid({
 					const effectiveUpdatedValues = serverUpdatedRow
 						? { ...payloadValues, ...serverUpdatedRow }
 						: payloadValues;
-					
+					if (detailNodes.length > 0) {
+						detailNodes.forEach((node: any) => {
+							const detailFieldName = String(node?.table_name || "").trim();
+							if (!detailFieldName) return;
+							if (Object.prototype.hasOwnProperty.call(payloadValues, detailFieldName)) {
+								effectiveUpdatedValues[detailFieldName] = payloadValues[detailFieldName];
+							}
+						});
+					}
+					let refreshedSelectedRow: Row | null = null;
+
 					// Update local state và run after trigger
 					// NOTE: For "create", we do NOT add the row locally here.
 					// The backend sends a socket "create" event before returning the HTTP response.
 					// The socket event updates database[tableName], which triggers the useEffect to reload
 					// rows. Adding the row locally too would cause a duplicate (race condition).
-					setData((prev) => {
-						if (effectiveCommand === "create") {
-							// Skip local add — socket event + useEffect will handle it
-							return prev;
-						} else if (targetRowForUpdate) {
-							const editingRowKey = getRowKey(targetRowForUpdate);
-							const idx = prev.findIndex(row => {
-								return getRowKey(row) === editingRowKey;
-							});
-							if (idx >= 0) {
-								const next = [...prev];
-								next[idx] = { ...next[idx], ...effectiveUpdatedValues };
-								// Run afterEdit trigger với toàn bộ mảng đã sửa
-								runAfterTrigger('afterEdit', next);
-								return next;
-							}
-							return prev;
+					if (effectiveCommand === "create") {
+						// Skip local add — socket event + useEffect will handle it
+					} else if (targetRowForUpdate) {
+						const editingRowKey = getRowKey(targetRowForUpdate);
+						const idx = data.findIndex((row) => getRowKey(row) === editingRowKey);
+						if (idx >= 0) {
+							const next = [...data];
+							next[idx] = { ...next[idx], ...effectiveUpdatedValues };
+							refreshedSelectedRow = next[idx];
+							setData(next);
+							syncMasterTableRows(next);
+							// Run afterEdit trigger với toàn bộ mảng đã sửa
+							runAfterTrigger('afterEdit', next);
 						}
-						return prev;
-					});
+					}
+					const selectedAfterSave = refreshedSelectedRow || (targetRowForUpdate
+						? { ...targetRowForUpdate, ...effectiveUpdatedValues }
+						: null);
+					if (selectedAfterSave) {
+						const reselectedRow = { ...selectedAfterSave };
+						const reselectedKey = getRowKey(reselectedRow);
+						if (reselectedKey) {
+							setSelectedKeys([reselectedKey]);
+						}
+						setSelectedRow(reselectedRow);
+						setSelectedDetailRow(reselectedRow);
+						onSelectRow?.(reselectedRow);
+						// Vue parity: force a same-row reselection tick so external detail panes refresh immediately.
+						setTimeout(() => {
+							onSelectRow?.({ ...reselectedRow });
+						}, 0);
+					}
 					
 					if (shouldCloseEditor) {
 						closeEditor();

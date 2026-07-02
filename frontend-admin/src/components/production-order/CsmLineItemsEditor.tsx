@@ -15,7 +15,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Button, Card, Col, Divider, Input, InputNumber,
+  AutoComplete, Button, Card, Col, Divider, Input, InputNumber,
   Modal, Row, Select, Space, Table, Typography, message,
 } from "antd";
 import { DeleteOutlined, EyeOutlined, PlusOutlined, PrinterOutlined, SaveOutlined, StepForwardOutlined } from "@ant-design/icons";
@@ -61,6 +61,7 @@ import {
   resolveWorkflowStep,
   validateWorkflowPromotion,
 } from "./line-items-workflow";
+import { extractGroupsFromRow } from "./line-items-storage";
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -185,6 +186,7 @@ interface GroupSectionProps {
   calc: EditorCalcResult;
   lang: string;
   subtotalTemplate?: string;
+  specHistoryOptions: string[];
   onUpdateGroup: (id: string, partial: Partial<ProductGroup>) => void;
   onUpdateItem: (gId: string, iKey: string, field: string, val: any) => void;
   onAddItem: (gId: string) => void;
@@ -194,6 +196,7 @@ interface GroupSectionProps {
 
 const GroupSection = React.memo(function GroupSection({
   group, gIdx, columns, groupCfg, calc, lang, subtotalTemplate,
+  specHistoryOptions,
   onUpdateGroup, onUpdateItem, onAddItem, onRemoveItem, onRemoveGroup,
 }: GroupSectionProps) {
   const liTheme = useLineItemsTheme();
@@ -203,6 +206,19 @@ const GroupSection = React.memo(function GroupSection({
   const subtotalText = (subtotalTemplate || groupCfg.subtotal_label || "Cộng nhóm {{group}} – chưa VAT {{vat}}%")
     .replace(/\{\{group\}\}/g, label)
     .replace(/\{\{vat\}\}/g, String(group.vat_rate ?? ""));
+  const specAutocompleteOptions = useMemo(() => {
+    const query = String(group.spec || "").trim().toLowerCase();
+    return specHistoryOptions
+      .filter((item) => {
+        if (!query || query.length < 2) return true;
+        return item.toLowerCase().includes(query);
+      })
+      .slice(0, 20)
+      .map((item) => ({
+        value: item,
+        label: item.replace(/\s+/g, " ").trim().slice(0, 120),
+      }));
+  }, [group.spec, specHistoryOptions]);
 
   // Find "subtotal" columns (formula cols)
   const formulaCols = columns.filter(c =>
@@ -306,13 +322,25 @@ const GroupSection = React.memo(function GroupSection({
         </Button>
       }
     >
-      <TextArea
-        rows={4}
-        value={group.spec}
-        placeholder={`Tên và quy cách kỹ thuật nhóm ${label}\nVí dụ: PANEL PUR VÁCH TRONG...\n* Mặt thứ nhất: ...\n* Lớp giữa: ...`}
-        onChange={e => onUpdateGroup(group.id, { spec: e.target.value })}
-        style={{ marginBottom: 8, fontFamily: "monospace", fontSize: 12 }}
-      />
+      <AutoComplete
+        options={specAutocompleteOptions}
+        filterOption={false}
+        onSelect={(next) => onUpdateGroup(group.id, { spec: next })}
+        dropdownMatchSelectWidth={false}
+      >
+        <TextArea
+          rows={4}
+          value={group.spec}
+          placeholder={`Tên và quy cách kỹ thuật nhóm ${label}\nVí dụ: PANEL PUR VÁCH TRONG...\n* Mặt thứ nhất: ...\n* Lớp giữa: ...`}
+          onChange={e => onUpdateGroup(group.id, { spec: e.target.value })}
+          style={{ marginBottom: 8, fontFamily: "monospace", fontSize: 12 }}
+        />
+      </AutoComplete>
+      {specAutocompleteOptions.length > 0 && (
+        <div style={{ marginBottom: 8, fontSize: 12, color: "var(--ant-colorTextDescription)" }}>
+          Gợi ý nhanh từ báo giá cũ: nhập vài ký tự để lọc rồi chọn.
+        </div>
+      )}
 
       <Table<LineItem>
         size="small"
@@ -444,6 +472,35 @@ export default function CsmLineItemsEditor({
   const [previewLabel, setPreviewLabel] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  const currentCustomerCode = useMemo(() => {
+    const raw = header?.ma_kh ?? header?.khach_hang_id ?? "";
+    return String(raw || "").trim().toLowerCase();
+  }, [header?.khach_hang_id, header?.ma_kh]);
+  const specHistoryOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const matchedByCustomer: string[] = [];
+    const fallback: string[] = [];
+    for (let i = existingRows.length - 1; i >= 0; i -= 1) {
+      const row = existingRows[i] || {};
+      const rowCustomerCode = String(row?.ma_kh ?? row?.khach_hang_id ?? "").trim().toLowerCase();
+      const isSameCustomer = Boolean(currentCustomerCode) && rowCustomerCode === currentCustomerCode;
+      const groupsInRow = extractGroupsFromRow(row, m_configs);
+      groupsInRow.forEach((g) => {
+        const text = String(g?.spec || "").trim();
+        if (!text) return;
+        const normalized = text.toLowerCase();
+        if (seen.has(normalized)) return;
+        seen.add(normalized);
+        if (isSameCustomer) {
+          matchedByCustomer.push(text);
+        } else {
+          fallback.push(text);
+        }
+      });
+      if (matchedByCustomer.length + fallback.length >= 120) break;
+    }
+    return [...matchedByCustomer, ...fallback];
+  }, [currentCustomerCode, existingRows, m_configs]);
   const manualNumbersRef = useRef<Record<string, boolean>>(
     Object.fromEntries(autoFieldNames.map((n) => [n, Boolean(initialValue?.header?.[n])])),
   );
@@ -838,6 +895,7 @@ export default function CsmLineItemsEditor({
             calc={calc}
             lang={uiLang}
             subtotalTemplate={groupCfg.subtotal_label}
+            specHistoryOptions={specHistoryOptions}
             onUpdateGroup={updateGroup}
             onUpdateItem={updateItem}
             onAddItem={addItem}

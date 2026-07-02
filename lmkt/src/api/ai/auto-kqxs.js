@@ -1496,6 +1496,10 @@
     return list.join("-");
   }
 
+  function sanitizeSoChuTypingInput(value) {
+    return String(value || "").replace(/[^\d\s,\-]/g, "");
+  }
+
   function buildLegacyKttLookupFromTimKiemTrRows(rows, heThong) {
     var he = Number(heThong || 2) === 3 ? 3 : 2;
     var list = Array.isArray(rows) ? rows : [];
@@ -13092,10 +13096,14 @@
                         inputMode: "numeric",
                         onKeyDown: function (e) {
                           var key = e && e.key ? e.key : "";
-                          var allow = /[0-9]|Backspace|Delete|Tab|ArrowLeft|ArrowRight|Home|End|Enter|-/.test(key);
+                          var allow = /[0-9]|Backspace|Delete|Tab|ArrowLeft|ArrowRight|Home|End|Enter|\-|,|\s/.test(key);
                           if (!allow) e.preventDefault();
                         },
                         onChange: function (e) {
+                          var raw = e && e.target ? e.target.value : "";
+                          setSoChuInput(sanitizeSoChuTypingInput(raw));
+                        },
+                        onBlur: function (e) {
                           var raw = e && e.target ? e.target.value : "";
                           setSoChuInput(formatSoChuInputByHe(raw, legacyHeThong));
                         },
@@ -13687,11 +13695,15 @@
                     h(Input, {
                       size: "small",
                       value: legacyThSoInput,
-                      placeholder: legacyHeThong === 3
-                        ? "931-375-538 hoặc 931 375 538"
+                      placeholder: Number(legacyHeThong || 2) === 3
+                        ? "Ví dụ: 459 hoặc 459-123-888"
                         : tt.lgThManualPlaceholder,
                       style: { flex: "1 1 260px", maxWidth: 380 },
                       onChange: function (e) {
+                        var raw = e && e.target ? e.target.value : "";
+                        setLegacyThSoInput(sanitizeSoChuTypingInput(raw));
+                      },
+                      onBlur: function (e) {
                         var raw = e && e.target ? e.target.value : "";
                         setLegacyThSoInput(formatSoChuInputByHe(raw, legacyHeThong));
                       }

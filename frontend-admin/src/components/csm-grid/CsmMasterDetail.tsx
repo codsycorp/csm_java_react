@@ -29,12 +29,23 @@ function resolveMultilingualText(raw: any, fallback = "", langInput?: string): s
 	return String(fallback || "");
 }
 
+function buildStableTextHash(input: string): string {
+	let hash = 0;
+	for (let i = 0; i < input.length; i += 1) {
+		hash = ((hash << 5) - hash) + input.charCodeAt(i);
+		hash |= 0;
+	}
+	return String(hash >>> 0);
+}
+
 export default function CsmMasterDetail(props: any) {
-	const { appId, permissions, menusPermissions, dataScope, database, decrypt, m_configs, onDataChange } = props;
+	const { appId, permissions, menusPermissions, dataScope, database, decrypt, m_configs, onDataChange, menuId } = props;
 	const { isDark } = usePreferences();
 	const { token } = theme.useToken();
+	const globalDatabase = useAppStore((state) => state.database);
 	const setTableData = useAppStore((state) => state.setTableData);
 	const mergeTableRows = useAppStore((state) => state.mergeTableRows);
+	const resolvedDatabase = useMemo(() => ({ ...(database || {}), ...(globalDatabase || {}) }), [database, globalDatabase]);
 	const apiWholeMenus = usePermissionStore((state) => state.apiWholeMenus);
 	const menuById = useMemo(() => flattenAppMenusById(apiWholeMenus || []), [apiWholeMenus]);
 	const [selectRow, setSelectRow] = useState<any>(null);
@@ -49,6 +60,7 @@ export default function CsmMasterDetail(props: any) {
 	const nodes = (m_configs && m_configs.nodes) || [];
 	const hasNodes = nodes.length > 0;
 	const masterTableName = String(m_configs?.table_name || "").trim();
+	const inheritedMenuId = (menuId ?? (m_configs as any)?.menu_id ?? (m_configs as any)?.id) as any;
 
 	const allComboFields = useMemo(() => {
 		const masterFields = Array.isArray(m_configs?.table) ? m_configs.table : [];
@@ -61,13 +73,13 @@ export default function CsmMasterDetail(props: any) {
 		signatureSuffix: `master-detail:${masterTableName}:${nodes.map((n: any) => n?.id).join(",")}`,
 		fallbackAppId: appId,
 		menuById,
-		database,
+		database: resolvedDatabase,
 		setTableData,
 		mergeTableRows,
 		decrypt,
 		evalContext: {
-			seft: { m_configs, context: { select_row: selectRow }, database, appId },
-			database,
+			seft: { m_configs, context: { select_row: selectRow }, database: resolvedDatabase, appId },
+			database: resolvedDatabase,
 		},
 	});
 
@@ -87,20 +99,62 @@ export default function CsmMasterDetail(props: any) {
 			setSelectRow(null);
 			return;
 		}
-		const masterRows = database?.[masterTableName]?.rows;
+		const masterRows = resolvedDatabase?.[masterTableName]?.rows;
 		const resolved = resolveMasterRowFromGridSelection(row, masterRows, masterPkFields);
-		setSelectRow(resolved);
-	}, [database, masterPkFields, masterTableName]);
+		// Prefer the freshest row from store (after save), fallback to emitted selection row.
+		const merged = resolved ? { ...row, ...resolved } : row;
+		setSelectRow(merged);
+	}, [resolvedDatabase, masterPkFields, masterTableName]);
 
-	const handleDetailRowsChange = useCallback((detailTableName: string, rows: Record<string, any>[]) => {
+	const handleDetailRowsChange = useCallback((detailFieldName: string, rows: Record<string, any>[]) => {
 		setSelectRow((prev: Record<string, any> | null) => {
 			if (!prev) return prev;
-			const nextMasterRow = { ...prev, [detailTableName]: rows };
+			// Vue parity: detail tab data is embedded in a master row field (node.table_name), not a separate table.
+			const nextMasterRow = { ...prev, [detailFieldName]: Array.isArray(rows) ? [...rows] : [] };
 			patchMasterRowInStore(nextMasterRow);
 			return nextMasterRow;
 		});
 		onDataChange?.();
 	}, [onDataChange, patchMasterRowInStore]);
+
+	const handleMasterDataChange = useCallback(() => {
+		onDataChange?.();
+		if (!selectRow || !masterTableName) return;
+		const masterRows = useAppStore.getState().database?.[masterTableName]?.rows;
+		if (!Array.isArray(masterRows) || masterRows.length === 0) return;
+		const selectedKey = buildMasterRowKey(selectRow, masterPkFields);
+		if (!selectedKey) return;
+		const latestRow = masterRows.find((row: any) => buildMasterRowKey(row, masterPkFields) === selectedKey);
+		if (latestRow) {
+			setSelectRow({ ...latestRow });
+		}
+	}, [onDataChange, selectRow, masterTableName, masterPkFields]);
+
+	useEffect(() => {
+		if (!selectRow || !masterTableName) return;
+		const masterRows = resolvedDatabase?.[masterTableName]?.rows;
+		if (!Array.isArray(masterRows) || masterRows.length === 0) return;
+
+		const selectedKey = buildMasterRowKey(selectRow, masterPkFields);
+		if (!selectedKey) return;
+
+		const latestRow = masterRows.find((row: any) => buildMasterRowKey(row, masterPkFields) === selectedKey);
+		if (!latestRow) return;
+
+		let currentSignature = "";
+		let latestSignature = "";
+		try {
+			currentSignature = JSON.stringify(selectRow);
+			latestSignature = JSON.stringify(latestRow);
+		} catch {
+			currentSignature = selectedKey;
+			latestSignature = selectedKey;
+		}
+
+		if (currentSignature !== latestSignature) {
+			setSelectRow({ ...latestRow });
+		}
+	}, [resolvedDatabase, masterPkFields, masterTableName, selectRow]);
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;
@@ -135,20 +189,34 @@ export default function CsmMasterDetail(props: any) {
 			if (!nodeId) return;
 			map.set(
 				nodeId,
-				buildDetailGridSelectEnums(node?.table || [], database, decrypt, {
+				buildDetailGridSelectEnums(node?.table || [], resolvedDatabase, decrypt, {
 					m_configs: node,
 					context: { select_row: contextRow },
 				}),
 			);
 		});
 		return map;
-	}, [nodes, database, decrypt, selectRow]);
+	}, [nodes, resolvedDatabase, decrypt, selectRow]);
 
 	const tabItems = useMemo(() => nodes.map((node: any) => {
 		const nodeLabel = resolveMultilingualText(node.label, node.id || "");
 		const label = nodeLabel.includes(".") ? nodeLabel.split(".").slice(-1)[0] : nodeLabel;
 		const detailGridSelectEnums = detailSelectEnumsByNode.get(String(node.id)) || {};
-		const detailTableName = String(node.table_name || "").trim();
+		const detailFieldName = String(node.table_name || "").trim();
+		const masterKey = selectRow ? buildMasterRowKey(selectRow, masterPkFields) : "none";
+		const detailRaw = detailFieldName ? (selectRow as any)?.[detailFieldName] : undefined;
+		let detailText = "";
+		if (typeof detailRaw === "string") {
+			detailText = detailRaw;
+		} else {
+			try {
+				detailText = JSON.stringify(detailRaw ?? []);
+			} catch {
+				detailText = String(detailRaw ?? "");
+			}
+		}
+		const detailVersionKey = buildStableTextHash(detailText);
+		const detailGridKey = `${String(node.id)}-${masterKey}-${detailVersionKey}`;
 		const children = React.createElement("div", {
 			style: {
 				height: "100%",
@@ -156,32 +224,36 @@ export default function CsmMasterDetail(props: any) {
 				overflow: "auto",
 			}
 		}, React.createElement(CsmDynamicGrid as any, {
-			key: `grid-${node.id}-${selectRow ? buildMasterRowKey(selectRow, masterPkFields) : "none"}`,
-			gridInstanceKey: `detail-${String(node.id)}-${selectRow ? buildMasterRowKey(selectRow, masterPkFields) : "none"}`,
+			key: `grid-${detailGridKey}`,
+			gridInstanceKey: `detail-${detailGridKey}`,
 			appId,
 			permissions,
 			menusPermissions,
 			dataScope,
-			menuId: (m_configs as any).menu_id,
-			database,
+			menuId: inheritedMenuId,
+			database: resolvedDatabase,
 			decrypt,
 			m_configs: {
 				...node,
 				table_name: node.table_name,
 				table: node.table,
 				type_form: 1,
-				row_type_edit: 1,
+				row_type_edit: node?.row_type_edit ?? 1,
+				// In master-detail browse mode, detail tabs are view-only.
+				// Detail CRUD is available in CsmEditModal when adding/editing master.
 				g_readonly: true,
 				selectEnumsOverride: detailGridSelectEnums,
 			},
 			context: { select_row: selectRow || undefined },
+			inheritMasterPermissions: true,
+			masterMenuId: inheritedMenuId,
 			isDetailGrid: true,
 			comboGateExternalReady: true,
-			onDetailRowsChange: (rows: Record<string, any>[]) => handleDetailRowsChange(detailTableName, rows),
+			onDetailRowsChange: (rows: Record<string, any>[]) => handleDetailRowsChange(detailFieldName, rows),
 			onDataChange,
 		}));
 		return { key: String(node.id), label, children } as any;
-	}), [nodes, appId, permissions, menusPermissions, dataScope, database, decrypt, m_configs, selectRow, onDataChange, detailSelectEnumsByNode, handleDetailRowsChange, masterPkFields]);
+	}), [nodes, appId, permissions, menusPermissions, dataScope, inheritedMenuId, resolvedDatabase, decrypt, m_configs, selectRow, onDataChange, detailSelectEnumsByNode, handleDetailRowsChange, masterPkFields]);
 
 	const panelStyle: React.CSSProperties = {
 		minWidth: 0,
@@ -311,11 +383,12 @@ export default function CsmMasterDetail(props: any) {
 			menusPermissions,
 			dataScope,
 			menuId: (m_configs as any).menu_id,
-			database,
+			database: resolvedDatabase,
+			shareTableState: true,
 			decrypt,
 			m_configs,
 			onSelectRow: handleMasterSelectRow,
-			onDataChange,
+			onDataChange: handleMasterDataChange,
 			embeddedPanelContainer: containerRef,
 			comboGateExternalReady: true,
 		}))),

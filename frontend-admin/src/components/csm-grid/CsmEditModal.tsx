@@ -187,7 +187,7 @@ export function buildDetailGridSelectEnums(
 // Giống hệt logic Vue: seft.select_row[mn.table_name]
 // detailFieldName = node.table_name = tên trường trong master record (VD: "chi_tiet_don_hang", "items")
 // Dữ liệu lưu dưới dạng JSON array trong trường đó
-function DetailGridTab({ node, record, appId, permissions, menusPermissions, decrypt, form, detailFieldName, menuId }: any) {
+function DetailGridTab({ node, record, appId, permissions, menusPermissions, decrypt, form, detailFieldName, menuId, onDetailRowsStateChange }: any) {
   const setTableData = useAppStore(state => state.setTableData);
   const database = useAppStore(state => state.database);
   const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
@@ -279,6 +279,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
       app_id: appId,
     });
     setDetailRowsState(parsedData);
+    onDetailRowsStateChange?.(detailFieldName, parsedData);
   }, [record?.id, detailFieldName, appId, setTableData]); // Depend on record.id, not record
   
   // Lắng nghe thay đổi từ database (khi grid update) và sync ngược vào form
@@ -387,6 +388,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
             app_id: appId,
           });
           form.setFieldsValue({ [detailFieldName]: nextRows });
+          onDetailRowsStateChange?.(detailFieldName, nextRows);
         }}
         onDataChange={() => {}}
       />
@@ -1202,6 +1204,13 @@ function getFieldComponent(
   // Kiểu JSON
     // Kiểu JSON: nếu là bảng chi tiết (array field) thì render DetailGridTab (subgrid)
     if (types === 'json') {
+        const isMasterDetail = Number((m_configs as any)?.type_form) === 2;
+        const hasMasterDetailNodes = Array.isArray((m_configs as any)?.nodes) && (m_configs as any).nodes.length > 0;
+        if (isMasterDetail && hasMasterDetailNodes) {
+          // Master-detail JSON fields are rendered in the dedicated detail Tabs section below.
+          // Rendering here would create duplicate DetailGridTab instances that overwrite each other.
+          return null;
+        }
       // Đối với kiểu json, không cần có field trong fields cha, chỉ cần match với table_name của node con
       const detailFieldName = key;
       if (typeof m_configs === 'object' && Array.isArray(m_configs.nodes)) {
@@ -1698,6 +1707,65 @@ export function CsmEditModal({
   );
   const currentAppId = appId || user.app_id || "csm";
   const isEmbedded = mode === "embedded";
+  const detailRowsByFieldRef = useRef<Record<string, Row[]>>({});
+  const detailRowsTouchedRef = useRef<Record<string, boolean>>({});
+  const currentRecordKeyRef = useRef<string>("");
+
+  const handleDetailRowsStateChange = useCallback((fieldName: string, rows: Row[]) => {
+    if (!fieldName) return;
+    detailRowsByFieldRef.current[fieldName] = Array.isArray(rows)
+      ? rows.map((row) => ({ ...row }))
+      : [];
+    detailRowsTouchedRef.current[fieldName] = true;
+  }, []);
+
+  useEffect(() => {
+    if (!open) {
+      detailRowsByFieldRef.current = {};
+      detailRowsTouchedRef.current = {};
+      currentRecordKeyRef.current = "";
+      return;
+    }
+
+    const nextRecordKey = String(record?.id || "__new__");
+    const recordChanged = currentRecordKeyRef.current !== nextRecordKey;
+    if (!recordChanged) {
+      return;
+    }
+    currentRecordKeyRef.current = nextRecordKey;
+
+    const isMasterDetail = Number(m_configs?.type_form) === 2;
+    const nodes = Array.isArray((m_configs as any)?.nodes) ? (m_configs as any).nodes : [];
+    if (!isMasterDetail || nodes.length === 0) {
+      detailRowsByFieldRef.current = {};
+      detailRowsTouchedRef.current = {};
+      return;
+    }
+    const parseRows = (input: any): Row[] => {
+      if (Array.isArray(input)) return input;
+      if (typeof input === "string") {
+        const text = input.trim();
+        if (!text) return [];
+        try {
+          const parsed = JSON.parse(text);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      }
+      return [];
+    };
+    const nextRef: Record<string, Row[]> = {};
+    nodes.forEach((node: any) => {
+      const detailFieldName = String(node?.table_name || "").trim();
+      if (!detailFieldName) return;
+      const formValue = form.getFieldValue(detailFieldName);
+      const recordValue = record?.[detailFieldName];
+      nextRef[detailFieldName] = parseRows(formValue != null ? formValue : recordValue);
+    });
+    detailRowsByFieldRef.current = nextRef;
+    detailRowsTouchedRef.current = {};
+  }, [open, record?.id, form, m_configs?.type_form, (m_configs as any)?.nodes]);
   
   // Track if we're currently updating from trigger to prevent recursion
   const isUpdatingFromTrigger = useRef(false);
@@ -2338,12 +2406,18 @@ export function CsmEditModal({
           if (!detailFieldName) return;
           const currentFormValue = form.getFieldValue(detailFieldName);
           const detailStoreValue = (database as any)?.[detailFieldName]?.rows;
-          const detailRecordValue = record?.[detailFieldName];
-          const detailSource = (currentFormValue !== undefined && currentFormValue !== null)
-            ? currentFormValue
+          const detailRefHasValue = Object.prototype.hasOwnProperty.call(detailRowsByFieldRef.current, detailFieldName);
+          const detailRefValue = detailRefHasValue ? detailRowsByFieldRef.current[detailFieldName] : undefined;
+          const detailTouched = detailRowsTouchedRef.current[detailFieldName] === true;
+          const detailSource = detailTouched
+            ? (detailRefValue ?? [])
+            : (currentFormValue !== undefined && currentFormValue !== null)
+              ? currentFormValue
+            : (detailRefValue !== undefined && detailRefValue !== null)
+              ? detailRefValue
             : (detailStoreValue !== undefined && detailStoreValue !== null)
               ? detailStoreValue
-              : detailRecordValue;
+              : [];
           const detailRows = normalizeDetailArray(
             detailSource,
           );
@@ -2351,8 +2425,9 @@ export function CsmEditModal({
           console.log(`[CsmEditModal] Saving ${detailFieldName}:`, {
             rowCount: detailRows.length,
             rawValue: currentFormValue,
+            refValueCount: Array.isArray(detailRefValue) ? detailRefValue.length : 0,
             storeValueCount: Array.isArray(detailStoreValue) ? detailStoreValue.length : 0,
-            recordValueCount: Array.isArray(detailRecordValue) ? detailRecordValue.length : 0,
+            detailTouched,
             detailFieldName: detailFieldName,
             type: typeof currentFormValue,
             sampleRow: detailRows.length > 0 ? detailRows[0] : null
@@ -2527,6 +2602,7 @@ export function CsmEditModal({
                         form={form}
                         detailFieldName={detailFieldName}
                         menuId={(m_configs as any)?.menu_id ?? node?.menu_id}
+                        onDetailRowsStateChange={handleDetailRowsStateChange}
                       />
                     </div>
                   </Tabs.TabPane>

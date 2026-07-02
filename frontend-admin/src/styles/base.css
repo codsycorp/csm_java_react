@@ -323,3 +323,66 @@ html[data-theme="dark"] .ant-message .ant-message-custom-content.ant-message-err
 	color: #ffc4c4;
 }
 
+/* Delete confirm modal contrast in dark mode */
+html[data-theme="dark"] .ant-modal-confirm .ant-modal-content {
+	background: var(--csm-surface-1);
+	border: 1px solid var(--csm-border-strong);
+}
+
+html[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-title,
+html[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-content {
+	color: #dbe6f5;
+}
+
+html[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-paragraph,
+html[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-paragraph .ant-modal-confirm-title,
+html[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-paragraph .ant-modal-confirm-content,
+html[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-content > div,
+html[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-content p,
+html[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-content span {
+	color: #dbe6f5 !important;
+}
+
+html[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-btns .ant-btn-default {
+	background: var(--csm-surface-2);
+	border-color: var(--csm-border-strong);
+	color: #dbe6f5;
+}
+
+body[data-theme="dark"] .ant-modal-confirm .ant-modal-content,
+html.dark .ant-modal-confirm .ant-modal-content,
+body.dark .ant-modal-confirm .ant-modal-content {
+	background: var(--csm-surface-1);
+	border: 1px solid var(--csm-border-strong);
+}
+
+body[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-title,
+html.dark .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-title,
+body.dark .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-title,
+body[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-content,
+html.dark .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-content,
+body.dark .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-content,
+body[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-content *,
+html.dark .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-content *,
+body.dark .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-content * {
+	color: #dbe6f5 !important;
+}
+
+body[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-title,
+html.dark .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-title,
+body.dark .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-title {
+	font-weight: 600;
+}
+
+body[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-title + .ant-modal-confirm-content,
+html.dark .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-title + .ant-modal-confirm-content,
+body.dark .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-title + .ant-modal-confirm-content {
+	opacity: 1;
+}
+
+body[data-theme="dark"] .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-body-wrapper .anticon,
+html.dark .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-body-wrapper .anticon,
+body.dark .ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-body-wrapper .anticon {
+	color: #ffb957;
+}
+
