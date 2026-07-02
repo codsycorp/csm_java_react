@@ -9,7 +9,7 @@ import { initializePerformanceOptimizations } from "#src/utils/performance-optim
 
 import { theme as antdTheme, ConfigProvider } from "antd";
 import dayjs from "dayjs";
-import { Suspense, useCallback, useEffect, useMemo } from "react";
+import { Suspense, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { RouterProvider } from "react-router-dom";
 
@@ -33,7 +33,6 @@ export default function App() {
 		colorBlindMode,
 		colorGrayMode,
 		themeRadius,
-		changeSiteTheme,
 		birthYear,
 		builtinTheme,
 		fengShuiManualColorSelected,
@@ -99,39 +98,6 @@ export default function App() {
 	}, [language, i18n.changeLanguage]);
 
 	// ĐÃ LOẠI BỎ auto addTab Trang Chủ ở đây, sẽ add sau khi layout admin render thành công
-
-	/**
-	 * Change theme when the system theme changes
-	 */
-	const setEmulateTheme = useCallback(
-		// eslint-disable-next-line unused-imports/no-unused-vars
-		(dark?: boolean) => {
-			changeSiteTheme("auto");
-		},
-		[changeSiteTheme],
-	);
-
-	/**
-	 * Watch system theme change
-	 */
-	useEffect(() => {
-		if (theme === "auto") {
-			// https://developer.chrome.com/docs/devtools/rendering/emulate-css/
-			const darkModeMediaQuery = window.matchMedia(
-				"(prefers-color-scheme: dark)",
-			);
-
-			function matchMode(e: MediaQueryListEvent) {
-				setEmulateTheme(e.matches);
-			}
-
-			setEmulateTheme(darkModeMediaQuery.matches);
-			darkModeMediaQuery.addEventListener("change", matchMode);
-			return () => {
-				darkModeMediaQuery.removeEventListener("change", matchMode);
-			};
-		}
-	}, [theme, setEmulateTheme]);
 
 	/**
 	 * 更新页面颜色模式（灰色、色弱）

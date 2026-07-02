@@ -299,3 +299,27 @@ html[data-theme="dark"] .ant-collapse-content {
 	border-top-color: var(--csm-border-soft);
 }
 
+/* Message/Toast contrast in dark mode */
+html[data-theme="dark"] .ant-message .ant-message-notice-content {
+	background: var(--csm-surface-2);
+	border: 1px solid var(--csm-border-strong);
+	color: #dbe6f5;
+	box-shadow: var(--csm-control-elevated-shadow);
+}
+
+html[data-theme="dark"] .ant-message .ant-message-custom-content {
+	color: #dbe6f5;
+}
+
+html[data-theme="dark"] .ant-message .ant-message-custom-content.ant-message-success {
+	color: #c8f0d5;
+}
+
+html[data-theme="dark"] .ant-message .ant-message-custom-content.ant-message-warning {
+	color: #ffe2a8;
+}
+
+html[data-theme="dark"] .ant-message .ant-message-custom-content.ant-message-error {
+	color: #ffc4c4;
+}
+

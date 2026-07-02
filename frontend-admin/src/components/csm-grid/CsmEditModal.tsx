@@ -8,7 +8,7 @@ import { xml } from '@codemirror/lang-xml';
 import { vscodeDark } from '@uiw/codemirror-theme-vscode';
 import React, { useEffect, useMemo, useState, Suspense, lazy, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Form, Input, Button, Select, Divider, Typography, InputNumber, DatePicker, TimePicker, Switch, Modal, Tabs, Space, TreeSelect, theme, Spin } from "antd";
+import { Form, Input, Button, Select, AutoComplete, Divider, Typography, InputNumber, DatePicker, TimePicker, Switch, Modal, Tabs, Space, TreeSelect, theme, Spin } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
 import { csmEncrypt, csmDecrypt } from "./CsmCrypto";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
@@ -195,6 +195,28 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
   
   // 🔄 Track database version để force re-compute selectEnums khi missing tables được fetch
   const [databaseVersion, setDatabaseVersion] = useState(0);
+  const [detailRowsState, setDetailRowsState] = useState<Row[] | null>(null);
+
+  const formDetailValue = form.getFieldValue(detailFieldName);
+
+  const currentDetailRows = useMemo(() => {
+    const raw = detailRowsState ?? (formDetailValue ?? record?.[detailFieldName]);
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string' && raw.trim()) {
+      try {
+        const parsed = JSON.parse(raw.trim());
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }, [detailFieldName, detailRowsState, formDetailValue, record, databaseVersion]);
+
+  const detailContextRow = useMemo(() => ({
+    ...(record || {}),
+    [detailFieldName]: currentDetailRows,
+  }), [currentDetailRows, detailFieldName, record]);
   
   // Poll for completed table fetches and trigger re-compute
   useEffect(() => {
@@ -236,7 +258,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
     let detailData = form.getFieldValue(detailFieldName);
     
     // Fallback: lấy từ record
-    if (!detailData && record) {
+    if ((detailData === undefined || detailData === null) && record) {
       detailData = record[detailFieldName];
     }
     
@@ -244,7 +266,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
     const parsedData = parseDetailData(detailData);
     
     gridDevLog(`[DetailGridTab] Syncing ${detailFieldName}:`, {
-      hasFormValue: !!form.getFieldValue(detailFieldName),
+      hasFormValue: form.getFieldValue(detailFieldName) !== undefined && form.getFieldValue(detailFieldName) !== null,
       hasRecord: !!record,
       dataLength: parsedData.length,
       recordId: record?.id
@@ -256,6 +278,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
       rows: parsedData,
       app_id: appId,
     });
+    setDetailRowsState(parsedData);
   }, [record?.id, detailFieldName, appId, setTableData]); // Depend on record.id, not record
   
   // Lắng nghe thay đổi từ database (khi grid update) và sync ngược vào form
@@ -264,7 +287,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
     const tableData = database[detailFieldName];
     if (tableData && Array.isArray(tableData.rows)) {
       const currentFormValue = form.getFieldValue(detailFieldName);
-      const needsUpdate = !currentFormValue || 
+      const needsUpdate = currentFormValue === undefined || currentFormValue === null || 
                          !Array.isArray(currentFormValue) || 
                          currentFormValue.length !== tableData.rows.length ||
                          JSON.stringify(currentFormValue) !== JSON.stringify(tableData.rows);
@@ -354,16 +377,18 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
           selectEnumsOverride: detailGridSelectEnums, // Override selectEnums from trigger
         } as any}
         isDetailGrid={true} // Đánh dấu detail grid - không load từ database riêng
-        onDataChange={() => {
-          // Khi grid thay đổi, force sync database → form ngay lập tức
-          const tableData = database[detailFieldName];
-          if (tableData && Array.isArray(tableData.rows)) {
-            gridDevLog(`[DetailGridTab] onDataChange: Syncing ${detailFieldName} → form (${tableData.rows.length} rows)`);
-            form.setFieldsValue({ [detailFieldName]: tableData.rows });
-          } else {
-            console.warn(`[DetailGridTab] onDataChange: No data for ${detailFieldName}`, tableData);
-          }
+        context={{ select_row: detailContextRow }}
+        onDetailRowsChange={(rows: Row[]) => {
+          const nextRows = Array.isArray(rows) ? rows : [];
+          setDetailRowsState(nextRows);
+          setTableData(detailFieldName, {
+            id: detailFieldName,
+            rows: nextRows,
+            app_id: appId,
+          });
+          form.setFieldsValue({ [detailFieldName]: nextRows });
         }}
+        onDataChange={() => {}}
       />
     </div>
   );
@@ -572,6 +597,11 @@ type SelectOption = {
   value: any;
 };
 
+type TextSuggestionOption = {
+  label: string;
+  value: string;
+};
+
 export function buildSelectOptions(
   rawOptions: { label: string; value: any }[] | undefined,
   enumObj: Record<string, { text: string }> | undefined,
@@ -743,6 +773,44 @@ function normalizeMultiTagValues(input: any, options: SelectOption[]): string[] 
       })
       .filter(Boolean),
   ));
+}
+
+function collectFieldTextHistory(
+  rowsSource: any,
+  fieldName: string,
+  currentValue: string,
+  query: string,
+  limit = 20,
+): TextSuggestionOption[] {
+  const rows = Array.isArray(rowsSource)
+    ? rowsSource
+    : (Array.isArray(rowsSource?.rows) ? rowsSource.rows : []);
+  if (!Array.isArray(rows) || rows.length === 0 || !fieldName) return [];
+
+  const normalizedQuery = String(query || "").trim().toLowerCase();
+  const normalizedCurrent = String(currentValue || "").trim();
+  const seen = new Set<string>();
+  const options: TextSuggestionOption[] = [];
+
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const raw = rows[i]?.[fieldName];
+    if (typeof raw !== "string") continue;
+    const text = raw.trim();
+    if (!text) continue;
+    if (normalizedCurrent && text === normalizedCurrent) continue;
+    const normalizedText = text.toLowerCase();
+    if (normalizedQuery.length >= 2 && !normalizedText.includes(normalizedQuery)) continue;
+    if (seen.has(normalizedText)) continue;
+    seen.add(normalizedText);
+    const oneLine = text.replace(/\s+/g, " ").trim();
+    options.push({
+      value: text,
+      label: oneLine.length > 90 ? `${oneLine.slice(0, 90)}...` : oneLine,
+    });
+    if (options.length >= limit) break;
+  }
+
+  return options;
 }
 
 // Key-value editor for JSON fields
@@ -949,6 +1017,16 @@ function getFieldComponent(
   const dateLocaleFormat = resolveDateLocaleFormat(lang);
   const fieldLabel = resolveFieldLabel(f, lang, translate);
   const initialVal = fieldValues?.[key];
+  const activeFieldValue = String(form.getFieldValue(key) ?? initialVal ?? "");
+  const activeFieldQuery = activeFieldValue.split("\n").slice(-1)[0] || activeFieldValue;
+  const tableName = String(m_configs?.table_name || "").split(",")[0].trim();
+  const textHistoryOptions = collectFieldTextHistory(
+    tableName ? database?.[tableName] : undefined,
+    key,
+    activeFieldValue,
+    activeFieldQuery,
+    25,
+  );
   const recordId = String(record?.id ?? fieldValues?.id ?? form.getFieldValue("id") ?? "").trim();
   const isExistingRecord = Boolean(recordId);
   
@@ -1018,7 +1096,29 @@ function getFieldComponent(
   // edt dùng TextArea
   if (types === 'edt') {
     return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
-      <Input.TextArea rows={8} disabled={isReadonly} />
+      <div>
+        <AutoComplete
+          options={textHistoryOptions}
+          filterOption={false}
+          onSelect={(nextValue) => {
+            form.setFieldsValue({ [key]: nextValue });
+            onFieldChange?.(key, nextValue);
+          }}
+          dropdownMatchSelectWidth={false}
+        >
+          <Input.TextArea
+            rows={8}
+            disabled={isReadonly}
+            placeholder={textHistoryOptions.length > 0 ? "Nhập để lọc mẫu cũ và chọn nhanh" : undefined}
+            onChange={(event) => onFieldChange?.(key, event.target.value)}
+          />
+        </AutoComplete>
+        {textHistoryOptions.length > 0 && (
+          <div style={{ marginTop: 6, fontSize: 12, color: "var(--ant-colorTextDescription)" }}>
+            Gợi ý nhanh từ dữ liệu cũ cùng trường.
+          </div>
+        )}
+      </div>
     </Form.Item>;
   }
   
@@ -1180,7 +1280,29 @@ function getFieldComponent(
   // Kiểu Textarea/Memo
   if (/textarea|memo/.test(types)) {
     return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
-      <Input.TextArea rows={6} disabled={isReadonly} />
+      <div>
+        <AutoComplete
+          options={textHistoryOptions}
+          filterOption={false}
+          onSelect={(nextValue) => {
+            form.setFieldsValue({ [key]: nextValue });
+            onFieldChange?.(key, nextValue);
+          }}
+          dropdownMatchSelectWidth={false}
+        >
+          <Input.TextArea
+            rows={6}
+            disabled={isReadonly}
+            placeholder={textHistoryOptions.length > 0 ? "Nhập để lọc mẫu cũ và chọn nhanh" : undefined}
+            onChange={(event) => onFieldChange?.(key, event.target.value)}
+          />
+        </AutoComplete>
+        {textHistoryOptions.length > 0 && (
+          <div style={{ marginTop: 6, fontSize: 12, color: "var(--ant-colorTextDescription)" }}>
+            Gợi ý nhanh từ dữ liệu cũ cùng trường.
+          </div>
+        )}
+      </div>
     </Form.Item>;
   }
   
@@ -1772,6 +1894,21 @@ export function CsmEditModal({
   // Helper: Run UPDATE trigger realtime (near-instant)
   const runUpdateTriggerRealtime = useCallback((changedValues: any, allValues: any) => {
     gridDevLog('[CsmEditModal.runUpdateTriggerRealtime] Triggered with changed values:', changedValues);
+
+    const isMasterDetail = Number(m_configs.type_form) === 2;
+    if (isMasterDetail && changedValues && typeof changedValues === 'object') {
+      const nodes = Array.isArray((m_configs as any).nodes) ? (m_configs as any).nodes : [];
+      const detailFieldNames = new Set(
+        nodes
+          .map((node: any) => String(node?.table_name || '').trim())
+          .filter(Boolean),
+      );
+      const changedKeys = Object.keys(changedValues);
+      if (changedKeys.some((key) => detailFieldNames.has(key))) {
+        gridDevLog('[CsmEditModal.runUpdateTriggerRealtime] Skip master realtime trigger for detail field change');
+        return;
+      }
+    }
     
     // Prevent recursion: don't run trigger if we're already updating from trigger
     if (isUpdatingFromTrigger.current) {
@@ -2182,29 +2319,48 @@ export function CsmEditModal({
       const nodes = (m_configs as any).nodes || [];
       if (isMasterDetail && Array.isArray(nodes)) {
         console.log('[CsmEditModal] Master-Detail save: processing detail grids');
+        const normalizeDetailArray = (input: any): any[] => {
+          if (Array.isArray(input)) return input;
+          if (typeof input === 'string') {
+            const text = input.trim();
+            if (!text) return [];
+            try {
+              const parsed = JSON.parse(text);
+              return Array.isArray(parsed) ? parsed : [];
+            } catch {
+              return [];
+            }
+          }
+          return [];
+        };
         nodes.forEach((node: any) => {
-          const detailFieldName = node.table_name;
+          const detailFieldName = String(node?.table_name || '').trim();
+          if (!detailFieldName) return;
           const currentFormValue = form.getFieldValue(detailFieldName);
-          const detailValue = currentFormValue || [];
+          const detailStoreValue = (database as any)?.[detailFieldName]?.rows;
+          const detailRecordValue = record?.[detailFieldName];
+          const detailSource = (currentFormValue !== undefined && currentFormValue !== null)
+            ? currentFormValue
+            : (detailStoreValue !== undefined && detailStoreValue !== null)
+              ? detailStoreValue
+              : detailRecordValue;
+          const detailRows = normalizeDetailArray(
+            detailSource,
+          );
 
           console.log(`[CsmEditModal] Saving ${detailFieldName}:`, {
-            rowCount: Array.isArray(detailValue) ? detailValue.length : 0,
-            rawValue: detailValue,
+            rowCount: detailRows.length,
+            rawValue: currentFormValue,
+            storeValueCount: Array.isArray(detailStoreValue) ? detailStoreValue.length : 0,
+            recordValueCount: Array.isArray(detailRecordValue) ? detailRecordValue.length : 0,
             detailFieldName: detailFieldName,
-            type: typeof detailValue,
-            sampleRow: Array.isArray(detailValue) && detailValue.length > 0 ? detailValue[2] : null
+            type: typeof currentFormValue,
+            sampleRow: detailRows.length > 0 ? detailRows[0] : null
           });
 
-          if (Array.isArray(detailValue)) {
-            finalValues[detailFieldName] = JSON.stringify(detailValue);
-            console.log(`[CsmEditModal] Stringified ${detailFieldName}: ${finalValues[detailFieldName].substring(0, 100)}...`);
-          } else if (typeof detailValue === 'string') {
-            finalValues[detailFieldName] = detailValue;
-            console.log(`[CsmEditModal] ${detailFieldName} already stringified`);
-          } else {
-            finalValues[detailFieldName] = '[]';
-            console.log(`[CsmEditModal] ${detailFieldName} set to empty array`);
-          }
+          // Persist detail tabs as JSON array string on master row field (Vue parity contract).
+          finalValues[detailFieldName] = JSON.stringify(detailRows);
+          console.log(`[CsmEditModal] Normalized ${detailFieldName}: ${detailRows.length} rows`);
         });
       }
 
@@ -2222,7 +2378,7 @@ export function CsmEditModal({
     }).catch(err => console.error('Validation error:', err)).finally(() => {
       setSubmitting(false);
     });
-  }, [submitting, form, dynamicFields, i18n.language, t, m_configs, applyRowTrigger, onSubmit, onOpenChange, onNavigateRecord]);
+  }, [submitting, form, dynamicFields, i18n.language, t, m_configs, applyRowTrigger, onSubmit, onOpenChange, onNavigateRecord, database, record]);
 
   const editorContent = (
     <div ref={modalContentRef}>
