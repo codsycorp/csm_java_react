@@ -141,6 +141,11 @@ func RenderPage(ctx SSRContext, uri, host, queryStr string) string {
 // shouldCacheSSRPage skips caching detail URLs that failed to resolve serviceDetail,
 // so a transient lookup miss is not frozen for 30 minutes (Java has no full-page SSR cache).
 func shouldCacheSSRPage(uri, html string) bool {
+	// Avoid freezing transient empty category listings for 30 minutes.
+	if strings.Contains(html, `"serviceDetailList":[]`) || strings.Contains(html, `"serviceDetailList": []`) {
+		return false
+	}
+
 	if !looksLikeDetailURI(uri) {
 		return true
 	}
@@ -1581,7 +1586,7 @@ func mapServiceCategory(rm *data.RecordManager, row map[string]any, lang string)
 		"domain":       s("domain"),
 		"name":         s("name"),
 		"service_code": s("service_code"),
-		"slug":         s("service_code"),
+		"slug":         s("slug"),
 		"status":       s("status"),
 		"icon":         s("icon"),
 		"sort_order":   s("sort_order"),
