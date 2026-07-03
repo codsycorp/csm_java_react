@@ -15,7 +15,7 @@ import {
 import type { ColumnsType } from "antd/es/table";
 
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
-import { resolveRuntimeAppId } from "#src/components/csm-grid/combo-utils";
+import { resolveRuntimeAppId, parseStaticComboQuery } from "#src/components/csm-grid/combo-utils";
 import { useUserStore } from "#src/store";
 import CsmLineItemsEditor from "./CsmLineItemsEditor";
 import type { LineItemsEditorConfig, OrderHeader, ProductGroup } from "./types";
@@ -113,6 +113,29 @@ export default function CsmLineItemsPage({
 	const listTitle = resolveTriLangLabel(ui, i18n.language, ["list_title"]) || menuLabel;
 	const pkFields = useMemo(() => resolvePkFields(m_configs), [m_configs]);
 	const listColumns = useMemo(() => resolveLineItemsListColumns(m_configs), [m_configs]);
+	const listComboLabelMaps = useMemo(() => {
+		const map = new Map<string, Record<string, string>>();
+		(m_configs.table || []).forEach((field: any) => {
+			const fieldName = String(field?.f_name ?? "").trim();
+			if (!fieldName) return;
+			const types = String(field?.f_types ?? "").toLowerCase();
+			if (!/co|cbo|cp|coro|select/.test(types)) return;
+			const parsed = parseStaticComboQuery(String(field?.f_cbo_query ?? ""));
+			const options = Array.isArray(parsed?.options) ? parsed.options : [];
+			if (options.length === 0) return;
+			const optionMap: Record<string, string> = {};
+			options.forEach((opt: any) => {
+				const value = String(opt?.ma ?? opt?.value ?? opt?.id ?? opt?.key ?? "").trim();
+				if (!value) return;
+				const label = String(opt?.ten ?? opt?.label ?? opt?.text ?? opt?.name ?? value).trim();
+				optionMap[value] = label || value;
+			});
+			if (Object.keys(optionMap).length > 0) {
+				map.set(fieldName, optionMap);
+			}
+		});
+		return map;
+	}, [m_configs.table]);
 
 	const [loading, setLoading] = useState(false);
 	const [rows, setRows] = useState<Record<string, any>[]>([]);
@@ -254,6 +277,15 @@ export default function CsmLineItemsPage({
 			key: col.field,
 			width: col.width,
 			ellipsis: true,
+			render: (_: unknown, row: Record<string, any>) => {
+				const raw = row?.[col.field];
+				const comboLabels = listComboLabelMaps.get(col.field);
+				if (comboLabels) {
+					const text = comboLabels[String(raw ?? "").trim()];
+					if (text) return text;
+				}
+				return raw as any;
+			},
 		}));
 		return [
 			...dataCols,
@@ -285,7 +317,7 @@ export default function CsmLineItemsPage({
 				),
 			},
 		];
-	}, [handleDelete, i18n.language, listColumns, openEdit]);
+	}, [handleDelete, i18n.language, listColumns, listComboLabelMaps, openEdit]);
 
 	const filteredRows = useMemo(
 		() => rows.filter(row => rowMatchesListFilter(row, ui.list_filter)),
