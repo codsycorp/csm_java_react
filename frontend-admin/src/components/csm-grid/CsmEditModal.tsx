@@ -1573,12 +1573,13 @@ function getFieldComponent(
   
   // Kiểu Select/CBO (combobox) - hỗ trợ thêm alias select/cbo cho tương thích dữ liệu cũ
   if (isComboLikeType(types)) {
-    const rawOptions = selectOptions?.[key];
     const cascadeConfig = resolveCascadeSelectOptions(f, form, database, decrypt, localizeLabel);
     const roleFieldNames = new Set(["group_id", "permissiongroups", "group_rights", "grouprights"]);
     const roleRows = roleFieldNames.has(String(key || "").trim().toLowerCase())
       ? getComboTableRows(database, "csm_roles")
       : [];
+    const fieldRawOptions = parseFieldOptions(f.f_options);
+    const rawOptions = fieldRawOptions.length > 0 ? fieldRawOptions : selectOptions?.[key];
     let localizedOptions: SelectOption[];
     if (roleRows.length > 0) {
       localizedOptions = buildRoleComboOptions(roleRows).map((opt) => ({
@@ -2236,14 +2237,21 @@ export function CsmEditModal({
           );
           convertedValues[key] = normalizeMultiTagValues(convertedValues[key], tagOptions);
         } else if (isComboLikeType(types)) {
-          const normalizedOptions = buildSelectOptions(
-            selectOptions?.[key],
-            modalSelectEnums?.[key],
-            (label) => {
+          const fieldRawOptions = parseFieldOptions(f.f_options);
+          const rawOptions = fieldRawOptions.length > 0 ? fieldRawOptions : selectOptions?.[key];
+          const normalizedOptions = resolveEditFieldComboSelectOptions(f, database, {
+            selectEnum: modalSelectEnums?.[key],
+            rawSelectOptions: rawOptions,
+            menuById,
+            fallbackAppId: currentAppId,
+            userContext: getUserAccessContext(),
+            decrypt: effectiveDecrypt,
+            evalContext: { seft: comboEvalSeft || { m_configs, database, appId: currentAppId }, database },
+            localizeLabel: (label) => {
               const text = String(label == null ? '' : label);
               return text.includes('.') ? t(text) : text;
-            }
-          );
+            },
+          });
           convertedValues[key] = normalizeSelectValue(convertedValues[key], normalizedOptions);
         }
       });
