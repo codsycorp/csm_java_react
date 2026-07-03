@@ -151,9 +151,9 @@ func DispatchAPI(st *state.AppState, method, path string, params map[string]any,
 		return st.SocialHandler.HandleCreateAdCampaign(params, "google_ads", auth)
 
 	case "/chat-history", "/chat-history-guest", "/chat-history-app",
-		"/chat-guests-list", "/chat-mark-read",
-		"/chat-mark-all-read", "/chat-delete-message":
-		return model.NotImplemented(path + " (chat deferred)")
+		"/chat-guests-list", "/chat-mark-read", "/chat-mark-read-guest",
+		"/chat-mark-all-read", "/chat-mark-read-all", "/chat-delete-message":
+		return dispatchChatAPI(st, path, params, auth)
 
 	case "/crm/customer":
 		return st.CrmHandler.HandleCustomer(method, params, auth)

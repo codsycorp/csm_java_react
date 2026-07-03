@@ -3454,6 +3454,140 @@ function findZaloConfigById(configs, targetId) {
   return configs.find((cfg) => cfg && cfg.config_for_zalo && normalizeConfigId(cfg.id) === normalizedTargetId) || null;
 }
 
+function getConfigFanpages(config = null) {
+  if (!config || typeof config !== 'object') return [];
+
+  if (Array.isArray(config.zalo_fanpages) && config.zalo_fanpages.length > 0) {
+    return config.zalo_fanpages
+      .map((fp) => ({
+        id: String(fp?.id || '').trim(),
+        name: fp?.name || fp?.page_name || 'Unknown',
+        access_token: String(fp?.access_token || fp?.token || fp?.page_token || '').trim()
+      }))
+      .filter((fp) => fp.id);
+  }
+
+  if (Array.isArray(config.fanpage_ids) && config.fanpage_ids.length > 0) {
+    return config.fanpage_ids
+      .map((id, idx) => ({
+        id: String(id || '').trim(),
+        name: config.fanpage_names?.[idx] || config.fanpage_name || 'Unknown',
+        access_token: String(config.fanpage_tokens?.[idx] || config.fanpage_token || '').trim()
+      }))
+      .filter((fp) => fp.id);
+  }
+
+  if (config.fanpage_id) {
+    return [{
+      id: String(config.fanpage_id).trim(),
+      name: config.fanpage_name || 'Unknown',
+      access_token: String(config.fanpage_token || '').trim()
+    }];
+  }
+
+  return [];
+}
+
+function enforcePostingTargetByConfig(config, ctx = {}, fanpages = [], articleUrl = '') {
+  if (!config || typeof config !== 'object') {
+    return Array.isArray(fanpages) ? fanpages : [];
+  }
+
+  const configId = normalizeConfigId(config.id);
+  const configDomain = migrateLegacyPhanmemDomain(config.domain || '');
+  const ctxDomain = migrateLegacyPhanmemDomain(ctx?.domain || '');
+
+  if (configDomain && ctxDomain && configDomain !== ctxDomain) {
+    throw new Error(`Domain context lệch config (${configId}): ctx=${ctxDomain}, config=${configDomain}. Đã chặn để tránh đăng nhầm.`);
+  }
+
+  if (articleUrl) {
+    let host = '';
+    try {
+      host = new URL(String(articleUrl)).hostname || '';
+    } catch {
+      host = '';
+    }
+    if (host && configDomain && !hostBelongsToDomainList(host, configDomain)) {
+      throw new Error(`URL bài viết không thuộc domain cấu hình (${configId}): ${articleUrl}. Đã chặn để tránh đăng nhầm.`);
+    }
+  }
+
+  const allowedFanpages = getConfigFanpages(config);
+  if (allowedFanpages.length === 0) {
+    throw new Error(`Cấu hình ${configId} không có fanpage hợp lệ. Đã chặn để tránh đăng nhầm.`);
+  }
+
+  const allowedById = new Map();
+  allowedFanpages.forEach((fp) => {
+    allowedById.set(String(fp.id || '').trim(), fp);
+  });
+
+  const resolvedFanpages = (Array.isArray(fanpages) ? fanpages : [])
+    .map((fp) => {
+      const id = String(fp?.id || '').trim();
+      if (!id) return null;
+      const allowed = allowedById.get(id);
+      if (!allowed) {
+        throw new Error(`Fanpage ${id} không thuộc cấu hình ${configId}. Đã chặn để tránh đăng nhầm.`);
+      }
+      const token = String(fp?.access_token || '').trim() || String(allowed?.access_token || '').trim();
+      if (!token) {
+        throw new Error(`Fanpage ${id} trong cấu hình ${configId} thiếu token hợp lệ. Đã chặn đăng.`);
+      }
+      const allowedToken = String(allowed?.access_token || '').trim();
+      if (allowedToken && token && allowedToken !== token) {
+        throw new Error(`Token fanpage ${id} không khớp cấu hình ${configId}. Đã chặn để tránh đăng nhầm.`);
+      }
+      return {
+        id,
+        name: fp?.name || allowed?.name || 'Unknown',
+        access_token: token
+      };
+    })
+    .filter(Boolean);
+
+  if (resolvedFanpages.length === 0) {
+    throw new Error(`Không có fanpage hợp lệ để đăng theo cấu hình ${configId}.`);
+  }
+
+  return resolvedFanpages;
+}
+
+const ZALO_POSTING_AUDIT_KEY = 'zalo_posting_audit_v1';
+const ZALO_POSTING_AUDIT_LIMIT = 500;
+
+function appendZaloPostingAuditLog(payload = {}) {
+  try {
+    const record = {
+      ts: Date.now(),
+      iso: new Date().toISOString(),
+      config_id: String(payload.config_id || '').trim() || 'unknown',
+      domain: String(payload.domain || '').trim(),
+      article_url: String(payload.article_url || '').trim(),
+      target_page_ids: Array.isArray(payload.target_page_ids) ? payload.target_page_ids : [],
+      posted_page_ids: Array.isArray(payload.posted_page_ids) ? payload.posted_page_ids : [],
+      success_count: Number(payload.success_count || 0),
+      fail_count: Number(payload.fail_count || 0),
+      note: String(payload.note || '').trim()
+    };
+
+    const oneLine = `[AUDIT][ZALO_POST] config=${record.config_id} domain=${record.domain || '-'} success=${record.success_count} fail=${record.fail_count} targetPages=${record.target_page_ids.join('|') || '-'} postedPages=${record.posted_page_ids.join('|') || '-'} url=${record.article_url || '-'}`;
+    console.log(oneLine);
+
+    const raw = localStorage.getItem(ZALO_POSTING_AUDIT_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    const next = Array.isArray(arr) ? arr : [];
+    next.unshift(record);
+    if (next.length > ZALO_POSTING_AUDIT_LIMIT) {
+      next.splice(ZALO_POSTING_AUDIT_LIMIT);
+    }
+    localStorage.setItem(ZALO_POSTING_AUDIT_KEY, JSON.stringify(next));
+  } catch (e) {
+    console.warn('⚠️ [ZALO_AUDIT] Không ghi được audit log:', e?.message || e);
+  }
+}
+
 function buildFanpageTokenMap(ctx = {}) {
   const map = {};
   const fallbackTokens = [];
@@ -5882,6 +6016,72 @@ function extractVideosFromMessage(item = {}) {
   return validVideos;
 }
 
+function normalizeHashtagToken(raw, opts = {}) {
+  const { lower = false } = opts;
+  const token = String(raw || "").trim();
+  if (!token) return "";
+
+  const compact = token
+    .replace(/[，、。！!？?;；]+$/g, "")
+    .replace(/\s+/g, "");
+  if (!compact) return "";
+
+  const normalized = compact.startsWith("#") ? compact : `#${compact}`;
+  return lower ? normalized.toLowerCase() : normalized;
+}
+
+function extractMessageHashtags(item = {}) {
+  const buckets = [
+    item.hashtags,
+    item.hashTags,
+    item.tags,
+    item.tag_list,
+    item.attributes_keywords,
+    item.keywords,
+    item.keyword,
+  ];
+
+  const out = [];
+  const pushToken = (v) => {
+    if (v == null) return;
+    if (Array.isArray(v)) {
+      v.forEach(pushToken);
+      return;
+    }
+
+    const str = String(v || "").trim();
+    if (!str) return;
+
+    const explicitTags = str.match(/#[^\s#]+/g) || [];
+    if (explicitTags.length > 0) {
+      explicitTags
+        .map((tag) => normalizeHashtagToken(tag))
+        .filter(Boolean)
+        .forEach((tag) => out.push(tag));
+      return;
+    }
+
+    str
+      .split(/[\n,;|]/g)
+      .map((tag) => normalizeHashtagToken(tag))
+      .filter(Boolean)
+      .forEach((tag) => out.push(tag));
+  };
+
+  buckets.forEach(pushToken);
+
+  const uniq = [];
+  const seen = new Set();
+  out.forEach((tag) => {
+    const key = normalizeHashtagToken(tag, { lower: true });
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    uniq.push(tag);
+  });
+
+  return uniq.slice(0, 20);
+}
+
 function extractMessageText(item = {}) {
   const candidates = [
     item.content,
@@ -5894,7 +6094,24 @@ function extractMessageText(item = {}) {
   ];
 
   const firstText = candidates.find(v => typeof v === "string" && v.trim().length > 0) || "";
-  return normalizeZaloText(firstText);
+  const baseText = normalizeZaloText(firstText);
+  const hashtags = extractMessageHashtags(item);
+
+  if (hashtags.length === 0) {
+    return baseText;
+  }
+
+  const textTags = new Set(
+    (baseText.match(/#[^\s#]+/g) || [])
+      .map((s) => normalizeHashtagToken(s, { lower: true }))
+      .filter(Boolean)
+  );
+  const missingTags = hashtags.filter((tag) => !textTags.has(normalizeHashtagToken(tag, { lower: true })));
+  if (missingTags.length === 0) {
+    return baseText;
+  }
+
+  return normalizeZaloText(`${baseText}\n\n${missingTags.join(" ")}`);
 }
 
 function getMessageEssentials(item = {}) {
@@ -7682,7 +7899,8 @@ async function processContent(item, opts = {}) {
             helperAi: ctx.helperAi,
             seft: seft || {},
             industry: effectiveIndustry,
-            skipRecord: true
+            skipRecord: true,
+            strictConfigId: opts.config_id
           }
         );
 
@@ -7703,6 +7921,17 @@ async function processContent(item, opts = {}) {
         canhbao(msg);
         thongbao(msg);
       }
+
+      appendZaloPostingAuditLog({
+        config_id: opts.config_id || ctx.config_id || latestConfig?.id || 'unknown',
+        domain: ctx.domain || latestConfig?.domain || '',
+        article_url: articleUrl,
+        target_page_ids: fanpagesToPost.map((p) => String(p?.id || '').trim()).filter(Boolean),
+        posted_page_ids: Array.from(new Set(postedFacebookItems.map((p) => String(p?.page_id || '').trim()).filter(Boolean))),
+        success_count: successCount,
+        fail_count: failCount,
+        note: tokenExpiredDetected ? 'token_expired' : ''
+      });
 
       // ✅ CRITICAL: Record posted Zalo message SAU KHI post FB thành công (tránh duplicate)
       if (successCount > 0) {
@@ -9288,6 +9517,29 @@ function resolveSeoClientTimeoutMs() {
   return 0;
 }
 
+function buildSeoPromptFallbackFromOneShotContext(seoContext = {}) {
+  const industry = String(seoContext.industry || "bat-dong-san").trim();
+  const topic = String(seoContext.topic || seoContext.content || "").trim();
+  if (!topic) return "";
+
+  const ctxLine = [
+    `industry=${industry}`,
+    seoContext.domainKey ? `domainKey=${String(seoContext.domainKey).trim()}` : "",
+    seoContext.property ? `property=${String(seoContext.property).trim()}` : "",
+    seoContext.location ? `location=${String(seoContext.location).trim()}` : "",
+    seoContext.business ? `business=${String(seoContext.business).trim()}` : "",
+    seoContext.seed ? `seed=${String(seoContext.seed).trim()}` : "",
+  ].filter(Boolean).join(" | ");
+
+  return [
+    `[SEO_CONTEXT] ${ctxLine}`,
+    `Topic: ${topic}`,
+    "Trả về JSON hợp lệ cho bài SEO đa ngôn ngữ với các field bắt buộc:",
+    "title, content, title_en, content_en, title_zh, content_zh, attributes_title, attributes_description, attributes_keywords.",
+    "Không trả markdown, không giải thích ngoài JSON.",
+  ].join("\n");
+}
+
 /**
  * POST /ai-generate-seo-content — ưu tiên window.csmAI (ky, cùng auth get-table-data).
  * Fallback raw fetch chỉ khi chạy ngoài admin SPA (không có csmAI bridge).
@@ -9302,12 +9554,21 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
       + ` promptChars=${prompt ? String(prompt).length : 0}`,
     );
     let result;
+    const fallbackPrompt = useSeoOneShot
+      ? String(prompt || "").trim() || buildSeoPromptFallbackFromOneShotContext(oneShotPayload || {})
+      : String(prompt || "").trim();
     if (useSeoOneShot && oneShotPayload && typeof helperAi.generateSeoAntiAiOneShot === "function") {
       result = await helperAi.generateSeoAntiAiOneShot(oneShotPayload, { taskType: "seo_content" });
     } else if (typeof helperAi.generateSeoContentWithPrompt === "function") {
-      result = await helperAi.generateSeoContentWithPrompt(String(prompt || ""), { taskType: "seo_content" });
+      if (!fallbackPrompt) {
+        throw new Error("Thiếu prompt fallback cho SEO one-shot khi helper không hỗ trợ generateSeoAntiAiOneShot");
+      }
+      result = await helperAi.generateSeoContentWithPrompt(fallbackPrompt, { taskType: "seo_content" });
     } else if (typeof helperAi.csm_ai_generate_seo_content === "function") {
-      result = await helperAi.csm_ai_generate_seo_content(String(prompt || ""));
+      if (!fallbackPrompt) {
+        throw new Error("Thiếu prompt fallback cho SEO one-shot khi helper không hỗ trợ generateSeoAntiAiOneShot");
+      }
+      result = await helperAi.csm_ai_generate_seo_content(fallbackPrompt);
     } else {
       throw new Error("csmAI không có hàm SEO — kiểm tra DynamicCodeMenu đã inject window.csmAI");
     }
@@ -9328,56 +9589,69 @@ async function callSeoGenerateContentApi(ctx, { useSeoOneShot, oneShotPayload, p
   const candidateUrls = resolveSeoApiEndpointCandidates(safeCtx);
   const timeoutMs = resolveSeoClientTimeoutMs();
   let lastError = null;
+  const shouldRetrySeoStatus = (status) => [429, 500, 502, 503, 504].includes(Number(status || 0));
 
   for (let u = 0; u < candidateUrls.length; u += 1) {
     const url = candidateUrls[u];
-    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-    let timeoutId = null;
-    if (controller && timeoutMs > 0) {
-      timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    }
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      let timeoutId = null;
+      if (controller && timeoutMs > 0) {
+        timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      }
 
-    console.log(`[SEO] POST ${url} promptChars=${body.prompt ? body.prompt.length : 0} oneShot=${!!useSeoOneShot} (raw fetch fallback)`);
+      console.log(`[SEO] POST ${url} promptChars=${body.prompt ? body.prompt.length : 0} oneShot=${!!useSeoOneShot} attempt=${attempt}/2 (raw fetch fallback)`);
 
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: buildApiHeaders(safeCtx, { omitRefreshToken: true }),
-        credentials: "include",
-        body: JSON.stringify(body),
-        signal: controller ? controller.signal : undefined,
-      });
-      const text = await response.text();
-      let data = {};
       try {
-        data = text ? JSON.parse(text) : {};
-      } catch (_e) {
-        data = { raw: text };
+        const response = await fetch(url, {
+          method: "POST",
+          headers: buildApiHeaders(safeCtx, { omitRefreshToken: true }),
+          credentials: "include",
+          body: JSON.stringify(body),
+          signal: controller ? controller.signal : undefined,
+        });
+        const text = await response.text();
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (_e) {
+          data = { raw: text };
+        }
+        if (response.status === 404 || isNginxNotFoundHtml(text)) {
+          lastError = new Error(
+            `HTTP 404 nginx — ${url}. Thử redeploy nginx location /ai-generate-seo-content hoặc dùng admin/api fallback.`
+          );
+          break;
+        }
+        if (!response.ok) {
+          const authHint = response.status === 401
+            ? " — đăng nhập lại admin LMKT (csm-token / refreshToken cookie)"
+            : "";
+          const err = new Error((data?.message || text || `HTTP ${response.status}`) + authHint);
+          if (shouldRetrySeoStatus(response.status) && attempt < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+            continue;
+          }
+          throw err;
+        }
+        return data;
+      } catch (fetchErr) {
+        if (fetchErr && fetchErr.name === "AbortError" && timeoutMs > 0) {
+          throw new Error(`SEO timeout sau ${Math.round(timeoutMs / 60000)} phút — đặt window.__CSM_AI_SEO_TIMEOUT_MS=0 để chờ không giới hạn`);
+        }
+        const status = extractHttpStatusFromError(fetchErr);
+        if (status === 404) {
+          lastError = fetchErr;
+          break;
+        }
+        if (shouldRetrySeoStatus(status) && attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+          continue;
+        }
+        throw fetchErr;
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId);
       }
-      if (response.status === 404 || isNginxNotFoundHtml(text)) {
-        lastError = new Error(
-          `HTTP 404 nginx — ${url}. Thử redeploy nginx location /ai-generate-seo-content hoặc dùng admin/api fallback.`
-        );
-        continue;
-      }
-      if (!response.ok) {
-        const authHint = response.status === 401
-          ? " — đăng nhập lại admin LMKT (csm-token / refreshToken cookie)"
-          : "";
-        throw new Error((data?.message || text || `HTTP ${response.status}`) + authHint);
-      }
-      return data;
-    } catch (fetchErr) {
-      if (fetchErr && fetchErr.name === "AbortError" && timeoutMs > 0) {
-        throw new Error(`SEO timeout sau ${Math.round(timeoutMs / 60000)} phút — đặt window.__CSM_AI_SEO_TIMEOUT_MS=0 để chờ không giới hạn`);
-      }
-      if (extractHttpStatusFromError(fetchErr) === 404) {
-        lastError = fetchErr;
-        continue;
-      }
-      throw fetchErr;
-    } finally {
-      if (timeoutId) clearTimeout(timeoutId);
     }
   }
 
@@ -9750,9 +10024,9 @@ async function testAiLaneExecuteLocalPlan(ctx, { message, attachments, onEvent }
     credentials: "include",
     body: JSON.stringify({
       message: message || "",
-      contextType: "business",
-      taskType: "media_script",
-      responseMode: "plan",
+      contextType: "code",
+      taskType: "code_assistant",
+      responseMode: "analyze",
       executePatch: false,
       applyDynamicIngestion: false,
       attachments: attachments || []
@@ -9931,6 +10205,28 @@ function keywordsFromTitle(title, keywordsFallback = "") {
   return fb;
 }
 
+function keywordValueToString(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => String(v == null ? "" : v).trim())
+      .filter(Boolean)
+      .join(", ");
+  }
+  return String(value == null ? "" : value).trim();
+}
+
+function fillBlankSeoField(obj, target, ...sources) {
+  if (String(obj[target] || "").trim()) return;
+  for (const src of sources) {
+    const val = typeof src === "string" && src in obj ? obj[src] : src;
+    const text = String(val == null ? "" : val).trim();
+    if (text) {
+      obj[target] = text;
+      return;
+    }
+  }
+}
+
 /** Bổ sung meta EN/ZH khi model local thiếu — khớp backend AiSeoContentPipelineService. */
 function normalizeSeoLanePayload(seo) {
   if (!seo || typeof seo !== "object") return seo;
@@ -9942,6 +10238,29 @@ function normalizeSeoLanePayload(seo) {
     }
     return "";
   };
+
+  if (!String(out.content || "").trim() && String(out.html_content || "").trim()) {
+    out.content = out.html_content;
+  }
+  if (!String(out.html_content || "").trim() && String(out.content || "").trim()) {
+    out.html_content = out.content;
+  }
+
+  fillBlankSeoField(out, "description", "excerpt", plainTextExcerpt(out.content, 160));
+  fillBlankSeoField(out, "description_en", "excerpt_en", plainTextExcerpt(out.content_en, 160));
+  fillBlankSeoField(out, "description_zh", "excerpt_zh", plainTextExcerpt(out.content_zh, 160));
+
+  fillBlankSeoField(out, "attributes_title", "title");
+  fillBlankSeoField(out, "attributes_title_en", "title_en", "attributes_title");
+  fillBlankSeoField(out, "attributes_title_zh", "title_zh", "attributes_title");
+  fillBlankSeoField(out, "attributes_description", "description");
+  fillBlankSeoField(out, "attributes_description_en", "description_en", "attributes_description");
+  fillBlankSeoField(out, "attributes_description_zh", "description_zh", "attributes_description");
+
+  fillBlankSeoField(out, "attributes_keywords", keywordValueToString(out.keywords));
+  fillBlankSeoField(out, "attributes_keywords_en", keywordValueToString(out.keywords_en), "attributes_keywords");
+  fillBlankSeoField(out, "attributes_keywords_zh", keywordValueToString(out.keywords_zh), "attributes_keywords");
+
   if (!String(out.attributes_description_zh || "").trim()) {
     out.attributes_description_zh = pick(
       out.attributes_description_en,
@@ -9961,6 +10280,11 @@ function normalizeSeoLanePayload(seo) {
       keywordsFromTitle(out.attributes_title_zh, out.attributes_keywords)
     );
   }
+
+  if (!String(out.provider || "").trim()) {
+    out.provider = "local_provider";
+  }
+
   return out;
 }
 
@@ -12910,7 +13234,12 @@ async function generateFacebookPostContent(webArticle = {}, helperAi, opts = {})
 
 function buildMessageHash(msg = {}) {
   const firstImage = Array.isArray(msg.images) ? msg.images[0] : "";
-  return [msg.date, msg.time, msg.sender, msg.content, firstImage].join("||");
+  const canonicalHashtags = extractMessageHashtags(msg)
+    .map((tag) => normalizeHashtagToken(tag, { lower: true }))
+    .filter(Boolean)
+    .sort()
+    .join(" ");
+  return [msg.date, msg.time, msg.sender, msg.content, firstImage, canonicalHashtags].join("||");
 }
 
 function normalizeImageSignature(raw = '') {
@@ -12943,15 +13272,9 @@ function getMessageFirstImageSignature(msg = {}) {
 
 function extractFirstImageFromHash(hash = '') {
   try {
-    const str = String(hash || '');
-    if (!str) return '';
-    let start = 0;
-    for (let i = 0; i < 4; i++) {
-      const idx = str.indexOf('||', start);
-      if (idx < 0) return '';
-      start = idx + 2;
-    }
-    return str.slice(start).trim();
+    const parts = String(hash || '').split('||');
+    if (parts.length < 5) return '';
+    return String(parts[4] || '').trim();
   } catch {
     return '';
   }
@@ -15204,9 +15527,23 @@ async function getLastCreatedPostUrl(maxRetries = 5, retryDelayMs = 1000) {
 }
 
 async function postToSelectedFanpages(messages, postUrl, selectedPages = null, options = {}) {
-  // Nếu không pass selectedPages, load từ toàn cục (fallback)
+  const strictConfigId = normalizeConfigId(options?.strictConfigId || options?.config_id || window.__currentZaloConfigId || '');
+
+  // Nếu không pass selectedPages: ưu tiên lấy đúng fanpage theo config_id khi chạy strict.
   if (!selectedPages || selectedPages.length === 0) {
-    selectedPages = getSelectedFacebookPages();
+    if (strictConfigId) {
+      selectedPages = getSelectedFacebookPagesForConfig(strictConfigId);
+    } else {
+      selectedPages = getSelectedFacebookPages();
+    }
+  }
+
+  if (strictConfigId) {
+    const strictConfig = findZaloConfigById(loadDataOptionUser(), strictConfigId);
+    if (!strictConfig) {
+      throw new Error(`Không tìm thấy config ${strictConfigId} để xác thực fanpage đích.`);
+    }
+    selectedPages = enforcePostingTargetByConfig(strictConfig, { domain: strictConfig.domain }, selectedPages, postUrl);
   }
   
   if (!selectedPages || selectedPages.length === 0) {
@@ -15214,6 +15551,10 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
     return { successCount: 0, failCount: 0 };
   }
 
+
+      if (latestConfig && opts.config_id) {
+        fanpagesToPost = enforcePostingTargetByConfig(latestConfig, ctx, fanpagesToPost, articleUrl);
+      }
   console.log(`🚀 [PostToFanpages] Bắt đầu đăng lên ${selectedPages.length} Fanpage với link: ${postUrl}`);
   
   // Tạo base content cho Facebook
@@ -17456,6 +17797,18 @@ function ensureZaloMultiGroupUI(container) {
       if (selectedFanpages.length === 0) {
         status.textContent = ti("⚠️ Vui lòng check fanpage ở mục '📱 Facebook Token Management' phía trên trước!", "⚠️ Please check fanpage(s) in '📱 Facebook Token Management' above first!", "⚠️ 请先在上方 '📱 Facebook Token Management' 勾选 fanpage！");
         console.warn('[Zalo Config] No fanpages selected. Mode:', currentMode, 'editingFanpageData:', editingFanpageData);
+        return;
+      }
+
+      const fanpagesMissingToken = selectedFanpages.filter((fp) => !String(fp?.access_token || '').trim());
+      if (fanpagesMissingToken.length > 0) {
+        const names = fanpagesMissingToken.map((fp) => fp?.name || fp?.id || 'Unknown').join(', ');
+        status.textContent = ti(
+          `⚠️ Không thể lưu: thiếu token fanpage (${names}). Hãy cập nhật token ở mục Facebook Token Management.`,
+          `⚠️ Cannot save: missing fanpage token (${names}). Please refresh token in Facebook Token Management.`,
+          `⚠️ 无法保存：fanpage token 缺失（${names}）。请在 Facebook Token Management 更新 token。`
+        );
+        console.warn('[Zalo Config] Block save due to missing fanpage tokens:', fanpagesMissingToken);
         return;
       }
       
@@ -22164,7 +22517,6 @@ async function postToFacebookPageWithImages(pageId, pageAccessToken, message, im
           link: link || null
         });
       } catch (callError) {
-        console.error(`❌ [postToFacebookPageWithImages] Exception from postToFacebookWithImages:`, callError);
         throw callError;
       }
       

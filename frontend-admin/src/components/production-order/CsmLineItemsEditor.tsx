@@ -30,7 +30,7 @@ import type {
 } from "./types";
 import { resolveTriLangLabel } from "./line-items-label";
 import LineItemsHeaderForm from "./LineItemsHeaderForm";
-import { collectComboTableFetchRequests } from "#src/components/csm-grid/combo-utils";
+import { collectComboTableFetchRequests, isDefaultComboWhereClause } from "#src/components/csm-grid/combo-utils";
 import { blockNonNumericKey, collectAutoFieldNames } from "./line-items-field-utils";
 import { useLineItemsTheme } from "./line-items-theme";
 import "./line-items-editor.css";
@@ -562,6 +562,26 @@ export default function CsmLineItemsEditor({
     [headerFields, appId],
   );
 
+  const fieldResetMap = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    (headerFields || []).forEach((f) => {
+      const key = String(f?.f_name ?? "").toLowerCase().trim();
+      if (!key) return;
+      const raw = (f as any)?.f_on_change_reset ?? (f as any)?.f_reset_fields;
+      let resetFields: string[] = [];
+      if (Array.isArray(raw)) {
+        resetFields = raw.map((x: any) => String(x ?? "").toLowerCase().trim()).filter(Boolean);
+      } else if (typeof raw === "string") {
+        resetFields = raw
+          .split(",")
+          .map((x) => String(x ?? "").toLowerCase().trim())
+          .filter(Boolean);
+      }
+      if (resetFields.length > 0) map[key] = resetFields;
+    });
+    return map;
+  }, [headerFields]);
+
   useEffect(() => {
     if (!appId) return;
     const seen = new Set<string>();
@@ -575,7 +595,13 @@ export default function CsmLineItemsEditor({
     });
     Promise.all([
       ...tables.map(({ tableName, where }) =>
-        getTableData<any>({ app_id: appId, obj_name: tableName, where })
+        getTableData<any>({
+          app_id: appId,
+          obj_name: tableName,
+          // where mặc định {id like ''} có thể làm một số backend trả rỗng.
+          // Bỏ where để luôn lấy full danh mục rồi cascade/filter ở runtime form.
+          ...(isDefaultComboWhereClause(where) ? {} : { where }),
+        })
           .then((res) => {
             const rows = Array.isArray(res?.rows) ? res.rows : (Array.isArray(res) ? res : []);
             return { tableName, rows: Array.isArray(rows) ? rows : [] };
@@ -617,9 +643,19 @@ export default function CsmLineItemsEditor({
       if (k === dateRefField) {
         return applyAutoNumbers(String(val ?? ""), { ...prev, [k]: val });
       }
+
+      const resetFields = fieldResetMap[k] ?? [];
+      if (resetFields.length > 0) {
+        const next = { ...prev, [key]: val } as OrderHeader;
+        resetFields.forEach((rf) => {
+          (next as any)[rf] = "";
+        });
+        return next;
+      }
+
       return { ...prev, [key]: val };
     });
-  }, [applyAutoNumbers, autoFieldNames, dateRefField]);
+  }, [applyAutoNumbers, autoFieldNames, dateRefField, fieldResetMap]);
 
   const patchHeader = useCallback((patch: OrderHeader) => {
     setHeader(prev => ({ ...prev, ...patch }));

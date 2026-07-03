@@ -350,7 +350,7 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
       f_li_auto: "date_offset", f_li_auto_ref: "ngay", f_li_auto_days: 5 },
     { f_name: "khach_hang_id", f_header: "Chọn khách hàng",   f_header_en: "Select customer",    f_header_zh: "选择客户",
       f_types: "co",     f_show: 1, f_stt: 4,  f_width_col: 12,
-      f_cbo_query: JSON.stringify({ query: [{ fields: ["id", "ten_kh"], obj_name: "tvp_khachhang", obj_where: "" }], options: [] }),
+      f_cbo_query: JSON.stringify({ query: [{ fields: ["id", "ten_kh", "ma_kh", "dia_chi", "dai_dien", "dien_thoai"], obj_name: "tvp_khachhang", obj_where: "" }], options: [] }),
       f_grid: "pm_khachhang", f_grid_fields: "ten_kh->khach_hang,dia_chi->dia_chi_kh" },
     { f_name: "khach_hang",    f_header: "Tên khách hàng",    f_header_en: "Customer",           f_header_zh: "客户名称",
       f_types: "text",   f_show: 1, f_stt: 5,  f_width_col: 12 },

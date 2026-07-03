@@ -68,9 +68,26 @@ func msgTimestamp(msg map[string]any) int64 {
 		return v
 	case int:
 		return int64(v)
+	case string:
+		return parseInt64(v)
 	default:
 		return 0
 	}
+}
+
+func parseInt64(v string) int64 {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	var out int64
+	for _, ch := range v {
+		if ch < '0' || ch > '9' {
+			return 0
+		}
+		out = out*10 + int64(ch-'0')
+	}
+	return out
 }
 
 func matchesGuest(msg map[string]any, guestSessionID string, guestPhone string) bool {
@@ -111,6 +128,29 @@ func (c *ChatService) GetHistoryByGuestIdentity(appID string, guestSessionID, gu
 	return matched
 }
 
+func (c *ChatService) GetHistoryByRoom(appID, roomID string, limit int) []map[string]any {
+	result := c.GetHistory(appID, roomID)
+	messages := rowsFromChat(result)
+	sort.Slice(messages, func(i, j int) bool {
+		return msgTimestamp(messages[i]) < msgTimestamp(messages[j])
+	})
+	if limit > 0 && len(messages) > limit {
+		messages = messages[len(messages)-limit:]
+	}
+	return messages
+}
+
+func (c *ChatService) GetHistoryByAppID(appID string, limit int) []map[string]any {
+	messages := c.allMessagesForApp(appID)
+	sort.Slice(messages, func(i, j int) bool {
+		return msgTimestamp(messages[i]) < msgTimestamp(messages[j])
+	})
+	if limit > 0 && len(messages) > limit {
+		messages = messages[len(messages)-limit:]
+	}
+	return messages
+}
+
 func (c *ChatService) GetGuestSessionsByAppID(appID string) []string {
 	seen := map[string]struct{}{}
 	for _, msg := range c.allMessagesForApp(appID) {
@@ -124,6 +164,21 @@ func (c *ChatService) GetGuestSessionsByAppID(appID string) []string {
 	out := make([]string, 0, len(seen))
 	for s := range seen {
 		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (c *ChatService) GetGuestPhonesByAppID(appID string) []string {
+	seen := map[string]struct{}{}
+	for _, msg := range c.allMessagesForApp(appID) {
+		if p, _ := msg["guestPhone"].(string); p != "" {
+			seen[p] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
 	}
 	sort.Strings(out)
 	return out
@@ -173,4 +228,71 @@ func (c *ChatService) RebindGuestPhone(appID, oldIdentity, newPhone string) int 
 		}
 	}
 	return updated
+}
+
+func (c *ChatService) MarkAllAsReadByGuestIdentity(appID, guestSessionID, guestPhone string) int {
+	messages := c.GetHistoryByGuestIdentity(appID, guestSessionID, guestPhone, 0)
+	updated := 0
+	for _, msg := range messages {
+		msg["read"] = true
+		if msg["id"] == nil || msg["id"] == "" {
+			msg["id"] = uuid.New().String()
+		}
+		if err := c.SaveMessage(appID, msg); err == nil {
+			updated++
+		}
+	}
+	return updated
+}
+
+func (c *ChatService) MarkAllAsRead(roomID, userID string) int {
+	if strings.TrimSpace(roomID) == "" || strings.TrimSpace(userID) == "" {
+		return 0
+	}
+	appID := inferAppIDFromRoom(roomID)
+	messages := c.GetHistoryByRoom(appID, roomID, 0)
+	updated := 0
+	for _, msg := range messages {
+		msg["read"] = true
+		msg["readBy"] = userID
+		if msg["id"] == nil || msg["id"] == "" {
+			msg["id"] = uuid.New().String()
+		}
+		if err := c.SaveMessage(appID, msg); err == nil {
+			updated++
+		}
+	}
+	return updated
+}
+
+func (c *ChatService) DeleteMessage(appID string, timestamp int64) bool {
+	if strings.TrimSpace(appID) == "" || timestamp <= 0 {
+		return false
+	}
+	for _, msg := range c.allMessagesForApp(appID) {
+		if msgTimestamp(msg) != timestamp {
+			continue
+		}
+		if err := c.rm.DeleteRecord(appID, ChatTable(appID), msg); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func inferAppIDFromRoom(room string) string {
+	normalized := strings.TrimSpace(room)
+	if normalized == "" {
+		return "csm"
+	}
+	if idx := strings.Index(normalized, ":"); idx >= 0 && idx < len(normalized)-1 {
+		normalized = normalized[idx+1:]
+	}
+	if idx := strings.Index(normalized, ";"); idx > 0 {
+		normalized = normalized[:idx]
+	}
+	if normalized == "" {
+		return "csm"
+	}
+	return normalized
 }
