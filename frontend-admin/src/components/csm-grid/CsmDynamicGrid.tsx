@@ -1797,12 +1797,21 @@ export function CsmDynamicGrid({
 
 			if (enableColumnFilter) {
 				if ((isSelect || isMultiSelect) && (selectEnums[f.f_name] || parseFieldOptions((f as any).f_options).length > 0)) {
-					const optionsValueEnum = parseFieldOptions((f as any).f_options).reduce<Record<string, { text: string }>>((acc, opt) => {
+					const comboQuery = parseComboQueryConfig((f as any).f_cbo_query, decrypt || csmDecrypt);
+					const optionSource: Array<{ value: string; label: string }> = parseFieldOptions((f as any).f_options).length > 0
+						? parseFieldOptions((f as any).f_options)
+						: (Array.isArray(comboQuery?.options)
+							? comboQuery.options.map((opt: any) => ({
+								value: String(opt?.value ?? opt?.ma ?? "").trim(),
+								label: String(opt?.label ?? opt?.ten ?? opt?.text ?? opt?.value ?? opt?.ma ?? "").trim(),
+							})).filter((opt: { value: string; label: string }) => Boolean(opt.value))
+							: []);
+					const optionsValueEnum = optionSource.reduce<Record<string, { text: string }>>((acc: Record<string, { text: string }>, opt: { value: string; label: string }) => {
 						acc[opt.value] = { text: opt.label.includes(".") ? t(opt.label) : opt.label };
 						return acc;
 					}, {});
 					const ve = Object.keys(optionsValueEnum).length > 0 ? optionsValueEnum : selectEnums[f.f_name];
-					col.filters = Object.entries(ve).map(([value, item]) => ({ text: item.text, value }));
+					col.filters = Object.entries(ve).map(([value, item]: [string, { text: string }]) => ({ text: item.text, value }));
 					col.onFilter = (filterValue: React.Key | boolean, record: Row) => {
 						return rowContainsSelectFilterValue(record?.[f.f_name], String(filterValue ?? ""));
 					};
@@ -1856,14 +1865,22 @@ export function CsmDynamicGrid({
 			else if (isRichText) col.valueType = "text"; // plain text for grid, editor in modal
 			else if (isSwitch) col.valueType = "switch";
 			else if (isSelect || isMultiSelect) {
-				const rawOptionsForRender = parseFieldOptionsRaw((f as any).f_options);
-				const optionsValueEnum = rawOptionsForRender.reduce<Record<string, { text: string }>>((acc, opt) => {
+				const comboQuery = parseComboQueryConfig((f as any).f_cbo_query, decrypt || csmDecrypt);
+				const rawOptionsForRender: Array<{ value: string; label: string; color?: string }> = parseFieldOptionsRaw((f as any).f_options).length > 0
+					? parseFieldOptionsRaw((f as any).f_options)
+					: (Array.isArray(comboQuery?.options)
+						? comboQuery.options.map((opt: any) => ({
+							value: String(opt?.value ?? opt?.ma ?? "").trim(),
+							label: String(opt?.label ?? opt?.ten ?? opt?.text ?? opt?.value ?? opt?.ma ?? "").trim(),
+						}))
+						: []);
+				const optionsValueEnum = rawOptionsForRender.reduce<Record<string, { text: string }>>((acc: Record<string, { text: string }>, opt: { value: string; label: string; color?: string }) => {
 					acc[opt.value] = { text: opt.label.includes(".") ? t(opt.label) : opt.label };
 					return acc;
 				}, {});
 				const ve = Object.keys(optionsValueEnum).length > 0 ? optionsValueEnum : selectEnums[f.f_name];
 				const optionColorMap: Record<string, string> = {};
-				rawOptionsForRender.forEach(({ value, color }) => { if (color) optionColorMap[value] = color; });
+				rawOptionsForRender.forEach(({ value, color }: { value: string; label: string; color?: string }) => { if (color) optionColorMap[value] = color; });
 
 				if (isMultiSelect) {
 					col.valueType = "select";
@@ -2792,7 +2809,16 @@ export function CsmDynamicGrid({
 		const map = new Map<string, Record<string, string>>();
 		(m_configs.table || []).forEach((f) => {
 			const enumFromSelect = selectEnums?.[f.f_name] || {};
-			const enumFromOptions = parseFieldOptions((f as any).f_options).reduce<Record<string, string>>((acc, opt) => {
+			const comboQuery = parseComboQueryConfig((f as any).f_cbo_query, decrypt || csmDecrypt);
+			const optionSource: Array<{ value: string; label: string }> = parseFieldOptions((f as any).f_options).length > 0
+				? parseFieldOptions((f as any).f_options)
+				: (Array.isArray(comboQuery?.options)
+					? comboQuery.options.map((opt: any) => ({
+						value: String(opt?.value ?? opt?.ma ?? "").trim(),
+						label: String(opt?.label ?? opt?.ten ?? opt?.text ?? opt?.value ?? opt?.ma ?? "").trim(),
+					}))
+					: []);
+			const enumFromOptions = optionSource.reduce<Record<string, string>>((acc: Record<string, string>, opt: { value: string; label: string }) => {
 				acc[String(opt.value)] = String(opt.label);
 				return acc;
 			}, {});
