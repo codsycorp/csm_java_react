@@ -17,21 +17,36 @@ export function parsePipeOptions(raw: unknown): { value: string; label: string }
   }).filter((o) => o.value);
 }
 
+function parseComboQueryObject(raw: unknown): any {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Fall through to Vue-style expression/function-body evaluation.
+  }
+
+  try {
+    // eslint-disable-next-line no-new-func
+    const fn = new Function("seft", "data", text.includes("return ") ? text : `return ${text};`);
+    return fn({ context: {} }, {});
+  } catch {
+    return null;
+  }
+}
+
 export function parseCoOptions(f: Record<string, any>): { value: string; label: string }[] {
   const fromPipe = parsePipeOptions(f.f_options);
   if (fromPipe.length > 0) return fromPipe;
 
-  const raw = String(f.f_cbo_query ?? "").trim();
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed?.options) && parsed.options.length > 0) {
-      return parsed.options.map((o: any) => ({
-        value: String(o.ma ?? o.value ?? ""),
-        label: String(o.ten ?? o.label ?? o.ma ?? ""),
-      })).filter((o: { value: string }) => o.value);
-    }
-  } catch { /* ignore */ }
+  const parsed = parseComboQueryObject(f.f_cbo_query);
+  if (Array.isArray(parsed?.options) && parsed.options.length > 0) {
+    return parsed.options.map((o: any) => ({
+      value: String(o.ma ?? o.value ?? ""),
+      label: String(o.ten ?? o.label ?? o.ma ?? ""),
+    })).filter((o: { value: string }) => o.value);
+  }
   return [];
 }
 
@@ -65,8 +80,8 @@ export function resolveComboQueryMeta(f: Record<string, any>): {
   valueField: string;
   labelField: string;
 } {
+  const parsed = parseComboQueryObject(f.f_cbo_query) ?? {};
   try {
-    const parsed = JSON.parse(String(f.f_cbo_query ?? "{}"));
     const q = parsed?.query?.[0];
     const fields = Array.isArray(q?.fields) ? q.fields : [];
     return {
