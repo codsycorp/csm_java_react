@@ -17,6 +17,7 @@ import {
   isAutoNumberField,
   isDateFieldConfig,
   parseGridFieldMap,
+  parseCoOptions,
   resolveComboQueryMeta,
   resolveGridDisplayColumns,
 } from "./line-items-field-utils";
@@ -385,11 +386,15 @@ export default function LineItemsHeaderForm({
   };
 
   const buildComboOptions = (
+    field: Record<string, any>,
     rows: Record<string, any>[],
     valueField: string,
     labelField: string,
     displayConfig?: Record<string, any> | null,
   ): { value: string; label: string }[] => {
+    const staticOptions = parseCoOptions(field);
+    if (staticOptions.length > 0) return staticOptions;
+
     const labelCandidates = Array.isArray(displayConfig?.label_candidates)
       ? displayConfig!.label_candidates.map((x: any) => String(x ?? "").trim()).filter(Boolean)
       : [labelField, "ten", "name", "title"];
@@ -442,7 +447,7 @@ export default function LineItemsHeaderForm({
 
     if (isComboType(types)) {
       const { rows, valueField, labelField, reconcileConfig, displayConfig } = resolveRuntimeComboMeta(f);
-      const options = buildComboOptions(rows, valueField, labelField, displayConfig);
+      const options = buildComboOptions(f, rows, valueField, labelField, displayConfig);
       let selectedValue: string | undefined = val != null && val !== "" ? String(val) : undefined;
 
       if (rows.length > 0 && reconcileConfig && typeof reconcileConfig === "object") {
