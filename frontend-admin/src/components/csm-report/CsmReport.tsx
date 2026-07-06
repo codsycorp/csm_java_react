@@ -30,6 +30,7 @@ import { useEnterToTab } from "#src/hooks/useEnterToTab";
 import { formatDateForStorage, resolveDateLocaleFormat } from "#src/utils/dateControl";
 import { useTranslation } from "react-i18next";
 import { gridDevLog } from "../csm-grid/grid-perf-utils";
+import { request } from "#src/utils";
 
 type Row = Record<string, any>;
 
@@ -88,6 +89,74 @@ function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): (
     console.warn("safeEval error:", e);
     return null;
   }
+}
+
+function unwrapFunctionBodyMaybe(raw: string): string {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  const match = text.match(/function\s*\([^)]*\)\s*\{([\s\S]*)\}\s*;?\s*$/i);
+  if (match?.[1]) return String(match[1] || "").trim();
+  return text;
+}
+
+function looksLikeReportCode(raw: string): boolean {
+  const text = String(raw || "").trim();
+  if (!text) return false;
+  if (/\breturn\b/.test(text)) return true;
+  if (/\bbang\b|\bdata\b|\bseft\b/.test(text) && /=>|function|const|let|var/.test(text)) return true;
+  return false;
+}
+
+function decodeReportDbTrigger(raw: unknown, decryptFn?: (s: string) => string): string {
+  const src = String(raw ?? "").trim();
+  if (!src) return "";
+
+  const candidates: string[] = [];
+  const push = (value: string) => {
+    const v = String(value || "").trim();
+    if (!v) return;
+    if (!candidates.includes(v)) candidates.push(v);
+  };
+
+  push(src);
+  if (src.includes("%")) {
+    try {
+      push(decodeURIComponent(src));
+    } catch {
+      // ignore invalid URI encoding
+    }
+  }
+
+  for (const c of [...candidates]) {
+    try {
+      if (decryptFn) push(decryptFn(c));
+    } catch {
+      // ignore custom decrypt errors
+    }
+    try {
+      push(csmDecrypt(c));
+    } catch {
+      // ignore csmDecrypt errors
+    }
+  }
+
+  for (const c of candidates) {
+    const body = unwrapFunctionBodyMaybe(c);
+    if (looksLikeReportCode(body)) return body;
+  }
+
+  return unwrapFunctionBodyMaybe(src);
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
 }
 
 export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps) {
@@ -479,6 +548,34 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
       await doc.renderAsync(datas_report);
       const output = doc.getZip().generate({ type: "arraybuffer", compression: "DEFLATE", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
 
+      // Prefer server-side LibreOffice conversion to keep PDF layout identical to DOCX.
+      try {
+        const templateBase = String(templateUrl || "").split("?")[0].split("/").pop() || "report.docx";
+        const outputName = String(templateBase).replace(/\.docx?$/i, "") + `_${Date.now()}.pdf`;
+        const convertResp: any = await request.post("ai-local/report/docx-to-pdf", {
+          json: {
+            appId: effectiveAppId,
+            docxBase64: arrayBufferToBase64(output),
+            outputName,
+            timeoutSec: 120,
+          },
+          timeout: 180000,
+          ignoreLoading: true,
+          retry: { limit: 0 },
+        } as any).json();
+
+        const convertResult = convertResp?.result || convertResp || {};
+        const serverSuccess = convertResult?.success !== false;
+        const pdfPathRaw = String(convertResult?.pdfUrl || convertResult?.pdfPath || "").trim();
+        if (serverSuccess && pdfPathRaw) {
+          const pdfUrl = pdfPathRaw.startsWith("/") ? pdfPathRaw : `/${pdfPathRaw}`;
+          setReportSrc(pdfUrl);
+          return;
+        }
+      } catch (serverConvertErr: any) {
+        console.warn("[CsmReport] server DOCX->PDF convert failed, fallback to html2pdf", serverConvertErr);
+      }
+
       // Convert to HTML then to PDF
       const container = document.createElement("div");
       container.style.position = "fixed";
@@ -533,12 +630,7 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
       });
 
       const trigger = m_configs.trigger || {};
-      let reportCode = "";
-      if (trigger && trigger["report_db"]) {
-        const codeEnc = trigger["report_db"];
-        const dec = decrypt ? decrypt(codeEnc) : csmDecrypt(codeEnc);
-        reportCode = dec;
-      }
+      const reportCode = decodeReportDbTrigger(trigger?.["report_db"], decrypt);
       
       if (!reportCode) {
         message.warning("Chưa cấu hình trigger report_db");

@@ -14,6 +14,7 @@ import {
   formatLayoutSpecForPrompt,
   groupPdfTextIntoLines,
   inferDocKindFromLayout,
+  type PdfLayoutExtractConfig,
   type PdfLayoutSpec,
 } from "./line-items-pdf-layout";
 
@@ -260,14 +261,18 @@ export type PrintSampleRead = {
 };
 
 /** Đọc PDF/ảnh mẫu: preview + text layer (PDF digital) cho AI local. */
-export async function readPrintSampleFile(file: File, maxPages = 2): Promise<PrintSampleRead> {
+export async function readPrintSampleFile(
+  file: File,
+  maxPages = 2,
+  layoutCfg?: PdfLayoutExtractConfig,
+): Promise<PrintSampleRead> {
   const type = String(file.type || "").toLowerCase();
   if (type.startsWith("image/")) {
-    const emptyLayout = buildPdfLayoutSpec([[]], 1);
+    const emptyLayout = buildPdfLayoutSpec([[]], 1, layoutCfg);
     return { previewUrls: [await readFileAsDataUrl(file)], pdfText: "", pdfLayout: emptyLayout };
   }
   if (type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
-    return pdfToSampleRead(file, maxPages);
+    return pdfToSampleRead(file, maxPages, layoutCfg);
   }
   throw new Error("Chỉ hỗ trợ file PDF hoặc ảnh (PNG/JPG/WebP).");
 }
@@ -281,7 +286,11 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
-async function pdfToSampleRead(file: File, maxPages: number): Promise<PrintSampleRead> {
+async function pdfToSampleRead(
+  file: File,
+  maxPages: number,
+  layoutCfg?: PdfLayoutExtractConfig,
+): Promise<PrintSampleRead> {
   const pdfjs = await import("pdfjs-dist");
   const version = (pdfjs as any).version || "4.10.38";
   (pdfjs as any).GlobalWorkerOptions.workerSrc =
@@ -317,7 +326,7 @@ async function pdfToSampleRead(file: File, maxPages: number): Promise<PrintSampl
       pageLines.push([]);
     }
   }
-  const pdfLayout = buildPdfLayoutSpec(pageLines, pageCount);
+  const pdfLayout = buildPdfLayoutSpec(pageLines, pageCount, layoutCfg);
   return { previewUrls: urls, pdfText: textParts.join("\n\n").trim(), pdfLayout };
 }
 

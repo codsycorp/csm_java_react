@@ -39,27 +39,44 @@ const getLanguageExtension = (mode: string) => {
   }
 };
 
+const looksLikeExecutableCode = (text: string): boolean => {
+  const src = String(text || "").trim();
+  if (!src) return false;
+  if (/\b(function|return|const|let|var|if|for|while|switch)\b/.test(src)) return true;
+  if (/=>/.test(src)) return true;
+  if (/^\s*[\[{]/.test(src)) return true;
+  return false;
+};
+
 const decodeTriggerCode = (raw: any): string => {
   if (raw == null) return "";
   if (typeof raw !== "string") return String(raw);
 
+  const source = String(raw);
+  if (looksLikeExecutableCode(source)) {
+    return source;
+  }
+
   // Old URL-encoded data
-  if (raw.includes("%")) {
+  if (source.includes("%")) {
     try {
-      return decodeURIComponent(raw);
+      const decoded = decodeURIComponent(source);
+      if (looksLikeExecutableCode(decoded)) {
+        return decoded;
+      }
     } catch {
       // fall through
     }
   }
 
   try {
-    const dec = csmDecrypt(raw);
-    if (dec && typeof dec === "string") return dec;
+    const dec = csmDecrypt(source);
+    if (dec && typeof dec === "string" && looksLikeExecutableCode(dec)) return dec;
   } catch {
     // ignore
   }
 
-  return raw;
+  return source;
 };
 
 const encodeTriggerCode = (plain: string): string => {

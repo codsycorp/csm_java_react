@@ -25,7 +25,7 @@ import type { LineItemsEditorConfig } from "./types";
 const PRINT_CSS = `
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'Times New Roman', Times, serif; font-size: 10.5pt; color: #000; line-height: 1.4; }
-.page { width: 780px; padding: 15px 20px; }
+.page { width: \${cfg.pdf_layout?.page_width_px ?? 794}px; padding: \${cfg.pdf_layout?.page_padding ?? '12px 12px'}; margin: 0 auto; }
 .co-name { text-align:center; font-size:13pt; font-weight:bold; text-transform:uppercase; }
 .co-addr { text-align:center; font-size:9.5pt; }
 .doc-title { text-align:center; font-size:14pt; font-weight:bold; text-transform:uppercase; margin:14px 0 8px; }
@@ -33,16 +33,16 @@ table.hdr { width:100%; border-collapse:collapse; margin-bottom:6px; }
 table.hdr td { padding:2px 4px; vertical-align:top; font-size:10.5pt; }
 .intro { font-size:10pt; margin-bottom:8px; font-style:italic; }
 table.it { width:100%; border-collapse:collapse; font-size:9.5pt; margin:6px 0; }
-table.it th { background:#d9d9d9; border:1px solid #555; padding:4px 3px; text-align:center; }
-table.it td { border:1px solid #555; padding:3px 4px; vertical-align:top; }
-.it-grp { background:#f2f2f2; font-weight:600; white-space:pre-wrap; font-size:9pt; }
-.it-sub { background:#e8e8e8; font-weight:bold; font-size:9pt; }
+table.it th { background:\${cfg.pdf_layout?.table_header_bg ?? '#fff'}; border:\${cfg.pdf_layout?.table_border ?? '1px solid #555'}; padding:\${cfg.pdf_layout?.cell_padding ?? '4px 3px'}; text-align:center; }
+table.it td { border:\${cfg.pdf_layout?.table_border ?? '1px solid #555'}; padding:\${cfg.pdf_layout?.cell_padding_body ?? '3px 4px'}; vertical-align:top; }
+.it-grp { background:\${cfg.pdf_layout?.group_row_bg ?? '#fff'}; font-weight:600; white-space:pre-wrap; font-size:9pt; }
+.it-sub { background:\${cfg.pdf_layout?.subtotal_row_bg ?? '#fff'}; font-weight:bold; font-size:9pt; }
 .r { text-align:right; } .c { text-align:center; }
 .tot-wrap { display:flex; justify-content:flex-end; margin:6px 0; }
 .tot { border-collapse:collapse; width:340px; }
 .tot td { padding:2px 6px; border:1px solid #aaa; font-size:10pt; }
 .tot .lbl { font-weight:600; } .tot .amt { text-align:right; font-weight:600; }
-.tot .grand td { background:#cfe2ff; font-weight:bold; font-size:10.5pt; }
+.tot .grand td { background:\${cfg.pdf_layout?.total_highlight_bg ?? '#fff'}; font-weight:bold; font-size:10.5pt; }
 .bang-chu { font-style:italic; margin:6px 0 10px; font-size:10pt; }
 .notes { font-size:9.5pt; margin:6px 0; }
 .note-grid { display:grid; grid-template-columns:1fr 1fr; column-gap:20px; }
@@ -51,6 +51,7 @@ table.it td { border:1px solid #555; padding:3px 4px; vertical-align:top; }
 .sig-box .lbl { font-weight:bold; }
 .sig-box .sub { font-size:8.5pt; color:#444; }
 .sig-box .name { margin-top:38px; font-weight:bold; }
+.pdf-page-break { break-before: page; page-break-before: always; height: 0; }
 .dlg { display:grid; grid-template-columns:1fr 1fr; gap:3px 20px; font-size:10pt; margin:6px 0; }
 .di { display:flex; gap:4px; }
 .di .k { font-weight:bold; min-width:100px; }
@@ -155,6 +156,7 @@ const NOTES = [
 const FN_BAO_GIA = `
 const cfg = utils.settings || {};
 const companyHdr = utils.buildCompanyHdr ? utils.buildCompanyHdr(cfg) : '';
+const labels = cfg.header_labels || {};
 const introDefault = 'Cảm ơn Quý khách hàng đã quan tâm tới sản phẩm do Công ty TNHH Công nghệ Công nghiệp Phú Sơn sản xuất. Chúng tôi xin gửi Báo giá theo yêu cầu Quý khách với nội dung như sau:';
 const intro = cfg.intro_bao_gia || introDefault;
 const phi_vc = order.phi_vc === 'da' ? 'Giá trên đã bao gồm vận chuyển.' : 'Giá trên chưa bao gồm vận chuyển.';
@@ -163,8 +165,8 @@ const hdr = \`<table class="hdr">
     <td>Số: <b>\${order.so_bao_gia??''}</b> &nbsp;&nbsp; Ngày: <b>\${order.ngay??''}</b></td></tr>
   <tr><td>Địa chỉ: \${order.dia_chi_kh??''}</td>
     <td>Hiệu lực đến: <b>\${order.hieu_luc_den??''}</b></td></tr>
-  <tr><td>Người mua hàng – SĐT: \${order.nguoi_lien_he??''}</td>
-    <td>NV bán hàng – SĐT: <b>\${order.nvkd??''}</b></td></tr></table>
+  <tr><td>\${labels.contact ?? cfg.header_labels_defaults?.contact ?? ''}: \${order.nguoi_lien_he??''}</td>
+    <td>\${labels.sales ?? cfg.header_labels_defaults?.sales ?? ''}: <b>\${order.nvkd??''}</b></td></tr></table>
   <div class="intro">\${intro}</div>\`;
 
 const items = utils.buildItemsTableHtml(groups, calc, utils, utils.printTableOpts || { showPrice: true, showGroupSubtotal: true });
@@ -188,7 +190,7 @@ return \`<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${PRINT_CSS.rep
 <body><div class="page">
 \${companyHdr}
 <div class="doc-title">BẢNG BÁO GIÁ SẢN PHẨM - KIÊM XÁC NHẬN ĐƠN HÀNG</div>
-\${hdr}\${items}\${totals}\${notes}\${payment}\${sigs}
+\${hdr}\${items}\${totals}\${(cfg.page_break_after_totals_bao_gia ?? true) ? '<div class="pdf-page-break"></div>' : ''}\${notes}\${payment}\${sigs}
 </div></body></html>\`;
 `;
 
@@ -481,12 +483,28 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
       trigger_key: "print_bao_gia",
       filename_expr: "`BaoGia_${order.so_bao_gia || 'draft'}.pdf`",
       print_table: { showPrice: true, showGroupSubtotal: true },
+      print_pdf: {
+        format: "a4",
+        orientation: "portrait",
+        margin_mm: [0, 0, 0, 0],
+        canvas_scale: 2,
+        pagebreak_mode: ["css", "legacy"],
+        preview_width_px: 794,
+      },
     },
     {
       label: "Xuất Lệnh SX nội bộ",
       trigger_key: "print_lenh_sx",
       filename_expr: "`LenhSX_${order.so_lenh || 'draft'}.pdf`",
       print_table: { showPrice: true, showGroupSubtotal: true },
+      print_pdf: {
+        format: "a4",
+        orientation: "portrait",
+        margin_mm: [0, 0, 0, 0],
+        canvas_scale: 2,
+        pagebreak_mode: ["css", "legacy"],
+        preview_width_px: 794,
+      },
     },
     {
       label: "Xuất Lệnh SX + PXK",
@@ -496,6 +514,14 @@ export const PHUSON_PANEL_CONFIG: LineItemsEditorConfig = {
         showPrice: false,
         showGroupSubtotal: false,
         hideColumns: ["chieu_rong", "don_gia", "thanh_tien"],
+      },
+      print_pdf: {
+        format: "a4",
+        orientation: "portrait",
+        margin_mm: [0, 0, 0, 0],
+        canvas_scale: 2,
+        pagebreak_mode: ["css", "legacy"],
+        preview_width_px: 794,
       },
     },
   ],

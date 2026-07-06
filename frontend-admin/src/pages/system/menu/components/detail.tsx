@@ -18,12 +18,19 @@ import * as AntdIcons from "@ant-design/icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { FormInstance, UploadProps } from "antd";
-import { Tabs, Alert, Card, Upload, Button, message, Spin, Input, Modal } from "antd";
+import { Tabs, Alert, Card, Upload, Button, Space, message, Spin, Input, Modal } from "antd";
 import FieldConfigEditor from "./FieldConfigEditor";
 import TriggerEditor from "./TriggerEditor";
 import LineItemsConfigEditor from "./LineItemsConfigEditor";
 import type { LineItemsEditorConfig } from "#src/components/production-order/types";
 import { PHUSON_PANEL_CONFIG } from "#src/components/production-order/defaultConfig";
+import { readPrintSampleFile } from "#src/components/production-order/line-items-print-import";
+import {
+  createDocxTemplateBuffer,
+  arrayBufferToDataUrl,
+  type DocxTemplateBlueprint,
+} from "#src/components/production-order/line-items-docx-template";
+import type { PdfLayoutSpec } from "#src/components/production-order/line-items-pdf-layout";
 import {
   buildPhusonMenuConfig,
   type PhusonMenuPresetId,
@@ -36,7 +43,7 @@ import {
 } from "#src/components/csm-grid/csm-trigger-runner";
 import type { TableField, TriggerConfig } from "#src/components/csm-grid/CsmDynamicGrid";
 import { KANBAN_CONFIG_TEMPLATE } from "#src/components/csm-kanban";
-import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
+import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
 import { useUserStore } from "#src/store/user";
 import { getDefaultSystemUserModeConfig, parseSystemUserModes, type SystemUserMenuModeConfig } from "#src/pages/system/admin/system-user-menu-config";
 
@@ -208,6 +215,263 @@ function mergeLineItemsConfigIntoPayload(
 }
 
 const UPLOAD_ENDPOINT = "/upload.shtml";
+
+function buildUploadEndpointCandidates(): string[] {
+  const out: string[] = [];
+  const push = (value: unknown) => {
+    const endpoint = String(value || "").trim();
+    if (!endpoint || out.includes(endpoint)) return;
+    out.push(endpoint);
+  };
+
+  if (import.meta.env.DEV) {
+    push("/api/upload.shtml");
+  }
+  push(UPLOAD_ENDPOINT);
+
+  const apiBase = String((import.meta as any)?.env?.VITE_API_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (apiBase) {
+    push(`${apiBase}/upload.shtml`);
+  }
+
+  return out;
+}
+
+async function postUploadJsonWithFallback(
+  payload: { app_id: string; name: string; src: string },
+  token?: string,
+): Promise<Response> {
+  const endpoints = buildUploadEndpointCandidates();
+  let lastErr: any = null;
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": token || "",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.status === 404) {
+        lastErr = new Error(`Upload failed on ${endpoint}: 404 Not Found`);
+        continue;
+      }
+
+      return response;
+    } catch (error: any) {
+      lastErr = error;
+    }
+  }
+
+  throw lastErr || new Error("Upload failed: no reachable upload endpoint");
+}
+
+function normalizeAsciiText(input: unknown): string {
+  return String(input ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function safeTemplateToken(name: string): string {
+  const normalized = normalizeAsciiText(name)
+    .toLowerCase()
+    .replace(/[^a-z0-9_\s]/g, "")
+    .replace(/\s+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || "field";
+}
+
+function extractLabelPrefix(line: string): string {
+  const text = String(line || "").trim();
+  if (!text) return "";
+  const colonIdx = text.indexOf(":");
+  if (colonIdx > 0 && colonIdx <= 50) {
+    return text.slice(0, colonIdx).trim();
+  }
+  return text;
+}
+
+function buildHeaderTemplateLines(headerLines: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < Math.min(headerLines.length, 8); i += 1) {
+    const raw = String(headerLines[i] || "").trim();
+    if (!raw) continue;
+    const label = extractLabelPrefix(raw) || `Thong tin ${i + 1}`;
+    out.push(`${label}: {hdr_${i + 1}}`);
+  }
+  if (out.length === 0) {
+    out.push("So chung tu: {hdr_1}");
+    out.push("Ngay: {hdr_2}");
+    out.push("Doi tac: {hdr_3}");
+  }
+  return out;
+}
+
+function buildTablePlaceholders(headers: string[]): string[] {
+  const count = Math.max(1, Math.min(headers.length, 10));
+  const placeholders: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const key = `col_${i + 1}`;
+    if (i === 0 && count === 1) {
+      placeholders.push(`{#items}{${key}}{/items}`);
+    } else if (i === 0) {
+      placeholders.push(`{#items}{${key}}`);
+    } else if (i === count - 1) {
+      placeholders.push(`{${key}}{/items}`);
+    } else {
+      placeholders.push(`{${key}}`);
+    }
+  }
+  return placeholders;
+}
+
+function buildDocxBlueprintFromPdfLayout(layout: PdfLayoutSpec): DocxTemplateBlueprint {
+  const title = String(layout.docTitle || "BAO CAO").trim() || "BAO CAO";
+  const subtitle = String(layout.docSubtitle || "").trim();
+  const tableHeaders = (layout.tableColumnHeaders || [])
+    .map((h) => normalizeAsciiText(h))
+    .filter(Boolean)
+    .slice(0, 10);
+  const resolvedTableHeaders = tableHeaders.length > 0
+    ? tableHeaders
+    : ["STT", "NOI DUNG", "DON VI", "SO LUONG", "DON GIA", "THANH TIEN"];
+  const signatureRaw = (layout.signatureLabels || []).map((s) => normalizeAsciiText(s)).filter(Boolean);
+  const signatureLabels = signatureRaw.length > 0
+    ? signatureRaw.slice(0, 6).map((s, i) => `${s}: {sig_${i + 1}}`)
+    : ["NGUOI LAP: {sig_1}", "NGUOI DUYET: {sig_2}"];
+
+  return {
+    title: normalizeAsciiText(title),
+    subtitle: subtitle ? normalizeAsciiText(subtitle) : undefined,
+    headerLines: buildHeaderTemplateLines(layout.headerLines || []),
+    tableHeaders: resolvedTableHeaders,
+    tableRowPlaceholders: buildTablePlaceholders(resolvedTableHeaders),
+    signatureLabels,
+    noteLines: [
+      "Tong cong: {tong_cong}",
+      "Ghi chu: {ghi_chu}",
+    ],
+  };
+}
+
+function escapeTemplateLiteral(value: string): string {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/`/g, "\\`")
+    .replace(/\$\{/g, "\\${");
+}
+
+function buildAutoReportDbBody(params: {
+  tableName: string;
+  fields: TableField[];
+  layout: PdfLayoutSpec;
+  blueprint: DocxTemplateBlueprint;
+}): string {
+  const tableName = String(params.tableName || "").trim();
+  const allFields = Array.isArray(params.fields) ? params.fields : [];
+  const visibleFieldNames = allFields
+    .map((f) => String((f as any)?.f_name || "").trim())
+    .filter(Boolean);
+
+  const colCount = Math.max(1, Math.min(params.blueprint.tableHeaders.length || 1, 10));
+  const selectedFieldNames = visibleFieldNames.slice(0, colCount);
+  const fallbacks = Array.from({ length: colCount }).map((_, i) => `col_${i + 1}`);
+  const colSource = Array.from({ length: colCount }).map((_, i) => selectedFieldNames[i] || fallbacks[i]);
+
+  const headerCount = Math.min(params.blueprint.headerLines.length || 0, 8);
+  const signatureCount = Math.min(params.blueprint.signatureLabels.length || 0, 6);
+
+  const headerAssignments = Array.from({ length: headerCount }).map((_, i) => {
+    const n = i + 1;
+    return `  hdr_${n}: data?.hdr_${n} ?? "",`;
+  }).join("\n");
+
+  const signatureAssignments = Array.from({ length: signatureCount }).map((_, i) => {
+    const n = i + 1;
+    return `  sig_${n}: data?.sig_${n} ?? "",`;
+  }).join("\n");
+
+  const itemAssignments = Array.from({ length: colCount }).map((_, i) => {
+    const n = i + 1;
+    const source = colSource[i];
+    if (n === 1) return `      col_${n}: (idx + 1),`;
+    return `      col_${n}: row?.["${source}"] ?? "",`;
+  }).join("\n");
+
+  return `
+const TABLE_NAME = "${escapeTemplateLiteral(tableName)}";
+const rows = Array.isArray(bang?.[TABLE_NAME]?.rows) ? bang[TABLE_NAME].rows : [];
+const moneyFormatter = (value) => {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value ?? "");
+  return num.toLocaleString("vi-VN");
+};
+
+const items = rows.map((row, idx) => ({
+${itemAssignments}
+}));
+
+const tongCongRaw = rows.reduce((sum, row) => {
+  const values = Object.values(row || {});
+  let maxNum = 0;
+  for (const val of values) {
+    const n = Number(val);
+    if (Number.isFinite(n) && Math.abs(n) > Math.abs(maxNum)) maxNum = n;
+  }
+  return sum + maxNum;
+}, 0);
+
+return {
+  ten_cong_ty: bang?.sys_apps?.rows?.[0]?.app_name ?? data?.ten_cong_ty ?? "",
+  com_logo: seft?.com_logo ?? data?.com_logo ?? "",
+${headerAssignments ? `${headerAssignments}\n` : ""}
+  items,
+  tong_cong: moneyFormatter(tongCongRaw),
+  ghi_chu: data?.ghi_chu ?? "",
+${signatureAssignments ? `${signatureAssignments}\n` : ""}
+};
+`.trim();
+}
+
+async function uploadReportAsset(params: {
+  appId: string;
+  token?: string;
+  fileName: string;
+  dataUrl: string;
+}): Promise<string> {
+  const response = await postUploadJsonWithFallback({
+    app_id: params.appId,
+    name: params.fileName,
+    src: params.dataUrl,
+  }, params.token);
+
+  if (!response.ok) {
+    throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
+  }
+
+  const responseText = await response.text();
+  try {
+    const parsed = JSON.parse(responseText);
+    const candidate = typeof parsed?.path === "string"
+      ? parsed.path
+      : (typeof parsed?.url === "string" ? parsed.url : "");
+    if (candidate) return candidate.startsWith("/") ? candidate : `/${candidate}`;
+  } catch {
+    // fallback to plain text below
+  }
+
+  const trimmed = responseText.trim();
+  if (trimmed && !/^<!doctype html>/i.test(trimmed)) {
+    return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  }
+
+  throw new Error("Upload response invalid path");
+}
 
 function normalizeFileName(originalName: string): string {
   const parts = originalName.split(".");
@@ -709,6 +973,7 @@ export function Detail({
   const [lineItemsConfig, setLineItemsConfig] = useState<Partial<LineItemsEditorConfig>>({});
   const [subUserModeConfig, setSubUserModeConfig] = useState<SystemUserMenuModeConfig>(() => getDefaultSystemUserModeConfig("sub", t));
   const user = useUserStore();
+  const [generatingReportFromPdf, setGeneratingReportFromPdf] = useState(false);
   const [autoCodeOptions, setAutoCodeOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [loadingAutoCode, setLoadingAutoCode] = useState(false);
 
@@ -1339,14 +1604,7 @@ export function Detail({
             src: dataUrl,
           };
 
-          const response = await fetch(UPLOAD_ENDPOINT, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": user.app_token || "",
-            },
-            body: JSON.stringify(uploadData),
-          });
+          const response = await postUploadJsonWithFallback(uploadData, user.app_token || "");
 
           if (!response.ok) {
             throw new Error(`Upload failed: ${response.statusText}`);
@@ -1391,6 +1649,83 @@ export function Detail({
       onError?.(err as Error);
       message.error(t("system.menu.readFileFailed"));
     }
+  };
+
+  const handleGenerateReportFromPdf: UploadProps["customRequest"] = async (options) => {
+    const { file, onSuccess, onError } = options;
+    if (!appId) {
+      message.error(t("system.menu.pleaseSelectApp"));
+      onError?.(new Error("Missing appId"));
+      return;
+    }
+
+    try {
+      setGeneratingReportFromPdf(true);
+      const sourceFile = file as File;
+      const sample = await readPrintSampleFile(sourceFile, 2);
+      const blueprint = buildDocxBlueprintFromPdfLayout(sample.pdfLayout);
+      const docxBuffer = createDocxTemplateBuffer(blueprint);
+      const dataUrl = arrayBufferToDataUrl(
+        docxBuffer,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      );
+
+      const safeTitle = safeTemplateToken(blueprint.title || "bao_cao");
+      const fileName = normalizeFileName(`${safeTitle}_${Date.now()}.docx`);
+      const reportPath = await uploadReportAsset({
+        appId,
+        token: user.app_token || "",
+        fileName,
+        dataUrl,
+      });
+
+      const tableName = String(formRef.current?.getFieldValue("table_name") || detailData.table_name || "").trim();
+      const reportDbBody = buildAutoReportDbBody({
+        tableName,
+        fields: tableRows,
+        layout: sample.pdfLayout,
+        blueprint,
+      });
+
+      formRef.current?.setFieldsValue({ report_name: reportPath });
+      setTriggerConfig((prev) => ({
+        ...(prev || {}),
+        report_db: csmEncrypt(reportDbBody),
+      }));
+
+      if (!String(formRef.current?.getFieldValue("orientation") || "").trim()) {
+        formRef.current?.setFieldsValue({ orientation: "p" });
+      }
+      if (!Number(formRef.current?.getFieldValue("p_width") || 0)) {
+        formRef.current?.setFieldsValue({ p_width: 8.27 });
+      }
+      if (!Number(formRef.current?.getFieldValue("p_height") || 0)) {
+        formRef.current?.setFieldsValue({ p_height: 11.69 });
+      }
+
+      message.success(
+        t(
+          "system.menu.reportAutoGeneratedFromPdf",
+          "Đã tạo DOCX template + trigger report_db từ PDF mẫu. Bạn có thể tinh chỉnh thêm trong tab Trigger.",
+        ),
+      );
+      onSuccess?.("ok");
+    } catch (error: any) {
+      console.error("Generate report from PDF failed:", error);
+      message.error(error?.message || t("system.menu.uploadReportFailed"));
+      onError?.(error as Error);
+    } finally {
+      setGeneratingReportFromPdf(false);
+    }
+  };
+
+  const handleReportTemplateUpload: UploadProps["customRequest"] = async (options) => {
+    const fileName = String((options.file as File)?.name || "").toLowerCase();
+    if (fileName.endsWith(".pdf")) {
+      await handleGenerateReportFromPdf(options);
+      return;
+    }
+    await handleReportUpload(options);
   };
 
   const onFinish = async (values: MenuItemType) => {
@@ -2776,15 +3111,27 @@ export function Detail({
                 size: 'large',
                 style: { width: '100%' },
                 addonAfter: (
-                  <Upload
-                    accept=".doc,.docx"
-                    showUploadList={false}
-                    customRequest={handleReportUpload}
-                  >
-                    <Button type="default" size="small">
-                      {t("common.upload") || "Tải lên"}
-                    </Button>
-                  </Upload>
+                  <Space>
+                    <Upload
+                      accept=".doc,.docx,.pdf"
+                      showUploadList={false}
+                      customRequest={handleReportTemplateUpload}
+                    >
+                      <Button type="default" size="small">
+                        {t("system.menu.uploadDocxOrPdf", "Tải lên DOCX/PDF")}
+                      </Button>
+                    </Upload>
+                    <Upload
+                      accept=".pdf"
+                      showUploadList={false}
+                      customRequest={handleGenerateReportFromPdf}
+                      disabled={generatingReportFromPdf}
+                    >
+                      <Button type="primary" size="small" loading={generatingReportFromPdf}>
+                        {t("system.menu.importPdfGenerateDocx", "Nạp PDF -> tạo DOCX + trigger")}
+                      </Button>
+                    </Upload>
+                  </Space>
                 ),
               }}
             />
@@ -3049,7 +3396,7 @@ export function Detail({
                     appId={appId}
                     editorMetadata={menuScopeAiMetadata}
                     onApplyTrigger={(key, body) => {
-                      setTriggerConfig((prev) => ({ ...(prev || {}), [key]: body }));
+                      setTriggerConfig((prev) => ({ ...(prev || {}), [key]: csmEncrypt(String(body || "")) }));
                       message.success(t("system.menu.lineItemsTriggerApplied", `Đã cập nhật trigger "${key}" — nhớ Lưu menu`));
                     }}
                   />

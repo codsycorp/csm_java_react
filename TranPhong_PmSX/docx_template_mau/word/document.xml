@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" mc:Ignorable="w14 wp14">
+  <w:body>
+    <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="36"/></w:rPr><w:t>BÁO GIÁ</w:t></w:r></w:p>
+    <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>{ten_cong_ty}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Logo: {%com_logo}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Số báo giá: {so_bao_gia}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Ngày: {ngay_bao_gia}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Khách hàng: {ten_khach_hang}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Địa chỉ: {dia_chi_khach_hang}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Điện thoại: {dien_thoai_khach_hang}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Ghi chú đầu trang: {ghi_chu_dau_trang}</w:t></w:r></w:p>
+
+    <w:tbl>
+      <w:tblPr>
+        <w:tblW w:w="0" w:type="auto"/>
+        <w:tblBorders>
+          <w:top w:val="single" w:sz="8" w:space="0" w:color="000000"/>
+          <w:left w:val="single" w:sz="8" w:space="0" w:color="000000"/>
+          <w:bottom w:val="single" w:sz="8" w:space="0" w:color="000000"/>
+          <w:right w:val="single" w:sz="8" w:space="0" w:color="000000"/>
+          <w:insideH w:val="single" w:sz="6" w:space="0" w:color="000000"/>
+          <w:insideV w:val="single" w:sz="6" w:space="0" w:color="000000"/>
+        </w:tblBorders>
+      </w:tblPr>
+      <w:tr>
+        <w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>STT</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>TEN HANG</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>DVT</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>SL</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>DON GIA</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>THANH TIEN</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      {#items}
+      <w:tr>
+        <w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>{stt}</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>{ten_hang}</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>{dvt}</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>{so_luong}</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t>{don_gia}</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t>{thanh_tien}</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      {/items}
+    </w:tbl>
+
+    <w:p><w:r><w:t>Tong tien truoc thue: {tong_tien_truoc_thue}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>VAT ({vat_percent}%): {tien_vat}</w:t></w:r></w:p>
+    <w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Tong thanh toan: {tong_thanh_toan}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>So tien bang chu: {tong_tien_bang_chu}</w:t></w:r></w:p>
+
+    <w:p><w:r><w:t>Dieu khoan thanh toan: {dieu_khoan_thanh_toan}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Thoi gian giao hang: {thoi_gian_giao_hang}</w:t></w:r></w:p>
+
+    <w:p><w:r><w:t>Nguoi lap: {nguoi_lap}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Khach hang xac nhan: {khach_hang_xac_nhan}</w:t></w:r></w:p>
+
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="708" w:footer="708" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>

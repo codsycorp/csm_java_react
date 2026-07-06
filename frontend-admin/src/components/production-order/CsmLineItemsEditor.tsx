@@ -26,7 +26,7 @@ import { getTableData } from "#src/components/csm-grid/CsmApi";
 import { resolveTriggerBody } from "#src/components/csm-grid/csm-trigger-runner";
 import type {
   LineItemsEditorConfig, LiColumnDef, LiGroupConfig,
-  LineItem, ProductGroup, OrderHeader, EditorCalcResult,
+  LineItem, ProductGroup, OrderHeader, EditorCalcResult, LiPrintPdfOptions,
 } from "./types";
 import { resolveTriLangLabel } from "./line-items-label";
 import LineItemsHeaderForm from "./LineItemsHeaderForm";
@@ -51,9 +51,16 @@ import {
 } from "./line-items-company";
 import {
   exportHtmlToPdf,
+  exportPreviewIframeToPdf,
+  normalizePreviewHtml,
   printHtmlInBrowser,
   validatePrintHtml,
 } from "./line-items-print";
+import {
+  downloadDocx,
+  renderDocxTemplateToArrayBuffer,
+  renderDocxTemplateToHtml,
+} from "./line-items-docx-print";
 import {
   applyWorkflowPromotion,
   resolveWorkflowPromoteLabel,
@@ -472,6 +479,9 @@ export default function CsmLineItemsEditor({
   const [previewLabel, setPreviewLabel] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  const [previewPdfOptions, setPreviewPdfOptions] = useState<LiPrintPdfOptions | undefined>(undefined);
+  const previewIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const previewViewportWidth = Math.max(720, Number(previewPdfOptions?.preview_width_px ?? 794));
   const currentCustomerCode = useMemo(() => {
     const raw = header?.ma_kh ?? header?.khach_hang_id ?? "";
     return String(raw || "").trim().toLowerCase();
@@ -720,12 +730,6 @@ export default function CsmLineItemsEditor({
   // ── Print ───────────────────────────────────────────────────────────────────
 
   const buildPrintHtml = useCallback(async (pc: (typeof printConfigs)[number]) => {
-    const rawFn = m_configs.trigger?.[pc.trigger_key];
-    if (!rawFn) {
-      return { ok: false as const, message: `Chưa cấu hình mẫu in "${resolveTriLangLabel(pc, uiLang, ["label"]) || pc.trigger_key}"` };
-    }
-    const fnBody = resolveTriggerBody(rawFn, decrypt);
-
     let settings = printSettings;
     if (appId) {
       try {
@@ -748,23 +752,106 @@ export default function CsmLineItemsEditor({
       })),
     })) as ProductGroup[];
 
-    const html = evalPrintTemplate(
-      fnBody,
-      header,
-      enrichedGroups,
-      calc,
-      buildPrintUtils(settings, {
-        totalConfigs,
-        lang: uiLang,
-        lineItemsColumns: columns,
-        printTableOpts: pc.print_table ?? {},
-      }),
-    );
+    const guessedTemplateUrl = String(
+      pc.print_docx?.template_url
+        || m_configs.report_name
+        || settings?.docx_template_url
+        || settings?.bao_gia_docx_template
+        || "",
+    ).trim();
+
+    const engine = pc.print_engine || (guessedTemplateUrl ? "docx" : "html");
+
+    const runtimeUtils = buildPrintUtils(settings, {
+      totalConfigs,
+      lang: uiLang,
+      lineItemsColumns: columns,
+      printTableOpts: pc.print_table ?? {},
+    });
+
+    // Protect critical helper functions from AI trigger mutation / malformed assignment.
+    const safeRuntimeUtils = new Proxy({ ...runtimeUtils } as Record<string, any>, {
+      get(target, prop, receiver) {
+        if (prop === "parseNoteLines") {
+          const fn = Reflect.get(target, prop, receiver);
+          return typeof fn === "function" ? fn : () => [];
+        }
+        if (prop === "soThanhChu") {
+          const fn = Reflect.get(target, prop, receiver);
+          return typeof fn === "function" ? fn : (() => "");
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+      set(_target, prop) {
+        // Ignore writes to protected helpers to avoid runtime "is not a function".
+        if (prop === "parseNoteLines" || prop === "soThanhChu") return true;
+        return true;
+      },
+    });
+
+    let html = "";
+    let fileName = "document.pdf";
+
+    if (engine === "docx") {
+      const templateUrl = guessedTemplateUrl;
+      if (!templateUrl) {
+        return { ok: false as const, message: `Thiếu print_docx.template_url cho "${resolveTriLangLabel(pc, uiLang, ["label"]) || pc.trigger_key}"` };
+      }
+
+      let docxData: Record<string, any> = {
+        order: header,
+        groups: enrichedGroups,
+        calc,
+        totals: calc.totals,
+        settings,
+      };
+
+      const dataTriggerKey = String(pc.print_docx?.data_trigger_key || `${pc.trigger_key}_docx_data`).trim();
+      if (dataTriggerKey) {
+        const rawDataTrigger = m_configs.trigger?.[dataTriggerKey];
+        if (rawDataTrigger) {
+          const dataFnBody = resolveTriggerBody(rawDataTrigger, decrypt);
+          try {
+            // eslint-disable-next-line no-new-func
+            const fn = new Function("order", "groups", "calc", "utils", dataFnBody);
+            const resolved = fn(header, enrichedGroups, calc, safeRuntimeUtils);
+            if (resolved && typeof resolved === "object") {
+              docxData = resolved as Record<string, any>;
+            }
+          } catch (err: any) {
+            console.warn(`DOCX data trigger failed (${dataTriggerKey}), fallback to default docxData:`, err);
+          }
+        }
+      }
+
+      if (pc.print_docx?.allow_download_docx) {
+        try {
+          const ab = await renderDocxTemplateToArrayBuffer(templateUrl, docxData);
+          downloadDocx(ab, (header.so_bao_gia ? `BaoGia_${header.so_bao_gia}` : "document") + ".docx");
+        } catch {
+          // Keep preview/export flow even if download fails.
+        }
+      }
+
+      html = await renderDocxTemplateToHtml(templateUrl, docxData);
+    } else {
+      const rawFn = m_configs.trigger?.[pc.trigger_key];
+      if (!rawFn) {
+        return { ok: false as const, message: `Chưa cấu hình mẫu in "${resolveTriLangLabel(pc, uiLang, ["label"]) || pc.trigger_key}"` };
+      }
+      const fnBody = resolveTriggerBody(rawFn, decrypt);
+      html = evalPrintTemplate(
+        fnBody,
+        header,
+        enrichedGroups,
+        calc,
+        runtimeUtils,
+      );
+    }
 
     const check = validatePrintHtml(html);
     if (!check.ok) return { ok: false as const, message: check.message };
 
-    let fileName = "document.pdf";
     if (pc.filename_expr) {
       try {
         // eslint-disable-next-line no-new-func
@@ -783,9 +870,10 @@ export default function CsmLineItemsEditor({
         message.warning(result.message ?? "Không tạo được bản xem trước");
         return;
       }
-      setPreviewHtml(result.html);
+      setPreviewHtml(normalizePreviewHtml(result.html));
       setPreviewFileName(result.fileName);
       setPreviewLabel(resolveTriLangLabel(pc, uiLang, ["label"]) || pc.trigger_key);
+      setPreviewPdfOptions(pc.print_pdf);
       setPreviewOpen(true);
     } catch (e: any) {
       message.error("Lỗi tạo bản xem trước: " + (e?.message ?? String(e)));
@@ -797,14 +885,18 @@ export default function CsmLineItemsEditor({
   const handleExportPreviewPdf = useCallback(async () => {
     setExportLoading(true);
     try {
-      await exportHtmlToPdf(previewHtml, previewFileName);
+      if (previewIframeRef.current?.contentDocument?.body) {
+        await exportPreviewIframeToPdf(previewIframeRef.current, previewFileName, previewPdfOptions);
+      } else {
+        await exportHtmlToPdf(previewHtml, previewFileName, previewPdfOptions);
+      }
       message.success("Đã xuất PDF");
     } catch (e: any) {
       message.error("Lỗi xuất PDF: " + (e?.message ?? String(e)));
     } finally {
       setExportLoading(false);
     }
-  }, [previewHtml, previewFileName]);
+  }, [previewHtml, previewFileName, previewPdfOptions]);
 
   const handlePreviewBrowserPrint = useCallback(() => {
     try {
@@ -863,7 +955,7 @@ export default function CsmLineItemsEditor({
         title={`Xem trước — ${previewLabel}`}
         open={previewOpen}
         onCancel={() => setPreviewOpen(false)}
-        width={900}
+        width={Math.max(860, previewViewportWidth + 100)}
         destroyOnClose
         footer={[
           <Button key="close" onClick={() => setPreviewOpen(false)}>
@@ -884,13 +976,17 @@ export default function CsmLineItemsEditor({
         ]}
       >
         <iframe
+          ref={previewIframeRef}
           title="print-preview"
           srcDoc={previewHtml}
           style={{
-            width: "100%",
+            width: `${previewViewportWidth}px`,
+            maxWidth: "100%",
             height: "72vh",
             border: "1px solid #d9d9d9",
             background: "#fff",
+            margin: "0 auto",
+            display: "block",
           }}
         />
       </Modal>

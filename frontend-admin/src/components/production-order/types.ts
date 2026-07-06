@@ -102,6 +102,48 @@ export interface LiPrintTableOpts {
   visibleColumns?: string[];
   /** Hiện khối tổng A/B/C/D — trigger tự quyết có gọi buildTotalsHtml hay không */
   showTotals?: boolean;
+  /** Override tiêu đề cột theo name (bao gồm cột stt) */
+  headerLabels?: Record<string, string>;
+  /** Override width cột theo name (vd: { ten_sp: '30%', stt: '4%' }) */
+  columnWidths?: Record<string, string>;
+  /** Override căn lề cột theo name */
+  columnAlign?: Record<string, "left" | "right" | "center">;
+  /** Tắt hack auto-width cũ để khóa cứng theo columnWidths/meta */
+  strictColumnLayout?: boolean;
+  /** Template dòng cộng nhóm ({{group}}, {{vat}}) */
+  subtotalLabelTemplate?: string;
+}
+
+export interface LiPrintPdfOptions {
+  /** jsPDF format, mặc định a4 */
+  format?: string;
+  /** portrait | landscape, mặc định portrait */
+  orientation?: "portrait" | "landscape";
+  /** jsPDF unit, mặc định mm */
+  unit?: "mm" | "pt" | "cm" | "in" | "px";
+  /** [top, right, bottom, left] tính theo unit */
+  margin_mm?: [number, number, number, number] | number[];
+  /** html2canvas scale, mặc định 2 */
+  canvas_scale?: number;
+  /** Width viewport render HTML trước khi cắt trang */
+  window_width_px?: number;
+  use_cors?: boolean;
+  allow_taint?: boolean;
+  /** html2pdf pagebreak mode */
+  pagebreak_mode?: string[];
+  /** Chờ font tải xong trước khi xuất */
+  wait_for_fonts?: boolean;
+  /** Width iframe preview/export khi mount HTML */
+  preview_width_px?: number;
+}
+
+export interface LiPrintDocxOptions {
+  /** URL/path tới file DOCX template (upload server hoặc public path) */
+  template_url: string;
+  /** Trigger key trả về object data cho docxtemplater */
+  data_trigger_key?: string;
+  /** Tải file .docx đã merge dữ liệu (phục vụ đối chiếu chuẩn mẫu) */
+  allow_download_docx?: boolean;
 }
 
 // ─── Workflow config (stored in m_configs.line_items_workflow) ───────────────
@@ -148,6 +190,12 @@ export interface LiPrintConfig {
   filename_expr?: string;   // JS expression for file name, vars: order, calc
   /** Tuỳ chọn bảng in — runtime merge vào utils.printTableOpts khi bấm in */
   print_table?: LiPrintTableOpts;
+  /** Tuỳ chọn PDF — cấu hình động từ JSON (không cần sửa code) */
+  print_pdf?: LiPrintPdfOptions;
+  /** Engine in: html (mặc định) hoặc docx template */
+  print_engine?: "html" | "docx";
+  /** Cấu hình in DOCX template */
+  print_docx?: LiPrintDocxOptions;
 }
 
 export interface LineItemsListColumn {

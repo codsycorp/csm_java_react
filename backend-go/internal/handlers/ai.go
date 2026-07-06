@@ -62,6 +62,18 @@ func (h *AiHandler) HandleAiLocal(path string, params map[string]any) *model.Sta
 	case strings.HasSuffix(path, "/cleanup-render-artifacts"):
 		r.Set("result", h.handleAiLocalCleanupRenderArtifacts(params))
 		return r
+	case strings.HasSuffix(path, "/report/docx-to-pdf"):
+		r.Set("result", h.handleAiLocalDocxToPdf(params))
+		return r
+	case strings.HasSuffix(path, "/report/docx-to-pdf/submit"):
+		r.Set("result", h.handleAiLocalDocxToPdfSubmit(params))
+		return r
+	case strings.HasSuffix(path, "/report/docx-to-pdf/status"):
+		r.Set("result", h.handleAiLocalDocxToPdfStatus(params))
+		return r
+	case strings.HasSuffix(path, "/report/render-and-convert"):
+		r.Set("result", h.handleAiLocalRenderAndConvert(params))
+		return r
 	case strings.HasSuffix(path, "/health"):
 		r.Set("result", ops.Health(h.llama))
 		return r

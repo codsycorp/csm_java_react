@@ -1,0 +1,37 @@
+{
+  "ten_cong_ty": "CONG TY TNHH ABC",
+  "com_logo": "https://dummyimage.com/180x60/ffffff/000000.png&text=LOGO",
+  "so_bao_gia": "BG-2026-0706",
+  "ngay_bao_gia": "06/07/2026",
+  "ten_khach_hang": "Cong ty XYZ",
+  "dia_chi_khach_hang": "123 Nguyen Van A, Q1, TP.HCM",
+  "dien_thoai_khach_hang": "0901234567",
+  "ghi_chu_dau_trang": "Bao gia co hieu luc trong 15 ngay",
+  "items": [
+    {
+      "stt": 1,
+      "ten_hang": "San pham A",
+      "dvt": "Cai",
+      "so_luong": 2,
+      "don_gia": "1,000,000",
+      "thanh_tien": "2,000,000"
+    },
+    {
+      "stt": 2,
+      "ten_hang": "San pham B",
+      "dvt": "Bo",
+      "so_luong": 1,
+      "don_gia": "3,500,000",
+      "thanh_tien": "3,500,000"
+    }
+  ],
+  "tong_tien_truoc_thue": "5,500,000",
+  "vat_percent": 10,
+  "tien_vat": "550,000",
+  "tong_thanh_toan": "6,050,000",
+  "tong_tien_bang_chu": "Sau trieu khong tram nam muoi ngan dong",
+  "dieu_khoan_thanh_toan": "Chuyen khoan 100% khi xac nhan don",
+  "thoi_gian_giao_hang": "3-5 ngay lam viec",
+  "nguoi_lap": "Nguyen Van A",
+  "khach_hang_xac_nhan": "Tran Thi B"
+}

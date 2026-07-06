@@ -533,11 +533,11 @@ function resolvePrintTableColumns(
   });
 }
 
-function printColHeader(name: string, columns?: LiColumnDef[]): string {
+function printColHeader(name: string, columns?: LiColumnDef[], opts?: LiPrintTableOpts): string {
   const col = columns?.find(c => c.name === name);
   const meta = PRINT_COL_META[name];
-  const label = col?.label ?? meta?.header ?? name;
-  const width = meta?.width ?? "8%";
+  const label = opts?.headerLabels?.[name] ?? col?.label ?? meta?.header ?? name;
+  const width = opts?.columnWidths?.[name] ?? meta?.width ?? "8%";
   return `<th style="width:${width}">${label.replace(/\n/g, "<br/>")}</th>`;
 }
 
@@ -593,6 +593,7 @@ export function buildItemsTableHtml(
   const dataColCount = visibleNames.length;
 
   const headerCells = visibleNames.map(name => printColHeader(name, columns)).join("");
+  const headerCellsHtml = visibleNames.map(name => printColHeader(name, columns, opts)).join("");
   let rows = "";
 
   for (const [gi, g] of groups.entries()) {
@@ -614,7 +615,11 @@ export function buildItemsTableHtml(
         n === agg.soTam || n === agg.kl || n === agg.price || n === agg.tt,
       );
       const labelSpan = firstAggIdx >= 0 ? firstAggIdx : visibleNames.length;
-      let subRow = `<tr><td class="it-sub"></td><td class="it-sub" colspan="${Math.max(labelSpan, 1)}">Cộng nhóm ${label} – chưa VAT ${g.vat_rate}%</td>`;
+      const subtotalTpl = String(opts.subtotalLabelTemplate || "Cộng nhóm {{group}} – chưa VAT {{vat}}%");
+      const subtotalText = subtotalTpl
+        .replace(/\{\{\s*group\s*\}\}/g, label)
+        .replace(/\{\{\s*vat\s*\}\}/g, String(g.vat_rate));
+      let subRow = `<tr><td class="it-sub"></td><td class="it-sub" colspan="${Math.max(labelSpan, 1)}">${subtotalText}</td>`;
       for (let i = labelSpan; i < visibleNames.length; i++) {
         const name = visibleNames[i];
         if (name === agg.soTam) subRow += `<td class="r it-sub">${totalSt}</td>`;
@@ -628,7 +633,7 @@ export function buildItemsTableHtml(
 
     g.items.forEach((item, idx) => {
       const cells = visibleNames.map(name => {
-        const align = PRINT_COL_META[name]?.align ?? "left";
+        const align = opts.columnAlign?.[name] ?? PRINT_COL_META[name]?.align ?? "left";
         const cls = align === "right" ? "r" : align === "center" ? "c" : "";
         const content = formatPrintCell(name, item, columns);
         return `<td class="${cls}">${content}</td>`;
@@ -637,10 +642,11 @@ export function buildItemsTableHtml(
     });
   }
 
-  const nameColWidth = visibleNames.includes("ten_sp") ? "26%" : "38%";
+  const sttWidth = opts.columnWidths?.stt ?? "4%";
+  const sttLabel = opts.headerLabels?.stt ?? "TT";
   return `<table class="it"><thead><tr>
-    <th style="width:4%">TT</th>
-    ${headerCells.replace('width:26%', `width:${nameColWidth}`)}
+    <th style="width:${sttWidth}">${sttLabel.replace(/\n/g, "<br/>")}</th>
+    ${headerCellsHtml}
     </tr></thead><tbody>${rows}</tbody></table>`;
 }
 

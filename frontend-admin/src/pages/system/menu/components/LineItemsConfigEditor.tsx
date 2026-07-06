@@ -1,10 +1,14 @@
 import { useCallback, useMemo, useState } from "react";
 import {
-	Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Switch,
+	Alert, Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Switch, Upload,
 	Table, Tabs, message,
 } from "antd";
-import { DeleteOutlined, EditOutlined, PlusOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, PlusOutlined, UploadOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
+import { AI_TIMEOUT_MS } from "#src/api/ai";
+import { consumeSseStream, dispatchAiCodeStreamEvent } from "#src/api/ai/sse-stream";
+import { request } from "#src/utils";
+import { useUserStore } from "#src/store";
 
 import type {
   LiColumnDef, LiGroupConfig, LiPrintConfig, LiPrintTableOpts, LiTotalConfig,
@@ -18,6 +22,14 @@ import {
 } from "#src/components/production-order/line-items-menu-presets";
 import { ensureTriLangLabels } from "#src/components/production-order/line-items-label";
 import LineItemsPdfImportPanel from "#src/components/production-order/LineItemsPdfImportPanel";
+import { readPrintSampleFile, suggestPrintConfig } from "#src/components/production-order/line-items-print-import";
+import { inferDocKindFromLayout } from "#src/components/production-order/line-items-pdf-layout";
+import {
+	createDocxTemplateBuffer,
+	arrayBufferToDataUrl,
+	type DocxTemplateBlueprint,
+} from "#src/components/production-order/line-items-docx-template";
+import { probeDocxTemplateUrl } from "#src/components/production-order/line-items-docx-print";
 
 const COLUMN_TYPES = [
 	{ value: "text", label: "text" },
@@ -27,6 +39,186 @@ const COLUMN_TYPES = [
 	{ value: "formula", label: "formula" },
 	{ value: "formula_or_manual", label: "formula_or_manual" },
 ];
+
+const PRINT_PDF_HINT_EXAMPLE = `Ví dụ: {"format":"a4","orientation":"portrait","margin_mm":[0,0,0,0],"canvas_scale":2,"pagebreak_mode":["css","legacy"],"preview_width_px":820}`;
+const UPLOAD_ENDPOINT = "/upload.shtml";
+
+function normalizeUploadFileName(name: string): string {
+	const source = String(name || "template.docx").toLowerCase();
+	const ext = source.endsWith(".docx") ? ".docx" : "";
+	const base = source.replace(/\.docx$/i, "").replace(/\s+/g, "-").replace(/[^a-z0-9._-]/g, "");
+	return `${base || "template"}${ext || ".docx"}`;
+}
+
+function normalizeUploadedTemplatePath(rawPath: string, appId?: string, expectedName?: string): string {
+	const raw = String(rawPath || "").trim();
+	if (!raw) return "";
+	let pathOnly = raw;
+	try {
+		if (/^https?:\/\//i.test(raw)) {
+			const u = new URL(raw);
+			pathOnly = `${u.pathname}${u.search || ""}`;
+		}
+	} catch {
+		// Keep original path if URL parsing fails.
+	}
+
+	let normalized = pathOnly.startsWith("/") ? pathOnly : `/${pathOnly}`;
+	normalized = normalized.replace(/\/{2,}/g, "/");
+
+	if (appId && expectedName) {
+		const expected = expectedName.startsWith("/") ? expectedName.slice(1) : expectedName;
+		if (normalized === `/app_images/${expected}` || normalized === `/app_images//${expected}`) {
+			return `/app_images/${appId}/${expected}`;
+		}
+	}
+
+	return normalized;
+}
+
+function extractUploadPathFromResponse(text: string, appId?: string, expectedName?: string): string {
+	const raw = String(text || "").trim();
+	if (!raw) return "";
+
+	const readCandidate = (candidate: unknown): string => {
+		if (typeof candidate !== "string") return "";
+		const normalized = normalizeUploadedTemplatePath(candidate, appId, expectedName);
+		return normalized.includes("/app_images/") ? normalized : "";
+	};
+
+	const walk = (node: any): string => {
+		if (!node || typeof node !== "object") return "";
+		const direct = readCandidate(node.path) || readCandidate(node.url) || readCandidate(node.file) || readCandidate(node.location);
+		if (direct) return direct;
+		if (Array.isArray(node.files)) {
+			for (const f of node.files) {
+				const found = walk(f);
+				if (found) return found;
+			}
+		}
+		const nestedKeys = ["data", "result", "payload", "response"];
+		for (const key of nestedKeys) {
+			const found = walk(node[key]);
+			if (found) return found;
+		}
+		return "";
+	};
+
+	try {
+		const parsed = JSON.parse(raw);
+		const fromJson = walk(parsed);
+		if (fromJson) return fromJson;
+	} catch {
+		// Ignore JSON parse failure and try plain-text extraction below.
+	}
+
+	const regexMatch = raw.match(/\/?app_images\/[A-Za-z0-9._\/-]+\.docx(?:\?[^"]*)?/i);
+	if (regexMatch?.[0]) {
+		return normalizeUploadedTemplatePath(regexMatch[0], appId, expectedName);
+	}
+
+	if (!/^<!doctype html>/i.test(raw) && !/^<html/i.test(raw)) {
+		const direct = normalizeUploadedTemplatePath(raw, appId, expectedName);
+		if (direct.includes("/app_images/")) return direct;
+	}
+
+	return "";
+}
+
+async function uploadGeneratedDocxTemplate(params: {
+	appId: string;
+	fileName: string;
+	dataUrl: string;
+	appToken?: string;
+}): Promise<string> {
+	const response = await fetch(UPLOAD_ENDPOINT, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			Authorization: String(params.appToken || ""),
+		},
+		body: JSON.stringify({
+			app_id: params.appId,
+			name: params.fileName,
+			src: params.dataUrl,
+		}),
+	});
+
+	if (!response.ok) {
+		throw new Error(`Upload DOCX thất bại: ${response.status} ${response.statusText}`);
+	}
+
+	const rawText = await response.text();
+	const extracted = extractUploadPathFromResponse(rawText, params.appId, params.fileName);
+	if (!extracted) {
+		throw new Error("Upload DOCX thành công nhưng response không có đường dẫn hợp lệ");
+	}
+	return extracted;
+}
+
+function tryParseLooseJson(raw: string): Record<string, any> | null {
+	const text = String(raw || "").trim();
+	if (!text) return null;
+	try {
+		const parsed = JSON.parse(text);
+		return parsed && typeof parsed === "object" ? parsed : null;
+	} catch {
+		const fence = text.match(/```(?:json)?\n([\s\S]+?)\n```/i);
+		if (fence?.[1]) {
+			try {
+				const parsed = JSON.parse(fence[1]);
+				return parsed && typeof parsed === "object" ? parsed : null;
+			} catch {
+				return null;
+			}
+		}
+		return null;
+	}
+}
+
+function extractJsBodyFromAi(raw: string): string {
+	const text = String(raw || "").trim();
+	if (!text) return "";
+	const fencedJs = text.match(/```(?:javascript|js)?\n([\s\S]+?)\n```/i);
+	if (fencedJs?.[1]) return fencedJs[1].trim();
+	return text;
+}
+
+function buildDefaultDocxBlueprint(params: {
+	kind: string;
+	title?: string;
+	subtitle?: string;
+	headers?: string[];
+	tableHeaders?: string[];
+	signatures?: string[];
+}): DocxTemplateBlueprint {
+	const tableHeaders = (params.tableHeaders || []).filter(Boolean);
+	const normalizedTableHeaders = tableHeaders.length
+		? tableHeaders.slice(0, 9)
+		: ["STT", "Tên hàng", "Đơn vị", "Số lượng", "Đơn giá", "Thành tiền"];
+	const rowPlaceholders = normalizedTableHeaders.map((_, idx) => {
+		if (idx === 0) return "{#items_flat}{stt}";
+		if (idx === normalizedTableHeaders.length - 1) return "{thanh_tien}{/items_flat}";
+		if (idx === 1) return "{ten_sp}";
+		if (idx === 2) return "{don_vi}";
+		if (idx === 3) return "{so_luong}";
+		if (idx === 4) return "{don_gia}";
+		return "{" + `col_${idx}` + "}";
+	});
+	return {
+		title: params.title || "MẪU CHỨNG TỪ",
+		subtitle: params.subtitle || "Tạo tự động từ PDF mẫu",
+		headerLines: (params.headers || []).slice(0, 8).map((h) => String(h || "").trim()).filter(Boolean),
+		tableHeaders: normalizedTableHeaders,
+		tableRowPlaceholders: rowPlaceholders,
+		signatureLabels: (params.signatures || []).slice(0, 6).map((s) => String(s || "").trim()).filter(Boolean),
+		noteLines: [
+			`template_kind: ${params.kind}`,
+			"Tổng cộng: {calc.totals.C}",
+			"Bằng chữ: {bang_chu}",
+		],
+	};
+}
 
 export interface LineItemsConfigEditorProps {
 	value?: Partial<LineItemsEditorConfig>;
@@ -95,6 +287,13 @@ export default function LineItemsConfigEditor({
 	const [printModalOpen, setPrintModalOpen] = useState(false);
 	const [printEditingIdx, setPrintEditingIdx] = useState<number | null>(null);
 	const [printForm] = Form.useForm();
+	const [docxSampleFile, setDocxSampleFile] = useState<File | null>(null);
+	const [docxTemplateUrl, setDocxTemplateUrl] = useState<string>("");
+	const [docxAutoLoading, setDocxAutoLoading] = useState(false);
+	const [docxLastAiStatus, setDocxLastAiStatus] = useState<string>("");
+	const [docxLastGeneratedTrigger, setDocxLastGeneratedTrigger] = useState<string>("");
+	const [docxLastGeneratedTriggerKey, setDocxLastGeneratedTriggerKey] = useState<string>("");
+	const user = useUserStore();
 
 	const patch = useCallback((partial: Partial<LineItemsEditorConfig>) => {
 		onChange?.({ ...value, ...partial });
@@ -199,31 +398,81 @@ export default function LineItemsConfigEditor({
 		const record = idx != null ? rows[idx] : newPrintCfg();
 		setPrintEditingIdx(idx ?? null);
 		const pt = record.print_table ?? {};
+		const pp = (record as any).print_pdf ?? {};
+		const pd = (record as any).print_docx ?? {};
 		printForm.setFieldsValue({
 			...record,
+			print_engine: (record as any).print_engine || "html",
 			pt_showPrice: pt.showPrice ?? true,
 			pt_showGroupSubtotal: pt.showGroupSubtotal ?? true,
 			pt_hideColumns: pt.hideColumns ?? [],
 			pt_showTotals: pt.showTotals ?? true,
+			print_pdf_json: JSON.stringify(pp, null, 2),
+			print_docx_template_url: pd.template_url ?? "",
+			print_docx_data_trigger_key: pd.data_trigger_key ?? "",
+			print_docx_allow_download_docx: Boolean(pd.allow_download_docx),
 		});
 		setPrintModalOpen(true);
 	};
 
 	const savePrint = async () => {
 		const raw = await printForm.validateFields();
+		let print_pdf: Record<string, any> | undefined;
+		const printPdfRaw = String(raw.print_pdf_json ?? "").trim();
+		if (printPdfRaw) {
+			try {
+				const parsed = JSON.parse(printPdfRaw);
+				if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+					print_pdf = parsed as Record<string, any>;
+				}
+			} catch {
+				message.error("print_pdf JSON không hợp lệ");
+				return;
+			}
+		}
 		const print_table: LiPrintTableOpts = {
 			showPrice: raw.pt_showPrice,
 			showGroupSubtotal: raw.pt_showGroupSubtotal,
 			showTotals: raw.pt_showTotals,
 			hideColumns: raw.pt_hideColumns?.length ? raw.pt_hideColumns : undefined,
 		};
+		const print_engine = raw.print_engine || "html";
+		const templateUrl = String(raw.print_docx_template_url ?? "").trim();
+		const dataTriggerKey = String(raw.print_docx_data_trigger_key ?? "").trim();
+		const allowDownloadDocx = Boolean(raw.print_docx_allow_download_docx);
+		const print_docx = print_engine === "docx"
+			? {
+				template_url: templateUrl,
+				data_trigger_key: dataTriggerKey || undefined,
+				allow_download_docx: allowDownloadDocx,
+			}
+			: undefined;
+		if (print_engine === "docx") {
+			if (!templateUrl) {
+				message.error("Thiếu print_docx.template_url");
+				return;
+			}
+			try {
+				const probe = await probeDocxTemplateUrl(templateUrl, { checkExternalTargets: true, appIdHint: appId });
+				if (!probe.ok) {
+					message.error(probe.message || "Template DOCX không hợp lệ");
+					return;
+				}
+			} catch (err: any) {
+				message.error(`Không kiểm tra được template DOCX: ${err?.message || String(err)}`);
+				return;
+			}
+		}
 		const saved = ensureTriLangLabels({
 			label: raw.label,
 			label_en: raw.label_en,
 			label_zh: raw.label_zh,
 			trigger_key: raw.trigger_key,
 			filename_expr: raw.filename_expr,
+			print_engine,
+			print_docx,
 			print_table,
+			print_pdf,
 		}, "label") as LiPrintConfig;
 		const rows = [...(value.line_items_print ?? [])];
 		if (printEditingIdx != null && printEditingIdx >= 0) rows[printEditingIdx] = saved;
@@ -239,6 +488,322 @@ export default function LineItemsConfigEditor({
 		setPrintModalOpen(false);
 		setPrintEditingIdx(null);
 	};
+
+	const applyDocxFromPdfSample = useCallback(async (selectedFile?: File | null) => {
+		const sourceFile = selectedFile || docxSampleFile;
+		if (!sourceFile) {
+			message.warning("Chưa chọn PDF mẫu");
+			return;
+		}
+
+		setDocxAutoLoading(true);
+		setDocxLastAiStatus("");
+		setDocxLastGeneratedTrigger("");
+		setDocxLastGeneratedTriggerKey("");
+		try {
+			let aiStatus = "";
+			const layoutCfg = (value as any)?.settings?.pdf_layout_extract || (value as any)?.pdf_layout_extract;
+			const sample = await readPrintSampleFile(sourceFile, 2, layoutCfg);
+			const kind = inferDocKindFromLayout(sample.pdfLayout, layoutCfg) || "bao_gia";
+
+			const byKind: Record<string, { key: string; label: string }> = {
+				bao_gia: { key: "print_bao_gia", label: "Xuất Báo giá" },
+				lenh_sx: { key: "print_lenh_sx", label: "Xuất Lệnh SX nội bộ" },
+				pxk: { key: "print_pxk", label: "Xuất Lệnh SX + PXK" },
+				custom: { key: "print_custom_docx", label: "Xuất DOCX từ mẫu" },
+			};
+
+			const triggerInfo = byKind[kind] || byKind.custom;
+			const suggested = suggestPrintConfig(kind as any, triggerInfo.key, sample.pdfLayout) as any;
+			const dataTriggerKey = `${triggerInfo.key}_docx_data`;
+
+			const aiDraft = buildDefaultDocxBlueprint({
+				kind,
+				title: sample.pdfLayout.docTitle,
+				subtitle: sample.pdfLayout.docSubtitle,
+				headers: sample.pdfLayout.headerLines,
+				tableHeaders: sample.pdfLayout.tableColumnHeaders,
+				signatures: sample.pdfLayout.signatureLabels,
+			});
+
+			let blueprint = aiDraft;
+			try {
+				const aiPrompt = [
+					"Bạn là AI local chuyên chuẩn hóa template DOCX cho CSM.",
+					"Nhiệm vụ: chỉnh JSON blueprint cho DOCX theo layout PDF mẫu.",
+					"Chỉ trả về một JSON object hợp lệ, không markdown, không giải thích.",
+					"Giữ placeholders Docxtemplater dạng {field}.",
+					"",
+					`docKind: ${kind}`,
+					`pdfLayout: ${JSON.stringify({
+						docTitle: sample.pdfLayout.docTitle,
+						docSubtitle: sample.pdfLayout.docSubtitle,
+						headerLines: sample.pdfLayout.headerLines?.slice(0, 10),
+						tableColumnHeaders: sample.pdfLayout.tableColumnHeaders?.slice(0, 12),
+						signatureLabels: sample.pdfLayout.signatureLabels?.slice(0, 8),
+						showPrice: sample.pdfLayout.showPrice,
+					}, null, 2)}`,
+					"",
+					"Schema JSON:",
+					"{",
+					"  \"title\": string,",
+					"  \"subtitle\": string,",
+					"  \"headerLines\": string[],",
+					"  \"tableHeaders\": string[],",
+					"  \"tableRowPlaceholders\": string[],",
+					"  \"signatureLabels\": string[],",
+					"  \"noteLines\": string[]",
+					"}",
+					"",
+					`current blueprint: ${JSON.stringify(aiDraft, null, 2)}`,
+				].join("\n");
+
+				const response = await request.post("ai-code-stream", {
+					json: {
+						appId: String(appId || "line_items_docx").trim() || "line_items_docx",
+						message: aiPrompt,
+						currentCode: JSON.stringify(aiDraft, null, 2),
+						flowType: "code_editor",
+						taskType: "code_assistant",
+						language: "json",
+						contextType: "code",
+						responseMode: "raw_code",
+						editorMetadata: {
+							...(editorMetadata || {}),
+							source: "LineItemsConfigEditor.docx_blueprint",
+							docKind: kind,
+							triggerKey: triggerInfo.key,
+						},
+					},
+					timeout: AI_TIMEOUT_MS,
+					throwHttpErrors: false,
+				});
+
+				if (response.ok && response.body) {
+					let completed = false;
+					let fullResponse = "";
+					await consumeSseStream(response, {
+						onEvent: (evt) => {
+							const payload = (evt.payload && typeof evt.payload === "object")
+								? (evt.payload as Record<string, unknown>)
+								: null;
+							if (!payload) return;
+							const result = dispatchAiCodeStreamEvent(payload, fullResponse, {
+								onChunk: (_chunk, accumulated) => { fullResponse = accumulated; },
+								onComplete: (p) => {
+									if (typeof p.fullResponse === "string") fullResponse = p.fullResponse;
+									completed = true;
+								},
+								onError: () => {},
+							});
+							fullResponse = result.accumulated;
+							if (result.completed) completed = true;
+						},
+					});
+
+					const payload = completed ? tryParseLooseJson(fullResponse) : null;
+					if (payload) {
+						blueprint = {
+							...aiDraft,
+							title: String(payload.title || aiDraft.title),
+							subtitle: String(payload.subtitle || aiDraft.subtitle || ""),
+							headerLines: Array.isArray(payload.headerLines) ? payload.headerLines.map(String).filter(Boolean) : aiDraft.headerLines,
+							tableHeaders: Array.isArray(payload.tableHeaders) ? payload.tableHeaders.map(String).filter(Boolean) : aiDraft.tableHeaders,
+							tableRowPlaceholders: Array.isArray(payload.tableRowPlaceholders) ? payload.tableRowPlaceholders.map(String).filter(Boolean) : aiDraft.tableRowPlaceholders,
+							signatureLabels: Array.isArray(payload.signatureLabels) ? payload.signatureLabels.map(String).filter(Boolean) : aiDraft.signatureLabels,
+							noteLines: Array.isArray(payload.noteLines) ? payload.noteLines.map(String).filter(Boolean) : aiDraft.noteLines,
+						};
+						aiStatus = "AI local đã tinh chỉnh blueprint DOCX";
+						setDocxLastAiStatus(aiStatus);
+					} else {
+						aiStatus = "AI local không trả JSON hợp lệ, dùng blueprint mặc định";
+						setDocxLastAiStatus(aiStatus);
+					}
+				} else {
+					aiStatus = "Không gọi được AI local, dùng blueprint mặc định";
+					setDocxLastAiStatus(aiStatus);
+				}
+			} catch {
+				aiStatus = "AI local lỗi, dùng blueprint mặc định";
+				setDocxLastAiStatus(aiStatus);
+			}
+
+			const normalizedName = normalizeUploadFileName(`${triggerInfo.key}_${Date.now()}.docx`);
+			const docxBuffer = createDocxTemplateBuffer(blueprint);
+			const docxDataUrl = arrayBufferToDataUrl(
+				docxBuffer,
+				"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+			);
+
+			let effectiveTemplateUrl = docxDataUrl;
+			if (appId) {
+				try {
+					effectiveTemplateUrl = await uploadGeneratedDocxTemplate({
+						appId: String(appId).trim(),
+						fileName: normalizedName,
+						dataUrl: docxDataUrl,
+						appToken: String(user?.app_token || ""),
+					});
+				} catch (uploadErr: any) {
+					message.warning(`Không upload được DOCX lên server, dùng tạm data URL: ${uploadErr?.message || String(uploadErr)}`);
+				}
+			}
+			setDocxTemplateUrl(effectiveTemplateUrl);
+
+			try {
+				const probe = await probeDocxTemplateUrl(effectiveTemplateUrl, { checkExternalTargets: true, appIdHint: appId });
+				if (!probe.ok) {
+					throw new Error(probe.message || "Template DOCX không hợp lệ sau khi tạo/upload");
+				}
+			} catch (probeErr: any) {
+				message.error(`DOCX tạo xong nhưng không hợp lệ để dùng: ${probeErr?.message || String(probeErr)}`);
+				return;
+			}
+
+			const docxPrintCfg = ensureTriLangLabels({
+				...suggested,
+				label: triggerInfo.label,
+				trigger_key: triggerInfo.key,
+				print_engine: "docx",
+				print_docx: {
+					template_url: effectiveTemplateUrl,
+					data_trigger_key: dataTriggerKey,
+					allow_download_docx: true,
+				},
+			}, "label") as LiPrintConfig;
+
+			const rows = [...(value.line_items_print ?? [])];
+			const idx = rows.findIndex(r => String(r.trigger_key || "") === triggerInfo.key);
+			if (idx >= 0) rows[idx] = { ...rows[idx], ...docxPrintCfg };
+			else rows.push(docxPrintCfg);
+
+			const keys = new Set([...(uiCfg.print_keys ?? []), triggerInfo.key]);
+			patch({
+				line_items_print: rows,
+				line_items_ui: { ...uiCfg, print_keys: Array.from(keys) },
+			});
+
+			const defaultTriggerBody = [
+				"const cfg = utils.settings || {};",
+				"const wordsKey = (Array.isArray(utils.totalConfigs) ? utils.totalConfigs.find((x)=>x && x.show_words)?.key : undefined) || 'D';",
+				"const wordsVal = (calc?.totals && typeof calc.totals[wordsKey] === 'number') ? calc.totals[wordsKey] : 0;",
+				"const items_flat = [];",
+				"let stt = 1;",
+				"for (const g of (groups || [])) {",
+				"  for (const it of (g?.items || [])) {",
+				"    items_flat.push({ ...it, stt });",
+				"    stt += 1;",
+				"  }",
+				"}",
+				"const noteLines = utils.parseNoteLines ? utils.parseNoteLines(cfg.ghi_chu_bao_gia, []) : [];",
+				"return {",
+				"  order,",
+				"  groups,",
+				"  items_flat,",
+				"  calc,",
+				"  totals: calc?.totals || {},",
+				"  bang_chu: utils.soThanhChu ? utils.soThanhChu(wordsVal) : '',",
+				"  note_lines: noteLines,",
+				"  settings: cfg,",
+				`  template_kind: ${JSON.stringify(String(kind || ""))},`,
+				`  template_title: ${JSON.stringify(String(sample.pdfLayout.docTitle || ""))},`,
+				"};",
+			].join("\n");
+
+			let finalTriggerBody = defaultTriggerBody;
+			let triggerAiStatus = "";
+			try {
+				const triggerPrompt = [
+					"Bạn là AI local chuyên viết JS trigger data cho Docxtemplater trong CSM.",
+					"Mục tiêu: tạo body function JavaScript hợp lệ cho new Function('order','groups','calc','utils', body).",
+					"Yêu cầu bắt buộc:",
+					"1) Chỉ trả về JSON object hợp lệ, không markdown, không giải thích.",
+					"2) JSON schema: { \"triggerBody\": string }",
+					"3) triggerBody phải là JS body an toàn, có return object.",
+					"4) Không dùng import/require/await/top-level return ngoài body function.",
+					"5) Ưu tiên mapping theo placeholders trong DOCX blueprint.",
+					"6) Giữ các key chuẩn: order, groups, items_flat, calc, totals, bang_chu, note_lines, settings, template_kind, template_title.",
+					"",
+					`docKind: ${kind}`,
+					`triggerKey: ${triggerInfo.key}`,
+					`dataTriggerKey: ${dataTriggerKey}`,
+					`docTitle: ${JSON.stringify(String(sample.pdfLayout.docTitle || ""))}`,
+					`docxBlueprint: ${JSON.stringify(blueprint, null, 2)}`,
+					"",
+					`fallbackTriggerBody: ${JSON.stringify(defaultTriggerBody)}`,
+				].join("\n");
+
+				const triggerResponse = await request.post("ai-code-stream", {
+					json: {
+						appId: String(appId || "line_items_docx").trim() || "line_items_docx",
+						message: triggerPrompt,
+						currentCode: defaultTriggerBody,
+						flowType: "code_editor",
+						taskType: "code_assistant",
+						language: "javascript",
+						contextType: "code",
+						responseMode: "raw_code",
+						editorMetadata: {
+							...(editorMetadata || {}),
+							source: "LineItemsConfigEditor.docx_data_trigger",
+							docKind: kind,
+							triggerKey: triggerInfo.key,
+							dataTriggerKey,
+						},
+					},
+					timeout: AI_TIMEOUT_MS,
+					throwHttpErrors: false,
+				});
+
+				if (triggerResponse.ok && triggerResponse.body) {
+					let completed = false;
+					let fullResponse = "";
+					await consumeSseStream(triggerResponse, {
+						onEvent: (evt) => {
+							const payload = (evt.payload && typeof evt.payload === "object")
+								? (evt.payload as Record<string, unknown>)
+								: null;
+							if (!payload) return;
+							const result = dispatchAiCodeStreamEvent(payload, fullResponse, {
+								onChunk: (_chunk, accumulated) => { fullResponse = accumulated; },
+								onComplete: (p) => {
+									if (typeof p.fullResponse === "string") fullResponse = p.fullResponse;
+									completed = true;
+								},
+								onError: () => {},
+							});
+							fullResponse = result.accumulated;
+							if (result.completed) completed = true;
+						},
+					});
+
+					const payload = completed ? tryParseLooseJson(fullResponse) : null;
+					const candidateRaw = typeof payload?.triggerBody === "string" ? payload.triggerBody : fullResponse;
+					const candidateBody = extractJsBodyFromAi(candidateRaw);
+					if (candidateBody) {
+						// Compile-check trigger body to avoid runtime "Invalid or unexpected token".
+						// eslint-disable-next-line no-new-func
+						new Function("order", "groups", "calc", "utils", candidateBody);
+						finalTriggerBody = candidateBody;
+						triggerAiStatus = "AI local đã tạo trigger data cho DOCX";
+					}
+				}
+			} catch {
+				triggerAiStatus = "AI trigger lỗi, dùng trigger mặc định";
+			}
+
+			onApplyTrigger?.(dataTriggerKey, finalTriggerBody);
+			setDocxLastGeneratedTrigger(finalTriggerBody);
+			setDocxLastGeneratedTriggerKey(dataTriggerKey);
+			const aiMsg = [aiStatus, triggerAiStatus].filter(Boolean).join(" | ");
+			const storageMode = String(effectiveTemplateUrl || "").startsWith("/app_images/") ? "[đã upload]" : "[data-url fallback]";
+			message.success(`Đã tạo cấu hình DOCX từ PDF mẫu (${kind}) ${storageMode}${aiMsg ? ` — ${aiMsg}` : ""}`);
+		} catch (err: any) {
+			message.error(`Không thể tạo cấu hình DOCX từ PDF: ${err?.message || String(err)}`);
+		} finally {
+			setDocxAutoLoading(false);
+		}
+	}, [appId, docxSampleFile, docxTemplateUrl, editorMetadata, onApplyTrigger, patch, uiCfg, user?.app_token, value]);
 
 	const patchUi = (partial: Partial<LineItemsUiConfig>) => {
 		patch({ line_items_ui: { ...uiCfg, ...partial } });
@@ -887,10 +1452,115 @@ export default function LineItemsConfigEditor({
 						label: t("system.menu.lineItemsTabPrint", "Nút in PDF"),
 						children: (
 							<>
+								<Card size="small" title="AI local: PDF mẫu -> cấu hình DOCX" style={{ marginBottom: 12 }}>
+									<Alert
+										type="info"
+										showIcon
+										style={{ marginBottom: 12 }}
+										message="Dev workflow: nhập PDF mẫu, hệ thống tự suy luận loại chứng từ và tạo print_engine=docx + data trigger."
+									/>
+									<Row gutter={12}>
+										<Col xs={24} md={12}>
+											<Upload
+												accept=".pdf"
+												maxCount={1}
+												beforeUpload={(file) => {
+													const picked = file as File;
+													setDocxSampleFile(picked);
+													if (!docxAutoLoading) {
+														void applyDocxFromPdfSample(picked);
+													}
+													return false;
+												}}
+												onRemove={() => {
+													setDocxSampleFile(null);
+													setDocxLastAiStatus("");
+													setDocxLastGeneratedTrigger("");
+													setDocxLastGeneratedTriggerKey("");
+													return true;
+												}}
+											>
+												<Button icon={<UploadOutlined />}>Chọn PDF mẫu</Button>
+											</Upload>
+											<div style={{ marginTop: 8, color: "var(--ant-colorTextSecondary)" }}>
+												{docxSampleFile ? `Đã chọn: ${docxSampleFile.name}` : "Chưa chọn file"}
+											</div>
+										</Col>
+										<Col xs={24} md={12}>
+											<Form layout="vertical" component={false}>
+												<Form.Item label="Đường dẫn DOCX template">
+													<Input
+														value={docxTemplateUrl}
+														onChange={(e) => setDocxTemplateUrl(e.target.value)}
+														placeholder="/reports/bao_gia_template.docx"
+													/>
+												</Form.Item>
+											</Form>
+										</Col>
+									</Row>
+									<Button type="primary" loading={docxAutoLoading} onClick={() => void applyDocxFromPdfSample()}>
+										Tự tạo cấu hình DOCX từ PDF mẫu
+									</Button>
+									{docxLastAiStatus && (
+										<Alert
+											type="info"
+											showIcon
+											style={{ marginTop: 12 }}
+											message={docxLastAiStatus}
+										/>
+									)}
+									{docxLastGeneratedTrigger && (
+										<Card
+											size="small"
+											title={`Trigger DOCX vừa sinh${docxLastGeneratedTriggerKey ? `: ${docxLastGeneratedTriggerKey}` : ""}`}
+											style={{ marginTop: 12 }}
+											extra={(
+												<Space>
+													<Button
+														size="small"
+														disabled={!docxLastGeneratedTriggerKey || !onApplyTrigger}
+														onClick={() => {
+															if (!onApplyTrigger || !docxLastGeneratedTriggerKey) {
+																message.warning("Thiếu key trigger để áp dụng");
+																return;
+															}
+															onApplyTrigger(docxLastGeneratedTriggerKey, docxLastGeneratedTrigger);
+															message.success(`Đã áp dụng lại trigger: ${docxLastGeneratedTriggerKey}`);
+														}}
+													>
+														Áp dụng lại
+													</Button>
+													<Button
+														size="small"
+														onClick={async () => {
+															try {
+																await navigator.clipboard.writeText(docxLastGeneratedTrigger);
+																message.success("Đã copy trigger");
+															} catch {
+																message.warning("Không copy được trigger");
+															}
+														}}
+													>
+														Copy
+													</Button>
+												</Space>
+											)}
+										>
+											<Input.TextArea
+												value={docxLastGeneratedTrigger}
+												readOnly
+												autoSize={{ minRows: 8, maxRows: 16 }}
+												style={{ fontFamily: "monospace", fontSize: 12 }}
+											/>
+										</Card>
+									)}
+								</Card>
+
 								<LineItemsPdfImportPanel
 									appId={appId}
 									tableFields={tableFields}
 									lineColumns={value.line_items_columns}
+									pdfLayoutExtractConfig={(value as any)?.settings?.pdf_layout_extract || (value as any)?.pdf_layout_extract}
 									onApplyTrigger={onApplyTrigger}
 									editorMetadata={editorMetadata}
 									onApplyPrintConfig={(cfg) => {
@@ -1094,6 +1764,9 @@ export default function LineItemsConfigEditor({
 				destroyOnClose
 			>
 				<Form form={printForm} layout="vertical">
+					<Form.Item name="print_engine" label="print_engine" initialValue="html">
+						<Select options={[{ label: "html", value: "html" }, { label: "docx", value: "docx" }]} />
+					</Form.Item>
 					<Row gutter={12}>
 						<Col span={12}>
 							<Form.Item name="trigger_key" label="trigger_key" rules={[{ required: true }]}>
@@ -1149,6 +1822,34 @@ export default function LineItemsConfigEditor({
 								placeholder="chieu_rong, don_gia, thanh_tien…"
 							/>
 						</Form.Item>
+					</Card>
+					<Card size="small" title="print_pdf — cấu hình PDF động (JSON)" style={{ marginTop: 12 }}>
+						<Alert
+							type="info"
+							showIcon
+							style={{ marginBottom: 8 }}
+							message={PRINT_PDF_HINT_EXAMPLE}
+						/>
+						<Form.Item name="print_pdf_json" label="print_pdf (JSON object)">
+							<Input.TextArea rows={7} placeholder="{}" style={{ fontFamily: "monospace" }} />
+						</Form.Item>
+					</Card>
+					<Card size="small" title="print_docx — cấu hình DOCX template" style={{ marginTop: 12 }}>
+						<Form.Item name="print_docx_template_url" label="template_url">
+							<Input placeholder="/reports/bao_gia_template.docx" />
+						</Form.Item>
+						<Row gutter={12}>
+							<Col span={16}>
+								<Form.Item name="print_docx_data_trigger_key" label="data_trigger_key">
+									<Input placeholder="print_bao_gia_docx_data" />
+								</Form.Item>
+							</Col>
+							<Col span={8}>
+								<Form.Item name="print_docx_allow_download_docx" label="allow_download_docx" valuePropName="checked">
+									<Switch />
+								</Form.Item>
+							</Col>
+						</Row>
 					</Card>
 				</Form>
 			</Modal>

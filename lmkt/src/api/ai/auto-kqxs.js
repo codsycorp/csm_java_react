@@ -2103,6 +2103,31 @@
     return max;
   }
 
+  function getMaxLineDisplayLength(value) {
+    var txt = String(value == null ? "" : value);
+    if (!txt) return 0;
+    var parts = txt.split(/\r?\n/);
+    var max = 0;
+    for (var i = 0; i < parts.length; i += 1) {
+      var len = cellDisplayLength(parts[i]);
+      if (len > max) max = len;
+    }
+    return max;
+  }
+
+  function estimateWrappedLineCount(value, colWch) {
+    var txt = String(value == null ? "" : value);
+    if (!txt) return 1;
+    var width = Math.max(6, Number(colWch || 10));
+    var parts = txt.split(/\r?\n/);
+    var lines = 0;
+    for (var i = 0; i < parts.length; i += 1) {
+      var partLen = Math.max(1, cellDisplayLength(parts[i]));
+      lines += Math.max(1, Math.ceil(partLen / Math.max(4, width - 1)));
+    }
+    return Math.max(1, lines);
+  }
+
   function buildAutoColsFromAoa(aoa) {
     var maxCols = 0;
     for (var r = 0; r < (aoa || []).length; r += 1) {
@@ -2114,10 +2139,10 @@
       var maxLen = 6;
       for (var rr = 0; rr < (aoa || []).length; rr += 1) {
         var row2 = Array.isArray(aoa[rr]) ? aoa[rr] : [];
-        var l = cellDisplayLength(row2[c]);
+        var l = getMaxLineDisplayLength(row2[c]);
         if (l > maxLen) maxLen = l;
       }
-      out.push({ wch: Math.min(48, Math.max(8, maxLen + 2)) });
+      out.push({ wch: Math.min(64, Math.max(9, maxLen + 2)) });
     }
     return out;
   }
@@ -2146,16 +2171,59 @@
       }
     };
 
+    var rowHeights = [];
     for (var r = 0; r < (aoa || []).length; r += 1) {
       var row = Array.isArray(aoa[r]) ? aoa[r] : [];
+      var maxLinesInRow = 1;
       for (var c = 0; c < row.length; c += 1) {
         var addr = XLSX.utils.encode_cell({ r: r, c: c });
         var cell = ws[addr];
         if (!cell) continue;
-        if (r === 0) cell.s = headerStyle;
+        var cellText = String(cell.v == null ? "" : cell.v);
+        var colWch = (cols[c] && Number(cols[c].wch)) || 10;
+        var lineCount = estimateWrappedLineCount(cellText, colWch);
+        if (lineCount > maxLinesInRow) maxLinesInRow = lineCount;
+
+        if (r === 0) {
+          cell.s = headerStyle;
+        } else if (cellText) {
+          // Keep multiline and long text readable after export.
+          var existingStyle = (cell.s && typeof cell.s === "object") ? cell.s : {};
+          var existingAlign = (existingStyle.alignment && typeof existingStyle.alignment === "object")
+            ? existingStyle.alignment
+            : {};
+          cell.s = Object.assign({}, existingStyle, {
+            alignment: Object.assign({}, existingAlign, {
+              wrapText: lineCount > 1,
+              vertical: existingAlign.vertical || "top"
+            })
+          });
+        }
         if (cell.t === "n") cell.z = Number.isInteger(cell.v) ? "0" : "0.00";
       }
+      // Height heuristic using estimated wrapped lines; keep header comfortably visible.
+      var baseHpt = r === 0 ? 22 : 18;
+      rowHeights[r] = { hpt: Math.min(320, baseHpt + Math.max(0, maxLinesInRow - 1) * 14) };
     }
+    if (rowHeights.length) {
+      ws["!rows"] = rowHeights;
+    }
+  }
+
+  function payloadHasMultilineCells(payload) {
+    if (!payload || !Array.isArray(payload.sheets)) return false;
+    for (var si = 0; si < payload.sheets.length; si += 1) {
+      var aoa = payload.sheets[si] && payload.sheets[si].aoa;
+      if (!Array.isArray(aoa)) continue;
+      for (var r = 0; r < aoa.length; r += 1) {
+        var row = Array.isArray(aoa[r]) ? aoa[r] : [];
+        for (var c = 0; c < row.length; c += 1) {
+          var text = String(row[c] == null ? "" : row[c]);
+          if (/\r?\n/.test(text)) return true;
+        }
+      }
+    }
+    return false;
   }
 
   function makeWorksheetFromAoa(aoa, XLSX) {
@@ -3494,7 +3562,7 @@
     var _ath14b = useState(""), legacyThAutoC7Tuan21Min = _ath14b[0], setLegacyThAutoC7Tuan21Min = _ath14b[1];
     var _ath14c = useState(""), legacyThAutoC8Tong29Min = _ath14c[0], setLegacyThAutoC8Tong29Min = _ath14c[1];
     var _ath15 = useState(""), legacyThIntersect = _ath15[0], setLegacyThIntersect = _ath15[1];
-    var _ath16 = useState({ KQT: true, KQN: true, KTD: true, KQD: true, N2D: false, B2D: false, T2D: false, N3D: false, N2C: false, B2C: false, T2C: false, N3C: false, B3C: false, L2C: false, L3C: false }), legacyThResultMask = _ath16[0], setLegacyThResultMask = _ath16[1];
+    var _ath16 = useState({ KQT: true, KQN: false, KTD: false, KQD: false, N2D: false, B2D: false, T2D: false, N3D: false, N2C: false, B2C: false, T2C: false, N3C: false, B3C: false, L2C: false, L3C: false }), legacyThResultMask = _ath16[0], setLegacyThResultMask = _ath16[1];
     var _ath16b = useState(true), legacyThShowKetQua = _ath16b[0], setLegacyThShowKetQua = _ath16b[1];
     var _ath17 = useState(buildLegacyThDefaultQueryTypeDefs(2)), legacyThQueryTypeOptions = _ath17[0], setLegacyThQueryTypeOptions = _ath17[1];
     var _ath18 = useState([buildLegacyThDefaultQueryTypeDefs(2)[0].value]), legacyThSelectedQueryTypes = _ath18[0], setLegacyThSelectedQueryTypes = _ath18[1];
@@ -4090,12 +4158,46 @@
     function htmlToPlainText(html) {
       var src = String(html || "");
       if (!src) return "";
+      var normalizedHtml = src
+        // Keep visual line breaks similar to grid render.
+        .replace(/<br\s*\/?\s*>/gi, "\n")
+        .replace(/<\/(div|p|li|tr|h[1-6]|section|article)>/gi, "\n")
+        .replace(/<(div|p|li|tr|h[1-6]|section|article)(\s[^>]*)?>/gi, "\n");
+
+      var text = "";
       if (typeof document !== "undefined" && document && typeof document.createElement === "function") {
         var temp = document.createElement("div");
-        temp.innerHTML = src;
-        return String(temp.textContent || temp.innerText || "").trim();
+        temp.innerHTML = normalizedHtml;
+        text = String(temp.textContent || temp.innerText || "");
+      } else {
+        text = normalizedHtml.replace(/<[^>]+>/g, " ");
       }
-      return src.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+
+      // Normalize per line, but do not collapse all newlines into one line.
+      var lines = text
+        .replace(/\r\n/g, "\n")
+        .split("\n")
+        .map(function (line) { return String(line || "").replace(/\s+/g, " ").trim(); });
+
+      // Keep non-empty lines and cap consecutive blanks to 1 for readability.
+      var out = [];
+      var blankStreak = 0;
+      for (var i = 0; i < lines.length; i += 1) {
+        var lineText = lines[i];
+        if (!lineText) {
+          blankStreak += 1;
+          if (blankStreak <= 1) out.push("");
+        } else {
+          blankStreak = 0;
+          out.push(lineText);
+        }
+      }
+
+      // Trim leading/trailing blank lines.
+      while (out.length && !out[0]) out.shift();
+      while (out.length && !out[out.length - 1]) out.pop();
+
+      return out.join("\n");
     }
 
     function extractExportTextFromNode(node) {
@@ -10411,7 +10513,8 @@
 
     function buildLegacySlrAutoTongHopRowFromMetric(row, metric, querySpec, tongHopInput, rowDateRange, q) {
       var ktnLastWeek = parseLegacySlrAutoKtnLastWeekValue(metric);
-      var built = applyLegacySlrAutoTongHopSerFields({
+      var metricObj = (metric && typeof metric === "object") ? metric : {};
+      var built = applyLegacySlrAutoTongHopSerFields(Object.assign({}, metricObj, {
         key: "slr_auto_th_" + String(row.key || row._autoPickOrder || 0) + "_" + q,
         autoPickOrder: Number(row._autoPickOrder || 0),
         autoQueryOrder: Number(q || 0),
@@ -10439,7 +10542,7 @@
         ngayCXHT3NB: Number(metric.ngayCXHT3NB || 0),
         ktnLastWeek: ktnLastWeek === null ? "" : ktnLastWeek,
         sourceSlrKey: String(row.key || q)
-      }, metric);
+      }), metric);
       built.ketQua = buildLegacySlrAutoTongHopKetQuaText(built);
       return built;
     }
@@ -10845,7 +10948,47 @@
       }
     ];
 
-    var legacySlrAutoTongHopColumns = [
+    function mergeLegacyColumnsWithoutDup(baseColumns, extraColumns) {
+      var base = Array.isArray(baseColumns) ? baseColumns.slice() : [];
+      var extra = Array.isArray(extraColumns) ? extraColumns : [];
+      var seen = {};
+      var excludedDataIndex = { boSo: true, cach: true };
+      var excludedTitle = { "Các Số": true, "Cách": true };
+
+      function colId(col) {
+        if (!col || typeof col !== "object") return "";
+        var key = String(col.key || "").trim();
+        if (key) return "k:" + key;
+        if (Array.isArray(col.dataIndex)) return "d:" + col.dataIndex.join(".");
+        var di = String(col.dataIndex || "").trim();
+        if (di) return "d:" + di;
+        var title = String(col.title || "").trim();
+        if (title) return "t:" + title;
+        return "";
+      }
+
+      base.forEach(function (col) {
+        var id = colId(col);
+        if (id) seen[id] = true;
+      });
+
+      extra.forEach(function (col) {
+        var di = Array.isArray(col && col.dataIndex)
+          ? String((col.dataIndex || []).join("."))
+          : String((col && col.dataIndex) || "").trim();
+        var title = String((col && col.title) || "").trim();
+        if ((di && excludedDataIndex[di]) || (title && excludedTitle[title])) return;
+
+        var id = colId(col);
+        if (!id || seen[id]) return;
+        seen[id] = true;
+        base.push(col);
+      });
+
+      return base;
+    }
+
+    var legacySlrAutoTongHopBaseColumns = [
       {
         title: tt.searchType || "Loại Tìm",
         dataIndex: "queryLabel",
@@ -10897,6 +11040,8 @@
       { title: "KTN tuần cuối", dataIndex: "ktnLastWeek", key: "ktnLastWeek", width: 90, sorter: function (a, b) { return Number((a && a.ktnLastWeek) || 0) - Number((b && b.ktnLastWeek) || 0); } },
       { title: "Tuần 0 (Nam/Bắc)", dataIndex: "tongNamZeroWeekStreak", key: "tongNamZeroWeekStreak", width: 90, sorter: function (a, b) { return Number((a && a.tongNamZeroWeekStreak) || 0) - Number((b && b.tongNamZeroWeekStreak) || 0); } }
     ];
+
+    var legacySlrAutoTongHopColumns = legacySlrAutoTongHopBaseColumns;
 
     function makeNbCol(title, di, dw, mp) {
       return { title: title, dataIndex: di, key: di, width: legacyNbColWidths[di] || dw,
@@ -11057,6 +11202,13 @@
       { title: sinhThKtd + " KTD", dataIndex: "lanKTD", key: "lanKTD", width: 70, sorter: legacyTongHopNumberSorter("lanKTD") },
       { title: "Cách", dataIndex: "cach", key: "cach", width: 200, sorter: legacyTongHopTextSorter("cach") }
     ];
+
+    // Bảng "Xuất Kết Hợp tự động" cần đầy đủ cột như tab ④ Thống Kê,
+    // nhưng giữ các cột đặc thù SLR và không lặp cột.
+    legacySlrAutoTongHopColumns = mergeLegacyColumnsWithoutDup(
+      legacySlrAutoTongHopBaseColumns,
+      legacyThColumns
+    );
 
     function buildPairRows(list, valueKey, idPrefix) {
       var rows = Array.isArray(list) ? list.slice() : [];

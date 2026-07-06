@@ -638,6 +638,70 @@ function sanitizeExcelFileToken(input: string): string {
   return String(input || "export").replace(/[\\/?*\[\]:]/g, "_").trim() || "export";
 }
 
+function excelDisplayWidth(value: unknown): number {
+  const text = String(value ?? "");
+  let width = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    width += text.charCodeAt(i) > 255 ? 2 : 1;
+  }
+  return width;
+}
+
+function maxLineWidth(value: unknown): number {
+  const text = String(value ?? "");
+  if (!text) return 0;
+  return text
+    .split(/\r?\n/)
+    .reduce((max, line) => Math.max(max, excelDisplayWidth(line)), 0);
+}
+
+function estimateWrappedLines(value: unknown, colWch: number): number {
+  const text = String(value ?? "");
+  if (!text) return 1;
+  const width = Math.max(6, Number(colWch || 10));
+  return text.split(/\r?\n/).reduce((sum, line) => {
+    const lineWidth = Math.max(1, excelDisplayWidth(line));
+    return sum + Math.max(1, Math.ceil(lineWidth / Math.max(4, width - 1)));
+  }, 0);
+}
+
+function applyWorksheetAutoLayout(ws: any, aoa: any[][]) {
+  const rows = Array.isArray(aoa) ? aoa : [];
+  let maxCols = 0;
+  rows.forEach((row) => {
+    const cells = Array.isArray(row) ? row : [];
+    if (cells.length > maxCols) maxCols = cells.length;
+  });
+
+  const cols: Array<{ wch: number }> = [];
+  for (let c = 0; c < maxCols; c += 1) {
+    let max = 7;
+    rows.forEach((row) => {
+      const cells = Array.isArray(row) ? row : [];
+      max = Math.max(max, maxLineWidth(cells[c]));
+    });
+    cols.push({ wch: Math.min(64, Math.max(9, max + 2)) });
+  }
+  if (cols.length) {
+    ws["!cols"] = cols;
+  }
+
+  const rowDefs: Array<{ hpt: number }> = [];
+  rows.forEach((row, rIdx) => {
+    const cells = Array.isArray(row) ? row : [];
+    let maxLines = 1;
+    for (let c = 0; c < cells.length; c += 1) {
+      const colWch = cols[c]?.wch || 10;
+      maxLines = Math.max(maxLines, estimateWrappedLines(cells[c], colWch));
+    }
+    const baseHpt = rIdx === 0 ? 22 : 18;
+    rowDefs[rIdx] = { hpt: Math.min(320, baseHpt + Math.max(0, maxLines - 1) * 14) };
+  });
+  if (rowDefs.length) {
+    ws["!rows"] = rowDefs;
+  }
+}
+
 async function csmDynamicGridExport(payload: any): Promise<void> {
   const sheets = Array.isArray(payload?.sheets) ? payload.sheets : [];
   if (!sheets.length) {
@@ -648,6 +712,7 @@ async function csmDynamicGridExport(payload: any): Promise<void> {
   sheets.forEach((sheet: any, index: number) => {
     const aoa = Array.isArray(sheet?.aoa) ? sheet.aoa : [[""]];
     const ws = xlsxUtils.aoa_to_sheet(aoa);
+    applyWorksheetAutoLayout(ws, aoa);
     const sheetName = sanitizeExcelSheetName(sheet?.name || `Sheet${index + 1}`);
     xlsxUtils.book_append_sheet(workbook, ws, sheetName);
   });

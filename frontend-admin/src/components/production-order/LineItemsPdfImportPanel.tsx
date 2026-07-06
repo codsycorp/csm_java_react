@@ -13,12 +13,18 @@ import {
   getBuiltinPrintTriggerBody,
   suggestPrintConfig,
 } from "./line-items-print-import";
-import { inferDocKindFromLayout, applyPdfLayoutToSeedTrigger, type PdfLayoutSpec } from "./line-items-pdf-layout";
+import {
+  inferDocKindFromLayout,
+  applyPdfLayoutToSeedTrigger,
+  type PdfLayoutExtractConfig,
+  type PdfLayoutSpec,
+} from "./line-items-pdf-layout";
 
 export interface LineItemsPdfImportPanelProps {
   appId?: string;
   tableFields?: Array<{ f_name?: string; f_header?: string }>;
   lineColumns?: LiColumnDef[];
+  pdfLayoutExtractConfig?: PdfLayoutExtractConfig;
   triggerKey?: string;
   onApplyTrigger?: (key: string, body: string) => void;
   onApplyPrintConfig?: (cfg: LiPrintConfig) => void;
@@ -36,6 +42,7 @@ export default function LineItemsPdfImportPanel({
   appId,
   tableFields = [],
   lineColumns = [],
+  pdfLayoutExtractConfig,
   triggerKey: triggerKeyProp,
   onApplyTrigger,
   onApplyPrintConfig,
@@ -72,11 +79,11 @@ export default function LineItemsPdfImportPanel({
 
   const handleUpload = useCallback(async (file: File) => {
     try {
-      const sample = await readPrintSampleFile(file, 2);
+      const sample = await readPrintSampleFile(file, 2, pdfLayoutExtractConfig);
       setPreviewUrls(sample.previewUrls);
       setPdfText(sample.pdfText);
       setPdfLayout(sample.pdfLayout);
-      const inferred = inferDocKindFromLayout(sample.pdfLayout);
+      const inferred = inferDocKindFromLayout(sample.pdfLayout, pdfLayoutExtractConfig);
       if (inferred) {
         setDocKind(inferred);
         setTriggerKey(
@@ -96,7 +103,7 @@ export default function LineItemsPdfImportPanel({
       message.error(e?.message ?? String(e));
     }
     return false;
-  }, []);
+  }, [pdfLayoutExtractConfig]);
 
   const handleApplyBuiltin = () => {
     let body = getBuiltinPrintTriggerBody(docKind);
@@ -192,14 +199,14 @@ export default function LineItemsPdfImportPanel({
   return (
     <Card
       size="small"
-      title="Import PDF / ảnh mẫu → trigger in"
+      title="Legacy: Import PDF / ảnh mẫu → HTML trigger"
       extra={<FilePdfOutlined />}
     >
       <Alert
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="Quy trình: tải PDF mẫu → AI sinh trigger (hoặc dùng mẫu Phú Sơn) → áp vào tab Trigger → Lưu menu → xem trước trên form đơn hàng."
+        message="Luồng legacy cho HTML trigger: tải PDF mẫu → AI sinh trigger (hoặc mẫu Phú Sơn) → áp tab Trigger. Không bắt buộc khi dùng DOCX auto từ PDF ở khối phía trên."
       />
 
       <Form layout="vertical" component={false}>
@@ -274,7 +281,7 @@ export default function LineItemsPdfImportPanel({
             loading={loading}
             onClick={handleGenerateAi}
           >
-            AI sinh trigger từ mẫu
+            AI sinh HTML trigger từ mẫu
           </Button>
           <Button icon={<ThunderboltOutlined />} onClick={handleApplyBuiltin}>
             Áp mẫu Phú Sơn (không AI)
