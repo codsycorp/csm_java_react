@@ -5351,8 +5351,86 @@
       return false;
     }
 
-    var LEGACY_KTT_NAM_FIELDS = ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi"];
     var LEGACY_KTT_BAC_DO_FIELDS = ["B_dau", "B_duoi"];
+
+    var LEGACY_KTT_BAC_VISIBLE_FIELDS = ["B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"];
+
+    function normalizeLegacyKttDisplayField(fieldName, heThong) {
+      var key = String(fieldName || "").trim();
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      // He 3 thường hiển thị *_dau (map từ field_so2), nên quy chiếu *_so2 -> *_dau để bôi đỏ đúng ô đang thấy.
+      if (he === 3 && /^(D|P|T)_so2$/.test(key)) {
+        return key.replace("_so2", "_dau");
+      }
+      return key;
+    }
+
+    function getLegacyKttNamFields(row, heThong, queryValue) {
+      var rec = row || {};
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      var queryFields = getLegacyQueryFieldList(queryValue, he);
+      var out = [];
+      var seen = {};
+
+      // Primary source: query-specific fields for the selected HeThong.
+      for (var i = 0; i < queryFields.length; i += 1) {
+        var qKey = String(queryFields[i] || "");
+        if (!/^[DPT]_/.test(qKey)) continue;
+        var displayKey = normalizeLegacyKttDisplayField(qKey, he);
+        var qRaw = String(rec[qKey] || rec[displayKey] || "").trim();
+        if (!qRaw || qRaw === "?") continue;
+        if (!seen[displayKey]) {
+          seen[displayKey] = true;
+          out.push(displayKey);
+        }
+      }
+      if (out.length) return out;
+
+      // Fallback: when query metadata is missing, still respect the row's available D/P/T fields.
+      var allKeys = getLegacyAllNormalizedFieldKeys();
+      for (var j = 0; j < allKeys.length; j += 1) {
+        var key = String(allKeys[j] || "");
+        if (!/^[DPT]_/.test(key)) continue;
+        var displayFallbackKey = normalizeLegacyKttDisplayField(key, he);
+        var raw = String(rec[key] || rec[displayFallbackKey] || "").trim();
+        if (!raw || raw === "?") continue;
+        if (!seen[displayFallbackKey]) {
+          seen[displayFallbackKey] = true;
+          out.push(displayFallbackKey);
+        }
+      }
+      return out;
+    }
+
+    function getLegacyKttBacFields(row, heThong, queryValue) {
+      var rec = row || {};
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      var queryFields = getLegacyQueryFieldList(queryValue, he);
+      var out = [];
+      var seen = {};
+
+      for (var i = 0; i < queryFields.length; i += 1) {
+        var key = String(queryFields[i] || "");
+        if (key.indexOf("B_") !== 0) continue;
+        var raw = String(rec[key] || "").trim();
+        if (!raw || raw === "?") continue;
+        if (!seen[key]) {
+          seen[key] = true;
+          out.push(key);
+        }
+      }
+
+      for (var j = 0; j < LEGACY_KTT_BAC_VISIBLE_FIELDS.length; j += 1) {
+        var visKey = LEGACY_KTT_BAC_VISIBLE_FIELDS[j];
+        var visRaw = String(rec[visKey] || "").trim();
+        if (!visRaw || visRaw === "?") continue;
+        if (!seen[visKey]) {
+          seen[visKey] = true;
+          out.push(visKey);
+        }
+      }
+      return out;
+    }
 
     function getLegacyKttFieldToken(val, heThong) {
       var v = String(val || "").trim();
@@ -5362,27 +5440,43 @@
       return new RegExp("^\\d{" + he + "}$").test(tail) ? tail : "";
     }
 
-    function buildLegacyKttDo3NamBacHitMap(rows, heThong) {
+    function buildLegacyKttDo3NamBacHitMap(rows, heThong, queryValue) {
       var out = {};
       var list = Array.isArray(rows) ? rows : [];
       for (var i = 0; i < list.length; i += 1) {
         var row = list[i] || {};
         var ymd = normalizeLegacyDateYmd(row.ID);
         if (!ymd) continue;
+        var namFields = getLegacyKttNamFields(row, heThong, queryValue);
+        if (!namFields.length) continue;
+        var bacFields = getLegacyKttBacFields(row, heThong, queryValue);
+        if (!bacFields.length) continue;
+
         var namTokenSet = {};
-        for (var ni = 0; ni < LEGACY_KTT_NAM_FIELDS.length; ni += 1) {
-          var namToken = getLegacyKttFieldToken(row[LEGACY_KTT_NAM_FIELDS[ni]], heThong);
-          if (namToken) namTokenSet[namToken] = true;
+        var namTokenToFields = {};
+        for (var ni = 0; ni < namFields.length; ni += 1) {
+          var namField = String(namFields[ni] || "");
+          var namToken = getLegacyKttFieldToken(row[namField], heThong);
+          if (namToken) {
+            namTokenSet[namToken] = true;
+            if (!namTokenToFields[namToken]) namTokenToFields[namToken] = {};
+            namTokenToFields[namToken][namField] = true;
+          }
         }
         if (!Object.keys(namTokenSet).length) continue;
         var dayHits = {};
         var anyHit = false;
-        for (var bi = 0; bi < LEGACY_KTT_BAC_DO_FIELDS.length; bi += 1) {
-          var bacField = LEGACY_KTT_BAC_DO_FIELDS[bi];
+        for (var bi = 0; bi < bacFields.length; bi += 1) {
+          var bacField = bacFields[bi];
           var bacToken = getLegacyKttFieldToken(row[bacField], heThong);
           var hit = !!(bacToken && namTokenSet[bacToken]);
-          dayHits[bacField] = hit;
-          if (hit) anyHit = true;
+          if (!hit) continue;
+          dayHits[bacField] = true;
+          var matchedNamFields = namTokenToFields[bacToken] || {};
+          Object.keys(matchedNamFields).forEach(function (namFieldKey) {
+            dayHits[namFieldKey] = true;
+          });
+          anyHit = true;
         }
         if (anyHit) out[ymd] = dayHits;
       }
@@ -8196,7 +8290,13 @@
           }
         }
       }
-      return { rows: rows, matchSet: matchSet, clickLookup: clickLookup, hasSearch: hasSearch };
+      return {
+        rows: rows,
+        matchSet: matchSet,
+        clickLookup: clickLookup,
+        hasSearch: hasSearch,
+        queryValue: kttQueryType.value
+      };
     }
 
     function applyLegacyKttViewPayload(payload) {
@@ -8238,7 +8338,7 @@
       try {
         var payload = await fetchLegacyKttViewModelPayload();
         if (!payload) return;
-        var hitMap = buildLegacyKttDo3NamBacHitMap(payload.rows, legacyHeThong);
+        var hitMap = buildLegacyKttDo3NamBacHitMap(payload.rows, legacyHeThong, payload.queryValue);
         applyLegacyKttViewPayload(payload);
         setLegacyKttDo3NamBacHitMap(hitMap);
         setLegacyKttDo3NamBacActive(true);
@@ -9535,12 +9635,15 @@
       if (ngayLabel && ngayLabel.indexOf("(") < 0 && thu) ngayLabel = ngayLabel + " (" + thu + ")";
       var cardYmd = normalizeLegacyDateYmd(row.ID);
       var do3DayHits = legacyKttDo3NamBacActive && cardYmd ? legacyKttDo3NamBacHitMap[cardYmd] : null;
-      function kttBacDoCell(val, field) {
-        return kttCellNode(val, KTT_COLORS.B, {
+      function kttDo3Cell(val, bgColor, field) {
+        return kttCellNode(val, bgColor, {
           row: row,
           field: field,
           forceDo3Hit: !!(do3DayHits && do3DayHits[field])
         });
+      }
+      function kttBacDoCell(val, field) {
+        return kttDo3Cell(val, KTT_COLORS.B, field);
       }
       // PHP: hiện (N) bên cạnh B_duoi của T2 (Monday) = đếm số lần B_duoi khớp trong tuần
       var monCount = (legacyKttHasSearchInput && isMonday && row.kttMonWeekCount != null) ? row.kttMonWeekCount : null;
@@ -9628,23 +9731,23 @@
         h("div", { style: { textAlign: "center", minHeight: 24, fontSize: 12, color: theme.text, background: kttDateHeaderBg, borderBottom: kttCardBorder, padding: "2px 0" } }, ngayLabel || ""),
         // Hàng 2: D_dau | D_duoi | P_dau | P_duoi
         h("div", { style: { display: "flex", borderBottom: kttRowBorder } }, [
-          kttCellNode(row.D_dau, KTT_COLORS.D, { row: row, field: "D_dau" }),
-          kttCellNode(row.D_duoi, KTT_COLORS.D, { row: row, field: "D_duoi" }),
-          kttCellNode(row.P_dau, KTT_COLORS.P, { row: row, field: "P_dau" }),
-          kttCellNode(row.P_duoi, KTT_COLORS.P, { row: row, field: "P_duoi" })
+          kttDo3Cell(row.D_dau, KTT_COLORS.D, "D_dau"),
+          kttDo3Cell(row.D_duoi, KTT_COLORS.D, "D_duoi"),
+          kttDo3Cell(row.P_dau, KTT_COLORS.P, "P_dau"),
+          kttDo3Cell(row.P_duoi, KTT_COLORS.P, "P_duoi")
         ]),
         // Hàng 3: T_dau | T_duoi | B_duoi (B_duoi chiếm 50%, T2 hiện số đếm tuần)
         h("div", { style: { display: "flex", borderBottom: kttRowBorder } }, [
-          kttCellNode(row.T_dau, KTT_COLORS.T, { row: row, field: "T_dau" }),
-          kttCellNode(row.T_duoi, KTT_COLORS.T, { row: row, field: "T_duoi" }),
+          kttDo3Cell(row.T_dau, KTT_COLORS.T, "T_dau"),
+          kttDo3Cell(row.T_duoi, KTT_COLORS.T, "T_duoi"),
           kttBduoiCell()
         ]),
         // Hàng 4: B_dau | B_so2 | B_so3 | B_so4 (ẩn B_so4 với Hệ 3)
         h("div", { style: { display: "flex" } }, [
           kttBacDoCell(row.B_dau, "B_dau"),
-          kttCellNode(row.B_so2, KTT_COLORS.B, { row: row, field: "B_so2" }),
-          kttCellNode(row.B_so3, KTT_COLORS.B, { row: row, field: "B_so3" }),
-          he2 ? kttCellNode(row.B_so4, KTT_COLORS.B, { row: row, field: "B_so4" }) : kttCellNode("", KTT_COLORS.B, { row: row, field: "B_so4" })
+          kttDo3Cell(row.B_so2, KTT_COLORS.B, "B_so2"),
+          kttDo3Cell(row.B_so3, KTT_COLORS.B, "B_so3"),
+          he2 ? kttDo3Cell(row.B_so4, KTT_COLORS.B, "B_so4") : kttDo3Cell("", KTT_COLORS.B, "B_so4")
         ])
       ]);
     }
