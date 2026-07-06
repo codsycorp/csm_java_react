@@ -2874,6 +2874,8 @@
     var _ab3 = useState(true), legacyChkHieu = _ab3[0], setLegacyChkHieu = _ab3[1];
     var _ab4 = useState(""), legacyNbGroupSize = _ab4[0], setLegacyNbGroupSize = _ab4[1];
     var _ab5 = useState(false), legacyNbTheoKy = _ab5[0], setLegacyNbTheoKy = _ab5[1];
+    var _ab6 = useState(""), legacyNbSoInput = _ab6[0], setLegacyNbSoInput = _ab6[1];
+    var _ab7 = useState(false), legacyNbUseGroupSource = _ab7[0], setLegacyNbUseGroupSource = _ab7[1];
 
     // --- SLR Auto-filter state (C1–C6) ---
     var _slr_af1 = useState(0), legacySlrAutoC1Gap = _slr_af1[0], setLegacySlrAutoC1Gap = _slr_af1[1];
@@ -8136,6 +8138,36 @@
       return groupItems;
     }
 
+    function buildLegacyNbInputBoSoList() {
+      var raw = String(legacyNbSoInput || "").toLowerCase().trim();
+      if (!raw) return [];
+      var he = Number(legacyHeThong || 2) === 3 ? 3 : 2;
+      var out = [];
+
+      if (!!legacyNbUseGroupSource) {
+        raw.split("@").map(function (part) {
+          return String(part || "").trim();
+        }).filter(Boolean).forEach(function (groupText) {
+          var tokens = parseSoChuByHeThong(groupText, he);
+          if (!tokens.length) return;
+          out.push(tokens.join(" "));
+        });
+      } else {
+        var singles = parseSoChuByHeThong(raw, he);
+        out = singles.map(function (token) {
+          return String(token || "").trim();
+        }).filter(Boolean);
+      }
+
+      var uniq = {};
+      return out.filter(function (item) {
+        var key = String(item || "").trim();
+        if (!key || uniq[key]) return false;
+        uniq[key] = true;
+        return true;
+      });
+    }
+
     function getLegacySpecialQueryTypeForTab(tabKey) {
       var tab = String(tabKey || "").toLowerCase();
       var options = (legacyThQueryTypeOptions && legacyThQueryTypeOptions.length)
@@ -8478,30 +8510,34 @@
         }
         setProgress(40);
         
-        // Fetch timkiem groups theo hệ số hiện tại.
-        var timkiemRows = [];
-        try {
-          timkiemRows = await fetchRowsFromGetTableData("kqxs_timkiem", he);
-        } catch (_nbTkErr) { timkiemRows = []; }
+        var boSoSource = buildLegacyNbInputBoSoList();
         setProgress(60);
-        
-        var selectedSize = Number(legacyNbGroupSize || 0);
-        var boSoSource = [];
-        if (Array.isArray(timkiemRows) && timkiemRows.length && selectedSize > 0) {
-          for (var _nbi = 0; _nbi < timkiemRows.length; _nbi++) {
-            var _nbRow = timkiemRows[_nbi] || {};
-            var _nbMaDuoi = Number(_nbRow.ma_duoi || _nbRow.MaDuoi || 0);
-            if (_nbMaDuoi && _nbMaDuoi !== he) continue;
-            var _nbNd = String(_nbRow.noi_dung || _nbRow.NoiDung || "").trim();
-            if (!_nbNd) continue;
-            var _nbTokens = parseSoChuByHeThong(_nbNd, he);
-            if (_nbTokens.length !== selectedSize) continue;
-            boSoSource.push(_nbTokens.join(" "));
+
+        // Fallback cũ: nếu ô nhập trống thì vẫn cho chạy từ "Nhóm số" theo timkiem.
+        if (!boSoSource.length) {
+          var timkiemRows = [];
+          try {
+            timkiemRows = await fetchRowsFromGetTableData("kqxs_timkiem", he);
+          } catch (_nbTkErr) { timkiemRows = []; }
+
+          var selectedSize = Number(legacyNbGroupSize || 0);
+          if (Array.isArray(timkiemRows) && timkiemRows.length && selectedSize > 0) {
+            for (var _nbi = 0; _nbi < timkiemRows.length; _nbi++) {
+              var _nbRow = timkiemRows[_nbi] || {};
+              var _nbMaDuoi = Number(_nbRow.ma_duoi || _nbRow.MaDuoi || 0);
+              if (_nbMaDuoi && _nbMaDuoi !== he) continue;
+              var _nbNd = String(_nbRow.noi_dung || _nbRow.NoiDung || "").trim();
+              if (!_nbNd) continue;
+              var _nbTokens = parseSoChuByHeThong(_nbNd, he);
+              if (_nbTokens.length !== selectedSize) continue;
+              boSoSource.push(_nbTokens.join(" "));
+            }
           }
         }
+
         boSoSource = boSoSource.filter(function (v, idx, arr) { return arr.indexOf(v) === idx; });
         if (!boSoSource.length) {
-          canhbao("Không có bộ số cho nhóm " + selectedSize + " số theo dữ liệu timkiem.");
+          canhbao("Vui lòng nhập Số ở tab ④ (bật Nhom nếu nhập theo nhóm) hoặc chọn Nhóm số để chạy từ timkiem.");
           return;
         }
         setProgress(80);
@@ -13212,6 +13248,36 @@
                             options: legacyNbGroupSizeOptions,
                             onChange: function (v) { setLegacyNbGroupSize(String(v || "")); }
                           }))
+                        ]),
+                        h(Col, { xs: 24, md: 10, key: "nb_so_input" }, [
+                          h("div", { style: { marginBottom: 6, fontWeight: 600, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } }, [
+                            h("span", null, tt.lgThManualNumber || "Số"),
+                            h(Checkbox, {
+                              checked: !!legacyNbUseGroupSource,
+                              onChange: function (e) { setLegacyNbUseGroupSource(!!(e && e.target && e.target.checked)); }
+                            }, tt.lgThManualGroup || "Nhóm (Nhom)")
+                          ]),
+                          h(Input, {
+                            value: legacyNbSoInput,
+                            placeholder: !!legacyNbUseGroupSource
+                              ? (Number(legacyHeThong || 2) === 3 ? "Ví dụ nhóm: 123 456@111 222" : "Ví dụ nhóm: 12 34@56 78")
+                              : (Number(legacyHeThong || 2) === 3 ? "Ví dụ số: 123 456 789" : "Ví dụ số: 12 34 56"),
+                            onChange: function (e) {
+                              var raw = e && e.target ? e.target.value : "";
+                              setLegacyNbSoInput(sanitizeSoChuTypingInput(raw));
+                            },
+                            onBlur: function (e) {
+                              var raw = e && e.target ? e.target.value : "";
+                              if (!!legacyNbUseGroupSource) {
+                                var groups = String(raw || "").split("@").map(function (part) {
+                                  return formatSoChuInputByHe(part, legacyHeThong);
+                                }).map(function (part) { return String(part || "").trim(); }).filter(Boolean);
+                                setLegacyNbSoInput(groups.join("@"));
+                                return;
+                              }
+                              setLegacyNbSoInput(formatSoChuInputByHe(raw, legacyHeThong));
+                            }
+                          })
                         ]),
                         h(Col, { xs: 24, md: 8, key: "nb_actions" }, [
                           h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.theoKy),
