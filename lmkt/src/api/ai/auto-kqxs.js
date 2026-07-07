@@ -1513,7 +1513,7 @@
 
     for (var i = 0; i < list.length; i += 1) {
       var row = list[i] || {};
-      var maDuoi = Number(row.ma_duoi || row.MaDuoi || 0);
+      var maDuoi = getLegacyMaDuoiValue(row);
       if (maDuoi && maDuoi !== he) continue;
       var noiDung = String(row.noi_dung || row.NoiDung || row.dong_nghia || "").trim();
       if (!noiDung) continue;
@@ -1540,7 +1540,7 @@
     // Fallback: if strict matching misses a token, use first row that contains it.
     for (var i2 = 0; i2 < list.length; i2 += 1) {
       var row2 = list[i2] || {};
-      var maDuoi2 = Number(row2.ma_duoi || row2.MaDuoi || 0);
+      var maDuoi2 = getLegacyMaDuoiValue(row2);
       if (maDuoi2 && maDuoi2 !== he) continue;
       var noiDung2 = String(row2.noi_dung || row2.NoiDung || row2.dong_nghia || "").trim();
       if (!noiDung2) continue;
@@ -1776,6 +1776,47 @@
     return (defaultQuery + "," + raw).replace(/\s+/g, "");
   }
 
+  function normalizeLegacyFieldKeyName(key) {
+    return String(key || "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  }
+
+  function getLegacyFieldValue(row, aliases) {
+    var src = row || {};
+    var list = Array.isArray(aliases) ? aliases : [];
+    for (var i = 0; i < list.length; i += 1) {
+      var key = String(list[i] || "");
+      if (!key) continue;
+      if (src[key] != null && src[key] !== "") return src[key];
+    }
+
+    var normalizedMap = {};
+    Object.keys(src).forEach(function (key) {
+      var nk = normalizeLegacyFieldKeyName(key);
+      if (!nk || normalizedMap[nk] != null) return;
+      normalizedMap[nk] = src[key];
+    });
+
+    for (var j = 0; j < list.length; j += 1) {
+      var alias = String(list[j] || "");
+      if (!alias) continue;
+      var nkAlias = normalizeLegacyFieldKeyName(alias);
+      if (nkAlias && normalizedMap[nkAlias] != null && normalizedMap[nkAlias] !== "") {
+        return normalizedMap[nkAlias];
+      }
+    }
+    return "";
+  }
+
+  function getLegacyMaDuoiValue(row) {
+    var raw = getLegacyFieldValue(row, ["ma_duoi", "MaDuoi", "maDuoi", "Ma_duoi", "MA_DUOI"]);
+    var num = Number(raw || 0);
+    return isNaN(num) ? 0 : num;
+  }
+
+  function getLegacyMaLoaiValue(row) {
+    return String(getLegacyFieldValue(row, ["ma_loai", "MaLoai", "maLoai", "Ma_loai", "MA_LOAI"]) || "").trim();
+  }
+
   function parseLegacyLoaiTimMeta(rawLoai, heThong) {
     var normalized = normalizeLegacyTongHopQueryValue(rawLoai, heThong);
     if (!normalized) {
@@ -1893,14 +1934,14 @@
     var out = [];
     for (var i = 0; i < list.length; i += 1) {
       var row = list[i] || {};
-      var maDuoi = Number(row.ma_duoi|| 0);
+      var maDuoi = getLegacyMaDuoiValue(row);
       if (maDuoi && maDuoi !== he) continue;
-      var maLoai = String(row.ma_loai|| "").trim();
+      var maLoai = getLegacyMaLoaiValue(row);
       var value = normalizeLegacyTongHopQueryValue(maLoai, he);
       if (!value) continue;
       if (seen[value]) continue;
       seen[value] = true;
-      var text = String(row.MoTa || row.mo_ta || row.mota || value).trim() || value;
+      var text = String(row.MoTa || row.mo_ta || row.moTa || row.mota || value).trim() || value;
       var meta = parseLegacyLoaiTimMeta(value, he);
       out.push({ value: value, text: text, maQuery: meta.maQuery, fieldPart: meta.fieldPart });
     }
@@ -1917,7 +1958,7 @@
 
     for (var li = 0; li < list.length; li += 1) {
       var srcRow = list[li] || {};
-      var srcMaDuoi = Number(srcRow.ma_duoi || srcRow.MaDuoi || 0);
+      var srcMaDuoi = getLegacyMaDuoiValue(srcRow);
       if (srcMaDuoi && srcMaDuoi !== he) continue;
       var srcKieuTim = String(srcRow.kieu_tim || srcRow.KieuTim || "").trim();
       var srcNoiDung = String(srcRow.noi_dung || srcRow.NoiDung || srcRow.dong_nghia || "").trim();
@@ -1928,7 +1969,7 @@
 
     for (var i = 0; i < list.length; i += 1) {
       var row = list[i] || {};
-      var maDuoi = Number(row.ma_duoi || row.MaDuoi || 0);
+      var maDuoi = getLegacyMaDuoiValue(row);
       if (maDuoi && maDuoi !== he) continue;
 
       var kieuTim = String(row.kieu_tim || row.KieuTim || "").trim();
@@ -4552,12 +4593,15 @@
       // Cùng chuẩn auto-lmkt / frontend-admin: seft.csm_obj_tables → ky getTableData (JWT refresh, CSRF, api host).
       // Không gọi fetch("/api/get-table-data") — thiếu auth headers và sai URL trên admin.* (401).
       var he = Number(heThong || 2) === 3 ? 3 : 2;
-      var rows = await fetchRows({
-        app_id: "kqxs",
-        obj_name: tableName,
-        e_where: { field: "ma_duoi", type: "eq", value: he }
-      });
-      if (rows && rows.length) return rows;
+      var filterFields = ["ma_duoi", "MaDuoi", "maDuoi", "Ma_duoi"];
+      for (var i = 0; i < filterFields.length; i += 1) {
+        var rows = await fetchRows({
+          app_id: "kqxs",
+          obj_name: tableName,
+          e_where: { field: filterFields[i], type: "eq", value: he }
+        });
+        if (rows && rows.length) return rows;
+      }
       return await fetchRows({
         app_id: "kqxs",
         obj_name: tableName,
@@ -5693,7 +5737,7 @@
 
       for (var i = 0; i < list.length; i += 1) {
         var row = list[i] || {};
-        var maDuoi = Number(row.ma_duoi || row.MaDuoi || 0);
+        var maDuoi = getLegacyMaDuoiValue(row);
         var noiDung = String(row.noi_dung || row.NoiDung || row.dong_nghia || "").trim();
         if (!noiDung) continue;
 
@@ -8524,7 +8568,7 @@
           if (Array.isArray(timkiemRows) && timkiemRows.length && selectedSize > 0) {
             for (var _nbi = 0; _nbi < timkiemRows.length; _nbi++) {
               var _nbRow = timkiemRows[_nbi] || {};
-              var _nbMaDuoi = Number(_nbRow.ma_duoi || _nbRow.MaDuoi || 0);
+              var _nbMaDuoi = getLegacyMaDuoiValue(_nbRow);
               if (_nbMaDuoi && _nbMaDuoi !== he) continue;
               var _nbNd = String(_nbRow.noi_dung || _nbRow.NoiDung || "").trim();
               if (!_nbNd) continue;
