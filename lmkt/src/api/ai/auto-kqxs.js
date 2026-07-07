@@ -1817,14 +1817,31 @@
     return String(getLegacyFieldValue(row, ["ma_loai", "MaLoai", "maLoai", "Ma_loai", "MA_LOAI"]) || "").trim();
   }
 
-  function inferLegacyHeFromMaLoai(maLoai) {
-    var raw = String(maLoai || "").trim();
-    if (!raw) return 0;
-    var m = raw.match(/^\s*sp_Get(\d+)_/i);
-    if (!m || !m[1]) return 0;
-    var n = Number(m[1]);
-    if (!isFinite(n) || isNaN(n)) return 0;
-    return n;
+  function filterLegacyRowsByHe(tableName, rows, heThong) {
+    var he = Number(heThong || 2) === 3 ? 3 : 2;
+    var list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return [];
+
+    // Loai Tim must be strictly isolated by selected HeThong.
+    if (String(tableName || "") === "kqxs_loaitim") {
+      return list.filter(function (row) {
+        var maDuoi = getLegacyMaDuoiValue(row);
+        return maDuoi === he;
+      });
+    }
+
+    // For timkiem/timkiemtr: if rows expose MaDuoi, enforce it.
+    var hasMaDuoi = false;
+    for (var i = 0; i < list.length; i += 1) {
+      if (getLegacyMaDuoiValue(list[i]) > 0) {
+        hasMaDuoi = true;
+        break;
+      }
+    }
+    if (!hasMaDuoi) return list;
+    return list.filter(function (row) {
+      return getLegacyMaDuoiValue(row) === he;
+    });
   }
 
   function parseLegacyLoaiTimMeta(rawLoai, heThong) {
@@ -1945,20 +1962,8 @@
     for (var i = 0; i < list.length; i += 1) {
       var row = list[i] || {};
       var maDuoi = getLegacyMaDuoiValue(row);
+      if (maDuoi !== he) continue;
       var maLoai = getLegacyMaLoaiValue(row);
-      var heFromMaLoai = inferLegacyHeFromMaLoai(maLoai);
-
-      // Strict he-thong isolation for Loai Tim:
-      // - Prefer explicit MaDuoi when present
-      // - Fallback to parsing he from MaLoai (sp_Get2_*/sp_Get3_*) when MaDuoi is missing
-      if (maDuoi > 0) {
-        if (maDuoi !== he) continue;
-      } else if (heFromMaLoai > 0) {
-        if (heFromMaLoai !== he) continue;
-      } else {
-        continue;
-      }
-
       var value = normalizeLegacyTongHopQueryValue(maLoai, he);
       if (!value) continue;
       if (seen[value]) continue;
@@ -4622,13 +4627,15 @@
           obj_name: tableName,
           e_where: { field: filterFields[i], type: "eq", value: he }
         });
-        if (rows && rows.length) return rows;
+        var filteredRows = filterLegacyRowsByHe(tableName, rows, he);
+        if (filteredRows && filteredRows.length) return filteredRows;
       }
-      return await fetchRows({
+      var allRows = await fetchRows({
         app_id: "kqxs",
         obj_name: tableName,
         e_where: { field: "id", type: "like", value: "" }
       });
+      return filterLegacyRowsByHe(tableName, allRows, he);
     }
 
     async function reloadLegacyThApiSource() {
