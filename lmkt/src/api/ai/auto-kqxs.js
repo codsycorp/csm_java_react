@@ -1817,6 +1817,16 @@
     return String(getLegacyFieldValue(row, ["ma_loai", "MaLoai", "maLoai", "Ma_loai", "MA_LOAI"]) || "").trim();
   }
 
+  function inferLegacyHeFromMaLoai(maLoai) {
+    var raw = String(maLoai || "").trim();
+    if (!raw) return 0;
+    var m = raw.match(/^\s*sp_Get(\d+)_/i);
+    if (!m || !m[1]) return 0;
+    var n = Number(m[1]);
+    if (!isFinite(n) || isNaN(n)) return 0;
+    return n;
+  }
+
   function parseLegacyLoaiTimMeta(rawLoai, heThong) {
     var normalized = normalizeLegacyTongHopQueryValue(rawLoai, heThong);
     if (!normalized) {
@@ -1935,8 +1945,20 @@
     for (var i = 0; i < list.length; i += 1) {
       var row = list[i] || {};
       var maDuoi = getLegacyMaDuoiValue(row);
-      if (maDuoi && maDuoi !== he) continue;
       var maLoai = getLegacyMaLoaiValue(row);
+      var heFromMaLoai = inferLegacyHeFromMaLoai(maLoai);
+
+      // Strict he-thong isolation for Loai Tim:
+      // - Prefer explicit MaDuoi when present
+      // - Fallback to parsing he from MaLoai (sp_Get2_*/sp_Get3_*) when MaDuoi is missing
+      if (maDuoi > 0) {
+        if (maDuoi !== he) continue;
+      } else if (heFromMaLoai > 0) {
+        if (heFromMaLoai !== he) continue;
+      } else {
+        continue;
+      }
+
       var value = normalizeLegacyTongHopQueryValue(maLoai, he);
       if (!value) continue;
       if (seen[value]) continue;
