@@ -164,7 +164,8 @@ export function PasswordLogin() {
 					if (!mergedProfile?.userId) {
 						console.error("[LOGIN] Failed to sync user-info and no fallback user data");
 						useAuthStore.getState().reset();
-						navigate("/error/500");
+						const base = import.meta.env.BASE_URL || "/";
+						window.location.replace(`${base}login`);
 						throw new Error("Failed to get user info");
 					}
 

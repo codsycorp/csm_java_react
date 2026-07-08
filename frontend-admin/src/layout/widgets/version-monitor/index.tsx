@@ -9,7 +9,16 @@ interface AppVersionMonitorProps {
 	checkUpdateUrl?: string
 }
 
-const VERSION_DISMISS_KEY = "csm_app_version_dismissed";
+const VERSION_ACCEPTED_KEY = "csm_app_version_accepted";
+const VERSION_SNOOZE_VERSION_KEY = "csm_app_version_snooze_version";
+const VERSION_SNOOZE_UNTIL_KEY = "csm_app_version_snooze_until";
+const VERSION_MONITOR_ACTIVE_KEY = "__csm_app_version_monitor_active__";
+const VERSION_NOTICE_KEY = "csm_app_version_notice";
+const VERSION_REFRESH_TARGET_KEY = "csm_app_version_refresh_target";
+const VERSION_REFRESH_AT_KEY = "csm_app_version_refresh_at";
+const VERSION_SUPPRESS_UNTIL_KEY = "csm_app_version_suppress_until";
+const VERSION_REFRESH_SUPPRESS_MS = 10 * 60 * 1000;
+const VERSION_REMIND_LATER_MS = 30 * 60 * 1000;
 
 declare const __APP_INFO__: { buildVersion?: string; lastBuildTime?: string };
 
@@ -36,10 +45,136 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl }: 
 	const { t } = useTranslation();
 	const currentVersionTag = useRef("");
 	const lastVersionTag = useRef("");
+	const hasOwnership = useRef(false);
 	const timer = useRef<ReturnType<typeof setInterval>>();
 	const consecutiveFailures = useRef(0);
 	const cooldownUntil = useRef(0);
 	const probeBase = resolveProbeBase(checkUpdateUrl);
+
+	function getAcceptedVersion(): string | null {
+		try {
+			const local = localStorage.getItem(VERSION_ACCEPTED_KEY);
+			if (local) return local;
+		} catch {
+			// ignore
+		}
+		try {
+			return sessionStorage.getItem(VERSION_ACCEPTED_KEY);
+		} catch {
+			return null;
+		}
+	}
+
+	function setAcceptedVersion(versionTag: string) {
+		try {
+			localStorage.setItem(VERSION_ACCEPTED_KEY, versionTag);
+		} catch {
+			// ignore
+		}
+		try {
+			sessionStorage.setItem(VERSION_ACCEPTED_KEY, versionTag);
+		} catch {
+			// ignore
+		}
+	}
+
+	function getSnoozeVersion(): string {
+		try {
+			return String(sessionStorage.getItem(VERSION_SNOOZE_VERSION_KEY) || "").trim();
+		} catch {
+			return "";
+		}
+	}
+
+	function getSnoozeUntil(): number {
+		try {
+			const raw = sessionStorage.getItem(VERSION_SNOOZE_UNTIL_KEY);
+			const until = Number(raw || "0");
+			return Number.isFinite(until) ? until : 0;
+		} catch {
+			return 0;
+		}
+	}
+
+	function snoozeVersion(versionTag: string) {
+		try {
+			sessionStorage.setItem(VERSION_SNOOZE_VERSION_KEY, versionTag);
+			sessionStorage.setItem(VERSION_SNOOZE_UNTIL_KEY, String(Date.now() + VERSION_REMIND_LATER_MS));
+		} catch {
+			// ignore
+		}
+	}
+
+	function clearSnooze() {
+		try {
+			sessionStorage.removeItem(VERSION_SNOOZE_VERSION_KEY);
+		} catch {
+			// ignore
+		}
+		try {
+			sessionStorage.removeItem(VERSION_SNOOZE_UNTIL_KEY);
+		} catch {
+			// ignore
+		}
+	}
+
+	function isVersionSnoozed(versionTag: string): boolean {
+		const snoozeVersionTag = getSnoozeVersion();
+		if (!snoozeVersionTag || snoozeVersionTag !== versionTag) return false;
+		return getSnoozeUntil() > Date.now();
+	}
+
+	function getRefreshTargetVersion(): string | null {
+		try {
+			return sessionStorage.getItem(VERSION_REFRESH_TARGET_KEY);
+		} catch {
+			return null;
+		}
+	}
+
+	function setRefreshTargetVersion(versionTag: string) {
+		try {
+			sessionStorage.setItem(VERSION_REFRESH_TARGET_KEY, versionTag);
+			sessionStorage.setItem(VERSION_REFRESH_AT_KEY, String(Date.now()));
+			sessionStorage.setItem(VERSION_SUPPRESS_UNTIL_KEY, String(Date.now() + VERSION_REFRESH_SUPPRESS_MS));
+		} catch {
+			// ignore
+		}
+	}
+
+	function isTemporarilySuppressed(): boolean {
+		try {
+			const untilRaw = sessionStorage.getItem(VERSION_SUPPRESS_UNTIL_KEY);
+			const until = Number(untilRaw || "0");
+			return Number.isFinite(until) && until > Date.now();
+		} catch {
+			return false;
+		}
+	}
+
+	async function hardReloadToVersion(versionTag: string) {
+		setRefreshTargetVersion(versionTag);
+
+		try {
+			if ("caches" in window) {
+				const keys = await caches.keys();
+				await Promise.all(keys.map((key) => caches.delete(key)));
+			}
+		} catch {
+			// ignore cache cleanup failures
+		}
+
+		try {
+			if ("serviceWorker" in navigator) {
+				const regs = await navigator.serviceWorker.getRegistrations();
+				await Promise.all(regs.map((reg) => reg.unregister()));
+			}
+		} catch {
+			// ignore SW cleanup failures
+		}
+
+		location.reload();
+	}
 
 	function buildProbeUrl(path: string) {
 		try {
@@ -58,9 +193,13 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl }: 
 	function handleNotice(versionTag: string) {
 		currentVersionTag.current = versionTag;
 		window.$notification?.open({
+			key: VERSION_NOTICE_KEY,
 			message: t("widgets.versionMonitorTitle"),
 			description: t("widgets.versionMonitorContent"),
 			duration: 0,
+			onClose: () => {
+				snoozeVersion(versionTag);
+			},
 			btn: (() => {
 				return createElement(
 					Space,
@@ -70,9 +209,8 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl }: 
 							Button,
 							{
 								onClick() {
-									sessionStorage.setItem(VERSION_DISMISS_KEY, versionTag);
-									lastVersionTag.current = versionTag;
-									window.$notification?.destroy();
+									snoozeVersion(versionTag);
+									window.$notification?.destroy(VERSION_NOTICE_KEY);
 								},
 								key: "cancel",
 							},
@@ -82,10 +220,13 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl }: 
 							Button,
 							{
 								type: "primary",
-								onClick() {
-									sessionStorage.removeItem(VERSION_DISMISS_KEY);
-									lastVersionTag.current = currentVersionTag.current;
-									location.reload();
+								async onClick() {
+									const acceptedVersion = currentVersionTag.current;
+									setAcceptedVersion(acceptedVersion);
+									clearSnooze();
+									lastVersionTag.current = acceptedVersion;
+									window.$notification?.destroy(VERSION_NOTICE_KEY);
+									await hardReloadToVersion(acceptedVersion);
 								},
 								key: "ok",
 							},
@@ -130,21 +271,6 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl }: 
 				return data.version || null;
 			}
 
-			const fallbackController = new AbortController();
-			const fallbackTimeoutId = setTimeout(() => fallbackController.abort(), 5000);
-
-			const fallbackResponse = await fetch(buildProbeUrl("fversion"), {
-				cache: "no-store",
-				method: "HEAD",
-				signal: fallbackController.signal,
-			});
-			clearTimeout(fallbackTimeoutId);
-
-			if (fallbackResponse.ok) {
-				consecutiveFailures.current = 0;
-				return fallbackResponse.headers.get("etag") || fallbackResponse.headers.get("last-modified");
-			}
-
 			return null;
 		}
 		catch (error) {
@@ -160,8 +286,19 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl }: 
 	}
 
 	async function checkForUpdates() {
+		if (isTemporarilySuppressed()) {
+			return;
+		}
+
 		const versionTag = await getVersionTag();
 		if (!versionTag) {
+			return;
+		}
+
+		if (getRefreshTargetVersion() === versionTag) {
+			lastVersionTag.current = versionTag;
+			setAcceptedVersion(versionTag);
+			clearSnooze();
 			return;
 		}
 
@@ -169,12 +306,15 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl }: 
 			return;
 		}
 
-		if (sessionStorage.getItem(VERSION_DISMISS_KEY) === versionTag) {
+		if (getAcceptedVersion() === versionTag) {
 			lastVersionTag.current = versionTag;
 			return;
 		}
 
-		clearInterval(timer.current);
+		if (isVersionSnoozed(versionTag)) {
+			return;
+		}
+
 		handleNotice(versionTag);
 	}
 
@@ -223,11 +363,22 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl }: 
 	}
 
 	useEffect(() => {
+		const g = window as any;
+		if (g[VERSION_MONITOR_ACTIVE_KEY]) {
+			return;
+		}
+		g[VERSION_MONITOR_ACTIVE_KEY] = true;
+		hasOwnership.current = true;
+
 		start();
 		document.addEventListener("visibilitychange", handleVisibilitychange);
 
 		return () => {
+			if (hasOwnership.current) {
+				delete g[VERSION_MONITOR_ACTIVE_KEY];
+			}
 			stop();
+			window.$notification?.destroy(VERSION_NOTICE_KEY);
 			document.removeEventListener("visibilitychange", handleVisibilitychange);
 		};
 	}, []);

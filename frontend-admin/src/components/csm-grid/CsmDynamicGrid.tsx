@@ -1135,10 +1135,41 @@ export function CsmDynamicGrid({
 	const userPermissionBitfield = useUserStore(state => (state as any).permissionBitfield);
 	const userLegacyPermissions = useUserStore(state => (state as any).permissions);
 	const userMenusPermissions = useUserStore(state => (state as any).menusPermissions);
-	const database = useMemo(
-		() => ({ ..._unusedDatabaseProp, ...globalDatabase }),
-		[globalDatabase, _unusedDatabaseProp]
-	);
+	const database = useMemo(() => {
+		const propDatabase = (_unusedDatabaseProp || {}) as Database;
+		const storeDatabase = (globalDatabase || {}) as Database;
+		const merged: Database = { ...storeDatabase };
+
+		const tableNames = new Set<string>([
+			...Object.keys(storeDatabase),
+			...Object.keys(propDatabase),
+		]);
+
+		tableNames.forEach((table) => {
+			const propEntry = propDatabase[table];
+			const storeEntry = storeDatabase[table];
+			if (!propEntry) {
+				if (storeEntry) merged[table] = storeEntry;
+				return;
+			}
+			if (!storeEntry) {
+				merged[table] = propEntry;
+				return;
+			}
+
+			const propRows = Array.isArray(propEntry?.rows) ? propEntry.rows : [];
+			const storeRows = Array.isArray(storeEntry?.rows) ? storeEntry.rows : [];
+			const propTotal = Number(propEntry?.totalCount ?? propRows.length ?? 0);
+			const storeTotal = Number(storeEntry?.totalCount ?? storeRows.length ?? 0);
+
+			const preferPropEntry = propRows.length > storeRows.length || propTotal > storeTotal;
+			merged[table] = preferPropEntry
+				? { ...storeEntry, ...propEntry }
+				: { ...propEntry, ...storeEntry };
+		});
+
+		return merged;
+	}, [globalDatabase, _unusedDatabaseProp]);
 	const effectiveScope = useMemo(() => {
 		if (isDev) return "ALL";
 		const userScope = normalizeScope(dataScope);
@@ -2599,11 +2630,16 @@ export function CsmDynamicGrid({
 		if (isDetailGrid || !hasTableName) return null;
 		return database[tableName];
 	}, [database, tableName, hasTableName, isDetailGrid]);
+	const hasClientFilterTrigger = useMemo(
+		() => String(m_configs.trigger?.filter || "").trim().length > 0,
+		[m_configs.trigger?.filter],
+	);
 
 	const configuredPageSize = Number(m_configs.table_pagesize) || GRID_SERVER_DEFAULT_PAGE_SIZE;
 	const canServerPage = !isDetailGrid
 		&& hasTableName
 		&& !m_configs.trigger?.load_db
+		&& !hasClientFilterTrigger
 		&& (
 			Boolean(tableStoreMeta?.serverPaged)
 			|| Number(tableStoreMeta?.totalCount ?? 0) > GRID_SERVER_PAGE_THRESHOLD
@@ -2617,6 +2653,7 @@ export function CsmDynamicGrid({
 	const lastSyncedDataSignatureRef = useRef("");
 	const lastSyncedRowsRef = useRef<Row[] | null>(null);
 	const lastDetailMasterSyncKeyRef = useRef("");
+	const forcedFullLoadByFilterKeyRef = useRef("");
 	const detailMasterSyncKey = useMemo(() => {
 		if (!isDetailGrid) return "";
 		const masterKey = buildRowKey(context?.select_row || null, pkFields);
@@ -2665,6 +2702,71 @@ export function CsmDynamicGrid({
 		lastSyncedDataSignatureRef.current = buildRowsSyncSignature(nextRows);
 		setData(nextRows);
 	}, []);
+
+	// When trigger.filter exists, filtering only the first server page causes missing rows.
+	// Load full table once and then run client filter on complete dataset.
+	useEffect(() => {
+		if (isDetailGrid || !hasTableName) return;
+		if (!hasClientFilterTrigger) return;
+		if (!tableStoreMeta?.serverPaged) return;
+
+		const loadKey = `${effectiveGridInstanceKey}::${runtimeAppId}::${tableName}`;
+		if (forcedFullLoadByFilterKeyRef.current === loadKey) return;
+		forcedFullLoadByFilterKeyRef.current = loadKey;
+
+		let canceled = false;
+		void (async () => {
+			try {
+				const allRows = await fetchAllTableRows(
+					(limit, offset) => getTableData<Record<string, unknown>>({
+						app_id: runtimeAppId,
+						obj_name: tableName,
+						where: serverBaseWhere,
+						limit,
+						offset,
+						fresh: true,
+					}),
+					{ pageSize: Math.max(configuredPageSize, GRID_SERVER_DEFAULT_PAGE_SIZE) },
+				);
+				if (canceled) return;
+
+				const currentStore = (useAppStore.getState().database as any)?.[tableName];
+				const fallbackTable = (database as any)?.[tableName];
+				const sourceTable = currentStore || fallbackTable || {};
+
+				setTableData(tableName, {
+					id: sourceTable?.id || tableName,
+					fields: sourceTable?.fields,
+					fieldsPK: sourceTable?.fieldsPK || pkFields,
+					rows: allRows as Row[],
+					app_id: sourceTable?.app_id || runtimeAppId,
+					totalCount: Math.max(Number(sourceTable?.totalCount || 0), allRows.length),
+					serverPaged: false,
+					pageSize: configuredPageSize,
+				});
+			} catch (err) {
+				console.warn(`[CsmDynamicGrid] Failed full-load for filter-trigger table '${tableName}':`, err);
+				forcedFullLoadByFilterKeyRef.current = "";
+			}
+		})();
+
+		return () => {
+			canceled = true;
+		};
+	}, [
+		isDetailGrid,
+		hasTableName,
+		hasClientFilterTrigger,
+		tableStoreMeta?.serverPaged,
+		effectiveGridInstanceKey,
+		runtimeAppId,
+		tableName,
+		serverBaseWhere,
+		configuredPageSize,
+		database,
+		pkFields,
+		setTableData,
+	]);
 
 	// Primary rows — combo prefetch runs in background; server-paged grids never wait.
 	useEffect(() => {
@@ -2980,6 +3082,7 @@ export function CsmDynamicGrid({
 				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
 				.map(v => v.trim().toLowerCase());
 			const ownerFields = ["created_by", "create_by", "owner_id", "owner", "user_id", "userid", "account_id", "parent_account_id"];
+			if (ownerCandidates.length === 0) return sourceRows;
 
 			sourceRows = filtered.filter((row) => {
 				const existingOwnerField = ownerFields.find((field) => row?.[field] != null && String(row[field]).trim() !== "");
@@ -2992,6 +3095,7 @@ export function CsmDynamicGrid({
 				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
 				.map(v => v.trim().toLowerCase());
 			const deptFields = ["dept_id", "department_id", "team_id", "org_unit_id"];
+			if (deptCandidates.length === 0) return sourceRows;
 
 			sourceRows = filtered.filter((row) => {
 				const existingDeptField = deptFields.find((field) => row?.[field] != null && String(row[field]).trim() !== "");
@@ -3004,6 +3108,7 @@ export function CsmDynamicGrid({
 				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
 				.map(v => v.trim().toLowerCase());
 			const branchFields = ["branch_id", "site_id", "region_id"];
+			if (branchCandidates.length === 0) return sourceRows;
 
 			sourceRows = filtered.filter((row) => {
 				const existingBranchField = branchFields.find((field) => row?.[field] != null && String(row[field]).trim() !== "");

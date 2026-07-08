@@ -109,10 +109,7 @@ export function logoutAndReload() {
   setTimeout(() => {
     try {
       const base = import.meta.env.BASE_URL || "/";
-      const redirect =
-        typeof window !== "undefined" && /^(\/homepage|\/system\b|\/personal-center\b)/.test(window.location.pathname)
-          ? "?redirect=admin" : "";
-      window.location.replace(`${base}login${redirect}`);
+      window.location.replace(`${base}login`);
     } catch {
       try { window.location.reload(); } catch {}
     }
@@ -160,11 +157,7 @@ export function forceLogoutAndReload(reason?: string) {
   setTimeout(() => {
     try {
       const base = import.meta.env.BASE_URL || "/";
-      // Preserve a safe redirect only when on admin routes
-      const redirect = 
-        typeof window !== "undefined" && /^(\/homepage|\/system\b|\/personal-center\b)/.test(window.location.pathname)
-          ? "?redirect=admin" : "";
-      window.location.replace(`${base}login${redirect}`);
+      window.location.replace(`${base}login`);
     } catch {
       // Fallback to reload
       try { window.location.reload(); } catch {}

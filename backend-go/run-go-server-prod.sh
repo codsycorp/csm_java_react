@@ -18,6 +18,9 @@ load_env_file() {
 
 load_env_file "$CSM_HOME/config.env" || true
 load_env_file "$CSM_HOME/config.local-8gb.env" || true
+if [ "${AI_LOCAL_PROMPT_BUDGET_DISABLED:-}" = "true" ] || [ "${AI_LOCAL_PROMPT_BUDGET_DISABLED:-}" = "1" ]; then
+    load_env_file "$CSM_HOME/config.ai-local-max-8gb.env" || load_env_file "$CSM_HOME/config.ai-local-max.env" || true
+fi
 
 export CSM_HOME
 export APP_DATA_DIR="${APP_DATA_DIR:-$CSM_HOME/csm_datas}"
@@ -26,6 +29,11 @@ export CSM_PEBBLE_ROOT="${CSM_PEBBLE_ROOT:-$CSM_NATIVE_DATA_DIR/pebble}"
 export CSM_VECTOR_DIR="${CSM_VECTOR_DIR:-$CSM_NATIVE_DATA_DIR/vector/chromem}"
 export ROCKSDB_ROOT_DIR="${ROCKSDB_ROOT_DIR:-$APP_DATA_DIR/database}"
 export SERVER_PORT="${SERVER_PORT:-9999}"
+export CSM_LOCAL_PROFILE="${CSM_LOCAL_PROFILE:-8gb}"
+export AI_LOCAL_ONLY_ENABLED="${AI_LOCAL_ONLY_ENABLED:-true}"
+export AI_LOCAL_LLAMA_NATIVE_ENABLED="${AI_LOCAL_LLAMA_NATIVE_ENABLED:-true}"
+export AI_LOCAL_RUNTIME_AUTO_TUNE="${AI_LOCAL_RUNTIME_AUTO_TUNE:-true}"
+export AI_LOCAL_PROMPT_BUDGET_DISABLED="${AI_LOCAL_PROMPT_BUDGET_DISABLED:-true}"
 
 BIN="${CSM_GO_BIN:-$CSM_HOME/csm_go_server}"
 if [ ! -x "$BIN" ]; then

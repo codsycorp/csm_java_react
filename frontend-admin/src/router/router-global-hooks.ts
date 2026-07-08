@@ -2,7 +2,7 @@ import type { BlockerFunction } from "react-router";
 import type { ReactRouterType, RouterSubscriber } from "./types";
 
 import { useAppStore, usePermissionStore, usePreferencesStore, useUserStore } from "#src/store";
-import { NProgress } from "#src/utils";
+import { NProgress, message } from "#src/utils";
 
 import { matchRoutes } from "react-router";
 
@@ -15,19 +15,28 @@ import { resolveNavigationAppId } from "#src/utils/user-app-id";
 // 不需要登录路由的路由白名单
 const baseNoLoginWhiteList = Array.from(ROUTE_WHITE_LIST).filter(item => item !== LOGIN);
 
-const ADMIN_REDIRECT_PREFIXES = ["/homepage", "/system", "/personal-center", "/about", "/iframe", "/route-nest", "/auto-setup"];
+const TRANSIENT_RELOAD_KEY = "csm_transient_reload_until";
+const TRANSIENT_RELOAD_COOLDOWN_MS = 30 * 1000;
 
-function normalizeAdminRedirect(rawRedirect: string | null | undefined): string | null {
-	if (!rawRedirect) return null;
-	const decoded = decodeURIComponent(String(rawRedirect || "").trim());
-	const normalized = decoded.startsWith("/") ? decoded : `/${decoded}`;
-	if (!normalized.startsWith("/")) return null;
-	if (decoded.startsWith("//")) return null;
-	if (normalized === "/") return null;
-	if (ADMIN_REDIRECT_PREFIXES.some(prefix => normalized === prefix || normalized.startsWith(`${prefix}/`) || normalized.startsWith(`${prefix}?`))) {
-		return normalized;
+function shouldHardReloadTransientFailure(): boolean {
+	try {
+		const until = Number(sessionStorage.getItem(TRANSIENT_RELOAD_KEY) || "0");
+		return !Number.isFinite(until) || until <= Date.now();
+	} catch {
+		return true;
 	}
-	return null;
+}
+
+function markTransientReload() {
+	try {
+		sessionStorage.setItem(TRANSIENT_RELOAD_KEY, String(Date.now() + TRANSIENT_RELOAD_COOLDOWN_MS));
+	} catch {
+		// ignore
+	}
+}
+
+function hardReloadCurrentPage() {
+	window.location.reload();
 }
 
 function normalizeHomePath(rawPath: string | undefined): string {
@@ -74,12 +83,7 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 	if (!isLogin) {
 		// Admin-only mode: any unauthenticated route except /login redirects to /login
 		if (pathnameWithoutBase !== LOGIN) {
-			if (pathnameWithoutBase.length > 1) {
-				reactRouter.navigate(`/login?redirect=${pathnameWithoutBase}${search}`);
-			}
-			else {
-				reactRouter.navigate("/login");
-			}
+			reactRouter.navigate("/login");
 			return true;
 		}
 		
@@ -99,22 +103,8 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 
 	/* 已登录访问登录页，跳转到首页 */
 	if (pathnameWithoutBase === "/login") {
-		const redirectParam = nextLocation.search.match(/[?&]redirect=([^&]*)/)?.[1];
-		const safeAdminRedirect = normalizeAdminRedirect(redirectParam);
-		const adminHomePath = normalizeHomePath(import.meta.env.VITE_BASE_HOME_PATH);
-		
-		// 如果有redirect=admin参数，跳转到admin home
-		if (redirectParam === "admin") {
-			reactRouter.navigate(adminHomePath, { replace: true });
-		}
-		else if (safeAdminRedirect) {
-			reactRouter.navigate(safeAdminRedirect, { replace: true });
-		}
-		else {
-			// 在admin模式下，跳转到admin首页
-			window.sessionStorage.setItem("forceAdminMode", "true");
-			reactRouter.navigate(adminHomePath, { replace: true });
-		}
+		window.sessionStorage.setItem("forceAdminMode", "true");
+		reactRouter.navigate("/", { replace: true });
 		return true;
 	}
 
@@ -202,11 +192,7 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 	if (!isLogin) {
 		// Admin-only mode: any unauthenticated route except /login redirects to /login
 		if (pathnameWithoutBase !== LOGIN) {
-			if (pathnameWithoutBase.length > 1) {
-				reactRouter.navigate(`/login?redirect=${pathnameWithoutBase}${search}`);
-			} else {
-				reactRouter.navigate("/login");
-			}
+			reactRouter.navigate("/login");
 			return;
 		}
 		
@@ -226,7 +212,22 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 		if (error?.response?.status === 401) {
 			goLogin();
 		} else {
-			reactRouter.navigate("/error/500");
+			const status = Number(error?.response?.status || 0);
+			if (status >= 500 || (typeof navigator !== "undefined" && navigator.onLine === false)) {
+				if (shouldHardReloadTransientFailure()) {
+					markTransientReload();
+					hardReloadCurrentPage();
+					return;
+				}
+				message.warning("Hệ thống đang cập nhật, vui lòng thử lại sau vài giây");
+				return;
+			}
+			if (shouldHardReloadTransientFailure()) {
+				markTransientReload();
+				hardReloadCurrentPage();
+				return;
+			}
+			message.warning("Không thể khởi tạo phiên làm việc, vui lòng tải lại trang");
 		}
 		return;
 	}
@@ -243,7 +244,22 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 			if (error?.response?.status === 401) {
 				goLogin();
 			} else {
-				reactRouter.navigate("/error/500");
+				const status = Number(error?.response?.status || 0);
+				if (status >= 500 || (typeof navigator !== "undefined" && navigator.onLine === false)) {
+					if (shouldHardReloadTransientFailure()) {
+						markTransientReload();
+						hardReloadCurrentPage();
+						return;
+					}
+					message.warning("Đồng bộ menu tạm lỗi do hệ thống đang cập nhật");
+					return;
+				}
+				if (shouldHardReloadTransientFailure()) {
+					markTransientReload();
+					hardReloadCurrentPage();
+					return;
+				}
+				message.warning("Không thể đồng bộ menu, vui lòng tải lại trang");
 			}
 			return;
 		}
@@ -260,23 +276,8 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 
 	/* 已登录时匹配 login 路由，跳转到首页 */
 	if (pathnameWithoutBase === "/login") {
-		// Kiểm tra redirect parameter
-		const redirectParam = new URLSearchParams(search).get("redirect");
-		const safeAdminRedirect = normalizeAdminRedirect(redirectParam);
-		const adminHomePath = normalizeHomePath(import.meta.env.VITE_BASE_HOME_PATH);
-		
-		if (redirectParam === "admin") {
-			// Redirect đến admin home
-			reactRouter.navigate(adminHomePath, { replace: true });
-		}
-		else if (safeAdminRedirect) {
-			reactRouter.navigate(safeAdminRedirect, { replace: true });
-		}
-		else {
-			// Admin mode, redirect to admin home
-			window.sessionStorage.setItem("forceAdminMode", "true");
-			reactRouter.navigate(adminHomePath, { replace: true });
-		}
+		window.sessionStorage.setItem("forceAdminMode", "true");
+		reactRouter.navigate("/", { replace: true });
 		return;
 	}
 

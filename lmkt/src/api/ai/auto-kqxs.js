@@ -1766,6 +1766,19 @@
     if (!raw) return "";
     if (/^sp_Get\d+_/i.test(raw)) {
       var cleaned = raw.replace(/\s+/g, "");
+      var heDirect = Number(heThong || 2) === 3 ? 3 : 2;
+      var partsDirect = cleaned.split(",");
+      var mqDirect = String(partsDirect[0] || "").trim();
+      var mqUpper = mqDirect.toUpperCase();
+      if (heDirect === 2) {
+        if (mqUpper === "SP_GET2_DD") mqDirect = "sp_Get2_DD3";
+        if (mqUpper === "SP_GET2_BL") mqDirect = "sp_Get2_BL3";
+      } else {
+        if (mqUpper === "SP_GET3_DD") mqDirect = "sp_Get3_DD3";
+        if (mqUpper === "SP_GET3_BL") mqDirect = "sp_Get3_BL3";
+      }
+      partsDirect[0] = mqDirect;
+      cleaned = partsDirect.join(",");
       // Legacy HTML/PHP combo values include both MaQuery and field filters: "sp_GetX_...,D_-P_-T_-B_".
       // Some API payloads only return MaQuery, so normalize to a complete value.
       if (cleaned.indexOf(",") < 0) cleaned = cleaned + ",D_-P_-T_-B_";
@@ -1817,6 +1830,58 @@
     return String(getLegacyFieldValue(row, ["ma_loai", "MaLoai", "maLoai", "Ma_loai", "MA_LOAI"]) || "").trim();
   }
 
+  function normalizeLegacyLoaiTimFieldToken(token, heThong, maQuery) {
+    var raw = String(token || "").trim();
+    if (!raw) return "";
+
+    var compact = raw
+      .replace(/\s+/g, "")
+      .replace(/^([dDpPtTbB])([_-]?)(dau|duoi|so\d*|so)?$/i, function (_, role, _sep, tail) {
+        return String(role || "") + (tail ? ("_" + tail) : "_");
+      });
+
+    var lower = compact.toLowerCase();
+    var mq = String(maQuery || "").trim().toUpperCase();
+    var he = Number(heThong || 2) === 3 ? 3 : 2;
+
+    if (/^[dptb]_?$/.test(lower)) {
+      return lower.charAt(0).toUpperCase() + "_";
+    }
+
+    if (/^[dptb]_so$/.test(lower)) {
+      return lower.charAt(0).toUpperCase() + "_so";
+    }
+
+    var m = lower.match(/^([dptb])_(dau|duoi|so\d+)$/);
+    if (!m) return raw.replace(/\s+/g, "");
+
+    var role = m[1].toUpperCase();
+    var tail = m[2];
+
+    if (mq === "SP_GET3_DD3") {
+      if (tail === "dau" && (role === "D" || role === "P" || role === "T")) return role + "_so2";
+      if (role === "B" && tail === "dau") return "B_so5";
+      if (role === "B" && tail === "so2") return "B_so6";
+      if (role === "B" && tail === "so3") return "B_so7";
+    }
+
+    if (mq === "SP_GET2_DD3") {
+      if (tail === "so2" && (role === "D" || role === "P" || role === "T")) return role + "_dau";
+      if (role === "B" && tail === "so5") return "B_dau";
+      if (role === "B" && tail === "so6") return "B_so2";
+      if (role === "B" && tail === "so7") return "B_so3";
+    }
+
+    if (mq === "SP_GET3_BL3" && role === "B" && tail === "dau") return "B_so5";
+    if (mq === "SP_GET2_BL3" && role === "B" && tail === "so5") return "B_dau";
+
+    if (he === 3 && mq === "SP_GET3_BL3" && (role === "D" || role === "P" || role === "T") && tail === "dau") {
+      return role + "_so2";
+    }
+
+    return role + "_" + tail;
+  }
+
   function filterLegacyRowsByHe(tableName, rows, heThong) {
     var he = Number(heThong || 2) === 3 ? 3 : 2;
     var list = Array.isArray(rows) ? rows : [];
@@ -1853,6 +1918,10 @@
     var parts = String(normalized || "").split(",");
     var maQuery = String(parts[0] || "").trim();
     var fieldPart = String(parts.slice(1).join(",") || "").trim();
+    var normalizedParts = fieldPart.split("-").map(function (part) {
+      return normalizeLegacyLoaiTimFieldToken(part, heThong, maQuery);
+    }).filter(Boolean);
+    if (normalizedParts.length) fieldPart = normalizedParts.join("-");
     return {
       rawValue: normalized,
       maQuery: maQuery,
@@ -1892,31 +1961,39 @@
   function getLegacyQueryFieldList(queryValue, heThong) {
     var he = Number(heThong || 2) === 3 ? 3 : 2;
     var maQuery = String(parseLegacyLoaiTimMaQuery(queryValue, he) || "").toUpperCase();
-      if (maQuery === "SP_GET2_DD") {
-        return ["D_dau", "D_duoi", "P_dau", "P_duoi", "B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"];
-      }
-      if (maQuery === "SP_GET2_BL") {
-        return ["D_dau"].concat(buildLegacyRangeFieldNames("D_so", 2, 17), ["D_duoi", "P_dau"]).concat(buildLegacyRangeFieldNames("P_so", 2, 17), ["P_duoi", "B_dau"]).concat(buildLegacyRangeFieldNames("B_so", 2, 26), ["B_duoi"]);
-      }
+    var baseFields = [];
       if (maQuery === "SP_GET2_DD3") {
-        return ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi", "B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"];
+        baseFields = ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi", "B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"];
       }
-      if (maQuery === "SP_GET2_BL3") {
-        return ["D_dau"].concat(buildLegacyRangeFieldNames("D_so", 2, 17), ["D_duoi", "P_dau"]).concat(buildLegacyRangeFieldNames("P_so", 2, 17), ["P_duoi", "T_dau"]).concat(buildLegacyRangeFieldNames("T_so", 2, 17), ["T_duoi", "B_dau"]).concat(buildLegacyRangeFieldNames("B_so", 2, 26), ["B_duoi"]);
+      else if (maQuery === "SP_GET2_BL3") {
+        baseFields = ["D_dau"].concat(buildLegacyRangeFieldNames("D_so", 2, 17), ["D_duoi", "P_dau"]).concat(buildLegacyRangeFieldNames("P_so", 2, 17), ["P_duoi", "T_dau"]).concat(buildLegacyRangeFieldNames("T_so", 2, 17), ["T_duoi", "B_dau"]).concat(buildLegacyRangeFieldNames("B_so", 2, 26), ["B_duoi"]);
       }
-      if (maQuery === "SP_GET3_DD") {
-        return ["D_so2", "D_duoi", "P_so2", "P_duoi", "B_dau", "B_so2", "B_so3", "B_duoi"];
+      else if (maQuery === "SP_GET3_DD3") {
+        baseFields = ["D_so2", "D_duoi", "P_so2", "P_duoi", "T_so2", "T_duoi", "B_so5", "B_so6", "B_so7", "B_duoi"];
       }
-      if (maQuery === "SP_GET3_BL") {
-        return buildLegacyRangeFieldNames("D_so", 2, 17).concat(["D_duoi"]).concat(buildLegacyRangeFieldNames("P_so", 2, 17), ["P_duoi"]).concat(buildLegacyRangeFieldNames("B_so", 5, 26), ["B_duoi"]);
+      else if (maQuery === "SP_GET3_BL3") {
+        baseFields = buildLegacyRangeFieldNames("D_so", 2, 17).concat(["D_duoi"]).concat(buildLegacyRangeFieldNames("P_so", 2, 17), ["P_duoi"]).concat(buildLegacyRangeFieldNames("T_so", 2, 17), ["T_duoi"]).concat(buildLegacyRangeFieldNames("B_so", 5, 26), ["B_duoi"]);
       }
-      if (maQuery === "SP_GET3_DD3") {
-        return ["D_so2", "D_duoi", "P_so2", "P_duoi", "T_so2", "T_duoi", "B_dau", "B_so2", "B_so3", "B_duoi"];
+      if (!baseFields.length) {
+        baseFields = he === 3
+          ? ["D_so2", "D_duoi", "P_so2", "P_duoi", "T_so2", "T_duoi", "B_so5", "B_so6", "B_so7", "B_duoi"]
+          : ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi", "B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"];
       }
-      if (maQuery === "SP_GET3_BL3") {
-        return buildLegacyRangeFieldNames("D_so", 2, 17).concat(["D_duoi"]).concat(buildLegacyRangeFieldNames("P_so", 2, 17), ["P_duoi"]).concat(buildLegacyRangeFieldNames("T_so", 2, 17), ["T_duoi"]).concat(buildLegacyRangeFieldNames("B_so", 5, 26), ["B_duoi"]);
-      }
-      return getLegacyAllNormalizedFieldKeys();
+
+      var fieldTokens = String(parseLegacyLoaiTimFieldPart(queryValue || "") || "")
+        .split("-")
+        .map(function (part) { return String(part || "").trim().toLowerCase(); })
+        .filter(Boolean);
+      if (!fieldTokens.length) return baseFields;
+
+      var filtered = baseFields.filter(function (name) {
+        var n = String(name || "").toLowerCase();
+        for (var i = 0; i < fieldTokens.length; i += 1) {
+          if (n.indexOf(fieldTokens[i]) >= 0) return true;
+        }
+        return false;
+      });
+      return filtered.length ? filtered : baseFields;
   }
 
   function countLegacyLoaiTimDashParts(text) {
@@ -1966,10 +2043,15 @@
       var maLoai = getLegacyMaLoaiValue(row);
       var value = normalizeLegacyTongHopQueryValue(maLoai, he);
       if (!value) continue;
+      var meta = parseLegacyLoaiTimMeta(value, he);
+      var mq = String((meta && meta.maQuery) || "").toUpperCase();
+      var allow = he === 3
+        ? (mq === "SP_GET3_DD3" || mq === "SP_GET3_BL3")
+        : (mq === "SP_GET2_DD3" || mq === "SP_GET2_BL3");
+      if (!allow) continue;
       if (seen[value]) continue;
       seen[value] = true;
       var text = String(row.MoTa || row.mo_ta || row.moTa || row.mota || value).trim() || value;
-      var meta = parseLegacyLoaiTimMeta(value, he);
       out.push({ value: value, text: text, maQuery: meta.maQuery, fieldPart: meta.fieldPart });
     }
     // Keep API/DB order to stay aligned with legacy combo source.
@@ -5293,9 +5375,6 @@
 
     function getLegacyTongHopRequiredRoles(queryValue, heThong) {
       var maQuery = String(parseLegacyLoaiTimMaQuery(queryValue, heThong) || "").toUpperCase();
-      if (maQuery === "SP_GET2_DD" || maQuery === "SP_GET2_BL" || maQuery === "SP_GET3_DD" || maQuery === "SP_GET3_BL") {
-        return { D: true, P: true, T: false, B: true };
-      }
       if (maQuery === "SP_GET2_DD3" || maQuery === "SP_GET2_BL3" || maQuery === "SP_GET3_DD3" || maQuery === "SP_GET3_BL3") {
         return { D: true, P: true, T: true, B: true };
       }
@@ -5739,16 +5818,17 @@
 
       queryFields = resolveQueryFieldsForRows(queryFields, dataRows);
       var fieldParts = parseLegacyLoaiTimFieldPart(queryValue).split("-").map(function (part) {
-        return String(part || "").trim();
+        return String(part || "").trim().toLowerCase();
       }).filter(Boolean);
 
       function fieldAllowed(fieldName) {
         var name = String(fieldName || "").trim();
+        var lowerName = name.toLowerCase();
         if (!name) return false;
         if (queryFields.length && queryFields.indexOf(name) < 0) return false;
         if (!fieldParts.length) return true;
         for (var i = 0; i < fieldParts.length; i += 1) {
-          if (name.indexOf(fieldParts[i]) >= 0) return true;
+          if (lowerName.indexOf(fieldParts[i]) >= 0) return true;
         }
         return false;
       }
@@ -6376,7 +6456,6 @@
 
       var expectedCols = dedupFields(
         getLegacyQueryFieldList(cfg.queryValue || queryBL, heThong)
-          .concat(getLegacyQueryFieldList(queryDD, heThong))
       );
       var actualMap = {};
       for (var ar = 0; ar < rows.length; ar += 1) {
@@ -6391,13 +6470,13 @@
       if (!colA.length) colA = expectedCols.slice();
 
       var DD3D_FIELDS = heThong === 3
-        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_duoi: true }
+        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true, B_so5: true, B_so6: true, B_so7: true, B_duoi: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true, B_duoi: true };
       var DDMB_FIELDS = heThong === 3
-        ? { B_dau: true, B_so2: true, B_so3: true, B_duoi: true }
+        ? { B_so5: true, B_so6: true, B_so7: true, B_duoi: true }
         : { B_dau: true, B_so2: true, B_so3: true, B_so4: true, B_duoi: true };
       var DAUB_FIELDS = heThong === 3
-        ? { B_dau: true, B_so2: true, B_so3: true }
+        ? { B_so5: true, B_so6: true, B_so7: true }
         : { B_dau: true, B_so2: true, B_so3: true, B_so4: true };
       var DD2D_FIELDS = heThong === 3
         ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true }
@@ -6406,13 +6485,13 @@
         ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true };
       var DDNDB_FIELDS = heThong === 3
-        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true }
+        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, B_so5: true, B_so6: true, B_so7: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true };
       var DDNDB2_FIELDS = heThong === 3
-        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true }
+        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, B_so5: true, B_so6: true, B_so7: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true };
       var DDNDB3_FIELDS = heThong === 3
-        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true }
+        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true, B_so5: true, B_so6: true, B_so7: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true };
       var DDC_FIELDS = heThong === 3 ? { D_so2: true, D_duoi: true } : { D_dau: true, D_duoi: true };
       var DAUCP_FIELDS = heThong === 3 ? { D_so2: true, P_so2: true } : { D_dau: true, P_dau: true };
@@ -6420,7 +6499,7 @@
       var DAI3_FIELDS = heThong === 3 ? { T_so2: true, T_duoi: true } : { T_dau: true, T_duoi: true };
       var DUOICP_FIELDS = { D_duoi: true, P_duoi: true };
       var DD3NB_FIELDS = heThong === 3
-        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_duoi: true }
+        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true, B_so5: true, B_so6: true, B_so7: true, B_duoi: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true, B_duoi: true };
 
       var fieldProfiles = {};
@@ -6505,6 +6584,8 @@
           var rs = st.result;
           if (isDone(fg)) continue;
           anyPending = true;
+          var dayDauC = false, dayDauP = false, dayDauT = false, dayDauB = false;
+          var dayDuoiC = false, dayDuoiP = false, dayDuoiT = false, dayDuoiB = false;
 
           for (var c = 0; c < colA.length; c += 1) {
             var fieldName = colA[c];
@@ -6518,32 +6599,43 @@
             if (fp.bldp) fg.BL_P = true;
             if (fp.bld3) fg.BL_T = true;
             if (fp.blmb) fg.BL_B = true;
-            if (fp.dd3d) fg.DD_3_NB = true;
-            if (fp.ddmb) fg.DD_B = true;
-            if (fp.daub) fg.DAU_B = true;
-            if (fp.dd2d) fg.DD_2_NAM = true;
-            if (fp.mndai3) fg.DD_3_NAM = true;
-            if (fp.ddndb) fg.DD_3_NB_DAU = true;
-            if (fp.ddndb2) fg.DD_2_NAM_B_DAU = true;
-            if (fp.ddndb3) fg.DD_3_NAM_B_DAU = true;
             if (fp.bl3mn) fg.BL_3_NAM = true;
-            if (fp.ddc) fg.DD_C = true;
-            if (fp.daucp) fg.DAU_CP = true;
-            if (fp.ddp) fg.DD_P = true;
-            if (fp.ddd3) fg.DD_T = true;
-            if (fp.duoicp) fg.DUOI_CP = true;
-            if (fp.dauc) fg.DAU_C = true;
-            if (fp.daup) fg.DAU_P = true;
-            if (fp.duoic) fg.DUOI_C = true;
-            if (fp.duoip) fg.DUOI_P = true;
-            if (fp.daut3) fg.DAU_T = true;
-            if (fp.duoit3) fg.DUOI_T = true;
-            if (fp.duoib) fg.DUOI_B = true;
-            if (fp.dd3nb) fg.DD_4_NHOM = true;
+            if (fp.dauc) { fg.DAU_C = true; dayDauC = true; }
+            if (fp.daup) { fg.DAU_P = true; dayDauP = true; }
+            if (fp.daut3) { fg.DAU_T = true; dayDauT = true; }
+            if (fp.daub) { fg.DAU_B = true; dayDauB = true; }
+            if (fp.duoic) { fg.DUOI_C = true; dayDuoiC = true; }
+            if (fp.duoip) { fg.DUOI_P = true; dayDuoiP = true; }
+            if (fp.duoit3) { fg.DUOI_T = true; dayDuoiT = true; }
+            if (fp.duoib) { fg.DUOI_B = true; dayDuoiB = true; }
             if (fp.blnb3) fg.BL_4_NHOM = true;
-            if (fp.dauc_duoip) fg.DAU_C_DUOI_P = true;
-            if (fp.daup_duoic) fg.DAU_P_DUOI_C = true;
           }
+
+          var dayDauCp = dayDauC && dayDauP;
+          var dayDuoiCp = dayDuoiC && dayDuoiP;
+          var dayDdC = dayDauC && dayDuoiC;
+          var dayDdP = dayDauP && dayDuoiP;
+          var dayDdT = dayDauT && dayDuoiT;
+          var dayDdB = dayDauB && dayDuoiB;
+          var dayDd2Nam = dayDdC && dayDdP;
+          var dayDd3Nam = dayDd2Nam && dayDdT;
+          var dayDd3Nb = dayDd3Nam && dayDdB;
+
+          fg.DAU_CP = fg.DAU_CP || dayDauCp;
+          fg.DUOI_CP = fg.DUOI_CP || dayDuoiCp;
+          fg.DD_C = fg.DD_C || dayDdC;
+          fg.DD_P = fg.DD_P || dayDdP;
+          fg.DD_T = fg.DD_T || dayDdT;
+          fg.DD_B = fg.DD_B || dayDdB;
+          fg.DD_2_NAM = fg.DD_2_NAM || dayDd2Nam;
+          fg.DD_3_NAM = fg.DD_3_NAM || dayDd3Nam;
+          fg.DD_3_NB = fg.DD_3_NB || dayDd3Nb;
+          fg.DD_2_NAM_B_DAU = fg.DD_2_NAM_B_DAU || (dayDd2Nam && dayDauB);
+          fg.DD_3_NAM_B_DAU = fg.DD_3_NAM_B_DAU || (dayDd3Nam && dayDauB);
+          fg.DD_3_NB_DAU = fg.DD_3_NB_DAU || (dayDd3Nb && dayDauB);
+          fg.DD_4_NHOM = fg.DD_4_NHOM || dayDd3Nb;
+          fg.DAU_C_DUOI_P = fg.DAU_C_DUOI_P || (dayDauC && dayDuoiP);
+          fg.DAU_P_DUOI_C = fg.DAU_P_DUOI_C || (dayDauP && dayDuoiC);
 
           if (!fg.BL_2_NAM) rs.BL_2_NAM += 1;
           if (!fg.BL_3_NB) rs.BL_3_NB += 1;

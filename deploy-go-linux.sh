@@ -16,6 +16,7 @@ set -euo pipefail
 SERVER="${1:-${DEPLOY_SERVER:-}}"
 SERVER_PATH="${2:-${DEPLOY_PATH:-/root/la_server}}"
 ARTIFACT="${3:-${ARTIFACT:-}}"
+SCP_FLAGS="${SCP_FLAGS:--O}"
 
 if [[ -z "$SERVER" ]]; then
   echo "Usage: $0 user@server-ip [/path/on/server] [/abs/path/to/artifact]"
@@ -58,19 +59,30 @@ log "[1/4] Prepare runtime directories"
 ssh "$SERVER" "mkdir -p '$SERVER_PATH' '$SERVER_PATH/csm_datas/native/pebble' '$SERVER_PATH/csm_datas/native/search' '$SERVER_PATH/csm_datas/database' '$SERVER_PATH/csm_datas/backups' '$SERVER_PATH/csm_datas/ai_local/model'"
 
 log "[2/4] Upload binary + optional config"
-scp "$ARTIFACT" "$SERVER:$SERVER_PATH/csm_go_server"
-ssh "$SERVER" "chmod +x '$SERVER_PATH/csm_go_server'"
+ssh "$SERVER" "systemctl stop csm-go || true"
+scp $SCP_FLAGS "$ARTIFACT" "$SERVER:$SERVER_PATH/csm_go_server.candidate"
+ssh "$SERVER" "mv -f '$SERVER_PATH/csm_go_server.candidate' '$SERVER_PATH/csm_go_server' && chmod +x '$SERVER_PATH/csm_go_server'"
 
 if [[ -f "$REPO_ROOT/config.env" ]]; then
-  scp "$REPO_ROOT/config.env" "$SERVER:$SERVER_PATH/config.env"
+  scp $SCP_FLAGS "$REPO_ROOT/config.env" "$SERVER:$SERVER_PATH/config.env"
   log "Uploaded config.env"
 else
   log "Skip config.env (local file not found)"
 fi
 
 if [[ -f "$REPO_ROOT/config.local-8gb.env" ]]; then
-  scp "$REPO_ROOT/config.local-8gb.env" "$SERVER:$SERVER_PATH/config.local-8gb.env"
+  scp $SCP_FLAGS "$REPO_ROOT/config.local-8gb.env" "$SERVER:$SERVER_PATH/config.local-8gb.env"
   log "Uploaded config.local-8gb.env"
+fi
+
+if [[ -f "$REPO_ROOT/config.ai-local-max-8gb.env" ]]; then
+  scp $SCP_FLAGS "$REPO_ROOT/config.ai-local-max-8gb.env" "$SERVER:$SERVER_PATH/config.ai-local-max-8gb.env"
+  log "Uploaded config.ai-local-max-8gb.env"
+fi
+
+if [[ -f "$REPO_ROOT/config.ai-local-max.env" ]]; then
+  scp $SCP_FLAGS "$REPO_ROOT/config.ai-local-max.env" "$SERVER:$SERVER_PATH/config.ai-local-max.env"
+  log "Uploaded config.ai-local-max.env"
 fi
 
 log "[3/4] Install/refresh systemd service"
@@ -88,6 +100,8 @@ User=root
 WorkingDirectory=$P
 EnvironmentFile=-$P/config.env
 EnvironmentFile=-$P/config.local-8gb.env
+EnvironmentFile=-$P/config.ai-local-max-8gb.env
+EnvironmentFile=-$P/config.ai-local-max.env
 Environment=CSM_HOME=$P
 Environment=CSM_LOCAL_PROFILE=8gb
 Environment=APP_DATA_DIR=$P/csm_datas
@@ -100,6 +114,10 @@ Environment=SERVER_PORT=9999
 Environment=SOCKET_SERVER_PORT=15301
 Environment=REDIS_ENABLED=0
 Environment=CSM_SKIP_STARTUP_DB_INIT=1
+Environment=AI_LOCAL_ONLY_ENABLED=true
+Environment=AI_LOCAL_LLAMA_NATIVE_ENABLED=true
+Environment=AI_LOCAL_RUNTIME_AUTO_TUNE=true
+Environment=AI_LOCAL_PROMPT_BUDGET_DISABLED=true
 ExecStart=$P/csm_go_server
 Restart=always
 RestartSec=5

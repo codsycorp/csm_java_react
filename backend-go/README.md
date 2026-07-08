@@ -265,6 +265,54 @@ ssh root@csmbridge.net "ls -lh /root/la_server/csm_datas/ai_local/model/qwen2.5-
 
 Neu thieu model, download vao dung thu muc tren truoc khi restart service.
 
+### 6) Build + deploy bang Docker, bat day du AI local (khuyen nghi)
+
+Copy nguyen khoi lenh ben duoi va chay (khong can sua file script):
+
+```bash
+cd /Volumes/Datas/CSM/JavaProjects/csm_server
+chmod +x backend-go/docker-build.sh deploy-go-linux.sh
+
+# 1) Build Linux amd64 native llamacpp (Docker)
+./backend-go/docker-build.sh --linux --linux-arch amd64 --llamacpp
+
+# 2) Deploy artifact len server
+./deploy-go-linux.sh root@csmbridge.net /root/la_server /Volumes/Datas/CSM/JavaProjects/csm_server/dist/csm-go-linux-amd64
+
+# 3) Verify service + health
+ssh root@csmbridge.net "systemctl --no-pager --full status csm-go | head -25"
+ssh root@csmbridge.net "curl -sf http://127.0.0.1:9999/api/monitoring/health | head -c 500"
+ssh root@csmbridge.net "curl -sf http://127.0.0.1:9999/ai-local/health | head -c 1400"
+```
+
+Neu ban thay loi `zsh: command not found: deploy-go-linux.sh`:
+
+```bash
+# Dang dung sai thu muc hoac thieu ./
+cd /Volumes/Datas/CSM/JavaProjects/csm_server
+./deploy-go-linux.sh root@csmbridge.net /root/la_server /Volumes/Datas/CSM/JavaProjects/csm_server/dist/csm-go-linux-amd64
+```
+
+Neu can chi upload lai binary thu cong (fallback nhanh):
+
+```bash
+cd /Volumes/Datas/CSM/JavaProjects/csm_server
+scp -O dist/csm-go-linux-amd64 root@csmbridge.net:/root/la_server/csm_go_server.candidate
+ssh root@csmbridge.net "systemctl stop csm-go || true && mv -f /root/la_server/csm_go_server.candidate /root/la_server/csm_go_server && chmod +x /root/la_server/csm_go_server && systemctl start csm-go"
+```
+
+Sau deploy, service `csm-go` tu nap env theo thu tu:
+- `config.env`
+- `config.local-8gb.env`
+- `config.ai-local-max-8gb.env`
+- `config.ai-local-max.env`
+
+Va mac dinh bat full local AI:
+- `AI_LOCAL_ONLY_ENABLED=true`
+- `AI_LOCAL_LLAMA_NATIVE_ENABLED=true`
+- `AI_LOCAL_RUNTIME_AUTO_TUNE=true`
+- `AI_LOCAL_PROMPT_BUDGET_DISABLED=true`
+
 ## Notes
 
 - **CGO required** for RocksDB compatibility with existing Java database files.

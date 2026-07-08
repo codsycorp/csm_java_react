@@ -88,15 +88,8 @@ build_linux_one() {
   local platform="linux/$arch"
 
   if $USE_LLAMACPP; then
-    log "Building Linux $arch with llamacpp (CGO=1)..."
-    docker build $NO_CACHE --platform linux/amd64 -f "$GO_DIR/Dockerfile" \
-      --build-arg LLAMACPP=1 \
-      -t csm-go-builder:llamacpp "$ROOT_DIR"
-
-    docker run --rm --platform linux/amd64 \
-      -v "$DIST:/out" \
-      csm-go-builder:llamacpp \
-      bash -lc "cp -f /app/csm-go /out/csm-go-linux-$arch && chmod +x /out/csm-go-linux-$arch"
+    log "Building Linux $arch with llamacpp (CGO=1, native script via Docker ubuntu:22.04)..."
+    "$ROOT_DIR/scripts/build-go-linux-native.sh" "$DIST/csm-go-linux-$arch"
   else
     log "Building Linux $arch (pure Go, CGO=0)..."
     docker run --rm --platform "$platform" \
