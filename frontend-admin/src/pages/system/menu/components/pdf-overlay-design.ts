@@ -2,9 +2,13 @@ export type PdfOverlayPlanItemLike = {
   page?: number;
   x?: number;
   y?: number;
+  width?: number;
+  align?: "L" | "C" | "R" | string;
   fontSize?: number;
   fontName?: string;
   color?: string;
+  bold?: boolean;
+  italic?: boolean;
   opacity?: number;
   rotate?: number;
   text?: string;
@@ -403,12 +407,15 @@ export function buildPdfReportDesignSpec(
       page: Number(item?.page || 1),
       x: Number(item?.x || 0),
       y: Number(item?.y || 0),
-      align: "L" as const,
+      width: Number(item?.width || 0) || undefined,
+      align: (["L", "C", "R"].includes(String(item?.align || "").toUpperCase())
+        ? String(item?.align || "").toUpperCase()
+        : "L") as "L" | "C" | "R",
       fontSize: Number(item?.fontSize || 11),
       fontName: String(item?.fontName || "Arial").trim() || "Arial",
       color: String(item?.color || "#000000").trim() || "#000000",
-      bold: false,
-      italic: false,
+      bold: Boolean(item?.bold),
+      italic: Boolean(item?.italic),
       text: sanitizeDisplayLine(String(item?.text || "")),
     }))
     .filter((item) => item.text);

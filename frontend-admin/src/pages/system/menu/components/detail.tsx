@@ -984,13 +984,23 @@ type PdfOverlayPlanItem = {
   page?: number;
   x?: number;
   y?: number;
+  width?: number;
+  align?: "L" | "C" | "R";
   fontSize?: number;
   fontName?: string;
   color?: string;
+  bold?: boolean;
+  italic?: boolean;
   opacity?: number;
   rotate?: number;
   text?: string;
 };
+
+function normalizeOverlayAlign(value: unknown): "L" | "C" | "R" {
+  const upper = String(value || "").trim().toUpperCase();
+  if (upper === "C" || upper === "R") return upper;
+  return "L";
+}
 
 type BackendPdfExtractResponse = {
   layout?: Partial<PdfLayoutSpec>;
@@ -1245,9 +1255,13 @@ async function buildPdfOverlayPlanWithLocalAi(params: {
         page: Number((x as any)?.page || 1),
         x: Number((x as any)?.x || 0),
         y: Number((x as any)?.y || 0),
+        width: Number((x as any)?.width || 0) || undefined,
+        align: normalizeOverlayAlign((x as any)?.align),
         fontSize: Number((x as any)?.fontSize || 11),
         fontName: sanitizeTemplateLine((x as any)?.fontName || "Helvetica") || "Helvetica",
         color: sanitizeTemplateLine((x as any)?.color || "#000000") || "#000000",
+        bold: Boolean((x as any)?.bold),
+        italic: Boolean((x as any)?.italic),
         opacity: Number((x as any)?.opacity || 1),
         rotate: Number((x as any)?.rotate || 0),
         text: sanitizeTemplateLine((x as any)?.text || ""),
@@ -3072,9 +3086,13 @@ export function Detail({
         page: Number(item?.page || 1),
         x: Number(item?.x || 0),
         y: Number(item?.y || 0),
+        width: Number(item?.width || 0) || undefined,
+        align: normalizeOverlayAlign(item?.align),
         fontSize: Number(item?.fontSize || 11),
         fontName: sanitizeTemplateLine(item?.fontName || "Helvetica") || "Helvetica",
         color: sanitizeTemplateLine(item?.color || "#000000") || "#000000",
+        bold: Boolean(item?.bold),
+        italic: Boolean(item?.italic),
         opacity: Number(item?.opacity || 1),
         rotate: Number(item?.rotate || 0),
         text: sanitizeTemplateLine(item?.text || ""),

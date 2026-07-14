@@ -237,7 +237,6 @@ func parsePDFContentLineBoxes(content string, page int) []pdfExtractLineBox {
 	out := make([]pdfExtractLineBox, 0, len(lines))
 	x := 0.0
 	y := 0.0
-	lastY := 0.0
 
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
@@ -248,12 +247,10 @@ func parsePDFContentLineBoxes(content string, page int) []pdfExtractLineBox {
 		for _, m := range reTM.FindAllStringSubmatch(line, -1) {
 			x = toFloat(m[5])
 			y = toFloat(m[6])
-			lastY = y
 		}
 		for _, m := range reTD.FindAllStringSubmatch(line, -1) {
 			x += toFloat(m[1])
 			y += toFloat(m[2])
-			lastY = y
 		}
 
 		for _, m := range reTj.FindAllStringSubmatch(line, -1) {
@@ -262,7 +259,6 @@ func parsePDFContentLineBoxes(content string, page int) []pdfExtractLineBox {
 				continue
 			}
 			out = append(out, pdfExtractLineBox{Text: t, X: x, Y: y, Page: page})
-			y = lastY - 12
 		}
 
 		for _, m := range reTJ.FindAllStringSubmatch(line, -1) {
@@ -282,7 +278,6 @@ func parsePDFContentLineBoxes(content string, page int) []pdfExtractLineBox {
 				continue
 			}
 			out = append(out, pdfExtractLineBox{Text: text, X: x, Y: y, Page: page})
-			y = lastY - 12
 		}
 	}
 
