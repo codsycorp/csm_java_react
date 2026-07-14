@@ -479,7 +479,13 @@ export default function CsmLineItemsEditor({
   const [previewLabel, setPreviewLabel] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  const [downloadDocxLoading, setDownloadDocxLoading] = useState(false);
   const [previewPdfOptions, setPreviewPdfOptions] = useState<LiPrintPdfOptions | undefined>(undefined);
+  const [previewDocxDownload, setPreviewDocxDownload] = useState<{
+    templateUrl: string;
+    data: Record<string, any>;
+    fileName: string;
+  } | null>(null);
   const previewIframeRef = useRef<HTMLIFrameElement | null>(null);
   const previewViewportWidth = Math.max(720, Number(previewPdfOptions?.preview_width_px ?? 794));
   const currentCustomerCode = useMemo(() => {
@@ -729,7 +735,10 @@ export default function CsmLineItemsEditor({
 
   // ── Print ───────────────────────────────────────────────────────────────────
 
-  const buildPrintHtml = useCallback(async (pc: (typeof printConfigs)[number]) => {
+  const buildPrintHtml = useCallback(async (
+    pc: (typeof printConfigs)[number],
+    options?: { skipAutoDocxDownload?: boolean },
+  ) => {
     let settings = printSettings;
     if (appId) {
       try {
@@ -824,16 +833,27 @@ export default function CsmLineItemsEditor({
         }
       }
 
-      if (pc.print_docx?.allow_download_docx) {
+      const docxFileName = (header.so_bao_gia ? `BaoGia_${header.so_bao_gia}` : "document") + ".docx";
+      if (pc.print_docx?.allow_download_docx && !options?.skipAutoDocxDownload) {
         try {
           const ab = await renderDocxTemplateToArrayBuffer(templateUrl, docxData);
-          downloadDocx(ab, (header.so_bao_gia ? `BaoGia_${header.so_bao_gia}` : "document") + ".docx");
+          downloadDocx(ab, docxFileName);
         } catch {
           // Keep preview/export flow even if download fails.
         }
       }
 
       html = await renderDocxTemplateToHtml(templateUrl, docxData);
+      return {
+        ok: true as const,
+        html,
+        fileName,
+        docxDownload: {
+          templateUrl,
+          data: docxData,
+          fileName: docxFileName,
+        },
+      };
     } else {
       const rawFn = m_configs.trigger?.[pc.trigger_key];
       if (!rawFn) {
@@ -859,13 +879,14 @@ export default function CsmLineItemsEditor({
       } catch { /* keep default */ }
     }
 
-    return { ok: true as const, html, fileName };
+    return { ok: true as const, html, fileName, docxDownload: undefined };
   }, [m_configs.trigger, decrypt, groups, columns, header, calc, printSettings, appId, tenantAppId, totalConfigs, uiLang]);
 
   const handleOpenPrintPreview = useCallback(async (pc: (typeof printConfigs)[number]) => {
     setPreviewLoading(true);
     try {
-      const result = await buildPrintHtml(pc);
+      // Preview/print should stay PDF-first; DOCX is available via explicit download button.
+      const result = await buildPrintHtml(pc, { skipAutoDocxDownload: true });
       if (!result.ok) {
         message.warning(result.message ?? "Không tạo được bản xem trước");
         return;
@@ -874,6 +895,7 @@ export default function CsmLineItemsEditor({
       setPreviewFileName(result.fileName);
       setPreviewLabel(resolveTriLangLabel(pc, uiLang, ["label"]) || pc.trigger_key);
       setPreviewPdfOptions(pc.print_pdf);
+      setPreviewDocxDownload(result.docxDownload ?? null);
       setPreviewOpen(true);
     } catch (e: any) {
       message.error("Lỗi tạo bản xem trước: " + (e?.message ?? String(e)));
@@ -881,6 +903,32 @@ export default function CsmLineItemsEditor({
       setPreviewLoading(false);
     }
   }, [buildPrintHtml, uiLang]);
+
+  const handleQuickDownloadDocx = useCallback(async (pc: (typeof printConfigs)[number]) => {
+    setDownloadDocxLoading(true);
+    try {
+      const result = await buildPrintHtml(pc, { skipAutoDocxDownload: true });
+      if (!result.ok) {
+        message.warning(result.message ?? "Không tạo được dữ liệu DOCX");
+        return;
+      }
+      if (!result.docxDownload) {
+        message.warning("Mẫu in này không dùng engine DOCX");
+        return;
+      }
+
+      const output = await renderDocxTemplateToArrayBuffer(
+        result.docxDownload.templateUrl,
+        result.docxDownload.data,
+      );
+      downloadDocx(output, result.docxDownload.fileName || "document.docx");
+      message.success("Đã tải DOCX");
+    } catch (e: any) {
+      message.error("Lỗi tải DOCX: " + (e?.message ?? String(e)));
+    } finally {
+      setDownloadDocxLoading(false);
+    }
+  }, [buildPrintHtml]);
 
   const handleExportPreviewPdf = useCallback(async () => {
     setExportLoading(true);
@@ -905,6 +953,27 @@ export default function CsmLineItemsEditor({
       message.error("Lỗi in: " + (e?.message ?? String(e)));
     }
   }, [previewHtml]);
+
+  const handleDownloadPreviewDocx = useCallback(async () => {
+    if (!previewDocxDownload) {
+      message.warning("Bản xem trước này không dùng engine DOCX");
+      return;
+    }
+
+    setDownloadDocxLoading(true);
+    try {
+      const output = await renderDocxTemplateToArrayBuffer(
+        previewDocxDownload.templateUrl,
+        previewDocxDownload.data,
+      );
+      downloadDocx(output, previewDocxDownload.fileName || "document.docx");
+      message.success("Đã tải DOCX");
+    } catch (e: any) {
+      message.error("Lỗi tải DOCX: " + (e?.message ?? String(e)));
+    } finally {
+      setDownloadDocxLoading(false);
+    }
+  }, [previewDocxDownload]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -939,14 +1008,22 @@ export default function CsmLineItemsEditor({
             </Button>
           )}
           {printConfigs.map(pc => (
-            <Button
-              key={pc.trigger_key}
-              icon={<EyeOutlined />}
-              loading={previewLoading}
-              onClick={() => handleOpenPrintPreview(pc)}
-            >
-              {resolveTriLangLabel(pc, uiLang, ["label"])}
-            </Button>
+            <React.Fragment key={pc.trigger_key}>
+              <Button
+                icon={<EyeOutlined />}
+                loading={previewLoading}
+                onClick={() => handleOpenPrintPreview(pc)}
+              >
+                {resolveTriLangLabel(pc, uiLang, ["label"])}
+              </Button>
+              <Button
+                icon={<SaveOutlined />}
+                loading={downloadDocxLoading}
+                onClick={() => handleQuickDownloadDocx(pc)}
+              >
+                Tải DOCX
+              </Button>
+            </React.Fragment>
           ))}
         </Space>
       </Card>
@@ -954,13 +1031,25 @@ export default function CsmLineItemsEditor({
       <Modal
         title={`Xem trước — ${previewLabel}`}
         open={previewOpen}
-        onCancel={() => setPreviewOpen(false)}
+        onCancel={() => {
+          setPreviewOpen(false);
+          setPreviewDocxDownload(null);
+        }}
         width={Math.max(860, previewViewportWidth + 100)}
         destroyOnClose
         footer={[
           <Button key="close" onClick={() => setPreviewOpen(false)}>
             Đóng
           </Button>,
+          previewDocxDownload ? (
+            <Button
+              key="docx"
+              onClick={handleDownloadPreviewDocx}
+              loading={downloadDocxLoading}
+            >
+              Tải DOCX
+            </Button>
+          ) : null,
           <Button key="print" icon={<PrinterOutlined />} onClick={handlePreviewBrowserPrint}>
             In
           </Button>,

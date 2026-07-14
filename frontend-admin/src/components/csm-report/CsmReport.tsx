@@ -164,6 +164,8 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
   const dateLocaleFormat = useMemo(() => resolveDateLocaleFormat(i18n.language), [i18n.language]);
   const [form] = Form.useForm();
   const [reportSrc, setReportSrc] = useState<string>("");
+  const [renderedDocxFile, setRenderedDocxFile] = useState<{ buffer: ArrayBuffer; fileName: string } | null>(null);
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const [formUpdated, setFormUpdated] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -495,6 +497,70 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
 
   async function createReport(datas_report: any, dai: number, cao: number, kieu_in: "p" | "l" | string) {
     try {
+      const designSpecRaw = (datas_report && typeof datas_report === "object")
+        ? (datas_report.reportDesignSpec || datas_report.report_design_spec || datas_report.designSpec || datas_report.design_spec)
+        : undefined;
+      const designSpec = typeof designSpecRaw === "string"
+        ? (() => { try { return JSON.parse(designSpecRaw); } catch { return undefined; } })()
+        : designSpecRaw;
+      if (designSpec && typeof designSpec === "object") {
+        const renderResp: any = await request.post("ai-local/report/render-template", {
+          json: {
+            appId: effectiveAppId,
+            outputName: `report_${Date.now()}.pdf`,
+            returnBase64: false,
+            data: datas_report,
+            reportDesignSpec: designSpec,
+            templatePath: String(m_configs.report_name || "").trim() || undefined,
+          },
+          timeout: 180000,
+          ignoreLoading: true,
+          retry: { limit: 0 },
+        } as any).json();
+
+        const renderResult = renderResp?.result || renderResp || {};
+        const renderSuccess = renderResult?.success !== false;
+        const pdfPathRaw = String(renderResult?.pdfUrl || renderResult?.pdfPath || "").trim();
+        if (renderSuccess && pdfPathRaw) {
+          const pdfUrl = pdfPathRaw.startsWith("/") ? pdfPathRaw : `/${pdfPathRaw}`;
+          setReportSrc(pdfUrl);
+          return;
+        }
+      }
+
+      const overlayCfg = (datas_report && typeof datas_report === "object")
+        ? ((datas_report.__pdfOverlay || datas_report.pdf_overlay) as Record<string, any> | undefined)
+        : undefined;
+      if (overlayCfg && typeof overlayCfg === "object") {
+        const overlays = Array.isArray(overlayCfg.overlays) ? overlayCfg.overlays : [];
+        const templatePdfPath = String(overlayCfg.templatePdfPath || overlayCfg.pdfPath || "").trim();
+        const templatePdfBase64 = String(overlayCfg.templatePdfBase64 || overlayCfg.pdfBase64 || "").trim();
+        if ((templatePdfPath || templatePdfBase64) && overlays.length > 0) {
+          const outputName = String(overlayCfg.outputName || `overlay_${Date.now()}.pdf`).trim();
+          const overlayResp: any = await request.post("ai-local/report/pdf-overlay", {
+            json: {
+              appId: effectiveAppId,
+              pdfPath: templatePdfPath || undefined,
+              pdfBase64: templatePdfBase64 || undefined,
+              overlays,
+              outputName,
+            },
+            timeout: 180000,
+            ignoreLoading: true,
+            retry: { limit: 0 },
+          } as any).json();
+
+          const overlayResult = overlayResp?.result || overlayResp || {};
+          const overlaySuccess = overlayResult?.success !== false;
+          const pdfPathRaw = String(overlayResult?.pdfUrl || overlayResult?.pdfPath || "").trim();
+          if (overlaySuccess && pdfPathRaw) {
+            const pdfUrl = pdfPathRaw.startsWith("/") ? pdfPathRaw : `/${pdfPathRaw}`;
+            setReportSrc(pdfUrl);
+            return;
+          }
+        }
+      }
+
       const templateUrl: string = m_configs.report_name;
       if (!templateUrl) {
         message.error("Không có mẫu báo cáo (report_name)");
@@ -547,11 +613,13 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
 
       await doc.renderAsync(datas_report);
       const output = doc.getZip().generate({ type: "arraybuffer", compression: "DEFLATE", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+      const templateBaseName = String(templateUrl || "").split("?")[0].split("/").pop() || "report.docx";
+      const renderedName = String(templateBaseName).replace(/\.docx?$/i, "") + "_rendered.docx";
+      setRenderedDocxFile({ buffer: output, fileName: renderedName });
 
       // Prefer server-side LibreOffice conversion to keep PDF layout identical to DOCX.
       try {
-        const templateBase = String(templateUrl || "").split("?")[0].split("/").pop() || "report.docx";
-        const outputName = String(templateBase).replace(/\.docx?$/i, "") + `_${Date.now()}.pdf`;
+        const outputName = String(templateBaseName).replace(/\.docx?$/i, "") + `_${Date.now()}.pdf`;
         const convertResp: any = await request.post("ai-local/report/docx-to-pdf", {
           json: {
             appId: effectiveAppId,
@@ -567,10 +635,16 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
         const convertResult = convertResp?.result || convertResp || {};
         const serverSuccess = convertResult?.success !== false;
         const pdfPathRaw = String(convertResult?.pdfUrl || convertResult?.pdfPath || "").trim();
-        if (serverSuccess && pdfPathRaw) {
+        const isPdfResult = /^data:application\/pdf/i.test(pdfPathRaw)
+          || /\.pdf(?:$|\?)/i.test(pdfPathRaw)
+          || /\/pdf\//i.test(pdfPathRaw);
+        if (serverSuccess && pdfPathRaw && isPdfResult) {
           const pdfUrl = pdfPathRaw.startsWith("/") ? pdfPathRaw : `/${pdfPathRaw}`;
           setReportSrc(pdfUrl);
           return;
+        }
+        if (serverSuccess && pdfPathRaw && !isPdfResult) {
+          console.warn("[CsmReport] DOCX->PDF endpoint returned non-pdf path, fallback to html2pdf", pdfPathRaw);
         }
       } catch (serverConvertErr: any) {
         console.warn("[CsmReport] server DOCX->PDF convert failed, fallback to html2pdf", serverConvertErr);
@@ -608,6 +682,53 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
       console.error(e);
       message.error(e?.message || "Lỗi tạo báo cáo");
     }
+  }
+
+  function downloadDocxBuffer(buffer: ArrayBuffer, fileName: string) {
+    const blob = new Blob([buffer], {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    const url = URL.createObjectURL(blob);
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  async function onDownloadTemplateDocx() {
+    const templateUrl: string = String(m_configs.report_name || "").trim();
+    if (!templateUrl) {
+      message.warning("Không có mẫu báo cáo (report_name)");
+      return;
+    }
+
+    setDownloadingTemplate(true);
+    try {
+      const templateBuffer = await fetchArrayBuffer(templateUrl);
+      const baseName = String(templateUrl).split("?")[0].split("/").pop() || "template.docx";
+      const fileName = /\.docx$/i.test(baseName) ? baseName : `${baseName}.docx`;
+      downloadDocxBuffer(templateBuffer, fileName);
+      message.success("Đã tải mẫu DOCX");
+    } catch (err: any) {
+      message.error(err?.message || "Không tải được mẫu DOCX");
+    } finally {
+      setDownloadingTemplate(false);
+    }
+  }
+
+  function onDownloadRenderedDocx() {
+    if (!renderedDocxFile) {
+      message.warning("Chưa có file DOCX đã render từ dữ liệu thật. Hãy bấm Xem trước.");
+      return;
+    }
+    downloadDocxBuffer(renderedDocxFile.buffer, renderedDocxFile.fileName);
+    message.success("Đã tải DOCX dữ liệu thật để đối chiếu với PDF");
   }
 
   async function onViewReport() {
@@ -743,9 +864,17 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
             {fields.map(renderField)}
           </Space>
           <div style={{ marginTop: 12 }}>
-            <Button type="primary" onClick={onViewReport}>
-              Xem
-            </Button>
+            <Space>
+              <Button type="primary" onClick={onViewReport}>
+                Xem
+              </Button>
+              <Button onClick={onDownloadTemplateDocx} loading={downloadingTemplate}>
+                Tải mẫu DOCX
+              </Button>
+              <Button onClick={onDownloadRenderedDocx} disabled={!renderedDocxFile}>
+                Tải DOCX dữ liệu thật
+              </Button>
+            </Space>
           </div>
         </Form>
       </div>

@@ -1858,24 +1858,29 @@
     var role = m[1].toUpperCase();
     var tail = m[2];
 
-    if (mq === "SP_GET3_DD3") {
+    var isGet3Dd = mq === "SP_GET3_DD" || mq === "SP_GET3_DD3";
+    var isGet2Dd = mq === "SP_GET2_DD" || mq === "SP_GET2_DD3";
+    var isGet3Bl = mq === "SP_GET3_BL" || mq === "SP_GET3_BL3";
+    var isGet2Bl = mq === "SP_GET2_BL" || mq === "SP_GET2_BL3";
+
+    if (isGet3Dd) {
       if (tail === "dau" && (role === "D" || role === "P" || role === "T")) return role + "_so2";
       if (role === "B" && tail === "dau") return "B_so5";
       if (role === "B" && tail === "so2") return "B_so6";
       if (role === "B" && tail === "so3") return "B_so7";
     }
 
-    if (mq === "SP_GET2_DD3") {
+    if (isGet2Dd) {
       if (tail === "so2" && (role === "D" || role === "P" || role === "T")) return role + "_dau";
       if (role === "B" && tail === "so5") return "B_dau";
       if (role === "B" && tail === "so6") return "B_so2";
       if (role === "B" && tail === "so7") return "B_so3";
     }
 
-    if (mq === "SP_GET3_BL3" && role === "B" && tail === "dau") return "B_so5";
-    if (mq === "SP_GET2_BL3" && role === "B" && tail === "so5") return "B_dau";
+    if (isGet3Bl && role === "B" && tail === "dau") return "B_so5";
+    if (isGet2Bl && role === "B" && tail === "so5") return "B_dau";
 
-    if (he === 3 && mq === "SP_GET3_BL3" && (role === "D" || role === "P" || role === "T") && tail === "dau") {
+    if (he === 3 && isGet3Bl && (role === "D" || role === "P" || role === "T") && tail === "dau") {
       return role + "_so2";
     }
 
@@ -1929,8 +1934,8 @@
     };
   }
 
-  function parseLegacyLoaiTimFieldPart(rawLoai) {
-    return parseLegacyLoaiTimMeta(rawLoai).fieldPart;
+  function parseLegacyLoaiTimFieldPart(rawLoai, heThong) {
+    return parseLegacyLoaiTimMeta(rawLoai, heThong).fieldPart;
   }
 
   function parseLegacyLoaiTimMaQuery(rawLoai, heThong) {
@@ -1958,20 +1963,20 @@
     return out;
   }
 
-  function getLegacyQueryFieldList(queryValue, heThong) {
+  function getLegacyQueryBaseFieldList(queryValue, heThong) {
     var he = Number(heThong || 2) === 3 ? 3 : 2;
     var maQuery = String(parseLegacyLoaiTimMaQuery(queryValue, he) || "").toUpperCase();
     var baseFields = [];
-      if (maQuery === "SP_GET2_DD3") {
+      if (maQuery === "SP_GET2_DD" || maQuery === "SP_GET2_DD3") {
         baseFields = ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi", "B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"];
       }
-      else if (maQuery === "SP_GET2_BL3") {
+      else if (maQuery === "SP_GET2_BL" || maQuery === "SP_GET2_BL3") {
         baseFields = ["D_dau"].concat(buildLegacyRangeFieldNames("D_so", 2, 17), ["D_duoi", "P_dau"]).concat(buildLegacyRangeFieldNames("P_so", 2, 17), ["P_duoi", "T_dau"]).concat(buildLegacyRangeFieldNames("T_so", 2, 17), ["T_duoi", "B_dau"]).concat(buildLegacyRangeFieldNames("B_so", 2, 26), ["B_duoi"]);
       }
-      else if (maQuery === "SP_GET3_DD3") {
+      else if (maQuery === "SP_GET3_DD" || maQuery === "SP_GET3_DD3") {
         baseFields = ["D_so2", "D_duoi", "P_so2", "P_duoi", "T_so2", "T_duoi", "B_so5", "B_so6", "B_so7", "B_duoi"];
       }
-      else if (maQuery === "SP_GET3_BL3") {
+      else if (maQuery === "SP_GET3_BL" || maQuery === "SP_GET3_BL3") {
         baseFields = buildLegacyRangeFieldNames("D_so", 2, 17).concat(["D_duoi"]).concat(buildLegacyRangeFieldNames("P_so", 2, 17), ["P_duoi"]).concat(buildLegacyRangeFieldNames("T_so", 2, 17), ["T_duoi"]).concat(buildLegacyRangeFieldNames("B_so", 5, 26), ["B_duoi"]);
       }
       if (!baseFields.length) {
@@ -1979,8 +1984,14 @@
           ? ["D_so2", "D_duoi", "P_so2", "P_duoi", "T_so2", "T_duoi", "B_so5", "B_so6", "B_so7", "B_duoi"]
           : ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi", "B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"];
       }
+      return baseFields;
+  }
 
-      var fieldTokens = String(parseLegacyLoaiTimFieldPart(queryValue || "") || "")
+  function getLegacyQueryFieldList(queryValue, heThong) {
+    var he = Number(heThong || 2) === 3 ? 3 : 2;
+    var baseFields = getLegacyQueryBaseFieldList(queryValue, he);
+
+      var fieldTokens = String(parseLegacyLoaiTimFieldPart(queryValue || "", he) || "")
         .split("-")
         .map(function (part) { return String(part || "").trim().toLowerCase(); })
         .filter(Boolean);
@@ -3898,7 +3909,7 @@
     }
 
     function resolveLegacyTongHopFieldLocList(queryValue) {
-      return parseLegacyLoaiTimFieldPart(queryValue || "D_-P_-T_-B_")
+      return parseLegacyLoaiTimFieldPart(queryValue || "D_-P_-T_-B_", legacyHeThong)
         .split("-")
         .map(function (part) { return String(part || "").trim(); })
         .filter(Boolean);
@@ -5785,8 +5796,9 @@
       return selected;
     }
 
-    function getLegacySoLauRaTokenFields(queryValue, heThong, dataRows) {
-      var queryFields = getLegacyQueryFieldList(queryValue, heThong);
+    function getLegacySoLauRaTokenFields(queryValue, heThong, dataRows, options) {
+      var cfg = options || {};
+      var queryFields = cfg.fullFields ? getLegacyAllNormalizedFieldKeys() : getLegacyQueryFieldList(queryValue, heThong);
 
       function resolveQueryFieldsForRows(expectedFields, dataRows) {
         var expected = Array.isArray(expectedFields) ? expectedFields : [];
@@ -5817,7 +5829,7 @@
       }
 
       queryFields = resolveQueryFieldsForRows(queryFields, dataRows);
-      var fieldParts = parseLegacyLoaiTimFieldPart(queryValue).split("-").map(function (part) {
+      var fieldParts = cfg.fullFields ? [] : parseLegacyLoaiTimFieldPart(queryValue, heThong).split("-").map(function (part) {
         return String(part || "").trim().toLowerCase();
       }).filter(Boolean);
 
@@ -6332,7 +6344,7 @@
           if (bymd && !dayRowMap[bymd]) dayRowMap[bymd] = baseRows[bri];
         }
       }
-      var tokenFields = getLegacySoLauRaTokenFields(cfg.queryValue, Number(cfg.heThong || 2) === 3 ? 3 : 2, baseRows);
+      var tokenFields = getLegacySoLauRaTokenFields(cfg.queryValue, Number(cfg.heThong || 2) === 3 ? 3 : 2, baseRows, { fullFields: !!cfg.fullTokenFields });
 
       var rowsDesc = (Array.isArray(baseRows) ? baseRows : []).map(function (row) {
         return {
@@ -6455,7 +6467,7 @@
       }
 
       var expectedCols = dedupFields(
-        getLegacyQueryFieldList(cfg.queryValue || queryBL, heThong)
+        getLegacyQueryFieldList(cfg.queryValue || queryBL, heThong).concat(getLegacyAllNormalizedFieldKeys())
       );
       var actualMap = {};
       for (var ar = 0; ar < rows.length; ar += 1) {
@@ -6470,37 +6482,68 @@
       if (!colA.length) colA = expectedCols.slice();
 
       var DD3D_FIELDS = heThong === 3
-        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true, B_so5: true, B_so6: true, B_so7: true, B_duoi: true }
+        ? { D_dau: true, D_so2: true, D_duoi: true, P_dau: true, P_so2: true, P_duoi: true, T_dau: true, T_so2: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so5: true, B_so6: true, B_so7: true, B_duoi: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true, B_duoi: true };
       var DDMB_FIELDS = heThong === 3
-        ? { B_so5: true, B_so6: true, B_so7: true, B_duoi: true }
+        ? { B_dau: true, B_so2: true, B_so3: true, B_so5: true, B_so6: true, B_so7: true, B_duoi: true }
         : { B_dau: true, B_so2: true, B_so3: true, B_so4: true, B_duoi: true };
       var DAUB_FIELDS = heThong === 3
-        ? { B_so5: true, B_so6: true, B_so7: true }
+        ? { B_dau: true, B_so2: true, B_so3: true, B_so5: true, B_so6: true, B_so7: true }
         : { B_dau: true, B_so2: true, B_so3: true, B_so4: true };
       var DD2D_FIELDS = heThong === 3
-        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true }
+        ? { D_dau: true, D_so2: true, D_duoi: true, P_dau: true, P_so2: true, P_duoi: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true };
       var DD3MN_FIELDS = heThong === 3
-        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true }
+        ? { D_dau: true, D_so2: true, D_duoi: true, P_dau: true, P_so2: true, P_duoi: true, T_dau: true, T_so2: true, T_duoi: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true };
       var DDNDB_FIELDS = heThong === 3
-        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, B_so5: true, B_so6: true, B_so7: true }
+        ? { D_dau: true, D_so2: true, D_duoi: true, P_dau: true, P_so2: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so5: true, B_so6: true, B_so7: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true };
       var DDNDB2_FIELDS = heThong === 3
-        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, B_so5: true, B_so6: true, B_so7: true }
+        ? { D_dau: true, D_so2: true, D_duoi: true, P_dau: true, P_so2: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so5: true, B_so6: true, B_so7: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true };
       var DDNDB3_FIELDS = heThong === 3
-        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true, B_so5: true, B_so6: true, B_so7: true }
+        ? { D_dau: true, D_so2: true, D_duoi: true, P_dau: true, P_so2: true, P_duoi: true, T_dau: true, T_so2: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so5: true, B_so6: true, B_so7: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true };
-      var DDC_FIELDS = heThong === 3 ? { D_so2: true, D_duoi: true } : { D_dau: true, D_duoi: true };
-      var DAUCP_FIELDS = heThong === 3 ? { D_so2: true, P_so2: true } : { D_dau: true, P_dau: true };
-      var DDP_FIELDS = heThong === 3 ? { P_so2: true, P_duoi: true } : { P_dau: true, P_duoi: true };
-      var DAI3_FIELDS = heThong === 3 ? { T_so2: true, T_duoi: true } : { T_dau: true, T_duoi: true };
+      var DDC_FIELDS = heThong === 3 ? { D_dau: true, D_so2: true, D_duoi: true } : { D_dau: true, D_duoi: true };
+      var DAUCP_FIELDS = heThong === 3 ? { D_dau: true, D_so2: true, P_dau: true, P_so2: true } : { D_dau: true, P_dau: true };
+      var DDP_FIELDS = heThong === 3 ? { P_dau: true, P_so2: true, P_duoi: true } : { P_dau: true, P_duoi: true };
+      var DAI3_FIELDS = heThong === 3 ? { T_dau: true, T_so2: true, T_duoi: true } : { T_dau: true, T_duoi: true };
       var DUOICP_FIELDS = { D_duoi: true, P_duoi: true };
       var DD3NB_FIELDS = heThong === 3
-        ? { D_so2: true, D_duoi: true, P_so2: true, P_duoi: true, T_so2: true, T_duoi: true, B_so5: true, B_so6: true, B_so7: true, B_duoi: true }
+        ? { D_dau: true, D_so2: true, D_duoi: true, P_dau: true, P_so2: true, P_duoi: true, T_dau: true, T_so2: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so5: true, B_so6: true, B_so7: true, B_duoi: true }
         : { D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_so2: true, B_so3: true, B_so4: true, B_duoi: true };
+
+      function isLegacyNamBacField(fieldName, station, role) {
+        var name = String(fieldName || "").trim();
+        if (!name) return false;
+        var headFields = heThong === 3
+          ? {
+              D: { D_dau: true, D_so2: true },
+              P: { P_dau: true, P_so2: true },
+              T: { T_dau: true, T_so2: true },
+              B: { B_dau: true, B_so2: true, B_so3: true, B_so5: true, B_so6: true, B_so7: true }
+            }
+          : {
+              D: { D_dau: true },
+              P: { P_dau: true },
+              T: { T_dau: true },
+              B: { B_dau: true, B_so2: true, B_so3: true, B_so4: true }
+            };
+        var tailFields = {
+          D: { D_duoi: true },
+          P: { P_duoi: true },
+          T: { T_duoi: true },
+          B: { B_duoi: true }
+        };
+        if (role === "dau") {
+          return !!(headFields[station] && headFields[station][name]);
+        }
+        if (role === "duoi") {
+          return !!(tailFields[station] && tailFields[station][name]);
+        }
+        return false;
+      }
 
       var fieldProfiles = {};
       for (var ci = 0; ci < colA.length; ci += 1) {
@@ -6515,7 +6558,7 @@
           blmb: startsWith(fieldName, "B_"),
           dd3d: !!DD3D_FIELDS[fieldName],
           ddmb: !!DDMB_FIELDS[fieldName],
-          daub: !!DAUB_FIELDS[fieldName],
+          daub: isLegacyNamBacField(fieldName, "B", "dau"),
           dd2d: !!DD2D_FIELDS[fieldName],
           mndai3: !!DD3MN_FIELDS[fieldName],
           ddndb: !!DDNDB_FIELDS[fieldName],
@@ -6527,17 +6570,17 @@
           ddp: !!DDP_FIELDS[fieldName],
           ddd3: !!DAI3_FIELDS[fieldName],
           duoicp: !!DUOICP_FIELDS[fieldName],
-          dauc: fieldName === (heThong === 3 ? "D_so2" : "D_dau"),
-          daup: fieldName === (heThong === 3 ? "P_so2" : "P_dau"),
-          duoic: fieldName === "D_duoi",
-          duoip: fieldName === "P_duoi",
-          daut3: fieldName === (heThong === 3 ? "T_so2" : "T_dau"),
-          duoit3: fieldName === "T_duoi",
-          duoib: fieldName === "B_duoi",
+          dauc: isLegacyNamBacField(fieldName, "D", "dau"),
+          daup: isLegacyNamBacField(fieldName, "P", "dau"),
+          duoic: isLegacyNamBacField(fieldName, "D", "duoi"),
+          duoip: isLegacyNamBacField(fieldName, "P", "duoi"),
+          daut3: isLegacyNamBacField(fieldName, "T", "dau"),
+          duoit3: isLegacyNamBacField(fieldName, "T", "duoi"),
+          duoib: isLegacyNamBacField(fieldName, "B", "duoi"),
           dd3nb: !!DD3NB_FIELDS[fieldName],
           blnb3: startsWith(fieldName, "D_") || startsWith(fieldName, "P_") || startsWith(fieldName, "T_") || startsWith(fieldName, "B_"),
-          dauc_duoip: fieldName === "D_dau" || fieldName === "P_duoi",
-          daup_duoic: fieldName === "P_dau" || fieldName === "D_duoi"
+          dauc_duoip: isLegacyNamBacField(fieldName, "D", "dau") || isLegacyNamBacField(fieldName, "P", "duoi"),
+          daup_duoic: isLegacyNamBacField(fieldName, "P", "dau") || isLegacyNamBacField(fieldName, "D", "duoi")
         };
       }
 
@@ -6552,40 +6595,38 @@
             DD_4_NHOM: 0, DD_3_NAM_B_DAU: 0, DD_3_NAM: 0, DD_3_NB: 0, DD_3_NB_DAU: 0,
             DD_2_NAM_B_DAU: 0, DD_2_NAM: 0, DD_C: 0, DD_P: 0, DD_T: 0, DD_B: 0,
             BL_4_NHOM: 0, BL_3_NAM: 0, BL_3_NB: 0, BL_2_NAM: 0, BL_C: 0, BL_P: 0, BL_T: 0, BL_B: 0
-          },
-          fg: {
-            DAU_CP: false, DAU_C: false, DAU_P: false, DAU_T: false, DAU_B: false,
-            DUOI_CP: false, DUOI_C: false, DUOI_P: false, DUOI_T: false, DUOI_B: false,
-            DAU_C_DUOI_P: false, DAU_P_DUOI_C: false,
-            DD_4_NHOM: false, DD_3_NAM_B_DAU: false, DD_3_NAM: false, DD_3_NB: false, DD_3_NB_DAU: false,
-            DD_2_NAM_B_DAU: false, DD_2_NAM: false, DD_C: false, DD_P: false, DD_T: false, DD_B: false,
-            BL_4_NHOM: false, BL_3_NAM: false, BL_3_NB: false, BL_2_NAM: false, BL_C: false, BL_P: false, BL_T: false, BL_B: false
           }
         };
       });
 
-      function isDone(fg) {
-        return fg.DD_3_NB && fg.DD_2_NAM && fg.DD_3_NAM && fg.DD_B &&
-          fg.DD_3_NB_DAU &&
-          fg.DUOI_B && fg.DAU_B && fg.DD_C && fg.DD_P && fg.DD_T &&
-          fg.DAU_T && fg.DUOI_T && fg.DAU_C && fg.DAU_P && fg.DAU_CP &&
-          fg.DUOI_C && fg.DUOI_P && fg.DUOI_CP && fg.BL_2_NAM && fg.BL_3_NAM &&
-          fg.BL_C && fg.BL_P && fg.BL_T && fg.DD_2_NAM_B_DAU && fg.DD_3_NAM_B_DAU &&
-          fg.DD_4_NHOM && fg.BL_4_NHOM && fg.BL_B && fg.BL_3_NB && fg.DAU_C_DUOI_P && fg.DAU_P_DUOI_C;
+      function makeNamBacGapTracker(result) {
+        var done = {};
+        function mark(key, hit) {
+          if (done[key]) return;
+          if (hit) {
+            done[key] = true;
+            return;
+          }
+          result[key] = Number(result[key] || 0) + 1;
+        }
+        return mark;
       }
+
+      var trackers = states.map(function (st) {
+        return makeNamBacGapTracker(st.result);
+      });
 
       for (var r = 0; r < rows.length; r += 1) {
         var day = rows[r] || {};
-        var anyPending = false;
 
         for (var s = 0; s < states.length; s += 1) {
           var st = states[s];
-          var fg = st.fg;
           var rs = st.result;
-          if (isDone(fg)) continue;
-          anyPending = true;
+          var markGap = trackers[s];
           var dayDauC = false, dayDauP = false, dayDauT = false, dayDauB = false;
           var dayDuoiC = false, dayDuoiP = false, dayDuoiT = false, dayDuoiB = false;
+          var dayBlNb = false, dayBlMn = false, dayBlDc = false, dayBlDp = false;
+          var dayBlD3 = false, dayBlMb = false, dayBl3Mn = false, dayBlNb3 = false;
 
           for (var c = 0; c < colA.length; c += 1) {
             var fieldName = colA[c];
@@ -6593,84 +6634,82 @@
             if (!value || !st.lookup[value]) continue;
 
             var fp = fieldProfiles[fieldName] || {};
-            if (fp.blnb) fg.BL_3_NB = true;
-            if (fp.blmn) fg.BL_2_NAM = true;
-            if (fp.bldc) fg.BL_C = true;
-            if (fp.bldp) fg.BL_P = true;
-            if (fp.bld3) fg.BL_T = true;
-            if (fp.blmb) fg.BL_B = true;
-            if (fp.bl3mn) fg.BL_3_NAM = true;
-            if (fp.dauc) { fg.DAU_C = true; dayDauC = true; }
-            if (fp.daup) { fg.DAU_P = true; dayDauP = true; }
-            if (fp.daut3) { fg.DAU_T = true; dayDauT = true; }
-            if (fp.daub) { fg.DAU_B = true; dayDauB = true; }
-            if (fp.duoic) { fg.DUOI_C = true; dayDuoiC = true; }
-            if (fp.duoip) { fg.DUOI_P = true; dayDuoiP = true; }
-            if (fp.duoit3) { fg.DUOI_T = true; dayDuoiT = true; }
-            if (fp.duoib) { fg.DUOI_B = true; dayDuoiB = true; }
-            if (fp.blnb3) fg.BL_4_NHOM = true;
+            if (fp.dauc) dayDauC = true;
+            if (fp.daup) dayDauP = true;
+            if (fp.daut3) dayDauT = true;
+            if (fp.daub) dayDauB = true;
+            if (fp.duoic) dayDuoiC = true;
+            if (fp.duoip) dayDuoiP = true;
+            if (fp.duoit3) dayDuoiT = true;
+            if (fp.duoib) dayDuoiB = true;
+            if (fp.blnb) dayBlNb = true;
+            if (fp.blmn) dayBlMn = true;
+            if (fp.bldc) dayBlDc = true;
+            if (fp.bldp) dayBlDp = true;
+            if (fp.bld3) dayBlD3 = true;
+            if (fp.blmb) dayBlMb = true;
+            if (fp.bl3mn) dayBl3Mn = true;
+            if (fp.blnb3) dayBlNb3 = true;
           }
 
-          var dayDauCp = dayDauC && dayDauP;
-          var dayDuoiCp = dayDuoiC && dayDuoiP;
-          var dayDdC = dayDauC && dayDuoiC;
-          var dayDdP = dayDauP && dayDuoiP;
-          var dayDdT = dayDauT && dayDuoiT;
-          var dayDdB = dayDauB && dayDuoiB;
-          var dayDd2Nam = dayDdC && dayDdP;
-          var dayDd3Nam = dayDd2Nam && dayDdT;
-          var dayDd3Nb = dayDd3Nam && dayDdB;
+          var dayHits = {
+            dauC: dayDauC,
+            dauP: dayDauP,
+            dauT: dayDauT,
+            dauB: dayDauB,
+            duoiC: dayDuoiC,
+            duoiP: dayDuoiP,
+            duoiT: dayDuoiT,
+            duoiB: dayDuoiB,
+            ddC: dayDauC || dayDuoiC,
+            ddP: dayDauP || dayDuoiP,
+            ddT: dayDauT || dayDuoiT,
+            ddB: dayDauB || dayDuoiB,
+            blC: dayBlDc,
+            blP: dayBlDp,
+            blT: dayBlD3,
+            blB: dayBlMb
+          };
 
-          fg.DAU_CP = fg.DAU_CP || dayDauCp;
-          fg.DUOI_CP = fg.DUOI_CP || dayDuoiCp;
-          fg.DD_C = fg.DD_C || dayDdC;
-          fg.DD_P = fg.DD_P || dayDdP;
-          fg.DD_T = fg.DD_T || dayDdT;
-          fg.DD_B = fg.DD_B || dayDdB;
-          fg.DD_2_NAM = fg.DD_2_NAM || dayDd2Nam;
-          fg.DD_3_NAM = fg.DD_3_NAM || dayDd3Nam;
-          fg.DD_3_NB = fg.DD_3_NB || dayDd3Nb;
-          fg.DD_2_NAM_B_DAU = fg.DD_2_NAM_B_DAU || (dayDd2Nam && dayDauB);
-          fg.DD_3_NAM_B_DAU = fg.DD_3_NAM_B_DAU || (dayDd3Nam && dayDauB);
-          fg.DD_3_NB_DAU = fg.DD_3_NB_DAU || (dayDd3Nb && dayDauB);
-          fg.DD_4_NHOM = fg.DD_4_NHOM || dayDd3Nb;
-          fg.DAU_C_DUOI_P = fg.DAU_C_DUOI_P || (dayDauC && dayDuoiP);
-          fg.DAU_P_DUOI_C = fg.DAU_P_DUOI_C || (dayDauP && dayDuoiC);
+          function hitAny(keys) {
+            for (var hi = 0; hi < keys.length; hi += 1) {
+              if (dayHits[keys[hi]]) return true;
+            }
+            return false;
+          }
 
-          if (!fg.BL_2_NAM) rs.BL_2_NAM += 1;
-          if (!fg.BL_3_NB) rs.BL_3_NB += 1;
-          if (!fg.BL_C) rs.BL_C += 1;
-          if (!fg.BL_P) rs.BL_P += 1;
-          if (!fg.BL_T) rs.BL_T += 1;
-          if (!fg.DD_2_NAM_B_DAU) rs.DD_2_NAM_B_DAU += 1;
-          if (!fg.DD_3_NAM_B_DAU) rs.DD_3_NAM_B_DAU += 1;
-          if (!fg.DD_3_NB_DAU) rs.DD_3_NB_DAU += 1;
-          if (!fg.BL_3_NAM) rs.BL_3_NAM += 1;
-          if (!fg.BL_B) rs.BL_B += 1;
-          if (!fg.DD_3_NB) rs.DD_3_NB += 1;
-          if (!fg.DD_2_NAM) rs.DD_2_NAM += 1;
-          if (!fg.DD_3_NAM) rs.DD_3_NAM += 1;
-          if (!fg.DD_B) rs.DD_B += 1;
-          if (!fg.DAU_C) rs.DAU_C += 1;
-          if (!fg.DAU_P) rs.DAU_P += 1;
-          if (!fg.DAU_CP) rs.DAU_CP += 1;
-          if (!fg.DUOI_C) rs.DUOI_C += 1;
-          if (!fg.DUOI_P) rs.DUOI_P += 1;
-          if (!fg.DAU_T) rs.DAU_T += 1;
-          if (!fg.DUOI_T) rs.DUOI_T += 1;
-          if (!fg.DUOI_CP) rs.DUOI_CP += 1;
-          if (!fg.DAU_B) rs.DAU_B += 1;
-          if (!fg.DUOI_B) rs.DUOI_B += 1;
-          if (!fg.DD_C) rs.DD_C += 1;
-          if (!fg.DD_P) rs.DD_P += 1;
-          if (!fg.DD_T) rs.DD_T += 1;
-          if (!fg.DD_4_NHOM) rs.DD_4_NHOM += 1;
-          if (!fg.BL_4_NHOM) rs.BL_4_NHOM += 1;
-          if (!fg.DAU_C_DUOI_P) rs.DAU_C_DUOI_P += 1;
-          if (!fg.DAU_P_DUOI_C) rs.DAU_P_DUOI_C += 1;
+          markGap("DAU_C", hitAny(["dauC"]));
+          markGap("DAU_P", hitAny(["dauP"]));
+          markGap("DAU_T", hitAny(["dauT"]));
+          markGap("DAU_B", hitAny(["dauB"]));
+          markGap("DAU_CP", hitAny(["dauC", "dauP"]));
+          markGap("DUOI_C", hitAny(["duoiC"]));
+          markGap("DUOI_P", hitAny(["duoiP"]));
+          markGap("DUOI_T", hitAny(["duoiT"]));
+          markGap("DUOI_B", hitAny(["duoiB"]));
+          markGap("DUOI_CP", hitAny(["duoiC", "duoiP"]));
+          markGap("DAU_C_DUOI_P", hitAny(["dauC", "duoiP"]));
+          markGap("DAU_P_DUOI_C", hitAny(["dauP", "duoiC"]));
+          markGap("DD_C", hitAny(["ddC"]));
+          markGap("DD_P", hitAny(["ddP"]));
+          markGap("DD_T", hitAny(["ddT"]));
+          markGap("DD_B", hitAny(["ddB"]));
+          markGap("DD_2_NAM", hitAny(["ddC", "ddP"]));
+          markGap("DD_3_NAM", hitAny(["ddC", "ddP", "ddT"]));
+          markGap("DD_3_NB", hitAny(["ddC", "ddP", "ddB"]));
+          markGap("DD_2_NAM_B_DAU", hitAny(["ddC", "ddP", "dauB"]));
+          markGap("DD_3_NAM_B_DAU", hitAny(["ddC", "ddP", "ddT", "dauB"]));
+          markGap("DD_3_NB_DAU", hitAny(["ddC", "ddP", "ddB"]));
+          markGap("DD_4_NHOM", hitAny(["ddC", "ddP", "ddT", "ddB"]));
+          markGap("BL_C", hitAny(["blC"]));
+          markGap("BL_P", hitAny(["blP"]));
+          markGap("BL_T", hitAny(["blT"]));
+          markGap("BL_B", hitAny(["blB"]));
+          markGap("BL_2_NAM", hitAny(["blC", "blP"]));
+          markGap("BL_3_NAM", hitAny(["blC", "blP", "blT"]));
+          markGap("BL_3_NB", hitAny(["blC", "blP", "blB"]));
+          markGap("BL_4_NHOM", hitAny(["blC", "blP", "blT", "blB"]));
         }
-
-        if (!anyPending) break;
       }
 
       return states.map(function (st) { return st.result; });
@@ -6715,6 +6754,18 @@
       });
 
       var queryFields = getLegacyQueryFieldList(queryValue, heThong);
+      var summaryBaseFields = getLegacyQueryBaseFieldList(queryValue, heThong);
+      var actualFieldMap = {};
+      rows.forEach(function (row) {
+        Object.keys(row || {}).forEach(function (key) {
+          var name = String(key || "").trim();
+          if (/^[DPTB]_(dau|duoi|so\d+)$/i.test(name)) actualFieldMap[name] = true;
+        });
+      });
+      var summaryFields = summaryBaseFields.filter(function (name) {
+        return !!actualFieldMap[String(name || "")];
+      });
+      if (!summaryFields.length) summaryFields = summaryBaseFields.slice();
 
       function tailOf(value) {
         var s = String(value || "").trim();
@@ -6838,9 +6889,10 @@
             }
           }
 
-          // Sub-group counts: hardcoded prefixes (mirrors PHP second loop)
-          for (var c2 = 0; c2 < queryFields.length; c2++) {
-            var fn2 = queryFields[c2];
+          // Sub-group counts widen only inside the same query family/system.
+          // DD stays DD, BL stays BL; choosing P_dau still needs T/B DD fields for D3/MB/3NB.
+          for (var c2 = 0; c2 < summaryFields.length; c2++) {
+            var fn2 = summaryFields[c2];
             if (!valueMatchesNoiDungLikePhp(NoiDung, row[fn2])) continue;
             var isD2 = fn2.indexOf("D_") >= 0;
             var isP2 = fn2.indexOf("P_") >= 0;

@@ -9,6 +9,11 @@ export interface PdfLayoutSpec {
   docSubtitle?: string;
   headerLines: string[];
   tableColumnHeaders: string[];
+  /** Layout có vẻ là bảng grid có border trong PDF gốc. */
+  tableGridLikely: boolean;
+  /** Kích thước trang PDF gốc dùng để map tọa độ overlay. */
+  pageWidth?: number;
+  pageHeight?: number;
   showPrice: boolean;
   showGroupSubtotal: boolean;
   sections: Array<{ kind: string; title: string; preview: string }>;
@@ -37,6 +42,7 @@ export interface PdfLayoutExtractConfig {
 }
 
 type PositionedText = { text: string; x: number; y: number; page: number };
+export type PdfLineBox = { text: string; x: number; y: number; page: number };
 
 const SECTION_MARKERS: Array<{ kind: string; patterns: RegExp[] }> = [
   { kind: "notes", patterns: [/^ghi chú/i, /^lưu ý/i] },
@@ -98,6 +104,34 @@ export function groupPdfTextIntoLines(items: Array<{ str?: string; transform?: n
   return lines;
 }
 
+export function groupPdfTextIntoLineBoxes(items: Array<{ str?: string; transform?: number[] }>, page: number): PdfLineBox[] {
+  const buckets = new Map<number, PositionedText[]>();
+  for (const item of items) {
+    const text = String(item?.str ?? "").trim();
+    if (!text) continue;
+    const t = item.transform ?? [];
+    const x = Number(t[4] ?? 0);
+    const y = roundY(Number(t[5] ?? 0));
+    const list = buckets.get(y) ?? [];
+    list.push({ text, x, y, page });
+    buckets.set(y, list);
+  }
+  const ys = [...buckets.keys()].sort((a, b) => b - a);
+  const out: PdfLineBox[] = [];
+  for (const y of ys) {
+    const list = (buckets.get(y) ?? []).sort((a, b) => a.x - b.x);
+    const text = list.map((p) => p.text).join(" ").replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    out.push({
+      text,
+      x: list.length ? list[0].x : 0,
+      y,
+      page,
+    });
+  }
+  return out;
+}
+
 function pickDocTitle(lines: string[], cfg?: PdfLayoutExtractConfig): string | undefined {
   const titlePatterns = compileRegexList(cfg?.doc_title_patterns);
   if (titlePatterns.length) {
@@ -134,6 +168,12 @@ function pickTableHeaders(lines: string[], cfg?: PdfLayoutExtractConfig): string
     }
   }
   return [];
+}
+
+function detectTableGridLikely(lines: string[], headers: string[], showPrice: boolean): boolean {
+  if (headers.length >= 4) return true;
+  if (!showPrice) return headers.length >= 3 || lines.some((line) => /\b(tt|stt|đơn giá|thành tiền|số lượng)\b/i.test(line));
+  return headers.length >= 3 && lines.some((line) => /\b(tên|quy cách|đơn vị|đơn giá|thành tiền)\b/i.test(line));
 }
 
 function detectSections(lines: string[], cfg?: PdfLayoutExtractConfig): PdfLayoutSpec["sections"] {
@@ -250,6 +290,7 @@ export function buildPdfLayoutSpec(
   const sections = detectSections(orderedLines, cfg);
   const signatureLabels = detectSignatures(orderedLines, cfg);
   const headerLines = extractHeaderLines(orderedLines, cfg);
+  const tableGridLikely = detectTableGridLikely(orderedLines, tableColumnHeaders, showPrice);
 
   let docSubtitle: string | undefined;
   const title = pickDocTitle(orderedLines, cfg);
@@ -266,6 +307,7 @@ export function buildPdfLayoutSpec(
     docSubtitle,
     headerLines,
     tableColumnHeaders,
+    tableGridLikely,
     showPrice,
     showGroupSubtotal: showPrice,
     sections,
@@ -430,6 +472,9 @@ export function formatLayoutSpecForPrompt(layout: PdfLayoutSpec): string {
     docSubtitle: layout.docSubtitle,
     headerLines: layout.headerLines,
     tableColumnHeaders: layout.tableColumnHeaders,
+    tableGridLikely: layout.tableGridLikely,
+    pageWidth: layout.pageWidth,
+    pageHeight: layout.pageHeight,
     showPrice: layout.showPrice,
     sections: layout.sections.map(s => ({ kind: s.kind, title: s.title })),
     signatureLabels: layout.signatureLabels,

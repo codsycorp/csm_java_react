@@ -12,6 +12,7 @@ import {
   applyPdfLayoutToSeedTrigger,
   buildPdfLayoutSpec,
   formatLayoutSpecForPrompt,
+  groupPdfTextIntoLineBoxes,
   groupPdfTextIntoLines,
   inferDocKindFromLayout,
   type PdfLayoutExtractConfig,
@@ -62,10 +63,14 @@ export function buildPrintImportPrompt(opts: {
       "",
       "Quy tắc khớp layout:",
       "- doc-title = docTitle trong spec (UPPERCASE như PDF).",
+      "- Không dùng PDF làm nền; phải tạo lại template HTML/CSS standalone giống mẫu PDF về bố cục, logo, khung bảng, chữ ký.",
       "- Giữ utils.buildCompanyHdr / buildItemsTableHtml / buildTotalsHtml — KHÔNG viết lại bảng HTML tay.",
+      "- tableGridLikely=true => giữ border-collapse và border 1px solid cho toàn bộ bảng dữ liệu; không được bỏ khung bảng.",
       "- showPrice=false nếu spec.showPrice=false (ẩn cột đơn giá/thành tiền).",
       "- signatureLabels → thay nhãn trong sig-box .lbl cho đúng PDF.",
       "- headerLines → map nhãn hdr (Kính gửi, Số, Ngày…) giữ field order.* như seed.",
+      "- Logo phải lấy từ utils.buildCompanyHdr(cfg) hoặc cfg.logo_url/f_logo; nếu sample có logo ở header thì phải thể hiện tương đương trong HTML template.",
+      "- Bảng và khung phải là HTML/CSS thật, không phải background image PDF.",
       "- Chỉ sửa CSS nhỏ trong <style> nếu cần (font-size, margin) — không đổi cấu trúc utils.",
       "",
     ]
@@ -96,14 +101,14 @@ export function buildPrintImportPrompt(opts: {
     "(order, groups, calc, utils) => string — CHỈ trả về body function (không bọc function(...){}), không markdown.",
     "",
     "## Quy tắc kỹ thuật",
-    "1. return chuỗi HTML đầy đủ: <!DOCTYPE html>...<div class=\"page\">...</div>",
+    "1. return chuỗi HTML đầy đủ: <!DOCTYPE html>...<div class=\"page\">...</div>.",
     "2. CSS inline trong <style> trong <head> (Times New Roman, bảng border, .page width ~780px).",
     "3. Header công ty: utils.buildCompanyHdr(cfg) — KHÔNG hardcode tên công ty.",
     "4. Bảng sản phẩm: utils.buildItemsTableHtml(groups, calc, utils, utils.printTableOpts || {...}).",
     "5. Tổng tiền (nếu PDF có): utils.buildTotalsHtml(calc, utils).",
     "6. Ô dữ liệu động: order.{field} ?? '' — field header có sẵn: " + fieldList,
     "7. Cột dòng hàng: " + (colList || "ten_sp, don_vi, chieu_rong, chieu_dai, so_tam, khoi_luong, don_gia, thanh_tien"),
-    "8. Ghi chú cố định: utils.parseNoteLines(cfg.ghi_chu_*, defaultArray) hoặc cfg từ pm_cai_dat.",
+    "8. Ghi chú và nhãn động phải lấy từ cfg/fields hiện tại của menu, không hardcode vào bộ tên cố định.",
     "9. PXK: utils.printTableOpts showPrice:false, hideColumns nếu cần.",
     "10. Code NGẮN GỌN: dùng utils.buildCompanyHdr / buildItemsTableHtml / buildTotalsHtml — KHÔNG nhét CSS dài; return phải có <!DOCTYPE html> hoặc template literal kết thúc </html>.",
     "",
@@ -258,6 +263,7 @@ export type PrintSampleRead = {
   previewUrls: string[];
   pdfText: string;
   pdfLayout: PdfLayoutSpec;
+  pdfLineBoxes: Array<{ text: string; x: number; y: number; page: number }>;
 };
 
 /** Đọc PDF/ảnh mẫu: preview + text layer (PDF digital) cho AI local. */
@@ -269,7 +275,7 @@ export async function readPrintSampleFile(
   const type = String(file.type || "").toLowerCase();
   if (type.startsWith("image/")) {
     const emptyLayout = buildPdfLayoutSpec([[]], 1, layoutCfg);
-    return { previewUrls: [await readFileAsDataUrl(file)], pdfText: "", pdfLayout: emptyLayout };
+    return { previewUrls: [await readFileAsDataUrl(file)], pdfText: "", pdfLayout: emptyLayout, pdfLineBoxes: [] };
   }
   if (type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
     return pdfToSampleRead(file, maxPages, layoutCfg);
@@ -302,9 +308,17 @@ async function pdfToSampleRead(
   const urls: string[] = [];
   const textParts: string[] = [];
   const pageLines: string[][] = [];
+  const pageLineBoxes: Array<{ text: string; x: number; y: number; page: number }> = [];
+  let firstPageWidth = 0;
+  let firstPageHeight = 0;
 
   for (let i = 1; i <= pageCount; i++) {
     const page = await doc.getPage(i);
+    const baseViewport = page.getViewport({ scale: 1 });
+    if (!firstPageWidth || !firstPageHeight) {
+      firstPageWidth = baseViewport.width;
+      firstPageHeight = baseViewport.height;
+    }
     const viewport = page.getViewport({ scale: 2 });
     const canvas = document.createElement("canvas");
     canvas.width = viewport.width;
@@ -317,7 +331,9 @@ async function pdfToSampleRead(
     try {
       const textContent = await page.getTextContent();
       const lines = groupPdfTextIntoLines(textContent.items as any[], i);
+      const lineBoxes = groupPdfTextIntoLineBoxes(textContent.items as any[], i);
       pageLines.push(lines);
+      pageLineBoxes.push(...lineBoxes);
       const pageText = lines.join("\n");
       if (pageText) {
         textParts.push(`--- Trang ${i} ---\n${pageText}`);
@@ -327,7 +343,11 @@ async function pdfToSampleRead(
     }
   }
   const pdfLayout = buildPdfLayoutSpec(pageLines, pageCount, layoutCfg);
-  return { previewUrls: urls, pdfText: textParts.join("\n\n").trim(), pdfLayout };
+  if (firstPageWidth > 0 && firstPageHeight > 0) {
+    pdfLayout.pageWidth = firstPageWidth;
+    pdfLayout.pageHeight = firstPageHeight;
+  }
+  return { previewUrls: urls, pdfText: textParts.join("\n\n").trim(), pdfLayout, pdfLineBoxes: pageLineBoxes };
 }
 
 export function suggestPrintConfig(docKind: PrintDocKind, triggerKey: string, layout?: PdfLayoutSpec) {

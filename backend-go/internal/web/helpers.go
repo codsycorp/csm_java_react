@@ -12,6 +12,7 @@ var staticExtensions = map[string]struct{}{
 	"js": {}, "css": {}, "png": {}, "jpg": {}, "jpeg": {}, "gif": {}, "svg": {}, "ico": {},
 	"woff": {}, "woff2": {}, "ttf": {}, "eot": {}, "webp": {}, "mp4": {}, "webm": {}, "mov": {},
 	"m4v": {}, "json": {}, "xml": {}, "map": {},
+	"pdf": {}, "doc": {}, "docx": {}, "xls": {}, "xlsx": {}, "csv": {},
 }
 
 func HasStaticExtension(uri string) bool {
@@ -99,6 +100,18 @@ func mimeFromPath(path string) string {
 		return "application/json; charset=utf-8"
 	case ".xml":
 		return "application/xml; charset=utf-8"
+	case ".pdf":
+		return "application/pdf"
+	case ".doc":
+		return "application/msword"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".xls":
+		return "application/vnd.ms-excel"
+	case ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".csv":
+		return "text/csv; charset=utf-8"
 	case ".svg":
 		return "image/svg+xml"
 	case ".webp":

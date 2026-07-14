@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8,6 +10,8 @@ import (
 	"time"
 
 	"csm_server/backend-go/internal/config"
+
+	"github.com/jung-kurt/gofpdf"
 )
 
 const onePixelPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAEElEQVR4nGL6z8AACAAA//8DCQECWLbVUAAAAABJRU5ErkJggg=="
@@ -125,6 +129,170 @@ func TestAiLocalRenderMediaContract(t *testing.T) {
 	}
 	if imageURL, _ := okResult["imageUrl"].(string); imageURL == "" {
 		t.Fatalf("expected generated imageUrl, got %#v", okResult["imageUrl"])
+	}
+}
+
+func TestAiLocalTemplateReportRenderContract(t *testing.T) {
+	dataDir := t.TempDir()
+	templateDir := filepath.Join(dataDir, "public", "reports")
+	if err := os.MkdirAll(templateDir, 0o755); err != nil {
+		t.Fatalf("mkdir template dir failed: %v", err)
+	}
+
+	templatePath := filepath.Join(templateDir, "customer-report.json")
+	templateJSON := []byte(`{
+		"name": "customer-report",
+		"title": "BÁO CÁO KHÁCH HÀNG",
+		"header": {
+			"companyName": "Công ty mẫu",
+			"taxNo": "0123456789",
+			"address": "Địa chỉ mẫu",
+			"website": "example.com"
+		},
+		"notes": ["Ghi chú mẫu", "Phụ lục đính kèm"],
+		"columns": [
+			{"title": "STT", "width": 10},
+			{"title": "Mục", "width": 90},
+			{"title": "Giá trị", "width": 30}
+		]
+	}`)
+	if err := os.WriteFile(templatePath, templateJSON, 0o644); err != nil {
+		t.Fatalf("write template failed: %v", err)
+	}
+
+	h := NewAiHandler(config.AppConfig{DataDir: dataDir}, nil, nil)
+	resp := h.HandleAiLocal("/ai-local/report/render-template", map[string]any{
+		"appId":        "csm",
+		"templatePath": "reports/customer-report.json",
+		"customerCode": "demo",
+		"outputName":   "demo-report.pdf",
+		"data": map[string]any{
+			"reportNo":   "RC-001",
+			"reportDate": "14/07/2026",
+			"clientName": "Khách hàng demo",
+			"items": []any{
+				map[string]any{"name": "Dịch vụ A", "value": "100"},
+				map[string]any{"name": "Dịch vụ B", "value": "200"},
+			},
+		},
+	})
+	result := getResultMap(t, mustGet(t, resp, "result"))
+	t.Logf("template render result: %#v", result)
+	if success, _ := result["success"].(bool); !success {
+		t.Fatalf("expected template render success=true, got %#v", result["success"])
+	}
+	if pdfPath, _ := result["pdfPath"].(string); pdfPath == "" {
+		t.Fatalf("expected pdfPath to be generated, got %#v", result["pdfPath"])
+	}
+	generated := filepath.Join(dataDir, "public", "app_images", "csm", "demo-report.pdf")
+	if _, err := os.Stat(generated); err != nil {
+		t.Fatalf("expected generated PDF at %s, stat err=%v", generated, err)
+	}
+}
+
+func TestAiLocalTemplateReportRenderBase64Contract(t *testing.T) {
+	h := NewAiHandler(config.AppConfig{DataDir: t.TempDir()}, nil, nil)
+	resp := h.HandleAiLocal("/ai-local/report/render-template", map[string]any{
+		"appId":           "csm",
+		"templatePath":    "reports/customer-report.json",
+		"customerCode":    "demo",
+		"saveToDisk":      false,
+		"returnBase64":    true,
+		"samplePdfBase64": base64.StdEncoding.EncodeToString([]byte("%PDF-1.4\n%sample")),
+		"data": map[string]any{
+			"reportNo":   "RC-002",
+			"reportDate": "15/07/2026",
+			"clientName": "Khách hàng tiếng Việt",
+			"items": []any{
+				map[string]any{"name": "Dịch vụ A", "value": "120"},
+				map[string]any{"name": "Dịch vụ B", "value": "240"},
+			},
+		},
+	})
+	result := getResultMap(t, mustGet(t, resp, "result"))
+	if success, _ := result["success"].(bool); !success {
+		t.Fatalf("expected base64 render success=true, got %#v", result["success"])
+	}
+	if pdfBase64, _ := result["pdfBase64"].(string); pdfBase64 == "" {
+		t.Fatalf("expected pdfBase64 to be returned, got %#v", result["pdfBase64"])
+	}
+	if _, ok := result["pdfPath"]; ok {
+		if pdfPath, _ := result["pdfPath"].(string); pdfPath != "" {
+			t.Fatalf("expected no disk path when saveToDisk=false, got %#v", pdfPath)
+		}
+	}
+}
+
+func TestAiLocalTemplateRejectsDocxSampleInput(t *testing.T) {
+	h := NewAiHandler(config.AppConfig{DataDir: t.TempDir()}, nil, nil)
+	resp := h.HandleAiLocal("/ai-local/report/render-template/preview", map[string]any{
+		"appId":         "csm",
+		"templatePath":  "reports/customer-report.json",
+		"samplePdfPath": "app_images/demo/sample.docx",
+		"data": map[string]any{
+			"reportNo":   "RC-101",
+			"reportDate": "14/07/2026",
+			"clientName": "Công ty Demo",
+		},
+	})
+	result := getResultMap(t, mustGet(t, resp, "result"))
+	if success, _ := result["success"].(bool); success {
+		t.Fatalf("expected DOCX sample input to be rejected, got success=true with %#v", result)
+	}
+	if code, _ := result["errorCode"].(string); code != "SAMPLE_PDF_REQUIRED" {
+		t.Fatalf("expected SAMPLE_PDF_REQUIRED error, got %#v", result["errorCode"])
+	}
+}
+
+func TestAiLocalTemplatePreviewFromSamplePdfContract(t *testing.T) {
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.SetMargins(12, 12, 12)
+	pdf.SetAutoPageBreak(true, 12)
+	pdf.AddPage()
+	pdf.SetFont("Helvetica", "B", 14)
+	pdf.CellFormat(0, 8, "BÁO CÁO MẪU KHÁCH HÀNG", "", 1, "C", false, 0, "")
+	pdf.Ln(2)
+	pdf.SetFont("Helvetica", "", 10)
+	pdf.CellFormat(0, 5, "Mã báo cáo: RC-100", "", 1, "L", false, 0, "")
+	pdf.CellFormat(0, 5, "Khách hàng: Công ty Demo", "", 1, "L", false, 0, "")
+	pdf.CellFormat(0, 5, "Ngày: 14/07/2026", "", 1, "L", false, 0, "")
+	var buf bytes.Buffer
+	if err := pdf.Output(&buf); err != nil {
+		t.Fatalf("generate sample pdf failed: %v", err)
+	}
+
+	h := NewAiHandler(config.AppConfig{DataDir: t.TempDir()}, nil, nil)
+	resp := h.HandleAiLocal("/ai-local/report/render-template/preview", map[string]any{
+		"appId":           "csm",
+		"templatePath":    "reports/customer-report.json",
+		"customerCode":    "demo",
+		"saveToDisk":      false,
+		"returnBase64":    true,
+		"samplePdfBase64": base64.StdEncoding.EncodeToString(buf.Bytes()),
+		"data": map[string]any{
+			"reportNo":   "RC-100",
+			"reportDate": "14/07/2026",
+			"clientName": "Công ty Demo",
+			"items": []any{
+				map[string]any{"name": "Dịch vụ A", "value": "120"},
+			},
+		},
+	})
+	result := getResultMap(t, mustGet(t, resp, "result"))
+	if success, _ := result["success"].(bool); !success {
+		t.Fatalf("expected preview success=true, got %#v", result["success"])
+	}
+	if previewMode, _ := result["previewMode"].(bool); !previewMode {
+		t.Fatalf("expected previewMode=true, got %#v", result["previewMode"])
+	}
+	if designPlan, _ := result["designPlan"].(map[string]any); designPlan == nil {
+		t.Fatalf("expected designPlan to be present, got %#v", result["designPlan"])
+	}
+	if pdfBase64, _ := result["pdfBase64"].(string); pdfBase64 == "" {
+		t.Fatalf("expected preview pdfBase64 to be returned, got %#v", result["pdfBase64"])
+	}
+	if pdfURL, _ := result["pdfUrl"].(string); pdfURL == "" || pdfURL == "/" {
+		t.Fatalf("expected preview pdfUrl to be returned, got %#v", result["pdfUrl"])
 	}
 }
 

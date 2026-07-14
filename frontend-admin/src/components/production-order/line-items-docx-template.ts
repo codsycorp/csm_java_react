@@ -8,6 +8,13 @@ export interface DocxTemplateBlueprint {
   tableRowPlaceholders: string[];
   signatureLabels: string[];
   noteLines: string[];
+  pageSizeTwip?: { width: number; height: number };
+  pageMarginsTwip?: { top: number; right: number; bottom: number; left: number };
+  baseFontName?: string;
+  baseFontSizeHalfPt?: number;
+  tableColWidthsTwip?: number[];
+  titleAlign?: "left" | "center" | "right";
+  headerAlign?: "left" | "center" | "right";
 }
 
 function xmlEscape(text: string): string {
@@ -19,28 +26,41 @@ function xmlEscape(text: string): string {
     .replace(/'/g, "&apos;");
 }
 
-function paragraph(text: string, opts?: { bold?: boolean; sz?: number; center?: boolean }): string {
-  const runs = `
-    <w:r>
-      ${opts?.bold ? "<w:rPr><w:b/></w:rPr>" : ""}
-      <w:t xml:space="preserve">${xmlEscape(text)}</w:t>
-    </w:r>
-  `;
+function paragraph(text: string, opts?: { bold?: boolean; sz?: number; align?: "left" | "center" | "right"; fontName?: string }): string {
+  const align = opts?.align || "left";
+  const jc = align === "center" ? "center" : (align === "right" ? "right" : "left");
+  const runPrParts: string[] = [];
+  if (opts?.bold) runPrParts.push("<w:b/>");
+  if (opts?.sz) runPrParts.push(`<w:sz w:val="${opts.sz}"/>`);
+  if (opts?.fontName) {
+    runPrParts.push(`<w:rFonts w:ascii="${xmlEscape(opts.fontName)}" w:hAnsi="${xmlEscape(opts.fontName)}" w:eastAsia="${xmlEscape(opts.fontName)}"/>`);
+  }
+  const runPr = runPrParts.length ? `<w:rPr>${runPrParts.join("")}</w:rPr>` : "";
   return `
     <w:p>
-      ${opts?.center ? "<w:pPr><w:jc w:val=\"center\"/></w:pPr>" : ""}
-      ${opts?.sz ? `<w:r><w:rPr><w:sz w:val="${opts.sz}"/></w:rPr><w:t></w:t></w:r>` : ""}
-      ${runs}
+      <w:pPr>
+        <w:jc w:val="${jc}"/>
+        <w:spacing w:before="60" w:after="60" w:line="240" w:lineRule="auto"/>
+      </w:pPr>
+      <w:r>
+        ${runPr}
+        <w:t xml:space="preserve">${xmlEscape(text)}</w:t>
+      </w:r>
     </w:p>
   `;
 }
 
-function tableCell(text: string, center = false, bold = false): string {
+function tableCell(text: string, widthTwip: number, center = false, bold = false): string {
   return `
     <w:tc>
-      <w:tcPr><w:tcW w:w="2400" w:type="dxa"/></w:tcPr>
+      <w:tcPr>
+        <w:tcW w:w="${widthTwip}" w:type="dxa"/>
+      </w:tcPr>
       <w:p>
-        ${center ? "<w:pPr><w:jc w:val=\"center\"/></w:pPr>" : ""}
+        <w:pPr>
+          ${center ? "<w:jc w:val=\"center\"/>" : "<w:jc w:val=\"left\"/>"}
+          <w:spacing w:before="40" w:after="40" w:line="220" w:lineRule="auto"/>
+        </w:pPr>
         <w:r>
           ${bold ? "<w:rPr><w:b/></w:rPr>" : ""}
           <w:t xml:space="preserve">${xmlEscape(text)}</w:t>
@@ -54,18 +74,51 @@ function tableRow(cells: string[]): string {
   return `<w:tr>${cells.join("")}</w:tr>`;
 }
 
-function buildTableXml(blueprint: DocxTemplateBlueprint): string {
+function deriveColumnWidths(blueprint: DocxTemplateBlueprint, contentWidthTwip: number): number[] {
+  const count = Math.max(1, blueprint.tableHeaders.length);
+  const custom = Array.isArray(blueprint.tableColWidthsTwip)
+    ? blueprint.tableColWidthsTwip.filter((w) => Number.isFinite(w) && w > 0)
+    : [];
+  if (custom.length >= count) {
+    const trimmed = custom.slice(0, count);
+    const sum = trimmed.reduce((acc, v) => acc + v, 0);
+    if (sum > 0) {
+      const scaled = trimmed.map((v) => Math.max(360, Math.floor((v / sum) * contentWidthTwip)));
+      const fixedSum = scaled.reduce((acc, v) => acc + v, 0);
+      const delta = contentWidthTwip - fixedSum;
+      scaled[scaled.length - 1] += delta;
+      return scaled;
+    }
+  }
+
+  const weights = blueprint.tableHeaders.map((h, idx) => {
+    const labelLen = String(h || "").trim().length;
+    if (idx === 0) return 1.0;
+    return Math.max(1.2, Math.min(4.8, labelLen / 4));
+  });
+  const weightSum = weights.reduce((acc, v) => acc + v, 0) || count;
+  const widths = weights.map((w) => Math.max(360, Math.floor((w / weightSum) * contentWidthTwip)));
+  const fixedSum = widths.reduce((acc, v) => acc + v, 0);
+  const delta = contentWidthTwip - fixedSum;
+  widths[widths.length - 1] += delta;
+  return widths;
+}
+
+function buildTableXml(blueprint: DocxTemplateBlueprint, contentWidthTwip: number): string {
   if (!blueprint.tableHeaders.length) return "";
-  const headerRow = tableRow(blueprint.tableHeaders.map((h) => tableCell(h, true, true)));
+  const colWidths = deriveColumnWidths(blueprint, contentWidthTwip);
+  const headerRow = tableRow(blueprint.tableHeaders.map((h, idx) => tableCell(h, colWidths[idx], true, true)));
   const rowCells = blueprint.tableHeaders.map((_, idx) => {
     const token = blueprint.tableRowPlaceholders[idx] || "";
-    return tableCell(token, idx === 0);
+    return tableCell(token, colWidths[idx], idx === 0);
   });
   const valueRow = tableRow(rowCells);
+  const gridXml = colWidths.map((w) => `<w:gridCol w:w="${w}"/>`).join("");
   return `
     <w:tbl>
       <w:tblPr>
-        <w:tblW w:w="0" w:type="auto"/>
+        <w:tblW w:w="${contentWidthTwip}" w:type="dxa"/>
+        <w:tblLayout w:type="fixed"/>
         <w:tblBorders>
           <w:top w:val="single" w:sz="8" w:space="0" w:color="auto"/>
           <w:left w:val="single" w:sz="8" w:space="0" w:color="auto"/>
@@ -75,6 +128,7 @@ function buildTableXml(blueprint: DocxTemplateBlueprint): string {
           <w:insideV w:val="single" w:sz="6" w:space="0" w:color="auto"/>
         </w:tblBorders>
       </w:tblPr>
+      <w:tblGrid>${gridXml}</w:tblGrid>
       ${headerRow}
       ${valueRow}
     </w:tbl>
@@ -84,18 +138,33 @@ function buildTableXml(blueprint: DocxTemplateBlueprint): string {
 export function createDocxTemplateBuffer(blueprint: DocxTemplateBlueprint): ArrayBuffer {
   const zip = new PizZip();
   const now = new Date().toISOString();
+  const pageSize = blueprint.pageSizeTwip || { width: 11906, height: 16838 };
+  const pageMargins = blueprint.pageMarginsTwip || { top: 1134, right: 1134, bottom: 1134, left: 1134 };
+  const contentWidthTwip = Math.max(1440, pageSize.width - pageMargins.left - pageMargins.right);
+  const baseFontName = blueprint.baseFontName || "Times New Roman";
+  const baseFontSizeHalfPt = Number(blueprint.baseFontSizeHalfPt || 24);
 
   const documentBody = [
-    paragraph(blueprint.title || "TEMPLATE", { bold: true, sz: 32, center: true }),
-    blueprint.subtitle ? paragraph(blueprint.subtitle, { center: true }) : "",
+    paragraph(blueprint.title || "TEMPLATE", {
+      bold: true,
+      sz: 32,
+      align: blueprint.titleAlign || "center",
+      fontName: baseFontName,
+    }),
+    blueprint.subtitle
+      ? paragraph(blueprint.subtitle, {
+        align: blueprint.titleAlign || "center",
+        fontName: baseFontName,
+      })
+      : "",
     paragraph(""),
-    ...blueprint.headerLines.map((l) => paragraph(l)),
+    ...blueprint.headerLines.map((l) => paragraph(l, { align: blueprint.headerAlign || "left", fontName: baseFontName })),
     paragraph(""),
-    buildTableXml(blueprint),
+    buildTableXml(blueprint, contentWidthTwip),
     paragraph(""),
-    ...blueprint.noteLines.map((l) => paragraph(l)),
+    ...blueprint.noteLines.map((l) => paragraph(l, { fontName: baseFontName })),
     paragraph(""),
-    ...blueprint.signatureLabels.map((l) => paragraph(l, { bold: true })),
+    ...blueprint.signatureLabels.map((l) => paragraph(l, { bold: true, fontName: baseFontName })),
   ].join("\n");
 
   zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -137,8 +206,8 @@ export function createDocxTemplateBuffer(blueprint: DocxTemplateBlueprint): Arra
   <w:body>
     ${documentBody}
     <w:sectPr>
-      <w:pgSz w:w="11906" w:h="16838"/>
-      <w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="708" w:footer="708" w:gutter="0"/>
+      <w:pgSz w:w="${pageSize.width}" w:h="${pageSize.height}"/>
+      <w:pgMar w:top="${pageMargins.top}" w:right="${pageMargins.right}" w:bottom="${pageMargins.bottom}" w:left="${pageMargins.left}" w:header="708" w:footer="708" w:gutter="0"/>
     </w:sectPr>
   </w:body>
 </w:document>`);
@@ -156,7 +225,7 @@ export function createDocxTemplateBuffer(blueprint: DocxTemplateBlueprint): Arra
   <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
     <w:name w:val="Normal"/>
     <w:qFormat/>
-    <w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr>
+    <w:rPr><w:rFonts w:ascii="${xmlEscape(baseFontName)}" w:hAnsi="${xmlEscape(baseFontName)}" w:eastAsia="${xmlEscape(baseFontName)}"/><w:sz w:val="${baseFontSizeHalfPt}"/></w:rPr>
   </w:style>
 </w:styles>`);
   word?.file("settings.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -165,7 +234,7 @@ export function createDocxTemplateBuffer(blueprint: DocxTemplateBlueprint): Arra
 <w:webSettings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>`);
   word?.file("fontTable.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:font w:name="Times New Roman"/>
+  <w:font w:name="${xmlEscape(baseFontName)}"/>
 </w:fonts>`);
 
   return zip.generate({ type: "arraybuffer", compression: "DEFLATE" }) as ArrayBuffer;

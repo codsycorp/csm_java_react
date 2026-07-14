@@ -1,0 +1,19 @@
+{
+  "name": "customer-report",
+  "title": "BÁO CÁO KHÁCH HÀNG",
+  "header": {
+    "companyName": "Công ty mẫu",
+    "taxNo": "0123456789",
+    "address": "Địa chỉ mẫu",
+    "website": "example.com"
+  },
+  "notes": [
+    "Ghi chú mẫu",
+    "Phụ lục đính kèm"
+  ],
+  "columns": [
+    {"title": "STT", "width": 10, "field": "index"},
+    {"title": "Mục", "width": 90, "field": "name"},
+    {"title": "Giá trị", "width": 30, "field": "value"}
+  ]
+}

@@ -74,6 +74,18 @@ func (h *AiHandler) HandleAiLocal(path string, params map[string]any) *model.Sta
 	case strings.HasSuffix(path, "/report/render-and-convert"):
 		r.Set("result", h.handleAiLocalRenderAndConvert(params))
 		return r
+	case strings.HasSuffix(path, "/report/pdf-layout-extract"):
+		r.Set("result", h.handleAiLocalPdfLayoutExtract(params))
+		return r
+	case strings.HasSuffix(path, "/report/pdf-overlay"):
+		r.Set("result", h.handleAiLocalPdfOverlay(params))
+		return r
+	case strings.HasSuffix(path, "/report/render-template"):
+		r.Set("result", h.handleAiLocalRenderTemplate(params))
+		return r
+	case strings.HasSuffix(path, "/report/render-template/preview"):
+		r.Set("result", h.handleAiLocalRenderTemplatePreview(params))
+		return r
 	case strings.HasSuffix(path, "/health"):
 		r.Set("result", ops.Health(h.llama))
 		return r

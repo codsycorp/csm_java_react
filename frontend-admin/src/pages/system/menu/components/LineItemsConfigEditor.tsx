@@ -195,16 +195,21 @@ function buildDefaultDocxBlueprint(params: {
 	const tableHeaders = (params.tableHeaders || []).filter(Boolean);
 	const normalizedTableHeaders = tableHeaders.length
 		? tableHeaders.slice(0, 9)
-		: ["STT", "Tên hàng", "Đơn vị", "Số lượng", "Đơn giá", "Thành tiền"];
+		: Array.from({ length: 6 }).map((_, idx) => `COL_${idx + 1}`);
 	const rowPlaceholders = normalizedTableHeaders.map((_, idx) => {
 		if (idx === 0) return "{#items_flat}{stt}";
-		if (idx === normalizedTableHeaders.length - 1) return "{thanh_tien}{/items_flat}";
-		if (idx === 1) return "{ten_sp}";
-		if (idx === 2) return "{don_vi}";
-		if (idx === 3) return "{so_luong}";
-		if (idx === 4) return "{don_gia}";
-		return "{" + `col_${idx}` + "}";
+		if (idx === normalizedTableHeaders.length - 1) return `{col_${idx + 1}}{/items_flat}`;
+		return `{col_${idx + 1}}`;
 	});
+	const totalTwip = 9600;
+	const rawWidths = normalizedTableHeaders.map((header, idx) => {
+		const key = String(header || "").toLowerCase();
+		if (idx === 0 || key.includes("stt") || key === "tt" || key === "id") return 0.7;
+		return Math.max(1, Math.min(2.1, Math.round((String(header).length / 6) * 10) / 10));
+	});
+	const widthSum = rawWidths.reduce((acc, v) => acc + v, 0) || normalizedTableHeaders.length;
+	const tableColWidthsTwip = rawWidths.map((w) => Math.max(480, Math.floor((w / widthSum) * totalTwip)));
+	tableColWidthsTwip[tableColWidthsTwip.length - 1] += totalTwip - tableColWidthsTwip.reduce((acc, v) => acc + v, 0);
 	return {
 		title: params.title || "MẪU CHỨNG TỪ",
 		subtitle: params.subtitle || "Tạo tự động từ PDF mẫu",
@@ -214,9 +219,16 @@ function buildDefaultDocxBlueprint(params: {
 		signatureLabels: (params.signatures || []).slice(0, 6).map((s) => String(s || "").trim()).filter(Boolean),
 		noteLines: [
 			`template_kind: ${params.kind}`,
-			"Tổng cộng: {calc.totals.C}",
+			"Tong cong: {totals_value}",
 			"Bằng chữ: {bang_chu}",
 		],
+		pageSizeTwip: { width: 11906, height: 16838 },
+		pageMarginsTwip: { top: 920, right: 920, bottom: 920, left: 920 },
+		baseFontName: "Times New Roman",
+		baseFontSizeHalfPt: 24,
+		tableColWidthsTwip,
+		titleAlign: "center",
+		headerAlign: "left",
 	};
 }
 
@@ -686,7 +698,10 @@ export default function LineItemsConfigEditor({
 			const defaultTriggerBody = [
 				"const cfg = utils.settings || {};",
 				"const wordsKey = (Array.isArray(utils.totalConfigs) ? utils.totalConfigs.find((x)=>x && x.show_words)?.key : undefined) || 'D';",
-				"const wordsVal = (calc?.totals && typeof calc.totals[wordsKey] === 'number') ? calc.totals[wordsKey] : 0;",
+				"const totalsObj = (calc && calc.totals && typeof calc.totals === 'object') ? calc.totals : {};",
+				"const wordsVal = (typeof totalsObj[wordsKey] === 'number') ? totalsObj[wordsKey] : 0;",
+				"const numericTotalCandidates = Object.values(totalsObj).filter((v) => typeof v === 'number' && Number.isFinite(v));",
+				"const totals_value = Number.isFinite(wordsVal) && wordsVal !== 0 ? wordsVal : (numericTotalCandidates.length ? Number(numericTotalCandidates[0]) : 0);",
 				"const items_flat = [];",
 				"let stt = 1;",
 				"for (const g of (groups || [])) {",
@@ -701,7 +716,8 @@ export default function LineItemsConfigEditor({
 				"  groups,",
 				"  items_flat,",
 				"  calc,",
-				"  totals: calc?.totals || {},",
+				"  totals: totalsObj,",
+				"  totals_value,",
 				"  bang_chu: utils.soThanhChu ? utils.soThanhChu(wordsVal) : '',",
 				"  note_lines: noteLines,",
 				"  settings: cfg,",
@@ -1452,128 +1468,11 @@ export default function LineItemsConfigEditor({
 						label: t("system.menu.lineItemsTabPrint", "Nút in PDF"),
 						children: (
 							<>
-								<Card size="small" title="AI local: PDF mẫu -> cấu hình DOCX" style={{ marginBottom: 12 }}>
-									<Alert
-										type="info"
-										showIcon
-										style={{ marginBottom: 12 }}
-										message="Dev workflow: nhập PDF mẫu, hệ thống tự suy luận loại chứng từ và tạo print_engine=docx + data trigger."
-									/>
-									<Row gutter={12}>
-										<Col xs={24} md={12}>
-											<Upload
-												accept=".pdf"
-												maxCount={1}
-												beforeUpload={(file) => {
-													const picked = file as File;
-													setDocxSampleFile(picked);
-													if (!docxAutoLoading) {
-														void applyDocxFromPdfSample(picked);
-													}
-													return false;
-												}}
-												onRemove={() => {
-													setDocxSampleFile(null);
-													setDocxLastAiStatus("");
-													setDocxLastGeneratedTrigger("");
-													setDocxLastGeneratedTriggerKey("");
-													return true;
-												}}
-											>
-												<Button icon={<UploadOutlined />}>Chọn PDF mẫu</Button>
-											</Upload>
-											<div style={{ marginTop: 8, color: "var(--ant-colorTextSecondary)" }}>
-												{docxSampleFile ? `Đã chọn: ${docxSampleFile.name}` : "Chưa chọn file"}
-											</div>
-										</Col>
-										<Col xs={24} md={12}>
-											<Form layout="vertical" component={false}>
-												<Form.Item label="Đường dẫn DOCX template">
-													<Input
-														value={docxTemplateUrl}
-														onChange={(e) => setDocxTemplateUrl(e.target.value)}
-														placeholder="/reports/bao_gia_template.docx"
-													/>
-												</Form.Item>
-											</Form>
-										</Col>
-									</Row>
-									<Button type="primary" loading={docxAutoLoading} onClick={() => void applyDocxFromPdfSample()}>
-										Tự tạo cấu hình DOCX từ PDF mẫu
-									</Button>
-									{docxLastAiStatus && (
-										<Alert
-											type="info"
-											showIcon
-											style={{ marginTop: 12 }}
-											message={docxLastAiStatus}
-										/>
-									)}
-									{docxLastGeneratedTrigger && (
-										<Card
-											size="small"
-											title={`Trigger DOCX vừa sinh${docxLastGeneratedTriggerKey ? `: ${docxLastGeneratedTriggerKey}` : ""}`}
-											style={{ marginTop: 12 }}
-											extra={(
-												<Space>
-													<Button
-														size="small"
-														disabled={!docxLastGeneratedTriggerKey || !onApplyTrigger}
-														onClick={() => {
-															if (!onApplyTrigger || !docxLastGeneratedTriggerKey) {
-																message.warning("Thiếu key trigger để áp dụng");
-																return;
-															}
-															onApplyTrigger(docxLastGeneratedTriggerKey, docxLastGeneratedTrigger);
-															message.success(`Đã áp dụng lại trigger: ${docxLastGeneratedTriggerKey}`);
-														}}
-													>
-														Áp dụng lại
-													</Button>
-													<Button
-														size="small"
-														onClick={async () => {
-															try {
-																await navigator.clipboard.writeText(docxLastGeneratedTrigger);
-																message.success("Đã copy trigger");
-															} catch {
-																message.warning("Không copy được trigger");
-															}
-														}}
-													>
-														Copy
-													</Button>
-												</Space>
-											)}
-										>
-											<Input.TextArea
-												value={docxLastGeneratedTrigger}
-												readOnly
-												autoSize={{ minRows: 8, maxRows: 16 }}
-												style={{ fontFamily: "monospace", fontSize: 12 }}
-											/>
-										</Card>
-									)}
-								</Card>
-
-								<LineItemsPdfImportPanel
-									appId={appId}
-									tableFields={tableFields}
-									lineColumns={value.line_items_columns}
-									pdfLayoutExtractConfig={(value as any)?.settings?.pdf_layout_extract || (value as any)?.pdf_layout_extract}
-									onApplyTrigger={onApplyTrigger}
-									editorMetadata={editorMetadata}
-									onApplyPrintConfig={(cfg) => {
-										const rows = [...(value.line_items_print ?? [])];
-										const idx = rows.findIndex(r => r.trigger_key === cfg.trigger_key);
-										if (idx >= 0) rows[idx] = { ...rows[idx], ...cfg };
-										else rows.push(cfg);
-										const keys = new Set([...(uiCfg.print_keys ?? []), cfg.trigger_key]);
-										patch({
-											line_items_print: rows,
-											line_items_ui: { ...uiCfg, print_keys: Array.from(keys) },
-										});
-									}}
+								<Alert
+									type="info"
+									showIcon
+									style={{ marginBottom: 12 }}
+									message="Đã tối giản: chỉ dùng 1 chỗ tạo DOCX + trigger từ PDF trong Report settings (tab chung), không tạo ở tab Nút in này."
 								/>
 								<Alert
 									type="warning"
@@ -1685,7 +1584,7 @@ export default function LineItemsConfigEditor({
 						<Input placeholder="m2|m|cái" />
 					</Form.Item>
 					<Form.Item name="formula" label="formula">
-						<Input.TextArea rows={2} placeholder="(khoi_luong ?? 0) * (don_gia ?? 0)" />
+						<Input.TextArea rows={2} placeholder="(field_a ?? 0) * (field_b ?? 0)" />
 					</Form.Item>
 					<Form.Item name="manual_condition" label="manual_condition">
 						<Input placeholder="chieu_dai == null && so_tam == null" />
@@ -1819,7 +1718,7 @@ export default function LineItemsConfigEditor({
 								mode="multiple"
 								allowClear
 								options={columnNameOptions}
-								placeholder="chieu_rong, don_gia, thanh_tien…"
+								placeholder="field_a, field_b, field_c..."
 							/>
 						</Form.Item>
 					</Card>
