@@ -21,6 +21,7 @@ export type PdfLayoutLike = {
   docTitle?: string;
   docSubtitle?: string;
   headerLines?: string[];
+  tableColumnHeaders?: string[];
   signatureLabels?: string[];
   orderedLines?: string[];
   sections?: Array<{ title?: string; lines?: string[] }>;
@@ -31,13 +32,35 @@ export type PdfLayoutLike = {
 
 export type PdfReportDesignSpec = {
   title: string;
-  layoutKind: "pdf-overlay";
+  layoutKind: "dynamic-pdf-template" | "quotation-grouped-table";
+  pageWidth?: number;
+  pageHeight?: number;
+  coordinateUnit?: "pt" | "mm";
+  coordinateOrigin?: "bottom-left" | "top-left";
+  company?: { name?: string; address?: string; taxCode?: string; website?: string };
+  intro?: string;
   header: Array<{ label: string; token: string; sampleValue: string }>;
+  table?: { headers: string[]; fields: string[]; widths: number[]; grouped?: boolean };
   sections: Array<{ id: string; title: string; lines: string[] }>;
   totals: Array<{ label: string; token: string; value: string }>;
   signatures: Array<{ label: string; token: string; value: string }>;
+  notes?: string[];
+  paymentTerms?: string[];
   footer: string[];
   overlaySummary: Array<{ page: number; x: number; y: number; text: string }>;
+  overlayItems?: Array<{
+    page: number;
+    x: number;
+    y: number;
+    width?: number;
+    align?: "L" | "C" | "R";
+    fontSize?: number;
+    fontName?: string;
+    color?: string;
+    bold?: boolean;
+    italic?: boolean;
+    text: string;
+  }>;
 };
 
 function normalizeText(value: string): string {
@@ -76,6 +99,58 @@ function sanitizeDisplayLine(value: string): string {
   return String(value || "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function splitLabelValueLine(line: string): { label: string; value: string } {
+  const text = sanitizeDisplayLine(line);
+  if (!text) return { label: "", value: "" };
+  const idx = text.indexOf(":");
+  if (idx <= 0 || idx > 60) return { label: text, value: "" };
+  const label = sanitizeDisplayLine(text.slice(0, idx));
+  const value = sanitizeDisplayLine(text.slice(idx + 1));
+  return { label, value };
+}
+
+function deriveCompanyInfo(lines: string[]): { name?: string; address?: string; taxCode?: string; website?: string } | undefined {
+  const source = (Array.isArray(lines) ? lines : []).map((line) => sanitizeDisplayLine(line)).filter(Boolean);
+  if (!source.length) return undefined;
+
+  const name = source.find((line) => /c[oô]ng ty|company/i.test(line));
+  const address = source.find((line) => /địa chỉ|dia chi|address/i.test(line));
+  const taxLine = source.find((line) => /\bmst\b|tax/i.test(line));
+  const website = source.find((line) => /https?:\/\//i.test(line));
+
+  const taxCode = (() => {
+    const raw = String(taxLine || "");
+    const m = raw.match(/(\d{10,14})/);
+    return m?.[1] || "";
+  })();
+
+  const out = {
+    name: name || undefined,
+    address: address ? address.replace(/^\s*(địa chỉ|dia chi|address)\s*:\s*/i, "") : undefined,
+    taxCode: taxCode || undefined,
+    website: website || undefined,
+  };
+
+  return out.name || out.address || out.taxCode || out.website ? out : undefined;
+}
+
+function pickSectionLines(lines: string[], hints: string[], max = 6): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    const normalized = sanitizeDisplayLine(line);
+    if (!normalized) continue;
+    const lower = normalizeText(normalized);
+    if (!hints.some((hint) => lower.includes(hint))) continue;
+    const key = lower;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+    if (out.length >= max) break;
+  }
+  return out;
 }
 
 function collectDesignCandidateLines(
@@ -224,29 +299,76 @@ export function buildPdfReportDesignSpec(
   const context = buildPdfOverlayPreviewContext(fields, layout);
   const title = String(layout?.docTitle || "BÁO CÁO").trim() || "BÁO CÁO";
   const candidateLines = collectDesignCandidateLines(layout, overlayItems, sampleLines);
+  const allLines = [...(layout?.orderedLines || []), ...sampleLines, ...candidateLines];
+  const allText = [title, ...allLines].join("\n").toLowerCase();
+  const hasTable = Array.isArray(layout?.tableColumnHeaders) && (layout?.tableColumnHeaders || []).length >= 4;
+  const hasQuoteKeyword = /bảng báo giá|bao gia|quotation|xác nhận đơn hàng|don hang/.test(allText);
+  const hasMoneyKeyword = /đơn giá|thành tiền|vat|tong gia tri|tong cong/.test(allText);
+  const hasGroupKeyword = /cộng nhóm|nhóm|group/i.test(allText);
+  const isQuotationLike = Boolean(hasTable && hasQuoteKeyword && hasMoneyKeyword && hasGroupKeyword);
 
   const headerSource = (Array.isArray(layout?.headerLines) && layout.headerLines.length > 0
     ? layout.headerLines
     : candidateLines.slice(0, 6));
   const header = headerSource
     .slice(0, 8)
-    .map((line, index) => ({
-      label: sanitizeDisplayLine(String(line || "")) || `Thông tin ${index + 1}`,
-      token: `hdr_${index + 1}`,
-      sampleValue: resolvePdfOverlayText(line, context),
-    }));
+    .map((line, index) => {
+      const parsed = splitLabelValueLine(String(line || ""));
+      const label = parsed.label || `Thông tin ${index + 1}`;
+      const token = `hdr_${index + 1}`;
+      const sampleValue = parsed.value || resolvePdfOverlayText(`{${token}}`, context);
+      return {
+        label,
+        token,
+        sampleValue: sanitizeDisplayLine(sampleValue),
+      };
+    });
+
+  const headerKeySet = new Set(
+    header
+      .map((item) => normalizeText(`${item.label} ${item.sampleValue}`))
+      .filter(Boolean),
+  );
+  const sectionCandidates = candidateLines.filter((line) => {
+    const key = normalizeText(line);
+    if (!key) return false;
+    return !headerKeySet.has(key) && key !== normalizeText(title);
+  });
 
   const sections = (Array.isArray(layout?.sections) && layout.sections.length > 0
     ? layout.sections
-    : [{ title: "Nội dung mẫu", lines: candidateLines.slice(0, 8) }])
+    : [{ title: "Nội dung mẫu", lines: sectionCandidates.slice(0, 8) }])
     .slice(0, 4)
     .map((section, index) => ({
       id: `section_${index + 1}`,
       title: String(section?.title || `Phần ${index + 1}`).trim() || `Phần ${index + 1}`,
       lines: Array.isArray(section?.lines)
         ? section.lines.map((line) => resolvePdfOverlayText(line, context)).filter(Boolean)
-        : (index === 0 ? candidateLines.slice(0, 6).map((line) => resolvePdfOverlayText(line, context)).filter(Boolean) : []),
+        : (index === 0 ? sectionCandidates.slice(0, 6).map((line) => resolvePdfOverlayText(line, context)).filter(Boolean) : []),
     }));
+
+  const tableHeaders = (Array.isArray(layout?.tableColumnHeaders) ? layout.tableColumnHeaders : [])
+    .map((item: string) => sanitizeDisplayLine(String(item || "")))
+    .filter(Boolean)
+    .slice(0, 10);
+  const table = tableHeaders.length > 0
+    ? {
+      headers: tableHeaders,
+      fields: tableHeaders.map((header: string, index: number) => {
+        if (index === 0) return "__index";
+        const normalizedHeader = normalizeTokenName(header);
+        const matched = fields.find((field) => {
+          const candidates = [field.f_name, field.f_header, field.f_header_en, field.f_header_zh]
+            .filter(Boolean)
+            .map((value) => normalizeTokenName(String(value || "")));
+          return candidates.includes(normalizedHeader) || candidates.some((value) => value && normalizedHeader.includes(value));
+        });
+        return String(matched?.f_name || `col_${index + 1}`).trim();
+      }),
+      widths: tableHeaders.map((_header: string, index: number) => (index === 0 ? 8 : Math.max(14, Math.round(182 / Math.max(tableHeaders.length - 1, 1))))),
+      grouped: isQuotationLike,
+    }
+    : undefined;
 
   const totals = [
     { label: "Tổng cộng", token: "tong_cong", value: resolvePdfOverlayText("{tong_cong}", context) },
@@ -276,14 +398,44 @@ export function buildPdfReportDesignSpec(
     }))
     .filter((item) => item.text);
 
+  const overlayItemsFull = (Array.isArray(overlayItems) ? overlayItems : [])
+    .map((item) => ({
+      page: Number(item?.page || 1),
+      x: Number(item?.x || 0),
+      y: Number(item?.y || 0),
+      align: "L" as const,
+      fontSize: Number(item?.fontSize || 11),
+      fontName: String(item?.fontName || "Arial").trim() || "Arial",
+      color: String(item?.color || "#000000").trim() || "#000000",
+      bold: false,
+      italic: false,
+      text: sanitizeDisplayLine(String(item?.text || "")),
+    }))
+    .filter((item) => item.text);
+
+  const companyInfo = deriveCompanyInfo([...(layout?.headerLines || []), ...(layout?.orderedLines || []), ...sampleLines]);
+  const introLine = pickSectionLines(allLines, ["cam on", "quy khach", "noi dung nhu sau"], 1)[0];
+  const notes = pickSectionLines(allLines, ["ghi chu", "dung sai", "bao gom", "chua bao gom", "vat"], 8);
+  const paymentTerms = pickSectionLines(allLines, ["thanh toan", "lan 1", "lan 2", "dat coc", "chuyen khoan"], 6);
+
   return {
     title,
-    layoutKind: "pdf-overlay",
+    layoutKind: isQuotationLike ? "quotation-grouped-table" : "dynamic-pdf-template",
+    pageWidth: Number(layout?.pageWidth || 0) || undefined,
+    pageHeight: Number(layout?.pageHeight || 0) || undefined,
+    coordinateUnit: "pt",
+    coordinateOrigin: "bottom-left",
+    company: isQuotationLike ? companyInfo : undefined,
+    intro: isQuotationLike ? introLine : undefined,
     header,
+    table,
     sections,
     totals,
     signatures,
+    notes: isQuotationLike ? notes : undefined,
+    paymentTerms: isQuotationLike ? paymentTerms : undefined,
     footer,
     overlaySummary,
+    overlayItems: overlayItemsFull,
   };
 }

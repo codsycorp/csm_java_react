@@ -419,17 +419,6 @@ function buildPdfOverlaySeedItems(params: {
       y: Number(box.y || 0),
       fontSize: 11,
       fontName: "Helvetica",
-      color: "#FFFFFF",
-      opacity: 1,
-      rotate: 0,
-      text: raw,
-    });
-    seeds.push({
-      page: Number(box.page || 1),
-      x: Number(box.x || 0),
-      y: Number(box.y || 0),
-      fontSize: 11,
-      fontName: "Helvetica",
       color: "#000000",
       opacity: 1,
       rotate: 0,
@@ -1153,15 +1142,18 @@ async function buildPdfOverlayPlanWithLocalAi(params: {
   appId?: string;
   layout: PdfLayoutSpec;
   fields: TableField[];
+  fallbackItems?: PdfOverlayPlanItem[];
 }): Promise<{ overlays: PdfOverlayPlanItem[]; status: string }> {
-  const fallback = buildFallbackPdfOverlayPlan(params.layout);
+  const fallback = Array.isArray(params.fallbackItems) && params.fallbackItems.length > 0
+    ? params.fallbackItems
+    : buildFallbackPdfOverlayPlan(params.layout);
   const prompt = [
-    "Bạn là AI local chuyên tái dựng template in từ PDF mẫu sang HTML/CSS standalone.",
-    "Mục tiêu: giữ bố cục, logo, khung bảng, nhãn chữ ký và dữ liệu động giống PDF mẫu, nhưng KHÔNG dùng PDF làm nền.",
+    "Bạn là AI local chuyên phân tích PDF mẫu để sinh reportDesignSpec động cho backend Go/gofpdf.",
+    "Mục tiêu: giữ bố cục, logo, khung bảng, nhãn chữ ký, nhóm hàng, subtotal, VAT và dữ liệu động giống PDF mẫu, nhưng KHÔNG dùng PDF làm nền.",
     "Chỉ trả về 1 JSON object hợp lệ, không markdown, không giải thích.",
     "Giữ text dạng placeholder {field} khi là dữ liệu động.",
-    "Không được sinh quá ít item: hãy bao phủ đủ header, các dòng bảng, tổng, ghi chú và chữ ký nếu chúng có mặt trong layout.",
-    "Không chồng đè lên PDF nền gốc; hãy dựng lại vùng đó bằng HTML/CSS thật.",
+    "Không được sinh quá ít item: hãy bao phủ đủ header, bảng, tổng, ghi chú và chữ ký nếu chúng có mặt trong layout.",
+    "Không chồng đè lên PDF nền gốc; backend sẽ render PDF mới bằng dữ liệu thật.",
     "Ưu tiên khớp theo đúng vị trí dòng từ orderedLines/headerLines, không bẻ sang bố cục cố định.",
     "",
     "Schema:",
@@ -1195,7 +1187,7 @@ async function buildPdfOverlayPlanWithLocalAi(params: {
       orderedLines: (params.layout.orderedLines || []).slice(0, 40),
     }, null, 2)}`,
     `fieldHints: ${JSON.stringify(buildPdfDynamicLabelHints(params.fields).slice(0, 24), null, 2)}`,
-    "- Nếu tableGridLikely=true, phải dựng table HTML có border-collapse và border 1px solid đúng như mẫu.",
+    "- Nếu là báo giá có nhóm hàng, tổng nhóm, VAT, hãy giữ dấu hiệu grouped-table để backend render như mẫu báo giá.",
     "- Với mỗi dòng có nhãn động, hãy xuất placeholder/dữ liệu vào đúng field của menu hiện tại; không phụ thuộc text cũ trên PDF.",
     "",
     `fallbackPlan: ${JSON.stringify(fallback.slice(0, 12), null, 2)}`,
@@ -1222,7 +1214,7 @@ async function buildPdfOverlayPlanWithLocalAi(params: {
     });
 
     if (!response.ok || !response.body) {
-      return { overlays: fallback, status: "AI local chưa sẵn sàng, dùng overlay plan mặc định." };
+      return { overlays: fallback, status: "AI local chưa sẵn sàng, dùng trích xuất backend từ PDF mẫu." };
     }
 
     let fullResponse = "";
@@ -1263,11 +1255,11 @@ async function buildPdfOverlayPlanWithLocalAi(params: {
       .filter((x) => x.text);
 
     if (!overlays.length) {
-      return { overlays: fallback, status: "AI local không trả overlay hợp lệ, dùng mặc định." };
+      return { overlays: fallback, status: "AI local không trả layout hợp lệ, dùng trích xuất backend từ PDF mẫu." };
     }
-    return { overlays, status: "AI local đã sinh overlay plan theo PDF mẫu." };
+    return { overlays, status: "AI local đã phân tích PDF mẫu và sinh layout động." };
   } catch {
-    return { overlays: fallback, status: "AI local lỗi khi sinh overlay plan, dùng mặc định." };
+    return { overlays: fallback, status: "AI local lỗi khi phân tích mẫu, dùng trích xuất backend từ PDF mẫu." };
   }
 }
 
@@ -1283,14 +1275,10 @@ function buildAutoReportDbBody(params: {
   fields: TableField[];
   layout: PdfLayoutSpec;
   blueprint?: DocxTemplateBlueprint;
-  overlayTemplatePdfPath?: string;
-  overlayItems?: PdfOverlayPlanItem[];
   designSpec?: ReturnType<typeof buildPdfReportDesignSpec>;
 }): string {
   const tableName = String(params.tableName || "").trim();
   const allFields = Array.isArray(params.fields) ? params.fields : [];
-  const overlayTemplatePdfPath = String(params.overlayTemplatePdfPath || "").trim();
-  const overlayItems = Array.isArray(params.overlayItems) ? params.overlayItems : [];
 
   const derivedBlueprint: DocxTemplateBlueprint = params.blueprint || {
     title: sanitizeTemplateLine(params.layout.docTitle || "BAO CAO") || "BAO CAO",
@@ -1444,6 +1432,9 @@ const moneyFormatter = (value) => {
 };
 
 const items = rows.map((row, idx) => ({
+  ...(row || {}),
+  stt: idx + 1,
+  index: idx + 1,
 ${itemAssignments}
 }));
 
@@ -1474,6 +1465,7 @@ const tongCongRaw = totalsKey
 const reportDesignSpec = ${JSON.stringify(params.designSpec || null)};
 
 return {
+  ...(data || {}),
   ten_cong_ty: bang?.sys_apps?.rows?.[0]?.app_name ?? data?.ten_cong_ty ?? "",
   com_logo: seft?.com_logo ?? data?.com_logo ?? "",
   table_name: activeTableName,
@@ -1485,56 +1477,6 @@ ${headerAssignments ? `${headerAssignments}\n` : ""}
   ghi_chu: data?.ghi_chu ?? "",
 ${signatureAssignments ? `${signatureAssignments}\n` : ""}
   reportDesignSpec,
-  __pdfOverlay: (() => {
-    const templatePdfPath = ${JSON.stringify(overlayTemplatePdfPath)};
-    const seedItems = ${JSON.stringify(overlayItems)};
-    if (!templatePdfPath || !Array.isArray(seedItems) || seedItems.length === 0) return undefined;
-
-    const tokenMap = {
-      ...(data || {}),
-      ...(data?.order || {}),
-      ...(rows?.[0] || {}),
-      ten_cong_ty: bang?.sys_apps?.rows?.[0]?.app_name ?? data?.ten_cong_ty ?? "",
-      tong_cong: moneyFormatter(tongCongRaw),
-      ghi_chu: data?.ghi_chu ?? "",
-      table_name: activeTableName,
-      rows,
-      items,
-      totals,
-    };
-
-    const fillTemplate = (text) => String(text ?? "").replace(/\{([^{}]+)\}/g, (_m, key) => {
-      const k = String(key || "").trim();
-      if (!k) return "";
-      const value = tokenMap?.[k];
-      return value == null ? "" : String(value);
-    });
-
-    const overlays = seedItems
-      .map((it) => {
-        const text = fillTemplate(it?.text);
-        if (!String(text || "").trim()) return null;
-        return {
-          page: Number(it?.page || 1),
-          x: Number(it?.x || 0),
-          y: Number(it?.y || 0),
-          fontSize: Number(it?.fontSize || 11),
-          fontName: String(it?.fontName || "Helvetica"),
-          color: String(it?.color || "#000000"),
-          opacity: Number(it?.opacity || 1),
-          rotate: Number(it?.rotate || 0),
-          text,
-        };
-      })
-      .filter(Boolean);
-
-    if (!overlays.length) return undefined;
-    return {
-      templatePdfPath,
-      overlays,
-      outputName: "overlay_" + Date.now() + ".pdf",
-    };
-  })(),
 };
 `.trim();
 }
@@ -2140,6 +2082,17 @@ export function Detail({
   const [autoCodeOptions, setAutoCodeOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [loadingAutoCode, setLoadingAutoCode] = useState(false);
   const [downloadingReportTemplate, setDownloadingReportTemplate] = useState(false);
+  const [comparingPdfTemplate, setComparingPdfTemplate] = useState(false);
+  const [pdfCompareResult, setPdfCompareResult] = useState<null | {
+    qualityGate?: string;
+    textCoveragePercent?: number;
+    matchedLines?: number;
+    sampleLineCount?: number;
+    renderedLineCount?: number;
+    positionDriftMm?: { avg?: number; p95?: number; max?: number };
+    missingSampleLines?: string[];
+    unexpectedRenderLines?: string[];
+  }>(null);
 
   const previewDesignSpec = useMemo(() => {
     if (!pdfOverlayPending) return null;
@@ -2148,6 +2101,67 @@ export function Detail({
       : [];
     return buildPdfReportDesignSpec(pdfOverlayPending.layout, pdfOverlayEditItems, tableRows, sampleLines);
   }, [pdfOverlayPending, pdfOverlayEditItems, tableRows]);
+
+  const previewOverlayItems = useMemo(() => {
+    return (pdfOverlayEditItems.length > 0 ? pdfOverlayEditItems : pdfOverlayPending?.overlayItems || [])
+      .filter((item) => String(item?.text || "").trim())
+      .slice(0, 120);
+  }, [pdfOverlayEditItems, pdfOverlayPending]);
+
+  const previewOverlayContext = useMemo(() => {
+    if (!pdfOverlayPending) return {} as Record<string, any>;
+    return buildPdfOverlayPreviewContext(tableRows, pdfOverlayPending.layout as any);
+  }, [pdfOverlayPending, tableRows]);
+
+  const compareHighlightSets = useMemo(() => {
+    const normalize = (value: string) => String(value || "")
+      .toLowerCase()
+      .replace(/\u00a0/g, " ")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const missing = new Set(
+      (pdfCompareResult?.missingSampleLines || [])
+        .map((line) => normalize(String(line || "")))
+        .filter(Boolean),
+    );
+    const unexpected = new Set(
+      (pdfCompareResult?.unexpectedRenderLines || [])
+        .map((line) => normalize(String(line || "")))
+        .filter(Boolean),
+    );
+    return { normalize, missing, unexpected };
+  }, [pdfCompareResult]);
+
+  const previewOverlayDisplayItems = useMemo(() => {
+    return previewOverlayItems.map((item) => {
+      const resolved = resolvePdfOverlayText(String(item?.text || ""), previewOverlayContext) || String(item?.text || "");
+      const key = compareHighlightSets.normalize(resolved);
+      let status: "neutral" | "ok" | "warn" | "miss" = "neutral";
+      if (pdfCompareResult) {
+        if (key && compareHighlightSets.missing.has(key)) status = "miss";
+        else if (key && compareHighlightSets.unexpected.has(key)) status = "warn";
+        else status = "ok";
+      }
+      return { item, resolved, status };
+    });
+  }, [previewOverlayItems, previewOverlayContext, compareHighlightSets, pdfCompareResult]);
+
+  const previewPageMetrics = useMemo(() => {
+    const widthPt = Number(previewDesignSpec?.pageWidth || 595);
+    const heightPt = Number(previewDesignSpec?.pageHeight || 842);
+    const toPercent = (item: PdfOverlayPlanItem) => {
+      const xPt = Number(item?.x || 0);
+      const yPt = Number(item?.y || 0);
+      const left = widthPt > 0 ? (xPt / widthPt) * 100 : 0;
+      const top = heightPt > 0 ? ((heightPt - yPt) / heightPt) * 100 : 0;
+      return {
+        left: Number.isFinite(left) ? left : 0,
+        top: Number.isFinite(top) ? top : 0,
+      };
+    };
+    return { toPercent };
+  }, [previewDesignSpec]);
 
   const antIconOptions = useMemo(() => {
     const fullOptions = Object.keys(AntdIcons)
@@ -2967,9 +2981,12 @@ export function Detail({
       });
       setPdfOverlayPreviewUrls(Array.isArray(sample.previewUrls) ? sample.previewUrls : []);
 
-      const overlayPlan = exactOverlaySeeds.length > 0
-        ? { overlays: exactOverlaySeeds, status: "Đã lấy tọa độ text trực tiếp từ PDF gốc." }
-        : await buildPdfOverlayPlanWithLocalAi({ appId, layout: effectiveLayout, fields: tableRows });
+      const overlayPlan = await buildPdfOverlayPlanWithLocalAi({
+        appId,
+        layout: effectiveLayout,
+        fields: tableRows,
+        fallbackItems: exactOverlaySeeds,
+      });
 
       const designSpec = buildPdfReportDesignSpec(
         effectiveLayout,
@@ -2981,12 +2998,10 @@ export function Detail({
         tableName,
         fields: tableRows,
         layout: effectiveLayout,
-        overlayTemplatePdfPath: sourcePdfPath,
-        overlayItems: overlayPlan.overlays,
         designSpec,
       });
 
-          formRef.current?.setFieldsValue({ report_name: sourcePdfPath });
+      formRef.current?.setFieldsValue({ report_name: "" });
       if (!String(formRef.current?.getFieldValue("orientation") || "").trim()) {
         formRef.current?.setFieldsValue({ orientation: "p" });
       }
@@ -3016,12 +3031,13 @@ export function Detail({
         overlayItems: overlayPlan.overlays,
         designSpec,
       });
+      setPdfCompareResult(null);
       setPdfOverlayModalOpen(true);
 
       message.success(
         t(
           "system.menu.reportAutoGeneratedFromPdf",
-          "Đã sinh overlay PDF gốc. Hãy tinh chỉnh tọa độ rồi bấm Áp overlay để lưu trigger report_db.",
+          "Đã sinh mẫu báo cáo động từ PDF mẫu. Hãy kiểm tra preview rồi bấm Lưu mẫu báo cáo động để lưu trigger report_db.",
         ),
       );
       onSuccess?.("ok");
@@ -3080,8 +3096,6 @@ export function Detail({
       tableName: pdfOverlayPending.tableName,
       fields: tableRows,
       layout: pdfOverlayPending.layout,
-      overlayTemplatePdfPath: pdfOverlayPending.sourcePdfPath,
-      overlayItems,
       designSpec,
     });
 
@@ -3091,9 +3105,88 @@ export function Detail({
       report_design_spec: csmEncrypt(JSON.stringify(designSpec, null, 2)),
     }));
     setPdfOverlayPending((prev) => prev ? { ...prev, overlayItems, designSpec } : prev);
+    setPdfCompareResult(null);
     setPdfOverlayModalOpen(false);
-    message.success("Đã áp overlay và lưu report_db");
+    message.success("Đã lưu trigger report_db cho mẫu báo cáo động");
   }, [pdfOverlayEditItems, pdfOverlayPending, tableRows]);
+
+  const handleCompareWithSourcePdf = useCallback(async () => {
+    if (!pdfOverlayPending || !previewDesignSpec || !appId) {
+      message.warning("Thiếu dữ liệu để so sánh mẫu PDF");
+      return;
+    }
+
+    try {
+      setComparingPdfTemplate(true);
+      const previewContext = buildPdfOverlayPreviewContext(tableRows, pdfOverlayPending.layout);
+
+      const previewRes = await fetch("/api/ai-local/report/render-template/preview", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": user.app_token || "",
+        },
+        body: JSON.stringify({
+          appId,
+          reportDesignSpec: previewDesignSpec,
+          data: previewContext,
+          saveToDisk: false,
+          returnBase64: true,
+          outputName: `compare_preview_${Date.now()}.pdf`,
+        }),
+      });
+
+      const previewJson = await previewRes.json().catch(() => ({}));
+      const previewResult = (previewJson?.result || previewJson || {}) as Record<string, any>;
+      if (!previewRes.ok || !previewResult?.success || !String(previewResult?.pdfBase64 || "").trim()) {
+        throw new Error(String(previewResult?.message || "Không render được PDF preview để so sánh"));
+      }
+
+      const compareRes = await fetch("/api/ai-local/report/render-template/compare", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": user.app_token || "",
+        },
+        body: JSON.stringify({
+          samplePdfPath: pdfOverlayPending.sourcePdfPath,
+          renderedPdfBase64: previewResult.pdfBase64,
+        }),
+      });
+      const compareJson = await compareRes.json().catch(() => ({}));
+      const compareResult = (compareJson?.result || compareJson || {}) as Record<string, any>;
+      if (!compareRes.ok || !compareResult?.success) {
+        throw new Error(String(compareResult?.message || "So sánh PDF thất bại"));
+      }
+
+      const coverage = Number(compareResult.textCoveragePercent || 0);
+      const p95 = Number(compareResult?.positionDriftMm?.p95 || 0);
+      setPdfCompareResult({
+        qualityGate: String(compareResult.qualityGate || ""),
+        textCoveragePercent: coverage,
+        matchedLines: Number(compareResult.matchedLines || 0),
+        sampleLineCount: Number(compareResult.sampleLineCount || 0),
+        renderedLineCount: Number(compareResult.renderedLineCount || 0),
+        positionDriftMm: {
+          avg: Number(compareResult?.positionDriftMm?.avg || 0),
+          p95,
+          max: Number(compareResult?.positionDriftMm?.max || 0),
+        },
+        missingSampleLines: Array.isArray(compareResult.missingSampleLines) ? compareResult.missingSampleLines : [],
+        unexpectedRenderLines: Array.isArray(compareResult.unexpectedRenderLines) ? compareResult.unexpectedRenderLines : [],
+      });
+
+      if (coverage >= 80 && p95 <= 6) {
+        message.success(`So sánh đạt: coverage ${coverage.toFixed(1)}%, drift p95 ${p95.toFixed(2)}mm`);
+      } else {
+        message.warning(`Cần tinh chỉnh: coverage ${coverage.toFixed(1)}%, drift p95 ${p95.toFixed(2)}mm`);
+      }
+    } catch (error: any) {
+      message.error(error?.message || "So sánh PDF thất bại");
+    } finally {
+      setComparingPdfTemplate(false);
+    }
+  }, [appId, pdfOverlayPending, previewDesignSpec, tableRows, user.app_token]);
 
   const updatePdfOverlayItem = useCallback((index: number, patch: Partial<PdfOverlayPlanItem>) => {
     setPdfOverlayEditItems((prev) =>
@@ -4683,6 +4776,14 @@ export function Detail({
           <Button key="close" onClick={() => setPdfOverlayModalOpen(false)}>
             Đóng
           </Button>,
+          <Button
+            key="compare"
+            onClick={handleCompareWithSourcePdf}
+            loading={comparingPdfTemplate}
+            disabled={!pdfOverlayPending}
+          >
+            So sánh với PDF gốc
+          </Button>,
           <Button key="apply" type="primary" onClick={handleApplyPdfOverlayDraft} disabled={!pdfOverlayPending}>
             Lưu mẫu báo cáo động
           </Button>,
@@ -4694,6 +4795,27 @@ export function Detail({
           style={{ marginBottom: 12 }}
           message="Review báo cáo động bằng dữ liệu mẫu và bố cục từ PDF gốc. Không dùng nền PDF làm preview nữa."
         />
+        {pdfCompareResult && (
+          <Alert
+            style={{ marginBottom: 12 }}
+            type={pdfCompareResult.qualityGate === "pass" ? "success" : "warning"}
+            showIcon
+            message={pdfCompareResult.qualityGate === "pass" ? "Kết quả so sánh: Đạt" : "Kết quả so sánh: Cần tinh chỉnh"}
+            description={(
+              <div style={{ display: "grid", gap: 4 }}>
+                <div>Coverage text: {Number(pdfCompareResult.textCoveragePercent || 0).toFixed(1)}% ({pdfCompareResult.matchedLines}/{pdfCompareResult.sampleLineCount})</div>
+                <div>Drift vị trí (mm): avg {Number(pdfCompareResult.positionDriftMm?.avg || 0).toFixed(2)} | p95 {Number(pdfCompareResult.positionDriftMm?.p95 || 0).toFixed(2)} | max {Number(pdfCompareResult.positionDriftMm?.max || 0).toFixed(2)}</div>
+              </div>
+            )}
+          />
+        )}
+        {pdfCompareResult && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+            <span style={{ border: "1px solid rgba(74,222,128,0.55)", background: "rgba(220,252,231,0.62)", borderRadius: 999, padding: "2px 10px", fontSize: 12, color: "#14532d" }}>Khớp</span>
+            <span style={{ border: "1px solid rgba(251,191,36,0.7)", background: "rgba(254,243,199,0.82)", borderRadius: 999, padding: "2px 10px", fontSize: 12, color: "#92400e" }}>Lệch/Nghi ngờ</span>
+            <span style={{ border: "1px solid rgba(248,113,113,0.65)", background: "rgba(254,226,226,0.78)", borderRadius: 999, padding: "2px 10px", fontSize: 12, color: "#991b1b" }}>Thiếu so với mẫu gốc</span>
+          </div>
+        )}
         <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 16, alignItems: "start" }}>
           <Card
             size="small"
@@ -4728,6 +4850,46 @@ export function Detail({
                   pointerEvents: "none",
                 }}
               />
+              <div style={{ position: "absolute", inset: 0, zIndex: 2, pointerEvents: "none" }}>
+                {previewOverlayDisplayItems.map(({ item, resolved, status }, index) => {
+                  const pos = previewPageMetrics.toPercent(item);
+                  const text = String(resolved || item.text || "").trim();
+                  if (!text) return null;
+                  const fontSizePx = Math.max(9, Math.min(18, Number(item.fontSize || 11)));
+                  const tone = status === "miss"
+                    ? { color: "#991b1b", bg: "rgba(254,226,226,0.78)", border: "1px solid rgba(248,113,113,0.65)" }
+                    : status === "warn"
+                      ? { color: "#92400e", bg: "rgba(254,243,199,0.82)", border: "1px solid rgba(251,191,36,0.7)" }
+                      : status === "ok"
+                        ? { color: "#14532d", bg: "rgba(220,252,231,0.62)", border: "1px solid rgba(74,222,128,0.55)" }
+                        : { color: "#111827", bg: "transparent", border: "none" };
+                  return (
+                    <div
+                      key={`preview-overlay-${index}`}
+                      style={{
+                        position: "absolute",
+                        left: `${Math.max(0, Math.min(95, pos.left))}%`,
+                        top: `${Math.max(0, Math.min(98, pos.top))}%`,
+                        transform: "translateY(-50%)",
+                        fontSize: fontSizePx,
+                        whiteSpace: "nowrap",
+                        maxWidth: "92%",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        opacity: 0.9,
+                        padding: tone.bg === "transparent" ? "0" : "1px 4px",
+                        borderRadius: tone.bg === "transparent" ? 0 : 4,
+                        background: tone.bg,
+                        border: tone.border,
+                        color: tone.color,
+                      }}
+                      title={text}
+                    >
+                      {text}
+                    </div>
+                  );
+                })}
+              </div>
               <div style={{ position: "relative", zIndex: 1, padding: 24, height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column", gap: 12 }}>
                 <div style={{ borderBottom: "1px solid #ececec", paddingBottom: 8 }}>
                   <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>{previewDesignSpec?.title || "BÁO CÁO"}</div>
@@ -4736,7 +4898,17 @@ export function Detail({
                 <div style={{ display: "grid", gap: 8 }}>
                   {(previewDesignSpec?.header || []).slice(0, 6).map((item, index) => (
                     <div key={`${item.token}-${index}`} style={{ fontSize: 12, color: "#374151" }}>
-                      <strong>{item.label}</strong>: {item.sampleValue}
+                      {(() => {
+                        const label = String(item.label || "").trim();
+                        const value = String(item.sampleValue || "").trim();
+                        if (!value) return <strong>{label}</strong>;
+                        const normalizedLabel = label.toLowerCase();
+                        const normalizedValue = value.toLowerCase();
+                        if (normalizedValue === normalizedLabel || normalizedValue.startsWith(`${normalizedLabel}:`)) {
+                          return <strong>{label}</strong>;
+                        }
+                        return <><strong>{label}</strong>: {value}</>;
+                      })()}
                     </div>
                   ))}
                 </div>
@@ -4769,12 +4941,26 @@ export function Detail({
             size="small"
             title={(
               <Space>
-                <span>Overlay items</span>
+                <span>Thành phần mẫu động</span>
                 <Button size="small" onClick={addPdfOverlayItem}>Thêm item</Button>
               </Space>
             )}
             bodyStyle={{ padding: 12 }}
           >
+            {pdfCompareResult && (
+              <div style={{ marginBottom: 10, display: "grid", gap: 6 }}>
+                {(pdfCompareResult.missingSampleLines || []).length > 0 && (
+                  <div style={{ fontSize: 12, color: "#991b1b" }}>
+                    Thiếu ({Math.min((pdfCompareResult.missingSampleLines || []).length, 3)} dòng đầu): {(pdfCompareResult.missingSampleLines || []).slice(0, 3).join(" | ")}
+                  </div>
+                )}
+                {(pdfCompareResult.unexpectedRenderLines || []).length > 0 && (
+                  <div style={{ fontSize: 12, color: "#92400e" }}>
+                    Dư/lệch ({Math.min((pdfCompareResult.unexpectedRenderLines || []).length, 3)} dòng đầu): {(pdfCompareResult.unexpectedRenderLines || []).slice(0, 3).join(" | ")}
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{ maxHeight: 640, overflow: "auto", display: "grid", gap: 12 }}>
               {(pdfOverlayEditItems.length > 0 ? pdfOverlayEditItems : pdfOverlayPending?.overlayItems || []).map((item, index) => (
                 <Card

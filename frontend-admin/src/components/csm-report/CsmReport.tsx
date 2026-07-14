@@ -526,6 +526,8 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
           setReportSrc(pdfUrl);
           return;
         }
+        message.error(String(renderResult?.message || "AI local chưa render được mẫu báo cáo động"));
+        return;
       }
 
       const overlayCfg = (datas_report && typeof datas_report === "object")
