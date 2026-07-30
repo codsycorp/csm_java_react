@@ -64,12 +64,44 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		"requestId": req.RequestID, "flowType": req.FlowType, "taskType": req.TaskType,
 		"contextType": req.ContextType, "appId": req.AppID, "model": req.Model,
 	}))
+	req.UserID = strings.TrimSpace(auth.UserID)
+	preMode := services.ResolveResponseMode(req)
+	req.ResponseMode = preMode
+	sessionMemoryCap := services.SessionMemoryBudget(deps.Config, req.ContextType, preMode)
+	injectedConversation := services.InjectScopedConversationContextIntoRequest(
+		deps.RM,
+		req,
+		sessionMemoryCap,
+	)
+	if req.EditorMetadata == nil {
+		req.EditorMetadata = map[string]any{}
+	}
+	req.EditorMetadata["__sessionMemoryCap"] = sessionMemoryCap
+	sessionMemorySource, sessionMemoryCapReported, sessionMemoryUsedChars := services.ConversationMemoryTelemetryFromMetadata(req.EditorMetadata)
+	if sessionMemoryCapReported <= 0 {
+		sessionMemoryCapReported = sessionMemoryCap
+	}
+	if sessionMemoryUsedChars <= 0 && injectedConversation != "" {
+		sessionMemoryUsedChars = len(injectedConversation)
+	}
+	writeSSE(w, stageEvent("context_memory", map[string]any{
+		"requestId":                req.RequestID,
+		"responseMode":             preMode,
+		"sessionMemoryCap":         sessionMemoryCapReported,
+		"sessionMemoryUsedChars":   sessionMemoryUsedChars,
+		"sessionMemorySource":      sessionMemorySource,
+		"sessionMemoryInjected":    injectedConversation != "",
+		"sessionMemoryInjectChars": len(injectedConversation),
+		"constrainedTier":          services.IsConstrained8GbTier(deps.Config),
+	}))
 
 	attachments := services.ParseAttachmentsFromParams(params)
 	scan := services.ScanAttachments(attachments, req.ContextType)
 	if blocked, reason := services.MultimodalRouteGuard(scan, false); blocked {
 		writeSSE(w, services.BlockedMultimodalSSE(req, reason))
-		writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": 0}))
+		writeSSE(w, stageEvent("request_complete", withSessionMemoryTelemetry(map[string]any{
+			"requestId": req.RequestID, "elapsedMs": 0,
+		}, sessionMemorySource, sessionMemoryCapReported, sessionMemoryUsedChars)))
 		return
 	}
 	if scan.TotalCount > 0 {
@@ -98,7 +130,7 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 				f.Flush()
 			}
 		}
-		handleQuickDirectReply(deps, w, req)
+		handleQuickDirectReply(deps, w, req, auth, phase1.Orchestration.RoutingTier)
 		return
 	}
 
@@ -111,9 +143,9 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 			elapsed := int64(0)
 			completion := services.CodeStreamCompletion(req, "", resolved, services.StreamingModelLabel(deps.Config, deps.Llama), elapsed)
 			writeSSE(w, completion)
-			writeSSE(w, stageEvent("request_complete", map[string]any{
+			writeSSE(w, stageEvent("request_complete", withSessionMemoryTelemetry(map[string]any{
 				"requestId": req.RequestID, "elapsedMs": elapsed, "menuPayloadTruncated": true,
-			}))
+			}, sessionMemorySource, sessionMemoryCapReported, sessionMemoryUsedChars)))
 			return
 		}
 	}
@@ -152,7 +184,15 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		writeSSE(w, completion)
 		services.CacheCodeStreamParts(req.RequestID, gf.MenuJSON, "done")
 		services.RecordCodeEditFromCompletion(deps.Config, deps.RM, req, completion, gf.MenuJSON)
-		writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": elapsed}))
+		services.RecordScopedConversationTurnFromRequest(deps.RM, req, gf.MenuJSON, map[string]any{
+			"requestId":    req.RequestID,
+			"responseMode": responseMode,
+			"routingTier":  phase1.Orchestration.RoutingTier,
+			"source":       "ai_code_stream_greenfield",
+		})
+		writeSSE(w, stageEvent("request_complete", withSessionMemoryTelemetry(map[string]any{
+			"requestId": req.RequestID, "elapsedMs": elapsed,
+		}, sessionMemorySource, sessionMemoryCapReported, sessionMemoryUsedChars)))
 		return
 	}
 
@@ -213,13 +253,23 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		completion := services.CodeStreamCompletion(req, result, req.CurrentCode, modelLabel, elapsed)
 		writeSSE(w, completion)
 		services.CacheCodeStreamParts(req.RequestID, result, "done")
-		writeSSE(w, stageEvent("request_complete", map[string]any{
+		services.RecordScopedConversationTurnFromRequest(deps.RM, req, result, map[string]any{
+			"requestId":    req.RequestID,
+			"responseMode": responseMode,
+			"routingTier":  phase1.Orchestration.RoutingTier,
+			"source":       "ai_code_stream_map_reduce",
+		})
+		writeSSE(w, stageEvent("request_complete", withSessionMemoryTelemetry(map[string]any{
 			"requestId": req.RequestID, "elapsedMs": elapsed, "mapReduce": true,
-		}))
+		}, sessionMemorySource, sessionMemoryCapReported, sessionMemoryUsedChars)))
 		return
 	}
 
 	prompt := services.BuildCodeStreamLocalPromptFull(deps.Config, req, phase1.LearningBlock, phase1.ComprehendBlock, phase1.TenantRAG.Block, phase1.Multimodal.CompactContext, phase1.Workspace.Block)
+	sessionMemorySource, sessionMemoryCapReported, sessionMemoryUsedChars = services.ConversationMemoryTelemetryFromMetadata(req.EditorMetadata)
+	if sessionMemoryCapReported <= 0 {
+		sessionMemoryCapReported = sessionMemoryCap
+	}
 
 	if services.ShouldUseIncrementalPlanExecute(deps.Config, req, phase1) && deps.Llama.IsAvailable() {
 		writeSSE(w, stageEvent("local_pre_analysis", map[string]any{
@@ -277,10 +327,16 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 			if responseMode == "edit" && req.ContextType == "menu_json" {
 				services.RecordCodeEditFromCompletion(deps.Config, deps.RM, req, completion, result)
 			}
-			writeSSE(w, stageEvent("request_complete", map[string]any{
+			services.RecordScopedConversationTurnFromRequest(deps.RM, req, result, map[string]any{
+				"requestId":    req.RequestID,
+				"responseMode": responseMode,
+				"routingTier":  phase1.Orchestration.RoutingTier,
+				"source":       "ai_code_stream_incremental",
+			})
+			writeSSE(w, stageEvent("request_complete", withSessionMemoryTelemetry(map[string]any{
 				"requestId": req.RequestID, "elapsedMs": elapsed, "incrementalPlan": true,
 				"planSteps": len(incrResult.Plan.Steps),
-			}))
+			}, sessionMemorySource, sessionMemoryCapReported, sessionMemoryUsedChars)))
 			return
 		}
 	}
@@ -294,6 +350,9 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 		"expertMatchedExamples":  phase1.ExpertRouting.MatchedExamples,
 		"expertRiskLevel":        phase1.ExpertRouting.RiskLevel,
 		"expertRecommendedRoute": phase1.ExpertRouting.RecommendedRoute,
+		"sessionMemoryCap":       sessionMemoryCapReported,
+		"sessionMemorySource":    sessionMemorySource,
+		"sessionMemoryUsedChars": sessionMemoryUsedChars,
 		"promptChars":            len(prompt), "constrainedTier": services.IsConstrained8GbTier(deps.Config),
 		"promptCap":       services.EffectiveLocalPromptCap(deps.Config, req.ContextType, responseMode),
 		"maxOutputTokens": services.EffectiveInferenceMaxTokensFromParams(deps.Config, responseMode, params),
@@ -422,7 +481,15 @@ func handleCodeStream(deps StreamDeps, w http.ResponseWriter, params map[string]
 	writeSSE(w, completion)
 	services.CacheCodeStreamParts(req.RequestID, result, "done")
 	services.RecordCodeEditFromCompletion(deps.Config, deps.RM, req, completion, result)
-	writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": elapsed}))
+	services.RecordScopedConversationTurnFromRequest(deps.RM, req, result, map[string]any{
+		"requestId":    req.RequestID,
+		"responseMode": responseMode,
+		"routingTier":  phase1.Orchestration.RoutingTier,
+		"source":       "ai_code_stream_main",
+	})
+	writeSSE(w, stageEvent("request_complete", withSessionMemoryTelemetry(map[string]any{
+		"requestId": req.RequestID, "elapsedMs": elapsed,
+	}, sessionMemorySource, sessionMemoryCapReported, sessionMemoryUsedChars)))
 }
 
 func handleAssistantChatStream(deps StreamDeps, w http.ResponseWriter, params map[string]any, auth *security.AuthUser) {
@@ -507,31 +574,64 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 		writeSSE(w, evt)
 	}
 	if services.ShouldQuickReply(phase1.Intent, responseMode) {
-		handleQuickDirectReply(deps, w, req)
+		handleQuickDirectReply(deps, w, req, nil, phase1.Orchestration.RoutingTier)
 		return
 	}
 
 	startedAt := time.Now()
 	modelLabel := services.StreamingModelLabel(deps.Config, deps.Llama)
 	var rawResult string
+	var inferErr error
 
-	if executePatch && deps.Llama.IsAvailable() {
+	if deps.Llama.IsAvailable() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
 
-		if contextType == "menu_json" {
+		writeSSE(w, stageEvent("streaming_started", map[string]any{
+			"requestId": requestID,
+			"model":     "local_provider",
+			"percent":   12,
+			"mode":      map[bool]string{true: "patch", false: "prompt"}[executePatch],
+		}))
+
+		if executePatch && contextType == "menu_json" {
 			prompt := services.BuildCodeStreamLocalPromptFull(deps.Config, req, phase1.LearningBlock, phase1.ComprehendBlock, phase1.TenantRAG.Block, phase1.Multimodal.CompactContext, phase1.Workspace.Block)
-			rawResult, _ = deps.Llama.Complete(ctx, prompt)
-		} else if contextType == "code" && currentCode != "" {
+			rawResult, inferErr = deps.Llama.Complete(ctx, prompt)
+		} else if executePatch && contextType == "code" && currentCode != "" {
 			prompt := buildPatchPrompt(message, currentCode)
-			rawResult, _ = deps.Llama.Complete(ctx, prompt)
+			rawResult, inferErr = deps.Llama.Complete(ctx, prompt)
+		} else {
+			// JS integrations often send business/plan tasks with executePatch=false; run prompt mode instead of dry-run.
+			prompt := services.BuildCodeStreamLocalPromptFull(deps.Config, req, phase1.LearningBlock, phase1.ComprehendBlock, phase1.TenantRAG.Block, phase1.Multimodal.CompactContext, phase1.Workspace.Block)
+			rawResult, inferErr = deps.Llama.Complete(ctx, prompt)
+		}
+	} else {
+		rawResult = services.LocalUnavailableMessage() + "\n\n(" + services.LocalUnavailableHint() + ")"
+		if deps.Llama.ModelOnDisk() {
+			rawResult = uiText(req.UILang,
+				"Model GGUF có trên disk nhưng inference chưa sẵn sàng. "+services.LocalUnavailableHint(),
+				"GGUF model exists on disk but local inference is not ready. "+services.LocalUnavailableHint(),
+				"磁盘已有 GGUF 模型，但本地推理尚未就绪。"+services.LocalUnavailableHint(),
+			)
 		}
 	}
 
 	rawResult = services.CleanLocalModelOutput(rawResult)
+	if inferErr != nil {
+		writeSSE(w, stageEvent("error", map[string]any{
+			"requestId":   requestID,
+			"reason_code": "local_execute_plan_inference_error",
+			"message": uiText(req.UILang,
+				"Local inference lỗi khi thực thi task JS. Đang fallback thông điệp an toàn.",
+				"Local inference failed while executing JS task. Falling back to a safe response.",
+				"执行 JS 任务时本地推理失败，正在回退到安全响应。",
+			),
+			"error": inferErr.Error(),
+		}))
+	}
 	if rawResult != "" {
 		writeSSE(w, map[string]any{
-			"stage": "streaming", "status": "running", "message": "Đang stream patch local",
+			"stage": "streaming", "status": "running", "message": "Đang stream kết quả local",
 			"chunk": rawResult, "responseMode": responseMode, "contextType": contextType, "model": "local_provider",
 		})
 	}
@@ -540,7 +640,7 @@ func handleExecuteLocalPlan(deps StreamDeps, w http.ResponseWriter, params map[s
 	if rawResult != "" {
 		completion := services.CodeStreamCompletion(req, rawResult, currentCode, modelLabel, elapsed)
 		completion["status"] = "done"
-		completion["message"] = "Local execute plan hoàn tất với patch local"
+		completion["message"] = "Local execute plan hoàn tất"
 		completion["localProviderPrimaryUsed"] = true
 		completion["result"] = map[string]any{
 			"appId": appID, "applyDynamicIngestion": false, "ingestCount": 0, "aggregateScopeMask": phase1.Orchestration.ScopeMask,
@@ -580,7 +680,7 @@ Current code:
 	return services.PrepareLocalProviderPrompt(raw, 32_000)
 }
 
-func handleQuickDirectReply(deps StreamDeps, w http.ResponseWriter, req *services.CodeStreamRequest) {
+func handleQuickDirectReply(deps StreamDeps, w http.ResponseWriter, req *services.CodeStreamRequest, auth *security.AuthUser, routingTier string) {
 	writeSSE(w, stageEvent("local_pre_analysis", map[string]any{
 		"requestId":    req.RequestID,
 		"status":       "quick_reply_ready",
@@ -670,7 +770,28 @@ func handleQuickDirectReply(deps StreamDeps, w http.ResponseWriter, req *service
 	completion := services.CodeStreamCompletion(req, answer, req.CurrentCode, modelLabel, elapsed)
 	writeSSE(w, completion)
 	services.CacheCodeStreamParts(req.RequestID, answer, "done")
-	writeSSE(w, stageEvent("request_complete", map[string]any{"requestId": req.RequestID, "elapsedMs": elapsed}))
+	if auth != nil {
+		services.RecordScopedConversationTurnFromRequest(deps.RM, req, answer, map[string]any{
+			"requestId":    req.RequestID,
+			"responseMode": "analyze",
+			"routingTier":  routingTier,
+			"source":       "ai_code_stream_quick_reply",
+		})
+	}
+	sessionMemorySource, sessionMemoryCapReported, sessionMemoryUsedChars := services.ConversationMemoryTelemetryFromMetadata(req.EditorMetadata)
+	writeSSE(w, stageEvent("request_complete", withSessionMemoryTelemetry(map[string]any{
+		"requestId": req.RequestID, "elapsedMs": elapsed,
+	}, sessionMemorySource, sessionMemoryCapReported, sessionMemoryUsedChars)))
+}
+
+func withSessionMemoryTelemetry(base map[string]any, source string, capChars, usedChars int) map[string]any {
+	if base == nil {
+		base = map[string]any{}
+	}
+	base["sessionMemorySource"] = source
+	base["sessionMemoryCap"] = capChars
+	base["sessionMemoryUsedChars"] = usedChars
+	return base
 }
 
 func stageEvent(stage string, data map[string]any) map[string]any {

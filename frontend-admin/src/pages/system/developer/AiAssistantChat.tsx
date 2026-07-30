@@ -241,6 +241,9 @@ interface AiAssistantStageEvent {
 	retrievalChars?: number
 	minChars?: number
 	deficit?: number
+	sessionMemoryCap?: number
+	sessionMemoryUsedChars?: number
+	sessionMemorySource?: string
 	retryApplied?: boolean
 	timestamp: number
 }
@@ -4782,13 +4785,32 @@ export default function AiAssistantChat({
 		const retrievalCharsNum = Number(data?.retrievalChars);
 		const minCharsNum = Number(data?.minChars);
 		const deficitNum = Number(data?.deficit);
+		const sessionMemoryCapNum = Number(data?.sessionMemoryCap);
+		const sessionMemoryUsedCharsNum = Number(data?.sessionMemoryUsedChars);
+		const sessionMemorySource = String(data?.sessionMemorySource || "").trim();
 		const retryApplied = Boolean(data?.retryApplied);
 		const patchValidator = normalizePatchValidatorMeta(data?.patchValidator);
 		const patchDryRun = normalizePatchDryRunMeta(data?.patchDryRun);
 		const rangeLabel = extractStageRangeLabel(data);
-		const hasValue = stage || msg || messageKey || detail || detailKey || orchestrationPhase || orchestrationPhaseKey || Number.isFinite(Number(data?.percent)) || Number.isFinite(Number(data?.overallPercent)) || Boolean(rangeLabel) || Boolean(patchValidator) || Boolean(patchDryRun);
+		const hasSessionMemoryTelemetry = Number.isFinite(sessionMemoryCapNum) || Number.isFinite(sessionMemoryUsedCharsNum) || Boolean(sessionMemorySource);
+		const hasValue = stage || msg || messageKey || detail || detailKey || orchestrationPhase || orchestrationPhaseKey || Number.isFinite(Number(data?.percent)) || Number.isFinite(Number(data?.overallPercent)) || Boolean(rangeLabel) || Boolean(patchValidator) || Boolean(patchDryRun) || hasSessionMemoryTelemetry;
 		if (!hasValue)
 			return;
+
+		const normalizedStage = stage.toLowerCase();
+		let normalizedMessage = msg;
+		if (!normalizedMessage && normalizedStage === "context_memory") {
+			const pieces: string[] = [];
+			if (sessionMemorySource)
+				pieces.push(`source=${sessionMemorySource}`);
+			if (Number.isFinite(sessionMemoryUsedCharsNum))
+				pieces.push(`used=${Math.max(0, Math.floor(sessionMemoryUsedCharsNum))}`);
+			if (Number.isFinite(sessionMemoryCapNum))
+				pieces.push(`cap=${Math.max(0, Math.floor(sessionMemoryCapNum))}`);
+			normalizedMessage = pieces.length > 0
+				? uiText(`Session memory: ${pieces.join(" | ")}`, `Session memory: ${pieces.join(" | ")}`, `会话记忆：${pieces.join(" | ")}`)
+				: uiText("Session memory telemetry", "Session memory telemetry", "会话记忆遥测");
+		}
 
 		if (COMPOSER_PRIMARY_EDIT_TIMELINE && streamStartedInEditModeRef.current) {
 			const normalizedStatus = status.toLowerCase();
@@ -4815,7 +4837,7 @@ export default function AiAssistantChat({
 			messageKey,
 			orchestrationPhase,
 			orchestrationPhaseKey,
-			msg,
+			normalizedMessage,
 			JSON.stringify(messageArgs || {}),
 			detail,
 			detailKey,
@@ -4833,6 +4855,9 @@ export default function AiAssistantChat({
 			Number.isFinite(retrievalCharsNum) ? retrievalCharsNum : "",
 			Number.isFinite(minCharsNum) ? minCharsNum : "",
 			Number.isFinite(deficitNum) ? deficitNum : "",
+			Number.isFinite(sessionMemoryCapNum) ? sessionMemoryCapNum : "",
+			Number.isFinite(sessionMemoryUsedCharsNum) ? sessionMemoryUsedCharsNum : "",
+			sessionMemorySource.toLowerCase(),
 			retryApplied ? "1" : "0",
 			patchValidator?.rejectionReason || "",
 			patchValidator?.acceptedCount ?? "",
@@ -4868,10 +4893,13 @@ export default function AiAssistantChat({
 			retrievalChars: Number.isFinite(retrievalCharsNum) ? retrievalCharsNum : undefined,
 			minChars: Number.isFinite(minCharsNum) ? minCharsNum : undefined,
 			deficit: Number.isFinite(deficitNum) ? deficitNum : undefined,
+			sessionMemoryCap: Number.isFinite(sessionMemoryCapNum) ? Math.max(0, Math.floor(sessionMemoryCapNum)) : undefined,
+			sessionMemoryUsedChars: Number.isFinite(sessionMemoryUsedCharsNum) ? Math.max(0, Math.floor(sessionMemoryUsedCharsNum)) : undefined,
+			sessionMemorySource: sessionMemorySource || undefined,
 			retryApplied,
 			patchValidator,
 			patchDryRun,
-			message: msg,
+			message: normalizedMessage,
 			messageKey: messageKey || undefined,
 			messageArgs,
 			detail: detail || undefined,
@@ -4934,7 +4962,7 @@ export default function AiAssistantChat({
 			const next: AiAssistantStageEvent[] = [...prev, nextEvent];
 			return next.slice(-40);
 		});
-	}, [extractStageRangeLabel, normalizeAssistantProgressMessage]);
+	}, [extractStageRangeLabel, normalizeAssistantProgressMessage, uiText]);
 
 	const liveBackendStepLabel = useMemo(() => {
 		const stage = String(backendProgressHint.stage || "").trim();

@@ -113,6 +113,7 @@ pub fn is_public_api_path(method: &Method, path: &str) -> bool {
             | "/chat-history-app"
             | "/chat-mark-read"
             | "/chat-mark-all-read"
+            | "/traffic/analyze-frame"
     ) || clean.starts_with("/monitoring")
         || clean.starts_with("/ai-local")
         || (clean == "/crm/customer" && (*method == Method::POST || *method == Method::PUT))
@@ -121,7 +122,7 @@ pub fn is_public_api_path(method: &Method, path: &str) -> bool {
 /// Optional-auth endpoints — dynamic-code fetch() may run without sessionStorage tokens (Go parity).
 pub fn is_optional_auth_api_path(path: &str) -> bool {
     let clean = path.strip_prefix("/api").unwrap_or(path);
-    matches!(clean, "/scrape-web" | "/execute-js-on-page")
+    matches!(clean, "/scrape-web" | "/execute-js-on-page" | "/traffic/analyze-frame")
 }
 
 pub async fn auth_middleware(

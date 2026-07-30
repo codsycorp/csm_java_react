@@ -31,11 +31,8 @@ func UserAccessFromAuth(auth *AuthUser, rm *data.RecordManager) *UserAccessConte
 		return nil
 	}
 	tokenMeta := util.ParseAppToken(rm, auth.AppToken)
-	// Mirror Java resolveCurrentUserAccessContext: sub-user is determined by app_token role only.
-	isSubUser := util.IsSubUserRole(tokenMeta.Role)
-	if auth.IsSubUser && tokenMeta.Role == "" {
-		isSubUser = true
-	}
+	// Trust resolved account type from AuthUser (mapped from csm_accounts vs csm_group_members).
+	isSubUser := auth.IsSubUser
 	menusPermissions := append([]string{}, auth.MenusPermissions...)
 	appID := auth.AppID
 	if appID == "" {
@@ -277,6 +274,13 @@ func ValidatePermissionGroupAppBoundary(appID, tableName string, ctx *UserAccess
 	if contextApp == "" || targetApp == "" {
 		return ""
 	}
+	if !ctx.IsSubUser && strings.EqualFold(targetApp, "csm") {
+		return ""
+	}
+	// Main-account admins can manage permission groups inside their reachable app scope.
+	if !ctx.IsSubUser && ctx.IsAdmin && ctx.CanAccessAppData(targetApp) {
+		return ""
+	}
 	if !strings.EqualFold(contextApp, targetApp) {
 		return "Bạn chỉ được quản lý Nhóm quyền trong app_id của chính mình."
 	}
@@ -302,6 +306,7 @@ func ApplyTableReadRowFilters(appID, tableName string, rows []map[string]any, ct
 		return rows
 	}
 	data := filterManagedAccountDescendants(tableName, rows, ctx, appID, rm)
+	data = filterSubUserRowsByAppScope(tableName, data, ctx)
 	data = applyDataScopeRowFilter(appID, tableName, data, ctx, rm)
 	data = filterMainAccountRows(tableName, data, ctx, rm)
 	if tableName == "csm_accounts" {
@@ -351,10 +356,10 @@ func filterRowsForUpdate(tableName string, records []map[string]any, ctx *UserAc
 				}
 			}
 			records = filtered
-		} else if isAdminNonDev || ctx.IsDev {
+		} else if isAdminNonDev {
 			var filtered []map[string]any
 			for _, row := range records {
-				if isOwnedSubUserRow(row, ctx) {
+				if isOwnedSubUserRow(row, ctx) || isSubUserRowInAccessibleApp(row, ctx) {
 					filtered = append(filtered, row)
 				}
 			}
@@ -912,6 +917,44 @@ func isOwnedSubUserRow(row map[string]any, access *UserAccessContext) bool {
 		}
 	}
 	return false
+}
+
+func isSubUserRowInAccessibleApp(row map[string]any, access *UserAccessContext) bool {
+	if row == nil || access == nil {
+		return false
+	}
+	appID := strings.TrimSpace(fmt.Sprint(row["app_id"]))
+	if appID == "" {
+		return false
+	}
+	return access.CanAccessAppData(appID)
+}
+
+func filterSubUserRowsByAppScope(tableName string, rows []map[string]any, access *UserAccessContext) []map[string]any {
+	if tableName != "csm_group_members" || len(rows) == 0 || access == nil || access.IsDev {
+		return rows
+	}
+	var out []map[string]any
+	for _, row := range rows {
+		if access.IsSubUser {
+			rowID := fieldValueAsIdentity(row["id"])
+			loginID := fieldValueAsIdentity(row["login_identifier"])
+			if containsIdentity(access.OwnerCandidates, rowID) || containsIdentity(access.OwnerCandidates, loginID) {
+				out = append(out, row)
+			}
+			continue
+		}
+		if access.IsAdmin {
+			if isOwnedSubUserRow(row, access) || isSubUserRowInAccessibleApp(row, access) {
+				out = append(out, row)
+			}
+			continue
+		}
+		if isOwnedSubUserRow(row, access) {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 func isDataScopeExemptTable(tableName string) bool {

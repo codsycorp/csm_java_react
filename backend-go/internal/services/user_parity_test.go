@@ -7,6 +7,7 @@ import (
 	"csm_server/backend-go/internal/config"
 	"csm_server/backend-go/internal/data"
 	"csm_server/backend-go/internal/model"
+	"csm_server/backend-go/internal/util"
 )
 
 func newTempRecordManager(t *testing.T) *data.RecordManager {
@@ -131,5 +132,24 @@ func TestMapSubUserCopiesGroupRightsAndAddress(t *testing.T) {
 	}
 	if user.Username == nil || *user.Username == "" {
 		t.Fatal("ensureSubUserCanonicalFields should populate username")
+	}
+}
+
+func TestMapRecordToUserMainAccountKeepsMainSemanticsWithLegacyUserRoleToken(t *testing.T) {
+	rm := newTempRecordManager(t)
+	us := NewUserService(rm)
+	record := map[string]any{
+		"id":        "main-legacy-role-user",
+		"email":     "owner@test.com",
+		"username":  "owner@test.com",
+		"actived":   true,
+		"app_token": util.BuildRawToken("lmkt", "owner@test.com", "user", util.ResolveAccessRight("user")),
+	}
+	user := us.mapRecordToUser(record, true)
+	if user.IsSubUser == nil || *user.IsSubUser {
+		t.Fatal("main account must not be marked as sub-user")
+	}
+	if !util.HasActionPermission(user.Permissions, "admin") {
+		t.Fatalf("main account should get admin permission elevation, got %v", user.Permissions)
 	}
 }

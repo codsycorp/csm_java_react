@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { FormInstance, UploadProps } from "antd";
 import { Tabs, Alert, Card, Upload, Button, Space, message, Spin, Input, InputNumber, Modal, Switch } from "antd";
+import { theme as antdTheme } from "antd";
 import FieldConfigEditor from "./FieldConfigEditor";
 import TriggerEditor from "./TriggerEditor";
 import LineItemsConfigEditor from "./LineItemsConfigEditor";
@@ -49,6 +50,7 @@ import type { TableField, TriggerConfig } from "#src/components/csm-grid/CsmDyna
 import { KANBAN_CONFIG_TEMPLATE } from "#src/components/csm-kanban";
 import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
 import { useUserStore } from "#src/store/user";
+import { usePreferences } from "#src/hooks/use-preferences";
 import { getDefaultSystemUserModeConfig, parseSystemUserModes, type SystemUserMenuModeConfig } from "#src/pages/system/admin/system-user-menu-config";
 
 import { getMenuTypeOptions } from "../constants";
@@ -404,15 +406,42 @@ function buildPdfOverlaySeedItems(params: {
   const lineBoxes = Array.isArray(params.lineBoxes) ? params.lineBoxes : [];
   const catalog = buildPdfFieldCatalog(params.fields);
   const seeds: PdfOverlayPlanItem[] = [];
+  const seen = new Set<string>();
+
+  const isLikelyTableBodyLine = (rawLine: string): boolean => {
+    const line = sanitizeTemplateLine(rawLine).toLowerCase();
+    if (!line) return false;
+    if (line.includes(":")) return false;
+    const hasTableHeaderHints = ["tt", "stt", "đơn vị", "chieu", "don gia", "thanh tien", "khối lượng", "khoi luong"]
+      .some((hint) => line.includes(hint));
+    if (hasTableHeaderHints) return false;
+    const tokens = line.split(/\s+/).filter(Boolean);
+    const numericTokens = tokens.filter((token) => /\d/.test(token));
+    if (tokens.length >= 3 && numericTokens.length >= 2) return true;
+    if (/^\d+[\s.\-]/.test(line) && numericTokens.length >= 1) return true;
+    return false;
+  };
 
   for (const box of lineBoxes) {
     const raw = String(box?.text || "").trim();
     if (!raw) continue;
+    if (isLikelyTableBodyLine(raw)) continue;
     const label = extractLabelPrefix(raw) || raw.replace(/:.*$/, "").trim();
     if (!label) continue;
     const matchedField = resolvePdfFieldByLabel(label, catalog);
-    const token = matchedField || safeTemplateToken(label);
-    const replacement = `${label}: {${token}}`;
+    let replacement = sanitizeTemplateLine(raw);
+    if (matchedField) {
+      const hasExplicitLabel = raw.includes(":");
+      replacement = hasExplicitLabel
+        ? `${label}: {${matchedField}}`
+        : `{${matchedField}}`;
+    }
+    if (!replacement) continue;
+
+    const dedupeKey = `${Number(box.page || 1)}|${Math.round(Number(box.x || 0) * 10)}|${Math.round(Number(box.y || 0) * 10)}|${replacement}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
     seeds.push({
       page: Number(box.page || 1),
       x: Number(box.x || 0),
@@ -1009,6 +1038,13 @@ type BackendPdfExtractResponse = {
   status?: string;
 };
 
+type BackendPdfSystemTemplateResponse = {
+  fittedDesignSpec?: Record<string, any>;
+  triggerBundle?: Record<string, any>;
+  samplePdfAnalysis?: Record<string, any>;
+  status?: string;
+};
+
 function mergePdfLayoutSpec(base: PdfLayoutSpec, patch?: Partial<PdfLayoutSpec>): PdfLayoutSpec {
   if (!patch) return base;
   return {
@@ -1116,6 +1152,53 @@ async function extractPdfLayoutWithBackend(params: {
       lineBoxes: [],
       imageHints: [],
       status: "Backend trích layout PDF lỗi, dùng fallback frontend.",
+    };
+  }
+}
+
+async function compilePdfToSystemTemplateWithBackend(params: {
+  appId?: string;
+  samplePdfDataUrl: string;
+  triggerKey?: string;
+  themeMode?: "light" | "dark";
+  reportDesignSpec?: Record<string, any>;
+}): Promise<BackendPdfSystemTemplateResponse> {
+  try {
+    const response = await request.post("ai-local/report/pdf-to-system-template", {
+      json: {
+        appId: String(params.appId || "").trim() || undefined,
+        samplePdfDataUrl: String(params.samplePdfDataUrl || "").trim(),
+        triggerKey: String(params.triggerKey || "").trim() || undefined,
+        themeMode: params.themeMode,
+        reportDesignSpec: params.reportDesignSpec,
+      },
+      timeout: 120000,
+      ignoreLoading: true,
+      retry: { limit: 0 },
+    } as any).json();
+
+    const payload = (response as any)?.result || response || {};
+    if (payload?.success === false) {
+      return {
+        fittedDesignSpec: undefined,
+        triggerBundle: undefined,
+        samplePdfAnalysis: undefined,
+        status: String(payload?.message || "").trim() || "Backend chưa compile được system template từ PDF mẫu.",
+      };
+    }
+
+    return {
+      fittedDesignSpec: payload?.fittedDesignSpec && typeof payload.fittedDesignSpec === "object" ? payload.fittedDesignSpec : undefined,
+      triggerBundle: payload?.triggerBundle && typeof payload.triggerBundle === "object" ? payload.triggerBundle : undefined,
+      samplePdfAnalysis: payload?.samplePdfAnalysis && typeof payload.samplePdfAnalysis === "object" ? payload.samplePdfAnalysis : undefined,
+      status: "Backend đã compile system template từ PDF mẫu.",
+    };
+  } catch {
+    return {
+      fittedDesignSpec: undefined,
+      triggerBundle: undefined,
+      samplePdfAnalysis: undefined,
+      status: "Backend compile system template lỗi, dùng flow fallback frontend.",
     };
   }
 }
@@ -1250,7 +1333,7 @@ async function buildPdfOverlayPlanWithLocalAi(params: {
 
     const parsed = tryParseLooseJson(completed ? fullResponse : "");
     const overlaysRaw = Array.isArray(parsed?.overlays) ? parsed?.overlays : [];
-    const overlays = overlaysRaw
+    const overlays: PdfOverlayPlanItem[] = overlaysRaw
       .map((x) => ({
         page: Number((x as any)?.page || 1),
         x: Number((x as any)?.x || 0),
@@ -1271,9 +1354,129 @@ async function buildPdfOverlayPlanWithLocalAi(params: {
     if (!overlays.length) {
       return { overlays: fallback, status: "AI local không trả layout hợp lệ, dùng trích xuất backend từ PDF mẫu." };
     }
-    return { overlays, status: "AI local đã phân tích PDF mẫu và sinh layout động." };
+
+    // Keep deterministic seed anchors so preview/compare does not lose static structure lines.
+    const merged: PdfOverlayPlanItem[] = [...overlays];
+    const overlayKeys = new Set(
+      overlays.map((item) => `${Number(item.page || 1)}|${Math.round(Number(item.x || 0) * 10)}|${Math.round(Number(item.y || 0) * 10)}|${String(item.text || "").trim()}`),
+    );
+    for (const item of fallback) {
+      const key = `${Number(item.page || 1)}|${Math.round(Number(item.x || 0) * 10)}|${Math.round(Number(item.y || 0) * 10)}|${String(item.text || "").trim()}`;
+      if (!overlayKeys.has(key)) {
+        merged.push(item);
+      }
+    }
+
+    return { overlays: merged, status: "AI local đã phân tích PDF mẫu và sinh layout động (đã hợp nhất anchor từ mẫu)." };
   } catch {
     return { overlays: fallback, status: "AI local lỗi khi phân tích mẫu, dùng trích xuất backend từ PDF mẫu." };
+  }
+}
+
+async function buildPdfSampleDataWithLocalAi(params: {
+  appId?: string;
+  layout: PdfLayoutSpec;
+  fields: TableField[];
+}): Promise<{ sampleData: Record<string, any>; status: string }> {
+  const layoutContext = {
+    docTitle: params.layout.docTitle,
+    docSubtitle: params.layout.docSubtitle,
+    headerLines: (params.layout.headerLines || []).slice(0, 16),
+    tableColumnHeaders: (params.layout.tableColumnHeaders || []).slice(0, 12),
+    signatureLabels: (params.layout.signatureLabels || []).slice(0, 8),
+    sections: (params.layout.sections || []).slice(0, 6),
+    orderedLines: (params.layout.orderedLines || []).slice(0, 180),
+    pageWidth: params.layout.pageWidth,
+    pageHeight: params.layout.pageHeight,
+    showPrice: params.layout.showPrice,
+    showGroupSubtotal: params.layout.showGroupSubtotal,
+    tableGridLikely: params.layout.tableGridLikely,
+  };
+  const fieldHints = buildPdfDynamicLabelHints(params.fields).slice(0, 40);
+  const prompt = [
+    "Bạn là AI local chuyên suy luận dữ liệu mẫu từ PDF mẫu cho CSM.",
+    "Nhiệm vụ là đọc cấu trúc PDF đầu vào và sinh ra sampleData linh hoạt để render đúng bố cục, KHÔNG ép vào một schema báo giá cố định nếu PDF không phải báo giá.",
+    "Chỉ trả về 1 JSON object hợp lệ, không markdown, không giải thích.",
+    "Hãy ưu tiên giữ đúng bố cục, nhãn, nhóm trường và các field xuất hiện trong PDF mẫu; dữ liệu có thể thay đổi theo khách hàng, nhưng cấu trúc output phải phản ánh mẫu PDF.",
+    "Nếu PDF là báo giá thì có thể trả client/sales/items/totals/notes/signature; nếu là loại biểu mẫu khác thì tự đặt key phù hợp theo mẫu đó.",
+    "Không hardcode output theo mẫu báo giá nếu không thấy các dấu hiệu của báo giá trong layout.",
+    "Nếu không chắc giá trị cụ thể, vẫn phải giữ key cấu trúc và để chuỗi rỗng thay vì bỏ cả object.",
+    "Không sinh markdown.",
+    "Bắt buộc dùng PDF layout thực tế dưới đây để suy ra cấu trúc output:",
+    `pdfLayoutContext: ${JSON.stringify(layoutContext, null, 2)}`,
+    `fieldHints: ${JSON.stringify(fieldHints, null, 2)}`,
+    "Hãy xuất các key theo đúng những nhóm xuất hiện trên mẫu: header, body, table, totals, notes, signature, footer hoặc key tương đương; không chèn dữ liệu không có trong PDF.",
+    "Nếu thấy bảng có nhiều dòng lặp, hãy gom chúng vào mảng items/rows/details theo cấu trúc phù hợp nhất với PDF.",
+    "Nếu thấy nhãn song ngữ hoặc nhiều ngôn ngữ, hãy giữ lại trong output thay vì rút gọn.",
+    "Tránh các key cứng như quotation_no/date/valid_until nếu PDF không có tín hiệu tương ứng.",
+    "Nếu PDF là báo giá, hãy giữ grouping, VAT, subtotal, chữ ký và ghi chú theo mẫu; nếu không, hãy tự điều chỉnh schema cho đúng loại tài liệu.",
+    "Không cần phải dùng chính xác 100% tên field của backend; ưu tiên tính linh hoạt và phản ánh đúng tài liệu đầu vào.",
+    "Output nên là object dữ liệu mẫu hoàn chỉnh, không phải mô tả layout.",
+  ].join("\n");
+
+  try {
+    const response = await request.post("ai-code-stream", {
+      json: {
+        appId: String(params.appId || "menu_pdf_sampledata").trim() || "menu_pdf_sampledata",
+        message: prompt,
+        currentCode: JSON.stringify({
+          layoutContext,
+          fieldHints,
+        }, null, 2),
+        flowType: "code_editor",
+        taskType: "code_assistant",
+        language: "json",
+        contextType: "code",
+        responseMode: "raw_code",
+        editorMetadata: {
+          source: "MenuDetail.report_pdf_sample_data",
+          docTitle: String(params.layout.docTitle || ""),
+        },
+      },
+      timeout: AI_TIMEOUT_MS,
+      throwHttpErrors: false,
+    });
+
+    if (!response.ok || !response.body) {
+      return { sampleData: {}, status: "AI local chưa trích được sampleData, dùng fallback preview." };
+    }
+
+    let fullResponse = "";
+    let completed = false;
+    await consumeSseStream(response as any, {
+      onEvent: (evt) => {
+        const payload = evt.payload && typeof evt.payload === "object"
+          ? (evt.payload as Record<string, unknown>)
+          : null;
+        if (!payload) return;
+        const result = dispatchAiCodeStreamEvent(payload, fullResponse, {
+          onChunk: (_chunk, accumulated) => { fullResponse = accumulated; },
+          onComplete: (p) => {
+            if (typeof p.fullResponse === "string") fullResponse = p.fullResponse;
+            completed = true;
+          },
+          onError: () => {},
+        });
+        fullResponse = result.accumulated;
+        if (result.completed) completed = true;
+      },
+    });
+
+    const parsed = tryParseLooseJson(completed ? fullResponse : "");
+    if (!parsed) {
+      return { sampleData: {}, status: "AI local trả sampleData không hợp lệ, dùng fallback preview." };
+    }
+
+    return {
+      sampleData: {
+        ...parsed,
+        _layoutKindHint: parsed._layoutKindHint || (params.layout.showGroupSubtotal || params.layout.showPrice ? "grouped-report" : "generic-report"),
+        _pdfLayoutSource: layoutContext,
+      },
+      status: "AI local đã trích sampleData từ PDF mẫu.",
+    };
+  } catch {
+    return { sampleData: {}, status: "AI local lỗi khi trích sampleData, dùng fallback preview." };
   }
 }
 
@@ -1289,7 +1492,7 @@ function buildAutoReportDbBody(params: {
   fields: TableField[];
   layout: PdfLayoutSpec;
   blueprint?: DocxTemplateBlueprint;
-  designSpec?: ReturnType<typeof buildPdfReportDesignSpec>;
+  designSpec?: Record<string, any>;
 }): string {
   const tableName = String(params.tableName || "").trim();
   const allFields = Array.isArray(params.fields) ? params.fields : [];
@@ -1477,11 +1680,38 @@ const tongCongRaw = totalsKey
     }, 0);
 
 const reportDesignSpec = ${JSON.stringify(params.designSpec || null)};
+const client = {
+  ...(data?.client && typeof data.client === 'object' ? data.client : {}),
+  company: data?.client?.company ?? data?.customerName ?? data?.clientName ?? data?.ten_khach_hang ?? data?.ten_cong_ty_khach ?? '',
+  address: data?.client?.address ?? data?.companyAddress ?? data?.clientAddress ?? data?.dia_chi ?? '',
+  contact: data?.client?.contact ?? data?.contactName ?? data?.nguoi_lien_he ?? data?.sdt_lien_he ?? '',
+};
+const sales = {
+  ...(data?.sales && typeof data.sales === 'object' ? data.sales : {}),
+  name: data?.sales?.name ?? data?.salesName ?? data?.nvkd ?? data?.nhan_vien_kinh_doanh ?? '',
+};
+const quotationNo = data?.quotation_no ?? data?.quotationNo ?? data?.reportNo ?? data?.so_bao_gia ?? '';
+const reportDate = data?.date ?? data?.reportDate ?? data?.ngay ?? '';
+const validUntil = data?.valid_until ?? data?.validUntil ?? data?.hieu_luc_den ?? '';
+const amountWords = data?.amount_words ?? data?.bang_chu ?? '';
+const bankInfo = data?.bank_info ?? data?.tai_khoan_nhan ?? data?.thong_tin_tai_khoan ?? '';
 
 return {
   ...(data || {}),
   ten_cong_ty: bang?.sys_apps?.rows?.[0]?.app_name ?? data?.ten_cong_ty ?? "",
   com_logo: seft?.com_logo ?? data?.com_logo ?? "",
+  client,
+  sales,
+  quotation_no: quotationNo,
+  date: reportDate,
+  valid_until: validUntil,
+  amount_words: amountWords,
+  bank_info: bankInfo,
+  signature: {
+    ...(data?.signature && typeof data.signature === 'object' ? data.signature : {}),
+    buyer_label: data?.signature?.buyer_label ?? data?.buyer_label ?? 'ĐẠI DIỆN BÊN MUA',
+    seller_label: data?.signature?.seller_label ?? data?.seller_label ?? 'ĐẠI DIỆN BÊN BÁN',
+  },
   table_name: activeTableName,
   rows,
   totals,
@@ -2081,17 +2311,24 @@ export function Detail({
   const [lineItemsConfig, setLineItemsConfig] = useState<Partial<LineItemsEditorConfig>>({});
   const [subUserModeConfig, setSubUserModeConfig] = useState<SystemUserMenuModeConfig>(() => getDefaultSystemUserModeConfig("sub", t));
   const user = useUserStore();
+  const { isDark } = usePreferences();
+  const { token } = antdTheme.useToken();
+  const reportThemeMode: "light" | "dark" = isDark ? "dark" : "light";
   const [generatingReportFromPdf, setGeneratingReportFromPdf] = useState(false);
   const [pdfOverlayDraft, setPdfOverlayDraft] = useState("");
+  const [pdfSampleDataDraft, setPdfSampleDataDraft] = useState("");
   const [pdfOverlayModalOpen, setPdfOverlayModalOpen] = useState(false);
   const [pdfOverlayEditItems, setPdfOverlayEditItems] = useState<PdfOverlayPlanItem[]>([]);
   const [pdfOverlayPreviewUrls, setPdfOverlayPreviewUrls] = useState<string[]>([]);
+  const [previewStaticOverlayText, setPreviewStaticOverlayText] = useState(false);
   const [pdfOverlayPending, setPdfOverlayPending] = useState<null | {
     sourcePdfPath: string;
+    sourcePdfDataUrl: string;
     tableName: string;
     layout: PdfLayoutSpec;
     overlayItems: PdfOverlayPlanItem[];
-    designSpec?: ReturnType<typeof buildPdfReportDesignSpec>;
+    sampleData?: Record<string, any>;
+    designSpec?: Record<string, any>;
   }>(null);
   const [autoCodeOptions, setAutoCodeOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [loadingAutoCode, setLoadingAutoCode] = useState(false);
@@ -2108,24 +2345,59 @@ export function Detail({
     unexpectedRenderLines?: string[];
   }>(null);
 
+  const overlayModalPalette = useMemo(() => ({
+    shellBg: token.colorBgElevated,
+    shellBorder: token.colorBorderSecondary,
+    shellShadow: isDark ? "0 18px 60px rgba(0,0,0,0.5)" : "0 18px 60px rgba(15,23,42,0.24)",
+    headBg: token.colorBgContainer,
+    titleColor: token.colorText,
+    subTextColor: token.colorTextSecondary,
+    bodyGradient: isDark
+      ? "linear-gradient(180deg, rgba(12,18,30,0.96) 0%, rgba(20,27,39,0.92) 100%)"
+      : "linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)",
+    previewCardBg: isDark ? "rgba(17,24,39,0.92)" : "#f6f7f9",
+    previewPaperBg: token.colorBgContainer,
+    previewPaperGradient: isDark
+      ? "linear-gradient(180deg, rgba(20,27,39,0.98) 0%, rgba(15,23,42,0.98) 100%)"
+      : "linear-gradient(180deg, #fff 0%, #fafafa 100%)",
+    previewOverlayGradient: isDark
+      ? "linear-gradient(180deg, rgba(17,24,39,0.98) 0%, rgba(15,23,42,0.98) 100%)"
+      : "linear-gradient(180deg, #ffffff 0%, #fbfbfb 100%)",
+    blockBorder: token.colorBorderSecondary,
+    secondaryText: token.colorTextSecondary,
+    subtleText: token.colorTextTertiary,
+    strongText: token.colorText,
+    sectionBg: isDark ? "rgba(17,24,39,0.9)" : "rgba(255,255,255,0.9)",
+    chipBorder: token.colorBorder,
+    chipBg: token.colorBgLayout,
+    matchTone: { color: isDark ? "#86efac" : "#14532d", bg: isDark ? "rgba(22,101,52,0.35)" : "rgba(220,252,231,0.62)", border: isDark ? "1px solid rgba(74,222,128,0.55)" : "1px solid rgba(74,222,128,0.55)" },
+    warnTone: { color: isDark ? "#fcd34d" : "#92400e", bg: isDark ? "rgba(120,53,15,0.35)" : "rgba(254,243,199,0.82)", border: isDark ? "1px solid rgba(251,191,36,0.7)" : "1px solid rgba(251,191,36,0.7)" },
+    missTone: { color: isDark ? "#fda4af" : "#991b1b", bg: isDark ? "rgba(127,29,29,0.4)" : "rgba(254,226,226,0.78)", border: isDark ? "1px solid rgba(248,113,113,0.65)" : "1px solid rgba(248,113,113,0.65)" },
+  }), [isDark, token]);
+
   const previewDesignSpec = useMemo(() => {
     if (!pdfOverlayPending) return null;
     const sampleLines = Array.isArray(pdfOverlayPending.layout?.orderedLines)
       ? pdfOverlayPending.layout.orderedLines.slice(0, 20)
       : [];
-    return buildPdfReportDesignSpec(pdfOverlayPending.layout, pdfOverlayEditItems, tableRows, sampleLines);
+    return buildPdfReportDesignSpec(pdfOverlayPending.layout, pdfOverlayEditItems, tableRows, sampleLines, pdfOverlayPending.sampleData);
   }, [pdfOverlayPending, pdfOverlayEditItems, tableRows]);
 
   const previewOverlayItems = useMemo(() => {
-    return (pdfOverlayEditItems.length > 0 ? pdfOverlayEditItems : pdfOverlayPending?.overlayItems || [])
+    const baseItems = (Array.isArray((previewDesignSpec as any)?.overlayItems) && (previewDesignSpec as any).overlayItems.length > 0
+      ? (previewDesignSpec as any).overlayItems
+      : (pdfOverlayEditItems.length > 0 ? pdfOverlayEditItems : pdfOverlayPending?.overlayItems || []));
+    const dynamicTokenPattern = /\{[^{}]+\}/;
+    return (baseItems as PdfOverlayPlanItem[])
       .filter((item) => String(item?.text || "").trim())
+      .filter((item) => previewStaticOverlayText || dynamicTokenPattern.test(String(item?.text || "")))
       .slice(0, 120);
-  }, [pdfOverlayEditItems, pdfOverlayPending]);
+  }, [previewDesignSpec, pdfOverlayEditItems, pdfOverlayPending, previewStaticOverlayText]);
 
   const previewOverlayContext = useMemo(() => {
     if (!pdfOverlayPending) return {} as Record<string, any>;
-    return buildPdfOverlayPreviewContext(tableRows, pdfOverlayPending.layout as any);
-  }, [pdfOverlayPending, tableRows]);
+    return buildPdfOverlayPreviewContext(tableRows, pdfOverlayPending.layout as any, previewDesignSpec as any);
+  }, [pdfOverlayPending, previewDesignSpec, tableRows]);
 
   const compareHighlightSets = useMemo(() => {
     const normalize = (value: string) => String(value || "")
@@ -2989,6 +3261,15 @@ export function Detail({
         : (Array.isArray(sample.pdfLineBoxes) ? sample.pdfLineBoxes : []);
 
       const tableName = String(formRef.current?.getFieldValue("table_name") || detailData.table_name || "").trim();
+      const triggerKey = `print_${safeTemplateToken(tableName || "bao_cao")}_auto`;
+
+      const backendSystemTemplate = await compilePdfToSystemTemplateWithBackend({
+        appId,
+        samplePdfDataUrl: pdfDataUrl,
+        triggerKey,
+        themeMode: reportThemeMode,
+      });
+
       const exactOverlaySeeds = buildPdfOverlaySeedItems({
         lineBoxes: effectiveLineBoxes,
         fields: tableRows,
@@ -3001,21 +3282,43 @@ export function Detail({
         fields: tableRows,
         fallbackItems: exactOverlaySeeds,
       });
+      const previewSample = await buildPdfSampleDataWithLocalAi({
+        appId,
+        layout: effectiveLayout,
+        fields: tableRows,
+      });
 
       const designSpec = buildPdfReportDesignSpec(
         effectiveLayout,
         overlayPlan.overlays,
         tableRows,
         Array.isArray(effectiveLayout?.orderedLines) ? effectiveLayout.orderedLines : [],
+        previewSample.sampleData,
       );
+      const backendFittedDesign = backendSystemTemplate.fittedDesignSpec && typeof backendSystemTemplate.fittedDesignSpec === "object"
+        ? { ...backendSystemTemplate.fittedDesignSpec, themeMode: reportThemeMode }
+        : null;
+      const effectiveDesignSpec: Record<string, any> = backendFittedDesign || { ...designSpec, themeMode: reportThemeMode };
+      effectiveDesignSpec.layoutLocks = {
+        ...(effectiveDesignSpec.layoutLocks && typeof effectiveDesignSpec.layoutLocks === "object" ? effectiveDesignSpec.layoutLocks : {}),
+        strict: true,
+        lockLayout: true,
+        lockPositions: true,
+        lockTypography: true,
+        preferOverlayRender: true,
+        disableFallback: true,
+        sourcePdfPath,
+      };
+      effectiveDesignSpec.renderMode = "overlay-locked";
       const reportDbBody = buildAutoReportDbBody({
         tableName,
         fields: tableRows,
         layout: effectiveLayout,
-        designSpec,
+        designSpec: effectiveDesignSpec,
       });
 
-      formRef.current?.setFieldsValue({ report_name: "" });
+      // Keep sample PDF path in report_name so developers can reopen/download/re-compare later.
+      formRef.current?.setFieldsValue({ report_name: sourcePdfPath });
       if (!String(formRef.current?.getFieldValue("orientation") || "").trim()) {
         formRef.current?.setFieldsValue({ orientation: "p" });
       }
@@ -3029,29 +3332,56 @@ export function Detail({
       if (overlayPlan.status) {
         message.info(overlayPlan.status);
       }
+      if (previewSample.status) {
+        message.info(previewSample.status);
+      }
       if (backendExtract.status) {
         message.info(backendExtract.status);
+      }
+      if (backendSystemTemplate.status) {
+        message.info(backendSystemTemplate.status);
       }
       if ((backendExtract.imageHints || []).length > 0) {
         message.info(`Backend đã trích ${backendExtract.imageHints.length} ảnh/logo từ PDF mẫu.`);
       }
 
       setPdfOverlayDraft(JSON.stringify(overlayPlan.overlays, null, 2));
+      setPdfSampleDataDraft(JSON.stringify(previewSample.sampleData || {}, null, 2));
       setPdfOverlayEditItems(overlayPlan.overlays);
       setPdfOverlayPending({
         sourcePdfPath,
+        sourcePdfDataUrl: pdfDataUrl,
         tableName,
         layout: effectiveLayout,
         overlayItems: overlayPlan.overlays,
-        designSpec,
+        sampleData: previewSample.sampleData,
+        designSpec: effectiveDesignSpec,
       });
       setPdfCompareResult(null);
       setPdfOverlayModalOpen(true);
 
+      const backendTriggerBody = String((backendSystemTemplate.triggerBundle as any)?.trigger?.report_db || "").trim();
+      const backendPdfDataBody = String((backendSystemTemplate.triggerBundle as any)?.trigger?.pdf_data || "").trim();
+      if (backendTriggerBody || backendPdfDataBody) {
+        setTriggerConfig((prev) => ({
+          ...(prev || {}),
+          ...(backendTriggerBody ? { report_db: csmEncrypt(backendTriggerBody) } : {}),
+          ...(backendPdfDataBody ? { pdf_data: csmEncrypt(backendPdfDataBody) } : {}),
+          pdf_sample_path: sourcePdfPath,
+          report_design_spec: csmEncrypt(JSON.stringify(effectiveDesignSpec, null, 2)),
+        }));
+      } else {
+        setTriggerConfig((prev) => ({
+          ...(prev || {}),
+          pdf_sample_path: sourcePdfPath,
+          report_design_spec: csmEncrypt(JSON.stringify(effectiveDesignSpec, null, 2)),
+        }));
+      }
+
       message.success(
         t(
           "system.menu.reportAutoGeneratedFromPdf",
-          "Đã sinh mẫu báo cáo động từ PDF mẫu. Hãy kiểm tra preview rồi bấm Lưu mẫu báo cáo động để lưu trigger report_db.",
+          "Đã sinh mẫu báo cáo động từ PDF mẫu. Hãy kiểm tra preview rồi bấm Lưu mẫu báo cáo động để lưu trigger report_db + pdf_data.",
         ),
       );
       onSuccess?.("ok");
@@ -3109,24 +3439,42 @@ export function Detail({
       overlayItems,
       tableRows,
       Array.isArray(pdfOverlayPending.layout?.orderedLines) ? pdfOverlayPending.layout.orderedLines : [],
+      pdfOverlayPending.sampleData,
     );
+    const lockedDesignSpec: Record<string, any> = {
+      ...designSpec,
+      renderMode: "overlay-locked",
+      layoutLocks: {
+        ...((designSpec as any)?.layoutLocks || {}),
+        strict: true,
+        lockLayout: true,
+        lockPositions: true,
+        lockTypography: true,
+        preferOverlayRender: true,
+        disableFallback: true,
+        sourcePdfPath: pdfOverlayPending.sourcePdfPath,
+      },
+    };
     const reportDbBody = buildAutoReportDbBody({
       tableName: pdfOverlayPending.tableName,
       fields: tableRows,
       layout: pdfOverlayPending.layout,
-      designSpec,
+      designSpec: lockedDesignSpec,
     });
 
     setTriggerConfig((prev) => ({
       ...(prev || {}),
       report_db: csmEncrypt(reportDbBody),
-      report_design_spec: csmEncrypt(JSON.stringify(designSpec, null, 2)),
+      pdf_sample_path: pdfOverlayPending.sourcePdfPath,
+      report_design_spec: csmEncrypt(JSON.stringify(lockedDesignSpec, null, 2)),
     }));
-    setPdfOverlayPending((prev) => prev ? { ...prev, overlayItems, designSpec } : prev);
+    formRef.current?.setFieldsValue({ report_name: pdfOverlayPending.sourcePdfPath });
+    setPdfOverlayPending((prev) => prev ? { ...prev, overlayItems, designSpec: lockedDesignSpec } : prev);
+    setPdfOverlayDraft(JSON.stringify(overlayItems, null, 2));
     setPdfCompareResult(null);
     setPdfOverlayModalOpen(false);
-    message.success("Đã lưu trigger report_db cho mẫu báo cáo động");
-  }, [pdfOverlayEditItems, pdfOverlayPending, tableRows]);
+    message.success("Đã lưu trigger report_db cho mẫu báo cáo động (giữ nguyên pdf_data nếu đã có)");
+  }, [pdfOverlayEditItems, pdfOverlayPending, tableRows, reportThemeMode]);
 
   const handleCompareWithSourcePdf = useCallback(async () => {
     if (!pdfOverlayPending || !previewDesignSpec || !appId) {
@@ -3136,7 +3484,7 @@ export function Detail({
 
     try {
       setComparingPdfTemplate(true);
-      const previewContext = buildPdfOverlayPreviewContext(tableRows, pdfOverlayPending.layout);
+      const previewContext = buildPdfOverlayPreviewContext(tableRows, pdfOverlayPending.layout, previewDesignSpec as any);
 
       const previewRes = await fetch("/api/ai-local/report/render-template/preview", {
         method: "POST",
@@ -3146,8 +3494,27 @@ export function Detail({
         },
         body: JSON.stringify({
           appId,
-          reportDesignSpec: previewDesignSpec,
+          reportDesignSpec: {
+            ...(previewDesignSpec as Record<string, any>),
+            themeMode: reportThemeMode,
+            renderMode: "overlay-locked",
+            layoutLocks: {
+              ...((previewDesignSpec as any)?.layoutLocks || {}),
+              strict: true,
+              lockLayout: true,
+              lockPositions: true,
+              lockTypography: true,
+              preferOverlayRender: true,
+              disableFallback: true,
+              sourcePdfPath: pdfOverlayPending.sourcePdfPath,
+              overlayStaticTextOnSample: previewStaticOverlayText,
+            },
+          },
           data: previewContext,
+          themeMode: reportThemeMode,
+          strictLayout: true,
+          autoTuneFromSample: false,
+          overlayStaticTextOnSample: previewStaticOverlayText,
           saveToDisk: false,
           returnBase64: true,
           outputName: `compare_preview_${Date.now()}.pdf`,
@@ -3168,6 +3535,7 @@ export function Detail({
         },
         body: JSON.stringify({
           samplePdfPath: pdfOverlayPending.sourcePdfPath,
+          samplePdfDataUrl: pdfOverlayPending.sourcePdfDataUrl,
           renderedPdfBase64: previewResult.pdfBase64,
         }),
       });
@@ -3204,13 +3572,59 @@ export function Detail({
     } finally {
       setComparingPdfTemplate(false);
     }
-  }, [appId, pdfOverlayPending, previewDesignSpec, tableRows, user.app_token]);
+  }, [appId, pdfOverlayPending, previewDesignSpec, tableRows, user.app_token, reportThemeMode, previewStaticOverlayText]);
 
   const updatePdfOverlayItem = useCallback((index: number, patch: Partial<PdfOverlayPlanItem>) => {
     setPdfOverlayEditItems((prev) =>
       prev.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)),
     );
   }, []);
+
+  const handleApplyOverlayJsonDraft = useCallback(() => {
+    const parsed = tryParseLooseJson(String(pdfOverlayDraft || "").trim());
+    const rawItems = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray((parsed as any)?.overlays)
+        ? (parsed as any).overlays
+        : null;
+    if (!rawItems) {
+      message.error("Overlay JSON không hợp lệ");
+      return;
+    }
+    const nextItems = rawItems
+      .map((x: any) => ({
+        page: Number(x?.page || 1),
+        x: Number(x?.x || 0),
+        y: Number(x?.y || 0),
+        width: Number(x?.width || 0) || undefined,
+        align: normalizeOverlayAlign(x?.align),
+        fontSize: Number(x?.fontSize || 11),
+        fontName: sanitizeTemplateLine(x?.fontName || "Helvetica") || "Helvetica",
+        color: sanitizeTemplateLine(x?.color || "#000000") || "#000000",
+        bold: Boolean(x?.bold),
+        italic: Boolean(x?.italic),
+        opacity: Number(x?.opacity || 1),
+        rotate: Number(x?.rotate || 0),
+        text: sanitizeTemplateLine(x?.text || ""),
+      }))
+      .filter((x: PdfOverlayPlanItem) => String(x?.text || "").trim());
+    if (nextItems.length === 0) {
+      message.error("Overlay JSON không có item hợp lệ");
+      return;
+    }
+    setPdfOverlayEditItems(nextItems);
+    message.success("Đã áp dụng overlay JSON");
+  }, [pdfOverlayDraft]);
+
+  const handleApplySampleDataDraft = useCallback(() => {
+    const parsed = tryParseLooseJson(String(pdfSampleDataDraft || "").trim());
+    if (!parsed) {
+      message.error("Sample data JSON không hợp lệ");
+      return;
+    }
+    setPdfOverlayPending((prev) => prev ? { ...prev, sampleData: parsed } : prev);
+    message.success("Đã áp dụng sample data");
+  }, [pdfSampleDataDraft]);
 
   const addPdfOverlayItem = useCallback(() => {
     setPdfOverlayEditItems((prev) => ([
@@ -4784,57 +5198,76 @@ export function Detail({
         </div>
       </Card>
 
-      <Modal
-        title="Thiết kế báo cáo động từ PDF mẫu"
-        open={pdfOverlayModalOpen}
-        onCancel={() => setPdfOverlayModalOpen(false)}
-        width={1320}
-        destroyOnClose
-        footer={[
-          <Button key="close" onClick={() => setPdfOverlayModalOpen(false)}>
-            Đóng
-          </Button>,
-          <Button
-            key="compare"
-            onClick={handleCompareWithSourcePdf}
-            loading={comparingPdfTemplate}
-            disabled={!pdfOverlayPending}
-          >
-            So sánh với PDF gốc
-          </Button>,
-          <Button key="apply" type="primary" onClick={handleApplyPdfOverlayDraft} disabled={!pdfOverlayPending}>
-            Lưu mẫu báo cáo động
-          </Button>,
-        ]}
-      >
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="Review báo cáo động bằng dữ liệu mẫu và bố cục từ PDF gốc. Không dùng nền PDF làm preview nữa."
-        />
-        {pdfCompareResult && (
-          <Alert
-            style={{ marginBottom: 12 }}
-            type={pdfCompareResult.qualityGate === "pass" ? "success" : "warning"}
-            showIcon
-            message={pdfCompareResult.qualityGate === "pass" ? "Kết quả so sánh: Đạt" : "Kết quả so sánh: Cần tinh chỉnh"}
-            description={(
-              <div style={{ display: "grid", gap: 4 }}>
-                <div>Coverage text: {Number(pdfCompareResult.textCoveragePercent || 0).toFixed(1)}% ({pdfCompareResult.matchedLines}/{pdfCompareResult.sampleLineCount})</div>
-                <div>Drift vị trí (mm): avg {Number(pdfCompareResult.positionDriftMm?.avg || 0).toFixed(2)} | p95 {Number(pdfCompareResult.positionDriftMm?.p95 || 0).toFixed(2)} | max {Number(pdfCompareResult.positionDriftMm?.max || 0).toFixed(2)}</div>
+      {pdfOverlayModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 16,
+            zIndex: 1000,
+            background: overlayModalPalette.shellBg,
+            borderRadius: 16,
+            boxShadow: overlayModalPalette.shellShadow,
+            border: `1px solid ${overlayModalPalette.shellBorder}`,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: `1px solid ${overlayModalPalette.shellBorder}`, background: overlayModalPalette.headBg }}>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: overlayModalPalette.titleColor }}>Thiết kế báo cáo động từ PDF mẫu</div>
+              <div style={{ fontSize: 12, color: overlayModalPalette.subTextColor, marginTop: 2 }}>Chế độ view chỉnh sửa theo workspace editor: preview trái, cấu hình phải, so sánh và lưu trigger ngay tại chỗ.</div>
+            </div>
+            <Space>
+              <Button onClick={() => setPdfOverlayModalOpen(false)}>Đóng</Button>
+              <Button
+                onClick={handleCompareWithSourcePdf}
+                loading={comparingPdfTemplate}
+                disabled={!pdfOverlayPending}
+              >
+                So sánh với PDF gốc
+              </Button>
+              <Button type="primary" onClick={handleApplyPdfOverlayDraft} disabled={!pdfOverlayPending}>
+                Lưu mẫu báo cáo động
+              </Button>
+            </Space>
+          </div>
+
+          <div style={{ padding: 16, overflow: "auto", background: overlayModalPalette.bodyGradient, flex: 1 }}>
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message="Review báo cáo động bằng dữ liệu mẫu và bố cục từ PDF gốc. Không dùng nền PDF làm preview nữa."
+            />
+            <div style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 10 }}>
+              <Switch checked={previewStaticOverlayText} onChange={setPreviewStaticOverlayText} />
+              <span style={{ fontSize: 12, color: overlayModalPalette.subTextColor }}>
+                Hiện text tĩnh trong preview (mặc định tắt để tránh chồng chữ)
+              </span>
+            </div>
+            {pdfCompareResult && (
+              <Alert
+                style={{ marginBottom: 12 }}
+                type={pdfCompareResult.qualityGate === "pass" ? "success" : "warning"}
+                showIcon
+                message={pdfCompareResult.qualityGate === "pass" ? "Kết quả so sánh: Đạt" : "Kết quả so sánh: Cần tinh chỉnh"}
+                description={(
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <div>Coverage text: {Number(pdfCompareResult.textCoveragePercent || 0).toFixed(1)}% ({pdfCompareResult.matchedLines}/{pdfCompareResult.sampleLineCount})</div>
+                    <div>Drift vị trí (mm): avg {Number(pdfCompareResult.positionDriftMm?.avg || 0).toFixed(2)} | p95 {Number(pdfCompareResult.positionDriftMm?.p95 || 0).toFixed(2)} | max {Number(pdfCompareResult.positionDriftMm?.max || 0).toFixed(2)}</div>
+                  </div>
+                )}
+              />
+            )}
+            {pdfCompareResult && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+                <span style={{ border: overlayModalPalette.matchTone.border, background: overlayModalPalette.matchTone.bg, borderRadius: 999, padding: "2px 10px", fontSize: 12, color: overlayModalPalette.matchTone.color }}>Khớp</span>
+                <span style={{ border: overlayModalPalette.warnTone.border, background: overlayModalPalette.warnTone.bg, borderRadius: 999, padding: "2px 10px", fontSize: 12, color: overlayModalPalette.warnTone.color }}>Lệch/Nghi ngờ</span>
+                <span style={{ border: overlayModalPalette.missTone.border, background: overlayModalPalette.missTone.bg, borderRadius: 999, padding: "2px 10px", fontSize: 12, color: overlayModalPalette.missTone.color }}>Thiếu so với mẫu gốc</span>
               </div>
             )}
-          />
-        )}
-        {pdfCompareResult && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-            <span style={{ border: "1px solid rgba(74,222,128,0.55)", background: "rgba(220,252,231,0.62)", borderRadius: 999, padding: "2px 10px", fontSize: 12, color: "#14532d" }}>Khớp</span>
-            <span style={{ border: "1px solid rgba(251,191,36,0.7)", background: "rgba(254,243,199,0.82)", borderRadius: 999, padding: "2px 10px", fontSize: 12, color: "#92400e" }}>Lệch/Nghi ngờ</span>
-            <span style={{ border: "1px solid rgba(248,113,113,0.65)", background: "rgba(254,226,226,0.78)", borderRadius: 999, padding: "2px 10px", fontSize: 12, color: "#991b1b" }}>Thiếu so với mẫu gốc</span>
-          </div>
-        )}
-        <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 16, alignItems: "start" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.1fr) minmax(420px, 0.9fr)", gap: 16, alignItems: "start" }}>
           <Card
             size="small"
             title={(
@@ -4842,7 +5275,7 @@ export function Detail({
                 <span>Preview trang 1</span>
               </Space>
             )}
-            style={{ background: "#f6f7f9" }}
+            style={{ background: overlayModalPalette.previewCardBg }}
             bodyStyle={{ padding: 12 }}
           >
             <div
@@ -4852,10 +5285,10 @@ export function Detail({
                 aspectRatio: "210 / 297",
                 maxWidth: 760,
                 margin: "0 auto",
-                border: "1px solid #d9d9d9",
+                border: `1px solid ${overlayModalPalette.blockBorder}`,
                 borderRadius: 12,
-                backgroundColor: "#fff",
-                backgroundImage: "linear-gradient(180deg, #fff 0%, #fafafa 100%)",
+                backgroundColor: overlayModalPalette.previewPaperBg,
+                backgroundImage: overlayModalPalette.previewPaperGradient,
                 boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.02)",
                 overflow: "hidden",
               }}
@@ -4864,7 +5297,7 @@ export function Detail({
                 style={{
                   position: "absolute",
                   inset: 0,
-                  background: "linear-gradient(180deg, #ffffff 0%, #fbfbfb 100%)",
+                  background: overlayModalPalette.previewOverlayGradient,
                   pointerEvents: "none",
                 }}
               />
@@ -4875,12 +5308,12 @@ export function Detail({
                   if (!text) return null;
                   const fontSizePx = Math.max(9, Math.min(18, Number(item.fontSize || 11)));
                   const tone = status === "miss"
-                    ? { color: "#991b1b", bg: "rgba(254,226,226,0.78)", border: "1px solid rgba(248,113,113,0.65)" }
+                    ? overlayModalPalette.missTone
                     : status === "warn"
-                      ? { color: "#92400e", bg: "rgba(254,243,199,0.82)", border: "1px solid rgba(251,191,36,0.7)" }
+                      ? overlayModalPalette.warnTone
                       : status === "ok"
-                        ? { color: "#14532d", bg: "rgba(220,252,231,0.62)", border: "1px solid rgba(74,222,128,0.55)" }
-                        : { color: "#111827", bg: "transparent", border: "none" };
+                        ? overlayModalPalette.matchTone
+                        : { color: overlayModalPalette.strongText, bg: "transparent", border: "none" };
                   return (
                     <div
                       key={`preview-overlay-${index}`}
@@ -4909,13 +5342,13 @@ export function Detail({
                 })}
               </div>
               <div style={{ position: "relative", zIndex: 1, padding: 24, height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column", gap: 12 }}>
-                <div style={{ borderBottom: "1px solid #ececec", paddingBottom: 8 }}>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>{previewDesignSpec?.title || "BÁO CÁO"}</div>
-                  <div style={{ fontSize: 12, color: "#6b7280" }}>Preview động từ trigger mẫu — không dùng nền PDF</div>
+                <div style={{ borderBottom: `1px solid ${overlayModalPalette.blockBorder}`, paddingBottom: 8 }}>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: overlayModalPalette.strongText }}>{previewDesignSpec?.title || "BÁO CÁO"}</div>
+                  <div style={{ fontSize: 12, color: overlayModalPalette.secondaryText }}>Preview động từ trigger mẫu — không dùng nền PDF</div>
                 </div>
                 <div style={{ display: "grid", gap: 8 }}>
                   {(previewDesignSpec?.header || []).slice(0, 6).map((item, index) => (
-                    <div key={`${item.token}-${index}`} style={{ fontSize: 12, color: "#374151" }}>
+                    <div key={`${item.token}-${index}`} style={{ fontSize: 12, color: overlayModalPalette.strongText }}>
                       {(() => {
                         const label = String(item.label || "").trim();
                         const value = String(item.sampleValue || "").trim();
@@ -4930,109 +5363,157 @@ export function Detail({
                     </div>
                   ))}
                 </div>
-                <div style={{ border: "1px solid #ececec", borderRadius: 8, padding: 10, background: "rgba(255,255,255,0.9)" }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", marginBottom: 6 }}>Dòng dữ liệu</div>
+                <div style={{ border: `1px solid ${overlayModalPalette.blockBorder}`, borderRadius: 8, padding: 10, background: overlayModalPalette.sectionBg }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: overlayModalPalette.strongText, marginBottom: 6 }}>Dòng dữ liệu</div>
                   {(previewDesignSpec?.sections || []).length > 0 ? previewDesignSpec!.sections.map((section, index) => (
                     <div key={`${section.id}-${index}`} style={{ marginBottom: 6 }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "#4b5563" }}>{section.title}</div>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: overlayModalPalette.secondaryText }}>{section.title}</div>
                       {(section.lines || []).slice(0, 3).map((line, lineIndex) => (
-                        <div key={`${section.id}-${lineIndex}`} style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{line}</div>
+                        <div key={`${section.id}-${lineIndex}`} style={{ fontSize: 11, color: overlayModalPalette.subtleText, marginTop: 2 }}>{line}</div>
                       ))}
                     </div>
-                  )) : <div style={{ fontSize: 11, color: "#6b7280" }}>Không có section dữ liệu, sẽ dùng các item overlay đã sinh.</div>}
+                  )) : <div style={{ fontSize: 11, color: overlayModalPalette.subtleText }}>Không có section dữ liệu, sẽ dùng các item overlay đã sinh.</div>}
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                   {(previewDesignSpec?.totals || []).map((item, index) => (
-                    <div key={`${item.token}-${index}`} style={{ border: "1px solid #d1d5db", borderRadius: 999, padding: "4px 8px", background: "#f9fafb", fontSize: 12, color: "#111827" }}>
+                    <div key={`${item.token}-${index}`} style={{ border: `1px solid ${overlayModalPalette.chipBorder}`, borderRadius: 999, padding: "4px 8px", background: overlayModalPalette.chipBg, fontSize: 12, color: overlayModalPalette.strongText }}>
                       {item.label}: {item.value}
                     </div>
                   ))}
                 </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: "auto" }}>
+                <div style={{ fontSize: 12, color: overlayModalPalette.secondaryText, marginTop: "auto" }}>
                   {(previewDesignSpec?.footer || []).slice(0, 4).map((line, index) => <div key={`${line}-${index}`}>{line}</div>)}
                 </div>
               </div>
             </div>
           </Card>
 
-          <Card
-            size="small"
-            title={(
-              <Space>
-                <span>Thành phần mẫu động</span>
-                <Button size="small" onClick={addPdfOverlayItem}>Thêm item</Button>
-              </Space>
-            )}
-            bodyStyle={{ padding: 12 }}
-          >
-            {pdfCompareResult && (
-              <div style={{ marginBottom: 10, display: "grid", gap: 6 }}>
-                {(pdfCompareResult.missingSampleLines || []).length > 0 && (
-                  <div style={{ fontSize: 12, color: "#991b1b" }}>
-                    Thiếu ({Math.min((pdfCompareResult.missingSampleLines || []).length, 3)} dòng đầu): {(pdfCompareResult.missingSampleLines || []).slice(0, 3).join(" | ")}
-                  </div>
-                )}
-                {(pdfCompareResult.unexpectedRenderLines || []).length > 0 && (
-                  <div style={{ fontSize: 12, color: "#92400e" }}>
-                    Dư/lệch ({Math.min((pdfCompareResult.unexpectedRenderLines || []).length, 3)} dòng đầu): {(pdfCompareResult.unexpectedRenderLines || []).slice(0, 3).join(" | ")}
-                  </div>
-                )}
-              </div>
-            )}
-            <div style={{ maxHeight: 640, overflow: "auto", display: "grid", gap: 12 }}>
-              {(pdfOverlayEditItems.length > 0 ? pdfOverlayEditItems : pdfOverlayPending?.overlayItems || []).map((item, index) => (
-                <Card
-                  key={`${index}-${String(item.text || "")}`}
-                  size="small"
-                  style={{ borderRadius: 10 }}
-                  bodyStyle={{ padding: 12 }}
-                  title={
-                    <Space style={{ width: "100%", justifyContent: "space-between" }}>
-                      <span>Item {index + 1}</span>
-                      <Button size="small" danger onClick={() => removePdfOverlayItem(index)}>Xóa</Button>
-                    </Space>
-                  }
-                >
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
-                    <div>
-                      <div style={{ fontSize: 12, marginBottom: 4 }}>Text</div>
-                      <Input value={String(item.text || "")} onChange={(e) => updatePdfOverlayItem(index, { text: e.target.value })} />
+          <Card size="small" bodyStyle={{ padding: 12 }}>
+            <Tabs
+              defaultActiveKey="items"
+              items={[
+                {
+                  key: "items",
+                  label: `Thành phần (${(pdfOverlayEditItems.length > 0 ? pdfOverlayEditItems : pdfOverlayPending?.overlayItems || []).length})`,
+                  children: (
+                    <>
+                      {pdfCompareResult && (
+                        <div style={{ marginBottom: 10, display: "grid", gap: 6 }}>
+                          {(pdfCompareResult.missingSampleLines || []).length > 0 && (
+                            <div style={{ fontSize: 12, color: overlayModalPalette.missTone.color }}>
+                              Thiếu ({Math.min((pdfCompareResult.missingSampleLines || []).length, 3)} dòng đầu): {(pdfCompareResult.missingSampleLines || []).slice(0, 3).join(" | ")}
+                            </div>
+                          )}
+                          {(pdfCompareResult.unexpectedRenderLines || []).length > 0 && (
+                            <div style={{ fontSize: 12, color: overlayModalPalette.warnTone.color }}>
+                              Dư/lệch ({Math.min((pdfCompareResult.unexpectedRenderLines || []).length, 3)} dòng đầu): {(pdfCompareResult.unexpectedRenderLines || []).slice(0, 3).join(" | ")}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+                        <div style={{ fontSize: 12, color: overlayModalPalette.secondaryText }}>Chỉnh sửa item động như một workspace editor thay cho modal thường.</div>
+                        <Button size="small" onClick={addPdfOverlayItem}>Thêm item</Button>
+                      </div>
+                      <div style={{ maxHeight: 620, overflow: "auto", display: "grid", gap: 12 }}>
+                        {(pdfOverlayEditItems.length > 0 ? pdfOverlayEditItems : pdfOverlayPending?.overlayItems || []).map((item, index) => (
+                          <Card
+                            key={`${index}-${String(item.text || "")}`}
+                            size="small"
+                            style={{ borderRadius: 10 }}
+                            bodyStyle={{ padding: 12 }}
+                            title={
+                              <Space style={{ width: "100%", justifyContent: "space-between" }}>
+                                <span>Item {index + 1}</span>
+                                <Button size="small" danger onClick={() => removePdfOverlayItem(index)}>Xóa</Button>
+                              </Space>
+                            }
+                          >
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
+                              <div>
+                                <div style={{ fontSize: 12, marginBottom: 4 }}>Text</div>
+                                <Input value={String(item.text || "")} onChange={(e) => updatePdfOverlayItem(index, { text: e.target.value })} />
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 12, marginBottom: 4 }}>Page</div>
+                                <InputNumber min={1} value={Number(item.page || 1)} style={{ width: "100%" }} onChange={(value) => updatePdfOverlayItem(index, { page: Number(value || 1) })} />
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 12, marginBottom: 4 }}>X</div>
+                                <InputNumber min={0} value={Number(item.x || 0)} style={{ width: "100%" }} onChange={(value) => updatePdfOverlayItem(index, { x: Number(value || 0) })} />
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 12, marginBottom: 4 }}>Y</div>
+                                <InputNumber min={0} value={Number(item.y || 0)} style={{ width: "100%" }} onChange={(value) => updatePdfOverlayItem(index, { y: Number(value || 0) })} />
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 12, marginBottom: 4 }}>Font size</div>
+                                <InputNumber min={4} value={Number(item.fontSize || 11)} style={{ width: "100%" }} onChange={(value) => updatePdfOverlayItem(index, { fontSize: Number(value || 11) })} />
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 12, marginBottom: 4 }}>Opacity</div>
+                                <InputNumber min={0} max={1} step={0.1} value={Number(item.opacity || 1)} style={{ width: "100%" }} onChange={(value) => updatePdfOverlayItem(index, { opacity: Number(value || 1) })} />
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 12, marginBottom: 4 }}>Font</div>
+                                <Input value={String(item.fontName || "Helvetica")} onChange={(e) => updatePdfOverlayItem(index, { fontName: e.target.value })} />
+                              </div>
+                              <div>
+                                <div style={{ fontSize: 12, marginBottom: 4 }}>Color</div>
+                                <Input value={String(item.color || "#000000")} onChange={(e) => updatePdfOverlayItem(index, { color: e.target.value })} />
+                              </div>
+                            </div>
+                          </Card>
+                        ))}
+                      </div>
+                    </>
+                  ),
+                },
+                {
+                  key: "overlay-json",
+                  label: "Overlay JSON",
+                  children: (
+                    <div style={{ display: "grid", gap: 10 }}>
+                      <div style={{ fontSize: 12, color: overlayModalPalette.secondaryText }}>Sửa trực tiếp danh sách overlay theo JSON rồi áp dụng lại vào view.</div>
+                      <Input.TextArea rows={24} value={pdfOverlayDraft} onChange={(e) => setPdfOverlayDraft(e.target.value)} style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }} />
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <Button onClick={handleApplyOverlayJsonDraft}>Áp dụng overlay JSON</Button>
+                      </div>
                     </div>
-                    <div>
-                      <div style={{ fontSize: 12, marginBottom: 4 }}>Page</div>
-                      <InputNumber min={1} value={Number(item.page || 1)} style={{ width: "100%" }} onChange={(value) => updatePdfOverlayItem(index, { page: Number(value || 1) })} />
+                  ),
+                },
+                {
+                  key: "sample-data",
+                  label: "Sample Data",
+                  children: (
+                    <div style={{ display: "grid", gap: 10 }}>
+                      <div style={{ fontSize: 12, color: overlayModalPalette.secondaryText }}>Dữ liệu mẫu dùng cho preview và compare. Có thể sửa để ép nội dung render gần PDF gốc hơn.</div>
+                      <Input.TextArea rows={24} value={pdfSampleDataDraft} onChange={(e) => setPdfSampleDataDraft(e.target.value)} style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }} />
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <Button onClick={handleApplySampleDataDraft}>Áp dụng sample data</Button>
+                      </div>
                     </div>
-                    <div>
-                      <div style={{ fontSize: 12, marginBottom: 4 }}>X</div>
-                      <InputNumber min={0} value={Number(item.x || 0)} style={{ width: "100%" }} onChange={(value) => updatePdfOverlayItem(index, { x: Number(value || 0) })} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 12, marginBottom: 4 }}>Y</div>
-                      <InputNumber min={0} value={Number(item.y || 0)} style={{ width: "100%" }} onChange={(value) => updatePdfOverlayItem(index, { y: Number(value || 0) })} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 12, marginBottom: 4 }}>Font size</div>
-                      <InputNumber min={4} value={Number(item.fontSize || 11)} style={{ width: "100%" }} onChange={(value) => updatePdfOverlayItem(index, { fontSize: Number(value || 11) })} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 12, marginBottom: 4 }}>Opacity</div>
-                      <InputNumber min={0} max={1} step={0.1} value={Number(item.opacity || 1)} style={{ width: "100%" }} onChange={(value) => updatePdfOverlayItem(index, { opacity: Number(value || 1) })} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 12, marginBottom: 4 }}>Font</div>
-                      <Input value={String(item.fontName || "Helvetica")} onChange={(e) => updatePdfOverlayItem(index, { fontName: e.target.value })} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 12, marginBottom: 4 }}>Color</div>
-                      <Input value={String(item.color || "#000000")} onChange={(e) => updatePdfOverlayItem(index, { color: e.target.value })} />
-                    </div>
-                  </div>
-                </Card>
-              ))}
-            </div>
+                  ),
+                },
+                {
+                  key: "spec",
+                  label: "Design Spec",
+                  children: (
+                    <Input.TextArea
+                      rows={24}
+                      readOnly
+                      value={JSON.stringify(previewDesignSpec || {}, null, 2)}
+                      style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}
+                    />
+                  ),
+                },
+              ]}
+            />
           </Card>
+            </div>
+          </div>
         </div>
-      </Modal>
+      )}
     </div>
 
     {/* Cài đặt hiển thị nâng cao */}

@@ -134,6 +134,8 @@ func DispatchAPI(st *state.AppState, method, path string, params map[string]any,
 		return st.ApiExtHandler.HandleAiGenerateSeoContent(params)
 	case "/apps-list":
 		return st.ApiExtHandler.HandleAppsList(params)
+	case "/traffic/analyze-frame":
+		return st.ApiExtHandler.HandleTrafficAnalyzeFrame(params)
 
 	case "/facebook/post":
 		return st.SocialHandler.HandleFacebookPost(params)

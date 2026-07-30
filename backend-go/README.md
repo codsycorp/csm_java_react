@@ -318,3 +318,14 @@ Va mac dinh bat full local AI:
 - **CGO required** for RocksDB compatibility with existing Java database files.
 - Drop-in replacement goal: point nginx `backend_pool` to Go port instead of Rust/Java when ready.
 - For production parity testing, compare responses with Java/Rust on `/login`, `/user-info`, `/get-table-data`.
+
+# ****** HƯỚNG DẪN BUILD BACKEND GO ĐƯA THẲNG LÊN SERVER ******** #
+
+cd /Volumes/Datas/CSM/JavaProjects/csm_server
+
+chmod +x ./scripts/build-go-linux-native.sh ./deploy-go-linux.sh
+
+./scripts/build-go-linux-native.sh --remote root@csmbridge.net dist/csm_go_server
+
+UPLOAD_AI_MODEL=false ./deploy-go-linux.sh root@csmbridge.net /root/la_server /Volumes/Datas/CSM/JavaProjects/csm_server/dist/csm_go_server
+# ****** XONG HƯỚNG DẪN BUILD BACKEND GO ĐƯA THẲNG LÊN SERVER ******** #

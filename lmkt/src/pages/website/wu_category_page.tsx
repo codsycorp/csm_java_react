@@ -14,6 +14,7 @@ import React from 'react';
 import { useParams } from 'react-router';
 import WuServices from './wu_services';
 import WuNoContentPage from './wu_no_content_page';
+import WuGroupLandingPage from './wu_group_landing';
 
 export default function WuCategoryPage() {
   const { slug } = useParams<{ slug: string }>();
@@ -22,6 +23,18 @@ export default function WuCategoryPage() {
     (typeof window !== 'undefined' ? (window as any).__SSR_WEBSITE_CATEGORIES__ : null) || [];
 
   const catObj = slug ? ssrCategories.find((c) => c && c.slug === slug) : null;
+
+  const isGroupRoute = Boolean(catObj && catObj.is_group_slug === true);
+
+  // Bridge keeps legacy service-style layout.
+  if (isGroupRoute && slug === 'cau-noi-kinh-doanh-online') {
+    return <WuServices />;
+  }
+
+  // Other group parents render dedicated landing page.
+  if (isGroupRoute) {
+    return <WuGroupLandingPage />;
+  }
 
   // Service / project listing (default)
   if (!catObj || catObj.is_service !== false) {

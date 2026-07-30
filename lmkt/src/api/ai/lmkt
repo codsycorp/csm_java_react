@@ -9580,6 +9580,11 @@ async function testAiLaneExecuteLocalPlan(ctx, { message, attachments, onEvent }
   const decoder = new TextDecoder();
   let buffer = "";
   const events = [];
+  const sessionMemoryTelemetry = {
+    source: "",
+    cap: 0,
+    usedChars: 0
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -9604,10 +9609,23 @@ async function testAiLaneExecuteLocalPlan(ctx, { message, attachments, onEvent }
       }
       const evt = { event: eventName, data: parsed };
       events.push(evt);
+
+      if (parsed && typeof parsed === "object") {
+        const stage = String(parsed.stage || "").trim().toLowerCase();
+        if (stage === "context_memory" || stage === "request_complete") {
+          const source = String(parsed.sessionMemorySource || "").trim();
+          const cap = Number(parsed.sessionMemoryCap);
+          const used = Number(parsed.sessionMemoryUsedChars);
+          if (source) sessionMemoryTelemetry.source = source;
+          if (Number.isFinite(cap) && cap > 0) sessionMemoryTelemetry.cap = Math.floor(cap);
+          if (Number.isFinite(used) && used >= 0) sessionMemoryTelemetry.usedChars = Math.floor(used);
+        }
+      }
+
       if (typeof onEvent === "function") onEvent(evt);
     }
   }
-  return { events };
+  return { events, sessionMemoryTelemetry };
 }
 
 const AI_LANE_SEO_REQUIRED_FIELDS = [

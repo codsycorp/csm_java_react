@@ -13,9 +13,12 @@ type CodeStreamRequest struct {
 	AppID                    string
 	FlowType                 string
 	TaskType                 string
+	UserID                   string
 	ContextType              string
 	Message                  string
 	CurrentCode              string
+	TargetPName              string
+	TargetPType              string
 	FullCurrentCode          string // raw editor payload before tier cap (map-reduce source)
 	FullCurrentCodeOrigLen   int
 	FullCurrentCodeTruncated bool
@@ -74,12 +77,15 @@ func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool)
 	fullOrigLen := len(fullCode)
 	fullCap := maxFullCurrentCodeChars(contextType)
 	editorMeta := parseEditorMetadata(params)
+	targetPName, targetPType := resolveCodeTarget(params, editorMeta)
 	return &CodeStreamRequest{
 		RequestID:                requestID,
 		AppID:                    appID,
 		FlowType:                 flowType,
 		TaskType:                 paramString(params, "taskType", "edit"),
 		ContextType:              contextType,
+		TargetPName:              targetPName,
+		TargetPType:              targetPType,
 		Message:                  truncateStr(paramString(params, "message", ""), 32_000),
 		CurrentCode:              truncateStr(rawCode, maxOutgoingEditorFromParams(params)),
 		FullCurrentCode:          truncateStr(fullCode, fullCap),
@@ -91,6 +97,26 @@ func ParseCodeStreamRequest(params map[string]any, authAppID string, isDev bool)
 		ResponseMode:             firstNonEmpty(paramString(params, "responseMode", ""), paramString(params, "response_mode", "")),
 		EditorMetadata:           editorMeta,
 	}, ""
+}
+
+func resolveCodeTarget(params map[string]any, editorMeta map[string]any) (string, string) {
+	pName := firstNonEmpty(
+		paramString(params, "pName", ""),
+		paramString(params, "p_name", ""),
+		paramString(params, "targetFile", ""),
+		paramString(editorMeta, "pName", ""),
+		paramString(editorMeta, "p_name", ""),
+		paramString(editorMeta, "targetFile", ""),
+		paramString(editorMeta, "fileKey", ""),
+	)
+	pType := firstNonEmpty(
+		paramString(params, "pType", ""),
+		paramString(params, "p_type", ""),
+		paramString(editorMeta, "pType", ""),
+		paramString(editorMeta, "p_type", ""),
+		paramString(editorMeta, "targetType", ""),
+	)
+	return strings.TrimSpace(pName), strings.TrimSpace(pType)
 }
 
 func parseEditorMetadata(params map[string]any) map[string]any {
@@ -174,6 +200,7 @@ func BuildCodeStreamLocalPromptWithExtras(cfg config.AppConfig, req *CodeStreamR
 func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest, learningBlock, comprehendBlock, tenantRAGBlock, multimodalBlock, workspaceBlock string) string {
 	mode := ResolveResponseMode(req)
 	printImport := IsLineItemsPdfImport(req)
+	sessionMemoryCap := SessionMemoryBudget(cfg, req.ContextType, mode)
 	intent := classifyLocalIntent(req.ContextType, mode)
 	editorMax, ragMax, learningMax, workspaceMax := ConstrainedPromptSlotCaps(cfg)
 	if isMenuJSONContext(req.ContextType) && mode == "edit" {
@@ -241,6 +268,8 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 	sb.WriteString("\n\n")
 	sb.WriteString(buildPromptLanguageBlock(req.UILang, userReq))
 	sb.WriteString(contract)
+	sessionMemorySource := "none"
+	sessionMemoryUsedChars := 0
 	sb.WriteByte('\n')
 
 	if printImport && editor != "" {
@@ -296,10 +325,18 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 		}
 	}
 
-	if ctxBlock := loadAppContextBlock(cfg, req.AppID, 6_000); ctxBlock != "" && !printImport {
+	if ctxBlock := conversationContextFromEditorMetadata(req.EditorMetadata, sessionMemoryCap); ctxBlock != "" && !printImport {
 		sb.WriteString("[SESSION_MEMORY]\n")
 		sb.WriteString(ctxBlock)
 		sb.WriteString("\n[/SESSION_MEMORY]\n\n")
+		sessionMemorySource = "scoped_editor_metadata"
+		sessionMemoryUsedChars = len(ctxBlock)
+	} else if ctxBlock := loadAppContextBlock(cfg, req.AppID, sessionMemoryCap); ctxBlock != "" && !printImport {
+		sb.WriteString("[SESSION_MEMORY]\n")
+		sb.WriteString(ctxBlock)
+		sb.WriteString("\n[/SESSION_MEMORY]\n\n")
+		sessionMemorySource = "app_context_fallback"
+		sessionMemoryUsedChars = len(ctxBlock)
 	}
 	if comprehendBlock != "" {
 		sb.WriteString(comprehendBlock)
@@ -332,6 +369,12 @@ func BuildCodeStreamLocalPromptFull(cfg config.AppConfig, req *CodeStreamRequest
 	sb.WriteString("[USER_REQUEST]\n")
 	sb.WriteString(userReq)
 	sb.WriteString("\n[/USER_REQUEST]\n")
+	if req.EditorMetadata == nil {
+		req.EditorMetadata = map[string]any{}
+	}
+	req.EditorMetadata["__sessionMemorySource"] = sessionMemorySource
+	req.EditorMetadata["__sessionMemoryCap"] = sessionMemoryCap
+	req.EditorMetadata["__sessionMemoryUsedChars"] = sessionMemoryUsedChars
 	raw := truncateStr(sb.String(), cfg.EffectiveCodeStreamPromptCap())
 	promptCap := EffectiveLocalPromptCap(cfg, req.ContextType, mode)
 	if printImport {
@@ -380,6 +423,53 @@ func loadAppContextBlock(cfg config.AppConfig, appID string, maxChars int) strin
 		}
 	}
 	return ""
+}
+
+func conversationContextFromEditorMetadata(meta map[string]any, maxChars int) string {
+	if meta == nil {
+		return ""
+	}
+	raw, ok := meta["__conversationContext"]
+	if !ok || raw == nil {
+		return ""
+	}
+	text := strings.TrimSpace(fmt.Sprint(raw))
+	if text == "" {
+		return ""
+	}
+	return truncateStr(text, maxChars)
+}
+
+// SessionMemoryBudget returns adaptive chars for SESSION_MEMORY block.
+// Priority: keep memory helpful without starving active editor/RAG on constrained machines.
+func SessionMemoryBudget(cfg config.AppConfig, contextType, responseMode string) int {
+	mode := strings.ToLower(strings.TrimSpace(responseMode))
+	ctx := strings.ToLower(strings.TrimSpace(contextType))
+	promptCap := EffectiveLocalPromptCap(cfg, ctx, mode)
+	if promptCap <= 0 {
+		promptCap = 12000
+	}
+
+	budget := promptCap / 6
+	if mode == "analyze" && ctx != "menu_json" {
+		budget = promptCap / 8
+	}
+	if mode == "edit" && ctx == "menu_json" {
+		budget = promptCap / 5
+	}
+
+	if IsConstrained8GbTier(cfg) {
+		if budget > 2200 {
+			budget = 2200
+		}
+	}
+	if budget < 1200 {
+		budget = 1200
+	}
+	if budget > 8000 {
+		budget = 8000
+	}
+	return budget
 }
 
 func buildPromptLanguageBlock(uiLang, userRequest string) string {

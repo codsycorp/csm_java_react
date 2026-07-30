@@ -12,6 +12,7 @@ import (
 	"csm_server/backend-go/internal/model"
 	"csm_server/backend-go/internal/security"
 	"csm_server/backend-go/internal/services"
+	"csm_server/backend-go/internal/util"
 )
 
 var reservedIndexIDs = map[string]struct{}{
@@ -130,6 +131,10 @@ func (h *TableHandler) handleTableOperation(params map[string]any, isUpdate bool
 	access := h.resolveAccess(auth)
 
 	table, filter = security.ResolveSystemUserTableForRead(table, isUpdate, params, filter, access)
+	if table == "csm_group_members" {
+		// csm_group_members is a system table stored under csm app namespace.
+		appID = "csm"
+	}
 
 	onlyMySubusers, _ := params["only_my_subusers"].(bool)
 	filter = security.MergeOnlyMySubusersFilter(table, isUpdate, onlyMySubusers, filter, access)
@@ -280,15 +285,27 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 	}
 
 	if table == "csm_group_members" && access != nil && !access.IsDev {
+		if access.IsAdmin {
+			adminAppID := strings.TrimSpace(access.AppID)
+			if adminAppID != "" {
+				// Admin manages sub-users in their signed-in app scope.
+				objUpdate["app_id"] = adminAppID
+			}
+		}
 		if command == "delete" && access.IsSubUser {
 			out["success"] = false
 			out["message"] = "Sub-user không có quyền xóa sub-user trên bảng csm_group_members"
 			return out
 		}
 		if command == "create" {
-			preferredParent := access.AppID
-			if preferredParent == "" && len(access.ParentAccountCandidates) > 0 {
-				preferredParent = access.ParentAccountCandidates[0]
+			// Java handleUpdateTableOperation: parent_account_id luôn tự gán theo tài khoản
+			// đăng nhập, không cho client chọn tay.
+			preferredParent := ""
+			if len(access.ParentAccountCandidates) > 0 {
+				preferredParent = strings.TrimSpace(access.ParentAccountCandidates[0])
+			}
+			if preferredParent == "" {
+				preferredParent = strings.TrimSpace(access.AppID)
 			}
 			if preferredParent == "" {
 				out["success"] = false
@@ -296,6 +313,10 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 				return out
 			}
 			objUpdate["parent_account_id"] = preferredParent
+			// Java: normalizeManagedSubUserPermissions + autoGenerateSubUserCredentials.
+			// app_token is built from the ADMIN's app_id (never client-supplied app_id)
+			// and app_id is removed from the row (not a business field in sub-user rows).
+			h.autoGenerateSubUserCredentials(objUpdate, access)
 		} else if parent, ok := objUpdate["parent_account_id"].(string); ok && strings.TrimSpace(parent) != "" {
 			if !containsIdentifierCandidate(access.ParentAccountCandidates, parent) {
 				out["success"] = false
@@ -320,6 +341,9 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 		if access != nil && len(existing) > 0 {
 			existing = security.FilterRowsForUpdate(table, existing, access, appID, h.rm)
 		}
+		if table == "csm_group_members" && access != nil && access.IsAdmin && !access.IsDev {
+			existing = h.filterSubUserRowsForAdminLoginApp(existing, access)
+		}
 		if (command == "update" || command == "delete") && len(existing) == 0 {
 			if id, ok := objUpdate["id"]; ok && strings.TrimSpace(fmt.Sprint(id)) != "" {
 				fallbackRows := h.filterRowsForUpdate(appID, table, model.EqFilter("id", id))
@@ -327,6 +351,9 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 					fallback := fallbackRows
 					if access != nil {
 						fallback = security.FilterRowsForUpdateWithoutDataScope(table, fallback, access, appID, h.rm)
+					}
+					if table == "csm_group_members" && access != nil && access.IsAdmin && !access.IsDev {
+						fallback = h.filterSubUserRowsForAdminLoginApp(fallback, access)
 					}
 					existing = fallback
 				}
@@ -443,6 +470,129 @@ func (h *TableHandler) handleUpdateOperation(out map[string]any, params map[stri
 	return out
 }
 
+// autoGenerateSubUserCredentials mirrors Java TableHandler.autoGenerateSubUserCredentials:
+//   - parent_account_id fallback = admin's app_id
+//   - app_token = CsmEncrypt(adminAppID_____loginID_____user_____0) built from the ADMIN's
+//     app_id — never from client-supplied app_id (frontend grid sends the csm namespace)
+//   - app_id is REMOVED from sub-user rows (isolated by app context, not a business field)
+//   - seeds canonical profile/session fields (username/email/full_name, refresh, login_version,
+//     actived, permissions defaults, permissionBitfield/schema/dataScope)
+func (h *TableHandler) autoGenerateSubUserCredentials(objUpdate map[string]any, access *security.UserAccessContext) {
+	if parent, _ := objUpdate["parent_account_id"].(string); strings.TrimSpace(parent) == "" && strings.TrimSpace(access.AppID) != "" {
+		objUpdate["parent_account_id"] = strings.TrimSpace(access.AppID)
+	}
+	loginID := strings.TrimSpace(tableStringFromAny(objUpdate["login_identifier"]))
+	if loginID == "" {
+		return
+	}
+
+	// Auto-encrypt pass (helper chống double-encryption)
+	h.ensurePassEncrypted("csm_group_members", objUpdate, nil)
+
+	// Auto-generate app_token from the ADMIN's app context if not already set
+	if existingToken, _ := objUpdate["app_token"].(string); strings.TrimSpace(existingToken) == "" {
+		effectiveAppID := strings.TrimSpace(access.AppID)
+		if effectiveAppID == "" {
+			effectiveAppID = "csm"
+		}
+		rawToken := util.BuildRawToken(effectiveAppID, loginID, "user", util.ResolveAccessRight("user"))
+		generated := h.rm.CsmEncrypt(rawToken)
+		objUpdate["app_token"] = generated
+		if refresh, _ := objUpdate["refresh"].(string); strings.TrimSpace(refresh) == "" {
+			objUpdate["refresh"] = generated
+		}
+	}
+
+	// Keep app_id on sub-user row aligned with the admin app context.
+	if effectiveAppID := strings.TrimSpace(access.AppID); effectiveAppID != "" {
+		objUpdate["app_id"] = effectiveAppID
+	}
+
+	// Canonical profile/session fields for csm_group_members
+	if v, _ := objUpdate["username"].(string); strings.TrimSpace(v) == "" {
+		objUpdate["username"] = loginID
+	}
+	if v, _ := objUpdate["email"].(string); strings.TrimSpace(v) == "" {
+		objUpdate["email"] = loginID
+	}
+	if _, ok := objUpdate["phoneNumber"]; !ok {
+		objUpdate["phoneNumber"] = ""
+	}
+	if v, _ := objUpdate["full_name"].(string); strings.TrimSpace(v) == "" {
+		objUpdate["full_name"] = loginID
+	}
+	if _, ok := objUpdate["user_address"]; !ok {
+		objUpdate["user_address"] = ""
+	}
+	if _, ok := objUpdate["avatar"]; !ok {
+		objUpdate["avatar"] = ""
+	}
+	if _, ok := objUpdate["group_rights"]; !ok {
+		objUpdate["group_rights"] = []any{}
+	}
+	if _, ok := objUpdate["source_app_token"]; !ok {
+		objUpdate["source_app_token"] = ""
+	}
+
+	appToken, _ := objUpdate["app_token"].(string)
+	refresh, _ := objUpdate["refresh"].(string)
+	refreshToken, _ := objUpdate["refresh_token"].(string)
+	if strings.TrimSpace(refreshToken) == "" {
+		if strings.TrimSpace(refresh) != "" {
+			refreshToken = refresh
+		} else {
+			refreshToken = appToken
+		}
+		objUpdate["refresh_token"] = refreshToken
+	}
+	if strings.TrimSpace(refresh) == "" {
+		objUpdate["refresh"] = refreshToken
+	}
+	if _, ok := objUpdate["refresh_token_ip"]; !ok {
+		objUpdate["refresh_token_ip"] = ""
+	}
+	if _, ok := objUpdate["refresh_token_ua"]; !ok {
+		objUpdate["refresh_token_ua"] = ""
+	}
+	if _, ok := objUpdate["refresh_token_expiry"]; !ok {
+		objUpdate["refresh_token_expiry"] = int64(0)
+	}
+	if _, ok := objUpdate["login_version"]; !ok {
+		objUpdate["login_version"] = 0
+	}
+	if _, ok := objUpdate["loginVersion"]; !ok {
+		objUpdate["loginVersion"] = objUpdate["login_version"]
+	}
+	if _, ok := objUpdate["actived"]; !ok {
+		objUpdate["actived"] = true
+	}
+	if _, ok := objUpdate["permissions"]; !ok {
+		objUpdate["permissions"] = []any{}
+	}
+	if _, ok := objUpdate["menusPermissions"]; !ok {
+		objUpdate["menusPermissions"] = []any{}
+	}
+	if _, ok := objUpdate["permissionsAdd"]; !ok {
+		objUpdate["permissionsAdd"] = []any{}
+	}
+	if _, ok := objUpdate["permissionsDeny"]; !ok {
+		objUpdate["permissionsDeny"] = []any{}
+	}
+	if _, ok := objUpdate["menusPermissionsAdd"]; !ok {
+		objUpdate["menusPermissionsAdd"] = []any{}
+	}
+	if _, ok := objUpdate["menusPermissionsDeny"]; !ok {
+		objUpdate["menusPermissionsDeny"] = []any{}
+	}
+
+	permissions := model.StringListFromRecord(objUpdate, "permissions")
+	menusPermissions := model.StringListFromRecord(objUpdate, "menusPermissions")
+	bitfield := util.BuildBitfield(permissions, menusPermissions, false)
+	objUpdate["permissionBitfield"] = util.ToCompactToken(bitfield)
+	objUpdate["permissionSchemaVersion"] = "v3"
+	objUpdate["dataScope"] = util.ResolveDataScope(bitfield)
+}
+
 func (h *TableHandler) captureLearningFromSavedRow(appID, table, action string, row map[string]any) {
 	if row == nil {
 		return
@@ -535,6 +685,43 @@ func truncateForLearning(input string, maxLen int) string {
 		return input
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+func (h *TableHandler) filterSubUserRowsForAdminLoginApp(rows []map[string]any, access *security.UserAccessContext) []map[string]any {
+	if len(rows) == 0 || access == nil {
+		return rows
+	}
+	adminAppID := strings.TrimSpace(access.AppID)
+	if adminAppID == "" {
+		return rows
+	}
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		rowAppID := h.resolveSubUserRowAppID(row)
+		if rowAppID == "" || strings.EqualFold(rowAppID, adminAppID) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func (h *TableHandler) resolveSubUserRowAppID(row map[string]any) string {
+	if row == nil {
+		return ""
+	}
+	if appID := strings.TrimSpace(tableStringFromAny(row["app_id"])); appID != "" {
+		return appID
+	}
+	for _, key := range []string{"app_token", "appToken", "source_app_token"} {
+		token := strings.TrimSpace(tableStringFromAny(row[key]))
+		if token == "" {
+			continue
+		}
+		if appID := strings.TrimSpace(util.AppIDFromToken(h.rm, token)); appID != "" {
+			return appID
+		}
+	}
+	return ""
 }
 
 func (h *TableHandler) resolveAccess(auth *security.AuthUser) *security.UserAccessContext {

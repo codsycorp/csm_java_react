@@ -618,6 +618,10 @@
       lgSlrAutoRunFilter: "Chạy lọc tự động",
       lgSlrAutoThMinNgayCx3Nb: "Ngày CX (DD3 Nam-Bắc): lấy khi >=",
       lgSlrAutoThMaxKtnLast: "Tổng cuối KTN: tuần cuối ≤",
+      lgSlrAutoThMinZeroWeek: "Tuần 0 (Nam/Bắc): lấy khi >=",
+      lgSlrAutoThSoFilter: "Dãy số xét TH (hệ 2/3)",
+      lgSlrAutoThNgayCxFilter: "Ngày chưa xổ (vd: 6-16)",
+      lgSlrAutoThHitToday: "Bảng dò Đến Ngày",
       lgNbColSo: "Bộ số",
       lgNbColDauCp: "Đầu chính phụ (D+P)",
       lgNbColDauC: "Đầu chính (D)",
@@ -730,14 +734,15 @@
       lgThManualRunCount: "Đầu vào chạy",
       lgThAutoFlow: "Luồng tự động",
       lgThAutoRunSearch: "⚙ Chạy tự động tìm",
-      lgThAutoRun: "Lọc Tự Động (C1–C8)",
+      lgThAutoRun: "Lọc Tự Động (C1–C9)",
       lgThAutoC1Ngay: "C1 Ngày: Top N lâu nhất",
       lgThAutoC1Ky: "C1 Kỳ: Top N lâu nhất",
       lgThAutoC2NgayCX: "C2 Ngày CX (vd: 5,9,13)",
       lgThAutoC3KyCX: "C3 Kỳ CX (vd: 5,9,13)",
       lgThAutoC4NgayGap: "C4: Ngày CX > Lâu Ngày + N",
       lgThAutoC5KyGap: "C5: Kỳ CX > Lâu Kỳ + N",
-      lgThAutoC6Both: "C6: Ngày CX ≥ Lâu Ngày VÀ Kỳ CX ≥ Lâu Kỳ",
+      lgThAutoC6Both: "C6: Ngày CX ≥ Lâu Ngày",
+      lgThAutoC9KyOnly: "C9: Kỳ CX ≥ Lâu Kỳ",
       lgThAutoC7Tuan21Min: "C7 Tổng 21 tuần: Top N bé nhất",
       lgThAutoC8Tong29Min: "C8 Tổng 29 ngày: Top N bé nhất",
       lgThAutoResult: "Kết Quả Lọc Tự Động",
@@ -879,6 +884,10 @@
       lgSlrAutoRunFilter: "Run auto filter",
       lgSlrAutoThMinNgayCx3Nb: "Days no-show DD3 N/S: keep if >=",
       lgSlrAutoThMaxKtnLast: "KTN last week in series ≤",
+      lgSlrAutoThMinZeroWeek: "Zero-week streak (S/N): keep if >=",
+      lgSlrAutoThSoFilter: "Input numbers for TH (2/3 digits)",
+      lgSlrAutoThNgayCxFilter: "Days no-show filter (e.g. 6-16)",
+      lgSlrAutoThHitToday: "End-date hit scan",
       lgNbColSo: "Number Set",
       lgNbColDauCp: "Main+Sub Head (D+P)",
       lgNbColDauC: "Main Head (D)",
@@ -991,14 +1000,15 @@
       lgThManualRunCount: "Run input",
       lgThAutoFlow: "Auto Flow",
       lgThAutoRunSearch: "⚙ Run Auto Search",
-      lgThAutoRun: "Auto Filter (C1–C8)",
+      lgThAutoRun: "Auto Filter (C1–C9)",
       lgThAutoC1Ngay: "C1 Day: Top N longest",
       lgThAutoC1Ky: "C1 Period: Top N longest",
       lgThAutoC2NgayCX: "C2: Days No-show (e.g. 5,9,13)",
       lgThAutoC3KyCX: "C3: Periods No-show (e.g. 5,9,13)",
       lgThAutoC4NgayGap: "C4: Days No-show > Max Day Gap + N",
       lgThAutoC5KyGap: "C5: Periods No-show > Max Period Gap + N",
-      lgThAutoC6Both: "C6: Days No-show ≥ Max Day AND Periods No-show ≥ Max Period",
+      lgThAutoC6Both: "C6: Days No-show ≥ Max Day",
+      lgThAutoC9KyOnly: "C9: Periods No-show ≥ Max Period",
       lgThAutoC7Tuan21Min: "C7 Total 21 weeks: Top N smallest",
       lgThAutoC8Tong29Min: "C8 Total 29 days: Top N smallest",
       lgThAutoResult: "Auto Filter Results",
@@ -1140,6 +1150,10 @@
       lgSlrAutoRunFilter: "运行自动筛选",
       lgSlrAutoThMinNgayCx3Nb: "DD3 南北未出现天数：保留 >=",
       lgSlrAutoThMaxKtnLast: "KTN 序列最后一周 ≤",
+      lgSlrAutoThMinZeroWeek: "南/北 0 周连空：保留 >=",
+      lgSlrAutoThSoFilter: "综合筛选号码（2/3位）",
+      lgSlrAutoThNgayCxFilter: "未出天数筛选（如 6-16）",
+      lgSlrAutoThHitToday: "截止日期命中扫描",
       lgNbColSo: "号码组",
       lgNbColDauCp: "主副头位 (D+P)",
       lgNbColDauC: "主台头位 (D)",
@@ -1252,14 +1266,15 @@
       lgThManualRunCount: "执行输入",
       lgThAutoFlow: "自动流程",
       lgThAutoRunSearch: "⚙ 运行自动查找",
-      lgThAutoRun: "自动筛选 (C1–C8)",
+      lgThAutoRun: "自动筛选 (C1–C9)",
       lgThAutoC1Ngay: "C1 天：最长N个",
       lgThAutoC1Ky: "C1 期：最长N个",
       lgThAutoC2NgayCX: "C2 未出现天数（例如：5,9,13）",
       lgThAutoC3KyCX: "C3 未出现期数（例如：5,9,13）",
       lgThAutoC4NgayGap: "C4: 未出现天数 > 最大间隔 + N",
       lgThAutoC5KyGap: "C5: 未出现期数 > 最大间隔 + N",
-      lgThAutoC6Both: "C6: 天数 ≥ 最大天间隔 且 期数 ≥ 最大期间隔",
+      lgThAutoC6Both: "C6: 天数 ≥ 最大天间隔",
+      lgThAutoC9KyOnly: "C9: 期数 ≥ 最大期间隔",
       lgThAutoC7Tuan21Min: "C7 21周总和：最小N个",
       lgThAutoC8Tong29Min: "C8 29天总和：最小N个",
       lgThAutoResult: "自动筛选结果",
@@ -3026,10 +3041,10 @@
     var _an = useState(2), legacyHeThong = _an[0], setLegacyHeThong = _an[1];
     var _ao = useState({ D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_duoi: true }), legacyLocMap = _ao[0], setLegacyLocMap = _ao[1];
     var _ao1 = useState(getLegacySlrPreferredQueryValue(2)), legacySlrQueryValue = _ao1[0], setLegacySlrQueryValue = _ao1[1];
-    var _ap = useState("C_D"), legacyCdMode = _ap[0], setLegacyCdMode = _ap[1];
+    var _ap = useState("C"), legacyCdMode = _ap[0], setLegacyCdMode = _ap[1];
     var _aq = useState(1), legacyRankFrom = _aq[0], setLegacyRankFrom = _aq[1];
     var _ar = useState(93), legacyRankTo = _ar[0], setLegacyRankTo = _ar[1];
-    var _ab1 = useState(500), legacyNgayChay = _ab1[0], setLegacyNgayChay = _ab1[1];
+    var _ab1 = useState(900), legacyNgayChay = _ab1[0], setLegacyNgayChay = _ab1[1];
     var _ab2 = useState(false), legacyTheoThu = _ab2[0], setLegacyTheoThu = _ab2[1];
     var _ab2k = useState(false), legacyTheoKy = _ab2k[0], setLegacyTheoKy = _ab2k[1];
     var _ab3 = useState(true), legacyChkHieu = _ab3[0], setLegacyChkHieu = _ab3[1];
@@ -3050,14 +3065,19 @@
     var _slr_autoSummary = useState(""), legacySlrAutoSummary = _slr_autoSummary[0], setLegacySlrAutoSummary = _slr_autoSummary[1];
     var _slr_autoDebugLogs = useState([]), legacySlrAutoDebugLogs = _slr_autoDebugLogs[0], setLegacySlrAutoDebugLogs = _slr_autoDebugLogs[1];
     var _slr_autoTongHopRows = useState([]), legacySlrAutoTongHopRows = _slr_autoTongHopRows[0], setLegacySlrAutoTongHopRows = _slr_autoTongHopRows[1];
+    var _slr_autoTongHopHitRows = useState([]), legacySlrAutoTongHopHitRows = _slr_autoTongHopHitRows[0], setLegacySlrAutoTongHopHitRows = _slr_autoTongHopHitRows[1];
+    var _slr_autoTongHopHitRunning = useState(false), legacySlrAutoTongHopHitRunning = _slr_autoTongHopHitRunning[0], setLegacySlrAutoTongHopHitRunning = _slr_autoTongHopHitRunning[1];
     var _slr_autoTongHopSummary = useState(""), legacySlrAutoTongHopSummary = _slr_autoTongHopSummary[0], setLegacySlrAutoTongHopSummary = _slr_autoTongHopSummary[1];
     var _slr_autoTongHopRunning = useState(false), legacySlrAutoTongHopRunning = _slr_autoTongHopRunning[0], setLegacySlrAutoTongHopRunning = _slr_autoTongHopRunning[1];
     // --- SLR Auto-run custom conditions ---
 
-    var _slr_autoNamWeeks = useState(5), legacySlrAutoNamWeeks = _slr_autoNamWeeks[0], setLegacySlrAutoNamWeeks = _slr_autoNamWeeks[1];
-    var _slr_autoSttWindow = useState(5), legacySlrAutoSttWindowSize = _slr_autoSttWindow[0], setLegacySlrAutoSttWindowSize = _slr_autoSttWindow[1];
+    var _slr_autoNamWeeks = useState(9), legacySlrAutoNamWeeks = _slr_autoNamWeeks[0], setLegacySlrAutoNamWeeks = _slr_autoNamWeeks[1];
+    var _slr_autoSttWindow = useState(3), legacySlrAutoSttWindowSize = _slr_autoSttWindow[0], setLegacySlrAutoSttWindowSize = _slr_autoSttWindow[1];
     var _slr_autoThMinNgayCx3Nb = useState(null), legacySlrAutoThMinNgayCx3Nb = _slr_autoThMinNgayCx3Nb[0], setLegacySlrAutoThMinNgayCx3Nb = _slr_autoThMinNgayCx3Nb[1];
     var _slr_autoThMaxKtnLast = useState(null), legacySlrAutoThMaxKtnLast = _slr_autoThMaxKtnLast[0], setLegacySlrAutoThMaxKtnLast = _slr_autoThMaxKtnLast[1];
+    var _slr_autoThMinZeroWeek = useState(null), legacySlrAutoThMinZeroWeek = _slr_autoThMinZeroWeek[0], setLegacySlrAutoThMinZeroWeek = _slr_autoThMinZeroWeek[1];
+    var _slr_autoThSoFilter = useState(""), legacySlrAutoThSoFilter = _slr_autoThSoFilter[0], setLegacySlrAutoThSoFilter = _slr_autoThSoFilter[1];
+    var _slr_autoThNgayCxFilter = useState(""), legacySlrAutoThNgayCxFilter = _slr_autoThNgayCxFilter[0], setLegacySlrAutoThNgayCxFilter = _slr_autoThNgayCxFilter[1];
 
     // --- SLR Auto-filtered rows (kept for display binding) ---
     var legacySlrAutoFilteredRows = useMemo(function () {
@@ -3270,6 +3290,8 @@
           // Xóa kết quả tổng hợp và selection cũ khi chạy lại (LT thay đổi → rows mới → selection cũ không còn hợp lệ)
           setLegacySlrAutoSelectedRowKeys([]);
           setLegacySlrAutoTongHopRows([]);
+          setLegacySlrAutoTongHopHitRows([]);
+          setLegacySlrAutoTongHopHitSelectedRowKeys([]);
           setLegacySlrAutoTongHopSummary("");
           setLegacySlrAutoTongHopSelectedRowKeys([]);
           try {
@@ -3297,9 +3319,9 @@
             var resultRows = [];
             var dataByQuery = {};
 
-            var sttWindowSize = Math.max(1, Math.min(93, Number(legacySlrAutoSttWindowSize || 5)));
-            var tongNamWeeks = Math.max(1, Number(legacySlrAutoNamWeeks || 5));
-            var modeNow = String(legacyCdMode || "C_D").toUpperCase();
+            var sttWindowSize = Math.max(1, Math.min(93, Number(legacySlrAutoSttWindowSize || 3)));
+            var tongNamWeeks = Math.max(1, Number(legacySlrAutoNamWeeks || 9));
+            var modeNow = String(legacyCdMode || "C").toUpperCase();
             pushAutoLog("Tham số: LoạiTìm=" + selectedQueryValues.length + ", STTWindow=" + sttWindowSize + ", NamNoHitWeeks=" + tongNamWeeks + ", Mode=" + modeNow);
 
             function resolveLegacySlrZeroWeekTarget(queryValue) {
@@ -3337,12 +3359,24 @@
               var zeroWeekTarget = resolveLegacySlrZeroWeekTarget(qv);
               var currentDateText = String(args && args.currentDateText || "").trim();
               var weekRows = Array.isArray(args && args.weekRows) ? args.weekRows : [];
-              var cells = Array.isArray(args && args.cells) ? args.cells : [];
-              var cellCaches = Array.isArray(args && args.cellCaches) ? args.cellCaches : [];
+              var cellsRaw = Array.isArray(args && args.cells) ? args.cells : [];
+              var cellCachesRaw = Array.isArray(args && args.cellCaches) ? args.cellCaches : [];
+              var selectedToYmdGuard = normalizeLegacyDateYmd(den_ngay);
+              var cells = [];
+              var cellCaches = [];
+              for (var ci = 0; ci < cellsRaw.length; ci += 1) {
+                var cellObj = cellsRaw[ci];
+                var cellYmd = normalizeLegacyDateYmd(cellObj && cellObj.cell && cellObj.cell.date);
+                if (selectedToYmdGuard && cellYmd && cellYmd >= selectedToYmdGuard) continue;
+                cells.push(cellObj);
+                cellCaches.push(cellCachesRaw[ci] || {});
+              }
               var tongNamWeeks = Math.max(1, Number(args && args.tongNamWeeks || 1));
-              var modeNow = String(args && args.modeNow || "C_D").toUpperCase();
+              var modeNow = String(args && args.modeNow || "C").toUpperCase();
               var rankTo = Math.max(sttTo, Number(args && args.rankTo || sttTo));
               var rowKeyPrefix = String(args && args.rowKeyPrefix || "slr_auto");
+
+              if (!cells.length) return null;
 
               // Chuỗi ngày không trúng gần nhất — chỉ hiển thị, không dùng làm điều kiện lọc.
               var noHitDaysCurrent = 0;
@@ -3524,7 +3558,8 @@
               pushAutoLog("Loại Tìm " + (qi + 1) + "/" + selectedQueryValues.length + ": " + qv);
               var zeroWeekTarget = resolveLegacySlrZeroWeekTarget(qv);
               if (!dataByQuery[qv]) {
-                dataByQuery[qv] = await loadLegacySpecialDataByQuery(qv);
+                var rawDataByQuery = await loadLegacySpecialDataByQuery(qv);
+                dataByQuery[qv] = filterLegacyDataMienBeforeDate(rawDataByQuery, den_ngay);
               }
               var dataMien = dataByQuery[qv];
               if (!dataMien || !dataMien.length) {
@@ -3543,6 +3578,21 @@
 
               var weekRows = buildLegacySoLauRaWeekRows(runtimeCfg.weekCfg);
               var cells = flattenLegacySlrWeekCells(weekRows);
+              var autoCalcToYmd = normalizeLegacyDateYmd(runtimeCfg.weekCfg && runtimeCfg.weekCfg.toDate);
+              var selectedToYmd = normalizeLegacyDateYmd(den_ngay);
+              if (autoCalcToYmd) {
+                cells = cells.filter(function (c) {
+                  var cellYmd = normalizeLegacyDateYmd(c && c.cell && c.cell.date);
+                  if (!cellYmd) return false;
+                  if (selectedToYmd && cellYmd >= selectedToYmd) return false;
+                  return cellYmd <= autoCalcToYmd;
+                });
+              } else if (selectedToYmd) {
+                cells = cells.filter(function (c) {
+                  var cellYmd = normalizeLegacyDateYmd(c && c.cell && c.cell.date);
+                  return !!cellYmd && cellYmd < selectedToYmd;
+                });
+              }
               var queryItem = (legacySlrQueryTypeOptions || []).find(function (item) {
                 return String(item && item.value) === qv;
               });
@@ -3605,7 +3655,7 @@
                   sttTo: sttTo,
                   qv: qv,
                   queryLabel: queryLabel,
-                  currentDateText: den_ngay,
+                  currentDateText: runtimeCfg.rowsCfg && runtimeCfg.rowsCfg.toDate,
                   weekRows: weekRows,
                   cells: cells,
                   cellCaches: cellCaches,
@@ -3620,7 +3670,7 @@
               queryRows = appendMergedSlrRows(queryRows, {
                 qv: qv,
                 queryLabel: queryLabel,
-                currentDateText: den_ngay,
+                currentDateText: runtimeCfg.rowsCfg && runtimeCfg.rowsCfg.toDate,
                 weekRows: weekRows,
                 cells: cells,
                 cellCaches: cellCaches,
@@ -3722,6 +3772,7 @@
     var _ath12 = useState(""), legacyThAutoC4NgayGap = _ath12[0], setLegacyThAutoC4NgayGap = _ath12[1];
     var _ath13 = useState(""), legacyThAutoC5KyGap = _ath13[0], setLegacyThAutoC5KyGap = _ath13[1];
     var _ath14 = useState(false), legacyThAutoC6Both = _ath14[0], setLegacyThAutoC6Both = _ath14[1];
+    var _ath14d = useState(false), legacyThAutoC9KyOnly = _ath14d[0], setLegacyThAutoC9KyOnly = _ath14d[1];
     var _ath14b = useState(""), legacyThAutoC7Tuan21Min = _ath14b[0], setLegacyThAutoC7Tuan21Min = _ath14b[1];
     var _ath14c = useState(""), legacyThAutoC8Tong29Min = _ath14c[0], setLegacyThAutoC8Tong29Min = _ath14c[1];
     var _ath15 = useState(""), legacyThIntersect = _ath15[0], setLegacyThIntersect = _ath15[1];
@@ -3763,6 +3814,7 @@
     var _sel_slr_week = useState([]), legacySlrWeekSelectedRowKeys = _sel_slr_week[0], setLegacySlrWeekSelectedRowKeys = _sel_slr_week[1];
     var _sel_slr_auto = useState([]), legacySlrAutoSelectedRowKeys = _sel_slr_auto[0], setLegacySlrAutoSelectedRowKeys = _sel_slr_auto[1];
     var _sel_slr_auto_th = useState([]), legacySlrAutoTongHopSelectedRowKeys = _sel_slr_auto_th[0], setLegacySlrAutoTongHopSelectedRowKeys = _sel_slr_auto_th[1];
+    var _sel_slr_auto_th_hit = useState([]), legacySlrAutoTongHopHitSelectedRowKeys = _sel_slr_auto_th_hit[0], setLegacySlrAutoTongHopHitSelectedRowKeys = _sel_slr_auto_th_hit[1];
     var _sel_nb = useState([]), legacyNbSelectedRowKeys = _sel_nb[0], setLegacyNbSelectedRowKeys = _sel_nb[1];
     var _am = useState({
       so_ky: so_ky,
@@ -3993,7 +4045,8 @@
         c3KyCX: c3KyCX,
         c4NgayGap: c4NgayGap,
         c5KyGap: c5KyGap,
-        c6Both: !!legacyThAutoC6Both,
+        c6NgayOnly: !!legacyThAutoC6Both,
+        c9KyOnly: !!legacyThAutoC9KyOnly,
         c7Tuan21MinTop: c7Tuan21MinTop,
         c8Tong29MinTop: c8Tong29MinTop
       };
@@ -4001,7 +4054,7 @@
 
     function hasLegacyThAutoFilter(cfg) {
       var filterCfg = cfg || getLegacyThFilterConfig();
-      return filterCfg.c1NgayTop > 0 || filterCfg.c1KyTop > 0 || filterCfg.c2NgayCX.length > 0 || filterCfg.c3KyCX.length > 0 || filterCfg.c4NgayGap >= 0 || filterCfg.c5KyGap >= 0 || filterCfg.c6Both || filterCfg.c7Tuan21MinTop > 0 || filterCfg.c8Tong29MinTop > 0;
+      return filterCfg.c1NgayTop > 0 || filterCfg.c1KyTop > 0 || filterCfg.c2NgayCX.length > 0 || filterCfg.c3KyCX.length > 0 || filterCfg.c4NgayGap >= 0 || filterCfg.c5KyGap >= 0 || filterCfg.c6NgayOnly || filterCfg.c7Tuan21MinTop > 0 || filterCfg.c8Tong29MinTop > 0 || filterCfg.c9KyOnly;
     }
 
     function buildLegacyThIntersectText(rows) {
@@ -4512,20 +4565,41 @@
       var cfg = filterCfg || getLegacyThFilterConfig();
       if (!hasLegacyThAutoFilter(cfg)) return [];
 
+      function readMetricNumber(row, keys) {
+        var list = Array.isArray(keys) ? keys : [keys];
+        for (var i = 0; i < list.length; i += 1) {
+          var key = list[i];
+          if (!key) continue;
+          var raw = row ? row[key] : undefined;
+          if (raw == null || raw === "") continue;
+          if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+          var text = String(raw).trim();
+          if (!text) continue;
+          var direct = Number(text);
+          if (Number.isFinite(direct)) return direct;
+          var match = text.match(/-?\d+(?:\.\d+)?/);
+          if (match) {
+            var parsed = Number(match[0]);
+            if (Number.isFinite(parsed)) return parsed;
+          }
+        }
+        return 0;
+      }
+
       var c1NgayMap = {};
       var c1KyMap = {};
       var c7Tuan21MinMap = {};
       var c8Tong29MinMap = {};
       if (cfg.c1NgayTop > 0) {
         sourceRows.slice().sort(function (a, b) {
-          return (Number(b.ngayCXHT) || 0) - (Number(a.ngayCXHT) || 0);
+          return readMetricNumber(b, ["ngayCXHT", "NgayCXHT"]) - readMetricNumber(a, ["ngayCXHT", "NgayCXHT"]);
         }).slice(0, cfg.c1NgayTop).forEach(function (row) {
           c1NgayMap[row.key] = 1;
         });
       }
       if (cfg.c1KyTop > 0) {
         sourceRows.slice().sort(function (a, b) {
-          return (Number(b.kyCXHT) || 0) - (Number(a.kyCXHT) || 0);
+          return readMetricNumber(b, ["kyCXHT", "KyCXHT"]) - readMetricNumber(a, ["kyCXHT", "KyCXHT"]);
         }).slice(0, cfg.c1KyTop).forEach(function (row) {
           c1KyMap[row.key] = 1;
         });
@@ -4546,15 +4620,20 @@
       }
 
       return sourceRows.filter(function (row) {
+        var ngayCx = readMetricNumber(row, ["ngayCXHT", "NgayCXHT"]);
+        var kyCx = readMetricNumber(row, ["kyCXHT", "KyCXHT"]);
+        var lauNgay = readMetricNumber(row, ["lauNgay", "LauNgay"]);
+        var lauKy = readMetricNumber(row, ["lauKy", "LauKy"]);
         var matchC1 = !!c1NgayMap[row.key] || !!c1KyMap[row.key];
-        var matchC2 = cfg.c2NgayCX.length > 0 && cfg.c2NgayCX.indexOf(Number(row.ngayCXHT) || 0) >= 0;
-        var matchC3 = cfg.c3KyCX.length > 0 && cfg.c3KyCX.indexOf(Number(row.kyCXHT) || 0) >= 0;
-        var matchC4 = cfg.c4NgayGap >= 0 && ((Number(row.ngayCXHT) || 0) > ((Number(row.lauNgay) || 0) + cfg.c4NgayGap));
-        var matchC5 = cfg.c5KyGap >= 0 && ((Number(row.kyCXHT) || 0) > ((Number(row.lauKy) || 0) + cfg.c5KyGap));
-        var matchC6 = !!cfg.c6Both && ((Number(row.ngayCXHT) || 0) >= (Number(row.lauNgay) || 0)) && ((Number(row.kyCXHT) || 0) >= (Number(row.lauKy) || 0));
+        var matchC2 = cfg.c2NgayCX.length > 0 && cfg.c2NgayCX.indexOf(ngayCx) >= 0;
+        var matchC3 = cfg.c3KyCX.length > 0 && cfg.c3KyCX.indexOf(kyCx) >= 0;
+        var matchC4 = cfg.c4NgayGap >= 0 && (ngayCx > (lauNgay + cfg.c4NgayGap));
+        var matchC5 = cfg.c5KyGap >= 0 && (kyCx > (lauKy + cfg.c5KyGap));
+        var matchC6 = !!cfg.c6NgayOnly && (ngayCx >= lauNgay);
+        var matchC9 = !!cfg.c9KyOnly && (kyCx >= lauKy);
         var matchC7 = !!c7Tuan21MinMap[row.key];
         var matchC8 = !!c8Tong29MinMap[row.key];
-        return matchC1 || matchC2 || matchC3 || matchC4 || matchC5 || matchC6 || matchC7 || matchC8;
+        return matchC1 || matchC2 || matchC3 || matchC4 || matchC5 || matchC6 || matchC7 || matchC8 || matchC9;
       });
     }
 
@@ -4584,9 +4663,10 @@
         cfg.c3KyCX.length ? ("C3=" + cfg.c3KyCX.join(",")) : "",
         cfg.c4NgayGap >= 0 ? ("C4=" + cfg.c4NgayGap) : "",
         cfg.c5KyGap >= 0 ? ("C5=" + cfg.c5KyGap) : "",
-        cfg.c6Both ? "C6=1" : "",
+        cfg.c6NgayOnly ? "C6=1" : "",
         cfg.c7Tuan21MinTop > 0 ? ("C7=" + cfg.c7Tuan21MinTop) : "",
-        cfg.c8Tong29MinTop > 0 ? ("C8=" + cfg.c8Tong29MinTop) : ""
+        cfg.c8Tong29MinTop > 0 ? ("C8=" + cfg.c8Tong29MinTop) : "",
+        cfg.c9KyOnly ? "C9=1" : ""
       ].filter(Boolean).join(" | "));
 
       Object.keys(grouped).sort().forEach(function (queryType) {
@@ -4958,7 +5038,7 @@
     }, [legacyHeThong, legacyThUseApiSource, legacyThGroupSourceMode, legacyThCustomGroupsText]);
 
     useEffect(function () {
-      // Auto-apply C1-C8 only after Tong Hop data exists from explicit user actions.
+      // Auto-apply C1-C9 only after Tong Hop data exists from explicit user actions.
       // Do not auto-run Tong Hop calculations when no source rows are present.
       if (legacyThAutoRunning) return;
       if (legacyThAutoPinnedFullAuto) return;
@@ -4974,6 +5054,7 @@
       legacyThAutoC6Both,
       legacyThAutoC7Tuan21Min,
       legacyThAutoC8Tong29Min,
+      legacyThAutoC9KyOnly,
       legacyThAutoRunning,
       legacyThAutoPinnedFullAuto
     ]);
@@ -8604,14 +8685,47 @@
       }
     }
 
+    function resolveLegacySlrCalcToDate(dateText) {
+      var raw = String(dateText || "").trim();
+      if (!raw) return raw;
+
+      var parsed = chuyenNgay(raw, "dd/mm/yyyy");
+      if (parsed && !isNaN(parsed.getTime())) {
+        var d = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+        d.setDate(d.getDate() - 1);
+        return dateFormat(d, "dd/mm/yyyy");
+      }
+
+      var ymd = normalizeLegacyDateYmd(raw);
+      if (!ymd || !/^\d{8}$/.test(ymd)) return raw;
+      return CongNgay(dateFormat(chuyenNgay(ymd, "yyyymmdd"), "dd/mm/yyyy"), -1, "dd/mm/yyyy");
+    }
+
+    function filterLegacyDataMienBeforeDate(dataMien, exclusiveDateText) {
+      var boundYmd = normalizeLegacyDateYmd(exclusiveDateText);
+      var list = Array.isArray(dataMien) ? dataMien : [];
+      if (!boundYmd) return list;
+
+      return list.map(function (dai) {
+        var rec = dai || {};
+        var rows = Array.isArray(rec.data) ? rec.data : [];
+        var filteredRows = rows.filter(function (row) {
+          var ymd = normalizeLegacyDateYmd(row && row.field_ngay);
+          return !!ymd && ymd < boundYmd;
+        });
+        return Object.assign({}, rec, { data: filteredRows });
+      });
+    }
+
     function buildLegacySoLauRaRuntimeConfig(dataMien, timkiemRows, queryValueOverride) {
       var slrNgayChay = legacyTheoKy ? legacyNgayChay * 7 : legacyNgayChay;
       var slrStep = (legacyTheoKy && legacyTheoThu) ? 7 : 1;
       var queryValue = String(queryValueOverride || legacySlrQueryValue || "");
+      var calcToDate = resolveLegacySlrCalcToDate(den_ngay);
       var baseCfg = {
         dataMien: dataMien,
         fromDate: tu_ngay,
-        toDate: den_ngay,
+        toDate: calcToDate,
         heThong: legacyHeThong,
         queryValue: queryValue,
         mode: legacyCdMode,
@@ -8621,12 +8735,12 @@
         chkHieu: legacyChkHieu,
         theoKy: legacyTheoKy,
         theoThu: legacyTheoThu,
-        fixedThuLabel: (legacyTheoKy && legacyTheoThu) ? legacySlrThuLabelFromYmd(normalizeLegacyDateYmd(den_ngay)) : "",
+        fixedThuLabel: (legacyTheoKy && legacyTheoThu) ? legacySlrThuLabelFromYmd(normalizeLegacyDateYmd(calcToDate)) : "",
         stepDays: slrStep,
         candidateList: buildLegacySoLauRaCandidatesFromTimKiemRows(timkiemRows, legacyHeThong, legacyCdMode, legacyChkHieu)
       };
 
-      var slrDenAdj = den_ngay;
+      var slrDenAdj = calcToDate;
       if (!legacyTheoKy || !legacyTheoThu) {
         var slrDenDate = chuyenNgay(slrDenAdj, "dd/mm/yyyy");
         var slrDow = slrDenDate ? (slrDenDate.getDay() === 0 ? 7 : slrDenDate.getDay()) : 7;
@@ -8641,7 +8755,7 @@
       var slrBroadFrom = CongNgay(slrTuAdj, -Math.max(0, Number(slrNgayChay || 0)), "dd/mm/yyyy");
       var slrBaseRows = buildLegacyTongHopViewModel(Object.assign({}, baseCfg, {
         fromDate: slrBroadFrom,
-        toDate: den_ngay,
+        toDate: calcToDate,
         stepDays: 1
       })).filter(function (row) {
         return hasLegacyDrawData(row, legacyHeThong);
@@ -8654,13 +8768,13 @@
 
       var rowsCfg = Object.assign({}, baseCfg, {
         fromDate: slrBroadFrom,
-        toDate: den_ngay,
+        toDate: calcToDate,
         baseRows: slrBaseRows,
         dayRowMap: slrDayRowMap
       });
       var weekCfg = Object.assign({}, baseCfg, {
         fromDate: tu_ngay,
-        toDate: den_ngay,
+        toDate: calcToDate,
         baseRows: slrBaseRows,
         dayRowMap: slrDayRowMap
       });
@@ -8675,8 +8789,9 @@
       setLegacySlrWeekRows([]);
       try {
         var slrQueryType = getLegacySpecialQueryTypeForTab("slr");
-        var dataMien = await loadLegacySpecialDataByQuery(slrQueryType.value);
-        if (!dataMien) return;
+        var rawDataMien = await loadLegacySpecialDataByQuery(slrQueryType.value);
+        if (!rawDataMien) return;
+        var dataMien = filterLegacyDataMienBeforeDate(rawDataMien, den_ngay);
         var timkiemRows = [];
         try {
           timkiemRows = await fetchRowsFromGetTableData("kqxs_timkiem", legacyHeThong);
@@ -9348,7 +9463,7 @@
       var filterCfg = getLegacyThFilterConfig();
       if (!hasLegacyThAutoFilter(filterCfg)) {
         if (!silent) {
-          canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C8)");
+          canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C9)");
         }
         if (!silent || !legacyThAutoRows.length) {
           if (legacyThAutoRows.length) {
@@ -9386,7 +9501,7 @@
       }
       var filterCfg = getLegacyThFilterConfig();
       if (!hasLegacyThAutoFilter(filterCfg)) {
-        canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C8)");
+        canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C9)");
         return;
       }
 
@@ -10738,17 +10853,51 @@
     function getLegacySlrAutoTongHopFilterConfig() {
       var minRaw = legacySlrAutoThMinNgayCx3Nb;
       var maxRaw = legacySlrAutoThMaxKtnLast;
+      var zeroWeekRaw = legacySlrAutoThMinZeroWeek;
+      var soFilterRaw = String(legacySlrAutoThSoFilter || "").trim();
+      var ngayCxRaw = String(legacySlrAutoThNgayCxFilter || "").trim();
       var minNgayCx3Nb = (minRaw === null || minRaw === undefined || String(minRaw).trim() === "") ? null : Number(minRaw);
       var maxKtnLast = (maxRaw === null || maxRaw === undefined || String(maxRaw).trim() === "") ? null : Number(maxRaw);
+      var minZeroWeek = (zeroWeekRaw === null || zeroWeekRaw === undefined || String(zeroWeekRaw).trim() === "") ? null : Number(zeroWeekRaw);
+
+      var soFilterTokens = [];
+      if (soFilterRaw) {
+        var seenSo = {};
+        parseSoChuByHeThong(soFilterRaw, legacyHeThong).forEach(function (token) {
+          var t = String(token || "").trim();
+          if (!t || seenSo[t]) return;
+          seenSo[t] = true;
+          soFilterTokens.push(t);
+        });
+      }
+
+      var ngayCxValues = [];
+      if (ngayCxRaw) {
+        var seenDay = {};
+        ngayCxRaw.split(/[\s,;|\-/]+/).forEach(function (part) {
+          var n = parseInt(String(part || "").trim(), 10);
+          if (isNaN(n) || n < 0 || seenDay[n]) return;
+          seenDay[n] = true;
+          ngayCxValues.push(n);
+        });
+      }
+
       return {
         minNgayCx3Nb: isNaN(minNgayCx3Nb) ? null : minNgayCx3Nb,
-        maxKtnLast: isNaN(maxKtnLast) ? null : maxKtnLast
+        maxKtnLast: isNaN(maxKtnLast) ? null : maxKtnLast,
+        minZeroWeek: isNaN(minZeroWeek) ? null : minZeroWeek,
+        soFilterTokens: soFilterTokens,
+        ngayCxValues: ngayCxValues
       };
     }
 
     function hasLegacySlrAutoTongHopFilter(cfg) {
       var filterCfg = cfg || getLegacySlrAutoTongHopFilterConfig();
-      return filterCfg.minNgayCx3Nb !== null || filterCfg.maxKtnLast !== null;
+      return filterCfg.minNgayCx3Nb !== null
+        || filterCfg.maxKtnLast !== null
+        || filterCfg.minZeroWeek !== null
+        || (Array.isArray(filterCfg.soFilterTokens) && filterCfg.soFilterTokens.length > 0)
+        || (Array.isArray(filterCfg.ngayCxValues) && filterCfg.ngayCxValues.length > 0);
     }
 
     function parseLegacySerKqtLastWeekValue(serKqt) {
@@ -10768,7 +10917,7 @@
     function passLegacySlrAutoTongHopDd3NbFilter(metric, cfg) {
       if (!metric) return false;
       var filterCfg = cfg || getLegacySlrAutoTongHopFilterConfig();
-      if (!hasLegacySlrAutoTongHopFilter(filterCfg)) return true;
+      if (filterCfg.minNgayCx3Nb === null && filterCfg.maxKtnLast === null) return true;
       if (filterCfg.minNgayCx3Nb !== null) {
         if (!(Number(metric.ngayCXHT3NB || 0) >= filterCfg.minNgayCx3Nb)) return false;
       }
@@ -10776,6 +10925,36 @@
         var ktnWeek = parseLegacySlrAutoKtnLastWeekValue(metric);
         if (ktnWeek > filterCfg.maxKtnLast) return false;
       }
+      return true;
+    }
+
+    function passLegacySlrAutoTongHopExtraFilter(row, cfg) {
+      var filterCfg = cfg || getLegacySlrAutoTongHopFilterConfig();
+      var rec = row || {};
+
+      if (filterCfg.minZeroWeek !== null) {
+        if (!(Number(rec.tongNamZeroWeekStreak || 0) >= Number(filterCfg.minZeroWeek || 0))) return false;
+      }
+
+      if (Array.isArray(filterCfg.soFilterTokens) && filterCfg.soFilterTokens.length) {
+        var rowTokens = parseSoChuByHeThong(String(rec.tongHopInput || ""), legacyHeThong);
+        var rowSet = {};
+        rowTokens.forEach(function (t) { rowSet[String(t || "").trim()] = true; });
+        var hasToken = false;
+        for (var i = 0; i < filterCfg.soFilterTokens.length; i += 1) {
+          if (rowSet[filterCfg.soFilterTokens[i]]) {
+            hasToken = true;
+            break;
+          }
+        }
+        if (!hasToken) return false;
+      }
+
+      if (Array.isArray(filterCfg.ngayCxValues) && filterCfg.ngayCxValues.length) {
+        var ngayCx = Number(rec.ngayCXHT || 0);
+        if (filterCfg.ngayCxValues.indexOf(ngayCx) < 0) return false;
+      }
+
       return true;
     }
 
@@ -10908,6 +11087,249 @@
       return t === "dd3nb" || t === "dd3nb_extra";
     }
 
+    function legacyTailByHeThong(value, heThong) {
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      var text = String(value || "").trim();
+      if (!text || text === "?") return "";
+      return text.slice(-he);
+    }
+
+    function getLegacyTongHopHitScanDayRow(dataMien, queryValue, toYmd, heThong) {
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      var queryFields = getLegacyQueryFieldList(queryValue, he);
+      var selected = Array.isArray(dataMien) ? dataMien : [];
+
+      for (var i = 0; i < selected.length; i += 1) {
+        var dai = selected[i] || {};
+        var role = resolveLegacyTongHopStationRole(dai, {});
+        var rows = Array.isArray(dai.data) ? dai.data : [];
+        for (var j = 0; j < rows.length; j += 1) {
+          var row = rows[j] || {};
+          if (normalizeLegacyDateYmd(row.field_ngay) !== toYmd) continue;
+          if (!role) continue;
+
+          var hasValue = false;
+          for (var q = 0; q < queryFields.length; q += 1) {
+            var fieldName = String(queryFields[q] || "");
+            var raw = String(row[fieldName] || "").trim();
+            if (raw && raw !== "?") {
+              hasValue = true;
+              break;
+            }
+          }
+          if (hasValue) return row;
+        }
+      }
+
+      return null;
+    }
+
+    function collectLegacyTongHopHitFields(todayRow, fieldList, tokenSet, heThong) {
+      var matched = [];
+      var seen = {};
+      var list = Array.isArray(fieldList) ? fieldList : [];
+      for (var i = 0; i < list.length; i += 1) {
+        var fn = String(list[i] || "");
+        if (!fn || fn === "ID" || fn === "Ngay") continue;
+        var tail = legacyTailByHeThong(todayRow && todayRow[fn], heThong);
+        if (!tail || !tokenSet[tail]) continue;
+        if (seen[fn]) continue;
+        seen[fn] = true;
+        matched.push(fn);
+      }
+      return matched;
+    }
+
+    async function runLegacySlrAutoTongHopHitScan() {
+      var sourceRows = legacySortedRowsRef.current["slr_auto"] || legacySlrAutoFilteredRows || [];
+      var selectedKeys = legacySlrAutoSelectedRowKeys || [];
+      if (!Array.isArray(sourceRows) || !sourceRows.length) {
+        canhbao("Vui lòng chạy Bảng tự động trước khi dò kết quả");
+        return;
+      }
+      if (!Array.isArray(selectedKeys) || !selectedKeys.length) {
+        canhbao("Vui lòng chọn ít nhất 1 dòng ở Bảng tự động rồi mới dò kết quả");
+        return;
+      }
+
+      var selectedMap = {};
+      selectedKeys.forEach(function (k) { selectedMap[String(k)] = true; });
+      sourceRows = sourceRows.filter(function (row, idx) {
+        var key = String((row && row.key) || (String((row && row.queryValue) || "") + "_" + String((row && row.sttFrom) || "") + "_" + String((row && row.sttTo) || "") + "_" + idx));
+        return !!selectedMap[key];
+      });
+      if (!sourceRows.length) {
+        canhbao("Không có dòng nào được chọn để dò kết quả");
+        return;
+      }
+
+      var toDateText = String(den_ngay || "").trim();
+      var toYmd = normalizeLegacyDateYmd(toDateText);
+      if (!toDateText || !toYmd) {
+        canhbao("Đến Ngày không hợp lệ để dò kết quả");
+        return;
+      }
+
+      setLoading(true);
+      setProgress(15);
+      setLegacySlrAutoTongHopHitRunning(true);
+      setLegacySlrAutoTongHopHitRows([]);
+      setLegacySlrAutoTongHopHitSelectedRowKeys([]);
+
+      try {
+        var outRows = [];
+        var queryDayRowCache = {};
+        var thFilterCfg = getLegacySlrAutoTongHopFilterConfig();
+        var totalHasResult = 0;
+        var totalNoResult = 0;
+        var totalHit = 0;
+        var filteredOutCount = 0;
+
+        for (var i = 0; i < sourceRows.length; i += 1) {
+          var rec = sourceRows[i] || {};
+          if (i > 0 && i % 3 === 0) await sleepMs(0);
+          var pct = 15 + Math.round(((i + 1) / sourceRows.length) * 80);
+          setProgress(Math.max(15, Math.min(96, pct)));
+
+          var queryValue = normalizeLegacyTongHopQueryValue(rec.sourceQueryValue || rec.queryValue || "", legacyHeThong);
+          if (!queryValue) continue;
+
+          if (queryDayRowCache[queryValue] === undefined) {
+            var dayRow = null;
+            try {
+              var dataMien = await loadLegacySpecialDataByQuery(queryValue);
+              if (Array.isArray(dataMien) && dataMien.length) {
+                var dayRows = buildLegacyTongHopViewModel({
+                  dataMien: dataMien,
+                  fromDate: toDateText,
+                  toDate: toDateText,
+                  heThong: legacyHeThong,
+                  stepDays: 1
+                }).filter(function (row) {
+                  return normalizeLegacyDateYmd(row && row.ID) === toYmd;
+                });
+                dayRow = dayRows.length ? dayRows[0] : getLegacyTongHopHitScanDayRow(dataMien, queryValue, toYmd, legacyHeThong);
+              }
+            } catch (_scanErr) {
+              dayRow = null;
+            }
+            queryDayRowCache[queryValue] = dayRow;
+          }
+
+          var todayRow = queryDayRowCache[queryValue];
+          if (!todayRow) {
+            totalNoResult += 1;
+            continue;
+          }
+          var scanText = String((rec && rec.tongHopInput) || (buildLegacySlrAutoTongHopSearchText(rec).searchText) || "").trim();
+          var cachItems = buildLegacySlrAutoCachItemsForQuery(scanText, queryValue, rec.key, 0);
+          var metricRows = [];
+          try {
+            metricRows = await fetchLegacyTongHopRowsFromApi({
+              triet: false,
+              queryValue: queryValue,
+              queryText: String(rec.queryLabel || queryValue || ""),
+              cachItems: cachItems,
+              fromDate: toDateText,
+              toDate: toDateText,
+              heThong: legacyHeThong
+            });
+          } catch (_metricErr) {
+            metricRows = [];
+          }
+
+          var metric = Array.isArray(metricRows) && metricRows.length ? metricRows[0] : null;
+          if (!metric) {
+            totalNoResult += 1;
+            continue;
+          }
+          totalHasResult += 1;
+
+          // Authoritative hit: metric for exactly one day of this query/cach.
+          // This follows the same engine as the auto summary table.
+          var isHit = Number(metric.ngayCXHT || 0) === 0;
+          if (!isHit) continue;
+
+          // Field/token details are explanatory only (for debugging/reference).
+          var scanTokens = parseSoChuByHeThong(scanText, legacyHeThong);
+          var tokenSet = {};
+          scanTokens.forEach(function (tk) {
+            var key = String(tk || "").trim();
+            if (key) tokenSet[key] = true;
+          });
+
+          var queryFields = getLegacyQueryFieldList(queryValue, legacyHeThong);
+          var matchedFields = collectLegacyTongHopHitFields(todayRow, queryFields, tokenSet, legacyHeThong);
+          var matchedTokenSet = {};
+          matchedFields.forEach(function (fn) {
+            var tail = legacyTailByHeThong(todayRow && todayRow[fn], legacyHeThong);
+            if (tail) matchedTokenSet[tail] = true;
+          });
+          var matchedTokens = Object.keys(matchedTokenSet).sort(function (a, b) {
+            return a.localeCompare(b, "vi", { numeric: true, sensitivity: "base" });
+          });
+
+          totalHit += 1;
+          var hitRowInput = buildLegacySlrAutoTongHopSearchText(rec);
+          var hitRowDateRange = resolveLegacySlrAutoTongHopDateRange();
+          var mainCachItemsByQuery = {};
+          mainCachItemsByQuery[queryValue] = buildLegacySlrAutoTongHopCachItemFromMetric(rec, metric, scanText);
+          var hitBatchPack = await buildLegacySlrAutoTongHopPickBatch(rec, hitRowInput, hitRowDateRange, {
+            mainCachItemsByQuery: mainCachItemsByQuery
+          });
+
+          var hitBatchRows = Array.isArray(hitBatchPack.pickBatch) ? hitBatchPack.pickBatch.slice() : [];
+          var dd3nbMetricForFilter = hitBatchPack.dd3nbMetricForFilter;
+          if (dd3nbMetricForFilter && hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
+            if (!passLegacySlrAutoTongHopDd3NbFilter(dd3nbMetricForFilter, thFilterCfg)) {
+              filteredOutCount += 1;
+              continue;
+            }
+          }
+          if (hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
+            hitBatchRows = hitBatchRows.filter(function (pickRow) {
+              return passLegacySlrAutoTongHopExtraFilter(pickRow, thFilterCfg);
+            });
+          }
+          if (!hitBatchRows.length) {
+            filteredOutCount += 1;
+            continue;
+          }
+
+          hitBatchRows.forEach(function (hitRow) {
+            hitRow.scanDate = toDateText;
+            hitRow.scanSourceDate = toDateText;
+            hitRow.scanHitTokens = matchedTokens.join(" ") || String(metric.serKQN || metric.serKQT || "").trim();
+            hitRow.scanHitFields = String((hitRow && hitRow.cach) || "").trim()
+              || matchedFields.join(" ")
+              || String(queryFields.join(" ") || "").trim();
+            if (!String(hitRow.ketQua || "").trim()) {
+              hitRow.ketQua = buildLegacySlrAutoTongHopKetQuaText(hitRow || metric);
+            }
+            outRows.push(hitRow);
+          });
+        }
+
+        setLegacySlrAutoTongHopHitRows(outRows);
+        legacySortedRowsRef.current["slr_auto_th_hit"] = null;
+        setLegacySlrAutoTongHopSummary(function (prev) {
+          var base = String(prev || "").split(" | Dò Đến Ngày ")[0];
+          return base
+            + " | Dò Đến Ngày " + toDateText + ": trúng " + totalHit + "/" + totalHasResult
+            + (totalNoResult ? (" | Chưa có KQ: " + totalNoResult) : "")
+            + (filteredOutCount ? (" | Lọc TH: bỏ " + filteredOutCount) : "");
+        });
+      } catch (e) {
+        console.error(e);
+        canhbao("Không thể dò kết quả Đến Ngày");
+      } finally {
+        setLegacySlrAutoTongHopHitRunning(false);
+        setLoading(false);
+        setProgress(100);
+        setTimeout(function () { setProgress(0); }, 600);
+      }
+    }
+
     async function fetchLegacySlrAutoDd3NamBacMetric(tongHopInput, rowDateRange, rowKey, queryIndex) {
       var dd3Option = getLegacyDd3NbQueryTypeOption(legacyHeThong);
       var rawSearch = String(tongHopInput.searchText || "").trim();
@@ -10952,6 +11374,141 @@
       return fetchLegacySlrAutoDd3NamBacMetric(tongHopInput, rowDateRange, rowKey, 99);
     }
 
+    function resolveLegacySlrAutoTongHopDateRange() {
+      var globalTo = String(den_ngay || "").trim();
+      var calcTo = String(resolveLegacySlrCalcToDate(globalTo) || "").trim();
+      var toYmd = normalizeLegacyDateYmd(calcTo);
+
+      if (toYmd) {
+        return {
+          fromDate: CongNgay(calcTo, -4 * 365, "dd/mm/yyyy"),
+          toDate: calcTo
+        };
+      }
+
+      var fallbackFrom = String(tu_ngay || "").trim();
+      var fallbackTo = calcTo;
+      return { fromDate: fallbackFrom, toDate: fallbackTo };
+    }
+
+    function buildLegacySlrAutoTongHopCachItemFromMetric(rec, metric, fallbackSearchText) {
+      var row = rec || {};
+      var hitMetric = metric || {};
+      var rawSearch = String(fallbackSearchText || hitMetric.noiDung || hitMetric.boSo || "").trim();
+      var boSo = String(hitMetric.boSo || rawSearch || "").trim() || rawSearch;
+      var cachName = String(hitMetric.cach || boSo || rawSearch || "").trim() || boSo;
+      var searchText = String(hitMetric.noiDung || rawSearch || boSo || "").trim() || rawSearch || boSo;
+      return [{
+        key: String((row && row.key) || "slr_auto_hit") + "_hit_metric",
+        boSo: boSo || searchText,
+        cachName: cachName || searchText,
+        searchText: searchText || boSo,
+        noiDungDisplay: cachName || boSo || searchText,
+        groupId: String(hitMetric.autoGroupId || row.key || "slr_auto_hit"),
+        groupText: String(hitMetric.autoGroupText || cachName || boSo || searchText || "")
+      }];
+    }
+
+    async function buildLegacySlrAutoTongHopPickBatch(row, tongHopInput, rowDateRange, options) {
+      var sourceRow = row || {};
+      var inputObj = tongHopInput || { cText: "-", dText: "-", searchText: "" };
+      var dateRange = rowDateRange || resolveLegacySlrAutoTongHopDateRange();
+      var opts = options || {};
+      var mainCachItemsByQuery = opts.mainCachItemsByQuery || {};
+
+      var normalizedMainQueryValue = normalizeLegacyTongHopQueryValue(sourceRow.queryValue, legacyHeThong);
+      if (!normalizedMainQueryValue) {
+        return {
+          normalizedMainQueryValue: "",
+          rowHadMetric: false,
+          dd3nbMetricForFilter: null,
+          pickBatch: []
+        };
+      }
+
+      var extraDd3NbOption = getLegacyDd3NbQueryTypeOption(legacyHeThong);
+      var querySpecs = [{
+        value: normalizedMainQueryValue,
+        text: getLegacySlrTongHopQueryDisplayText(normalizedMainQueryValue, sourceRow.queryLabel)
+      }];
+      if (!isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)) {
+        querySpecs.push({
+          value: extraDd3NbOption.value,
+          text: getLegacySlrTongHopQueryDisplayText(extraDd3NbOption.value, extraDd3NbOption.text)
+        });
+      }
+
+      var rowHadMetric = false;
+      var pickBatch = [];
+      var dd3nbMetricForFilter = null;
+
+      for (var q = 0; q < querySpecs.length; q += 1) {
+        var querySpec = querySpecs[q] || {};
+        var isDd3Query = isLegacySlrDd3NamBacQueryValue(querySpec.value, legacyHeThong);
+        var metric = null;
+        if (isDd3Query) {
+          metric = await fetchLegacySlrAutoDd3NamBacMetric(
+            inputObj,
+            dateRange,
+            sourceRow.key,
+            q
+          );
+        } else {
+          var overrideCachItems = mainCachItemsByQuery[String(querySpec.value || "")];
+          var cachItems = Array.isArray(overrideCachItems) && overrideCachItems.length
+            ? overrideCachItems
+            : buildLegacySlrAutoCachItemsForQuery(
+                inputObj.searchText,
+                querySpec.value,
+                sourceRow.key,
+                q
+              );
+          var metrics = await fetchLegacyTongHopRowsFromApi({
+            triet: false,
+            queryValue: querySpec.value,
+            queryText: querySpec.text,
+            cachItems: cachItems,
+            fromDate: dateRange.fromDate,
+            toDate: dateRange.toDate,
+            heThong: legacyHeThong
+          });
+          metric = Array.isArray(metrics) && metrics.length ? metrics[0] : null;
+        }
+        if (!metric) continue;
+        rowHadMetric = true;
+        if (isDd3Query) {
+          dd3nbMetricForFilter = metric;
+        }
+        pickBatch.push(buildLegacySlrAutoTongHopRowFromMetric(sourceRow, metric, querySpec, inputObj, dateRange, q));
+      }
+
+      if (!dd3nbMetricForFilter && !isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)) {
+        dd3nbMetricForFilter = await fetchLegacySlrAutoDd3NamBacFilterMetric(inputObj, dateRange, sourceRow.key);
+      }
+      if (!pickBatch.some(isLegacySlrAutoTongHopDd3Row)
+        && dd3nbMetricForFilter
+        && !isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)) {
+        pickBatch.push(buildLegacySlrAutoTongHopRowFromMetric(
+          sourceRow,
+          dd3nbMetricForFilter,
+          {
+            value: extraDd3NbOption.value,
+            text: getLegacySlrTongHopQueryDisplayText(extraDd3NbOption.value, extraDd3NbOption.text)
+          },
+          inputObj,
+          dateRange,
+          pickBatch.length
+        ));
+      }
+
+      return {
+        normalizedMainQueryValue: normalizedMainQueryValue,
+        rowHadMetric: rowHadMetric,
+        dd3nbMetricForFilter: dd3nbMetricForFilter,
+        pickBatch: pickBatch
+      };
+    }
+
     async function runLegacySlrAutoTongHopSelectedRows() {
       var sourceRows = legacySortedRowsRef.current["slr_auto"] || legacySlrAutoFilteredRows || [];
       var pickedRows = getLegacySlrAutoSelectedRows(sourceRows);
@@ -10964,6 +11521,8 @@
       setProgress(12);
       setLegacySlrAutoTongHopRunning(true);
       setLegacySlrAutoTongHopRows([]);
+      setLegacySlrAutoTongHopHitRows([]);
+      setLegacySlrAutoTongHopHitSelectedRowKeys([]);
       setLegacySlrAutoTongHopSelectedRowKeys([]);
       setLegacySlrAutoTongHopSummary("Đang xét tổng hợp " + pickedRows.length + " dòng...");
 
@@ -10971,26 +11530,10 @@
         var combinedRows = [];
         var skippedCount = 0;
         var filteredOutCount = 0;
+        var extraFilteredOutCount = 0;
         var missingDd3Count = 0;
         var thFilterCfg = getLegacySlrAutoTongHopFilterConfig();
-        var extraDd3NbOption = getLegacyDd3NbQueryTypeOption(legacyHeThong);
         var thRefDate = String(den_ngay || tu_ngay || "").trim();
-
-        function resolveRowTongHopDateRange() {
-          var globalTo = String(den_ngay || "").trim();
-          var toYmd = normalizeLegacyDateYmd(globalTo);
-
-          if (toYmd) {
-            return {
-              fromDate: CongNgay(globalTo, -4 * 365, "dd/mm/yyyy"),
-              toDate: globalTo
-            };
-          }
-
-          var fallbackFrom = String(tu_ngay || "").trim();
-          var fallbackTo = String(den_ngay || "").trim();
-          return { fromDate: fallbackFrom, toDate: fallbackTo };
-        }
 
         for (var i = 0; i < pickedRows.length; i += 1) {
           if (i > 0 && i % 2 === 0) await sleepMs(0);
@@ -11005,69 +11548,17 @@
             continue;
           }
 
-          var normalizedMainQueryValue = normalizeLegacyTongHopQueryValue(row.queryValue, legacyHeThong);
-          if (!normalizedMainQueryValue) {
+          var rowDateRange = resolveLegacySlrAutoTongHopDateRange();
+
+          var batchPack = await buildLegacySlrAutoTongHopPickBatch(row, tongHopInput, rowDateRange);
+          var normalizedMainQueryValue = batchPack.normalizedMainQueryValue;
+          var rowHadMetric = !!batchPack.rowHadMetric;
+          var dd3nbMetricForFilter = batchPack.dd3nbMetricForFilter;
+          var pickBatch = Array.isArray(batchPack.pickBatch) ? batchPack.pickBatch.slice() : [];
+
+          if (!normalizedMainQueryValue || !rowHadMetric) {
             skippedCount += 1;
             continue;
-          }
-          var rowDateRange = resolveRowTongHopDateRange();
-
-          var querySpecs = [{
-            value: normalizedMainQueryValue,
-            text: getLegacySlrTongHopQueryDisplayText(normalizedMainQueryValue, row.queryLabel)
-          }];
-          if (!isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)) {
-            querySpecs.push({
-              value: extraDd3NbOption.value,
-              text: getLegacySlrTongHopQueryDisplayText(extraDd3NbOption.value, extraDd3NbOption.text)
-            });
-          }
-
-          var rowHadMetric = false;
-          var pickBatch = [];
-          var dd3nbMetricForFilter = null;
-          for (var q = 0; q < querySpecs.length; q += 1) {
-            var querySpec = querySpecs[q] || {};
-            var isDd3Query = isLegacySlrDd3NamBacQueryValue(querySpec.value, legacyHeThong);
-            var metric = null;
-            if (isDd3Query) {
-              metric = await fetchLegacySlrAutoDd3NamBacMetric(
-                tongHopInput,
-                rowDateRange,
-                row.key,
-                q
-              );
-            } else {
-              var cachItems = buildLegacySlrAutoCachItemsForQuery(
-                tongHopInput.searchText,
-                querySpec.value,
-                row.key,
-                q
-              );
-              var metrics = await fetchLegacyTongHopRowsFromApi({
-                triet: false,
-                queryValue: querySpec.value,
-                queryText: querySpec.text,
-                cachItems: cachItems,
-                fromDate: rowDateRange.fromDate,
-                toDate: rowDateRange.toDate,
-                heThong: legacyHeThong
-              });
-              metric = Array.isArray(metrics) && metrics.length ? metrics[0] : null;
-            }
-            if (!metric) continue;
-            rowHadMetric = true;
-            if (isDd3Query) {
-              dd3nbMetricForFilter = metric;
-            }
-            pickBatch.push(buildLegacySlrAutoTongHopRowFromMetric(row, metric, querySpec, tongHopInput, rowDateRange, q));
-          }
-          if (!rowHadMetric) {
-            skippedCount += 1;
-            continue;
-          }
-          if (!dd3nbMetricForFilter && !isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)) {
-            dd3nbMetricForFilter = await fetchLegacySlrAutoDd3NamBacFilterMetric(tongHopInput, rowDateRange, row.key);
           }
           if (dd3nbMetricForFilter && hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
             if (!passLegacySlrAutoTongHopDd3NbFilter(dd3nbMetricForFilter, thFilterCfg)) {
@@ -11075,24 +11566,22 @@
               continue;
             }
           }
-          if (!pickBatch.some(isLegacySlrAutoTongHopDd3Row)
-            && dd3nbMetricForFilter
-            && !isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)) {
-            pickBatch.push(buildLegacySlrAutoTongHopRowFromMetric(
-              row,
-              dd3nbMetricForFilter,
-              {
-                value: extraDd3NbOption.value,
-                text: getLegacySlrTongHopQueryDisplayText(extraDd3NbOption.value, extraDd3NbOption.text)
-              },
-              tongHopInput,
-              rowDateRange,
-              pickBatch.length
-            ));
-          }
           if (!isLegacySlrDd3NamBacQueryValue(normalizedMainQueryValue, legacyHeThong)
             && !pickBatch.some(isLegacySlrAutoTongHopDd3Row)) {
             missingDd3Count += 1;
+          }
+          if (hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
+            var beforeExtraLen = pickBatch.length;
+            pickBatch = pickBatch.filter(function (pickRow) {
+              return passLegacySlrAutoTongHopExtraFilter(pickRow, thFilterCfg);
+            });
+            if (!pickBatch.length) {
+              extraFilteredOutCount += 1;
+              continue;
+            }
+            if (beforeExtraLen > pickBatch.length) {
+              extraFilteredOutCount += (beforeExtraLen - pickBatch.length);
+            }
           }
           pickBatch.forEach(function (pickRow) {
             combinedRows.push(pickRow);
@@ -11127,13 +11616,19 @@
         });
 
         setLegacySlrAutoTongHopRows(combinedRows);
+        setLegacySlrAutoTongHopHitRows([]);
+        setLegacySlrAutoTongHopHitSelectedRowKeys([]);
+        legacySortedRowsRef.current["slr_auto_th_hit"] = null;
         legacySortedRowsRef.current["slr_auto_th"] = null;
         var filterNote = "";
         if (hasLegacySlrAutoTongHopFilter(thFilterCfg)) {
           filterNote = " | Lọc DD3 Nam-Bắc";
           if (thFilterCfg.minNgayCx3Nb !== null) filterNote += " Ngày CX>=" + thFilterCfg.minNgayCx3Nb;
           if (thFilterCfg.maxKtnLast !== null) filterNote += " KTN≤" + thFilterCfg.maxKtnLast;
-          if (filteredOutCount) filterNote += " (bỏ " + filteredOutCount + ")";
+          if (thFilterCfg.minZeroWeek !== null) filterNote += " Tuần0>=" + thFilterCfg.minZeroWeek;
+          if (thFilterCfg.soFilterTokens && thFilterCfg.soFilterTokens.length) filterNote += " SốTH∩{" + thFilterCfg.soFilterTokens.join(",") + "}";
+          if (thFilterCfg.ngayCxValues && thFilterCfg.ngayCxValues.length) filterNote += " NgàyCX∈{" + thFilterCfg.ngayCxValues.join(",") + "}";
+          if (filteredOutCount || extraFilteredOutCount) filterNote += " (bỏ " + (filteredOutCount + extraFilteredOutCount) + ")";
         }
         var staleNote = missingDd3Count ? (" | Thiếu DD3 Nam-Bắc: " + missingDd3Count) : "";
         setLegacySlrAutoTongHopSummary(
@@ -11389,8 +11884,8 @@
         }
       },
       { title: "Ngày CX", dataIndex: "ngayCXHT", key: "ngayCXHT", width: 70, sorter: function (a, b) { return Number((a && a.ngayCXHT) || 0) - Number((b && b.ngayCXHT) || 0); } },
-      { title: "Kỳ CX", dataIndex: "kyCXHT", key: "kyCXHT", width: 70, sorter: function (a, b) { return Number((a && a.kyCXHT) || 0) - Number((b && b.kyCXHT) || 0); } },
       { title: "Lâu ngày", dataIndex: "lauNgay", key: "lauNgay", width: 80, sorter: function (a, b) { return Number((a && a.lauNgay) || 0) - Number((b && b.lauNgay) || 0); } },
+      { title: "Kỳ CX", dataIndex: "kyCXHT", key: "kyCXHT", width: 70, sorter: function (a, b) { return Number((a && a.kyCXHT) || 0) - Number((b && b.kyCXHT) || 0); } },
       { title: "Lâu kỳ", dataIndex: "lauKy", key: "lauKy", width: 80, sorter: function (a, b) { return Number((a && a.lauKy) || 0) - Number((b && b.lauKy) || 0); } },
       { title: "Ngày CX 3 NB", dataIndex: "ngayCXHT3NB", key: "ngayCXHT3NB", width: 90, sorter: function (a, b) { return Number((a && a.ngayCXHT3NB) || 0) - Number((b && b.ngayCXHT3NB) || 0); } },
       { title: "KTN tuần cuối", dataIndex: "ktnLastWeek", key: "ktnLastWeek", width: 90, sorter: function (a, b) { return Number((a && a.ktnLastWeek) || 0) - Number((b && b.ktnLastWeek) || 0); } },
@@ -11398,6 +11893,7 @@
     ];
 
     var legacySlrAutoTongHopColumns = legacySlrAutoTongHopBaseColumns;
+    var legacySlrAutoTongHopHitColumns = legacySlrAutoTongHopColumns;
 
     function makeNbCol(title, di, dw, mp) {
       return { title: title, dataIndex: di, key: di, width: legacyNbColWidths[di] || dw,
@@ -11522,13 +12018,14 @@
           return h("span", { style: { color: over ? theme.error : theme.text, fontWeight: over ? "bold" : "normal" } }, v);
         }
       },
+      { title: "Lâu Ngày", dataIndex: "lauNgay", key: "lauNgay", width: 70, sorter: legacyTongHopNumberSorter("lauNgay") },
       { title: "Kỳ CX", dataIndex: "kyCXHT", key: "kyCXHT", width: 60, sorter: legacyTongHopNumberSorter("kyCXHT"),
         render: function (v, rec) {
           var over = rec.lauKy > 0 && v >= rec.lauKy;
           return h("span", { style: { color: over ? theme.warning : theme.text, fontWeight: over ? "bold" : "normal" } }, v);
         }
       },
-      { title: "Lâu Ngày", dataIndex: "lauNgay", key: "lauNgay", width: 70, sorter: legacyTongHopNumberSorter("lauNgay") },
+      { title: "Lâu Kỳ", dataIndex: "lauKy", key: "lauKy", width: 70, sorter: legacyTongHopNumberSorter("lauKy") },
       { title: "Ngày CX 3 NB", dataIndex: "ngayCXHT3NB", key: "ngayCXHT3NB", width: 60, sorter: legacyTongHopNumberSorter("ngayCXHT3NB") },
       { title: "Ngày CX 2Đ", dataIndex: "ngayCXHT2D", key: "ngayCXHT2D", width: 70, sorter: legacyTongHopNumberSorter("ngayCXHT2D") },
       { title: "Ngày CX 3Đ", dataIndex: "ngayCXHT3D", key: "ngayCXHT3D", width: 70, sorter: legacyTongHopNumberSorter("ngayCXHT3D") },
@@ -11537,7 +12034,6 @@
       { title: "Ngày CX ĐC", dataIndex: "ngayCXHTDC", key: "ngayCXHTDC", width: 70, sorter: legacyTongHopNumberSorter("ngayCXHTDC") },
       { title: "Ngày CX ĐP", dataIndex: "ngayCXHTDP", key: "ngayCXHTDP", width: 70, sorter: legacyTongHopNumberSorter("ngayCXHTDP") },
       { title: "Ngày CX NB", dataIndex: "ngayCXHTNB", key: "ngayCXHTNB", width: 70, sorter: legacyTongHopNumberSorter("ngayCXHTNB") },
-      { title: "Lâu Kỳ", dataIndex: "lauKy", key: "lauKy", width: 70, sorter: legacyTongHopNumberSorter("lauKy") },
       { title: "Lâu ngày NB", dataIndex: "lauNgayNB", key: "lauNgayNB", width: 70, sorter: legacyTongHopNumberSorter("lauNgayNB") },
       { title: "Lâu ngày 3 NB", dataIndex: "lauNgay3NB", key: "lauNgay3NB", width: 70, sorter: legacyTongHopNumberSorter("lauNgay3NB") },
       { title: "Lâu ngày 2Đ", dataIndex: "lauNgay2D", key: "lauNgay2D", width: 70, sorter: legacyTongHopNumberSorter("lauNgay2D") },
@@ -11565,6 +12061,7 @@
       legacySlrAutoTongHopBaseColumns,
       legacyThColumns
     );
+    legacySlrAutoTongHopHitColumns = legacySlrAutoTongHopColumns;
 
     function buildPairRows(list, valueKey, idPrefix) {
       var rows = Array.isArray(list) ? list.slice() : [];
@@ -13140,13 +13637,13 @@
                                 h(Select, themedSelectProps({
                                   value: legacyCdMode,
                                   options: [
-                                    { value: "C_D", label: tt.lgCdAll },
                                     { value: "C", label: tt.lgCdC },
                                     { value: "D", label: tt.lgCdD },
+                                    { value: "C_D", label: tt.lgCdAll },
                                     { value: "2C", label: tt.lgCdPair }
                                   ],
                                   onChange: function (v) {
-                                    var next = String(v || "C_D");
+                                    var next = String(v || "C");
                                     setLegacyCdMode(next);
                                     setLegacyRankTo(next === "2C" ? 5 : 93);
                                   }
@@ -13207,7 +13704,7 @@
                                   max: 93,
                                   value: legacySlrAutoSttWindowSize,
                                   style: { width: "100%" },
-                                  onChange: function (v) { setLegacySlrAutoSttWindowSize(Math.max(1, Math.min(93, Number(v) || 5))); }
+                                  onChange: function (v) { setLegacySlrAutoSttWindowSize(Math.max(1, Math.min(93, Number(v) || 3))); }
                                 }))
                               ]),
                               h(Col, { xs: 12, sm: 12 }, [
@@ -13217,7 +13714,7 @@
                                   max: 20,
                                   value: legacySlrAutoNamWeeks,
                                   style: { width: "100%" },
-                                  onChange: function (v) { setLegacySlrAutoNamWeeks(Math.max(1, Number(v) || 1)); }
+                                  onChange: function (v) { setLegacySlrAutoNamWeeks(Math.max(1, Number(v) || 9)); }
                                 }))
                               ])
                             ]),
@@ -14015,6 +14512,37 @@
                           setLegacySlrAutoThMaxKtnLast(v === null || v === undefined || v === "" ? null : Number(v));
                         }
                       }))
+                    ]),
+                    h("div", { className: "kqxs-slr-field", style: { marginBottom: 0, minWidth: 140, flex: "0 0 140px" } }, [
+                      h("div", { className: "kqxs-slr-label" }, tt.lgSlrAutoThMinZeroWeek || "Tuần 0 (Nam/Bắc): lấy khi >="),
+                      h(InputNumber, themedNumberProps({
+                        min: 0,
+                        max: 99,
+                        value: legacySlrAutoThMinZeroWeek,
+                        style: { width: "100%" },
+                        placeholder: "để trống",
+                        onChange: function (v) {
+                          setLegacySlrAutoThMinZeroWeek(v === null || v === undefined || v === "" ? null : Number(v));
+                        }
+                      }))
+                    ]),
+                    h("div", { className: "kqxs-slr-field", style: { marginBottom: 0, minWidth: 200, flex: "1 1 200px" } }, [
+                      h("div", { className: "kqxs-slr-label" }, tt.lgSlrAutoThSoFilter || "Dãy số xét TH (hệ 2/3)"),
+                      h(Input, {
+                        value: legacySlrAutoThSoFilter,
+                        placeholder: legacyHeThong === 3 ? "123-456 hoặc 123 456" : "12-34 hoặc 12 34",
+                        onChange: function (e) { setLegacySlrAutoThSoFilter(String(e && e.target && e.target.value || "")); },
+                        style: { width: "100%" }
+                      })
+                    ]),
+                    h("div", { className: "kqxs-slr-field", style: { marginBottom: 0, minWidth: 160, flex: "1 1 160px" } }, [
+                      h("div", { className: "kqxs-slr-label" }, tt.lgSlrAutoThNgayCxFilter || "Ngày chưa xổ (vd: 6-16)"),
+                      h(Input, {
+                        value: legacySlrAutoThNgayCxFilter,
+                        placeholder: "6-16 hoặc 6,16",
+                        onChange: function (e) { setLegacySlrAutoThNgayCxFilter(String(e && e.target && e.target.value || "")); },
+                        style: { width: "100%" }
+                      })
                     ])
                   ])
                 ]),
@@ -14055,6 +14583,13 @@
                     disabled: !!legacySlrAutoTongHopRunning,
                     onClick: function () { runLegacySlrAutoTongHopSelectedRows(); }
                   }, "Xét tổng hợp"),
+                    h(Button, {
+                      size: "small",
+                      type: "primary",
+                      loading: !!legacySlrAutoTongHopHitRunning,
+                      disabled: !!legacySlrAutoTongHopHitRunning || !legacySlrAutoSelectedRowKeys.length,
+                      onClick: function () { runLegacySlrAutoTongHopHitScan(); }
+                    }, "Dò kết quả các cách"),
                   h(Button, {
                     size: "small",
                     onClick: function () { exportLegacySlrAutoRows(); }
@@ -14130,6 +14665,57 @@
                     size: "small",
                     scroll: { x: 2200, y: 320 },
                     onChange: function (p, f, s, extra) { if (extra && Array.isArray(extra.currentDataSource)) legacySortedRowsRef.current["slr_auto_th"] = extra.currentDataSource; }
+                  })
+                ]) : null,
+                legacySlrAutoTongHopHitRows.length ? h(Card, {
+                  size: "small",
+                  title: (tt.lgSlrAutoThHitToday || "Bảng các cách trúng") + " - " + legacySlrAutoTongHopHitRows.length + " dòng trúng",
+                  style: { marginTop: 10, background: theme.cardBg, color: theme.text, borderColor: theme.border }
+                }, [
+                  h("div", { style: { marginBottom: 8, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } }, [
+                    h(Button, {
+                      size: "small",
+                      onClick: function () {
+                        setLegacySlrAutoTongHopHitSelectedRowKeys((legacySlrAutoTongHopHitRows || []).map(function (r, idx) {
+                          return String((r && r.key) || ("slr_auto_th_hit_" + idx));
+                        }));
+                      }
+                    }, tt.lgThAutoSelectAll || "Chọn hết"),
+                    h(Button, {
+                      size: "small",
+                      onClick: function () { setLegacySlrAutoTongHopHitSelectedRowKeys([]); }
+                    }, tt.lgThAutoClearAll || "Bỏ chọn"),
+                    h(Button, {
+                      size: "small",
+                      type: "default",
+                      onClick: function () {
+                        exportSelectedRowsByConfig({
+                          selectedKeys: legacySlrAutoTongHopHitSelectedRowKeys,
+                          sourceRows: legacySortedRowsRef.current["slr_auto_th_hit"] || legacySlrAutoTongHopHitRows,
+                          keyGetter: function (row, idx) { return String((row && row.key) || ("slr_auto_th_hit_" + idx)); },
+                          columns: legacySlrAutoTongHopHitColumns,
+                          fileName: "legacy_slr_auto_tonghop_hit_selected",
+                          sheetName: "SLR_TongHop_Hit"
+                        });
+                      }
+                    }, "💾 Xuất đã chọn"),
+                    h("span", { style: { fontSize: 11, color: theme.muted } }, "Đã chọn: " + (legacySlrAutoTongHopHitSelectedRowKeys || []).length)
+                  ]),
+                  h(Table, {
+                    rowKey: function (r, idx) { return String((r && r.key) || ("slr_auto_th_hit_" + idx)); },
+                    rowSelection: {
+                      type: "checkbox",
+                      columnTitle: tt.lgThSelect || "Chọn",
+                      columnWidth: 32,
+                      selectedRowKeys: legacySlrAutoTongHopHitSelectedRowKeys,
+                      onChange: function (keys) { setLegacySlrAutoTongHopHitSelectedRowKeys(keys); }
+                    },
+                    columns: withMultiSortColumns(legacySlrAutoTongHopHitColumns),
+                    dataSource: legacySlrAutoTongHopHitRows,
+                    pagination: false,
+                    size: "small",
+                    scroll: { x: 2200, y: 260 },
+                    onChange: function (p, f, s, extra) { if (extra && Array.isArray(extra.currentDataSource)) legacySortedRowsRef.current["slr_auto_th_hit"] = extra.currentDataSource; }
                   })
                 ]) : null
               ]) : null
@@ -14419,6 +15005,7 @@
                   h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC5KyGap + ":"),
                   h(Input, { size: "small", placeholder: "0", value: legacyThAutoC5KyGap, onChange: function (e) { setLegacyThAutoC5KyGap(e.target.value); }, style: { width: 55 } }),
                   h(Checkbox, { checked: legacyThAutoC6Both, onChange: function (e) { setLegacyThAutoC6Both(e.target.checked); }, style: { fontSize: 11, color: theme.text } }, tt.lgThAutoC6Both),
+                  h(Checkbox, { checked: legacyThAutoC9KyOnly, onChange: function (e) { setLegacyThAutoC9KyOnly(e.target.checked); }, style: { fontSize: 11, color: theme.text } }, tt.lgThAutoC9KyOnly),
                   h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC7Tuan21Min + ":"),
                   h(Input, { size: "small", placeholder: "N", value: legacyThAutoC7Tuan21Min, onChange: function (e) { setLegacyThAutoC7Tuan21Min(e.target.value); }, style: { width: 55 } }),
                   h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC8Tong29Min + ":"),

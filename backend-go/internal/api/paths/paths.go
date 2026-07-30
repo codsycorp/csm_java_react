@@ -49,6 +49,7 @@ var bareAPIPaths = map[string]struct{}{
 	"/ai-generate-seo-content": {},
 	"/aiAssistant-chat-stream": {},
 	"/ai/menu-merge":           {},
+	"/traffic/analyze-frame":   {},
 }
 
 func IsBareAPIPath(uri string) bool {

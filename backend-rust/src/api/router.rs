@@ -215,6 +215,7 @@ async fn dispatch_api(
         "/scrape-web" => api_ext::handle_scrape_web(state, &params).await,
         "/execute-js-on-page" => api_ext::handle_execute_js(&params),
         "/indexgoogle" => api_ext::handle_index_google(state, &params).await,
+        "/traffic/analyze-frame" => api_ext::handle_traffic_analyze_frame(&params),
         // ── Facebook / Ads ──
         "/facebook/post" => social::handle_facebook_post(state, &params).await,
         "/facebook/post-with-images" => social::handle_facebook_post_with_images(state, &params).await,

@@ -759,6 +759,7 @@ func loadCategoriesFull(rm *data.RecordManager, route resolvedRoute, domain, lan
 			"group_slug":             groupSlug,
 			"color":                  recordStr(obj, "attributes_color"),
 			"icon":                   recordStr(obj, "attributes_icon"),
+			"attributes_priority":    obj["attributes_priority"],
 			"description":            attributesDescription,
 			"description_en":         recordStr(obj, "attributes_description_en"),
 			"description_zh":         recordStr(obj, "attributes_description_zh"),
@@ -769,7 +770,54 @@ func loadCategoriesFull(rm *data.RecordManager, route resolvedRoute, domain, lan
 		})
 	}
 
+	// Compatibility adapter:
+	// Keep database records unchanged, but normalize SSR category hierarchy to support
+	// the target 4-menu layout on frontend-web (including older frontend builds).
+	adaptCategoriesForTargetMenu(cats)
+
 	return cats, loadDynamicCodeTemplates(rm, dynamicCodeNames), mainServiceCode, defaultServiceCode
+}
+
+func adaptCategoriesForTargetMenu(cats []any) {
+	if len(cats) == 0 {
+		return
+	}
+
+	hasSlug := map[string]bool{}
+	for _, item := range cats {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		slug := strings.TrimSpace(recordStr(m, "slug"))
+		if slug != "" {
+			hasSlug[slug] = true
+		}
+	}
+
+	bridgeParent := "cau-noi-kinh-doanh-online"
+
+	legacyBridgeChildren := map[string]struct{}{
+		"phan-mem":        {},
+		"bat-dong-san":    {},
+		"lam-dep-my-pham": {},
+		"cho-thue-xe":     {},
+		"booking-online":  {},
+	}
+
+	if hasSlug[bridgeParent] {
+		for _, item := range cats {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			slug := strings.TrimSpace(recordStr(m, "slug"))
+			if _, ok := legacyBridgeChildren[slug]; ok {
+				m["group_slug"] = bridgeParent
+			}
+		}
+	}
+
 }
 
 func loadDynamicCodeTemplates(rm *data.RecordManager, codeNames []string) map[string]any {

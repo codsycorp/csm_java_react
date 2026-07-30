@@ -29,7 +29,7 @@ const uiTranslations = {
     load_categories: '⬇️ Tải danh mục từ web_services',
     loading: '⏳ Đang tải...',
     multi_domain_manager: '🌐 Trình quản lý nội dung đa tên miền (chống nhận diện AI)',
-    tip_label: '💡 <strong>Mẹo:</strong> LMKT dùng <strong>Dự án</strong> làm danh mục; Phanmemmottrieu dùng <strong>Lĩnh vực</strong>. Chọn tại <strong>Cài Đặt Chung</strong> phía trên.',
+    tip_label: '💡 <strong>Mẹo:</strong> LMKT dùng <strong>Dự án</strong> làm danh mục; csmbridge dùng <strong>Lĩnh vực</strong>. Chọn tại <strong>Cài Đặt Chung</strong> phía trên.',
     upload_zalo: '📱 Tải lên JSON Zalo',
     upload_facebook: '👍 Tải lên JSON Facebook',
     create_post: '✍️ Tạo Bài',
@@ -126,7 +126,7 @@ const uiTranslations = {
     load_categories: '⬇️ Load categories from web_services',
     loading: '⏳ Loading...',
     multi_domain_manager: '🌐 Multi-Domain Content Manager (Anti-AI Detection)',
-    tip_label: '💡 <strong>Tip:</strong> LMKT uses <strong>Projects</strong> as categories; Phanmemmottrieu uses <strong>Industries</strong>. Select in <strong>General Settings</strong> above.',
+    tip_label: '💡 <strong>Tip:</strong> LMKT uses <strong>Projects</strong> as categories; csmbridge uses <strong>Industries</strong>. Select in <strong>General Settings</strong> above.',
     upload_zalo: '📱 Upload Zalo JSON',
     upload_facebook: '👍 Upload Facebook JSON',
     create_post: '✍️ Create Post',
@@ -223,7 +223,7 @@ const uiTranslations = {
     load_categories: '⬇️ 从 web_services 加载类别',
     loading: '⏳ 加载中...',
     multi_domain_manager: '🌐 多域名内容管理器 (防AI检测)',
-    tip_label: '💡 <strong>提示：</strong>LMKT 使用<strong>项目</strong>作为类别；Phanmemmottrieu 使用<strong>行业</strong>。在上面的<strong>常规设置</strong>中选择。',
+    tip_label: '💡 <strong>提示：</strong>LMKT 使用<strong>项目</strong>作为类别；csmbridge 使用<strong>行业</strong>。在上面的<strong>常规设置</strong>中选择。',
     upload_zalo: '📱 上传 Zalo JSON',
     upload_facebook: '👍 上传 Facebook JSON',
     create_post: '✍️ 创建帖子',
@@ -347,6 +347,559 @@ function getUILanguage() {
   } catch {
     return 'vi';
   }
+}
+
+// ===== QUICK DEPLOY: NEW WEBSITE STRUCTURE =====
+// Usage in console:
+//   await window.pushWebStructure4Menus();
+//   await window.pushWebStructure4Menus({ appId: 'wuweb', domain: 'csmbridge.net,localhost:3333' });
+//   await window.pushWebStructure4Menus({
+//     homepagePdfText: 'Noi dung trich tu PDF...\\nDong 2...\\n- Bullet A\\n- Bullet B'
+//   });
+if (typeof window !== 'undefined') {
+  window.pushWebStructure4Menus = async function pushWebStructure4Menus(options = {}) {
+    if (!window.csmApi || typeof window.csmApi.updateTableData !== 'function') {
+      throw new Error('window.csmApi.updateTableData is not available');
+    }
+
+    const appId = String(options.appId || 'wuweb');
+    const runtimeHost = String(options.runtimeHost || (typeof window !== 'undefined' ? (window.location?.hostname || '') : '')).trim();
+    const defaultDomain = runtimeHost
+      ? `${runtimeHost},csmbridge.net,localhost:3333`
+      : 'csmbridge.net,localhost:3333';
+    const domain = String(options.domain || defaultDomain);
+    // Default behavior for the fixed 4-menu deploy button: enforce the canonical mapping.
+    const preserveLegacyServiceGrouping = options.preserveLegacyServiceGrouping === true;
+    const now = Date.now();
+
+    const escapeHtml = (value) => String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    const linesToHtml = (rawText) => {
+      const raw = String(rawText || '').replace(/\r\n/g, '\n').trim();
+      if (!raw) return '';
+
+      const lines = raw.split('\n').map((line) => line.trim()).filter(Boolean);
+      if (lines.length === 0) return '';
+
+      const title = lines[0].replace(/^#+\s*/, '') || 'Trang Chu';
+      const bodyLines = lines.slice(1);
+      let html = `<h1>${escapeHtml(title)}</h1>`;
+
+      const bulletLines = bodyLines.filter((line) => /^[-*]\s+/.test(line));
+      const paragraphLines = bodyLines.filter((line) => !/^[-*]\s+/.test(line));
+
+      if (paragraphLines.length > 0) {
+        html += paragraphLines
+          .map((line) => `<p>${escapeHtml(line)}</p>`)
+          .join('');
+      }
+
+      if (bulletLines.length > 0) {
+        html += `<ul>${bulletLines
+          .map((line) => `<li>${escapeHtml(line.replace(/^[-*]\s+/, ''))}</li>`)
+          .join('')}</ul>`;
+      }
+
+      return html;
+    };
+
+    const pdfText = String(
+      options.homepagePdfText
+      || options.homePdfText
+      || options.pdfText
+      || ''
+    ).trim();
+    const homepagePdfHtml = String(options.homepagePdfHtml || '').trim();
+    const homepageContent = homepagePdfHtml || linesToHtml(pdfText);
+
+    const kqxsProvidedContent = String(
+      options.kqxsContentHtml
+      || options.kqxsSeoHtml
+      || options.kqxsHtmlDoc
+      || options.lotteryHtmlDoc
+      || ''
+    ).trim();
+
+    const defaultKqxsSeoContent = `
+      <article>
+        <h1>Hệ Thống Thống Kê Giải Đặc Biệt Và Phân Tích Dữ Liệu Kết Quả Xổ Số 3 Miền</h1>
+        <p>Nền tảng tự động phân tích dữ liệu xổ số kiến thiết Miền Bắc, Miền Trung, Miền Nam theo chu kỳ thời gian 30, 100 và 365 ngày.</p>
+        <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;">
+          <strong>Tuyên bố pháp lý:</strong> Nội dung chỉ phục vụ mục đích thống kê dữ liệu tham khảo. Hệ thống không hỗ trợ cá cược và không khuyến khích hành vi vi phạm pháp luật Việt Nam.
+        </div>
+        <h2>1. Thống kê giải đặc biệt theo tuần và theo tổng</h2>
+        <p>Công cụ cung cấp bảng thống kê giải đặc biệt theo tuần, theo tổng và xu hướng biến động theo từng mốc ngày để người dùng theo dõi dữ liệu minh bạch.</p>
+        <ul>
+          <li><strong>Thống kê giải đặc biệt theo tuần:</strong> Theo dõi phân bố dãy số theo chu kỳ ngày trong tuần.</li>
+          <li><strong>Thống kê giải đặc biệt theo tổng:</strong> Nhóm dữ liệu theo tổng hai số cuối để quan sát cụm phân bổ.</li>
+          <li><strong>Thống kê miền bắc:</strong> Tổng hợp dữ liệu theo từng đài và nhiều khoảng thời gian.</li>
+        </ul>
+        <h2>2. Thống kê lô, tần suất lô tô và lô gan</h2>
+        <p>Hệ thống đo tần suất lô tô cho các cặp số 00-99, đồng thời hiển thị khoảng trễ dữ liệu thường được gọi là lô gan miền bắc, lô gan mb và lô gan miền nam.</p>
+        <p>Dữ liệu được trình bày theo cách trung lập, không đưa ra khuyến nghị cá cược.</p>
+        <h2>3. Thống kê kết quả xổ số miền bắc 100 ngày</h2>
+        <p>Người dùng có thể tra cứu thống kê kết quả xổ số miền bắc 100 ngày, xsmb theo tuần và lịch sử biến động để so sánh theo từng giai đoạn.</p>
+        <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;">
+          <thead>
+            <tr>
+              <th>Chỉ số</th>
+              <th>Khoảng dữ liệu</th>
+              <th>Cách xử lý</th>
+              <th>Giá trị tham khảo</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Tần suất xuất hiện</td>
+              <td>30 - 100 kỳ quay</td>
+              <td>Đếm số lần và chuẩn hóa</td>
+              <td>Đánh giá độ ổn định của dãy số</td>
+            </tr>
+            <tr>
+              <td>Giải đặc biệt đa chiều</td>
+              <td>Theo tuần, theo tổng</td>
+              <td>Phân nhóm chuỗi số cuối</td>
+              <td>Trực quan hóa xu hướng</td>
+            </tr>
+            <tr>
+              <td>Khoảng trễ phân bố</td>
+              <td>Tối đa 500 kỳ gần nhất</td>
+              <td>Đo độ lệch xác suất</td>
+              <td>Theo dõi nhóm số ít xuất hiện</td>
+            </tr>
+          </tbody>
+        </table>
+        <h2>4. Kết luận</h2>
+        <p>Các bảng thống kê giải đặc biệt, thống kê xổ số miền bắc và tần suất lô tô hỗ trợ người dùng tiếp cận dữ liệu theo hướng khoa học, hợp pháp và minh bạch.</p>
+      </article>
+    `;
+
+    const validateKqxsSeoContent = (html) => {
+      const text = String(html || '').toLowerCase();
+      const requiredTokens = [
+        '<h1',
+        '<h2',
+        'thống kê giải đặc biệt',
+        'thống kê kết quả xổ số miền bắc 100 ngày',
+        'tần suất lô tô',
+      ];
+      const hasLegalGuard = (
+        text.includes('không hỗ trợ cá cược')
+        || text.includes('khong ho tro ca cuoc')
+        || text.includes('không khuyến khích hành vi vi phạm pháp luật')
+      );
+
+      return requiredTokens.every((token) => text.includes(token)) && hasLegalGuard;
+    };
+
+    const defaultKqxsLandingContent = validateKqxsSeoContent(kqxsProvidedContent)
+      ? kqxsProvidedContent
+      : defaultKqxsSeoContent;
+
+    if (kqxsProvidedContent && !validateKqxsSeoContent(kqxsProvidedContent)) {
+      console.warn('[pushWebStructure4Menus] kqxs content is missing required SEO/legal blocks. Using default compliant template.');
+    }
+
+    const upsert = async (objName, row, pkFields = ['slug', 'domain', 'status']) => {
+      const normalizedRow = {
+        ...row,
+        category: row.category || row.slug || '',
+        category_en: row.category_en || row.category || row.slug || '',
+        category_zh: row.category_zh || row.category_en || row.category || row.slug || '',
+      };
+
+      const baseObjUpdate = {
+        ...normalizedRow,
+        app_id: appId,
+        domain,
+        status: normalizedRow.status || 'active',
+        updated_at: now,
+      };
+
+      const tryUpdate = async (fields) => {
+        return window.csmApi.updateTableData({
+          app_id: appId,
+          obj_name: objName,
+          command: 'update',
+          pk_fields: fields,
+          obj_update: baseObjUpdate,
+        });
+      };
+
+      const tryCreate = async () => {
+        return window.csmApi.updateTableData({
+          app_id: appId,
+          obj_name: objName,
+          command: 'create',
+          obj_update: {
+            ...baseObjUpdate,
+            created_at: now,
+          },
+        });
+      };
+
+      // Preferred path: detect existence first to avoid intentional 400 retries.
+      if (typeof window.csmApi.getTableData === 'function' && normalizedRow.slug) {
+        try {
+          const where = tableWhereAnd([
+            tableWhereEq('slug', normalizedRow.slug),
+            tableWhereEq('domain', domain),
+            tableWhereEq('status', baseObjUpdate.status),
+          ]);
+
+          const probe = await window.csmApi.getTableData({
+            app_id: appId,
+            obj_name: objName,
+            where,
+            take: 1,
+          });
+
+          const rows = Array.isArray(probe?.rows)
+            ? probe.rows
+            : (Array.isArray(probe?.data) ? probe.data : []);
+
+          if (rows.length > 0) {
+            return tryUpdate(pkFields);
+          }
+          return tryCreate();
+        } catch (probeErr) {
+          // Continue to fallback strategy below when probe endpoint rejects.
+        }
+      }
+
+      try {
+        return await tryUpdate(pkFields);
+      } catch (err1) {
+        try {
+          // Fallback 1: match by slug only (some data may have legacy domain/status).
+          return await tryUpdate(['slug']);
+        } catch (err2) {
+          // Fallback 2: create row when update cannot find or update target.
+          return tryCreate();
+        }
+      }
+    };
+
+    const menuRows = [
+      {
+        id: 'thong-ke-ket-qua-xo-so',
+        service_code: 'thong-ke-ket-qua-xo-so',
+        slug: 'thong-ke-ket-qua-xo-so',
+        category: 'Thống Kê Kết Quả Xổ Số',
+        category_en: 'Lottery Statistics',
+        category_zh: '彩票统计',
+        is_service: true,
+        is_group_slug: true,
+        is_group_slug_default: false,
+        group_slug: '',
+        attributes_icon: 'DatabaseOutlined',
+        attributes_color: '#13c2c2',
+        attributes_priority: 1,
+        attributes_title: 'Hệ thống thống kê giải đặc biệt và dữ liệu kết quả xổ số 3 miền',
+        attributes_title_en: 'Special Prize Statistics and 3-Region Lottery Data Platform',
+        attributes_title_zh: '三地区特别奖统计与彩票数据平台',
+        attributes_description: 'Tra cứu thống kê giải đặc biệt theo tuần, theo tổng, tần suất lô tô và thống kê kết quả xổ số miền bắc 100 ngày.',
+        attributes_description_en: 'Look up special-prize weekly and sum-based analytics, loto frequency and 100-day Northern lottery statistics.',
+        attributes_description_zh: '提供特别奖周统计、总值统计、号码频率及北部100天彩票数据查询。',
+        attributes_keywords: 'thống kê giải đặc biệt, thống kê giải đặc biệt theo tuần, thống kê giải đặc biệt theo tổng, tần suất lô tô, lô gan miền bắc, lô gan mb, lô gan miền nam, thống kê kết quả xổ số miền bắc 100 ngày, xsmb theo tuần, thống kê xổ số miền bắc',
+        attributes_keywords_en: 'special prize statistics, weekly special prize analytics, loto frequency, northern lottery 100-day statistics',
+        attributes_keywords_zh: '特别奖统计, 周统计, 号码频率, 北部彩票100天统计',
+        content: defaultKqxsLandingContent,
+      },
+      {
+        id: 'cau-noi-kinh-doanh-online',
+        service_code: 'cau-noi-kinh-doanh-online',
+        slug: 'cau-noi-kinh-doanh-online',
+        category: 'Cầu Nối Kinh Doanh Online',
+        category_en: 'Online Business Bridge',
+        category_zh: '在线商业桥梁',
+        is_service: true,
+        is_group_slug: true,
+        is_group_slug_default: false,
+        group_slug: '',
+        attributes_icon: 'DatabaseOutlined',
+        attributes_color: '#722ed1',
+        attributes_priority: 2,
+        attributes_title: 'Cầu nối các lĩnh vực kinh doanh online',
+        attributes_title_en: 'Bridge Across Online Business Verticals',
+        attributes_title_zh: '连接多行业线上业务',
+        attributes_description: 'Kết nối mỹ phẩm, bất động sản, xe dịch vụ và đặt lịch online trên một nền tảng.',
+        attributes_description_en: 'Connect beauty, real estate, transport and booking services on one platform.',
+        attributes_description_zh: '在同一平台连接美妆、房产、用车与在线预约服务。',
+      },
+      {
+        id: 'bat-dong-san',
+        service_code: 'bat-dong-san',
+        slug: 'bat-dong-san',
+        category: 'Bất Động Sản',
+        category_en: 'Real Estate',
+        category_zh: '房地产',
+        is_service: true,
+        is_group_slug: false,
+        is_group_slug_default: false,
+        group_slug: 'cau-noi-kinh-doanh-online',
+        attributes_icon: 'HomeOutlined',
+        attributes_color: '#13c2c2',
+        attributes_priority: 1,
+      },
+      {
+        id: 'lam-dep-my-pham',
+        service_code: 'lam-dep-my-pham',
+        slug: 'lam-dep-my-pham',
+        category: 'Mỹ Phẩm Làm Đẹp',
+        category_en: 'Beauty & Cosmetics',
+        category_zh: '美容化妆品',
+        is_service: true,
+        is_group_slug: false,
+        is_group_slug_default: false,
+        group_slug: 'cau-noi-kinh-doanh-online',
+        attributes_icon: 'SkinOutlined',
+        attributes_color: '#eb2f96',
+        attributes_priority: 2,
+      },
+      {
+        id: 'cho-thue-xe',
+        service_code: 'cho-thue-xe',
+        slug: 'cho-thue-xe',
+        category: 'Cho Thuê Xe 4-7 Chỗ',
+        category_en: 'Car Rental',
+        category_zh: '租车服务',
+        is_service: true,
+        is_group_slug: false,
+        is_group_slug_default: false,
+        group_slug: 'cau-noi-kinh-doanh-online',
+        attributes_icon: 'CarOutlined',
+        attributes_color: '#faad14',
+        attributes_priority: 3,
+      },
+      {
+        id: 'booking-online',
+        service_code: 'booking-online',
+        slug: 'booking-online',
+        category: 'Đặt Lịch Online',
+        category_en: 'Online Booking',
+        category_zh: '在线预订',
+        is_service: true,
+        is_group_slug: false,
+        is_group_slug_default: false,
+        group_slug: 'cau-noi-kinh-doanh-online',
+        attributes_icon: 'CalendarOutlined',
+        attributes_color: '#faad14',
+        attributes_priority: 4,
+      },
+      {
+        id: 'phan-mem',
+        service_code: 'phan-mem',
+        slug: 'phan-mem',
+        category: 'Phần Mềm',
+        category_en: 'Software',
+        category_zh: '软件',
+        is_service: true,
+        is_group_slug: false,
+        is_group_slug_default: false,
+        group_slug: 'cau-noi-kinh-doanh-online',
+        attributes_icon: 'CodeOutlined',
+        attributes_color: '#1677ff',
+        attributes_priority: 5,
+      },
+    ];
+
+    const kqxsLanding = {
+      slug: 'thong-ke-giai-dac-biet-du-lieu-kqxs',
+      service_code: 'thong-ke-ket-qua-xo-so',
+      service_type: 'thong-ke-ket-qua-xo-so',
+      title: 'Hệ Thống Thống Kê Giải Đặc Biệt Và Phân Tích Dữ Liệu Kết Quả Xổ Số 3 Miền',
+      title_en: 'Special Prize Statistics and 3-Region Lottery Data Analysis System',
+      title_zh: '三地区特别奖统计与彩票数据分析系统',
+      excerpt: 'Tra cứu thống kê giải đặc biệt theo tuần, theo tổng, tần suất lô tô và dữ liệu thống kê kết quả xổ số miền bắc 100 ngày.',
+      excerpt_en: 'Track weekly and sum-based special prize analytics, loto frequency and 100-day northern lottery data.',
+      excerpt_zh: '查询特别奖周统计、总值统计、号码频率与北部100天彩票数据。',
+      content: defaultKqxsLandingContent,
+      content_en: String(options.kqxsContentEn || ''),
+      content_zh: String(options.kqxsContentZh || ''),
+      attributes_title: 'Hệ thống thống kê giải đặc biệt và dữ liệu kết quả xổ số 3 miền',
+      attributes_title_en: 'Special Prize Statistics and 3-Region Lottery Data Platform',
+      attributes_title_zh: '三地区特别奖统计与彩票数据平台',
+      attributes_description: 'Nền tảng thống kê xổ số kiến thiết theo hướng dữ liệu minh bạch: thống kê lô, tần suất lô tô, xsmb theo tuần và chu kỳ 100 ngày.',
+      attributes_description_en: 'A transparent data-first lottery statistics platform: loto analytics, frequency tracking, weekly North-region views and 100-day windows.',
+      attributes_description_zh: '基于透明数据的彩票统计平台：号码统计、频率追踪、北部周视图与100天窗口。',
+      attributes_keywords: 'thống kê giải đặc biệt, thống kê giải đặc biệt theo tuần, thống kê giải đặc biệt theo tổng, thống kê lô, tần suất lô tô, lô gan miền bắc, lô gan mb, lô gan miền nam, thống kê kết quả xổ số miền bắc 100 ngày, xsmb theo tuần, thống kê xổ số miền bắc, thống kê miền bắc',
+      attributes_keywords_en: 'special prize statistics, weekly xsmb stats, loto frequency analytics, 100-day lottery data',
+      attributes_keywords_zh: '特别奖统计, 周期统计, 号码频率, 北部100天数据',
+      tags: JSON.stringify(['thong-ke-xo-so', 'giai-dac-biet', 'xsmb-100-ngay', 'du-lieu-3-mien']),
+      featured: 1,
+      active_home: 0,
+      publish_date: new Date().toISOString(),
+    };
+
+    const defaultHomepageSeoContent = `
+      <article>
+        <h1>Trang Chủ Thống Kê Dữ Liệu Kết Quả Xổ Số 3 Miền</h1>
+        <p>Trang chủ tổng hợp các công cụ thống kê giải đặc biệt, thống kê lô, tần suất lô tô và dữ liệu kết quả xổ số miền bắc 100 ngày.</p>
+        <div style="background:#eff6ff;border-left:4px solid #2563eb;padding:14px;margin:16px 0;">
+          <strong>Tuyên bố pháp lý:</strong> Nội dung chỉ phục vụ mục đích thống kê dữ liệu tham khảo, không hỗ trợ cá cược và không khuyến khích hành vi vi phạm pháp luật Việt Nam.
+        </div>
+        <h2>Danh mục nổi bật</h2>
+        <ul>
+          <li>Thống kê giải đặc biệt theo tuần và theo tổng.</li>
+          <li>Thống kê kết quả xổ số miền bắc 100 ngày.</li>
+          <li>Phân tích tần suất lô tô và khoảng trễ dữ liệu.</li>
+        </ul>
+        <h2>Mục tiêu của hệ thống</h2>
+        <p>Cung cấp dữ liệu minh bạch, dễ tra cứu trên điện thoại và máy tính, phục vụ nghiên cứu và tham khảo thông tin công khai.</p>
+      </article>
+    `;
+
+    const homepageFromPdf = {
+      slug: 'home',
+      service_code: 'home',
+      service_type: 'home',
+      title: String(options.homepageTitle || 'Trang Chủ Thống Kê Dữ Liệu Kết Quả Xổ Số 3 Miền'),
+      title_en: String(options.homepageTitleEn || 'CSM Bridge Home'),
+      title_zh: String(options.homepageTitleZh || 'CSM Bridge 首页'),
+      excerpt: String(options.homepageExcerpt || 'Trang chủ tổng hợp thống kê giải đặc biệt, thống kê lô, tần suất lô tô và dữ liệu kết quả xổ số 3 miền.'),
+      excerpt_en: String(options.homepageExcerptEn || 'Homepage content is generated from PDF materials.'),
+      excerpt_zh: String(options.homepageExcerptZh || '首页内容由 PDF 资料生成。'),
+      content: homepageContent || defaultHomepageSeoContent,
+      content_en: String(options.homepageContentEn || ''),
+      content_zh: String(options.homepageContentZh || ''),
+      attributes_title: String(options.homepageSeoTitle || 'Trang chủ thống kê dữ liệu kết quả xổ số 3 miền'),
+      attributes_title_en: String(options.homepageSeoTitleEn || 'CSM Bridge Home'),
+      attributes_title_zh: String(options.homepageSeoTitleZh || 'CSM Bridge 首页'),
+      attributes_description: String(options.homepageSeoDescription || 'Tra cứu nhanh thống kê giải đặc biệt, thống kê miền bắc, tần suất lô tô và dữ liệu xổ số 3 miền theo chu kỳ.'),
+      attributes_description_en: String(options.homepageSeoDescriptionEn || 'Homepage aggregating service information and data from PDF sources.'),
+      attributes_description_zh: String(options.homepageSeoDescriptionZh || '汇总服务信息与 PDF 数据来源的首页。'),
+      attributes_keywords: String(options.homepageSeoKeywords || 'trang chủ thống kê xổ số, thống kê giải đặc biệt, thống kê kết quả xổ số miền bắc 100 ngày, tần suất lô tô, thống kê miền bắc'),
+      attributes_keywords_en: String(options.homepageSeoKeywordsEn || 'homepage, software, online business bridge, lottery statistics'),
+      attributes_keywords_zh: String(options.homepageSeoKeywordsZh || '首页, 软件, 在线商业桥梁, 彩票统计'),
+      tags: JSON.stringify(['homepage', 'pdf', 'landing']),
+      featured: 1,
+      active_home: 1,
+      publish_date: new Date().toISOString(),
+    };
+
+    const stats = { ok: 0, fail: 0, skipped: 0, migrated: 0, failDetails: [], skippedDetails: [] };
+    console.log('[pushWebStructure4Menus] start', { appId, domain, preserveLegacyServiceGrouping });
+
+    const legacyServiceSlugs = new Set([
+      'phan-mem',
+      'bat-dong-san',
+      'lam-dep-my-pham',
+      'cho-thue-xe',
+      'booking-online',
+      'dich-vu',
+    ]);
+
+    const migrateLegacyDichVuChildren = async () => {
+      if (typeof window.csmApi.getTableData !== 'function') return;
+
+      const fixedChildSlugs = new Set([
+        'phan-mem',
+        'bat-dong-san',
+        'lam-dep-my-pham',
+        'cho-thue-xe',
+        'booking-online',
+      ]);
+
+      try {
+        const probe = await window.csmApi.getTableData({
+          app_id: appId,
+          obj_name: 'web_services',
+          where: tableWhereAnd([
+            tableWhereEq('status', 'active'),
+            tableWhereEq('group_slug', 'dich-vu'),
+          ]),
+          take: 200,
+        });
+
+        const rows = Array.isArray(probe?.rows)
+          ? probe.rows
+          : (Array.isArray(probe?.data) ? probe.data : []);
+
+        for (const row of rows) {
+          const slug = String(row?.slug || '').trim();
+          if (!fixedChildSlugs.has(slug)) continue;
+
+          try {
+            await window.csmApi.updateTableData({
+              app_id: appId,
+              obj_name: 'web_services',
+              command: 'update',
+              pk_fields: ['slug'],
+              obj_update: {
+                slug,
+                group_slug: 'cau-noi-kinh-doanh-online',
+                domain: row?.domain || domain,
+                status: row?.status || 'active',
+                updated_at: now,
+              },
+            });
+            stats.migrated += 1;
+            console.log(`[MIGRATE] web_services/${slug}: dich-vu -> cau-noi-kinh-doanh-online`);
+          } catch (err) {
+            stats.fail += 1;
+            stats.failDetails.push({ obj: 'web_services', slug, error: String(err?.message || err) });
+            console.error(`[FAIL-MIGRATE] web_services/${slug}`, err);
+          }
+        }
+      } catch (err) {
+        stats.fail += 1;
+        stats.failDetails.push({ obj: 'web_services', slug: 'dich-vu/*', error: String(err?.message || err) });
+        console.error('[FAIL-MIGRATE] query dich-vu children', err);
+      }
+    };
+
+    await migrateLegacyDichVuChildren();
+
+    for (const row of menuRows) {
+      if (preserveLegacyServiceGrouping && legacyServiceSlugs.has(String(row.slug || ''))) {
+        stats.skipped += 1;
+        stats.skippedDetails.push({ obj: 'web_services', slug: row.slug, reason: 'preserve-legacy-grouping' });
+        console.log(`[SKIP] web_services/${row.slug} (preserve legacy grouping)`);
+        continue;
+      }
+      try {
+        await upsert('web_services', row);
+        stats.ok += 1;
+        console.log(`[OK] web_services/${row.slug}`);
+      } catch (err) {
+        stats.fail += 1;
+        stats.failDetails.push({ obj: 'web_services', slug: row.slug, error: String(err?.message || err) });
+        console.error(`[FAIL] web_services/${row.slug}`, err);
+      }
+    }
+
+    try {
+      await upsert('web_service_detail', kqxsLanding, ['slug']);
+      stats.ok += 1;
+      console.log(`[OK] web_service_detail/${kqxsLanding.slug}`);
+    } catch (err) {
+      stats.fail += 1;
+      stats.failDetails.push({ obj: 'web_service_detail', slug: kqxsLanding.slug, error: String(err?.message || err) });
+      console.error(`[FAIL] web_service_detail/${kqxsLanding.slug}`, err);
+    }
+
+    try {
+      await upsert('web_service_detail', homepageFromPdf, ['slug']);
+      stats.ok += 1;
+      console.log(`[OK] web_service_detail/${homepageFromPdf.slug}`);
+    } catch (err) {
+      stats.fail += 1;
+      stats.failDetails.push({ obj: 'web_service_detail', slug: homepageFromPdf.slug, error: String(err?.message || err) });
+      console.error(`[FAIL] web_service_detail/${homepageFromPdf.slug}`, err);
+    }
+
+    console.log('[pushWebStructure4Menus] done', stats);
+    if (stats.skippedDetails.length > 0) {
+      console.table(stats.skippedDetails);
+    }
+    return stats;
+  };
 }
 
 // Translation function (t = translate)
@@ -650,7 +1203,7 @@ const decryptHtmlContent = (data) => {
  *    - h-holding.vn → app_id: "lmkt" (Bất động sản - 6 dự án)
  *    - domain: TOÀN BỘ danh sách (VD: "h-holding.vn,h-holding.com.vn,localhost:3333")
  * 
- * 2. INDUSTRY_TYPES: Config cho từng lĩnh vực phanmemmottrieu
+ * 2. INDUSTRY_TYPES: Config cho từng lĩnh vực csmbridge
  *    - bat-dong-san: Bất Động Sản
  *    - lam-dep-my-pham: Mỹ Phẩm - Làm Đẹp
  *    - booking-online: Đặt Lịch Online
@@ -670,7 +1223,7 @@ const decryptHtmlContent = (data) => {
  * ========== QUY TRÌNH HOẠT ĐỘNG ==========
  * 
  * BƯỚC 1: User vào admin → Chọn Domain
- *         ↓ Script kiểm tra: LMKT hay Phanmemmottrieu?
+ *         ↓ Script kiểm tra: LMKT hay csmbridge?
  *
  * BƯỚC 2: Chọn Lĩnh Vực/Dự Án
  *         ↓ Hiển thị config (vai trò, phong cách, nhấn mạnh)
@@ -698,7 +1251,7 @@ const decryptHtmlContent = (data) => {
  * getCategoriesForDomain(domainKey)
  *   → Trả về danh sách lĩnh vực/dự án cho domain
  *   → LMKT: 6 dự án BĐS
- *   → Phanmemmottrieu: 5 lĩnh vực khác nhau
+ *   → csmbridge: 5 lĩnh vực khác nhau
  *
  * buildCategoryPrompt(categoryData, userPrompt, domainKey)
  *   → Xây dựng prompt hoàn chỉnh cho AI
@@ -717,7 +1270,7 @@ const decryptHtmlContent = (data) => {
  * ========== CÁCH DÙNG ==========
  * 
  * 1. Copy file này vào p_code của sys_autos (Admin)
- * 2. Chọn Domain (LMKT hoặc Phanmemmottrieu)
+ * 2. Chọn Domain (LMKT hoặc csmbridge)
  * 3. Chọn Lĩnh Vực/Dự Án
  * 4. Nhập hướng dẫn nội dung (tùy chỉnh)
  * 5. Nhấn "Tạo Content"
@@ -767,7 +1320,7 @@ const decryptHtmlContent = (data) => {
  * 
  * ⚠️ Domain phải là TOÀN BỘ danh sách:
  *    - LMKT: "h-holding.vn,h-holding.com.vn,localhost:3333"
- *    - Phanmemmottrieu: "csmbridge.net,localhost:3333"
+ *    - csmbridge: "csmbridge.net,localhost:3333"
  * 
  * ⚠️ Mỗi domain phải có app_id đúng:
  *    - csmbridge.net → app_id: "wuweb"
@@ -793,7 +1346,7 @@ const decryptHtmlContent = (data) => {
  * 
  * Ví dụ:
  *   LMKT → h-holding.vn → app_id: "lmkt" → Lấy data từ app LMKT
- *   Phanmemmottrieu → csmbridge.net → app_id: "wuweb" → Lấy data từ app Phanmemmottrieu
+ *   csmbridge → csmbridge.net → app_id: "wuweb" → Lấy data từ app csmbridge
  */
 const DEFAULT_UPLOAD_ENDPOINT = "/upload.shtml";
 const UPLOAD_ENDPOINT_COOLDOWN_MS = 2 * 60 * 1000;
@@ -863,7 +1416,7 @@ function getCandidateUploadEndpoints(ctx = {}) {
 
 // Domain Options
 const DOMAIN_OPTIONS = {
-  phanmemmottrieu: {
+  csmbridge: {
     value: "csmbridge.net,localhost:3333",
     label: "Phần Mềm Một Triệu (Multi-Industry)",
     app_id: "wuweb"
@@ -888,6 +1441,19 @@ function parseDomainList(domainValue) {
   return String(domainValue || "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
+function mergeRuntimeHostIntoDomainValue(domainValue, runtimeHost) {
+  const host = String(runtimeHost || "").trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "");
+  if (!host || host.includes("localhost") || host.includes("127.0.0.1")) {
+    return String(domainValue || "");
+  }
+  const parts = parseDomainList(domainValue);
+  const normalized = new Set(parts.map((p) => p.toLowerCase().replace(/^www\./, "")));
+  if (!normalized.has(host)) {
+    parts.unshift(host);
+  }
+  return parts.join(",");
+}
+
 function hostBelongsToDomainList(host, domainListValue) {
   const h = String(host || "").trim().toLowerCase().replace(/^www\./, "");
   if (!h) return false;
@@ -897,7 +1463,7 @@ function hostBelongsToDomainList(host, domainListValue) {
   });
 }
 
-/** Map domain cũ (phanmemmottrieu.net, chỉ csmbridge.net, …) → domainKey. */
+/** Map domain cũ (csmbridge.net, chỉ csmbridge.net, …) → domainKey. */
 function resolveDomainKeyFromValue(domainValue) {
   if (!domainValue) return "";
   const raw = String(domainValue).trim();
@@ -907,18 +1473,18 @@ function resolveDomainKeyFromValue(domainValue) {
     if (hostBelongsToDomainList(lower, option.value)) return key;
   }
   if (lower.includes("h-holding") || lower.includes("lmkt")) return "lmkt";
-  if (lower.includes("phanmemmottrieu") || lower.includes("csmbridge") || lower === "localhost:3333") {
-    return "phanmemmottrieu";
+  if (lower.includes("csmbridge") || lower.includes("csmbridge") || lower === "localhost:3333") {
+    return "csmbridge";
   }
   return "";
 }
 
-/** Chuẩn hóa domain lưu DB — Phanmemmottrieu luôn "csmbridge.net,localhost:3333". */
+/** Chuẩn hóa domain lưu DB — csmbridge luôn "csmbridge.net,localhost:3333". */
 function migrateLegacyPhanmemDomain(domainValue) {
   const key = resolveDomainKeyFromValue(domainValue);
-  if (key === "phanmemmottrieu") return canonicalDomainForKey("phanmemmottrieu");
+  if (key === "csmbridge") return canonicalDomainForKey("csmbridge");
   if (key === "lmkt") return canonicalDomainForKey("lmkt");
-  return domainValue || canonicalDomainForKey("phanmemmottrieu");
+  return domainValue || canonicalDomainForKey("csmbridge");
 }
 
 /**
@@ -950,16 +1516,16 @@ function normalizeTableWhere(where) {
 function domainQueryValuesForKey(domainKey) {
   const canonical = canonicalDomainForKey(domainKey);
   const set = new Set([canonical]);
-  if (domainKey === "phanmemmottrieu") {
+  if (domainKey === "csmbridge") {
     [
-      "phanmemmottrieu.net",
-      "www.phanmemmottrieu.net",
       "csmbridge.net",
       "www.csmbridge.net",
-      "phanmemmottrieu.net,localhost:3333",
+      "csmbridge.net",
+      "www.csmbridge.net",
+      "csmbridge.net,localhost:3333",
       "csmbridge.net,localhost:3333",
       "localhost:3333",
-      "phanmemmottrieu"
+      "csmbridge"
     ].forEach((d) => set.add(d));
   }
   if (domainKey === "lmkt") {
@@ -1512,9 +2078,9 @@ function ensureDomainMigrationPanel(theme) {
   const hint = document.createElement("div");
   hint.style.cssText = `font-size:12px;color:${theme.muted || theme.textSecondary};line-height:1.5;margin-bottom:10px;`;
   hint.innerHTML = ti(
-    "Quét và cập nhật <strong>web_service_detail</strong>, <strong>web_services</strong>, <strong>cấu hình Zalo</strong> từ domain cũ (VD: <code>phanmemmottrieu.net</code>) sang giá trị chuẩn theo <strong>Cài Đặt Chung → Tên miền</strong>. Phanmemmottrieu: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & lưu DB: ghi theo lô <code>bulk-update</code>, ~35 API/phút, tự chờ khi 429 (giới hạn server 500/phút/IP).</span>",
-    "Scan and update <strong>web_service_detail</strong>, <strong>web_services</strong>, and <strong>Zalo configs</strong> from legacy domains (e.g. <code>phanmemmottrieu.net</code>) to the canonical value from <strong>General Settings → Domain</strong>. Phanmemmottrieu: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & save: batched <code>bulk-update</code>, ~35 API calls/min, auto-waits on 429 (server cap 500/min/IP).</span>",
-    "扫描并更新 <strong>web_service_detail</strong>、<strong>web_services</strong>、<strong>Zalo 配置</strong>，将旧域名迁移为标准域名。Phanmemmottrieu：<code>csmbridge.net,localhost:3333</code>。<br><span style=\"opacity:.85\">✅ 迁移保存：分批 bulk-update，约 35 次 API/分钟，遇 429 自动等待（服务端 500 次/分钟/IP）。</span>"
+    "Quét và cập nhật <strong>web_service_detail</strong>, <strong>web_services</strong>, <strong>cấu hình Zalo</strong> từ domain cũ (VD: <code>csmbridge.net</code>) sang giá trị chuẩn theo <strong>Cài Đặt Chung → Tên miền</strong>. csmbridge: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & lưu DB: ghi theo lô <code>bulk-update</code>, ~35 API/phút, tự chờ khi 429 (giới hạn server 500/phút/IP).</span>",
+    "Scan and update <strong>web_service_detail</strong>, <strong>web_services</strong>, and <strong>Zalo configs</strong> from legacy domains (e.g. <code>csmbridge.net</code>) to the canonical value from <strong>General Settings → Domain</strong>. csmbridge: <code>csmbridge.net,localhost:3333</code>.<br><span style=\"opacity:.85\">✅ Migrate & save: batched <code>bulk-update</code>, ~35 API calls/min, auto-waits on 429 (server cap 500/min/IP).</span>",
+    "扫描并更新 <strong>web_service_detail</strong>、<strong>web_services</strong>、<strong>Zalo 配置</strong>，将旧域名迁移为标准域名。csmbridge：<code>csmbridge.net,localhost:3333</code>。<br><span style=\"opacity:.85\">✅ 迁移保存：分批 bulk-update，约 35 次 API/分钟，遇 429 自动等待（服务端 500 次/分钟/IP）。</span>"
   );
 
   const targetPreview = document.createElement("div");
@@ -1873,7 +2439,7 @@ function ensureDomainDuplicateCleanupPanel(theme) {
   const hint = document.createElement("div");
   hint.style.cssText = `font-size:12px;color:${theme.muted || theme.textSecondary};line-height:1.5;margin-bottom:10px;`;
   hint.innerHTML = ti(
-    "Quét <strong>mọi bài active</strong> thuộc domain đang chọn (gồm <code>phanmemmottrieu.net</code>, <code>csmbridge.net,localhost:3333</code>, …), phát hiện trùng theo tiêu đề/nội dung/ảnh, xóa bài cũ giữ bài mới. Khác nút «Dọn tin trùng» ở khu Zalo (chỉ 1 lĩnh vực/dự án).",
+    "Quét <strong>mọi bài active</strong> thuộc domain đang chọn (gồm <code>csmbridge.net</code>, <code>csmbridge.net,localhost:3333</code>, …), phát hiện trùng theo tiêu đề/nội dung/ảnh, xóa bài cũ giữ bài mới. Khác nút «Dọn tin trùng» ở khu Zalo (chỉ 1 lĩnh vực/dự án).",
     "Scan <strong>all active posts</strong> for the selected domain (including legacy domain strings), detect duplicates by title/content/images, delete older posts. Unlike the Zalo «Cleanup duplicates» button (single industry/project only).",
     "扫描所选域名下<strong>全部 active 文章</strong>（含旧域名字符串），按标题/内容/图片查重并删除旧文。与 Zalo 区「清理重复」按钮不同（后者仅单个行业/项目）。"
   );
@@ -2710,9 +3276,9 @@ const HASHTAGS_BY_SELLING_INTENT = {
   }
 };
 
-// ===== TITLE TEMPLATES FOR PHANMEMMOTTRIEU (Luôn có Bán/Cho thuê + Địa chỉ + Hook) =====
+// ===== TITLE TEMPLATES FOR csmbridge (Luôn có Bán/Cho thuê + Địa chỉ + Hook) =====
 const TITLE_TEMPLATES_FOR_PHANMEM = {
-  label: "Tiêu đề Phanmemmottrieu - [Giao dịch] + [Địa chỉ] + [Hook Hấp Dẫn]",
+  label: "Tiêu đề csmbridge - [Giao dịch] + [Địa chỉ] + [Hook Hấp Dẫn]",
   templates: [
     // Pattern 1: [Bán/Cho thuê] + {location} - {hook}
     "Bán {property} {location} - {hook}",
@@ -2758,7 +3324,7 @@ const TITLE_TEMPLATES_FOR_SOFTWARE = {
 function isSoftwareTechSeoContext(industry, domainKey, topic = "") {
   if (domainKey === "lmkt") return false;
   if (industry === "bat-dong-san") return false;
-  if (domainKey === "phanmemmottrieu") return true;
+  if (domainKey === "csmbridge") return true;
   const ind = String(industry || "").toLowerCase();
   if (["phan-mem", "software", "cong-nghe", "technology", "it-services"].some(k => ind.includes(k))) {
     return true;
@@ -2805,9 +3371,9 @@ function generateTitleForSoftware(industry, opts = {}) {
   return title;
 }
 
-// ===== HELPER: GENERATE TITLE FOR PHANMEMMOTTRIEU =====
+// ===== HELPER: GENERATE TITLE FOR csmbridge =====
 function generateTitleForPhanmem(industry, opts = {}) {
-  if (isSoftwareTechSeoContext(industry, "phanmemmottrieu", opts.topic || opts.hook || "")) {
+  if (isSoftwareTechSeoContext(industry, "csmbridge", opts.topic || opts.hook || "")) {
     return generateTitleForSoftware(industry, opts);
   }
   const templates = TITLE_TEMPLATES_FOR_PHANMEM.templates;
@@ -4022,7 +4588,7 @@ async function cleanupDuplicateArticles(duplicateGroups = [], ctx = {}) {
  * @returns {Object} - Kết quả cleanup
  */
 async function cleanupDuplicatesByServiceType(domainValue, serviceType, projectCode = "", ctx = {}) {
-  const domainKey = resolveDomainKeyFromValue(domainValue) || "phanmemmottrieu";
+  const domainKey = resolveDomainKeyFromValue(domainValue) || "csmbridge";
   const scopeServiceType = serviceType || projectCode || "";
   console.log(`\n[cleanupDuplicatesByServiceType] === START ===`);
   console.log(`   Domain key: ${domainKey} (input: ${domainValue})`);
@@ -4210,7 +4776,7 @@ async function cleanupBrokenFeaturedImagesByServiceType(domainValue, serviceType
   const appId = getAppIdFromDomainOptions(domainValue) || "wuweb";
 
   try {
-    const domainKey = resolveDomainKeyFromValue(domainValue) || "phanmemmottrieu";
+    const domainKey = resolveDomainKeyFromValue(domainValue) || "csmbridge";
     ctx.app_id = ctx.app_id || appId;
     console.log(`\n   📥 Đang tải toàn bộ bài (where + mọi biến thể domain)...`);
     const articles = await fetchActiveArticlesForDomainKey(domainKey, ctx, {
@@ -4881,7 +5447,7 @@ function generateSlug(text, projectName = "") {
 function getAntiAIPrompt(industry, topic, articleHistory = [], opts = {}) {
   const industryConfig = INDUSTRY_TYPES[industry] || INDUSTRY_TYPES["bat-dong-san"];
   const isLmkt = opts.domainKey === "lmkt";
-  const isSoftwareTech = !isLmkt && isSoftwareTechSeoContext(industry, opts.domainKey || "phanmemmottrieu", topic);
+  const isSoftwareTech = !isLmkt && isSoftwareTechSeoContext(industry, opts.domainKey || "csmbridge", topic);
   
   // ===== CHỌN BUYER PERSONA NGẪU NHIÊN =====
   const personaKeys = Object.keys(BUYER_PERSONAS_V2);
@@ -4911,7 +5477,7 @@ function getAntiAIPrompt(industry, topic, articleHistory = [], opts = {}) {
       topic
     });
   } else {
-    // Phanmemmottrieu (BĐS / legacy): Tiêu đề có [Bán/Cho thuê] + [Địa chỉ] + [Hook]
+    // csmbridge (BĐS / legacy): Tiêu đề có [Bán/Cho thuê] + [Địa chỉ] + [Hook]
     generatedTitle = generateTitleForPhanmem(industry, {
       property: opts.property || "dịch vụ",
       location: opts.location || "Quận 7",
@@ -5580,7 +6146,7 @@ function findCategoryTemplate(domainKey, slug) {
 
 // ===== AUTO-SYNC SERVICE DEFINITIONS FROM SERVER =====
 /**
- * Tự động đồng bộ service types (phanmemmottrieu) và projects (LMKT) từ server
+ * Tự động đồng bộ service types (csmbridge) và projects (LMKT) từ server
  * - Đảm bảo khi có service_type hoặc project mới, code sẽ tự cập nhật
  * - Cache trong localStorage (5 phút)
  * - Merge trực tiếp vào INDUSTRY_TYPES và LMKT_PROJECT_DEFS
@@ -5678,7 +6244,7 @@ async function syncServiceDefinitionsFromServer(force = false) {
       console.log(`✅ [syncServiceDefs] Synced ${lmktRows.length} LMKT projects (${totalSynced} new)`);
     }
     
-    // ===== 2️⃣ Sync Phanmemmottrieu Service Types =====
+    // ===== 2️⃣ Sync csmbridge Service Types =====
     const pmtRowsRaw = await fetchAllTableRowsPaginated({
       appId: "wuweb",
       objName: "web_services",
@@ -8055,10 +8621,10 @@ async function runMessages(messages, configIdOverride = null) {
   let ok = 0, fail = 0;
   
   // ⚠️ CRITICAL SECURITY: Kiểm tra xem có config_id hay không
-  // Nếu không có, chỉ xử lý phanmemmottrieu (legacy behavior)
+  // Nếu không có, chỉ xử lý csmbridge (legacy behavior)
   // Nếu có, dùng config đó
   let configToUse = null;
-  let domainConfigToUse = DOMAIN_OPTIONS["phanmemmottrieu"];
+  let domainConfigToUse = DOMAIN_OPTIONS["csmbridge"];
   
   if (configIdOverride) {
     try {
@@ -8066,7 +8632,7 @@ async function runMessages(messages, configIdOverride = null) {
       configToUse = findZaloConfigById(allConfigs, configIdOverride);
       if (configToUse) {
         console.log(`✅ [runMessages] Using config by override: config_id=${configIdOverride}`);
-        domainConfigToUse = DOMAIN_OPTIONS[configToUse.service_type === "lmkt" ? "lmkt" : "phanmemmottrieu"];
+        domainConfigToUse = DOMAIN_OPTIONS[configToUse.service_type === "lmkt" ? "lmkt" : "csmbridge"];
       } else {
         console.warn(`⚠️ [runMessages] Config override không tìm thấy: config_id=${configIdOverride}`);
       }
@@ -8074,7 +8640,7 @@ async function runMessages(messages, configIdOverride = null) {
       console.error(`❌ [runMessages] Error loading config:`, e.message);
     }
   } else {
-    console.warn(`⚠️ [runMessages] Không có config_id - chỉ xử lý phanmemmottrieu (legacy mode)`);
+    console.warn(`⚠️ [runMessages] Không có config_id - chỉ xử lý csmbridge (legacy mode)`);
   }
 
   if (configIdOverride && !configToUse) {
@@ -8099,7 +8665,7 @@ async function runMessages(messages, configIdOverride = null) {
       await processContent(msg, {
         app_id: derivedAppId,  // ✅ Use derived app_id from domain
         domain: domainConfigToUse.value,
-        domainKey: domainConfigToUse === DOMAIN_OPTIONS["lmkt"] ? "lmkt" : "phanmemmottrieu",
+        domainKey: domainConfigToUse === DOMAIN_OPTIONS["lmkt"] ? "lmkt" : "csmbridge",
         industry: configToUse?.service_type || "bat-dong-san",
         author: "Zalo Bot",
         config_id: configIdOverride || null  // ✅ Pass config_id to ensure proper config isolation
@@ -8475,7 +9041,7 @@ function refreshGlobalSettingsOptionsFromDefinitions() {
       return false;
     }
 
-    const currentDomain = domainSelect.value || 'phanmemmottrieu';
+    const currentDomain = domainSelect.value || 'csmbridge';
 
     const projectOptions = LMKT_PROJECT_DEFS
       .map(item => ({
@@ -8553,8 +9119,15 @@ function ensureGlobalSettingsPanel() {
     }
   });
   
-  // Set LMKT as default
-  domainSelect.value = "lmkt";
+  // Set default domain by current host/runtime to avoid pushing into wrong app.
+  const runtimeHost = (typeof window !== 'undefined' && window.location && window.location.hostname)
+    ? window.location.hostname
+    : '';
+  const runtimeDomainValue = runtimeHost || '';
+  const inferredRuntimeDomainKey = resolveDomainKeyFromValue(runtimeDomainValue)
+    || (runtimeHost.includes('h-holding') ? 'lmkt' : 'csmbridge');
+
+  domainSelect.value = inferredRuntimeDomainKey;
   industrySelect.value = "bat-dong-san";
   projectSelect.value = LMKT_PROJECT_DEFS[0]?.service_code || "destino-centro";
   
@@ -8578,21 +9151,139 @@ function ensureGlobalSettingsPanel() {
   loadBtn.textContent = t('load_categories');
   loadBtn.style.cssText = `padding:6px 10px;border:1px solid ${theme.border};border-radius:4px;background:${theme.bg};color:${theme.text};font-size:12px;cursor:pointer`;
 
+  const pushStructureBtn = document.createElement('button');
+  pushStructureBtn.id = 'btn-push-web-structure-4menus';
+  pushStructureBtn.textContent = ti('🚀 Đẩy cấu trúc 4 menu', '🚀 Push 4-menu structure', '🚀 推送4菜单结构');
+  pushStructureBtn.style.cssText = `padding:6px 10px;border:1px solid ${theme.border};border-radius:4px;background:${theme.primary};color:#fff;font-size:12px;cursor:pointer`;
+
+  const pushStatus = document.createElement('div');
+  pushStatus.id = 'push-web-structure-status';
+  pushStatus.style.cssText = `grid-column:1 / -1;font-size:12px;color:${theme.muted || theme.textSecondary};line-height:1.5;`;
+  pushStatus.textContent = ti(
+    'Sẵn sàng đẩy cấu trúc menu theo Domain/App hiện tại.',
+    'Ready to push menu structure using current Domain/App.',
+    '已准备好根据当前 Domain/App 推送菜单结构。'
+  );
+
+  const getRuntimeAppId = () => {
+    try {
+      const fromInitial = window?.__INITIAL_REACT_DATA__?.app_id;
+      if (typeof fromInitial === 'string' && fromInitial.trim()) return fromInitial.trim();
+    } catch (_) {}
+    return '';
+  };
+
+  const getPushTargetFromRuntime = () => {
+    const runtimeAppId = getRuntimeAppId();
+    const runtimeHost = (typeof window !== 'undefined' && window.location && window.location.hostname)
+      ? window.location.hostname
+      : '';
+    const selectedKey = domainSelect.value || 'csmbridge';
+    const selectedCfg = DOMAIN_OPTIONS[selectedKey] || DOMAIN_OPTIONS.csmbridge;
+
+    // Strong safety: when runtime app is known, prefer matching DOMAIN_OPTIONS by app_id.
+    if (runtimeAppId) {
+      const matchEntry = Object.entries(DOMAIN_OPTIONS).find(([, cfg]) => cfg?.app_id === runtimeAppId);
+      if (matchEntry) {
+        const [runtimeKey, runtimeCfg] = matchEntry;
+        return {
+          domainKey: runtimeKey,
+          appId: runtimeCfg.app_id,
+          domain: mergeRuntimeHostIntoDomainValue(runtimeCfg.value, runtimeHost),
+          source: 'runtime-app',
+        };
+      }
+    }
+
+    return {
+      domainKey: selectedKey,
+      appId: selectedCfg?.app_id || 'wuweb',
+      domain: mergeRuntimeHostIntoDomainValue(selectedCfg?.value || 'csmbridge.net,localhost:3333', runtimeHost),
+      source: 'selector',
+    };
+  };
+
   loadBtn.onclick = async () => {
-    const domainKey = domainSelect.value || 'phanmemmottrieu';
+    const domainKey = domainSelect.value || 'csmbridge';
     loadBtn.disabled = true;
+    pushStructureBtn.disabled = true;
     loadBtn.textContent = t('loading');
     try {
       await loadCategoriesFromWebServices(domainKey);
     } finally {
       loadBtn.disabled = false;
+      pushStructureBtn.disabled = false;
       loadBtn.textContent = t('load_categories');
+    }
+  };
+
+  pushStructureBtn.onclick = async () => {
+    const runner = window.pushWebStructure4Menus;
+    if (typeof runner !== 'function') {
+      const msg = ti(
+        '❌ Không tìm thấy window.pushWebStructure4Menus. Vui lòng nạp lại auto-lmkt.js mới nhất.',
+        '❌ window.pushWebStructure4Menus not found. Please reload latest auto-lmkt.js.',
+        '❌ 未找到 window.pushWebStructure4Menus，请重新加载最新 auto-lmkt.js。'
+      );
+      pushStatus.textContent = msg;
+      canhbao(msg, 6);
+      return;
+    }
+
+    const target = getPushTargetFromRuntime();
+    const domainKey = target.domainKey;
+    const appId = target.appId;
+    const domain = target.domain;
+    const sourceText = target.source === 'runtime-app'
+      ? ti('runtime app', 'runtime app', '运行时应用')
+      : ti('domain selector', 'domain selector', '域名选择器');
+
+    const oldText = pushStructureBtn.textContent;
+    pushStructureBtn.disabled = true;
+    loadBtn.disabled = true;
+    pushStructureBtn.textContent = ti('⏳ Đang đẩy...', '⏳ Pushing...', '⏳ 推送中...');
+    pushStatus.textContent = ti(
+      `Đang đẩy cấu trúc 4 menu cho ${domainKey} (${appId}) từ ${sourceText}...`,
+      `Pushing 4-menu structure for ${domainKey} (${appId}) from ${sourceText}...`,
+      `正在从 ${sourceText} 为 ${domainKey} (${appId}) 推送4菜单结构...`
+    );
+
+    try {
+      const result = await runner({ appId, domain });
+      const ok = Number(result?.ok || 0);
+      const fail = Number(result?.fail || 0);
+      const failDetails = Array.isArray(result?.failDetails) ? result.failDetails : [];
+      const skipped = Number(result?.skipped || 0);
+      const doneMsg = ti(
+        `✅ Đẩy xong cấu trúc 4 menu. Thành công: ${ok}, lỗi: ${fail}, giữ nguyên cũ: ${skipped}.`,
+        `✅ 4-menu structure pushed. Success: ${ok}, failed: ${fail}, preserved: ${skipped}.`,
+        `✅ 4菜单结构推送完成。成功：${ok}，失败：${fail}，保留旧结构：${skipped}。`
+      );
+      pushStatus.textContent = failDetails.length > 0
+        ? `${doneMsg} ${ti('Mở Console để xem failDetails.', 'Open Console to inspect failDetails.', '请在 Console 查看 failDetails。')}`
+        : doneMsg;
+      if (failDetails.length > 0) {
+        console.table(failDetails);
+      }
+      thongbao(doneMsg, 5);
+    } catch (err) {
+      const errMsg = ti(
+        `❌ Đẩy cấu trúc thất bại: ${err?.message || err}`,
+        `❌ Push failed: ${err?.message || err}`,
+        `❌ 推送失败：${err?.message || err}`
+      );
+      pushStatus.textContent = errMsg;
+      canhbao(errMsg, 6);
+    } finally {
+      pushStructureBtn.disabled = false;
+      loadBtn.disabled = false;
+      pushStructureBtn.textContent = oldText;
     }
   };
 
   // Append rows to grid container
   settingsContainer.append(domainRow, industryRow, projectRow);
-  settingsContainer.append(loadBtn);
+  settingsContainer.append(loadBtn, pushStructureBtn, pushStatus);
 
   const facebookCommonSection = document.createElement('div');
   facebookCommonSection.id = 'facebook-common-settings';
@@ -8706,7 +9397,7 @@ function getGlobalSettings() {
   const industrySelect = document.getElementById("global-industry-select");
   const projectSelect = document.getElementById("global-project-select");
 
-  const domainKey = domainSelect?.value || "phanmemmottrieu";
+  const domainKey = domainSelect?.value || "csmbridge";
   const isLmkt = domainKey === "lmkt";
 
   return {
@@ -10044,6 +10735,11 @@ async function testAiLaneExecuteLocalPlan(ctx, { message, attachments, onEvent }
   const decoder = new TextDecoder();
   let buffer = "";
   const events = [];
+  const sessionMemoryTelemetry = {
+    source: "",
+    cap: 0,
+    usedChars: 0
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -10068,10 +10764,23 @@ async function testAiLaneExecuteLocalPlan(ctx, { message, attachments, onEvent }
       }
       const evt = { event: eventName, data: parsed };
       events.push(evt);
+
+      if (parsed && typeof parsed === "object") {
+        const stage = String(parsed.stage || "").trim().toLowerCase();
+        if (stage === "context_memory" || stage === "request_complete") {
+          const source = String(parsed.sessionMemorySource || "").trim();
+          const cap = Number(parsed.sessionMemoryCap);
+          const used = Number(parsed.sessionMemoryUsedChars);
+          if (source) sessionMemoryTelemetry.source = source;
+          if (Number.isFinite(cap) && cap > 0) sessionMemoryTelemetry.cap = Math.floor(cap);
+          if (Number.isFinite(used) && used >= 0) sessionMemoryTelemetry.usedChars = Math.floor(used);
+        }
+      }
+
       if (typeof onEvent === "function") onEvent(evt);
     }
   }
-  return { events };
+  return { events, sessionMemoryTelemetry };
 }
 
 const AI_LANE_SEO_REQUIRED_FIELDS = [
@@ -11587,7 +12296,7 @@ async function ensureUI() {
     
     console.log(`[cleanupDupBtn] Global settings:`, globalSettings);
     
-    // ✅ Determine which field to use: LMKT uses Project, Phanmemmottrieu uses Industry
+    // ✅ Determine which field to use: LMKT uses Project, csmbridge uses Industry
     const isLmkt = globalSettings.domainKey === "lmkt";
     const serviceFieldName = isLmkt ? "project" : "industry";
     const serviceFieldValue = isLmkt ? globalSettings.project : globalSettings.industry;
@@ -11663,10 +12372,10 @@ async function ensureUI() {
       
       // Call cleanup function
       // For LMKT: use project as serviceType parameter
-      // For Phanmemmottrieu: use industry as serviceType parameter
+      // For csmbridge: use industry as serviceType parameter
       const cleanupResult = await cleanupDuplicatesByServiceType(
         selectedDomain,
-        selectedService,  // This is either project (LMKT) or industry (Phanmemmottrieu)
+        selectedService,  // This is either project (LMKT) or industry (csmbridge)
         selectedProject,
         ctx
       );
@@ -16739,7 +17448,7 @@ function ensureZaloMultiGroupUI(container) {
       .map(cb => cb.value);
 
     return {
-      domainKey: domainSelect?.value || "phanmemmottrieu",
+      domainKey: domainSelect?.value || "csmbridge",
       industry: industrySelect?.value || "bat-dong-san",
       project: projectSelect?.value || "",
       checkedFanpages,
@@ -16757,7 +17466,7 @@ function ensureZaloMultiGroupUI(container) {
     const keepOriginalCheckbox = document.getElementById("zalo-keep-original-content-checkbox");
 
     if (domainSelect) {
-      domainSelect.value = state.domainKey || "phanmemmottrieu";
+      domainSelect.value = state.domainKey || "csmbridge";
       domainSelect.dispatchEvent(new Event('change'));
     }
     if (industrySelect) industrySelect.value = state.industry || "bat-dong-san";
@@ -16825,7 +17534,7 @@ function ensureZaloMultiGroupUI(container) {
     // Ưu tiên dùng domain_key nếu có, fallback sang reverse mapping
     let domainKey = row.domain_key;
     if (!domainKey) {
-      domainKey = resolveDomainKeyFromValue(row.domain) || "phanmemmottrieu";
+      domainKey = resolveDomainKeyFromValue(row.domain) || "csmbridge";
     }
     
     const domainSelect = document.getElementById("global-domain-select");
@@ -18321,7 +19030,7 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
  * 
  * Cách hoạt động:
  *   - Kiểm tra window.location.hostname
- *   - Nếu là phanmemmottrieu → Trả về config phanmemmottrieu
+ *   - Nếu là csmbridge → Trả về config csmbridge
  *   - Nếu là h-holding hoặc lmkt → Trả về config lmkt
  *   - Nếu localhost → User sẽ chọn manual từ dropdown
  * 
@@ -18334,11 +19043,11 @@ function getDomainInfo() {
   if (hostname.includes("h-holding") || hostname.includes("lmkt")) {
     return DOMAIN_OPTIONS.lmkt;
   }
-  if (hostname.includes("phanmemmottrieu")
+  if (hostname.includes("csmbridge")
       || hostname.includes("csmbridge")
       || hostname === "localhost"
       || hostname === "127.0.0.1") {
-    return DOMAIN_OPTIONS.phanmemmottrieu;
+    return DOMAIN_OPTIONS.csmbridge;
   }
 
   return null;
@@ -18351,7 +19060,7 @@ function getDomainInfo() {
  * 
  * Input: 
  *   - "lmkt" → Trả về 6 dự án BĐS
- *   - "phanmemmottrieu" → Trả về 5 lĩnh vực
+ *   - "csmbridge" → Trả về 5 lĩnh vực
  * 
  * Output: Array of { slug, name, description, type, config }
  * 
@@ -18362,7 +19071,7 @@ function getDomainInfo() {
  *     ...
  *   ]
  * 
- *   Phanmemmottrieu: [
+ *   csmbridge: [
  *     { slug: "bat-dong-san", name: "Bất Động Sản", type: "industry", config: {...} },
  *     { slug: "phan-mem", name: "Phần Mềm", type: "industry", config: {...} },
  *     ...
@@ -18634,7 +19343,7 @@ USER REQUEST: ${userCustomPrompt || '(Không có yêu cầu bổ sung)'}
 }
 `;
   } else {
-    // Phanmemmottrieu: Lĩnh vực có config riêng
+    // csmbridge: Lĩnh vực có config riêng
     const config = categoryData.config || INDUSTRY_TYPES[categoryData.slug] || {};
     const role = config.prompt_role || "chuyên gia tư vấn dịch vụ";
     const style = config.prompt_style || "Rõ ràng, dễ hiểu, nhấn mạnh lợi ích";
@@ -18791,7 +19500,7 @@ USER REQUEST: ${userCustomPrompt || '(Không có yêu cầu bổ sung)'}
  * @param {string} categoryName - Tên lĩnh vực/dự án (VD: "Phần Mềm", "Destino Centro")
  * @param {string} description - Mô tả lĩnh vực/dự án
  * @param {string} prompt - Hướng dẫn của người dùng
- * @param {string} domainKey - Domain key (lmkt hoặc phanmemmottrieu)
+ * @param {string} domainKey - Domain key (lmkt hoặc csmbridge)
  * @param {object} categoryData - Category data object chứa slug, service_code, etc.
  */
 function getCategoryContentPrompt(categoryName, description, prompt, domainKey = '', categoryData = {}, creative = {}) {
@@ -19105,7 +19814,7 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
   const domainKey = resolveDomainKeyFromValue(ctx.domain) || "";
 
   const selectedCategoryData = contentData.selectedCategoryData || {};
-  const baseCategory = findCategoryTemplate(domainKey || 'phanmemmottrieu', categorySlug) || selectedCategoryData || {};
+  const baseCategory = findCategoryTemplate(domainKey || 'csmbridge', categorySlug) || selectedCategoryData || {};
   const baseConfig = baseCategory.config || {};
 
   const rowsBySlug = await ctx.helperApi.getTableData({
@@ -19350,7 +20059,7 @@ async function createServiceCategoryContent(opts = {}) {
 //   1. Kiểm tra UI đã tồn tại chưa
 //   2. Nếu có rồi → Trả về element hiện có
 //   3. Nếu chưa → Tạo UI mới gồm:
-//      - Domain dropdown (Chọn LMKT hoặc Phanmemmottrieu)
+//      - Domain dropdown (Chọn LMKT hoặc csmbridge)
 //      - Category dropdown (Tự động load theo domain)
 //      - Description preview (Hiển thị mô tả lĩnh vực)
 //      - Textarea (Nhập hướng dẫn custom)
@@ -19634,7 +20343,7 @@ async function ensureServiceContentUI() {
       note.innerHTML = ti("💡 <strong>LMKT:</strong> Danh mục chính là <strong>Dự án</strong>. Lĩnh vực bị khóa ở <strong>Bất động sản</strong>.", "💡 <strong>LMKT:</strong> Main category is <strong>Project</strong>. Industry is locked to <strong>Real Estate</strong>.", "💡 <strong>LMKT：</strong>主分类为<strong>项目</strong>，行业锁定为<strong>房地产</strong>。");
       infoContent.innerHTML = `<strong>🏢 ${ti('Tên miền', 'Domain', '域名')}:</strong> ${domainLabel} | <strong>🏗️ ${ti('Danh mục (Dự án)', 'Category (Project)', '分类（项目）')}:</strong> ${projectLabel} | <strong>🏢 ${ti('Lĩnh vực', 'Industry', '行业')}:</strong> ${industryLabel} (${ti('cố định', 'fixed', '固定')})`;
     } else {
-      note.innerHTML = ti("💡 <strong>Phanmemmottrieu:</strong> Danh mục chính là <strong>Lĩnh vực</strong>. Chọn ở <strong>Cài Đặt Chung</strong>.", "💡 <strong>Phanmemmottrieu:</strong> Main category is <strong>Industry</strong>. Choose it in <strong>General Settings</strong>.", "💡 <strong>Phanmemmottrieu：</strong>主分类为<strong>行业</strong>，请在<strong>常规设置</strong>中选择。");
+      note.innerHTML = ti("💡 <strong>csmbridge:</strong> Danh mục chính là <strong>Lĩnh vực</strong>. Chọn ở <strong>Cài Đặt Chung</strong>.", "💡 <strong>csmbridge:</strong> Main category is <strong>Industry</strong>. Choose it in <strong>General Settings</strong>.", "💡 <strong>csmbridge：</strong>主分类为<strong>行业</strong>，请在<strong>常规设置</strong>中选择。");
       infoContent.innerHTML = `<strong>🏢 ${ti('Tên miền', 'Domain', '域名')}:</strong> ${domainLabel} | <strong>🏢 ${ti('Danh mục (Lĩnh vực)', 'Category (Industry)', '分类（行业）')}:</strong> ${industryLabel}`;
     }
     
@@ -20327,7 +21036,7 @@ async function ensureServiceContentUI() {
  *   - industry: Lĩnh vực (slug)
  *   - project: Dự án (slug) - nếu LMKT
  *   - userPrompt: Hướng dẫn custom từ user
- *   - domainKey: lmkt | phanmemmottrieu
+ *   - domainKey: lmkt | csmbridge
  * 
  * Output: String prompt hoàn chỉnh cho AI
  * ========================================================
@@ -20347,7 +21056,7 @@ function createServiceDetailPostPrompt(opts = {}) {
     : (INDUSTRY_TYPES[industry]?.name || industry);
 
   const basePrompt = `
-Bạn là chuyên gia viết nội dung SEO cho website ${isLmkt ? 'BĐS LMKT' : 'Phanmemmottrieu'}.
+Bạn là chuyên gia viết nội dung SEO cho website ${isLmkt ? 'BĐS LMKT' : 'csmbridge'}.
 
 **NHIỆM VỤ: Tạo bài viết chi tiết**
 

@@ -163,7 +163,8 @@ func isPublicAPIPath(method, path string) bool {
 	switch path {
 	case "/login", "/refresh-token", "/register", "/create-default-data",
 		"/chat-history", "/chat-history-guest", "/chat-history-app",
-		"/chat-mark-read", "/chat-mark-read-guest", "/chat-mark-all-read", "/chat-mark-read-all":
+		"/chat-mark-read", "/chat-mark-read-guest", "/chat-mark-all-read", "/chat-mark-read-all",
+		"/traffic/analyze-frame":
 		return true
 	}
 	if strings.HasPrefix(path, "/monitoring") || strings.HasPrefix(path, "/ai-local") {
@@ -179,7 +180,7 @@ func isPublicAPIPath(method, path string) bool {
 // Handler does not require AuthUser; attach auth when credentials are present.
 func isOptionalAuthAPIPath(path string) bool {
 	switch path {
-	case "/scrape-web", "/execute-js-on-page":
+	case "/scrape-web", "/execute-js-on-page", "/traffic/analyze-frame":
 		return true
 	}
 	return false

@@ -19,6 +19,11 @@ import { usePreferencesStore } from "#src/store";
 export function useWebsiteMenu() {
   const { t, i18n } = useTranslation();
   const { changeLanguage } = usePreferencesStore();
+  const getPriority = (cat: SSRCategoryObject): number => {
+    const raw = (cat as any).attributes_priority;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : 999;
+  };
   // Lấy ngôn ngữ hiện tại từ i18n hoặc store
   React.useEffect(() => {
     function syncLangFromUrl() {
@@ -117,10 +122,14 @@ export function useWebsiteMenu() {
   };
 
   // Build service group menus (is_group_slug=true, group_slug='', is_service=true)
-  const serviceGroupMenus = ssrCategoryObjects.filter(isSSRGroupCategory).map((groupCat) => {
+  const serviceGroupMenus = ssrCategoryObjects
+    .filter(isSSRGroupCategory)
+    .sort((a, b) => getPriority(a) - getPriority(b))
+    .map((groupCat) => {
     // Lấy các service children cho group này (CHỈ service items, is_service=true)
     const children = ssrCategoryObjects
       .filter((cat) => cat.group_slug === groupCat.slug && !cat.is_group_slug && isService(cat))
+      .sort((a, b) => getPriority(a) - getPriority(b))
       .map((cat) => ({
         key: `/${cat.slug}`,
         label: getCategoryLabel(cat),
@@ -144,11 +153,90 @@ export function useWebsiteMenu() {
       children: (menu.children || []).filter((child) => !staticMenuKeys.has(child.key)),
     }));
 
+  const bySlug = new Map<string, SSRCategoryObject>();
+  ssrCategoryObjects.forEach((cat) => {
+    if (cat?.slug) bySlug.set(String(cat.slug), cat);
+  });
+
+  const buildChildrenFromSlugs = (slugs: string[]) => {
+    const seen = new Set<string>();
+    return slugs
+      .map((slug) => bySlug.get(slug))
+      .filter((cat): cat is SSRCategoryObject => !!cat && !!cat.slug && !cat.is_group_slug)
+      .filter((cat) => {
+        const key = `/${cat.slug}`;
+        if (seen.has(key) || staticMenuKeys.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => getPriority(a) - getPriority(b))
+      .map((cat) => ({
+        key: `/${cat.slug}`,
+        label: getCategoryLabel(cat),
+        path: buildPath(`/${cat.slug}`),
+        icon: iconMap[cat.attributes_icon ?? ''] || <DatabaseOutlined />,
+        children: [],
+      }));
+  };
+
+  const findGroupMenu = (slug: string) => {
+    return filteredServiceGroupMenus.find((m) => m.key === `/${slug}`);
+  };
+
+  const hasTargetMenuParents = [
+    'thong-ke-ket-qua-xo-so',
+    'cau-noi-kinh-doanh-online',
+  ].every((slug) => bySlug.has(slug));
+
+  const resolvedTargetMenus = (() => {
+    if (!hasTargetMenuParents) return null;
+
+    const lotteryParent = findGroupMenu('thong-ke-ket-qua-xo-so');
+    const bridgeParent = findGroupMenu('cau-noi-kinh-doanh-online');
+
+    const lotteryChildren: any[] = [];
+
+    const bridgeChildren = (() => {
+      const direct = bridgeParent?.children || [];
+      if (direct.length > 0) return direct;
+      // Legacy-compatible fallback: keep old categories but render under new bridge menu.
+      return buildChildrenFromSlugs([
+        'phan-mem',
+        'bat-dong-san',
+        'lam-dep-my-pham',
+        'cho-thue-xe',
+        'booking-online',
+      ]);
+    })();
+
+    return [
+      {
+        key: '/thong-ke-ket-qua-xo-so',
+        label: lotteryParent?.label || t('website.menu.lotteryStats', 'Thống Kê Kết Quả Xổ Số'),
+        path: lotteryParent?.path || buildPath('/thong-ke-ket-qua-xo-so'),
+        icon: lotteryParent?.icon || <DatabaseOutlined />,
+        children: lotteryChildren,
+      },
+      {
+        key: '/cau-noi-kinh-doanh-online',
+        label: bridgeParent?.label || t('website.menu.businessBridge', 'Cầu Nối Kinh Doanh Online'),
+        path: bridgeParent?.path || buildPath('/cau-noi-kinh-doanh-online'),
+        icon: bridgeParent?.icon || <ShoppingCartOutlined />,
+        children: bridgeChildren,
+      },
+    ];
+  })();
+
   const serviceMenuKeys = new Set<string>();
   filteredServiceGroupMenus.forEach((menu) => {
     serviceMenuKeys.add(menu.key);
     (menu.children || []).forEach((child) => serviceMenuKeys.add(child.key));
   });
+
+  const hasDynamicLotteryMenu =
+    serviceMenuKeys.has('/thong-ke-ket-qua-xo-so') ||
+    serviceMenuKeys.has('/thong-ke-xo-so') ||
+    serviceMenuKeys.has('/xo-so');
 
   console.log('📊 [Menu Stats]:', {
     totalCategories: ssrCategoryObjects.length,
@@ -170,14 +258,16 @@ export function useWebsiteMenu() {
       icon: <HomeOutlined />,
       children: [],
     },
-    ...filteredServiceGroupMenus,
-    {
-      key: "/xem-ngay",
-      label: t("website.menu.xemngay", "Xem Ngày"),
-      path: buildPath("/xem-ngay"),
-      icon: <CalendarOutlined />,
-      children: [],
-    },
+    ...(resolvedTargetMenus || filteredServiceGroupMenus),
+    ...(!hasDynamicLotteryMenu
+      ? [{
+          key: "/xem-ngay",
+          label: t("website.menu.xemngay", "Xem Ngày"),
+          path: buildPath("/xem-ngay"),
+          icon: <CalendarOutlined />,
+          children: [],
+        }]
+      : []),
     {
       key: "/lien-he",
       label: t("website.menu.contact", "Liên Hệ"),

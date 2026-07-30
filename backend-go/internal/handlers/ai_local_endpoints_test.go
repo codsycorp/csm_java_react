@@ -3,9 +3,11 @@ package handlers
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -293,6 +295,233 @@ func TestAiLocalTemplatePreviewFromSamplePdfContract(t *testing.T) {
 	}
 	if pdfURL, _ := result["pdfUrl"].(string); pdfURL == "" || pdfURL == "/" {
 		t.Fatalf("expected preview pdfUrl to be returned, got %#v", result["pdfUrl"])
+	}
+}
+
+func TestAiLocalTemplateTriggerBundleGenerationContract(t *testing.T) {
+	h := NewAiHandler(config.AppConfig{DataDir: t.TempDir()}, nil, nil)
+	resp := h.HandleAiLocal("/ai-local/report/render-template/trigger", map[string]any{
+		"triggerKey": "print_bao_gia_auto",
+		"reportDesignSpec": map[string]any{
+			"title": "BÁO GIÁ {reportNo}",
+			"header": []any{
+				map[string]any{"label": "Khách hàng", "token": "client.name"},
+				map[string]any{"label": "Ngày", "token": "reportDate"},
+			},
+			"table": map[string]any{
+				"headers": []any{"STT", "Mặt hàng", "Số lượng", "Đơn giá"},
+				"fields":  []any{"__index", "name", "qty", "price"},
+			},
+		},
+		"data": map[string]any{
+			"reportNo":   "BG-001",
+			"reportDate": "16/07/2026",
+			"client":     map[string]any{"name": "Công ty Demo"},
+			"items": []any{
+				map[string]any{"name": "Sản phẩm A", "qty": 2, "price": 1000},
+			},
+		},
+	})
+	result := getResultMap(t, mustGet(t, resp, "result"))
+	if success, _ := result["success"].(bool); !success {
+		t.Fatalf("expected trigger generation success=true, got %#v", result["success"])
+	}
+	bundle := getResultMap(t, result["triggerBundle"])
+	if key, _ := bundle["triggerKey"].(string); key != "print_bao_gia_auto" {
+		t.Fatalf("expected triggerKey=print_bao_gia_auto, got %#v", bundle["triggerKey"])
+	}
+	variableCount := 0
+	if variableIDsAny, ok := bundle["variableIds"].([]any); ok {
+		variableCount = len(variableIDsAny)
+	}
+	if variableIDs, ok := bundle["variableIds"].([]string); ok {
+		variableCount = len(variableIDs)
+	}
+	if variableCount == 0 {
+		t.Fatalf("expected variableIds to be generated, got %#v", bundle["variableIds"])
+	}
+	portable := getResultMap(t, bundle["portableDocument"])
+	if version, _ := portable["version"].(string); version == "" {
+		t.Fatalf("expected portableDocument.version, got %#v", portable["version"])
+	}
+	meta := getResultMap(t, portable["meta"])
+	if lang, _ := meta["language"].(string); lang != "en" && lang != "es" {
+		t.Fatalf("expected portableDocument.meta.language to match pdf-forge schema, got %#v", meta["language"])
+	}
+	exportInfo := getResultMap(t, portable["exportInfo"])
+	if _, ok := exportInfo["exportedAt"].(string); !ok {
+		t.Fatalf("expected portableDocument.exportInfo.exportedAt, got %#v", exportInfo["exportedAt"])
+	}
+	if sourceApp, _ := exportInfo["sourceApp"].(string); sourceApp == "" {
+		t.Fatalf("expected portableDocument.exportInfo.sourceApp, got %#v", exportInfo["sourceApp"])
+	}
+	trigger := getResultMap(t, bundle["trigger"])
+	if reportDB, _ := trigger["report_db"].(string); !strings.Contains(reportDB, "Array.isArray") {
+		t.Fatalf("expected report_db trigger body, got %#v", trigger["report_db"])
+	}
+	if pdfData, _ := trigger["pdf_data"].(string); !strings.Contains(pdfData, "payload.items") {
+		t.Fatalf("expected pdf_data trigger body, got %#v", trigger["pdf_data"])
+	}
+	if _, ok := bundle["fittedDesignSpec"].(map[string]any); !ok {
+		t.Fatalf("expected fittedDesignSpec, got %#v", bundle["fittedDesignSpec"])
+	}
+	injectables, ok := bundle["injectables"].([]map[string]any)
+	if !ok {
+		if rawAny, okAny := bundle["injectables"].([]any); okAny {
+			injectables = make([]map[string]any, 0, len(rawAny))
+			for _, item := range rawAny {
+				if m, okMap := item.(map[string]any); okMap {
+					injectables = append(injectables, m)
+				}
+			}
+		}
+	}
+	if len(injectables) == 0 {
+		t.Fatalf("expected injectables to be generated, got %#v", bundle["injectables"])
+	}
+	if dataType := strings.TrimSpace(fmt.Sprint(injectables[0]["dataType"])); dataType == "" {
+		t.Fatalf("expected injectables[*].dataType, got %#v", injectables[0]["dataType"])
+	}
+	designKit := getResultMap(t, bundle["designKit"])
+	if _, ok := designKit["theme"].(map[string]any); !ok {
+		t.Fatalf("expected designKit.theme, got %#v", designKit["theme"])
+	}
+}
+
+func TestAiLocalTemplateRenderIncludesTriggerBundleWhenRequested(t *testing.T) {
+	h := NewAiHandler(config.AppConfig{DataDir: t.TempDir()}, nil, nil)
+	resp := h.HandleAiLocal("/ai-local/report/render-template/preview", map[string]any{
+		"autoGenerateTrigger": true,
+		"saveToDisk":          false,
+		"returnBase64":        true,
+		"themeMode":           "dark",
+		"reportDesignSpec": map[string]any{
+			"title": "BÁO CÁO {reportNo}",
+			"table": map[string]any{
+				"headers": []any{"STT", "Tên", "Giá trị"},
+				"fields":  []any{"__index", "name", "value"},
+			},
+		},
+		"data": map[string]any{
+			"reportNo": "R-100",
+			"items": []any{
+				map[string]any{"name": "A", "value": "10"},
+			},
+		},
+	})
+	result := getResultMap(t, mustGet(t, resp, "result"))
+	if success, _ := result["success"].(bool); !success {
+		t.Fatalf("expected preview success=true, got %#v", result["success"])
+	}
+	bundle := getResultMap(t, result["triggerBundle"])
+	if _, ok := bundle["trigger"]; !ok {
+		t.Fatalf("expected trigger bundle in render response, got %#v", bundle)
+	}
+	designKit := getResultMap(t, bundle["designKit"])
+	if mode, _ := designKit["themeMode"].(string); mode != "dark" {
+		t.Fatalf("expected designKit.themeMode=dark, got %#v", designKit["themeMode"])
+	}
+	designSpec := getResultMap(t, result["designSpec"])
+	style := getResultMap(t, designSpec["style"])
+	if mode, _ := style["themeMode"].(string); mode != "dark" {
+		t.Fatalf("expected fitted designSpec.style.themeMode=dark, got %#v", style["themeMode"])
+	}
+}
+
+func TestAiLocalTemplateAutoTuneFromSampleContract(t *testing.T) {
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.SetMargins(12, 12, 12)
+	pdf.SetAutoPageBreak(true, 12)
+	pdf.AddPage()
+	pdf.SetFont("Helvetica", "B", 12)
+	pdf.CellFormat(0, 8, "BÁO GIÁ MẪU", "", 1, "C", false, 0, "")
+	pdf.SetFont("Helvetica", "", 10)
+	pdf.CellFormat(0, 5, "STT  Tên hàng  Số lượng  Đơn giá  Thành tiền", "", 1, "L", false, 0, "")
+	var sample bytes.Buffer
+	if err := pdf.Output(&sample); err != nil {
+		t.Fatalf("generate sample pdf failed: %v", err)
+	}
+
+	h := NewAiHandler(config.AppConfig{DataDir: t.TempDir()}, nil, nil)
+	resp := h.HandleAiLocal("/ai-local/report/render-template/preview", map[string]any{
+		"saveToDisk":         false,
+		"returnBase64":       true,
+		"autoTuneFromSample": true,
+		"samplePdfBase64":    base64.StdEncoding.EncodeToString(sample.Bytes()),
+		"reportDesignSpec": map[string]any{
+			"title": "BÁO GIÁ {reportNo}",
+			"table": map[string]any{
+				"headers": []any{"STT", "Tên hàng", "Số lượng", "Đơn giá", "Thành tiền"},
+				"fields":  []any{"__index", "name", "qty", "price", "amount"},
+			},
+		},
+		"data": map[string]any{
+			"reportNo": "BG-02",
+			"items": []any{
+				map[string]any{"name": "A", "qty": 1, "price": 100, "amount": 100},
+			},
+		},
+	})
+	result := getResultMap(t, mustGet(t, resp, "result"))
+	if success, _ := result["success"].(bool); !success {
+		t.Fatalf("expected preview success=true, got %#v", result["success"])
+	}
+	if _, ok := result["autoTuneReport"].(map[string]any); !ok {
+		t.Fatalf("expected autoTuneReport in response, got %#v", result["autoTuneReport"])
+	}
+	sampleAnalysis := getResultMap(t, result["samplePdfAnalysis"])
+	if _, ok := sampleAnalysis["layoutLocks"].(map[string]any); !ok {
+		t.Fatalf("expected sample layoutLocks, got %#v", sampleAnalysis["layoutLocks"])
+	}
+	designSpec := getResultMap(t, result["designSpec"])
+	if _, ok := designSpec["layoutLocks"].(map[string]any); !ok {
+		t.Fatalf("expected fitted designSpec.layoutLocks, got %#v", designSpec["layoutLocks"])
+	}
+}
+
+func TestAiLocalPdfToSystemTemplateContract(t *testing.T) {
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.SetMargins(12, 12, 12)
+	pdf.SetAutoPageBreak(true, 12)
+	pdf.AddPage()
+	pdf.SetFont("Helvetica", "B", 12)
+	pdf.CellFormat(0, 8, "BẢNG BÁO GIÁ SẢN PHẨM - KIÊM XÁC NHẬN ĐƠN HÀNG", "", 1, "C", false, 0, "")
+	pdf.SetFont("Helvetica", "", 10)
+	pdf.CellFormat(0, 5, "Kính gửi: Công ty A Số: BG-001", "", 1, "L", false, 0, "")
+	pdf.CellFormat(0, 5, "Địa chỉ: Hà Nội Ngày: 09/06/26", "", 1, "L", false, 0, "")
+	pdf.CellFormat(0, 5, "Người liên hệ: Mr X Hiệu lực đến: 14/06/2026", "", 1, "L", false, 0, "")
+	pdf.CellFormat(0, 5, "TT Tên sản phẩm / Quy cách Đơn vị C.Rộng C.Dài Số tấm K.Lượng Đơn giá (VNĐ) Thành tiền (VNĐ)", "", 1, "L", false, 0, "")
+	var sample bytes.Buffer
+	if err := pdf.Output(&sample); err != nil {
+		t.Fatalf("generate sample pdf failed: %v", err)
+	}
+
+	h := NewAiHandler(config.AppConfig{DataDir: t.TempDir()}, nil, nil)
+	resp := h.HandleAiLocal("/ai-local/report/pdf-to-system-template", map[string]any{
+		"triggerKey":      "print_bao_gia_auto",
+		"samplePdfBase64": base64.StdEncoding.EncodeToString(sample.Bytes()),
+	})
+	result := getResultMap(t, mustGet(t, resp, "result"))
+	if success, _ := result["success"].(bool); !success {
+		t.Fatalf("expected compile success=true, got %#v", result["success"])
+	}
+	if _, ok := result["systemTemplate"].(map[string]any); !ok {
+		t.Fatalf("expected systemTemplate, got %#v", result["systemTemplate"])
+	}
+	systemTemplate := getResultMap(t, result["systemTemplate"])
+	if _, ok := systemTemplate["renderArchetype"].(map[string]any); !ok {
+		t.Fatalf("expected systemTemplate.renderArchetype, got %#v", systemTemplate["renderArchetype"])
+	}
+	if _, ok := result["triggerBundle"].(map[string]any); !ok {
+		t.Fatalf("expected triggerBundle, got %#v", result["triggerBundle"])
+	}
+	if _, ok := result["qualityGate"].(map[string]any); !ok {
+		t.Fatalf("expected qualityGate, got %#v", result["qualityGate"])
+	}
+	if _, ok := result["accuracyChecklist"].([]string); !ok {
+		if _, okAny := result["accuracyChecklist"].([]any); !okAny {
+			t.Fatalf("expected accuracyChecklist, got %#v", result["accuracyChecklist"])
+		}
 	}
 }
 

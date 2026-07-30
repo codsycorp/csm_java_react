@@ -512,6 +512,8 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
             data: datas_report,
             reportDesignSpec: designSpec,
             templatePath: String(m_configs.report_name || "").trim() || undefined,
+            strictLayout: true,
+            autoTuneFromSample: false,
           },
           timeout: 180000,
           ignoreLoading: true,

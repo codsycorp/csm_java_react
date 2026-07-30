@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Full Traffic Monitor - Speed, Plate & Sign Detection</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.16.3/dist/ort.wasm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            margin: 0;
+        }
+        h2 { margin-bottom: 10px; color: #38bdf8; }
+        
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 15px;
+            background: #1e293b;
+            padding: 10px 20px;
+            border-radius: 8px;
+            align-items: center;
+        }
+        .status-chip {
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            color: #cbd5e1;
+            background: rgba(15, 23, 42, 0.65);
+        }
+        .status-chip.ok {
+            color: #86efac;
+            border-color: rgba(34, 197, 94, 0.6);
+        }
+        .status-chip.warn {
+            color: #fbbf24;
+            border-color: rgba(245, 158, 11, 0.6);
+        }
+        .status-chip.bad {
+            color: #fca5a5;
+            border-color: rgba(239, 68, 68, 0.65);
+        }
+        .btn {
+            background: #0284c7;
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        .btn:hover { background: #0369a1; }
+        input[type="file"] { display: none; }
+
+        .container {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.6);
+            background: #000;
+        }
+        video, canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 640px;
+            height: 480px;
+            object-fit: cover;
+        }
+        #status-box {
+            margin-top: 15px;
+            width: 610px;
+            padding: 12px 15px;
+            border-radius: 8px;
+            background: #1e293b;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 13px;
+            border-left: 4px solid #0284c7;
+            word-wrap: break-word;
+        }
+        #result-box {
+            margin-top: 10px;
+            width: 610px;
+            padding: 10px 15px;
+            border-radius: 8px;
+            background: #064e3b;
+            color: #6ee7b7;
+            font-size: 15px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Hệ Thống AI Giám Sát Giao Thông & Biển Số Realtime</h2>
+
+    <div class="controls">
+        <button class="btn" onclick="useWebcam()">🎥 Chuyển Webcam</button>
+        <label class="btn" for="video-upload">📁 Tải Video MP4 Test</label>
+        <input type="file" id="video-upload" accept="video/mp4,video/mkv" onchange="loadVideoFile(event)">
+        <span id="auth-chip" class="status-chip warn">OIDC: checking...</span>
+        <span id="ocr-chip" class="status-chip warn">OCR: loading...</span>
+        <span id="api-chip" class="status-chip warn">API: standby</span>
+    </div>
+
+    <div class="container">
+        <video id="media-stream" autoplay playsinline muted loop width="640" height="480"></video>
+        <canvas id="canvas" width="640" height="480"></canvas>
+    </div>
+
+    <div id="status-box">Đang khởi tạo hệ thống...</div>
+    <div id="result-box">Kết quả OCR từ Go Backend: <span id="ocr-text">Chờ quét...</span></div>
+
+<script>
+let yoloSession = null;
+const mediaElement = document.getElementById('media-stream');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const statusBox = document.getElementById('status-box');
+const ocrText = document.getElementById('ocr-text');
+const authChip = document.getElementById('auth-chip');
+const ocrChip = document.getElementById('ocr-chip');
+const apiChip = document.getElementById('api-chip');
+const API_ENDPOINTS = [
+    { url: '/api/traffic/analyze-frame', requiresAuth: true },
+    { url: 'http://localhost:9999/api/traffic/analyze-frame', requiresAuth: false },
+    { url: 'http://127.0.0.1:9999/api/traffic/analyze-frame', requiresAuth: false }
+];
+const LANE_COUNT = 3;
+let lastBackendSync = 0;
+let latestAlerts = [];
+let preferredApiEndpointIndex = 0;
+let authReady = false;
+const endpointBlockedUntil = new Map();
+let lastMissingTokenLogAt = 0;
+let ocrWorkerPromise = null;
+let ocrReady = false;
+const plateOCRState = new Map();
+
+function setChip(chipEl, text, level) {
+    if (!chipEl) return;
+    chipEl.classList.remove('ok', 'warn', 'bad');
+    chipEl.classList.add(level || 'warn');
+    chipEl.innerText = text;
+}
+
+function updateRuntimeChips() {
+    const hasToken = !!readStoredToken();
+    setChip(authChip, hasToken ? 'OIDC: token ok' : 'OIDC: missing', hasToken ? 'ok' : 'warn');
+    setChip(ocrChip, ocrReady ? 'OCR: ready' : 'OCR: loading', ocrReady ? 'ok' : 'warn');
+}
+
+// Bộ nhớ Tracking
+const trackerMap = new Map();
+let nextTrackId = 1;
+
+// 1. Kích thước tiêu chuẩn ngoài đời thực (mét) để Homography đo tốc độ
+const VEHICLE_REAL_SIZES = {
+    'car': { width: 1.8, length: 4.5 },
+    'motorcycle': { width: 0.8, length: 2.0 },
+    'bus': { width: 2.5, length: 12.0 },
+    'truck': { width: 2.4, length: 8.0 }
+};
+
+// 2. Các Lớp Giao Thông Cần Nhận Diện
+const TRAFFIC_CLASSES = {
+    2: { name: 'Ô tô', type: 'car', category: 'vehicle' },
+    3: { name: 'Xe máy', type: 'motorcycle', category: 'vehicle' },
+    5: { name: 'Xe khách', type: 'bus', category: 'vehicle' },
+    7: { name: 'Xe tải', type: 'truck', category: 'vehicle' },
+    9: { name: 'Đèn giao thông', type: 'traffic_light', category: 'sign' },
+    11: { name: 'Biển STOP', type: 'stop', category: 'sign' }
+};
+
+function log(msg) {
+    console.log(msg);
+    statusBox.innerText = msg;
+}
+
+async function init() {
+    try {
+        ort.env.wasm.numThreads = 1;
+        updateRuntimeChips();
+        initPlateOCR();
+        await useWebcam();
+
+        log("Đang nạp mô hình ONNX yolov8n.onnx...");
+        const response = await fetch('/yolov8n.onnx');
+        if (!response.ok) throw new Error(`Không tìm thấy file /yolov8n.onnx (HTTP ${response.status})`);
+        const modelBuffer = await response.arrayBuffer();
+
+        log("Đang khởi tạo Engine AI ONNX...");
+        yoloSession = await ort.InferenceSession.create(modelBuffer);
+
+        log("✅ Hệ thống đã sẵn sàng! Đang phát hiện Xe, Tốc độ, Biển số & Biển báo...");
+        requestAnimationFrame(processFrame);
+
+    } catch (err) {
+        log(`❌ Lỗi khởi tạo: ${err.message || err}`);
+        console.error("Lỗi chi tiết:", err);
+    }
+}
+
+async function useWebcam() {
+    log("Đang kích hoạt Webcam...");
+    mediaElement.pause();
+    mediaElement.src = "";
+    
+    const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: 'user' }
+    });
+    mediaElement.srcObject = stream;
+    await mediaElement.play();
+    log("🎥 Đã bật Webcam!");
+}
+
+function loadVideoFile(event) {
+    const file = event.target.files[0];
+    if (file) {
+        log(`Đang nạp video test: ${file.name}...`);
+        if (mediaElement.srcObject) {
+            mediaElement.srcObject.getTracks().forEach(track => track.stop());
+            mediaElement.srcObject = null;
+        }
+        mediaElement.src = URL.createObjectURL(file);
+        mediaElement.play();
+        log(`🎬 Đang phát video file: ${file.name}`);
+    }
+}
+
+function initPlateOCR() {
+    if (!window.Tesseract) {
+        log('⚠ Khong tim thay Tesseract.js, he thong dung bien so tam');
+        return;
+    }
+    if (!ocrWorkerPromise) {
+        ocrWorkerPromise = (async () => {
+            const worker = await window.Tesseract.createWorker('eng');
+            ocrReady = true;
+            updateRuntimeChips();
+            return worker;
+        })().catch((err) => {
+            console.warn('Khoi tao OCR worker that bai:', err);
+            ocrReady = false;
+            setChip(ocrChip, 'OCR: failed', 'bad');
+            return null;
+        });
+    }
+}
+
+async function processFrame() {
+    if (!yoloSession || mediaElement.paused || mediaElement.ended) {
+        requestAnimationFrame(processFrame);
+        return;
+    }
+
+    try {
+        const inputTensor = await preprocess(mediaElement);
+        const outputs = await yoloSession.run({ images: inputTensor });
+        const outputTensor = outputs.images || Object.values(outputs)[0];
+
+        const rawDetections = decodeYOLOv8(outputTensor.data, outputTensor.dims);
+        const trackedDetections = updateTrackingAndSpeed(rawDetections);
+
+        await syncDetectionsToBackend(trackedDetections);
+        
+        renderDetections(trackedDetections);
+
+    } catch (err) {
+        console.error("Lỗi Inference Frame:", err);
+    }
+
+    requestAnimationFrame(processFrame);
+}
+
+async function preprocess(videoElement) {
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = 640;
+    tempCanvas.height = 640;
+    const tempCtx = tempCanvas.getContext('2d');
+    
+    tempCtx.drawImage(videoElement, 0, 0, 640, 640);
+    const imgData = tempCtx.getImageData(0, 0, 640, 640);
+    const pixels = imgData.data;
+
+    const float32Data = new Float32Array(3 * 640 * 640);
+
+    for (let i = 0; i < 640 * 640; i++) {
+        float32Data[i] = pixels[i * 4] / 255.0;                   // Red
+        float32Data[640 * 640 + i] = pixels[i * 4 + 1] / 255.0;   // Green
+        float32Data[2 * 640 * 640 + i] = pixels[i * 4 + 2] / 255.0;// Blue
+    }
+
+    return new ort.Tensor('float32', float32Data, [1, 3, 640, 640]);
+}
+
+function decodeYOLOv8(data, dims) {
+    const numChannels = dims[1]; 
+    const numAnchors = dims[2];  
+    const boxes = [];
+    const confThreshold = 0.35;
+
+    for (let i = 0; i < numAnchors; i++) {
+        let maxScore = 0;
+        let classId = -1;
+
+        for (let c = 0; c < 80; c++) {
+            const score = data[(4 + c) * numAnchors + i];
+            if (score > maxScore) {
+                maxScore = score;
+                classId = c;
+            }
+        }
+
+        if (maxScore >= confThreshold && TRAFFIC_CLASSES[classId]) {
+            const xc = data[0 * numAnchors + i];
+            const yc = data[1 * numAnchors + i];
+            const w = data[2 * numAnchors + i];
+            const h = data[3 * numAnchors + i];
+
+            boxes.push({
+                x: Math.max(0, xc - w / 2),
+                y: Math.max(0, (yc - h / 2) * (480 / 640)),
+                w: w,
+                h: h * (480 / 640),
+                classId: classId,
+                meta: TRAFFIC_CLASSES[classId],
+                score: maxScore
+            });
+        }
+    }
+    return applyNMS(boxes, 0.45);
+}
+
+function applyNMS(boxes, iouThreshold) {
+    boxes.sort((a, b) => b.score - a.score);
+    const result = [];
+    const selected = new Array(boxes.length).fill(true);
+
+    for (let i = 0; i < boxes.length; i++) {
+        if (!selected[i]) continue;
+        result.push(boxes[i]);
+
+        for (let j = i + 1; j < boxes.length; j++) {
+            if (!selected[j]) continue;
+            if (calculateIoU(boxes[i], boxes[j]) > iouThreshold) {
+                selected[j] = false;
+            }
+        }
+    }
+    return result;
+}
+
+function calculateIoU(boxA, boxB) {
+    const xA = Math.max(boxA.x, boxB.x);
+    const yA = Math.max(boxA.y, boxB.y);
+    const xB = Math.min(boxA.x + boxA.w, boxB.x + boxB.w);
+    const yB = Math.min(boxA.y + boxA.h, boxB.y + boxB.h);
+    const interArea = Math.max(0, xB - xA) * Math.max(0, yB - yA);
+    return interArea / (boxA.w * boxA.h + boxB.w * boxB.h - interArea);
+}
+
+// 📐 THUẬT TOÁN TÍNH TỐC ĐỘ THEO TỪNG LOẠI XE
+function updateTrackingAndSpeed(detections) {
+    const now = performance.now();
+    const updatedDetections = [];
+
+    detections.forEach(det => {
+        const cx = det.x + det.w / 2;
+        const cy = det.y + det.h; 
+        let matchedId = null;
+        let minDistance = 60; 
+
+        trackerMap.forEach((val, id) => {
+            const dist = Math.hypot(cx - val.lastCx, cy - val.lastCy);
+            if (dist < minDistance && val.classId === det.classId) {
+                minDistance = dist;
+                matchedId = id;
+            }
+        });
+
+        if (matchedId === null) {
+            matchedId = nextTrackId++;
+            trackerMap.set(matchedId, { lastCx: cx, lastCy: cy, lastTime: now, speed: 0, classId: det.classId });
+        } else {
+            const track = trackerMap.get(matchedId);
+            const dt = (now - track.lastTime) / 1000.0;
+
+            if (dt > 0.08) {
+                const dPixels = Math.hypot(cx - track.lastCx, cy - track.lastCy);
+                const depthFactor = 1.0 + (cy / 480.0) * 1.5; 
+                const realSize = VEHICLE_REAL_SIZES[det.meta.type] || { width: 1.8 };
+                const metersPerPixel = (realSize.width / Math.max(10, det.w)) * depthFactor;
+
+                const distanceMeters = dPixels * metersPerPixel;
+                const calculatedSpeedKmh = (distanceMeters / dt) * 3.6;
+
+                if (calculatedSpeedKmh < 150) {
+                    track.speed = track.speed * 0.75 + calculatedSpeedKmh * 0.25;
+                }
+
+                track.lastCx = cx;
+                track.lastCy = cy;
+                track.lastTime = now;
+            }
+        }
+
+        det.trackId = matchedId;
+        det.speed = trackerMap.get(matchedId).speed;
+        det.centerX = cx;
+        det.centerY = cy;
+        det.centerXNorm = cx / 640;
+        det.centerYNorm = cy / 480;
+        det.laneId = inferLaneID(det.centerXNorm);
+        const cachedPlate = getCachedPlateText(matchedId);
+        det.plate = cachedPlate || `V${String(matchedId).padStart(4, '0')}`;
+        updatedDetections.push(det);
+    });
+
+    return updatedDetections;
+}
+
+function inferLaneID(centerXNorm) {
+    const lane = Math.min(LANE_COUNT, Math.max(1, Math.floor(centerXNorm * LANE_COUNT) + 1));
+    return `lane-${lane}`;
+}
+
+// 🔍 STAGE 2: THUẬT TOÁN ĐỊNH VỊ BIỂN SỐ XE THỰC TẾ (License Plate Localization)
+function detectLicensePlateBox(vX, vY, vW, vH) {
+    // Vùng chứa biển số thường nằm ở 40% phía dưới của xe
+    const pX = vX + vW * 0.15;
+    const pY = vY + vH * 0.55;
+    const pW = vW * 0.70;
+    const pH = vH * 0.40;
+
+    return {
+        x: pX,
+        y: pY,
+        w: pW,
+        h: pH
+    };
+}
+
+// 🎨 VẼ KHUNG NHẬN DIỆN & HIỂN THỊ
+function renderDetections(detections) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawLaneOverlay();
+
+    detections.forEach(det => {
+        const isVehicle = det.meta.category === 'vehicle';
+        const isSign = det.meta.category === 'sign';
+
+        // 1. KHUNG LOẠI XE (Đỏ)
+        ctx.strokeStyle = isVehicle ? '#ef4444' : '#f59e0b';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(det.x, det.y, det.w, det.h);
+
+        ctx.fillStyle = isVehicle ? '#ef4444' : '#f59e0b';
+        ctx.font = 'bold 14px sans-serif';
+
+        let labelText = `${det.meta.name} #${det.trackId}`;
+
+        if (isVehicle) {
+            // 2. HIỂN THỊ TỐC ĐỘ ($km/h$)
+            labelText += ` | ${det.speed.toFixed(1)} km/h | ${det.laneId}`;
+            ctx.fillText(labelText, det.x, det.y > 20 ? det.y - 8 : 20);
+
+            // 3. KHUNG BIỂN SỐ XE (Xanh Lá) - Khoanh vùng riêng cho biển số
+            const plateBox = detectLicensePlateBox(det.x, det.y, det.w, det.h);
+            
+            ctx.strokeStyle = '#10b981'; // Màu xanh lá nổi bật cho Biển Số
+            ctx.lineWidth = 2;
+            ctx.strokeRect(plateBox.x, plateBox.y, plateBox.w, plateBox.h);
+
+            ctx.fillStyle = '#10b981';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillText(`BS: ${det.plate}`, plateBox.x, plateBox.y - 4);
+
+            schedulePlateOCR(det.trackId, plateBox);
+
+        } else if (isSign) {
+            // 4. HIỂN THỊ BIỂN BÁO GIAO THÔNG
+            labelText += ` [BIỂN BÁO:${det.laneId}]`;
+            ctx.fillText(labelText, det.x, det.y > 20 ? det.y - 8 : 20);
+        }
+    });
+
+    drawAlertsOverlay(latestAlerts);
+}
+
+function getCachedPlateText(trackId) {
+    const state = plateOCRState.get(String(trackId));
+    if (!state || !state.text) return '';
+    return state.text;
+}
+
+function preprocessPlateForOCR(sourceCanvas) {
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = sourceCanvas.width;
+    outCanvas.height = sourceCanvas.height;
+    const outCtx = outCanvas.getContext('2d');
+    outCtx.drawImage(sourceCanvas, 0, 0);
+
+    const img = outCtx.getImageData(0, 0, outCanvas.width, outCanvas.height);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+        const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        const bw = gray > 140 ? 255 : 0;
+        d[i] = bw;
+        d[i + 1] = bw;
+        d[i + 2] = bw;
+    }
+    outCtx.putImageData(img, 0, 0);
+    return outCanvas;
+}
+
+function normalizePlateText(raw) {
+    if (!raw) return '';
+    const cleaned = raw
+        .toUpperCase()
+        .replace(/\s+/g, '')
+        .replace(/[^A-Z0-9.-]/g, '');
+    if (cleaned.length < 6) return '';
+    return cleaned;
+}
+
+async function schedulePlateOCR(trackId, plateBox) {
+    if (!ocrReady || !ocrWorkerPromise) return;
+    if (!plateBox || plateBox.w < 26 || plateBox.h < 12) return;
+
+    const key = String(trackId || 'unknown');
+    const now = Date.now();
+    const state = plateOCRState.get(key) || { lastAt: 0, inflight: false, text: '' };
+
+    if (state.inflight) return;
+    if (now - state.lastAt < 1800) return;
+
+    state.inflight = true;
+    state.lastAt = now;
+    plateOCRState.set(key, state);
+
+    try {
+        const cropCanvas = document.createElement('canvas');
+        cropCanvas.width = Math.max(64, Math.round(plateBox.w * 2));
+        cropCanvas.height = Math.max(24, Math.round(plateBox.h * 2));
+        const cropCtx = cropCanvas.getContext('2d');
+        cropCtx.drawImage(
+            mediaElement,
+            Math.max(0, plateBox.x),
+            Math.max(0, plateBox.y),
+            Math.max(1, plateBox.w),
+            Math.max(1, plateBox.h),
+            0,
+            0,
+            cropCanvas.width,
+            cropCanvas.height
+        );
+
+        const prepared = preprocessPlateForOCR(cropCanvas);
+        const worker = await ocrWorkerPromise;
+        if (!worker) return;
+
+        const result = await worker.recognize(prepared);
+        const text = normalizePlateText(result?.data?.text || '');
+        if (text) {
+            state.text = text;
+            plateOCRState.set(key, state);
+        }
+    } catch (err) {
+        console.warn('OCR bien so that bai:', err);
+    } finally {
+        state.inflight = false;
+        plateOCRState.set(key, state);
+    }
+}
+
+function drawLaneOverlay() {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.55)';
+    ctx.fillStyle = 'rgba(56, 189, 248, 0.85)';
+    ctx.lineWidth = 2;
+    ctx.font = 'bold 12px sans-serif';
+    for (let i = 1; i < LANE_COUNT; i++) {
+        const x = (640 / LANE_COUNT) * i;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, 480);
+        ctx.stroke();
+    }
+    for (let i = 0; i < LANE_COUNT; i++) {
+        ctx.fillText(`Lane ${i + 1}`, i * (640 / LANE_COUNT) + 8, 18);
+    }
+    ctx.restore();
+}
+
+function drawAlertsOverlay(alerts) {
+    if (!alerts || alerts.length === 0) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(220, 38, 38, 0.9)';
+    ctx.font = 'bold 16px sans-serif';
+    const topAlerts = alerts.slice(0, 2);
+    topAlerts.forEach((a, i) => {
+        const msg = a.message || a.code || 'CANH BAO';
+        ctx.fillText(`⚠ ${msg}`, 10, 460 - (topAlerts.length - 1 - i) * 20);
+    });
+    ctx.restore();
+}
+
+async function syncDetectionsToBackend(detections) {
+    const now = Date.now();
+    if (now - lastBackendSync < 700) return;
+    lastBackendSync = now;
+
+    const payloadDetections = detections.map((d) => ({
+        trackId: String(d.trackId || ''),
+        category: d.meta.category,
+        vehicleType: d.meta.category === 'vehicle' ? d.meta.type : '',
+        signType: d.meta.category === 'sign' ? d.meta.type : '',
+        speedKmh: Number((d.speed || 0).toFixed(2)),
+        currentSpeed: Number((d.speed || 0).toFixed(2)),
+        plate: d.plate || '',
+        confidence: Number((d.score || 0).toFixed(3)),
+        laneId: d.laneId,
+        bbox: {
+            centerXNorm: Number(d.centerXNorm.toFixed(4)),
+            centerYNorm: Number(d.centerYNorm.toFixed(4)),
+            xNorm: Number((d.x / 640).toFixed(4)),
+            yNorm: Number((d.y / 480).toFixed(4)),
+            wNorm: Number((d.w / 640).toFixed(4)),
+            hNorm: Number((d.h / 480).toFixed(4))
+        }
+    }));
+
+    try {
+        const data = await postTrafficPayload({
+            cameraId: 'cam-demo-01',
+            laneCount: LANE_COUNT,
+            detections: payloadDetections,
+            ts: now
+        });
+        if (!data) return;
+
+        latestAlerts = Array.isArray(data.alerts) ? data.alerts : [];
+
+        const speedWarnings = latestAlerts.filter((a) => a.code === 'OVER_SPEED').length;
+        const stopWarnings = latestAlerts.filter((a) => a.code === 'STOP_SIGN_VIOLATION').length;
+        const vehicleCount = (data.vehicles || []).length;
+        const signCount = (data.signs || []).length;
+
+        ocrText.innerText = `Xe: ${vehicleCount} | Bien bao: ${signCount} | Vuot toc do: ${speedWarnings} | Vi pham STOP: ${stopWarnings}`;
+    } catch (err) {
+        console.warn('Khong goi duoc backend traffic API:', err);
+    }
+}
+
+function readPersistedDocAssemblyAuth() {
+    try {
+        const raw = localStorage.getItem('doc-assembly-auth') || sessionStorage.getItem('doc-assembly-auth') || '';
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        const state = parsed?.state || parsed;
+        if (!state || typeof state !== 'object') return null;
+        return {
+            token: typeof state.token === 'string' ? state.token : '',
+            refreshToken: typeof state.refreshToken === 'string' ? state.refreshToken : ''
+        };
+    } catch (e) {
+        console.warn('Khong doc duoc doc-assembly-auth:', e);
+        return null;
+    }
+}
+
+function buildAuthHeaders() {
+    const headers = { 'Content-Type': 'application/json' };
+    try {
+        const persisted = readPersistedDocAssemblyAuth();
+        const token = (persisted && persisted.token)
+            || sessionStorage.getItem('csm-token')
+            || localStorage.getItem('csm-token')
+            || '';
+        const refreshToken = (persisted && persisted.refreshToken)
+            || sessionStorage.getItem('refreshToken')
+            || localStorage.getItem('refreshToken')
+            || '';
+        if (token) {
+            headers['csm-token'] = token;
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+        if (refreshToken) {
+            headers['X-Refresh-Token'] = refreshToken;
+        }
+    } catch (e) {
+        console.warn('Khong doc duoc token tu browser storage:', e);
+    }
+    return headers;
+}
+
+function readStoredToken() {
+    try {
+        const persisted = readPersistedDocAssemblyAuth();
+        return (persisted && persisted.token)
+            || sessionStorage.getItem('csm-token')
+            || localStorage.getItem('csm-token')
+            || '';
+    } catch (e) {
+        return '';
+    }
+}
+
+async function ensureTrafficAuth(force) {
+    const hasToken = !!readStoredToken();
+    authReady = hasToken;
+    updateRuntimeChips();
+    if (force && !hasToken) {
+        const now = Date.now();
+        if (now - lastMissingTokenLogAt > 30000) {
+            log('⚠ Chua co token OIDC trong doc-assembly-auth, vui long dang nhap tu man hinh Login cua app');
+            lastMissingTokenLogAt = now;
+        }
+    }
+    return hasToken;
+}
+
+async function postTrafficPayload(payload) {
+    const now = Date.now();
+    const hasToken = await ensureTrafficAuth(false);
+    const candidates = hasToken
+        ? API_ENDPOINTS
+        : API_ENDPOINTS.filter((e) => !e.requiresAuth);
+
+    const preferred = API_ENDPOINTS[preferredApiEndpointIndex];
+    const orderedEndpoints = (preferred && candidates.some((e) => e.url === preferred.url))
+        ? [preferred, ...candidates.filter((e) => e.url !== preferred.url)]
+        : candidates;
+
+    if (orderedEndpoints.length === 0) {
+        log('⚠ Chua co endpoint phu hop de goi traffic API');
+        return null;
+    }
+
+    let headers = buildAuthHeaders();
+
+    for (let i = 0; i < orderedEndpoints.length; i++) {
+        const endpoint = orderedEndpoints[i].url;
+        const blockedUntil = endpointBlockedUntil.get(endpoint) || 0;
+        if (now < blockedUntil) {
+            continue;
+        }
+        try {
+            const resp = await fetch(endpoint, {
+                method: 'POST',
+                headers,
+                credentials: 'include',
+                body: JSON.stringify(payload)
+            });
+            if (resp.ok) {
+                preferredApiEndpointIndex = API_ENDPOINTS.findIndex((e) => e.url === endpoint);
+                setChip(apiChip, `API: ${new URL(endpoint, window.location.href).host || 'same-origin'} ok`, 'ok');
+                return await resp.json();
+            }
+            if (resp.status === 401) {
+                endpointBlockedUntil.set(endpoint, Date.now() + 60 * 1000);
+                setChip(apiChip, `API: 401 ${new URL(endpoint, window.location.href).host || 'same-origin'}`, 'bad');
+                const hasAuth = await ensureTrafficAuth(true);
+                if (hasAuth) {
+                    headers = buildAuthHeaders();
+                    const retryResp = await fetch(endpoint, {
+                        method: 'POST',
+                        headers,
+                        credentials: 'include',
+                        body: JSON.stringify(payload)
+                    });
+                    if (retryResp.ok) {
+                        endpointBlockedUntil.delete(endpoint);
+                        preferredApiEndpointIndex = API_ENDPOINTS.findIndex((e) => e.url === endpoint);
+                        setChip(apiChip, `API: ${new URL(endpoint, window.location.href).host || 'same-origin'} ok`, 'ok');
+                        return await retryResp.json();
+                    }
+                }
+                continue;
+            }
+            if (resp.status !== 401 && resp.status !== 404) {
+                log(`⚠ API cảnh báo trả về lỗi ${resp.status} tại ${endpoint}`);
+                setChip(apiChip, `API: ${resp.status}`, 'warn');
+            }
+        } catch (err) {
+            console.warn(`Loi goi ${endpoint}:`, err);
+            setChip(apiChip, 'API: network err', 'bad');
+        }
+    }
+
+    log('⚠ Khong ket noi duoc traffic API (da thu /api va :9999)');
+    setChip(apiChip, 'API: unavailable', 'bad');
+    return null;
+}
+
+window.onload = init;
+</script>
+</body>
+</html>

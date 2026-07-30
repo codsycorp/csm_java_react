@@ -30,6 +30,7 @@ type ServicePost = {
   title: string;
   slug?: string;
   excerpt?: string;
+  content?: string;
   thumbnail?: string;
   serviceType: string;
   category?: string;
@@ -95,6 +96,19 @@ const generatePlaceholder = (text: string, bgColor: string = '1890ff') => {
     <text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="white" font-family="Arial, sans-serif" font-size="16" font-weight="600">${text}</text>
   </svg>`;
   return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+};
+
+const sanitizeHomeHtml = (html?: string) => {
+  if (!html) return '';
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return html;
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    doc.querySelectorAll('script,iframe,object,embed').forEach((n) => n.remove());
+    return doc.body.innerHTML;
+  } catch {
+    return html;
+  }
 };
 
 export default function WuHome() {
@@ -338,6 +352,7 @@ export default function WuHome() {
   // State cho sản phẩm nổi bật và đặc biệt lấy từ API hoặc mock
   const [featuredSoftwarePosts, setFeaturedSoftwarePosts] = useState<ServicePost[]>([]);
   const [specialSoftwarePosts, setSpecialSoftwarePosts] = useState<ServicePost[]>([]);
+  const [homeCmsContent, setHomeCmsContent] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [featuredPage, setFeaturedPage] = useState(1);
@@ -386,6 +401,7 @@ export default function WuHome() {
             title: String(p.title || ''),
             slug: p.slug || '',
             excerpt: p.excerpt || '',
+            content: p.content || '',
             thumbnail: getThumbnail(p),
             serviceType: String(p.service_type || p.serviceType || 'phan-mem'),
             publishDate: p.publish_date || p.publishDate || '',
@@ -404,8 +420,12 @@ export default function WuHome() {
     
     // If SSR data available, use it and skip API
     if (ssrList && ssrList.length > 0) {
-      // Only show posts from 'phan-mem' category on homepage
-      const filteredList = ssrList.filter((post) => post.serviceType === 'phan-mem');
+      const homeEntry = ssrList.find((post) => post.slug === 'home' || post.serviceType === 'home');
+      setHomeCmsContent(sanitizeHomeHtml(String(homeEntry?.content || '')));
+
+      // Keep card sections focused on actual service posts.
+      const servicePosts = ssrList.filter((post) => post.serviceType !== 'home' && post.slug !== 'home');
+      const filteredList = servicePosts.filter((post) => post.serviceType === 'phan-mem');
       const featuredData = filteredList.filter((post) => !!post.featured);
       const specialData = filteredList.filter((post) => !!post.activeHome);
       setFeaturedSoftwarePosts(featuredData.length > 0 ? featuredData : filteredList.slice(0, 6));
@@ -444,6 +464,14 @@ export default function WuHome() {
 
   <WebsiteLayout menuItems={menuItems} selectedKey="/">
       {HeroSection()}
+
+      {homeCmsContent ? (
+        <section style={{ padding: '16px 24px 32px', background: 'var(--bg-primary)' }}>
+          <div style={{ maxWidth: 1100, margin: '0 auto', border: '1px solid var(--card-border)', borderRadius: 16, background: 'var(--card-bg)', padding: 24 }}>
+            <div style={{ color: 'var(--text-primary)', lineHeight: 1.8 }} dangerouslySetInnerHTML={{ __html: homeCmsContent }} />
+          </div>
+        </section>
+      ) : null}
 
       {/* Debug: show counts when loaded (helps identify missing data) */}
       {!loading && featuredSoftwarePosts.length === 0 && specialSoftwarePosts.length === 0 && (

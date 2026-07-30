@@ -89,6 +89,12 @@ func (h *AiHandler) HandleAiLocal(path string, params map[string]any) *model.Sta
 	case strings.HasSuffix(path, "/report/render-template/compare"):
 		r.Set("result", h.handleAiLocalRenderTemplateCompare(params))
 		return r
+	case strings.HasSuffix(path, "/report/render-template/trigger"):
+		r.Set("result", h.handleAiLocalRenderTemplateTrigger(params))
+		return r
+	case strings.HasSuffix(path, "/report/pdf-to-system-template"):
+		r.Set("result", h.handleAiLocalPdfToSystemTemplate(params))
+		return r
 	case strings.HasSuffix(path, "/health"):
 		r.Set("result", ops.Health(h.llama))
 		return r

@@ -38,3 +38,43 @@ func TestFilterRowsForUpdateAllowsSubUserSelfRow(t *testing.T) {
 		t.Fatalf("expected sub-user self row to pass update filter, got %d rows", len(filtered))
 	}
 }
+
+func TestFilterRowsForUpdateAdminAllowsReachableSubUserApp(t *testing.T) {
+	ctx := &UserAccessContext{
+		IsAdmin:                 true,
+		IsDev:                   false,
+		AppID:                   "lmkt",
+		DataAppIDs:              []string{"kqxs"},
+		ParentAccountCandidates: []string{"admin-1"},
+	}
+	row := map[string]any{
+		"id":                "sub-1",
+		"login_identifier":  "sub1@test.com",
+		"parent_account_id": "another-admin",
+		"app_id":            "kqxs",
+	}
+	filtered := filterRowsForUpdate("csm_group_members", []map[string]any{row}, ctx, "csm", nil, true)
+	if len(filtered) != 1 {
+		t.Fatalf("expected admin to update sub-user in reachable app, got %d rows", len(filtered))
+	}
+}
+
+func TestFilterRowsForUpdateAdminBlocksUnreachableSubUserApp(t *testing.T) {
+	ctx := &UserAccessContext{
+		IsAdmin:                 true,
+		IsDev:                   false,
+		AppID:                   "lmkt",
+		DataAppIDs:              []string{"kqxs"},
+		ParentAccountCandidates: []string{"admin-1"},
+	}
+	row := map[string]any{
+		"id":                "sub-2",
+		"login_identifier":  "sub2@test.com",
+		"parent_account_id": "another-admin",
+		"app_id":            "crm",
+	}
+	filtered := filterRowsForUpdate("csm_group_members", []map[string]any{row}, ctx, "csm", nil, true)
+	if len(filtered) != 0 {
+		t.Fatalf("expected admin to be blocked outside reachable app scope, got %d rows", len(filtered))
+	}
+}

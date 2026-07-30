@@ -51,6 +51,8 @@ func resolveWorkspaceRoots(cfg config.AppConfig) []string {
 	var roots []string
 	candidates := []string{
 		filepath.Join(cfg.DataDir, "..", "frontend-admin", "src"),
+		filepath.Join(cfg.DataDir, "..", "frontend-web", "src"),
+		filepath.Join(cfg.DataDir, "..", "lmkt", "src"),
 		filepath.Join(cfg.DataDir, "..", "backend-go", "internal"),
 		cfg.AI.ContextDir,
 	}

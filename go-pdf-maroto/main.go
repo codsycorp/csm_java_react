@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/jung-kurt/gofpdf"
 )
@@ -38,6 +41,7 @@ type QuotationRawPayload struct {
 	QuotationNo string        `json:"quotation_no"`
 	Date        string        `json:"date"`
 	ValidUntil  string        `json:"valid_until"`
+	LogoPath    string        `json:"logo_path"`
 	Client      ClientInfo    `json:"client"`
 	Sales       SalesRep      `json:"sales"`
 	Items       []ProductItem `json:"items"`
@@ -79,22 +83,42 @@ func handleRawQuotationPDF(w http.ResponseWriter, r *http.Request) {
 	pdf.AddUTF8Font("Arial", "BI", "fonts/Arial-BoldItalic.ttf")
 
 	pdf.SetHeaderFunc(func() {
-		// pdf.ImageOptions("fonts/logo.png", 10, 8, 15, 0, false, gofpdf.ImageOptions{ImageType: "PNG", ReadFromMods: false}, 0, "")
+		const (
+			logoX     = 10.0
+			logoY     = 8.3
+			logoW     = 18.0
+			textLeft  = 30.0
+			textWidth = 170.0
+		)
 
-		pdf.SetFont("Arial", "B", 10)
-		pdf.CellFormat(130, 5, "CÔNG TY TNHH CÔNG NGHỆ CÔNG NGHIỆP PHÚ SƠN", "", 0, "L", false, 0, "")
+		logoPath := resolveExistingPath(payload.LogoPath, []string{
+			"fonts/logoPhuSon.png",
+			"go-pdf-maroto/fonts/logoPhuSon.png",
+		})
+
+		if logoPath != "" {
+			pdf.ImageOptions(logoPath, logoX, logoY, logoW, 0, false, gofpdf.ImageOptions{ReadDpi: true}, 0, "")
+		} else {
+			log.Printf("logo not found. payload.logo_path=%q", payload.LogoPath)
+		}
+
+		pdf.SetXY(textLeft, 10.0)
+		pdf.SetTextColor(0, 120, 70)
+		pdf.SetFont("Arial", "B", 11)
+		pdf.CellFormat(textWidth, 5, "CÔNG TY TNHH CÔNG NGHỆ CÔNG NGHIỆP PHÚ SƠN", "", 1, "L", false, 0, "")
+
+		pdf.SetXY(textLeft, 14.6)
+		pdf.SetTextColor(0, 0, 0)
 		pdf.SetFont("Arial", "", 9)
-		pdf.CellFormat(60, 5, "MST: 0104113174", "", 1, "R", false, 0, "")
+		pdf.CellFormat(textWidth, 4, "Địa chỉ: Lô 7 CN5, Cụm công nghiệp Ngọc Hồi, xã Ngọc Hồi, Thành phố Hà Nội", "", 1, "L", false, 0, "")
 
-		pdf.SetFont("Arial", "I", 8)
-		pdf.CellFormat(190, 4, "Địa chỉ: Lô 7 CN5, Cụm công nghiệp Ngọc Hồi, xã Ngọc Hồi, Thành phố Hà Nội", "", 1, "L", false, 0, "")
+		pdf.SetXY(textLeft, 18.9)
+		pdf.CellFormat(36, 4, "MST: 0104113174", "", 0, "L", false, 0, "")
+		pdf.CellFormat(84, 4, "https://panelphuson.vn", "", 0, "C", false, 0, "")
+		pdf.CellFormat(50, 4, "https://javta.vn", "", 1, "R", false, 0, "")
 
-		pdf.SetFont("Arial", "", 8)
-		pdf.CellFormat(190, 4, "Website: panelphuson.vn | javta.vn", "", 1, "L", false, 0, "")
-
-		currX, currY := pdf.GetX(), pdf.GetY()
-		pdf.Line(currX, currY+1, 200, currY+1)
-		pdf.Ln(4)
+		_, currY := pdf.GetX(), pdf.GetY()
+		pdf.SetY(currY + 2.8)
 	})
 
 	pdf.SetFooterFunc(func() {
@@ -107,10 +131,13 @@ func handleRawQuotationPDF(w http.ResponseWriter, r *http.Request) {
 	pdf.AliasNbPages("")
 	pdf.AddPage()
 
-	pdf.Ln(2)
+	const titleY = 24.0
+	pdf.SetXY(10, titleY)
+	pdf.SetTextColor(0, 120, 70)
 	pdf.SetFont("Arial", "B", 13)
-	pdf.CellFormat(190, 7, "BẢNG BÁO GIÁ SẢN PHẨM - KIÊM XÁC NHẬN ĐƠN HÀNG", "", 1, "CENTER", false, 0, "")
-	pdf.Ln(3)
+	pdf.CellFormat(190, 6.2, "BẢNG BÁO GIÁ SẢN PHẨM - KIÊM XÁC NHẬN ĐƠN HÀNG", "", 1, "C", false, 0, "")
+	pdf.SetTextColor(0, 0, 0)
+	pdf.SetY(titleY + 8.4)
 
 	pdf.SetFont("Arial", "B", 9)
 	pdf.CellFormat(120, 5, "Kính gửi: "+payload.Client.Company, "", 0, "L", false, 0, "")
@@ -133,15 +160,16 @@ func handleRawQuotationPDF(w http.ResponseWriter, r *http.Request) {
 	pdf.Ln(3)
 
 	pdf.SetFont("Arial", "B", 8)
-	pdf.CellFormat(7, 8, "TT", "1", 0, "C", false, 0, "")
-	pdf.CellFormat(63, 8, "Tên sản phẩm / Quy cách", "1", 0, "C", false, 0, "")
-	pdf.CellFormat(10, 8, "Đơn vị", "1", 0, "C", false, 0, "")
-	pdf.CellFormat(15, 8, "C.Rộng", "1", 0, "C", false, 0, "")
-	pdf.CellFormat(15, 8, "C.Dài", "1", 0, "C", false, 0, "")
-	pdf.CellFormat(15, 8, "Số tấm", "1", 0, "C", false, 0, "")
-	pdf.CellFormat(17, 8, "K.Lượng", "1", 0, "C", false, 0, "")
-	pdf.CellFormat(23, 8, "Đơn giá (VNĐ)", "1", 0, "C", false, 0, "")
-	pdf.CellFormat(25, 8, "Thành tiền (VNĐ)", "1", 1, "C", false, 0, "")
+	pdf.SetFillColor(236, 236, 236)
+	pdf.CellFormat(7, 8, "TT", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(63, 8, "Tên sản phẩm / Quy cách", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(10, 8, "Đơn vị", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(15, 8, "Chiều rộng", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(15, 8, "Chiều dài", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(15, 8, "Số tấm", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(17, 8, "Khối lượng", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(23, 8, "Đơn giá (VNĐ)", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(25, 8, "Thành tiền (VNĐ)", "1", 1, "C", true, 0, "")
 
 	groupsOrder := []string{}
 	groupsData := make(map[string][]ProductItem)
@@ -164,13 +192,14 @@ func handleRawQuotationPDF(w http.ResponseWriter, r *http.Request) {
 		romanLabel := getRomanNumeral(gIdx + 1)
 
 		pdf.SetFont("Arial", "B", 8.5)
-		pdf.CellFormat(7, 6, romanLabel+".", "1", 0, "C", false, 0, "")
-		pdf.CellFormat(183, 6, " "+gTitle, "1", 1, "L", false, 0, "")
+		pdf.SetFillColor(244, 244, 244)
+		pdf.CellFormat(7, 6, romanLabel+".", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(183, 6, " "+gTitle, "1", 1, "L", true, 0, "")
 
 		if gDesc != "" {
 			pdf.SetFont("Arial", "I", 7.5)
-			pdf.CellFormat(7, 4, "", "1", 0, "C", false, 0, "")
-			pdf.CellFormat(183, 4, "   "+gDesc, "1", 1, "L", false, 0, "")
+			pdf.CellFormat(7, 4, "", "1", 0, "C", true, 0, "")
+			pdf.CellFormat(183, 4, "   "+gDesc, "1", 1, "L", true, 0, "")
 		}
 
 		var groupQty int = 0
@@ -235,14 +264,15 @@ func handleRawQuotationPDF(w http.ResponseWriter, r *http.Request) {
 		}
 
 		pdf.SetFont("Arial", "B", 8)
-		pdf.CellFormat(70, 6, fmt.Sprintf("Cộng nhóm %s - chưa VAT %.0f%%", romanLabel, currentVatRate), "1", 0, "L", false, 0, "")
-		pdf.CellFormat(10, 6, "", "1", 0, "C", false, 0, "")
-		pdf.CellFormat(15, 6, "", "1", 0, "C", false, 0, "")
-		pdf.CellFormat(15, 6, "", "1", 0, "C", false, 0, "")
-		pdf.CellFormat(15, 6, strconv.Itoa(groupQty), "1", 0, "C", false, 0, "")
-		pdf.CellFormat(17, 6, fmt.Sprintf("%.2f", groupWeight), "1", 0, "R", false, 0, "")
-		pdf.CellFormat(23, 6, "", "1", 0, "R", false, 0, "")
-		pdf.CellFormat(25, 6, formatMoney(groupAmount), "1", 1, "R", false, 0, "")
+		pdf.SetFillColor(236, 236, 236)
+		pdf.CellFormat(70, 6, fmt.Sprintf("Cộng nhóm %s - chưa VAT %.0f%%", romanLabel, currentVatRate), "1", 0, "L", true, 0, "")
+		pdf.CellFormat(10, 6, "", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(15, 6, "", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(15, 6, "", "1", 0, "C", true, 0, "")
+		pdf.CellFormat(15, 6, strconv.Itoa(groupQty), "1", 0, "C", true, 0, "")
+		pdf.CellFormat(17, 6, fmt.Sprintf("%.2f", groupWeight), "1", 0, "R", true, 0, "")
+		pdf.CellFormat(23, 6, "", "1", 0, "R", true, 0, "")
+		pdf.CellFormat(25, 6, formatMoney(groupAmount), "1", 1, "R", true, 0, "")
 
 		totalBeforeVat += groupAmount
 		vatAmounts[currentVatRate] += (groupAmount * currentVatRate / 100)
@@ -338,6 +368,7 @@ func getRawMockData() QuotationRawPayload {
 		QuotationNo: "090626.01",
 		Date:        "09/06/2026",
 		ValidUntil:  "14/06/2026",
+		LogoPath:    "",
 		Client: ClientInfo{
 			Company: "Công ty CP Giải pháp Cách nhiệt Việt Nam",
 			Address: "Lô 7 CN6 - Cụm công nghiệp Ngọc Hồi",
@@ -349,4 +380,59 @@ func getRawMockData() QuotationRawPayload {
 		},
 		Items: []ProductItem{},
 	}
+}
+
+func findFirstExistingPath(paths []string) string {
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+func resolveExistingPath(primary string, fallbacks []string) string {
+	candidates := make([]string, 0, len(fallbacks)+1)
+	if strings.TrimSpace(primary) != "" {
+		candidates = append(candidates, strings.TrimSpace(strings.TrimPrefix(primary, "file://")))
+	}
+	candidates = append(candidates, fallbacks...)
+
+	wd, _ := os.Getwd()
+	execPath, _ := os.Executable()
+	execDir := filepath.Dir(execPath)
+
+	for _, raw := range candidates {
+		cand := strings.TrimSpace(raw)
+		if cand == "" {
+			continue
+		}
+
+		if filepath.IsAbs(cand) {
+			if _, err := os.Stat(cand); err == nil {
+				return cand
+			}
+			continue
+		}
+
+		if _, err := os.Stat(cand); err == nil {
+			return cand
+		}
+
+		if wd != "" {
+			joined := filepath.Join(wd, cand)
+			if _, err := os.Stat(joined); err == nil {
+				return joined
+			}
+		}
+
+		if execDir != "" {
+			joined := filepath.Join(execDir, cand)
+			if _, err := os.Stat(joined); err == nil {
+				return joined
+			}
+		}
+	}
+
+	return ""
 }

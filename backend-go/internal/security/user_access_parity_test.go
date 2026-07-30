@@ -53,6 +53,25 @@ func TestUserAccessFromAuthSubUserKeepsScopeAll(t *testing.T) {
 	}
 }
 
+func TestUserAccessFromAuthMainAccountIgnoresLegacyUserRoleToken(t *testing.T) {
+	auth := &AuthUser{
+		AppID:       "lmkt",
+		IsSubUser:   false,
+		Permissions: []string{"view"},
+		AppToken:    "lmkt_____owner@test.com_____user_____0",
+	}
+	ctx := UserAccessFromAuth(auth, nil)
+	if ctx == nil {
+		t.Fatal("expected access context")
+	}
+	if ctx.IsSubUser {
+		t.Fatal("main account must not be classified as sub-user from legacy token role")
+	}
+	if !ctx.IsAdmin {
+		t.Fatal("main account should keep admin semantics")
+	}
+}
+
 func TestFilterSysAutosRowsUsesResolvedEffectiveAppID(t *testing.T) {
 	ctx := &UserAccessContext{
 		AppID:            "csm",
@@ -89,17 +108,30 @@ func TestFilterSysAutosRowsRejectsCrossAppForNonDev(t *testing.T) {
 	}
 }
 
-func TestValidatePermissionGroupAppBoundaryStrictSameApp(t *testing.T) {
+func TestValidatePermissionGroupAppBoundaryMainAdminCanManageReachableApp(t *testing.T) {
 	ctx := &UserAccessContext{
-		AppID:  "lmkt",
-		IsDev:  false,
-		IsAdmin: true,
+		AppID:      "lmkt",
+		IsDev:      false,
+		IsAdmin:    true,
 		DataAppIDs: []string{"other-app"},
 	}
-	if msg := ValidatePermissionGroupAppBoundary("other-app", "csm_roles", ctx); msg == "" {
-		t.Fatal("expected cross-app csm_roles access to be denied")
+	if msg := ValidatePermissionGroupAppBoundary("other-app", "csm_roles", ctx); msg != "" {
+		t.Fatalf("expected reachable cross-app csm_roles access to be allowed, got %q", msg)
 	}
 	if msg := ValidatePermissionGroupAppBoundary("lmkt", "csm_roles", ctx); msg != "" {
 		t.Fatalf("expected same-app access, got %q", msg)
+	}
+}
+
+func TestValidatePermissionGroupAppBoundarySubUserStillBlockedCrossApp(t *testing.T) {
+	ctx := &UserAccessContext{
+		AppID:      "lmkt",
+		IsDev:      false,
+		IsAdmin:    false,
+		IsSubUser:  true,
+		DataAppIDs: []string{"other-app"},
+	}
+	if msg := ValidatePermissionGroupAppBoundary("other-app", "csm_roles", ctx); msg == "" {
+		t.Fatal("expected sub-user cross-app csm_roles access to be denied")
 	}
 }

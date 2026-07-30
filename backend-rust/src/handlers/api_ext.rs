@@ -109,6 +109,135 @@ pub fn handle_execute_js(_params: &Map<String, Value>) -> StandardResponse {
     r
 }
 
+pub fn handle_traffic_analyze_frame(params: &Map<String, Value>) -> StandardResponse {
+    let camera_id = param_str(params, "cameraId").unwrap_or("default");
+    let detections = params
+        .get("detections")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut vehicles: Vec<Value> = Vec::new();
+    let mut signs: Vec<Value> = Vec::new();
+    let mut alerts: Vec<Value> = Vec::new();
+    let mut speed_limit_by_lane: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+
+    for d in &detections {
+        let Some(obj) = d.as_object() else { continue; };
+        let category = obj.get("category").and_then(|v| v.as_str()).unwrap_or("");
+        if category != "sign" {
+            continue;
+        }
+
+        let lane_id = obj
+            .get("laneId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("lane-2")
+            .to_string();
+        let sign_type = obj
+            .get("signType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_lowercase();
+
+        let speed_limit = obj
+            .get("speedLimit")
+            .and_then(|v| v.as_f64())
+            .or_else(|| obj.get("speedKmh").and_then(|v| v.as_f64()))
+            .unwrap_or(0.0);
+
+        if (sign_type.contains("speed") || sign_type.contains("limit")) && speed_limit > 0.0 {
+            speed_limit_by_lane.insert(lane_id.clone(), speed_limit);
+        }
+
+        signs.push(json!({
+            "laneId": lane_id,
+            "signType": sign_type,
+            "speedLimit": speed_limit,
+            "confidence": obj.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        }));
+    }
+
+    for d in &detections {
+        let Some(obj) = d.as_object() else { continue; };
+        let category = obj.get("category").and_then(|v| v.as_str()).unwrap_or("");
+        if category != "vehicle" {
+            continue;
+        }
+
+        let lane_id = obj
+            .get("laneId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("lane-2")
+            .to_string();
+        let track_id = obj
+            .get("trackId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let plate = obj
+            .get("plate")
+            .and_then(|v| v.as_str())
+            .unwrap_or("N/A")
+            .to_string();
+        let vehicle_type = obj
+            .get("vehicleType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let speed = obj
+            .get("speedKmh")
+            .and_then(|v| v.as_f64())
+            .or_else(|| obj.get("currentSpeed").and_then(|v| v.as_f64()))
+            .unwrap_or(0.0);
+
+        if let Some(limit) = speed_limit_by_lane.get(&lane_id) {
+            if speed > *limit {
+                alerts.push(json!({
+                    "code": "OVER_SPEED",
+                    "severity": "high",
+                    "laneId": lane_id,
+                    "trackId": track_id,
+                    "plate": plate,
+                    "vehicle": vehicle_type,
+                    "currentSpeed": speed,
+                    "speedLimit": limit,
+                    "overBy": (speed - limit),
+                    "message": format!("Xe vuot toc do {:.1} km/h (gioi han {:.0})", speed, limit),
+                }));
+            }
+        }
+
+        vehicles.push(json!({
+            "laneId": lane_id,
+            "trackId": track_id,
+            "plate": plate,
+            "vehicleType": vehicle_type,
+            "currentSpeed": speed,
+            "confidence": obj.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        }));
+    }
+
+    let vehicle_count = vehicles.len();
+    let sign_count = signs.len();
+    let alert_count = alerts.len();
+
+    let mut r = StandardResponse::new();
+    r.set("code", 200);
+    r.set("success", true);
+    r.set("message", "traffic frame analyzed");
+    r.set("cameraId", camera_id);
+    r.set("alerts", alerts);
+    r.set("vehicles", vehicles);
+    r.set("signs", signs);
+    r.set("stats", json!({
+        "vehicleCount": vehicle_count,
+        "signCount": sign_count,
+        "alertCount": alert_count,
+    }));
+    r
+}
+
 pub async fn handle_ai_seo_content(state: &AppState, params: &Map<String, Value>) -> StandardResponse {
     use crate::services::ai::policy::{
         local_unavailable_hint, local_unavailable_message, LOCAL_PROVIDER_UNAVAILABLE_CODE,

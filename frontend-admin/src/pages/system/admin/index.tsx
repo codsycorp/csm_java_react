@@ -1246,15 +1246,17 @@ export default function AdminPage(props: any = {}) {
 	// would contaminate cached (KeepAlive) instances of AdminPage, triggering false mismatch warnings.
 	const menuId = props.menuId || routeMenuId;
 	const propMenuData = props.menuData || props.m_configs || null;
+	const tabPathFallback = String(props.path || props.key || "").trim();
 	const normalizedMenuSource = useMemo(() => {
 		const candidates = [
 			propMenuData?.path,
 			propMenuData?.id,
 			props.menuId,
 			menuId,
+			tabPathFallback,
 		];
 		return String(candidates.find(item => Boolean(item)) || "");
-	}, [propMenuData?.path, propMenuData?.id, props.menuId, menuId]);
+	}, [propMenuData?.path, propMenuData?.id, props.menuId, menuId, tabPathFallback]);
 	const normalizedMenuKey = useMemo(
 		() => normalizeSystemMenuKey(normalizedMenuSource),
 		[normalizedMenuSource],
@@ -1274,7 +1276,21 @@ export default function AdminPage(props: any = {}) {
 	const userMenusPermissionsRaw = useUserStore(state => state.menusPermissions as any);
 	const userPermissionBitfieldRaw = useUserStore(state => (state as any).permissionBitfield as any);
 	const isDevUser = resolveDevFlag(devFlag, userRoles);
-	const isAdminUser = !isDevUser && isSuperPermissionProfile(toPermissionBigInt(userPermissionBitfieldRaw));
+	const normalizedRoleTokens = useMemo(
+		() => userRoles.map(role => String(role || "").trim().toLowerCase()).filter(Boolean),
+		[userRoles],
+	);
+	const normalizedPermissionTokens = useMemo(
+		() => normalizeStringList(userPermissionsRaw).map(token => String(token || "").trim().toLowerCase()).filter(Boolean),
+		[userPermissionsRaw],
+	);
+	const hasAdminRole = normalizedRoleTokens.includes("admin") || normalizedRoleTokens.includes("administrator");
+	const hasAdminPermission = normalizedPermissionTokens.includes("admin") || normalizedPermissionTokens.includes("scope:all");
+	const isAdminUser = !isDevUser && (
+		isSuperPermissionProfile(toPermissionBigInt(userPermissionBitfieldRaw))
+		|| hasAdminRole
+		|| hasAdminPermission
+	);
 	const isSystemUserRoute = normalizedMenuKey === "user";
 	// app_id tenant — decrypt app_token trước (khớp Java mapMainAccountToUser / Rust middleware)
 	const appId = useMemo(
@@ -1746,7 +1762,7 @@ export default function AdminPage(props: any = {}) {
 			}
 			return null;
 		};
-		const targetId = menuId;
+		const targetId = String(menuId || tabPathFallback || normalizedMenuKey || "").trim();
 		if (targetId) {
 			let found = apiWholeMenus.length > 0 ? findMenuInTree(apiWholeMenus, targetId) : null;
 			// Fallback cho các menu hệ thống khi không tìm thấy hoặc thiếu table_name
@@ -2198,7 +2214,7 @@ export default function AdminPage(props: any = {}) {
 	// Load table data from API when menuData changes
 	useEffect(() => {
 		loadTableData();
-	}, [menuData?.table_name, appId, reloadTrigger, isSystemUserRoute, isAdminUser, userSubOwnerCandidates.join("|")]);
+	}, [menuData?.table_name, appId, reloadTrigger, isSystemUserRoute, isDevUser, userSubOwnerCandidates.join("|")]);
 
 	// Theo dõi thay đổi ngôn ngữ và cập nhật giao diện
 	useEffect(() => {

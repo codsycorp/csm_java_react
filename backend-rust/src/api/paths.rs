@@ -38,6 +38,7 @@ const BARE_API_PATHS: &[&str] = &[
     "/chat-history-guest",
     "/chat-history-app",
     "/apps-list",
+    "/traffic/analyze-frame",
     "/chat-guests-list",
     "/chat-mark-read",
     "/chat-mark-all-read",

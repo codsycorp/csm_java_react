@@ -66,7 +66,12 @@ func enrichAccountMeta(rm *data.RecordManager, user *model.User, info map[string
 		token = *user.AppToken
 	}
 	meta := util.ParseAppToken(rm, token)
-	isSubUser := util.IsSubUserRole(meta.Role)
+	isSubUser := false
+	if user.IsSubUser != nil {
+		isSubUser = *user.IsSubUser
+	} else {
+		isSubUser = util.IsSubUserRole(meta.Role)
+	}
 	info["account_type"] = "main"
 	if isSubUser {
 		info["account_type"] = "sub-user"

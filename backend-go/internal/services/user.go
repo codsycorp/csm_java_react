@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	CSMAppID          = "csm"
-	AccountsTable     = "csm_accounts"
-	SubAccountsTable  = "csm_group_members"
+	CSMAppID         = "csm"
+	AccountsTable    = "csm_accounts"
+	SubAccountsTable = "csm_group_members"
 )
 
 type UserService struct {
@@ -247,13 +247,13 @@ func (s *UserService) UpdateSessionToken(user *model.User, refreshToken, ip, ua 
 		}
 	}
 	fields := map[string]any{
-		"refresh_token":         refreshToken,
-		"refresh":               refreshToken,
-		"refresh_token_ip":      ip,
-		"refresh_token_ua":      ua,
-		"refresh_token_expiry":  expiryMs,
-		"login_version":         loginVersion,
-		"loginVersion":          loginVersion,
+		"refresh_token":        refreshToken,
+		"refresh":              refreshToken,
+		"refresh_token_ip":     ip,
+		"refresh_token_ua":     ua,
+		"refresh_token_expiry": expiryMs,
+		"login_version":        loginVersion,
+		"loginVersion":         loginVersion,
 	}
 	if strings.TrimSpace(clientID) != "" {
 		fields["refresh_token_client_id"] = strings.TrimSpace(clientID)
@@ -443,13 +443,12 @@ func (s *UserService) normalizeMainAccountUser(user *model.User, record map[stri
 		}
 	}
 
-	isSubUserToken := util.IsSubUserRole(meta.Role)
 	if isDev {
 		permissions = util.MergeUniqueCaseInsensitive(permissions, []string{"dev", "admin", "scope:all"})
 		if appID != "" {
 			menusPermissions = []string{appID}
 		}
-	} else if isMainAccount && !isSubUserToken {
+	} else if isMainAccount {
 		permissions = util.MergeUniqueCaseInsensitive(permissions, []string{
 			"admin", "scope:all", "view", "create", "edit", "delete", "export",
 		})
@@ -469,10 +468,7 @@ func (s *UserService) normalizeMainAccountUser(user *model.User, record map[stri
 	dataScope := util.ResolveDataScope(bitfield)
 	user.DataScope = &dataScope
 
-	isSubUser := isSubUserToken
-	if !isMainAccount {
-		isSubUser = true
-	}
+	isSubUser := !isMainAccount
 	user.IsSubUser = &isSubUser
 
 	if isSubUser {

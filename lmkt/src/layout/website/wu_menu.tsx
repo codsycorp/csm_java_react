@@ -147,6 +147,78 @@ export function useWebsiteMenu() {
       children: (menu.children || []).filter((child) => !staticMenuKeys.has(child.key)),
     }));
 
+  const bySlug = new Map<string, SSRCategoryObject>();
+  ssrCategoryObjects.forEach((cat) => {
+    if (cat?.slug) bySlug.set(String(cat.slug), cat);
+  });
+
+  const buildChildrenFromSlugs = (slugs: string[]) => {
+    const seen = new Set<string>();
+    return slugs
+      .map((slug) => bySlug.get(slug))
+      .filter((cat): cat is SSRCategoryObject => !!cat && !!cat.slug && !cat.is_group_slug)
+      .filter((cat) => {
+        const key = `/${cat.slug}`;
+        if (seen.has(key) || staticMenuKeys.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map((cat) => ({
+        key: `/${cat.slug}`,
+        label: getCategoryLabel(cat),
+        path: buildPath(`/${cat.slug}`),
+        icon: iconMap[cat.attributes_icon ?? ''] || <DatabaseOutlined />,
+        children: [],
+      }));
+  };
+
+  const findGroupMenu = (slug: string) => {
+    return filteredServiceGroupMenus.find((m) => m.key === `/${slug}`);
+  };
+
+  const hasTargetMenuParents = [
+    'thong-ke-ket-qua-xo-so',
+    'cau-noi-kinh-doanh-online',
+  ].every((slug) => bySlug.has(slug));
+
+  const resolvedTargetMenus = (() => {
+    if (!hasTargetMenuParents) return null;
+
+    const lotteryParent = findGroupMenu('thong-ke-ket-qua-xo-so');
+    const bridgeParent = findGroupMenu('cau-noi-kinh-doanh-online');
+
+    const lotteryChildren: any[] = [];
+
+    const bridgeChildren = (() => {
+      const direct = bridgeParent?.children || [];
+      if (direct.length > 0) return direct;
+      return buildChildrenFromSlugs([
+        'phan-mem',
+        'bat-dong-san',
+        'lam-dep-my-pham',
+        'cho-thue-xe',
+        'booking-online',
+      ]);
+    })();
+
+    return [
+      {
+        key: '/thong-ke-ket-qua-xo-so',
+        label: lotteryParent?.label || t('website.menu.lotteryStats', 'Thống Kê Kết Quả Xổ Số'),
+        path: lotteryParent?.path || buildPath('/thong-ke-ket-qua-xo-so'),
+        icon: lotteryParent?.icon || <DatabaseOutlined />,
+        children: lotteryChildren,
+      },
+      {
+        key: '/cau-noi-kinh-doanh-online',
+        label: bridgeParent?.label || t('website.menu.businessBridge', 'Cầu Nối Kinh Doanh Online'),
+        path: bridgeParent?.path || buildPath('/cau-noi-kinh-doanh-online'),
+        icon: bridgeParent?.icon || <ShoppingCartOutlined />,
+        children: bridgeChildren,
+      },
+    ];
+  })();
+
   const serviceMenuKeys = new Set<string>();
   filteredServiceGroupMenus.forEach((menu) => {
     serviceMenuKeys.add(menu.key);
@@ -209,7 +281,7 @@ export function useWebsiteMenu() {
       icon: <HomeOutlined />,
       children: [],
     },
-    ...filteredServiceGroupMenus,
+    ...(resolvedTargetMenus || filteredServiceGroupMenus),
     ...filteredStandaloneMenus,
     {
       key: "/lien-he",

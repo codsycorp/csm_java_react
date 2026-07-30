@@ -1,0 +1,489 @@
+/**
+ * WuSoftwareHub - Menu 2: Phần Mềm Theo Yêu Cầu (B2B Tech Solutions Hub)
+ *
+ * Silo Architecture: Trang cha /dich-vu-phan-mem/ chứa sub-services pages
+ *
+ * Mục tiêu SEO: Dominance các từ khóa mua hàng (Commercial / Transactional Keywords)
+ * Keywords: "viết phần mềm theo yêu cầu", "phát triển phần mềm", "CRM ERP",
+ *   "automation tools", "tích hợp AI", "tối ưu hạ tầng"
+ *
+ * Schema: SoftwareApplication & Service
+ *
+ * Brand Positioning: "May đo phần mềm chuẩn kiến trúc - Không dùng mã nguồn dựng sẵn kém an toàn"
+ */
+
+import React, { useState, useEffect } from "react";
+import { useLocation } from "react-router";
+import i18n from "i18next";
+import { useTranslation } from "react-i18next";
+import { Row, Col, Card, Typography, Button, Tag, Space, Collapse } from "antd";
+import {
+  CodeOutlined,
+  RocketOutlined,
+  CloudOutlined,
+  ApiOutlined,
+  MobileOutlined,
+  ToolOutlined,
+  SafetyOutlined,
+  TeamOutlined,
+  CheckCircleOutlined,
+  ArrowRightOutlined,
+  PhoneOutlined,
+  ThunderboltOutlined,
+  DatabaseOutlined,
+  SettingOutlined,
+  RobotOutlined,
+  HddOutlined,
+} from "@ant-design/icons";
+import WebsiteLayout from "#src/layout/website/WebsiteLayout";
+import { useWebsiteMenu } from "#src/layout/website/wu_menu";
+import WebsiteBreadcrumb from "#src/components/WebsiteBreadcrumb";
+import SeoStructuredData, {
+  buildProfessionalServiceSchema,
+  buildFAQSchema,
+  buildWebPageSchema,
+} from "#src/components/SeoStructuredData";
+import { fetchServiceList } from "#src/api/wu_service";
+
+const { Title, Paragraph, Text } = Typography;
+
+// Sub-services theo Silo Architecture - mỗi service có URL riêng
+const subServices = [
+  {
+    key: "crm-erp",
+    slug: "phan-mem-crm-erp",
+    icon: <DatabaseOutlined />,
+    title: "Thiết Kế & Phát Triển CRM/ERP Doanh Nghiệp",
+    description:
+      "Xây dựng hệ thống CRM, ERP, HRM, kế toán, quản lý kho, quản lý sản xuất theo quy trình riêng. Không phụ thuộc phần mềm đóng gói.",
+    features: ["Custom Workflow", "Role-based Access", "Report Builder", "Scalable"],
+    color: "#1890ff",
+    route: "/dich-vu-phan-mem/phan-mem-crm-erp",
+  },
+  {
+    key: "custom-dev",
+    slug: "lap-trinh-theo-yeu-cau",
+    icon: <CodeOutlined />,
+    title: "Viết Phần Mềm & App Mobile Theo Yêu Cầu",
+    description:
+      "Phát triển ứng dụng web, mobile (iOS/Android), desktop độc quyền. React, Vue, Node.js, Java, Go, Rust, React Native, Flutter.",
+    features: ["Web & Mobile", "Cross-Platform", "Responsive", "Security"],
+    color: "#52c41a",
+    route: "/dich-vu-phan-mem/lap-trinh-theo-yeu-cau",
+  },
+  {
+    key: "automation-seo",
+    slug: "tu-dong-hoa-seo-data",
+    icon: <ToolOutlined />,
+    title: "Giải Pháp Tự Động Hóa & SEO Tooling",
+    description:
+      "Auto click, cào dữ liệu (scraping), chạy traffic, bot tương tác, tự động đăng tin, báo cáo. Tăng hiệu suất gấp 10 lần.",
+    features: ["Auto Click", "Data Scraping", "Traffic Bot", "Scheduled Tasks"],
+    color: "#fa8c16",
+    route: "/dich-vu-phan-mem/tu-dong-hoa-seo-data",
+  },
+  {
+    key: "ai-integration",
+    slug: "tich-hop-ai-workflow",
+    icon: <RobotOutlined />,
+    title: "Tích Hợp AI & Chatbot Cho Doanh Nghiệp",
+    description:
+      "Tích hợp AI/ML, chatbot thông minh, RAG, tự động hóa workflow. GPT, LLM local, computer vision, NLP.",
+    features: ["AI Chatbot", "RAG System", "Workflow Auto", "LLM Integration"],
+    color: "#722ed1",
+    route: "/dich-vu-phan-mem/tich-hop-ai-workflow",
+  },
+  {
+    key: "infrastructure",
+    slug: "toi-uu-ha-tang-database",
+    icon: <HddOutlined />,
+    title: "Tối Ưu & Nâng Cấp Hạ Tầng Server / Database",
+    description:
+      "Triển khai, vận hành, tối ưu hạ tầng: AWS, GCP, Docker, K8s, CI/CD. RocksDB, Lucene, high-performance database tuning.",
+    features: ["AWS/GCP", "Docker & K8s", "CI/CD", "DB Tuning"],
+    color: "#13c2c2",
+    route: "/dich-vu-phan-mem/toi-uu-ha-tang-database",
+  },
+  {
+    key: "system-integration",
+    slug: "tich-hop-he-thong",
+    icon: <ApiOutlined />,
+    title: "Tích Hợp & Kết Nối Hệ Thống Đa Nền Tảng",
+    description:
+      "Kết nối ERP, CRM, kế toán, TMĐT, thanh toán. API integration, webhook, đồng bộ dữ liệu real-time.",
+    features: ["API Integration", "Data Sync", "Webhook", "Real-time"],
+    color: "#eb2f96",
+    route: "/dich-vu-phan-mem/tich-hop-he-thong",
+  },
+];
+
+// FAQ cho phần mềm theo yêu cầu
+const softwareFAQs = [
+  {
+    question: "Tôi muốn viết phần mềm theo yêu cầu, quy trình như thế nào?",
+    answer:
+      "Quy trình 5 bước: (1) Tư vấn & phân tích nhu cầu miễn phí, (2) Thiết kế kiến trúc & báo giá, (3) Phát triển theo sprint, (4) Test & bàn giao, (5) Bảo hành & bảo trì. Liên hệ 0964014947 để bắt đầu.",
+  },
+  {
+    question: "Chi phí viết phần mềm theo yêu cầu bao nhiêu?",
+    answer:
+      "Chi phí phụ thuộc phạm vi, độ phức tạp, công nghệ và thời gian. Dự án nhỏ từ 5-20 triệu, dự án vừa 20-100 triệu, hệ thống doanh nghiệp từ 100 triệu. Báo giá chính xác sau khi tư vấn.",
+  },
+  {
+    question: "Thời gian hoàn thành một phần mềm theo yêu cầu mất bao lâu?",
+    answer:
+      "Phần mềm nhỏ: 2-4 tuần. Ứng dụng vừa: 1-3 tháng. Hệ thống doanh nghiệp: 3-6 tháng. Cam kết đúng tiến độ bằng hợp đồng, có milestone rõ ràng.",
+  },
+  {
+    question: "Có hỗ trợ sau khi bàn giao phần mềm không?",
+    answer:
+      "Có. Bảo hành miễn phí 3-6 tháng tùy gói. Gói bảo trì dài hạn: fix bug, nâng cấp tính năng, tối ưu hiệu suất, hỗ trợ người dùng 24/7.",
+  },
+  {
+    question: "Tôi giữ quyền sở hữu mã nguồn phần mềm không?",
+    answer:
+      "Có. Toàn bộ mã nguồn, tài liệu thiết kế, dữ liệu được bàn giao đầy đủ. Bạn hoàn toàn sở hữu và kiểm soát phần mềm, không bị phụ thuộc nhà phát triển.",
+  },
+  {
+    question: "Có thể phát triển phần mềm từ mã nguồn có sẵn không?",
+    answer:
+      "Có. Tôi nhận audit, refactor, nâng cấp, mở rộng tính năng cho phần mềm có sẵn. Đảm bảo tương thích, không phá vỡ dữ liệu, tối ưu hiệu suất.",
+  },
+];
+
+// Process steps
+const processSteps = [
+  { step: 1, title: "Tư vấn & Phân tích", description: "Gặp gỡ, lắng nghe nhu cầu, phân tích quy trình, đề xuất giải pháp tối ưu.", icon: <TeamOutlined /> },
+  { step: 2, title: "Thiết kế & Báo giá", description: "Thiết kế kiến trúc, wireframe, database, API. Báo giá chi tiết, hợp đồng rõ ràng.", icon: <SettingOutlined /> },
+  { step: 3, title: "Phát triển theo Sprint", description: "Code theo từng sprint 1-2 tuần, demo liên tục, phản hồi nhanh, linh hoạt thay đổi.", icon: <CodeOutlined /> },
+  { step: 4, title: "Test & Bàn giao", description: "Test kỹ (unit, integration, UAT), tài liệu đầy đủ, đào tạo người dùng, bàn giao mã nguồn.", icon: <SafetyOutlined /> },
+  { step: 5, title: "Bảo hành & Bảo trì", description: "Bảo hành miễn phí, gói bảo trì dài hạn, hỗ trợ nâng cấp, tối ưu liên tục.", icon: <CheckCircleOutlined /> },
+];
+
+function useLanguageFromQuery() {
+  const location = useLocation();
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const hl = params.get("hl");
+    if (hl === "en" || hl === "vi") {
+      i18n.changeLanguage(hl);
+    } else if (!i18n.language || i18n.language === "" || i18n.language === "cimode") {
+      i18n.changeLanguage("vi");
+    }
+  }, [location.search]);
+}
+
+type ServicePost = {
+  id: string;
+  title: string;
+  slug?: string;
+  excerpt?: string;
+  thumbnail?: string;
+  serviceType: string;
+  category?: string;
+  publishDate?: string;
+  tags?: string[];
+  featured?: boolean;
+  activeHome?: boolean;
+  attributes?: Record<string, any>;
+};
+
+export default function WuSoftwareHub() {
+  useLanguageFromQuery();
+  const { t } = useTranslation();
+  const menuItems = useWebsiteMenu();
+
+  const [softwarePosts, setSoftwarePosts] = useState<ServicePost[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    try {
+      const w: any = typeof window !== "undefined" ? window : undefined;
+      const initial = w && (w.__INITIAL_REACT_DATA__ || w.initialReactData);
+      if (initial && Array.isArray(initial.serviceDetailList)) {
+        const dataList = initial.serviceDetailList;
+        const getThumbnail = (p: any): string => {
+          const value = p.thumbnail || p.cover || "";
+          if (Array.isArray(value)) return value[0] || "";
+          if (typeof value === "string") {
+            try {
+              const parsed = JSON.parse(value);
+              if (Array.isArray(parsed)) return parsed[0] || "";
+            } catch {}
+          }
+          return value || "";
+        };
+        const ssrList: ServicePost[] = dataList
+          .filter((p: any) => String(p.service_type || p.serviceType || "") === "phan-mem")
+          .map((p: any) => ({
+            id: String(p.id || ""),
+            title: String(p.title || ""),
+            slug: p.slug || "",
+            excerpt: p.excerpt || "",
+            thumbnail: getThumbnail(p),
+            serviceType: "phan-mem",
+            publishDate: p.publish_date || p.publishDate || "",
+            featured: !!p.featured,
+            attributes: typeof p.attributes === "string" ? JSON.parse(p.attributes) : (p.attributes || {}),
+          }));
+        if (ssrList.length > 0) {
+          setSoftwarePosts(ssrList);
+          setLoading(false);
+          return;
+        }
+      }
+    } catch (e) {}
+
+    fetchServiceList("phan-mem", 20, undefined, { q: undefined })
+      .then((res) => {
+        const data = Array.isArray(res?.data) ? (res.data as ServicePost[]) : [];
+        setSoftwarePosts(data);
+      })
+      .catch(() => setSoftwarePosts([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const getLangCode = () =>
+    i18n.language && i18n.language !== "vi" && i18n.language !== "cimode"
+      ? i18n.language.slice(0, 2)
+      : "";
+  const langParam = getLangCode() ? `?hl=${getLangCode()}` : "";
+  const computePostHref = (post: ServicePost) => `/phan-mem/${post.slug}${langParam}`;
+
+  const generatePlaceholder = (text: string, bgColor: string = "1890ff") => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="180" viewBox="0 0 400 180"><rect width="400" height="180" fill="#${bgColor}"/><text x="50%" y="50%" text-anchor="middle" dy=".3em" fill="white" font-family="Arial, sans-serif" font-size="16" font-weight="600">${text}</text></svg>`;
+    return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+  };
+
+  const professionalServiceSchema = buildProfessionalServiceSchema({
+    name: "Viết phần mềm theo yêu cầu - Lê Anh CSM 20+ năm kinh nghiệm",
+    description:
+      "Dịch vụ phát triển phần mềm theo yêu cầu: CRM/ERP, web app, mobile app, automation tools, AI integration, tối ưu hạ tầng. Bởi chuyên gia fullstack 20+ năm kinh nghiệm.",
+    url: typeof window !== "undefined" ? window.location.href : "https://www.csmbridge.net/dich-vu-phan-mem",
+  });
+
+  const faqSchema = buildFAQSchema(softwareFAQs);
+
+  const webPageSchema = buildWebPageSchema({
+    name: "Phần Mềm Theo Yêu Cầu - B2B Tech Solutions Hub",
+    description:
+      "Chuyên gia phần mềm 20+ năm kinh nghiệm nhận viết phần mềm theo yêu cầu: CRM/ERP, web, mobile, automation, AI, tối ưu hạ tầng.",
+    url: typeof window !== "undefined" ? window.location.href : "https://www.csmbridge.net/dich-vu-phan-mem",
+    breadcrumb: [
+      { name: "Trang chủ", url: "https://www.csmbridge.net/" },
+      { name: "Phần Mềm Theo Yêu Cầu", url: "https://www.csmbridge.net/dich-vu-phan-mem" },
+    ],
+  });
+
+  return (
+    <WebsiteLayout menuItems={menuItems} selectedKey="/dich-vu-phan-mem">
+      <SeoStructuredData data={[professionalServiceSchema, faqSchema, webPageSchema]} id="software-hub-schema" />
+      <WebsiteBreadcrumb items={[{ name: "Phần Mềm Theo Yêu Cầu" }]} />
+
+      {/* Hero Section - Brand Positioning */}
+      <section style={{ width: "100%", minHeight: "50vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-primary)", color: "var(--text-primary)", padding: "48px 0 32px 0" }}>
+        <div style={{ width: "100%", maxWidth: 1100, margin: "0 auto", padding: "0 24px", textAlign: "center" }}>
+          <Tag color="blue" style={{ fontSize: 14, padding: "4px 16px", marginBottom: 16, borderRadius: 8 }}>
+            <CodeOutlined /> B2B TECH SOLUTIONS HUB
+          </Tag>
+          <h1 style={{ fontSize: "clamp(2rem, 5vw, 3.2rem)", fontWeight: 700, marginBottom: 20, color: "var(--text-primary)", letterSpacing: "-0.02em", lineHeight: 1.15 }}>
+            Phần Mềm Theo Yêu Cầu
+            <br />
+            <span style={{ color: "var(--brand-primary)" }}>May Đo Chuẩn Kiến Trúc - Không Dùng Mã Nguồn Dựng Sẵn</span>
+          </h1>
+          <p style={{ fontSize: "clamp(1.1rem, 2vw, 1.4rem)", color: "var(--text-secondary)", margin: "0 auto 36px auto", maxWidth: 700, fontWeight: 400, lineHeight: 1.6 }}>
+            Lê Anh CSM - 20+ năm kinh nghiệm phát triển phần mềm enterprise. CRM/ERP, Web App, Mobile App,
+            Automation, AI Integration, tối ưu hạ tầng. Bảo mật dữ liệu + Cam kết hiệu năng + Hỗ trợ 24/7.
+          </p>
+          <div style={{ display: "flex", gap: 20, justifyContent: "center", flexWrap: "wrap" }}>
+            <Button type="primary" size="large" icon={<RocketOutlined />} style={{ background: "var(--brand-primary)", color: "var(--button-text-primary, #fff)", border: "none", borderRadius: 32, fontWeight: 600, fontSize: 18, padding: "0 36px", height: 56 }} href="/lien-he">
+              Nhận Tư Vấn Miễn Phí
+            </Button>
+            <Button type="default" size="large" icon={<PhoneOutlined />} style={{ background: "transparent", color: "var(--brand-primary)", border: "2px solid var(--brand-primary)", borderRadius: 32, fontWeight: 600, fontSize: 18, padding: "0 36px", height: 56 }} href="tel:+84964014947">
+              Gọi: 0964 014 947
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      {/* Sub-Services Silo Architecture */}
+      <div style={{ padding: "80px 24px", background: "var(--bg-primary)" }}>
+        <Row justify="center">
+          <Col xs={24} lg={20}>
+            <div style={{ textAlign: "center", marginBottom: "60px" }}>
+              <h2 style={{ color: "var(--text-primary)", marginBottom: "1rem", fontSize: "clamp(1.8rem, 4vw, 2.8rem)" }}>
+                Danh Mục Dịch Vụ Phần Mềm
+              </h2>
+              <Paragraph style={{ fontSize: 18, color: "var(--text-secondary)", maxWidth: 600, margin: "0 auto" }}>
+                Mỗi dịch vụ có trang riêng biệt (Landing Page) với quy trình làm việc minh bạch
+              </Paragraph>
+            </div>
+            <Row gutter={[32, 32]}>
+              {subServices.map((cat) => (
+                <Col xs={24} sm={12} lg={8} key={cat.key}>
+                  <a href={`${cat.route}${langParam}`} style={{ display: "block", textDecoration: "none", color: "inherit" }} aria-label={cat.title}>
+                    <Card hoverable style={{ height: "100%", borderRadius: 20, overflow: "hidden", border: `1px solid ${cat.color}33`, boxShadow: `0 2px 16px ${cat.color}11`, background: "var(--card-bg)", transition: "all 0.3s ease" }}>
+                      <div style={{ width: 60, height: 60, borderRadius: 16, background: `linear-gradient(135deg, ${cat.color}22 0%, var(--bg-secondary) 100%)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, color: cat.color, marginBottom: 16 }}>
+                        {cat.icon}
+                      </div>
+                      <h3 style={{ fontWeight: 700, fontSize: 18, marginBottom: 8, color: cat.color }}>{cat.title}</h3>
+                      <Paragraph style={{ color: "var(--text-secondary)", minHeight: 60 }}>{cat.description}</Paragraph>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {cat.features.map((f) => (
+                          <Tag key={f} color={cat.color} style={{ borderRadius: 6, fontSize: 12 }}>{f}</Tag>
+                        ))}
+                      </div>
+                      <Button type="link" style={{ padding: 0, color: cat.color, marginTop: 12 }} icon={<ArrowRightOutlined />}>
+                        Xem chi tiết
+                      </Button>
+                    </Card>
+                  </a>
+                </Col>
+              ))}
+            </Row>
+          </Col>
+        </Row>
+      </div>
+
+      {/* Process Section */}
+      <div style={{ padding: "80px 24px", background: "var(--bg-secondary)" }}>
+        <Row justify="center">
+          <Col xs={24} lg={20}>
+            <div style={{ textAlign: "center", marginBottom: "60px" }}>
+              <h2 style={{ color: "var(--text-primary)", marginBottom: "1rem", fontSize: "clamp(1.8rem, 4vw, 2.8rem)" }}>
+                Quy Trình Phát Triển Phần Mềm
+              </h2>
+              <Paragraph style={{ fontSize: 18, color: "var(--text-secondary)", maxWidth: 600, margin: "0 auto" }}>
+                5 bước rõ ràng, minh bạch, cam kết đúng tiến độ và chất lượng
+              </Paragraph>
+            </div>
+            <Row gutter={[24, 24]}>
+              {processSteps.map((step) => (
+                <Col xs={24} sm={12} lg={8} key={step.step} style={{ display: "flex" }}>
+                  <Card style={{ width: "100%", borderRadius: 16, border: "1px solid var(--card-border)", background: "var(--card-bg)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 12 }}>
+                      <div style={{ width: 48, height: 48, borderRadius: 12, background: "var(--brand-primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, fontWeight: 700 }}>{step.step}</div>
+                      <div style={{ fontSize: 24, color: "var(--brand-primary)" }}>{step.icon}</div>
+                    </div>
+                    <h3 style={{ fontWeight: 700, fontSize: 18, marginBottom: 8, color: "var(--text-primary)" }}>{step.title}</h3>
+                    <Paragraph style={{ color: "var(--text-secondary)", margin: 0 }}>{step.description}</Paragraph>
+                  </Card>
+                </Col>
+              ))}
+            </Row>
+          </Col>
+        </Row>
+      </div>
+
+      {/* Software Products from DB */}
+      {softwarePosts.length > 0 && (
+        <div style={{ padding: "80px 24px", background: "var(--bg-primary)" }}>
+          <Row justify="center">
+            <Col xs={24} lg={20}>
+              <div style={{ textAlign: "center", marginBottom: "60px" }}>
+                <h2 style={{ color: "var(--text-primary)", marginBottom: "1rem", fontSize: "clamp(1.8rem, 4vw, 2.8rem)" }}>
+                  Sản Phẩm & Công Cụ Phần Mềm Sẵn Có
+                </h2>
+                <Paragraph style={{ fontSize: 18, color: "var(--text-secondary)", maxWidth: 600, margin: "0 auto" }}>
+                  Các tool automation và phần mềm đã hoàn thiện, có thể tùy chỉnh theo nhu cầu
+                </Paragraph>
+              </div>
+              <Row gutter={[32, 32]}>
+                {softwarePosts.slice(0, 6).map((post) => (
+                  <Col xs={24} sm={12} lg={8} key={post.id}>
+                    <Card hoverable style={{ height: "100%", borderRadius: 20, overflow: "hidden", border: "1px solid var(--card-border)", boxShadow: "var(--card-shadow)", background: "var(--card-bg)" }}
+                      cover={
+                        <a href={computePostHref(post)} aria-label={post.title} style={{ display: "block" }}>
+                          <img src={post.thumbnail || generatePlaceholder(post.title.substring(0, 30), "1890ff")} alt={post.title} style={{ height: 180, objectFit: "cover" }}
+                            onError={(e) => { const target = e.target as HTMLImageElement; if (!target.src.startsWith("data:")) { target.onerror = null; target.src = generatePlaceholder("Image Error", "cccccc"); } }}
+                          />
+                        </a>
+                      }
+                    >
+                      <h3 style={{ fontWeight: 700, fontSize: 18, marginBottom: 8 }}>
+                        <a href={computePostHref(post)} style={{ color: "var(--brand-primary)", textDecoration: "none" }}>{post.title}</a>
+                      </h3>
+                      <Paragraph style={{ color: "var(--text-secondary)", minHeight: 48 }}>{post.excerpt}</Paragraph>
+                      <Button type="link" href={computePostHref(post)} icon={<ArrowRightOutlined />}>Xem chi tiết</Button>
+                    </Card>
+                  </Col>
+                ))}
+              </Row>
+            </Col>
+          </Row>
+        </div>
+      )}
+
+      {/* Why Choose Me - Trust Factors */}
+      <div style={{ padding: "80px 24px", background: "var(--bg-secondary)" }}>
+        <Row justify="center">
+          <Col xs={24} lg={20}>
+            <div style={{ textAlign: "center", marginBottom: "60px" }}>
+              <h2 style={{ color: "var(--text-primary)", marginBottom: "1rem", fontSize: "clamp(1.8rem, 4vw, 2.8rem)" }}>
+                Vì Sao Chọn Lê Anh CSM?
+              </h2>
+            </div>
+            <Row gutter={[32, 32]}>
+              {[
+                { icon: <ThunderboltOutlined />, title: "20+ năm kinh nghiệm thực chiến", desc: "Đã phát triển hàng trăm dự án từ startup đến enterprise, đa ngành nghề" },
+                { icon: <SafetyOutlined />, title: "Cam kết bảo mật & hiệu năng", desc: "Bảo mật dữ liệu + Cam kết hiệu năng + Hỗ trợ vận hành 24/7" },
+                { icon: <CodeOutlined />, title: "Fullstack đa công nghệ", desc: "Java Spring Boot, React, Node.js, Python, Go, Rust, RocksDB, Lucene, AI" },
+                { icon: <CheckCircleOutlined />, title: "Bàn giao mã nguồn đầy đủ", desc: "Toàn bộ source code, tài liệu, bạn hoàn toàn sở hữu và kiểm soát" },
+                { icon: <TeamOutlined />, title: "Tư vấn tận tâm, không oversell", desc: "Đề xuất giải pháp tối ưu, tiết kiệm chi phí, không phức tạp hóa" },
+                { icon: <SettingOutlined />, title: "Bảo trì & nâng cấp dài hạn", desc: "Hỗ trợ sau bàn giao, tối ưu liên tục, mở rộng khi cần" },
+              ].map((item, idx) => (
+                <Col xs={24} sm={12} lg={8} key={idx}>
+                  <Card style={{ height: "100%", borderRadius: 16, border: "1px solid var(--card-border)", background: "var(--card-bg)" }}>
+                    <div style={{ fontSize: 32, color: "var(--brand-primary)", marginBottom: 16 }}>{item.icon}</div>
+                    <h3 style={{ fontWeight: 700, fontSize: 18, marginBottom: 8, color: "var(--text-primary)" }}>{item.title}</h3>
+                    <Paragraph style={{ color: "var(--text-secondary)" }}>{item.desc}</Paragraph>
+                  </Card>
+                </Col>
+              ))}
+            </Row>
+          </Col>
+        </Row>
+      </div>
+
+      {/* FAQ Section */}
+      <div style={{ padding: "80px 24px", background: "var(--bg-primary)" }}>
+        <Row justify="center">
+          <Col xs={24} lg={20}>
+            <div style={{ textAlign: "center", marginBottom: "60px" }}>
+              <h2 style={{ color: "var(--text-primary)", marginBottom: "1rem", fontSize: "clamp(1.8rem, 4vw, 2.8rem)" }}>Câu Hỏi Thường Gặp</h2>
+              <Paragraph style={{ fontSize: 18, color: "var(--text-secondary)", maxWidth: 600, margin: "0 auto" }}>
+                Những thắc mắc phổ biến khi đặt viết phần mềm theo yêu cầu
+              </Paragraph>
+            </div>
+            <Collapse items={softwareFAQs.map((faq, idx) => ({
+              key: String(idx),
+              label: <h3 style={{ fontWeight: 600, fontSize: 16, margin: 0, color: "var(--text-primary)" }}>{faq.question}</h3>,
+              children: <Paragraph style={{ color: "var(--text-secondary)", fontSize: 15, lineHeight: 1.7 }}>{faq.answer}</Paragraph>,
+            }))} accordion style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)", borderRadius: 16 }} />
+          </Col>
+        </Row>
+      </div>
+
+      {/* CTA Section */}
+      <div style={{ padding: "80px 24px", background: "var(--brand-primary)", textAlign: "center" }}>
+        <Row justify="center">
+          <Col xs={24} lg={16}>
+            <h2 style={{ color: "#fff", marginBottom: 16, fontSize: "clamp(1.8rem, 4vw, 2.8rem)" }}>Sẵn Sàng Phát Triển Phần Mềm Của Bạn?</h2>
+            <p style={{ color: "rgba(255,255,255,0.9)", fontSize: 18, marginBottom: 32, maxWidth: 600, margin: "0 auto 32px auto" }}>
+              Liên hệ ngay để được tư vấn miễn phí, báo giá chi tiết trong 24h. Không cam kết, không ép buộc.
+            </p>
+            <Space size="large" wrap>
+              <Button size="large" type="primary" icon={<PhoneOutlined />} href="tel:+84964014947" style={{ background: "#fff", color: "var(--brand-primary)", border: "none", borderRadius: 32, fontWeight: 600, fontSize: 18, height: 56, padding: "0 36px" }}>
+                Gọi ngay: 0964 014 947
+              </Button>
+              <Button size="large" href="/lien-he" style={{ background: "transparent", color: "#fff", border: "2px solid #fff", borderRadius: 32, fontWeight: 600, fontSize: 18, height: 56, padding: "0 36px" }}>
+                Gửi yêu cầu
+              </Button>
+            </Space>
+          </Col>
+        </Row>
+      </div>
+    </WebsiteLayout>
+  );
+}

@@ -354,12 +354,33 @@ func normalizeDocxSourcePath(raw string) string {
 }
 
 func isAllowedDocxSourcePath(p string) bool {
+	return isAllowedStaticSourcePath(p, ".docx", ".doc")
+}
+
+func isAllowedPdfSourcePath(p string) bool {
+	return isAllowedStaticSourcePath(p, ".pdf")
+}
+
+func isAllowedStaticSourcePath(p string, exts ...string) bool {
 	if strings.Contains(p, "..") {
 		return false
 	}
 	lower := strings.ToLower(strings.TrimSpace(p))
-	if !(strings.HasSuffix(lower, ".docx") || strings.HasSuffix(lower, ".doc")) {
-		return false
+	if len(exts) > 0 {
+		matched := false
+		for _, ext := range exts {
+			normalizedExt := strings.ToLower(strings.TrimSpace(ext))
+			if normalizedExt == "" {
+				continue
+			}
+			if strings.HasSuffix(lower, normalizedExt) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
 	}
 	return strings.HasPrefix(lower, "app_images/") || strings.HasPrefix(lower, "reports/")
 }

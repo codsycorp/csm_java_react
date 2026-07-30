@@ -17,6 +17,8 @@ SERVER="${1:-${DEPLOY_SERVER:-}}"
 SERVER_PATH="${2:-${DEPLOY_PATH:-/root/la_server}}"
 ARTIFACT="${3:-${ARTIFACT:-}}"
 SCP_FLAGS="${SCP_FLAGS:--O}"
+UPLOAD_AI_MODEL="${UPLOAD_AI_MODEL:-true}"
+AI_LOCAL_MODEL_PATH="${AI_LOCAL_MODEL_PATH:-}"
 
 if [[ -z "$SERVER" ]]; then
   echo "Usage: $0 user@server-ip [/path/on/server] [/abs/path/to/artifact]"
@@ -55,6 +57,45 @@ fi
 log "Detected remote arch: $REMOTE_UNAME -> $REMOTE_ARCH"
 log "Using artifact      : $ARTIFACT"
 
+if [[ -z "$AI_LOCAL_MODEL_PATH" ]]; then
+  if [[ -f "$REPO_ROOT/Modelfile" ]]; then
+    MODEL_FROM_FILE="$(awk '/^FROM /{print $2; exit}' "$REPO_ROOT/Modelfile" | tr -d '\r' || true)"
+    if [[ -n "$MODEL_FROM_FILE" ]]; then
+      if [[ "$MODEL_FROM_FILE" == ./* ]]; then
+        AI_LOCAL_MODEL_PATH="$REPO_ROOT/${MODEL_FROM_FILE#./}"
+      elif [[ "$MODEL_FROM_FILE" == /* ]]; then
+        AI_LOCAL_MODEL_PATH="$MODEL_FROM_FILE"
+      else
+        AI_LOCAL_MODEL_PATH="$REPO_ROOT/$MODEL_FROM_FILE"
+      fi
+    fi
+  fi
+fi
+
+if [[ "$UPLOAD_AI_MODEL" == "true" ]]; then
+  if [[ -n "$AI_LOCAL_MODEL_PATH" && ! -f "$AI_LOCAL_MODEL_PATH" ]]; then
+    log "WARN: Model from Modelfile not found at: $AI_LOCAL_MODEL_PATH"
+    AI_LOCAL_MODEL_PATH=""
+  fi
+  if [[ -z "$AI_LOCAL_MODEL_PATH" ]]; then
+    FALLBACK_MODEL="$(ls -1 "$REPO_ROOT"/backend/csm_datas/ai_local/model/*.gguf 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$FALLBACK_MODEL" ]]; then
+      AI_LOCAL_MODEL_PATH="$FALLBACK_MODEL"
+      log "Using fallback AI model: $AI_LOCAL_MODEL_PATH"
+    fi
+  fi
+fi
+
+if [[ "$UPLOAD_AI_MODEL" == "true" ]]; then
+  if [[ -n "$AI_LOCAL_MODEL_PATH" && -f "$AI_LOCAL_MODEL_PATH" ]]; then
+    log "AI local model      : $AI_LOCAL_MODEL_PATH"
+  else
+    log "WARN: AI model file not found. Set AI_LOCAL_MODEL_PATH=/abs/path/to/model.gguf to upload model."
+  fi
+else
+  log "AI model upload     : disabled (UPLOAD_AI_MODEL=$UPLOAD_AI_MODEL)"
+fi
+
 log "[1/4] Prepare runtime directories"
 ssh "$SERVER" "mkdir -p '$SERVER_PATH' '$SERVER_PATH/csm_datas/native/pebble' '$SERVER_PATH/csm_datas/native/search' '$SERVER_PATH/csm_datas/database' '$SERVER_PATH/csm_datas/backups' '$SERVER_PATH/csm_datas/ai_local/model'"
 
@@ -83,6 +124,18 @@ fi
 if [[ -f "$REPO_ROOT/config.ai-local-max.env" ]]; then
   scp $SCP_FLAGS "$REPO_ROOT/config.ai-local-max.env" "$SERVER:$SERVER_PATH/config.ai-local-max.env"
   log "Uploaded config.ai-local-max.env"
+fi
+
+if [[ "$UPLOAD_AI_MODEL" == "true" && -n "$AI_LOCAL_MODEL_PATH" && -f "$AI_LOCAL_MODEL_PATH" ]]; then
+  log "[2.5/4] Upload AI local model"
+  MODEL_BASENAME="$(basename "$AI_LOCAL_MODEL_PATH")"
+  scp $SCP_FLAGS "$AI_LOCAL_MODEL_PATH" "$SERVER:$SERVER_PATH/csm_datas/ai_local/model/$MODEL_BASENAME.candidate"
+  ssh "$SERVER" "mv -f '$SERVER_PATH/csm_datas/ai_local/model/$MODEL_BASENAME.candidate' '$SERVER_PATH/csm_datas/ai_local/model/$MODEL_BASENAME'"
+  if [[ -f "$REPO_ROOT/Modelfile" ]]; then
+    scp $SCP_FLAGS "$REPO_ROOT/Modelfile" "$SERVER:$SERVER_PATH/Modelfile"
+    log "Uploaded Modelfile"
+  fi
+  log "Uploaded AI model: $MODEL_BASENAME"
 fi
 
 log "[3/4] Install/refresh systemd service"
