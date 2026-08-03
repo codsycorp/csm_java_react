@@ -3240,6 +3240,16 @@
           return Number((cache.namHitPrefix[to] || 0) - (cache.namHitPrefix[from - 1] || 0));
         }
 
+        function getLegacySlrBacHitCountRangeCached(cache, sttFrom, sttTo, mode) {
+          var m = String(mode || "C_D").toUpperCase();
+          var cBac = getLegacySlrRangeCachedCount(cache && cache.cBacPrefix, sttFrom, sttTo);
+          var dBac = getLegacySlrRangeCachedCount(cache && cache.dBacPrefix, sttFrom, sttTo);
+          if (m === "C") return cBac;
+          if (m === "D") return dBac;
+          if (m === "2C") return cBac;
+          return cBac + dBac;
+        }
+
         function getLegacySlrHitCountRangeCached(cache, sttFrom, sttTo) {
           var from = Math.max(1, Number(sttFrom || 1));
           var to = Math.max(from, Number(sttTo || from));
@@ -3421,8 +3431,7 @@
                 weekDNamTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.dNamPrefix, sttFrom, sttTo);
                 weekCBacTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.cBacPrefix, sttFrom, sttTo);
                 weekDBacTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.dBacPrefix, sttFrom, sttTo);
-                weekBacTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.cBacPrefix, sttFrom, sttTo)
-                  + getLegacySlrRangeCachedCount(cacheWi.dBacPrefix, sttFrom, sttTo);
+                weekBacTotals[wk] += getLegacySlrBacHitCountRangeCached(cacheWi, sttFrom, sttTo, modeNow);
               }
 
               var weekNoHitStreak = 0;
@@ -3638,8 +3647,7 @@
                   for (var wci = 0; wci < cells.length; wci += 1) {
                     if (Number(cells[wci] && cells[wci].weekIdx || -1) !== wri) continue;
                     namTotalTmp += getLegacySlrNamHitCountRangeCached(cellCaches[wci], sttFrom, sttTo);
-                    bacTotalTmp += getLegacySlrRangeCachedCount(cellCaches[wci].cBacPrefix, sttFrom, sttTo)
-                      + getLegacySlrRangeCachedCount(cellCaches[wci].dBacPrefix, sttFrom, sttTo);
+                    bacTotalTmp += getLegacySlrBacHitCountRangeCached(cellCaches[wci], sttFrom, sttTo, modeNow);
                   }
                   weekNamTotals[wri] = namTotalTmp;
                   weekBacTotals[wri] = bacTotalTmp;
